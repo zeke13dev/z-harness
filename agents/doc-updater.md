@@ -21,7 +21,7 @@ You refresh a single concept's docs from the current state of the code. The call
 ### 1. Telemetry: start
 
 ```bash
-TOKEN="$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" start "docs/<concept>" doc_update \
+TOKEN="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" start "docs/<concept>" doc_update \
   "$(printf '{"concept":"%s","reason":"%s","mode":"%s"}' "<concept>" "<reason>" "<mode>")")"
 ```
 
@@ -99,7 +99,7 @@ If `MODE: write`: also actually write the two files to their given paths and rep
 ### 5. Telemetry: end
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$TOKEN" \
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$TOKEN" \
   "$(printf '{"concept":"%s","status":"%s","subagent_model":"sonnet"}' "<concept>" "<status>")"
 ```
 

@@ -77,7 +77,7 @@ SLUG="gemini-<bundled-decisions|plan-review>"
 printf '%s\n' "$PROMPT" > "$DIR/$N-$SLUG.prompt.md"
 printf '%s\n' "$RESPONSE" > "$DIR/$N-$SLUG.response.md"
 
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" consult \
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" consult \
   "$(printf '{"llm":"gemini","mode":"%s","prompt_chars":%d,"response_chars":%d,"wall_ms":%d,"transcript":"%s"}' \
      "$MODE" "${#PROMPT}" "${#RESPONSE}" "$WALL_MS" "$N-$SLUG")"
 ```

@@ -22,9 +22,9 @@ You do not write code. You do not edit anything. You do not spawn subagents. You
 0. **Emit a `precheck_start` event** before doing anything else, and an `precheck_end` event before returning. Use the helper:
 
 ```bash
-TOKEN="$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" start "tasks/<task-id>" precheck '{"id":"<task-id>"}')"
+TOKEN="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" start "tasks/<task-id>" precheck '{"id":"<task-id>"}')"
 # ... do the work below ...
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$TOKEN" \
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$TOKEN" \
   "$(printf '{"id":"%s","status":"%s","references_checked":%d}' \
      "<task-id>" "<ok|spec_problem>" "$N_REFS")"
 ```

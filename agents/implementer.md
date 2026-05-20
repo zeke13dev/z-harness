@@ -22,10 +22,10 @@ You implement **exactly one task** from `z-harness/TASKS.md` and return a struct
 0. **Emit an `implement_start` event** before doing anything else, and an `implement_end` event before returning. Use the helper:
 
 ```bash
-TOKEN="$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" start "tasks/<task-id>" implement \
+TOKEN="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" start "tasks/<task-id>" implement \
   "$(printf '{"id":"%s","retry":%d}' "<task-id>" "<0 on first try, N on retry>")")"
 # ... do the work below ...
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$TOKEN" \
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$TOKEN" \
   "$(printf '{"id":"%s","retry":%d,"status":"%s","files_changed_count":%d}' \
      "<task-id>" "<retry>" "<status>" "$N_CHANGED")"
 ```

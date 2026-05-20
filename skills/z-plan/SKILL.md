@@ -1,8 +1,8 @@
 ---
+name: z-plan
 description: Run the rigorous z-harness planning pipeline — challenge premises, batch decisions, cross-consult Gemini + Codex once, and produce SPEC.md / PLAN.md / TASKS.md.
 argument-hint: <feature or task description>
 ---
-
 You are running the **z-harness `/z-plan`** pipeline.
 
 Task (from `$ARGUMENTS`):
@@ -33,12 +33,6 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
 6. Notification policy: read env `Z_HARNESS_NOTIFY` (default `approval_only`). Values: `off`, `approval_only`, `all`.
 7. Usage-limit guard policy: read env `Z_HARNESS_PAUSE_AT_PCT` (default `90`). If Claude Code surfaces a usage indicator and current usage ≥ this %, **don't dispatch new phases**; instead emit `usage_pause`, push-notify, and finalize whatever phase you're on cleanly. The user resumes by re-invoking `/z-plan` with the same task (or `/z-implement-all` if planning is already done).
 8. **Check for LLM-tier docs.** If `docs/llm/INDEX.json` exists in the repo root, read it first. It's the cheap ground-truth oracle for Phase 1 Explore — use it to scope which modules to investigate. Treat it as authoritative until evidence in the code contradicts it (log `doc_drift` events when that happens; `/z-maintain-docs` will follow up).
-9. **Docs-freshness gate.** If `docs/llm/INDEX.json` exists, compute staleness across all its entries before Phase 1 starts. For each concept entry, compare `entry.last_updated` against the max `mtime` of its `source_files`. A concept is **stale** if any source file's mtime exceeds `last_updated`. Compute `stale_pct = stale_concepts / total_concepts`. The threshold is `$Z_HARNESS_DOC_STALENESS_THRESHOLD` (default `20` — meaning 20 percent). If `stale_pct >= threshold`, **halt before Phase 1**, push-notify the user, and recommend `/z-maintain-docs` first:
-   ```
-   Docs are <stale_pct>% stale (>= <threshold>% threshold).
-   Recommend: /z-maintain-docs to refresh, then resume /z-plan <task>.
-   ```
-   The user can override via `AskUserQuestion` ("refresh now" / "proceed with stale docs" / "abandon"). If they proceed with stale docs, emit a `doc_drift_acknowledged` event and continue — Phase 1 still uses INDEX.json but the orchestrator should weight `relevant_concepts` hints less and verify against current code more aggressively.
 
 **All paths in subsequent phases live under `z-harness/<slug>/`:**
 - `z-harness/<slug>/SPEC.md`

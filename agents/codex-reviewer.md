@@ -23,10 +23,10 @@ The caller will give you:
 0. **Emit a `review_start` event** before doing anything else, and a `review_end` event before returning. Use the helper:
 
 ```bash
-TOKEN="$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" start "tasks/<task-id>" review \
+TOKEN="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" start "tasks/<task-id>" review \
   "$(printf '{"id":"%s","cycle":%d}' "<task-id>" "<1 on first review, N on subsequent cycles>")")"
 # ... do the work below ...
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$TOKEN" \
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$TOKEN" \
   "$(printf '{"id":"%s","cycle":%d,"blockers":%d,"majors":%d,"prompt_chars":%d,"response_chars":%d,"return_chars":%d}' \
      "<task-id>" "<cycle>" "$BLOCKERS" "$MAJORS" "${#PROMPT}" "${#RESPONSE}" "${#RETURN}")"
 ```
@@ -91,7 +91,7 @@ mkdir -p "$DIR"
 printf '%s\n' "$PROMPT"   > "$DIR/review.prompt.md"
 printf '%s\n' "$RESPONSE" > "$DIR/review.response.md"
 
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tasks/$TASK_ID" review \
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tasks/$TASK_ID" review \
   "$(printf '{"prompt_chars":%d,"response_chars":%d,"return_chars":%d,"wall_ms":%d}' \
      "${#PROMPT}" "${#RESPONSE}" "${#RETURN}" "$WALL_MS")"
 ```

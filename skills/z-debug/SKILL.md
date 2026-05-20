@@ -1,8 +1,8 @@
 ---
+name: z-debug
 description: Investigate a known-bad behavior with explicit repro / hypothesis / evidence / isolation phases, then ship a fix using the /z-plan-light flow, then write a post-mortem with preventative action items. Cross-LLM consult at the hypothesis stage and again at the fix stage. Auto-bails to /z-plan when scope grows beyond architectural change.
 argument-hint: <symptom description>
 ---
-
 You are running **z-harness `/z-debug`** — investigation pipeline for an existing bug. Target: ≤30 min wall time end-to-end for a typical localized bug; can take longer if reproduction is difficult.
 
 Symptom (from `$ARGUMENTS`):

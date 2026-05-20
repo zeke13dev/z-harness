@@ -30,7 +30,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(dirname "$(dirname "$0")")}"
+PLUGIN_ROOT="${ANTIGRAVITY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$(dirname "$(dirname "$0")")}}"
 LOG_EVENT="$PLUGIN_ROOT/scripts/log-event.sh"
 
 if [[ ! -x "$LOG_EVENT" ]]; then

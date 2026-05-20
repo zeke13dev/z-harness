@@ -15,7 +15,7 @@
 #
 # Exclude file lookup order:
 #   1. $(pwd)/.z-harness-rsync-exclude         (per-project override)
-#   2. $CLAUDE_PLUGIN_ROOT/.z-harness-rsync-exclude  (plugin default)
+#   2. $ANTIGRAVITY_PLUGIN_ROOT / $CLAUDE_PLUGIN_ROOT/.z-harness-rsync-exclude  (plugin default)
 #
 # Output: writes rsync's stats summary to stdout. Exits non-zero on rsync error.
 
@@ -41,7 +41,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 LOCAL_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+PLUGIN_ROOT="${ANTIGRAVITY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}}"
 
 EXCLUDE_FILE=""
 if [[ -f "$LOCAL_ROOT/.z-harness-rsync-exclude" ]]; then
