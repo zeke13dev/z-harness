@@ -1,0 +1,50 @@
+# Default rsync exclude list for /z-harness/agents/remote-runner.md
+# (rsync local repo -> remote sandbox for cargo builds).
+#
+# This file is copied INTO each target repo by /z-init-docs if missing,
+# so it ends up at <repo-root>/.z-harness-rsync-exclude per project.
+# Per-project edits should happen in that copy, not here.
+
+# Build artifacts (re-created on remote)
+target/
+**/target/
+node_modules/
+**/node_modules/
+.venv/
+**/.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+
+# Version control
+.git/
+.hg/
+.svn/
+
+# Large data files — do NOT ship to sandbox; tests should use remote-resident data
+data/
+**/data/
+*.parquet
+*.duckdb
+*.duckdb.wal
+*.sqlite
+*.sqlite-journal
+*.csv.gz
+*.csv
+
+# Logs and state — remote has its own
+logs/
+**/logs/
+state/
+**/state/
+
+# IDE / OS detritus
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# z-harness artifacts (the SPEC/PLAN/TASKS already live on remote via git or
+# we manually sync them; we don't want the sandbox to keep stale copies)
+z-harness/

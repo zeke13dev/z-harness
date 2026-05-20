@@ -1,0 +1,13 @@
+{
+  "name": "zeke-tools",
+  "owner": {
+    "name": "zeke"
+  },
+  "plugins": [
+    {
+      "name": "z-harness",
+      "source": "./",
+      "description": "Rigorous planning + implementation pipeline with cross-LLM consultation."
+    }
+  ]
+}
