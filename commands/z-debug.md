@@ -28,7 +28,7 @@ $ARGUMENTS
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" debug_run_start "$START_PAYLOAD"
    ```
 6. Record start time `T0_DEBUG=$(date -u +%Y-%m-%dT%H:%M:%SZ)` — used for post-mortem timeline.
-7. If `docs/llm/INDEX.json` exists → read it.
+7. If `docs/llm/INDEX.json` exists → note it. Phase 2 (Repro) and Phase 3 (Hypotheses) will dispatch `doc-fetcher` (Haiku) instead of reading INDEX.json or per-concept JSONs from main thread. The orchestrator never reads `docs/llm/*.json` directly.
 
 ## Auto-bail thresholds (check throughout)
 
@@ -118,7 +118,13 @@ Default recommendation: gather more evidence. Debug-on-inference often fixes the
 
 ## Phase 3 — Hypothesize
 
-Read relevant files (use `docs/llm/INDEX.json` to scope). Propose **2-3 hypotheses**, ranked by likelihood. For each:
+If INDEX.json exists, dispatch `doc-fetcher` (Haiku) FIRST to scope:
+```
+Agent(subagent_type="doc-fetcher",
+      description="Doc context for <slug> hypothesis",
+      prompt="query: <symptom in one sentence>\nrepo_root: <abs path>\ndepth: standard")
+```
+Then read additional files only to fill gaps doc-fetcher couldn't cover. Propose **2-3 hypotheses**, ranked by likelihood. For each:
 
 - **Hypothesis:** <one-sentence statement of what's broken>
 - **Supporting evidence:** <which lines in EVIDENCE.md point to this>

@@ -1,0 +1,6 @@
+ README.md                       | 86 ++++++++++++++++++++++++++++++++++++++++-
+ agents/doc-updater.md           | 41 +++++++++++++++++++-
+ skills/z-debug/SKILL.md         | 47 ++++++++++++++++++++--
+ skills/z-init-docs/SKILL.md     |  7 ++++
+ skills/z-maintain-docs/SKILL.md | 62 ++++++++++++++++++++++++++++-
+ 5 files changed, 235 insertions(+), 8 deletions(-)

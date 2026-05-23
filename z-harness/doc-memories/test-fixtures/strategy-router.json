@@ -1,0 +1,36 @@
+{
+  "concept": "strategy-router",
+  "last_updated": "2026-04-20",
+  "source_file": ["src/strategy_router.py"],
+  "confidence": "high",
+  "entry_points": [
+    {"file": "src/strategy_router.py", "line": 42, "symbol": "route_signal", "kind": "fn", "summary": "Dispatch signal to matching strategy by regime + spread"}
+  ],
+  "depends_on": [],
+  "consumed_by": ["alpha-model"],
+  "invariants": ["Signal must be routed within one tick", "Spread threshold must be positive"],
+  "gotchas": ["Cache invalidation resets spread baseline on rebalance"],
+  "memories": [
+    {
+      "type": "incident",
+      "text": "cache invalidated on rebal so first 3 bars use stale spreads",
+      "source": "incident:slippage-spike",
+      "date": "2026-04-12",
+      "tags": ["correctness", "time-window"]
+    },
+    {
+      "type": "abandoned_path",
+      "text": "tried sliding-window EMA, killed because regime lagged 4 bars",
+      "source": "spec:rebalance-v2/run-3",
+      "date": "2026-02-08",
+      "tags": ["signal", "perf"]
+    },
+    {
+      "type": "decision_rationale",
+      "text": "chose static regime thresholds over ML classifier to avoid overfitting on 6-month backtest window",
+      "source": "human_review:zbarnett",
+      "date": "2026-01-15",
+      "tags": ["correctness", "dependency"]
+    }
+  ]
+}

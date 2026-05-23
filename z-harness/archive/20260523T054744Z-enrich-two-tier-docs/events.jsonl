@@ -1,0 +1,3 @@
+{"ts":"2026-05-23T05:49:11Z","run":"20260523T054744Z-enrich-two-tier-docs","kind":"phase_end","phase":1,"name":"scaffolding","wall_ms":430,"user_wait_ms":0}
+{"ts":"2026-05-23T05:50:24Z","run":"20260523T054744Z-enrich-two-tier-docs","kind":"ideator_failed","vendor":"codex","reason":"spawn ENOENT - codex binary missing at /opt/homebrew/lib/node_modules/@openai/codex/vendor/aarch64-apple-darwin/codex/codex"}
+{"ts":"2026-05-23T05:52:24Z","run":"20260523T054744Z-enrich-two-tier-docs","kind":"phase_end","phase":3,"name":"synthesis","wall_ms":780,"user_wait_ms":0}

@@ -1,0 +1,64 @@
+--- z-harness/doc-memories/archive/tasks/T010/diff-v1.patch	2026-05-23 02:30:16
++++ z-harness/doc-memories/archive/tasks/T010/diff.patch	2026-05-23 02:32:14
+@@ -1,9 +1,9 @@
+ diff --git a/skills/z-improve/SKILL.md b/skills/z-improve/SKILL.md
+ new file mode 100644
+-index 0000000..0a20b57
++index 0000000..6167791
+ --- /dev/null
+ +++ b/skills/z-improve/SKILL.md
+-@@ -0,0 +1,202 @@
++@@ -0,0 +1,231 @@
+ +---
+ +description: Post-run retrospective. Analyzes ONE z-harness run's events.jsonl + artifacts, identifies friction signals (slow phases, retries, doc drift, blocked askings, reviewer cycles), and opens a discussion with the user about concrete edits to the z-harness repo itself (commands, agents, scripts). Optional cross-LLM consult on proposed changes. Discussion logged to z-harness/improvements/. Opt-in; never auto-fired.
+ +argument-hint: <slug> | <slug>/<run-id> | adhoc/<run-id>
+@@ -169,10 +169,39 @@
+ +
+ +```
+ +/z-suggest-memory
+-+concept_hints: <space-separated slugs derived from the z-harness file paths touched by accepted edits — e.g. "commands/z-plan.md" → "z-plan", "agents/implementer.md" → "implementer">
+++concept_hints: <space-separated slugs — see derivation rule below>
+ +context: "z-improve retro for <slug>: accepted <N> proposal(s) — <one-sentence summary of what changed>"
+ +```
+ +
+++**concept_hints derivation rule** — apply before invoking `/z-suggest-memory`:
+++
+++```bash
+++# For each z-harness file path touched by accepted edits, derive a slug:
+++#   commands/z-plan.md        → z-plan
+++#   skills/z-plan/SKILL.md   → z-plan
+++#   agents/codex-reviewer.md  → codex-reviewer
+++# Rule: strip the parent directory prefix and strip the .md or /SKILL.md suffix.
+++# Deduplicate the resulting list.
+++# concept_hints = space-joined slug list
+++
+++# Example (bash):
+++concept_hints=""
+++for path in "${touched_files[@]}"; do
+++  slug="${path##*/}"          # basename
+++  slug="${slug%.md}"          # strip .md
+++  slug="${slug%/SKILL}"       # strip /SKILL (already stripped by basename, no-op)
+++  # For skills/z-plan/SKILL.md the basename is SKILL.md → slug becomes SKILL; use dirname instead:
+++  # Re-derive: if basename == SKILL, use the parent dir name
+++  if [[ "$slug" == "SKILL" ]]; then
+++    slug="$(basename "$(dirname "$path")")"
+++  fi
+++  concept_hints="$concept_hints $slug"
+++done
+++concept_hints="${concept_hints# }"  # trim leading space
+++# Deduplicate:
+++concept_hints="$(echo "$concept_hints" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+++```
+++
+ +**Salience guidance — read before invoking:**
+ +
+ +> **Default to Cancel** unless a genuinely novel anti-pattern, process insight, or non-obvious decision rationale surfaced during the retro discussion that would materially improve a future run of the same command. Cancel is a first-class outcome and should be chosen most of the time. Only persist memory when the insight is not already documented in the improvements doc or in existing docs/llm/ concepts — not just because edits were applied.
+@@ -180,7 +209,7 @@
+ +Log the outcome:
+ +
+ +```bash
+-+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN-improve" suggest_memory_called \
+++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" suggest_memory_called \
+ +  "$(printf '{"memories_written":%d,"concept":"%s"}' "$MEMORIES_WRITTEN" "$CONCEPT_SLUG")"
+ +```
+ +

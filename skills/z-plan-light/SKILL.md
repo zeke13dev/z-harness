@@ -1,8 +1,8 @@
 ---
-name: z-plan-light
 description: Lightweight planner for small targeted changes / bug fixes. Bundled cross-LLM consult, single FIX.md artifact, inline implementation in the orchestrator (no implementer subagent), codex review still runs as the safety gate. Auto-bails to /z-plan if scope grows beyond ~5 files or >2 non-obvious decisions.
 argument-hint: <fix description>
 ---
+
 You are running **z-harness `/z-plan-light`** — a fast path for one-file-or-few-files fixes. Target: ≤10 min wall time end-to-end.
 
 Task (from `$ARGUMENTS`):
@@ -30,7 +30,7 @@ This command is for **small, focused changes**. If at any phase you realize the 
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" light_run_start "$START_PAYLOAD"
    ```
 6. Notification policy: read `Z_HARNESS_NOTIFY` (default `approval_only`).
-7. If `docs/llm/INDEX.json` exists → read it (cheap, structured ground truth).
+7. If `docs/llm/INDEX.json` exists → note it. Phase 1 will dispatch `doc-fetcher` (Haiku). Do NOT read INDEX.json or per-concept JSONs from main thread.
 
 ## Auto-bail thresholds (check throughout)
 
@@ -52,7 +52,14 @@ At any phase, if you discover:
 
 If any concern surfaces → raise it with the user via `AskUserQuestion` before proceeding. Don't plan around a flawed premise.
 
-**Quick exploration.** Read 3-5 files MAX. **DO NOT spawn the `Explore` subagent** — it's too expensive for a light-mode task. Use Read/Grep/Glob directly. If `docs/llm/INDEX.json` exists, grep it for relevant concepts and read those JSONs (1-3 KB each — cheap grounding).
+**Quick exploration.**
+1. **If `docs/llm/INDEX.json` exists, dispatch `doc-fetcher` (Haiku) FIRST** — it's the cheapest grounding available. One call, returns ≤2 KB synthesis:
+   ```
+   Agent(subagent_type="doc-fetcher",
+         description="Doc context for <slug>",
+         prompt="query: <one-sentence fix description>\nrepo_root: <abs path>\ndepth: standard")
+   ```
+2. After doc-fetcher returns (or if no INDEX.json), Read 3-5 source files MAX to fill gaps. **DO NOT spawn the `Explore` subagent** — too expensive for light-mode. Use Read/Grep/Glob directly from main thread.
 
 Output: 1-paragraph problem statement + 1-paragraph context. Save to `z-harness/$Z_HARNESS_SLUG/archive/$RUN/phase1-context.md`.
 

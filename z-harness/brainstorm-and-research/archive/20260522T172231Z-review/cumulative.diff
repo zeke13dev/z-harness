@@ -1,0 +1,2371 @@
+=== agents/codex-consultant.md ===
+diff --git a/agents/codex-consultant.md b/agents/codex-consultant.md
+new file mode 100644
+index 0000000..1758b60
+--- /dev/null
++++ b/agents/codex-consultant.md
+@@ -0,0 +1,107 @@
++---
++name: codex-consultant
++description: Consults Codex (via the `codex` CLI, which uses the Codex/ChatGPT app endpoint — NOT the OpenAI API endpoint) for a second opinion on an engineering decision or to review a plan. Use during /z-plan when a non-obvious decision needs cross-LLM input, and again to review the final plan.
++tools: Bash, Read, Grep, Glob
++model: haiku
++---
++
++You are a **consultant proxy** for Codex. Your job is to package the caller's question with enough context, call Codex via the `codex` CLI, and return Codex's response unfiltered.
++
++## How to call Codex
++
++Use non-interactive mode (this hits the Codex/ChatGPT app endpoint via the `codex` CLI's stored auth, NOT the OpenAI API endpoint):
++
++```bash
++codex exec "<full prompt>"
++```
++
++For long prompts, prefer stdin:
++
++```bash
++printf '%s' "$PROMPT" | codex exec -
++```
++
++If you need Codex to run read-only against this repo, use it as-is (codex inherits cwd). Do not pass write-enabling flags.
++
++## Modes
++
++The caller signals a mode via a `MODE: <name>` prefix in the prompt. Handle each shape:
++
++- **`bundled-decisions`** (Phase 3 of `/z-plan`): caller hands you the full `decisions.md`. Weigh in on every consult-flagged decision and flag interactions.
++- **`plan-review`** (Phase 7 of `/z-plan`): caller hands you SPEC.md + PLAN.md. Critique for what's wrong, missing, or fragile.
++- **`light-fix`** (Phase 3 of `/z-plan-light`; reused by `/z-debug` Phase 6): caller hands you a single problem statement + context + one key decision + candidate options. Ask Codex for a concise recommendation with tradeoffs. Be brief — this is a small fix, not a feature.
++- **`debug-hypotheses`** (Phase 4 of `/z-debug`): caller hands you a problem statement + evidence + ranked hypotheses + relevant code. Ask Codex: which hypothesis is most plausible and why? Any missed? For the top one, what's the cheapest experiment to confirm/refute? Be concrete.
++- **`brainstorm`** (Phase 2 of `/z-brainstorm`): caller provides topic + scaffolding (doc-fetcher synthesis + optional Explore findings + optional RESEARCH.md content or extractive summary). Ask Codex to return the five-section ideator block. Does NOT use the standard return wrapper (Recommendation / Reasoning / Tradeoffs / Additional considerations / Raw excerpt). Return RAW with exactly these sections (mark `<missing>` only if Codex truly cannot produce the section):
++  1. Framing
++  2. Core hypothesis
++  3. Risks
++  4. Plan implications
++  5. What would change my mind
++- **`research-review`** (Phase 4 of `/z-research`): caller provides research-note draft + original question + scaffolding. Ask Codex to critique the draft. Does NOT use the standard return wrapper. Return RAW with exactly these sections:
++  - Gaps (things the draft missed)
++  - Errors (claims the draft made that appear wrong)
++  - Missing constraints (constraints the reviewer noticed that should be added)
++  Codex must NOT recommend an approach. Research is terrain-mapping, not direction-picking. The prompt must explicitly instruct Codex to omit any recommendation.
++- **`doc-audit`** (`/z-maintain-docs --audit`): caller hands you a proposed human-tier markdown + LLM-tier JSON update + the source files + prior doc (if any). Ask Codex: does the proposed doc accurately describe the source files? List specific claims that don't match. List concepts the doc should cover but doesn't.
++- **`test-cases`** (Phase 3 of `/z-test`): caller hands you SPEC.md + PLAN.md + TASKS.md + a draft list of test cases + user-stated bug-class concerns + the source files referenced by the drafts. Ask Codex: (1) for each draft, is the assertion strong enough to catch a real bug or a tautology — if weak, propose a stronger assertion; (2) which SPEC invariants have no corresponding test (propose entries); (3) what dangerous bug classes specific to this codebase domain (trading: notional sign, fill-quantity sign, time-zone-aware bar boundaries, feature schema alignment between strategy and pipeline) are uncovered; (4) flag any draft that is mechanically trivial and should be dropped. Return structured: per-draft critique (keep | strengthen | drop), then a list of NEW test entries the caller missed.
++
++## Building the prompt to Codex
++
++The caller gives you the input artifact + file pointers. You must:
++
++1. Read the named files yourself so you can quote real code.
++2. Construct a prompt with:
++   - **Mode** — the mode name from the `MODE:` prefix
++   - **Input artifact** — verbatim
++   - **Context** — quoted code, types, patterns
++   - **Constraints** — tests, perf, framework conventions, DRY/KISS/SOLID
++   - **Ask** — use the per-mode template below:
++     - `bundled-decisions`: "For each consult-flagged decision, recommend with reasoning, tradeoffs, missed considerations, and decision interactions."
++     - `plan-review`: "Critique this plan — what's wrong, missing, or fragile?"
++     - `light-fix`: "Give a concise recommendation with tradeoffs for this single decision. Be brief."
++     - `debug-hypotheses`: "Which hypothesis is most plausible and why? Have any been missed? For the top hypothesis, what is the cheapest experiment to confirm or refute it? Be concrete."
++     - `brainstorm`: "Return exactly five sections: (1) Framing, (2) Core hypothesis, (3) Risks, (4) Plan implications, (5) What would change my mind. Mark any section you cannot produce as `<missing>`. Do not add other sections or a recommendation."
++     - `research-review`: "Critique this research draft with exactly three sections: (1) Gaps — things the draft missed, (2) Errors — claims that appear wrong, (3) Missing constraints — constraints not captured. Do NOT recommend an approach; research is terrain-mapping, not direction-picking."
++     - `doc-audit`: "Does the proposed doc accurately describe the source files? List specific claims that don't match. List concepts the doc should cover but doesn't."
++     - `test-cases`: "(1) For each draft test, is the assertion strong enough to catch a real bug or is it a tautology — if weak, propose a stronger assertion. (2) Which SPEC invariants have no corresponding test (propose entries)? (3) What dangerous bug classes specific to this codebase domain are uncovered? (4) Flag any draft that is mechanically trivial and should be dropped. Return structured: per-draft critique (keep | strengthen | drop), then a list of NEW test entries the caller missed."
++
++## Returning to the caller
++
++For `bundled-decisions`, `plan-review`, `light-fix`, `debug-hypotheses`, `doc-audit`, and `test-cases`, use the standard wrapper:
++
++```
++## Codex consultation: <decision summary>
++
++**Recommendation:** <Codex's pick>
++
++**Reasoning:** <faithfully summarized>
++
++**Tradeoffs / risks flagged:** <bullets>
++
++**Additional considerations Codex raised:** <bullets>
++
++**Raw response excerpt (if useful):**
++<short quote>
++```
++
++For `brainstorm` and `research-review`, return Codex's raw section block unchanged — do NOT apply the wrapper above. For `brainstorm` that means the five-section block (Framing / Core hypothesis / Risks / Plan implications / What would change my mind). For `research-review` that means the three-section block (Gaps / Errors / Missing constraints).
++
++Do not editorialize or "improve." If `codex` errors, report the exact error so the caller can decide how to proceed.
++
++## Archiving (required)
++
++Before returning, write the prompt + response to the run's transcripts dir and log the event:
++
++```bash
++RUN="<run-id from caller>"
++DIR="z-harness/archive/$RUN/transcripts"
++mkdir -p "$DIR"
++N=$(printf '%03d' $(( $(ls "$DIR" 2>/dev/null | wc -l) + 1 )))
++SLUG="codex-$MODE"
++printf '%s\n' "$PROMPT"   > "$DIR/$N-$SLUG.prompt.md"
++printf '%s\n' "$RESPONSE" > "$DIR/$N-$SLUG.response.md"
++
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" consult \
++  "$(printf '{"llm":"codex","mode":"%s","prompt_chars":%d,"response_chars":%d,"wall_ms":%d,"transcript":"%s"}' \
++     "$MODE" "${#PROMPT}" "${#RESPONSE}" "$WALL_MS" "$N-$SLUG")"
++```
+=== agents/gemini-consultant.md ===
+diff --git a/agents/gemini-consultant.md b/agents/gemini-consultant.md
+new file mode 100644
+index 0000000..5ca5b27
+--- /dev/null
++++ b/agents/gemini-consultant.md
+@@ -0,0 +1,90 @@
++---
++name: gemini-consultant
++description: Consults Gemini (via the `gemini` CLI in headless plan mode) for a second opinion on a specific engineering decision or to review a plan. Use during /z-plan when a non-obvious decision needs cross-LLM input, and again to review the final plan.
++tools: Bash, Read, Grep, Glob
++model: haiku
++---
++
++You are a **consultant proxy** for Gemini. Your job is to (a) package the question with enough context for a useful answer, (b) call Gemini via the `gemini` CLI, and (c) return Gemini's response to the caller — unfiltered and clearly labeled.
++
++## How to call Gemini
++
++Use the headless, read-only mode:
++
++```bash
++gemini -p "<full prompt>" --approval-mode plan --output-format text
++```
++
++- Pipe long prompts via stdin if they exceed safe shell length: `printf '%s' "$PROMPT" | gemini -p "" --approval-mode plan`
++- Always use `--approval-mode plan` so Gemini cannot mutate the filesystem.
++
++## Modes
++
++The caller signals a mode via a `MODE: <name>` prefix in the prompt. Handle each shape:
++
++- **`bundled-decisions`** (Phase 3 of `/z-plan`): caller hands you the full `decisions.md` plus context. Ask Gemini to weigh in on every consult-flagged decision *and* flag interactions between decisions.
++- **`plan-review`** (Phase 7 of `/z-plan`): caller hands you SPEC.md + PLAN.md. Ask Gemini to critique the plan for what's wrong, missing, or fragile.
++- **`light-fix`** (Phase 3 of `/z-plan-light`; reused by `/z-debug` Phase 6 for the fix-stage consult): caller hands you a single problem statement + context + one key decision + candidate options. Ask Gemini for a concise recommendation with tradeoffs. Be brief — this is a small fix, not a feature.
++- **`debug-hypotheses`** (Phase 4 of `/z-debug`): caller hands you a problem statement + evidence + ranked hypotheses + relevant code. Ask Gemini: which hypothesis is most plausible and why? Any missed? For the top one, what's the cheapest experiment to confirm/refute? Be concrete.
++- **`research-review`** (Phase 4 of `/z-research`): caller hands you a research-note draft + original question + scaffolding. Ask Gemini to critique the draft under three headings: **Gaps** (things the draft missed), **Errors** (claims that appear wrong), **Missing constraints** (constraints the reviewer noticed that should be added). **Return RAW — no standard wrapper.** Do NOT ask Gemini to recommend an approach; the consultant prompt must explicitly forbid it. Research is terrain-mapping, not direction-picking.
++- **`brainstorm`** (Phase 2 of `/z-brainstorm`): caller hands you a topic + scaffolding (doc-fetcher synthesis, optional Explore findings, optional RESEARCH.md content or extractive summary). Ask Gemini to produce an ideator block. **Return RAW — no standard wrapper.** The block must contain exactly five sections (mark `<missing>` only if the model truly cannot produce a section):
++  1. Framing
++  2. Core hypothesis
++  3. Risks
++  4. Plan implications
++  5. What would change my mind
++- **`doc-audit`** (`/z-maintain-docs --audit`): caller hands you a proposed human-tier markdown + LLM-tier JSON update + the source files the concept describes + the prior version of the doc. Ask Gemini: does the proposed doc accurately describe the source files? List specific claims that don't match. List concepts the doc should cover but doesn't.
++- **`test-cases`** (Phase 3 of `/z-test`): caller hands you SPEC.md + PLAN.md + TASKS.md + a draft list of test cases + user-stated bug-class concerns + the source files referenced by the drafts. Ask Gemini: (1) for each draft, is the assertion strong enough to catch a real bug or a tautology — if weak, propose a stronger assertion; (2) which SPEC invariants have no corresponding test (propose entries); (3) what dangerous bug classes specific to this codebase domain (trading: notional sign, fill-quantity sign, time-zone-aware bar boundaries, feature schema alignment between strategy and pipeline) are uncovered; (4) flag any draft that is mechanically trivial and should be dropped. Return structured: per-draft critique (keep | strengthen | drop), then a list of NEW test entries the caller missed.
++
++## Building the prompt to Gemini
++
++The caller gives you the input artifact + pointers to relevant files. You must:
++
++1. Read the named files yourself (Read tool) so you can quote real code — Gemini cannot see this repo.
++2. Construct a single prompt that includes:
++   - **Mode** — "bundled decisions" or "plan review"
++   - **Input artifact** — verbatim decisions.md, or SPEC.md + PLAN.md
++   - **Context** — quoted code snippets, types, surrounding patterns from the repo
++   - **Constraints** — tests, perf, framework conventions, DRY/KISS/SOLID
++   - **Ask** — for bundled mode: "For each consult-flagged decision, recommend an option with reasoning, tradeoffs, and anything missed. Also flag interactions between decisions." For plan review: "Critique this plan — what's wrong, missing, or fragile?"
++
++## Returning to the caller
++
++Return a structured response:
++
++```
++## Gemini consultation: <decision summary>
++
++**Recommendation:** <Gemini's pick>
++
++**Reasoning:** <Gemini's reasoning, summarized faithfully>
++
++**Tradeoffs / risks flagged:** <bullets>
++
++**Additional considerations Gemini raised:** <bullets>
++
++**Raw response excerpt (if useful):**
++<short quote>
++```
++
++Do not editorialize, do not "improve" Gemini's answer, do not agree or disagree — that's the caller's job. Just faithfully relay.
++
++If `gemini` errors (auth, rate limit, network), report the exact error so the caller can decide whether to retry, fall back to Codex only, or ask the user.
++
++## Archiving (required)
++
++Before returning, write the full prompt + response to disk and log the event. The caller will tell you the run id; if not, derive it from the most recent `z-harness/archive/*/` directory.
++
++```bash
++RUN="<run-id from caller>"
++DIR="z-harness/archive/$RUN/transcripts"
++mkdir -p "$DIR"
++N=$(printf '%03d' $(( $(ls "$DIR" 2>/dev/null | wc -l) + 1 )))
++SLUG="gemini-<bundled-decisions|plan-review>"
++printf '%s\n' "$PROMPT" > "$DIR/$N-$SLUG.prompt.md"
++printf '%s\n' "$RESPONSE" > "$DIR/$N-$SLUG.response.md"
++
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" consult \
++  "$(printf '{"llm":"gemini","mode":"%s","prompt_chars":%d,"response_chars":%d,"wall_ms":%d,"transcript":"%s"}' \
++     "$MODE" "${#PROMPT}" "${#RESPONSE}" "$WALL_MS" "$N-$SLUG")"
++```
+=== commands/z-brainstorm.md ===
+diff --git a/commands/z-brainstorm.md b/commands/z-brainstorm.md
+new file mode 100644
+index 0000000..2156da0
+--- /dev/null
++++ b/commands/z-brainstorm.md
+@@ -0,0 +1,301 @@
++---
++description: Cheap parallel pre-plan ideation — dispatch 3 vendor-diverse ideators (Claude + Codex + Gemini), perform a mandatory anti-bias check, and produce BRAINSTORM.md to seed /z-plan.
++argument-hint: <topic to brainstorm> [--slug=<kebab>]
++---
++
++You are running the **z-harness `/z-brainstorm`** pipeline.
++
++Topic (from `$ARGUMENTS`):
++
++$ARGUMENTS
++
++**If the topic above is empty or whitespace**, do this first: use `AskUserQuestion` to ask "What topic should I brainstorm?". Wait for their reply. Treat the reply as the topic and continue.
++
++`/z-brainstorm` is **cheap, opt-in pre-planning**. It does not produce SPEC/PLAN/TASKS — those come from `/z-plan` later. Cost target: ≤200K tokens end-to-end. If you exceed that, log a warning and continue.
++
++## Setup
++
++1. **Derive slug.** If `$ARGUMENTS` contains `--slug=<value>`, use that verbatim. Otherwise auto-derive from the topic: short kebab-case, 2-4 words (e.g. "rethink batting order model" → `rethink-batting-order`). If the auto-derived slug is non-obvious, confirm via `AskUserQuestion`.
++2. **Export** `Z_HARNESS_SLUG=<slug>` for all subsequent shell calls and subagents.
++3. Pick a run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`.
++4. `mkdir -p z-harness/$Z_HARNESS_SLUG/archive/$RUN/transcripts`.
++5. **Existing slug-dir handling.** Run `ls z-harness/` to check for a matching slug dir. If `z-harness/$Z_HARNESS_SLUG/BRAINSTORM.md` exists, prompt the user via `AskUserQuestion`:
++   - **overwrite** — archive existing `BRAINSTORM.md` to `z-harness/$Z_HARNESS_SLUG/archive/$RUN/BRAINSTORM.md.previous-<N>` (where `<N>` is the next free integer in that archive dir) and start fresh
++   - **abort** — exit cleanly with no changes
++6. **Version stamp + log run start:**
++   ```bash
++   VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
++   START_PAYLOAD="$(python3 -c '
++   import json, sys
++   v = json.loads(sys.argv[1]); v["topic"] = sys.argv[2]
++   print(json.dumps(v))
++   ' "$VERSION_BLOB" "<arguments>")"
++   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" brainstorm_run_start "$START_PAYLOAD"
++   ```
++7. Notification policy: read env `Z_HARNESS_NOTIFY` (default `approval_only`). Values: `off`, `approval_only`, `all`.
++8. **Cost guardrail.** Target ≤200K tokens. If the running total exceeds 200K (rough estimate: sum prompt+response chars across consult events ÷ 4), log a warning event and continue — do not halt.
++
++**All paths live under `z-harness/<slug>/`:**
++- `z-harness/<slug>/BRAINSTORM.md`
++- `z-harness/<slug>/archive/<RUN>/...`
++
++## Phase telemetry (mandatory)
++
++At the **start** of each phase (1 through 4), record `T0=$(date +%s%3N)`. At the **end**, log:
++
++```bash
++WALL_MS=$(( $(date +%s%3N) - T0 ))
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" phase_end \
++  "$(printf '{"phase":%d,"name":"%s","wall_ms":%d,"user_wait_ms":%d}' \
++     <phase-num> "<phase-name>" "$WALL_MS" "$USER_WAIT_MS_THIS_PHASE")"
++```
++
++If a phase blocks on `AskUserQuestion`, bracket the wait with `user_wait_start` / `user_wait_end` events so we can separate machine time from human-wait time:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start '{"phase":<n>,"reason":"<short>"}'
++# ... AskUserQuestion ...
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end '{"phase":<n>,"wall_ms":<delta>}'
++```
++
++---
++
++## Phase 1 — Scaffolding
++
++Build a shared scaffolding payload that **all three ideators receive identically** (no read-by-reference asymmetry). Components:
++
++### 1a. Doc-fetcher (if INDEX.json exists)
++
++If `docs/llm/INDEX.json` exists in the repo root, dispatch ONE `doc-fetcher` (Haiku) call. **Never read INDEX.json or per-concept `<slug>.json` from main thread** — that's what doc-fetcher is for.
++
++```
++Agent(
++  subagent_type="doc-fetcher",
++  description="Doc context for <slug>",
++  prompt="query: <one-sentence summary of the topic>\nrepo_root: <abs path>\ndepth: standard"
++)
++```
++
++It returns a tight synthesis (matched concepts, key files with line ranges, invariants). If it returns `STATUS: no_docs` or `STATUS: no_match`, proceed with empty doc synthesis. If it emits a `DRIFT WARNING`, log a `doc_drift` event per affected concept.
++
++### 1b. Optional Explore
++
++If env `Z_HARNESS_BRAINSTORM_EXPLORE=1`, dispatch ONE Explore subagent (Haiku by default) to fill scaffolding gaps:
++
++```
++Agent(
++  subagent_type="Explore",
++  model: "haiku",
++  description="Brainstorm scaffolding for <slug>",
++  prompt="<TARGETED question about the topic's adjacent code / constraints>\n\nAlready known (from doc-fetcher): <paste synthesis>\n\nFocus only on what is NOT covered above."
++)
++```
++
++If `Z_HARNESS_BRAINSTORM_EXPLORE` is unset or `0`, skip this step entirely — brainstorming is supposed to be cheap.
++
++### 1c. RESEARCH.md ingestion
++
++If `z-harness/$Z_HARNESS_SLUG/RESEARCH.md` exists, read it.
++
++- **≤20 KB:** inline the full content into the scaffolding payload.
++- **>20 KB:** produce an **extractive summary** that preserves citations and constraints (do not paraphrase; copy the cited bullets and constraint statements verbatim, drop the prose). Write the summary to `z-harness/$Z_HARNESS_SLUG/archive/$RUN/research-summary-for-brainstorm.md`. Inline the summary instead of the full file.
++
++Record `depends_on: [RESEARCH.md]` in the eventual BRAINSTORM.md frontmatter if RESEARCH.md was ingested.
++
++### 1d. Assemble and hash
++
++Compute the `input_hash` per SPEC:
++
++```
++input_hash = sha256(canonicalize(
++    topic + "\n---\n" +
++    doc_fetcher_synthesis_or_empty + "\n---\n" +
++    explore_synthesis_or_empty + "\n---\n" +
++    research_md_or_summary_or_empty
++)).hexdigest()[:16]
++```
++
++`canonicalize`: strip leading/trailing whitespace; collapse all internal runs of whitespace to a single space.
++
++Checkpoint: write the assembled scaffolding to `z-harness/$Z_HARNESS_SLUG/archive/$RUN/phase1-scaffolding.md`.
++
++---
++
++## Phase 2 — Parallel ideator dispatch
++
++Spawn **all three ideators in parallel in a single message**, each receiving the **identical** scaffolding payload from Phase 1 (topic + doc-fetcher synthesis + Explore findings if any + RESEARCH content/summary if any). No read-by-reference asymmetry.
++
++Define a shared instruction block `IDEATOR_SCHEMA` (used verbatim in all three prompts):
++
++```
++Return exactly five sections: (1) Framing, (2) Core hypothesis, (3) Risks, (4) Plan implications, (5) What would change my mind. Mark any section you cannot produce as `<missing>`. Do not add other sections or a recommendation. Be bold and distinct — diversity across the three ideators is the point.
++```
++
++Then dispatch:
++
++```
++Agent(
++  subagent_type="general-purpose",
++  model="sonnet",
++  description="Claude ideator for <slug>",
++  prompt="MODE: brainstorm\n\nTopic: <topic>\n\nScaffolding:\n<paste assembled payload>\n\n<IDEATOR_SCHEMA>"
++)
++Agent(
++  subagent_type="codex-consultant",
++  description="Codex ideator for <slug>",
++  prompt="MODE: brainstorm\n\nTopic: <topic>\n\nScaffolding:\n<same payload>\n\n<IDEATOR_SCHEMA>"
++)
++Agent(
++  subagent_type="gemini-consultant",
++  description="Gemini ideator for <slug>",
++  prompt="MODE: brainstorm\n\nTopic: <topic>\n\nScaffolding:\n<same payload>\n\n<IDEATOR_SCHEMA>"
++)
++```
++
++All three ideators see byte-identical scaffolding AND byte-identical schema instructions. The consultants return RAW (per the `MODE: brainstorm` contract in their agent files) — no standard wrapper. The Claude ideator (general-purpose Sonnet) returns the same five-section block.
++
++### Ideator failure policy
++
++Treat an ideator as failed if it returns an error, times out, or returns no parseable five-section block.
++
++- **1/3 fail** → proceed with the surviving two. Record the failed member as `"<id>:failed"` in the `ideators` frontmatter list using the canonical id (`claude:failed` | `codex:failed` | `gemini:failed`). The Phase 3 anti-bias check becomes a two-way comparison (still mandatory). Log `ideator_failed` with `{vendor, reason}`.
++- **2/3 fail** → halt. Use `AskUserQuestion` with options:
++  - **retry** (default) — re-dispatch the failed ideators once
++  - **proceed-with-1** — record the two failed members and run Phase 3 with a single framing (anti-bias check becomes "single framing — no comparison possible; flag inherent bias risk")
++  - **abandon** — write a minimal abandoned BRAINSTORM.md (frontmatter: `artifact`, `slug`, `generated_at`, `command`, `input_hash`, `ideators` with `:failed` suffix on the failed members, `ideator_models`, `status: abandoned`, `chosen_framing: abandoned`; body: a single `## Abandoned` section with one sentence of context) so `/z-plan` can detect the prior attempt, then exit.
++- **3/3 fail** → hard halt. Log `total_ideator_failure`, push-notify the user, exit. Do not write BRAINSTORM.md.
++
++Log every individual failure as `ideator_failed` regardless of the bucket above.
++
++---
++
++## Phase 3 — Synthesis + mandatory anti-bias check
++
++1. **Parse** the three (or two, or one) returns. For each ideator, extract the five sections. If a section is missing or malformed, record it as `<missing>` rather than omitting it.
++
++2. **Anti-bias check (MANDATORY).** Section-by-section, compare what each ideator said and identify which framing wins that dimension. **If you (the orchestrator, running on Claude) find yourself picking the Claude ideator over a peer for a given section, you must write an explicit justification for that pick.** "Claude wins" without justification is not acceptable — every Claude-favoring call needs a concrete reason (e.g. "Claude wins on Risks because it surfaced the data-leakage edge case that Codex and Gemini missed"). For two-way comparisons (one ideator failed), the same rule applies.
++
++3. **Orchestrator recommendation.** Pick one framing as your tentative recommendation with a one-line rationale. The user is free to override.
++
++4. **Write `z-harness/$Z_HARNESS_SLUG/BRAINSTORM.md`** with YAML frontmatter:
++
++   ```yaml
++   ---
++   artifact: brainstorm
++   slug: <slug>
++   generated_at: <UTC ISO 8601>
++   command: /z-brainstorm <args>
++   input_hash: <16 hex from Phase 1d>
++   depends_on: [<RESEARCH.md if ingested>]
++   ideators:
++     - claude
++     - codex
++     - gemini
++     # failed members recorded as "<id>:failed" (e.g. claude:failed)
++   ideator_models:
++     claude: sonnet
++     codex: default
++     gemini: default
++   status: complete
++   chosen_framing: pending
++   ---
++   ```
++
++   `chosen_framing` is written as `pending` here and updated in Phase 4 to one of `claude | codex | gemini | restart | abandoned` per SPEC.
++
++   Body sections, one block per ideator (in fixed order Claude → Codex → Gemini):
++
++   ```markdown
++   ## Framing: <ideator-name>
++
++   ### Framing
++   <one paragraph or `<missing>`>
++
++   ### Core hypothesis
++   <one paragraph or `<missing>`>
++
++   ### Risks
++   <bulleted list or `<missing>`>
++
++   ### Plan implications
++   <bulleted list or `<missing>`>
++
++   ### What would change my mind
++   <bulleted list or `<missing>`>
++   ```
++
++   Followed by:
++
++   ```markdown
++   ## Anti-bias check
++   <section-by-section comparison with explicit justification for any Claude-favoring pick>
++
++   ## Orchestrator recommendation
++   <one-line rationale; user is free to override>
++   ```
++
++   Do **not** write a `## User choice` section in Phase 3 — Phase 4 writes it for the first time (no placeholder, no duplication).
++
++5. **Present** the three framings + anti-bias check + recommendation to the user via `AskUserQuestion`. Options:
++   - One option per available framing (e.g. **Claude framing**, **Codex framing**, **Gemini framing** — only for ideators that succeeded)
++   - **Restart** — discard this run and re-run with a refined topic
++   - **Abandon** — exit cleanly without finalizing
++
++Block until the user answers. Send a `PushNotification` if `Z_HARNESS_NOTIFY` is `approval_only` or `all`.
++
++---
++
++## Phase 4 — Finalize
++
++Branch on the user's Phase 3 choice:
++
++### User picked a framing
++
++1. Update the `chosen_framing:` field in the BRAINSTORM.md frontmatter from `pending` to the picked ideator id (`claude` | `codex` | `gemini`).
++2. Append (for the first time) a `## User choice` body section with the picked framing's text reproduced verbatim (so `/z-plan` can find it without re-parsing the ideator blocks) plus any free-text refinement the user provided.
++3. Confirm `status: complete` in the frontmatter.
++
++### User picked Restart
++
++1. Archive the just-written BRAINSTORM.md to `z-harness/$Z_HARNESS_SLUG/archive/$RUN/BRAINSTORM.md.previous-<N>` (next free integer). Before archiving, update the archived copy's frontmatter to `status: complete`, `chosen_framing: restart` so the historical record is spec-valid.
++2. Ask the user (free-text or `AskUserQuestion`) for the refined topic.
++3. Start a fresh RUN: regenerate `RUN`, re-mkdir, re-emit `brainstorm_run_start`, and loop back to Phase 1 with the refined topic.
++
++### User picked Abandon
++
++1. Set the frontmatter `status: abandoned` and `chosen_framing: abandoned`. Leave the file in place (so a future re-run knows there was a prior attempt).
++2. Skip the push-notify "next step" recommendation; emit a simpler "abandoned" notification.
++
++### In all branches
++
++Log `brainstorm_run_end`:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" brainstorm_run_end \
++  "$(printf '{"status":"%s","chosen_framing":"%s","ideators_failed":%d}' \
++     "<complete|abandoned>" "<framing-or-empty>" "<N>")"
++```
++
++Push-notify (if policy ≠ `off`) with a next-step recommendation:
++
++```
++Brainstorm complete (framing: <chosen>).
++
++Recommended next:
++  /z-research <question>  — (optional) map terrain before planning
++  /z-plan <task>          — start the rigorous planning pipeline; it will auto-detect BRAINSTORM.md
++```
++
++For the abandoned branch, the push notification just says "Brainstorm abandoned" with no next-step.
++
++---
++
++## Operating principles
++
++- **Cheap and parallel.** Three ideators in one message, no per-ideator round-trips.
++- **Identical scaffolding for all three.** No read-by-reference asymmetry.
++- **Anti-bias is mandatory.** Every Claude-favoring pick needs explicit justification.
++- **Failures degrade gracefully** — 1/3 proceeds, 2/3 asks, 3/3 halts.
++- **Restart is cheap.** Archive and loop, don't try to patch.
++- **Never read `docs/llm/*.json` from main thread.** Always dispatch `doc-fetcher`.
++- **Log everything** via `scripts/log-event.sh`.
+=== skills/z-brainstorm/SKILL.md ===
+diff --git a/skills/z-brainstorm/SKILL.md b/skills/z-brainstorm/SKILL.md
+new file mode 100644
+index 0000000..2156da0
+--- /dev/null
++++ b/skills/z-brainstorm/SKILL.md
+@@ -0,0 +1,301 @@
++---
++description: Cheap parallel pre-plan ideation — dispatch 3 vendor-diverse ideators (Claude + Codex + Gemini), perform a mandatory anti-bias check, and produce BRAINSTORM.md to seed /z-plan.
++argument-hint: <topic to brainstorm> [--slug=<kebab>]
++---
++
++You are running the **z-harness `/z-brainstorm`** pipeline.
++
++Topic (from `$ARGUMENTS`):
++
++$ARGUMENTS
++
++**If the topic above is empty or whitespace**, do this first: use `AskUserQuestion` to ask "What topic should I brainstorm?". Wait for their reply. Treat the reply as the topic and continue.
++
++`/z-brainstorm` is **cheap, opt-in pre-planning**. It does not produce SPEC/PLAN/TASKS — those come from `/z-plan` later. Cost target: ≤200K tokens end-to-end. If you exceed that, log a warning and continue.
++
++## Setup
++
++1. **Derive slug.** If `$ARGUMENTS` contains `--slug=<value>`, use that verbatim. Otherwise auto-derive from the topic: short kebab-case, 2-4 words (e.g. "rethink batting order model" → `rethink-batting-order`). If the auto-derived slug is non-obvious, confirm via `AskUserQuestion`.
++2. **Export** `Z_HARNESS_SLUG=<slug>` for all subsequent shell calls and subagents.
++3. Pick a run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`.
++4. `mkdir -p z-harness/$Z_HARNESS_SLUG/archive/$RUN/transcripts`.
++5. **Existing slug-dir handling.** Run `ls z-harness/` to check for a matching slug dir. If `z-harness/$Z_HARNESS_SLUG/BRAINSTORM.md` exists, prompt the user via `AskUserQuestion`:
++   - **overwrite** — archive existing `BRAINSTORM.md` to `z-harness/$Z_HARNESS_SLUG/archive/$RUN/BRAINSTORM.md.previous-<N>` (where `<N>` is the next free integer in that archive dir) and start fresh
++   - **abort** — exit cleanly with no changes
++6. **Version stamp + log run start:**
++   ```bash
++   VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
++   START_PAYLOAD="$(python3 -c '
++   import json, sys
++   v = json.loads(sys.argv[1]); v["topic"] = sys.argv[2]
++   print(json.dumps(v))
++   ' "$VERSION_BLOB" "<arguments>")"
++   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" brainstorm_run_start "$START_PAYLOAD"
++   ```
++7. Notification policy: read env `Z_HARNESS_NOTIFY` (default `approval_only`). Values: `off`, `approval_only`, `all`.
++8. **Cost guardrail.** Target ≤200K tokens. If the running total exceeds 200K (rough estimate: sum prompt+response chars across consult events ÷ 4), log a warning event and continue — do not halt.
++
++**All paths live under `z-harness/<slug>/`:**
++- `z-harness/<slug>/BRAINSTORM.md`
++- `z-harness/<slug>/archive/<RUN>/...`
++
++## Phase telemetry (mandatory)
++
++At the **start** of each phase (1 through 4), record `T0=$(date +%s%3N)`. At the **end**, log:
++
++```bash
++WALL_MS=$(( $(date +%s%3N) - T0 ))
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" phase_end \
++  "$(printf '{"phase":%d,"name":"%s","wall_ms":%d,"user_wait_ms":%d}' \
++     <phase-num> "<phase-name>" "$WALL_MS" "$USER_WAIT_MS_THIS_PHASE")"
++```
++
++If a phase blocks on `AskUserQuestion`, bracket the wait with `user_wait_start` / `user_wait_end` events so we can separate machine time from human-wait time:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start '{"phase":<n>,"reason":"<short>"}'
++# ... AskUserQuestion ...
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end '{"phase":<n>,"wall_ms":<delta>}'
++```
++
++---
++
++## Phase 1 — Scaffolding
++
++Build a shared scaffolding payload that **all three ideators receive identically** (no read-by-reference asymmetry). Components:
++
++### 1a. Doc-fetcher (if INDEX.json exists)
++
++If `docs/llm/INDEX.json` exists in the repo root, dispatch ONE `doc-fetcher` (Haiku) call. **Never read INDEX.json or per-concept `<slug>.json` from main thread** — that's what doc-fetcher is for.
++
++```
++Agent(
++  subagent_type="doc-fetcher",
++  description="Doc context for <slug>",
++  prompt="query: <one-sentence summary of the topic>\nrepo_root: <abs path>\ndepth: standard"
++)
++```
++
++It returns a tight synthesis (matched concepts, key files with line ranges, invariants). If it returns `STATUS: no_docs` or `STATUS: no_match`, proceed with empty doc synthesis. If it emits a `DRIFT WARNING`, log a `doc_drift` event per affected concept.
++
++### 1b. Optional Explore
++
++If env `Z_HARNESS_BRAINSTORM_EXPLORE=1`, dispatch ONE Explore subagent (Haiku by default) to fill scaffolding gaps:
++
++```
++Agent(
++  subagent_type="Explore",
++  model: "haiku",
++  description="Brainstorm scaffolding for <slug>",
++  prompt="<TARGETED question about the topic's adjacent code / constraints>\n\nAlready known (from doc-fetcher): <paste synthesis>\n\nFocus only on what is NOT covered above."
++)
++```
++
++If `Z_HARNESS_BRAINSTORM_EXPLORE` is unset or `0`, skip this step entirely — brainstorming is supposed to be cheap.
++
++### 1c. RESEARCH.md ingestion
++
++If `z-harness/$Z_HARNESS_SLUG/RESEARCH.md` exists, read it.
++
++- **≤20 KB:** inline the full content into the scaffolding payload.
++- **>20 KB:** produce an **extractive summary** that preserves citations and constraints (do not paraphrase; copy the cited bullets and constraint statements verbatim, drop the prose). Write the summary to `z-harness/$Z_HARNESS_SLUG/archive/$RUN/research-summary-for-brainstorm.md`. Inline the summary instead of the full file.
++
++Record `depends_on: [RESEARCH.md]` in the eventual BRAINSTORM.md frontmatter if RESEARCH.md was ingested.
++
++### 1d. Assemble and hash
++
++Compute the `input_hash` per SPEC:
++
++```
++input_hash = sha256(canonicalize(
++    topic + "\n---\n" +
++    doc_fetcher_synthesis_or_empty + "\n---\n" +
++    explore_synthesis_or_empty + "\n---\n" +
++    research_md_or_summary_or_empty
++)).hexdigest()[:16]
++```
++
++`canonicalize`: strip leading/trailing whitespace; collapse all internal runs of whitespace to a single space.
++
++Checkpoint: write the assembled scaffolding to `z-harness/$Z_HARNESS_SLUG/archive/$RUN/phase1-scaffolding.md`.
++
++---
++
++## Phase 2 — Parallel ideator dispatch
++
++Spawn **all three ideators in parallel in a single message**, each receiving the **identical** scaffolding payload from Phase 1 (topic + doc-fetcher synthesis + Explore findings if any + RESEARCH content/summary if any). No read-by-reference asymmetry.
++
++Define a shared instruction block `IDEATOR_SCHEMA` (used verbatim in all three prompts):
++
++```
++Return exactly five sections: (1) Framing, (2) Core hypothesis, (3) Risks, (4) Plan implications, (5) What would change my mind. Mark any section you cannot produce as `<missing>`. Do not add other sections or a recommendation. Be bold and distinct — diversity across the three ideators is the point.
++```
++
++Then dispatch:
++
++```
++Agent(
++  subagent_type="general-purpose",
++  model="sonnet",
++  description="Claude ideator for <slug>",
++  prompt="MODE: brainstorm\n\nTopic: <topic>\n\nScaffolding:\n<paste assembled payload>\n\n<IDEATOR_SCHEMA>"
++)
++Agent(
++  subagent_type="codex-consultant",
++  description="Codex ideator for <slug>",
++  prompt="MODE: brainstorm\n\nTopic: <topic>\n\nScaffolding:\n<same payload>\n\n<IDEATOR_SCHEMA>"
++)
++Agent(
++  subagent_type="gemini-consultant",
++  description="Gemini ideator for <slug>",
++  prompt="MODE: brainstorm\n\nTopic: <topic>\n\nScaffolding:\n<same payload>\n\n<IDEATOR_SCHEMA>"
++)
++```
++
++All three ideators see byte-identical scaffolding AND byte-identical schema instructions. The consultants return RAW (per the `MODE: brainstorm` contract in their agent files) — no standard wrapper. The Claude ideator (general-purpose Sonnet) returns the same five-section block.
++
++### Ideator failure policy
++
++Treat an ideator as failed if it returns an error, times out, or returns no parseable five-section block.
++
++- **1/3 fail** → proceed with the surviving two. Record the failed member as `"<id>:failed"` in the `ideators` frontmatter list using the canonical id (`claude:failed` | `codex:failed` | `gemini:failed`). The Phase 3 anti-bias check becomes a two-way comparison (still mandatory). Log `ideator_failed` with `{vendor, reason}`.
++- **2/3 fail** → halt. Use `AskUserQuestion` with options:
++  - **retry** (default) — re-dispatch the failed ideators once
++  - **proceed-with-1** — record the two failed members and run Phase 3 with a single framing (anti-bias check becomes "single framing — no comparison possible; flag inherent bias risk")
++  - **abandon** — write a minimal abandoned BRAINSTORM.md (frontmatter: `artifact`, `slug`, `generated_at`, `command`, `input_hash`, `ideators` with `:failed` suffix on the failed members, `ideator_models`, `status: abandoned`, `chosen_framing: abandoned`; body: a single `## Abandoned` section with one sentence of context) so `/z-plan` can detect the prior attempt, then exit.
++- **3/3 fail** → hard halt. Log `total_ideator_failure`, push-notify the user, exit. Do not write BRAINSTORM.md.
++
++Log every individual failure as `ideator_failed` regardless of the bucket above.
++
++---
++
++## Phase 3 — Synthesis + mandatory anti-bias check
++
++1. **Parse** the three (or two, or one) returns. For each ideator, extract the five sections. If a section is missing or malformed, record it as `<missing>` rather than omitting it.
++
++2. **Anti-bias check (MANDATORY).** Section-by-section, compare what each ideator said and identify which framing wins that dimension. **If you (the orchestrator, running on Claude) find yourself picking the Claude ideator over a peer for a given section, you must write an explicit justification for that pick.** "Claude wins" without justification is not acceptable — every Claude-favoring call needs a concrete reason (e.g. "Claude wins on Risks because it surfaced the data-leakage edge case that Codex and Gemini missed"). For two-way comparisons (one ideator failed), the same rule applies.
++
++3. **Orchestrator recommendation.** Pick one framing as your tentative recommendation with a one-line rationale. The user is free to override.
++
++4. **Write `z-harness/$Z_HARNESS_SLUG/BRAINSTORM.md`** with YAML frontmatter:
++
++   ```yaml
++   ---
++   artifact: brainstorm
++   slug: <slug>
++   generated_at: <UTC ISO 8601>
++   command: /z-brainstorm <args>
++   input_hash: <16 hex from Phase 1d>
++   depends_on: [<RESEARCH.md if ingested>]
++   ideators:
++     - claude
++     - codex
++     - gemini
++     # failed members recorded as "<id>:failed" (e.g. claude:failed)
++   ideator_models:
++     claude: sonnet
++     codex: default
++     gemini: default
++   status: complete
++   chosen_framing: pending
++   ---
++   ```
++
++   `chosen_framing` is written as `pending` here and updated in Phase 4 to one of `claude | codex | gemini | restart | abandoned` per SPEC.
++
++   Body sections, one block per ideator (in fixed order Claude → Codex → Gemini):
++
++   ```markdown
++   ## Framing: <ideator-name>
++
++   ### Framing
++   <one paragraph or `<missing>`>
++
++   ### Core hypothesis
++   <one paragraph or `<missing>`>
++
++   ### Risks
++   <bulleted list or `<missing>`>
++
++   ### Plan implications
++   <bulleted list or `<missing>`>
++
++   ### What would change my mind
++   <bulleted list or `<missing>`>
++   ```
++
++   Followed by:
++
++   ```markdown
++   ## Anti-bias check
++   <section-by-section comparison with explicit justification for any Claude-favoring pick>
++
++   ## Orchestrator recommendation
++   <one-line rationale; user is free to override>
++   ```
++
++   Do **not** write a `## User choice` section in Phase 3 — Phase 4 writes it for the first time (no placeholder, no duplication).
++
++5. **Present** the three framings + anti-bias check + recommendation to the user via `AskUserQuestion`. Options:
++   - One option per available framing (e.g. **Claude framing**, **Codex framing**, **Gemini framing** — only for ideators that succeeded)
++   - **Restart** — discard this run and re-run with a refined topic
++   - **Abandon** — exit cleanly without finalizing
++
++Block until the user answers. Send a `PushNotification` if `Z_HARNESS_NOTIFY` is `approval_only` or `all`.
++
++---
++
++## Phase 4 — Finalize
++
++Branch on the user's Phase 3 choice:
++
++### User picked a framing
++
++1. Update the `chosen_framing:` field in the BRAINSTORM.md frontmatter from `pending` to the picked ideator id (`claude` | `codex` | `gemini`).
++2. Append (for the first time) a `## User choice` body section with the picked framing's text reproduced verbatim (so `/z-plan` can find it without re-parsing the ideator blocks) plus any free-text refinement the user provided.
++3. Confirm `status: complete` in the frontmatter.
++
++### User picked Restart
++
++1. Archive the just-written BRAINSTORM.md to `z-harness/$Z_HARNESS_SLUG/archive/$RUN/BRAINSTORM.md.previous-<N>` (next free integer). Before archiving, update the archived copy's frontmatter to `status: complete`, `chosen_framing: restart` so the historical record is spec-valid.
++2. Ask the user (free-text or `AskUserQuestion`) for the refined topic.
++3. Start a fresh RUN: regenerate `RUN`, re-mkdir, re-emit `brainstorm_run_start`, and loop back to Phase 1 with the refined topic.
++
++### User picked Abandon
++
++1. Set the frontmatter `status: abandoned` and `chosen_framing: abandoned`. Leave the file in place (so a future re-run knows there was a prior attempt).
++2. Skip the push-notify "next step" recommendation; emit a simpler "abandoned" notification.
++
++### In all branches
++
++Log `brainstorm_run_end`:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" brainstorm_run_end \
++  "$(printf '{"status":"%s","chosen_framing":"%s","ideators_failed":%d}' \
++     "<complete|abandoned>" "<framing-or-empty>" "<N>")"
++```
++
++Push-notify (if policy ≠ `off`) with a next-step recommendation:
++
++```
++Brainstorm complete (framing: <chosen>).
++
++Recommended next:
++  /z-research <question>  — (optional) map terrain before planning
++  /z-plan <task>          — start the rigorous planning pipeline; it will auto-detect BRAINSTORM.md
++```
++
++For the abandoned branch, the push notification just says "Brainstorm abandoned" with no next-step.
++
++---
++
++## Operating principles
++
++- **Cheap and parallel.** Three ideators in one message, no per-ideator round-trips.
++- **Identical scaffolding for all three.** No read-by-reference asymmetry.
++- **Anti-bias is mandatory.** Every Claude-favoring pick needs explicit justification.
++- **Failures degrade gracefully** — 1/3 proceeds, 2/3 asks, 3/3 halts.
++- **Restart is cheap.** Archive and loop, don't try to patch.
++- **Never read `docs/llm/*.json` from main thread.** Always dispatch `doc-fetcher`.
++- **Log everything** via `scripts/log-event.sh`.
+=== commands/z-research.md ===
+diff --git a/commands/z-research.md b/commands/z-research.md
+new file mode 100644
+index 0000000..f60f5ea
+--- /dev/null
++++ b/commands/z-research.md
+@@ -0,0 +1,350 @@
++---
++description: Structured pre-plan terrain mapping — up to 3 parallel Explore subagents, bundled cross-LLM critique, produce RESEARCH.md with file:line citations to ground /z-plan. Explicitly does not recommend an approach.
++argument-hint: <question or technical area to research>
++---
++
++You are running the **z-harness `/z-research`** pipeline.
++
++Question (from `$ARGUMENTS`):
++
++$ARGUMENTS
++
++**If the question above is empty or whitespace**, do this first: use `AskUserQuestion` (or a direct question if a free-text answer is needed) to ask "What question should I research?". Wait for their reply. Treat their reply as the question and continue. Do not proceed past this point without a concrete question.
++
++Strict, multi-phase. Do not skip phases. `/z-research` produces a research note only — it maps terrain, it does not pick an approach. Implementation and approach-selection happen later via `/z-brainstorm` or `/z-plan`.
++
++**Known v1 limitation:** `Agent()` does not expose a per-call wall-clock timeout. Subagents that hang block the run. User escape: ctrl-c.
++
++## Setup
++
++1. **Parse `--slug=<value>` flag** from `$ARGUMENTS` first. If present, strip the entire `--slug=<value>` token from the arguments — the remainder is the research question, and the explicit slug overrides auto-derivation. The stripped `--slug=` token MUST NOT appear in any prompt to subagents and MUST NOT be included in the canonical text fed into `input_hash` (use only the cleaned research question + any non-`--slug` flags). Store the original normalized invocation (question + supported flags) separately for the final `command:` frontmatter.
++
++   **Derive a research slug** (only if `--slug=` was not provided): from the cleaned question, short kebab-case, 2-4 words (e.g. "how does the retry logic interact with token bucket limits?" → `retry-token-bucket`). Run `ls z-harness/` to check for existing slug dirs. Slug-collision handling (precontext-only vs finished-plan dir, and the auto-derived-slug confirmation) is deferred to **Phase 0.5** below so we do not mutate the workspace before the user clears the cost gate.
++
++   If `--slug=` was explicitly provided, skip auto-derivation but still defer collision handling to Phase 0.5.
++2. **Export** `Z_HARNESS_SLUG=<slug>` for all subsequent shell calls and subagents.
++3. Pick a run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`
++4. `mkdir -p z-harness/$Z_HARNESS_SLUG/archive/$RUN/transcripts`
++5. Capture the z-harness plugin version stamp and log the run start (merge version blob into the payload):
++   ```bash
++   VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
++   START_PAYLOAD="$(python3 -c '
++   import json, sys
++   v = json.loads(sys.argv[1]); v["question"] = sys.argv[2]
++   print(json.dumps(v))
++   ' "$VERSION_BLOB" "<arguments>")"
++   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" research_run_start "$START_PAYLOAD"
++   ```
++6. Notification policy: read env `Z_HARNESS_NOTIFY` (default `approval_only`). Values: `off`, `approval_only`, `all`.
++7. **Check for LLM-tier docs.** If `docs/llm/INDEX.json` exists, note its existence; Phase 1 will dispatch `doc-fetcher` (Haiku). The orchestrator never reads `docs/llm/*.json` directly from main thread.
++
++**Setup does NOT mutate `z-harness/<slug>/RESEARCH.md` or any sibling artifact.** All collision/archive decisions happen in Phase 0.5, AFTER the user clears the cost gate.
++
++**All paths in subsequent phases live under `z-harness/<slug>/`:**
++- `z-harness/<slug>/RESEARCH.md`
++- `z-harness/<slug>/archive/<run-id>/...`
++
++## Phase telemetry (mandatory)
++
++At the **start** of each phase (0, 0.5, 1 through 6), record `T0=$(date +%s%3N)`. At the **end**, log:
++
++```bash
++WALL_MS=$(( $(date +%s%3N) - T0 ))
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" phase_end \
++  "$(printf '{"phase":%d,"name":"%s","wall_ms":%d,"user_wait_ms":%d}' \
++     <phase-num> "<phase-name>" "$WALL_MS" "$USER_WAIT_MS_THIS_PHASE")"
++```
++
++If the phase blocks on `AskUserQuestion`, separately log `user_wait_start` / `user_wait_end` events bracketing that wait:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start '{"phase":<n>,"reason":"<short>"}'
++# ... AskUserQuestion ...
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end '{"phase":<n>,"wall_ms":<delta>}'
++```
++
++---
++
++## Phase 0 — Cost-confirmation gate
++
++Research can be expensive. The default fan-out is up to 3 parallel `Explore` subagents (Haiku) plus a bundled cross-LLM critique pass. Target spend: **≤2M tokens / 5-10 min wall time.** If you exceed 2M tokens at any point, log a `cost_warning` event and surface it to the user.
++
++Present the cost up front via `AskUserQuestion` with three options:
++
++- **Proceed (~2M tokens)** — full fan-out, up to 3 parallel Explores.
++- **Reduce to 1 Explore** — single Explore, lighter spend (~700k-1M tokens).
++- **Abandon** — exit cleanly, write nothing.
++
++Log the user's pick:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cost_gate_decision \
++  "$(printf '{"choice":"%s"}' "<proceed|reduce|abandon>")"
++```
++
++If `abandon`: exit. If `reduce`: set `EXPLORE_BUDGET=1`. Otherwise `EXPLORE_BUDGET=3`.
++
++Checkpoint: `phase0-cost-gate.md`.
++
++## Phase 0.5 — Slug + artifact collision handling
++
++This phase runs **only if** the user picked `proceed` or `reduce` in Phase 0. The `abandon` path must never reach this phase, so the existing workspace stays untouched.
++
++1. **Slug-dir collision (deferred from Setup step 1).** If the chosen slug (auto-derived or `--slug=`) matches an existing `z-harness/<slug>/` dir:
++   - **Precontext-only slug dir** (only `BRAINSTORM.md` and/or `RESEARCH.md` present, no `PLAN.md`/`SPEC.md`/`TASKS.md`): treat as continuation — no prompt, proceed with the existing slug.
++   - **Finished-plan slug dir** (`PLAN.md` or `TASKS.md` exists): collision — prompt the user via `AskUserQuestion` to confirm or choose a different slug.
++   If the auto-derived slug is non-obvious (and `--slug=` was not provided), confirm with the user via `AskUserQuestion`.
++
++2. **Existing-RESEARCH.md handling (deferred from old Setup step 7).** If `z-harness/$Z_HARNESS_SLUG/RESEARCH.md` exists, prompt the user via `AskUserQuestion` with three options:
++   - **archive-and-start-fresh** — archive the existing note (`mv z-harness/$Z_HARNESS_SLUG/RESEARCH.md z-harness/$Z_HARNESS_SLUG/archive/$RUN/RESEARCH.previous.md`) and proceed with a clean draft.
++   - **continue (re-use existing)** — leave the existing RESEARCH.md in place and treat this run as a refinement; the existing note's findings become inputs to Phase 3.
++   - **abort** — exit cleanly. **Do NOT touch the existing RESEARCH.md or any sibling file.** Log a `phase0_5_abort` event and return.
++
++   Log the user's pick:
++   ```bash
++   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" research_collision_decision \
++     "$(printf '{"choice":"%s"}' "<archive-and-start-fresh|continue|abort>")"
++   ```
++
++Checkpoint: `phase0_5-collision.md`.
++
++## Phase 1 — Scaffolding
++
++**Rule: doc-fetcher FIRST.** If Setup step 8 noted `docs/llm/INDEX.json` exists, spawn **ONE** `doc-fetcher` call with the question's keywords:
++
++```
++Agent(
++  subagent_type="doc-fetcher",
++  description="Doc context for <slug>",
++  prompt="query: <one-sentence summary of the question>\nrepo_root: <abs path>\ndepth: standard"
++)
++```
++
++It returns a tight synthesis: matched concepts, key files with line ranges, invariants. If it returns `STATUS: no_docs` or `STATUS: no_match`, proceed without doc grounding. If `STATUS: partial`, note the gap for Phase 2.
++
++If a `DRIFT WARNING` block appears in the return, log a `doc_drift` event per affected slug:
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" doc_drift \
++  '{"concept":"<slug>","claim":"<what doc said>","reality":"<what code says>","file":"<path>"}'
++```
++
++**No Explore here.** Phase 1 is doc-fetcher only. Explore happens in Phase 2.
++
++Checkpoint: `phase1-scaffolding.md`.
++
++## Phase 2 — Parallel Explores
++
++Dispatch up to `EXPLORE_BUDGET` parallel `Explore` subagents (Haiku) on **distinct facets** of the question. Each Explore must answer a targeted sub-question; do not dispatch overlapping queries.
++
++**Hard cap: 3.** No env override in v1. If `EXPLORE_BUDGET=1` from Phase 0, dispatch a single Explore covering the most important facet.
++
++Send all calls in **one message** so they run in parallel:
++
++```
++Agent(
++  subagent_type="Explore",
++  model: "haiku",
++  description="Facet A: <short label>",
++  prompt="<TARGETED sub-question>\n\nAlready known (from doc-fetcher): <paste tight summary or 'none'>\n\nReturn findings with file:line citations. Do NOT recommend an approach — this is terrain mapping."
++)
++Agent(
++  subagent_type="Explore",
++  model: "haiku",
++  description="Facet B: <short label>",
++  prompt="<TARGETED sub-question>\n\n..."
++)
++Agent(
++  subagent_type="Explore",
++  model: "haiku",
++  description="Facet C: <short label>",
++  prompt="<TARGETED sub-question>\n\n..."
++)
++```
++
++**When to upgrade Explore to Sonnet:** if the facet requires *interpretation* (e.g. "explain the control flow of X" rather than "where is X defined"), upgrade by setting `model: "sonnet"`. Locating > Haiku. Interpreting > Sonnet.
++
++**Track three counts separately:**
++
++- `EXPLORE_BUDGET` — the planned cap from Phase 0 (1 or 3).
++- `EXPLORES_DISPATCHED` — the number of `Explore` `Agent()` calls you actually sent in the parallel message (≤ `EXPLORE_BUDGET`).
++- `EXPLORES_SUCCEEDED` — the number of those calls that returned a usable result (no error, non-empty findings). Failed, malformed, or empty returns do NOT count.
++
++For every Explore that fails or returns malformed output, log it and surface the failure as an **Open question** in Phase 3:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" explore_failure \
++  "$(printf '{"facet":"%s","reason":"%s"}' "<facet-label>" "<short reason>")"
++```
++
++The final frontmatter uses **`EXPLORES_SUCCEEDED`** for `explore_calls:`. If `EXPLORES_DISPATCHED - EXPLORES_SUCCEEDED > 0`, emit an additional `explore_failures: <N>` frontmatter field. Do not fabricate `explore_calls` from `EXPLORE_BUDGET`.
++
++Checkpoint: `phase2-explores.md` (synthesis of all Explore returns).
++
++## Phase 3 — Draft research note
++
++Write `z-harness/$Z_HARNESS_SLUG/archive/$RUN/research-draft.md` with **these mandatory sections, in this exact order**:
++
++```markdown
++## Findings
++- <claim> (path/to/file.rs:42)
++- <claim> (path/to/other.py:117-130)
++
++## Constraints discovered
++- <constraint with citation>
++
++## Open questions
++- <question the Explores could not resolve>
++
++## No-recommendation
++This research note explicitly does not recommend an approach. Use /z-brainstorm or /z-plan to pick one.
++```
++
++**Citation requirement.** Every finding MUST cite a `file:line` (or `file:line-line` range) using the broadened regex `/[A-Za-z0-9_./-]+\.(rs|py|md|ts|tsx|js|jsx|json|toml|yaml|yml|sh|sql)(:\d+(-\d+)?)?/`, plus extensionless allowlist `Makefile`, `Dockerfile`. Markdown link form `[label](path:line)` is allowed.
++
++**Demotion rule.** Findings without a `file:line` citation are demoted to **Open questions** — do not silently drop them, and do not add a fake citation.
++
++**Recommendation invariant.** The `## No-recommendation` section is **MANDATORY and NON-DELETABLE**. The canonical text is exactly: `This research note explicitly does not recommend an approach. Use /z-brainstorm or /z-plan to pick one.` If you find yourself drafting a recommendation anywhere in the note (e.g. "we should use X", "the right approach is Y"), log a `research_temptation` event and **remove the recommendation before proceeding**:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" research_temptation \
++  '{"location":"<section>","removed_text":"<short excerpt>"}'
++```
++
++Checkpoint: `research-draft.md` (this file).
++
++## Phase 4 — Bundled cross-LLM critique
++
++Spawn **both** consultants in parallel in a single message with `MODE: research-review`. They return RAW critique (Gaps / Errors / Missing constraints) — no standard wrapper. They are explicitly forbidden from recommending an approach.
++
++```
++Agent(
++  subagent_type="gemini-consultant",
++  description="Research review (Gemini) for <slug>",
++  prompt="MODE: research-review\n\nOriginal question: <question>\n\nScaffolding (doc-fetcher synthesis): <paste>\n\nResearch draft:\n<paste research-draft.md verbatim>\n\nReturn three sections only: Gaps, Errors, Missing constraints. Do NOT recommend an approach."
++)
++Agent(
++  subagent_type="codex-consultant",
++  description="Research review (Codex) for <slug>",
++  prompt="MODE: research-review\n\nOriginal question: <question>\n\nScaffolding (doc-fetcher synthesis): <paste>\n\nResearch draft:\n<paste research-draft.md verbatim>\n\nReturn three sections only: Gaps, Errors, Missing constraints. Do NOT recommend an approach."
++)
++```
++
++Save the raw transcripts under `archive/$RUN/transcripts/` (the consultant subagents do this themselves).
++
++**Per-consultant failure policy.** A consultant return is "failed" if it errors, returns empty, or returns a payload that does not contain at least one of `Gaps` / `Errors` / `Missing constraints` sections (malformed). For each consultant independently:
++
++1. **Retry once.** Re-dispatch the same consultant with the identical prompt. Log a `consultant_retry` event with `{"consultant":"<gemini|codex>","reason":"<error|empty|malformed>"}`.
++2. **If still failed**, record `<consultant>:failed` as a line in Phase 5's `## Cross-LLM review notes` section. The gap that consultant would have filled remains **unfilled**. Log `consultant_failed` with the same shape.
++
++**Aggregate decision** (after both consultants resolve):
++
++- **At least one consultant succeeded** → proceed to Phase 5 with the available critique; the `status:` frontmatter field may be `complete`.
++- **Both consultants failed (after retry)** → DO NOT mark `status: complete`. Prompt the user via `AskUserQuestion` with three options:
++  - **proceed-with-no-critique** — finalize with `status: complete_no_critique` and an explicit `## Cross-LLM review notes` entry stating both consultants failed.
++  - **retry-both** — dispatch Phase 4 from scratch once more.
++  - **abandon** — write nothing further; log `research_run_end` with `status: abandoned_critique_failure` and exit.
++
++Log the aggregate decision:
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" critique_failure_decision \
++  "$(printf '{"choice":"%s"}' "<proceed-with-no-critique|retry-both|abandon>")"
++```
++
++Checkpoint: `phase4-critiques.md` (both critiques side-by-side, with `<consultant>:failed` markers where applicable).
++
++## Phase 5 — Revise
++
++For each consultant gap / error / missing-constraint:
++
++- **Fill it** if the orchestrator can resolve it from existing Explore returns or via a quick targeted Read.
++- **Note it as unfilled** in the `## Cross-LLM review notes` section if it would require another Explore dispatch (out of scope at this phase).
++
++Update the draft accordingly. If a consultant tried to recommend an approach despite the MODE prohibition, **strip the recommendation** and log `research_temptation` for the consultant turn.
++
++Add a `## Cross-LLM review notes` section to the draft summarizing:
++- Gemini's flagged gaps / errors / missing constraints — and which were filled vs. left as Open questions.
++- Codex's flagged gaps / errors / missing constraints — and which were filled vs. left as Open questions.
++
++Re-run the demotion rule from Phase 3: any new findings introduced during revision must carry a `file:line` citation or be demoted.
++
++Checkpoint: `research-draft.revised.md`.
++
++## Phase 6 — Finalize
++
++Compute `input_hash` per the SPEC algorithm:
++
++```
++input_hash = sha256(canonicalize(
++    question + "\n---\n" +
++    doc_fetcher_synthesis_or_empty + "\n---\n" +
++    explore_synthesis_or_empty + "\n---\n" +
++    research_md_or_empty
++)).hexdigest()[:16]
++```
++
++`canonicalize`: strip leading/trailing whitespace; collapse all internal runs of whitespace to single space.
++
++Write final `z-harness/$Z_HARNESS_SLUG/RESEARCH.md`:
++
++```markdown
++---
++artifact: research
++slug: <slug>
++generated_at: <ISO-8601 UTC>
++command: /z-research "<verbatim cleaned research question>" [--slug=<value>]
++input_hash: <16 hex chars>
++depends_on: []
++explore_calls: <EXPLORES_SUCCEEDED, 0..3>
++# explore_failures only emitted if (EXPLORES_DISPATCHED - EXPLORES_SUCCEEDED) > 0:
++explore_failures: <N>
++status: <complete | complete_no_critique>
++---
++
++# Research: <question>
++
++## Findings
++<bulleted list with file:line citations>
++
++## Constraints discovered
++<bulleted list>
++
++## Open questions
++<bulleted list>
++
++## No-recommendation
++This research note explicitly does not recommend an approach. Use /z-brainstorm or /z-plan to pick one.
++
++## Cross-LLM review notes
++<consultant feedback summary; filled vs unfilled gaps>
++```
++
++**`command:` frontmatter rule.** Store the exact normalized invocation, including the verbatim cleaned research question (double-quoted) and any supported flags such as `--slug=<value>`. Example: `command: /z-research "What's the right schema for X?" --slug=foo-bar`. The bare `command: /z-research` form is **forbidden** — reproducibility requires the question be recoverable from the frontmatter alone.
++
++**`status:` frontmatter rule.** Use `complete` when at least one consultant critique phase succeeded. Use `complete_no_critique` when both consultants failed (after retry) AND the user picked `proceed-with-no-critique` at the Phase 4 aggregate prompt. Never write `status: complete` when both consultants failed.
++
++Log run end:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" research_run_end \
++  "$(printf '{"slug":"%s","explore_calls":%d,"explore_failures":%d,"status":"%s"}' \
++     "$Z_HARNESS_SLUG" "$EXPLORES_SUCCEEDED" "$((EXPLORES_DISPATCHED - EXPLORES_SUCCEEDED))" "<complete|complete_no_critique>")"
++```
++
++Send a `PushNotification` if policy ≠ `off` with a next-step recommendation:
++
++```
++Research complete. RESEARCH.md written to z-harness/<slug>/RESEARCH.md.
++
++Recommended next step:
++  /z-brainstorm <topic>  — ideate approaches grounded in this research, OR
++  /z-plan <task>         — go straight to planning if the approach is already clear
++```
++
++---
++
++## Operating principles
++
++- **Terrain mapping, not direction picking.** The `## No-recommendation` section is invariant. Every temptation to recommend gets logged and removed.
++- **Citations are non-negotiable.** No `file:line` → not a finding.
++- **Cost discipline.** Phase 0 is the user's gate; respect their pick. If you exceed 2M tokens, warn.
++- **Log everything.** Every Explore dispatch, consultant call, temptation, and demotion — via `scripts/log-event.sh`.
+=== skills/z-research/SKILL.md ===
+diff --git a/skills/z-research/SKILL.md b/skills/z-research/SKILL.md
+new file mode 100644
+index 0000000..f60f5ea
+--- /dev/null
++++ b/skills/z-research/SKILL.md
+@@ -0,0 +1,350 @@
++---
++description: Structured pre-plan terrain mapping — up to 3 parallel Explore subagents, bundled cross-LLM critique, produce RESEARCH.md with file:line citations to ground /z-plan. Explicitly does not recommend an approach.
++argument-hint: <question or technical area to research>
++---
++
++You are running the **z-harness `/z-research`** pipeline.
++
++Question (from `$ARGUMENTS`):
++
++$ARGUMENTS
++
++**If the question above is empty or whitespace**, do this first: use `AskUserQuestion` (or a direct question if a free-text answer is needed) to ask "What question should I research?". Wait for their reply. Treat their reply as the question and continue. Do not proceed past this point without a concrete question.
++
++Strict, multi-phase. Do not skip phases. `/z-research` produces a research note only — it maps terrain, it does not pick an approach. Implementation and approach-selection happen later via `/z-brainstorm` or `/z-plan`.
++
++**Known v1 limitation:** `Agent()` does not expose a per-call wall-clock timeout. Subagents that hang block the run. User escape: ctrl-c.
++
++## Setup
++
++1. **Parse `--slug=<value>` flag** from `$ARGUMENTS` first. If present, strip the entire `--slug=<value>` token from the arguments — the remainder is the research question, and the explicit slug overrides auto-derivation. The stripped `--slug=` token MUST NOT appear in any prompt to subagents and MUST NOT be included in the canonical text fed into `input_hash` (use only the cleaned research question + any non-`--slug` flags). Store the original normalized invocation (question + supported flags) separately for the final `command:` frontmatter.
++
++   **Derive a research slug** (only if `--slug=` was not provided): from the cleaned question, short kebab-case, 2-4 words (e.g. "how does the retry logic interact with token bucket limits?" → `retry-token-bucket`). Run `ls z-harness/` to check for existing slug dirs. Slug-collision handling (precontext-only vs finished-plan dir, and the auto-derived-slug confirmation) is deferred to **Phase 0.5** below so we do not mutate the workspace before the user clears the cost gate.
++
++   If `--slug=` was explicitly provided, skip auto-derivation but still defer collision handling to Phase 0.5.
++2. **Export** `Z_HARNESS_SLUG=<slug>` for all subsequent shell calls and subagents.
++3. Pick a run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`
++4. `mkdir -p z-harness/$Z_HARNESS_SLUG/archive/$RUN/transcripts`
++5. Capture the z-harness plugin version stamp and log the run start (merge version blob into the payload):
++   ```bash
++   VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
++   START_PAYLOAD="$(python3 -c '
++   import json, sys
++   v = json.loads(sys.argv[1]); v["question"] = sys.argv[2]
++   print(json.dumps(v))
++   ' "$VERSION_BLOB" "<arguments>")"
++   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" research_run_start "$START_PAYLOAD"
++   ```
++6. Notification policy: read env `Z_HARNESS_NOTIFY` (default `approval_only`). Values: `off`, `approval_only`, `all`.
++7. **Check for LLM-tier docs.** If `docs/llm/INDEX.json` exists, note its existence; Phase 1 will dispatch `doc-fetcher` (Haiku). The orchestrator never reads `docs/llm/*.json` directly from main thread.
++
++**Setup does NOT mutate `z-harness/<slug>/RESEARCH.md` or any sibling artifact.** All collision/archive decisions happen in Phase 0.5, AFTER the user clears the cost gate.
++
++**All paths in subsequent phases live under `z-harness/<slug>/`:**
++- `z-harness/<slug>/RESEARCH.md`
++- `z-harness/<slug>/archive/<run-id>/...`
++
++## Phase telemetry (mandatory)
++
++At the **start** of each phase (0, 0.5, 1 through 6), record `T0=$(date +%s%3N)`. At the **end**, log:
++
++```bash
++WALL_MS=$(( $(date +%s%3N) - T0 ))
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" phase_end \
++  "$(printf '{"phase":%d,"name":"%s","wall_ms":%d,"user_wait_ms":%d}' \
++     <phase-num> "<phase-name>" "$WALL_MS" "$USER_WAIT_MS_THIS_PHASE")"
++```
++
++If the phase blocks on `AskUserQuestion`, separately log `user_wait_start` / `user_wait_end` events bracketing that wait:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start '{"phase":<n>,"reason":"<short>"}'
++# ... AskUserQuestion ...
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end '{"phase":<n>,"wall_ms":<delta>}'
++```
++
++---
++
++## Phase 0 — Cost-confirmation gate
++
++Research can be expensive. The default fan-out is up to 3 parallel `Explore` subagents (Haiku) plus a bundled cross-LLM critique pass. Target spend: **≤2M tokens / 5-10 min wall time.** If you exceed 2M tokens at any point, log a `cost_warning` event and surface it to the user.
++
++Present the cost up front via `AskUserQuestion` with three options:
++
++- **Proceed (~2M tokens)** — full fan-out, up to 3 parallel Explores.
++- **Reduce to 1 Explore** — single Explore, lighter spend (~700k-1M tokens).
++- **Abandon** — exit cleanly, write nothing.
++
++Log the user's pick:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cost_gate_decision \
++  "$(printf '{"choice":"%s"}' "<proceed|reduce|abandon>")"
++```
++
++If `abandon`: exit. If `reduce`: set `EXPLORE_BUDGET=1`. Otherwise `EXPLORE_BUDGET=3`.
++
++Checkpoint: `phase0-cost-gate.md`.
++
++## Phase 0.5 — Slug + artifact collision handling
++
++This phase runs **only if** the user picked `proceed` or `reduce` in Phase 0. The `abandon` path must never reach this phase, so the existing workspace stays untouched.
++
++1. **Slug-dir collision (deferred from Setup step 1).** If the chosen slug (auto-derived or `--slug=`) matches an existing `z-harness/<slug>/` dir:
++   - **Precontext-only slug dir** (only `BRAINSTORM.md` and/or `RESEARCH.md` present, no `PLAN.md`/`SPEC.md`/`TASKS.md`): treat as continuation — no prompt, proceed with the existing slug.
++   - **Finished-plan slug dir** (`PLAN.md` or `TASKS.md` exists): collision — prompt the user via `AskUserQuestion` to confirm or choose a different slug.
++   If the auto-derived slug is non-obvious (and `--slug=` was not provided), confirm with the user via `AskUserQuestion`.
++
++2. **Existing-RESEARCH.md handling (deferred from old Setup step 7).** If `z-harness/$Z_HARNESS_SLUG/RESEARCH.md` exists, prompt the user via `AskUserQuestion` with three options:
++   - **archive-and-start-fresh** — archive the existing note (`mv z-harness/$Z_HARNESS_SLUG/RESEARCH.md z-harness/$Z_HARNESS_SLUG/archive/$RUN/RESEARCH.previous.md`) and proceed with a clean draft.
++   - **continue (re-use existing)** — leave the existing RESEARCH.md in place and treat this run as a refinement; the existing note's findings become inputs to Phase 3.
++   - **abort** — exit cleanly. **Do NOT touch the existing RESEARCH.md or any sibling file.** Log a `phase0_5_abort` event and return.
++
++   Log the user's pick:
++   ```bash
++   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" research_collision_decision \
++     "$(printf '{"choice":"%s"}' "<archive-and-start-fresh|continue|abort>")"
++   ```
++
++Checkpoint: `phase0_5-collision.md`.
++
++## Phase 1 — Scaffolding
++
++**Rule: doc-fetcher FIRST.** If Setup step 8 noted `docs/llm/INDEX.json` exists, spawn **ONE** `doc-fetcher` call with the question's keywords:
++
++```
++Agent(
++  subagent_type="doc-fetcher",
++  description="Doc context for <slug>",
++  prompt="query: <one-sentence summary of the question>\nrepo_root: <abs path>\ndepth: standard"
++)
++```
++
++It returns a tight synthesis: matched concepts, key files with line ranges, invariants. If it returns `STATUS: no_docs` or `STATUS: no_match`, proceed without doc grounding. If `STATUS: partial`, note the gap for Phase 2.
++
++If a `DRIFT WARNING` block appears in the return, log a `doc_drift` event per affected slug:
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" doc_drift \
++  '{"concept":"<slug>","claim":"<what doc said>","reality":"<what code says>","file":"<path>"}'
++```
++
++**No Explore here.** Phase 1 is doc-fetcher only. Explore happens in Phase 2.
++
++Checkpoint: `phase1-scaffolding.md`.
++
++## Phase 2 — Parallel Explores
++
++Dispatch up to `EXPLORE_BUDGET` parallel `Explore` subagents (Haiku) on **distinct facets** of the question. Each Explore must answer a targeted sub-question; do not dispatch overlapping queries.
++
++**Hard cap: 3.** No env override in v1. If `EXPLORE_BUDGET=1` from Phase 0, dispatch a single Explore covering the most important facet.
++
++Send all calls in **one message** so they run in parallel:
++
++```
++Agent(
++  subagent_type="Explore",
++  model: "haiku",
++  description="Facet A: <short label>",
++  prompt="<TARGETED sub-question>\n\nAlready known (from doc-fetcher): <paste tight summary or 'none'>\n\nReturn findings with file:line citations. Do NOT recommend an approach — this is terrain mapping."
++)
++Agent(
++  subagent_type="Explore",
++  model: "haiku",
++  description="Facet B: <short label>",
++  prompt="<TARGETED sub-question>\n\n..."
++)
++Agent(
++  subagent_type="Explore",
++  model: "haiku",
++  description="Facet C: <short label>",
++  prompt="<TARGETED sub-question>\n\n..."
++)
++```
++
++**When to upgrade Explore to Sonnet:** if the facet requires *interpretation* (e.g. "explain the control flow of X" rather than "where is X defined"), upgrade by setting `model: "sonnet"`. Locating > Haiku. Interpreting > Sonnet.
++
++**Track three counts separately:**
++
++- `EXPLORE_BUDGET` — the planned cap from Phase 0 (1 or 3).
++- `EXPLORES_DISPATCHED` — the number of `Explore` `Agent()` calls you actually sent in the parallel message (≤ `EXPLORE_BUDGET`).
++- `EXPLORES_SUCCEEDED` — the number of those calls that returned a usable result (no error, non-empty findings). Failed, malformed, or empty returns do NOT count.
++
++For every Explore that fails or returns malformed output, log it and surface the failure as an **Open question** in Phase 3:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" explore_failure \
++  "$(printf '{"facet":"%s","reason":"%s"}' "<facet-label>" "<short reason>")"
++```
++
++The final frontmatter uses **`EXPLORES_SUCCEEDED`** for `explore_calls:`. If `EXPLORES_DISPATCHED - EXPLORES_SUCCEEDED > 0`, emit an additional `explore_failures: <N>` frontmatter field. Do not fabricate `explore_calls` from `EXPLORE_BUDGET`.
++
++Checkpoint: `phase2-explores.md` (synthesis of all Explore returns).
++
++## Phase 3 — Draft research note
++
++Write `z-harness/$Z_HARNESS_SLUG/archive/$RUN/research-draft.md` with **these mandatory sections, in this exact order**:
++
++```markdown
++## Findings
++- <claim> (path/to/file.rs:42)
++- <claim> (path/to/other.py:117-130)
++
++## Constraints discovered
++- <constraint with citation>
++
++## Open questions
++- <question the Explores could not resolve>
++
++## No-recommendation
++This research note explicitly does not recommend an approach. Use /z-brainstorm or /z-plan to pick one.
++```
++
++**Citation requirement.** Every finding MUST cite a `file:line` (or `file:line-line` range) using the broadened regex `/[A-Za-z0-9_./-]+\.(rs|py|md|ts|tsx|js|jsx|json|toml|yaml|yml|sh|sql)(:\d+(-\d+)?)?/`, plus extensionless allowlist `Makefile`, `Dockerfile`. Markdown link form `[label](path:line)` is allowed.
++
++**Demotion rule.** Findings without a `file:line` citation are demoted to **Open questions** — do not silently drop them, and do not add a fake citation.
++
++**Recommendation invariant.** The `## No-recommendation` section is **MANDATORY and NON-DELETABLE**. The canonical text is exactly: `This research note explicitly does not recommend an approach. Use /z-brainstorm or /z-plan to pick one.` If you find yourself drafting a recommendation anywhere in the note (e.g. "we should use X", "the right approach is Y"), log a `research_temptation` event and **remove the recommendation before proceeding**:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" research_temptation \
++  '{"location":"<section>","removed_text":"<short excerpt>"}'
++```
++
++Checkpoint: `research-draft.md` (this file).
++
++## Phase 4 — Bundled cross-LLM critique
++
++Spawn **both** consultants in parallel in a single message with `MODE: research-review`. They return RAW critique (Gaps / Errors / Missing constraints) — no standard wrapper. They are explicitly forbidden from recommending an approach.
++
++```
++Agent(
++  subagent_type="gemini-consultant",
++  description="Research review (Gemini) for <slug>",
++  prompt="MODE: research-review\n\nOriginal question: <question>\n\nScaffolding (doc-fetcher synthesis): <paste>\n\nResearch draft:\n<paste research-draft.md verbatim>\n\nReturn three sections only: Gaps, Errors, Missing constraints. Do NOT recommend an approach."
++)
++Agent(
++  subagent_type="codex-consultant",
++  description="Research review (Codex) for <slug>",
++  prompt="MODE: research-review\n\nOriginal question: <question>\n\nScaffolding (doc-fetcher synthesis): <paste>\n\nResearch draft:\n<paste research-draft.md verbatim>\n\nReturn three sections only: Gaps, Errors, Missing constraints. Do NOT recommend an approach."
++)
++```
++
++Save the raw transcripts under `archive/$RUN/transcripts/` (the consultant subagents do this themselves).
++
++**Per-consultant failure policy.** A consultant return is "failed" if it errors, returns empty, or returns a payload that does not contain at least one of `Gaps` / `Errors` / `Missing constraints` sections (malformed). For each consultant independently:
++
++1. **Retry once.** Re-dispatch the same consultant with the identical prompt. Log a `consultant_retry` event with `{"consultant":"<gemini|codex>","reason":"<error|empty|malformed>"}`.
++2. **If still failed**, record `<consultant>:failed` as a line in Phase 5's `## Cross-LLM review notes` section. The gap that consultant would have filled remains **unfilled**. Log `consultant_failed` with the same shape.
++
++**Aggregate decision** (after both consultants resolve):
++
++- **At least one consultant succeeded** → proceed to Phase 5 with the available critique; the `status:` frontmatter field may be `complete`.
++- **Both consultants failed (after retry)** → DO NOT mark `status: complete`. Prompt the user via `AskUserQuestion` with three options:
++  - **proceed-with-no-critique** — finalize with `status: complete_no_critique` and an explicit `## Cross-LLM review notes` entry stating both consultants failed.
++  - **retry-both** — dispatch Phase 4 from scratch once more.
++  - **abandon** — write nothing further; log `research_run_end` with `status: abandoned_critique_failure` and exit.
++
++Log the aggregate decision:
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" critique_failure_decision \
++  "$(printf '{"choice":"%s"}' "<proceed-with-no-critique|retry-both|abandon>")"
++```
++
++Checkpoint: `phase4-critiques.md` (both critiques side-by-side, with `<consultant>:failed` markers where applicable).
++
++## Phase 5 — Revise
++
++For each consultant gap / error / missing-constraint:
++
++- **Fill it** if the orchestrator can resolve it from existing Explore returns or via a quick targeted Read.
++- **Note it as unfilled** in the `## Cross-LLM review notes` section if it would require another Explore dispatch (out of scope at this phase).
++
++Update the draft accordingly. If a consultant tried to recommend an approach despite the MODE prohibition, **strip the recommendation** and log `research_temptation` for the consultant turn.
++
++Add a `## Cross-LLM review notes` section to the draft summarizing:
++- Gemini's flagged gaps / errors / missing constraints — and which were filled vs. left as Open questions.
++- Codex's flagged gaps / errors / missing constraints — and which were filled vs. left as Open questions.
++
++Re-run the demotion rule from Phase 3: any new findings introduced during revision must carry a `file:line` citation or be demoted.
++
++Checkpoint: `research-draft.revised.md`.
++
++## Phase 6 — Finalize
++
++Compute `input_hash` per the SPEC algorithm:
++
++```
++input_hash = sha256(canonicalize(
++    question + "\n---\n" +
++    doc_fetcher_synthesis_or_empty + "\n---\n" +
++    explore_synthesis_or_empty + "\n---\n" +
++    research_md_or_empty
++)).hexdigest()[:16]
++```
++
++`canonicalize`: strip leading/trailing whitespace; collapse all internal runs of whitespace to single space.
++
++Write final `z-harness/$Z_HARNESS_SLUG/RESEARCH.md`:
++
++```markdown
++---
++artifact: research
++slug: <slug>
++generated_at: <ISO-8601 UTC>
++command: /z-research "<verbatim cleaned research question>" [--slug=<value>]
++input_hash: <16 hex chars>
++depends_on: []
++explore_calls: <EXPLORES_SUCCEEDED, 0..3>
++# explore_failures only emitted if (EXPLORES_DISPATCHED - EXPLORES_SUCCEEDED) > 0:
++explore_failures: <N>
++status: <complete | complete_no_critique>
++---
++
++# Research: <question>
++
++## Findings
++<bulleted list with file:line citations>
++
++## Constraints discovered
++<bulleted list>
++
++## Open questions
++<bulleted list>
++
++## No-recommendation
++This research note explicitly does not recommend an approach. Use /z-brainstorm or /z-plan to pick one.
++
++## Cross-LLM review notes
++<consultant feedback summary; filled vs unfilled gaps>
++```
++
++**`command:` frontmatter rule.** Store the exact normalized invocation, including the verbatim cleaned research question (double-quoted) and any supported flags such as `--slug=<value>`. Example: `command: /z-research "What's the right schema for X?" --slug=foo-bar`. The bare `command: /z-research` form is **forbidden** — reproducibility requires the question be recoverable from the frontmatter alone.
++
++**`status:` frontmatter rule.** Use `complete` when at least one consultant critique phase succeeded. Use `complete_no_critique` when both consultants failed (after retry) AND the user picked `proceed-with-no-critique` at the Phase 4 aggregate prompt. Never write `status: complete` when both consultants failed.
++
++Log run end:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" research_run_end \
++  "$(printf '{"slug":"%s","explore_calls":%d,"explore_failures":%d,"status":"%s"}' \
++     "$Z_HARNESS_SLUG" "$EXPLORES_SUCCEEDED" "$((EXPLORES_DISPATCHED - EXPLORES_SUCCEEDED))" "<complete|complete_no_critique>")"
++```
++
++Send a `PushNotification` if policy ≠ `off` with a next-step recommendation:
++
++```
++Research complete. RESEARCH.md written to z-harness/<slug>/RESEARCH.md.
++
++Recommended next step:
++  /z-brainstorm <topic>  — ideate approaches grounded in this research, OR
++  /z-plan <task>         — go straight to planning if the approach is already clear
++```
++
++---
++
++## Operating principles
++
++- **Terrain mapping, not direction picking.** The `## No-recommendation` section is invariant. Every temptation to recommend gets logged and removed.
++- **Citations are non-negotiable.** No `file:line` → not a finding.
++- **Cost discipline.** Phase 0 is the user's gate; respect their pick. If you exceed 2M tokens, warn.
++- **Log everything.** Every Explore dispatch, consultant call, temptation, and demotion — via `scripts/log-event.sh`.
+=== commands/z-plan.md ===
+diff --git a/commands/z-plan.md b/commands/z-plan.md
+new file mode 100644
+index 0000000..1144136
+--- /dev/null
++++ b/commands/z-plan.md
+@@ -0,0 +1,310 @@
++---
++description: Run the rigorous z-harness planning pipeline — challenge premises, batch decisions, cross-consult Gemini + Codex once, and produce SPEC.md / PLAN.md / TASKS.md.
++argument-hint: <feature or task description>
++---
++
++You are running the **z-harness `/z-plan`** pipeline.
++
++Task (from `$ARGUMENTS`):
++
++$ARGUMENTS
++
++**If the task above is empty or whitespace**, do this first: use `AskUserQuestion` (or a direct question if a free-text answer is needed) to ask the user "What task should I plan?". Wait for their reply. Treat their reply as the task and continue. Do not proceed past this point without a concrete task description.
++
++Strict, multi-phase. Do not skip phases. Do not write production code — `/z-plan` produces planning artifacts only; implementation happens later via `/z-implement-next`.
++
++## Setup
++
++1. **Derive a plan slug** from the task: short kebab-case, 2-4 words (e.g. "expand sports ML" → `expand-sports-ml`; "add rate limit middleware" → `add-rate-limit`). Run `ls z-harness/` to check for existing slug dirs. If the derived slug matches an existing dir:
++   - **Precontext-only slug dir** (only `BRAINSTORM.md` and/or `RESEARCH.md` present, no `PLAN.md`/`SPEC.md`/`TASKS.md`): treat as continuation — no prompt, proceed with the existing slug.
++   - **Finished-plan slug dir** (`PLAN.md` or `TASKS.md` exists): collision — prompt the user via `AskUserQuestion` to confirm or choose a different slug.
++   If the auto-derived slug is non-obvious, confirm with the user via `AskUserQuestion`.
++2. **Export** `Z_HARNESS_SLUG=<slug>` for all subsequent shell calls and subagents — this is what namespaces every output path.
++3. Pick a run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`
++4. `mkdir -p z-harness/$Z_HARNESS_SLUG/archive/$RUN/transcripts`
++5. Capture the z-harness plugin version stamp and log the run start (merge version blob into the payload):
++   ```bash
++   VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
++   START_PAYLOAD="$(python3 -c '
++   import json, sys
++   v = json.loads(sys.argv[1]); v["task"] = sys.argv[2]
++   print(json.dumps(v))
++   ' "$VERSION_BLOB" "<arguments>")"
++   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_start "$START_PAYLOAD"
++   ```
++   Output lands under `z-harness/<slug>/archive/$RUN/events.jsonl` (log-event.sh honors `Z_HARNESS_SLUG`).
++6. Notification policy: read env `Z_HARNESS_NOTIFY` (default `approval_only`). Values: `off`, `approval_only`, `all`.
++7. Usage-limit guard policy: read env `Z_HARNESS_PAUSE_AT_PCT` (default `90`). If Claude Code surfaces a usage indicator and current usage ≥ this %, **don't dispatch new phases**; instead emit `usage_pause`, push-notify, and finalize whatever phase you're on cleanly. The user resumes by re-invoking `/z-plan` with the same task (or `/z-implement-all` if planning is already done).
++8. **Check for LLM-tier docs.** If `docs/llm/INDEX.json` exists in the repo root, **do NOT read it from main thread.** Note its existence; Phase 1 will dispatch `doc-fetcher` (Haiku) to read it. The orchestrator never reads `docs/llm/*.json` directly — that's what burns main-thread context unnecessarily. If INDEX.json does not exist, note that fact and continue (Phase 1 will Explore without doc grounding).
++9. **Docs-freshness gate.** If `docs/llm/INDEX.json` exists, compute staleness across all its entries before Phase 1 starts. This step is the ONE exception where main thread reads INDEX.json — but only the lightweight metadata fields (`slug`, `last_updated`, `source_file`), never the per-concept `<slug>.json` bodies. For each concept entry, compare `entry.last_updated` against the max `mtime` of its `source_files`. A concept is **stale** if any source file's mtime exceeds `last_updated`. Compute `stale_pct = stale_concepts / total_concepts`. The threshold is `$Z_HARNESS_DOC_STALENESS_THRESHOLD` (default `20` — meaning 20 percent). If `stale_pct >= threshold`, **halt before Phase 1**, push-notify the user, and recommend `/z-maintain-docs` first:
++   ```
++   Docs are <stale_pct>% stale (>= <threshold>% threshold).
++   Recommend: /z-maintain-docs to refresh, then resume /z-plan <task>.
++   ```
++   The user can override via `AskUserQuestion` ("refresh now" / "proceed with stale docs" / "abandon"). If they proceed with stale docs, emit a `doc_drift_acknowledged` event and continue — Phase 1 still uses INDEX.json but the orchestrator should weight `relevant_concepts` hints less and verify against current code more aggressively.
++10. **Pre-plan artifact detection.** Check `z-harness/$Z_HARNESS_SLUG/` for `BRAINSTORM.md` and `RESEARCH.md`.
++    - **Freshness check (RESEARCH.md only):** If `RESEARCH.md` exists, parse all file citations using regex `/[A-Za-z0-9_./-]+\.(rs|py|md|ts|tsx|js|jsx|json|toml|yaml|yml|sh|sql)(:\d+(-\d+)?)?/`. Also scan for extensionless allowlist filenames (`Makefile`, `Dockerfile`). Markdown link form `[label](path:line)` — extract the inner path. For each cited path: follow symlinks; compare mtime to `generated_at`; for line-ranges, use min-line mtime (any modification within range → stale). If any stale citation found, warn the user via `AskUserQuestion` ("proceed with stale research" / "re-run research" / "abort"). Deleted-source detection: if a cited file no longer exists, emit a `precontext_source_deleted` event (higher severity than stale-mtime) **and** trigger the same `AskUserQuestion` warn path — deleted-source citations are treated as stale for the purposes of the user gate. Parse failure: emit `precontext_freshness_check_failed`, continue (fail-open).
++    - **Conflict check:** If both `BRAINSTORM.md` and `RESEARCH.md` exist, scan for obvious contradictions (e.g. Brainstorm assumes X is possible; Research found constraint Y that prevents it). Surface contradictions to the user.
++    - **Unfinalized brainstorm:** If `BRAINSTORM.md` is present but `status: complete` is missing or `chosen_framing` is absent, recommend the user run `/z-brainstorm` again before proceeding.
++
++**All paths in subsequent phases live under `z-harness/<slug>/`:**
++- `z-harness/<slug>/SPEC.md`
++- `z-harness/<slug>/PLAN.md`
++- `z-harness/<slug>/TASKS.md`
++- `z-harness/<slug>/archive/<run-id>/...`
++
++Multiple slugs can coexist (parallel plans). The repo-wide `z-harness/metrics.jsonl` aggregates events across all slugs with a `slug` field in each event.
++
++Each phase below ends with a checkpoint — write the phase's output to `z-harness/$Z_HARNESS_SLUG/archive/$RUN/<phase>.md` so the run is resumable.
++
++## Phase telemetry (mandatory)
++
++At the **start** of each phase (0 through 9), record `T0=$(date +%s%3N)`. At the **end**, log:
++
++```bash
++WALL_MS=$(( $(date +%s%3N) - T0 ))
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" phase_end \
++  "$(printf '{"phase":%d,"name":"%s","wall_ms":%d,"user_wait_ms":%d}' \
++     <phase-num> "<phase-name>" "$WALL_MS" "$USER_WAIT_MS_THIS_PHASE")"
++```
++
++If the phase blocks on `AskUserQuestion`, separately log `user_wait_start` / `user_wait_end` events bracketing that wait so we can compute machine-time vs human-wait-time after the fact:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start '{"phase":<n>,"reason":"<short>"}'
++# ... AskUserQuestion ...
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end '{"phase":<n>,"wall_ms":<delta>}'
++```
++
++This makes post-run analysis trivial: total run time = sum(`phase_end.wall_ms`); machine time = that minus sum(`user_wait_end.wall_ms`); per-LLM costs already covered by the existing `consult` events.
++
++---
++
++## Phase 0 — Premise check
++
++**Do not take the prompt's premises for granted.** If `BRAINSTORM.md` or `RESEARCH.md` were detected in Setup step 10, **inject their content here** as input to the premise check (extracting core hypothesis + findings). Do not re-derive context already covered by these artifacts.
++
++Before any planning, ask:
++
++- Does the stated goal actually solve the underlying problem? (e.g. if the user asks for a faster cache, is caching even the right answer?)
++- Will the proposed approach actually work? (e.g. for a quant strategy: is the edge real, will it survive transaction costs, is the backtest leaking? for an architecture: will it scale to the stated load?)
++- Is there a materially better path the user hasn't considered?
++
++If any of these surface a real concern, **stop and raise it with the user before moving on.** Do not plan around a flawed premise. Use `AskUserQuestion` if there's a structured choice.
++
++If nothing concerning surfaces, write a one-paragraph "premise accepted, here's what I take the goal to be" summary so the user can correct your read.
++
++Checkpoint: `phase0-premise.md`.
++
++## Phase 1 — Exploration
++
++**RESEARCH.md shortcut:** If RESEARCH.md was detected (Setup step 10) and is non-stale, it may make doc-fetcher and/or Explore optional. The two skip conditions are **independent** — evaluate each separately:
++
++- **Skip doc-fetcher** iff RESEARCH.md is non-stale AND its `Findings:` section has ≥1 entry citing a file in the task's likely-touched set.
++- **Skip Explore** iff RESEARCH.md is non-stale AND its `Open questions:` section is empty.
++
++The four resulting cases:
++- **(a) Skip doc-fetcher only** — RESEARCH.md has findings for touched files but has open questions → run Explore, skip doc-fetcher.
++- **(b) Skip Explore only** — RESEARCH.md has no findings for touched files but has no open questions → run doc-fetcher, skip Explore.
++- **(c) Skip both** — RESEARCH.md has findings for touched files AND no open questions → skip both, proceed to Phase 2.
++- **(d) Run both** — RESEARCH.md is stale, absent, or meets neither skip condition → run both doc-fetcher and Explore.
++
++**Rule: doc-fetcher FIRST, Explore for gaps.** The two-tier docs at `docs/llm/` are a cheap pre-built oracle. The orchestrator must consult them via the `doc-fetcher` (Haiku) subagent before dispatching the (expensive) Explore subagent.
++
++### 1a. Dispatch doc-fetcher (if INDEX.json exists)
++
++If Setup step 8 noted `docs/llm/INDEX.json` exists, spawn ONE `doc-fetcher` call with the task's keywords:
++
++```
++Agent(
++  subagent_type="doc-fetcher",
++  description="Doc context for <slug>",
++  prompt="query: <one-sentence summary of the task>\nrepo_root: <abs path>\ndepth: standard"
++)
++```
++
++It returns a tight synthesis: matched concepts, key files with line ranges, invariants. If it returns `STATUS: no_docs` or `STATUS: no_match`, proceed to Explore with no grounding. If it returns `STATUS: partial`, Explore must fill the gap it named.
++
++If a `DRIFT WARNING` block appears in the return, log a `doc_drift` event per affected slug:
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" doc_drift \
++  '{"concept":"<slug>","claim":"<what doc said>","reality":"<what code says>","file":"<path>"}'
++```
++
++### 1b. Explore for gaps (Haiku by default)
++
++Now identify what doc-fetcher did NOT cover (or what's absent entirely if no docs exist): touched files, reusable patterns, constraints, adjacent code that could regress.
++
++**Explore is dispatched with `model: "haiku"` by default.** Pass it the doc-fetcher synthesis as scaffolding so it doesn't re-derive what we already have:
++
++```
++Agent(
++  subagent_type="Explore",
++  model: "haiku",
++  description="Find <thing> related to <slug>",
++  prompt="<TARGETED question that fills a specific gap from doc-fetcher>\n\nAlready known (from doc-fetcher): <paste tight summary>\n\nFocus only on what is NOT covered above."
++)
++```
++
++**When to upgrade Explore to Sonnet:** if the question requires *interpretation* (e.g. "explain the control flow of X" rather than "where is X defined"), upgrade by setting `model: "sonnet"`. Locating > Sonnet. Interpreting > Sonnet. Default > Haiku.
++
++**Cap `Explore` subagent dispatches at 3 total per `/z-plan` run.** Each Explore (even Haiku) is a repo-mapping pass that consumes meaningful cache-read context. In the data-overhaul run, 5 Opus Explores ate 13.9 M tokens — ~93% of the entire planning budget. Haiku materially cuts that, but the cap stays: if 3 is not enough, prefer direct Read/Grep/Glob from the orchestrator over a 4th Explore. Override via `Z_HARNESS_MAX_EXPLORE=N` only with explicit user request.
++
++Output a one-paragraph context summary. Checkpoint: `phase1-context.md`.
++
++## Phase 2 — Decisions document
++
++Enumerate **every** decision needed to implement this task — obvious and non-obvious. Write `z-harness/$Z_HARNESS_SLUG/archive/$RUN/decisions.md`. For each decision:
++
++- **Decision:** what's being decided
++- **Options:** ≥1 candidate, with one-line tradeoffs
++- **Tentative call:** your current pick
++- **Consult? (yes/no):** apply the rules below
++- **Trigger:** which rule made it consult-worthy (if yes)
++
++### Consultation rules
++
++A decision is **non-obvious (consult)** if *any* applies:
++
++- Introduces a new external dependency
++- Defines or changes a public API / module boundary / wire format
++- Picks an algorithm or data structure where Big-O or memory differ between candidates
++- Touches concurrency, shared state, or ordering guarantees
++- Touches persistence: schema, migration, indexes, retention
++- Names something on a public surface (hard to rename later)
++- Affects >1 module or crosses a layer boundary
++- **Reversibility:** if wrong, >1 hour to undo
++- **Articulation:** you can name ≥2 candidate options with materially different tradeoffs
++
++A decision is **obvious (skip consult)** if:
++- Following an existing convention in the same file/module
++- Local variable naming, internal helper structure
++- Mechanical refactor with no behavior change
++- Bug fix with root cause already identified
++
++## Phase 2.5 — User gate
++
++Show `decisions.md` to the user. They are the gate:
++- Can flip any decision's consult flag
++- Can override your tentative call
++- Can kill scope
++
++**Hard cap: 5 consult-flagged decisions per bundle.** If more, ask the user to pick the top 5 or split the plan into multiple `/z-plan` runs.
++
++Block here until the user has approved the decisions doc. Send a `PushNotification` if policy is `approval_only` or `all`.
++
++## Phase 3 — Bundled cross-LLM consultation
++
++Spawn **both** consultants in parallel in a single message:
++
++- `Agent(subagent_type="gemini-consultant", ...)`
++- `Agent(subagent_type="codex-consultant", ...)`
++
++Each gets the **entire approved decisions doc** with the consult-flagged decisions highlighted. They can see all decisions and flag interactions between them. Two calls total, regardless of feature size.
++
++When both return:
++1. For each recommendation, articulate **one concrete reason it might be wrong** before accepting it. This is mechanical, not optional.
++2. Synthesize. Make the final call yourself, citing which inputs you weighed.
++3. Flag any shortcut over the robust long-lasting solution — requires explicit user approval in Phase 5.
++
++Save transcripts (the consultants do this themselves). Checkpoint: `phase3-decisions-final.md`.
++
++## Phase 4 — Final clarifications
++
++If anything is still unclear about scope, constraints, or success criteria — ask the user. No silent assumptions.
++
++## Phase 5 — Present + approve
++
++If notification policy ≠ `off`, send a `PushNotification`: "Decisions ready for review."
++
++Present a **concise** decisions summary: one bullet per decision (what, why, what was rejected). Separate **Shortcuts** section: what's being skipped, robust alternative, cost of the shortcut.
++
++Use `AskUserQuestion` for explicit approval on:
++- Each major design decision
++- Each proposed shortcut (default to robust if not approved)
++
++Block until answered.
++
++## Phase 6 — Write SPEC.md and PLAN.md
++
++Create `z-harness/$Z_HARNESS_SLUG/SPEC.md` — per-file detailed spec: paths, exported surface, signatures, behavior, invariants, edge cases, error handling.
++
++The SPEC.md must include a `## Planning Inputs` section near the top (after title/overview, before any per-file sections) listing which precontext artifacts contributed to this plan:
++
++```markdown
++## Planning Inputs
++
++| Artifact | Path | generated_at |
++|----------|------|--------------|
++| BRAINSTORM.md | z-harness/<slug>/BRAINSTORM.md | <iso timestamp or "n/a"> |
++| RESEARCH.md | z-harness/<slug>/RESEARCH.md | <iso timestamp or "n/a"> |
++```
++
++If neither artifact was present, write: `none — fresh /z-plan run.`
++
++Create `z-harness/$Z_HARNESS_SLUG/PLAN.md` — approved plan: goals, decisions (with rationale), non-goals, approved shortcuts, ordered phases.
++
++Both obey **DRY / KISS / SOLID**. State explicitly how the plan respects each.
++
++## Phase 7 — Bundled final review
++
++Spawn both consultants in parallel, each handed the full SPEC.md + PLAN.md:
++- gemini-consultant: "Critique this plan. What's wrong, missing, or fragile?"
++- codex-consultant: same.
++
++Apply findings that hold up under "one reason this might be wrong" scrutiny. Push back on the rest with documented reasoning.
++
++## Phase 8 — TASKS.md
++
++Create `z-harness/$Z_HARNESS_SLUG/TASKS.md`. Break PLAN.md into small, independently-implementable tasks. Each: `T001`-style ID, title, files touched, dependencies, acceptance criteria, status `[ ]`. Size so each fits a fresh context window.
++
++**Task-count discipline.** Target **10–20 tasks**. If you produced **>25** tasks, stop and ask the user via `AskUserQuestion`:
++- "Combine 2-3 tasks I'll suggest" (you propose candidate merges)
++- "Ship as-is — this plan really is that big"
++- "Restructure — let me redesign Phase 8"
++
++Sweet spot: each task fits one fresh context window AND produces ~50–500 lines of diff. Too many micro-tasks = orchestration overhead dominates; too few mega-tasks = bad failure isolation.
++
++**Remote-verify tags.** For any task that touches Rust crates or Python scripts intended for the remote host, append a `**REMOTE_VERIFY:** <cargo command>` line to the task block. Example:
++```
++**REMOTE_VERIFY:** cargo check -p strategies-sports-ml-mispricing
++```
++The orchestrator dispatches a `remote-runner` (Haiku) to rsync+build in the sandbox; failure halts the task before review.
++
++**Docs-touched flag.** For any task that touches a user-facing surface (CLI flags, public APIs, configs, schemas), append a `**DOCS:** <concept-slug>` line. This is a hint for `/z-maintain-docs`; not a rigid task on its own.
++
++**Complexity stamp (parallel Haiku classifier).** After writing all task blocks, dispatch the `complexity-classifier` (Haiku) subagent once per task **in parallel** (single message, multiple `Agent()` calls). Each call passes the verbatim task block, `spec_slice_path: $BASE/SPEC.md`, and `repo_root`. Parse each return's `TIER:` and `REASON:` lines, then `Edit` TASKS.md to append a `**Complexity:** <tier>` line to the matching task block. Log a `task_classified` event per task:
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" task_classified \
++  "$(printf '{"task":"%s","tier":"%s","reason":%s}' "<task-id>" "<tier>" "$(printf '%s' "<reason>" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')")"
++```
++If a task block already contains a user-authored `**Complexity:** <tier>` line (rare at plan-time, but possible if the user is editing TASKS.md in-flight), the classifier returns `REASON: user-authored override` and you leave the stamp alone. The orchestrator `/z-implement-all` reads this stamp at dispatch time to pick the implementer model (`low|medium` → Sonnet, `high` → Opus).
++
++## Phase 9 — Finalize archive
++
++Copy `z-harness/$Z_HARNESS_SLUG/{SPEC,PLAN,TASKS}.md` into `z-harness/$Z_HARNESS_SLUG/archive/$RUN/`. Update `manifest.json` with end timestamp, status `complete`, totals (decision count, consultation count, total tokens if available).
++
++Log run end. Send a `PushNotification` if policy ≠ `off` with THREE recommendations:
++```
++Plan complete. <N> tasks queued.
++
++Recommended:
++  /compact          — free planning context before next phase
++  /z-test           — (optional, recommended for risky / financial code) draft semantic test cases before implementation
++  /z-implement-all  — orchestrate the queue (auto-includes TESTS.md if present, or /z-implement-next for one-at-a-time)
++```
++
++The `/compact` recommendation is important: the planning phase (Explore agents, decisions doc, consultant returns, SPEC/PLAN drafting) is the heaviest context burner in the harness. Compacting at this boundary frees ~MB of main-thread context before implementation kicks off. Subagents during implementation are fresh-context already, so no per-batch compact is needed.
++
++The `/z-test` step is optional but high-value when the plan touches money, ordering, signal generation, or any other domain where mechanical correctness (which `/z-implement-all`'s codex-reviewer catches) is not enough to catch semantic bugs (notional sign flips, feature schema mismatches, unit confusion). It produces a `TESTS.md` artifact that `/z-implement-all`'s implementer subagent reads alongside TASKS.md, so test code lands in the same diff as the production code it exercises.
++
++---
++
++## Operating principles
++
++- **Premise first.** Challenge the request before planning around it.
++- **Push back is structural** — every accepted recommendation needs an articulated "reason it might be wrong" before you accept it.
++- **Always ask** when unclear.
++- **Shortcuts only with explicit approval.**
++- **DRY / KISS / SOLID** are non-negotiable.
++- **Log everything.** Every consultation, approval, pushback, error — via `scripts/log-event.sh`.
+=== skills/z-plan/SKILL.md ===
+diff --git a/skills/z-plan/SKILL.md b/skills/z-plan/SKILL.md
+new file mode 100644
+index 0000000..1144136
+--- /dev/null
++++ b/skills/z-plan/SKILL.md
+@@ -0,0 +1,310 @@
++---
++description: Run the rigorous z-harness planning pipeline — challenge premises, batch decisions, cross-consult Gemini + Codex once, and produce SPEC.md / PLAN.md / TASKS.md.
++argument-hint: <feature or task description>
++---
++
++You are running the **z-harness `/z-plan`** pipeline.
++
++Task (from `$ARGUMENTS`):
++
++$ARGUMENTS
++
++**If the task above is empty or whitespace**, do this first: use `AskUserQuestion` (or a direct question if a free-text answer is needed) to ask the user "What task should I plan?". Wait for their reply. Treat their reply as the task and continue. Do not proceed past this point without a concrete task description.
++
++Strict, multi-phase. Do not skip phases. Do not write production code — `/z-plan` produces planning artifacts only; implementation happens later via `/z-implement-next`.
++
++## Setup
++
++1. **Derive a plan slug** from the task: short kebab-case, 2-4 words (e.g. "expand sports ML" → `expand-sports-ml`; "add rate limit middleware" → `add-rate-limit`). Run `ls z-harness/` to check for existing slug dirs. If the derived slug matches an existing dir:
++   - **Precontext-only slug dir** (only `BRAINSTORM.md` and/or `RESEARCH.md` present, no `PLAN.md`/`SPEC.md`/`TASKS.md`): treat as continuation — no prompt, proceed with the existing slug.
++   - **Finished-plan slug dir** (`PLAN.md` or `TASKS.md` exists): collision — prompt the user via `AskUserQuestion` to confirm or choose a different slug.
++   If the auto-derived slug is non-obvious, confirm with the user via `AskUserQuestion`.
++2. **Export** `Z_HARNESS_SLUG=<slug>` for all subsequent shell calls and subagents — this is what namespaces every output path.
++3. Pick a run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`
++4. `mkdir -p z-harness/$Z_HARNESS_SLUG/archive/$RUN/transcripts`
++5. Capture the z-harness plugin version stamp and log the run start (merge version blob into the payload):
++   ```bash
++   VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
++   START_PAYLOAD="$(python3 -c '
++   import json, sys
++   v = json.loads(sys.argv[1]); v["task"] = sys.argv[2]
++   print(json.dumps(v))
++   ' "$VERSION_BLOB" "<arguments>")"
++   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_start "$START_PAYLOAD"
++   ```
++   Output lands under `z-harness/<slug>/archive/$RUN/events.jsonl` (log-event.sh honors `Z_HARNESS_SLUG`).
++6. Notification policy: read env `Z_HARNESS_NOTIFY` (default `approval_only`). Values: `off`, `approval_only`, `all`.
++7. Usage-limit guard policy: read env `Z_HARNESS_PAUSE_AT_PCT` (default `90`). If Claude Code surfaces a usage indicator and current usage ≥ this %, **don't dispatch new phases**; instead emit `usage_pause`, push-notify, and finalize whatever phase you're on cleanly. The user resumes by re-invoking `/z-plan` with the same task (or `/z-implement-all` if planning is already done).
++8. **Check for LLM-tier docs.** If `docs/llm/INDEX.json` exists in the repo root, **do NOT read it from main thread.** Note its existence; Phase 1 will dispatch `doc-fetcher` (Haiku) to read it. The orchestrator never reads `docs/llm/*.json` directly — that's what burns main-thread context unnecessarily. If INDEX.json does not exist, note that fact and continue (Phase 1 will Explore without doc grounding).
++9. **Docs-freshness gate.** If `docs/llm/INDEX.json` exists, compute staleness across all its entries before Phase 1 starts. This step is the ONE exception where main thread reads INDEX.json — but only the lightweight metadata fields (`slug`, `last_updated`, `source_file`), never the per-concept `<slug>.json` bodies. For each concept entry, compare `entry.last_updated` against the max `mtime` of its `source_files`. A concept is **stale** if any source file's mtime exceeds `last_updated`. Compute `stale_pct = stale_concepts / total_concepts`. The threshold is `$Z_HARNESS_DOC_STALENESS_THRESHOLD` (default `20` — meaning 20 percent). If `stale_pct >= threshold`, **halt before Phase 1**, push-notify the user, and recommend `/z-maintain-docs` first:
++   ```
++   Docs are <stale_pct>% stale (>= <threshold>% threshold).
++   Recommend: /z-maintain-docs to refresh, then resume /z-plan <task>.
++   ```
++   The user can override via `AskUserQuestion` ("refresh now" / "proceed with stale docs" / "abandon"). If they proceed with stale docs, emit a `doc_drift_acknowledged` event and continue — Phase 1 still uses INDEX.json but the orchestrator should weight `relevant_concepts` hints less and verify against current code more aggressively.
++10. **Pre-plan artifact detection.** Check `z-harness/$Z_HARNESS_SLUG/` for `BRAINSTORM.md` and `RESEARCH.md`.
++    - **Freshness check (RESEARCH.md only):** If `RESEARCH.md` exists, parse all file citations using regex `/[A-Za-z0-9_./-]+\.(rs|py|md|ts|tsx|js|jsx|json|toml|yaml|yml|sh|sql)(:\d+(-\d+)?)?/`. Also scan for extensionless allowlist filenames (`Makefile`, `Dockerfile`). Markdown link form `[label](path:line)` — extract the inner path. For each cited path: follow symlinks; compare mtime to `generated_at`; for line-ranges, use min-line mtime (any modification within range → stale). If any stale citation found, warn the user via `AskUserQuestion` ("proceed with stale research" / "re-run research" / "abort"). Deleted-source detection: if a cited file no longer exists, emit a `precontext_source_deleted` event (higher severity than stale-mtime) **and** trigger the same `AskUserQuestion` warn path — deleted-source citations are treated as stale for the purposes of the user gate. Parse failure: emit `precontext_freshness_check_failed`, continue (fail-open).
++    - **Conflict check:** If both `BRAINSTORM.md` and `RESEARCH.md` exist, scan for obvious contradictions (e.g. Brainstorm assumes X is possible; Research found constraint Y that prevents it). Surface contradictions to the user.
++    - **Unfinalized brainstorm:** If `BRAINSTORM.md` is present but `status: complete` is missing or `chosen_framing` is absent, recommend the user run `/z-brainstorm` again before proceeding.
++
++**All paths in subsequent phases live under `z-harness/<slug>/`:**
++- `z-harness/<slug>/SPEC.md`
++- `z-harness/<slug>/PLAN.md`
++- `z-harness/<slug>/TASKS.md`
++- `z-harness/<slug>/archive/<run-id>/...`
++
++Multiple slugs can coexist (parallel plans). The repo-wide `z-harness/metrics.jsonl` aggregates events across all slugs with a `slug` field in each event.
++
++Each phase below ends with a checkpoint — write the phase's output to `z-harness/$Z_HARNESS_SLUG/archive/$RUN/<phase>.md` so the run is resumable.
++
++## Phase telemetry (mandatory)
++
++At the **start** of each phase (0 through 9), record `T0=$(date +%s%3N)`. At the **end**, log:
++
++```bash
++WALL_MS=$(( $(date +%s%3N) - T0 ))
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" phase_end \
++  "$(printf '{"phase":%d,"name":"%s","wall_ms":%d,"user_wait_ms":%d}' \
++     <phase-num> "<phase-name>" "$WALL_MS" "$USER_WAIT_MS_THIS_PHASE")"
++```
++
++If the phase blocks on `AskUserQuestion`, separately log `user_wait_start` / `user_wait_end` events bracketing that wait so we can compute machine-time vs human-wait-time after the fact:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start '{"phase":<n>,"reason":"<short>"}'
++# ... AskUserQuestion ...
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end '{"phase":<n>,"wall_ms":<delta>}'
++```
++
++This makes post-run analysis trivial: total run time = sum(`phase_end.wall_ms`); machine time = that minus sum(`user_wait_end.wall_ms`); per-LLM costs already covered by the existing `consult` events.
++
++---
++
++## Phase 0 — Premise check
++
++**Do not take the prompt's premises for granted.** If `BRAINSTORM.md` or `RESEARCH.md` were detected in Setup step 10, **inject their content here** as input to the premise check (extracting core hypothesis + findings). Do not re-derive context already covered by these artifacts.
++
++Before any planning, ask:
++
++- Does the stated goal actually solve the underlying problem? (e.g. if the user asks for a faster cache, is caching even the right answer?)
++- Will the proposed approach actually work? (e.g. for a quant strategy: is the edge real, will it survive transaction costs, is the backtest leaking? for an architecture: will it scale to the stated load?)
++- Is there a materially better path the user hasn't considered?
++
++If any of these surface a real concern, **stop and raise it with the user before moving on.** Do not plan around a flawed premise. Use `AskUserQuestion` if there's a structured choice.
++
++If nothing concerning surfaces, write a one-paragraph "premise accepted, here's what I take the goal to be" summary so the user can correct your read.
++
++Checkpoint: `phase0-premise.md`.
++
++## Phase 1 — Exploration
++
++**RESEARCH.md shortcut:** If RESEARCH.md was detected (Setup step 10) and is non-stale, it may make doc-fetcher and/or Explore optional. The two skip conditions are **independent** — evaluate each separately:
++
++- **Skip doc-fetcher** iff RESEARCH.md is non-stale AND its `Findings:` section has ≥1 entry citing a file in the task's likely-touched set.
++- **Skip Explore** iff RESEARCH.md is non-stale AND its `Open questions:` section is empty.
++
++The four resulting cases:
++- **(a) Skip doc-fetcher only** — RESEARCH.md has findings for touched files but has open questions → run Explore, skip doc-fetcher.
++- **(b) Skip Explore only** — RESEARCH.md has no findings for touched files but has no open questions → run doc-fetcher, skip Explore.
++- **(c) Skip both** — RESEARCH.md has findings for touched files AND no open questions → skip both, proceed to Phase 2.
++- **(d) Run both** — RESEARCH.md is stale, absent, or meets neither skip condition → run both doc-fetcher and Explore.
++
++**Rule: doc-fetcher FIRST, Explore for gaps.** The two-tier docs at `docs/llm/` are a cheap pre-built oracle. The orchestrator must consult them via the `doc-fetcher` (Haiku) subagent before dispatching the (expensive) Explore subagent.
++
++### 1a. Dispatch doc-fetcher (if INDEX.json exists)
++
++If Setup step 8 noted `docs/llm/INDEX.json` exists, spawn ONE `doc-fetcher` call with the task's keywords:
++
++```
++Agent(
++  subagent_type="doc-fetcher",
++  description="Doc context for <slug>",
++  prompt="query: <one-sentence summary of the task>\nrepo_root: <abs path>\ndepth: standard"
++)
++```
++
++It returns a tight synthesis: matched concepts, key files with line ranges, invariants. If it returns `STATUS: no_docs` or `STATUS: no_match`, proceed to Explore with no grounding. If it returns `STATUS: partial`, Explore must fill the gap it named.
++
++If a `DRIFT WARNING` block appears in the return, log a `doc_drift` event per affected slug:
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" doc_drift \
++  '{"concept":"<slug>","claim":"<what doc said>","reality":"<what code says>","file":"<path>"}'
++```
++
++### 1b. Explore for gaps (Haiku by default)
++
++Now identify what doc-fetcher did NOT cover (or what's absent entirely if no docs exist): touched files, reusable patterns, constraints, adjacent code that could regress.
++
++**Explore is dispatched with `model: "haiku"` by default.** Pass it the doc-fetcher synthesis as scaffolding so it doesn't re-derive what we already have:
++
++```
++Agent(
++  subagent_type="Explore",
++  model: "haiku",
++  description="Find <thing> related to <slug>",
++  prompt="<TARGETED question that fills a specific gap from doc-fetcher>\n\nAlready known (from doc-fetcher): <paste tight summary>\n\nFocus only on what is NOT covered above."
++)
++```
++
++**When to upgrade Explore to Sonnet:** if the question requires *interpretation* (e.g. "explain the control flow of X" rather than "where is X defined"), upgrade by setting `model: "sonnet"`. Locating > Sonnet. Interpreting > Sonnet. Default > Haiku.
++
++**Cap `Explore` subagent dispatches at 3 total per `/z-plan` run.** Each Explore (even Haiku) is a repo-mapping pass that consumes meaningful cache-read context. In the data-overhaul run, 5 Opus Explores ate 13.9 M tokens — ~93% of the entire planning budget. Haiku materially cuts that, but the cap stays: if 3 is not enough, prefer direct Read/Grep/Glob from the orchestrator over a 4th Explore. Override via `Z_HARNESS_MAX_EXPLORE=N` only with explicit user request.
++
++Output a one-paragraph context summary. Checkpoint: `phase1-context.md`.
++
++## Phase 2 — Decisions document
++
++Enumerate **every** decision needed to implement this task — obvious and non-obvious. Write `z-harness/$Z_HARNESS_SLUG/archive/$RUN/decisions.md`. For each decision:
++
++- **Decision:** what's being decided
++- **Options:** ≥1 candidate, with one-line tradeoffs
++- **Tentative call:** your current pick
++- **Consult? (yes/no):** apply the rules below
++- **Trigger:** which rule made it consult-worthy (if yes)
++
++### Consultation rules
++
++A decision is **non-obvious (consult)** if *any* applies:
++
++- Introduces a new external dependency
++- Defines or changes a public API / module boundary / wire format
++- Picks an algorithm or data structure where Big-O or memory differ between candidates
++- Touches concurrency, shared state, or ordering guarantees
++- Touches persistence: schema, migration, indexes, retention
++- Names something on a public surface (hard to rename later)
++- Affects >1 module or crosses a layer boundary
++- **Reversibility:** if wrong, >1 hour to undo
++- **Articulation:** you can name ≥2 candidate options with materially different tradeoffs
++
++A decision is **obvious (skip consult)** if:
++- Following an existing convention in the same file/module
++- Local variable naming, internal helper structure
++- Mechanical refactor with no behavior change
++- Bug fix with root cause already identified
++
++## Phase 2.5 — User gate
++
++Show `decisions.md` to the user. They are the gate:
++- Can flip any decision's consult flag
++- Can override your tentative call
++- Can kill scope
++
++**Hard cap: 5 consult-flagged decisions per bundle.** If more, ask the user to pick the top 5 or split the plan into multiple `/z-plan` runs.
++
++Block here until the user has approved the decisions doc. Send a `PushNotification` if policy is `approval_only` or `all`.
++
++## Phase 3 — Bundled cross-LLM consultation
++
++Spawn **both** consultants in parallel in a single message:
++
++- `Agent(subagent_type="gemini-consultant", ...)`
++- `Agent(subagent_type="codex-consultant", ...)`
++
++Each gets the **entire approved decisions doc** with the consult-flagged decisions highlighted. They can see all decisions and flag interactions between them. Two calls total, regardless of feature size.
++
++When both return:
++1. For each recommendation, articulate **one concrete reason it might be wrong** before accepting it. This is mechanical, not optional.
++2. Synthesize. Make the final call yourself, citing which inputs you weighed.
++3. Flag any shortcut over the robust long-lasting solution — requires explicit user approval in Phase 5.
++
++Save transcripts (the consultants do this themselves). Checkpoint: `phase3-decisions-final.md`.
++
++## Phase 4 — Final clarifications
++
++If anything is still unclear about scope, constraints, or success criteria — ask the user. No silent assumptions.
++
++## Phase 5 — Present + approve
++
++If notification policy ≠ `off`, send a `PushNotification`: "Decisions ready for review."
++
++Present a **concise** decisions summary: one bullet per decision (what, why, what was rejected). Separate **Shortcuts** section: what's being skipped, robust alternative, cost of the shortcut.
++
++Use `AskUserQuestion` for explicit approval on:
++- Each major design decision
++- Each proposed shortcut (default to robust if not approved)
++
++Block until answered.
++
++## Phase 6 — Write SPEC.md and PLAN.md
++
++Create `z-harness/$Z_HARNESS_SLUG/SPEC.md` — per-file detailed spec: paths, exported surface, signatures, behavior, invariants, edge cases, error handling.
++
++The SPEC.md must include a `## Planning Inputs` section near the top (after title/overview, before any per-file sections) listing which precontext artifacts contributed to this plan:
++
++```markdown
++## Planning Inputs
++
++| Artifact | Path | generated_at |
++|----------|------|--------------|
++| BRAINSTORM.md | z-harness/<slug>/BRAINSTORM.md | <iso timestamp or "n/a"> |
++| RESEARCH.md | z-harness/<slug>/RESEARCH.md | <iso timestamp or "n/a"> |
++```
++
++If neither artifact was present, write: `none — fresh /z-plan run.`
++
++Create `z-harness/$Z_HARNESS_SLUG/PLAN.md` — approved plan: goals, decisions (with rationale), non-goals, approved shortcuts, ordered phases.
++
++Both obey **DRY / KISS / SOLID**. State explicitly how the plan respects each.
++
++## Phase 7 — Bundled final review
++
++Spawn both consultants in parallel, each handed the full SPEC.md + PLAN.md:
++- gemini-consultant: "Critique this plan. What's wrong, missing, or fragile?"
++- codex-consultant: same.
++
++Apply findings that hold up under "one reason this might be wrong" scrutiny. Push back on the rest with documented reasoning.
++
++## Phase 8 — TASKS.md
++
++Create `z-harness/$Z_HARNESS_SLUG/TASKS.md`. Break PLAN.md into small, independently-implementable tasks. Each: `T001`-style ID, title, files touched, dependencies, acceptance criteria, status `[ ]`. Size so each fits a fresh context window.
++
++**Task-count discipline.** Target **10–20 tasks**. If you produced **>25** tasks, stop and ask the user via `AskUserQuestion`:
++- "Combine 2-3 tasks I'll suggest" (you propose candidate merges)
++- "Ship as-is — this plan really is that big"
++- "Restructure — let me redesign Phase 8"
++
++Sweet spot: each task fits one fresh context window AND produces ~50–500 lines of diff. Too many micro-tasks = orchestration overhead dominates; too few mega-tasks = bad failure isolation.
++
++**Remote-verify tags.** For any task that touches Rust crates or Python scripts intended for the remote host, append a `**REMOTE_VERIFY:** <cargo command>` line to the task block. Example:
++```
++**REMOTE_VERIFY:** cargo check -p strategies-sports-ml-mispricing
++```
++The orchestrator dispatches a `remote-runner` (Haiku) to rsync+build in the sandbox; failure halts the task before review.
++
++**Docs-touched flag.** For any task that touches a user-facing surface (CLI flags, public APIs, configs, schemas), append a `**DOCS:** <concept-slug>` line. This is a hint for `/z-maintain-docs`; not a rigid task on its own.
++
++**Complexity stamp (parallel Haiku classifier).** After writing all task blocks, dispatch the `complexity-classifier` (Haiku) subagent once per task **in parallel** (single message, multiple `Agent()` calls). Each call passes the verbatim task block, `spec_slice_path: $BASE/SPEC.md`, and `repo_root`. Parse each return's `TIER:` and `REASON:` lines, then `Edit` TASKS.md to append a `**Complexity:** <tier>` line to the matching task block. Log a `task_classified` event per task:
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" task_classified \
++  "$(printf '{"task":"%s","tier":"%s","reason":%s}' "<task-id>" "<tier>" "$(printf '%s' "<reason>" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')")"
++```
++If a task block already contains a user-authored `**Complexity:** <tier>` line (rare at plan-time, but possible if the user is editing TASKS.md in-flight), the classifier returns `REASON: user-authored override` and you leave the stamp alone. The orchestrator `/z-implement-all` reads this stamp at dispatch time to pick the implementer model (`low|medium` → Sonnet, `high` → Opus).
++
++## Phase 9 — Finalize archive
++
++Copy `z-harness/$Z_HARNESS_SLUG/{SPEC,PLAN,TASKS}.md` into `z-harness/$Z_HARNESS_SLUG/archive/$RUN/`. Update `manifest.json` with end timestamp, status `complete`, totals (decision count, consultation count, total tokens if available).
++
++Log run end. Send a `PushNotification` if policy ≠ `off` with THREE recommendations:
++```
++Plan complete. <N> tasks queued.
++
++Recommended:
++  /compact          — free planning context before next phase
++  /z-test           — (optional, recommended for risky / financial code) draft semantic test cases before implementation
++  /z-implement-all  — orchestrate the queue (auto-includes TESTS.md if present, or /z-implement-next for one-at-a-time)
++```
++
++The `/compact` recommendation is important: the planning phase (Explore agents, decisions doc, consultant returns, SPEC/PLAN drafting) is the heaviest context burner in the harness. Compacting at this boundary frees ~MB of main-thread context before implementation kicks off. Subagents during implementation are fresh-context already, so no per-batch compact is needed.
++
++The `/z-test` step is optional but high-value when the plan touches money, ordering, signal generation, or any other domain where mechanical correctness (which `/z-implement-all`'s codex-reviewer catches) is not enough to catch semantic bugs (notional sign flips, feature schema mismatches, unit confusion). It produces a `TESTS.md` artifact that `/z-implement-all`'s implementer subagent reads alongside TASKS.md, so test code lands in the same diff as the production code it exercises.
++
++---
++
++## Operating principles
++
++- **Premise first.** Challenge the request before planning around it.
++- **Push back is structural** — every accepted recommendation needs an articulated "reason it might be wrong" before you accept it.
++- **Always ask** when unclear.
++- **Shortcuts only with explicit approval.**
++- **DRY / KISS / SOLID** are non-negotiable.
++- **Log everything.** Every consultation, approval, pushback, error — via `scripts/log-event.sh`.
+=== README.md ===
+diff --git a/README.md b/README.md
+new file mode 100644
+index 0000000..80b6c31
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,189 @@
++# z-harness
++
++A Claude Code plugin that wraps planning and implementation in a rigorous, cross-LLM-reviewed pipeline.
++
++## What it does
++
++Every command writes its artifacts under `z-harness/<slug>/`, with run-frozen archives in `z-harness/<slug>/archive/<run-id>/` and aggregated telemetry in `z-harness/metrics.jsonl`.
++
++### Pre-planning (optional; feed into `/z-plan`)
++
++- **`/z-brainstorm <topic>`** — Cheap parallel idea generation across three vendor-diverse ideators (Claude Sonnet + Codex + Gemini). Produces `BRAINSTORM.md` in `z-harness/<slug>/`. Cost target: ≤200K tokens. Use this when the framing or approach for a problem is still open and you want divergent perspectives before locking in a plan.
++- **`/z-research <question>`** — Heavier terrain mapping via parallel Explores + cross-LLM critique. Produces `RESEARCH.md` in `z-harness/<slug>/`. Cost target: ≤2M tokens. Use this when you need concrete file:line evidence about an existing codebase or design space before deciding what to build.
++
++**Typical chains:**
++
++- Murky problem: `/z-research → /z-brainstorm → /z-plan` — research terrain first, generate framed approaches, then plan.
++- Lighter case: `/z-brainstorm → /z-plan` — skip research when the codebase is already well understood.
++- Standard: `/z-plan` alone — when the problem and approach are already clear.
++
++`/z-plan` Setup step 10 automatically detects `BRAINSTORM.md` and `RESEARCH.md` in the slug directory and incorporates them into Phase 0 (premise check) and Phase 1 (exploration). For `RESEARCH.md`, a freshness check runs against every cited `file:line` reference; stale citations prompt a warning before proceeding. If `RESEARCH.md` is non-stale and covers the task's likely-touched files, doc-fetcher and Explore become optional in Phase 1.
++
++### Planning
++
++- **`/z-plan <task>`** — Rigorous pipeline: premise check → exploration (with `docs/llm/INDEX.json` if present, plus a freshness gate that defers to `/z-maintain-docs` when docs are stale) → enumerate decisions → user-gated bundled Gemini+Codex consult → SPEC.md / PLAN.md / TASKS.md.
++- **`/z-plan-light <fix>`** — Fast path for 1-5 file fixes; auto-bails to `/z-plan` if scope grows. Single `FIX.md` artifact, inline implementation, codex-reviewer safety gate kept.
++- **`/z-test`** — Semantic test-case planner. Reads SPEC/PLAN/TASKS, drafts non-trivial tests (sign errors, schema mismatches, off-by-one, unit confusion), cross-consults Gemini+Codex, writes `TESTS.md`. The implementer reads TESTS.md alongside TASKS.md so tests land in the same diff as production code.
++
++### Implementation
++
++- **`/z-implement-all`** — Orchestrates the full TASKS.md queue: one fresh `implementer` subagent per task → per-task `codex-reviewer` safety gate → retry once on review failure → push-notify at every task boundary.
++- **`/z-implement-next`** — Same loop, one task at a time.
++
++### Audit, debug, review
++
++- **`/z-audit <target>`** — Read-only audit pipeline. Pre-flight scopes (target, dimensions, optional `.claude/audit-rubrics/<component>.md`), spawns one `auditor` subagent per dimension in parallel (correctness / perf / cleanliness / design), bundled Gemini+Codex consult on findings, emits REPORT.md + TASKS.md in `/z-implement-all`-compatible format, codex-reviewer safety gate.
++- **`/z-debug <symptom>`** — Investigate a known-bad behavior with explicit repro / hypothesis / evidence / isolation phases; cross-LLM consult at hypothesis and fix stages; auto-bails to `/z-plan` if scope grows; writes a post-mortem.
++- **`/z-review-all`** — Final-gate cross-LLM review of a completed plan's cumulative diff against SPEC.md — catches implementation drift and aggregate-only spec gaps.
++- **`/z-skill-fix <skill>`** — Meta-command. Patches any `.claude/skills/*/SKILL.md` (or `commands/*.md` / `agents/*.md` inside z-harness itself). Inline diagnosis → surgical edit → codex-reviewer safety gate.
++
++### Docs
++
++- **`/z-init-docs`** — Bootstrap two-tier docs (`docs/human/` markdown + `docs/llm/INDEX.json` token-compacted) so `/z-plan` Phase 1 has a fast-lookup oracle.
++- **`/z-maintain-docs`** — Refresh stale concepts whose source files changed since each doc's `last_updated`. Dry-run preview by default.
++
++### Telemetry
++
++- **`/z-stats`** — Read-only progress + cost report from `metrics.jsonl` and TASKS.md. No writes, no LLM calls.
++
++### Subagents (invoked by commands; you don't call them directly)
++
++| Agent | Model | Role |
++|---|---|---|
++| `implementer` | sonnet | Implements one task in fresh context |
++| `auditor` | sonnet | Audits one dimension, returns structured findings |
++| `gemini-consultant` | (CLI) | Cross-LLM consult via Gemini |
++| `codex-consultant` | (CLI) | Cross-LLM consult via Codex |
++| `codex-reviewer` | haiku | Post-diff safety gate via Codex |
++| `spec-precheck` | haiku | Pre-flight: verify SPEC.md references actually exist before implementing |
++| `doc-updater` | sonnet | Refreshes one stale concept's docs/human + docs/llm pair |
++| `remote-runner` | haiku | Mechanical remote work — rsync sandbox + cargo build, read-only DB/log queries, paper qtctl restarts |
++
++`/z-brainstorm` dispatches three ideators in Phase 2: Claude as `general-purpose` Sonnet, Codex via `codex-consultant` with `MODE: brainstorm`, and Gemini via `gemini-consultant` with `MODE: brainstorm`. There is no dedicated `ideator` agent file.
++
++## Operating principles
++
++- Push back by default — on Gemini, Codex, and the user.
++- Always ask when unclear. No silent assumptions.
++- No shortcuts without explicit user approval.
++- DRY / KISS / SOLID are non-negotiable in the final plan.
++
++## Requirements
++
++- `codex` CLI installed and authenticated (uses the Codex/ChatGPT app endpoint, *not* the OpenAI API endpoint).
++- `gemini` CLI installed and authenticated.
++- Claude Code with `PushNotification` available (for mobile notifications).
++
++## Install
++
++From any Claude Code session:
++
++```
++/plugin marketplace add /Users/zeke/dev/z-harness
++/plugin install z-harness@zeke-tools
++```
++
++Or, for git distribution:
++
++```
++/plugin marketplace add <github-org>/z-harness
++/plugin install z-harness@zeke-tools
++```
++
++## Per-repo auto-enable
++
++In each project where you want z-harness on automatically, commit `.claude/settings.json`:
++
++```json
++{
++  "extraKnownMarketplaces": {
++    "zeke-tools": { "source": { "source": "github", "repo": "<org>/z-harness" } }
++  },
++  "enabledPlugins": { "z-harness@zeke-tools": true }
++}
++```
++
++## Plugin-author conventions (for downstream `.claude/skills/`)
++
++When a downstream repo defines its own skills that interoperate with z-harness, follow these conventions so they cooperate with the harness rather than fight it:
++
++- End each skill file with `## Anti-patterns (push back)` and `## Out of scope` sections — they're the cheapest place to encode failure modes and handoff boundaries.
++- Skills that diagnose should NOT also apply patches. Hand off to `/z-plan-light` (small fix) or `/z-plan` (structural) for any code change beyond initial scaffolding.
++- Skills that orchestrate should call cross-LLM consult (`gemini-consultant`, `codex-consultant`) at premise / red-team gates, not run them inline.
++- Use explicit slash commands instead of flag-routed `mode:` parameters — one skill per mode (`/qt-audit-strategy`, not `/qt-audit mode=strategy`).
++- Domain-specific audit checklists live under `.claude/audit-rubrics/<component>.md` and are consumed by `/z-audit` via its rubric-file slot — keep them as plain checklists, not scaffolding.
++
++## Environment knobs
++
++- `Z_HARNESS_NOTIFY` — `off` | `approval_only` (default) | `all`. Controls push notifications.
++- `Z_HARNESS_PAUSE_AT_PCT` — default `90`. Pause new phase dispatch when Claude Code usage hits this %.
++- `Z_HARNESS_MAX_EXPLORE` — default `3`. Cap on `Explore` subagent dispatches per `/z-plan` run.
++- `Z_HARNESS_DOC_STALENESS_THRESHOLD` — default `20` (percent). Above this, `/z-plan` halts and recommends `/z-maintain-docs` first.
++- ~~`Z_HARNESS_RETRY_UPGRADE`~~ — removed. The implementer model is now picked directly via `Agent(model=...)` based on the task block's `**Complexity:** low|medium|high` stamp (`low|medium` → Sonnet, `high` → Opus). Retries (cycle ≥ 2) always dispatch with `model="opus"`. The complexity stamp is added at plan-time by a Haiku `complexity-classifier` subagent and is user-editable in TASKS.md.
++- `Z_HARNESS_LOCAL_CARGO_CLEAN` — set to `1` at the start of `/z-implement-all` to trigger a one-time local `cargo clean`.
++- `Z_HARNESS_SLUG` — set by commands; namespaces all output paths under `z-harness/<slug>/`.
++- `Z_HARNESS_BRAINSTORM_EXPLORE=1` — opts into a Phase 1 Explore dispatch inside `/z-brainstorm`. Off by default (doc-fetcher only). Set this when you want the brainstorm scaffolding to include live codebase exploration in addition to the doc-fetcher lookup.
++
++## Telemetry event types
++
++All events are appended to `z-harness/metrics.jsonl` via `scripts/log-event.sh`. Standard fields present on every event: `ts`, `run`, `kind` (and `slug` when set). The fields `prompt_chars`, `response_chars`, and `wall_ms` are optional — they appear only on subagent-bracket events, not on lifecycle or gate events.
++
++Event kinds introduced by `/z-brainstorm` and `/z-research`:
++
++| Event | Emitted by |
++|---|---|
++| `brainstorm_run_start` | `/z-brainstorm` setup |
++| `brainstorm_run_end` | `/z-brainstorm` Phase 4 |
++| `research_run_start` | `/z-research` setup |
++| `research_run_end` | `/z-research` Phase 6 |
++| `ideator_failed` | `/z-brainstorm` Phase 2 (fields: `vendor`, `reason`) |
++| `total_ideator_failure` | `/z-brainstorm` Phase 2 when all three ideators fail |
++| `research_temptation` | `/z-research` when orchestrator drafts a recommendation it must not make |
++| `precontext_source_deleted` | `/z-plan` Setup step 10 freshness check (higher severity than stale-mtime) |
++| `precontext_freshness_check_failed` | `/z-plan` Setup step 10 freshness check parse failure |
++| `cost_gate_decision` | `/z-research` Phase 0 cost-confirmation gate |
++| `explore_failure` | any command that dispatches an Explore subagent that does not return |
++
++## Known v1 limitations
++
++- **No per-subagent wall-clock timeout.** `Agent()` does not expose a per-call timeout; subagents that hang block the entire run. User-facing escape: ctrl-c to abort.
++- **No doc-fetcher caching across precontext and plan runs.** If you run `/z-research` and then `/z-plan` in the same slug, doc-fetcher is dispatched twice (once per command). Marked as a v2 candidate; the cost is low enough today.
++
++## Layout
++
++```
++z-harness/
++├── .claude-plugin/
++│   ├── plugin.json
++│   └── marketplace.json
++├── commands/
++│   ├── z-brainstorm.md
++│   ├── z-research.md
++│   ├── z-plan.md
++│   ├── z-plan-light.md
++│   ├── z-test.md
++│   ├── z-implement-all.md
++│   ├── z-implement-next.md
++│   ├── z-audit.md
++│   ├── z-debug.md
++│   ├── z-review-all.md
++│   ├── z-skill-fix.md
++│   ├── z-init-docs.md
++│   ├── z-maintain-docs.md
++│   └── z-stats.md
++├── agents/
++│   ├── implementer.md
++│   ├── auditor.md
++│   ├── codex-reviewer.md
++│   ├── codex-consultant.md
++│   ├── gemini-consultant.md
++│   ├── spec-precheck.md
++│   ├── doc-updater.md
++│   └── remote-runner.md
++├── scripts/
++│   ├── log-event.sh
++│   ├── log-phase.sh
++│   ├── remote-sandbox-sync.sh
++│   └── version.sh
++└── README.md
++```

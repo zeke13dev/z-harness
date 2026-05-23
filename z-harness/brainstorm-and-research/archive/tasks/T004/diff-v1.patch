@@ -1,0 +1,590 @@
+diff --git a/commands/z-research.md b/commands/z-research.md
+new file mode 100644
+index 0000000..a08955a
+--- /dev/null
++++ b/commands/z-research.md
+@@ -0,0 +1,289 @@
++---
++description: Structured pre-plan terrain mapping — up to 3 parallel Explore subagents, bundled cross-LLM critique, produce RESEARCH.md with file:line citations to ground /z-plan. Explicitly does not recommend an approach.
++argument-hint: <question or technical area to research>
++---
++
++You are running the **z-harness `/z-research`** pipeline.
++
++Question (from `$ARGUMENTS`):
++
++$ARGUMENTS
++
++**If the question above is empty or whitespace**, do this first: use `AskUserQuestion` (or a direct question if a free-text answer is needed) to ask "What question should I research?". Wait for their reply. Treat their reply as the question and continue. Do not proceed past this point without a concrete question.
++
++Strict, multi-phase. Do not skip phases. `/z-research` produces a research note only — it maps terrain, it does not pick an approach. Implementation and approach-selection happen later via `/z-brainstorm` or `/z-plan`.
++
++**Known v1 limitation:** `Agent()` does not expose a per-call wall-clock timeout. Subagents that hang block the run. User escape: ctrl-c.
++
++## Setup
++
++1. **Derive a research slug** from the question: short kebab-case, 2-4 words (e.g. "how does the retry logic interact with token bucket limits?" → `retry-token-bucket`). Run `ls z-harness/` to check for existing slug dirs. If the derived slug matches an existing dir:
++   - **Precontext-only slug dir** (only `BRAINSTORM.md` and/or `RESEARCH.md` present, no `PLAN.md`/`SPEC.md`/`TASKS.md`): treat as continuation — no prompt, proceed with the existing slug.
++   - **Finished-plan slug dir** (`PLAN.md` or `TASKS.md` exists): collision — prompt the user via `AskUserQuestion` to confirm or choose a different slug.
++   If the auto-derived slug is non-obvious, confirm with the user via `AskUserQuestion`.
++2. **Export** `Z_HARNESS_SLUG=<slug>` for all subsequent shell calls and subagents.
++3. Pick a run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`
++4. `mkdir -p z-harness/$Z_HARNESS_SLUG/archive/$RUN/transcripts`
++5. Capture the z-harness plugin version stamp and log the run start (merge version blob into the payload):
++   ```bash
++   VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
++   START_PAYLOAD="$(python3 -c '
++   import json, sys
++   v = json.loads(sys.argv[1]); v["question"] = sys.argv[2]
++   print(json.dumps(v))
++   ' "$VERSION_BLOB" "<arguments>")"
++   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" research_run_start "$START_PAYLOAD"
++   ```
++6. Notification policy: read env `Z_HARNESS_NOTIFY` (default `approval_only`). Values: `off`, `approval_only`, `all`.
++7. **Artifact collision check.** If `z-harness/$Z_HARNESS_SLUG/RESEARCH.md` exists:
++   - Archive it: `mv z-harness/$Z_HARNESS_SLUG/RESEARCH.md z-harness/$Z_HARNESS_SLUG/archive/$RUN/RESEARCH.previous.md`
++   - Notify the user: "Existing RESEARCH.md archived. Starting fresh research."
++8. **Check for LLM-tier docs.** If `docs/llm/INDEX.json` exists, note its existence; Phase 1 will dispatch `doc-fetcher` (Haiku). The orchestrator never reads `docs/llm/*.json` directly from main thread.
++
++**All paths in subsequent phases live under `z-harness/<slug>/`:**
++- `z-harness/<slug>/RESEARCH.md`
++- `z-harness/<slug>/archive/<run-id>/...`
++
++## Phase telemetry (mandatory)
++
++At the **start** of each phase (0 through 6), record `T0=$(date +%s%3N)`. At the **end**, log:
++
++```bash
++WALL_MS=$(( $(date +%s%3N) - T0 ))
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" phase_end \
++  "$(printf '{"phase":%d,"name":"%s","wall_ms":%d,"user_wait_ms":%d}' \
++     <phase-num> "<phase-name>" "$WALL_MS" "$USER_WAIT_MS_THIS_PHASE")"
++```
++
++If the phase blocks on `AskUserQuestion`, separately log `user_wait_start` / `user_wait_end` events bracketing that wait:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start '{"phase":<n>,"reason":"<short>"}'
++# ... AskUserQuestion ...
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end '{"phase":<n>,"wall_ms":<delta>}'
++```
++
++---
++
++## Phase 0 — Cost-confirmation gate
++
++Research can be expensive. The default fan-out is up to 3 parallel `Explore` subagents (Haiku) plus a bundled cross-LLM critique pass. Target spend: **≤2M tokens / 5-10 min wall time.** If you exceed 2M tokens at any point, log a `cost_warning` event and surface it to the user.
++
++Present the cost up front via `AskUserQuestion` with three options:
++
++- **Proceed (~2M tokens)** — full fan-out, up to 3 parallel Explores.
++- **Reduce to 1 Explore** — single Explore, lighter spend (~700k-1M tokens).
++- **Abandon** — exit cleanly, write nothing.
++
++Log the user's pick:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cost_gate_decision \
++  "$(printf '{"choice":"%s"}' "<proceed|reduce|abandon>")"
++```
++
++If `abandon`: exit. If `reduce`: set `EXPLORE_BUDGET=1`. Otherwise `EXPLORE_BUDGET=3`.
++
++Checkpoint: `phase0-cost-gate.md`.
++
++## Phase 1 — Scaffolding
++
++**Rule: doc-fetcher FIRST.** If Setup step 8 noted `docs/llm/INDEX.json` exists, spawn **ONE** `doc-fetcher` call with the question's keywords:
++
++```
++Agent(
++  subagent_type="doc-fetcher",
++  description="Doc context for <slug>",
++  prompt="query: <one-sentence summary of the question>\nrepo_root: <abs path>\ndepth: standard"
++)
++```
++
++It returns a tight synthesis: matched concepts, key files with line ranges, invariants. If it returns `STATUS: no_docs` or `STATUS: no_match`, proceed without doc grounding. If `STATUS: partial`, note the gap for Phase 2.
++
++If a `DRIFT WARNING` block appears in the return, log a `doc_drift` event per affected slug:
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" doc_drift \
++  '{"concept":"<slug>","claim":"<what doc said>","reality":"<what code says>","file":"<path>"}'
++```
++
++**No Explore here.** Phase 1 is doc-fetcher only. Explore happens in Phase 2.
++
++Checkpoint: `phase1-scaffolding.md`.
++
++## Phase 2 — Parallel Explores
++
++Dispatch up to `EXPLORE_BUDGET` parallel `Explore` subagents (Haiku) on **distinct facets** of the question. Each Explore must answer a targeted sub-question; do not dispatch overlapping queries.
++
++**Hard cap: 3.** No env override in v1. If `EXPLORE_BUDGET=1` from Phase 0, dispatch a single Explore covering the most important facet.
++
++Send all calls in **one message** so they run in parallel:
++
++```
++Agent(
++  subagent_type="Explore",
++  model: "haiku",
++  description="Facet A: <short label>",
++  prompt="<TARGETED sub-question>\n\nAlready known (from doc-fetcher): <paste tight summary or 'none'>\n\nReturn findings with file:line citations. Do NOT recommend an approach — this is terrain mapping."
++)
++Agent(
++  subagent_type="Explore",
++  model: "haiku",
++  description="Facet B: <short label>",
++  prompt="<TARGETED sub-question>\n\n..."
++)
++Agent(
++  subagent_type="Explore",
++  model: "haiku",
++  description="Facet C: <short label>",
++  prompt="<TARGETED sub-question>\n\n..."
++)
++```
++
++**When to upgrade Explore to Sonnet:** if the facet requires *interpretation* (e.g. "explain the control flow of X" rather than "where is X defined"), upgrade by setting `model: "sonnet"`. Locating > Haiku. Interpreting > Sonnet.
++
++Record `explore_calls = <N>` (0 if Phase 0 abandoned but you somehow got here; 1 if reduced; up to 3 otherwise) — it lands in the final frontmatter.
++
++Checkpoint: `phase2-explores.md` (synthesis of all Explore returns).
++
++## Phase 3 — Draft research note
++
++Write `z-harness/$Z_HARNESS_SLUG/archive/$RUN/research-draft.md` with **these mandatory sections, in this exact order**:
++
++```markdown
++## Findings
++- <claim> (path/to/file.rs:42)
++- <claim> (path/to/other.py:117-130)
++
++## Constraints discovered
++- <constraint with citation>
++
++## Open questions
++- <question the Explores could not resolve>
++
++## No-recommendation
++This research note explicitly does not recommend an approach. Use /z-brainstorm or /z-plan to pick one.
++```
++
++**Citation requirement.** Every finding MUST cite a `file:line` (or `file:line-line` range) using the broadened regex `/[A-Za-z0-9_./-]+\.(rs|py|md|ts|tsx|js|jsx|json|toml|yaml|yml|sh|sql)(:\d+(-\d+)?)?/`, plus extensionless allowlist `Makefile`, `Dockerfile`. Markdown link form `[label](path:line)` is allowed.
++
++**Demotion rule.** Findings without a `file:line` citation are demoted to **Open questions** — do not silently drop them, and do not add a fake citation.
++
++**Recommendation invariant.** The `## No-recommendation` section is **MANDATORY and NON-DELETABLE**. The canonical text is exactly: `This research note explicitly does not recommend an approach. Use /z-brainstorm or /z-plan to pick one.` If you find yourself drafting a recommendation anywhere in the note (e.g. "we should use X", "the right approach is Y"), log a `research_temptation` event and **remove the recommendation before proceeding**:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" research_temptation \
++  '{"location":"<section>","removed_text":"<short excerpt>"}'
++```
++
++Checkpoint: `research-draft.md` (this file).
++
++## Phase 4 — Bundled cross-LLM critique
++
++Spawn **both** consultants in parallel in a single message with `MODE: research-review`. They return RAW critique (Gaps / Errors / Missing constraints) — no standard wrapper. They are explicitly forbidden from recommending an approach.
++
++```
++Agent(
++  subagent_type="gemini-consultant",
++  description="Research review (Gemini) for <slug>",
++  prompt="MODE: research-review\n\nOriginal question: <question>\n\nScaffolding (doc-fetcher synthesis): <paste>\n\nResearch draft:\n<paste research-draft.md verbatim>\n\nReturn three sections only: Gaps, Errors, Missing constraints. Do NOT recommend an approach."
++)
++Agent(
++  subagent_type="codex-consultant",
++  description="Research review (Codex) for <slug>",
++  prompt="MODE: research-review\n\nOriginal question: <question>\n\nScaffolding (doc-fetcher synthesis): <paste>\n\nResearch draft:\n<paste research-draft.md verbatim>\n\nReturn three sections only: Gaps, Errors, Missing constraints. Do NOT recommend an approach."
++)
++```
++
++Save the raw transcripts under `archive/$RUN/transcripts/` (the consultant subagents do this themselves).
++
++Checkpoint: `phase4-critiques.md` (both critiques side-by-side).
++
++## Phase 5 — Revise
++
++For each consultant gap / error / missing-constraint:
++
++- **Fill it** if the orchestrator can resolve it from existing Explore returns or via a quick targeted Read.
++- **Note it as unfilled** in the `## Cross-LLM review notes` section if it would require another Explore dispatch (out of scope at this phase).
++
++Update the draft accordingly. If a consultant tried to recommend an approach despite the MODE prohibition, **strip the recommendation** and log `research_temptation` for the consultant turn.
++
++Add a `## Cross-LLM review notes` section to the draft summarizing:
++- Gemini's flagged gaps / errors / missing constraints — and which were filled vs. left as Open questions.
++- Codex's flagged gaps / errors / missing constraints — and which were filled vs. left as Open questions.
++
++Re-run the demotion rule from Phase 3: any new findings introduced during revision must carry a `file:line` citation or be demoted.
++
++Checkpoint: `research-draft.revised.md`.
++
++## Phase 6 — Finalize
++
++Compute `input_hash` per the SPEC algorithm:
++
++```
++input_hash = sha256(canonicalize(
++    question + "\n---\n" +
++    doc_fetcher_synthesis_or_empty + "\n---\n" +
++    explore_synthesis_or_empty + "\n---\n" +
++    research_md_or_empty
++)).hexdigest()[:16]
++```
++
++`canonicalize`: strip leading/trailing whitespace; collapse all internal runs of whitespace to single space.
++
++Write final `z-harness/$Z_HARNESS_SLUG/RESEARCH.md`:
++
++```markdown
++---
++artifact: research
++slug: <slug>
++generated_at: <ISO-8601 UTC>
++command: /z-research
++input_hash: <16 hex chars>
++depends_on: []
++explore_calls: <0..3>
++status: complete
++---
++
++# Research: <question>
++
++## Findings
++<bulleted list with file:line citations>
++
++## Constraints discovered
++<bulleted list>
++
++## Open questions
++<bulleted list>
++
++## No-recommendation
++This research note explicitly does not recommend an approach. Use /z-brainstorm or /z-plan to pick one.
++
++## Cross-LLM review notes
++<consultant feedback summary; filled vs unfilled gaps>
++```
++
++Log run end:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" research_run_end \
++  "$(printf '{"slug":"%s","explore_calls":%d,"status":"complete"}' "$Z_HARNESS_SLUG" "<N>")"
++```
++
++Send a `PushNotification` if policy ≠ `off` with a next-step recommendation:
++
++```
++Research complete. RESEARCH.md written to z-harness/<slug>/RESEARCH.md.
++
++Recommended next step:
++  /z-brainstorm <topic>  — ideate approaches grounded in this research, OR
++  /z-plan <task>         — go straight to planning if the approach is already clear
++```
++
++---
++
++## Operating principles
++
++- **Terrain mapping, not direction picking.** The `## No-recommendation` section is invariant. Every temptation to recommend gets logged and removed.
++- **Citations are non-negotiable.** No `file:line` → not a finding.
++- **Cost discipline.** Phase 0 is the user's gate; respect their pick. If you exceed 2M tokens, warn.
++- **Log everything.** Every Explore dispatch, consultant call, temptation, and demotion — via `scripts/log-event.sh`.
+diff --git a/skills/z-research/SKILL.md b/skills/z-research/SKILL.md
+new file mode 100644
+index 0000000..a08955a
+--- /dev/null
++++ b/skills/z-research/SKILL.md
+@@ -0,0 +1,289 @@
++---
++description: Structured pre-plan terrain mapping — up to 3 parallel Explore subagents, bundled cross-LLM critique, produce RESEARCH.md with file:line citations to ground /z-plan. Explicitly does not recommend an approach.
++argument-hint: <question or technical area to research>
++---
++
++You are running the **z-harness `/z-research`** pipeline.
++
++Question (from `$ARGUMENTS`):
++
++$ARGUMENTS
++
++**If the question above is empty or whitespace**, do this first: use `AskUserQuestion` (or a direct question if a free-text answer is needed) to ask "What question should I research?". Wait for their reply. Treat their reply as the question and continue. Do not proceed past this point without a concrete question.
++
++Strict, multi-phase. Do not skip phases. `/z-research` produces a research note only — it maps terrain, it does not pick an approach. Implementation and approach-selection happen later via `/z-brainstorm` or `/z-plan`.
++
++**Known v1 limitation:** `Agent()` does not expose a per-call wall-clock timeout. Subagents that hang block the run. User escape: ctrl-c.
++
++## Setup
++
++1. **Derive a research slug** from the question: short kebab-case, 2-4 words (e.g. "how does the retry logic interact with token bucket limits?" → `retry-token-bucket`). Run `ls z-harness/` to check for existing slug dirs. If the derived slug matches an existing dir:
++   - **Precontext-only slug dir** (only `BRAINSTORM.md` and/or `RESEARCH.md` present, no `PLAN.md`/`SPEC.md`/`TASKS.md`): treat as continuation — no prompt, proceed with the existing slug.
++   - **Finished-plan slug dir** (`PLAN.md` or `TASKS.md` exists): collision — prompt the user via `AskUserQuestion` to confirm or choose a different slug.
++   If the auto-derived slug is non-obvious, confirm with the user via `AskUserQuestion`.
++2. **Export** `Z_HARNESS_SLUG=<slug>` for all subsequent shell calls and subagents.
++3. Pick a run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`
++4. `mkdir -p z-harness/$Z_HARNESS_SLUG/archive/$RUN/transcripts`
++5. Capture the z-harness plugin version stamp and log the run start (merge version blob into the payload):
++   ```bash
++   VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
++   START_PAYLOAD="$(python3 -c '
++   import json, sys
++   v = json.loads(sys.argv[1]); v["question"] = sys.argv[2]
++   print(json.dumps(v))
++   ' "$VERSION_BLOB" "<arguments>")"
++   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" research_run_start "$START_PAYLOAD"
++   ```
++6. Notification policy: read env `Z_HARNESS_NOTIFY` (default `approval_only`). Values: `off`, `approval_only`, `all`.
++7. **Artifact collision check.** If `z-harness/$Z_HARNESS_SLUG/RESEARCH.md` exists:
++   - Archive it: `mv z-harness/$Z_HARNESS_SLUG/RESEARCH.md z-harness/$Z_HARNESS_SLUG/archive/$RUN/RESEARCH.previous.md`
++   - Notify the user: "Existing RESEARCH.md archived. Starting fresh research."
++8. **Check for LLM-tier docs.** If `docs/llm/INDEX.json` exists, note its existence; Phase 1 will dispatch `doc-fetcher` (Haiku). The orchestrator never reads `docs/llm/*.json` directly from main thread.
++
++**All paths in subsequent phases live under `z-harness/<slug>/`:**
++- `z-harness/<slug>/RESEARCH.md`
++- `z-harness/<slug>/archive/<run-id>/...`
++
++## Phase telemetry (mandatory)
++
++At the **start** of each phase (0 through 6), record `T0=$(date +%s%3N)`. At the **end**, log:
++
++```bash
++WALL_MS=$(( $(date +%s%3N) - T0 ))
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" phase_end \
++  "$(printf '{"phase":%d,"name":"%s","wall_ms":%d,"user_wait_ms":%d}' \
++     <phase-num> "<phase-name>" "$WALL_MS" "$USER_WAIT_MS_THIS_PHASE")"
++```
++
++If the phase blocks on `AskUserQuestion`, separately log `user_wait_start` / `user_wait_end` events bracketing that wait:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start '{"phase":<n>,"reason":"<short>"}'
++# ... AskUserQuestion ...
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end '{"phase":<n>,"wall_ms":<delta>}'
++```
++
++---
++
++## Phase 0 — Cost-confirmation gate
++
++Research can be expensive. The default fan-out is up to 3 parallel `Explore` subagents (Haiku) plus a bundled cross-LLM critique pass. Target spend: **≤2M tokens / 5-10 min wall time.** If you exceed 2M tokens at any point, log a `cost_warning` event and surface it to the user.
++
++Present the cost up front via `AskUserQuestion` with three options:
++
++- **Proceed (~2M tokens)** — full fan-out, up to 3 parallel Explores.
++- **Reduce to 1 Explore** — single Explore, lighter spend (~700k-1M tokens).
++- **Abandon** — exit cleanly, write nothing.
++
++Log the user's pick:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cost_gate_decision \
++  "$(printf '{"choice":"%s"}' "<proceed|reduce|abandon>")"
++```
++
++If `abandon`: exit. If `reduce`: set `EXPLORE_BUDGET=1`. Otherwise `EXPLORE_BUDGET=3`.
++
++Checkpoint: `phase0-cost-gate.md`.
++
++## Phase 1 — Scaffolding
++
++**Rule: doc-fetcher FIRST.** If Setup step 8 noted `docs/llm/INDEX.json` exists, spawn **ONE** `doc-fetcher` call with the question's keywords:
++
++```
++Agent(
++  subagent_type="doc-fetcher",
++  description="Doc context for <slug>",
++  prompt="query: <one-sentence summary of the question>\nrepo_root: <abs path>\ndepth: standard"
++)
++```
++
++It returns a tight synthesis: matched concepts, key files with line ranges, invariants. If it returns `STATUS: no_docs` or `STATUS: no_match`, proceed without doc grounding. If `STATUS: partial`, note the gap for Phase 2.
++
++If a `DRIFT WARNING` block appears in the return, log a `doc_drift` event per affected slug:
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" doc_drift \
++  '{"concept":"<slug>","claim":"<what doc said>","reality":"<what code says>","file":"<path>"}'
++```
++
++**No Explore here.** Phase 1 is doc-fetcher only. Explore happens in Phase 2.
++
++Checkpoint: `phase1-scaffolding.md`.
++
++## Phase 2 — Parallel Explores
++
++Dispatch up to `EXPLORE_BUDGET` parallel `Explore` subagents (Haiku) on **distinct facets** of the question. Each Explore must answer a targeted sub-question; do not dispatch overlapping queries.
++
++**Hard cap: 3.** No env override in v1. If `EXPLORE_BUDGET=1` from Phase 0, dispatch a single Explore covering the most important facet.
++
++Send all calls in **one message** so they run in parallel:
++
++```
++Agent(
++  subagent_type="Explore",
++  model: "haiku",
++  description="Facet A: <short label>",
++  prompt="<TARGETED sub-question>\n\nAlready known (from doc-fetcher): <paste tight summary or 'none'>\n\nReturn findings with file:line citations. Do NOT recommend an approach — this is terrain mapping."
++)
++Agent(
++  subagent_type="Explore",
++  model: "haiku",
++  description="Facet B: <short label>",
++  prompt="<TARGETED sub-question>\n\n..."
++)
++Agent(
++  subagent_type="Explore",
++  model: "haiku",
++  description="Facet C: <short label>",
++  prompt="<TARGETED sub-question>\n\n..."
++)
++```
++
++**When to upgrade Explore to Sonnet:** if the facet requires *interpretation* (e.g. "explain the control flow of X" rather than "where is X defined"), upgrade by setting `model: "sonnet"`. Locating > Haiku. Interpreting > Sonnet.
++
++Record `explore_calls = <N>` (0 if Phase 0 abandoned but you somehow got here; 1 if reduced; up to 3 otherwise) — it lands in the final frontmatter.
++
++Checkpoint: `phase2-explores.md` (synthesis of all Explore returns).
++
++## Phase 3 — Draft research note
++
++Write `z-harness/$Z_HARNESS_SLUG/archive/$RUN/research-draft.md` with **these mandatory sections, in this exact order**:
++
++```markdown
++## Findings
++- <claim> (path/to/file.rs:42)
++- <claim> (path/to/other.py:117-130)
++
++## Constraints discovered
++- <constraint with citation>
++
++## Open questions
++- <question the Explores could not resolve>
++
++## No-recommendation
++This research note explicitly does not recommend an approach. Use /z-brainstorm or /z-plan to pick one.
++```
++
++**Citation requirement.** Every finding MUST cite a `file:line` (or `file:line-line` range) using the broadened regex `/[A-Za-z0-9_./-]+\.(rs|py|md|ts|tsx|js|jsx|json|toml|yaml|yml|sh|sql)(:\d+(-\d+)?)?/`, plus extensionless allowlist `Makefile`, `Dockerfile`. Markdown link form `[label](path:line)` is allowed.
++
++**Demotion rule.** Findings without a `file:line` citation are demoted to **Open questions** — do not silently drop them, and do not add a fake citation.
++
++**Recommendation invariant.** The `## No-recommendation` section is **MANDATORY and NON-DELETABLE**. The canonical text is exactly: `This research note explicitly does not recommend an approach. Use /z-brainstorm or /z-plan to pick one.` If you find yourself drafting a recommendation anywhere in the note (e.g. "we should use X", "the right approach is Y"), log a `research_temptation` event and **remove the recommendation before proceeding**:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" research_temptation \
++  '{"location":"<section>","removed_text":"<short excerpt>"}'
++```
++
++Checkpoint: `research-draft.md` (this file).
++
++## Phase 4 — Bundled cross-LLM critique
++
++Spawn **both** consultants in parallel in a single message with `MODE: research-review`. They return RAW critique (Gaps / Errors / Missing constraints) — no standard wrapper. They are explicitly forbidden from recommending an approach.
++
++```
++Agent(
++  subagent_type="gemini-consultant",
++  description="Research review (Gemini) for <slug>",
++  prompt="MODE: research-review\n\nOriginal question: <question>\n\nScaffolding (doc-fetcher synthesis): <paste>\n\nResearch draft:\n<paste research-draft.md verbatim>\n\nReturn three sections only: Gaps, Errors, Missing constraints. Do NOT recommend an approach."
++)
++Agent(
++  subagent_type="codex-consultant",
++  description="Research review (Codex) for <slug>",
++  prompt="MODE: research-review\n\nOriginal question: <question>\n\nScaffolding (doc-fetcher synthesis): <paste>\n\nResearch draft:\n<paste research-draft.md verbatim>\n\nReturn three sections only: Gaps, Errors, Missing constraints. Do NOT recommend an approach."
++)
++```
++
++Save the raw transcripts under `archive/$RUN/transcripts/` (the consultant subagents do this themselves).
++
++Checkpoint: `phase4-critiques.md` (both critiques side-by-side).
++
++## Phase 5 — Revise
++
++For each consultant gap / error / missing-constraint:
++
++- **Fill it** if the orchestrator can resolve it from existing Explore returns or via a quick targeted Read.
++- **Note it as unfilled** in the `## Cross-LLM review notes` section if it would require another Explore dispatch (out of scope at this phase).
++
++Update the draft accordingly. If a consultant tried to recommend an approach despite the MODE prohibition, **strip the recommendation** and log `research_temptation` for the consultant turn.
++
++Add a `## Cross-LLM review notes` section to the draft summarizing:
++- Gemini's flagged gaps / errors / missing constraints — and which were filled vs. left as Open questions.
++- Codex's flagged gaps / errors / missing constraints — and which were filled vs. left as Open questions.
++
++Re-run the demotion rule from Phase 3: any new findings introduced during revision must carry a `file:line` citation or be demoted.
++
++Checkpoint: `research-draft.revised.md`.
++
++## Phase 6 — Finalize
++
++Compute `input_hash` per the SPEC algorithm:
++
++```
++input_hash = sha256(canonicalize(
++    question + "\n---\n" +
++    doc_fetcher_synthesis_or_empty + "\n---\n" +
++    explore_synthesis_or_empty + "\n---\n" +
++    research_md_or_empty
++)).hexdigest()[:16]
++```
++
++`canonicalize`: strip leading/trailing whitespace; collapse all internal runs of whitespace to single space.
++
++Write final `z-harness/$Z_HARNESS_SLUG/RESEARCH.md`:
++
++```markdown
++---
++artifact: research
++slug: <slug>
++generated_at: <ISO-8601 UTC>
++command: /z-research
++input_hash: <16 hex chars>
++depends_on: []
++explore_calls: <0..3>
++status: complete
++---
++
++# Research: <question>
++
++## Findings
++<bulleted list with file:line citations>
++
++## Constraints discovered
++<bulleted list>
++
++## Open questions
++<bulleted list>
++
++## No-recommendation
++This research note explicitly does not recommend an approach. Use /z-brainstorm or /z-plan to pick one.
++
++## Cross-LLM review notes
++<consultant feedback summary; filled vs unfilled gaps>
++```
++
++Log run end:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" research_run_end \
++  "$(printf '{"slug":"%s","explore_calls":%d,"status":"complete"}' "$Z_HARNESS_SLUG" "<N>")"
++```
++
++Send a `PushNotification` if policy ≠ `off` with a next-step recommendation:
++
++```
++Research complete. RESEARCH.md written to z-harness/<slug>/RESEARCH.md.
++
++Recommended next step:
++  /z-brainstorm <topic>  — ideate approaches grounded in this research, OR
++  /z-plan <task>         — go straight to planning if the approach is already clear
++```
++
++---
++
++## Operating principles
++
++- **Terrain mapping, not direction picking.** The `## No-recommendation` section is invariant. Every temptation to recommend gets logged and removed.
++- **Citations are non-negotiable.** No `file:line` → not a finding.
++- **Cost discipline.** Phase 0 is the user's gate; respect their pick. If you exceed 2M tokens, warn.
++- **Log everything.** Every Explore dispatch, consultant call, temptation, and demotion — via `scripts/log-event.sh`.

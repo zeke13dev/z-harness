@@ -1,0 +1,2 @@
+{"ts":"2026-05-23T05:35:03Z","run":"20260523T053503Z-review","kind":"review_all_start","slug":"plan-decompose","z_harness_version":"aaa6f80","z_harness_dirty":true,"z_harness_branch":"main"}
+{"ts":"2026-05-23T05:43:06Z","run":"20260523T053503Z-review","kind":"review_all_end","slug":"plan-decompose","drift_findings":4,"spec_gap_findings":4,"minor_findings":8,"user_action":"spec_retro","blockers_resolved":1,"consensus_majors_resolved":3,"prong_b_majors_resolved":4,"deferred":["shared_concerns_acknowledged_emission"]}

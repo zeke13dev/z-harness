@@ -1,8 +1,8 @@
 ---
-name: z-debug
 description: Investigate a known-bad behavior with explicit repro / hypothesis / evidence / isolation phases, then ship a fix using the /z-plan-light flow, then write a post-mortem with preventative action items. Cross-LLM consult at the hypothesis stage and again at the fix stage. Auto-bails to /z-plan when scope grows beyond architectural change.
 argument-hint: <symptom description>
 ---
+
 You are running **z-harness `/z-debug`** — investigation pipeline for an existing bug. Target: ≤30 min wall time end-to-end for a typical localized bug; can take longer if reproduction is difficult.
 
 Symptom (from `$ARGUMENTS`):
@@ -28,7 +28,7 @@ $ARGUMENTS
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" debug_run_start "$START_PAYLOAD"
    ```
 6. Record start time `T0_DEBUG=$(date -u +%Y-%m-%dT%H:%M:%SZ)` — used for post-mortem timeline.
-7. If `docs/llm/INDEX.json` exists → read it.
+7. If `docs/llm/INDEX.json` exists → note it. Phase 2 (Repro) and Phase 3 (Hypotheses) will dispatch `doc-fetcher` (Haiku) instead of reading INDEX.json or per-concept JSONs from main thread. The orchestrator never reads `docs/llm/*.json` directly.
 
 ## Auto-bail thresholds (check throughout)
 
@@ -61,6 +61,7 @@ Write `z-harness/$Z_HARNESS_SLUG/PROBLEM.md`:
 **Reported:** <T0_DEBUG>
 **Reproducible:** <always | sometimes | once>
 **Started:** <last-good ref or "unknown">
+**Relevant concepts:** <slug>, <slug>
 
 ## Expected behavior
 <verbatim from user>
@@ -74,6 +75,8 @@ Write `z-harness/$Z_HARNESS_SLUG/PROBLEM.md`:
 ## Recent changes mentioned by user
 <verbatim or "none">
 ```
+
+> `Relevant concepts:` is a comma-separated list of `docs/llm/<slug>` slugs that this bug likely touches. Fill in as many as are known at Phase 1; update in Phase 3 after `doc-fetcher` returns. Leave empty if the repo has no `docs/llm/` directory.
 
 ## Phase 2 — Reproduce + gather evidence
 
@@ -118,7 +121,13 @@ Default recommendation: gather more evidence. Debug-on-inference often fixes the
 
 ## Phase 3 — Hypothesize
 
-Read relevant files (use `docs/llm/INDEX.json` to scope). Propose **2-3 hypotheses**, ranked by likelihood. For each:
+If INDEX.json exists, dispatch `doc-fetcher` (Haiku) FIRST to scope:
+```
+Agent(subagent_type="doc-fetcher",
+      description="Doc context for <slug> hypothesis",
+      prompt="query: <symptom in one sentence>\nrepo_root: <abs path>\ndepth: standard")
+```
+Then read additional files only to fill gaps doc-fetcher couldn't cover. Propose **2-3 hypotheses**, ranked by likelihood. For each:
 
 - **Hypothesis:** <one-sentence statement of what's broken>
 - **Supporting evidence:** <which lines in EVIDENCE.md point to this>
@@ -248,7 +257,37 @@ Pick at least one. Be honest:
 - **Similar bugs likely elsewhere?** <list any places worth auditing; or "none — this is localized">
 ```
 
-After writing, ask the user via `AskUserQuestion`:
+After writing POSTMORTEM.md, invoke `/z-suggest-memory` **before** the action-items `AskUserQuestion`:
+
+Assemble `concept_hints` as follows:
+1. If POSTMORTEM.md "Doc gap" line names a concept slug (i.e. user did not pick "Other"), take that slug as the first element.
+2. Append any slugs listed in PROBLEM.md "Relevant concepts:" (comma-separated), skipping empty slots.
+3. Join all non-empty elements with a space. If no elements remain, `concept_hints` is empty.
+
+Assign `$CONCEPT_SLUG` = the first non-empty slug from `concept_hints` (or empty string if none). This must happen before the log call below.
+
+```
+/z-suggest-memory
+concept_hints: <assembled concept_hints string per rules above>
+context: "Post-mortem for <slug>: <one-sentence root cause from POSTMORTEM.md Root cause section>"
+```
+
+**Salience guidance — read before invoking:**
+
+> **Default to Cancel** unless a genuinely novel anti-pattern, abandoned investigation path, or non-obvious decision rationale surfaced during root-cause investigation. Cancel is a first-class outcome and should be chosen most of the time. Only persist memory when the insight would materially prevent a future misdiagnosis of the same class of bug — not just because a bug was fixed.
+
+Log the outcome:
+
+```bash
+# Assign $CONCEPT_SLUG = first non-empty slug from concept_hints (empty string if none).
+CONCEPT_SLUG="<first element of concept_hints, or empty>"
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" suggest_memory_called \
+  "$(printf '{"memories_written":%d,"concept":"%s"}' "$MEMORIES_WRITTEN" "$CONCEPT_SLUG")"
+```
+
+(`$MEMORIES_WRITTEN` = 0 if user chose Cancel; `$CONCEPT_SLUG` = first slug from `concept_hints`, empty string if `concept_hints` had no slugs.)
+
+Then ask the user via `AskUserQuestion`:
 - "Convert action items into follow-up tasks?" → If yes, the orchestrator appends them to a designated `TASKS.md` (user picks which slug, or creates a fresh `audit-<topic>` slug) and the user can later `/z-implement-all` them.
 - "Convert regression-test action items into a /z-test follow-up" → For each action item shaped like `Add regression test ...`, record the invariant + failure-class + target-file hint into `z-harness/<slug>/test-followups.md` (a flat list of seed entries shaped like Phase 2 drafts in `/z-test`). On the next `/z-plan` + `/z-test` cycle (or if the user re-runs `/z-test` on this same slug after seeding follow-up production tasks), these become mandatory TESTS.md entries. Closes the post-mortem loop automatically — the next plan run cannot ship without the regression test the post-mortem flagged.
 - "Just record and move on" → leave POSTMORTEM.md as a standalone record.

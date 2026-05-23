@@ -30,7 +30,13 @@ This command is **read-only**. Never edit the target. Fixes happen later via `/z
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" audit_run_start "$START_PAYLOAD"
    ```
 6. Notification policy: read `Z_HARNESS_NOTIFY` (default `approval_only`).
-7. If `docs/llm/INDEX.json` exists → read it. For each concept whose source files overlap the audit target, capture the JSON path — these go to auditors as `relevant_docs`.
+7. If `docs/llm/INDEX.json` exists → dispatch `doc-fetcher` (Haiku) to get the concept list overlapping the audit target. Do NOT read INDEX.json or per-concept JSONs from main thread.
+   ```
+   Agent(subagent_type="doc-fetcher",
+         description="Doc context for audit <slug>",
+         prompt="query: which concepts cover <audit target paths>?\nrepo_root: <abs path>\ndepth: summary")
+   ```
+   The orchestrator captures the returned concept slugs and passes the corresponding `docs/llm/<slug>.json` paths to auditors as `relevant_docs` (the auditors then read them themselves — they're fresh-context already).
 
 `$BASE = z-harness/$Z_HARNESS_SLUG/`.
 

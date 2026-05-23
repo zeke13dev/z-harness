@@ -1,8 +1,8 @@
 ---
-name: z-plan
 description: Run the rigorous z-harness planning pipeline — challenge premises, batch decisions, cross-consult Gemini + Codex once, and produce SPEC.md / PLAN.md / TASKS.md.
 argument-hint: <feature or task description>
 ---
+
 You are running the **z-harness `/z-plan`** pipeline.
 
 Task (from `$ARGUMENTS`):
@@ -15,7 +15,10 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
 
 ## Setup
 
-1. **Derive a plan slug** from the task: short kebab-case, 2-4 words (e.g. "expand sports ML" → `expand-sports-ml`; "add rate limit middleware" → `add-rate-limit`). Confirm with the user via `AskUserQuestion` if the auto-derived slug is non-obvious or might collide with an existing slug (run `ls z-harness/` to check for existing slug dirs first).
+1. **Derive a plan slug** from the task: short kebab-case, 2-4 words (e.g. "expand sports ML" → `expand-sports-ml`; "add rate limit middleware" → `add-rate-limit`). Run `ls z-harness/` to check for existing slug dirs. If the derived slug matches an existing dir:
+   - **Precontext-only slug dir** (only `BRAINSTORM.md` and/or `RESEARCH.md` present, no `PLAN.md`/`SPEC.md`/`TASKS.md`): treat as continuation — no prompt, proceed with the existing slug.
+   - **Finished-plan slug dir** (`PLAN.md` or `TASKS.md` exists): collision — prompt the user via `AskUserQuestion` to confirm or choose a different slug.
+   If the auto-derived slug is non-obvious, confirm with the user via `AskUserQuestion`.
 2. **Export** `Z_HARNESS_SLUG=<slug>` for all subsequent shell calls and subagents — this is what namespaces every output path.
 3. Pick a run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`
 4. `mkdir -p z-harness/$Z_HARNESS_SLUG/archive/$RUN/transcripts`
@@ -32,7 +35,17 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
    Output lands under `z-harness/<slug>/archive/$RUN/events.jsonl` (log-event.sh honors `Z_HARNESS_SLUG`).
 6. Notification policy: read env `Z_HARNESS_NOTIFY` (default `approval_only`). Values: `off`, `approval_only`, `all`.
 7. Usage-limit guard policy: read env `Z_HARNESS_PAUSE_AT_PCT` (default `90`). If Claude Code surfaces a usage indicator and current usage ≥ this %, **don't dispatch new phases**; instead emit `usage_pause`, push-notify, and finalize whatever phase you're on cleanly. The user resumes by re-invoking `/z-plan` with the same task (or `/z-implement-all` if planning is already done).
-8. **Check for LLM-tier docs.** If `docs/llm/INDEX.json` exists in the repo root, read it first. It's the cheap ground-truth oracle for Phase 1 Explore — use it to scope which modules to investigate. Treat it as authoritative until evidence in the code contradicts it (log `doc_drift` events when that happens; `/z-maintain-docs` will follow up).
+8. **Check for LLM-tier docs.** If `docs/llm/INDEX.json` exists in the repo root, **do NOT read it from main thread.** Note its existence; Phase 1 will dispatch `doc-fetcher` (Haiku) to read it. The orchestrator never reads `docs/llm/*.json` directly — that's what burns main-thread context unnecessarily. If INDEX.json does not exist, note that fact and continue (Phase 1 will Explore without doc grounding).
+9. **Docs-freshness gate.** If `docs/llm/INDEX.json` exists, compute staleness across all its entries before Phase 1 starts. This step is the ONE exception where main thread reads INDEX.json — but only the lightweight metadata fields (`slug`, `last_updated`, `source_file`), never the per-concept `<slug>.json` bodies. For each concept entry, compare `entry.last_updated` against the max `mtime` of its `source_files`. A concept is **stale** if any source file's mtime exceeds `last_updated`. Compute `stale_pct = stale_concepts / total_concepts`. The threshold is `$Z_HARNESS_DOC_STALENESS_THRESHOLD` (default `20` — meaning 20 percent). If `stale_pct >= threshold`, **halt before Phase 1**, push-notify the user, and recommend `/z-maintain-docs` first:
+   ```
+   Docs are <stale_pct>% stale (>= <threshold>% threshold).
+   Recommend: /z-maintain-docs to refresh, then resume /z-plan <task>.
+   ```
+   The user can override via `AskUserQuestion` ("refresh now" / "proceed with stale docs" / "abandon"). If they proceed with stale docs, emit a `doc_drift_acknowledged` event and continue — Phase 1 still uses INDEX.json but the orchestrator should weight `relevant_concepts` hints less and verify against current code more aggressively.
+10. **Pre-plan artifact detection.** Check `z-harness/$Z_HARNESS_SLUG/` for `BRAINSTORM.md` and `RESEARCH.md`.
+    - **Freshness check (RESEARCH.md only):** If `RESEARCH.md` exists, parse all file citations using regex `/[A-Za-z0-9_./-]+\.(rs|py|md|ts|tsx|js|jsx|json|toml|yaml|yml|sh|sql)(:\d+(-\d+)?)?/`. Also scan for extensionless allowlist filenames (`Makefile`, `Dockerfile`). Markdown link form `[label](path:line)` — extract the inner path. For each cited path: follow symlinks; compare mtime to `generated_at`; for line-ranges, use min-line mtime (any modification within range → stale). If any stale citation found, warn the user via `AskUserQuestion` ("proceed with stale research" / "re-run research" / "abort"). Deleted-source detection: if a cited file no longer exists, emit a `precontext_source_deleted` event (higher severity than stale-mtime) **and** trigger the same `AskUserQuestion` warn path — deleted-source citations are treated as stale for the purposes of the user gate. Parse failure: emit `precontext_freshness_check_failed`, continue (fail-open).
+    - **Conflict check:** If both `BRAINSTORM.md` and `RESEARCH.md` exist, scan for obvious contradictions (e.g. Brainstorm assumes X is possible; Research found constraint Y that prevents it). Surface contradictions to the user.
+    - **Unfinalized brainstorm:** If `BRAINSTORM.md` is present but `status: complete` is missing or `chosen_framing` is absent, recommend the user run `/z-brainstorm` again before proceeding.
 
 **All paths in subsequent phases live under `z-harness/<slug>/`:**
 - `z-harness/<slug>/SPEC.md`
@@ -69,7 +82,9 @@ This makes post-run analysis trivial: total run time = sum(`phase_end.wall_ms`);
 
 ## Phase 0 — Premise check
 
-**Do not take the prompt's premises for granted.** Before any planning, ask:
+**Do not take the prompt's premises for granted.** If `BRAINSTORM.md` or `RESEARCH.md` were detected in Setup step 10, **inject their content here** as input to the premise check (extracting core hypothesis + findings). Do not re-derive context already covered by these artifacts.
+
+Before any planning, ask:
 
 - Does the stated goal actually solve the underlying problem? (e.g. if the user asks for a faster cache, is caching even the right answer?)
 - Will the proposed approach actually work? (e.g. for a quant strategy: is the edge real, will it survive transaction costs, is the backtest leaking? for an architecture: will it scale to the stated load?)
@@ -83,18 +98,57 @@ Checkpoint: `phase0-premise.md`.
 
 ## Phase 1 — Exploration
 
-Read the codebase. Use Read/Grep/Glob, and the `Explore` subagent for broad sweeps. Identify: touched files, reusable patterns, constraints (types, framework, tests, perf, security), adjacent code that could regress.
+**RESEARCH.md shortcut:** If RESEARCH.md was detected (Setup step 10) and is non-stale, it may make doc-fetcher and/or Explore optional. The two skip conditions are **independent** — evaluate each separately:
 
-**If `docs/llm/INDEX.json` exists, use it first** — it's a cheap structured map of concepts → source files. For each Explore dispatch, include `relevant_concepts: <paths from INDEX.json>` in the prompt so the Explore agent reads those JSON entries first and treats them as scaffolding (saves ~30-50% of broad-repo grep cost). The Explore is still authorized to verify the docs against current code; if it finds drift, it should report it in its return and you log a `doc_drift` event:
+- **Skip doc-fetcher** iff RESEARCH.md is non-stale AND its `Findings:` section has ≥1 entry citing a file in the task's likely-touched set.
+- **Skip Explore** iff RESEARCH.md is non-stale AND its `Open questions:` section is empty.
 
+The four resulting cases:
+- **(a) Skip doc-fetcher only** — RESEARCH.md has findings for touched files but has open questions → run Explore, skip doc-fetcher.
+- **(b) Skip Explore only** — RESEARCH.md has no findings for touched files but has no open questions → run doc-fetcher, skip Explore.
+- **(c) Skip both** — RESEARCH.md has findings for touched files AND no open questions → skip both, proceed to Phase 2.
+- **(d) Run both** — RESEARCH.md is stale, absent, or meets neither skip condition → run both doc-fetcher and Explore.
+
+**Rule: doc-fetcher FIRST, Explore for gaps.** The two-tier docs at `docs/llm/` are a cheap pre-built oracle. The orchestrator must consult them via the `doc-fetcher` (Haiku) subagent before dispatching the (expensive) Explore subagent.
+
+### 1a. Dispatch doc-fetcher (if INDEX.json exists)
+
+If Setup step 8 noted `docs/llm/INDEX.json` exists, spawn ONE `doc-fetcher` call with the task's keywords:
+
+```
+Agent(
+  subagent_type="doc-fetcher",
+  description="Doc context for <slug>",
+  prompt="query: <one-sentence summary of the task>\nrepo_root: <abs path>\ndepth: standard"
+)
+```
+
+It returns a tight synthesis: matched concepts, key files with line ranges, invariants. If it returns `STATUS: no_docs` or `STATUS: no_match`, proceed to Explore with no grounding. If it returns `STATUS: partial`, Explore must fill the gap it named.
+
+If a `DRIFT WARNING` block appears in the return, log a `doc_drift` event per affected slug:
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" doc_drift \
   '{"concept":"<slug>","claim":"<what doc said>","reality":"<what code says>","file":"<path>"}'
 ```
 
-`/z-maintain-docs` later consumes these events to know which concepts need refresh.
+### 1b. Explore for gaps (Haiku by default)
 
-**Cap `Explore` subagent dispatches at 3 total per `/z-plan` run.** Each Explore is a Claude (Opus by default) repo-mapping pass that consumes 2–3 M tokens of cache-read context. In the data-overhaul run, 5 Explore agents ate 13.9 M tokens — ~93% of the entire planning budget — and the marginal Explore beyond the third surfaced no new findings the prior three missed. If 3 is not enough, prefer running direct Read/Grep/Glob from the orchestrator (which reuses the orchestrator's already-warm context) over spawning a 4th Explore. Override via `Z_HARNESS_MAX_EXPLORE=N` only with explicit user request.
+Now identify what doc-fetcher did NOT cover (or what's absent entirely if no docs exist): touched files, reusable patterns, constraints, adjacent code that could regress.
+
+**Explore is dispatched with `model: "haiku"` by default.** Pass it the doc-fetcher synthesis as scaffolding so it doesn't re-derive what we already have:
+
+```
+Agent(
+  subagent_type="Explore",
+  model: "haiku",
+  description="Find <thing> related to <slug>",
+  prompt="<TARGETED question that fills a specific gap from doc-fetcher>\n\nAlready known (from doc-fetcher): <paste tight summary>\n\nFocus only on what is NOT covered above."
+)
+```
+
+**When to upgrade Explore to Sonnet:** if the question requires *interpretation* (e.g. "explain the control flow of X" rather than "where is X defined"), upgrade by setting `model: "sonnet"`. Locating > Sonnet. Interpreting > Sonnet. Default > Haiku.
+
+**Cap `Explore` subagent dispatches at 3 total per `/z-plan` run.** Each Explore (even Haiku) is a repo-mapping pass that consumes meaningful cache-read context. In the data-overhaul run, 5 Opus Explores ate 13.9 M tokens — ~93% of the entire planning budget. Haiku materially cuts that, but the cap stays: if 3 is not enough, prefer direct Read/Grep/Glob from the orchestrator over a 4th Explore. Override via `Z_HARNESS_MAX_EXPLORE=N` only with explicit user request.
 
 Output a one-paragraph context summary. Checkpoint: `phase1-context.md`.
 
@@ -175,6 +229,19 @@ Block until answered.
 
 Create `z-harness/$Z_HARNESS_SLUG/SPEC.md` — per-file detailed spec: paths, exported surface, signatures, behavior, invariants, edge cases, error handling.
 
+The SPEC.md must include a `## Planning Inputs` section near the top (after title/overview, before any per-file sections) listing which precontext artifacts contributed to this plan:
+
+```markdown
+## Planning Inputs
+
+| Artifact | Path | generated_at |
+|----------|------|--------------|
+| BRAINSTORM.md | z-harness/<slug>/BRAINSTORM.md | <iso timestamp or "n/a"> |
+| RESEARCH.md | z-harness/<slug>/RESEARCH.md | <iso timestamp or "n/a"> |
+```
+
+If neither artifact was present, write: `none — fresh /z-plan run.`
+
 Create `z-harness/$Z_HARNESS_SLUG/PLAN.md` — approved plan: goals, decisions (with rationale), non-goals, approved shortcuts, ordered phases.
 
 Both obey **DRY / KISS / SOLID**. State explicitly how the plan respects each.
@@ -205,6 +272,13 @@ Sweet spot: each task fits one fresh context window AND produces ~50–500 lines
 The orchestrator dispatches a `remote-runner` (Haiku) to rsync+build in the sandbox; failure halts the task before review.
 
 **Docs-touched flag.** For any task that touches a user-facing surface (CLI flags, public APIs, configs, schemas), append a `**DOCS:** <concept-slug>` line. This is a hint for `/z-maintain-docs`; not a rigid task on its own.
+
+**Complexity stamp (parallel Haiku classifier).** After writing all task blocks, dispatch the `complexity-classifier` (Haiku) subagent once per task **in parallel** (single message, multiple `Agent()` calls). Each call passes the verbatim task block, `spec_slice_path: $BASE/SPEC.md`, and `repo_root`. Parse each return's `TIER:` and `REASON:` lines, then `Edit` TASKS.md to append a `**Complexity:** <tier>` line to the matching task block. Log a `task_classified` event per task:
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" task_classified \
+  "$(printf '{"task":"%s","tier":"%s","reason":%s}' "<task-id>" "<tier>" "$(printf '%s' "<reason>" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')")"
+```
+If a task block already contains a user-authored `**Complexity:** <tier>` line (rare at plan-time, but possible if the user is editing TASKS.md in-flight), the classifier returns `REASON: user-authored override` and you leave the stamp alone. The orchestrator `/z-implement-all` reads this stamp at dispatch time to pick the implementer model (`low|medium` → Sonnet, `high` → Opus).
 
 ## Phase 9 — Finalize archive
 

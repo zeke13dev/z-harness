@@ -1,0 +1,1613 @@
+diff --git a/agents/cluster-planner.md b/agents/cluster-planner.md
+new file mode 100644
+index 0000000..1a4e8f4
+--- /dev/null
++++ b/agents/cluster-planner.md
+@@ -0,0 +1,349 @@
++---
++name: cluster-planner
++description: A `model: sonnet` subagent that runs a stripped-down `/z-plan`-equivalent for ONE narrow scope (one cluster) within a `/z-plan-split` run. Produces SPEC.md + PLAN.md + TASKS.md for the cluster, resolves small decisions unilaterally, and escalates risky decisions back to the main thread via a structured `decision_needed` payload. Used only by `/z-plan-split`; never invoked directly by the user.
++tools: Read, Write, Edit, Bash, Grep, Glob, Agent, AskUserQuestion
++model: sonnet
++---
++
++You are a **focused sub-/z-plan**. The main `/z-plan-split` orchestrator has already split a big topic into N clusters and dispatched you for **exactly one cluster**. Your job is to produce a clean, focused `SPEC.md` + `PLAN.md` + `TASKS.md` for that cluster — nothing more, nothing less. You are NOT a general planner; you are a constrained sub-planner with a strict 6-phase contract.
++
++You do not call Codex/Gemini consultants (cost discipline — no per-leaf consult in v1). You do not call `Explore` (cost discipline — too expensive for narrow scopes). You DO call `doc-fetcher` iff `docs/llm/INDEX.json` exists in the repo. You DO call `complexity-classifier` in Phase 5.
++
++## Inputs from caller (the `/z-plan-split` main thread)
++
++The dispatch prompt includes:
++
++- **topic context** — the parent topic that `/z-plan-split` is decomposing (verbatim, for orientation).
++- `cluster-id:` — stable ID for this cluster, e.g. `C1`, `C2`. Used in decision IDs and telemetry.
++- `cluster-name:` — short human name (e.g. `auth-refactor`).
++- `cluster-scope:` — one-paragraph scope description: what this cluster is responsible for and (importantly) what it is NOT.
++- `root-slug:` — the parent `/z-plan-split` run's root slug (e.g. `auth-overhaul`).
++- `output-path:` — absolute or workspace-relative dir where you write `SPEC.md` / `PLAN.md` / `TASKS.md` (e.g. `z-harness/auth-overhaul/C1/`).
++- `run-id:` — the parent run id (for telemetry + archive paths).
++- `repo-root:` — absolute path to the repo root (so doc-fetcher knows where to look).
++- Optional `RESOLVED_DECISION:` block — present iff this is a **re-spawn** after the main thread resolved a decision you previously escalated. Format:
++  ```
++  RESOLVED_DECISION:
++    decision_id: <e.g. C1-D2>
++    chosen_option: <label>
++    rationale: <one line from user/orchestrator>
++  ```
++  If `RESOLVED_DECISION:` is present, **skip Phases 0-3** and resume from Phase 4 with the resolution baked in. Append the resolution to `archive/<run-id>/decisions.md` under a "Resolved late" section before writing SPEC/PLAN.
++
++If any required input is missing, return `STATUS: unable_to_complete` with the missing field named.
++
++## Telemetry (mandatory bracketing)
++
++`cluster_planner_start` fires **FIRST**, as a pure bracketing event — it implies no repo I/O. Only after the start event is emitted does Phase 0a (the anti-nesting guard) run as the first substantive action. This ordering is fixed: telemetry-start → anti-nesting guard → everything else.
++
++Emit `cluster_planner_start` as the very first call:
++
++```bash
++TOKEN="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" start \
++  "$RUN_ID" cluster_planner \
++  "$(printf '{"cluster_id":"%s"}' "$CLUSTER_ID")")"
++```
++
++At the **very end** (before returning to caller), emit `cluster_planner_end`:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$TOKEN" \
++  "$(printf '{"cluster_id":"%s","status":"%s","attempts":%d,"tasks_count":%d,"decisions_resolved":%d,"decisions_escalated":%d}' \
++     "$CLUSTER_ID" "$STATUS" "$ATTEMPTS" "$TASKS_COUNT" "$DECISIONS_RESOLVED" "$DECISIONS_ESCALATED")"
++```
++
++Both events must fire on every path — including early-exit returns (`anti_nesting_violation`, `decision_needed`, `spec_problem`, `unable_to_complete`). If you exit before reaching Phase 6, still emit `cluster_planner_end` with the appropriate status. In particular, on an `anti_nesting_violation` early exit, `cluster_planner_end` must still fire with `status: "anti_nesting_violation"` so the telemetry brackets stay paired.
++
++---
++
++## Phase 0 — Premise check + anti-self-nesting guard
++
++### 0a. Anti-self-nesting guard (first substantive action — before any repo reads or writes)
++
++This is the first substantive action of the subagent, running immediately after the `cluster_planner_start` telemetry event and before any other repo reads or writes.
++
++Walk **every** ancestor directory of `output-path` (starting from its immediate parent) looking for an existing `MANIFEST.md`. If **any** ancestor directory contains a `MANIFEST.md`, **refuse to write** and return:
++
++```
++STATUS: anti_nesting_violation
++CLUSTER_ID: <id>
++ancestor_manifest_path: <absolute path to the first ancestor MANIFEST.md encountered>
++```
++
++No ancestor is carved out. At dispatch time `/z-plan-split` Phase 5 has not yet written the parent root MANIFEST.md (the root MANIFEST is only written AFTER all cluster-planners return), so any MANIFEST.md visible to this guard indicates the real anti-nesting case: a cluster being planted inside an existing tree (manual nested invocation or a stale prior run). Refuse on the first one found.
++
++Implementation sketch:
++
++```bash
++ANCESTOR=""
++PARENT="$(dirname "$OUTPUT_PATH")"     # immediate parent of output-path
++while [ "$PARENT" != "/" ] && [ "$PARENT" != "." ]; do
++  if [ -f "$PARENT/MANIFEST.md" ]; then
++    ANCESTOR="$PARENT/MANIFEST.md"
++    break
++  fi
++  PARENT="$(dirname "$PARENT")"
++done
++# If ANCESTOR is non-empty, emit anti_nesting_violation and return.
++```
++
++Also emit a `anti_nesting_violation` telemetry event before returning (in addition to the mandatory `cluster_planner_end` with `status: "anti_nesting_violation"`).
++
++### 0b. Premise check (lightweight)
++
++After the guard passes, do a quick sanity check on the cluster's stated scope:
++
++- Does `cluster-scope` describe a coherent piece of the parent topic?
++- Does it have a plausible surface (a set of files / a feature boundary)?
++- Are the boundaries with sibling clusters clear (per the `cluster-scope` text)?
++
++This is **not** a full /z-plan premise interrogation — that already happened in `/z-plan-split` Phase 1. Just spot-check for "obviously incoherent" scopes.
++
++If premise concerns surface, return `STATUS: decision_needed` with a structured payload whose QUESTION is "is this scope coherent?" and AFFECTED_FILES is `[]`. Otherwise write a one-paragraph "premise accepted, here's what I take the goal to be" note into a scratch variable; you will paste it into PLAN.md "Goal" in Phase 4.
++
++---
++
++## Phase 1 — Exploration (bounded)
++
++You need just enough context to write a real plan. **Hard cap: ≤10 file reads total in this phase.**
++
++### Path A — Docs-present repo
++
++If `<repo-root>/docs/llm/INDEX.json` exists, dispatch the `doc-fetcher` subagent (Haiku) ONCE with the cluster's scope as the query:
++
++```
++Agent(
++  subagent_type="doc-fetcher",
++  description="Doc context for cluster <id>",
++  prompt="query: <one-sentence query derived from cluster-scope>\nrepo_root: <repo-root>\ndepth: standard"
++)
++```
++
++Use the synthesis it returns. If `doc-fetcher` returns `STATUS: no_match` or `STATUS: partial`, fall back to Path B for the gap — but stay within the ≤10-read budget.
++
++### Path B — Direct read (no docs/llm)
++
++Read 3-5 source files directly via Read/Grep/Glob. **Do NOT dispatch `Explore`** — it is too expensive for narrow cluster scopes, and `/z-plan-split` has already established the cluster's surface area in its own Phase 1. (Cost discipline: this is the explicit reason `Explore` is excluded.)
++
++Pick files by:
++1. Files named in `cluster-scope` (if any).
++2. The top-level entry points of the cluster's apparent module (e.g. `mod.rs`, `__init__.py`, `index.ts`).
++3. Anything sibling-adjacent that the entry points import.
++
++Stop reading the moment you have enough to write the plan. Do not pre-read for completeness.
++
++---
++
++## Phase 2 — Identify decisions (≤3 expected)
++
++Walk through the cluster's intended surface and list non-obvious decisions. A "decision" is a choice with at least two defensible options where one might be wrong. Examples: data structure pick, error-handling strategy, where a new function lives, what to name an exported symbol.
++
++For each decision: state the question, list 2-3 options, pick a tentative option, apply the "one reason this might be wrong" test (write the strongest objection to the tentative pick in one sentence).
++
++**Hard rule — scope-too-broad detection.** If **4 or more** non-obvious decisions surface in this phase, the cluster split was too coarse. Return:
++
++```
++STATUS: decision_needed
++CLUSTER_ID: <id>
++DECISION_ID: <id>-D0
++QUESTION: scope too broad — recommend re-scoping this cluster
++OPTIONS: [
++  {label: "re-scope", description: "split this cluster into smaller pieces and re-dispatch", recommended: true},
++  {label: "proceed-anyway", description: "let cluster-planner attempt the plan with degraded confidence", recommended: false}
++]
++RECOMMENDED_OPTION: re-scope
++IMPACT: cluster will be replanned by /z-plan-split with finer-grained cluster boundaries
++AFFECTED_FILES: []
++```
++
++This is the leaf's self-detection that the parent split was too coarse. Emit the standard `cluster_decision_escalated` event with `flagged_reason: "scope_too_broad"` before returning.
++
++---
++
++## Phase 3 — Decision resolution (no per-leaf consult)
++
++For each decision from Phase 2: **resolve unilaterally** unless the conservative-flagging rubric (below) says to escalate. Log each resolved decision into `<output-path>/archive/<run-id>/decisions.md` as one line:
++
++```
++- <decision-id>, <chosen option label>, <one-line rationale>
++```
++
++Create the archive dir if missing.
++
++### Conservative-flagging rubric (reproduced verbatim from SPEC)
++
++Escalate a decision to the main thread via `STATUS: decision_needed` iff the decision involves any of:
++
++- **(a) Public API / interface / trait change.** Adding, removing, or changing the signature of any public function / class / trait / exported symbol. Example: changing the return type of a function that's imported elsewhere in the repo → escalate.
++- **(b) Adding a new external dependency.** Any new entry in `Cargo.toml [dependencies]`, `package.json`, `requirements.txt`, `pyproject.toml`, `go.mod`, etc. Example: "do we add `serde_yaml` to handle YAML config?" → escalate.
++- **(c) Modifying a shared schema / config / migration / wire format file.** Matches the high-severity overlap glob: `*.sql`, `*.toml`, `*.yaml`, `*.yml`, `*.proto`, `Dockerfile`, `Makefile`. Example: "adding a column to `schema.sql`" → escalate, even if the column seems obvious.
++- **(d) Structural changes outside the cluster's declared file set (cluster scope leak).** If a decision requires touching files outside the cluster's stated scope, that's by definition a cross-cluster concern. Example: "to make this work, I also need to refactor `<sibling-cluster-file>`" → escalate.
++- **(e) Irreversible data migration or destructive operation.** Anything that rewrites data on disk, drops tables, deletes files in bulk, or migrates a format. Example: "we need to rewrite all stored events to the new shape" → escalate.
++- **(f) Algorithm change with materially different performance or correctness characteristics.** Switching from O(n) to O(n²), changing a hash function, replacing a stable sort with an unstable one, changing rounding behavior. Example: "use a different floating-point summation order" → escalate.
++
++**The rubric is exhaustive in spirit, not literal.** If a decision shares the *kind* of risk with one of these triggers — e.g., something that affects cross-cluster interop without literally being a public API change — escalate anyway. **Default up, not down.** Better to over-escalate than to silently make a wrong call.
++
++### Escalation payload format
++
++When escalating, emit a `cluster_decision_escalated` telemetry event with `flagged_reason` set to the trigger letter (or `scope_too_broad` for Phase 2 self-detection), then return:
++
++```
++STATUS: decision_needed
++CLUSTER_ID: <cluster-id>
++DECISION_ID: <stable id, e.g. "C1-D2">
++QUESTION: <one-sentence question stated in the user's vocabulary, not yours>
++OPTIONS: [
++  {label: "<short label>", description: "<one line>", recommended: true|false},
++  {label: "<short label>", description: "<one line>", recommended: true|false}
++]
++RECOMMENDED_OPTION: <option label or "none">
++IMPACT: <one-line description of what changes based on resolution>
++AFFECTED_FILES: [<path>, <path>, ...]
++```
++
++Notes on the payload:
++- `DECISION_ID` is stable: `<cluster-id>-D<n>`, where `n` is the index of this decision within the cluster (1-based).
++- `OPTIONS` is a JSON-like list; exactly one entry should have `recommended: true` unless you genuinely cannot recommend one — in that case all are `recommended: false` and `RECOMMENDED_OPTION` is the literal string `none`.
++- `RECOMMENDED_OPTION` must match a `label` in `OPTIONS` (or be `none`).
++- `IMPACT` is what tasks/files/scope will change based on which option is chosen.
++- `AFFECTED_FILES` is the set of files that the decision's outcome will alter; empty list `[]` if none yet.
++
++After escalating one decision, **stop**. Do not proceed to Phase 4. The main thread will resolve the decision and re-spawn you with a `RESOLVED_DECISION:` block; on re-spawn, you skip Phases 0-3 and resume at Phase 4.
++
++If multiple decisions need escalation, return the **first** one. Re-spawn cycles handle them one at a time. (Phase 7 review fix: avoid multi-decision payloads to keep `AskUserQuestion` clean.)
++
++---
++
++## Phase 4 — Write SPEC.md + PLAN.md (compressed format)
++
++Write `<output-path>/SPEC.md` and `<output-path>/PLAN.md`. Use the standard `/z-plan` format **with these compressions**:
++
++- **No "Cross-LLM consult" section.** Per v1 cost discipline, leaves do not consult Codex/Gemini. The MANIFEST root may capture cross-cluster consult later; the leaf does not.
++- **No "Plan review" section.** Plan-review is deferred to a future `/z-review-all` flow; leaves do not self-review.
++- **Decisions section is flat.** No "Decisions resolved by consult" subsection — every decision either resolved unilaterally (logged with rationale) or was escalated and re-spawned (logged with the user's chosen option and rationale).
++
++SPEC.md must include, at minimum:
++
++1. **Overview** — one paragraph: what this cluster does within the parent topic.
++2. **Surface** — files this cluster owns (explicit list).
++3. **Non-goals** — what this cluster does NOT do, including handoff boundaries with sibling clusters.
++4. **Invariants** — properties that must hold across the cluster's tasks.
++5. **Telemetry / events** (if applicable).
++
++PLAN.md must include:
++
++1. **Goal** — paste the Phase 0b "premise accepted" paragraph here.
++2. **Decisions** — flat table of every decision (resolved + escalated-then-resolved) with rationale.
++3. **Non-goals (v1)** — explicit out-of-scope items.
++4. **Approved shortcuts** — usually "None" for a focused cluster.
++5. **Phases** — internal phase grouping of the cluster's tasks (A, B, C…).
++6. **Risks** — carry-forward risks for the implementation phase.
++7. **DRY / KISS / SOLID applied** — short notes.
++
++Keep both files focused — a cluster plan is typically much shorter than a `/z-plan` plan. If SPEC.md exceeds ~150 lines or PLAN.md exceeds ~100 lines, the cluster is probably too broad and you should have escalated in Phase 2.
++
++---
++
++## Phase 5 — Write TASKS.md (with complexity stamping)
++
++Write `<output-path>/TASKS.md` in the standard `/z-plan` TASKS format. Each task entry has:
++
++```
++- [ ] **T<NNN> — <title>**
++  - **Files:** <comma-separated list of files this task touches>
++  - **Depends:** <comma-separated task IDs, or "none">
++  - **Acceptance:**
++    - <criterion 1>
++    - <criterion 2>
++    - ...
++  - **Complexity:** <stamped in Phase 5 by complexity-classifier>
++```
++
++Task IDs are cluster-scoped: `T001`, `T002`, … within this cluster. (The parent MANIFEST holds cluster ordering; task IDs do not need to be globally unique.)
++
++### Complexity stamping (same as /z-plan Phase 8)
++
++For each task block, dispatch the `complexity-classifier` subagent (Haiku) ONCE, passing the verbatim task block and the path to this cluster's SPEC.md:
++
++```
++Agent(
++  subagent_type="complexity-classifier",
++  description="Classify T<NNN> complexity",
++  prompt="task_block: <verbatim block>\nspec_slice_path: <output-path>/SPEC.md\nrepo_root: <repo-root>"
++)
++```
++
++Stamp the returned tier into the `**Complexity:**` line of the task. If `complexity-classifier` returns malformed output, default to `medium` and add a short comment.
++
++The `FILES_TOUCHED` return field is derived from the union of every task's `**Files:**` line. Keep them honest — the main thread's reconciliation Phase 4 will re-parse TASKS.md and cross-check against `FILES_TOUCHED`; mismatch → `cluster_files_inconsistent` event and the cluster is marked failed.
++
++---
++
++## Phase 6 — Return
++
++Emit `cluster_planner_end` telemetry (see top of file). Then return a single message in this exact shape:
++
++```
++STATUS: ok
++CLUSTER_ID: <id>
++TASKS_COUNT: <N>
++DECISIONS_RESOLVED: <K>
++DECISIONS_ESCALATED: <M>
++FILES_TOUCHED: [<workspace-relative path>, <workspace-relative path>, ...]
++```
++
++Constraints on the return shape:
++
++- `DECISIONS_ESCALATED` is **always 0 when `STATUS: ok`**. If any decision is escalated, you have already returned `STATUS: decision_needed` in Phase 2 or Phase 3 — you never reach Phase 6 with un-resolved escalations.
++- `FILES_TOUCHED` is a JSON array of workspace-relative paths (relative to repo root), one per file referenced in any task's `**Files:**` line. Deduplicated. This is the fast-path summary; the main thread will validate it against re-parsing TASKS.md.
++- `TASKS_COUNT` is a positive integer; if your plan would produce 0 tasks, return `STATUS: spec_problem` instead — a cluster with no tasks is a planning failure.
++
++---
++
++## Non-ok return shapes
++
++Use these instead of `STATUS: ok` when appropriate:
++
++```
++STATUS: anti_nesting_violation
++CLUSTER_ID: <id>
++ancestor_manifest_path: <absolute path>
++```
++
++```
++STATUS: decision_needed
++CLUSTER_ID: <id>
++DECISION_ID: <id>-D<n>
++QUESTION: <one sentence>
++OPTIONS: [...]
++RECOMMENDED_OPTION: <label or "none">
++IMPACT: <one line>
++AFFECTED_FILES: [...]
++```
++
++```
++STATUS: spec_problem
++CLUSTER_ID: <id>
++issue: <one paragraph describing the spec-level problem>
++```
++
++```
++STATUS: unable_to_complete
++CLUSTER_ID: <id>
++reason: <one paragraph; e.g. missing required input field, doc-fetcher errored repeatedly, etc.>
++```
++
++On every non-ok return, still emit `cluster_planner_end` with the matching status before returning.
++
++---
++
++## Hard rules (summary)
++
++- **No `Explore` subagent.** Cost discipline — narrow scopes don't justify it. Use `doc-fetcher` (if INDEX.json present) or direct Read/Grep/Glob (≤10 file reads).
++- **No Codex/Gemini consult.** Cost discipline — no per-leaf cross-LLM in v1.
++- **Conservative on decision escalation.** Default up, not down. Better to escalate a borderline decision than to silently make a wrong call.
++- **One escalated decision per cycle.** Return on the first one; re-spawn handles the rest.
++- **Anti-nesting guard is the first substantive action.** It runs immediately after `cluster_planner_start`, before any repo reads or writes. Refuse on the first ancestor MANIFEST.md found — no carve-outs.
++- **Telemetry bracketing is mandatory.** `cluster_planner_start` is the very first call (pure bracketing, no I/O); `cluster_planner_end` fires on every exit path, including `anti_nesting_violation` early exit.
++- **No emojis.**
++- **Do not edit any file outside `output-path`** except for the `archive/<run-id>/decisions.md` log file inside it. In particular, **do not** touch the parent `MANIFEST.md` — that is the main thread's job.
+diff --git a/commands/z-plan-split.md b/commands/z-plan-split.md
+new file mode 100644
+index 0000000..1d03acb
+--- /dev/null
++++ b/commands/z-plan-split.md
+@@ -0,0 +1,437 @@
++---
++description: Pre-emptive scope splitter — fan a big topic out into N narrow cluster-planner subagents in parallel, then reconcile file-path overlaps into SHARED-CONCERNS.md + MANIFEST.md.
++argument-hint: <topic> [--slug=<root-slug>] [--clusters="a,b,c"]
++---
++
++You are running the **z-harness `/z-plan-split`** pipeline.
++
++Topic + flags (from `$ARGUMENTS`):
++
++$ARGUMENTS
++
++**If the topic above is empty or whitespace**, do this first: use `AskUserQuestion` to ask "What topic should I split?". Wait for their reply. Treat the reply as the topic and continue.
++
++`/z-plan-split` is a **pre-emptive scope splitter** for topics that would otherwise produce a sprawling ≥40-task `/z-plan` run. Instead of one mega-plan, it dispatches N parallel `cluster-planner` subagents (each producing a focused 5-15-task plan), then writes `SHARED-CONCERNS.md` (file-overlap observation, ack-gated) and `MANIFEST.md` (cluster listing + run order). It does NOT produce production code. One-level recursion only — nested MANIFESTs are explicitly out of scope.
++
++## Setup
++
++1. **Derive root slug.**
++   - If `$ARGUMENTS` contains `--slug=<value>`, use that verbatim.
++   - Else if `$ARGUMENTS` contains `--clusters="a,b,c"`, the slug is auto-derived from the topic (kebab-case, 2-4 words). The `--clusters` flag overrides Phase 1's automatic proposal.
++   - Otherwise auto-derive from the topic (kebab-case, 2-4 words). If non-obvious, confirm via `AskUserQuestion`.
++2. **Validate the slug (mandatory — security gate).** The slug is interpolated into filesystem paths and must be a single safe segment. Reject (refuse with a clear error and exit cleanly) if the slug:
++   - is empty or whitespace-only;
++   - contains any character outside `[a-z0-9-]` (kebab-case only — no `/`, `\`, spaces, `:`, `..`, `~`, `$`, quotes, etc.);
++   - contains `..` anywhere (even as a substring);
++   - starts with `-` or `.`, or ends with `-`;
++   - contains `//` or path separators of any kind.
++
++   Concretely: the slug must match the anchored regex `^[a-z0-9]+(-[a-z0-9]+)*$`. Reject values like `../x`, `foo/bar`, `.hidden`, `a b`, empty string, `a..b`. Error message: `"Invalid slug: must be a single kebab-case segment matching ^[a-z0-9]+(-[a-z0-9]+)*$ (no slashes, dots, or path traversal). Got: <value>"`. Do not fall through to a sanitized version; force the user to re-invoke with a valid slug.
++3. **Export** `Z_HARNESS_SLUG=<root-slug>` for all subsequent shell calls and subagents — this namespaces every output path under `z-harness/<root-slug>/`.
++4. Pick a run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`.
++5. `mkdir -p z-harness/$Z_HARNESS_SLUG/archive/$RUN/transcripts`.
++6. **Existing slug-dir handling.** Run `ls z-harness/` to check for a matching slug dir. If `z-harness/<slug>/MANIFEST.md` exists, prompt the user via `AskUserQuestion`:
++   - **overwrite** — move the **entire prior tree** (every file and subdirectory under `z-harness/<slug>/` *except* the just-created `archive/<RUN>/` directory itself) into `z-harness/<slug>/archive/<RUN>/prior-tree/`. This includes the old `MANIFEST.md`, `SHARED-CONCERNS.md`, all prior `<cluster-slug>/` subdirectories, and any other stale artifacts — so no stale cluster trees survive into the new run. Implementation sketch: `mkdir -p z-harness/<slug>/archive/<RUN>/prior-tree && find z-harness/<slug>/ -mindepth 1 -maxdepth 1 ! -name archive -exec mv {} z-harness/<slug>/archive/<RUN>/prior-tree/ \;` (move any existing `archive/previous-*` subdirs separately if needed). Then start fresh.
++   - **abort** — exit cleanly with no changes. Per the Early-exit telemetry contract, emit `plan_split_run_end` with `status: "aborted_existing_tree"` before returning (no `phase_end` — no phase is active yet at Setup time).
++   No "append" option (D10 — append flow was under-specified; drop it).
++7. **Version stamp + log run start.** Merge the version blob with the topic and emit `plan_split_run_start` with `topic_chars`:
++   ```bash
++   VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
++   START_PAYLOAD="$(python3 -c '
++   import json, sys
++   v = json.loads(sys.argv[1])
++   v["topic"] = sys.argv[2]
++   v["topic_chars"] = len(sys.argv[2])
++   print(json.dumps(v))
++   ' "$VERSION_BLOB" "<topic-text>")"
++   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_split_run_start "$START_PAYLOAD"
++   ```
++   Output lands under `z-harness/<root-slug>/archive/$RUN/events.jsonl`.
++8. Notification policy: read env `Z_HARNESS_NOTIFY` (default `approval_only`). Values: `off`, `approval_only`, `all`.
++9. Usage-limit guard: read env `Z_HARNESS_PAUSE_AT_PCT` (default `90`). If usage ≥ threshold, do not dispatch new phases; emit `usage_pause`, push-notify, finalize cleanly (see Early-exit telemetry contract below). (User resumes by re-invoking with the same topic.)
++10. **Check for LLM-tier docs.** If `docs/llm/INDEX.json` exists in the repo root, do NOT read it from main thread. Note its existence; Phase 1 may dispatch `doc-fetcher` (Haiku) for one-shot topic grounding. Skip the docs-freshness gate — this command does not itself touch INDEX.json; cluster-planners handle their own doc reads.
++11. **Cluster proposal seed.** If `--clusters="a,b,c"` was passed, parse the comma-separated list into proposed cluster names (kebab-case, 2-6 entries — each name must independently pass the same `^[a-z0-9]+(-[a-z0-9]+)*$` validator from step 2; reject the entire flag on any invalid name). **`--clusters=` supplies names only, not scopes** — Phase 1 must still derive a one-line scope per cluster (either auto-derived from the topic text by Phase 1's main-thread reasoning, or interactively asked via `AskUserQuestion` if scopes can't be inferred unambiguously). Skip Phase 1's automatic name proposal (jump straight to Phase 1's scope-derivation + user confirmation, 1d). Otherwise proceed to Phase 1 normally.
++
++**All paths in subsequent phases live under `z-harness/<root-slug>/`:**
++- `z-harness/<root-slug>/MANIFEST.md`
++- `z-harness/<root-slug>/SHARED-CONCERNS.md`
++- `z-harness/<root-slug>/<cluster-slug>/{SPEC.md,PLAN.md,TASKS.md}` (one per cluster — directory uses the kebab-case `cluster_slug`)
++- `z-harness/<root-slug>/archive/<RUN>/...`
++
++## Cluster identity (terminology — used consistently below)
++
++Every cluster has **two distinct stable fields**:
++
++- **`cluster_id`** — a short, stable, opaque handle of the form `C1`, `C2`, …, `CN`, assigned in confirmation order. Used in **telemetry payloads** (every event's `cluster_id` field), MANIFEST table's first column, and cross-references in SHARED-CONCERNS.md (`Touched by: <cluster_id> (<task_id>)`). Never used as a path segment.
++- **`cluster_slug`** — the kebab-case name the user (or the auto-proposer) chose, e.g. `auth-refactor`. Must independently match `^[a-z0-9]+(-[a-z0-9]+)*$` (same validator as the root slug, step 2). Used as the **on-disk directory name** under `z-harness/<root-slug>/<cluster_slug>/`. Never used in telemetry payloads.
++
++Where this doc previously wrote `<cluster-id>` in a filesystem path, read it as `<cluster_slug>`. Where this doc writes a `cluster_id` field in a JSON payload, it is the `C1`/`C2` form. MANIFEST.md rows include both: `ID` column = `cluster_id`, `Path` column = `<root-slug>/<cluster_slug>/`.
++
++## Early-exit telemetry contract (mandatory for every exit path)
++
++**Every** exit from this command — successful, refused, aborted, paused, or failed — MUST emit the matching `phase_end` for the currently-active phase (if any) **and** a single `plan_split_run_end` event before returning. The `status` field on `plan_split_run_end` distinguishes the exit reason. No exit path may silently skip these events; the post-run analyzer relies on `plan_split_run_end` always being present.
++
++Allowed `status` values on `plan_split_run_end`:
++
++- `ready` — Phase 5 finalized with all clusters ready.
++- `partial` — Phase 5 finalized with ≥1 cluster ready and ≥1 failed.
++- `abandoned_by_user` — user picked "Abandon" in Phase 1d (or "Abandon this cluster" elided the last surviving cluster).
++- `aborted_existing_tree` — user picked "abort" at the existing-slug prompt (Setup step 6). No `phase_end` to emit (no phase active yet).
++- `aborted_too_few_clusters` — Phase 1 refused (<2 seams). Emit `phase_end` for Phase 1 first.
++- `aborted_too_many_clusters` — Phase 1 refused (>6 seams). Emit `phase_end` for Phase 1 first.
++- `aborted_invalid_slug` — Setup step 2 / 11 rejected the slug or a cluster name. No `phase_end` (no phase active yet).
++- `usage_paused` — Usage-limit guard fired (Setup step 9 or mid-run). Emit `phase_end` for the currently-active phase before returning.
++- `total_cluster_failure` — Phase 3 (or Phase 4 after re-validation cascade) found all clusters failed. Emit `phase_end` for Phase 3 (or Phase 4) before returning; also emit the `total_cluster_failure` event as documented in Phase 3.
++
++Payload shape for early exits (when full counts aren't available yet, use `null` or `0`):
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_split_run_end \
++  "$(printf '{"status":"%s","total_clusters":%s,"clusters_ready":%s,"clusters_failed":%s,"overlap_count":%s,"partial_tree":%s,"reason":"%s"}' \
++     "$STATUS" "${N:-0}" "${K:-0}" "${F:-0}" "${O:-0}" "${PT:-false}" "$REASON_SHORT")"
++```
++
++## Phase telemetry (mandatory)
++
++At the **start** of each phase (1 through 5), record `T0=$(date +%s%3N)`. At the **end**, log:
++
++```bash
++WALL_MS=$(( $(date +%s%3N) - T0 ))
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" phase_end \
++  "$(printf '{"phase":%d,"name":"%s","wall_ms":%d,"user_wait_ms":%d}' \
++     <phase-num> "<phase-name>" "$WALL_MS" "$USER_WAIT_MS_THIS_PHASE")"
++```
++
++If a phase blocks on `AskUserQuestion`, bracket the wait with `user_wait_start` / `user_wait_end` events so post-run analysis can separate machine time from human-wait time:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start '{"phase":<n>,"reason":"<short>"}'
++# ... AskUserQuestion ...
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end '{"phase":<n>,"wall_ms":<delta>}'
++```
++
++---
++
++## Phase 1 — Cluster proposal
++
++Main thread only. **Do NOT spawn a subagent** — cluster proposal is small-context and benefits from sitting alongside the topic.
++
++### 1a. Optional doc grounding (if INDEX.json exists, Setup step 9)
++
++If `docs/llm/INDEX.json` exists, dispatch ONE `doc-fetcher` (Haiku) call for topic grounding:
++
++```
++Agent(
++  subagent_type="doc-fetcher",
++  description="Doc context for <root-slug>",
++  prompt="query: <one-sentence summary of the topic>\nrepo_root: <abs path>\ndepth: standard"
++)
++```
++
++If it emits a `DRIFT WARNING`, log a `doc_drift` event per affected concept. Use its synthesis to inform cluster naming. If it returns `STATUS: no_docs` / `no_match`, proceed without doc grounding.
++
++### 1b. Propose 2-6 clusters
++
++Read the topic (+ doc-fetcher synthesis if present). Propose **2-6 narrow scopes**, each as:
++
++- A **kebab-case name** (this becomes the cluster slug + directory name, e.g. `auth-refactor`).
++- A **1-line scope description** stating what the cluster IS responsible for and what it is NOT (handoff boundary with siblings).
++
++**Hard limits:**
++- If fewer than 2 distinct seams surface, **refuse** the split: print "Topic does not warrant /z-plan-split — only 1 coherent seam found. Run /z-plan <topic> directly." Then emit `phase_end` for Phase 1 and `plan_split_run_end` with `status: "aborted_too_few_clusters"` (per the Early-exit telemetry contract), and exit cleanly. Do not write MANIFEST.md.
++- If more than 6 seams surface, **refuse** the split: print "Topic too broad — >6 seams found. Narrow the topic and re-invoke, or accept a coarser split." Then emit `phase_end` for Phase 1 and `plan_split_run_end` with `status: "aborted_too_many_clusters"`, and exit cleanly.
++
++If `--clusters="a,b,c"` was passed in Setup step 11, the proposed name list is the parsed flag value; still validate 2-6 bounds. Phase 1 must still derive a one-line scope per name — either inferred from the topic text or asked interactively (see Setup step 11). Same refusal + telemetry rules apply if the post-derivation list violates 2-6 bounds.
++
++### 1c. Write proposal artifact
++
++Write `z-harness/$Z_HARNESS_SLUG/archive/$RUN/proposed-clusters.md` with one block per cluster (name + scope). For each proposed cluster, log:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cluster_proposed \
++  "$(printf '{"cluster_id":"%s","cluster_name":"%s","scope":%s}' \
++     "$CLUSTER_ID" "$CLUSTER_NAME" "$(printf '%s' "$SCOPE" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')")"
++```
++
++### 1d. User confirmation
++
++Bracket the wait with `user_wait_start` / `user_wait_end`. Use `AskUserQuestion` with previews — one option per proposed cluster (preview = `<name>: <scope>`), plus three meta-options:
++
++- **Approve as proposed** — proceed to Phase 2 with the listed clusters.
++- **Edit** — free-text follow-up; user can rename clusters, rewrite scopes, add/drop clusters (still bounded 2-6).
++- **Abandon** — exit cleanly with no further work. Per the Early-exit telemetry contract: emit `phase_end` for Phase 1 first, then `plan_split_run_end` with `status: "abandoned_by_user"` and a short `reason` (e.g. `user_abandoned_phase1`).
++
++If the user picks **Edit**, re-loop Phase 1c after applying their edits (re-write `proposed-clusters.md`, re-confirm). Maximum 3 edit iterations to avoid pathological loops — after that, ask the user to abandon or commit.
++
++### 1e. Write confirmed-clusters artifact
++
++After approval, write `z-harness/$Z_HARNESS_SLUG/archive/$RUN/confirmed-clusters.md` with the final cluster list (name + scope, one block per cluster, fixed display order matching MANIFEST run-order). For each confirmed cluster, log:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cluster_confirmed \
++  "$(printf '{"cluster_id":"%s","confirmed_clusters_total":%d}' "$CLUSTER_ID" "$TOTAL")"
++```
++
++Send a `PushNotification` if `Z_HARNESS_NOTIFY` is `approval_only` or `all`.
++
++---
++
++## Phase 2 — Parallel cluster-planner dispatch
++
++Spawn **all N cluster-planners in parallel in a single message**. Each receives the **identical** root-topic context + the full sibling-cluster list (so each leaf knows what its siblings own and can stay in-scope).
++
++For each confirmed cluster, build the prompt:
++
++```
++<topic context — verbatim from $ARGUMENTS>
++
++Sibling clusters (for scope-boundary awareness):
++- C1 <name>: <scope>
++- C2 <name>: <scope>
++- ...
++
++cluster-id: <Cn>
++cluster-name: <name>
++cluster-scope: <scope>
++root-slug: <root-slug>
++output-path: z-harness/<root-slug>/<cluster-id>/
++run-id: <RUN>
++repo-root: <abs path to repo root>
++```
++
++Dispatch (single message, N parallel calls):
++
++```
++Agent(
++  subagent_type="cluster-planner",
++  description="Plan cluster <cluster-id> for <root-slug>",
++  prompt="<assembled prompt per above>"
++)
++```
++
++Each cluster-planner brackets itself with `cluster_planner_start` / `cluster_planner_end` events (the subagent owns those). No further main-thread events fire during Phase 2 dispatch — the subagent telemetry is the bracket.
++
++---
++
++## Phase 3 — Collect leaf returns + handle decision gates
++
++For each cluster-planner return, branch on `STATUS:`:
++
++- **`STATUS: ok`** → mark cluster `ready` in the in-memory MANIFEST state with `attempts: 1`. Record `final_status_at: <UTC ISO>`. Stash the returned `FILES_TOUCHED` JSON array for Phase 4 reconciliation.
++
++- **`STATUS: decision_needed`** → halt only this cluster (siblings continue / are already done). Parse the structured payload (`DECISION_ID`, `QUESTION`, `OPTIONS`, `RECOMMENDED_OPTION`, `IMPACT`, `AFFECTED_FILES`). Bracket the wait with `user_wait_start` / `user_wait_end`. Present to the user via `AskUserQuestion`:
++  - **One option per entry in `OPTIONS`**, using each entry's `label` and `description` verbatim. List `RECOMMENDED_OPTION` first (if not `none`).
++  - Plus a meta-option **Abandon this cluster** — marks it `failed` with `failure_reason: user_abandoned_decision`.
++
++  Append the question + chosen option + rationale to `z-harness/$Z_HARNESS_SLUG/<cluster-id>/archive/$RUN/decisions-late.md`, and echo into MANIFEST's `## Resolved decisions` section. Then re-spawn the cluster-planner with a `RESOLVED_DECISION:` block in the prompt (decision_id, chosen_option, rationale). Increment `attempts` for that cluster. **Sibling clusters continue / their results are unaffected.**
++
++- **`STATUS: spec_problem`** → mark cluster `failed` with `failure_reason: spec_problem`. Surface to user via push-notify (no halt). Other clusters continue.
++
++- **`STATUS: anti_nesting_violation`** → mark cluster `failed` with `failure_reason: anti_nesting_violation`. Log `anti_nesting_violation` event with `ancestor_manifest_path` from the payload. Other clusters continue.
++
++- **`STATUS: unable_to_complete`** → mark cluster `failed` with `failure_reason: unable_to_complete`. Other clusters continue.
++
++For every `failed` cluster, emit:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cluster_failed \
++  "$(printf '{"cluster_id":"%s","failure_reason":"%s"}' "$CLUSTER_ID" "$REASON")"
++```
++
++**Total-failure gate.** If **all** clusters end in a `failed` state, halt: emit:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" total_cluster_failure \
++  "$(printf '{"cluster_ids":%s}' "$ALL_FAILED_IDS_JSON")"
++```
++
++…push-notify the user, write a minimal MANIFEST.md (`status: failed`, no SHARED-CONCERNS.md). Then per the Early-exit telemetry contract: emit `phase_end` for Phase 3, followed by `plan_split_run_end` with `status: "total_cluster_failure"`, then exit. Do not proceed to Phase 4.
++
++If ≥1 cluster is `ready`, proceed to Phase 4 — partial trees are valid.
++
++---
++
++## Phase 4 — Reconciliation (file-overlap detection)
++
++**TASKS.md is canonical.** For each `ready` cluster, parse its `TASKS.md` and extract every `**Files:**` line. Build the canonical files-per-cluster set.
++
++**Validation.** Compare each cluster's TASKS.md-parsed set against the `FILES_TOUCHED` JSON array the cluster-planner returned (the fast-path summary). If they disagree (after path normalization, see below), mark the cluster `failed` and emit:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cluster_files_inconsistent \
++  "$(printf '{"cluster_id":"%s","files_touched_set":%s,"tasks_md_files_set":%s,"mismatch":%s}' \
++     "$CLUSTER_ID" "$FT_JSON" "$TM_JSON" "$DIFF_JSON")"
++```
++
++Re-evaluate the total-failure gate after any newly-failed cluster. If after Phase 4 file-inconsistency checks **all** clusters are failed, halt exactly as Phase 3 would: emit `cluster_failed` events (already done), then `total_cluster_failure`, then `phase_end` for Phase 4, then `plan_split_run_end` with `status: "total_cluster_failure"`, then exit (no SHARED-CONCERNS.md; minimal MANIFEST with `status: failed`).
++
++**Re-validation cascade (mandatory after any Phase 4 demotion).** Demoting a previously-ready cluster to `failed` invalidates the overlap index that was built from the full ready set. Before writing any Phase 5 artifact, **rebuild the overlap index from scratch using only the clusters whose status is still `ready` after Phase 4 demotions**:
++
++1. Drop the entire in-memory `path → [(cluster_id, task_id, task_title), ...]` index.
++2. Re-iterate the (post-demotion) ready set, re-parse each cluster's `TASKS.md` `**Files:**` lines, re-normalize, and re-insert into a fresh index.
++3. Recompute `overlap_count` (count of paths with ≥2 distinct `cluster_id` entries).
++4. Recompute `partial_tree` (`true` iff any cluster has status != `ready`, which includes the freshly-demoted ones).
++5. Re-emit `overlap_detected` events from the rebuilt index (the prior events from the stale index are now superseded — log a single `overlap_index_rebuilt` event with payload `{"demoted_cluster_ids": [...], "new_overlap_count": <N>}` so the post-run analyzer can reconcile).
++
++Only after the rebuild may Phase 5 write `SHARED-CONCERNS.md`, populate `overlap_count` / `partial_tree`, and set MANIFEST `status`. Skipping the rebuild would write stale overlap data that references files contributed by a now-failed cluster.
++
++**Path normalization (mandatory, applied to BOTH FILES_TOUCHED entries and TASKS.md `**Files:**` entries):**
++
++1. Strip leading `/` or `./`.
++2. Collapse `.` and `..` segments (e.g. `a/./b` → `a/b`; `a/b/../c` → `a/c`).
++3. Normalize separator to `/`.
++4. **Reject** paths that escape the repo root (`..` walks past origin after collapsing) — log a `precontext_freshness_check_failed`-style event and exclude that path from overlap detection (do not fail the cluster on this alone — only on FILES_TOUCHED↔TASKS.md disagreement).
++
++After normalization, build the cross-cluster path index: `path → [(cluster_id, task_id, task_title), ...]`.
++
++**Severity heuristics (cascading precedence — first match wins).** Files touched by exactly 1 cluster are severity `none` and **excluded** from SHARED-CONCERNS.md entirely.
++
++1. **high** — file matches `.*\.(sql|migration|schema|toml|yaml|yml|proto)$`, OR basename is in the extension-less / dependency-manifest allowlist: `Dockerfile`, `Makefile`, `package.json`, `package-lock.json`, `Cargo.lock`, `pnpm-lock.yaml`, `yarn.lock`. Wins regardless of cluster count (so `package.json` touched in 2 clusters is `high`, not `low`; same for any lockfile).
++2. **medium** — file matches `.*\.(rs|py|ts|tsx|js|jsx)$` AND appears in **≥3** clusters.
++3. **low** — file matches `.*\.(rs|py|ts|tsx|js|jsx)$` AND appears in **exactly 2** clusters.
++4. **low** — anything else with ≥2 cluster touches (catch-all).
++
++For each detected overlap, emit:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" overlap_detected \
++  "$(printf '{"file_path":"%s","cluster_ids":%s,"severity":"%s"}' "$PATH" "$CIDS_JSON" "$SEVERITY")"
++```
++
++---
++
++## Phase 5 — Write SHARED-CONCERNS.md + MANIFEST.md + finalize
++
++### 5a. SHARED-CONCERNS.md
++
++Write `z-harness/$Z_HARNESS_SLUG/SHARED-CONCERNS.md` with YAML frontmatter:
++
++```yaml
++---
++artifact: shared-concerns
++slug: <root-slug>
++generated_at: <UTC ISO 8601>
++acknowledged: false              # user flips to true after reading (auto-true iff overlap_count: 0)
++acknowledged_at:
++acknowledged_by:
++overlap_count: <N>
++partial_tree: <true|false>       # true iff any cluster has status != ready
++---
++```
++
++If `overlap_count: 0`, set `acknowledged: true` in the frontmatter at write time (ack-gate auto-passes). Otherwise leave `acknowledged: false`.
++
++If `partial_tree: true`, set `partial_tree: true` in the frontmatter. This is consumed by `/z-implement-all`'s partial-tree gate (refuses without `--force-partial`).
++
++Body: one block per detected overlap (ordered by descending severity, then by path):
++
++```markdown
++# Shared concerns — <root-slug>
++
++## Overlap: `<normalized file path>`
++
++Touched by:
++- <cluster-id-1> (<task-ids>): <task title>
++- <cluster-id-2> (<task-ids>): <task title>
++
++Likely severity: <low | medium | high>
++
++## ...
++```
++
++If `overlap_count: 0`, still write the file with the heading and a single sentence: `No file-path overlaps detected across clusters.`
++
++### 5b. MANIFEST.md
++
++Write `z-harness/$Z_HARNESS_SLUG/MANIFEST.md` with YAML frontmatter:
++
++```yaml
++---
++artifact: manifest
++slug: <root-slug>
++generated_at: <UTC ISO 8601>
++command: /z-plan-split <args>
++input_hash: <16 hex>   # sha256(canonicalize(topic + confirmed cluster names + scopes))[:16]
++status: ready | partial | failed
++total_clusters: <N>
++clusters_ready: <K>
++---
++```
++
++Status field:
++- `ready` — all clusters succeeded.
++- `partial` — ≥1 cluster `failed` AND ≥1 cluster `ready`.
++- `failed` — all clusters failed (total-failure gate already halted; this branch should not normally write a MANIFEST, but if it did emit a minimal one, use `failed`).
++
++Body:
++
++```markdown
++# MANIFEST — <root-slug>
++
++## Clusters
++
++| ID | Name (slug) | Scope (one line) | Path | Status | Attempts | Final status at |
++|----|-------------|------------------|------|--------|----------|-----------------|
++| C1 | <cluster_slug> | <scope> | <root-slug>/<cluster_slug>/ | ready / failed | 1 | <ISO> |
++| ...
++
++`ID` is the stable `cluster_id` (`C1`, `C2`, …) used in telemetry. `Name (slug)` is the kebab-case `cluster_slug` used as the on-disk directory.
++
++## Run order
++
++Clusters execute sequentially in this order under `/z-implement-all`. Cross-cluster task parallelism is v2.
++
++1. C1 → C2 → C3 → shared (if user runs `/z-plan --slug=<root>/shared/` manually)
++
++## Shared concerns
++
++See SHARED-CONCERNS.md for detected file-overlap observations (count: <N>). Ack-gate enforced by `/z-implement-all`.
++
++## Resolved decisions
++
++(Populated if any cluster-planner re-spawn cycles fired in Phase 3.)
++
++- <cluster-id> <decision-id>: chose `<option>` — <rationale> (run <RUN>)
++- ...
++```
++
++### 5c. Finalize
++
++Emit `phase_end` for Phase 5, then log `plan_split_run_end` with the full payload (per the Early-exit telemetry contract — this is the non-early, success/partial path):
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_split_run_end \
++  "$(printf '{"status":"%s","total_clusters":%d,"clusters_ready":%d,"clusters_failed":%d,"overlap_count":%d,"partial_tree":%s}' \
++     "$STATUS" "$N" "$K" "$F" "$O" "$PT")"
++```
++
++where `$STATUS` is `"ready"` (all clusters succeeded) or `"partial"` (≥1 ready and ≥1 failed). The total-failure branch never reaches Phase 5 — it exits in Phase 3 or Phase 4 per the Early-exit telemetry contract.
++
++Push-notify (if policy ≠ `off`) with a next-step recommendation:
++
++```
++Split complete: <K>/<N> clusters ready. Overlap count: <M>.
++
++Recommended next:
++  1. Read z-harness/<root-slug>/SHARED-CONCERNS.md and flip `acknowledged: true`
++     (or pass --ack to /z-implement-all).
++  2. /z-implement-all   — walks the tree in MANIFEST run-order.
++```
++
++For the partial-tree branch, the push notification also names the failed clusters and reminds the user that `/z-implement-all` will refuse without `--force-partial` until the failures are addressed (drop the cluster, re-plan it, or override the gate).
++
++---
++
++## Operating principles
++
++- **One-level recursion only.** Cluster-planners refuse to write inside an existing MANIFEST.md tree (anti-self-nesting guard); the main thread refuses to write a nested MANIFEST.
++- **2-6 clusters or refuse.** Below 2 → recommend `/z-plan` directly. Above 6 → ask the user to narrow.
++- **TASKS.md is canonical for reconciliation.** `FILES_TOUCHED` is a fast-path summary; mismatch fails the cluster.
++- **Partial trees are valid.** ≥1 cluster ready → proceed. All clusters failed → halt with `total_cluster_failure`.
++- **No per-leaf cross-LLM consult.** Cost discipline (v1).
++- **Decision-gate halts only the affected cluster.** Siblings continue; re-spawn handles the resolution.
++- **Ack-gate is mandatory.** `/z-implement-all` refuses to walk a tree with `acknowledged: false` (unless `overlap_count: 0` auto-acks).
++- **Path normalization applies everywhere.** Strip `./` / leading `/`, collapse `.`/`..`, reject escapes.
++- **Never read `docs/llm/*.json` from main thread.** Always dispatch `doc-fetcher`.
++- **Log everything** via `scripts/log-event.sh`.
++- **No emojis.**
+diff --git a/skills/z-plan-split/SKILL.md b/skills/z-plan-split/SKILL.md
+new file mode 100644
+index 0000000..1d03acb
+--- /dev/null
++++ b/skills/z-plan-split/SKILL.md
+@@ -0,0 +1,437 @@
++---
++description: Pre-emptive scope splitter — fan a big topic out into N narrow cluster-planner subagents in parallel, then reconcile file-path overlaps into SHARED-CONCERNS.md + MANIFEST.md.
++argument-hint: <topic> [--slug=<root-slug>] [--clusters="a,b,c"]
++---
++
++You are running the **z-harness `/z-plan-split`** pipeline.
++
++Topic + flags (from `$ARGUMENTS`):
++
++$ARGUMENTS
++
++**If the topic above is empty or whitespace**, do this first: use `AskUserQuestion` to ask "What topic should I split?". Wait for their reply. Treat the reply as the topic and continue.
++
++`/z-plan-split` is a **pre-emptive scope splitter** for topics that would otherwise produce a sprawling ≥40-task `/z-plan` run. Instead of one mega-plan, it dispatches N parallel `cluster-planner` subagents (each producing a focused 5-15-task plan), then writes `SHARED-CONCERNS.md` (file-overlap observation, ack-gated) and `MANIFEST.md` (cluster listing + run order). It does NOT produce production code. One-level recursion only — nested MANIFESTs are explicitly out of scope.
++
++## Setup
++
++1. **Derive root slug.**
++   - If `$ARGUMENTS` contains `--slug=<value>`, use that verbatim.
++   - Else if `$ARGUMENTS` contains `--clusters="a,b,c"`, the slug is auto-derived from the topic (kebab-case, 2-4 words). The `--clusters` flag overrides Phase 1's automatic proposal.
++   - Otherwise auto-derive from the topic (kebab-case, 2-4 words). If non-obvious, confirm via `AskUserQuestion`.
++2. **Validate the slug (mandatory — security gate).** The slug is interpolated into filesystem paths and must be a single safe segment. Reject (refuse with a clear error and exit cleanly) if the slug:
++   - is empty or whitespace-only;
++   - contains any character outside `[a-z0-9-]` (kebab-case only — no `/`, `\`, spaces, `:`, `..`, `~`, `$`, quotes, etc.);
++   - contains `..` anywhere (even as a substring);
++   - starts with `-` or `.`, or ends with `-`;
++   - contains `//` or path separators of any kind.
++
++   Concretely: the slug must match the anchored regex `^[a-z0-9]+(-[a-z0-9]+)*$`. Reject values like `../x`, `foo/bar`, `.hidden`, `a b`, empty string, `a..b`. Error message: `"Invalid slug: must be a single kebab-case segment matching ^[a-z0-9]+(-[a-z0-9]+)*$ (no slashes, dots, or path traversal). Got: <value>"`. Do not fall through to a sanitized version; force the user to re-invoke with a valid slug.
++3. **Export** `Z_HARNESS_SLUG=<root-slug>` for all subsequent shell calls and subagents — this namespaces every output path under `z-harness/<root-slug>/`.
++4. Pick a run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`.
++5. `mkdir -p z-harness/$Z_HARNESS_SLUG/archive/$RUN/transcripts`.
++6. **Existing slug-dir handling.** Run `ls z-harness/` to check for a matching slug dir. If `z-harness/<slug>/MANIFEST.md` exists, prompt the user via `AskUserQuestion`:
++   - **overwrite** — move the **entire prior tree** (every file and subdirectory under `z-harness/<slug>/` *except* the just-created `archive/<RUN>/` directory itself) into `z-harness/<slug>/archive/<RUN>/prior-tree/`. This includes the old `MANIFEST.md`, `SHARED-CONCERNS.md`, all prior `<cluster-slug>/` subdirectories, and any other stale artifacts — so no stale cluster trees survive into the new run. Implementation sketch: `mkdir -p z-harness/<slug>/archive/<RUN>/prior-tree && find z-harness/<slug>/ -mindepth 1 -maxdepth 1 ! -name archive -exec mv {} z-harness/<slug>/archive/<RUN>/prior-tree/ \;` (move any existing `archive/previous-*` subdirs separately if needed). Then start fresh.
++   - **abort** — exit cleanly with no changes. Per the Early-exit telemetry contract, emit `plan_split_run_end` with `status: "aborted_existing_tree"` before returning (no `phase_end` — no phase is active yet at Setup time).
++   No "append" option (D10 — append flow was under-specified; drop it).
++7. **Version stamp + log run start.** Merge the version blob with the topic and emit `plan_split_run_start` with `topic_chars`:
++   ```bash
++   VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
++   START_PAYLOAD="$(python3 -c '
++   import json, sys
++   v = json.loads(sys.argv[1])
++   v["topic"] = sys.argv[2]
++   v["topic_chars"] = len(sys.argv[2])
++   print(json.dumps(v))
++   ' "$VERSION_BLOB" "<topic-text>")"
++   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_split_run_start "$START_PAYLOAD"
++   ```
++   Output lands under `z-harness/<root-slug>/archive/$RUN/events.jsonl`.
++8. Notification policy: read env `Z_HARNESS_NOTIFY` (default `approval_only`). Values: `off`, `approval_only`, `all`.
++9. Usage-limit guard: read env `Z_HARNESS_PAUSE_AT_PCT` (default `90`). If usage ≥ threshold, do not dispatch new phases; emit `usage_pause`, push-notify, finalize cleanly (see Early-exit telemetry contract below). (User resumes by re-invoking with the same topic.)
++10. **Check for LLM-tier docs.** If `docs/llm/INDEX.json` exists in the repo root, do NOT read it from main thread. Note its existence; Phase 1 may dispatch `doc-fetcher` (Haiku) for one-shot topic grounding. Skip the docs-freshness gate — this command does not itself touch INDEX.json; cluster-planners handle their own doc reads.
++11. **Cluster proposal seed.** If `--clusters="a,b,c"` was passed, parse the comma-separated list into proposed cluster names (kebab-case, 2-6 entries — each name must independently pass the same `^[a-z0-9]+(-[a-z0-9]+)*$` validator from step 2; reject the entire flag on any invalid name). **`--clusters=` supplies names only, not scopes** — Phase 1 must still derive a one-line scope per cluster (either auto-derived from the topic text by Phase 1's main-thread reasoning, or interactively asked via `AskUserQuestion` if scopes can't be inferred unambiguously). Skip Phase 1's automatic name proposal (jump straight to Phase 1's scope-derivation + user confirmation, 1d). Otherwise proceed to Phase 1 normally.
++
++**All paths in subsequent phases live under `z-harness/<root-slug>/`:**
++- `z-harness/<root-slug>/MANIFEST.md`
++- `z-harness/<root-slug>/SHARED-CONCERNS.md`
++- `z-harness/<root-slug>/<cluster-slug>/{SPEC.md,PLAN.md,TASKS.md}` (one per cluster — directory uses the kebab-case `cluster_slug`)
++- `z-harness/<root-slug>/archive/<RUN>/...`
++
++## Cluster identity (terminology — used consistently below)
++
++Every cluster has **two distinct stable fields**:
++
++- **`cluster_id`** — a short, stable, opaque handle of the form `C1`, `C2`, …, `CN`, assigned in confirmation order. Used in **telemetry payloads** (every event's `cluster_id` field), MANIFEST table's first column, and cross-references in SHARED-CONCERNS.md (`Touched by: <cluster_id> (<task_id>)`). Never used as a path segment.
++- **`cluster_slug`** — the kebab-case name the user (or the auto-proposer) chose, e.g. `auth-refactor`. Must independently match `^[a-z0-9]+(-[a-z0-9]+)*$` (same validator as the root slug, step 2). Used as the **on-disk directory name** under `z-harness/<root-slug>/<cluster_slug>/`. Never used in telemetry payloads.
++
++Where this doc previously wrote `<cluster-id>` in a filesystem path, read it as `<cluster_slug>`. Where this doc writes a `cluster_id` field in a JSON payload, it is the `C1`/`C2` form. MANIFEST.md rows include both: `ID` column = `cluster_id`, `Path` column = `<root-slug>/<cluster_slug>/`.
++
++## Early-exit telemetry contract (mandatory for every exit path)
++
++**Every** exit from this command — successful, refused, aborted, paused, or failed — MUST emit the matching `phase_end` for the currently-active phase (if any) **and** a single `plan_split_run_end` event before returning. The `status` field on `plan_split_run_end` distinguishes the exit reason. No exit path may silently skip these events; the post-run analyzer relies on `plan_split_run_end` always being present.
++
++Allowed `status` values on `plan_split_run_end`:
++
++- `ready` — Phase 5 finalized with all clusters ready.
++- `partial` — Phase 5 finalized with ≥1 cluster ready and ≥1 failed.
++- `abandoned_by_user` — user picked "Abandon" in Phase 1d (or "Abandon this cluster" elided the last surviving cluster).
++- `aborted_existing_tree` — user picked "abort" at the existing-slug prompt (Setup step 6). No `phase_end` to emit (no phase active yet).
++- `aborted_too_few_clusters` — Phase 1 refused (<2 seams). Emit `phase_end` for Phase 1 first.
++- `aborted_too_many_clusters` — Phase 1 refused (>6 seams). Emit `phase_end` for Phase 1 first.
++- `aborted_invalid_slug` — Setup step 2 / 11 rejected the slug or a cluster name. No `phase_end` (no phase active yet).
++- `usage_paused` — Usage-limit guard fired (Setup step 9 or mid-run). Emit `phase_end` for the currently-active phase before returning.
++- `total_cluster_failure` — Phase 3 (or Phase 4 after re-validation cascade) found all clusters failed. Emit `phase_end` for Phase 3 (or Phase 4) before returning; also emit the `total_cluster_failure` event as documented in Phase 3.
++
++Payload shape for early exits (when full counts aren't available yet, use `null` or `0`):
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_split_run_end \
++  "$(printf '{"status":"%s","total_clusters":%s,"clusters_ready":%s,"clusters_failed":%s,"overlap_count":%s,"partial_tree":%s,"reason":"%s"}' \
++     "$STATUS" "${N:-0}" "${K:-0}" "${F:-0}" "${O:-0}" "${PT:-false}" "$REASON_SHORT")"
++```
++
++## Phase telemetry (mandatory)
++
++At the **start** of each phase (1 through 5), record `T0=$(date +%s%3N)`. At the **end**, log:
++
++```bash
++WALL_MS=$(( $(date +%s%3N) - T0 ))
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" phase_end \
++  "$(printf '{"phase":%d,"name":"%s","wall_ms":%d,"user_wait_ms":%d}' \
++     <phase-num> "<phase-name>" "$WALL_MS" "$USER_WAIT_MS_THIS_PHASE")"
++```
++
++If a phase blocks on `AskUserQuestion`, bracket the wait with `user_wait_start` / `user_wait_end` events so post-run analysis can separate machine time from human-wait time:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start '{"phase":<n>,"reason":"<short>"}'
++# ... AskUserQuestion ...
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end '{"phase":<n>,"wall_ms":<delta>}'
++```
++
++---
++
++## Phase 1 — Cluster proposal
++
++Main thread only. **Do NOT spawn a subagent** — cluster proposal is small-context and benefits from sitting alongside the topic.
++
++### 1a. Optional doc grounding (if INDEX.json exists, Setup step 9)
++
++If `docs/llm/INDEX.json` exists, dispatch ONE `doc-fetcher` (Haiku) call for topic grounding:
++
++```
++Agent(
++  subagent_type="doc-fetcher",
++  description="Doc context for <root-slug>",
++  prompt="query: <one-sentence summary of the topic>\nrepo_root: <abs path>\ndepth: standard"
++)
++```
++
++If it emits a `DRIFT WARNING`, log a `doc_drift` event per affected concept. Use its synthesis to inform cluster naming. If it returns `STATUS: no_docs` / `no_match`, proceed without doc grounding.
++
++### 1b. Propose 2-6 clusters
++
++Read the topic (+ doc-fetcher synthesis if present). Propose **2-6 narrow scopes**, each as:
++
++- A **kebab-case name** (this becomes the cluster slug + directory name, e.g. `auth-refactor`).
++- A **1-line scope description** stating what the cluster IS responsible for and what it is NOT (handoff boundary with siblings).
++
++**Hard limits:**
++- If fewer than 2 distinct seams surface, **refuse** the split: print "Topic does not warrant /z-plan-split — only 1 coherent seam found. Run /z-plan <topic> directly." Then emit `phase_end` for Phase 1 and `plan_split_run_end` with `status: "aborted_too_few_clusters"` (per the Early-exit telemetry contract), and exit cleanly. Do not write MANIFEST.md.
++- If more than 6 seams surface, **refuse** the split: print "Topic too broad — >6 seams found. Narrow the topic and re-invoke, or accept a coarser split." Then emit `phase_end` for Phase 1 and `plan_split_run_end` with `status: "aborted_too_many_clusters"`, and exit cleanly.
++
++If `--clusters="a,b,c"` was passed in Setup step 11, the proposed name list is the parsed flag value; still validate 2-6 bounds. Phase 1 must still derive a one-line scope per name — either inferred from the topic text or asked interactively (see Setup step 11). Same refusal + telemetry rules apply if the post-derivation list violates 2-6 bounds.
++
++### 1c. Write proposal artifact
++
++Write `z-harness/$Z_HARNESS_SLUG/archive/$RUN/proposed-clusters.md` with one block per cluster (name + scope). For each proposed cluster, log:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cluster_proposed \
++  "$(printf '{"cluster_id":"%s","cluster_name":"%s","scope":%s}' \
++     "$CLUSTER_ID" "$CLUSTER_NAME" "$(printf '%s' "$SCOPE" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')")"
++```
++
++### 1d. User confirmation
++
++Bracket the wait with `user_wait_start` / `user_wait_end`. Use `AskUserQuestion` with previews — one option per proposed cluster (preview = `<name>: <scope>`), plus three meta-options:
++
++- **Approve as proposed** — proceed to Phase 2 with the listed clusters.
++- **Edit** — free-text follow-up; user can rename clusters, rewrite scopes, add/drop clusters (still bounded 2-6).
++- **Abandon** — exit cleanly with no further work. Per the Early-exit telemetry contract: emit `phase_end` for Phase 1 first, then `plan_split_run_end` with `status: "abandoned_by_user"` and a short `reason` (e.g. `user_abandoned_phase1`).
++
++If the user picks **Edit**, re-loop Phase 1c after applying their edits (re-write `proposed-clusters.md`, re-confirm). Maximum 3 edit iterations to avoid pathological loops — after that, ask the user to abandon or commit.
++
++### 1e. Write confirmed-clusters artifact
++
++After approval, write `z-harness/$Z_HARNESS_SLUG/archive/$RUN/confirmed-clusters.md` with the final cluster list (name + scope, one block per cluster, fixed display order matching MANIFEST run-order). For each confirmed cluster, log:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cluster_confirmed \
++  "$(printf '{"cluster_id":"%s","confirmed_clusters_total":%d}' "$CLUSTER_ID" "$TOTAL")"
++```
++
++Send a `PushNotification` if `Z_HARNESS_NOTIFY` is `approval_only` or `all`.
++
++---
++
++## Phase 2 — Parallel cluster-planner dispatch
++
++Spawn **all N cluster-planners in parallel in a single message**. Each receives the **identical** root-topic context + the full sibling-cluster list (so each leaf knows what its siblings own and can stay in-scope).
++
++For each confirmed cluster, build the prompt:
++
++```
++<topic context — verbatim from $ARGUMENTS>
++
++Sibling clusters (for scope-boundary awareness):
++- C1 <name>: <scope>
++- C2 <name>: <scope>
++- ...
++
++cluster-id: <Cn>
++cluster-name: <name>
++cluster-scope: <scope>
++root-slug: <root-slug>
++output-path: z-harness/<root-slug>/<cluster-id>/
++run-id: <RUN>
++repo-root: <abs path to repo root>
++```
++
++Dispatch (single message, N parallel calls):
++
++```
++Agent(
++  subagent_type="cluster-planner",
++  description="Plan cluster <cluster-id> for <root-slug>",
++  prompt="<assembled prompt per above>"
++)
++```
++
++Each cluster-planner brackets itself with `cluster_planner_start` / `cluster_planner_end` events (the subagent owns those). No further main-thread events fire during Phase 2 dispatch — the subagent telemetry is the bracket.
++
++---
++
++## Phase 3 — Collect leaf returns + handle decision gates
++
++For each cluster-planner return, branch on `STATUS:`:
++
++- **`STATUS: ok`** → mark cluster `ready` in the in-memory MANIFEST state with `attempts: 1`. Record `final_status_at: <UTC ISO>`. Stash the returned `FILES_TOUCHED` JSON array for Phase 4 reconciliation.
++
++- **`STATUS: decision_needed`** → halt only this cluster (siblings continue / are already done). Parse the structured payload (`DECISION_ID`, `QUESTION`, `OPTIONS`, `RECOMMENDED_OPTION`, `IMPACT`, `AFFECTED_FILES`). Bracket the wait with `user_wait_start` / `user_wait_end`. Present to the user via `AskUserQuestion`:
++  - **One option per entry in `OPTIONS`**, using each entry's `label` and `description` verbatim. List `RECOMMENDED_OPTION` first (if not `none`).
++  - Plus a meta-option **Abandon this cluster** — marks it `failed` with `failure_reason: user_abandoned_decision`.
++
++  Append the question + chosen option + rationale to `z-harness/$Z_HARNESS_SLUG/<cluster-id>/archive/$RUN/decisions-late.md`, and echo into MANIFEST's `## Resolved decisions` section. Then re-spawn the cluster-planner with a `RESOLVED_DECISION:` block in the prompt (decision_id, chosen_option, rationale). Increment `attempts` for that cluster. **Sibling clusters continue / their results are unaffected.**
++
++- **`STATUS: spec_problem`** → mark cluster `failed` with `failure_reason: spec_problem`. Surface to user via push-notify (no halt). Other clusters continue.
++
++- **`STATUS: anti_nesting_violation`** → mark cluster `failed` with `failure_reason: anti_nesting_violation`. Log `anti_nesting_violation` event with `ancestor_manifest_path` from the payload. Other clusters continue.
++
++- **`STATUS: unable_to_complete`** → mark cluster `failed` with `failure_reason: unable_to_complete`. Other clusters continue.
++
++For every `failed` cluster, emit:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cluster_failed \
++  "$(printf '{"cluster_id":"%s","failure_reason":"%s"}' "$CLUSTER_ID" "$REASON")"
++```
++
++**Total-failure gate.** If **all** clusters end in a `failed` state, halt: emit:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" total_cluster_failure \
++  "$(printf '{"cluster_ids":%s}' "$ALL_FAILED_IDS_JSON")"
++```
++
++…push-notify the user, write a minimal MANIFEST.md (`status: failed`, no SHARED-CONCERNS.md). Then per the Early-exit telemetry contract: emit `phase_end` for Phase 3, followed by `plan_split_run_end` with `status: "total_cluster_failure"`, then exit. Do not proceed to Phase 4.
++
++If ≥1 cluster is `ready`, proceed to Phase 4 — partial trees are valid.
++
++---
++
++## Phase 4 — Reconciliation (file-overlap detection)
++
++**TASKS.md is canonical.** For each `ready` cluster, parse its `TASKS.md` and extract every `**Files:**` line. Build the canonical files-per-cluster set.
++
++**Validation.** Compare each cluster's TASKS.md-parsed set against the `FILES_TOUCHED` JSON array the cluster-planner returned (the fast-path summary). If they disagree (after path normalization, see below), mark the cluster `failed` and emit:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cluster_files_inconsistent \
++  "$(printf '{"cluster_id":"%s","files_touched_set":%s,"tasks_md_files_set":%s,"mismatch":%s}' \
++     "$CLUSTER_ID" "$FT_JSON" "$TM_JSON" "$DIFF_JSON")"
++```
++
++Re-evaluate the total-failure gate after any newly-failed cluster. If after Phase 4 file-inconsistency checks **all** clusters are failed, halt exactly as Phase 3 would: emit `cluster_failed` events (already done), then `total_cluster_failure`, then `phase_end` for Phase 4, then `plan_split_run_end` with `status: "total_cluster_failure"`, then exit (no SHARED-CONCERNS.md; minimal MANIFEST with `status: failed`).
++
++**Re-validation cascade (mandatory after any Phase 4 demotion).** Demoting a previously-ready cluster to `failed` invalidates the overlap index that was built from the full ready set. Before writing any Phase 5 artifact, **rebuild the overlap index from scratch using only the clusters whose status is still `ready` after Phase 4 demotions**:
++
++1. Drop the entire in-memory `path → [(cluster_id, task_id, task_title), ...]` index.
++2. Re-iterate the (post-demotion) ready set, re-parse each cluster's `TASKS.md` `**Files:**` lines, re-normalize, and re-insert into a fresh index.
++3. Recompute `overlap_count` (count of paths with ≥2 distinct `cluster_id` entries).
++4. Recompute `partial_tree` (`true` iff any cluster has status != `ready`, which includes the freshly-demoted ones).
++5. Re-emit `overlap_detected` events from the rebuilt index (the prior events from the stale index are now superseded — log a single `overlap_index_rebuilt` event with payload `{"demoted_cluster_ids": [...], "new_overlap_count": <N>}` so the post-run analyzer can reconcile).
++
++Only after the rebuild may Phase 5 write `SHARED-CONCERNS.md`, populate `overlap_count` / `partial_tree`, and set MANIFEST `status`. Skipping the rebuild would write stale overlap data that references files contributed by a now-failed cluster.
++
++**Path normalization (mandatory, applied to BOTH FILES_TOUCHED entries and TASKS.md `**Files:**` entries):**
++
++1. Strip leading `/` or `./`.
++2. Collapse `.` and `..` segments (e.g. `a/./b` → `a/b`; `a/b/../c` → `a/c`).
++3. Normalize separator to `/`.
++4. **Reject** paths that escape the repo root (`..` walks past origin after collapsing) — log a `precontext_freshness_check_failed`-style event and exclude that path from overlap detection (do not fail the cluster on this alone — only on FILES_TOUCHED↔TASKS.md disagreement).
++
++After normalization, build the cross-cluster path index: `path → [(cluster_id, task_id, task_title), ...]`.
++
++**Severity heuristics (cascading precedence — first match wins).** Files touched by exactly 1 cluster are severity `none` and **excluded** from SHARED-CONCERNS.md entirely.
++
++1. **high** — file matches `.*\.(sql|migration|schema|toml|yaml|yml|proto)$`, OR basename is in the extension-less / dependency-manifest allowlist: `Dockerfile`, `Makefile`, `package.json`, `package-lock.json`, `Cargo.lock`, `pnpm-lock.yaml`, `yarn.lock`. Wins regardless of cluster count (so `package.json` touched in 2 clusters is `high`, not `low`; same for any lockfile).
++2. **medium** — file matches `.*\.(rs|py|ts|tsx|js|jsx)$` AND appears in **≥3** clusters.
++3. **low** — file matches `.*\.(rs|py|ts|tsx|js|jsx)$` AND appears in **exactly 2** clusters.
++4. **low** — anything else with ≥2 cluster touches (catch-all).
++
++For each detected overlap, emit:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" overlap_detected \
++  "$(printf '{"file_path":"%s","cluster_ids":%s,"severity":"%s"}' "$PATH" "$CIDS_JSON" "$SEVERITY")"
++```
++
++---
++
++## Phase 5 — Write SHARED-CONCERNS.md + MANIFEST.md + finalize
++
++### 5a. SHARED-CONCERNS.md
++
++Write `z-harness/$Z_HARNESS_SLUG/SHARED-CONCERNS.md` with YAML frontmatter:
++
++```yaml
++---
++artifact: shared-concerns
++slug: <root-slug>
++generated_at: <UTC ISO 8601>
++acknowledged: false              # user flips to true after reading (auto-true iff overlap_count: 0)
++acknowledged_at:
++acknowledged_by:
++overlap_count: <N>
++partial_tree: <true|false>       # true iff any cluster has status != ready
++---
++```
++
++If `overlap_count: 0`, set `acknowledged: true` in the frontmatter at write time (ack-gate auto-passes). Otherwise leave `acknowledged: false`.
++
++If `partial_tree: true`, set `partial_tree: true` in the frontmatter. This is consumed by `/z-implement-all`'s partial-tree gate (refuses without `--force-partial`).
++
++Body: one block per detected overlap (ordered by descending severity, then by path):
++
++```markdown
++# Shared concerns — <root-slug>
++
++## Overlap: `<normalized file path>`
++
++Touched by:
++- <cluster-id-1> (<task-ids>): <task title>
++- <cluster-id-2> (<task-ids>): <task title>
++
++Likely severity: <low | medium | high>
++
++## ...
++```
++
++If `overlap_count: 0`, still write the file with the heading and a single sentence: `No file-path overlaps detected across clusters.`
++
++### 5b. MANIFEST.md
++
++Write `z-harness/$Z_HARNESS_SLUG/MANIFEST.md` with YAML frontmatter:
++
++```yaml
++---
++artifact: manifest
++slug: <root-slug>
++generated_at: <UTC ISO 8601>
++command: /z-plan-split <args>
++input_hash: <16 hex>   # sha256(canonicalize(topic + confirmed cluster names + scopes))[:16]
++status: ready | partial | failed
++total_clusters: <N>
++clusters_ready: <K>
++---
++```
++
++Status field:
++- `ready` — all clusters succeeded.
++- `partial` — ≥1 cluster `failed` AND ≥1 cluster `ready`.
++- `failed` — all clusters failed (total-failure gate already halted; this branch should not normally write a MANIFEST, but if it did emit a minimal one, use `failed`).
++
++Body:
++
++```markdown
++# MANIFEST — <root-slug>
++
++## Clusters
++
++| ID | Name (slug) | Scope (one line) | Path | Status | Attempts | Final status at |
++|----|-------------|------------------|------|--------|----------|-----------------|
++| C1 | <cluster_slug> | <scope> | <root-slug>/<cluster_slug>/ | ready / failed | 1 | <ISO> |
++| ...
++
++`ID` is the stable `cluster_id` (`C1`, `C2`, …) used in telemetry. `Name (slug)` is the kebab-case `cluster_slug` used as the on-disk directory.
++
++## Run order
++
++Clusters execute sequentially in this order under `/z-implement-all`. Cross-cluster task parallelism is v2.
++
++1. C1 → C2 → C3 → shared (if user runs `/z-plan --slug=<root>/shared/` manually)
++
++## Shared concerns
++
++See SHARED-CONCERNS.md for detected file-overlap observations (count: <N>). Ack-gate enforced by `/z-implement-all`.
++
++## Resolved decisions
++
++(Populated if any cluster-planner re-spawn cycles fired in Phase 3.)
++
++- <cluster-id> <decision-id>: chose `<option>` — <rationale> (run <RUN>)
++- ...
++```
++
++### 5c. Finalize
++
++Emit `phase_end` for Phase 5, then log `plan_split_run_end` with the full payload (per the Early-exit telemetry contract — this is the non-early, success/partial path):
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_split_run_end \
++  "$(printf '{"status":"%s","total_clusters":%d,"clusters_ready":%d,"clusters_failed":%d,"overlap_count":%d,"partial_tree":%s}' \
++     "$STATUS" "$N" "$K" "$F" "$O" "$PT")"
++```
++
++where `$STATUS` is `"ready"` (all clusters succeeded) or `"partial"` (≥1 ready and ≥1 failed). The total-failure branch never reaches Phase 5 — it exits in Phase 3 or Phase 4 per the Early-exit telemetry contract.
++
++Push-notify (if policy ≠ `off`) with a next-step recommendation:
++
++```
++Split complete: <K>/<N> clusters ready. Overlap count: <M>.
++
++Recommended next:
++  1. Read z-harness/<root-slug>/SHARED-CONCERNS.md and flip `acknowledged: true`
++     (or pass --ack to /z-implement-all).
++  2. /z-implement-all   — walks the tree in MANIFEST run-order.
++```
++
++For the partial-tree branch, the push notification also names the failed clusters and reminds the user that `/z-implement-all` will refuse without `--force-partial` until the failures are addressed (drop the cluster, re-plan it, or override the gate).
++
++---
++
++## Operating principles
++
++- **One-level recursion only.** Cluster-planners refuse to write inside an existing MANIFEST.md tree (anti-self-nesting guard); the main thread refuses to write a nested MANIFEST.
++- **2-6 clusters or refuse.** Below 2 → recommend `/z-plan` directly. Above 6 → ask the user to narrow.
++- **TASKS.md is canonical for reconciliation.** `FILES_TOUCHED` is a fast-path summary; mismatch fails the cluster.
++- **Partial trees are valid.** ≥1 cluster ready → proceed. All clusters failed → halt with `total_cluster_failure`.
++- **No per-leaf cross-LLM consult.** Cost discipline (v1).
++- **Decision-gate halts only the affected cluster.** Siblings continue; re-spawn handles the resolution.
++- **Ack-gate is mandatory.** `/z-implement-all` refuses to walk a tree with `acknowledged: false` (unless `overlap_count: 0` auto-acks).
++- **Path normalization applies everywhere.** Strip `./` / leading `/`, collapse `.`/`..`, reject escapes.
++- **Never read `docs/llm/*.json` from main thread.** Always dispatch `doc-fetcher`.
++- **Log everything** via `scripts/log-event.sh`.
++- **No emojis.**
+diff --git a/commands/z-implement-all.md b/commands/z-implement-all.md
+index 402e972..2a1ef75 100644
+--- a/commands/z-implement-all.md
++++ b/commands/z-implement-all.md
+@@ -6,16 +6,104 @@ You are the **z-harness `/z-implement-all`** orchestrator. Your job is to drive
+ 
+ Notification policy: read env `Z_HARNESS_NOTIFY` (default `approval_only`).
+ 
++## Flags
++
++- `--ack` — Override the SHARED-CONCERNS.md ack-gate when iterating a tree-rooted plan produced by `/z-plan-split`. Equivalent to manually flipping `acknowledged: true` in the file. No-op for legacy single-slug plans.
++- `--force-partial` — Override the partial-tree gate when iterating a tree-rooted plan whose SHARED-CONCERNS.md has `partial_tree: true` (i.e. one or more clusters failed planning). Implies the user accepts that overlap detection is a lower bound on a partial tree. No-op for legacy single-slug plans.
++
++Both flags are inert for legacy (single-slug) plans and only affect tree-rooted discovery in Setup step 2.
++
+ ## Setup
+ 
+ 1. `cd` to the repo root. Abort if no `z-harness/` directory.
+-2. **Discover plan slug.** Multiple plans may coexist under `z-harness/<slug>/`:
+-   - Enumerate subdirs of `z-harness/` containing a `TASKS.md`.
+-   - Also check for legacy flat layout (`z-harness/TASKS.md` directly).
+-   - One candidate → use it; export `Z_HARNESS_SLUG=<slug>` (or leave unset for legacy flat).
+-   - Multiple candidates → `AskUserQuestion` to pick.
++2. **Discover plan slug.** Multiple plans may coexist under `z-harness/<slug>/`. A `<slug>/` may be either a **legacy single-slug plan** (contains `TASKS.md` directly) or a **tree-rooted plan** produced by `/z-plan-split` (contains `MANIFEST.md` + per-cluster subdirectories, each with its own `TASKS.md`):
++
++   **2a. Enumerate candidates.**
++   - For each subdir of `z-harness/`: classify as `tree-rooted` if `<slug>/MANIFEST.md` exists, else `legacy` if `<slug>/TASKS.md` exists, else skip.
++   - Also check for the legacy flat layout (`z-harness/TASKS.md` directly).
+    - Zero candidates → tell user to run `/z-plan` first; abort.
+-3. From here on, **`BASE`** = `z-harness/$Z_HARNESS_SLUG` (or `z-harness` for legacy). All paths use `$BASE`.
++   - One candidate → use it.
++   - Multiple candidates → `AskUserQuestion` to pick. Mixed legacy + tree-rooted slugs are allowed in the same `/z-implement-all` invocation: the user picks one, validation/expansion below depends on its kind.
++   - Export `Z_HARNESS_SLUG=<slug>` (or leave unset for legacy flat).
++
++   **2b. If chosen slug is tree-rooted (has `<slug>/MANIFEST.md`), validate in order:**
++
++   Parse MANIFEST.md once: extract (i) the YAML frontmatter (`status`, `total_clusters`, `clusters_ready`), (ii) the Clusters table (each row: `ID`, `Path`, `Status`, …), and (iii) the `## Run order` section (an ordered list of cluster IDs). The `Path` column is canonical — every downstream BASE binding in 2c reads it from there; do **not** synthesize paths from `<slug>/<cluster-id>/`.
++
++   1. **Nested-MANIFEST gate (depth invariant).** One-level recursion is invariant per `/z-plan-split` SPEC. Check `find z-harness/$Z_HARNESS_SLUG/*/ -name MANIFEST.md` (excluding the root MANIFEST). If any are found, halt with `tree_depth_exceeded` event:
++      ```bash
++      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" tree_depth_exceeded \
++        "$(printf '{"slug":"%s","nested_paths":%s}' "$Z_HARNESS_SLUG" "$NESTED_JSON_ARRAY")"
++      ```
++      Push-notify and abort. No override — a tree-of-trees is structurally unsupported in v1.
++   2. **SHARED-CONCERNS.md existence gate.** `<slug>/SHARED-CONCERNS.md` must exist (cluster-planner reconciliation writes it unconditionally). If absent, halt with `shared_concerns_missing` event before attempting any frontmatter read:
++      ```bash
++      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" shared_concerns_missing \
++        "$(printf '{"slug":"%s","expected_path":"%s"}' "$Z_HARNESS_SLUG" "z-harness/$Z_HARNESS_SLUG/SHARED-CONCERNS.md")"
++      ```
++      Push-notify and abort. No override — a tree-rooted slug without SHARED-CONCERNS.md is structurally malformed (re-run `/z-plan-split` to regenerate).
++   3. **MANIFEST frontmatter consistency.** Cross-check the parsed frontmatter against the Clusters table:
++      - `total_clusters` must equal the number of rows in the Clusters table.
++      - `clusters_ready` must equal the count of rows whose `Status == ready`.
++      - `status` must be one of the legal values (`ready`, `partial`, `failed`); if `status: ready` then `clusters_ready == total_clusters`; if `status: partial` then `0 < clusters_ready < total_clusters`.
++
++      On any mismatch, halt with `manifest_frontmatter_inconsistent` event:
++      ```bash
++      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" manifest_frontmatter_inconsistent \
++        "$(printf '{"slug":"%s","frontmatter_total":%d,"table_rows":%d,"frontmatter_ready":%d,"table_ready":%d,"frontmatter_status":"%s"}' \
++           "$Z_HARNESS_SLUG" "$FM_TOTAL" "$TBL_ROWS" "$FM_READY" "$TBL_READY" "$FM_STATUS")"
++      ```
++      Push-notify and abort. No override — a stale/forged frontmatter must be reconciled with the table before iteration is safe.
++   4. **Run-order bijection.** The `## Run order` list must reference every cluster in the Clusters table exactly once, with no unknown IDs and no duplicates. Compute `set(run_order_ids) == set(table_ids)` AND `len(run_order_ids) == len(table_ids)`. On failure, halt with `manifest_run_order_invalid` event:
++      ```bash
++      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" manifest_run_order_invalid \
++        "$(printf '{"slug":"%s","missing_ids":%s,"unknown_ids":%s,"duplicate_ids":%s}' \
++           "$Z_HARNESS_SLUG" "$MISSING_JSON" "$UNKNOWN_JSON" "$DUP_JSON")"
++      ```
++      Push-notify and abort. No override — the run order is the authoritative iteration sequence; an inconsistent list can't be repaired by the orchestrator.
++   5. **Partial-tree gate (decides which clusters will run).** Read SHARED-CONCERNS.md frontmatter. If `partial_tree: true` (some clusters failed planning, so overlap detection is a lower bound):
++      - **Without `--force-partial`** → halt with `partial_tree_blocked` event naming the failed clusters parsed from MANIFEST:
++      ```bash
++      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" partial_tree_blocked \
++        "$(printf '{"slug":"%s","failed_cluster_ids":%s}' "$Z_HARNESS_SLUG" "$FAILED_JSON_ARRAY")"
++      ```
++      Push-notify and abort.
++      - **With `--force-partial`** → log a distinct override event (NOT `partial_tree_blocked`, which is reserved for halts):
++      ```bash
++      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" partial_tree_force_override \
++        "$(printf '{"slug":"%s","failed_cluster_ids":%s,"override":true}' "$Z_HARNESS_SLUG" "$FAILED_JSON_ARRAY")"
++      ```
++      Continue, but exclude failed clusters from the run set. Define `clusters_to_run` = run-order list with `failed`-status IDs filtered out.
++
++      If `partial_tree: false` (or absent), `clusters_to_run` = full run-order list.
++   6. **Cluster-readiness gate (over `clusters_to_run` only).** For each cluster in `clusters_to_run`, look up its row in the Clusters table. The `Status` column must be `ready`; equivalently, the file at the cluster's `Path` column joined with `TASKS.md` must exist, parse cleanly, and contain ≥1 task block. Any cluster in `clusters_to_run` with `status: planning` (or `failed` — which can only happen if `--force-partial` was NOT in play, since 2b.5 already filtered failed) → halt with `cluster_not_ready` event:
++      ```bash
++      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" cluster_not_ready \
++        "$(printf '{"slug":"%s","cluster_id":"%s","cluster_status":"%s"}' "$Z_HARNESS_SLUG" "<id>" "<status>")"
++      ```
++      Push-notify the user and abort. (No override flag — planning clusters must finish planning via `/z-plan-split` resume; failed clusters are addressed via `--force-partial` in step 2b.5.)
++   7. **Shared-concerns ack-gate.** Read SHARED-CONCERNS.md frontmatter:
++      - If `overlap_count: 0` → ack-gate auto-passes regardless of `acknowledged`.
++      - Else if `acknowledged: true` → pass.
++      - Else (overlap_count > 0 AND acknowledged != true):
++        - **Without `--ack`** → halt with `shared_concerns_unacknowledged` event (reserved for actual halts):
++        ```bash
++        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" shared_concerns_unacknowledged \
++          "$(printf '{"slug":"%s","acknowledged":false,"overlap_count":%d}' "$Z_HARNESS_SLUG" "$N")"
++        ```
++        Push-notify and abort.
++        - **With `--ack`** → log a distinct override event (NOT `shared_concerns_unacknowledged`):
++        ```bash
++        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" shared_concerns_ack_override \
++          "$(printf '{"slug":"%s","overlap_count":%d,"override":true}' "$Z_HARNESS_SLUG" "$N")"
++        ```
++        Continue.
++
++   **2c. Expand tree-rooted slug into cluster sequence.** On all validations passing, iterate `clusters_to_run` **sequentially**. For each cluster ID in the list, look up its row in the parsed Clusters table and read the `Path` column verbatim — this is the canonical BASE for the cluster (`BASE = <Path value>`). Do **not** synthesize `BASE = z-harness/<slug>/<cluster-id>/` from the ID; the MANIFEST's `Path` column is the source of truth (it may differ from the naive form). Validate that the lookup resolves to exactly one row per ID (already guaranteed by 2b.4's bijection check). Run the full main loop (steps 1–8) on that cluster's `BASE/TASKS.md`, then advance to the next cluster. Within each cluster, the existing N=3 parallel-batching applies as today (intra-cluster parallelism honored; cross-cluster parallelism is v2).
++
++   **2d. If chosen slug is legacy (TASKS.md directly under it, no MANIFEST.md),** behavior is unchanged: a single `BASE` for the whole run, no tree validation, `--ack` and `--force-partial` are no-ops.
++
++3. From here on, **`BASE`** = `z-harness/$Z_HARNESS_SLUG` for legacy slugs (or `z-harness` for legacy flat). For tree-rooted slugs, `BASE` is rebound per-cluster as the orchestrator iterates the run-order sequence from 2c. All paths use `$BASE`.
+ 4. Read `$BASE/TASKS.md` once into memory — you'll re-read between batches to pick up status flips. **Do NOT pre-extract SPEC/PLAN slices in main thread** — subagents will Read them directly from `$BASE/SPEC.md` and `$BASE/PLAN.md` themselves. This keeps the orchestrator main-thread context light across many tasks.
+ 5. **Version stamp + run_start event:**
+    ```bash
+diff --git a/skills/z-implement-all/SKILL.md b/skills/z-implement-all/SKILL.md
+index 48fb1a9..e1fd75d 100644
+--- a/skills/z-implement-all/SKILL.md
++++ b/skills/z-implement-all/SKILL.md
+@@ -6,16 +6,104 @@ You are the **z-harness `/z-implement-all`** orchestrator. Your job is to drive
+ 
+ Notification policy: read env `Z_HARNESS_NOTIFY` (default `approval_only`).
+ 
++## Flags
++
++- `--ack` — Override the SHARED-CONCERNS.md ack-gate when iterating a tree-rooted plan produced by `/z-plan-split`. Equivalent to manually flipping `acknowledged: true` in the file. No-op for legacy single-slug plans.
++- `--force-partial` — Override the partial-tree gate when iterating a tree-rooted plan whose SHARED-CONCERNS.md has `partial_tree: true` (i.e. one or more clusters failed planning). Implies the user accepts that overlap detection is a lower bound on a partial tree. No-op for legacy single-slug plans.
++
++Both flags are inert for legacy (single-slug) plans and only affect tree-rooted discovery in Setup step 2.
++
+ ## Setup
+ 
+ 1. `cd` to the repo root. Abort if no `z-harness/` directory.
+-2. **Discover plan slug.** Multiple plans may coexist under `z-harness/<slug>/`:
+-   - Enumerate subdirs of `z-harness/` containing a `TASKS.md`.
+-   - Also check for legacy flat layout (`z-harness/TASKS.md` directly).
+-   - One candidate → use it; export `Z_HARNESS_SLUG=<slug>` (or leave unset for legacy flat).
+-   - Multiple candidates → `AskUserQuestion` to pick.
++2. **Discover plan slug.** Multiple plans may coexist under `z-harness/<slug>/`. A `<slug>/` may be either a **legacy single-slug plan** (contains `TASKS.md` directly) or a **tree-rooted plan** produced by `/z-plan-split` (contains `MANIFEST.md` + per-cluster subdirectories, each with its own `TASKS.md`):
++
++   **2a. Enumerate candidates.**
++   - For each subdir of `z-harness/`: classify as `tree-rooted` if `<slug>/MANIFEST.md` exists, else `legacy` if `<slug>/TASKS.md` exists, else skip.
++   - Also check for the legacy flat layout (`z-harness/TASKS.md` directly).
+    - Zero candidates → tell user to run `/z-plan` first; abort.
+-3. From here on, **`BASE`** = `z-harness/$Z_HARNESS_SLUG` (or `z-harness` for legacy). All paths use `$BASE`.
++   - One candidate → use it.
++   - Multiple candidates → `AskUserQuestion` to pick. Mixed legacy + tree-rooted slugs are allowed in the same `/z-implement-all` invocation: the user picks one, validation/expansion below depends on its kind.
++   - Export `Z_HARNESS_SLUG=<slug>` (or leave unset for legacy flat).
++
++   **2b. If chosen slug is tree-rooted (has `<slug>/MANIFEST.md`), validate in order:**
++
++   Parse MANIFEST.md once: extract (i) the YAML frontmatter (`status`, `total_clusters`, `clusters_ready`), (ii) the Clusters table (each row: `ID`, `Path`, `Status`, …), and (iii) the `## Run order` section (an ordered list of cluster IDs). The `Path` column is canonical — every downstream BASE binding in 2c reads it from there; do **not** synthesize paths from `<slug>/<cluster-id>/`.
++
++   1. **Nested-MANIFEST gate (depth invariant).** One-level recursion is invariant per `/z-plan-split` SPEC. Check `find z-harness/$Z_HARNESS_SLUG/*/ -name MANIFEST.md` (excluding the root MANIFEST). If any are found, halt with `tree_depth_exceeded` event:
++      ```bash
++      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" tree_depth_exceeded \
++        "$(printf '{"slug":"%s","nested_paths":%s}' "$Z_HARNESS_SLUG" "$NESTED_JSON_ARRAY")"
++      ```
++      Push-notify and abort. No override — a tree-of-trees is structurally unsupported in v1.
++   2. **SHARED-CONCERNS.md existence gate.** `<slug>/SHARED-CONCERNS.md` must exist (cluster-planner reconciliation writes it unconditionally). If absent, halt with `shared_concerns_missing` event before attempting any frontmatter read:
++      ```bash
++      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" shared_concerns_missing \
++        "$(printf '{"slug":"%s","expected_path":"%s"}' "$Z_HARNESS_SLUG" "z-harness/$Z_HARNESS_SLUG/SHARED-CONCERNS.md")"
++      ```
++      Push-notify and abort. No override — a tree-rooted slug without SHARED-CONCERNS.md is structurally malformed (re-run `/z-plan-split` to regenerate).
++   3. **MANIFEST frontmatter consistency.** Cross-check the parsed frontmatter against the Clusters table:
++      - `total_clusters` must equal the number of rows in the Clusters table.
++      - `clusters_ready` must equal the count of rows whose `Status == ready`.
++      - `status` must be one of the legal values (`ready`, `partial`, `failed`); if `status: ready` then `clusters_ready == total_clusters`; if `status: partial` then `0 < clusters_ready < total_clusters`.
++
++      On any mismatch, halt with `manifest_frontmatter_inconsistent` event:
++      ```bash
++      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" manifest_frontmatter_inconsistent \
++        "$(printf '{"slug":"%s","frontmatter_total":%d,"table_rows":%d,"frontmatter_ready":%d,"table_ready":%d,"frontmatter_status":"%s"}' \
++           "$Z_HARNESS_SLUG" "$FM_TOTAL" "$TBL_ROWS" "$FM_READY" "$TBL_READY" "$FM_STATUS")"
++      ```
++      Push-notify and abort. No override — a stale/forged frontmatter must be reconciled with the table before iteration is safe.
++   4. **Run-order bijection.** The `## Run order` list must reference every cluster in the Clusters table exactly once, with no unknown IDs and no duplicates. Compute `set(run_order_ids) == set(table_ids)` AND `len(run_order_ids) == len(table_ids)`. On failure, halt with `manifest_run_order_invalid` event:
++      ```bash
++      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" manifest_run_order_invalid \
++        "$(printf '{"slug":"%s","missing_ids":%s,"unknown_ids":%s,"duplicate_ids":%s}' \
++           "$Z_HARNESS_SLUG" "$MISSING_JSON" "$UNKNOWN_JSON" "$DUP_JSON")"
++      ```
++      Push-notify and abort. No override — the run order is the authoritative iteration sequence; an inconsistent list can't be repaired by the orchestrator.
++   5. **Partial-tree gate (decides which clusters will run).** Read SHARED-CONCERNS.md frontmatter. If `partial_tree: true` (some clusters failed planning, so overlap detection is a lower bound):
++      - **Without `--force-partial`** → halt with `partial_tree_blocked` event naming the failed clusters parsed from MANIFEST:
++      ```bash
++      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" partial_tree_blocked \
++        "$(printf '{"slug":"%s","failed_cluster_ids":%s}' "$Z_HARNESS_SLUG" "$FAILED_JSON_ARRAY")"
++      ```
++      Push-notify and abort.
++      - **With `--force-partial`** → log a distinct override event (NOT `partial_tree_blocked`, which is reserved for halts):
++      ```bash
++      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" partial_tree_force_override \
++        "$(printf '{"slug":"%s","failed_cluster_ids":%s,"override":true}' "$Z_HARNESS_SLUG" "$FAILED_JSON_ARRAY")"
++      ```
++      Continue, but exclude failed clusters from the run set. Define `clusters_to_run` = run-order list with `failed`-status IDs filtered out.
++
++      If `partial_tree: false` (or absent), `clusters_to_run` = full run-order list.
++   6. **Cluster-readiness gate (over `clusters_to_run` only).** For each cluster in `clusters_to_run`, look up its row in the Clusters table. The `Status` column must be `ready`; equivalently, the file at the cluster's `Path` column joined with `TASKS.md` must exist, parse cleanly, and contain ≥1 task block. Any cluster in `clusters_to_run` with `status: planning` (or `failed` — which can only happen if `--force-partial` was NOT in play, since 2b.5 already filtered failed) → halt with `cluster_not_ready` event:
++      ```bash
++      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" cluster_not_ready \
++        "$(printf '{"slug":"%s","cluster_id":"%s","cluster_status":"%s"}' "$Z_HARNESS_SLUG" "<id>" "<status>")"
++      ```
++      Push-notify the user and abort. (No override flag — planning clusters must finish planning via `/z-plan-split` resume; failed clusters are addressed via `--force-partial` in step 2b.5.)
++   7. **Shared-concerns ack-gate.** Read SHARED-CONCERNS.md frontmatter:
++      - If `overlap_count: 0` → ack-gate auto-passes regardless of `acknowledged`.
++      - Else if `acknowledged: true` → pass.
++      - Else (overlap_count > 0 AND acknowledged != true):
++        - **Without `--ack`** → halt with `shared_concerns_unacknowledged` event (reserved for actual halts):
++        ```bash
++        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" shared_concerns_unacknowledged \
++          "$(printf '{"slug":"%s","acknowledged":false,"overlap_count":%d}' "$Z_HARNESS_SLUG" "$N")"
++        ```
++        Push-notify and abort.
++        - **With `--ack`** → log a distinct override event (NOT `shared_concerns_unacknowledged`):
++        ```bash
++        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" shared_concerns_ack_override \
++          "$(printf '{"slug":"%s","overlap_count":%d,"override":true}' "$Z_HARNESS_SLUG" "$N")"
++        ```
++        Continue.
++
++   **2c. Expand tree-rooted slug into cluster sequence.** On all validations passing, iterate `clusters_to_run` **sequentially**. For each cluster ID in the list, look up its row in the parsed Clusters table and read the `Path` column verbatim — this is the canonical BASE for the cluster (`BASE = <Path value>`). Do **not** synthesize `BASE = z-harness/<slug>/<cluster-id>/` from the ID; the MANIFEST's `Path` column is the source of truth (it may differ from the naive form). Validate that the lookup resolves to exactly one row per ID (already guaranteed by 2b.4's bijection check). Run the full main loop (steps 1–8) on that cluster's `BASE/TASKS.md`, then advance to the next cluster. Within each cluster, the existing N=3 parallel-batching applies as today (intra-cluster parallelism honored; cross-cluster parallelism is v2).
++
++   **2d. If chosen slug is legacy (TASKS.md directly under it, no MANIFEST.md),** behavior is unchanged: a single `BASE` for the whole run, no tree validation, `--ack` and `--force-partial` are no-ops.
++
++3. From here on, **`BASE`** = `z-harness/$Z_HARNESS_SLUG` for legacy slugs (or `z-harness` for legacy flat). For tree-rooted slugs, `BASE` is rebound per-cluster as the orchestrator iterates the run-order sequence from 2c. All paths use `$BASE`.
+ 4. Read `$BASE/TASKS.md` once into memory — you'll re-read between batches to pick up status flips. **Do NOT pre-extract SPEC/PLAN slices in main thread** — subagents will Read them directly from `$BASE/SPEC.md` and `$BASE/PLAN.md` themselves. This keeps the orchestrator main-thread context light across many tasks.
+ 5. **Version stamp + run_start event:**
+    ```bash
+diff --git a/README.md b/README.md
+index 7b3fc4d..b2bcbe6 100644
+--- a/README.md
++++ b/README.md
+@@ -6,15 +6,31 @@ A Claude Code plugin that wraps planning and implementation in a rigorous, cross
+ 
+ Every command writes its artifacts under `z-harness/<slug>/`, with run-frozen archives in `z-harness/<slug>/archive/<run-id>/` and aggregated telemetry in `z-harness/metrics.jsonl`.
+ 
++### Pre-planning (optional; feed into `/z-plan`)
++
++- **`/z-brainstorm <topic>`** — Cheap parallel idea generation across three vendor-diverse ideators (Claude Sonnet + Codex + Gemini). Produces `BRAINSTORM.md` in `z-harness/<slug>/`. Cost target: ≤200K tokens. Use this when the framing or approach for a problem is still open and you want divergent perspectives before locking in a plan.
++- **`/z-research <question>`** — Heavier terrain mapping via parallel Explores + cross-LLM critique. Produces `RESEARCH.md` in `z-harness/<slug>/`. Cost target: ≤2M tokens. Use this when you need concrete file:line evidence about an existing codebase or design space before deciding what to build.
++
++**Typical chains:**
++
++- Murky problem: `/z-research → /z-brainstorm → /z-plan` — research terrain first, generate framed approaches, then plan.
++- Lighter case: `/z-brainstorm → /z-plan` — skip research when the codebase is already well understood.
++- Standard: `/z-plan` alone — when the problem and approach are already clear.
++
++`/z-plan` Setup step 10 automatically detects `BRAINSTORM.md` and `RESEARCH.md` in the slug directory and incorporates them into Phase 0 (premise check) and Phase 1 (exploration). For `RESEARCH.md`, a freshness check runs against every cited `file:line` reference; stale citations prompt a warning before proceeding. If `RESEARCH.md` is non-stale and covers the task's likely-touched files, doc-fetcher and Explore become optional in Phase 1.
++
+ ### Planning
+ 
+ - **`/z-plan <task>`** — Rigorous pipeline: premise check → exploration (with `docs/llm/INDEX.json` if present, plus a freshness gate that defers to `/z-maintain-docs` when docs are stale) → enumerate decisions → user-gated bundled Gemini+Codex consult → SPEC.md / PLAN.md / TASKS.md.
+ - **`/z-plan-light <fix>`** — Fast path for 1-5 file fixes; auto-bails to `/z-plan` if scope grows. Single `FIX.md` artifact, inline implementation, codex-reviewer safety gate kept.
++- **`/z-plan-split <topic>`** — Pre-emptive scope splitter for sprawling topics that would otherwise yield a ≥40-task `/z-plan` run across natural seams. Proposes 2-6 narrow clusters, dispatches one `cluster-planner` subagent per cluster in parallel, then reconciles file-path overlaps into `SHARED-CONCERNS.md` + `MANIFEST.md` under `z-harness/<root-slug>/`. One-level recursion only; no production code. Cost target: cheaper than a single mega-`/z-plan` only when the user genuinely needed N narrow plans — otherwise more expensive (opt-in, do not use as a default).
++
++  Typical chain for a murky multi-component problem: `/z-research → /z-brainstorm → /z-plan-split → /z-implement-all`.
+ - **`/z-test`** — Semantic test-case planner. Reads SPEC/PLAN/TASKS, drafts non-trivial tests (sign errors, schema mismatches, off-by-one, unit confusion), cross-consults Gemini+Codex, writes `TESTS.md`. The implementer reads TESTS.md alongside TASKS.md so tests land in the same diff as production code.
+ 
+ ### Implementation
+ 
+-- **`/z-implement-all`** — Orchestrates the full TASKS.md queue: one fresh `implementer` subagent per task → per-task `codex-reviewer` safety gate → retry once on review failure → push-notify at every task boundary.
++- **`/z-implement-all`** — Orchestrates the full TASKS.md queue: one fresh `implementer` subagent per task → per-task `codex-reviewer` safety gate → retry once on review failure → push-notify at every task boundary. Walks a tree-rooted plan produced by `/z-plan-split` (one cluster at a time, in MANIFEST run order) as well as legacy single-slug plans. Flags: `--ack` (override the SHARED-CONCERNS.md ack-gate) and `--force-partial` (proceed against a tree where some clusters failed planning, excluding the failed ones from the run set). Both flags are inert for legacy single-slug plans.
+ - **`/z-implement-next`** — Same loop, one task at a time.
+ 
+ ### Audit, debug, review
+@@ -39,6 +55,7 @@ Every command writes its artifacts under `z-harness/<slug>/`, with run-frozen ar
+ |---|---|---|
+ | `implementer` | sonnet | Implements one task in fresh context |
+ | `auditor` | sonnet | Audits one dimension, returns structured findings |
++| `cluster-planner` | sonnet | Runs a narrow sub-/z-plan for one cluster of a `/z-plan-split` tree |
+ | `gemini-consultant` | (CLI) | Cross-LLM consult via Gemini |
+ | `codex-consultant` | (CLI) | Cross-LLM consult via Codex |
+ | `codex-reviewer` | haiku | Post-diff safety gate via Codex |
+@@ -46,6 +63,8 @@ Every command writes its artifacts under `z-harness/<slug>/`, with run-frozen ar
+ | `doc-updater` | sonnet | Refreshes one stale concept's docs/human + docs/llm pair |
+ | `remote-runner` | haiku | Mechanical remote work — rsync sandbox + cargo build, read-only DB/log queries, paper qtctl restarts |
+ 
++`/z-brainstorm` dispatches three ideators in Phase 2: Claude as `general-purpose` Sonnet, Codex via `codex-consultant` with `MODE: brainstorm`, and Gemini via `gemini-consultant` with `MODE: brainstorm`. There is no dedicated `ideator` agent file.
++
+ ## Operating principles
+ 
+ - Push back by default — on Gemini, Codex, and the user.
+@@ -104,9 +123,66 @@ When a downstream repo defines its own skills that interoperate with z-harness,
+ - `Z_HARNESS_PAUSE_AT_PCT` — default `90`. Pause new phase dispatch when Claude Code usage hits this %.
+ - `Z_HARNESS_MAX_EXPLORE` — default `3`. Cap on `Explore` subagent dispatches per `/z-plan` run.
+ - `Z_HARNESS_DOC_STALENESS_THRESHOLD` — default `20` (percent). Above this, `/z-plan` halts and recommends `/z-maintain-docs` first.
+-- `Z_HARNESS_RETRY_UPGRADE` — `opus` to upgrade the implementer model on second retry.
++- ~~`Z_HARNESS_RETRY_UPGRADE`~~ — removed. The implementer model is now picked directly via `Agent(model=...)` based on the task block's `**Complexity:** low|medium|high` stamp (`low|medium` → Sonnet, `high` → Opus). Retries (cycle ≥ 2) always dispatch with `model="opus"`. The complexity stamp is added at plan-time by a Haiku `complexity-classifier` subagent and is user-editable in TASKS.md.
+ - `Z_HARNESS_LOCAL_CARGO_CLEAN` — set to `1` at the start of `/z-implement-all` to trigger a one-time local `cargo clean`.
+ - `Z_HARNESS_SLUG` — set by commands; namespaces all output paths under `z-harness/<slug>/`.
++- `Z_HARNESS_BRAINSTORM_EXPLORE=1` — opts into a Phase 1 Explore dispatch inside `/z-brainstorm`. Off by default (doc-fetcher only). Set this when you want the brainstorm scaffolding to include live codebase exploration in addition to the doc-fetcher lookup.
++
++## Telemetry event types
++
++All events are appended to `z-harness/metrics.jsonl` via `scripts/log-event.sh`. Standard fields present on every event: `ts`, `run`, `kind` (and `slug` when set). The fields `prompt_chars`, `response_chars`, and `wall_ms` are optional — they appear only on subagent-bracket events, not on lifecycle or gate events.
++
++Event kinds introduced by `/z-brainstorm` and `/z-research`:
++
++| Event | Emitted by |
++|---|---|
++| `brainstorm_run_start` | `/z-brainstorm` setup |
++| `brainstorm_run_end` | `/z-brainstorm` Phase 4 |
++| `research_run_start` | `/z-research` setup |
++| `research_run_end` | `/z-research` Phase 6 |
++| `ideator_failed` | `/z-brainstorm` Phase 2 (fields: `vendor`, `reason`) |
++| `total_ideator_failure` | `/z-brainstorm` Phase 2 when all three ideators fail |
++| `research_temptation` | `/z-research` when orchestrator drafts a recommendation it must not make |
++| `precontext_source_deleted` | `/z-plan` Setup step 10 freshness check (higher severity than stale-mtime) |
++| `precontext_freshness_check_failed` | `/z-plan` Setup step 10 freshness check parse failure |
++| `cost_gate_decision` | `/z-research` Phase 0 cost-confirmation gate |
++| `explore_failure` | any command that dispatches an Explore subagent that does not return |
++
++Event kinds introduced by `/z-plan-split` and the tree-walking branch of `/z-implement-all`:
++
++| Event | Emitted by |
++|---|---|
++| `plan_split_run_start` | `/z-plan-split` Setup |
++| `plan_split_run_end` | `/z-plan-split` finalize (every exit path; `status` distinguishes the exit reason) |
++| `cluster_proposed` | `/z-plan-split` Phase 1c (per proposed cluster) |
++| `cluster_confirmed` | `/z-plan-split` Phase 1e (per confirmed cluster) |
++| `cluster_planner_start` | `cluster-planner` subagent, first call |
++| `cluster_planner_end` | `cluster-planner` subagent, last call (every exit path) |
++| `cluster_failed` | `/z-plan-split` Phase 3 (per failed cluster; `failure_reason` distinguishes the cause) |
++| `cluster_decision_escalated` | `cluster-planner` Phase 2/3 when the conservative-flagging rubric escalates |
++| `cluster_files_inconsistent` | `/z-plan-split` Phase 4 when `FILES_TOUCHED` ↔ TASKS.md disagree |
++| `total_cluster_failure` | `/z-plan-split` Phase 3 or Phase 4 when every cluster ends `failed` |
++| `overlap_detected` | `/z-plan-split` Phase 4 (per overlapping path) |
++| `overlap_index_rebuilt` | `/z-plan-split` Phase 4 after any post-Phase-3 cluster demotion |
++| `shared_concerns_missing` | `/z-implement-all` Setup 2b when SHARED-CONCERNS.md is absent on a tree-rooted slug |
++| `shared_concerns_unacknowledged` | `/z-implement-all` Setup 2b ack-gate (halt; no override) |
++| `shared_concerns_ack_override` | `/z-implement-all` Setup 2b ack-gate when `--ack` was supplied |
++| `manifest_frontmatter_inconsistent` | `/z-implement-all` Setup 2b when frontmatter counts disagree with the table |
++| `manifest_run_order_invalid` | `/z-implement-all` Setup 2b when run order doesn't bijectively match the table |
++| `tree_depth_exceeded` | `/z-implement-all` Setup 2b when a nested MANIFEST.md is found inside the tree |
++| `partial_tree_blocked` | `/z-implement-all` Setup 2b partial-tree gate (halt; no `--force-partial`) |
++| `partial_tree_force_override` | `/z-implement-all` Setup 2b partial-tree gate when `--force-partial` was supplied |
++| `anti_nesting_violation` | `cluster-planner` Phase 0a when an ancestor MANIFEST.md is detected |
++| `cluster_not_ready` | `/z-implement-all` Setup 2b cluster-readiness gate |
++
++## Known v1 limitations
++
++- **No per-subagent wall-clock timeout.** `Agent()` does not expose a per-call timeout; subagents that hang block the entire run. User-facing escape: ctrl-c to abort.
++- **No doc-fetcher caching across precontext and plan runs.** If you run `/z-research` and then `/z-plan` in the same slug, doc-fetcher is dispatched twice (once per command). Marked as a v2 candidate; the cost is low enough today.
++- **`/z-plan-split`: no cross-cluster task parallelism.** `/z-implement-all` walks clusters sequentially in MANIFEST run-order; intra-cluster parallelism (N=3) is honored, cross-cluster is v2.
++- **`/z-plan-split`: path-only overlap detection.** SHARED-CONCERNS.md is built from file-path intersections across cluster TASKS.md `**Files:**` lines. No semantic overlap detection (two clusters that touch disjoint files but conflict on the same in-memory invariant will not surface here).
++- **`/z-plan-split`: no `--from-audit` / `--from-brainstorm` input chains.** The topic is taken verbatim from `$ARGUMENTS`; there is no structured handoff from `/z-audit`, `/z-research`, or `/z-brainstorm` artifacts beyond what the user pastes into the topic string. v2 candidate.
++- **`/z-plan-split`: one-level recursion cap.** Cluster-planners refuse to write inside an existing MANIFEST.md tree, and `/z-implement-all` halts with `tree_depth_exceeded` if it finds a nested MANIFEST.md. A tree-of-trees is structurally unsupported.
+ 
+ ## Layout
+ 
+@@ -116,8 +192,11 @@ z-harness/
+ │   ├── plugin.json
+ │   └── marketplace.json
+ ├── commands/
++│   ├── z-brainstorm.md
++│   ├── z-research.md
+ │   ├── z-plan.md
+ │   ├── z-plan-light.md
++│   ├── z-plan-split.md
+ │   ├── z-test.md
+ │   ├── z-implement-all.md
+ │   ├── z-implement-next.md
+@@ -131,6 +210,7 @@ z-harness/
+ ├── agents/
+ │   ├── implementer.md
+ │   ├── auditor.md
++│   ├── cluster-planner.md
+ │   ├── codex-reviewer.md
+ │   ├── codex-consultant.md
+ │   ├── gemini-consultant.md

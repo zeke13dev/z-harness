@@ -1,0 +1,1 @@
+{"ts":"2026-05-23T06:01:10Z","run":"20260523T060110Z-doc-memories","kind":"run_start","slug":"doc-memories","z_harness_version":"aaa6f80","z_harness_dirty":true,"z_harness_branch":"main","task":"enrich docs/llm with curated memories + ripgrep lookup augment"}

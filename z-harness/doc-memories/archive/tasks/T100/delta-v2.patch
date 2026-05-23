@@ -1,0 +1,79 @@
+--- z-harness/doc-memories/archive/tasks/T100/diff-v1.patch	2026-05-23 11:54:45
++++ z-harness/doc-memories/archive/tasks/T100/diff.patch	2026-05-23 11:56:07
+@@ -206,10 +206,31 @@
+     Recommended next:
+       git add docs/ && git commit -m "Initialize z-harness docs"
+ diff --git a/skills/z-maintain-docs/SKILL.md b/skills/z-maintain-docs/SKILL.md
+-index 5ed0fff..dd96fff 100644
++index 5ed0fff..e270e6e 100644
+ --- a/skills/z-maintain-docs/SKILL.md
+ +++ b/skills/z-maintain-docs/SKILL.md
+-@@ -44,7 +44,7 @@ For each stale concept, spawn a `doc-updater` subagent. In dry-run mode, leave `
++@@ -38,18 +38,44 @@ If nothing is stale → tell the user "All docs are current."; log `maintain_doc
++ 
++ ## Phase 2 — Spawn doc-updaters (parallel, up to 3 concurrent)
++ 
+++**Before spawning each doc-updater**, capture the baseline memory count from the existing LLM-tier JSON (if it exists). Store it per concept so Phase 3 can validate the return:
+++
+++```python
+++import json, os
+++
+++baseline_memories = {}  # slug -> int
+++for slug in stale_concepts:
+++    llm_path = f"docs/llm/{slug}.json"
+++    if os.path.exists(llm_path):
+++        data = json.load(open(llm_path))
+++        baseline_memories[slug] = len(data.get("memories", []))
+++    else:
+++        baseline_memories[slug] = 0
+++```
+++
++ For each stale concept, spawn a `doc-updater` subagent. In dry-run mode, leave `mode: dry-run` (default); in apply mode, set `mode: write`.
++ 
++ ```
+  Agent(
+    subagent_type="doc-updater",
+    description="Refresh docs for <concept>",
+@@ -218,8 +239,24 @@
+  )
+  ```
+  
+-@@ -109,7 +109,69 @@ When `--audit` was used, prefix each entry with the audit verdict so the user ca
++ Up to 3 in parallel per batch (`Z_HARNESS_PARALLEL=N` env override).
+  
+++When each doc-updater returns, check its `MEMORIES_PRESERVED: <N>` value against the stored baseline:
+++
+++```python
+++preserved = int(doc_updater_return["MEMORIES_PRESERVED"])
+++baseline = baseline_memories[slug]
+++if preserved != baseline:
+++    warn(f"memories_lost: {slug} — doc-updater preserved {preserved} memories but baseline was {baseline}. Check docs/llm/{slug}.json manually.")
+++```
+++
+++Surface any `memories_lost` warning prominently in Phase 3 before presenting diffs. A mismatch indicates doc-updater may have dropped memories, which is a hard-rule violation (doc-updater must copy memories verbatim).
+++
++ ## Phase 2.5 — Cross-LLM audit (only if `--audit` flag set)
++ 
++ For each `doc-updater` return from Phase 2, spawn **both** consultants in parallel (single message, multiple `Agent()` calls) to verify the proposed update is accurate:
++@@ -109,7 +135,69 @@ When `--audit` was used, prefix each entry with the audit verdict so the user ca
++ 
+  Write the proposed updates to `z-harness/archive/docs/<RRUN>/proposed/<concept>.human.md` and `<concept>.llm.json` so the user can inspect before applying.
+  
+ -Ask via `AskUserQuestion`:
+@@ -282,14 +319,14 @@
+ +     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "docs" tag_alias_added \
+ +       "$(printf '{"canonical":"%s","alias":"%s","concept":"%s"}' "<canonical>" "<alias>" "<slug>")"
+ +     ```
+-+  Note: the alias is recorded but the in-memory memories are **not** rewritten during this run. On the next `/z-maintain-docs` run, `doc-updater` step 3.5 will auto-collapse the alias and emit `tag_aliased` log lines.
+++  **Deferral note:** adding an alias here only records the mapping in `TAGS.txt`. The alias-collapse logic (doc-updater step 3.5 step A) is **not** triggered in the current run — no memory `tags[]` arrays are rewritten now. In-memory tag state for this run remains at the collision-tag values. On the next `/z-maintain-docs` (or doc-updater) invocation, step 3.5 reads the updated `TAGS.txt`, auto-collapses the alias in any memory that carries it, and emits `tag_aliased` log lines. Do not expect collapsed tags to appear in MEMORIES-FLAT.md until after that subsequent run.
+ +- **Skip** — do nothing for this collision in this run.
+ +
+ +After all per-collision questions, ask the top-level `AskUserQuestion` for the doc-refresh action:
+  - **Apply all** → re-run this command with `--apply` (or apply now in-place; user choice).
+  - **Apply a subset** → user picks which concepts.
+  - **Skip** → leave docs as-is; concepts stay flagged for next run.
+-@@ -120,6 +182,18 @@ For each accepted concept, write the proposed `human_path` and `llm_path` files.
++@@ -120,6 +208,18 @@ For each accepted concept, write the proposed `human_path` and `llm_path` files.
+  
+  If any concept's source files changed enough that the doc-updater couldn't produce confident output (`STATUS: not_enough_info`), DO NOT write — surface to user.
+  

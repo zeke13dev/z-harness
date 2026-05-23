@@ -42,17 +42,29 @@ If TASKS.md is missing or has no pending tasks, tell the user and stop.
 
 **Discover relevant_docs.** If `docs/llm/INDEX.json` exists, identify concept docs relevant to this task (same logic as `/z-implement-all` step 4b): (a) `**DOCS:** <slug>` lines in task block; (b) `source_file` overlap with the task's `Files:`. Cap at 5 concept paths. Pass as `relevant_docs` below.
 
-Spawn the implementer subagent (fresh context):
+Spawn the implementer subagent (fresh context).
+
+**Pick the implementer model from the task block's `**Complexity:**` stamp** (stamped by `/z-plan` or `/z-amend`):
+- `low` or `medium` → `model="sonnet"`
+- `high` → `model="opus"`
+- **Stamp missing**: default to `model="sonnet"` and log a `missing_complexity_stamp` warning event with the task id:
+  ```bash
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" missing_complexity_stamp \
+    "$(printf '{"task":"%s","fallback_model":"sonnet"}' "<task-id>")"
+  ```
 
 ```
 Agent(
   subagent_type="implementer",
   description="Implement <task-id>",
+  model="<sonnet|opus per the rules above>",
   prompt="<task-id>\n\n<task block verbatim from TASKS.md>\n\n$BASE: <abs path to z-harness/<slug>>\nRepo root: <abs path>\nrelevant_docs (paths — Read these for cross-file invariants): <paths>"
 )
 ```
 
-If this is a retry after review failure with `cycle ≥ 2`, set env `Z_HARNESS_RETRY_UPGRADE=opus` before the call (per the auto-upgrade-on-retry policy). Also set the env if the task block has `**Complexity:** high`.
+This replaces the prior `Z_HARNESS_RETRY_UPGRADE=opus` env-var pattern; `Agent(...)` supports per-call `model` override directly.
+
+`/z-implement-next` is a single-shot command and does not auto-retry on Codex review failure. If you want a retry with `model="opus"` (the "always-Opus-on-retry" policy from `/z-implement-all`), re-invoke `/z-implement-next` after manually flipping the task's stamp to `**Complexity:** high`, or run `/z-implement-all` which handles the retry loop internally.
 
 Implement the task exactly as specified. No scope expansion. If the spec is wrong or ambiguous, **stop and ask the user** rather than improvising. After the answer, **update SPEC.md** to match the resolved decision before continuing — the spec must stay the source of truth.
 

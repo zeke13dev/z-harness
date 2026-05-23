@@ -1,0 +1,27 @@
+{
+  "concept": "weird-[brackets]",
+  "last_updated": "2026-05-01",
+  "source_file": ["src/weird_brackets.py"],
+  "confidence": "low",
+  "entry_points": [],
+  "depends_on": [],
+  "consumed_by": [],
+  "invariants": [],
+  "gotchas": ["Contains regex-special characters in slug and memory text"],
+  "memories": [
+    {
+      "type": "anti_pattern",
+      "text": "regex metachar test: price * volume + $offset [bracket] \\escape (paren) {brace} ^ anchor | pipe",
+      "source": "human_review:zbarnett",
+      "date": "2026-05-01",
+      "tags": ["correctness", "unicode-tag"]
+    },
+    {
+      "type": "open_question",
+      "text": "does unicode work: café naïve résumé and emoji-free ♥ non-emoji unicode",
+      "source": "debug:20260501T120000Z-regex-test",
+      "date": "2026-05-01",
+      "tags": ["schema"]
+    }
+  ]
+}
