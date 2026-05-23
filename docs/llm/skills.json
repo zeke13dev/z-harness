@@ -1,0 +1,160 @@
+{
+  "concept": "skills",
+  "last_updated": "2026-05-23",
+  "covers_spec": "none",
+  "source_file": [
+    "skills/z-amend/SKILL.md",
+    "skills/z-brainstorm/SKILL.md",
+    "skills/z-debug/SKILL.md",
+    "skills/z-do/SKILL.md",
+    "skills/z-implement-all/SKILL.md",
+    "skills/z-implement-next/SKILL.md",
+    "skills/z-improve/SKILL.md",
+    "skills/z-init-docs/SKILL.md",
+    "skills/z-maintain-docs/SKILL.md",
+    "skills/z-plan-light/SKILL.md",
+    "skills/z-plan-split/SKILL.md",
+    "skills/z-plan/SKILL.md",
+    "skills/z-research/SKILL.md",
+    "skills/z-review-all/SKILL.md",
+    "skills/z-stats/SKILL.md",
+    "skills/z-suggest-memory/SKILL.md",
+    "skills/z-test/SKILL.md"
+  ],
+  "confidence": "high",
+  "entry_points": [
+    {
+      "file": "skills/z-amend/SKILL.md",
+      "line": 1,
+      "symbol": "z-amend",
+      "kind": "module",
+      "summary": "Checklists for amending spec, plan, and task checklists consistently."
+    },
+    {
+      "file": "skills/z-brainstorm/SKILL.md",
+      "line": 1,
+      "symbol": "z-brainstorm",
+      "kind": "module",
+      "summary": "Checklists for parallel candidate plan brainstorming and bias filters."
+    },
+    {
+      "file": "skills/z-debug/SKILL.md",
+      "line": 1,
+      "symbol": "z-debug",
+      "kind": "module",
+      "summary": "Checklists for bug isolation, hypothesis generation, and post-mortems."
+    },
+    {
+      "file": "skills/z-do/SKILL.md",
+      "line": 1,
+      "symbol": "z-do",
+      "kind": "module",
+      "summary": "Checklists for small targeted code updates under code reviews."
+    },
+    {
+      "file": "skills/z-implement-all/SKILL.md",
+      "line": 1,
+      "symbol": "z-implement-all",
+      "kind": "module",
+      "summary": "Checklists for task implementations via parallel subagents and reviewers."
+    },
+    {
+      "file": "skills/z-implement-next/SKILL.md",
+      "line": 1,
+      "symbol": "z-implement-next",
+      "kind": "module",
+      "summary": "Checklists for executing individual queue tasks with code reviews."
+    },
+    {
+      "file": "skills/z-improve/SKILL.md",
+      "line": 1,
+      "symbol": "z-improve",
+      "kind": "module",
+      "summary": "Checklists for aggregating run event friction metrics into platform updates."
+    },
+    {
+      "file": "skills/z-init-docs/SKILL.md",
+      "line": 1,
+      "symbol": "z-init-docs",
+      "kind": "module",
+      "summary": "Checklists for bootstrapping the two-tier human and LLM doc system."
+    },
+    {
+      "file": "skills/z-maintain-docs/SKILL.md",
+      "line": 1,
+      "symbol": "z-maintain-docs",
+      "kind": "module",
+      "summary": "Checklists for auditing doc updates, tag deduping, and memory pruning."
+    },
+    {
+      "file": "skills/z-plan-light/SKILL.md",
+      "line": 1,
+      "symbol": "z-plan-light",
+      "kind": "module",
+      "summary": "Checklists for lightweight plans focused on minor bug fixes."
+    },
+    {
+      "file": "skills/z-plan-split/SKILL.md",
+      "line": 1,
+      "symbol": "z-plan-split",
+      "kind": "module",
+      "summary": "Checklists for decomposing high-scope plans into separate areas."
+    },
+    {
+      "file": "skills/z-plan/SKILL.md",
+      "line": 1,
+      "symbol": "z-plan",
+      "kind": "module",
+      "summary": "Checklists for detailed spec, plan, and task checklists planning."
+    },
+    {
+      "file": "skills/z-research/SKILL.md",
+      "line": 1,
+      "symbol": "z-research",
+      "kind": "module",
+      "summary": "Checklists for codebase terrain maps and identifying file constraints."
+    },
+    {
+      "file": "skills/z-review-all/SKILL.md",
+      "line": 1,
+      "symbol": "z-review-all",
+      "kind": "module",
+      "summary": "Checklists for auditing cumulative diffs against spec requirements."
+    },
+    {
+      "file": "skills/z-stats/SKILL.md",
+      "line": 1,
+      "symbol": "z-stats",
+      "kind": "module",
+      "summary": "Checklists for compiling execution time, token counts, and costs."
+    },
+    {
+      "file": "skills/z-suggest-memory/SKILL.md",
+      "line": 1,
+      "symbol": "z-suggest-memory",
+      "kind": "module",
+      "summary": "Checklists for cataloging lessons and invariants into doc JSONs."
+    },
+    {
+      "file": "skills/z-test/SKILL.md",
+      "line": 1,
+      "symbol": "z-test",
+      "kind": "module",
+      "summary": "Checklists for drafting rich semantic tests mapped to queue tasks."
+    }
+  ],
+  "depends_on": [
+    "agents",
+    "commands",
+    "scripts"
+  ],
+  "consumed_by": [],
+  "invariants": [
+    "All skills must implement idempotent run patterns.",
+    "Phase telemetries must be logged at the start and end of every skill execution."
+  ],
+  "gotchas": [
+    "Skills specify the rigorous discipline behind planning; do not bypass their checklists."
+  ],
+  "memories": []
+}

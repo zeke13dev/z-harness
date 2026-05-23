@@ -1,0 +1,177 @@
+{
+  "concept": "commands",
+  "last_updated": "2026-05-23",
+  "covers_spec": "none",
+  "source_file": [
+    "commands/z-amend.md",
+    "commands/z-audit.md",
+    "commands/z-brainstorm.md",
+    "commands/z-debug.md",
+    "commands/z-do.md",
+    "commands/z-implement-all.md",
+    "commands/z-implement-next.md",
+    "commands/z-improve.md",
+    "commands/z-init-docs.md",
+    "commands/z-maintain-docs.md",
+    "commands/z-plan-light.md",
+    "commands/z-plan-split.md",
+    "commands/z-plan.md",
+    "commands/z-research.md",
+    "commands/z-review-all.md",
+    "commands/z-skill-fix.md",
+    "commands/z-stats.md",
+    "commands/z-suggest-memory.md",
+    "commands/z-test.md"
+  ],
+  "confidence": "high",
+  "entry_points": [
+    {
+      "file": "commands/z-amend.md",
+      "line": 1,
+      "symbol": "z-amend",
+      "kind": "module",
+      "summary": "Propagates targeted plan amendments consistently across plan artifacts."
+    },
+    {
+      "file": "commands/z-audit.md",
+      "line": 1,
+      "symbol": "z-audit",
+      "kind": "module",
+      "summary": "Coordinates parallel multi-dimensional code auditing and rubric checks."
+    },
+    {
+      "file": "commands/z-brainstorm.md",
+      "line": 1,
+      "symbol": "z-brainstorm",
+      "kind": "module",
+      "summary": "Seeds plan definitions via parallel ideation models and anti-bias passes."
+    },
+    {
+      "file": "commands/z-debug.md",
+      "line": 1,
+      "symbol": "z-debug",
+      "kind": "module",
+      "summary": "Coordinates regression investigation, hypothesis isolation, and fix loops."
+    },
+    {
+      "file": "commands/z-do.md",
+      "line": 1,
+      "symbol": "z-do",
+      "kind": "module",
+      "summary": "Applies small plan-free changes directly to source code under peer review."
+    },
+    {
+      "file": "commands/z-implement-all.md",
+      "line": 1,
+      "symbol": "z-implement-all",
+      "kind": "module",
+      "summary": "Executes all pending task files using isolated implementer and reviewer subagents."
+    },
+    {
+      "file": "commands/z-implement-next.md",
+      "line": 1,
+      "symbol": "z-implement-next",
+      "kind": "module",
+      "summary": "Implements the next pending plan task under code review safety gates."
+    },
+    {
+      "file": "commands/z-improve.md",
+      "line": 1,
+      "symbol": "z-improve",
+      "kind": "module",
+      "summary": "Surfaces project infrastructure suggestions from run event logs."
+    },
+    {
+      "file": "commands/z-init-docs.md",
+      "line": 1,
+      "symbol": "z-init-docs",
+      "kind": "module",
+      "summary": "Initializes the two-tier human and LLM concept documentation system."
+    },
+    {
+      "file": "commands/z-maintain-docs.md",
+      "line": 1,
+      "symbol": "z-maintain-docs",
+      "kind": "module",
+      "summary": "Drift-checks and refreshes stale or drifted concept documentation."
+    },
+    {
+      "file": "commands/z-plan-light.md",
+      "line": 1,
+      "symbol": "z-plan-light",
+      "kind": "module",
+      "summary": "Creates lightweight bug fix plans bypassing full subagent overhead."
+    },
+    {
+      "file": "commands/z-plan-split.md",
+      "line": 1,
+      "symbol": "z-plan-split",
+      "kind": "module",
+      "summary": "Splits a large plan into parallel sub-planning sessions."
+    },
+    {
+      "file": "commands/z-plan.md",
+      "line": 1,
+      "symbol": "z-plan",
+      "kind": "module",
+      "summary": "Executes the core planning pipeline creating spec, plan, and task files."
+    },
+    {
+      "file": "commands/z-research.md",
+      "line": 1,
+      "symbol": "z-research",
+      "kind": "module",
+      "summary": "Explores a codebase and charts its constraints before defining a plan."
+    },
+    {
+      "file": "commands/z-review-all.md",
+      "line": 1,
+      "symbol": "z-review-all",
+      "kind": "module",
+      "summary": "Validates the complete set of generated code diffs against spec requirements."
+    },
+    {
+      "file": "commands/z-skill-fix.md",
+      "line": 1,
+      "symbol": "z-skill-fix",
+      "kind": "module",
+      "summary": "Safely mutates system plugin skill definitions."
+    },
+    {
+      "file": "commands/z-stats.md",
+      "line": 1,
+      "symbol": "z-stats",
+      "kind": "module",
+      "summary": "Analyzes historical run logs to aggregate token metrics and run times."
+    },
+    {
+      "file": "commands/z-suggest-memory.md",
+      "line": 1,
+      "symbol": "z-suggest-memory",
+      "kind": "module",
+      "summary": "Appends key lessons and edge case memories to concept documentation JSON."
+    },
+    {
+      "file": "commands/z-test.md",
+      "line": 1,
+      "symbol": "z-test",
+      "kind": "module",
+      "summary": "Constructs rich semantic test-case plans to link within task items."
+    }
+  ],
+  "depends_on": [
+    "agents",
+    "scripts"
+  ],
+  "consumed_by": [
+    "skills"
+  ],
+  "invariants": [
+    "Every execution event must be routed to metrics.jsonl and per-run event logs.",
+    "Commands must handle the Z_HARNESS_SLUG environment variable to partition plan directories."
+  ],
+  "gotchas": [
+    "Orchestrating large plans directly in the main thread is context-heavy; delegate to subagents."
+  ],
+  "memories": []
+}

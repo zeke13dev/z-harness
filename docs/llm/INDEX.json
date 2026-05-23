@@ -1,0 +1,117 @@
+{
+  "version": "1",
+  "generated_at": "2026-05-23T19:31:00Z",
+  "z_harness_version": "64a3dbe",
+  "concepts": [
+    {
+      "slug": "agents",
+      "source_file": [
+        "agents/auditor.md",
+        "agents/cluster-planner.md",
+        "agents/codex-consultant.md",
+        "agents/codex-reviewer.md",
+        "agents/complexity-classifier.md",
+        "agents/doc-fetcher.md",
+        "agents/doc-updater.md",
+        "agents/gemini-consultant.md",
+        "agents/implementer.md",
+        "agents/remote-runner.md",
+        "agents/spec-precheck.md"
+      ],
+      "last_updated": "2026-05-23",
+      "confidence": "high",
+      "depends_on": [
+        "scripts"
+      ],
+      "consumed_by": [
+        "commands",
+        "skills"
+      ],
+      "summary": "Scrutinizes codebase targets across correctness/perf/cleanliness/design."
+    },
+    {
+      "slug": "commands",
+      "source_file": [
+        "commands/z-amend.md",
+        "commands/z-audit.md",
+        "commands/z-brainstorm.md",
+        "commands/z-debug.md",
+        "commands/z-do.md",
+        "commands/z-implement-all.md",
+        "commands/z-implement-next.md",
+        "commands/z-improve.md",
+        "commands/z-init-docs.md",
+        "commands/z-maintain-docs.md",
+        "commands/z-plan-light.md",
+        "commands/z-plan-split.md",
+        "commands/z-plan.md",
+        "commands/z-research.md",
+        "commands/z-review-all.md",
+        "commands/z-skill-fix.md",
+        "commands/z-stats.md",
+        "commands/z-suggest-memory.md",
+        "commands/z-test.md"
+      ],
+      "last_updated": "2026-05-23",
+      "confidence": "high",
+      "depends_on": [
+        "agents",
+        "scripts"
+      ],
+      "consumed_by": [
+        "skills"
+      ],
+      "summary": "Propagates targeted plan amendments consistently across plan artifacts."
+    },
+    {
+      "slug": "scripts",
+      "source_file": [
+        "scripts/log-event.sh",
+        "scripts/log-phase.sh",
+        "scripts/regenerate-memories-flat.py",
+        "scripts/remote-sandbox-sync.sh",
+        "scripts/version.sh"
+      ],
+      "last_updated": "2026-05-23",
+      "confidence": "high",
+      "depends_on": [],
+      "consumed_by": [
+        "agents",
+        "commands",
+        "skills"
+      ],
+      "summary": "Appends standard JSON events to run and global logs."
+    },
+    {
+      "slug": "skills",
+      "source_file": [
+        "skills/z-amend/SKILL.md",
+        "skills/z-brainstorm/SKILL.md",
+        "skills/z-debug/SKILL.md",
+        "skills/z-do/SKILL.md",
+        "skills/z-implement-all/SKILL.md",
+        "skills/z-implement-next/SKILL.md",
+        "skills/z-improve/SKILL.md",
+        "skills/z-init-docs/SKILL.md",
+        "skills/z-maintain-docs/SKILL.md",
+        "skills/z-plan-light/SKILL.md",
+        "skills/z-plan-split/SKILL.md",
+        "skills/z-plan/SKILL.md",
+        "skills/z-research/SKILL.md",
+        "skills/z-review-all/SKILL.md",
+        "skills/z-stats/SKILL.md",
+        "skills/z-suggest-memory/SKILL.md",
+        "skills/z-test/SKILL.md"
+      ],
+      "last_updated": "2026-05-23",
+      "confidence": "high",
+      "depends_on": [
+        "agents",
+        "commands",
+        "scripts"
+      ],
+      "consumed_by": [],
+      "summary": "Checklists for amending spec, plan, and task checklists consistently."
+    }
+  ]
+}

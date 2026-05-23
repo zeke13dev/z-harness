@@ -1,0 +1,63 @@
+{
+  "concept": "scripts",
+  "last_updated": "2026-05-23",
+  "covers_spec": "none",
+  "source_file": [
+    "scripts/log-event.sh",
+    "scripts/log-phase.sh",
+    "scripts/regenerate-memories-flat.py",
+    "scripts/remote-sandbox-sync.sh",
+    "scripts/version.sh"
+  ],
+  "confidence": "high",
+  "entry_points": [
+    {
+      "file": "scripts/log-event.sh",
+      "line": 1,
+      "symbol": "log-event.sh",
+      "kind": "module",
+      "summary": "Appends standard JSON events to run and global logs."
+    },
+    {
+      "file": "scripts/log-phase.sh",
+      "line": 1,
+      "symbol": "log-phase.sh",
+      "kind": "module",
+      "summary": "Logs process start/end and handles timing telemetry."
+    },
+    {
+      "file": "scripts/regenerate-memories-flat.py",
+      "line": 1,
+      "symbol": "regenerate-memories-flat.py",
+      "kind": "module",
+      "summary": "Compiles memories across concepts into MEMORIES-FLAT.md."
+    },
+    {
+      "file": "scripts/remote-sandbox-sync.sh",
+      "line": 1,
+      "symbol": "remote-sandbox-sync.sh",
+      "kind": "module",
+      "summary": "Maps local files to remote testing VM via rsync."
+    },
+    {
+      "file": "scripts/version.sh",
+      "line": 1,
+      "symbol": "version.sh",
+      "kind": "module",
+      "summary": "Provides git-anchored plugin version JSON."
+    }
+  ],
+  "depends_on": [],
+  "consumed_by": [
+    "agents",
+    "commands",
+    "skills"
+  ],
+  "invariants": [
+    "Requires python3 for JSON parsing, event validation, and logging timing fallbacks."
+  ],
+  "gotchas": [
+    "macOS BSD date lacks %3N support, necessitating the python3 fallback in log-phase.sh."
+  ],
+  "memories": []
+}

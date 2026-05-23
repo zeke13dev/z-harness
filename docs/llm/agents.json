@@ -1,0 +1,113 @@
+{
+  "concept": "agents",
+  "last_updated": "2026-05-23",
+  "covers_spec": "none",
+  "source_file": [
+    "agents/auditor.md",
+    "agents/cluster-planner.md",
+    "agents/codex-consultant.md",
+    "agents/codex-reviewer.md",
+    "agents/complexity-classifier.md",
+    "agents/doc-fetcher.md",
+    "agents/doc-updater.md",
+    "agents/gemini-consultant.md",
+    "agents/implementer.md",
+    "agents/remote-runner.md",
+    "agents/spec-precheck.md"
+  ],
+  "confidence": "high",
+  "entry_points": [
+    {
+      "file": "agents/auditor.md",
+      "line": 1,
+      "symbol": "auditor",
+      "kind": "module",
+      "summary": "Scrutinizes codebase targets across correctness/perf/cleanliness/design."
+    },
+    {
+      "file": "agents/cluster-planner.md",
+      "line": 1,
+      "symbol": "cluster-planner",
+      "kind": "module",
+      "summary": "Plans sub-tasks for large split components."
+    },
+    {
+      "file": "agents/codex-consultant.md",
+      "line": 1,
+      "symbol": "codex-consultant",
+      "kind": "module",
+      "summary": "Performs Codex-tier validation and review of plan specifications."
+    },
+    {
+      "file": "agents/codex-reviewer.md",
+      "line": 1,
+      "symbol": "codex-reviewer",
+      "kind": "module",
+      "summary": "Reviews code-generation diffs against correctness and style rubrics."
+    },
+    {
+      "file": "agents/complexity-classifier.md",
+      "line": 1,
+      "symbol": "complexity-classifier",
+      "kind": "module",
+      "summary": "Classifies task files by expected execution complexity."
+    },
+    {
+      "file": "agents/doc-fetcher.md",
+      "line": 1,
+      "symbol": "doc-fetcher",
+      "kind": "module",
+      "summary": "Retrieves, filters, and ranks relevant documentation concepts."
+    },
+    {
+      "file": "agents/doc-updater.md",
+      "line": 1,
+      "symbol": "doc-updater",
+      "kind": "module",
+      "summary": "Rebuilds or refreshes concept markdown and JSON docs."
+    },
+    {
+      "file": "agents/gemini-consultant.md",
+      "line": 1,
+      "symbol": "gemini-consultant",
+      "kind": "module",
+      "summary": "Performs primary Gemini-tier validation of plan specifications."
+    },
+    {
+      "file": "agents/implementer.md",
+      "line": 1,
+      "symbol": "implementer",
+      "kind": "module",
+      "summary": "Writes code and fulfills discrete task files."
+    },
+    {
+      "file": "agents/remote-runner.md",
+      "line": 1,
+      "symbol": "remote-runner",
+      "kind": "module",
+      "summary": "Executes testing and verification inside isolated sandboxes."
+    },
+    {
+      "file": "agents/spec-precheck.md",
+      "line": 1,
+      "symbol": "spec-precheck",
+      "kind": "module",
+      "summary": "Validates planning specs and checklists for completeness."
+    }
+  ],
+  "depends_on": [
+    "scripts"
+  ],
+  "consumed_by": [
+    "commands",
+    "skills"
+  ],
+  "invariants": [
+    "Subagents are configured as isolated agents with customized system prompt instructions.",
+    "doc-updater must preserve memories verbatim from any pre-existing concept JSON."
+  ],
+  "gotchas": [
+    "Subagents are read-only except for explicitly authorized output files like findings or logs."
+  ],
+  "memories": []
+}

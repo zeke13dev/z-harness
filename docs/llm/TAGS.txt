@@ -1,0 +1,23 @@
+# Controlled tag seed — do not remove entries; add canonical aliases in section 2.
+# Format:
+#   Section 1: one tag per line (the controlled set).
+#   Section 2 (after blank line): <canonical> = <alias1>, <alias2>
+#              <canonical> must appear in section 1.
+# /z-maintain-docs TAG_COLLISIONS UX writes to section 2 automatically.
+correctness
+perf
+data-quality
+schema
+time-window
+units
+api-boundary
+retry-loop
+race-condition
+dependency
+deprecation
+lossy-default
+ux
+observability
+compliance
+
+# Aliases: <canonical> = <alias1>, <alias2>
