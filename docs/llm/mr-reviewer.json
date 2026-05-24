@@ -1,0 +1,92 @@
+{
+  "concept": "mr-reviewer",
+  "last_updated": "2026-05-23",
+  "covers_spec": "z-harness/mr-style-reviewer/SPEC.md",
+  "source_files": [
+    "commands/z-mr-review.md",
+    "agents/mr-reviewer.md",
+    "scripts/extract-dismissals.py"
+  ],
+  "confidence": "high",
+  "entry_points": [
+    {
+      "file": "commands/z-mr-review.md",
+      "line": 1,
+      "symbol": "z-mr-review",
+      "kind": "module",
+      "summary": "Orchestrates multi-LLM code-quality review of a branch diff against STYLE.md."
+    },
+    {
+      "file": "agents/mr-reviewer.md",
+      "line": 1,
+      "symbol": "mr-reviewer",
+      "kind": "module",
+      "summary": "Sonnet agent that fans out to codex/gemini consultants, deduplicates findings, and returns structured JSON to the orchestrator."
+    },
+    {
+      "file": "scripts/extract-dismissals.py",
+      "line": 1,
+      "symbol": "extract-dismissals.py",
+      "kind": "module",
+      "summary": "Computes dismissed-finding signatures by diffing consecutive MR-REVIEW.md archive snapshots."
+    }
+  ],
+  "description": "The MR-reviewer feature provides code-quality review (not correctness review) for branch diffs. It targets five categories: abstraction, defensive-bloat, test-noise, hygiene, and style-drift. Findings are ranked P0-P4 and written to ${Z_HARNESS_PLANS_DIR:-z-harness/plans}/<slug>/MR-REVIEW.md (resolved via scripts/plan-path.sh plan_dir) in TASKS.md-compatible shape. The command never blocks — users triage by deleting unwanted findings. Three LLM voices (Claude, Codex, Gemini) are fanned out in parallel; findings are deduplicated by (file, category, normalized_text) signature and tagged with which voices raised them. Voice consensus promotes findings one tier; minority voice demotes one tier; P0 is exempt from both adjustments.",
+  "invariants": [
+    "P0 findings are never demoted — not by voice consensus, not by dismissal-pattern match. Only tagged [previously-dismissed-pattern].",
+    "The mr-reviewer agent always receives a single diff_path pointing to one .patch file. Orchestrator handles chunking; agent contract is not polymorphic.",
+    "Orchestrator writes MR-REVIEW.md and the archive snapshot, not the agent. Agent returns structured JSON findings only.",
+    "STYLE.md must exist before /z-mr-review will run. There is no --no-style escape.",
+    "extract-dismissals.py is the single source of truth for dismissal signatures; both /z-mr-review and /z-style-init --amend use the same script.",
+    "Dismissal signature format: (file, category, normalized_text) — no line-range. Normalization: lowercase, collapse whitespace, strip punctuation."
+  ],
+  "gotchas": [
+    "Large diffs (> Z_MR_DIFF_CHUNK_BYTES, default 320000 bytes) trigger chunked-pass mode: N per-chunk passes + 1 whole-diff abstraction-only pass. The abstraction-only pass is the only one that can catch cross-file duplication.",
+    "Voice availability is checked via `command -v` at setup. If only Claude is available, mr_voices_degraded is logged and the run continues in single-voice mode (no consensus tier-bump possible).",
+    "Dismissal rate is computed by /z-stats. If a category's rate exceeds 30% over >= 10 runs, /z-stats emits a retire-warning.",
+    "The abstraction tooling uses a hardcoded suppression list of common symbol names (format, parse, init, get, set, new, build, run, main, etc.) to avoid flooding findings with spurious matches.",
+    "base_sha is passed to the agent so it can `git show <base_sha>:<path>` to read pre-change file context for interface-adherence verification."
+  ],
+  "five_categories": [
+    "abstraction — duplicated logic, missed extractions, cross-file symbol collisions",
+    "defensive-bloat — guards against impossible states, over-long error chains",
+    "test-noise — redundant, brittle, or dead test code",
+    "hygiene — stale comments, naming oddities, unnecessary logging",
+    "style-drift — violations of STYLE.md rules (cited by rule ID)"
+  ],
+  "severity_rubric": {
+    "P0": "Would actively cause future bugs or maintenance pain.",
+    "P1": "Clear quality regression vs rest of codebase.",
+    "P2": "STYLE.md violation or noticeable idiom drift.",
+    "P3": "Minor hygiene.",
+    "P4": "Taste-only nit."
+  },
+  "falsifiability_thresholds": {
+    "retire_category": ">30% dismissal rate over >= 10 runs per category",
+    "fold_into_audit": ">90% finding parity with /z-audit --dimension=cleanliness"
+  },
+  "telemetry_events": [
+    "mr_run_start",
+    "mr_run_end",
+    "mr_finding_emitted",
+    "mr_finding_dismissed",
+    "mr_style_missing",
+    "mr_voice_failed",
+    "mr_all_voices_failed",
+    "mr_voices_degraded"
+  ],
+  "related_concepts": [
+    "style-init",
+    "agents",
+    "commands",
+    "scripts"
+  ],
+  "depends_on": [
+    "agents",
+    "scripts"
+  ],
+  "consumed_by": [
+    "commands"
+  ],
+  "memories": []
+}

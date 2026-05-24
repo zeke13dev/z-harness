@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "generated_at": "2026-05-23T19:31:00Z",
+  "generated_at": "2026-05-24T00:00:00Z",
   "z_harness_version": "64a3dbe",
   "concepts": [
     {
@@ -18,7 +18,7 @@
         "agents/remote-runner.md",
         "agents/spec-precheck.md"
       ],
-      "last_updated": "2026-05-23",
+      "last_updated": "2026-05-24",
       "confidence": "high",
       "depends_on": [
         "scripts"
@@ -37,6 +37,7 @@
         "commands/z-brainstorm.md",
         "commands/z-debug.md",
         "commands/z-do.md",
+        "commands/z-fix.md",
         "commands/z-implement-all.md",
         "commands/z-implement-next.md",
         "commands/z-improve.md",
@@ -52,7 +53,7 @@
         "commands/z-suggest-memory.md",
         "commands/z-test.md"
       ],
-      "last_updated": "2026-05-23",
+      "last_updated": "2026-05-24",
       "confidence": "high",
       "depends_on": [
         "agents",
@@ -81,6 +82,22 @@
         "skills"
       ],
       "summary": "Appends standard JSON events to run and global logs."
+    },
+    {
+      "slug": "z-fix",
+      "source_file": [
+        "commands/z-fix.md"
+      ],
+      "last_updated": "2026-05-24",
+      "confidence": "high",
+      "depends_on": [
+        "agents",
+        "commands"
+      ],
+      "consumed_by": [
+        "commands"
+      ],
+      "summary": "Lightweight bug-fix command for the case where the user already has a diagnosis; single light-fix consult, inline implementation, non-negotiable Codex review, optional post-mortem."
     },
     {
       "slug": "skills",
@@ -112,6 +129,86 @@
       ],
       "consumed_by": [],
       "summary": "Checklists for amending spec, plan, and task checklists consistently."
+    },
+    {
+      "slug": "providers-registry",
+      "source_files": [
+        "scripts/resolve-provider.py",
+        "scripts/resolve-provider.sh",
+        "scripts/discover-providers.py",
+        "commands/z-providers-discover.md",
+        "docs/human/PROVIDERS.md"
+      ],
+      "last_updated": "2026-05-24",
+      "confidence": "high",
+      "depends_on": [
+        "scripts"
+      ],
+      "consumed_by": [
+        "agents",
+        "commands"
+      ],
+      "summary": "Config-file registry routing consultant/reviewer dispatches to any CLI-addressable LLM; three fixed roles mapped to named provider entries; resolution via scripts/resolve-provider.sh."
+    },
+    {
+      "slug": "multi-ide-exports",
+      "source_files": [
+        "scripts/export-common.py",
+        "scripts/export-cursor.py",
+        "scripts/export-codex.py",
+        "scripts/export-agy.py",
+        "scripts/audit-tarball.sh",
+        "commands/z-export.md",
+        "docs/human/MULTI-IDE.md",
+        "exports/cursor/CAPABILITIES.md",
+        "exports/codex/CAPABILITIES.md",
+        "exports/agy/CAPABILITIES.md"
+      ],
+      "last_updated": "2026-05-24",
+      "confidence": "high",
+      "depends_on": [
+        "commands",
+        "agents"
+      ],
+      "consumed_by": [],
+      "summary": "Pipeline translating Claude Code source files into Cursor (.mdc rules), Codex CLI (AGENTS.md + prompts), and Antigravity (agy-plugin.yaml + prompts); /z-export slash command; per-target CAPABILITIES.md documents dropped constructs."
+    },
+    {
+      "slug": "plan-layout-migration",
+      "source_files": [
+        "scripts/plan-path.sh",
+        "scripts/migrate-plan-layout.sh",
+        "scripts/log-event.sh",
+        "docs/human/PLAN-LAYOUT.md"
+      ],
+      "last_updated": "2026-05-24",
+      "confidence": "high",
+      "depends_on": [
+        "scripts",
+        "commands"
+      ],
+      "consumed_by": [
+        "commands"
+      ],
+      "summary": "Canonical plan layout under z-harness/plans/<slug>/; Z_HARNESS_PLANS_DIR override; dual-read fallback from legacy z-harness/<slug>/; migrate-plan-layout.sh for bulk or per-slug migration."
+    },
+    {
+      "slug": "z-update",
+      "source_files": [
+        "install.sh",
+        "scripts/bundle-plugin.sh",
+        "scripts/version.sh",
+        "commands/z-update.md",
+        "docs/human/INSTALL.md"
+      ],
+      "last_updated": "2026-05-24",
+      "confidence": "high",
+      "depends_on": [
+        "scripts",
+        "commands"
+      ],
+      "consumed_by": [],
+      "summary": "Explicit in-place plugin update via /z-update; detects symlink vs tarball mode; git pull --ff-only for symlink, atomic swap for tarball; no autoupdate; version tracked by scripts/version.sh."
     }
   ]
 }

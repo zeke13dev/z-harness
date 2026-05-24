@@ -1,0 +1,55 @@
+--- /Users/zeke/dev/z-harness/z-harness/mr-style-reviewer/archive/tasks/T006/diff-v2.patch	2026-05-23 16:51:28
++++ /Users/zeke/dev/z-harness/z-harness/mr-style-reviewer/archive/tasks/T006/diff.patch	2026-05-23 16:54:19
+@@ -1,9 +1,9 @@
+ diff --git a/commands/z-mr-review.md b/commands/z-mr-review.md
+ new file mode 100644
+-index 0000000..dc3fd47
++index 0000000..abe1cdc
+ --- /dev/null
+ +++ b/commands/z-mr-review.md
+-@@ -0,0 +1,706 @@
++@@ -0,0 +1,714 @@
+ +---
+ +description: Multi-LLM code-quality review of the current branch diff against STYLE.md. Never blocks; ranks P0-P4; output is a TASKS.md-shape file you edit and feed to /z-implement-all.
+ +argument-hint: [--slug <slug>] [--base <git-ref>] [--include-untracked] [--deep] [--force-on-trunk]
+@@ -464,6 +464,8 @@
+ +From the parsed findings array:
+ +
+ +```python
+++import json as _json, os as _os
+++_archive_dir = _os.environ['ARCHIVE_DIR']
+ +total_findings = len(findings)
+ +by_severity = {"P0": 0, "P1": 0, "P2": 0, "P3": 0, "P4": 0}
+ +by_category = {}
+@@ -471,6 +473,12 @@
+ +    by_severity[f["severity"]] += 1
+ +    cat = f.get("category", "uncategorized")
+ +    by_category[cat] = by_category.get(cat, 0) + 1
+++
+++# Serialize to files so the shell can read them back
+++with open(f"{_archive_dir}/by_severity.json", "w") as _fh:
+++    _fh.write(_json.dumps(by_severity))
+++with open(f"{_archive_dir}/by_category.json", "w") as _fh:
+++    _fh.write(_json.dumps(by_category))
+ +
+ +# Group findings by severity for ordered output (P0 first)
+ +severity_order = ["P0", "P1", "P2", "P3", "P4"]
+@@ -483,14 +491,14 @@
+ +}
+ +```
+ +
+-+Serialize `by_category` to JSON for use in Step 3g:
+++Then read back into shell variables:
+ +
+ +```bash
+-+BY_CATEGORY_JSON="$(python3 -c 'import json, sys; print(json.dumps(json.loads(sys.argv[1])))' "$BY_CATEGORY_JSON")"
+++BY_SEVERITY_JSON="$(cat "$ARCHIVE_DIR/by_severity.json")"
+++BY_CATEGORY_JSON="$(cat "$ARCHIVE_DIR/by_category.json")"
+++TOTAL_FINDINGS="$(python3 -c 'import json,sys; print(sum(json.load(open(sys.argv[1])).values()))' "$ARCHIVE_DIR/by_severity.json")"
+ +```
+ +
+-+(The `BY_CATEGORY_JSON` shell variable must be populated from the `by_category` dict computed above — pass it as an env var or inline it in the same Python block that computes aggregates.)
+-+
+ +Assign T-MR-NNN IDs by iterating findings in severity order (P0 first, then P1, P2, P3, P4), then in original finding order within each severity group. IDs start at T-MR-001.
+ +
+ +Compute `STYLE_MD_REVISION`:

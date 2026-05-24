@@ -16,11 +16,11 @@ $ARGUMENTS
 ## Setup
 
 1. **Derive slug.** If `$ARGUMENTS` contains `--slug=<value>`, use that verbatim. Otherwise auto-derive from the topic: short kebab-case, 2-4 words (e.g. "rethink batting order model" → `rethink-batting-order`). If the auto-derived slug is non-obvious, confirm via `AskUserQuestion`.
-2. **Export** `Z_HARNESS_SLUG=<slug>` for all subsequent shell calls and subagents.
+2. **Export** `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")` for all subsequent shell calls and subagents.
 3. Pick a run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`.
-4. `mkdir -p z-harness/$Z_HARNESS_SLUG/archive/$RUN/transcripts`.
-5. **Existing slug-dir handling.** Run `ls z-harness/` to check for a matching slug dir. If `z-harness/$Z_HARNESS_SLUG/BRAINSTORM.md` exists, prompt the user via `AskUserQuestion`:
-   - **overwrite** — archive existing `BRAINSTORM.md` to `z-harness/$Z_HARNESS_SLUG/archive/$RUN/BRAINSTORM.md.previous-<N>` (where `<N>` is the next free integer in that archive dir) and start fresh
+4. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`.
+5. **Existing slug-dir handling.** Run `ls z-harness/` to check for a matching slug dir. If `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md` exists, prompt the user via `AskUserQuestion`:
+   - **overwrite** — archive existing `BRAINSTORM.md` to `$Z_HARNESS_PLAN_DIR/archive/$RUN/BRAINSTORM.md.previous-<N>` (where `<N>` is the next free integer in that archive dir) and start fresh
    - **abort** — exit cleanly with no changes
 6. **Version stamp + log run start:**
    ```bash
@@ -35,9 +35,9 @@ $ARGUMENTS
 7. Notification policy: read env `Z_HARNESS_NOTIFY` (default `approval_only`). Values: `off`, `approval_only`, `all`.
 8. **Cost guardrail.** Target ≤200K tokens. If the running total exceeds 200K (rough estimate: sum prompt+response chars across consult events ÷ 4), log a warning event and continue — do not halt.
 
-**All paths live under `z-harness/<slug>/`:**
-- `z-harness/<slug>/BRAINSTORM.md`
-- `z-harness/<slug>/archive/<RUN>/...`
+**All paths live under `$Z_HARNESS_PLAN_DIR/`:**
+- `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md`
+- `$Z_HARNESS_PLAN_DIR/archive/<RUN>/...`
 
 ## Phase telemetry (mandatory)
 
@@ -95,10 +95,10 @@ If `Z_HARNESS_BRAINSTORM_EXPLORE` is unset or `0`, skip this step entirely — b
 
 ### 1c. RESEARCH.md ingestion
 
-If `z-harness/$Z_HARNESS_SLUG/RESEARCH.md` exists, read it.
+If `$Z_HARNESS_PLAN_DIR/RESEARCH.md` exists, read it.
 
 - **≤20 KB:** inline the full content into the scaffolding payload.
-- **>20 KB:** produce an **extractive summary** that preserves citations and constraints (do not paraphrase; copy the cited bullets and constraint statements verbatim, drop the prose). Write the summary to `z-harness/$Z_HARNESS_SLUG/archive/$RUN/research-summary-for-brainstorm.md`. Inline the summary instead of the full file.
+- **>20 KB:** produce an **extractive summary** that preserves citations and constraints (do not paraphrase; copy the cited bullets and constraint statements verbatim, drop the prose). Write the summary to `$Z_HARNESS_PLAN_DIR/archive/$RUN/research-summary-for-brainstorm.md`. Inline the summary instead of the full file.
 
 Record `depends_on: [RESEARCH.md]` in the eventual BRAINSTORM.md frontmatter if RESEARCH.md was ingested.
 
@@ -117,7 +117,7 @@ input_hash = sha256(canonicalize(
 
 `canonicalize`: strip leading/trailing whitespace; collapse all internal runs of whitespace to a single space.
 
-Checkpoint: write the assembled scaffolding to `z-harness/$Z_HARNESS_SLUG/archive/$RUN/phase1-scaffolding.md`.
+Checkpoint: write the assembled scaffolding to `$Z_HARNESS_PLAN_DIR/archive/$RUN/phase1-scaffolding.md`.
 
 ---
 
@@ -141,12 +141,12 @@ Agent(
   prompt="MODE: brainstorm\n\nTopic: <topic>\n\nScaffolding:\n<paste assembled payload>\n\n<IDEATOR_SCHEMA>"
 )
 Agent(
-  subagent_type="codex-consultant",
+  subagent_type="consultant-secondary",
   description="Codex ideator for <slug>",
   prompt="MODE: brainstorm\n\nTopic: <topic>\n\nScaffolding:\n<same payload>\n\n<IDEATOR_SCHEMA>"
 )
 Agent(
-  subagent_type="gemini-consultant",
+  subagent_type="consultant-primary",
   description="Gemini ideator for <slug>",
   prompt="MODE: brainstorm\n\nTopic: <topic>\n\nScaffolding:\n<same payload>\n\n<IDEATOR_SCHEMA>"
 )
@@ -177,7 +177,7 @@ Log every individual failure as `ideator_failed` regardless of the bucket above.
 
 3. **Orchestrator recommendation.** Pick one framing as your tentative recommendation with a one-line rationale. The user is free to override.
 
-4. **Write `z-harness/$Z_HARNESS_SLUG/BRAINSTORM.md`** with YAML frontmatter:
+4. **Write `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md`** with YAML frontmatter:
 
    ```yaml
    ---
@@ -257,7 +257,7 @@ Branch on the user's Phase 3 choice:
 
 ### User picked Restart
 
-1. Archive the just-written BRAINSTORM.md to `z-harness/$Z_HARNESS_SLUG/archive/$RUN/BRAINSTORM.md.previous-<N>` (next free integer). Before archiving, update the archived copy's frontmatter to `status: complete`, `chosen_framing: restart` so the historical record is spec-valid.
+1. Archive the just-written BRAINSTORM.md to `$Z_HARNESS_PLAN_DIR/archive/$RUN/BRAINSTORM.md.previous-<N>` (next free integer). Before archiving, update the archived copy's frontmatter to `status: complete`, `chosen_framing: restart` so the historical record is spec-valid.
 2. Ask the user (free-text or `AskUserQuestion`) for the refined topic.
 3. Start a fresh RUN: regenerate `RUN`, re-mkdir, re-emit `brainstorm_run_start`, and loop back to Phase 1 with the refined topic.
 

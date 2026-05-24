@@ -11,8 +11,8 @@ Same logic as `/z-implement-all` / `/z-implement-next`:
 
 1. Enumerate subdirs of `z-harness/` containing a `TASKS.md`. Also check legacy flat `z-harness/TASKS.md`.
 2. Single candidate → use it. Multiple → `AskUserQuestion` to pick (or honor `--slug <slug>` argument). Zero → tell user nothing to review; stop.
-3. Export `Z_HARNESS_SLUG=<slug>` (or leave unset for legacy flat).
-4. `BASE = z-harness/$Z_HARNESS_SLUG` (or `z-harness` for legacy).
+3. Export `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")` (or leave unset for legacy flat).
+4. `BASE = $Z_HARNESS_PLAN_DIR` (or `z-harness` for legacy).
 
 Pick a review run id: `RRUN=$(date -u +%Y%m%dT%H%M%SZ)-review`. Create `$BASE/archive/$RRUN/`.
 
@@ -25,6 +25,15 @@ v = json.loads(sys.argv[1]); v["slug"] = sys.argv[2]
 print(json.dumps(v))
 ' "$VERSION_BLOB" "$Z_HARNESS_SLUG")"
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_all_start "$START_PAYLOAD"
+```
+
+Log provider resolution (once per run, guarded against re-emission):
+```bash
+if [ ! -f "$BASE/archive/$RRUN/.providers-logged" ]; then
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-providers.sh" || true
+  mkdir -p "$BASE/archive/$RRUN"
+  touch "$BASE/archive/$RRUN/.providers-logged"
+fi
 ```
 
 ## Phase 1 — Sanity check task status
@@ -118,12 +127,12 @@ Each is asked the **two-pronged** review:
 
 ```
 Agent(
-  subagent_type="gemini-consultant",
+  subagent_type="consultant-primary",
   description="Final-review (Gemini) for plan <slug>",
   prompt="MODE: final-review-2pronged\n\n<full prompt with both prongs, plus paths to SPEC/PLAN/TASKS and cumulative.diff>"
 )
 Agent(
-  subagent_type="codex-consultant",
+  subagent_type="consultant-secondary",
   description="Final-review (Codex) for plan <slug>",
   prompt="MODE: final-review-2pronged\n\n<same>"
 )

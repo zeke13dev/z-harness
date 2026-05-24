@@ -1,0 +1,18 @@
+--- z-harness/z-fix-hypothesis-driven/archive/tasks/T005/diff-v1.patch	2026-05-24 00:08:39
++++ z-harness/z-fix-hypothesis-driven/archive/tasks/T005/diff.patch	2026-05-24 00:10:15
+@@ -1,5 +1,5 @@
+ diff --git a/docs/llm/commands.json b/docs/llm/commands.json
+-index d72fa38..a6694d0 100644
++index d72fa38..a09dab9 100644
+ --- a/docs/llm/commands.json
+ +++ b/docs/llm/commands.json
+ @@ -1,12 +1,14 @@
+@@ -53,7 +53,7 @@
+ +      "line": 1,
+ +      "symbol": "z-fix",
+ +      "kind": "module",
+-+      "summary": "Lightweight bug-fix path for known-diagnosis cases: wrong-tool gate, single light-fix consult (Codex + Gemini parallel), inline implementation, non-negotiable Codex review, optional post-mortem auto-suggested after >1 review cycle."
+++      "summary": "Lightweight bug-fix command for the case where the user already has a diagnosis; single light-fix consult, inline implementation, non-negotiable Codex review, optional post-mortem."
+ +    },
+      {
+        "file": "commands/z-test.md",

@@ -1,4 +1,16 @@
 .claude/settings.local.json
+.claude/worktrees/
 .DS_Store
 *.swp
 .antigravitycli/
+
+# Per-user provider config (repo-local override)
+.z-harness/
+
+# Build artifacts
+dist/
+__pycache__/
+*.pyc
+
+# Stray top-level archive (agent debris; canonical location is z-harness/archive/)
+/archive/

@@ -1,8 +1,8 @@
 ---
-description: Orchestrate implementation of ALL pending tasks in z-harness/TASKS.md, spawning a fresh implementer subagent per task and a codex-reviewer per task. Halts on blockers, retries once on review failure, push-notifies user on every gate.
+description: Orchestrate implementation of ALL pending tasks in z-harness/TASKS.md, spawning a fresh implementer subagent per task and a reviewer per task. Halts on blockers, retries once on review failure, push-notifies user on every gate.
 ---
 
-You are the **z-harness `/z-implement-all`** orchestrator. Your job is to drive the task queue to completion without losing the per-task fresh-context guarantee. You do not implement code yourself — you delegate each task to a fresh `implementer` subagent and each review to a fresh `codex-reviewer` subagent.
+You are the **z-harness `/z-implement-all`** orchestrator. Your job is to drive the task queue to completion without losing the per-task fresh-context guarantee. You do not implement code yourself — you delegate each task to a fresh `implementer` subagent and each review to a fresh `reviewer` subagent.
 
 Notification policy: read env `Z_HARNESS_NOTIFY` (default `approval_only`).
 
@@ -10,36 +10,48 @@ Notification policy: read env `Z_HARNESS_NOTIFY` (default `approval_only`).
 
 - `--ack` — Override the SHARED-CONCERNS.md ack-gate when iterating a tree-rooted plan produced by `/z-plan-split`. Equivalent to manually flipping `acknowledged: true` in the file. No-op for legacy single-slug plans.
 - `--force-partial` — Override the partial-tree gate when iterating a tree-rooted plan whose SHARED-CONCERNS.md has `partial_tree: true` (i.e. one or more clusters failed planning). Implies the user accepts that overlap detection is a lower bound on a partial tree. No-op for legacy single-slug plans.
+- `--tasks=<path>` — Override the default tasks file location. By default the orchestrator reads `$TASKS_FILE` (discovered via slug detection in Setup step 2). When `--tasks=<path>` is provided, that file is used as the task queue instead. `<path>` may be repo-relative (e.g. `z-harness/mr-style-reviewer/MR-REVIEW.md`) or absolute. `$BASE` is derived from the directory containing the tasks file — e.g. `--tasks=z-harness/mr-style-reviewer/MR-REVIEW.md` sets `BASE=z-harness/mr-style-reviewer` so SPEC.md, PLAN.md, and archive paths resolve correctly. Slug detection (step 2) is skipped when `--tasks` is supplied; tree-rooted and MANIFEST validation are bypassed for the single overridden file. `--ack` and `--force-partial` are no-ops when `--tasks` is active.
 
-Both flags are inert for legacy (single-slug) plans and only affect tree-rooted discovery in Setup step 2.
+Both `--ack` and `--force-partial` are inert for legacy (single-slug) plans and only affect tree-rooted discovery in Setup step 2.
 
 ## Setup
 
 1. `cd` to the repo root. Abort if no `z-harness/` directory.
-2. **Discover plan slug.** Multiple plans may coexist under `z-harness/<slug>/`. A `<slug>/` may be either a **legacy single-slug plan** (contains `TASKS.md` directly) or a **tree-rooted plan** produced by `/z-plan-split` (contains `MANIFEST.md` + per-cluster subdirectories, each with its own `TASKS.md`):
+
+   **`--tasks` fast path.** If the user invoked with `--tasks=<path>`, resolve the path to absolute and derive `BASE` as its parent directory:
+   ```bash
+   TASKS_FILE="$(realpath <path>)"           # make absolute
+   BASE="$(dirname "$TASKS_FILE")"           # e.g. /abs/z-harness/mr-style-reviewer
+   Z_HARNESS_SLUG="$(basename "$BASE")"      # e.g. mr-style-reviewer (for logging only)
+   ```
+   Skip steps 2 (slug discovery) and 2a–2d (MANIFEST/SHARED-CONCERNS validation) entirely. Jump directly to step 3, binding `BASE` and the tasks file as derived above. `--ack` and `--force-partial` are no-ops in this mode.
+
+   **Example:** `/z-implement-all --tasks=z-harness/mr-style-reviewer/MR-REVIEW.md` reads task blocks from `MR-REVIEW.md` (e.g. `T-MR-001`, `T-MR-002`, …) and resolves SPEC.md at `z-harness/mr-style-reviewer/SPEC.md`.
+
+2. **Discover plan slug.** Multiple plans may coexist under `$Z_HARNESS_PLAN_DIR/`. A `$Z_HARNESS_PLAN_DIR/` may be either a **legacy single-slug plan** (contains `TASKS.md` directly) or a **tree-rooted plan** produced by `/z-plan-split` (contains `MANIFEST.md` + per-cluster subdirectories, each with its own `TASKS.md`):
 
    **2a. Enumerate candidates.**
-   - For each subdir of `z-harness/`: classify as `tree-rooted` if `<slug>/MANIFEST.md` exists, else `legacy` if `<slug>/TASKS.md` exists, else skip.
+   - For each subdir of `z-harness/plans/` (canonical) and `z-harness/` (legacy): classify as `tree-rooted` if `$Z_HARNESS_PLAN_DIR/MANIFEST.md` exists, else `legacy` if `$Z_HARNESS_PLAN_DIR/TASKS.md` exists, else skip.
    - Also check for the legacy flat layout (`z-harness/TASKS.md` directly).
    - Zero candidates → tell user to run `/z-plan` first; abort.
    - One candidate → use it.
    - Multiple candidates → `AskUserQuestion` to pick. Mixed legacy + tree-rooted slugs are allowed in the same `/z-implement-all` invocation: the user picks one, validation/expansion below depends on its kind.
-   - Export `Z_HARNESS_SLUG=<slug>` (or leave unset for legacy flat).
+   - Export `Z_HARNESS_SLUG=<slug>` (or leave unset for legacy flat) and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")`.
 
-   **2b. If chosen slug is tree-rooted (has `<slug>/MANIFEST.md`), validate in order:**
+   **2b. If chosen slug is tree-rooted (has `$Z_HARNESS_PLAN_DIR/MANIFEST.md`), validate in order:**
 
-   Parse MANIFEST.md once: extract (i) the YAML frontmatter (`status`, `total_clusters`, `clusters_ready`), (ii) the Clusters table (each row: `ID`, `Path`, `Status`, …), and (iii) the `## Run order` section (an ordered list of cluster IDs). The `Path` column is canonical — every downstream BASE binding in 2c reads it from there; do **not** synthesize paths from `<slug>/<cluster-id>/`.
+   Parse MANIFEST.md once: extract (i) the YAML frontmatter (`status`, `total_clusters`, `clusters_ready`), (ii) the Clusters table (each row: `ID`, `Path`, `Status`, …), and (iii) the `## Run order` section (an ordered list of cluster IDs). The `Path` column is canonical — every downstream BASE binding in 2c reads it from there; do **not** synthesize paths from `$Z_HARNESS_PLAN_DIR/<cluster-id>/`.
 
-   1. **Nested-MANIFEST gate (depth invariant).** One-level recursion is invariant per `/z-plan-split` SPEC. Check `find z-harness/$Z_HARNESS_SLUG/*/ -name MANIFEST.md` (excluding the root MANIFEST). If any are found, halt with `tree_depth_exceeded` event:
+   1. **Nested-MANIFEST gate (depth invariant).** One-level recursion is invariant per `/z-plan-split` SPEC. Check `find $Z_HARNESS_PLAN_DIR/*/ -name MANIFEST.md` (excluding the root MANIFEST). If any are found, halt with `tree_depth_exceeded` event:
       ```bash
       bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" tree_depth_exceeded \
         "$(printf '{"slug":"%s","nested_paths":%s}' "$Z_HARNESS_SLUG" "$NESTED_JSON_ARRAY")"
       ```
       Push-notify and abort. No override — a tree-of-trees is structurally unsupported in v1.
-   2. **SHARED-CONCERNS.md existence gate.** `<slug>/SHARED-CONCERNS.md` must exist (cluster-planner reconciliation writes it unconditionally). If absent, halt with `shared_concerns_missing` event before attempting any frontmatter read:
+   2. **SHARED-CONCERNS.md existence gate.** `$Z_HARNESS_PLAN_DIR/SHARED-CONCERNS.md` must exist (cluster-planner reconciliation writes it unconditionally). If absent, halt with `shared_concerns_missing` event before attempting any frontmatter read:
       ```bash
       bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" shared_concerns_missing \
-        "$(printf '{"slug":"%s","expected_path":"%s"}' "$Z_HARNESS_SLUG" "z-harness/$Z_HARNESS_SLUG/SHARED-CONCERNS.md")"
+        "$(printf '{"slug":"%s","expected_path":"%s"}' "$Z_HARNESS_SLUG" "$Z_HARNESS_PLAN_DIR/SHARED-CONCERNS.md")"
       ```
       Push-notify and abort. No override — a tree-rooted slug without SHARED-CONCERNS.md is structurally malformed (re-run `/z-plan-split` to regenerate).
    3. **MANIFEST frontmatter consistency.** Cross-check the parsed frontmatter against the Clusters table:
@@ -99,12 +111,18 @@ Both flags are inert for legacy (single-slug) plans and only affect tree-rooted 
         ```
         Continue.
 
-   **2c. Expand tree-rooted slug into cluster sequence.** On all validations passing, iterate `clusters_to_run` **sequentially**. For each cluster ID in the list, look up its row in the parsed Clusters table and read the `Path` column verbatim — this is the canonical BASE for the cluster (`BASE = <Path value>`). Do **not** synthesize `BASE = z-harness/<slug>/<cluster-id>/` from the ID; the MANIFEST's `Path` column is the source of truth (it may differ from the naive form). Validate that the lookup resolves to exactly one row per ID (already guaranteed by 2b.4's bijection check). Run the full main loop (steps 1–8) on that cluster's `BASE/TASKS.md`, then advance to the next cluster. Within each cluster, the existing N=3 parallel-batching applies as today (intra-cluster parallelism honored; cross-cluster parallelism is v2).
+   **2c. Expand tree-rooted slug into cluster sequence.** On all validations passing, iterate `clusters_to_run` **sequentially**. For each cluster ID in the list, look up its row in the parsed Clusters table and read the `Path` column verbatim — this is the canonical BASE for the cluster (`BASE = <Path value>`). Do **not** synthesize `BASE = $Z_HARNESS_PLAN_DIR/<cluster-id>/` from the ID; the MANIFEST's `Path` column is the source of truth (it may differ from the naive form). Validate that the lookup resolves to exactly one row per ID (already guaranteed by 2b.4's bijection check). Run the full main loop (steps 1–8) on that cluster's `BASE/TASKS.md`, then advance to the next cluster. Within each cluster, the existing N=3 parallel-batching applies as today (intra-cluster parallelism honored; cross-cluster parallelism is v2).
 
    **2d. If chosen slug is legacy (TASKS.md directly under it, no MANIFEST.md),** behavior is unchanged: a single `BASE` for the whole run, no tree validation, `--ack` and `--force-partial` are no-ops.
 
-3. From here on, **`BASE`** = `z-harness/$Z_HARNESS_SLUG` for legacy slugs (or `z-harness` for legacy flat). For tree-rooted slugs, `BASE` is rebound per-cluster as the orchestrator iterates the run-order sequence from 2c. All paths use `$BASE`.
-4. Read `$BASE/TASKS.md` once into memory — you'll re-read between batches to pick up status flips. **Do NOT pre-extract SPEC/PLAN slices in main thread** — subagents will Read them directly from `$BASE/SPEC.md` and `$BASE/PLAN.md` themselves. This keeps the orchestrator main-thread context light across many tasks.
+3. From here on, **`BASE`** = `$Z_HARNESS_PLAN_DIR` for legacy slugs (or `z-harness` for legacy flat). For tree-rooted slugs, `BASE` is rebound per-cluster as the orchestrator iterates the run-order sequence from 2c. When `--tasks` was provided, `BASE` was set in step 1's fast path. All paths use `$BASE`.
+
+   **Set the default tasks file now that `BASE` is bound** (the `--tasks` fast path already set `TASKS_FILE` in step 1, so the `:-` default leaves it alone):
+   ```bash
+   TASKS_FILE="${TASKS_FILE:-$BASE/TASKS.md}"
+   ```
+
+4. Read `$TASKS_FILE` into memory — always set by step 1's fast path or step 3's default above. You'll re-read between batches to pick up status flips. **Do NOT pre-extract SPEC/PLAN slices in main thread** — subagents will Read them directly from `$BASE/SPEC.md` and `$BASE/PLAN.md` themselves. This keeps the orchestrator main-thread context light across many tasks.
 5. **Version stamp + run_start event:**
    ```bash
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
@@ -114,6 +132,15 @@ Both flags are inert for legacy (single-slug) plans and only affect tree-rooted 
    print(json.dumps(v))
    ' "$VERSION_BLOB" "$Z_HARNESS_SLUG")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" run_start "$START_PAYLOAD"
+   ```
+   Then log provider resolution (once per run, guarded against re-emission):
+   ```bash
+   IMPL_RUN="$(date -u +%Y%m%dT%H%M%SZ)-implement"
+   if [ ! -f "$BASE/archive/$IMPL_RUN/.providers-logged" ]; then
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-providers.sh" || true
+     mkdir -p "$BASE/archive/$IMPL_RUN"
+     touch "$BASE/archive/$IMPL_RUN/.providers-logged"
+   fi
    ```
 6. **One-time local cargo clean** (only when remote-runner is in play): if any task in the queue has a `**REMOTE_VERIFY:**` line and the repo has a `Cargo.toml`, set env `Z_HARNESS_LOCAL_CARGO_CLEAN=1` (the remote-runner uses this to trigger a one-time `cargo clean` on the local checkout). Local cargo builds should be rare in this harness.
 7. Send initial `PushNotification` (if policy != `off`): "Orchestration started on plan `<slug>`. <N> pending tasks. Plugin version: <z_harness_version>."
@@ -153,7 +180,7 @@ Repeat until no eligible task remains or you halt:
 
 ### 1. Pick next task
 
-Re-read `TASKS.md`. Build a quick eligibility check:
+Re-read `$TASKS_FILE`. Build a quick eligibility check:
 
 - Status is `[ ]` (pending)
 - **Every** dependency listed under "Depends on" is `[x]` (done) — go by task-level deps, not phase headings (phases mislead — e.g. T006 depends on T010+T011 even though they're in different phases)
@@ -190,7 +217,7 @@ Critical: **never retry a skip-flagged task in the same run** unless the user pi
 
 ### 3. Mark in-progress
 
-Edit `$BASE/TASKS.md`: flip the chosen task's `[ ]` to `[~]`. Log:
+Edit `$TASKS_FILE`: flip the chosen task's `[ ]` to `[~]`. Log:
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tasks/<task-id>" task_start '{"id":"<task-id>"}'
 ```
@@ -229,7 +256,7 @@ Spawn the precheck before any code is written:
 Agent(
   subagent_type="spec-precheck",
   description="Spec precheck <task-id>",
-  prompt="<task-id>\n\n<task block verbatim>\n\n$BASE: <abs path to z-harness/<slug>>\nRepo root: <abs path>\nrelevant_docs (paths from step 4b — Read these for concept grounding): <paths>"
+  prompt="<task-id>\n\n<task block verbatim>\n\n$BASE: <abs path to $Z_HARNESS_PLAN_DIR>\nRepo root: <abs path>\nrelevant_docs (paths from step 4b — Read these for concept grounding): <paths>"
 )
 ```
 
@@ -285,7 +312,7 @@ git diff > $BASE/archive/tasks/<task-id>/diff.patch 2>/dev/null \
 
 ```
 Agent(
-  subagent_type="codex-reviewer",
+  subagent_type="reviewer",
   description="Codex review <task-id>",
   prompt="task id: <id>\ntask description: <title>\nacceptance criteria: <criteria verbatim from task block>\ndiff.patch path: <abs path>\nchanged files: <abs paths>\nrelated downstream files (paths only; reviewer Reads them itself): <related_files paths from step 4a>\nrelevant_docs (paths — verify the diff didn't break invariants stated in these): <paths from step 4b>\n$BASE: <abs path>  (read SPEC.md yourself for relevant sections)"
 )
@@ -328,7 +355,7 @@ Implementer prompt on cycle ≥ 2 is shorter than cycle 1:
 Agent(
   subagent_type="implementer",
   description="Implement <task-id> v<CYCLE>",
-  prompt="<task-id> RETRY v<CYCLE>\n\n<task block verbatim — unchanged>\n\nPrior attempt diff (already on disk at $BASE/archive/tasks/<id>/diff-v<CYCLE-1>.patch — READ IT FIRST, then patch ONLY what the reviewer flagged):\n\n=== Reviewer findings to address ===\n<verbatim ≤8K return from codex-reviewer>\n\nDo NOT rewrite from scratch. Apply targeted fixes. Return the same STATUS report shape."
+  prompt="<task-id> RETRY v<CYCLE>\n\n<task block verbatim — unchanged>\n\nPrior attempt diff (already on disk at $BASE/archive/tasks/<id>/diff-v<CYCLE-1>.patch — READ IT FIRST, then patch ONLY what the reviewer flagged):\n\n=== Reviewer findings to address ===\n<verbatim ≤8K return from reviewer>\n\nDo NOT rewrite from scratch. Apply targeted fixes. Return the same STATUS report shape."
 )
 ```
 
@@ -345,7 +372,7 @@ Reviewer prompt on cycle ≥ 2:
 
 ```
 Agent(
-  subagent_type="codex-reviewer",
+  subagent_type="reviewer",
   description="Codex review <task-id> v<CYCLE>",
   prompt="task id: <id>\ntask description: <title>\nReview ROUND v<CYCLE> — focus on whether the prior findings were addressed; do NOT re-flag issues outside the delta.\n\nPrior findings (v<CYCLE-1>):\n<verbatim ≤8K reviewer return from prior cycle>\n\nImplementer's claim of what changed: <SUMMARY from implementer return>\n\nDelta patch (between-attempts): $BASE/archive/tasks/<id>/delta-v<CYCLE>.patch\nFull current diff: $BASE/archive/tasks/<id>/diff.patch\nSPEC excerpt: <slice>\nchanged files: <abs paths>"
 )
@@ -388,7 +415,7 @@ If `$BASE/test-runner.json` is absent OR the task block has no `**Tests:**` line
 
 ### 8. Mark done
 
-1. Flip `[~]` to `[x]` in `$BASE/TASKS.md`. Add a one-line completion note (e.g. "T004 done; reviewer flagged 1 minor (deferred); 3/3 tests passed").
+1. Flip `[~]` to `[x]` in `$TASKS_FILE`. Add a one-line completion note (e.g. "T004 done; reviewer flagged 1 minor (deferred); 3/3 tests passed").
 2. Write per-task summary file `$BASE/archive/tasks/<task-id>/SUMMARY.md` with outcome + counts. Future references to this task pull from the file rather than re-loading the full reviewer return into main thread.
 3. Log:
 ```bash
@@ -404,7 +431,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tas
 
 When the loop exits (no more eligible tasks, or you halted):
 
-1. Re-read `TASKS.md` for final counts: `done`, `pending`, `in_progress`, `skipped`.
+1. Re-read `$TASKS_FILE` for final counts: `done`, `pending`, `in_progress`, `skipped`.
 2. Write a summary message to the user:
    - Counts
    - Skipped tasks with reasons (REMOTE / wall-clock / human action required)
@@ -434,7 +461,7 @@ For each task track, the orchestrator emits these event kinds (in order):
 | `implement_start` | Just before spawning `implementer` (each retry counts) | `id`, `retry` (0=first, 1=retry) |
 | `implement_end` | Implementer returned | `id`, `retry`, `status`, `files_changed_count`, `wall_ms` |
 | `diff_capture` | After `git diff` | `id`, `diff_bytes` |
-| `review_start` | Just before spawning `codex-reviewer` (each cycle) | `id`, `cycle` (1, 2, ...) |
+| `review_start` | Just before spawning `reviewer` (each cycle) | `id`, `cycle` (1, 2, ...) |
 | `review_end` | Reviewer returned | `id`, `cycle`, `wall_ms`, `response_chars`, `blockers`, `majors` |
 | `decision_gate` | Halted for user input | `id`, `reason` (`spec_problem`/`decision_needed`/`needs_clarification`/`review_failed`), `wait_ms` (filled in after user replies) |
 | `task_done` | Marked `[x]` | `id`, `total_retries`, `review_cycles`, `task_wall_ms` (start→done), `precheck_wall_ms`, `implement_wall_ms_sum`, `review_wall_ms_sum`, `user_wait_ms_sum` |
@@ -442,7 +469,7 @@ For each task track, the orchestrator emits these event kinds (in order):
 
 **Implementation pattern for any subagent call:**
 
-Most `*_start` / `*_end` events are emitted by the subagents themselves (the orchestrator can't time a subagent from outside, since `Agent()` is an in-process tool call, not a shell process). The relevant subagents — `spec-precheck`, `implementer`, `codex-reviewer` — call `scripts/log-phase.sh start`/`end` at the top and bottom of their procedure. Read those agent files for the exact payload shape.
+Most `*_start` / `*_end` events are emitted by the subagents themselves (the orchestrator can't time a subagent from outside, since `Agent()` is an in-process tool call, not a shell process). The relevant subagents — `spec-precheck`, `implementer`, `reviewer` — call `scripts/log-phase.sh start`/`end` at the top and bottom of their procedure. Read those agent files for the exact payload shape.
 
 For orchestrator-side events (`task_start`, `task_done`, `task_halt`, `decision_gate`, `batch_done`) use `log-phase.sh wrap` when timing a single shell op, or the explicit `start`/`end` pair when timing spans multiple shell calls:
 

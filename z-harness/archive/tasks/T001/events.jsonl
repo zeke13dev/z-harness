@@ -24,3 +24,12 @@
 {"ts":"2026-05-23T08:49:47Z","run":"tasks/T001","kind":"precheck_start","id":"T001"}
 {"ts":"2026-05-23T08:50:49Z","run":"tasks/T001","kind":"precheck_end","id":"T001","status":"ok","references_checked":12,"wall_ms":61750}
 {"ts":"2026-05-23T08:55:04Z","run":"tasks/T001","kind":"task_done","id":"T001","retries":0,"review_blockers":0,"review_cycles":1,"tests_passed":0,"tests_failed":0}
+{"ts":"2026-05-23T21:55:17Z","run":"tasks/T001","kind":"review_start","id":"T001","cycle":2}
+{"ts":"2026-05-23T22:00:03Z","run":"tasks/T001","kind":"task_done","id":"T001","review_cycles":2,"review_blockers":0,"retries":1}
+{"ts":"2026-05-24T06:50:20Z","run":"tasks/T001","kind":"precheck_start","id":"T001"}
+{"ts":"2026-05-24T06:52:21Z","run":"tasks/T001","kind":"task_start","id":"T001"}
+{"ts":"2026-05-24T06:56:09Z","run":"tasks/T001","kind":"review_start","id":"T001","cycle":1}
+{"ts":"2026-05-24T06:57:46Z","run":"tasks/T001","kind":"review_end","id":"T001","cycle":1,"blockers":2,"majors":1,"prompt_chars":2350,"response_chars":1950,"return_chars":800,"wall_ms":97108}
+{"ts":"2026-05-24T07:02:38Z","run":"tasks/T001","kind":"task_done","id":"T001","retries":1,"review_cycles":2,"review_blockers":2}
+{"ts":"2026-05-24T10:38:12Z","run":"tasks/T001","kind":"task_start","id":"T001","attempt":1}
+{"ts":"2026-05-24T10:51:25Z","run":"tasks/T001","kind":"task_done","id":"T001","retries":0,"review_blockers":0,"review_cycles":0,"note":"net-new files mostly pre-existing; edits to log-event.sh only"}

@@ -1,0 +1,493 @@
+diff --git a/scripts/resolve-provider.py b/scripts/resolve-provider.py
+new file mode 100755
+index 0000000..286985b
+--- /dev/null
++++ b/scripts/resolve-provider.py
+@@ -0,0 +1,233 @@
++#!/usr/bin/env python3
++"""
++resolve-provider.py <role>
++
++Resolves a provider role to its full JSON descriptor.
++
++Config locations (in priority order — repo wins):
++  1. ~/.config/z-harness/providers.json  (user-global)
++  2. $Z_HARNESS_REPO_PROVIDERS            (env override for testability)
++     or <repo>/.z-harness/providers.json (repo-local default)
++
++Output (stdout): JSON with keys: role, provider, command, args_template, stdin,
++                 timeout_s, model_label
++
++Exit codes:
++  0  success
++  1  role unbound, CLI not on PATH, or invariant violation
++  2  bad usage or schema error
++"""
++
++import json
++import os
++import shutil
++import subprocess
++import sys
++from pathlib import Path
++
++
++# ---------------------------------------------------------------------------
++# Config loading
++# ---------------------------------------------------------------------------
++
++def _load(path: Path) -> dict:
++    """Load JSON from path; return {} if file missing."""
++    if not path.exists():
++        return {}
++    with open(path) as fh:
++        return json.load(fh)
++
++
++def _validate_version(data: dict, path: str) -> None:
++    if not data:
++        return  # empty / missing file — skip validation
++    v = data.get("version")
++    if v != 1:
++        print(
++            f"[providers] {path}: schema version must be 1 (got {v!r})",
++            file=sys.stderr,
++        )
++        sys.exit(2)
++
++
++def load_configs() -> tuple[dict, dict, str, str]:
++    """
++    Return (global_data, repo_data, global_path_str, repo_path_str).
++    """
++    global_path = Path.home() / ".config" / "z-harness" / "providers.json"
++    global_data = _load(global_path)
++    _validate_version(global_data, str(global_path))
++
++    # Repo config: prefer explicit env override for testability.
++    repo_env = os.environ.get("Z_HARNESS_REPO_PROVIDERS", "")
++    if repo_env:
++        repo_path = Path(repo_env)
++    else:
++        # Discover repo root via git, fall back to cwd.
++        try:
++            result = subprocess.run(
++                ["git", "rev-parse", "--show-toplevel"],
++                capture_output=True, text=True, check=True,
++            )
++            repo_root = Path(result.stdout.strip())
++        except (subprocess.CalledProcessError, FileNotFoundError):
++            repo_root = Path.cwd()
++        repo_path = repo_root / ".z-harness" / "providers.json"
++
++    repo_data = _load(repo_path)
++    _validate_version(repo_data, str(repo_path))
++
++    return global_data, repo_data, str(global_path), str(repo_path)
++
++
++# ---------------------------------------------------------------------------
++# Merge + shadow detection
++# ---------------------------------------------------------------------------
++
++def merge_with_shadow(
++    global_data: dict,
++    repo_data: dict,
++    global_path: str,
++    repo_path: str,
++) -> dict:
++    """
++    Merge global + repo configs per-key (repo wins).
++    Log + emit provider_shadowed events for each key that is shadowed.
++    Returns the merged dict: {"providers": {...}, "roles": {...}}.
++    """
++    merged: dict = {"providers": {}, "roles": {}}
++
++    for section in ("providers", "roles"):
++        g_section = global_data.get(section, {})
++        r_section = repo_data.get(section, {})
++
++        shadowed_keys = set(g_section) & set(r_section)
++        for key in shadowed_keys:
++            _emit_shadow(section, key, global_path, repo_path)
++
++        merged[section] = {**g_section, **r_section}
++
++    return merged
++
++
++def _emit_shadow(section: str, key: str, global_path: str, repo_path: str) -> None:
++    """Print warning to stderr and emit provider_shadowed event (de-duped)."""
++    # De-dup guard: only warn once per process tree per (section, key).
++    guard_var = f"Z_HARNESS_SHADOW_WARNED_{section.upper()}_{key.upper()}"
++    if os.environ.get(guard_var):
++        return
++    os.environ[guard_var] = "1"
++
++    msg = (
++        f"[providers] provider_shadowed: {section}.{key} "
++        f"— repo ({repo_path}) overrides global ({global_path})"
++    )
++    print(msg, file=sys.stderr)
++
++    # Also emit a JSONL event if log-event.sh is reachable.
++    script_dir = Path(__file__).parent
++    log_event = script_dir / "log-event.sh"
++    if log_event.exists() and shutil.which("bash"):
++        payload = json.dumps({"section": section, "key": key, "repo": repo_path, "global": global_path})
++        run_id = os.environ.get("Z_HARNESS_RUN_ID", "unknown-run")
++        try:
++            subprocess.run(
++                ["bash", str(log_event), run_id, "provider_shadowed", payload],
++                check=False,           # non-fatal — observability best-effort
++                capture_output=True,
++            )
++        except OSError:
++            pass  # log-event.sh unavailable — ignore
++
++
++# ---------------------------------------------------------------------------
++# Resolution
++# ---------------------------------------------------------------------------
++
++def resolve(role: str, merged: dict) -> dict:
++    """
++    Resolve *role* to a provider descriptor.
++    Returns dict with keys matching the output schema.
++    Calls sys.exit on unresolvable situations.
++    """
++    roles = merged.get("roles", {})
++    providers = merged.get("providers", {})
++
++    provider_name = roles.get(role)
++    if not provider_name:
++        print(
++            f"[providers] role={role} unbound — run /z-providers-discover",
++            file=sys.stderr,
++        )
++        sys.exit(1)
++
++    provider = providers.get(provider_name)
++    if not provider:
++        print(
++            f"[providers] role={role}: provider={provider_name!r} referenced in roles "
++            f"but not defined in providers map",
++            file=sys.stderr,
++        )
++        sys.exit(1)
++
++    command = provider.get("command", "")
++    if not shutil.which(command):
++        print(
++            f"[providers] role={role}, provider={provider_name}, command={command} not on PATH",
++            file=sys.stderr,
++        )
++        sys.exit(1)
++
++    return {
++        "role": role,
++        "provider": provider_name,
++        "command": command,
++        "args_template": provider.get("args_template", []),
++        "stdin": provider.get("stdin", False),
++        "timeout_s": provider.get("timeout_s", 300),
++        "model_label": provider.get("model_label", ""),
++    }
++
++
++# ---------------------------------------------------------------------------
++# Invariant: consultant_primary ≠ consultant_secondary
++# ---------------------------------------------------------------------------
++
++def check_consultant_distinctness(role: str, merged: dict) -> None:
++    """Error if both consultant roles are bound to the same provider."""
++    if role not in ("consultant_primary", "consultant_secondary"):
++        return
++    roles = merged.get("roles", {})
++    p = roles.get("consultant_primary")
++    s = roles.get("consultant_secondary")
++    if p and s and p == s:
++        print(
++            f"[providers] consultant_primary and consultant_secondary must resolve to "
++            f"DISTINCT providers (both are {p!r})",
++            file=sys.stderr,
++        )
++        sys.exit(1)
++
++
++# ---------------------------------------------------------------------------
++# Entry point
++# ---------------------------------------------------------------------------
++
++def main() -> None:
++    if len(sys.argv) != 2:
++        print("usage: resolve-provider.py <role>", file=sys.stderr)
++        sys.exit(2)
++
++    role = sys.argv[1]
++
++    global_data, repo_data, global_path, repo_path = load_configs()
++    merged = merge_with_shadow(global_data, repo_data, global_path, repo_path)
++
++    check_consultant_distinctness(role, merged)
++
++    descriptor = resolve(role, merged)
++    print(json.dumps(descriptor))
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/scripts/resolve-provider.sh b/scripts/resolve-provider.sh
+new file mode 100755
+index 0000000..a2fd621
+--- /dev/null
++++ b/scripts/resolve-provider.sh
+@@ -0,0 +1,4 @@
++#!/usr/bin/env bash
++# resolve-provider.sh <role>
++# Thin wrapper — all logic lives in resolve-provider.py.
++exec python3 "$(dirname "$0")/resolve-provider.py" "$@"
+diff --git a/scripts/log-providers.sh b/scripts/log-providers.sh
+new file mode 100755
+index 0000000..2b5be7d
+--- /dev/null
++++ b/scripts/log-providers.sh
+@@ -0,0 +1,54 @@
++#!/usr/bin/env bash
++# log-providers.sh
++#
++# Resolves all three provider roles, prints a one-line summary, and emits
++# a provider_resolved event per role via log-event.sh.
++#
++# Invoke from each command that may dispatch a consultant or reviewer:
++#   source "$(dirname "$0")/log-providers.sh"  -- or --
++#   bash scripts/log-providers.sh
++#
++# Requires: Z_HARNESS_RUN_ID (optional — falls back to "unknown-run").
++# Depends on: scripts/resolve-provider.sh, scripts/log-event.sh.
++
++set -euo pipefail
++
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++RESOLVE="${SCRIPT_DIR}/resolve-provider.sh"
++LOG_EVENT="${SCRIPT_DIR}/log-event.sh"
++
++RUN_ID="${Z_HARNESS_RUN_ID:-unknown-run}"
++
++ROLES=(consultant_primary consultant_secondary reviewer)
++SUMMARY_PARTS=()
++
++for ROLE in "${ROLES[@]}"; do
++  # resolve-provider.sh exits nonzero if role is unbound or CLI missing.
++  DESCRIPTOR="$(bash "$RESOLVE" "$ROLE" 2>/dev/null)" || {
++    SUMMARY_PARTS+=("${ROLE}=UNBOUND")
++    continue
++  }
++
++  PROVIDER="$(python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); print(d["provider"])' <<<"$DESCRIPTOR")"
++  MODEL_LABEL="$(python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); print(d.get("model_label",""))' <<<"$DESCRIPTOR")"
++  COMMAND="$(python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); print(d["command"])' <<<"$DESCRIPTOR")"
++
++  if [[ -n "$MODEL_LABEL" ]]; then
++    SUMMARY_PARTS+=("${ROLE}=${PROVIDER}(${MODEL_LABEL})")
++  else
++    SUMMARY_PARTS+=("${ROLE}=${PROVIDER}")
++  fi
++
++  # Emit provider_resolved event (best-effort — non-fatal if log-event.sh unavailable).
++  if [[ -x "$LOG_EVENT" ]]; then
++    PAYLOAD="$(python3 -c '
++import json, sys
++role, provider, command, model_label = sys.argv[1:5]
++print(json.dumps({"role": role, "provider": provider, "command": command, "model_label": model_label}))
++' "$ROLE" "$PROVIDER" "$COMMAND" "$MODEL_LABEL")"
++    bash "$LOG_EVENT" "$RUN_ID" "provider_resolved" "$PAYLOAD" 2>/dev/null || true
++  fi
++done
++
++# Print one-line summary to stdout.
++printf '[providers] %s\n' "$(IFS='  '; echo "${SUMMARY_PARTS[*]}")"
+diff --git a/docs/human/PROVIDERS.md b/docs/human/PROVIDERS.md
+new file mode 100644
+index 0000000..2074b6c
+--- /dev/null
++++ b/docs/human/PROVIDERS.md
+@@ -0,0 +1,178 @@
++# PROVIDERS — Provider Registry Guide
++
++> Last updated: 2026-05-24
++
++## Overview
++
++z-harness uses a **provider registry** to route consultant and reviewer
++dispatches to any CLI-addressable LLM.  A provider is anything reachable via a
++shell command — `codex`, `gemini`, `claude`, `ollama`, `agy`, or a custom
++wrapper you write yourself.
++
++Roles are kept separate from provider definitions so a team can share a repo
++config that says "use codex for reviews" without hard-coding credentials or
++install paths.
++
++---
++
++## Config file locations + precedence
++
++| Priority | Path | Wins on |
++|----------|------|---------|
++| Repo-local (higher) | `<repo>/.z-harness/providers.json` | Any key present in this file |
++| User-global (lower) | `~/.config/z-harness/providers.json` | All other keys |
++
++Merge is **per-key**, not whole-file.  If both files define `providers.codex`,
++the repo file wins for that key only.  All other providers come from the global
++file.  Same rule applies to the `roles` map.
++
++Whenever a repo key shadows a global key, z-harness prints a warning to stderr:
++
++```
++[providers] provider_shadowed: providers.codex — repo (.z-harness/providers.json) overrides global (~/.config/z-harness/providers.json)
++```
++
++…and emits a `provider_shadowed` event to `metrics.jsonl`.
++
++### Testability env override
++
++Set `Z_HARNESS_REPO_PROVIDERS=/path/to/fixture.json` to point the resolver at
++any file instead of the actual repo config.  Useful in CI or test scripts.
++
++---
++
++## Schema (version 1)
++
++```json
++{
++  "version": 1,
++  "providers": {
++    "<name>": {
++      "kind": "cli",
++      "command": "codex",
++      "args_template": ["exec", "-"],
++      "stdin": true,
++      "timeout_s": 300,
++      "model_label": "gpt-5-codex"
++    }
++  },
++  "roles": {
++    "consultant_primary":   "<provider-name>",
++    "consultant_secondary": "<provider-name>",
++    "reviewer":             "<provider-name>"
++  }
++}
++```
++
++### Field reference
++
++| Field | Required | Description |
++|-------|----------|-------------|
++| `version` | yes | Must be `1` — resolver exits with an error otherwise. |
++| `providers.<name>.kind` | yes | Must be `"cli"` (only kind supported). |
++| `providers.<name>.command` | yes | Executable name on `PATH`. |
++| `providers.<name>.args_template` | yes | Positional args passed to the command. |
++| `providers.<name>.stdin` | yes | If `true`, the prompt is piped to the command's stdin. |
++| `providers.<name>.timeout_s` | no | Seconds before the CLI call is killed (default 300). |
++| `providers.<name>.model_label` | no | Human-readable model name (used in logs/summaries). |
++| `roles.consultant_primary` | required for most commands | Primary consultant CLI. |
++| `roles.consultant_secondary` | required for most commands | Secondary consultant CLI — **must differ** from primary. |
++| `roles.reviewer` | required for review commands | Reviewer CLI (may equal either consultant). |
++
++---
++
++## The three roles
++
++| Role | Purpose |
++|------|---------|
++| `consultant_primary` | First external LLM consulted during planning, implementation, and review. |
++| `consultant_secondary` | Second LLM for cross-model critique.  **Must resolve to a different provider** than `consultant_primary` (the resolver rejects configs where they collide). |
++| `reviewer` | LLM used by the reviewer agent.  May overlap with either consultant role. |
++
++---
++
++## Minimal example
++
++```json
++{
++  "version": 1,
++  "providers": {
++    "my-codex": {
++      "kind": "cli",
++      "command": "codex",
++      "args_template": ["exec", "-"],
++      "stdin": true,
++      "timeout_s": 300,
++      "model_label": "gpt-5-codex"
++    },
++    "my-gemini": {
++      "kind": "cli",
++      "command": "gemini",
++      "args_template": ["-p", "@-", "--approval-mode", "plan", "--output-format", "text"],
++      "stdin": false,
++      "timeout_s": 240,
++      "model_label": "gemini-2.5-pro"
++    }
++  },
++  "roles": {
++    "consultant_primary":   "my-gemini",
++    "consultant_secondary": "my-codex",
++    "reviewer":             "my-codex"
++  }
++}
++```
++
++---
++
++## Discovery command
++
++Run `/z-providers-discover` to auto-detect installed LLM CLIs and generate a
++starter `providers.json`.  The command probes your `PATH` for `codex`, `gemini`,
++`claude`, `ollama`, `agy`, and `gpt`; shows the proposed config; and asks which
++roles to bind before writing.
++
++For CLIs not in the auto-detect list, add them manually following the schema
++above.
++
++---
++
++## Adding a custom CLI provider
++
++1. Write a wrapper script that reads the prompt from stdin (or a named arg) and
++   prints the response to stdout.  Exit 0 on success, nonzero on failure.
++2. Put it on your `PATH` (or supply an absolute path as `command`).
++3. Add a stanza under `providers` in your `~/.config/z-harness/providers.json`.
++4. Bind a role in the `roles` map.
++
++Example wrapper skeleton:
++
++```bash
++#!/usr/bin/env bash
++# my-llm-wrapper — reads prompt from stdin, writes response to stdout
++PROMPT="$(cat)"
++my-llm-api call --prompt "$PROMPT"
++```
++
++---
++
++## Error messages
++
++| Message | Cause | Fix |
++|---------|-------|-----|
++| `[providers] role=<r> unbound — run /z-providers-discover` | Role not in `roles` map | Run `/z-providers-discover` or edit your `providers.json`. |
++| `[providers] role=<r>, provider=<p>, command=<c> not on PATH` | CLI missing from shell `PATH` | Install the CLI or update `PATH`. |
++| `[providers] schema version must be 1` | `version` field wrong or missing | Set `"version": 1` in your config. |
++| `[providers] consultant_primary and consultant_secondary must resolve to DISTINCT providers` | Both consultant roles point to the same provider | Bind them to different providers. |
++
++---
++
++## Run-start observability
++
++Every command that dispatches a consultant or reviewer calls
++`scripts/log-providers.sh` at start-up.  It prints a one-line summary:
++
++```
++[providers] consultant_primary=my-gemini(gemini-2.5-pro)  consultant_secondary=my-codex(gpt-5-codex)  reviewer=my-codex(gpt-5-codex)
++```
++
++…and emits a `provider_resolved` event per role to `metrics.jsonl`.

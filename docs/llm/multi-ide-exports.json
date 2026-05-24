@@ -1,0 +1,24 @@
+{
+  "slug": "multi-ide-exports",
+  "summary": "Pipeline for exporting z-harness source files (commands/, agents/, skills/) to IDE-specific formats for Cursor (.mdc rules), Codex CLI (AGENTS.md + prompt files), and Antigravity/agy (agy-plugin.yaml + prompt files). All targets share scripts/export-common.py for enumeration and filter logic. Invoked via /z-export or per-target Python scripts directly.",
+  "key_invariants": [
+    "Export adapters MUST NOT include providers.json, .z-harness/, z-harness/plans/, z-harness/archive/, or anything under ~/. This filter is enforced by scripts/audit-tarball.sh.",
+    "Claude Code constructs that cannot be represented in target IDEs (Agent(), Skill(), AskUserQuestion()) are replaced with inline comments — never silently dropped.",
+    "Each target directory contains a CAPABILITIES.md that documents every dropped or replaced construct.",
+    "Export scripts never write files outside their own exports/<target>/ directory."
+  ],
+  "key_files": [
+    { "path": "scripts/export-common.py", "why": "Shared library for source-file enumeration, schema validation, and export filter logic." },
+    { "path": "scripts/export-cursor.py", "why": "Produces .cursor/rules/*.mdc files from command/agent/skill sources." },
+    { "path": "scripts/export-codex.py", "why": "Produces AGENTS.md and prompts/*.md for Codex CLI." },
+    { "path": "scripts/export-agy.py", "why": "Produces agy-plugin.yaml and prompts/*.md for Antigravity." },
+    { "path": "scripts/audit-tarball.sh", "why": "CI lint gate: rejects any export tarball containing excluded paths." },
+    { "path": "commands/z-export.md", "why": "Slash command wrapping export scripts; --target flag selects cursor|codex|agy|all." },
+    { "path": "exports/cursor/CAPABILITIES.md", "why": "Documents what was translated and what was dropped for the Cursor target." },
+    { "path": "exports/codex/CAPABILITIES.md", "why": "Documents what was translated and what was dropped for the Codex CLI target." },
+    { "path": "exports/agy/CAPABILITIES.md", "why": "Documents what was translated and what was dropped for the agy target." },
+    { "path": "docs/human/MULTI-IDE.md", "why": "User-facing guide: per-target install instructions, CAPABILITIES caveats, export filter rules." }
+  ],
+  "related_concepts": ["commands", "agents", "providers-registry"],
+  "last_updated": "2026-05-24"
+}

@@ -29,9 +29,9 @@ $ARGUMENTS
    Concretely: the slug must match the anchored regex `^[a-z0-9]+(-[a-z0-9]+)*$`. Reject values like `../x`, `foo/bar`, `.hidden`, `a b`, empty string, `a..b`. Error message: `"Invalid slug: must be a single kebab-case segment matching ^[a-z0-9]+(-[a-z0-9]+)*$ (no slashes, dots, or path traversal). Got: <value>"`. Do not fall through to a sanitized version; force the user to re-invoke with a valid slug.
 3. **Export** `Z_HARNESS_SLUG=<root-slug>` for all subsequent shell calls and subagents — this namespaces every output path under `z-harness/<root-slug>/`.
 4. Pick a run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`.
-5. `mkdir -p z-harness/$Z_HARNESS_SLUG/archive/$RUN/transcripts`.
-6. **Existing slug-dir handling.** Run `ls z-harness/` to check for a matching slug dir. If `z-harness/<slug>/MANIFEST.md` exists, prompt the user via `AskUserQuestion`:
-   - **overwrite** — move the **entire prior tree** (every file and subdirectory under `z-harness/<slug>/` *except* the just-created `archive/<RUN>/` directory itself) into `z-harness/<slug>/archive/<RUN>/prior-tree/`. This includes the old `MANIFEST.md`, `SHARED-CONCERNS.md`, all prior `<cluster-slug>/` subdirectories, and any other stale artifacts — so no stale cluster trees survive into the new run. Implementation sketch: `mkdir -p z-harness/<slug>/archive/<RUN>/prior-tree && find z-harness/<slug>/ -mindepth 1 -maxdepth 1 ! -name archive -exec mv {} z-harness/<slug>/archive/<RUN>/prior-tree/ \;` (move any existing `archive/previous-*` subdirs separately if needed). Then start fresh.
+5. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`.
+6. **Existing slug-dir handling.** Run `ls z-harness/` to check for a matching slug dir. If `$Z_HARNESS_PLAN_DIR/MANIFEST.md` exists, prompt the user via `AskUserQuestion`:
+   - **overwrite** — move the **entire prior tree** (every file and subdirectory under `$Z_HARNESS_PLAN_DIR/` *except* the just-created `archive/<RUN>/` directory itself) into `$Z_HARNESS_PLAN_DIR/archive/<RUN>/prior-tree/`. This includes the old `MANIFEST.md`, `SHARED-CONCERNS.md`, all prior `<cluster-slug>/` subdirectories, and any other stale artifacts — so no stale cluster trees survive into the new run. Implementation sketch: `mkdir -p $Z_HARNESS_PLAN_DIR/archive/<RUN>/prior-tree && find $Z_HARNESS_PLAN_DIR/ -mindepth 1 -maxdepth 1 ! -name archive -exec mv {} $Z_HARNESS_PLAN_DIR/archive/<RUN>/prior-tree/ \;` (move any existing `archive/previous-*` subdirs separately if needed). Then start fresh.
    - **abort** — exit cleanly with no changes. Per the Early-exit telemetry contract, emit `plan_split_run_end` with `status: "aborted_existing_tree"` before returning (no `phase_end` — no phase is active yet at Setup time).
    No "append" option (D10 — append flow was under-specified; drop it).
 7. **Version stamp + log run start.** Merge the version blob with the topic and emit `plan_split_run_start` with `topic_chars`:
@@ -145,7 +145,7 @@ If `--clusters="a,b,c"` was passed in Setup step 11, the proposed name list is t
 
 ### 1c. Write proposal artifact
 
-Write `z-harness/$Z_HARNESS_SLUG/archive/$RUN/proposed-clusters.md` with one block per cluster (name + scope). For each proposed cluster, log:
+Write `$Z_HARNESS_PLAN_DIR/archive/$RUN/proposed-clusters.md` with one block per cluster (name + scope). For each proposed cluster, log:
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cluster_proposed \
@@ -165,7 +165,7 @@ If the user picks **Edit**, re-loop Phase 1c after applying their edits (re-writ
 
 ### 1e. Write confirmed-clusters artifact
 
-After approval, write `z-harness/$Z_HARNESS_SLUG/archive/$RUN/confirmed-clusters.md` with the final cluster list (name + scope, one block per cluster, fixed display order matching MANIFEST run-order). For each confirmed cluster, log:
+After approval, write `$Z_HARNESS_PLAN_DIR/archive/$RUN/confirmed-clusters.md` with the final cluster list (name + scope, one block per cluster, fixed display order matching MANIFEST run-order). For each confirmed cluster, log:
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cluster_confirmed \
@@ -223,7 +223,7 @@ For each cluster-planner return, branch on `STATUS:`:
   - **One option per entry in `OPTIONS`**, using each entry's `label` and `description` verbatim. List `RECOMMENDED_OPTION` first (if not `none`).
   - Plus a meta-option **Abandon this cluster** — marks it `failed` with `failure_reason: user_abandoned_decision`.
 
-  Append the question + chosen option + rationale to `z-harness/$Z_HARNESS_SLUG/<cluster-id>/archive/$RUN/decisions-late.md`, and echo into MANIFEST's `## Resolved decisions` section. Then re-spawn the cluster-planner with a `RESOLVED_DECISION:` block in the prompt (decision_id, chosen_option, rationale). Increment `attempts` for that cluster. **Sibling clusters continue / their results are unaffected.**
+  Append the question + chosen option + rationale to `$Z_HARNESS_PLAN_DIR/<cluster-id>/archive/$RUN/decisions-late.md`, and echo into MANIFEST's `## Resolved decisions` section. Then re-spawn the cluster-planner with a `RESOLVED_DECISION:` block in the prompt (decision_id, chosen_option, rationale). Increment `attempts` for that cluster. **Sibling clusters continue / their results are unaffected.**
 
 - **`STATUS: spec_problem`** → mark cluster `failed` with `failure_reason: spec_problem`. Surface to user via push-notify (no halt). Other clusters continue.
 
@@ -304,7 +304,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 ### 5a. SHARED-CONCERNS.md
 
-Write `z-harness/$Z_HARNESS_SLUG/SHARED-CONCERNS.md` with YAML frontmatter:
+Write `$Z_HARNESS_PLAN_DIR/SHARED-CONCERNS.md` with YAML frontmatter:
 
 ```yaml
 ---
@@ -343,7 +343,7 @@ If `overlap_count: 0`, still write the file with the heading and a single senten
 
 ### 5b. MANIFEST.md
 
-Write `z-harness/$Z_HARNESS_SLUG/MANIFEST.md` with YAML frontmatter:
+Write `$Z_HARNESS_PLAN_DIR/MANIFEST.md` with YAML frontmatter:
 
 ```yaml
 ---

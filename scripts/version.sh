@@ -28,11 +28,17 @@ fi
 
 SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+TAG="$(git describe --tags --abbrev=0 2>/dev/null || echo "")"
 if git diff --quiet --ignore-submodules HEAD 2>/dev/null; then
   DIRTY="false"
 else
   DIRTY="true"
 fi
 
-printf '{"z_harness_version":"%s","z_harness_dirty":%s,"z_harness_branch":"%s"}' \
-  "$SHA" "$DIRTY" "$BRANCH"
+if [[ -n "$TAG" ]]; then
+  printf '{"z_harness_version":"%s","z_harness_dirty":%s,"z_harness_branch":"%s","z_harness_tag":"%s"}' \
+    "$SHA" "$DIRTY" "$BRANCH" "$TAG"
+else
+  printf '{"z_harness_version":"%s","z_harness_dirty":%s,"z_harness_branch":"%s"}' \
+    "$SHA" "$DIRTY" "$BRANCH"
+fi

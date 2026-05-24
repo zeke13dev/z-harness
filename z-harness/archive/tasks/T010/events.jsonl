@@ -1,1 +1,5 @@
 {"ts":"2026-05-23T09:34:10Z","run":"tasks/T010","kind":"task_done","id":"T010","retries":1,"review_blockers":1,"review_cycles":2}
+{"ts":"2026-05-24T00:15:00Z","run":"tasks/T010","kind":"review_start","id":"T010","cycle":1}
+{"ts":"2026-05-24T00:16:52Z","run":"tasks/T010","kind":"review_end","id":"T010","cycle":1,"blockers":0,"majors":3,"prompt_chars":0,"response_chars":0,"return_chars":0,"wall_ms":112276}
+{"ts":"2026-05-24T07:21:36Z","run":"tasks/T010","kind":"task_done","id":"T010","retries":0,"review_cycles":1,"review_blockers":0,"pushback":"mr-reviewer pre-existing"}
+{"ts":"2026-05-24T11:00:05Z","run":"tasks/T010","kind":"task_done","id":"T010"}

@@ -1,0 +1,19 @@
+{
+  "slug": "portable-harness",
+  "run_id": "20260524T094344Z-portable-harness",
+  "status": "complete",
+  "end_ts": "2026-05-24T10:12:32Z",
+  "totals": {
+    "decisions_total": 16,
+    "decisions_consulted": 5,
+    "consult_rounds": 2,
+    "tasks": 15
+  },
+  "phase_checkpoints": [
+    "phase0-premise.md",
+    "phase1-context.md",
+    "decisions.md",
+    "phase3-decisions-final.md",
+    "phase7-review-synthesis.md"
+  ]
+}

@@ -3,3 +3,7 @@
 {"ts":"2026-05-23T09:46:48Z","run":"orchestration","kind":"run_end","slug":"doc-memories","tasks_done":12,"tasks_halted":0,"tasks_skipped":0}
 {"ts":"2026-05-23T18:46:47Z","run":"orchestration","kind":"run_start","slug":"doc-memories","resume":true,"pending":["T100"]}
 {"ts":"2026-05-23T18:56:50Z","run":"orchestration","kind":"run_end","slug":"doc-memories","tasks_done":1,"tasks_halted":0,"resume":true}
+{"ts":"2026-05-24T00:35:52Z","run":"orchestration","kind":"run_end","slug":"mr-style-reviewer","status":"complete","tasks_done":14,"tasks_pending":0}
+{"ts":"2026-05-24T07:53:21Z","run":"orchestration","kind":"run_end","status":"complete","tasks_done":17,"tasks_skipped":0,"tasks_halted":0}
+{"ts":"2026-05-24T11:14:01Z","run":"orchestration","kind":"run_end","slug":"portable-harness","done":15,"halted":0,"skipped":0}
+{"ts":"2026-05-24T18:19:07Z","run":"orchestration","kind":"run_end","slug":"portable-harness","fixups_done":7,"scope":"T100-T106"}

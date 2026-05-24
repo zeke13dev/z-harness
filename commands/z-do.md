@@ -104,7 +104,7 @@ Spawn the reviewer:
 
 ```
 Agent(
-  subagent_type="codex-reviewer",
+  subagent_type="reviewer",
   description="Codex review of /z-do <run>",
   prompt="task id: <RUN>\ntask description: <approach.md body, ≤500 chars>\nacceptance criteria: <approach.md Acceptance line>\ndiff.patch path: <abs path>\nchanged files: <abs paths>\n$BASE: z-harness/adhoc/archive/$RUN  (read approach.md and premise.md yourself if you need more context)"
 )
@@ -113,7 +113,7 @@ Agent(
 Parse the return (capped at 8 KB, blockers + majors only).
 
 **On blockers/majors:**
-- First failure: re-edit inline. Re-run diff; if byte-identical → halt `no_change_on_retry`. Else re-spawn codex-reviewer once.
+- First failure: re-edit inline. Re-run diff; if byte-identical → halt `no_change_on_retry`. Else re-spawn reviewer once.
 - Second failure: `AskUserQuestion` — proceed anyway / patch manually / abandon.
 
 **No blockers/majors** → accept.
@@ -129,7 +129,7 @@ This phase is **off by default**. Only run if any of:
 If running, spawn one or both consultants on the **diff + approach**, framed as "review this small change — anything wrong?":
 
 ```
-Agent(subagent_type="codex-consultant",
+Agent(subagent_type="consultant-secondary",
       description="End-of-run consult for /z-do <RUN>",
       prompt="MODE: post-do-review\n\nTask: <approach summary>\nDiff: <inline or path>\nCodex-reviewer findings: <accepted / what was waived>\n\nAsk: is this change sound? Anything the reviewer missed?")
 ```

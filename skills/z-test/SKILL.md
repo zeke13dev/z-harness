@@ -11,13 +11,13 @@ You are running **z-harness `/z-test`** — the semantic test-case planner. This
 
 Same logic as `/z-implement-all` Phase 0:
 
-1. Enumerate `z-harness/<slug>/` subdirs containing a `TASKS.md`; also check legacy flat `z-harness/TASKS.md`.
+1. Enumerate `$Z_HARNESS_PLAN_DIR/` subdirs containing a `TASKS.md`; also check legacy flat `z-harness/TASKS.md`.
 2. If `--slug <slug>` arg → use it.
-3. Single candidate → use it; export `Z_HARNESS_SLUG=<slug>`.
+3. Single candidate → use it; export `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")`.
 4. Multiple → `AskUserQuestion` to pick.
 5. Zero → tell user "no plan found — run `/z-plan` first"; abort.
 
-Set `$BASE = z-harness/$Z_HARNESS_SLUG` (or `z-harness` for legacy).
+Set `$BASE = $Z_HARNESS_PLAN_DIR` (or `z-harness` for legacy).
 
 **Require SPEC.md + PLAN.md + TASKS.md.** Abort with "incomplete plan; run /z-plan to completion first" if any of the three is missing.
 
@@ -107,12 +107,12 @@ Spawn **both** consultants in parallel in a single message:
 
 ```
 Agent(
-  subagent_type="gemini-consultant",
+  subagent_type="consultant-primary",
   description="Test-cases consult (Gemini) for <slug>",
   prompt="MODE: test-cases\n\nSPEC.md (verbatim):\n<contents>\n\nPLAN.md (verbatim):\n<contents>\n\nTASKS.md (verbatim):\n<contents>\n\nMy draft test cases (Phase 2):\n<contents of phase2-drafts.md>\n\nUser-stated concerns:\n<from Phase 1 AskUserQuestion>\n\nSource files referenced by the drafts (read these for real types/signatures):\n<list of abs paths>\n\nAsk:\n1. For each draft test: is the assertion strong enough to catch a real bug, or a tautology? If weak, propose a stronger assertion (be concrete).\n2. Which SPEC invariants do not yet have a corresponding test? Propose entries.\n3. What dangerous bug classes specific to this codebase domain (trading: notional sign, fill-quantity sign, time-zone-aware bar boundaries, feature schema alignment between strategy and pipeline) are not covered by my drafts?\n4. Flag any draft that is mechanically trivial (asserts what the implementation already obviously does) and recommend dropping it.\n5. Identify any draft whose target_file is in the wrong place (test framework convention mismatch).\n\nReturn structured: per-draft critique (keep | strengthen | drop), then a list of NEW test entries Claude missed."
 )
 Agent(
-  subagent_type="codex-consultant",
+  subagent_type="consultant-secondary",
   description="Test-cases consult (Codex) for <slug>",
   prompt="MODE: test-cases\n\n<same prompt body>"
 )
@@ -224,7 +224,7 @@ If a task already has a `**Tests:**` line from a prior `/z-test` invocation, **m
 - **Cross-LLM consult is non-skippable.** This is the entire point of `/z-test` — Claude alone reliably generates trivial tests; the cross-LLM step catches the bug classes it would otherwise miss.
 - **No test execution.** `/z-test` is planning, not execution. The implementer writes the test code (in the same task as its production code); `/z-implement-all`'s per-task acceptance check runs it; `/z-review-all`'s final gate runs the suite.
 - **No SPEC.md / PLAN.md edits.** Only writes TESTS.md and appends `**Tests:**` lines to TASKS.md.
-- **No new agents dispatched.** Reuses `gemini-consultant` and `codex-consultant` only.
+- **No new agents dispatched.** Reuses `consultant-primary` and `consultant-secondary` only.
 - **No emojis** anywhere in TESTS.md.
 
 ## What /z-test deliberately skips

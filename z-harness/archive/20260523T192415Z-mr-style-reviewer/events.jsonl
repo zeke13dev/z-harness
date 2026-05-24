@@ -1,0 +1,1 @@
+{"ts":"2026-05-23T19:37:02Z","run":"20260523T192415Z-mr-style-reviewer","kind":"brainstorm_run_end","status":"complete","chosen_framing":"claude","ideators_failed":0,"user_override":true,"override_note":"picked claude shape over codex recommendation; hybridized with gemini nitpicker persona + multi-agent diff review + scope broadened to include human slop"}

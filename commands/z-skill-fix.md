@@ -1,5 +1,5 @@
 ---
-description: Diagnose and patch a misleading skill file — any SKILL.md under .claude/skills/ in the current repo, or any z-harness commands/*.md / agents/*.md when invoked inside the z-harness repo itself. Inline diagnosis note, surgical edit, codex-reviewer safety gate. Repo-agnostic meta-skill — no qt-bot coupling.
+description: Diagnose and patch a misleading skill file — any SKILL.md under .claude/skills/ in the current repo, or any z-harness commands/*.md / agents/*.md when invoked inside the z-harness repo itself. Inline diagnosis note, surgical edit, reviewer safety gate. Repo-agnostic meta-skill — no qt-bot coupling.
 argument-hint: <skill name or path; or describe the failure>
 ---
 
@@ -111,7 +111,7 @@ Spawn the reviewer:
 
 ```
 Agent(
-  subagent_type="codex-reviewer",
+  subagent_type="reviewer",
   description="Codex review of skill fix",
   prompt="task id: skill-fix-$RUN\ntask description: <one-line root cause from diagnosis note>\nacceptance criteria: the patched skill file no longer misleads on <specific failure mode>; no contradictions introduced elsewhere in the file or in sibling skills.\ndiff.patch path: /tmp/skill-fix-$RUN.patch\nchanged files: <abs path>\nrelevant_docs: (none)\n$BASE: (n/a — meta-skill edit, no SPEC.md exists)\n\nNote to reviewer: this is a SKILL.md / command.md / agent.md edit, not application code. Scrutinize for (1) contradictions with other sections of the same file, (2) ambiguity the fix purports to remove but doesn't actually remove, (3) handoff drift if the file references other skills, (4) hedging language that weakens a gate. Skip generic code-review concerns (broad except, etc.) — they don't apply."
 )
@@ -151,7 +151,7 @@ If the repo's `CLAUDE.md` has an explicit commit-on-every-step rule, mention it;
 
 ## Hard rules
 
-- **Always run the codex-reviewer safety gate.** No exceptions.
+- **Always run the reviewer safety gate.** No exceptions.
 - **Never commit on the user's behalf** unless they've explicitly said to.
 - **Never weaken a gate or pushback rule** to make a skill more convenient.
 - **No emojis** in patched skill files.

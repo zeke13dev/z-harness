@@ -1,0 +1,1 @@
+{"ts":"2026-05-24T05:53:48Z","run":"20260524T055333Z-z-fix-hypothesis-driven","kind":"brainstorm_run_start","slug":"z-fix-hypothesis-driven","z_harness_version":"338e138","z_harness_dirty":true,"z_harness_branch":"main","topic":"rethink z-fix to be hypothesis-driven: generate multiple hypotheses, test each, determine which worked, iterate; keep multi-LLM advantage"}

@@ -1,0 +1,1 @@
+{"ts":"2026-05-23T19:24:30Z","run":"20260523T192415Z-mr-style-reviewer","kind":"brainstorm_run_start","slug":"mr-style-reviewer","z_harness_version":"64a3dbe","z_harness_dirty":true,"z_harness_branch":"main","topic":"Add MR-Style reviewer (code quality gate, distinct from z-review correctness gate)"}

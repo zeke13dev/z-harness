@@ -1,0 +1,2 @@
+{"ts":"2026-05-24T09:54:08Z","run":"20260524T094344Z-portable-harness","kind":"run_start","slug":"portable-harness","z_harness_version":"338e138","z_harness_dirty":true,"z_harness_branch":"main","task":"portable-harness: relocate plans + multi-IDE + multi-model + instant updates"}
+{"ts":"2026-05-24T10:12:32Z","run":"20260524T094344Z-portable-harness","kind":"run_end","slug":"portable-harness","status":"complete","tasks":15}

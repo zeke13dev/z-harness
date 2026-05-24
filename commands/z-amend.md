@@ -15,14 +15,14 @@ This command modifies an **already-produced** planning artifact set. It does NOT
 
 ## Phase 0 — Discover plan slug
 
-Multiple plans may coexist under `z-harness/<slug>/`. Determine which one to amend:
+Multiple plans may coexist under `$Z_HARNESS_PLAN_DIR/`. Determine which one to amend:
 
 1. Enumerate candidates: immediate subdirs of `z-harness/` that contain **any** of `SPEC.md`, `PLAN.md`, `TASKS.md`, or `FIX.md`. Also check for legacy flat layout.
 2. Choose:
    - **One candidate** → use it. `export Z_HARNESS_SLUG=<slug>` (or leave unset for legacy).
    - **Multiple candidates** → `AskUserQuestion` with each slug as an option (annotate each with mode: `full` if SPEC.md exists, `light` if only FIX.md). Set `Z_HARNESS_SLUG` to chosen.
    - **Zero candidates** → tell the user there's no plan to amend; suggest `/z-plan` or `/z-plan-light`. Stop.
-3. From here on, **`$BASE`** refers to `z-harness/$Z_HARNESS_SLUG` (or `z-harness` if legacy).
+3. From here on, **`$BASE`** refers to `$Z_HARNESS_PLAN_DIR` (or `z-harness` if legacy).
 4. Detect **mode**:
    - `full` if `$BASE/SPEC.md` exists.
    - `light` if only `$BASE/FIX.md` exists.
@@ -119,9 +119,9 @@ If `amendment.md`'s Risk section flagged any of these triggers, run a **bundled*
 
 Spawn both in parallel:
 ```
-Agent(subagent_type="gemini-consultant", description="Amend consult (Gemini) for <slug>",
+Agent(subagent_type="consultant-primary", description="Amend consult (Gemini) for <slug>",
       prompt="MODE: amend\n\nExisting plan: <inline brief — 2-3 paragraphs from SPEC/PLAN summary>\nAmendment: <amendment.md body>\nKey concern: <the risk trigger>\n\nAsk: is the amendment sound? what's likely to break? what did I miss?")
-Agent(subagent_type="codex-consultant", description="Amend consult (Codex) for <slug>",
+Agent(subagent_type="consultant-secondary", description="Amend consult (Codex) for <slug>",
       prompt="<same body>")
 ```
 

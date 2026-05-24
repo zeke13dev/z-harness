@@ -1,0 +1,18 @@
+{
+  "slug": "plan-layout-migration",
+  "summary": "Plan output is namespaced under z-harness/plans/<slug>/ (canonical) instead of z-harness/<slug>/ (legacy). All commands use scripts/plan-path.sh to construct paths; they try the new path first and fall back to legacy with a one-line warning. scripts/migrate-plan-layout.sh handles bulk or per-slug migration with --dry-run support.",
+  "key_invariants": [
+    "commands MUST try ${Z_HARNESS_PLANS_DIR:-z-harness/plans}/<slug>/ first; if absent, fall back to z-harness/<slug>/ with a printed warning — never write new artifacts to the legacy path.",
+    "Z_HARNESS_PLANS_DIR when set is respected verbatim (no normalization); default is 'z-harness/plans'.",
+    "scripts/migrate-plan-layout.sh refuses to overwrite a non-empty existing directory at the new path; idempotent if already migrated.",
+    "Path construction MUST go through scripts/plan-path.sh — inline literal path construction is a DRY violation."
+  ],
+  "key_files": [
+    { "path": "scripts/plan-path.sh", "why": "Exports plan_dir and legacy_plan_dir functions; the single source of truth for plan path construction." },
+    { "path": "scripts/migrate-plan-layout.sh", "why": "Moves legacy z-harness/<slug>/ directories to z-harness/plans/<slug>/; supports --all and --dry-run." },
+    { "path": "scripts/log-event.sh", "why": "Respects Z_HARNESS_PLANS_DIR when constructing the metrics.jsonl path." },
+    { "path": "docs/human/PLAN-LAYOUT.md", "why": "User-facing guide: canonical layout, override env var, dual-read fallback, migration commands." }
+  ],
+  "related_concepts": ["commands", "scripts", "z-update"],
+  "last_updated": "2026-05-24"
+}

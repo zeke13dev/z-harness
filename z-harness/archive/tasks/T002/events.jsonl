@@ -15,3 +15,8 @@
 {"ts":"2026-05-23T05:05:32Z","run":"tasks/T002","kind":"review_start","id":"T002","cycle":2}
 {"ts":"2026-05-23T05:05:45Z","run":"tasks/T002","kind":"review_end","id":"T002","cycle":2,"blockers":0,"majors":0,"prompt_chars":0,"response_chars":33,"return_chars":33,"wall_ms":12677}
 {"ts":"2026-05-23T09:03:45Z","run":"tasks/T002","kind":"task_done","id":"T002","retries":0,"review_blockers":0,"review_cycles":1}
+{"ts":"2026-05-23T22:00:03Z","run":"tasks/T002","kind":"task_start","id":"T002"}
+{"ts":"2026-05-23T22:21:27Z","run":"tasks/T002","kind":"review_start","id":"T002","cycle":3}
+{"ts":"2026-05-23T22:23:31Z","run":"tasks/T002","kind":"review_end","id":"T002","cycle":3,"blockers":0,"majors":1,"prompt_chars":1850,"response_chars":1200,"return_chars":800,"wall_ms":124243}
+{"ts":"2026-05-24T07:08:39Z","run":"tasks/T002","kind":"task_done","id":"T002","retries":0,"review_cycles":1,"review_blockers":0}
+{"ts":"2026-05-24T10:55:06Z","run":"tasks/T002","kind":"task_done","id":"T002","retries":0}

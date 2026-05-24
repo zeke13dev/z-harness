@@ -3,6 +3,7 @@
   "last_updated": "2026-05-23",
   "covers_spec": "none",
   "source_file": [
+    "scripts/extract-dismissals.py",
     "scripts/log-event.sh",
     "scripts/log-phase.sh",
     "scripts/regenerate-memories-flat.py",
@@ -11,6 +12,13 @@
   ],
   "confidence": "high",
   "entry_points": [
+    {
+      "file": "scripts/extract-dismissals.py",
+      "line": 1,
+      "symbol": "extract-dismissals.py",
+      "kind": "module",
+      "summary": "Computes dismissed finding signatures from consecutive MR-REVIEW.md archive snapshots; shared by /z-mr-review and /z-style-init --amend."
+    },
     {
       "file": "scripts/log-event.sh",
       "line": 1,

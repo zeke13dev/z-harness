@@ -10,7 +10,7 @@ Companion LLM-tier JSON lives at `../llm/<slug>.json`.
 
 | Concept | Confidence | Source files | Summary |
 |---|---|---|---|
-| [agents](./agents.md) | high | `agents/auditor.md`, `agents/cluster-planner.md`, `agents/codex-consultant.md` | Scrutinizes codebase targets across correctness/perf/cleanliness/design. |
+| [agents](./agents.md) | high | `agents/auditor.md`, `agents/cluster-planner.md`, `agents/consultant-primary.md` | Scrutinizes codebase targets across correctness/perf/cleanliness/design. |
 
 ## commands
 

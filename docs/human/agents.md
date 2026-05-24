@@ -1,7 +1,7 @@
 # Agents
 
 > Last updated: 2026-05-23
-> Covers source: agents/auditor.md, agents/cluster-planner.md, agents/codex-consultant.md, agents/codex-reviewer.md, agents/complexity-classifier.md, agents/doc-fetcher.md, agents/doc-updater.md, agents/gemini-consultant.md, agents/implementer.md, agents/remote-runner.md, agents/spec-precheck.md
+> Covers source: agents/auditor.md, agents/cluster-planner.md, agents/consultant-primary.md, agents/consultant-secondary.md, agents/reviewer.md, agents/complexity-classifier.md, agents/doc-fetcher.md, agents/doc-updater.md, agents/implementer.md, agents/remote-runner.md, agents/spec-precheck.md
 
 ## Overview
 The agents concept represents the complete suite of specialized subagent profiles that drive the automated plan-and-implement workflow in z-harness. Each subagent is configured with a tailored system prompt, dedicated tools, and appropriate model profiles (typically Sonnet or specialized consultant roles) to execute discrete, high-discipline steps.
@@ -11,12 +11,12 @@ These agents act as isolated workers spawned in parallel or series by orchestrat
 ## Key entry points
 - `agents/auditor.md:1` — `auditor` — Scrutinizes target codebase files across correctness, perf, cleanliness, or design dimensions.
 - `agents/cluster-planner.md:1` — `cluster-planner` — Resolves specialized technical sub-tasks during large-scale workspace planning.
-- `agents/codex-consultant.md:1` — `codex-consultant` — Performs secondary LLM critiques to resolve plan ambiguities and technical risks.
-- `agents/codex-reviewer.md:1` — `codex-reviewer` — Scrutinizes diffs from code-generation agents against safety, rubric, and styling guidelines.
+- `agents/consultant-secondary.md:1` — `consultant-secondary` — Performs secondary LLM critiques to resolve plan ambiguities and technical risks.
+- `agents/reviewer.md:1` — `reviewer` — Scrutinizes diffs from code-generation agents against safety, rubric, and styling guidelines.
 - `agents/complexity-classifier.md:1` — `complexity-classifier` — Classifies task files based on implementation complexity to guide orchestrator constraints.
 - `agents/doc-fetcher.md:1` — `doc-fetcher` — Retrieves, filters, and ranks documentation concepts relevant to an ongoing plan phase.
 - `agents/doc-updater.md:1` — `doc-updater` — Rebuilds or updates concept documentation files to match source files under maintain-docs.
-- `agents/gemini-consultant.md:1` — `gemini-consultant` — Performs primary Gemini-level plan critiques and risk evaluations.
+- `agents/consultant-primary.md:1` — `consultant-primary` — Performs primary plan critiques and risk evaluations.
 - `agents/implementer.md:1` — `implementer` — Executes the actual code-writing tasks under discrete plan targets.
 - `agents/remote-runner.md:1` — `remote-runner` — Executes verification tests and builds inside remote sandboxes for safety.
 - `agents/spec-precheck.md:1` — `spec-precheck` — Validates specifications, task lists, and designs for completeness before implementation.

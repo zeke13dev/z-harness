@@ -1,0 +1,11 @@
+{
+  "slug": "mr-style-reviewer",
+  "run_id": "20260523T194623Z-mr-style-reviewer",
+  "status": "complete",
+  "ended_at": "2026-05-23T20:23:29Z",
+  "decision_count": 15,
+  "consultations": 2,
+  "tasks_total": 14,
+  "shortcuts_approved": ["D7-global-style-md-v2", "D8c-gh-pr-fetch-v2"],
+  "user_overrides": ["D13-feedback-loop-promoted-to-v1"]
+}

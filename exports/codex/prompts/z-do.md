@@ -1,0 +1,156 @@
+# /z-do
+
+You are running **z-harness `/z-do`** — the lightest harness on-ramp. No slug, no plan artifacts, no upfront cross-LLM consult. Just: premise check, doc-fetcher grounding, inline implementation, codex review.
+
+Task (from `$ARGUMENTS`):
+
+$ARGUMENTS
+
+**If empty**, use `AskUserQuestion`: "What's the task?" Block until answered.
+
+## Setup
+
+1. Pick run id: `RUN=$(date -u +%Y-%m-%dT%H:%M:%SZ)-do`
+2. `export Z_HARNESS_SLUG=adhoc`
+3. `mkdir -p z-harness/adhoc/archive/$RUN`
+4. **Version stamp + log:**
+   ```bash
+   VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
+   START_PAYLOAD="$(python3 -c '
+   import json, sys
+   v = json.loads(sys.argv[1]); v["task"] = sys.argv[2]
+   print(json.dumps(v))
+   ' "$VERSION_BLOB" "<arguments>")"
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" do_run_start "$START_PAYLOAD"
+   ```
+5. Notification policy: read `Z_HARNESS_NOTIFY` (default `approval_only`).
+
+## Auto-bail thresholds (check throughout)
+
+If at any point you discover:
+
+- **>3 files** need editing → recommend `/z-plan-light`
+- **Any non-obvious decision** surfaces (new dep, public API change, persistence change, algorithm choice with materially different tradeoffs) → recommend `/z-plan-light`
+- **Cross-module / cross-crate impact** OR **schema change** → recommend `/z-plan`
+- User says "this might be bigger than I thought" → bail
+
+→ Halt: write a one-paragraph `z-harness/adhoc/archive/$RUN/escalation.md`, log `do_escalation`, push-notify, suggest the appropriate command. Do not improvise.
+
+## Phase 1 — Premise check (mandatory, quick)
+
+One paragraph in main thread: is the stated task actually the right problem? Could it be config, expected behavior, or symptom of something else? Is there a materially better path?
+
+If a concern surfaces → raise via `AskUserQuestion` before proceeding. Otherwise, write a single-sentence "premise accepted: <restated goal>" and continue.
+
+Save to `z-harness/adhoc/archive/$RUN/premise.md`.
+
+## Phase 2 — Ground (doc-fetcher first)
+
+Per the global rule, if `docs/llm/INDEX.json` exists, dispatch `doc-fetcher` (Haiku) BEFORE any other reading:
+
+```
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+      description="Doc context for: <task>",
+      prompt="query: <one-sentence task>\nrepo_root: <abs path>\ndepth: standard")
+```
+
+Use its return to constrain what files you read next. If `STATUS: no_docs` / `no_match` / `partial`, fall back to direct Read/Grep/Glob — do NOT spawn Explore in `/z-do` (too expensive for this command).
+
+Read at most 3-5 files from main thread to fill gaps.
+
+If a `DRIFT WARNING` came back, log `doc_drift` and continue.
+
+## Phase 3 — Inline approach note (NO decisions.md, NO upfront consult)
+
+In a single short message to yourself, state:
+- What you're about to change (2-3 sentences)
+- Files to touch (list)
+- Acceptance: how you'll know it worked
+
+Save to `z-harness/adhoc/archive/$RUN/approach.md`. This is the entire "plan" — no PLAN.md, no TASKS.md, no FIX.md.
+
+**Check auto-bail thresholds before implementing.** If the file list is >3 or any item is a non-obvious decision, halt now and recommend escalation.
+
+## Phase 4 — Implement inline
+
+Edit / Write the files. Apply the implementer self-check:
+
+1. No broad exception handlers added.
+2. No scope expansion outside `approach.md` "Files to touch".
+3. No unsolicited validation / error paths.
+4. No new public surface beyond what `approach.md` describes.
+5. No stale docstrings / comments left behind.
+
+If mid-implementation you discover scope growth → halt and `AskUserQuestion`:
+- "Continue in z-do — update approach.md"
+- "Escalate to /z-plan-light"
+- "Escalate to /z-plan"
+- "Abandon"
+
+Hard limit: if you find yourself touching >5 files inline, halt regardless.
+
+## Phase 5 — Codex review (MANDATORY safety gate)
+
+Non-negotiable. This is what makes `/z-do` z-harness rather than freewheeling.
+
+```bash
+git diff > z-harness/adhoc/archive/$RUN/diff.patch
+```
+
+Spawn the reviewer:
+
+```
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+  subagent_type="reviewer",
+  description="Codex review of /z-do <run>",
+  prompt="task id: <RUN>\ntask description: <approach.md body, ≤500 chars>\nacceptance criteria: <approach.md Acceptance line>\ndiff.patch path: <abs path>\nchanged files: <abs paths>\n$BASE: z-harness/adhoc/archive/$RUN  (read approach.md and premise.md yourself if you need more context)"
+)
+```
+
+Parse the return (capped at 8 KB, blockers + majors only).
+
+**On blockers/majors:**
+- First failure: re-edit inline. Re-run diff; if byte-identical → halt `no_change_on_retry`. Else re-spawn reviewer once.
+- Second failure: `AskUserQuestion` — proceed anyway / patch manually / abandon.
+
+**No blockers/majors** → accept.
+
+## Phase 6 — (Optional) end-of-run cross-LLM consult
+
+This phase is **off by default**. Only run if any of:
+
+- User explicitly asked for a consult ("get a second opinion")
+- A non-obvious decision DID surface mid-run but you continued (rare — usually you'd escalate)
+- The implementation diverges meaningfully from the stated approach.md
+
+If running, spawn one or both consultants on the **diff + approach**, framed as "review this small change — anything wrong?":
+
+```
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+      description="End-of-run consult for /z-do <RUN>",
+      prompt="MODE: post-do-review\n\nTask: <approach summary>\nDiff: <inline or path>\nCodex-reviewer findings: <accepted / what was waived>\n\nAsk: is this change sound? Anything the reviewer missed?")
+```
+
+Apply the "one reason it might be wrong" check to each finding. If it raises a real concern, halt and ask the user.
+
+## Phase 7 — Finalize
+
+1. Log run end:
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" do_run_end \
+     "$(printf '{"status":"shipped","files_changed":%d,"review_cycles":%d,"consult_at_end":%s}' \
+        "$N_FILES" "$CYCLES" "$DID_CONSULT")"
+   ```
+2. Push-notify (if policy ≠ `off`): "z-do complete. <N> files changed; review passed."
+3. Brief 2-3 sentence summary to user: what changed, what's next.
+4. If non-trivial friction surfaced during the run (auto-bail considered, doc_drift, retry on review), suggest: "Consider `/z-improve adhoc/$RUN` to retro this run."
+
+## Hard rules
+
+- **Doc-fetcher first** (per global CLAUDE.md rule) whenever `docs/llm/INDEX.json` exists.
+- **No upfront cross-LLM consult.** Only at the end, only if triggered.
+- **Codex review is non-negotiable.** Skipping it makes /z-do not-z-harness.
+- **Never proceed past auto-bail thresholds** without explicit user override.
+- **Never read `docs/llm/*.json` from main thread.**
+- **Always log to `z-harness/adhoc/archive/$RUN/`** — `/z-improve` reads this.
+- **No emojis.**

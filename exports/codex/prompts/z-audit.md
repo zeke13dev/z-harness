@@ -1,0 +1,236 @@
+# /z-audit
+
+You are running **z-harness `/z-audit`** — a structured, read-only audit pipeline. The output is `REPORT.md` (everything found) plus a curated `TASKS.md` (actionable subset, in `/z-implement-all`-compatible format) under `$Z_HARNESS_PLAN_DIR-audit/`.
+
+Target (from `$ARGUMENTS`):
+
+$ARGUMENTS
+
+**If the target above is empty** — use `AskUserQuestion` to ask "What should I audit?" before proceeding. Do not invent.
+
+This command is **read-only**. Never edit the target. Fixes happen later via `/z-implement-all` consuming the emitted `TASKS.md`.
+
+## Setup
+
+1. **Derive slug** — short kebab-case like `audit-<component>` (e.g. target `strategies/kxbtc15m_fade_extremes` → `audit-kxbtc15m`). Confirm via `AskUserQuestion` if non-obvious. Check `ls z-harness/` first for collisions.
+2. Export `Z_HARNESS_SLUG=<slug>-audit`.
+3. Pick run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>-audit`.
+4. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`.
+5. **Version stamp + log:**
+   ```bash
+   VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
+   START_PAYLOAD="$(python3 -c '
+   import json, sys
+   v = json.loads(sys.argv[1]); v["target"] = sys.argv[2]
+   print(json.dumps(v))
+   ' "$VERSION_BLOB" "<arguments>")"
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" audit_run_start "$START_PAYLOAD"
+   ```
+6. Notification policy: read `Z_HARNESS_NOTIFY` (default `approval_only`).
+7. If `docs/llm/INDEX.json` exists → dispatch `doc-fetcher` (Haiku) to get the concept list overlapping the audit target. Do NOT read INDEX.json or per-concept JSONs from main thread.
+   ```
+   <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+         description="Doc context for audit <slug>",
+         prompt="query: which concepts cover <audit target paths>?\nrepo_root: <abs path>\ndepth: summary")
+   ```
+   The orchestrator captures the returned concept slugs and passes the corresponding `docs/llm/<slug>.json` paths to auditors as `relevant_docs` (the auditors then read them themselves — they're fresh-context already).
+
+`$BASE = $Z_HARNESS_PLAN_DIR/`.
+
+## Auto-bail thresholds (check after Phase 4)
+
+If the merged findings count exceeds:
+
+- **>30 findings total**, OR
+- **>10 CRITICAL/HIGH findings** (indicates structural problems, not point fixes)
+
+→ STOP. Write `$BASE/escalation.md` summarizing the scope. Push-notify: "Audit surfaced N findings; recommend `/z-plan` for a full restructure rather than a TASKS.md queue." Do not generate TASKS.md.
+
+## Phase 1 — Pre-flight scoping
+
+If `$ARGUMENTS` supplied a target + the user already named dimensions in prose, skip ahead. Otherwise use `AskUserQuestion` to collect:
+
+1. **Dimensions** — multi-select (≥1 required):
+   - `correctness` — bugs, off-by-ones, math, look-ahead, polarity, invariants
+   - `perf` — slowdowns, allocations, blocking IO, redundant work
+   - `cleanliness` — duplication, dead code, layering, config sprawl
+   - `design` — assumptions still sound? algorithm choice still right? module boundaries earning their weight?
+
+2. **Rubric file (optional)** — if the repo has rubric files under `.claude/audit-rubrics/`, present each as an option. The rubric is a domain-specific checklist that supplements (or replaces) the generic dimension checklist. Discovery:
+   ```bash
+   ls .claude/audit-rubrics/*.md 2>/dev/null
+   ```
+   Offer one per matching rubric, plus a "none — use generic checklist" option.
+
+3. **Target confirmation** — show what you read from `$ARGUMENTS`; let user correct.
+
+Checkpoint: `$BASE/archive/$RUN/phase1-scope.md` with the resolved (target, dimensions, rubric_path).
+
+## Phase 2 — Parallel auditor dispatch
+
+Spawn one `auditor` subagent **per selected dimension**, in parallel, in a single message:
+
+```
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+  subagent_type="auditor",
+  description="<dim> audit of <slug>",
+  prompt="DIMENSION: <dim>\nTARGET: <abs path> — <one-line description>\nRUBRIC_PATH: <abs path or empty>\n$BASE: <abs path to $BASE>\nrelevant_docs:\n  - <doc1>\n  - <doc2>\n\nFollow your agent definition. Emit findings to $BASE/findings-<dim>.md and return STATUS + COUNTS + VERDICT."
+)
+```
+
+Each auditor writes `$BASE/findings-<dim>.md` and returns a structured summary. Collect all returns.
+
+**If any auditor returns `unable_to_complete`** — surface the reason via `AskUserQuestion`: retry that dimension / skip it / abort the audit.
+
+Checkpoint: `$BASE/archive/$RUN/phase2-auditor-returns.md` (concatenate the four return blocks).
+
+## Phase 3 — Merge findings
+
+Build `$BASE/REPORT.md` (full set, organized by dimension):
+
+```markdown
+# Audit — <slug>
+
+- **Date (UTC):** YYYY-MM-DDTHH:MMZ
+- **Target:** <abs path + one-line description>
+- **Dimensions audited:** <comma-separated>
+- **Rubric:** <path or "generic">
+
+## Summary
+- <2-5 bullets across all dimensions>
+
+## Findings — correctness
+<verbatim from findings-correctness.md>
+
+## Findings — perf
+<verbatim from findings-perf.md>
+
+... (one section per dimension)
+
+## Cross-dimension findings
+<findings flagged by multiple auditors via CROSS_DIMENSION: lines — consolidate here>
+
+## Verdicts
+- correctness: PASS | NEEDS-WORK | BLOCKED
+- perf:        ...
+- cleanliness: ...
+- design:      KEEP | REFACTOR | SCRAP
+```
+
+## Phase 4 — Bundled cross-LLM consult on findings
+
+Spawn both consultants in parallel against `REPORT.md`:
+
+```
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+  subagent_type="consultant-primary",
+  description="Audit findings review (Gemini) for <slug>",
+  prompt="MODE: audit-review\n\nA target has been audited across <dimensions>. Here is the full REPORT:\n\n<paste REPORT.md>\n\nTwo asks:\n1. What significant findings are MISSING — issues the dimension auditors should have caught but didn't?\n2. Which listed findings are TRIVIAL or speculative and should be dropped before promotion to TASKS.md?\n\nBe specific. Cite path:line. Severity-rank any additions."
+)
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+  subagent_type="consultant-secondary",
+  description="Audit findings review (Codex) for <slug>",
+  prompt="MODE: audit-review\n\n<same prompt body>"
+)
+```
+
+Both transcripts archive themselves under `$BASE/archive/$RUN/transcripts/`.
+
+**When both return:**
+
+1. For each addition: apply the "one reason this might be wrong" check before accepting.
+2. For each suggested drop: confirm by re-reading the cited code.
+3. Update `REPORT.md` with `## Consult additions` and `## Consult drops` sections noting what changed and which consultant flagged it.
+
+**Check auto-bail thresholds now** (see top). If the post-consult count exceeds the bail thresholds, escalate to `/z-plan`.
+
+## Phase 5 — Promote to TASKS.md
+
+Only actionable findings go into TASKS.md. An observation that has no clear fix stays in REPORT.md.
+
+Write `$BASE/TASKS.md` in the **exact format `/z-implement-all` consumes** (mirror `agents/implementer.md` shape):
+
+```markdown
+# Audit TASKS — <slug>
+
+Status legend: `[ ]` pending · `[~]` in_progress · `[x]` done.
+
+### [ ] T001 — [SEVERITY] short subject
+- One-paragraph context: why this matters, what evidence supports it (cite the REPORT.md finding ID).
+- **Files:** `<path>:<line>` (modified).
+- **Depends on:** none | T00X.
+- **Acceptance:** verifiable criteria (test name, benchmark delta, code removed, abstraction extracted, etc.).
+- **REMOTE_VERIFY:** <cargo / verify command> (if applicable — see /z-plan Phase 8 rules)
+- **DOCS:** <concept-slug> (if the fix touches a documented surface)
+
+### [ ] T002 — [SEVERITY] ...
+```
+
+Severity prefix in subject: `[CRITICAL] | [HIGH] | [MED] | [LOW]`. Group by phase (Phase A / B / …) when tasks have ordering dependencies.
+
+**Note in `$BASE/SPEC.md`:** `/z-implement-all` will read `$BASE/SPEC.md`. Audits don't produce a SPEC, but the implementer reads it. Write a minimal `$BASE/SPEC.md`:
+
+```markdown
+# Audit SPEC — <slug>
+
+This SPEC was produced by `/z-audit`, not `/z-plan`. Each task in TASKS.md references a finding in REPORT.md; the finding's "Recommendation" line is the per-task spec. The implementer should:
+
+1. Read the task's Files + Acceptance.
+2. Read the cited REPORT.md finding for full context.
+3. Apply the Recommendation surgically — no scope expansion beyond Files.
+```
+
+Also write a minimal `$BASE/PLAN.md` pointing to REPORT.md:
+
+```markdown
+# Audit PLAN — <slug>
+
+See `REPORT.md` for full findings and `TASKS.md` for the actionable queue.
+
+Goals: address all CRITICAL + HIGH severity findings.
+Non-goals: structural refactors (those need `/z-plan`).
+```
+
+This three-file set (SPEC.md / PLAN.md / TASKS.md) is what `/z-implement-all` requires.
+
+## Phase 6 — Codex safety gate on TASKS.md
+
+Spawn the reviewer against the audit-produced TASKS.md (the diff in this case is the TASKS.md itself):
+
+```
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+  subagent_type="reviewer",
+  description="Codex review of audit TASKS for <slug>",
+  prompt="task id: <slug>-audit-tasks\ntask description: review the audit-produced TASKS.md for soundness — would executing these tasks make the target better or risk regression?\nacceptance criteria: every task addresses a real finding in REPORT.md with a verifiable acceptance line\ndiff.patch path: (n/a — review the file directly)\nchanged files: <abs path to $BASE/TASKS.md>\nrelevant_docs: <any docs/llm paths from Setup step 7>\n$BASE: <abs path to $BASE>\n\nFlag: tasks that would regress invariants, tasks with vague acceptance, severity inflation, scope creep beyond the cited finding."
+)
+```
+
+Parse the return (capped at 8 KB):
+- **Blockers** → re-edit the affected TASKS.md entries; re-run review once. Second failure → halt with `AskUserQuestion`.
+- **Majors** → fix in place, then accept.
+- **No blockers/majors** → accept.
+
+## Phase 7 — Present + finalize
+
+Send `PushNotification` (if policy != `off`): "Audit complete — <N> tasks queued."
+
+Brief summary to user (3-5 bullets):
+- Target audited and dimensions covered
+- Top 3 findings by severity
+- Task count and recommended next step (`/z-implement-all` if findings are point fixes; `/z-plan` if structural)
+- Pointers: `$BASE/REPORT.md`, `$BASE/TASKS.md`
+
+Log run end:
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" audit_run_end \
+  "$(printf '{"status":"complete","findings":%d,"tasks":%d,"dimensions":"%s"}' "$N_FINDINGS" "$N_TASKS" "$DIMS")"
+```
+
+## Hard rules
+
+- **Read-only.** Never edit the target. Ever.
+- **Never skip the codex safety gate** on the produced TASKS.md.
+- **Always emit cross-LLM consult** in Phase 4 — both Gemini and Codex, in parallel.
+- **One auditor per dimension, in parallel.** Never serialize.
+- **TASKS.md format must match what `/z-implement-all` consumes** — otherwise the audit is a dead-end artifact.
+- **No emojis** anywhere in artifacts.

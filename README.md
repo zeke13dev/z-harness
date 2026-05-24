@@ -22,7 +22,7 @@ Every command writes its artifacts under `z-harness/<slug>/`, with run-frozen ar
 ### Planning
 
 - **`/z-plan <task>`** — Rigorous pipeline: premise check → exploration (with `docs/llm/INDEX.json` if present, plus a freshness gate that defers to `/z-maintain-docs` when docs are stale) → enumerate decisions → user-gated bundled Gemini+Codex consult → SPEC.md / PLAN.md / TASKS.md.
-- **`/z-plan-light <fix>`** — Fast path for 1-5 file fixes; auto-bails to `/z-plan` if scope grows. Single `FIX.md` artifact, inline implementation, codex-reviewer safety gate kept.
+- **`/z-plan-light <fix>`** — Fast path for 1-5 file fixes; auto-bails to `/z-plan` if scope grows. Single `FIX.md` artifact, inline implementation, reviewer safety gate kept.
 - **`/z-plan-split <topic>`** — Pre-emptive scope splitter for sprawling topics that would otherwise yield a ≥40-task `/z-plan` run across natural seams. Proposes 2-6 narrow clusters, dispatches one `cluster-planner` subagent per cluster in parallel, then reconciles file-path overlaps into `SHARED-CONCERNS.md` + `MANIFEST.md` under `z-harness/<root-slug>/`. One-level recursion only; no production code. Cost target: cheaper than a single mega-`/z-plan` only when the user genuinely needed N narrow plans — otherwise more expensive (opt-in, do not use as a default).
 
   Typical chain for a murky multi-component problem: `/z-research → /z-brainstorm → /z-plan-split → /z-implement-all`.
@@ -30,15 +30,33 @@ Every command writes its artifacts under `z-harness/<slug>/`, with run-frozen ar
 
 ### Implementation
 
-- **`/z-implement-all`** — Orchestrates the full TASKS.md queue: one fresh `implementer` subagent per task → per-task `codex-reviewer` safety gate → retry once on review failure → push-notify at every task boundary. Walks a tree-rooted plan produced by `/z-plan-split` (one cluster at a time, in MANIFEST run order) as well as legacy single-slug plans. Flags: `--ack` (override the SHARED-CONCERNS.md ack-gate) and `--force-partial` (proceed against a tree where some clusters failed planning, excluding the failed ones from the run set). Both flags are inert for legacy single-slug plans.
+- **`/z-implement-all`** — Orchestrates the full TASKS.md queue: one fresh `implementer` subagent per task → per-task reviewer safety gate → retry once on review failure → push-notify at every task boundary. Walks a tree-rooted plan produced by `/z-plan-split` (one cluster at a time, in MANIFEST run order) as well as legacy single-slug plans. Flags: `--ack` (override the SHARED-CONCERNS.md ack-gate) and `--force-partial` (proceed against a tree where some clusters failed planning, excluding the failed ones from the run set). Both flags are inert for legacy single-slug plans.
 - **`/z-implement-next`** — Same loop, one task at a time.
+
+### Code quality
+
+- **`/z-style-init`** — Author the project `STYLE.md` interactively, grounded in the repo's most idiomatic existing files (Capture). Required before `/z-mr-review` will run. Pass `--amend` to add rules derived from repeated review dismissals instead of bootstrapping.
+- **`/z-mr-review`** — Multi-LLM code-quality review of the current branch diff against `STYLE.md`. Fans out to Claude, Codex, and Gemini; deduplicates and ranks findings P0–P4; writes `z-harness/<slug>/MR-REVIEW.md` in `TASKS.md`-compatible shape. Never blocks — delete findings you don't want, then run `/z-implement-all --tasks=z-harness/<slug>/MR-REVIEW.md`. Targets five categories: abstraction, defensive-bloat, test-noise, hygiene, and style-drift. Distinct from `/z-audit`, which gates correctness.
+
+### Multi-IDE export
+
+- **`/z-export [--target=<cursor|codex|agy|all>]`** — Export z-harness commands, agents, and skills to Cursor (`.mdc` rules), Codex CLI (`AGENTS.md` + prompts), or Antigravity (`agy-plugin.yaml` + prompts). Default: all three targets. See [docs/human/MULTI-IDE.md](docs/human/MULTI-IDE.md).
+
+### Providers
+
+- **`/z-providers-discover`** — Auto-detect installed LLM CLIs, generate a starter `providers.json`, and bind roles interactively. See [docs/human/PROVIDERS.md](docs/human/PROVIDERS.md).
+
+### Plugin management
+
+- **`/z-update`** — Update the z-harness plugin to the latest version. Detects symlink vs tarball install mode and runs the appropriate update path. See [docs/human/INSTALL.md](docs/human/INSTALL.md).
 
 ### Audit, debug, review
 
-- **`/z-audit <target>`** — Read-only audit pipeline. Pre-flight scopes (target, dimensions, optional `.claude/audit-rubrics/<component>.md`), spawns one `auditor` subagent per dimension in parallel (correctness / perf / cleanliness / design), bundled Gemini+Codex consult on findings, emits REPORT.md + TASKS.md in `/z-implement-all`-compatible format, codex-reviewer safety gate.
-- **`/z-debug <symptom>`** — Investigate a known-bad behavior with explicit repro / hypothesis / evidence / isolation phases; cross-LLM consult at hypothesis and fix stages; auto-bails to `/z-plan` if scope grows; writes a post-mortem.
+- **`/z-audit <target>`** — Read-only audit pipeline. Pre-flight scopes (target, dimensions, optional `.claude/audit-rubrics/<component>.md`), spawns one `auditor` subagent per dimension in parallel (correctness / perf / cleanliness / design), bundled consultant-primary + consultant-secondary consult on findings, emits REPORT.md + TASKS.md in `/z-implement-all`-compatible format, reviewer safety gate.
+- **`/z-fix <symptom or proposed fix>`** — Lightweight bug-fix command for the case where the user already has a diagnosis; single light-fix consult, inline implementation, non-negotiable Codex review, optional post-mortem. Early gate recommends `/z-debug` if root cause is unknown.
+- **`/z-debug <symptom>`** — Investigate a known-bad behavior via adversarial hypothesis tournament; 3-LLM two-round hypothesis generation, discriminating-test matrix, discrete Bayesian scoring, 3-5 isolation rounds; writes a single unified `DEBUG.md` artifact (Problem, Evidence, Isolation, Fix, and Post-mortem sections); auto-bails to `/z-plan` if scope grows. Post-mortem phase optionally invokes `mr-reviewer` on the fix diff; P0/P1 findings are promoted to the post-mortem's preventative-action list automatically. Early gate recommends `/z-fix` if the user already has a diagnosis.
 - **`/z-review-all`** — Final-gate cross-LLM review of a completed plan's cumulative diff against SPEC.md — catches implementation drift and aggregate-only spec gaps.
-- **`/z-skill-fix <skill>`** — Meta-command. Patches any `.claude/skills/*/SKILL.md` (or `commands/*.md` / `agents/*.md` inside z-harness itself). Inline diagnosis → surgical edit → codex-reviewer safety gate.
+- **`/z-skill-fix <skill>`** — Meta-command. Patches any `.claude/skills/*/SKILL.md` (or `commands/*.md` / `agents/*.md` inside z-harness itself). Inline diagnosis → surgical edit → reviewer safety gate.
 
 ### Docs
 
@@ -55,16 +73,23 @@ Every command writes its artifacts under `z-harness/<slug>/`, with run-frozen ar
 | Agent | Model | Role |
 |---|---|---|
 | `implementer` | sonnet | Implements one task in fresh context |
+| `mr-reviewer` | sonnet | Fans out to consultant-primary/secondary, deduplicates findings, applies P0-P4 rubric |
 | `auditor` | sonnet | Audits one dimension, returns structured findings |
 | `cluster-planner` | sonnet | Runs a narrow sub-/z-plan for one cluster of a `/z-plan-split` tree |
-| `gemini-consultant` | (CLI) | Cross-LLM consult via Gemini |
-| `codex-consultant` | (CLI) | Cross-LLM consult via Codex |
-| `codex-reviewer` | haiku | Post-diff safety gate via Codex |
+| `consultant-primary` | (CLI via providers.json) | Cross-LLM consult — primary role |
+| `consultant-secondary` | (CLI via providers.json) | Cross-LLM consult — secondary role (must differ from primary) |
+| `reviewer` | (CLI via providers.json) | Post-diff safety gate |
 | `spec-precheck` | haiku | Pre-flight: verify SPEC.md references actually exist before implementing |
 | `doc-updater` | sonnet | Refreshes one stale concept's docs/human + docs/llm pair |
 | `remote-runner` | haiku | Mechanical remote work — rsync sandbox + cargo build, read-only DB/log queries, paper qtctl restarts |
 
-`/z-brainstorm` dispatches three ideators in Phase 2: Claude as `general-purpose` Sonnet, Codex via `codex-consultant` with `MODE: brainstorm`, and Gemini via `gemini-consultant` with `MODE: brainstorm`. There is no dedicated `ideator` agent file.
+Which CLI each agent role calls is determined by `providers.json` (see
+[docs/human/PROVIDERS.md](docs/human/PROVIDERS.md)). Run
+`/z-providers-discover` to configure.
+
+`/z-brainstorm` dispatches three ideators in Phase 2: Claude as
+`general-purpose` Sonnet, plus `consultant-primary` and `consultant-secondary`
+with `MODE: brainstorm`. There is no dedicated `ideator` agent file.
 
 ## Operating principles
 
@@ -75,25 +100,45 @@ Every command writes its artifacts under `z-harness/<slug>/`, with run-frozen ar
 
 ## Requirements
 
-- `codex` CLI installed and authenticated (uses the Codex/ChatGPT app endpoint, *not* the OpenAI API endpoint).
-- `gemini` CLI installed and authenticated.
+- At least one CLI-addressable LLM (e.g., `codex`, `gemini`, `claude`, `ollama`, `agy`) installed and reachable on your `PATH`. Run `/z-providers-discover` to auto-configure roles after install. See [docs/human/PROVIDERS.md](docs/human/PROVIDERS.md).
 - Claude Code with `PushNotification` available (for mobile notifications).
 
 ## Install
 
-From any Claude Code session:
+**From a local clone (symlink mode — edits go live immediately):**
+
+```bash
+git clone https://github.com/<org>/z-harness
+cd z-harness
+bash install.sh
+```
+
+**From a release tarball:**
+
+```bash
+bash install.sh --tarball=<release-url>
+# or:
+Z_HARNESS_RELEASE_URL=<release-url> bash install.sh
+```
+
+Both modes install to `~/.claude/plugins/z-harness@zeke-tools`. For full
+details including the `--force` flag and switching between modes, see
+[docs/human/INSTALL.md](docs/human/INSTALL.md).
+
+After installing, run `/z-providers-discover` in Claude Code to configure
+which LLM CLIs play which roles (consultant\_primary, consultant\_secondary,
+reviewer).
+
+## Updating
+
+From any Claude Code session with z-harness loaded:
 
 ```
-/plugin marketplace add /Users/zeke/dev/z-harness
-/plugin install z-harness@zeke-tools
+/z-update
 ```
 
-Or, for git distribution:
-
-```
-/plugin marketplace add <github-org>/z-harness
-/plugin install z-harness@zeke-tools
-```
+Detects symlink vs tarball mode and runs the appropriate update path.
+No autoupdate — all updates are explicit.
 
 ## Per-repo auto-enable
 
@@ -108,13 +153,36 @@ In each project where you want z-harness on automatically, commit `.claude/setti
 }
 ```
 
+## Providers
+
+z-harness routes all consultant and reviewer LLM calls through a
+**provider registry** rather than hard-coding any specific CLI. Three roles
+are defined (`consultant_primary`, `consultant_secondary`, `reviewer`); you
+bind each role to a named provider entry in `providers.json`.
+
+Quick start after install:
+
+```
+/z-providers-discover
+```
+
+This probes your `PATH` for known LLM CLIs (`codex`, `gemini`, `claude`,
+`ollama`, `agy`, `gpt`), proposes a config, and writes it to
+`~/.config/z-harness/providers.json` after confirmation.
+
+For the full schema, config-file locations, precedence rules, and custom CLI
+patterns, see [docs/human/PROVIDERS.md](docs/human/PROVIDERS.md).
+
+To export z-harness to Cursor, Codex CLI, or Antigravity, see
+[docs/human/MULTI-IDE.md](docs/human/MULTI-IDE.md).
+
 ## Plugin-author conventions (for downstream `.claude/skills/`)
 
 When a downstream repo defines its own skills that interoperate with z-harness, follow these conventions so they cooperate with the harness rather than fight it:
 
 - End each skill file with `## Anti-patterns (push back)` and `## Out of scope` sections — they're the cheapest place to encode failure modes and handoff boundaries.
 - Skills that diagnose should NOT also apply patches. Hand off to `/z-plan-light` (small fix) or `/z-plan` (structural) for any code change beyond initial scaffolding.
-- Skills that orchestrate should call cross-LLM consult (`gemini-consultant`, `codex-consultant`) at premise / red-team gates, not run them inline.
+- Skills that orchestrate should call cross-LLM consult (`consultant-primary`, `consultant-secondary`) at premise / red-team gates, not run them inline.
 - Use explicit slash commands instead of flag-routed `mode:` parameters — one skill per mode (`/qt-audit-strategy`, not `/qt-audit mode=strategy`).
 - Domain-specific audit checklists live under `.claude/audit-rubrics/<component>.md` and are consumed by `/z-audit` via its rubric-file slot — keep them as plain checklists, not scaffolding.
 
@@ -202,9 +270,12 @@ z-harness/
 │   ├── z-implement-all.md
 │   ├── z-implement-next.md
 │   ├── z-audit.md
+│   ├── z-fix.md
 │   ├── z-debug.md
+│   ├── z-mr-review.md
 │   ├── z-review-all.md
 │   ├── z-skill-fix.md
+│   ├── z-style-init.md
 │   ├── z-init-docs.md
 │   ├── z-maintain-docs.md
 │   ├── z-suggest-memory.md
@@ -213,13 +284,15 @@ z-harness/
 │   ├── implementer.md
 │   ├── auditor.md
 │   ├── cluster-planner.md
-│   ├── codex-reviewer.md
-│   ├── codex-consultant.md
-│   ├── gemini-consultant.md
+│   ├── reviewer.md
+│   ├── consultant-primary.md
+│   ├── consultant-secondary.md
+│   ├── mr-reviewer.md
 │   ├── spec-precheck.md
 │   ├── doc-updater.md
 │   └── remote-runner.md
 ├── scripts/
+│   ├── extract-dismissals.py
 │   ├── log-event.sh
 │   ├── log-phase.sh
 │   ├── remote-sandbox-sync.sh

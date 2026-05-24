@@ -13,7 +13,7 @@ You do not write code. You do not edit anything. You do not spawn subagents. You
 
 - **Task ID** (e.g. `T007`)
 - **Task block** verbatim from TASKS.md (Files / Depends on / Acceptance)
-- **`$BASE` path** (e.g. `z-harness/<slug>`) — read SPEC.md and PLAN.md yourself. The orchestrator no longer pre-extracts slices; reading directly keeps the orchestrator's context light. Use the task block's "Files:" list to scope which SPEC sections matter.
+- **`$BASE` path** (e.g. `$Z_HARNESS_PLAN_DIR`) — read SPEC.md and PLAN.md yourself. The orchestrator no longer pre-extracts slices; reading directly keeps the orchestrator's context light. Use the task block's "Files:" list to scope which SPEC sections matter.
 - **`relevant_docs`** (paths, may be empty) — `docs/llm/<concept>.json` files for concepts this task touches. **Use these as a second source of truth** alongside SPEC: if SPEC says a function exists but the LLM doc lists different entry points OR if SPEC names a column but the LLM doc says the column was renamed in a prior plan, that's a drift signal — return `spec_problem` with the discrepancy. The LLM docs are typically more up-to-date than SPEC because they're refreshed every plan by `/z-maintain-docs`.
 - **Repo root** (absolute path)
 

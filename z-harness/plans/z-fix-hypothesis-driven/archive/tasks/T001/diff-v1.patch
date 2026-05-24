@@ -1,0 +1,36 @@
+diff --git a/agents/codex-consultant.md b/agents/codex-consultant.md
+index 1758b60..3221718 100644
+--- a/agents/codex-consultant.md
++++ b/agents/codex-consultant.md
+@@ -44,6 +44,12 @@ The caller signals a mode via a `MODE: <name>` prefix in the prompt. Handle each
+   Codex must NOT recommend an approach. Research is terrain-mapping, not direction-picking. The prompt must explicitly instruct Codex to omit any recommendation.
+ - **`doc-audit`** (`/z-maintain-docs --audit`): caller hands you a proposed human-tier markdown + LLM-tier JSON update + the source files + prior doc (if any). Ask Codex: does the proposed doc accurately describe the source files? List specific claims that don't match. List concepts the doc should cover but doesn't.
+ - **`test-cases`** (Phase 3 of `/z-test`): caller hands you SPEC.md + PLAN.md + TASKS.md + a draft list of test cases + user-stated bug-class concerns + the source files referenced by the drafts. Ask Codex: (1) for each draft, is the assertion strong enough to catch a real bug or a tautology — if weak, propose a stronger assertion; (2) which SPEC invariants have no corresponding test (propose entries); (3) what dangerous bug classes specific to this codebase domain (trading: notional sign, fill-quantity sign, time-zone-aware bar boundaries, feature schema alignment between strategy and pipeline) are uncovered; (4) flag any draft that is mechanically trivial and should be dropped. Return structured: per-draft critique (keep | strengthen | drop), then a list of NEW test entries the caller missed.
++- **`mr-review`** (Step 4 of `mr-reviewer`): caller hands you active categories, full STYLE.md contents, and the full diff. Ask Codex to find quality issues (not correctness bugs) in the diff, citing STYLE.md rule IDs for style-drift findings and file:line for abstraction findings. Return RAW — the caller expects a fenced `json` block with `{"findings": [...]}` matching the schema in the prompt; do not apply the standard wrapper.
++- **`generate-hypotheses-round1`** (Phase 3a of `/z-debug`): caller hands you a problem statement + evidence inventory + relevant code (surgical sections from DEBUG.md). Ask Codex to **independently** propose 3-5 hypotheses, no awareness of any other model's list. Return ordered list, each row schema: `claim`, `prediction_if_true`, `prediction_if_false`, `discriminating_test` (concrete, executable where possible), `test_cost` (one of `free|cheap|medium|expensive`), `parallel_safe` (bool, true only if the test mutates no shared state), `reasoning` (one sentence). Mode `schema_version: hypothesis_round1_v1`. Return RAW (no standard wrapper).
++- **`generate-hypotheses-round2-adversarial`** (Phase 3b of `/z-debug`): caller hands you Problem + Evidence Inventory + the merged Round-1 Hypothesis Pool (per the Phase-visibility matrix; NOT the full DEBUG.md). Ask Codex to return **two markdown tables in this exact order**:
++    1. **NEW** rows (additions to the pool — orthogonality hunt) with columns `| claim | prediction_if_true | prediction_if_false | discriminating_test | test_cost | parallel_safe | reasoning | orthogonality_to |`. `orthogonality_to` is a comma-separated list of `H<NNN>` IDs this row fills a gap relative to.
++    2. **CRITIQUES** with columns `| target_id | critique_type | problem | recommended_action | merge_with_id |`. `critique_type` MUST be one of: `non_discriminating_test`, `false_parallel_safe`, `duplicate`, `weak_claim`, `unclear_prediction`. `problem` cell must be concrete (no `"looks good"`, no `"agree"`); `false_parallel_safe` rows MUST cite the specific mutation in the `problem` cell (e.g., `"writes to ~/.cache/foo"`). `merge_with_id` populated only when `critique_type == duplicate`.
++    The prompt MUST explicitly forbid mere agreement with existing pool entries: "Your value is orthogonality and critique, not endorsement. Do not return rows that merely restate existing pool entries." Mode `schema_version: hypothesis_round2_v1`. Return RAW.
+ 
+ ## Building the prompt to Codex
+ 
+@@ -64,6 +70,9 @@ The caller gives you the input artifact + file pointers. You must:
+      - `research-review`: "Critique this research draft with exactly three sections: (1) Gaps — things the draft missed, (2) Errors — claims that appear wrong, (3) Missing constraints — constraints not captured. Do NOT recommend an approach; research is terrain-mapping, not direction-picking."
+      - `doc-audit`: "Does the proposed doc accurately describe the source files? List specific claims that don't match. List concepts the doc should cover but doesn't."
+      - `test-cases`: "(1) For each draft test, is the assertion strong enough to catch a real bug or is it a tautology — if weak, propose a stronger assertion. (2) Which SPEC invariants have no corresponding test (propose entries)? (3) What dangerous bug classes specific to this codebase domain are uncovered? (4) Flag any draft that is mechanically trivial and should be dropped. Return structured: per-draft critique (keep | strengthen | drop), then a list of NEW test entries the caller missed."
++     - `mr-review`: Pass through the prompt verbatim to Codex. The prompt already contains the full ask and output schema. Return the fenced `json` block from Codex's response unchanged.
++     - `generate-hypotheses-round1`: "Independently propose 3-5 hypotheses for the root cause. Each must include a discriminating test that confirms if true AND refutes if false. Do not assume any context outside the problem statement and evidence inventory provided."
++     - `generate-hypotheses-round2-adversarial`: "Given this merged hypothesis pool, return: (1) NEW hypotheses representing failure modes absent from the pool; (2) CRITIQUES of existing rows — non-discriminating tests, false parallel-safe tags, duplicate claims. Do not restate existing pool entries — your value is orthogonality and critique, not endorsement."
+ 
+ ## Returning to the caller
+ 
+@@ -84,7 +93,7 @@ For `bundled-decisions`, `plan-review`, `light-fix`, `debug-hypotheses`, `doc-au
+ <short quote>
+ ```
+ 
+-For `brainstorm` and `research-review`, return Codex's raw section block unchanged — do NOT apply the wrapper above. For `brainstorm` that means the five-section block (Framing / Core hypothesis / Risks / Plan implications / What would change my mind). For `research-review` that means the three-section block (Gaps / Errors / Missing constraints).
++For `brainstorm`, `research-review`, `mr-review`, `generate-hypotheses-round1`, and `generate-hypotheses-round2-adversarial`, return Codex's raw output unchanged — do NOT apply the wrapper above. For `brainstorm` that means the five-section block (Framing / Core hypothesis / Risks / Plan implications / What would change my mind). For `research-review` that means the three-section block (Gaps / Errors / Missing constraints). For `mr-review` that means the fenced `json` block with `{"findings": [...]}`. For `generate-hypotheses-round1` that means the ordered list of hypotheses using `schema_version: hypothesis_round1_v1`. For `generate-hypotheses-round2-adversarial` that means the two markdown tables (NEW rows + CRITIQUES) using `schema_version: hypothesis_round2_v1`.
+ 
+ Do not editorialize or "improve." If `codex` errors, report the exact error so the caller can decide how to proceed.
+ 

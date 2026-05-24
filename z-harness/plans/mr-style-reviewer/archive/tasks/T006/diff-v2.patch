@@ -1,0 +1,712 @@
+diff --git a/commands/z-mr-review.md b/commands/z-mr-review.md
+new file mode 100644
+index 0000000..dc3fd47
+--- /dev/null
++++ b/commands/z-mr-review.md
+@@ -0,0 +1,706 @@
++---
++description: Multi-LLM code-quality review of the current branch diff against STYLE.md. Never blocks; ranks P0-P4; output is a TASKS.md-shape file you edit and feed to /z-implement-all.
++argument-hint: [--slug <slug>] [--base <git-ref>] [--include-untracked] [--deep] [--force-on-trunk]
++---
++
++You are running the **z-harness `/z-mr-review`** pipeline.
++
++Arguments (from `$ARGUMENTS`):
++
++$ARGUMENTS
++
++## Argument parsing
++
++Parse `$ARGUMENTS` before doing anything else:
++
++- `--slug <value>` → capture as `SLUG_OVERRIDE`. Overrides the auto-derived slug.
++- `--base <ref>` → capture as `BASE_OVERRIDE`. Overrides the default base ref computation.
++- `--include-untracked` flag → set `INCLUDE_UNTRACKED=true` (default `false`).
++- `--deep` flag → set `DEEP=true` (default `false`). Upgrades the abstraction pass to Opus (plumbed in T006+ agent dispatch).
++- `--force-on-trunk` flag → set `FORCE_ON_TRUNK=true` (default `false`). Allows running on `main`/`master`/`trunk`.
++
++---
++
++## Phase 1 — Setup
++
++### Step 1a — Slug resolution
++
++Resolve the slug by which this run is namespaced (`z-harness/<slug>/`):
++
++**If `--slug` was provided:**
++
++Validate the override before accepting it — reject empty values or any character outside `[a-z0-9-]`:
++
++```bash
++if [ -z "$SLUG_OVERRIDE" ] || ! echo "$SLUG_OVERRIDE" | grep -qE '^[a-z0-9-]+$'; then
++  echo "Error: --slug value '$SLUG_OVERRIDE' is invalid. Must match ^[a-z0-9-]+$ (lowercase alphanumeric and hyphens only)." >&2
++  exit 1
++fi
++SLUG="$SLUG_OVERRIDE"
++```
++
++**Trunk guard applies regardless of `--slug`.** Always inspect the actual current branch:
++
++```bash
++CURRENT_BRANCH="$(git branch --show-current 2>/dev/null)"
++if [ "$CURRENT_BRANCH" = "main" ] || [ "$CURRENT_BRANCH" = "master" ] || [ "$CURRENT_BRANCH" = "trunk" ]; then
++  if [ "${FORCE_ON_TRUNK:-false}" != "true" ]; then
++    echo "Error: current branch is '$CURRENT_BRANCH'. /z-mr-review is almost certainly meant for a feature branch, not trunk. Run with --force-on-trunk if you intend to review a trunk diff." >&2
++    exit 1
++  fi
++fi
++```
++
++Export the slug for child processes:
++
++```bash
++export Z_HARNESS_SLUG="$SLUG"
++```
++
++**Otherwise, derive from the current branch:**
++
++```bash
++CURRENT_BRANCH="$(git symbolic-ref --short HEAD 2>/dev/null)"
++```
++
++If `git symbolic-ref --short HEAD` exits nonzero (detached HEAD), refuse with:
++
++> Error: repository is in detached HEAD state. Use `--slug=<name>` to specify a slug explicitly.
++
++Exit nonzero.
++
++If `CURRENT_BRANCH` is empty after the check, apply the same detached-HEAD refusal.
++
++Normalize the branch name to a slug:
++1. Lowercase the branch name.
++2. Replace `/` with `-`.
++3. Strip any character that is not alphanumeric or `-`.
++
++```bash
++SLUG="$(echo "$CURRENT_BRANCH" | tr '[:upper:]' '[:lower:]' | tr '/' '-' | tr -cd 'a-z0-9-')"
++```
++
++Export the slug for child processes:
++
++```bash
++export Z_HARNESS_SLUG="$SLUG"
++```
++
++**Trunk guard:** If `CURRENT_BRANCH` is one of `main`, `master`, or `trunk` AND `FORCE_ON_TRUNK` is `false`, refuse with:
++
++> Error: current branch is `<CURRENT_BRANCH>`. `/z-mr-review` is almost certainly meant for a feature branch, not trunk. Run with `--force-on-trunk` if you intend to review a trunk diff.
++
++Exit nonzero.
++
++### Step 1b — STYLE.md gate
++
++Check that `STYLE.md` exists at the repo root:
++
++```bash
++ls ./STYLE.md 2>/dev/null
++```
++
++If `STYLE.md` does not exist, log `mr_style_missing`, then refuse:
++
++> Error: no `STYLE.md` found at the repo root. Run `/z-style-init` first. There is no `--no-style` escape.
++
++Exit nonzero.
++
++### Step 1c — Run ID and archive setup
++
++Pick a run ID and create the archive directory **before** any telemetry calls:
++
++```bash
++RUN="$(date -u +%Y%m%dT%H%M%SZ)-mr-review"
++SLUG_DIR="z-harness/$SLUG"
++ARCHIVE_DIR="$SLUG_DIR/archive/$RUN"
++mkdir -p "$ARCHIVE_DIR/chunks"
++export SLUG RUN ARCHIVE_DIR SLUG_DIR
++```
++
++### Step 1d — Voice availability pre-check
++
++Check which multi-LLM voices are available:
++
++```bash
++command -v codex >/dev/null 2>&1 && CODEX_AVAILABLE=true || CODEX_AVAILABLE=false
++command -v gemini >/dev/null 2>&1 && GEMINI_AVAILABLE=true || GEMINI_AVAILABLE=false
++```
++
++Build the `VOICES_AVAILABLE` list:
++
++- Always include `claude`.
++- If `CODEX_AVAILABLE=true`, include `codex`.
++- If `GEMINI_AVAILABLE=true`, include `gemini`.
++
++```bash
++VOICES_AVAILABLE="claude"
++[ "$CODEX_AVAILABLE" = "true" ] && VOICES_AVAILABLE="$VOICES_AVAILABLE,codex"
++[ "$GEMINI_AVAILABLE" = "true" ] && VOICES_AVAILABLE="$VOICES_AVAILABLE,gemini"
++```
++
++If `VOICES_AVAILABLE` is only `claude` (neither codex nor gemini is available), warn the user and log a degraded event:
++
++> Warning: neither `codex` nor `gemini` CLI is available. Running in single-voice (Claude-only) mode. Consensus tier-bump/demote logic is disabled. Install the missing CLIs for full multi-voice review.
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" mr_voices_degraded \
++  "$(printf '{"slug":"%s","voices_available":"%s"}' "$SLUG" "$VOICES_AVAILABLE")"
++```
++
++### Step 1e — Archive any existing MR-REVIEW.md
++
++If `z-harness/<slug>/MR-REVIEW.md` already exists, archive it before overwriting:
++
++```bash
++EXISTING="$SLUG_DIR/MR-REVIEW.md"
++if [ -f "$EXISTING" ]; then
++  N=1
++  while [ -f "$ARCHIVE_DIR/MR-REVIEW.md.previous-$N" ]; do
++    N=$(( N + 1 ))
++  done
++  cp "$EXISTING" "$ARCHIVE_DIR/MR-REVIEW.md.previous-$N"
++fi
++```
++
++### Step 1f — Version stamp and run-start log
++
++```bash
++VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
++```
++
++### Step 1g — Base ref and diff capture
++
++Determine the base git ref:
++
++- If `--base` was provided, use `BASE_OVERRIDE`.
++- Otherwise: check if `main` exists (`git rev-parse --verify main 2>/dev/null`); if so, use `main`.
++- Otherwise: check if `master` exists (`git rev-parse --verify master 2>/dev/null`); if so, use `master`.
++- Otherwise: refuse with "Cannot determine base ref: neither `main` nor `master` exists. Use `--base=<ref>` to specify one."
++
++```bash
++if [ -n "$BASE_OVERRIDE" ]; then
++  BASE_REF="$BASE_OVERRIDE"
++elif git rev-parse --verify main >/dev/null 2>&1; then
++  BASE_REF="main"
++elif git rev-parse --verify master >/dev/null 2>&1; then
++  BASE_REF="master"
++else
++  echo "Error: Cannot determine base ref: neither 'main' nor 'master' exists. Use --base=<ref> to specify one." >&2
++  exit 1
++fi
++```
++
++Validate the resolved `BASE_REF` before using it — a bad `--base` value must error, not silently produce an empty diff:
++
++```bash
++if ! git rev-parse --verify "$BASE_REF" >/dev/null 2>&1; then
++  echo "Error: base ref '$BASE_REF' does not exist in this repository." >&2
++  exit 1
++fi
++BASE_SHA="$(git rev-parse "$BASE_REF")"
++```
++
++Capture the diff. `git diff` exits nonzero on error; an empty result is OK only when the diff command itself succeeds:
++
++```bash
++if ! git diff "$BASE_REF"...HEAD > "$ARCHIVE_DIR/diff.patch"; then
++  echo "Error: 'git diff $BASE_REF...HEAD' failed — check that the base ref is reachable." >&2
++  exit 1
++fi
++```
++
++If `--include-untracked` is set, append untracked files using `git diff --no-index` directly (no custom header prepending to avoid malformed/duplicated hunks):
++
++```bash
++if [ "$INCLUDE_UNTRACKED" = "true" ]; then
++  git ls-files --others --exclude-standard | while IFS= read -r f; do
++    git diff --no-index -- /dev/null "$f" 2>/dev/null >> "$ARCHIVE_DIR/diff.patch" || true
++  done
++fi
++```
++
++If `diff.patch` is empty (zero bytes), exit cleanly:
++
++> No changes vs `<BASE_REF>`; nothing to review.
++
++```bash
++if [ ! -s "$ARCHIVE_DIR/diff.patch" ]; then
++  echo "No changes vs '$BASE_REF'; nothing to review."
++  exit 0
++fi
++```
++
++Compute diff stat for logging:
++
++```bash
++DIFF_STAT="$(git diff --stat "$BASE_REF"...HEAD | tail -1)"
++```
++
++### Step 1h — Size and chunking decision
++
++Read the env-configurable threshold (default 320000 bytes ≈ 80k tokens):
++
++```bash
++CHUNK_THRESHOLD="${Z_MR_DIFF_CHUNK_BYTES:-320000}"
++DIFF_BYTES="$(wc -c < "$ARCHIVE_DIR/diff.patch")"
++```
++
++If `DIFF_BYTES <= CHUNK_THRESHOLD`, set `MODE=full`. Otherwise set `MODE=per-chunk`.
++
++```bash
++if [ "$DIFF_BYTES" -le "$CHUNK_THRESHOLD" ]; then
++  MODE="full"
++else
++  MODE="per-chunk"
++fi
++```
++
++**If `MODE=per-chunk`**, fail immediately (T009 not yet implemented):
++
++```
++Error: diff exceeds chunk threshold (DIFF_BYTES bytes > CHUNK_THRESHOLD bytes). Chunked review is pending T009 implementation. Either reduce the diff size or wait for the chunking feature. Exiting.
++```
++
++Exit nonzero. Do not generate chunk files.
++
++Only proceed past this point if `MODE=full`.
++
++**If `MODE=per-chunk`** (dead code path, retained for future T009 implementation), split `diff.patch` into per-file chunks:
++
++Parse the diff to identify per-file sections (lines starting with `diff --git`). For each file section in diff order:
++- Extract the file path (the `b/<path>` part).
++- Sanitize the path for use as a filename: replace `/` with `__`, strip leading dots (e.g. `.hidden` → `hidden`).
++- Write the section to `archive/$RUN/chunks/<NNN>-<sanitized-path>.patch` where `NNN` is zero-padded to 3 digits.
++
++```python
++# Chunking is performed via a Python inline script for reliable diff boundary detection:
++python3 - <<'PYEOF'
++import os, sys, json, re
++
++archive_dir = os.environ['ARCHIVE_DIR']
++diff_path = os.path.join(archive_dir, 'diff.patch')
++chunks_dir = os.path.join(archive_dir, 'chunks')
++os.makedirs(chunks_dir, exist_ok=True)
++
++with open(diff_path, 'r', errors='replace') as f:
++    content = f.read()
++
++# Split on 'diff --git' boundaries
++sections = re.split(r'(?=^diff --git )', content, flags=re.MULTILINE)
++sections = [s for s in sections if s.strip()]
++
++chunks = []
++for idx, section in enumerate(sections):
++    nnn = str(idx).zfill(3)
++    # Extract file path from 'diff --git a/<path> b/<path>'
++    m = re.match(r'^diff --git a/(.+?) b/(.+?)$', section, re.MULTILINE)
++    if m:
++        file_path = m.group(2)
++    else:
++        file_path = f'unknown-{nnn}'
++    # Sanitize: replace / with __, strip leading dots
++    sanitized = file_path.replace('/', '__').lstrip('.')
++    chunk_name = f'{nnn}-{sanitized}.patch'
++    chunk_path = os.path.join(chunks_dir, chunk_name)
++    with open(chunk_path, 'w') as cf:
++        cf.write(section)
++    line_count = section.count('\n')
++    chunks.append({
++        'index': idx,
++        'path': chunk_path,
++        'files_touched': [file_path],
++        'line_count': line_count
++    })
++
++manifest = {
++    'chunks': chunks,
++    'total_bytes': os.path.getsize(diff_path),
++    'generated_at': os.popen('date -u +%Y-%m-%dT%H:%M:%SZ').read().strip()
++}
++manifest_path = os.path.join(chunks_dir, 'manifest.json')
++with open(manifest_path, 'w') as mf:
++    json.dump(manifest, mf, indent=2)
++
++print(f"Chunked diff into {len(chunks)} file patches. Manifest: {manifest_path}")
++PYEOF
++```
++
++### Step 1i — Dismissal signature extraction
++
++Invoke `scripts/extract-dismissals.py` to compute prior dismissal signatures:
++
++```bash
++if ! python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/extract-dismissals.py" \
++  "z-harness/$SLUG/" \
++  --max-runs 10 \
++  > "$ARCHIVE_DIR/dismissed_signatures.json" 2>/dev/null; then
++  echo '{"signatures":[],"n_runs_scanned":0}' > "$ARCHIVE_DIR/dismissed_signatures.json"
++  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" mr_dismissal_extract_failed \
++    "$(printf '{"slug":"%s"}' "$SLUG")"
++fi
++```
++
++**Emit one `mr_finding_dismissed` event per dismissed signature:**
++
++```bash
++python3 - <<'PYEOF'
++import json, os, subprocess
++
++archive_dir = os.environ['ARCHIVE_DIR']
++slug = os.environ['SLUG']
++run_id = os.environ['RUN']
++plugin_root = os.environ.get('ANTIGRAVITY_PLUGIN_ROOT') or os.environ.get('CLAUDE_PLUGIN_ROOT', '')
++
++with open(os.path.join(archive_dir, 'dismissed_signatures.json')) as f:
++    data = json.load(f)
++
++for sig in data.get('signatures', []):
++    payload = json.dumps({
++        'slug': slug,
++        'category': sig.get('category', ''),
++        'prior_run_id': sig.get('prior_run_id') or sig.get('run_id', '')
++    })
++    subprocess.run([
++        'bash',
++        os.path.join(plugin_root, 'scripts/log-event.sh'),
++        run_id,
++        'mr_finding_dismissed',
++        payload
++    ])
++PYEOF
++```
++
++### Step 1j — Log mr_run_start
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" mr_run_start \
++  "$(python3 -c '
++import json, sys
++v = json.loads(sys.argv[1])
++v["slug"] = sys.argv[2]
++v["run_id"] = sys.argv[3]
++v["base"] = sys.argv[4]
++v["diff_stat"] = sys.argv[5]
++v["mode"] = sys.argv[6]
++v["voices_available"] = sys.argv[7].split(",")
++v["deep"] = sys.argv[8] == "true"
++print(json.dumps(v))
++' "$VERSION_BLOB" "$SLUG" "$RUN" "$BASE_REF" "$DIFF_STAT" "$MODE" "$VOICES_AVAILABLE" "${DEEP:-false}")"
++```
++
++---
++
++## Phase 2 — Agent dispatch
++
++### Step 2a — Resolve absolute paths for agent inputs
++
++```bash
++REPO_ROOT="$(git rev-parse --show-toplevel)"
++STYLE_PATH="$REPO_ROOT/STYLE.md"
++DIFF_PATH="$REPO_ROOT/$ARCHIVE_DIR/diff.patch"
++DISMISSED_PATH="$REPO_ROOT/$ARCHIVE_DIR/dismissed_signatures.json"
++SLUG_DIR_ABS="$REPO_ROOT/$SLUG_DIR"
++```
++
++### Step 2b — Dispatch mr-reviewer agent
++
++Dispatch the agent with the single-pass input shape. The agent always receives one `diff_path` pointing to a single `.patch` file — polymorphism lives in the orchestrator only.
++
++```
++Agent(
++  subagent_type="mr-reviewer",
++  model="sonnet",
++  description="MR review for <SLUG>",
++  prompt="slug: <SLUG>
++run_id: <RUN>
++slug_dir: <SLUG_DIR_ABS>
++base: <BASE_REF>
++base_sha: <BASE_SHA>
++diff_path: <DIFF_PATH>
++style_path: <STYLE_PATH>
++dismissed_signatures_path: <DISMISSED_PATH>
++voices_available: [<VOICES_AVAILABLE>]
++mode: full
++chunk_meta: null
++deep: <DEEP>"
++)
++```
++
++Capture the agent's full return text as `AGENT_RETURN`.
++
++---
++
++## Phase 3 — Parse agent return and write MR-REVIEW.md
++
++### Step 3a — Extract findings JSON
++
++Parse the agent return by locating the first fenced `json` block (` ```json ... ``` `). Extract and parse its contents as JSON with schema `{"findings": [...]}`. Each finding has: `severity`, `category`, `file`, `line_start`, `line_end`, `title`, `detail`, `citation`.
++
++If no valid JSON block is found, log `mr_all_voices_failed` and exit nonzero with:
++
++```
++Error: mr-reviewer agent returned no parseable findings JSON. The agent return was:
++<AGENT_RETURN>
++```
++
++### Step 3b — Extract summary block
++
++Parse the `## Summary` block from the agent return (the section after the JSON block). Extract these fields:
++- `voices_succeeded` — list, e.g. `[claude]`
++- `voices_failed` — list
++- `dismissal_pattern_matches` — integer
++
++If parsing fails for any field, default to: `voices_succeeded=[claude]`, `voices_failed=[]`, `dismissal_pattern_matches=0`.
++
++### Step 3c — Compute aggregates
++
++From the parsed findings array:
++
++```python
++total_findings = len(findings)
++by_severity = {"P0": 0, "P1": 0, "P2": 0, "P3": 0, "P4": 0}
++by_category = {}
++for f in findings:
++    by_severity[f["severity"]] += 1
++    cat = f.get("category", "uncategorized")
++    by_category[cat] = by_category.get(cat, 0) + 1
++
++# Group findings by severity for ordered output (P0 first)
++severity_order = ["P0", "P1", "P2", "P3", "P4"]
++by_severity_label = {
++    "P0": "would cause future bugs",
++    "P1": "clear regression",
++    "P2": "style drift",
++    "P3": "minor hygiene",
++    "P4": "taste-only nits",
++}
++```
++
++Serialize `by_category` to JSON for use in Step 3g:
++
++```bash
++BY_CATEGORY_JSON="$(python3 -c 'import json, sys; print(json.dumps(json.loads(sys.argv[1])))' "$BY_CATEGORY_JSON")"
++```
++
++(The `BY_CATEGORY_JSON` shell variable must be populated from the `by_category` dict computed above — pass it as an env var or inline it in the same Python block that computes aggregates.)
++
++Assign T-MR-NNN IDs by iterating findings in severity order (P0 first, then P1, P2, P3, P4), then in original finding order within each severity group. IDs start at T-MR-001.
++
++Compute `STYLE_MD_REVISION`:
++
++```bash
++STYLE_MD_REVISION="$(git rev-parse HEAD:STYLE.md 2>/dev/null || echo 'unknown')"
++```
++
++### Step 3d — Build findings_index
++
++For each finding (in T-MR-NNN order), build a YAML findings_index entry:
++
++```yaml
++  - {id: T-MR-001, severity: P1, category: defensive-bloat, file: src/foo.rs, title: "Short title here"}
++```
++
++### Step 3e — Write MR-REVIEW.md
++
++Build the full MR-REVIEW.md content using this exact structure:
++
++```markdown
++---
++artifact: mr-review
++slug: <SLUG>
++run_id: <RUN>
++generated_at: <ISO timestamp — date -u +%Y-%m-%dT%H:%M:%SZ>
++base: <BASE_REF>
++base_sha: <BASE_SHA>
++diff_stat: <DIFF_STAT>
++style_md_revision: <STYLE_MD_REVISION>
++voices_available: [<VOICES_AVAILABLE comma-separated>]
++voices_succeeded: [<voices_succeeded from summary>]
++total_findings: <N>
++by_severity: {P0: N, P1: N, P2: N, P3: N, P4: N}
++findings_index:
++  - {id: T-MR-001, severity: P1, category: defensive-bloat, file: src/foo.rs, title: "..."}
++  # ... one entry per finding
++---
++
++# MR Review — <SLUG>
++
++Findings ranked P0-P4. **Delete any finding you don't want fixed.** Then `/z-implement-all --tasks=z-harness/<SLUG>/MR-REVIEW.md`.
++
++## P0 — would cause future bugs
++
++(findings with severity=P0, each as a task block; omit section if empty)
++
++- [ ] T-MR-NNN. <title>
++  **File:** <file>:<line_start>-<line_end>
++  **Category:** <category>
++  **Voices:** <voices list, comma-separated>
++  **Citation:** <citation or "none">
++  **Finding:** <detail>
++  **Acceptance criteria:**
++  - Address the finding in <file> per the detail above.
++
++## P1 — clear regression
++
++(findings with severity=P1; omit section if empty)
++
++## P2 — style drift
++
++(findings with severity=P2; omit section if empty)
++
++## P3 — minor hygiene
++
++(findings with severity=P3; omit section if empty)
++
++## P4 — taste-only nits
++
++(findings with severity=P4; omit section if empty)
++```
++
++Rules:
++- Omit any severity section that has zero findings — do not emit an empty `## P2 — style drift` section.
++- For `line_start`/`line_end`: if both are non-null, format as `<file>:<line_start>-<line_end>`. If only `line_start` is non-null, format as `<file>:<line_start>`. If both are null, just `<file>`.
++- `voices` in each finding block: the agent returns `voices_succeeded` at the summary level; in T005/T006 single-voice mode the per-finding voices tag is always `[claude]`. Use `claude` in the finding block.
++- `Citation`: use the `citation` field from the finding JSON. If null, write `none`.
++
++Write the completed content to **both** paths:
++1. `z-harness/<SLUG>/MR-REVIEW.md` — canonical (overwrites any prior file)
++2. `<ARCHIVE_DIR>/MR-REVIEW.md` — snapshot (identical content)
++
++```bash
++mkdir -p "$SLUG_DIR"
++# Write both files with the same content
++python3 - <<'PYEOF'
++import os
++
++slug_dir = os.environ['SLUG_DIR']
++archive_dir = os.environ['ARCHIVE_DIR']
++content = os.environ['MR_REVIEW_CONTENT']
++
++canonical = os.path.join(slug_dir, 'MR-REVIEW.md')
++snapshot  = os.path.join(archive_dir, 'MR-REVIEW.md')
++
++with open(canonical, 'w') as f:
++    f.write(content)
++with open(snapshot, 'w') as f:
++    f.write(content)
++
++print(f"Wrote {canonical}")
++print(f"Wrote {snapshot}")
++PYEOF
++```
++
++### Step 3f — Emit per-finding telemetry
++
++For each finding emit one `mr_finding_emitted` event:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" mr_finding_emitted \
++  "$(printf '{"slug":"%s","run_id":"%s","id":"%s","severity":"%s","category":"%s","voices_count":1,"dismissal_match":false}' \
++     "$SLUG" "$RUN" "$FINDING_ID" "$FINDING_SEVERITY" "$FINDING_CATEGORY")"
++```
++
++### Step 3g — Log mr_run_end
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" mr_run_end \
++  "$(python3 -c '
++import json, sys
++slug, run_id, total, by_sev_json, by_cat_json, voices_s, voices_f, dismissal_matches = \
++  sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7], int(sys.argv[8])
++by_sev = json.loads(by_sev_json)
++by_cat = json.loads(by_cat_json)
++print(json.dumps({
++  "slug": slug,
++  "run_id": run_id,
++  "total_findings": total,
++  "by_severity": by_sev,
++  "by_category": by_cat,
++  "voices_succeeded": voices_s.split(",") if voices_s else [],
++  "voices_failed": voices_f.split(",") if voices_f else [],
++  "dismissal_matches": dismissal_matches,
++}))
++' "$SLUG" "$RUN" "$TOTAL_FINDINGS" "$BY_SEVERITY_JSON" "$BY_CATEGORY_JSON" "$VOICES_SUCCEEDED" "$VOICES_FAILED" "$DISMISSAL_MATCHES")"
++```
++
++---
++
++## Phase 4 — Final user message
++
++After writing both files, output a final message to the user:
++
++```
++MR review complete.
++
++Results: z-harness/<SLUG>/MR-REVIEW.md
++  Total findings: <N>
++  P0: <N>  P1: <N>  P2: <N>  P3: <N>  P4: <N>
++  Voices: <VOICES_AVAILABLE>
++  Run ID: <RUN>
++
++Delete what you don't want, then /z-implement-all --tasks=z-harness/<SLUG>/MR-REVIEW.md to apply the survivors.
++```
++
++If `DISMISSAL_MATCHES >= 3`, append after the main message:
++
++```
++Note: <N> finding(s) match prior dismissal patterns. Consider `/z-style-init --amend` to codify these preferences into STYLE.md so they are not raised again.
++```
++
++---
++
++## End-to-end smoke test (manual)
++
++To manually verify this command end-to-end on a small synthetic diff:
++
++1. Create a scratch repo with `git init scratch-repo && cd scratch-repo && git commit --allow-empty -m "init"`.
++2. Create a minimal `STYLE.md` with one rule:
++   ```markdown
++   ---
++   schema_version: 1
++   source: natural-language
++   source_files: []
++   repo: scratch-repo
++   revision: HEAD
++   generated_at: 2026-05-23T00:00:00Z
++   ---
++   ## Error handling
++   ### EH-001: Never swallow exceptions silently
++   Do not use bare `except: pass` or `except Exception: pass` without re-raising.
++   Rationale: Silent failures make debugging impossible.
++   ## Tests
++   ## Comments
++   ## Naming
++   ## Project-specific
++   ```
++   Commit STYLE.md to main: `git add STYLE.md && git commit -m "add STYLE.md"`.
++3. Create a feature branch: `git checkout -b feature/smoke-test`.
++4. Add a Python file with a bad pattern:
++   ```python
++   # payment.py
++   def format_price(x):
++       return f"${x:.2f}"
++
++   def process():
++       try:
++           do_something()
++       except Exception:
++           pass  # swallow silently
++   ```
++   Commit: `git add payment.py && git commit -m "add payment module"`.
++5. Run `/z-mr-review`. Expected outcome:
++   - Command completes without error.
++   - `z-harness/feature-smoke-test/MR-REVIEW.md` is created with valid YAML frontmatter, at least one finding, `T-MR-001` block present, and the "Delete what you don't want" footer line.
++
++---
++
++## Operating principles
++
++- **Never skip the STYLE.md gate.** There is no `--no-style` flag. No STYLE.md → refuse immediately.
++- **Never run on trunk without `--force-on-trunk`.** The check is a safety net against accidentally reviewing main.
++- **Voice degradation is a warning, not an error.** Single-voice mode is allowed; the user is informed.
++- **Chunking is transparent to the agent.** The agent always receives a single `.patch` file. Polymorphism lives in the orchestrator only.
++- **Log everything** via `scripts/log-event.sh`. Dismissal events are emitted per-signature, every run.
++- **Archive before overwrite.** Existing `MR-REVIEW.md` is always archived before being replaced.
++- **Empty diff exits cleanly.** No review needed if there are no changes.

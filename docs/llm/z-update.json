@@ -1,0 +1,19 @@
+{
+  "slug": "z-update",
+  "summary": "Slash command for updating a z-harness install in-place. Detects install mode (symlink vs tarball) and takes the appropriate update path: git pull --ff-only for symlink, atomic tarball swap for tarball installs. Version is tracked via scripts/version.sh. No autoupdate — updates are always explicit.",
+  "key_invariants": [
+    "In symlink mode, /z-update aborts if the plugin repo has uncommitted changes (git status --porcelain is non-empty) — the user must resolve before updating.",
+    "In tarball mode, the swap is atomic: old dir is moved aside first, new dir moved in; on any failure the old dir is restored before exiting.",
+    "No autoupdate. Updates must be triggered explicitly by the user via /z-update.",
+    "A harness_updated event with old_version and new_version is emitted to metrics.jsonl on every successful update."
+  ],
+  "key_files": [
+    { "path": "install.sh", "why": "Initial install script; handles both symlink and tarball modes; sets up ~/.claude/plugins/z-harness@zeke-tools." },
+    { "path": "scripts/bundle-plugin.sh", "why": "Produces the release tarball (excludes plans/, archive/, transcripts, providers.json)." },
+    { "path": "scripts/version.sh", "why": "Emits the current plugin version (git short SHA); used by both install.sh and /z-update." },
+    { "path": "commands/z-update.md", "why": "Slash command implementation: locate plugin, detect mode, pull or swap, emit event." },
+    { "path": "docs/human/INSTALL.md", "why": "User-facing guide: symlink vs tarball install, /z-update flow, no-autoupdate policy." }
+  ],
+  "related_concepts": ["commands", "scripts", "plan-layout-migration"],
+  "last_updated": "2026-05-24"
+}

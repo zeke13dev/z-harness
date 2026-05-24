@@ -8,7 +8,7 @@ Notification policy: read env `Z_HARNESS_NOTIFY` (default `approval_only`).
 
 ## Phase 0 — Discover plan slug
 
-Multiple plans may coexist under `z-harness/<slug>/`. Determine which one to operate on:
+Multiple plans may coexist under `$Z_HARNESS_PLAN_DIR/`. Determine which one to operate on:
 
 1. Enumerate candidates:
    - List immediate subdirs of `z-harness/` that contain a `TASKS.md`.
@@ -17,7 +17,7 @@ Multiple plans may coexist under `z-harness/<slug>/`. Determine which one to ope
    - **One candidate** → use it. If slug-namespaced, `export Z_HARNESS_SLUG=<slug>`. If legacy flat, leave `Z_HARNESS_SLUG` unset.
    - **Multiple candidates** → `AskUserQuestion` with each slug as an option. Set `Z_HARNESS_SLUG` to the chosen one.
    - **Zero candidates** → tell the user there's no plan; suggest `/z-plan`. Stop.
-3. From here on, **`BASE`** refers to `z-harness/$Z_HARNESS_SLUG` (or `z-harness` if legacy). Paths below use `$BASE`.
+3. From here on, **`BASE`** refers to `$Z_HARNESS_PLAN_DIR` (or `z-harness` if legacy). Paths below use `$BASE`.
 
 ## Phase 1 — Load context
 
@@ -58,7 +58,7 @@ Agent(
   subagent_type="implementer",
   description="Implement <task-id>",
   model="<sonnet|opus per the rules above>",
-  prompt="<task-id>\n\n<task block verbatim from TASKS.md>\n\n$BASE: <abs path to z-harness/<slug>>\nRepo root: <abs path>\nrelevant_docs (paths — Read these for cross-file invariants): <paths>"
+  prompt="<task-id>\n\n<task block verbatim from TASKS.md>\n\n$BASE: <abs path to $Z_HARNESS_PLAN_DIR>\nRepo root: <abs path>\nrelevant_docs (paths — Read these for cross-file invariants): <paths>"
 )
 ```
 
@@ -77,7 +77,7 @@ Obey DRY/KISS/SOLID. No shortcuts unless PLAN.md explicitly approved one for thi
 
 ```
 Agent(
-  subagent_type="codex-reviewer",
+  subagent_type="reviewer",
   description="Codex scrutiny of task <ID>",
   prompt="task id: <id>\ntask description: <title>\nacceptance criteria: <verbatim from task block>\ndiff.patch path: <abs path>\nchanged files: <abs paths>\nrelevant_docs (paths — verify the diff didn't break invariants stated here): <paths>\n$BASE: <abs path>  (read SPEC.md yourself for relevant sections)"
 )

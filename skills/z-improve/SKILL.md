@@ -1,6 +1,6 @@
 ---
 description: Post-run retrospective. Analyzes ONE z-harness run's events.jsonl + artifacts, identifies friction signals (slow phases, retries, doc drift, blocked askings, reviewer cycles), and opens a discussion with the user about concrete edits to the z-harness repo itself (commands, agents, scripts). Optional cross-LLM consult on proposed changes. Discussion logged to z-harness/improvements/. Opt-in; never auto-fired.
-argument-hint: <slug> | <slug>/<run-id> | adhoc/<run-id>
+argument-hint: <slug> | $Z_HARNESS_PLAN_DIR/<run-id> | adhoc/<run-id>
 ---
 
 You are running **z-harness `/z-improve`** — the self-improvement retro for a completed run.
@@ -14,13 +14,13 @@ $ARGUMENTS
 ## Phase 0 — Resolve target run
 
 `$ARGUMENTS` should name one of:
-- `<slug>` → use the most recent run under `z-harness/<slug>/archive/`
-- `<slug>/<run-id>` → exact run
+- `<slug>` → use the most recent run under `$Z_HARNESS_PLAN_DIR/archive/`
+- `$Z_HARNESS_PLAN_DIR/<run-id>` → exact run
 - `adhoc/<run-id>` → a `/z-do` run
 - (empty) → list the 10 most recent runs across all slugs (via `ls -t z-harness/*/archive/* 2>/dev/null | head -10`) and `AskUserQuestion` to pick
 
 Resolve to absolute paths:
-- `$RUN_DIR = z-harness/<slug>/archive/<run-id>` (or `z-harness/adhoc/archive/<run-id>`)
+- `$RUN_DIR = $Z_HARNESS_PLAN_DIR/archive/<run-id>` (or `z-harness/adhoc/archive/<run-id>`)
 - `$EVENTS = $RUN_DIR/events.jsonl`
 
 If `$EVENTS` doesn't exist, tell the user this run has no telemetry and ask whether to proceed analyzing artifacts only.
@@ -38,11 +38,11 @@ Read (all from main thread — these are tight):
 - `$EVENTS` — events.jsonl. Parse with `python3 -c 'import json; [print(json.loads(l)) for l in open(sys.argv[1])]'` or jq.
 - `$RUN_DIR/manifest.json` if present
 - The run's primary artifact, if present:
-  - full plan: `z-harness/<slug>/{SPEC,PLAN,TASKS}.md`
-  - light plan: `z-harness/<slug>/FIX.md`
+  - full plan: `$Z_HARNESS_PLAN_DIR/{SPEC,PLAN,TASKS}.md`
+  - light plan: `$Z_HARNESS_PLAN_DIR/FIX.md`
   - z-do: `$RUN_DIR/approach.md` + `$RUN_DIR/premise.md`
-  - audit: `z-harness/<slug>/REPORT.md`
-  - debug: `z-harness/<slug>/POST-MORTEM.md` if present, else `PROBLEM.md`
+  - audit: `$Z_HARNESS_PLAN_DIR/REPORT.md`
+  - debug: `$Z_HARNESS_PLAN_DIR/DEBUG.md ## Problem` and `DEBUG.md ## Post-mortem` if present
 - Codex review transcripts (under `$RUN_DIR/transcripts/`) if present — read at most 2, the most recent.
 
 Save a one-paragraph "run summary" to scratch (don't write it to disk yet).
@@ -114,10 +114,10 @@ Hard limit: ≤5 proposals per retro. If more candidates surface, pick the 5 wit
 If any proposal touches a non-trivial part of the harness (cross-command behavior, new subagent, change to event schema, change to consultation rules), spawn a bundled consult:
 
 ```
-Agent(subagent_type="gemini-consultant",
+Agent(subagent_type="consultant-primary",
       description="z-improve consult — Gemini",
       prompt="MODE: harness-self-improvement\n\nObserved friction:\n<bulleted signals>\n\nProposed harness edits:\n<proposals 1..N>\n\nAsk: which proposals actually address the root friction? which create new problems? what did I miss?")
-Agent(subagent_type="codex-consultant",
+Agent(subagent_type="consultant-secondary",
       description="z-improve consult — Codex",
       prompt="<same body>")
 ```
@@ -173,7 +173,7 @@ context: "z-improve retro for <slug>: accepted <N> proposal(s) — <one-sentence
 # For each z-harness file path touched by accepted edits, derive a slug:
 #   commands/z-plan.md        → z-plan
 #   skills/z-plan/SKILL.md   → z-plan
-#   agents/codex-reviewer.md  → codex-reviewer
+#   agents/reviewer.md  → reviewer
 # Rule: strip the parent directory prefix and strip the .md or /SKILL.md suffix.
 # Deduplicate the resulting list.
 # concept_hints = space-joined slug list

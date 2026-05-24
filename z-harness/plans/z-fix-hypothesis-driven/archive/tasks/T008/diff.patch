@@ -1,0 +1,80 @@
+diff --git a/docs/llm/commands.json b/docs/llm/commands.json
+index d72fa38..cdb6352 100644
+--- a/docs/llm/commands.json
++++ b/docs/llm/commands.json
+@@ -1,12 +1,14 @@
+ {
+   "concept": "commands",
+-  "last_updated": "2026-05-23",
++  "last_updated": "2026-05-24",
+   "covers_spec": "none",
+   "source_file": [
+     "commands/z-amend.md",
+     "commands/z-audit.md",
+     "commands/z-brainstorm.md",
+     "commands/z-debug.md",
++    "commands/z-mr-review.md",
++    "commands/z-style-init.md",
+     "commands/z-do.md",
+     "commands/z-implement-all.md",
+     "commands/z-implement-next.md",
+@@ -21,10 +23,25 @@
+     "commands/z-skill-fix.md",
+     "commands/z-stats.md",
+     "commands/z-suggest-memory.md",
++    "commands/z-fix.md",
+     "commands/z-test.md"
+   ],
+   "confidence": "high",
+   "entry_points": [
++    {
++      "file": "commands/z-mr-review.md",
++      "line": 1,
++      "symbol": "z-mr-review",
++      "kind": "module",
++      "summary": "Orchestrates multi-LLM code-quality review of a branch diff; writes P0-P4 findings to MR-REVIEW.md."
++    },
++    {
++      "file": "commands/z-style-init.md",
++      "line": 1,
++      "symbol": "z-style-init",
++      "kind": "module",
++      "summary": "Authors or amends the project STYLE.md via Capture-first grounding and interactive interview."
++    },
+     {
+       "file": "commands/z-amend.md",
+       "line": 1,
+@@ -51,7 +68,8 @@
+       "line": 1,
+       "symbol": "z-debug",
+       "kind": "module",
+-      "summary": "Coordinates regression investigation, hypothesis isolation, and fix loops."
++      "summary": "Heavy hypothesis-tournament debugging pipeline: 3-LLM 2-round adversarial hypothesis generation, ordinal Bayesian scoring, consensus-first ranking with forced outlier carve-out, 3-5 isolation rounds, fix-gate requires highest posterior and full evidence coverage. Single unified DEBUG.md artifact.",
++      "last_updated": "2026-05-24"
+     },
+     {
+       "file": "commands/z-do.md",
+@@ -151,6 +169,13 @@
+       "kind": "module",
+       "summary": "Appends key lessons and edge case memories to concept documentation JSON."
+     },
++    {
++      "file": "commands/z-fix.md",
++      "line": 1,
++      "symbol": "z-fix",
++      "kind": "module",
++      "summary": "Lightweight bug-fix command for the case where the user already has a diagnosis; single light-fix consult, inline implementation, non-negotiable Codex review, optional post-mortem."
++    },
+     {
+       "file": "commands/z-test.md",
+       "line": 1,
+@@ -161,7 +186,8 @@
+   ],
+   "depends_on": [
+     "agents",
+-    "scripts"
++    "scripts",
++    "z-plan-light"
+   ],
+   "consumed_by": [
+     "skills"

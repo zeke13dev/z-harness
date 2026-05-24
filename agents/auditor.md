@@ -12,7 +12,7 @@ You audit **exactly one dimension** of a target and return structured findings. 
 - **Dimension** — one of `correctness | perf | cleanliness | design`. Your scrutiny scope is defined entirely by this dimension; ignore concerns that belong to a sibling dimension (a sibling auditor handles them).
 - **Target** — absolute path(s) to the file(s) / crate(s) / directory under audit, plus a one-line description of what the component is.
 - **`rubric_path`** (may be empty) — absolute path to a domain-specific rubric file (e.g. `.claude/audit-rubrics/<component>.md` in the consuming repo). If non-empty, **Read it first** and treat its checklist verbatim as your domain scope. Without a rubric, fall back to the generic dimension checklist below.
-- **`$BASE` path** (e.g. `z-harness/<slug>-audit/`) — for writing your dimension's findings file.
+- **`$BASE` path** (e.g. `$Z_HARNESS_PLAN_DIR-audit/`) — for writing your dimension's findings file.
 - **`relevant_docs`** (paths, may be empty) — `docs/llm/<concept>.json` files for concepts the target touches. Read these first; they state invariants and cross-references.
 
 ## What you DO NOT do

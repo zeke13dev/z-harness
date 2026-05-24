@@ -1,0 +1,162 @@
+---
+description: z-harness z-update workflow
+---
+
+# /z-update
+
+Update the z-harness plugin to the latest version.
+
+## What it does
+
+Detects whether z-harness is installed as a **symlink** (dev/clone mode) or a **tarball** (extracted mode), then runs the appropriate update path.
+
+Emits a `harness_updated` event with old and new version stamps.
+
+---
+
+## Steps
+
+### 1. Locate plugin root
+
+```bash
+PLUGIN_LINK="${HOME}/.claude/plugins/z-harness@zeke-tools"
+```
+
+If `$PLUGIN_LINK` does not exist, halt with:
+```
+[z-update] ERROR: plugin not found at ~/.claude/plugins/z-harness@zeke-tools
+Run install.sh from the repo or supply --tarball=<url> to install first.
+```
+
+### 2. Detect install mode
+
+```bash
+if [ -L "$PLUGIN_LINK" ]; then
+  MODE="symlink"
+  PLUGIN_DIR="$(readlink "$PLUGIN_LINK")"
+else
+  MODE="tarball"
+  PLUGIN_DIR="$PLUGIN_LINK"
+fi
+```
+
+### 3. Capture old version
+
+```bash
+OLD_VERSION="$(bash "${PLUGIN_DIR}/scripts/version.sh")"
+```
+
+### 4. Symlink mode — git pull
+
+Pre-flight: abort on dirty tree.
+
+```bash
+DIRTY="$(git -C "$PLUGIN_DIR" status --porcelain 2>/dev/null)"
+if [ -n "$DIRTY" ]; then
+  echo "[z-update] Aborting: plugin repo has uncommitted changes:"
+  git -C "$PLUGIN_DIR" status
+  echo ""
+  echo "Commit or stash your changes, then re-run /z-update."
+  exit 1
+fi
+```
+
+Pull:
+
+```bash
+git -C "$PLUGIN_DIR" pull --ff-only
+```
+
+If `git pull --ff-only` fails (e.g. diverged), print the error and advise the user to resolve manually. Do not force-merge or reset.
+
+### 5. Tarball mode — atomic swap
+
+```bash
+RELEASE_URL="${Z_HARNESS_RELEASE_URL:-}"
+# TODO: replace placeholder with real release URL once hosting is set up
+RELEASE_URL="${RELEASE_URL:-https://example.com/z-harness/releases/latest/z-harness.tar.gz}"
+```
+
+Steps:
+1. HEAD-check the release URL to get the latest version tag (via `curl -fsSI` or similar).
+2. If the version matches the current install, print `[z-update] Already up to date (${OLD_VERSION}).` and exit 0.
+3. Download new tarball to a temp directory.
+4. Extract to a temp location adjacent to the plugin dir.
+5. Atomically swap: `mv "$PLUGIN_DIR" "${PLUGIN_DIR}.old" && mv "$TMP_EXTRACT" "$PLUGIN_DIR"`.
+6. Remove the old dir: `rm -rf "${PLUGIN_DIR}.old"`.
+7. On any failure during swap, restore: `mv "${PLUGIN_DIR}.old" "$PLUGIN_DIR"`.
+
+```bash
+TMP_DIR="$(mktemp -d)"
+TMP_TARBALL="${TMP_DIR}/z-harness.tar.gz"
+TMP_EXTRACT="${TMP_DIR}/extracted"
+
+cleanup() { rm -rf "$TMP_DIR"; }
+trap cleanup EXIT
+
+if command -v curl >/dev/null 2>&1; then
+  curl -fsSL "$RELEASE_URL" -o "$TMP_TARBALL"
+elif command -v wget >/dev/null 2>&1; then
+  wget -q "$RELEASE_URL" -O "$TMP_TARBALL"
+else
+  echo "[z-update] ERROR: neither curl nor wget found." >&2
+  exit 1
+fi
+
+mkdir -p "$TMP_EXTRACT"
+tar -xzf "$TMP_TARBALL" -C "$TMP_EXTRACT"
+
+# Handle single-top-dir tarballs
+TOP_COUNT="$(ls "$TMP_EXTRACT" | wc -l | tr -d ' ')"
+if [ "$TOP_COUNT" -eq 1 ]; then
+  TOP_DIR="$(ls "$TMP_EXTRACT")"
+  TMP_EXTRACT="${TMP_EXTRACT}/${TOP_DIR}"
+fi
+
+# Atomic swap
+mv "$PLUGIN_DIR" "${PLUGIN_DIR}.old"
+if mv "$TMP_EXTRACT" "$PLUGIN_DIR"; then
+  rm -rf "${PLUGIN_DIR}.old"
+else
+  echo "[z-update] ERROR: swap failed; restoring previous install." >&2
+  mv "${PLUGIN_DIR}.old" "$PLUGIN_DIR"
+  exit 1
+fi
+```
+
+### 6. Capture new version and emit event
+
+```bash
+NEW_VERSION="$(bash "${PLUGIN_DIR}/scripts/version.sh")"
+
+echo "[z-update] Updated successfully."
+echo "  old: ${OLD_VERSION}"
+echo "  new: ${NEW_VERSION}"
+```
+
+Emit event:
+
+```bash
+PLUGIN_ROOT="${PLUGIN_DIR}"
+bash "${PLUGIN_ROOT}/scripts/log-event.sh" \
+  "z-update-$(date -u +%Y%m%dT%H%M%SZ)" \
+  harness_updated \
+  "$(printf '{"mode":"%s","old_version":%s,"new_version":%s}' \
+     "$MODE" "$OLD_VERSION" "$NEW_VERSION")"
+```
+
+---
+
+## Environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `Z_HARNESS_RELEASE_URL` | placeholder URL | Override release download URL for tarball updates |
+
+---
+
+## Notes
+
+- In symlink mode, the plugin dir is the live repo — no extraction needed.
+- In tarball mode, `--ff-only` is not applicable; the atomic swap is the equivalent safety guarantee.
+- If you want to switch from tarball to symlink mode, clone the repo and re-run `install.sh` from inside it.

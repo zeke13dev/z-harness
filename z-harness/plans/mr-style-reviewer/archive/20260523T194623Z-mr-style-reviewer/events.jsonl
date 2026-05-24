@@ -1,0 +1,2 @@
+{"ts":"2026-05-23T19:46:23Z","run":"20260523T194623Z-mr-style-reviewer","kind":"run_start","slug":"mr-style-reviewer","z_harness_version":"338e138","z_harness_dirty":true,"z_harness_branch":"main","task":"Implement MR-style reviewer per BRAINSTORM.md (/z-mr-review + /z-style-init)"}
+{"ts":"2026-05-23T20:23:29Z","run":"20260523T194623Z-mr-style-reviewer","kind":"run_end","slug":"mr-style-reviewer","status":"complete","tasks":14,"shortcuts":2,"phases_completed":9}

@@ -11,8 +11,8 @@ Same logic as `/z-implement-all` / `/z-implement-next`:
 
 1. Enumerate subdirs of `z-harness/` containing a `TASKS.md`. Also check legacy flat `z-harness/TASKS.md`.
 2. Single candidate → use it. Multiple → `AskUserQuestion` to pick (or honor `--slug <slug>` argument). Zero → tell user nothing to review; stop.
-3. Export `Z_HARNESS_SLUG=<slug>` (or leave unset for legacy flat).
-4. `BASE = z-harness/$Z_HARNESS_SLUG` (or `z-harness` for legacy).
+3. Export `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")` (or leave unset for legacy flat).
+4. `BASE = $Z_HARNESS_PLAN_DIR` (or `z-harness` for legacy).
 
 Pick a review run id: `RRUN=$(date -u +%Y%m%dT%H%M%SZ)-review`. Create `$BASE/archive/$RRUN/`.
 
@@ -118,12 +118,12 @@ Each is asked the **two-pronged** review:
 
 ```
 Agent(
-  subagent_type="gemini-consultant",
+  subagent_type="consultant-primary",
   description="Final-review (Gemini) for plan <slug>",
   prompt="MODE: final-review-2pronged\n\n<full prompt with both prongs, plus paths to SPEC/PLAN/TASKS and cumulative.diff>"
 )
 Agent(
-  subagent_type="codex-consultant",
+  subagent_type="consultant-secondary",
   description="Final-review (Codex) for plan <slug>",
   prompt="MODE: final-review-2pronged\n\n<same>"
 )

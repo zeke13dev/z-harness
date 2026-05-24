@@ -56,12 +56,12 @@ For each `doc-updater` return from Phase 2, spawn **both** consultants in parall
 
 ```
 Agent(
-  subagent_type="gemini-consultant",
+  subagent_type="consultant-primary",
   description="Doc audit (Gemini) for <concept>",
   prompt="MODE: doc-audit\n\nConcept: <slug>\nProposed human-tier markdown:\n<verbatim from doc-updater HUMAN_DOC>\n\nProposed LLM-tier JSON:\n<verbatim from doc-updater LLM_DOC>\n\nSource files (read these):\n<list of abs paths>\n\nPrior doc (if any):\n<verbatim or 'none — fresh init'>\n\nAsk: does the proposed doc accurately describe the source files? List specific claims that don't match (file:line). List concepts the doc should cover but doesn't."
 )
 Agent(
-  subagent_type="codex-consultant",
+  subagent_type="consultant-secondary",
   description="Doc audit (Codex) for <concept>",
   prompt="MODE: doc-audit\n\n<same prompt body>"
 )

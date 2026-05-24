@@ -1,0 +1,302 @@
+# /z-fix
+
+You are running **z-harness `/z-fix`** — a fast path for bugs where you already know the root cause. Target: ≤15 min wall time end-to-end.
+
+Task (from `$ARGUMENTS`):
+
+$ARGUMENTS
+
+**If the task above is empty** — use `AskUserQuestion` to ask "What's the symptom and your hypothesis for the cause?" before proceeding. Do not invent.
+
+This command is for **targeted fixes with a known diagnosis**. If at any phase you realize scope is broader or the root cause is unclear, STOP and recommend `/z-debug` instead.
+
+## Setup
+
+1. **Derive slug** — short kebab-case like `fix-<short-description>` (e.g. "null pointer on login" → `fix-null-pointer-login`). Confirm via `AskUserQuestion` if non-obvious or might collide with an existing slug (`ls z-harness/` first).
+2. Export `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")`.
+3. Pick run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`.
+4. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`.
+5. **Version stamp + log:**
+   ```bash
+   VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
+   START_PAYLOAD="$(python3 -c '
+   import json, sys
+   v = json.loads(sys.argv[1]); v["task"] = sys.argv[2]
+   print(json.dumps(v))
+   ' "$VERSION_BLOB" "<arguments>")"
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" fix_run_start "$START_PAYLOAD"
+   ```
+6. Notification policy: read `Z_HARNESS_NOTIFY` (default `approval_only`).
+7. Initialize `REVIEW_CYCLES=0` counter (used in Phase 9 post-mortem trigger).
+8. If `docs/llm/INDEX.json` exists → note it. Phase 1 will dispatch `doc-fetcher` (Haiku). Do NOT read INDEX.json or per-concept JSONs from main thread.
+
+## Auto-bail thresholds (check throughout)
+
+At any phase, if you discover:
+
+- **>5 candidate files** need editing
+- **>2 non-obvious decisions** (per the rules `/z-plan` uses: new dep, public API change, algorithm with materially different tradeoffs, persistence change)
+- **Cross-module / cross-crate impact** (the fix touches multiple modules, public APIs, wire formats, or schemas)
+- **The user explicitly says** "this might be bigger than I thought"
+
+→ STOP. Write `$Z_HARNESS_PLAN_DIR/escalation.md` describing what you found. Push-notify: "Scope grew past fix-mode thresholds. Recommend `/z-plan <task>`." Do not proceed to implementation.
+
+## Phase 0 — Wrong-tool gate (NON-SKIPPABLE)
+
+Before any exploration, ask via `AskUserQuestion`:
+
+> "Do you already have a hypothesis for what's causing this?"
+> - `yes — proceed with /z-fix` (default)
+> - `no — recommend /z-debug` (will exit)
+> - `modify hypothesis — let me refine it first` (free-text follow-up, then loop back to this question)
+
+If user picks **no** → output one line: "Root cause unknown — run `/z-debug <symptom>` to start a hypothesis-driven investigation." Then log `fix_run_end` with `{status: "wrong_tool"}` and exit. Do not continue.
+
+This gate is non-skippable even if the user passed an argument. A symptom description alone is not a hypothesis.
+
+## Phase 1 — Problem + repro + quick exploration (combined)
+
+**Premise check.** Don't take the description for granted:
+- Is this actually caused by the named hypothesis? Could the symptom have a different origin?
+- Will fixing the proposed cause actually resolve the symptom?
+- Is there a materially simpler fix path the user hasn't considered?
+
+If any concern surfaces → raise it with the user via `AskUserQuestion` before proceeding. Don't plan around a flawed premise.
+
+**Capture problem + evidence inline:**
+
+Write an `## Evidence` section to `$Z_HARNESS_PLAN_DIR/archive/$RUN/phase1-context.md` with:
+- The symptom (quoted if log/error output)
+- The repro steps or failing test
+- The proposed hypothesis (user's stated diagnosis)
+- Any confirming or contradicting signals already observed
+
+These become sections in FIX.md at Phase 6.
+
+**Quick exploration:**
+1. **If `docs/llm/INDEX.json` exists, dispatch `doc-fetcher` (Haiku) FIRST** — cheapest grounding available:
+   ```
+   <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+         description="Doc context for <slug>",
+         prompt="query: <one-sentence fix description>\nrepo_root: <abs path>\ndepth: standard")
+   ```
+2. After doc-fetcher returns (or if no INDEX.json), Read 3-5 source files MAX to fill gaps. **Do NOT spawn the `Explore` subagent** — too expensive for fix-mode. Use Read/Grep/Glob directly from main thread.
+
+Output: 1-paragraph problem statement + 1-paragraph context (hypothesis + confirming evidence).
+
+**Check auto-bail thresholds.** If reading reveals >5 candidate files or cross-module impact, bail now.
+
+## Phase 2 — Single key decision
+
+Most light fixes have ONE root question: "what's the right fix for this cause?" Articulate it explicitly.
+
+If there are >2 truly non-obvious decisions (new dep, public API change, algorithm with materially different tradeoffs, persistence change), **bail to `/z-plan`** — the cross-decision interaction analysis is worth the overhead.
+
+## Phase 3 — Bundled `light-fix` consult
+
+Spawn both consultants in parallel in a single message. The consult question is framed around the user's hypothesis — NOT a generic "what's the best fix?" framing:
+
+```
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+  subagent_type="consultant-primary",
+  description="Light-fix consult (Gemini) for <slug>",
+  prompt="MODE: light-fix\n\nUser's proposed cause: <hypothesis>\n\nProblem: <1-paragraph symptom + repro>\nEvidence: <1-paragraph confirming/contradicting signals>\nKey decision: <what's the right fix for this specific cause?>\nCandidate options (if any): <list with one-line tradeoffs>\nRelevant code snippets:\n<short quoted code with file:line markers>\n\nAsk: Does this proposed cause explain ALL symptoms listed in the evidence above? If not, what is the gap? Recommend the fix approach with tradeoffs. Be concise — this is a targeted fix for a known cause, not a feature."
+)
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+  subagent_type="consultant-secondary",
+  description="Light-fix consult (Codex) for <slug>",
+  prompt="MODE: light-fix\n\n<same prompt body>"
+)
+```
+
+Both transcripts archive themselves under `$Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts/`.
+
+## Phase 4 — Synthesize + push back
+
+When both return:
+
+1. **One reason it might be wrong.** For each recommendation, articulate one concrete reason it could be wrong before accepting it. Mechanical, not optional.
+2. **Synthesize.** Make the final call yourself, citing what you weighed.
+3. **Flag shortcuts.** If any option is a shortcut over the robust long-lasting solution, mark it explicitly — needs Phase 5 user approval.
+4. **Cross-LLM disagreement.** If Gemini and Codex disagree substantively — or either flags that the proposed cause does NOT explain all symptoms — surface the disagreement to the user in Phase 5. Do not silently pick one side.
+
+## Phase 5 — Approve
+
+Send `PushNotification` (if policy != `off`): "Fix-mode decision ready for review."
+
+Present a brief synthesis (3-5 bullets) via `AskUserQuestion`:
+- "Approve fix as proposed"
+- "Modify — I want to change <X>" (free-text follow-up)
+- "Abandon — this isn't the right approach"
+
+For any flagged shortcut: separate explicit approval via `AskUserQuestion` (default to robust if not approved).
+
+If user picks **Abandon** → write nothing more; log `fix_run_end` with `{status: "abandoned"}`; exit.
+
+## Phase 6 — Write FIX.md
+
+Write `$Z_HARNESS_PLAN_DIR/FIX.md`:
+
+```markdown
+# Fix: <slug>
+
+**Run:** <RUN>
+**Status:** approved (not yet shipped)
+**Plugin version:** <z_harness_version from setup>
+
+## Problem
+<1 paragraph — symptom + repro>
+
+## Hypothesis
+<user's proposed cause>
+
+## Evidence
+<confirming + contradicting signals observed>
+
+## Root cause
+<1 paragraph — confirmed or refined diagnosis after consult>
+
+## Approach
+<concrete plan: what files change, what stays the same>
+
+## Files to change
+- `<abs path 1>`
+- `<abs path 2>`
+
+## Acceptance
+- [ ] <criterion 1>
+- [ ] <criterion 2>
+
+## Cross-LLM consensus
+- Gemini: <one-line recommendation + whether cause explains all symptoms>
+- Codex:  <one-line recommendation + whether cause explains all symptoms>
+- Synthesized call: <your decision + brief rationale>
+
+## Approved shortcuts
+<list each shortcut + why approved; or "none">
+
+## Docs touched
+<slug(s) from docs/llm/ matching changed files, or "none"; consumed by /z-maintain-docs later>
+```
+
+Note: FIX.md is the single artifact for this command. Problem, hypothesis, and evidence content live as sections within FIX.md — no separate PROBLEM.md or EVIDENCE.md files.
+
+No SPEC.md / PLAN.md / TASKS.md generated. FIX.md is the whole plan.
+
+## Phase 7 — Inline implementation (NO implementer subagent)
+
+The orchestrator (you, in main thread) reads the files listed in FIX.md "Files to change" and applies the edits directly with the Edit / Write tools. For 1-5 file edits the main thread already has all the context — spawning a fresh implementer just doubles token cost.
+
+**Apply the same self-check the implementer subagent would** (from `agents/implementer.md`):
+1. No broad exception handlers added.
+2. No scope expansion outside FIX.md's "Files to change" list.
+3. No unsolicited validation / error paths.
+4. No new public surface beyond what FIX.md describes.
+5. No stale docstrings / comments left behind.
+
+If you applied any fix from the checklist, note it in the user-facing summary later.
+
+**Mid-implementation scope growth — halt, do not continue.** If you discover mid-edit that the change needs more files than FIX.md anticipated, OR a new non-obvious decision surfaces, STOP immediately. Do NOT offer to continue or spawn a subagent — auto-bail is non-negotiable:
+
+1. Write `$Z_HARNESS_PLAN_DIR/escalation.md` describing what you found (which new files or decisions surfaced and why they exceed fix-mode thresholds).
+2. Log `fix_run_end` with `{status: "escalated"}`.
+3. Push-notify: "Scope grew past fix-mode thresholds mid-implementation. Recommend `/z-plan <task>`."
+4. Exit. The user must restart with `/z-plan`.
+
+Hard limit: if you find yourself touching >7 files inline, halt regardless — that's no longer a fix-mode change.
+
+## Phase 8 — Codex review (safety gate, non-negotiable)
+
+This step is non-negotiable. Even in fix mode, post-implementation review is the correctness guarantee.
+
+```bash
+git diff > $Z_HARNESS_PLAN_DIR/archive/$RUN/diff.patch
+```
+
+Spawn the reviewer:
+
+```
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+  subagent_type="reviewer",
+  description="Codex review of <slug>",
+  prompt="task id: <slug>\ntask description: <FIX.md Approach summary>\nacceptance criteria: <FIX.md Acceptance list>\ndiff.patch path: <abs path>\nchanged files: <abs paths from FIX.md>\nrelevant_docs (paths — verify the diff didn't break invariants stated here): <paths from FIX.md Docs touched>\n$BASE: $Z_HARNESS_PLAN_DIR  (read FIX.md yourself if you need more context)"
+)
+```
+
+Increment `REVIEW_CYCLES` by 1.
+
+Parse the return (already capped at 8 KB, blockers + majors only).
+
+**On blockers or majors:**
+- **First failure**: re-edit inline based on findings. Re-run `git diff`; if byte-identical to prior diff (you pushed back instead of editing), halt with `no_change_on_retry`. Otherwise re-spawn `reviewer` once. Increment `REVIEW_CYCLES` by 1.
+- **Second failure**: halt; `AskUserQuestion` — proceed anyway / patch manually / abandon.
+
+**No blockers/majors** → accept.
+
+## Phase 9 — Optional post-mortem
+
+Ask via `AskUserQuestion`:
+
+- **Default = NO** if `REVIEW_CYCLES <= 1`: "Write post-mortem? (optional — default: skip)"
+- **Default = YES** if `REVIEW_CYCLES > 1`: "Review cycles: <REVIEW_CYCLES>. Suggesting post-mortem — simple fix may have been subtler than expected. Write post-mortem? (default: yes)"
+
+Options: `yes — write post-mortem` | `no — skip`
+
+If user picks **yes** → write `$Z_HARNESS_PLAN_DIR/POSTMORTEM.md`:
+
+```markdown
+# Post-mortem: <slug>
+
+**Run:** <RUN>
+**Date:** <date>
+
+## Summary
+<1-2 sentence synopsis>
+
+## Timeline
+<ordered list of events from symptom notice to fix shipped>
+
+## Root cause
+<precise statement — what code path, what condition>
+
+## Fix
+<what was changed and why>
+
+## Why we didn't catch it
+<test gap, review gap, or assumption that failed>
+
+## Action items
+- [ ] <follow-up 1>
+- [ ] <follow-up 2>
+
+## Confidence
+<high|medium|low> — <one sentence on what would change this>
+```
+
+Note: the MR-review integration block is NOT triggered automatically in `/z-fix`. If needed, run `/z-mr-review` separately.
+
+If user picks **no** → skip; nothing written.
+
+## Phase 10 — Finalize
+
+1. Update FIX.md `Status:` to `shipped` and check off the acceptance boxes you verified.
+2. Mark the run done:
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" fix_run_end \
+     "$(printf '{"status":"shipped","files_changed":%d,"review_cycles":%d,"postmortem_written":%s}' \
+        "$N_FILES" "$REVIEW_CYCLES" "$POSTMORTEM_WRITTEN")"
+   ```
+   Where `$POSTMORTEM_WRITTEN` is `true` or `false`.
+3. Push-notify (if policy != `off`): "Fix complete. <N> files changed; review passed (<N> blockers/<M> majors resolved across <REVIEW_CYCLES> cycle(s))."
+4. **If FIX.md "Docs touched" is non-empty**, suggest: "Run `/z-maintain-docs --audit` to refresh affected concepts."
+5. Brief summary to user (3-5 sentences): what changed, what the reviewer flagged, what's next.
+
+## Hard rules
+
+- **Never skip Codex review.** Fix mode cuts planning overhead, not correctness.
+- **Never proceed past auto-bail thresholds** without explicit user override.
+- **Always emit cross-LLM consult** — both Gemini and Codex in parallel, framed around "does this cause explain all symptoms?", not a generic fix framing.
+- **Never overwrite an existing `$Z_HARNESS_PLAN_DIR/` directory** without asking the user.
+- **No emojis** anywhere in artifacts.
+- **Phase 0 is non-skippable.** If the user cannot name a hypothesis, the command exits with a `/z-debug` recommendation, even if an argument was passed.
+- **Single bundled `light-fix` consult only.** Parallel Gemini + Codex, framed around "does this cause explain all symptoms?" — not a multi-round hypothesis generation flow.

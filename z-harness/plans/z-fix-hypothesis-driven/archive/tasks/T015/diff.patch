@@ -1,0 +1,56 @@
+diff --git a/README.md b/README.md
+index bc4a19e..86d7c05 100644
+--- a/README.md
++++ b/README.md
+@@ -33,10 +33,16 @@ Every command writes its artifacts under `z-harness/<slug>/`, with run-frozen ar
+ - **`/z-implement-all`** — Orchestrates the full TASKS.md queue: one fresh `implementer` subagent per task → per-task `codex-reviewer` safety gate → retry once on review failure → push-notify at every task boundary. Walks a tree-rooted plan produced by `/z-plan-split` (one cluster at a time, in MANIFEST run order) as well as legacy single-slug plans. Flags: `--ack` (override the SHARED-CONCERNS.md ack-gate) and `--force-partial` (proceed against a tree where some clusters failed planning, excluding the failed ones from the run set). Both flags are inert for legacy single-slug plans.
+ - **`/z-implement-next`** — Same loop, one task at a time.
+ 
++### Code quality
++
++- **`/z-style-init`** — Author the project `STYLE.md` interactively, grounded in the repo's most idiomatic existing files (Capture). Required before `/z-mr-review` will run. Pass `--amend` to add rules derived from repeated review dismissals instead of bootstrapping.
++- **`/z-mr-review`** — Multi-LLM code-quality review of the current branch diff against `STYLE.md`. Fans out to Claude, Codex, and Gemini; deduplicates and ranks findings P0–P4; writes `z-harness/<slug>/MR-REVIEW.md` in `TASKS.md`-compatible shape. Never blocks — delete findings you don't want, then run `/z-implement-all --tasks=z-harness/<slug>/MR-REVIEW.md`. Targets five categories: abstraction, defensive-bloat, test-noise, hygiene, and style-drift. Distinct from `/z-audit`, which gates correctness.
++
+ ### Audit, debug, review
+ 
+ - **`/z-audit <target>`** — Read-only audit pipeline. Pre-flight scopes (target, dimensions, optional `.claude/audit-rubrics/<component>.md`), spawns one `auditor` subagent per dimension in parallel (correctness / perf / cleanliness / design), bundled Gemini+Codex consult on findings, emits REPORT.md + TASKS.md in `/z-implement-all`-compatible format, codex-reviewer safety gate.
+-- **`/z-debug <symptom>`** — Investigate a known-bad behavior with explicit repro / hypothesis / evidence / isolation phases; cross-LLM consult at hypothesis and fix stages; auto-bails to `/z-plan` if scope grows; writes a post-mortem.
++- **`/z-fix <symptom or proposed fix>`** — Lightweight bug-fix command for the case where the user already has a diagnosis; single light-fix consult, inline implementation, non-negotiable Codex review, optional post-mortem. Early gate recommends `/z-debug` if root cause is unknown.
++- **`/z-debug <symptom>`** — Investigate a known-bad behavior via adversarial hypothesis tournament; 3-LLM two-round hypothesis generation, discriminating-test matrix, discrete Bayesian scoring, 3-5 isolation rounds; writes a single unified `DEBUG.md` artifact (Problem, Evidence, Isolation, Fix, and Post-mortem sections); auto-bails to `/z-plan` if scope grows. Post-mortem phase optionally invokes `mr-reviewer` on the fix diff; P0/P1 findings are promoted to the post-mortem's preventative-action list automatically. Early gate recommends `/z-fix` if the user already has a diagnosis.
+ - **`/z-review-all`** — Final-gate cross-LLM review of a completed plan's cumulative diff against SPEC.md — catches implementation drift and aggregate-only spec gaps.
+ - **`/z-skill-fix <skill>`** — Meta-command. Patches any `.claude/skills/*/SKILL.md` (or `commands/*.md` / `agents/*.md` inside z-harness itself). Inline diagnosis → surgical edit → codex-reviewer safety gate.
+ 
+@@ -55,6 +61,7 @@ Every command writes its artifacts under `z-harness/<slug>/`, with run-frozen ar
+ | Agent | Model | Role |
+ |---|---|---|
+ | `implementer` | sonnet | Implements one task in fresh context |
++| `mr-reviewer` | sonnet | Fans out to codex/gemini consultants, deduplicates findings, applies P0-P4 rubric |
+ | `auditor` | sonnet | Audits one dimension, returns structured findings |
+ | `cluster-planner` | sonnet | Runs a narrow sub-/z-plan for one cluster of a `/z-plan-split` tree |
+ | `gemini-consultant` | (CLI) | Cross-LLM consult via Gemini |
+@@ -202,9 +209,12 @@ z-harness/
+ │   ├── z-implement-all.md
+ │   ├── z-implement-next.md
+ │   ├── z-audit.md
++│   ├── z-fix.md
+ │   ├── z-debug.md
++│   ├── z-mr-review.md
+ │   ├── z-review-all.md
+ │   ├── z-skill-fix.md
++│   ├── z-style-init.md
+ │   ├── z-init-docs.md
+ │   ├── z-maintain-docs.md
+ │   ├── z-suggest-memory.md
+@@ -216,10 +226,12 @@ z-harness/
+ │   ├── codex-reviewer.md
+ │   ├── codex-consultant.md
+ │   ├── gemini-consultant.md
++│   ├── mr-reviewer.md
+ │   ├── spec-precheck.md
+ │   ├── doc-updater.md
+ │   └── remote-runner.md
+ ├── scripts/
++│   ├── extract-dismissals.py
+ │   ├── log-event.sh
+ │   ├── log-phase.sh
+ │   ├── remote-sandbox-sync.sh

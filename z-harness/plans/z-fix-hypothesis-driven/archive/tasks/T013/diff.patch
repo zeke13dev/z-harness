@@ -1,0 +1,13 @@
+diff --git a/commands/z-stats.md b/commands/z-stats.md
+index 89c2933..0453c43 100644
+--- a/commands/z-stats.md
++++ b/commands/z-stats.md
+@@ -96,7 +96,7 @@ Based on the state, suggest one command:
+ | Plan is fresh and `$BASE/TESTS.md` present with `Status: drafted` | `/z-implement-all` (will pick up TESTS.md automatically) |
+ | No plan / no TASKS.md | `/z-plan` (full feature) or `/z-plan-light` (small fix) or `/z-debug` (existing bug) |
+ | Light-mode plan with `FIX.md` and `Status: shipped` | `/z-maintain-docs` if FIX.md "Docs touched" is non-empty |
+-| Debug plan with `POSTMORTEM.md` action items not yet tasked | "Convert post-mortem action items via the AskUserQuestion path documented in /z-debug Phase 7 (option C seeds a /z-test follow-up)" |
++| Debug plan with `DEBUG.md ## Post-mortem` action items not yet tasked | "Convert post-mortem action items via the AskUserQuestion path documented in /z-debug Phase 9 (option C seeds a /z-test follow-up)" |
+ 
+ ## Output format
+ 

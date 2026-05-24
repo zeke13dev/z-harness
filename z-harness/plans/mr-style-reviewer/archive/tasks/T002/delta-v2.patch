@@ -1,0 +1,555 @@
+--- /Users/zeke/dev/z-harness/z-harness/mr-style-reviewer/archive/tasks/T002/diff-v1.patch	2026-05-23 15:08:11
++++ /Users/zeke/dev/z-harness/z-harness/mr-style-reviewer/archive/tasks/T002/diff.patch	2026-05-23 15:11:49
+@@ -1,9 +1,9 @@
+ diff --git a/scripts/extract-dismissals.py b/scripts/extract-dismissals.py
+ new file mode 100644
+-index 0000000..d140818
++index 0000000..c8b7f9c
+ --- /dev/null
+ +++ b/scripts/extract-dismissals.py
+-@@ -0,0 +1,454 @@
++@@ -0,0 +1,529 @@
+ +#!/usr/bin/env python3
+ +"""
+ +Extract dismissed MR-review findings from archived run snapshots.
+@@ -167,12 +167,30 @@
+ +
+ +
+ +def _split_respecting_nesting(text: str) -> list[str]:
+-+    """Split text on commas, but respect nesting depth for {} and []."""
+++    """Split text on commas, respecting nesting depth for {}, [], () and quote state."""
+ +    parts = []
+ +    depth = 0
+++    in_quote: str | None = None  # None, '"', or "'"
+ +    current: list[str] = []
+-+    for ch in text:
+-+        if ch in "([{":
+++    i = 0
+++    while i < len(text):
+++        ch = text[i]
+++        if in_quote is not None:
+++            # Inside a quoted string: only an unescaped matching quote ends it
+++            if ch == "\\" and i + 1 < len(text):
+++                # Escaped character — consume both
+++                current.append(ch)
+++                i += 1
+++                current.append(text[i])
+++            elif ch == in_quote:
+++                in_quote = None
+++                current.append(ch)
+++            else:
+++                current.append(ch)
+++        elif ch in ('"', "'"):
+++            in_quote = ch
+++            current.append(ch)
+++        elif ch in "([{":
+ +            depth += 1
+ +            current.append(ch)
+ +        elif ch in ")]}":
+@@ -183,6 +201,7 @@
+ +            current = []
+ +        else:
+ +            current.append(ch)
+++        i += 1
+ +    if current:
+ +        parts.append("".join(current))
+ +    return parts
+@@ -217,15 +236,22 @@
+ +# Signature extraction
+ +# ---------------------------------------------------------------------------
+ +
+-+def findings_to_signatures(frontmatter: dict) -> list[dict]:
+++def findings_to_signatures(
+++    frontmatter: dict,
+++    *,
+++    _drop_count: list | None = None,
+++) -> list[dict]:
+ +    """
+ +    Extract (file, category, normalized_snippet) tuples from frontmatter.
+ +
+ +    The findings_index list looks like:
+ +      [{id: T-MR-001, severity: P0, category: abstraction, file: src/foo.rs, title: ...}, ...]
+ +
+-+    We use the `title` field (if present) as the snippet to normalize; fall
+-+    back to `id` if title is absent.
+++    The `title` field is REQUIRED as the snippet source.  Findings that lack a
+++    `title` are dropped (counted in _drop_count[0] if a list is provided).
+++    Falling back to the T-MR-NNN id is intentionally NOT done: those IDs are
+++    re-numbered each run, so using them as snippet would produce spurious
+++    dismissal matches.
+ +    """
+ +    findings = frontmatter.get("findings_index", [])
+ +    if not isinstance(findings, list):
+@@ -235,12 +261,19 @@
+ +    for finding in findings:
+ +        if not isinstance(finding, dict):
+ +            continue
+++        title_raw = finding.get("title")
+++        if title_raw is None:
+++            # title is absent — drop this finding from analysis
+++            if _drop_count is not None:
+++                _drop_count[0] += 1
+++            continue
+ +        file_val = str(finding.get("file", "")).strip()
+ +        category = str(finding.get("category", "")).strip()
+-+        # Use title as the snippet; fall back to finding id
+-+        snippet_src = str(finding.get("title", finding.get("id", ""))).strip()
+++        snippet_src = str(title_raw).strip()
+ +        normalized = normalize_snippet(snippet_src)
+ +        if not normalized:
+++            if _drop_count is not None:
+++                _drop_count[0] += 1
+ +            continue
+ +        results.append({
+ +            "file": file_val,
+@@ -259,12 +292,35 @@
+ +# Archive discovery
+ +# ---------------------------------------------------------------------------
+ +
+-+def discover_archive_runs(archive_dir: Path) -> list[Path]:
+++_ISO_PREFIX_RE = re.compile(r"^(\d{8}T\d{6}Z)")
+++
+++
+++def _run_dir_sort_key(d: Path) -> tuple:
+ +    """
+-+    Return archive run dirs sorted chronologically by mtime ascending.
+++    Sort key for an archive run dir.
+ +
+-+    Each run dir should contain an MR-REVIEW.md snapshot.
+++    Primary: ISO timestamp prefix from the directory name
+++             (e.g. "20260523T194623Z-mr-review" → "20260523T194623Z").
+++             Lexicographic sort on this string gives chronological order.
+++    Fallback: directory mtime (used when the dir name has no ISO prefix,
+++              e.g. legacy "run-001" style names in tests).
+ +    """
+++    m = _ISO_PREFIX_RE.match(d.name)
+++    if m:
+++        return (0, m.group(1), 0.0)
+++    return (1, "", d.stat().st_mtime)
+++
+++
+++def discover_archive_runs(archive_dir: Path) -> list[Path]:
+++    """
+++    Return archive run dirs sorted chronologically ascending.
+++
+++    Sort order: ISO timestamp prefix in the directory name (SPEC canonical form
+++    "20260523T194623Z-mr-review"), with mtime as a defensive fallback for dirs
+++    whose names lack the prefix (e.g. test fixtures).
+++
+++    Each run dir must contain an MR-REVIEW.md snapshot to be included.
+++    """
+ +    if not archive_dir.is_dir():
+ +        return []
+ +
+@@ -272,8 +328,7 @@
+ +        d for d in archive_dir.iterdir()
+ +        if d.is_dir() and (d / "MR-REVIEW.md").exists()
+ +    ]
+-+    # Sort by mtime ascending (oldest first)
+-+    run_dirs.sort(key=lambda d: d.stat().st_mtime)
+++    run_dirs.sort(key=_run_dir_sort_key)
+ +    return run_dirs
+ +
+ +
+@@ -361,23 +416,26 @@
+ +    return discover_archive_runs(archive_dir)
+ +
+ +
+-+def collect_run_dirs_global(repo_root: Path) -> list[Path]:
+++def collect_slug_run_dirs_global(repo_root: Path) -> dict[Path, list[Path]]:
+ +    """
+-+    Walk z-harness/*/archive/*/MR-REVIEW.md across all slugs.
+-+    Returns all run dirs sorted by mtime ascending.
+++    Walk z-harness/*/archive/ and return a mapping of slug_dir → sorted run_dirs.
+++
+++    The pairwise dismissal algorithm (R_i → R_{i+1}) must be applied WITHIN each
+++    slug independently, not across slugs.  Callers receive this grouped structure
+++    so they can iterate per-slug rather than interleaving runs from different slugs.
+ +    """
+ +    harness_root = repo_root / "z-harness"
+-+    all_run_dirs: list[Path] = []
+++    slug_runs: dict[Path, list[Path]] = {}
+ +    if not harness_root.is_dir():
+-+        return []
+-+    for slug_dir in harness_root.iterdir():
+++        return slug_runs
+++    for slug_dir in sorted(harness_root.iterdir()):
+ +        if not slug_dir.is_dir():
+ +            continue
+ +        archive_dir = slug_dir / "archive"
+-+        all_run_dirs.extend(discover_archive_runs(archive_dir))
+-+    # Re-sort globally by mtime ascending
+-+    all_run_dirs.sort(key=lambda d: d.stat().st_mtime)
+-+    return all_run_dirs
+++        runs = discover_archive_runs(archive_dir)
+++        if runs:
+++            slug_runs[slug_dir] = runs
+++    return slug_runs
+ +
+ +
+ +# ---------------------------------------------------------------------------
+@@ -418,12 +476,29 @@
+ +        # Resolve repo root: go up from the cwd until we find z-harness/ or hit /
+ +        cwd = Path.cwd()
+ +        repo_root = cwd
+-+        # Walk up to find a directory that contains z-harness/
+ +        for candidate in [cwd] + list(cwd.parents):
+ +            if (candidate / "z-harness").is_dir():
+ +                repo_root = candidate
+ +                break
+-+        run_dirs = collect_run_dirs_global(repo_root)
+++
+++        slug_runs = collect_slug_run_dirs_global(repo_root)
+++        if not slug_runs:
+++            output = {"signatures": [], "n_runs_scanned": 0}
+++            json.dump(output, sys.stdout)
+++            sys.stdout.write("\n")
+++            return
+++
+++        all_signatures: list[dict] = []
+++        total_runs = 0
+++        for slug_run_dirs in slug_runs.values():
+++            sigs, n = extract_dismissals_from_runs(slug_run_dirs, args.max_runs)
+++            all_signatures.extend(sigs)
+++            total_runs += n
+++
+++        output = {"signatures": all_signatures, "n_runs_scanned": total_runs}
+++        json.dump(output, sys.stdout, indent=2)
+++        sys.stdout.write("\n")
+++        return
+ +    else:
+ +        if args.slug_dir is None:
+ +            print(
+@@ -460,10 +535,10 @@
+ +    main()
+ diff --git a/scripts/test_extract_dismissals.py b/scripts/test_extract_dismissals.py
+ new file mode 100644
+-index 0000000..8dec88e
++index 0000000..13f6b23
+ --- /dev/null
+ +++ b/scripts/test_extract_dismissals.py
+-@@ -0,0 +1,425 @@
++@@ -0,0 +1,741 @@
+ +"""
+ +pytest tests for scripts/extract-dismissals.py
+ +
+@@ -889,3 +964,319 @@
+ +        assert "signatures" in data
+ +        assert "n_runs_scanned" in data
+ +        assert data["n_runs_scanned"] >= 3
+++
+++
+++# ---------------------------------------------------------------------------
+++# Fix #1 — title field required; T-MR-NNN id fallback removed
+++# ---------------------------------------------------------------------------
+++
+++class TestTitleRequired:
+++    def test_finding_without_title_is_dropped(self):
+++        """A finding that lacks a `title` key must be silently dropped."""
+++        fm = {"findings_index": [
+++            {"id": "T-MR-001", "severity": "P1", "category": "hygiene",
+++             "file": "src/foo.rs"},  # no 'title'
+++        ]}
+++        sigs = ed.findings_to_signatures(fm)
+++        assert sigs == [], "Finding without title must be dropped, not included via id fallback"
+++
+++    def test_t_mr_nnn_id_not_used_as_snippet(self):
+++        """
+++        Regression: T-MR-NNN ids must NOT appear as normalized_snippet.
+++        They are re-numbered each run and would produce spurious dismissals.
+++        """
+++        fm = {"findings_index": [
+++            {"id": "T-MR-042", "severity": "P2", "category": "style-drift",
+++             "file": "src/foo.rs"},  # title absent
+++        ]}
+++        sigs = ed.findings_to_signatures(fm)
+++        for sig in sigs:
+++            assert "t-mr-" not in sig["normalized_snippet"], (
+++                "T-MR-NNN id must not appear in normalized_snippet"
+++            )
+++
+++    def test_finding_with_title_is_included(self):
+++        """Presence of a non-empty title means the finding is included normally."""
+++        fm = {"findings_index": [
+++            {"id": "T-MR-001", "severity": "P1", "category": "hygiene",
+++             "file": "src/foo.rs", "title": "Stale TODO"},
+++        ]}
+++        sigs = ed.findings_to_signatures(fm)
+++        assert len(sigs) == 1
+++        assert sigs[0]["normalized_snippet"] == "stale todo"
+++
+++    def test_drop_count_incremented_for_missing_title(self):
+++        """_drop_count[0] must be incremented for each finding dropped due to absent title."""
+++        fm = {"findings_index": [
+++            {"id": "T-MR-001", "severity": "P1", "category": "hygiene",
+++             "file": "src/foo.rs"},  # no title → dropped
+++            {"id": "T-MR-002", "severity": "P2", "category": "hygiene",
+++             "file": "src/bar.rs", "title": "Real title"},  # kept
+++        ]}
+++        drop_count = [0]
+++        sigs = ed.findings_to_signatures(fm, _drop_count=drop_count)
+++        assert drop_count[0] == 1, "Exactly one finding should have been dropped"
+++        assert len(sigs) == 1
+++
+++
+++# ---------------------------------------------------------------------------
+++# Fix #2 — ISO timestamp sort order
+++# ---------------------------------------------------------------------------
+++
+++class TestIsoTimestampSort:
+++    def _make_iso_run(self, archive_dir: Path, timestamp: str, finding: dict, mtime: float) -> None:
+++        """
+++        Create a run dir named "<timestamp>-mr-review" with an MR-REVIEW.md snapshot.
+++        Deliberately sets mtime to a value OPPOSITE to chronological order to verify
+++        that mtime is NOT the primary sort key.
+++        """
+++        run_dir = archive_dir / f"{timestamp}-mr-review"
+++        run_dir.mkdir(parents=True)
+++        content = make_mr_review([finding])
+++        (run_dir / "MR-REVIEW.md").write_text(content, encoding="utf-8")
+++        os.utime(run_dir, (mtime, mtime))
+++
+++    def test_iso_prefix_sort_overrides_mtime(self, tmp_path):
+++        """
+++        Three run dirs with ISO-prefix names but REVERSED mtime order.
+++        discover_archive_runs must return them in ISO timestamp order, not mtime order.
+++        """
+++        archive_dir = tmp_path / "archive"
+++        archive_dir.mkdir()
+++
+++        base_t = time.time() - 3000
+++        # Write dirs in ISO order but assign mtime in REVERSE (newest mtime = oldest timestamp)
+++        self._make_iso_run(archive_dir, "20260101T000000Z", FINDING_A, mtime=base_t + 200)
+++        self._make_iso_run(archive_dir, "20260201T000000Z", FINDING_B, mtime=base_t + 100)
+++        self._make_iso_run(archive_dir, "20260301T000000Z", FINDING_C, mtime=base_t + 0)
+++
+++        runs = ed.discover_archive_runs(archive_dir)
+++        names = [d.name for d in runs]
+++        assert names == [
+++            "20260101T000000Z-mr-review",
+++            "20260201T000000Z-mr-review",
+++            "20260301T000000Z-mr-review",
+++        ], f"Expected ISO order but got: {names}"
+++
+++    def test_iso_prefix_dismissal_order_correct(self, tmp_path):
+++        """
+++        End-to-end: with ISO-named runs whose mtimes are reversed, the dismissal
+++        algorithm must still identify findings dismissed in the chronologically
+++        correct R_i → R_{i+1} pair.
+++        """
+++        slug_dir = tmp_path / "slug"
+++        archive_dir = slug_dir / "archive"
+++        archive_dir.mkdir(parents=True)
+++
+++        base_t = time.time() - 3000
+++
+++        # Run 1 (oldest ISO): snapshot has A and B; mtime is NEWEST (reversed)
+++        run1_dir = archive_dir / "20260101T000000Z-mr-review"
+++        run1_dir.mkdir()
+++        (run1_dir / "MR-REVIEW.md").write_text(
+++            make_mr_review([FINDING_A, FINDING_B]), encoding="utf-8"
+++        )
+++        os.utime(run1_dir, (base_t + 200, base_t + 200))
+++
+++        # Run 2 (newer ISO): snapshot has A; .previous-1 shows user kept A (dropped B)
+++        run2_dir = archive_dir / "20260201T000000Z-mr-review"
+++        run2_dir.mkdir()
+++        (run2_dir / "MR-REVIEW.md").write_text(
+++            make_mr_review([FINDING_A]), encoding="utf-8"
+++        )
+++        (run2_dir / "MR-REVIEW.md.previous-1").write_text(
+++            make_mr_review([FINDING_A]), encoding="utf-8"
+++        )
+++        os.utime(run2_dir, (base_t + 0, base_t + 0))  # oldest mtime — opposite of ISO order
+++
+++        run_dirs = ed.collect_run_dirs_for_slug(slug_dir)
+++        sigs, _ = ed.extract_dismissals_from_runs(run_dirs, max_runs=10)
+++
+++        dismissed = {s["normalized_snippet"] for s in sigs}
+++        assert ed.normalize_snippet(FINDING_B["title"]) in dismissed, (
+++            "B must be dismissed (dropped by user between run1 and run2)"
+++        )
+++        assert ed.normalize_snippet(FINDING_A["title"]) not in dismissed, (
+++            "A must NOT be dismissed (user kept it)"
+++        )
+++
+++
+++# ---------------------------------------------------------------------------
+++# Fix #3 — --global mode: pairwise per-slug, not interleaved
+++# ---------------------------------------------------------------------------
+++
+++class TestGlobalPerSlug:
+++    def _make_slug(
+++        self,
+++        harness_root: Path,
+++        slug: str,
+++        runs: list[dict],
+++    ) -> Path:
+++        """
+++        Create a slug dir with the given archive runs.
+++        Each run dict: {name, snapshot_findings, previous_findings (or None)}.
+++        Uses ISO-prefix names so sort order is deterministic.
+++        """
+++        slug_dir = harness_root / slug
+++        archive_dir = slug_dir / "archive"
+++
+++        base_t = time.time() - 5000
+++        for i, run in enumerate(runs):
+++            run_dir = archive_dir / run["name"]
+++            run_dir.mkdir(parents=True)
+++            (run_dir / "MR-REVIEW.md").write_text(
+++                make_mr_review(run["snapshot_findings"], slug=slug, run_id=run["name"]),
+++                encoding="utf-8",
+++            )
+++            if run.get("previous_findings") is not None:
+++                (run_dir / "MR-REVIEW.md.previous-1").write_text(
+++                    make_mr_review(run["previous_findings"], slug=slug, run_id=f"{run['name']}-prev"),
+++                    encoding="utf-8",
+++                )
+++            mtime = base_t + i * 10
+++            os.utime(run_dir, (mtime, mtime))
+++
+++        return slug_dir
+++
+++    def test_global_pairwise_per_slug(self, tmp_path):
+++        """
+++        Two slugs, each with their own run series.  The pairwise algorithm must
+++        not cross slug boundaries: a run from slug-A must never be paired with a
+++        run from slug-B.
+++        """
+++        harness_root = tmp_path / "z-harness"
+++
+++        # slug-alpha: run-001 (A+B snapshot) → run-002 (A kept, B dropped)
+++        self._make_slug(harness_root, "slug-alpha", [
+++            {"name": "20260101T000000Z-mr-review",
+++             "snapshot_findings": [FINDING_A, FINDING_B],
+++             "previous_findings": None},
+++            {"name": "20260102T000000Z-mr-review",
+++             "snapshot_findings": [FINDING_A],
+++             "previous_findings": [FINDING_A]},  # user kept A, dropped B
+++        ])
+++
+++        # slug-beta: run-001 (C+D snapshot) → run-002 (C kept, D dropped)
+++        self._make_slug(harness_root, "slug-beta", [
+++            {"name": "20260103T000000Z-mr-review",
+++             "snapshot_findings": [FINDING_C, FINDING_D],
+++             "previous_findings": None},
+++            {"name": "20260104T000000Z-mr-review",
+++             "snapshot_findings": [FINDING_C],
+++             "previous_findings": [FINDING_C]},  # user kept C, dropped D
+++        ])
+++
+++        slug_runs = ed.collect_slug_run_dirs_global(tmp_path)
+++        all_sigs: list[dict] = []
+++        total_n = 0
+++        for run_dirs in slug_runs.values():
+++            sigs, n = ed.extract_dismissals_from_runs(run_dirs, max_runs=10)
+++            all_sigs.extend(sigs)
+++            total_n += n
+++
+++        dismissed = {s["normalized_snippet"] for s in all_sigs}
+++
+++        # B dismissed in slug-alpha; D dismissed in slug-beta
+++        assert ed.normalize_snippet(FINDING_B["title"]) in dismissed
+++        assert ed.normalize_snippet(FINDING_D["title"]) in dismissed
+++
+++        # A and C were kept, not dismissed
+++        assert ed.normalize_snippet(FINDING_A["title"]) not in dismissed
+++        assert ed.normalize_snippet(FINDING_C["title"]) not in dismissed
+++
+++        # n_runs_scanned sums across slugs
+++        assert total_n == 4  # 2 per slug × 2 slugs
+++
+++    def test_global_cli_pairwise_per_slug(self, tmp_path):
+++        """
+++        CLI --global must not interleave: dismissal signatures from each slug
+++        are computed independently and merged into the output.
+++        """
+++        import subprocess
+++
+++        harness_root = tmp_path / "z-harness"
+++
+++        # slug-alpha: B dismissed
+++        self._make_slug(harness_root, "slug-alpha", [
+++            {"name": "20260101T000000Z-mr-review",
+++             "snapshot_findings": [FINDING_A, FINDING_B],
+++             "previous_findings": None},
+++            {"name": "20260102T000000Z-mr-review",
+++             "snapshot_findings": [FINDING_A],
+++             "previous_findings": [FINDING_A]},
+++        ])
+++        # slug-beta: D dismissed
+++        self._make_slug(harness_root, "slug-beta", [
+++            {"name": "20260103T000000Z-mr-review",
+++             "snapshot_findings": [FINDING_C, FINDING_D],
+++             "previous_findings": None},
+++            {"name": "20260104T000000Z-mr-review",
+++             "snapshot_findings": [FINDING_C],
+++             "previous_findings": [FINDING_C]},
+++        ])
+++
+++        script = SCRIPTS_DIR / "extract-dismissals.py"
+++        result = subprocess.run(
+++            [sys.executable, str(script), "--global"],
+++            capture_output=True,
+++            text=True,
+++            cwd=str(tmp_path),
+++        )
+++        assert result.returncode == 0, f"stderr: {result.stderr}"
+++        data = json.loads(result.stdout)
+++
+++        dismissed_snippets = {s["normalized_snippet"] for s in data["signatures"]}
+++        assert ed.normalize_snippet(FINDING_B["title"]) in dismissed_snippets
+++        assert ed.normalize_snippet(FINDING_D["title"]) in dismissed_snippets
+++        # n_runs_scanned = 2 per slug × 2 slugs
+++        assert data["n_runs_scanned"] == 4
+++
+++
+++# ---------------------------------------------------------------------------
+++# Fix #4 — quote-aware comma splitting
+++# ---------------------------------------------------------------------------
+++
+++class TestQuoteAwareSplitting:
+++    def test_quoted_comma_not_split(self):
+++        """A comma inside double-quoted value must NOT split the field."""
+++        result = ed._split_respecting_nesting('title: "Foo, bar"')
+++        # The whole string is one item; comma inside quotes is not a separator
+++        assert len(result) == 1, f"Expected 1 part but got: {result}"
+++
+++    def test_single_quoted_comma_not_split(self):
+++        """A comma inside single-quoted value must NOT split the field."""
+++        result = ed._split_respecting_nesting("title: 'Foo, bar'")
+++        assert len(result) == 1, f"Expected 1 part but got: {result}"
+++
+++    def test_unquoted_comma_does_split(self):
+++        """A comma outside quotes must still split normally."""
+++        result = ed._split_respecting_nesting("a, b, c")
+++        assert len(result) == 3, f"Expected 3 parts but got: {result}"
+++
+++    def test_inline_dict_with_quoted_comma_title(self):
+++        """
+++        An inline dict like {id: T-MR-001, title: "Foo, bar", category: hygiene}
+++        must parse correctly: title value is "Foo, bar" (one field, not two).
+++        """
+++        inner = 'id: T-MR-001, title: "Foo, bar", category: hygiene'
+++        result = ed._parse_inline_dict(inner)
+++        assert result.get("title") == "Foo, bar", (
+++            f"title should be 'Foo, bar' but got: {result.get('title')!r}"
+++        )
+++        assert result.get("id") == "T-MR-001"
+++        assert result.get("category") == "hygiene"
+++
+++    def test_findings_index_with_quoted_comma_title_parses(self, tmp_path):
+++        """
+++        End-to-end: an MR-REVIEW.md whose findings_index has a title with a
+++        comma inside quotes must yield a single finding with the full title.
+++        """
+++        fm_text = (
+++            "findings_index:\n"
+++            '  - {id: T-MR-001, severity: P1, category: hygiene, '
+++            'file: src/foo.rs, title: "Unused import, remove it"}\n'
+++        )
+++        parsed = ed._parse_frontmatter_block(fm_text)
+++        sigs = ed.findings_to_signatures(parsed)
+++        assert len(sigs) == 1, f"Expected 1 sig but got {len(sigs)}: {sigs}"
+++        assert sigs[0]["normalized_snippet"] == "unused import, remove it"

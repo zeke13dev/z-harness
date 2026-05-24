@@ -8,13 +8,13 @@ You are running **z-harness `/z-stats`**. Read-only diagnostic. Cheap — uses o
 ## Phase 0 — Slug discovery
 
 Same as `/z-implement-all` Phase 0:
-1. Enumerate `z-harness/<slug>/` subdirs with TASKS.md; check legacy flat layout.
+1. Enumerate `$Z_HARNESS_PLAN_DIR/` subdirs with TASKS.md; check legacy flat layout.
 2. If `--slug <slug>` arg present → use it.
 3. If one candidate → use it.
 4. Multiple → `AskUserQuestion` to pick.
 5. Zero → tell user "no plan found"; abort.
 
-Set `$BASE = z-harness/$Z_HARNESS_SLUG` (or `z-harness` for legacy). Set `$METRICS = $BASE/metrics.jsonl` (if exists) else `z-harness/metrics.jsonl`.
+Set `$BASE = $Z_HARNESS_PLAN_DIR` (or `z-harness` for legacy). Set `$METRICS = $BASE/metrics.jsonl` (if exists) else `z-harness/metrics.jsonl`.
 
 ## Phase 1 — Plan progress
 
@@ -96,7 +96,7 @@ Based on the state, suggest one command:
 | Plan is fresh and `$BASE/TESTS.md` present with `Status: drafted` | `/z-implement-all` (will pick up TESTS.md automatically) |
 | No plan / no TASKS.md | `/z-plan` (full feature) or `/z-plan-light` (small fix) or `/z-debug` (existing bug) |
 | Light-mode plan with `FIX.md` and `Status: shipped` | `/z-maintain-docs` if FIX.md "Docs touched" is non-empty |
-| Debug plan with `POSTMORTEM.md` action items not yet tasked | "Convert post-mortem action items via the AskUserQuestion path documented in /z-debug Phase 7 (option C seeds a /z-test follow-up)" |
+| Debug plan with `DEBUG.md ## Post-mortem` action items not yet tasked | "Convert post-mortem action items via the AskUserQuestion path documented in /z-debug Phase 9 (option C seeds a /z-test follow-up)" |
 
 ## Output format
 

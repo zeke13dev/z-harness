@@ -18,3 +18,9 @@
 {"ts":"2026-05-23T05:18:03Z","run":"tasks/T003","kind":"review_end","id":"T003","cycle":2,"blockers":0,"majors":0,"prompt_chars":35328,"response_chars":36743,"return_chars":159,"wall_ms":65415}
 {"ts":"2026-05-23T05:18:04Z","run":"tasks/T003","kind":"review","prompt_chars":35328,"response_chars":36743,"return_chars":159,"wall_ms":17997}
 {"ts":"2026-05-23T09:16:58Z","run":"tasks/T003","kind":"task_done","id":"T003","retries":0,"review_blockers":0,"review_cycles":1}
+{"ts":"2026-05-23T22:00:04Z","run":"tasks/T003","kind":"task_start","id":"T003"}
+{"ts":"2026-05-24T06:50:30Z","run":"tasks/T003","kind":"precheck_start","id":"T003"}
+{"ts":"2026-05-24T06:51:50Z","run":"tasks/T003","kind":"precheck_end","id":"T003","status":"ok","references_checked":18,"wall_ms":79917}
+{"ts":"2026-05-24T06:52:21Z","run":"tasks/T003","kind":"task_start","id":"T003"}
+{"ts":"2026-05-24T07:02:38Z","run":"tasks/T003","kind":"task_done","id":"T003","retries":1,"review_cycles":2,"review_blockers":0}
+{"ts":"2026-05-24T10:55:06Z","run":"tasks/T003","kind":"task_done","id":"T003","retries":0}

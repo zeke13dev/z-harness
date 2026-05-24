@@ -16,9 +16,9 @@ This command is for **small, focused changes**. If at any phase you realize the 
 ## Setup
 
 1. **Derive slug** — short kebab-case like `fix-<short-description>` (e.g. "off-by-one in nba parser" → `fix-nba-parser-off-by-one`). Confirm via `AskUserQuestion` if non-obvious or might collide with an existing slug (`ls z-harness/` first).
-2. Export `Z_HARNESS_SLUG=<slug>`.
+2. Export `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")`.
 3. Pick run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`.
-4. `mkdir -p z-harness/$Z_HARNESS_SLUG/archive/$RUN/transcripts`.
+4. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`.
 5. **Version stamp + log:**
    ```bash
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
@@ -41,7 +41,7 @@ At any phase, if you discover:
 - **Cross-module / cross-crate impact** (the fix touches multiple crates, public APIs, wire formats, or schemas)
 - **The user explicitly says** "this might be bigger than I thought"
 
-→ STOP. Write `z-harness/$Z_HARNESS_SLUG/escalation.md` describing what you found. Push-notify: "Scope grew past light-mode thresholds. Recommend `/z-plan <task>`." Do not proceed to implementation.
+→ STOP. Write `$Z_HARNESS_PLAN_DIR/escalation.md` describing what you found. Push-notify: "Scope grew past light-mode thresholds. Recommend `/z-plan <task>`." Do not proceed to implementation.
 
 ## Phase 1 — Premise + quick exploration (combined)
 
@@ -61,7 +61,7 @@ If any concern surfaces → raise it with the user via `AskUserQuestion` before 
    ```
 2. After doc-fetcher returns (or if no INDEX.json), Read 3-5 source files MAX to fill gaps. **DO NOT spawn the `Explore` subagent** — too expensive for light-mode. Use Read/Grep/Glob directly from main thread.
 
-Output: 1-paragraph problem statement + 1-paragraph context. Save to `z-harness/$Z_HARNESS_SLUG/archive/$RUN/phase1-context.md`.
+Output: 1-paragraph problem statement + 1-paragraph context. Save to `$Z_HARNESS_PLAN_DIR/archive/$RUN/phase1-context.md`.
 
 **Check auto-bail thresholds.** If reading reveals >5 candidate files or cross-module impact, bail now.
 
@@ -77,18 +77,18 @@ Spawn both consultants in parallel in a single message:
 
 ```
 Agent(
-  subagent_type="gemini-consultant",
+  subagent_type="consultant-primary",
   description="Light-fix consult (Gemini) for <slug>",
   prompt="MODE: light-fix\n\nProblem: <1-paragraph>\nContext: <1-paragraph>\nKey decision: <statement>\nCandidate options (if any): <list with one-line tradeoffs>\nRelevant code snippets:\n<short quoted code with file:line markers>\n\nAsk: recommend an option with reasoning. Identify tradeoffs. Flag anything I haven't considered. Be concise — this is a single small fix, not a feature."
 )
 Agent(
-  subagent_type="codex-consultant",
+  subagent_type="consultant-secondary",
   description="Light-fix consult (Codex) for <slug>",
   prompt="MODE: light-fix\n\n<same prompt body>"
 )
 ```
 
-Both transcripts archive themselves under `z-harness/$Z_HARNESS_SLUG/archive/$RUN/transcripts/`.
+Both transcripts archive themselves under `$Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts/`.
 
 ## Phase 4 — Synthesize + push back
 
@@ -114,7 +114,7 @@ If user picks **Abandon** → write nothing more; log `light_run_end` with `stat
 
 ## Phase 6 — Write FIX.md
 
-Write `z-harness/$Z_HARNESS_SLUG/FIX.md`:
+Write `$Z_HARNESS_PLAN_DIR/FIX.md`:
 
 ```markdown
 # Fix: <slug>
@@ -179,23 +179,23 @@ Hard limit: if you find yourself touching >7 files inline, halt regardless — t
 This step is non-negotiable. Even in light mode, post-implementation review is the correctness guarantee.
 
 ```bash
-git diff > z-harness/$Z_HARNESS_SLUG/archive/$RUN/diff.patch
+git diff > $Z_HARNESS_PLAN_DIR/archive/$RUN/diff.patch
 ```
 
 Spawn the reviewer:
 
 ```
 Agent(
-  subagent_type="codex-reviewer",
+  subagent_type="reviewer",
   description="Codex review of <slug>",
-  prompt="task id: <slug>\ntask description: <FIX.md Approach summary>\nacceptance criteria: <FIX.md Acceptance list>\ndiff.patch path: <abs path>\nchanged files: <abs paths from FIX.md>\nrelevant_docs (paths — verify the diff didn't break invariants stated here): <paths from FIX.md Docs touched>\n$BASE: z-harness/$Z_HARNESS_SLUG  (read FIX.md yourself if you need more context)"
+  prompt="task id: <slug>\ntask description: <FIX.md Approach summary>\nacceptance criteria: <FIX.md Acceptance list>\ndiff.patch path: <abs path>\nchanged files: <abs paths from FIX.md>\nrelevant_docs (paths — verify the diff didn't break invariants stated here): <paths from FIX.md Docs touched>\n$BASE: $Z_HARNESS_PLAN_DIR  (read FIX.md yourself if you need more context)"
 )
 ```
 
 Parse the return (already capped at 8 KB, blockers + majors only).
 
 **On blockers or majors:**
-- **First failure**: re-edit inline based on findings. Re-run `git diff`; if byte-identical to prior diff (you pushed back instead of editing), halt with `no_change_on_retry`. Otherwise re-spawn `codex-reviewer` once.
+- **First failure**: re-edit inline based on findings. Re-run `git diff`; if byte-identical to prior diff (you pushed back instead of editing), halt with `no_change_on_retry`. Otherwise re-spawn `reviewer` once.
 - **Second failure**: halt; `AskUserQuestion` — proceed anyway / patch manually / abandon.
 
 **No blockers/majors** → accept.
@@ -217,5 +217,5 @@ Parse the return (already capped at 8 KB, blockers + majors only).
 - **Never skip the codex review.** Light mode is about cutting planning overhead, not correctness.
 - **Never proceed past auto-bail thresholds** without explicit user override.
 - **Always emit cross-LLM consult** — both Gemini and Codex, in parallel.
-- **Never overwrite an existing `<slug>/` directory** without asking the user.
+- **Never overwrite an existing `$Z_HARNESS_PLAN_DIR/` directory** without asking the user.
 - **No emojis** anywhere in artifacts.

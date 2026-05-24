@@ -1,1 +1,5 @@
 {"ts":"2026-05-23T09:34:10Z","run":"tasks/T008","kind":"task_done","id":"T008","retries":0,"review_blockers":0,"review_cycles":1}
+{"ts":"2026-05-24T00:10:21Z","run":"tasks/T008","kind":"review_start","id":"T008","cycle":1}
+{"ts":"2026-05-24T00:11:40Z","run":"tasks/T008","kind":"review_end","id":"T008","cycle":1,"blockers":0,"majors":1,"prompt_chars":4275,"response_chars":500,"return_chars":539,"wall_ms":78603}
+{"ts":"2026-05-24T07:35:25Z","run":"tasks/T008","kind":"task_done","id":"T008","retries":0,"review_cycles":1,"review_blockers":0,"pushback":"T005 leftover changes flagged"}
+{"ts":"2026-05-24T11:04:51Z","run":"tasks/T008","kind":"task_done","id":"T008"}

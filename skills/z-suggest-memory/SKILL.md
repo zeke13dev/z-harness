@@ -382,7 +382,7 @@ In `--dry-run` mode, `MEMORIES_WRITTEN` is always 0 even when STATUS is ok.
 ## Calling context notes (for /z-debug and /z-improve)
 
 When invoked from `/z-debug` Phase 7:
-- `concept_hints` come from POSTMORTEM.md "Root cause" section (slugs in `Doc gap — <slug>` lines) plus PROBLEM.md `Relevant concepts:` line.
+- `concept_hints` come from `DEBUG.md ## Post-mortem` "Root cause" section (slugs in `Doc gap — <slug>` lines) plus `DEBUG.md ## Problem` `Relevant concepts:` line.
 - `--source debug:<run-id>` is pre-filled by the caller.
 - Salience guidance (prominent, load-bearing): **Default to Cancel** unless a genuinely novel anti-pattern, abandoned path, or decision rationale surfaced during root-cause investigation. A retro that produced no new institutional learning should emit zero memories.
 

@@ -22,9 +22,9 @@ Strict, multi-phase. Do not skip phases. `/z-research` produces a research note 
    **Derive a research slug** (only if `--slug=` was not provided): from the cleaned question, short kebab-case, 2-4 words (e.g. "how does the retry logic interact with token bucket limits?" → `retry-token-bucket`). Run `ls z-harness/` to check for existing slug dirs. Slug-collision handling (precontext-only vs finished-plan dir, and the auto-derived-slug confirmation) is deferred to **Phase 0.5** below so we do not mutate the workspace before the user clears the cost gate.
 
    If `--slug=` was explicitly provided, skip auto-derivation but still defer collision handling to Phase 0.5.
-2. **Export** `Z_HARNESS_SLUG=<slug>` for all subsequent shell calls and subagents.
+2. **Export** `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")` for all subsequent shell calls and subagents.
 3. Pick a run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`
-4. `mkdir -p z-harness/$Z_HARNESS_SLUG/archive/$RUN/transcripts`
+4. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`
 5. Capture the z-harness plugin version stamp and log the run start (merge version blob into the payload):
    ```bash
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
@@ -38,11 +38,11 @@ Strict, multi-phase. Do not skip phases. `/z-research` produces a research note 
 6. Notification policy: read env `Z_HARNESS_NOTIFY` (default `approval_only`). Values: `off`, `approval_only`, `all`.
 7. **Check for LLM-tier docs.** If `docs/llm/INDEX.json` exists, note its existence; Phase 1 will dispatch `doc-fetcher` (Haiku). The orchestrator never reads `docs/llm/*.json` directly from main thread.
 
-**Setup does NOT mutate `z-harness/<slug>/RESEARCH.md` or any sibling artifact.** All collision/archive decisions happen in Phase 0.5, AFTER the user clears the cost gate.
+**Setup does NOT mutate `$Z_HARNESS_PLAN_DIR/RESEARCH.md` or any sibling artifact.** All collision/archive decisions happen in Phase 0.5, AFTER the user clears the cost gate.
 
-**All paths in subsequent phases live under `z-harness/<slug>/`:**
-- `z-harness/<slug>/RESEARCH.md`
-- `z-harness/<slug>/archive/<run-id>/...`
+**All paths in subsequent phases live under `$Z_HARNESS_PLAN_DIR/`:**
+- `$Z_HARNESS_PLAN_DIR/RESEARCH.md`
+- `$Z_HARNESS_PLAN_DIR/archive/<run-id>/...`
 
 ## Phase telemetry (mandatory)
 
@@ -90,13 +90,13 @@ Checkpoint: `phase0-cost-gate.md`.
 
 This phase runs **only if** the user picked `proceed` or `reduce` in Phase 0. The `abandon` path must never reach this phase, so the existing workspace stays untouched.
 
-1. **Slug-dir collision (deferred from Setup step 1).** If the chosen slug (auto-derived or `--slug=`) matches an existing `z-harness/<slug>/` dir:
+1. **Slug-dir collision (deferred from Setup step 1).** If the chosen slug (auto-derived or `--slug=`) matches an existing `$Z_HARNESS_PLAN_DIR/` dir:
    - **Precontext-only slug dir** (only `BRAINSTORM.md` and/or `RESEARCH.md` present, no `PLAN.md`/`SPEC.md`/`TASKS.md`): treat as continuation — no prompt, proceed with the existing slug.
    - **Finished-plan slug dir** (`PLAN.md` or `TASKS.md` exists): collision — prompt the user via `AskUserQuestion` to confirm or choose a different slug.
    If the auto-derived slug is non-obvious (and `--slug=` was not provided), confirm with the user via `AskUserQuestion`.
 
-2. **Existing-RESEARCH.md handling (deferred from old Setup step 7).** If `z-harness/$Z_HARNESS_SLUG/RESEARCH.md` exists, prompt the user via `AskUserQuestion` with three options:
-   - **archive-and-start-fresh** — archive the existing note (`mv z-harness/$Z_HARNESS_SLUG/RESEARCH.md z-harness/$Z_HARNESS_SLUG/archive/$RUN/RESEARCH.previous.md`) and proceed with a clean draft.
+2. **Existing-RESEARCH.md handling (deferred from old Setup step 7).** If `$Z_HARNESS_PLAN_DIR/RESEARCH.md` exists, prompt the user via `AskUserQuestion` with three options:
+   - **archive-and-start-fresh** — archive the existing note (`mv $Z_HARNESS_PLAN_DIR/RESEARCH.md $Z_HARNESS_PLAN_DIR/archive/$RUN/RESEARCH.previous.md`) and proceed with a clean draft.
    - **continue (re-use existing)** — leave the existing RESEARCH.md in place and treat this run as a refinement; the existing note's findings become inputs to Phase 3.
    - **abort** — exit cleanly. **Do NOT touch the existing RESEARCH.md or any sibling file.** Log a `phase0_5_abort` event and return.
 
@@ -182,7 +182,7 @@ Checkpoint: `phase2-explores.md` (synthesis of all Explore returns).
 
 ## Phase 3 — Draft research note
 
-Write `z-harness/$Z_HARNESS_SLUG/archive/$RUN/research-draft.md` with **these mandatory sections, in this exact order**:
+Write `$Z_HARNESS_PLAN_DIR/archive/$RUN/research-draft.md` with **these mandatory sections, in this exact order**:
 
 ```markdown
 ## Findings
@@ -218,12 +218,12 @@ Spawn **both** consultants in parallel in a single message with `MODE: research-
 
 ```
 Agent(
-  subagent_type="gemini-consultant",
+  subagent_type="consultant-primary",
   description="Research review (Gemini) for <slug>",
   prompt="MODE: research-review\n\nOriginal question: <question>\n\nScaffolding (doc-fetcher synthesis): <paste>\n\nResearch draft:\n<paste research-draft.md verbatim>\n\nReturn three sections only: Gaps, Errors, Missing constraints. Do NOT recommend an approach."
 )
 Agent(
-  subagent_type="codex-consultant",
+  subagent_type="consultant-secondary",
   description="Research review (Codex) for <slug>",
   prompt="MODE: research-review\n\nOriginal question: <question>\n\nScaffolding (doc-fetcher synthesis): <paste>\n\nResearch draft:\n<paste research-draft.md verbatim>\n\nReturn three sections only: Gaps, Errors, Missing constraints. Do NOT recommend an approach."
 )
@@ -284,7 +284,7 @@ input_hash = sha256(canonicalize(
 
 `canonicalize`: strip leading/trailing whitespace; collapse all internal runs of whitespace to single space.
 
-Write final `z-harness/$Z_HARNESS_SLUG/RESEARCH.md`:
+Write final `$Z_HARNESS_PLAN_DIR/RESEARCH.md`:
 
 ```markdown
 ---
@@ -333,7 +333,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 Send a `PushNotification` if policy ≠ `off` with a next-step recommendation:
 
 ```
-Research complete. RESEARCH.md written to z-harness/<slug>/RESEARCH.md.
+Research complete. RESEARCH.md written to $Z_HARNESS_PLAN_DIR/RESEARCH.md.
 
 Recommended next step:
   /z-brainstorm <topic>  — ideate approaches grounded in this research, OR

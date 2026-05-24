@@ -1,0 +1,66 @@
+{
+  "concept": "style-init",
+  "last_updated": "2026-05-23",
+  "covers_spec": "z-harness/mr-style-reviewer/SPEC.md",
+  "source_files": [
+    "commands/z-style-init.md",
+    "scripts/extract-dismissals.py"
+  ],
+  "confidence": "high",
+  "entry_points": [
+    {
+      "file": "commands/z-style-init.md",
+      "line": 1,
+      "symbol": "z-style-init",
+      "kind": "module",
+      "summary": "Bootstrap or amend a project STYLE.md via Capture-first grounding and interactive interview."
+    }
+  ],
+  "description": "z-style-init creates and maintains the project STYLE.md that /z-mr-review requires. Bootstrap mode (no --amend) uses a 'Capture' approach: it identifies the top 5 most idiomatic existing source files (heuristic prefilter → Sonnet ranking → user confirmation gate), reads them, asks up to 4 interview questions about error handling / testing / comments / project specifics, drafts STYLE.md, critiques it via codex+gemini consultants, then asks for user approval before writing. Amend mode (--amend) reads recent archive dismissal patterns via extract-dismissals.py, clusters similar dismissals (Jaccard >= 0.6), proposes new STYLE.md rules per cluster, and lets the user accept/edit/reject each proposed rule.",
+  "invariants": [
+    "Bootstrap mode refuses if STYLE.md already exists (use --amend).",
+    "Amend mode refuses if STYLE.md does not exist.",
+    "The Capture user-confirmation gate (step 2.5) is mandatory — it cannot be bypassed. This prevents legacy god-objects from anchoring STYLE.md to bad patterns.",
+    "Rule IDs are append-only and never reused. Retired rules get a tombstone comment so historical mr-reviewer citations remain traceable.",
+    "Amend clusters require >= 2 members (single-occurrence dismissals are not patterns).",
+    "extract-dismissals.py is shared with /z-mr-review — same script, same output schema."
+  ],
+  "gotchas": [
+    "The Capture prefilter excludes files < 50 or > 800 lines and a hardcoded list: node_modules/, vendor/, dist/, target/, *.pb.go, *_pb2.py, migrations/, __generated__/, .min.*, lock files.",
+    "Amend uses --global flag on extract-dismissals.py to scan all slugs (not just the current slug), giving a cross-plan dismissal view.",
+    "Amend cluster similarity uses Jaccard token-overlap >= 0.6 after dropping stopwords (the, a, an, this, that, is, are, in, on, of, to, for, and, or, with, by).",
+    "schema_version frontmatter is not incremented by --amend; it is only bumped on breaking schema changes.",
+    "--ingest <path> skips the interview phase entirely and uses the user's existing guide as the sole input."
+  ],
+  "capture_insight": "STYLE.md rules are grounded in the project's own idiomatic code (top-5 file ranking), making rules accurate and uncontroversial rather than template-imposed.",
+  "modes": {
+    "bootstrap": "No --amend. Creates STYLE.md from scratch via Capture + interview + codex/gemini critique.",
+    "amend": "--amend flag. Adds rules from repeated dismissal pattern clusters to existing STYLE.md."
+  },
+  "style_md_sections": [
+    "## Error handling (EH-NNN)",
+    "## Tests (T-NNN)",
+    "## Comments (C-NNN)",
+    "## Naming (N-NNN)",
+    "## Project-specific (P-NNN)"
+  ],
+  "telemetry_events": [
+    "style_init_complete",
+    "style_amend_complete"
+  ],
+  "related_concepts": [
+    "mr-reviewer",
+    "agents",
+    "commands",
+    "scripts"
+  ],
+  "depends_on": [
+    "agents",
+    "scripts"
+  ],
+  "consumed_by": [
+    "commands",
+    "mr-reviewer"
+  ],
+  "memories": []
+}

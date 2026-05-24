@@ -164,3 +164,182 @@
 {"ts":"2026-05-23T18:46:47Z","run":"tasks/T100","kind":"task_start","id":"T100"}
 {"ts":"2026-05-23T18:56:50Z","run":"tasks/T100","kind":"task_done","id":"T100","retries":1,"review_blockers":0,"review_cycles":2}
 {"ts":"2026-05-23T18:56:50Z","run":"orchestration","kind":"run_end","slug":"doc-memories","tasks_done":1,"tasks_halted":0,"resume":true}
+{"ts":"2026-05-23T19:19:42Z","run":"docs","kind":"init_docs_start","z_harness_version":"64a3dbe","z_harness_dirty":false,"z_harness_branch":"main"}
+{"ts":"2026-05-23T19:24:30Z","run":"20260523T192415Z-mr-style-reviewer","kind":"brainstorm_run_start","slug":"mr-style-reviewer","z_harness_version":"64a3dbe","z_harness_dirty":true,"z_harness_branch":"main","topic":"Add MR-Style reviewer (code quality gate, distinct from z-review correctness gate)"}
+{"ts":"2026-05-23T19:25:34Z","run":"20260523T192534Z-mr-style-reviewer","kind":"brainstorm_run_start","z_harness_version":"64a3dbe","z_harness_dirty":true,"z_harness_branch":"main","topic":"Add an MR-style code-quality reviewer to z-harness"}
+{"ts":"2026-05-23T19:26:20Z","run":"20260523T192534Z-mr-style-reviewer","kind":"phase_end","phase":1,"name":"scaffolding","wall_ms":27,"user_wait_ms":0}
+{"ts":"2026-05-23T19:26:37Z","run":"20260523T192534Z-mr-style-reviewer","kind":"phase_end","phase":2,"name":"ideator-dispatch","wall_ms":0,"user_wait_ms":0}
+{"ts":"2026-05-23T19:27:29Z","run":"20260523T192534Z-mr-style-reviewer","kind":"consult","llm":"codex","mode":"brainstorm","prompt_chars":2684,"response_chars":11410,"wall_ms":19651,"transcript":"001-codex-brainstorm"}
+{"ts":"2026-05-23T19:27:34Z","run":"20260523T192534Z-mr-style-reviewer","kind":"consult","llm":"gemini","mode":"brainstorm","prompt_chars":2633,"response_chars":474,"wall_ms":3260,"transcript":"002-gemini-brainstorm"}
+{"ts":"2026-05-23T19:28:30Z","run":"20260523T192534Z-mr-style-reviewer","kind":"consult","llm":"gemini","mode":"brainstorm","prompt_chars":2384,"response_chars":3061,"wall_ms":25915,"transcript":"002-gemini-brainstorm"}
+{"ts":"2026-05-23T19:28:39Z","run":"20260523T192534Z-mr-style-reviewer","kind":"phase_end","phase":2,"name":"ideator-dispatch","wall_ms":50000,"user_wait_ms":0}
+{"ts":"2026-05-23T19:30:26Z","run":"20260523T192534Z-mr-style-reviewer","kind":"phase_end","phase":3,"name":"synthesis","wall_ms":107799,"user_wait_ms":0}
+{"ts":"2026-05-23T19:30:26Z","run":"20260523T192534Z-mr-style-reviewer","kind":"user_wait_start","phase":4,"reason":"user-framing-choice"}
+{"ts":"2026-05-23T19:31:07Z","run":"docs","kind":"init_docs_end","concepts_count":4,"human_dir":"docs/human","llm_dir":"docs/llm"}
+{"ts":"2026-05-23T19:37:02Z","run":"20260523T192415Z-mr-style-reviewer","kind":"brainstorm_run_end","status":"complete","chosen_framing":"claude","ideators_failed":0,"user_override":true,"override_note":"picked claude shape over codex recommendation; hybridized with gemini nitpicker persona + multi-agent diff review + scope broadened to include human slop"}
+{"ts":"2026-05-23T19:46:23Z","run":"20260523T194623Z-mr-style-reviewer","kind":"run_start","slug":"mr-style-reviewer","z_harness_version":"338e138","z_harness_dirty":true,"z_harness_branch":"main","task":"Implement MR-style reviewer per BRAINSTORM.md (/z-mr-review + /z-style-init)"}
+{"ts":"2026-05-23T20:23:29Z","run":"20260523T194623Z-mr-style-reviewer","kind":"run_end","slug":"mr-style-reviewer","status":"complete","tasks":14,"shortcuts":2,"phases_completed":9}
+{"ts":"2026-05-23T21:47:14Z","run":"orchestration","kind":"run_start","slug":"mr-style-reviewer","z_harness_version":"338e138","z_harness_dirty":true,"z_harness_branch":"main"}
+{"ts":"2026-05-23T21:47:33Z","run":"tasks/T001","kind":"task_start","slug":"mr-style-reviewer","id":"T001"}
+{"ts":"2026-05-23T21:47:33Z","run":"tasks/T012","kind":"task_start","slug":"mr-style-reviewer","id":"T012"}
+{"ts":"2026-05-23T21:50:56Z","run":"tasks/T012","kind":"review_start","id":"T012","cycle":1}
+{"ts":"2026-05-23T21:53:09Z","run":"tasks/T012","kind":"review_end","id":"T012","cycle":1,"blockers":1,"majors":0,"prompt_chars":1024,"response_chars":6000,"return_chars":800,"wall_ms":133182}
+{"ts":"2026-05-23T21:55:17Z","run":"tasks/T001","kind":"review_start","id":"T001","cycle":2}
+{"ts":"2026-05-23T21:55:28Z","run":"tasks/T012","kind":"review_start","id":"T012","cycle":2}
+{"ts":"2026-05-23T21:56:04Z","run":"1779573317775","kind":"_end","id":"T001","cycle":2,"blockers":0,"majors":0,"prompt_chars":3842,"response_chars":191,"return_chars":191,"wall_ms":1779573364636}
+{"ts":"2026-05-23T21:56:56Z","run":"tasks/T012","kind":"review_end","id":"T012","cycle":2,"blockers":1,"majors":0,"prompt_chars":2500,"response_chars":650,"return_chars":650,"wall_ms":87670}
+{"ts":"2026-05-23T22:00:03Z","run":"tasks/T001","kind":"task_done","id":"T001","review_cycles":2,"review_blockers":0,"retries":1}
+{"ts":"2026-05-23T22:00:03Z","run":"tasks/T012","kind":"task_done","id":"T012","review_cycles":3,"review_blockers":2,"retries":2}
+{"ts":"2026-05-23T22:00:03Z","run":"tasks/T002","kind":"task_start","id":"T002"}
+{"ts":"2026-05-23T22:00:04Z","run":"tasks/T003","kind":"task_start","id":"T003"}
+{"ts":"2026-05-23T22:00:04Z","run":"tasks/T005","kind":"task_start","id":"T005"}
+{"ts":"2026-05-23T22:01:17Z","run":"tasks/T005","kind":"implement_start","id":"T005","retry":0}
+{"ts":"2026-05-23T22:02:53Z","run":"tasks/T005","kind":"implement_end","id":"T005","retry":0,"status":"ok","files_changed_count":1,"wall_ms":95249}
+{"ts":"2026-05-23T22:18:41Z","run":"dummy-token-unused","kind":"_end","id":"T002","cycle":2,"blockers":0,"majors":1,"prompt_chars":11378,"response_chars":1665,"return_chars":2200,"wall_ms":1779574721719}
+{"ts":"2026-05-23T22:21:27Z","run":"tasks/T002","kind":"review_start","id":"T002","cycle":3}
+{"ts":"2026-05-23T22:23:31Z","run":"tasks/T002","kind":"review_end","id":"T002","cycle":3,"blockers":0,"majors":1,"prompt_chars":1850,"response_chars":1200,"return_chars":800,"wall_ms":124243}
+{"ts":"2026-05-23T22:29:37Z","run":"tasks/T004","kind":"review_start","id":"T004","cycle":1}
+{"ts":"2026-05-23T22:29:44Z","run":"tasks/T011","kind":"review_start","id":"T011","cycle":1}
+{"ts":"2026-05-23T22:31:24Z","run":"1779575384116","kind":"_end","id":"T011","cycle":1,"blockers":0,"majors":0,"prompt_chars":0,"response_chars":0,"return_chars":0,"wall_ms":1779575484003}
+{"ts":"2026-05-23T22:31:44Z","run":"1779575384116","kind":"_end","id":"T011","cycle":1,"blockers":1,"majors":2,"prompt_chars":2847,"response_chars":2100,"return_chars":1950,"wall_ms":1779575504543}
+{"ts":"2026-05-23T22:32:22Z","run":"1779575377159","kind":"_end","id":"T004","cycle":1,"blockers":3,"majors":7,"prompt_chars":16594,"response_chars":304516,"return_chars":2135,"wall_ms":1779575542818}
+{"ts":"2026-05-23T23:42:49Z","run":"tasks/T006","kind":"implement_start","id":"T006","retry":0}
+{"ts":"2026-05-23T23:44:24Z","run":"tasks/T006","kind":"implement_end","id":"T006","retry":0,"status":"ok","files_changed_count":1,"wall_ms":95100}
+{"ts":"2026-05-23T23:54:36Z","run":"tasks/T006","kind":"review_start","id":"T006","cycle":3}
+{"ts":"2026-05-23T23:55:36Z","run":"tasks/T006","kind":"review_end","id":"T006","cycle":3,"blockers":0,"majors":0,"prompt_chars":2365,"response_chars":250,"return_chars":250,"wall_ms":59983}
+{"ts":"2026-05-24T00:00:10Z","run":"tasks/T007","kind":"review_start","id":"T007","cycle":1}
+{"ts":"2026-05-24T00:02:08Z","run":"tasks/T007","kind":"review_end","id":"T007","cycle":1,"blockers":1,"majors":1,"prompt_chars":3824,"response_chars":1858,"return_chars":1200,"wall_ms":118350}
+{"ts":"2026-05-24T00:02:52Z","run":"tasks/T007","kind":"implement_start","id":"T007","retry":2}
+{"ts":"2026-05-24T00:03:18Z","run":"tasks/T007","kind":"implement_end","id":"T007","retry":2,"status":"ok","files_changed_count":1,"wall_ms":26107}
+{"ts":"2026-05-24T00:05:11Z","run":"tasks/T007","kind":"review_start","id":"T007","cycle":2}
+{"ts":"2026-05-24T00:06:39Z","run":"tasks/T007","kind":"review_end","id":"T007","cycle":2,"blockers":0,"majors":1,"prompt_chars":2763,"response_chars":456,"return_chars":650,"wall_ms":88327}
+{"ts":"2026-05-24T00:10:21Z","run":"tasks/T008","kind":"review_start","id":"T008","cycle":1}
+{"ts":"2026-05-24T00:11:40Z","run":"tasks/T008","kind":"review_end","id":"T008","cycle":1,"blockers":0,"majors":1,"prompt_chars":4275,"response_chars":500,"return_chars":539,"wall_ms":78603}
+{"ts":"2026-05-24T00:15:00Z","run":"tasks/T010","kind":"review_start","id":"T010","cycle":1}
+{"ts":"2026-05-24T00:16:52Z","run":"tasks/T010","kind":"review_end","id":"T010","cycle":1,"blockers":0,"majors":3,"prompt_chars":0,"response_chars":0,"return_chars":0,"wall_ms":112276}
+{"ts":"2026-05-24T00:22:23Z","run":"tasks/T009","kind":"review_start","id":"T009","cycle":1}
+{"ts":"2026-05-24T00:23:26Z","run":"tasks/T009","kind":"review_end","id":"T009","cycle":1,"blockers":1,"majors":4,"prompt_chars":32715,"response_chars":37355,"return_chars":1200,"wall_ms":63044}
+{"ts":"2026-05-24T00:31:27Z","run":"tasks/T014","kind":"review_start","id":"T014","cycle":1}
+{"ts":"2026-05-24T00:34:05Z","run":"tasks/T014","kind":"review_end","id":"T014","cycle":1,"blockers":0,"majors":2,"prompt_chars":10833,"response_chars":224991,"return_chars":300,"wall_ms":157320}
+{"ts":"2026-05-24T00:34:09Z","run":"tasks/T014","kind":"review","prompt_chars":10833,"response_chars":224991,"return_chars":300,"wall_ms":60000}
+{"ts":"2026-05-24T00:35:52Z","run":"orchestration","kind":"run_end","slug":"mr-style-reviewer","status":"complete","tasks_done":14,"tasks_pending":0}
+{"ts":"2026-05-24T00:44:59Z","run":"20260524T004459Z-review","kind":"review_all_start","slug":"mr-style-reviewer","z_harness_version":"338e138","z_harness_dirty":true,"z_harness_branch":"main"}
+{"ts":"2026-05-24T00:55:51Z","run":"20260524T004459Z-review","kind":"review_all_end","slug":"mr-style-reviewer","drift_findings":5,"spec_gap_findings":4,"blockers":0,"user_action":"patch_spec_for_majors"}
+{"ts":"2026-05-24T05:53:48Z","run":"20260524T055333Z-z-fix-hypothesis-driven","kind":"brainstorm_run_start","slug":"z-fix-hypothesis-driven","z_harness_version":"338e138","z_harness_dirty":true,"z_harness_branch":"main","topic":"rethink z-fix to be hypothesis-driven: generate multiple hypotheses, test each, determine which worked, iterate; keep multi-LLM advantage"}
+{"ts":"2026-05-24T05:56:24Z","run":"20260524T055559Z-z-debug-rethink","kind":"brainstorm_run_start","z_harness_version":"338e138","z_harness_dirty":true,"z_harness_branch":"main","topic":"rethink z-debug to be hypothesis-driven Cursor-style with multi-LLM advantage","slug":"z-debug-rethink"}
+{"ts":"2026-05-24T05:57:41Z","run":"20260524T055559Z-z-debug-rethink","kind":"phase_end","phase":1,"name":"scaffolding","wall_ms":72439,"user_wait_ms":0}
+{"ts":"2026-05-24T06:00:14Z","run":"20260524T055559Z-z-debug-rethink","kind":"phase_end","phase":2,"name":"ideator-dispatch","wall_ms":152826,"user_wait_ms":0}
+{"ts":"2026-05-24T06:02:09Z","run":"20260524T055559Z-z-debug-rethink","kind":"phase_end","phase":3,"name":"synthesis-anti-bias","wall_ms":30000,"user_wait_ms":0}
+{"ts":"2026-05-24T06:02:09Z","run":"20260524T055559Z-z-debug-rethink","kind":"user_wait_start","phase":4,"reason":"awaiting user framing choice"}
+{"ts":"2026-05-24T06:04:43Z","run":"20260524T055333Z-z-fix-hypothesis-driven","kind":"user_wait_start","phase":3,"reason":"awaiting framing choice"}
+{"ts":"2026-05-24T06:17:35Z","run":"20260524T055333Z-z-fix-hypothesis-driven","kind":"user_wait_end","phase":3,"resolution":"hybrid-on-codex-skeleton"}
+{"ts":"2026-05-24T06:17:35Z","run":"20260524T055333Z-z-fix-hypothesis-driven","kind":"brainstorm_run_end","status":"complete","chosen_framing":"codex","ideators_failed":0,"note":"hybrid synthesis with command split"}
+{"ts":"2026-05-24T06:19:03Z","run":"20260524T061903Z-z-fix-hypothesis-driven","kind":"run_start","slug":"z-fix-hypothesis-driven","z_harness_version":"338e138","z_harness_dirty":true,"z_harness_branch":"main","task":"split /z-debug into /z-fix (light) and /z-debug (heavy hypothesis tournament); BRAINSTORM.md exists at z-harness/z-fix-hypothesis-driven/BRAINSTORM.md (chosen_framing: codex, with hybrid User choice section)"}
+{"ts":"2026-05-24T06:44:29Z","run":"20260524T061903Z-z-fix-hypothesis-driven","kind":"run_end","slug":"z-fix-hypothesis-driven","status":"complete","task_count":17,"consultations":4}
+{"ts":"2026-05-24T06:49:42Z","run":"orchestration","kind":"run_start","slug":"z-fix-hypothesis-driven","z_harness_version":"338e138","z_harness_dirty":true,"z_harness_branch":"main"}
+{"ts":"2026-05-24T06:50:20Z","run":"tasks/T001","kind":"precheck_start","id":"T001"}
+{"ts":"2026-05-24T06:50:30Z","run":"tasks/T003","kind":"precheck_start","id":"T003"}
+{"ts":"2026-05-24T06:50:36Z","run":"1234567890abcdef","kind":"_end","id":"T001","status":"spec_problem","references_checked":5,"wall_ms":1779605436925}
+{"ts":"2026-05-24T06:51:50Z","run":"tasks/T003","kind":"precheck_end","id":"T003","status":"ok","references_checked":18,"wall_ms":79917}
+{"ts":"2026-05-24T06:52:21Z","run":"tasks/T001","kind":"task_start","id":"T001"}
+{"ts":"2026-05-24T06:52:21Z","run":"tasks/T003","kind":"task_start","id":"T003"}
+{"ts":"2026-05-24T06:56:09Z","run":"tasks/T001","kind":"review_start","id":"T001","cycle":1}
+{"ts":"2026-05-24T06:57:46Z","run":"tasks/T001","kind":"review_end","id":"T001","cycle":1,"blockers":2,"majors":1,"prompt_chars":2350,"response_chars":1950,"return_chars":800,"wall_ms":97108}
+{"ts":"2026-05-24T07:02:38Z","run":"tasks/T001","kind":"task_done","id":"T001","retries":1,"review_cycles":2,"review_blockers":2}
+{"ts":"2026-05-24T07:02:38Z","run":"tasks/T003","kind":"task_done","id":"T003","retries":1,"review_cycles":2,"review_blockers":0}
+{"ts":"2026-05-24T07:07:39Z","run":"tasks/T005","kind":"review_start","id":"T005","cycle":1}
+{"ts":"2026-05-24T07:08:18Z","run":"tasks/T005","kind":"review","prompt_chars":9158,"response_chars":699,"return_chars":699}
+{"ts":"2026-05-24T07:08:18Z","run":"tasks/T005","kind":"review_end","id":"T005","cycle":1,"blockers":2,"majors":0,"wall_ms":38728}
+{"ts":"2026-05-24T07:08:39Z","run":"tasks/T002","kind":"task_done","id":"T002","retries":0,"review_cycles":1,"review_blockers":0}
+{"ts":"2026-05-24T07:10:47Z","run":"tasks/T004","kind":"review_start","id":"T004","cycle":2}
+{"ts":"2026-05-24T07:11:16Z","run":"tasks/T005","kind":"review_start","id":"T005","cycle":2}
+{"ts":"2026-05-24T07:11:27Z","run":"tasks/T005","kind":"review_end","id":"T005","cycle":2,"blockers":0,"majors":0,"prompt_chars":0,"response_chars":0,"return_chars":0,"wall_ms":10992}
+{"ts":"2026-05-24T07:11:38Z","run":"tasks/T004","kind":"review","prompt_chars":4256,"response_chars":0,"return_chars":305}
+{"ts":"2026-05-24T07:11:43Z","run":"tasks/T004","kind":"review_end","id":"T004","cycle":2,"blockers":0,"majors":0,"prompt_chars":4256,"response_chars":0,"return_chars":312,"wall_ms":55599}
+{"ts":"2026-05-24T07:12:01Z","run":"tasks/T004","kind":"task_done","id":"T004","retries":1,"review_cycles":2,"review_blockers":0}
+{"ts":"2026-05-24T07:12:01Z","run":"tasks/T005","kind":"task_done","id":"T005","retries":1,"review_cycles":2,"review_blockers":1}
+{"ts":"2026-05-24T07:12:41Z","run":"tasks/T006","kind":"implement_start","id":"T006","retry":0}
+{"ts":"2026-05-24T07:15:31Z","run":"tasks/T006","kind":"implement_end","id":"T006","retry":0,"status":"ok","files_changed_count":1,"wall_ms":169618}
+{"ts":"2026-05-24T07:16:33Z","run":"tasks/T006","kind":"review_start","id":"T006","cycle":1}
+{"ts":"2026-05-24T07:21:01Z","run":"tasks/T006","kind":"review_end","id":"T006","cycle":1,"blockers":3,"majors":0,"prompt_chars":44040,"response_chars":1840,"return_chars":1840,"wall_ms":268065}
+{"ts":"2026-05-24T07:21:36Z","run":"tasks/T010","kind":"task_done","id":"T010","retries":0,"review_cycles":1,"review_blockers":0,"pushback":"mr-reviewer pre-existing"}
+{"ts":"2026-05-24T07:22:06Z","run":"tasks/T006","kind":"implement_start","id":"T006","retry":2}
+{"ts":"2026-05-24T07:22:56Z","run":"tasks/T006","kind":"implement_end","id":"T006","retry":2,"status":"ok","files_changed_count":1,"wall_ms":50036}
+{"ts":"2026-05-24T07:24:08Z","run":"tasks/T006","kind":"review_start","id":"T006","cycle":2}
+{"ts":"2026-05-24T07:25:31Z","run":"tasks/T006","kind":"review","prompt_chars":5539,"response_chars":755,"return_chars":28,"cycle":2}
+{"ts":"2026-05-24T07:25:31Z","run":"1779607448691","kind":"_end","id":"T006","cycle":2,"blockers":0,"majors":0,"prompt_chars":5539,"response_chars":755,"return_chars":28,"wall_ms":1779607531845}
+{"ts":"2026-05-24T07:25:55Z","run":"tasks/T006","kind":"task_done","id":"T006","retries":1,"review_cycles":2,"review_blockers":3}
+{"ts":"2026-05-24T07:35:25Z","run":"tasks/T008","kind":"task_done","id":"T008","retries":0,"review_cycles":1,"review_blockers":0,"pushback":"T005 leftover changes flagged"}
+{"ts":"2026-05-24T07:35:25Z","run":"tasks/T009","kind":"task_done","id":"T009","retries":0,"review_cycles":1,"review_blockers":0}
+{"ts":"2026-05-24T07:40:43Z","run":"tasks/T007","kind":"task_done","id":"T007","retries":1,"review_cycles":2,"review_blockers":0}
+{"ts":"2026-05-24T07:41:15Z","run":"tasks/T011","kind":"implement_start","id":"T011","retry":0}
+{"ts":"2026-05-24T07:42:10Z","run":"tasks/T011","kind":"implement_end","id":"T011","retry":0,"status":"ok","files_changed_count":1,"wall_ms":55009}
+{"ts":"2026-05-24T07:43:13Z","run":"tasks/T013","kind":"review_start","id":"T013","cycle":1}
+{"ts":"2026-05-24T07:45:33Z","run":"tasks/T013","kind":"review_end","id":"T013","cycle":1,"blockers":0,"majors":0,"prompt_chars":700,"response_chars":250,"return_chars":200,"wall_ms":139824}
+{"ts":"2026-05-24T07:47:09Z","run":"tasks/T012","kind":"task_done","id":"T012","retries":0,"review_cycles":1,"review_blockers":0}
+{"ts":"2026-05-24T07:47:09Z","run":"tasks/T013","kind":"task_done","id":"T013","retries":0,"review_cycles":1,"review_blockers":0}
+{"ts":"2026-05-24T07:49:06Z","run":"tasks/T011","kind":"review_start","id":"T011","cycle":2}
+{"ts":"2026-05-24T07:49:49Z","run":"tasks/T011","kind":"review_end","id":"T011","cycle":2,"blockers":0,"majors":0,"prompt_chars":0,"response_chars":0,"return_chars":0,"wall_ms":42692}
+{"ts":"2026-05-24T07:52:05Z","run":"tasks/T011","kind":"task_done","id":"T011","retries":1,"review_cycles":2,"review_blockers":0}
+{"ts":"2026-05-24T07:52:06Z","run":"tasks/T014","kind":"task_done","id":"T014","retries":0,"review_cycles":0,"review_blockers":0,"note":"reviewer permission-blocked; verified manually"}
+{"ts":"2026-05-24T07:52:06Z","run":"tasks/T015","kind":"task_done","id":"T015","retries":0,"review_cycles":1,"review_blockers":0}
+{"ts":"2026-05-24T07:53:20Z","run":"tasks/T016","kind":"task_done","id":"T016","retries":0,"review_cycles":0,"note":"verification self-check; found+fixed skills/z-stats/SKILL.md missed by T013"}
+{"ts":"2026-05-24T07:53:20Z","run":"tasks/T017","kind":"task_done","id":"T017","retries":0,"review_cycles":0,"note":"command-vs-skill diff=0; consultant mirror verified"}
+{"ts":"2026-05-24T07:53:21Z","run":"orchestration","kind":"run_end","status":"complete","tasks_done":17,"tasks_skipped":0,"tasks_halted":0}
+{"ts":"2026-05-24T07:54:13Z","run":"20260524T075413Z-review","kind":"review_all_start","slug":"z-fix-hypothesis-driven","z_harness_version":"338e138","z_harness_dirty":true,"z_harness_branch":"main"}
+{"ts":"2026-05-24T07:59:44Z","run":"20260524T075413Z-review","kind":"review_all_findings","slug":"z-fix-hypothesis-driven","prong_a_blockers":0,"prong_a_majors":2,"prong_a_minors":3,"prong_b_blockers":0,"prong_b_majors":3,"prong_b_minors":4,"consensus_items":0}
+{"ts":"2026-05-24T08:01:56Z","run":"20260524T075413Z-review","kind":"review_all_end","slug":"z-fix-hypothesis-driven","drift_findings":5,"spec_gap_findings":7,"user_action":"spec_retro","spec_patches":3}
+{"ts":"2026-05-24T09:54:08Z","run":"20260524T094344Z-portable-harness","kind":"run_start","slug":"portable-harness","z_harness_version":"338e138","z_harness_dirty":true,"z_harness_branch":"main","task":"portable-harness: relocate plans + multi-IDE + multi-model + instant updates"}
+{"ts":"2026-05-24T10:07:45Z","run":"migration","kind":"migration_done","slug":"test-legacy-plan","from":"z-harness/test-legacy-plan","to":"z-harness/plans/test-legacy-plan"}
+{"ts":"2026-05-24T10:12:32Z","run":"20260524T094344Z-portable-harness","kind":"run_end","slug":"portable-harness","status":"complete","tasks":15}
+{"ts":"2026-05-24T10:37:58Z","run":"orchestration","kind":"run_start","slug":"portable-harness","z_harness_version":"338e138","z_harness_dirty":true,"z_harness_branch":"main","command":"z-implement-all"}
+{"ts":"2026-05-24T10:38:12Z","run":"tasks/T001","kind":"task_start","id":"T001","attempt":1}
+{"ts":"2026-05-24T10:38:12Z","run":"tasks/T004","kind":"task_start","id":"T004","attempt":1}
+{"ts":"2026-05-24T10:38:12Z","run":"tasks/T005","kind":"task_start","id":"T005","attempt":1}
+{"ts":"2026-05-24T10:39:38Z","run":"tasks/T004","kind":"implement_start","id":"T004","retry":0}
+{"ts":"2026-05-24T10:40:37Z","run":"test-run-001","kind":"smoke_test","slug":"testslug","msg":"hello"}
+{"ts":"2026-05-24T10:40:42Z","run":"test-run-002","kind":"smoke_test","slug":"testslug","msg":"default path"}
+{"ts":"2026-05-24T10:40:48Z","run":"legacy-run-001","kind":"legacy_fallback_test","slug":"testslug-legacy","msg":"should go to legacy"}
+{"ts":"2026-05-24T10:40:55Z","run":"tasks/T001","kind":"implement_start","slug":"testphase","id":"T001"}
+{"ts":"2026-05-24T10:40:55Z","run":"tasks/T001","kind":"implement_end","slug":"testphase","status":"ok","wall_ms":123}
+{"ts":"2026-05-24T10:42:07Z","run":"unknown-run","kind":"provider_shadowed","section":"roles","key":"consultant_primary","repo":"/var/folders/8h/hkmcg37d1_b6f6jq7qlhzzk00000gn/T/tmpyssw7ron/repo.json","global":"/var/folders/8h/hkmcg37d1_b6f6jq7qlhzzk00000gn/T/tmpyssw7ron/home/.config/z-harness/providers.json"}
+{"ts":"2026-05-24T10:49:35Z","run":"tasks/T004","kind":"implement_end","id":"T004","retry":0,"status":"ok","files_changed_count":1,"wall_ms":597511}
+{"ts":"2026-05-24T10:51:25Z","run":"tasks/T001","kind":"task_done","id":"T001","retries":0,"review_blockers":0,"review_cycles":0,"note":"net-new files mostly pre-existing; edits to log-event.sh only"}
+{"ts":"2026-05-24T10:51:25Z","run":"tasks/T004","kind":"task_done","id":"T004","retries":0,"review_blockers":0,"review_cycles":0,"note":"research note only"}
+{"ts":"2026-05-24T10:51:25Z","run":"tasks/T005","kind":"task_done","id":"T005","retries":0,"review_blockers":0,"review_cycles":0,"note":"net-new resolver + docs"}
+{"ts":"2026-05-24T10:52:55Z","run":"tasks/T009","kind":"implement_start","id":"T009","retry":0}
+{"ts":"2026-05-24T10:54:39Z","run":"tasks/T009","kind":"implement_end","id":"T009","retry":0,"status":"ok","files_changed_count":2,"wall_ms":104087}
+{"ts":"2026-05-24T10:55:06Z","run":"tasks/T002","kind":"task_done","id":"T002","retries":0}
+{"ts":"2026-05-24T10:55:06Z","run":"tasks/T003","kind":"task_done","id":"T003","retries":0}
+{"ts":"2026-05-24T10:55:06Z","run":"tasks/T009","kind":"task_done","id":"T009","retries":0}
+{"ts":"2026-05-24T11:00:05Z","run":"tasks/T006","kind":"task_done","id":"T006"}
+{"ts":"2026-05-24T11:00:05Z","run":"tasks/T007","kind":"task_done","id":"T007"}
+{"ts":"2026-05-24T11:00:05Z","run":"tasks/T010","kind":"task_done","id":"T010"}
+{"ts":"2026-05-24T11:04:51Z","run":"tasks/T008","kind":"task_done","id":"T008"}
+{"ts":"2026-05-24T11:04:51Z","run":"tasks/T011","kind":"task_done","id":"T011"}
+{"ts":"2026-05-24T11:04:51Z","run":"tasks/T012","kind":"task_done","id":"T012"}
+{"ts":"2026-05-24T11:06:08Z","run":"tasks/T014","kind":"implement_start","id":"T014","retry":0}
+{"ts":"2026-05-24T11:08:22Z","run":"1779620768421","kind":"_end","id":"T014","retry":0,"status":"ok","files_changed_count":4,"wall_ms":1779620902853}
+{"ts":"2026-05-24T11:08:49Z","run":"tasks/T013","kind":"task_done","id":"T013"}
+{"ts":"2026-05-24T11:08:49Z","run":"tasks/T014","kind":"task_done","id":"T014"}
+{"ts":"2026-05-24T11:14:01Z","run":"tasks/T015","kind":"task_done","id":"T015"}
+{"ts":"2026-05-24T11:14:01Z","run":"orchestration","kind":"run_end","slug":"portable-harness","done":15,"halted":0,"skipped":0}
+{"ts":"2026-05-24T17:45:19Z","run":"20260524T174504Z-review","kind":"review_all_start","z_harness_version":"338e138","z_harness_dirty":true,"z_harness_branch":"main","slug":"portable-harness"}
+{"ts":"2026-05-24T17:58:11Z","run":"20260524T174504Z-review","kind":"review_all_end","slug":"portable-harness","drift_findings_kept":4,"spec_gap_findings_kept":7,"codex_rejected":27,"presented_to_user":true}
+{"ts":"2026-05-24T18:08:46Z","run":"orchestration","kind":"run_start","slug":"portable-harness","command":"z-implement-all","scope":"fixups T100-T106"}
+{"ts":"2026-05-24T18:09:31Z","run":"tasks/T100","kind":"implement_start","id":"T100","retry":0}
+{"ts":"2026-05-24T18:11:10Z","run":"tasks/T100","kind":"implement_end","id":"T100","retry":0,"status":"ok","files_changed_count":5,"wall_ms":98646}
+{"ts":"2026-05-24T18:11:32Z","run":"tasks/T100","kind":"task_done","id":"T100"}
+{"ts":"2026-05-24T18:11:32Z","run":"tasks/T101","kind":"task_done","id":"T101"}
+{"ts":"2026-05-24T18:11:32Z","run":"tasks/T102","kind":"task_done","id":"T102"}
+{"ts":"2026-05-24T18:13:38Z","run":"tasks/T103","kind":"task_done","id":"T103"}
+{"ts":"2026-05-24T18:15:42Z","run":"tasks/T104","kind":"task_done","id":"T104"}
+{"ts":"2026-05-24T18:19:07Z","run":"tasks/T105","kind":"task_done","id":"T105","method":"inline-git-add","staged":155}
+{"ts":"2026-05-24T18:19:07Z","run":"tasks/T106","kind":"task_done","id":"T106"}
+{"ts":"2026-05-24T18:19:07Z","run":"orchestration","kind":"run_end","slug":"portable-harness","fixups_done":7,"scope":"T100-T106"}
+{"ts":"2026-05-24T18:33:07Z","run":"migration","kind":"migration_done","slug":"brainstorm-and-research","from":"z-harness/brainstorm-and-research","to":"z-harness/plans/brainstorm-and-research"}
+{"ts":"2026-05-24T18:33:07Z","run":"migration","kind":"migration_done","slug":"doc-memories","from":"z-harness/doc-memories","to":"z-harness/plans/doc-memories"}
+{"ts":"2026-05-24T18:33:07Z","run":"migration","kind":"migration_done","slug":"mr-style-reviewer","from":"z-harness/mr-style-reviewer","to":"z-harness/plans/mr-style-reviewer"}
+{"ts":"2026-05-24T18:33:07Z","run":"migration","kind":"migration_done","slug":"plan-decompose","from":"z-harness/plan-decompose","to":"z-harness/plans/plan-decompose"}
+{"ts":"2026-05-24T18:33:07Z","run":"migration","kind":"migration_done","slug":"portable-harness","from":"z-harness/portable-harness","to":"z-harness/plans/portable-harness"}
+{"ts":"2026-05-24T18:33:08Z","run":"migration","kind":"migration_done","slug":"z-fix-hypothesis-driven","from":"z-harness/z-fix-hypothesis-driven","to":"z-harness/plans/z-fix-hypothesis-driven"}

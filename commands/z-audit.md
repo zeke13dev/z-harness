@@ -1,9 +1,9 @@
 ---
-description: Audit a target component across one or more dimensions (correctness / perf / cleanliness / design). Pre-flight scopes (target, dimensions, optional rubric file), spawns one auditor subagent per dimension in parallel, runs bundled Gemini+Codex consult on findings, emits REPORT.md + TASKS.md under z-harness/<slug>-audit/ in the exact shape /z-implement-all consumes. Read-only — never edits the target.
+description: Audit a target component across one or more dimensions (correctness / perf / cleanliness / design). Pre-flight scopes (target, dimensions, optional rubric file), spawns one auditor subagent per dimension in parallel, runs bundled Gemini+Codex consult on findings, emits REPORT.md + TASKS.md under $Z_HARNESS_PLAN_DIR-audit/ in the exact shape /z-implement-all consumes. Read-only — never edits the target.
 argument-hint: <target path or component name>
 ---
 
-You are running **z-harness `/z-audit`** — a structured, read-only audit pipeline. The output is `REPORT.md` (everything found) plus a curated `TASKS.md` (actionable subset, in `/z-implement-all`-compatible format) under `z-harness/<slug>-audit/`.
+You are running **z-harness `/z-audit`** — a structured, read-only audit pipeline. The output is `REPORT.md` (everything found) plus a curated `TASKS.md` (actionable subset, in `/z-implement-all`-compatible format) under `$Z_HARNESS_PLAN_DIR-audit/`.
 
 Target (from `$ARGUMENTS`):
 
@@ -18,7 +18,7 @@ This command is **read-only**. Never edit the target. Fixes happen later via `/z
 1. **Derive slug** — short kebab-case like `audit-<component>` (e.g. target `strategies/kxbtc15m_fade_extremes` → `audit-kxbtc15m`). Confirm via `AskUserQuestion` if non-obvious. Check `ls z-harness/` first for collisions.
 2. Export `Z_HARNESS_SLUG=<slug>-audit`.
 3. Pick run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>-audit`.
-4. `mkdir -p z-harness/$Z_HARNESS_SLUG/archive/$RUN/transcripts`.
+4. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`.
 5. **Version stamp + log:**
    ```bash
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
@@ -38,7 +38,7 @@ This command is **read-only**. Never edit the target. Fixes happen later via `/z
    ```
    The orchestrator captures the returned concept slugs and passes the corresponding `docs/llm/<slug>.json` paths to auditors as `relevant_docs` (the auditors then read them themselves — they're fresh-context already).
 
-`$BASE = z-harness/$Z_HARNESS_SLUG/`.
+`$BASE = $Z_HARNESS_PLAN_DIR/`.
 
 ## Auto-bail thresholds (check after Phase 4)
 
@@ -126,12 +126,12 @@ Spawn both consultants in parallel against `REPORT.md`:
 
 ```
 Agent(
-  subagent_type="gemini-consultant",
+  subagent_type="consultant-primary",
   description="Audit findings review (Gemini) for <slug>",
   prompt="MODE: audit-review\n\nA target has been audited across <dimensions>. Here is the full REPORT:\n\n<paste REPORT.md>\n\nTwo asks:\n1. What significant findings are MISSING — issues the dimension auditors should have caught but didn't?\n2. Which listed findings are TRIVIAL or speculative and should be dropped before promotion to TASKS.md?\n\nBe specific. Cite path:line. Severity-rank any additions."
 )
 Agent(
-  subagent_type="codex-consultant",
+  subagent_type="consultant-secondary",
   description="Audit findings review (Codex) for <slug>",
   prompt="MODE: audit-review\n\n<same prompt body>"
 )
@@ -202,7 +202,7 @@ Spawn the reviewer against the audit-produced TASKS.md (the diff in this case is
 
 ```
 Agent(
-  subagent_type="codex-reviewer",
+  subagent_type="reviewer",
   description="Codex review of audit TASKS for <slug>",
   prompt="task id: <slug>-audit-tasks\ntask description: review the audit-produced TASKS.md for soundness — would executing these tasks make the target better or risk regression?\nacceptance criteria: every task addresses a real finding in REPORT.md with a verifiable acceptance line\ndiff.patch path: (n/a — review the file directly)\nchanged files: <abs path to $BASE/TASKS.md>\nrelevant_docs: <any docs/llm paths from Setup step 7>\n$BASE: <abs path to $BASE>\n\nFlag: tasks that would regress invariants, tasks with vague acceptance, severity inflation, scope creep beyond the cited finding."
 )
