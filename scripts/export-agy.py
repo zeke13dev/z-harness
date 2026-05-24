@@ -152,6 +152,24 @@ def _render_rule(entry: dict) -> str:
     return fm_block + rewritten_body
 
 
+def _render_skill(entry: dict) -> str:
+    """Render a skill entry as an Antigravity skill SKILL.md file."""
+    fm = entry["frontmatter"]
+    body = entry["body"]
+
+    skill_id = entry["id"]
+    description = fm.get("description", f"z-harness {skill_id} skill")
+    description = description.replace("---", "—")
+    if len(description) > 250:
+        description = description[:247] + "..."
+
+    rewritten_body = _rewrite_body(body)
+    if rewritten_body and not rewritten_body.startswith("\n"):
+        rewritten_body = "\n" + rewritten_body
+
+    return f"---\nname: {skill_id}\ndescription: {description}\n---\n{rewritten_body}"
+
+
 # ---------------------------------------------------------------------------
 # Prompt rendering (exports/agy/prompts/<id>.md)
 # ---------------------------------------------------------------------------
@@ -239,8 +257,9 @@ def _build_manifest(sources: dict, repo_name: str = "z-harness") -> str:
         lines.append(f"    description: {_yaml_str(description)}")
     lines.append("")
 
-    # Skills — inlined, not expressible natively
-    lines.append("# Skills — inlined into invoking workflows; no native skill concept in agy")
+    # Skills → .agent/skills/<id>/SKILL.md
+    lines.append("# Skills → .agent/skills/<id>/SKILL.md")
+    lines.append("# Native workspace skills in Antigravity")
     if sources["skills"]:
         lines.append("skills:")
         for entry in sources["skills"]:
@@ -248,9 +267,15 @@ def _build_manifest(sources: dict, repo_name: str = "z-harness") -> str:
             source_rel = f"skills/{eid}/SKILL.md"
             lines.append(f"  - id: {eid}")
             lines.append(f"    source: {source_rel}")
-            lines.append("    output: null  # inlined into parent workflow; see CAPABILITIES.md")
+            lines.append(f"    output: .agent/skills/{eid}/SKILL.md")
+            fm = entry["frontmatter"]
+            description = fm.get("description", f"z-harness {eid} skill")
+            description = description.replace("---", "—")
+            if len(description) > 250:
+                description = description[:247] + "..."
+            lines.append(f"    description: {_yaml_str(description)}")
     else:
-        lines.append("skills: []  # not expressible natively; see CAPABILITIES.md")
+        lines.append("skills: []")
     lines.append("")
 
     # MCP hint
@@ -285,6 +310,7 @@ The following z-harness constructs have direct or near-direct equivalents in Ant
 |---------------------|----------------------|
 | `commands/*.md` (slash commands) | `.agent/workflows/<name>.md` — custom chat modes (`agy chat --mode <id>`) |
 | `agents/*.md` (agent definitions) | `.agent/rules/<name>.md` — always_on or model_decision rules |
+| `skills/*/SKILL.md` (skills) | `.agent/skills/<name>/SKILL.md` — workspace skills |
 | `Bash`, `Read`, `Edit`, `Write` tools | Cascade native tools (exact names may differ; semantics are equivalent) |
 | `AskUserQuestion` tool (clarification) | Cascade conversational turn (native; no special syntax needed) |
 | `WebFetch`, `WebSearch` tools | Cascade native (if enabled in the workspace) |
@@ -302,9 +328,11 @@ The following z-harness features have no native Antigravity equivalent:
    from a shell command in the workflow body. This does not nest within a running Cascade
    session; it launches a new top-level session.
 
-2. **Skills / Skill inclusion** — Antigravity has no skill-loading mechanism.  Skills from
-   `skills/*/SKILL.md` must be inlined into the invoking workflow's Markdown body.  Note the
-   12,000-character content limit per workflow file.
+2. **Programmatic Skill Invocation (`Skill(name=...)`)** — Although Antigravity natively
+   supports workspace skills under `.agent/skills/<name>/SKILL.md`, it does not support
+   programmatic `Skill()` runtime API calls or dynamic inclusion. Downstream actions that rely
+   on programmatic skill loading must be handled as instructions directing Cascade to load the
+   appropriate workspace skill.
 
 3. **Provider registry (`providers.json`, `resolve-provider.sh`)** — Cascade is bound to
    Gemini; there is no multi-provider routing mechanism.  All provider-routing logic in
@@ -363,8 +391,8 @@ The following z-harness features have no native Antigravity equivalent:
 _README_MD = """\
 # z-harness → Antigravity (agy) Export
 
-This directory contains z-harness commands and agents exported as Antigravity
-(Google's agy IDE) workflow and rule files.
+This directory contains z-harness commands, agents, and skills exported as Antigravity
+(Google's agy IDE) workflow, rule, and skill files.
 
 ## What's included
 
@@ -372,6 +400,7 @@ This directory contains z-harness commands and agents exported as Antigravity
 |------|---------|
 | `.agent/workflows/*.md` | Custom chat modes — one per z-harness command |
 | `.agent/rules/*.md` | Always-on or model-decision rules — one per z-harness agent |
+| `.agent/skills/*` | Workspace skills — one per z-harness skill |
 | `prompts/*.md` | Flat prompt files (description + role frontmatter) |
 | `agy-plugin.yaml` | Export manifest (z-harness convention; not read by agy) |
 | `CAPABILITIES.md` | What can and cannot be expressed in Antigravity |
@@ -386,7 +415,7 @@ Copy the `.agent/` directory into your project workspace root:
 cp -r exports/agy/.agent /path/to/your/project/
 ```
 
-Antigravity auto-discovers `.agent/workflows/**/*.md` and `.agent/rules/**/*.md`
+Antigravity auto-discovers `.agent/workflows/**/*.md`, `.agent/rules/**/*.md`, and `.agent/skills/**/*`
 by watching the workspace directory tree.  No restart required — files become
 available immediately in the IDE.
 
@@ -470,6 +499,24 @@ def _validate_rule(path: Path) -> list[str]:
     return errors
 
 
+def _validate_skill(path: Path) -> list[str]:
+    """Validate an Antigravity skill SKILL.md file."""
+    errors: list[str] = []
+    text = path.read_text(encoding="utf-8")
+    m = _FRONTMATTER_RE.match(text)
+    if not m:
+        errors.append(f"{path}: missing or malformed frontmatter (expected --- fences)")
+        return errors
+    fm_text = m.group(1)
+    for key in ("name", "description"):
+        if not re.search(rf"^{key}\s*:", fm_text, re.MULTILINE):
+            errors.append(f"{path}: skill frontmatter missing '{key}'")
+    body = text[m.end():]
+    if not body.strip():
+        errors.append(f"{path}: body is empty")
+    return errors
+
+
 def _validate_prompt(path: Path) -> list[str]:
     """Validate a flat prompt .md file."""
     errors: list[str] = []
@@ -523,6 +570,7 @@ def main() -> int:
 
     emitted_workflows: list[Path] = []
     emitted_rules: list[Path] = []
+    emitted_skills: list[Path] = []
     emitted_prompts: list[Path] = []
 
     # --- Workflows (commands) ---
@@ -542,6 +590,16 @@ def main() -> int:
         out_path = rules_dir / f"z-harness-{eid}.md"
         out_path.write_text(_render_rule(entry), encoding="utf-8")
         emitted_rules.append(out_path)
+
+    # --- Skills (skills) ---
+    skills_dir = out_root / ".agent" / "skills"
+    for entry in sources["skills"]:
+        eid = entry["id"]
+        skill_dir = skills_dir / eid
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        out_path = skill_dir / "SKILL.md"
+        out_path.write_text(_render_skill(entry), encoding="utf-8")
+        emitted_skills.append(out_path)
 
     # --- Prompts (commands + agents + skills, flat) ---
     prompts_dir = out_root / "prompts"
@@ -578,6 +636,8 @@ def main() -> int:
         validation_errors.extend(_validate_workflow(path))
     for path in emitted_rules:
         validation_errors.extend(_validate_rule(path))
+    for path in emitted_skills:
+        validation_errors.extend(_validate_skill(path))
     for path in emitted_prompts:
         validation_errors.extend(_validate_prompt(path))
     cap_errors = validate_capabilities(caps_path)
@@ -585,10 +645,10 @@ def main() -> int:
         validation_errors.append(f"CAPABILITIES.md: {err}")
 
     # --- Summary ---
-    total = len(emitted_workflows) + len(emitted_rules) + len(emitted_prompts)
+    total = len(emitted_workflows) + len(emitted_rules) + len(emitted_skills) + len(emitted_prompts)
     print(f"export-agy: emitted {len(emitted_workflows)} workflows, "
-          f"{len(emitted_rules)} rules, {len(emitted_prompts)} prompts "
-          f"to {out_root}")
+          f"{len(emitted_rules)} rules, {len(emitted_skills)} skills, "
+          f"{len(emitted_prompts)} prompts to {out_root}")
     print(f"  agy-plugin.yaml: {manifest_path}")
     print(f"  CAPABILITIES.md: {caps_path}")
     print(f"  README.md:       {readme_path}")
@@ -599,7 +659,7 @@ def main() -> int:
             print(f"  ERROR: {err}")
         return 1
 
-    print(f"  all {total} prompt/workflow/rule files passed validation.")
+    print(f"  all {total} prompt/workflow/rule/skill/ files passed validation.")
     return 0
 
 

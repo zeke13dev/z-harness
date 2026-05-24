@@ -38,17 +38,43 @@ If nothing is stale → tell the user "All docs are current."; log `maintain_doc
 
 ## Phase 2 — Spawn doc-updaters (parallel, up to 3 concurrent)
 
+**Before spawning each doc-updater**, capture the baseline memory count from the existing LLM-tier JSON (if it exists). Store it per concept so Phase 3 can validate the return:
+
+```python
+import json, os
+
+baseline_memories = {}  # slug -> int
+for slug in stale_concepts:
+    llm_path = f"docs/llm/{slug}.json"
+    if os.path.exists(llm_path):
+        data = json.load(open(llm_path))
+        baseline_memories[slug] = len(data.get("memories", []))
+    else:
+        baseline_memories[slug] = 0
+```
+
 For each stale concept, spawn a `doc-updater` subagent. In dry-run mode, leave `mode: dry-run` (default); in apply mode, set `mode: write`.
 
 ```
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="doc-updater",
   description="Refresh docs for <concept>",
-  prompt="concept: <slug>\nhuman_path: docs/human/<slug>.md\nllm_path: docs/llm/<slug>.json\nsource_files: <paths from INDEX.json>\nreason: <stale|drift|spec_change>\nmode: <dry-run|write>\nrepo_root: <abs path>"
+  prompt="concept: <slug>\nhuman_path: docs/human/<slug>.md\nllm_path: docs/llm/<slug>.json\nsource_files: <paths from INDEX.json>\nreason: <stale|drift|spec_change>\nmode: <dry-run|write>\nrepo_root: <abs path>\ndedup_tags: true"
 )
 ```
 
 Up to 3 in parallel per batch (`Z_HARNESS_PARALLEL=N` env override).
+
+When each doc-updater returns, check its `MEMORIES_PRESERVED: <N>` value against the stored baseline:
+
+```python
+preserved = int(doc_updater_return["MEMORIES_PRESERVED"])
+baseline = baseline_memories[slug]
+if preserved != baseline:
+    warn(f"memories_lost: {slug} — doc-updater preserved {preserved} memories but baseline was {baseline}. Check docs/llm/{slug}.json manually.")
+```
+
+Surface any `memories_lost` warning prominently in Phase 3 before presenting diffs. A mismatch indicates doc-updater may have dropped memories, which is a hard-rule violation (doc-updater must copy memories verbatim).
 
 ## Phase 2.5 — Cross-LLM audit (only if `--audit` flag set)
 
@@ -109,7 +135,69 @@ When `--audit` was used, prefix each entry with the audit verdict so the user ca
 
 Write the proposed updates to `z-harness/archive/docs/<RRUN>/proposed/<concept>.human.md` and `<concept>.llm.json` so the user can inspect before applying.
 
-Ask via `AskUserQuestion`:
+### Stale memories
+
+After presenting the doc diffs, scan every `docs/llm/<slug>.json` for memories where either:
+- `expires` is present and `expires < today`, OR
+- `date < today - $Z_HARNESS_MEMORY_STALE_DAYS` (default 547 days)
+
+For each stale memory, display it as:
+
+```
+Stale memory in <slug> (index <N>):
+  [<TYPE> <DATE>] <text> (tags: t1, t2)
+  Reason: expired / age > 547 days
+```
+
+For each stale entry, ask via inline `AskUserQuestion` with three choices:
+- **Keep** (default) — no change, memory remains as-is.
+- **Edit** — hand off to `/z-suggest-memory --edit <slug> <index>` and return after the edit completes.
+- **Delete** — splice out `memories[index]` from the concept JSON using an atomic write, then log the deletion. MEMORIES-FLAT.md is **NOT** regenerated inline; Phase 4.5 handles regen after all deletes apply.
+
+  **Atomic-write pattern for the splice:**
+  1. Read the current `docs/llm/<slug>.json` into memory.
+  2. Remove `memories[index]` from the in-memory array.
+  3. Serialize the updated JSON to a temporary file (e.g. `<slug>.json.tmp`) in the same directory.
+  4. `fsync` the tmpfile to flush to disk.
+  5. Use `os.replace(<tmpfile>, <slug>.json)` to atomically swap the files.
+  6. **If any step above fails** (read error, write error, replace error): surface the error to the user, leave the original JSON file untouched, and **do not** log `memory_deleted`. Do not attempt regeneration.
+  7. Only after a successful `os.replace` log the deletion:
+  ```bash
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "docs" memory_deleted \
+    "$(printf '{"concept":"%s","index":%d,"text_preview":"%s"}' "<slug>" <N> "<first 60 chars of text>")"
+  ```
+
+Stale memories are **never auto-deleted** — every removal requires an explicit human choice.
+
+If no stale memories are found, skip this section silently.
+
+### TAG_COLLISIONS
+
+If any doc-updater subagent from Phase 2 was invoked with `dedup_tags: true` and returned a `TAG_COLLISIONS` block, surface those collisions here before the AskUserQuestion:
+
+```
+Tag collisions detected:
+  • <slug>: "perf" (5 uses) vs "performance" (2 uses) — consider consolidating
+  • <slug>: "cache" (3 uses) vs "caching" (1 use) — consider consolidating
+```
+
+For each collision, ask via an inline `AskUserQuestion` with four options:
+
+- **Keep both** — leave both tags as-is; the collision will re-appear on the next run.
+- **Rename one** — hand off to `/z-suggest-memory --edit` to update individual memory entries manually.
+- **Add alias** — prompt the user to pick which of the two tags is canonical (radio; both options shown with their use counts to guide the decision). Then append the alias line to `docs/llm/TAGS.txt` section 2 using an atomic write:
+  1. Read `docs/llm/TAGS.txt` into memory.
+  2. Append `<canonical> = <alias>` after the last non-blank, non-comment line in section 2 (or after the blank separator if section 2 is empty).
+  3. Write atomically via tmpfile + `os.replace()`.
+  4. Log the alias addition:
+     ```bash
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "docs" tag_alias_added \
+       "$(printf '{"canonical":"%s","alias":"%s","concept":"%s"}' "<canonical>" "<alias>" "<slug>")"
+     ```
+  **Deferral note:** adding an alias here only records the mapping in `TAGS.txt`. The alias-collapse logic (doc-updater step 3.5 step A) is **not** triggered in the current run — no memory `tags[]` arrays are rewritten now. In-memory tag state for this run remains at the collision-tag values. On the next `/z-maintain-docs` (or doc-updater) invocation, step 3.5 reads the updated `TAGS.txt`, auto-collapses the alias in any memory that carries it, and emits `tag_aliased` log lines. Do not expect collapsed tags to appear in MEMORIES-FLAT.md until after that subsequent run.
+- **Skip** — do nothing for this collision in this run.
+
+After all per-collision questions, ask the top-level `AskUserQuestion` for the doc-refresh action:
 - **Apply all** → re-run this command with `--apply` (or apply now in-place; user choice).
 - **Apply a subset** → user picks which concepts.
 - **Skip** → leave docs as-is; concepts stay flagged for next run.
@@ -119,6 +207,18 @@ Ask via `AskUserQuestion`:
 For each accepted concept, write the proposed `human_path` and `llm_path` files. Update `docs/llm/INDEX.json` with the new `last_updated`, `confidence`, `depends_on`, `consumed_by`, `summary` fields.
 
 If any concept's source files changed enough that the doc-updater couldn't produce confident output (`STATUS: not_enough_info`), DO NOT write — surface to user.
+
+## Phase 4.5 — Regenerate MEMORIES-FLAT.md
+
+After all accepted concept files have been written in Phase 4, unconditionally regenerate `docs/llm/MEMORIES-FLAT.md` from all current `docs/llm/<slug>.json` files:
+
+```bash
+python3 scripts/regenerate-memories-flat.py --repo-root <abs_path>
+```
+
+This step runs in both `--apply` mode (after writes) and whenever a memory was deleted during Phase 3's stale-memories review. It covers the case where a memory was edited or deleted but no source file changed. Do not skip this step even if zero concepts were updated.
+
+If the script exits non-zero, surface the error to the user and halt (do not proceed to Phase 5 with a potentially corrupt MEMORIES-FLAT.md).
 
 ## Phase 5 — Finalize
 

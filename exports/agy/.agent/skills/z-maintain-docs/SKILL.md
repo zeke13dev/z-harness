@@ -1,6 +1,6 @@
 ---
-description: Refresh stale docs in docs/human/ and docs/llm/. Reads docs/llm/INDEX.json to find concepts whose source files changed since each doc's last_updated. Spawns doc-updater subagents (Sonnet) per stale concept. Dry-run preview by default — user reviews diffs before they're written.
-argument-hint: [--scope <concept-slug>] [--apply] [--audit]
+name: z-maintain-docs
+description: Refresh stale docs in docs/human/ and docs/llm/. Reads docs/llm/INDEX.json to find concepts whose source files changed since each doc's last_updated. Spawns doc-updater subagents (Sonnet) per stale concept. Dry-run preview by default — user review...
 ---
 
 You are running **z-harness `/z-maintain-docs`**. Goal: keep `docs/human/` and `docs/llm/` in sync with the current state of the code.
@@ -56,7 +56,7 @@ for slug in stale_concepts:
 For each stale concept, spawn a `doc-updater` subagent. In dry-run mode, leave `mode: dry-run` (default); in apply mode, set `mode: write`.
 
 ```
-Agent(
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="doc-updater",
   description="Refresh docs for <concept>",
   prompt="concept: <slug>\nhuman_path: docs/human/<slug>.md\nllm_path: docs/llm/<slug>.json\nsource_files: <paths from INDEX.json>\nreason: <stale|drift|spec_change>\nmode: <dry-run|write>\nrepo_root: <abs path>\ndedup_tags: true"
@@ -78,15 +78,15 @@ Surface any `memories_lost` warning prominently in Phase 3 before presenting dif
 
 ## Phase 2.5 — Cross-LLM audit (only if `--audit` flag set)
 
-For each `doc-updater` return from Phase 2, spawn **both** consultants in parallel (single message, multiple `Agent()` calls) to verify the proposed update is accurate:
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
 
 ```
-Agent(
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="consultant-primary",
   description="Doc audit (Gemini) for <concept>",
   prompt="MODE: doc-audit\n\nConcept: <slug>\nProposed human-tier markdown:\n<verbatim from doc-updater HUMAN_DOC>\n\nProposed LLM-tier JSON:\n<verbatim from doc-updater LLM_DOC>\n\nSource files (read these):\n<list of abs paths>\n\nPrior doc (if any):\n<verbatim or 'none — fresh init'>\n\nAsk: does the proposed doc accurately describe the source files? List specific claims that don't match (file:line). List concepts the doc should cover but doesn't."
 )
-Agent(
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="consultant-secondary",
   description="Doc audit (Codex) for <concept>",
   prompt="MODE: doc-audit\n\n<same prompt body>"

@@ -1,7 +1,7 @@
 # z-harness → Antigravity (agy) Export
 
-This directory contains z-harness commands and agents exported as Antigravity
-(Google's agy IDE) workflow and rule files.
+This directory contains z-harness commands, agents, and skills exported as Antigravity
+(Google's agy IDE) workflow, rule, and skill files.
 
 ## What's included
 
@@ -9,6 +9,7 @@ This directory contains z-harness commands and agents exported as Antigravity
 |------|---------|
 | `.agent/workflows/*.md` | Custom chat modes — one per z-harness command |
 | `.agent/rules/*.md` | Always-on or model-decision rules — one per z-harness agent |
+| `.agent/skills/*` | Workspace skills — one per z-harness skill |
 | `prompts/*.md` | Flat prompt files (description + role frontmatter) |
 | `agy-plugin.yaml` | Export manifest (z-harness convention; not read by agy) |
 | `CAPABILITIES.md` | What can and cannot be expressed in Antigravity |
@@ -23,7 +24,7 @@ Copy the `.agent/` directory into your project workspace root:
 cp -r exports/agy/.agent /path/to/your/project/
 ```
 
-Antigravity auto-discovers `.agent/workflows/**/*.md` and `.agent/rules/**/*.md`
+Antigravity auto-discovers `.agent/workflows/**/*.md`, `.agent/rules/**/*.md`, and `.agent/skills/**/*`
 by watching the workspace directory tree.  No restart required — files become
 available immediately in the IDE.
 

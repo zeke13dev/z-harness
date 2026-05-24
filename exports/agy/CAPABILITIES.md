@@ -13,6 +13,7 @@ The following z-harness constructs have direct or near-direct equivalents in Ant
 |---------------------|----------------------|
 | `commands/*.md` (slash commands) | `.agent/workflows/<name>.md` — custom chat modes (`agy chat --mode <id>`) |
 | `agents/*.md` (agent definitions) | `.agent/rules/<name>.md` — always_on or model_decision rules |
+| `skills/*/SKILL.md` (skills) | `.agent/skills/<name>/SKILL.md` — workspace skills |
 | `Bash`, `Read`, `Edit`, `Write` tools | Cascade native tools (exact names may differ; semantics are equivalent) |
 | `AskUserQuestion` tool (clarification) | Cascade conversational turn (native; no special syntax needed) |
 | `WebFetch`, `WebSearch` tools | Cascade native (if enabled in the workspace) |
@@ -30,9 +31,11 @@ The following z-harness features have no native Antigravity equivalent:
    from a shell command in the workflow body. This does not nest within a running Cascade
    session; it launches a new top-level session.
 
-2. **Skills / Skill inclusion** — Antigravity has no skill-loading mechanism.  Skills from
-   `skills/*/SKILL.md` must be inlined into the invoking workflow's Markdown body.  Note the
-   12,000-character content limit per workflow file.
+2. **Programmatic Skill Invocation (`Skill(name=...)`)** — Although Antigravity natively
+   supports workspace skills under `.agent/skills/<name>/SKILL.md`, it does not support
+   programmatic `Skill()` runtime API calls or dynamic inclusion. Downstream actions that rely
+   on programmatic skill loading must be handled as instructions directing Cascade to load the
+   appropriate workspace skill.
 
 3. **Provider registry (`providers.json`, `resolve-provider.sh`)** — Cascade is bound to
    Gemini; there is no multi-provider routing mechanism.  All provider-routing logic in
