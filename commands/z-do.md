@@ -1,5 +1,5 @@
 ---
-description: Plan-less z-harness execution for small tasks. Brings the harness discipline — premise check, doc-fetcher grounding, codex review safety gate, structured logging — without SPEC/PLAN/TASKS/FIX.md ceremony. Logs to z-harness/adhoc/ so /z-improve can retro it. Auto-bails to /z-plan-light if scope grows past ~3 files or any non-obvious decision surfaces.
+description: Plan-less z-harness execution for small tasks. Brings the harness discipline — premise check, doc-fetcher grounding, codex review safety gate, structured logging — without SPEC/PLAN/TASKS/FIX.md ceremony. Logs to z-harness/adhoc/ so /z-improve can retro it. Routes to the right planning/debug workflow when scope or bug signals exceed direct execution.
 argument-hint: <small task description>
 ---
 
@@ -16,7 +16,8 @@ $ARGUMENTS
 1. Pick run id: `RUN=$(date -u +%Y-%m-%dT%H:%M:%SZ)-do`
 2. `export Z_HARNESS_SLUG=adhoc`
 3. `mkdir -p z-harness/adhoc/archive/$RUN`
-4. **Version stamp + log:**
+4. `CURRENT_ARCHIVE_DIR="z-harness/adhoc/archive/$RUN"`
+5. **Version stamp + log:**
    ```bash
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
    START_PAYLOAD="$(python3 -c '
@@ -26,18 +27,38 @@ $ARGUMENTS
    ' "$VERSION_BLOB" "<arguments>")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" do_run_start "$START_PAYLOAD"
    ```
-5. Notification policy: read `Z_HARNESS_NOTIFY` (default `approval_only`).
+6. Notification policy: read `Z_HARNESS_NOTIFY` (default `approval_only`).
 
-## Auto-bail thresholds (check throughout)
+## Plan Route Check
+
+<!-- PLAN_ROUTE_CHECK_START -->
+Run this check after premise/doc grounding and before writing `approach.md`; run it again before implementation if the file count or decision count grows. `/z-do` may route only to `/z-plan-light`, `/z-plan`, `/z-research`, `/z-brainstorm`, `/z-fix`, or `/z-debug` under the conditions below. It must not route to `/z-plan-split` directly.
+
+Collect only already-known deterministic signals: `candidate_files`, `non_obvious_decisions`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `terrain_uncertain`, `approach_uncertain`, `has_bug_diagnosis`, `has_unknown_bug_symptom`, and `docs_stale_or_drifted`.
+
+Deterministic routes:
+- Route to `/z-plan-light <task>` when this is still a small targeted implementation/fix but exceeds `/z-do` limits: `candidate_files > 3` or `non_obvious_decisions > 0`, while `candidate_files <= 5`, `non_obvious_decisions <= 2`, and there is no cross-module, schema, persistence, public API, or wire-format impact.
+- Route to `/z-plan <task>` when the task has cross-module impact, schema/persistence impact, public API or wire-format impact, more than 5 candidate files, or more than 2 non-obvious decisions.
+- Route to `/z-research <topic>` when terrain is uncertain, source facts cannot yet be cited, or this is no-code terrain mapping.
+- Route to `/z-brainstorm <topic>` when terrain is sufficiently known but multiple plausible framings or approaches would materially change the plan.
+- Route to `/z-fix <diagnosis>` only when the user has a concrete bug hypothesis or diagnosis.
+- Route to `/z-debug <symptom>` only when the user has an observed bug/symptom and the root cause is unknown.
+
+Call `planning-router` only when deterministic signals conflict, confidence is medium, no hard threshold already mandates a route, and the same `reason_codes` have not already used the router in this run.
 
 If at any point you discover:
 
-- **>3 files** need editing → recommend `/z-plan-light`
-- **Any non-obvious decision** surfaces (new dep, public API change, persistence change, algorithm choice with materially different tradeoffs) → recommend `/z-plan-light`
-- **Cross-module / cross-crate impact** OR **schema change** → recommend `/z-plan`
-- User says "this might be bigger than I thought" → bail
+- **>3 files** need editing
+- **Any non-obvious decision** surfaces (new dep, public API change, persistence change, algorithm choice with materially different tradeoffs)
+- **Cross-module / cross-crate impact** OR **schema change**
+- User says "this might be bigger than I thought"
 
-→ Halt: write a one-paragraph `z-harness/adhoc/archive/$RUN/escalation.md`, log `do_escalation`, push-notify, suggest the appropriate command. Do not improvise.
+→ Halt the current flow behind a route gate: write `$CURRENT_ARCHIVE_DIR/route-decision.md`, emit `plan_route_decision`, log the legacy `do_escalation` event as compatibility telemetry if this replaces an old escalation branch, push-notify, and ask the user to switch / continue if the hard threshold allows continuation / abandon. If the user chooses switch, stop after presenting the exact next command invocation; do not execute it.
+
+`route-decision.md` must include the recommended command, reason, deterministic signals, route chain, and resume context. Emit `plan_route_decision` with `from_command`, `to_command`, `route_class`, `reason_codes`, `signals`, `confidence`, `classifier_used`, `artifact_path`, `route_chain`, and `user_choice`.
+
+Loop prevention: carry forward the latest route chain from any supplied or discovered `route-decision.md`; if the chain already has two entries, ask the user to choose instead of routing again; if the target equals the immediate prior source command, present both route artifacts and ask the user to choose.
+<!-- PLAN_ROUTE_CHECK_END -->
 
 ## Phase 1 — Premise check (mandatory, quick)
 
@@ -72,7 +93,7 @@ In a single short message to yourself, state:
 
 Save to `z-harness/adhoc/archive/$RUN/approach.md`. This is the entire "plan" — no PLAN.md, no TASKS.md, no FIX.md.
 
-**Check auto-bail thresholds before implementing.** If the file list is >3 or any item is a non-obvious decision, halt now and recommend escalation.
+**Check the Plan Route Check before implementing.** If the file list is >3 or any item is a non-obvious decision, use `$CURRENT_ARCHIVE_DIR/route-decision.md` and the `plan_route_decision` gate instead of a separate escalation prompt.
 
 ## Phase 4 — Implement inline
 
@@ -85,9 +106,8 @@ Edit / Write the files. Apply the implementer self-check:
 5. No stale docstrings / comments left behind.
 
 If mid-implementation you discover scope growth → halt and `AskUserQuestion`:
-- "Continue in z-do — update approach.md"
-- "Escalate to /z-plan-light"
-- "Escalate to /z-plan"
+- "Switch to the recommended routed command"
+- "Continue in z-do — update approach.md" (only if no hard threshold forbids continuation)
 - "Abandon"
 
 Hard limit: if you find yourself touching >5 files inline, halt regardless.
@@ -153,7 +173,11 @@ Apply the "one reason it might be wrong" check to each finding. If it raises a r
 - **Doc-fetcher first** (per global CLAUDE.md rule) whenever `docs/llm/INDEX.json` exists.
 - **No upfront cross-LLM consult.** Only at the end, only if triggered.
 - **Codex review is non-negotiable.** Skipping it makes /z-do not-z-harness.
-- **Never proceed past auto-bail thresholds** without explicit user override.
+- **Never proceed past Plan Route Check hard thresholds** without explicit user override.
 - **Never read `docs/llm/*.json` from main thread.**
 - **Always log to `z-harness/adhoc/archive/$RUN/`** — `/z-improve` reads this.
 - **No emojis.**
+
+### Git history-rewrite safety
+
+Before recommending any `git reset --hard HEAD~N`, `git commit --amend`, or interactive-rebase squash on a branch tracking an upstream: for each commit being rewritten, run `git branch -r --contains <sha>`. If the upstream ref appears, STOP — recommend rebase or new-commit instead, never silent rewrite. Force-push to main requires explicit per-incident user authorization with (i) list of overwritten commits and (ii) content-equivalence/superset demonstration.

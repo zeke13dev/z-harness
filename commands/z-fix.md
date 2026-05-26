@@ -303,3 +303,7 @@ If user picks **no** → skip; nothing written.
 - **No emojis** anywhere in artifacts.
 - **Phase 0 is non-skippable.** If the user cannot name a hypothesis, the command exits with a `/z-debug` recommendation, even if an argument was passed.
 - **Single bundled `light-fix` consult only.** Parallel Gemini + Codex, framed around "does this cause explain all symptoms?" — not a multi-round hypothesis generation flow.
+
+### Git history-rewrite safety
+
+Before recommending any `git reset --hard HEAD~N`, `git commit --amend`, or interactive-rebase squash on a branch tracking an upstream: for each commit being rewritten, run `git branch -r --contains <sha>`. If the upstream ref appears, STOP — recommend rebase or new-commit instead, never silent rewrite. Force-push to main requires explicit per-incident user authorization with (i) list of overwritten commits and (ii) content-equivalence/superset demonstration.

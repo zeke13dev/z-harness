@@ -97,3 +97,7 @@ If during implementation you discovered `$BASE/SPEC.md` was wrong, incomplete, o
 4. Brief user summary: what changed, what the reviewer flagged, what's next.
 
 Do **not** auto-advance. Wait for the user to invoke `/z-implement-next` again — this forces a fresh context per task.
+
+### Git history-rewrite safety
+
+Before recommending any `git reset --hard HEAD~N`, `git commit --amend`, or interactive-rebase squash on a branch tracking an upstream: for each commit being rewritten, run `git branch -r --contains <sha>`. If the upstream ref appears, STOP — recommend rebase or new-commit instead, never silent rewrite. Force-push to main requires explicit per-incident user authorization with (i) list of overwritten commits and (ii) content-equivalence/superset demonstration.
