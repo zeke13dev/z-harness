@@ -14,3 +14,11 @@ __pycache__/
 
 # Stray top-level archive (agent debris; canonical location is z-harness/archive/)
 /archive/
+
+# Locally installed plugin caches (canonical sources live under exports/)
+/.agent/
+/.codex-plugin/
+/.claude/scheduled_tasks.lock
+
+# Ad-hoc local research scratch
+/research/
