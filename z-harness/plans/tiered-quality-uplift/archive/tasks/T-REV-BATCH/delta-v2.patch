@@ -1,0 +1,233 @@
+--- z-harness/plans/tiered-quality-uplift/archive/tasks/T-REV-BATCH/diff-v1.patch	2026-05-26 08:01:06
++++ z-harness/plans/tiered-quality-uplift/archive/tasks/T-REV-BATCH/diff.patch	2026-05-26 08:03:05
+@@ -1,26 +1,27 @@
+ --- z-harness/plans/tiered-quality-uplift/archive/tasks/T-REV-BATCH/baseline.md	2026-05-26 07:52:32
+-+++ commands/z-uplift.md	2026-05-26 07:56:13
+++++ commands/z-uplift.md	2026-05-26 08:02:34
+ @@ -872,12 +872,16 @@
+  ```
+  
+  ```bash
+ -# Apply collision resolution choices (repeat per collision until none remain)
+ -# User response format: "1", "2", or "<slug-A> <slug-B>"
++-COMPONENTS_JSON="$(python3 - "$COMPONENTS_JSON" "$USER_COLLISION_CHOICES" <<'PYEOF'
++-import json, sys
+ +# Apply collision resolution choices.
+ +# Runs in a while-loop until the slug list is collision-free (handles N-way collisions
+ +# and the case where a user-supplied custom slug introduces a new collision).
+-+# A safety counter (max 5 passes) prevents infinite loops on pathological input.
+- COMPONENTS_JSON="$(python3 - "$COMPONENTS_JSON" "$USER_COLLISION_CHOICES" <<'PYEOF'
+--import json, sys
+++# A no-progress sanity counter (fires after 3 stalled iterations) prevents infinite loops.
+++COMPONENTS_JSON="$(python3 - "$COMPONENTS_JSON" "$USER_COLLISION_CHOICES" <<'PYEOF'
+ +import json, re, sys
+  from collections import defaultdict
+  
+-+SLUG_RE = re.compile(r'^[a-z0-9][a-z0-9-]*$')
+++SLUG_RE = re.compile(r'^[a-z0-9]+(?:-[a-z0-9]+)*$')
+ +
+  data   = json.loads(sys.argv[1])
+  # USER_COLLISION_CHOICES is a JSON array of {"slug": str, "choice": str} objects
+  choices = json.loads(sys.argv[2]) if sys.argv[2] else []
+-@@ -891,22 +895,42 @@
++@@ -891,23 +895,46 @@
+          groups[c["slug"]].append(c)
+      return {slug: cs for slug, cs in groups.items() if len(cs) > 1}
+  
+@@ -34,17 +35,25 @@
+ -    elif choice == "2":
+ -        # B keeps slug; A gets slug-1
+ -        colliding[0]["slug"] = slug + "-1"
+--    else:
+++prev_collision_count = -1
+++sanity = 0
+++while True:
+++    collisions = find_collisions(components)
+++    if not collisions:
+++        break
+++    if len(collisions) == prev_collision_count:
+++        sanity += 1
+++        if sanity > 3:
+++            print(f"ERROR: collision resolution made no progress over 3 iterations — aborting. Stuck slugs: {sorted(collisions.keys())}", file=sys.stderr)
+++            sys.exit(1)
++     else:
+ -        # Custom: "slug-A slug-B"
+ -        parts = choice.strip().split()
+ -        if len(parts) >= 2:
+ -            colliding[0]["slug"] = parts[0]
+ -            colliding[1]["slug"] = parts[1]
+-+MAX_PASSES = 5
+-+for _pass in range(MAX_PASSES):
+-+    collisions = find_collisions(components)
+-+    if not collisions:
+-+        break
+++        sanity = 0
+++    prev_collision_count = len(collisions)
+ +    for slug in sorted(collisions.keys()):
+ +        colliding = sorted(collisions[slug], key=lambda c: c["path"])
+ +        choice = choice_map.get(slug, "1")
+@@ -60,26 +69,21 @@
+ +            if len(parts) >= 2:
+ +                for i, part in enumerate(parts[:2]):
+ +                    if not SLUG_RE.match(part):
+-+                        print(f"ERROR: custom slug '{part}' is invalid — must match ^[a-z0-9][a-z0-9-]*$. Aborting.", file=sys.stderr)
+++                        print(f"ERROR: custom slug '{part}' is invalid — must match ^[a-z0-9]+(?:-[a-z0-9]+)*$. Aborting.", file=sys.stderr)
+ +                        sys.exit(1)
+ +                colliding[0]["slug"] = parts[0]
+ +                colliding[1]["slug"] = parts[1]
+-+else:
+-+    # After MAX_PASSES, check if collisions still remain
+-+    remaining = find_collisions(components)
+-+    if remaining:
+-+        print(f"ERROR: slug collisions remain after {MAX_PASSES} resolution passes: {sorted(remaining.keys())}. Aborting.", file=sys.stderr)
+-+        sys.exit(1)
+-+
++ 
+ +# Final re-check: verify no duplicates were introduced by custom choices
+ +remaining = find_collisions(components)
+ +if remaining:
+ +    print(f"ERROR: slug collision introduced by custom choice: {sorted(remaining.keys())}. Re-run with corrected slugs.", file=sys.stderr)
+ +    sys.exit(1)
+- 
+++
+  data["components"] = components
+  print(json.dumps(data))
+-@@ -1204,7 +1228,9 @@
++ PYEOF
++@@ -1204,7 +1231,9 @@
+  - \`risk\` — watch items with no immediately actionable fix
+  
+  Style-drift findings must cite STYLE rule IDs explicitly.
+@@ -90,11 +94,10 @@
+  ```
+  
+  ### Step 4 — Dispatch consultants in parallel
+-@@ -1350,6 +1376,23 @@
+- 
++@@ -1351,6 +1380,23 @@
+  for f in merged:
+      f["class"] = normalise_class(f.get("class", ""))
+-+
++ 
+ +# Warn about bullets that looked like findings but were not matched by the strict G/C/R-NNN parser.
+ +# Counts candidate bullets (any "- <word>" line) across both transcripts, compares against
+ +# the number actually parsed, and emits a warning + telemetry event if any were dropped.
+@@ -111,10 +114,11 @@
+ +             _json.dumps({"slug": slug, "count": dropped})],
+ +            check=False)
+ +    print(f"WARNING: {dropped} bullet(s) in cross-cutting output did not match G-NNN/C-NNN/R-NNN pattern and were dropped.")
+- 
+++
+  # Sort into buckets and assign sequential numbers
+  global_tasks   = [f for f in merged if f["class"] == "global-task"]
+-@@ -1521,7 +1564,8 @@
++ per_comp       = [f for f in merged if f["class"] == "per-component-context"]
++@@ -1521,7 +1567,8 @@
+      content = f.read()
+  
+  cross_slug = f"{slug}-cross-cutting"
+@@ -124,7 +128,7 @@
+  
+  # Idempotent: if a row for this cross-slug already exists, update it in place; else insert as first row.
+  existing_row_re = re.compile(
+-@@ -1542,8 +1586,12 @@
++@@ -1542,8 +1589,12 @@
+      )
+      print(f"inserted {cross_slug} as first row in MANIFEST.md")
+  
+@@ -138,7 +142,7 @@
+  PYEOF
+  ```
+  
+-@@ -1888,9 +1936,22 @@
++@@ -1888,9 +1939,34 @@
+  import re, sys
+  with open(sys.argv[1]) as f:
+      text = f.read()
+@@ -147,9 +151,15 @@
+ -print(count)
+ +# Parse findings structurally: split on finding-start markers, then inspect each block's
+ +# header for a CRITICAL or HIGH severity tag. This avoids counting prose mentions.
+++# Recognises three auditor output formats:
+++#   1. ### [CRITICAL] <subject>  (auditor.md native format)
+++#   2. - F-NNN [CRITICAL] ...    (bullet + tag)
+++#   3. Severity: CRITICAL        (key-value inside block)
+ +finding_start_re = re.compile(
+-+    r'^\s*[-*]\s+(?:F|C|P|D)-\d+|^\s*#{2,4}\s+(?:Finding\s+\d+|F-\d+|C-\d+|P-\d+|D-\d+)',
+-+    re.MULTILINE
+++    r'^\s*#{2,4}\s*\[\s*(?:CRITICAL|HIGH|MEDIUM|LOW)\s*\]'
+++    r'|^\s*[-*]\s+(?:F|C|P|D)-\d+'
+++    r'|^\s*#{2,4}\s+(?:Finding\s+\d+|F-\d+|C-\d+|P-\d+|D-\d+)',
+++    re.MULTILINE | re.IGNORECASE
+ +)
+ +positions = [m.start() for m in finding_start_re.finditer(text)]
+ +positions.append(len(text))
+@@ -157,30 +167,40 @@
+ +for i in range(len(positions) - 1):
+ +    block = text[positions[i]:positions[i+1]]
+ +    head = block[:300]
+-+    if re.search(r'\bSeverity\s*:?\s*(CRITICAL|HIGH)\b', head, re.IGNORECASE) \
+-+       or re.match(r'^\s*[-*]\s+(?:F|C|P|D)-\d+\s*\[\s*(?:CRITICAL|HIGH)\s*\]', head, re.IGNORECASE):
+++    # Format 1: ### [CRITICAL] or ### [HIGH] header line
+++    if re.match(r'^\s*#{2,4}\s*\[\s*(CRITICAL|HIGH)\s*\]', head, re.IGNORECASE):
+ +        crit_high += 1
+++    # Format 2: bullet with inline tag  - F-NNN [CRITICAL]
+++    elif re.match(r'^\s*[-*]\s+(?:F|C|P|D)-\d+\s*\[\s*(?:CRITICAL|HIGH)\s*\]', head, re.IGNORECASE):
+++        crit_high += 1
+++    # Format 3: Severity: CRITICAL|HIGH field inside block
+++    elif re.search(r'\bSeverity\s*:?\s*(CRITICAL|HIGH)\b', head, re.IGNORECASE):
+++        crit_high += 1
+ +print(crit_high)
+  PYEOF
+  )"
+  
+-@@ -1898,9 +1959,12 @@
++@@ -1898,9 +1974,16 @@
+  import re, sys
+  with open(sys.argv[1]) as f:
+      text = f.read()
+ -# Count discrete finding entries: lines starting with a numbered or bullet finding marker
+ -count = len(re.findall(r'^\s*[-*]\s+(?:F|C|P|D)-\d+|\bFinding\s+\d+\b', text, re.MULTILINE | re.IGNORECASE))
+ -print(count)
+-+# Count discrete finding entries by their structural start markers
+++# Count discrete finding entries by their structural start markers.
+++# Recognises ### [SEVERITY] headers (auditor.md native), bullet F/C/P/D-NNN markers,
+++# and legacy ### Finding-NNN headers.
+ +finding_start_re = re.compile(
+-+    r'^\s*[-*]\s+(?:F|C|P|D)-\d+|^\s*#{2,4}\s+(?:Finding\s+\d+|F-\d+|C-\d+|P-\d+|D-\d+)',
+-+    re.MULTILINE
+++    r'^\s*#{2,4}\s*\[\s*(?:CRITICAL|HIGH|MEDIUM|LOW)\s*\]'
+++    r'|^\s*[-*]\s+(?:F|C|P|D)-\d+'
+++    r'|^\s*#{2,4}\s+(?:Finding\s+\d+|F-\d+|C-\d+|P-\d+|D-\d+)',
+++    re.MULTILINE | re.IGNORECASE
+ +)
+ +print(len(finding_start_re.findall(text)))
+  PYEOF
+  )"
+  ```
+-@@ -1954,7 +2018,11 @@
++@@ -1954,7 +2037,11 @@
+  print(' '.join(paths))
+  INNEREOF
+     )"
+@@ -193,16 +213,16 @@
+     ```
+  
+  3. Append the dependents section to REPORT.md:
+-@@ -2320,6 +2388,12 @@
++@@ -2319,6 +2406,12 @@
++ > - Dependents warnings: `<DEP_WARN_COUNT>` `<if > 0: note "see MANIFEST.md Dependents warnings section">`
+  >
+  > Phase 5 will prompt you per-component before dispatching any implementation.
+- 
+++
+ +```bash
+ +if grep -qE '^\| .* \| .*-cross-cutting \|' "$Z_HARNESS_PLAN_DIR/MANIFEST.md"; then
+ +  echo "Note: '${SLUG}-cross-cutting' will be implemented first (per SPEC §Phase 5)."
+ +fi
+ +```
+-+
++ 
+  ### Step 3 — Phase telemetry
+  
+- ```bash

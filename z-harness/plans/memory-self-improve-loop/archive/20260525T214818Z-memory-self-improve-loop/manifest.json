@@ -1,0 +1,19 @@
+{
+  "slug": "memory-self-improve-loop",
+  "run": "20260525T214818Z-memory-self-improve-loop",
+  "status": "complete",
+  "ended_at": "2026-05-25T23:28:23Z",
+  "totals": {
+    "decisions": 13,
+    "consult_flagged": 5,
+    "consultations_attempted": 2,
+    "consultations_succeeded": 0,
+    "consultations_failed": 2,
+    "consultant_failure_reason": "session_limit (both Gemini and Codex CLIs)",
+    "tasks": 13,
+    "tasks_remote_verify": 0,
+    "shortcuts_approved": 6
+  },
+  "depends_on": ["BRAINSTORM.md", "RESEARCH.md"],
+  "notes": "Phase 3 + Phase 7 consultant review degraded to orchestrator-only self-critique due to session_limit. Future /z-amend may re-consult once quotas reset (4pm America/Los_Angeles)."
+}

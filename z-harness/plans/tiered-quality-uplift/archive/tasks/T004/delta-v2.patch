@@ -1,0 +1,243 @@
+--- z-harness/plans/tiered-quality-uplift/archive/tasks/T004/diff-v1.patch	2026-05-25 21:42:34
++++ z-harness/plans/tiered-quality-uplift/archive/tasks/T004/diff.patch	2026-05-25 21:46:20
+@@ -1219,7 +1219,7 @@
+ 
+ ### Overview
+ 
+-Iterate every component in MANIFEST with state `[ ] pending` (the synthetic `<slug>-cross-cutting` component, if present, was already inserted at the top of MANIFEST by Phase 2 and is also processed here as a regular `pending` row — it is NOT skipped; its TASKS.md already exists, so Step 6 below is skipped for it). For each such component, run Steps 1–8 below.
++Iterate every component in MANIFEST with state `[ ] pending`, **excluding** any row whose slug ends in `-cross-cutting` or whose component column is `(global)` — the synthetic cross-cutting component inserted by Phase 2 (T003) is handled separately in Phase 5 and must not be re-audited here. For each qualifying component, run Steps 1–8 below.
+ 
+ ### Step 0 — Phase setup
+ 
+@@ -1260,11 +1260,16 @@
+     if len(cells) < 7:
+         continue
+     state = cells[1]
++    slug  = cells[3]
++    comp  = cells[2]
++    # Synthetic cross-cutting handled in Phase 2 (T003); skip from Phase 3 iteration
++    if slug.endswith('-cross-cutting') or comp == '(global)':
++        continue
+     if '[ ] pending' in state or state == '[ ] pending':
+         rows.append({
+             "state":     state,
+-            "component": cells[2],
+-            "slug":      cells[3],
++            "component": comp,
++            "slug":      slug,
+             "tasks_md":  cells[6],
+         })
+ 
+@@ -1284,8 +1289,14 @@
+ 
+ ```bash
+ python3 - "$Z_HARNESS_PLAN_DIR/MANIFEST.md" "$COMP_SLUG" <<'PYEOF'
+-import re, sys
++import re, sys, os
+ 
++def manifest_write(path, content):
++    tmp = path + ".tmp"
++    with open(tmp, "w") as f:
++        f.write(content)
++    os.replace(tmp, path)
++
+ manifest_path = sys.argv[1]
+ comp_slug     = sys.argv[2]
+ 
+@@ -1299,8 +1310,7 @@
+     re.MULTILINE
+ )
+ updated = pattern.sub(r'\1[~] auditing\2', content, count=1)
+-with open(manifest_path, "w") as f:
+-    f.write(updated)
++manifest_write(manifest_path, updated)
+ PYEOF
+ 
+ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" component_audit_start \
+@@ -1552,11 +1562,36 @@
+    <existing REPORT.md content below>
+    ```
+ 
+-2. Run a text-grep across other component paths to find references to this component:
++2. Compute `OTHER_COMP_PATHS` from MANIFEST (all Path-column values except the bailing component and the synthetic cross-cutting row), then run a text-grep to find references:
+ 
+    ```bash
+    COMP_BASENAME="$(basename "$COMP_PATH")"
+-   # OTHER_COMP_PATHS is the space-separated list of all non-current component paths from MANIFEST
++   # Derive OTHER_COMP_PATHS from MANIFEST: all Path-column values except COMP_PATH and cross-cutting synthetic rows
++   OTHER_COMP_PATHS="$(python3 - "$Z_HARNESS_PLAN_DIR/MANIFEST.md" "$COMP_PATH" <<'INNEREOF'
++import sys
++manifest_path = sys.argv[1]
++current_path  = sys.argv[2]
++with open(manifest_path) as f:
++    content = f.read()
++paths = []
++for line in content.splitlines():
++    line = line.strip()
++    if not line.startswith('|') or line.startswith('|---') or line.startswith('| State'):
++        continue
++    cells = [c.strip() for c in line.split('|')]
++    # cells: ['', state, component(path), slug, findings, bail, tasks, '']
++    if len(cells) < 7:
++        continue
++    comp_path = cells[2]
++    slug      = cells[3]
++    # Skip current bailing component and synthetic cross-cutting row
++    if comp_path == current_path or slug.endswith('-cross-cutting') or comp_path == '(global)':
++        continue
++    if comp_path and comp_path != '—' and comp_path != '-':
++        paths.append(comp_path)
++print(' '.join(paths))
++INNEREOF
++   )"
+    DEPS_FOUND="$(git grep -l "$COMP_BASENAME" -- $OTHER_COMP_PATHS 2>/dev/null || true)"
+    ```
+ 
+@@ -1576,8 +1611,14 @@
+ 
+    ```bash
+    python3 - "$Z_HARNESS_PLAN_DIR/MANIFEST.md" "$COMP_SLUG" "$COMP_PATH" "$DEPS_FOUND" <<'PYEOF'
+-   import sys, re
++   import sys, re, os
+ 
++   def manifest_write(path, content):
++       tmp = path + ".tmp"
++       with open(tmp, "w") as f:
++           f.write(content)
++       os.replace(tmp, path)
++
+    manifest_path = sys.argv[1]
+    comp_slug     = sys.argv[2]
+    comp_path     = sys.argv[3]
+@@ -1600,31 +1641,55 @@
+    else:
+        content = content.rstrip() + f"\n\n{section_header}\n{warn_entry}"
+ 
+-   with open(manifest_path, "w") as f:
+-       f.write(content)
++   manifest_write(manifest_path, content)
+    PYEOF
+    ```
+ 
+-5. Mark MANIFEST row as `[!] bailed: crit_high_volume`:
++5. Mark MANIFEST row as `[!] bailed: crit_high_volume` and populate Audit findings + Bail reason columns:
+ 
+    ```bash
+-   python3 - "$Z_HARNESS_PLAN_DIR/MANIFEST.md" "$COMP_SLUG" "crit_high_volume" <<'PYEOF'
+-   import re, sys
++   python3 - "$Z_HARNESS_PLAN_DIR/MANIFEST.md" "$COMP_SLUG" "crit_high_volume" \
++     "$TOTAL_COUNT" "$CRIT_HIGH_COUNT" <<'PYEOF'
++   import re, sys, os
+ 
++   def manifest_write(path, content):
++       tmp = path + ".tmp"
++       with open(tmp, "w") as f:
++           f.write(content)
++       os.replace(tmp, path)
++
+    manifest_path = sys.argv[1]
+    comp_slug     = sys.argv[2]
+    bail_reason   = sys.argv[3]
++   total_count   = int(sys.argv[4])
++   crit_high     = int(sys.argv[5])
+ 
+    with open(manifest_path) as f:
+        content = f.read()
+ 
++   findings_str = f"{total_count} ({crit_high} HIGH)"
++
++   # Update the row matching comp_slug: replace state AND populate Audit findings + Bail reason columns.
++   # Row format: | state | component | slug | findings | bail | tasks |
++   def replace_row(m):
++       # m.group(0) is the full row; rebuild with updated cells
++       row = m.group(0)
++       cells = row.split('|')
++       # cells: ['', state, component, slug, findings, bail, tasks, '']
++       if len(cells) < 8:
++           return row
++       cells[1] = f" [!] bailed: {bail_reason} "
++       cells[4] = f" {findings_str} "
++       cells[5] = f" {bail_reason} "
++       # TASKS.md stays as-is (partial REPORT.md only — leave existing value)
++       return '|'.join(cells)
++
+    pattern = re.compile(
+-       r'(\|\s*)\[~\] auditing(\s*\|(?:[^|\n]*\|){1}\s*' + re.escape(comp_slug) + r'\s*\|)',
++       r'\|[^|\n]*\|\s*[^|\n]*\|\s*' + re.escape(comp_slug) + r'\s*\|[^\n]*\|',
+        re.MULTILINE
+    )
+-   updated = pattern.sub(r'\1[!] bailed: ' + bail_reason + r'\2', content, count=1)
+-   with open(manifest_path, "w") as f:
+-       f.write(updated)
++   updated = pattern.sub(replace_row, content, count=1)
++   manifest_write(manifest_path, updated)
+    PYEOF
+    ```
+ 
+@@ -1690,33 +1755,50 @@
+ #### Step 2j — Mark `[a] audited` and emit done event
+ 
+ ```bash
+-python3 - "$Z_HARNESS_PLAN_DIR/MANIFEST.md" "$COMP_SLUG" "$COMP_PLAN_DIR/TASKS.md" <<'PYEOF'
+-import re, sys
++python3 - "$Z_HARNESS_PLAN_DIR/MANIFEST.md" "$COMP_SLUG" "$COMP_PLAN_DIR/TASKS.md" \
++  "$TOTAL_COUNT" "$CRIT_HIGH_COUNT" <<'PYEOF'
++import re, sys, os
+ 
++def manifest_write(path, content):
++    tmp = path + ".tmp"
++    with open(tmp, "w") as f:
++        f.write(content)
++    os.replace(tmp, path)
++
+ manifest_path = sys.argv[1]
+ comp_slug     = sys.argv[2]
+ tasks_path    = sys.argv[3]
++total_count   = int(sys.argv[4])
++crit_high     = int(sys.argv[5])
+ 
+ with open(manifest_path) as f:
+     content = f.read()
+ 
+-# Update state cell: [~] auditing → [a] audited
++findings_str = f"{total_count} ({crit_high} HIGH)"
++
++# Update the row matching comp_slug (column 3): set state, findings, and TASKS.md columns.
++# Row format: | state | component | slug | findings | bail | tasks |
++# Filter by slug column to avoid modifying the wrong row (B2 fix).
++def replace_row(m):
++    row = m.group(0)
++    cells = row.split('|')
++    # cells: ['', state, component, slug, findings, bail, tasks, '']
++    if len(cells) < 8:
++        return row
++    if cells[3].strip() != comp_slug:
++        return row  # slug mismatch — do not mutate this row
++    cells[1] = " [a] audited "
++    cells[4] = f" {findings_str} "
++    cells[6] = f" {tasks_path} "
++    return '|'.join(cells)
++
++# Match any row that contains the slug in column position 3 with auditing state
+ pattern = re.compile(
+-    r'(\|\s*)\[~\] auditing(\s*\|(?:[^|\n]*\|){1}\s*' + re.escape(comp_slug) + r'\s*\|)',
++    r'\|[^|\n]*\|\s*[^|\n]*\|\s*' + re.escape(comp_slug) + r'\s*\|[^\n]*\|',
+     re.MULTILINE
+ )
+-updated = pattern.sub(r'\1[a] audited\2', content, count=1)
+-
+-# Update TASKS.md column (last pipe-cell before trailing |) for this row
+-updated = re.sub(
+-    r'(\|\s*\[a\] audited\s*\|(?:[^|\n]*\|){3}[^|\n]*)\|\s*(?:[^|\n]*)\s*\|',
+-    lambda m: m.group(0).rsplit('|', 2)[0] + '| ' + tasks_path + ' |',
+-    updated,
+-    count=1
+-)
+-
+-with open(manifest_path, "w") as f:
+-    f.write(updated)
++updated = pattern.sub(replace_row, content)
++manifest_write(manifest_path, updated)
+ PYEOF
+ 
+ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" component_audit_done \

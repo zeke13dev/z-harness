@@ -1,4 +1,5 @@
 ---
+name: z-research
 description: Structured pre-plan terrain mapping — up to 3 parallel Explore subagents, bundled cross-LLM critique, produce RESEARCH.md with file:line citations to ground /z-plan. Explicitly does not recommend an approach.
 argument-hint: <question or technical area to research>
 ---
@@ -43,6 +44,26 @@ Strict, multi-phase. Do not skip phases. `/z-research` produces a research note 
 **All paths in subsequent phases live under `$Z_HARNESS_PLAN_DIR/`:**
 - `$Z_HARNESS_PLAN_DIR/RESEARCH.md`
 - `$Z_HARNESS_PLAN_DIR/archive/<run-id>/...`
+
+<!-- PLAN_ROUTE_CHECK_START -->
+## Plan Route Check
+
+Run this route check before the Phase 0 cost gate when the request is clearly not research. After Phase 6 finalization, route language may appear only as a next-step handoff outside `RESEARCH.md`; never put approach recommendations in the research note.
+
+Use only already-known signals from the question, slug/artifact collision check, and docs availability: `candidate_files`, `expected_tasks`, `non_obvious_decisions`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `terrain_uncertain`, `approach_uncertain`, `has_existing_plan`, `has_fix_artifact`, and `docs_stale_or_drifted`.
+
+Deterministic routes:
+- Stay in `/z-research` when terrain is uncertain, citations/source facts are missing, or the user asks to map code constraints before choosing an approach.
+- Route clearly framed planning work with enough terrain to `/z-plan`.
+- Route multiple plausible framings with enough terrain to `/z-brainstorm`.
+- Route a small concrete fix (`candidate_files <= 5`, `non_obvious_decisions <= 2`, no public API/schema impact) to `/z-plan-light`.
+
+Call `planning-router` only when deterministic signals conflict and no hard threshold already decides the route. It receives the compact signal payload plus the current route chain and is advisory; malformed or unavailable classifier output falls back to deterministic routing or an AskUser choice.
+
+If routing before research starts, write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md`, emit `plan_route_decision` with `from_command`, `to_command`, `route_class`, `reason_codes`, `signals`, `confidence`, `classifier_used`, `artifact_path`, `route_chain`, and `user_choice`, then present the AskUser handoff gate: switch, continue, or abandon. Do not execute the next command automatically.
+
+Loop prevention: carry forward the latest route chain; if it already has two entries, ask the user to choose explicitly. If the recommended target equals the immediate prior `from_command`, block ping-pong, show both route artifacts, and ask the user to choose. If the user continues here, log the override and do not route again for the same `reason_codes` in this run.
+<!-- PLAN_ROUTE_CHECK_END -->
 
 ## Phase telemetry (mandatory)
 

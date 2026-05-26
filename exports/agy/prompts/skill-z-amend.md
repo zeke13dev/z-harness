@@ -13,6 +13,8 @@ $ARGUMENTS
 
 This command modifies an **already-produced** planning artifact set. It does NOT do exploration / consult-everywhere / full premise check — that's `/z-plan`. It does the surgical work of changing one or more decisions / scope items and making sure every downstream artifact (SPEC.md, PLAN.md, TASKS.md, or FIX.md) reflects the change consistently.
 
+Review-generated amendment proposals (for example from `/z-review-all` `REVIEW-TASKS.md`) are inputs to this command, not permission for an implementer to mutate planning artifacts autonomously. If a promoted review task says `Class: spec_gap` or `Disposition: amendment_proposal`, route the change through `/z-amend` so the normal impact analysis, user gate, and completed-task supersession rules still apply.
+
 ## Phase 0 — Discover plan slug
 
 Multiple plans may coexist under `$Z_HARNESS_PLAN_DIR/`. Determine which one to amend:

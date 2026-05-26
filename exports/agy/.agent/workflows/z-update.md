@@ -19,31 +19,45 @@ Emits a `harness_updated` event with old and new version stamps.
 ### 1. Locate plugin root
 
 ```bash
-PLUGIN_LINK="${HOME}/.claude/plugins/z-harness@zeke-tools"
+Z_HARNESS_PLUGIN_ROOT="${Z_HARNESS_PLUGIN_ROOT:-${ANTIGRAVITY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}}"
+if [ -z "$Z_HARNESS_PLUGIN_ROOT" ]; then
+  for candidate in \
+    "${HOME}/plugins/z-harness" \
+    "${HOME}/.claude/plugins/z-harness@zeke-tools" \
+    "$(pwd)"
+  do
+    if [ -f "${candidate}/scripts/version.sh" ] && [ -f "${candidate}/install.sh" ]; then
+      Z_HARNESS_PLUGIN_ROOT="$candidate"
+      break
+    fi
+  done
+fi
 ```
 
-If `$PLUGIN_LINK` does not exist, halt with:
+If `$Z_HARNESS_PLUGIN_ROOT` does not exist or lacks `scripts/version.sh`, halt with:
 ```
-[z-update] ERROR: plugin not found at ~/.claude/plugins/z-harness@zeke-tools
-Run install.sh from the repo or supply --tarball=<url> to install first.
+[z-update] ERROR: z-harness plugin root not found.
+Run install.sh --target=codex from the repo, or set Z_HARNESS_PLUGIN_ROOT.
 ```
 
 ### 2. Detect install mode
 
 ```bash
-if [ -L "$PLUGIN_LINK" ]; then
+PLUGIN_DIR="$Z_HARNESS_PLUGIN_ROOT"
+if [ -L "$PLUGIN_DIR" ]; then
   MODE="symlink"
-  PLUGIN_DIR="$(readlink "$PLUGIN_LINK")"
+  PLUGIN_DIR="$(readlink "$PLUGIN_DIR")"
+elif git -C "$PLUGIN_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+  MODE="symlink"
 else
   MODE="tarball"
-  PLUGIN_DIR="$PLUGIN_LINK"
 fi
 ```
 
 ### 3. Capture old version
 
 ```bash
-OLD_VERSION="$(bash "${PLUGIN_DIR}/scripts/version.sh")"
+OLD_VERSION="$(Z_HARNESS_PLUGIN_ROOT="$PLUGIN_DIR" bash "${PLUGIN_DIR}/scripts/version.sh")"
 ```
 
 ### 4. Symlink mode — git pull
@@ -76,6 +90,9 @@ RELEASE_URL="${Z_HARNESS_RELEASE_URL:-}"
 # TODO: replace placeholder with real release URL once hosting is set up
 RELEASE_URL="${RELEASE_URL:-https://example.com/z-harness/releases/latest/z-harness.tar.gz}"
 ```
+
+If `RELEASE_URL` still points at `example.com`, halt and ask the user to set
+`Z_HARNESS_RELEASE_URL`; there is no real public release URL yet.
 
 Steps:
 1. HEAD-check the release URL to get the latest version tag (via `curl -fsSI` or similar).
@@ -127,7 +144,7 @@ fi
 ### 6. Capture new version and emit event
 
 ```bash
-NEW_VERSION="$(bash "${PLUGIN_DIR}/scripts/version.sh")"
+NEW_VERSION="$(Z_HARNESS_PLUGIN_ROOT="$PLUGIN_DIR" bash "${PLUGIN_DIR}/scripts/version.sh")"
 
 echo "[z-update] Updated successfully."
 echo "  old: ${OLD_VERSION}"
@@ -143,6 +160,15 @@ bash "${PLUGIN_ROOT}/scripts/log-event.sh" \
   harness_updated \
   "$(printf '{"mode":"%s","old_version":%s,"new_version":%s}' \
      "$MODE" "$OLD_VERSION" "$NEW_VERSION")"
+```
+
+For Codex marketplace installs, reinstall the plugin cache after a successful
+symlink update:
+
+```bash
+if command -v codex >/dev/null 2>&1 && [ -f "${HOME}/.agents/plugins/marketplace.json" ]; then
+  codex plugin add z-harness@personal
+fi
 ```
 
 ---

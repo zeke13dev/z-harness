@@ -1,0 +1,370 @@
+diff --git a/docs/human/agents.md b/docs/human/agents.md
+index cfb4e56..f7c632d 100644
+--- a/docs/human/agents.md
++++ b/docs/human/agents.md
+@@ -1,34 +1,52 @@
+ # Agents
+ 
+-> Last updated: 2026-05-23
+-> Covers source: agents/auditor.md, agents/cluster-planner.md, agents/consultant-primary.md, agents/consultant-secondary.md, agents/reviewer.md, agents/complexity-classifier.md, agents/doc-fetcher.md, agents/doc-updater.md, agents/implementer.md, agents/remote-runner.md, agents/spec-precheck.md
++> Last updated: 2026-05-24
++> Covers source: agents/auditor.md, agents/cluster-planner.md, agents/complexity-classifier.md, agents/consultant-primary.md, agents/consultant-secondary.md, agents/doc-fetcher.md, agents/doc-updater.md, agents/external-lookup.md, agents/implementer.md, agents/mr-reviewer.md, agents/planning-router.md, agents/remote-runner.md, agents/reviewer.md, agents/spec-precheck.md
+ 
+ ## Overview
+-The agents concept represents the complete suite of specialized subagent profiles that drive the automated plan-and-implement workflow in z-harness. Each subagent is configured with a tailored system prompt, dedicated tools, and appropriate model profiles (typically Sonnet or specialized consultant roles) to execute discrete, high-discipline steps.
+ 
+-These agents act as isolated workers spawned in parallel or series by orchestration commands. By decomposing complex workflows—such as code generation, planning, security checks, and code reviews—into focused subagent roles with precise scopes, the system minimizes context drift and maximizes execution quality.
++The agents concept represents the complete suite of specialized subagent profiles that drive the automated plan-and-implement workflow in z-harness. Each agent is a markdown file with a frontmatter header (`name`, `description`, `tools`, `model`) that configures its context, available tools, and target model tier (Haiku for cheap mechanical work, Sonnet for implementation and review, Haiku-proxied consultant agents that shell out to an external provider CLI resolved via `scripts/resolve-provider.sh`). Agents are spawned fresh per invocation — isolated workers with no shared mutable state.
++
++These agents decompose complex workflows into focused roles: planning (cluster-planner), planning-route disambiguation (planning-router), implementation (implementer), correctness review (reviewer), code quality review (mr-reviewer), spec validation (spec-precheck), complexity routing (complexity-classifier), documentation (doc-fetcher, doc-updater), remote execution (remote-runner), external retrieval (external-lookup), auditing (auditor), and cross-LLM consultation (consultant-primary, consultant-secondary). The consultant and reviewer agents are provider-agnostic proxies: they call `scripts/resolve-provider.sh` to discover which CLI (Codex, Gemini, or another) is registered for each role, then shell out to that CLI. This replaced the earlier hard-coded `codex-consultant.md`, `codex-reviewer.md`, and `gemini-consultant.md` files.
+ 
+ ## Key entry points
+-- `agents/auditor.md:1` — `auditor` — Scrutinizes target codebase files across correctness, perf, cleanliness, or design dimensions.
+-- `agents/cluster-planner.md:1` — `cluster-planner` — Resolves specialized technical sub-tasks during large-scale workspace planning.
+-- `agents/consultant-secondary.md:1` — `consultant-secondary` — Performs secondary LLM critiques to resolve plan ambiguities and technical risks.
+-- `agents/reviewer.md:1` — `reviewer` — Scrutinizes diffs from code-generation agents against safety, rubric, and styling guidelines.
+-- `agents/complexity-classifier.md:1` — `complexity-classifier` — Classifies task files based on implementation complexity to guide orchestrator constraints.
+-- `agents/doc-fetcher.md:1` — `doc-fetcher` — Retrieves, filters, and ranks documentation concepts relevant to an ongoing plan phase.
+-- `agents/doc-updater.md:1` — `doc-updater` — Rebuilds or updates concept documentation files to match source files under maintain-docs.
+-- `agents/consultant-primary.md:1` — `consultant-primary` — Performs primary plan critiques and risk evaluations.
+-- `agents/implementer.md:1` — `implementer` — Executes the actual code-writing tasks under discrete plan targets.
+-- `agents/remote-runner.md:1` — `remote-runner` — Executes verification tests and builds inside remote sandboxes for safety.
+-- `agents/spec-precheck.md:1` — `spec-precheck` — Validates specifications, task lists, and designs for completeness before implementation.
++
++- `agents/auditor.md:1` — `auditor` — Reads target files for one dimension (correctness | perf | cleanliness | design), writes `findings-<dimension>.md`, returns structured findings. Spawned in parallel by `/z-audit`.
++- `agents/cluster-planner.md:1` — `cluster-planner` — Sub-planner for one cluster in a `/z-plan-split` run; produces SPEC.md + PLAN.md + TASKS.md, escalates risky decisions via `decision_needed` payload.
++- `agents/complexity-classifier.md:1` — `complexity-classifier` — Classifies a single task block into `low | medium | high` tier; Haiku call; result stamped into TASKS.md by orchestrator.
++- `agents/consultant-primary.md:1` — `consultant-primary` — Provider-agnostic proxy for the primary consultant LLM (resolved via `scripts/resolve-provider.sh consultant_primary`). Supports 11 modes: `bundled-decisions`, `plan-review`, `light-fix`, `debug-hypotheses`, `brainstorm`, `research-review`, `doc-audit`, `test-cases`, `mr-review`, `generate-hypotheses-round1`, `generate-hypotheses-round2-adversarial`. Emits `consult_start` before the provider call for liveness detection; uses `scripts/check-timeout.sh` to detect and wrap calls with `timeout(1)` / `gtimeout` when available.
++- `agents/consultant-secondary.md:1` — `consultant-secondary` — Identical shape to consultant-primary but resolves `consultant_secondary` — must be a distinct provider. Same 11 modes.
++- `agents/doc-fetcher.md:1` — `doc-fetcher` — Fast Haiku context-fetcher; reads `docs/llm/INDEX.json` and per-concept JSONs; optionally ripgreps `MEMORIES-FLAT.md`; returns ≤2 KB synthesis with file:line markers. Always dispatched before Explore.
++- `agents/doc-updater.md:1` — `doc-updater` — Refreshes one concept's human-tier markdown + LLM-tier JSON to match current source files; dry-run by default; copies `memories[]` verbatim.
++- `agents/external-lookup.md:1` — `external-lookup` — Haiku retrieval worker for web docs, public APIs, paginated JSON, and library docs outside training cutoff. Returns ≤3 KB STATUS-headed synthesis per `docs/llm/lookup-contract.json`. Enforces a verb-blocklist against mutating Bash commands before any invocation.
++- `agents/implementer.md:1` — `implementer` — Executes a single task block (canonical `T<NNN>` or promoted `T-REV-NNN` / `T-MR-NNN`); runs common-critique self-check before returning `STATUS: ok`; stamps complexity tier from task block.
++- `agents/mr-reviewer.md:1` — `mr-reviewer` — Multi-LLM code-quality reviewer (not correctness); targets AI-shaped slop, defensive bloat, test noise, abstraction failures, style drift. Fans out to `consultant-primary` / `consultant-secondary` voices in parallel, deduplicates findings by `(file, category, normalized_text)`, applies consensus tier-bumps and dismissal-pattern Jaccard matching. Returns fenced JSON + `## Summary` block.
++- `agents/planning-router.md:1` — `planning-router` — Cheap Haiku, read-only ambiguity resolver for plan-family route decisions. It accepts compact caller-supplied signals, returns the exact `STATUS`/`RECOMMENDED`/`ROUTE_CLASS`/`CONFIDENCE`/`REASON_CODES`/`REASON` shape, treats malformed input as `bad_input`, and asks the user on route-loop or conflicting-signal risk.
++- `agents/remote-runner.md:1` — `remote-runner` — Mechanical Haiku agent; rsyncs repo to per-(slug, task) sandbox on remote host, runs cargo/python builds, tails logs, runs read-only DB queries. Classifies commands as `needs-sandbox` vs `read-only-against-shared-state`. Enforces write-verb blocklist for DB queries.
++- `agents/reviewer.md:1` — `reviewer` — Provider-agnostic proxy for the reviewer LLM (resolved via `scripts/resolve-provider.sh reviewer`). Scrutinizes diffs for bugs, spec violations, missed edge cases, DRY/KISS/SOLID. Emits `review_start` / `review_end` events; uses `scripts/check-timeout.sh` for liveness. Returns ≤8 KB findings (blockers + majors only).
++- `agents/spec-precheck.md:1` — `spec-precheck` — Pre-flight Haiku verifier; checks SPEC.md factual claims (symbols, table names, config keys, file paths) against actual codebase before implementer runs. Returns `STATUS: ok` or `STATUS: spec_problem`.
+ 
+ ## How it interacts with others
++
+ - `commands` — Commands are the orchestrators that compile configurations and spawn these subagents to perform specialized work.
+ - `skills` — Skills define the exact operational boundaries, steps, and telemetry wrappers that direct subagent execution.
+-- `scripts` — Subagents use utility scripts to report telemetry log-events, time phase durations, and sync remote file structures.
++- `scripts` — Subagents use `scripts/log-phase.sh`, `scripts/log-event.sh`, `scripts/check-timeout.sh`, and `scripts/resolve-provider.sh` to emit telemetry, detect timeout availability, and resolve provider CLIs at runtime.
++- `lookup-contract` — `external-lookup` conforms to the output contract defined in `docs/llm/lookup-contract.json`; if that file conflicts with the agent's inline prose, the JSON wins.
+ 
+ ## Edge cases / gotchas
+-- Many agents operate in parallel (e.g., auditors, cluster planners, and implementers) which requires strict telemetry event logging using `log-phase.sh` to prevent execution tracing conflicts.
++
++- `consultant-primary`, `consultant-secondary`, and `reviewer` are provider-agnostic proxy shells (Haiku model) that shell out to an external CLI; the actual reasoning model is whatever `resolve-provider.sh` returns. The old hard-coded `codex-consultant.md`, `codex-reviewer.md`, and `gemini-consultant.md` files no longer exist — references to them in archived transcripts or old docs are stale.
++- All three proxy agents (`consultant-primary`, `consultant-secondary`, `reviewer`) now source `scripts/check-timeout.sh` before calling the provider CLI. This sets `$TIMEOUT_CMD` and emits a `timeout_availability` event once per run so silent timeouts are debuggable. They also emit a `consult_start` / `review_start` event BEFORE the provider call so `scripts/liveness.sh` can detect hung consultants even when `$TIMEOUT_CMD` is empty.
++- `external-lookup` enforces a verb-blocklist (Python regex) against every Bash command before execution. A matched pattern produces `STATUS: refused` with `mutation_blocked` rather than silently proceeding.
++- `mr-reviewer` applies a two-stage dismissal filter: Jaccard token-overlap ≥ 0.6 against `dismissed_signatures.json` demotes severity and tags the finding; P0 findings are tagged but never demoted.
++- `cluster-planner` has an anti-self-nesting guard as its first substantive action: it walks ancestor directories looking for `MANIFEST.md` and refuses if any ancestor contains one.
++- `planning-router` is advisory only: it does not edit, call agents, or run shell commands. It must not route tiny/small tasks when `non_obvious_decisions` is unknown, and it must not recommend `/z-plan-split` unless split seams are explicitly independently plannable.
+ - Memory preservation is mandatory for `doc-updater`: it must copy existing `memories[]` arrays verbatim without altering, adding, or deleting entries.
++- Many agents run in parallel (auditors, cluster-planners, implementers), requiring strict `log-phase.sh` telemetry brackets so wall-clock durations are traceable per invocation.
+ 
+ ## Examples
+-- An implementer receiving a task to code will use `agents/implementer.md` to ground its tools and complete the code-generation cycle in isolation before returning its proposed diff for review.
++
++- `/z-plan` Phase 3 dispatches `consultant-primary` and `consultant-secondary` in parallel with `MODE: bundled-decisions`; each resolves its provider CLI via `scripts/resolve-provider.sh` and returns a standard wrapper response.
++- `/z-implement-all` dispatches `spec-precheck` (Haiku) then `implementer` (Sonnet or Opus based on complexity tier) per task; after each implementer returns, `reviewer` is dispatched with the diff and relevant docs.
++- `/z-mr-review` dispatches `mr-reviewer` with a diff path, STYLE.md path, and dismissed-signatures JSON; mr-reviewer fans out to available consultant voices and returns a merged fenced JSON findings block.
++- `external-lookup` is dispatched by `/z-do` or any skill that needs current web docs; it writes raw artifacts to `z-harness/lookup-cache/<sha256>.raw` when the result exceeds the 3 KB budget.
+diff --git a/docs/llm/INDEX.json b/docs/llm/INDEX.json
+index 90f0ada..0836e9d 100644
+--- a/docs/llm/INDEX.json
++++ b/docs/llm/INDEX.json
+@@ -8,14 +8,17 @@
+       "source_file": [
+         "agents/auditor.md",
+         "agents/cluster-planner.md",
+-        "agents/codex-consultant.md",
+-        "agents/codex-reviewer.md",
+         "agents/complexity-classifier.md",
++        "agents/consultant-primary.md",
++        "agents/consultant-secondary.md",
+         "agents/doc-fetcher.md",
+         "agents/doc-updater.md",
+-        "agents/gemini-consultant.md",
++        "agents/external-lookup.md",
+         "agents/implementer.md",
++        "agents/mr-reviewer.md",
++        "agents/planning-router.md",
+         "agents/remote-runner.md",
++        "agents/reviewer.md",
+         "agents/spec-precheck.md"
+       ],
+       "last_updated": "2026-05-24",
+@@ -27,7 +30,7 @@
+         "commands",
+         "skills"
+       ],
+-      "summary": "Scrutinizes codebase targets across correctness/perf/cleanliness/design."
++      "summary": "Specialized subagents, including auditors/reviewers, implementers, and the advisory planning-router for ambiguous plan-family route decisions."
+     },
+     {
+       "slug": "commands",
+@@ -43,6 +46,7 @@
+         "commands/z-improve.md",
+         "commands/z-init-docs.md",
+         "commands/z-maintain-docs.md",
++        "commands/z-mr-review.md",
+         "commands/z-plan-light.md",
+         "commands/z-plan-split.md",
+         "commands/z-plan.md",
+@@ -62,7 +66,7 @@
+       "consumed_by": [
+         "skills"
+       ],
+-      "summary": "Propagates targeted plan amendments consistently across plan artifacts."
++      "summary": "Slash command surfaces, including review-family finding promotion into task-shaped artifacts and /z-implement-all --tasks consumption."
+     },
+     {
+       "slug": "scripts",
+@@ -73,7 +77,7 @@
+         "scripts/remote-sandbox-sync.sh",
+         "scripts/version.sh"
+       ],
+-      "last_updated": "2026-05-23",
++      "last_updated": "2026-05-24",
+       "confidence": "high",
+       "depends_on": [],
+       "consumed_by": [
+@@ -120,7 +124,7 @@
+         "skills/z-suggest-memory/SKILL.md",
+         "skills/z-test/SKILL.md"
+       ],
+-      "last_updated": "2026-05-23",
++      "last_updated": "2026-05-24",
+       "confidence": "high",
+       "depends_on": [
+         "agents",
+@@ -128,7 +132,7 @@
+         "scripts"
+       ],
+       "consumed_by": [],
+-      "summary": "Checklists for amending spec, plan, and task checklists consistently."
++      "summary": "Operational checklists, including review finding promotion, z-amend safety gates, and explicit --tasks implementation queues."
+     },
+     {
+       "slug": "providers-registry",
+@@ -209,6 +213,35 @@
+       ],
+       "consumed_by": [],
+       "summary": "Explicit in-place plugin update via /z-update; detects symlink vs tarball mode; git pull --ff-only for symlink, atomic swap for tarball; no autoupdate; version tracked by scripts/version.sh."
++    },
++    {
++      "slug": "lookup-contract",
++      "source_files": [
++        "agents/external-lookup.md"
++      ],
++      "last_updated": "2026-05-24",
++      "confidence": "high",
++      "depends_on": [
++        "agents"
++      ],
++      "consumed_by": [
++        "external-lookup-agent"
++      ],
++      "summary": "Output envelope contract (STATUS line + fixed Markdown sections) that all external/domain lookup subagents must emit."
++    },
++    {
++      "slug": "external-lookup-agent",
++      "source_files": [
++        "agents/external-lookup.md"
++      ],
++      "last_updated": "2026-05-24",
++      "confidence": "high",
++      "depends_on": [
++        "agents",
++        "lookup-contract"
++      ],
++      "consumed_by": [],
++      "summary": "Haiku-tier subagent for external retrieval (web docs, public APIs, library docs) that offloads lookups from main context while enforcing a read-only verb-blocklist."
+     }
+   ]
+ }
+diff --git a/docs/llm/agents.json b/docs/llm/agents.json
+index 973f1e7..b3619b8 100644
+--- a/docs/llm/agents.json
++++ b/docs/llm/agents.json
+@@ -4,144 +4,52 @@
+   "covers_spec": "none",
+   "source_file": [
+     "agents/auditor.md",
+-    "agents/mr-reviewer.md",
+     "agents/cluster-planner.md",
+-    "agents/codex-consultant.md",
+-    "agents/codex-reviewer.md",
+     "agents/complexity-classifier.md",
++    "agents/consultant-primary.md",
++    "agents/consultant-secondary.md",
+     "agents/doc-fetcher.md",
+     "agents/doc-updater.md",
+-    "agents/gemini-consultant.md",
++    "agents/external-lookup.md",
+     "agents/implementer.md",
++    "agents/mr-reviewer.md",
++    "agents/planning-router.md",
+     "agents/remote-runner.md",
++    "agents/reviewer.md",
+     "agents/spec-precheck.md"
+   ],
+   "confidence": "high",
+   "entry_points": [
+-    {
+-      "file": "agents/mr-reviewer.md",
+-      "line": 1,
+-      "symbol": "mr-reviewer",
+-      "kind": "module",
+-      "summary": "Fans out to codex/gemini consultants, deduplicates findings by (file, category, normalized_text), applies consensus tier-bumps and dismissal-pattern matches, returns structured findings JSON to orchestrator."
+-    },
+-    {
+-      "file": "agents/auditor.md",
+-      "line": 1,
+-      "symbol": "auditor",
+-      "kind": "module",
+-      "summary": "Scrutinizes codebase targets across correctness/perf/cleanliness/design."
+-    },
+-    {
+-      "file": "agents/cluster-planner.md",
+-      "line": 1,
+-      "symbol": "cluster-planner",
+-      "kind": "module",
+-      "summary": "Plans sub-tasks for large split components."
+-    },
+-    {
+-      "file": "agents/codex-consultant.md",
+-      "line": 1,
+-      "symbol": "codex-consultant",
+-      "kind": "module",
+-      "summary": "Performs Codex-tier validation and review of plan specifications.",
+-      "modes": [
+-        "bundled-decisions",
+-        "plan-review",
+-        "light-fix",
+-        "debug-hypotheses",
+-        "brainstorm",
+-        "research-review",
+-        "doc-audit",
+-        "test-cases",
+-        "mr-review",
+-        "generate-hypotheses-round1",
+-        "generate-hypotheses-round2-adversarial"
+-      ]
+-    },
+-    {
+-      "file": "agents/codex-reviewer.md",
+-      "line": 1,
+-      "symbol": "codex-reviewer",
+-      "kind": "module",
+-      "summary": "Reviews code-generation diffs against correctness and style rubrics."
+-    },
+-    {
+-      "file": "agents/complexity-classifier.md",
+-      "line": 1,
+-      "symbol": "complexity-classifier",
+-      "kind": "module",
+-      "summary": "Classifies task files by expected execution complexity."
+-    },
+-    {
+-      "file": "agents/doc-fetcher.md",
+-      "line": 1,
+-      "symbol": "doc-fetcher",
+-      "kind": "module",
+-      "summary": "Retrieves, filters, and ranks relevant documentation concepts."
+-    },
+-    {
+-      "file": "agents/doc-updater.md",
+-      "line": 1,
+-      "symbol": "doc-updater",
+-      "kind": "module",
+-      "summary": "Rebuilds or refreshes concept markdown and JSON docs."
+-    },
+-    {
+-      "file": "agents/gemini-consultant.md",
+-      "line": 1,
+-      "symbol": "gemini-consultant",
+-      "kind": "module",
+-      "summary": "Performs primary Gemini-tier validation of plan specifications.",
+-      "modes": [
+-        "bundled-decisions",
+-        "plan-review",
+-        "light-fix",
+-        "debug-hypotheses",
+-        "brainstorm",
+-        "research-review",
+-        "doc-audit",
+-        "test-cases",
+-        "mr-review",
+-        "generate-hypotheses-round1",
+-        "generate-hypotheses-round2-adversarial"
+-      ]
+-    },
+-    {
+-      "file": "agents/implementer.md",
+-      "line": 1,
+-      "symbol": "implementer",
+-      "kind": "module",
+-      "summary": "Writes code and fulfills discrete task files."
+-    },
+-    {
+-      "file": "agents/remote-runner.md",
+-      "line": 1,
+-      "symbol": "remote-runner",
+-      "kind": "module",
+-      "summary": "Executes testing and verification inside isolated sandboxes."
+-    },
+-    {
+-      "file": "agents/spec-precheck.md",
+-      "line": 1,
+-      "symbol": "spec-precheck",
+-      "kind": "module",
+-      "summary": "Validates planning specs and checklists for completeness."
+-    }
+-  ],
+-  "depends_on": [
+-    "scripts"
+-  ],
+-  "consumed_by": [
+-    "commands",
+-    "skills"
++    {"file": "agents/auditor.md", "line": 1, "symbol": "auditor", "kind": "module", "summary": "Single-dimension read-only auditor; writes findings-<dim>.md; spawned in parallel by /z-audit."},
++    {"file": "agents/cluster-planner.md", "line": 1, "symbol": "cluster-planner", "kind": "module", "summary": "Sub-planner for one /z-plan-split cluster; produces SPEC+PLAN+TASKS, escalates risky decisions."},
++    {"file": "agents/complexity-classifier.md", "line": 1, "symbol": "complexity-classifier", "kind": "module", "summary": "Haiku; classifies one task block into low|medium|high complexity tier for model routing."},
++    {"file": "agents/consultant-primary.md", "line": 1, "symbol": "consultant-primary", "kind": "module", "summary": "Haiku proxy; resolves primary consultant provider via resolve-provider.sh; 11 modes; emits consult_start for liveness; uses check-timeout.sh."},
++    {"file": "agents/consultant-secondary.md", "line": 1, "symbol": "consultant-secondary", "kind": "module", "summary": "Haiku proxy; resolves secondary consultant provider (must differ from primary); same 11 modes as consultant-primary."},
++    {"file": "agents/doc-fetcher.md", "line": 1, "symbol": "doc-fetcher", "kind": "module", "summary": "Haiku; reads INDEX.json + concept JSONs + optional MEMORIES-FLAT.md rg pass; returns <=2 KB synthesis."},
++    {"file": "agents/doc-updater.md", "line": 1, "symbol": "doc-updater", "kind": "module", "summary": "Sonnet; refreshes one concept's human-tier md + LLM-tier JSON; dry-run by default; copies memories[] verbatim."},
++    {"file": "agents/external-lookup.md", "line": 1, "symbol": "external-lookup", "kind": "module", "summary": "Haiku retrieval worker for web/API lookups; <=3 KB STATUS-headed output per lookup-contract.json; verb-blocklist enforced."},
++    {"file": "agents/implementer.md", "line": 1, "symbol": "implementer", "kind": "module", "summary": "Sonnet/Opus; implements one task block (canonical or promoted review ID); runs common-critique self-check."},
++    {"file": "agents/mr-reviewer.md", "line": 1, "symbol": "mr-reviewer", "kind": "module", "summary": "Sonnet; code-quality (not correctness) reviewer; fans out to consultant voices; deduplicates by (file,category,normalized_text); consensus tier-bumps; Jaccard dismissal matching."},
++    {"file": "agents/planning-router.md", "line": 1, "symbol": "planning-router", "kind": "module", "summary": "Haiku; read-only advisory router for ambiguous plan-family route decisions; requires exact parseable return shape and explicit split preconditions."},
++    {"file": "agents/remote-runner.md", "line": 1, "symbol": "remote-runner", "kind": "module", "summary": "Haiku; rsyncs repo to remote sandbox, runs cargo/python builds, read-only DB/log queries; needs-sandbox vs read-only routing."},
++    {"file": "agents/reviewer.md", "line": 1, "symbol": "reviewer", "kind": "module", "summary": "Haiku proxy; resolves reviewer provider via resolve-provider.sh; scrutinizes diffs for bugs/spec violations; emits review_start for liveness; uses check-timeout.sh."},
++    {"file": "agents/spec-precheck.md", "line": 1, "symbol": "spec-precheck", "kind": "module", "summary": "Haiku; pre-flight verifier; checks SPEC factual claims (symbols, paths, table names) exist in codebase before implementer runs."}
+   ],
++  "depends_on": ["scripts", "lookup-contract"],
++  "consumed_by": ["commands", "skills"],
+   "invariants": [
+-    "Subagents are configured as isolated agents with customized system prompt instructions.",
+-    "doc-updater must preserve memories verbatim from any pre-existing concept JSON."
++    "Subagents are isolated workers with no shared mutable state - spawned fresh per invocation.",
++    "consultant-primary, consultant-secondary, and reviewer resolve their provider at runtime via scripts/resolve-provider.sh - they are not hard-coded to any specific LLM.",
++    "doc-updater must preserve memories[] verbatim from any pre-existing concept JSON.",
++    "external-lookup enforces the verb-blocklist before every Bash invocation; a matched pattern -> STATUS: refused, not silent execution.",
++    "consultant-primary, consultant-secondary, and reviewer emit consult_start / review_start BEFORE the provider call so liveness.sh can detect hangs."
+   ],
+   "gotchas": [
+-    "Subagents are read-only except for explicitly authorized output files like findings or logs."
++    "codex-consultant.md, codex-reviewer.md, and gemini-consultant.md no longer exist - replaced by consultant-primary.md, consultant-secondary.md, reviewer.md with runtime provider resolution.",
++    "check-timeout.sh is sourced (not called) by the three proxy agents so $TIMEOUT_CMD is set in the agent's shell environment; missing coreutils means $TIMEOUT_CMD is empty but calls still proceed.",
++    "mr-reviewer never writes MR-REVIEW.md - the orchestrator does that from the returned JSON block.",
++    "cluster-planner anti-nesting guard fires before any repo reads; any ancestor MANIFEST.md causes immediate refusal.",
++    "external-lookup output contract is defined in docs/llm/lookup-contract.json; the JSON wins over the agent's inline prose on conflicts."
+   ],
+   "memories": []
+ }

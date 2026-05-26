@@ -241,11 +241,17 @@ def main() -> int:
     emitted: list[Path] = []
     validation_errors: list[str] = []
 
+    # Build a set of command IDs to detect skill/command name collisions.
+    command_ids = {entry["id"] for entry in sources["commands"]}
+
     # --- Emit prompt files for commands and skills ---
     for kind in ("commands", "skills"):
         for entry in sources[kind]:
             eid = entry["id"]
-            out_path = output_path_for(repo_root, "codex", kind, eid)
+            # Skills that share a name with a command get a "-skill" suffix
+            # to avoid overwriting the command export.
+            export_id = f"{eid}-skill" if kind == "skills" and eid in command_ids else eid
+            out_path = output_path_for(repo_root, "codex", kind, export_id)
             default_base = repo_root / "exports" / "codex"
             if out_root != default_base:
                 relative = out_path.relative_to(default_base)

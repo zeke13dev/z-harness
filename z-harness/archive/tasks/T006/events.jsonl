@@ -24,3 +24,6 @@
 {"ts":"2026-05-24T07:25:31Z","run":"tasks/T006","kind":"review","prompt_chars":5539,"response_chars":755,"return_chars":28,"cycle":2}
 {"ts":"2026-05-24T07:25:55Z","run":"tasks/T006","kind":"task_done","id":"T006","retries":1,"review_cycles":2,"review_blockers":3}
 {"ts":"2026-05-24T11:00:05Z","run":"tasks/T006","kind":"task_done","id":"T006"}
+{"ts":"2026-05-25T00:44:51Z","run":"tasks/T006","kind":"implement_start","id":"T006","retry":0}
+{"ts":"2026-05-25T00:46:24Z","run":"tasks/T006","kind":"implement_end","id":"T006","retry":0,"status":"ok","files_changed_count":2,"wall_ms":92860}
+{"ts":"2026-05-25T06:59:50Z","run":"tasks/T006","kind":"task_done","id":"T006","retries":0,"review_cycles":1}

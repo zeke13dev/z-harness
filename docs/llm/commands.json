@@ -1,7 +1,7 @@
 {
   "concept": "commands",
-  "last_updated": "2026-05-25",
-  "covers_spec": "memory-self-improve-loop/20260525",
+  "last_updated": "2026-05-26",
+  "covers_spec": "none",
   "source_file": [
     "commands/z-amend.md",
     "commands/z-audit.md",
@@ -24,7 +24,9 @@
     "commands/z-skill-fix.md",
     "commands/z-stats.md",
     "commands/z-suggest-memory.md",
-    "commands/z-test.md"
+    "commands/z-test.md",
+    "commands/z-update.md",
+    "commands/z-uplift.md"
   ],
   "confidence": "high",
   "entry_points": [
@@ -49,7 +51,9 @@
     {"file": "commands/z-skill-fix.md", "line": 1, "symbol": "z-skill-fix", "kind": "module", "summary": "Diagnoses and patches misleading skill or command files."},
     {"file": "commands/z-stats.md", "line": 1, "symbol": "z-stats", "kind": "module", "summary": "Reports run progress, timing, cost, next step, and memory-review activity (Phase 4b)."},
     {"file": "commands/z-suggest-memory.md", "line": 1, "symbol": "z-suggest-memory", "kind": "module", "summary": "Delegates memory authoring; accepts --from-candidate-json for automated candidate ingestion."},
-    {"file": "commands/z-test.md", "line": 1, "symbol": "z-test", "kind": "module", "summary": "Drafts semantic TESTS.md cases and links them to tasks."}
+    {"file": "commands/z-test.md", "line": 1, "symbol": "z-test", "kind": "module", "summary": "Drafts semantic TESTS.md cases and links them to tasks."},
+    {"file": "commands/z-update.md", "line": 1, "symbol": "z-update", "kind": "module", "summary": "Updates the z-harness plugin to the latest version."},
+    {"file": "commands/z-uplift.md", "line": 1, "symbol": "z-uplift", "kind": "module", "summary": "Tiered bulk codebase quality uplift: decompose repo, cross-cut pass, per-component audits, sequential implement."}
   ],
   "depends_on": ["agents", "scripts", "skills"],
   "consumed_by": ["skills"],
@@ -63,7 +67,12 @@
     "z-implement-all preserves fresh-context implementation by delegating tasks to implementer and reviewer subagents.",
     "Long consult-heavy phases use explicit compaction breakpoints or resumable state files where specified.",
     "z-implement-all Phase 9 and z-review-all Phase 7 are soft auto-memory-review phases: all failure paths (malformed output, skipped helper, empty candidates) exit silently without halting the parent command.",
-    "Memory candidates surfaced by Phase 9/Phase 7 are presented sequentially per candidate; accepted candidates are dispatched to z-suggest-memory --from-candidate-json with source prefix incident:<RUN>."
+    "Memory candidates surfaced by Phase 9/Phase 7 are presented sequentially per candidate; accepted candidates are dispatched to z-suggest-memory --from-candidate-json with source prefix incident:<RUN>.",
+    "z-uplift never writes production code directly; it orchestrates audits via auditor subagents and delegates implementation to z-implement-all.",
+    "z-uplift gates on STYLE.md presence and doc-staleness before decomposition; it never auto-invokes z-style-init or z-maintain-docs.",
+    "z-uplift MANIFEST.md is the single source of truth for component state across phases and resumes; all state transitions are atomic via tmp-then-rename writes.",
+    "The cross-cutting synthetic component is excluded from Phase 3 per-component audit iteration and is handled in Phase 5 only.",
+    "perf is excluded from z-uplift default dimensions to bound cost; must be added explicitly via --dimensions."
   ],
   "gotchas": [
     "Do not add z-audit-plan as a front-door planning route when no plan exists; route to z-plan instead.",
@@ -74,7 +83,11 @@
     "Plain z-maintain-docs is dry-run by default; docs writes require --apply or explicit confirmation.",
     "--from-candidate-json on z-suggest-memory accepts a file path or - (stdin); it is the automated path used by Phase 9/Phase 7 only — interactive callers should omit it.",
     "z-stats Phase 4b reads review_agent_call events; the section is empty if no memory-review phases have run yet for the selected slug.",
-    "Phase 9 in z-implement-all caps the sequential AskUserQuestion loop at 3 candidates per run; Phase 7 in z-review-all has no hard cap but stops early on Skip-all-remaining."
+    "Phase 9 in z-implement-all caps the sequential AskUserQuestion loop at 3 candidates per run; Phase 7 in z-review-all has no hard cap but stops early on Skip-all-remaining.",
+    "z-uplift slug collision detection presents one AskUserQuestion per colliding slug before COMPONENTS.md is written; collision resolution choices must be applied before MANIFEST.md initialization.",
+    "z-uplift --refresh-component archives both REPORT.md and TASKS.md atomically (stage-then-rename) before resetting the MANIFEST row; both files must exist or the command exits with an error.",
+    "z-uplift resume detection reads MANIFEST state before entering any phase; SKIP_TO_PHASE guards must be checked at the top of every skippable phase — not only inside the phase body.",
+    "z-uplift cross-cutting context (C-NNN lines) is filtered per component slug using exact-match on the component: field; global or mismatched slugs are silently excluded from the per-component prompt."
   ],
   "memories": []
 }

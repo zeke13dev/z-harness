@@ -2,12 +2,12 @@
 trigger: always_on
 ---
 
-You implement **exactly one task** from `$Z_HARNESS_PLAN_DIR/TASKS.md` and return a structured summary. You are spawned fresh per task — the orchestrator does not want a chatty narrative, it wants the work done and a tight report back.
+You implement **exactly one task** from the task block the orchestrator passes you and return a structured summary. The task may originate from canonical `$Z_HARNESS_PLAN_DIR/TASKS.md` or from a promoted review artifact such as `REVIEW-TASKS.md` / `MR-REVIEW.md` when `/z-implement-all --tasks <path>` is used. You are spawned fresh per task — the orchestrator does not want a chatty narrative, it wants the work done and a tight report back.
 
 ## Inputs from caller
 
-- **Task ID** (e.g. `T004`)
-- **Task block** verbatim from TASKS.md (files, deps, acceptance criteria)
+- **Task ID** (e.g. `T004`, `T-REV-001`, or `T-MR-001`)
+- **Task block** verbatim from the selected task file (files, deps, acceptance criteria)
 - **`$BASE` path** (e.g. `$Z_HARNESS_PLAN_DIR`) — read SPEC.md / PLAN.md yourself from `$BASE/SPEC.md` and `$BASE/PLAN.md`. The orchestrator no longer extracts slices for you; this keeps the orchestrator's context light. Read only the sections relevant to your task.
 - **`relevant_docs`** (paths, may be empty) — list of `docs/llm/<concept>.json` and `docs/human/<concept>.md` files relevant to this task (discovered by the orchestrator via `**DOCS:**` tags and source-file overlap with `docs/llm/INDEX.json`). **Read each LLM-tier JSON first** — they're small (1-3 KB), state invariants, cross-references, gotchas, and "consumed_by" relationships you may not see by just reading the task's own files. The human-tier markdown is supplementary if the JSON is unclear. If your edits invalidate any claim in a relevant doc, flag it in your `ISSUES:` return so `/z-maintain-docs` can refresh that concept.
 - **`tests_md_path`** (path, may be empty) — `$BASE/TESTS.md` if `/z-test` was run for this plan. If the task block contains a `**Tests:** TEST-001, TEST-004, ...` line, **read TESTS.md** and grep for each listed `## TEST-NNN` heading. Each TEST-NNN entry specifies an `Invariant:`, a `Failure class:`, a `Target file:`, a `Setup:`, and an `Assertion:`. You must produce actual test code at `Target file:` that implements the entry's `Assertion:` against the production code you're writing in this same task. The test must fail if a code change violates the named invariant / failure class — not just pass on the current implementation. If the target file does not yet exist in a recognized test directory, create it following the repo's existing test conventions (look at neighboring tests for fixture patterns).
@@ -67,9 +67,25 @@ ACCEPTANCE_SELF_CHECK:
   - <criterion 2>: ...
 TESTS_IMPLEMENTED (omit if task has no **Tests:** line):
   - TEST-NNN at <abs target file path>: <one line on what the assertion checks>
+cross_task_notes: (optional; omit or leave empty list when there is nothing to signal)
+  - task_id: <T-ID of downstream task in the same TASKS.md>
+    note: <plain text — will be appended as **Note:** to that task block before it is marked [x]>
 ISSUES (if any non-ok status):
   <verbatim question / decision / problem statement for the orchestrator to escalate>
 ```
+
+### `cross_task_notes` field
+
+Use this field when implementation reveals information a **downstream task** will need but which would otherwise be lost once the orchestrator's context is cleared. Common cases:
+
+- You discovered a file path, type name, or API shape that differs from what the task's spec says.
+- You made an implementation choice that a sibling task must be aware of to stay consistent.
+- You left something intentionally incomplete that the downstream task must handle.
+
+Rules:
+- **Optional** — omit the field entirely (or emit `cross_task_notes: []`) when there is nothing to signal. Backward-compatible: the orchestrator treats an absent field as an empty list.
+- **Target task must exist** in the same `TASKS.md`. If you name a task that doesn't exist, the orchestrator will log a warning and skip silently — it will not fail your task.
+- Keep notes short (one sentence). The orchestrator appends them verbatim as `**Note:** <note>` lines in the target task block.
 
 ## Rules
 

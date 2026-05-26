@@ -187,10 +187,16 @@ def main() -> int:
     emitted: list[Path] = []
     skipped: list[tuple[str, str]] = []
 
+    # Build a set of command IDs to detect skill/command name collisions.
+    command_ids = {entry["id"] for entry in sources["commands"]}
+
     for kind in ("commands", "agents", "skills"):
         for entry in sources[kind]:
             eid = entry["id"]
-            out_path = output_path_for(repo_root, "cursor", kind, eid)
+            # Skills that share a name with a command get a "-skill" suffix
+            # to avoid overwriting the command export.
+            export_id = f"{eid}-skill" if kind == "skills" and eid in command_ids else eid
+            out_path = output_path_for(repo_root, "cursor", kind, export_id)
             # If --out differs from the default, redirect accordingly.
             # output_path_for always writes under repo_root/exports/cursor;
             # honour --out by replacing that prefix.

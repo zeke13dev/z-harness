@@ -52,6 +52,7 @@ Every command writes its artifacts under `z-harness/<slug>/`, with run-frozen ar
 
 ### Audit, debug, review
 
+- **`/z-uplift`** — Bulk codebase quality uplift. Decomposes the repo into components (Cargo/pyproject/JS workspaces or top-level dirs), runs a repo-wide cross-cutting pass, dispatches per-component `auditor` subagents, produces per-component TASKS.md files consumable by `/z-implement-all --tasks=`, then drives sequential implementation behind AskUser gates. Resumable via MANIFEST.md. Requires STYLE.md (pass `--no-style` to skip).
 - **`/z-audit <target>`** — Read-only audit pipeline. Pre-flight scopes (target, dimensions, optional `.claude/audit-rubrics/<component>.md`), spawns one `auditor` subagent per dimension in parallel (correctness / perf / cleanliness / design), bundled consultant-primary + consultant-secondary consult on findings, emits REPORT.md + TASKS.md in `/z-implement-all`-compatible format, reviewer safety gate.
 - **`/z-fix <symptom or proposed fix>`** — Lightweight bug-fix command for the case where the user already has a diagnosis; single light-fix consult, inline implementation, non-negotiable Codex review, optional post-mortem. Early gate recommends `/z-debug` if root cause is unknown.
 - **`/z-debug <symptom>`** — Investigate a known-bad behavior via adversarial hypothesis tournament; 3-LLM two-round hypothesis generation, discriminating-test matrix, discrete Bayesian scoring, 3-5 isolation rounds; writes a single unified `DEBUG.md` artifact (Problem, Evidence, Isolation, Fix, and Post-mortem sections); auto-bails to `/z-plan` if scope grows. Post-mortem phase optionally invokes `mr-reviewer` on the fix diff; P0/P1 findings are promoted to the post-mortem's preventative-action list automatically. Early gate recommends `/z-fix` if the user already has a diagnosis.
@@ -82,6 +83,7 @@ Every command writes its artifacts under `z-harness/<slug>/`, with run-frozen ar
 | `spec-precheck` | haiku | Pre-flight: verify SPEC.md references actually exist before implementing |
 | `doc-updater` | sonnet | Refreshes one stale concept's docs/human + docs/llm pair |
 | `remote-runner` | haiku | Mechanical remote work — rsync sandbox + cargo build, read-only DB/log queries, paper qtctl restarts |
+| `external-lookup` | haiku | Fetch external information (web docs, public APIs, paginated JSON, library docs outside training cutoff) and return a tight STATUS-headed Markdown synthesis per docs/llm/lookup-contract.json. Read-only. Refuses mutating shell commands via verb-blocklist. |
 
 Which CLI each agent role calls is determined by `providers.json` (see
 [docs/human/PROVIDERS.md](docs/human/PROVIDERS.md)). Run
@@ -105,7 +107,7 @@ with `MODE: brainstorm`. There is no dedicated `ideator` agent file.
 
 ## Install
 
-**From a local clone (symlink mode — edits go live immediately):**
+**Claude Code from a local clone (symlink mode):**
 
 ```bash
 git clone https://github.com/<org>/z-harness
@@ -113,15 +115,25 @@ cd z-harness
 bash install.sh
 ```
 
+**Codex from a local clone:**
+
+```bash
+bash install.sh --target=codex
+```
+
+This creates `~/plugins/z-harness -> <clone>`, updates
+`~/.agents/plugins/marketplace.json`, and installs `z-harness@personal` through
+`codex plugin add`.
+
 **From a release tarball:**
 
 ```bash
-bash install.sh --tarball=<release-url>
+bash install.sh --target=codex --tarball=<release-url>
 # or:
-Z_HARNESS_RELEASE_URL=<release-url> bash install.sh
+Z_HARNESS_RELEASE_URL=<release-url> bash install.sh --target=codex
 ```
 
-Both modes install to `~/.claude/plugins/z-harness@zeke-tools`. For full
+Omit `--target` for Claude Code, or use `--target=all` for both hosts. For full
 details including the `--force` flag and switching between modes, see
 [docs/human/INSTALL.md](docs/human/INSTALL.md).
 
@@ -131,14 +143,16 @@ reviewer).
 
 ## Updating
 
-From any Claude Code session with z-harness loaded:
+From Claude Code, run:
 
 ```
 /z-update
 ```
 
-Detects symlink vs tarball mode and runs the appropriate update path.
-No autoupdate — all updates are explicit.
+From Codex, invoke the `z-update` skill. Both detect symlink vs tarball mode
+and run the appropriate update path. Codex installs are cached, so the updater
+also reruns `codex plugin add z-harness@personal` after a successful symlink
+update. No autoupdate — all updates are explicit.
 
 ## Per-repo auto-enable
 
@@ -189,13 +203,14 @@ When a downstream repo defines its own skills that interoperate with z-harness, 
 ## Environment knobs
 
 - `Z_HARNESS_NOTIFY` — `off` | `approval_only` (default) | `all`. Controls push notifications.
-- `Z_HARNESS_PAUSE_AT_PCT` — default `90`. Pause new phase dispatch when Claude Code usage hits this %.
 - `Z_HARNESS_MAX_EXPLORE` — default `3`. Cap on `Explore` subagent dispatches per `/z-plan` run.
 - `Z_HARNESS_DOC_STALENESS_THRESHOLD` — default `20` (percent). Above this, `/z-plan` halts and recommends `/z-maintain-docs` first.
 - ~~`Z_HARNESS_RETRY_UPGRADE`~~ — removed. The implementer model is now picked directly via `Agent(model=...)` based on the task block's `**Complexity:** low|medium|high` stamp (`low|medium` → Sonnet, `high` → Opus). Retries (cycle ≥ 2) always dispatch with `model="opus"`. The complexity stamp is added at plan-time by a Haiku `complexity-classifier` subagent and is user-editable in TASKS.md.
 - `Z_HARNESS_LOCAL_CARGO_CLEAN` — set to `1` at the start of `/z-implement-all` to trigger a one-time local `cargo clean`.
 - `Z_HARNESS_SLUG` — set by commands; namespaces all output paths under `z-harness/<slug>/`.
 - `Z_HARNESS_BRAINSTORM_EXPLORE=1` — opts into a Phase 1 Explore dispatch inside `/z-brainstorm`. Off by default (doc-fetcher only). Set this when you want the brainstorm scaffolding to include live codebase exploration in addition to the doc-fetcher lookup.
+- `Z_IMPLEMENT_PAUSE_TASKS` — default `5`. Number of completed tasks (since last pause or run start) that triggers a compaction breakpoint in `/z-implement-all`. Set to `0` to disable the task-count trigger. See [Compaction policy](#compaction-policy).
+- `Z_IMPLEMENT_PAUSE_MINUTES` — default `30`. Wall-clock minutes since last pause (or run start) that triggers a compaction breakpoint in `/z-implement-all`. Set to `0` to disable the wall-time trigger. Setting both to `0` disables all compaction breakpoints in `/z-implement-all`. See [Compaction policy](#compaction-policy).
 
 ## Telemetry event types
 
@@ -244,6 +259,46 @@ Event kinds introduced by `/z-plan-split` and the tree-walking branch of `/z-imp
 | `anti_nesting_violation` | `cluster-planner` Phase 0a when an ancestor MANIFEST.md is detected |
 | `cluster_not_ready` | `/z-implement-all` Setup 2b cluster-readiness gate |
 
+Event kinds introduced by the compaction breakpoint policy:
+
+| Event | Payload schema | Emitted by |
+|---|---|---|
+| `compaction_pause` | `{trigger, detail}` — `trigger` is one of `"task_count"`, `"wall_time"`, or `"pre_consult"`; `detail` carries trigger-specific fields (e.g. `tasks_since_pause`, `wall_minutes_since_pause`, `pending_remaining` for task-count/wall-time triggers, or `phase` for pre-consult) | `/z-implement-all` batch-settle (after halt-flush); `/z-review-all` Phase 3.7 (gates Phase 4 — `phase` payload value is `"review_all_phase_4"`); `/z-maintain-docs --audit` pre-consult breakpoint |
+
+## Compaction policy
+
+Long `/z-implement-all` runs and cross-LLM consult phases in `/z-review-all` and `/z-maintain-docs --audit` accumulate significant orchestrator context. The compaction policy inserts deterministic breakpoints at the highest-context-pressure boundaries so you can clear context before it degrades subagent quality.
+
+### `/z-implement-all` — task-count and wall-time triggers
+
+Two env vars control when a breakpoint fires (see [Environment knobs](#environment-knobs)):
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `Z_IMPLEMENT_PAUSE_TASKS` | `5` | Pause after this many `[x]` completions since last pause |
+| `Z_IMPLEMENT_PAUSE_MINUTES` | `30` | Pause after this many wall-clock minutes since last pause |
+
+Either var set to `0` disables that trigger; both set to `0` disables `/z-implement-all` compaction breakpoints entirely.
+
+The trigger fires **at the end of each batch-settle**, strictly after: all in-flight tasks reach terminal status → TASKS.md atomic write → `batch_done` event → halt-flush resolved. This ordering prevents halt context from being lost to a `/clear`. Only `[x]` completions count toward `Z_IMPLEMENT_PAUSE_TASKS`; retries and rollbacks do not.
+
+On trigger: a `compaction_pause` event is emitted (see [Telemetry event types](#telemetry-event-types)), a push notification fires, and the loop exits cleanly. Re-invoke `/z-implement-all` to resume from TASKS.md.
+
+### `/z-review-all` and `/z-maintain-docs --audit` — pre-consult breakpoints
+
+Both commands insert an unconditional breakpoint **before** the cross-LLM consultant batch dispatches. There is no env var gate — these breakpoints always appear. You are shown an `AskUserQuestion` with two options:
+
+- **Pause for /clear** — exit cleanly; no state written. Re-invoke the command to hit the breakpoint again and reconfirm.
+- **Proceed now** — write a slug-scoped state file (`.review_state.json` / `.maintain_docs_audit_state.json`) and continue into the consult phase.
+
+Both commands emit `compaction_pause {trigger: "pre_consult"}` at this point. See the event-table entry under [Telemetry event types](#telemetry-event-types) for the full payload schema.
+
+### Why `/clear` over `/compact`
+
+`/clear` is the recommended action at every compaction breakpoint. The harness's durable state lives entirely in TASKS.md (and the slug-scoped state files above) — there is no cross-task state in orchestrator memory (SPEC Invariant 2). Clearing reclaims more context than `/compact` with no safety loss. Re-invoking any affected command after `/clear` picks up exactly where it left off.
+
+Use `/compact` instead only when you need to preserve chat history for debugging a specific task failure — the compressed history may help a retry's reviewer.
+
 ## Known v1 limitations
 
 - **No per-subagent wall-clock timeout.** `Agent()` does not expose a per-call timeout; subagents that hang block the entire run. User-facing escape: ctrl-c to abort.
@@ -290,7 +345,8 @@ z-harness/
 │   ├── mr-reviewer.md
 │   ├── spec-precheck.md
 │   ├── doc-updater.md
-│   └── remote-runner.md
+│   ├── remote-runner.md
+│   └── external-lookup.md
 ├── scripts/
 │   ├── extract-dismissals.py
 │   ├── log-event.sh

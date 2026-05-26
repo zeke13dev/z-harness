@@ -1,0 +1,63 @@
+{
+  "concept": "skills",
+  "last_updated": "2026-05-24",
+  "covers_spec": "none",
+  "source_file": [
+    "skills/z-amend/SKILL.md",
+    "skills/z-brainstorm/SKILL.md",
+    "skills/z-debug/SKILL.md",
+    "skills/z-do/SKILL.md",
+    "skills/z-implement-all/SKILL.md",
+    "skills/z-implement-next/SKILL.md",
+    "skills/z-improve/SKILL.md",
+    "skills/z-init-docs/SKILL.md",
+    "skills/z-maintain-docs/SKILL.md",
+    "skills/z-plan-light/SKILL.md",
+    "skills/z-plan-split/SKILL.md",
+    "skills/z-plan/SKILL.md",
+    "skills/z-research/SKILL.md",
+    "skills/z-review-all/SKILL.md",
+    "skills/z-stats/SKILL.md",
+    "skills/z-suggest-memory/SKILL.md",
+    "skills/z-test/SKILL.md"
+  ],
+  "confidence": "high",
+  "entry_points": [
+    {"file": "skills/z-amend/SKILL.md", "line": 1, "symbol": "z-amend", "kind": "module", "summary": "Amend SPEC/PLAN/TASKS or FIX.md; uses $Z_HARNESS_PLAN_DIR; re-classifies complexity stamps for changed task blocks."},
+    {"file": "skills/z-brainstorm/SKILL.md", "line": 1, "symbol": "z-brainstorm", "kind": "module", "summary": "Three-vendor parallel ideation (Claude + consultant-primary + consultant-secondary) with mandatory anti-bias check; produces BRAINSTORM.md."},
+    {"file": "skills/z-debug/SKILL.md", "line": 1, "symbol": "z-debug", "kind": "module", "summary": "Heavy hypothesis-tournament pipeline: Phase 0 wrong-tool gate, rounds of parallel hypothesis generation, fix with /z-plan-light mechanics, mandatory post-mortem."},
+    {"file": "skills/z-do/SKILL.md", "line": 1, "symbol": "z-do", "kind": "module", "summary": "Lightest harness on-ramp: no plan artifacts, doc-fetcher grounding, inline implementation, mandatory reviewer gate; logs to z-harness/adhoc/."},
+    {"file": "skills/z-implement-all/SKILL.md", "line": 1, "symbol": "z-implement-all", "kind": "module", "summary": "Full task-queue orchestrator: --tasks fast path, tree-rooted MANIFEST support, spec-precheck, TESTS.md integration, hard caps MAX_ATTEMPTS/wall-clock/halts."},
+    {"file": "skills/z-implement-next/SKILL.md", "line": 1, "symbol": "z-implement-next", "kind": "module", "summary": "Single-task implementation; model selected from **Complexity:** stamp; no auto-retry; single-shot design forces fresh context per task."},
+    {"file": "skills/z-improve/SKILL.md", "line": 1, "symbol": "z-improve", "kind": "module", "summary": "Post-run retro: reads events.jsonl friction signals, proposes <=5 z-harness edits, applies accepted edits, invokes /z-suggest-memory with derived concept_hints."},
+    {"file": "skills/z-init-docs/SKILL.md", "line": 1, "symbol": "z-init-docs", "kind": "module", "summary": "Bootstraps two-tier docs: doc-updater per concept, INDEX.json aggregation, TAGS.txt 15-tag seed, MEMORIES-FLAT.md init via regenerate-memories-flat.py."},
+    {"file": "skills/z-maintain-docs/SKILL.md", "line": 1, "symbol": "z-maintain-docs", "kind": "module", "summary": "Refreshes stale concept docs: doc-updater with dedup_tags:true, stale-memory UI, TAG_COLLISIONS surface, MEMORIES-FLAT.md regen after every write."},
+    {"file": "skills/z-plan-light/SKILL.md", "line": 1, "symbol": "z-plan-light", "kind": "module", "summary": "Lightweight planner for small fixes: inline orchestrator implementation, FIX.md only, mandatory reviewer gate, auto-bail at >5 files or >2 non-obvious decisions."},
+    {"file": "skills/z-plan-split/SKILL.md", "line": 1, "symbol": "z-plan-split", "kind": "module", "summary": "Scope splitter into 2-6 clusters: kebab-slug security gate, file-overlap reconciliation from TASKS.md canonical, MANIFEST.md + SHARED-CONCERNS.md output."},
+    {"file": "skills/z-plan/SKILL.md", "line": 1, "symbol": "z-plan", "kind": "module", "summary": "Full rigorous planning: docs-freshness gate, Explore cap 3, batch decisions, single bundled cross-LLM consult, parallel Haiku complexity classifier per task."},
+    {"file": "skills/z-research/SKILL.md", "line": 1, "symbol": "z-research", "kind": "module", "summary": "Terrain mapping: cost gate, doc-fetcher first, up to 3 parallel Explore subagents, bundled cross-LLM critique, mandatory ## No-recommendation section."},
+    {"file": "skills/z-review-all/SKILL.md", "line": 1, "symbol": "z-review-all", "kind": "module", "summary": "Final-gate two-pronged review: Phase 3.5 runs TESTS.md suite (blocker on failure), parallel consultants on cumulative diff, promotes findings to REVIEW-TASKS.md."},
+    {"file": "skills/z-stats/SKILL.md", "line": 1, "symbol": "z-stats", "kind": "module", "summary": "Read-only diagnostic: shell+jq+awk only, no subagent calls; wall time, token spend, halts, stalls, plugin version history, suggested next command."},
+    {"file": "skills/z-suggest-memory/SKILL.md", "line": 1, "symbol": "z-suggest-memory", "kind": "module", "summary": "Sole authoring path for memories[]: append/edit/delete modes, schema validation, atomic writes, MEMORIES-FLAT.md regen, optional human-tier refresh. Default: Cancel."},
+    {"file": "skills/z-test/SKILL.md", "line": 1, "symbol": "z-test", "kind": "module", "summary": "Semantic test-case planner: risk-ranks tasks, requires non-trivial failure classes, cross-LLM consult drops trivial drafts, writes TESTS.md + cross-links into TASKS.md."}
+  ],
+  "depends_on": ["agents", "commands", "scripts"],
+  "consumed_by": [],
+  "invariants": [
+    "All plan artifact paths are resolved through scripts/plan-path.sh to $Z_HARNESS_PLAN_DIR; no skill hardcodes z-harness/<slug>/ paths.",
+    "Cross-LLM consult agents are always referenced as consultant-primary and consultant-secondary; code review uses the reviewer agent.",
+    "Phase telemetry (log-phase.sh start/end) is mandatory for every skill execution.",
+    "Review-generated spec-gap tasks are inputs to z-amend and must not authorize implementers to mutate planning artifacts directly.",
+    "All skills implement idempotent run patterns; re-running modifies only targeted resources.",
+    "z-suggest-memory is the sole path for creating, editing, or deleting memories[] entries; doc-updater only copies them verbatim."
+  ],
+  "gotchas": [
+    "z-implement-all --tasks <path> skips slug discovery, tree validation, and ack/force-partial gates; $BASE is derived from the task file's parent directory.",
+    "z-plan-split uses two distinct per-cluster identifiers: cluster_id (C1..CN) for telemetry, cluster_slug (kebab-case) for on-disk paths - never swap them.",
+    "z-implement-all hard caps (MAX_ATTEMPTS=2, MAX_TASK_WALL_MS=45min, MAX_DISTINCT_HALTS=3) are unconditional and cannot be caught by skip-marker text matching.",
+    "z-debug Phase 0 wrong-tool gate is non-skippable: if user already has a hypothesis, skill exits with /z-fix recommendation.",
+    "z-review-all Phase 3.5 TESTS.md suite run is a blocker gate - any test failure halts the review before consultants are spawned.",
+    "z-suggest-memory and z-init-docs both write docs/llm/TAGS.txt with the same 15-tag controlled seed via atomic write; neither overwrites if the file already exists."
+  ],
+  "memories": []
+}

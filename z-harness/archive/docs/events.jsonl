@@ -1,2 +1,14 @@
 {"ts":"2026-05-23T19:19:42Z","run":"docs","kind":"init_docs_start","z_harness_version":"64a3dbe","z_harness_dirty":false,"z_harness_branch":"main"}
 {"ts":"2026-05-23T19:31:07Z","run":"docs","kind":"init_docs_end","concepts_count":4,"human_dir":"docs/human","llm_dir":"docs/llm"}
+{"ts":"2026-05-24T23:52:04Z","run":"docs","kind":"maintain_docs_start","z_harness_version":"380aca6","z_harness_dirty":true,"z_harness_branch":"main","mode":"dry-run"}
+{"ts":"2026-05-25T00:01:04Z","run":"docs","kind":"maintain_docs_end","mode":"apply","updated":2,"deferred":0,"skipped":0}
+{"ts":"2026-05-25T08:18:23Z","run":"docs","kind":"maintain_docs_start","z_harness_version":"380aca6","z_harness_dirty":true,"z_harness_branch":"main","mode":"dry-run"}
+{"ts":"2026-05-25T08:24:10Z","run":"docs","kind":"maintain_docs_end","mode":"dry-run","updated":0,"deferred":0,"skipped":3,"stale_count":3}
+{"ts":"2026-05-25T18:11:13Z","run":"docs","kind":"maintain_docs_end","mode":"apply","updated":3,"deferred":0,"skipped":0}
+{"ts":"2026-05-26T00:30:46Z","run":"docs","kind":"maintain_docs_start","z_harness_version":"380aca6","z_harness_dirty":true,"z_harness_branch":"main","mode":"dry-run"}
+{"ts":"2026-05-26T00:38:31Z","run":"docs","kind":"maintain_docs_end","mode":"dry-run","updated":0,"deferred":0,"skipped":0,"proposed":6}
+{"ts":"2026-05-26T00:47:56Z","run":"docs","kind":"maintain_docs_end","mode":"apply","updated":6,"deferred":0,"skipped":0}
+{"ts":"2026-05-26T01:32:14Z","run":"docs","kind":"maintain_docs_start","z_harness_version":"ddc5273","z_harness_dirty":true,"z_harness_branch":"main","mode":"apply"}
+{"ts":"2026-05-26T01:38:12Z","run":"docs","kind":"maintain_docs_end","mode":"apply","updated":3,"deferred":0,"skipped":0,"concepts":["skills","multi-ide-exports","z-update"]}
+{"ts":"2026-05-26T14:50:08Z","run":"docs","kind":"maintain_docs_end","mode":"apply","updated":4,"deferred":0,"skipped":6}
+{"ts":"2026-05-26T15:10:20Z","run":"docs","kind":"maintain_docs_end","mode":"apply","updated":1,"deferred":0,"skipped":0}

@@ -1,0 +1,2 @@
+{"ts":"2026-05-24T23:31:17Z","run":"20260524T203829Z-subagent-liveness","kind":"consult","slug":"plan-bail-router","llm":"gemini","mode":"plan-review","prompt_chars":5452,"response_chars":466,"wall_ms":2844,"transcript":"001-gemini-plan-review"}
+{"ts":"2026-05-24T23:32:33Z","run":"20260524T203829Z-subagent-liveness","kind":"consult","slug":"plan-bail-router","llm":"gemini","mode":"plan-review","prompt_chars":5452,"response_chars":3308,"wall_ms":26484,"transcript":"003-gemini-plan-review"}

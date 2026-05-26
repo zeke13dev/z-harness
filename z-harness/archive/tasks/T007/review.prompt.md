@@ -1,21 +1,18 @@
-## Codex Review Prompt: T007
+You are reviewing code that Claude just wrote for task T007: Telemetry events: full component lifecycle wiring.
 
-You are reviewing code that Claude just wrote for task T007: New /z-suggest-memory skill.
+Spec (excerpt):
+From SPEC.md lines 164-170:
+```
+### `commands/z-uplift.md` — telemetry contract
+Standard `phase_end` events per phase. Component-specific events:
+- `component_detected` — payload: `{slug, path, method, unclaimed: bool}`
+- `component_audit_start` — `{component, dimensions}`
+- `component_audit_done` — `{component, findings_total, findings_crit_high, bailed, bail_reason}`
+- `component_implement_start` — `{component, task_count}`
+- `component_implement_done` — `{component, completed, halted}`
+- `cross_cutting_classified` — `{global_tasks, per_component_context, risks}`
+```
 
-**Acceptance criteria:**
-- All four AskUserQuestion options for target resolution
-- Create-new-concept writes minimal stubs + adds INDEX.json entry (confidence: low)
-- Append/edit/delete modes mutually exclusive
-- --dry-run skips write in all modes
-- STATUS / CONCEPT / MEMORIES_WRITTEN / WROTE return shape
-
-**Critical spec requirements:**
-1. Phase 0: Preflight check for docs/llm/INDEX.json
-2. Phase 2: EXACTLY FOUR AskUserQuestion options (with conditional collapse when no hints)
-3. Phase 3: Collect type (6 enum), text (≤200 chars), tags (15 seed + free-form), source (strict regex), date, expires
-4. Phase 5: Three mutually-exclusive modes (append, edit, delete) with atomic writes
-5. Phase 6: Regenerate MEMORIES-FLAT.md via helper script
-6. Phase 8: Return STATUS/CONCEPT/MEMORIES_WRITTEN/WROTE shape
-7. Hard rules: One mutation per call, no emojis, atomic writes, Cancel is default
-
-The implementation is SKILL.md only (328 lines of documentation).
+Acceptance criteria:
+1. grep `commands/z-uplift.md` for `log-event.sh` returns ≥10 distinct event names matching the SPEC list (component_detected, component_audit_start, component_audit_done, component_implement_start, component_implement_done, cross_cutting_classified, style_md_missing, resume_detected)
+2. every AskUser block is wrapped by user_wait_start / user_wait_end

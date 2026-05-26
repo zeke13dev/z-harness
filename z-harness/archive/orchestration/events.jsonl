@@ -7,3 +7,7 @@
 {"ts":"2026-05-24T07:53:21Z","run":"orchestration","kind":"run_end","status":"complete","tasks_done":17,"tasks_skipped":0,"tasks_halted":0}
 {"ts":"2026-05-24T11:14:01Z","run":"orchestration","kind":"run_end","slug":"portable-harness","done":15,"halted":0,"skipped":0}
 {"ts":"2026-05-24T18:19:07Z","run":"orchestration","kind":"run_end","slug":"portable-harness","fixups_done":7,"scope":"T100-T106"}
+{"ts":"2026-05-24T20:02:13Z","run":"orchestration","kind":"run_end","slug":"lookup-subagent","done":10,"skipped":2,"halted":0}
+{"ts":"2026-05-25T07:07:00Z","run":"orchestration","kind":"run_end","slug":"compaction-cadence","done":9,"skipped":1,"halted":0}
+{"ts":"2026-05-26T05:01:06Z","run":"orchestration","kind":"compaction_pause","trigger":"task_count","tasks_since_pause":5,"wall_minutes_since_pause":0,"pending_remaining":5}
+{"ts":"2026-05-26T05:14:57Z","run":"orchestration","kind":"run_start","slug":"tiered-quality-uplift","resume":true,"pending":5}

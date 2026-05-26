@@ -1,365 +1,355 @@
-You are reviewing code that Claude just wrote for task T003: Create commands/z-fix.md — new lightweight bug-fix command mirroring /z-plan-light structure.
+You are reviewing code that Claude just wrote for task T003: Implement Phase 2 (cross-cutting pass): consultant dispatch + 3-tier classification.
 
-## Spec (excerpt from SPEC.md)
+Spec (excerpt):
+From SPEC.md Phase 2 (lines 97-116):
 
-### File: `commands/z-fix.md` (NEW)
-
-The command must have:
-- Frontmatter with description + argument-hint
-- Phases 0-10 present:
-  - Phase 0: wrong-tool gate (non-skippable, asks "Do you already have a hypothesis?")
-  - Phase 1: Problem + repro + quick exploration (captures into phase1-context.md, dispatches doc-fetcher if INDEX.json exists)
-  - Phase 2: Single key decision
-  - Phase 3: Bundled light-fix consult framing focused on "does this cause explain all symptoms?" (both Gemini + Codex in parallel)
-  - Phase 4: Synthesize + push back
-  - Phase 5: Approve
-  - Phase 6: Write FIX.md (single artifact, no separate PROBLEM.md/EVIDENCE.md)
-  - Phase 7: Inline implementation (NO implementer subagent)
-  - Phase 8: Codex review (non-negotiable)
-  - Phase 9: Optional post-mortem (default NO if REVIEW_CYCLES <= 1; default YES if > 1, with auto-suggest)
-  - Phase 10: Finalize (update FIX.md Status, log fix_run_end with stats, push-notify, suggest /z-maintain-docs)
-- Setup mirrors /z-plan-light: version stamp, fix_run_start event, notification policy
-- Auto-bail thresholds: >5 files, >2 non-obvious decisions, cross-module
-- Hard rules: never skip Codex review, never proceed past auto-bail, cross-LLM consult always, no emojis, Phase 0 non-skippable
-- No references to round-1/round-2 modes (those belong to /z-debug)
-
-## Acceptance criteria (from task)
-
-- Frontmatter has description + argument-hint
-- Phases 0-10 present (Phase 0 wrong-tool gate non-skippable; Phase 9 optional post-mortem with auto-suggest if REVIEW_CYCLES > 1)
-- Phase 3 light-fix consult framing focused on "does this cause explain all symptoms?"
-- Setup mirrors /z-plan-light (version stamp, fix_run_start event, notification policy)
-- Auto-bail thresholds: >5 files, >2 non-obvious decisions, cross-module
-- Hard rules: never skip Codex review, never proceed past auto-bail, cross-LLM consult always, no emojis, Phase 0 non-skippable
-- No references to round-1/round-2 modes
-
-## Diff (primary artifact)
-
-```diff
-diff --git a/commands/z-fix.md b/commands/z-fix.md
-new file mode 100644
-index 0000000..f114612
---- /dev/null
-+++ b/commands/z-fix.md
-@@ -0,0 +1,303 @@
-+---
-+description: Lightweight bug-fix command for the case where the user already has a diagnosis. Captures problem + repro, single light-fix sanity consult ("does the proposed cause explain all symptoms?"), inline implementation, non-negotiable Codex review. Optional post-mortem (auto-suggested if review needed >1 retry). Early gate recommends /z-debug if user signals unknown root cause.
-+argument-hint: <symptom or proposed fix description>
-+---
-+
-+You are running **z-harness `/z-fix`** — a fast path for bugs where you already know the root cause. Target: ≤15 min wall time end-to-end.
-+
-+Task (from `$ARGUMENTS`):
-+
-+$ARGUMENTS
-+
-+**If the task above is empty** — use `AskUserQuestion` to ask "What's the symptom and your hypothesis for the cause?" before proceeding. Do not invent.
-+
-+This command is for **targeted fixes with a known diagnosis**. If at any phase you realize scope is broader or the root cause is unclear, STOP and recommend `/z-debug` instead.
-+
-+## Setup
-+
-+1. **Derive slug** — short kebab-case like `fix-<short-description>` (e.g. "null pointer on login" → `fix-null-pointer-login`). Confirm via `AskUserQuestion` if non-obvious or might collide with an existing slug (`ls z-harness/` first).
-+2. Export `Z_HARNESS_SLUG=<slug>`.
-+3. Pick run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`.
-+4. `mkdir -p z-harness/$Z_HARNESS_SLUG/archive/$RUN/transcripts`.
-+5. **Version stamp + log:**
-+   ```bash
-+   VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
-+   START_PAYLOAD="$(python3 -c '
-+   import json, sys
-+   v = json.loads(sys.argv[1]); v["task"] = sys.argv[2]
-+   print(json.dumps(v))
-+   ' "$VERSION_BLOB" "<arguments>")"
-+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" fix_run_start "$START_PAYLOAD"
-+   ```
-+6. Notification policy: read `Z_HARNESS_NOTIFY` (default `approval_only`).
-+7. Initialize `REVIEW_CYCLES=0` counter (used in Phase 9 post-mortem trigger).
-+8. If `docs/llm/INDEX.json` exists → note it. Phase 1 will dispatch `doc-fetcher` (Haiku). Do NOT read INDEX.json or per-concept JSONs from main thread.
-+
-+## Auto-bail thresholds (check throughout)
-+
-+At any phase, if you discover:
-+
-+- **>5 candidate files** need editing
-+- **>2 non-obvious decisions** (per the rules `/z-plan` uses: new dep, public API change, algorithm with materially different tradeoffs, persistence change)
-+- **Cross-module / cross-crate impact** (the fix touches multiple modules, public APIs, wire formats, or schemas)
-+- **The user explicitly says** "this might be bigger than I thought"
-+
-+→ STOP. Write `z-harness/$Z_HARNESS_SLUG/escalation.md` describing what you found. Push-notify: "Scope grew past fix-mode thresholds. Recommend `/z-plan <task>`." Do not proceed to implementation.
-+
-+## Phase 0 — Wrong-tool gate (NON-SKIPPABLE)
-+
-+Before any exploration, ask via `AskUserQuestion`:
-+
-+> "Do you already have a hypothesis for what's causing this?"
-+> - `yes — proceed with /z-fix` (default)
-+> - `no — recommend /z-debug` (will exit)
-+> - `modify hypothesis — let me refine it first` (free-text follow-up, then loop back to this question)
-+
-+If user picks **no** → output one line: "Root cause unknown — run `/z-debug <symptom>` to start a hypothesis-driven investigation." Then log `fix_run_end` with `{status: "wrong_tool"}` and exit. Do not continue.
-+
-+This gate is non-skippable even if the user passed an argument. A symptom description alone is not a hypothesis.
-+
-+## Phase 1 — Problem + repro + quick exploration (combined)
-+
-+**Premise check.** Don't take the description for granted:
-+- Is this actually caused by the named hypothesis? Could the symptom have a different origin?
-+- Will fixing the proposed cause actually resolve the symptom?
-+- Is there a materially simpler fix path the user hasn't considered?
-+
-+If any concern surfaces → raise it with the user via `AskUserQuestion` before proceeding. Don't plan around a flawed premise.
-+
-+**Capture problem + evidence inline:**
-+
-+Write an `## Evidence` section to `z-harness/$Z_HARNESS_SLUG/archive/$RUN/phase1-context.md` with:
-+- The symptom (quoted if log/error output)
-+- The repro steps or failing test
-+- The proposed hypothesis (user's stated diagnosis)
-+- Any confirming or contradicting signals already observed
-+
-+These become sections in FIX.md at Phase 6.
-+
-+**Quick exploration:**
-+1. **If `docs/llm/INDEX.json` exists, dispatch `doc-fetcher` (Haiku) FIRST** — cheapest grounding available:
-+   ```
-+   Agent(subagent_type="doc-fetcher",
-+         description="Doc context for <slug>",
-+         prompt="query: <one-sentence fix description>\nrepo_root: <abs path>\ndepth: standard")
-+   ```
-+2. After doc-fetcher returns (or if no INDEX.json), Read 3-5 source files MAX to fill gaps. **Do NOT spawn the `Explore` subagent** — too expensive for fix-mode. Use Read/Grep/Glob directly from main thread.
-+
-+Output: 1-paragraph problem statement + 1-paragraph context (hypothesis + confirming evidence).
-+
-+**Check auto-bail thresholds.** If reading reveals >5 candidate files or cross-module impact, bail now.
-+
-+## Phase 2 — Single key decision
-+
-+Most light fixes have ONE root question: "what's the right fix for this cause?" Articulate it explicitly.
-+
-+If there are >2 truly non-obvious decisions (new dep, public API change, algorithm with materially different tradeoffs, persistence change), **bail to `/z-plan`** — the cross-decision interaction analysis is worth the overhead.
-+
-+## Phase 3 — Bundled `light-fix` consult
-+
-+Spawn both consultants in parallel in a single message. The consult question is framed around the user's hypothesis — NOT a generic "what's the best fix?" framing:
-+
-+```
-+Agent(
-+  subagent_type="gemini-consultant",
-+  description="Light-fix consult (Gemini) for <slug>",
-+  prompt="MODE: light-fix\n\nUser's proposed cause: <hypothesis>\n\nProblem: <1-paragraph symptom + repro>\nEvidence: <1-paragraph confirming/contradicting signals>\nKey decision: <what's the right fix for this specific cause?>\nCandidate options (if any): <list with one-line tradeoffs>\nRelevant code snippets:\n<short quoted code with file:line markers>\n\nAsk: Does this proposed cause explain ALL symptoms listed in the evidence above? If not, what is the gap? Recommend the fix approach with tradeoffs. Be concise — this is a targeted fix for a known cause, not a feature."
-+)
-+Agent(
-+  subagent_type="codex-consultant",
-+  description="Light-fix consult (Codex) for <slug>",
-+  prompt="MODE: light-fix\n\n<same prompt body>"
-+)
-+```
-+
-+Both transcripts archive themselves under `z-harness/$Z_HARNESS_SLUG/archive/$RUN/transcripts/`.
-+
-+## Phase 4 — Synthesize + push back
-+
-+When both return:
-+
-+1. **One reason it might be wrong.** For each recommendation, articulate one concrete reason it could be wrong before accepting it. Mechanical, not optional.
-+2. **Synthesize.** Make the final call yourself, citing what you weighed.
-+3. **Flag shortcuts.** If any option is a shortcut over the robust long-lasting solution, mark it explicitly — needs Phase 5 user approval.
-+4. **Cross-LLM disagreement.** If Gemini and Codex disagree substantively — or either flags that the proposed cause does NOT explain all symptoms — surface the disagreement to the user in Phase 5. Do not silently pick one side.
-+
-+## Phase 5 — Approve
-+
-+Send `PushNotification` (if policy != `off`): "Fix-mode decision ready for review."
-+
-+Present a brief synthesis (3-5 bullets) via `AskUserQuestion`:
-+- "Approve fix as proposed"
-+- "Modify — I want to change <X>" (free-text follow-up)
-+- "Abandon — this isn't the right approach"
-+
-+For any flagged shortcut: separate explicit approval via `AskUserQuestion` (default to robust if not approved).
-+
-+If user picks **Abandon** → write nothing more; log `fix_run_end` with `{status: "abandoned"}`; exit.
-+
-+## Phase 6 — Write FIX.md
-+
-+Write `z-harness/$Z_HARNESS_SLUG/FIX.md`:
-+
-+```markdown
-+# Fix: <slug>
-+
-+**Run:** <RUN>
-+**Status:** approved (not yet shipped)
-+**Plugin version:** <z_harness_version from setup>
-+
-+## Problem
-+<1 paragraph — symptom + repro>
-+
-+## Hypothesis
-+<user's proposed cause>
-+
-+## Evidence
-+<confirming + contradicting signals observed>
-+
-+## Root cause
-+<1 paragraph — confirmed or refined diagnosis after consult>
-+
-+## Approach
-+<concrete plan: what files change, what stays the same>
-+
-+## Files to change
-+- `<abs path 1>`
-+- `<abs path 2>`
-+
-+## Acceptance
-+- [ ] <criterion 1>
-+- [ ] <criterion 2>
-+
-+## Cross-LLM consensus
-+- Gemini: <one-line recommendation + whether cause explains all symptoms>
-+- Codex:  <one-line recommendation + whether cause explains all symptoms>
-+- Synthesized call: <your decision + brief rationale>
-+
-+## Approved shortcuts
-+<list each shortcut + why approved; or "none">
-+
-+## Docs touched
-+<slug(s) from docs/llm/ matching changed files, or "none"; consumed by /z-maintain-docs later>
-+```
-+
-+Note: FIX.md is the single artifact for this command. Problem, hypothesis, and evidence content live as sections within FIX.md — no separate PROBLEM.md or EVIDENCE.md files.
-+
-+No SPEC.md / PLAN.md / TASKS.md generated. FIX.md is the whole plan.
-+
-+## Phase 7 — Inline implementation (NO implementer subagent)
-+
-+The orchestrator (you, in main thread) reads the files listed in FIX.md "Files to change" and applies the edits directly with the Edit / Write tools. For 1-5 file edits the main thread already has all the context — spawning a fresh implementer just doubles token cost.
-+
-+**Apply the same self-check the implementer subagent would** (from `agents/implementer.md`):
-+1. No broad exception handlers added.
-+2. No scope expansion outside FIX.md's "Files to change" list.
-+3. No unsolicited validation / error paths.
-+4. No new public surface beyond what FIX.md describes.
-+5. No stale docstrings / comments left behind.
-+
-+If you applied any fix from the checklist, note it in the user-facing summary later.
-+
-+**Escape hatch — mid-implementation scope growth.** If you discover mid-edit that the change needs more files than FIX.md anticipated, OR a new non-obvious decision surfaces, STOP and ask the user via `AskUserQuestion`:
-+- "Continue in fix mode — update FIX.md and proceed"
-+- "Switch to full `/z-plan` — abort this run, save context, run /z-plan"
-+- "Spawn implementer subagent for isolation — keep fix mode but isolate the implementation"
-+
-+Hard limit: if you find yourself touching >7 files inline, halt regardless — that's no longer a fix-mode change.
-+
-+## Phase 8 — Codex review (safety gate, non-negotiable)
-+
-+This step is non-negotiable. Even in fix mode, post-implementation review is the correctness guarantee.
-+
-+```bash
-+git diff > z-harness/$Z_HARNESS_SLUG/archive/$RUN/diff.patch
-+```
-+
-+Spawn the reviewer:
-+
-+```
-+Agent(
-+  subagent_type="codex-reviewer",
-+  description="Codex review of <slug>",
-+  prompt="task id: <slug>\ntask description: <FIX.md Approach summary>\nacceptance criteria: <FIX.md Acceptance list>\ndiff.patch path: <abs path>\nchanged files: <abs paths from FIX.md>\nrelevant_docs (paths — verify the diff didn't break invariants stated here): <paths from FIX.md Docs touched>\n$BASE: z-harness/$Z_HARNESS_SLUG  (read FIX.md yourself if you need more context)"
-+)
-+```
-+
-+Increment `REVIEW_CYCLES` by 1.
-+
-+Parse the return (already capped at 8 KB, blockers + majors only).
-+
-+**On blockers or majors:**
-+- **First failure**: re-edit inline based on findings. Re-run `git diff`; if byte-identical to prior diff (you pushed back instead of editing), halt with `no_change_on_retry`. Otherwise re-spawn `codex-reviewer` once. Increment `REVIEW_CYCLES` by 1.
-+- **Second failure**: halt; `AskUserQuestion` — proceed anyway / patch manually / abandon.
-+
-+**No blockers/majors** → accept.
-+
-+## Phase 9 — Optional post-mortem
-+
-+Ask via `AskUserQuestion`:
-+
-+- **Default = NO** if `REVIEW_CYCLES <= 1`: "Write post-mortem? (optional — default: skip)"
-+- **Default = YES** if `REVIEW_CYCLES > 1`: "Review cycles: <REVIEW_CYCLES>. Suggesting post-mortem — simple fix may have been subtler than expected. Write post-mortem? (default: yes)"
-+
-+Options: `yes — write post-mortem` | `no — skip`
-+
-+If user picks **yes** → write `z-harness/$Z_HARNESS_SLUG/POSTMORTEM.md`:
-+
-+```markdown
-+# Post-mortem: <slug>
-+
-+**Run:** <RUN>
-+**Date:** <date>
-+
-+## Summary
-+<1-2 sentence synopsis>
-+
-+## Timeline
-+<ordered list of events from symptom notice to fix shipped>
-+
-+## Root cause
-+<precise statement — what code path, what condition>
-+
-+## Fix
-+<what was changed and why>
-+
-+## Why we didn't catch it
-+<test gap, review gap, or assumption that failed>
-+
-+## Action items
-+- [ ] <follow-up 1>
-+- [ ] <follow-up 2>
-+
-+## Confidence
-+<high|medium|low> — <one sentence on what would change this>
-+```
-+
-+Note: the MR-review integration block is NOT triggered automatically in `/z-fix`. If needed, run `/z-mr-review` separately.
-+
-+If user picks **no** → skip; nothing written.
-+
-+## Phase 10 — Finalize
-+
-+1. Update FIX.md `Status:` to `shipped` and check off the acceptance boxes you verified.
-+2. Mark the run done:
-+   ```bash
-+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" fix_run_end \
-+     "$(printf '{"status":"shipped","files_changed":%d,"review_cycles":%d,"postmortem_written":%s}' \
-+        "$N_FILES" "$REVIEW_CYCLES" "$POSTMORTEM_WRITTEN")"
-+   ```
-+   Where `$POSTMORTEM_WRITTEN` is `true` or `false`.
-+3. Push-notify (if policy != `off`): "Fix complete. <N> files changed; review passed (<N> blockers/<M> majors resolved across <REVIEW_CYCLES> cycle(s))."
-+4. **If FIX.md "Docs touched" is non-empty**, suggest: "Run `/z-maintain-docs --audit` to refresh affected concepts."
-+5. Brief summary to user (3-5 sentences): what changed, what the reviewer flagged, what's next.
-+
-+## Hard rules
-+
-+- **Never skip Codex review.** Fix mode cuts planning overhead, not correctness.
-+- **Never proceed past auto-bail thresholds** without explicit user override.
-+- **Always emit cross-LLM consult** — both Gemini and Codex in parallel, framed around "does this cause explain all symptoms?", not a generic fix framing.
-+- **Never overwrite an existing `<slug>/` directory** without asking the user.
-+- **No emojis** anywhere in artifacts.
-+- **Phase 0 is non-skippable.** If the user cannot name a hypothesis, the command exits with a `/z-debug` recommendation, even if an argument was passed.
-+- **No round-1 / round-2 hypothesis generation modes.** Those belong to `/z-debug`. This command uses a single bundled `light-fix` consult only.
+Dispatch shape (bare agent names — providers are resolved at dispatch by `scripts/resolve-provider.sh`, NOT hardcoded to Gemini/Codex):
+```
+Agent(subagent_type="consultant-primary", description="Cross-cutting (primary) for <slug>",
+      prompt="MODE: cross-cutting-uplift\nrepo_root: <abs>\ncomponents: <COMPONENTS.md verbatim>\nsource_map: <top-50 files by churn over last 90 days, plus each component's entry file (heuristic below)>\nAsk: list cross-component issues (duplicated abstractions, style drift, dead code at module boundaries, public-API drift). For each, emit an explicit `component: <slug-from-MANIFEST>` marker, then classify as global-task | per-component-context | risk.")
+Agent(subagent_type="consultant-secondary", description="Cross-cutting (secondary) for <slug>", prompt="<same body>")
 ```
 
-## Surrounding context: /z-plan-light.md reference
+Entry-file heuristic per component: pick the first match, in this order: `README.md` in component root → `src/lib.rs` → `src/main.rs` → `__init__.py` → `package.json` → first non-test source file by lexicographic order → component root path itself.
 
-The diff closely mirrors `/z-plan-light` structure. Key patterns to check:
-- Setup steps 1-7 match (slug, RUN, mkdir, version stamp, fix_run_start event)
-- Auto-bail thresholds identical (>5 files, >2 decisions, cross-module)
-- Phase numbering and decision flow similar
-- FIX.md schema similar but with "Hypothesis" and "Evidence" sections added (per `/z-fix` spec requirements)
-- Codex review with retry-once policy
-- No post-mortem in `/z-plan-light`; `/z-fix` adds optional post-mortem with auto-suggest logic
+Merge into `CROSS-CUTTING.md`:
+```markdown
+# Cross-cutting findings — <slug>
+## Global tasks (need dedicated plan)
+- G-001 — [HIGH] <subject> — files: a, b, c
+## Per-component context (inform audits)
+- C-001 — affects <component-name> — <context>
+## Risks (watch items)
+- R-001 — <subject> — <evidence>
+```
 
-## Scrutinize rigorously
+If `global-task` count > 0 → synthetic component `<slug>-cross-cutting` inserted at top of MANIFEST. Its TASKS.md is hand-written from `global-task` entries (one task per G-NNN), with `**Files:**` lines aggregating affected paths.
 
-Claude is prone to: over-engineering, premature abstraction, plausible-looking-but-wrong logic, missed edge cases, and silently expanding scope.
+Acceptance criteria:
+1. Dispatch shape matches /z-audit Phase 4 (two parallel Agent() calls in one message, subagent_type = bare consultant-primary / consultant-secondary)
+2. CROSS-CUTTING.md has the three required sections and each finding carries a component: marker
+3. Synthetic plan dir is created at $(dirname $Z_HARNESS_PLAN_DIR)/${Z_HARNESS_SLUG}-cross-cutting only when global-task > 0
+4. --cross-cutting=skip short-circuits cleanly
+
+Focus areas (in priority order):
+1. **Dispatch shape**: Are the two Agent() calls actually in a single message (parallel) per /z-audit L138-148? If serialized into two separate code blocks, that's wrong.
+2. **--cross-cutting=skip short-circuit**: Does the placeholder CROSS-CUTTING.md get written, AND does it skip downstream synthetic-dir logic, AND does it advance correctly to Phase 3?
+3. **Synthetic dir gating**: ONLY created when global-task count > 0; not when only per-component-context or risk findings exist.
+4. **CROSS_DIR path computation**: must use $(dirname $Z_HARNESS_PLAN_DIR)/${Z_HARNESS_SLUG}-cross-cutting form — verify no regex-replace lurking.
+5. **MANIFEST first-row insert**: synthetic component goes to the FIRST row (not appended), so it processes FIRST in Phase 5.
+6. **Source map filtering**: git log returns historical paths; deleted files must be filtered out before passing to consultants.
+7. **Entry-file heuristic**: README.md → src/lib.rs → src/main.rs → __init__.py → package.json → first non-test source → component root. All 6 levels implemented?
+8. **Source map cap**: max ~100 paths after UNION + filter.
+9. **CROSS-CUTTING.md unclassified default**: findings without explicit class default to per-component-context (not dropped).
+10. **`cross_cutting_classified` telemetry**: emitted with counts.
+
+Diff (primary artifact — focus your scrutiny on what changed):
+
+=== Phase 2 section: z-uplift.md lines 698-999 ===
+
+## Phase 2 — Cross-cutting pass
+
+Record `T0=$(date +%s%3N)` at phase start.
+
+If `CROSS_CUTTING_SKIP=true`:
+
+```bash
+cat > "$Z_HARNESS_PLAN_DIR/CROSS-CUTTING.md" <<'EOF'
+# Cross-cutting findings — (skipped)
+
+Cross-cutting pass was skipped via --cross-cutting=skip.
+EOF
+cp "$Z_HARNESS_PLAN_DIR/CROSS-CUTTING.md" "$Z_HARNESS_PLAN_DIR/archive/$RUN/phase2-cross-cutting.md"
+WALL_MS=$(( $(date +%s%3N) - T0 ))
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" phase_end \
+  "$(printf '{"phase":2,"name":"cross-cutting","wall_ms":%d,"user_wait_ms":0,"skipped":true}' "$WALL_MS")"
+```
+
+Then skip to Phase 3.
+
+### Step 1 — Build source map
+
+Curate a source map of up to ~100 paths: the top-50 files by churn over the last 90 days (filtered to paths that still exist on disk), UNION the entry file for each component.
+
+```bash
+SOURCE_MAP_JSON="$(python3 - "$Z_HARNESS_PLAN_DIR" "$COMPONENTS_JSON" "$(pwd)" <<'PYEOF'
+import os, sys, json, subprocess
+
+plan_dir     = sys.argv[1]
+data         = json.loads(sys.argv[2])
+repo_root    = sys.argv[3]
+components   = data["components"]
+
+# --- churn top-50 (paths still present on disk) ---
+result = subprocess.run(
+    ["git", "log", "--since=90 days ago", "--name-only", "--format="],
+    capture_output=True, text=True, cwd=repo_root
+)
+from collections import Counter
+counts = Counter()
+for line in result.stdout.splitlines():
+    line = line.strip()
+    if line:
+        counts[line] += 1
+
+churn_paths = []
+for path, _ in counts.most_common(200):
+    abs_path = os.path.join(repo_root, path)
+    if os.path.isfile(abs_path):
+        churn_paths.append(path)
+    if len(churn_paths) >= 50:
+        break
+
+# --- entry-file heuristic per component ---
+def entry_file(comp_path, repo_root):
+    """Return relative path of entry file for this component (first match wins)."""
+    abs_comp = os.path.join(repo_root, comp_path) if not os.path.isabs(comp_path) else comp_path
+    candidates = [
+        os.path.join(abs_comp, "README.md"),
+        os.path.join(abs_comp, "src", "lib.rs"),
+        os.path.join(abs_comp, "src", "main.rs"),
+        os.path.join(abs_comp, "__init__.py"),
+        os.path.join(abs_comp, "package.json"),
+    ]
+    for c in candidates:
+        if os.path.isfile(c):
+            return os.path.relpath(c, repo_root)
+    # first non-test source file lexicographically
+    try:
+        for fname in sorted(os.listdir(abs_comp)):
+            if fname.startswith("test") or fname.startswith("_test") or fname.endswith("_test.py"):
+                continue
+            full = os.path.join(abs_comp, fname)
+            if os.path.isfile(full):
+                return os.path.relpath(full, repo_root)
+    except OSError:
+        pass
+    # fall back to component root path itself
+    return comp_path
+
+entry_paths = []
+for c in components:
+    ep = entry_file(c["path"], repo_root)
+    if ep and os.path.isfile(os.path.join(repo_root, ep)):
+        entry_paths.append(ep)
+
+# merge, de-duplicate, cap at ~100
+seen = set()
+merged = []
+for p in churn_paths + entry_paths:
+    if p not in seen:
+        seen.add(p)
+        merged.append(p)
+    if len(merged) >= 100:
+        break
+
+print(json.dumps(merged))
+PYEOF
+)"
+```
+
+### Step 2 — Load STYLE.md content (if applicable)
+
+```bash
+if [ "$NO_STYLE" != "true" ] && [ -f "$STYLE_MD_PATH" ]; then
+  STYLE_CONTENT="$(cat "$STYLE_MD_PATH")"
+else
+  STYLE_CONTENT=""
+fi
+```
+
+### Step 3 — Build prompt body
+
+```bash
+COMPONENTS_MD_CONTENT="$(cat "$Z_HARNESS_PLAN_DIR/COMPONENTS.md")"
+SOURCE_MAP_PATHS="$(python3 -c 'import json,sys; paths=json.loads(sys.argv[1]); print("\n".join(paths))' "$SOURCE_MAP_JSON")"
+
+CROSS_CUTTING_PROMPT="MODE: cross-cutting-uplift
+
+repo_root: $(pwd)
+slug: $SLUG
+
+components:
+$COMPONENTS_MD_CONTENT
+
+source_map (files to examine — top-50 by churn over last 90 days plus component entry files):
+$SOURCE_MAP_PATHS
+$([ -n "$STYLE_CONTENT" ] && printf '\nSTYLE.md:\n%s\n' "$STYLE_CONTENT" || true)
+Instructions: Examine the source map files for cross-component issues. For each finding, emit an explicit \`component: <slug-from-MANIFEST>\` marker (use the exact slug from the components table, or \`component: global\` for issues spanning all components). Then classify each finding as one of:
+- \`global-task\` — cross-component issues requiring a dedicated plan (duplicated abstractions, global API drift, cross-cutting architectural debt)
+- \`per-component-context\` — issues that should inform the per-component audit for that specific component
+- \`risk\` — watch items with no immediately actionable fix
+
+Style-drift findings must cite STYLE rule IDs explicitly.
+Number global-task findings G-001, G-002, ... (include affected files). Number per-component-context findings C-001, C-002, .... Number risk findings R-001, R-002, ...."
+```
+
+### Step 4 — Dispatch consultants in parallel
+
+Dispatch `consultant-primary` and `consultant-secondary` in a single message (two `Agent(...)` calls):
+
+```
+Agent(
+  subagent_type="consultant-primary",
+  description="Cross-cutting uplift (primary) for <slug>",
+  prompt="<CROSS_CUTTING_PROMPT>"
+)
+Agent(
+  subagent_type="consultant-secondary",
+  description="Cross-cutting uplift (secondary) for <slug>",
+  prompt="<CROSS_CUTTING_PROMPT>"
+)
+```
+
+Archive both transcripts:
+
+```bash
+echo "$PRIMARY_TRANSCRIPT"   > "$Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts/phase2-consultant-primary.md"
+echo "$SECONDARY_TRANSCRIPT" > "$Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts/phase2-consultant-secondary.md"
+```
+
+### Step 5 — Merge findings into CROSS-CUTTING.md
+
+Merge both consultant returns. For any finding missing a classification, default it to `per-component-context`.
+
+Write `$Z_HARNESS_PLAN_DIR/CROSS-CUTTING.md`:
+
+```markdown
+# Cross-cutting findings — <slug>
+
+## Global tasks (need dedicated plan)
+- G-001 — [HIGH] <subject> — component: <slug> — files: a, b, c
+...
+
+## Per-component context (inform audits)
+- C-001 — component: <slug> — <context>
+...
+
+## Risks (watch items)
+- R-001 — component: <slug> — <subject> — <evidence>
+...
+```
+
+Every finding must carry a `component: <slug>` marker. Unclassified findings are placed in the "Per-component context" section.
+
+### Step 6 — Create synthetic cross-cutting plan (if global-task count > 0)
+
+Count `G_COUNT` (number of `G-NNN` entries in CROSS-CUTTING.md).
+
+If `G_COUNT > 0`:
+
+```bash
+CROSS_DIR="$(dirname "$Z_HARNESS_PLAN_DIR")/${Z_HARNESS_SLUG}-cross-cutting"
+mkdir -p "$CROSS_DIR"
+```
+
+Write `$CROSS_DIR/SPEC.md`:
+
+```markdown
+# Spec — <slug>-cross-cutting
+
+This synthetic component addresses global-task findings from the cross-cutting pass.
+
+See: <abs path to CROSS-CUTTING.md>
+```
+
+Write `$CROSS_DIR/PLAN.md`:
+
+```markdown
+# Plan — <slug>-cross-cutting
+
+Implement each global-task finding (G-001, G-002, ...) as a separate task.
+Findings are sourced from CROSS-CUTTING.md.
+```
+
+Generate `$CROSS_DIR/TASKS.md` — one task per G-NNN entry. Parse the G-NNN lines from CROSS-CUTTING.md to extract the subject and affected files:
+
+```bash
+python3 - "$Z_HARNESS_PLAN_DIR/CROSS-CUTTING.md" "$CROSS_DIR/TASKS.md" "$Z_HARNESS_PLAN_DIR" <<'PYEOF'
+import re, sys
+
+cc_path   = sys.argv[1]
+tasks_out = sys.argv[2]
+plan_dir  = sys.argv[3]
+
+with open(cc_path) as f:
+    content = f.read()
+
+# Extract G-NNN lines from the Global tasks section
+global_section = re.search(
+    r'## Global tasks.*?\n(.*?)(?=\n## |\Z)', content, re.DOTALL
+)
+tasks_lines = []
+if global_section:
+    for line in global_section.group(1).splitlines():
+        m = re.match(r'-\s+(G-\d+)\s+[—-]+\s+(?:\[.*?\]\s+)?(.*?)(?:\s+[—-]+\s+files?:\s*(.*))?$', line.strip())
+        if m:
+            gnum    = m.group(1)
+            subject = m.group(2).strip() if m.group(2) else line.strip()
+            files   = m.group(3).strip() if m.group(3) else ""
+            files_line = f"  - {files}" if files else "  - (see CROSS-CUTTING.md)"
+            tasks_lines.append(
+                f"### [{gnum}] {subject}\n"
+                f"- **Files:**\n{files_line}\n"
+                f"- **Depends on:** (none)\n"
+                f"- **Acceptance:** Resolve the cross-cutting issue described in {plan_dir}/CROSS-CUTTING.md#{gnum}.\n"
+            )
+
+header = "# Tasks — cross-cutting global tasks\n\nGenerated from CROSS-CUTTING.md global-task findings.\n\n"
+with open(tasks_out, "w") as f:
+    f.write(header + "\n".join(tasks_lines) + "\n")
+print(f"wrote {tasks_out} with {len(tasks_lines)} task(s)")
+PYEOF
+```
+
+Insert `<slug>-cross-cutting` as the FIRST row in MANIFEST.md:
+
+```bash
+python3 - "$Z_HARNESS_PLAN_DIR/MANIFEST.md" "$Z_HARNESS_SLUG" "$CROSS_DIR" <<'PYEOF'
+import sys, re
+
+manifest_path = sys.argv[1]
+slug          = sys.argv[2]
+cross_dir     = sys.argv[3]
+
+with open(manifest_path) as f:
+    content = f.read()
+
+cross_slug = f"{slug}-cross-cutting"
+new_row = f"| [ ] pending | {cross_slug} | (global) | — | — | {cross_dir}/TASKS.md |\n"
+
+# Insert immediately after the header row separator line
+content = re.sub(
+    r'(\|[-| ]+\|\n)',
+    r'\1' + new_row,
+    content,
+    count=1
+)
+with open(manifest_path, "w") as f:
+    f.write(content)
+print(f"inserted {cross_slug} as first row in MANIFEST.md")
+PYEOF
+```
+
+### Step 7 — Emit telemetry and checkpoint
+
+```bash
+G_COUNT="$(grep -c '^- G-' "$Z_HARNESS_PLAN_DIR/CROSS-CUTTING.md" 2>/dev/null || echo 0)"
+C_COUNT="$(grep -c '^- C-' "$Z_HARNESS_PLAN_DIR/CROSS-CUTTING.md" 2>/dev/null || echo 0)"
+R_COUNT="$(grep -c '^- R-' "$Z_HARNESS_PLAN_DIR/CROSS-CUTTING.md" 2>/dev/null || echo 0)"
+
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cross_cutting_classified \
+  "$(printf '{"slug":"%s","global_tasks":%d,"per_component_context":%d,"risks":%d}' \
+     "$SLUG" "$G_COUNT" "$C_COUNT" "$R_COUNT")"
+
+cp "$Z_HARNESS_PLAN_DIR/CROSS-CUTTING.md" "$Z_HARNESS_PLAN_DIR/archive/$RUN/phase2-cross-cutting.md"
+WALL_MS=$(( $(date +%s%3N) - T0 ))
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" phase_end \
+  "$(printf '{"phase":2,"name":"cross-cutting","wall_ms":%d,"user_wait_ms":%d}' \
+     "$WALL_MS" "$USER_WAIT_MS_THIS_PHASE")"
+```
+
+Scrutinize this code rigorously. Claude is prone to: over-engineering, premature abstraction, plausible-looking-but-wrong logic, missed edge cases, and silently expanding scope beyond the spec.
 
 Report:
 1. Bugs or correctness issues
@@ -372,8 +362,8 @@ Report:
 For each finding: severity (blocker / major / minor / nit), location, and a suggested fix.
 
 OUTPUT BUDGET — respect strictly:
-- Total response under 8000 characters
-- Report blockers and majors only
-- One finding per bullet; two sentences max per finding
-- No re-stating code already in the diff
-- If there are no blockers or majors, respond with exactly: `No blockers or majors found.`
+- Total response under 8000 characters.
+- Report blockers and majors only. Skip minors and nits unless a "minor" hides a correctness bug — in which case promote it to major.
+- One finding per bullet. Two sentences max per finding (one for the problem, one for the fix).
+- No re-stating of code already in the diff. No summaries of what the code does. No restating the spec.
+

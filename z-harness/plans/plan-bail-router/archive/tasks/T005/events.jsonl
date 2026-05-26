@@ -1,0 +1,8 @@
+{"ts":"2026-05-25T00:20:16Z","run":"tasks/T005","kind":"task_start","slug":"plan-bail-router","id":"T005","attempt":1}
+{"ts":"2026-05-25T00:21:09Z","run":"tasks/T005","kind":"implement_start","slug":"plan-bail-router","id":"T005","retry":0}
+{"ts":"2026-05-25T00:22:37Z","run":"tasks/T005","kind":"implement_end","slug":"plan-bail-router","id":"T005","retry":0,"status":"ok","files_changed_count":7,"wall_ms":87941}
+{"ts":"2026-05-25T00:22:49Z","run":"tasks/T005","kind":"diff_capture","slug":"plan-bail-router","id":"T005","diff_bytes":66157}
+{"ts":"2026-05-25T00:23:03Z","run":"tasks/T005","kind":"review_start","slug":"plan-bail-router","id":"T005","cycle":1}
+{"ts":"2026-05-25T00:25:06Z","run":"tasks/T005","kind":"review","slug":"plan-bail-router","prompt_chars":116512,"response_chars":245364,"return_chars":248,"wall_ms":88036}
+{"ts":"2026-05-25T00:25:06Z","run":"tasks/T005","kind":"review_end","slug":"plan-bail-router","id":"T005","cycle":1,"blockers":3,"majors":3,"prompt_chars":116512,"response_chars":245364,"return_chars":248,"wall_ms":123287}
+{"ts":"2026-05-25T00:25:30Z","run":"tasks/T005","kind":"task_done","slug":"plan-bail-router","id":"T005","retries":0,"review_blockers":0,"review_cycles":1,"tests_passed":0,"tests_failed":0}

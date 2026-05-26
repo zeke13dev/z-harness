@@ -1,0 +1,234 @@
+diff --git a/commands/z-implement-all.md b/commands/z-implement-all.md
+index 84283ea..d0a8b92 100644
+--- a/commands/z-implement-all.md
++++ b/commands/z-implement-all.md
+@@ -151,7 +151,52 @@ Both `--ack` and `--force-partial` are inert for legacy (single-slug) plans and
+      {"framework": "<pytest|cargo|jest|...>", "cmd_template": "<template>", "set_at": "<ISO ts>"}
+      ```
+    This is asked exactly once per slug; it's a per-plan cache so different plans can target different test frameworks.
+-8. **Usage-limit guard policy.** Read env `Z_HARNESS_PAUSE_AT_PCT` (default `90`). At each batch boundary, check whether Claude Code surfaces current usage %. If ≥ this threshold: emit a `usage_pause` event, push-notify ("Usage at <N>%; pausing. Reply or re-invoke `/z-implement-all` to resume."), finalize the loop cleanly (no new dispatch; in-flight tasks complete), and exit. Re-invocation picks up from current TASKS.md state — no manual recovery needed.
++
++## Compaction breakpoint policy
++
++High-context runs (many tasks, long wall time) accumulate orchestrator context pressure. These breakpoints fire at natural settle points — never mid-batch — so the user can `/clear` and resume with a fresh context window. The harness's durable state lives in TASKS.md, making `/clear` safe at any batch boundary.
++
++**Env vars:**
++- `Z_IMPLEMENT_PAUSE_TASKS` (default `5`) — number of completed (`[x]`) tasks since last pause that triggers a breakpoint.
++- `Z_IMPLEMENT_PAUSE_MINUTES` (default `30`) — wall minutes since last pause (or run start) that triggers a breakpoint.
++- Either env var set to `0` disables that trigger; both `0` disables compaction breakpoints entirely for this command.
++
++**Counters (orchestrator-side, in-memory; reset on every pause and on re-invocation):**
++- `tasks_since_pause`: incremented when a task transitions to `[x]` (done). **Not** incremented on retries (a single task with 3 retries counts as 1 completion). **Not** incremented when a task is rolled back to `[ ]` after a halt or abandon. A task surfaced as a halt and explicitly deferred by the user (left `[ ]` with a `**Note:**`) also does not increment — only `[x]` transitions count.
++- `pause_clock_start`: epoch seconds, set at run start and reset on every pause.
++
++**Trigger check (batch-settle only):** At the end of each batch — after all in-flight task tracks reach terminal status, after the atomic TASKS.md write, after the `batch_done` event is emitted, and after all halt signals from the batch have been surfaced and resolved or deferred by the user — evaluate:
++
++```
++Z_IMPLEMENT_PAUSE_TASKS="${Z_IMPLEMENT_PAUSE_TASKS:-5}"
++Z_IMPLEMENT_PAUSE_MINUTES="${Z_IMPLEMENT_PAUSE_MINUTES:-30}"
++NOW="$(date +%s)"
++WALL_MINUTES=$(( (NOW - pause_clock_start) / 60 ))
++
++if [ "$Z_IMPLEMENT_PAUSE_TASKS" -gt 0 ] && [ "$tasks_since_pause" -ge "$Z_IMPLEMENT_PAUSE_TASKS" ]; then
++    TRIGGER="task_count"
++elif [ "$Z_IMPLEMENT_PAUSE_MINUTES" -gt 0 ] && [ "$WALL_MINUTES" -ge "$Z_IMPLEMENT_PAUSE_MINUTES" ]; then
++    TRIGGER="wall_time"
++else
++    TRIGGER=""
++fi
++```
++
++**On trigger:** count the remaining `[ ]` tasks in `$TASKS_FILE` as `PENDING_REMAINING`. Emit:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" compaction_pause \
++  "$(printf '{"trigger":"%s","tasks_since_pause":%d,"wall_minutes_since_pause":%d,"pending_remaining":%d}' \
++     "$TRIGGER" "$tasks_since_pause" "$WALL_MINUTES" "$PENDING_REMAINING")"
++```
++
++Then push-notify (regardless of `Z_HARNESS_NOTIFY` value — this is a hard pause):
++
++> "Compaction breakpoint: `<N>` tasks completed (or `<M>` min wall). `<K>` pending tasks remain. Run `/clear`, then re-invoke `/z-implement-all` to resume from TASKS.md. Use `/compact` instead if you need chat history for debugging."
++
++Finalize the loop cleanly: do **not** dispatch any new task. Exit with status 0. On the next `/z-implement-all` invocation, counters reset — if the user ran `/clear`, context is fresh and a new window is correct. If they did not `/clear`, they chose to forgo the breakpoint's benefit; the run proceeds with a new window.
++
++**No trigger:** continue to the next outer loop iteration (step 1).
+ 
+ ## Parallelism (read first)
+ 
+@@ -276,7 +321,7 @@ The precheck is cheap (≤30s) and saves 30-60 minutes per spec-drift incident 
+ Agent(
+   subagent_type="implementer",
+   description="Implement <task-id>",
+-  prompt="<task-id>\n\n<task block verbatim from TASKS.md>\n\n$BASE: <abs path>  (read SPEC.md / PLAN.md yourself from here)\nRepo root: <abs path>\nrelevant_docs (paths — Read these for cross-file invariants and consumer contracts): <paths from step 4b>\ntests_md_path: <$BASE/TESTS.md if it exists, else empty>  (if the task block contains a **Tests:** line, Read TESTS.md and produce test code for each listed TEST-NNN at its Target file path, in the same diff as the production code)"
++  prompt="<task-id>\n\n<task block verbatim from $TASKS_FILE>\n\n$BASE: <abs path>  (read SPEC.md / PLAN.md yourself from here)\nRepo root: <abs path>\nrelevant_docs (paths — Read these for cross-file invariants and consumer contracts): <paths from step 4b>\ntests_md_path: <$BASE/TESTS.md if it exists, else empty>  (if the task block contains a **Tests:** line, Read TESTS.md and produce test code for each listed TEST-NNN at its Target file path, in the same diff as the production code)"
+ )
+ ```
+ 
+@@ -425,7 +470,10 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tas
+ ```
+ (`tests_passed`/`tests_failed` are 0 if the task had no `**Tests:**` line.)
+ 4. If `Z_HARNESS_NOTIFY=all`: push-notify per-task. (For `approval_only` default: only notify on halts.)
+-5. Loop to step 1.
++5. Increment `tasks_since_pause` by 1 (this task reached `[x]`; retries and rollbacks do not count).
++6. **Batch-settle compaction check (once per batch, after all tracks finish).** When all parallel tracks in this outer iteration have completed (all have reached terminal status, the atomic TASKS.md write is done, `batch_done` is emitted, and all halt signals have been surfaced and resolved or deferred by the user), run the trigger check documented in the "Compaction breakpoint policy" section above. If a trigger fires: emit the `compaction_pause` event, push-notify, and exit cleanly with no new dispatch. If no trigger fires: continue to step 1.
++
++   If pending tasks remain but the loop exits due to a compaction trigger, the Finalize section is **skipped** — the push notification text is sufficient, and Finalize's "no more eligible tasks" summary would be misleading (tasks are not blocked, just paused).
+ 
+ ## Finalize
+ 
+diff --git a/skills/z-implement-all/SKILL.md b/skills/z-implement-all/SKILL.md
+index 53302ca..c9a73c7 100644
+--- a/skills/z-implement-all/SKILL.md
++++ b/skills/z-implement-all/SKILL.md
+@@ -10,12 +10,23 @@ Notification policy: read env `Z_HARNESS_NOTIFY` (default `approval_only`).
+ 
+ - `--ack` — Override the SHARED-CONCERNS.md ack-gate when iterating a tree-rooted plan produced by `/z-plan-split`. Equivalent to manually flipping `acknowledged: true` in the file. No-op for legacy single-slug plans.
+ - `--force-partial` — Override the partial-tree gate when iterating a tree-rooted plan whose SHARED-CONCERNS.md has `partial_tree: true` (i.e. one or more clusters failed planning). Implies the user accepts that overlap detection is a lower bound on a partial tree. No-op for legacy single-slug plans.
++- `--tasks=<path>` — Override the default tasks file location. When provided, that file is the task queue instead of `$BASE/TASKS.md`. `<path>` may be repo-relative (for example `z-harness/<slug>/REVIEW-TASKS.md` or `z-harness/<slug>/MR-REVIEW.md`) or absolute. `$BASE` is derived from the directory containing the task file so SPEC.md, PLAN.md, and archive paths resolve next to the promoted artifact. Slug discovery, tree validation, `--ack`, and `--force-partial` are skipped for this single overridden task file.
+ 
+-Both flags are inert for legacy (single-slug) plans and only affect tree-rooted discovery in Setup step 2.
++Both `--ack` and `--force-partial` are inert for legacy (single-slug) plans and only affect tree-rooted discovery in Setup step 2.
+ 
+ ## Setup
+ 
+ 1. `cd` to the repo root. Abort if no `z-harness/` directory.
++
++   **`--tasks` fast path.** If the user invoked with `--tasks=<path>`, resolve the path to absolute and derive `BASE` as its parent directory:
++   ```bash
++   TASKS_FILE="$(realpath <path>)"
++   BASE="$(dirname "$TASKS_FILE")"
++   Z_HARNESS_SLUG="$(basename "$BASE")"
++   ```
++   Skip steps 2 and 2a-2d. Jump directly to step 3, binding `BASE` and `TASKS_FILE` as derived above. This supports promoted review artifacts such as `REVIEW-TASKS.md` and `MR-REVIEW.md`.
++
++   **Example:** `/z-implement-all --tasks=z-harness/my-plan/REVIEW-TASKS.md` reads task blocks such as `T-REV-001` from `REVIEW-TASKS.md` and resolves SPEC.md/PLAN.md at `z-harness/my-plan/`.
+ 2. **Discover plan slug.** Multiple plans may coexist under `$Z_HARNESS_PLAN_DIR/`. A `$Z_HARNESS_PLAN_DIR/` may be either a **legacy single-slug plan** (contains `TASKS.md` directly) or a **tree-rooted plan** produced by `/z-plan-split` (contains `MANIFEST.md` + per-cluster subdirectories, each with its own `TASKS.md`):
+ 
+    **2a. Enumerate candidates.**
+@@ -103,8 +114,14 @@ Both flags are inert for legacy (single-slug) plans and only affect tree-rooted
+ 
+    **2d. If chosen slug is legacy (TASKS.md directly under it, no MANIFEST.md),** behavior is unchanged: a single `BASE` for the whole run, no tree validation, `--ack` and `--force-partial` are no-ops.
+ 
+-3. From here on, **`BASE`** = `$Z_HARNESS_PLAN_DIR` for legacy slugs (or `z-harness` for legacy flat). For tree-rooted slugs, `BASE` is rebound per-cluster as the orchestrator iterates the run-order sequence from 2c. All paths use `$BASE`.
+-4. Read `$BASE/TASKS.md` once into memory — you'll re-read between batches to pick up status flips. **Do NOT pre-extract SPEC/PLAN slices in main thread** — subagents will Read them directly from `$BASE/SPEC.md` and `$BASE/PLAN.md` themselves. This keeps the orchestrator main-thread context light across many tasks.
++3. From here on, **`BASE`** = `$Z_HARNESS_PLAN_DIR` for legacy slugs (or `z-harness` for legacy flat). For tree-rooted slugs, `BASE` is rebound per-cluster as the orchestrator iterates the run-order sequence from 2c. When `--tasks` was provided, `BASE` was set in step 1's fast path. All paths use `$BASE`.
++
++   **Set the default tasks file now that `BASE` is bound** (the `--tasks` fast path already set `TASKS_FILE`, so the default leaves it alone):
++   ```bash
++   TASKS_FILE="${TASKS_FILE:-$BASE/TASKS.md}"
++   ```
++
++4. Read `$TASKS_FILE` into memory — always set by step 1's fast path or step 3's default above. You'll re-read between batches to pick up status flips. **Do NOT pre-extract SPEC/PLAN slices in main thread** — subagents will Read them directly from `$BASE/SPEC.md` and `$BASE/PLAN.md` themselves. This keeps the orchestrator main-thread context light across many tasks.
+ 5. **Version stamp + run_start event:**
+    ```bash
+    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
+@@ -124,7 +141,52 @@ Both flags are inert for legacy (single-slug) plans and only affect tree-rooted
+      {"framework": "<pytest|cargo|jest|...>", "cmd_template": "<template>", "set_at": "<ISO ts>"}
+      ```
+    This is asked exactly once per slug; it's a per-plan cache so different plans can target different test frameworks.
+-8. **Usage-limit guard policy.** Read env `Z_HARNESS_PAUSE_AT_PCT` (default `90`). At each batch boundary, check whether Claude Code surfaces current usage %. If ≥ this threshold: emit a `usage_pause` event, push-notify ("Usage at <N>%; pausing. Reply or re-invoke `/z-implement-all` to resume."), finalize the loop cleanly (no new dispatch; in-flight tasks complete), and exit. Re-invocation picks up from current TASKS.md state — no manual recovery needed.
++
++## Compaction breakpoint policy
++
++High-context runs (many tasks, long wall time) accumulate orchestrator context pressure. These breakpoints fire at natural settle points — never mid-batch — so the user can `/clear` and resume with a fresh context window. The harness's durable state lives in TASKS.md, making `/clear` safe at any batch boundary.
++
++**Env vars:**
++- `Z_IMPLEMENT_PAUSE_TASKS` (default `5`) — number of completed (`[x]`) tasks since last pause that triggers a breakpoint.
++- `Z_IMPLEMENT_PAUSE_MINUTES` (default `30`) — wall minutes since last pause (or run start) that triggers a breakpoint.
++- Either env var set to `0` disables that trigger; both `0` disables compaction breakpoints entirely for this command.
++
++**Counters (orchestrator-side, in-memory; reset on every pause and on re-invocation):**
++- `tasks_since_pause`: incremented when a task transitions to `[x]` (done). **Not** incremented on retries (a single task with 3 retries counts as 1 completion). **Not** incremented when a task is rolled back to `[ ]` after a halt or abandon. A task surfaced as a halt and explicitly deferred by the user (left `[ ]` with a `**Note:**`) also does not increment — only `[x]` transitions count.
++- `pause_clock_start`: epoch seconds, set at run start and reset on every pause.
++
++**Trigger check (batch-settle only):** At the end of each batch — after all in-flight task tracks reach terminal status, after the atomic TASKS.md write, after the `batch_done` event is emitted, and after all halt signals from the batch have been surfaced and resolved or deferred by the user — evaluate:
++
++```
++Z_IMPLEMENT_PAUSE_TASKS="${Z_IMPLEMENT_PAUSE_TASKS:-5}"
++Z_IMPLEMENT_PAUSE_MINUTES="${Z_IMPLEMENT_PAUSE_MINUTES:-30}"
++NOW="$(date +%s)"
++WALL_MINUTES=$(( (NOW - pause_clock_start) / 60 ))
++
++if [ "$Z_IMPLEMENT_PAUSE_TASKS" -gt 0 ] && [ "$tasks_since_pause" -ge "$Z_IMPLEMENT_PAUSE_TASKS" ]; then
++    TRIGGER="task_count"
++elif [ "$Z_IMPLEMENT_PAUSE_MINUTES" -gt 0 ] && [ "$WALL_MINUTES" -ge "$Z_IMPLEMENT_PAUSE_MINUTES" ]; then
++    TRIGGER="wall_time"
++else
++    TRIGGER=""
++fi
++```
++
++**On trigger:** count the remaining `[ ]` tasks in `$TASKS_FILE` as `PENDING_REMAINING`. Emit:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" compaction_pause \
++  "$(printf '{"trigger":"%s","tasks_since_pause":%d,"wall_minutes_since_pause":%d,"pending_remaining":%d}' \
++     "$TRIGGER" "$tasks_since_pause" "$WALL_MINUTES" "$PENDING_REMAINING")"
++```
++
++Then push-notify (regardless of `Z_HARNESS_NOTIFY` value — this is a hard pause):
++
++> "Compaction breakpoint: `<N>` tasks completed (or `<M>` min wall). `<K>` pending tasks remain. Run `/clear`, then re-invoke `/z-implement-all` to resume from TASKS.md. Use `/compact` instead if you need chat history for debugging."
++
++Finalize the loop cleanly: do **not** dispatch any new task. Exit with status 0. On the next `/z-implement-all` invocation, counters reset — if the user ran `/clear`, context is fresh and a new window is correct. If they did not `/clear`, they chose to forgo the breakpoint's benefit; the run proceeds with a new window.
++
++**No trigger:** continue to the next outer loop iteration (step 1).
+ 
+ ## Parallelism (read first)
+ 
+@@ -153,7 +215,7 @@ Repeat until no eligible task remains or you halt:
+ 
+ ### 1. Pick next task
+ 
+-Re-read `TASKS.md`. Build a quick eligibility check:
++Re-read `$TASKS_FILE`. Build a quick eligibility check:
+ 
+ - Status is `[ ]` (pending)
+ - **Every** dependency listed under "Depends on" is `[x]` (done) — go by task-level deps, not phase headings (phases mislead — e.g. T006 depends on T010+T011 even though they're in different phases)
+@@ -190,7 +252,7 @@ Critical: **never retry a skip-flagged task in the same run** unless the user pi
+ 
+ ### 3. Mark in-progress
+ 
+-Edit `$BASE/TASKS.md`: flip the chosen task's `[ ]` to `[~]`. Log:
++Edit `$TASKS_FILE`: flip the chosen task's `[ ]` to `[~]`. Log:
+ ```bash
+ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tasks/<task-id>" task_start '{"id":"<task-id>"}'
+ ```
+@@ -249,7 +311,7 @@ The precheck is cheap (≤30s) and saves 30-60 minutes per spec-drift incident 
+ Agent(
+   subagent_type="implementer",
+   description="Implement <task-id>",
+-  prompt="<task-id>\n\n<task block verbatim from TASKS.md>\n\n$BASE: <abs path>  (read SPEC.md / PLAN.md yourself from here)\nRepo root: <abs path>\nrelevant_docs (paths — Read these for cross-file invariants and consumer contracts): <paths from step 4b>\ntests_md_path: <$BASE/TESTS.md if it exists, else empty>  (if the task block contains a **Tests:** line, Read TESTS.md and produce test code for each listed TEST-NNN at its Target file path, in the same diff as the production code)"
++  prompt="<task-id>\n\n<task block verbatim from $TASKS_FILE>\n\n$BASE: <abs path>  (read SPEC.md / PLAN.md yourself from here)\nRepo root: <abs path>\nrelevant_docs (paths — Read these for cross-file invariants and consumer contracts): <paths from step 4b>\ntests_md_path: <$BASE/TESTS.md if it exists, else empty>  (if the task block contains a **Tests:** line, Read TESTS.md and produce test code for each listed TEST-NNN at its Target file path, in the same diff as the production code)"
+ )
+ ```
+ 
+@@ -388,7 +450,7 @@ If `$BASE/test-runner.json` is absent OR the task block has no `**Tests:**` line
+ 
+ ### 8. Mark done
+ 
+-1. Flip `[~]` to `[x]` in `$BASE/TASKS.md`. Add a one-line completion note (e.g. "T004 done; reviewer flagged 1 minor (deferred); 3/3 tests passed").
++1. Flip `[~]` to `[x]` in `$TASKS_FILE`. Add a one-line completion note (e.g. "T004 done; reviewer flagged 1 minor (deferred); 3/3 tests passed").
+ 2. Write per-task summary file `$BASE/archive/tasks/<task-id>/SUMMARY.md` with outcome + counts. Future references to this task pull from the file rather than re-loading the full reviewer return into main thread.
+ 3. Log:
+ ```bash
+@@ -398,13 +460,16 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tas
+ ```
+ (`tests_passed`/`tests_failed` are 0 if the task had no `**Tests:**` line.)
+ 4. If `Z_HARNESS_NOTIFY=all`: push-notify per-task. (For `approval_only` default: only notify on halts.)
+-5. Loop to step 1.
++5. Increment `tasks_since_pause` by 1 (this task reached `[x]`; retries and rollbacks do not count).
++6. **Batch-settle compaction check (once per batch, after all tracks finish).** When all parallel tracks in this outer iteration have completed (all have reached terminal status, the atomic TASKS.md write is done, `batch_done` is emitted, and all halt signals have been surfaced and resolved or deferred by the user), run the trigger check documented in the "Compaction breakpoint policy" section above. If a trigger fires: emit the `compaction_pause` event, push-notify, and exit cleanly with no new dispatch. If no trigger fires: continue to step 1.
++
++   If pending tasks remain but the loop exits due to a compaction trigger, the Finalize section is **skipped** — the push notification text is sufficient, and Finalize's "no more eligible tasks" summary would be misleading (tasks are not blocked, just paused).
+ 
+ ## Finalize
+ 
+ When the loop exits (no more eligible tasks, or you halted):
+ 
+-1. Re-read `TASKS.md` for final counts: `done`, `pending`, `in_progress`, `skipped`.
++1. Re-read `$TASKS_FILE` for final counts: `done`, `pending`, `in_progress`, `skipped`.
+ 2. Write a summary message to the user:
+    - Counts
+    - Skipped tasks with reasons (REMOTE / wall-clock / human action required)

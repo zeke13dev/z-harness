@@ -1,23 +1,18 @@
-## Review of /z-suggest-memory SKILL.md (T007)
+## Codex Review: T007
 
-### Assessment
+### Blockers
+None identified by Codex.
 
-The SKILL.md file is **SPEC-COMPLIANT**. Manual review against the detailed SPEC requirements confirms:
+### Major
 
-- **Phase 0 (Preflight):** Correctly checks `docs/llm/INDEX.json` and returns proper `no_docs` shape.
-- **Phase 1 (Parse args):** All flags documented; mutual exclusivity of --edit and --delete noted.
-- **Phase 2 (Resolve concept):** Four options implemented with spec-compliant collapse behavior when hints are absent. The acceptance criterion "All four AskUserQuestion options" is satisfied — the four options are available (option 1+2 collapse when no hints, as spec requires).
-- **Phase 3 (Collect):** All six enum types, 15-tag seed set, source regex, date/expires handling documented.
-- **Phase 4 (Validate):** Complete validation table with all error messages.
-- **Phase 5 (Write):** Append mode shows full atomic-write Python code (tmpfile + fsync + os.replace). Edit and Delete modes correctly reference "same pattern as append" (matching spec structure). All three modes documented as mutually exclusive.
-- **Phase 6 (Regen):** Helper script invocation correct, dry-run variant shown.
-- **Phase 7 (Human refresh):** doc-updater subagent spawn documented, MEMORIES_PRESERVED check included.
-- **Phase 8 (Return):** Return shape complete with STATUS values and MEMORIES_WRITTEN rules (1 for append/edit, 0 for delete/skipped/bad_input/no_docs).
+1. **[commands/z-uplift.md:1788](/Users/zeke/dev/z-harness/commands/z-uplift.md:1788)** `auditor_failed` AskUserQuestion is prose-only. There is no concrete `log-event.sh "$RUN" user_wait_start`, `_WAIT_T0`, AskUserQuestion placeholder, `USER_WAIT_MS_PHASE3` accumulation, or `user_wait_end` code block.
+   Suggested fix: add the same explicit bash wrapper pattern used elsewhere, with payload `{"phase":3,"reason":"auditor_failed","component":"...","dimension":"..."}` before the AskUserQuestion and `user_wait_end` after it.
 
-### Findings
+2. **[commands/z-uplift.md:2099](/Users/zeke/dev/z-harness/commands/z-uplift.md:2099)** `reviewer_blocker` AskUserQuestion is also prose-only. This misses the acceptance criterion requiring every AskUserQuestion block to be wrapped by actual `user_wait_start` / `user_wait_end` logging.
+   Suggested fix: add an explicit shell snippet around the reviewer-blocker halt path and accumulate into `USER_WAIT_MS_PHASE3`.
 
-**No blockers or majors found.**
+3. **[commands/z-uplift.md:2518](/Users/zeke/dev/z-harness/commands/z-uplift.md:2518)** `component_implement_start` payload does not match the spec. Spec requires `{component, task_count}`; current payload is `{component, tasks_md}`.
+   Suggested fix: compute `TASK_COUNT` from `COMP_TASKS_MD` before logging and emit `{"component":"...","task_count":%d}`.
 
-The implementation correctly transposes the spec requirements into prose form. Tag seed list has all 15 tags. Source regex matches spec exactly. Atomic write patterns are described and code-exemplified for append mode (with defer-to-append for edit/delete, as spec does). MEMORIES_WRITTEN logic is complete and accurate. Mutual exclusivity of modes is clear. Dry-run behavior is documented throughout.
-
-One minor clarity note: The Phase 2 option-collapse behavior (line 66) is spec-compliant but could be clearer upfront that "exactly four options" means logically available, with UI collapse when hints absent.
+4. **[commands/z-uplift.md:2405](/Users/zeke/dev/z-harness/commands/z-uplift.md:2405), [commands/z-uplift.md:2665](/Users/zeke/dev/z-harness/commands/z-uplift.md:2665)** `component_implement_done` payload does not match the spec. Spec requires `{component, completed, halted}`; current payload uses `outcome` and omits both booleans.
+   Suggested fix: emit `{"component":"...","completed":true,"halted":false}` for successful/auto/manual completion.

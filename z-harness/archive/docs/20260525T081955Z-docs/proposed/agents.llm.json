@@ -1,0 +1,63 @@
+{
+  "concept": "agents",
+  "last_updated": "2026-05-25",
+  "covers_spec": "none",
+  "source_file": [
+    "agents/auditor.md",
+    "agents/cluster-planner.md",
+    "agents/complexity-classifier.md",
+    "agents/consultant-primary.md",
+    "agents/consultant-secondary.md",
+    "agents/doc-fetcher.md",
+    "agents/doc-updater.md",
+    "agents/external-lookup.md",
+    "agents/implementer.md",
+    "agents/mr-reviewer.md",
+    "agents/planning-router.md",
+    "agents/remote-runner.md",
+    "agents/reviewer.md",
+    "agents/spec-precheck.md"
+  ],
+  "confidence": "high",
+  "entry_points": [
+    {"file": "agents/auditor.md", "line": 1, "symbol": "auditor", "kind": "module", "summary": "Read-only single-dimension auditor; writes findings file."},
+    {"file": "agents/cluster-planner.md", "line": 1, "symbol": "cluster-planner", "kind": "module", "summary": "/z-plan-split leaf planner; writes cluster SPEC/PLAN/TASKS."},
+    {"file": "agents/complexity-classifier.md", "line": 1, "symbol": "complexity-classifier", "kind": "module", "summary": "Classifies one task low|medium|high for model routing."},
+    {"file": "agents/consultant-primary.md", "line": 1, "symbol": "consultant-primary", "kind": "module", "summary": "Primary provider proxy for consult/review modes."},
+    {"file": "agents/consultant-secondary.md", "line": 1, "symbol": "consultant-secondary", "kind": "module", "summary": "Secondary provider proxy; same modes as primary."},
+    {"file": "agents/doc-fetcher.md", "line": 1, "symbol": "doc-fetcher", "kind": "module", "summary": "Read-only docs context fetcher over INDEX/concept JSON/memories."},
+    {"file": "agents/doc-updater.md", "line": 1, "symbol": "doc-updater", "kind": "module", "summary": "Refreshes one concept doc pair; preserves memories verbatim."},
+    {"file": "agents/external-lookup.md", "line": 1, "symbol": "external-lookup", "kind": "module", "summary": "Web/API retrieval worker; emits lookup-contract envelope."},
+    {"file": "agents/implementer.md", "line": 1, "symbol": "implementer", "kind": "module", "summary": "Implements exactly one task block and returns structured status."},
+    {"file": "agents/mr-reviewer.md", "line": 1, "symbol": "mr-reviewer", "kind": "module", "summary": "Code-quality branch diff reviewer; returns findings JSON."},
+    {"file": "agents/planning-router.md", "line": 1, "symbol": "planning-router", "kind": "module", "summary": "Read-only advisory router for ambiguous planning decisions."},
+    {"file": "agents/remote-runner.md", "line": 1, "symbol": "remote-runner", "kind": "module", "summary": "Mechanical remote verifier for builds, logs, disk, read-only DB."},
+    {"file": "agents/reviewer.md", "line": 1, "symbol": "reviewer", "kind": "module", "summary": "Provider proxy for task correctness/spec review."},
+    {"file": "agents/spec-precheck.md", "line": 1, "symbol": "spec-precheck", "kind": "module", "summary": "Preflight verifier for SPEC references before implementation."}
+  ],
+  "depends_on": ["scripts", "lookup-contract"],
+  "consumed_by": ["commands", "skills"],
+  "invariants": [
+    "Each agent is spawned fresh per invocation; callers pass all required context.",
+    "Commands/skills own orchestration, user interaction, artifact writes, and final routing decisions.",
+    "consultant-primary, consultant-secondary, and reviewer resolve providers via scripts/resolve-provider.sh.",
+    "Proxy agents emit start telemetry before provider calls so liveness checks can detect hangs.",
+    "doc-updater must preserve existing memories[] verbatim and never author memories.",
+    "external-lookup must follow docs/llm/lookup-contract.json and refuse mutating commands.",
+    "planning-router is read-only and advisory; malformed or unsafe routing returns ask_user/bad_input.",
+    "mr-reviewer reviews quality, not correctness, and returns JSON for the orchestrator to write.",
+    "remote-runner executes mechanical checks only; interpretive debugging returns to the caller.",
+    "cluster-planner refuses nested plan-split outputs when an ancestor MANIFEST.md exists."
+  ],
+  "gotchas": [
+    "codex-consultant.md, gemini-consultant.md, and codex-reviewer.md are stale names.",
+    "check-timeout.sh is sourced by proxy agents; missing timeout/gtimeout leaves TIMEOUT_CMD empty.",
+    "planning-router must not infer missing quantitative signals from filesystem exploration.",
+    "doc-updater dry-run returns proposed docs; /z-maintain-docs decides whether to write them.",
+    "external-lookup's canonical contract is lookup-contract.json, not only inline agent prose.",
+    "remote-runner refuses DB writes, real-money operations, destructive ops, and interpretive work.",
+    "mr-reviewer never writes MR-REVIEW.md; callers parse its fenced JSON response.",
+    "spec-precheck validates factual SPEC references, not design quality or runtime semantics."
+  ],
+  "memories": []
+}

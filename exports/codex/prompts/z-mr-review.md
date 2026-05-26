@@ -6,6 +6,16 @@ Arguments (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
+## Finding promotion contract
+
+`/z-mr-review` is a producer of the shared review-family promotion contract:
+
+- The parsed reviewer JSON is the structured finding source.
+- `MR-REVIEW.md` is both the evidence summary and the promotion artifact: ranked findings are emitted as task-shaped blocks that the user can delete before applying survivors.
+- The command preserves its P0-P4 severity model because it is code-quality oriented, but every emitted task block must include source severity, category, file citation, finding detail, and acceptance criteria.
+
+`MR-REVIEW.md` is intentionally separate from canonical plan `TASKS.md`. Users apply survivors with `/z-implement-all --tasks=z-harness/<SLUG>/MR-REVIEW.md`; the implementation orchestrator must treat that path as the task queue while still resolving `$BASE` from the slug for SPEC/PLAN context when present.
+
 ## Argument parsing
 
 Parse `$ARGUMENTS` before doing anything else:

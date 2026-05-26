@@ -1,0 +1,6 @@
+{"ts":"2026-05-25T21:01:49Z","run":"20260525T205931Z-memory-self-improvement-loop","kind":"phase_end","phase":1,"name":"scaffolding","wall_ms":113000,"user_wait_ms":0}
+{"ts":"2026-05-25T21:06:07Z","run":"20260525T205931Z-memory-self-improvement-loop","kind":"consult","role":"consultant_primary","provider":"gemini","model_label":"gemini-2.5-pro","mode":"brainstorm","prompt_chars":1789,"response_chars":3614,"wall_ms":34000,"transcript":"001-consultant-primary-gemini-brainstorm"}
+{"ts":"2026-05-25T21:06:07Z","run":"20260525T205931Z-memory-self-improvement-loop","kind":"consult","role":"consultant_secondary","provider":"codex","model_label":"gpt-5.5","mode":"brainstorm","prompt_chars":1789,"response_chars":20816,"wall_ms":40000,"transcript":"002-consultant-secondary-codex-brainstorm"}
+{"ts":"2026-05-25T21:06:07Z","run":"20260525T205931Z-memory-self-improvement-loop","kind":"phase_end","phase":2,"name":"ideator_dispatch","wall_ms":254000,"user_wait_ms":0}
+{"ts":"2026-05-25T21:08:12Z","run":"20260525T205931Z-memory-self-improvement-loop","kind":"phase_end","phase":3,"name":"synthesis_antibiascheck","wall_ms":379000,"user_wait_ms":0}
+{"ts":"2026-05-25T21:08:13Z","run":"20260525T205931Z-memory-self-improvement-loop","kind":"user_wait_start","phase":3,"reason":"framing_choice"}

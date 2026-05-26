@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "generated_at": "2026-05-26T00:35:00Z",
+  "generated_at": "2026-05-26T01:38:04Z",
   "z_harness_version": "380aca6",
   "concepts": [
     {
@@ -129,9 +129,11 @@
         "skills/z-review-all/SKILL.md",
         "skills/z-stats/SKILL.md",
         "skills/z-suggest-memory/SKILL.md",
-        "skills/z-test/SKILL.md"
+        "skills/z-test/SKILL.md",
+        "skills/z-update/SKILL.md",
+        "skills/z-uplift/SKILL.md"
       ],
-      "last_updated": "2026-05-25",
+      "last_updated": "2026-05-26",
       "confidence": "high",
       "depends_on": [
         "agents",
@@ -143,7 +145,7 @@
         "commands",
         "multi-ide-exports"
       ],
-      "summary": "Operational checklists, including planning-family route policy, z-audit-plan plan audits, review finding promotion, z-amend safety gates, and explicit --tasks implementation queues."
+      "summary": "Amend plans/FIX; preserve completed tasks; reclassify changed tasks."
     },
     {
       "slug": "providers-registry",
@@ -218,7 +220,7 @@
         "commands/z-update.md",
         "docs/human/INSTALL.md"
       ],
-      "last_updated": "2026-05-24",
+      "last_updated": "2026-05-25",
       "confidence": "high",
       "depends_on": [
         "scripts",
@@ -275,6 +277,22 @@
         "z-review-all"
       ],
       "summary": "Post-run Haiku subagent that proposes 0-3 candidate memories from a completed /z-implement-all or /z-review-all run. Reads run events, cumulative diff, and SPEC.md; emits structured candidates as a fenced JSON block. Does not write \u2014 orchestrator owns all writes via /z-suggest-memory. Dispatched by scripts/run-memory-review.sh after skip-conditions check (empty diff, zero tasks completed)."
+    },
+    {
+      "slug": "z-uplift",
+      "source_files": [
+        "commands/z-uplift.md",
+        "docs/human/z-uplift.md",
+        "skills/z-uplift/SKILL.md"
+      ],
+      "last_updated": "2026-05-25",
+      "confidence": "high",
+      "depends_on": [
+        "commands",
+        "agents"
+      ],
+      "consumed_by": [],
+      "summary": "Tiered bulk codebase quality uplift: decompose into components, repo-wide cross-cutting pass, per-component audits, sequential implement via /z-implement-all."
     }
   ]
 }

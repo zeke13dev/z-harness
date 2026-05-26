@@ -8,12 +8,24 @@ Notification policy: read env `Z_HARNESS_NOTIFY` (default `approval_only`).
 
 - `--ack` — Override the SHARED-CONCERNS.md ack-gate when iterating a tree-rooted plan produced by `/z-plan-split`. Equivalent to manually flipping `acknowledged: true` in the file. No-op for legacy single-slug plans.
 - `--force-partial` — Override the partial-tree gate when iterating a tree-rooted plan whose SHARED-CONCERNS.md has `partial_tree: true` (i.e. one or more clusters failed planning). Implies the user accepts that overlap detection is a lower bound on a partial tree. No-op for legacy single-slug plans.
+- `--tasks=<path>` — Override the default tasks file location. By default the orchestrator reads `$TASKS_FILE` (discovered via slug detection in Setup step 2). When `--tasks=<path>` is provided, that file is used as the task queue instead. `<path>` may be repo-relative (e.g. `z-harness/mr-style-reviewer/MR-REVIEW.md`) or absolute. `$BASE` is derived from the directory containing the tasks file — e.g. `--tasks=z-harness/mr-style-reviewer/MR-REVIEW.md` sets `BASE=z-harness/mr-style-reviewer` so SPEC.md, PLAN.md, and archive paths resolve correctly. Slug detection (step 2) is skipped when `--tasks` is supplied; tree-rooted and MANIFEST validation are bypassed for the single overridden file. `--ack` and `--force-partial` are no-ops when `--tasks` is active.
 
-Both flags are inert for legacy (single-slug) plans and only affect tree-rooted discovery in Setup step 2.
+Both `--ack` and `--force-partial` are inert for legacy (single-slug) plans and only affect tree-rooted discovery in Setup step 2.
 
 ## Setup
 
 1. `cd` to the repo root. Abort if no `z-harness/` directory.
+
+   **`--tasks` fast path.** If the user invoked with `--tasks=<path>`, resolve the path to absolute and derive `BASE` as its parent directory:
+   ```bash
+   TASKS_FILE="$(realpath <path>)"           # make absolute
+   BASE="$(dirname "$TASKS_FILE")"           # e.g. /abs/z-harness/mr-style-reviewer
+   Z_HARNESS_SLUG="$(basename "$BASE")"      # e.g. mr-style-reviewer (for logging only)
+   ```
+   Skip steps 2 (slug discovery) and 2a–2d (MANIFEST/SHARED-CONCERNS validation) entirely. Jump directly to step 3, binding `BASE` and the tasks file as derived above. `--ack` and `--force-partial` are no-ops in this mode.
+
+   **Example:** `/z-implement-all --tasks=z-harness/mr-style-reviewer/MR-REVIEW.md` reads task blocks from `MR-REVIEW.md` (e.g. `T-MR-001`, `T-MR-002`, …) and resolves SPEC.md at `z-harness/mr-style-reviewer/SPEC.md`.
+
 2. **Discover plan slug.** Multiple plans may coexist under `$Z_HARNESS_PLAN_DIR/`. A `$Z_HARNESS_PLAN_DIR/` may be either a **legacy single-slug plan** (contains `TASKS.md` directly) or a **tree-rooted plan** produced by `/z-plan-split` (contains `MANIFEST.md` + per-cluster subdirectories, each with its own `TASKS.md`):
 
    **2a. Enumerate candidates.**
@@ -101,8 +113,14 @@ Both flags are inert for legacy (single-slug) plans and only affect tree-rooted 
 
    **2d. If chosen slug is legacy (TASKS.md directly under it, no MANIFEST.md),** behavior is unchanged: a single `BASE` for the whole run, no tree validation, `--ack` and `--force-partial` are no-ops.
 
-3. From here on, **`BASE`** = `$Z_HARNESS_PLAN_DIR` for legacy slugs (or `z-harness` for legacy flat). For tree-rooted slugs, `BASE` is rebound per-cluster as the orchestrator iterates the run-order sequence from 2c. All paths use `$BASE`.
-4. Read `$BASE/TASKS.md` once into memory — you'll re-read between batches to pick up status flips. **Do NOT pre-extract SPEC/PLAN slices in main thread** — subagents will Read them directly from `$BASE/SPEC.md` and `$BASE/PLAN.md` themselves. This keeps the orchestrator main-thread context light across many tasks.
+3. From here on, **`BASE`** = `$Z_HARNESS_PLAN_DIR` for legacy slugs (or `z-harness` for legacy flat). For tree-rooted slugs, `BASE` is rebound per-cluster as the orchestrator iterates the run-order sequence from 2c. When `--tasks` was provided, `BASE` was set in step 1's fast path. All paths use `$BASE`.
+
+   **Set the default tasks file now that `BASE` is bound** (the `--tasks` fast path already set `TASKS_FILE` in step 1, so the `:-` default leaves it alone):
+   ```bash
+   TASKS_FILE="${TASKS_FILE:-$BASE/TASKS.md}"
+   ```
+
+4. Read `$TASKS_FILE` into memory — always set by step 1's fast path or step 3's default above. You'll re-read between batches to pick up status flips. **Do NOT pre-extract SPEC/PLAN slices in main thread** — subagents will Read them directly from `$BASE/SPEC.md` and `$BASE/PLAN.md` themselves. This keeps the orchestrator main-thread context light across many tasks.
 5. **Version stamp + run_start event:**
    ```bash
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
@@ -113,6 +131,22 @@ Both flags are inert for legacy (single-slug) plans and only affect tree-rooted 
    ' "$VERSION_BLOB" "$Z_HARNESS_SLUG")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" run_start "$START_PAYLOAD"
    ```
+   **Initialize compaction counters** (immediately after emitting `run_start`, before any task dispatch):
+   ```bash
+   tasks_since_pause=0
+   pause_clock_start="$(date +%s)"
+   ```
+   These are in-memory counters that live only for the duration of this invocation. Both reset to these initial values on every re-invocation (i.e. after a `compaction_pause` exit and `/clear`). There is no persistent state to read — TASKS.md's `[x]` count is the durable record; the counters are ephemeral rate-limiters for the current window only.
+
+   Then log provider resolution (once per run, guarded against re-emission):
+   ```bash
+   IMPL_RUN="$(date -u +%Y%m%dT%H%M%SZ)-implement"
+   if [ ! -f "$BASE/archive/$IMPL_RUN/.providers-logged" ]; then
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-providers.sh" || true
+     mkdir -p "$BASE/archive/$IMPL_RUN"
+     touch "$BASE/archive/$IMPL_RUN/.providers-logged"
+   fi
+   ```
 6. **One-time local cargo clean** (only when remote-runner is in play): if any task in the queue has a `**REMOTE_VERIFY:**` line and the repo has a `Cargo.toml`, set env `Z_HARNESS_LOCAL_CARGO_CLEAN=1` (the remote-runner uses this to trigger a one-time `cargo clean` on the local checkout). Local cargo builds should be rare in this harness.
 7. Send initial `PushNotification` (if policy != `off`): "Orchestration started on plan `<slug>`. <N> pending tasks. Plugin version: <z_harness_version>."
 7.5. **Test-runner cache (only if `$BASE/TESTS.md` exists).** Tests written by the implementer per TESTS.md must be executable in the per-task acceptance check (step 8.5). The exact run command depends on the repo: `cargo test --test <name>` / `cargo nextest run -E 'test(<name>)'` / `pytest <path> -k <name>` / `pnpm test <name>` / etc. Look for an existing cache at `$BASE/test-runner.json`:
@@ -122,7 +156,52 @@ Both flags are inert for legacy (single-slug) plans and only affect tree-rooted 
      {"framework": "<pytest|cargo|jest|...>", "cmd_template": "<template>", "set_at": "<ISO ts>"}
      ```
    This is asked exactly once per slug; it's a per-plan cache so different plans can target different test frameworks.
-8. **Usage-limit guard policy.** Read env `Z_HARNESS_PAUSE_AT_PCT` (default `90`). At each batch boundary, check whether Claude Code surfaces current usage %. If ≥ this threshold: emit a `usage_pause` event, push-notify ("Usage at <N>%; pausing. Reply or re-invoke `/z-implement-all` to resume."), finalize the loop cleanly (no new dispatch; in-flight tasks complete), and exit. Re-invocation picks up from current TASKS.md state — no manual recovery needed.
+
+## Compaction breakpoint policy
+
+High-context runs (many tasks, long wall time) accumulate orchestrator context pressure. These breakpoints fire at natural settle points — never mid-batch — so the user can `/clear` and resume with a fresh context window. The harness's durable state lives in TASKS.md, making `/clear` safe at any batch boundary.
+
+**Env vars:**
+- `Z_IMPLEMENT_PAUSE_TASKS` (default `5`) — number of completed (`[x]`) tasks since last pause that triggers a breakpoint.
+- `Z_IMPLEMENT_PAUSE_MINUTES` (default `30`) — wall minutes since last pause (or run start) that triggers a breakpoint.
+- Either env var set to `0` disables that trigger; both `0` disables compaction breakpoints entirely for this command.
+
+**Counters (orchestrator-side, in-memory; reset on every pause and on re-invocation):**
+- `tasks_since_pause`: incremented when a task transitions to `[x]` (done). **Not** incremented on retries (a single task with 3 retries counts as 1 completion). **Not** incremented when a task is rolled back to `[ ]` after a halt or abandon. A task surfaced as a halt and explicitly deferred by the user (left `[ ]` with a `**Note:**`) also does not increment — only `[x]` transitions count.
+- `pause_clock_start`: epoch seconds, set at run start and reset on every pause.
+
+**Trigger check (batch-settle only):** At the end of each batch — after all in-flight task tracks reach terminal status, after the atomic TASKS.md write, after the `batch_done` event is emitted, and after all halt signals from the batch have been surfaced and resolved or deferred by the user — evaluate:
+
+```
+Z_IMPLEMENT_PAUSE_TASKS="${Z_IMPLEMENT_PAUSE_TASKS:-5}"
+Z_IMPLEMENT_PAUSE_MINUTES="${Z_IMPLEMENT_PAUSE_MINUTES:-30}"
+NOW="$(date +%s)"
+WALL_MINUTES=$(( (NOW - pause_clock_start) / 60 ))
+
+if [ "$Z_IMPLEMENT_PAUSE_TASKS" -gt 0 ] && [ "$tasks_since_pause" -ge "$Z_IMPLEMENT_PAUSE_TASKS" ]; then
+    TRIGGER="task_count"
+elif [ "$Z_IMPLEMENT_PAUSE_MINUTES" -gt 0 ] && [ "$WALL_MINUTES" -ge "$Z_IMPLEMENT_PAUSE_MINUTES" ]; then
+    TRIGGER="wall_time"
+else
+    TRIGGER=""
+fi
+```
+
+**On trigger:** count the remaining `[ ]` tasks in `$TASKS_FILE` as `PENDING_REMAINING`. Emit:
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" compaction_pause \
+  "$(printf '{"trigger":"%s","tasks_since_pause":%d,"wall_minutes_since_pause":%d,"pending_remaining":%d}' \
+     "$TRIGGER" "$tasks_since_pause" "$WALL_MINUTES" "$PENDING_REMAINING")"
+```
+
+Then push-notify (regardless of `Z_HARNESS_NOTIFY` value — this is a hard pause):
+
+> "Compaction breakpoint: `<N>` tasks completed (or `<M>` min wall). `<K>` pending tasks remain. Run `/clear`, then re-invoke `/z-implement-all` to resume from TASKS.md. Use `/compact` instead if you need chat history for debugging."
+
+Finalize the loop cleanly: do **not** dispatch any new task. Exit with status 0. On the next `/z-implement-all` invocation, counters reset — if the user ran `/clear`, context is fresh and a new window is correct. If they did not `/clear`, they chose to forgo the breakpoint's benefit; the run proceeds with a new window.
+
+**No trigger:** continue to the next outer loop iteration (step 1).
 
 ## Parallelism (read first)
 
@@ -147,11 +226,16 @@ These exist because the T006 saga (4 attempts spanning ~20 wall-clock hours, eac
 
 ## Main loop
 
-Repeat until no eligible task remains or you halt:
+Repeat until one of the following three exit conditions is met:
+1. **No eligible task remaining** — all `[ ]` tasks are blocked, skip-flagged, or done; jump to Finalize.
+2. **Hard halt from collected user-blocking findings** — a `spec_problem`, `decision_needed`, `needs_clarification`, or repeated review failure that the user did not resolve; jump to Finalize.
+3. **Compaction trigger fired** (step 8 sub-step 6) — emit `compaction_pause`, push-notify, and exit without running Finalize. Resume on next invocation.
+
+Only conditions (1) and (2) lead to the Finalize block. Condition (3) exits immediately after the push notification.
 
 ### 1. Pick next task
 
-Re-read `TASKS.md`. Build a quick eligibility check:
+Re-read `$TASKS_FILE`. Build a quick eligibility check:
 
 - Status is `[ ]` (pending)
 - **Every** dependency listed under "Depends on" is `[x]` (done) — go by task-level deps, not phase headings (phases mislead — e.g. T006 depends on T010+T011 even though they're in different phases)
@@ -188,7 +272,7 @@ Critical: **never retry a skip-flagged task in the same run** unless the user pi
 
 ### 3. Mark in-progress
 
-Edit `$BASE/TASKS.md`: flip the chosen task's `[ ]` to `[~]`. Log:
+Edit `$TASKS_FILE`: flip the chosen task's `[ ]` to `[~]`. Log:
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tasks/<task-id>" task_start '{"id":"<task-id>"}'
 ```
@@ -247,7 +331,7 @@ The precheck is cheap (≤30s) and saves 30-60 minutes per spec-drift incident �
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
   subagent_type="implementer",
   description="Implement <task-id>",
-  prompt="<task-id>\n\n<task block verbatim from TASKS.md>\n\n$BASE: <abs path>  (read SPEC.md / PLAN.md yourself from here)\nRepo root: <abs path>\nrelevant_docs (paths — Read these for cross-file invariants and consumer contracts): <paths from step 4b>\ntests_md_path: <$BASE/TESTS.md if it exists, else empty>  (if the task block contains a **Tests:** line, Read TESTS.md and produce test code for each listed TEST-NNN at its Target file path, in the same diff as the production code)"
+  prompt="<task-id>\n\n<task block verbatim from $TASKS_FILE>\n\n$BASE: <abs path>  (read SPEC.md / PLAN.md yourself from here)\nRepo root: <abs path>\nrelevant_docs (paths — Read these for cross-file invariants and consumer contracts): <paths from step 4b>\ntests_md_path: <$BASE/TESTS.md if it exists, else empty>  (if the task block contains a **Tests:** line, Read TESTS.md and produce test code for each listed TEST-NNN at its Target file path, in the same diff as the production code)"
 )
 ```
 
@@ -386,7 +470,16 @@ If `$BASE/test-runner.json` is absent OR the task block has no `**Tests:**` line
 
 ### 8. Mark done
 
-1. Flip `[~]` to `[x]` in `$BASE/TASKS.md`. Add a one-line completion note (e.g. "T004 done; reviewer flagged 1 minor (deferred); 3/3 tests passed").
+0. **Process `cross_task_notes` (before flipping status).** If the implementer's return includes a non-empty `cross_task_notes` list, iterate it. For each entry `{task_id, note}`:
+   - Look up `task_id` in `$TASKS_FILE`. If no task block with that ID is found, log a warning event and continue — do **not** fail the producing task:
+     ```bash
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tasks/<producing-task-id>" cross_task_note_target_missing \
+       "$(printf '{"producer":"%s","target":"%s","note":"%s"}' "<producing-id>" "<task_id>" "<note>")"
+     ```
+   - If the target task block is found, append `**Note:** <note>` as a new line at the end of that task block (before the next `## T` heading or end of file). This write is part of the same atomic TASKS.md update in sub-step 1.
+   - If `cross_task_notes` is absent or empty, this step is a no-op.
+
+1. Flip `[~]` to `[x]` in `$TASKS_FILE`. Add a one-line completion note (e.g. "T004 done; reviewer flagged 1 minor (deferred); 3/3 tests passed").
 2. Write per-task summary file `$BASE/archive/tasks/<task-id>/SUMMARY.md` with outcome + counts. Future references to this task pull from the file rather than re-loading the full reviewer return into main thread.
 3. Log:
 ```bash
@@ -396,13 +489,16 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tas
 ```
 (`tests_passed`/`tests_failed` are 0 if the task had no `**Tests:**` line.)
 4. If `Z_HARNESS_NOTIFY=all`: push-notify per-task. (For `approval_only` default: only notify on halts.)
-5. Loop to step 1.
+5. Increment `tasks_since_pause` by 1 (this task reached `[x]`; retries and rollbacks do not count).
+6. **Batch-settle compaction check (once per batch, after all tracks finish).** When all parallel tracks in this outer iteration have completed (all have reached terminal status, the atomic TASKS.md write is done, `batch_done` is emitted, and all halt signals have been surfaced and resolved or deferred by the user), run the trigger check documented in the "Compaction breakpoint policy" section above. If a trigger fires: emit the `compaction_pause` event, push-notify, and exit cleanly with no new dispatch. If no trigger fires: continue to step 1.
+
+   If pending tasks remain but the loop exits due to a compaction trigger, the Finalize section is **skipped** — the push notification text is sufficient, and Finalize's "no more eligible tasks" summary would be misleading (tasks are not blocked, just paused).
 
 ## Finalize
 
 When the loop exits (no more eligible tasks, or you halted):
 
-1. Re-read `TASKS.md` for final counts: `done`, `pending`, `in_progress`, `skipped`.
+1. Re-read `$TASKS_FILE` for final counts: `done`, `pending`, `in_progress`, `skipped`.
 2. Write a summary message to the user:
    - Counts
    - Skipped tasks with reasons (REMOTE / wall-clock / human action required)
@@ -496,6 +592,196 @@ jq -r '[.ts, .kind, (.id//.run//"")] | @tsv' "$BASE/metrics.jsonl" \
 ```
 
 If gaps line up across multiple parallel tracks → session pause (benign). If only one track stalls → that subagent is stuck (real bug; escalate).
+
+## Phase 9 — Memory review (auto)
+
+This phase fires once per run, after the Finalize push-notify, before the session ends. It is a soft phase: all failure paths are silent skips — no halt, no retry.
+
+1. **Run the memory-review helper:**
+
+   ```bash
+   MEMORY_REVIEW_OUT="$(bash scripts/run-memory-review.sh "$RUN" "implement-all")"
+   MEMORY_REVIEW_FIRST_LINE="$(printf '%s' "$MEMORY_REVIEW_OUT" | head -1)"
+   ```
+
+2. **Skip path — first line is `STATUS: skipped <reason>`:**
+
+   ```bash
+   if [[ "$MEMORY_REVIEW_FIRST_LINE" == STATUS:\ skipped* ]]; then
+     SKIP_REASON="${MEMORY_REVIEW_FIRST_LINE#STATUS: skipped }"
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$PHASE9_TOKEN" \
+       "$(printf '{"phase":9,"name":"memory_review","skipped":true,"skip_reason":"%s"}' "$SKIP_REASON")"
+     # exit phase quietly — no push-notify
+   fi
+   ```
+
+   (Emit `PHASE9_TOKEN` just before the helper call: `PHASE9_TOKEN="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" start "phase9" memory_review '{}')"`)
+
+3. **Ready path — first line is `STATUS: ready`:** parse the three artifact paths from subsequent lines:
+
+   ```bash
+   CUMULATIVE_DIFF_PATH="$(printf '%s' "$MEMORY_REVIEW_OUT" | sed -n '2p')"
+   SPEC_PATH="$(printf '%s' "$MEMORY_REVIEW_OUT" | sed -n '3p')"
+   TAGS_PATH="$(printf '%s' "$MEMORY_REVIEW_OUT" | sed -n '4p')"
+   RUN_DIR="$(dirname "$CUMULATIVE_DIFF_PATH")"
+   SLUG_FOR_DESC="${Z_HARNESS_SLUG:-$(basename "$BASE")}"
+   ```
+
+4. **Dispatch the review-agent:**
+
+   ```
+   <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+     subagent_type="review-agent",
+     description="Memory review for <SLUG_FOR_DESC>",
+     prompt="run_dir: <RUN_DIR>
+   cumulative_diff_path: <CUMULATIVE_DIFF_PATH>
+   spec_path: <SPEC_PATH>
+   tags_path: <TAGS_PATH>
+   index_path: docs/llm/INDEX.json
+   run_id: <RUN>
+   parent_command: implement-all"
+   )
+   ```
+
+5. **Parse agent return — extract single fenced ```json block:**
+
+   ```python
+   import re, json
+   raw = agent_return_text
+   m = re.search(r'```json\s*([\s\S]*?)```', raw)
+   if not m:
+       # no fenced block → review_agent_failed
+       raise ValueError("no_fenced_block")
+   try:
+       candidates = json.loads(m.group(1))
+   except json.JSONDecodeError as e:
+       raise ValueError("json_parse_error") from e
+   ```
+
+   - **Parse failure (malformed output — no fenced block or invalid JSON):**
+     ```bash
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" review_agent_malformed \
+       "$(printf '{"run":"%s","excerpt":"%s"}' "$RUN" "$(printf '%s' "$raw" | head -c 200 | tr '"' "'")")"
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$PHASE9_TOKEN" \
+       "$(printf '{"phase":9,"name":"memory_review","skipped":true,"skip_reason":"malformed_output"}')"
+     ```
+     Push-notify: "Memory review skipped (malformed output). Check `agents/review-agent.md` or run `/z-stats` to see recent review_agent_failed events."
+     Exit phase.
+
+   - **Agent errored / no fenced block:**
+     ```bash
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" review_agent_failed \
+       "$(printf '{"run":"%s","reason":"no_fenced_block"}' "$RUN")"
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$PHASE9_TOKEN" \
+       "$(printf '{"phase":9,"name":"memory_review","skipped":true,"skip_reason":"agent_error"}')"
+     ```
+     Push-notify: "Memory review skipped (malformed output). Check `agents/review-agent.md` or run `/z-stats` to see recent review_agent_failed events."
+     Exit phase.
+
+6. **Empty candidates (`[]`):**
+
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" review_agent_call \
+     "$(printf '{"run":"%s","parent_command":"implement-all","candidates_emitted":0,"accepted":0}' "$RUN")"
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$PHASE9_TOKEN" \
+     "$(printf '{"phase":9,"name":"memory_review","skipped":false,"candidates_emitted":0,"candidates_accepted":0,"candidates_skipped":0}')"
+   ```
+   Exit phase quietly — no push-notify.
+
+7. **Candidates ≥ 1:**
+
+   a. **Persist to JSONL:**
+      ```bash
+      CANDIDATES_FILE="$RUN_DIR/memory-candidates.jsonl"
+      python3 -c '
+      import json, sys
+      candidates = json.loads(sys.argv[1])
+      with open(sys.argv[2], "w") as f:
+          for c in candidates:
+              f.write(json.dumps(c) + "\n")
+      ' "$CANDIDATES_JSON_STR" "$CANDIDATES_FILE"
+      ```
+
+   b. **Log `review_agent_call`** (with token counts from Agent return usage block):
+      ```bash
+      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" review_agent_call \
+        "$(printf '{"run":"%s","parent_command":"implement-all","subagent_model":"haiku","subagent_input_tokens":%d,"subagent_output_tokens":%d,"candidates_emitted":%d,"accepted":"<filled-in-later>"}' \
+           "$RUN" "$INPUT_TOKENS" "$OUTPUT_TOKENS" "$N_CANDIDATES")"
+      ```
+
+   c. **Push-notify `memory_candidates_ready`:**
+      ```bash
+      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" memory_candidates_ready \
+        "$(printf '{"run":"%s","candidates_emitted":%d}' "$RUN" "$N_CANDIDATES")"
+      ```
+      Push-notify: "Memory review produced `<N>` candidate(s) — please review."
+
+   d. **Sequential AskUserQuestion per candidate (max 3 candidates):**
+
+      For each candidate (index `i`, 0-based; stop after 3):
+      ```
+      <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+        title: "Memory candidate <i+1> of <total> — <candidate.candidate_kind>",
+        body: "**Suggested concept:** `<candidate.suggested_concept_slug>`\n\n**Type:** `<candidate.type>`\n\n**Text:** <candidate.text>\n\n**Tags:** <candidate.tags joined by ', '>\n\n**Rationale:** <candidate.rationale>\n\n**Evidence:** <candidate.evidence_citations joined by ', '>",
+        options: [
+          { id: "accept", label: "Accept — persist this candidate" },
+          { id: "edit",   label: "Edit — modify before persisting" },
+          { id: "skip",   label: "Skip (provide one-word reason)" },
+          { id: "skip_all", label: "Skip all remaining" }
+        ]
+      )
+      ```
+
+      - **Accept:**
+        ```bash
+        printf '%s' "$CANDIDATE_JSON" | bash -c \
+          'bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-skill.sh" z-suggest-memory \
+             --concept "<candidate.suggested_concept_slug>" \
+             --source "incident:<RUN>" \
+             --from-candidate-json -'
+        ```
+        On `STATUS: ok` → increment `ACCEPTED`.
+        On `STATUS: skipped` or `STATUS: bad_input` → log:
+        ```bash
+        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" review_agent_suggest_failed \
+          "$(printf '{"run":"%s","candidate_index":%d,"reason":"%s"}' "$RUN" "$i" "<reason>")"
+        ```
+        Continue to next candidate.
+
+      - **Edit:** Surface the candidate fields. Collect user edits. Apply edits to the candidate JSON in-memory. Re-present as Accept and dispatch `/z-suggest-memory` with the edited JSON piped via `--from-candidate-json -`.
+
+      - **Skip (one-word reason):** Ask the user for the reason word (follow-up prompt or inline if the UI allows). Then:
+        ```bash
+        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" review_candidate_skipped \
+          "$(printf '{"run":"%s","candidate_index":%d,"reason":"%s"}' "$RUN" "$i" "<user_reason>")"
+        ```
+        Increment `SKIPPED`. Continue to next candidate.
+
+      - **Skip-all-remaining:**
+        ```bash
+        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" review_skip_all \
+          "$(printf '{"run":"%s","candidates_remaining":%d}' "$RUN" "$((N_CANDIDATES - i))")"
+        ```
+        Break the loop.
+
+8. **Final `phase_end`:**
+
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$PHASE9_TOKEN" \
+     "$(printf '{"phase":9,"name":"memory_review","skipped":false,"candidates_emitted":%d,"candidates_accepted":%d,"candidates_skipped":%d}' \
+        "$N_CANDIDATES" "$ACCEPTED" "$SKIPPED")"
+   ```
+
+**Event-kind reference for this phase:**
+
+| Event kind | When emitted |
+|---|---|
+| `review_agent_call` | Agent returned candidates (including empty-array case) |
+| `review_agent_failed` | Agent returned without a fenced block |
+| `review_agent_malformed` | Agent returned with a fenced block that failed `json.loads` |
+| `memory_candidates_ready` | N ≥ 1 candidates; push-notify fired |
+| `review_candidate_skipped` | User skipped a single candidate with a reason |
+| `review_skip_all` | User chose Skip-all-remaining |
 
 ## Hard rules
 

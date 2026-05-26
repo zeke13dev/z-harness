@@ -1,0 +1,17 @@
+ README.md                | 74 ++++++++++++++++++++++++++++++++++++++++++------
+ docs/llm/INDEX.json      | 20 +++++++++++--
+ scripts/export-codex.py  |  8 +++++-
+ scripts/export-cursor.py |  8 +++++-
+ 4 files changed, 97 insertions(+), 13 deletions(-)
+
+=== NEW FILES ===
+commands/z-uplift.md                                              2742 lines
+skills/z-uplift/SKILL.md                                          40 lines
+docs/llm/z-uplift.json                                            106 lines
+docs/human/z-uplift.md                                            80 lines
+exports/cursor/.cursor/rules/z-uplift.mdc                         2709 lines
+exports/cursor/.cursor/rules/z-uplift-skill.mdc                   39 lines
+exports/codex/prompts/z-uplift.md                                 2706 lines
+exports/codex/prompts/z-uplift-skill.md                           36 lines
+exports/agy/.agent/workflows/z-uplift.md                          2740 lines
+exports/agy/.agent/skills/z-uplift/SKILL.md                       39 lines

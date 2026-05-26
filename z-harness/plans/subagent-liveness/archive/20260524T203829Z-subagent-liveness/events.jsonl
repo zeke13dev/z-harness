@@ -1,0 +1,3 @@
+{"ts":"2026-05-24T20:38:29Z","run":"20260524T203829Z-subagent-liveness","kind":"light_run_start","slug":"subagent-liveness","z_harness_version":"380aca6","z_harness_dirty":true,"z_harness_branch":"main","task":"subagent liveness/progress system"}
+{"ts":"2026-05-24T23:25:00Z","run":"20260524T203829Z-subagent-liveness","kind":"timeout_availability","slug":"subagent-liveness","available":true,"command":"/opt/homebrew/bin/timeout"}
+{"ts":"2026-05-24T20:40:00Z","run":"20260524T203829Z-subagent-liveness","kind":"consult_start","slug":"subagent-liveness","role":"consultant_primary","mode":"light-fix","provider":"codex"}

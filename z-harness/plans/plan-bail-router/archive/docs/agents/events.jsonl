@@ -1,0 +1,2 @@
+{"ts":"2026-05-25T08:20:50Z","run":"docs/agents","kind":"doc_update_start","slug":"plan-bail-router","concept":"agents","reason":"stale","mode":"dry-run"}
+{"ts":"2026-05-25T08:25:25Z","run":"docs/agents","kind":"doc_update_end","slug":"plan-bail-router","concept":"agents","status":"ok","subagent_model":"sonnet","wall_ms":275338}

@@ -8,12 +8,13 @@
 # their `run_start` events so post-run analysis can correlate behavior
 # with the exact plugin commit.
 #
-# Resolves the plugin dir via $ANTIGRAVITY_PLUGIN_ROOT or $CLAUDE_PLUGIN_ROOT
-# or by walking up from this script's own location.
+# Resolves the plugin dir via $Z_HARNESS_PLUGIN_ROOT,
+# $ANTIGRAVITY_PLUGIN_ROOT, or $CLAUDE_PLUGIN_ROOT, or by walking up from this
+# script's own location.
 
 set -euo pipefail
 
-PLUGIN_ROOT="${ANTIGRAVITY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}}"
+PLUGIN_ROOT="${Z_HARNESS_PLUGIN_ROOT:-${ANTIGRAVITY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}}}"
 
 cd "$PLUGIN_ROOT" 2>/dev/null || {
   printf '{"z_harness_version":"unknown","z_harness_dirty":false,"z_harness_branch":"unknown","error":"plugin_root_missing"}'

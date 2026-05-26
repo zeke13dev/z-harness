@@ -1,0 +1,81 @@
+--- docs/llm/agents.json	2026-05-24 17:22:14
++++ z-harness/archive/docs/20260525T081955Z-docs/proposed/agents.llm.json	2026-05-25 01:24:34
+@@ -1,6 +1,6 @@
+ {
+   "concept": "agents",
+-  "last_updated": "2026-05-24",
++  "last_updated": "2026-05-25",
+   "covers_spec": "none",
+   "source_file": [
+     "agents/auditor.md",
+@@ -20,38 +20,44 @@
+   ],
+   "confidence": "high",
+   "entry_points": [
+-    {"file": "agents/auditor.md", "line": 1, "symbol": "auditor", "kind": "module", "summary": "Single-dimension read-only auditor; writes findings-<dim>.md; spawned in parallel by /z-audit."},
+-    {"file": "agents/cluster-planner.md", "line": 1, "symbol": "cluster-planner", "kind": "module", "summary": "Sub-planner for one /z-plan-split cluster; produces SPEC+PLAN+TASKS, escalates risky decisions."},
+-    {"file": "agents/complexity-classifier.md", "line": 1, "symbol": "complexity-classifier", "kind": "module", "summary": "Haiku; classifies one task block into low|medium|high complexity tier for model routing."},
+-    {"file": "agents/consultant-primary.md", "line": 1, "symbol": "consultant-primary", "kind": "module", "summary": "Haiku proxy; resolves primary consultant provider via resolve-provider.sh; 11 modes; emits consult_start for liveness; uses check-timeout.sh."},
+-    {"file": "agents/consultant-secondary.md", "line": 1, "symbol": "consultant-secondary", "kind": "module", "summary": "Haiku proxy; resolves secondary consultant provider (must differ from primary); same 11 modes as consultant-primary."},
+-    {"file": "agents/doc-fetcher.md", "line": 1, "symbol": "doc-fetcher", "kind": "module", "summary": "Haiku; reads INDEX.json + concept JSONs + optional MEMORIES-FLAT.md rg pass; returns <=2 KB synthesis."},
+-    {"file": "agents/doc-updater.md", "line": 1, "symbol": "doc-updater", "kind": "module", "summary": "Sonnet; refreshes one concept's human-tier md + LLM-tier JSON; dry-run by default; copies memories[] verbatim."},
+-    {"file": "agents/external-lookup.md", "line": 1, "symbol": "external-lookup", "kind": "module", "summary": "Haiku retrieval worker for web/API lookups; <=3 KB STATUS-headed output per lookup-contract.json; verb-blocklist enforced."},
+-    {"file": "agents/implementer.md", "line": 1, "symbol": "implementer", "kind": "module", "summary": "Sonnet/Opus; implements one task block (canonical or promoted review ID); runs common-critique self-check."},
+-    {"file": "agents/mr-reviewer.md", "line": 1, "symbol": "mr-reviewer", "kind": "module", "summary": "Sonnet; code-quality (not correctness) reviewer; fans out to consultant voices; deduplicates by (file,category,normalized_text); consensus tier-bumps; Jaccard dismissal matching."},
+-    {"file": "agents/planning-router.md", "line": 1, "symbol": "planning-router", "kind": "module", "summary": "Haiku; read-only advisory router for ambiguous plan-family route decisions; requires exact parseable return shape and explicit split preconditions."},
+-    {"file": "agents/remote-runner.md", "line": 1, "symbol": "remote-runner", "kind": "module", "summary": "Haiku; rsyncs repo to remote sandbox, runs cargo/python builds, read-only DB/log queries; needs-sandbox vs read-only routing."},
+-    {"file": "agents/reviewer.md", "line": 1, "symbol": "reviewer", "kind": "module", "summary": "Haiku proxy; resolves reviewer provider via resolve-provider.sh; scrutinizes diffs for bugs/spec violations; emits review_start for liveness; uses check-timeout.sh."},
+-    {"file": "agents/spec-precheck.md", "line": 1, "symbol": "spec-precheck", "kind": "module", "summary": "Haiku; pre-flight verifier; checks SPEC factual claims (symbols, paths, table names) exist in codebase before implementer runs."}
++    {"file": "agents/auditor.md", "line": 1, "symbol": "auditor", "kind": "module", "summary": "Read-only single-dimension auditor; writes findings file."},
++    {"file": "agents/cluster-planner.md", "line": 1, "symbol": "cluster-planner", "kind": "module", "summary": "/z-plan-split leaf planner; writes cluster SPEC/PLAN/TASKS."},
++    {"file": "agents/complexity-classifier.md", "line": 1, "symbol": "complexity-classifier", "kind": "module", "summary": "Classifies one task low|medium|high for model routing."},
++    {"file": "agents/consultant-primary.md", "line": 1, "symbol": "consultant-primary", "kind": "module", "summary": "Primary provider proxy for consult/review modes."},
++    {"file": "agents/consultant-secondary.md", "line": 1, "symbol": "consultant-secondary", "kind": "module", "summary": "Secondary provider proxy; same modes as primary."},
++    {"file": "agents/doc-fetcher.md", "line": 1, "symbol": "doc-fetcher", "kind": "module", "summary": "Read-only docs context fetcher over INDEX/concept JSON/memories."},
++    {"file": "agents/doc-updater.md", "line": 1, "symbol": "doc-updater", "kind": "module", "summary": "Refreshes one concept doc pair; preserves memories verbatim."},
++    {"file": "agents/external-lookup.md", "line": 1, "symbol": "external-lookup", "kind": "module", "summary": "Web/API retrieval worker; emits lookup-contract envelope."},
++    {"file": "agents/implementer.md", "line": 1, "symbol": "implementer", "kind": "module", "summary": "Implements exactly one task block and returns structured status."},
++    {"file": "agents/mr-reviewer.md", "line": 1, "symbol": "mr-reviewer", "kind": "module", "summary": "Code-quality branch diff reviewer; returns findings JSON."},
++    {"file": "agents/planning-router.md", "line": 1, "symbol": "planning-router", "kind": "module", "summary": "Read-only advisory router for ambiguous planning decisions."},
++    {"file": "agents/remote-runner.md", "line": 1, "symbol": "remote-runner", "kind": "module", "summary": "Mechanical remote verifier for builds, logs, disk, read-only DB."},
++    {"file": "agents/reviewer.md", "line": 1, "symbol": "reviewer", "kind": "module", "summary": "Provider proxy for task correctness/spec review."},
++    {"file": "agents/spec-precheck.md", "line": 1, "symbol": "spec-precheck", "kind": "module", "summary": "Preflight verifier for SPEC references before implementation."}
+   ],
+   "depends_on": ["scripts", "lookup-contract"],
+   "consumed_by": ["commands", "skills"],
+   "invariants": [
+-    "Subagents are isolated workers with no shared mutable state - spawned fresh per invocation.",
+-    "consultant-primary, consultant-secondary, and reviewer resolve their provider at runtime via scripts/resolve-provider.sh - they are not hard-coded to any specific LLM.",
+-    "doc-updater must preserve memories[] verbatim from any pre-existing concept JSON.",
+-    "external-lookup enforces the verb-blocklist before every Bash invocation; a matched pattern -> STATUS: refused, not silent execution.",
+-    "consultant-primary, consultant-secondary, and reviewer emit consult_start / review_start BEFORE the provider call so liveness.sh can detect hangs.",
+-    "planning-router is advisory only: callers own route artifacts, plan_route_decision telemetry, AskUser handoffs, and final routing decisions."
++    "Each agent is spawned fresh per invocation; callers pass all required context.",
++    "Commands/skills own orchestration, user interaction, artifact writes, and final routing decisions.",
++    "consultant-primary, consultant-secondary, and reviewer resolve providers via scripts/resolve-provider.sh.",
++    "Proxy agents emit start telemetry before provider calls so liveness checks can detect hangs.",
++    "doc-updater must preserve existing memories[] verbatim and never author memories.",
++    "external-lookup must follow docs/llm/lookup-contract.json and refuse mutating commands.",
++    "planning-router is read-only and advisory; malformed or unsafe routing returns ask_user/bad_input.",
++    "mr-reviewer reviews quality, not correctness, and returns JSON for the orchestrator to write.",
++    "remote-runner executes mechanical checks only; interpretive debugging returns to the caller.",
++    "cluster-planner refuses nested plan-split outputs when an ancestor MANIFEST.md exists."
+   ],
+   "gotchas": [
+-    "codex-consultant.md, codex-reviewer.md, and gemini-consultant.md no longer exist - replaced by consultant-primary.md, consultant-secondary.md, reviewer.md with runtime provider resolution.",
+-    "check-timeout.sh is sourced (not called) by the three proxy agents so $TIMEOUT_CMD is set in the agent's shell environment; missing coreutils means $TIMEOUT_CMD is empty but calls still proceed.",
+-    "mr-reviewer never writes MR-REVIEW.md - the orchestrator does that from the returned JSON block.",
+-    "cluster-planner anti-nesting guard fires before any repo reads; any ancestor MANIFEST.md causes immediate refusal.",
+-    "external-lookup output contract is defined in docs/llm/lookup-contract.json; the JSON wins over the agent's inline prose on conflicts.",
+-    "planning-router distinguishes primary route targets (/z-do, /z-plan-light, /z-plan, /z-plan-split, /z-brainstorm, /z-research) from contextual exits (/z-audit-plan, /z-fix, /z-debug, /z-amend, /z-maintain-docs), and returns ask_user for loop-risk or conflicting-signal cases."
++    "codex-consultant.md, gemini-consultant.md, and codex-reviewer.md are stale names.",
++    "check-timeout.sh is sourced by proxy agents; missing timeout/gtimeout leaves TIMEOUT_CMD empty.",
++    "planning-router must not infer missing quantitative signals from filesystem exploration.",
++    "doc-updater dry-run returns proposed docs; /z-maintain-docs decides whether to write them.",
++    "external-lookup's canonical contract is lookup-contract.json, not only inline agent prose.",
++    "remote-runner refuses DB writes, real-money operations, destructive ops, and interpretive work.",
++    "mr-reviewer never writes MR-REVIEW.md; callers parse its fenced JSON response.",
++    "spec-precheck validates factual SPEC references, not design quality or runtime semantics."
+   ],
+   "memories": []
+ }

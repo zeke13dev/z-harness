@@ -1,0 +1,2 @@
+{"ts":"2026-05-25T08:21:14Z","run":"docs/skills","kind":"doc_update_start","slug":"plan-bail-router","concept":"skills","reason":"stale","mode":"dry-run"}
+{"ts":"2026-05-25T08:25:37Z","run":"docs/skills","kind":"doc_update_end","slug":"plan-bail-router","concept":"skills","status":"ok","subagent_model":"sonnet","wall_ms":263494}

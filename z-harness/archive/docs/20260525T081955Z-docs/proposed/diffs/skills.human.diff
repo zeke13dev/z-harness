@@ -1,0 +1,97 @@
+--- docs/human/skills.md	2026-05-24 17:21:46
++++ z-harness/archive/docs/20260525T081955Z-docs/proposed/skills.human.md	2026-05-25 01:24:20
+@@ -1,57 +1,56 @@
+ # Skills
+ 
+-> Last updated: 2026-05-24
++> Last updated: 2026-05-25
+ > Covers source: skills/z-amend/SKILL.md, skills/z-audit-plan/SKILL.md, skills/z-brainstorm/SKILL.md, skills/z-debug/SKILL.md, skills/z-do/SKILL.md, skills/z-implement-all/SKILL.md, skills/z-implement-next/SKILL.md, skills/z-improve/SKILL.md, skills/z-init-docs/SKILL.md, skills/z-maintain-docs/SKILL.md, skills/z-plan-light/SKILL.md, skills/z-plan-split/SKILL.md, skills/z-plan/SKILL.md, skills/z-research/SKILL.md, skills/z-review-all/SKILL.md, skills/z-stats/SKILL.md, skills/z-suggest-memory/SKILL.md, skills/z-test/SKILL.md
+ 
+ ## Overview
+ 
+-The skills concept covers the core operational guidelines, detailed checklists, and phase-by-phase procedures that govern every z-harness slash command execution. Each slash command maps to a matching skill directory containing a SKILL.md file. These documents are the ultimate authority on how planning, implementation, review, debugging, and documentation-maintenance runs are structured — including exact telemetry event shapes, subagent dispatch patterns, user-gate rules, and hard safety caps.
++The skills concept covers the operational playbooks behind z-harness slash commands. Each `skills/<name>/SKILL.md` file defines a command's phases, telemetry, user gates, subagent dispatches, output artifacts, and hard safety rules. These files are the practical source of truth for how planning, research, debugging, implementation orchestration, final review, docs maintenance, memory authoring, and statistics reporting should run.
+ 
+-All skills share a common set of infrastructure assumptions established in the 2026-05-24 portable-harness migration: plan artifacts are resolved via `scripts/plan-path.sh` to `$Z_HARNESS_PLAN_DIR` (rather than hardcoded `z-harness/<slug>/` paths), cross-LLM consults use the provider-registry agents `consultant-primary` and `consultant-secondary`, and code review uses the `reviewer` agent. These agent names are stable identifiers that map to actual CLI vendors through the provider registry — skills never reference `gemini-consultant`, `codex-consultant`, or `codex-reviewer` directly.
++The current skill family has converged on a shared route-policy model. Planning and execution skills collect deterministic signals, call the advisory `planning-router` only when those signals conflict, write `route-decision.md`, emit `plan_route_decision`, preserve command-specific telemetry, present an AskUser handoff, and stop rather than auto-running the recommended target. The skills also assume the provider-registry agent names (`consultant-primary`, `consultant-secondary`, `reviewer`), shared scripts for path resolution and logging, and docs/memory maintenance through `doc-updater`, `/z-maintain-docs`, and `/z-suggest-memory`.
+ 
+ ## Key entry points
+ 
+-- `skills/z-amend/SKILL.md:1` — `z-amend` — Amend SPEC/PLAN/TASKS or FIX.md artifacts consistently. Phase 0 discovers the plan slug via `$Z_HARNESS_PLAN_DIR`. Complexity re-classification fires in Phase 6 for any task block whose body changed.
+-- `skills/z-audit-plan/SKILL.md:1` — `z-audit-plan` — Read-only pre-implementation audit of existing plan artifacts. It verifies references and design, runs adversarial consultants, writes PLAN_AUDIT_REPORT.md, and routes to `/z-plan`, `/z-amend`, or `/z-maintain-docs` only through the shared route handoff gate.
+-- `skills/z-brainstorm/SKILL.md:1` — `z-brainstorm` — Parallel pre-plan ideation: three vendor-diverse ideators (Claude + consultant-primary + consultant-secondary) with mandatory anti-bias check, producing BRAINSTORM.md with `chosen_framing`.
+-- `skills/z-debug/SKILL.md:1` — `z-debug` — Heavy hypothesis-tournament debug pipeline. Phase 0 wrong-tool gate redirects to `/z-fix` if user already has a hypothesis. Phases 3a/3b use rounds of parallel consultant hypothesis generation. Phase 9 post-mortem optionally invokes `/z-mr-review` and `/z-suggest-memory`.
+-- `skills/z-do/SKILL.md:1` — `z-do` — Lightest harness on-ramp for plan-less small tasks. Logs to `z-harness/adhoc/`. Codex review via `reviewer` agent is mandatory. Auto-bails at 3 files or non-obvious decisions.
+-- `skills/z-implement-all/SKILL.md:1` — `z-implement-all` — Orchestrates full task queue implementation. Supports `--tasks <path>` fast path for review artifacts (REVIEW-TASKS.md, MR-REVIEW.md). Tree-rooted plan support with MANIFEST.md/SHARED-CONCERNS.md validation gates and `--ack`/`--force-partial` overrides. Hard caps: `MAX_ATTEMPTS=2`, `MAX_TASK_WALL_MS=45min`, `MAX_DISTINCT_HALTS=3` per task.
+-- `skills/z-implement-next/SKILL.md:1` — `z-implement-next` — Single-task implementation. Picks implementer model from the task block's `**Complexity:**` stamp (`low|medium` → Sonnet, `high` → Opus). Single-shot; does not auto-retry on review failure.
+-- `skills/z-improve/SKILL.md:1` — `z-improve` — Post-run retro: analyzes `events.jsonl` friction signals, proposes ≤5 edits to z-harness files, applies accepted edits, then invokes `/z-suggest-memory` with derived `concept_hints`.
+-- `skills/z-init-docs/SKILL.md:1` — `z-init-docs` — Bootstraps the two-tier docs system. Phase 2 spawns `doc-updater` subagents per concept. Phase 4 writes `TAGS.txt` (15-tag controlled seed) and initializes `MEMORIES-FLAT.md` via `scripts/regenerate-memories-flat.py`.
+-- `skills/z-maintain-docs/SKILL.md:1` — `z-maintain-docs` — Refreshes stale docs. Phase 2 spawns `doc-updater` subagents with `dedup_tags: true`. Phase 3 surfaces stale memories and TAG_COLLISIONS. Phase 4.5 regenerates MEMORIES-FLAT.md after every write. Supports `--apply` and `--audit` flags.
+-- `skills/z-plan-light/SKILL.md:1` — `z-plan-light` — Lightweight planner for small fixes. Inline orchestrator implementation (no implementer subagent); Codex review via `reviewer` is non-negotiable. FIX.md is the only artifact. Auto-bails at >5 files or >2 non-obvious decisions.
+-- `skills/z-plan-split/SKILL.md:1` — `z-plan-split` — Pre-emptive scope splitter into 2-6 clusters. Enforces kebab-slug security gate. Phase 4 reconciles file-path overlaps from TASKS.md (canonical) against `FILES_TOUCHED` summary. Writes MANIFEST.md and SHARED-CONCERNS.md. MANIFEST uses stable `cluster_id` (C1…CN) for telemetry and `cluster_slug` for on-disk paths.
+-- `skills/z-plan/SKILL.md:1` — `z-plan` — Full rigorous planning pipeline. Docs-freshness gate checks `INDEX.json` staleness before Phase 1. Explore capped at 3 subagents. Phase 8 complexity-classifier stamps each task in parallel (Haiku).
+-- `skills/z-research/SKILL.md:1` — `z-research` — Terrain-mapping pre-plan research. Cost gate at Phase 0 (up to 3 Explores or 1). Phase 4 bundled cross-LLM critique. RESEARCH.md has mandatory `## No-recommendation` section with locked canonical text.
+-- `skills/z-review-all/SKILL.md:1` — `z-review-all` — Final-gate two-pronged cross-LLM review of cumulative diff. Phase 3.5 runs the full TESTS.md suite across affected modules before consulting LLMs (blocker if any test fails). Promotes findings to REVIEW-TASKS.md.
+-- `skills/z-stats/SKILL.md:1` — `z-stats` — Read-only diagnostic. Shell + jq + awk only; no subagent dispatch; no writes. Phases: plan progress, wall time per phase, token spend by model, recent halts, stall detection, plugin version history, suggested next command.
+-- `skills/z-suggest-memory/SKILL.md:1` — `z-suggest-memory` — Sole authoring path for `memories[]` in concept JSONs. Supports append/edit/delete modes. Validates against memory schema, writes atomically, regenerates MEMORIES-FLAT.md, optionally refreshes human-tier doc. Default outcome is Cancel.
+-- `skills/z-test/SKILL.md:1` — `z-test` — Semantic test-case planner between `/z-plan` and `/z-implement-all`. Risk-ranks tasks on domain criticality, surface area, and test-gap signal. Non-trivial failure classes required; trivial mechanical tests rejected by cross-LLM consult. Writes TESTS.md and cross-links `**Tests:**` lines into TASKS.md.
++- `skills/z-amend/SKILL.md:1` — `z-amend` — Amends SPEC/PLAN/TASKS or FIX.md artifacts while preserving completed-task state; changed task blocks get complexity re-classified.
++- `skills/z-audit-plan/SKILL.md:1` — `z-audit-plan` — Read-only audit of existing plan artifacts; verifies references/design, runs adversarial consultants, and routes contextually when no plan, plan changes, or doc drift blocks confidence.
++- `skills/z-brainstorm/SKILL.md:1` — `z-brainstorm` — Cheap pre-plan ideation with three vendor-diverse ideators, identical scaffolding, anti-bias checks, and BRAINSTORM.md output.
++- `skills/z-debug/SKILL.md:1` — `z-debug` — Heavy unknown-root-cause debugging flow with a wrong-tool gate, hypothesis rounds, fix-gate, verification, and mandatory post-mortem.
++- `skills/z-do/SKILL.md:1` — `z-do` — Plan-less small-task runner with premise check, doc-fetcher grounding, inline implementation, mandatory reviewer gate, and route handoff when scope grows.
++- `skills/z-implement-all/SKILL.md:1` — `z-implement-all` — Full task-queue orchestrator with `--tasks` fast path, tree-rooted MANIFEST/SHARED-CONCERNS gates, spec-precheck, implementer/reviewer batching, hard caps, and compaction breakpoints.
++- `skills/z-implement-next/SKILL.md:1` — `z-implement-next` — Single-task implementation flow; selects Sonnet or Opus from the task's `**Complexity:**` stamp and performs one reviewer pass.
++- `skills/z-improve/SKILL.md:1` — `z-improve` — Post-run retro that reads events/artifacts, proposes up to five harness improvements, applies accepted edits, and then calls `/z-suggest-memory`.
++- `skills/z-init-docs/SKILL.md:1` — `z-init-docs` — Bootstraps docs/human and docs/llm, initializes INDEX files, writes the controlled TAGS.txt seed, and regenerates MEMORIES-FLAT.md.
++- `skills/z-maintain-docs/SKILL.md:1` — `z-maintain-docs` — Refreshes stale docs via doc-updater, validates memory preservation, optionally audits proposals, surfaces stale memories and tag collisions, and regenerates MEMORIES-FLAT.md after writes.
++- `skills/z-plan-light/SKILL.md:1` — `z-plan-light` — Lightweight planner for small fixes; produces FIX.md, runs bundled consultant review, implements inline, and uses a mandatory reviewer gate.
++- `skills/z-plan-split/SKILL.md:1` — `z-plan-split` — Splits large topics into 2-6 clusters, enforces slug safety, plans leaves in parallel, reconciles file overlap, and writes MANIFEST.md plus SHARED-CONCERNS.md.
++- `skills/z-plan/SKILL.md:1` — `z-plan` — Full rigorous planning flow with docs-freshness route gate, doc-fetcher/Explore grounding, decisions, bundled consult, SPEC/PLAN/TASKS, and complexity stamps.
++- `skills/z-research/SKILL.md:1` — `z-research` — Terrain-mapping flow with cost gate, doc-fetcher-first scaffolding, up to three Explore calls, critique, citations, and a mandatory no-recommendation invariant.
++- `skills/z-review-all/SKILL.md:1` — `z-review-all` — Final-gate review of cumulative diff against plan artifacts; includes resume state, optional TESTS.md suite gate, pre-consult compaction pause, and REVIEW-TASKS promotion.
++- `skills/z-stats/SKILL.md:1` — `z-stats` — Read-only shell/jq/awk diagnostic for progress, wall time, token estimates, halts, stalls, version history, and next-command suggestions.
++- `skills/z-suggest-memory/SKILL.md:1` — `z-suggest-memory` — Sole authoring path for `memories[]`; supports append/edit/delete, validates memory schema, writes atomically, regenerates MEMORIES-FLAT.md, and optionally refreshes human docs.
++- `skills/z-test/SKILL.md:1` — `z-test` — Semantic test planner that risk-ranks plan tasks, drafts non-trivial failure-class tests, consults both LLMs, writes TESTS.md, and cross-links task blocks.
+ 
+ ## How it interacts with others
+ 
+-- `commands` — Slash commands are the user-facing triggers that invoke the skill pipelines defined here.
+-- `agents` — Skills define the exact subagent types, models, and prompt shapes dispatched during runs. The provider-registry agents (`consultant-primary`, `consultant-secondary`, `reviewer`) abstract CLI vendor selection away from skill logic; `planning-router` is an advisory Haiku helper used only when deterministic route signals conflict.
+-- `scripts` — Skills call `plan-path.sh` to resolve `$Z_HARNESS_PLAN_DIR`, `log-event.sh` for telemetry, `version.sh` for run stamps, `log-phase.sh` for timing, and `regenerate-memories-flat.py` for memory flat-file sync.
+-- `z-amend` remains the authority for applying review-generated spec-gap proposals; promoted amendment tasks in REVIEW-TASKS.md are inputs to the amendment workflow, not permission for implementers to edit planning artifacts autonomously.
+-- Planning skills mirror the shared route classes: primary routes are `/z-do`, `/z-plan-light`, `/z-plan`, `/z-plan-split`, `/z-brainstorm`, and `/z-research`; contextual exits are `/z-audit-plan`, `/z-fix`, `/z-debug`, `/z-amend`, and `/z-maintain-docs`. Route bails write `route-decision.md`, emit `plan_route_decision`, preserve existing telemetry, and stop rather than auto-running the target command.
++- `commands` — Commands are the user-facing surfaces that mirror or invoke these skill workflows. Route-policy changes must stay aligned between command markdown and skill markdown.
++- `agents` — Skills define when to dispatch `doc-fetcher`, `doc-updater`, `planning-router`, `implementer`, `reviewer`, consultants, and other subagents, plus the exact prompt contracts those agents receive.
++- `scripts` — Skills rely on `plan-path.sh`, `log-event.sh`, `log-phase.sh`, `version.sh`, and `regenerate-memories-flat.py` for path resolution, telemetry, version stamping, and memory flat-file sync.
++- `multi-ide-exports` — Export pipelines consume these skill files to generate Cursor rules, Codex prompts/skills, and Antigravity skills/workflows, so source skill edits must propagate through exported surfaces.
++- `providers-registry` — Skills refer to stable agent roles (`consultant-primary`, `consultant-secondary`, `reviewer`) while provider resolution happens behind those roles.
+ 
+ ## Edge cases / gotchas
+ 
+-- All skills resolve plan artifact paths via `$Z_HARNESS_PLAN_DIR` (set by `scripts/plan-path.sh`), not by hardcoded `z-harness/<slug>/` paths. Legacy flat layout (`z-harness/TASKS.md`) is still supported by most skills.
+-- `z-implement-all --tasks <path>` skips slug discovery, tree validation, and `--ack`/`--force-partial` checks. `$BASE` is derived from the task file's parent directory, so SPEC.md and archive paths resolve next to the promoted artifact.
+-- `z-debug` Phase 0 wrong-tool gate is non-skippable. If the user already has a hypothesis, the skill exits with a `/z-fix` recommendation rather than proceeding.
+-- `z-plan-split` uses two distinct identifiers per cluster: `cluster_id` (`C1`, `C2`, …) for telemetry payloads, and `cluster_slug` (kebab-case name) for on-disk directory paths. These must never be swapped.
+-- `z-implement-all` has unconditional hard caps (`MAX_ATTEMPTS=2` per task, 45-min wall clock per track, `MAX_DISTINCT_HALTS=3`) that override skip-marker lists and cannot be caught by static text matching alone.
+-- `z-suggest-memory` bootstraps `docs/llm/TAGS.txt` in Phase 0 if it is absent; `z-init-docs` Phase 4 also writes it. Both use the same 15-tag controlled seed and atomic write pattern.
+-- Phase telemetry (log-phase.sh start/end) is mandatory for every skill. Missing brackets make `/z-stats` wall-time analysis incorrect.
+-- Contextual exits require preconditions: `/z-audit-plan` needs existing SPEC/PLAN/TASKS, `/z-amend` needs an existing plan to change, `/z-fix` needs a concrete diagnosis, `/z-debug` needs an unknown-cause symptom, and `/z-maintain-docs` needs doc staleness or drift that matters to the current workflow.
++- Route handoffs are not command chaining. Skills write a route decision, emit telemetry, ask the user, and stop after presenting the next command.
++- The `planning-router` is advisory only. Deterministic thresholds win, malformed output falls back to deterministic routing or AskUser, and loop-prevention blocks ping-pong route chains.
++- `/z-audit-plan` is only valid when plan artifacts exist. If none are found, it writes a no-plan route decision toward `/z-plan` instead of fabricating an audit.
++- `/z-do` may not route directly to `/z-plan-split`; larger work routes through `/z-plan`, `/z-plan-light`, `/z-research`, `/z-brainstorm`, `/z-fix`, or `/z-debug` based on signals.
++- `/z-plan-split` keeps `cluster_id` (`C1`, `C2`, ...) separate from `cluster_slug` (the path segment). Swapping them breaks telemetry and on-disk layout.
++- `/z-implement-all --tasks=<path>` bypasses normal slug/tree discovery and derives `$BASE` from the task file's parent; this is how promoted REVIEW-TASKS.md or MR-REVIEW.md queues are consumed.
++- `/z-maintain-docs --audit` has a pre-audit compaction state file; fast-forward is allowed only if the stale concept set is unchanged.
++- `memories[]` are never authored by doc-updater. `/z-suggest-memory` is the only supported mutation path, and both stale-memory deletes and memory edits use atomic JSON writes.
+ 
+ ## Examples
+ 
+-- Reading the z-amend workflow to understand how review-generated amendment proposals are routed:
+-  Read `skills/z-amend/SKILL.md` Phase 4 (user gate) and Phase 6 (propagation) for the full checklist.
+-- Checking why `/z-implement-all` refused a tree-rooted plan:
+-  Read `skills/z-implement-all/SKILL.md` Setup 2b for the MANIFEST validation gate sequence (6 checks before any task runs).
++- To understand a route bailout from light mode, read `skills/z-plan-light/SKILL.md` Plan Route Check and Phase 1. The artifact to inspect is the run's `route-decision.md`.
++- To debug why tree-rooted implementation refused to start, read `skills/z-implement-all/SKILL.md` Setup 2b for MANIFEST, SHARED-CONCERNS, partial-tree, and ack validation gates.
++- To add a durable lesson after a debug or retro run, use `/z-suggest-memory`; do not edit `memories[]` directly and do not ask doc-updater to invent memory entries.

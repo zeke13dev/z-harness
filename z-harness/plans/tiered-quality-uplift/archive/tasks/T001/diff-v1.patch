@@ -1,0 +1,298 @@
+---
+description: Tiered bulk codebase quality uplift — decompose repo into components, run a repo-wide cross-cutting pass, dispatch per-component audits, produce per-component TASKS.md files, and drive sequential implementation via /z-implement-all.
+argument-hint: [--components=<file>] [--component <path>] [--retry-bailed] [--refresh-component <name>] [--dimensions=<csv>] [--cross-cutting=skip] [--no-style]
+model: opus
+---
+
+You are running the **z-harness `/z-uplift`** pipeline.
+
+Arguments (from `$ARGUMENTS`):
+
+$ARGUMENTS
+
+Strict, multi-phase. Do not skip phases. Do not edit production code directly — `/z-uplift` orchestrates audits and delegates implementation to `/z-implement-all`.
+
+---
+
+## Argument parsing
+
+Parse `$ARGUMENTS` before doing anything else:
+
+- `--components=<file>` → capture as `COMPONENTS_FILE`. Path to a newline-delimited list of component paths; bypasses auto-detection in Phase 1.
+- `--component <path>` (repeatable) → collect each value into `EXTRA_COMPONENTS` list. Explicitly include one component path per flag occurrence.
+- `--retry-bailed` flag → set `RETRY_BAILED=true` (default `false`). On re-invoke, re-attempts components in `bailed` state.
+- `--refresh-component <name>` → capture as `REFRESH_COMPONENT`. Re-runs audit for one named component (overwrites its REPORT/TASKS); does NOT touch other components.
+- `--dimensions=<csv>` → capture as `DIMENSIONS` (default `correctness,cleanliness,design`).
+  **`perf` is deliberately excluded from the default set** to bound uplift cost — perf auditors are the most expensive dimension and rarely surface fixable findings during bulk uplift. Pass `--dimensions=correctness,cleanliness,design,perf` to include it explicitly.
+- `--cross-cutting=skip` → set `CROSS_CUTTING_SKIP=true` (default `false`). Skips Phase 2; escape hatch for tiny repos.
+- `--no-style` → set `NO_STYLE=true` (default `false`). Bypasses the STYLE.md gate; cleanliness+design audits fall back to the generic rubric.
+
+---
+
+## Setup
+
+### Step 1 — Derive uplift slug
+
+Derive a slug from the repository name or the first 2–4 words of the user's description: short kebab-case (e.g. "uplift my-app" → `my-app-uplift`; default `<repo-basename>-uplift`).
+
+If the auto-derived slug is non-obvious, confirm with the user via `AskUserQuestion`.
+
+Check for an existing slug dir in the canonical plans directory (`z-harness/plans/`). If a MANIFEST.md is found there, this is a **resume** — skip decomposition phases and jump to the next non-terminal MANIFEST state. If only a slug collision without MANIFEST, prompt the user to confirm or choose a different slug.
+
+```bash
+SLUG="<derived-kebab-slug>"
+export Z_HARNESS_SLUG="$SLUG"
+```
+
+### Step 2 — Resolve plan dir and RUN id
+
+```bash
+Z_HARNESS_PLAN_DIR="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")"
+export Z_HARNESS_PLAN_DIR
+RUN="$(date -u +%Y%m%dT%H%M%SZ)-$SLUG"
+mkdir -p "$Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts"
+export RUN
+```
+
+### Step 3 — Log run start + providers
+
+Capture the z-harness version stamp and log `run_start`:
+
+```bash
+VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
+START_PAYLOAD="$(python3 -c '
+import json, sys
+v = json.loads(sys.argv[1]); v["arguments"] = sys.argv[2]
+print(json.dumps(v))
+' "$VERSION_BLOB" "$ARGUMENTS")"
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_start "$START_PAYLOAD"
+```
+
+Log provider resolution once per run (guarded against re-emission):
+
+```bash
+if [ ! -f "$Z_HARNESS_PLAN_DIR/archive/$RUN/.providers-logged" ]; then
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-providers.sh" || true
+  touch "$Z_HARNESS_PLAN_DIR/archive/$RUN/.providers-logged"
+fi
+```
+
+### Step 4 — Notification policy
+
+Read env `Z_HARNESS_NOTIFY` (default `approval_only`). Values: `off`, `approval_only`, `all`.
+
+### Step 5 — Doc-staleness route check
+
+If `docs/llm/INDEX.json` exists in the repo root, compute staleness across all entries before Phase 0 starts. Read only the lightweight metadata fields (`slug`, `last_updated`, `source_file`). For each concept entry, compare `entry.last_updated` against the max `mtime` of its `source_files`. A concept is **stale** if any source file's mtime exceeds `last_updated`.
+
+Compute `stale_pct = stale_concepts / total_concepts`. Threshold: `$Z_HARNESS_DOC_STALENESS_THRESHOLD` (default `20` — 20 percent).
+
+If `stale_pct >= threshold`:
+- Write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md`.
+- Emit `plan_route_decision` with `from_command: "/z-uplift"`, `to_command: "/z-maintain-docs"`, `route_class: "contextual"`, `reason_codes: ["docs_stale"]`, `signals.docs_stale_or_drifted: true`, `confidence: "high"`, `classifier_used: false`.
+- Push-notify and present `AskUserQuestion`: switch to `/z-maintain-docs` / continue here with stale docs / abandon.
+- Do NOT auto-invoke `/z-maintain-docs`.
+- If user continues: emit `doc_drift_acknowledged` event and proceed.
+
+---
+
+## STYLE.md gate
+
+This gate runs immediately after Setup. It is skipped if `NO_STYLE=true`.
+
+Check for STYLE.md:
+
+```bash
+if [ "$NO_STYLE" != "true" ]; then
+  if ! ls ./STYLE.md >/dev/null 2>&1; then
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" style_md_missing \
+      "$(printf '{"slug":"%s","action":"halted"}' "$SLUG")"
+  fi
+fi
+```
+
+If STYLE.md is missing and `NO_STYLE` is not set, push-notify and present `AskUserQuestion`:
+
+> No `STYLE.md` found at the repo root. How would you like to proceed?
+> 1. Run `/z-style-init` first (recommended) — after it completes, re-invoke `/z-uplift`
+> 2. Continue without STYLE.md (cleanliness+design audits degrade to generic rubric) — equivalent to passing `--no-style`
+> 3. Abort
+
+Handle the response:
+
+- **Option 1** (`/z-style-init`): halt cleanly with the explicit message: "After running `/z-style-init`, re-invoke `/z-uplift` to continue." Do NOT auto-invoke `/z-style-init`.
+- **Option 2** (continue without STYLE): set `NO_STYLE=true` and log:
+
+  ```bash
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" style_md_missing \
+    "$(printf '{"slug":"%s","action":"continued_without_style"}' "$SLUG")"
+  ```
+
+- **Option 3** (abort): log and exit:
+
+  ```bash
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
+    "$(printf '{"slug":"%s","status":"aborted_by_user","reason":"no_style_md"}' "$SLUG")"
+  exit 1
+  ```
+
+If STYLE.md is present, note its absolute path for later injection into auditor prompts:
+
+```bash
+STYLE_MD_PATH="$(pwd)/STYLE.md"
+```
+
+---
+
+## Phase telemetry (mandatory)
+
+At the **start** of each phase (0 through 6), record `T0=$(date +%s%3N)`. At the **end**, log:
+
+```bash
+WALL_MS=$(( $(date +%s%3N) - T0 ))
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" phase_end \
+  "$(printf '{"phase":%d,"name":"%s","wall_ms":%d,"user_wait_ms":%d}' \
+     <phase-num> "<phase-name>" "$WALL_MS" "$USER_WAIT_MS_THIS_PHASE")"
+```
+
+If a phase blocks on `AskUserQuestion`, log `user_wait_start` / `user_wait_end` events bracketing the wait.
+
+---
+
+## Phase 0 — Premise check
+
+**Do not take the prompt's premises for granted.** Before proceeding with decomposition, verify:
+
+- Does the codebase actually need bulk uplift, or is there a more targeted `/z-audit` call that's more appropriate?
+- Are there any obvious blockers (e.g. the repo is a single-file script with no meaningful component boundaries) that would make `/z-uplift` inappropriate?
+- Is there a `MANIFEST.md` already present under `$Z_HARNESS_PLAN_DIR/`? If so, this is a resume — describe the current MANIFEST state to the user and confirm whether they want to resume or restart.
+
+If any concern surfaces, stop and raise it with the user via `AskUserQuestion` before continuing.
+
+If nothing concerning surfaces, write a one-paragraph "premise accepted" summary describing what uplift will cover (component detection strategy, dimensions, STYLE.md status).
+
+Checkpoint: `phase0-premise.md`.
+
+---
+
+## Phase 1 — Decomposition
+
+**Full implementation lands in T002 — this is a placeholder describing the expected behavior.**
+
+Auto-detect components from the repo's project manifests and directory structure, write `COMPONENTS.md` with a preview table, and present an AskUser confirmation gate before proceeding. Honor `--components=<file>` and repeated `--component <path>` overrides. Detect slug collisions among component basenames and disambiguate via AskUser if any two paths share the same kebab-cased basename.
+
+Detection order (inline Python, <30 lines):
+1. Parse `Cargo.toml` for `[workspace] members`.
+2. Parse `pyproject.toml` / `setup.cfg` for package directories.
+3. Parse `package.json` `"workspaces"`.
+4. Fall back to top-level non-hidden directories, minus the standard denylist (`docs/`, `target/`, `node_modules/`, `dist/`, `build/`, `.git/`, `z-harness/`, `__pycache__/`, `.venv/`).
+5. Surface "unclaimed" dirs (not covered by steps 1–4 and not in denylist) in COMPONENTS.md.
+
+AskUser gate: proceed with the detected components / abort (to revise, edit `COMPONENTS.md` and re-invoke `/z-uplift`). No "edit and confirm in-place" option — always abort to revise.
+
+After confirmation, initialize `MANIFEST.md` with all components in `[ ] pending` state.
+
+Emit `component_detected` telemetry event per component: `{slug, path, method, unclaimed: bool}`.
+
+Checkpoint: `phase1-decomposition.md`.
+
+---
+
+## Phase 2 — Cross-cutting pass
+
+**Full implementation lands in T003 — this is a placeholder describing the expected behavior.**
+
+If `CROSS_CUTTING_SKIP=true`, skip this phase entirely.
+
+Dispatch `consultant-primary` and `consultant-secondary` in parallel on a curated source map (top-50 files by churn over last 90 days, plus each component's entry file) and STYLE.md (if present and `NO_STYLE` is not set). Agents are resolved at dispatch via `scripts/resolve-provider.sh` — do not hardcode provider labels.
+
+Merge findings into `CROSS-CUTTING.md` with three-tier classification:
+- `global-task` — cross-component issues needing a dedicated plan
+- `per-component-context` — issues that inform per-component audits
+- `risk` — watch items with no immediately actionable fix
+
+If any `global-task` findings exist, create a synthetic component named `<slug>-cross-cutting` and insert it FIRST in MANIFEST.
+
+Emit `cross_cutting_classified` telemetry: `{global_tasks, per_component_context, risks}`.
+
+Checkpoint: `phase2-cross-cutting.md`.
+
+---
+
+## Phase 3 — Per-component audits
+
+**Full implementation lands in T004 — this is a placeholder describing the expected behavior.**
+
+For each component in MANIFEST `pending` state (processing synthetic `<slug>-cross-cutting` first if it exists):
+
+1. Mark MANIFEST state `[~] auditing` immediately before dispatch.
+2. Dispatch one `auditor` subagent per `--dimensions` value in parallel. Inject `rubric_path` (absolute path of `./STYLE.md`) for `cleanliness` and `design` dimensions when STYLE.md is present and `NO_STYLE` is not set. Inject `cross_cutting_context` from CROSS-CUTTING.md entries matching this component's MANIFEST slug (exact match).
+3. Merge per-dimension findings into `<slug>-<component>/REPORT.md`.
+4. Dispatch bundled `consultant-primary` + `consultant-secondary` consult in parallel on REPORT.md (drops + additions).
+5. Auto-bail check: if `>10 CRIT-HIGH` OR `>30 total` findings → mark MANIFEST `[!] bailed: crit_high_volume`; run `git grep -l "<component-basename>"` across other components; append "Potential dependents (text-grep — incomplete; validate manually for critical APIs)" to REPORT.md and MANIFEST.md; skip TASKS.md generation; continue to next component.
+6. Otherwise: promote findings to `<slug>-<component>/TASKS.md`; write minimal SPEC.md + PLAN.md.
+7. Dispatch one `reviewer` over generated TASKS.md (mandatory safety gate). On Blocker, re-edit in-place.
+8. Mark MANIFEST state `[a] audited`.
+
+Emit `component_audit_start` / `component_audit_done` telemetry per component.
+
+Checkpoint: `phase3-audits.md`.
+
+---
+
+## Phase 4 — Review gate
+
+Present an aggregated queue summary to the user before any implementation begins:
+
+```
+Uplift queue summary for <slug>:
+  Components audited:   N
+  Total tasks queued:   N
+  Bailed components:    N (list)
+  Dep warnings:         N
+
+Proceed to sequential implementation? [yes / abort]
+```
+
+Use `AskUserQuestion` for this gate. If user aborts, emit `run_end status: aborted_by_user` and exit.
+
+Checkpoint: `phase4-review-gate.md`.
+
+---
+
+## Phase 5 — Sequential implement
+
+**Full implementation lands in T005 — this is a placeholder describing the expected behavior.**
+
+For each component with state `[a] audited` in MANIFEST order (synthetic `<slug>-cross-cutting` first):
+
+1. AskUser gate: proceed with this component / skip this component / abort uplift.
+2. If proceed: mark MANIFEST `[i] implementing`; invoke `/z-implement-all --tasks=z-harness/plans/<slug>-<component>/TASKS.md`; wait for completion; mark MANIFEST `[x] done`.
+3. If skip: mark MANIFEST `[s] skipped: user`; continue to next component.
+4. If abort: leave remaining component states unchanged; emit `run_end status: aborted_by_user`; exit.
+
+On re-invoke with a component in `[i] implementing` state (interrupted mid-implement): AskUser — resume with `/z-implement-all` on this component / mark `[s] skipped` / mark `[x] done` (if completed manually) / abort.
+
+Emit `component_implement_start` / `component_implement_done` telemetry per component.
+
+Checkpoint: `phase5-implement.md`.
+
+---
+
+## Phase 6 — Finalize
+
+1. Log `run_end` with a status blob:
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
+  "$(printf '{"slug":"%s","status":"complete","components_done":%d,"components_skipped":%d,"components_bailed":%d}' \
+     "$SLUG" "$DONE_COUNT" "$SKIPPED_COUNT" "$BAILED_COUNT")"
+```
+
+2. Push-notify the user with the final summary (done / skipped / bailed counts).
+
+3. If any task in any generated TASKS.md carried a `**DOCS:**` line, recommend:
+
+   > "Some tasks carried DOCS tags. Run `/z-maintain-docs` to refresh the two-tier documentation."
+
+Checkpoint: `phase6-finalize.md`.

@@ -76,6 +76,41 @@ if preserved != baseline:
 
 Surface any `memories_lost` warning prominently in Phase 3 before presenting diffs. A mismatch indicates doc-updater may have dropped memories, which is a hard-rule violation (doc-updater must copy memories verbatim).
 
+## Phase 2.3 — Pre-audit compaction breakpoint (only if `--audit` flag set)
+
+Before spawning any audit consultant, check the state file and optionally pause for context compaction.
+
+**State file path:** `docs/llm/.maintain_docs_audit_state.json`
+
+**On every `--audit` invocation, run these steps before Phase 2.5:**
+
+1. Compute the current stale concept set (the slugs identified in Phase 1).
+2. If `docs/llm/.maintain_docs_audit_state.json` exists:
+   - Read it and compare `stale_concepts_at_ack` (as a set) to the current stale concept set.
+   - If the sets are **equal**: fast-forward — skip the AskUserQuestion below, proceed directly to Phase 2.5. Log a `maintain_docs_audit_fast_forward` event.
+   - If the sets **differ**: delete the stale state file and continue to the AskUserQuestion prompt below (re-prompt).
+3. If the state file does not exist (or was just deleted): emit the `compaction_pause` event, push-notify, and prompt:
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "docs" compaction_pause \
+  '{"trigger":"pre_consult","phase":"maintain_docs_audit"}'
+```
+
+Push-notify (regardless of `Z_HARNESS_NOTIFY` — this is a hard pause prompt):
+> "About to audit <N> concept docs via consultants. Recommended: `/clear`, then re-invoke `/z-maintain-docs --audit` to continue. Dismiss to proceed now."
+
+`AskUserQuestion` with two options:
+- **(a) Pause for /clear** — exit cleanly. Do **NOT** write the state file. On the next invocation, Phase 2.3 will fire again.
+- **(b) Proceed now** — write the state file and continue into Phase 2.5:
+  ```json
+  {
+    "audit_acknowledged": true,
+    "stale_concepts_at_ack": ["<slug1>", "<slug2>", "..."],
+    "acknowledged_at": "<iso timestamp>"
+  }
+  ```
+  If the state file write fails, log a warning to stderr and proceed (filesystem errors are non-blocking).
+
 ## Phase 2.5 — Cross-LLM audit (only if `--audit` flag set)
 
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
@@ -222,7 +257,8 @@ If the script exits non-zero, surface the error to the user and halt (do not pro
 
 ## Phase 5 — Finalize
 
-1. Summary to user:
+1. If `--audit` was used, delete the state file `docs/llm/.maintain_docs_audit_state.json` if it exists (cleanup; ignore errors).
+2. Summary to user:
    ```
    docs/ refreshed:
      <N> concepts updated, <M> deferred (not_enough_info), <K> skipped.
@@ -230,7 +266,7 @@ If the script exits non-zero, surface the error to the user and halt (do not pro
    Recommended next:
      git add docs/ && git commit -m "Refresh z-harness docs"
    ```
-2. Log:
+3. Log:
    ```bash
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "docs" maintain_docs_end \
      "$(printf '{"mode":"%s","updated":%d,"deferred":%d,"skipped":%d}' "<mode>" "$U" "$D" "$S")"

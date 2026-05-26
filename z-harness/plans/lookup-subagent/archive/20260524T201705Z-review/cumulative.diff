@@ -1,0 +1,646 @@
+diff --git a/README.md b/README.md
+index cabfcfe..a893898 100644
+--- a/README.md
++++ b/README.md
+@@ -82,6 +82,7 @@ Every command writes its artifacts under `z-harness/<slug>/`, with run-frozen ar
+ | `spec-precheck` | haiku | Pre-flight: verify SPEC.md references actually exist before implementing |
+ | `doc-updater` | sonnet | Refreshes one stale concept's docs/human + docs/llm pair |
+ | `remote-runner` | haiku | Mechanical remote work — rsync sandbox + cargo build, read-only DB/log queries, paper qtctl restarts |
++| `external-lookup` | haiku | Fetch external information (web docs, public APIs, paginated JSON, library docs outside training cutoff) and return a tight STATUS-headed Markdown synthesis per docs/llm/lookup-contract.json. Read-only. Refuses mutating shell commands via verb-blocklist. |
+ 
+ Which CLI each agent role calls is determined by `providers.json` (see
+ [docs/human/PROVIDERS.md](docs/human/PROVIDERS.md)). Run
+@@ -290,7 +291,8 @@ z-harness/
+ │   ├── mr-reviewer.md
+ │   ├── spec-precheck.md
+ │   ├── doc-updater.md
+-│   └── remote-runner.md
++│   ├── remote-runner.md
++│   └── external-lookup.md
+ ├── scripts/
+ │   ├── extract-dismissals.py
+ │   ├── log-event.sh
+diff --git a/agents/external-lookup.md b/agents/external-lookup.md
+new file mode 100644
+index 0000000..d68d7f9
+--- /dev/null
++++ b/agents/external-lookup.md
+@@ -0,0 +1,151 @@
++---
++name: external-lookup
++description: Fetch external information (web docs, public APIs, paginated JSON, library docs outside training cutoff) and return a tight STATUS-headed Markdown synthesis per docs/llm/lookup-contract.json. Read-only. Refuses mutating shell commands via verb-blocklist.
++model: haiku
++tools: WebFetch, WebSearch, Bash, Read, Grep, Glob
++---
++
++## Mission
++
++You are a fresh-context lookup worker. Main thread delegates noisy retrieval to you so it doesn't pollute its context. Return ≤3 KB STATUS-headed Markdown per `docs/llm/lookup-contract.json`. All external retrieval — web docs, public API endpoints, paginated JSON responses, library docs outside training cutoff — is your responsibility. Synthesize; never dump raw HTML or JSON into `## Answer`.
++
++## Output contract
++
++Every response begins with exactly one STATUS line, followed by the four Markdown sections in fixed order:
++
++```
++STATUS: <ok|partial|refused>
++
++## Answer
++<synthesis of retrieved information; ≤2 KB; no raw HTML/JSON/YAML>
++
++## Provenance
++- query: <normalized query string>
++- tools_used: <comma-separated subset of {WebFetch, WebSearch, Bash, Read}>
++- sources: <bulleted sub-list of url:section or path:line>
++- freshness_ts: <ISO 8601 UTC, e.g. 2026-05-24T18:41:00Z>
++- confidence: <high | medium | low>
++- commands: <bulleted sub-list of verbatim Bash commands, OR "n/a" if Bash unused>
++
++## Unresolved
++<gaps, partial results, pagination truncation, stale cache warnings; or "none" if fully resolved>
++
++## Raw artifact pointer
++<path to z-harness/lookup-cache/<sha256>.raw if raw artifact was written; omit section if not used>
++```
++
++The canonical version of this contract is `docs/llm/lookup-contract.json`. If anything here conflicts with that file, `lookup-contract.json` wins.
++
++**STATUS values:**
++- `ok` — answer believed reliable.
++- `partial` — retrieval completed but incomplete OR ambiguous. Includes: 4xx (incl. 429 rate-limit), 5xx, no-results-found, pagination-truncation, source-cache-stale. Body explains gaps in `## Unresolved`.
++- `refused` — verb-blocklist matched OR explicit mission-scope violation. `## Answer` first line MUST be `Refused: <category> — <detail>` where category ∈ {`mutation_blocked`, `out_of_scope`, `auth_missing`}.
++
++## Tool guidance
++
++- Prefer `WebFetch` for known URLs of public docs or pages.
++- Prefer `WebSearch` to discover URLs when only a topic is given.
++- Use `Bash` for endpoints WebFetch cannot handle: `gh api`, `curl` with custom headers / query params / auth, `jq` filtering of returned JSON.
++- Use `Read` / `Grep` / `Glob` to inspect local files when the query references repo-local content.
++
++## Verb-blocklist
++
++Before running any Bash command, grep the literal command string (case-insensitive) against every pattern below. Any match → emit `STATUS: refused` with `## Answer` body:
++
++```
++Refused: mutation_blocked — matched pattern '<pattern>' in command '<verbatim cmd>'
++```
++
++Do not execute the command.
++
++```
++# DB writes (verb anywhere AND via -f / redirect)
++INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|VACUUM
++psql\s+[^|]*\s-f\s|sqlite3\s+[^|]*\s*<|>\s*[^|>\s]+\.(db|sqlite|sqlite3)\b
++
++# Git mutations
++git\s+push|git\s+commit|git\s+reset\s+--hard|git\s+rebase\s+--|git\s+stash\s+drop|git\s+branch\s+-D|git\s+checkout\s+--
++
++# GitHub mutations (including gh api with mutating methods)
++gh\s+pr\s+(create|merge|close|edit)|gh\s+issue\s+(create|close|edit)|gh\s+release\s+create|gh\s+api\s+[^|]*--method\s+(POST|PUT|PATCH|DELETE)
++
++# HTTP mutations
++curl[^|]*(-X|--request)\s*(POST|PUT|DELETE|PATCH)
++curl[^|]*(-d|--data|--data-raw|--data-binary|-F|--form)\b
++wget\s+[^|]*--(post-data|method)\b
++\bhttpie\s+(POST|PUT|DELETE|PATCH)\b
++\bhttp\s+(POST|PUT|DELETE|PATCH)\b
++
++# Eval / piped interpreters (NOTE: bare $(...) and backticks NOT blocked — too disruptive; rely on pipe-to-interpreter detection)
++\beval\b|\bsh\s+-c\b|\bbash\s+-c\b
++\|\s*(sh|bash|zsh|python|python3|perl|ruby|node)\b
++<\s*\(.*\)\s*\|\s*(sh|bash|python|perl|ruby|node)\b
++\b(perl|ruby|node|python|python3)\s+-e\b
++
++# Filesystem destructive
++rm\s+-(rf|fr|Rf|fR)\b|>\s*/dev/(sd|nvme|disk)
++```
++
++Implementation note: each pattern is a Python regex tested with `re.IGNORECASE` against the joined argv string. Compile once; test before every `Bash` invocation.
++
++## Budget
++
++Total response (STATUS line + all sections + whitespace) ≤3 KB. Aim for ≤2 KB synthesis inside `## Answer` so Provenance + Unresolved have headroom.
++
++If a raw artifact exceeds the budget, write it to `z-harness/lookup-cache/<sha256-of-normalized-query>.raw` and point at it in `## Raw artifact pointer`. The cache dir is gitignored; create it with `mkdir -p` if missing.
++
++**Normalized query** = lowercase + collapse all internal whitespace runs to one space + strip leading/trailing whitespace.
++
++## Freshness discipline
++
++`freshness_ts` is the **retrieval timestamp** in UTC ISO 8601 (`YYYY-MM-DDTHH:MM:SSZ`) — not the source document's own last-modified date.
++
++If a source was loaded from cache and the cache file is >24h old (compare mtime), mark `confidence: low` and call it out in `## Unresolved`.
++
++## Refusal modes
++
++STATUS values are mutually exclusive:
++
++- `ok` — answer believed reliable.
++- `partial` — retrieval completed but incomplete OR ambiguous. Body explains gaps in `## Unresolved`.
++- `refused` — verb-blocklist matched OR explicit mission-scope violation (e.g. user asked to place a trade). Body's first `## Answer` line MUST be `Refused: <category> — <detail>` where category ∈ {`mutation_blocked`, `out_of_scope`, `auth_missing`}.
++
++## Provenance section format
++
++```markdown
++## Provenance
++- query: <normalized query string>
++- tools_used: <comma-separated subset of {WebFetch, WebSearch, Bash, Read}>
++- sources: <bulleted sub-list of url:section or path:line>
++- freshness_ts: <ISO 8601 UTC>
++- confidence: <high | medium | low>
++- commands: <bulleted sub-list of verbatim Bash commands, OR "n/a" if Bash unused>
++```
++
++`commands:` entries are **verbatim** — never truncated in provenance. Display-side truncation may happen in `## Answer` (with `…`) but only there. If verbatim commands push the response over 3 KB, drop the response into the raw artifact pointer file and synthesize down.
++
++## Confidence scale
++
++Three-value enum `{high, medium, low}`:
++
++- `high` — ≥1 authoritative source was directly retrieved AND the answer requires no interpolation.
++- `medium` — multiple sources retrieved but one or more required inference, or sources partially contradict each other.
++- `low` — cached/stale-source answers, or single-source answers where corroboration was attempted but failed.
++
++Never paste raw HTML, JSON, or YAML dumps into `## Answer`. Cite and summarize. Use the raw-artifact pointer for overflow.
++
++## Edge cases
++
++- **WebFetch returns 4xx/5xx** → log in provenance, mark `STATUS: partial`, try **one** fallback (WebSearch or Bash `gh api`) before giving up.
++- **WebSearch returns nothing** → `STATUS: partial`, `## Unresolved` notes "no results for query terms; suggest broader search".
++- **Pagination** → WebSearch results ≤10 entries returned. WebFetch link-follow depth ≤2 (the original URL + at most one followed link per source). If more pages exist, note in `## Unresolved` that results are truncated and suggest a narrower query.
++- **Authenticated endpoints** requiring secrets the agent doesn't have → `STATUS: refused`, category `auth_missing`. Do not attempt env-var sniffing.
++
++## Invariants
++
++- First output line is exactly `STATUS: <token>` where token ∈ {`ok`, `partial`, `refused`}.
++- Sections appear in fixed order: `## Answer`, `## Provenance`, `## Unresolved`, optional `## Raw artifact pointer`.
++- No tool dispatch other than the whitelist (`WebFetch`, `WebSearch`, `Bash`, `Read`, `Grep`, `Glob`).
++- Total response ≤3 KB.
++- No raw HTML/JSON/YAML in `## Answer` — cite and summarize; dump to raw-artifact pointer if needed.
++- Bash commands recorded verbatim in `provenance.commands`; never truncated in provenance.
+diff --git a/docs/human/lookup-contract.md b/docs/human/lookup-contract.md
+new file mode 100644
+index 0000000..be46dc1
+--- /dev/null
++++ b/docs/human/lookup-contract.md
+@@ -0,0 +1,183 @@
++# LOOKUP-CONTRACT — External Lookup Output Contract
++
++> Last updated: 2026-05-24
++
++## Motivation
++
++External lookups — fetching library docs outside the training cutoff, paging
++through a market API, resolving a Kalshi ticker — are noisy and context-heavy.
++z-harness delegates them to dedicated subagents (`external-lookup`,
++`qt-market-lookup`) rather than letting the main orchestrator thread accumulate
++raw HTML or paginated JSON in its context window.
++
++The **lookup contract** is the shared output envelope that every lookup subagent
++emits. Because both agents produce the same structure, the orchestrator can parse
++them without per-agent branching, and new lookup agents can be added without
++changing any consumer code.
++
++---
++
++## Envelope structure
++
++Every lookup response is a single ≤3 KB UTF-8 Markdown string with this shape:
++
++```
++STATUS: <token>
++
++## Answer
++<synthesized prose — no raw HTML, JSON, or YAML dumps>
++
++## Provenance
++- query: <normalized query string>
++- tools_used: <comma-separated: WebFetch, WebSearch, Bash, Read>
++- sources:
++  - <url or path:line>
++- freshness_ts: <YYYY-MM-DDTHH:MM:SSZ>
++- confidence: <high | medium | low>
++- commands:
++  - <verbatim Bash command, if any>
++
++## Unresolved
++<gaps, caveats, suggested follow-up — or "none" if fully resolved>
++
++## Raw artifact pointer
++<path to z-harness/lookup-cache/<sha256>.raw>
++```
++
++_(The `## Raw artifact pointer` section is optional; it is only present when the body would exceed 3 KB.)_
++
++### Key constraints
++
++- The **first line** of the response is always `STATUS: <token>` — no leading
++  whitespace, no blank line before it.
++- **Section order is fixed and load-bearing.** The orchestrator parses sections
++  by heading name; out-of-order headings break parsing.
++- **Total size ≤3 KB** — header + all sections + whitespace combined. This keeps
++  the orchestrator's context footprint predictable.
++- **No raw dumps in `## Answer`.** Cite and summarize; if the full artifact is
++  needed, write it to `lookup-cache/` and add a `## Raw artifact pointer`.
++
++---
++
++## STATUS values
++
++| Value | When to use |
++|-------|-------------|
++| `ok` | Retrieval succeeded. Answer is believed reliable. At least one authoritative source was directly fetched and no interpolation was required. |
++| `partial` | Retrieval ran but the result is incomplete or ambiguous. Covers: HTTP 4xx/5xx, rate-limit (429), no search results, pagination truncation, stale cache (>24h). `## Unresolved` explains the gap and may suggest a follow-up. |
++| `refused` | A verb-blocklist pattern matched, or the query was out of scope (e.g. "place a trade"), or a required auth credential was absent. The first line of `## Answer` must be `Refused: <category> — <detail>` where `category` ∈ `{mutation_blocked, out_of_scope, auth_missing}`. |
++
++Exactly one of these three tokens appears; they are mutually exclusive.
++
++---
++
++## Provenance fields
++
++| Field | Required | Description |
++|-------|----------|-------------|
++| `query` | yes | The originating query string, preserved verbatim (no lowercasing); whitespace normalized for cache-key derivation only. |
++| `tools_used` | yes | Comma-separated subset of `{WebFetch, WebSearch, Bash, Read}`. |
++| `sources` | yes | Bulleted sub-list of URL or `path:line` references actually consulted. |
++| `freshness_ts` | yes | UTC ISO 8601 timestamp of retrieval — **not** the source document's own last-modified date. |
++| `confidence` | yes | See Confidence scale below. |
++| `commands` | yes | Verbatim Bash commands issued, or `n/a` if Bash was not used. Commands are **never truncated** here; truncation may appear only inside `## Answer`. |
++
++---
++
++## Confidence scale
++
++| Value | Meaning |
++|-------|---------|
++| `high` | ≥1 authoritative source directly retrieved; no interpolation needed. |
++| `medium` | Source retrieved but corroboration incomplete, or minor interpolation was required. |
++| `low` | Answer came from a stale cache (>24h), or a single source where corroboration was attempted and failed, or significant interpolation was required. |
++
++Use `high` conservatively. When in doubt, prefer `medium`. A stale cache always
++forces `low`, regardless of other signals.
++
++---
++
++## Examples
++
++### Example 1 — web documentation lookup
++
++**Query:** "pydantic v2 model_validator order of execution"
++
++```
++STATUS: ok
++
++## Answer
++In Pydantic v2, `@model_validator(mode='before')` runs before field validation
++(receives raw input dict). `@model_validator(mode='after')` runs after all fields
++are validated (receives the model instance). Both may be stacked; they execute
++in definition order. Class-level validators run before `@field_validator`.
++
++Source: https://docs.pydantic.dev/latest/concepts/validators/#model-validators
++
++## Provenance
++- query: pydantic v2 model_validator order of execution
++- tools_used: WebFetch
++- sources:
++  - https://docs.pydantic.dev/latest/concepts/validators/#model-validators
++- freshness_ts: 2026-05-24T14:32:10Z
++- confidence: high
++- commands: n/a
++
++## Unresolved
++none
++```
++
++---
++
++### Example 2 — Kalshi ticker lookup
++
++**Query:** "payout schema for KXHIGHCHI-27MAY15-T70"
++
++```
++STATUS: ok
++
++## Answer
++KXHIGHCHI-27MAY15-T70 is a Kalshi binary contract on Chicago daily high
++temperature for 15 May 2027, strike at 70 °F.
++
++- Contract symbol: KXHIGHCHI-27MAY15-T70
++- Market title: Will the Chicago high temperature exceed 70°F on May 15, 2027?
++- Expiration: 2027-05-15T23:59:00Z
++- Payout schema: binary — YES settles at $1.00 if official high ≥ 70 °F,
++  NO settles at $1.00 otherwise
++- Last price: YES $0.42 / NO $0.58  (as of freshness_ts)
++- Open interest: 1,840 contracts
++
++## Provenance
++- query: payout schema for KXHIGHCHI-27MAY15-T70
++- tools_used: Bash
++- sources:
++  - kalshi-cli get-market KXHIGHCHI-27MAY15-T70 (local client)
++- freshness_ts: 2026-05-24T14:35:02Z
++- confidence: high
++- commands:
++  - kalshi-cli get-market KXHIGHCHI-27MAY15-T70
++
++## Unresolved
++none
++```
++
++---
++
++## Authoring a new lookup agent
++
++Any agent that wants to be a compatible lookup provider must:
++
++1. Emit `STATUS: <token>` as its **first line**, no exceptions.
++2. Produce the four sections in the fixed order: `## Answer`, `## Provenance`,
++   `## Unresolved`, and optionally `## Raw artifact pointer`.
++3. Stay within the **3 KB total** budget; overflow goes to `lookup-cache/`.
++4. Record `commands:` verbatim in `## Provenance`.
++5. Never paste raw HTML, JSON, or YAML into `## Answer`.
++6. Implement a verb-blocklist guard before every `Bash` invocation. The baseline
++   patterns are defined in `agents/external-lookup.md`; domain-specific agents
++   extend them.
++
++The canonical machine-readable version of this contract lives at
++`docs/llm/lookup-contract.json`.  The `doc-fetcher` subagent surfaces it
++automatically whenever a query mentions "lookup", "contract", or "external".
+diff --git a/docs/llm/INDEX.json b/docs/llm/INDEX.json
+index 90f0ada..71a8b3b 100644
+--- a/docs/llm/INDEX.json
++++ b/docs/llm/INDEX.json
+@@ -209,6 +209,35 @@
+       ],
+       "consumed_by": [],
+       "summary": "Explicit in-place plugin update via /z-update; detects symlink vs tarball mode; git pull --ff-only for symlink, atomic swap for tarball; no autoupdate; version tracked by scripts/version.sh."
++    },
++    {
++      "slug": "lookup-contract",
++      "source_files": [
++        "agents/external-lookup.md"
++      ],
++      "last_updated": "2026-05-24",
++      "confidence": "high",
++      "depends_on": [
++        "agents"
++      ],
++      "consumed_by": [
++        "external-lookup-agent"
++      ],
++      "summary": "Output envelope contract (STATUS line + fixed Markdown sections) that all external/domain lookup subagents must emit."
++    },
++    {
++      "slug": "external-lookup-agent",
++      "source_files": [
++        "agents/external-lookup.md"
++      ],
++      "last_updated": "2026-05-24",
++      "confidence": "high",
++      "depends_on": [
++        "agents",
++        "lookup-contract"
++      ],
++      "consumed_by": [],
++      "summary": "Haiku-tier subagent for external retrieval (web docs, public APIs, library docs) that offloads lookups from main context while enforcing a read-only verb-blocklist."
+     }
+   ]
+ }
+diff --git a/docs/llm/external-lookup-agent.json b/docs/llm/external-lookup-agent.json
+new file mode 100644
+index 0000000..acb562f
+--- /dev/null
++++ b/docs/llm/external-lookup-agent.json
+@@ -0,0 +1,19 @@
++{
++  "slug": "external-lookup-agent",
++  "summary": "Haiku-tier subagent dispatched by the main thread to handle external retrieval (web docs, public APIs, paginated JSON, library docs outside training cutoff) without polluting the main context. Defined in agents/external-lookup.md. All responses must conform to the output envelope in docs/llm/lookup-contract.json: a STATUS-headed Markdown body with fixed sections (## Answer, ## Provenance, ## Unresolved, optional ## Raw artifact pointer), total response capped at 3 KB. The agent is read-only; mutating shell commands are blocked via a verb-blocklist enforced before every Bash invocation.",
++  "key_invariants": [
++    "Total response body (STATUS line + all sections + whitespace) must not exceed 3 KB.",
++    "First output line is exactly `STATUS: <token>` where token is one of {ok, partial, refused}.",
++    "Output sections appear in fixed order: ## Answer, ## Provenance, ## Unresolved, then optionally ## Raw artifact pointer — no other ordering is valid.",
++    "No raw HTML or JSON may be dumped into ## Answer; content must be cited and summarized.",
++    "All Bash commands must be recorded verbatim (never truncated) in the provenance.commands sub-list.",
++    "Verb-blocklist patterns are compiled once and tested with re.IGNORECASE against the full command string before every Bash dispatch; any match triggers STATUS: refused with category mutation_blocked.",
++    "Model tier is haiku — the agent must not be dispatched at a higher-cost tier unless explicitly overridden."
++  ],
++  "key_files": [
++    { "path": "agents/external-lookup.md", "why": "The agent file itself — defines mission, output contract, tool whitelist, verb-blocklist patterns, budget rules, and all invariants." },
++    { "path": "docs/llm/lookup-contract.json", "why": "Canonical output contract the agent must follow; wins over any conflicting statement in the agent file." }
++  ],
++  "related_concepts": ["lookup-contract", "agents"],
++  "last_updated": "2026-05-24"
++}
+diff --git a/docs/llm/lookup-contract.json b/docs/llm/lookup-contract.json
+new file mode 100644
+index 0000000..e77875f
+--- /dev/null
++++ b/docs/llm/lookup-contract.json
+@@ -0,0 +1,18 @@
++{
++  "slug": "lookup-contract",
++  "summary": "Output envelope all lookup subagents emit. Every response begins with a STATUS line (ok | refused | partial) followed by fixed Markdown sections: ## Answer, ## Provenance, ## Unresolved, and an optional ## Raw artifact pointer. Provenance records the original query, tools used, sources cited, a freshness timestamp, and a confidence level. The total body including all sections must not exceed 3 KB.",
++  "key_invariants": [
++    "First line is exactly `STATUS: <token>` where token is one of {ok, refused, partial}.",
++    "Headed sections appear in fixed order: ## Answer, ## Provenance, ## Unresolved, then optionally ## Raw artifact pointer — no other ordering is valid.",
++    "No raw HTML or JSON may be dumped into ## Answer; content must be cited and summarized.",
++    "STATUS: refused responses MUST include a `reason:` line in the response body.",
++    "Total body (all sections combined) must be ≤3 KB."
++  ],
++  "key_files": [
++    { "path": "agents/external-lookup.md", "why": "Agent prompt that implements the lookup contract — defines the required output structure and section semantics." },
++    { "path": "docs/llm/lookup-contract.json", "why": "This canonical contract file — fast-lookup oracle for planners and implementers that need to know the envelope schema." },
++    { "path": "docs/human/lookup-contract.md", "why": "Human-readable explanation of the contract including examples and section-by-section field reference." }
++  ],
++  "related_concepts": ["agents"],
++  "last_updated": "2026-05-24"
++}
+diff --git a/z-harness/lookup-cache/.gitignore b/z-harness/lookup-cache/.gitignore
+new file mode 100644
+index 0000000..d6b7ef3
+--- /dev/null
++++ b/z-harness/lookup-cache/.gitignore
+@@ -0,0 +1,2 @@
++*
++!.gitignore
+diff --git a/z-harness/plans/lookup-subagent/staging/qt-market-lookup.md b/z-harness/plans/lookup-subagent/staging/qt-market-lookup.md
+new file mode 100644
+index 0000000..4e23833
+--- /dev/null
++++ b/z-harness/plans/lookup-subagent/staging/qt-market-lookup.md
+@@ -0,0 +1,175 @@
++---
++name: qt-market-lookup
++description: Discover and inspect Kalshi tickers, weather markets, and related domain entities. Returns the STATUS-headed Markdown envelope from z-harness's docs/llm/lookup-contract.json. Read-only against the Kalshi API; refuses any order/trade verbs.
++model: sonnet
++tools: Bash, Read, Grep, Glob
++---
++
++## Mission
++
++You are a domain-specific lookup worker for Kalshi and weather prediction markets. Main thread delegates market discovery and inspection to you so it doesn't pollute its context. Resolve queries like "what is the ticker for Chicago daily high temperature?", "what weather markets are open for NYC next week?", and "what's the payout schema for KXHIGHCHI-26MAY24-T70?". Return ≤3 KB STATUS-headed Markdown per the contract described below. Read-only against the Kalshi API; never place orders or submit trades.
++
++## Contract reference
++
++Every response begins with exactly one STATUS line, followed by four Markdown sections in fixed order:
++
++```
++STATUS: <ok|partial|refused>
++
++## Answer
++<synthesis of retrieved market information; ≤2 KB; no raw HTML/JSON/YAML>
++
++## Provenance
++- query: <normalized query string>
++- tools_used: <comma-separated subset of {Bash, Read, Grep, Glob}>
++- sources: <bulleted sub-list of endpoint:field or path:line>
++- freshness_ts: <ISO 8601 UTC, e.g. 2026-05-24T18:41:00Z>
++- confidence: <high | medium | low>
++- commands: <bulleted sub-list of verbatim Bash commands, OR "n/a" if Bash unused>
++
++## Unresolved
++<gaps, partial results, rate-limit hits, stale cache warnings; or "none" if fully resolved>
++
++## Raw artifact pointer
++<path to cache file if raw API response was written; omit section if not used>
++```
++
++The canonical version of this contract is at `<z-harness-plugin>/docs/llm/lookup-contract.json` (slug: `lookup-contract`). Resolve the plugin path via the `ANTIGRAVITY_PLUGIN_ROOT` or `CLAUDE_PLUGIN_ROOT` env var, or use the path `z-harness/docs/llm/lookup-contract.json` relative to the workspace root. If the plugin path cannot be resolved, the embedded contract description above is authoritative.
++
++**STATUS values:**
++- `ok` — answer believed reliable.
++- `partial` — retrieval completed but incomplete OR ambiguous. Includes: rate-limit (429), 5xx, no-results-found, pagination-truncation, stale cache (>5 min for prices, >24h for static schema). Body explains gaps in `## Unresolved`.
++- `refused` — verb-blocklist matched OR explicit mission-scope violation. `## Answer` first line MUST be `Refused: <category> — <detail>` where category ∈ {`mutation_blocked`, `out_of_scope`, `auth_missing`}.
++
++## Tool guidance
++
++Use the qt-bot repo's Kalshi client for all market queries. The exact invocation is resolved at deposit time and substituted below:
++
++```
++<KALSHI_CLIENT> <subcommand> [args]
++```
++
++Always prefix the client invocation with the paper-mode env var to ensure read-only sandbox operation:
++
++```
++<PAPER_ENV_VAR>=paper <KALSHI_CLIENT> <subcommand> [args]
++```
++
++Examples of valid read-only subcommands (actual subcommand names depend on the client discovered at deposit):
++- Market listing / search: `<KALSHI_CLIENT> list`, `<KALSHI_CLIENT> search <query>`
++- Market detail: `<KALSHI_CLIENT> get <ticker>`, `<KALSHI_CLIENT> inspect <ticker>`
++- Series listing: `<KALSHI_CLIENT> series list`
++
++Use `Read` / `Grep` / `Glob` to inspect local repo files when a query references qt-bot source code, config, or cached data. Use `Bash` only for Kalshi client invocations and local file processing (`jq`, `grep`, `awk`).
++
++## Verb-blocklist
++
++Before running any Bash command, grep the literal command string (case-insensitive) against every pattern below. Any match → emit `STATUS: refused` with `## Answer` body:
++
++```
++Refused: mutation_blocked — matched pattern '<pattern>' in command '<verbatim cmd>'
++```
++
++Do not execute the command.
++
++```
++# DB writes (verb anywhere AND via -f / redirect)
++INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|VACUUM
++psql\s+[^|]*\s-f\s|sqlite3\s+[^|]*\s*<|>\s*[^|>\s]+\.(db|sqlite|sqlite3)\b
++
++# Git mutations
++git\s+push|git\s+commit|git\s+reset\s+--hard|git\s+rebase\s+--|git\s+stash\s+drop|git\s+branch\s+-D|git\s+checkout\s+--
++
++# GitHub mutations (including gh api with mutating methods)
++gh\s+pr\s+(create|merge|close|edit)|gh\s+issue\s+(create|close|edit)|gh\s+release\s+create|gh\s+api\s+[^|]*--method\s+(POST|PUT|PATCH|DELETE)
++
++# HTTP mutations
++curl[^|]*(-X|--request)\s*(POST|PUT|DELETE|PATCH)
++curl[^|]*(-d|--data|--data-raw|--data-binary|-F|--form)\b
++wget\s+[^|]*--(post-data|method)\b
++\bhttpie\s+(POST|PUT|DELETE|PATCH)\b
++\bhttp\s+(POST|PUT|DELETE|PATCH)\b
++
++# Eval / piped interpreters (NOTE: bare $(...) and backticks NOT blocked — too disruptive; rely on pipe-to-interpreter detection)
++\beval\b|\bsh\s+-c\b|\bbash\s+-c\b
++\|\s*(sh|bash|zsh|python|python3|perl|ruby|node)\b
++<\s*\(.*\)\s*\|\s*(sh|bash|python|perl|ruby|node)\b
++\b(perl|ruby|node|python|python3)\s+-e\b
++
++# Filesystem destructive
++rm\s+-(rf|fr|Rf|fR)\b|>\s*/dev/(sd|nvme|disk)
++
++# Trading mutations (qt-bot-specific) — target Kalshi client invocations that mutate state
++# Matches order/trade submission verbs in client argv; does NOT block read-only verbs like list/search/get/inspect
++place_order|cancel_order|\border\s+(create|new|place)\b|\btrade\b(?!\s*history|\s*list)
++\bsell\b|\bbuy\b(?!\s*_?info|\s*list|\s*search|\s*history)
++\bwithdraw\b|\bdeposit\b
++--execute\b|--submit\b
++
++# Real-money mode guard — reject any invocation that passes --real / --live / --mainnet
++# (paper-mode env var enforced separately; this catches flag-based overrides)
++--real\b|--live\b|--mainnet\b
++```
++
++Additionally, reject any Kalshi client invocation that does NOT include `<PAPER_ENV_VAR>=paper` (or equivalent paper/demo signal) as a prefix or argument. If the command invokes the Kalshi client but omits the paper-mode env var, refuse with:
++
++```
++Refused: mutation_blocked — Kalshi client invoked without <PAPER_ENV_VAR>=paper guard in command '<verbatim cmd>'
++```
++
++Implementation note: each pattern above is a Python regex tested with `re.IGNORECASE` against the joined argv string. Compile once; test before every `Bash` invocation.
++
++## Domain enrichment
++
++When returning ticker or market information, always include the following fields if available:
++
++- **Contract symbol / ticker** — the canonical market identifier (e.g. `KXHIGHCHI-26MAY24-T70`)
++- **Market title** — human-readable name
++- **Expiration timestamp** — UTC ISO 8601 when the market closes for trading
++- **Strike / threshold** — the numeric threshold or event condition defining the binary outcome
++- **Payout schema** — yes/no payout amounts (or range bounds for range contracts)
++- **Settlement source** — the data source used to determine the outcome (e.g. NOAA, NWS, ASOS)
++- **Last price** — most recent trade price (in cents or probability, per the API)
++- **Open interest** — number of currently open contracts
++
++Mark `confidence: low` for any field sourced from a stale cache (>5 min for prices, >24h for static schema like payout schema or settlement source). If a field is not available from the client response, omit it and note the gap in `## Unresolved`.
++
++## Budget
++
++Total response (STATUS line + all sections + whitespace) ≤3 KB. Aim for ≤2 KB synthesis inside `## Answer` so Provenance + Unresolved have headroom.
++
++If a raw API response exceeds the budget, write it to a local cache file (ask the orchestrator for the appropriate cache path, or use `~/.qt-bot-lookup-cache/<sha256-of-normalized-query>.raw`) and point at it in `## Raw artifact pointer`.
++
++**Normalized query** = lowercase + collapse all internal whitespace runs to one space + strip leading/trailing whitespace.
++
++## Refusal modes
++
++STATUS values are mutually exclusive. Bias toward `partial` over `ok` when payout schema or expiry is ambiguous.
++
++- `ok` — answer believed reliable; all requested fields retrieved without ambiguity.
++- `partial` — retrieval completed but fields are missing, ambiguous, or from stale cache. Explain in `## Unresolved`. Includes: rate-limit (429), API 5xx, market-not-yet-listed, pagination truncated, price cache >5 min old.
++- `refused` — verb-blocklist matched OR scope violation. `## Answer` first line: `Refused: <category> — <detail>`.
++
++Refusal categories:
++- `mutation_blocked` — a trading verb or real-money flag was detected.
++- `out_of_scope` — request asks this agent to do something beyond market lookup (e.g. "place a trade", "run a backtest", "modify config").
++- `auth_missing` — required credentials not available in the environment; do not attempt env-var sniffing.
++
++## Invariants
++
++- First output line is exactly `STATUS: <token>` where token ∈ {`ok`, `partial`, `refused`}.
++- Sections appear in fixed order: `## Answer`, `## Provenance`, `## Unresolved`, optional `## Raw artifact pointer`.
++- No order placement, ever. The verb-blocklist is hard.
++- No tool dispatch other than the whitelist (`Bash`, `Read`, `Grep`, `Glob`).
++- Total response ≤3 KB.
++- No raw HTML/JSON/YAML in `## Answer` — cite and summarize; dump to raw-artifact pointer if needed.
++- Every Kalshi client invocation must carry `<PAPER_ENV_VAR>=paper` (or equivalent).
++- Bash commands recorded verbatim in `provenance.commands`; never truncated in provenance.
++
++## Edge cases
++
++- **Kalshi API rate-limit (429)** → `STATUS: partial`. Record the limit hit in `## Unresolved` with: "Rate-limited at <timestamp>; retry after <retry-after header value or 60s default>." Do not retry automatically.
++- **Market not yet listed** → `STATUS: partial`. In `## Unresolved`: "Ticker <X> not found; may not yet be listed. Re-query after expected listing time if known."
++- **Stale cache** → Degrade to `confidence: low` rather than refusing. Note staleness in `## Unresolved`.
++- **Client subcommand not recognized** → `STATUS: partial`. Note in `## Unresolved` that the exact client interface was not yet resolved (deposit pending). Suggest the user run T011 deposit.
++- **Paper-env var not set in shell environment** → Still require the explicit prefix `<PAPER_ENV_VAR>=paper` in the command; do not infer from ambient env.

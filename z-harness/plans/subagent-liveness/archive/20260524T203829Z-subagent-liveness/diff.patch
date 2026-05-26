@@ -1,0 +1,457 @@
+diff --git a/agents/consultant-primary.md b/agents/consultant-primary.md
+index 6b4da11..652c81b 100644
+--- a/agents/consultant-primary.md
++++ b/agents/consultant-primary.md
+@@ -25,11 +25,21 @@ USE_STDIN="$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; d=json.loa
+ MODEL_LABEL="$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["model_label"])')"
+ TIMEOUT="$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["timeout_s"])')"
+ 
+-TIMEOUT_CMD="$(command -v timeout || command -v gtimeout || true)"
+-if [ -z "$TIMEOUT_CMD" ] && [ -z "$Z_HARNESS_TIMEOUT_WARNED" ]; then
+-  echo "[providers] timeout(1) not on PATH — provider timeout disabled. brew install coreutils to restore." >&2
+-  export Z_HARNESS_TIMEOUT_WARNED=1
+-fi
++# $RUN is the run-id the caller passed in (see "Archiving" section below).
++# Set it now — check-timeout.sh keys the per-run timeout_availability marker
++# on it, and without it the event isn't emitted.
++RUN="<run-id from caller>"
++
++# Detects timeout(1)/gtimeout, sets $TIMEOUT_CMD, and emits one
++# `timeout_availability` event per run so silent-disable is debuggable.
++source "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/check-timeout.sh" "$RUN"
++
++# Emit `consult_start` BEFORE the provider CLI call so scripts/liveness.sh
++# can detect a hung consultant even when $TIMEOUT_CMD is empty (no coreutils
++# on PATH). The existing post-call `consult` event in the Archiving section
++# below is the matching end-marker (see END_KIND_TO_BASE in liveness.sh).
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" consult_start \
++  "$(printf '{"role":"consultant_primary","mode":"%s","provider":"%s"}' "$MODE" "$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; print(json.load(sys.stdin)["provider"])')")"
+ 
+ if [ "$USE_STDIN" = "True" ]; then
+   if [ -n "$TIMEOUT_CMD" ]; then
+diff --git a/agents/consultant-secondary.md b/agents/consultant-secondary.md
+index d318c0a..215ace2 100644
+--- a/agents/consultant-secondary.md
++++ b/agents/consultant-secondary.md
+@@ -25,11 +25,21 @@ USE_STDIN="$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; d=json.loa
+ MODEL_LABEL="$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["model_label"])')"
+ TIMEOUT="$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["timeout_s"])')"
+ 
+-TIMEOUT_CMD="$(command -v timeout || command -v gtimeout || true)"
+-if [ -z "$TIMEOUT_CMD" ] && [ -z "$Z_HARNESS_TIMEOUT_WARNED" ]; then
+-  echo "[providers] timeout(1) not on PATH — provider timeout disabled. brew install coreutils to restore." >&2
+-  export Z_HARNESS_TIMEOUT_WARNED=1
+-fi
++# $RUN is the run-id the caller passed in (see "Archiving" section below).
++# Set it now — check-timeout.sh keys the per-run timeout_availability marker
++# on it, and without it the event isn't emitted.
++RUN="<run-id from caller>"
++
++# Detects timeout(1)/gtimeout, sets $TIMEOUT_CMD, and emits one
++# `timeout_availability` event per run so silent-disable is debuggable.
++source "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/check-timeout.sh" "$RUN"
++
++# Emit `consult_start` BEFORE the provider CLI call so scripts/liveness.sh
++# can detect a hung consultant even when $TIMEOUT_CMD is empty (no coreutils
++# on PATH). The existing post-call `consult` event in the Archiving section
++# below is the matching end-marker (see END_KIND_TO_BASE in liveness.sh).
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" consult_start \
++  "$(printf '{"role":"consultant_secondary","mode":"%s","provider":"%s"}' "$MODE" "$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; print(json.load(sys.stdin)["provider"])')")"
+ 
+ if [ "$USE_STDIN" = "True" ]; then
+   if [ -n "$TIMEOUT_CMD" ]; then
+diff --git a/agents/reviewer.md b/agents/reviewer.md
+index bd16a61..e9fc13d 100644
+--- a/agents/reviewer.md
++++ b/agents/reviewer.md
+@@ -25,11 +25,16 @@ USE_STDIN="$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; d=json.loa
+ MODEL_LABEL="$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["model_label"])')"
+ TIMEOUT="$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["timeout_s"])')"
+ 
+-TIMEOUT_CMD="$(command -v timeout || command -v gtimeout || true)"
+-if [ -z "$TIMEOUT_CMD" ] && [ -z "$Z_HARNESS_TIMEOUT_WARNED" ]; then
+-  echo "[providers] timeout(1) not on PATH — provider timeout disabled. brew install coreutils to restore." >&2
+-  export Z_HARNESS_TIMEOUT_WARNED=1
+-fi
++# $RUN is the run-id the caller passed in. Set it now — check-timeout.sh
++# keys its per-run timeout_availability marker on it, and without it the
++# event isn't emitted. The reviewer is typically dispatched per-task, so
++# pass "tasks/<task-id>" if that's the scope you want the event written to;
++# otherwise the run-id of the parent /z-implement-all call.
++RUN="<run-id or tasks/<task-id> from caller>"
++
++# Detects timeout(1)/gtimeout, sets $TIMEOUT_CMD, and emits one
++# `timeout_availability` event per run so silent-disable is debuggable.
++source "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/check-timeout.sh" "$RUN"
+ 
+ if [ "$USE_STDIN" = "True" ]; then
+   if [ -n "$TIMEOUT_CMD" ]; then
+diff --git a/docs/human/LIVENESS.md b/docs/human/LIVENESS.md
+new file mode 100644
+index 0000000..d9c8b39
+--- /dev/null
++++ b/docs/human/LIVENESS.md
+@@ -0,0 +1,72 @@
++# Subagent liveness inspector
++
++## What it is
++
++`scripts/liveness.sh` is a post-hoc reader for `events.jsonl`. It scans a run's
++event log for `*_start` events that have no matching `*_end` and reports them
++as "possibly stuck" with their elapsed wall time.
++
++It emits no events of its own, makes no LLM calls, and is safe to run any
++number of times from a second terminal while a `/z-plan` or `/z-implement-all`
++run is in flight.
++
++## Why it exists
++
++Foreground subagents (implementer, consultant, reviewer) are dispatched
++synchronously via the Agent tool — while one is in flight, the orchestrator
++itself is blocked and cannot poll. From the user's terminal, that looks
++identical to a hang. `liveness.sh` gives you a way to disambiguate without
++adding heartbeats, polling loops, or any per-subagent LLM cost.
++
++The companion script `scripts/check-timeout.sh` is sourced by the
++consultant/reviewer agents at dispatch time. It detects whether `timeout(1)`
++or `gtimeout` is on PATH, sets the `TIMEOUT_CMD` variable used by the
++dispatch wrappers, and emits a `timeout_availability` event once per run.
++This makes the silent-disable failure mode (no `timeout` on PATH, provider
++CLI hangs indefinitely) post-hoc debuggable in `events.jsonl`.
++
++The implementer does *not* source `check-timeout.sh` because it doesn't
++invoke external CLIs — its hangs are caught by the `implement_start` /
++`implement_end` bracket detection in `liveness.sh` directly, which needs no
++auxiliary event.
++
++## Usage
++
++```bash
++# Most-recently-modified run across all plans + legacy archive
++scripts/liveness.sh
++
++# A specific run
++scripts/liveness.sh --run 20260524T203829Z-subagent-liveness
++
++# Latest run for a specific slug
++scripts/liveness.sh --slug subagent-liveness
++
++# Lower the staleness threshold to 60 seconds (default 300)
++scripts/liveness.sh --stale-seconds 60
++
++# Include just-started entries (no staleness filter)
++scripts/liveness.sh --all
++
++# Live tail from a second terminal
++watch -n 5 scripts/liveness.sh
++```
++
++Exit code is 1 if any subagent is flagged, 0 otherwise — usable from another
++script if you want to wire up paging.
++
++## What "possibly stuck" means
++
++A `*_start` event with no matching `*_end` is a hint, not proof. Possible
++causes, in rough order of likelihood:
++
++1. The subagent is genuinely still working (long implementer task, slow CLI
++   consultant). Re-run in a minute; elapsed should still grow but the entry
++   may close.
++2. The subagent crashed before emitting its `*_end` event.
++3. The external provider CLI hung — most likely when
++   `timeout_availability.available == false` for this run.
++
++If you see a stuck `consult_*_start` AND `timeout_availability.available
++== false` in the same run, the external CLI almost certainly hung silently;
++install GNU coreutils (`brew install coreutils`) and re-run.
+diff --git a/scripts/check-timeout.sh b/scripts/check-timeout.sh
+new file mode 100755
+index 0000000..21423b8
+--- /dev/null
++++ b/scripts/check-timeout.sh
+@@ -0,0 +1,83 @@
++#!/usr/bin/env bash
++# Detect timeout(1)/gtimeout(1) on PATH and emit a structured
++# `timeout_availability` event once per run.
++#
++# Designed to be SOURCED, not executed:
++#   source "$PLUGIN_ROOT/scripts/check-timeout.sh" "$RUN"
++#
++# On return, the caller's environment has `TIMEOUT_CMD` set:
++#   - absolute path to `timeout` or `gtimeout` if found
++#   - empty string if neither is on PATH (caller must check)
++#
++# The event is emitted at most once per (run, shell-session) tuple via a
++# marker file under the run dir, mirroring the `.providers-logged` pattern
++# in commands/z-plan.md. Subsequent sources within the same run are no-ops
++# beyond exporting TIMEOUT_CMD.
++
++# Resolve plugin root the same way log-phase.sh does.
++_CT_PLUGIN_ROOT="${ANTIGRAVITY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}"
++
++# Argument: run id (relative or absolute path under archive/). May be empty;
++# if empty, we still set TIMEOUT_CMD but skip the event emission.
++_CT_RUN="${1:-}"
++
++TIMEOUT_CMD="$(command -v timeout || command -v gtimeout || true)"
++export TIMEOUT_CMD
++
++# Stderr warning runs before any marker check so parallel shell sessions
++# (where the env-var guard doesn't carry across processes) still see it once
++# per shell. Idempotency of the *event* is enforced separately below via a
++# filesystem marker.
++if [ -z "$TIMEOUT_CMD" ] && [ -z "${Z_HARNESS_TIMEOUT_WARNED:-}" ]; then
++  echo "[providers] timeout(1) not on PATH — provider timeout disabled. brew install coreutils to restore." >&2
++  export Z_HARNESS_TIMEOUT_WARNED=1
++fi
++
++if [ -z "$_CT_RUN" ]; then
++  return 0 2>/dev/null || exit 0
++fi
++
++# Locate the run dir to drop the marker file. Mirrors log-event.sh's resolution.
++_CT_REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
++if [ -n "${Z_HARNESS_SLUG:-}" ]; then
++  _CT_PLANS_DIR="${Z_HARNESS_PLANS_DIR:-z-harness/plans}"
++  case "$_CT_PLANS_DIR" in
++    /*) _CT_RUN_DIR="$_CT_PLANS_DIR/$Z_HARNESS_SLUG/archive/$_CT_RUN" ;;
++    *)  _CT_RUN_DIR="$_CT_REPO_ROOT/$_CT_PLANS_DIR/$Z_HARNESS_SLUG/archive/$_CT_RUN" ;;
++  esac
++  _CT_LEGACY_RUN_DIR="$_CT_REPO_ROOT/z-harness/$Z_HARNESS_SLUG/archive/$_CT_RUN"
++  if [ -d "$_CT_LEGACY_RUN_DIR" ] && [ ! -d "$_CT_RUN_DIR" ]; then
++    _CT_RUN_DIR="$_CT_LEGACY_RUN_DIR"
++  fi
++else
++  _CT_RUN_DIR="$_CT_REPO_ROOT/z-harness/archive/$_CT_RUN"
++fi
++
++mkdir -p "$_CT_RUN_DIR"
++
++# Atomic lock via mkdir — `mkdir` of an existing directory is a non-zero exit,
++# so only the first parallel source-caller proceeds to emit the event. This
++# is the cheap POSIX-portable replacement for flock here (log-event.sh itself
++# uses flock; we only need to gate the one-shot emission).
++_CT_MARKER_DIR="$_CT_RUN_DIR/.timeout-logged"
++if ! mkdir "$_CT_MARKER_DIR" 2>/dev/null; then
++  return 0 2>/dev/null || exit 0
++fi
++
++# Build payload via python3 so a path with quotes/backslashes/newlines round-trips
++# as valid JSON instead of being wrapped as `{"raw": ...}` by log-event.sh.
++_CT_PAYLOAD="$(python3 -c '
++import json, sys
++cmd = sys.argv[1] or None
++out = {"available": bool(cmd), "command": cmd}
++if not cmd:
++    out["hint"] = "brew install coreutils to restore timeout(1)"
++print(json.dumps(out))
++' "$TIMEOUT_CMD")"
++
++# Write the event BEFORE confirming the marker survives. If log-event.sh
++# fails, remove the marker so a subsequent caller can retry the emission
++# instead of being silently locked out for the rest of the run.
++if ! bash "$_CT_PLUGIN_ROOT/scripts/log-event.sh" "$_CT_RUN" timeout_availability "$_CT_PAYLOAD" >/dev/null 2>&1; then
++  rmdir "$_CT_MARKER_DIR" 2>/dev/null || true
++fi
+diff --git a/scripts/liveness.sh b/scripts/liveness.sh
+new file mode 100755
+index 0000000..221b549
+--- /dev/null
++++ b/scripts/liveness.sh
+@@ -0,0 +1,196 @@
++#!/usr/bin/env bash
++# Post-hoc liveness inspector. Scans a run's events.jsonl for `*_start` events
++# that have no matching `*_end` event and reports them as "possibly stuck"
++# subagents with elapsed wall time.
++#
++# Designed to be safe to run repeatedly from a second terminal while a /z-plan
++# or /z-implement-all run is in flight. It is purely a reader — no events
++# emitted, no orchestrator-flow changes, zero LLM token cost.
++#
++# Usage:
++#   scripts/liveness.sh                       # latest run across all plans
++#   scripts/liveness.sh --run RUN_ID          # specific run id
++#   scripts/liveness.sh --slug SLUG           # latest run for a specific slug
++#   scripts/liveness.sh --stale-seconds 600   # only flag entries older than N (default 300)
++#   scripts/liveness.sh --all                 # include non-stale (just-started) entries
++#
++# Tail mode (from a second terminal): `watch -n 5 scripts/liveness.sh`
++#
++# Exit codes: 0 if no stuck subagents found; 1 if any flagged; 2 on usage error.
++
++set -euo pipefail
++
++STALE_SECONDS=300
++SLUG=""
++RUN=""
++SHOW_ALL=0
++
++while [ $# -gt 0 ]; do
++  case "$1" in
++    --run)            RUN="$2"; shift 2 ;;
++    --slug)           SLUG="$2"; shift 2 ;;
++    --stale-seconds)  STALE_SECONDS="$2"; shift 2 ;;
++    --all)            SHOW_ALL=1; shift ;;
++    -h|--help)
++      sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
++      exit 0 ;;
++    *)
++      echo "liveness.sh: unknown arg: $1" >&2
++      exit 2 ;;
++  esac
++done
++
++REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
++PLANS_DIR="${Z_HARNESS_PLANS_DIR:-z-harness/plans}"
++case "$PLANS_DIR" in
++  /*) PLANS_ABS="$PLANS_DIR" ;;
++  *)  PLANS_ABS="$REPO_ROOT/$PLANS_DIR" ;;
++esac
++
++# Collect candidate events.jsonl files based on flags. maxdepth 6 covers
++# both run-scoped (plans/<slug>/archive/<run>/events.jsonl, depth 4 below
++# PLANS_ABS) and task-scoped (plans/<slug>/archive/tasks/<task-id>/events.jsonl,
++# depth 5) layouts.
++CANDIDATES=()
++if [ -n "$RUN" ]; then
++  while IFS= read -r -d '' f; do CANDIDATES+=("$f"); done < <(
++    find "$PLANS_ABS" "$REPO_ROOT/z-harness/archive" -maxdepth 6 -type f -name events.jsonl -path "*/$RUN/*" -print0 2>/dev/null
++  )
++elif [ -n "$SLUG" ]; then
++  while IFS= read -r -d '' f; do CANDIDATES+=("$f"); done < <(
++    find "$PLANS_ABS/$SLUG/archive" -maxdepth 5 -type f -name events.jsonl -print0 2>/dev/null
++  )
++else
++  while IFS= read -r -d '' f; do CANDIDATES+=("$f"); done < <(
++    find "$PLANS_ABS" "$REPO_ROOT/z-harness/archive" -maxdepth 6 -type f -name events.jsonl -print0 2>/dev/null
++  )
++fi
++
++if [ ${#CANDIDATES[@]} -eq 0 ]; then
++  echo "liveness.sh: no events.jsonl found under $PLANS_ABS or legacy archive" >&2
++  exit 0
++fi
++
++# When no explicit --run was given, narrow to the single most-recently-modified
++# events.jsonl. --slug also narrows so users don't see stale starts from old
++# runs under the same slug.
++if [ -z "$RUN" ]; then
++  LATEST="$(ls -t "${CANDIDATES[@]}" 2>/dev/null | head -1)"
++  CANDIDATES=("$LATEST")
++fi
++
++python3 - "$STALE_SECONDS" "$SHOW_ALL" "${CANDIDATES[@]}" <<'PY'
++import json, os, sys, time
++from datetime import datetime, timezone
++
++stale_seconds = int(sys.argv[1])
++show_all = sys.argv[2] == "1"
++files = sys.argv[3:]
++
++# Lifecycle brackets — these always look "open" mid-run and are not signs of
++# a stuck subagent. The subagent-level brackets we care about are implement,
++# review, consult, audit, precheck, remote_verify, brainstorm, mr_review,
++# doc_audit, etc. — anything not on this deny-list passes.
++LIFECYCLE_BASES = {
++    "run", "light_run", "user_wait", "phase",
++    "brainstorm_run", "research_run", "debug_run",
++}
++
++# Some subagents emit a single post-call event (not a `*_end` pair) or use
++# alternate end-markers. Map each non-standard end kind to the base whose
++# `<base>_start` it closes. Standard `<base>_end` pairing is handled inline
++# without needing an entry here.
++END_KIND_TO_BASE = {
++    "consult": "consult",            # consultant agents post-call summary
++    "review": "review",              # reviewer agent post-call summary
++    "task_done": "task",             # /z-implement-all task close
++    "task_skip": "task",
++    "task_halt": "task",
++}
++
++def parse_ts(ts):
++    return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
++
++def match_key(base, ev):
++    # Discriminators so distinct attempts/parallel calls don't close each other:
++    #   - id      → per-task identifier
++    #   - retry/cycle/attempt → distinct attempts at the same task
++    #   - role    → consultant_primary vs consultant_secondary running in parallel
++    tid = ev.get("id") or ""
++    retry = ev.get("retry", ev.get("cycle", ev.get("attempt", "")))
++    role = ev.get("role", "")
++    return (base, tid, str(retry), role)
++
++now = time.time()
++any_flagged = False
++
++for path in files:
++    starts = {}
++    with open(path) as fh:
++        for line in fh:
++            line = line.strip()
++            if not line:
++                continue
++            try:
++                ev = json.loads(line)
++            except json.JSONDecodeError:
++                continue
++            kind = ev.get("kind", "")
++            base = None
++            is_start = False
++            if kind.endswith("_start"):
++                base = kind[:-len("_start")]
++                is_start = True
++            elif kind.endswith("_end"):
++                base = kind[:-len("_end")]
++            elif kind in END_KIND_TO_BASE:
++                base = END_KIND_TO_BASE[kind]
++            else:
++                continue
++
++            if base in LIFECYCLE_BASES:
++                continue
++
++            if is_start:
++                starts[match_key(base, ev)] = ev
++            else:
++                starts.pop(match_key(base, ev), None)
++
++    if not starts:
++        continue
++
++    # Filter for stale (unless --all)
++    rows = []
++    for key, ev in starts.items():
++        base, tid, _retry, role = key
++        try:
++            elapsed = int(now - parse_ts(ev["ts"]))
++        except Exception:
++            elapsed = -1
++        if not show_all and (elapsed < stale_seconds or elapsed < 0):
++            continue
++        rows.append((base, tid, role, elapsed, ev))
++
++    if not rows:
++        continue
++
++    any_flagged = True
++    # Derive a friendly run label from the path
++    parts = path.split(os.sep)
++    try:
++        run_label = parts[parts.index("archive") + 1]
++    except (ValueError, IndexError):
++        run_label = path
++    print(f"\nRun: {run_label}")
++    print(f"  events.jsonl: {path}")
++    print(f"  possibly stuck (elapsed >= {stale_seconds}s):")
++    for base, tid, role, elapsed, ev in sorted(rows, key=lambda r: -r[3]):
++        tag = ""
++        if tid:
++            tag += f" [{tid}]"
++        if role:
++            tag += f" ({role})"
++        print(f"    - {base}_start{tag}: {elapsed}s ago  (ts={ev['ts']})")
++
++sys.exit(1 if any_flagged else 0)
++PY

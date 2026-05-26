@@ -1,0 +1,2 @@
+{"ts":"2026-05-26T06:01:25Z","run":"20260526T060106Z-debug-main-divergence-force-push","kind":"debug_run_start","z_harness_version":"ddc5273","z_harness_dirty":true,"z_harness_branch":"main","symptom":"Recurring force-push of main due to local/origin divergence"}
+{"ts":"2026-05-26T14:55:00Z","run":"20260526T060106Z-debug-main-divergence-force-push","kind":"debug_run_end","status":"shipped","hypothesis_cycles":1,"total_hypotheses_generated":14,"action_items":4,"postmortem_written":true,"winning_hypothesis":"H002","posterior":"very_high"}

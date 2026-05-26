@@ -23,11 +23,21 @@ USE_STDIN="$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; d=json.loa
 MODEL_LABEL="$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["model_label"])')"
 TIMEOUT="$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["timeout_s"])')"
 
-TIMEOUT_CMD="$(command -v timeout || command -v gtimeout || true)"
-if [ -z "$TIMEOUT_CMD" ] && [ -z "$Z_HARNESS_TIMEOUT_WARNED" ]; then
-  echo "[providers] timeout(1) not on PATH — provider timeout disabled. brew install coreutils to restore." >&2
-  export Z_HARNESS_TIMEOUT_WARNED=1
-fi
+# $RUN is the run-id the caller passed in (see "Archiving" section below).
+# Set it now — check-timeout.sh keys the per-run timeout_availability marker
+# on it, and without it the event isn't emitted.
+RUN="<run-id from caller>"
+
+# Detects timeout(1)/gtimeout, sets $TIMEOUT_CMD, and emits one
+# `timeout_availability` event per run so silent-disable is debuggable.
+source "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/check-timeout.sh" "$RUN"
+
+# Emit `consult_start` BEFORE the provider CLI call so scripts/liveness.sh
+# can detect a hung consultant even when $TIMEOUT_CMD is empty (no coreutils
+# on PATH). The existing post-call `consult` event in the Archiving section
+# below is the matching end-marker (see END_KIND_TO_BASE in liveness.sh).
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" consult_start \
+  "$(printf '{"role":"consultant_secondary","mode":"%s","provider":"%s"}' "$MODE" "$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; print(json.load(sys.stdin)["provider"])')")"
 
 if [ "$USE_STDIN" = "True" ]; then
   if [ -n "$TIMEOUT_CMD" ]; then

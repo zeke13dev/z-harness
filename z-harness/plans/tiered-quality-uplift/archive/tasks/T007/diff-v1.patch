@@ -1,0 +1,283 @@
+--- z-harness/plans/tiered-quality-uplift/archive/tasks/T007/baseline.md	2026-05-25 22:31:08
++++ commands/z-uplift.md	2026-05-25 22:36:05
+@@ -68,8 +68,17 @@
+ 
+ Derive a slug from the repository name or the first 2–4 words of the user's description: short kebab-case (e.g. "uplift my-app" → `my-app-uplift`; default `<repo-basename>-uplift`).
+ 
+-If the auto-derived slug is non-obvious, confirm with the user via `AskUserQuestion`.
++If the auto-derived slug is non-obvious, log `user_wait_start`, confirm with the user via `AskUserQuestion`, then log `user_wait_end`:
+ 
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start \
++  '{"phase":"setup","reason":"slug_confirmation"}'
++_WAIT_T0=$(date +%s%3N)
++# AskUserQuestion(...)
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end \
++  "$(printf '{"phase":"setup","wall_ms":%d}' "$(( $(date +%s%3N) - _WAIT_T0 ))")"
++```
++
+ Check for an existing slug dir in the canonical plans directory (`z-harness/plans/`). If a MANIFEST.md is found there, this is a **resume** — skip decomposition phases and jump to the next non-terminal MANIFEST state. If only a slug collision without MANIFEST, prompt the user to confirm or choose a different slug.
+ 
+ ```bash
+@@ -122,9 +131,21 @@
+ 
+ If `stale_pct >= threshold`:
+ - Write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md` (artifact for audit trail). Set `ARTIFACT_PATH="$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md"`.
+-- Push-notify and present `AskUserQuestion`: switch to `/z-maintain-docs` / continue here with stale docs / abandon.
++- Log `user_wait_start`, push-notify, and present `AskUserQuestion`: switch to `/z-maintain-docs` / continue here with stale docs / abandon.
++
++  ```bash
++  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start \
++    '{"phase":"setup","reason":"docs_staleness_gate"}'
++  _WAIT_T0=$(date +%s%3N)
++  ```
++
+ - Do NOT auto-invoke `/z-maintain-docs`.
+-- After the user responds, emit `plan_route_decision` with the resolved `user_choice` populated:
++- After the user responds, log `user_wait_end` and emit `plan_route_decision` with the resolved `user_choice` populated:
++
++  ```bash
++  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end \
++    "$(printf '{"phase":"setup","wall_ms":%d}' "$(( $(date +%s%3N) - _WAIT_T0 ))")"
++  ```
+ 
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_route_decision \
+@@ -426,15 +447,28 @@
+ fi
+ ```
+ 
+-If STYLE.md is missing and `NO_STYLE` is not set, push-notify and present `AskUserQuestion`:
++If STYLE.md is missing and `NO_STYLE` is not set, log `user_wait_start`, push-notify, and present `AskUserQuestion`:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start \
++  '{"phase":"setup","reason":"style_md_missing_gate"}'
++_WAIT_T0=$(date +%s%3N)
++```
+ 
+ > No `STYLE.md` found at the repo root. How would you like to proceed?
+ > 1. Run `/z-style-init` first (recommended) — after it completes, re-invoke `/z-uplift`
+ > 2. Continue without STYLE.md (cleanliness+design audits degrade to generic rubric) — equivalent to passing `--no-style`
+ > 3. Abort
+ 
+-Handle the response (emit the outcome-specific event AFTER the user responds, inside each branch):
++After the user responds, log `user_wait_end`:
+ 
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end \
++  "$(printf '{"phase":"setup","wall_ms":%d}' "$(( $(date +%s%3N) - _WAIT_T0 ))")"
++```
++
++Handle the response (emit the outcome-specific event AFTER `user_wait_end` is logged, inside each branch):
++
+ - **Option 1** (`/z-style-init`): log the handoff and halt cleanly:
+ 
+   ```bash
+@@ -484,17 +518,41 @@
+ 
+ ## Phase 0 — Premise check
+ 
++Record `T0=$(date +%s%3N)` and `USER_WAIT_MS_THIS_PHASE=0` at phase start.
++
+ **Do not take the prompt's premises for granted.** Before proceeding with decomposition, verify:
+ 
+ - Does the codebase actually need bulk uplift, or is there a more targeted `/z-audit` call that's more appropriate?
+ - Are there any obvious blockers (e.g. the repo is a single-file script with no meaningful component boundaries) that would make `/z-uplift` inappropriate?
+ - Is there a `MANIFEST.md` already present under `$Z_HARNESS_PLAN_DIR/`? If so, this is a resume — describe the current MANIFEST state to the user and confirm whether they want to resume or restart.
+ 
+-If any concern surfaces, stop and raise it with the user via `AskUserQuestion` before continuing.
++If any concern surfaces:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start \
++  '{"phase":0,"reason":"premise_concern"}'
++_WAIT_T0=$(date +%s%3N)
++```
++
++Stop and raise it with the user via `AskUserQuestion` before continuing. After the user responds:
++
++```bash
++USER_WAIT_MS_THIS_PHASE=$(( USER_WAIT_MS_THIS_PHASE + $(date +%s%3N) - _WAIT_T0 ))
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end \
++  "$(printf '{"phase":0,"wall_ms":%d}' "$(( $(date +%s%3N) - _WAIT_T0 ))")"
++```
+ 
+ If nothing concerning surfaces, write a one-paragraph "premise accepted" summary describing what uplift will cover (component detection strategy, dimensions, STYLE.md status).
+ 
+ Checkpoint: `phase0-premise.md`.
++
++```bash
++cp "$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md" "$Z_HARNESS_PLAN_DIR/archive/$RUN/phase0-premise.md" 2>/dev/null || true
++WALL_MS=$(( $(date +%s%3N) - T0 ))
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" phase_end \
++  "$(printf '{"phase":0,"name":"premise-check","wall_ms":%d,"user_wait_ms":%d}' \
++     "$WALL_MS" "$USER_WAIT_MS_THIS_PHASE")"
++```
+ 
+ ---
+ 
+@@ -801,9 +859,19 @@
+ )"
+ ```
+ 
+-For each `COLLISION:` block printed above, call `AskUserQuestion` with the offered options, then apply the choice:
++For each `COLLISION:` block printed above, log `user_wait_start`, call `AskUserQuestion` with the offered options, log `user_wait_end`, then apply the choice:
+ 
+ ```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start \
++  '{"phase":1,"reason":"slug_collision_disambiguation"}'
++_WAIT_T0=$(date +%s%3N)
++# AskUserQuestion(...)
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end \
++  "$(printf '{"phase":1,"wall_ms":%d}' "$(( $(date +%s%3N) - _WAIT_T0 ))")"
++USER_WAIT_MS_THIS_PHASE=$(( USER_WAIT_MS_THIS_PHASE + $(date +%s%3N) - _WAIT_T0 ))
++```
++
++```bash
+ # Apply collision resolution choices (repeat per collision until none remain)
+ # User response format: "1", "2", or "<slug-A> <slug-B>"
+ COMPONENTS_JSON="$(python3 - "$COMPONENTS_JSON" "$USER_COLLISION_CHOICES" <<'PYEOF'
+@@ -907,7 +975,13 @@
+ 
+ Push-notify the user that decomposition is ready.
+ 
+-Present `AskUserQuestion`:
++Log `user_wait_start`, present `AskUserQuestion`, then log `user_wait_end`:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start \
++  '{"phase":1,"reason":"decomposition_confirm"}'
++_WAIT_T0=$(date +%s%3N)
++```
+ 
+ > Decomposition complete. Review `$Z_HARNESS_PLAN_DIR/COMPONENTS.md` — it lists N component(s) detected via [methods].
+ >
+@@ -915,6 +989,12 @@
+ > 1. Proceed — confirm the detected components and continue to Phase 2
+ > 2. Abort — to revise the decomposition, edit `COMPONENTS.md` (or re-invoke with `--components=<file>` / `--component <path>`), then re-invoke `/z-uplift`
+ 
++```bash
++USER_WAIT_MS_THIS_PHASE=$(( USER_WAIT_MS_THIS_PHASE + $(date +%s%3N) - _WAIT_T0 ))
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end \
++  "$(printf '{"phase":1,"wall_ms":%d}' "$(( $(date +%s%3N) - _WAIT_T0 ))")"
++```
++
+ If the user chooses **Abort**: emit `run_end status: aborted_by_user` and exit. Do NOT offer an "edit in-place" loop.
+ 
+ If the user chooses **Proceed**: continue to Step 6.
+@@ -1705,7 +1785,7 @@
+ - `rubric_path` is the **absolute path** to STYLE.md (or empty string). Never inline STYLE.md content.
+ - `rubric_path` is non-empty **only** when `dim ∈ {cleanliness, design}` AND `STYLE_MD_PATH` is non-empty.
+ - All auditors for this component are dispatched simultaneously in one message — never serialized.
+-- If any auditor returns `unable_to_complete`: surface via `AskUserQuestion` (retry / skip that dimension / skip the entire component / abort Phase 3). On retry, re-dispatch only the failed dimension.
++- If any auditor returns `unable_to_complete`: log `user_wait_start` (`phase:3, reason:"auditor_failed"`), surface via `AskUserQuestion` (retry / skip that dimension / skip the entire component / abort Phase 3), log `user_wait_end` and accumulate into `USER_WAIT_MS_PHASE3`. On retry, re-dispatch only the failed dimension.
+ 
+ #### Step 2e — Merge per-dimension findings into REPORT.md
+ 
+@@ -2016,7 +2096,7 @@
+ 
+ Parse the return:
+ 
+-- **Blockers** → re-edit the affected TASKS.md entries in-place; re-run the reviewer once. If the second review still has Blockers, halt with `AskUserQuestion` describing the issue.
++- **Blockers** → re-edit the affected TASKS.md entries in-place; re-run the reviewer once. If the second review still has Blockers, log `user_wait_start` (`phase:3, reason:"reviewer_blocker"`), halt with `AskUserQuestion` describing the issue, then log `user_wait_end` and accumulate into `USER_WAIT_MS_PHASE3`.
+ - **Majors** → fix in-place, then accept.
+ - **No Blockers/Majors** → accept and continue.
+ 
+@@ -2318,10 +2398,24 @@
+ )"
+ ```
+ 
+-If `RESUME_PENDING_COUNT == 0` (all tasks are `[x]`): automatically transition without AskUserQuestion — run the manifest_replace_row block from Step 2d with state `[x] done`, emit `component_implement_done` with `outcome: "auto_detected_complete"`, and continue to the next component. Skip the AskUserQuestion below.
++If `RESUME_PENDING_COUNT == 0` (all tasks are `[x]`): automatically transition without AskUserQuestion — run the manifest_replace_row block from Step 2d with state `[x] done`, emit `component_implement_done`, and continue to the next component. Skip the AskUserQuestion below.
+ 
+-If `RESUME_PENDING_COUNT > 0`: Log a `user_wait_start` event, then present `AskUserQuestion`:
++```bash
++# Run manifest_replace_row (Step 2d block) with new_state="[x] done", then:
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" component_implement_done \
++  "$(printf '{"component":"%s","outcome":"auto_detected_complete"}' "$COMP_SLUG")"
++```
+ 
++If `RESUME_PENDING_COUNT > 0`:
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start \
++  "$(printf '{"phase":5,"reason":"interrupted_resume","component":"%s"}' "$COMP_SLUG")"
++_WAIT_T0=$(date +%s%3N)
++```
++
++Present `AskUserQuestion`:
++
+ > Component `<component>` is in state `[i] implementing` — it was being implemented when the last invocation was interrupted. `<RESUME_PENDING_COUNT>` pending task(s) remain in `<COMP_TASKS_MD>`.
+ >
+ > How would you like to proceed?
+@@ -2330,8 +2424,14 @@
+ > 3. Skip — mark as `[s] skipped: user` and move on
+ > 4. Abort — leave all remaining components unchanged and exit
+ 
+-Log `user_wait_end` after the user responds.
++After the user responds:
+ 
++```bash
++USER_WAIT_MS_THIS_PHASE=$(( USER_WAIT_MS_THIS_PHASE + $(date +%s%3N) - _WAIT_T0 ))
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end \
++  "$(printf '{"phase":5,"wall_ms":%d}' "$(( $(date +%s%3N) - _WAIT_T0 ))")"
++```
++
+ Handle the response:
+ 
+ - **Option 1 (Resume):** continue into Step 2b (treat as a normal proceed).
+@@ -2379,8 +2479,14 @@
+ )"
+ ```
+ 
+-Log `user_wait_start`, then present `AskUserQuestion`:
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start \
++  "$(printf '{"phase":5,"reason":"implement_gate","component":"%s"}' "$COMP_SLUG")"
++_WAIT_T0=$(date +%s%3N)
++```
+ 
++Present `AskUserQuestion`:
++
+ > Implement `<component>` (`<COMP_PENDING_TASKS>` pending tasks)?
+ >
+ > Tasks file: `<COMP_TASKS_MD>`
+@@ -2390,8 +2496,14 @@
+ > 2. Skip this component — mark as skipped and move on
+ > 3. Abort uplift — leave remaining components unchanged and exit
+ 
+-Log `user_wait_end` after the user responds.
++After the user responds:
+ 
++```bash
++USER_WAIT_MS_THIS_PHASE=$(( USER_WAIT_MS_THIS_PHASE + $(date +%s%3N) - _WAIT_T0 ))
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end \
++  "$(printf '{"phase":5,"wall_ms":%d}' "$(( $(date +%s%3N) - _WAIT_T0 ))")"
++```
++
+ Handle the response:
+ 
+ - **Proceed:** continue into Step 2c.
+@@ -2570,6 +2682,8 @@
+ 
+ ## Phase 6 — Finalize
+ 
++Record `T0=$(date +%s%3N)` at phase start.
++
+ Phase 6 closes the uplift run by recording final telemetry, notifying the user with a summary of outcomes (done / skipped / bailed), and flagging any follow-on work. It logs `run_end` with a structured status blob so post-run analysis can compute per-run metrics. If any task in any generated TASKS.md carried a `**DOCS:**` line, Phase 6 surfaces a recommendation to run `/z-maintain-docs` — this keeps the two-tier documentation current after uplift-driven code changes. No code is modified in this phase.
+ 
+ 1. Log `run_end` with a status blob:
+@@ -2586,4 +2700,11 @@
+ 
+    > "Some tasks carried DOCS tags. Run `/z-maintain-docs` to refresh the two-tier documentation."
+ 
+-Checkpoint: `phase6-finalize.md`.
++Checkpoint and phase telemetry:
++
++```bash
++cp "$Z_HARNESS_PLAN_DIR/MANIFEST.md" "$Z_HARNESS_PLAN_DIR/archive/$RUN/phase6-finalize.md"
++WALL_MS=$(( $(date +%s%3N) - T0 ))
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" phase_end \
++  "$(printf '{"phase":6,"name":"finalize","wall_ms":%d,"user_wait_ms":0}' "$WALL_MS")"
++```

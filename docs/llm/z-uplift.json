@@ -1,0 +1,118 @@
+{
+  "concept": "z-uplift",
+  "last_updated": "2026-05-26",
+  "covers_spec": "z-harness/plans/tiered-quality-uplift/SPEC.md",
+  "source_files": [
+    "commands/z-uplift.md",
+    "docs/human/z-uplift.md",
+    "skills/z-uplift/SKILL.md"
+  ],
+  "confidence": "high",
+  "entry_points": [
+    {
+      "file": "commands/z-uplift.md",
+      "line": 65,
+      "symbol": "Setup",
+      "kind": "module",
+      "summary": "Derive uplift slug, resolve plan dir, pick run ID, log run_start, doc-staleness gate."
+    },
+    {
+      "file": "commands/z-uplift.md",
+      "line": 434,
+      "symbol": "STYLE.md gate",
+      "kind": "gate",
+      "summary": "Require STYLE.md at repo root; halt and recommend /z-style-init if missing unless --no-style passed."
+    },
+    {
+      "file": "commands/z-uplift.md",
+      "line": 519,
+      "symbol": "Phase 0",
+      "kind": "phase",
+      "summary": "Premise check — one-paragraph goal confirmation, same shape as /z-plan Phase 0."
+    },
+    {
+      "file": "commands/z-uplift.md",
+      "line": 559,
+      "symbol": "Phase 1",
+      "kind": "phase",
+      "summary": "Decomposition — auto-detect components, write COMPONENTS.md, AskUser gate; slug collision resolver loops with sanity counter (aborts after 3 no-progress iterations); SLUG_RE validates ^[a-z0-9]+(?:-[a-z0-9]+)*$."
+    },
+    {
+      "file": "commands/z-uplift.md",
+      "line": 1076,
+      "symbol": "Phase 2",
+      "kind": "phase",
+      "summary": "Cross-cutting pass — dispatch consultant-primary + consultant-secondary in parallel; merge into CROSS-CUTTING.md; parser emits cross_cutting_findings_dropped for non-G/C/R bullets; Step 6 inserts synthetic row as [a] audited with atomic write."
+    },
+    {
+      "file": "commands/z-uplift.md",
+      "line": 1619,
+      "symbol": "Phase 3",
+      "kind": "phase",
+      "summary": "Per-component audits — dispatch auditor per dimension in parallel; CRIT_HIGH parser is structural (handles ### [CRITICAL] headers, inline bullet tags, Severity: key-value); git grep guarded against empty OTHER_COMP_PATHS; auto-bail check (>30 total OR >10 CRIT-HIGH); produce REPORT.md + TASKS.md; reviewer gate."
+    },
+    {
+      "file": "commands/z-uplift.md",
+      "line": 2282,
+      "symbol": "Phase 4",
+      "kind": "phase",
+      "summary": "Review gate — present aggregated queue summary (component count, total tasks, bailed components, dep warnings); prints cross-cutting-first ordering callout when synthetic row is present."
+    },
+    {
+      "file": "commands/z-uplift.md",
+      "line": 2428,
+      "symbol": "Phase 5",
+      "kind": "phase",
+      "summary": "Sequential implement — AskUser gate per component; prints the /z-implement-all --tasks= command and marks state [i] implementing, then exits for the user to run it (two-step handoff); update MANIFEST state after user confirms completion."
+    },
+    {
+      "file": "commands/z-uplift.md",
+      "line": 2808,
+      "symbol": "Phase 6",
+      "kind": "phase",
+      "summary": "Finalize — log run_end, push-notify, recommend /z-maintain-docs if any task carried a **DOCS:** line."
+    }
+  ],
+  "invariants": [
+    "STYLE.md gate runs at Setup (same shape as /z-mr-review's STYLE gate); without --no-style, missing STYLE.md halts and recommends /z-style-init. With --no-style, audits proceed but cleanliness+design fall back to the generic rubric.",
+    "STYLE.md content is injected as authoritative rubric into cleanliness and design auditor prompts; auditors cite STYLE rule IDs in findings.",
+    "commands/z-uplift.md MUST mirror /z-audit Phases 2-6 inline (intentional duplication); divergence is a bug.",
+    "Per-component output dir is z-harness/plans/<uplift-slug>-<component-slug>/; SPEC/PLAN/TASKS live there; /z-implement-all --tasks= reads SPEC/PLAN from that dir.",
+    "MANIFEST.md is the resume authority; no parallel state file.",
+    "Components processed sequentially in MANIFEST order; synthetic -cross-cutting first if it exists.",
+    "Synthetic <slug>-cross-cutting row is inserted as [a] audited (not [ ] pending) so Phase 5 queue filter picks it up immediately without a Phase 3 audit pass.",
+    "Auto-bail thresholds match /z-audit's (>30 total OR >10 CRIT-HIGH) per component; bailed components excluded from implement queue and not retried unless --retry-bailed.",
+    "CRIT_HIGH parser is structural: recognises ### [CRITICAL]/[HIGH] headers, - F-NNN [CRITICAL] inline bullet tags, and Severity: CRITICAL/HIGH key-value fields; prose mentions are not counted.",
+    "git grep for bail dependents is only invoked when OTHER_COMP_PATHS is non-empty; empty path list is a no-op that sets DEPS_FOUND to empty string.",
+    "Collision resolver loops until slug list is collision-free; no-progress sanity counter (>3 stalled iterations) exits with error to prevent infinite loops.",
+    "SLUG_RE enforces ^[a-z0-9]+(?:-[a-z0-9]+)*$ for all custom slugs supplied during collision resolution.",
+    "All MANIFEST mutations use atomic write (os.replace tmp → final) to prevent partial-write corruption on interrupt.",
+    "Cross-cutting parser emits cross_cutting_findings_dropped telemetry event for every bullet dropped due to non-G/C/R-NNN prefix mismatch.",
+    "Phase 4 prints a callout when the synthetic <slug>-cross-cutting row is in MANIFEST, reminding operator it will be implemented first.",
+    "auditor agent is the only audit primitive; no shell-out to /z-audit.",
+    "Idempotent: re-invoking /z-uplift with no flags resumes at the next non-terminal MANIFEST state.",
+    "Read-only during Phases 1-4; only Phase 5 (/z-implement-all dispatches) writes code.",
+    "No automatic retry of bailed components — --retry-bailed is explicit user opt-in.",
+    "Cross-cutting pass is skippable via --cross-cutting=skip; default ON.",
+    "Every phase emits phase_end with wall_ms and user_wait_ms; AskUserQuestion waits are bracketed by user_wait_start / user_wait_end events."
+  ],
+  "gotchas": [
+    "Main tree may be transiently un-buildable between AskUser gates if a global-task API change lands and dependents are not yet updated; mitigated (but NOT eliminated) by processing <slug>-cross-cutting first. Operators should expect to manually resolve transient build failures.",
+    "Text-grep dependency reporting on bail misses reflection / string-based imports — output is labeled 'Potential dependents (text-grep — incomplete)' in REPORT.md and MANIFEST.md to avoid false confidence.",
+    "git grep for bail dependents silently produces nothing (not an error) when OTHER_COMP_PATHS is empty; DEPS_FOUND will be empty string in that case.",
+    "Polyglot detection misses unconventional layouts; --components=<file> is the escape hatch.",
+    "COMPONENTS.md is read at AskUser confirmation; subsequent edits to that file after confirmation have no effect until --refresh-component or re-decompose.",
+    "perf dimension is deliberately excluded by default to bound uplift cost; pass --dimensions=correctness,cleanliness,design,perf to include it.",
+    "Slug collision (two components with identical basename) triggers AskUser at Phase 1 for user disambiguation; custom slugs failing SLUG_RE abort with an error rather than silently accepting.",
+    "The synthetic <slug>-cross-cutting component is inserted FIRST in MANIFEST as [a] audited so global-task API changes land before per-component cleanup.",
+    "consultant/reviewer provider routing is delegated to scripts/resolve-provider.sh — provider names (Gemini/Codex) are never hardcoded in dispatch prompts.",
+    "Phase line anchors shift whenever the command file is edited; always verify against grep before citing a line number.",
+    "cross_cutting_findings_dropped telemetry fires when consultant output contains bullets that don't match G-NNN/C-NNN/R-NNN; if finding counts seem low check run logs for this event."
+  ],
+  "depends_on": [
+    "commands",
+    "agents"
+  ],
+  "consumed_by": [],
+  "memories": []
+}

@@ -1,0 +1,15 @@
+{"ts":"2026-05-25T00:25:38Z","run":"tasks/T006","kind":"task_start","slug":"plan-bail-router","id":"T006","attempt":1}
+{"ts":"2026-05-25T00:27:57Z","run":"tasks/T006","kind":"implement_start","slug":"plan-bail-router","id":"T006","retry":0}
+{"ts":"2026-05-25T00:29:36Z","run":"tasks/T006","kind":"implement_end","slug":"plan-bail-router","id":"T006","retry":0,"status":"ok","files_changed_count":86,"wall_ms":99368}
+{"ts":"2026-05-25T00:30:10Z","run":"tasks/T006","kind":"diff_capture","slug":"plan-bail-router","id":"T006","diff_bytes":316462}
+{"ts":"2026-05-25T00:30:24Z","run":"tasks/T006","kind":"review_start","slug":"plan-bail-router","id":"T006","cycle":1}
+{"ts":"2026-05-25T00:33:46Z","run":"tasks/T006","kind":"review","slug":"plan-bail-router","prompt_chars":326635,"response_chars":455537,"return_chars":1650,"wall_ms":135463}
+{"ts":"2026-05-25T00:33:46Z","run":"tasks/T006","kind":"review_end","slug":"plan-bail-router","id":"T006","cycle":1,"blockers":0,"majors":4,"prompt_chars":326635,"response_chars":455537,"return_chars":1650,"wall_ms":201668}
+{"ts":"2026-05-25T00:34:14Z","run":"tasks/T006","kind":"review_end","slug":"plan-bail-router","id":"T006","cycle":1,"blockers":0,"majors":4,"response_chars":1250}
+{"ts":"2026-05-25T00:34:31Z","run":"tasks/T006","kind":"implement_start","slug":"plan-bail-router","id":"T006","retry":2}
+{"ts":"2026-05-25T00:35:42Z","run":"tasks/T006","kind":"implement_end","slug":"plan-bail-router","id":"T006","retry":2,"status":"ok","files_changed_count":14,"wall_ms":70880}
+{"ts":"2026-05-25T00:36:04Z","run":"tasks/T006","kind":"diff_capture","slug":"plan-bail-router","id":"T006","diff_bytes":476977,"cycle":2,"includes_untracked":true}
+{"ts":"2026-05-25T00:36:22Z","run":"tasks/T006","kind":"review_start","slug":"plan-bail-router","id":"T006","cycle":2}
+{"ts":"2026-05-25T00:38:12Z","run":"tasks/T006","kind":"review","slug":"plan-bail-router","prompt_chars":191752,"response_chars":309980,"return_chars":5325,"wall_ms":55418}
+{"ts":"2026-05-25T00:38:12Z","run":"tasks/T006","kind":"review_end","slug":"plan-bail-router","id":"T006","cycle":2,"blockers":2,"majors":2,"prompt_chars":191752,"response_chars":309980,"return_chars":5325,"wall_ms":109946}
+{"ts":"2026-05-25T00:38:30Z","run":"tasks/T006","kind":"task_done","slug":"plan-bail-router","id":"T006","retries":1,"review_blockers":0,"review_cycles":2,"tests_passed":0,"tests_failed":0}

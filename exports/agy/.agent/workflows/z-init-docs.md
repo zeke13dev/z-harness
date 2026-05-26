@@ -16,8 +16,21 @@ This is a **one-time setup per repo** (safe to re-run for additional scope). Aft
 
 3. **Version stamp + log run start:**
    ```bash
-   VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
-   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "docs" init_docs_start "$VERSION_BLOB"
+   Z_HARNESS_PLUGIN_ROOT="${Z_HARNESS_PLUGIN_ROOT:-${ANTIGRAVITY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}}"
+   if [ -z "$Z_HARNESS_PLUGIN_ROOT" ]; then
+     for candidate in "${HOME}/plugins/z-harness" "${HOME}/.claude/plugins/z-harness@zeke-tools" "$(pwd)"; do
+       if [ -f "${candidate}/scripts/version.sh" ]; then
+         Z_HARNESS_PLUGIN_ROOT="$candidate"
+         break
+       fi
+     done
+   fi
+   if [ -z "$Z_HARNESS_PLUGIN_ROOT" ]; then
+     echo "z-init-docs: ERROR: z-harness plugin root not found. Run install.sh --target=codex or set Z_HARNESS_PLUGIN_ROOT." >&2
+     exit 1
+   fi
+   VERSION_BLOB="$(Z_HARNESS_PLUGIN_ROOT="$Z_HARNESS_PLUGIN_ROOT" bash "${Z_HARNESS_PLUGIN_ROOT}/scripts/version.sh")"
+   bash "${Z_HARNESS_PLUGIN_ROOT}/scripts/log-event.sh" "docs" init_docs_start "$VERSION_BLOB"
    ```
 
 ## Phase 1 — Concept enumeration
@@ -90,13 +103,19 @@ For each chosen concept, spawn a `doc-updater` subagent in `mode: write` (since 
 
 Each doc-updater Reads its source files, drafts human + LLM tiers, writes both, and returns.
 
+**Codex fallback:** if native `doc-updater` subagent dispatch is unavailable,
+perform the same work inline for each selected concept. Read the listed source
+files yourself, write `docs/human/<concept-slug>.md` and
+`docs/llm/<concept-slug>.json` directly, then continue to Phase 3. Do not halt
+solely because the host lacks a `doc-updater` primitive.
+
 ## Phase 3 — Build `docs/llm/INDEX.json`
 
 Each `doc-updater` wrote `docs/llm/<slug>.json` to disk. Aggregate them into the index:
 
 ```bash
 TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
+VERSION_BLOB="$(Z_HARNESS_PLUGIN_ROOT="$Z_HARNESS_PLUGIN_ROOT" bash "${Z_HARNESS_PLUGIN_ROOT}/scripts/version.sh")"
 SHA="$(printf '%s' "$VERSION_BLOB" | python3 -c 'import json,sys; print(json.load(sys.stdin)["z_harness_version"])')"
 
 # Merge all per-concept JSONs into one index. If INDEX.json exists already
@@ -196,7 +215,7 @@ PY
 
 ## Phase 5 — Copy default `.z-harness-rsync-exclude`
 
-If `<repo-root>/.z-harness-rsync-exclude` doesn't exist, copy the default from `${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/.z-harness-rsync-exclude`. This file is used by the `remote-runner` subagent during `/z-implement-all` remote verification.
+If `<repo-root>/.z-harness-rsync-exclude` doesn't exist, copy the default from `${Z_HARNESS_PLUGIN_ROOT}/.z-harness-rsync-exclude` when that file exists. This file is used by the `remote-runner` subagent during `/z-implement-all` remote verification. If the default file is missing from the install, skip the copy and report it; do not fail docs initialization.
 
 ## Phase 6 — Finalize
 
@@ -212,7 +231,7 @@ If `<repo-root>/.z-harness-rsync-exclude` doesn't exist, copy the default from `
    ```
 2. Log:
    ```bash
-   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "docs" init_docs_end \
+   bash "${Z_HARNESS_PLUGIN_ROOT}/scripts/log-event.sh" "docs" init_docs_end \
      "$(printf '{"concepts_count":%d,"human_dir":"docs/human","llm_dir":"docs/llm"}' "$N")"
    ```
 

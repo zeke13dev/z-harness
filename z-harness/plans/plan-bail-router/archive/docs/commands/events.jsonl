@@ -1,0 +1,2 @@
+{"ts":"2026-05-25T08:21:03Z","run":"docs/commands","kind":"doc_update_start","slug":"plan-bail-router","concept":"commands","reason":"stale","mode":"dry-run"}
+{"ts":"2026-05-25T08:26:53Z","run":"docs/commands","kind":"doc_update_end","slug":"plan-bail-router","concept":"commands","status":"ok","subagent_model":"sonnet","wall_ms":350786}

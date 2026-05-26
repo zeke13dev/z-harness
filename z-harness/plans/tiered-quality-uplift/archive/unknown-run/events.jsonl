@@ -1,0 +1,6 @@
+{"ts":"2026-05-26T01:20:26Z","run":"unknown-run","kind":"provider_resolved","slug":"tiered-quality-uplift","role":"consultant_primary","provider":"gemini","command":"gemini","model_label":"gemini-2.5-pro"}
+{"ts":"2026-05-26T01:20:26Z","run":"unknown-run","kind":"provider_resolved","slug":"tiered-quality-uplift","role":"consultant_secondary","provider":"codex","command":"codex","model_label":"gpt-5-codex"}
+{"ts":"2026-05-26T01:20:26Z","run":"unknown-run","kind":"provider_resolved","slug":"tiered-quality-uplift","role":"reviewer","provider":"codex","command":"codex","model_label":"gpt-5-codex"}
+{"ts":"2026-05-26T03:22:42Z","run":"unknown-run","kind":"provider_resolved","slug":"tiered-quality-uplift","role":"consultant_primary","provider":"gemini","command":"gemini","model_label":"gemini-2.5-pro"}
+{"ts":"2026-05-26T03:22:42Z","run":"unknown-run","kind":"provider_resolved","slug":"tiered-quality-uplift","role":"consultant_secondary","provider":"codex","command":"codex","model_label":"gpt-5-codex"}
+{"ts":"2026-05-26T03:22:42Z","run":"unknown-run","kind":"provider_resolved","slug":"tiered-quality-uplift","role":"reviewer","provider":"codex","command":"codex","model_label":"gpt-5-codex"}

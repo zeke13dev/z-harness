@@ -1,0 +1,2 @@
+{"ts":"2026-05-25T08:27:48Z","run":"docs/lookup-contract","kind":"doc_update_start","slug":"plan-bail-router","concept":"lookup-contract","reason":"stale","mode":"dry-run"}
+{"ts":"2026-05-25T08:30:45Z","run":"docs/lookup-contract","kind":"doc_update_end","slug":"plan-bail-router","concept":"lookup-contract","status":"ok","subagent_model":"sonnet","wall_ms":177232}

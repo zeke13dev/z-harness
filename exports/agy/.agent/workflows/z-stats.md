@@ -62,11 +62,21 @@ Tells you the haiku/sonnet/opus split. Verifies that the v2 default-to-Sonnet ch
 ## Phase 4 — Recent halts
 
 ```bash
-jq -c 'select(.kind == "task_halt" or .kind == "decision_gate" or .kind == "task_security_warn")' "$METRICS" \
+jq -c 'select(.kind == "task_halt" or .kind == "decision_gate" or .kind == "task_security_warn" or .kind == "review_agent_failed" or .kind == "review_agent_malformed")' "$METRICS" \
   | tail -10
 ```
 
 Display last 10 halts with their reasons.
+
+## Phase 4b — Recent memory-review activity
+
+```bash
+jq -c 'select(.kind == "review_agent_call")' "$METRICS" | tail -10
+```
+
+Output format per line: `<ts> review-agent <parent_command>: candidates=<N> accepted=<A> tokens=<input>/<output>`
+
+Where `<input>` and `<output>` come from the event's `subagent_input_tokens` / `subagent_output_tokens` fields.
 
 ## Phase 5 — Stalls (post-run gap detection)
 

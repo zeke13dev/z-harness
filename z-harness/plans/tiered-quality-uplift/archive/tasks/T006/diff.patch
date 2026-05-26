@@ -1,0 +1,280 @@
+--- z-harness/plans/tiered-quality-uplift/archive/tasks/T005/diff.patch	2026-05-25 22:00:19
++++ commands/z-uplift.md	2026-05-25 22:27:05
+@@ -137,7 +137,277 @@
+ - If user chose `"continue"`: emit `doc_drift_acknowledged` event and proceed.
+ - If user chose `"switch"`: halt with the message "Run `/z-maintain-docs` to refresh docs, then re-invoke `/z-uplift`." Do NOT auto-invoke.
+ - If user chose `"abandon"`: emit `run_end status: aborted_by_user` and exit.
++
++### Step 6 — Resume detection + flag processing
++
++This step runs after the plan dir and RUN id are resolved (Step 2) and after run_start is logged (Step 3). It handles three scenarios:
++
++1. **`--retry-bailed`**: mutate `[!] bailed:` rows back to `[ ] pending` before resume detection proceeds.
++2. **`--refresh-component <name>`**: archive the named component's REPORT.md and TASKS.md, reset its MANIFEST row to `[ ] pending`, then fall through to resume detection.
++3. **Resume detection**: if MANIFEST.md exists with at least one row, inspect its states and jump to the appropriate phase; emit `resume_detected` event.
++
++#### Sub-step 6a — Apply `--retry-bailed`
++
++If `RETRY_BAILED=true` and `$Z_HARNESS_PLAN_DIR/MANIFEST.md` exists, change every `[!] bailed:` row to `[ ] pending`:
++
++```bash
++if [ "$RETRY_BAILED" = "true" ] && [ -f "$Z_HARNESS_PLAN_DIR/MANIFEST.md" ]; then
++  python3 - "$Z_HARNESS_PLAN_DIR/MANIFEST.md" <<'PYEOF'
++import re, sys, os
++
++manifest_path = sys.argv[1]
++with open(manifest_path) as f:
++    content = f.read()
++
++# Replace every bailed-state cell with pending.
++# Match the state cell (column 1, between first two pipes) — handles both
++# "[ ] bailed" variants and "[!] bailed: <reason>" variants.
++updated = re.sub(
++    r'(\|)\s*\[!\]\s*bailed:[^\|]*(\|)',
++    r'\1 [ ] pending \2',
++    content
++)
++changed = content.count('[!] bailed') - updated.count('[!] bailed')
++if changed == 0:
++    print("--retry-bailed: no bailed rows found; nothing changed.")
++else:
++    tmp = manifest_path + ".tmp"
++    with open(tmp, "w") as f:
++        f.write(updated)
++    os.replace(tmp, manifest_path)
++    print(f"--retry-bailed: reset {changed} bailed row(s) to pending.")
++PYEOF
++fi
++```
++
++#### Sub-step 6b — Apply `--refresh-component`
++
++If `REFRESH_COMPONENT` is set and `$Z_HARNESS_PLAN_DIR/MANIFEST.md` exists, archive the component's existing artifacts and reset its MANIFEST row to `[ ] pending`:
++
++```bash
++if [ -n "$REFRESH_COMPONENT" ] && [ -f "$Z_HARNESS_PLAN_DIR/MANIFEST.md" ]; then
++  python3 - "$Z_HARNESS_PLAN_DIR/MANIFEST.md" "$REFRESH_COMPONENT" \
++    "$Z_HARNESS_PLAN_DIR" "$RUN" "$(dirname "$Z_HARNESS_PLAN_DIR")" "$Z_HARNESS_SLUG" <<'PYEOF'
++import re, sys, os, shutil
++
++manifest_path  = sys.argv[1]
++comp_name      = sys.argv[2]   # the slug passed to --refresh-component
++plan_dir       = sys.argv[3]
++run            = sys.argv[4]
++plans_parent   = sys.argv[5]
++uplift_slug    = sys.argv[6]
++
++with open(manifest_path) as f:
++    content = f.read()
++
++# Locate the row whose slug column (column 3) matches comp_name.
++# Table columns: [0]=empty [1]=state [2]=component [3]=slug [4]=findings [5]=bail [6]=tasks
++row_re = re.compile(
++    r'^\|[^|\n]*\|[^|\n]*\|\s*' + re.escape(comp_name) + r'\s*\|[^\n]*$',
++    re.MULTILINE
++)
++# MAJOR 5: guard against duplicate rows — assert exactly 1 match before proceeding.
++matches = row_re.findall(content)
++if len(matches) == 0:
++    print(f"ERROR: --refresh-component: no MANIFEST row found for slug '{comp_name}'.")
++    sys.exit(1)
++if len(matches) > 1:
++    print(f"ERROR: --refresh-component: {len(matches)} MANIFEST rows match slug '{comp_name}'; expected exactly 1. MANIFEST not modified.")
++    sys.exit(1)
++
++# Resolve the component plan dir: "<plans_parent>/<uplift_slug>-<comp_name>/"
++comp_plan_dir = os.path.join(plans_parent, f"{uplift_slug}-{comp_name}")
++
++# MAJOR 4: both source files must exist before any mutation is attempted.
++sources = {}
++for fname in ("REPORT.md", "TASKS.md"):
++    src = os.path.join(comp_plan_dir, fname)
++    if not os.path.isfile(src):
++        print(f"ERROR: --refresh-component: {fname} not found at {src}. "
++              "Both REPORT.md and TASKS.md must exist before archiving. MANIFEST not modified.")
++        sys.exit(1)
++    sources[fname] = src
++
++# MAJOR 3: atomic archive — stage both files to a tmp directory, verify, then rename into place.
++archive_dest = os.path.join(plan_dir, "archive", run, "refreshed", comp_name)
++stage_dir    = archive_dest + ".staging"
++
++# Clean any leftover staging dir from a previous interrupted run.
++if os.path.exists(stage_dir):
++    shutil.rmtree(stage_dir)
++os.makedirs(stage_dir, exist_ok=True)
++
++# Copy both files into the staging directory.
++for fname, src in sources.items():
++    dst = os.path.join(stage_dir, fname)
++    shutil.copy2(src, dst)
++    if not os.path.isfile(dst):
++        print(f"ERROR: staging copy of {fname} failed. MANIFEST not modified.")
++        sys.exit(1)
++
++# Atomically rename staging → final archive destination.
++os.rename(stage_dir, archive_dest)
++print(f"archived {comp_plan_dir}/{{REPORT,TASKS}}.md → {archive_dest}/")
++
++# Remove originals now that archive is confirmed.
++for fname, src in sources.items():
++    os.remove(src)
++    print(f"removed original {src}")
++
++# MAJOR 5: Reset MANIFEST row using replacement_count guard — exactly 1 row must be replaced.
++replacement_count = 0
++
++def reset_row(m):
++    global replacement_count
++    row   = m.group(0)
++    cells = row.split('|')
++    if len(cells) < 7:
++        return row
++    cells[1] = ' [ ] pending '
++    # Also clear findings, bail, and tasks columns (indices 4, 5, 6)
++    cells[4] = ' — '
++    cells[5] = ' — '
++    cells[6] = ' — '
++    replacement_count += 1
++    return '|'.join(cells)
++
++updated = row_re.sub(reset_row, content)
++
++if replacement_count != 1:
++    print(f"ERROR: --refresh-component: expected to reset exactly 1 MANIFEST row, "
++          f"got {replacement_count}. MANIFEST not written.")
++    sys.exit(1)
++
++tmp = manifest_path + ".tmp"
++with open(tmp, "w") as f:
++    f.write(updated)
++os.replace(tmp, manifest_path)
++print(f"--refresh-component: reset '{comp_name}' row to [ ] pending.")
++PYEOF
++fi
++```
++
++#### Sub-step 6c — Resume detection
++
++If `$Z_HARNESS_PLAN_DIR/MANIFEST.md` exists, inspect MANIFEST state and determine the resume target. Emit `resume_detected` with the detected state, then jump to the appropriate phase. **If no MANIFEST.md exists, skip this step entirely** (fresh run; continue through STYLE.md gate into Phase 0).
++
++```bash
++SKIP_TO_PHASE=0
++if [ -f "$Z_HARNESS_PLAN_DIR/MANIFEST.md" ]; then
++  RESUME_STATE="$(python3 - "$Z_HARNESS_PLAN_DIR/MANIFEST.md" <<'PYEOF'
++import re, sys
++
++manifest_path = sys.argv[1]
++with open(manifest_path) as f:
++    content = f.read()
++
++states = []
++for line in content.splitlines():
++    line = line.strip()
++    if not line.startswith('|') or line.startswith('|---') or line.startswith('| State'):
++        continue
++    cells = [c.strip() for c in line.split('|')]
++    if len(cells) < 7:
++        continue
++    states.append(cells[1])  # state column
++
++if not states:
++    # Empty MANIFEST table — treat as fresh run
++    print("fresh")
++    sys.exit(0)
++
++# Priority check order (most critical first):
++# 1. Any [i] implementing → phase5_implementing
++# 2. Any [~] auditing or [ ] pending → phase3_pending
++# 3. All rows are [a] audited or terminal ([x]/[s]/[!]) → phase5_ready
++
++has_implementing = any('[i] implementing' in s for s in states)
++has_pending_or_auditing = any(
++    '[ ] pending' in s or '[~] auditing' in s for s in states
++)
++all_terminal_or_audited = all(
++    '[a] audited' in s or '[x] done' in s or '[s] skipped' in s or '[!] bailed' in s
++    for s in states
++)
++
++if has_implementing:
++    print("phase5_implementing")
++elif has_pending_or_auditing:
++    print("phase3_pending")
++elif all_terminal_or_audited:
++    print("phase5_ready")
++else:
++    # Mixed unknown states — default to phase3 to re-audit
++    print("phase3_pending")
++PYEOF
++)"
++
++  if [ "$RESUME_STATE" != "fresh" ]; then
++    # Emit resume_detected event
++    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" resume_detected \
++      "$(printf '{"slug":"%s","manifest_state":"%s"}' "$SLUG" "$RESUME_STATE")"
++
++    case "$RESUME_STATE" in
++      phase3_pending)
++        # Re-audit: skip Phase 0, Phase 1 (decomposition), Phase 2 (cross-cutting already done).
++        # Announce the resume state to the user, then jump directly to Phase 3.
++        cat <<RESUME_MSG
++RESUME DETECTED — MANIFEST has pending/auditing rows. Resuming at Phase 3 (per-component audits).
++  Plan dir : $Z_HARNESS_PLAN_DIR
++  MANIFEST : $Z_HARNESS_PLAN_DIR/MANIFEST.md
++Skip forward to Phase 3 now. Do NOT re-run Phase 0, Phase 1, or Phase 2.
++RESUME_MSG
++        # Jump to Phase 3 — skip STYLE.md gate, Phase 0, Phase 1, Phase 2.
++        # The STYLE.md gate is re-evaluated inside Phase 3 if needed via $NO_STYLE / $STYLE_MD_PATH
++        # which were already initialised from argument parsing.
++        SKIP_TO_PHASE=3
++        ;;
++      phase5_implementing)
++        cat <<RESUME_MSG
++RESUME DETECTED — MANIFEST has a row in [i] implementing state. Resuming at Phase 5.
++  Plan dir : $Z_HARNESS_PLAN_DIR
++  MANIFEST : $Z_HARNESS_PLAN_DIR/MANIFEST.md
++Skip forward to Phase 5 now. The [i] implementing component will be handled by Step 2a
++(interrupted-resume AskUser gate) before the normal [a] audited queue is processed.
++RESUME_MSG
++        SKIP_TO_PHASE=5
++        ;;
++      phase5_ready)
++        cat <<RESUME_MSG
++RESUME DETECTED — All components are [a] audited or terminal. Resuming at Phase 5 (sequential implement).
++  Plan dir : $Z_HARNESS_PLAN_DIR
++  MANIFEST : $Z_HARNESS_PLAN_DIR/MANIFEST.md
++Skip forward to Phase 5 now.
++RESUME_MSG
++        SKIP_TO_PHASE=5
++        ;;
++    esac
++  fi
++fi
++```
++
++After setting `SKIP_TO_PHASE`, honor it when entering each phase:
++
++- **STYLE.md gate**: skip entirely if `SKIP_TO_PHASE` is set (the gate ran on the original invocation; no need to re-gate on resume).
++- **Phase 0**: skip if `SKIP_TO_PHASE` is set.
++- **Phase 1**: skip if `SKIP_TO_PHASE` is set.
++- **Phase 2**: skip if `SKIP_TO_PHASE` is set.
++- **Phase 3**: skip if `SKIP_TO_PHASE = 5`.
++- **Phase 4**: skip if `SKIP_TO_PHASE = 5`.
++- **Phase 5**: always run if reached (either normally or via resume).
+ 
++Check the skip guard at the top of each skippable phase/gate:
++
++```bash
++# Example guard — place at the top of each skippable phase.
++# Skip phases STRICTLY BEFORE the resume target (e.g. if SKIP_TO_PHASE=3, skip phases 0,1,2 but run 3).
++if [ <this-phase-number> -lt "${SKIP_TO_PHASE:-0}" ]; then
++  echo "Skipping Phase <N> (resume target is Phase $SKIP_TO_PHASE)"
++else
++  # ... phase body ...
++fi
++```
++
+ ---
+ 
+ ## STYLE.md gate

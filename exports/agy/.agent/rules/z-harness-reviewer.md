@@ -22,11 +22,16 @@ USE_STDIN="$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; d=json.loa
 MODEL_LABEL="$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["model_label"])')"
 TIMEOUT="$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["timeout_s"])')"
 
-TIMEOUT_CMD="$(command -v timeout || command -v gtimeout || true)"
-if [ -z "$TIMEOUT_CMD" ] && [ -z "$Z_HARNESS_TIMEOUT_WARNED" ]; then
-  echo "[providers] timeout(1) not on PATH — provider timeout disabled. brew install coreutils to restore." >&2
-  export Z_HARNESS_TIMEOUT_WARNED=1
-fi
+# $RUN is the run-id the caller passed in. Set it now — check-timeout.sh
+# keys its per-run timeout_availability marker on it, and without it the
+# event isn't emitted. The reviewer is typically dispatched per-task, so
+# pass "tasks/<task-id>" if that's the scope you want the event written to;
+# otherwise the run-id of the parent /z-implement-all call.
+RUN="<run-id or tasks/<task-id> from caller>"
+
+# Detects timeout(1)/gtimeout, sets $TIMEOUT_CMD, and emits one
+# `timeout_availability` event per run so silent-disable is debuggable.
+source "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/check-timeout.sh" "$RUN"
 
 if [ "$USE_STDIN" = "True" ]; then
   if [ -n "$TIMEOUT_CMD" ]; then

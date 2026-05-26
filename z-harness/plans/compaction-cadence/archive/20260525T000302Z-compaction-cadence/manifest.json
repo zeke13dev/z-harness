@@ -1,0 +1,9 @@
+{
+  "run_id": "20260525T000302Z-compaction-cadence",
+  "slug": "compaction-cadence",
+  "status": "complete",
+  "ended_at": "2026-05-25T00:25:34Z",
+  "task_count": 10,
+  "consult_rounds": 2,
+  "consult_calls": 4
+}

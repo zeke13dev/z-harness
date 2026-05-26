@@ -156,56 +156,6 @@ diff -u <(git -C "$Z_HARNESS_ROOT" show HEAD:<file>) "$Z_HARNESS_ROOT/<file>" > 
 
 If an edit fails sanity check (e.g. invalid yaml frontmatter, broken markdown structure), revert it and reclassify the proposal as "Deferred — needs manual application".
 
-After all diffs are written, invoke `/z-suggest-memory`:
-
-```
-/z-suggest-memory
-concept_hints: <space-separated slugs — see derivation rule below>
-context: "z-improve retro for <slug>: accepted <N> proposal(s) — <one-sentence summary of what changed>"
-```
-
-**concept_hints derivation rule** — apply before invoking `/z-suggest-memory`:
-
-```bash
-# For each z-harness file path touched by accepted edits, derive a slug:
-#   commands/z-plan.md        → z-plan
-#   skills/z-plan/SKILL.md   → z-plan
-#   agents/reviewer.md  → reviewer
-# Rule: strip the parent directory prefix and strip the .md or /SKILL.md suffix.
-# Deduplicate the resulting list.
-# concept_hints = space-joined slug list
-
-# Example (bash):
-concept_hints=""
-for path in "${touched_files[@]}"; do
-  slug="${path##*/}"          # basename
-  slug="${slug%.md}"          # strip .md
-  slug="${slug%/SKILL}"       # strip /SKILL (already stripped by basename, no-op)
-  # For skills/z-plan/SKILL.md the basename is SKILL.md → slug becomes SKILL; use dirname instead:
-  # Re-derive: if basename == SKILL, use the parent dir name
-  if [[ "$slug" == "SKILL" ]]; then
-    slug="$(basename "$(dirname "$path")")"
-  fi
-  concept_hints="$concept_hints $slug"
-done
-concept_hints="${concept_hints# }"  # trim leading space
-# Deduplicate:
-concept_hints="$(echo "$concept_hints" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/ $//')"
-```
-
-**Salience guidance — read before invoking:**
-
-> **Default to Cancel** unless a genuinely novel anti-pattern, process insight, or non-obvious decision rationale surfaced during the retro discussion that would materially improve a future run of the same command. Cancel is a first-class outcome and should be chosen most of the time. Only persist memory when the insight is not already documented in the improvements doc or in existing docs/llm/ concepts — not just because edits were applied.
-
-Log the outcome:
-
-```bash
-bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" suggest_memory_called \
-  "$(printf '{"memories_written":%d,"concept":"%s"}' "$MEMORIES_WRITTEN" "$CONCEPT_SLUG")"
-```
-
-(`$MEMORIES_WRITTEN` = 0 if user chose Cancel; `$CONCEPT_SLUG` = primary slug derived from touched file paths.)
-
 ## Phase 8 — Finalize
 
 1. Update the improvements doc's `**Status:**` to `complete`.

@@ -1,0 +1,5 @@
+{"ts":"2026-05-25T21:56:00Z","run":"20260525T214818Z-memory-self-improve-loop","kind":"plan_route_decision","from_command":"/z-plan","to_command":null,"route_class":"contextual","reason_codes":["docs_stale"],"signals":{"docs_stale_or_drifted":true,"stale_pct":100},"confidence":"high","classifier_used":false,"user_choice":"continue_stale"}
+{"ts":"2026-05-25T21:56:00Z","run":"20260525T214818Z-memory-self-improve-loop","kind":"doc_drift_acknowledged","stale_concepts":5,"total":5}
+{"ts":"2026-05-25T23:18:41Z","run":"20260525T214818Z-memory-self-improve-loop","kind":"consultant_failed","consultant":"gemini","phase":3,"reason":"session_limit"}
+{"ts":"2026-05-25T23:18:41Z","run":"20260525T214818Z-memory-self-improve-loop","kind":"consultant_failed","consultant":"codex","phase":3,"reason":"session_limit"}
+{"ts":"2026-05-25T23:28:23Z","run":"20260525T214818Z-memory-self-improve-loop","kind":"run_end","slug":"memory-self-improve-loop","status":"complete","tasks":13,"consult_failures":2}

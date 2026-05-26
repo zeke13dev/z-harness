@@ -1,0 +1,2 @@
+{"ts":"2026-05-24T21:44:09Z","run":"20260524T214409Z-plan-variant-bail-routing","kind":"light_run_start","slug":"plan-variant-bail-routing","z_harness_version":"380aca6","z_harness_dirty":true,"z_harness_branch":"main","task":"make all z-plan variants able to bail to each other"}
+{"ts":"2026-05-24T21:44:34Z","run":"20260524T214409Z-plan-variant-bail-routing","kind":"light_run_end","slug":"plan-variant-bail-routing","status":"escalated","reason":"scope_exceeds_light_thresholds","recommended_command":"/z-plan"}

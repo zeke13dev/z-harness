@@ -1,0 +1,2 @@
+{"ts":"2026-05-24T19:19:03Z","run":"20260524T190609Z-lookup-subagent","kind":"doc_drift_acknowledged","stale_pct":100,"total":4,"reason":"stale concepts unrelated to lookup-subagent topic"}
+{"ts":"2026-05-24T19:41:03Z","run":"20260524T190609Z-lookup-subagent","kind":"run_end","status":"complete","tasks":12,"decisions":10,"consult_flagged":5}

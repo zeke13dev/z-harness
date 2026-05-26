@@ -9,4 +9,17 @@ Arguments (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
+### `--source` prefix conventions
+
+The `--source <prefix:ref>` flag accepts these canonical prefixes:
+
+| Prefix | Example | Set by |
+|--------|---------|--------|
+| `incident:<RUN_ID>` | `--source "incident:20260525T233740Z-implement"` | `/z-implement-all` Phase 9 and `/z-review-all` Phase 7 review-agent flow (automatic) |
+| `debug:<run-id>` | `--source "debug:20260523T143012Z-my-plan"` | `/z-debug` (automatic) |
+| `human_review:<username>` | `--source "human_review:zbarnett"` | `/z-improve` (automatic) |
+| `spec:<plan>/<ref>` | `--source "spec:rebalance-v2/run-3"` | Manual |
+
+The `incident:` prefix is used automatically by the review-agent flow — you do not need to supply it when invoked from `/z-implement-all` or `/z-review-all`.
+
 Read and execute `skills/z-suggest-memory/SKILL.md` in full, passing `$ARGUMENTS` through verbatim.

@@ -1,0 +1,2 @@
+{"ts":"2026-05-25T08:27:53Z","run":"docs/external-lookup-agent","kind":"doc_update_start","slug":"plan-bail-router","concept":"external-lookup-agent","reason":"stale","mode":"dry-run"}
+{"ts":"2026-05-25T08:31:37Z","run":"docs/external-lookup-agent","kind":"doc_update_end","slug":"plan-bail-router","concept":"external-lookup-agent","status":"ok","subagent_model":"sonnet","wall_ms":223950}

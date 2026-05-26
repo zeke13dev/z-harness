@@ -1,7 +1,7 @@
 {
   "concept": "multi-ide-exports",
-  "last_updated": "2026-05-25",
-  "covers_spec": "plan-bail-router/20260525T081137Z-review",
+  "last_updated": "2026-05-26",
+  "covers_spec": "none",
   "source_file": [
     "scripts/export-common.py",
     "scripts/export-cursor.py",
@@ -9,153 +9,32 @@
     "scripts/export-agy.py",
     "scripts/audit-tarball.sh",
     "commands/z-export.md",
-    "docs/human/MULTI-IDE.md",
     "exports/cursor/CAPABILITIES.md",
     "exports/codex/CAPABILITIES.md",
     "exports/agy/CAPABILITIES.md"
   ],
   "confidence": "high",
   "entry_points": [
-    {
-      "file": "scripts/export-common.py",
-      "line": 107,
-      "symbol": "enumerate_sources",
-      "kind": "fn",
-      "summary": "Collect commands, agents, and skills from repo root"
-    },
-    {
-      "file": "scripts/export-common.py",
-      "line": 134,
-      "symbol": "validate_capabilities",
-      "kind": "fn",
-      "summary": "Require Supported, Unsupported, and Notes sections"
-    },
-    {
-      "file": "scripts/export-common.py",
-      "line": 181,
-      "symbol": "output_path_for",
-      "kind": "fn",
-      "summary": "Compute target-specific conventional output paths"
-    },
-    {
-      "file": "scripts/export-cursor.py",
-      "line": 66,
-      "symbol": "_rewrite_body",
-      "kind": "fn",
-      "summary": "Replace unsupported call sites for Cursor exports"
-    },
-    {
-      "file": "scripts/export-cursor.py",
-      "line": 96,
-      "symbol": "_render_mdc",
-      "kind": "fn",
-      "summary": "Render one source entry as a Cursor .mdc rule"
-    },
-    {
-      "file": "scripts/export-cursor.py",
-      "line": 179,
-      "symbol": "main",
-      "kind": "fn",
-      "summary": "Emit and validate Cursor .mdc rules"
-    },
-    {
-      "file": "scripts/export-codex.py",
-      "line": 90,
-      "symbol": "_rewrite_body",
-      "kind": "fn",
-      "summary": "Replace unsupported call sites for Codex exports"
-    },
-    {
-      "file": "scripts/export-codex.py",
-      "line": 117,
-      "symbol": "_render_prompt",
-      "kind": "fn",
-      "summary": "Render command and skill prompt files"
-    },
-    {
-      "file": "scripts/export-codex.py",
-      "line": 140,
-      "symbol": "_render_agents_md",
-      "kind": "fn",
-      "summary": "Consolidate all agents into AGENTS.md"
-    },
-    {
-      "file": "scripts/export-codex.py",
-      "line": 229,
-      "symbol": "main",
-      "kind": "fn",
-      "summary": "Emit Codex prompts and AGENTS.md"
-    },
-    {
-      "file": "scripts/export-agy.py",
-      "line": 71,
-      "symbol": "_rewrite_body",
-      "kind": "fn",
-      "summary": "Replace unsupported call sites for agy exports"
-    },
-    {
-      "file": "scripts/export-agy.py",
-      "line": 93,
-      "symbol": "_render_workflow",
-      "kind": "fn",
-      "summary": "Render commands as agy workflows"
-    },
-    {
-      "file": "scripts/export-agy.py",
-      "line": 130,
-      "symbol": "_render_rule",
-      "kind": "fn",
-      "summary": "Render agents as agy rules"
-    },
-    {
-      "file": "scripts/export-agy.py",
-      "line": 155,
-      "symbol": "_render_skill",
-      "kind": "fn",
-      "summary": "Render skills as native agy skills"
-    },
-    {
-      "file": "scripts/export-agy.py",
-      "line": 177,
-      "symbol": "_render_prompt",
-      "kind": "fn",
-      "summary": "Render flat agy prompts for commands, agents, skills"
-    },
-    {
-      "file": "scripts/export-agy.py",
-      "line": 207,
-      "symbol": "_build_manifest",
-      "kind": "fn",
-      "summary": "Generate agy-plugin.yaml manifest"
-    },
-    {
-      "file": "scripts/export-agy.py",
-      "line": 559,
-      "symbol": "main",
-      "kind": "fn",
-      "summary": "Emit and validate all agy export surfaces"
-    },
-    {
-      "file": "scripts/audit-tarball.sh",
-      "line": 75,
-      "symbol": "_audit_fail",
-      "kind": "fn",
-      "summary": "Fail on forbidden tarball entry"
-    },
-    {
-      "file": "scripts/audit-tarball.sh",
-      "line": 83,
-      "symbol": "_check_pattern",
-      "kind": "fn",
-      "summary": "Search tarball listing for one forbidden pattern"
-    },
-    {
-      "file": "commands/z-export.md",
-      "line": 10,
-      "symbol": "/z-export",
-      "kind": "module",
-      "summary": "Run selected export adapters sequentially"
-    }
+    {"file": "scripts/export-common.py", "line": 107, "symbol": "enumerate_sources", "kind": "fn", "summary": "Collect commands, agents, and skills from repo root into kind-keyed dict"},
+    {"file": "scripts/export-common.py", "line": 134, "symbol": "validate_capabilities", "kind": "fn", "summary": "Require Supported, Unsupported, and Notes sections in CAPABILITIES.md"},
+    {"file": "scripts/export-common.py", "line": 181, "symbol": "output_path_for", "kind": "fn", "summary": "Compute conventional output path for target, kind, and id"},
+    {"file": "scripts/export-cursor.py", "line": 66, "symbol": "_rewrite_body", "kind": "fn", "summary": "Replace Agent/Skill/tool-schema call sites with Cursor limitation comment"},
+    {"file": "scripts/export-cursor.py", "line": 96, "symbol": "_render_mdc", "kind": "fn", "summary": "Render one source entry as a Cursor .mdc rule with YAML frontmatter"},
+    {"file": "scripts/export-cursor.py", "line": 179, "symbol": "main", "kind": "fn", "summary": "Build command-ID set, emit and validate Cursor .mdc rules, append -skill suffix on collision"},
+    {"file": "scripts/export-codex.py", "line": 90, "symbol": "_rewrite_body", "kind": "fn", "summary": "Replace unsupported call sites with Codex limitation comment"},
+    {"file": "scripts/export-codex.py", "line": 117, "symbol": "_render_prompt", "kind": "fn", "summary": "Render command or skill as Codex prompt with # /<id> header"},
+    {"file": "scripts/export-codex.py", "line": 140, "symbol": "_render_agents_md", "kind": "fn", "summary": "Consolidate all agents into single AGENTS.md"},
+    {"file": "scripts/export-codex.py", "line": 229, "symbol": "main", "kind": "fn", "summary": "Build command-ID set, emit Codex prompts and AGENTS.md, append -skill suffix on collision"},
+    {"file": "scripts/export-agy.py", "line": 71, "symbol": "_rewrite_body", "kind": "fn", "summary": "Replace unsupported call sites with Antigravity limitation comment"},
+    {"file": "scripts/export-agy.py", "line": 93, "symbol": "_render_workflow", "kind": "fn", "summary": "Render command as Antigravity workflow .md (description frontmatter, 250-char limit)"},
+    {"file": "scripts/export-agy.py", "line": 130, "symbol": "_render_rule", "kind": "fn", "summary": "Render agent as Antigravity rule .md with always_on or model_decision trigger"},
+    {"file": "scripts/export-agy.py", "line": 155, "symbol": "_render_skill", "kind": "fn", "summary": "Render skill as Antigravity SKILL.md with name and description frontmatter"},
+    {"file": "scripts/export-agy.py", "line": 177, "symbol": "_render_prompt", "kind": "fn", "summary": "Render flat agy prompt with description and role frontmatter"},
+    {"file": "scripts/export-agy.py", "line": 207, "symbol": "_build_manifest", "kind": "fn", "summary": "Generate agy-plugin.yaml export manifest (z-harness convention only)"},
+    {"file": "scripts/export-agy.py", "line": 559, "symbol": "main", "kind": "fn", "summary": "Emit and validate all agy surfaces: workflows, rules, skills, prompts, manifest, caps, README"},
+    {"file": "scripts/audit-tarball.sh", "line": 75, "symbol": "_audit_fail", "kind": "fn", "summary": "Exit 1 immediately when forbidden tarball pattern is matched"},
+    {"file": "scripts/audit-tarball.sh", "line": 83, "symbol": "_check_pattern", "kind": "fn", "summary": "Search tarball listing for one forbidden pattern (fixed-string or regex)"},
+    {"file": "commands/z-export.md", "line": 10, "symbol": "/z-export", "kind": "module", "summary": "Parse --target, run adapters sequentially, report OK/FAILED per target"}
   ],
   "depends_on": [
     "commands",
@@ -165,19 +44,23 @@
   ],
   "consumed_by": [],
   "invariants": [
-    "Source of truth remains commands/, agents/, and skills/*/SKILL.md",
-    "Unsupported target constructs are replaced with explicit limitation comments",
-    "Each adapter validates its emitted files before reporting success",
-    "CAPABILITIES.md files must contain Supported, Unsupported, and Notes sections",
-    "/z-export runs target adapters sequentially and continues past failures",
-    "Tarball audit rejects providers, harness archives/plans, exports, homes, and legacy plans"
+    "Source of truth is commands/, agents/, and skills/*/SKILL.md — never the exports/ tree",
+    "Unsupported constructs are replaced line-by-line with explicit limitation comments, never silently dropped",
+    "Each adapter validates all emitted files before reporting success",
+    "CAPABILITIES.md must contain ## Supported, ## Unsupported, and ## Notes sections",
+    "/z-export runs adapters sequentially and continues past individual target failures",
+    "audit-tarball.sh rejects providers.json, .z-harness/, plan artifacts, exports/, and absolute home paths",
+    "When a skill ID collides with a command ID, both Cursor and Codex adapters append a -skill suffix to the export filename to prevent overwrite"
   ],
   "gotchas": [
-    "export-common.py does not enforce tarball exclusions; audit-tarball.sh does",
-    "Codex consolidates agents into AGENTS.md instead of per-agent prompts",
-    "agy emits workflows, rules, skills, flat prompts, manifest, capabilities, and README",
-    "Adapters delegate all writes under the selected exports/<target> output root",
-    "Regenerated exports include planning-router and z-audit-plan surfaces"
+    "Skill/command ID collision handling: if a skill and a command share the same ID, the skill's export filename gets a -skill suffix (e.g. z-plan-skill.mdc) in both Cursor and Codex adapters",
+    "export-common.py does not enforce tarball exclusions; that gate lives in audit-tarball.sh",
+    "Codex consolidates all agents into AGENTS.md — no per-agent prompt files are emitted",
+    "agy emits the most surfaces: workflows + rules + skills + flat prompts + manifest + CAPABILITIES.md + README.md",
+    "agy _ALWAYS_ON_AGENTS hard-codes implementer, reviewer, auditor, mr-reviewer, remote-runner; all others get model_decision",
+    "agy-plugin.yaml is a z-harness convention manifest; Antigravity does not read it natively",
+    "Antigravity workflow bodies have an ~12,000 character limit; several z-harness commands exceed it",
+    "export-common.py is loaded via importlib in each adapter because the hyphen prevents direct Python import"
   ],
   "memories": []
 }

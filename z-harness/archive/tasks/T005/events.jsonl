@@ -24,3 +24,11 @@
 {"ts":"2026-05-24T07:12:01Z","run":"tasks/T005","kind":"task_done","id":"T005","retries":1,"review_cycles":2,"review_blockers":1}
 {"ts":"2026-05-24T10:38:12Z","run":"tasks/T005","kind":"task_start","id":"T005","attempt":1}
 {"ts":"2026-05-24T10:51:25Z","run":"tasks/T005","kind":"task_done","id":"T005","retries":0,"review_blockers":0,"review_cycles":0,"note":"net-new resolver + docs"}
+{"ts":"2026-05-25T06:59:50Z","run":"tasks/T005","kind":"task_done","id":"T005","retries":0,"review_cycles":1}
+{"ts":"2026-05-26T04:49:37Z","run":"tasks/T005","kind":"task_start","id":"T005"}
+{"ts":"2026-05-26T04:55:24Z","run":"tasks/T005","kind":"review_start","id":"T005","cycle":1}
+{"ts":"2026-05-26T04:55:25Z","run":"tasks/T005","kind":"review_end","id":"T005","cycle":1,"blockers":1,"majors":4,"prompt_chars":9045,"response_chars":633445,"return_chars":1973,"wall_ms":126}
+{"ts":"2026-05-26T04:56:01Z","run":"tasks/T005","kind":"implement_start","id":"T005","retry":1}
+{"ts":"2026-05-26T04:56:42Z","run":"tasks/T005","kind":"implement_start","raw":"{\"id\":\"T005\",\"retry\":2)"}
+{"ts":"2026-05-26T04:59:54Z","run":"tasks/T005","kind":"implement_end","id":"T005","retry":2,"status":"ok","files_changed_count":1,"wall_ms":192567}
+{"ts":"2026-05-26T05:00:57Z","run":"tasks/T005","kind":"task_done","id":"T005","retries":1,"review_blockers":0,"review_cycles":1,"tests_passed":0,"tests_failed":0,"override":true,"v2_review_skipped":true}

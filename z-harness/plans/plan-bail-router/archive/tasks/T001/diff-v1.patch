@@ -1,0 +1,161 @@
+diff --git a/docs/human/agents.md b/docs/human/agents.md
+index cfb4e56..7396ffa 100644
+--- a/docs/human/agents.md
++++ b/docs/human/agents.md
+@@ -1,13 +1,15 @@
+ # Agents
+ 
+-> Last updated: 2026-05-23
+-> Covers source: agents/auditor.md, agents/cluster-planner.md, agents/consultant-primary.md, agents/consultant-secondary.md, agents/reviewer.md, agents/complexity-classifier.md, agents/doc-fetcher.md, agents/doc-updater.md, agents/implementer.md, agents/remote-runner.md, agents/spec-precheck.md
++> Last updated: 2026-05-24
++> Covers source: agents/auditor.md, agents/cluster-planner.md, agents/consultant-primary.md, agents/consultant-secondary.md, agents/reviewer.md, agents/complexity-classifier.md, agents/doc-fetcher.md, agents/doc-updater.md, agents/implementer.md, agents/planning-router.md, agents/remote-runner.md, agents/spec-precheck.md
+ 
+ ## Overview
+ The agents concept represents the complete suite of specialized subagent profiles that drive the automated plan-and-implement workflow in z-harness. Each subagent is configured with a tailored system prompt, dedicated tools, and appropriate model profiles (typically Sonnet or specialized consultant roles) to execute discrete, high-discipline steps.
+ 
+ These agents act as isolated workers spawned in parallel or series by orchestration commands. By decomposing complex workflows—such as code generation, planning, security checks, and code reviews—into focused subagent roles with precise scopes, the system minimizes context drift and maximizes execution quality.
+ 
++The `planning-router` agent is a Haiku, read-only advisory classifier for ambiguous planning-family route decisions. It consumes compact caller-supplied signals, never edits files, and returns only the parseable route envelope that callers can accept, ignore, or convert into an AskUser handoff.
++
+ ## Key entry points
+ - `agents/auditor.md:1` — `auditor` — Scrutinizes target codebase files across correctness, perf, cleanliness, or design dimensions.
+ - `agents/cluster-planner.md:1` — `cluster-planner` — Resolves specialized technical sub-tasks during large-scale workspace planning.
+@@ -17,7 +19,8 @@ These agents act as isolated workers spawned in parallel or series by orchestrat
+ - `agents/doc-fetcher.md:1` — `doc-fetcher` — Retrieves, filters, and ranks documentation concepts relevant to an ongoing plan phase.
+ - `agents/doc-updater.md:1` — `doc-updater` — Rebuilds or updates concept documentation files to match source files under maintain-docs.
+ - `agents/consultant-primary.md:1` — `consultant-primary` — Performs primary plan critiques and risk evaluations.
+-- `agents/implementer.md:1` — `implementer` — Executes the actual code-writing tasks under discrete plan targets.
++- `agents/implementer.md:1` — `implementer` — Executes a single passed task block, whether it came from canonical `TASKS.md` or a promoted review task artifact.
++- `agents/planning-router.md:1` — `planning-router` — Advises ambiguous `/z-do`, `/z-plan-light`, `/z-plan`, `/z-plan-split`, `/z-brainstorm`, `/z-research`, and contextual route handoffs from compact signals.
+ - `agents/remote-runner.md:1` — `remote-runner` — Executes verification tests and builds inside remote sandboxes for safety.
+ - `agents/spec-precheck.md:1` — `spec-precheck` — Validates specifications, task lists, and designs for completeness before implementation.
+ 
+@@ -29,6 +32,7 @@ These agents act as isolated workers spawned in parallel or series by orchestrat
+ ## Edge cases / gotchas
+ - Many agents operate in parallel (e.g., auditors, cluster planners, and implementers) which requires strict telemetry event logging using `log-phase.sh` to prevent execution tracing conflicts.
+ - Memory preservation is mandatory for `doc-updater`: it must copy existing `memories[]` arrays verbatim without altering, adding, or deleting entries.
++- `planning-router` is advisory only: malformed input returns `STATUS: bad_input`, route-loop risk returns `STATUS: ask_user`, and the command/orchestrator owns the final handoff decision.
+ 
+ ## Examples
+-- An implementer receiving a task to code will use `agents/implementer.md` to ground its tools and complete the code-generation cycle in isolation before returning its proposed diff for review.
++- An implementer receiving a task to code will use `agents/implementer.md` to ground its tools and complete the code-generation cycle in isolation before returning its proposed diff for review. The task ID may be canonical (`T004`) or review-generated (`T-REV-001`, `T-MR-001`).
+diff --git a/docs/llm/INDEX.json b/docs/llm/INDEX.json
+index 90f0ada..ecebe64 100644
+--- a/docs/llm/INDEX.json
++++ b/docs/llm/INDEX.json
+@@ -15,6 +15,7 @@
+         "agents/doc-updater.md",
+         "agents/gemini-consultant.md",
+         "agents/implementer.md",
++        "agents/planning-router.md",
+         "agents/remote-runner.md",
+         "agents/spec-precheck.md"
+       ],
+@@ -27,7 +28,7 @@
+         "commands",
+         "skills"
+       ],
+-      "summary": "Scrutinizes codebase targets across correctness/perf/cleanliness/design."
++      "summary": "Specialized subagents, including auditors/reviewers, implementers, and the advisory planning-router for ambiguous plan-family route decisions."
+     },
+     {
+       "slug": "commands",
+@@ -43,6 +44,7 @@
+         "commands/z-improve.md",
+         "commands/z-init-docs.md",
+         "commands/z-maintain-docs.md",
++        "commands/z-mr-review.md",
+         "commands/z-plan-light.md",
+         "commands/z-plan-split.md",
+         "commands/z-plan.md",
+@@ -62,7 +64,7 @@
+       "consumed_by": [
+         "skills"
+       ],
+-      "summary": "Propagates targeted plan amendments consistently across plan artifacts."
++      "summary": "Slash command surfaces, including review-family finding promotion into task-shaped artifacts and /z-implement-all --tasks consumption."
+     },
+     {
+       "slug": "scripts",
+@@ -73,7 +75,7 @@
+         "scripts/remote-sandbox-sync.sh",
+         "scripts/version.sh"
+       ],
+-      "last_updated": "2026-05-23",
++      "last_updated": "2026-05-24",
+       "confidence": "high",
+       "depends_on": [],
+       "consumed_by": [
+@@ -128,7 +130,7 @@
+         "scripts"
+       ],
+       "consumed_by": [],
+-      "summary": "Checklists for amending spec, plan, and task checklists consistently."
++      "summary": "Operational checklists, including review finding promotion, z-amend safety gates, and explicit --tasks implementation queues."
+     },
+     {
+       "slug": "providers-registry",
+@@ -209,6 +211,35 @@
+       ],
+       "consumed_by": [],
+       "summary": "Explicit in-place plugin update via /z-update; detects symlink vs tarball mode; git pull --ff-only for symlink, atomic swap for tarball; no autoupdate; version tracked by scripts/version.sh."
++    },
++    {
++      "slug": "lookup-contract",
++      "source_files": [
++        "agents/external-lookup.md"
++      ],
++      "last_updated": "2026-05-24",
++      "confidence": "high",
++      "depends_on": [
++        "agents"
++      ],
++      "consumed_by": [
++        "external-lookup-agent"
++      ],
++      "summary": "Output envelope contract (STATUS line + fixed Markdown sections) that all external/domain lookup subagents must emit."
++    },
++    {
++      "slug": "external-lookup-agent",
++      "source_files": [
++        "agents/external-lookup.md"
++      ],
++      "last_updated": "2026-05-24",
++      "confidence": "high",
++      "depends_on": [
++        "agents",
++        "lookup-contract"
++      ],
++      "consumed_by": [],
++      "summary": "Haiku-tier subagent for external retrieval (web docs, public APIs, library docs) that offloads lookups from main context while enforcing a read-only verb-blocklist."
+     }
+   ]
+ }
+diff --git a/docs/llm/agents.json b/docs/llm/agents.json
+index 973f1e7..09de5ab 100644
+--- a/docs/llm/agents.json
++++ b/docs/llm/agents.json
+@@ -13,6 +13,7 @@
+     "agents/doc-updater.md",
+     "agents/gemini-consultant.md",
+     "agents/implementer.md",
++    "agents/planning-router.md",
+     "agents/remote-runner.md",
+     "agents/spec-precheck.md"
+   ],
+@@ -112,7 +113,14 @@
+       "line": 1,
+       "symbol": "implementer",
+       "kind": "module",
+-      "summary": "Writes code and fulfills discrete task files."
++      "summary": "Writes code and fulfills a single passed task block, including canonical tasks and promoted review task IDs such as T-REV-001 or T-MR-001."
++    },
++    {
++      "file": "agents/planning-router.md",
++      "line": 1,
++      "symbol": "planning-router",
++      "kind": "module",
++      "summary": "Advisory Haiku router for ambiguous z-harness planning-family route decisions; returns routed, ask_user, or bad_input envelopes from compact caller-supplied signals."
+     },
+     {
+       "file": "agents/remote-runner.md",

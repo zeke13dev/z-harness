@@ -5,6 +5,54 @@ description: Final-gate cross-LLM review of a completed z-harness plan. Runs Gem
 
 You are running the **z-harness `/z-review-all`** final-gate review. This is a holistic cross-task cross-LLM review, intentionally distinct from the per-task review that `/z-implement-all` already performs. Per-task review catches per-task issues; this catches issues that only show up when looking at all tasks together.
 
+## Pre-Phase 0 — Resume check
+
+**Before entering Phase 0**, check for an existing state file from a prior invocation that reached Phase 3.7:
+
+```bash
+# Resolve slug from --slug arg or by enumerating z-harness/plans/*/TASKS.md
+# STATE_FILE="$Z_HARNESS_PLAN_DIR/.review_state.json"   (set after slug is known)
+# Perform a lightweight slug resolution here only to find the state file path.
+# If --slug was passed: EARLY_SLUG="<arg>"; EARLY_PLAN_DIR="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$EARLY_SLUG")"
+# Otherwise: scan for a single TASKS.md candidate (same logic as Phase 0 step 1).
+```
+
+Once `EARLY_PLAN_DIR` is known:
+
+1. If `$EARLY_PLAN_DIR/.review_state.json` **does not exist** → proceed to Phase 0 normally.
+2. If it exists, attempt to parse it. **If it fails to parse (invalid JSON), or any required field is missing or the wrong type, or `phase_3_7_acknowledged` is not `true`:** treat as stale — delete the file, emit a `review_state_corrupt` event with a `reason` field, and proceed to Phase 0 for a full re-run:
+   ```bash
+   # RRUN is not yet established in pre-Phase-0; use a transient identifier
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "pre-resume" review_state_corrupt \
+     "$(jq -n --arg slug "$EARLY_SLUG" --arg reason 'parse_error or missing field' '{"slug":$slug,"reason":$reason}')"
+   rm "$EARLY_PLAN_DIR/.review_state.json"
+   ```
+3. If parsed successfully, validate the state file:
+   - Run `git rev-parse HEAD` and compare with `head_sha` in the file.
+   - Check that the files at `cumulative_diff_path` **and** `cumulative_stat_path` both still exist on disk. If either is missing, treat as stale (delete state file, full re-run).
+   - **If HEAD matches AND both artifact files are present:**
+     - **Fast-forward environment restore** — set all variables Phase 4 requires from state-file fields:
+       ```bash
+       Z_HARNESS_SLUG="<slug from state or slug resolution>"
+       Z_HARNESS_PLAN_DIR="$EARLY_PLAN_DIR"
+       BASE="$EARLY_PLAN_DIR"
+       BASE_REF="<base_ref from state file>"
+       HEAD_SHA="<head_sha from state file>"
+       RRUN="<run_id from state file>"
+       cumulative_diff_path="<cumulative_diff_path from state file>"
+       cumulative_stat_path="<cumulative_stat_path from state file>"
+       ```
+     - Emit `review_resume_fast_forward` event:
+       ```bash
+       bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_resume_fast_forward \
+         "$(jq -n --arg slug "$Z_HARNESS_SLUG" --arg head_sha "$HEAD_SHA" --arg path "$cumulative_diff_path" \
+           '{"slug":$slug,"head_sha":$head_sha,"cumulative_diff_path":$path}')"
+       ```
+     - Skip Phases 0–3.5. Jump directly to Phase 4.
+   - **If HEAD has changed OR either artifact file is missing:**
+     - Delete the stale state file: `rm "$EARLY_PLAN_DIR/.review_state.json"`
+     - Proceed to Phase 0 for a full re-run.
+
 ## Phase 0 — Discover plan slug
 
 Same logic as `/z-implement-all` / `/z-implement-next`:
@@ -87,6 +135,46 @@ done
 
 Skip this phase if either TESTS.md or test-runner.json is absent (no harm — older plans without /z-test predate this step).
 
+## Phase 3.7 — Pre-consult compaction breakpoint
+
+**Always runs** between Phase 3.5 and Phase 4 (unless fast-forwarded via the Pre-Phase 0 resume check).
+
+Emit the compaction pause event:
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" compaction_pause \
+  '{"trigger":"pre_consult","phase":"review_all_phase_4"}'
+```
+
+Present an `AskUserQuestion` with exactly two options:
+
+> **Compaction breakpoint — pre-consultant spawn**
+>
+> You are about to dispatch the cross-LLM consultant subagents (Phase 4). These are context-heavy; starting them on a fresh context window improves quality.
+>
+> **Options:**
+> - **(a) Pause for /clear** — exit now so you can run `/clear`, then re-invoke `/z-review-all` to resume. No state file is written; Phase 3.7 will prompt again on the next invocation (correct — you wanted to re-evaluate).
+> - **(b) Proceed now** — continue into Phase 4 immediately. A state file will be written so a subsequent re-invocation (e.g. after an interruption) can fast-forward past Phases 0–3.5.
+
+**If the user picks (a) — Pause for /clear:**
+- Exit cleanly. Do **not** write `.review_state.json`.
+- The next `/z-review-all` invocation will run Phase 0–3.7 again.
+
+**If the user picks (b) — Proceed now:**
+- Write `$Z_HARNESS_PLAN_DIR/.review_state.json` with this schema:
+  ```json
+  {
+    "phase_3_7_acknowledged": true,
+    "run_id": "<RRUN — the current review run id, e.g. 20260524T120000Z-review>",
+    "base_ref": "<BASE_REF captured in Phase 2>",
+    "head_sha": "<output of git rev-parse HEAD at this moment>",
+    "cumulative_diff_path": "<absolute path to $BASE/archive/$RRUN/cumulative.diff>",
+    "cumulative_stat_path": "<absolute path to $BASE/archive/$RRUN/cumulative.stat>",
+    "acknowledged_at": "<ISO-8601 timestamp>"
+  }
+  ```
+  If the write fails, log a warning to stderr and proceed (do not block on a filesystem hiccup).
+- Continue to Phase 4.
+
 ## Phase 4 — Spawn final-review consultants (parallel)
 
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
@@ -135,6 +223,16 @@ Transcripts are archived by each consultant under `$BASE/archive/$RRUN/transcrip
 
 ## Phase 5 — Aggregate findings
 
+Before promotion, classify each accepted finding using the shared review-family promotion contract:
+
+- `implementation_drift` → candidate fixup task.
+- `spec_gap` → amendment proposal task that routes through `/z-amend`; never edit `SPEC.md` directly.
+- `completed_task_contradiction` → fresh superseding task; never mutate a completed `[x]` task in place.
+- `premise_failure` → escalation section, not implementer work.
+- `observation` → keep in `findings.md` only.
+
+Every promoted finding must include source, severity, evidence, the "one reason this might be wrong" pushback, files, disposition, and acceptance criteria.
+
 Read both consultants' returns. Build `$BASE/archive/$RRUN/findings.md` with this structure:
 
 ```markdown
@@ -173,30 +271,172 @@ Diff stats: <X files, Y additions, Z deletions>
 
 Apply the **one-reason-it-might-be-wrong** rule from `/z-plan` to every finding before listing it. Push back on weak findings.
 
-## Phase 6 — Present + ask what to do
+## Phase 6 — Promote findings to review tasks
 
-Push-notify: "Final review complete: A=<n> drift, B=<m> spec gaps."
+Build `$BASE/REVIEW-TASKS.md` and snapshot the same content to `$BASE/archive/$RRUN/REVIEW-TASKS.md`. This is a candidate artifact: the user deletes anything they reject before applying it.
 
-Present a short version to the user (counts + top blockers) and ask via `AskUserQuestion` what to do with the findings. Options:
+Use this structure:
 
-- **Open drift fixup tasks** → append new tasks (e.g. `T100-fixup-drift`) to `$BASE/TASKS.md`, mark them `[ ]`. User can then run `/z-implement-all` again.
-- **Spec retro** → patch `$BASE/SPEC.md` to address the Prong B findings (you make the edits in-line; user reviews).
-- **Both**
-- **Ship as-is** — write a `$BASE/archive/$RRUN/shipped.md` acknowledging findings as acceptable; close out the plan.
-- **Reject and re-plan** — escalate; recommend running `/z-plan` for the affected scope.
+```markdown
+---
+artifact: review-tasks
+slug: <slug>
+run_id: <RRUN>
+source_findings: archive/<RRUN>/findings.md
+drift_findings: <n>
+spec_gap_findings: <m>
+escalations: <k>
+---
 
-Log: `bash ${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh "$RRUN" review_all_end '{"slug":"<slug>","drift_findings":<a>,"spec_gap_findings":<b>,"user_action":"<choice>"}'`.
+# Review Tasks — <slug>
 
-**On Ship as-is or after fixup tasks complete**, also push-notify the user:
+Findings promoted from `/z-review-all`. Delete any candidate you do not want fixed, then run:
+
+`/z-implement-all --tasks $BASE/REVIEW-TASKS.md`
+
+## Candidate fixup tasks
+
+### [ ] T-REV-001 — [blocker] <short title>
+- **Class:** implementation_drift
+- **Source:** Prong A; <gemini|codex|both>; finding <stable reference or short quote>
+- **Pushback:** <one reason this might be wrong>
+- **Files:** `<path>:<line>` (modified)
+- **Depends on:** none | T-REV-00N
+- **Acceptance:** <verifiable criteria>
+
+## Amendment proposals
+
+### [ ] T-REV-002 — [major] Amend spec: <short title>
+- **Class:** spec_gap
+- **Disposition:** amendment_proposal
+- **Source:** Prong B; <gemini|codex|both>; finding <stable reference or short quote>
+- **Pushback:** <one reason this might be wrong>
+- **Files:** `$BASE/SPEC.md`, `$BASE/PLAN.md`, `$BASE/TASKS.md`
+- **Depends on:** none | T-REV-00N
+- **Acceptance:** run `/z-amend "<specific amendment>"`; resulting SPEC/PLAN/TASKS reflect the amendment and preserve completed-task state.
+
+## Superseding tasks
+
+### [ ] T-REV-003 — [major] Supersedes T0NN: <short title>
+- **Class:** completed_task_contradiction
+- **Disposition:** superseding_task
+- **Source:** <finding reference>
+- **Pushback:** <one reason this might be wrong>
+- **Files:** <files to revisit>
+- **Depends on:** none | T-REV-00N
+- **Acceptance:** new work corrects or replaces the completed task behavior without editing the completed `[x]` task in place.
+
+## Escalations
+
+- **Premise failure:** <finding>. Recommended next: `/z-plan <affected scope>`.
+
+## Report-only observations
+
+- <minor/speculative finding left in findings.md only>
+```
+
+If there are no actionable findings and no escalations, write `$BASE/archive/$RRUN/shipped.md` acknowledging the clean final review and omit `REVIEW-TASKS.md`.
+
+**Cleanup (unconditional — applies to both success outcomes: REVIEW-TASKS.md generated OR clean shipped.md):** Delete `$Z_HARNESS_PLAN_DIR/.review_state.json` before emitting the final response:
+```bash
+rm -f "$Z_HARNESS_PLAN_DIR/.review_state.json"
+```
+This ensures a subsequent `/z-review-all` starts a full fresh run rather than fast-forwarding into a stale Phase 4.
+
+Push-notify: "Final review complete: A=<n> drift, B=<m> spec gaps, review tasks=<t>, escalations=<k>."
+
+Present a short summary to the user:
+
+- `findings.md` path
+- `REVIEW-TASKS.md` path, if generated
+- top blockers/escalations
+- next command: `/z-implement-all --tasks $BASE/REVIEW-TASKS.md` after deleting rejected candidates, or `/z-amend` for amendment proposals that should be applied first
+
+Log: `bash ${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh "$RRUN" review_all_end '{"slug":"<slug>","drift_findings":<a>,"spec_gap_findings":<b>,"review_tasks":<t>,"escalations":<k>,"user_action":"artifact_promoted"}'`.
+
+**On a clean review or after promoted tasks complete**, also push-notify the user:
 ```
 Final review accepted. Recommended next:
   /z-maintain-docs   — refresh docs/human/ and docs/llm/ for any concepts touched by this plan
 ```
 The implementation is done and reviewed; the docs are what's left.
 
+## Phase 7 — Memory review (auto)
+
+1. Call `bash scripts/run-memory-review.sh "$RRUN" "review-all"`. Capture stdout.
+2. If the first line is `STATUS: skipped <reason>` — emit `phase_end` with `phase: 7, name: "memory_review", skipped: true, skip_reason: "<reason>"` and exit phase quietly (no push-notify):
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" phase_end \
+     "$(jq -n --argjson phase 7 --arg name 'memory_review' --arg skip_reason '<reason>' \
+        '{"phase":$phase,"name":$name,"skipped":true,"skip_reason":$skip_reason}')"
+   ```
+3. If the first line is `STATUS: ready`, parse the three paths printed on subsequent lines:
+   - Line 2: `<RUN_DIR>/cumulative.diff` (cumulative diff path)
+   - Line 3: `<BASE>/SPEC.md` (spec path)
+   - Line 4: `docs/llm/TAGS.txt` (tags path)
+4. Dispatch:
+   ```
+   <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+     subagent_type="review-agent",
+     description="Memory review for <slug>",
+     prompt="run_dir: <RUN_DIR>\ncumulative_diff_path: <cumulative.diff path>\nspec_path: $BASE/SPEC.md\ntags_path: docs/llm/TAGS.txt\nindex_path: docs/llm/INDEX.json\nrun_id: <RRUN>\nparent_command: review-all"
+   )
+   ```
+5. Parse the agent's return: extract the single fenced ```json block. On parse failure → emit `review_agent_malformed` event, soft-skip with a push-notify hint, and exit phase:
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_agent_malformed \
+     "$(jq -n --arg reason 'no_fenced_json_block' '{"reason":$reason}')"
+   # Push-notify: "Memory review output was malformed — no valid fenced json block found. Check events.jsonl for review_agent_malformed."
+   ```
+6. If the candidates array is empty (`[]`) → emit `phase_end` with `candidates_emitted: 0`, exit phase quietly (no push-notify):
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" phase_end \
+     "$(jq -n --argjson phase 7 --arg name 'memory_review' --argjson candidates 0 \
+        '{"phase":$phase,"name":$name,"candidates_emitted":$candidates}')"
+   ```
+7. If candidates ≥ 1:
+   - Write the raw candidates array to `$RUN_DIR/memory-candidates.jsonl` (one JSON object per line).
+   - Emit `review_agent_call` event:
+     ```bash
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_agent_call \
+       "$(jq -n --arg model 'haiku' --argjson in_tok '<input_tokens>' --argjson out_tok '<output_tokens>' --argjson n '<N>' \
+          '{"subagent_model":$model,"subagent_input_tokens":$in_tok,"subagent_output_tokens":$out_tok,"candidates_emitted":$n}')"
+     ```
+   - **Push-notify** (`memory_candidates_ready`): "`<N>` memory candidate(s) ready for review."
+   - **Sequential AskUserQuestion per candidate** (iterate the candidates array, one prompt per candidate; stop early if user picks Skip-all-remaining):
+     - Show: `candidate_kind`, `type`, `text`, `tags`, `suggested_concept_slug`, `rationale`.
+     - Options:
+       - **Accept** — dispatch `/z-suggest-memory --concept <suggested_concept_slug> --from-candidate-json <tmp_path> --source "incident:<RRUN>"`. On `STATUS: ok`, increment `accepted` counter. On `STATUS: skipped` or `STATUS: bad_input`, log `review_agent_suggest_failed` with reason and continue.
+       - **Edit** — surface candidate fields for the user to modify inline, then dispatch as Accept with the edited values.
+       - **Skip (one-word reason)** — capture the reason, log `review_candidate_skipped {reason}`, continue to next candidate.
+       - **Skip-all-remaining** — log `review_skip_all`, break the loop.
+8. Final accounting: emit `phase_end`:
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" phase_end \
+     "$(jq -n --argjson phase 7 --arg name 'memory_review' \
+           --argjson wall_ms '<wall_ms>' \
+           --argjson accepted '<accepted>' \
+           --argjson edited '<edited>' \
+           --argjson skipped '<skipped>' \
+           --argjson emitted '<candidates_emitted>' \
+        '{"phase":$phase,"name":$name,"wall_ms":$wall_ms,"accepted":$accepted,"edited":$edited,"skipped":$skipped,"candidates_emitted":$emitted}')"
+   ```
+
+**Event-kind reference for this phase:**
+
+| Event kind | When emitted |
+|---|---|
+| `review_agent_call` | Agent returned candidates (including empty-array case) |
+| `review_agent_failed` | Agent returned without a fenced block |
+| `review_agent_malformed` | Agent returned with a fenced block that failed `json.loads` |
+| `memory_candidates_ready` | N ≥ 1 candidates; push-notify fired |
+| `review_candidate_skipped` | User skipped a single candidate with a reason |
+| `review_skip_all` | User chose Skip-all-remaining |
+| `review_agent_suggest_failed` | `/z-suggest-memory` dispatch failed for an Accepted candidate |
+
 ## Hard rules
 
-- **Never** edit SPEC.md or TASKS.md automatically. Always present changes to the user first (use `AskUserQuestion` for confirmation on each substantive edit, or stage edits in a draft file and let the user accept).
+- **Never** edit SPEC.md or TASKS.md automatically. Stage review findings in `REVIEW-TASKS.md` or an amendment proposal and let the user prune/apply them.
 - **Never** run this on an incomplete plan without explicit user override.
 - **Never** trust a single LLM's finding without pushback — list "one reason this might be wrong" before treating a finding as actionable.
 - **Always** archive the cumulative diff and both consultant transcripts under `$BASE/archive/$RRUN/`.
