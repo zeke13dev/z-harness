@@ -4,22 +4,34 @@
 
 ## Overview
 
-z-harness is a Claude Code plugin distributed in two modes: **symlink** (for
-active development) and **tarball** (for stable deploys). Both modes install
-to the same location so Claude Code picks them up identically.
+z-harness can be installed for Claude Code or Codex. Both hosts support
+**symlink** mode for active development and **tarball** mode for stable
+deploys.
 
 ---
 
-## Plugin install location
+## Plugin install locations
 
-Both modes install to:
+Claude Code installs to:
 
 ```
 ~/.claude/plugins/z-harness@zeke-tools
 ```
 
-In symlink mode this is a symlink to your local clone.
-In tarball mode this is an extracted directory.
+Codex installs through the personal marketplace at:
+
+```
+~/.agents/plugins/marketplace.json
+```
+
+The marketplace entry points at:
+
+```
+~/plugins/z-harness
+```
+
+In symlink mode these locations point to your local clone. In tarball mode
+they contain an extracted directory.
 
 ---
 
@@ -37,15 +49,41 @@ cd z-harness
 bash install.sh
 ```
 
-`install.sh` detects the presence of `.git + commands/ + agents/` and
-creates:
+`install.sh` defaults to Claude Code. It detects the presence of
+`.git + commands/ + agents/` and creates:
 
 ```
 ~/.claude/plugins/z-harness@zeke-tools -> <absolute path to clone>
 ```
 
+For Codex:
+
+```bash
+bash install.sh --target=codex
+```
+
+This creates:
+
+```
+~/plugins/z-harness -> <absolute path to clone>
+```
+
+It also creates or updates `~/.agents/plugins/marketplace.json` and runs:
+
+```bash
+codex plugin add z-harness@personal
+```
+
+For both hosts:
+
+```bash
+bash install.sh --target=all
+```
+
 Any edit you make in the repo takes effect immediately in Claude Code — no
-re-install needed.
+re-install needed. Codex snapshots plugins into its cache, so after editing
+plugin skills or metadata, re-run `codex plugin add z-harness@personal` and
+start a new Codex thread.
 
 ---
 
@@ -55,17 +93,20 @@ Tarball mode is for users who want a stable, versioned install without keeping
 a local clone.
 
 ```bash
-bash install.sh --tarball=<release-url>
+bash install.sh --target=codex --tarball=<release-url>
 ```
 
 Or set the env variable and run without a flag:
 
 ```bash
-Z_HARNESS_RELEASE_URL=<release-url> bash install.sh
+Z_HARNESS_RELEASE_URL=<release-url> bash install.sh --target=codex
 ```
 
-`install.sh` downloads the tarball, extracts it under
-`~/.claude/plugins/z-harness@zeke-tools/`, and prints the installed version.
+Use `--target=claude` or omit `--target` for Claude Code. Use `--target=all`
+to install the tarball for both hosts.
+
+`install.sh` downloads the tarball, extracts it under the selected host's
+plugin location, and prints the installed version.
 
 To update a tarball install later, use `/z-update` from inside Claude Code.
 
@@ -108,12 +149,13 @@ To have z-harness load automatically in a specific project, commit
 
 ## /z-update — refreshing the install
 
-`/z-update` is the in-Claude-Code command for keeping z-harness current. It
-detects install mode and takes the appropriate update path.
+`/z-update` in Claude Code, or the `z-update` skill in Codex, keeps z-harness
+current. It detects install mode and takes the appropriate update path.
 
 **Symlink mode:** runs `git -C <plugin-path> pull --ff-only`. If the repo has
 uncommitted changes, it aborts and prints `git status`; resolve the changes,
-then re-run `/z-update`.
+then re-run `/z-update` or `z-update`. In Codex, it then reruns
+`codex plugin add z-harness@personal` so the cache is refreshed.
 
 **Tarball mode:** HEAD-checks the release URL, compares version strings, and
 performs an atomic swap if a newer version is found. Rolls back automatically
@@ -149,6 +191,8 @@ footgun.
 
 ```bash
 rm ~/.claude/plugins/z-harness@zeke-tools
+codex plugin remove z-harness@personal
+rm ~/plugins/z-harness
 ```
 
 If you installed via tarball, this removes the extracted directory. If you

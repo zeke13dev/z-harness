@@ -1,71 +1,42 @@
 {
   "concept": "scripts",
-  "last_updated": "2026-05-23",
+  "last_updated": "2026-05-25",
   "covers_spec": "none",
   "source_file": [
-    "scripts/extract-dismissals.py",
     "scripts/log-event.sh",
     "scripts/log-phase.sh",
     "scripts/regenerate-memories-flat.py",
     "scripts/remote-sandbox-sync.sh",
-    "scripts/version.sh"
+    "scripts/version.sh",
+    "scripts/run-memory-review.sh",
+    "scripts/extract-dismissals.py"
   ],
   "confidence": "high",
   "entry_points": [
-    {
-      "file": "scripts/extract-dismissals.py",
-      "line": 1,
-      "symbol": "extract-dismissals.py",
-      "kind": "module",
-      "summary": "Computes dismissed finding signatures from consecutive MR-REVIEW.md archive snapshots; shared by /z-mr-review and /z-style-init --amend."
-    },
-    {
-      "file": "scripts/log-event.sh",
-      "line": 1,
-      "symbol": "log-event.sh",
-      "kind": "module",
-      "summary": "Appends standard JSON events to run and global logs."
-    },
-    {
-      "file": "scripts/log-phase.sh",
-      "line": 1,
-      "symbol": "log-phase.sh",
-      "kind": "module",
-      "summary": "Logs process start/end and handles timing telemetry."
-    },
-    {
-      "file": "scripts/regenerate-memories-flat.py",
-      "line": 1,
-      "symbol": "regenerate-memories-flat.py",
-      "kind": "module",
-      "summary": "Compiles memories across concepts into MEMORIES-FLAT.md."
-    },
-    {
-      "file": "scripts/remote-sandbox-sync.sh",
-      "line": 1,
-      "symbol": "remote-sandbox-sync.sh",
-      "kind": "module",
-      "summary": "Maps local files to remote testing VM via rsync."
-    },
-    {
-      "file": "scripts/version.sh",
-      "line": 1,
-      "symbol": "version.sh",
-      "kind": "module",
-      "summary": "Provides git-anchored plugin version JSON."
-    }
+    {"file": "scripts/log-event.sh", "line": 1, "symbol": "log-event.sh", "kind": "module", "summary": "Appends structured JSON event to run events.jsonl and repo-wide metrics.jsonl; flock-safe."},
+    {"file": "scripts/log-phase.sh", "line": 1, "symbol": "log-phase.sh", "kind": "module", "summary": "Sugar over log-event.sh; start/end/wrap modes emit <phase>_start/_end with wall_ms."},
+    {"file": "scripts/regenerate-memories-flat.py", "line": 1, "symbol": "regenerate-memories-flat.py", "kind": "module", "summary": "Scans docs/llm/*.json, collects memories[], writes MEMORIES-FLAT.md atomically."},
+    {"file": "scripts/remote-sandbox-sync.sh", "line": 1, "symbol": "remote-sandbox-sync.sh", "kind": "module", "summary": "Rsyncs local tree to ~/dev/qt-bot-sandbox/<slug>/<task-id>/ on remote host."},
+    {"file": "scripts/version.sh", "line": 1, "symbol": "version.sh", "kind": "module", "summary": "Emits JSON blob with plugin git SHA, dirty flag, branch, optional tag."},
+    {"file": "scripts/run-memory-review.sh", "line": 1, "symbol": "run-memory-review.sh", "kind": "module", "summary": "Gate script for memory-review agent; checks skip conditions, writes cumulative diff, returns artifact paths."},
+    {"file": "scripts/extract-dismissals.py", "line": 1, "symbol": "extract-dismissals.py", "kind": "module", "summary": "Mines historical review artifacts for dismissed-finding patterns consumed by mr-reviewer."}
   ],
   "depends_on": [],
-  "consumed_by": [
-    "agents",
-    "commands",
-    "skills"
-  ],
+  "consumed_by": ["agents", "commands", "skills", "review-agent"],
   "invariants": [
-    "Requires python3 for JSON parsing, event validation, and logging timing fallbacks."
+    "All scripts require python3 for JSON handling, timing fallbacks, and document generation.",
+    "All scripts resolve the repo root via git rev-parse or pwd fallback.",
+    "log-event.sh and log-phase.sh honor Z_HARNESS_SLUG for slug-namespaced vs. legacy flat plan layout.",
+    "regenerate-memories-flat.py writes MEMORIES-FLAT.md atomically via os.replace on a temp file.",
+    "run-memory-review.sh always exits 0; skip conditions are communicated via STATUS: line on stdout."
   ],
   "gotchas": [
-    "macOS BSD date lacks %3N support, necessitating the python3 fallback in log-phase.sh."
+    "macOS BSD date lacks %3N support; log-phase.sh falls back to python3 time.time()*1000.",
+    "log-event.sh silently wraps non-JSON payloads as {\"raw\": ...} instead of failing.",
+    "log-event.sh mid-flight legacy detection: writes to old flat path if run dir already exists there.",
+    "remote-sandbox-sync.sh warns but does not fail when no .z-harness-rsync-exclude is found.",
+    "run-memory-review.sh disables pipefail around git diff | head -n 5000 to tolerate SIGPIPE.",
+    "version.sh degrades gracefully if plugin root is not a git repo, returning non-git sentinel values."
   ],
   "memories": []
 }

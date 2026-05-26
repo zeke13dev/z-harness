@@ -1,160 +1,56 @@
-# MULTI-IDE — Exporting z-harness to Cursor, Codex CLI, and Antigravity
+# Multi IDE Exports
 
-> Last updated: 2026-05-24
+> Last updated: 2026-05-25
+> Covers source: scripts/export-common.py, scripts/export-cursor.py, scripts/export-codex.py, scripts/export-agy.py, scripts/audit-tarball.sh, commands/z-export.md, docs/human/MULTI-IDE.md, exports/cursor/CAPABILITIES.md, exports/codex/CAPABILITIES.md, exports/agy/CAPABILITIES.md
 
 ## Overview
 
-z-harness source of truth lives in Claude Code format (`commands/*.md`,
-`agents/*.md`, `skills/*/SKILL.md`). The multi-IDE export pipeline translates
-this source into IDE-specific formats under `exports/` so that Cursor,
-Codex CLI, and Antigravity (agy) users can run the same workflows.
+The multi-IDE export pipeline translates the z-harness source of truth from `commands/`, `agents/`, and `skills/` into target-specific files under `exports/`. Cursor receives `.cursor/rules/*.mdc`, Codex CLI receives `prompts/*.md` plus a consolidated `AGENTS.md`, and Antigravity receives `.agent/workflows`, `.agent/rules`, `.agent/skills`, flat prompts, `agy-plugin.yaml`, `CAPABILITIES.md`, and `README.md`.
 
----
+The pipeline is intentionally mechanical. `scripts/export-common.py` enumerates source files, validates the minimal `CAPABILITIES.md` schema, and computes conventional target paths; each adapter rewrites unsupported Claude Code constructs into explicit comments, writes its target tree, and validates the emitted files. The `/z-export` command is the user-facing wrapper that selects one target or all three and runs the adapters sequentially.
 
-## Export targets
+## Key entry points
 
-| Target | Output dir | Format |
-|--------|-----------|--------|
-| `cursor` | `exports/cursor/` | `.cursor/rules/*.mdc` + README.md |
-| `codex` | `exports/codex/` | `AGENTS.md` + `prompts/*.md` + README.md |
-| `agy` | `exports/agy/` | `agy-plugin.yaml` + `prompts/*.md` + README.md |
+- `scripts/export-common.py:107` — `enumerate_sources` — Collect commands, agents, and skills from the repo root.
+- `scripts/export-common.py:134` — `validate_capabilities` — Require Supported, Unsupported, and Notes sections.
+- `scripts/export-common.py:181` — `output_path_for` — Compute Cursor, Codex, and agy conventional output paths.
+- `scripts/export-cursor.py:66` — `_rewrite_body` — Replace unsupported call sites with a Cursor limitation comment.
+- `scripts/export-cursor.py:96` — `_render_mdc` — Render one command, agent, or skill as a Cursor `.mdc` rule.
+- `scripts/export-cursor.py:179` — `main` — Emit and validate Cursor `.mdc` rules.
+- `scripts/export-codex.py:90` — `_rewrite_body` — Replace unsupported call sites with a Codex limitation comment.
+- `scripts/export-codex.py:117` — `_render_prompt` — Render command and skill prompt files.
+- `scripts/export-codex.py:140` — `_render_agents_md` — Consolidate all agents into `AGENTS.md`.
+- `scripts/export-codex.py:229` — `main` — Emit Codex prompts plus `AGENTS.md` and validate prompts.
+- `scripts/export-agy.py:71` — `_rewrite_body` — Replace unsupported call sites with an Antigravity limitation comment.
+- `scripts/export-agy.py:93` — `_render_workflow` — Render commands as `.agent/workflows/<id>.md`.
+- `scripts/export-agy.py:130` — `_render_rule` — Render agents as `.agent/rules/z-harness-<id>.md`.
+- `scripts/export-agy.py:155` — `_render_skill` — Render skills as `.agent/skills/<id>/SKILL.md`.
+- `scripts/export-agy.py:177` — `_render_prompt` — Render flat agy prompt files for commands, agents, and skills.
+- `scripts/export-agy.py:207` — `_build_manifest` — Generate the z-harness `agy-plugin.yaml` manifest.
+- `scripts/export-agy.py:559` — `main` — Emit and validate agy workflows, rules, skills, prompts, manifest, capabilities, and README.
+- `scripts/audit-tarball.sh:75` — `_audit_fail` — Fail immediately when a forbidden tarball entry is detected.
+- `scripts/audit-tarball.sh:83` — `_check_pattern` — Search a tarball listing for one forbidden pattern.
+- `commands/z-export.md:10` — `/z-export` — Parse `--target`, run adapters sequentially, and report per-target status.
 
-Each target also contains a `CAPABILITIES.md` that documents which Claude Code
-constructs are not representable in that IDE and how they were handled.
+## How it interacts with others
 
----
+- `commands` — export adapters enumerate command markdown files, and `/z-export` is itself the command wrapper for the pipeline.
+- `agents` — export adapters enumerate agent definitions; Cursor emits one rule per agent, Codex consolidates agents into `AGENTS.md`, and agy emits both rules and flat prompts.
+- `skills` — export adapters enumerate `skills/*/SKILL.md`; Cursor and Codex render them as rule/prompt files, while agy also emits native `.agent/skills/<id>/SKILL.md` directories.
+- `scripts` — the adapters are standalone Python scripts with a shared `export-common.py`; `audit-tarball.sh` is the export safety gate for packaged artifacts.
 
-## Running an export
+## Edge cases / gotchas
 
-### Via /z-export (recommended)
+- `scripts/export-common.py` does not apply the tarball exclusion policy; the sensitive-path gate lives in `scripts/audit-tarball.sh`.
+- Codex does not emit one prompt per agent. Agents are consolidated into `exports/codex/AGENTS.md` because Codex CLI has no native subagent dispatch.
+- Antigravity emits multiple surfaces for the same source: workflows for commands, rules for agents, native skills for skills, flat prompts for all three, plus `agy-plugin.yaml`.
+- Unsupported constructs are replaced line-by-line with target-specific comments. They should not disappear silently.
+- `commands/z-export.md` says the command itself performs no direct file I/O; writes are delegated to the adapter scripts.
+- The export tree now includes regenerated planning surfaces such as `planning-router` and `z-audit-plan` wherever those source files exist.
 
-From any Claude Code session with z-harness loaded:
+## Examples
 
-```
-/z-export --target=cursor
-/z-export --target=codex
-/z-export --target=agy
-/z-export                    # exports all three targets
-```
-
-`/z-export` runs the corresponding Python adapter script, reports per-target
-success or failure, and never aborts early — a single target failure does not
-skip the remaining targets.
-
-### Via Python scripts directly
-
-```bash
-python3 scripts/export-cursor.py
-python3 scripts/export-codex.py
-python3 scripts/export-agy.py
-```
-
-All three scripts share `scripts/export-common.py` for source-file
-enumeration, CAPABILITIES.md schema validation, and filter logic.
-
----
-
-## Per-target CAPABILITIES.md
-
-Each target's `CAPABILITIES.md` records what was translated and what was
-dropped. Read it before using the exported files to understand the fidelity
-boundaries.
-
-Paths:
-
-- `exports/cursor/CAPABILITIES.md`
-- `exports/codex/CAPABILITIES.md`
-- `exports/agy/CAPABILITIES.md`
-
-Common unsupported constructs across all non-Claude-Code targets:
-
-| Construct | Reason |
-|-----------|--------|
-| `Agent(subagent_type=...)` | Native subagent dispatch is a Claude Code primitive |
-| `Skill(name=...)` | Skill invocation is a Claude Code plugin primitive |
-| `AskUserQuestion(...)` | Anthropic tool-use schema; not available in other IDEs |
-
-When a source file contains these constructs, the export adapter replaces them
-with an inline comment explaining the limitation. Refer to the target's
-`CAPABILITIES.md` for the full list.
-
----
-
-## Cursor
-
-The Cursor export produces `.mdc` rule files under
-`exports/cursor/.cursor/rules/`. Each source file (command, agent, skill) gets
-its own `.mdc` file.
-
-### Install instructions for Cursor
-
-1. Run `/z-export --target=cursor` (or `python3 scripts/export-cursor.py`).
-2. Copy or symlink `exports/cursor/.cursor/rules/` into your project:
-   ```bash
-   cp -r exports/cursor/.cursor /path/to/your/project/
-   ```
-3. Open the project in Cursor. The rules load automatically.
-
----
-
-## Codex CLI
-
-The Codex export produces:
-
-- `exports/codex/AGENTS.md` — consolidated agent definitions.
-- `exports/codex/prompts/*.md` — one file per command.
-
-### Install instructions for Codex CLI
-
-1. Run `/z-export --target=codex` (or `python3 scripts/export-codex.py`).
-2. Copy `exports/codex/AGENTS.md` and `exports/codex/prompts/` to your repo:
-   ```bash
-   cp exports/codex/AGENTS.md /path/to/your/project/
-   cp -r exports/codex/prompts /path/to/your/project/
-   ```
-3. Reference the prompt files in your Codex CLI invocations.
-
----
-
-## Antigravity (agy)
-
-The agy export produces:
-
-- `exports/agy/agy-plugin.yaml` — plugin manifest.
-- `exports/agy/prompts/*.md` — one file per command.
-
-### Install instructions for Antigravity
-
-1. Run `/z-export --target=agy` (or `python3 scripts/export-agy.py`).
-2. Copy the output to your agy plugin directory:
-   ```bash
-   cp -r exports/agy/ ~/.agy/plugins/z-harness/
-   ```
-3. The plugin is loaded on the next agy session start.
-
-Refer to `exports/agy/CAPABILITIES.md` for agy-specific translation notes.
-
----
-
-## Export filter — what is excluded
-
-The export scripts never include:
-
-- `providers.json` or `.z-harness/` (contains credentials and local paths)
-- `z-harness/plans/` or `z-harness/archive/` (run artifacts)
-- Anything under `~/` (home directory paths)
-
-This filter is enforced by `scripts/audit-tarball.sh`, which the CI pipeline
-runs after every export build.
-
----
-
-## Keeping exports up to date
-
-Exports are not automatically regenerated when source files change. Re-run
-`/z-export` (or the per-target script) whenever you update commands, agents,
-or skills.
-
-The `scripts/export-common.py` shared library handles path enumeration, so
-new source files are picked up automatically on the next export run without
-changes to the adapter scripts.
+- `python3 scripts/export-cursor.py` regenerates `exports/cursor/.cursor/rules/*.mdc`.
+- `python3 scripts/export-codex.py` regenerates `exports/codex/prompts/*.md` and `exports/codex/AGENTS.md`.
+- `python3 scripts/export-agy.py` regenerates `.agent/workflows`, `.agent/rules`, `.agent/skills`, flat prompts, `agy-plugin.yaml`, `CAPABILITIES.md`, and `README.md` under `exports/agy/`.
+- `/z-export --target=all` runs the three adapters sequentially and continues past individual target failures so each target reports `OK` or `FAILED`.

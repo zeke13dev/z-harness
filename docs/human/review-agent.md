@@ -1,0 +1,151 @@
+# review-agent
+
+> Last updated: 2026-05-25
+> Covers source: agents/review-agent.md, scripts/run-memory-review.sh
+
+## Overview
+
+`review-agent` is a Haiku-tier subagent defined in `agents/review-agent.md`. It fires automatically at the end of `/z-implement-all` (Phase 9) and `/z-review-all` (Phase 7), reads the completed run's `events.jsonl`, cumulative diff, and `SPEC.md`, and proposes 0-3 candidate memories worth persisting to the docs knowledge base.
+
+The agent reasons but does not write. It returns a single fenced JSON block containing candidate objects. The orchestrator owns all writes: it parses the candidates, surfaces them via `AskUserQuestion` prompts, and routes accepted candidates through `/z-suggest-memory`. Before the agent is dispatched, `scripts/run-memory-review.sh` performs skip-condition checks and assembles artifact paths — the script is always called first, and on a non-skip result the orchestrator constructs the agent prompt from its output.
+
+## Key entry points
+
+- `agents/review-agent.md` — `review-agent` — subagent definition: role, procedure, output contract, hard rules, and slug naming anti-patterns
+- `scripts/run-memory-review.sh` — `run-memory-review` — skip-condition guard and artifact-prep helper; called by both `/z-implement-all` Phase 9 and `/z-review-all` Phase 7
+
+## How it interacts with others
+
+- `z-implement-all` — Phase 9 calls `run-memory-review.sh`, then dispatches `review-agent`, then runs the accept/skip loop
+- `z-review-all` — Phase 7 does the same; signals differ (no `all_tasks_skipped` skip condition here)
+- `z-suggest-memory` — sole write path for accepted candidates; called with `--from-candidate-json` and `--source "incident:<RUN_ID>"`
+- `z-stats` — Phase 4 and Phase 4b surface `review_agent_call`, `review_agent_failed`, and `review_agent_malformed` events for debugging
+
+## When it fires
+
+The review-agent fires **after** the existing primary-deliverable push-notify at the end of:
+
+- `/z-implement-all` — Phase 9 (after the Finalize phase push-notify).
+- `/z-review-all` — Phase 7 (after Phase 6's `.review_state.json` cleanup push-notify).
+
+Before dispatching the agent, `scripts/run-memory-review.sh` performs a skip-conditions check:
+
+- **Skip if `empty_diff`**: no code changed since the merge-base — nothing to remember.
+- **Skip if `all_tasks_skipped`** (implement-all only): no tasks executed — no signals to mine.
+- **Skip if `no_plan_dir`**: `$Z_HARNESS_PLAN_DIR` is not set — the plan directory cannot be resolved.
+- **Do NOT skip on halt**: halted runs are high-signal and are always reviewed.
+- **Soft-skip if `tags_missing`**: `docs/llm/TAGS.txt` is absent; emits `review_agent_failed` with `skip_reason: tags_missing` and exits without blocking.
+
+## What the user sees
+
+When candidates >= 1, the orchestrator emits a `memory_candidates_ready` push-notify:
+
+```
+<N> memory candidate(s) ready for review.
+```
+
+Then, up to 3 sequential `AskUserQuestion` prompts appear, one per candidate:
+
+| Option | Effect |
+|---|---|
+| **Accept** | Dispatches `/z-suggest-memory --concept <slug> --from-candidate-json <tmp_path> --source "incident:<RUN_ID>"`. |
+| **Edit** | Surfaces the candidate fields for editing, then dispatches as Accept. |
+| **Skip (one-word reason)** | Logs `review_candidate_skipped {reason}` and moves to the next candidate. |
+| **Skip-all-remaining** | Logs `review_skip_all` and exits the review loop immediately. |
+
+If the agent returns zero candidates, the phase exits quietly with no push-notify and no prompts.
+
+## What gets persisted
+
+### Per-run candidate store
+
+When candidates >= 1, the raw candidate array is written to:
+
+```
+$RUN_DIR/memory-candidates.jsonl
+```
+
+One JSON object per line. This file is ephemeral — it lives with the run archive and is not globally aggregated in v1.
+
+### On Accept
+
+`/z-suggest-memory` writes the accepted memory to `docs/llm/<slug>.json` and regenerates `MEMORIES-FLAT.md`. This is the only write path — the review-agent and orchestrator never mutate doc files directly.
+
+## Telemetry events
+
+| Event | When |
+|---|---|
+| `review_agent_call` | On successful agent return; fields: `subagent_model`, `subagent_input_tokens`, `subagent_output_tokens`, `candidates_emitted`. |
+| `review_agent_failed` | Agent dispatch failed or returned no parseable output; fields include `reason`. |
+| `review_agent_malformed` | Agent returned output but the fenced JSON block could not be parsed. |
+| `memory_candidates_ready` | N >= 1 candidates; push-notify fired. |
+| `review_candidate_skipped` | User skipped a single candidate; includes one-word reason. |
+| `review_skip_all` | User chose Skip-all-remaining. |
+| `review_agent_suggest_failed` | `/z-suggest-memory` dispatch failed for an accepted candidate; logged and iteration continues. |
+| `phase_end` | Emitted at end of Phase 9 / Phase 7 with `{phase, name: "memory_review", wall_ms, accepted, edited, skipped, candidates_emitted}`. |
+
+## Edge cases / gotchas
+
+- `run-memory-review.sh` requires `$Z_HARNESS_PLAN_DIR` to be set; if unset, the script emits `STATUS: skipped no_plan_dir` and exits 0 without error.
+- `run-memory-review.sh` soft-skips (exit 0) on missing `docs/llm/TAGS.txt` rather than failing hard; the orchestrator sees `STATUS: skipped tags_missing`.
+- The diff base ref is resolved in order: merge-base with `origin/main`, then `HEAD~5`, then the empty-tree hash. An empty diff causes skip before any agent dispatch.
+- Parse failure on agent return is a soft-skip (`review_agent_malformed` event), not a hard error — the phase exits with a push-notify hint.
+- No per-call wall-clock timeout on the Agent dispatch in v1; user ctrl-c is the only escape if the Haiku call hangs. The primary-deliverable push-notify has already fired at that point.
+- Candidate tags must come from `docs/llm/TAGS.txt` unless a free-form tag is explicitly justified; the agent is instructed to prefer controlled tags.
+- The agent receives `index_path` (path to `docs/llm/INDEX.json`) and is expected to prefer extending an existing slug over coining a new one.
+
+## Slug naming anti-patterns
+
+The following slug patterns are banned in candidate output:
+
+- **PR-number references** — e.g. `pr-1234-fix`. Slugs must be conceptual, not tied to a specific PR.
+- **Library-name-alone slugs** — e.g. `serde`, `tokio`. Name the concept or failure mode, not just the library.
+- **Session-specific artifact names** — e.g. `run-2026-05-25-patch`. Slugs must survive across sessions.
+- **Negative-capability claims** — e.g. `dont-use-threads`. Use a positive framing of the invariant.
+- **Model-specific slugs** — e.g. `haiku-context-limit`. Generalize to the pattern, not the model version.
+
+## v1 known limitation: no per-call timeout
+
+There is no per-call wall-clock timeout in the current `Agent(...)` infrastructure. If the Haiku subagent call hangs, ctrl-c is the only escape. The parent command's primary-deliverable push-notify has already fired at this point, so ctrl-c aborts only the memory review phase, not the run's main output.
+
+## v1 explicit deferrals
+
+The following six mechanisms were explicitly deferred to a gated v2 plan, contingent on v1 telemetry:
+
+1. **No utility scoring sidecar** — no `retrieval_count`, `helpful_count`, or `trust_score` tracked per candidate.
+2. **No retrieval smoke-test** — after acceptance, no check that `doc-fetcher` can actually retrieve the new memory.
+3. **No friction-trigger drafting** — capture happens end-of-run only. Mid-run signals resolved before exit are missed.
+4. **No existing-memory verification** — stale or contradicted memories are not cross-checked during candidate generation.
+5. **No Atropos / RL training** — not portable to the Claude-API-only stack.
+6. **No auto-acceptance for trusted slugs** — every accepted candidate requires a user click.
+
+## How to debug a failure
+
+**Step 1 — Run `/z-stats` Phase 4.** Phase 4 surfaces `review_agent_failed` and `review_agent_malformed` events. Phase 4b lists recent `review_agent_call` entries with candidate counts and token spend:
+
+```
+<ts> review-agent <parent_command>: candidates=<N> accepted=<A> tokens=<input/output>
+```
+
+**Step 2 — Inspect `events.jsonl` directly.** Filter for failure events:
+
+```bash
+jq 'select(.kind == "review_agent_failed" or .kind == "review_agent_malformed")' \
+  z-harness/<slug>/archive/<RUN>/events.jsonl
+```
+
+**Step 3 — Check `memory-candidates.jsonl`.** If the file exists but is malformed, the agent returned parseable JSON but downstream write failed. If missing, the agent returned zero candidates or the phase was skipped.
+
+**Common causes:**
+
+- `tags_missing`: `docs/llm/TAGS.txt` does not exist. Run `/z-suggest-memory` Phase 0 to create it.
+- `no_plan_dir`: `$Z_HARNESS_PLAN_DIR` is not set in the calling environment.
+- `malformed_json`: The agent returned prose outside the fenced block. One-shot soft-skip; no retry in v1.
+- `empty_diff`: Skip-condition fired correctly — not an error.
+
+## See also
+
+- `/Users/zeke/dev/z-harness/commands/z-suggest-memory.md` — sole authoring path for accepted candidates.
+- `/Users/zeke/dev/z-harness/commands/z-implement-all.md` — Phase 9 wiring details.
+- `/Users/zeke/dev/z-harness/commands/z-review-all.md` — Phase 7 wiring details.
+- `/Users/zeke/dev/z-harness/commands/z-stats.md` — Phase 4 and Phase 4b telemetry surface.

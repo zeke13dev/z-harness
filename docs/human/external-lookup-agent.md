@@ -1,0 +1,34 @@
+# external-lookup-agent
+
+> Last updated: 2026-05-25
+> Covers source: agents/external-lookup.md
+
+## Overview
+`external-lookup-agent` is the Haiku-tier retrieval worker defined in `agents/external-lookup.md`. The main thread delegates current external information gathering to it, including web docs, public APIs, paginated JSON responses, and library docs outside the model cutoff, so noisy retrieval does not pollute the main context.
+
+The agent is read-only and returns a compact Markdown synthesis instead of raw fetched content. Its output must follow the canonical `lookup-contract` envelope: one `STATUS` line, fixed `## Answer`, `## Provenance`, and `## Unresolved` sections, and an optional raw artifact pointer when fetched material is too large for the response budget.
+
+## Key entry points
+- `agents/external-lookup.md:1` — `external-lookup` — Agent module metadata: Haiku model, lookup mission, and allowed tools.
+- `agents/external-lookup.md:12` — `Output contract` — Fixed STATUS-headed Markdown envelope that every response must follow.
+- `agents/external-lookup.md:51` — `Verb-blocklist` — Regex blocklist that refuses mutating Bash commands before execution.
+- `agents/external-lookup.md:91` — `Budget` — Total response cap, normalized query rule, and raw artifact cache behavior.
+- `agents/external-lookup.md:99` — `Freshness discipline` — Requires retrieval-time UTC timestamps and marks stale cache use low confidence.
+- `agents/external-lookup.md:105` — `Refusal modes` — Defines `ok`, `partial`, and `refused` semantics and refusal categories.
+
+## How it interacts with others
+- `agents` — This concept is one specialized agent in the broader agent suite.
+- `lookup-contract` — The agent must follow `docs/llm/lookup-contract.json`; that JSON contract wins if it conflicts with inline prose.
+- `multi-ide-exports` — The agent source is exported into downstream CLI surfaces such as Antigravity and Codex.
+
+## Edge cases / gotchas
+- `WebFetch` 4xx/5xx responses should become `STATUS: partial`, with one fallback attempt before giving up.
+- Bash commands are checked against the verb-blocklist before execution; a match produces `STATUS: refused` with `mutation_blocked`.
+- Authenticated endpoints that need unavailable secrets are refused as `auth_missing`; the agent must not sniff environment variables.
+- Raw HTML, JSON, or YAML must not be pasted into `## Answer`; oversized raw material belongs in `z-harness/lookup-cache/<sha256>.raw`.
+- Provenance commands are verbatim and never truncated, so large command text can force use of the raw artifact pointer.
+
+## Examples
+- A request for current library docs should use `WebSearch` or `WebFetch`, summarize the result under `## Answer`, cite URLs under `## Provenance`, and set a UTC `freshness_ts`.
+- A request to run `curl -X POST ...` should return `STATUS: refused` with `Refused: mutation_blocked — matched pattern ...` instead of executing Bash.
+- A paginated API query that only inspects the first page should return `STATUS: partial` and note pagination truncation in `## Unresolved`.

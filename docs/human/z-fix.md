@@ -1,41 +1,46 @@
 # z-fix
 
-> Last updated: 2026-05-24
+> Last updated: 2026-05-25
 > Covers source: commands/z-fix.md
 
-## What it does
+## Overview
 
-`/z-fix` is a fast, lightweight bug-fix command for the case where you **already have a diagnosis**. You bring the hypothesis; the command validates it against a parallel two-LLM consult, implements inline, and runs a mandatory Codex review — all in roughly 15 minutes wall time. It is explicitly **not** for situations where the root cause is unclear. If you cannot name a concrete hypothesis before Phase 0 completes, the command exits and recommends `/z-debug` instead.
+`/z-fix` is a fast, lightweight bug-fix command for the case where you already have a diagnosis. You bring the hypothesis; the command validates it against a parallel two-LLM consult, implements inline, and runs a mandatory Codex review — all targeting roughly 15 minutes wall time end-to-end. It is explicitly not for situations where the root cause is unclear. If you cannot name a concrete hypothesis before Phase 0 completes, the command exits and recommends `/z-debug` instead.
 
-`/z-fix` produces a single artifact: `FIX.md`. There is no SPEC.md, PLAN.md, or TASKS.md — the problem statement, evidence, root cause, approach, and acceptance criteria all live as sections within FIX.md.
+`/z-fix` produces a single artifact: `FIX.md`. There is no SPEC.md, PLAN.md, TASKS.md, PROBLEM.md, or EVIDENCE.md — the problem statement, evidence, root cause, approach, and acceptance criteria all live as sections within FIX.md. The plan directory is resolved via `scripts/plan-path.sh` and lives under `z-harness/plans/<slug>/`.
 
-## Phases at a glance
+## Key entry points
 
-| Phase | What happens |
-|---|---|
-| **Setup** | Derive slug (`fix-<symptom>`), create run directory, version-stamp, log `fix_run_start`. |
-| **Phase 0 — Wrong-tool gate** | Non-skippable `AskUserQuestion`: do you have a hypothesis? No → exits with `/z-debug` recommendation. |
-| **Phase 1 — Problem + repro** | Capture symptom, repro, hypothesis, and confirming/contradicting signals into a phase1-context scratch file. Dispatch `doc-fetcher` (Haiku) if `docs/llm/INDEX.json` exists; otherwise Read/Grep/Glob directly. Check auto-bail thresholds. |
-| **Phase 2 — Single key decision** | Articulate the one root question ("what's the right fix?"). Bail to `/z-plan` if >2 non-obvious decisions surface. |
-| **Phase 3 — Bundled `light-fix` consult** | Spawn Gemini and Codex in parallel with `MODE: light-fix`. Framing is "does this proposed cause explain all symptoms?" — not a generic "what's the best fix?". |
-| **Phase 4 — Synthesize + push back** | For each recommendation, articulate one concrete reason it might be wrong. Surface cross-LLM disagreement to user if present. |
-| **Phase 5 — Approve** | `AskUserQuestion`: approve / modify / abandon. Shortcuts require explicit separate approval. |
-| **Phase 6 — Write FIX.md** | Write the single artifact; status = `approved (not yet shipped)`. |
-| **Phase 7 — Inline implementation** | Orchestrator applies edits directly (no implementer subagent). Apply the standard implementer self-check. Mid-edit scope growth triggers mandatory auto-bail. |
-| **Phase 8 — Codex review** | Non-negotiable. Retry once on blockers/majors. Increment `REVIEW_CYCLES` counter each attempt. |
-| **Phase 9 — Optional post-mortem** | Default = skip if `REVIEW_CYCLES <= 1`. Default = suggest if `REVIEW_CYCLES > 1`. POSTMORTEM.md written only if user accepts. |
-| **Phase 10 — Finalize** | FIX.md `Status` updated to `shipped`. Log `fix_run_end`. Push-notify. Suggest `/z-maintain-docs --audit` if docs were touched. |
+- `commands/z-fix.md:1` — `/z-fix` — top-level slash command definition; read this for the full phase-by-phase procedure
+- `commands/z-fix.md:18` — Setup — slug derivation, run-id, directory creation, version stamp, `fix_run_start` telemetry
+- `commands/z-fix.md:47` — Phase 0 — non-skippable wrong-tool gate via `AskUserQuestion`
+- `commands/z-fix.md:61` — Phase 1 — problem capture, `doc-fetcher` dispatch, auto-bail threshold check
+- `commands/z-fix.md:94` — Phase 2 — single key decision; bail to `/z-plan` if >2 non-obvious decisions
+- `commands/z-fix.md:99` — Phase 3 — bundled `light-fix` consult (Gemini + Codex in parallel)
+- `commands/z-fix.md:119` — Phase 4 — synthesize, one-reason-wrong check, cross-LLM disagreement surface
+- `commands/z-fix.md:128` — Phase 5 — approve/modify/abandon gate
+- `commands/z-fix.md:141` — Phase 6 — write FIX.md
+- `commands/z-fix.md:190` — Phase 7 — inline implementation (no implementer subagent; orchestrator applies edits directly)
+- `commands/z-fix.md:212` — Phase 8 — Codex review (non-negotiable safety gate)
+- `commands/z-fix.md:240` — Phase 9 — optional post-mortem (auto-suggested if `REVIEW_CYCLES > 1`)
+- `commands/z-fix.md:283` — Phase 10 — finalize, FIX.md status → `shipped`, log `fix_run_end`
+
+## How it interacts with others
+
+- `agents` — spawns `consultant-primary` (Gemini) and `consultant-secondary` (Codex) in parallel at Phase 3; spawns `reviewer` (Codex) at Phase 8
+- `commands` — exits to `/z-debug` when root cause is unknown; escalates to `/z-plan` when auto-bail thresholds are exceeded; suggests `/z-maintain-docs --audit` at finalize if docs were touched
+- `scripts` — uses `log-event.sh` for `fix_run_start` / `fix_run_end` telemetry; uses `plan-path.sh` to resolve plan directory; uses `version.sh` for version stamp
 
 ## Auto-bail thresholds
 
-At any phase, if any of the following are found, the command stops and writes `escalation.md`:
+At any phase, if any of the following are found, the command stops and writes `escalation.md` then recommends `/z-plan`:
 
 - More than 5 candidate files need editing.
 - More than 2 non-obvious decisions (new dep, public API change, algorithm with materially different tradeoffs, persistence change).
-- Cross-module or cross-crate impact.
+- Cross-module or cross-crate impact (fix touches multiple modules, public APIs, wire formats, or schemas).
 - User says "this might be bigger than I thought."
 
-On auto-bail the command recommends `/z-plan`.
+If scope growth is discovered mid-implementation (Phase 7), the halt is immediate and non-negotiable — the orchestrator does NOT offer to continue or spawn a subagent. Hard limit: touching >7 files inline triggers halt regardless of threshold checks.
 
 ## When to pick `/z-fix` vs `/z-debug`
 
@@ -43,87 +48,43 @@ On auto-bail the command recommends `/z-plan`.
 |---|---|
 | You can state a hypothesis in one sentence. | `/z-fix` |
 | You cannot name what's causing the symptom. | `/z-debug` |
-| The fix touches 1–5 files in one module. | `/z-fix` |
+| The fix touches 1-5 files in one module. | `/z-fix` |
 | The fix may involve multiple modules or public APIs — root cause unclear. | `/z-debug` |
 | The fix scope is confirmed too large (cross-module impact, >5 files). | `/z-plan` |
 | You want a fast loop — 15 min target. | `/z-fix` |
 | You want adversarial hypothesis generation and Bayesian elimination. | `/z-debug` |
 | A previous `/z-debug` run identified the root cause. | `/z-fix` to implement the fix. |
-| Post-mortem is optional. | `/z-fix` |
-| Post-mortem is mandatory. | `/z-debug` |
 
 If you are unsure which to pick, start with `/z-fix` Phase 0. The wrong-tool gate will redirect you if you cannot name a hypothesis.
 
-## Example invocation
+## Edge cases / gotchas
+
+- **Phase 0 is non-skippable even if an argument is passed.** A symptom description alone is not a hypothesis. The gate fires regardless.
+- **The `light-fix` consult is framed around "does this cause explain all symptoms?" — not "what's the best fix?"** This framing is intentional; accepting a hypothesis that does not explain all symptoms is the most common /z-fix failure mode.
+- **Cross-LLM disagreement must be surfaced to the user.** If Gemini and Codex disagree substantively — or either flags that the proposed cause does not explain all symptoms — the orchestrator does not silently pick one side.
+- **Shortcuts require explicit separate approval at Phase 5.** If either consultant recommends a shortcut over the robust long-lasting solution, the orchestrator marks it and gets separate user confirmation. Default is the robust solution.
+- **Codex review is non-negotiable.** Fix mode cuts planning overhead, not correctness guarantees.
+- **`/z-mr-review` is not auto-triggered.** If a merge-request review is needed post-fix, run it separately.
+- **The `REVIEW_CYCLES` counter drives post-mortem defaults.** `<= 1` cycle defaults to skip; `> 1` cycles defaults to suggest post-mortem.
+- **Never overwrite an existing `<slug>/` plan directory** without asking the user (checked at slug derivation in Setup).
+- **doc-fetcher is dispatched at Phase 1 only when `docs/llm/INDEX.json` exists.** In its absence, the orchestrator reads files directly; it never spawns the `Explore` subagent (too expensive for fix mode).
+
+## Examples
 
 ```
-/z-fix "Login returns 403 after session token is refreshed — hypothesis: the cookie SameSite attribute is being reset to 'Strict' on refresh, blocking the subsequent request"
+/z-fix "Login returns 403 after session token refresh — hypothesis: SameSite attribute is hardcoded to Strict on refresh response, blocking the subsequent browser request"
 ```
 
-At Phase 0 the command will confirm you have a hypothesis. If you typed only a symptom with no hypothesis, Phase 0 will ask you to provide one or redirect to `/z-debug`.
+At Phase 0 the command confirms you have a hypothesis. If you typed only a symptom with no hypothesis, Phase 0 asks you to provide one or redirects to `/z-debug`.
 
-## Sample FIX.md
+## Memories
 
-```markdown
-# Fix: fix-cookie-samesite-refresh
+<!-- DO NOT EDIT this section by hand — regenerated from docs/llm/z-fix.json by doc-updater. Use /z-suggest-memory to add or edit memories. -->
 
-**Run:** 20260524T093000Z-fix-cookie-samesite-refresh
-**Status:** approved (not yet shipped)
-**Plugin version:** 0.3.1
-
-## Problem
-After a session token refresh, the server returns 403 on the next authenticated request.
-Repro: log in, wait for token expiry, observe next API call fails with 403.
-
-## Hypothesis
-The `Set-Cookie` header emitted during token refresh hardcodes `SameSite=Strict`, which
-prevents the browser from attaching the cookie on the redirect that follows the refresh.
-
-## Evidence
-- Browser DevTools shows `SameSite=Strict` on the refresh response `Set-Cookie` header.
-- Same request succeeds when cookie is set manually with `SameSite=None; Secure`.
-- No contradicting signals found.
-
-## Root cause
-`auth/token_refresh.py:set_cookie()` calls the cookie helper with a hardcoded
-`same_site="strict"` argument, ignoring the app-wide default of `"lax"`.
-
-## Approach
-Change the `same_site` argument in `token_refresh.py:set_cookie()` to use the
-app-wide constant `settings.COOKIE_SAMESITE` (default `"lax"`).
-
-## Files to change
-- `/abs/path/to/auth/token_refresh.py`
-
-## Acceptance
-- [ ] Token refresh response sets `SameSite=Lax` (or the value of `settings.COOKIE_SAMESITE`).
-- [ ] Subsequent authenticated request after refresh succeeds with 200.
-- [ ] Existing session cookie tests still pass.
-
-## Cross-LLM consensus
-- Gemini: confirmed cause explains symptoms; recommends using the app constant over inline literal.
-- Codex: confirmed cause explains symptoms; flagged that tests should assert the `SameSite` header value explicitly.
-- Synthesized call: use `settings.COOKIE_SAMESITE`; add header assertion to existing test.
-
-## Approved shortcuts
-none
-
-## Docs touched
-none
-```
-
-## Hard rules
-
-- **Never skip Codex review.** Fix mode cuts planning overhead, not correctness.
-- **Never proceed past auto-bail thresholds** without explicit user override.
-- **Always emit cross-LLM consult** — both Gemini and Codex in parallel, framed around "does this cause explain all symptoms?".
-- **Phase 0 is non-skippable.** A symptom description alone is not a hypothesis. If the user cannot name a hypothesis, the command exits with a `/z-debug` recommendation.
-- **Single bundled `light-fix` consult only.** This is not a multi-round hypothesis generation flow.
-- **No emojis** in any artifact.
-- **FIX.md is the single artifact.** No SPEC.md, PLAN.md, TASKS.md, PROBLEM.md, or EVIDENCE.md.
-- **Never overwrite an existing `<slug>/` directory** without asking the user.
+_No memories recorded yet._
 
 ## See also
 
-- `commands/z-fix.md` — full phase-by-phase procedure.
-- `docs/human/commands.md` — index of all slash commands.
+- `commands/z-fix.md` — full phase-by-phase procedure
+- `docs/human/commands.md` — index of all slash commands
+- `docs/human/z-debug.md` — the hypothesis-generation counterpart

@@ -1,0 +1,49 @@
+{
+  "concept": "z-fix",
+  "last_updated": "2026-05-25",
+  "covers_spec": "z-fix-hypothesis-driven/20260524T061903Z-z-fix-hypothesis-driven",
+  "source_file": ["commands/z-fix.md"],
+  "confidence": "high",
+  "entry_points": [
+    {"file": "commands/z-fix.md", "line": 1, "symbol": "/z-fix", "kind": "module", "summary": "Top-level slash command; fast bug-fix path for known-diagnosis cases"},
+    {"file": "commands/z-fix.md", "line": 18, "symbol": "Setup", "kind": "module", "summary": "Slug derivation, run-id, plan directory, version stamp, fix_run_start log"},
+    {"file": "commands/z-fix.md", "line": 39, "symbol": "auto-bail thresholds", "kind": "const", "summary": ">5 files / >2 non-obvious decisions / cross-module → escalation.md + /z-plan"},
+    {"file": "commands/z-fix.md", "line": 47, "symbol": "Phase 0", "kind": "module", "summary": "Non-skippable wrong-tool gate; exits to /z-debug if no hypothesis"},
+    {"file": "commands/z-fix.md", "line": 61, "symbol": "Phase 1", "kind": "module", "summary": "Problem capture + doc-fetcher dispatch + auto-bail check"},
+    {"file": "commands/z-fix.md", "line": 94, "symbol": "Phase 2", "kind": "module", "summary": "Single key decision; bail to /z-plan if >2 non-obvious decisions"},
+    {"file": "commands/z-fix.md", "line": 99, "symbol": "Phase 3", "kind": "module", "summary": "Bundled light-fix consult: Gemini + Codex in parallel, cause-explains-symptoms framing"},
+    {"file": "commands/z-fix.md", "line": 119, "symbol": "Phase 4", "kind": "module", "summary": "Synthesize; one-reason-wrong check; surface cross-LLM disagreement"},
+    {"file": "commands/z-fix.md", "line": 128, "symbol": "Phase 5", "kind": "module", "summary": "Approve/modify/abandon gate; shortcuts need separate explicit approval"},
+    {"file": "commands/z-fix.md", "line": 141, "symbol": "Phase 6", "kind": "module", "summary": "Write FIX.md (single artifact, status=approved not yet shipped)"},
+    {"file": "commands/z-fix.md", "line": 190, "symbol": "Phase 7", "kind": "module", "summary": "Inline implementation by orchestrator; no implementer subagent; hard limit >7 files"},
+    {"file": "commands/z-fix.md", "line": 212, "symbol": "Phase 8", "kind": "module", "summary": "Codex review, non-negotiable; retry once on blockers; REVIEW_CYCLES counter"},
+    {"file": "commands/z-fix.md", "line": 240, "symbol": "Phase 9", "kind": "module", "summary": "Optional post-mortem; auto-suggested if REVIEW_CYCLES > 1"},
+    {"file": "commands/z-fix.md", "line": 283, "symbol": "Phase 10", "kind": "module", "summary": "Finalize: FIX.md status=shipped, fix_run_end log, /z-maintain-docs hint"}
+  ],
+  "depends_on": ["agents", "scripts", "commands"],
+  "consumed_by": ["commands"],
+  "invariants": [
+    "Phase 0 (wrong-tool gate) is non-skippable, even when $ARGUMENTS is non-empty",
+    "A symptom description alone is not a hypothesis; Phase 0 rejects it",
+    "Codex review (Phase 8) is always run — fix mode never skips the safety gate",
+    "light-fix consult is always bundled (Gemini + Codex in parallel), never sequential or single-provider",
+    "Consult framing is 'does this cause explain all symptoms?', not 'what is the best fix?'",
+    "Cross-LLM disagreement is always surfaced to the user; never silently resolved",
+    "Implementation is inline on the orchestrator main thread; implementer subagent is never spawned",
+    "Auto-bail on >5 candidate files or >2 non-obvious decisions is non-negotiable without explicit user override",
+    "Mid-implementation scope growth triggers immediate halt; orchestrator does not continue or offer alternatives",
+    "FIX.md is the sole planning artifact; SPEC.md, PLAN.md, TASKS.md are never generated",
+    "/z-mr-review is never auto-triggered from /z-fix"
+  ],
+  "gotchas": [
+    "Hard implementation file limit is >7 (halt regardless); auto-bail threshold is >5 (escalate before starting)",
+    "REVIEW_CYCLES counter is initialized at setup, not at Phase 8",
+    "Post-mortem default flips from skip to suggest when REVIEW_CYCLES > 1",
+    "doc-fetcher is dispatched only if docs/llm/INDEX.json exists; Explore subagent is never spawned in fix mode",
+    "Shortcuts flagged by either consultant require separate explicit approval at Phase 5; default is the robust solution",
+    "phase1-context.md is a temporary scratch file under archive/$RUN/; its content migrates to FIX.md sections",
+    "FIX.md 'Docs touched' field drives the post-fix /z-maintain-docs --audit suggestion",
+    "Plan directory collision: if slug already exists, user is asked before overwriting"
+  ],
+  "memories": []
+}

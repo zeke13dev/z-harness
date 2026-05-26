@@ -1,0 +1,38 @@
+{
+  "concept": "review-agent",
+  "last_updated": "2026-05-25",
+  "covers_spec": "z-harness/plans/memory-self-improve-loop/SPEC.md",
+  "source_file": [
+    "agents/review-agent.md",
+    "scripts/run-memory-review.sh"
+  ],
+  "confidence": "high",
+  "entry_points": [],
+  "depends_on": [
+    "z-suggest-memory",
+    "z-stats"
+  ],
+  "consumed_by": [
+    "z-implement-all",
+    "z-review-all"
+  ],
+  "invariants": [
+    "subagent never writes; orchestrator owns all writes",
+    "skip-conditions check via run-memory-review.sh before any Agent dispatch (cost guard)",
+    "candidate schema aligned 1:1 with /z-suggest-memory memory-object",
+    "hard cap of 3 candidates per run; emit fewer rather than pad",
+    "output is exactly one fenced json block; any other output is malformed",
+    "agent receives index_path and must prefer extending an existing slug over coining a new one"
+  ],
+  "gotchas": [
+    "run-memory-review.sh requires $Z_HARNESS_PLAN_DIR to be set; unset yields STATUS: skipped no_plan_dir",
+    "run-memory-review.sh soft-skips (exit 0) on missing TAGS.txt rather than failing hard",
+    "empty diff causes skip with skip_reason: empty_diff before any Agent dispatch",
+    "diff base ref resolved in order: merge-base(origin/main) -> HEAD~5 -> empty-tree",
+    "parse failure on agent return is a soft-skip (review_agent_malformed event) not a hard error",
+    "subagent timeout has no per-call wall-clock guard in v1; user ctrl-c is the escape",
+    "candidate tags must come from docs/llm/TAGS.txt unless free-form is explicitly justified",
+    "review_agent_suggest_failed is logged and skipped (iteration continues) — not a phase abort"
+  ],
+  "memories": []
+}

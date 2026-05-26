@@ -1,0 +1,77 @@
+{
+  "concept": "lookup-contract",
+  "last_updated": "2026-05-25",
+  "covers_spec": "none",
+  "source_file": [
+    "agents/external-lookup.md"
+  ],
+  "confidence": "high",
+  "entry_points": [
+    {
+      "file": "agents/external-lookup.md",
+      "line": 1,
+      "symbol": "external-lookup",
+      "kind": "module",
+      "summary": "Agent metadata declares lookup role, model, and tool allowlist."
+    },
+    {
+      "file": "agents/external-lookup.md",
+      "line": 12,
+      "symbol": "Output contract",
+      "kind": "module",
+      "summary": "Fixed STATUS-headed Markdown envelope and required sections."
+    },
+    {
+      "file": "agents/external-lookup.md",
+      "line": 51,
+      "symbol": "Verb-blocklist",
+      "kind": "const",
+      "summary": "Regex patterns that force STATUS: refused before Bash runs."
+    },
+    {
+      "file": "agents/external-lookup.md",
+      "line": 91,
+      "symbol": "Budget",
+      "kind": "const",
+      "summary": "Total response cap and raw-artifact cache behavior."
+    },
+    {
+      "file": "agents/external-lookup.md",
+      "line": 99,
+      "symbol": "Freshness discipline",
+      "kind": "const",
+      "summary": "freshness_ts is retrieval time; stale cache lowers confidence."
+    },
+    {
+      "file": "agents/external-lookup.md",
+      "line": 137,
+      "symbol": "Edge cases",
+      "kind": "module",
+      "summary": "Fallback, pagination, no-result, and auth-missing behavior."
+    }
+  ],
+  "depends_on": [
+    "agents"
+  ],
+  "consumed_by": [
+    "external-lookup-agent"
+  ],
+  "invariants": [
+    "First output line is exactly STATUS: ok|partial|refused.",
+    "Sections are ordered Answer, Provenance, Unresolved, optional Raw artifact pointer.",
+    "Total response, including STATUS and sections, is <=3 KB.",
+    "Answer summarizes and cites; raw HTML/JSON/YAML goes to raw artifact pointer.",
+    "Bash commands are checked against verb-blocklist before execution.",
+    "Executed Bash commands are recorded verbatim in provenance.commands.",
+    "freshness_ts is retrieval time in UTC, not source last-modified time."
+  ],
+  "gotchas": [
+    "docs/llm/lookup-contract.json wins over inline agent prose on conflicts.",
+    "Refused Answer first line must be Refused: <category> - <detail>.",
+    "Fetch 4xx/5xx, no results, stale cache, and pagination gaps are partial.",
+    "Auth-required endpoints without secrets are refused as auth_missing.",
+    "Do not sniff env vars for credentials when auth is missing.",
+    "Cache key query is lowercase, whitespace-collapsed, and trimmed."
+  ],
+  "memories": []
+}

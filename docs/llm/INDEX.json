@@ -1,39 +1,45 @@
 {
   "version": "1",
-  "generated_at": "2026-05-24T00:00:00Z",
-  "z_harness_version": "64a3dbe",
+  "generated_at": "2026-05-26T00:35:00Z",
+  "z_harness_version": "380aca6",
   "concepts": [
     {
       "slug": "agents",
       "source_file": [
         "agents/auditor.md",
         "agents/cluster-planner.md",
-        "agents/codex-consultant.md",
-        "agents/codex-reviewer.md",
         "agents/complexity-classifier.md",
+        "agents/consultant-primary.md",
+        "agents/consultant-secondary.md",
         "agents/doc-fetcher.md",
         "agents/doc-updater.md",
-        "agents/gemini-consultant.md",
+        "agents/external-lookup.md",
         "agents/implementer.md",
+        "agents/mr-reviewer.md",
+        "agents/planning-router.md",
         "agents/remote-runner.md",
+        "agents/review-agent.md",
+        "agents/reviewer.md",
         "agents/spec-precheck.md"
       ],
-      "last_updated": "2026-05-24",
+      "last_updated": "2026-05-25",
       "confidence": "high",
       "depends_on": [
-        "scripts"
+        "scripts",
+        "lookup-contract"
       ],
       "consumed_by": [
         "commands",
         "skills"
       ],
-      "summary": "Scrutinizes codebase targets across correctness/perf/cleanliness/design."
+      "summary": "Specialized subagents, including auditors/reviewers, implementers, and the advisory planning-router for ambiguous plan-family route decisions."
     },
     {
       "slug": "commands",
       "source_file": [
         "commands/z-amend.md",
         "commands/z-audit.md",
+        "commands/z-audit-plan.md",
         "commands/z-brainstorm.md",
         "commands/z-debug.md",
         "commands/z-do.md",
@@ -43,6 +49,7 @@
         "commands/z-improve.md",
         "commands/z-init-docs.md",
         "commands/z-maintain-docs.md",
+        "commands/z-mr-review.md",
         "commands/z-plan-light.md",
         "commands/z-plan-split.md",
         "commands/z-plan.md",
@@ -53,27 +60,30 @@
         "commands/z-suggest-memory.md",
         "commands/z-test.md"
       ],
-      "last_updated": "2026-05-24",
+      "last_updated": "2026-05-25",
       "confidence": "high",
       "depends_on": [
         "agents",
-        "scripts"
+        "scripts",
+        "skills"
       ],
       "consumed_by": [
         "skills"
       ],
-      "summary": "Propagates targeted plan amendments consistently across plan artifacts."
+      "summary": "Slash command surfaces, including planning-family route checks, contextual exits such as /z-audit-plan, plan_route_decision telemetry, review-family finding promotion, and /z-implement-all --tasks consumption."
     },
     {
       "slug": "scripts",
       "source_file": [
+        "scripts/extract-dismissals.py",
         "scripts/log-event.sh",
         "scripts/log-phase.sh",
         "scripts/regenerate-memories-flat.py",
         "scripts/remote-sandbox-sync.sh",
+        "scripts/run-memory-review.sh",
         "scripts/version.sh"
       ],
-      "last_updated": "2026-05-23",
+      "last_updated": "2026-05-25",
       "confidence": "high",
       "depends_on": [],
       "consumed_by": [
@@ -88,7 +98,7 @@
       "source_file": [
         "commands/z-fix.md"
       ],
-      "last_updated": "2026-05-24",
+      "last_updated": "2026-05-25",
       "confidence": "high",
       "depends_on": [
         "agents",
@@ -103,6 +113,7 @@
       "slug": "skills",
       "source_file": [
         "skills/z-amend/SKILL.md",
+        "skills/z-audit-plan/SKILL.md",
         "skills/z-brainstorm/SKILL.md",
         "skills/z-debug/SKILL.md",
         "skills/z-do/SKILL.md",
@@ -120,15 +131,19 @@
         "skills/z-suggest-memory/SKILL.md",
         "skills/z-test/SKILL.md"
       ],
-      "last_updated": "2026-05-23",
+      "last_updated": "2026-05-25",
       "confidence": "high",
       "depends_on": [
         "agents",
         "commands",
+        "providers-registry",
         "scripts"
       ],
-      "consumed_by": [],
-      "summary": "Checklists for amending spec, plan, and task checklists consistently."
+      "consumed_by": [
+        "commands",
+        "multi-ide-exports"
+      ],
+      "summary": "Operational checklists, including planning-family route policy, z-audit-plan plan audits, review finding promotion, z-amend safety gates, and explicit --tasks implementation queues."
     },
     {
       "slug": "providers-registry",
@@ -164,11 +179,13 @@
         "exports/codex/CAPABILITIES.md",
         "exports/agy/CAPABILITIES.md"
       ],
-      "last_updated": "2026-05-24",
+      "last_updated": "2026-05-25",
       "confidence": "high",
       "depends_on": [
         "commands",
-        "agents"
+        "agents",
+        "skills",
+        "scripts"
       ],
       "consumed_by": [],
       "summary": "Pipeline translating Claude Code source files into Cursor (.mdc rules), Codex CLI (AGENTS.md + prompts), and Antigravity (agy-plugin.yaml + prompts); /z-export slash command; per-target CAPABILITIES.md documents dropped constructs."
@@ -209,6 +226,55 @@
       ],
       "consumed_by": [],
       "summary": "Explicit in-place plugin update via /z-update; detects symlink vs tarball mode; git pull --ff-only for symlink, atomic swap for tarball; no autoupdate; version tracked by scripts/version.sh."
+    },
+    {
+      "slug": "lookup-contract",
+      "source_files": [
+        "agents/external-lookup.md"
+      ],
+      "last_updated": "2026-05-25",
+      "confidence": "high",
+      "depends_on": [
+        "agents"
+      ],
+      "consumed_by": [
+        "external-lookup-agent"
+      ],
+      "summary": "Output envelope contract (STATUS line + fixed Markdown sections) that all external/domain lookup subagents must emit."
+    },
+    {
+      "slug": "external-lookup-agent",
+      "source_files": [
+        "agents/external-lookup.md"
+      ],
+      "last_updated": "2026-05-25",
+      "confidence": "high",
+      "depends_on": [
+        "agents",
+        "lookup-contract"
+      ],
+      "consumed_by": [
+        "multi-ide-exports"
+      ],
+      "summary": "Haiku-tier subagent for external retrieval (web docs, public APIs, library docs) that offloads lookups from main context while enforcing a read-only verb-blocklist."
+    },
+    {
+      "slug": "review-agent",
+      "source_file": [
+        "agents/review-agent.md",
+        "scripts/run-memory-review.sh"
+      ],
+      "last_updated": "2026-05-25",
+      "confidence": "high",
+      "depends_on": [
+        "z-suggest-memory",
+        "z-stats"
+      ],
+      "consumed_by": [
+        "z-implement-all",
+        "z-review-all"
+      ],
+      "summary": "Post-run Haiku subagent that proposes 0-3 candidate memories from a completed /z-implement-all or /z-review-all run. Reads run events, cumulative diff, and SPEC.md; emits structured candidates as a fenced JSON block. Does not write \u2014 orchestrator owns all writes via /z-suggest-memory. Dispatched by scripts/run-memory-review.sh after skip-conditions check (empty diff, zero tasks completed)."
     }
   ]
 }

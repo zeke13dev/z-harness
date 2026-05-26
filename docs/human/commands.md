@@ -1,45 +1,65 @@
 # Commands
 
-> Last updated: 2026-05-23
-> Covers source: commands/z-amend.md, commands/z-audit.md, commands/z-brainstorm.md, commands/z-debug.md, commands/z-do.md, commands/z-implement-all.md, commands/z-implement-next.md, commands/z-improve.md, commands/z-init-docs.md, commands/z-maintain-docs.md, commands/z-plan-light.md, commands/z-plan-split.md, commands/z-plan.md, commands/z-research.md, commands/z-review-all.md, commands/z-skill-fix.md, commands/z-stats.md, commands/z-suggest-memory.md, commands/z-test.md
+> Last updated: 2026-05-25
+> Covers source: commands/z-amend.md, commands/z-audit.md, commands/z-audit-plan.md, commands/z-brainstorm.md, commands/z-debug.md, commands/z-do.md, commands/z-fix.md, commands/z-implement-all.md, commands/z-implement-next.md, commands/z-improve.md, commands/z-init-docs.md, commands/z-maintain-docs.md, commands/z-mr-review.md, commands/z-plan-light.md, commands/z-plan-split.md, commands/z-plan.md, commands/z-research.md, commands/z-review-all.md, commands/z-skill-fix.md, commands/z-stats.md, commands/z-suggest-memory.md, commands/z-test.md
 
 ## Overview
-The commands concept covers the complete set of slash commands that provide a structured CLI-like interface for executing z-harness tasks. These commands partition harness behaviors into clear logical operations—such as parallel brainstorming, deep pre-plan terrain research, comprehensive planning, targeted hotfixes, checklist implementation, automatic code review, test case generation, and documentation maintenance.
 
-Each command is specified in a Markdown file under the commands/ directory, which details the strict multi-phase procedures, setup configurations, input arguments, telemetry logging expectations, and safety checks required for the orchestrator model to follow.
+The `commands` concept covers the slash-command specifications that drive z-harness workflows. Each command lives as a Markdown procedure under `commands/` and defines a user-facing orchestration path: planning, research, debugging, fixing, implementation, review, docs maintenance, memory authoring, audits, tests, stats, and skill repair.
+
+The command surface is organized around explicit routing, durable artifacts, and a closed-loop memory layer. Planning-family commands collect deterministic route signals, consult `planning-router` only when signals conflict, write `route-decision.md`, emit `plan_route_decision`, and ask the user before switching. Review-family commands preserve evidence separately from promotion artifacts and route actionable findings through `/z-implement-all --tasks`. Both `/z-implement-all` (Phase 9) and `/z-review-all` (Phase 7) now close the loop by running `run-memory-review.sh` after each plan completes, dispatching a `review-agent` to surface memory candidates, and presenting them sequentially for user acceptance — accepted candidates are persisted via `/z-suggest-memory --from-candidate-json`.
 
 ## Key entry points
-- `commands/z-amend.md:1` — `z-amend` — Propagates target plan changes consistently across planning and task artifacts.
-- `commands/z-audit.md:1` — `z-audit` — Executes multi-dimensional, rubrics-grounded code reviews in parallel.
-- `commands/z-brainstorm.md:1` — `z-brainstorm` — Seeds plans via parallel candidate generation and bias checking.
-- `commands/z-debug.md:1` — `z-debug` — Investigates regressions with hypothesis isolation and lightweight fix loops.
-- `commands/z-do.md:1` — `z-do` — Performs small, plan-free coding changes with review safety gates.
-- `commands/z-implement-all.md:1` — `z-implement-all` — Automates task implementation with parallel agents and peer reviews.
-- `commands/z-implement-next.md:1` — `z-implement-next` — Implements the next pending task from the plan queue with review.
-- `commands/z-improve.md:1` — `z-improve` — Suggests platform improvements based on aggregate post-run telemetry logs.
-- `commands/z-init-docs.md:1` — `z-init-docs` — Bootstraps the human and LLM-tier two-tier documentation system in a repo.
-- `commands/z-maintain-docs.md:1` — `z-maintain-docs` — Scans for doc drifts and auto-refreshes outdated concept documentation.
-- `commands/z-plan-light.md:1` — `z-plan-light` — Handles targeted bug fixes and refactor plans without subagent overhead.
-- `commands/z-plan-split.md:1` — `z-plan-split` — Decomposes high-scope plans across multiple sub-planners.
-- `commands/z-plan.md:1` — `z-plan` — Runs the rigorous planning pipeline producing SPEC.md, PLAN.md, and TASKS.md.
-- `commands/z-research.md:1` — `z-research` — Performs early codebase scans and terrain mapping before designing a plan.
-- `commands/z-review-all.md:1` — `z-review-all` — Audits the entire task diff queue against the complete design spec.
-- `commands/z-skill-fix.md:1` — `z-skill-fix` — Safely applies direct changes to z-harness platform skills.
-- `commands/z-stats.md:1` — `z-stats` — Evaluates local runtime performance and token costs across past runs.
-- `commands/z-suggest-memory.md:1` — `z-suggest-memory` — appends lessons-learned memories to targeted concept documentation files.
-- `commands/z-test.md:1` — `z-test` — Drafts semantic test plans targeting edge cases and off-by-ones.
+
+- `commands/z-amend.md:1` — `z-amend` — Propagates approved changes through existing plan artifacts.
+- `commands/z-audit.md:1` — `z-audit` — Runs read-only multi-dimension audits and emits task artifacts.
+- `commands/z-audit-plan.md:1` — `z-audit-plan` — Audits existing SPEC/PLAN/TASKS and routes contextually.
+- `commands/z-brainstorm.md:1` — `z-brainstorm` — Seeds planning with parallel ideation and anti-bias checks.
+- `commands/z-debug.md:1` — `z-debug` — Runs heavy unknown-root-cause debugging with post-mortem.
+- `commands/z-do.md:1` — `z-do` — Executes tiny plan-free changes with review gates.
+- `commands/z-fix.md:1` — `z-fix` — Ships diagnosed bug fixes with consult and Codex review.
+- `commands/z-implement-all.md:1` — `z-implement-all` — Orchestrates task queues with fresh subagents, reviewers, and auto memory review (Phase 9).
+- `commands/z-implement-next.md:1` — `z-implement-next` — Implements one pending task with model selection and review.
+- `commands/z-improve.md:1` — `z-improve` — Retrospects one run and proposes harness improvements.
+- `commands/z-init-docs.md:1` — `z-init-docs` — Bootstraps two-tier human and LLM documentation.
+- `commands/z-maintain-docs.md:1` — `z-maintain-docs` — Refreshes stale docs and previews proposed updates.
+- `commands/z-mr-review.md:1` — `z-mr-review` — Reviews branch diffs into ranked task-shaped findings.
+- `commands/z-plan-light.md:1` — `z-plan-light` — Plans and ships small focused changes via FIX.md.
+- `commands/z-plan-split.md:1` — `z-plan-split` — Splits large work into one-level cluster plans.
+- `commands/z-plan.md:1` — `z-plan` — Produces SPEC.md, PLAN.md, and TASKS.md for coherent work.
+- `commands/z-research.md:1` — `z-research` — Maps terrain with citations without recommending an approach.
+- `commands/z-review-all.md:1` — `z-review-all` — Final-gate reviews cumulative implementation against the plan, then auto-runs memory review (Phase 7).
+- `commands/z-skill-fix.md:1` — `z-skill-fix` — Diagnoses and patches misleading skill or command files.
+- `commands/z-stats.md:1` — `z-stats` — Reports read-only run progress, timing, cost, next step, and recent memory-review activity (Phase 4b).
+- `commands/z-suggest-memory.md:1` — `z-suggest-memory` — Delegates memory authoring to the memory skill; accepts `--from-candidate-json` for automated candidate ingestion.
+- `commands/z-test.md:1` — `z-test` — Drafts semantic TESTS.md cases and links them to tasks.
 
 ## How it interacts with others
-- `skills` — Commands are the user-facing entry points that invoke the deeper instructions and checklists stored within the skills directory.
-- `agents` — Commands instantiate and direct subagent teams (e.g. auditors, reviewers, implementers, plan consultants) to safely delegate heavy workloads.
-- `scripts` — Commands execute core utility scripts to version resources, log telemetry timing, and synchronize sandboxes.
+
+- `agents` — Commands dispatch specialized subagents: implementers, reviewers, consultants, doc-updaters, doc-fetchers, auditors, cluster-planners, remote-runners, the advisory `planning-router`, and the `review-agent` (memory candidate generation).
+- `scripts` — Commands rely on shared scripts for version stamping, event logging, phase timing, plan path resolution, memory flattening, remote support, and the `run-memory-review.sh` helper that gates Phase 9 / Phase 7.
+- `skills` — Skills expose or wrap the command flows for different clients and are the main consumer of the command specifications.
+- Review-family artifacts — `/z-audit`, `/z-review-all`, and `/z-mr-review` preserve evidence separately from promoted task artifacts; survivors are applied through `/z-implement-all --tasks <path>`.
+- Planning-family route policy — `/z-plan`, `/z-plan-light`, `/z-plan-split`, `/z-research`, `/z-brainstorm`, and `/z-do` share route checks that record route artifacts and never auto-execute a different command.
+- Memory loop — `/z-implement-all` Phase 9 and `/z-review-all` Phase 7 both call `run-memory-review.sh`, dispatch `review-agent`, and route accepted candidates into `/z-suggest-memory --from-candidate-json`. `/z-stats` Phase 4b surfaces `review_agent_call` events so the user can see memory-review history.
 
 ## Edge cases / gotchas
-- Namespacing is strictly enforced via the `Z_HARNESS_SLUG` environment variable. Every shell call and subagent invocation must inherit this slug to target files in the correct run directory.
-- Grounding checks during planning commands use `doc-fetcher` to consult the `docs/llm/INDEX.json` instead of reading files directly to preserve main context tokens.
+
+- `/z-audit-plan` is contextual-only: with no existing plan artifacts it routes to `/z-plan` rather than pretending an audit can proceed.
+- `planning-router` is advisory and only used after deterministic route thresholds fail to decide; malformed or unavailable output falls back to deterministic routing or an explicit user choice.
+- Route chains prevent ping-pong. Once a chain has two entries, or a recommendation would return to the immediate prior command, the user must choose explicitly.
+- `/z-implement-all --tasks=<path>` derives `BASE` from the tasks file directory and bypasses normal slug/tree discovery; this is how review promotion artifacts are consumed.
+- `z-review-all` and `z-maintain-docs --audit` have pre-consult compaction breakpoints with state files so expensive consultant phases can resume safely.
+- `/z-suggest-memory` is intentionally thin: it delegates to `skills/z-suggest-memory/SKILL.md`, which owns memory mutation and `MEMORIES-FLAT.md` regeneration.
+- Phase 9 (`z-implement-all`) and Phase 7 (`z-review-all`) are **soft phases**: all failure paths (malformed agent output, skipped helper, empty candidate array) exit silently without halting the run. They never interrupt implementation or review work.
+- `--from-candidate-json` on `z-suggest-memory` accepts either a file path or `-` (stdin). It is used exclusively by the automated review-agent flow; manual callers should use the interactive path instead.
+- `/z-stats` Phase 4b reads `review_agent_call` events from `metrics.jsonl`; if no memory-review phases have run yet, this phase outputs nothing.
 
 ## Examples
-- Bootstrapping a repository's documentation:
-  `/z-init-docs`
-- Starting a fresh feature design phase:
-  `/z-plan "Implement client-side request timeout handling"`
+
+- Start a rigorous plan: `/z-plan "add request timeout handling"`
+- Use the light path for a known small fix: `/z-plan-light "fix stale cache invalidation"`
+- Debug an observed symptom with unknown cause: `/z-debug "orders double-submit after reconnect"`
+- Apply promoted review findings: `/z-implement-all --tasks z-harness/<slug>/REVIEW-TASKS.md`
+- Refresh stale docs after implementation: `/z-maintain-docs --audit`
+- Check memory-review history for a run: `/z-stats` (see Phase 4b output)

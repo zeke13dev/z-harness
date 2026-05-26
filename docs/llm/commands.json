@@ -1,20 +1,21 @@
 {
   "concept": "commands",
-  "last_updated": "2026-05-24",
-  "covers_spec": "none",
+  "last_updated": "2026-05-25",
+  "covers_spec": "memory-self-improve-loop/20260525",
   "source_file": [
     "commands/z-amend.md",
     "commands/z-audit.md",
+    "commands/z-audit-plan.md",
     "commands/z-brainstorm.md",
     "commands/z-debug.md",
-    "commands/z-mr-review.md",
-    "commands/z-style-init.md",
     "commands/z-do.md",
+    "commands/z-fix.md",
     "commands/z-implement-all.md",
     "commands/z-implement-next.md",
     "commands/z-improve.md",
     "commands/z-init-docs.md",
     "commands/z-maintain-docs.md",
+    "commands/z-mr-review.md",
     "commands/z-plan-light.md",
     "commands/z-plan-split.md",
     "commands/z-plan.md",
@@ -23,181 +24,57 @@
     "commands/z-skill-fix.md",
     "commands/z-stats.md",
     "commands/z-suggest-memory.md",
-    "commands/z-fix.md",
     "commands/z-test.md"
   ],
   "confidence": "high",
   "entry_points": [
-    {
-      "file": "commands/z-mr-review.md",
-      "line": 1,
-      "symbol": "z-mr-review",
-      "kind": "module",
-      "summary": "Orchestrates multi-LLM code-quality review of a branch diff; writes P0-P4 findings to MR-REVIEW.md."
-    },
-    {
-      "file": "commands/z-style-init.md",
-      "line": 1,
-      "symbol": "z-style-init",
-      "kind": "module",
-      "summary": "Authors or amends the project STYLE.md via Capture-first grounding and interactive interview."
-    },
-    {
-      "file": "commands/z-amend.md",
-      "line": 1,
-      "symbol": "z-amend",
-      "kind": "module",
-      "summary": "Propagates targeted plan amendments consistently across plan artifacts."
-    },
-    {
-      "file": "commands/z-audit.md",
-      "line": 1,
-      "symbol": "z-audit",
-      "kind": "module",
-      "summary": "Coordinates parallel multi-dimensional code auditing and rubric checks."
-    },
-    {
-      "file": "commands/z-brainstorm.md",
-      "line": 1,
-      "symbol": "z-brainstorm",
-      "kind": "module",
-      "summary": "Seeds plan definitions via parallel ideation models and anti-bias passes."
-    },
-    {
-      "file": "commands/z-debug.md",
-      "line": 1,
-      "symbol": "z-debug",
-      "kind": "module",
-      "summary": "Heavy hypothesis-tournament debugging pipeline: 3-LLM 2-round adversarial hypothesis generation, ordinal Bayesian scoring, consensus-first ranking with forced outlier carve-out, 3-5 isolation rounds, fix-gate requires highest posterior and full evidence coverage. Single unified DEBUG.md artifact.",
-      "last_updated": "2026-05-24"
-    },
-    {
-      "file": "commands/z-do.md",
-      "line": 1,
-      "symbol": "z-do",
-      "kind": "module",
-      "summary": "Applies small plan-free changes directly to source code under peer review."
-    },
-    {
-      "file": "commands/z-implement-all.md",
-      "line": 1,
-      "symbol": "z-implement-all",
-      "kind": "module",
-      "summary": "Executes all pending task files using isolated implementer and reviewer subagents."
-    },
-    {
-      "file": "commands/z-implement-next.md",
-      "line": 1,
-      "symbol": "z-implement-next",
-      "kind": "module",
-      "summary": "Implements the next pending plan task under code review safety gates."
-    },
-    {
-      "file": "commands/z-improve.md",
-      "line": 1,
-      "symbol": "z-improve",
-      "kind": "module",
-      "summary": "Surfaces project infrastructure suggestions from run event logs."
-    },
-    {
-      "file": "commands/z-init-docs.md",
-      "line": 1,
-      "symbol": "z-init-docs",
-      "kind": "module",
-      "summary": "Initializes the two-tier human and LLM concept documentation system."
-    },
-    {
-      "file": "commands/z-maintain-docs.md",
-      "line": 1,
-      "symbol": "z-maintain-docs",
-      "kind": "module",
-      "summary": "Drift-checks and refreshes stale or drifted concept documentation."
-    },
-    {
-      "file": "commands/z-plan-light.md",
-      "line": 1,
-      "symbol": "z-plan-light",
-      "kind": "module",
-      "summary": "Creates lightweight bug fix plans bypassing full subagent overhead."
-    },
-    {
-      "file": "commands/z-plan-split.md",
-      "line": 1,
-      "symbol": "z-plan-split",
-      "kind": "module",
-      "summary": "Splits a large plan into parallel sub-planning sessions."
-    },
-    {
-      "file": "commands/z-plan.md",
-      "line": 1,
-      "symbol": "z-plan",
-      "kind": "module",
-      "summary": "Executes the core planning pipeline creating spec, plan, and task files."
-    },
-    {
-      "file": "commands/z-research.md",
-      "line": 1,
-      "symbol": "z-research",
-      "kind": "module",
-      "summary": "Explores a codebase and charts its constraints before defining a plan."
-    },
-    {
-      "file": "commands/z-review-all.md",
-      "line": 1,
-      "symbol": "z-review-all",
-      "kind": "module",
-      "summary": "Validates the complete set of generated code diffs against spec requirements."
-    },
-    {
-      "file": "commands/z-skill-fix.md",
-      "line": 1,
-      "symbol": "z-skill-fix",
-      "kind": "module",
-      "summary": "Safely mutates system plugin skill definitions."
-    },
-    {
-      "file": "commands/z-stats.md",
-      "line": 1,
-      "symbol": "z-stats",
-      "kind": "module",
-      "summary": "Analyzes historical run logs to aggregate token metrics and run times."
-    },
-    {
-      "file": "commands/z-suggest-memory.md",
-      "line": 1,
-      "symbol": "z-suggest-memory",
-      "kind": "module",
-      "summary": "Appends key lessons and edge case memories to concept documentation JSON."
-    },
-    {
-      "file": "commands/z-fix.md",
-      "line": 1,
-      "symbol": "z-fix",
-      "kind": "module",
-      "summary": "Lightweight bug-fix command for the case where the user already has a diagnosis; single light-fix consult, inline implementation, non-negotiable Codex review, optional post-mortem."
-    },
-    {
-      "file": "commands/z-test.md",
-      "line": 1,
-      "symbol": "z-test",
-      "kind": "module",
-      "summary": "Constructs rich semantic test-case plans to link within task items."
-    }
+    {"file": "commands/z-amend.md", "line": 1, "symbol": "z-amend", "kind": "module", "summary": "Propagates approved changes through existing plan artifacts."},
+    {"file": "commands/z-audit.md", "line": 1, "symbol": "z-audit", "kind": "module", "summary": "Runs read-only multi-dimension audits and emits task artifacts."},
+    {"file": "commands/z-audit-plan.md", "line": 1, "symbol": "z-audit-plan", "kind": "module", "summary": "Audits existing SPEC/PLAN/TASKS and routes contextually."},
+    {"file": "commands/z-brainstorm.md", "line": 1, "symbol": "z-brainstorm", "kind": "module", "summary": "Seeds planning with parallel ideation and anti-bias checks."},
+    {"file": "commands/z-debug.md", "line": 1, "symbol": "z-debug", "kind": "module", "summary": "Runs heavy unknown-root-cause debugging with post-mortem."},
+    {"file": "commands/z-do.md", "line": 1, "symbol": "z-do", "kind": "module", "summary": "Executes tiny plan-free changes with review gates."},
+    {"file": "commands/z-fix.md", "line": 1, "symbol": "z-fix", "kind": "module", "summary": "Ships diagnosed bug fixes with consult and Codex review."},
+    {"file": "commands/z-implement-all.md", "line": 1, "symbol": "z-implement-all", "kind": "module", "summary": "Orchestrates task queues with fresh subagents, reviewers, and auto memory review (Phase 9)."},
+    {"file": "commands/z-implement-next.md", "line": 1, "symbol": "z-implement-next", "kind": "module", "summary": "Implements one pending task with model selection and review."},
+    {"file": "commands/z-improve.md", "line": 1, "symbol": "z-improve", "kind": "module", "summary": "Retrospects one run and proposes harness improvements."},
+    {"file": "commands/z-init-docs.md", "line": 1, "symbol": "z-init-docs", "kind": "module", "summary": "Bootstraps two-tier human and LLM documentation."},
+    {"file": "commands/z-maintain-docs.md", "line": 1, "symbol": "z-maintain-docs", "kind": "module", "summary": "Refreshes stale docs and previews proposed updates."},
+    {"file": "commands/z-mr-review.md", "line": 1, "symbol": "z-mr-review", "kind": "module", "summary": "Reviews branch diffs into ranked task-shaped findings."},
+    {"file": "commands/z-plan-light.md", "line": 1, "symbol": "z-plan-light", "kind": "module", "summary": "Plans and ships small focused changes via FIX.md."},
+    {"file": "commands/z-plan-split.md", "line": 1, "symbol": "z-plan-split", "kind": "module", "summary": "Splits large work into one-level cluster plans."},
+    {"file": "commands/z-plan.md", "line": 1, "symbol": "z-plan", "kind": "module", "summary": "Produces SPEC.md, PLAN.md, and TASKS.md for coherent work."},
+    {"file": "commands/z-research.md", "line": 1, "symbol": "z-research", "kind": "module", "summary": "Maps terrain with citations without recommending an approach."},
+    {"file": "commands/z-review-all.md", "line": 1, "symbol": "z-review-all", "kind": "module", "summary": "Final-gate reviews cumulative implementation, then auto-runs memory review (Phase 7)."},
+    {"file": "commands/z-skill-fix.md", "line": 1, "symbol": "z-skill-fix", "kind": "module", "summary": "Diagnoses and patches misleading skill or command files."},
+    {"file": "commands/z-stats.md", "line": 1, "symbol": "z-stats", "kind": "module", "summary": "Reports run progress, timing, cost, next step, and memory-review activity (Phase 4b)."},
+    {"file": "commands/z-suggest-memory.md", "line": 1, "symbol": "z-suggest-memory", "kind": "module", "summary": "Delegates memory authoring; accepts --from-candidate-json for automated candidate ingestion."},
+    {"file": "commands/z-test.md", "line": 1, "symbol": "z-test", "kind": "module", "summary": "Drafts semantic TESTS.md cases and links them to tasks."}
   ],
-  "depends_on": [
-    "agents",
-    "scripts",
-    "z-plan-light"
-  ],
-  "consumed_by": [
-    "skills"
-  ],
+  "depends_on": ["agents", "scripts", "skills"],
+  "consumed_by": ["skills"],
   "invariants": [
-    "Every execution event must be routed to metrics.jsonl and per-run event logs.",
-    "Commands must resolve plan directories via scripts/plan-path.sh (plan_dir or resolve_plan_path), not by constructing z-harness/<slug> paths directly. New canonical path: ${Z_HARNESS_PLANS_DIR:-z-harness/plans}/<slug>/. Commands must try the new path first; on miss, resolve_plan_path falls back to the legacy z-harness/<slug>/ path and warns once per process (Z_HARNESS_LEGACY_WARNED guard) with the exact migration command: scripts/migrate-plan-layout.sh <slug>."
+    "Commands are Markdown procedure specs; planning, research, audit, and test commands do not write production code unless explicitly scoped to do so.",
+    "Route checks collect deterministic signals first; planning-router is advisory only when deterministic signals conflict.",
+    "Every route decision writes route-decision.md, emits plan_route_decision, asks the user, and never auto-executes the target command.",
+    "Primary routes are z-do, z-plan-light, z-plan, z-plan-split, z-brainstorm, and z-research; contextual exits include z-audit-plan, z-fix, z-debug, z-amend, and z-maintain-docs.",
+    "z-audit-plan is valid only with existing plan artifacts and remains read-only.",
+    "Review-family commands preserve evidence separately and promote only actionable findings into task-shaped artifacts consumed by z-implement-all --tasks.",
+    "z-implement-all preserves fresh-context implementation by delegating tasks to implementer and reviewer subagents.",
+    "Long consult-heavy phases use explicit compaction breakpoints or resumable state files where specified.",
+    "z-implement-all Phase 9 and z-review-all Phase 7 are soft auto-memory-review phases: all failure paths (malformed output, skipped helper, empty candidates) exit silently without halting the parent command.",
+    "Memory candidates surfaced by Phase 9/Phase 7 are presented sequentially per candidate; accepted candidates are dispatched to z-suggest-memory --from-candidate-json with source prefix incident:<RUN>."
   ],
   "gotchas": [
-    "Orchestrating large plans directly in the main thread is context-heavy; delegate to subagents."
+    "Do not add z-audit-plan as a front-door planning route when no plan exists; route to z-plan instead.",
+    "Route chains prevent ping-pong; after two entries or immediate return-to-prior, ask the user to choose.",
+    "z-implement-all --tasks derives BASE from the provided tasks file and bypasses normal slug/tree discovery.",
+    "Promoted REVIEW-TASKS.md and MR-REVIEW.md artifacts should be pruned by the user before z-implement-all --tasks consumes them.",
+    "z-suggest-memory is a thin delegator; memory mutation lives in skills/z-suggest-memory/SKILL.md.",
+    "Plain z-maintain-docs is dry-run by default; docs writes require --apply or explicit confirmation.",
+    "--from-candidate-json on z-suggest-memory accepts a file path or - (stdin); it is the automated path used by Phase 9/Phase 7 only — interactive callers should omit it.",
+    "z-stats Phase 4b reads review_agent_call events; the section is empty if no memory-review phases have run yet for the selected slug.",
+    "Phase 9 in z-implement-all caps the sequential AskUserQuestion loop at 3 candidates per run; Phase 7 in z-review-all has no hard cap but stops early on Skip-all-remaining."
   ],
   "memories": []
 }
