@@ -1,0 +1,52 @@
+{
+  "epoch": 1,
+  "rubric_version": 1,
+  "n_runs": 3,
+  "samples_per_run": 3,
+  "runs": [
+    {
+      "slug": "fanout-escalate-primitive",
+      "run_id": "20260527T175422Z-fanout-escalate-primitive",
+      "topic": "fanout-escalate-primitive \u2014 scope-probe Haiku subagent as Phase 0 of every z-* command; SCOPE.json schema; calibration harness against z-harness/archive/; /z-audit + /z-brainstorm v1 pilots. Per BRAINSTORM.md chosen_framing: claude.",
+      "classified_mode": "MEDIUM",
+      "ground_truth_mode": "MEDIUM",
+      "match": true
+    },
+    {
+      "slug": "z-harness-config-toml",
+      "run_id": "20260527T170933Z-z-harness-config-toml",
+      "topic": "",
+      "classified_mode": "MEDIUM",
+      "ground_truth_mode": "MEDIUM",
+      "match": true
+    },
+    {
+      "slug": "postmortem-memory-nudge",
+      "run_id": "20260527T045853Z-postmortem-memory-nudge",
+      "topic": "Codex framing from BRAINSTORM.md: instrument Phase 9 with 4-state terminal taxonomy (not_applicable/skipped_broken_context/ran_empty/needs_user), audit env propagation, verify qt-bot docs/llm deployment, reconcile /z-debug & /z-improve claims about /z-suggest-memory",
+      "classified_mode": "MEDIUM",
+      "ground_truth_mode": "LIGHT",
+      "match": false
+    }
+  ],
+  "confusion_matrix": {
+    "LIGHT": {
+      "LIGHT": 0,
+      "MEDIUM": 0,
+      "HEAVY": 0
+    },
+    "MEDIUM": {
+      "LIGHT": 1,
+      "MEDIUM": 2,
+      "HEAVY": 0
+    },
+    "HEAVY": {
+      "LIGHT": 0,
+      "MEDIUM": 0,
+      "HEAVY": 0
+    }
+  },
+  "pct_heavy": 0.0,
+  "pct_medium": 66.7,
+  "pct_light": 33.3
+}

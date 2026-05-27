@@ -1,0 +1,200 @@
+# z-harness TOML config
+
+> Last updated: 2026-05-27
+
+## What this is
+
+z-harness reads a layered TOML config from four sources (built-in defaults,
+user-global file, repo-local file, env vars).  Slice 1 ships two knobs —
+`notify.level` and `docs.always_apply` — plus `scripts/config.py` with five
+subcommands.  Commands resolve all layers at startup via
+`eval "$(scripts/config.py export-env)"`.
+
+---
+
+## File locations
+
+| Priority | Path | Wins on |
+|----------|------|---------|
+| 1 — built-in defaults | (in `scripts/config.py`) | Any key not set elsewhere |
+| 2 — user-global (lower) | `~/.config/z-harness/config.toml` | All keys present in this file |
+| 3 — repo-local (higher) | `<git-root>/.z-harness/config.toml` | Any key present in this file |
+| 4 — env override (highest) | `Z_HARNESS_<SECTION>_<KEY>` | Any key with a matching, non-empty env var |
+
+Per-key shadowing — repo overrides global; env overrides both.  Missing files
+at layers 2/3 are silently skipped (no error).
+
+Set `$Z_HARNESS_REPO_CONFIG` to override the git-root discovery path (exits 2 if
+the path does not exist).  Run `scripts/config.sh ensure-defaults` once after
+install to create the user-global file with defaults and inline comments.
+
+---
+
+## The knobs
+
+| Key | Type | Default | Values | Description |
+|-----|------|---------|--------|-------------|
+| `notify.level` | string | `approval_only` | `off` \| `approval_only` \| `all` | Controls when PushNotification fires. `off` silences all notifications. `approval_only` notifies on `approval` and `error` events. `all` notifies on every `approval`, `phase_end`, and `error` event. |
+| `docs.always_apply` | string | `always` | `always` \| `never` | Whether light flows auto-dispatch doc-fetcher when `docs/llm/INDEX.json` exists. `always` matches current /z-do default behavior. `never` skips doc-fetcher. **Applies only to light flows (slice 1: /z-do). Heavy flows always dispatch doc-fetcher regardless of this knob.** |
+
+---
+
+## The transliteration rule
+
+Env-var overrides follow a deterministic rule: lowercase TOML dotted-key →
+prefix `Z_HARNESS_` + uppercase + `.` to `_`.
+
+| TOML key | Env var |
+|----------|---------|
+| `notify.level` | `Z_HARNESS_NOTIFY_LEVEL` |
+| `docs.always_apply` | `Z_HARNESS_DOCS_ALWAYS_APPLY` |
+
+Keys must match `^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`.  Hyphens in keys exit 2.
+Nested keys >2 levels exit 2.  Empty env vars are treated as missing.
+
+---
+
+## CLI reference
+
+All subcommands available via `scripts/config.sh <sub>` (bash wrapper) or `python3 scripts/config.py <sub>`.
+
+### `get <dotted.key>`
+
+Prints the effective value for one key (no quotes).  Unknown or meta keys exit 3.
+
+```
+$ scripts/config.sh get notify.level       → approval_only
+$ scripts/config.sh get docs.always_apply  → always
+```
+
+### `export-env`
+
+Prints `export Z_HARNESS_<KEY>=<value>` lines for all user knobs.
+Designed for `eval "$(scripts/config.sh export-env)"`.  Emits `config_resolved`
+event once per `$Z_HARNESS_RUN`.
+
+```
+export Z_HARNESS_DOCS_ALWAYS_APPLY='always'
+export Z_HARNESS_NOTIFY_LEVEL='approval_only'
+```
+
+### `ensure-defaults`
+
+Writes the user-global config with defaults + inline comments if absent.
+Idempotent — prints `exists <path>` if already present.  Exits 4 if the file
+exists but is empty or unparseable (never silently overwrites).
+
+```
+$ scripts/config.sh ensure-defaults
+created /Users/you/.config/z-harness/config.toml
+```
+
+### `explain <dotted.key>`
+
+Prints the effective value and its source layer.
+
+```
+$ scripts/config.sh explain notify.level
+notify.level = "approval_only"   (source: defaults)
+
+$ Z_HARNESS_NOTIFY_LEVEL=all scripts/config.sh explain notify.level
+notify.level = "all"   (source: env Z_HARNESS_NOTIFY_LEVEL)
+```
+
+### `should-notify --event <kind>`
+
+Prints `yes` or `no`; always exits 0 (safe for `set -e`).  Unknown event → exit 2.
+Valid event kinds: `approval`, `phase_end`, `error`.
+
+```bash
+[ "$(scripts/config.sh should-notify --event approval)" = yes ] && <PushNotification ...>
+```
+
+**Exit code reference:**
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 2 | Schema/validation error, bad key format, unknown event kind |
+| 3 | Unknown dotted-key (`get` / `explain`) |
+| 4 | I/O error (`ensure-defaults` edge cases, permission denied) |
+
+---
+
+## Examples
+
+**User-global config** (`~/.config/z-harness/config.toml`) — both knobs set:
+
+```toml
+schema_version = 1
+
+[notify]
+# off | approval_only | all
+level = "all"
+
+[docs]
+# always | never  (applies to light flows only)
+always_apply = "never"
+```
+
+**Repo-local override** (`.z-harness/config.toml` at git root) — silence
+notifications for this repo only:
+
+```toml
+schema_version = 1
+
+[notify]
+level = "off"
+```
+
+**Env override for CI:**
+
+```bash
+export Z_HARNESS_NOTIFY_LEVEL=off
+export Z_HARNESS_DOCS_ALWAYS_APPLY=never
+```
+
+---
+
+## `config_resolved` event
+
+Every time `export-env` runs inside a `/z-*` run, it emits a `config_resolved`
+event to `metrics.jsonl` (once per `$Z_HARNESS_RUN`, de-duplicated via an
+O_EXCL temp file).
+
+Event payload shape:
+
+```json
+{
+  "values": {
+    "notify.level": "approval_only",
+    "docs.always_apply": "always"
+  },
+  "sources": {
+    "notify.level": "defaults",
+    "docs.always_apply": "/Users/you/.config/z-harness/config.toml"
+  }
+}
+```
+
+To inspect recent config_resolved events:
+
+```bash
+grep '"kind":"config_resolved"' z-harness/metrics.jsonl | tail -5 | jq .
+```
+
+`sources` values: `"defaults"`, an absolute file path (global or repo-local),
+or `"env Z_HARNESS_<VAR>"`.
+
+---
+
+## Future knobs
+
+Slices 2 and 3 of this feature (see `z-harness/z-harness-config-toml/BRAINSTORM.md`)
+plan additional knobs for consult preferences, escalation budgets, archive
+retention, and prompt-fragment injection.
+
+**Do not add knobs without a `/z-plan` run.** Schema sprawl is the most common
+failure mode for config systems — every new knob must be designed, documented,
+and validated before it ships.  Undocumented knobs break the two-tier doc
+contract and silently diverge from `docs/llm/config-design.json`.

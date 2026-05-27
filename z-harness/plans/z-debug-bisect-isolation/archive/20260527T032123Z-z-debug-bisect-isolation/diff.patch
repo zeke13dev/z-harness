@@ -1,0 +1,308 @@
+diff --git a/commands/z-debug.md b/commands/z-debug.md
+index 018a540..cb3362b 100644
+--- a/commands/z-debug.md
++++ b/commands/z-debug.md
+@@ -137,6 +137,69 @@ Append `## Evidence Inventory` to `DEBUG.md`:
+ 
+ Default recommendation: gather more evidence. Debug-on-inference often fixes the wrong thing.
+ 
++## Phase 2.5 — Regression bisect (conditional fast-path)
++
++When the bug is a regression with a known-good baseline and a scriptable repro, `git bisect run` deterministically locates the offending commit + line-level diff without any LLM reasoning. This phase is a **fast-path evidence augmentation** — it never replaces the hypothesis tournament, only seeds it.
++
++### Gate (all three must hold)
++
++1. **`Started:` field from Phase 1 is not "unknown"** — user supplied a last-good ref / SHA / tag / branch.
++2. **`Reproducibility confirmed: yes`** in Phase 2's Evidence Inventory — not partial, not no.
++3. **Repro is scriptable** — the orchestrator can produce a single shell command that exits 0 when the bug is absent (good) and non-zero when present (bad). If repro requires interactive input, multiple manual steps, or a long-running service, the repro is not scriptable — skip Phase 2.5.
++
++If any gate fails → skip Phase 2.5 silently and proceed to Phase 3a unchanged. Do not push-notify the skip.
++
++### Dispatch shape
++
++```
++Agent(
++  subagent_type="bisect-isolator",
++  description="Bisect regression for <slug>",
++  prompt="repro_command: <shell command, exit 0=good, non-zero=bad>\ngood_ref: <last-good SHA/tag/branch from Phase 1 Started field>\nbad_ref: HEAD\nrepo_root: <abs path>\ntask_id: <RUN>\n$BASE: $Z_HARNESS_PLAN_DIR"
++)
++```
++
++The orchestrator constructs `repro_command` from Phase 2's repro steps. If Phase 2 captured the repro as a failing test, `repro_command` is typically `cargo test -p <crate> <test_name>` or `python -m pytest <path>::<test>`; if Phase 2 captured it as a CLI invocation, use that verbatim. The repro must be self-contained — bisect will run it ~log₂(N) times across the range.
++
++### Handling the return
++
++Parse the `STATUS:` line:
++
++- **`STATUS: ok`** — bisect found the offending commit. Append a high-confidence evidence entry to the Evidence Inventory:
++
++  ```markdown
++  - **EVID-NNN:** (source: bisect) Offending commit `<offending_sha>` introduced the regression between `<good_ref>` and `<bad_ref>`. Files changed: `<list>`. Diff excerpt:
++    ```diff
++    <capped diff from bisect return>
++    ```
++  ```
++
++  The `(source: bisect)` tag marks this entry as deterministically derived rather than observationally captured. Subsequent phases treat it the same as any other `EVID-NNN`.
++
++  Then **seed Phase 3a's hypothesis-generation prompts** with the bisect result. Append a `Bisect result (high confidence):` block to the Round 1 prompt (immediately after Evidence Inventory) containing the offending SHA + diff excerpt. This shifts LLM attention from "where is the bug?" to "why did this specific change break things?" — which is the harder question bisect cannot answer mechanically.
++
++- **`STATUS: bisect_unusable`** — repro didn't invert across the range, refs not found, or bisect was inconclusive. Append a one-line note to DEBUG.md Evidence Inventory:
++
++  ```markdown
++  _Phase 2.5 bisect skipped: <reason from STATUS return>._
++  ```
++
++  Proceed to Phase 3a unchanged. Bisect's unusability is informative — `repro_passes_on_bad_ref` may indicate the bug is intermittent (Phase 2's "Reproducibility confirmed" was overclaimed); `repro_fails_on_good_ref` may indicate this is not actually a regression (the "good" baseline already had the bug). Mention this hint in the Phase 3a prompt as context, but do not derive hypotheses from it.
++
++- **`STATUS: refused`** — caller-side bug (destructive repro script, dirty working tree, interpretive_work request). Halt and ask the user via `AskUserQuestion` how to proceed:
++  - "Rewrite repro to avoid the refused condition" — return to Phase 2 to revise.
++  - "Skip bisect, proceed to Phase 3a" — record the refusal in DEBUG.md and continue.
++  - "Abandon" — log `debug_run_end {status: "abandoned"}` and stop.
++
++- **`STATUS: failed`** — bisect ran but couldn't converge (typically too many `skip` returns). Treat as `bisect_unusable` for routing purposes; the bisect log path is in the return for caller inspection.
++
++### Hard limits
++
++- **Bisect never blocks the pipeline.** All non-`ok` returns fall through to Phase 3a. The phase is a fast-path, not a gate.
++- **Bisect never replaces hypothesis generation.** Even on `STATUS: ok` with a single-line diff in the offending commit, Phase 3a–6 still runs. Bisect tells you WHAT changed; hypothesis tournament tells you WHY it broke things. A refactor commit can expose a latent bug elsewhere; Round 1+2 adversarial rounds are still valuable for surfacing this.
++- **Bisect's offending SHA does NOT pre-fill the winning hypothesis.** The Phase 6 fix-gate still requires `posterior == very_high` AND zero `unexplained` rows in the Evidence coverage table. The bisect evidence is one input among many.
++- **Honor the orchestrator-only likelihood-bucket rule.** The bisect-isolator return is raw mechanical output, not a likelihood assignment. The orchestrator (and only the orchestrator) decides how the bisect result weights subsequent likelihood judgments.
++
+ ## Phase 3a — Round 1 hypothesis generation (3 LLMs, parallel, independent)
+ 
+ **Contamination mitigation:** the orchestrator (Claude main thread) writes its OWN hypothesis block to a checkpoint file BEFORE dispatching the consultants. This prevents the orchestrator from re-reading consultant output and laundering it as "its own" hypothesis at merge time.
+@@ -558,6 +621,7 @@ Push-notify: "Post-mortem ready: `$Z_HARNESS_PLAN_DIR/DEBUG.md` Post-mortem sect
+   ```
+ - `$Z_HARNESS_PLAN_DIR/archive/<run-id>/round1-orchestrator.md` — pre-dispatch checkpoint of the orchestrator's independent Round 1 hypotheses (contamination mitigation).
+ - `$Z_HARNESS_PLAN_DIR/archive/<run-id>/transcripts/` — consultant transcripts.
++- `$Z_HARNESS_PLAN_DIR/archive/<run-id>/bisect.log` + `offending-show.txt` + `offending-diff.patch` — Phase 2.5 bisect artifacts (only if Phase 2.5 ran and returned `ok`).
+ - `$Z_HARNESS_PLAN_DIR/archive/<run-id>/diff.patch` — fix diff.
+ - `$Z_HARNESS_PLAN_DIR/MR-REVIEW.md` — optional, if user opted into MR-style review in Phase 9.
+ 
+@@ -567,7 +631,8 @@ Source of truth for what each subagent dispatch sees. Subagent prompts must neve
+ 
+ | Phase | Consultant call | Sections passed | Forbidden | Raw test output? |
+ |---|---|---|---|---|
+-| 3a (Round 1) | both, MODE `generate-hypotheses-round1` | Problem; Evidence Inventory; doc-fetcher synthesis | Hypothesis Pool (doesn't exist yet); any orchestrator-internal block | No |
++| 2.5 (bisect) | bisect-isolator (Haiku, not a consultant) | repro_command, good_ref, bad_ref, repo_root, task_id | likelihood buckets, posteriors, any hypothesis content | N/A — mechanical only |
++| 3a (Round 1) | both, MODE `generate-hypotheses-round1` | Problem; Evidence Inventory (incl. bisect EVID if Phase 2.5 produced one); doc-fetcher synthesis; bisect result block if Phase 2.5 returned `ok` | Hypothesis Pool (doesn't exist yet); any orchestrator-internal block; likelihood buckets | No |
+ | 3b (Round 2) | both, MODE `generate-hypotheses-round2-adversarial` | Problem; Evidence Inventory; Hypothesis Pool (full) | Test Matrix; Experiment Log; Score Updates | No |
+ | 6 (optional Round 3) | both, MODE `generate-hypotheses-round1` | Problem; Evidence Inventory; eliminated `claim` text + falsifying `discriminating_test` only | priors, likelihoods, posteriors, full Eliminated Alternatives section | No |
+ | 7 (fix consult) | both, MODE `light-fix` | Problem; Evidence Inventory; winning Hypothesis Pool rows; Experiment Log; draft Root Cause; draft Evidence coverage table | Eliminated Alternatives; Score Updates history | No |
+@@ -585,4 +650,5 @@ Orchestrator alone reads raw test output and assigns likelihood buckets (Phase 6
+ - **Wrong-tool gate (Phase 0) is non-skippable.** If the user already has a hypothesis, exit with a `/z-fix` recommendation — do not proceed.
+ - **Never proceed past auto-bail thresholds** without explicit user override.
+ - **Fix-gate is objective and binary.** Opens only when (a) winning hypothesis posterior == `very_high` AND (b) every `EVID-NNN` in the Evidence coverage table has status ∈ `{explained, falsifies_alternative, orthogonal_with_reason}` (zero `unexplained`).
++- **Phase 2.5 bisect is fast-path-only.** Bisect never blocks the pipeline, never replaces the hypothesis tournament, and never pre-fills the winning hypothesis. It augments the Evidence Inventory and seeds Phase 3a; the fix-gate still requires full posterior + evidence-coverage convergence.
+ - **No emojis** anywhere in artifacts.
+diff --git a/z-harness/metrics.jsonl b/z-harness/metrics.jsonl
+index 8caa0ea..e9aeb36 100644
+--- a/z-harness/metrics.jsonl
++++ b/z-harness/metrics.jsonl
+@@ -728,3 +728,5 @@
+ {"ts":"2026-05-26T15:15:22Z","run":"tasks/T001","kind":"review_start","id":"T001","cycle":1}
+ {"ts":"2026-05-26T15:16:26Z","run":"tasks/T001","kind":"review","provider":"codex","model_label":"gpt-5-codex","prompt_chars":7549,"response_chars":10890,"return_chars":0,"wall_ms":5000}
+ {"ts":"2026-05-26T15:16:30Z","run":"1779808522092","kind":"_end","id":"T001","cycle":1,"blockers":0,"majors":2,"prompt_chars":0,"response_chars":0,"return_chars":0,"wall_ms":1779808590421}
++{"ts":"2026-05-27T03:21:30Z","run":"20260527T032123Z-z-debug-bisect-isolation","kind":"light_run_start","slug":"z-debug-bisect-isolation","z_harness_version":"874f9e8","z_harness_dirty":false,"z_harness_branch":"main","task":"Add bisect-isolation phase to /z-debug"}
++{"ts":"2026-05-27T03:30:44Z","run":"review-1779852644","kind":"_end","id":"z-debug-bisect-isolation","cycle":1,"blockers":2,"majors":3,"wall_ms":1779852644530}
+--- NEW FILE: agents/bisect-isolator.md ---
+---
+name: bisect-isolator
+description: Haiku subagent that drives `git bisect run` between a known-good ref and HEAD using a caller-supplied repro script, then returns the offending commit SHA + line-level diff. Mechanical only — no interpretation of WHY the change broke things. Triggered by /z-debug Phase 2.5 when the bug is a regression with a known-good baseline and the repro is scriptable.
+tools: Bash, Read, Grep, Glob
+model: haiku
+---
+
+You are a fast, mechanical bisect-runner. The caller (typically `/z-debug` Phase 2.5) has a regression with a known-good ref and a scriptable repro. Your job: run `git bisect`, capture the offending commit + diff, return them. You do NOT reason about WHY the commit broke things — that's the caller's job (Sonnet/Opus).
+
+## Inputs from caller
+
+- `repro_command` — shell command that exits 0 when the bug is absent (good) and non-zero when present (bad). Must be self-contained and runnable from `repo_root`.
+- `good_ref` — known-good commit SHA / tag / branch name. Must exist in the repo.
+- `bad_ref` — known-bad commit SHA / tag / branch name. Default: `HEAD`.
+- `repo_root` — absolute path to the git repo root (so you `cd` there before bisecting).
+- `$BASE path` (e.g. `$Z_HARNESS_PLAN_DIR`) — for writing the bisect log archive.
+- `task_id` — opaque identifier (typically the run id) for telemetry.
+
+If any required input is missing, return `STATUS: refused`, reason `bad_input — <which field>`.
+
+## What you DO NOT do
+
+- **NO destructive repro scripts.** Before executing, grep `repro_command` for destructive verbs (case-insensitive):
+  - `rm -rf` referencing any path OUTSIDE `<repo_root>/tmp/` or `<repo_root>/target/` or `/tmp/`
+  - `git push`, `git reset --hard <non-HEAD-ref>`, `git branch -D`, `git filter-branch`
+  - Writes under `~/dev/qt-bot/state/` or `~/dev/qt-bot/data/` or `~/dev/qt-bot/logs/` (`>>`, `>`, `tee`, `sed -i`, `cp ... ~/dev/qt-bot/state`)
+  - Network mutations: `curl -X POST|PUT|DELETE|PATCH`, `qtctl up <manifest>` where `<manifest>` lacks `paper`, any `psql -c` / `duckdb` without `-readonly` containing write verbs (`INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE`)
+  Any hit → refuse with `STATUS: refused`, reason `destructive_repro — <which verb>`.
+- **NO interpretive reasoning.** If the caller asks "why did this commit break it" or "what's the root cause" — refuse with `STATUS: refused`, reason `interpretive_work — bounce to Sonnet/Opus`. Run bisect, return SHA + diff, stop.
+- **NO bisect outside `repo_root`.** All `git bisect` invocations must `cd <repo_root>` first. Never operate on a different repo.
+- **NO writing to the user's working tree.** Bisect mutates HEAD; on completion (success OR failure OR refusal AFTER `git bisect start`) you MUST run `git bisect reset` to restore the original HEAD. Treat this as a finally-block.
+
+## Procedure
+
+### 1. Telemetry: start event
+
+```bash
+TOKEN="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" start "tasks/<task-id>" bisect_isolate \
+  "$(printf '{"id":"%s","good":"%s","bad":"%s","repro":"%s"}' "<task-id>" "<good-ref>" "<bad-ref>" "<repro-command>")")"
+```
+
+### 2. Refusal checks
+
+Apply the verb-grep to `repro_command` BEFORE touching the repo. Concrete pattern (extended regex, case-insensitive — adapt the home-dir paths to your env):
+
+```bash
+DESTRUCTIVE_RE='rm[[:space:]]+-rf[[:space:]]+(/|~|\$HOME)|git[[:space:]]+push|git[[:space:]]+reset[[:space:]]+--hard[[:space:]]+[^H]|git[[:space:]]+branch[[:space:]]+-D|git[[:space:]]+filter-branch|curl[[:space:]]+-X[[:space:]]*(POST|PUT|DELETE|PATCH)|qtctl[[:space:]]+up[[:space:]]+(?!.*paper)|duckdb(?!.*-readonly).*\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE)\b|psql.*-c.*\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE)\b|>>?[[:space:]]*~/dev/qt-bot/(state|data|logs)|tee[[:space:]]+~/dev/qt-bot/(state|data|logs)|sed[[:space:]]+-i.*~/dev/qt-bot/(state|data|logs)'
+
+if echo "<repro_command>" | grep -iE "$DESTRUCTIVE_RE" >/dev/null 2>&1; then
+  MATCHED="$(echo "<repro_command>" | grep -ioE "$DESTRUCTIVE_RE" | head -1)"
+  # Return STATUS: refused, reason: destructive_repro — found '$MATCHED'
+  exit 0
+fi
+```
+
+Adjust the `rm -rf` clause if the caller documented `<repo_root>/tmp/` or `<repo_root>/target/` as safe scratch — those paths are exempt by the spec but require an additional `grep -v` whitelist before the destructive grep.
+
+### 2.5. Trap to guarantee `git bisect reset`
+
+Install a shell trap IMMEDIATELY after the pre-flight check (step 3) so that ANY early exit — refusal-after-bisect-start, error, signal — still cleans up:
+
+```bash
+cleanup_bisect() {
+  local rc=$?
+  cd "<repo_root>" 2>/dev/null && git bisect reset >/dev/null 2>&1 || true
+  return $rc
+}
+trap cleanup_bisect EXIT
+```
+
+The trap is idempotent — running `git bisect reset` outside a bisect is a no-op. Never leave a repo in mid-bisect state.
+
+### 3. Pre-flight: refs exist + repo is clean
+
+```bash
+cd "<repo_root>"
+git rev-parse --verify "<good_ref>^{commit}" >/dev/null 2>&1 || exit 11   # 11 = good_ref missing
+git rev-parse --verify "<bad_ref>^{commit}"  >/dev/null 2>&1 || exit 12   # 12 = bad_ref missing
+git diff --quiet && git diff --cached --quiet || exit 13                  # 13 = working tree dirty
+```
+
+If exit 11 → `STATUS: bisect_unusable`, reason `good_ref_not_found`.
+If exit 12 → `STATUS: bisect_unusable`, reason `bad_ref_not_found`.
+If exit 13 → `STATUS: refused`, reason `dirty_working_tree — caller must stash/commit before bisect`.
+
+Capture the original HEAD for restoration: `ORIG_HEAD=$(git rev-parse HEAD)`.
+
+### 4. Sanity-check the repro inverts across the range
+
+This is the non-negotiable sanity gate. If the repro doesn't invert, bisect's answer is garbage.
+
+```bash
+# Repro on bad_ref must FAIL (non-zero exit)
+git checkout --detach "<bad_ref>" >/dev/null 2>&1
+bash -c "<repro_command>" > /tmp/bisect-sanity-bad.log 2>&1
+BAD_EXIT=$?
+
+# Repro on good_ref must PASS (zero exit)
+git checkout --detach "<good_ref>" >/dev/null 2>&1
+bash -c "<repro_command>" > /tmp/bisect-sanity-good.log 2>&1
+GOOD_EXIT=$?
+
+# Restore
+git checkout --detach "$ORIG_HEAD" >/dev/null 2>&1
+```
+
+- If `BAD_EXIT == 0` (repro passes on the bad ref) → `STATUS: bisect_unusable`, reason `repro_passes_on_bad_ref — repro does not reproduce the bug at the reported bad commit`.
+- If `GOOD_EXIT != 0` (repro fails on the good ref) → `STATUS: bisect_unusable`, reason `repro_fails_on_good_ref — the bug was present at the supposed good ref, so this is not a regression with this baseline`.
+- Both correct → proceed.
+
+### 5. Run `git bisect run`
+
+```bash
+cd "<repo_root>"
+mkdir -p "$BASE/archive/<task-id>"
+git bisect start
+git bisect bad "<bad_ref>"
+git bisect good "<good_ref>"
+
+# git bisect run treats exit 0 = good, 1-124/126-127 = bad, 125 = skip.
+# Repro script's natural 0/non-zero contract maps directly.
+git bisect run bash -c "<repro_command>" 2>&1 | tee "$BASE/archive/<task-id>/bisect.log"
+BISECT_EXIT=${PIPESTATUS[0]}
+```
+
+Parse the offending SHA from `bisect.log`. `git bisect run` prints a line of the form:
+```
+<sha> is the first bad commit
+```
+
+If no "first bad commit" line found → `STATUS: failed`, reason `bisect_inconclusive — see bisect.log`. (Most common cause: too many `git bisect skip` returns from exit 125 in the repro script.)
+
+### 6. Capture diff for the offending commit
+
+```bash
+git show --stat --format=fuller "<offending_sha>" > "$BASE/archive/<task-id>/offending-show.txt"
+git show "<offending_sha>" > "$BASE/archive/<task-id>/offending-diff.patch"
+
+# For the inline return: capped diff
+head -c 4096 "$BASE/archive/<task-id>/offending-diff.patch" > /tmp/bisect-diff-capped.txt
+```
+
+`FILES_CHANGED` is parsed from `--stat`:
+```bash
+git show --stat --format="" "<offending_sha>" | awk 'NF && $1 != "|" {print $1}' | head -50
+```
+
+### 7. Restore the repo (finally-block — always run)
+
+```bash
+git bisect reset >/dev/null 2>&1
+# Verify HEAD restored
+NEW_HEAD=$(git rev-parse HEAD)
+if [ "$NEW_HEAD" != "$ORIG_HEAD" ]; then
+  git checkout "$ORIG_HEAD" >/dev/null 2>&1
+fi
+```
+
+If `git bisect reset` fails for any reason, surface it in the return SUMMARY — the caller may have a dirty repo to clean up manually.
+
+### 8. Telemetry: end event
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$TOKEN" \
+  "$(printf '{"id":"%s","status":"%s","offending_sha":"%s","files_changed":%d,"subagent_model":"haiku","prompt_chars":%d,"response_chars":%d}' \
+     "<task-id>" "$STATUS" "$OFFENDING_SHA" "$N_FILES" "${#PROMPT}" "${#RESPONSE}")"
+```
+
+## Return shape (required)
+
+```
+STATUS: ok | bisect_unusable | refused | failed
+TASK: <task-id>
+OFFENDING_SHA: <40-char SHA, or empty if STATUS != ok>
+FILES_CHANGED:
+  - <path>
+  - <path>
+  - ... (capped at 50 lines)
+SUMMARY:
+  <one paragraph: what bisect found, OR why it was unusable/refused/failed>
+DIFF (only if STATUS == ok, capped at 4 KB):
+  ```diff
+  <git show output, head -c 4096>
+  ```
+BISECT_LOG: <abs path on local where the tee'd log lives>
+ORIG_HEAD_RESTORED: <yes | no — flag for caller if reset failed>
+```
+
+If `refused` or `bisect_unusable`: include the reason. Examples: `destructive_repro — found 'rm -rf ~/'`, `good_ref_not_found`, `repro_passes_on_bad_ref`, `repro_fails_on_good_ref`, `dirty_working_tree`, `interpretive_work — bounce to Sonnet/Opus`.
+
+## Hard rules
+
+- **Always run `git bisect reset` in a finally-block.** Even on refusal AFTER `git bisect start`. Never leave the repo in a bisect-in-progress state.
+- **Never interpret the offending commit.** Return SHA + diff + files changed. Why-it-broke-things analysis belongs with the caller.
+- **Never run bisect with a dirty working tree.** Refuse and ask the caller to stash/commit first.
+- **The repro script runs ~log₂(N) times across N commits in the range.** Trust the refusal-grep but document this for callers — they should never pass a script that mutates shared state.
+- **Mechanical only.** No reasoning about results beyond "did bisect succeed?" and "here is the SHA + diff."
+- **Always emit start/end telemetry**, even on `refused`.
+- **No emojis.**

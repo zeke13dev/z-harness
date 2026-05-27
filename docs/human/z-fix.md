@@ -1,6 +1,6 @@
 # z-fix
 
-> Last updated: 2026-05-25
+> Last updated: 2026-05-27
 > Covers source: commands/z-fix.md
 
 ## Overview
@@ -21,15 +21,21 @@
 - `commands/z-fix.md:128` — Phase 5 — approve/modify/abandon gate
 - `commands/z-fix.md:141` — Phase 6 — write FIX.md
 - `commands/z-fix.md:190` — Phase 7 — inline implementation (no implementer subagent; orchestrator applies edits directly)
-- `commands/z-fix.md:212` — Phase 8 — Codex review (non-negotiable safety gate)
-- `commands/z-fix.md:240` — Phase 9 — optional post-mortem (auto-suggested if `REVIEW_CYCLES > 1`)
+- `commands/z-fix.md:211` — Phase 8 — Codex review (non-negotiable safety gate)
+- `commands/z-fix.md:239` — Phase 9 — optional post-mortem (auto-suggested if `REVIEW_CYCLES > 1`)
 - `commands/z-fix.md:283` — Phase 10 — finalize, FIX.md status → `shipped`, log `fix_run_end`
+- `commands/z-fix.md:307` — Git history-rewrite safety — doctrine for `git reset`/`amend`/`rebase` on upstream-tracking branches
 
 ## How it interacts with others
 
 - `agents` — spawns `consultant-primary` (Gemini) and `consultant-secondary` (Codex) in parallel at Phase 3; spawns `reviewer` (Codex) at Phase 8
 - `commands` — exits to `/z-debug` when root cause is unknown; escalates to `/z-plan` when auto-bail thresholds are exceeded; suggests `/z-maintain-docs --audit` at finalize if docs were touched
 - `scripts` — uses `log-event.sh` for `fix_run_start` / `fix_run_end` telemetry; uses `plan-path.sh` to resolve plan directory; uses `version.sh` for version stamp
+- `config-design` — notification policy is read from `docs/human/config.md` (`notify.level` key); `PushNotification` calls at Phase 5 and Phase 10 are gated on this value
+
+## Notification policy
+
+Push notifications are sent at two points: Phase 5 (decision ready for review) and Phase 10 (fix complete). Both are gated on the `notify.level` key in the harness config — if the level is `off`, no `PushNotification` calls are made. See [docs/human/config.md](docs/human/config.md) for the full config reference, including how to set `notify.level` per-repo or globally.
 
 ## Auto-bail thresholds
 
@@ -68,6 +74,8 @@ If you are unsure which to pick, start with `/z-fix` Phase 0. The wrong-tool gat
 - **The `REVIEW_CYCLES` counter drives post-mortem defaults.** `<= 1` cycle defaults to skip; `> 1` cycles defaults to suggest post-mortem.
 - **Never overwrite an existing `<slug>/` plan directory** without asking the user (checked at slug derivation in Setup).
 - **doc-fetcher is dispatched at Phase 1 only when `docs/llm/INDEX.json` exists.** In its absence, the orchestrator reads files directly; it never spawns the `Explore` subagent (too expensive for fix mode).
+- **Notification calls are gated on `notify.level` from `docs/human/config.md`.** Setting `notify.level = off` suppresses all `PushNotification` calls; the env var `Z_HARNESS_NOTIFY` is no longer the control point.
+- **Git history-rewrite safety doctrine applies.** Before recommending any `git reset --hard HEAD~N`, `git commit --amend`, or interactive-rebase squash on a branch tracking an upstream, run `git branch -r --contains <sha>` for each commit being rewritten. If the upstream ref appears, STOP — recommend rebase or new-commit instead. Force-push to main requires explicit per-incident user authorization with the list of overwritten commits and a content-equivalence demonstration.
 
 ## Examples
 
@@ -87,4 +95,5 @@ _No memories recorded yet._
 
 - `commands/z-fix.md` — full phase-by-phase procedure
 - `docs/human/commands.md` — index of all slash commands
+- `docs/human/config.md` — notification policy and other harness config keys
 - `docs/human/z-debug.md` — the hypothesis-generation counterpart

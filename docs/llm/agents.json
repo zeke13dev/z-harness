@@ -19,30 +19,162 @@
     "agents/remote-runner.md",
     "agents/review-agent.md",
     "agents/reviewer.md",
+    "agents/scope-probe.md",
+    "agents/scope-reconciler-audit.md",
+    "agents/scope-reconciler-brainstorm.md",
     "agents/spec-precheck.md"
   ],
   "confidence": "high",
   "entry_points": [
-    {"file": "agents/auditor.md", "line": 1, "symbol": "auditor", "kind": "module", "summary": "Read-only Sonnet single-dimension auditor; writes findings file, returns counts."},
-    {"file": "agents/bisect-isolator.md", "line": 1, "symbol": "bisect-isolator", "kind": "module", "summary": "Haiku mechanical bisect runner; returns offending SHA+diff; refuses destructive repros and interpretive work."},
-    {"file": "agents/cluster-planner.md", "line": 1, "symbol": "cluster-planner", "kind": "module", "summary": "/z-plan-split leaf planner; writes cluster SPEC/PLAN/TASKS, escalates risky decisions."},
-    {"file": "agents/complexity-classifier.md", "line": 1, "symbol": "complexity-classifier", "kind": "module", "summary": "Haiku task classifier returning low|medium|high for model routing."},
-    {"file": "agents/consultant-primary.md", "line": 1, "symbol": "consultant-primary", "kind": "module", "summary": "Primary provider proxy; supports 11+ modes including plan-style-audit and generate-hypotheses rounds."},
-    {"file": "agents/consultant-secondary.md", "line": 1, "symbol": "consultant-secondary", "kind": "module", "summary": "Secondary provider proxy; same mode surface as primary, distinct provider role."},
-    {"file": "agents/doc-fetcher.md", "line": 1, "symbol": "doc-fetcher", "kind": "module", "summary": "Read-only Haiku fetcher over INDEX/concept JSON/MEMORIES-FLAT.md; returns synthesis."},
-    {"file": "agents/doc-updater.md", "line": 1, "symbol": "doc-updater", "kind": "module", "summary": "Refreshes one concept doc pair; preserves memories[] verbatim; dry-run default."},
-    {"file": "agents/external-lookup.md", "line": 1, "symbol": "external-lookup", "kind": "module", "summary": "Haiku web/API retrieval worker; emits lookup-contract envelope; verb-blocklist enforced."},
-    {"file": "agents/implementer.md", "line": 1, "symbol": "implementer", "kind": "module", "summary": "Implements exactly one task block; mandatory self-check before returning STATUS: ok."},
-    {"file": "agents/mr-reviewer.md", "line": 1, "symbol": "mr-reviewer", "kind": "module", "summary": "Sonnet branch-diff quality reviewer; dedup+consensus+dismissal merge; fenced JSON return."},
-    {"file": "agents/plan-style-reviewer.md", "line": 1, "symbol": "plan-style-reviewer", "kind": "module", "summary": "Sonnet plan artifact style reviewer; 7 categories; multi-voice; returns fenced JSON+Summary."},
-    {"file": "agents/planning-router.md", "line": 1, "symbol": "planning-router", "kind": "module", "summary": "Haiku advisory router for ambiguous plan-family decisions; parseable route contract."},
-    {"file": "agents/remote-runner.md", "line": 1, "symbol": "remote-runner", "kind": "module", "summary": "Haiku mechanical remote verifier: sandbox builds, paper checks, logs, read-only DB."},
-    {"file": "agents/review-agent.md", "line": 1, "symbol": "review-agent", "kind": "module", "summary": "Haiku post-run memory candidate generator; supports implement-all, review-all, debug parent_command; proposes 0-3 candidates as fenced JSON."},
-    {"file": "agents/reviewer.md", "line": 1, "symbol": "reviewer", "kind": "module", "summary": "Provider proxy for task correctness/spec review; blockers+majors only return."},
-    {"file": "agents/spec-precheck.md", "line": 1, "symbol": "spec-precheck", "kind": "module", "summary": "Haiku preflight verifier for SPEC references before implementation."}
+    {
+      "file": "agents/auditor.md",
+      "line": 1,
+      "symbol": "auditor",
+      "kind": "module",
+      "summary": "Read-only Sonnet single-dimension auditor; writes findings file, returns counts."
+    },
+    {
+      "file": "agents/bisect-isolator.md",
+      "line": 1,
+      "symbol": "bisect-isolator",
+      "kind": "module",
+      "summary": "Haiku mechanical bisect runner; returns offending SHA+diff; refuses destructive repros and interpretive work."
+    },
+    {
+      "file": "agents/cluster-planner.md",
+      "line": 1,
+      "symbol": "cluster-planner",
+      "kind": "module",
+      "summary": "/z-plan-split leaf planner; writes cluster SPEC/PLAN/TASKS, escalates risky decisions."
+    },
+    {
+      "file": "agents/complexity-classifier.md",
+      "line": 1,
+      "symbol": "complexity-classifier",
+      "kind": "module",
+      "summary": "Haiku task classifier returning low|medium|high for model routing."
+    },
+    {
+      "file": "agents/consultant-primary.md",
+      "line": 1,
+      "symbol": "consultant-primary",
+      "kind": "module",
+      "summary": "Primary provider proxy; supports 12 modes including generate-hypotheses-round1/round2-adversarial."
+    },
+    {
+      "file": "agents/consultant-secondary.md",
+      "line": 1,
+      "symbol": "consultant-secondary",
+      "kind": "module",
+      "summary": "Secondary provider proxy; same 12-mode surface as primary, distinct provider role."
+    },
+    {
+      "file": "agents/doc-fetcher.md",
+      "line": 1,
+      "symbol": "doc-fetcher",
+      "kind": "module",
+      "summary": "Read-only Haiku fetcher over INDEX/concept JSON/MEMORIES-FLAT.md; returns synthesis."
+    },
+    {
+      "file": "agents/doc-updater.md",
+      "line": 1,
+      "symbol": "doc-updater",
+      "kind": "module",
+      "summary": "Refreshes one concept doc pair; preserves memories[] verbatim; dry-run default; dedup_tags support."
+    },
+    {
+      "file": "agents/external-lookup.md",
+      "line": 1,
+      "symbol": "external-lookup",
+      "kind": "module",
+      "summary": "Haiku web/API retrieval worker; emits lookup-contract envelope; verb-blocklist enforced."
+    },
+    {
+      "file": "agents/implementer.md",
+      "line": 1,
+      "symbol": "implementer",
+      "kind": "module",
+      "summary": "Implements one task block; supports --tasks path override, cross_task_notes, tests_md_path; mandatory self-check."
+    },
+    {
+      "file": "agents/mr-reviewer.md",
+      "line": 1,
+      "symbol": "mr-reviewer",
+      "kind": "module",
+      "summary": "Sonnet branch-diff quality reviewer; deep=true triggers Opus abstraction sub-pass; dedup+consensus+dismissal merge."
+    },
+    {
+      "file": "agents/plan-style-reviewer.md",
+      "line": 1,
+      "symbol": "plan-style-reviewer",
+      "kind": "module",
+      "summary": "Sonnet plan artifact style reviewer; 7 categories; multi-voice; returns fenced JSON+Summary."
+    },
+    {
+      "file": "agents/planning-router.md",
+      "line": 1,
+      "symbol": "planning-router",
+      "kind": "module",
+      "summary": "Haiku advisory router for ambiguous plan-family decisions; parseable route contract."
+    },
+    {
+      "file": "agents/remote-runner.md",
+      "line": 1,
+      "symbol": "remote-runner",
+      "kind": "module",
+      "summary": "Haiku mechanical remote verifier: sandbox builds, paper checks, logs, read-only DB."
+    },
+    {
+      "file": "agents/review-agent.md",
+      "line": 1,
+      "symbol": "review-agent",
+      "kind": "module",
+      "summary": "Haiku post-run memory candidate generator; debug_md_path primary for debug runs; slug anti-patterns enforced."
+    },
+    {
+      "file": "agents/reviewer.md",
+      "line": 1,
+      "symbol": "reviewer",
+      "kind": "module",
+      "summary": "Provider proxy for task correctness/spec review; accepts relevant_docs LLM JSONs; blockers+majors only return."
+    },
+    {
+      "file": "agents/scope-probe.md",
+      "line": 1,
+      "symbol": "scope-probe",
+      "kind": "module",
+      "summary": "Haiku Phase-0 scope classifier for z-audit and z-brainstorm; returns LIGHT/MEDIUM/HEAVY + axis + chunks manifest; advisory only."
+    },
+    {
+      "file": "agents/scope-reconciler-audit.md",
+      "line": 1,
+      "symbol": "scope-reconciler-audit",
+      "kind": "module",
+      "summary": "Sonnet post-fanout reconciler for HEAVY z-audit runs; dedupes N per-chunk findings, preserves cross-chunk dissent verbatim, elevates systemic findings; never writes to disk."
+    },
+    {
+      "file": "agents/scope-reconciler-brainstorm.md",
+      "line": 1,
+      "symbol": "scope-reconciler-brainstorm",
+      "kind": "module",
+      "summary": "Sonnet post-fanout reconciler for HEAVY z-brainstorm runs; concatenates N per-chunk BRAINSTORM.md files verbatim, runs cross-chunk anti-bias check; sets chosen_framing: pending for user selection."
+    },
+    {
+      "file": "agents/spec-precheck.md",
+      "line": 1,
+      "symbol": "spec-precheck",
+      "kind": "module",
+      "summary": "Haiku preflight verifier for SPEC references; uses relevant_docs LLM JSONs as second source of truth."
+    }
   ],
-  "depends_on": ["scripts", "lookup-contract"],
-  "consumed_by": ["commands", "skills"],
+  "depends_on": [
+    "scripts",
+    "lookup-contract"
+  ],
+  "consumed_by": [
+    "commands",
+    "skills"
+  ],
   "invariants": [
     "Each agent is spawned fresh per invocation; callers pass all required context.",
     "Commands/skills own orchestration, user interaction, artifact writes, and final routing decisions.",
@@ -62,7 +194,16 @@
     "review-agent parent_command=debug: debug_md_path is primary artifact; spec_path is supplementary.",
     "bisect-isolator always runs git bisect reset in a finally-block trap; never leaves repo in bisect-in-progress state.",
     "bisect-isolator runs a sanity gate verifying the repro inverts across the range before git bisect run.",
-    "bisect-isolator never interprets the offending commit; returns SHA+diff only; why-it-broke analysis belongs to caller."
+    "bisect-isolator never interprets the offending commit; returns SHA+diff only; why-it-broke analysis belongs to caller.",
+    "implementer's cross_task_notes target task must exist in the same TASKS.md; absent target is logged and silently skipped.",
+    "spec-precheck and reviewer both consume relevant_docs LLM JSONs as a second source of truth alongside SPEC.",
+    "scope-probe is advisory only; the orchestrator owns the final dispatch decision, including whether to treat a low-confidence classification as MEDIUM.",
+    "scope-probe never invents axis names; only names from the caller-supplied axis_taxonomy or the special value 'none' on refusal are valid returns.",
+    "scope-probe archive file is written before the live file (archive-first invariant); if archive write fails, Phase 0 aborts and the host command proceeds as MEDIUM.",
+    "scope-reconciler-audit never smooths over chunk dissent; both conflicting findings appear verbatim in the Cross-chunk dissent section.",
+    "scope-reconciler-audit never writes to disk; it returns REPORT.md content and CHUNK_ARTIFACTS for the orchestrator to persist.",
+    "scope-reconciler-brainstorm always sets chosen_framing: pending; any other value is a spec violation.",
+    "scope-reconciler-brainstorm never drops a failed chunk silently; every chunk ID from the input array must appear as either a Chunk or Chunk FAILED section."
   ],
   "gotchas": [
     "codex-consultant.md, gemini-consultant.md, and codex-reviewer.md are stale names.",
@@ -71,16 +212,28 @@
     "doc-updater dry-run returns proposed docs; /z-maintain-docs decides whether to write them.",
     "external-lookup's canonical contract is lookup-contract.json, not only inline agent prose.",
     "remote-runner refuses DB writes, real-money operations, destructive ops, and interpretive work.",
+    "remote-runner refuses naked binary restarts; must use qtctl up <paper-manifest>, not direct binary invocation.",
     "mr-reviewer never writes MR-REVIEW.md; callers parse its fenced JSON response.",
+    "mr-reviewer Opus sub-pass fires only when mode=abstraction-only AND deep=true; otherwise Grep+definition check is sufficient.",
     "plan-style-reviewer: dismissed_signatures.json suppresses previously dismissed findings via Jaccard >= 0.6 match.",
     "plan-style-reviewer: voices that return malformed JSON are logged as plan_style_voice_failed and skipped (no retry).",
     "spec-precheck validates factual SPEC references, not design quality or runtime semantics.",
     "doc-fetcher Ripgrep is a soft dependency; falls back to Python word-boundary scan if rg is missing.",
-    "review-agent caps candidates at 3 and emits [] rather than padding; slug anti-patterns are banned.",
+    "review-agent caps candidates at 3 and emits [] rather than padding; slug anti-patterns banned (PR-number refs, library-name-alone, session-specific names, negative-capability claims, model-specific slugs).",
     "review-agent debug mode: debug_md_path must be passed when parent_command=debug; absent for implement-all/review-all.",
     "bisect-isolator refusal checks use POSIX-ERE split patterns (not Perl lookaheads) for macOS/BSD grep compat.",
     "bisect-isolator returns bisect_unusable (not refused) when the repro does not invert across the good/bad ref range.",
-    "bisect-isolator captures ORIG_HEAD before any checkout and installs cleanup_bisect trap covering refusal-after-checkout paths."
+    "bisect-isolator captures ORIG_HEAD before any checkout and installs cleanup_bisect trap covering refusal-after-checkout paths.",
+    "consultant modes generate-hypotheses-round1 and generate-hypotheses-round2-adversarial return RAW (no standard wrapper); callers must parse provider output directly.",
+    "implementer's cross_task_notes are optional; omitting the field or emitting [] is backward-compatible.",
+    "scope-probe caps walked candidates at 4 to keep context cheap; walking more than 4 is a violation.",
+    "scope-probe makes at most one doc-fetcher call (step 4); chaining doc-fetcher calls is a violation.",
+    "scope-probe output must have exactly one fenced JSON block; line-prefix headers (STATUS, MODE, AXIS, etc.) must appear before the fence, never inside it.",
+    "scope-probe returns STATUS: refused + MODE: MEDIUM when axis evidence is insufficient \u2014 this is not an error, it is the correct graceful-degradation path.",
+    "scope-reconciler-audit severity elevation applies only to systemic non-dissent findings (same normalized_evidence_key in \u22652 distinct chunks); dissent findings are never elevated.",
+    "scope-reconciler-audit normalization (lowercase, collapse whitespace, strip line-number prefix, truncate to 200 chars) is an internal computation only; the original quoted evidence is always written to REPORT.md.",
+    "scope-reconciler-brainstorm anti-bias check (sections A through D) is mandatory even when findings are empty; skipping any sub-check makes the output less trustworthy than a single chunk's output.",
+    "scope-reconciler-brainstorm: a Claude-favoring pick requires a concrete justification naming what Claude said that peers did not; a generic preference is not accepted as justification."
   ],
   "memories": []
 }

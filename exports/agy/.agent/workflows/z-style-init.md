@@ -53,7 +53,7 @@ Parse `$ARGUMENTS` before doing anything else:
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" style_init_start "$START_PAYLOAD"
    ```
 
-5. **Notification policy:** read env `Z_HARNESS_NOTIFY` (default `approval_only`). Values: `off`, `approval_only`, `all`.
+5. **Notification policy:** see [docs/human/config.md](docs/human/config.md) (notify.level key).
 
 ---
 
@@ -349,7 +349,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
      "<SOURCE>" "<SECTIONS_WITH_RULES>" "<TOTAL_RULE_COUNT>")"
 ```
 
-Push-notify (if `Z_HARNESS_NOTIFY` ≠ `off`):
+Push-notify (if notify.level ≠ `off`; see [docs/human/config.md](docs/human/config.md)):
 
 > STYLE.md written to repo root (<TOTAL_RULE_COUNT> rules across <SECTIONS_WITH_RULES> sections). Run `/z-mr-review` to review a branch diff against it.
 
@@ -389,7 +389,7 @@ Push-notify (if `Z_HARNESS_NOTIFY` ≠ `off`):
    ```
    If the branch is empty/detached or `SLUG_DIR` does not exist as a directory, use the first available `z-harness/*/` directory (via `ls -d z-harness/*/`). If no `z-harness/*/` directory exists at all, `SLUG_DIR` can be any valid path string — the `--global` flag causes `extract-dismissals.py` to scan all slugs, so a missing slug-dir simply yields an empty result set.
 
-5. **Notification policy:** read env `Z_HARNESS_NOTIFY` (default `approval_only`). Values: `off`, `approval_only`, `all`.
+5. **Notification policy:** see [docs/human/config.md](docs/human/config.md) (notify.level key).
 
 ---
 
@@ -656,7 +656,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
   "$(printf '{"clusters":%d,"rules_added":%d}' "$N_CLUSTERS" "$N_RULES_ADDED")"
 ```
 
-Push-notify (if `Z_HARNESS_NOTIFY` ≠ `off`):
+Push-notify (if notify.level ≠ `off`; see [docs/human/config.md](docs/human/config.md)):
 > STYLE.md amended: <N_RULES_ADDED> rule(s) added across <K> section(s) (from <N_CLUSTERS> dismissal clusters). Run `/z-mr-review` to see new findings against the updated guide.
 
 ---

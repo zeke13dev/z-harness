@@ -37,7 +37,7 @@ print(json.dumps(v))
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" test_plan_start "$START_PAYLOAD"
 ```
 
-Notification policy: read `Z_HARNESS_NOTIFY` (default `approval_only`).
+Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
 
 ## Phase 1 — Risk-rank the plan
 

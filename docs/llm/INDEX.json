@@ -20,9 +20,12 @@
         "agents/remote-runner.md",
         "agents/review-agent.md",
         "agents/reviewer.md",
+        "agents/scope-probe.md",
+        "agents/scope-reconciler-audit.md",
+        "agents/scope-reconciler-brainstorm.md",
         "agents/spec-precheck.md"
       ],
-      "last_updated": "2026-05-26",
+      "last_updated": "2026-05-27",
       "confidence": "high",
       "depends_on": [
         "scripts",
@@ -40,9 +43,11 @@
         "commands/z-amend.md",
         "commands/z-audit.md",
         "commands/z-audit-plan.md",
+        "commands/z-audit-plan-style.md",
         "commands/z-brainstorm.md",
         "commands/z-debug.md",
         "commands/z-do.md",
+        "commands/z-export.md",
         "commands/z-fix.md",
         "commands/z-implement-all.md",
         "commands/z-implement-next.md",
@@ -53,24 +58,29 @@
         "commands/z-plan-light.md",
         "commands/z-plan-split.md",
         "commands/z-plan.md",
+        "commands/z-providers-discover.md",
         "commands/z-research.md",
         "commands/z-review-all.md",
         "commands/z-skill-fix.md",
         "commands/z-stats.md",
+        "commands/z-style-init.md",
         "commands/z-suggest-memory.md",
-        "commands/z-test.md"
+        "commands/z-test.md",
+        "commands/z-update.md",
+        "commands/z-uplift.md"
       ],
-      "last_updated": "2026-05-26",
+      "last_updated": "2026-05-27",
       "confidence": "high",
       "depends_on": [
         "agents",
         "scripts",
-        "skills"
+        "skills",
+        "config-design"
       ],
       "consumed_by": [
         "skills"
       ],
-      "summary": "Slash command surfaces, including planning-family route checks, contextual exits such as /z-audit-plan, plan_route_decision telemetry, review-family finding promotion, and /z-implement-all --tasks consumption."
+      "summary": "Slash command surfaces, including planning-family route checks, contextual exits, plan_route_decision telemetry, review-family finding promotion, config.py export-env/should-notify wrappers, and /z-implement-all --tasks consumption."
     },
     {
       "slug": "scripts",
@@ -81,9 +91,12 @@
         "scripts/regenerate-memories-flat.py",
         "scripts/remote-sandbox-sync.sh",
         "scripts/run-memory-review.sh",
-        "scripts/version.sh"
+        "scripts/version.sh",
+        "scripts/config.py",
+        "scripts/config.sh",
+        "scripts/test_config.py"
       ],
-      "last_updated": "2026-05-26",
+      "last_updated": "2026-05-27",
       "confidence": "high",
       "depends_on": [],
       "consumed_by": [
@@ -98,7 +111,7 @@
       "source_file": [
         "commands/z-fix.md"
       ],
-      "last_updated": "2026-05-26",
+      "last_updated": "2026-05-27",
       "confidence": "high",
       "depends_on": [
         "agents",
@@ -133,7 +146,7 @@
         "skills/z-update/SKILL.md",
         "skills/z-uplift/SKILL.md"
       ],
-      "last_updated": "2026-05-26",
+      "last_updated": "2026-05-27",
       "confidence": "high",
       "depends_on": [
         "agents",
@@ -266,7 +279,7 @@
         "agents/review-agent.md",
         "scripts/run-memory-review.sh"
       ],
-      "last_updated": "2026-05-26",
+      "last_updated": "2026-05-27",
       "confidence": "high",
       "depends_on": [
         "z-suggest-memory",
@@ -274,9 +287,10 @@
       ],
       "consumed_by": [
         "z-implement-all",
-        "z-review-all"
+        "z-review-all",
+        "z-debug"
       ],
-      "summary": "Post-run Haiku subagent that proposes 0-3 candidate memories from a completed /z-implement-all or /z-review-all run. Reads run events, cumulative diff, and SPEC.md; emits structured candidates as a fenced JSON block. Does not write \u2014 orchestrator owns all writes via /z-suggest-memory. Dispatched by scripts/run-memory-review.sh after skip-conditions check (empty diff, zero tasks completed)."
+      "summary": "Post-run Haiku subagent that proposes 0-3 candidate memories from a completed /z-implement-all (Phase 9), /z-review-all (Phase 7), or /z-debug (Phase 10, shipped branch only) run. Reads run events, cumulative diff, SPEC.md or DEBUG.md; emits structured candidates as a fenced JSON block. Does not write — orchestrator owns all writes via /z-suggest-memory. Dispatched after skip-conditions check by scripts/run-memory-review.sh."
     },
     {
       "slug": "z-uplift",
@@ -292,6 +306,24 @@
         "commands/z-uplift.md",
         "skills/z-uplift/SKILL.md"
       ]
+    },
+    {
+      "slug": "config-design",
+      "source_file": [
+        "scripts/config.py",
+        "scripts/config.sh",
+        "docs/human/config.md"
+      ],
+      "last_updated": "2026-05-27",
+      "confidence": "high",
+      "depends_on": [
+        "scripts"
+      ],
+      "consumed_by": [
+        "commands",
+        "skills"
+      ],
+      "summary": "Layered TOML config loader. Built-in defaults -> ~/.config/z-harness/config.toml -> repo .z-harness/config.toml -> env vars. Five subcommands: get, export-env, ensure-defaults, explain, should-notify. Slice 1 ships notify.level and docs.always_apply."
     }
   ]
 }

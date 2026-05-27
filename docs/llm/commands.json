@@ -35,12 +35,12 @@
   "confidence": "high",
   "entry_points": [
     {"file": "commands/z-amend.md", "line": 1, "symbol": "z-amend", "kind": "module", "summary": "Propagates approved changes through existing plan artifacts."},
-    {"file": "commands/z-audit.md", "line": 1, "symbol": "z-audit", "kind": "module", "summary": "Runs read-only multi-dimension audits and emits task artifacts."},
+    {"file": "commands/z-audit.md", "line": 1, "symbol": "z-audit", "kind": "module", "summary": "Runs read-only multi-dimension audits with Phase 0 scope probe (LIGHT/MEDIUM/HEAVY) and emits task artifacts. Accepts --scope-from <chunk-spec> for HEAVY sub-flow fan-out."},
     {"file": "commands/z-audit-plan.md", "line": 1, "symbol": "z-audit-plan", "kind": "module", "summary": "Audits existing SPEC/PLAN/TASKS and routes contextually."},
     {"file": "commands/z-audit-plan-style.md", "line": 1, "symbol": "z-audit-plan-style", "kind": "module", "summary": "Audits plan artifacts for code-quality issues before implementation; requires STYLE.md; emits PLAN_STYLE_AUDIT.md."},
-    {"file": "commands/z-brainstorm.md", "line": 1, "symbol": "z-brainstorm", "kind": "module", "summary": "Seeds planning with parallel ideation and anti-bias checks."},
+    {"file": "commands/z-brainstorm.md", "line": 1, "symbol": "z-brainstorm", "kind": "module", "summary": "Seeds planning with parallel ideation and anti-bias checks. Phase 0 scope probe (LIGHT/MEDIUM/HEAVY) with per_vendor/per_framing axis taxonomy. HEAVY Phase 4 presents a (chunk x framing) selection matrix."},
     {"file": "commands/z-debug.md", "line": 1, "symbol": "z-debug", "kind": "module", "summary": "Runs heavy hypothesis-tournament debugging with post-mortem and Phase 10 memory review (shipped branch only)."},
-    {"file": "commands/z-do.md", "line": 1, "symbol": "z-do", "kind": "module", "summary": "Executes tiny plan-free changes with review gates."},
+    {"file": "commands/z-do.md", "line": 1, "symbol": "z-do", "kind": "module", "summary": "Executes tiny plan-free changes with review gates. Calls config.py export-env during Setup; guards notifications via should-notify wrappers."},
     {"file": "commands/z-export.md", "line": 1, "symbol": "z-export", "kind": "module", "summary": "Exports commands/agents/skills to Cursor, Codex, or agy via adapter scripts; defaults to all targets."},
     {"file": "commands/z-fix.md", "line": 1, "symbol": "z-fix", "kind": "module", "summary": "Ships diagnosed bug fixes with consult and Codex review."},
     {"file": "commands/z-implement-all.md", "line": 1, "symbol": "z-implement-all", "kind": "module", "summary": "Orchestrates task queues with fresh subagents, reviewers, and auto memory review (Phase 9)."},
@@ -51,7 +51,7 @@
     {"file": "commands/z-mr-review.md", "line": 1, "symbol": "z-mr-review", "kind": "module", "summary": "Reviews branch diffs into ranked task-shaped findings; requires STYLE.md."},
     {"file": "commands/z-plan-light.md", "line": 1, "symbol": "z-plan-light", "kind": "module", "summary": "Plans and ships small focused changes via FIX.md."},
     {"file": "commands/z-plan-split.md", "line": 1, "symbol": "z-plan-split", "kind": "module", "summary": "Splits large work into one-level cluster plans."},
-    {"file": "commands/z-plan.md", "line": 1, "symbol": "z-plan", "kind": "module", "summary": "Produces SPEC.md, PLAN.md, and TASKS.md for coherent work."},
+    {"file": "commands/z-plan.md", "line": 1, "symbol": "z-plan", "kind": "module", "summary": "Produces SPEC.md, PLAN.md, and TASKS.md for coherent work. Calls config.py export-env during Setup; guards notifications via should-notify wrappers."},
     {"file": "commands/z-providers-discover.md", "line": 1, "symbol": "z-providers-discover", "kind": "module", "summary": "Probes PATH for LLM CLIs and writes providers.json with interactively-confirmed role bindings."},
     {"file": "commands/z-research.md", "line": 1, "symbol": "z-research", "kind": "module", "summary": "Maps terrain with citations without recommending an approach."},
     {"file": "commands/z-review-all.md", "line": 1, "symbol": "z-review-all", "kind": "module", "summary": "Final-gate reviews cumulative implementation, then auto-runs memory review (Phase 7)."},
@@ -63,7 +63,7 @@
     {"file": "commands/z-update.md", "line": 1, "symbol": "z-update", "kind": "module", "summary": "Updates the z-harness plugin to the latest version."},
     {"file": "commands/z-uplift.md", "line": 1, "symbol": "z-uplift", "kind": "module", "summary": "Tiered bulk codebase quality uplift: decompose repo, cross-cut pass, per-component audits, sequential implement."}
   ],
-  "depends_on": ["agents", "scripts", "skills"],
+  "depends_on": ["agents", "scripts", "skills", "config-design"],
   "consumed_by": ["skills"],
   "invariants": [
     "Commands are Markdown procedure specs; planning, research, audit, and test commands do not write production code unless explicitly scoped to do so.",
@@ -76,6 +76,8 @@
     "Long consult-heavy phases use explicit compaction breakpoints or resumable state files where specified.",
     "z-implement-all Phase 9 and z-review-all Phase 7 are soft auto-memory-review phases: all failure paths (malformed output, skipped helper, empty candidates) exit silently without halting the parent command.",
     "z-debug Phase 10 is also a soft auto-memory-review phase and follows the same contract; the abandoned branch does not invoke run-memory-review.sh.",
+    "Every memory-review invocation (Phase 9, Phase 7, Phase 10) must emit exactly one memory_review_terminal event: the helper emits it on all skip paths; the orchestrator emits it after the user-gate loop for ran_empty and needs_user paths.",
+    "z-debug Phase 10 uses a 5-line stdout contract with run-memory-review.sh: line 1=status, line 2=cumulative_diff_path, line 3=spec_path (may be empty), line 4=tags_path, line 5=debug_md_path.",
     "Memory candidates surfaced by Phase 9/Phase 7/Phase 10 are presented sequentially per candidate; accepted candidates are dispatched to z-suggest-memory --from-candidate-json with source prefix incident:<RUN>.",
     "z-uplift never writes production code directly; it orchestrates audits via auditor subagents and delegates implementation to z-implement-all.",
     "z-uplift gates on STYLE.md presence and doc-staleness before decomposition; it never auto-invokes z-style-init or z-maintain-docs.",
@@ -88,7 +90,15 @@
     "z-providers-discover enforces consultant_primary != consultant_secondary before writing providers.json.",
     "z-providers-discover writes atomically via tmpfile+rename; it never leaves a partial providers.json.",
     "z-audit-plan-style requires STYLE.md at repo root; there is no --no-style escape. Absence causes immediate refusal and routing to z-style-init.",
-    "z-audit-plan-style is read-only; plan mutations happen only via /z-amend applied to surviving PLAN_STYLE_AUDIT.md findings."
+    "z-audit-plan-style is read-only; plan mutations happen only via /z-amend applied to surviving PLAN_STYLE_AUDIT.md findings.",
+    "z-audit Phase 0 (scope-probe) is skipped when --scope-from is present; SKIP_PHASE_0=true is set before slug derivation, doc-fetcher, or run_start logging.",
+    "z-audit --scope-from always uses absolute-path-with-fragment form when dispatched by HEAVY fan-out; bare chunk IDs are for manual invocation only and require PARENT_RUN_ID + PARENT_SLUG in caller context.",
+    "z-brainstorm Phase 0 uses axis taxonomy [per_vendor, per_framing]; low-confidence probe results downgrade to MEDIUM without AskUser in v1a.",
+    "z-brainstorm sub-flows (HEAVY fan-out) skip Phase 0 entirely — anti-sprawl invariant prevents recursive fan-out.",
+    "z-brainstorm HEAVY Phase 4 presents a (chunk x framing) selection matrix; N_PAIRS <= 12 uses a single AskUserQuestion, N_PAIRS > 12 uses two-step chunk-then-framing selection.",
+    "z-brainstorm HEAVY abandons set chosen_framing: abandoned (not chosen_pair) to keep abandon detection uniform across LIGHT/MEDIUM/HEAVY modes.",
+    "All commands that fire notifications call scripts/config.py should-notify --event <type> and act only when the return is yes; no command checks Z_HARNESS_NOTIFY_LEVEL directly.",
+    "Commands that send notifications or apply docs call scripts/config.py export-env during Setup before any phase runs; z-do and z-plan are the canonical examples."
   ],
   "gotchas": [
     "Do not add z-audit-plan as a front-door planning route when no plan exists; route to z-plan instead.",
@@ -102,6 +112,8 @@
     "Phase 9 in z-implement-all and Phase 10 in z-debug each cap the sequential AskUserQuestion loop at 3 candidates per run; Phase 7 in z-review-all has no hard cap but stops early on Skip-all-remaining.",
     "z-debug Phase 10 memory review is skipped entirely on the abandoned branch; no memory_review_terminal event is emitted for inconclusive debug sessions.",
     "z-debug Phase 10 clears .notify-dedup-session at the start of each fresh invocation; without this, notify dedup state from a prior session bleeds into the current one.",
+    "z-debug Phase 10 D11 push-notify policy: push-notify at most once per (slug, skip_reason) pair for skipped_broken_context states, deduplicated via .notify-dedup-session.",
+    "z-debug Phase 2.5 bisect fast-path: all three gates must hold (known-good ref, reproducibility confirmed yes, scriptable repro). Non-ok bisect returns fall through to Phase 3a silently — bisect never blocks the pipeline, never replaces hypothesis generation, and never pre-fills the winning hypothesis.",
     "z-uplift slug collision detection presents one AskUserQuestion per colliding slug before COMPONENTS.md is written; collision resolution choices must be applied before MANIFEST.md initialization.",
     "z-uplift --refresh-component archives both REPORT.md and TASKS.md atomically (stage-then-rename) before resetting the MANIFEST row; both files must exist or the command exits with an error.",
     "z-uplift resume detection reads MANIFEST state before entering any phase; SKIP_TO_PHASE guards must be checked at the top of every skippable phase — not only inside the phase body.",
@@ -114,7 +126,14 @@
     "z-export --target=all runs cursor, codex, agy sequentially — not in parallel. A failed target does not abort subsequent targets.",
     "z-export exits nonzero immediately for unrecognized --target values before running any scripts.",
     "z-audit-plan-style PLAN_STYLE_AUDIT.md is separate from z-audit-plan's PLAN_AUDIT_REPORT.md; correctness concerns from the plan-style-reviewer are noted in a Cross-dimension note but not promoted into amendment blocks.",
-    "z-audit-plan-style archives any existing PLAN_STYLE_AUDIT.md before overwriting; this archive powers the dismissal-extraction loop on subsequent runs."
+    "z-audit-plan-style archives any existing PLAN_STYLE_AUDIT.md before overwriting; this archive powers the dismissal-extraction loop on subsequent runs.",
+    "z-audit --scope-from must be parsed BEFORE Setup (before slug derivation, doc-fetcher, or run_start logging); SCOPE_FROM_ERROR is stored for deferred halt after RUN is established.",
+    "z-audit HEAVY fan-out chunk-artifact path validation: dest must be under chunks_dir; source absolute paths must start with Z_HARNESS_PLAN_DIR or one of the per-chunk findings_path directories from the sub-flow archive — not arbitrary paths.",
+    "z-audit HEAVY reconciliation skips Phase 2 (auditor dispatch) and Phase 3 (merge findings) entirely; those phases produce per-dimension findings files that do not exist in the HEAVY path.",
+    "z-brainstorm HEAVY Phase 4 Back-loop is capped at 3 iterations; the fourth Back is treated as Abandon.",
+    "z-brainstorm SCOPE-brainstorm.json is the live file read by Phase 4 to determine HEAVY mode; the archive copy is at archive/<RUN>/SCOPE.json. These are different files — do not confuse them.",
+    "z-brainstorm scope-probe low-confidence results are silently downgraded to MEDIUM in v1a — no AskUser gate.",
+    "Notification policy is now driven by config.py should-notify; do not check Z_HARNESS_NOTIFY_LEVEL directly in command procedures. The canonical reference for knobs is docs/human/config.md."
   ],
   "memories": []
 }

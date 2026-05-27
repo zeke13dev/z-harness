@@ -32,7 +32,7 @@ $ARGUMENTS
    ' "$VERSION_BLOB" "<arguments>")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" brainstorm_run_start "$START_PAYLOAD"
    ```
-7. Notification policy: read env `Z_HARNESS_NOTIFY` (default `approval_only`). Values: `off`, `approval_only`, `all`.
+7. Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
 8. **Cost guardrail.** Target ≤200K tokens. If the running total exceeds 200K (rough estimate: sum prompt+response chars across consult events ÷ 4), log a warning event and continue — do not halt.
 
 **All paths live under `$Z_HARNESS_PLAN_DIR/`:**
@@ -261,7 +261,7 @@ Log every individual failure as `ideator_failed` regardless of the bucket above.
    - **Restart** — discard this run and re-run with a refined topic
    - **Abandon** — exit cleanly without finalizing
 
-Block until the user answers. Send a `PushNotification` if `Z_HARNESS_NOTIFY` is `approval_only` or `all`.
+Block until the user answers. Send a `PushNotification` if notify.level is `approval_only` or `all` (see [docs/human/config.md](docs/human/config.md)).
 
 ---
 

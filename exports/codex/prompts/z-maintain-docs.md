@@ -93,7 +93,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "doc
   '{"trigger":"pre_consult","phase":"maintain_docs_audit"}'
 ```
 
-Push-notify (regardless of `Z_HARNESS_NOTIFY` — this is a hard pause prompt):
+Push-notify (this is a hard pause prompt — fires regardless of notification level; see [docs/human/config.md](docs/human/config.md)):
 > "About to audit <N> concept docs via consultants. Recommended: `/clear`, then re-invoke `/z-maintain-docs --audit` to continue. Dismiss to proceed now."
 
 `AskUserQuestion` with two options:

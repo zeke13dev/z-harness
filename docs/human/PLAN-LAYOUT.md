@@ -123,3 +123,32 @@ The affected list includes: `z-plan`, `z-plan-light`, `z-plan-split`,
 
 Scripts that also respect `Z_HARNESS_PLANS_DIR`: `scripts/log-event.sh`,
 `scripts/log-phase.sh`.
+
+---
+
+## Plugin directory layout
+
+The z-harness plugin itself is laid out as follows:
+
+```
+z-harness/
+├── .claude-plugin/
+│   ├── plugin.json
+│   └── marketplace.json
+├── commands/
+│   └── z-*.md
+├── agents/
+│   └── *.md
+├── scripts/
+│   ├── config.py
+│   ├── config.sh
+│   ├── extract-dismissals.py
+│   ├── log-event.sh
+│   ├── log-phase.sh
+│   ├── remote-sandbox-sync.sh
+│   └── version.sh
+├── docs/
+│   ├── human/    ← human-readable reference
+│   └── llm/      ← LLM-tier fast-lookup JSONs
+└── README.md
+```

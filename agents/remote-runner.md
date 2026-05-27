@@ -36,6 +36,7 @@ When in doubt — sandbox it. Wasted rsync is cheaper than running stale code.
 - **NO real-money operations** (`qtctl up <real-manifest>`, anything that writes prod-trading state). Refuse and ask.
 - **NO destructive ops** on remote (`rm -rf` outside the sandbox dir, `truncate`, killing live trader procs). Refuse and ask.
 - **NO local builds**. The whole point is to use the remote sandbox.
+- **NO naked binary launches as a "restart" substitute.** If you killed a qtctl-supervised PID (e.g. `live-trader`, any `crypto-feed`, any sink) you MUST bring it back via `qtctl up --manifest <paper-manifest>` — never by invoking the binary directly (`target/release/live-trader --config ...`). A naked launch skips the feeds.toml/sinks deps the manifest wires up, so the new process boots into a silent disconnected state (no Kalshi/Coinbase feed, no heartbeat, no signal_logs). It looks "running" in `ps` but is functionally dead. Equivalently: never `kill <pid>` an existing qtctl-supervised process when you mean `qtctl down --manifest <m>`. If you cannot find the right manifest, refuse with `STATUS: refused`, reason `naked_binary_restart_attempted` and surface to the user.
 - **NO interpretive reasoning.** If the caller asks "why did this query return 0 rows?" — refuse with `STATUS: refused`, reason `interpretive_work — bounce to Sonnet/Opus`. Execute and return; do not analyze.
 
 ## Procedure

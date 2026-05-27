@@ -56,8 +56,7 @@ Loop prevention: carry forward the latest route chain; if it already has two ent
    ' "$VERSION_BLOB" "$Z_HARNESS_SLUG")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_audit_start "$START_PAYLOAD"
    ```
-6. **Notification policy:**
-   Read `Z_HARNESS_NOTIFY` (default `approval_only`).
+6. **Notification policy:** see [docs/human/config.md](docs/human/config.md) (notify.level key).
 7. **Docs Grounding:**
    If `docs/llm/INDEX.json` exists in the repo root, dispatch `doc-fetcher` (Haiku) to identify concepts touched by this plan:
    ```

@@ -1,0 +1,362 @@
+diff --git a/commands/z-brainstorm.md b/commands/z-brainstorm.md
+index befed80..e2af05d 100644
+--- a/commands/z-brainstorm.md
++++ b/commands/z-brainstorm.md
+@@ -32,13 +32,192 @@ $ARGUMENTS
+    ' "$VERSION_BLOB" "<arguments>")"
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" brainstorm_run_start "$START_PAYLOAD"
+    ```
+-7. Notification policy: read env `Z_HARNESS_NOTIFY` (default `approval_only`). Values: `off`, `approval_only`, `all`.
++7. Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
+ 8. **Cost guardrail.** Target ≤200K tokens. If the running total exceeds 200K (rough estimate: sum prompt+response chars across consult events ÷ 4), log a warning event and continue — do not halt.
+ 
+ **All paths live under `$Z_HARNESS_PLAN_DIR/`:**
+ - `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md`
+ - `$Z_HARNESS_PLAN_DIR/archive/<RUN>/...`
+ 
++## Phase 0 — Scope probe
++
++Run Phase 0 **immediately after Setup** — BEFORE Plan Route Check, BEFORE Phase 1 scaffolding begins. scope-probe internally dispatches doc-fetcher (per its step 4); Phase 0 does not depend on Phase 1's doc-fetcher run.
++
++### 0a. Define axis taxonomy
++
++```
++AXIS_TAXONOMY=["per_vendor","per_framing"]
++```
++
++This is the fixed brainstorm axis taxonomy for v1a. Pass it verbatim to scope-probe.
++
++### 0b. Dispatch scope-probe
++
++```
++T0_PHASE0=$(date +%s%3N)
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" scope_probe_start \
++  '{"host_command":"z-brainstorm","axis_taxonomy":["per_vendor","per_framing"]}'
++
++Agent(
++  subagent_type="scope-probe",
++  description="Scope probe for z-brainstorm: <slug>",
++  prompt="host_command: z-brainstorm
++topic: <topic verbatim>
++axis_taxonomy: [\"per_vendor\",\"per_framing\"]
++repo_root: <abs path to repo root>
++run_id: <RUN>"
++)
++```
++
++### 0c. Parse scope-probe return
++
++Parse the hybrid return using the two-step parser (line-prefix headers BEFORE the first ` ```json ` fence, JSON block via fence regex `^```json\n(.*?)^```$`). Extract:
++
++- `STATUS` (classified | refused | bad_input)
++- `MODE` (LIGHT | MEDIUM | HEAVY)
++- `AXIS` (one of `per_vendor`, `per_framing`, or `none`)
++- `CONFIDENCE` (high | medium | low)
++- `REASON_CODES` (comma-separated string)
++- `chunks` array from the fenced JSON block
++- `seams_counted` and `candidates_walked` integers from the fenced JSON block
++
++**Parser failure handling:** If the response is missing line-prefix headers, has no fenced JSON block, has malformed JSON, or has line-prefix headers inside the fence, emit `scope_probe_malformed` event with `{"host_command":"z-brainstorm","raw_response_len":<len>}`, treat as `STATUS: refused` + `MODE: MEDIUM`, and continue. Never retry.
++
++**Low-confidence handling:** If `CONFIDENCE: low`, log a warning event (`scope_probe_low_confidence`), downgrade the result to `MODE: MEDIUM`, and continue. Do not AskUser in v1a.
++
++### 0d. Write SCOPE artifacts (archive-first)
++
++**Step 1 — Write archive copy first (must succeed):**
++
++Assemble the SCOPE JSON from the parsed scope-probe return plus run-context metadata:
++
++```json
++{
++  "host_command": "z-brainstorm",
++  "slug": "<Z_HARNESS_SLUG>",
++  "last_run_id": "<RUN>",
++  "last_updated": "<UTC ISO 8601 timestamp>",
++  "mode": "<MODE>",
++  "axis": "<AXIS>",
++  "confidence": "<CONFIDENCE>",
++  "reason_codes": ["<code1>", "<code2>"],
++  "chunks": [ ... ],
++  "seams_counted": <int>,
++  "candidates_walked": <int>,
++  "scope_probe_version": "1"
++}
++```
++
++Write atomically via tmp+rename to `$Z_HARNESS_PLAN_DIR/archive/$RUN/SCOPE.json`.
++
++If the archive write fails: emit `scope_probe_archive_write_failed` event, skip Phase 0 entirely, and proceed to Plan Route Check as if scope-probe was never dispatched. Do not write the live file.
++
++**Step 2 — Write live file (only after archive succeeds):**
++
++Write the same JSON to `$Z_HARNESS_PLAN_DIR/SCOPE-brainstorm.json` atomically (tmp+rename). The live file is namespaced per host command; it is overwritten on each run.
++
++### 0e. Log classification result
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" scope_probe_classified \
++  "$(printf '{"host_command":"z-brainstorm","mode":"%s","axis":"%s","confidence":"%s","chunks_count":%d}' \
++     "<MODE>" "<AXIS>" "<CONFIDENCE>" "<N chunks>")"
++```
++
++### 0f. Branch on STATUS, then MODE
++
++**Branch on STATUS first:**
++
++#### refused — MEDIUM fallback
++
++If `STATUS: refused`: log a `scope_probe_refused` event, treat as `MODE: MEDIUM`, and proceed to Plan Route Check and then Phase 1 unchanged.
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" scope_probe_refused \
++  '{"host_command":"z-brainstorm"}'
++```
++
++#### bad_input — MEDIUM fallback
++
++If `STATUS: bad_input`: log a `scope_probe_bad_input` event, treat as `MODE: MEDIUM`, and proceed to Plan Route Check and then Phase 1 unchanged.
++
++```bash
++bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" scope_probe_bad_input \
++  '{"host_command":"z-brainstorm"}'
++```
++
++**Only if `STATUS: classified`, branch on MODE:**
++
++#### LIGHT or MEDIUM — pass-through
++
++`MODE: LIGHT` or `MODE: MEDIUM`: proceed to Plan Route Check and then Phase 1 scaffolding unchanged. SCOPE-brainstorm.json is written but Phase 1 does not consult it for brainstorm (unlike `/z-audit` LIGHT, brainstorm has no `dimensions_hint` equivalent — Phase 1 runs identically for both modes in `/z-brainstorm`).
++
++#### HEAVY — parallel sub-flow fan-out
++
++When `MODE: HEAVY`:
++
++1. **Log fan-out start:**
++   ```bash
++   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" scope_fanout_dispatched \
++     "$(printf '{"host_command":"z-brainstorm","axis":"%s","chunks_count":%d}' "<AXIS>" "<N>")"
++   ```
++
++2. **Dispatch N parallel `/z-brainstorm` sub-flows** — one per chunk from the `chunks` array. Each sub-flow runs Phases 1 (scaffolding), 2 (ideator dispatch), and **3 (synthesis)** for its chunk's `scope_hint` sub-topic, producing its own per-chunk BRAINSTORM.md. Dispatch all N in a single message (parallel).
++
++   For each chunk `C` in `chunks`, call:
++   ```
++   Agent(
++     subagent_type="general-purpose",
++     model="sonnet",
++     description="z-brainstorm sub-flow for chunk <C.id>: <C.intent>",
++     prompt="MODE: brainstorm-subflow
++
++This is a HEAVY fan-out sub-flow of /z-brainstorm. Run Phase 1 (scaffolding), Phase 2 (ideator dispatch), and Phase 3 (synthesis) for the sub-scope below. Do NOT run Phase 0 (scope-probe), Plan Route Check, or Phase 4 (user-pick gate — selection happens at the parent level for HEAVY mode). Produce a BRAINSTORM.md at the path specified.
++
++Z_HARNESS_PARENT_RUN_ID: <interpolate $RUN value here, e.g. 20260101T000000Z-my-slug>
++Parent slug: <interpolate $Z_HARNESS_SLUG value here>
++Chunk id: <C.id>
++Sub-scope topic: <C.scope_hint> — <C.intent>
++Original topic (for context): <topic>
++Axis: <AXIS>
++Output path: <interpolate $Z_HARNESS_PLAN_DIR>/archive/<interpolate $RUN>/chunks/<C.id>/BRAINSTORM.md
++
++Scaffolding instructions: follow /z-brainstorm Phase 1 (doc-fetcher, optional Explore, RESEARCH.md ingestion, input_hash). Ideator dispatch: follow /z-brainstorm Phase 2 with the IDEATOR_SCHEMA. Synthesis: follow /z-brainstorm Phase 3 (anti-bias check, orchestrator recommendation). Write the BRAINSTORM.md with chosen_framing: pending (do NOT present an AskUserQuestion — the parent owns the user-pick gate)."
++   )
++   ```
++
++   Sub-flows MUST NOT themselves go HEAVY (anti-sprawl invariant: sub-flows skip Phase 0 entirely).
++
++3. **Collect sub-flow results.** For each chunk, record:
++   - `brainstorm_path`: `$Z_HARNESS_PLAN_DIR/archive/$RUN/chunks/<C.id>/BRAINSTORM.md`
++   - `status`: succeeded (file exists and is non-empty) or failed
++
++4. **Dispatch scope-reconciler-brainstorm** to merge the per-chunk BRAINSTORM.md files. The reconciler is **read-only** — it returns merged BRAINSTORM.md text as its output; the orchestrator (/z-brainstorm) writes the file. Do NOT include `output_path` in the reconciler prompt.
++   ```
++   Agent(
++     subagent_type="scope-reconciler-brainstorm",
++     description="Reconcile HEAVY brainstorm chunks for <slug>",
++     prompt="host_run_id: <interpolate $RUN value here>
++chunks: <JSON array of {id, brainstorm_path, status?} — mark failed sub-flows with status: failed>
++axis: <AXIS>"
++   )
++   ```
++
++5. **Write unified BRAINSTORM.md.** Parse the text returned by scope-reconciler-brainstorm and write it to `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md` (the orchestrator performs this write, not the reconciler).
++
++   If reconciler fails or returns no parseable content: fall back to concatenating the per-chunk BRAINSTORM.md files under a `## Reconciliation failed — raw chunks below` header, and write that to `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md`.
++
++6. **Log reconciliation:**
++   ```bash
++   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" scope_fanout_reconciled \
++     "$(printf '{"host_command":"z-brainstorm","axis":"%s","chunks_total":%d,"chunks_succeeded":%d,"reconciler_ok":%s}' \
++        "<AXIS>" "<N>" "<succeeded_count>" "<true|false>")"
++   ```
++
++7. **Skip Phases 1, 2, and 3.** The unified BRAINSTORM.md (produced by the reconciler or the fallback) replaces the normal Phase 1+2+3 output. Jump directly to Phase 4 — **the HEAVY branch at the top of Phase 4 owns the chunk-selection matrix logic** (see Phase 4 HEAVY-mode branch above).
++
++---
++
+ <!-- PLAN_ROUTE_CHECK_START -->
+ ## Plan Route Check
+ 
+@@ -59,6 +238,8 @@ If routing, write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md`, emit `pl
+ Loop prevention: carry forward the latest route chain; if it already has two entries, ask the user to choose explicitly. If the recommended target equals the immediate prior `from_command`, block ping-pong, show both route artifacts, and ask the user to choose. If the user continues here, log the override and do not route again for the same `reason_codes` in this run.
+ <!-- PLAN_ROUTE_CHECK_END -->
+ 
++---
++
+ ## Phase telemetry (mandatory)
+ 
+ At the **start** of each phase (1 through 4), record `T0=$(date +%s%3N)`. At the **end**, log:
+@@ -261,31 +442,141 @@ Log every individual failure as `ideator_failed` regardless of the bucket above.
+    - **Restart** — discard this run and re-run with a refined topic
+    - **Abandon** — exit cleanly without finalizing
+ 
+-Block until the user answers. Send a `PushNotification` if `Z_HARNESS_NOTIFY` is `approval_only` or `all`.
++Block until the user answers. Send a `PushNotification` if notify.level is `approval_only` or `all` (see [docs/human/config.md](docs/human/config.md)).
+ 
+ ---
+ 
+ ## Phase 4 — Finalize
+ 
++### HEAVY-mode branch (check FIRST — fires only when mode == HEAVY)
++
++Read `$Z_HARNESS_PLAN_DIR/SCOPE-brainstorm.json`. If the file exists and `mode` is `"HEAVY"`, execute this branch and **skip the LIGHT/MEDIUM branch below entirely**.
++
++#### Step 4H-1 — Build the (chunk × framing) matrix
++
++Parse the unified BRAINSTORM.md that was written at the end of Phase 0's HEAVY fan-out (step 6 of the 0f HEAVY sub-section). Walk each `## Chunk: <id>` section in order. For each chunk that succeeded (i.e. does NOT have `— FAILED` in the heading), enumerate the three standard framings: `claude`, `codex`, `gemini`. Only include framings for ideators that are present in that chunk's BRAINSTORM.md (skip any marked `:failed`).
++
++Collect a flat list of pairs in the form `(chunk_id, framing)`, e.g.:
++```
++[("C1","claude"), ("C1","codex"), ("C1","gemini"), ("C2","claude"), ("C2","codex"), ("C2","gemini"), ...]
++```
++
++Let `N_PAIRS = len(pairs)`.
++
++#### Step 4H-2 — Present the selection matrix to the user
++
++**Case A — N_PAIRS ≤ 12 (single AskUserQuestion):**
++
++Present a single `AskUserQuestion` listing all pairs as labeled options plus two standard exits:
++
++```
++Which (chunk, framing) should seed the downstream /z-plan?
++
++Options:
++  C1: claude   — <one-line summary of C1's Claude framing from BRAINSTORM.md>
++  C1: codex    — <one-line summary of C1's Codex framing>
++  C1: gemini   — <one-line summary of C1's Gemini framing>
++  C2: claude   — <one-line summary of C2's Claude framing>
++  ...           (up to 12 options)
++  Restart       — discard this run and re-run with a refined topic
++  Abandon       — exit cleanly without finalizing
++```
++
++The one-line summary is the first sentence of that ideator's "Framing" section in the unified BRAINSTORM.md. If that section is missing, use `<no summary available>`.
++
++**Case B — N_PAIRS > 12 (two-step AskUserQuestion):**
++
++First, present a question to pick the chunk:
++
++```
++This run produced <N_PAIRS> (chunk × framing) pairs (>{12}). Pick a chunk first.
++
++Options:
++  C1  — <one-line description of C1's sub-scope from unified BRAINSTORM.md>
++  C2  — <one-line description>
++  ...
++  Restart
++  Abandon
++```
++
++After the user picks a chunk (or Restart/Abandon), if they picked a chunk then present a second question to pick the framing within that chunk:
++
++```
++Chunk <id> selected. Which framing seeds the plan?
++
++Options:
++  claude   — <one-line summary of this chunk's Claude framing>
++  codex    — <one-line summary of this chunk's Codex framing>
++  gemini   — <one-line summary of this chunk's Gemini framing>
++  Back     — go back to chunk selection
++  Abandon  — exit cleanly without finalizing
++```
++
++If the user picks **Back**, loop to the chunk-selection question. Allow at most 3 Back-loops; on the fourth Back, treat it as Abandon.
++
++#### Step 4H-3 — Handle user's pick
++
++**User picked a (chunk, framing) pair:**
++
++1. Update the BRAINSTORM.md frontmatter:
++   - Remove the `chosen_framing:` field entirely.
++   - Add `chosen_pair: {chunk_id: "<id>", framing: "<claude|codex|gemini>"}` (e.g. `chosen_pair: {chunk_id: "C1", framing: "codex"}`).
++   - Confirm `status: complete`.
++2. Append (for the first time) a `## User choice` body section:
++   ```markdown
++   ## User choice
++
++   **Chosen pair:** chunk `<id>` / framing `<framing>`
++
++   The framing text below seeds any downstream `/z-plan` invocation. Run `/z-plan` in the same working directory and it will auto-detect BRAINSTORM.md and read `chosen_pair` from the frontmatter.
++
++   <verbatim text of the picked chunk's picked ideator framing block, copied from the `## Chunk: <id>` section of the unified BRAINSTORM.md>
++   ```
++3. Log the pick:
++   ```bash
++   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" heavy_pair_selected \
++     "$(printf '{"chunk_id":"%s","framing":"%s"}' "<id>" "<framing>")"
++   ```
++
++**User picked Restart:**
++
++Follow the standard Restart path (see LIGHT/MEDIUM branch below) — archive BRAINSTORM.md with `chosen_framing: restart`, ask for a refined topic, start a fresh RUN.
++
++**User picked Abandon:**
++
++Follow the standard Abandon path below — but set both `chosen_pair: null` and `chosen_framing: abandoned` in the frontmatter (omit `chosen_pair` from the output entirely; set `chosen_framing: abandoned`).
++
++#### Step 4H-4 — Fall through to "In all branches" below
++
++After completing step 4H-3, skip the LIGHT/MEDIUM branch entirely and jump to "In all branches" at the end of this section. The `brainstorm_run_end` log event and push-notify are shared with the LIGHT/MEDIUM path.
++
++For the `brainstorm_run_end` event, serialize `chosen_framing` as `"<chunk_id>:<framing>"` (e.g. `"C1:codex"`) for HEAVY picks, or `"restart"` / `"abandoned"` for those exits.
++
++---
++
++### LIGHT/MEDIUM branch (fires when mode is NOT HEAVY, or SCOPE-brainstorm.json is absent)
++
+ Branch on the user's Phase 3 choice:
+ 
+-### User picked a framing
++#### User picked a framing
+ 
+ 1. Update the `chosen_framing:` field in the BRAINSTORM.md frontmatter from `pending` to the picked ideator id (`claude` | `codex` | `gemini`).
+ 2. Append (for the first time) a `## User choice` body section with the picked framing's text reproduced verbatim (so `/z-plan` can find it without re-parsing the ideator blocks) plus any free-text refinement the user provided.
+ 3. Confirm `status: complete` in the frontmatter.
+ 
+-### User picked Restart
++#### User picked Restart
+ 
+ 1. Archive the just-written BRAINSTORM.md to `$Z_HARNESS_PLAN_DIR/archive/$RUN/BRAINSTORM.md.previous-<N>` (next free integer). Before archiving, update the archived copy's frontmatter to `status: complete`, `chosen_framing: restart` so the historical record is spec-valid.
+ 2. Ask the user (free-text or `AskUserQuestion`) for the refined topic.
+ 3. Start a fresh RUN: regenerate `RUN`, re-mkdir, re-emit `brainstorm_run_start`, and loop back to Phase 1 with the refined topic.
+ 
+-### User picked Abandon
++#### User picked Abandon
+ 
+ 1. Set the frontmatter `status: abandoned` and `chosen_framing: abandoned`. Leave the file in place (so a future re-run knows there was a prior attempt).
+ 2. Skip the push-notify "next step" recommendation; emit a simpler "abandoned" notification.
+ 
++---
++
+ ### In all branches
+ 
+ Log `brainstorm_run_end`:
+@@ -306,6 +597,8 @@ Recommended next:
+   /z-plan <task>          — start the rigorous planning pipeline; it will auto-detect BRAINSTORM.md
+ ```
+ 
++For HEAVY runs, the push notification uses the chosen pair: `Brainstorm complete (pair: C1:codex).`
++
+ For the abandoned branch, the push notification just says "Brainstorm abandoned" with no next-step.
+ 
+ ---

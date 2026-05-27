@@ -1,0 +1,87 @@
+--- z-harness/z-harness-config-toml/archive/tasks/T004/diff-v1.patch	2026-05-27 11:33:24
++++ z-harness/z-harness-config-toml/archive/tasks/T004/diff.patch	2026-05-27 11:35:00
+@@ -1,62 +1,16 @@
+ diff --git a/docs/llm/INDEX.json b/docs/llm/INDEX.json
+-index f1b9237..0efcf8b 100644
++index f1b9237..2680582 100644
+ --- a/docs/llm/INDEX.json
+ +++ b/docs/llm/INDEX.json
+-@@ -22,7 +22,7 @@
+-         "agents/reviewer.md",
+-         "agents/spec-precheck.md"
+-       ],
+--      "last_updated": "2026-05-26",
+-+      "last_updated": "2026-05-28",
+-       "confidence": "high",
+-       "depends_on": [
+-         "scripts",
+-@@ -60,7 +60,7 @@
+-         "commands/z-suggest-memory.md",
+-         "commands/z-test.md"
+-       ],
+--      "last_updated": "2026-05-26",
+-+      "last_updated": "2026-05-28",
+-       "confidence": "high",
+-       "depends_on": [
+-         "agents",
+-@@ -83,7 +83,7 @@
+-         "scripts/run-memory-review.sh",
+-         "scripts/version.sh"
+-       ],
+--      "last_updated": "2026-05-26",
+-+      "last_updated": "2026-05-28",
+-       "confidence": "high",
+-       "depends_on": [],
+-       "consumed_by": [
+-@@ -133,7 +133,7 @@
+-         "skills/z-update/SKILL.md",
+-         "skills/z-uplift/SKILL.md"
+-       ],
+--      "last_updated": "2026-05-26",
+-+      "last_updated": "2026-05-28",
+-       "confidence": "high",
+-       "depends_on": [
+-         "agents",
+-@@ -266,7 +266,7 @@
+-         "agents/review-agent.md",
+-         "scripts/run-memory-review.sh"
+-       ],
+--      "last_updated": "2026-05-26",
+-+      "last_updated": "2026-05-28",
+-       "confidence": "high",
+-       "depends_on": [
+-         "z-suggest-memory",
+-@@ -292,6 +292,16 @@
++@@ -292,6 +292,15 @@
+          "commands/z-uplift.md",
+          "skills/z-uplift/SKILL.md"
+        ]
+ +    },
+ +    {
+ +      "slug": "config-design",
+-+      "source_file": "scripts/config.py",
+-+      "source_files": ["scripts/config.py", "scripts/config.sh", "docs/human/config.md"],
+-+      "last_updated": "2026-05-27T18:26:24Z",
+++      "source_file": ["scripts/config.py", "scripts/config.sh", "docs/human/config.md"],
+++      "last_updated": "2026-05-27",
+ +      "confidence": "high",
+ +      "depends_on": ["log-event", "providers-registry"],
+ +      "consumed_by": ["commands", "skills"],
+@@ -66,7 +20,7 @@
+  }
+ diff --git a/docs/llm/config-design.json b/docs/llm/config-design.json
+ new file mode 100644
+-index 0000000..1fe5847
++index 0000000..2a15df4
+ --- /dev/null
+ +++ b/docs/llm/config-design.json
+ @@ -0,0 +1,19 @@
+@@ -76,7 +30,7 @@
+ +  "invariants": [
+ +    "schema_version == 1 (else exit 2)",
+ +    "ensure-defaults never writes repo-local",
+-+    "should-notify always exits 0; prints yes|no on stdout",
+++    "should-notify exits 0 on valid event (prints yes|no on stdout); exits 2 on unknown event",
+ +    "config_resolved event emitted once per $Z_HARNESS_RUN",
+ +    "enum values: notify.level ∈ {off, approval_only, all}; docs.always_apply ∈ {always, never}",
+ +    "transliteration: dotted.key → Z_HARNESS_<SECTION>_<KEY>"

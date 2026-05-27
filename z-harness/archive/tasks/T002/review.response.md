@@ -1,15 +1,7 @@
-   465	        components.append({"path": rel, "method": "manual"})
-   466	
-   467	# Re-filter unclaimed: remove any path that was explicitly added via --component
-   468	unclaimed = [u for u in unclaimed if u not in manual_paths]
-   469	
-   470	# Compute slugs
+- **major**, `agents/scope-reconciler-audit.md:4` and Step 5/6: The agent is required to write `REPORT.md` and copy chunk artifacts, but frontmatter only grants `Read, Grep, Glob`, so it cannot perform its core output duties. Fix by resolving the spec/tool contract: either add `Write` to the allowed tools and update the acceptance criteria, or change the agent to return the report content for the caller to write.
 
-codex
-- **Blocker** — [commands/z-uplift.md](/Users/zeke/dev/z-harness/commands/z-uplift.md:556): collision resolution is still incomplete for groups larger than two, or when a chosen/custom slug creates a new collision, because the apply pass runs once and never re-checks before `COMPONENTS.md` is written. Fix by looping `find_collisions()` after every applied choice until empty, handling all members in a collision group, and failing before Step 3 if any duplicate slug remains.
+- **major**, Step 3: Dissent detection is structurally wrong because the inventory key includes `severity`, so “same evidence, different severity” will never hit the same map entry and will be treated as separate normal findings instead of cross-chunk dissent. Fix by indexing dissent candidates by normalized evidence/site independently of severity before dedupe, then grouping conflicting severities or recommendations under `## Cross-chunk dissent`.
 
-- **Major** — [commands/z-uplift.md](/Users/zeke/dev/z-harness/commands/z-uplift.md:559): missing `USER_COLLISION_CHOICES` entries silently default to choice `"1"`, so a collision can be “resolved” without the required AskUser gate. Fix by requiring an explicit choice for every colliding slug and exiting with an error if any choice is absent.
+- **major**, Step 4: Severity elevation is narrowed to exact consensus findings with the same severity and normalized evidence, but the spec requires elevating cross-chunk patterns when two or more chunks flag the same systemic issue. Fix by defining a systemic-issue grouping key separate from exact evidence dedupe, and apply one-tier elevation when that issue group appears in at least two chunks.
 
-- **Major** — [commands/z-uplift.md](/Users/zeke/dev/z-harness/commands/z-uplift.md:566): custom collision slugs are accepted without validation or uniqueness checks, allowing invalid path-like slugs or fresh duplicates to reach `COMPONENTS.md` and later MANIFEST paths. Fix by validating custom slugs against the same kebab-case slug regex and re-running duplicate detection before writing artifacts.
-tokens used
-126,825
+- **major**, Step 1: A chunk with a valid `PASS` verdict and zero findings would be classified as malformed because “no findings” is treated as failure. Fix by allowing zero-finding chunks when a valid verdict is present, counting them in chunk verdicts without adding findings.

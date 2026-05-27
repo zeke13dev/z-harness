@@ -1,7 +1,7 @@
 # Docs index
 
-_Generated: 2026-05-23T19:31:00Z_  
-_Plugin: z-harness 64a3dbe_
+_Updated: 2026-05-27_  
+_Plugin: z-harness_
 
 Concepts grouped by top-level module. Each entry links to its human-tier page.
 Companion LLM-tier JSON lives at `../llm/<slug>.json`.
@@ -18,6 +18,12 @@ Companion LLM-tier JSON lives at `../llm/<slug>.json`.
 |---|---|---|---|
 | [commands](./commands.md) | high | `commands/z-amend.md`, `commands/z-audit.md`, `commands/z-brainstorm.md` | Propagates targeted plan amendments consistently across plan artifacts. |
 
+## config
+
+| Concept | Confidence | Source files | Summary |
+|---|---|---|---|
+| [config](./config.md) | high | `scripts/config.py`, `scripts/config.sh` | Layered TOML config: built-in defaults → global → repo-local → env. Slice 1 knobs: notify.level, docs.always_apply. |
+
 ## scripts
 
 | Concept | Confidence | Source files | Summary |
@@ -29,4 +35,17 @@ Companion LLM-tier JSON lives at `../llm/<slug>.json`.
 | Concept | Confidence | Source files | Summary |
 |---|---|---|---|
 | [skills](./skills.md) | high | `skills/z-amend/SKILL.md`, `skills/z-brainstorm/SKILL.md`, `skills/z-debug/SKILL.md` | Checklists for amending spec, plan, and task checklists consistently. |
+
+## reference
+
+| Concept | Source file | Summary |
+|---|---|---|
+| [INSTALL.md](./INSTALL.md) | — | Install instructions, requirements, uninstall. |
+| [PROVIDERS.md](./PROVIDERS.md) | — | Provider registry: roles, config-file locations, precedence. |
+| [PLAN-LAYOUT.md](./PLAN-LAYOUT.md) | — | Plan directory layout and plugin directory layout. |
+| [MULTI-IDE.md](./MULTI-IDE.md) | — | Exporting z-harness to Cursor, Codex CLI, and Antigravity. |
+| [environment-knobs.md](./environment-knobs.md) | — | Environment variable reference for all tunables. |
+| [telemetry.md](./telemetry.md) | — | Telemetry event kinds, compaction policy. |
+| [plugin-author-conventions.md](./plugin-author-conventions.md) | — | Conventions for downstream `.claude/skills/` authors. |
+| [limitations.md](./limitations.md) | — | Known v1 limitations. |
 

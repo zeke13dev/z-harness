@@ -1,0 +1,83 @@
+# TASKS — C2: driver-codex
+
+- [ ] **T001 — Create driver package structure and auth resolution module**
+  - **Files:** runtime/drivers/codex/__init__.py, runtime/drivers/codex/auth.py, tests/drivers/test_codex_driver.py
+  - **Depends:** none
+  - **Acceptance:**
+    - `runtime/drivers/codex/` package exists and is importable
+    - `auth.py` exports `resolve_auth(provider_entry: dict) -> AuthResult` where AuthResult has fields `strategy: str` and `env_additions: dict[str, str]`
+    - Precedence is: CODEX_API_KEY env → OPENAI_API_KEY via model_providers workaround → ~/.codex/auth.json presence check
+    - `AuthResolutionError` is raised (with descriptive message) if no path yields a credential
+    - Unit tests cover all three auth strategies and the error path, with no codex binary required (mocked)
+    - `codex_auth_resolved` telemetry event fires with correct `strategy_used` value
+  - **Complexity:** high
+
+- [ ] **T002 — Implement subprocess invocation in driver.py**
+  - **Files:** runtime/drivers/codex/driver.py
+  - **Depends:** T001
+  - **Acceptance:**
+    - `driver.py` implements `CodexDriver` satisfying the C1 `HostDriver` interface (depends on C1 defining that interface; use a stub `HostDriver` protocol if C1 is not yet available)
+    - Invocation: `codex exec -` with `--output-format stream-json`; prompt piped to stdin
+    - Auth env additions from `auth.resolve_auth()` are injected into subprocess env; parent env is passed through with ANTHROPIC_API_KEY and CLAUDE_API_KEY explicitly excluded unless the provider config explicitly opts in
+    - `session_timeout_s` from provider config is enforced; subprocess is killed and reaped on timeout
+    - `codex_driver_invoke` telemetry fires on launch; `codex_driver_complete` fires on clean exit
+    - Unit tests use `subprocess.Popen` mock; no real codex invocation required
+  - **Complexity:** high
+
+- [ ] **T003 — Implement stream-json JSONL parser with full error handling**
+  - **Files:** runtime/drivers/codex/stream.py, tests/drivers/test_codex_driver.py
+  - **Depends:** T002
+  - **Acceptance:**
+    - `stream.py` exports `parse_stream(proc: subprocess.Popen) -> Iterator[Frame]` where `Frame` is a typed dataclass with at minimum `type`, `content`, `is_error` fields
+    - Parser handles: normal completion frames, `is_error: true` frames (raises `CodexExecutionError`), empty/hanging stdout (raises `CodexTimeoutError` after timeout), non-zero exit code (raises `CodexCrashError` with exit code), malformed JSONL lines (logs warning, continues)
+    - Unknown JSON keys in frames are preserved in a `raw` dict field (lenient parsing)
+    - `codex_driver_error` telemetry fires with correct `error_kind` on each abnormal path
+    - Unit tests cover all five abnormal paths using mocked subprocess stdout
+    - Format-pairing pitfall is documented in a module-level comment: `--output-format stream-json` must NOT be combined with `--json-schema` (silently omits structured_output)
+  - **Complexity:** high
+
+- [ ] **T004 — Probe tasks: session resumption detection and cross-env collision smoke test**
+  - **Files:** runtime/drivers/codex/probe.py, runtime/drivers/codex/probe_results.json, tests/drivers/test_codex_probe.py
+  - **Depends:** T003
+  - **Acceptance:**
+    - `probe.py` exports `run_probes(codex_path: str) -> ProbeResults` (a dataclass)
+    - Session-resumption probe: runs `codex exec --help` and parses help text for any flag matching `session`, `resume`, or `continue`; records `session_resume_flag: str | None` in ProbeResults
+    - Cross-env collision probe: launches a trivial `codex exec -` with both ANTHROPIC_API_KEY and OPENAI_API_KEY set in subprocess env; records whether exit code is 0 or non-zero and captures any warning lines from stderr; records `cross_env_collision_outcome: str` in ProbeResults
+    - ProbeResults are written to `runtime/drivers/codex/probe_results.json` (overwritten on each probe run)
+    - `codex_env_collision_detected` telemetry fires if ANTHROPIC_API_KEY was detected in parent env during probe
+    - All probe tests are decorated with `@pytest.mark.skipif(not shutil.which("codex"), reason="codex not on PATH")`
+    - If session-resume flag is not found, a WARNING is logged to stderr and the feature is marked unsupported in probe_results.json; no exception raised
+  - **Complexity:** high
+
+- [ ] **T005 — Implement MCP registration helper (codex mcp add)**
+  - **Files:** runtime/drivers/codex/mcp.py, tests/drivers/test_codex_driver.py
+  - **Depends:** T001
+  - **Acceptance:**
+    - `mcp.py` exports `ensure_mcp_registered(mcp_config_path: str, server_name: str, codex_path: str) -> bool` returning True if registration was performed, False if already registered
+    - Idempotency: checks `~/.codex/config.toml` (or the path from provider config) for existing `[mcp_servers.<server_name>]` entry before invoking `codex mcp add`
+    - Does NOT re-register on every driver invocation; registration is a one-time setup step called explicitly (e.g., from a setup command, not from the hot path)
+    - Subprocess error from `codex mcp add` raises `McpRegistrationError` with stderr captured
+    - Unit tests mock the subprocess and the config-file check; no real codex required
+  - **Complexity:** medium
+
+- [ ] **T006 — Wire CodexDriver into C1 HostDriver interface and emit full telemetry**
+  - **Files:** runtime/drivers/codex/driver.py, runtime/drivers/codex/__init__.py
+  - **Depends:** T002, T003, T005, C1-HostDriver-interface (external dependency)
+  - **Acceptance:**
+    - `CodexDriver` fully satisfies the C1 `HostDriver` abstract interface (no stub remaining)
+    - `runtime/drivers/codex/__init__.py` exports `CodexDriver` as the public entry point
+    - All five telemetry events (codex_driver_invoke, codex_driver_complete, codex_driver_error, codex_auth_resolved, codex_env_collision_detected) fire on the correct paths and reach the z-harness metrics.jsonl sink
+    - Driver is importable from `runtime.drivers.codex` with a single import
+    - If C1's interface is not yet available, this task is blocked and must be noted in progress log
+  - **Complexity:** medium
+
+- [ ] **T007 — Integration tests against real codex subprocess**
+  - **Files:** tests/drivers/test_codex_driver.py, tests/drivers/test_codex_probe.py
+  - **Depends:** T006, T004
+  - **Acceptance:**
+    - All integration tests decorated with `@pytest.mark.skipif(not shutil.which("codex"), reason="codex not on PATH")`
+    - At least one integration test invokes the full `CodexDriver.run(prompt)` against a real `codex exec -` subprocess with a trivial prompt ("say hello") and asserts a non-error Frame is returned
+    - Integration test for auth: verifies that ANTHROPIC_API_KEY is not present in the subprocess env when not opted in
+    - Integration test for timeout: verifies that a simulated hang (prompt that never completes) triggers CodexTimeoutError within session_timeout_s + 2s
+    - All unit tests still pass without codex on PATH (mock path remains intact)
+  - **Complexity:** high

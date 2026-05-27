@@ -1,0 +1,104 @@
+{
+  "concept": "config-design",
+  "last_updated": "2026-05-27",
+  "covers_spec": "none",
+  "source_file": [
+    "scripts/config.py",
+    "scripts/config.sh",
+    "docs/human/config.md"
+  ],
+  "confidence": "high",
+  "entry_points": [
+    {
+      "file": "scripts/config.py",
+      "line": 238,
+      "symbol": "load_config",
+      "kind": "fn",
+      "summary": "Build resolved config from all 4 layers; returns (values, sources) dicts"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 389,
+      "symbol": "cmd_export_env",
+      "kind": "fn",
+      "summary": "Print export lines for all user knobs; emit config_resolved event once per run"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 361,
+      "symbol": "cmd_get",
+      "kind": "fn",
+      "summary": "Resolve and print single dotted-key value; exits 3 on unknown key"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 403,
+      "symbol": "cmd_ensure_defaults",
+      "kind": "fn",
+      "summary": "Write global config with defaults + inline comments if absent; never overwrites"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 464,
+      "symbol": "cmd_explain",
+      "kind": "fn",
+      "summary": "Print effective value and source layer for one key"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 489,
+      "symbol": "cmd_should_notify",
+      "kind": "fn",
+      "summary": "Print yes|no for a given event kind; always exits 0; exits 2 on unknown event"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 40,
+      "symbol": "DEFAULTS",
+      "kind": "const",
+      "summary": "Built-in default values for all config keys (layer 1)"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 51,
+      "symbol": "VALIDATORS",
+      "kind": "const",
+      "summary": "Allowed enum sets per dotted-key; drives hard-fail on repo/env, soft-warn on global"
+    },
+    {
+      "file": "scripts/config.sh",
+      "line": 2,
+      "symbol": "config.sh",
+      "kind": "module",
+      "summary": "Thin bash wrapper: exec python3 scripts/config.py $@"
+    }
+  ],
+  "depends_on": [
+    "scripts"
+  ],
+  "consumed_by": [
+    "commands",
+    "skills"
+  ],
+  "invariants": [
+    "schema_version must equal 1 (else exit 2)",
+    "ensure-defaults never writes repo-local; only writes the global user path",
+    "should-notify always exits 0 on valid event kind (yes|no on stdout); exits 2 on unknown event",
+    "config_resolved event emitted at most once per $Z_HARNESS_RUN via O_EXCL temp-file de-dup",
+    "enum: notify.level in {off, approval_only, all}; docs.always_apply in {always, never}",
+    "transliteration rule: dotted.key -> Z_HARNESS_<SECTION>_<KEY> (uppercase, dot to underscore)",
+    "keys must match ^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$; hyphens or >2-level nesting exit 2",
+    "empty env vars are treated as missing (not as override)",
+    "unknown keys in TOML files are silently ignored for forward compatibility",
+    "global-layer enum violations: soft-warn + fall back to default; repo/env-layer violations: exit 2"
+  ],
+  "gotchas": [
+    "Global config validation is soft (warn + default fallback); repo/env config validation is hard (exit 2) — same bad value has different outcomes depending on which file it appears in",
+    "docs.always_apply=never only suppresses doc-fetcher in light flows (/z-do); heavy flows always dispatch doc-fetcher regardless",
+    "Z_HARNESS_REPO_CONFIG env var overrides git-root discovery entirely — exits 2 if path does not exist",
+    "ensure-defaults exits 4 (not 2) on I/O errors and when file exists but is empty or unparseable; it never silently overwrites",
+    "scripts/config.sh is only a 2-line exec wrapper — all logic lives in config.py",
+    "providers-registry is NOT a dependency; it was listed in the old compact schema in error"
+  ],
+  "memories": []
+}

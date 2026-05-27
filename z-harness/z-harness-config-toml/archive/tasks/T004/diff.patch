@@ -1,0 +1,45 @@
+diff --git a/docs/llm/INDEX.json b/docs/llm/INDEX.json
+index f1b9237..2680582 100644
+--- a/docs/llm/INDEX.json
++++ b/docs/llm/INDEX.json
+@@ -292,6 +292,15 @@
+         "commands/z-uplift.md",
+         "skills/z-uplift/SKILL.md"
+       ]
++    },
++    {
++      "slug": "config-design",
++      "source_file": ["scripts/config.py", "scripts/config.sh", "docs/human/config.md"],
++      "last_updated": "2026-05-27",
++      "confidence": "high",
++      "depends_on": ["log-event", "providers-registry"],
++      "consumed_by": ["commands", "skills"],
++      "summary": "Layered TOML config loader. Slice 1 = notify.level + docs.always_apply."
+     }
+   ]
+ }
+diff --git a/docs/llm/config-design.json b/docs/llm/config-design.json
+new file mode 100644
+index 0000000..2a15df4
+--- /dev/null
++++ b/docs/llm/config-design.json
+@@ -0,0 +1,19 @@
++{
++  "concept": "config-design",
++  "summary": "Layered TOML config loader. Built-in defaults → ~/.config/z-harness/config.toml → repo .z-harness/config.toml → env. Single Python helper scripts/config.py with subcommands get|export-env|ensure-defaults|explain|should-notify. Slice 1 ships notify.level and docs.always_apply.",
++  "invariants": [
++    "schema_version == 1 (else exit 2)",
++    "ensure-defaults never writes repo-local",
++    "should-notify exits 0 on valid event (prints yes|no on stdout); exits 2 on unknown event",
++    "config_resolved event emitted once per $Z_HARNESS_RUN",
++    "enum values: notify.level ∈ {off, approval_only, all}; docs.always_apply ∈ {always, never}",
++    "transliteration: dotted.key → Z_HARNESS_<SECTION>_<KEY>"
++  ],
++  "key_files": [
++    "scripts/config.py",
++    "scripts/config.sh",
++    "docs/human/config.md"
++  ],
++  "depends_on": ["log-event", "providers-registry"],
++  "consumed_by": ["commands", "skills"]
++}

@@ -27,7 +27,12 @@ $ARGUMENTS
    ' "$VERSION_BLOB" "<arguments>")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" do_run_start "$START_PAYLOAD"
    ```
-6. Notification policy: read `Z_HARNESS_NOTIFY` (default `approval_only`).
+6. **Config resolution:**
+   ```bash
+   export Z_HARNESS_RUN="$RUN"
+   eval "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" export-env)"
+   ```
+   See `docs/human/config.md` for available knobs (`notify.level`, `docs.always_apply`).
 
 ## Plan Route Check
 
@@ -53,7 +58,12 @@ If at any point you discover:
 - **Cross-module / cross-crate impact** OR **schema change**
 - User says "this might be bigger than I thought"
 
-→ Halt the current flow behind a route gate: write `$CURRENT_ARCHIVE_DIR/route-decision.md`, emit `plan_route_decision`, log the legacy `do_escalation` event as compatibility telemetry if this replaces an old escalation branch, push-notify, and ask the user to switch / continue if the hard threshold allows continuation / abandon. If the user chooses switch, stop after presenting the exact next command invocation; do not execute it.
+→ Halt the current flow behind a route gate: write `$CURRENT_ARCHIVE_DIR/route-decision.md`, emit `plan_route_decision`, log the legacy `do_escalation` event as compatibility telemetry if this replaces an old escalation branch, then notify and ask the user to switch / continue if the hard threshold allows continuation / abandon:
+```bash
+[ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event approval)" = yes ] && \
+  PushNotification("z-do: route decision reached — your input is needed to proceed.")
+```
+If the user chooses switch, stop after presenting the exact next command invocation; do not execute it.
 
 `route-decision.md` must include the recommended command, reason, deterministic signals, route chain, and resume context. Emit `plan_route_decision` with `from_command`, `to_command`, `route_class`, `reason_codes`, `signals`, `confidence`, `classifier_used`, `artifact_path`, `route_chain`, and `user_choice`.
 
@@ -64,13 +74,18 @@ Loop prevention: carry forward the latest route chain from any supplied or disco
 
 One paragraph in main thread: is the stated task actually the right problem? Could it be config, expected behavior, or symptom of something else? Is there a materially better path?
 
-If a concern surfaces → raise via `AskUserQuestion` before proceeding. Otherwise, write a single-sentence "premise accepted: <restated goal>" and continue.
+If a concern surfaces → notify and raise via `AskUserQuestion` before proceeding:
+```bash
+[ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event approval)" = yes ] && \
+  PushNotification("z-do: premise concern — your input is needed before continuing.")
+```
+Otherwise, write a single-sentence "premise accepted: <restated goal>" and continue.
 
 Save to `z-harness/adhoc/archive/$RUN/premise.md`.
 
 ## Phase 2 — Ground (doc-fetcher first)
 
-Per the global rule, if `docs/llm/INDEX.json` exists, dispatch `doc-fetcher` (Haiku) BEFORE any other reading:
+Per the global rule, if `docs/llm/INDEX.json` exists AND `$Z_HARNESS_DOCS_ALWAYS_APPLY` is `always` (the default), dispatch `doc-fetcher` (Haiku) BEFORE any other reading:
 
 ```
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
@@ -78,7 +93,9 @@ Per the global rule, if `docs/llm/INDEX.json` exists, dispatch `doc-fetcher` (Ha
       prompt="query: <one-sentence task>\nrepo_root: <abs path>\ndepth: standard")
 ```
 
-Use its return to constrain what files you read next. If `STATUS: no_docs` / `no_match` / `partial`, fall back to direct Read/Grep/Glob — do NOT spawn Explore in `/z-do` (too expensive for this command).
+If `$Z_HARNESS_DOCS_ALWAYS_APPLY` is `never`, skip doc-fetcher entirely and proceed directly to Read/Grep/Glob.
+
+Use doc-fetcher's return to constrain what files you read next. If `STATUS: no_docs` / `no_match` / `partial`, fall back to direct Read/Grep/Glob — do NOT spawn Explore in `/z-do` (too expensive for this command).
 
 Read at most 3-5 files from main thread to fill gaps.
 
@@ -105,7 +122,12 @@ Edit / Write the files. Apply the implementer self-check:
 4. No new public surface beyond what `approach.md` describes.
 5. No stale docstrings / comments left behind.
 
-If mid-implementation you discover scope growth → halt and `AskUserQuestion`:
+If mid-implementation you discover scope growth → notify and halt:
+```bash
+[ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event error)" = yes ] && \
+  PushNotification("z-do: scope growth detected mid-implementation — halted for your decision.")
+```
+Then `AskUserQuestion`:
 - "Switch to the recommended routed command"
 - "Continue in z-do — update approach.md" (only if no hard threshold forbids continuation)
 - "Abandon"
@@ -164,7 +186,11 @@ Apply the "one reason it might be wrong" check to each finding. If it raises a r
      "$(printf '{"status":"shipped","files_changed":%d,"review_cycles":%d,"consult_at_end":%s}' \
         "$N_FILES" "$CYCLES" "$DID_CONSULT")"
    ```
-2. Push-notify (if policy ≠ `off`): "z-do complete. <N> files changed; review passed."
+2. Push-notify on completion:
+   ```bash
+   [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end)" = yes ] && \
+     PushNotification("z-do complete. <N> files changed; review passed.")
+   ```
 3. Brief 2-3 sentence summary to user: what changed, what's next.
 4. If non-trivial friction surfaced during the run (auto-bail considered, doc_drift, retry on review), suggest: "Consider `/z-improve adhoc/$RUN` to retro this run."
 
@@ -177,7 +203,3 @@ Apply the "one reason it might be wrong" check to each finding. If it raises a r
 - **Never read `docs/llm/*.json` from main thread.**
 - **Always log to `z-harness/adhoc/archive/$RUN/`** — `/z-improve` reads this.
 - **No emojis.**
-
-### Git history-rewrite safety
-
-Before recommending any `git reset --hard HEAD~N`, `git commit --amend`, or interactive-rebase squash on a branch tracking an upstream: for each commit being rewritten, run `git branch -r --contains <sha>`. If the upstream ref appears, STOP — recommend rebase or new-commit instead, never silent rewrite. Force-push to main requires explicit per-incident user authorization with (i) list of overwritten commits and (ii) content-equivalence/superset demonstration.

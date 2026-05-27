@@ -1,0 +1,31 @@
+Calibration harness — epoch 1
+Archive root: /Users/zeke/dev/z-harness/z-harness
+n_runs=6, samples_per_run=3
+
+Found 3 run(s) to evaluate:
+  20260527T175422Z-fanout-escalate-primitive (slug=fanout-escalate-primitive)
+  20260527T170933Z-z-harness-config-toml (slug=z-harness-config-toml)
+  20260527T045853Z-postmortem-memory-nudge (slug=postmortem-memory-nudge)
+
+  20260527T175422Z-fanout-escalate-primitive: ground_truth=MEDIUM, classified=MEDIUM, votes=['MEDIUM', 'MEDIUM', 'MEDIUM'], match=True
+  20260527T170933Z-z-harness-config-toml: ground_truth=MEDIUM, classified=MEDIUM, votes=['MEDIUM', 'MEDIUM', 'MEDIUM'], match=True
+  20260527T045853Z-postmortem-memory-nudge: ground_truth=LIGHT, classified=MEDIUM, votes=['MEDIUM', 'MEDIUM', 'MEDIUM'], match=False
+
+
+=== Confusion Matrix (classified → ground truth) ===
+              LIGHT   MEDIUM    HEAVY
+  LIGHT           0        0        0
+  MEDIUM          1        2        0
+  HEAVY           0        0        0
+
+Total runs evaluated: 3
+Correct classifications: 2/3 (66.7%)
+Ground-truth distribution: LIGHT=33.3% MEDIUM=66.7% HEAVY=0.0%
+
+=== Tripwire Report ===
+  [ok]   Tripwire 1: pct_medium=66.7% (threshold: >= 70%)
+  [FIRE] Tripwire 2: pct_heavy=0.0% < 20% — probe is under-classifying HEAVY runs. Review escalation event detection or tasks_total threshold.
+  [manual] Tripwire 3 (synthesis quality): requires manual review of per-chunk reconciler output. Flag for human follow-up.
+  [manual] Tripwire 4 (semantic axis correctness): requires manual review of chosen axis vs expected axis per run. Flag for human follow-up.
+
+Emitted: /Users/zeke/dev/z-harness/scripts/calibration-epoch-1.json

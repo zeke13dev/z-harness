@@ -22,13 +22,34 @@ This command is **read-only**. Never edit the target. Fixes happen later via `/z
 
 Each promoted audit task must preserve the finding's source dimension, severity, evidence, files, recommendation, and verifiable acceptance criteria. Observations with no clear fix stay in `REPORT.md`. Structural or premise-level findings that exceed the audit auto-bail thresholds become `escalation.md` instead of task blocks. This command may use its own severity labels and filenames, but the artifact must remain task-shaped and consumable by `/z-implement-all`.
 
+## --scope-from flag handling (parsed BEFORE Setup)
+
+Parse `$ARGUMENTS` for `--scope-from <chunk-spec>` **immediately — before slug derivation, doc-fetcher, version stamp, or run_start logging**. This ordering ensures recursive sub-flows do not pollute the parent run's slug or events.
+
+**If `--scope-from` is present:**
+
+1. Extract `CHUNK_SPEC` (the value immediately following `--scope-from`).
+2. Set `SKIP_PHASE_0=true` immediately.
+3. Resolve the chunk:
+   - **Bare chunk ID** (e.g. `C1` — no `/` in the value): locate the parent run's SCOPE.json at `z-harness/<parent-slug>/archive/$Z_HARNESS_PARENT_RUN_ID/SCOPE.json`. The `$Z_HARNESS_PARENT_RUN_ID` env var is set by the HEAVY fan-out parent when spawning sub-flows. If `$Z_HARNESS_PARENT_RUN_ID` is unset, halt with `AskUserQuestion`: "Cannot resolve bare chunk ID `<id>` — no \$Z_HARNESS_PARENT_RUN_ID in environment. Pass a full path instead (e.g. `/abs/path/SCOPE.json#<id>`)."
+   - **Absolute path with fragment** (e.g. `/abs/path/SCOPE.json#C1`): split on `#` to yield `(scope_json_path, chunk_id)`. Use `scope_json_path` directly.
+4. Read the resolved SCOPE.json. Parse the `chunks` array. Find the chunk whose `id` matches the chunk ID.
+   - If no matching chunk: emit event `scope_from_chunk_not_found` and halt with `AskUserQuestion`: "Chunk `<id>` not found in SCOPE.json. Valid chunk ids: <list>."
+5. Set `SCOPE_HINT` to the matched chunk's `scope_hint` field.
+6. Log event: `scope_from_resolved` with payload `{"chunk_id": "<id>", "scope_hint": "<SCOPE_HINT>", "parent_scope_json": "<path>"}`.
+
+**Anti-sprawl invariant:** `SKIP_PHASE_0=true` alone enforces this. Sub-flows cannot recursively go HEAVY because Phase 0's HEAVY dispatch branch never executes when `SKIP_PHASE_0` is set.
+
+**If `--scope-from` is absent:** `SKIP_PHASE_0` is unset. Phase 0 (T009) will run if present; `SCOPE_HINT` is unset.
+
 ## Setup
 
-1. **Derive slug** — short kebab-case like `audit-<component>` (e.g. target `strategies/kxbtc15m_fade_extremes` → `audit-kxbtc15m`). Confirm via `AskUserQuestion` if non-obvious. Check `ls z-harness/` first for collisions.
-2. Export `Z_HARNESS_SLUG=<slug>-audit`.
-3. Pick run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>-audit`.
-4. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`.
-5. **Version stamp + log:**
+1. **Sanitize `$ARGUMENTS`** — strip the `--scope-from <chunk-spec>` token pair (if present) before using `$ARGUMENTS` for slug derivation, doc-fetcher dispatch, or target parsing. The sanitized value is used for all subsequent steps.
+2. **Derive slug** — short kebab-case like `audit-<component>` (e.g. target `strategies/kxbtc15m_fade_extremes` → `audit-kxbtc15m`). Confirm via `AskUserQuestion` if non-obvious. Check `ls z-harness/` first for collisions.
+3. Export `Z_HARNESS_SLUG=<slug>-audit`.
+4. Pick run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>-audit`.
+5. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`.
+6. **Version stamp + log:**
    ```bash
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
    START_PAYLOAD="$(python3 -c '
@@ -38,8 +59,8 @@ Each promoted audit task must preserve the finding's source dimension, severity,
    ' "$VERSION_BLOB" "<arguments>")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" audit_run_start "$START_PAYLOAD"
    ```
-6. Notification policy: read `Z_HARNESS_NOTIFY` (default `approval_only`).
-7. If `docs/llm/INDEX.json` exists → dispatch `doc-fetcher` (Haiku) to get the concept list overlapping the audit target. Do NOT read INDEX.json or per-concept JSONs from main thread.
+7. Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
+8. If `docs/llm/INDEX.json` exists → dispatch `doc-fetcher` (Haiku) to get the concept list overlapping the audit target. Do NOT read INDEX.json or per-concept JSONs from main thread.
    ```
    <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
          description="Doc context for audit <slug>",
@@ -48,6 +69,182 @@ Each promoted audit task must preserve the finding's source dimension, severity,
    The orchestrator captures the returned concept slugs and passes the corresponding `docs/llm/<slug>.json` paths to auditors as `relevant_docs` (the auditors then read them themselves — they're fresh-context already).
 
 `$BASE = $Z_HARNESS_PLAN_DIR/`.
+
+## Phase 0 — Scope probe
+
+**Check `SKIP_PHASE_0` first.** If `SKIP_PHASE_0=true` (set by `--scope-from` flag handling above), skip this entire section immediately and proceed to Phase 1. Do not dispatch scope-probe, do not write SCOPE files, do not log scope_probe_* events.
+
+If `SKIP_PHASE_0` is not set, execute the following:
+
+### Step 0.1 — Define axis taxonomy and dispatch scope-probe
+
+```
+AXIS_TAXONOMY=["per_dimension","per_component","per_risk_domain","per_workflow"]
+```
+
+Log event `scope_probe_start`:
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" scope_probe_start \
+  '{"axis_taxonomy":["per_dimension","per_component","per_risk_domain","per_workflow"]}'
+```
+
+Dispatch scope-probe:
+```
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+  subagent_type="scope-probe",
+  description="Scope probe for audit <slug>",
+  prompt="host_command: z-audit\ntopic: <sanitized $ARGUMENTS>\naxis_taxonomy: [\"per_dimension\",\"per_component\",\"per_risk_domain\",\"per_workflow\"]\nrepo_root: <abs path to repo root>\nrun_id: <$RUN>"
+)
+```
+
+### Step 0.2 — Parse the hybrid return
+
+Read the scope-probe return line-by-line. Collect `KEY: VALUE` lines that appear **before** the first ` ```json ` fence marker. Any line-prefix headers found inside the fence are malformed (parser error).
+
+Extract line-prefix fields:
+- `STATUS` — one of `classified`, `refused`, `bad_input`
+- `MODE` — one of `LIGHT`, `MEDIUM`, `HEAVY`
+- `AXIS` — axis name from `AXIS_TAXONOMY` or `none`
+- `CONFIDENCE` — `high`, `medium`, or `low`
+- `REASON_CODES` — comma-separated codes
+- `REASON` — one-line description
+
+Extract the fenced JSON block using: ` ```json\n(.*?)``` ` (same pattern as review-agent). Parse `chunks`, `seams_counted`, `candidates_walked` from the JSON.
+
+**On any parse failure** (missing line-prefix headers, no fenced block, malformed JSON, or prefix-inside-fence):
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" scope_probe_malformed \
+  '{"reason":"<parse failure description>","raw_truncated":"<first 200 chars of raw response>"}'
+```
+Treat as `STATUS: refused`, `MODE: MEDIUM`, `chunks: []`. Proceed to Step 0.3 (refused branch). Never retry on parse failure.
+
+**On `STATUS: bad_input`:**
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" scope_probe_malformed \
+  '{"reason":"bad_input from scope-probe","raw_truncated":"<first 200 chars of raw response>"}'
+```
+Treat as `STATUS: refused`, `MODE: MEDIUM`, `chunks: []`. Proceed to Step 0.3 (refused branch).
+
+**On `STATUS: refused`:**
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" scope_probe_classified \
+  '{"status":"refused","mode":"MEDIUM","axis":"none","confidence":"<CONFIDENCE>","reason_codes":"<REASON_CODES>","reason":"<REASON>"}'
+```
+`MODE=MEDIUM`, `chunks=[]`. Proceed to Step 0.3 (refused/MEDIUM branch).
+
+**On `STATUS: classified`:**
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" scope_probe_classified \
+  '{"status":"classified","mode":"<MODE>","axis":"<AXIS>","confidence":"<CONFIDENCE>","reason_codes":"<REASON_CODES>","reason":"<REASON>","seams_counted":<seams_counted>,"candidates_walked":<candidates_walked>}'
+```
+
+### Step 0.3 — Write SCOPE.json (archive-first, then live)
+
+Assemble the SCOPE.json payload:
+```python
+SCOPE_JSON = {
+  "host_command":        "z-audit",
+  "slug":                "<slug>",
+  "last_run_id":         "<$RUN>",
+  "last_updated":        "<ISO 8601 UTC timestamp now>",
+  "mode":                "<MODE>",
+  "axis":                "<AXIS>",
+  "confidence":          "<CONFIDENCE>",
+  "reason_codes":        [<parsed from REASON_CODES comma-separated>],
+  "chunks":              <chunks array from JSON, or []>,
+  "seams_counted":       <seams_counted or 0>,
+  "candidates_walked":   <candidates_walked or 0>,
+  "scope_probe_version": "1"
+}
+# For LIGHT mode only: include dimensions_hint (derived from topic; see Step 0.4)
+```
+
+**Write archive copy first (atomic tmp+rename):**
+```bash
+ARCHIVE_SCOPE="$Z_HARNESS_PLAN_DIR/archive/$RUN/SCOPE.json"
+ARCHIVE_TMP="${ARCHIVE_SCOPE}.tmp"
+python3 -c "import json,sys; print(json.dumps(json.loads(sys.argv[1]),indent=2))" "$SCOPE_JSON_STR" > "$ARCHIVE_TMP" \
+  && mv "$ARCHIVE_TMP" "$ARCHIVE_SCOPE"
+```
+
+If the archive write fails (any step errors), abort Phase 0 entirely. Do not write the live file. Log event:
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" scope_probe_classified \
+  '{"status":"archive_write_failed","mode":"MEDIUM","note":"proceeding as MEDIUM"}'
+```
+Host proceeds as MEDIUM. Skip to Phase 1.
+
+**Write live file (overwrite):**
+```bash
+LIVE_SCOPE="$Z_HARNESS_PLAN_DIR/SCOPE-audit.json"
+python3 -c "import json,sys; print(json.dumps(json.loads(sys.argv[1]),indent=2))" "$SCOPE_JSON_STR" > "$LIVE_SCOPE"
+```
+
+### Step 0.4 — Branch on MODE
+
+**LIGHT branch** (`MODE: LIGHT`):
+
+Derive `dimensions_hint` from the topic. Inspect the topic (sanitized `$ARGUMENTS`) and the seam evidence: identify which of `correctness`, `perf`, `cleanliness`, `design` are most relevant to the narrow component described. Typically: a single-file target with no seams narrows to 1–2 dimensions. Add `dimensions_hint` to the SCOPE.json payload and re-write both archive and live files with this field included.
+
+SCOPE.json now has `"dimensions_hint": ["<dim1>", ...]`. Phase 1 will consume this.
+
+**MEDIUM branch** (`MODE: MEDIUM`, including refused/fallback):
+
+SCOPE.json populated without `dimensions_hint`. Phase 1 proceeds with interactive dimension selection. No further action in Phase 0.
+
+**HEAVY branch** (`MODE: HEAVY`):
+
+Log event `scope_fanout_dispatched`:
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" scope_fanout_dispatched \
+  "$(python3 -c "import json,sys; chunks=json.loads(sys.argv[1]); print(json.dumps({'chunk_count':len(chunks),'chunks':[c['id'] for c in chunks],'axis':sys.argv[2]}))" "$CHUNKS_JSON" "$AXIS")"
+```
+
+Dispatch N parallel `/z-audit` sub-flows (one per chunk in `chunks`), all in a single message:
+
+```
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+  subagent_type="orchestrator",
+  description="z-audit sub-flow chunk <chunk-id>",
+  prompt="Run /z-audit <sanitized $ARGUMENTS> --scope-from <abs path to ARCHIVE_SCOPE>#<chunk-id>\n\nZ_HARNESS_PARENT_RUN_ID: <$RUN>\n\nThis is a HEAVY fan-out sub-flow spawned by the parent z-audit run <$RUN>. The parent run ID is <$RUN> — include it in the sub-flow environment as $Z_HARNESS_PARENT_RUN_ID so bare chunk ID resolution works correctly."
+)
+```
+
+Wait for all N sub-flows to return. Collect their returns.
+
+After all sub-flows complete, dispatch `scope-reconciler-audit`:
+```
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+  subagent_type="scope-reconciler-audit",
+  description="Reconcile HEAVY fanout for audit <slug>",
+  prompt="host_run_id: <$RUN>\nchunks: <JSON array of {id, findings_path} for each completed sub-flow — findings_path is the per-chunk findings file produced by that sub-flow>\ntarget_slug: <slug>\naxis: <AXIS>\noutput_dir: <abs path to $Z_HARNESS_PLAN_DIR>"
+)
+```
+
+Parse reconciler return. The reconciler's `REPORT_CONTENT:` field contains the full REPORT.md text. Write it:
+```bash
+python3 -c "import sys; open(sys.argv[1],'w').write(sys.argv[2])" \
+  "$Z_HARNESS_PLAN_DIR/REPORT.md" "<REPORT_CONTENT from reconciler>"
+```
+
+Write each chunk artifact per reconciler's `CHUNK_ARTIFACTS:` list:
+- For entries with `source`: copy the source file to `dest`.
+- For entries with `content`: write the content string to `dest`.
+
+Log event `scope_fanout_reconciled`:
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" scope_fanout_reconciled \
+  "$(python3 -c "import json,sys; r=json.loads(sys.argv[1]); print(json.dumps({'unified_verdict':r['UNIFIED_VERDICT'],'chunks_total':r['COUNTS']['chunks_total'],'chunks_failed':r['COUNTS']['chunks_failed'],'findings_after_dedup':r['COUNTS']['findings_after_dedup']}))" "$RECONCILER_RETURN_JSON")"
+```
+
+**After HEAVY reconciliation: skip Phase 2 (standard auditor dispatch) — the per-chunk sub-flows have already performed auditing. Proceed directly to Phase 3 (merge findings into REPORT.md is already done by reconciler), then Phase 4 (Bundled cross-LLM consult), Phase 5 (Promote to TASKS.md), etc.**
+
+**HEAVY reconciler failure fallback:** If `scope-reconciler-audit` returns `STATUS: unable_to_complete`:
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" scope_fanout_reconciled \
+  '{"status":"reconciler_failed","fallback":"concatenated_chunks"}'
+```
+Write a `REPORT.md` with `## Reconciliation failed — raw chunks below` as the header, then concatenate each chunk's findings file verbatim under `## Chunk: <chunk-id>` headings. Continue to Phase 5.
 
 ## Auto-bail thresholds (check after Phase 4)
 
@@ -60,13 +257,23 @@ If the merged findings count exceeds:
 
 ## Phase 1 — Pre-flight scoping
 
+If `SCOPE_HINT` is set (from `--scope-from`), use `SCOPE_HINT` as the resolved target — do not re-derive the target from `$ARGUMENTS`. Skip the target confirmation step.
+
 If `$ARGUMENTS` supplied a target + the user already named dimensions in prose, skip ahead. Otherwise use `AskUserQuestion` to collect:
 
 1. **Dimensions** — multi-select (≥1 required):
+
+   **Before asking the user**, check `$Z_HARNESS_PLAN_DIR/SCOPE-audit.json` (the live SCOPE file written by Phase 0). If it exists for this run (`last_run_id` matches `$RUN`) AND `mode` is `LIGHT` AND `dimensions_hint` is a non-empty array:
+   - Auto-confirm the `dimensions_hint` list. Do NOT ask the user which dimensions to audit. Proceed as if the user selected those dimensions.
+   - Inform the user: "Phase 0 scope probe suggested dimensions: <dimensions_hint list>. Proceeding with those."
+
+   If `SCOPE-audit.json` does not exist, `last_run_id` does not match, `mode` is not `LIGHT`, or `dimensions_hint` is absent/empty — ask the user interactively:
    - `correctness` — bugs, off-by-ones, math, look-ahead, polarity, invariants
    - `perf` — slowdowns, allocations, blocking IO, redundant work
    - `cleanliness` — duplication, dead code, layering, config sprawl
    - `design` — assumptions still sound? algorithm choice still right? module boundaries earning their weight?
+
+   **No double-scoping:** Phase 1 must not re-derive dimensions from scratch when SCOPE-audit.json provides `dimensions_hint`. Phase 0 narrows; Phase 1 confirms and proceeds.
 
 2. **Rubric file (optional)** — if the repo has rubric files under `.claude/audit-rubrics/`, present each as an option. The rubric is a domain-specific checklist that supplements (or replaces) the generic dimension checklist. Discovery:
    ```bash

@@ -1,0 +1,2 @@
+{"ts":"2026-05-27T17:56:53Z","run":"20260527T175653Z-z-harness-config-toml-audit-plan","kind":"plan_audit_start","slug":"z-harness-config-toml"}
+{"ts":"2026-05-27T18:02:42Z","run":"20260527T175653Z-z-harness-config-toml-audit-plan","kind":"plan_audit_end","status":"complete","findings":15,"blockers":2,"majors":7}

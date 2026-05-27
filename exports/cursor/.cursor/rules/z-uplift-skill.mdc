@@ -1,5 +1,5 @@
 ---
-description: "Bulk codebase quality uplift. Triggers on phrases like \"bulk codebase quality\", \"uplift the codebase\", \"audit the whole repo\", \"review every component\", \"quality pass across the whole project\", \"codebase-wide audit\". Decomposes the repo into components, runs a repo-wide cross-cutting pass via parallel consultants, dispatches per-component audits, and produces per-component TASKS.md files consumable by /z-implement-all. Requires STYLE.md (run /z-style-init first, or pass --no-style to skip). Resumable: re-invoke to continue from MANIFEST state."
+description: "Bulk codebase quality uplift. Triggers on \"uplift the codebase\", \"audit the whole repo\", \"review every component\", \"quality pass\". Decomposes repo into components, runs cross-cutting audit, dispatches per-component reviews, and outputs TASKS.md."
 alwaysApply: false
 ---
 

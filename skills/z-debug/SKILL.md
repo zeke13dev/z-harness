@@ -546,12 +546,12 @@ Push-notify: "Post-mortem ready: `$Z_HARNESS_PLAN_DIR/DEBUG.md` Post-mortem sect
       ```bash
       if [[ "$STATUS_LINE" == STATUS:\ skipped* ]]; then
         # Helper already emitted the memory_review_terminal event.
-        # For state: skipped_broken_context → push-notify if Z_HARNESS_NOTIFY != off, deduped:
+        # For state: skipped_broken_context → push-notify if Z_HARNESS_NOTIFY_LEVEL != off, deduped:
         SKIP_REASON="${STATUS_LINE#STATUS: skipped }"
         if [[ "$SKIP_REASON" == tags_missing || "$SKIP_REASON" == no_plan_dir || "$SKIP_REASON" == missing_args ]]; then
           DEDUP_FILE="$Z_HARNESS_PLAN_DIR/.notify-dedup-session"
           DEDUP_KEY="${Z_HARNESS_SLUG:-unknown}:${SKIP_REASON}"
-          if [[ "${Z_HARNESS_NOTIFY:-approval_only}" != "off" ]] && ! grep -qxF "$DEDUP_KEY" "$DEDUP_FILE" 2>/dev/null; then
+          if [[ "${Z_HARNESS_NOTIFY_LEVEL:-approval_only}" != "off" ]] && ! grep -qxF "$DEDUP_KEY" "$DEDUP_FILE" 2>/dev/null; then
             PushNotification("Memory review skipped on \`${Z_HARNESS_SLUG:-unknown}\`: \`${SKIP_REASON}\`. Fix to re-enable memory candidates.")
             printf '%s\n' "$DEDUP_KEY" >> "$DEDUP_FILE"
           fi

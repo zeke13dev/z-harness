@@ -1,0 +1,4 @@
+{"ts":"2026-05-27T16:57:54Z","run":"20260527T165738Z-z-harness-config-toml","kind":"brainstorm_run_start","z_harness_version":"c5fa111","z_harness_dirty":true,"z_harness_branch":"main","topic":"Add a user-facing TOML config to the z-harness repo + slim the README to a human-only quickstart"}
+{"ts":"2026-05-27T16:59:37Z","run":"20260527T165738Z-z-harness-config-toml","kind":"phase_end","phase":1,"name":"scaffolding","wall_ms":45000,"user_wait_ms":0}
+{"ts":"2026-05-27T16:59:53Z","run":"20260527T165738Z-z-harness-config-toml","kind":"phase_end","phase":2,"name":"ideator-dispatch-start","wall_ms":0,"user_wait_ms":0}
+{"ts":"2026-05-27T17:04:02Z","run":"20260527T165738Z-z-harness-config-toml","kind":"phase_end","phase":3,"name":"synthesis","wall_ms":90000,"user_wait_ms":0}

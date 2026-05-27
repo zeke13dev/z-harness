@@ -11,3 +11,8 @@
 {"ts":"2026-05-25T07:07:00Z","run":"orchestration","kind":"run_end","slug":"compaction-cadence","done":9,"skipped":1,"halted":0}
 {"ts":"2026-05-26T05:01:06Z","run":"orchestration","kind":"compaction_pause","trigger":"task_count","tasks_since_pause":5,"wall_minutes_since_pause":0,"pending_remaining":5}
 {"ts":"2026-05-26T05:14:57Z","run":"orchestration","kind":"run_start","slug":"tiered-quality-uplift","resume":true,"pending":5}
+{"ts":"2026-05-27T18:56:31Z","run":"orchestration","kind":"run_end","status":"halted_for_amendment","tasks_done":5,"tasks_deferred":3,"tasks_pending":7}
+{"ts":"2026-05-27T19:06:13Z","run":"20260527T190613Z-impl-fanout-escalate-primitive-resume","kind":"run_start","resume":true,"after_amend":true}
+{"ts":"2026-05-27T19:17:40Z","run":"orchestration","kind":"run_end","status":"halted","tasks_done":7,"tasks_pending":9,"reason":"meta_defect_requires_user_decision"}
+{"ts":"2026-05-27T19:19:36Z","run":"20260527T191936Z-impl-batch4","kind":"run_start","batch":4}
+{"ts":"2026-05-27T19:53:29Z","run":"orchestration","kind":"run_end","status":"complete","tasks_done":16,"tasks_pending":0}

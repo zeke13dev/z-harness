@@ -54,6 +54,18 @@ MANIFEST states:
 - `[x] done` — terminal; implementation complete
 - `[s] skipped` — terminal; user-skipped at AskUser gate
 
+## Notification policy
+
+Push-notification behavior throughout `/z-uplift` is governed by the `notify.level` config key (TOML key), which resolves to the `Z_HARNESS_NOTIFY_LEVEL` environment variable. There is no standalone `Z_HARNESS_NOTIFY` variable. See [docs/human/config.md](docs/human/config.md) for the full config reference, file locations, and the CLI (`scripts/config.sh get notify.level`).
+
+| `notify.level` value | Behavior |
+|----------------------|----------|
+| `off` | All push-notifications silenced |
+| `approval_only` (default) | Notifies on `approval` and `error` events only |
+| `all` | Notifies on every `approval`, `phase_end`, and `error` event |
+
+`/z-uplift` emits push-notifications at: decomposition completion (Phase 1 Step 5), review gate (Phase 4), and run finalization (Phase 6). These fire only when `notify.level` permits. Setup Step 4 reads this value via `eval "$(scripts/config.sh export-env)"` before any notifications are attempted.
+
 ## Edge cases / gotchas
 
 - **Bail thresholds.** Auto-bail fires when a single component has >30 total audit findings OR >10 CRIT-HIGH findings. The CRIT_HIGH parser is structural: it recognises `### [CRITICAL]` / `### [HIGH]` headers, inline bullet tags (`- F-NNN [CRITICAL]`), and `Severity: CRITICAL` key-value fields. Bailed components are excluded from the implement queue and are not retried unless `--retry-bailed` is explicitly passed. When a component bails, `/z-uplift` runs `git grep` to surface potential dependents — but only when `OTHER_COMP_PATHS` is non-empty (guard added to prevent `git grep` receiving no path arguments).
@@ -67,6 +79,7 @@ MANIFEST states:
 - **Atomic MANIFEST writes.** All MANIFEST mutations use `os.replace(tmp, path)` (write to `.tmp` then rename) to prevent partial-write corruption on interrupt.
 - **Phase telemetry.** Every phase records `T0` at entry and emits `phase_end` with `wall_ms` and `user_wait_ms` at exit. User wait time is tracked via `user_wait_start` / `user_wait_end` event pairs bracketing each `AskUserQuestion` call.
 - **Doc-staleness gate.** Setup Step 5 checks `docs/llm/INDEX.json` staleness across all concepts before Phase 0. If more than 20% are stale (configurable via `$Z_HARNESS_DOC_STALENESS_THRESHOLD`), the user is prompted to switch to `/z-maintain-docs`, continue with stale docs, or abandon. The gate does NOT auto-invoke `/z-maintain-docs`.
+- **Notification config var.** The correct environment variable for notification control is `Z_HARNESS_NOTIFY_LEVEL` (maps to `notify.level` in TOML). There is no standalone `Z_HARNESS_NOTIFY` variable. Setting `Z_HARNESS_NOTIFY` has no effect.
 
 ## Examples
 

@@ -9,7 +9,10 @@
     "scripts/regenerate-memories-flat.py",
     "scripts/remote-sandbox-sync.sh",
     "scripts/run-memory-review.sh",
-    "scripts/version.sh"
+    "scripts/version.sh",
+    "scripts/config.py",
+    "scripts/config.sh",
+    "scripts/test_config.py"
   ],
   "confidence": "high",
   "entry_points": [
@@ -17,13 +20,16 @@
     {"file": "scripts/log-phase.sh", "line": 1, "symbol": "log-phase.sh", "kind": "module", "summary": "Sugar over log-event.sh; start/end/wrap modes emit <phase>_start/_end with wall_ms."},
     {"file": "scripts/regenerate-memories-flat.py", "line": 1, "symbol": "regenerate-memories-flat.py", "kind": "module", "summary": "Scans docs/llm/*.json, collects memories[], writes MEMORIES-FLAT.md atomically."},
     {"file": "scripts/version.sh", "line": 1, "symbol": "version.sh", "kind": "module", "summary": "Emits JSON blob with plugin git SHA, dirty flag, branch, optional tag."},
-    {"file": "scripts/run-memory-review.sh", "line": 1, "symbol": "run-memory-review.sh", "kind": "module", "summary": "Gate script for memory-review agent; <RUN> <parent_command>; 5-line stdout contract; single memory_review_terminal event on skip."},
-    {"file": "scripts/extract-dismissals.py", "line": 480, "symbol": "main", "kind": "fn", "summary": "CLI: extracts dismissed MR-review finding signatures from consecutive archive run pairs; outputs {signatures, n_runs_scanned}."},
+    {"file": "scripts/run-memory-review.sh", "line": 1, "symbol": "run-memory-review.sh", "kind": "module", "summary": "Gate script for memory-review agent; <RUN> <parent_command>; 4-state terminal taxonomy; 5-line stdout contract on ready."},
+    {"file": "scripts/extract-dismissals.py", "line": 480, "symbol": "main", "kind": "fn", "summary": "CLI: extracts dismissed finding signatures from consecutive archive run pairs; --global and --filename flags; outputs {signatures,n_runs_scanned}."},
     {"file": "scripts/extract-dismissals.py", "line": 384, "symbol": "extract_dismissals_from_runs", "kind": "fn", "summary": "Pairwise algorithm: R_i snapshot vs R_{i+1}.previous-* user-edited copy to find dismissed findings."},
-    {"file": "scripts/remote-sandbox-sync.sh", "line": 1, "symbol": "remote-sandbox-sync.sh", "kind": "module", "summary": "Rsync local tree to ~/dev/qt-bot-sandbox/<slug>/<task-id>/ on remote host; invoked by remote-runner agent."}
+    {"file": "scripts/remote-sandbox-sync.sh", "line": 1, "symbol": "remote-sandbox-sync.sh", "kind": "module", "summary": "Rsync local tree to ~/dev/qt-bot-sandbox/<slug>/<task-id>/ on remote host; invoked by remote-runner agent."},
+    {"file": "scripts/config.py", "line": 1, "symbol": "config.py", "kind": "module", "summary": "Layered TOML config loader (slice 1: notify.level, docs.always_apply); deep docs in config-design concept."},
+    {"file": "scripts/config.sh", "line": 1, "symbol": "config.sh", "kind": "module", "summary": "Thin shell wrapper: exec python3 scripts/config.py \"$@\"; deep docs in config-design concept."},
+    {"file": "scripts/test_config.py", "line": 1, "symbol": "test_config.py", "kind": "module", "summary": "End-to-end smoke tests for config.py using hermetic XDG_CONFIG_HOME temp dirs; deep docs in config-design concept."}
   ],
   "depends_on": [],
-  "consumed_by": ["agents", "commands", "skills", "review-agent", "remote-runner"],
+  "consumed_by": ["agents", "commands", "skills", "review-agent", "remote-runner", "config-design"],
   "invariants": [
     "All scripts require python3 for JSON handling, timing fallbacks, and document generation.",
     "All scripts resolve the repo root via git rev-parse or pwd fallback.",
@@ -33,11 +39,14 @@
     "run-memory-review.sh always exits 0; skip conditions are communicated via STATUS: line on stdout.",
     "run-memory-review.sh accepts exactly two positional args: <RUN> <parent_command>.",
     "run-memory-review.sh stdout line 1 is always STATUS: ready | STATUS: skipped <reason>; lines 2-4 are diff, SPEC (or empty), TAGS paths when ready; line 5 is DEBUG.md path when parent_command is debug.",
-    "run-memory-review.sh emits exactly one memory_review_terminal event on all skip paths; orchestrator owns it for non-skip paths.",
-    "extract-dismissals.py outputs JSON {signatures, n_runs_scanned} to stdout; exit 0 even when no dismissals found."
+    "run-memory-review.sh emits exactly one memory_review_terminal event on all skip paths using a 4-state taxonomy: skipped_broken_context, not_applicable, ready (orchestrator-owned), dispatched (orchestrator-owned).",
+    "extract-dismissals.py outputs JSON {signatures, n_runs_scanned} to stdout; exit 0 even when no dismissals found.",
+    "extract-dismissals.py --global applies the pairwise algorithm within each slug independently, not across slugs.",
+    "The env var for the plan base dir is Z_HARNESS_PLAN_DIR (singular, not PLANS_DIR)."
   ],
   "gotchas": [
-    "run-memory-review.sh parent_command=debug adds a third skip condition: STATUS: skipped debug_md_missing if DEBUG.md is absent or unreadable.",
+    "run-memory-review.sh 4-state terminal taxonomy: skipped_broken_context (missing_args, no_plan_dir, tags_missing), not_applicable (empty_diff, all_tasks_skipped, debug_md_missing), ready and dispatched are orchestrator-owned.",
+    "run-memory-review.sh parent_command=debug adds a third skip condition: STATUS: skipped debug_md_missing if DEBUG.md is absent or unreadable; emits state not_applicable.",
     "run-memory-review.sh _build_terminal_payload has a pure-bash JSON fallback for environments without python3.",
     "macOS BSD date lacks %3N support; log-phase.sh falls back to python3 time.time()*1000.",
     "log-event.sh silently wraps non-JSON payloads as {\"raw\": ...} instead of failing.",
@@ -45,7 +54,9 @@
     "run-memory-review.sh disables pipefail around git diff | head -n 5000 to tolerate SIGPIPE.",
     "version.sh degrades gracefully if plugin root is not a git repo, returning non-git sentinel values.",
     "extract-dismissals.py drops findings lacking a title field; does NOT fall back to T-MR-NNN ids (renumbered each run).",
-    "remote-sandbox-sync.sh warns but does not fail when no .z-harness-rsync-exclude is found."
+    "extract-dismissals.py --filename allows targeting PLAN_STYLE_AUDIT.md instead of the default MR-REVIEW.md.",
+    "remote-sandbox-sync.sh warns but does not fail when no .z-harness-rsync-exclude is found.",
+    "config.py, config.sh, and test_config.py are cross-referenced here; invariants and deep gotchas live in the config-design concept."
   ],
   "memories": []
 }

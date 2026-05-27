@@ -1,0 +1,7 @@
+{"ts":"2026-05-27T16:51:22Z","run":"20260527T165106Z-fanout-escalate-primitive","kind":"brainstorm_run_start","z_harness_version":"c5fa111","z_harness_dirty":true,"z_harness_branch":"main","topic":"Extract recurring breakup+auto-escalate pattern across z-plan-light/z-plan/z-plan-split and z-audit/z-review-all into a single reusable primitive"}
+{"ts":"2026-05-27T16:53:03Z","run":"20260527T165106Z-fanout-escalate-primitive","kind":"phase_end","raw":"{\"phase\":1,\"name\":\"scaffolding\",\"wall_ms\":17799007823N,\"user_wait_ms\":0}"}
+{"ts":"2026-05-27T16:54:09Z","run":"20260527T165106Z-fanout-escalate-primitive","kind":"consult_start","role":"consultant_primary","mode":"brainstorm","provider":"gemini"}
+{"ts":"2026-05-27T16:54:17Z","run":"20260527T165106Z-fanout-escalate-primitive","kind":"consult_start","role":"consultant_secondary","mode":"brainstorm","provider":"codex"}
+{"ts":"2026-05-27T16:55:36Z","run":"20260527T165106Z-fanout-escalate-primitive","kind":"consult","role":"consultant_primary","mode":"brainstorm","provider":"gemini","status":"ok"}
+{"ts":"2026-05-27T16:55:37Z","run":"20260527T165106Z-fanout-escalate-primitive","kind":"consult","role":"consultant_secondary","mode":"brainstorm","provider":"codex","status":"ok"}
+{"ts":"2026-05-27T16:57:26Z","run":"20260527T165106Z-fanout-escalate-primitive","kind":"phase_end","phase":3,"name":"synthesis","wall_ms":0,"user_wait_ms":0}

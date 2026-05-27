@@ -1,0 +1,1119 @@
+diff --git a/README.md b/README.md
+index 0c33fc9..888751d 100644
+--- a/README.md
++++ b/README.md
+@@ -1,109 +1,6 @@
+ # z-harness
+ 
+-A Claude Code plugin that wraps planning and implementation in a rigorous, cross-LLM-reviewed pipeline.
+-
+-## What it does
+-
+-Every command writes its artifacts under `z-harness/<slug>/`, with run-frozen archives in `z-harness/<slug>/archive/<run-id>/` and aggregated telemetry in `z-harness/metrics.jsonl`.
+-
+-### Pre-planning (optional; feed into `/z-plan`)
+-
+-- **`/z-brainstorm <topic>`** — Cheap parallel idea generation across three vendor-diverse ideators (Claude Sonnet + Codex + Gemini). Produces `BRAINSTORM.md` in `z-harness/<slug>/`. Cost target: ≤200K tokens. Use this when the framing or approach for a problem is still open and you want divergent perspectives before locking in a plan.
+-- **`/z-research <question>`** — Heavier terrain mapping via parallel Explores + cross-LLM critique. Produces `RESEARCH.md` in `z-harness/<slug>/`. Cost target: ≤2M tokens. Use this when you need concrete file:line evidence about an existing codebase or design space before deciding what to build.
+-
+-**Typical chains:**
+-
+-- Murky problem: `/z-research → /z-brainstorm → /z-plan` — research terrain first, generate framed approaches, then plan.
+-- Lighter case: `/z-brainstorm → /z-plan` — skip research when the codebase is already well understood.
+-- Standard: `/z-plan` alone — when the problem and approach are already clear.
+-
+-`/z-plan` Setup step 10 automatically detects `BRAINSTORM.md` and `RESEARCH.md` in the slug directory and incorporates them into Phase 0 (premise check) and Phase 1 (exploration). For `RESEARCH.md`, a freshness check runs against every cited `file:line` reference; stale citations prompt a warning before proceeding. If `RESEARCH.md` is non-stale and covers the task's likely-touched files, doc-fetcher and Explore become optional in Phase 1.
+-
+-### Planning
+-
+-- **`/z-plan <task>`** — Rigorous pipeline: premise check → exploration (with `docs/llm/INDEX.json` if present, plus a freshness gate that defers to `/z-maintain-docs` when docs are stale) → enumerate decisions → user-gated bundled Gemini+Codex consult → SPEC.md / PLAN.md / TASKS.md.
+-- **`/z-plan-light <fix>`** — Fast path for 1-5 file fixes; auto-bails to `/z-plan` if scope grows. Single `FIX.md` artifact, inline implementation, reviewer safety gate kept.
+-- **`/z-plan-split <topic>`** — Pre-emptive scope splitter for sprawling topics that would otherwise yield a ≥40-task `/z-plan` run across natural seams. Proposes 2-6 narrow clusters, dispatches one `cluster-planner` subagent per cluster in parallel, then reconciles file-path overlaps into `SHARED-CONCERNS.md` + `MANIFEST.md` under `z-harness/<root-slug>/`. One-level recursion only; no production code. Cost target: cheaper than a single mega-`/z-plan` only when the user genuinely needed N narrow plans — otherwise more expensive (opt-in, do not use as a default).
+-
+-  Typical chain for a murky multi-component problem: `/z-research → /z-brainstorm → /z-plan-split → /z-implement-all`.
+-- **`/z-test`** — Semantic test-case planner. Reads SPEC/PLAN/TASKS, drafts non-trivial tests (sign errors, schema mismatches, off-by-one, unit confusion), cross-consults Gemini+Codex, writes `TESTS.md`. The implementer reads TESTS.md alongside TASKS.md so tests land in the same diff as production code.
+-
+-### Implementation
+-
+-- **`/z-implement-all`** — Orchestrates the full TASKS.md queue: one fresh `implementer` subagent per task → per-task reviewer safety gate → retry once on review failure → push-notify at every task boundary. Walks a tree-rooted plan produced by `/z-plan-split` (one cluster at a time, in MANIFEST run order) as well as legacy single-slug plans. Flags: `--ack` (override the SHARED-CONCERNS.md ack-gate) and `--force-partial` (proceed against a tree where some clusters failed planning, excluding the failed ones from the run set). Both flags are inert for legacy single-slug plans.
+-- **`/z-implement-next`** — Same loop, one task at a time.
+-
+-### Code quality
+-
+-- **`/z-style-init`** — Author the project `STYLE.md` interactively, grounded in the repo's most idiomatic existing files (Capture). Required before `/z-mr-review` will run. Pass `--amend` to add rules derived from repeated review dismissals instead of bootstrapping.
+-- **`/z-mr-review`** — Multi-LLM code-quality review of the current branch diff against `STYLE.md`. Fans out to Claude, Codex, and Gemini; deduplicates and ranks findings P0–P4; writes `z-harness/<slug>/MR-REVIEW.md` in `TASKS.md`-compatible shape. Never blocks — delete findings you don't want, then run `/z-implement-all --tasks=z-harness/<slug>/MR-REVIEW.md`. Targets five categories: abstraction, defensive-bloat, test-noise, hygiene, and style-drift. Distinct from `/z-audit`, which gates correctness.
+-
+-### Multi-IDE export
+-
+-- **`/z-export [--target=<cursor|codex|agy|all>]`** — Export z-harness commands, agents, and skills to Cursor (`.mdc` rules), Codex CLI (`AGENTS.md` + prompts), or Antigravity (`agy-plugin.yaml` + prompts). Default: all three targets. See [docs/human/MULTI-IDE.md](docs/human/MULTI-IDE.md).
+-
+-### Providers
+-
+-- **`/z-providers-discover`** — Auto-detect installed LLM CLIs, generate a starter `providers.json`, and bind roles interactively. See [docs/human/PROVIDERS.md](docs/human/PROVIDERS.md).
+-
+-### Plugin management
+-
+-- **`/z-update`** — Update the z-harness plugin to the latest version. Detects symlink vs tarball install mode and runs the appropriate update path. See [docs/human/INSTALL.md](docs/human/INSTALL.md).
+-
+-### Audit, debug, review
+-
+-- **`/z-uplift`** — Bulk codebase quality uplift. Decomposes the repo into components (Cargo/pyproject/JS workspaces or top-level dirs), runs a repo-wide cross-cutting pass, dispatches per-component `auditor` subagents, produces per-component TASKS.md files consumable by `/z-implement-all --tasks=`, then drives sequential implementation behind AskUser gates. Resumable via MANIFEST.md. Requires STYLE.md (pass `--no-style` to skip).
+-- **`/z-audit <target>`** — Read-only audit pipeline. Pre-flight scopes (target, dimensions, optional `.claude/audit-rubrics/<component>.md`), spawns one `auditor` subagent per dimension in parallel (correctness / perf / cleanliness / design), bundled consultant-primary + consultant-secondary consult on findings, emits REPORT.md + TASKS.md in `/z-implement-all`-compatible format, reviewer safety gate.
+-- **`/z-fix <symptom or proposed fix>`** — Lightweight bug-fix command for the case where the user already has a diagnosis; single light-fix consult, inline implementation, non-negotiable Codex review, optional post-mortem. Early gate recommends `/z-debug` if root cause is unknown.
+-- **`/z-debug <symptom>`** — Investigate a known-bad behavior via adversarial hypothesis tournament; 3-LLM two-round hypothesis generation, discriminating-test matrix, discrete Bayesian scoring, 3-5 isolation rounds; writes a single unified `DEBUG.md` artifact (Problem, Evidence, Isolation, Fix, and Post-mortem sections); auto-bails to `/z-plan` if scope grows. Post-mortem phase optionally invokes `mr-reviewer` on the fix diff; P0/P1 findings are promoted to the post-mortem's preventative-action list automatically. Early gate recommends `/z-fix` if the user already has a diagnosis.
+-- **`/z-review-all`** — Final-gate cross-LLM review of a completed plan's cumulative diff against SPEC.md — catches implementation drift and aggregate-only spec gaps.
+-- **`/z-skill-fix <skill>`** — Meta-command. Patches any `.claude/skills/*/SKILL.md` (or `commands/*.md` / `agents/*.md` inside z-harness itself). Inline diagnosis → surgical edit → reviewer safety gate.
+-
+-### Docs
+-
+-- **`/z-init-docs`** — Bootstrap two-tier docs (`docs/human/` markdown + `docs/llm/INDEX.json` token-compacted) so `/z-plan` Phase 1 has a fast-lookup oracle.
+-- **`/z-maintain-docs`** — Refresh stale concepts whose source files changed since each doc's `last_updated`. Dry-run preview by default.
+-- **`/z-suggest-memory`** — Author a dated, provenance-bearing memory entry into a concept's `docs/llm/<slug>.json` `memories[]` array and rebuild `MEMORIES-FLAT.md`. The only memory-mutating path — `/z-debug` and `/z-improve` retros call this mandatorily.
+-
+-### Telemetry
+-
+-- **`/z-stats`** — Read-only progress + cost report from `metrics.jsonl` and TASKS.md. No writes, no LLM calls.
+-
+-### Subagents (invoked by commands; you don't call them directly)
+-
+-| Agent | Model | Role |
+-|---|---|---|
+-| `implementer` | sonnet | Implements one task in fresh context |
+-| `mr-reviewer` | sonnet | Fans out to consultant-primary/secondary, deduplicates findings, applies P0-P4 rubric |
+-| `auditor` | sonnet | Audits one dimension, returns structured findings |
+-| `cluster-planner` | sonnet | Runs a narrow sub-/z-plan for one cluster of a `/z-plan-split` tree |
+-| `consultant-primary` | (CLI via providers.json) | Cross-LLM consult — primary role |
+-| `consultant-secondary` | (CLI via providers.json) | Cross-LLM consult — secondary role (must differ from primary) |
+-| `reviewer` | (CLI via providers.json) | Post-diff safety gate |
+-| `spec-precheck` | haiku | Pre-flight: verify SPEC.md references actually exist before implementing |
+-| `doc-updater` | sonnet | Refreshes one stale concept's docs/human + docs/llm pair |
+-| `remote-runner` | haiku | Mechanical remote work — rsync sandbox + cargo build, read-only DB/log queries, paper qtctl restarts |
+-| `external-lookup` | haiku | Fetch external information (web docs, public APIs, paginated JSON, library docs outside training cutoff) and return a tight STATUS-headed Markdown synthesis per docs/llm/lookup-contract.json. Read-only. Refuses mutating shell commands via verb-blocklist. |
+-
+-Which CLI each agent role calls is determined by `providers.json` (see
+-[docs/human/PROVIDERS.md](docs/human/PROVIDERS.md)). Run
+-`/z-providers-discover` to configure.
+-
+-`/z-brainstorm` dispatches three ideators in Phase 2: Claude as
+-`general-purpose` Sonnet, plus `consultant-primary` and `consultant-secondary`
+-with `MODE: brainstorm`. There is no dedicated `ideator` agent file.
+-
+-## Operating principles
+-
+-- Push back by default — on Gemini, Codex, and the user.
+-- Always ask when unclear. No silent assumptions.
+-- No shortcuts without explicit user approval.
+-- DRY / KISS / SOLID are non-negotiable in the final plan.
+-
+-## Requirements
+-
+-- At least one CLI-addressable LLM (e.g., `codex`, `gemini`, `claude`, `ollama`, `agy`) installed and reachable on your `PATH`. Run `/z-providers-discover` to auto-configure roles after install. See [docs/human/PROVIDERS.md](docs/human/PROVIDERS.md).
+-- Claude Code with `PushNotification` available (for mobile notifications).
++A Claude Code plugin that wraps planning and implementation in a rigorous, cross-LLM-reviewed pipeline. Every command writes artifacts to `z-harness/<slug>/`, with run-frozen archives and aggregated telemetry in `z-harness/metrics.jsonl`. Designed for engineers who want AI-assisted code changes to go through a real review loop rather than land silently.
+ 
+ ## Install
+ 
+@@ -113,245 +10,23 @@ with `MODE: brainstorm`. There is no dedicated `ideator` agent file.
+ git clone https://github.com/<org>/z-harness
+ cd z-harness
+ bash install.sh
++bash scripts/config.sh ensure-defaults  # creates ~/.config/z-harness/config.toml with defaults
+ ```
+ 
+-**Codex from a local clone:**
++After installing, run `/z-providers-discover` in Claude Code to configure which LLM CLIs play which roles. For Codex, tarball mode, or full install details, see [docs/human/INSTALL.md](docs/human/INSTALL.md).
+ 
+-```bash
+-bash install.sh --target=codex
+-```
+-
+-This creates `~/plugins/z-harness -> <clone>`, updates
+-`~/.agents/plugins/marketplace.json`, and installs `z-harness@personal` through
+-`codex plugin add`.
+-
+-**From a release tarball:**
+-
+-```bash
+-bash install.sh --target=codex --tarball=<release-url>
+-# or:
+-Z_HARNESS_RELEASE_URL=<release-url> bash install.sh --target=codex
+-```
++## Quickstart
+ 
+-Omit `--target` for Claude Code, or use `--target=all` for both hosts. For full
+-details including the `--force` flag and switching between modes, see
+-[docs/human/INSTALL.md](docs/human/INSTALL.md).
++- `/z-do <small task>` — plan-less execution for small changes
++- `/z-plan <task>` — rigorous planning pipeline (SPEC/PLAN/TASKS)
++- `/z-implement-all` — orchestrate the queue from a /z-plan output
+ 
+-After installing, run `/z-providers-discover` in Claude Code to configure
+-which LLM CLIs play which roles (consultant\_primary, consultant\_secondary,
+-reviewer).
+-
+-## Updating
+-
+-From Claude Code, run:
+-
+-```
+-/z-update
+-```
++## Where to look next
+ 
+-From Codex, invoke the `z-update` skill. Both detect symlink vs tarball mode
+-and run the appropriate update path. Codex installs are cached, so the updater
+-also reruns `codex plugin add z-harness@personal` after a successful symlink
+-update. No autoupdate — all updates are explicit.
++- [docs/human/INDEX.md](docs/human/INDEX.md) — human reference (commands, skills, agents, scripts)
++- [docs/llm/INDEX.json](docs/llm/INDEX.json) — LLM-tier two-tier docs; agents read this via doc-fetcher
++- [docs/human/config.md](docs/human/config.md) — TOML config (notify level, doc-fetcher policy)
+ 
+-## Per-repo auto-enable
++## License
+ 
+-In each project where you want z-harness on automatically, commit `.claude/settings.json`:
+-
+-```json
+-{
+-  "extraKnownMarketplaces": {
+-    "zeke-tools": { "source": { "source": "github", "repo": "<org>/z-harness" } }
+-  },
+-  "enabledPlugins": { "z-harness@zeke-tools": true }
+-}
+-```
+-
+-## Providers
+-
+-z-harness routes all consultant and reviewer LLM calls through a
+-**provider registry** rather than hard-coding any specific CLI. Three roles
+-are defined (`consultant_primary`, `consultant_secondary`, `reviewer`); you
+-bind each role to a named provider entry in `providers.json`.
+-
+-Quick start after install:
+-
+-```
+-/z-providers-discover
+-```
+-
+-This probes your `PATH` for known LLM CLIs (`codex`, `gemini`, `claude`,
+-`ollama`, `agy`, `gpt`), proposes a config, and writes it to
+-`~/.config/z-harness/providers.json` after confirmation.
+-
+-For the full schema, config-file locations, precedence rules, and custom CLI
+-patterns, see [docs/human/PROVIDERS.md](docs/human/PROVIDERS.md).
+-
+-To export z-harness to Cursor, Codex CLI, or Antigravity, see
+-[docs/human/MULTI-IDE.md](docs/human/MULTI-IDE.md).
+-
+-## Plugin-author conventions (for downstream `.claude/skills/`)
+-
+-When a downstream repo defines its own skills that interoperate with z-harness, follow these conventions so they cooperate with the harness rather than fight it:
+-
+-- End each skill file with `## Anti-patterns (push back)` and `## Out of scope` sections — they're the cheapest place to encode failure modes and handoff boundaries.
+-- Skills that diagnose should NOT also apply patches. Hand off to `/z-plan-light` (small fix) or `/z-plan` (structural) for any code change beyond initial scaffolding.
+-- Skills that orchestrate should call cross-LLM consult (`consultant-primary`, `consultant-secondary`) at premise / red-team gates, not run them inline.
+-- Use explicit slash commands instead of flag-routed `mode:` parameters — one skill per mode (`/qt-audit-strategy`, not `/qt-audit mode=strategy`).
+-- Domain-specific audit checklists live under `.claude/audit-rubrics/<component>.md` and are consumed by `/z-audit` via its rubric-file slot — keep them as plain checklists, not scaffolding.
+-
+-## Environment knobs
+-
+-- `Z_HARNESS_NOTIFY` — `off` | `approval_only` (default) | `all`. Controls push notifications.
+-- `Z_HARNESS_MAX_EXPLORE` — default `3`. Cap on `Explore` subagent dispatches per `/z-plan` run.
+-- `Z_HARNESS_DOC_STALENESS_THRESHOLD` — default `20` (percent). Above this, `/z-plan` halts and recommends `/z-maintain-docs` first.
+-- ~~`Z_HARNESS_RETRY_UPGRADE`~~ — removed. The implementer model is now picked directly via `Agent(model=...)` based on the task block's `**Complexity:** low|medium|high` stamp (`low|medium` → Sonnet, `high` → Opus). Retries (cycle ≥ 2) always dispatch with `model="opus"`. The complexity stamp is added at plan-time by a Haiku `complexity-classifier` subagent and is user-editable in TASKS.md.
+-- `Z_HARNESS_LOCAL_CARGO_CLEAN` — set to `1` at the start of `/z-implement-all` to trigger a one-time local `cargo clean`.
+-- `Z_HARNESS_SLUG` — set by commands; namespaces all output paths under `z-harness/<slug>/`.
+-- `Z_HARNESS_BRAINSTORM_EXPLORE=1` — opts into a Phase 1 Explore dispatch inside `/z-brainstorm`. Off by default (doc-fetcher only). Set this when you want the brainstorm scaffolding to include live codebase exploration in addition to the doc-fetcher lookup.
+-- `Z_IMPLEMENT_PAUSE_TASKS` — default `5`. Number of completed tasks (since last pause or run start) that triggers a compaction breakpoint in `/z-implement-all`. Set to `0` to disable the task-count trigger. See [Compaction policy](#compaction-policy).
+-- `Z_IMPLEMENT_PAUSE_MINUTES` — default `30`. Wall-clock minutes since last pause (or run start) that triggers a compaction breakpoint in `/z-implement-all`. Set to `0` to disable the wall-time trigger. Setting both to `0` disables all compaction breakpoints in `/z-implement-all`. See [Compaction policy](#compaction-policy).
+-
+-## Telemetry event types
+-
+-All events are appended to `z-harness/metrics.jsonl` via `scripts/log-event.sh`. Standard fields present on every event: `ts`, `run`, `kind` (and `slug` when set). The fields `prompt_chars`, `response_chars`, and `wall_ms` are optional — they appear only on subagent-bracket events, not on lifecycle or gate events.
+-
+-Event kinds introduced by `/z-brainstorm` and `/z-research`:
+-
+-| Event | Emitted by |
+-|---|---|
+-| `brainstorm_run_start` | `/z-brainstorm` setup |
+-| `brainstorm_run_end` | `/z-brainstorm` Phase 4 |
+-| `research_run_start` | `/z-research` setup |
+-| `research_run_end` | `/z-research` Phase 6 |
+-| `ideator_failed` | `/z-brainstorm` Phase 2 (fields: `vendor`, `reason`) |
+-| `total_ideator_failure` | `/z-brainstorm` Phase 2 when all three ideators fail |
+-| `research_temptation` | `/z-research` when orchestrator drafts a recommendation it must not make |
+-| `precontext_source_deleted` | `/z-plan` Setup step 10 freshness check (higher severity than stale-mtime) |
+-| `precontext_freshness_check_failed` | `/z-plan` Setup step 10 freshness check parse failure |
+-| `cost_gate_decision` | `/z-research` Phase 0 cost-confirmation gate |
+-| `explore_failure` | any command that dispatches an Explore subagent that does not return |
+-
+-Event kinds introduced by `/z-plan-split` and the tree-walking branch of `/z-implement-all`:
+-
+-| Event | Emitted by |
+-|---|---|
+-| `plan_split_run_start` | `/z-plan-split` Setup |
+-| `plan_split_run_end` | `/z-plan-split` finalize (every exit path; `status` distinguishes the exit reason) |
+-| `cluster_proposed` | `/z-plan-split` Phase 1c (per proposed cluster) |
+-| `cluster_confirmed` | `/z-plan-split` Phase 1e (per confirmed cluster) |
+-| `cluster_planner_start` | `cluster-planner` subagent, first call |
+-| `cluster_planner_end` | `cluster-planner` subagent, last call (every exit path) |
+-| `cluster_failed` | `/z-plan-split` Phase 3 (per failed cluster; `failure_reason` distinguishes the cause) |
+-| `cluster_decision_escalated` | `cluster-planner` Phase 2/3 when the conservative-flagging rubric escalates |
+-| `cluster_files_inconsistent` | `/z-plan-split` Phase 4 when `FILES_TOUCHED` ↔ TASKS.md disagree |
+-| `total_cluster_failure` | `/z-plan-split` Phase 3 or Phase 4 when every cluster ends `failed` |
+-| `overlap_detected` | `/z-plan-split` Phase 4 (per overlapping path) |
+-| `overlap_index_rebuilt` | `/z-plan-split` Phase 4 after any post-Phase-3 cluster demotion |
+-| `shared_concerns_missing` | `/z-implement-all` Setup 2b when SHARED-CONCERNS.md is absent on a tree-rooted slug |
+-| `shared_concerns_unacknowledged` | `/z-implement-all` Setup 2b ack-gate (halt; no override) |
+-| `shared_concerns_ack_override` | `/z-implement-all` Setup 2b ack-gate when `--ack` was supplied |
+-| `manifest_frontmatter_inconsistent` | `/z-implement-all` Setup 2b when frontmatter counts disagree with the table |
+-| `manifest_run_order_invalid` | `/z-implement-all` Setup 2b when run order doesn't bijectively match the table |
+-| `tree_depth_exceeded` | `/z-implement-all` Setup 2b when a nested MANIFEST.md is found inside the tree |
+-| `partial_tree_blocked` | `/z-implement-all` Setup 2b partial-tree gate (halt; no `--force-partial`) |
+-| `partial_tree_force_override` | `/z-implement-all` Setup 2b partial-tree gate when `--force-partial` was supplied |
+-| `anti_nesting_violation` | `cluster-planner` Phase 0a when an ancestor MANIFEST.md is detected |
+-| `cluster_not_ready` | `/z-implement-all` Setup 2b cluster-readiness gate |
+-
+-Event kinds introduced by the compaction breakpoint policy:
+-
+-| Event | Payload schema | Emitted by |
+-|---|---|---|
+-| `compaction_pause` | `{trigger, detail}` — `trigger` is one of `"task_count"`, `"wall_time"`, or `"pre_consult"`; `detail` carries trigger-specific fields (e.g. `tasks_since_pause`, `wall_minutes_since_pause`, `pending_remaining` for task-count/wall-time triggers, or `phase` for pre-consult) | `/z-implement-all` batch-settle (after halt-flush); `/z-review-all` Phase 3.7 (gates Phase 4 — `phase` payload value is `"review_all_phase_4"`); `/z-maintain-docs --audit` pre-consult breakpoint |
+-
+-## Compaction policy
+-
+-Long `/z-implement-all` runs and cross-LLM consult phases in `/z-review-all` and `/z-maintain-docs --audit` accumulate significant orchestrator context. The compaction policy inserts deterministic breakpoints at the highest-context-pressure boundaries so you can clear context before it degrades subagent quality.
+-
+-### `/z-implement-all` — task-count and wall-time triggers
+-
+-Two env vars control when a breakpoint fires (see [Environment knobs](#environment-knobs)):
+-
+-| Env var | Default | Meaning |
+-|---|---|---|
+-| `Z_IMPLEMENT_PAUSE_TASKS` | `5` | Pause after this many `[x]` completions since last pause |
+-| `Z_IMPLEMENT_PAUSE_MINUTES` | `30` | Pause after this many wall-clock minutes since last pause |
+-
+-Either var set to `0` disables that trigger; both set to `0` disables `/z-implement-all` compaction breakpoints entirely.
+-
+-The trigger fires **at the end of each batch-settle**, strictly after: all in-flight tasks reach terminal status → TASKS.md atomic write → `batch_done` event → halt-flush resolved. This ordering prevents halt context from being lost to a `/clear`. Only `[x]` completions count toward `Z_IMPLEMENT_PAUSE_TASKS`; retries and rollbacks do not.
+-
+-On trigger: a `compaction_pause` event is emitted (see [Telemetry event types](#telemetry-event-types)), a push notification fires, and the loop exits cleanly. Re-invoke `/z-implement-all` to resume from TASKS.md.
+-
+-### `/z-review-all` and `/z-maintain-docs --audit` — pre-consult breakpoints
+-
+-Both commands insert an unconditional breakpoint **before** the cross-LLM consultant batch dispatches. There is no env var gate — these breakpoints always appear. You are shown an `AskUserQuestion` with two options:
+-
+-- **Pause for /clear** — exit cleanly; no state written. Re-invoke the command to hit the breakpoint again and reconfirm.
+-- **Proceed now** — write a slug-scoped state file (`.review_state.json` / `.maintain_docs_audit_state.json`) and continue into the consult phase.
+-
+-Both commands emit `compaction_pause {trigger: "pre_consult"}` at this point. See the event-table entry under [Telemetry event types](#telemetry-event-types) for the full payload schema.
+-
+-### Why `/clear` over `/compact`
+-
+-`/clear` is the recommended action at every compaction breakpoint. The harness's durable state lives entirely in TASKS.md (and the slug-scoped state files above) — there is no cross-task state in orchestrator memory (SPEC Invariant 2). Clearing reclaims more context than `/compact` with no safety loss. Re-invoking any affected command after `/clear` picks up exactly where it left off.
+-
+-Use `/compact` instead only when you need to preserve chat history for debugging a specific task failure — the compressed history may help a retry's reviewer.
+-
+-## Known v1 limitations
+-
+-- **No per-subagent wall-clock timeout.** `Agent()` does not expose a per-call timeout; subagents that hang block the entire run. User-facing escape: ctrl-c to abort.
+-- **No doc-fetcher caching across precontext and plan runs.** If you run `/z-research` and then `/z-plan` in the same slug, doc-fetcher is dispatched twice (once per command). Marked as a v2 candidate; the cost is low enough today.
+-- **`/z-plan-split`: no cross-cluster task parallelism.** `/z-implement-all` walks clusters sequentially in MANIFEST run-order; intra-cluster parallelism (N=3) is honored, cross-cluster is v2.
+-- **`/z-plan-split`: path-only overlap detection.** SHARED-CONCERNS.md is built from file-path intersections across cluster TASKS.md `**Files:**` lines. No semantic overlap detection (two clusters that touch disjoint files but conflict on the same in-memory invariant will not surface here).
+-- **`/z-plan-split`: no `--from-audit` / `--from-brainstorm` input chains.** The topic is taken verbatim from `$ARGUMENTS`; there is no structured handoff from `/z-audit`, `/z-research`, or `/z-brainstorm` artifacts beyond what the user pastes into the topic string. v2 candidate.
+-- **`/z-plan-split`: one-level recursion cap.** Cluster-planners refuse to write inside an existing MANIFEST.md tree, and `/z-implement-all` halts with `tree_depth_exceeded` if it finds a nested MANIFEST.md. A tree-of-trees is structurally unsupported.
+-
+-## Layout
+-
+-```
+-z-harness/
+-├── .claude-plugin/
+-│   ├── plugin.json
+-│   └── marketplace.json
+-├── commands/
+-│   ├── z-brainstorm.md
+-│   ├── z-research.md
+-│   ├── z-plan.md
+-│   ├── z-plan-light.md
+-│   ├── z-plan-split.md
+-│   ├── z-test.md
+-│   ├── z-implement-all.md
+-│   ├── z-implement-next.md
+-│   ├── z-audit.md
+-│   ├── z-fix.md
+-│   ├── z-debug.md
+-│   ├── z-mr-review.md
+-│   ├── z-review-all.md
+-│   ├── z-skill-fix.md
+-│   ├── z-style-init.md
+-│   ├── z-init-docs.md
+-│   ├── z-maintain-docs.md
+-│   ├── z-suggest-memory.md
+-│   └── z-stats.md
+-├── agents/
+-│   ├── implementer.md
+-│   ├── auditor.md
+-│   ├── cluster-planner.md
+-│   ├── reviewer.md
+-│   ├── consultant-primary.md
+-│   ├── consultant-secondary.md
+-│   ├── mr-reviewer.md
+-│   ├── spec-precheck.md
+-│   ├── doc-updater.md
+-│   ├── remote-runner.md
+-│   └── external-lookup.md
+-├── scripts/
+-│   ├── extract-dismissals.py
+-│   ├── log-event.sh
+-│   ├── log-phase.sh
+-│   ├── remote-sandbox-sync.sh
+-│   └── version.sh
+-└── README.md
+-```
++MIT
+diff --git a/docs/human/INDEX.md b/docs/human/INDEX.md
+index e4174c0..4bf06cd 100644
+--- a/docs/human/INDEX.md
++++ b/docs/human/INDEX.md
+@@ -1,7 +1,7 @@
+ # Docs index
+ 
+-_Generated: 2026-05-23T19:31:00Z_  
+-_Plugin: z-harness 64a3dbe_
++_Updated: 2026-05-27_  
++_Plugin: z-harness_
+ 
+ Concepts grouped by top-level module. Each entry links to its human-tier page.
+ Companion LLM-tier JSON lives at `../llm/<slug>.json`.
+@@ -18,6 +18,12 @@ Companion LLM-tier JSON lives at `../llm/<slug>.json`.
+ |---|---|---|---|
+ | [commands](./commands.md) | high | `commands/z-amend.md`, `commands/z-audit.md`, `commands/z-brainstorm.md` | Propagates targeted plan amendments consistently across plan artifacts. |
+ 
++## config
++
++| Concept | Confidence | Source files | Summary |
++|---|---|---|---|
++| [config](./config.md) | high | `scripts/config.py`, `scripts/config.sh` | Layered TOML config: built-in defaults → global → repo-local → env. Slice 1 knobs: notify.level, docs.always_apply. |
++
+ ## scripts
+ 
+ | Concept | Confidence | Source files | Summary |
+@@ -30,3 +36,16 @@ Companion LLM-tier JSON lives at `../llm/<slug>.json`.
+ |---|---|---|---|
+ | [skills](./skills.md) | high | `skills/z-amend/SKILL.md`, `skills/z-brainstorm/SKILL.md`, `skills/z-debug/SKILL.md` | Checklists for amending spec, plan, and task checklists consistently. |
+ 
++## reference
++
++| Concept | Source file | Summary |
++|---|---|---|
++| [INSTALL.md](./INSTALL.md) | — | Install instructions, requirements, uninstall. |
++| [PROVIDERS.md](./PROVIDERS.md) | — | Provider registry: roles, config-file locations, precedence. |
++| [PLAN-LAYOUT.md](./PLAN-LAYOUT.md) | — | Plan directory layout and plugin directory layout. |
++| [MULTI-IDE.md](./MULTI-IDE.md) | — | Exporting z-harness to Cursor, Codex CLI, and Antigravity. |
++| [environment-knobs.md](./environment-knobs.md) | — | Environment variable reference for all tunables. |
++| [telemetry.md](./telemetry.md) | — | Telemetry event kinds, compaction policy. |
++| [plugin-author-conventions.md](./plugin-author-conventions.md) | — | Conventions for downstream `.claude/skills/` authors. |
++| [limitations.md](./limitations.md) | — | Known v1 limitations. |
++
+diff --git a/docs/human/INSTALL.md b/docs/human/INSTALL.md
+index 6bd366d..6375bfc 100644
+--- a/docs/human/INSTALL.md
++++ b/docs/human/INSTALL.md
+@@ -198,3 +198,12 @@ rm ~/plugins/z-harness
+ If you installed via tarball, this removes the extracted directory. If you
+ installed via symlink, this removes only the symlink — the local clone is
+ untouched.
++
++---
++
++## Requirements
++
++- At least one CLI-addressable LLM (e.g. `codex`, `gemini`, `claude`, `ollama`,
++  `agy`) installed and reachable on your `PATH`. Run `/z-providers-discover` to
++  auto-configure roles after install. See [PROVIDERS.md](PROVIDERS.md).
++- Claude Code with `PushNotification` available (for mobile notifications).
+diff --git a/docs/human/PLAN-LAYOUT.md b/docs/human/PLAN-LAYOUT.md
+index dc84279..fb568cc 100644
+--- a/docs/human/PLAN-LAYOUT.md
++++ b/docs/human/PLAN-LAYOUT.md
+@@ -123,3 +123,32 @@ The affected list includes: `z-plan`, `z-plan-light`, `z-plan-split`,
+ 
+ Scripts that also respect `Z_HARNESS_PLANS_DIR`: `scripts/log-event.sh`,
+ `scripts/log-phase.sh`.
++
++---
++
++## Plugin directory layout
++
++The z-harness plugin itself is laid out as follows:
++
++```
++z-harness/
++├── .claude-plugin/
++│   ├── plugin.json
++│   └── marketplace.json
++├── commands/
++│   └── z-*.md
++├── agents/
++│   └── *.md
++├── scripts/
++│   ├── config.py
++│   ├── config.sh
++│   ├── extract-dismissals.py
++│   ├── log-event.sh
++│   ├── log-phase.sh
++│   ├── remote-sandbox-sync.sh
++│   └── version.sh
++├── docs/
++│   ├── human/    ← human-readable reference
++│   └── llm/      ← LLM-tier fast-lookup JSONs
++└── README.md
++```
+diff --git a/docs/human/agents.md b/docs/human/agents.md
+index 8eb1039..12611b7 100644
+--- a/docs/human/agents.md
++++ b/docs/human/agents.md
+@@ -15,25 +15,25 @@ The suite is split by responsibility: planning route advice (`planning-router`),
+ - `agents/bisect-isolator.md:1` — `bisect-isolator` — Haiku mechanical bisect runner; drives `git bisect run` between a known-good ref and HEAD, returns offending commit SHA and line-level diff. Refuses destructive repro scripts and interpretive work.
+ - `agents/cluster-planner.md:1` — `cluster-planner` — Focused `/z-plan-split` leaf planner; writes cluster SPEC.md, PLAN.md, TASKS.md, and escalates risky decisions one at a time.
+ - `agents/complexity-classifier.md:1` — `complexity-classifier` — Cheap Haiku task classifier returning `low`, `medium`, or `high` for model routing.
+-- `agents/consultant-primary.md:1` — `consultant-primary` — Provider-agnostic primary consultant proxy; supports bundled-decisions, plan-review, light-fix, debug-hypotheses, brainstorm, research-review, doc-audit, test-cases, mr-review, plan-style-audit, and multi-round generate-hypotheses modes.
+-- `agents/consultant-secondary.md:1` — `consultant-secondary` — Provider-agnostic secondary consultant proxy with the same mode surface as the primary consultant and a distinct provider role.
++- `agents/consultant-primary.md:1` — `consultant-primary` — Provider-agnostic primary consultant proxy; supports 12 named modes: bundled-decisions, plan-review, light-fix, debug-hypotheses, brainstorm, research-review, doc-audit, test-cases, mr-review, plan-style-audit, generate-hypotheses-round1, and generate-hypotheses-round2-adversarial.
++- `agents/consultant-secondary.md:1` — `consultant-secondary` — Provider-agnostic secondary consultant proxy with the same 12-mode surface as the primary consultant and a distinct provider role.
+ - `agents/doc-fetcher.md:1` — `doc-fetcher` — Read-only Haiku context fetcher over `docs/llm/INDEX.json`, concept JSONs, and optional `MEMORIES-FLAT.md` ripgrep searches.
+-- `agents/doc-updater.md:1` — `doc-updater` — Refreshes one concept's human and LLM docs; dry-run by default; must preserve existing `memories[]` verbatim.
++- `agents/doc-updater.md:1` — `doc-updater` — Refreshes one concept's human and LLM docs; dry-run by default; must preserve existing `memories[]` verbatim. Supports `dedup_tags: true` for tag collision detection.
+ - `agents/external-lookup.md:1` — `external-lookup` — Fresh-context Haiku web/API retrieval worker that returns the fixed lookup-contract envelope and refuses mutating commands via verb-blocklist.
+-- `agents/implementer.md:1` — `implementer` — Implements exactly one task block, reads relevant plan/docs context, performs a mandatory self-check, and returns structured status.
+-- `agents/mr-reviewer.md:1` — `mr-reviewer` — Sonnet branch-diff code-quality reviewer that runs inline Claude review plus optional multi-voice dispatch; merges findings with dedup, consensus tier-bump, and dismissal-pattern matching into a fenced JSON payload.
++- `agents/implementer.md:1` — `implementer` — Implements exactly one task block; accepts `--tasks <path>` for promoted review artifacts (REVIEW-TASKS.md / MR-REVIEW.md); mandatory self-check before returning STATUS: ok; supports `cross_task_notes` for downstream task signaling and `tests_md_path` for TESTS.md coverage.
++- `agents/mr-reviewer.md:1` — `mr-reviewer` — Sonnet branch-diff code-quality reviewer that runs inline Claude review plus optional multi-voice dispatch; supports `deep: true` for Opus upgrade on `abstraction-only` passes; merges findings with dedup, consensus tier-bump, and dismissal-pattern matching into a fenced JSON payload.
+ - `agents/plan-style-reviewer.md:1` — `plan-style-reviewer` — Sonnet plan artifact style reviewer; audits SPEC.md, PLAN.md, TASKS.md for design-quality issues (defensive bloat, premature abstraction, DRY/KISS/SOLID violations, over-engineering, style-drift, test-noise) before any code is written; multi-voice capable; returns fenced JSON + Summary block.
+ - `agents/planning-router.md:1` — `planning-router` — Cheap Haiku read-only advisory router for ambiguous planning-family route decisions; returns an exact parseable route contract.
+ - `agents/remote-runner.md:1` — `remote-runner` — Haiku mechanical remote verifier for sandboxed builds/tests, paper service checks, logs, disk, and read-only DB queries.
+-- `agents/reviewer.md:1` — `reviewer` — Provider-agnostic correctness/spec reviewer proxy for completed implementation tasks.
+-- `agents/review-agent.md:1` — `review-agent` — Haiku post-run memory candidate generator; reads run events, cumulative diff, and SPEC.md (or DEBUG.md for debug runs); proposes 0-3 memory candidates as a fenced JSON block without writing anything.
+-- `agents/spec-precheck.md:1` — `spec-precheck` — Read-only Haiku preflight checker that validates SPEC claims about existing files, symbols, config keys, and schemas before the implementer runs.
++- `agents/reviewer.md:1` — `reviewer` — Provider-agnostic correctness/spec reviewer proxy for completed implementation tasks; accepts `relevant_docs` LLM JSONs to catch contract drift.
++- `agents/review-agent.md:1` — `review-agent` — Haiku post-run memory candidate generator; reads run events, cumulative diff, and SPEC.md (or DEBUG.md for debug runs); proposes 0-3 memory candidates as a fenced JSON block without writing anything. Enforces slug naming anti-patterns.
++- `agents/spec-precheck.md:1` — `spec-precheck` — Read-only Haiku preflight checker that validates SPEC claims about existing files, symbols, config keys, and schemas before the implementer runs; uses `relevant_docs` LLM JSONs as a second source of truth.
+ 
+ ## How it interacts with others
+ 
+-- `commands` — Commands are the orchestrators that decide when to spawn each agent, pass compact inputs, parse exact return shapes, and write user-facing artifacts. `/z-debug` dispatches `bisect-isolator` in Phase 2.5 when a regression has a known-good baseline and a scriptable repro; `/z-audit-plan-style` dispatches `plan-style-reviewer` to review plan artifacts before implementation.
+-- `skills` — Skills mirror command behavior across agent CLIs and encode the operational gates that rely on these subagent contracts.
+-- `scripts` — Agents call shared scripts for telemetry, provider resolution, timeout detection, plan path handling, and remote sandbox sync.
++- `commands` — Commands are the orchestrators that decide when to spawn each agent, pass compact inputs, parse exact return shapes, and write user-facing artifacts. `/z-debug` dispatches `bisect-isolator` in Phase 2.5 when a regression has a known-good baseline and a scriptable repro, and dispatches `review-agent` with `parent_command: debug` and a `debug_md_path` in Phase 10 when a DEBUG.md exists. `/z-audit-plan-style` dispatches `plan-style-reviewer` to review plan artifacts before implementation.
++- `skills` — Skills mirror command behavior across agent CLIs and encode the operational gates that rely on these subagent contracts. `/z-implement-all` Phase 9, `/z-review-all` Phase 7, and `/z-debug` Phase 10 all dispatch `review-agent` as a post-run pass.
++- `scripts` — Agents call shared scripts for telemetry, provider resolution, timeout detection, plan path handling, remote sandbox sync, and memory review (`scripts/run-memory-review.sh`).
+ - `lookup-contract` — `external-lookup` must follow the canonical envelope in `docs/llm/lookup-contract.json`; the JSON contract wins over inline prose if they diverge.
+ 
+ ## Edge cases / gotchas
+@@ -43,25 +43,50 @@ The suite is split by responsibility: planning route advice (`planning-router`),
+ - `planning-router` is advisory only. It reads compact caller-supplied signals, performs no shell work, writes nothing, and returns `ask_user` for route-loop or conflicting-signal risk.
+ - `doc-updater` is the structural refresh path, not the memory authoring path. It must copy `memories[]` exactly; `/z-suggest-memory` is the only intended authoring and editing path for memories.
+ - `external-lookup` checks every Bash command against a mutation verb-blocklist before execution and returns `STATUS: refused` instead of trying to sanitize a risky command.
+-- `remote-runner` is mechanical. It can run sandboxed builds and read-only shared-state checks, but interpretive debugging or DB analysis belongs to the main reasoning thread.
++- `remote-runner` is mechanical. It can run sandboxed builds and read-only shared-state checks, but interpretive debugging or DB analysis belongs to the main reasoning thread. It also refuses naked binary launches as restart substitutes — `qtctl up <manifest>` is the only correct restart path for qtctl-supervised processes.
++
++## Subagents quick-reference
++
++These agents are invoked by commands; users do not call them directly.
++
++| Agent | Model | Role |
++|---|---|---|
++| `implementer` | sonnet | Implements one task in fresh context |
++| `mr-reviewer` | sonnet | Fans out to consultant-primary/secondary, deduplicates findings, applies P0-P4 rubric |
++| `auditor` | sonnet | Audits one dimension, returns structured findings |
++| `cluster-planner` | sonnet | Runs a narrow sub-`/z-plan` for one cluster of a `/z-plan-split` tree |
++| `consultant-primary` | (CLI via providers.json) | Cross-LLM consult — primary role |
++| `consultant-secondary` | (CLI via providers.json) | Cross-LLM consult — secondary role (must differ from primary) |
++| `reviewer` | (CLI via providers.json) | Post-diff safety gate |
++| `spec-precheck` | haiku | Pre-flight: verify SPEC.md references actually exist before implementing |
++| `doc-updater` | sonnet | Refreshes one stale concept's docs/human + docs/llm pair |
++| `remote-runner` | haiku | Mechanical remote work — rsync sandbox + cargo build, read-only DB/log queries |
++| `external-lookup` | haiku | Fetch external information and return a tight STATUS-headed Markdown synthesis. Read-only. |
++
++Which CLI each agent role calls is determined by `providers.json`. See [PROVIDERS.md](PROVIDERS.md).
+ - `bisect-isolator` applies a POSIX-ERE verb-grep to the caller-supplied repro command before touching the repo. macOS/BSD grep does not support Perl lookaheads, so refusal checks use split patterns + explicit shell conditionals. It also installs a `cleanup_bisect` trap to guarantee `git bisect reset` on all exit paths, including refusals that occur after `git bisect start`.
+ - `bisect-isolator` runs a mandatory sanity gate (step 4) that verifies the repro inverts across the range before starting bisect proper. If the repro passes on the bad ref or fails on the good ref, it returns `STATUS: bisect_unusable` rather than running a bisect whose answer would be garbage.
+-- `mr-reviewer` reviews quality, not correctness, and does not write MR-REVIEW.md itself; the orchestrator parses the returned JSON and writes the artifact. Multi-voice findings go through dedup, consensus tier-bump, and Jaccard-based dismissal-pattern matching before return.
++- `mr-reviewer` reviews quality, not correctness, and does not write MR-REVIEW.md itself; the orchestrator parses the returned JSON and writes the artifact. Multi-voice findings go through dedup, consensus tier-bump, and Jaccard-based dismissal-pattern matching before return. When `mode=abstraction-only` AND `deep=true`, an Opus sub-agent is dispatched for deep structural reasoning on abstraction candidate pairs.
+ - `plan-style-reviewer` reviews design-quality of plan artifacts, not correctness. It never finds correctness bugs, logic errors, or reference-reality issues (those belong to `/z-audit-plan`). Every style-drift finding must cite a STYLE.md rule ID; every premature-abstraction finding must cite an existing duplicate by `file:line`. It never writes `PLAN_STYLE_AUDIT.md`; the orchestrator does.
+ - `plan-style-reviewer` uses the same multi-voice dispatch, dedup, consensus tier-bump, and Jaccard dismissal-pattern matching pipeline as `mr-reviewer`. `dismissed_signatures.json` suppresses previously dismissed findings across runs.
+ - `cluster-planner` refuses nested plan-split output by checking ancestor directories for `MANIFEST.md` before substantive repo reads or writes.
+-- `spec-precheck`, `implementer`, and `reviewer` read relevant LLM-tier docs themselves so stale spec references can be caught before or during task execution.
++- `spec-precheck` uses `relevant_docs` LLM JSONs as a second source of truth alongside SPEC.md — if SPEC says a function exists but the LLM doc lists different entry points, that is a drift signal.
++- `reviewer` accepts `relevant_docs` LLM JSONs and reads them before composing the review prompt, to catch contract drift not visible from the diff alone.
++- `implementer` accepts `--tasks <path>` so review artifacts (REVIEW-TASKS.md / MR-REVIEW.md) can be used as the task source without altering the main TASKS.md. The `cross_task_notes` return field lets a task signal downstream tasks before orchestrator context is cleared. The `tests_md_path` input enables TESTS.md-driven test code generation per each TEST-NNN entry.
+ - `review-agent` accepts `parent_command: debug` with an optional `debug_md_path` field; when set, DEBUG.md is the primary artifact for reasoning and `spec_path` is supplementary. For `implement-all` and `review-all` runs, `spec_path` remains primary and `debug_md_path` is unset.
++- `review-agent` enforces slug naming anti-patterns: PR-number references, library-name-alone slugs, session-specific artifact names, negative-capability claims, and model-specific slugs are all banned.
+ - `review-agent` proposes memory candidates only — it never writes anything. The orchestrator handles all writes via `/z-suggest-memory`. Output is exactly one fenced JSON block; any other form is treated as malformed by the orchestrator.
+ - `doc-fetcher` falls back to a Python word-boundary scan when `rg` is not on PATH; the Ripgrep dependency is soft — never fail on its absence.
++- Consultant modes `generate-hypotheses-round1` and `generate-hypotheses-round2-adversarial` return RAW output (no standard wrapper); callers must parse the provider's output directly.
+ 
+ ## Examples
+ 
+ - `/z-plan` and related plan-family commands dispatch `planning-router` only when deterministic route signals conflict or confidence is too low for an automatic route.
+ - `/z-plan-split` dispatches `cluster-planner` once per cluster; each cluster planner may call `doc-fetcher` and `complexity-classifier` but not external consultants.
+-- `/z-implement-all` dispatches `spec-precheck`, then `implementer`, optional `remote-runner`, and finally `reviewer` for each task batch.
++- `/z-implement-all` dispatches `spec-precheck`, then `implementer`, optional `remote-runner`, and finally `reviewer` for each task batch. `spec-precheck` and `reviewer` both consume `relevant_docs` LLM JSONs.
+ - `/z-audit-plan-style` dispatches `plan-style-reviewer` for the plan artifacts; `plan-style-reviewer` may fan out to consultant voices for additional quality findings; the orchestrator builds `PLAN_STYLE_AUDIT.md` from the returned JSON.
+ - `/z-maintain-docs` dispatches `doc-updater` for stale concepts and can then audit the proposed update with both consultant proxies in `doc-audit` mode.
+-- `/z-mr-review` dispatches `mr-reviewer` for the whole diff or per chunk; `mr-reviewer` may fan out to consultant voices for additional quality findings.
+-- `/z-implement-all` and `/z-review-all` dispatch `review-agent` as a post-run pass to propose memory candidates from run events and the cumulative diff; `/z-suggest-memory` is then used to commit any accepted candidates.
+-- `/z-debug` Phase 2.5 dispatches `bisect-isolator` when the bug is a regression with a known-good baseline and the repro is scriptable; the orchestrator interprets the returned SHA + diff, not the bisect-isolator itself. When a DEBUG.md exists, `/z-debug` also dispatches `review-agent` with `parent_command: debug` and `debug_md_path` pointing to DEBUG.md.
++- `/z-mr-review` dispatches `mr-reviewer` for the whole diff or per chunk; `mr-reviewer` may fan out to consultant voices for additional quality findings, and can dispatch an Opus sub-agent for deep abstraction analysis when `deep: true`.
++- `/z-implement-all` Phase 9, `/z-review-all` Phase 7, and `/z-debug` Phase 10 dispatch `review-agent` as a post-run pass to propose memory candidates from run events and the cumulative diff; `/z-suggest-memory` is then used to commit any accepted candidates.
++- `/z-debug` Phase 2.5 dispatches `bisect-isolator` when the bug is a regression with a known-good baseline and the repro is scriptable; the orchestrator interprets the returned SHA + diff, not the bisect-isolator itself. When a DEBUG.md exists, `/z-debug` Phase 10 dispatches `review-agent` with `parent_command: debug` and `debug_md_path` pointing to DEBUG.md.
++- `/z-debug` Phase 3a and 3b dispatch `consultant-primary` and `consultant-secondary` in `generate-hypotheses-round1` and `generate-hypotheses-round2-adversarial` modes for multi-LLM hypothesis generation and adversarial critique.
+diff --git a/docs/human/commands.md b/docs/human/commands.md
+index 6b199b5..cea7b4f 100644
+--- a/docs/human/commands.md
++++ b/docs/human/commands.md
+@@ -7,7 +7,7 @@
+ 
+ The `commands` concept covers the slash-command specifications that drive z-harness workflows. Each command lives as a Markdown procedure under `commands/` and defines a user-facing orchestration path: planning, research, debugging, fixing, implementation, review, docs maintenance, memory authoring, audits, tests, stats, skill repair, plugin updates, bulk codebase uplift, style-guide authoring, provider discovery, and cross-IDE export.
+ 
+-The command surface is organized around explicit routing, durable artifacts, and a closed-loop memory layer. Planning-family commands collect deterministic route signals, consult `planning-router` only when signals conflict, write `route-decision.md`, emit `plan_route_decision`, and ask the user before switching. Review-family commands preserve evidence separately from promotion artifacts and route actionable findings through `/z-implement-all --tasks`. Both `/z-implement-all` (Phase 9) and `/z-review-all` (Phase 7) close the loop by running `run-memory-review.sh` after each plan completes, dispatching a `review-agent` to surface memory candidates, and presenting them sequentially for user acceptance — accepted candidates are persisted via `/z-suggest-memory --from-candidate-json`. `/z-debug` (Phase 10) also runs `run-memory-review.sh` after a shipped fix and dispatches the review-agent with `parent_command: debug`, capped at 3 candidates per session; the abandoned branch skips memory review entirely. `/z-audit-plan-style` audits plan artifacts (SPEC.md, PLAN.md, TASKS.md) for code-quality issues before any code is written — it requires STYLE.md (hard gate), dispatches a `plan-style-reviewer` agent internally, and emits `PLAN_STYLE_AUDIT.md` with BLOCKER/MAJOR/MINOR findings shaped for `/z-amend`. `/z-uplift` adds a tiered bulk-uplift path: it decomposes the repo into components, runs a cross-cutting pass, dispatches per-component audits, produces per-component TASKS.md files, and drives sequential implementation via `/z-implement-all`. `/z-style-init` authors a STYLE.md grounded in the repo's most idiomatic files and a cross-LLM critique; its `--amend` mode mines repeated dismissals from past MR-REVIEW runs to propose new rules. `/z-providers-discover` probes PATH for known LLM CLIs and writes a `providers.json` with interactively-confirmed role bindings. `/z-export` runs per-target adapter scripts to translate z-harness sources into IDE-specific formats under `exports/`.
++The command surface is organized around explicit routing, durable artifacts, and a closed-loop memory layer. Planning-family commands collect deterministic route signals, consult `planning-router` only when signals conflict, write `route-decision.md`, emit `plan_route_decision`, and ask the user before switching. Review-family commands preserve evidence separately from promotion artifacts and route actionable findings through `/z-implement-all --tasks`. Both `/z-implement-all` (Phase 9) and `/z-review-all` (Phase 7) close the loop by running `run-memory-review.sh` after each plan completes, dispatching a `review-agent` to surface memory candidates, and presenting them sequentially for user acceptance — accepted candidates are persisted via `/z-suggest-memory --from-candidate-json`. `/z-debug` (Phase 10) also runs `run-memory-review.sh` after a shipped fix and dispatches the review-agent with `parent_command: debug`, capped at 3 candidates per session; it uses a 5-line stdout contract where line 5 carries the path to DEBUG.md. The memory-review terminal-event contract requires exactly one `memory_review_terminal` event per invocation: the helper emits it on all skip paths; the orchestrator emits it after the user-gate loop for `ran_empty` and `needs_user` paths. The abandoned branch skips memory review entirely. `/z-audit-plan-style` audits plan artifacts (SPEC.md, PLAN.md, TASKS.md) for code-quality issues before any code is written — it requires STYLE.md (hard gate), dispatches a `plan-style-reviewer` agent internally, and emits `PLAN_STYLE_AUDIT.md` with BLOCKER/MAJOR/MINOR findings shaped for `/z-amend`. `/z-uplift` adds a tiered bulk-uplift path: it decomposes the repo into components, runs a cross-cutting pass, dispatches per-component audits, produces per-component TASKS.md files, and drives sequential implementation via `/z-implement-all`. `/z-style-init` authors a STYLE.md grounded in the repo's most idiomatic files and a cross-LLM critique; its `--amend` mode mines repeated dismissals from past MR-REVIEW runs to propose new rules. `/z-providers-discover` probes PATH for known LLM CLIs and writes a `providers.json` with interactively-confirmed role bindings. `/z-export` runs per-target adapter scripts to translate z-harness sources into IDE-specific formats under `exports/`.
+ 
+ ## Key entry points
+ 
+@@ -16,7 +16,7 @@ The command surface is organized around explicit routing, durable artifacts, and
+ - `commands/z-audit-plan.md:1` — `z-audit-plan` — Audits existing SPEC/PLAN/TASKS and routes contextually.
+ - `commands/z-audit-plan-style.md:1` — `z-audit-plan-style` — Audits plan artifacts for code-quality issues before implementation; requires STYLE.md; emits PLAN_STYLE_AUDIT.md for /z-amend.
+ - `commands/z-brainstorm.md:1` — `z-brainstorm` — Seeds planning with parallel ideation and anti-bias checks.
+-- `commands/z-debug.md:1` — `z-debug` — Runs heavy hypothesis-tournament debugging with post-mortem and Phase 10 memory review.
++- `commands/z-debug.md:1` — `z-debug` — Runs heavy hypothesis-tournament debugging with post-mortem and Phase 10 memory review (shipped branch only).
+ - `commands/z-do.md:1` — `z-do` — Executes tiny plan-free changes with review gates.
+ - `commands/z-export.md:1` — `z-export` — Exports commands/agents/skills to Cursor, Codex, or agy via adapter scripts.
+ - `commands/z-fix.md:1` — `z-fix` — Ships diagnosed bug fixes with consult and Codex review.
+@@ -47,11 +47,71 @@ The command surface is organized around explicit routing, durable artifacts, and
+ - `skills` — Skills expose or wrap the command flows for different clients and are the main consumer of the command specifications.
+ - Review-family artifacts — `/z-audit`, `/z-review-all`, and `/z-mr-review` preserve evidence separately from promoted task artifacts; survivors are applied through `/z-implement-all --tasks <path>`.
+ - Planning-family route policy — `/z-plan`, `/z-plan-light`, `/z-plan-split`, `/z-research`, `/z-brainstorm`, and `/z-do` share route checks that record route artifacts and never auto-execute a different command.
+-- Memory loop — `/z-implement-all` Phase 9 and `/z-review-all` Phase 7 both call `run-memory-review.sh`, dispatch `review-agent`, and route accepted candidates into `/z-suggest-memory --from-candidate-json`. `/z-debug` Phase 10 participates in the same loop after a shipped fix (abandoned branch skips). All three emit `review_agent_call` events. `/z-stats` Phase 4b surfaces these events so the user can see memory-review history.
++- Memory loop — `/z-implement-all` Phase 9 and `/z-review-all` Phase 7 both call `run-memory-review.sh`, dispatch `review-agent`, and route accepted candidates into `/z-suggest-memory --from-candidate-json`. `/z-debug` Phase 10 participates in the same loop after a shipped fix (abandoned branch skips). All three emit `review_agent_call` events and each invocation must produce exactly one `memory_review_terminal` event. `/z-stats` Phase 4b surfaces these events so the user can see memory-review history.
+ - Plan-quality pipeline — `/z-audit-plan-style` audits plan artifacts for code-quality issues before implementation begins. It requires `STYLE.md` (hard gate, no escape), dispatches the `plan-style-reviewer` agent, uses `extract-dismissals.py` to suppress repeated past dismissals, and emits `PLAN_STYLE_AUDIT.md` shaped for direct `/z-amend` consumption.
+ - Uplift pipeline — `/z-uplift` is a self-contained orchestration that sits above the planning and review families: it auto-decomposes the repo, calls consultant subagents for cross-cutting analysis, delegates per-component audits to auditor subagents, and drives sequential implementation via existing `/z-implement-all` invocations. It gates on `STYLE.md` presence and doc-staleness before proceeding.
+ - Style pipeline — `/z-style-init` (bootstrap and amend) is a prerequisite for `/z-mr-review` style enforcement, `/z-audit-plan-style`'s hard gate, and feeds the `/z-uplift` cleanliness+design rubric. `/z-style-init --amend` consumes dismissal archives written by `/z-mr-review` runs.
+ - Provider configuration — `/z-providers-discover` writes `providers.json` consumed by all commands that dispatch `consultant-primary`, `consultant-secondary`, or `reviewer` subagents.
++
++## Command catalogue (from README)
++
++### Pre-planning
++
++- **`/z-brainstorm <topic>`** — Cheap parallel idea generation across three vendor-diverse ideators. Produces `BRAINSTORM.md`. Cost target: ≤200K tokens.
++- **`/z-research <question>`** — Heavier terrain mapping via parallel Explores + cross-LLM critique. Produces `RESEARCH.md`. Cost target: ≤2M tokens.
++
++Typical chains:
++- Murky problem: `/z-research → /z-brainstorm → /z-plan`
++- Lighter case: `/z-brainstorm → /z-plan`
++- Standard: `/z-plan` alone
++
++### Planning
++
++- **`/z-plan <task>`** — Rigorous pipeline: premise check → exploration → enumerate decisions → bundled Gemini+Codex consult → SPEC.md / PLAN.md / TASKS.md.
++- **`/z-plan-light <fix>`** — Fast path for 1-5 file fixes; auto-bails to `/z-plan` if scope grows.
++- **`/z-plan-split <topic>`** — Pre-emptive scope splitter for sprawling topics. Proposes 2-6 narrow clusters and reconciles overlaps into `SHARED-CONCERNS.md` + `MANIFEST.md`.
++- **`/z-test`** — Semantic test-case planner. Reads SPEC/PLAN/TASKS, drafts non-trivial tests, cross-consults, writes `TESTS.md`.
++
++### Implementation
++
++- **`/z-implement-all`** — Orchestrates the full TASKS.md queue with per-task reviewer safety gate and retry. Flags: `--ack`, `--force-partial`.
++- **`/z-implement-next`** — Same loop, one task at a time.
++
++### Code quality
++
++- **`/z-style-init`** — Author the project `STYLE.md` interactively. Pass `--amend` to add rules from repeated review dismissals.
++- **`/z-mr-review`** — Multi-LLM code-quality review of the current branch diff against `STYLE.md`.
++
++### Multi-IDE export
++
++- **`/z-export [--target=<cursor|codex|agy|all>]`** — Export commands, agents, and skills to Cursor, Codex CLI, or Antigravity. See [MULTI-IDE.md](MULTI-IDE.md).
++
++### Providers
++
++- **`/z-providers-discover`** — Auto-detect installed LLM CLIs, generate a starter `providers.json`. See [PROVIDERS.md](PROVIDERS.md).
++
++### Plugin management
++
++- **`/z-update`** — Update the z-harness plugin. Detects symlink vs tarball mode. See [INSTALL.md](INSTALL.md).
++
++### Audit, debug, review
++
++- **`/z-uplift`** — Bulk codebase quality uplift. Decomposes repo, audits per component, drives sequential implementation.
++- **`/z-audit <target>`** — Read-only audit pipeline; emits REPORT.md + TASKS.md.
++- **`/z-fix <symptom>`** — Lightweight bug-fix command; single light-fix consult, inline implementation, Codex review.
++- **`/z-debug <symptom>`** — Adversarial hypothesis tournament; writes `DEBUG.md`; auto-bails to `/z-plan` if scope grows.
++- **`/z-review-all`** — Final-gate cross-LLM review of a completed plan's cumulative diff against SPEC.md.
++- **`/z-skill-fix <skill>`** — Patches any `.claude/skills/*/SKILL.md`, `commands/*.md`, or `agents/*.md`.
++
++### Docs
++
++- **`/z-init-docs`** — Bootstrap two-tier docs (`docs/human/` + `docs/llm/INDEX.json`).
++- **`/z-maintain-docs`** — Refresh stale concepts. Dry-run preview by default.
++- **`/z-suggest-memory`** — Author a memory entry into a concept's `docs/llm/<slug>.json`.
++
++### Telemetry
++
++- **`/z-stats`** — Read-only progress + cost report from `metrics.jsonl` and TASKS.md.
+ - Export pipeline — `/z-export` is a thin orchestration shell around `scripts/export-<target>.py` adapter scripts; it does no file I/O itself.
+ 
+ ## Edge cases / gotchas
+@@ -65,6 +125,10 @@ The command surface is organized around explicit routing, durable artifacts, and
+ - Phase 9 (`z-implement-all`) and Phase 7 (`z-review-all`) are soft phases: all failure paths (malformed agent output, skipped helper, empty candidate array) exit silently without halting the run. Phase 10 (`z-debug`) follows the same soft-phase contract.
+ - `--from-candidate-json` on `z-suggest-memory` accepts either a file path or `-` (stdin). It is used exclusively by the automated review-agent flow; manual callers should use the interactive path instead.
+ - `/z-stats` Phase 4b reads `review_agent_call` events from `metrics.jsonl`; these are emitted by `/z-implement-all` Phase 9, `/z-review-all` Phase 7, and `/z-debug` Phase 10. If none of these phases have run yet, this section outputs nothing.
++- `/z-debug` Phase 10 uses a 5-line stdout contract with `run-memory-review.sh`: line 1=status, line 2=cumulative_diff_path, line 3=spec_path (may be empty), line 4=tags_path, line 5=debug_md_path. Phase 10 requires `memory_review_terminal` to be emitted exactly once per invocation: the helper emits it on all skip paths; the orchestrator emits it after the user-gate loop for `ran_empty` and `needs_user` paths.
++- `/z-debug` Phase 10 memory review only runs on the `status: shipped` branch; the abandoned branch emits no memory-review telemetry. The D11 push-notify policy applies to `skipped_broken_context` skip states: push-notify at most once per `(slug, skip_reason)` pair, deduplicated via `.notify-dedup-session`.
++- `/z-debug` Phase 10 clears `.notify-dedup-session` at the start of each fresh debug invocation so notify dedup state from a previous session does not bleed into the current one.
++- `/z-debug` Phase 2.5 (bisect fast-path) is conditional: all three gates must hold (known-good ref, reproducibility confirmed yes, scriptable repro). All non-`ok` bisect statuses fall through to Phase 3a without blocking. Bisect augments evidence and seeds Phase 3a prompts but never replaces hypothesis generation or pre-fills the winning hypothesis.
+ - `/z-uplift` gates on `STYLE.md` before proceeding: if absent, it offers three options (run `/z-style-init` first, continue with degraded rubric, or abort). It does NOT auto-invoke `/z-style-init`.
+ - `/z-uplift` also gates on doc-staleness: if `stale_pct >= Z_HARNESS_DOC_STALENESS_THRESHOLD` (default 20%), it presents an `AskUserQuestion` to switch to `/z-maintain-docs`, continue anyway, or abandon. It does NOT auto-invoke `/z-maintain-docs`.
+ - `/z-uplift` is resumable via MANIFEST.md state: `[ ] pending` or `[~] auditing` rows resume at Phase 3; `[a] audited` rows resume at Phase 5. Use `--retry-bailed` to reset `[!] bailed` rows back to pending, and `--refresh-component <slug>` to re-audit a single named component.
+@@ -79,8 +143,6 @@ The command surface is organized around explicit routing, durable artifacts, and
+ - `/z-export` defaults to `--target=all`; unrecognized target values exit nonzero immediately before running any scripts.
+ - `/z-audit-plan-style` has a hard STYLE.md gate: there is no `--no-style` escape. If STYLE.md is missing, the command refuses immediately and routes to `/z-style-init`.
+ - `/z-audit-plan-style` emits `PLAN_STYLE_AUDIT.md` separately from `/z-audit-plan`'s `PLAN_AUDIT_REPORT.md`; correctness findings from the plan-style-reviewer are passed through under a `## Cross-dimension note` but are not promoted into amendment blocks.
+-- `/z-debug` Phase 10 memory review only runs on the `status: shipped` branch; the abandoned branch emits no memory-review telemetry.
+-- `/z-debug` Phase 10 clears `.notify-dedup-session` at the start of each fresh debug invocation so notify dedup state from a previous session does not bleed into the current one.
+ 
+ ## Examples
+ 
+diff --git a/docs/human/environment-knobs.md b/docs/human/environment-knobs.md
+new file mode 100644
+index 0000000..6edd426
+--- /dev/null
++++ b/docs/human/environment-knobs.md
+@@ -0,0 +1,28 @@
++# Environment Knobs
++
++> Last updated: 2026-05-27
++
++z-harness behaviour can be tuned via environment variables. The notify and
++docs knobs are now managed through `scripts/config.py` (see
++[docs/human/config.md](config.md)); the variables below remain in effect
++for the other tunables.
++
++## Variables
++
++| Variable | Default | Purpose |
++|---|---|---|
++| `Z_HARNESS_NOTIFY` | `approval_only` | Push notifications: `off` \| `approval_only` \| `all`. Superseded by `scripts/config.py` when the TOML config is present. |
++| `Z_HARNESS_MAX_EXPLORE` | `3` | Cap on `Explore` subagent dispatches per `/z-plan` run. |
++| `Z_HARNESS_DOC_STALENESS_THRESHOLD` | `20` | Percent staleness above which `/z-plan` halts and recommends `/z-maintain-docs`. |
++| `Z_HARNESS_LOCAL_CARGO_CLEAN` | — | Set to `1` to trigger a one-time local `cargo clean` at the start of `/z-implement-all`. |
++| `Z_HARNESS_SLUG` | — | Set by commands; namespaces all output paths under `z-harness/<slug>/`. |
++| `Z_HARNESS_BRAINSTORM_EXPLORE` | — | Set to `1` to opt into a Phase 1 Explore dispatch inside `/z-brainstorm`. Off by default. |
++| `Z_IMPLEMENT_PAUSE_TASKS` | `5` | Completed tasks since last pause that triggers a compaction breakpoint in `/z-implement-all`. Set to `0` to disable. |
++| `Z_IMPLEMENT_PAUSE_MINUTES` | `30` | Wall-clock minutes since last pause that triggers a compaction breakpoint in `/z-implement-all`. Set to `0` to disable. |
++| ~~`Z_HARNESS_RETRY_UPGRADE`~~ | — | Removed. Model selection now uses `**Complexity:** low\|medium\|high` stamp in TASKS.md; retries always use Opus. |
++
++Setting both `Z_IMPLEMENT_PAUSE_TASKS=0` and `Z_IMPLEMENT_PAUSE_MINUTES=0` disables all
++compaction breakpoints in `/z-implement-all`.
++
++See [docs/human/config.md](config.md) for the TOML config system, which covers
++`notify.level` and `docs.always_apply` as structured, layered knobs.
+diff --git a/docs/human/limitations.md b/docs/human/limitations.md
+new file mode 100644
+index 0000000..d590131
+--- /dev/null
++++ b/docs/human/limitations.md
+@@ -0,0 +1,23 @@
++# Known Limitations (v1)
++
++> Last updated: 2026-05-27
++
++- **No per-subagent wall-clock timeout.** `Agent()` does not expose a per-call
++  timeout; subagents that hang block the entire run. User-facing escape: ctrl-c
++  to abort.
++- **No doc-fetcher caching across precontext and plan runs.** If you run
++  `/z-research` and then `/z-plan` in the same slug, doc-fetcher is dispatched
++  twice (once per command). Marked as a v2 candidate; the cost is low today.
++- **`/z-plan-split`: no cross-cluster task parallelism.** `/z-implement-all`
++  walks clusters sequentially in MANIFEST run-order; intra-cluster parallelism
++  (N=3) is honored, cross-cluster is v2.
++- **`/z-plan-split`: path-only overlap detection.** SHARED-CONCERNS.md is built
++  from file-path intersections across cluster TASKS.md `**Files:**` lines. No
++  semantic overlap detection (two clusters that touch disjoint files but conflict
++  on the same in-memory invariant will not surface here).
++- **`/z-plan-split`: no `--from-audit` / `--from-brainstorm` input chains.** The
++  topic is taken verbatim from `$ARGUMENTS`; there is no structured handoff from
++  `/z-audit`, `/z-research`, or `/z-brainstorm` artifacts. v2 candidate.
++- **`/z-plan-split`: one-level recursion cap.** Cluster-planners refuse to write
++  inside an existing MANIFEST.md tree, and `/z-implement-all` halts with
++  `tree_depth_exceeded` if it finds a nested MANIFEST.md.
+diff --git a/docs/human/plugin-author-conventions.md b/docs/human/plugin-author-conventions.md
+new file mode 100644
+index 0000000..273fdbb
+--- /dev/null
++++ b/docs/human/plugin-author-conventions.md
+@@ -0,0 +1,31 @@
++# Plugin-author Conventions
++
++> Last updated: 2026-05-27
++
++Conventions for downstream repos that define `.claude/skills/` files
++interoperating with z-harness.
++
++## Conventions
++
++- End each skill file with `## Anti-patterns (push back)` and `## Out of scope`
++  sections — they're the cheapest place to encode failure modes and handoff
++  boundaries.
++- Skills that diagnose should NOT also apply patches. Hand off to `/z-plan-light`
++  (small fix) or `/z-plan` (structural) for any code change beyond initial
++  scaffolding.
++- Skills that orchestrate should call cross-LLM consult (`consultant-primary`,
++  `consultant-secondary`) at premise / red-team gates, not run them inline.
++- Use explicit slash commands instead of flag-routed `mode:` parameters — one
++  skill per mode (`/qt-audit-strategy`, not `/qt-audit mode=strategy`).
++- Domain-specific audit checklists live under `.claude/audit-rubrics/<component>.md`
++  and are consumed by `/z-audit` via its rubric-file slot — keep them as plain
++  checklists, not scaffolding.
++
++## Operating principles
++
++These apply to all z-harness commands and skills:
++
++- Push back by default — on Gemini, Codex, and the user.
++- Always ask when unclear. No silent assumptions.
++- No shortcuts without explicit user approval.
++- DRY / KISS / SOLID are non-negotiable in the final plan.
+diff --git a/docs/human/review-agent.md b/docs/human/review-agent.md
+index 47ad82b..fe2d299 100644
+--- a/docs/human/review-agent.md
++++ b/docs/human/review-agent.md
+@@ -1,11 +1,11 @@
+ # review-agent
+ 
+-> Last updated: 2026-05-27
++> Last updated: 2026-05-26
+ > Covers source: agents/review-agent.md, scripts/run-memory-review.sh
+ 
+ ## Overview
+ 
+-`review-agent` is a Haiku-tier subagent defined in `agents/review-agent.md`. It fires automatically at the end of `/z-implement-all` (Phase 9), `/z-review-all` (Phase 7), and `/z-debug` (Phase 10 shipped branch). It reads the completed run's `events.jsonl`, cumulative diff, and `SPEC.md` (or `DEBUG.md` for debug runs), and proposes 0-3 candidate memories worth persisting to the docs knowledge base. The Phase 9 and Phase 7 wiring lives in `skills/z-implement-all/SKILL.md` and `skills/z-review-all/SKILL.md`; the debug wiring lives in `skills/z-debug/SKILL.md` Phase 10.
++`review-agent` is a Haiku-tier subagent defined in `agents/review-agent.md`. It fires automatically at the end of `/z-implement-all` (Phase 9), `/z-review-all` (Phase 7), and `/z-debug` (Phase 10, shipped branch only). It reads the completed run's `events.jsonl`, cumulative diff, and `SPEC.md` (or `DEBUG.md` for debug runs), and proposes 0-3 candidate memories worth persisting to the docs knowledge base. The Phase 9 wiring lives in `skills/z-implement-all/SKILL.md`; Phase 7 in `skills/z-review-all/SKILL.md`; Phase 10 in `skills/z-debug/SKILL.md`.
+ 
+ The agent reasons but does not write. It returns a single fenced JSON block containing candidate objects. The orchestrator owns all writes: it parses the candidates, surfaces them via `AskUserQuestion` prompts, and routes accepted candidates through `/z-suggest-memory`. Before the agent is dispatched, `scripts/run-memory-review.sh` performs skip-condition checks and assembles artifact paths — the script is always called first, and on a non-skip result the orchestrator constructs the agent prompt from its output.
+ 
+@@ -15,7 +15,7 @@ The agent reasons but does not write. It returns a single fenced JSON block cont
+ - `agents/review-agent.md:12` — `## Inputs from caller` — full input field list including `parent_command`, `debug_md_path`, and artifact primacy rules
+ - `agents/review-agent.md:27` — `## Procedure` — six-step candidate-generation procedure (read, scan signal patterns, prefer existing slugs, cap at 3, check tags, debug filter)
+ - `agents/review-agent.md:46` — `## Output contract` — fenced JSON schema for candidate objects; any other output is malformed
+-- `scripts/run-memory-review.sh:1` — `run-memory-review` — skip-condition guard and artifact-prep helper; called by `/z-implement-all` Phase 9, `/z-review-all` Phase 7, and `/z-debug` Phase 10
++- `scripts/run-memory-review.sh:1` — `run-memory-review` — skip-condition guard and artifact-prep helper; called by all three parent commands before any agent dispatch
+ - `scripts/run-memory-review.sh:135` — `debug_md_missing` skip condition — fires when `parent_command: debug` and `DEBUG.md` is absent or unreadable
+ 
+ ## How it interacts with others
+@@ -41,7 +41,7 @@ Before dispatching the agent, `scripts/run-memory-review.sh` performs a skip-con
+ - **Skip if `no_plan_dir`**: `$Z_HARNESS_PLAN_DIR` is not set — the plan directory cannot be resolved.
+ - **Skip if `debug_md_missing`** (debug only): `DEBUG.md` does not exist or is unreadable — required primary artifact is absent.
+ - **Do NOT skip on halt**: halted runs are high-signal and are always reviewed.
+-- **Soft-skip if `tags_missing`**: `docs/llm/TAGS.txt` is absent; emits `review_agent_failed` with `skip_reason: tags_missing` and exits without blocking.
++- **Soft-skip if `tags_missing`**: `docs/llm/TAGS.txt` is absent; emits `memory_review_terminal` with `state: skipped_broken_context` and exits without blocking.
+ 
+ ## Artifact primacy by parent_command
+ 
+@@ -118,6 +118,7 @@ One JSON object per line. This file is ephemeral — it lives with the run archi
+ - Candidate tags must come from `docs/llm/TAGS.txt` unless a free-form tag is explicitly justified; the agent is instructed to prefer controlled tags.
+ - The agent receives `index_path` (path to `docs/llm/INDEX.json`) and is expected to prefer extending an existing slug over coining a new one.
+ - `skills/z-implement-all/SKILL.md`, `skills/z-review-all/SKILL.md`, and `skills/z-debug/SKILL.md` are the canonical orchestrator definitions; `commands/` equivalents may be stale.
++- `review_agent_failed` and `review_agent_malformed` do NOT emit `memory_review_terminal` — they are orthogonal failure classes, not terminal states of the review pass.
+ 
+ ## Slug naming anti-patterns
+ 
+@@ -169,6 +170,12 @@ jq 'select(.kind == "review_agent_failed" or .kind == "review_agent_malformed")'
+ - `malformed_json`: The agent returned prose outside the fenced block. One-shot soft-skip; no retry in v1.
+ - `empty_diff`: Skip-condition fired correctly — not an error.
+ 
++## Memories
++
++<!-- DO NOT EDIT this section by hand — regenerated from docs/llm/review-agent.json by doc-updater. Use /z-suggest-memory to add or edit memories. -->
++
++_No memories recorded yet._
++
+ ## See also
+ 
+ - `/Users/zeke/dev/z-harness/skills/z-suggest-memory/SKILL.md` — sole authoring path for accepted candidates.
+diff --git a/docs/human/scripts.md b/docs/human/scripts.md
+index 815472e..35b2e4c 100644
+--- a/docs/human/scripts.md
++++ b/docs/human/scripts.md
+@@ -1,6 +1,6 @@
+ # Scripts
+ 
+-> Last updated: 2026-05-27
++> Last updated: 2026-05-26
+ > Covers source: scripts/extract-dismissals.py, scripts/log-event.sh, scripts/log-phase.sh, scripts/regenerate-memories-flat.py, scripts/remote-sandbox-sync.sh, scripts/run-memory-review.sh, scripts/version.sh
+ 
+ ## Overview
+@@ -16,7 +16,7 @@ These scripts share a common dependency on `python3` — used for JSON serializa
+ - `scripts/regenerate-memories-flat.py:1` — `regenerate-memories-flat.py` — Scans all `docs/llm/*.json` files (excluding `INDEX.json`), extracts `memories[]` entries, sorts them by slug ascending then date descending, and writes `docs/llm/MEMORIES-FLAT.md` atomically via a temp-file rename.
+ - `scripts/version.sh:1` — `version.sh` — Prints a single-line JSON blob with the plugin's git short-SHA, dirty flag, branch, and optional tag; used at `run_start` events for post-run correlation.
+ - `scripts/run-memory-review.sh:1` — `run-memory-review.sh` — Gate script called by `/z-implement-all`, `/z-review-all`, and `/z-debug`; accepts `<RUN> <parent_command>` (where `parent_command` is `implement-all`, `review-all`, or `debug`); evaluates skip conditions, writes a truncated cumulative diff to the run archive, and prints artifact paths on stdout.
+-- `scripts/extract-dismissals.py:480` — `main` — CLI entry point; extracts dismissed MR-review (or plan-style-audit) finding signatures by comparing consecutive archived run snapshots; outputs `{"signatures": [...], "n_runs_scanned": N}` to stdout.
++- `scripts/extract-dismissals.py:480` — `main` — CLI entry point; extracts dismissed MR-review or plan-style-audit finding signatures by comparing consecutive archived run snapshots; supports `--global` to scan all slugs and `--filename` to target alternate snapshot files (e.g. `PLAN_STYLE_AUDIT.md`); outputs `{"signatures": [...], "n_runs_scanned": N}` to stdout.
+ - `scripts/extract-dismissals.py:384` — `extract_dismissals_from_runs` — Core pairwise algorithm: for each consecutive run pair (R_i, R_{i+1}), compares R_i snapshot against R_{i+1}'s `.previous-*` user-edited copy to identify dismissed findings.
+ - `scripts/remote-sandbox-sync.sh:1` — `remote-sandbox-sync.sh` — Rsync the local working tree to a per-(slug, task-id) remote sandbox at `~/dev/qt-bot-sandbox/<slug>/<task-id>/`; invoked by the remote-runner agent before running cargo or qtctl on the remote host.
+ 
+@@ -29,7 +29,7 @@ These scripts share a common dependency on `python3` — used for JSON serializa
+ 
+ ## Edge cases / gotchas
+ 
+-- `run-memory-review.sh` now accepts a mandatory second argument `parent_command` (`implement-all`, `review-all`, or `debug`). When `parent_command` is `debug`, an additional skip condition applies: if `DEBUG.md` is not readable in the plan base dir, the script exits with `STATUS: skipped debug_md_missing`. On `STATUS: ready` with a `debug` parent, line 5 of stdout is the absolute path to `DEBUG.md`.
++- `run-memory-review.sh` accepts a mandatory second argument `parent_command` (`implement-all`, `review-all`, or `debug`). When `parent_command` is `debug`, an additional skip condition applies: if `DEBUG.md` is not readable in the plan base dir, the script exits with `STATUS: skipped debug_md_missing`. On `STATUS: ready` with a `debug` parent, line 5 of stdout is the absolute path to `DEBUG.md`.
+ - `run-memory-review.sh` stdout contract: line 1 is always `STATUS: ready | STATUS: skipped <reason>`; if ready, lines 2-4 are absolute paths to `cumulative.diff`, `SPEC.md` (or empty string if missing), and `TAGS.txt`; line 5 is present only for the `debug` parent and holds the absolute path to `DEBUG.md`.
+ - `run-memory-review.sh` emits exactly one `memory_review_terminal` event per invocation (on all skip paths). The orchestrator owns the terminal event for non-skip paths.
+ - `run-memory-review.sh` contains a pure-bash JSON fallback in `_build_terminal_payload` for environments where `python3` is unavailable; this path avoids any external JSON library.
+@@ -40,6 +40,7 @@ These scripts share a common dependency on `python3` — used for JSON serializa
+ - `version.sh` resolves the plugin root via four environment variables in priority order: `Z_HARNESS_PLUGIN_ROOT`, `ANTIGRAVITY_PLUGIN_ROOT`, `CLAUDE_PLUGIN_ROOT`, then script-relative path walk. It gracefully degrades if the plugin root is not a git repo.
+ - `regenerate-memories-flat.py` writes atomically using `os.replace()` on a PID+random-suffixed temp file; a partial write will never corrupt the canonical `MEMORIES-FLAT.md`.
+ - `extract-dismissals.py` drops findings that lack a `title` field in the `findings_index` frontmatter; it does NOT fall back to the T-MR-NNN id as a snippet because those ids are renumbered each run.
++- `extract-dismissals.py`'s `--filename` flag allows targeting `PLAN_STYLE_AUDIT.md` instead of the default `MR-REVIEW.md`; `--global` mode applies within each slug independently to prevent cross-slug run interleaving.
+ - `remote-sandbox-sync.sh` warns (but does not fail) when no `.z-harness-rsync-exclude` file is found; it checks the project root first, then the plugin root.
+ 
+ ## Examples
+@@ -58,6 +59,8 @@ These scripts share a common dependency on `python3` — used for JSON serializa
+   `python3 scripts/regenerate-memories-flat.py --repo-root /path/to/repo --dry-run`
+ - Extract dismissal signatures for a slug:
+   `python3 scripts/extract-dismissals.py z-harness/mr-style-reviewer/ --max-runs 10`
++- Extract plan-style-audit dismissal signatures globally:
++  `python3 scripts/extract-dismissals.py --global --filename PLAN_STYLE_AUDIT.md`
+ - Extract dismissal signatures globally across all slugs:
+   `python3 scripts/extract-dismissals.py --global`
+ - Sync local working tree to remote sandbox:
+diff --git a/docs/human/skills.md b/docs/human/skills.md
+index 0cc75f2..0b592cf 100644
+--- a/docs/human/skills.md
++++ b/docs/human/skills.md
+@@ -1,20 +1,21 @@
+ # Skills
+ 
+-> Last updated: 2026-05-27
+-> Covers source: skills/z-amend/SKILL.md, skills/z-audit-plan/SKILL.md, skills/z-brainstorm/SKILL.md, skills/z-debug/SKILL.md, skills/z-do/SKILL.md, skills/z-implement-all/SKILL.md, skills/z-implement-next/SKILL.md, skills/z-improve/SKILL.md, skills/z-init-docs/SKILL.md, skills/z-maintain-docs/SKILL.md, skills/z-plan-light/SKILL.md, skills/z-plan-split/SKILL.md, skills/z-plan/SKILL.md, skills/z-research/SKILL.md, skills/z-review-all/SKILL.md, skills/z-stats/SKILL.md, skills/z-suggest-memory/SKILL.md, skills/z-test/SKILL.md, skills/z-update/SKILL.md, skills/z-uplift/SKILL.md
++> Last updated: 2026-05-26
++> Covers source: skills/z-amend/SKILL.md, skills/z-audit-plan/SKILL.md, skills/z-audit-plan-style/SKILL.md, skills/z-brainstorm/SKILL.md, skills/z-debug/SKILL.md, skills/z-do/SKILL.md, skills/z-implement-all/SKILL.md, skills/z-implement-next/SKILL.md, skills/z-improve/SKILL.md, skills/z-init-docs/SKILL.md, skills/z-maintain-docs/SKILL.md, skills/z-plan-light/SKILL.md, skills/z-plan-split/SKILL.md, skills/z-plan/SKILL.md, skills/z-research/SKILL.md, skills/z-review-all/SKILL.md, skills/z-stats/SKILL.md, skills/z-suggest-memory/SKILL.md, skills/z-test/SKILL.md, skills/z-update/SKILL.md, skills/z-uplift/SKILL.md
+ 
+ ## Overview
+ 
+-The skills concept covers the operational playbooks behind z-harness slash commands. Each `skills/<name>/SKILL.md` file (and several `commands/*.md` files that define full pipelines) specifies a command's phases, telemetry, user gates, subagent dispatches, output artifacts, and hard safety rules. These files are the practical source of truth for how planning, research, debugging, implementation orchestration, test-case planning, final review, docs maintenance, memory authoring, statistics reporting, self-update, bulk quality uplift, targeted component auditing, fast-path bug fixing, and skill-file patching should run.
++The skills concept covers the operational playbooks behind z-harness slash commands. Each `skills/<name>/SKILL.md` file (and several `commands/*.md` files that define full pipelines) specifies a command's phases, telemetry, user gates, subagent dispatches, output artifacts, and hard safety rules. These files are the practical source of truth for how planning, research, debugging, implementation orchestration, test-case planning, final review, docs maintenance, memory authoring, statistics reporting, self-update, bulk quality uplift, targeted component auditing, fast-path bug fixing, plan-correctness auditing, plan-style auditing, and skill-file patching should run.
+ 
+-The skill family shares a route-policy model: planning and execution skills collect deterministic signals, call the advisory `planning-router` only when signals conflict, write `route-decision.md`, emit `plan_route_decision`, present an AskUser handoff gate, and stop rather than auto-running the next command. Skills reference stable provider-registry agent roles (`consultant-primary`, `consultant-secondary`, `reviewer`) and shared scripts for path resolution and logging. Four skills have auto memory-review phases: `z-implement-all` (Phase 9), `z-review-all` (Phase 7), `z-debug` (Phase 10 — shipped branch only), and `z-suggest-memory` (sole memory authoring path, supports `--from-candidate-json` for review-agent output). All memory-review phases share a common pattern: `run-memory-review.sh` gates dispatch, the skip path emits `memory_review_terminal` via the helper, the ready path dispatches a `review-agent` subagent, and the terminal `memory_review_terminal` event (with `state: needs_user` or `ran_empty`) is emitted once per invocation. Push-notify for broken-context skip reasons uses a per-session dedup file (`.notify-dedup-session`) to suppress duplicate notifications. The debug family covers two distinct flows: `/z-debug` for unknown-root-cause bugs (heavy hypothesis tournament with Phase 2.5 bisect fast-path) and `/z-fix` for known-diagnosis bugs (lightweight fix with a mandatory wrong-tool gate at Phase 0). `/z-audit` is the read-only component audit primitive that produces REPORT.md plus TASKS.md consumable by `/z-implement-all`. `/z-skill-fix` is a meta-skill for patching misleading SKILL.md, command, or agent files. The newest skill, `z-uplift`, adds bulk codebase quality uplift by decomposing a repo into components, running a cross-cutting pass for global issues, dispatching per-component `auditor` subagents across `correctness`, `cleanliness`, and `design` dimensions in parallel, then driving sequential per-component implementation via `/z-implement-all --tasks=`.
++The skill family shares a route-policy model: planning and execution skills collect deterministic signals, call the advisory `planning-router` only when signals conflict, write `route-decision.md`, emit `plan_route_decision`, present an AskUser handoff gate, and stop rather than auto-running the next command. Skills reference stable provider-registry agent roles (`consultant-primary`, `consultant-secondary`, `reviewer`) and shared scripts for path resolution and logging. Four skills have auto memory-review phases: `z-implement-all` (Phase 9), `z-review-all` (Phase 7), `z-debug` (Phase 10 — shipped branch only), and `z-suggest-memory` (sole memory authoring path, supports `--from-candidate-json` for review-agent output). All memory-review phases share a common pattern: `run-memory-review.sh` gates dispatch, the skip path emits `memory_review_terminal` via the helper, the ready path dispatches a `review-agent` subagent, and the terminal `memory_review_terminal` event (with `state: needs_user` or `ran_empty`) is emitted once per invocation. Push-notify for broken-context skip reasons uses a per-session dedup file (`.notify-dedup-session`) to suppress duplicate notifications. The debug family covers two distinct flows: `/z-debug` for unknown-root-cause bugs (heavy hypothesis tournament with Phase 2.5 bisect fast-path via `bisect-isolator` Haiku subagent) and `/z-fix` for known-diagnosis bugs (lightweight fix with a mandatory wrong-tool gate at Phase 0). `/z-audit` is the read-only component audit primitive that produces REPORT.md plus TASKS.md consumable by `/z-implement-all`. `/z-audit-plan` audits plan correctness (references, design, adversarial review) before implementation. `/z-audit-plan-style` audits plan artifacts for code-quality and style issues — the same lens `/z-mr-review` applies to diffs, applied pre-implementation; it requires STYLE.md and has no `--no-style` escape. `/z-skill-fix` is a meta-skill for patching misleading SKILL.md, command, or agent files. The newest skill, `z-uplift`, adds bulk codebase quality uplift by decomposing a repo into components, running a cross-cutting pass for global issues, dispatching per-component `auditor` subagents across `correctness`, `cleanliness`, and `design` dimensions in parallel, then driving sequential per-component implementation via `/z-implement-all --tasks=`.
+ 
+ ## Key entry points
+ 
+ - `skills/z-amend/SKILL.md:1` — `z-amend` — Amends SPEC/PLAN/TASKS or FIX.md artifacts while preserving completed-task state; changed task blocks get complexity re-classified.
+ - `skills/z-audit-plan/SKILL.md:1` — `z-audit-plan` — Read-only audit of existing plan artifacts; verifies references/design, runs adversarial consultants, and routes contextually when no plan, plan changes, or doc drift blocks confidence.
++- `skills/z-audit-plan-style/SKILL.md:1` — `z-audit-plan-style` — Re-entry alias for `commands/z-audit-plan-style.md`; audits SPEC/PLAN/TASKS for MR-review-style code-quality issues (defensive bloat, premature abstraction, DRY/KISS/SOLID, STYLE.md drift) BEFORE any code is written; dispatches `plan-style-reviewer` agent; emits `PLAN_STYLE_AUDIT.md` with BLOCKER/MAJOR/MINOR findings shaped for `/z-amend`. Hard gate on STYLE.md — no `--no-style` escape.
+ - `skills/z-brainstorm/SKILL.md:1` — `z-brainstorm` — Cheap pre-plan ideation with three vendor-diverse ideators, identical scaffolding, mandatory anti-bias checks, and BRAINSTORM.md output.
+-- `skills/z-debug/SKILL.md:1` — `z-debug` — Heavy unknown-root-cause debugging flow with a wrong-tool gate (Phase 0), optional bisect fast-path (Phase 2.5), hypothesis rounds (3a round-1 + 3b adversarial), posterior scoring table, fix-gate (posterior == very_high + zero unexplained evidence), verification, optional MR-style review on the fix diff, mandatory post-mortem, and Phase 10 auto memory-review on the shipped branch only.
++- `skills/z-debug/SKILL.md:1` — `z-debug` — Heavy unknown-root-cause debugging flow with a wrong-tool gate (Phase 0), conditional bisect fast-path (Phase 2.5 via `bisect-isolator` Haiku subagent), hypothesis rounds (3a round-1 + 3b adversarial), posterior scoring table, fix-gate (posterior == very_high + zero unexplained evidence), verification, optional MR-style review on the fix diff, mandatory post-mortem, and Phase 10 auto memory-review on the shipped branch only.
+ - `commands/z-audit.md:1` — `z-audit` — Read-only structured audit pipeline for a target component; spawns one `auditor` subagent per selected dimension in parallel, runs bundled Gemini + Codex consult on merged findings, and emits REPORT.md plus TASKS.md (in `/z-implement-all`-compatible format) under `$Z_HARNESS_PLAN_DIR-audit/`. Auto-bails to escalation.md at >30 findings or >10 CRITICAL/HIGH.
+ - `commands/z-fix.md:1` — `z-fix` — Fast-path fix for bugs with a known diagnosis; Phase 0 wrong-tool gate (redirects to `/z-debug` if no hypothesis), premise check, doc-fetcher grounding, single bundled `light-fix` consult (framed as "does this cause explain all symptoms?"), inline implementation (main thread, no implementer subagent), non-negotiable Codex review, optional post-mortem. Auto-bails at >5 candidate files or cross-module impact. Hard inline limit of 7 files.
+ - `commands/z-skill-fix.md:1` — `z-skill-fix` — Meta-skill for patching misleading skill/command/agent files; writes a diagnosis note in chat before editing, applies the smallest correct change, checks referrer consistency on deletions, re-reads for internal contradiction, and runs a mandatory Codex reviewer safety gate. Never auto-commits.
+@@ -28,7 +29,7 @@ The skill family shares a route-policy model: planning and execution skills coll
+ - `skills/z-plan-split/SKILL.md:1` — `z-plan-split` — Splits large topics into 2-6 clusters, enforces slug safety, plans leaves in parallel, reconciles file overlap with path normalization and severity heuristics, writes MANIFEST.md plus SHARED-CONCERNS.md, and emits a strict early-exit telemetry contract for every exit path.
+ - `skills/z-plan/SKILL.md:1` — `z-plan` — Full rigorous planning flow with docs-freshness route gate, doc-fetcher/Explore grounding (Haiku by default; cap 3 Explores), decisions, bundled consult, SPEC/PLAN/TASKS, and parallel complexity-classifier dispatch.
+ - `skills/z-research/SKILL.md:1` — `z-research` — Terrain-mapping flow with cost gate, `--slug` flag parsing, doc-fetcher-first scaffolding, up to three Explore calls tracked as dispatched vs succeeded, bundled critique with per-consultant retry-once policy, and a mandatory no-recommendation invariant.
+-- `skills/z-review-all/SKILL.md:1` — `z-review-all` — Final-gate review with Pre-Phase 0 resume check (`.review_state.json` fast-forward), sanity checks, optional TESTS.md suite gate, Phase 3.7 pre-consult compaction breakpoint, two-pronged consultant review (implementation faithfulness + spec correctness), REVIEW-TASKS promotion, and Phase 7 auto memory-review. Emits `memory_review_terminal`; clears `.notify-dedup-session` at Phase 7 start.
++- `skills/z-review-all/SKILL.md:1` — `z-review-all` — Final-gate review with Pre-Phase 0 resume check (`.review_state.json` fast-forward), sanity checks, optional TESTS.md suite gate, Phase 3.7 pre-consult compaction breakpoint, two-pronged consultant review (implementation faithfulness + spec correctness), REVIEW-TASKS promotion, and Phase 7 auto memory-review. Emits `memory_review_terminal`; clears `.notify-dedup-session` at Phase 0 start.
+ - `skills/z-stats/SKILL.md:1` — `z-stats` — Read-only shell/jq/awk diagnostic for progress, wall time, token estimates, halts, Phase 4b memory-review activity (reads both `review_agent_call` and `memory_review_terminal` events, with old-shape `phase_end` back-compat mapping), stalls, version history, and next-command suggestions.
+ - `skills/z-suggest-memory/SKILL.md:1` — `z-suggest-memory` — Sole authoring path for `memories[]`; supports append/edit/delete, `--from-candidate-json` for review-agent output, validates memory schema, writes atomically, regenerates MEMORIES-FLAT.md, and optionally refreshes human docs.
+ - `skills/z-test/SKILL.md:1` — `z-test` — Optional planning-time semantic test-case planner; risk-ranks tasks, drafts non-trivial test cases, runs cross-LLM consult (mode `test-cases`), writes TESTS.md, and cross-links TEST-NNN entries into TASKS.md so tests are implemented alongside production code.
+@@ -37,8 +38,8 @@ The skill family shares a route-policy model: planning and execution skills coll
+ 
+ ## How it interacts with others
+ 
+-- `commands` — Commands are the user-facing surfaces that mirror or invoke these skill workflows. Route-policy changes must stay aligned between command markdown and skill markdown. Several commands (`z-audit.md`, `z-fix.md`, `z-skill-fix.md`) define their pipelines directly in `commands/` without a corresponding `SKILL.md` re-entry alias.
+-- `agents` — Skills define when to dispatch `doc-fetcher`, `doc-updater`, `planning-router`, `implementer`, `reviewer`, `consultant-primary`, `consultant-secondary`, `review-agent`, `complexity-classifier`, `auditor`, `bisect-isolator`, and other subagents, plus the exact prompt contracts those agents receive.
++- `commands` — Commands are the user-facing surfaces that mirror or invoke these skill workflows. Route-policy changes must stay aligned between command markdown and skill markdown. Several commands (`z-audit.md`, `z-audit-plan-style.md`, `z-fix.md`, `z-skill-fix.md`) define their pipelines directly in `commands/` without a corresponding `SKILL.md` re-entry alias.
++- `agents` — Skills define when to dispatch `doc-fetcher`, `doc-updater`, `planning-router`, `implementer`, `reviewer`, `consultant-primary`, `consultant-secondary`, `review-agent`, `complexity-classifier`, `auditor`, `bisect-isolator`, `plan-style-reviewer`, and other subagents, plus the exact prompt contracts those agents receive.
+ - `scripts` — Skills rely on `plan-path.sh`, `log-event.sh`, `log-phase.sh`, `version.sh`, `regenerate-memories-flat.py`, and `run-memory-review.sh` for path resolution, telemetry, version stamping, memory flat-file sync, and memory-review orchestration.
+ - `multi-ide-exports` — Export pipelines consume these skill files to generate Cursor rules, Codex prompts/skills, and Antigravity skills/workflows, so source skill edits must propagate through exported surfaces.
+ - `providers-registry` — Skills refer to stable agent roles (`consultant-primary`, `consultant-secondary`, `reviewer`) while provider resolution happens behind those roles.
+@@ -48,6 +49,7 @@ The skill family shares a route-policy model: planning and execution skills coll
+ - Route handoffs are not command chaining. Skills write a route decision, emit telemetry, ask the user, and stop after presenting the next command.
+ - The `planning-router` is advisory only. Deterministic thresholds win, malformed output falls back to deterministic routing or AskUser, and loop-prevention blocks ping-pong route chains capped at two entries.
+ - `/z-audit-plan` is only valid when plan artifacts exist. If none are found, it writes a no-plan route decision toward `/z-plan` instead of fabricating an audit.
++- `/z-audit-plan-style` requires STYLE.md at the repo root. There is no `--no-style` escape — missing STYLE.md causes an immediate hard exit recommending `/z-style-init`. This differs from `/z-uplift`, which accepts `--no-style` for a degraded run.
+ - `/z-do` may not route directly to `/z-plan-split`; larger work routes through `/z-plan`, `/z-plan-light`, `/z-research`, `/z-brainstorm`, `/z-fix`, or `/z-debug` based on signals.
+ - `/z-plan-split` keeps `cluster_id` (e.g. `C1`, `C2`) separate from `cluster_slug` (the path segment). Swapping them breaks telemetry and on-disk layout. The `--clusters` flag supplies names only; scopes must still be derived per cluster.
+ - `/z-implement-all --tasks=<path>` bypasses normal slug/tree discovery and derives `$BASE` from the task file's parent directory; this is how promoted `REVIEW-TASKS.md` or `MR-REVIEW.md` queues are consumed.
+@@ -58,12 +60,12 @@ The skill family shares a route-policy model: planning and execution skills coll
+ - `--from-candidate-json` in `z-suggest-memory` bypasses Phases 3a–3f; the candidate object must have `type` and `text` fields or the skill returns `STATUS: bad_input`. Pass `-` as path to read from stdin.
+ - Phase 4b in `z-stats` reads both `review_agent_call` events and `memory_review_terminal` events from metrics.jsonl, with a back-compat mapping from old `phase_end` shape; it is read-only and adds no writes.
+ - `memory_review_terminal` is the canonical terminal event for all memory-review paths. It is emitted by `run-memory-review.sh` for all skip states, and by the orchestrating skill for `ran_empty` and `needs_user` states. `review_agent_failed` and `review_agent_malformed` are orthogonal failure-class events — they do NOT emit `memory_review_terminal`.
+-- Broken-context skip push-notifications (for `tags_missing`, `no_plan_dir`, `missing_args` reasons) use a per-session dedup file (`.notify-dedup-session`) keyed by `slug:reason`. The dedup file is cleared at the start of each fresh `/z-debug` and `/z-review-all` invocation; `/z-implement-all` clears it before the first task dispatch.
++- Broken-context skip push-notifications (for `tags_missing`, `no_plan_dir`, `missing_args` reasons) use a per-session dedup file (`.notify-dedup-session`) keyed by `slug:reason`. The dedup file is cleared at the start of each fresh `/z-review-all` Phase 0 invocation; at the top of each fresh `/z-debug` Phase 10; and before the first task dispatch in `/z-implement-all`.
+ - Adding a tag alias records TAGS.txt only; memory tags collapse on a later run when doc-updater's step 3.5 reads the updated TAGS.txt.
+ - MEMORIES-FLAT.md regen is mandatory after doc writes or memory mutations.
+ - `/z-debug` Phase 2.5 bisect is a conditional fast-path, not a required phase. It fires only when the bug is a regression with a known-good baseline and a scriptable repro. `refused`, `failed`, and `bisect_unusable` returns all fall through to Phase 3a unchanged — bisect never blocks the pipeline.
+ - `/z-debug` bisect offending SHA does not pre-fill the winning hypothesis; it augments the Evidence Inventory and seeds Phase 3a prompts. The fix-gate still requires `posterior == very_high` and zero unexplained evidence rows.
+-- `/z-debug` auto-bail thresholds no longer include `>5 files` as a trigger; only cross-module impact, architectural change, or new public surface trigger escalation. The hard cycle cap is 5; soft warning fires at cycle 3.
++- `/z-debug` auto-bail thresholds no longer include `>5 files` as a trigger; only cross-module impact, architectural change, or new public surface trigger escalation. The hard cycle cap is 5 (halt when cycle 6 would be needed); soft warning fires at cycle 3.
+ - `/z-fix` Phase 0 is non-skippable even if the user passed an argument. A symptom description alone is not a hypothesis — if the user cannot name a cause, the command exits with a `/z-debug` recommendation.
+ - `/z-fix` auto-bail threshold is >5 candidate files, >2 non-obvious decisions, or cross-module/cross-crate impact. The hard inline implementation limit is 7 files regardless of what FIX.md anticipated.
+ - `/z-fix` does not auto-trigger MR-review; run `/z-mr-review` separately if needed.
+@@ -91,6 +93,7 @@ The skill family shares a route-policy model: planning and execution skills coll
+ - To implement one task at a time (manual pacing), use `/z-implement-next`; it does not auto-advance and keeps each task in a fresh context.
+ - To plan semantic test cases before implementation, use `/z-test` after `/z-plan`; the TESTS.md it produces is consumed by `/z-implement-all` automatically.
+ - To run a full-codebase quality pass, use `/z-uplift`; for a single component only, use `/z-audit <target>`; for branch-diff review before merging, use `/z-mr-review`.
++- To audit plan artifacts for style and quality issues before writing any code, use `/z-audit-plan-style`; findings are emitted as amendment-shaped blocks in `PLAN_STYLE_AUDIT.md` for direct promotion into `/z-amend`.
+ - To update the z-harness plugin itself, run `/z-update`; it detects symlink vs tarball and picks the safe update path automatically.
+ - To fix a bug when you already have a hypothesis, use `/z-fix`; if the root cause is unknown, use `/z-debug` instead (Phase 0 of both commands routes appropriately).
+ - To patch a skill or command file that misled during a run, use `/z-skill-fix`; it diagnoses the failure in chat, applies the smallest correct edit, and runs a Codex reviewer gate before returning control to the user.
+diff --git a/docs/human/telemetry.md b/docs/human/telemetry.md
+new file mode 100644
+index 0000000..dacb698
+--- /dev/null
++++ b/docs/human/telemetry.md
+@@ -0,0 +1,109 @@
++# Telemetry
++
++> Last updated: 2026-05-27
++
++All events are appended to `z-harness/metrics.jsonl` via `scripts/log-event.sh`.
++Standard fields on every event: `ts`, `run`, `kind` (and `slug` when set). The
++fields `prompt_chars`, `response_chars`, and `wall_ms` are optional — they
++appear only on subagent-bracket events, not on lifecycle or gate events.
++
++## Event kinds
++
++### `/z-brainstorm` and `/z-research`
++
++| Event | Emitted by |
++|---|---|
++| `brainstorm_run_start` | `/z-brainstorm` setup |
++| `brainstorm_run_end` | `/z-brainstorm` Phase 4 |
++| `research_run_start` | `/z-research` setup |
++| `research_run_end` | `/z-research` Phase 6 |
++| `ideator_failed` | `/z-brainstorm` Phase 2 (fields: `vendor`, `reason`) |
++| `total_ideator_failure` | `/z-brainstorm` Phase 2 when all three ideators fail |
++| `research_temptation` | `/z-research` when orchestrator drafts a recommendation it must not make |
++| `precontext_source_deleted` | `/z-plan` Setup step 10 freshness check (higher severity than stale-mtime) |
++| `precontext_freshness_check_failed` | `/z-plan` Setup step 10 freshness check parse failure |
++| `cost_gate_decision` | `/z-research` Phase 0 cost-confirmation gate |
++| `explore_failure` | any command that dispatches an Explore subagent that does not return |
++
++### `/z-plan-split` and tree-walking branch of `/z-implement-all`
++
++| Event | Emitted by |
++|---|---|
++| `plan_split_run_start` | `/z-plan-split` Setup |
++| `plan_split_run_end` | `/z-plan-split` finalize (every exit path; `status` distinguishes exit reason) |
++| `cluster_proposed` | `/z-plan-split` Phase 1c (per proposed cluster) |
++| `cluster_confirmed` | `/z-plan-split` Phase 1e (per confirmed cluster) |
++| `cluster_planner_start` | `cluster-planner` subagent, first call |
++| `cluster_planner_end` | `cluster-planner` subagent, last call (every exit path) |
++| `cluster_failed` | `/z-plan-split` Phase 3 (per failed cluster; `failure_reason` field) |
++| `cluster_decision_escalated` | `cluster-planner` Phase 2/3 when conservative-flagging rubric escalates |
++| `cluster_files_inconsistent` | `/z-plan-split` Phase 4 when `FILES_TOUCHED` ↔ TASKS.md disagree |
++| `total_cluster_failure` | `/z-plan-split` Phase 3 or Phase 4 when every cluster ends `failed` |
++| `overlap_detected` | `/z-plan-split` Phase 4 (per overlapping path) |
++| `overlap_index_rebuilt` | `/z-plan-split` Phase 4 after any post-Phase-3 cluster demotion |
++| `shared_concerns_missing` | `/z-implement-all` Setup 2b when SHARED-CONCERNS.md is absent on a tree-rooted slug |
++| `shared_concerns_unacknowledged` | `/z-implement-all` Setup 2b ack-gate (halt; no override) |
++| `shared_concerns_ack_override` | `/z-implement-all` Setup 2b ack-gate when `--ack` was supplied |
++| `manifest_frontmatter_inconsistent` | `/z-implement-all` Setup 2b when frontmatter counts disagree with the table |
++| `manifest_run_order_invalid` | `/z-implement-all` Setup 2b when run order doesn't bijectively match the table |
++| `tree_depth_exceeded` | `/z-implement-all` Setup 2b when a nested MANIFEST.md is found inside the tree |
++| `partial_tree_blocked` | `/z-implement-all` Setup 2b partial-tree gate (halt; no `--force-partial`) |
++| `partial_tree_force_override` | `/z-implement-all` Setup 2b partial-tree gate when `--force-partial` was supplied |
++| `anti_nesting_violation` | `cluster-planner` Phase 0a when an ancestor MANIFEST.md is detected |
++| `cluster_not_ready` | `/z-implement-all` Setup 2b cluster-readiness gate |
++
++### Compaction breakpoints
++
++| Event | Payload schema | Emitted by |
++|---|---|---|
++| `compaction_pause` | `{trigger, detail}` — `trigger` is one of `"task_count"`, `"wall_time"`, or `"pre_consult"`; `detail` carries trigger-specific fields | `/z-implement-all` batch-settle; `/z-review-all` Phase 3.7; `/z-maintain-docs --audit` pre-consult breakpoint |
++
++### Config
++
++| Event | Emitted by |
++|---|---|
++| `config_resolved` | `scripts/config.py export-env` once per `$Z_HARNESS_RUN` (see [config.md](config.md)) |
++
++---
++
++## Compaction policy
++
++Long `/z-implement-all` runs and cross-LLM consult phases in `/z-review-all`
++and `/z-maintain-docs --audit` accumulate significant orchestrator context. The
++compaction policy inserts deterministic breakpoints at the highest-context-pressure
++boundaries.
++
++### `/z-implement-all` — task-count and wall-time triggers
++
++Two env vars control when a breakpoint fires (see [environment-knobs.md](environment-knobs.md)):
++
++| Env var | Default | Meaning |
++|---|---|---|
++| `Z_IMPLEMENT_PAUSE_TASKS` | `5` | Pause after this many `[x]` completions since last pause |
++| `Z_IMPLEMENT_PAUSE_MINUTES` | `30` | Pause after this many wall-clock minutes since last pause |
++
++The trigger fires **at the end of each batch-settle**, strictly after: all
++in-flight tasks reach terminal status → TASKS.md atomic write → `batch_done`
++event → halt-flush resolved. Only `[x]` completions count toward
++`Z_IMPLEMENT_PAUSE_TASKS`; retries and rollbacks do not.
++
++On trigger: a `compaction_pause` event is emitted, a push notification fires,
++and the loop exits cleanly. Re-invoke `/z-implement-all` to resume from TASKS.md.
++
++### `/z-review-all` and `/z-maintain-docs --audit` — pre-consult breakpoints
++
++Both commands insert an unconditional breakpoint before the cross-LLM consultant
++batch dispatches. You are shown an `AskUserQuestion` with two options:
++
++- **Pause for /clear** — exit cleanly; no state written. Re-invoke to continue.
++- **Proceed now** — write a slug-scoped state file and continue into the consult phase.
++
++### Why `/clear` over `/compact`
++
++`/clear` is the recommended action at every compaction breakpoint. The harness's
++durable state lives entirely in TASKS.md (and slug-scoped state files) — there
++is no cross-task state in orchestrator memory. Clearing reclaims more context
++than `/compact` with no safety loss.
++
++Use `/compact` only when you need to preserve chat history for debugging a
++specific task failure.
+diff --git a/docs/human/z-fix.md b/docs/human/z-fix.md
+index b8fa4ea..2e0fd93 100644
+--- a/docs/human/z-fix.md
++++ b/docs/human/z-fix.md
+@@ -1,6 +1,6 @@
+ # z-fix
+ 
+-> Last updated: 2026-05-25
++> Last updated: 2026-05-26
+ > Covers source: commands/z-fix.md
+ 
+ ## Overview
+@@ -21,9 +21,10 @@
+ - `commands/z-fix.md:128` — Phase 5 — approve/modify/abandon gate
+ - `commands/z-fix.md:141` — Phase 6 — write FIX.md
+ - `commands/z-fix.md:190` — Phase 7 — inline implementation (no implementer subagent; orchestrator applies edits directly)
+-- `commands/z-fix.md:212` — Phase 8 — Codex review (non-negotiable safety gate)
+-- `commands/z-fix.md:240` — Phase 9 — optional post-mortem (auto-suggested if `REVIEW_CYCLES > 1`)
++- `commands/z-fix.md:211` — Phase 8 — Codex review (non-negotiable safety gate)
++- `commands/z-fix.md:239` — Phase 9 — optional post-mortem (auto-suggested if `REVIEW_CYCLES > 1`)
+ - `commands/z-fix.md:283` — Phase 10 — finalize, FIX.md status → `shipped`, log `fix_run_end`
++- `commands/z-fix.md:307` — Git history-rewrite safety — doctrine for `git reset`/`amend`/`rebase` on upstream-tracking branches
+ 
+ ## How it interacts with others
+ 
+@@ -68,6 +69,7 @@ If you are unsure which to pick, start with `/z-fix` Phase 0. The wrong-tool gat
+ - **The `REVIEW_CYCLES` counter drives post-mortem defaults.** `<= 1` cycle defaults to skip; `> 1` cycles defaults to suggest post-mortem.
+ - **Never overwrite an existing `<slug>/` plan directory** without asking the user (checked at slug derivation in Setup).
+ - **doc-fetcher is dispatched at Phase 1 only when `docs/llm/INDEX.json` exists.** In its absence, the orchestrator reads files directly; it never spawns the `Explore` subagent (too expensive for fix mode).
++- **Git history-rewrite safety doctrine applies.** Before recommending any `git reset --hard HEAD~N`, `git commit --amend`, or interactive-rebase squash on a branch tracking an upstream, run `git branch -r --contains <sha>` for each commit being rewritten. If the upstream ref appears, STOP — recommend rebase or new-commit instead. Force-push to main requires explicit per-incident user authorization with the list of overwritten commits and a content-equivalence demonstration.
+ 
+ ## Examples
+ 

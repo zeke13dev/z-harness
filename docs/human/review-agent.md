@@ -5,7 +5,7 @@
 
 ## Overview
 
-`review-agent` is a Haiku-tier subagent defined in `agents/review-agent.md`. It fires automatically at the end of `/z-implement-all` (Phase 9), `/z-review-all` (Phase 7), and `/z-debug` (Phase 10 shipped branch). It reads the completed run's `events.jsonl`, cumulative diff, and `SPEC.md` (or `DEBUG.md` for debug runs), and proposes 0-3 candidate memories worth persisting to the docs knowledge base. The Phase 9 and Phase 7 wiring lives in `skills/z-implement-all/SKILL.md` and `skills/z-review-all/SKILL.md`; the debug wiring lives in `skills/z-debug/SKILL.md` Phase 10.
+`review-agent` is a Haiku-tier subagent defined in `agents/review-agent.md`. It fires automatically at the end of `/z-implement-all` (Phase 9), `/z-review-all` (Phase 7), and `/z-debug` (Phase 10, shipped branch only). It reads the completed run's `events.jsonl`, cumulative diff, and `SPEC.md` (or `DEBUG.md` for debug runs), and proposes 0-3 candidate memories worth persisting to the docs knowledge base. The Phase 9 wiring lives in `skills/z-implement-all/SKILL.md`; Phase 7 in `skills/z-review-all/SKILL.md`; Phase 10 in `skills/z-debug/SKILL.md`.
 
 The agent reasons but does not write. It returns a single fenced JSON block containing candidate objects. The orchestrator owns all writes: it parses the candidates, surfaces them via `AskUserQuestion` prompts, and routes accepted candidates through `/z-suggest-memory`. Before the agent is dispatched, `scripts/run-memory-review.sh` performs skip-condition checks and assembles artifact paths — the script is always called first, and on a non-skip result the orchestrator constructs the agent prompt from its output.
 
@@ -15,7 +15,7 @@ The agent reasons but does not write. It returns a single fenced JSON block cont
 - `agents/review-agent.md:12` — `## Inputs from caller` — full input field list including `parent_command`, `debug_md_path`, and artifact primacy rules
 - `agents/review-agent.md:27` — `## Procedure` — six-step candidate-generation procedure (read, scan signal patterns, prefer existing slugs, cap at 3, check tags, debug filter)
 - `agents/review-agent.md:46` — `## Output contract` — fenced JSON schema for candidate objects; any other output is malformed
-- `scripts/run-memory-review.sh:1` — `run-memory-review` — skip-condition guard and artifact-prep helper; called by `/z-implement-all` Phase 9, `/z-review-all` Phase 7, and `/z-debug` Phase 10
+- `scripts/run-memory-review.sh:1` — `run-memory-review` — skip-condition guard and artifact-prep helper; called by all three parent commands before any agent dispatch
 - `scripts/run-memory-review.sh:135` — `debug_md_missing` skip condition — fires when `parent_command: debug` and `DEBUG.md` is absent or unreadable
 
 ## How it interacts with others
@@ -41,7 +41,7 @@ Before dispatching the agent, `scripts/run-memory-review.sh` performs a skip-con
 - **Skip if `no_plan_dir`**: `$Z_HARNESS_PLAN_DIR` is not set — the plan directory cannot be resolved.
 - **Skip if `debug_md_missing`** (debug only): `DEBUG.md` does not exist or is unreadable — required primary artifact is absent.
 - **Do NOT skip on halt**: halted runs are high-signal and are always reviewed.
-- **Soft-skip if `tags_missing`**: `docs/llm/TAGS.txt` is absent; emits `review_agent_failed` with `skip_reason: tags_missing` and exits without blocking.
+- **Soft-skip if `tags_missing`**: `docs/llm/TAGS.txt` is absent; emits `memory_review_terminal` with `state: skipped_broken_context` and exits without blocking.
 
 ## Artifact primacy by parent_command
 
@@ -118,6 +118,7 @@ One JSON object per line. This file is ephemeral — it lives with the run archi
 - Candidate tags must come from `docs/llm/TAGS.txt` unless a free-form tag is explicitly justified; the agent is instructed to prefer controlled tags.
 - The agent receives `index_path` (path to `docs/llm/INDEX.json`) and is expected to prefer extending an existing slug over coining a new one.
 - `skills/z-implement-all/SKILL.md`, `skills/z-review-all/SKILL.md`, and `skills/z-debug/SKILL.md` are the canonical orchestrator definitions; `commands/` equivalents may be stale.
+- `review_agent_failed` and `review_agent_malformed` do NOT emit `memory_review_terminal` — they are orthogonal failure classes, not terminal states of the review pass.
 
 ## Slug naming anti-patterns
 
@@ -169,10 +170,16 @@ jq 'select(.kind == "review_agent_failed" or .kind == "review_agent_malformed")'
 - `malformed_json`: The agent returned prose outside the fenced block. One-shot soft-skip; no retry in v1.
 - `empty_diff`: Skip-condition fired correctly — not an error.
 
+## Memories
+
+<!-- DO NOT EDIT this section by hand — regenerated from docs/llm/review-agent.json by doc-updater. Use /z-suggest-memory to add or edit memories. -->
+
+_No memories recorded yet._
+
 ## See also
 
-- `/Users/zeke/dev/z-harness/skills/z-suggest-memory/SKILL.md` — sole authoring path for accepted candidates.
-- `/Users/zeke/dev/z-harness/skills/z-implement-all/SKILL.md` — Phase 9 wiring details.
-- `/Users/zeke/dev/z-harness/skills/z-review-all/SKILL.md` — Phase 7 wiring details.
-- `/Users/zeke/dev/z-harness/skills/z-debug/SKILL.md` — Phase 10 wiring details (debug parent).
-- `/Users/zeke/dev/z-harness/skills/z-stats/SKILL.md` — Phase 4 and Phase 4b telemetry surface.
+- `skills/z-suggest-memory/SKILL.md` — sole authoring path for accepted candidates.
+- `skills/z-implement-all/SKILL.md` — Phase 9 wiring details.
+- `skills/z-review-all/SKILL.md` — Phase 7 wiring details.
+- `skills/z-debug/SKILL.md` — Phase 10 wiring details (debug parent).
+- `skills/z-stats/SKILL.md` — Phase 4 and Phase 4b telemetry surface.

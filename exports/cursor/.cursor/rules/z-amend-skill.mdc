@@ -43,7 +43,7 @@ Multiple plans may coexist under `$Z_HARNESS_PLAN_DIR/`. Determine which one to 
    ' "$VERSION_BLOB" "<arguments>" "<full|light>")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" amend_run_start "$START_PAYLOAD"
    ```
-4. Notification policy: read `Z_HARNESS_NOTIFY` (default `approval_only`).
+4. Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
 
 ## Phase 2 — Read the current plan
 

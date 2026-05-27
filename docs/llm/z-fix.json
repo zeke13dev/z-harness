@@ -1,6 +1,6 @@
 {
   "concept": "z-fix",
-  "last_updated": "2026-05-25",
+  "last_updated": "2026-05-27",
   "covers_spec": "z-fix-hypothesis-driven/20260524T061903Z-z-fix-hypothesis-driven",
   "source_file": ["commands/z-fix.md"],
   "confidence": "high",
@@ -16,11 +16,12 @@
     {"file": "commands/z-fix.md", "line": 128, "symbol": "Phase 5", "kind": "module", "summary": "Approve/modify/abandon gate; shortcuts need separate explicit approval"},
     {"file": "commands/z-fix.md", "line": 141, "symbol": "Phase 6", "kind": "module", "summary": "Write FIX.md (single artifact, status=approved not yet shipped)"},
     {"file": "commands/z-fix.md", "line": 190, "symbol": "Phase 7", "kind": "module", "summary": "Inline implementation by orchestrator; no implementer subagent; hard limit >7 files"},
-    {"file": "commands/z-fix.md", "line": 212, "symbol": "Phase 8", "kind": "module", "summary": "Codex review, non-negotiable; retry once on blockers; REVIEW_CYCLES counter"},
-    {"file": "commands/z-fix.md", "line": 240, "symbol": "Phase 9", "kind": "module", "summary": "Optional post-mortem; auto-suggested if REVIEW_CYCLES > 1"},
-    {"file": "commands/z-fix.md", "line": 283, "symbol": "Phase 10", "kind": "module", "summary": "Finalize: FIX.md status=shipped, fix_run_end log, /z-maintain-docs hint"}
+    {"file": "commands/z-fix.md", "line": 211, "symbol": "Phase 8", "kind": "module", "summary": "Codex review, non-negotiable; retry once on blockers; REVIEW_CYCLES counter"},
+    {"file": "commands/z-fix.md", "line": 239, "symbol": "Phase 9", "kind": "module", "summary": "Optional post-mortem; auto-suggested if REVIEW_CYCLES > 1"},
+    {"file": "commands/z-fix.md", "line": 283, "symbol": "Phase 10", "kind": "module", "summary": "Finalize: FIX.md status=shipped, fix_run_end log, /z-maintain-docs hint"},
+    {"file": "commands/z-fix.md", "line": 307, "symbol": "Git history-rewrite safety", "kind": "const", "summary": "Doctrine: check git branch -r --contains before any reset/amend/rebase on upstream branch"}
   ],
-  "depends_on": ["agents", "scripts", "commands"],
+  "depends_on": ["agents", "scripts", "commands", "config-design"],
   "consumed_by": ["commands"],
   "invariants": [
     "Phase 0 (wrong-tool gate) is non-skippable, even when $ARGUMENTS is non-empty",
@@ -33,7 +34,9 @@
     "Auto-bail on >5 candidate files or >2 non-obvious decisions is non-negotiable without explicit user override",
     "Mid-implementation scope growth triggers immediate halt; orchestrator does not continue or offer alternatives",
     "FIX.md is the sole planning artifact; SPEC.md, PLAN.md, TASKS.md are never generated",
-    "/z-mr-review is never auto-triggered from /z-fix"
+    "/z-mr-review is never auto-triggered from /z-fix",
+    "Before any git reset/amend/rebase on upstream-tracking branch: run git branch -r --contains <sha>; STOP if upstream reachable",
+    "PushNotification calls at Phase 5 and Phase 10 are gated on notify.level from config; when notify.level=off no notifications are sent"
   ],
   "gotchas": [
     "Hard implementation file limit is >7 (halt regardless); auto-bail threshold is >5 (escalate before starting)",
@@ -43,7 +46,9 @@
     "Shortcuts flagged by either consultant require separate explicit approval at Phase 5; default is the robust solution",
     "phase1-context.md is a temporary scratch file under archive/$RUN/; its content migrates to FIX.md sections",
     "FIX.md 'Docs touched' field drives the post-fix /z-maintain-docs --audit suggestion",
-    "Plan directory collision: if slug already exists, user is asked before overwriting"
+    "Plan directory collision: if slug already exists, user is asked before overwriting",
+    "Force-push to main requires per-incident user authorization with list of overwritten commits and content-equivalence demonstration",
+    "Notification control point is notify.level in config (docs/human/config.md), not the Z_HARNESS_NOTIFY env var; the env var no longer applies"
   ],
   "memories": []
 }

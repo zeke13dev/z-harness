@@ -823,3 +823,170 @@
 {"ts":"2026-05-27T06:39:10Z","run":"docs/scripts","kind":"doc_update_end","concept":"scripts","status":"ok","subagent_model":"sonnet","wall_ms":31150}
 {"ts":"2026-05-27T15:54:55Z","run":"20260527T155455Z-amend-runtime-core","kind":"amend_run_start","z_harness_version":"68a4e5c","z_harness_dirty":true,"z_harness_branch":"main","amendment":"Apply C1 audit findings: 3 BLOCKER + 5 MAJOR + 8 MINOR from PLAN_AUDIT_REPORT.md (audit run 20260527T063245Z)","mode":"full"}
 {"ts":"2026-05-27T16:04:50Z","run":"docs","kind":"maintain_docs_end","mode":"apply","updated":7,"deferred":0,"skipped":0}
+{"ts":"2026-05-27T16:48:43Z","run":"20260527T164826Z-fanout-escalate-primitive","kind":"brainstorm_run_start","slug":"fanout-escalate-primitive","z_harness_version":"c5fa111","z_harness_dirty":true,"z_harness_branch":"main","topic":"Extract recurring breakup+auto-escalate pattern across z-plan-light/z-plan/z-plan-split and z-audit/z-review-all into a single reusable primitive (skill/agent/script-lib?) with fan-out along a strategy/idea axis, automatic escalation thresholds, subagent dispatch of appropriate z-commands, and main-orchestrator reconciliation of heterogeneous artifacts."}
+{"ts":"2026-05-27T16:50:22Z","run":"20260527T164826Z-fanout-escalate-primitive","kind":"phase_end","phase":1,"name":"scaffolding","wall_ms":120000,"user_wait_ms":0}
+{"ts":"2026-05-27T16:51:22Z","run":"20260527T165106Z-fanout-escalate-primitive","kind":"brainstorm_run_start","z_harness_version":"c5fa111","z_harness_dirty":true,"z_harness_branch":"main","topic":"Extract recurring breakup+auto-escalate pattern across z-plan-light/z-plan/z-plan-split and z-audit/z-review-all into a single reusable primitive"}
+{"ts":"2026-05-27T16:53:03Z","run":"20260527T165106Z-fanout-escalate-primitive","kind":"phase_end","raw":"{\"phase\":1,\"name\":\"scaffolding\",\"wall_ms\":17799007823N,\"user_wait_ms\":0}"}
+{"ts":"2026-05-27T16:54:09Z","run":"20260527T165106Z-fanout-escalate-primitive","kind":"consult_start","role":"consultant_primary","mode":"brainstorm","provider":"gemini"}
+{"ts":"2026-05-27T16:54:17Z","run":"20260527T165106Z-fanout-escalate-primitive","kind":"consult_start","role":"consultant_secondary","mode":"brainstorm","provider":"codex"}
+{"ts":"2026-05-27T16:55:20Z","run":"20260527T165458Z-z-harness-config-toml","kind":"brainstorm_run_start","z_harness_version":"c5fa111","z_harness_dirty":true,"z_harness_branch":"main","topic":"z-harness-config-toml + slim README"}
+{"ts":"2026-05-27T16:55:36Z","run":"20260527T165106Z-fanout-escalate-primitive","kind":"consult","role":"consultant_primary","mode":"brainstorm","provider":"gemini","status":"ok"}
+{"ts":"2026-05-27T16:55:37Z","run":"20260527T165106Z-fanout-escalate-primitive","kind":"consult","role":"consultant_secondary","mode":"brainstorm","provider":"codex","status":"ok"}
+{"ts":"2026-05-27T16:56:52Z","run":"20260527T165458Z-z-harness-config-toml","kind":"phase_end","phase":1,"name":"scaffolding"}
+{"ts":"2026-05-27T16:57:26Z","run":"20260527T165106Z-fanout-escalate-primitive","kind":"phase_end","phase":3,"name":"synthesis","wall_ms":0,"user_wait_ms":0}
+{"ts":"2026-05-27T16:57:54Z","run":"20260527T165738Z-z-harness-config-toml","kind":"brainstorm_run_start","z_harness_version":"c5fa111","z_harness_dirty":true,"z_harness_branch":"main","topic":"Add a user-facing TOML config to the z-harness repo + slim the README to a human-only quickstart"}
+{"ts":"2026-05-27T16:59:37Z","run":"20260527T165738Z-z-harness-config-toml","kind":"phase_end","phase":1,"name":"scaffolding","wall_ms":45000,"user_wait_ms":0}
+{"ts":"2026-05-27T16:59:53Z","run":"20260527T165738Z-z-harness-config-toml","kind":"phase_end","phase":2,"name":"ideator-dispatch-start","wall_ms":0,"user_wait_ms":0}
+{"ts":"2026-05-27T17:00:24Z","run":"20260527T164826Z-fanout-escalate-primitive","kind":"phase_end","phase":2,"name":"ideators","wall_ms":440000,"user_wait_ms":0}
+{"ts":"2026-05-27T17:00:24Z","run":"20260527T164826Z-fanout-escalate-primitive","kind":"phase_end","phase":3,"name":"synthesis","wall_ms":60000,"user_wait_ms":0}
+{"ts":"2026-05-27T17:00:24Z","run":"20260527T164826Z-fanout-escalate-primitive","kind":"user_wait_start","phase":3,"reason":"choose_framing"}
+{"ts":"2026-05-27T17:04:02Z","run":"20260527T165738Z-z-harness-config-toml","kind":"phase_end","phase":3,"name":"synthesis","wall_ms":90000,"user_wait_ms":0}
+{"ts":"2026-05-27T17:04:29Z","run":"20260527T164826Z-fanout-escalate-primitive","kind":"user_wait_end","phase":3,"wall_ms":120000}
+{"ts":"2026-05-27T17:04:29Z","run":"20260527T164826Z-fanout-escalate-primitive","kind":"brainstorm_run_end","status":"complete","chosen_framing":"restart","ideators_failed":0}
+{"ts":"2026-05-27T17:04:44Z","run":"20260527T170429Z-fanout-escalate-primitive","kind":"brainstorm_run_start","z_harness_version":"c5fa111","z_harness_dirty":true,"z_harness_branch":"main","topic":"Pre-dispatch scope-decomposition router that runs BEFORE any z-* command (audit, debug, plan, review, etc). Given the users request like \"/z-audit trader\", the router decides: LIGHT (narrowed single run, user asked about a specific component), MEDIUM (single normal run), or HEAVY (fan out the sub-command along a natural axis \u2014 per strategy, per component, per hypothesis, per cluster \u2014 into N parallel sub-runs that return IDEAS/findings, then the main thread does the actual synthesis/planning/hypothesizing). Same pattern reused across /z-audit, /z-debug, /z-plan, /z-review-all, etc. Sub-commands work on manageable chunks; main thread reconciles. Where does the routing live (skill? subagent? script?), how is the natural axis discovered, what does the main-thread synthesis look like for each command, and how does this differ from todays auto-bail (light\u2192heavy escalation) which only fires AFTER work starts?"}
+{"ts":"2026-05-27T17:06:32Z","run":"20260527T170429Z-fanout-escalate-primitive","kind":"phase_end","phase":1,"name":"scaffolding","wall_ms":80000,"user_wait_ms":0}
+{"ts":"2026-05-27T17:06:43Z","run":"20260527T165458Z-z-harness-config-toml","kind":"phase_end","phase":3,"name":"synthesis"}
+{"ts":"2026-05-27T17:11:42Z","run":"20260527T165458Z-z-harness-config-toml","kind":"brainstorm_run_end","status":"complete","chosen_framing":"codex","ideators_failed":0}
+{"ts":"2026-05-27T17:11:50Z","run":"20260527T170429Z-fanout-escalate-primitive","kind":"phase_end","phase":2,"name":"ideators","wall_ms":170000,"user_wait_ms":0}
+{"ts":"2026-05-27T17:11:50Z","run":"20260527T170429Z-fanout-escalate-primitive","kind":"phase_end","phase":3,"name":"synthesis","wall_ms":120000,"user_wait_ms":0}
+{"ts":"2026-05-27T17:11:50Z","run":"20260527T170429Z-fanout-escalate-primitive","kind":"user_wait_start","phase":3,"reason":"choose_framing"}
+{"ts":"2026-05-27T17:16:25Z","run":"20260527T170429Z-fanout-escalate-primitive","kind":"user_wait_end","phase":3,"wall_ms":60000}
+{"ts":"2026-05-27T17:16:25Z","run":"20260527T170429Z-fanout-escalate-primitive","kind":"phase_end","phase":4,"name":"finalize","wall_ms":30000,"user_wait_ms":0}
+{"ts":"2026-05-27T17:16:25Z","run":"20260527T170429Z-fanout-escalate-primitive","kind":"brainstorm_run_end","status":"complete","chosen_framing":"claude","ideators_failed":0}
+{"ts":"2026-05-27T17:16:35Z","run":"20260527T171625Z-z-harness-config-toml","kind":"run_start","z_harness_version":"c5fa111","z_harness_dirty":true,"z_harness_branch":"main","task":"z-harness TOML config + slim README (codex framing)"}
+{"ts":"2026-05-27T17:20:38Z","run":"20260527T172038Z-fanout-escalate-primitive","kind":"run_start","slug":"fanout-escalate-primitive","z_harness_version":"c5fa111","z_harness_dirty":true,"z_harness_branch":"main","task":"fanout-escalate-primitive \u2014 implement scope-probe Haiku subagent as Phase 0 of every z-* command; SCOPE.json schema; calibration harness; /z-audit + /z-brainstorm as v1 pilots. Per BRAINSTORM.md User choice section (chosen_framing: claude)."}
+{"ts":"2026-05-27T17:22:24Z","run":"20260527T172038Z-fanout-escalate-primitive","kind":"docs_staleness_halt","stale_pct":38,"threshold":20,"stale":["agents","commands","review-agent","scripts","skills"],"user_choice":"refresh_now"}
+{"ts":"2026-05-27T17:22:25Z","run":"20260527T172038Z-fanout-escalate-primitive","kind":"run_end","status":"paused_for_maintain_docs","phase":"setup"}
+{"ts":"2026-05-27T17:22:51Z","run":"docs","kind":"maintain_docs_start","z_harness_version":"c5fa111","z_harness_dirty":true,"z_harness_branch":"main","mode":"dry-run"}
+{"ts":"2026-05-27T17:28:40Z","run":"docs/skills","kind":"doc_update_start","concept":"skills","reason":"stale","mode":"dry-run"}
+{"ts":"2026-05-27T17:28:49Z","run":"docs/skills","kind":"doc_update_end","concept":"skills","status":"ok","subagent_model":"sonnet","wall_ms":9166}
+{"ts":"2026-05-27T17:34:09Z","run":"20260527T170933Z-z-harness-config-toml","kind":"run_end","status":"complete","tasks":8}
+{"ts":"2026-05-27T17:42:54Z","run":"docs/skills","kind":"doc_update_start","concept":"skills","reason":"stale","mode":"write"}
+{"ts":"2026-05-27T17:47:29Z","run":"docs/skills","kind":"doc_update_end","concept":"skills","status":"ok","subagent_model":"sonnet","wall_ms":274497}
+{"ts":"2026-05-27T17:48:22Z","run":"docs","kind":"maintain_docs_end","mode":"apply","updated":5,"deferred":0,"skipped":0}
+{"ts":"2026-05-27T17:54:22Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"run_start","slug":"fanout-escalate-primitive","z_harness_version":"c5fa111","z_harness_dirty":true,"z_harness_branch":"main","task":"fanout-escalate-primitive \u2014 scope-probe Haiku subagent as Phase 0 of every z-* command; SCOPE.json schema; calibration harness against z-harness/archive/; /z-audit + /z-brainstorm v1 pilots. Per BRAINSTORM.md chosen_framing: claude."}
+{"ts":"2026-05-27T17:56:53Z","run":"20260527T175653Z-z-harness-config-toml-audit-plan","kind":"plan_audit_start","slug":"z-harness-config-toml"}
+{"ts":"2026-05-27T18:02:42Z","run":"20260527T175653Z-z-harness-config-toml-audit-plan","kind":"plan_audit_end","status":"complete","findings":15,"blockers":2,"majors":7}
+{"ts":"2026-05-27T18:04:05Z","run":"20260527T180405Z-amend-z-harness-config-toml","kind":"amend_run_start","slug":"z-harness-config-toml","mode":"full"}
+{"ts":"2026-05-27T18:08:54Z","run":"20260527T180405Z-amend-z-harness-config-toml","kind":"amend_run_end","status":"applied","mode":"full","tasks_added":1,"tasks_modified":6,"tasks_removed":0,"tasks_superseded":0,"consulted":false}
+{"ts":"2026-05-27T18:13:14Z","run":"test-run-66440","kind":"config_resolved","values":{"notify.level":"approval_only","docs.always_apply":"always"},"sources":{"notify.level":"defaults","docs.always_apply":"defaults"}}
+{"ts":"2026-05-27T18:13:17Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T001","tier":"low","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:17Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T002","tier":"high","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:17Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T003","tier":"medium","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:17Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T004","tier":"low","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:17Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T005","tier":"low","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:17Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T006","tier":"medium","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:17Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T007","tier":"low","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:17Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T008","tier":"low","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:17Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T009","tier":"high","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:17Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T010","tier":"medium","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:18Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T011","tier":"medium","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:18Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T012","tier":"medium","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:18Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T013","tier":"low","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:18Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T014","tier":"high","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:18Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T015","tier":"medium","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:18Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"run_end","status":"complete","tasks_total":15,"decisions_total":14,"decisions_consulted":5}
+{"ts":"2026-05-27T18:13:26Z","run":"test-run-66644","kind":"config_resolved","values":{"notify.level":"approval_only","docs.always_apply":"always"},"sources":{"notify.level":"defaults","docs.always_apply":"defaults"}}
+{"ts":"2026-05-27T18:15:06Z","run":"orchestration","kind":"run_start","slug":"fanout-escalate-primitive","z_harness_version":"c5fa111","z_harness_dirty":true,"z_harness_branch":"main"}
+{"ts":"2026-05-27T18:15:27Z","run":"tasks/T001","kind":"task_start","slug":"fanout-escalate-primitive","id":"T001"}
+{"ts":"2026-05-27T18:15:28Z","run":"tasks/T005","kind":"task_start","slug":"fanout-escalate-primitive","id":"T005"}
+{"ts":"2026-05-27T18:15:48Z","run":"tasks/T002","kind":"review_start","id":"T002","cycle":1}
+{"ts":"2026-05-27T18:15:55Z","run":"tasks/T001","kind":"precheck_start","id":"T001"}
+{"ts":"2026-05-27T18:16:01Z","run":"tasks/T005","kind":"precheck_start","id":"T005"}
+{"ts":"2026-05-27T18:16:45Z","run":"tasks/T001","kind":"precheck_end","id":"T001","status":"ok","references_checked":23,"wall_ms":49562}
+{"ts":"2026-05-27T18:17:01Z","run":"tasks/T005","kind":"precheck_end","id":"T005","status":"ok","references_checked":9,"wall_ms":59498}
+{"ts":"2026-05-27T18:19:40Z","run":"tasks/T002","kind":"review_end","id":"T002","cycle":1,"blockers":0,"majors":1,"prompt_chars":2837,"response_chars":2150,"return_chars":2050,"wall_ms":232017}
+{"ts":"2026-05-27T18:20:15Z","run":"tasks/T005","kind":"review_start","id":"T005","cycle":1}
+{"ts":"2026-05-27T18:21:14Z","run":"tasks/T005","kind":"review","prompt_chars":0,"response_chars":0,"return_chars":51,"wall_ms":0}
+{"ts":"2026-05-27T18:21:19Z","run":"tasks/T005","kind":"review_end","id":"T005","cycle":1,"blockers":0,"majors":0,"prompt_chars":0,"response_chars":0,"return_chars":51,"wall_ms":63778}
+{"ts":"2026-05-27T18:23:38Z","run":"tasks/T001","kind":"task_done","id":"T001","retries":0,"review_blockers":0,"review_cycles":1}
+{"ts":"2026-05-27T18:23:39Z","run":"tasks/T005","kind":"task_done","id":"T005","retries":0,"review_blockers":0,"review_cycles":1}
+{"ts":"2026-05-27T18:23:39Z","run":"tasks/T002","kind":"task_start","id":"T002"}
+{"ts":"2026-05-27T18:23:39Z","run":"tasks/T003","kind":"task_start","id":"T003"}
+{"ts":"2026-05-27T18:23:39Z","run":"tasks/T004","kind":"task_start","id":"T004"}
+{"ts":"2026-05-27T18:24:43Z","run":"tasks/T002","kind":"review_start","id":"T002","cycle":2}
+{"ts":"2026-05-27T18:25:25Z","run":"tasks/T002","kind":"review_end","id":"T002","cycle":2,"blockers":0,"majors":0,"prompt_chars":2374,"response_chars":61,"return_chars":61,"wall_ms":41337}
+{"ts":"2026-05-27T18:26:18Z","run":"tasks/T002","kind":"review_start","id":"T002","cycle":1}
+{"ts":"2026-05-27T18:27:38Z","run":"tasks/T002","kind":"review_end","id":"T002","cycle":1,"blockers":0,"majors":4,"prompt_chars":13299,"response_chars":1560,"return_chars":0,"wall_ms":79450}
+{"ts":"2026-05-27T18:30:02Z","run":"tasks/T004","kind":"review","prompt_chars":5191,"response_chars":800,"return_chars":600,"wall_ms":45000}
+{"ts":"2026-05-27T18:30:38Z","run":"tasks/T003","kind":"review_start","id":"T003","cycle":1}
+{"ts":"2026-05-27T18:30:38Z","run":"tasks/T003","kind":"review_end","id":"T003","cycle":1,"blockers":0,"majors":0,"prompt_chars":1500,"response_chars":3500,"return_chars":500,"wall_ms":123}
+{"ts":"2026-05-27T18:35:08Z","run":"tasks/T002","kind":"review_start","id":"T002","cycle":2}
+{"ts":"2026-05-27T18:36:22Z","run":"1779906908062","kind":"_end","id":"T002","cycle":2,"blockers":0,"majors":1,"prompt_chars":2687,"response_chars":847,"return_chars":1287,"wall_ms":1779906982416}
+{"ts":"2026-05-27T18:36:30Z","run":"tasks/T002","kind":"review","prompt_chars":2687,"response_chars":847,"return_chars":1287,"wall_ms":0}
+{"ts":"2026-05-27T18:38:12Z","run":"test-run-dedup-99999","kind":"config_resolved","values":{"notify.level":"approval_only","docs.always_apply":"always"},"sources":{"notify.level":"defaults","docs.always_apply":"defaults"}}
+{"ts":"2026-05-27T18:38:12Z","run":"test-run-dedup-99999","kind":"config_resolved","values":{"notify.level":"approval_only","docs.always_apply":"always"},"sources":{"notify.level":"defaults","docs.always_apply":"defaults"}}
+{"ts":"2026-05-27T18:38:43Z","run":"test-run-dedup-99999","kind":"config_resolved","values":{"notify.level":"approval_only","docs.always_apply":"always"},"sources":{"notify.level":"defaults","docs.always_apply":"defaults"}}
+{"ts":"2026-05-27T18:38:43Z","run":"test-run-dedup-99999","kind":"config_resolved","values":{"notify.level":"approval_only","docs.always_apply":"always"},"sources":{"notify.level":"defaults","docs.always_apply":"defaults"}}
+{"ts":"2026-05-27T18:39:06Z","run":"tasks/T005","kind":"review_start","id":"T005","cycle":1}
+{"ts":"2026-05-27T18:39:18Z","run":"test-run-dedup-99999","kind":"config_resolved","values":{"notify.level":"approval_only","docs.always_apply":"always"},"sources":{"notify.level":"defaults","docs.always_apply":"defaults"}}
+{"ts":"2026-05-27T18:39:18Z","run":"test-run-dedup-99999","kind":"config_resolved","values":{"notify.level":"approval_only","docs.always_apply":"always"},"sources":{"notify.level":"defaults","docs.always_apply":"defaults"}}
+{"ts":"2026-05-27T18:39:20Z","run":"tasks/T002","kind":"task_done","id":"T002","retries":2,"review_blockers":0,"review_cycles":3}
+{"ts":"2026-05-27T18:39:20Z","run":"tasks/T003","kind":"task_done","id":"T003","retries":1,"review_blockers":0,"review_cycles":2}
+{"ts":"2026-05-27T18:39:20Z","run":"tasks/T004","kind":"task_done","id":"T004","retries":1,"review_blockers":0,"review_cycles":2}
+{"ts":"2026-05-27T18:39:20Z","run":"tasks/T006","kind":"task_start","id":"T006"}
+{"ts":"2026-05-27T18:39:20Z","run":"tasks/T008","kind":"task_start","id":"T008"}
+{"ts":"2026-05-27T18:39:20Z","run":"tasks/T010","kind":"task_start","id":"T010"}
+{"ts":"2026-05-27T18:40:03Z","run":"tasks/T010","kind":"implement_start","id":"T010","retry":0}
+{"ts":"2026-05-27T18:41:07Z","run":"tasks/T005","kind":"review_end","id":"T005","cycle":1,"blockers":0,"majors":9,"prompt_chars":4765,"response_chars":7500,"return_chars":3800,"wall_ms":120555}
+{"ts":"2026-05-27T18:41:15Z","run":"tasks/T010","kind":"implement_end","id":"T010","retry":0,"status":"ok","files_changed_count":1,"wall_ms":71844}
+{"ts":"2026-05-27T18:42:25Z","run":"test-run-dedup-99999","kind":"config_resolved","values":{"notify.level":"approval_only","docs.always_apply":"always"},"sources":{"notify.level":"defaults","docs.always_apply":"defaults"}}
+{"ts":"2026-05-27T18:42:26Z","run":"test-run-dedup-99999","kind":"config_resolved","values":{"notify.level":"approval_only","docs.always_apply":"always"},"sources":{"notify.level":"defaults","docs.always_apply":"defaults"}}
+{"ts":"2026-05-27T18:42:39Z","run":"tasks/T010","kind":"review_start","id":"T010","cycle":1}
+{"ts":"2026-05-27T18:44:07Z","run":"tasks/T010","kind":"review_end","id":"T010","cycle":1,"blockers":3,"majors":1,"prompt_chars":21600,"response_chars":1121642,"return_chars":1000,"wall_ms":87801}
+{"ts":"2026-05-27T18:49:05Z","run":"tasks/T005","kind":"review_round_2","majors":2,"blockers":0}
+{"ts":"2026-05-27T18:49:10Z","run":"placeholder-token","kind":"_end","id":"T005","cycle":2,"blockers":0,"majors":2,"prompt_chars":4800,"response_chars":950,"return_chars":950,"wall_ms":1779907750535}
+{"ts":"2026-05-27T18:56:31Z","run":"tasks/T006","kind":"task_halt","id":"T006","reason":"review_blocker_minor","cycle":1,"halt_reason":"unused_import; trivial fix deferred to post-amend"}
+{"ts":"2026-05-27T18:56:31Z","run":"tasks/T008","kind":"task_halt","id":"T008","reason":"review_blockers_and_majors","cycle":1,"halt_reason":"flag-parse ordering, chunk-id encoding, sanitization gaps"}
+{"ts":"2026-05-27T18:56:31Z","run":"tasks/T010","kind":"task_halt","id":"T010","reason":"spec_defect","cycle":1,"halt_reason":"Phase 0 ordering vs Plan Route Check; HEAVY sub-flow contract; Phase 4 chunk selection branch missing"}
+{"ts":"2026-05-27T18:56:31Z","run":"orchestration","kind":"run_end","status":"halted_for_amendment","tasks_done":5,"tasks_deferred":3,"tasks_pending":7}
+{"ts":"2026-05-27T18:59:50Z","run":"tasks/T007","kind":"implement_start","id":"T007","retry":0}
+{"ts":"2026-05-27T19:00:43Z","run":"20260527T190042Z-amend-fanout-escalate-primitive","kind":"amend_run_start","slug":"fanout-escalate-primitive","z_harness_version":"c5fa111","z_harness_dirty":true,"z_harness_branch":"main","mode":"full"}
+{"ts":"2026-05-27T19:01:03Z","run":"tasks/T007","kind":"implement_end","id":"T007","retry":0,"status":"ok","files_changed_count":2,"wall_ms":72974}
+{"ts":"2026-05-27T19:05:11Z","run":"20260527T190042Z-amend-fanout-escalate-primitive","kind":"amend_run_end","status":"applied","mode":"full","tasks_added":1,"tasks_modified":4,"tasks_removed":0,"tasks_superseded":0,"consulted":false}
+{"ts":"2026-05-27T19:05:46Z","run":"tasks/T007","kind":"review_start","id":"T007","cycle":1}
+{"ts":"2026-05-27T19:06:13Z","run":"20260527T190613Z-impl-fanout-escalate-primitive-resume","kind":"run_start","resume":true,"after_amend":true}
+{"ts":"2026-05-27T19:06:13Z","run":"tasks/T006","kind":"task_start","id":"T006","attempt":2}
+{"ts":"2026-05-27T19:06:13Z","run":"tasks/T008","kind":"task_start","id":"T008","attempt":2}
+{"ts":"2026-05-27T19:06:13Z","run":"tasks/T010","kind":"task_start","id":"T010","attempt":2}
+{"ts":"2026-05-27T19:06:56Z","run":"tasks/T006","kind":"review_start","id":"T006","cycle":1}
+{"ts":"2026-05-27T19:07:36Z","run":"tasks/T007","kind":"review_end","id":"T007","cycle":1,"blockers":0,"majors":0,"prompt_chars":7490,"response_chars":406,"return_chars":406,"wall_ms":110402}
+{"ts":"2026-05-27T19:17:40Z","run":"tasks/T006","kind":"task_done","id":"T006","retries":1,"review_cycles":2}
+{"ts":"2026-05-27T19:17:40Z","run":"tasks/T008","kind":"task_done","id":"T008","retries":1,"review_cycles":2}
+{"ts":"2026-05-27T19:17:40Z","run":"tasks/T010","kind":"task_halt","id":"T010","reason":"meta_defect_spec_premise","cycle":2,"halt_reason":"SPEC text claims Plan Route Check uses Phase 1 signals but actual file has Plan Route Check before Phase 1; 3 real implementer bugs in env var, branch order, reconciler writer"}
+{"ts":"2026-05-27T19:17:40Z","run":"orchestration","kind":"run_end","status":"halted","tasks_done":7,"tasks_pending":9,"reason":"meta_defect_requires_user_decision"}
+{"ts":"2026-05-27T19:18:47Z","run":"20260527T191847Z-review","kind":"review_all_start","slug":"z-harness-config-toml"}
+{"ts":"2026-05-27T19:19:36Z","run":"20260527T191936Z-impl-batch4","kind":"run_start","batch":4}
+{"ts":"2026-05-27T19:19:36Z","run":"tasks/T007","kind":"task_start","id":"T007"}
+{"ts":"2026-05-27T19:19:36Z","run":"tasks/T009","kind":"task_start","id":"T009"}
+{"ts":"2026-05-27T19:19:36Z","run":"tasks/T011","kind":"task_start","id":"T011"}
+{"ts":"2026-05-27T19:20:13Z","run":"tasks/T009","kind":"implement_start","id":"T009","retry":0}
+{"ts":"2026-05-27T19:21:57Z","run":"tasks/T009","kind":"implement_end","id":"T009","retry":0,"status":"ok","files_changed_count":1,"wall_ms":104115}
+{"ts":"2026-05-27T19:23:51Z","run":"tasks/T007","kind":"review_start","id":"T007","cycle":1}
+{"ts":"2026-05-27T19:23:59Z","run":"tasks/T009","kind":"review_start","id":"T009","cycle":1}
+{"ts":"2026-05-27T19:24:02Z","run":"tasks/T011","kind":"review_start","id":"T011","cycle":1}
+{"ts":"2026-05-27T19:24:54Z","run":"20260527T191847Z-review","kind":"review_all_end","slug":"z-harness-config-toml","drift_findings":1,"spec_gap_findings":0,"user_action":"open-followup-tasks","followup_task_ids":["T010","T011"]}
+{"ts":"2026-05-27T19:25:01Z","run":"tasks/T007","kind":"review_end","id":"T007","cycle":1,"blockers":0,"majors":0,"prompt_chars":7848,"response_chars":234,"return_chars":40,"wall_ms":69715}
+{"ts":"2026-05-27T19:25:29Z","run":"tasks/T011","kind":"review_end","id":"T011","cycle":1,"blockers":0,"majors":1,"prompt_chars":1500,"response_chars":800,"return_chars":400,"wall_ms":87434}
+{"ts":"2026-05-27T19:28:10Z","run":"tasks/T009","kind":"review","prompt_chars":16842,"response_chars":461875,"blockers":1,"majors":8}
+{"ts":"2026-05-27T19:28:14Z","run":"tasks/T009","kind":"review_end","id":"T009","cycle":1,"blockers":1,"majors":8,"wall_ms":255321}
+{"ts":"2026-05-27T19:29:28Z","run":"tasks/T007","kind":"task_done","id":"T007","retries":0,"review_cycles":1}
+{"ts":"2026-05-27T19:29:28Z","run":"tasks/T011","kind":"task_done","id":"T011","retries":0,"review_cycles":1,"inline_fix":"timestamp"}
+{"ts":"2026-05-27T19:29:29Z","run":"tasks/T010","kind":"task_start","id":"T010","attempt":3,"after_spec_retraction":true}
+{"ts":"2026-05-27T19:32:38Z","run":"docs","kind":"maintain_docs_start","mode":"dry-run","stale_count":8}
+{"ts":"2026-05-27T19:37:11Z","run":"tasks/T010","kind":"task_done","id":"T010","retries":2,"review_cycles":2}
+{"ts":"2026-05-27T19:37:11Z","run":"tasks/T013","kind":"task_start","id":"T013"}
+{"ts":"2026-05-27T19:37:11Z","run":"tasks/T016","kind":"task_start","id":"T016"}
+{"ts":"2026-05-27T19:44:27Z","run":"tasks/T009","kind":"task_done","id":"T009","retries":2,"review_cycles":2}
+{"ts":"2026-05-27T19:44:27Z","run":"tasks/T013","kind":"task_done","id":"T013","retries":0,"review_cycles":0}
+{"ts":"2026-05-27T19:44:27Z","run":"tasks/T016","kind":"task_done","id":"T016","retries":0,"review_cycles":1,"inline_fixes":3}
+{"ts":"2026-05-27T19:44:27Z","run":"tasks/T012","kind":"task_start","id":"T012"}
+{"ts":"2026-05-27T19:50:19Z","run":"tasks/T012","kind":"task_done","id":"T012","retries":0,"review_cycles":0}
+{"ts":"2026-05-27T19:50:20Z","run":"tasks/T014","kind":"task_start","id":"T014"}
+{"ts":"2026-05-27T19:51:38Z","run":"tasks/T014","kind":"task_done","id":"T014","retries":0,"review_cycles":0,"tripwires_fired":["T2"]}
+{"ts":"2026-05-27T19:51:38Z","run":"tasks/T015","kind":"task_start","id":"T015"}
+{"ts":"2026-05-27T19:53:29Z","run":"tasks/T015","kind":"task_done","id":"T015","retries":0,"review_cycles":0,"verdict":"v1a_shipped_v1b_gated"}
+{"ts":"2026-05-27T19:53:29Z","run":"orchestration","kind":"run_end","status":"complete","tasks_done":16,"tasks_pending":0}
+{"ts":"2026-05-27T19:54:31Z","run":"docs/scripts","kind":"doc_update_start","concept":"scripts","reason":"stale","mode":"write"}
+{"ts":"2026-05-27T19:56:29Z","run":"docs/scripts","kind":"doc_update_end","concept":"scripts","status":"ok","subagent_model":"sonnet","wall_ms":118061}
+{"ts":"2026-05-27T20:05:29Z","run":"docs","kind":"maintain_docs_end","mode":"write","updated":8,"deferred":0,"skipped":0}

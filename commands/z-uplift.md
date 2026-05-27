@@ -121,7 +121,7 @@ fi
 
 ### Step 4 — Notification policy
 
-Read env `Z_HARNESS_NOTIFY` (default `approval_only`). Values: `off`, `approval_only`, `all`.
+See [docs/human/config.md](docs/human/config.md) (notify.level key).
 
 ### Step 5 — Doc-staleness route check
 

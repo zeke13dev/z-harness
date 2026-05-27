@@ -4,7 +4,7 @@ description: Orchestrate implementation of ALL pending tasks in z-harness/TASKS.
 ---
 You are the **z-harness `/z-implement-all`** orchestrator. Your job is to drive the task queue to completion without losing the per-task fresh-context guarantee. You do not implement code yourself — you delegate each task to a fresh `implementer` subagent and each review to a fresh `reviewer` subagent.
 
-Notification policy: read env `Z_HARNESS_NOTIFY` (default `approval_only`).
+Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
 
 ## Flags
 
@@ -192,7 +192,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orc
      "$TRIGGER" "$tasks_since_pause" "$WALL_MINUTES" "$PENDING_REMAINING")"
 ```
 
-Then push-notify (regardless of `Z_HARNESS_NOTIFY` value — this is a hard pause):
+Then push-notify (this is a hard pause — fires regardless of notification level; see [docs/human/config.md](docs/human/config.md)):
 
 > "Compaction breakpoint: `<N>` tasks completed (or `<M>` min wall). `<K>` pending tasks remain. Run `/clear`, then re-invoke `/z-implement-all` to resume from TASKS.md. Use `/compact` instead if you need chat history for debugging."
 
@@ -259,7 +259,7 @@ Scan the **entire task block** (title, Files, Depends, Acceptance — every line
 
 **Phase markers:** Phase F tasks (T050+) — explicitly wall-clock-bound, skip entirely (do not even ask, just report at finalize).
 
-When halting on a skip-flagged task, immediately push-notify (regardless of `Z_HARNESS_NOTIFY` value) and use `AskUserQuestion` with options:
+When halting on a skip-flagged task, immediately push-notify (fires regardless of notification level; see [docs/human/config.md](docs/human/config.md)) and use `AskUserQuestion` with options:
 - **Skip entirely** — leave `[ ]`, exclude from this run's eligibility for the rest of the loop, continue with other eligible tasks.
 - **I'll run it myself** — leave `[ ]`, exclude for now; user will mark `[x]` manually when done, then re-invoke `/z-implement-all` to resume.
 - **Defer** — leave `[ ]`, eligible again on the next outer loop iteration (use when waiting on a transient condition).
@@ -485,7 +485,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tas
      "<task-id>" "<n>" "<n>" "<n>" "$PASSED" "$FAILED")"
 ```
 (`tests_passed`/`tests_failed` are 0 if the task had no `**Tests:**` line.)
-4. If `Z_HARNESS_NOTIFY=all`: push-notify per-task. (For `approval_only` default: only notify on halts.)
+4. If notify.level is `all` (see [docs/human/config.md](docs/human/config.md)): push-notify per-task. (For `approval_only` default: only notify on halts.)
 5. Increment `tasks_since_pause` by 1 (this task reached `[x]`; retries and rollbacks do not count).
 6. **Batch-settle compaction check (once per batch, after all tracks finish).** When all parallel tracks in this outer iteration have completed (all have reached terminal status, the atomic TASKS.md write is done, `batch_done` is emitted, and all halt signals have been surfaced and resolved or deferred by the user), run the trigger check documented in the "Compaction breakpoint policy" section above. If a trigger fires: emit the `compaction_pause` event, push-notify, and exit cleanly with no new dispatch. If no trigger fires: continue to step 1.
 
@@ -607,12 +607,12 @@ This phase fires once per run, after the Finalize push-notify, before the sessio
    if [[ "$STATUS_LINE" == STATUS:\ skipped* ]]; then
      # Helper (run-memory-review.sh) already emitted the memory_review_terminal event
      # for all skip states. Phase 9 ends here — do not execute steps 3-8.
-     # For state: skipped_broken_context → push-notify if Z_HARNESS_NOTIFY != off, deduped:
+     # For state: skipped_broken_context → push-notify if Z_HARNESS_NOTIFY_LEVEL != off, deduped:
      SKIP_REASON="${STATUS_LINE#STATUS: skipped }"
      if [[ "$SKIP_REASON" == tags_missing || "$SKIP_REASON" == no_plan_dir || "$SKIP_REASON" == missing_args ]]; then
        DEDUP_FILE="$BASE/.notify-dedup-session"
        DEDUP_KEY="${Z_HARNESS_SLUG:-unknown}:${SKIP_REASON}"
-       if [[ "${Z_HARNESS_NOTIFY:-approval_only}" != "off" ]] && ! grep -qxF "$DEDUP_KEY" "$DEDUP_FILE" 2>/dev/null; then
+       if [[ "${Z_HARNESS_NOTIFY_LEVEL:-approval_only}" != "off" ]] && ! grep -qxF "$DEDUP_KEY" "$DEDUP_FILE" 2>/dev/null; then
          PushNotification("Memory review skipped on \`${Z_HARNESS_SLUG:-unknown}\`: \`${SKIP_REASON}\`. Fix to re-enable memory candidates.")
          printf '%s\n' "$DEDUP_KEY" >> "$DEDUP_FILE"
        fi

@@ -1,0 +1,13 @@
+{
+  "slug": "z-harness-config-toml",
+  "run": "20260527T170933Z-z-harness-config-toml",
+  "status": "complete",
+  "ended_at": "2026-05-27T17:34:09Z",
+  "tasks_total": 8,
+  "tasks_complexity": {"low": 6, "medium": 2, "high": 0},
+  "decisions_total": 12,
+  "decisions_consulted": 3,
+  "consultations": 4,
+  "framing": "codex",
+  "depends_on": ["BRAINSTORM.md"]
+}

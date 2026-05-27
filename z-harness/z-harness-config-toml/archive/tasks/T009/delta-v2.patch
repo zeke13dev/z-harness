@@ -1,0 +1,268 @@
+--- z-harness/z-harness-config-toml/archive/tasks/T009/diff-v1.patch	2026-05-27 12:09:12
++++ z-harness/z-harness-config-toml/archive/tasks/T009/diff.patch	2026-05-27 12:09:40
+@@ -40,54 +40,68 @@
+     If `docs/llm/INDEX.json` exists in the repo root, dispatch `doc-fetcher` (Haiku) to identify concepts touched by this plan:
+     ```
+ diff --git a/commands/z-audit.md b/commands/z-audit.md
+-index 8ac6e7d..4287f9c 100644
++index 8ac6e7d..c3f4657 100644
+ --- a/commands/z-audit.md
+ +++ b/commands/z-audit.md
+ @@ -1,6 +1,6 @@
+  ---
+  description: Audit a target component across one or more dimensions (correctness / perf / cleanliness / design). Pre-flight scopes (target, dimensions, optional rubric file), spawns one auditor subagent per dimension in parallel, runs bundled Gemini+Codex consult on findings, emits REPORT.md + TASKS.md under $Z_HARNESS_PLAN_DIR-audit/ in the exact shape /z-implement-all consumes. Read-only — never edits the target.
+ -argument-hint: <target path or component name>
+-+argument-hint: <target path or component name> [--scope-from <chunk-id-or-path>]
+++argument-hint: <target path or component name> [--scope-from <chunk-spec>]
+  ---
+  
+  You are running **z-harness `/z-audit`** — a structured, read-only audit pipeline. The output is `REPORT.md` (everything found) plus a curated `TASKS.md` (actionable subset, in `/z-implement-all`-compatible format) under `$Z_HARNESS_PLAN_DIR-audit/`.
+-@@ -38,7 +38,7 @@ Each promoted audit task must preserve the finding's source dimension, severity,
+-    ' "$VERSION_BLOB" "<arguments>")"
+-    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" audit_run_start "$START_PAYLOAD"
+-    ```
+--6. Notification policy: read `Z_HARNESS_NOTIFY` (default `approval_only`).
+-+6. Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
+- 7. If `docs/llm/INDEX.json` exists → dispatch `doc-fetcher` (Haiku) to get the concept list overlapping the audit target. Do NOT read INDEX.json or per-concept JSONs from main thread.
+-    ```
+-    Agent(subagent_type="doc-fetcher",
+-@@ -49,6 +49,27 @@ Each promoted audit task must preserve the finding's source dimension, severity,
++@@ -22,13 +22,34 @@ This command is **read-only**. Never edit the target. Fixes happen later via `/z
+  
+- `$BASE = $Z_HARNESS_PLAN_DIR/`.
++ Each promoted audit task must preserve the finding's source dimension, severity, evidence, files, recommendation, and verifiable acceptance criteria. Observations with no clear fix stay in `REPORT.md`. Structural or premise-level findings that exceed the audit auto-bail thresholds become `escalation.md` instead of task blocks. This command may use its own severity labels and filenames, but the artifact must remain task-shaped and consumable by `/z-implement-all`.
+  
+-+## --scope-from flag handling
+++## --scope-from flag handling (parsed BEFORE Setup)
+ +
+-+Parse `$ARGUMENTS` for `--scope-from <chunk-id-or-path>` before any other phase.
+++Parse `$ARGUMENTS` for `--scope-from <chunk-spec>` **immediately — before slug derivation, doc-fetcher, version stamp, or run_start logging**. This ordering ensures recursive sub-flows do not pollute the parent run's slug or events.
+ +
+ +**If `--scope-from` is present:**
+ +
+-+1. Extract `SCOPE_FROM_ARG` (the value after `--scope-from`; may be a bare chunk id like `C1` or an absolute path to SCOPE.json).
+-+2. Locate the SCOPE.json file:
+-+   - If `SCOPE_FROM_ARG` starts with `/` (absolute path), use it directly.
+-+   - Otherwise treat it as a chunk id and resolve the path: `z-harness/<slug>/archive/<RUN>/SCOPE.json`. The slug and RUN must already be set from Setup; if not yet resolvable, ask the user to pass a full path.
+-+3. Read `SCOPE.json`. Parse the `chunks` array. Find the chunk whose `id` matches `SCOPE_FROM_ARG` (or the chunk at the given path if an absolute path was supplied).
+++1. Extract `CHUNK_SPEC` (the value immediately following `--scope-from`).
+++2. Set `SKIP_PHASE_0=true` immediately.
+++3. Resolve the chunk:
+++   - **Bare chunk ID** (e.g. `C1` — no `/` in the value): locate the parent run's SCOPE.json at `z-harness/<parent-slug>/archive/$Z_HARNESS_PARENT_RUN_ID/SCOPE.json`. The `$Z_HARNESS_PARENT_RUN_ID` env var is set by the HEAVY fan-out parent when spawning sub-flows. If `$Z_HARNESS_PARENT_RUN_ID` is unset, halt with `AskUserQuestion`: "Cannot resolve bare chunk ID `<id>` — no \$Z_HARNESS_PARENT_RUN_ID in environment. Pass a full path instead (e.g. `/abs/path/SCOPE.json#<id>`)."
+++   - **Absolute path with fragment** (e.g. `/abs/path/SCOPE.json#C1`): split on `#` to yield `(scope_json_path, chunk_id)`. Use `scope_json_path` directly.
+++4. Read the resolved SCOPE.json. Parse the `chunks` array. Find the chunk whose `id` matches the chunk ID.
+ +   - If no matching chunk: emit event `scope_from_chunk_not_found` and halt with `AskUserQuestion`: "Chunk `<id>` not found in SCOPE.json. Valid chunk ids: <list>."
+-+4. **Anti-sprawl invariant.** If `SCOPE.json` reports `"mode": "HEAVY"`, this sub-flow was dispatched by a HEAVY fan-out parent. Sub-flows cannot themselves re-enter HEAVY:
+-+   - Emit event: `scope_recursive_heavy_refused` with payload `{"chunk_id": "<id>", "parent_run_scope_json": "<path>"}`.
+-+   - Set `SCOPE_FROM_MODE_LOCKED=true`. When Phase 0 (T009) runs, it MUST skip HEAVY dispatch and fall through to MEDIUM behavior regardless of the probe's output.
+-+5. Set `SCOPE_HINT` to the matched chunk's `scope_hint` field. This overrides the audit target for Phase 1 onward — the audit operates only on `SCOPE_HINT`.
+-+6. Set `SKIP_PHASE_0=true` — Phase 0 (T009) must not be dispatched when `--scope-from` is present.
+-+7. Log event: `scope_from_resolved` with payload `{"chunk_id": "<id>", "scope_hint": "<SCOPE_HINT>", "parent_scope_json": "<path>"}`.
+++5. Set `SCOPE_HINT` to the matched chunk's `scope_hint` field.
+++6. Log event: `scope_from_resolved` with payload `{"chunk_id": "<id>", "scope_hint": "<SCOPE_HINT>", "parent_scope_json": "<path>"}`.
+ +
+-+**If `--scope-from` is absent:** proceed normally. Phase 0 (T009) will run if present; `SCOPE_HINT` is unset.
+++**Anti-sprawl invariant:** `SKIP_PHASE_0=true` alone enforces this. Sub-flows cannot recursively go HEAVY because Phase 0's HEAVY dispatch branch never executes when `SKIP_PHASE_0` is set.
+ +
+- ## Auto-bail thresholds (check after Phase 4)
+++**If `--scope-from` is absent:** `SKIP_PHASE_0` is unset. Phase 0 (T009) will run if present; `SCOPE_HINT` is unset.
+++
++ ## Setup
+  
+- If the merged findings count exceeds:
++-1. **Derive slug** — short kebab-case like `audit-<component>` (e.g. target `strategies/kxbtc15m_fade_extremes` → `audit-kxbtc15m`). Confirm via `AskUserQuestion` if non-obvious. Check `ls z-harness/` first for collisions.
++-2. Export `Z_HARNESS_SLUG=<slug>-audit`.
++-3. Pick run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>-audit`.
++-4. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`.
++-5. **Version stamp + log:**
+++1. **Sanitize `$ARGUMENTS`** — strip the `--scope-from <chunk-spec>` token pair (if present) before using `$ARGUMENTS` for slug derivation, doc-fetcher dispatch, or target parsing. The sanitized value is used for all subsequent steps.
+++2. **Derive slug** — short kebab-case like `audit-<component>` (e.g. target `strategies/kxbtc15m_fade_extremes` → `audit-kxbtc15m`). Confirm via `AskUserQuestion` if non-obvious. Check `ls z-harness/` first for collisions.
+++3. Export `Z_HARNESS_SLUG=<slug>-audit`.
+++4. Pick run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>-audit`.
+++5. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`.
+++6. **Version stamp + log:**
++    ```bash
++    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
++    START_PAYLOAD="$(python3 -c '
++@@ -38,8 +59,8 @@ Each promoted audit task must preserve the finding's source dimension, severity,
++    ' "$VERSION_BLOB" "<arguments>")"
++    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" audit_run_start "$START_PAYLOAD"
++    ```
++-6. Notification policy: read `Z_HARNESS_NOTIFY` (default `approval_only`).
++-7. If `docs/llm/INDEX.json` exists → dispatch `doc-fetcher` (Haiku) to get the concept list overlapping the audit target. Do NOT read INDEX.json or per-concept JSONs from main thread.
+++7. Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
+++8. If `docs/llm/INDEX.json` exists → dispatch `doc-fetcher` (Haiku) to get the concept list overlapping the audit target. Do NOT read INDEX.json or per-concept JSONs from main thread.
++    ```
++    Agent(subagent_type="doc-fetcher",
++          description="Doc context for audit <slug>",
+ @@ -60,6 +81,8 @@ If the merged findings count exceeds:
+  
+  ## Phase 1 — Pre-flight scoping
+@@ -98,10 +112,10 @@
+  
+  1. **Dimensions** — multi-select (≥1 required):
+ diff --git a/commands/z-brainstorm.md b/commands/z-brainstorm.md
+-index befed80..1118a52 100644
++index befed80..3193e3a 100644
+ --- a/commands/z-brainstorm.md
+ +++ b/commands/z-brainstorm.md
+-@@ -32,7 +32,7 @@ $ARGUMENTS
++@@ -32,13 +32,174 @@ $ARGUMENTS
+     ' "$VERSION_BLOB" "<arguments>")"
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" brainstorm_run_start "$START_PAYLOAD"
+     ```
+@@ -110,15 +124,12 @@
+  8. **Cost guardrail.** Target ≤200K tokens. If the running total exceeds 200K (rough estimate: sum prompt+response chars across consult events ÷ 4), log a warning event and continue — do not halt.
+  
+  **All paths live under `$Z_HARNESS_PLAN_DIR/`:**
+-@@ -59,6 +59,169 @@ If routing, write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md`, emit `pl
+- Loop prevention: carry forward the latest route chain; if it already has two entries, ask the user to choose explicitly. If the recommended target equals the immediate prior `from_command`, block ping-pong, show both route artifacts, and ask the user to choose. If the user continues here, log the override and do not route again for the same `reason_codes` in this run.
+- <!-- PLAN_ROUTE_CHECK_END -->
++ - `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md`
++ - `$Z_HARNESS_PLAN_DIR/archive/<RUN>/...`
+  
+-+---
+-+
+ +## Phase 0 — Scope probe
+ +
+-+Run Phase 0 **immediately after the Plan Route Check** (if the route check keeps you in `/z-brainstorm`), before Phase 1 scaffolding begins.
+++Run Phase 0 **immediately after Setup** — BEFORE Plan Route Check, BEFORE Phase 1 scaffolding begins. scope-probe internally dispatches doc-fetcher (per its step 4); Phase 0 does not depend on Phase 1's doc-fetcher run.
+ +
+ +### 0a. Define axis taxonomy
+ +
+@@ -187,7 +198,7 @@
+ +
+ +Write atomically via tmp+rename to `$Z_HARNESS_PLAN_DIR/archive/$RUN/SCOPE.json`.
+ +
+-+If the archive write fails: emit `scope_probe_archive_write_failed` event, skip Phase 0 entirely, and proceed to Phase 1 as if scope-probe was never dispatched. Do not write the live file.
+++If the archive write fails: emit `scope_probe_archive_write_failed` event, skip Phase 0 entirely, and proceed to Plan Route Check as if scope-probe was never dispatched. Do not write the live file.
+ +
+ +**Step 2 — Write live file (only after archive succeeds):**
+ +
+@@ -205,7 +216,7 @@
+ +
+ +#### LIGHT or MEDIUM — pass-through
+ +
+-+`MODE: LIGHT` or `MODE: MEDIUM`: proceed to Phase 1 scaffolding unchanged. SCOPE-brainstorm.json is written but Phase 1 does not consult it for brainstorm (unlike `/z-audit` LIGHT, brainstorm has no `dimensions_hint` equivalent — Phase 1 runs identically for both modes in `/z-brainstorm`).
+++`MODE: LIGHT` or `MODE: MEDIUM`: proceed to Plan Route Check and then Phase 1 scaffolding unchanged. SCOPE-brainstorm.json is written but Phase 1 does not consult it for brainstorm (unlike `/z-audit` LIGHT, brainstorm has no `dimensions_hint` equivalent — Phase 1 runs identically for both modes in `/z-brainstorm`).
+ +
+ +#### HEAVY — parallel sub-flow fan-out
+ +
+@@ -217,7 +228,7 @@
+ +     "$(printf '{"host_command":"z-brainstorm","axis":"%s","chunks_count":%d}' "<AXIS>" "<N>")"
+ +   ```
+ +
+-+2. **Dispatch N parallel `/z-brainstorm` sub-flows** — one per chunk from the `chunks` array. Each sub-flow runs Phases 1+2 (ideator dispatch) for its chunk's `scope_hint` sub-topic. Dispatch all N in a single message (parallel).
+++2. **Dispatch N parallel `/z-brainstorm` sub-flows** — one per chunk from the `chunks` array. Each sub-flow runs Phases 1 (scaffolding), 2 (ideator dispatch), and **3 (synthesis)** for its chunk's `scope_hint` sub-topic, producing its own per-chunk BRAINSTORM.md. Dispatch all N in a single message (parallel).
+ +
+ +   For each chunk `C` in `chunks`, call:
+ +   ```
+@@ -226,17 +237,17 @@
+ +     model="sonnet",
+ +     description="z-brainstorm sub-flow for chunk <C.id>: <C.intent>",
+ +     prompt="MODE: brainstorm-subflow
+-+   
+-+   This is a HEAVY fan-out sub-flow of /z-brainstorm. Run Phase 1 (scaffolding) and Phase 2 (ideator dispatch) ONLY for the sub-scope below. Do NOT run Phase 0 (scope-probe), Plan Route Check, or Phase 3/4 (user choice). Produce a BRAINSTORM.md at the path specified.
+-+   
+-+   Parent run id: <RUN>
+-+   Chunk id: <C.id>
+-+   Sub-scope topic: <C.scope_hint> — <C.intent>
+-+   Original topic (for context): <topic>
+-+   Axis: <AXIS>
+-+   Output path: $Z_HARNESS_PLAN_DIR/archive/$RUN/chunks/<C.id>/BRAINSTORM.md
+-+   
+-+   Scaffolding instructions: follow /z-brainstorm Phase 1 (doc-fetcher, optional Explore, RESEARCH.md ingestion, input_hash). Ideator dispatch: follow /z-brainstorm Phase 2 with the IDEATOR_SCHEMA. Write the BRAINSTORM.md (through Phase 3 synthesis, stopping before the AskUserQuestion user-choice gate). Set chosen_framing: pending."
+++
+++This is a HEAVY fan-out sub-flow of /z-brainstorm. Run Phase 1 (scaffolding), Phase 2 (ideator dispatch), and Phase 3 (synthesis) for the sub-scope below. Do NOT run Phase 0 (scope-probe), Plan Route Check, or Phase 4 (user-pick gate — selection happens at the parent level for HEAVY mode). Produce a BRAINSTORM.md at the path specified.
+++
+++Parent run id: <RUN>
+++Chunk id: <C.id>
+++Sub-scope topic: <C.scope_hint> — <C.intent>
+++Original topic (for context): <topic>
+++Axis: <AXIS>
+++Output path: $Z_HARNESS_PLAN_DIR/archive/$RUN/chunks/<C.id>/BRAINSTORM.md
+++
+++Scaffolding instructions: follow /z-brainstorm Phase 1 (doc-fetcher, optional Explore, RESEARCH.md ingestion, input_hash). Ideator dispatch: follow /z-brainstorm Phase 2 with the IDEATOR_SCHEMA. Synthesis: follow /z-brainstorm Phase 3 (anti-bias check, orchestrator recommendation). Write the BRAINSTORM.md with chosen_framing: pending (do NOT present an AskUserQuestion — the parent owns the user-pick gate)."
+ +   )
+ +   ```
+ +
+@@ -252,9 +263,9 @@
+ +     subagent_type="scope-reconciler-brainstorm",
+ +     description="Reconcile HEAVY brainstorm chunks for <slug>",
+ +     prompt="host_run_id: <RUN>
+-+   chunks: <JSON array of {id, brainstorm_path, status?} — mark failed sub-flows with status: failed>
+-+   axis: <AXIS>
+-+   output_path: $Z_HARNESS_PLAN_DIR/BRAINSTORM.md"
+++chunks: <JSON array of {id, brainstorm_path, status?} — mark failed sub-flows with status: failed>
+++axis: <AXIS>
+++output_path: $Z_HARNESS_PLAN_DIR/BRAINSTORM.md"
+ +   )
+ +   ```
+ +
+@@ -269,14 +280,23 @@
+ +        "<AXIS>" "<N>" "<succeeded_count>" "<true|false>")"
+ +   ```
+ +
+-+7. **Skip Phases 1, 2, and 3.** The unified BRAINSTORM.md (produced by the reconciler or the fallback) replaces the normal Phase 1+2+3 output. Jump directly to Phase 4 — present the unified BRAINSTORM.md to the user via `AskUserQuestion` for `chosen_framing` selection. The options presented must include one option per chunk (e.g. "C1: <chunk intent>") rather than one option per ideator, since each chunk may have multiple ideator framings. The user may also pick Restart or Abandon as normal.
+++7. **Skip Phases 1, 2, and 3.** The unified BRAINSTORM.md (produced by the reconciler or the fallback) replaces the normal Phase 1+2+3 output. Jump directly to Phase 4 — **HEAVY parent-level Phase 4 chunk-selection logic is TBD: implemented in T016.** Until T016 ships, present the unified BRAINSTORM.md to the user via `AskUserQuestion` and prompt them to select a framing manually from the chunk sections.
+ +
+ +#### refused / bad_input — MEDIUM fallback
+ +
+-+Treat `STATUS: refused` or `STATUS: bad_input` as `MODE: MEDIUM`. Proceed to Phase 1 unchanged. Log a `scope_probe_refused` or `scope_probe_bad_input` event respectively.
+++Treat `STATUS: refused` or `STATUS: bad_input` as `MODE: MEDIUM`. Proceed to Plan Route Check and then Phase 1 unchanged. Log a `scope_probe_refused` or `scope_probe_bad_input` event respectively.
+ +
+ +---
+ +
++ <!-- PLAN_ROUTE_CHECK_START -->
++ ## Plan Route Check
++ 
++@@ -59,6 +220,8 @@ If routing, write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md`, emit `pl
++ Loop prevention: carry forward the latest route chain; if it already has two entries, ask the user to choose explicitly. If the recommended target equals the immediate prior `from_command`, block ping-pong, show both route artifacts, and ask the user to choose. If the user continues here, log the override and do not route again for the same `reason_codes` in this run.
++ <!-- PLAN_ROUTE_CHECK_END -->
++ 
+++---
+++
+  ## Phase telemetry (mandatory)
+  
+  At the **start** of each phase (1 through 4), record `T0=$(date +%s%3N)`. At the **end**, log:
+@@ -482,6 +502,40 @@
+  
+  ### Step 5 — Doc-staleness route check
+  
++diff --git a/docs/human/environment-knobs.md b/docs/human/environment-knobs.md
++new file mode 100644
++index 0000000..de80716
++--- /dev/null
+++++ b/docs/human/environment-knobs.md
++@@ -0,0 +1,28 @@
+++# Environment Knobs
+++
+++> Last updated: 2026-05-27
+++
+++z-harness behaviour can be tuned via environment variables. The notify and
+++docs knobs are now managed through `scripts/config.py` (see
+++[docs/human/config.md](config.md)); the variables below remain in effect
+++for the other tunables.
+++
+++## Variables
+++
+++| Variable | Default | Purpose |
+++|---|---|---|
+++| ~~`Z_HARNESS_NOTIFY`~~ | — | Removed. Use `notify.level` in `~/.config/z-harness/config.toml` instead; see [docs/human/config.md](config.md). The loader exports `Z_HARNESS_NOTIFY_LEVEL` to migrated flows. |
+++| `Z_HARNESS_MAX_EXPLORE` | `3` | Cap on `Explore` subagent dispatches per `/z-plan` run. |
+++| `Z_HARNESS_DOC_STALENESS_THRESHOLD` | `20` | Percent staleness above which `/z-plan` halts and recommends `/z-maintain-docs`. |
+++| `Z_HARNESS_LOCAL_CARGO_CLEAN` | — | Set to `1` to trigger a one-time local `cargo clean` at the start of `/z-implement-all`. |
+++| `Z_HARNESS_SLUG` | — | Set by commands; namespaces all output paths under `z-harness/<slug>/`. |
+++| `Z_HARNESS_BRAINSTORM_EXPLORE` | — | Set to `1` to opt into a Phase 1 Explore dispatch inside `/z-brainstorm`. Off by default. |
+++| `Z_IMPLEMENT_PAUSE_TASKS` | `5` | Completed tasks since last pause that triggers a compaction breakpoint in `/z-implement-all`. Set to `0` to disable. |
+++| `Z_IMPLEMENT_PAUSE_MINUTES` | `30` | Wall-clock minutes since last pause that triggers a compaction breakpoint in `/z-implement-all`. Set to `0` to disable. |
+++| ~~`Z_HARNESS_RETRY_UPGRADE`~~ | — | Removed. Model selection now uses `**Complexity:** low\|medium\|high` stamp in TASKS.md; retries always use Opus. |
+++
+++Setting both `Z_IMPLEMENT_PAUSE_TASKS=0` and `Z_IMPLEMENT_PAUSE_MINUTES=0` disables all
+++compaction breakpoints in `/z-implement-all`.
+++
+++See [docs/human/config.md](config.md) for the TOML config system, which covers
+++`notify.level` and `docs.always_apply` as structured, layered knobs.
+ diff --git a/skills/z-amend/SKILL.md b/skills/z-amend/SKILL.md
+ index 6674acd..1b57ec3 100644
+ --- a/skills/z-amend/SKILL.md

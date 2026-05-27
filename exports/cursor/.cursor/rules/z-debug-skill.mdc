@@ -519,12 +519,158 @@ Push-notify: "Post-mortem ready: `$Z_HARNESS_PLAN_DIR/DEBUG.md` Post-mortem sect
 
 ## Phase 10 — Finalize
 
+**Clear the notify-dedup session file** (once per top-level `/z-debug` invocation — ensures each fresh debug session gets its own notify de-dup state):
+```bash
+[[ -n "${Z_HARNESS_PLAN_DIR:-}" ]] && rm -f "$Z_HARNESS_PLAN_DIR/.notify-dedup-session"
+```
+
+### Branch: `status: shipped` (fix was applied and post-mortem written)
+
 1. Log:
    ```bash
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" debug_run_end \
      "$(printf '{"status":"shipped","hypothesis_cycles":%d,"total_hypotheses_generated":%d,"action_items":%d,"postmortem_written":true}' "$CYCLES" "$N_HYPOTHESES" "$N_ACTIONS")"
    ```
 2. Push-notify if policy != `off`: "Debug complete. Root cause: <one-line, H<NNN>>. DEBUG.md in `$Z_HARNESS_PLAN_DIR/`."
+
+3. **Memory review (shipped branch only):**
+
+   a. Run the memory-review helper and parse with `mapfile`:
+      ```bash
+      mapfile -t LINES < <(bash scripts/run-memory-review.sh "$RUN" "debug")
+      STATUS_LINE="${LINES[0]:-}"
+      ```
+
+   b. **Skip path — first line is `STATUS: skipped <reason>`:**
+      ```bash
+      if [[ "$STATUS_LINE" == STATUS:\ skipped* ]]; then
+        # Helper already emitted the memory_review_terminal event.
+        # For state: skipped_broken_context → push-notify if Z_HARNESS_NOTIFY_LEVEL != off, deduped:
+        SKIP_REASON="${STATUS_LINE#STATUS: skipped }"
+        if [[ "$SKIP_REASON" == tags_missing || "$SKIP_REASON" == no_plan_dir || "$SKIP_REASON" == missing_args ]]; then
+          DEDUP_FILE="$Z_HARNESS_PLAN_DIR/.notify-dedup-session"
+          DEDUP_KEY="${Z_HARNESS_SLUG:-unknown}:${SKIP_REASON}"
+          if [[ "${Z_HARNESS_NOTIFY_LEVEL:-approval_only}" != "off" ]] && ! grep -qxF "$DEDUP_KEY" "$DEDUP_FILE" 2>/dev/null; then
+            PushNotification("Memory review skipped on \`${Z_HARNESS_SLUG:-unknown}\`: \`${SKIP_REASON}\`. Fix to re-enable memory candidates.")
+            printf '%s\n' "$DEDUP_KEY" >> "$DEDUP_FILE"
+          fi
+        fi
+        # exit memory-review sub-step quietly
+      fi
+      ```
+
+   c. **Ready path — first line is `STATUS: ready`:** parse artifact paths:
+      ```bash
+      CUMULATIVE_DIFF_PATH="${LINES[1]:-}"
+      SPEC_PATH="${LINES[2]:-}"
+      TAGS_PATH="${LINES[3]:-}"
+      DEBUG_MD_PATH="${LINES[4]:-}"
+      RUN_DIR="$(dirname "$CUMULATIVE_DIFF_PATH")"
+      SLUG_FOR_DESC="${Z_HARNESS_SLUG:-$(basename "$Z_HARNESS_PLAN_DIR")}"
+      ```
+
+   d. **Dispatch the review-agent:**
+      ```
+      <!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
+        subagent_type="review-agent",
+        description="Memory review for <SLUG_FOR_DESC>",
+        prompt="parent_command: debug
+      debug_md_path: <DEBUG_MD_PATH>
+      spec_path: <SPEC_PATH>
+      cumulative_diff_path: <CUMULATIVE_DIFF_PATH>
+      tags_path: <TAGS_PATH>
+      index_path: docs/llm/INDEX.json
+      run_id: <RUN>
+      run_dir: <RUN_DIR>"
+      )
+      ```
+
+   e. **Parse agent return — extract single fenced ```json block:**
+      ```python
+      import re, json
+      raw = agent_return_text
+      m = re.search(r'```json\s*([\s\S]*?)```', raw)
+      if not m:
+          raise ValueError("no_fenced_block")
+      try:
+          candidates = json.loads(m.group(1))
+      except json.JSONDecodeError as e:
+          raise ValueError("json_parse_error") from e
+      ```
+
+      - **Parse failure:** log `review_agent_malformed`; push-notify; exit memory-review sub-step.
+      - **Agent error / no fenced block:** log `review_agent_failed`; push-notify; exit memory-review sub-step.
+
+   f. **Empty candidates (`[]`):**
+      ```bash
+      SLUG_JSON="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]) if sys.argv[1] else "null")' \
+        "${Z_HARNESS_SLUG:-}")"
+      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" memory_review_terminal \
+        "$(printf '{"state":"ran_empty","skip_reason":null,"parent_command":"debug","candidates":0,"accepted":0,"slug":%s}' \
+           "$SLUG_JSON")"
+      ```
+      Exit memory-review sub-step quietly — no push-notify.
+
+   g. **Candidates ≥ 1:**
+
+      i. Persist to JSONL:
+         ```bash
+         CANDIDATES_FILE="$RUN_DIR/memory-candidates.jsonl"
+         python3 -c '
+         import json, sys
+         candidates = json.loads(sys.argv[1])
+         with open(sys.argv[2], "w") as f:
+             for c in candidates:
+                 f.write(json.dumps(c) + "\n")
+         ' "$CANDIDATES_JSON_STR" "$CANDIDATES_FILE"
+         ```
+
+      ii. Log `review_agent_call` and push-notify `memory_candidates_ready`:
+          ```bash
+          bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" memory_candidates_ready \
+            "$(printf '{"run":"%s","candidates_emitted":%d}' "$RUN" "$N_CANDIDATES")"
+          ```
+          Push-notify: "Memory review produced `<N>` candidate(s) — please review."
+
+      iii. **Sequential AskUserQuestion per candidate (hard cap: 3 candidates). Source: `incident:debug-<slug>-<RUN>`.**
+
+           For each candidate (index `i`, 0-based; stop after 3):
+           ```
+           <!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
+             title: "Memory candidate <i+1> of <total> — <candidate.candidate_kind>",
+             body: "...",
+             options: [
+               { id: "accept", label: "Accept — persist this candidate" },
+               { id: "edit",   label: "Edit — modify before persisting" },
+               { id: "skip",   label: "Skip (provide one-word reason)" },
+               { id: "skip_all", label: "Skip all remaining" }
+             ]
+           )
+           ```
+
+           - **Accept:** dispatch `/z-suggest-memory --from-candidate-json -` with source `incident:debug-<slug>-<RUN>`. Increment `ACCEPTED`.
+           - **Edit:** collect edits, re-present as Accept, dispatch with edited JSON.
+           - **Skip (one-word reason):** log `review_candidate_skipped`; increment `SKIPPED`.
+           - **Skip-all-remaining:** log `review_skip_all`; break loop.
+
+      iv. **Emit `memory_review_terminal` event (needs_user path only — after loop completes):**
+          ```bash
+          SLUG_JSON="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]) if sys.argv[1] else "null")' \
+            "${Z_HARNESS_SLUG:-}")"
+          bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" memory_review_terminal \
+            "$(printf '{"state":"needs_user","skip_reason":null,"parent_command":"debug","candidates":%d,"accepted":%d,"slug":%s}' \
+               "$N_CANDIDATES" "$ACCEPTED" "$SLUG_JSON")"
+          ```
+
+### Branch: `status: abandoned` (debug was inconclusive — no fix shipped)
+
+Log:
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" debug_run_end \
+  "$(printf '{"status":"abandoned","hypothesis_cycles":%d,"total_hypotheses_generated":%d}' "$CYCLES" "$N_HYPOTHESES")"
+```
+
+Do NOT invoke `run-memory-review.sh` on the abandoned branch. No memory-review telemetry is emitted for inconclusive debug sessions.
 
 ## Artifacts produced
 

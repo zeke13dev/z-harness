@@ -1,0 +1,16 @@
+{"ts":"2026-05-27T18:13:17Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T001","tier":"low","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:17Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T002","tier":"high","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:17Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T003","tier":"medium","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:17Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T004","tier":"low","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:17Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T005","tier":"low","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:17Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T006","tier":"medium","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:17Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T007","tier":"low","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:17Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T008","tier":"low","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:17Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T009","tier":"high","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:17Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T010","tier":"medium","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:18Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T011","tier":"medium","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:18Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T012","tier":"medium","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:18Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T013","tier":"low","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:18Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T014","tier":"high","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:18Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"task_classified","task":"T015","tier":"medium","reason":"complexity-classifier output"}
+{"ts":"2026-05-27T18:13:18Z","run":"20260527T175422Z-fanout-escalate-primitive","kind":"run_end","status":"complete","tasks_total":15,"decisions_total":14,"decisions_consulted":5}

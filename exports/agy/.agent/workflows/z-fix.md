@@ -28,7 +28,7 @@ This command is for **targeted fixes with a known diagnosis**. If at any phase y
    ' "$VERSION_BLOB" "<arguments>")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" fix_run_start "$START_PAYLOAD"
    ```
-6. Notification policy: read `Z_HARNESS_NOTIFY` (default `approval_only`).
+6. Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
 7. Initialize `REVIEW_CYCLES=0` counter (used in Phase 9 post-mortem trigger).
 8. If `docs/llm/INDEX.json` exists → note it. Phase 1 will dispatch `doc-fetcher` (Haiku). Do NOT read INDEX.json or per-concept JSONs from main thread.
 

@@ -52,3 +52,9 @@
 {"ts":"2026-05-26T03:45:05Z","run":"tasks/T001","kind":"task_done","id":"T001","retries":1,"review_blockers":0,"review_cycles":2,"tests_passed":0,"tests_failed":0}
 {"ts":"2026-05-26T15:15:22Z","run":"tasks/T001","kind":"review_start","id":"T001","cycle":1}
 {"ts":"2026-05-26T15:16:26Z","run":"tasks/T001","kind":"review","provider":"codex","model_label":"gpt-5-codex","prompt_chars":7549,"response_chars":10890,"return_chars":0,"wall_ms":5000}
+{"ts":"2026-05-27T05:29:35Z","run":"tasks/T001","kind":"review_start","id":"T001","cycle":1}
+{"ts":"2026-05-27T05:30:59Z","run":"tasks/T001","kind":"review_end","id":"T001","cycle":1,"blockers":4,"majors":7,"prompt_chars":9593,"response_chars":14981,"return_chars":2989,"wall_ms":84634}
+{"ts":"2026-05-27T05:31:25Z","run":"tasks/T001","kind":"review_end","id":"T001","cycle":1,"blockers":2,"majors":4,"prompt_chars":9593,"response_chars":14981,"return_chars":1676,"wall_ms":110772}
+{"ts":"2026-05-27T18:15:55Z","run":"tasks/T001","kind":"precheck_start","id":"T001"}
+{"ts":"2026-05-27T18:16:45Z","run":"tasks/T001","kind":"precheck_end","id":"T001","status":"ok","references_checked":23,"wall_ms":49562}
+{"ts":"2026-05-27T18:23:38Z","run":"tasks/T001","kind":"task_done","id":"T001","retries":0,"review_blockers":0,"review_cycles":1}

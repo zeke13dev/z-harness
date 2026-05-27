@@ -1,0 +1,469 @@
+2026-05-27T17:00:27.720917Z ERROR codex_core::session::session: failed to load skill /Users/zeke/.codex/skills/z-maintain-docs/SKILL.md: invalid YAML: did not find expected key at line 3 column 41, while parsing a block mapping
+2026-05-27T17:00:27.721575Z ERROR codex_core::session::session: failed to load skill /Users/zeke/.codex/skills/z-stats/SKILL.md: invalid YAML: did not find expected key at line 3 column 32, while parsing a block mapping
+2026-05-27T17:00:27.721582Z ERROR codex_core::session::session: failed to load skill /Users/zeke/.codex/skills/z-review-all/SKILL.md: invalid YAML: did not find expected key at line 3 column 32, while parsing a block mapping
+2026-05-27T17:00:27.721586Z ERROR codex_core::session::session: failed to load skill /Users/zeke/.codex/plugins/cache/personal/z-harness/0.1.0/skills/z-suggest-memory/SKILL.md: invalid YAML: did not find expected key at line 3 column 35, while parsing a block mapping
+2026-05-27T17:00:27.721590Z ERROR codex_core::session::session: failed to load skill /Users/zeke/.codex/plugins/cache/personal/z-harness/0.1.0/skills/z-maintain-docs/SKILL.md: invalid YAML: did not find expected key at line 3 column 41, while parsing a block mapping
+2026-05-27T17:00:27.721594Z ERROR codex_core::session::session: failed to load skill /Users/zeke/.codex/plugins/cache/personal/z-harness/0.1.0/skills/z-stats/SKILL.md: invalid YAML: did not find expected key at line 3 column 32, while parsing a block mapping
+2026-05-27T17:00:27.721597Z ERROR codex_core::session::session: failed to load skill /Users/zeke/.codex/plugins/cache/personal/z-harness/0.1.0/skills/z-review-all/SKILL.md: invalid YAML: did not find expected key at line 3 column 32, while parsing a block mapping
+OpenAI Codex v0.133.0
+--------
+workdir: /Users/zeke/dev/z-harness
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: workspace-write [workdir, /tmp, $TMPDIR]
+reasoning effort: medium
+reasoning summaries: none
+session id: 019e6a61-6267-7b32-8382-42f0af090872
+--------
+user
+MODE: brainstorm
+
+Topic: Add a user-facing TOML config to the z-harness repo + slim the README to a human-only quickstart.
+
+Scaffolding:
+---
+User constraints:
+- README becomes human-only quickstart (what this is / how to install / where to look). Reference material lives in docs/human/ + docs/llm/.
+- TOML config controls runtime behavior. Example knobs the user named:
+  - `docs.always_apply` (force doc-fetcher even on small flows)
+  - auto-escalate vs don't (z-do → z-plan-light → z-plan ladder)
+  - per-module consultation preferences: always/never consult, specific CLI path, which consultants on which phases
+  - defaults per subagent role, doc-fetcher depth, archive retention, push-notification toggles
+- Auto-generate missing keys on first run (write defaults, never fail).
+- "Thin wrapper / prompt injection-removal" — config-driven prompt fragments to minimize token overhead: e.g. skip the codex-consult preamble entirely if `consult.codex = "never"`; trim the doc-fetcher preface if `docs.always_apply = false` and task is small.
+- Persist the config DESIGN in the repo as a docs/llm/ memory + docs/human/ doc.
+- Format preference: TOML.
+
+Current state (from doc-fetcher):
+- providers.json + scripts/resolve-provider.{sh,py} already exist (schema_version, role-based mapping, global ~/.config/z-harness/ + repo `.z-harness/` with per-key shadowing emitting `provider_shadowed` events). This is a precedent.
+- `Z_HARNESS_PLANS_DIR` and `Z_HARNESS_NOTIFY` are env-driven knobs that could absorb into TOML.
+- Plan paths via `scripts/plan-path.sh`. Archive paths hardcoded in commands.
+- Doc-fetcher behavior is procedural (in CLAUDE.md/global rules), no toggle exists.
+- Auto-escalation hardcoded per-command (z-implement-all retry budget, z-debug hypothesis budget, z-style-init fallback).
+- 28 commands, 21 skills, 17 agents → big surface area to migrate.
+- No config.toml anywhere yet.
+
+Brainstorm questions:
+1. Config schema shape — load-bearing vs noise.
+2. Config location — `z-harness.toml`, `.z-harness/config.toml`, `~/.config/z-harness/`, or layered.
+3. How skills READ config cheaply — shell TOML parser, python helper, generated env-export, pre-templated SKILL.md.
+4. Thin wrapper / prompt injection-removal mechanism — concrete design.
+5. Auto-generation of missing keys — write-back vs in-memory defaults; how to surface.
+6. Maintenance — docs/llm/ memory + docs/human/ doc + INDEX.json wiring.
+7. Risks — drift, stale keys, consult prefs leaking into wrong prompts.
+8. Smallest credible first slice.
+---
+
+Return exactly five sections: (1) Framing, (2) Core hypothesis, (3) Risks, (4) Plan implications, (5) What would change my mind. Mark any section you cannot produce as `<missing>`. Do not add other sections or a recommendation. Be bold and distinct — diversity across the three ideators is the point.
+
+codex
+I’ll use the `z-harness:z-brainstorm` skill here because the request is explicitly in brainstorm mode and asks for ideation output with a fixed structure.
+exec
+/bin/zsh -lc "sed -n '1,220p' /Users/zeke/.codex/plugins/cache/personal/z-harness/0.1.0/skills/z-brainstorm/SKILL.md" in /Users/zeke/dev/z-harness
+ succeeded in 0ms:
+---
+name: z-brainstorm
+description: Cheap parallel pre-plan ideation — dispatch 3 vendor-diverse ideators (Claude + Codex + Gemini), perform a mandatory anti-bias check, and produce BRAINSTORM.md to seed /z-plan.
+argument-hint: <topic to brainstorm> [--slug=<kebab>]
+---
+
+You are running the **z-harness `/z-brainstorm`** pipeline.
+
+Topic (from `$ARGUMENTS`):
+
+$ARGUMENTS
+
+**If the topic above is empty or whitespace**, do this first: use `AskUserQuestion` to ask "What topic should I brainstorm?". Wait for their reply. Treat the reply as the topic and continue.
+
+`/z-brainstorm` is **cheap, opt-in pre-planning**. It does not produce SPEC/PLAN/TASKS — those come from `/z-plan` later. Cost target: ≤200K tokens end-to-end. If you exceed that, log a warning and continue.
+
+## Setup
+
+1. **Derive slug.** If `$ARGUMENTS` contains `--slug=<value>`, use that verbatim. Otherwise auto-derive from the topic: short kebab-case, 2-4 words (e.g. "rethink batting order model" → `rethink-batting-order`). If the auto-derived slug is non-obvious, confirm via `AskUserQuestion`.
+2. **Export** `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")` for all subsequent shell calls and subagents.
+3. Pick a run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`.
+4. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`.
+5. **Existing slug-dir handling.** Run `ls z-harness/` to check for a matching slug dir. If `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md` exists, prompt the user via `AskUserQuestion`:
+   - **overwrite** — archive existing `BRAINSTORM.md` to `$Z_HARNESS_PLAN_DIR/archive/$RUN/BRAINSTORM.md.previous-<N>` (where `<N>` is the next free integer in that archive dir) and start fresh
+   - **abort** — exit cleanly with no changes
+6. **Version stamp + log run start:**
+   ```bash
+   VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
+   START_PAYLOAD="$(python3 -c '
+   import json, sys
+   v = json.loads(sys.argv[1]); v["topic"] = sys.argv[2]
+   print(json.dumps(v))
+   ' "$VERSION_BLOB" "<arguments>")"
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" brainstorm_run_start "$START_PAYLOAD"
+   ```
+7. Notification policy: read env `Z_HARNESS_NOTIFY` (default `approval_only`). Values: `off`, `approval_only`, `all`.
+8. **Cost guardrail.** Target ≤200K tokens. If the running total exceeds 200K (rough estimate: sum prompt+response chars across consult events ÷ 4), log a warning event and continue — do not halt.
+
+**All paths live under `$Z_HARNESS_PLAN_DIR/`:**
+- `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md`
+- `$Z_HARNESS_PLAN_DIR/archive/<RUN>/...`
+
+<!-- PLAN_ROUTE_CHECK_START -->
+## Plan Route Check
+
+Run this route check after Phase 1 scaffolding is assembled and before Phase 2 ideator dispatch. `/z-brainstorm` may route only before ideators are spawned; once ideation starts, finish the brainstorm flow instead of switching commands mid-run.
+
+Use only already-known signals from the topic, doc-fetcher synthesis, optional Explore, and any ingested `RESEARCH.md`: `candidate_files`, `expected_tasks`, `non_obvious_decisions`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `terrain_uncertain`, `approach_uncertain`, `has_existing_plan`, `has_fix_artifact`, and `docs_stale_or_drifted`.
+
+Deterministic routes:
+- Route unknown terrain, missing citations, or insufficient source facts to `/z-research`.
+- Route a framing that is already clear and ready for task planning to `/z-plan`.
+- Route a small concrete fix (`candidate_files <= 5`, `non_obvious_decisions <= 2`, no public API/schema impact) to `/z-plan-light`.
+- Stay in `/z-brainstorm` when the terrain is known enough but multiple plausible framings remain.
+
+Call `planning-router` only when deterministic signals conflict and no hard threshold already decides the route. It receives the compact signal payload plus the current route chain and is advisory; malformed or unavailable classifier output falls back to deterministic routing or an AskUser choice.
+
+If routing, write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md`, emit `plan_route_decision` with `from_command`, `to_command`, `route_class`, `reason_codes`, `signals`, `confidence`, `classifier_used`, `artifact_path`, `route_chain`, and `user_choice`, then present the AskUser handoff gate: switch, continue, or abandon. Do not execute the next command automatically.
+
+Loop prevention: carry forward the latest route chain; if it already has two entries, ask the user to choose explicitly. If the recommended target equals the immediate prior `from_command`, block ping-pong, show both route artifacts, and ask the user to choose. If the user continues here, log the override and do not route again for the same `reason_codes` in this run.
+<!-- PLAN_ROUTE_CHECK_END -->
+
+## Phase telemetry (mandatory)
+
+At the **start** of each phase (1 through 4), record `T0=$(date +%s%3N)`. At the **end**, log:
+
+```bash
+WALL_MS=$(( $(date +%s%3N) - T0 ))
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" phase_end \
+  "$(printf '{"phase":%d,"name":"%s","wall_ms":%d,"user_wait_ms":%d}' \
+     <phase-num> "<phase-name>" "$WALL_MS" "$USER_WAIT_MS_THIS_PHASE")"
+```
+
+If a phase blocks on `AskUserQuestion`, bracket the wait with `user_wait_start` / `user_wait_end` events so we can separate machine time from human-wait time:
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start '{"phase":<n>,"reason":"<short>"}'
+# ... AskUserQuestion ...
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end '{"phase":<n>,"wall_ms":<delta>}'
+```
+
+---
+
+## Phase 1 — Scaffolding
+
+Build a shared scaffolding payload that **all three ideators receive identically** (no read-by-reference asymmetry). Components:
+
+### 1a. Doc-fetcher (if INDEX.json exists)
+
+If `docs/llm/INDEX.json` exists in the repo root, dispatch ONE `doc-fetcher` (Haiku) call. **Never read INDEX.json or per-concept `<slug>.json` from main thread** — that's what doc-fetcher is for.
+
+```
+Agent(
+  subagent_type="doc-fetcher",
+  description="Doc context for <slug>",
+  prompt="query: <one-sentence summary of the topic>\nrepo_root: <abs path>\ndepth: standard"
+)
+```
+
+It returns a tight synthesis (matched concepts, key files with line ranges, invariants). If it returns `STATUS: no_docs` or `STATUS: no_match`, proceed with empty doc synthesis. If it emits a `DRIFT WARNING`, log a `doc_drift` event per affected concept.
+
+### 1b. Optional Explore
+
+If env `Z_HARNESS_BRAINSTORM_EXPLORE=1`, dispatch ONE Explore subagent (Haiku by default) to fill scaffolding gaps:
+
+```
+Agent(
+  subagent_type="Explore",
+  model: "haiku",
+  description="Brainstorm scaffolding for <slug>",
+  prompt="<TARGETED question about the topic's adjacent code / constraints>\n\nAlready known (from doc-fetcher): <paste synthesis>\n\nFocus only on what is NOT covered above."
+)
+```
+
+If `Z_HARNESS_BRAINSTORM_EXPLORE` is unset or `0`, skip this step entirely — brainstorming is supposed to be cheap.
+
+### 1c. RESEARCH.md ingestion
+
+If `$Z_HARNESS_PLAN_DIR/RESEARCH.md` exists, read it.
+
+- **≤20 KB:** inline the full content into the scaffolding payload.
+- **>20 KB:** produce an **extractive summary** that preserves citations and constraints (do not paraphrase; copy the cited bullets and constraint statements verbatim, drop the prose). Write the summary to `$Z_HARNESS_PLAN_DIR/archive/$RUN/research-summary-for-brainstorm.md`. Inline the summary instead of the full file.
+
+Record `depends_on: [RESEARCH.md]` in the eventual BRAINSTORM.md frontmatter if RESEARCH.md was ingested.
+
+### 1d. Assemble and hash
+
+Compute the `input_hash` per SPEC:
+
+```
+input_hash = sha256(canonicalize(
+    topic + "\n---\n" +
+    doc_fetcher_synthesis_or_empty + "\n---\n" +
+    explore_synthesis_or_empty + "\n---\n" +
+    research_md_or_summary_or_empty
+)).hexdigest()[:16]
+```
+
+`canonicalize`: strip leading/trailing whitespace; collapse all internal runs of whitespace to a single space.
+
+Checkpoint: write the assembled scaffolding to `$Z_HARNESS_PLAN_DIR/archive/$RUN/phase1-scaffolding.md`.
+
+---
+
+## Phase 2 — Parallel ideator dispatch
+
+Spawn **all three ideators in parallel in a single message**, each receiving the **identical** scaffolding payload from Phase 1 (topic + doc-fetcher synthesis + Explore findings if any + RESEARCH content/summary if any). No read-by-reference asymmetry.
+
+Define a shared instruction block `IDEATOR_SCHEMA` (used verbatim in all three prompts):
+
+```
+Return exactly five sections: (1) Framing, (2) Core hypothesis, (3) Risks, (4) Plan implications, (5) What would change my mind. Mark any section you cannot produce as `<missing>`. Do not add other sections or a recommendation. Be bold and distinct — diversity across the three ideators is the point.
+```
+
+Then dispatch:
+
+```
+Agent(
+  subagent_type="general-purpose",
+  model="sonnet",
+  description="Claude ideator for <slug>",
+  prompt="MODE: brainstorm\n\nTopic: <topic>\n\nScaffolding:\n<paste assembled payload>\n\n<IDEATOR_SCHEMA>"
+)
+Agent(
+  subagent_type="consultant-secondary",
+  description="Codex ideator for <slug>",
+  prompt="MODE: brainstorm\n\nTopic: <topic>\n\nScaffolding:\n<same payload>\n\n<IDEATOR_SCHEMA>"
+)
+Agent(
+  subagent_type="consultant-primary",
+  description="Gemini ideator for <slug>",
+  prompt="MODE: brainstorm\n\nTopic: <topic>\n\nScaffolding:\n<same payload>\n\n<IDEATOR_SCHEMA>"
+)
+```
+
+All three ideators see byte-identical scaffolding AND byte-identical schema instructions. The consultants return RAW (per the `MODE: brainstorm` contract in their agent files) — no standard wrapper. The Claude ideator (general-purpose Sonnet) returns the same five-section block.
+
+### Ideator failure policy
+
+Treat an ideator as failed if it returns an error, times out, or returns no parseable five-section block.
+
+- **1/3 fail** → proceed with the surviving two. Record the failed member as `"<id>:failed"` in the `ideators` frontmatter list using the canonical id (`claude:failed` | `codex:failed` | `gemini:failed`). The Phase 3 anti-bias check becomes a two-way comparison (still mandatory). Log `ideator_failed` with `{vendor, reason}`.
+- **2/3 fail** → halt. Use `AskUserQuestion` with options:
+  - **retry** (default) — re-dispatch the failed ideators once
+  - **proceed-with-1** — record the two failed members and run Phase 3 with a single framing (anti-bias check becomes "single framing — no comparison possible; flag inherent bias risk")
+  - **abandon** — write a minimal abandoned BRAINSTORM.md (frontmatter: `artifact`, `slug`, `generated_at`, `command`, `input_hash`, `ideators` with `:failed` suffix on the failed members, `ideator_models`, `status: abandoned`, `chosen_framing: abandoned`; body: a single `## Abandoned` section with one sentence of context) so `/z-plan` can detect the prior attempt, then exit.
+- **3/3 fail** → hard halt. Log `total_ideator_failure`, push-notify the user, exit. Do not write BRAINSTORM.md.
+
+Log every individual failure as `ideator_failed` regardless of the bucket above.
+
+---
+
+## Phase 3 — Synthesis + mandatory anti-bias check
+
+1. **Parse** the three (or two, or one) returns. For each ideator, extract the five sections. If a section is missing or malformed, record it as `<missing>` rather than omitting it.
+
+2. **Anti-bias check (MANDATORY).** Section-by-section, compare what each ideator said and identify which framing wins that dimension. **If you (the orchestrator, running on Claude) find yourself picking the Claude ideator over a peer for a given section, you must write an explicit justification for that pick.** "Claude wins" without justification is not acceptable — every Claude-favoring call needs a concrete reason (e.g. "Claude wins on Risks because it surfaced the data-leakage edge case that Codex and Gemini missed"). For two-way comparisons (one ideator failed), the same rule applies.
+
+3. **Orchestrator recommendation.** Pick one framing as your tentative recommendation with a one-line rationale. The user is free to override.
+
+4. **Write `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md`** with YAML frontmatter:
+
+   ```yaml
+   ---
+   artifact: brainstorm
+   slug: <slug>
+   generated_at: <UTC ISO 8601>
+   command: /z-brainstorm <args>
+   input_hash: <16 hex from Phase 1d>
+   depends_on: [<RESEARCH.md if ingested>]
+   ideators:
+     - claude
+     - codex
+     - gemini
+     # failed members recorded as "<id>:failed" (e.g. claude:failed)
+   ideator_models:
+     claude: sonnet
+     codex: default
+     gemini: default
+   status: complete
+
+exec
+/bin/zsh -lc "sed -n '220,520p' /Users/zeke/.codex/plugins/cache/personal/z-harness/0.1.0/skills/z-brainstorm/SKILL.md" in /Users/zeke/dev/z-harness
+ succeeded in 0ms:
+   status: complete
+   chosen_framing: pending
+   ---
+   ```
+
+   `chosen_framing` is written as `pending` here and updated in Phase 4 to one of `claude | codex | gemini | restart | abandoned` per SPEC.
+
+   Body sections, one block per ideator (in fixed order Claude → Codex → Gemini):
+
+   ```markdown
+   ## Framing: <ideator-name>
+
+   ### Framing
+   <one paragraph or `<missing>`>
+
+   ### Core hypothesis
+   <one paragraph or `<missing>`>
+
+   ### Risks
+   <bulleted list or `<missing>`>
+
+   ### Plan implications
+   <bulleted list or `<missing>`>
+
+   ### What would change my mind
+   <bulleted list or `<missing>`>
+   ```
+
+   Followed by:
+
+   ```markdown
+   ## Anti-bias check
+   <section-by-section comparison with explicit justification for any Claude-favoring pick>
+
+   ## Orchestrator recommendation
+   <one-line rationale; user is free to override>
+   ```
+
+   Do **not** write a `## User choice` section in Phase 3 — Phase 4 writes it for the first time (no placeholder, no duplication).
+
+5. **Present** the three framings + anti-bias check + recommendation to the user via `AskUserQuestion`. Options:
+   - One option per available framing (e.g. **Claude framing**, **Codex framing**, **Gemini framing** — only for ideators that succeeded)
+   - **Restart** — discard this run and re-run with a refined topic
+   - **Abandon** — exit cleanly without finalizing
+
+Block until the user answers. Send a `PushNotification` if `Z_HARNESS_NOTIFY` is `approval_only` or `all`.
+
+---
+
+## Phase 4 — Finalize
+
+Branch on the user's Phase 3 choice:
+
+### User picked a framing
+
+1. Update the `chosen_framing:` field in the BRAINSTORM.md frontmatter from `pending` to the picked ideator id (`claude` | `codex` | `gemini`).
+2. Append (for the first time) a `## User choice` body section with the picked framing's text reproduced verbatim (so `/z-plan` can find it without re-parsing the ideator blocks) plus any free-text refinement the user provided.
+3. Confirm `status: complete` in the frontmatter.
+
+### User picked Restart
+
+1. Archive the just-written BRAINSTORM.md to `$Z_HARNESS_PLAN_DIR/archive/$RUN/BRAINSTORM.md.previous-<N>` (next free integer). Before archiving, update the archived copy's frontmatter to `status: complete`, `chosen_framing: restart` so the historical record is spec-valid.
+2. Ask the user (free-text or `AskUserQuestion`) for the refined topic.
+3. Start a fresh RUN: regenerate `RUN`, re-mkdir, re-emit `brainstorm_run_start`, and loop back to Phase 1 with the refined topic.
+
+### User picked Abandon
+
+1. Set the frontmatter `status: abandoned` and `chosen_framing: abandoned`. Leave the file in place (so a future re-run knows there was a prior attempt).
+2. Skip the push-notify "next step" recommendation; emit a simpler "abandoned" notification.
+
+### In all branches
+
+Log `brainstorm_run_end`:
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" brainstorm_run_end \
+  "$(printf '{"status":"%s","chosen_framing":"%s","ideators_failed":%d}' \
+     "<complete|abandoned>" "<framing-or-empty>" "<N>")"
+```
+
+Push-notify (if policy ≠ `off`) with a next-step recommendation:
+
+```
+Brainstorm complete (framing: <chosen>).
+
+Recommended next:
+  /z-research <question>  — (optional) map terrain before planning
+  /z-plan <task>          — start the rigorous planning pipeline; it will auto-detect BRAINSTORM.md
+```
+
+For the abandoned branch, the push notification just says "Brainstorm abandoned" with no next-step.
+
+---
+
+## Operating principles
+
+- **Cheap and parallel.** Three ideators in one message, no per-ideator round-trips.
+- **Identical scaffolding for all three.** No read-by-reference asymmetry.
+- **Anti-bias is mandatory.** Every Claude-favoring pick needs explicit justification.
+- **Failures degrade gracefully** — 1/3 proceeds, 2/3 asks, 3/3 halts.
+- **Restart is cheap.** Archive and loop, don't try to patch.
+- **Never read `docs/llm/*.json` from main thread.** Always dispatch `doc-fetcher`.
+- **Log everything** via `scripts/log-event.sh`.
+
+codex
+## (1) Framing
+
+Treat config as a runtime contract, not a preference dump. The load-bearing split is: behavior routing, consultant/doc-fetcher invocation, execution defaults, storage/retention, and notifications. Anything that only changes wording should live behind derived policy, not as arbitrary prompt text, or the TOML becomes a second prompt language.
+
+## (2) Core hypothesis
+
+Use layered TOML with deterministic merge order: built-in defaults, user global `~/.config/z-harness/config.toml`, repo `.z-harness/config.toml`, then env overrides for CI/emergency compatibility. Add one Python helper as the only parser/writer: `scripts/config.py get|export-env|ensure-defaults|explain`. Skills and commands should read cheap shell-exported values, not parse TOML themselves.
+
+## (3) Risks
+
+The biggest risk is pretending all 28 commands need first-class config immediately. That creates schema sprawl before usage patterns are known.
+
+Prompt-fragment config is dangerous if users can inject freeform text into agent prompts. Prefer enum-driven fragments: `consult.codex = "never"` selects no codex block; it does not paste user-authored TOML into prompts.
+
+Layered config can become invisible behavior. Every run should emit a compact `config_resolved` event with source metadata and shadowing, following the `providers.json` precedent.
+
+Auto-writing defaults can annoy users if it churns files. Only create missing files when a command actually needs config, and only add missing top-level sections/keys with stable formatting.
+
+## (4) Plan implications
+
+First slice should be one schema, one loader, one docs page, and two migrated knobs: `notifications.mode` replacing `Z_HARNESS_NOTIFY`, and `docs.always_apply` controlling doc-fetcher routing. Add `routing.auto_escalate` next because it changes command behavior but has a simple boolean/enum surface.
+
+The thin-wrapper mechanism should be implemented as named policy decisions returned by the helper, e.g. `consult.codex.enabled=false`, `docs.preface=compact`, `routing.escalation=manual`. Commands consume decisions, not raw TOML.
+
+Docs should include `docs/human/config.md` for users and `docs/llm/config-design.json` for agents, wired into `docs/llm/INDEX.json` under concepts like `config`, `runtime_policy`, and `prompt_trimming`.
+
+README should shrink to install, first command, config path, and doc index. No schema reference table in README.
+
+## (5) What would change my mind
+
+If most commands already run through a single shared shell prelude, I would favor generated env export immediately. If they do not, I would keep the first slice command-local and avoid a repo-wide migration.
+
+If TOML write-back proves formatting-hostile, I would switch to “generate on first missing file, never mutate existing files” and report missing keys via `config_explain`.
+
+If consult preferences need per-phase precision from day one, I would make consultation config table-driven early. Otherwise start coarse: `consult.codex`, `consult.gemini`, and `consult.default_phases`.
+
+If users expect per-repo behavior more than personal defaults, `.z-harness/config.toml` should be the documented primary path, with global config framed as optional personal defaults.
+tokens used
+46,944
+## (1) Framing
+
+Treat config as a runtime contract, not a preference dump. The load-bearing split is: behavior routing, consultant/doc-fetcher invocation, execution defaults, storage/retention, and notifications. Anything that only changes wording should live behind derived policy, not as arbitrary prompt text, or the TOML becomes a second prompt language.
+
+## (2) Core hypothesis
+
+Use layered TOML with deterministic merge order: built-in defaults, user global `~/.config/z-harness/config.toml`, repo `.z-harness/config.toml`, then env overrides for CI/emergency compatibility. Add one Python helper as the only parser/writer: `scripts/config.py get|export-env|ensure-defaults|explain`. Skills and commands should read cheap shell-exported values, not parse TOML themselves.
+
+## (3) Risks
+
+The biggest risk is pretending all 28 commands need first-class config immediately. That creates schema sprawl before usage patterns are known.
+
+Prompt-fragment config is dangerous if users can inject freeform text into agent prompts. Prefer enum-driven fragments: `consult.codex = "never"` selects no codex block; it does not paste user-authored TOML into prompts.
+
+Layered config can become invisible behavior. Every run should emit a compact `config_resolved` event with source metadata and shadowing, following the `providers.json` precedent.
+
+Auto-writing defaults can annoy users if it churns files. Only create missing files when a command actually needs config, and only add missing top-level sections/keys with stable formatting.
+
+## (4) Plan implications
+
+First slice should be one schema, one loader, one docs page, and two migrated knobs: `notifications.mode` replacing `Z_HARNESS_NOTIFY`, and `docs.always_apply` controlling doc-fetcher routing. Add `routing.auto_escalate` next because it changes command behavior but has a simple boolean/enum surface.
+
+The thin-wrapper mechanism should be implemented as named policy decisions returned by the helper, e.g. `consult.codex.enabled=false`, `docs.preface=compact`, `routing.escalation=manual`. Commands consume decisions, not raw TOML.
+
+Docs should include `docs/human/config.md` for users and `docs/llm/config-design.json` for agents, wired into `docs/llm/INDEX.json` under concepts like `config`, `runtime_policy`, and `prompt_trimming`.
+
+README should shrink to install, first command, config path, and doc index. No schema reference table in README.
+
+## (5) What would change my mind
+
+If most commands already run through a single shared shell prelude, I would favor generated env export immediately. If they do not, I would keep the first slice command-local and avoid a repo-wide migration.
+
+If TOML write-back proves formatting-hostile, I would switch to “generate on first missing file, never mutate existing files” and report missing keys via `config_explain`.
+
+If consult preferences need per-phase precision from day one, I would make consultation config table-driven early. Otherwise start coarse: `consult.codex`, `consult.gemini`, and `consult.default_phases`.
+
+If users expect per-repo behavior more than personal defaults, `.z-harness/config.toml` should be the documented primary path, with global config framed as optional personal defaults.

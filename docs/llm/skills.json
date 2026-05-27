@@ -5,6 +5,7 @@
   "source_file": [
     "skills/z-amend/SKILL.md",
     "skills/z-audit-plan/SKILL.md",
+    "skills/z-audit-plan-style/SKILL.md",
     "skills/z-brainstorm/SKILL.md",
     "skills/z-debug/SKILL.md",
     "skills/z-do/SKILL.md",
@@ -24,6 +25,7 @@
     "skills/z-update/SKILL.md",
     "skills/z-uplift/SKILL.md",
     "commands/z-audit.md",
+    "commands/z-audit-plan-style.md",
     "commands/z-fix.md",
     "commands/z-skill-fix.md"
   ],
@@ -44,6 +46,13 @@
       "summary": "Read-only plan audit; route when no plan, changes, or doc drift."
     },
     {
+      "file": "skills/z-audit-plan-style/SKILL.md",
+      "line": 1,
+      "symbol": "z-audit-plan-style",
+      "kind": "module",
+      "summary": "Plan style audit pre-implementation; dispatches plan-style-reviewer; PLAN_STYLE_AUDIT.md; hard STYLE.md gate; no --no-style escape."
+    },
+    {
       "file": "skills/z-brainstorm/SKILL.md",
       "line": 1,
       "symbol": "z-brainstorm",
@@ -55,7 +64,7 @@
       "line": 1,
       "symbol": "z-debug",
       "kind": "module",
-      "summary": "Unknown-root-cause debug flow; Phase 2.5 bisect fast-path; hypothesis rounds; posterior table; MR-review on fix; post-mortem; Phase 10 memory-review (shipped branch only)."
+      "summary": "Unknown-root-cause debug flow; Phase 2.5 conditional bisect fast-path (bisect-isolator Haiku); hypothesis rounds; posterior table; MR-review on fix; post-mortem; Phase 10 memory-review (shipped branch only)."
     },
     {
       "file": "commands/z-audit.md",
@@ -63,6 +72,13 @@
       "symbol": "z-audit",
       "kind": "module",
       "summary": "Read-only component audit; parallel auditor subagents per dimension; bundled consult; REPORT.md + TASKS.md for /z-implement-all."
+    },
+    {
+      "file": "commands/z-audit-plan-style.md",
+      "line": 1,
+      "symbol": "z-audit-plan-style (command)",
+      "kind": "module",
+      "summary": "Authoritative pipeline for plan-style auditing; STYLE.md hard gate; dismissal-extraction loop; plan-style-reviewer agent fanout; PLAN_STYLE_AUDIT.md with T-PS-NNN IDs."
     },
     {
       "file": "commands/z-fix.md",
@@ -83,14 +99,14 @@
       "line": 1,
       "symbol": "z-do",
       "kind": "module",
-      "summary": "Plan-less small-task runner with doc grounding and reviewer gate."
+      "summary": "Plan-less small-task runner; config.py export-env at Setup step 6; should-notify guards on all PushNotifications; doc grounding; reviewer gate."
     },
     {
       "file": "skills/z-implement-all/SKILL.md",
       "line": 1,
       "symbol": "z-implement-all",
       "kind": "module",
-      "summary": "Full task queue orchestration; --tasks fast path; tree gates; batching; caps; Phase 9 memory-review with memory_review_terminal event; deduped push-notify via .notify-dedup-session."
+      "summary": "Full task queue orchestration; --tasks fast path; tree gates; batching; caps; Phase 9 memory-review with memory_review_terminal event; deduped push-notify via .notify-dedup-session; notify policy via docs/human/config.md."
     },
     {
       "file": "skills/z-implement-next/SKILL.md",
@@ -125,7 +141,7 @@
       "line": 1,
       "symbol": "z-plan-light",
       "kind": "module",
-      "summary": "Small-fix planner; FIX.md only; inline implementation; reviewer gate."
+      "summary": "Small-fix planner; FIX.md only; inline implementation; reviewer gate; optional scope-probe agent."
     },
     {
       "file": "skills/z-plan-split/SKILL.md",
@@ -139,7 +155,7 @@
       "line": 1,
       "symbol": "z-plan",
       "kind": "module",
-      "summary": "Full planner; docs-freshness gate; consult; SPEC/PLAN/TASKS; parallel complexity-classifier."
+      "summary": "Full planner; config.py export-env at Setup step 4a; should-notify guards on PushNotifications; docs-freshness gate; consult; SPEC/PLAN/TASKS; parallel complexity-classifier."
     },
     {
       "file": "skills/z-research/SKILL.md",
@@ -153,7 +169,7 @@
       "line": 1,
       "symbol": "z-review-all",
       "kind": "module",
-      "summary": "Final diff review; pre-Phase-0 resume check; test-suite gate; Phase 3.7 compaction; REVIEW-TASKS; Phase 7 memory-review with memory_review_terminal event; clears .notify-dedup-session at phase start."
+      "summary": "Final diff review; pre-Phase-0 resume check; test-suite gate; Phase 3.7 compaction; REVIEW-TASKS; Phase 7 memory-review with memory_review_terminal event; clears .notify-dedup-session at Phase 0 start."
     },
     {
       "file": "skills/z-stats/SKILL.md",
@@ -234,14 +250,22 @@
     "z-audit is read-only; it never edits the target; fixes happen later via /z-implement-all consuming the emitted TASKS.md.",
     "z-audit Phase 4 cross-LLM consult (both Gemini and Codex in parallel) is non-skippable.",
     "z-audit Phase 6 Codex reviewer safety gate on the produced TASKS.md is non-skippable.",
+    "z-audit-plan-style STYLE.md gate is non-skippable; no --no-style flag exists; missing STYLE.md causes immediate exit recommending /z-style-init.",
+    "z-audit-plan-style is read-only; PLAN_STYLE_AUDIT.md findings are shaped for /z-amend promotion; correctness findings belong to /z-audit-plan.",
+    "z-audit-plan-style archives any existing PLAN_STYLE_AUDIT.md before overwriting to power the dismissal-extraction loop.",
     "z-skill-fix Codex reviewer safety gate on every patched skill file is non-skippable.",
     "z-skill-fix never auto-commits; commit decision is always delegated to the user.",
     "z-debug Phase 2.5 bisect fast-path never blocks the pipeline; refused/failed/bisect_unusable all fall through to Phase 3a.",
     "z-debug bisect offending SHA does not pre-fill the winning hypothesis; fix-gate still requires full posterior + evidence-coverage convergence.",
-    "Before any git reset --hard, commit --amend, or interactive-rebase squash on a tracked branch, run git branch -r --contains <sha>; STOP if upstream ref appears."
+    "Before any git reset --hard, commit --amend, or interactive-rebase squash on a tracked branch, run git branch -r --contains <sha>; STOP if upstream ref appears.",
+    "config.py export-env is called at startup in z-do (Setup step 6) and z-plan (Setup step 4a) to populate all Z_HARNESS_* env vars; skills that do not yet call export-env must use Z_HARNESS_NOTIFY_LEVEL with a default fallback.",
+    "All PushNotification calls gated by config.py should-notify --event <type> returning yes, except hard-pause notifications (compaction breakpoints, halt-on-skip-flagged) which fire regardless of notify level.",
+    "Notification policy knobs (notify.level, docs.always_apply) are documented in docs/human/config.md; skills reference that file rather than inline documentation."
   ],
   "gotchas": [
     "z-audit-plan cannot run without SPEC/PLAN/TASKS; no-plan routes to z-plan.",
+    "z-audit-plan-style has a hard STYLE.md gate with no --no-style override; this differs from z-uplift which accepts --no-style for degraded mode.",
+    "z-audit-plan-style emits PLAN_STYLE_AUDIT.md (separate from PLAN_AUDIT_REPORT.md produced by z-audit-plan); findings have T-PS-NNN IDs.",
     "z-do may not route directly to z-plan-split.",
     "Route chains cap at two entries and block ping-pong to the prior command.",
     "z-plan-split cluster_id is telemetry-only; cluster_slug is the path segment.",
@@ -254,9 +278,9 @@
     "Phase 4b in z-stats reads review_agent_call events AND memory_review_terminal events with old-shape phase_end back-compat; it is read-only and never writes.",
     "review_agent_malformed and review_agent_failed are orthogonal failure-class events — they do NOT emit memory_review_terminal. In z-implement-all Phase 9, review_agent_malformed triggers a push-notify hint; review_agent_failed also triggers a push-notify. Neither halts the run.",
     "z-debug Phase 10 memory-review only runs on the shipped branch. Abandoned debug sessions (status:abandoned) do not call run-memory-review.sh.",
-    "Broken-context skip push-notify uses .notify-dedup-session (keyed slug:reason); z-review-all clears this file at Phase 7 start; z-debug clears it at Phase 10 start; z-implement-all clears it before first task dispatch.",
+    "Broken-context skip push-notify uses .notify-dedup-session (keyed slug:reason); z-review-all clears this file at Phase 0 start; z-debug clears it at the top of Phase 10; z-implement-all clears it before first task dispatch.",
     "z-debug auto-bail no longer triggers on >5 files; only cross-module/arch/public-surface change triggers escalation.",
-    "z-debug hard cycle cap is 5; soft warning fires at cycle 3. Cycle cap overridable via AskUserQuestion only.",
+    "z-debug hard cycle cap is 5 (halt when cycle 6 would be needed); soft warning fires at cycle 3. Cycle cap overridable via AskUserQuestion only.",
     "z-debug Phase 2.5 bisect is conditional: only fires when bug is a regression with known-good baseline and scriptable repro.",
     "z-debug bisect-isolator is dispatched as a Haiku subagent, not a consultant; orchestrator-only likelihood-bucket rule still applies to its output.",
     "z-review-all pre-Phase-0 deletes stale .review_state.json if HEAD changed or artifacts missing.",
@@ -278,7 +302,9 @@
     "z-audit escalation writes escalation.md and recommends /z-plan; no TASKS.md is generated on bail.",
     "z-audit TASKS.md must include a minimal SPEC.md and PLAN.md for /z-implement-all to resolve context.",
     "z-skill-fix only patches skill/command/agent files; bugs in repo code, missing CLAUDE.md conventions, and policy disputes are out of scope.",
-    "z-skill-fix never weakens a gate or pushback rule even if the gate was inconvenient in a specific case."
+    "z-skill-fix never weakens a gate or pushback rule even if the gate was inconvenient in a specific case.",
+    "config.py export-env is only invoked in z-do and z-plan; z-implement-all, z-review-all, and z-debug still reference Z_HARNESS_NOTIFY_LEVEL directly with a default fallback — they have not yet been updated to use export-env.",
+    "should-notify --event <type> accepts approval, error, and phase_end event types; hard-pause notifications bypass this check entirely."
   ],
   "memories": []
 }

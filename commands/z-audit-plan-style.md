@@ -108,8 +108,7 @@ Loop prevention: carry forward the latest route chain; if it already has two ent
    ' "$VERSION_BLOB" "$Z_HARNESS_SLUG" "$RUN" "$VOICES_AVAILABLE" "$STYLE_MD_REVISION")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_style_run_start "$START_PAYLOAD"
    ```
-9. **Notification policy:**
-   Read `Z_HARNESS_NOTIFY` (default `approval_only`).
+9. **Notification policy:** see [docs/human/config.md](docs/human/config.md) (notify.level key).
 
 ---
 

@@ -1,0 +1,2 @@
+{"ts":"2026-05-27T03:32:12Z","run":"tasks/z-debug-bisect-isolation","kind":"review_start","id":"z-debug-bisect-isolation","cycle":2}
+{"ts":"2026-05-27T03:35:05Z","run":"tasks/z-debug-bisect-isolation","kind":"review_end","id":"z-debug-bisect-isolation","cycle":2,"blockers":1,"majors":3,"prompt_chars":7000,"response_chars":11000,"return_chars":2000,"wall_ms":172740}

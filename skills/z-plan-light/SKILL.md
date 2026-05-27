@@ -31,7 +31,7 @@ This command is for **small, focused changes**. If at any phase you realize the 
    ' "$VERSION_BLOB" "<arguments>")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" light_run_start "$START_PAYLOAD"
    ```
-7. Notification policy: read `Z_HARNESS_NOTIFY` (default `approval_only`).
+7. Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
 8. If `docs/llm/INDEX.json` exists → note it. Phase 1 will dispatch `doc-fetcher` (Haiku). Do NOT read INDEX.json or per-concept JSONs from main thread.
 
 ## Plan Route Check

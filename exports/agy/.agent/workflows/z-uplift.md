@@ -119,7 +119,7 @@ fi
 
 ### Step 4 — Notification policy
 
-Read env `Z_HARNESS_NOTIFY` (default `approval_only`). Values: `off`, `approval_only`, `all`.
+See [docs/human/config.md](docs/human/config.md) (notify.level key).
 
 ### Step 5 — Doc-staleness route check
 
@@ -870,11 +870,15 @@ USER_WAIT_MS_THIS_PHASE=$(( USER_WAIT_MS_THIS_PHASE + $(date +%s%3N) - _WAIT_T0 
 ```
 
 ```bash
-# Apply collision resolution choices (repeat per collision until none remain)
-# User response format: "1", "2", or "<slug-A> <slug-B>"
+# Apply collision resolution choices.
+# Runs in a while-loop until the slug list is collision-free (handles N-way collisions
+# and the case where a user-supplied custom slug introduces a new collision).
+# A no-progress sanity counter (fires after 3 stalled iterations) prevents infinite loops.
 COMPONENTS_JSON="$(python3 - "$COMPONENTS_JSON" "$USER_COLLISION_CHOICES" <<'PYEOF'
-import json, sys
+import json, re, sys
 from collections import defaultdict
+
+SLUG_RE = re.compile(r'^[a-z0-9]+(?:-[a-z0-9]+)*$')
 
 data   = json.loads(sys.argv[1])
 # USER_COLLISION_CHOICES is a JSON array of {"slug": str, "choice": str} objects
@@ -889,22 +893,45 @@ def find_collisions(comps):
         groups[c["slug"]].append(c)
     return {slug: cs for slug, cs in groups.items() if len(cs) > 1}
 
-collisions = find_collisions(components)
-for slug in sorted(collisions.keys()):
-    colliding = sorted(collisions[slug], key=lambda c: c["path"])
-    choice = choice_map.get(slug, "1")
-    if choice == "1":
-        # A keeps slug; B gets slug-2
-        colliding[1]["slug"] = slug + "-2"
-    elif choice == "2":
-        # B keeps slug; A gets slug-1
-        colliding[0]["slug"] = slug + "-1"
+prev_collision_count = -1
+sanity = 0
+while True:
+    collisions = find_collisions(components)
+    if not collisions:
+        break
+    if len(collisions) == prev_collision_count:
+        sanity += 1
+        if sanity > 3:
+            print(f"ERROR: collision resolution made no progress over 3 iterations — aborting. Stuck slugs: {sorted(collisions.keys())}", file=sys.stderr)
+            sys.exit(1)
     else:
-        # Custom: "slug-A slug-B"
-        parts = choice.strip().split()
-        if len(parts) >= 2:
-            colliding[0]["slug"] = parts[0]
-            colliding[1]["slug"] = parts[1]
+        sanity = 0
+    prev_collision_count = len(collisions)
+    for slug in sorted(collisions.keys()):
+        colliding = sorted(collisions[slug], key=lambda c: c["path"])
+        choice = choice_map.get(slug, "1")
+        if choice == "1":
+            # A keeps slug; B gets slug-2
+            colliding[1]["slug"] = slug + "-2"
+        elif choice == "2":
+            # B keeps slug; A gets slug-1
+            colliding[0]["slug"] = slug + "-1"
+        else:
+            # Custom: "slug-A slug-B" — validate each against slug regex before applying
+            parts = choice.strip().split()
+            if len(parts) >= 2:
+                for i, part in enumerate(parts[:2]):
+                    if not SLUG_RE.match(part):
+                        print(f"ERROR: custom slug '{part}' is invalid — must match ^[a-z0-9]+(?:-[a-z0-9]+)*$. Aborting.", file=sys.stderr)
+                        sys.exit(1)
+                colliding[0]["slug"] = parts[0]
+                colliding[1]["slug"] = parts[1]
+
+# Final re-check: verify no duplicates were introduced by custom choices
+remaining = find_collisions(components)
+if remaining:
+    print(f"ERROR: slug collision introduced by custom choice: {sorted(remaining.keys())}. Re-run with corrected slugs.", file=sys.stderr)
+    sys.exit(1)
 
 data["components"] = components
 print(json.dumps(data))
@@ -1202,7 +1229,9 @@ Instructions: Examine the source map files for cross-component issues. For each 
 - \`risk\` — watch items with no immediately actionable fix
 
 Style-drift findings must cite STYLE rule IDs explicitly.
-Number global-task findings G-001, G-002, ... (include affected files). Number per-component-context findings C-001, C-002, .... Number risk findings R-001, R-002, ...."
+Number global-task findings G-001, G-002, ... (include affected files). Number per-component-context findings C-001, C-002, .... Number risk findings R-001, R-002, ....
+
+CRITICAL FORMAT REQUIREMENT: Each finding MUST be a bullet beginning with \`G-NNN\`, \`C-NNN\`, or \`R-NNN\` (e.g. \`- G-001 ...\`). The orchestrator's parser will silently drop any bullet that does not match this exact pattern."
 ```
 
 ### Step 4 — Dispatch consultants in parallel
@@ -1348,6 +1377,23 @@ def normalise_class(raw):
 
 for f in merged:
     f["class"] = normalise_class(f.get("class", ""))
+
+# Warn about bullets that looked like findings but were not matched by the strict G/C/R-NNN parser.
+# Counts candidate bullets (any "- <word>" line) across both transcripts, compares against
+# the number actually parsed, and emits a warning + telemetry event if any were dropped.
+combined_text = primary_text + "\n" + secondary_text
+candidate_bullets = re.findall(r'^\s*[-*]\s+\S+', combined_text, re.MULTILINE)
+strict_matched = len(primary_findings) + len(secondary_findings)
+dropped = max(0, len(candidate_bullets) - strict_matched)
+if dropped > 0:
+    import subprocess as _sp, json as _json, os as _os
+    _plugin_root = _os.environ.get("ANTIGRAVITY_PLUGIN_ROOT", _os.environ.get("CLAUDE_PLUGIN_ROOT", ""))
+    _run = _os.environ.get("RUN", "uplift")
+    _sp.run(["bash", _plugin_root + "/scripts/log-event.sh", _run,
+             "cross_cutting_findings_dropped",
+             _json.dumps({"slug": slug, "count": dropped})],
+            check=False)
+    print(f"WARNING: {dropped} bullet(s) in cross-cutting output did not match G-NNN/C-NNN/R-NNN pattern and were dropped.")
 
 # Sort into buckets and assign sequential numbers
 global_tasks   = [f for f in merged if f["class"] == "global-task"]
@@ -1519,7 +1565,8 @@ with open(manifest_path) as f:
     content = f.read()
 
 cross_slug = f"{slug}-cross-cutting"
-new_row = f"| [ ] pending | {cross_slug} | (global) | — | — | {cross_dir}/TASKS.md |\n"
+# Inserted as [a] audited so Phase 5 Step 1 queue filter picks it up immediately.
+new_row = f"| [a] audited | {cross_slug} | (global) | — | — | {cross_dir}/TASKS.md |\n"
 
 # Idempotent: if a row for this cross-slug already exists, update it in place; else insert as first row.
 existing_row_re = re.compile(
@@ -1540,8 +1587,12 @@ else:
     )
     print(f"inserted {cross_slug} as first row in MANIFEST.md")
 
-with open(manifest_path, "w") as f:
+# Atomic write: write to a tmp file then os.replace to prevent partial-write corruption.
+import os as _os
+tmp = manifest_path + ".tmp"
+with open(tmp, "w") as f:
     f.write(content)
+_os.replace(tmp, manifest_path)
 PYEOF
 ```
 
@@ -1886,9 +1937,34 @@ CRIT_HIGH_COUNT="$(python3 - "$COMP_PLAN_DIR/REPORT.md" <<'PYEOF'
 import re, sys
 with open(sys.argv[1]) as f:
     text = f.read()
-# Count lines bearing CRITICAL or HIGH severity tags (case-insensitive)
-count = len(re.findall(r'\b(?:CRITICAL|HIGH)\b', text, re.IGNORECASE))
-print(count)
+# Parse findings structurally: split on finding-start markers, then inspect each block's
+# header for a CRITICAL or HIGH severity tag. This avoids counting prose mentions.
+# Recognises three auditor output formats:
+#   1. ### [CRITICAL] <subject>  (auditor.md native format)
+#   2. - F-NNN [CRITICAL] ...    (bullet + tag)
+#   3. Severity: CRITICAL        (key-value inside block)
+finding_start_re = re.compile(
+    r'^\s*#{2,4}\s*\[\s*(?:CRITICAL|HIGH|MEDIUM|LOW)\s*\]'
+    r'|^\s*[-*]\s+(?:F|C|P|D)-\d+'
+    r'|^\s*#{2,4}\s+(?:Finding\s+\d+|F-\d+|C-\d+|P-\d+|D-\d+)',
+    re.MULTILINE | re.IGNORECASE
+)
+positions = [m.start() for m in finding_start_re.finditer(text)]
+positions.append(len(text))
+crit_high = 0
+for i in range(len(positions) - 1):
+    block = text[positions[i]:positions[i+1]]
+    head = block[:300]
+    # Format 1: ### [CRITICAL] or ### [HIGH] header line
+    if re.match(r'^\s*#{2,4}\s*\[\s*(CRITICAL|HIGH)\s*\]', head, re.IGNORECASE):
+        crit_high += 1
+    # Format 2: bullet with inline tag  - F-NNN [CRITICAL]
+    elif re.match(r'^\s*[-*]\s+(?:F|C|P|D)-\d+\s*\[\s*(?:CRITICAL|HIGH)\s*\]', head, re.IGNORECASE):
+        crit_high += 1
+    # Format 3: Severity: CRITICAL|HIGH field inside block
+    elif re.search(r'\bSeverity\s*:?\s*(CRITICAL|HIGH)\b', head, re.IGNORECASE):
+        crit_high += 1
+print(crit_high)
 PYEOF
 )"
 
@@ -1896,9 +1972,16 @@ TOTAL_COUNT="$(python3 - "$COMP_PLAN_DIR/REPORT.md" <<'PYEOF'
 import re, sys
 with open(sys.argv[1]) as f:
     text = f.read()
-# Count discrete finding entries: lines starting with a numbered or bullet finding marker
-count = len(re.findall(r'^\s*[-*]\s+(?:F|C|P|D)-\d+|\bFinding\s+\d+\b', text, re.MULTILINE | re.IGNORECASE))
-print(count)
+# Count discrete finding entries by their structural start markers.
+# Recognises ### [SEVERITY] headers (auditor.md native), bullet F/C/P/D-NNN markers,
+# and legacy ### Finding-NNN headers.
+finding_start_re = re.compile(
+    r'^\s*#{2,4}\s*\[\s*(?:CRITICAL|HIGH|MEDIUM|LOW)\s*\]'
+    r'|^\s*[-*]\s+(?:F|C|P|D)-\d+'
+    r'|^\s*#{2,4}\s+(?:Finding\s+\d+|F-\d+|C-\d+|P-\d+|D-\d+)',
+    re.MULTILINE | re.IGNORECASE
+)
+print(len(finding_start_re.findall(text)))
 PYEOF
 )"
 ```
@@ -1952,7 +2035,11 @@ for line in content.splitlines():
 print(' '.join(paths))
 INNEREOF
    )"
-   DEPS_FOUND="$(git grep -l "$COMP_BASENAME" -- $OTHER_COMP_PATHS 2>/dev/null || true)"
+   if [ -n "$OTHER_COMP_PATHS" ]; then
+     DEPS_FOUND="$(git grep -l "$COMP_BASENAME" -- $OTHER_COMP_PATHS 2>/dev/null || true)"
+   else
+     DEPS_FOUND=""
+   fi
    ```
 
 3. Append the dependents section to REPORT.md:
@@ -2317,6 +2404,12 @@ Present the following summary (no AskUser — this is informational only):
 > - Dependents warnings: `<DEP_WARN_COUNT>` `<if > 0: note "see MANIFEST.md Dependents warnings section">`
 >
 > Phase 5 will prompt you per-component before dispatching any implementation.
+
+```bash
+if grep -qE '^\| .* \| .*-cross-cutting \|' "$Z_HARNESS_PLAN_DIR/MANIFEST.md"; then
+  echo "Note: '${SLUG}-cross-cutting' will be implemented first (per SPEC §Phase 5)."
+fi
+```
 
 ### Step 3 — Phase telemetry
 
@@ -2693,7 +2786,7 @@ When the user selects "Mark as done" (Step 2a option 2), emit:
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" component_implement_done \
-  "$(printf '{"component":"%s","outcome":"marked_done_manually"}' "$COMP_SLUG")"
+  "$(printf '{"component":"%s","completed":true,"halted":false}' "$COMP_SLUG")"
 ```
 
 ### Step 4 — Phase checkpoint and telemetry

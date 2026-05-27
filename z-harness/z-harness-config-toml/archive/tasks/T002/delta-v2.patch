@@ -1,0 +1,34 @@
+--- z-harness/z-harness-config-toml/archive/tasks/T002/diff-v1.patch	2026-05-27 11:20:12
++++ z-harness/z-harness-config-toml/archive/tasks/T002/diff.patch	2026-05-27 11:22:18
+@@ -1,9 +1,9 @@
+ diff --git a/scripts/config.py b/scripts/config.py
+ new file mode 100755
+-index 0000000..fb5655f
++index 0000000..af7e42c
+ --- /dev/null
+ +++ b/scripts/config.py
+-@@ -0,0 +1,549 @@
++@@ -0,0 +1,555 @@
+ +#!/usr/bin/env python3
+ +"""
+ +config.py — z-harness layered TOML config loader.
+@@ -271,6 +271,9 @@
+ +                continue
+ +            for k, v in sv.items():
+ +                dotted = f"{section}.{k}"
+++                # Silently ignore unknown keys for forward compatibility.
+++                if dotted not in flat_defaults:
+++                    continue
+ +                v = _validate_enum(dotted, v, str(global_path), is_global=True)
+ +                values[dotted] = v
+ +                sources[dotted] = str(global_path)
+@@ -288,6 +291,9 @@
+ +                continue
+ +            for k, v in sv.items():
+ +                dotted = f"{section}.{k}"
+++                # Silently ignore unknown keys for forward compatibility.
+++                if dotted not in flat_defaults:
+++                    continue
+ +                v = _validate_enum(dotted, v, str(repo_path), is_global=False)
+ +                values[dotted] = v
+ +                sources[dotted] = str(repo_path)

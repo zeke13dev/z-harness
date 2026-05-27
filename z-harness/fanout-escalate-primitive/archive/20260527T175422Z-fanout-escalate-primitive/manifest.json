@@ -1,0 +1,19 @@
+{
+  "slug": "fanout-escalate-primitive",
+  "run": "20260527T175422Z-fanout-escalate-primitive",
+  "status": "complete",
+  "ended_at": "2026-05-27T18:13:18Z",
+  "tasks_total": 15,
+  "tasks_complexity": {
+    "low": 5,
+    "medium": 7,
+    "high": 3
+  },
+  "decisions_total": 14,
+  "decisions_consulted": 5,
+  "consultations": 3,
+  "framing": "claude",
+  "depends_on": [
+    "BRAINSTORM.md"
+  ]
+}

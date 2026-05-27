@@ -35,3 +35,8 @@
 {"ts":"2026-05-26T04:42:14Z","run":"tasks/T004","kind":"review_end","id":"T004","cycle":1,"blockers":3,"majors":2,"prompt_chars":4700,"response_chars":1850,"return_chars":1200,"wall_ms":177182}
 {"ts":"2026-05-26T04:42:34Z","run":"tasks/T004","kind":"implement_start","id":"T004","retry":1}
 {"ts":"2026-05-26T04:49:29Z","run":"tasks/T004","kind":"task_done","id":"T004","retries":1,"review_blockers":0,"review_cycles":2,"tests_passed":0,"tests_failed":0,"override":true}
+{"ts":"2026-05-27T05:26:14Z","run":"tasks/T004","kind":"precheck_start","id":"T004"}
+{"ts":"2026-05-27T05:26:40Z","run":"tasks/T004","kind":"precheck_end","id":"T004","status":"spec_problem","references_checked":5,"wall_ms":25928}
+{"ts":"2026-05-27T18:23:39Z","run":"tasks/T004","kind":"task_start","id":"T004"}
+{"ts":"2026-05-27T18:30:02Z","run":"tasks/T004","kind":"review","prompt_chars":5191,"response_chars":800,"return_chars":600,"wall_ms":45000}
+{"ts":"2026-05-27T18:39:20Z","run":"tasks/T004","kind":"task_done","id":"T004","retries":1,"review_blockers":0,"review_cycles":2}

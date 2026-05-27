@@ -1,0 +1,10 @@
+Review Task T004 v2 (retry)
+
+Prior findings from v1:
+- Major 1: HEAVY example includes dimensions_hint (LIGHT-only field)
+- Major 2: Writer column incorrectly attributes metadata fields to scope-probe; should be host Phase 0 dispatcher
+- Major 3: chunks field Notes says "always empty for LIGHT/MEDIUM" but Output Contract allows single summary entry
+
+Implementer's v2 claim: Full Schema example split into HEAVY + LIGHT cases (dimensions_hint only in LIGHT); Writer column corrected; chunks Notes now read "refused: always []; HEAVY: one per sub-run; LIGHT/MEDIUM: may be empty or single summary entry" aligning with Output Contract.
+
+Verify only the 3 prior majors are addressed. Do not re-scan unrelated content.

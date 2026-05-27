@@ -2,7 +2,7 @@
 
 You are running the **z-harness `/z-implement-next`** pipeline.
 
-Notification policy: read env `Z_HARNESS_NOTIFY` (default `approval_only`).
+Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
 
 ## Phase 0 — Discover plan slug
 

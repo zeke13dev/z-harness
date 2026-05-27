@@ -76,6 +76,102 @@ Output format per line: `<ts> review-agent <parent_command>: candidates=<N> acce
 
 Where `<input>` and `<output>` come from the event's `subagent_input_tokens` / `subagent_output_tokens` fields.
 
+### Memory review terminal states (last 10 runs)
+
+Collect terminal-state rows from `metrics.jsonl`. Read both the new `memory_review_terminal` event and old-shape events for back-compat. Old-shape mapping rules:
+
+- `phase_end` with `name == "memory_review"` and `skip_reason` in `["empty_diff","all_tasks_skipped"]` → `state: not_applicable`
+- `phase_end` with `name == "memory_review"` and `skip_reason` in `["tags_missing","no_plan_dir","missing_args"]` → `state: skipped_broken_context`
+- `phase_end` with `name == "memory_review"` and no `skip_reason` → `state: ran_empty, skip_reason: null`
+- `review_agent_failed` with `reason == "tags_missing"` → `state: skipped_broken_context, skip_reason: "tags_missing"`
+
+```bash
+jq -s '
+  # Normalize all events to a common shape: {run, ts, state, skip_reason, parent_command, candidates, accepted}
+  map(
+    if .kind == "memory_review_terminal" then
+      {
+        run: (.run // "unknown"),
+        ts: (.ts // ""),
+        state: (.state // "unknown"),
+        skip_reason: (.skip_reason // null),
+        parent_command: (.parent_command // null),
+        candidates: (.candidates // 0),
+        accepted: (.accepted // 0)
+      }
+    elif .kind == "phase_end" and .name == "memory_review" then
+      {
+        run: (.run // "unknown"),
+        ts: (.ts // ""),
+        state: (
+          if .skip_reason == "empty_diff" or .skip_reason == "all_tasks_skipped" then "not_applicable"
+          elif .skip_reason == "tags_missing" or .skip_reason == "no_plan_dir" or .skip_reason == "missing_args" then "skipped_broken_context"
+          else "ran_empty"
+          end
+        ),
+        skip_reason: (.skip_reason // null),
+        parent_command: (.parent_command // null),
+        candidates: (.candidates // 0),
+        accepted: (.accepted // 0)
+      }
+    elif .kind == "review_agent_failed" and .reason == "tags_missing" then
+      {
+        run: (.run // "unknown"),
+        ts: (.ts // ""),
+        state: "skipped_broken_context",
+        skip_reason: "tags_missing",
+        parent_command: (.parent_command // null),
+        candidates: 0,
+        accepted: 0
+      }
+    else empty
+    end
+  )
+  # Get last 10 distinct runs (by unique run field, newest first)
+  # Group by run, pick the last event per run as authoritative
+  | group_by(.run)
+  | map({run: .[0].run, ts: .[0].ts, terminal: .[-1]})
+  | sort_by(.ts) | reverse | .[0:10]
+  | map(.terminal)
+  # Aggregate by state
+  | group_by(.state)
+  | map({
+      state: .[0].state,
+      count: length,
+      accepted_total: (map(.accepted // 0) | add),
+      skip_reason_counts: (
+        map(.skip_reason // "null")
+        | group_by(.)
+        | map({(.[0]): length})
+        | add // {}
+      ),
+      parent_command_counts: (
+        map(.parent_command // "unknown")
+        | group_by(.)
+        | map({(.[0]): length})
+        | add // {}
+      )
+    })
+' "$METRICS"
+```
+
+Display the aggregation as a human-readable section titled **"Memory review terminal states (last 10 runs across all parents):"** with one line per state:
+
+```
+Memory review terminal states (last 10 runs across all parents):
+  needs_user             4    (of which accepted: 6 memories)
+  ran_empty              2
+  not_applicable         3    (empty_diff: 2, all_tasks_skipped: 1)
+  skipped_broken_context 1    (tags_missing: 1)
+```
+
+Rules for display:
+- Order: `needs_user`, `ran_empty`, `not_applicable`, `skipped_broken_context` (by severity, most actionable first).
+- For `needs_user`: include `(of which accepted: <sum> memories)` parenthetical.
+- For `not_applicable` and `skipped_broken_context`: include parenthetical listing each `skip_reason: count` pair.
+- Omit states with count 0.
+- If no terminal-state events found (section empty), print: `  (no memory-review terminal events found in metrics.jsonl)`
+
 ## Phase 5 — Stalls (post-run gap detection)
 
 Reuse the gap-detection awk from `/z-implement-all` Detecting Stalls section. Flag any gap > 30 min between consecutive same-run events.

@@ -1,231 +1,105 @@
-You are reviewing code that Claude just wrote for task T005: Implement Phase 4 (review gate) + Phase 5 (sequential implement loop).
+You are reviewing code that Claude just wrote for task T005: Sanity-test scripts/config.py end-to-end (smoke tests).
 
-Spec (excerpt from SPEC.md, Phase 4 & 5 contract):
+## Task Spec
 
-**Phase 4 — Review gate** (L36-37):
-Present the aggregated queue summary to user (component count, total tasks, bailed components, dep warnings). Informational only; no AskUser gate.
+Acceptance criteria (verbatim from TASKS.md T005):
 
-**Phase 5 — Sequential implement** (L130-138):
-For each component with state `[a] audited`:
-1. AskUser: proceed / skip this component / abort uplift.
-2. If proceed: invoke `/z-implement-all --tasks=z-harness/plans/<slug>-<component>/TASKS.md`. Wait for completion.
-3. On completion: mark MANIFEST `[x] done`.
-4. On user-skip: mark MANIFEST `[s] skipped: user`.
-5. On abort: mark MANIFEST state for this and remaining components left unchanged; log `run_end status: aborted_by_user`; exit.
+All scenarios below pass under `set -e`. Use a hermetic test fixture (`XDG_CONFIG_HOME=$(mktemp -d)` per test; cleanup on exit) to avoid touching the developer's real `~/.config/z-harness/`.
 
-Synthetic `<slug>-cross-cutting` is processed FIRST so any global-task API changes land before per-component cleanup.
+**Baseline (defaults):**
+- `config.py get notify.level` → `approval_only`.
+- `config.py get docs.always_apply` → `always`.
+- `config.py get schema_version` → exit 3 (meta key, not user-exposed).
 
-Acceptance criteria:
-- synthetic cross-cutting component is processed first (or skipped cleanly if absent)
-- per-component AskUser gates work
-- MANIFEST state transitions are atomic per component
-- abort leaves remaining MANIFEST rows unchanged
+**Env override:**
+- `Z_HARNESS_NOTIFY_LEVEL=off config.py get notify.level` → `off`.
+- `Z_HARNESS_NOTIFY_LEVEL="" config.py get notify.level` → `approval_only` (empty = missing layer).
+- `Z_HARNESS_NOTIFY_LEVEL=loud config.py get notify.level` → exit 2.
 
-Diff (primary artifact — focus scrutiny on what changed):
+**Repo-local precedence:** with `.z-harness/config.toml` containing `notify.level = "off"`:
+- `config.py get notify.level` → `off`.
+- `config.py explain notify.level` shows source `repo`.
+- With ALSO `Z_HARNESS_NOTIFY_LEVEL=all`: `get` → `all`, `explain` source → `env`.
 
-## Phase 4 — Review gate
+**Unknown / typo'd keys:**
+- `config.py get notify.lvel` → exit 3.
+- `config.py explain notify.lvel` → exit 3.
 
-Record `T0=$(date +%s%3N)` at phase start.
+**`should-notify` truth table (9 branches):** for every `(level, event)` pair with `level ∈ {off, approval_only, all}` and `event ∈ {approval, phase_end, error}`, assert stdout matches SPEC §"should-notify Logic":
+- `off` × `{approval, phase_end, error}` → `no`, `no`, `no`.
+- `approval_only` × `{approval, phase_end, error}` → `yes`, `no`, `yes`.
+- `all` × `{approval, phase_end, error}` → `yes`, `yes`, `yes`.
+- `config.py should-notify --event failre` (typo) → exit 2 + stderr lists allowlist.
 
-### Step 1 — Aggregate queue summary from MANIFEST
+**`ensure-defaults` behavior:**
+- On empty `$XDG_CONFIG_HOME`: creates `~/.config/z-harness/config.toml`; prints `created <path>`.
+- Second invocation: `exists <path>`; file unchanged.
+- With pre-existing 0-byte file: exit 4 with actionable message; file NOT overwritten.
+- With pre-existing malformed TOML (e.g. `notify.level = `): exit 4; file NOT overwritten.
 
-Parse MANIFEST.md to compute counts:
+**TOML / schema errors:**
+- Repo-local file with `notify.level = "loud"` → exit 2 (project-specific invalid: hard-fail).
+- Global file with `notify.level = "loud"` → stderr warn + `get notify.level` returns `approval_only` (default; per-key fallback).
+- Any layer with `schema_version = 2` → exit 2 + message naming the file.
+- Malformed TOML at any layer → exit 2 with parser line/column.
 
-```bash
-PHASE4_SUMMARY="$(python3 - "$Z_HARNESS_PLAN_DIR/MANIFEST.md" "$SLUG" <<'PYEOF'
-import re, sys, json, os
+**Explicit override path:**
+- `Z_HARNESS_REPO_CONFIG=/nonexistent/path config.py get notify.level` → exit 2 (explicit miss is loud).
 
-manifest_path = sys.argv[1]
-slug          = sys.argv[2]
+**Event de-dup:** with `Z_HARNESS_RUN=test-run-123`:
+- First `config.py export-env` emits one `config_resolved` event.
+- Second `config.py export-env` with same `Z_HARNESS_RUN` emits zero (O_EXCL temp file blocks).
+- Without `$Z_HARNESS_RUN`: zero events emitted.
 
-with open(manifest_path) as f:
-    content = f.read()
+**Pure transliteration function:**
+- `_dotted_to_env("notify.level")` → `"Z_HARNESS_NOTIFY_LEVEL"`.
+- `_dotted_to_env("docs.always_apply")` → `"Z_HARNESS_DOCS_ALWAYS_APPLY"`.
+- `_dotted_to_env("notify-level")` raises / exits 2.
+- `_dotted_to_env("a.b.c")` raises / exits 2 (>2 levels).
+- `_dotted_to_env("notify")` raises / exits 2 (no dot).
 
-audited      = []
-bailed       = []
-dep_warnings = []
-total_tasks  = 0
+**eval-cleanliness:** `eval "$(config.py export-env)"` under `set -e` succeeds and sets `$Z_HARNESS_NOTIFY_LEVEL` and `$Z_HARNESS_DOCS_ALWAYS_APPLY` but NOT `$Z_HARNESS_SCHEMA_VERSION`.
 
-for line in content.splitlines():
-    line = line.strip()
-    if not line.startswith('|') or line.startswith('|---') or line.startswith('| State'):
-        continue
-    cells = [c.strip() for c in line.split('|')]
-    # cells[0] empty, [1]=state, [2]=component, [3]=slug, [4]=findings, [5]=bail, [6]=tasks
-    if len(cells) < 7:
-        continue
-    state    = cells[1]
-    comp     = cells[2]
-    findings = cells[4]
-    tasks_md = cells[6] if len(cells) > 6 else ''
+## Focus checks
 
-    if '[a] audited' in state:
-        audited.append(comp)
-        # Count tasks in TASKS.md if path is valid
-        if tasks_md and tasks_md not in ('—', '-', ''):
-            tasks_path = tasks_md.strip()
-            try:
-                with open(tasks_path) as tf:
-                    task_text = tf.read()
-                pending = len(re.findall(r'^\s*###\s*\[\s*\]', task_text, re.MULTILINE))
-                total_tasks += pending
-            except OSError:
-                pass
-    elif '[!] bailed' in state:
-        bail_reason = cells[5] if len(cells) > 5 else 'unknown'
-        bailed.append(f"{comp} ({bail_reason.strip()})")
+- Hermeticity: every test must isolate XDG_CONFIG_HOME, no leaking to dev's real ~/.config/z-harness/.
+- Z_HARNESS_* env var scrubbing in subprocess calls — confirm the test runner doesn't accidentally inherit Z_HARNESS_NOTIFY_LEVEL etc from the calling shell into a "baseline" test.
+- 9-branch should-notify truth table actually covers all 9 combinations.
+- Event de-dup test actually creates and cleans up its $TMPDIR/z-harness-config-resolved-* stamp file.
+- Tests that claim to assert exit codes use the actual exit code (not just check exit != 0).
+- For malformed TOML / 0-byte tests: are they checking exit codes AND that the file was NOT overwritten?
+- Any test that's a no-op (always passes) due to subtle logic error?
+- DRY violations or test duplication?
 
-# Count dep-warnings section entries
-dep_section = re.search(r'## Dependents warnings \(post-bail\)(.*?)(?=\n## |\Z)', content, re.DOTALL)
-if dep_section:
-    dep_warnings = [l.strip() for l in dep_section.group(1).splitlines()
-                    if l.strip().startswith('-')]
+## Diff (primary artifact)
 
-result = {
-    "audited_count":  len(audited),
-    "total_tasks":    total_tasks,
-    "bailed_list":    bailed,
-    "dep_warn_count": len(dep_warnings),
-    "audited_list":   audited,
-}
-print(json.dumps(result))
-PYEOF
-)"
-```
+The diff adds a new file `scripts/test_config.py` with ~500 lines of test code. 41 tests, all passing in 2.3s. Test results:
+- Baseline defaults (3 tests)
+- Env override (3 tests)
+- Repo-local precedence (4 tests)
+- Unknown / typo'd keys (2 tests)
+- should-notify truth table (10 tests including typo event)
+- ensure-defaults edge cases (4 tests)
+- TOML / schema errors (4 tests)
+- Explicit override path (1 test)
+- Event de-dup (3 tests)
+- Pure _dotted_to_env function (5 tests)
+- Eval cleanliness (2 tests)
 
-Step 3 issue: Line 1954 shows duplicate variable assignment: copies MANIFEST.md as the checkpoint but names it `phase4-review-gate.md` in archive when it should checkpoint the summary. Phase 4 Step 2 writes `phase4-review-gate.md` separately at Step 2 line 1901-1935.
+Total: 41 tests, all passing.
 
-## Phase 5 — Sequential implement
+## Context: Target implementation (scripts/config.py)
 
-Record `T0=$(date +%s%3N)` at phase start.
+Scripts/config.py is a 556-line Python module implementing the loader with:
+- DEFAULTS dict (schema_version, notify.level, docs.always_apply)
+- VALIDATORS dict (enum values per key)
+- _dotted_to_env pure function (dotted-key → Z_HARNESS_* env var)
+- Layer merging: defaults → global → repo → env, with per-key shadowing
+- Five subcommands: get, export-env, ensure-defaults, explain, should-notify
+- Event emission (config_resolved) via O_EXCL de-dup on $Z_HARNESS_RUN
+- Validation rules: global-config invalid-enum triggers soft-fail (warn + default), repo/env invalid-enum triggers hard-fail (exit 2)
 
-### Step 1 — Build the ordered implementation queue
-
-Parse MANIFEST.md to collect rows with state `[a] audited` **plus** any `[i] implementing` rows (interrupted on a prior invocation). Apply the ordering rule: the synthetic `<slug>-cross-cutting` row is always processed first, regardless of its physical position in the table.
-
-```bash
-IMPL_QUEUE="$(python3 - "$Z_HARNESS_PLAN_DIR/MANIFEST.md" "$SLUG" <<'PYEOF'
-import re, sys, json
-
-manifest_path = sys.argv[1]
-slug          = sys.argv[2]
-
-with open(manifest_path) as f:
-    content = f.read()
-
-cross_cutting_row = None
-other_rows        = []
-
-for line in content.splitlines():
-    line = line.strip()
-    if not line.startswith('|') or line.startswith('|---') or line.startswith('| State'):
-        continue
-    cells = [c.strip() for c in line.split('|')]
-    # cells[0]=empty, [1]=state, [2]=component, [3]=slug, [4]=findings, [5]=bail, [6]=tasks
-    if len(cells) < 7:
-        continue
-    state    = cells[1]
-    comp     = cells[2]
-    row_slug = cells[3]
-    tasks_md = cells[6] if len(cells) > 6 else ''
-
-    actionable = '[a] audited' in state or '[i] implementing' in state
-    if not actionable:
-        continue
-
-    row = {
-        "state":     state,
-        "component": comp,
-        "slug":      row_slug,
-        "tasks_md":  tasks_md,
-        "implementing": '[i] implementing' in state,
-    }
-
-    # Synthetic cross-cutting goes first
-    if row_slug.endswith('-cross-cutting') or comp == '(global)':
-        cross_cutting_row = row
-    else:
-        other_rows.append(row)
-
-ordered = ([cross_cutting_row] if cross_cutting_row else []) + other_rows
-print(json.dumps(ordered))
-PYEOF
-)"
-```
-
-Phase 5 Step 1 correctly implements synthetic cross-cutting-first ordering: checks both slug endswith-cross-cutting and comp == '(global)' marker (2009-2011), with fallback [cross_cutting_row] if cross_cutting_row else [] ensuring clean skip if absent (2015).
-
-### Step 2c — Dispatch implementation (key section)
-
-Emit `component_implement_start` event and mark MANIFEST `[i] implementing` BEFORE dispatch (so an interrupt is detectable on next resume):
-
-```bash
-bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" component_implement_start \
-  "$(printf '{"component":"%s","tasks_md":"%s"}' "$COMP_SLUG" "$COMP_TASKS_MD")"
-
-python3 - "$Z_HARNESS_PLAN_DIR/MANIFEST.md" "$COMP_SLUG" "[i] implementing" <<'PYEOF'
-import re, sys, os
-
-def manifest_write(path, content):
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        f.write(content)
-    os.replace(tmp, path)
-
-manifest_path = sys.argv[1]
-comp_slug     = sys.argv[2]
-new_state     = sys.argv[3]
-
-with open(manifest_path) as f:
-    content = f.read()
-
-def replace_row(m):
-    row   = m.group(0)
-    cells = row.split('|')
-    if len(cells) < 8:
-        return row
-    if cells[3].strip() != comp_slug:
-        return row
-    cells[1] = f" {new_state} "
-    return '|'.join(cells)
-
-pattern = re.compile(
-    r'\|[^|\n]*\|\s*[^|\n]*\|\s*' + re.escape(comp_slug) + r'\s*\|[^\n]*\|',
-    re.MULTILINE
-)
-updated = pattern.sub(replace_row, content)
-manifest_write(manifest_path, updated)
-print(f"marked {comp_slug} as {new_state}")
-PYEOF
-```
-
-Present the `/z-implement-all` invocation command to the user and instruct them to run it:
-
-> Run the following command to implement `<component>`:
->
-> `/z-implement-all --tasks=<COMP_TASKS_MD>`
->
-> When `/z-implement-all` completes, re-invoke `/z-uplift` to continue with the next component.
-
-Then **exit** the current `/z-uplift` invocation cleanly (do not attempt to wait for `/z-implement-all` inline — it is a separate slash command that the user runs). The next `/z-uplift` invocation will detect the `[i] implementing` row and check completion via Step 2a above.
-
-### Step 2e — Abort path
-
-When the user chooses "Abort" in any AskUser gate above:
-
-1. Do NOT modify the current component's MANIFEST row (leave it in `[a] audited` or `[i] implementing`).
-2. Do NOT modify any subsequent component's MANIFEST row.
-3. Log `run_end` with `status: aborted_by_user`:
-
-```bash
-bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
-  "$(printf '{"slug":"%s","status":"aborted_by_user","aborted_at_component":"%s"}' \
-     "$SLUG" "$COMP_SLUG")"
-```
-
-4. Exit cleanly. Output the message:
-
-> Uplift aborted. Re-invoke `/z-uplift` to resume from `<component>`.
+---
 
 Scrutinize this code rigorously. Claude is prone to: over-engineering, premature abstraction, plausible-looking-but-wrong logic, missed edge cases, and silently expanding scope beyond the spec.
 
@@ -244,4 +118,5 @@ For each finding: severity (blocker / major / minor / nit), location, and a sugg
 - Report **blockers and majors only**. Skip minors and nits unless a "minor" hides a correctness bug — in which case promote it to major.
 - One finding per bullet. Two sentences max per finding (one for the problem, one for the fix).
 - No re-stating of code already in the diff. No summaries of what the code does. No restating the spec.
+- If there are no blockers or majors, respond with exactly: `No blockers or majors found.` (plus an optional 1-line note if something needs the implementer's attention but is below the bar).
 

@@ -5,7 +5,7 @@ alwaysApply: false
 
 You are the **z-harness `/z-implement-all`** orchestrator. Your job is to drive the task queue to completion without losing the per-task fresh-context guarantee. You do not implement code yourself — you delegate each task to a fresh `implementer` subagent and each review to a fresh `reviewer` subagent.
 
-Notification policy: read env `Z_HARNESS_NOTIFY` (default `approval_only`).
+Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
 
 ## Flags
 
@@ -122,6 +122,11 @@ Both `--ack` and `--force-partial` are inert for legacy (single-slug) plans and 
    TASKS_FILE="${TASKS_FILE:-$BASE/TASKS.md}"
    ```
 
+   **Clear the notify-dedup session file** (once per top-level invocation, before any task dispatch):
+   ```bash
+   [[ -n "${BASE:-}" ]] && rm -f "$BASE/.notify-dedup-session"
+   ```
+
 4. Read `$TASKS_FILE` into memory — always set by step 1's fast path or step 3's default above. You'll re-read between batches to pick up status flips. **Do NOT pre-extract SPEC/PLAN slices in main thread** — subagents will Read them directly from `$BASE/SPEC.md` and `$BASE/PLAN.md` themselves. This keeps the orchestrator main-thread context light across many tasks.
 5. **Version stamp + run_start event:**
    ```bash
@@ -188,7 +193,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orc
      "$TRIGGER" "$tasks_since_pause" "$WALL_MINUTES" "$PENDING_REMAINING")"
 ```
 
-Then push-notify (regardless of `Z_HARNESS_NOTIFY` value — this is a hard pause):
+Then push-notify (this is a hard pause — fires regardless of notification level; see [docs/human/config.md](docs/human/config.md)):
 
 > "Compaction breakpoint: `<N>` tasks completed (or `<M>` min wall). `<K>` pending tasks remain. Run `/clear`, then re-invoke `/z-implement-all` to resume from TASKS.md. Use `/compact` instead if you need chat history for debugging."
 
@@ -255,7 +260,7 @@ Scan the **entire task block** (title, Files, Depends, Acceptance — every line
 
 **Phase markers:** Phase F tasks (T050+) — explicitly wall-clock-bound, skip entirely (do not even ask, just report at finalize).
 
-When halting on a skip-flagged task, immediately push-notify (regardless of `Z_HARNESS_NOTIFY` value) and use `AskUserQuestion` with options:
+When halting on a skip-flagged task, immediately push-notify (fires regardless of notification level; see [docs/human/config.md](docs/human/config.md)) and use `AskUserQuestion` with options:
 - **Skip entirely** — leave `[ ]`, exclude from this run's eligibility for the rest of the loop, continue with other eligible tasks.
 - **I'll run it myself** — leave `[ ]`, exclude for now; user will mark `[x]` manually when done, then re-invoke `/z-implement-all` to resume.
 - **Defer** — leave `[ ]`, eligible again on the next outer loop iteration (use when waiting on a transient condition).
@@ -481,7 +486,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tas
      "<task-id>" "<n>" "<n>" "<n>" "$PASSED" "$FAILED")"
 ```
 (`tests_passed`/`tests_failed` are 0 if the task had no `**Tests:**` line.)
-4. If `Z_HARNESS_NOTIFY=all`: push-notify per-task. (For `approval_only` default: only notify on halts.)
+4. If notify.level is `all` (see [docs/human/config.md](docs/human/config.md)): push-notify per-task. (For `approval_only` default: only notify on halts.)
 5. Increment `tasks_since_pause` by 1 (this task reached `[x]`; retries and rollbacks do not count).
 6. **Batch-settle compaction check (once per batch, after all tracks finish).** When all parallel tracks in this outer iteration have completed (all have reached terminal status, the atomic TASKS.md write is done, `batch_done` is emitted, and all halt signals have been surfaced and resolved or deferred by the user), run the trigger check documented in the "Compaction breakpoint policy" section above. If a trigger fires: emit the `compaction_pause` event, push-notify, and exit cleanly with no new dispatch. If no trigger fires: continue to step 1.
 
@@ -593,29 +598,39 @@ This phase fires once per run, after the Finalize push-notify, before the sessio
 1. **Run the memory-review helper:**
 
    ```bash
-   MEMORY_REVIEW_OUT="$(bash scripts/run-memory-review.sh "$RUN" "implement-all")"
-   MEMORY_REVIEW_FIRST_LINE="$(printf '%s' "$MEMORY_REVIEW_OUT" | head -1)"
+   mapfile -t LINES < <(bash scripts/run-memory-review.sh "$RUN" "implement-all")
+   STATUS_LINE="${LINES[0]:-}"
    ```
 
 2. **Skip path — first line is `STATUS: skipped <reason>`:**
 
    ```bash
-   if [[ "$MEMORY_REVIEW_FIRST_LINE" == STATUS:\ skipped* ]]; then
-     SKIP_REASON="${MEMORY_REVIEW_FIRST_LINE#STATUS: skipped }"
-     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$PHASE9_TOKEN" \
-       "$(printf '{"phase":9,"name":"memory_review","skipped":true,"skip_reason":"%s"}' "$SKIP_REASON")"
-     # exit phase quietly — no push-notify
+   if [[ "$STATUS_LINE" == STATUS:\ skipped* ]]; then
+     # Helper (run-memory-review.sh) already emitted the memory_review_terminal event
+     # for all skip states. Phase 9 ends here — do not execute steps 3-8.
+     # For state: skipped_broken_context → push-notify if Z_HARNESS_NOTIFY_LEVEL != off, deduped:
+     SKIP_REASON="${STATUS_LINE#STATUS: skipped }"
+     if [[ "$SKIP_REASON" == tags_missing || "$SKIP_REASON" == no_plan_dir || "$SKIP_REASON" == missing_args ]]; then
+       DEDUP_FILE="$BASE/.notify-dedup-session"
+       DEDUP_KEY="${Z_HARNESS_SLUG:-unknown}:${SKIP_REASON}"
+       if [[ "${Z_HARNESS_NOTIFY_LEVEL:-approval_only}" != "off" ]] && ! grep -qxF "$DEDUP_KEY" "$DEDUP_FILE" 2>/dev/null; then
+         PushNotification("Memory review skipped on \`${Z_HARNESS_SLUG:-unknown}\`: \`${SKIP_REASON}\`. Fix to re-enable memory candidates.")
+         printf '%s\n' "$DEDUP_KEY" >> "$DEDUP_FILE"
+       fi
+     fi
+     # exit phase quietly — no push-notify for not_applicable states
+     return 0
    fi
    ```
 
-   (Emit `PHASE9_TOKEN` just before the helper call: `PHASE9_TOKEN="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" start "phase9" memory_review '{}')"`)
+   The `return 0` above is mandatory — without it, control falls through to step 3 and may attempt to parse empty artifact paths.
 
-3. **Ready path — first line is `STATUS: ready`:** parse the three artifact paths from subsequent lines:
+3. **Ready path — first line is `STATUS: ready`:** parse the artifact paths from subsequent lines (only reached when step 2's `return 0` did NOT fire, i.e. `STATUS_LINE` is NOT a skip):
 
    ```bash
-   CUMULATIVE_DIFF_PATH="$(printf '%s' "$MEMORY_REVIEW_OUT" | sed -n '2p')"
-   SPEC_PATH="$(printf '%s' "$MEMORY_REVIEW_OUT" | sed -n '3p')"
-   TAGS_PATH="$(printf '%s' "$MEMORY_REVIEW_OUT" | sed -n '4p')"
+   CUMULATIVE_DIFF_PATH="${LINES[1]:-}"
+   SPEC_PATH="${LINES[2]:-}"
+   TAGS_PATH="${LINES[3]:-}"
    RUN_DIR="$(dirname "$CUMULATIVE_DIFF_PATH")"
    SLUG_FOR_DESC="${Z_HARNESS_SLUG:-$(basename "$BASE")}"
    ```
@@ -655,29 +670,28 @@ This phase fires once per run, after the Finalize push-notify, before the sessio
      ```bash
      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" review_agent_malformed \
        "$(printf '{"run":"%s","excerpt":"%s"}' "$RUN" "$(printf '%s' "$raw" | head -c 200 | tr '"' "'")")"
-     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$PHASE9_TOKEN" \
-       "$(printf '{"phase":9,"name":"memory_review","skipped":true,"skip_reason":"malformed_output"}')"
      ```
      Push-notify: "Memory review skipped (malformed output). Check `agents/review-agent.md` or run `/z-stats` to see recent review_agent_failed events."
-     Exit phase.
+     Exit phase. (No `memory_review_terminal` event — this is an agent failure class, not a skip or terminal state.)
 
    - **Agent errored / no fenced block:**
      ```bash
      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" review_agent_failed \
        "$(printf '{"run":"%s","reason":"no_fenced_block"}' "$RUN")"
-     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$PHASE9_TOKEN" \
-       "$(printf '{"phase":9,"name":"memory_review","skipped":true,"skip_reason":"agent_error"}')"
      ```
      Push-notify: "Memory review skipped (malformed output). Check `agents/review-agent.md` or run `/z-stats` to see recent review_agent_failed events."
-     Exit phase.
+     Exit phase. (No `memory_review_terminal` event — this is an agent failure class, not a skip or terminal state.)
 
 6. **Empty candidates (`[]`):**
 
    ```bash
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" review_agent_call \
      "$(printf '{"run":"%s","parent_command":"implement-all","candidates_emitted":0,"accepted":0}' "$RUN")"
-   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$PHASE9_TOKEN" \
-     "$(printf '{"phase":9,"name":"memory_review","skipped":false,"candidates_emitted":0,"candidates_accepted":0,"candidates_skipped":0}')"
+   SLUG_JSON="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]) if sys.argv[1] else "null")' \
+     "${Z_HARNESS_SLUG:-}")"
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" memory_review_terminal \
+     "$(printf '{"state":"ran_empty","skip_reason":null,"parent_command":"implement-all","candidates":0,"accepted":0,"slug":%s}' \
+        "$SLUG_JSON")"
    ```
    Exit phase quietly — no push-notify.
 
@@ -757,22 +771,29 @@ This phase fires once per run, after the Finalize push-notify, before the sessio
         ```
         Break the loop.
 
-8. **Final `phase_end`:**
+8. **Final `memory_review_terminal` event for `needs_user` path only:**
+
+   After the AskUserQuestion loop completes (all candidates reviewed, or `skip_all` chosen), emit exactly one terminal event. **This step applies ONLY to the `needs_user` path (candidates ≥ 1, step 7). The `ran_empty` path already emitted its terminal event in step 6 and must NOT execute step 8.**
 
    ```bash
-   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$PHASE9_TOKEN" \
-     "$(printf '{"phase":9,"name":"memory_review","skipped":false,"candidates_emitted":%d,"candidates_accepted":%d,"candidates_skipped":%d}' \
-        "$N_CANDIDATES" "$ACCEPTED" "$SKIPPED")"
+   SLUG_JSON="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]) if sys.argv[1] else "null")' \
+     "${Z_HARNESS_SLUG:-}")"
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" memory_review_terminal \
+     "$(printf '{"state":"needs_user","skip_reason":null,"parent_command":"implement-all","candidates":%d,"accepted":%d,"slug":%s}' \
+        "$N_CANDIDATES" "$ACCEPTED" "$SLUG_JSON")"
    ```
+
+   This is the single terminal event for the `needs_user` path (candidates ≥ 1). The mid-phase `memory_candidates_ready` push-notify in step 7c is a separate signal and is NOT the terminal event — do not conflate them.
 
 **Event-kind reference for this phase:**
 
 | Event kind | When emitted |
 |---|---|
+| `memory_review_terminal` | Once per invocation: after user gate (`state: needs_user` or `ran_empty`); skip path terminal events are emitted by helper, not here |
 | `review_agent_call` | Agent returned candidates (including empty-array case) |
 | `review_agent_failed` | Agent returned without a fenced block |
 | `review_agent_malformed` | Agent returned with a fenced block that failed `json.loads` |
-| `memory_candidates_ready` | N ≥ 1 candidates; push-notify fired |
+| `memory_candidates_ready` | N ≥ 1 candidates; push-notify fired (mid-phase signal, distinct from terminal event) |
 | `review_candidate_skipped` | User skipped a single candidate with a reason |
 | `review_skip_all` | User chose Skip-all-remaining |
 

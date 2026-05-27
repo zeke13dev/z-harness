@@ -1,0 +1,125 @@
+---
+artifact: brainstorm
+slug: fanout-escalate-primitive
+generated_at: 2026-05-27T16:51:00Z
+command: /z-brainstorm fanout-escalate-primitive
+input_hash: 979b5af685ec66e8
+depends_on: []
+ideators:
+  - claude
+  - codex
+  - gemini
+ideator_models:
+  claude: sonnet
+  codex: default
+  gemini: default
+status: complete
+chosen_framing: restart
+---
+
+## Framing: claude
+
+### Framing
+The z-harness is a collection of commands that each re-implement the same three-phase lifecycle — *fan out* (spawn N parallel subagents along some axis), *gate* (check outputs against thresholds and escalate), and *reconcile* (merge heterogeneous artifacts). Proposal: extract a `z-fanout` FGR (Fan-out / Gate / Reconcile) primitive that makes this lifecycle a first-class, parameterizable abstraction.
+
+### Core hypothesis
+A single `fan-out-gate-reconcile` script library with three parameters: (a) strategy axis (dimensions/vendors/tasks/clusters), (b) gate spec (threshold table → escalation targets), (c) reconciliation contract — typed merge-strategy names: `dedup-score`, `anti-bias-merge`, `task-append`, `delta-patch`. Every command becomes a thin wrapper that defines its axis + gate + contract.
+
+### Risks
+- Over-abstraction obscures domain semantics.
+- Reconciliation heterogeneity may require a plugin mechanism as complex as the current per-command logic.
+- Escalation targets differ per command — risk of circular escalation chains.
+- Testing surface explodes (cartesian product of axes × gates × contracts).
+- Strategy axes are structurally different (vendor = symmetric / no deps; task = dependency-constrained DAG).
+
+### Plan implications
+- Bash script library `scripts/fanout-lib.sh`.
+- Per-command `ESCALATION_SPEC` env blocks.
+- Typed merge-strategy dispatch table.
+- Migration order: `/z-audit` and `/z-brainstorm` first (cleanest shapes); `/z-implement-all` last (most specialized).
+- Gate-spec format is the load-bearing decision.
+
+### What would change my mind
+- <30% shared code surface across commands.
+- Branch outputs differ so much that typed merge-strategy can't be normalized without quality loss.
+- `/z-implement-all` needs >2 special-case hooks — scope it out of the primitive entirely.
+
+---
+
+## Framing: codex
+
+### Framing
+The recurring pattern is not "parallelism." It is a **bounded decomposition transaction**: break one ambiguous objective into independent branches, execute each branch with command-specific workers, then reconcile outputs under explicit escalation rules. The reusable primitive should be a **harness kernel** — a script-lib plus thin skill wrapper, not a new user-facing z-command. Skills describe policy; scripts enforce invariants (branch manifests, thresholds, event logging, artifact collection, retry semantics, reconciliation envelopes).
+
+### Core hypothesis
+A primitive like `fanout_reconcile_run` with five pluggable contracts:
+1. **Axis generator** — produces branches along strategy / dimension / cluster / task / idea axis.
+2. **Escalation policy** — file count, findings count, severity count, attempts, wall time, decision count, drift, overlap, stall.
+3. **Branch dispatcher** — maps each branch to a z-command, agent, or script.
+4. **Artifact schema adapter** — normalizes heterogeneous outputs (findings, tasks, notes, routes, patches, plans).
+5. **Main reconciler** — runs only in the orchestrator (never in branch agents); performs dedup, scoring, promotion, escalation artifact creation, atomic writes.
+
+The unit of work should be a **branch record** (immutable JSON: `{branch_id, axis, intent, dispatcher, inputs, thresholds, expected_artifacts, status}`), not a subagent call.
+
+### Risks
+- Over-abstracting away the parts that make each command good (brainstorm wants diversity/bias-checks; audit wants severity discipline; implement-all wants task settlement and retry controls).
+- Hidden state coupling — today's fresh-context branches are clean; primitive must preserve that via immutable inputs + explicit artifact collection only.
+- Artifact impedance mismatch — brainstorm sections, audit findings, research citations, implementation diffs, and split-plan manifests are not naturally the same shape; primitive should normalize **metadata and lifecycle**, not force all content into one schema.
+
+### Plan implications
+- `scripts/lib/fanout.sh` (or `.py`) owns branch lifecycle, logging, thresholds, temp dirs, atomic settlement.
+- Command-local adapters for `/z-plan-light`, `/z-plan`, `/z-plan-split`, `/z-audit`, `/z-review-all`.
+- Small shared artifact envelope: `branch.json`, `result.json`, `events.jsonl`, `artifacts/`.
+- Shared escalation artifact format: `escalation.md` + machine-readable `escalation.json`.
+- Reconciliation API receives all branch results at once; no branch mutates global plan files directly.
+- **Do not start with `/z-implement-all`** — most mature but most specialized. Start with `/z-audit` + `/z-brainstorm` (cleanest common shape).
+
+### What would change my mind
+- If existing commands mostly differ in shell ceremony rather than behavior — script-lib extraction is enough.
+- If branch outputs cannot be normalized without losing important command semantics — keep as duplicated skill patterns + shared helper scripts for only logging, thresholds, atomic writes.
+- If users need to invoke this directly — then it is not a primitive; it is a new command (`/z-decompose` or `/z-fanout`) with explicit modes.
+
+---
+
+## Framing: gemini
+
+### Framing
+The "Fanout-Escalate-Reconcile" (FER) primitive. Rather than treating parallel ideation, auditing, and multi-track implementation as distinct workflows, extract them into a generalized, **MapReduce-like orchestration layer**. This primitive acts as a universal pipeline that standardizes context partitioning (fan-out along a defined axis), circuit-breaking via hard/soft thresholds (auto-escalate), and context distillation (reconciliation). It relegates specific business logic into thin strategy configurations.
+
+### Core hypothesis
+The cognitive overhead, context limits, and scope creep associated with complex LLM tasks necessitate a unified mechanism for containment and synthesis. Currently every `z-*` command reinvents its own parallel dispatch, state tracking, and failure recovery. A single, composable primitive will drastically reduce boilerplate, enforce uniform cost containment across the entire `z-harness` suite, and **guarantee that anti-bias and cross-LLM critique behaviors are universally applied** rather than ad-hoc.
+
+### Risks
+- **Over-abstraction** — risk building a generic, sluggish workflow engine that forces rigid schemas, obscuring the nuanced domain-specific reconciliation required for merging dependent code patches vs abstract architectural ideas.
+- **Context dilution** — generic fan-in might aggressively summarize heterogeneous artifacts to fit context windows, inadvertently flattening the divergent ideas that anti-bias merges are designed to protect.
+- **State-machine hell** — managing sequential retries, cross-task notes, and async halts in a generalized DAG could introduce opaque race conditions harder to debug than current siloed scripts.
+
+### Plan implications
+- **Command hollowing** — `/z-plan`, `/z-audit`, `/z-brainstorm`, `/z-review-all` get gutted, transition into declarative configs (or thin prompt wrappers) specifying axis + escalation triggers + reconciliation strategy.
+- **New core engine** — central `orchestrator` (script library + router agent) strictly responsible for dispatching subagents, tracking state via `events.jsonl`, evaluating circuit breakers, triggering final merge.
+- **Artifact standardization** — all subagent branches forced to emit artifacts adhering to a strict parseable envelope (structured JSON alongside markdown) for predictable dedup / cost-gating / merging.
+
+### What would change my mind
+- If mapping domain-specific thresholds ("3 modified files" vs "10 CRITICAL findings") into a generic schema becomes as complex/error-prone as writing the bespoke scripts.
+- If reconciliation is inherently too coupled to the task (merging architectural plans needs fundamentally different context-awareness than deduping audit findings) → shared primitive useless.
+- If enforcing a universal artifact schema restricts the natural unstructured reasoning of subagents → measurable output-quality drop.
+
+---
+
+## Anti-bias check
+
+**Framing** — *Codex wins.* Codex's "bounded decomposition transaction, not parallelism" reframe is the sharpest distinction; Claude's "FGR lifecycle" is descriptive but reuses existing vocabulary, and Gemini's "MapReduce-like" analogy is technically apt but doesn't add design constraint. Codex's separation of *policy in skills* vs *invariants in scripts* is the single most useful design lens here. (Claude-favoring would require justification; I'm picking Codex, so no special burden.)
+
+**Core hypothesis** — *Codex wins, but borrow from Claude.* Codex provides a 5-contract decomposition and an immutable `branch record` data model — concrete enough to start coding against. Claude's contribution that survives the merge: the **named merge-strategy vocabulary** (`dedup-score`, `anti-bias-merge`, `task-append`, `delta-patch`) — Codex's "artifact schema adapter" is hand-wavy in comparison and benefits from naming the actual strategies. Gemini's "MapReduce" framing is the least operationally actionable. *Claude-favoring justification for keeping the merge-strategy vocabulary: Codex explicitly says "normalize metadata and lifecycle, not force all content into one schema" — but never enumerates which strategies the reconciler dispatch table should support. Claude's 4-strategy taxonomy fills exactly that gap and maps 1:1 to existing reconciliation patterns (audit's `dedup-score`, brainstorm's `anti-bias-merge`, implement-all's `task-append` + `delta-patch`).*
+
+**Risks** — *Codex wins.* "Hidden state coupling" (the fresh-context invariant a primitive could silently break) and "artifact impedance mismatch" (the structural why-not behind the abstraction) are the most operationally specific. Gemini's "context dilution" and "state-machine hell" are real but generic. Claude's "circular escalation" and "testing surface explodes" are technically true but less foundational.
+
+**Plan implications** — *Codex wins on sequencing and scope; Claude contributes one line.* Codex's "start with `/z-audit` + `/z-brainstorm`, do `/z-implement-all` last" matches reality — implement-all has the most specialized retry/halt semantics (`MAX_ATTEMPTS=2`, `MAX_BATCH_STALL_MS`, cross-task notes, delta-compression) that don't generalize. Claude correctly flags "gate-spec format is the load-bearing decision" — single line worth preserving. Gemini's "command hollowing" is the most aggressive vision but the riskiest: it commits early to declarative configs replacing skills, making refactor cost much higher and locking in a v1 abstraction before learning from migration.
+
+**What would change my mind** — *Codex wins.* The third bullet — "if users need to invoke this directly, then it is not a primitive; it is a new command (`/z-decompose` or `/z-fanout`)" — is the cleanest falsifier because it forces a commitment to the *layer*, not just the *idea*. Claude's "<30% shared code surface" is a clean numeric threshold but doesn't address the design question. Gemini's "universal schema causes quality drop" overlaps with Codex's first but is vaguer about measurement.
+
+**Net:** Codex sweeps 5/5 sections (with two grafts from Claude: named merge-strategy vocabulary in the hypothesis, and the "gate-spec is load-bearing" call-out in plan implications). The Claude ideator's value here was vocabulary and a numeric falsifier — not framing or risk-spotting.
+
+## Orchestrator recommendation
+
+**Codex framing**, with Claude's named merge-strategy vocabulary folded into contract #4 (artifact schema adapter → reconciliation strategy dispatch). Concretely: build `scripts/lib/fanout.sh` (Bash, matching existing infra — not Python), start by extracting `/z-audit` + `/z-brainstorm` (NOT `/z-implement-all`), define the 5 pluggable contracts (axis generator / escalation policy / branch dispatcher / artifact adapter / main reconciler) with a named reconciliation strategy table (`dedup-score`, `anti-bias-merge`, `task-append`, `delta-patch`). Treat the gate-spec format as the load-bearing decision before any code lands. Defer command-hollowing (Gemini's vision) — the goal is a kernel commands *use*, not a config language they *become*.

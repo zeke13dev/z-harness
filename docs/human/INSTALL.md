@@ -198,3 +198,12 @@ rm ~/plugins/z-harness
 If you installed via tarball, this removes the extracted directory. If you
 installed via symlink, this removes only the symlink — the local clone is
 untouched.
+
+---
+
+## Requirements
+
+- At least one CLI-addressable LLM (e.g. `codex`, `gemini`, `claude`, `ollama`,
+  `agy`) installed and reachable on your `PATH`. Run `/z-providers-discover` to
+  auto-configure roles after install. See [PROVIDERS.md](PROVIDERS.md).
+- Claude Code with `PushNotification` available (for mobile notifications).

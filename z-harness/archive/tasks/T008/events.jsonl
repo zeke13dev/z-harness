@@ -4,3 +4,9 @@
 {"ts":"2026-05-24T07:35:25Z","run":"tasks/T008","kind":"task_done","id":"T008","retries":0,"review_cycles":1,"review_blockers":0,"pushback":"T005 leftover changes flagged"}
 {"ts":"2026-05-24T11:04:51Z","run":"tasks/T008","kind":"task_done","id":"T008"}
 {"ts":"2026-05-25T07:04:14Z","run":"tasks/T008","kind":"task_done","id":"T008"}
+{"ts":"2026-05-27T06:07:47Z","run":"tasks/T008","kind":"implement_start","id":"T008","retry":0}
+{"ts":"2026-05-27T06:09:52Z","run":"tasks/T008","kind":"implement_end","id":"T008","retry":0,"status":"ok","files_changed_count":2,"wall_ms":124718}
+{"ts":"2026-05-27T18:39:20Z","run":"tasks/T008","kind":"task_start","id":"T008"}
+{"ts":"2026-05-27T18:56:31Z","run":"tasks/T008","kind":"task_halt","id":"T008","reason":"review_blockers_and_majors","cycle":1,"halt_reason":"flag-parse ordering, chunk-id encoding, sanitization gaps"}
+{"ts":"2026-05-27T19:06:13Z","run":"tasks/T008","kind":"task_start","id":"T008","attempt":2}
+{"ts":"2026-05-27T19:17:40Z","run":"tasks/T008","kind":"task_done","id":"T008","retries":1,"review_cycles":2}

@@ -27,3 +27,9 @@
 {"ts":"2026-05-25T00:44:51Z","run":"tasks/T006","kind":"implement_start","id":"T006","retry":0}
 {"ts":"2026-05-25T00:46:24Z","run":"tasks/T006","kind":"implement_end","id":"T006","retry":0,"status":"ok","files_changed_count":2,"wall_ms":92860}
 {"ts":"2026-05-25T06:59:50Z","run":"tasks/T006","kind":"task_done","id":"T006","retries":0,"review_cycles":1}
+{"ts":"2026-05-27T05:56:52Z","run":"tasks/T006","kind":"review_start","id":"T006","cycle":1}
+{"ts":"2026-05-27T18:39:20Z","run":"tasks/T006","kind":"task_start","id":"T006"}
+{"ts":"2026-05-27T18:56:31Z","run":"tasks/T006","kind":"task_halt","id":"T006","reason":"review_blocker_minor","cycle":1,"halt_reason":"unused_import; trivial fix deferred to post-amend"}
+{"ts":"2026-05-27T19:06:13Z","run":"tasks/T006","kind":"task_start","id":"T006","attempt":2}
+{"ts":"2026-05-27T19:06:56Z","run":"tasks/T006","kind":"review_start","id":"T006","cycle":1}
+{"ts":"2026-05-27T19:17:40Z","run":"tasks/T006","kind":"task_done","id":"T006","retries":1,"review_cycles":2}

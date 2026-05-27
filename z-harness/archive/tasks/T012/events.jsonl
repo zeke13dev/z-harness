@@ -8,3 +8,5 @@
 {"ts":"2026-05-24T11:04:51Z","run":"tasks/T012","kind":"task_done","id":"T012"}
 {"ts":"2026-05-26T00:02:03Z","run":"tasks/T012","kind":"implement_start","id":"T012","retry":0}
 {"ts":"2026-05-26T00:02:49Z","run":"tasks/T012","kind":"implement_end","id":"T012","retry":0,"status":"ok","files_changed_count":168,"wall_ms":45585}
+{"ts":"2026-05-27T19:44:27Z","run":"tasks/T012","kind":"task_start","id":"T012"}
+{"ts":"2026-05-27T19:50:19Z","run":"tasks/T012","kind":"task_done","id":"T012","retries":0,"review_cycles":0}
