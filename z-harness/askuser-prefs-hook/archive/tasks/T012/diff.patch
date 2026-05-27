@@ -1,0 +1,59 @@
+diff --git a/skills/z-stats/SKILL.md b/skills/z-stats/SKILL.md
+index 48fcaee..64a356c 100644
+--- a/skills/z-stats/SKILL.md
++++ b/skills/z-stats/SKILL.md
+@@ -175,6 +175,54 @@ Rules for display:
+ - Omit states with count 0.
+ - If no terminal-state events found (section empty), print: `  (no memory-review terminal events found in metrics.jsonl)`
+ 
++## Phase 4c — Preference resolutions (last 10 runs)
++
++```bash
++jq -s '
++  map(select(.kind == "askuser_resolved"))
++  | sort_by(.ts) | reverse | .[0:10]
++  | {
++      total: length,
++      by_result: (
++        group_by(.result)
++        | map({(.[0].result // "unknown"): length})
++        | add // {}
++      ),
++      by_source: (
++        group_by(.source)
++        | map({(.[0].source // "unknown"): length})
++        | add // {}
++      ),
++      by_question_id: (
++        group_by(.question_id)
++        | map({key: (.[0].question_id // "unknown"), count: length})
++        | sort_by(-.count)
++      ),
++      conflict_count: (map(select(.source == "conflict")) | length)
++    }
++' "$METRICS"
++```
++
++Display as a human-readable section:
++
++```
++Preference resolutions (last 10 runs):
++  Total: <N>
++  By result:  skip=<N>  prefill=<N>  ask=<N>
++  By source:  config=<N>  memory=<N>  conflict=<N>  none=<N>  override=<N>
++  By question (most-fired first):
++    workflow.audit_to_amend    <N>
++    workflow.slug_confirm      <N>
++  Conflict rate: <conflict_count>/<total> (<pct>%)  ← proxy for user surprise; trend down as TOML stabilises
++```
++
++Rules for display:
++- Only show non-zero result/source buckets.
++- Omit `By question` rows with count 0.
++- Conflict rate line: if total is 0, print `  (no askuser_resolved events found in metrics.jsonl)` and skip the rest.
++- Conflict rate percentage: `round(conflict_count / total * 100)`. Show `0%` when conflict_count is 0.
++- Read-only; no writes.
++
+ ## Phase 5 — Stalls (post-run gap detection)
+ 
+ Reuse the gap-detection awk from `/z-implement-all` Detecting Stalls section. Flag any gap > 30 min between consecutive same-run events.

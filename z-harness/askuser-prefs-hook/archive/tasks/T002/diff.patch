@@ -1,0 +1,154 @@
+diff --git a/scripts/config.py b/scripts/config.py
+index af7e42c..8041010 100755
+--- a/scripts/config.py
++++ b/scripts/config.py
+@@ -8,6 +8,7 @@ Subcommands:
+   ensure-defaults               Write global config with defaults if absent.
+   explain <dotted.key>          Print value + source layer.
+   should-notify --event <kind>  Print yes/no notification gate.
++  list-question-ids             Print sorted JSON array of registered question IDs.
+ 
+ Layer order (lowest → highest priority):
+   1. Built-in defaults (DEFAULTS)
+@@ -45,15 +46,106 @@ DEFAULTS: dict = {
+     "docs": {
+         "always_apply": "always",   # always | never
+     },
++    "workflow": {
++        "audit_to_amend": "ask",    # ask | amend | stop
++        "slug_confirm":   "ask",    # ask | auto_accept | recommend_derived
++    },
+ }
+ 
+ VALIDATORS: dict = {
+     "notify.level": {"off", "approval_only", "all"},
+     "docs.always_apply": {"always", "never"},
++    "workflow.audit_to_amend": {"ask", "amend", "stop"},
++    "workflow.slug_confirm":   {"ask", "auto_accept", "recommend_derived"},
+ }
+ 
+ META_KEYS: set = {"schema_version"}
+ 
++# ---------------------------------------------------------------------------
++# Question registry (single source of truth for resolver and /z-suggest-memory)
++# ---------------------------------------------------------------------------
++
++QUESTION_IDS: dict[str, dict] = {
++    "workflow.audit_to_amend": {
++        "config_key": "workflow.audit_to_amend",
++        "choices": {"ask", "amend", "stop"},
++        "skill_default": "amend",
++        "callsites": [
++            "commands/z-audit-plan.md:183",
++            "commands/z-audit-plan-style.md:384",
++        ],
++    },
++    "workflow.slug_confirm": {
++        "config_key": "workflow.slug_confirm",
++        # `auto_accept` means "always accept derived slug without asking" (resolves to result: skip).
++        # `recommend_derived` means "show AskUser with derived slug pre-selected" (resolves to result: prefill).
++        # `ask` means "always ask" (resolves to result: ask).
++        "choices": {"ask", "auto_accept", "recommend_derived"},
++        "skill_default": "yes_keep_derived",
++        "callsites": [
++            "commands/z-plan.md:21",
++            "commands/z-fix.md:18",
++            "skills/z-debug/SKILL.md:17",
++            "skills/z-brainstorm/SKILL.md:19",
++            "skills/z-research/SKILL.md:117",
++            "skills/z-plan-light/SKILL.md:19",
++            "commands/z-uplift.md:71",
++        ],
++        # Hard prerequisite: even when resolver returns skip, the slug-COLLISION check runs
++        # unconditionally. The resolver only governs the soft non-obvious-slug confirmation.
++        "safety_check_runs_unconditionally": True,
++    },
++}
++
++# Map each question_id's option-domain value → resolver result-domain
++RESULT_MAP: dict[tuple[str, str], str] = {
++    ("workflow.audit_to_amend", "ask"):             "ask",
++    ("workflow.audit_to_amend", "amend"):           "skip",  # user wants auto-amend → skip the prompt
++    ("workflow.audit_to_amend", "stop"):            "skip",  # user wants auto-stop → also skip the prompt
++    ("workflow.slug_confirm",   "ask"):             "ask",
++    ("workflow.slug_confirm",   "auto_accept"):     "skip",
++    ("workflow.slug_confirm",   "recommend_derived"): "prefill",
++}
++
++# ---------------------------------------------------------------------------
++# Startup guards — run at module load; raise SystemExit(2) on violation
++# ---------------------------------------------------------------------------
++
++def _run_startup_guards() -> None:
++    """Validate internal registry consistency at module load."""
++    # Guard 1: every question_id must have a corresponding VALIDATORS entry
++    for qid in QUESTION_IDS:
++        if qid not in VALIDATORS:
++            raise SystemExit(
++                f"[config] startup guard failed: QUESTION_IDS key {qid!r} "
++                "is not present in VALIDATORS — add it before shipping"
++            )
++
++    # Guard 2: every question_id must have a non-null skill_default
++    for qid, meta in QUESTION_IDS.items():
++        if meta.get("skill_default") is None:
++            raise SystemExit(
++                f"[config] startup guard failed: QUESTION_IDS[{qid!r}]['skill_default'] "
++                "is None — every question_id requires a presentation default"
++            )
++
++    # Guard 3: every choice referenced in RESULT_MAP must be a valid choice in QUESTION_IDS
++    for (qid, choice), result in RESULT_MAP.items():
++        if qid not in QUESTION_IDS:
++            raise SystemExit(
++                f"[config] startup guard failed: RESULT_MAP references question_id "
++                f"{qid!r} which is not in QUESTION_IDS"
++            )
++        if choice not in QUESTION_IDS[qid]["choices"]:
++            raise SystemExit(
++                f"[config] startup guard failed: RESULT_MAP[({qid!r}, {choice!r})] "
++                f"references choice {choice!r} which is not in "
++                f"QUESTION_IDS[{qid!r}]['choices'] = {QUESTION_IDS[qid]['choices']!r}"
++            )
++
++
++_run_startup_guards()
++
+ # Valid event kinds for should-notify
+ _NOTIFY_EVENTS: set = {"approval", "phase_end", "error"}
+ 
+@@ -486,6 +578,11 @@ def cmd_explain(args: list[str]) -> None:
+     print(f'{key} = "{val}"   (source: {src})')
+ 
+ 
++def cmd_list_question_ids(args: list[str]) -> None:
++    """Print a sorted JSON array of registered question IDs to stdout."""
++    print(json.dumps(sorted(QUESTION_IDS.keys())))
++
++
+ def cmd_should_notify(args: list[str]) -> None:
+     # Parse --event <kind>
+     if len(args) != 2 or args[0] != "--event":
+@@ -524,7 +621,7 @@ def cmd_should_notify(args: list[str]) -> None:
+ def main() -> None:
+     if len(sys.argv) < 2:
+         print(
+-            "usage: config.py <get|export-env|ensure-defaults|explain|should-notify> [args...]",
++            "usage: config.py <get|export-env|ensure-defaults|explain|should-notify|list-question-ids> [args...]",
+             file=sys.stderr,
+         )
+         sys.exit(2)
+@@ -542,10 +639,12 @@ def main() -> None:
+         cmd_explain(args)
+     elif subcommand == "should-notify":
+         cmd_should_notify(args)
++    elif subcommand == "list-question-ids":
++        cmd_list_question_ids(args)
+     else:
+         print(
+             f"[config] unknown subcommand {subcommand!r}; "
+-            "valid: get, export-env, ensure-defaults, explain, should-notify",
++            "valid: get, export-env, ensure-defaults, explain, should-notify, list-question-ids",
+             file=sys.stderr,
+         )
+         sys.exit(2)

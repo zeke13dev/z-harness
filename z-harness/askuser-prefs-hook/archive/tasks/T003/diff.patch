@@ -1,0 +1,361 @@
+diff --git a/scripts/config.py b/scripts/config.py
+index af7e42c..182646d 100755
+--- a/scripts/config.py
++++ b/scripts/config.py
+@@ -3,11 +3,13 @@
+ config.py — z-harness layered TOML config loader.
+ 
+ Subcommands:
+-  get <dotted.key>              Resolve a single key and print its value.
+-  export-env                    Print export lines for all non-meta keys.
+-  ensure-defaults               Write global config with defaults if absent.
+-  explain <dotted.key>          Print value + source layer.
+-  should-notify --event <kind>  Print yes/no notification gate.
++  get <dotted.key>                        Resolve a single key and print its value.
++  export-env                              Print export lines for all non-meta keys.
++  ensure-defaults                         Write global config with defaults if absent.
++  explain <dotted.key>                    Print value + source layer.
++  should-notify --event <kind>            Print yes/no notification gate.
++  list-question-ids                       Print sorted JSON array of registered question IDs.
++  resolve-question <question_id>          Return JSON resolver envelope for a question ID.
+ 
+ Layer order (lowest → highest priority):
+   1. Built-in defaults (DEFAULTS)
+@@ -45,15 +47,106 @@ DEFAULTS: dict = {
+     "docs": {
+         "always_apply": "always",   # always | never
+     },
++    "workflow": {
++        "audit_to_amend": "ask",    # ask | amend | stop
++        "slug_confirm":   "ask",    # ask | auto_accept | recommend_derived
++    },
+ }
+ 
+ VALIDATORS: dict = {
+     "notify.level": {"off", "approval_only", "all"},
+     "docs.always_apply": {"always", "never"},
++    "workflow.audit_to_amend": {"ask", "amend", "stop"},
++    "workflow.slug_confirm":   {"ask", "auto_accept", "recommend_derived"},
+ }
+ 
+ META_KEYS: set = {"schema_version"}
+ 
++# ---------------------------------------------------------------------------
++# Question registry (single source of truth for resolver and /z-suggest-memory)
++# ---------------------------------------------------------------------------
++
++QUESTION_IDS: dict[str, dict] = {
++    "workflow.audit_to_amend": {
++        "config_key": "workflow.audit_to_amend",
++        "choices": {"ask", "amend", "stop"},
++        "skill_default": "amend",
++        "callsites": [
++            "commands/z-audit-plan.md:183",
++            "commands/z-audit-plan-style.md:384",
++        ],
++    },
++    "workflow.slug_confirm": {
++        "config_key": "workflow.slug_confirm",
++        # `auto_accept` means "always accept derived slug without asking" (resolves to result: skip).
++        # `recommend_derived` means "show AskUser with derived slug pre-selected" (resolves to result: prefill).
++        # `ask` means "always ask" (resolves to result: ask).
++        "choices": {"ask", "auto_accept", "recommend_derived"},
++        "skill_default": "yes_keep_derived",
++        "callsites": [
++            "commands/z-plan.md:21",
++            "commands/z-fix.md:18",
++            "skills/z-debug/SKILL.md:17",
++            "skills/z-brainstorm/SKILL.md:19",
++            "skills/z-research/SKILL.md:117",
++            "skills/z-plan-light/SKILL.md:19",
++            "commands/z-uplift.md:71",
++        ],
++        # Hard prerequisite: even when resolver returns skip, the slug-COLLISION check runs
++        # unconditionally. The resolver only governs the soft non-obvious-slug confirmation.
++        "safety_check_runs_unconditionally": True,
++    },
++}
++
++# Map each question_id's option-domain value → resolver result-domain
++RESULT_MAP: dict[tuple[str, str], str] = {
++    ("workflow.audit_to_amend", "ask"):             "ask",
++    ("workflow.audit_to_amend", "amend"):           "skip",  # user wants auto-amend → skip the prompt
++    ("workflow.audit_to_amend", "stop"):            "skip",  # user wants auto-stop → also skip the prompt
++    ("workflow.slug_confirm",   "ask"):             "ask",
++    ("workflow.slug_confirm",   "auto_accept"):     "skip",
++    ("workflow.slug_confirm",   "recommend_derived"): "prefill",
++}
++
++# ---------------------------------------------------------------------------
++# Startup guards — run at module load; raise SystemExit(2) on violation
++# ---------------------------------------------------------------------------
++
++def _run_startup_guards() -> None:
++    """Validate internal registry consistency at module load."""
++    # Guard 1: every question_id must have a corresponding VALIDATORS entry
++    for qid in QUESTION_IDS:
++        if qid not in VALIDATORS:
++            raise SystemExit(
++                f"[config] startup guard failed: QUESTION_IDS key {qid!r} "
++                "is not present in VALIDATORS — add it before shipping"
++            )
++
++    # Guard 2: every question_id must have a non-null skill_default
++    for qid, meta in QUESTION_IDS.items():
++        if meta.get("skill_default") is None:
++            raise SystemExit(
++                f"[config] startup guard failed: QUESTION_IDS[{qid!r}]['skill_default'] "
++                "is None — every question_id requires a presentation default"
++            )
++
++    # Guard 3: every choice referenced in RESULT_MAP must be a valid choice in QUESTION_IDS
++    for (qid, choice), result in RESULT_MAP.items():
++        if qid not in QUESTION_IDS:
++            raise SystemExit(
++                f"[config] startup guard failed: RESULT_MAP references question_id "
++                f"{qid!r} which is not in QUESTION_IDS"
++            )
++        if choice not in QUESTION_IDS[qid]["choices"]:
++            raise SystemExit(
++                f"[config] startup guard failed: RESULT_MAP[({qid!r}, {choice!r})] "
++                f"references choice {choice!r} which is not in "
++                f"QUESTION_IDS[{qid!r}]['choices'] = {QUESTION_IDS[qid]['choices']!r}"
++            )
++
++
++_run_startup_guards()
++
+ # Valid event kinds for should-notify
+ _NOTIFY_EVENTS: set = {"approval", "phase_end", "error"}
+ 
+@@ -486,6 +579,203 @@ def cmd_explain(args: list[str]) -> None:
+     print(f'{key} = "{val}"   (source: {src})')
+ 
+ 
++def cmd_list_question_ids(args: list[str]) -> None:
++    """Print a sorted JSON array of registered question IDs to stdout."""
++    print(json.dumps(sorted(QUESTION_IDS.keys())))
++
++
++# ---------------------------------------------------------------------------
++# resolve-question subcommand
++# ---------------------------------------------------------------------------
++
++def _emit_askuser_resolved(
++    question_id: str,
++    result: str,
++    source: str,
++    strength: str,
++) -> None:
++    """
++    Emit an askuser_resolved event via log-event.sh.
++    Non-fatal: silently skips if Z_HARNESS_RUN is unset or log-event.sh unavailable.
++    """
++    run_id = os.environ.get("Z_HARNESS_RUN", "")
++    if not run_id:
++        return
++
++    script_dir = Path(__file__).parent
++    log_event = script_dir / "log-event.sh"
++    if not log_event.exists() or not shutil.which("bash"):
++        return
++
++    payload = json.dumps({
++        "question_id": question_id,
++        "result": result,
++        "source": source,
++        "strength": strength,
++    })
++    try:
++        subprocess.run(
++            ["bash", str(log_event), run_id, "askuser_resolved", payload],
++            check=False,
++            capture_output=True,
++        )
++    except OSError:
++        pass  # non-fatal — observability is best-effort
++
++
++def cmd_resolve_question(args: list[str]) -> None:
++    """
++    resolve-question <question_id> [--scope-slug <slug>] [--explain]
++
++    Returns a JSON envelope to stdout. All diagnostics go to stderr.
++    Exit codes: 0=ok, 2=bad invocation, 3=unknown question_id, 4=I/O error.
++
++    NOTE: T003 is config-layer only. Memory consultation is implemented in T004.
++    When config value is the default ("ask") and no memory signal exists,
++    returns source=none, strength=none, result=ask.
++    """
++    if not args:
++        print("usage: config.py resolve-question <question_id> [--scope-slug <slug>] [--explain]",
++              file=sys.stderr)
++        sys.exit(2)
++
++    # Parse positional + optional args
++    question_id: str = ""
++    explain: bool = False
++    i = 0
++    while i < len(args):
++        if args[i] == "--explain":
++            explain = True
++            i += 1
++        elif args[i] == "--scope-slug":
++            # Consume and ignore the slug for now (used by T004 memory walk)
++            i += 2
++        elif args[i].startswith("--"):
++            print(f"[config] unknown flag {args[i]!r}", file=sys.stderr)
++            sys.exit(2)
++        elif not question_id:
++            question_id = args[i]
++            i += 1
++        else:
++            print(f"[config] unexpected argument {args[i]!r}", file=sys.stderr)
++            sys.exit(2)
++
++    if not question_id:
++        print("usage: config.py resolve-question <question_id> [--scope-slug <slug>] [--explain]",
++              file=sys.stderr)
++        sys.exit(2)
++
++    # Check Z_HARNESS_EXPLAIN_RESOLUTION
++    if os.environ.get("Z_HARNESS_EXPLAIN_RESOLUTION", "") == "1":
++        explain = True
++
++    # Step 1: Validate question_id
++    if question_id not in QUESTION_IDS:
++        envelope = {
++            "error": "unknown_question_id",
++            "known": sorted(QUESTION_IDS.keys()),
++        }
++        print(json.dumps(envelope))
++        sys.exit(3)
++
++    qmeta = QUESTION_IDS[question_id]
++    skill_default: str = qmeta["skill_default"]
++    config_key: str = qmeta["config_key"]
++
++    # Step 2: Honor Z_HARNESS_ASK_ALL=1 short-circuit
++    if os.environ.get("Z_HARNESS_ASK_ALL", "") == "1":
++        envelope = {
++            "result": "ask",
++            "default": skill_default,
++            "source": "override",
++            "rule_id": "Z_HARNESS_ASK_ALL",
++            "strength": "none",
++            "reason": "Z_HARNESS_ASK_ALL=1 forces ask for all questions",
++            "sources": [],
++        }
++        if explain:
++            print(
++                f"[explain] question_id={question_id} → Z_HARNESS_ASK_ALL=1 override → result=ask",
++                file=sys.stderr,
++            )
++        print(json.dumps(envelope))
++        _emit_askuser_resolved(question_id, "ask", "override", "none")
++        sys.exit(0)
++
++    # Step 3: Consult 4-layer config
++    try:
++        values, sources = load_config()
++    except SystemExit:
++        # load_config exits on I/O or schema errors; re-raise is the right path
++        raise
++    except OSError as exc:
++        envelope = {
++            "error": "io_error",
++            "message": str(exc),
++            "result": "ask",
++            "default": skill_default,
++            "source": "none",
++            "rule_id": config_key,
++            "strength": "none",
++            "reason": f"I/O error reading config: {exc}",
++            "sources": [],
++        }
++        print(str(exc), file=sys.stderr)
++        print(json.dumps(envelope))
++        sys.exit(4)
++
++    config_value: str = values.get(config_key, "ask")
++    config_source_label: str = sources.get(config_key, "defaults")
++
++    # Default value for this config key (the "ask" string means "no preference set")
++    default_config_value: str = "ask"
++
++    # Step 4 (T003 — config-only path; memory walk deferred to T004):
++    # If config value is NOT the default ("ask"), return config-driven result.
++    if config_value != default_config_value:
++        mapped_result = RESULT_MAP.get((question_id, config_value), "ask")
++        reason = (
++            f"config key {config_key!r} = {config_value!r} (source: {config_source_label})"
++        )
++        envelope = {
++            "result": mapped_result,
++            "default": skill_default,
++            "source": "config",
++            "rule_id": config_key,
++            "strength": "hard",
++            "reason": reason,
++            "sources": [],
++        }
++        if explain:
++            print(
++                f"[explain] question_id={question_id} → config={config_value!r} at "
++                f"{config_source_label} → result={mapped_result} (hard)",
++                file=sys.stderr,
++            )
++        print(json.dumps(envelope))
++        _emit_askuser_resolved(question_id, mapped_result, "config", "hard")
++        sys.exit(0)
++
++    # Config is at default ("ask"). Memory walk is T004 — for now return none tier.
++    envelope = {
++        "result": "ask",
++        "default": skill_default,
++        "source": "none",
++        "rule_id": config_key,
++        "strength": "none",
++        "reason": "No config preference set; defaulting to ask",
++        "sources": [],
++    }
++    if explain:
++        print(
++            f"[explain] question_id={question_id} → config=ask (default), no memory → result=ask",
++            file=sys.stderr,
++        )
++    print(json.dumps(envelope))
++    _emit_askuser_resolved(question_id, "ask", "none", "none")
++    sys.exit(0)
++
++
+ def cmd_should_notify(args: list[str]) -> None:
+     # Parse --event <kind>
+     if len(args) != 2 or args[0] != "--event":
+@@ -524,7 +814,8 @@ def cmd_should_notify(args: list[str]) -> None:
+ def main() -> None:
+     if len(sys.argv) < 2:
+         print(
+-            "usage: config.py <get|export-env|ensure-defaults|explain|should-notify> [args...]",
++            "usage: config.py <get|export-env|ensure-defaults|explain|should-notify"
++            "|list-question-ids|resolve-question> [args...]",
+             file=sys.stderr,
+         )
+         sys.exit(2)
+@@ -542,10 +833,15 @@ def main() -> None:
+         cmd_explain(args)
+     elif subcommand == "should-notify":
+         cmd_should_notify(args)
++    elif subcommand == "list-question-ids":
++        cmd_list_question_ids(args)
++    elif subcommand == "resolve-question":
++        cmd_resolve_question(args)
+     else:
+         print(
+             f"[config] unknown subcommand {subcommand!r}; "
+-            "valid: get, export-env, ensure-defaults, explain, should-notify",
++            "valid: get, export-env, ensure-defaults, explain, should-notify, "
++            "list-question-ids, resolve-question",
+             file=sys.stderr,
+         )
+         sys.exit(2)

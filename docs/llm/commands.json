@@ -243,7 +243,7 @@
     "agents",
     "scripts",
     "skills",
-    "config-design"
+    "config"
   ],
   "consumed_by": [
     "skills"

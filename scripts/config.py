@@ -3,11 +3,13 @@
 config.py — z-harness layered TOML config loader.
 
 Subcommands:
-  get <dotted.key>              Resolve a single key and print its value.
-  export-env                    Print export lines for all non-meta keys.
-  ensure-defaults               Write global config with defaults if absent.
-  explain <dotted.key>          Print value + source layer.
-  should-notify --event <kind>  Print yes/no notification gate.
+  get <dotted.key>                        Resolve a single key and print its value.
+  export-env                              Print export lines for all non-meta keys.
+  ensure-defaults                         Write global config with defaults if absent.
+  explain <dotted.key>                    Print value + source layer.
+  should-notify --event <kind>            Print yes/no notification gate.
+  list-question-ids                       Print sorted JSON array of registered question IDs.
+  resolve-question <question_id>          Return JSON resolver envelope for a question ID.
 
 Layer order (lowest → highest priority):
   1. Built-in defaults (DEFAULTS)
@@ -45,14 +47,105 @@ DEFAULTS: dict = {
     "docs": {
         "always_apply": "always",   # always | never
     },
+    "workflow": {
+        "audit_to_amend": "ask",    # ask | amend | stop
+        "slug_confirm":   "ask",    # ask | auto_accept | recommend_derived
+    },
 }
 
 VALIDATORS: dict = {
     "notify.level": {"off", "approval_only", "all"},
     "docs.always_apply": {"always", "never"},
+    "workflow.audit_to_amend": {"ask", "amend", "stop"},
+    "workflow.slug_confirm":   {"ask", "auto_accept", "recommend_derived"},
 }
 
 META_KEYS: set = {"schema_version"}
+
+# ---------------------------------------------------------------------------
+# Question registry (single source of truth for resolver and /z-suggest-memory)
+# ---------------------------------------------------------------------------
+
+QUESTION_IDS: dict[str, dict] = {
+    "workflow.audit_to_amend": {
+        "config_key": "workflow.audit_to_amend",
+        "choices": {"ask", "amend", "stop"},
+        "skill_default": "amend",
+        "callsites": [
+            "commands/z-audit-plan.md:183",
+            "commands/z-audit-plan-style.md:384",
+        ],
+    },
+    "workflow.slug_confirm": {
+        "config_key": "workflow.slug_confirm",
+        # `auto_accept` means "always accept derived slug without asking" (resolves to result: skip).
+        # `recommend_derived` means "show AskUser with derived slug pre-selected" (resolves to result: prefill).
+        # `ask` means "always ask" (resolves to result: ask).
+        "choices": {"ask", "auto_accept", "recommend_derived"},
+        "skill_default": "yes_keep_derived",
+        "callsites": [
+            "commands/z-plan.md:21",
+            "commands/z-fix.md:18",
+            "skills/z-debug/SKILL.md:17",
+            "skills/z-brainstorm/SKILL.md:19",
+            "skills/z-map/SKILL.md:133",
+            "skills/z-plan-light/SKILL.md:19",
+            "commands/z-uplift.md:71",
+        ],
+        # Hard prerequisite: even when resolver returns skip, the slug-COLLISION check runs
+        # unconditionally. The resolver only governs the soft non-obvious-slug confirmation.
+        "safety_check_runs_unconditionally": True,
+    },
+}
+
+# Map each question_id's option-domain value → resolver result-domain
+RESULT_MAP: dict[tuple[str, str], str] = {
+    ("workflow.audit_to_amend", "ask"):             "ask",
+    ("workflow.audit_to_amend", "amend"):           "skip",  # user wants auto-amend → skip the prompt
+    ("workflow.audit_to_amend", "stop"):            "skip",  # user wants auto-stop → also skip the prompt
+    ("workflow.slug_confirm",   "ask"):             "ask",
+    ("workflow.slug_confirm",   "auto_accept"):     "skip",
+    ("workflow.slug_confirm",   "recommend_derived"): "prefill",
+}
+
+# ---------------------------------------------------------------------------
+# Startup guards — run at module load; raise SystemExit(2) on violation
+# ---------------------------------------------------------------------------
+
+def _run_startup_guards() -> None:
+    """Validate internal registry consistency at module load."""
+    # Guard 1: every question_id must have a corresponding VALIDATORS entry
+    for qid in QUESTION_IDS:
+        if qid not in VALIDATORS:
+            raise SystemExit(
+                f"[config] startup guard failed: QUESTION_IDS key {qid!r} "
+                "is not present in VALIDATORS — add it before shipping"
+            )
+
+    # Guard 2: every question_id must have a non-null skill_default
+    for qid, meta in QUESTION_IDS.items():
+        if meta.get("skill_default") is None:
+            raise SystemExit(
+                f"[config] startup guard failed: QUESTION_IDS[{qid!r}]['skill_default'] "
+                "is None — every question_id requires a presentation default"
+            )
+
+    # Guard 3: every choice referenced in RESULT_MAP must be a valid choice in QUESTION_IDS
+    for (qid, choice), result in RESULT_MAP.items():
+        if qid not in QUESTION_IDS:
+            raise SystemExit(
+                f"[config] startup guard failed: RESULT_MAP references question_id "
+                f"{qid!r} which is not in QUESTION_IDS"
+            )
+        if choice not in QUESTION_IDS[qid]["choices"]:
+            raise SystemExit(
+                f"[config] startup guard failed: RESULT_MAP[({qid!r}, {choice!r})] "
+                f"references choice {choice!r} which is not in "
+                f"QUESTION_IDS[{qid!r}]['choices'] = {QUESTION_IDS[qid]['choices']!r}"
+            )
+
+
+_run_startup_guards()
 
 # Valid event kinds for should-notify
 _NOTIFY_EVENTS: set = {"approval", "phase_end", "error"}
@@ -162,11 +255,19 @@ def _global_config_path() -> Path:
     return Path(xdg) / "z-harness" / "config.toml"
 
 
-def _repo_config_path() -> Path:
+def _repo_config_path(require_exists: bool = True) -> Path:
+    """
+    Return the repo-local config path.
+
+    When ``require_exists`` is True (the default, used by readers), exits 2 if
+    ``Z_HARNESS_REPO_CONFIG`` is set but the path does not yet exist.
+    When ``require_exists`` is False (used by writers), returns the path even if
+    the file does not exist yet.
+    """
     repo_env = os.environ.get("Z_HARNESS_REPO_CONFIG", "")
     if repo_env:
         p = Path(repo_env)
-        if not p.exists():
+        if require_exists and not p.exists():
             print(
                 f"[config] Z_HARNESS_REPO_CONFIG={repo_env!r} does not exist",
                 file=sys.stderr,
@@ -486,6 +587,703 @@ def cmd_explain(args: list[str]) -> None:
     print(f'{key} = "{val}"   (source: {src})')
 
 
+def cmd_list_question_ids(args: list[str]) -> None:
+    """Print a sorted JSON array of registered question IDs to stdout."""
+    print(json.dumps(sorted(QUESTION_IDS.keys())))
+
+
+# ---------------------------------------------------------------------------
+# resolve-question subcommand
+# ---------------------------------------------------------------------------
+
+def _emit_askuser_resolved(
+    question_id: str,
+    result: str,
+    source: str,
+    strength: str,
+) -> None:
+    """
+    Emit an askuser_resolved event via log-event.sh.
+    Non-fatal: silently skips if Z_HARNESS_RUN is unset or log-event.sh unavailable.
+    """
+    run_id = os.environ.get("Z_HARNESS_RUN", "")
+    if not run_id:
+        return
+
+    script_dir = Path(__file__).parent
+    log_event = script_dir / "log-event.sh"
+    if not log_event.exists() or not shutil.which("bash"):
+        return
+
+    payload = json.dumps({
+        "question_id": question_id,
+        "result": result,
+        "source": source,
+        "strength": strength,
+    })
+    try:
+        subprocess.run(
+            ["bash", str(log_event), run_id, "askuser_resolved", payload],
+            check=False,
+            capture_output=True,
+        )
+    except OSError:
+        pass  # non-fatal — observability is best-effort
+
+
+def _get_project_root() -> str:
+    """
+    Return the current project root for memory scope filtering.
+
+    Priority:
+      1. Z_HARNESS_PROJECT_ROOT env var
+      2. git rev-parse --show-toplevel
+      3. Empty string (treat all memories as scope=global matches when outside a git repo)
+    """
+    project_root = os.environ.get("Z_HARNESS_PROJECT_ROOT", "")
+    if project_root:
+        return project_root
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, check=True,
+        )
+        return result.stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return ""
+
+
+def _emit_routing_preference_malformed(location: str, index: int, reason: str) -> None:
+    """
+    Emit a routing_preference_malformed event via log-event.sh.
+    Non-fatal: silently skips if Z_HARNESS_RUN is unset or log-event.sh unavailable.
+    """
+    run_id = os.environ.get("Z_HARNESS_RUN", "")
+    if not run_id:
+        print(
+            f"[config] routing_preference_malformed: {location}[{index}]: {reason}",
+            file=sys.stderr,
+        )
+        return
+
+    script_dir = Path(__file__).parent
+    log_event = script_dir / "log-event.sh"
+    if not log_event.exists() or not shutil.which("bash"):
+        print(
+            f"[config] routing_preference_malformed: {location}[{index}]: {reason}",
+            file=sys.stderr,
+        )
+        return
+
+    payload = json.dumps({
+        "location": location,
+        "index": index,
+        "reason": reason,
+    })
+    try:
+        subprocess.run(
+            ["bash", str(log_event), run_id, "routing_preference_malformed", payload],
+            check=False,
+            capture_output=True,
+        )
+    except OSError:
+        pass  # non-fatal — observability is best-effort
+    print(
+        f"[config] routing_preference_malformed: {location}[{index}]: {reason}",
+        file=sys.stderr,
+    )
+
+
+# Required fields for a routing-preference memory entry
+_ROUTING_PREF_REQUIRED_FIELDS = {"type", "question_id", "value", "scope", "strength"}
+
+
+def _load_memory_matches(question_id: str, project_root: str) -> list[dict]:
+    """
+    Walk docs/llm/*.json (skipping INDEX.json), filter memories[] for
+    type=routing-preference matching question_id, respect scope.
+
+    Returns list of dicts: {value, strength, location, scope}
+    Malformed entries are logged via _emit_routing_preference_malformed and skipped.
+
+    NOTE: docs_dir is resolved relative to the harness repo (where config.py lives),
+    not relative to project_root. project_root is only used for scope filtering.
+    """
+    # Resolve docs/llm relative to the harness repo root (parent of scripts/)
+    harness_root = Path(__file__).parent.parent
+    docs_dir = harness_root / "docs" / "llm"
+    if not docs_dir.is_dir():
+        # Fallback to CWD-based resolution for non-standard layouts
+        docs_dir = Path.cwd() / "docs" / "llm"
+
+    if not docs_dir.is_dir():
+        return []
+
+    matches = []
+    for json_path in sorted(docs_dir.glob("*.json")):
+        if json_path.name == "INDEX.json":
+            continue
+
+        try:
+            with open(json_path, "rb") as fh:
+                data = json.load(fh)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(
+                f"[config] skipping {json_path}: {exc}",
+                file=sys.stderr,
+            )
+            continue
+
+        memories = data.get("memories", [])
+        if not isinstance(memories, list):
+            continue
+
+        for idx, entry in enumerate(memories):
+            if not isinstance(entry, dict):
+                _emit_routing_preference_malformed(str(json_path), idx, "entry is not a dict")
+                continue
+
+            if entry.get("type") != "routing-preference":
+                continue
+
+            # Validate required fields
+            missing = _ROUTING_PREF_REQUIRED_FIELDS - set(entry.keys())
+            if missing:
+                _emit_routing_preference_malformed(
+                    str(json_path), idx, f"missing required fields: {sorted(missing)}"
+                )
+                continue
+
+            if entry["question_id"] != question_id:
+                continue
+
+            # Validate strength field
+            strength = entry["strength"]
+            if strength not in {"weak", "strong", "very_strong"}:
+                _emit_routing_preference_malformed(
+                    str(json_path), idx,
+                    f"invalid strength {strength!r}; allowed: weak, strong, very_strong"
+                )
+                continue
+
+            # Validate value field
+            qmeta = QUESTION_IDS.get(question_id)
+            if qmeta and entry["value"] not in qmeta["choices"]:
+                _emit_routing_preference_malformed(
+                    str(json_path), idx,
+                    f"invalid value {entry['value']!r} for question_id {question_id!r}"
+                )
+                continue
+
+            # Respect scope
+            scope = entry["scope"]
+            if scope == "global":
+                pass  # always included
+            elif scope == "project":
+                entry_project_root = entry.get("project_root", "")
+                if not project_root:
+                    # Outside a git repo: treat all as global (edge case per SPEC)
+                    pass
+                elif entry_project_root != project_root:
+                    continue  # doesn't match current project
+            else:
+                _emit_routing_preference_malformed(
+                    str(json_path), idx, f"invalid scope {scope!r}; allowed: global, project"
+                )
+                continue
+
+            matches.append({
+                "value": entry["value"],
+                "strength": strength,
+                "location": str(json_path),
+                "scope": scope,
+            })
+
+    return matches
+
+
+# Strength ordering for "highest strength wins"
+_STRENGTH_ORDER = {"very_strong": 3, "strong": 2, "weak": 1}
+
+
+def _resolve_memory_matches(
+    matches: list[dict],
+) -> tuple[str | None, str | None, list[dict]]:
+    """
+    Given a list of memory match dicts, return (value, strength, sources).
+
+    - No matches → (None, None, [])
+    - One match → (value, strength, [source])
+    - Multiple agreeing → highest strength wins → (value, strength, all_sources)
+    - Multiple disagreeing → (None, "conflict", all_sources) signals conflict
+    """
+    if not matches:
+        return None, None, []
+
+    # Gather all unique values
+    values_seen = {m["value"] for m in matches}
+
+    sources = [
+        {
+            "kind": "memory",
+            "value": m["value"],
+            "location": m["location"],
+            "strength": m["strength"],
+        }
+        for m in matches
+    ]
+
+    if len(values_seen) == 1:
+        # All agree — pick highest strength
+        best = max(matches, key=lambda m: _STRENGTH_ORDER.get(m["strength"], 0))
+        return best["value"], best["strength"], sources
+
+    # Disagreeing
+    return None, "conflict", sources
+
+
+def cmd_resolve_question(args: list[str]) -> None:
+    """
+    resolve-question <question_id> [--scope-slug <slug>] [--explain]
+
+    Returns a JSON envelope to stdout. All diagnostics go to stderr.
+    Exit codes: 0=ok, 2=bad invocation, 3=unknown question_id, 4=I/O error.
+    """
+    if not args:
+        print("usage: config.py resolve-question <question_id> [--scope-slug <slug>] [--explain]",
+              file=sys.stderr)
+        sys.exit(2)
+
+    # Parse positional + optional args
+    question_id: str = ""
+    explain: bool = False
+    i = 0
+    while i < len(args):
+        if args[i] == "--explain":
+            explain = True
+            i += 1
+        elif args[i] == "--scope-slug":
+            # Consume the slug value (not used by the resolver itself — scope is
+            # determined by Z_HARNESS_PROJECT_ROOT / git-toplevel, not slug name)
+            i += 2
+        elif args[i].startswith("--"):
+            print(f"[config] unknown flag {args[i]!r}", file=sys.stderr)
+            sys.exit(2)
+        elif not question_id:
+            question_id = args[i]
+            i += 1
+        else:
+            print(f"[config] unexpected argument {args[i]!r}", file=sys.stderr)
+            sys.exit(2)
+
+    if not question_id:
+        print("usage: config.py resolve-question <question_id> [--scope-slug <slug>] [--explain]",
+              file=sys.stderr)
+        sys.exit(2)
+
+    # Check Z_HARNESS_EXPLAIN_RESOLUTION
+    if os.environ.get("Z_HARNESS_EXPLAIN_RESOLUTION", "") == "1":
+        explain = True
+
+    # Step 1: Validate question_id
+    if question_id not in QUESTION_IDS:
+        envelope = {
+            "error": "unknown_question_id",
+            "known": sorted(QUESTION_IDS.keys()),
+        }
+        print(json.dumps(envelope))
+        sys.exit(3)
+
+    qmeta = QUESTION_IDS[question_id]
+    skill_default: str = qmeta["skill_default"]
+    config_key: str = qmeta["config_key"]
+
+    # Step 2: Honor Z_HARNESS_ASK_ALL=1 short-circuit
+    if os.environ.get("Z_HARNESS_ASK_ALL", "") == "1":
+        envelope = {
+            "result": "ask",
+            "default": skill_default,
+            "source": "override",
+            "rule_id": "Z_HARNESS_ASK_ALL",
+            "strength": "none",
+            "reason": "Z_HARNESS_ASK_ALL=1 forces ask for all questions",
+            "sources": [],
+        }
+        if explain:
+            print(
+                f"[explain] question_id={question_id} → Z_HARNESS_ASK_ALL=1 override → result=ask",
+                file=sys.stderr,
+            )
+        print(json.dumps(envelope))
+        _emit_askuser_resolved(question_id, "ask", "override", "none")
+        sys.exit(0)
+
+    # Step 3: Consult 4-layer config
+    try:
+        values, sources = load_config()
+    except SystemExit:
+        # load_config exits on I/O or schema errors; re-raise is the right path
+        raise
+    except OSError as exc:
+        envelope = {
+            "error": "io_error",
+            "message": str(exc),
+            "result": "ask",
+            "default": skill_default,
+            "source": "none",
+            "rule_id": config_key,
+            "strength": "none",
+            "reason": f"I/O error reading config: {exc}",
+            "sources": [],
+        }
+        print(str(exc), file=sys.stderr)
+        print(json.dumps(envelope))
+        sys.exit(4)
+
+    config_value: str = values.get(config_key, "ask")
+    config_source_label: str = sources.get(config_key, "defaults")
+
+    # Default value for this config key (the "ask" string means "no preference set")
+    default_config_value: str = "ask"
+    config_is_default: bool = config_value == default_config_value
+
+    # Steps 4-7: Consult memory (JSON walk over docs/llm/*.json)
+    project_root = _get_project_root()
+    memory_matches = _load_memory_matches(question_id, project_root)
+    mem_value, mem_strength, mem_sources = _resolve_memory_matches(memory_matches)
+
+    # Steps 8-11: Combine config + memory signals
+
+    # Case: no memory at all
+    if mem_value is None and mem_strength is None:
+        if config_is_default:
+            # No config preference, no memory → ask
+            envelope = {
+                "result": "ask",
+                "default": skill_default,
+                "source": "none",
+                "rule_id": config_key,
+                "strength": "none",
+                "reason": "No config preference set and no memory entries found",
+                "sources": [],
+            }
+            if explain:
+                print(
+                    f"[explain] question_id={question_id} → config=ask (default), "
+                    "no memory → result=ask",
+                    file=sys.stderr,
+                )
+            print(json.dumps(envelope))
+            _emit_askuser_resolved(question_id, "ask", "none", "none")
+            sys.exit(0)
+        else:
+            # Config has a non-default value, no memory → config wins (step 10 analog)
+            mapped_result = RESULT_MAP.get((question_id, config_value), "ask")
+            reason = (
+                f"config key {config_key!r} = {config_value!r} "
+                f"(source: {config_source_label}); no memory entries"
+            )
+            envelope = {
+                "result": mapped_result,
+                "default": skill_default,
+                "source": "config",
+                "rule_id": config_key,
+                "strength": "hard",
+                "reason": reason,
+                "sources": [],
+            }
+            if explain:
+                print(
+                    f"[explain] question_id={question_id} → config={config_value!r} at "
+                    f"{config_source_label} → result={mapped_result} (hard), no memory",
+                    file=sys.stderr,
+                )
+            print(json.dumps(envelope))
+            _emit_askuser_resolved(question_id, mapped_result, "config", "hard")
+            sys.exit(0)
+
+    # Case: memory conflict (multiple disagreeing entries)
+    if mem_strength == "conflict":
+        if config_is_default:
+            # Config has no opinion; memory alone is conflicted → ask, show memory sources
+            envelope = {
+                "result": "ask",
+                "default": skill_default,
+                "source": "conflict",
+                "rule_id": config_key,
+                "strength": "none",
+                "reason": "Memory entries disagree on value",
+                "sources": mem_sources,
+            }
+        else:
+            # Config has an opinion AND memory is internally conflicted → conflict
+            config_source_entry = {
+                "kind": "config",
+                "value": config_value,
+                "location": config_source_label,
+                "strength": "hard",
+            }
+            all_sources = [config_source_entry] + mem_sources
+            envelope = {
+                "result": "ask",
+                "default": skill_default,
+                "source": "conflict",
+                "rule_id": config_key,
+                "strength": "none",
+                "reason": "Config and memory entries disagree on value",
+                "sources": all_sources,
+            }
+        if explain:
+            print(
+                f"[explain] question_id={question_id} → memory conflict → result=ask",
+                file=sys.stderr,
+            )
+        print(json.dumps(envelope))
+        _emit_askuser_resolved(question_id, "ask", "conflict", "none")
+        sys.exit(0)
+
+    # At this point: mem_value is set (single or agreeing multiple memory entries)
+    # mem_strength is one of weak | strong | very_strong
+
+    if config_is_default:
+        # Step 8: Config is "ask" (default) AND memory exists → memory wins (no conflict)
+        # Derive result from memory strength
+        if mem_strength == "very_strong":
+            mem_result = "skip"
+        else:
+            # strong or weak → prefill
+            mem_result = "prefill"
+
+        envelope = {
+            "result": mem_result,
+            "default": skill_default,
+            "source": "memory",
+            "rule_id": config_key,
+            "strength": mem_strength,
+            "reason": (
+                f"Memory routing-preference: question_id={question_id!r}, "
+                f"value={mem_value!r}, strength={mem_strength!r}"
+            ),
+            "sources": mem_sources,
+        }
+        if explain:
+            print(
+                f"[explain] question_id={question_id} → config=ask (default), "
+                f"memory={mem_value!r} ({mem_strength}) → result={mem_result}",
+                file=sys.stderr,
+            )
+        print(json.dumps(envelope))
+        _emit_askuser_resolved(question_id, mem_result, "memory", mem_strength)
+        sys.exit(0)
+
+    # Config is non-default AND memory exists
+    # Check if they agree: translate config value to result-domain then compare mem_value
+    # "Agreement" means memory's value == config's value (both are in the option-domain)
+    if mem_value == config_value:
+        # Step 10: Config and memory agree → config wins, no conflict
+        mapped_result = RESULT_MAP.get((question_id, config_value), "ask")
+        envelope = {
+            "result": mapped_result,
+            "default": skill_default,
+            "source": "config",
+            "rule_id": config_key,
+            "strength": "hard",
+            "reason": (
+                f"Config and memory agree: {config_key!r} = {config_value!r} "
+                f"(config source: {config_source_label})"
+            ),
+            "sources": [],
+        }
+        if explain:
+            print(
+                f"[explain] question_id={question_id} → config={config_value!r} and "
+                f"memory={mem_value!r} agree → result={mapped_result} (config wins)",
+                file=sys.stderr,
+            )
+        print(json.dumps(envelope))
+        _emit_askuser_resolved(question_id, mapped_result, "config", "hard")
+        sys.exit(0)
+
+    # Step 9: Config is non-default AND memory disagrees → conflict tier
+    config_source_entry = {
+        "kind": "config",
+        "value": config_value,
+        "location": config_source_label,
+        "strength": "hard",
+    }
+    all_sources = [config_source_entry] + mem_sources
+    envelope = {
+        "result": "ask",
+        "default": skill_default,
+        "source": "conflict",
+        "rule_id": config_key,
+        "strength": "none",
+        "reason": (
+            f"Config says {config_value!r} but memory says {mem_value!r}; "
+            "showing both — resolve the conflict"
+        ),
+        "sources": all_sources,
+    }
+    if explain:
+        print(
+            f"[explain] question_id={question_id} → config={config_value!r} "
+            f"vs memory={mem_value!r} → conflict → result=ask",
+            file=sys.stderr,
+        )
+    print(json.dumps(envelope))
+    _emit_askuser_resolved(question_id, "ask", "conflict", "none")
+    sys.exit(0)
+
+
+def _toml_write(path: Path, data: dict) -> None:
+    """
+    Write ``data`` to ``path`` atomically via tmp+rename.
+
+    Supports the two-level flat schema used by z-harness config:
+      schema_version = 1
+
+      [section]
+      key = "value"
+
+    Only handles str values at the section level; schema_version is always int.
+    Raises OSError if the write fails (caller handles exit 4).
+    """
+    lines: list[str] = []
+    # Write top-level scalars first (only schema_version in practice)
+    for k, v in data.items():
+        if not isinstance(v, dict):
+            if isinstance(v, str):
+                lines.append(f'{k} = "{v}"\n')
+            elif isinstance(v, bool):
+                lines.append(f'{k} = {"true" if v else "false"}\n')
+            else:
+                lines.append(f"{k} = {v}\n")
+
+    # Write each section
+    for section, sv in data.items():
+        if not isinstance(sv, dict):
+            continue
+        lines.append(f"\n[{section}]\n")
+        for sk, sv2 in sv.items():
+            if isinstance(sv2, str):
+                lines.append(f'{sk} = "{sv2}"\n')
+            elif isinstance(sv2, bool):
+                lines.append(f'{sk} = {"true" if sv2 else "false"}\n')
+            else:
+                lines.append(f"{sk} = {sv2}\n")
+
+    content = "".join(lines)
+    parent = path.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    # Write to a temp file in the same directory, then atomically rename
+    fd, tmp_path = tempfile.mkstemp(dir=parent, suffix=".toml.tmp")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(content)
+        os.replace(tmp_path, path)
+    except OSError:
+        # Clean up temp file if rename failed
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def cmd_set(args: list[str]) -> None:
+    """
+    set <key> <value> [--scope=global|project]
+
+    Validates <key> against _KEY_RE and VALIDATORS[<key>], then atomically
+    writes the value to the target TOML file via tmp+rename.
+    Preserves all other existing keys (read-modify-write).
+    Exit 0 on success, 2 on validation failure, 4 on I/O error.
+    """
+    scope = "project"
+    positional: list[str] = []
+
+    for arg in args:
+        if arg.startswith("--scope="):
+            scope = arg[len("--scope="):]
+        elif arg.startswith("--"):
+            print(f"[config] unknown flag {arg!r}", file=sys.stderr)
+            sys.exit(2)
+        else:
+            positional.append(arg)
+
+    if len(positional) != 2:
+        print("usage: config.py set <key> <value> [--scope=global|project]", file=sys.stderr)
+        sys.exit(2)
+
+    key, value = positional
+
+    if scope not in {"global", "project"}:
+        print(
+            f"[config] invalid scope {scope!r}; allowed: global, project",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    # Validate key format
+    if not _KEY_RE.match(key):
+        print(
+            f"[config] key {key!r} does not match required format "
+            r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    # Validate key is known (exists in VALIDATORS)
+    if key not in VALIDATORS:
+        valid_keys = _valid_user_keys()
+        print(
+            f"[config] unknown key {key!r}; valid keys: {valid_keys}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    # Validate value against VALIDATORS
+    allowed = VALIDATORS[key]
+    if callable(allowed):
+        valid = allowed(value)
+    else:
+        valid = value in allowed
+    if not valid:
+        print(
+            f"[config] invalid value for {key!r}: {value!r} — allowed: {sorted(allowed)}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    # Resolve target path; writers pass require_exists=False to allow creating new files
+    if scope == "global":
+        target_path = _global_config_path()
+    else:
+        target_path = _repo_config_path(require_exists=False)
+
+    # Read-modify-write: load existing data or start from scratch
+    existing = _load_toml(target_path)
+    if existing is None:
+        data: dict = {"schema_version": 1}
+    else:
+        data = dict(existing)
+
+    # Mutate the target key
+    section, subkey = key.split(".", 1)
+    if section not in data or not isinstance(data[section], dict):
+        data[section] = {}
+    else:
+        data[section] = dict(data[section])
+    data[section][subkey] = value
+
+    # Atomic write
+    try:
+        _toml_write(target_path, data)
+    except OSError as exc:
+        print(f"[config] cannot write {target_path}: {exc}", file=sys.stderr)
+        sys.exit(4)
+
+
 def cmd_should_notify(args: list[str]) -> None:
     # Parse --event <kind>
     if len(args) != 2 or args[0] != "--event":
@@ -524,7 +1322,8 @@ def cmd_should_notify(args: list[str]) -> None:
 def main() -> None:
     if len(sys.argv) < 2:
         print(
-            "usage: config.py <get|export-env|ensure-defaults|explain|should-notify> [args...]",
+            "usage: config.py <get|export-env|ensure-defaults|explain|should-notify"
+            "|list-question-ids|resolve-question|set> [args...]",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -542,10 +1341,17 @@ def main() -> None:
         cmd_explain(args)
     elif subcommand == "should-notify":
         cmd_should_notify(args)
+    elif subcommand == "list-question-ids":
+        cmd_list_question_ids(args)
+    elif subcommand == "resolve-question":
+        cmd_resolve_question(args)
+    elif subcommand == "set":
+        cmd_set(args)
     else:
         print(
             f"[config] unknown subcommand {subcommand!r}; "
-            "valid: get, export-env, ensure-defaults, explain, should-notify",
+            "valid: get, export-env, ensure-defaults, explain, should-notify, "
+            "list-question-ids, resolve-question, set",
             file=sys.stderr,
         )
         sys.exit(2)

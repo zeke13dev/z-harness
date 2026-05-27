@@ -16,3 +16,6 @@
 {"ts":"2026-05-27T19:17:40Z","run":"orchestration","kind":"run_end","status":"halted","tasks_done":7,"tasks_pending":9,"reason":"meta_defect_requires_user_decision"}
 {"ts":"2026-05-27T19:19:36Z","run":"20260527T191936Z-impl-batch4","kind":"run_start","batch":4}
 {"ts":"2026-05-27T19:53:29Z","run":"orchestration","kind":"run_end","status":"complete","tasks_done":16,"tasks_pending":0}
+{"ts":"2026-05-27T22:30:32Z","run":"orchestration","kind":"run_end","status":"halted_for_compact","tasks_done":3,"tasks_pending":13,"reason":"end_of_session_clean_break"}
+{"ts":"2026-05-27T22:37:18Z","run":"orchestration","kind":"run_end","slug":"askuser-prefs-hook","status":"complete","tasks_done":14,"tasks_skipped":0}
+{"ts":"2026-05-27T22:58:47Z","run":"orchestration","kind":"run_end","status":"complete","tasks_done":16,"tasks_pending":0}

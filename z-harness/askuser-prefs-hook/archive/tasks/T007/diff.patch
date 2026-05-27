@@ -1,0 +1,262 @@
+diff --git a/skills/z-suggest-memory/SKILL.md b/skills/z-suggest-memory/SKILL.md
+index 9d25fe9..6f666bc 100644
+--- a/skills/z-suggest-memory/SKILL.md
++++ b/skills/z-suggest-memory/SKILL.md
+@@ -1,7 +1,7 @@
+ ---
+ name: z-suggest-memory
+ description: Authoring skill for the docs/llm/ memory layer. Called mandatorily from /z-debug post-mortem and /z-improve retro. Validates input against the memory schema, writes to docs/llm/<slug>.json, regenerates docs/llm/MEMORIES-FLAT.md, optionally extracts into docs/human/<slug>.md.
+-argument-hint: [--concept <slug>] [--concept-hints <slug>,<slug>] [--source <prefix:ref>] [--edit <slug> <index>] [--delete <slug> <index>] [--dry-run] [--no-refresh-human] [--from-candidate-json <path|-]
++argument-hint: [--concept <slug>] [--concept-hints <slug>,<slug>] [--source <prefix:ref>] [--edit <slug> <index>] [--delete <slug> <index>] [--dry-run] [--no-refresh-human] [--from-candidate-json <path|-] [--kind routing-preference --question-id <id> --value <v> --strength <weak|strong|very_strong> --scope <global|project> [--reason <text>]]
+ ---
+ 
+ You are running **z-harness `/z-suggest-memory`**. Goal: author one memory entry into `docs/llm/<slug>.json`, regenerate `docs/llm/MEMORIES-FLAT.md`, and optionally refresh the human-tier doc.
+@@ -90,16 +90,141 @@ Parse `$ARGUMENTS` to extract:
+ - `--dry-run` — print the patch but skip the actual write in all modes.
+ - `--no-refresh-human` — skip Phase 7 (human-tier refresh).
+ - `--from-candidate-json <path>` — path to a JSON file containing a single candidate object (use `-` to read from stdin). When present, Phases 3a–3f are bypassed; the candidate object supplies `type`, `text`, `tags`, and optionally `expires` (via `review_after`). `suggested_concept_slug` is used as `--concept` if `--concept` was not also passed. `evidence_citations` are stored in the memory object's `evidence` field. `candidate_kind` is stored in the memory object's `candidate_kind` field for future analytics but does not affect validation. `rationale` is discarded. Date defaults to today unless `--date` was also passed. Phase 4 validation, Phase 5 atomic write, and Phase 6 MEMORIES-FLAT.md regeneration still run.
++- `--kind routing-preference` — activates the **routing-preference mode** (see below). Must be accompanied by `--question-id`, `--value`, `--strength`, and `--scope`. Optional `--reason`. Mutually exclusive with `--edit`, `--delete`, and `--from-candidate-json`.
++- `--question-id <id>` — the question_id to write a routing preference for (e.g. `workflow.audit_to_amend`). Required when `--kind routing-preference` is present.
++- `--value <v>` — the preferred answer value (e.g. `amend`). Required when `--kind routing-preference` is present.
++- `--strength <weak|strong|very_strong>` — signal strength of this preference. Required when `--kind routing-preference` is present.
++- `--scope <global|project>` — memory scope. Required when `--kind routing-preference` is present.
++- `--reason <text>` — optional one-line rationale for the preference (free text, no emojis, ≤ 200 chars).
+ 
+ If both `--edit` and `--delete` are present → reject immediately with `STATUS: bad_input` and a clear error message.
+ 
++If `--kind routing-preference` is present alongside `--edit`, `--delete`, or `--from-candidate-json` → reject immediately with `STATUS: bad_input` and a clear error message.
++
+ Mode determination:
++- `--kind routing-preference` present → **routing-preference mode** (see § Routing-preference mode).
+ - `--delete` present → **delete mode**.
+ - `--edit` present → **edit mode**.
+ - Neither → **append mode** (default).
+ 
+ In delete mode, jump directly to Phase 5 (Write) after resolving the target concept from the `--delete <slug>` argument — no collection needed.
+ 
++## Routing-preference mode
++
++When `--kind routing-preference` is present, this skill writes a structured routing-preference memory entry to `docs/llm/workflow.json` (global scope) or `docs/llm/workflow-<project-slug>.json` (project scope). Normal interactive collection (Phases 2–3) and normal concept-selection flows are **bypassed entirely**. The skill jumps: Phase 0 → Phase 1 → here → Phase 4 (validation) → Phase 5 (write) → Phase 6 (MEMORIES-FLAT.md regen) → Phase 7 (human-tier refresh, unless `--no-refresh-human`) → Phase 8 (return).
++
++### RP-1. Validate flags
++
++All four required flags must be present: `--question-id`, `--value`, `--strength`, `--scope`. If any is missing, return `STATUS: bad_input` with message `--kind routing-preference requires --question-id, --value, --strength, and --scope`.
++
++### RP-2. Validate `question_id`
++
++Run the `list-question-ids` subcommand to obtain the known set:
++
++```bash
++KNOWN_IDS="$(python3 scripts/config.py list-question-ids)"
++LISTQ_EXIT=$?
++```
++
++If the subprocess exits non-zero, return `STATUS: bad_input` with message `could not validate question_id: config.py list-question-ids failed (exit <N>)`.
++
++Parse `KNOWN_IDS` as a JSON array. If `--question-id <id>` is not in the array, return `STATUS: bad_input` with message `unknown question_id "<id>"; known: <KNOWN_IDS>`.
++
++### RP-3. Validate `strength`
++
++`--strength` must be one of: `weak`, `strong`, `very_strong`. If not, return `STATUS: bad_input` with message `strength "<v>" is not valid; must be one of: weak, strong, very_strong`.
++
++### RP-4. Validate `scope`
++
++`--scope` must be `global` or `project`. If not, return `STATUS: bad_input` with message `scope "<v>" is not valid; must be global or project`.
++
++### RP-5. Resolve target concept slug and project_root
++
++- **Global scope:** target slug = `workflow`. `project_root = null`.
++- **Project scope:** derive the project slug from `git rev-parse --show-toplevel`, then take the basename and slugify (lowercase, spaces and underscores to hyphens). Target slug = `workflow-<project-slug>`. `project_root` = the absolute path returned by `git rev-parse --show-toplevel`.
++
++  If `git rev-parse --show-toplevel` fails (not inside a git repo), return `STATUS: bad_input` with message `--scope project requires a git repo; git rev-parse --show-toplevel failed`.
++
++### RP-6. Ensure target file exists (create if missing)
++
++Check whether `docs/llm/<target-slug>.json` exists:
++
++```bash
++test -f docs/llm/<target-slug>.json
++```
++
++If it does **not** exist, create it now as a minimal stub and register it in `docs/llm/INDEX.json`:
++
++**Create `docs/llm/<target-slug>.json`:**
++
++```json
++{
++  "concept": "<target-slug>",
++  "last_updated": "<today-YYYY-MM-DD>",
++  "source_file": [],
++  "confidence": "low",
++  "entry_points": [],
++  "depends_on": [],
++  "consumed_by": [],
++  "invariants": [],
++  "gotchas": [],
++  "memories": []
++}
++```
++
++Write atomically (tmpfile + `os.replace()`).
++
++**Register in `docs/llm/INDEX.json`:** read the file, append an entry, write atomically:
++
++```json
++{
++  "slug": "<target-slug>",
++  "source_file": [],
++  "last_updated": "<today>",
++  "confidence": "low",
++  "depends_on": [],
++  "consumed_by": [],
++  "summary": "Routing preferences for workflow decisions."
++}
++```
++
++If `docs/llm/INDEX.json` cannot be read or written, return `STATUS: bad_input` with message `could not register concept in INDEX.json: <error>`.
++
++Also create a stub `docs/human/<target-slug>.md` if it does not exist:
++
++```markdown
++# <Title Case of target-slug>
++
++> Stub — routing preference memories for workflow decisions. Populated via /z-suggest-memory --kind routing-preference.
++```
++
++Write atomically. If this write fails, log a warning to stderr but do not abort — the llm-tier write is the critical one.
++
++### RP-7. Assemble memory entry
++
++```json
++{
++  "type": "routing-preference",
++  "question_id": "<question-id>",
++  "value": "<value>",
++  "scope": "<global|project>",
++  "strength": "<weak|strong|very_strong>",
++  "reason": "<reason or null>",
++  "date": "<today-YYYY-MM-DD>",
++  "project_root": "<abs-path or null>"
++}
++```
++
++Omit `reason` from the JSON object if `--reason` was not supplied (do not include `"reason": null`). Set `project_root` to null (omitted) for global scope; set to the absolute path for project scope.
++
++If `--dry-run` is active, print the assembled entry and target file path, then skip Phases 5–7 and return `STATUS: ok` (dry-run), `MEMORIES_WRITTEN: 0`.
++
++### RP-8. Proceed to Phase 5 (Write)
++
++The assembled entry is written via the **append mode** path in Phase 5 (read `docs/llm/<target-slug>.json`, push memory entry, atomic write). Then Phase 6 regenerates MEMORIES-FLAT.md, Phase 7 refreshes the human tier, and Phase 8 returns.
++
++The return shape uses `CONCEPT: <target-slug>` and `MEMORIES_WRITTEN: 1`.
++
+ ## Phase 2 — Resolve target concept
+ 
+ Skip this phase if `--concept <slug>` was provided (use that slug directly).
+@@ -207,7 +332,65 @@ After mapping, proceed directly to Phase 4 with the assembled fields.
+ 
+ Gather the four required memory fields interactively (one `AskUserQuestion` block is preferred over multiple round-trips; group what the UI allows):
+ 
+-### 3a. Type (enum chips)
++### 3a. Routing-flavored text detection (redirect gate)
++
++Before presenting type chips or collecting any text, check whether the user has already supplied candidate text (e.g. via a `--text` flag or pre-filled context). If candidate text is available, scan it for routing-flavored patterns:
++
++```python
++import re
++
++ROUTING_PATTERN = re.compile(
++    r'\b(always|usually|every time)\b.*\b(after|before|when)\b',
++    re.IGNORECASE
++)
++
++routing_match = bool(ROUTING_PATTERN.search(candidate_text)) if candidate_text else False
++```
++
++If `routing_match` is `True` **and** the candidate has no explicit `type` already set:
++
++Surface a one-shot `AskUserQuestion`:
++
++> **"This looks like a workflow preference. Write to `.z-harness/config.toml [workflow]` instead?"**
++>
++> Options:
++> - **yes-config** — Write to config (see instructions below).
++> - **write-as-routing-preference** — Write as a `routing-preference` memory entry.
++> - **write-as-lesson-learned** — Continue with the original write path (lesson-learned memory).
++
++**Branch on the user's choice:**
++
++**yes-config branch:**
++Gather the following via follow-up `AskUserQuestion` prompts:
++1. `key` — the `workflow.*` key to set (e.g. `workflow.audit_to_amend`). Must be a dot-prefixed key under `[workflow]`.
++2. `value` — the value to assign (free text; validated by `config.py set` downstream).
++3. `scope` — `global` or `project`.
++
++Then invoke (future-facing; `config.py set` is not yet shipped as of this writing — document the call for when it lands):
++
++```bash
++python3 scripts/config.py set <key> <value> [--scope=global|project]
++```
++
++Return `STATUS: ok` with `MEMORIES_WRITTEN: 0` and a note that the value was written to config. Do not proceed to memory write phases.
++
++**write-as-routing-preference branch:**
++Redirect into the `--kind routing-preference` flow. Gather the required flags interactively:
++1. `question_id` — the question_id to write a preference for (e.g. `workflow.audit_to_amend`). Present available IDs from `python3 scripts/config.py list-question-ids` as chips.
++2. `value` — the preferred answer value.
++3. `strength` — one of `weak`, `strong`, `very_strong`.
++4. `scope` — `global` or `project`.
++5. `reason` (optional) — one-line rationale.
++
++Once all flags are gathered, proceed as if invoked with `--kind routing-preference --question-id <id> --value <v> --strength <s> --scope <sc> [--reason <r>]` (jump to § Routing-preference mode → RP-1).
++
++**write-as-lesson-learned branch:**
++Continue with the original write path silently (proceed to Phase 3b below as normal).
++
++**Detection-fail or detection-irrelevant (no match, or candidate text not yet available):**
++Continue with Phase 3b silently. Do not surface the redirect question.
++
++### 3b. Type (enum chips)
+ 
+ Present chips for:
+ - `anti_pattern`
+@@ -219,14 +402,14 @@ Present chips for:
+ 
+ User must pick exactly one. No free-form type.
+ 
+-### 3b. Text
++### 3c. Text
+ 
+ Free-text input. Constraints (validated in Phase 4; show them inline in the question):
+ - ≤ 200 characters.
+ - No newlines (single line only).
+ - No emojis.
+ 
+-### 3c. Tags
++### 3d. Tags
+ 
+ Read `docs/llm/TAGS.txt` to obtain the controlled chip set. Parse section 1 (lines before the first blank separator line, ignoring `#` comments and blank lines within the section):
+ 
+@@ -248,7 +431,7 @@ If `TAGS.txt` is missing (Phase 0 bootstrap should have created it, but as a saf
+ 
+ Present the controlled set as multi-select chips (zero or more may be selected). Also allow free-form additional tags (comma-separated; each must be kebab-case). Free-form tags are accepted and written as-is; `/z-maintain-docs` dedup pass surfaces near-duplicates for human review later.
+ 
+-### 3d. Source
++### 3e. Source
+ 
+ If `--source <prefix:ref>` was supplied in Phase 1, use it (skip source collection).
+ 
+@@ -271,11 +454,11 @@ The `/z-implement-all` Phase 9 and `/z-review-all` Phase 7 review-agent passes s
+ If calling context is `/z-debug`, the source is pre-filled as `debug:<run-id>` (caller passes via `--source`).
+ If calling context is `/z-improve`, the source is pre-filled as `human_review:<username>` (caller passes via `--source`).
+ 
+-### 3e. Date
++### 3f. Date
+ 
+ Default to today (`YYYY-MM-DD`). Not editable by user during collection — always uses today. (Editable later via `--edit` if needed.)
+ 
+-### 3f. Expires (optional)
++### 3g. Expires (optional)
+ 
+ Offer an optional expiry date field (`YYYY-MM-DD`). Leave blank to omit the field. A future `/z-maintain-docs` pass will flag the memory when `expires < today`.
+ 

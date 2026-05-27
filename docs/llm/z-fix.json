@@ -21,7 +21,7 @@
     {"file": "commands/z-fix.md", "line": 283, "symbol": "Phase 10", "kind": "module", "summary": "Finalize: FIX.md status=shipped, fix_run_end log, /z-maintain-docs hint"},
     {"file": "commands/z-fix.md", "line": 307, "symbol": "Git history-rewrite safety", "kind": "const", "summary": "Doctrine: check git branch -r --contains before any reset/amend/rebase on upstream branch"}
   ],
-  "depends_on": ["agents", "scripts", "commands", "config-design"],
+  "depends_on": ["agents", "scripts", "commands", "config"],
   "consumed_by": ["commands"],
   "invariants": [
     "Phase 0 (wrong-tool gate) is non-skippable, even when $ARGUMENTS is non-empty",

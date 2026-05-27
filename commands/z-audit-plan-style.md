@@ -381,7 +381,36 @@ print(json.dumps({
 
 Send `PushNotification` (if policy ≠ `off`): "Plan-style audit complete: N findings surfaced (B BLOCKER / M MAJOR / m MINOR)."
 
-Present the summary and ask via `AskUserQuestion`:
+**Resolver pre-check — run before invoking `AskUserQuestion`:**
+
+```bash
+# Capture exit code separately — do NOT silence stderr
+RESOLVED="$(python3 scripts/config.py resolve-question workflow.audit_to_amend)"
+RESOLVE_EXIT=$?
+
+if [[ $RESOLVE_EXIT -ne 0 ]]; then
+  # Exit codes: 2=bad invocation, 3=unknown question_id, 4=I/O error.
+  # In all error cases, fall through to ask the user normally — never silently skip.
+  echo "resolve-question failed (exit $RESOLVE_EXIT); falling back to ask" >&2
+  RESULT="ask"; DEFAULT=""; SOURCE="error"
+else
+  RESULT="$(echo "$RESOLVED" | jq -r .result)"
+  DEFAULT="$(echo "$RESOLVED" | jq -r .default)"
+  SOURCE="$(echo "$RESOLVED" | jq -r .source)"
+fi
+```
+
+Branch on `$RESULT`:
+
+- **`skip`:** Skip the `AskUserQuestion` and proceed as if the user picked `$DEFAULT`. Emit `askuser_skipped` event:
+  ```bash
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" askuser_skipped \
+    "$(printf '{"question_id":"workflow.audit_to_amend","source":"%s"}' "$SOURCE")"
+  ```
+- **`prefill`:** Present the `AskUserQuestion` normally, pre-select `$DEFAULT` as the recommended option (append label suffix: ` (Recommended — your preference)`).
+- **`ask`:** Present the `AskUserQuestion` normally. If `$SOURCE == "conflict"`, add to the question header text: `(Note: config says <X>, memory says <Y> — your answer below will be offered as a conflict-resolution write target.)` After the user picks an answer, if that answer differs from both config and memory values, surface a one-shot follow-up `AskUserQuestion`: "Record your answer as the new preference? (config / memory:very_strong / memory:strong / no — keep both stored, ask again next time)". Caller writes to config or dispatches `/z-suggest-memory` accordingly.
+
+Present the summary and ask via `AskUserQuestion` (when resolver result is `prefill` or `ask`):
 - "Amend now (run `/z-amend --from z-harness/<SLUG>/PLAN_STYLE_AUDIT.md`)"
 - "Review and trim — I'll edit PLAN_STYLE_AUDIT.md first, then run /z-amend myself"
 - "Proceed as-is — findings acceptable, start implementation"
@@ -405,6 +434,103 @@ If `DISMISSAL_MATCHES >= 3`, append:
 ```
 Note: <N> finding(s) match prior dismissal patterns. Consider /z-style-init --amend to codify these preferences into STYLE.md so they are not raised again.
 ```
+
+---
+
+---
+
+## Phase 9 — Elevation Proposer
+
+After the user gate in Phase 5 resolves, run the preference elevation check:
+
+```bash
+PROPOSE_OUT="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/propose-prefs.py" --check z-audit-plan-style 2>/dev/null)"
+```
+
+If `$PROPOSE_OUT` is non-empty, parse it as JSON and surface a one-shot preference proposal:
+
+```python
+import json
+proposal = json.loads(PROPOSE_OUT)
+qid = proposal["question_id"]
+val = proposal["proposed_value"]
+n   = len(proposal["evidence"])
+scope_rec = proposal["scope_recommendation"]
+```
+
+Emit `proposal_surfaced`:
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" proposal_surfaced \
+  "$(python3 -c '
+import json, sys
+print(json.dumps({"question_id": sys.argv[1], "proposed_value": sys.argv[2], "n_evidence": int(sys.argv[3]), "scope_recommendation": sys.argv[4]}))
+' "$qid" "$val" "$n" "$scope_rec")"
+```
+
+Present a single `AskUserQuestion`:
+
+> "You've done `<cmd_a> → z-amend` **N times** — add `<val>` as your preference for `<qid>`?"
+>
+> Options:
+> - **config** — write to project config (or global if `scope_recommendation=global`)
+> - **memory:very_strong** — store as a very-strong routing-preference memory entry
+> - **memory:strong** — store as a strong routing-preference memory entry
+> - **no** — suppress this prompt for 30 days
+
+Branch on the user's choice:
+
+**`config` branch:**
+```bash
+SCOPE_FLAG="--scope=project"
+[ "$scope_rec" = "global" ] && SCOPE_FLAG="--scope=global"
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" set workflow.audit_to_amend amend $SCOPE_FLAG
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" proposal_accepted \
+  "$(printf '{"question_id":"%s","via":"config","scope":"%s"}' "$qid" "$scope_rec")"
+```
+
+**`memory:very_strong` or `memory:strong` branch:**
+
+Dispatch `/z-suggest-memory` with `--kind routing-preference`:
+```
+/z-suggest-memory --kind routing-preference \
+  --question-id <qid> \
+  --value <val> \
+  --strength <very_strong|strong> \
+  --scope <scope_recommendation>
+```
+
+Then emit:
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" proposal_accepted \
+  "$(printf '{"question_id":"%s","via":"memory","strength":"%s","scope":"%s"}' "$qid" "$strength" "$scope_rec")"
+```
+
+**`no` branch:**
+
+Write suppression entry with 30-day expiry:
+```python
+import json, os, time
+from pathlib import Path
+suppress_path = Path(".z-harness") / ".propose-suppress"
+suppress_path.parent.mkdir(parents=True, exist_ok=True)
+data = {}
+if suppress_path.exists():
+    try:
+        data = json.loads(suppress_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        data = {}
+expiry = time.time() + 30 * 86400
+data[qid] = str(expiry)
+suppress_path.write_text(json.dumps(data))
+```
+
+Then emit:
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" proposal_rejected \
+  "$(printf '{"question_id":"%s","suppressed_until_epoch":"%s"}' "$qid" "$expiry")"
+```
+
+If `$PROPOSE_OUT` is empty, skip this phase entirely — no question is asked.
 
 ---
 

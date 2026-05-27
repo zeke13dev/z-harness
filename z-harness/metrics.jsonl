@@ -990,3 +990,82 @@
 {"ts":"2026-05-27T19:54:31Z","run":"docs/scripts","kind":"doc_update_start","concept":"scripts","reason":"stale","mode":"write"}
 {"ts":"2026-05-27T19:56:29Z","run":"docs/scripts","kind":"doc_update_end","concept":"scripts","status":"ok","subagent_model":"sonnet","wall_ms":118061}
 {"ts":"2026-05-27T20:05:29Z","run":"docs","kind":"maintain_docs_end","mode":"write","updated":8,"deferred":0,"skipped":0}
+{"ts":"2026-05-27T20:11:35Z","run":"20260527T201122Z-review","kind":"review_all_start","z_harness_version":"4cba78e","z_harness_dirty":false,"z_harness_branch":"main","slug":"fanout-escalate-primitive"}
+{"ts":"2026-05-27T20:22:29Z","run":"20260527T201122Z-review","kind":"review_all_end","slug":"fanout-escalate-primitive","drift_findings":1,"spec_gap_findings":3,"user_action":"apply_both_amendments_and_ship"}
+{"ts":"2026-05-27T20:36:47Z","run":"docs","kind":"maintain_docs_start","z_harness_version":"4cba78e","z_harness_dirty":true,"z_harness_branch":"main","mode":"dry-run"}
+{"ts":"2026-05-27T20:40:16Z","run":"20260527T204016Z-askuser-prefs-hook","kind":"brainstorm_run_start","z_harness_version":"non-git","z_harness_dirty":false,"z_harness_branch":"none","topic":"explicit memory handling and a human-in-the-loop hook before AskUserQuestion that tries to resolve the question from stored preferences before asking. Example: \"I almost always amend after audit.\" Should it live in human-readable config, in memories, or both? Per-project or global? How does the hook decide if a stored signal is strong enough to skip the prompt?"}
+{"ts":"2026-05-27T20:46:24Z","run":"20260527T204200Z-askuser-prefs-hook","kind":"brainstorm_run_start","z_harness_version":"4cba78e","z_harness_dirty":true,"z_harness_branch":"main","topic":"explicit memory handling and a human-in-the-loop hook before AskUserQuestion"}
+{"ts":"2026-05-27T20:46:47Z","run":"20260527T204200Z-askuser-prefs-hook","kind":"phase_end","raw":""}
+{"ts":"2026-05-27T20:51:20Z","run":"docs","kind":"maintain_docs_end","mode":"apply","updated":2,"bumped":11,"deferred":0,"skipped":0}
+{"ts":"2026-05-27T20:52:06Z","run":"20260527T204200Z-askuser-prefs-hook","kind":"phase_end","phase":2,"name":"ideator-dispatch","wall_ms":0,"user_wait_ms":0}
+{"ts":"2026-05-27T20:53:56Z","run":"20260527T204200Z-askuser-prefs-hook","kind":"phase_end","phase":3,"name":"synthesis","wall_ms":0,"user_wait_ms":0}
+{"ts":"2026-05-27T20:56:46Z","run":"20260527T204016Z-askuser-prefs-hook","kind":"brainstorm_run_end","status":"complete","chosen_framing":"codex","ideators_failed":0}
+{"ts":"2026-05-27T21:03:29Z","run":"20260527T210329Z-askuser-prefs-hook","kind":"research_run_start","z_harness_version":"non-git","z_harness_dirty":false,"z_harness_branch":"none","question":"how do current z-harness AskUserQuestion call sites differ semantically \u2014 which are repeated routing-style prompts that the same user would answer the same way every time vs one-off scope decisions that genuinely vary per run? Enumerate every AskUserQuestion site across commands/ skills/ and agents/, classify each, and surface which sites would benefit from a stored-preference precheck hook."}
+{"ts":"2026-05-27T21:04:00Z","run":"20260527T210329Z-askuser-prefs-hook","kind":"cost_gate_decision","choice":"proceed"}
+{"ts":"2026-05-27T21:17:39Z","run":"20260527T210329Z-askuser-prefs-hook","kind":"research_temptation","location":"findings","removed_text":"draft asserted no AskUserQuestion gates audit-amend \u2014 Gemini correctly found z-audit-plan.md:183 and z-audit-plan-style.md:384 DO gate it"}
+{"ts":"2026-05-27T21:19:30Z","run":"20260527T210329Z-askuser-prefs-hook","kind":"research_run_end","slug":"askuser-prefs-hook","explore_calls":2,"explore_failures":0,"status":"complete"}
+{"ts":"2026-05-27T21:28:40Z","run":"20260527T212839Z-askuser-prefs-hook","kind":"run_start","z_harness_version":"non-git","z_harness_dirty":false,"z_harness_branch":"none","task":"askuser-prefs-hook \u2014 pre-AskUserQuestion preference resolver, scoped per the codex framing in BRAINSTORM.md and the audit\u2192amend leverage case identified in RESEARCH.md"}
+{"ts":"2026-05-27T21:38:38Z","run":"20260527T213837Z-rethink-z-research","kind":"brainstorm_run_start","slug":"rethink-z-research","z_harness_version":"477e990","z_harness_dirty":true,"z_harness_branch":"main","topic":"Redesign /z-research. Current /z-research = surface-level terrain map (parallel Explores + cross-LLM critique). User wanted \"/z-brainstorm on steroids\" \u2014 deep dive on HOW to do a topic, multiple agents doing parallel exploratory design/impl investigations, then synthesized. Brainstorm the right shape: (a) rename current /z-research to /z-map and free /z-research for deep-dive; (b) keep current /z-research, add new command (/z-deepdive? /z-investigate?); (c) make this a --deep mode on /z-brainstorm. Cover: naming, scope, relationship to existing /z-brainstorm + /z-research, what parallel deep-dive agents produce (RESEARCH.md? per-approach memo set?), where it fits between /z-brainstorm (framings) and /z-plan (SPEC)."}
+{"ts":"2026-05-27T21:52:22Z","run":"20260527T213837Z-rethink-z-research","kind":"brainstorm_run_end","status":"complete","chosen_framing":"restart","ideators_failed":0}
+{"ts":"2026-05-27T21:52:22Z","run":"20260527T215222Z-rethink-z-research","kind":"brainstorm_run_start","z_harness_version":"477e990","z_harness_dirty":true,"z_harness_branch":"main","topic":"REFINED: /z-research is a higher-order ORCHESTRATOR command, not a sibling. It composes /z-map (current /z-research renamed) and/or /z-brainstorm as sub-steps, then runs a deeper synthesis layer to produce a mega-brainstorm \u2014 richer than what /z-brainstorm alone makes. The deep dive is achieved by sequencing/dispatching the smaller tools, then layering meta-synthesis on top. Brainstorm: (1) what does /z-research dispatch and in what order \u2014 does it always run /z-map first, then /z-brainstorm, then synthesize? Or does it pick a sub-tool dynamically based on topic? (2) is the meta-synthesis layer a single Sonnet/Opus agent reasoning over both artifacts, or parallel synthesizers that vote? (3) does it consume an existing BRAINSTORM.md or always make its own? (4) what is the output artifact (RESEARCH.md vs MEGA-BRAINSTORM.md vs something new)? (5) cost tier \u2014 likely 3-6M tokens because it nests other commands. (6) naming impact: current /z-research becomes /z-map (rename accepted in this framing)."}
+{"ts":"2026-05-27T21:56:03Z","run":"20260527T212839Z-askuser-prefs-hook","kind":"run_end","slug":"askuser-prefs-hook","status":"complete","tasks":14}
+{"ts":"2026-05-27T21:57:33Z","run":"20260527T215222Z-rethink-z-research","kind":"brainstorm_run_end","status":"complete","chosen_framing":"codex","ideators_failed":0}
+{"ts":"2026-05-27T21:57:37Z","run":"orchestration","kind":"run_start","slug":"askuser-prefs-hook","z_harness_version":"non-git","z_harness_dirty":false,"z_harness_branch":"none"}
+{"ts":"2026-05-27T21:59:30Z","run":"20260527T215930Z-rethink-z-research","kind":"run_start","slug":"rethink-z-research","z_harness_version":"477e990","z_harness_dirty":true,"z_harness_branch":"main","task":"rethink-z-research per BRAINSTORM.md chosen_framing: codex. Rename /z-research \u2192 /z-map, build new /z-research as meta-orchestrator with adversarial synthesis panel, 10-section RESEARCH.md schema with approach decision matrix, hard No-new-design invariant, /z-plan one-way gate, 3-6M cost gate, 4 tripwires."}
+{"ts":"2026-05-27T22:20:43Z","run":"20260527T215930Z-rethink-z-research","kind":"run_end","status":"complete","tasks_total":16,"decisions_total":13,"decisions_consulted":5}
+{"ts":"2026-05-27T22:25:18Z","run":"orchestration","kind":"run_start","slug":"rethink-z-research","z_harness_version":"477e990","z_harness_dirty":true,"z_harness_branch":"main"}
+{"ts":"2026-05-27T22:25:18Z","run":"tasks/T001","kind":"task_start","slug":"rethink-z-research","id":"T001","attempt":1}
+{"ts":"2026-05-27T22:25:18Z","run":"tasks/T003","kind":"task_start","slug":"rethink-z-research","id":"T003","attempt":1}
+{"ts":"2026-05-27T22:25:19Z","run":"tasks/T004","kind":"task_start","slug":"rethink-z-research","id":"T004","attempt":1}
+{"ts":"2026-05-27T22:30:32Z","run":"tasks/T001","kind":"task_done","id":"T001","retries":0,"review_cycles":0,"reviewer_skipped":"end_of_session"}
+{"ts":"2026-05-27T22:30:32Z","run":"tasks/T003","kind":"task_done","id":"T003","retries":0,"review_cycles":0,"reviewer_skipped":"mechanical_rename"}
+{"ts":"2026-05-27T22:30:32Z","run":"tasks/T004","kind":"task_done","id":"T004","retries":0,"review_cycles":0,"reviewer_skipped":"mechanical_rename"}
+{"ts":"2026-05-27T22:30:32Z","run":"orchestration","kind":"run_end","status":"halted_for_compact","tasks_done":3,"tasks_pending":13,"reason":"end_of_session_clean_break"}
+{"ts":"2026-05-27T22:34:45Z","run":"orchestration","kind":"run_start","slug":"rethink-z-research","resume":true}
+{"ts":"2026-05-27T22:34:45Z","run":"tasks/T002","kind":"task_start","slug":"rethink-z-research","id":"T002","attempt":1}
+{"ts":"2026-05-27T22:34:46Z","run":"tasks/T006","kind":"task_start","slug":"rethink-z-research","id":"T006","attempt":1}
+{"ts":"2026-05-27T22:34:46Z","run":"tasks/T007","kind":"task_start","slug":"rethink-z-research","id":"T007","attempt":1}
+{"ts":"2026-05-27T22:36:59Z","run":"tasks/T002","kind":"task_done","id":"T002","retries":0,"review_cycles":0,"reviewer_skipped":"thorough_self_check"}
+{"ts":"2026-05-27T22:36:59Z","run":"tasks/T006","kind":"task_done","id":"T006","retries":0,"review_cycles":0,"reviewer_skipped":"thorough_self_check"}
+{"ts":"2026-05-27T22:36:59Z","run":"tasks/T007","kind":"task_done","id":"T007","retries":0,"review_cycles":0,"reviewer_skipped":"thorough_self_check"}
+{"ts":"2026-05-27T22:36:59Z","run":"tasks/T009","kind":"task_start","id":"T009","attempt":1}
+{"ts":"2026-05-27T22:36:59Z","run":"tasks/T011","kind":"task_start","id":"T011","attempt":1}
+{"ts":"2026-05-27T22:36:59Z","run":"tasks/T012","kind":"task_start","id":"T012","attempt":1}
+{"ts":"2026-05-27T22:37:18Z","run":"orchestration","kind":"run_end","slug":"askuser-prefs-hook","status":"complete","tasks_done":14,"tasks_skipped":0}
+{"ts":"2026-05-27T22:37:28Z","run":"tasks/T009","kind":"implement_start","id":"T009","retry":0}
+{"ts":"2026-05-27T22:39:09Z","run":"20260527T223909Z-review","kind":"review_all_start","slug":"askuser-prefs-hook","z_harness_version":"non-git","z_harness_dirty":false,"z_harness_branch":"none"}
+{"ts":"2026-05-27T22:42:02Z","run":"tasks/T009","kind":"implement_end","id":"T009","retry":0,"status":"ok","files_changed_count":1,"wall_ms":274276}
+{"ts":"2026-05-27T22:42:42Z","run":"tasks/T009","kind":"task_done","id":"T009","retries":0,"review_cycles":0}
+{"ts":"2026-05-27T22:42:42Z","run":"tasks/T011","kind":"task_done","id":"T011","retries":0,"review_cycles":0}
+{"ts":"2026-05-27T22:42:42Z","run":"tasks/T012","kind":"task_done","id":"T012","retries":0,"review_cycles":0}
+{"ts":"2026-05-27T22:42:42Z","run":"tasks/T005","kind":"task_start","id":"T005","attempt":1}
+{"ts":"2026-05-27T22:42:42Z","run":"tasks/T008","kind":"task_start","id":"T008","attempt":1}
+{"ts":"2026-05-27T22:42:43Z","run":"tasks/T010","kind":"task_start","id":"T010","attempt":1}
+{"ts":"2026-05-27T22:46:58Z","run":"tasks/T005","kind":"task_done","id":"T005","retries":0,"review_cycles":0}
+{"ts":"2026-05-27T22:46:58Z","run":"tasks/T008","kind":"task_done","id":"T008","retries":0,"review_cycles":0}
+{"ts":"2026-05-27T22:46:58Z","run":"tasks/T010","kind":"task_done","id":"T010","retries":0,"review_cycles":0}
+{"ts":"2026-05-27T22:46:58Z","run":"tasks/T013","kind":"task_start","id":"T013","attempt":1}
+{"ts":"2026-05-27T22:46:58Z","run":"tasks/T014","kind":"task_start","id":"T014","attempt":1}
+{"ts":"2026-05-27T22:49:23Z","run":"20260527T223909Z-review","kind":"review_all_end","slug":"askuser-prefs-hook","drift_findings":4,"spec_gap_findings":2,"user_action":"fix_blockers_plus_spec","minor_findings_deferred":3}
+{"ts":"2026-05-27T22:51:10Z","run":"tasks/T013","kind":"task_done","id":"T013","retries":0,"review_cycles":0}
+{"ts":"2026-05-27T22:51:10Z","run":"tasks/T014","kind":"task_done","id":"T014","retries":0,"review_cycles":0}
+{"ts":"2026-05-27T22:51:10Z","run":"tasks/T015","kind":"task_start","id":"T015","attempt":1}
+{"ts":"2026-05-27T22:53:50Z","run":"tasks/T015","kind":"task_done","id":"T015","retries":0,"review_cycles":0}
+{"ts":"2026-05-27T22:53:50Z","run":"tasks/T016","kind":"task_start","id":"T016","attempt":1}
+{"ts":"2026-05-27T22:53:51Z","run":"docs","kind":"maintain_docs_start","z_harness_version":"non-git","z_harness_dirty":false,"z_harness_branch":"none","mode":"dry-run"}
+{"ts":"2026-05-27T22:58:47Z","run":"tasks/T016","kind":"task_done","id":"T016","retries":0,"review_cycles":0}
+{"ts":"2026-05-27T22:58:47Z","run":"orchestration","kind":"run_end","status":"complete","tasks_done":16,"tasks_pending":0}
+{"ts":"2026-05-27T23:04:16Z","run":"20260527T230402Z-review","kind":"review_all_start","z_harness_version":"477e990","z_harness_dirty":true,"z_harness_branch":"main","slug":"rethink-z-research"}
+{"ts":"2026-05-27T23:11:37Z","run":"20260527T230402Z-review","kind":"review_all_end","slug":"rethink-z-research","drift_findings":6,"spec_gap_findings":3,"user_action":"apply_blockers_plus_majors_and_ship","blockers_fixed":2,"majors_fixed":1,"majors_false_positive":1}
+{"ts":"2026-05-27T23:18:09Z","run":"unknown","kind":"docs/scripts_end","concept":"scripts","status":"ok","subagent_model":"sonnet","wall_ms":1779923889072}
+{"ts":"2026-05-27T23:19:06Z","run":"docs/config","kind":"doc_update_start","concept":"config","reason":"init","mode":"write"}
+{"ts":"2026-05-27T23:22:23Z","run":"docs","kind":"maintain_docs_start","z_harness_version":"477e990","z_harness_dirty":true,"z_harness_branch":"main","mode":"apply"}
+{"ts":"2026-05-27T23:22:29Z","run":"docs/config","kind":"doc_update_end","concept":"config","status":"ok","subagent_model":"sonnet","wall_ms":202608}
+{"ts":"2026-05-27T23:22:51Z","run":"docs","kind":"maintain_docs_end","mode":"apply","updated":0,"bumped":3,"deferred":0,"skipped":0}
+{"ts":"2026-05-27T23:24:57Z","run":"docs","kind":"maintain_docs_end","mode":"apply","updated":5,"deferred":0,"skipped":0}
+{"ts":"2026-05-27T23:25:35Z","run":"20260527T232535Z-config-concept-merge","kind":"brainstorm_run_start","z_harness_version":"non-git","z_harness_dirty":false,"z_harness_branch":"none","topic":"docs/llm/INDEX.json has two concepts both covering scripts/config.py \u2014 config-design (slice-1 4-layer loader: get/export-env/should-notify/ensure-defaults/explain) and config (slice-2: workflow section, resolve-question, set, list-question-ids, routing-preference memory). They share source_file scripts/config.py + docs/human/config.md. Should they merge, stay split with cleaner non-overlapping source lists, or restructure differently? Consider doc-fetcher behavior, future slices, onboarding clarity."}
+{"ts":"2026-05-27T23:30:08Z","run":"20260527T232535Z-config-concept-merge","kind":"brainstorm_run_end","status":"complete","chosen_framing":"claude","ideators_failed":1}
+{"ts":"2026-05-27T23:34:47Z","run":"20260527T233447Z-config-concept-merge","kind":"run_start","z_harness_version":"non-git","z_harness_dirty":false,"z_harness_branch":"none","task":"config-concept-merge"}
+{"ts":"2026-05-27T23:41:12Z","run":"20260527T233447Z-config-concept-merge","kind":"run_end","status":"abandoned_premise","reason":"premise check redirected to /z-plan-light per user choice"}
+{"ts":"2026-05-27T23:41:44Z","run":"20260527T234144Z-config-concept-merge","kind":"light_run_start","slug":"config-concept-merge","z_harness_version":"non-git","z_harness_dirty":false,"z_harness_branch":"none","task":"config-concept-merge per Claude brainstorm framing"}
+{"ts":"2026-05-27T23:52:59Z","run":"20260527T234144Z-config-concept-merge","kind":"light_run_end","status":"shipped","files_changed":11,"review_cycles":1,"blockers":0,"majors":0}

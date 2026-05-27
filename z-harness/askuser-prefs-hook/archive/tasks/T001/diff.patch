@@ -1,0 +1,22 @@
+diff --git a/scripts/config.py b/scripts/config.py
+index af7e42c..bb15623 100755
+--- a/scripts/config.py
++++ b/scripts/config.py
+@@ -45,11 +45,17 @@ DEFAULTS: dict = {
+     "docs": {
+         "always_apply": "always",   # always | never
+     },
++    "workflow": {
++        "audit_to_amend": "ask",    # ask | amend | stop
++        "slug_confirm":   "ask",    # ask | auto_accept | recommend_derived
++    },
+ }
+ 
+ VALIDATORS: dict = {
+     "notify.level": {"off", "approval_only", "all"},
+     "docs.always_apply": {"always", "never"},
++    "workflow.audit_to_amend": {"ask", "amend", "stop"},
++    "workflow.slug_confirm":   {"ask", "auto_accept", "recommend_derived"},
+ }
+ 
+ META_KEYS: set = {"schema_version"}

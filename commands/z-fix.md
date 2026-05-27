@@ -15,7 +15,33 @@ This command is for **targeted fixes with a known diagnosis**. If at any phase y
 
 ## Setup
 
-1. **Derive slug** — short kebab-case like `fix-<short-description>` (e.g. "null pointer on login" → `fix-null-pointer-login`). Confirm via `AskUserQuestion` if non-obvious or might collide with an existing slug (`ls z-harness/` first).
+1. **Derive slug** — short kebab-case like `fix-<short-description>` (e.g. "null pointer on login" → `fix-null-pointer-login`). Check for an existing slug collision first (`ls z-harness/` to detect matching dirs). **If a collision is found, prompt the user via `AskUserQuestion` to confirm or choose a different slug. This collision check runs UNCONDITIONALLY and is never bypassed by the resolver below.**
+
+   After the collision check passes (no collision found, or the user confirmed a new slug), apply the soft non-obvious-slug confirmation gate:
+
+   ```bash
+   # Only reached after collision check has already passed.
+   RESOLVED="$(python3 scripts/config.py resolve-question workflow.slug_confirm)"
+   RESOLVE_EXIT=$?
+
+   if [[ $RESOLVE_EXIT -ne 0 ]]; then
+     # Exit codes: 2=bad invocation, 3=unknown question_id, 4=I/O error.
+     # In all error cases, fall through to ask the user normally — never silently skip.
+     echo "resolve-question failed (exit $RESOLVE_EXIT); falling back to ask" >&2
+     RESULT="ask"; DEFAULT=""; SOURCE="error"
+   else
+     RESULT="$(echo "$RESOLVED" | jq -r .result)"
+     DEFAULT="$(echo "$RESOLVED" | jq -r .default)"
+     SOURCE="$(echo "$RESOLVED" | jq -r .source)"
+   fi
+   ```
+
+   Branch on `$RESULT`:
+   - `skip`: accept the derived slug silently — no AskUserQuestion. Emit `askuser_skipped` event with `{question_id: "workflow.slug_confirm", source: "$SOURCE"}`.
+   - `prefill`: present the AskUserQuestion normally, pre-select the derived slug as the recommended option (label suffix: ` (Recommended — your preference)`).
+   - `ask`: if non-obvious, confirm via `AskUserQuestion` normally. If `$SOURCE == "conflict"`, add to the question header: `(Note: config says <X>, memory says <Y> — your answer below will be offered as a conflict-resolution write target.)` After the user picks an answer that differs from both stored values, surface a one-shot follow-up: "Record your answer as the new preference? (config / memory:very_strong / memory:strong / no)".
+
+   **Invariant:** the collision check above is a hard safety prerequisite that runs unconditionally regardless of resolver outcome. The resolver only governs the soft non-obvious-slug confirmation gate.
 2. Export `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")`.
 3. Pick run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`.
 4. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`.

@@ -1,13 +1,13 @@
 # Scripts
 
-> Last updated: 2026-05-26
-> Covers source: scripts/extract-dismissals.py, scripts/log-event.sh, scripts/log-phase.sh, scripts/regenerate-memories-flat.py, scripts/remote-sandbox-sync.sh, scripts/run-memory-review.sh, scripts/version.sh, scripts/config.py, scripts/config.sh, scripts/test_config.py, scripts/scope-probe-calibrate.py, scripts/CALIBRATION.md, scripts/test-scope-probe-calibrate.py
+> Last updated: 2026-05-27
+> Covers source: scripts/extract-dismissals.py, scripts/log-event.sh, scripts/log-phase.sh, scripts/regenerate-memories-flat.py, scripts/remote-sandbox-sync.sh, scripts/run-memory-review.sh, scripts/version.sh, scripts/config.py, scripts/config.sh, scripts/propose-prefs.py, scripts/test_config.py, scripts/scope-probe-calibrate.py, scripts/CALIBRATION.md, scripts/test-scope-probe-calibrate.py
 
 ## Overview
 
-The scripts concept covers the shell and Python utility scripts that form the operational backbone of the z-harness pipeline. They handle structured event telemetry (logging individual events and wrapping entire phases with start/end timing), memory document regeneration across all concept JSONs, plugin version introspection, the lifecycle gate logic for the memory-review agent, MR-review dismissal signature extraction across archived run snapshots, rsync-based remote sandbox synchronization, and the calibration harness for the scope-probe classifier. All scripts reside in the `scripts/` directory at the repository root and are invoked directly by commands, skills, and subagents rather than being imported as libraries.
+The scripts concept covers the shell and Python utility scripts that form the operational backbone of the z-harness pipeline. They handle structured event telemetry (logging individual events and wrapping entire phases with start/end timing), memory document regeneration across all concept JSONs, plugin version introspection, the lifecycle gate logic for the memory-review agent, MR-review dismissal signature extraction across archived run snapshots, rsync-based remote sandbox synchronization, and the calibration harness for the scope-probe classifier. The layered TOML config loader (`config.py`) has grown significantly: it now exposes `resolve-question`, `set`, and `list-question-ids` subcommands backed by a `QUESTION_IDS` registry, a `RESULT_MAP` lookup table, and startup guards that enforce registry consistency at module load. A new `propose-prefs.py` script detects repeated command-pair patterns in `metrics.jsonl` and emits a JSON proposal when a user's repetition count crosses a threshold.
 
-These scripts share a common dependency on `python3` — used for JSON serialization, millisecond-precision timing on macOS, and document generation — and on `git` — used to resolve the repository root, detect dirty state, and compute diffs. They honor the `Z_HARNESS_SLUG`, `Z_HARNESS_PLAN_DIR`, `ANTIGRAVITY_PLUGIN_ROOT`, `CLAUDE_PLUGIN_ROOT`, and `Z_HARNESS_PLUGIN_ROOT` environment variables to support both slug-namespaced and legacy flat plan layouts and to locate the plugin root across different host environments. `log-event.sh` sources `scripts/plan-path.sh` for canonical plan path resolution.
+These scripts share a common dependency on `python3` (used for JSON serialization, millisecond-precision timing on macOS, and document generation) and on `git` (used to resolve the repository root, detect dirty state, and compute diffs). They honor the `Z_HARNESS_SLUG`, `Z_HARNESS_PLAN_DIR`, `ANTIGRAVITY_PLUGIN_ROOT`, `CLAUDE_PLUGIN_ROOT`, and `Z_HARNESS_PLUGIN_ROOT` environment variables to support both slug-namespaced and legacy flat plan layouts and to locate the plugin root across different host environments. `log-event.sh` sources `scripts/plan-path.sh` for canonical plan path resolution.
 
 ## Key entry points
 
@@ -19,46 +19,52 @@ These scripts share a common dependency on `python3` — used for JSON serializa
 - `scripts/extract-dismissals.py:480` — `main` — CLI entry point; extracts dismissed MR-review or plan-style-audit finding signatures by comparing consecutive archived run snapshots; supports `--global` to scan all slugs and `--filename` to target alternate snapshot files (e.g. `PLAN_STYLE_AUDIT.md`); outputs `{"signatures": [...], "n_runs_scanned": N}` to stdout.
 - `scripts/extract-dismissals.py:384` — `extract_dismissals_from_runs` — Core pairwise algorithm: for each consecutive run pair (R_i, R_{i+1}), compares R_i snapshot against R_{i+1}'s `.previous-*` user-edited copy to identify dismissed findings.
 - `scripts/remote-sandbox-sync.sh:1` — `remote-sandbox-sync.sh` — Rsync the local working tree to a per-(slug, task-id) remote sandbox at `~/dev/qt-bot-sandbox/<slug>/<task-id>/`; invoked by the remote-runner agent before running cargo or qtctl on the remote host.
-- `scripts/config.py:1` — `config.py` — Layered TOML config loader (slice 1: `notify.level`, `docs.always_apply`). See `config-design` concept for deep docs.
-- `scripts/config.sh:1` — `config.sh` — Thin shell wrapper: `exec python3 scripts/config.py "$@"`. See `config-design` concept for deep docs.
-- `scripts/test_config.py:1` — `test_config.py` — End-to-end smoke-test suite for `config.py` using hermetic `XDG_CONFIG_HOME` temp dirs. See `config-design` concept for deep docs.
+- `scripts/config.py:1` — `config.py` — Layered TOML config loader with subcommands: `get`, `export-env`, `ensure-defaults`, `explain`, `should-notify`, `list-question-ids`, `resolve-question`, and `set`. The `QUESTION_IDS` registry is the single source of truth for question routing; `RESULT_MAP` maps `(question_id, option_value)` pairs to resolver result-domain values (`ask`, `skip`, `prefill`). Startup guards fire at module load and exit 2 if the registry is internally inconsistent.
+- `scripts/config.sh:1` — `config.sh` — Thin shell wrapper: `exec python3 scripts/config.py "$@"`. See `config` concept for deep docs.
+- `scripts/propose-prefs.py:1` — `propose-prefs.py` — Scans `metrics.jsonl` for repeated command-pair patterns (e.g., `z-audit-plan` always followed by `z-amend` within an hour on the same slug) and emits a single JSON proposal `{question_id, proposed_value, evidence, scope_recommendation}` to stdout when the repetition count reaches a threshold. Called with `--check <command-name>` at the end of certain commands. Never blocks or crashes the calling command (wraps main in a bare except that exits 0).
+- `scripts/test_config.py:1` — `test_config.py` — End-to-end smoke-test suite for `config.py` using hermetic `XDG_CONFIG_HOME` temp dirs. See `config` concept for deep docs.
 - `scripts/scope-probe-calibrate.py:373` — `main` — CLI entry point for the scope-probe calibration harness; walks `z-harness/*/archive/*/` runs that have `manifest.json`, computes ground-truth LIGHT/MEDIUM/HEAVY labels per CALIBRATION.md rubric_version 1, dispatches the scope-probe N times per run (or reads a fixture file in `--fixture-mode`), applies majority vote, prints a confusion matrix and tripwire report, and emits `scripts/calibration-epoch-<N>.json` atomically.
-- `scripts/scope-probe-calibrate.py:36` — `classify_ground_truth` — Implements the rubric_version 1 classification rule: HEAVY if any `escalation_*` event or `tasks_total >= 16`; LIGHT if `tasks_total <= 5` AND `tasks_complexity.high == 0` AND no `plan_route_decision` event; MEDIUM otherwise. This document is the normative spec; `CALIBRATION.md` is the human-readable canonical reference.
-- `scripts/CALIBRATION.md:1` — `CALIBRATION.md` — Human-readable canonical reference for the ground-truth classification rubric. When the Python implementation and this document conflict, this document wins. Defines HEAVY/LIGHT/MEDIUM rules, tie-break signal priority, epoch versioning policy, and manifest/events shape reference.
-- `scripts/test-scope-probe-calibrate.py:308` — `main` — Unit test runner for `scope-probe-calibrate.py`; loads the production module via `importlib` (bypassing the hyphenated filename), runs six test suites covering `classify_ground_truth`, confusion matrix, tripwire fire/no-fire, archive discovery, and majority vote; exits 0 on full pass, 1 on any failure.
+- `scripts/scope-probe-calibrate.py:36` — `classify_ground_truth` — Implements the rubric_version 1 classification rule: HEAVY if any `escalation_*` event or `tasks_total >= 16`; LIGHT if `tasks_total <= 5` AND `tasks_complexity.high == 0` AND no `plan_route_decision` event; MEDIUM otherwise.
+- `scripts/CALIBRATION.md:1` — `CALIBRATION.md` — Human-readable canonical reference for the ground-truth classification rubric. When the Python implementation and this document conflict, this document wins.
+- `scripts/test-scope-probe-calibrate.py:308` — `main` — Unit test runner for `scope-probe-calibrate.py`; loads the production module via `importlib` (bypassing the hyphenated filename), runs six test suites; exits 0 on full pass, 1 on any failure.
 
 ## How it interacts with others
 
-- `commands` — Every z-harness command that tracks execution time calls `log-phase.sh start`/`end`; `/z-plan`, `/z-implement-all`, `/z-implement-next`, `/z-review-all`, `/z-audit`, `/z-fix`, `/z-do`, `/z-uplift`, and `/z-maintain-docs` call `version.sh` and `log-event.sh` at run start and end events. `/z-mr-review` and `/z-audit-plan-style` call `extract-dismissals.py` to load prior dismissal signatures. `/z-style-init` calls `extract-dismissals.py --global` to seed a new reviewer with all known dismissals.
-- `skills` — `/z-implement-all`, `/z-review-all`, and `/z-debug` skills call `run-memory-review.sh` (via `mapfile`) to gate the memory-review subagent; the helper emits the `memory_review_terminal` telemetry event on all skip paths using a 4-state taxonomy.
+- `commands` — Every z-harness command that tracks execution time calls `log-phase.sh start`/`end`. `/z-plan`, `/z-implement-all`, `/z-implement-next`, `/z-review-all`, `/z-audit`, `/z-fix`, `/z-do`, `/z-uplift`, and `/z-maintain-docs` call `version.sh` and `log-event.sh` at run start/end events. `/z-mr-review` and `/z-audit-plan-style` call `extract-dismissals.py` to load prior dismissal signatures. `/z-style-init` calls `extract-dismissals.py --global` to seed a new reviewer. `/z-audit-plan`, `/z-audit-plan-style`, and `/z-amend` call `propose-prefs.py --check <command-name>` after execution. `/z-plan`, `/z-fix`, `/z-audit-plan`, `/z-audit-plan-style`, and `/z-uplift` call `config.py resolve-question` to determine whether to show or skip workflow confirmation prompts; `/z-audit-plan` also calls `config.py set` to apply accepted preference proposals.
+- `skills` — `/z-implement-all`, `/z-review-all`, and `/z-debug` skills call `run-memory-review.sh` (via `mapfile`) to gate the memory-review subagent. The `z-plan-light` skill calls `config.py resolve-question workflow.slug_confirm`. The `z-brainstorm`, `z-map`, `z-debug` skills call `config.py resolve-question workflow.slug_confirm`.
 - `agents` — The remote-runner agent calls `remote-sandbox-sync.sh` before executing cargo or qtctl on the remote host; the doc-updater agent calls `log-phase.sh` and `log-event.sh` for doc-update telemetry; the memory-review agent receives artifact paths from `run-memory-review.sh`.
 - `review-agent` — `run-memory-review.sh` is the dedicated lifecycle helper for the memory-review agent; on `STATUS: ready` it outputs five lines: the cumulative diff path, SPEC.md path (or empty if absent), TAGS.txt path, and (for `debug` parent only) the DEBUG.md path.
-- `config-design` — `config.py` and `config.sh` implement the layered TOML config system; deep documentation, invariants, and test coverage live in the `config-design` concept.
-- `scope-probe` (future) — `scope-probe-calibrate.py` is the calibration harness for the scope-probe classifier concept; the `dispatch_scope_probe_stub` currently returns MEDIUM as a placeholder until T009/T010/T014 integrate scope-probe as a real subprocess.
+- `config` — `config.py` and `config.sh` implement the layered TOML config system + workflow resolver; deep documentation, invariants, and test coverage live in the `config` concept.
+- `z-suggest-memory` — When a `resolve-question` result source is `memory` or `conflict`, the calling command may dispatch `/z-suggest-memory --kind routing-preference` to author or update routing-preference memory entries that `config.py resolve-question` reads via `_load_memory_matches`.
+- `scope-probe` (future) — `scope-probe-calibrate.py` is the calibration harness for the scope-probe classifier concept; `dispatch_scope_probe_stub` currently returns MEDIUM as a placeholder until T014 integrates scope-probe as a real subprocess.
 
 ## Edge cases / gotchas
 
-- `run-memory-review.sh` uses a 4-state terminal taxonomy in `memory_review_terminal` events: `skipped_broken_context` (missing args, no plan dir, tags file absent), `not_applicable` (empty diff, all tasks skipped, debug_md missing), `ready` (orchestrator path — no terminal event emitted by this script), and `dispatched` (owned by orchestrator after review-agent returns).
-- `run-memory-review.sh` accepts a mandatory second argument `parent_command` (`implement-all`, `review-all`, or `debug`). When `parent_command` is `debug`, an additional skip condition applies: if `DEBUG.md` is not readable in the plan base dir, the script exits with `STATUS: skipped debug_md_missing` and emits state `not_applicable`.
+- `config.py` startup guards run at module load time via `_run_startup_guards()`. They enforce: every key in `QUESTION_IDS` must exist in `VALIDATORS`; every `QUESTION_IDS` entry must have a non-null `skill_default`; every `(question_id, choice)` key in `RESULT_MAP` must reference a known question_id and a valid choice. Violations exit 2 immediately.
+- `config.py resolve-question` returns a JSON envelope with `result` in `{ask, skip, prefill}` (the resolver result-domain), not the option-domain value. The `RESULT_MAP` handles translation. Callers must parse stdout as JSON and must not assume the config option value equals the result value.
+- `config.py resolve-question` honors `Z_HARNESS_ASK_ALL=1` as a short-circuit that forces `result: ask` regardless of config or memory. `Z_HARNESS_EXPLAIN_RESOLUTION=1` activates verbose explain output on stderr.
+- `config.py resolve-question` reads `routing-preference` memory entries from `docs/llm/*.json` (harness-relative, not project-relative) and uses `Z_HARNESS_PROJECT_ROOT` or `git rev-parse` to determine project scope for `scope: project` entries. Outside a git repo, all entries are treated as global.
+- `config.py set` performs a read-modify-write using atomic temp-file rename. It validates the key against `_KEY_RE` and `VALIDATORS` before writing; exits 2 on validation failure, 4 on I/O error.
+- `propose-prefs.py` is invoked with `--check <command-name>` at the end of certain commands. It reads `metrics.jsonl`, identifies the last `max_runs` run boundaries, detects `(cmd_a, cmd_b)` pairs on the same slug within a time window, and proposes when count reaches the threshold. It checks `.z-harness/.propose-suppress` for per-question-id suppression entries. It emits at most one proposal per invocation and exits 0 always.
+- `propose-prefs.py` scope recommendation logic: if detected pairs span more than one `project_root`, recommends `global`; if all are in the current project root, recommends `project`. The calling command is responsible for presenting the proposal and dispatching `/z-suggest-memory` or `config.py set`.
+- `run-memory-review.sh` uses a 4-state terminal taxonomy in `memory_review_terminal` events: `skipped_broken_context` (missing args, no plan dir, tags file absent), `not_applicable` (empty diff, all tasks skipped, debug_md missing), `ready` and `dispatched` are orchestrator-owned.
 - `run-memory-review.sh` stdout contract: line 1 is always `STATUS: ready | STATUS: skipped <reason>`; if ready, lines 2-4 are absolute paths to `cumulative.diff`, `SPEC.md` (or empty string if missing), and `TAGS.txt`; line 5 is present only for the `debug` parent and holds the absolute path to `DEBUG.md`.
 - `run-memory-review.sh` emits exactly one `memory_review_terminal` event per invocation (on all skip paths). The orchestrator owns the terminal event for non-skip paths.
-- `run-memory-review.sh` contains a pure-bash JSON fallback in `_build_terminal_payload` for environments where `python3` is unavailable; this path avoids any external JSON library.
+- `run-memory-review.sh` contains a pure-bash JSON fallback in `_build_terminal_payload` for environments where `python3` is unavailable.
 - The env var controlling the plan base dir is `Z_HARNESS_PLAN_DIR` (singular), not `Z_HARNESS_PLANS_DIR`.
 - `log-phase.sh` uses a `python3` fallback (`time.time()*1000`) to get millisecond timestamps because macOS BSD `date` does not support the `%3N` format specifier.
 - `log-event.sh` validates JSON payloads via `python3`; malformed payloads are silently wrapped in `{"raw": ...}` rather than failing.
-- `log-event.sh` performs mid-flight legacy run detection: if a run directory already exists at the old flat layout path, it writes there instead of the slug-namespaced path, to avoid splitting a run's events across two locations.
+- `log-event.sh` performs mid-flight legacy run detection: if a run directory already exists at the old flat layout path, it writes there instead of the slug-namespaced path.
 - `run-memory-review.sh` uses `set +o pipefail` around the `git diff | head -n 5000` pipeline to avoid SIGPIPE failures when the diff is shorter than 5000 lines.
-- `version.sh` resolves the plugin root via four environment variables in priority order: `Z_HARNESS_PLUGIN_ROOT`, `ANTIGRAVITY_PLUGIN_ROOT`, `CLAUDE_PLUGIN_ROOT`, then script-relative path walk. It gracefully degrades if the plugin root is not a git repo.
-- `regenerate-memories-flat.py` writes atomically using `os.replace()` on a PID+random-suffixed temp file; a partial write will never corrupt the canonical `MEMORIES-FLAT.md`.
-- `extract-dismissals.py` drops findings that lack a `title` field in the `findings_index` frontmatter; it does NOT fall back to the T-MR-NNN id as a snippet because those ids are renumbered each run.
-- `extract-dismissals.py`'s `--filename` flag allows targeting `PLAN_STYLE_AUDIT.md` instead of the default `MR-REVIEW.md`; `--global` mode applies within each slug independently to prevent cross-slug run interleaving.
-- `remote-sandbox-sync.sh` warns (but does not fail) when no `.z-harness-rsync-exclude` file is found; it checks the project root first, then the plugin root.
-- `scope-probe-calibrate.py` exits 0 when no tripwires fire and exits 1 when at least one tripwire fires; it exits 0 (with a message) when no runs with `manifest.json` are found in the archive root.
-- `scope-probe-calibrate.py` `dispatch_scope_probe_stub` always returns MEDIUM — it is a placeholder pending T014 real integration. Results from normal mode are therefore not meaningful for accuracy assessment yet.
-- `scope-probe-calibrate.py` fixture format supports three shapes: a flat `{run_id -> mode_str}` dict, a nested `{run_id -> [mode_str, ...]}` per-sample list (index wrapped), or a bare string applied to all runs. Runs absent from the fixture default to MEDIUM.
-- `scope-probe-calibrate.py` epoch JSON files are append-only; a `rubric_version` bump invalidates cross-epoch trend comparisons. After a bump, the calibration epoch series restarts at 1 under the new version.
+- `version.sh` resolves the plugin root via four environment variables in priority order: `Z_HARNESS_PLUGIN_ROOT`, `ANTIGRAVITY_PLUGIN_ROOT`, `CLAUDE_PLUGIN_ROOT`, then script-relative path walk.
+- `regenerate-memories-flat.py` writes atomically using `os.replace()` on a PID+random-suffixed temp file.
+- `extract-dismissals.py` drops findings that lack a `title` field; it does NOT fall back to T-MR-NNN ids (renumbered each run).
+- `extract-dismissals.py` `--global` mode applies within each slug independently to prevent cross-slug run interleaving.
+- `remote-sandbox-sync.sh` warns (but does not fail) when no `.z-harness-rsync-exclude` file is found.
+- `scope-probe-calibrate.py` exits 0 when no tripwires fire and exits 1 when at least one fires; exits 0 (with message) when no runs with `manifest.json` are found.
+- `scope-probe-calibrate.py` `dispatch_scope_probe_stub` always returns MEDIUM — placeholder pending T014.
 - `test-scope-probe-calibrate.py` uses `importlib.util.spec_from_file_location` to import `scope-probe-calibrate.py` because the hyphenated filename prevents a plain `import` statement.
-- Tripwire 1 fires when `pct_medium >= 70%` (probe is under-discriminating). Tripwire 2 fires when `pct_heavy < 20%` (probe under-classifies HEAVY). Tripwires 3 and 4 are flagged as requiring manual review and never auto-fire.
+- Tripwire 1 fires when `pct_medium >= 70%`; Tripwire 2 fires when `pct_heavy < 20%`; Tripwires 3 and 4 are manual-review-only.
 
 ## Examples
 
@@ -78,8 +84,6 @@ These scripts share a common dependency on `python3` — used for JSON serializa
   `python3 scripts/extract-dismissals.py z-harness/mr-style-reviewer/ --max-runs 10`
 - Extract plan-style-audit dismissal signatures globally:
   `python3 scripts/extract-dismissals.py --global --filename PLAN_STYLE_AUDIT.md`
-- Extract dismissal signatures globally across all slugs:
-  `python3 scripts/extract-dismissals.py --global`
 - Sync local working tree to remote sandbox:
   `bash scripts/remote-sandbox-sync.sh zeke-pc add-rate-limit T030`
 - Resolve a config key (falls through to default if no config file exists):
@@ -88,11 +92,17 @@ These scripts share a common dependency on `python3` — used for JSON serializa
   `eval "$(python3 scripts/config.py export-env)"`
 - Write the global config file with defaults if it does not exist:
   `python3 scripts/config.py ensure-defaults`
+- List all registered question IDs:
+  `python3 scripts/config.py list-question-ids`
+- Resolve a question (returns JSON envelope with result, default, source, strength):
+  `python3 scripts/config.py resolve-question workflow.audit_to_amend`
+- Set a config key in the project scope:
+  `python3 scripts/config.py set workflow.audit_to_amend amend --scope=project`
+- Check for a preference proposal after z-audit-plan completes:
+  `PROPOSE_OUT="$(python3 scripts/propose-prefs.py --check z-audit-plan 2>/dev/null)"`
 - Run the end-to-end config smoke tests:
   `python3 scripts/test_config.py`
-- Run the scope-probe calibration harness against the live archive (fixture mode for T007):
+- Run the scope-probe calibration harness in fixture mode:
   `python3 scripts/scope-probe-calibrate.py --archive-root z-harness --epoch 1 --n-runs 6 --samples-per-run 3 --fixture-mode scripts/fixtures/t007-fixture.json`
-- Run the scope-probe calibration harness in normal stub mode:
-  `python3 scripts/scope-probe-calibrate.py --archive-root z-harness --epoch 2 --n-runs 10`
 - Run the unit tests for the calibration harness:
   `python3 scripts/test-scope-probe-calibrate.py`

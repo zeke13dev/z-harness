@@ -20,3 +20,9 @@
 {"ts":"2026-05-27T17:48:22Z","run":"docs","kind":"maintain_docs_end","mode":"apply","updated":5,"deferred":0,"skipped":0}
 {"ts":"2026-05-27T19:32:38Z","run":"docs","kind":"maintain_docs_start","mode":"dry-run","stale_count":8}
 {"ts":"2026-05-27T20:05:29Z","run":"docs","kind":"maintain_docs_end","mode":"write","updated":8,"deferred":0,"skipped":0}
+{"ts":"2026-05-27T20:36:47Z","run":"docs","kind":"maintain_docs_start","z_harness_version":"4cba78e","z_harness_dirty":true,"z_harness_branch":"main","mode":"dry-run"}
+{"ts":"2026-05-27T20:51:20Z","run":"docs","kind":"maintain_docs_end","mode":"apply","updated":2,"bumped":11,"deferred":0,"skipped":0}
+{"ts":"2026-05-27T22:53:51Z","run":"docs","kind":"maintain_docs_start","z_harness_version":"non-git","z_harness_dirty":false,"z_harness_branch":"none","mode":"dry-run"}
+{"ts":"2026-05-27T23:22:23Z","run":"docs","kind":"maintain_docs_start","z_harness_version":"477e990","z_harness_dirty":true,"z_harness_branch":"main","mode":"apply"}
+{"ts":"2026-05-27T23:22:51Z","run":"docs","kind":"maintain_docs_end","mode":"apply","updated":0,"bumped":3,"deferred":0,"skipped":0}
+{"ts":"2026-05-27T23:24:57Z","run":"docs","kind":"maintain_docs_end","mode":"apply","updated":5,"deferred":0,"skipped":0}

@@ -77,7 +77,7 @@
         "agents",
         "scripts",
         "skills",
-        "config-design"
+        "config"
       ],
       "consumed_by": [
         "skills"
@@ -311,13 +311,14 @@
       ]
     },
     {
-      "slug": "config-design",
+      "slug": "config",
       "source_file": [
         "scripts/config.py",
         "scripts/config.sh",
+        "scripts/propose-prefs.py",
         "docs/human/config.md"
       ],
-      "last_updated": "2026-05-28T00:00:00Z",
+      "last_updated": "2026-05-27",
       "confidence": "high",
       "depends_on": [
         "scripts"
@@ -326,26 +327,7 @@
         "commands",
         "skills"
       ],
-      "summary": "Layered TOML config loader. Built-in defaults -> ~/.config/z-harness/config.toml -> repo .z-harness/config.toml -> env vars. Five subcommands: get, export-env, ensure-defaults, explain, should-notify. Slice 1 ships notify.level and docs.always_apply."
-    },
-    {
-      "slug": "config",
-      "source_file": [
-        "scripts/config.py",
-        "scripts/propose-prefs.py",
-        "docs/human/config.md"
-      ],
-      "last_updated": "2026-05-28T00:00:00Z",
-      "confidence": "high",
-      "depends_on": [
-        "scripts",
-        "config-design"
-      ],
-      "consumed_by": [
-        "commands",
-        "skills"
-      ],
-      "summary": "Extends config-design with [workflow] section (audit_to_amend, slug_confirm), resolve-question + set + list-question-ids subcommands, routing-preference memory schema, and the elevation proposer (propose-prefs.py). Implements the askuser-prefs-hook v1 with full 5-tier signal-strength model (hard|strong|very_strong|weak|conflict|none|override)."
+      "summary": "Unified config concept covering Loader API (4-layer TOML loader: get, export-env, ensure-defaults, explain, should-notify) and Workflow Resolver (resolve-question, set, list-question-ids, [workflow] section, routing-preference memory schema, elevation proposer). Merged from former `config-design` (slice-1) + `config` (slice-2) concepts on 2026-05-27."
     }
   ]
 }

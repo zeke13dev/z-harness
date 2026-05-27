@@ -1,0 +1,276 @@
+{
+  "concept": "config",
+  "last_updated": "2026-05-27",
+  "covers_spec": "z-harness/askuser-prefs-hook/SPEC.md",
+  "scope": "Layered TOML config loader (Loader API surface) + workflow preference resolver and elevation proposer (Workflow Resolver surface). Formerly split as `config-design` (slice-1) and `config` (slice-2); merged into one concept.",
+  "source_file": [
+    "scripts/config.py",
+    "scripts/config.sh",
+    "scripts/propose-prefs.py",
+    "docs/human/config.md"
+  ],
+  "confidence": "high",
+  "entry_points": [
+    {
+      "file": "scripts/config.py",
+      "line": 42,
+      "symbol": "DEFAULTS",
+      "kind": "const",
+      "summary": "[Loader API] Built-in default values for all config keys including [workflow] section (layer 1)"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 56,
+      "symbol": "VALIDATORS",
+      "kind": "const",
+      "summary": "[Loader API] Allowed enum sets per dotted-key; hard-fail on repo/env, soft-warn on global"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 339,
+      "symbol": "load_config",
+      "kind": "fn",
+      "summary": "[Loader API] Build resolved config from all 4 layers; returns (values, sources) dicts"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 462,
+      "symbol": "cmd_get",
+      "kind": "fn",
+      "summary": "[Loader API] Resolve and print single dotted-key value; exits 3 on unknown or meta key"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 490,
+      "symbol": "cmd_export_env",
+      "kind": "fn",
+      "summary": "[Loader API] Print export lines for all user knobs; emit config_resolved event once per run"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 504,
+      "symbol": "cmd_ensure_defaults",
+      "kind": "fn",
+      "summary": "[Loader API] Write global config with defaults + inline comments if absent; never overwrites"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 565,
+      "symbol": "cmd_explain",
+      "kind": "fn",
+      "summary": "[Loader API] Print effective value and source layer for one key"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 1287,
+      "symbol": "cmd_should_notify",
+      "kind": "fn",
+      "summary": "[Loader API] Print yes|no for a given event kind; always exits 0; exits 2 on unknown event"
+    },
+    {
+      "file": "scripts/config.sh",
+      "line": 2,
+      "symbol": "config.sh",
+      "kind": "module",
+      "summary": "[Loader API] Thin bash wrapper: exec python3 scripts/config.py $@"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 69,
+      "symbol": "QUESTION_IDS",
+      "kind": "const",
+      "summary": "[Workflow Resolver] Single source of truth for AskUserQuestion routing-class preference keys: workflow.audit_to_amend, workflow.slug_confirm; validated against VALIDATORS at module load"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 102,
+      "symbol": "RESULT_MAP",
+      "kind": "const",
+      "summary": "[Workflow Resolver] Maps (question_id, option-domain-value) -> resolver result-domain (skip|prefill|ask)"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 115,
+      "symbol": "_run_startup_guards",
+      "kind": "fn",
+      "summary": "[Workflow Resolver] Module-load consistency check: asserts QUESTION_IDS <= VALIDATORS and RESULT_MAP references only valid choices; raises SystemExit(2) on violation"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 845,
+      "symbol": "cmd_resolve_question",
+      "kind": "fn",
+      "summary": "[Workflow Resolver] Consult 4-layer config + memory routing-preferences; return JSON {result, default, source, rule_id, strength, reason, sources[]}; stdout reserved for JSON"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 701,
+      "symbol": "_load_memory_matches",
+      "kind": "fn",
+      "summary": "[Workflow Resolver] Walk docs/llm/*.json for routing-preference entries matching question_id; respects scope (global|project); skips INDEX.json and malformed entries"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 809,
+      "symbol": "_resolve_memory_matches",
+      "kind": "fn",
+      "summary": "[Workflow Resolver] Merge memory match list: highest strength wins on agreement; returns (None, 'conflict', sources) when entries disagree"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 1193,
+      "symbol": "cmd_set",
+      "kind": "fn",
+      "summary": "[Workflow Resolver] Atomically write a TOML key to global or project config via tmp+rename; validates against VALIDATORS before writing; exit 2 on invalid value"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 590,
+      "symbol": "cmd_list_question_ids",
+      "kind": "fn",
+      "summary": "[Workflow Resolver] Print sorted JSON array of registered question IDs; consumed by /z-suggest-memory for routing-preference validation"
+    },
+    {
+      "file": "scripts/propose-prefs.py",
+      "line": 1,
+      "symbol": "propose-prefs",
+      "kind": "module",
+      "summary": "[Workflow Resolver] Walk metrics.jsonl for repeated command-pair patterns; emit JSON proposal if threshold met; never writes — caller owns write"
+    }
+  ],
+  "depends_on": [
+    "scripts"
+  ],
+  "consumed_by": [
+    "commands",
+    "skills"
+  ],
+  "invariants": [
+    "[Loader API] schema_version must equal 1 (else exit 2)",
+    "[Loader API] ensure-defaults never writes repo-local; only writes the global user path",
+    "[Loader API] should-notify always exits 0 on valid event kind (yes|no on stdout); exits 2 on unknown event",
+    "[Loader API] config_resolved event emitted at most once per $Z_HARNESS_RUN via O_EXCL temp-file de-dup",
+    "[Loader API] slice-1 enums: notify.level in {off, approval_only, all}; docs.always_apply in {always, never}",
+    "[Loader API] transliteration rule: dotted.key -> Z_HARNESS_<SECTION>_<KEY> (uppercase, dot to underscore)",
+    "[Loader API] keys must match ^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$; hyphens or >2-level nesting exit 2",
+    "[Loader API] empty env vars are treated as missing (not as override)",
+    "[Loader API] unknown keys in TOML files are silently ignored for forward compatibility",
+    "[Loader API] global-layer enum violations: soft-warn + fall back to default; repo/env-layer violations: exit 2",
+    "[Workflow Resolver] workflow.audit_to_amend valid values: ask | amend | stop; default ask",
+    "workflow.slug_confirm valid values: ask | auto_accept | recommend_derived; default ask",
+    "Z_HARNESS_WORKFLOW_AUDIT_TO_AMEND and Z_HARNESS_WORKFLOW_SLUG_CONFIRM are the env transliterations for the [workflow] keys",
+    "resolve-question stdout is reserved exclusively for JSON; all diagnostics route to stderr",
+    "Z_HARNESS_ASK_ALL=1 short-circuits resolve-question to always return {result: ask, source: override}",
+    "Z_HARNESS_EXPLAIN_RESOLUTION=1 or --explain flag prints a human-readable resolution trace on stderr",
+    "resolve-question exit 0 = valid JSON; exit 2 = bad invocation; exit 3 = unknown question_id (JSON with error key still emitted); exit 4 = I/O error (JSON still emitted)",
+    "QUESTION_IDS registry is the single source of truth; _run_startup_guards() asserts set(QUESTION_IDS) <= set(VALIDATORS) at module load",
+    "Resolver is read-only — never writes to config or memory; all writes go through config.py set or /z-suggest-memory",
+    "Conflict tier always returns result: ask; sources[] is always populated with both disagreeing entries",
+    "config.py set writes atomically via tmp+rename; validates against VALIDATORS before writing; exit 2 on invalid value",
+    "propose-prefs.py never writes automatically; proposal fires AskUserQuestion and user picks the write target",
+    "Proposer suppression is scoped to (project_root, question_id) stored in .z-harness/.propose-suppress; suppression expires after 30 days",
+    "Z_HARNESS_PROPOSE_WINDOW_S controls max gap (seconds) between command A end and B start for pattern detection; default 3600",
+    "Z_HARNESS_PROPOSE_THRESHOLD controls min repetitions to propose; default 3",
+    "Z_HARNESS_PROPOSE_MAX_RUNS controls number of recent run_start events to scan; default 30",
+    "routing-preference memory entries live in docs/llm/workflow.json (global scope) or docs/llm/workflow-<project-slug>.json (project scope)"
+  ],
+  "gotchas": [
+    "[Loader API] Global config validation is soft (warn + default fallback); repo/env config validation is hard (exit 2) — same bad value has different outcomes depending on which file it appears in",
+    "[Loader API] docs.always_apply=never only suppresses doc-fetcher in light flows (/z-do); heavy flows always dispatch doc-fetcher regardless",
+    "[Loader API] Z_HARNESS_REPO_CONFIG env var overrides git-root discovery entirely — exits 2 if path does not exist",
+    "[Loader API] ensure-defaults exits 4 (not 2) on I/O errors and when file exists but is empty or unparseable; it never silently overwrites",
+    "[Loader API] scripts/config.sh is only a 2-line exec wrapper — all logic lives in config.py",
+    "[Loader API] Empty env vars (Z_HARNESS_NOTIFY_LEVEL=) are treated as missing, not as overrides",
+    "[Workflow Resolver] workflow.slug_confirm value domain (ask/auto_accept/recommend_derived) is NOT the same as the resolver result domain (ask/prefill/skip); RESULT_MAP translates between them",
+    "auto_accept resolves to result: skip (silently accept derived slug); recommend_derived resolves to result: prefill (pre-select derived slug in AskUser)",
+    "Slug-confirm retrofit has TWO gates: hard collision check (always runs, resolver NOT consulted) + soft non-obvious confirmation (resolver-controlled). resolve-question only governs the soft gate",
+    "resolve-question error paths (exit 2/3/4) must always fall through to ask — never silently skip",
+    "Capture exit code separately from output: RESOLVED=$(python3 scripts/config.py resolve-question ...); RESOLVE_EXIT=$?. Do NOT pipe through set -e chains that swallow the exit code",
+    "When source==conflict, the AskUser surfaces a follow-up write-back question after the user picks, to prevent conflict from persisting across runs",
+    "Proposer in v1 only watches command-pair patterns (run_start/run_end in metrics.jsonl); it does NOT auto-propose workflow.slug_confirm because AskUser responses are not yet recorded in metrics.jsonl",
+    "Stale routing-preference memory after config supersedes it: v1 emits memory_potentially_superseded warning; cleanup is a v2 concern",
+    "Memory entries missing required fields are logged as routing_preference_malformed events and treated as non-existent (no crash)",
+    "Resolver falls back to git rev-parse --show-toplevel for project_root when Z_HARNESS_PROJECT_ROOT is unset; treats all memories as global if outside a git repo",
+    "_run_startup_guards() raises SystemExit(2) at module load on registry inconsistency — always add new question_ids to both QUESTION_IDS and VALIDATORS",
+    "Multi-IDE export (Cursor/Codex/agy) does NOT carry the precheck; those paths fall back to raw AskUserQuestion; v2 concern"
+  ],
+  "workflow_section": {
+    "keys": {
+      "workflow.audit_to_amend": {
+        "type": "string",
+        "default": "ask",
+        "valid_values": ["ask", "amend", "stop"],
+        "env": "Z_HARNESS_WORKFLOW_AUDIT_TO_AMEND",
+        "callsites": [
+          "commands/z-audit-plan.md:187",
+          "commands/z-audit-plan-style.md:388"
+        ],
+        "description": "Controls Phase 5 AskUserQuestion in /z-audit-plan and /z-audit-plan-style. ask=always prompt; amend=auto-proceed as amend (skips prompt); stop=auto-stop (skips prompt)"
+      },
+      "workflow.slug_confirm": {
+        "type": "string",
+        "default": "ask",
+        "valid_values": ["ask", "auto_accept", "recommend_derived"],
+        "env": "Z_HARNESS_WORKFLOW_SLUG_CONFIRM",
+        "callsites": [
+          "commands/z-plan.md:26",
+          "commands/z-fix.md:24",
+          "commands/z-uplift.md:79",
+          "skills/z-debug/SKILL.md:23",
+          "skills/z-brainstorm/SKILL.md:25",
+          "skills/z-map/SKILL.md:133",
+          "skills/z-plan-light/SKILL.md:25"
+        ],
+        "description": "Controls soft non-obvious-slug confirmation at 7 callsites. ask=always prompt; auto_accept=silently accept derived slug (resolver returns skip); recommend_derived=pre-select derived slug (resolver returns prefill). Collision check always runs unconditionally"
+      }
+    }
+  },
+  "resolve_question_envelope": {
+    "result": "skip | prefill | ask",
+    "default": "<option-label from QUESTION_IDS[id].skill_default>",
+    "source": "config | memory | conflict | none | override",
+    "rule_id": "<question_id>",
+    "strength": "hard | very_strong | strong | weak | none",
+    "reason": "<one-line human-readable>",
+    "sources": [
+      {
+        "kind": "config | memory",
+        "value": "<resolved value>",
+        "location": "<config file path or docs/llm/*.json>",
+        "strength": "<tier>"
+      }
+    ]
+  },
+  "routing_preference_memory_schema": {
+    "description": "Memory type for routing-class workflow preferences. Lives in docs/llm/workflow.json (global scope) or docs/llm/workflow-<project-slug>.json (project scope).",
+    "required_fields": ["type", "question_id", "value", "scope", "strength"],
+    "fields": {
+      "type": "routing-preference",
+      "question_id": "<string — must be in QUESTION_IDS registry, e.g. workflow.audit_to_amend>",
+      "value": "<string — must be in QUESTION_IDS[question_id].choices>",
+      "scope": "global | project",
+      "strength": "weak | strong | very_strong",
+      "reason": "<one-line human-readable reason for this preference>",
+      "date": "<ISO 8601 date string>",
+      "project_root": "<absolute path — required when scope is project; omit or null for global>"
+    },
+    "example": {
+      "type": "routing-preference",
+      "question_id": "workflow.audit_to_amend",
+      "value": "amend",
+      "scope": "project",
+      "strength": "very_strong",
+      "reason": "Always amend after audit on this project",
+      "date": "2026-05-27",
+      "project_root": "/Users/you/dev/myproject"
+    }
+  },
+  "v2_deferrals": [
+    "Stale-memory hygiene: when routing-preference memory exists and user later writes same question_id to config, v1 only warns (memory_potentially_superseded); v2 will add cleanup prompt or auto-archive",
+    "config.py set --dry-run / --backup flags",
+    "Async memory-write telemetry: propose_accepted event logged only after /z-suggest-memory returns 0",
+    "Multi-IDE export precheck integration: Cursor/Codex/agy fall back to raw AskUserQuestion in v1",
+    "Halt-class bypass (spec_problem, decision_needed): explicitly out of v1"
+  ],
+  "memories": []
+}

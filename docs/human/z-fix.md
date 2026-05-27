@@ -31,7 +31,7 @@
 - `agents` — spawns `consultant-primary` (Gemini) and `consultant-secondary` (Codex) in parallel at Phase 3; spawns `reviewer` (Codex) at Phase 8
 - `commands` — exits to `/z-debug` when root cause is unknown; escalates to `/z-plan` when auto-bail thresholds are exceeded; suggests `/z-maintain-docs --audit` at finalize if docs were touched
 - `scripts` — uses `log-event.sh` for `fix_run_start` / `fix_run_end` telemetry; uses `plan-path.sh` to resolve plan directory; uses `version.sh` for version stamp
-- `config-design` — notification policy is read from `docs/human/config.md` (`notify.level` key); `PushNotification` calls at Phase 5 and Phase 10 are gated on this value
+- `config` — notification policy is read from `docs/human/config.md` (`notify.level` key); `PushNotification` calls at Phase 5 and Phase 10 are gated on this value
 
 ## Notification policy
 
