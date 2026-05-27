@@ -1,7 +1,7 @@
 # Commands
 
-> Last updated: 2026-05-26
-> Covers source: commands/z-amend.md, commands/z-audit.md, commands/z-audit-plan.md, commands/z-audit-plan-style.md, commands/z-brainstorm.md, commands/z-debug.md, commands/z-do.md, commands/z-export.md, commands/z-fix.md, commands/z-implement-all.md, commands/z-implement-next.md, commands/z-improve.md, commands/z-init-docs.md, commands/z-maintain-docs.md, commands/z-mr-review.md, commands/z-plan-light.md, commands/z-plan-split.md, commands/z-plan.md, commands/z-providers-discover.md, commands/z-research.md, commands/z-review-all.md, commands/z-skill-fix.md, commands/z-stats.md, commands/z-style-init.md, commands/z-suggest-memory.md, commands/z-test.md, commands/z-update.md, commands/z-uplift.md
+> Last updated: 2026-05-27
+> Covers source: commands/z-amend.md, commands/z-audit.md, commands/z-audit-plan.md, commands/z-audit-plan-style.md, commands/z-brainstorm.md, commands/z-debug.md, commands/z-do.md, commands/z-export.md, commands/z-fix.md, commands/z-implement-all.md, commands/z-implement-next.md, commands/z-improve.md, commands/z-init-docs.md, commands/z-maintain-docs.md, commands/z-map.md, commands/z-mr-review.md, commands/z-plan-light.md, commands/z-plan-split.md, commands/z-plan.md, commands/z-providers-discover.md, commands/z-research.md, commands/z-review-all.md, commands/z-skill-fix.md, commands/z-stats.md, commands/z-style-init.md, commands/z-suggest-memory.md, commands/z-test.md, commands/z-update.md, commands/z-uplift.md
 
 ## Overview
 
@@ -11,17 +11,19 @@ The command surface is organized around explicit routing, durable artifacts, and
 
 **Scope probe (v1a):** `/z-audit` and `/z-brainstorm` now run a Haiku `scope-probe` subagent as Phase 0 (before Phase 1 scaffolding) to classify the topic as LIGHT / MEDIUM / HEAVY and choose the execution topology. HEAVY triggers parallel sub-flow fan-out with a `scope-reconciler` agent consolidating results. `/z-audit` also accepts a `--scope-from <chunk-spec>` flag (parsed before Setup) to skip Phase 0 when already running as a HEAVY sub-flow. `/z-brainstorm` HEAVY Phase 4 presents a `(chunk × framing)` selection matrix to the user before finalizing BRAINSTORM.md.
 
+**Resolver hooks and elevation proposer:** Several commands integrate `scripts/config.py resolve-question <question_id>` to consult stored preferences before presenting `AskUserQuestion` gates. The resolver returns `{result: skip|prefill|ask, default, source}` and the command branches accordingly: `skip` accepts the default silently and emits `askuser_skipped`; `prefill` pre-selects the default but still asks; `ask` presents the question normally (adding a conflict-resolution note when `source == "conflict"`). After major user-gate decisions, `/z-audit-plan` (Phase 9), `/z-audit-plan-style` (Phase 9), and `/z-amend` (Phase 9) run an Elevation Proposer via `scripts/propose-prefs.py --check <cmd>`. If the script detects a repeated pattern (e.g., always running z-amend after an audit), it surfaces a one-shot `AskUserQuestion` offering to persist the preference as a config entry or a `routing-preference` memory entry (via `/z-suggest-memory --kind routing-preference`). Suppression for 30 days is available via the `no` branch; the suppression state is stored in `.z-harness/.propose-suppress`. The `workflow.slug_confirm` question governs slug-name confirmation in `/z-plan`, `/z-fix`, and `/z-uplift`; the hard collision check (slug dir already contains PLAN.md/TASKS.md) runs unconditionally before the resolver is consulted — the resolver only governs the soft non-obvious-slug gate. The `workflow.audit_to_amend` question governs the post-audit action choice in `/z-audit-plan` and `/z-audit-plan-style`. `/z-suggest-memory` now accepts `--kind routing-preference` with `--question-id`, `--value`, `--strength` (weak/strong/very_strong), `--scope` (global/project), and optional `--reason`; routing-preference entries are written to `docs/llm/workflow.json` (global) or `docs/llm/workflow-<project-slug>.json` (project).
+
 ## Key entry points
 
-- `commands/z-amend.md:1` — `z-amend` — Propagates approved changes through existing plan artifacts.
+- `commands/z-amend.md:1` — `z-amend` — Propagates approved changes through existing plan artifacts; Phase 9 elevation proposer after finalize.
 - `commands/z-audit.md:1` — `z-audit` — Runs read-only multi-dimension audits with Phase 0 scope probe (LIGHT/MEDIUM/HEAVY). Accepts `--scope-from <chunk-spec>` for HEAVY sub-flow fan-out; emits REPORT.md + TASKS.md.
-- `commands/z-audit-plan.md:1` — `z-audit-plan` — Audits existing SPEC/PLAN/TASKS and routes contextually.
-- `commands/z-audit-plan-style.md:1` — `z-audit-plan-style` — Audits plan artifacts for code-quality issues before implementation; requires STYLE.md; emits PLAN_STYLE_AUDIT.md for /z-amend.
+- `commands/z-audit-plan.md:1` — `z-audit-plan` — Audits existing SPEC/PLAN/TASKS; Phase 5 resolver pre-check for `workflow.audit_to_amend`; Phase 9 elevation proposer.
+- `commands/z-audit-plan-style.md:1` — `z-audit-plan-style` — Audits plan artifacts for code-quality issues before implementation; requires STYLE.md; emits PLAN_STYLE_AUDIT.md for /z-amend; Phase 5 resolver pre-check; Phase 9 elevation proposer.
 - `commands/z-brainstorm.md:1` — `z-brainstorm` — Seeds planning with parallel ideation and anti-bias checks. Phase 0 scope probe with `per_vendor`/`per_framing` axis taxonomy; HEAVY Phase 4 presents a `(chunk × framing)` selection matrix.
 - `commands/z-debug.md:1` — `z-debug` — Runs heavy hypothesis-tournament debugging with post-mortem and Phase 10 memory review (shipped branch only).
 - `commands/z-do.md:1` — `z-do` — Executes tiny plan-free changes with review gates. Uses `config.py export-env` for config resolution and `should-notify` wrappers for all notification gates. Doc-fetcher dispatch is gated on `Z_HARNESS_DOCS_ALWAYS_APPLY`: skipped when set to `never` (Phase 2).
 - `commands/z-export.md:1` — `z-export` — Exports commands/agents/skills to Cursor, Codex, or agy via adapter scripts.
-- `commands/z-fix.md:1` — `z-fix` — Ships diagnosed bug fixes with consult and Codex review.
+- `commands/z-fix.md:1` — `z-fix` — Ships diagnosed bug fixes with consult and Codex review; slug-confirm resolver gate (`workflow.slug_confirm`) after hard collision check.
 - `commands/z-implement-all.md:1` — `z-implement-all` — Orchestrates task queues with fresh subagents, reviewers, and auto memory review (Phase 9).
 - `commands/z-implement-next.md:1` — `z-implement-next` — Implements one pending task with model selection and review.
 - `commands/z-improve.md:1` — `z-improve` — Retrospects one run and proposes harness improvements.
@@ -30,48 +32,52 @@ The command surface is organized around explicit routing, durable artifacts, and
 - `commands/z-mr-review.md:1` — `z-mr-review` — Reviews branch diffs into ranked task-shaped findings.
 - `commands/z-plan-light.md:1` — `z-plan-light` — Plans and ships small focused changes via FIX.md.
 - `commands/z-plan-split.md:1` — `z-plan-split` — Splits large work into one-level cluster plans.
-- `commands/z-plan.md:1` — `z-plan` — Produces SPEC.md, PLAN.md, and TASKS.md for coherent work. Uses `config.py export-env` for config resolution and `should-notify` wrappers for all notification gates.
+- `commands/z-plan.md:1` — `z-plan` — Produces SPEC.md, PLAN.md, and TASKS.md for coherent work. Uses `config.py export-env` for config resolution and `should-notify` wrappers. Slug-confirm resolver gate (`workflow.slug_confirm`) after hard collision check.
 - `commands/z-providers-discover.md:1` — `z-providers-discover` — Probes PATH for LLM CLIs and writes providers.json with role bindings.
-- `commands/z-research.md:1` — `z-research` — Maps terrain with citations without recommending an approach.
+- `commands/z-map.md:1` — `z-map` — Maps terrain with citations and cross-LLM critique. No recommendations — terrain only. Produces MAP.md. See /z-research for synthesis.
+- `commands/z-research.md:1` — `z-research` — Higher-order meta-orchestrator: composes /z-map and /z-brainstorm, runs adversarial synthesis panel (3 perspectives + research-judge), produces RESEARCH.md with 10-section schema including approach decision matrix. Cost 3–6M tokens.
 - `commands/z-review-all.md:1` — `z-review-all` — Final-gate reviews cumulative implementation against the plan, then auto-runs memory review (Phase 7).
 - `commands/z-skill-fix.md:1` — `z-skill-fix` — Diagnoses and patches misleading skill or command files.
 - `commands/z-stats.md:1` — `z-stats` — Reports read-only run progress, timing, cost, next step, and recent memory-review activity (Phase 4b).
 - `commands/z-style-init.md:1` — `z-style-init` — Authors STYLE.md from idiomatic source captures and cross-LLM critique; `--amend` mines dismissals.
-- `commands/z-suggest-memory.md:1` — `z-suggest-memory` — Delegates memory authoring to the memory skill; accepts `--from-candidate-json` for automated candidate ingestion.
+- `commands/z-suggest-memory.md:1` — `z-suggest-memory` — Delegates memory authoring to the memory skill; accepts `--from-candidate-json` for automated candidate ingestion and `--kind routing-preference` for structured preference writes.
 - `commands/z-test.md:1` — `z-test` — Drafts semantic TESTS.md cases and links them to tasks.
 - `commands/z-update.md:1` — `z-update` — Updates the z-harness plugin to the latest version.
-- `commands/z-uplift.md:1` — `z-uplift` — Tiered bulk codebase quality uplift: decompose, cross-cut, per-component audit, implement.
+- `commands/z-uplift.md:1` — `z-uplift` — Tiered bulk codebase quality uplift: decompose, cross-cut, per-component audit, implement; slug-confirm resolver gate (`workflow.slug_confirm`) after hard collision check.
 
 ## How it interacts with others
 
 - `agents` — Commands dispatch specialized subagents: implementers, reviewers, consultants, doc-updaters, doc-fetchers, auditors, cluster-planners, remote-runners, the advisory `planning-router`, the `review-agent` (memory candidate generation), the `plan-style-reviewer` (plan artifact quality review), the `bisect-isolator` (regression isolation), the `scope-probe` (Phase 0 topology classifier for /z-audit and /z-brainstorm), and the `scope-reconciler-audit` / `scope-reconciler-brainstorm` (HEAVY fan-out synthesis). `/z-uplift` dispatches `auditor` subagents in parallel per dimension per component. `/z-style-init` dispatches Sonnet subagents for file ranking, drafting, and rule proposals.
-- `scripts` — Commands rely on shared scripts for version stamping, event logging, phase timing, plan path resolution, memory flattening, remote support, `run-memory-review.sh`, `discover-providers.py`, `export-<target>.py`, and `extract-dismissals.py`.
-- `config-design` — All commands that send notifications or apply docs call `scripts/config.py export-env` during Setup to populate `Z_HARNESS_NOTIFY_LEVEL` and `Z_HARNESS_DOCS_ALWAYS_APPLY`, then guard every notification with `[ "$(config.py should-notify --event <type>)" = yes ]`. The canonical reference for available knobs is `docs/human/config.md`.
+- `scripts` — Commands rely on shared scripts for version stamping, event logging, phase timing, plan path resolution, memory flattening, remote support, `run-memory-review.sh`, `discover-providers.py`, `export-<target>.py`, `extract-dismissals.py`, and `propose-prefs.py` (elevation proposer check).
+- `config-design` — All commands that send notifications or apply docs call `scripts/config.py export-env` during Setup to populate `Z_HARNESS_NOTIFY_LEVEL` and `Z_HARNESS_DOCS_ALWAYS_APPLY`, then guard every notification with `[ "$(config.py should-notify --event <type>)" = yes ]`. Commands that use resolver hooks call `scripts/config.py resolve-question <question_id>` before AskUserQuestion gates. The canonical reference for available knobs is `docs/human/config.md`.
 - `skills` — Skills expose or wrap the command flows for different clients and are the main consumer of the command specifications.
 - Review-family artifacts — `/z-audit`, `/z-review-all`, and `/z-mr-review` preserve evidence separately from promoted task artifacts; survivors are applied through `/z-implement-all --tasks <path>`.
-- Planning-family route policy — `/z-plan`, `/z-plan-light`, `/z-plan-split`, `/z-research`, `/z-brainstorm`, and `/z-do` share route checks that record route artifacts and never auto-execute a different command.
+- Planning-family route policy — `/z-plan`, `/z-plan-light`, `/z-plan-split`, `/z-map`, `/z-research`, `/z-brainstorm`, and `/z-do` share route checks that record route artifacts and never auto-execute a different command.
 - Memory loop — `/z-implement-all` Phase 9 and `/z-review-all` Phase 7 both call `run-memory-review.sh`, dispatch `review-agent`, and route accepted candidates into `/z-suggest-memory --from-candidate-json`. `/z-debug` Phase 10 participates in the same loop after a shipped fix (abandoned branch skips). All three emit `review_agent_call` events and each invocation must produce exactly one `memory_review_terminal` event. `/z-stats` Phase 4b surfaces these events so the user can see memory-review history.
 - Plan-quality pipeline — `/z-audit-plan-style` audits plan artifacts for code-quality issues before implementation begins. It requires `STYLE.md` (hard gate, no escape), dispatches the `plan-style-reviewer` agent, uses `extract-dismissals.py` to suppress repeated past dismissals, and emits `PLAN_STYLE_AUDIT.md` shaped for direct `/z-amend` consumption.
 - Uplift pipeline — `/z-uplift` is a self-contained orchestration that sits above the planning and review families: it auto-decomposes the repo, calls consultant subagents for cross-cutting analysis, delegates per-component audits to auditor subagents, and drives sequential implementation via existing `/z-implement-all` invocations. It gates on `STYLE.md` presence and doc-staleness before proceeding.
 - Style pipeline — `/z-style-init` (bootstrap and amend) is a prerequisite for `/z-mr-review` style enforcement, `/z-audit-plan-style`'s hard gate, and feeds the `/z-uplift` cleanliness+design rubric. `/z-style-init --amend` consumes dismissal archives written by `/z-mr-review` runs.
 - Provider configuration — `/z-providers-discover` writes `providers.json` consumed by all commands that dispatch `consultant-primary`, `consultant-secondary`, or `reviewer` subagents.
 - Scope probe pipeline — `/z-audit` Phase 0 dispatches `scope-probe` (Haiku) to classify topics as LIGHT/MEDIUM/HEAVY before Phase 1. HEAVY triggers N parallel `/z-audit` sub-flows via `--scope-from <abs-path>#<chunk-id>`, then dispatches `scope-reconciler-audit` to merge results; HEAVY sub-flows skip Phase 0 via `SKIP_PHASE_0=true`. `/z-brainstorm` Phase 0 uses the same `scope-probe` with axis taxonomy `[per_vendor, per_framing]`; HEAVY dispatches N parallel general-purpose Sonnet sub-flows and calls `scope-reconciler-brainstorm`. HEAVY Phase 4 in `/z-brainstorm` presents the `(chunk × framing)` selection matrix before finalizing BRAINSTORM.md.
+- Resolver and elevation proposer pipeline — `/z-audit-plan` (Phase 9), `/z-audit-plan-style` (Phase 9), and `/z-amend` (Phase 9) all invoke `propose-prefs.py` after the finalize step. When the script identifies a repeated user pattern (e.g., always choosing amend after an audit), it surfaces a one-shot `AskUserQuestion` that routes the answer to config (via `config.py set`) or to `docs/llm/workflow.json` / `docs/llm/workflow-<project-slug>.json` (via `/z-suggest-memory --kind routing-preference`). Future resolver calls for the same `question_id` can then skip or pre-fill the gate automatically. Suppression state lives in `.z-harness/.propose-suppress` with 30-day TTL entries.
 
 ## Command catalogue (from README)
 
 ### Pre-planning
 
 - **`/z-brainstorm <topic>`** — Cheap parallel idea generation across three vendor-diverse ideators. Phase 0 scope probe classifies topic as LIGHT/MEDIUM/HEAVY; HEAVY fans out N parallel sub-flows per axis chunk and presents a chunk × framing matrix at Phase 4. Produces `BRAINSTORM.md`. Cost target: ≤200K tokens.
-- **`/z-research <question>`** — Heavier terrain mapping via parallel Explores + cross-LLM critique. Produces `RESEARCH.md`. Cost target: ≤2M tokens.
+- **`/z-map <question>`** — Terrain mapping via parallel Explores + cross-LLM critique. No recommendations — terrain only. Produces `MAP.md`. Cost target: ≤2M tokens.
+- **`/z-research <topic>`** — Heavy meta-orchestrator: invokes `/z-map` and/or `/z-brainstorm`, then runs an adversarial synthesis panel (3 vendor-diverse perspectives + `research-judge` Opus synthesizer) to produce `RESEARCH.md` with a 10-section schema including an approach decision matrix. Cost: 3–6M tokens. AskUser cost gate always runs before dispatch.
 
 Typical chains:
-- Murky problem: `/z-research → /z-brainstorm → /z-plan`
+- Deep research + synthesis: `/z-research → /z-plan`
+- Terrain only: `/z-map → /z-brainstorm → /z-plan`
 - Lighter case: `/z-brainstorm → /z-plan`
 - Standard: `/z-plan` alone
 
 ### Planning
 
-- **`/z-plan <task>`** — Rigorous pipeline: premise check → exploration → enumerate decisions → bundled Gemini+Codex consult → SPEC.md / PLAN.md / TASKS.md.
+- **`/z-plan <task>`** — Rigorous pipeline: premise check → exploration → enumerate decisions → bundled Gemini+Codex consult → SPEC.md / PLAN.md / TASKS.md. Slug-confirm resolver gate (`workflow.slug_confirm`) runs after the unconditional hard collision check.
 - **`/z-plan-light <fix>`** — Fast path for 1-5 file fixes; auto-bails to `/z-plan` if scope grows.
 - **`/z-plan-split <topic>`** — Pre-emptive scope splitter for sprawling topics. Proposes 2-6 narrow clusters and reconciles overlaps into `SHARED-CONCERNS.md` + `MANIFEST.md`.
 - **`/z-test`** — Semantic test-case planner. Reads SPEC/PLAN/TASKS, drafts non-trivial tests, cross-consults, writes `TESTS.md`.
@@ -100,9 +106,9 @@ Typical chains:
 
 ### Audit, debug, review
 
-- **`/z-uplift`** — Bulk codebase quality uplift. Decomposes repo, audits per component, drives sequential implementation.
+- **`/z-uplift`** — Bulk codebase quality uplift. Decomposes repo, audits per component, drives sequential implementation. Slug-confirm resolver gate (`workflow.slug_confirm`) after hard collision check.
 - **`/z-audit <target> [--scope-from <chunk-spec>]`** — Read-only audit pipeline with Phase 0 scope probe; emits REPORT.md + TASKS.md. HEAVY mode fans out N parallel sub-audits and reconciles. `--scope-from` skips Phase 0 for sub-flows.
-- **`/z-fix <symptom>`** — Lightweight bug-fix command; single light-fix consult, inline implementation, Codex review.
+- **`/z-fix <symptom>`** — Lightweight bug-fix command; single light-fix consult, inline implementation, Codex review. Slug-confirm resolver gate (`workflow.slug_confirm`) after hard collision check.
 - **`/z-debug <symptom>`** — Adversarial hypothesis tournament; writes `DEBUG.md`; auto-bails to `/z-plan` if scope grows.
 - **`/z-review-all`** — Final-gate cross-LLM review of a completed plan's cumulative diff against SPEC.md.
 - **`/z-skill-fix <skill>`** — Patches any `.claude/skills/*/SKILL.md`, `commands/*.md`, or `agents/*.md`.
@@ -111,7 +117,7 @@ Typical chains:
 
 - **`/z-init-docs`** — Bootstrap two-tier docs (`docs/human/` + `docs/llm/INDEX.json`).
 - **`/z-maintain-docs`** — Refresh stale concepts. Dry-run preview by default.
-- **`/z-suggest-memory`** — Author a memory entry into a concept's `docs/llm/<slug>.json`.
+- **`/z-suggest-memory`** — Author a memory entry into a concept's `docs/llm/<slug>.json`. Use `--kind routing-preference` to write a structured workflow preference entry to `docs/llm/workflow.json` (global) or `docs/llm/workflow-<project-slug>.json` (project).
 
 ### Telemetry
 
@@ -147,6 +153,7 @@ Typical chains:
 - `/z-export` defaults to `--target=all`; unrecognized target values exit nonzero immediately before running any scripts.
 - `/z-audit-plan-style` has a hard STYLE.md gate: there is no `--no-style` escape. If STYLE.md is missing, the command refuses immediately and routes to `/z-style-init`.
 - `/z-audit-plan-style` emits `PLAN_STYLE_AUDIT.md` separately from `/z-audit-plan`'s `PLAN_AUDIT_REPORT.md`; correctness findings from the plan-style-reviewer are passed through under a `## Cross-dimension note` but are not promoted into amendment blocks.
+- `/z-audit-plan-style` archives any existing `PLAN_STYLE_AUDIT.md` before overwriting — this archive is what `extract-dismissals.py` reads to compute prior dismissal signatures on subsequent runs.
 - `/z-audit --scope-from` must be parsed before slug derivation, doc-fetcher dispatch, or `run_start` logging. SCOPE_FROM_ERROR is stored for deferred halt after Setup establishes RUN.
 - `/z-audit` HEAVY fan-out always uses absolute-path-with-fragment form (`/abs/path/SCOPE.json#C1`) in sub-flow prompts. Bare chunk IDs (`C1`) are for manual invocation only and require `PARENT_RUN_ID` and `PARENT_SLUG` in the caller context.
 - `/z-audit` HEAVY path skips Phase 2 (auditor dispatch) and Phase 3 (merge findings) entirely; the reconciler has already written REPORT.md. Attempting to run Phase 2/3 in the HEAVY path will fail because per-dimension findings files do not exist.
@@ -156,6 +163,11 @@ Typical chains:
 - `/z-brainstorm` HEAVY Phase 4: N_PAIRS ≤ 12 uses a single AskUserQuestion for all (chunk, framing) pairs; N_PAIRS > 12 uses a two-step question (chunk first, then framing). Back-loops are capped at 3 iterations; the fourth Back is treated as Abandon.
 - `/z-brainstorm` HEAVY abandons set `chosen_framing: abandoned` (not `chosen_pair`) so abort detection is uniform across LIGHT/MEDIUM/HEAVY modes.
 - Notification policy across all commands now points to `docs/human/config.md` (not a `Z_HARNESS_NOTIFY` env var). Commands that send notifications call `scripts/config.py should-notify --event <type>` and act only when the return is `yes`. `/z-do` and `/z-plan` also call `scripts/config.py export-env` during Setup to hydrate all config knobs into the environment before any phase runs.
+- Resolver hooks (`resolve-question`) are separate from notification policy: they govern AskUserQuestion gates, not notification sends. A resolver error (any non-zero exit) always falls back to asking the user normally — never silently skips.
+- The hard slug-collision check (detecting an existing PLAN.md/TASKS.md in the slug dir) always runs unconditionally in `/z-plan`, `/z-fix`, and `/z-uplift` before the resolver is consulted. The resolver only governs the soft non-obvious-slug confirmation gate that runs after the collision check passes.
+- Elevation proposer Phase 9 in `/z-audit-plan`, `/z-audit-plan-style`, and `/z-amend` is a soft phase: if `propose-prefs.py` returns empty output or a non-zero exit, the phase is skipped silently with no AskUserQuestion surfaced.
+- Suppression entries in `.z-harness/.propose-suppress` are keyed by `question_id` with a Unix-epoch expiry. The elevation proposer checks these before surfacing a proposal; an unexpired entry suppresses the proposal entirely.
+- `/z-suggest-memory --kind routing-preference` writes to `docs/llm/workflow.json` (global) or `docs/llm/workflow-<project-slug>.json` (project scope). The file is created with INDEX.json registration if it does not exist. The `reason` and `project_root` fields are omitted from the entry when not applicable. MEMORIES-FLAT.md is regenerated after every write.
 
 ## Examples
 
@@ -179,3 +191,5 @@ Typical chains:
 - Audit plan artifacts for code-quality issues before implementation: `/z-audit-plan-style`
 - Audit a component (auto-classifies scope): `/z-audit strategies/kxbtc15m_fade_extremes`
 - Brainstorm a topic (with parallel ideators + scope probe): `/z-brainstorm "rethink the retry backoff strategy"`
+- Persist a routing preference to skip slug-confirm in future: implicitly via resolver after repeated `skip` choices; or explicitly after Phase 9 elevation proposer in `/z-audit-plan`
+- Write a routing-preference memory entry manually: `/z-suggest-memory --kind routing-preference --question-id workflow.audit_to_amend --value amend --strength strong --scope project`

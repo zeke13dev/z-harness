@@ -67,6 +67,10 @@ workflows:
     source: commands/z-maintain-docs.md
     output: .agent/workflows/z-maintain-docs.md
     description: "Refresh stale docs in docs/human/ and docs/llm/. Reads docs/llm/INDEX.json to find concepts whose source files changed since each doc's last_updated. Spawns doc-updater subagents (Sonnet) per stale concept. Dry-run preview by default — user review..."
+  - id: z-map
+    source: commands/z-map.md
+    output: .agent/workflows/z-map.md
+    description: "Maps terrain with citations + cross-LLM critique. No recommendations — terrain only. See `/z-research` for synthesis across map + brainstorm."
   - id: z-mr-review
     source: commands/z-mr-review.md
     output: .agent/workflows/z-mr-review.md
@@ -90,7 +94,7 @@ workflows:
   - id: z-research
     source: commands/z-research.md
     output: .agent/workflows/z-research.md
-    description: "Structured pre-plan terrain mapping — up to 3 parallel Explore subagents, bundled cross-LLM critique, produce RESEARCH.md with file:line citations to ground /z-plan. Explicitly does not recommend an approach."
+    description: "Higher-order meta-orchestrator. Composes /z-map (terrain) and /z-brainstorm (framings), then runs adversarial synthesis panel (3 perspectives + judge) producing RESEARCH.md with 10-section schema including approach decision matrix. Cost 3–6M token..."
   - id: z-review-all
     source: commands/z-review-all.md
     output: .agent/workflows/z-review-all.md
@@ -197,6 +201,11 @@ rules:
     output: .agent/rules/z-harness-remote-runner.md
     trigger: always_on
     description: "Haiku subagent that handles MECHANICAL remote work — rsync local repo to a per-(slug, task-id) sandbox on the remote host, run cargo build/check/clean, restart paper qtctl manifests, tail logs, run READ-ONLY DB/disk/log queries against shared stat..."
+  - id: research-judge
+    source: agents/research-judge.md
+    output: .agent/rules/z-harness-research-judge.md
+    trigger: model_decision
+    description: "Final-judge synthesizer for /z-research. Reads N=3 adversarial-panel perspective outputs + the MAP.md + BRAINSTORM.md source artifacts; produces the final RESEARCH.md content (10 sections per SPEC) including the approach decision matrix with manda..."
   - id: review-agent
     source: agents/review-agent.md
     output: .agent/rules/z-harness-review-agent.md
@@ -275,6 +284,10 @@ skills:
     source: skills/z-maintain-docs/SKILL.md
     output: .agent/skills/z-maintain-docs/SKILL.md
     description: "Refresh stale docs in docs/human/ and docs/llm/. Reads docs/llm/INDEX.json to find concepts whose source files changed since each doc's last_updated. Spawns doc-updater subagents (Sonnet) per stale concept. Dry-run preview by default — user review..."
+  - id: z-map
+    source: skills/z-map/SKILL.md
+    output: .agent/skills/z-map/SKILL.md
+    description: "Maps terrain with citations + cross-LLM critique. No recommendations — terrain only. See `/z-research` for synthesis across map + brainstorm."
   - id: z-plan
     source: skills/z-plan/SKILL.md
     output: .agent/skills/z-plan/SKILL.md
@@ -290,7 +303,7 @@ skills:
   - id: z-research
     source: skills/z-research/SKILL.md
     output: .agent/skills/z-research/SKILL.md
-    description: "Structured pre-plan terrain mapping — up to 3 parallel Explore subagents, bundled cross-LLM critique, produce RESEARCH.md with file:line citations to ground /z-plan. Explicitly does not recommend an approach."
+    description: "Higher-order meta-orchestrator. Composes /z-map (terrain) and /z-brainstorm (framings), then runs adversarial synthesis panel (3 perspectives + judge) producing RESEARCH.md with 10-section schema including approach decision matrix. Cost 3–6M token..."
   - id: z-review-all
     source: skills/z-review-all/SKILL.md
     output: .agent/skills/z-review-all/SKILL.md

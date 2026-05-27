@@ -33,7 +33,7 @@ Return exactly this parseable shape and no prose before or after:
 
 ```text
 STATUS: routed | ask_user | bad_input
-RECOMMENDED: /z-do | /z-plan-light | /z-plan | /z-plan-split | /z-brainstorm | /z-research | /z-audit-plan | /z-fix | /z-debug | /z-amend | /z-maintain-docs | ask_user
+RECOMMENDED: /z-do | /z-plan-light | /z-plan | /z-plan-split | /z-brainstorm | /z-map | /z-research | /z-audit-plan | /z-fix | /z-debug | /z-amend | /z-maintain-docs | ask_user
 ROUTE_CLASS: primary | contextual | none
 CONFIDENCE: high | medium | low
 REASON_CODES: <comma-separated stable reason codes>
@@ -55,6 +55,7 @@ Primary route targets:
 - `/z-plan`
 - `/z-plan-split`
 - `/z-brainstorm`
+- `/z-map`
 - `/z-research`
 
 Contextual exits:
@@ -75,7 +76,9 @@ Use only these reason codes:
 - `small_fix`
 - `medium_plan`
 - `large_split`
-- `needs_research`
+- `needs_terrain_map`
+- `needs_approach_synthesis`
+- `needs_research` (**DEPRECATED ALIAS** — for one version cycle only; maps to `needs_terrain_map` → `/z-map`. Drop in next major version. Emit alongside `needs_terrain_map` when encountered in legacy callers.)
 - `needs_brainstorm`
 - `existing_plan_audit`
 - `existing_plan_amend`
@@ -108,6 +111,7 @@ Use only these reason codes:
 - `public_api_or_wire_format`: boolean
 - `terrain_uncertain`: boolean
 - `approach_uncertain`: boolean
+- `has_map_and_brainstorm`: boolean
 - `has_bug_diagnosis`: boolean
 - `has_unknown_bug_symptom`: boolean
 - `has_existing_plan`: boolean
@@ -131,17 +135,18 @@ Apply these rules in order:
    - `has_bug_diagnosis` -> `/z-fix`
    - `has_unknown_bug_symptom` -> `/z-debug`
    - `docs_stale_or_drifted` -> `/z-maintain-docs`
-5. If `terrain_uncertain` is true, recommend `/z-research`.
-6. If `approach_uncertain` is true and terrain is known enough to compare approaches, recommend `/z-brainstorm`.
-7. Apply split-specific seam rules before generic downrouting. If `current_command` is `/z-plan-split` or `cluster_seams` is present, resolve these seam rules before considering `candidate_files`-based routes:
-   - If `current_command` is `/z-plan-split` and `cluster_seams` is `null` or absent, recommend `/z-research` with `needs_research` unless other supplied signals genuinely conflict; in that case return `STATUS: ask_user` with `ambiguous_route`.
+5. If `terrain_uncertain` is true, recommend `/z-map` with `needs_terrain_map`.
+6. If `has_map_and_brainstorm` is true AND `approach_uncertain` is true, recommend `/z-research` with `needs_approach_synthesis`.
+7. If `approach_uncertain` is true and terrain is known enough to compare approaches (and `has_map_and_brainstorm` is not true), recommend `/z-brainstorm`.
+8. Apply split-specific seam rules before generic downrouting. If `current_command` is `/z-plan-split` or `cluster_seams` is present, resolve these seam rules before considering `candidate_files`-based routes:
+   - If `current_command` is `/z-plan-split` and `cluster_seams` is `null` or absent, recommend `/z-map` with `needs_terrain_map` unless other supplied signals genuinely conflict; in that case return `STATUS: ask_user` with `ambiguous_route`.
    - If `cluster_seams < 2`, recommend `/z-plan` with `too_few_clusters`.
    - If `cluster_seams` is between 2 and 6 and `cluster_seams_independently_plannable` is true, recommend `/z-plan-split`.
    - If `cluster_seams` is between 2 and 6 but independent plannability is false or unknown, do not recommend `/z-plan-split`; prefer `/z-plan` or return `STATUS: ask_user` with `ambiguous_route` if `/z-plan` and `/z-plan-split` remain tied.
-8. If `candidate_files` is known and `candidate_files <= 3`, no cross-module impact, no schema or persistence impact, and `non_obvious_decisions == 0`, recommend `/z-do`. If `non_obvious_decisions` is `null` or absent, do not recommend `/z-do`; choose a safer planning route or `ask_user` with lower confidence.
-9. If `candidate_files` is known and `candidate_files <= 5`, `non_obvious_decisions` is known and `non_obvious_decisions <= 2`, and there is no public API, wire-format, schema, or persistence impact, recommend `/z-plan-light`.
-10. If `expected_tasks > 25`, recommend `/z-plan-split` only when `cluster_seams_independently_plannable` is true; otherwise recommend `/z-plan` with medium or low confidence based on the supplied signals.
-11. Otherwise recommend `/z-plan`.
+9. If `candidate_files` is known and `candidate_files <= 3`, no cross-module impact, no schema or persistence impact, and `non_obvious_decisions == 0`, recommend `/z-do`. If `non_obvious_decisions` is `null` or absent, do not recommend `/z-do`; choose a safer planning route or `ask_user` with lower confidence.
+10. If `candidate_files` is known and `candidate_files <= 5`, `non_obvious_decisions` is known and `non_obvious_decisions <= 2`, and there is no public API, wire-format, schema, or persistence impact, recommend `/z-plan-light`.
+11. If `expected_tasks > 25`, recommend `/z-plan-split` only when `cluster_seams_independently_plannable` is true; otherwise recommend `/z-plan` with medium or low confidence based on the supplied signals.
+12. Otherwise recommend `/z-plan`.
 
 If two or more plausible targets remain tied after applying the rules, return `STATUS: ask_user` with `REASON_CODES: ambiguous_route`.
 

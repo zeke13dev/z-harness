@@ -1,6 +1,6 @@
 {
   "concept": "agents",
-  "last_updated": "2026-05-27",
+  "last_updated": "2026-05-28T12:00:00Z",
   "covers_spec": "none",
   "source_file": [
     "agents/auditor.md",
@@ -21,6 +21,7 @@
     "agents/reviewer.md",
     "agents/scope-probe.md",
     "agents/scope-reconciler-audit.md",
+    "agents/research-judge.md",
     "agents/scope-reconciler-brainstorm.md",
     "agents/spec-precheck.md"
   ],
@@ -116,6 +117,13 @@
       "symbol": "planning-router",
       "kind": "module",
       "summary": "Haiku advisory router for ambiguous plan-family decisions; parseable route contract."
+    },
+    {
+      "file": "agents/research-judge.md",
+      "line": 1,
+      "symbol": "research-judge",
+      "kind": "module",
+      "summary": "Opus final-judge synthesizer for /z-research; reads N adversarial-panel perspectives + MAP.md + BRAINSTORM.md; produces 10-section RESEARCH.md; forbidden from new design recommendations; read-only."
     },
     {
       "file": "agents/remote-runner.md",
@@ -233,7 +241,12 @@
     "scope-reconciler-audit severity elevation applies only to systemic non-dissent findings (same normalized_evidence_key in \u22652 distinct chunks); dissent findings are never elevated.",
     "scope-reconciler-audit normalization (lowercase, collapse whitespace, strip line-number prefix, truncate to 200 chars) is an internal computation only; the original quoted evidence is always written to REPORT.md.",
     "scope-reconciler-brainstorm anti-bias check (sections A through D) is mandatory even when findings are empty; skipping any sub-check makes the output less trustworthy than a single chunk's output.",
-    "scope-reconciler-brainstorm: a Claude-favoring pick requires a concrete justification naming what Claude said that peers did not; a generic preference is not accepted as justification."
+    "scope-reconciler-brainstorm: a Claude-favoring pick requires a concrete justification naming what Claude said that peers did not; a generic preference is not accepted as justification.",
+    "research-judge is FORBIDDEN from proposing new design recommendations; every claim must trace back to MAP.md, BRAINSTORM.md, or a panel perspective file.",
+    "research-judge is read-only; it returns RESEARCH.md content as text; the orchestrator writes the file.",
+    "research-judge fires panel_degraded mode when panel_perspective_count < 3; synthesis continues with available perspectives.",
+    "research-judge self-check (Step 7) is mandatory on every invocation; research_judge_temptation field is always populated.",
+    "research-judge produces exactly 10 sections in fixed order; no additional top-level sections permitted."
   ],
   "memories": []
 }

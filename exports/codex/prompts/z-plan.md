@@ -13,9 +13,34 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
 ## Setup
 
 1. **Derive a plan slug** from the task: short kebab-case, 2-4 words (e.g. "expand sports ML" → `expand-sports-ml`; "add rate limit middleware" → `add-rate-limit`). Check for existing slug dirs in the canonical plans directory (`z-harness/plans/`) and the legacy directory (`z-harness/`). If a matching slug dir is found:
-   - **Precontext-only slug dir** (only `BRAINSTORM.md` and/or `RESEARCH.md` present, no `PLAN.md`/`SPEC.md`/`TASKS.md`): treat as continuation — no prompt, proceed with the existing slug.
-   - **Finished-plan slug dir** (`PLAN.md` or `TASKS.md` exists): collision — prompt the user via `AskUserQuestion` to confirm or choose a different slug.
-   If the auto-derived slug is non-obvious, confirm with the user via `AskUserQuestion`.
+   - **Precontext-only slug dir** (only `MAP.md`, `BRAINSTORM.md`, and/or `RESEARCH.md` present, no `PLAN.md`/`SPEC.md`/`TASKS.md`): treat as continuation — no prompt, proceed with the existing slug.
+   - **Finished-plan slug dir** (`PLAN.md` or `TASKS.md` exists): **collision — prompt the user via `AskUserQuestion` to confirm or choose a different slug. This collision check runs UNCONDITIONALLY and is never bypassed by the resolver below.**
+
+   After the collision check passes (no collision found, or the user confirmed a new slug), apply the soft non-obvious-slug confirmation gate:
+
+   ```bash
+   # Only reached after collision check has already passed.
+   RESOLVED="$(python3 scripts/config.py resolve-question workflow.slug_confirm)"
+   RESOLVE_EXIT=$?
+
+   if [[ $RESOLVE_EXIT -ne 0 ]]; then
+     # Exit codes: 2=bad invocation, 3=unknown question_id, 4=I/O error.
+     # In all error cases, fall through to ask the user normally — never silently skip.
+     echo "resolve-question failed (exit $RESOLVE_EXIT); falling back to ask" >&2
+     RESULT="ask"; DEFAULT=""; SOURCE="error"
+   else
+     RESULT="$(echo "$RESOLVED" | jq -r .result)"
+     DEFAULT="$(echo "$RESOLVED" | jq -r .default)"
+     SOURCE="$(echo "$RESOLVED" | jq -r .source)"
+   fi
+   ```
+
+   Branch on `$RESULT`:
+   - `skip`: accept the derived slug silently — no AskUserQuestion. Emit `askuser_skipped` event with `{question_id: "workflow.slug_confirm", source: "$SOURCE"}`.
+   - `prefill`: present the AskUserQuestion normally, pre-select the derived slug as the recommended option (label suffix: ` (Recommended — your preference)`).
+   - `ask`: if the auto-derived slug is non-obvious, confirm with the user via `AskUserQuestion` normally. If `$SOURCE == "conflict"`, add to the question header: `(Note: config says <X>, memory says <Y> — your answer below will be offered as a conflict-resolution write target.)` After the user picks an answer that differs from both stored values, surface a one-shot follow-up: "Record your answer as the new preference? (config / memory:very_strong / memory:strong / no)".
+
+   **Invariant:** the collision check above is a hard safety prerequisite that runs unconditionally regardless of resolver outcome. The resolver only governs the soft non-obvious-slug confirmation gate.
 2. **Export** `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")` for all subsequent shell calls and subagents — this is what namespaces every output path.
 3. Pick a run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`
 4. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`
@@ -46,9 +71,20 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
 6. Notification policy is resolved from config via the `export-env` step above. See `docs/human/config.md` for knob details (`notify.level`).
 7. **Check for LLM-tier docs.** If `docs/llm/INDEX.json` exists in the repo root, **do NOT read it from main thread.** Note its existence; Phase 1 will dispatch `doc-fetcher` (Haiku) to read it. The orchestrator never reads `docs/llm/*.json` directly — that's what burns main-thread context unnecessarily. If INDEX.json does not exist, note that fact and continue (Phase 1 will Explore without doc grounding).
 8. **Docs-freshness route gate.** If `docs/llm/INDEX.json` exists, compute staleness across all its entries before Phase 1 starts. This step is the ONE exception where main thread reads INDEX.json — but only the lightweight metadata fields (`slug`, `last_updated`, `source_file`), never the per-concept `<slug>.json` bodies. For each concept entry, compare `entry.last_updated` against the max `mtime` of its `source_files`. A concept is **stale** if any source file's mtime exceeds `last_updated`. Compute `stale_pct = stale_concepts / total_concepts`. The threshold is `$Z_HARNESS_DOC_STALENESS_THRESHOLD` (default `20` — meaning 20 percent). If `stale_pct >= threshold`, handle it through the route-decision flow before Phase 1: write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md`, emit `plan_route_decision` with `from_command: "/z-plan"`, `to_command: "/z-maintain-docs"`, `route_class: "contextual"`, `reason_codes: ["docs_stale"]`, `signals.docs_stale_or_drifted: true`, `confidence: "high"`, `classifier_used: false`, `artifact_path`, `route_chain`, and the eventual `user_choice`, then push-notify and present the AskUser handoff gate: switch to `/z-maintain-docs`, continue here with stale docs, or abandon. Do not execute `/z-maintain-docs` automatically. If the user continues with stale docs, emit a `doc_drift_acknowledged` event and continue — Phase 1 still uses INDEX.json but the orchestrator should weight `relevant_concepts` hints less and verify against current code more aggressively.
-9. **Pre-plan artifact detection.** Check `$Z_HARNESS_PLAN_DIR/` for `BRAINSTORM.md` and `RESEARCH.md`.
-    - **Freshness check (RESEARCH.md only):** If `RESEARCH.md` exists, parse all file citations using regex `/[A-Za-z0-9_./-]+\.(rs|py|md|ts|tsx|js|jsx|json|toml|yaml|yml|sh|sql)(:\d+(-\d+)?)?/`. Also scan for extensionless allowlist filenames (`Makefile`, `Dockerfile`). Markdown link form `[label](path:line)` — extract the inner path. For each cited path: follow symlinks; compare mtime to `generated_at`; for line-ranges, use min-line mtime (any modification within range → stale). If any stale citation found, warn the user via `AskUserQuestion` ("proceed with stale research" / "re-run research" / "abort"). Deleted-source detection: if a cited file no longer exists, emit a `precontext_source_deleted` event (higher severity than stale-mtime) **and** trigger the same `AskUserQuestion` warn path — deleted-source citations are treated as stale for the purposes of the user gate. Parse failure: emit `precontext_freshness_check_failed`, continue (fail-open).
-    - **Conflict check:** If both `BRAINSTORM.md` and `RESEARCH.md` exist, scan for obvious contradictions (e.g. Brainstorm assumes X is possible; Research found constraint Y that prevents it). Surface contradictions to the user.
+9. **Pre-plan artifact detection.** Check `$Z_HARNESS_PLAN_DIR/` for `MAP.md`, `BRAINSTORM.md`, and `RESEARCH.md`.
+
+    **RESEARCH.md artifact_kind dispatch:** If `RESEARCH.md` exists, read its frontmatter `artifact_kind` and `status` fields first to determine the precontext mode:
+
+    - **`artifact_kind: approach_synthesis` + `status: complete`** → **one-way gate active.** RESEARCH.md is canonical precontext. Skip MAP.md + BRAINSTORM.md injection entirely. Phase 1 uses matrix-based skip rules (see Phase 1 — RESEARCH.md one-way gate shortcut).
+    - **`artifact_kind: map`** (legacy old-RESEARCH.md not yet renamed) → treat as a MAP.md artifact: apply freshness check (same regex/mtime logic as MAP.md below), then proceed with component-file injection (MAP.md + BRAINSTORM.md mode). Log `legacy_map_artifact_detected`.
+    - **No `artifact_kind` field** → treat as legacy MAP.md artifact per above (component-file injection). Log `legacy_map_artifact_detected`.
+    - **`status: incomplete`** → halt. Emit `precontext_research_incomplete`. Recommend re-running `/z-research` before proceeding.
+
+    **Freshness check — RESEARCH.md** (when one-way gate is active): parse all file citations using regex `/[A-Za-z0-9_./-]+\.(rs|py|md|ts|tsx|js|jsx|json|toml|yaml|yml|sh|sql)(:\d+(-\d+)?)?/`. Also scan for extensionless allowlist filenames (`Makefile`, `Dockerfile`). Markdown link form `[label](path:line)` — extract the inner path. For each cited path: follow symlinks; compare mtime to `generated_at`; for line-ranges, use min-line mtime (any modification within range → stale). If any stale citation found, warn the user via `AskUserQuestion` ("proceed with stale research" / "re-run /z-research" / "abort"). Deleted-source detection: if a cited file no longer exists, emit a `precontext_source_deleted` event (higher severity than stale-mtime) **and** trigger the same `AskUserQuestion` warn path — deleted-source citations are treated as stale for the purposes of the user gate. Parse failure: emit `precontext_freshness_check_failed`, continue (fail-open).
+
+    **Freshness check — MAP.md** (when one-way gate is inactive and MAP.md exists or RESEARCH.md is treated as MAP.md): parse all file citations using the same regex `/[A-Za-z0-9_./-]+\.(rs|py|md|ts|tsx|js|jsx|json|toml|yaml|yml|sh|sql)(:\d+(-\d+)?)?/` and extensionless allowlist (`Makefile`, `Dockerfile`). Markdown link form `[label](path:line)` — extract the inner path. For each cited path: follow symlinks; compare mtime to the MAP.md frontmatter `generated_at`; for line-ranges, use min-line mtime. If any stale citation found, warn the user via `AskUserQuestion` ("proceed with stale map" / "re-run /z-map" / "abort"). Deleted-source detection: emit `precontext_source_deleted` and trigger the same warn path. Parse failure: emit `precontext_freshness_check_failed`, continue (fail-open).
+
+    - **Conflict check:** If both `BRAINSTORM.md` and `RESEARCH.md` exist (in component-file mode, i.e. one-way gate inactive), scan for obvious contradictions (e.g. Brainstorm assumes X is possible; Research/Map found constraint Y that prevents it). Surface contradictions to the user.
     - **Unfinalized brainstorm:** If `BRAINSTORM.md` is present but `status: complete` is missing or `chosen_framing` is absent, recommend the user run `/z-brainstorm` again before proceeding.
 
 **All paths in subsequent phases live under `$Z_HARNESS_PLAN_DIR/`:**
@@ -106,7 +142,11 @@ This makes post-run analysis trivial: total run time = sum(`phase_end.wall_ms`);
 
 ## Phase 0 — Premise check
 
-**Do not take the prompt's premises for granted.** If `BRAINSTORM.md` or `RESEARCH.md` were detected in Setup step 9, **inject their content here** as input to the premise check (extracting core hypothesis + findings). Do not re-derive context already covered by these artifacts.
+**Do not take the prompt's premises for granted.** If precontext artifacts were detected in Setup step 9, **inject their content here** as input to the premise check:
+- **One-way gate active** (`artifact_kind: approach_synthesis`): inject RESEARCH.md content only (core hypothesis, approach decision matrix summary, mechanical rank-ordering). Do not inject MAP.md or BRAINSTORM.md.
+- **One-way gate inactive** (component-file mode): inject MAP.md (or legacy RESEARCH.md treated as MAP.md) findings and BRAINSTORM.md chosen framing.
+
+Do not re-derive context already covered by these artifacts.
 
 Before any planning, ask:
 
@@ -122,16 +162,27 @@ Checkpoint: `phase0-premise.md`.
 
 ## Phase 1 — Exploration
 
-**RESEARCH.md shortcut:** If RESEARCH.md was detected (Setup step 9) and is non-stale, it may make doc-fetcher and/or Explore optional. The two skip conditions are **independent** — evaluate each separately:
+**RESEARCH.md one-way gate shortcut** (when `artifact_kind: approach_synthesis` + `status: complete` detected in Setup step 9): If RESEARCH.md is non-stale, it may make doc-fetcher and/or Explore optional. The two skip conditions are **independent** — evaluate each separately using the new RESEARCH.md schema (matrix + evidence gaps):
 
-- **Skip doc-fetcher** iff RESEARCH.md is non-stale AND its `Findings:` section has ≥1 entry citing a file in the task's likely-touched set.
-- **Skip Explore** iff RESEARCH.md is non-stale AND its `Open questions:` section is empty.
+- **Skip doc-fetcher** iff RESEARCH.md is non-stale AND its `## Approach decision matrix` section has ≥1 cell with `OK` or `RISKY` verdict citing a file in the task's likely-touched set.
+- **Skip Explore** iff RESEARCH.md is non-stale AND its `## Evidence gaps` section is empty (no `UNVERIFIED` cells aggregated).
 
-The four resulting cases:
-- **(a) Skip doc-fetcher only** — RESEARCH.md has findings for touched files but has open questions → run Explore, skip doc-fetcher.
-- **(b) Skip Explore only** — RESEARCH.md has no findings for touched files but has no open questions → run doc-fetcher, skip Explore.
-- **(c) Skip both** — RESEARCH.md has findings for touched files AND no open questions → skip both, proceed to Phase 2.
-- **(d) Run both** — RESEARCH.md is stale, absent, or meets neither skip condition → run both doc-fetcher and Explore.
+The four resulting cases (one-way gate active):
+- **(a) Skip doc-fetcher only** — matrix has OK/RISKY cell citing a touched file but Evidence gaps non-empty → run Explore, skip doc-fetcher.
+- **(b) Skip Explore only** — matrix has no OK/RISKY cell for touched files but Evidence gaps empty → run doc-fetcher, skip Explore.
+- **(c) Skip both** — matrix has OK/RISKY cell for touched files AND Evidence gaps empty → skip both, proceed to Phase 2.
+- **(d) Run both** — RESEARCH.md is stale, absent in gate-active mode, or meets neither skip condition → run both doc-fetcher and Explore.
+
+**Legacy RESEARCH.md / component-file shortcut** (when one-way gate is inactive — MAP.md or legacy RESEARCH.md detected in Setup step 9): If MAP.md (or legacy RESEARCH.md treated as MAP.md) is non-stale, it may make doc-fetcher and/or Explore optional. The two skip conditions are **independent** — evaluate each separately:
+
+- **Skip doc-fetcher** iff MAP.md (or legacy RESEARCH.md) is non-stale AND its `Findings:` section has ≥1 entry citing a file in the task's likely-touched set.
+- **Skip Explore** iff MAP.md (or legacy RESEARCH.md) is non-stale AND its `Open questions:` section is empty.
+
+The four resulting cases (gate inactive):
+- **(a) Skip doc-fetcher only** — MAP.md has findings for touched files but has open questions → run Explore, skip doc-fetcher.
+- **(b) Skip Explore only** — MAP.md has no findings for touched files but has no open questions → run doc-fetcher, skip Explore.
+- **(c) Skip both** — MAP.md has findings for touched files AND no open questions → skip both, proceed to Phase 2.
+- **(d) Run both** — MAP.md is stale, absent, or meets neither skip condition → run both doc-fetcher and Explore.
 
 **Rule: doc-fetcher FIRST, Explore for gaps.** The two-tier docs at `docs/llm/` are a cheap pre-built oracle. The orchestrator must consult them via the `doc-fetcher` (Haiku) subagent before dispatching the (expensive) Explore subagent.
 
@@ -265,11 +316,12 @@ The SPEC.md must include a `## Planning Inputs` section near the top (after titl
 
 | Artifact | Path | generated_at |
 |----------|------|--------------|
+| MAP.md | $Z_HARNESS_PLAN_DIR/MAP.md | <iso timestamp or "n/a"> |
 | BRAINSTORM.md | $Z_HARNESS_PLAN_DIR/BRAINSTORM.md | <iso timestamp or "n/a"> |
 | RESEARCH.md | $Z_HARNESS_PLAN_DIR/RESEARCH.md | <iso timestamp or "n/a"> |
 ```
 
-If neither artifact was present, write: `none — fresh /z-plan run.`
+Include only rows for artifacts that were actually present. If none were present, write: `none — fresh /z-plan run.`
 
 Create `$Z_HARNESS_PLAN_DIR/PLAN.md` — approved plan: goals, decisions (with rationale), non-goals, approved shortcuts, ordered phases.
 

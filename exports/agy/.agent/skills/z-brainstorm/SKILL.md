@@ -15,11 +15,36 @@ $ARGUMENTS
 
 ## Setup
 
-1. **Derive slug.** If `$ARGUMENTS` contains `--slug=<value>`, use that verbatim. Otherwise auto-derive from the topic: short kebab-case, 2-4 words (e.g. "rethink batting order model" → `rethink-batting-order`). If the auto-derived slug is non-obvious, confirm via `AskUserQuestion`.
+1. **Derive slug.** If `$ARGUMENTS` contains `--slug=<value>`, use that verbatim (no confirmation needed — user-specified). Otherwise auto-derive from the topic: short kebab-case, 2-4 words (e.g. "rethink batting order model" → `rethink-batting-order`).
+
+   After deriving the slug (when `--slug=` was NOT provided), apply the soft non-obvious-slug confirmation gate. **Note: the existing slug-dir collision check in step 5 below is a hard prerequisite that runs UNCONDITIONALLY and is separate from this soft gate. The resolver below only governs the soft non-obvious confirmation.**
+
+   ```bash
+   # Soft non-obvious-slug confirmation gate (runs before step 2; collision check is in step 5).
+   RESOLVED="$(python3 scripts/config.py resolve-question workflow.slug_confirm)"
+   RESOLVE_EXIT=$?
+
+   if [[ $RESOLVE_EXIT -ne 0 ]]; then
+     # Exit codes: 2=bad invocation, 3=unknown question_id, 4=I/O error.
+     # In all error cases, fall through to ask the user normally — never silently skip.
+     echo "resolve-question failed (exit $RESOLVE_EXIT); falling back to ask" >&2
+     RESULT="ask"; DEFAULT=""; SOURCE="error"
+   else
+     RESULT="$(echo "$RESOLVED" | jq -r .result)"
+     DEFAULT="$(echo "$RESOLVED" | jq -r .default)"
+     SOURCE="$(echo "$RESOLVED" | jq -r .source)"
+   fi
+   ```
+
+   Branch on `$RESULT`:
+   - `skip`: accept the derived slug silently — no AskUserQuestion. Emit `askuser_skipped` event with `{question_id: "workflow.slug_confirm", source: "$SOURCE"}`.
+   - `prefill`: present the AskUserQuestion normally, pre-select the derived slug as the recommended option (label suffix: ` (Recommended — your preference)`).
+   - `ask`: if the auto-derived slug is non-obvious, confirm via `AskUserQuestion` normally. If `$SOURCE == "conflict"`, add to the question header: `(Note: config says <X>, memory says <Y> — your answer below will be offered as a conflict-resolution write target.)` After the user picks an answer that differs from both stored values, surface a one-shot follow-up: "Record your answer as the new preference? (config / memory:very_strong / memory:strong / no)".
+
 2. **Export** `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")` for all subsequent shell calls and subagents.
 3. Pick a run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`.
 4. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`.
-5. **Existing slug-dir handling.** Run `ls z-harness/` to check for a matching slug dir. If `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md` exists, prompt the user via `AskUserQuestion`:
+5. **Existing slug-dir handling (hard collision check — runs UNCONDITIONALLY regardless of resolver outcome above).** Run `ls z-harness/` to check for a matching slug dir. If `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md` exists, prompt the user via `AskUserQuestion`:
    - **overwrite** — archive existing `BRAINSTORM.md` to `$Z_HARNESS_PLAN_DIR/archive/$RUN/BRAINSTORM.md.previous-<N>` (where `<N>` is the next free integer in that archive dir) and start fresh
    - **abort** — exit cleanly with no changes
 6. **Version stamp + log run start:**
@@ -32,8 +57,19 @@ $ARGUMENTS
    ' "$VERSION_BLOB" "<arguments>")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" brainstorm_run_start "$START_PAYLOAD"
    ```
-7. Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
-8. **Cost guardrail.** Target ≤200K tokens. If the running total exceeds 200K (rough estimate: sum prompt+response chars across consult events ÷ 4), log a warning event and continue — do not halt.
+7. **Parent attribution (sub-command contract).** If `$Z_HARNESS_PARENT_RUN_ID` is set in the environment (i.e. this sub-command is being dispatched by a meta-orchestrator like `/z-research`), include `parent_run_id` and `parent_command` fields in every subsequent `log-event.sh` payload. Example:
+
+   ```bash
+   bash log-event.sh "$RUN" some_event "$(python3 -c 'import json,os,sys; p=json.loads(sys.argv[1]);
+   pid=os.environ.get("Z_HARNESS_PARENT_RUN_ID"); pcmd=os.environ.get("Z_HARNESS_PARENT_COMMAND");
+   if pid: p["parent_run_id"]=pid;
+   if pcmd: p["parent_command"]=pcmd;
+   print(json.dumps(p))' "$ORIG_PAYLOAD")"
+   ```
+
+   If env vars absent → emit events as today (no attribution fields). Backward compatible.
+8. Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
+9. **Cost guardrail.** Target ≤200K tokens. If the running total exceeds 200K (rough estimate: sum prompt+response chars across consult events ÷ 4), log a warning event and continue — do not halt.
 
 **All paths live under `$Z_HARNESS_PLAN_DIR/`:**
 - `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md`
@@ -44,7 +80,7 @@ $ARGUMENTS
 
 Run this route check after Phase 1 scaffolding is assembled and before Phase 2 ideator dispatch. `/z-brainstorm` may route only before ideators are spawned; once ideation starts, finish the brainstorm flow instead of switching commands mid-run.
 
-Use only already-known signals from the topic, doc-fetcher synthesis, optional Explore, and any ingested `RESEARCH.md`: `candidate_files`, `expected_tasks`, `non_obvious_decisions`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `terrain_uncertain`, `approach_uncertain`, `has_existing_plan`, `has_fix_artifact`, and `docs_stale_or_drifted`.
+Use only already-known signals from the topic, doc-fetcher synthesis, optional Explore, and any ingested `MAP.md` (or legacy `RESEARCH.md` with `artifact_kind: map`): `candidate_files`, `expected_tasks`, `non_obvious_decisions`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `terrain_uncertain`, `approach_uncertain`, `has_existing_plan`, `has_fix_artifact`, and `docs_stale_or_drifted`.
 
 Deterministic routes:
 - Route unknown terrain, missing citations, or insufficient source facts to `/z-research`.
@@ -113,14 +149,21 @@ If env `Z_HARNESS_BRAINSTORM_EXPLORE=1`, dispatch ONE Explore subagent (Haiku by
 
 If `Z_HARNESS_BRAINSTORM_EXPLORE` is unset or `0`, skip this step entirely — brainstorming is supposed to be cheap.
 
-### 1c. RESEARCH.md ingestion
+### 1c. MAP.md ingestion
 
-If `$Z_HARNESS_PLAN_DIR/RESEARCH.md` exists, read it.
+Resolve the terrain artifact to inline into scaffolding using this precedence:
+
+1. **MAP.md (primary):** If `$Z_HARNESS_PLAN_DIR/MAP.md` exists, read it. This is the canonical terrain artifact after the `/z-research` → `/z-map` rename.
+2. **Legacy RESEARCH.md fallback (backward-compat):** If MAP.md does not exist AND `$Z_HARNESS_PLAN_DIR/RESEARCH.md` exists, read its YAML frontmatter. Accept it as terrain scaffolding only if `artifact_kind` is `map` OR the `artifact_kind` field is absent (pre-rename legacy artifact). In that case, treat it identically to MAP.md.
+3. **Explicit skip:** If `$Z_HARNESS_PLAN_DIR/RESEARCH.md` exists but its frontmatter has `artifact_kind: approach_synthesis`, **do not ingest it.** It is a synthesis output produced by the new `/z-research` meta-orchestrator — not raw terrain — and is not useful as brainstorm scaffolding. Log a note and proceed without terrain content.
+4. **No terrain artifact:** If none of the above resolve, proceed with empty terrain content.
+
+Once a terrain file is resolved (MAP.md or accepted legacy RESEARCH.md):
 
 - **≤20 KB:** inline the full content into the scaffolding payload.
 - **>20 KB:** produce an **extractive summary** that preserves citations and constraints (do not paraphrase; copy the cited bullets and constraint statements verbatim, drop the prose). Write the summary to `$Z_HARNESS_PLAN_DIR/archive/$RUN/research-summary-for-brainstorm.md`. Inline the summary instead of the full file.
 
-Record `depends_on: [RESEARCH.md]` in the eventual BRAINSTORM.md frontmatter if RESEARCH.md was ingested.
+Record `depends_on: [MAP.md]` in the eventual BRAINSTORM.md frontmatter if a terrain artifact was ingested (use the resolved filename — `MAP.md` or `RESEARCH.md` — as the value).
 
 ### 1d. Assemble and hash
 
@@ -206,7 +249,7 @@ Log every individual failure as `ideator_failed` regardless of the bucket above.
    generated_at: <UTC ISO 8601>
    command: /z-brainstorm <args>
    input_hash: <16 hex from Phase 1d>
-   depends_on: [<RESEARCH.md if ingested>]
+   depends_on: [<MAP.md or RESEARCH.md if terrain artifact ingested — use actual resolved filename>]
    ideators:
      - claude
      - codex

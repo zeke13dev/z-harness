@@ -179,6 +179,101 @@ If any check fails, do **not** silently fix — surface to user via `AskUserQues
    - **full mode with new/modified `[ ]` tasks** → `/z-implement-next` or `/z-implement-all`
    - **light mode** → `/z-plan-light` won't re-run; if the amendment is large enough to warrant re-implementation, suggest the user explicitly trigger that.
 
+## Phase 9 — Elevation Proposer
+
+After Phase 8 completes, run the preference elevation check:
+
+```bash
+PROPOSE_OUT="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/propose-prefs.py" --check z-amend 2>/dev/null)"
+```
+
+If `$PROPOSE_OUT` is non-empty, parse it as JSON and surface a one-shot preference proposal:
+
+```python
+import json
+proposal = json.loads(PROPOSE_OUT)
+qid = proposal["question_id"]
+val = proposal["proposed_value"]
+n   = len(proposal["evidence"])
+scope_rec = proposal["scope_recommendation"]
+```
+
+Emit `proposal_surfaced`:
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" proposal_surfaced \
+  "$(python3 -c '
+import json, sys
+print(json.dumps({"question_id": sys.argv[1], "proposed_value": sys.argv[2], "n_evidence": int(sys.argv[3]), "scope_recommendation": sys.argv[4]}))
+' "$qid" "$val" "$n" "$scope_rec")"
+```
+
+Present a single `AskUserQuestion`:
+
+> "You've done `<cmd_a> → z-amend` **N times** — add `<val>` as your preference for `<qid>`?"
+>
+> Options:
+> - **config** — write to project config (or global if `scope_recommendation=global`)
+> - **memory:very_strong** — store as a very-strong routing-preference memory entry
+> - **memory:strong** — store as a strong routing-preference memory entry
+> - **no** — suppress this prompt for 30 days
+
+Branch on the user's choice:
+
+**`config` branch:**
+```bash
+SCOPE_FLAG="--scope=project"
+[ "$scope_rec" = "global" ] && SCOPE_FLAG="--scope=global"
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" set workflow.audit_to_amend amend $SCOPE_FLAG
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" proposal_accepted \
+  "$(printf '{"question_id":"%s","via":"config","scope":"%s"}' "$qid" "$scope_rec")"
+```
+
+**`memory:very_strong` or `memory:strong` branch:**
+
+Dispatch `/z-suggest-memory` with `--kind routing-preference`:
+```
+/z-suggest-memory --kind routing-preference \
+  --question-id <qid> \
+  --value <val> \
+  --strength <very_strong|strong> \
+  --scope <scope_recommendation>
+```
+
+Then emit:
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" proposal_accepted \
+  "$(printf '{"question_id":"%s","via":"memory","strength":"%s","scope":"%s"}' "$qid" "$strength" "$scope_rec")"
+```
+
+**`no` branch:**
+
+Write suppression entry with 30-day expiry:
+```python
+import json, os, time
+from pathlib import Path
+suppress_path = Path(".z-harness") / ".propose-suppress"
+suppress_path.parent.mkdir(parents=True, exist_ok=True)
+data = {}
+if suppress_path.exists():
+    try:
+        data = json.loads(suppress_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        data = {}
+expiry = time.time() + 30 * 86400
+data[qid] = str(expiry)
+suppress_path.write_text(json.dumps(data))
+```
+
+Then emit:
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" proposal_rejected \
+  "$(printf '{"question_id":"%s","suppressed_until_epoch":"%s"}' "$qid" "$expiry")"
+```
+
+If `$PROPOSE_OUT` is empty, skip this phase entirely — no question is asked.
+
+---
+
 ## Hard rules
 
 - **Never delete or silently mutate a `[x]` task.** Supersede instead.

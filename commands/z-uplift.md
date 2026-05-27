@@ -68,18 +68,45 @@ done
 
 Derive a slug from the repository name or the first 2–4 words of the user's description: short kebab-case (e.g. "uplift my-app" → `my-app-uplift`; default `<repo-basename>-uplift`).
 
-If the auto-derived slug is non-obvious, log `user_wait_start`, confirm with the user via `AskUserQuestion`, then log `user_wait_end`:
+**First, run the slug collision check unconditionally** — check for an existing slug dir in the canonical plans directory (`z-harness/plans/`). This collision check is a hard prerequisite that is never bypassed by the resolver below.
+- If a MANIFEST.md is found there, this is a **resume** — skip decomposition phases and jump to the next non-terminal MANIFEST state.
+- If only a slug collision without MANIFEST, prompt the user to confirm or choose a different slug via `AskUserQuestion`.
+
+After the collision check passes (no collision found, or the user confirmed a new slug), apply the soft non-obvious-slug confirmation gate. If the auto-derived slug is non-obvious, consult the resolver:
 
 ```bash
-bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start \
-  '{"phase":"setup","reason":"slug_confirmation"}'
-_WAIT_T0=$(date +%s%3N)
-# AskUserQuestion(...)
-bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end \
-  "$(printf '{"phase":"setup","wall_ms":%d}' "$(( $(date +%s%3N) - _WAIT_T0 ))")"
+# Only reached after collision check has already passed.
+RESOLVED="$(python3 scripts/config.py resolve-question workflow.slug_confirm)"
+RESOLVE_EXIT=$?
+
+if [[ $RESOLVE_EXIT -ne 0 ]]; then
+  # Exit codes: 2=bad invocation, 3=unknown question_id, 4=I/O error.
+  # In all error cases, fall through to ask the user normally — never silently skip.
+  echo "resolve-question failed (exit $RESOLVE_EXIT); falling back to ask" >&2
+  RESULT="ask"; DEFAULT=""; SOURCE="error"
+else
+  RESULT="$(echo "$RESOLVED" | jq -r .result)"
+  DEFAULT="$(echo "$RESOLVED" | jq -r .default)"
+  SOURCE="$(echo "$RESOLVED" | jq -r .source)"
+fi
 ```
 
-Check for an existing slug dir in the canonical plans directory (`z-harness/plans/`). If a MANIFEST.md is found there, this is a **resume** — skip decomposition phases and jump to the next non-terminal MANIFEST state. If only a slug collision without MANIFEST, prompt the user to confirm or choose a different slug.
+Branch on `$RESULT`:
+- `skip`: accept the derived slug silently — no AskUserQuestion. Emit `askuser_skipped` event with `{question_id: "workflow.slug_confirm", source: "$SOURCE"}`.
+- `prefill`: present the AskUserQuestion normally, pre-select the derived slug as the recommended option (label suffix: ` (Recommended — your preference)`). Wrap with `user_wait_start` / `user_wait_end` logging:
+
+  ```bash
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start \
+    '{"phase":"setup","reason":"slug_confirmation"}'
+  _WAIT_T0=$(date +%s%3N)
+  # AskUserQuestion(...) with derived slug pre-selected
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end \
+    "$(printf '{"phase":"setup","wall_ms":%d}' "$(( $(date +%s%3N) - _WAIT_T0 ))")"
+  ```
+
+- `ask`: if non-obvious, confirm with the user via `AskUserQuestion` normally, wrapped with `user_wait_start` / `user_wait_end` logging (as shown above). If `$SOURCE == "conflict"`, add to the question header: `(Note: config says <X>, memory says <Y> — your answer below will be offered as a conflict-resolution write target.)` After the user picks an answer that differs from both stored values, surface a one-shot follow-up: "Record your answer as the new preference? (config / memory:very_strong / memory:strong / no)".
+
+**Invariant:** the collision check above is a hard safety prerequisite that runs unconditionally regardless of resolver outcome. The resolver only governs the soft non-obvious-slug confirmation gate.
 
 ```bash
 SLUG="<derived-kebab-slug>"

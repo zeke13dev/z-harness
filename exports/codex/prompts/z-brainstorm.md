@@ -29,8 +29,19 @@ $ARGUMENTS
    ' "$VERSION_BLOB" "<arguments>")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" brainstorm_run_start "$START_PAYLOAD"
    ```
-7. Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
-8. **Cost guardrail.** Target ≤200K tokens. If the running total exceeds 200K (rough estimate: sum prompt+response chars across consult events ÷ 4), log a warning event and continue — do not halt.
+7. **Parent attribution (sub-command contract).** If `$Z_HARNESS_PARENT_RUN_ID` is set in the environment (i.e. this sub-command is being dispatched by a meta-orchestrator like `/z-research`), include `parent_run_id` and `parent_command` fields in every subsequent `log-event.sh` payload. Example:
+
+   ```bash
+   bash log-event.sh "$RUN" some_event "$(python3 -c 'import json,os,sys; p=json.loads(sys.argv[1]);
+   pid=os.environ.get("Z_HARNESS_PARENT_RUN_ID"); pcmd=os.environ.get("Z_HARNESS_PARENT_COMMAND");
+   if pid: p["parent_run_id"]=pid;
+   if pcmd: p["parent_command"]=pcmd;
+   print(json.dumps(p))' "$ORIG_PAYLOAD")"
+   ```
+
+   If env vars absent → emit events as today (no attribution fields). Backward compatible.
+8. Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
+9. **Cost guardrail.** Target ≤200K tokens. If the running total exceeds 200K (rough estimate: sum prompt+response chars across consult events ÷ 4), log a warning event and continue — do not halt.
 
 **All paths live under `$Z_HARNESS_PLAN_DIR/`:**
 - `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md`
@@ -121,7 +132,29 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
      "<MODE>" "<AXIS>" "<CONFIDENCE>" "<N chunks>")"
 ```
 
-### 0f. Branch on MODE
+### 0f. Branch on STATUS, then MODE
+
+**Branch on STATUS first:**
+
+#### refused — MEDIUM fallback
+
+If `STATUS: refused`: log a `scope_probe_refused` event, treat as `MODE: MEDIUM`, and proceed to Plan Route Check and then Phase 1 unchanged.
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" scope_probe_refused \
+  '{"host_command":"z-brainstorm"}'
+```
+
+#### bad_input — MEDIUM fallback
+
+If `STATUS: bad_input`: log a `scope_probe_bad_input` event, treat as `MODE: MEDIUM`, and proceed to Plan Route Check and then Phase 1 unchanged.
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" scope_probe_bad_input \
+  '{"host_command":"z-brainstorm"}'
+```
+
+**Only if `STATUS: classified`, branch on MODE:**
 
 #### LIGHT or MEDIUM — pass-through
 
@@ -147,38 +180,38 @@ When `MODE: HEAVY`:
      description="z-brainstorm sub-flow for chunk <C.id>: <C.intent>",
      prompt="MODE: brainstorm-subflow
 
-This is a HEAVY fan-out sub-flow of /z-brainstorm. Run Phase 1 (scaffolding), Phase 2 (ideator dispatch), and Phase 3 (synthesis) for the sub-scope below. Do NOT run Phase 0 (scope-probe), Plan Route Check, or Phase 4 (user-pick gate — selection happens at the parent level for HEAVY mode). Produce a BRAINSTORM.md at the path specified.
+This is a HEAVY fan-out sub-flow of /z-brainstorm. Run Phase 1 (scaffolding), Phase 2 (ideator dispatch), and Phase 3 (synthesis) for the sub-scope below. Do NOT run Phase 0 (scope-probe), Plan Route Check, or Phase 4 (user-pick gate — selection happens at the parent level for HEAVY mode). Produce the per-chunk BRAINSTORM.md content; the parent orchestrator writes the file to the path below (you have no Write tool; return the full markdown in your response).
 
-Parent run id: <RUN>
+Z_HARNESS_PARENT_RUN_ID: <interpolate $RUN value here, e.g. 20260101T000000Z-my-slug>
+Parent slug: <interpolate $Z_HARNESS_SLUG value here>
 Chunk id: <C.id>
 Sub-scope topic: <C.scope_hint> — <C.intent>
 Original topic (for context): <topic>
 Axis: <AXIS>
-Output path: $Z_HARNESS_PLAN_DIR/archive/$RUN/chunks/<C.id>/BRAINSTORM.md
+Output path: <interpolate $Z_HARNESS_PLAN_DIR>/archive/<interpolate $RUN>/chunks/<C.id>/BRAINSTORM.md
 
-Scaffolding instructions: follow /z-brainstorm Phase 1 (doc-fetcher, optional Explore, RESEARCH.md ingestion, input_hash). Ideator dispatch: follow /z-brainstorm Phase 2 with the IDEATOR_SCHEMA. Synthesis: follow /z-brainstorm Phase 3 (anti-bias check, orchestrator recommendation). Write the BRAINSTORM.md with chosen_framing: pending (do NOT present an AskUserQuestion — the parent owns the user-pick gate)."
+Scaffolding instructions: follow /z-brainstorm Phase 1 (doc-fetcher, optional Explore, MAP.md ingestion with legacy RESEARCH.md fallback, input_hash). Ideator dispatch: follow /z-brainstorm Phase 2 with the IDEATOR_SCHEMA. Synthesis: follow /z-brainstorm Phase 3 (anti-bias check, orchestrator recommendation). Return the full per-chunk BRAINSTORM.md content (frontmatter + body) with chosen_framing: pending in your response; the parent orchestrator writes the file. Do NOT present an AskUserQuestion — the parent owns the user-pick gate."
    )
    ```
 
    Sub-flows MUST NOT themselves go HEAVY (anti-sprawl invariant: sub-flows skip Phase 0 entirely).
 
-3. **Collect sub-flow results.** For each chunk, record:
+3. **Collect sub-flow results and write per-chunk files.** Each sub-flow returns BRAINSTORM.md content as its response text (sub-agents have no Write tool — the orchestrator owns the write). For each chunk, write the returned text to `$Z_HARNESS_PLAN_DIR/archive/$RUN/chunks/<C.id>/BRAINSTORM.md` (atomic tmp+rename; create the parent dir first). Record:
    - `brainstorm_path`: `$Z_HARNESS_PLAN_DIR/archive/$RUN/chunks/<C.id>/BRAINSTORM.md`
-   - `status`: succeeded (file exists and is non-empty) or failed
+   - `status`: succeeded (write completed, content is non-empty + has valid frontmatter) or failed (sub-flow errored or returned empty/malformed content)
 
-4. **Dispatch scope-reconciler-brainstorm** to merge the per-chunk BRAINSTORM.md files:
+4. **Dispatch scope-reconciler-brainstorm** to merge the per-chunk BRAINSTORM.md files. The reconciler is **read-only** — it returns merged BRAINSTORM.md text as its output; the orchestrator (/z-brainstorm) writes the file. Do NOT include `output_path` in the reconciler prompt.
    ```
    <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
      subagent_type="scope-reconciler-brainstorm",
      description="Reconcile HEAVY brainstorm chunks for <slug>",
-     prompt="host_run_id: <RUN>
+     prompt="host_run_id: <interpolate $RUN value here>
 chunks: <JSON array of {id, brainstorm_path, status?} — mark failed sub-flows with status: failed>
-axis: <AXIS>
-output_path: $Z_HARNESS_PLAN_DIR/BRAINSTORM.md"
+axis: <AXIS>"
    )
    ```
 
-5. **Write unified BRAINSTORM.md.** Take the text returned by scope-reconciler-brainstorm and write it to `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md`.
+5. **Write unified BRAINSTORM.md.** Parse the text returned by scope-reconciler-brainstorm and write it to `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md` (the orchestrator performs this write, not the reconciler).
 
    If reconciler fails or returns no parseable content: fall back to concatenating the per-chunk BRAINSTORM.md files under a `## Reconciliation failed — raw chunks below` header, and write that to `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md`.
 
@@ -189,11 +222,7 @@ output_path: $Z_HARNESS_PLAN_DIR/BRAINSTORM.md"
         "<AXIS>" "<N>" "<succeeded_count>" "<true|false>")"
    ```
 
-7. **Skip Phases 1, 2, and 3.** The unified BRAINSTORM.md (produced by the reconciler or the fallback) replaces the normal Phase 1+2+3 output. Jump directly to Phase 4 — **HEAVY parent-level Phase 4 chunk-selection logic is TBD: implemented in T016.** Until T016 ships, present the unified BRAINSTORM.md to the user via `AskUserQuestion` and prompt them to select a framing manually from the chunk sections.
-
-#### refused / bad_input — MEDIUM fallback
-
-Treat `STATUS: refused` or `STATUS: bad_input` as `MODE: MEDIUM`. Proceed to Plan Route Check and then Phase 1 unchanged. Log a `scope_probe_refused` or `scope_probe_bad_input` event respectively.
+7. **Skip Phases 1, 2, and 3.** The unified BRAINSTORM.md (produced by the reconciler or the fallback) replaces the normal Phase 1+2+3 output. Jump directly to Phase 4 — **the HEAVY branch at the top of Phase 4 owns the chunk-selection matrix logic** (see Phase 4 HEAVY-mode branch above).
 
 ---
 
@@ -202,7 +231,7 @@ Treat `STATUS: refused` or `STATUS: bad_input` as `MODE: MEDIUM`. Proceed to Pla
 
 Run this route check after Phase 1 scaffolding is assembled and before Phase 2 ideator dispatch. `/z-brainstorm` may route only before ideators are spawned; once ideation starts, finish the brainstorm flow instead of switching commands mid-run.
 
-Use only already-known signals from the topic, doc-fetcher synthesis, optional Explore, and any ingested `RESEARCH.md`: `candidate_files`, `expected_tasks`, `non_obvious_decisions`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `terrain_uncertain`, `approach_uncertain`, `has_existing_plan`, `has_fix_artifact`, and `docs_stale_or_drifted`.
+Use only already-known signals from the topic, doc-fetcher synthesis, optional Explore, and any ingested `MAP.md` (or legacy `RESEARCH.md` with `artifact_kind: map`): `candidate_files`, `expected_tasks`, `non_obvious_decisions`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `terrain_uncertain`, `approach_uncertain`, `has_existing_plan`, `has_fix_artifact`, and `docs_stale_or_drifted`.
 
 Deterministic routes:
 - Route unknown terrain, missing citations, or insufficient source facts to `/z-research`.
@@ -273,14 +302,21 @@ If env `Z_HARNESS_BRAINSTORM_EXPLORE=1`, dispatch ONE Explore subagent (Haiku by
 
 If `Z_HARNESS_BRAINSTORM_EXPLORE` is unset or `0`, skip this step entirely — brainstorming is supposed to be cheap.
 
-### 1c. RESEARCH.md ingestion
+### 1c. MAP.md ingestion
 
-If `$Z_HARNESS_PLAN_DIR/RESEARCH.md` exists, read it.
+Resolve the terrain artifact to inline into scaffolding using this precedence:
+
+1. **MAP.md (primary):** If `$Z_HARNESS_PLAN_DIR/MAP.md` exists, read it. This is the canonical terrain artifact after the `/z-research` → `/z-map` rename.
+2. **Legacy RESEARCH.md fallback (backward-compat):** If MAP.md does not exist AND `$Z_HARNESS_PLAN_DIR/RESEARCH.md` exists, read its YAML frontmatter. Accept it as terrain scaffolding only if `artifact_kind` is `map` OR the `artifact_kind` field is absent (pre-rename legacy artifact). In that case, treat it identically to MAP.md.
+3. **Explicit skip:** If `$Z_HARNESS_PLAN_DIR/RESEARCH.md` exists but its frontmatter has `artifact_kind: approach_synthesis`, **do not ingest it.** It is a synthesis output produced by the new `/z-research` meta-orchestrator — not raw terrain — and is not useful as brainstorm scaffolding. Log a note and proceed without terrain content.
+4. **No terrain artifact:** If none of the above resolve, proceed with empty terrain content.
+
+Once a terrain file is resolved (MAP.md or accepted legacy RESEARCH.md):
 
 - **≤20 KB:** inline the full content into the scaffolding payload.
 - **>20 KB:** produce an **extractive summary** that preserves citations and constraints (do not paraphrase; copy the cited bullets and constraint statements verbatim, drop the prose). Write the summary to `$Z_HARNESS_PLAN_DIR/archive/$RUN/research-summary-for-brainstorm.md`. Inline the summary instead of the full file.
 
-Record `depends_on: [RESEARCH.md]` in the eventual BRAINSTORM.md frontmatter if RESEARCH.md was ingested.
+Record `depends_on: [MAP.md]` in the eventual BRAINSTORM.md frontmatter if a terrain artifact was ingested (use the resolved filename — `MAP.md` or `RESEARCH.md` — as the value).
 
 ### 1d. Assemble and hash
 
@@ -366,7 +402,7 @@ Log every individual failure as `ideator_failed` regardless of the bucket above.
    generated_at: <UTC ISO 8601>
    command: /z-brainstorm <args>
    input_hash: <16 hex from Phase 1d>
-   depends_on: [<RESEARCH.md if ingested>]
+   depends_on: [<MAP.md or RESEARCH.md if terrain artifact ingested — use actual resolved filename>]
    ideators:
      - claude
      - codex
@@ -427,24 +463,134 @@ Block until the user answers. Send a `PushNotification` if notify.level is `appr
 
 ## Phase 4 — Finalize
 
+### HEAVY-mode branch (check FIRST — fires only when mode == HEAVY)
+
+Read `$Z_HARNESS_PLAN_DIR/SCOPE-brainstorm.json`. If the file exists and `mode` is `"HEAVY"`, execute this branch and **skip the LIGHT/MEDIUM branch below entirely**.
+
+#### Step 4H-1 — Build the (chunk × framing) matrix
+
+Parse the unified BRAINSTORM.md that was written at the end of Phase 0's HEAVY fan-out (step 6 of the 0f HEAVY sub-section). The reconciler produces a strict chunk-major structure: each successful chunk is rendered under `## Chunk: <id>` heading (e.g. `## Chunk: C1`) and inside that section the per-ideator framings appear under `## Framing: <ideator>` sub-headings (e.g. `## Framing: claude`, `## Framing: codex`, `## Framing: gemini`) — same `## Framing:` pattern used by single-run BRAINSTORM.md per `/z-brainstorm` Phase 3. A chunk's framing scope ends at the next `## Chunk:` heading or EOF. Walk each `## Chunk: <id>` section in order. Skip chunks whose heading contains `— FAILED`. For each successful chunk, enumerate every `## Framing: <ideator>` sub-section actually present (skip any sub-section marked `<missing>` per ideator-failure convention). If a chunk has zero parseable `## Framing:` sub-sections, halt with `AskUserQuestion` ("reconciler emitted no framings for chunk <id> — repair manually / abandon / restart").
+
+Collect a flat list of pairs in the form `(chunk_id, framing)`, e.g.:
+```
+[("C1","claude"), ("C1","codex"), ("C1","gemini"), ("C2","claude"), ("C2","codex"), ("C2","gemini"), ...]
+```
+
+Let `N_PAIRS = len(pairs)`.
+
+#### Step 4H-2 — Present the selection matrix to the user
+
+**Case A — N_PAIRS ≤ 12 (single AskUserQuestion):**
+
+Present a single `AskUserQuestion` listing all pairs as labeled options plus two standard exits:
+
+```
+Which (chunk, framing) should seed the downstream /z-plan?
+
+Options:
+  C1: claude   — <one-line summary of C1's Claude framing from BRAINSTORM.md>
+  C1: codex    — <one-line summary of C1's Codex framing>
+  C1: gemini   — <one-line summary of C1's Gemini framing>
+  C2: claude   — <one-line summary of C2's Claude framing>
+  ...           (up to 12 options)
+  Restart       — discard this run and re-run with a refined topic
+  Abandon       — exit cleanly without finalizing
+```
+
+The one-line summary is the first sentence of that ideator's "Framing" section in the unified BRAINSTORM.md. If that section is missing, use `<no summary available>`.
+
+**Case B — N_PAIRS > 12 (two-step AskUserQuestion):**
+
+First, present a question to pick the chunk:
+
+```
+This run produced <N_PAIRS> (chunk × framing) pairs (>{12}). Pick a chunk first.
+
+Options:
+  C1  — <one-line description of C1's sub-scope from unified BRAINSTORM.md>
+  C2  — <one-line description>
+  ...
+  Restart
+  Abandon
+```
+
+After the user picks a chunk (or Restart/Abandon), if they picked a chunk then present a second question to pick the framing within that chunk:
+
+```
+Chunk <id> selected. Which framing seeds the plan?
+
+Options:
+  claude   — <one-line summary of this chunk's Claude framing>
+  codex    — <one-line summary of this chunk's Codex framing>
+  gemini   — <one-line summary of this chunk's Gemini framing>
+  Back     — go back to chunk selection
+  Abandon  — exit cleanly without finalizing
+```
+
+If the user picks **Back**, loop to the chunk-selection question. Allow at most 3 Back-loops; on the fourth Back, treat it as Abandon.
+
+#### Step 4H-3 — Handle user's pick
+
+**User picked a (chunk, framing) pair:**
+
+1. Update the BRAINSTORM.md frontmatter atomically (tmp-file-then-rename). Build the full new frontmatter in memory, then write to a temp file in the same directory, then `os.replace()` over the original — never leave the file in an intermediate state where both `chosen_framing` and `chosen_pair` are present or where neither is present:
+   - Remove the `chosen_framing:` field entirely.
+   - Add `chosen_pair: {chunk_id: "<id>", framing: "<claude|codex|gemini>"}` (e.g. `chosen_pair: {chunk_id: "C1", framing: "codex"}`).
+   - Confirm `status: complete`.
+2. Append (for the first time) a `## User choice` body section:
+   ```markdown
+   ## User choice
+
+   **Chosen pair:** chunk `<id>` / framing `<framing>`
+
+   The framing text below seeds any downstream `/z-plan` invocation. Run `/z-plan` in the same working directory and it will auto-detect BRAINSTORM.md and read `chosen_pair` from the frontmatter.
+
+   <verbatim text of the picked chunk's picked ideator framing block, copied from the `## Chunk: <id>` section of the unified BRAINSTORM.md>
+   ```
+3. Log the pick:
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" heavy_pair_selected \
+     "$(printf '{"chunk_id":"%s","framing":"%s"}' "<id>" "<framing>")"
+   ```
+
+**User picked Restart:**
+
+Follow the standard Restart path (see LIGHT/MEDIUM branch below) — archive BRAINSTORM.md with `chosen_framing: restart`, ask for a refined topic, start a fresh RUN.
+
+**User picked Abandon:**
+
+Follow the standard Abandon path below. For HEAVY abandons, the frontmatter MUST match LIGHT/MEDIUM abandon shape exactly: set `status: abandoned` and `chosen_framing: abandoned`. Do NOT emit a `chosen_pair` key (it is only present on successful HEAVY completion). This keeps abandon detection uniform across modes.
+
+#### Step 4H-4 — Fall through to "In all branches" below
+
+After completing step 4H-3, skip the LIGHT/MEDIUM branch entirely and jump to "In all branches" at the end of this section. The `brainstorm_run_end` log event and push-notify are shared with the LIGHT/MEDIUM path.
+
+For the `brainstorm_run_end` event, serialize `chosen_framing` as `"<chunk_id>:<framing>"` (e.g. `"C1:codex"`) for HEAVY picks, or `"restart"` / `"abandoned"` for those exits.
+
+---
+
+### LIGHT/MEDIUM branch (fires when mode is NOT HEAVY, or SCOPE-brainstorm.json is absent)
+
 Branch on the user's Phase 3 choice:
 
-### User picked a framing
+#### User picked a framing
 
 1. Update the `chosen_framing:` field in the BRAINSTORM.md frontmatter from `pending` to the picked ideator id (`claude` | `codex` | `gemini`).
 2. Append (for the first time) a `## User choice` body section with the picked framing's text reproduced verbatim (so `/z-plan` can find it without re-parsing the ideator blocks) plus any free-text refinement the user provided.
 3. Confirm `status: complete` in the frontmatter.
 
-### User picked Restart
+#### User picked Restart
 
 1. Archive the just-written BRAINSTORM.md to `$Z_HARNESS_PLAN_DIR/archive/$RUN/BRAINSTORM.md.previous-<N>` (next free integer). Before archiving, update the archived copy's frontmatter to `status: complete`, `chosen_framing: restart` so the historical record is spec-valid.
 2. Ask the user (free-text or `AskUserQuestion`) for the refined topic.
 3. Start a fresh RUN: regenerate `RUN`, re-mkdir, re-emit `brainstorm_run_start`, and loop back to Phase 1 with the refined topic.
 
-### User picked Abandon
+#### User picked Abandon
 
 1. Set the frontmatter `status: abandoned` and `chosen_framing: abandoned`. Leave the file in place (so a future re-run knows there was a prior attempt).
 2. Skip the push-notify "next step" recommendation; emit a simpler "abandoned" notification.
+
+---
 
 ### In all branches
 
@@ -465,6 +611,8 @@ Recommended next:
   /z-research <question>  — (optional) map terrain before planning
   /z-plan <task>          — start the rigorous planning pipeline; it will auto-detect BRAINSTORM.md
 ```
+
+For HEAVY runs, the push notification uses the chosen pair: `Brainstorm complete (pair: C1:codex).`
 
 For the abandoned branch, the push notification just says "Brainstorm abandoned" with no next-step.
 

@@ -1,7 +1,7 @@
 {
   "concept": "skills",
   "last_updated": "2026-05-27",
-  "covers_spec": "memory-self-improve-loop/20260525",
+  "covers_spec": "askuser-prefs-hook/20260527",
   "source_file": [
     "skills/z-amend/SKILL.md",
     "skills/z-audit-plan/SKILL.md",
@@ -14,6 +14,7 @@
     "skills/z-improve/SKILL.md",
     "skills/z-init-docs/SKILL.md",
     "skills/z-maintain-docs/SKILL.md",
+    "skills/z-map/SKILL.md",
     "skills/z-plan-light/SKILL.md",
     "skills/z-plan-split/SKILL.md",
     "skills/z-plan/SKILL.md",
@@ -57,14 +58,14 @@
       "line": 1,
       "symbol": "z-brainstorm",
       "kind": "module",
-      "summary": "Three-ideator pre-plan brainstorm with mandatory anti-bias check."
+      "summary": "Three-ideator pre-plan brainstorm; mandatory anti-bias check; slug-confirm preference resolver (skip/prefill/ask/conflict) after hard collision check."
     },
     {
       "file": "skills/z-debug/SKILL.md",
       "line": 1,
       "symbol": "z-debug",
       "kind": "module",
-      "summary": "Unknown-root-cause debug flow; Phase 2.5 conditional bisect fast-path (bisect-isolator Haiku); hypothesis rounds; posterior table; MR-review on fix; post-mortem; Phase 10 memory-review (shipped branch only)."
+      "summary": "Unknown-root-cause debug flow; Phase 2.5 conditional bisect fast-path; hypothesis rounds; posterior table; MR-review on fix; post-mortem; Phase 10 memory-review (shipped branch only); slug-confirm resolver in Setup."
     },
     {
       "file": "commands/z-audit.md",
@@ -85,7 +86,7 @@
       "line": 1,
       "symbol": "z-fix",
       "kind": "module",
-      "summary": "Fast-path fix for known-diagnosis bugs; Phase 0 wrong-tool gate; light-fix consult; inline implementation; Codex review; optional post-mortem."
+      "summary": "Fast-path fix for known-diagnosis bugs; Phase 0 wrong-tool gate; light-fix consult; inline implementation; Codex review; optional post-mortem; slug-confirm resolver in Setup."
     },
     {
       "file": "commands/z-skill-fix.md",
@@ -137,11 +138,18 @@
       "summary": "Refresh stale docs; dedup_tags:true; preserve memories; pre-audit compaction state; tags; flat-memory regen."
     },
     {
+      "file": "skills/z-map/SKILL.md",
+      "line": 1,
+      "symbol": "z-map",
+      "kind": "module",
+      "summary": "Terrain-mapping; cost gate; --slug flag; doc-fetcher-first; up to 3 Explores tracked dispatched vs succeeded; bundled critique; no-recommendation invariant; slug-confirm resolver in Phase 0.5. Produces MAP.md."
+    },
+    {
       "file": "skills/z-plan-light/SKILL.md",
       "line": 1,
       "symbol": "z-plan-light",
       "kind": "module",
-      "summary": "Small-fix planner; FIX.md only; inline implementation; reviewer gate; optional scope-probe agent."
+      "summary": "Small-fix planner; FIX.md only; inline implementation; reviewer gate; optional scope-probe agent; slug-confirm resolver in Setup."
     },
     {
       "file": "skills/z-plan-split/SKILL.md",
@@ -162,7 +170,7 @@
       "line": 1,
       "symbol": "z-research",
       "kind": "module",
-      "summary": "Terrain research; --slug flag; cost gate; Explore fanout tracked dispatched vs succeeded; no recommendation."
+      "summary": "Meta-orchestrator: cost gate → intelligent dispatch decision → inline /z-map + /z-brainstorm sub-commands → adversarial synthesis panel (3 perspectives + research-judge Opus) → 10-section RESEARCH.md with approach decision matrix. Cost 3–6M tokens."
     },
     {
       "file": "skills/z-review-all/SKILL.md",
@@ -176,14 +184,14 @@
       "line": 1,
       "symbol": "z-stats",
       "kind": "module",
-      "summary": "Read-only shell metrics; Phase 4b reads review_agent_call + memory_review_terminal events with old-shape phase_end back-compat mapping."
+      "summary": "Read-only shell metrics; Phase 4b reads review_agent_call + memory_review_terminal events with old-shape phase_end back-compat; Phase 4c reads askuser_resolved events (preference resolutions by result/source/question_id + conflict rate)."
     },
     {
       "file": "skills/z-suggest-memory/SKILL.md",
       "line": 1,
       "symbol": "z-suggest-memory",
       "kind": "module",
-      "summary": "Sole memory authoring path; --from-candidate-json; --concept-hints; atomic writes; MEMORIES-FLAT regen."
+      "summary": "Sole memory authoring path; --from-candidate-json; --concept-hints; atomic writes; MEMORIES-FLAT regen; --kind routing-preference mode writes to workflow[-.].json bypassing interactive collection; Phase 3a routing-flavored text redirect gate."
     },
     {
       "file": "skills/z-test/SKILL.md",
@@ -260,7 +268,12 @@
     "Before any git reset --hard, commit --amend, or interactive-rebase squash on a tracked branch, run git branch -r --contains <sha>; STOP if upstream ref appears.",
     "config.py export-env is called at startup in z-do (Setup step 6) and z-plan (Setup step 4a) to populate all Z_HARNESS_* env vars; skills that do not yet call export-env must use Z_HARNESS_NOTIFY_LEVEL with a default fallback.",
     "All PushNotification calls gated by config.py should-notify --event <type> returning yes, except hard-pause notifications (compaction breakpoints, halt-on-skip-flagged) which fire regardless of notify level.",
-    "Notification policy knobs (notify.level, docs.always_apply) are documented in docs/human/config.md; skills reference that file rather than inline documentation."
+    "Notification policy knobs (notify.level, docs.always_apply) are documented in docs/human/config.md; skills reference that file rather than inline documentation.",
+    "Slug-confirm resolver (config.py resolve-question workflow.slug_confirm) is a soft gate only; the hard unconditional slug-dir collision check runs before it and is never bypassed by resolver outcome.",
+    "config.py emits askuser_resolved for every resolved question; resolver errors fall through to ask mode (never silently skip).",
+    "z-stats Phase 4c reads askuser_resolved events; it is read-only and never writes.",
+    "z-suggest-memory --kind routing-preference requires --question-id, --value, --strength, and --scope; mutually exclusive with --edit, --delete, and --from-candidate-json.",
+    "z-suggest-memory --kind routing-preference writes to docs/llm/workflow.json (global) or docs/llm/workflow-<project-slug>.json (project scope); creates stub + INDEX entry if file absent."
   ],
   "gotchas": [
     "z-audit-plan cannot run without SPEC/PLAN/TASKS; no-plan routes to z-plan.",
@@ -276,6 +289,7 @@
     "MEMORIES-FLAT.md regen is mandatory after doc writes or memory mutations.",
     "--from-candidate-json bypasses z-suggest-memory Phases 3a-3f; candidate must have type and text or returns bad_input.",
     "Phase 4b in z-stats reads review_agent_call events AND memory_review_terminal events with old-shape phase_end back-compat; it is read-only and never writes.",
+    "Phase 4c in z-stats reads askuser_resolved events; if none found, prints a 'none found' note and skips the conflict-rate line; read-only.",
     "review_agent_malformed and review_agent_failed are orthogonal failure-class events — they do NOT emit memory_review_terminal. In z-implement-all Phase 9, review_agent_malformed triggers a push-notify hint; review_agent_failed also triggers a push-notify. Neither halts the run.",
     "z-debug Phase 10 memory-review only runs on the shipped branch. Abandoned debug sessions (status:abandoned) do not call run-memory-review.sh.",
     "Broken-context skip push-notify uses .notify-dedup-session (keyed slug:reason); z-review-all clears this file at Phase 0 start; z-debug clears it at the top of Phase 10; z-implement-all clears it before first task dispatch.",
@@ -304,7 +318,13 @@
     "z-skill-fix only patches skill/command/agent files; bugs in repo code, missing CLAUDE.md conventions, and policy disputes are out of scope.",
     "z-skill-fix never weakens a gate or pushback rule even if the gate was inconvenient in a specific case.",
     "config.py export-env is only invoked in z-do and z-plan; z-implement-all, z-review-all, and z-debug still reference Z_HARNESS_NOTIFY_LEVEL directly with a default fallback — they have not yet been updated to use export-env.",
-    "should-notify --event <type> accepts approval, error, and phase_end event types; hard-pause notifications bypass this check entirely."
+    "should-notify --event <type> accepts approval, error, and phase_end event types; hard-pause notifications bypass this check entirely.",
+    "Slug-confirm preference resolver (resolve-question workflow.slug_confirm) runs only after the hard collision check passes; the collision check is never gated by resolver outcome.",
+    "On slug-confirm conflict (config says X, memory says Y), the question header surfaces the conflict, and a one-shot follow-up offers to record the user's answer (config / memory:very_strong / memory:strong / no).",
+    "z-suggest-memory --kind routing-preference is mutually exclusive with --edit, --delete, and --from-candidate-json; combining any two returns STATUS: bad_input.",
+    "z-suggest-memory --kind routing-preference validates question_id via config.py list-question-ids; unknown IDs return bad_input immediately.",
+    "z-suggest-memory Phase 3a routing-flavored text detection only fires when candidate text is already available AND no explicit type is set; no-match or no-text cases proceed silently to Phase 3b.",
+    "z-suggest-memory yes-config branch in Phase 3a invokes config.py set, which is not yet shipped as of this writing — the call is documented for when it lands."
   ],
   "memories": []
 }
