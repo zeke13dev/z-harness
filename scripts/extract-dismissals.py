@@ -333,7 +333,7 @@ def _run_dir_sort_key(d: Path) -> tuple:
     return (1, "", d.stat().st_mtime)
 
 
-def discover_archive_runs(archive_dir: Path) -> list[Path]:
+def discover_archive_runs(archive_dir: Path, filename: str = "MR-REVIEW.md") -> list[Path]:
     """
     Return archive run dirs sorted chronologically ascending.
 
@@ -341,28 +341,29 @@ def discover_archive_runs(archive_dir: Path) -> list[Path]:
     "20260523T194623Z-mr-review"), with mtime as a defensive fallback for dirs
     whose names lack the prefix (e.g. test fixtures).
 
-    Each run dir must contain an MR-REVIEW.md snapshot to be included.
+    Each run dir must contain a snapshot file named `filename` to be included
+    (default `MR-REVIEW.md`; `PLAN_STYLE_AUDIT.md` for plan-style audits).
     """
     if not archive_dir.is_dir():
         return []
 
     run_dirs = [
         d for d in archive_dir.iterdir()
-        if d.is_dir() and (d / "MR-REVIEW.md").exists()
+        if d.is_dir() and (d / filename).exists()
     ]
     run_dirs.sort(key=_run_dir_sort_key)
     return run_dirs
 
 
-def get_previous_snapshot(next_run_dir: Path) -> Path | None:
+def get_previous_snapshot(next_run_dir: Path, filename: str = "MR-REVIEW.md") -> Path | None:
     """
-    Find the MR-REVIEW.md.previous-* file in next_run_dir (the user-edited
+    Find the `<filename>.previous-*` file in next_run_dir (the user-edited
     version that was present when the next run started).
 
     If multiple exist, return the one with the highest suffix N (most recent).
     Returns None if no such file exists.
     """
-    candidates = list(next_run_dir.glob("MR-REVIEW.md.previous-*"))
+    candidates = list(next_run_dir.glob(f"{filename}.previous-*"))
     if not candidates:
         return None
     # Sort by the integer suffix; fall back to lexicographic if not parseable
@@ -383,6 +384,7 @@ def get_previous_snapshot(next_run_dir: Path) -> Path | None:
 def extract_dismissals_from_runs(
     run_dirs: list[Path],
     max_runs: int,
+    filename: str = "MR-REVIEW.md",
 ) -> tuple[list[dict], int]:
     """
     Walk run_dirs (chronological ascending), cap to most recent max_runs.
@@ -404,8 +406,8 @@ def extract_dismissals_from_runs(
         r_i = capped[i]
         r_next = capped[i + 1]
 
-        snapshot_path = r_i / "MR-REVIEW.md"
-        previous_path = get_previous_snapshot(r_next)
+        snapshot_path = r_i / filename
+        previous_path = get_previous_snapshot(r_next, filename)
 
         if previous_path is None:
             # No user-edited copy archived — skip this pair
@@ -432,13 +434,13 @@ def extract_dismissals_from_runs(
     return dismissed, n_runs
 
 
-def collect_run_dirs_for_slug(slug_dir: Path) -> list[Path]:
+def collect_run_dirs_for_slug(slug_dir: Path, filename: str = "MR-REVIEW.md") -> list[Path]:
     """Return sorted (ascending mtime) run dirs under slug_dir/archive/."""
     archive_dir = slug_dir / "archive"
-    return discover_archive_runs(archive_dir)
+    return discover_archive_runs(archive_dir, filename)
 
 
-def collect_slug_run_dirs_global(repo_root: Path) -> dict[Path, list[Path]]:
+def collect_slug_run_dirs_global(repo_root: Path, filename: str = "MR-REVIEW.md") -> dict[Path, list[Path]]:
     """
     Walk z-harness/*/archive/ and z-harness/plans/*/archive/ and return a mapping of slug_dir → sorted run_dirs.
 
@@ -465,7 +467,7 @@ def collect_slug_run_dirs_global(repo_root: Path) -> dict[Path, list[Path]]:
             if root == harness_root and slug_dir == plans_root:
                 continue
             archive_dir = slug_dir / "archive"
-            runs = discover_archive_runs(archive_dir)
+            runs = discover_archive_runs(archive_dir, filename)
             if runs:
                 slug_runs[slug_dir] = runs
     return slug_runs
@@ -497,7 +499,14 @@ def main() -> None:
         "--global",
         dest="global_scan",
         action="store_true",
-        help="Scan z-harness/*/archive/*/MR-REVIEW.md across all slugs.",
+        help="Scan z-harness/*/archive/*/<filename> across all slugs.",
+    )
+    parser.add_argument(
+        "--filename",
+        default="MR-REVIEW.md",
+        metavar="NAME",
+        help="Snapshot filename to scan in each archive run dir "
+             "(default: MR-REVIEW.md; use PLAN_STYLE_AUDIT.md for plan-style audits).",
     )
     args = parser.parse_args()
 
@@ -514,7 +523,7 @@ def main() -> None:
                 repo_root = candidate
                 break
 
-        slug_runs = collect_slug_run_dirs_global(repo_root)
+        slug_runs = collect_slug_run_dirs_global(repo_root, args.filename)
         if not slug_runs:
             output = {"signatures": [], "n_runs_scanned": 0}
             json.dump(output, sys.stdout)
@@ -524,7 +533,7 @@ def main() -> None:
         all_signatures: list[dict] = []
         total_runs = 0
         for slug_run_dirs in slug_runs.values():
-            sigs, n = extract_dismissals_from_runs(slug_run_dirs, args.max_runs)
+            sigs, n = extract_dismissals_from_runs(slug_run_dirs, args.max_runs, args.filename)
             all_signatures.extend(sigs)
             total_runs += n
 
@@ -546,7 +555,7 @@ def main() -> None:
             json.dump(output, sys.stdout)
             sys.stdout.write("\n")
             return
-        run_dirs = collect_run_dirs_for_slug(slug_dir)
+        run_dirs = collect_run_dirs_for_slug(slug_dir, args.filename)
 
     if not run_dirs:
         output = {"signatures": [], "n_runs_scanned": 0}
@@ -554,7 +563,7 @@ def main() -> None:
         sys.stdout.write("\n")
         return
 
-    signatures, n_runs = extract_dismissals_from_runs(run_dirs, args.max_runs)
+    signatures, n_runs = extract_dismissals_from_runs(run_dirs, args.max_runs, args.filename)
 
     output = {
         "signatures": signatures,
