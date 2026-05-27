@@ -172,7 +172,7 @@ When `MODE: HEAVY`:
      description="z-brainstorm sub-flow for chunk <C.id>: <C.intent>",
      prompt="MODE: brainstorm-subflow
 
-This is a HEAVY fan-out sub-flow of /z-brainstorm. Run Phase 1 (scaffolding), Phase 2 (ideator dispatch), and Phase 3 (synthesis) for the sub-scope below. Do NOT run Phase 0 (scope-probe), Plan Route Check, or Phase 4 (user-pick gate — selection happens at the parent level for HEAVY mode). Produce a BRAINSTORM.md at the path specified.
+This is a HEAVY fan-out sub-flow of /z-brainstorm. Run Phase 1 (scaffolding), Phase 2 (ideator dispatch), and Phase 3 (synthesis) for the sub-scope below. Do NOT run Phase 0 (scope-probe), Plan Route Check, or Phase 4 (user-pick gate — selection happens at the parent level for HEAVY mode). Produce the per-chunk BRAINSTORM.md content; the parent orchestrator writes the file to the path below (you have no Write tool; return the full markdown in your response).
 
 Z_HARNESS_PARENT_RUN_ID: <interpolate $RUN value here, e.g. 20260101T000000Z-my-slug>
 Parent slug: <interpolate $Z_HARNESS_SLUG value here>
@@ -182,15 +182,15 @@ Original topic (for context): <topic>
 Axis: <AXIS>
 Output path: <interpolate $Z_HARNESS_PLAN_DIR>/archive/<interpolate $RUN>/chunks/<C.id>/BRAINSTORM.md
 
-Scaffolding instructions: follow /z-brainstorm Phase 1 (doc-fetcher, optional Explore, RESEARCH.md ingestion, input_hash). Ideator dispatch: follow /z-brainstorm Phase 2 with the IDEATOR_SCHEMA. Synthesis: follow /z-brainstorm Phase 3 (anti-bias check, orchestrator recommendation). Write the BRAINSTORM.md with chosen_framing: pending (do NOT present an AskUserQuestion — the parent owns the user-pick gate)."
+Scaffolding instructions: follow /z-brainstorm Phase 1 (doc-fetcher, optional Explore, RESEARCH.md ingestion, input_hash). Ideator dispatch: follow /z-brainstorm Phase 2 with the IDEATOR_SCHEMA. Synthesis: follow /z-brainstorm Phase 3 (anti-bias check, orchestrator recommendation). Return the full per-chunk BRAINSTORM.md content (frontmatter + body) with chosen_framing: pending in your response; the parent orchestrator writes the file. Do NOT present an AskUserQuestion — the parent owns the user-pick gate."
    )
    ```
 
    Sub-flows MUST NOT themselves go HEAVY (anti-sprawl invariant: sub-flows skip Phase 0 entirely).
 
-3. **Collect sub-flow results.** For each chunk, record:
+3. **Collect sub-flow results and write per-chunk files.** Each sub-flow returns BRAINSTORM.md content as its response text (sub-agents have no Write tool — the orchestrator owns the write). For each chunk, write the returned text to `$Z_HARNESS_PLAN_DIR/archive/$RUN/chunks/<C.id>/BRAINSTORM.md` (atomic tmp+rename; create the parent dir first). Record:
    - `brainstorm_path`: `$Z_HARNESS_PLAN_DIR/archive/$RUN/chunks/<C.id>/BRAINSTORM.md`
-   - `status`: succeeded (file exists and is non-empty) or failed
+   - `status`: succeeded (write completed, content is non-empty + has valid frontmatter) or failed (sub-flow errored or returned empty/malformed content)
 
 4. **Dispatch scope-reconciler-brainstorm** to merge the per-chunk BRAINSTORM.md files. The reconciler is **read-only** — it returns merged BRAINSTORM.md text as its output; the orchestrator (/z-brainstorm) writes the file. Do NOT include `output_path` in the reconciler prompt.
    ```

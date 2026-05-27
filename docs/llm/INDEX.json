@@ -25,7 +25,7 @@
         "agents/scope-reconciler-brainstorm.md",
         "agents/spec-precheck.md"
       ],
-      "last_updated": "2026-05-27",
+      "last_updated": "2026-05-28T00:00:00Z",
       "confidence": "high",
       "depends_on": [
         "scripts",
@@ -111,7 +111,7 @@
       "source_file": [
         "commands/z-fix.md"
       ],
-      "last_updated": "2026-05-27",
+      "last_updated": "2026-05-28T00:00:00Z",
       "confidence": "high",
       "depends_on": [
         "agents",
@@ -146,7 +146,7 @@
         "skills/z-update/SKILL.md",
         "skills/z-uplift/SKILL.md"
       ],
-      "last_updated": "2026-05-27",
+      "last_updated": "2026-05-28T00:00:00Z",
       "confidence": "high",
       "depends_on": [
         "agents",
@@ -169,7 +169,7 @@
         "commands/z-providers-discover.md",
         "docs/human/PROVIDERS.md"
       ],
-      "last_updated": "2026-05-24",
+      "last_updated": "2026-05-28T00:00:00Z",
       "confidence": "high",
       "depends_on": [
         "scripts"
@@ -213,7 +213,7 @@
         "scripts/log-event.sh",
         "docs/human/PLAN-LAYOUT.md"
       ],
-      "last_updated": "2026-05-24",
+      "last_updated": "2026-05-28T00:00:00Z",
       "confidence": "high",
       "depends_on": [
         "scripts",
@@ -233,7 +233,7 @@
         "commands/z-update.md",
         "docs/human/INSTALL.md"
       ],
-      "last_updated": "2026-05-25",
+      "last_updated": "2026-05-28T00:00:00Z",
       "confidence": "high",
       "depends_on": [
         "scripts",
@@ -247,7 +247,7 @@
       "source_files": [
         "agents/external-lookup.md"
       ],
-      "last_updated": "2026-05-25",
+      "last_updated": "2026-05-28T00:00:00Z",
       "confidence": "high",
       "depends_on": [
         "agents"
@@ -262,7 +262,7 @@
       "source_files": [
         "agents/external-lookup.md"
       ],
-      "last_updated": "2026-05-25",
+      "last_updated": "2026-05-28T00:00:00Z",
       "confidence": "high",
       "depends_on": [
         "agents",
@@ -279,7 +279,7 @@
         "agents/review-agent.md",
         "scripts/run-memory-review.sh"
       ],
-      "last_updated": "2026-05-27",
+      "last_updated": "2026-05-28T00:00:00Z",
       "confidence": "high",
       "depends_on": [
         "z-suggest-memory",
@@ -290,11 +290,11 @@
         "z-review-all",
         "z-debug"
       ],
-      "summary": "Post-run Haiku subagent that proposes 0-3 candidate memories from a completed /z-implement-all (Phase 9), /z-review-all (Phase 7), or /z-debug (Phase 10, shipped branch only) run. Reads run events, cumulative diff, SPEC.md or DEBUG.md; emits structured candidates as a fenced JSON block. Does not write — orchestrator owns all writes via /z-suggest-memory. Dispatched after skip-conditions check by scripts/run-memory-review.sh."
+      "summary": "Post-run Haiku subagent that proposes 0-3 candidate memories from a completed /z-implement-all (Phase 9), /z-review-all (Phase 7), or /z-debug (Phase 10, shipped branch only) run. Reads run events, cumulative diff, SPEC.md or DEBUG.md; emits structured candidates as a fenced JSON block. Does not write \u2014 orchestrator owns all writes via /z-suggest-memory. Dispatched after skip-conditions check by scripts/run-memory-review.sh."
     },
     {
       "slug": "z-uplift",
-      "last_updated": "2026-05-27",
+      "last_updated": "2026-05-28T00:00:00Z",
       "confidence": "high",
       "depends_on": [
         "commands",
@@ -314,7 +314,7 @@
         "scripts/config.sh",
         "docs/human/config.md"
       ],
-      "last_updated": "2026-05-27",
+      "last_updated": "2026-05-28T00:00:00Z",
       "confidence": "high",
       "depends_on": [
         "scripts"

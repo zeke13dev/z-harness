@@ -194,10 +194,12 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 ```
 Host proceeds as MEDIUM. Skip to Phase 1.
 
-**Write live file (overwrite):**
+**Write live file (atomic tmp+rename — matches archive write order; prevents partial-overwrite on parallel runs):**
 ```bash
 LIVE_SCOPE="$Z_HARNESS_PLAN_DIR/SCOPE-audit.json"
-python3 -c "import json,sys; print(json.dumps(json.loads(sys.argv[1]),indent=2))" "$SCOPE_JSON_STR" > "$LIVE_SCOPE"
+LIVE_TMP="${LIVE_SCOPE}.tmp.$$"
+python3 -c "import json,sys; print(json.dumps(json.loads(sys.argv[1]),indent=2))" "$SCOPE_JSON_STR" > "$LIVE_TMP" \
+  && mv "$LIVE_TMP" "$LIVE_SCOPE"
 ```
 
 ### Step 0.4 — Branch on MODE

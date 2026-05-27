@@ -1,6 +1,6 @@
 {
   "concept": "scripts",
-  "last_updated": "2026-05-27",
+  "last_updated": "2026-05-26",
   "covers_spec": "none",
   "source_file": [
     "scripts/extract-dismissals.py",
@@ -12,7 +12,10 @@
     "scripts/version.sh",
     "scripts/config.py",
     "scripts/config.sh",
-    "scripts/test_config.py"
+    "scripts/test_config.py",
+    "scripts/scope-probe-calibrate.py",
+    "scripts/CALIBRATION.md",
+    "scripts/test-scope-probe-calibrate.py"
   ],
   "confidence": "high",
   "entry_points": [
@@ -26,7 +29,11 @@
     {"file": "scripts/remote-sandbox-sync.sh", "line": 1, "symbol": "remote-sandbox-sync.sh", "kind": "module", "summary": "Rsync local tree to ~/dev/qt-bot-sandbox/<slug>/<task-id>/ on remote host; invoked by remote-runner agent."},
     {"file": "scripts/config.py", "line": 1, "symbol": "config.py", "kind": "module", "summary": "Layered TOML config loader (slice 1: notify.level, docs.always_apply); deep docs in config-design concept."},
     {"file": "scripts/config.sh", "line": 1, "symbol": "config.sh", "kind": "module", "summary": "Thin shell wrapper: exec python3 scripts/config.py \"$@\"; deep docs in config-design concept."},
-    {"file": "scripts/test_config.py", "line": 1, "symbol": "test_config.py", "kind": "module", "summary": "End-to-end smoke tests for config.py using hermetic XDG_CONFIG_HOME temp dirs; deep docs in config-design concept."}
+    {"file": "scripts/test_config.py", "line": 1, "symbol": "test_config.py", "kind": "module", "summary": "End-to-end smoke tests for config.py using hermetic XDG_CONFIG_HOME temp dirs; deep docs in config-design concept."},
+    {"file": "scripts/scope-probe-calibrate.py", "line": 373, "symbol": "main", "kind": "fn", "summary": "CLI: walks archive runs, classifies ground truth per rubric_version 1, majority-votes probe, emits calibration-epoch-<N>.json; tripwires exit 1."},
+    {"file": "scripts/scope-probe-calibrate.py", "line": 36, "symbol": "classify_ground_truth", "kind": "fn", "summary": "Rubric v1: HEAVY if escalation_* event or tasks_total>=16; LIGHT if tasks_total<=5 AND high==0 AND no plan_route_decision; MEDIUM otherwise."},
+    {"file": "scripts/CALIBRATION.md", "line": 1, "symbol": "CALIBRATION.md", "kind": "module", "summary": "Normative rubric reference; wins over Python impl on conflict; defines HEAVY/LIGHT/MEDIUM rules, tie-break priority, epoch versioning."},
+    {"file": "scripts/test-scope-probe-calibrate.py", "line": 308, "symbol": "main", "kind": "fn", "summary": "Unit test runner for scope-probe-calibrate.py; 6 test suites; importlib load bypasses hyphenated filename; exit 0 pass, 1 fail."}
   ],
   "depends_on": [],
   "consumed_by": ["agents", "commands", "skills", "review-agent", "remote-runner", "config-design"],
@@ -42,7 +49,11 @@
     "run-memory-review.sh emits exactly one memory_review_terminal event on all skip paths using a 4-state taxonomy: skipped_broken_context, not_applicable, ready (orchestrator-owned), dispatched (orchestrator-owned).",
     "extract-dismissals.py outputs JSON {signatures, n_runs_scanned} to stdout; exit 0 even when no dismissals found.",
     "extract-dismissals.py --global applies the pairwise algorithm within each slug independently, not across slugs.",
-    "The env var for the plan base dir is Z_HARNESS_PLAN_DIR (singular, not PLANS_DIR)."
+    "The env var for the plan base dir is Z_HARNESS_PLAN_DIR (singular, not PLANS_DIR).",
+    "scope-probe-calibrate.py exits 0 when no tripwires fire; exits 1 when at least one tripwire fires.",
+    "scope-probe-calibrate.py epoch JSON files are written atomically via temp-file replace and are append-only after creation.",
+    "CALIBRATION.md is the normative rubric reference; when it conflicts with the Python implementation, CALIBRATION.md wins.",
+    "test-scope-probe-calibrate.py loads scope-probe-calibrate.py via importlib.util because the hyphenated filename prevents plain import."
   ],
   "gotchas": [
     "run-memory-review.sh 4-state terminal taxonomy: skipped_broken_context (missing_args, no_plan_dir, tags_missing), not_applicable (empty_diff, all_tasks_skipped, debug_md_missing), ready and dispatched are orchestrator-owned.",
@@ -56,7 +67,12 @@
     "extract-dismissals.py drops findings lacking a title field; does NOT fall back to T-MR-NNN ids (renumbered each run).",
     "extract-dismissals.py --filename allows targeting PLAN_STYLE_AUDIT.md instead of the default MR-REVIEW.md.",
     "remote-sandbox-sync.sh warns but does not fail when no .z-harness-rsync-exclude is found.",
-    "config.py, config.sh, and test_config.py are cross-referenced here; invariants and deep gotchas live in the config-design concept."
+    "config.py, config.sh, and test_config.py are cross-referenced here; invariants and deep gotchas live in the config-design concept.",
+    "scope-probe-calibrate.py dispatch_scope_probe_stub always returns MEDIUM (placeholder until T014); normal-mode accuracy results are not meaningful yet.",
+    "scope-probe-calibrate.py fixture format: flat {run_id->mode}, nested {run_id->[modes]} (index wrapped), or bare string; absent run_id defaults to MEDIUM.",
+    "rubric_version bump invalidates all prior epoch trend comparisons; the calibration epoch series must restart at 1 after a bump.",
+    "Tripwire 1 fires at pct_medium >= 70%; Tripwire 2 fires at pct_heavy < 20%; Tripwires 3 and 4 are manual-review-only and never auto-fire.",
+    "scope-probe-calibrate.py exits 0 (not 1) when no runs with manifest.json are found — treated as vacuous success, not failure."
   ],
   "memories": []
 }

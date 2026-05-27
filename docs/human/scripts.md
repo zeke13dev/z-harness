@@ -1,11 +1,11 @@
 # Scripts
 
-> Last updated: 2026-05-27
-> Covers source: scripts/extract-dismissals.py, scripts/log-event.sh, scripts/log-phase.sh, scripts/regenerate-memories-flat.py, scripts/remote-sandbox-sync.sh, scripts/run-memory-review.sh, scripts/version.sh, scripts/config.py, scripts/config.sh, scripts/test_config.py
+> Last updated: 2026-05-26
+> Covers source: scripts/extract-dismissals.py, scripts/log-event.sh, scripts/log-phase.sh, scripts/regenerate-memories-flat.py, scripts/remote-sandbox-sync.sh, scripts/run-memory-review.sh, scripts/version.sh, scripts/config.py, scripts/config.sh, scripts/test_config.py, scripts/scope-probe-calibrate.py, scripts/CALIBRATION.md, scripts/test-scope-probe-calibrate.py
 
 ## Overview
 
-The scripts concept covers the shell and Python utility scripts that form the operational backbone of the z-harness pipeline. They handle structured event telemetry (logging individual events and wrapping entire phases with start/end timing), memory document regeneration across all concept JSONs, plugin version introspection, the lifecycle gate logic for the memory-review agent, MR-review dismissal signature extraction across archived run snapshots, and rsync-based remote sandbox synchronization. All scripts reside in the `scripts/` directory at the repository root and are invoked directly by commands, skills, and subagents rather than being imported as libraries.
+The scripts concept covers the shell and Python utility scripts that form the operational backbone of the z-harness pipeline. They handle structured event telemetry (logging individual events and wrapping entire phases with start/end timing), memory document regeneration across all concept JSONs, plugin version introspection, the lifecycle gate logic for the memory-review agent, MR-review dismissal signature extraction across archived run snapshots, rsync-based remote sandbox synchronization, and the calibration harness for the scope-probe classifier. All scripts reside in the `scripts/` directory at the repository root and are invoked directly by commands, skills, and subagents rather than being imported as libraries.
 
 These scripts share a common dependency on `python3` — used for JSON serialization, millisecond-precision timing on macOS, and document generation — and on `git` — used to resolve the repository root, detect dirty state, and compute diffs. They honor the `Z_HARNESS_SLUG`, `Z_HARNESS_PLAN_DIR`, `ANTIGRAVITY_PLUGIN_ROOT`, `CLAUDE_PLUGIN_ROOT`, and `Z_HARNESS_PLUGIN_ROOT` environment variables to support both slug-namespaced and legacy flat plan layouts and to locate the plugin root across different host environments. `log-event.sh` sources `scripts/plan-path.sh` for canonical plan path resolution.
 
@@ -22,6 +22,10 @@ These scripts share a common dependency on `python3` — used for JSON serializa
 - `scripts/config.py:1` — `config.py` — Layered TOML config loader (slice 1: `notify.level`, `docs.always_apply`). See `config-design` concept for deep docs.
 - `scripts/config.sh:1` — `config.sh` — Thin shell wrapper: `exec python3 scripts/config.py "$@"`. See `config-design` concept for deep docs.
 - `scripts/test_config.py:1` — `test_config.py` — End-to-end smoke-test suite for `config.py` using hermetic `XDG_CONFIG_HOME` temp dirs. See `config-design` concept for deep docs.
+- `scripts/scope-probe-calibrate.py:373` — `main` — CLI entry point for the scope-probe calibration harness; walks `z-harness/*/archive/*/` runs that have `manifest.json`, computes ground-truth LIGHT/MEDIUM/HEAVY labels per CALIBRATION.md rubric_version 1, dispatches the scope-probe N times per run (or reads a fixture file in `--fixture-mode`), applies majority vote, prints a confusion matrix and tripwire report, and emits `scripts/calibration-epoch-<N>.json` atomically.
+- `scripts/scope-probe-calibrate.py:36` — `classify_ground_truth` — Implements the rubric_version 1 classification rule: HEAVY if any `escalation_*` event or `tasks_total >= 16`; LIGHT if `tasks_total <= 5` AND `tasks_complexity.high == 0` AND no `plan_route_decision` event; MEDIUM otherwise. This document is the normative spec; `CALIBRATION.md` is the human-readable canonical reference.
+- `scripts/CALIBRATION.md:1` — `CALIBRATION.md` — Human-readable canonical reference for the ground-truth classification rubric. When the Python implementation and this document conflict, this document wins. Defines HEAVY/LIGHT/MEDIUM rules, tie-break signal priority, epoch versioning policy, and manifest/events shape reference.
+- `scripts/test-scope-probe-calibrate.py:308` — `main` — Unit test runner for `scope-probe-calibrate.py`; loads the production module via `importlib` (bypassing the hyphenated filename), runs six test suites covering `classify_ground_truth`, confusion matrix, tripwire fire/no-fire, archive discovery, and majority vote; exits 0 on full pass, 1 on any failure.
 
 ## How it interacts with others
 
@@ -30,6 +34,7 @@ These scripts share a common dependency on `python3` — used for JSON serializa
 - `agents` — The remote-runner agent calls `remote-sandbox-sync.sh` before executing cargo or qtctl on the remote host; the doc-updater agent calls `log-phase.sh` and `log-event.sh` for doc-update telemetry; the memory-review agent receives artifact paths from `run-memory-review.sh`.
 - `review-agent` — `run-memory-review.sh` is the dedicated lifecycle helper for the memory-review agent; on `STATUS: ready` it outputs five lines: the cumulative diff path, SPEC.md path (or empty if absent), TAGS.txt path, and (for `debug` parent only) the DEBUG.md path.
 - `config-design` — `config.py` and `config.sh` implement the layered TOML config system; deep documentation, invariants, and test coverage live in the `config-design` concept.
+- `scope-probe` (future) — `scope-probe-calibrate.py` is the calibration harness for the scope-probe classifier concept; the `dispatch_scope_probe_stub` currently returns MEDIUM as a placeholder until T009/T010/T014 integrate scope-probe as a real subprocess.
 
 ## Edge cases / gotchas
 
@@ -48,6 +53,12 @@ These scripts share a common dependency on `python3` — used for JSON serializa
 - `extract-dismissals.py` drops findings that lack a `title` field in the `findings_index` frontmatter; it does NOT fall back to the T-MR-NNN id as a snippet because those ids are renumbered each run.
 - `extract-dismissals.py`'s `--filename` flag allows targeting `PLAN_STYLE_AUDIT.md` instead of the default `MR-REVIEW.md`; `--global` mode applies within each slug independently to prevent cross-slug run interleaving.
 - `remote-sandbox-sync.sh` warns (but does not fail) when no `.z-harness-rsync-exclude` file is found; it checks the project root first, then the plugin root.
+- `scope-probe-calibrate.py` exits 0 when no tripwires fire and exits 1 when at least one tripwire fires; it exits 0 (with a message) when no runs with `manifest.json` are found in the archive root.
+- `scope-probe-calibrate.py` `dispatch_scope_probe_stub` always returns MEDIUM — it is a placeholder pending T014 real integration. Results from normal mode are therefore not meaningful for accuracy assessment yet.
+- `scope-probe-calibrate.py` fixture format supports three shapes: a flat `{run_id -> mode_str}` dict, a nested `{run_id -> [mode_str, ...]}` per-sample list (index wrapped), or a bare string applied to all runs. Runs absent from the fixture default to MEDIUM.
+- `scope-probe-calibrate.py` epoch JSON files are append-only; a `rubric_version` bump invalidates cross-epoch trend comparisons. After a bump, the calibration epoch series restarts at 1 under the new version.
+- `test-scope-probe-calibrate.py` uses `importlib.util.spec_from_file_location` to import `scope-probe-calibrate.py` because the hyphenated filename prevents a plain `import` statement.
+- Tripwire 1 fires when `pct_medium >= 70%` (probe is under-discriminating). Tripwire 2 fires when `pct_heavy < 20%` (probe under-classifies HEAVY). Tripwires 3 and 4 are flagged as requiring manual review and never auto-fire.
 
 ## Examples
 
@@ -79,3 +90,9 @@ These scripts share a common dependency on `python3` — used for JSON serializa
   `python3 scripts/config.py ensure-defaults`
 - Run the end-to-end config smoke tests:
   `python3 scripts/test_config.py`
+- Run the scope-probe calibration harness against the live archive (fixture mode for T007):
+  `python3 scripts/scope-probe-calibrate.py --archive-root z-harness --epoch 1 --n-runs 6 --samples-per-run 3 --fixture-mode scripts/fixtures/t007-fixture.json`
+- Run the scope-probe calibration harness in normal stub mode:
+  `python3 scripts/scope-probe-calibrate.py --archive-root z-harness --epoch 2 --n-runs 10`
+- Run the unit tests for the calibration harness:
+  `python3 scripts/test-scope-probe-calibrate.py`
