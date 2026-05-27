@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "generated_at": "2026-05-26T01:38:04Z",
+  "generated_at": "2026-05-27T04:56:33Z",
   "z_harness_version": "380aca6",
   "concepts": [
     {
@@ -22,7 +22,7 @@
         "agents/reviewer.md",
         "agents/spec-precheck.md"
       ],
-      "last_updated": "2026-05-25",
+      "last_updated": "2026-05-26",
       "confidence": "high",
       "depends_on": [
         "scripts",
@@ -60,7 +60,7 @@
         "commands/z-suggest-memory.md",
         "commands/z-test.md"
       ],
-      "last_updated": "2026-05-25",
+      "last_updated": "2026-05-26",
       "confidence": "high",
       "depends_on": [
         "agents",
@@ -83,7 +83,7 @@
         "scripts/run-memory-review.sh",
         "scripts/version.sh"
       ],
-      "last_updated": "2026-05-25",
+      "last_updated": "2026-05-26",
       "confidence": "high",
       "depends_on": [],
       "consumed_by": [
@@ -98,7 +98,7 @@
       "source_file": [
         "commands/z-fix.md"
       ],
-      "last_updated": "2026-05-25",
+      "last_updated": "2026-05-26",
       "confidence": "high",
       "depends_on": [
         "agents",
@@ -181,7 +181,7 @@
         "exports/codex/CAPABILITIES.md",
         "exports/agy/CAPABILITIES.md"
       ],
-      "last_updated": "2026-05-25",
+      "last_updated": "2026-05-27",
       "confidence": "high",
       "depends_on": [
         "commands",
@@ -190,7 +190,7 @@
         "scripts"
       ],
       "consumed_by": [],
-      "summary": "Pipeline translating Claude Code source files into Cursor (.mdc rules), Codex CLI (AGENTS.md + prompts), and Antigravity (agy-plugin.yaml + prompts); /z-export slash command; per-target CAPABILITIES.md documents dropped constructs."
+      "summary": "Pipeline translating z-harness source files into Cursor (.mdc rules), Codex CLI (AGENTS.md + prompts), and Antigravity (workflows + rules + native skills + prompts); /z-export slash command; per-target CAPABILITIES.md documents dropped constructs; agy natively supports workspace skills via .agent/skills/<id>/SKILL.md."
     },
     {
       "slug": "plan-layout-migration",
@@ -266,7 +266,7 @@
         "agents/review-agent.md",
         "scripts/run-memory-review.sh"
       ],
-      "last_updated": "2026-05-25",
+      "last_updated": "2026-05-26",
       "confidence": "high",
       "depends_on": [
         "z-suggest-memory",
@@ -280,19 +280,18 @@
     },
     {
       "slug": "z-uplift",
-      "source_files": [
-        "commands/z-uplift.md",
-        "docs/human/z-uplift.md",
-        "skills/z-uplift/SKILL.md"
-      ],
-      "last_updated": "2026-05-25",
+      "last_updated": "2026-05-27",
       "confidence": "high",
       "depends_on": [
         "commands",
         "agents"
       ],
       "consumed_by": [],
-      "summary": "Tiered bulk codebase quality uplift: decompose into components, repo-wide cross-cutting pass, per-component audits, sequential implement via /z-implement-all."
+      "summary": "Tiered bulk codebase quality uplift: decompose into components, repo-wide cross-cutting pass, per-component audits, sequential implement via /z-implement-all.",
+      "source_file": [
+        "commands/z-uplift.md",
+        "skills/z-uplift/SKILL.md"
+      ]
     }
   ]
 }

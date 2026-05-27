@@ -1,10 +1,9 @@
 {
   "concept": "z-uplift",
-  "last_updated": "2026-05-26",
+  "last_updated": "2026-05-27",
   "covers_spec": "z-harness/plans/tiered-quality-uplift/SPEC.md",
-  "source_files": [
+  "source_file": [
     "commands/z-uplift.md",
-    "docs/human/z-uplift.md",
     "skills/z-uplift/SKILL.md"
   ],
   "confidence": "high",
@@ -14,7 +13,7 @@
       "line": 65,
       "symbol": "Setup",
       "kind": "module",
-      "summary": "Derive uplift slug, resolve plan dir, pick run ID, log run_start, doc-staleness gate."
+      "summary": "Derive uplift slug, resolve plan dir, pick run ID, log run_start, doc-staleness gate (Step 5)."
     },
     {
       "file": "commands/z-uplift.md",
@@ -63,16 +62,21 @@
       "line": 2428,
       "symbol": "Phase 5",
       "kind": "phase",
-      "summary": "Sequential implement — AskUser gate per component; prints the /z-implement-all --tasks= command and marks state [i] implementing, then exits for the user to run it (two-step handoff); update MANIFEST state after user confirms completion."
+      "summary": "Sequential implement — AskUser gate per component; prints the /z-implement-all --tasks= command and marks state [i] implementing, then exits for the user to run it (two-step handoff); manifest_replace_row helper enforces exactly-one-row invariant on all state transitions."
     },
     {
       "file": "commands/z-uplift.md",
       "line": 2808,
       "symbol": "Phase 6",
       "kind": "phase",
-      "summary": "Finalize — log run_end, push-notify, recommend /z-maintain-docs if any task carried a **DOCS:** line."
+      "summary": "Finalize — log run_end, push-notify with done/skipped/bailed counts, recommend /z-maintain-docs if any task carried a **DOCS:** line."
     }
   ],
+  "depends_on": [
+    "commands",
+    "agents"
+  ],
+  "consumed_by": [],
   "invariants": [
     "STYLE.md gate runs at Setup (same shape as /z-mr-review's STYLE gate); without --no-style, missing STYLE.md halts and recommends /z-style-init. With --no-style, audits proceed but cleanliness+design fall back to the generic rubric.",
     "STYLE.md content is injected as authoritative rubric into cleanliness and design auditor prompts; auditors cite STYLE rule IDs in findings.",
@@ -86,7 +90,8 @@
     "git grep for bail dependents is only invoked when OTHER_COMP_PATHS is non-empty; empty path list is a no-op that sets DEPS_FOUND to empty string.",
     "Collision resolver loops until slug list is collision-free; no-progress sanity counter (>3 stalled iterations) exits with error to prevent infinite loops.",
     "SLUG_RE enforces ^[a-z0-9]+(?:-[a-z0-9]+)*$ for all custom slugs supplied during collision resolution.",
-    "All MANIFEST mutations use atomic write (os.replace tmp → final) to prevent partial-write corruption on interrupt.",
+    "All MANIFEST mutations use atomic write (os.replace tmp -> final) to prevent partial-write corruption on interrupt.",
+    "manifest_replace_row helper asserts exactly one MANIFEST row matches comp_slug; zero or multiple matches raise ValueError and abort without writing.",
     "Cross-cutting parser emits cross_cutting_findings_dropped telemetry event for every bullet dropped due to non-G/C/R-NNN prefix mismatch.",
     "Phase 4 prints a callout when the synthetic <slug>-cross-cutting row is in MANIFEST, reminding operator it will be implemented first.",
     "auditor agent is the only audit primitive; no shell-out to /z-audit.",
@@ -94,7 +99,8 @@
     "Read-only during Phases 1-4; only Phase 5 (/z-implement-all dispatches) writes code.",
     "No automatic retry of bailed components — --retry-bailed is explicit user opt-in.",
     "Cross-cutting pass is skippable via --cross-cutting=skip; default ON.",
-    "Every phase emits phase_end with wall_ms and user_wait_ms; AskUserQuestion waits are bracketed by user_wait_start / user_wait_end events."
+    "Every phase emits phase_end with wall_ms and user_wait_ms; AskUserQuestion waits are bracketed by user_wait_start / user_wait_end events.",
+    "Doc-staleness gate (Setup Step 5) computes stale_pct across all INDEX concepts before Phase 0; if >= Z_HARNESS_DOC_STALENESS_THRESHOLD (default 20%), user is prompted to switch to /z-maintain-docs, continue, or abandon. Never auto-invokes /z-maintain-docs."
   ],
   "gotchas": [
     "Main tree may be transiently un-buildable between AskUser gates if a global-task API change lands and dependents are not yet updated; mitigated (but NOT eliminated) by processing <slug>-cross-cutting first. Operators should expect to manually resolve transient build failures.",
@@ -107,12 +113,8 @@
     "The synthetic <slug>-cross-cutting component is inserted FIRST in MANIFEST as [a] audited so global-task API changes land before per-component cleanup.",
     "consultant/reviewer provider routing is delegated to scripts/resolve-provider.sh — provider names (Gemini/Codex) are never hardcoded in dispatch prompts.",
     "Phase line anchors shift whenever the command file is edited; always verify against grep before citing a line number.",
-    "cross_cutting_findings_dropped telemetry fires when consultant output contains bullets that don't match G-NNN/C-NNN/R-NNN; if finding counts seem low check run logs for this event."
+    "cross_cutting_findings_dropped telemetry fires when consultant output contains bullets that don't match G-NNN/C-NNN/R-NNN; if finding counts seem low check run logs for this event.",
+    "docs/human/z-uplift.md is NOT a source file for this concept — it is generated output. The true sources are commands/z-uplift.md and skills/z-uplift/SKILL.md."
   ],
-  "depends_on": [
-    "commands",
-    "agents"
-  ],
-  "consumed_by": [],
   "memories": []
 }

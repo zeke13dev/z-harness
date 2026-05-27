@@ -1,0 +1,42 @@
+## (1) Framing
+
+This is not an auto-memory question yet. It is a reachability and observability failure disguised as a memory-authoring policy question.
+
+The pipeline has a write boundary, a reviewer, candidate limits, and approval UX. What it lacks is proof that the review path actually runs in the contexts where learning should happen. A silent Phase 9 after `/z-implement-all` is not a learning loop; it is an invisible best-effort epilogue.
+
+## (2) Core hypothesis
+
+Zero memories are produced because the system is optimized to disappear before `z-suggest-memory` is ever reached.
+
+The dominant failure is upstream eligibility: missing `Z_HARNESS_PLAN_DIR`, missing `TAGS.txt`, empty diff, zero completed tasks, and remote repo context drift. Even when the reviewer runs, zero candidates are silent. `/z-debug` also claims mandatory memory suggestion without dispatching the sole write path, so the lifecycle contract is false.
+
+## (3) Risks
+
+Auto-running memory authoring after `/z-implement-all` risks creating low-signal approval fatigue while leaving the real failure untouched.
+
+Keeping current silence is worse in one specific way: it lets users believe z-harness is learning when it is mostly skipping. The dangerous ambiguity is “nothing worth remembering” versus “memory review never ran.”
+
+Noisy notifications are also a real risk under `approval_only`. Every skip should not page the user. The system needs state clarity before user interruption.
+
+## (4) Plan implications
+
+Separate the collapsed states:
+
+- `not_applicable`: no meaningful implementation result or missing required context.
+- `skipped_broken_context`: completed work existed, but metadata like `Z_HARNESS_PLAN_DIR` or `TAGS.txt` was missing.
+- `ran_empty`: reviewer executed and returned zero candidates.
+- `needs_user`: candidates exist and require Accept/Edit/Skip.
+
+Fix caller-side propagation of `Z_HARNESS_PLAN_DIR` before changing authoring behavior. Add structured telemetry for every skip. Add a low-noise visible nudge only for `skipped_broken_context` and maybe `ran_empty`, not every benign non-event.
+
+Keep `z-suggest-memory` as the only mutating path. Make `/z-debug` either dispatch it or stop claiming it does.
+
+## (5) What would change my mind
+
+Evidence that Phase 9 reliably runs with valid plan dir, completed tasks, tags, and non-empty diffs, yet still returns zero candidates.
+
+Evidence that users regularly reject high-quality candidates, implying candidate quality or approval UX is the bottleneck.
+
+Evidence that qt-bot has complete local harness docs and plan metadata but still skips.
+
+A deliberate product decision that implementation memory should only happen inside explicit `/z-improve`, not after `/z-implement-all`.

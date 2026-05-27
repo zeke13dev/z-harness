@@ -1,6 +1,6 @@
 {
   "concept": "multi-ide-exports",
-  "last_updated": "2026-05-26",
+  "last_updated": "2026-05-27",
   "covers_spec": "none",
   "source_file": [
     "scripts/export-common.py",
@@ -28,7 +28,7 @@
     {"file": "scripts/export-agy.py", "line": 71, "symbol": "_rewrite_body", "kind": "fn", "summary": "Replace unsupported call sites with Antigravity limitation comment"},
     {"file": "scripts/export-agy.py", "line": 93, "symbol": "_render_workflow", "kind": "fn", "summary": "Render command as Antigravity workflow .md (description frontmatter, 250-char limit)"},
     {"file": "scripts/export-agy.py", "line": 130, "symbol": "_render_rule", "kind": "fn", "summary": "Render agent as Antigravity rule .md with always_on or model_decision trigger"},
-    {"file": "scripts/export-agy.py", "line": 155, "symbol": "_render_skill", "kind": "fn", "summary": "Render skill as Antigravity SKILL.md with name and description frontmatter"},
+    {"file": "scripts/export-agy.py", "line": 155, "symbol": "_render_skill", "kind": "fn", "summary": "Render skill as native Antigravity SKILL.md under .agent/skills/<id>/SKILL.md"},
     {"file": "scripts/export-agy.py", "line": 177, "symbol": "_render_prompt", "kind": "fn", "summary": "Render flat agy prompt with description and role frontmatter"},
     {"file": "scripts/export-agy.py", "line": 207, "symbol": "_build_manifest", "kind": "fn", "summary": "Generate agy-plugin.yaml export manifest (z-harness convention only)"},
     {"file": "scripts/export-agy.py", "line": 559, "symbol": "main", "kind": "fn", "summary": "Emit and validate all agy surfaces: workflows, rules, skills, prompts, manifest, caps, README"},
@@ -50,12 +50,14 @@
     "CAPABILITIES.md must contain ## Supported, ## Unsupported, and ## Notes sections",
     "/z-export runs adapters sequentially and continues past individual target failures",
     "audit-tarball.sh rejects providers.json, .z-harness/, plan artifacts, exports/, and absolute home paths",
-    "When a skill ID collides with a command ID, both Cursor and Codex adapters append a -skill suffix to the export filename to prevent overwrite"
+    "When a skill ID collides with a command ID, both Cursor and Codex adapters append a -skill suffix to the export filename to prevent overwrite",
+    "agy is the only target with native skill equivalents (.agent/skills/<id>/SKILL.md); programmatic Skill() invocations remain unsupported on all targets"
   ],
   "gotchas": [
     "Skill/command ID collision handling: if a skill and a command share the same ID, the skill's export filename gets a -skill suffix (e.g. z-plan-skill.mdc) in both Cursor and Codex adapters",
     "export-common.py does not enforce tarball exclusions; that gate lives in audit-tarball.sh",
     "Codex consolidates all agents into AGENTS.md — no per-agent prompt files are emitted",
+    "agy has native workspace skill support: skills become .agent/skills/<id>/SKILL.md with name+description frontmatter; but programmatic Skill(name=...) runtime calls are still replaced with limitation comments",
     "agy emits the most surfaces: workflows + rules + skills + flat prompts + manifest + CAPABILITIES.md + README.md",
     "agy _ALWAYS_ON_AGENTS hard-codes implementer, reviewer, auditor, mr-reviewer, remote-runner; all others get model_decision",
     "agy-plugin.yaml is a z-harness convention manifest; Antigravity does not read it natively",

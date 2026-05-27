@@ -1,0 +1,38 @@
+diff --git a/agents/review-agent.md b/agents/review-agent.md
+index f265d8d..9189bf9 100644
+--- a/agents/review-agent.md
++++ b/agents/review-agent.md
+@@ -1,6 +1,6 @@
+ ---
+ name: review-agent
+-description: Post-run Haiku subagent that proposes 0-3 candidate memories from a completed /z-implement-all or /z-review-all run. Reads run events + cumulative diff + SPEC.md; emits structured candidates as a single fenced ```json block. Does NOT write — orchestrator owns all writes via /z-suggest-memory.
++description: Post-run Haiku subagent that proposes 0-3 candidate memories from a completed /z-implement-all, /z-review-all, or /z-debug run. Reads run events + cumulative diff + SPEC.md (or DEBUG.md for debug runs); emits structured candidates as a single fenced ```json block. Does NOT write — orchestrator owns all writes via /z-suggest-memory.
+ tools: Read, Grep, Glob, Bash
+ model: haiku
+ ---
+@@ -15,11 +15,14 @@ The caller's prompt should include:
+ 
+ - `run_dir:` absolute path to the run directory (contains events.jsonl)
+ - `cumulative_diff_path:` absolute path to a pre-computed diff file (orchestrator creates this before dispatching)
+-- `spec_path:` absolute path to SPEC.md if it exists (may be empty string for /z-review-all where SPEC.md still exists from /z-plan)
++- `spec_path:` absolute path to SPEC.md if it exists. May be an empty string when no SPEC is available (e.g. a fresh `/z-debug` run with no prior `/z-plan`). Empty `spec_path` means "no SPEC available — treat the run as self-contained."
+ - `tags_path:` absolute path to docs/llm/TAGS.txt (controlled-tag list)
+ - `index_path:` absolute path to docs/llm/INDEX.json (existing concept slug registry)
+ - `run_id:` the RUN string (used as `source: incident:<run_id>`)
+-- `parent_command:` one of `"implement-all"` or `"review-all"` (informs what kind of signals to look for)
++- `parent_command:` one of `"implement-all"`, `"review-all"`, or `"debug"` (informs what kind of signals to look for)
++- `debug_md_path:` (optional) absolute path to DEBUG.md. Present only when `parent_command: debug`; absent for `implement-all` and `review-all`.
++
++**Artifact primacy by `parent_command`:** When `parent_command: debug`, `debug_md_path` is the primary artifact the agent reasons over. `spec_path` is supplementary context for recognizing affected invariants. For `implement-all` and `review-all`, `spec_path` is primary and `debug_md_path` is unset.
+ 
+ ## Procedure
+ 
+@@ -38,6 +41,8 @@ The caller's prompt should include:
+ 
+ 5. Consult TAGS.txt for valid tag values. Prefer controlled tags; free-form is acceptable only when no controlled tag fits.
+ 
++6. **For `parent_command: debug`:** Filter candidates for generalizable invariants, root-cause patterns, and "why we didn't catch it" gaps. Single-run patches and fix-specific minutiae are NOT memories. Reason over `debug_md_path` as the primary signal source; use `spec_path` (if non-empty) only to cross-reference which invariants the root cause violated.
++
+ ## Output contract
+ 
+ Return exactly one fenced ```json block. No prose before or after it. Schema:

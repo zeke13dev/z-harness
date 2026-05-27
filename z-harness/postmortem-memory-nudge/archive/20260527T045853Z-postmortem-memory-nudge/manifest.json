@@ -1,0 +1,12 @@
+{
+  "run": "20260527T045853Z-postmortem-memory-nudge",
+  "slug": "postmortem-memory-nudge",
+  "status": "complete",
+  "ended_at": "2026-05-27T05:21:06Z",
+  "totals": {
+    "decisions": 12,
+    "consult_flagged": 5,
+    "tasks": 12,
+    "consultations": 2
+  }
+}

@@ -1,0 +1,152 @@
+--- z-harness/postmortem-memory-nudge/archive/tasks/T003/diff-v1.patch	2026-05-26 22:46:29
++++ z-harness/postmortem-memory-nudge/archive/tasks/T003/diff.patch	2026-05-26 22:49:02
+@@ -1,8 +1,8 @@
+ diff --git a/scripts/run-memory-review.sh b/scripts/run-memory-review.sh
+-index 753525b..b4733d6 100755
++index 753525b..6f7a25b 100755
+ --- a/scripts/run-memory-review.sh
+ +++ b/scripts/run-memory-review.sh
+-@@ -1,18 +1,31 @@
++@@ -1,32 +1,85 @@
+  #!/usr/bin/env bash
+ -# Helper called by /z-implement-all and /z-review-all.
+ +# Helper called by /z-implement-all, /z-review-all, and /z-debug.
+@@ -20,40 +20,23 @@
+  
+  set -euo pipefail
+  
+- if [[ $# -lt 2 ]]; then
+-   echo "STATUS: skipped missing_args"
+-+  # Attempt to emit terminal event if we have enough context; otherwise skip silently.
+-+  _PLUGIN_ROOT="${ANTIGRAVITY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}"
+-+  _LOG_EVENT="${_PLUGIN_ROOT:+$_PLUGIN_ROOT/scripts/log-event.sh}"
+-+  _SLUG="${Z_HARNESS_SLUG:-}"
+-+  if [[ -n "${_LOG_EVENT:-}" && -x "$_LOG_EVENT" ]]; then
+-+    _PAYLOAD="$(python3 -c '
+-+import json, sys
+-+slug = sys.argv[1] if sys.argv[1] else None
+-+print(json.dumps({"state":"skipped_broken_context","skip_reason":"missing_args","parent_command":None,"candidates":0,"accepted":0,"slug":slug}))
+-+' "$_SLUG")"
+-+    bash "$_LOG_EVENT" "unknown" "memory_review_terminal" "$_PAYLOAD" || true
+-+  fi
+-   exit 0
+- fi
+- 
+-@@ -23,10 +36,38 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+- PLUGIN_ROOT="${ANTIGRAVITY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$REPO_ROOT}}"
+- LOG_EVENT="$PLUGIN_ROOT/scripts/log-event.sh"
+- 
+++# Resolve REPO_ROOT, PLUGIN_ROOT, LOG_EVENT, and SLUG first so the missing_args
+++# early-exit path can use them before RUN/PARENT_COMMAND are parsed.
+++REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+++PLUGIN_ROOT="${ANTIGRAVITY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$REPO_ROOT}}"
+++LOG_EVENT="$PLUGIN_ROOT/scripts/log-event.sh"
+ +SLUG="${Z_HARNESS_SLUG:-}"
+ +
+-+# emit_terminal <state> <skip_reason>
+-+# Emits a single memory_review_terminal event. skip_reason may be "null" for the null literal.
+-+emit_terminal() {
+-+  local state="$1"
+-+  local skip_reason="$2"
+-+  if [[ -x "$LOG_EVENT" ]]; then
+-+    local payload
+-+    payload="$(python3 -c '
+++# _build_terminal_payload <state> <skip_reason_raw> <parent_command_raw> <slug_raw>
+++# Builds a JSON payload string. Uses python3 when available; falls back to pure bash.
+++_build_terminal_payload() {
+++  local state="$1" skip_reason_raw="$2" parent_command_raw="$3" slug_raw="$4"
+++  if python3 -c '' 2>/dev/null; then
+++    python3 -c '
+ +import json, sys
+-+state, skip_reason_raw, parent_command, slug_raw = sys.argv[1:5]
+++state, skip_reason_raw, parent_command_raw, slug_raw = sys.argv[1:5]
+ +skip_reason = None if skip_reason_raw == "null" else skip_reason_raw
+++parent_command = None if not parent_command_raw else parent_command_raw
+ +slug = None if not slug_raw else slug_raw
+ +print(json.dumps({
+ +  "state": state,
+@@ -63,11 +46,46 @@
+ +  "accepted": 0,
+ +  "slug": slug
+ +}))
+-+' "$state" "$skip_reason" "$PARENT_COMMAND" "$SLUG")"
+-+    bash "$LOG_EVENT" "$RUN" "memory_review_terminal" "$payload" || true
+++' "$state" "$skip_reason_raw" "$parent_command_raw" "$slug_raw"
+++  else
+++    # Pure-bash fallback — no special characters in these values so no escaping needed.
+++    local skip_json parent_json slug_json
+++    [[ "$skip_reason_raw" == "null" ]] && skip_json="null" || skip_json="\"$skip_reason_raw\""
+++    [[ -z "$parent_command_raw" ]] && parent_json="null" || parent_json="\"$parent_command_raw\""
+++    [[ -z "$slug_raw" ]] && slug_json="null" || slug_json="\"$slug_raw\""
+++    printf '{"state":"%s","skip_reason":%s,"parent_command":%s,"candidates":0,"accepted":0,"slug":%s}' \
+++      "$state" "$skip_json" "$parent_json" "$slug_json"
+ +  fi
+ +}
+ +
++ if [[ $# -lt 2 ]]; then
++   echo "STATUS: skipped missing_args"
+++  # Attempt to emit terminal event; degrade gracefully if log-event.sh is unavailable.
+++  if [[ -x "$LOG_EVENT" ]]; then
+++    _PAYLOAD="$(_build_terminal_payload "skipped_broken_context" "missing_args" "" "$SLUG")" || true
+++    [[ -n "${_PAYLOAD:-}" ]] && bash "$LOG_EVENT" "unknown" "memory_review_terminal" "$_PAYLOAD" || true
+++  fi
++   exit 0
++ fi
++ 
++ RUN="$1"
++ PARENT_COMMAND="$2"
++ 
++-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
++-PLUGIN_ROOT="${ANTIGRAVITY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$REPO_ROOT}}"
++-LOG_EVENT="$PLUGIN_ROOT/scripts/log-event.sh"
+++# emit_terminal <state> <skip_reason>
+++# Emits a single memory_review_terminal event. skip_reason may be "null" for the null literal.
+++emit_terminal() {
+++  local state="$1"
+++  local skip_reason="$2"
+++  if [[ -x "$LOG_EVENT" ]]; then
+++    local payload
+++    payload="$(_build_terminal_payload "$state" "$skip_reason" "$PARENT_COMMAND" "$SLUG")" || true
+++    [[ -n "${payload:-}" ]] && bash "$LOG_EVENT" "$RUN" "memory_review_terminal" "$payload" || true
+++  fi
+++}
++ 
+  # Resolve plan base dir — must be absolute
+  BASE="${Z_HARNESS_PLAN_DIR:-}"
+  if [[ -z "$BASE" ]]; then
+@@ -76,7 +94,7 @@
+    exit 0
+  fi
+  
+-@@ -61,10 +102,7 @@ fi
++@@ -61,10 +114,7 @@ fi
+  # Test emptiness without loading the diff into memory, then stream to file.
+  if git diff --quiet "${BASE_REF}..HEAD" 2>/dev/null; then
+    echo "STATUS: skipped empty_diff"
+@@ -88,7 +106,7 @@
+    exit 0
+  fi
+  
+-@@ -76,10 +114,17 @@ if [[ -f "$TASKS_FILE" && "$PARENT_COMMAND" == "implement-all" ]]; then
++@@ -76,10 +126,17 @@ if [[ -f "$TASKS_FILE" && "$PARENT_COMMAND" == "implement-all" ]]; then
+    COMPLETED_COUNT="$(printf '%s' "$COMPLETED_COUNT" | tr -d '[:space:]')"
+    if [[ "${COMPLETED_COUNT:-0}" -eq 0 ]]; then
+      echo "STATUS: skipped all_tasks_skipped"
+@@ -110,7 +128,7 @@
+      exit 0
+    fi
+  fi
+-@@ -88,10 +133,7 @@ fi
++@@ -88,10 +145,7 @@ fi
+  TAGS_FILE="$REPO_ROOT/docs/llm/TAGS.txt"
+  if [[ ! -f "$TAGS_FILE" ]]; then
+    echo "STATUS: skipped tags_missing"
+@@ -122,7 +140,7 @@
+    exit 0
+  fi
+  
+-@@ -103,9 +145,17 @@ git diff "${BASE_REF}..HEAD" | head -n 5000 > "$DIFF_FILE"
++@@ -103,9 +157,17 @@ git diff "${BASE_REF}..HEAD" | head -n 5000 > "$DIFF_FILE"
+  set -o pipefail
+  
+  # --- Print ready + artifact paths (all absolute) ---

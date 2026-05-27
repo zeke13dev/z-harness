@@ -592,12 +592,31 @@ Push-notify: "Post-mortem ready: `$Z_HARNESS_PLAN_DIR/DEBUG.md` Post-mortem sect
 
 ## Phase 10 — Finalize
 
+**Clear the notify-dedup session file** (once per top-level `/z-debug` invocation — ensures each fresh debug session gets its own notify de-dup state):
+```bash
+[[ -n "${Z_HARNESS_PLAN_DIR:-}" ]] && rm -f "$Z_HARNESS_PLAN_DIR/.notify-dedup-session"
+```
+
+### Branch: `status: shipped` (fix was applied and post-mortem written)
+
 1. Log:
    ```bash
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" debug_run_end \
      "$(printf '{"status":"shipped","hypothesis_cycles":%d,"total_hypotheses_generated":%d,"action_items":%d,"postmortem_written":true}' "$CYCLES" "$N_HYPOTHESES" "$N_ACTIONS")"
    ```
 2. Push-notify if policy != `off`: "Debug complete. Root cause: <one-line, H<NNN>>. DEBUG.md in `$Z_HARNESS_PLAN_DIR/`."
+
+3. **Memory review:** After logging `debug_run_end` with `status: shipped`, invoke `bash scripts/run-memory-review.sh "$RUN" "debug"` and parse its stdout with `mapfile`. On `STATUS: skipped`, the helper has already emitted the terminal event; honor the D11 push-notify policy (push-notify once per `(slug, skip_reason)` for `skipped_broken_context` states, deduped via `.notify-dedup-session`). On `STATUS: ready`, dispatch the review-agent with `parent_command: debug`, `debug_md_path` from line 5 (the path to DEBUG.md), `spec_path` from line 3 (may be empty), `cumulative_diff_path` from line 2, and `tags_path` from line 4. Run the sequential AskUserQuestion loop (hard cap 3 candidates) with source `incident:debug-<slug>-<RUN>`. Emit exactly one `memory_review_terminal` event per invocation: the helper emits it on skip paths; the orchestrator emits it after the user-gate loop for `ran_empty` and `needs_user` paths. See `skills/z-debug/SKILL.md` Phase 10 for the full step-by-step procedure.
+
+### Branch: `status: abandoned` (debug was inconclusive — no fix shipped)
+
+Log:
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" debug_run_end \
+  "$(printf '{"status":"abandoned","hypothesis_cycles":%d,"total_hypotheses_generated":%d}' "$CYCLES" "$N_HYPOTHESES")"
+```
+
+Do NOT invoke `run-memory-review.sh` on the abandoned branch. No memory-review telemetry is emitted for inconclusive debug sessions.
 
 ## Artifacts produced
 

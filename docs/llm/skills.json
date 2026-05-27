@@ -1,6 +1,6 @@
 {
   "concept": "skills",
-  "last_updated": "2026-05-26",
+  "last_updated": "2026-05-27",
   "covers_spec": "memory-self-improve-loop/20260525",
   "source_file": [
     "skills/z-amend/SKILL.md",
@@ -22,7 +22,10 @@
     "skills/z-suggest-memory/SKILL.md",
     "skills/z-test/SKILL.md",
     "skills/z-update/SKILL.md",
-    "skills/z-uplift/SKILL.md"
+    "skills/z-uplift/SKILL.md",
+    "commands/z-audit.md",
+    "commands/z-fix.md",
+    "commands/z-skill-fix.md"
   ],
   "confidence": "high",
   "entry_points": [
@@ -52,7 +55,28 @@
       "line": 1,
       "symbol": "z-debug",
       "kind": "module",
-      "summary": "Unknown-root-cause debug flow with hypothesis rounds, posterior table, MR-review on fix, post-mortem."
+      "summary": "Unknown-root-cause debug flow; Phase 2.5 bisect fast-path; hypothesis rounds; posterior table; MR-review on fix; post-mortem; Phase 10 memory-review (shipped branch only)."
+    },
+    {
+      "file": "commands/z-audit.md",
+      "line": 1,
+      "symbol": "z-audit",
+      "kind": "module",
+      "summary": "Read-only component audit; parallel auditor subagents per dimension; bundled consult; REPORT.md + TASKS.md for /z-implement-all."
+    },
+    {
+      "file": "commands/z-fix.md",
+      "line": 1,
+      "symbol": "z-fix",
+      "kind": "module",
+      "summary": "Fast-path fix for known-diagnosis bugs; Phase 0 wrong-tool gate; light-fix consult; inline implementation; Codex review; optional post-mortem."
+    },
+    {
+      "file": "commands/z-skill-fix.md",
+      "line": 1,
+      "symbol": "z-skill-fix",
+      "kind": "module",
+      "summary": "Meta-skill for patching misleading SKILL.md/command/agent files; diagnosis note; surgical edit; reviewer safety gate."
     },
     {
       "file": "skills/z-do/SKILL.md",
@@ -66,7 +90,7 @@
       "line": 1,
       "symbol": "z-implement-all",
       "kind": "module",
-      "summary": "Full task queue orchestration; --tasks fast path; tree gates; batching; caps; Phase 9 memory-review."
+      "summary": "Full task queue orchestration; --tasks fast path; tree gates; batching; caps; Phase 9 memory-review with memory_review_terminal event; deduped push-notify via .notify-dedup-session."
     },
     {
       "file": "skills/z-implement-next/SKILL.md",
@@ -129,14 +153,14 @@
       "line": 1,
       "symbol": "z-review-all",
       "kind": "module",
-      "summary": "Final diff review; pre-Phase-0 resume check; test-suite gate; Phase 3.7 compaction; REVIEW-TASKS; Phase 7 memory-review."
+      "summary": "Final diff review; pre-Phase-0 resume check; test-suite gate; Phase 3.7 compaction; REVIEW-TASKS; Phase 7 memory-review with memory_review_terminal event; clears .notify-dedup-session at phase start."
     },
     {
       "file": "skills/z-stats/SKILL.md",
       "line": 1,
       "symbol": "z-stats",
       "kind": "module",
-      "summary": "Read-only shell metrics; Phase 4b surfaces recent memory-review activity."
+      "summary": "Read-only shell metrics; Phase 4b reads review_agent_call + memory_review_terminal events with old-shape phase_end back-compat mapping."
     },
     {
       "file": "skills/z-suggest-memory/SKILL.md",
@@ -186,10 +210,13 @@
     "z-suggest-memory is the only supported memories[] mutation path.",
     "doc-updater must preserve existing memories verbatim.",
     "Telemetry uses log-event.sh/log-phase.sh so z-stats can compute wall time.",
-    "Phase 9 (z-implement-all) and Phase 7 (z-review-all) are soft; all failure paths silently skip.",
+    "Phase 9 (z-implement-all), Phase 7 (z-review-all), and Phase 10 (z-debug shipped-branch) are soft; all failure paths silently skip.",
     "run-memory-review.sh gates whether a review-agent dispatch is warranted before any candidate prompt.",
+    "memory_review_terminal is emitted by run-memory-review.sh for all skip states; by the skill for ran_empty and needs_user states. review_agent_failed and review_agent_malformed are orthogonal failure-class events and never emit memory_review_terminal.",
+    "Broken-context skip push-notify (tags_missing, no_plan_dir, missing_args) uses .notify-dedup-session keyed by slug:reason to suppress duplicate notifications within a session.",
+    "z-debug memory-review (Phase 10) runs only on the status:shipped branch; abandoned debug sessions emit no memory-review telemetry.",
     "z-plan-split emits plan_split_run_end on every exit path (success, partial, refused, abandoned).",
-    "cluster_id (C1..CN) is for telemetry; cluster_slug is the on-disk directory name \u2014 never swap.",
+    "cluster_id (C1..CN) is for telemetry; cluster_slug is the on-disk directory name — never swap.",
     "z-maintain-docs always passes dedup_tags:true to doc-updater subagents.",
     "z-review-all Phase 3.7 compaction breakpoint always runs between Phase 3.5 and Phase 4.",
     "z-debug fix-gate requires posterior==very_high AND zero unexplained evidence rows before any fix.",
@@ -200,7 +227,18 @@
     "z-implement-next is single-shot; no auto-retry on review failure.",
     "z-test cross-LLM consult (mode test-cases) is non-skippable.",
     "z-test writes TESTS.md only; no SPEC.md or PLAN.md edits; only appends **Tests:** to TASKS.md.",
-    "z-update aborts symlink mode on dirty plugin tree; aborts tarball mode if RELEASE_URL still points at example.com."
+    "z-update aborts symlink mode on dirty plugin tree; aborts tarball mode if RELEASE_URL still points at example.com.",
+    "z-fix Phase 0 wrong-tool gate is non-skippable even if $ARGUMENTS is non-empty; a symptom description is not a hypothesis.",
+    "z-fix inline implementation self-check mirrors the implementer subagent checklist; main thread applies edits directly for 1-5 file changes.",
+    "z-fix mid-implementation scope growth triggers an unconditional halt and escalation.md write; no continue or subagent spawn.",
+    "z-audit is read-only; it never edits the target; fixes happen later via /z-implement-all consuming the emitted TASKS.md.",
+    "z-audit Phase 4 cross-LLM consult (both Gemini and Codex in parallel) is non-skippable.",
+    "z-audit Phase 6 Codex reviewer safety gate on the produced TASKS.md is non-skippable.",
+    "z-skill-fix Codex reviewer safety gate on every patched skill file is non-skippable.",
+    "z-skill-fix never auto-commits; commit decision is always delegated to the user.",
+    "z-debug Phase 2.5 bisect fast-path never blocks the pipeline; refused/failed/bisect_unusable all fall through to Phase 3a.",
+    "z-debug bisect offending SHA does not pre-fill the winning hypothesis; fix-gate still requires full posterior + evidence-coverage convergence.",
+    "Before any git reset --hard, commit --amend, or interactive-rebase squash on a tracked branch, run git branch -r --contains <sha>; STOP if upstream ref appears."
   ],
   "gotchas": [
     "z-audit-plan cannot run without SPEC/PLAN/TASKS; no-plan routes to z-plan.",
@@ -213,10 +251,14 @@
     "Adding a tag alias records TAGS.txt only; memory tags collapse on a later run.",
     "MEMORIES-FLAT.md regen is mandatory after doc writes or memory mutations.",
     "--from-candidate-json bypasses z-suggest-memory Phases 3a-3f; candidate must have type and text or returns bad_input.",
-    "Phase 4b in z-stats is read-only; it reads review_agent_call events and never writes.",
-    "review_agent_malformed and review_agent_failed events in Phase 9/7 trigger a push-notify hint but never halt the run.",
+    "Phase 4b in z-stats reads review_agent_call events AND memory_review_terminal events with old-shape phase_end back-compat; it is read-only and never writes.",
+    "review_agent_malformed and review_agent_failed are orthogonal failure-class events — they do NOT emit memory_review_terminal. In z-implement-all Phase 9, review_agent_malformed triggers a push-notify hint; review_agent_failed also triggers a push-notify. Neither halts the run.",
+    "z-debug Phase 10 memory-review only runs on the shipped branch. Abandoned debug sessions (status:abandoned) do not call run-memory-review.sh.",
+    "Broken-context skip push-notify uses .notify-dedup-session (keyed slug:reason); z-review-all clears this file at Phase 7 start; z-debug clears it at Phase 10 start; z-implement-all clears it before first task dispatch.",
     "z-debug auto-bail no longer triggers on >5 files; only cross-module/arch/public-surface change triggers escalation.",
     "z-debug hard cycle cap is 5; soft warning fires at cycle 3. Cycle cap overridable via AskUserQuestion only.",
+    "z-debug Phase 2.5 bisect is conditional: only fires when bug is a regression with known-good baseline and scriptable repro.",
+    "z-debug bisect-isolator is dispatched as a Haiku subagent, not a consultant; orchestrator-only likelihood-bucket rule still applies to its output.",
     "z-review-all pre-Phase-0 deletes stale .review_state.json if HEAD changed or artifacts missing.",
     "z-plan Phase 8 complexity-classifier strips existing **Complexity:** line before dispatch to force re-classification.",
     "z-research --slug= token must be stripped from $ARGUMENTS before computing input_hash; do not include in canonicalized text.",
@@ -227,7 +269,16 @@
     "z-update tarball mode halts if Z_HARNESS_RELEASE_URL still points at example.com.",
     "z-uplift slug collision detection presents one AskUserQuestion per colliding slug before COMPONENTS.md is written.",
     "z-uplift --refresh-component archives both REPORT.md and TASKS.md atomically before resetting the MANIFEST row; both files must exist or command exits with error.",
-    "z-uplift cross-cutting context (C-NNN lines) is filtered per component slug using exact-match on component: field; global or mismatched slugs are silently excluded."
+    "z-uplift cross-cutting context (C-NNN lines) is filtered per component slug using exact-match on component: field; global or mismatched slugs are silently excluded.",
+    "z-fix auto-bail threshold is >5 candidate files OR >2 non-obvious decisions OR cross-module/cross-crate impact — check at both Phase 1 end and throughout.",
+    "z-fix hard inline implementation limit is 7 files; halt unconditionally at that threshold regardless of FIX.md scope.",
+    "z-fix REVIEW_CYCLES counter gates the optional post-mortem default: default=NO when <=1, default=YES when >1.",
+    "z-fix does NOT auto-trigger MR-review; run /z-mr-review separately if needed.",
+    "z-audit auto-bail thresholds are >30 total findings OR >10 CRITICAL/HIGH findings post-consult; check after Phase 4.",
+    "z-audit escalation writes escalation.md and recommends /z-plan; no TASKS.md is generated on bail.",
+    "z-audit TASKS.md must include a minimal SPEC.md and PLAN.md for /z-implement-all to resolve context.",
+    "z-skill-fix only patches skill/command/agent files; bugs in repo code, missing CLAUDE.md conventions, and policy disputes are out of scope.",
+    "z-skill-fix never weakens a gate or pushback rule even if the gate was inconvenient in a specific case."
   ],
   "memories": []
 }

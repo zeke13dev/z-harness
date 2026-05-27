@@ -1,7 +1,7 @@
 # /z-uplift
 
-> Last updated: 2026-05-26
-> Covers source: commands/z-uplift.md, docs/human/z-uplift.md, skills/z-uplift/SKILL.md
+> Last updated: 2026-05-27
+> Covers source: commands/z-uplift.md, skills/z-uplift/SKILL.md
 
 ## Overview
 
@@ -14,7 +14,7 @@ The command is resumable: it writes a `MANIFEST.md` at `z-harness/plans/<slug>/M
 | Phase | Line | Purpose |
 |-------|------|---------|
 | Setup | `commands/z-uplift.md:65` | Derive uplift slug, resolve plan dir, pick run ID, log run_start, doc-staleness gate |
-| STYLE.md gate | `commands/z-uplift.md:434` | Require STYLE.md; halt with recommendation to run `/z-style-init` unless `--no-style` |
+| STYLE.md gate | `commands/z-uplift.md:434` | Require STYLE.md at repo root; halt and recommend /z-style-init if missing unless --no-style |
 | Phase 0 | `commands/z-uplift.md:519` | Premise check — one-paragraph goal confirmation |
 | Phase 1 | `commands/z-uplift.md:559` | Decomposition — auto-detect components, write COMPONENTS.md, AskUser gate; slug collision resolver loops with no-progress sanity counter; `SLUG_RE` validates custom slugs as `^[a-z0-9]+(?:-[a-z0-9]+)*$` |
 | Phase 2 | `commands/z-uplift.md:1076` | Cross-cutting pass — parallel consultant dispatches, output CROSS-CUTTING.md; parser emits `cross_cutting_findings_dropped` for non-G/C/R bullets; Step 6 inserts synthetic row as `[a] audited` using atomic write |
@@ -66,6 +66,7 @@ MANIFEST states:
 - **Cross-cutting parser drops.** The Phase 2 merge parser emits a `cross_cutting_findings_dropped` telemetry event for any bullets in consultant output that do not match the strict `G-NNN` / `C-NNN` / `R-NNN` prefix pattern. Watch for this in run logs if finding counts seem low.
 - **Atomic MANIFEST writes.** All MANIFEST mutations use `os.replace(tmp, path)` (write to `.tmp` then rename) to prevent partial-write corruption on interrupt.
 - **Phase telemetry.** Every phase records `T0` at entry and emits `phase_end` with `wall_ms` and `user_wait_ms` at exit. User wait time is tracked via `user_wait_start` / `user_wait_end` event pairs bracketing each `AskUserQuestion` call.
+- **Doc-staleness gate.** Setup Step 5 checks `docs/llm/INDEX.json` staleness across all concepts before Phase 0. If more than 20% are stale (configurable via `$Z_HARNESS_DOC_STALENESS_THRESHOLD`), the user is prompted to switch to `/z-maintain-docs`, continue with stale docs, or abandon. The gate does NOT auto-invoke `/z-maintain-docs`.
 
 ## Examples
 
@@ -87,4 +88,13 @@ MANIFEST states:
 
 # Limit to specific components listed in a file
 /z-uplift --components=my-components.txt
+
+# Include an extra component not auto-detected
+/z-uplift --component path/to/extra-component
+
+# Re-run audit for a single component only
+/z-uplift --refresh-component my-component-slug
+
+# Include the perf dimension
+/z-uplift --dimensions=correctness,cleanliness,design,perf
 ```

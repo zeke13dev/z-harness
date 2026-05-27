@@ -1,0 +1,54 @@
+diff --git a/scripts/run-memory-review.sh b/scripts/run-memory-review.sh
+index 753525b..f5594fb 100755
+--- a/scripts/run-memory-review.sh
++++ b/scripts/run-memory-review.sh
+@@ -1,13 +1,14 @@
+ #!/usr/bin/env bash
+-# Helper called by /z-implement-all and /z-review-all.
++# Helper called by /z-implement-all, /z-review-all, and /z-debug.
+ # Encapsulates the review-agent lifecycle skip-conditions and artifact prep.
+ #
+ # Usage: bash scripts/run-memory-review.sh <RUN> <parent_command>
+-#   parent_command: implement-all | review-all
++#   parent_command: implement-all | review-all | debug
+ #
+ # Exit 0 always (skip is success).
+ # Stdout line 1 is always: STATUS: ready | STATUS: skipped <reason>
+-# If ready, lines 2-4 are absolute paths to: cumulative.diff, SPEC.md, TAGS.txt
++# If ready, lines 2-4 are absolute paths to: cumulative.diff, SPEC.md (or empty if missing), TAGS.txt
++# Line 5 (debug parent only): absolute path to DEBUG.md
+ 
+ set -euo pipefail
+ 
+@@ -84,6 +85,15 @@ if [[ -f "$TASKS_FILE" && "$PARENT_COMMAND" == "implement-all" ]]; then
+   fi
+ fi
+ 
++# --- Skip-condition 3: debug parent requires DEBUG.md to exist and be readable ---
++if [[ "$PARENT_COMMAND" == "debug" ]]; then
++  DEBUG_MD="$BASE/DEBUG.md"
++  if [[ ! -r "$DEBUG_MD" ]]; then
++    echo "STATUS: skipped debug_md_missing"
++    exit 0
++  fi
++fi
++
+ # --- Verify TAGS.txt exists ---
+ TAGS_FILE="$REPO_ROOT/docs/llm/TAGS.txt"
+ if [[ ! -f "$TAGS_FILE" ]]; then
+@@ -105,7 +115,14 @@ set -o pipefail
+ # --- Print ready + artifact paths (all absolute) ---
+ echo "STATUS: ready"
+ echo "$DIFF_FILE"
+-echo "$BASE/SPEC.md"
++if [[ -f "$BASE/SPEC.md" ]]; then
++  echo "$BASE/SPEC.md"
++else
++  echo ""
++fi
+ echo "$TAGS_FILE"
++if [[ "$PARENT_COMMAND" == "debug" ]]; then
++  echo "$BASE/DEBUG.md"
++fi
+ 
+ exit 0

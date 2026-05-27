@@ -1,0 +1,286 @@
+You are reviewing code that Claude just wrote for task T006: Phase 7 of /z-review-all mirrors T005.
+
+SPEC (T006 excerpt from SPEC.md):
+
+### `skills/z-review-all/SKILL.md` (Phase 7 wiring)
+
+Same changes as `skills/z-implement-all/SKILL.md` Phase 9. The
+`parent_command: review-all` is already in use and unchanged.
+
+Key invariants from SPEC:
+1. Single `memory_review_terminal` event per invocation (either helper emits on skip path OR orchestrator after user gate, never both).
+2. Push-notify on `skipped_broken_context` deduped per `(slug, skip_reason)` for the lifetime of one top-level invocation. Dedup file cleared at start of each `/z-review-all`.
+3. `parent_command: review-all` stays unchanged; this is existing contract.
+4. Mid-phase signal `memory_candidates_ready` is distinct from terminal event.
+5. All failure paths (malformed output, skipped helper, empty candidates) exit silently without halting.
+
+Acceptance criteria:
+- Phase 7 changes mirror T005 (same single-event-per-invocation contract)
+- parent_command: review-all unchanged
+
+Diff (primary artifact — focus your scrutiny on what changed):
+
+diff --git a/skills/z-review-all/SKILL.md b/skills/z-review-all/SKILL.md
+index 961f907..ed3d1b8 100644
+--- a/skills/z-review-all/SKILL.md
++++ b/skills/z-review-all/SKILL.md
+@@ -363,73 +363,205 @@ The implementation is done and reviewed; the docs are what's left.
+ 
+ ## Phase 7 — Memory review (auto)
+ 
+-1. Call `bash scripts/run-memory-review.sh "$RRUN" "review-all"`. Capture stdout.
+-2. If the first line is `STATUS: skipped <reason>` — emit `phase_end` with `phase: 7, name: "memory_review", skipped: true, skip_reason: "<reason>"` and exit phase quietly (no push-notify):
++This phase fires once per run, after Phase 6, before the session ends. It is a soft phase: all failure paths are silent skips — no halt, no retry.
++
++**Clear dedup file at phase start:**
++```bash
++rm -f "$BASE/.notify-dedup-session"
++```
++
++1. **Run the memory-review helper:**
++
+    ```bash
+-   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" phase_end \
+-     "$(jq -n --argjson phase 7 --arg name 'memory_review' --arg skip_reason '<reason>' \
+-        '{"phase":$phase,"name":$name,"skipped":true,"skip_reason":$skip_reason}')"
++   mapfile -t LINES < <(bash scripts/run-memory-review.sh "$RRUN" "review-all")
++   STATUS_LINE="${LINES[0]:-}"
+    ```
+-3. If the first line is `STATUS: ready`, parse the three paths printed on subsequent lines:
+-   - Line 2: `<RUN_DIR>/cumulative.diff` (cumulative diff path)
+-   - Line 3: `<BASE>/SPEC.md` (spec path)
+-   - Line 4: `docs/llm/TAGS.txt` (tags path)
+-4. Dispatch:
++
++2. **Skip path — first line is `STATUS: skipped <reason>`:**
++
++   ```bash
++   if [[ "$STATUS_LINE" == STATUS:\ skipped* ]]; then
++     # Helper (run-memory-review.sh) already emitted the memory_review_terminal event
++     # for all skip states. Phase 7 exits silently — no duplicate event.
++     # For state: skipped_broken_context → push-notify if Z_HARNESS_NOTIFY != off, deduped:
++     SKIP_REASON="${STATUS_LINE#STATUS: skipped }"
++     if [[ "$SKIP_REASON" == tags_missing || "$SKIP_REASON" == no_plan_dir || "$SKIP_REASON" == missing_args ]]; then
++       DEDUP_FILE="$BASE/.notify-dedup-session"
++       DEDUP_KEY="${Z_HARNESS_SLUG:-unknown}:${SKIP_REASON}"
++       if [[ "${Z_HARNESS_NOTIFY:-approval_only}" != "off" ]] && ! grep -qxF "$DEDUP_KEY" "$DEDUP_FILE" 2>/dev/null; then
++         # Push-notify: "Memory review skipped on `<slug>`: `<skip_reason>`. Fix to re-enable memory candidates."
++         printf '%s\n' "$DEDUP_KEY" >> "$DEDUP_FILE"
++       fi
++     fi
++     # exit phase quietly — no push-notify for not_applicable states
++   fi
++   ```
++
++3. **Ready path — first line is `STATUS: ready`:** parse the artifact paths from subsequent lines:
++
++   ```bash
++   CUMULATIVE_DIFF_PATH="${LINES[1]:-}"
++   SPEC_PATH="${LINES[2]:-}"
++   TAGS_PATH="${LINES[3]:-}"
++   RUN_DIR="$(dirname "$CUMULATIVE_DIFF_PATH")"
++   SLUG_FOR_DESC="${Z_HARNESS_SLUG:-$(basename "$BASE")}"
++   ```
++
++4. **Dispatch the review-agent:**
++
+    ```
+    Agent(
+      subagent_type="review-agent",
+-     description="Memory review for <slug>",
+-     prompt="run_dir: <RUN_DIR>\ncumulative_diff_path: <cumulative.diff path>\nspec_path: $BASE/SPEC.md\ntags_path: docs/llm/TAGS.txt\nindex_path: docs/llm/INDEX.json\nrun_id: <RRUN>\nparent_command: review-all"
++     description="Memory review for <SLUG_FOR_DESC>",
++     prompt="run_dir: <RUN_DIR>
++   cumulative_diff_path: <CUMULATIVE_DIFF_PATH>
++   spec_path: <SPEC_PATH>
++   tags_path: <TAGS_PATH>
++   index_path: docs/llm/INDEX.json
++   run_id: <RRUN>
++   parent_command: review-all"
+    )
+    ```
+-5. Parse the agent's return: extract the single fenced ```json block. On parse failure → emit `review_agent_malformed` event, soft-skip with a push-notify hint, and exit phase:
++
++5. **Parse agent return — extract single fenced ```json block:**
++
++   ```python
++   import re, json
++   raw = agent_return_text
++   m = re.search(r'```json\s*([\s\S]*?)```', raw)
++   if not m:
++       # no fenced block → review_agent_failed
++       raise ValueError("no_fenced_block")
++   try:
++       candidates = json.loads(m.group(1))
++   except json.JSONDecodeError as e:
++       raise ValueError("json_parse_error") from e
++   ```
++
++   - **Parse failure (malformed output — no fenced block or invalid JSON):**
++     ```bash
++     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_agent_malformed \
++       "$(printf '{"run":"%s","excerpt":"%s"}' "$RRUN" "$(printf '%s' "$raw" | head -c 200 | tr '"' "'")")"
++     ```
++     Push-notify: "Memory review skipped (malformed output). Check `agents/review-agent.md` or run `/z-stats` to see recent review_agent_failed events."
++     Exit phase. (No `memory_review_terminal` event — this is an agent failure class, not a skip or terminal state.)
++
++   - **Agent errored / no fenced block:**
+      ```bash
+-     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_agent_malformed \
+-       "$(jq -n --arg reason 'no_fenced_json_block' '{"reason":$reason}')"
+-     # Push-notify: "Memory review output was malformed — no valid fenced json block found. Check events.jsonl for review_agent_malformed."
++     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_agent_failed \
++       "$(printf '{"run":"%s","reason":"no_fenced_block"}' "$RRUN")"
++     ```
++     Push-notify: "Memory review skipped (malformed output). Check `agents/review-agent.md` or run `/z-stats` to see recent review_agent_failed events."
++     Exit phase. (No `memory_review_terminal` event — this is an agent failure class, not a skip or terminal state.)
++
++6. **Empty candidates (`[]`):**
++
++   ```bash
++   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_agent_call \
++     "$(printf '{"run":"%s","parent_command":"review-all","candidates_emitted":0,"accepted":0}' "$RRUN")"
++   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" memory_review_terminal \
++     "$(printf '{"state":"ran_empty","skip_reason":null,"parent_command":"review-all","candidates":0,"accepted":0,"slug":"%s"}' \
++        "${Z_HARNESS_SLUG:-null}")"
+    ```
+-6. If the candidates array is empty (`[]`) → emit `phase_end` with `candidates_emitted: 0`, exit phase quietly (no push-notify):
++   Exit phase quietly — no push-notify.
++
++7. **Candidates ≥ 1:**
++
++   a. **Persist to JSONL:**
++      ```bash
++      CANDIDATES_FILE="$RUN_DIR/memory-candidates.jsonl"
++      python3 -c '
++      import json, sys
++      candidates = json.loads(sys.argv[1])
++      with open(sys.argv[2], "w") as f:
++          for c in candidates:
++              f.write(json.dumps(c) + "\n")
++      ' "$CANDIDATES_JSON_STR" "$CANDIDATES_FILE"
++      ```
++
++   b. **Log `review_agent_call`** (with token counts from Agent return usage block):
++      ```bash
++      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_agent_call \
++        "$(printf '{"run":"%s","parent_command":"review-all","subagent_model":"haiku","subagent_input_tokens":%d,"subagent_output_tokens":%d,"candidates_emitted":%d,"accepted":"<filled-in-later>"}' \
++           "$RRUN" "$INPUT_TOKENS" "$OUTPUT_TOKENS" "$N_CANDIDATES")"
++      ```
++
++   c. **Push-notify `memory_candidates_ready`:**
++      ```bash
++      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" memory_candidates_ready \
++        "$(printf '{"run":"%s","candidates_emitted":%d}' "$RRUN" "$N_CANDIDATES")"
++      ```
++      Push-notify: "Memory review produced `<N>` candidate(s) — please review."
++
++   d. **Sequential AskUserQuestion per candidate (max 3 candidates):**
++
++      For each candidate (index `i`, 0-based; stop after 3):
+       ```
+-     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" phase_end \
+-       "$(jq -n --argjson phase 7 --arg name 'memory_review' --argjson candidates 0 \
+-          '{"phase":$phase,"name":$name,"candidates_emitted":$candidates}')"
++      AskUserQuestion(
++        title: "Memory candidate <i+1> of <total> — <candidate.candidate_kind>",
++        body: "**Suggested concept:** `<candidate.suggested_concept_slug>`\n\n**Type:** `<candidate.type>`\n\n**Text:** <candidate.text>\n\n**Tags:** <candidate.tags joined by ', '>\n\n**Rationale:** <candidate.rationale>\n\n**Evidence:** <candidate.evidence_citations joined by ', '>",
++        options: [
++          { id: "accept", label: "Accept — persist this candidate" },
++          { id: "edit",   label: "Edit — modify before persisting" },
++          { id: "skip",   label: "Skip (provide one-word reason)" },
++          { id: "skip_all", label: "Skip all remaining" }
++        ]
++      )
++      ```
++
++      - **Accept:**
++        ```bash
++        printf '%s' "$CANDIDATE_JSON" | bash -c \
++          'bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-skill.sh" z-suggest-memory \
++             --concept "<candidate.suggested_concept_slug>" \
++             --source "incident:<RRUN>" \
++             --from-candidate-json -'
++        ```
++        On `STATUS: ok` → increment `ACCEPTED`.
++        On `STATUS: skipped` or `STATUS: bad_input` → log:
++        ```bash
++        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_agent_suggest_failed \
++          "$(printf '{"run":"%s","candidate_index":%d,"reason":"%s"}' "$RRUN" "$i" "<reason>")"
++        ```
++        Continue to next candidate.
++
++      - **Edit:** Surface the candidate fields. Collect user edits. Apply edits to the candidate JSON in-memory. Re-present as Accept and dispatch `/z-suggest-memory` with the edited JSON piped via `--from-candidate-json -`.
++
++      - **Skip (one-word reason):** Ask the user for the reason word (follow-up prompt or inline if the UI allows). Then:
++        ```bash
++        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_candidate_skipped \
++          "$(printf '{"run":"%s","candidate_index":%d,"reason":"%s"}' "$RRUN" "$i" "<user_reason>")"
++        ```
++        Increment `SKIPPED`. Continue to next candidate.
++
++      - **Skip-all-remaining:**
++        ```bash
++        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_skip_all \
++          "$(printf '{"run":"%s","candidates_remaining":%d}' "$RRUN" "$((N_CANDIDATES - i))")"
++        ```
++        Break the loop.
++
++8. **Final `memory_review_terminal` event (after gate loop or after ran_empty):**
++
++   After the AskUserQuestion loop completes (all candidates reviewed, or `skip_all` chosen), emit exactly one terminal event:
++
+    ```bash
+-7. If candidates ≥ 1:
+-   - Write the raw candidates array to `$RUN_DIR/memory-candidates.jsonl` (one JSON object per line).
+-   - Emit `review_agent_call` event:
+-     ```bash
+-     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_agent_call \
+-       "$(jq -n --arg model 'haiku' --argjson in_tok '<input_tokens>' --argjson out_tok '<output_tokens>' --argjson n '<N>' \
+-          '{"subagent_model":$model,"subagent_input_tokens":$in_tok,"subagent_output_tokens":$out_tok,"candidates_emitted":$n}')"
++   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" memory_review_terminal \
++     "$(printf '{"state":"needs_user","skip_reason":null,"parent_command":"review-all","candidates":%d,"accepted":%d,"slug":"%s"}' \
++        "$N_CANDIDATES" "$ACCEPTED" "${Z_HARNESS_SLUG:-null}")"
+     ```
+-   - **Push-notify** (`memory_candidates_ready`): "`<N>` memory candidate(s) ready for review."
+-   - **Sequential AskUserQuestion per candidate** (iterate the candidates array, one prompt per candidate; stop early if user picks Skip-all-remaining):
+-     - Show: `candidate_kind`, `type`, `text`, `tags`, `suggested_concept_slug`, `rationale`.
+-     - Options:
+-       - **Accept** — dispatch `/z-suggest-memory --concept <suggested_concept_slug> --from-candidate-json <tmp_path> --source "incident:<RRUN>"`. On `STATUS: ok`, increment `accepted` counter. On `STATUS: skipped` or `STATUS: bad_input`, log `review_agent_suggest_failed` with reason and continue.
+-       - **Edit** — surface candidate fields for the user to modify inline, then dispatch as Accept with the edited values.
+-       - **Skip (one-word reason)** — capture the reason, log `review_candidate_skipped {reason}`, continue to next candidate.
+-       - **Skip-all-remaining** — log `review_skip_all`, break the loop.
+-8. Final accounting: emit `phase_end`:
++
++   This is the single terminal event for the `needs_user` path (candidates ≥ 1). The mid-phase `memory_candidates_ready` push-notify in step 7c is a separate signal and is NOT the terminal event — do not conflate them.
++
++**Event-kind reference for this phase:**
++
++| Event kind | When emitted |
++|---|---|
++| `memory_review_terminal` | Once per invocation: after user gate (`state: needs_user` or `ran_empty`); skip path terminal events are emitted by helper, not here |
++| `review_agent_call` | Agent returned candidates (including empty-array case) |
++| `review_agent_failed` | Agent returned without a fenced block |
++| `review_agent_malformed` | Agent returned with a fenced block that failed `json.loads` |
++| `memory_candidates_ready` | N ≥ 1 candidates; push-notify fired (mid-phase signal, distinct from terminal event) |
++| `review_candidate_skipped` | User skipped a single candidate with a reason |
++| `review_skip_all` | User chose Skip-all-remaining |
++| `review_agent_suggest_failed` | `/z-suggest-memory` dispatch failed for an Accepted candidate |
+
+Scrutinize this code rigorously. Claude is prone to: over-engineering, premature abstraction, plausible-looking-but-wrong logic, missed edge cases, and silently expanding scope beyond the spec.
+
+Report:
+1. Bugs or correctness issues
+2. Spec violations or missed acceptance criteria
+3. Missed edge cases / error handling gaps
+4. DRY / KISS / SOLID violations
+5. Security concerns
+6. Anything else worth flagging
+
+For each finding: severity (blocker / major / minor / nit), location, and a suggested fix.
+
+OUTPUT BUDGET — respect strictly:
+- Total response under 8000 characters.
+- Report blockers and majors only. Skip minors and nits unless a "minor" hides a correctness bug.
+- One finding per bullet. Two sentences max per finding (one for the problem, one for the fix).
+- No re-stating of code already in the diff. No summaries of what the code does. No restating the spec.
