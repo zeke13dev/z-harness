@@ -1,0 +1,332 @@
+diff --git a/docs/human/config.md b/docs/human/config.md
+index 244eff9..e047e03 100644
+--- a/docs/human/config.md
++++ b/docs/human/config.md
+@@ -12,10 +12,14 @@
+ 
+ The core runtime loop for workflow preferences is: skill prose calls `config.py resolve-question <question_id>` before firing an `AskUserQuestion`; the resolver consults both the TOML config and `routing-preference` memory entries in `docs/llm/*.json`, then returns a typed JSON envelope instructing the skill to `skip`, `prefill`, or `ask`. When the user wants to make a preference permanent they run `/z-suggest-memory` (memory path) or `config.py set` (TOML path). The proposer (`propose-prefs.py`) surfaces an invitation to do so when it detects a repeated command-pair pattern in `metrics.jsonl`.
+ 
+-Historical note: this concept was previously split as `config-design` (Loader API) + `config` (Workflow Resolver) in docs/llm/INDEX.json. They were merged on 2026-05-27 because they shared all source files and the split caused doc-fetcher to fire both concepts on every touch. Section headers below preserve the boundary for human readers.
++Historical note: this concept was previously split as `config-design` (Loader API) + `config` (Workflow Resolver) in docs/llm/INDEX.json. They were merged on 2026-05-27 because they shared all source files and the split caused doc-fetcher to fire both concepts on every touch. The two h2 section groupings below preserve the boundary for human readers.
+ 
+ ---
+ 
++# Loader API
++
++The slice-1 foundation: 4-layer TOML config loader, env transliteration, and the read-only subcommands that consult it.
++
+ ## File locations
+ 
+ | Priority | Path | Wins on |
+@@ -29,18 +33,14 @@ Per-key shadowing — repo overrides global; env overrides both.  Missing files
+ 
+ Set `$Z_HARNESS_REPO_CONFIG` to override the git-root discovery path (exits 2 if the path does not exist).  Run `scripts/config.sh ensure-defaults` once after install to create the user-global file with defaults and inline comments.
+ 
+----
+-
+-## The knobs
++## The knobs (Loader API)
+ 
+ | Key | Type | Default | Values | Description |
+ |-----|------|---------|--------|-------------|
+ | `notify.level` | string | `approval_only` | `off` \| `approval_only` \| `all` | Controls when PushNotification fires. `off` silences all notifications. `approval_only` notifies on `approval` and `error` events. `all` notifies on every `approval`, `phase_end`, and `error` event. |
+ | `docs.always_apply` | string | `always` | `always` \| `never` | Whether light flows auto-dispatch doc-fetcher when `docs/llm/INDEX.json` exists. `always` matches current /z-do default behavior. `never` skips doc-fetcher. **Applies only to light flows (slice 1: /z-do). Heavy flows always dispatch doc-fetcher regardless of this knob.** |
+-| `workflow.audit_to_amend` | string | `ask` | `ask` \| `amend` \| `stop` | Controls the Phase 5 AskUserQuestion in `/z-audit-plan` and `/z-audit-plan-style`. `ask` always prompts. `amend` auto-proceeds as amend (skips prompt). `stop` auto-stops (skips prompt). |
+-| `workflow.slug_confirm` | string | `ask` | `ask` \| `auto_accept` \| `recommend_derived` | Controls the soft non-obvious-slug confirmation at 7 callsites. `ask` always prompts. `auto_accept` silently accepts the derived slug. `recommend_derived` pre-selects the derived slug in the AskUser prompt. **The hard slug-collision check always runs unconditionally, regardless of this setting.** |
+ 
+----
++For `[workflow]` knobs, see [The knobs (Workflow Resolver)](#the-knobs-workflow-resolver) below.
+ 
+ ## The transliteration rule
+ 
+@@ -50,15 +50,13 @@ Env-var overrides follow a deterministic rule: lowercase TOML dotted-key → pre
+ |----------|---------|
+ | `notify.level` | `Z_HARNESS_NOTIFY_LEVEL` |
+ | `docs.always_apply` | `Z_HARNESS_DOCS_ALWAYS_APPLY` |
+-| `workflow.audit_to_amend` | `Z_HARNESS_WORKFLOW_AUDIT_TO_AMEND` |
+-| `workflow.slug_confirm` | `Z_HARNESS_WORKFLOW_SLUG_CONFIRM` |
++
++For workflow keys (`workflow.audit_to_amend`, `workflow.slug_confirm`), the rule applies identically — see [The transliteration rule (Workflow Resolver)](#the-transliteration-rule-workflow-resolver).
+ 
+ Keys must match `^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`.  Hyphens in keys exit 2.
+ Nested keys >2 levels exit 2.  Empty env vars are treated as missing.
+ 
+----
+-
+-## CLI reference
++## CLI reference (Loader API)
+ 
+ All subcommands available via `scripts/config.sh <sub>` (bash wrapper) or `python3 scripts/config.py <sub>`.
+ 
+@@ -114,6 +112,62 @@ Valid event kinds: `approval`, `phase_end`, `error`.
+ [ "$(scripts/config.sh should-notify --event approval)" = yes ] && <PushNotification ...>
+ ```
+ 
++**Exit code reference (Loader API):**
++
++| Code | Meaning |
++|------|---------|
++| 0 | Success |
++| 2 | Schema/validation error, bad key format, unknown event kind |
++| 3 | Unknown dotted-key (`get` / `explain`) |
++| 4 | I/O error (`ensure-defaults` edge cases, permission denied) |
++
++## `config_resolved` event
++
++Every time `export-env` runs inside a `/z-*` run, it emits a `config_resolved`
++event to `metrics.jsonl` (once per `$Z_HARNESS_RUN`, de-duplicated via an
++O_EXCL temp file).
++
++Event payload shape:
++
++```json
++{
++  "values": {
++    "notify.level": "approval_only",
++    "docs.always_apply": "always"
++  },
++  "sources": {
++    "notify.level": "defaults",
++    "docs.always_apply": "/Users/you/.config/z-harness/config.toml"
++  }
++}
++```
++
++`sources` values: `"defaults"`, an absolute file path (global or repo-local), or `"env Z_HARNESS_<VAR>"`.
++
++---
++
++# Workflow Resolver
++
++The slice-2 layer: the `[workflow]` config section, the question-registry, the resolver subcommand, the writer, the routing-preference memory schema, and the elevation proposer. All built on top of the Loader API.
++
++## The knobs (Workflow Resolver)
++
++| Key | Type | Default | Values | Description |
++|-----|------|---------|--------|-------------|
++| `workflow.audit_to_amend` | string | `ask` | `ask` \| `amend` \| `stop` | Controls the Phase 5 AskUserQuestion in `/z-audit-plan` and `/z-audit-plan-style`. `ask` always prompts. `amend` auto-proceeds as amend (skips prompt). `stop` auto-stops (skips prompt). |
++| `workflow.slug_confirm` | string | `ask` | `ask` \| `auto_accept` \| `recommend_derived` | Controls the soft non-obvious-slug confirmation at 7 callsites. `ask` always prompts. `auto_accept` silently accepts the derived slug. `recommend_derived` pre-selects the derived slug in the AskUser prompt. **The hard slug-collision check always runs unconditionally, regardless of this setting.** |
++
++## The transliteration rule (Workflow Resolver)
++
++| TOML key | Env var |
++|----------|---------|
++| `workflow.audit_to_amend` | `Z_HARNESS_WORKFLOW_AUDIT_TO_AMEND` |
++| `workflow.slug_confirm` | `Z_HARNESS_WORKFLOW_SLUG_CONFIRM` |
++
++Same general rule as the Loader API surface — see [The transliteration rule](#the-transliteration-rule) for format constraints.
++
++## CLI reference (Workflow Resolver)
++
+ ### `resolve-question <question_id> [--scope-slug <slug>] [--explain]`
+ 
+ Returns a typed JSON envelope on stdout indicating how an AskUserQuestion should behave.
+@@ -189,17 +243,6 @@ $ scripts/config.sh list-question-ids
+ ["workflow.audit_to_amend", "workflow.slug_confirm"]
+ ```
+ 
+-**Exit code reference:**
+-
+-| Code | Meaning |
+-|------|---------|
+-| 0 | Success |
+-| 2 | Schema/validation error, bad key format, unknown event kind |
+-| 3 | Unknown dotted-key (`get` / `explain`) |
+-| 4 | I/O error (`ensure-defaults` edge cases, permission denied) |
+-
+----
+-
+ ## Key entry points
+ 
+ - `scripts/config.py:42` — `DEFAULTS` — built-in default values for all config keys including `[workflow]` section (layer 1)
+@@ -213,90 +256,6 @@ $ scripts/config.sh list-question-ids
+ - `scripts/config.py:809` — `_resolve_memory_matches` — merges memory entries; highest strength wins on agreement; returns `conflict` on disagreement
+ - `scripts/propose-prefs.py:1` — `propose-prefs` (module) — walks `metrics.jsonl` for repeated command-pair patterns; emits JSON proposal if threshold met; never writes
+ 
+----
+-
+-## How it interacts with others
+-
+-- `commands` (z-audit-plan, z-audit-plan-style, z-plan, z-fix, z-uplift, z-amend, z-do) — call `export-env` + `should-notify` during Setup; call `resolve-question` before workflow AskUserQuestions; call `set` after proposal acceptance; call `propose-prefs.py` at command end
+-- `skills` (z-suggest-memory, z-map, z-plan-light, z-debug, z-brainstorm) — call `list-question-ids` to validate routing-preference question IDs; call `resolve-question` for slug-confirm gate
+-- `scripts` — provides the `log-event.sh` + `log-phase.sh` telemetry pipeline that `config.py` writes `config_resolved` and `askuser_resolved` events through
+-
+----
+-
+-## Examples
+-
+-**User-global config** (`~/.config/z-harness/config.toml`) — both knobs set:
+-
+-```toml
+-schema_version = 1
+-
+-[notify]
+-# off | approval_only | all
+-level = "all"
+-
+-[docs]
+-# always | never  (applies to light flows only)
+-always_apply = "never"
+-```
+-
+-**Repo-local override** (`.z-harness/config.toml` at git root) — silence notifications for this repo only:
+-
+-```toml
+-schema_version = 1
+-
+-[notify]
+-level = "off"
+-```
+-
+-**Workflow preferences** (`.z-harness/config.toml` at git root):
+-
+-```toml
+-schema_version = 1
+-
+-[workflow]
+-# ask | amend | stop
+-audit_to_amend = "amend"
+-
+-# ask | auto_accept | recommend_derived
+-slug_confirm = "recommend_derived"
+-```
+-
+-**Env override for CI:**
+-
+-```bash
+-export Z_HARNESS_NOTIFY_LEVEL=off
+-export Z_HARNESS_DOCS_ALWAYS_APPLY=never
+-export Z_HARNESS_WORKFLOW_AUDIT_TO_AMEND=amend
+-export Z_HARNESS_WORKFLOW_SLUG_CONFIRM=auto_accept
+-```
+-
+----
+-
+-## `config_resolved` event
+-
+-Every time `export-env` runs inside a `/z-*` run, it emits a `config_resolved`
+-event to `metrics.jsonl` (once per `$Z_HARNESS_RUN`, de-duplicated via an
+-O_EXCL temp file).
+-
+-Event payload shape:
+-
+-```json
+-{
+-  "values": {
+-    "notify.level": "approval_only",
+-    "docs.always_apply": "always"
+-  },
+-  "sources": {
+-    "notify.level": "defaults",
+-    "docs.always_apply": "/Users/you/.config/z-harness/config.toml"
+-  }
+-}
+-```
+-
+-`sources` values: `"defaults"`, an absolute file path (global or repo-local), or `"env Z_HARNESS_<VAR>"`.
+-
+----
+-
+ ## `routing-preference` memory type
+ 
+ Workflow preferences can also live as memory entries in `docs/llm/workflow.json`
+@@ -353,8 +312,6 @@ Write a routing-preference memory via:
+ | none | — | `ask` |
+ | `Z_HARNESS_ASK_ALL=1` | — | `ask` (override) |
+ 
+----
+-
+ ## Elevation proposer
+ 
+ `scripts/propose-prefs.py` walks `metrics.jsonl` for repeated command-pair
+@@ -376,8 +333,6 @@ The proposer never writes automatically.  The user picks: accept as config, acce
+ as memory (very_strong / strong), or no.  Rejecting suppresses the proposal for
+ 30 days, scoped to `(project_root, question_id)` in `.z-harness/.propose-suppress`.
+ 
+----
+-
+ ## `askuser_resolved` event
+ 
+ Every successful `resolve-question` call emits an `askuser_resolved` event to
+@@ -397,6 +352,63 @@ Every successful `resolve-question` call emits an `askuser_resolved` event to
+ 
+ ---
+ 
++# Common
++
++Cross-cutting material that applies to both surfaces.
++
++## How it interacts with others
++
++- `commands` (z-audit-plan, z-audit-plan-style, z-plan, z-fix, z-uplift, z-amend, z-do) — call `export-env` + `should-notify` during Setup; call `resolve-question` before workflow AskUserQuestions; call `set` after proposal acceptance; call `propose-prefs.py` at command end
++- `skills` (z-suggest-memory, z-map, z-plan-light, z-debug, z-brainstorm) — call `list-question-ids` to validate routing-preference question IDs; call `resolve-question` for slug-confirm gate
++- `scripts` — provides the `log-event.sh` + `log-phase.sh` telemetry pipeline that `config.py` writes `config_resolved` and `askuser_resolved` events through
++
++## Examples
++
++**User-global config** (`~/.config/z-harness/config.toml`) — Loader API knobs only:
++
++```toml
++schema_version = 1
++
++[notify]
++# off | approval_only | all
++level = "all"
++
++[docs]
++# always | never  (applies to light flows only)
++always_apply = "never"
++```
++
++**Repo-local override** (`.z-harness/config.toml` at git root) — silence notifications for this repo only (Loader API):
++
++```toml
++schema_version = 1
++
++[notify]
++level = "off"
++```
++
++**Workflow preferences** (`.z-harness/config.toml` at git root) — Workflow Resolver knobs:
++
++```toml
++schema_version = 1
++
++[workflow]
++# ask | amend | stop
++audit_to_amend = "amend"
++
++# ask | auto_accept | recommend_derived
++slug_confirm = "recommend_derived"
++```
++
++**Env override for CI** — covers both surfaces:
++
++```bash
++export Z_HARNESS_NOTIFY_LEVEL=off
++export Z_HARNESS_DOCS_ALWAYS_APPLY=never
++export Z_HARNESS_WORKFLOW_AUDIT_TO_AMEND=amend
++export Z_HARNESS_WORKFLOW_SLUG_CONFIRM=auto_accept
++```
++
+ ## Edge cases / gotchas
+ 
+ - `workflow.slug_confirm` value domain (`ask`/`auto_accept`/`recommend_derived`) is NOT the same as the resolver result domain (`ask`/`prefill`/`skip`); `RESULT_MAP` translates between them — `auto_accept` → `skip`, `recommend_derived` → `prefill`
+@@ -409,8 +421,6 @@ Every successful `resolve-question` call emits an `askuser_resolved` event to
+ - Resolver falls back to `git rev-parse --show-toplevel` for `project_root` when `Z_HARNESS_PROJECT_ROOT` is unset; treats all memories as global when outside a git repo
+ - `_run_startup_guards()` runs at module load and raises `SystemExit(2)` if `QUESTION_IDS`, `VALIDATORS`, and `RESULT_MAP` are internally inconsistent — add to both registries when extending
+ 
+----
+-
+ ## v2 deferrals
+ 
+ The following are known issues documented in SPEC but deferred to v2:
+@@ -421,8 +431,6 @@ The following are known issues documented in SPEC but deferred to v2:
+ - **Multi-IDE export precheck** — Cursor, Codex CLI, and agy fall back to raw AskUserQuestion in v1; precheck integration is a v2 concern.
+ - **Halt-class bypass** (`spec_problem`, `decision_needed`) — explicitly out of v1.
+ 
+----
+-
+ ## Future knobs
+ 
+ Slices 2 and 3 of this feature (see `z-harness/z-harness-config-toml/BRAINSTORM.md`)
