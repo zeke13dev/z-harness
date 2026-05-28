@@ -126,7 +126,7 @@ Both `--ack` and `--force-partial` are inert for legacy (single-slug) plans and 
       bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" cross_cluster_parallel \
         "$(printf '{"slug":"%s","cluster_ids":["%s","%s"],"overlap_count":0}' "$Z_HARNESS_SLUG" "$CLUSTER_A_ID" "$CLUSTER_B_ID")"
       ```
-      Then dispatch both clusters' main loops as parallel `Agent()` calls in a single message. After both complete, advance the iterator by 2.
+      Then dispatch both clusters' main loops as parallel `Agent()` calls in a single message. After both complete, advance the iterator by 2; this means `clusters_to_run` is consumed in pairs with the final cluster running serial if the count is odd, using the global `overlap_count` from SHARED-CONCERNS.md frontmatter as the v1 conservative guard (a per-pair overlap matrix is a v2 concern).
    3. Any other case (fewer than 2 remaining clusters, or `overlap_count != 0`) → serial dispatch as before. N=3 parallel cross-cluster dispatch remains v2.
    4. **Regression invariant:** a plan whose SHARED-CONCERNS.md frontmatter has `overlap_count != 0` MUST run clusters serially regardless of actual file-level overlap details — the global count is the conservative guard in v1.
 
@@ -435,7 +435,28 @@ Parse the reviewer's response. Group findings by severity.
 - **Has blockers or majors** →
   - **First failure**: re-spawn implementer once with the reviewer's findings as `prior-attempt reviewer feedback`. Then re-review (cycle 2). Note: if the implementer was re-spawned for a non-review reason (e.g. after resolving a `decision_needed` or `needs_clarification`), the cycle-2 reviewer is skipped entirely by the **Skip-rereview on clean cycle-1** guard above — meaning a cycle-2 re-review only fires when the cycle-1 review actually found something actionable.
   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the second-review-failure decision (proceed anyway / patch manually / abandon task / re-spec) via their native channel. Silent omission is forbidden. -->
-  - **Second failure**: halt queue. Push-notify. Present diff + reviewer findings to user; await `AskUserQuestion` for "proceed anyway / patch manually / abandon task / re-spec".
+  - **Second failure**: halt queue. Push-notify. Before presenting to the user, run the `check-no-ask` resolver for `workflow.implement_all_proceed`:
+
+    ```bash
+    NO_ASK_RESULT="$(python3 scripts/config.py check-no-ask --question-id workflow.implement_all_proceed)"
+    NO_ASK_CHECK="$(echo "$NO_ASK_RESULT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"])')"
+    ```
+
+    Branch on `$NO_ASK_CHECK`:
+    - `halt`: normalize state, emit `task_halt` and `implement_end`, and exit cleanly — do NOT invoke `AskUserQuestion`:
+      ```bash
+      if [[ "$NO_ASK_CHECK" == "halt" ]]; then
+        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/normalize-task-state.sh" "$BASE"
+        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tasks/<task-id>" task_halt \
+          "$(printf '{"id":"%s","reason":"no_ask_blocked","question_id":"workflow.implement_all_proceed"}' "<task-id>")"
+        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tasks/<task-id>" implement_end \
+          "$(printf '{"id":"%s","retry":%d,"status":"halt","files_changed_count":0}' "<task-id>" "$CYCLE")"
+        exit 0
+      fi
+      ```
+    - `proceed`: fall through to the `AskUserQuestion` below.
+
+    Present diff + reviewer findings to user; await `AskUserQuestion` for "proceed anyway / patch manually / abandon task / re-spec".
 
 #### 7a. Delta-on-retry (mandatory for cycle ≥ 2)
 
