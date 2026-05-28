@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "schema_version": 1,
   "title": "ProviderRegistry",
-  "description": "Schema for z-harness provider registry files (.z-harness/providers.json).",
+  "description": "Schema for z-harness provider registry files (.z-harness/providers.json). Accepts version 1 (deprecated) and version 2.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -13,8 +13,8 @@
   "properties": {
     "version": {
       "type": "integer",
-      "description": "Registry format version. Must be 1.",
-      "const": 1
+      "description": "Registry format version. 1 is deprecated (upgraded in-memory to v2); 2 is current.",
+      "enum": [1, 2]
     },
     "schema_version": {
       "type": "integer",
@@ -34,6 +34,13 @@
       "additionalProperties": {
         "$ref": "#/definitions/ProviderEntry"
       }
+    },
+    "aliases": {
+      "type": "object",
+      "description": "Optional mapping of old provider names to new provider names for backward compatibility. Only meaningful in version 2.",
+      "additionalProperties": {
+        "type": "string"
+      }
     }
   },
   "definitions": {
@@ -48,6 +55,7 @@
         "timeout_s",
         "model_label"
       ],
+      "description": "Provider descriptor. v1 entries that omit 'kind' and 'args_template' are upgraded in-memory by the resolver before validation runs (kind defaults to 'cli', args_template to []). v2 authors must include them explicitly.",
       "properties": {
         "kind": {
           "type": "string",
@@ -80,6 +88,45 @@
         "model_label": {
           "type": "string",
           "description": "Human-readable model identifier (e.g. 'gemini-2.5-pro')."
+        },
+        "model_arg_template": {
+          "oneOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Argument list template for injecting the model, e.g. [\"--model\", \"{model}\"]. The token {model} is replaced with the effective model at composition time."
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional model argument template. Null or absent means model stays embedded in args_template (legacy mode)."
+        },
+        "model_env_var": {
+          "oneOf": [
+            {
+              "type": "string",
+              "description": "Environment variable name to set to the effective model value at subprocess time."
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional environment variable for passing the model. Null or absent means no model env var is set."
+        },
+        "default_model": {
+          "oneOf": [
+            {
+              "type": "string",
+              "description": "Default model identifier for this provider, e.g. \"gpt-5-codex\"."
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional default model. Used when the resolved effective model is empty. Null means no provider-level default."
         },
         "auth_env": {
           "type": "string",

@@ -198,24 +198,30 @@ _run_startup_guards()
 # Valid event kinds for should-notify
 _NOTIFY_EVENTS: set = {"approval", "phase_end", "error"}
 
-# Key-format regex (must match dotted.key format: two segments, lowercase, underscores/digits)
-_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
+# Key-format regex: 2 to 4 segments, all lowercase with underscores/digits.
+# Valid: notify.level, roles.z_plan.consultant_primary, roles.z_plan.consultant_primary.persona
+# Invalid: roles..foo (empty segment), roles.z_plan.role.field.extra (5 segments), uppercase or hyphens
+_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){1,3}$")
 
 
 # ---------------------------------------------------------------------------
 # Pure helper: _dotted_to_env
 # ---------------------------------------------------------------------------
 
+_ENV_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
+
+
 def _dotted_to_env(key: str) -> str:
     """
-    Translate a dotted TOML key to a Z_HARNESS_ env var name.
+    Translate a 2-level dotted TOML key to a Z_HARNESS_ env var name.
 
     notify.level  ->  Z_HARNESS_NOTIFY_LEVEL
     docs.always_apply  ->  Z_HARNESS_DOCS_ALWAYS_APPLY
 
-    Raises SystemExit(2) if key does not match ``^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$``.
+    Raises SystemExit(2) if key does not match ``^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$``
+    (exactly 2 segments; 3-level role keys are not exported as env vars).
     """
-    if not _KEY_RE.match(key):
+    if not _ENV_KEY_RE.match(key):
         print(
             f"[config] key {key!r} does not match required format "
             r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$",
@@ -231,8 +237,15 @@ def _dotted_to_env(key: str) -> str:
 
 def _validate_toml_keys(data: dict, path: str) -> None:
     """
-    Reject hyphenated keys and keys with >2-level nesting.
-    Only validates top-level and one-level-deep keys (the schema we support).
+    Reject hyphenated keys and keys with >3-level table nesting (i.e. no dict
+    values at depth ≥4 from the root).
+
+    Supported nesting depth (as TOML table headers):
+      [section]                             — depth 1 (e.g. [notify])
+      [section.subsection]                  — depth 2 (e.g. [workflow])
+      [section.subsection.role]             — depth 3 (e.g. [roles.z_plan.consultant_primary])
+
+    Leaf values (strings, ints, etc.) may appear at any supported depth.
     """
     for top_key, value in data.items():
         if "-" in top_key:
@@ -252,12 +265,37 @@ def _validate_toml_keys(data: dict, path: str) -> None:
                     )
                     sys.exit(2)
                 if isinstance(sub_val, dict):
-                    print(
-                        f"[config] {path}: key {top_key!r}.{sub_key!r} has >2-level nesting; "
-                        "not supported in slice 1",
-                        file=sys.stderr,
-                    )
-                    sys.exit(2)
+                    # 3-level table nesting is allowed: [section.subsection.role]
+                    for role_key, role_val in sub_val.items():
+                        if "-" in role_key:
+                            print(
+                                f"[config] {path}: hyphenated key "
+                                f"{top_key!r}.{sub_key!r}.{role_key!r} "
+                                "is not allowed (use underscores)",
+                                file=sys.stderr,
+                            )
+                            sys.exit(2)
+                        if isinstance(role_val, dict):
+                            # role_val is a dict — this is the leaf table (depth 4)
+                            # containing actual key=value pairs; check leaf keys for hyphens
+                            # and reject any deeper nesting (depth 5+)
+                            for leaf_key, leaf_val in role_val.items():
+                                if "-" in leaf_key:
+                                    print(
+                                        f"[config] {path}: hyphenated key "
+                                        f"{top_key!r}.{sub_key!r}.{role_key!r}.{leaf_key!r} "
+                                        "is not allowed (use underscores)",
+                                        file=sys.stderr,
+                                    )
+                                    sys.exit(2)
+                                if isinstance(leaf_val, dict):
+                                    print(
+                                        f"[config] {path}: key "
+                                        f"{top_key!r}.{sub_key!r}.{role_key!r}.{leaf_key!r} "
+                                        "has >3-level nesting; not supported",
+                                        file=sys.stderr,
+                                    )
+                                    sys.exit(2)
 
 
 # ---------------------------------------------------------------------------
@@ -368,6 +406,39 @@ def _validate_enum(dotted_key: str, value: object, source_label: str, is_global:
 
 
 # ---------------------------------------------------------------------------
+# 3-level role key validation
+# ---------------------------------------------------------------------------
+
+def _validate_roles_value(dotted_key: str, value: object, source_label: str, is_global: bool) -> object | None:
+    """
+    Validate a 3-level role key value (e.g. roles.z_plan.consultant_primary.persona).
+
+    If the key is in VALIDATORS, delegate to _validate_enum.
+    Otherwise, validate as a non-empty string (the default for role keys).
+
+    Returns the (possibly substituted) value on success, or None if validation fails
+    and is_global is True (soft fail — caller skips the key).
+    On hard fail (repo/env layer), exits with code 2.
+    """
+    if dotted_key in VALIDATORS:
+        return _validate_enum(dotted_key, value, source_label, is_global)
+
+    # Default validation: must be a non-empty string
+    if not isinstance(value, str) or not value:
+        msg = (
+            f"[config] {source_label}: invalid value for {dotted_key!r}: "
+            f"{value!r} — must be a non-empty string"
+        )
+        if is_global:
+            print(f"WARNING: {msg}; skipping key", file=sys.stderr)
+            return None
+        else:
+            print(msg, file=sys.stderr)
+            sys.exit(2)
+    return value
+
+
+# ---------------------------------------------------------------------------
 # Layer merging
 # ---------------------------------------------------------------------------
 
@@ -413,13 +484,28 @@ def load_config() -> tuple[dict[str, object], dict[str, str]]:
             if not isinstance(sv, dict):
                 continue
             for k, v in sv.items():
-                dotted = f"{section}.{k}"
-                # Silently ignore unknown keys for forward compatibility.
-                if dotted not in flat_defaults:
-                    continue
-                v = _validate_enum(dotted, v, str(global_path), is_global=True)
-                values[dotted] = v
-                sources[dotted] = str(global_path)
+                if isinstance(v, dict):
+                    # 3-level table nesting: e.g. [roles.z_plan.consultant_primary]
+                    # sv[k] == {"consultant_primary": {"persona": "X", ...}}
+                    # k = "z_plan", v = {"consultant_primary": {"persona": "X", ...}}
+                    for role_name, role_fields in v.items():
+                        if not isinstance(role_fields, dict):
+                            # Unexpected: skip non-dict at this level
+                            continue
+                        for leaf_k, leaf_v in role_fields.items():
+                            dotted = f"{section}.{k}.{role_name}.{leaf_k}"
+                            v_validated = _validate_roles_value(dotted, leaf_v, str(global_path), is_global=True)
+                            if v_validated is not None:
+                                values[dotted] = v_validated
+                                sources[dotted] = str(global_path)
+                else:
+                    dotted = f"{section}.{k}"
+                    # Silently ignore unknown 2-level keys for forward compatibility.
+                    if dotted not in flat_defaults:
+                        continue
+                    v = _validate_enum(dotted, v, str(global_path), is_global=True)
+                    values[dotted] = v
+                    sources[dotted] = str(global_path)
 
     # Layer 3: Repo-local config
     repo_path = _repo_config_path()
@@ -433,13 +519,28 @@ def load_config() -> tuple[dict[str, object], dict[str, str]]:
             if not isinstance(sv, dict):
                 continue
             for k, v in sv.items():
-                dotted = f"{section}.{k}"
-                # Silently ignore unknown keys for forward compatibility.
-                if dotted not in flat_defaults:
-                    continue
-                v = _validate_enum(dotted, v, str(repo_path), is_global=False)
-                values[dotted] = v
-                sources[dotted] = str(repo_path)
+                if isinstance(v, dict):
+                    # 3-level table nesting: e.g. [roles.z_plan.consultant_primary]
+                    # sv[k] == {"consultant_primary": {"persona": "X", ...}}
+                    # k = "z_plan", v = {"consultant_primary": {"persona": "X", ...}}
+                    for role_name, role_fields in v.items():
+                        if not isinstance(role_fields, dict):
+                            # Unexpected: skip non-dict at this level
+                            continue
+                        for leaf_k, leaf_v in role_fields.items():
+                            dotted = f"{section}.{k}.{role_name}.{leaf_k}"
+                            v_validated = _validate_roles_value(dotted, leaf_v, str(repo_path), is_global=False)
+                            if v_validated is not None:
+                                values[dotted] = v_validated
+                                sources[dotted] = str(repo_path)
+                else:
+                    dotted = f"{section}.{k}"
+                    # Silently ignore unknown 2-level keys for forward compatibility.
+                    if dotted not in flat_defaults:
+                        continue
+                    v = _validate_enum(dotted, v, str(repo_path), is_global=False)
+                    values[dotted] = v
+                    sources[dotted] = str(repo_path)
 
     # Layer 4: Env vars
     for dotted_key in list(flat_defaults.keys()):
@@ -538,6 +639,10 @@ def cmd_get(args: list[str]) -> None:
 def cmd_export_env(args: list[str]) -> None:
     values, sources = load_config()
     for dotted_key in sorted(values.keys()):
+        # Skip roles.* keys — they are not exported as env vars
+        first_segment = dotted_key.split(".", 1)[0]
+        if first_segment == "roles":
+            continue
         env_var = _dotted_to_env(dotted_key)
         val = values[dotted_key]
         # Coerce to shell string
@@ -615,6 +720,13 @@ def cmd_explain(args: list[str]) -> None:
         print("usage: config.py explain <dotted.key>", file=sys.stderr)
         sys.exit(2)
     key = args[0]
+    if not _KEY_RE.match(key):
+        print(
+            f"[config] key {key!r} does not match required format "
+            "(2 to 4 lowercase dot-separated segments, underscores/digits only)",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     if key in META_KEYS:
         valid_keys = _valid_user_keys()
         print(

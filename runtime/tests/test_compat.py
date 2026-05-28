@@ -12,8 +12,10 @@ Run:
     pytest runtime/tests/test_compat.py -v
 """
 
+import importlib.util
 import json
 import shutil
+import sys
 import uuid
 from pathlib import Path
 
@@ -21,8 +23,35 @@ import pytest
 
 from runtime.compat import log_event, resolve_provider
 
+# ---------------------------------------------------------------------------
+# Import scripts/resolve-provider.py as a module so we can clear its
+# module-level _v1_upgrade_emitted set between tests.
+# ---------------------------------------------------------------------------
+_SCRIPTS_DIR = Path(__file__).parent.parent.parent / "scripts"
+_RESOLVE_PROVIDER_SCRIPT = _SCRIPTS_DIR / "resolve-provider.py"
+_spec = importlib.util.spec_from_file_location(
+    "resolve_provider_script", _RESOLVE_PROVIDER_SCRIPT
+)
+_resolve_provider_module = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
+_spec.loader.exec_module(_resolve_provider_module)  # type: ignore[union-attr]
+
 # Resolve repo root as the directory containing runtime/
 _REPO_ROOT = Path(__file__).parent.parent.parent
+
+
+# ---------------------------------------------------------------------------
+# Autouse fixture: clear module-level upgrade tracker between tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def clear_upgrade_tracker() -> None:
+    """
+    Clear the _v1_upgrade_emitted set on the resolve-provider script module
+    before each test to prevent cross-test state leakage.
+    """
+    _resolve_provider_module._v1_upgrade_emitted.clear()
+    yield  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------
@@ -47,7 +76,7 @@ def archive_cleanup(unique_run_id: str):
 @pytest.fixture()
 def codex_providers_json(tmp_path: Path) -> Path:
     """
-    Write a minimal providers.json that defines 'codex' as both a role and
+    Write a minimal v1 providers.json that defines 'codex' as both a role and
     provider, then return its path.
 
     Using Z_HARNESS_REPO_PROVIDERS avoids relying on repo's .z-harness layout
@@ -70,6 +99,67 @@ def codex_providers_json(tmp_path: Path) -> Path:
         },
     }
     path = tmp_path / "providers.json"
+    path.write_text(json.dumps(providers), encoding="utf-8")
+    return path
+
+
+@pytest.fixture()
+def codex_providers_v2_json(tmp_path: Path) -> Path:
+    """
+    Write a v2 providers.json with new optional fields populated.
+    """
+    providers = {
+        "version": 2,
+        "roles": {
+            "codex": "codex-cli",
+        },
+        "providers": {
+            "codex-cli": {
+                "kind": "cli",
+                "command": "codex",
+                "args_template": ["exec", "-"],
+                "model_arg_template": ["--model", "{model}"],
+                "model_env_var": "OPENAI_MODEL",
+                "default_model": "gpt-5-codex",
+                "stdin": True,
+                "timeout_s": 300,
+                "model_label": "gpt-5-codex",
+            }
+        },
+        "aliases": {
+            "codex": "codex-cli",
+        },
+    }
+    path = tmp_path / "providers_v2.json"
+    path.write_text(json.dumps(providers), encoding="utf-8")
+    return path
+
+
+@pytest.fixture()
+def codex_providers_v2_null_fields_json(tmp_path: Path) -> Path:
+    """
+    Write a v2 providers.json with the new optional fields explicitly null.
+    """
+    providers = {
+        "version": 2,
+        "roles": {
+            "codex": "codex-cli",
+        },
+        "providers": {
+            "codex-cli": {
+                "kind": "cli",
+                "command": "codex",
+                "args_template": ["exec", "-"],
+                "model_arg_template": None,
+                "model_env_var": None,
+                "default_model": None,
+                "stdin": True,
+                "timeout_s": 300,
+                "model_label": "gpt-5-codex",
+            }
+        },
+    }
+    path = tmp_path / "providers_v2_null.json"
     path.write_text(json.dumps(providers), encoding="utf-8")
     return path
 
@@ -235,3 +325,97 @@ def test_log_event_injects_schema_version_when_absent(archive_cleanup: str) -> N
         assert parsed.get("schema_version") == 1, (
             f"schema_version not injected — found: {line!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Tests: v1 → v2 in-memory upgrade
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_provider_v1_returns_new_fields_as_null(
+    codex_providers_json: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    A v1 providers.json must load without error, and the resolved descriptor
+    must include model_arg_template, model_env_var, and default_model as null.
+
+    Failure class: if the in-memory v1→v2 upgrade is missing or broken, these
+    keys will be absent from the result.
+    """
+    monkeypatch.setenv("Z_HARNESS_REPO_PROVIDERS", str(codex_providers_json))
+
+    result = resolve_provider("codex", str(_REPO_ROOT))
+
+    assert isinstance(result, dict), "resolve_provider must return a dict"
+    assert "model_arg_template" in result, "model_arg_template must be present after v1 upgrade"
+    assert result["model_arg_template"] is None, (
+        f"model_arg_template must be null for v1 provider, got: {result['model_arg_template']!r}"
+    )
+    assert "model_env_var" in result, "model_env_var must be present after v1 upgrade"
+    assert result["model_env_var"] is None, (
+        f"model_env_var must be null for v1 provider, got: {result['model_env_var']!r}"
+    )
+    assert "default_model" in result, "default_model must be present after v1 upgrade"
+    assert result["default_model"] is None, (
+        f"default_model must be null for v1 provider, got: {result['default_model']!r}"
+    )
+
+
+def test_resolve_provider_v2_returns_populated_new_fields(
+    codex_providers_v2_json: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    A v2 providers.json with populated model_arg_template, model_env_var,
+    and default_model must return those values in the resolved descriptor.
+
+    Failure class: if the resolve() function drops or ignores new v2 fields,
+    this test must fail.
+    """
+    monkeypatch.setenv("Z_HARNESS_REPO_PROVIDERS", str(codex_providers_v2_json))
+
+    result = resolve_provider("codex", str(_REPO_ROOT))
+
+    assert result.get("model_arg_template") == ["--model", "{model}"], (
+        f"Expected model_arg_template=[\"--model\", \"{{model}}\"], got: {result.get('model_arg_template')!r}"
+    )
+    assert result.get("model_env_var") == "OPENAI_MODEL", (
+        f"Expected model_env_var='OPENAI_MODEL', got: {result.get('model_env_var')!r}"
+    )
+    assert result.get("default_model") == "gpt-5-codex", (
+        f"Expected default_model='gpt-5-codex', got: {result.get('default_model')!r}"
+    )
+
+
+def test_resolve_provider_v2_null_fields_returns_null(
+    codex_providers_v2_null_fields_json: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    A v2 providers.json with explicit null for new fields must return those
+    fields as null in the resolved descriptor.
+    """
+    monkeypatch.setenv("Z_HARNESS_REPO_PROVIDERS", str(codex_providers_v2_null_fields_json))
+
+    result = resolve_provider("codex", str(_REPO_ROOT))
+
+    assert result.get("model_arg_template") is None
+    assert result.get("model_env_var") is None
+    assert result.get("default_model") is None
+
+
+def test_resolve_provider_v1_existing_tests_pass_with_v2_upgrade(
+    codex_providers_json: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    Existing fields (command, args_template, timeout_s) are preserved correctly
+    after the v1→v2 in-memory upgrade.
+
+    Failure class: if the upgrade accidentally drops or corrupts required fields,
+    this test must fail.
+    """
+    monkeypatch.setenv("Z_HARNESS_REPO_PROVIDERS", str(codex_providers_json))
+
+    result = resolve_provider("codex", str(_REPO_ROOT))
+
+    assert result["command"] == "codex"
+    assert isinstance(result["args_template"], list)
+    assert isinstance(result["timeout_s"], int) and result["timeout_s"] > 0

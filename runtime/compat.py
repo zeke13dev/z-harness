@@ -27,7 +27,9 @@ def resolve_provider(role: str, repo_root: str) -> dict:
     Returns
     -------
     dict
-        Parsed JSON output from the script.
+        Parsed JSON output from the script. Keys include: role, provider,
+        command, args_template, stdin, timeout_s, model_label,
+        model_arg_template, model_env_var, default_model.
 
     Raises
     ------

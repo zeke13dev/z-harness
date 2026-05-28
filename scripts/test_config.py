@@ -29,6 +29,7 @@ from config import (  # noqa: E402
     _parse_overnight_allowlist,
     OVERNIGHT_AUTODECIDE_QIDS_DEFAULT,
     QUESTION_IDS,
+    _KEY_RE,
 )
 
 
@@ -1688,6 +1689,303 @@ class TestParseOvernightAllowlist(unittest.TestCase):
         for k in result:
             self.assertIn(k, QUESTION_IDS,
                           f"Key {k!r} in result is not a registered question_id")
+
+
+# ---------------------------------------------------------------------------
+# Tests for T001: 3-level TOML nesting (roles.<command>.<role> bindings)
+# ---------------------------------------------------------------------------
+
+class TestThreeLevelNesting(unittest.TestCase):
+    """
+    Covers all T001 acceptance criteria for 3-level TOML key support:
+
+    1. _KEY_RE accepts 4-segment keys (roles.z_plan.consultant_primary.persona)
+       and rejects invalid forms (empty segment, 5-segment, uppercase, hyphens).
+    2. Round-trip parse: [roles.z_plan.consultant_primary] persona = "X" via load_config().
+    3. cmd_export_env outputs no Z_HARNESS_ROLES_* lines.
+    4. cmd_explain traverses 3-level paths and shows value + source.
+    5. Per-field merge: global defines persona="A", repo defines model="opus";
+       merged effective binding has both.
+    6. Existing 2-level keys (notify.level, workflow.audit_to_amend) still resolve unchanged.
+    """
+
+    def setUp(self):
+        self.xdg = make_xdg()
+        self.repo = tempfile.mkdtemp(prefix="z-harness-test-repo-")
+        self.cwd = make_isolation_dir()
+
+    def tearDown(self):
+        shutil.rmtree(self.xdg, ignore_errors=True)
+        shutil.rmtree(self.repo, ignore_errors=True)
+        shutil.rmtree(self.cwd, ignore_errors=True)
+
+    # -------------------------------------------------------------------------
+    # Criterion 1: _KEY_RE accepts and rejects correctly
+    # -------------------------------------------------------------------------
+
+    def test_key_re_accepts_four_segment_roles_key(self):
+        """_KEY_RE must accept roles.z_plan.consultant_primary.persona (4 segments)."""
+        self.assertTrue(
+            bool(_KEY_RE.match("roles.z_plan.consultant_primary.persona")),
+            "_KEY_RE must accept 4-segment roles key"
+        )
+
+    def test_key_re_accepts_two_segment_key(self):
+        """_KEY_RE must still accept 2-segment keys (backward compat)."""
+        self.assertTrue(bool(_KEY_RE.match("notify.level")))
+        self.assertTrue(bool(_KEY_RE.match("workflow.audit_to_amend")))
+
+    def test_key_re_accepts_three_segment_key(self):
+        """_KEY_RE must accept 3-segment keys (roles table header form)."""
+        self.assertTrue(bool(_KEY_RE.match("roles.z_plan.consultant_primary")))
+
+    def test_key_re_rejects_empty_segment(self):
+        """_KEY_RE must reject roles..foo (empty middle segment)."""
+        self.assertFalse(bool(_KEY_RE.match("roles..foo")))
+
+    def test_key_re_rejects_five_segment_key(self):
+        """_KEY_RE must reject roles.z_plan.role.field.extra (5 segments)."""
+        self.assertFalse(bool(_KEY_RE.match("roles.z_plan.role.field.extra")))
+
+    def test_key_re_rejects_uppercase(self):
+        """_KEY_RE must reject keys with uppercase letters."""
+        self.assertFalse(bool(_KEY_RE.match("roles.Z_Plan.consultant_primary.persona")))
+        self.assertFalse(bool(_KEY_RE.match("Roles.z_plan.consultant_primary.persona")))
+
+    def test_key_re_rejects_hyphens(self):
+        """_KEY_RE must reject keys with hyphens."""
+        self.assertFalse(bool(_KEY_RE.match("roles.z-plan.consultant_primary.persona")))
+        self.assertFalse(bool(_KEY_RE.match("roles.z_plan.consultant-primary.persona")))
+
+    # -------------------------------------------------------------------------
+    # Criterion 2: Round-trip parse via load_config()
+    # -------------------------------------------------------------------------
+
+    def test_roundtrip_three_level_parses_correctly(self):
+        """[roles.z_plan.consultant_primary] persona = 'X' parses via load_config()."""
+        repo_cfg = write_repo_config(
+            self.repo,
+            '[roles.z_plan.consultant_primary]\npersona = "X"\n',
+        )
+        env = {
+            "XDG_CONFIG_HOME": self.xdg,
+            "Z_HARNESS_REPO_CONFIG": repo_cfg,
+        }
+        r = run(["get", "roles.z_plan.consultant_primary.persona"], env=env)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        self.assertEqual(r.stdout.strip(), "X")
+
+    def test_roundtrip_multiple_keys_in_same_role_table(self):
+        """Multiple keys in [roles.z_plan.consultant_primary] are each loadable."""
+        repo_cfg = write_repo_config(
+            self.repo,
+            '[roles.z_plan.consultant_primary]\npersona = "myp"\nmodel = "opus"\nruntime = "codex-cli"\n',
+        )
+        env = {
+            "XDG_CONFIG_HOME": self.xdg,
+            "Z_HARNESS_REPO_CONFIG": repo_cfg,
+        }
+        for key, expected in [
+            ("roles.z_plan.consultant_primary.persona", "myp"),
+            ("roles.z_plan.consultant_primary.model", "opus"),
+            ("roles.z_plan.consultant_primary.runtime", "codex-cli"),
+        ]:
+            r = run(["get", key], env=env)
+            self.assertEqual(r.returncode, 0, f"key={key!r} stderr={r.stderr!r}")
+            self.assertEqual(r.stdout.strip(), expected, f"key={key!r}")
+
+    # -------------------------------------------------------------------------
+    # Criterion 3: cmd_export_env outputs no Z_HARNESS_ROLES_* lines
+    # -------------------------------------------------------------------------
+
+    def test_export_env_no_roles_lines(self):
+        """export-env must output no Z_HARNESS_ROLES_* lines even when roles are configured."""
+        repo_cfg = write_repo_config(
+            self.repo,
+            '[roles.z_plan.consultant_primary]\npersona = "X"\nmodel = "opus"\n',
+        )
+        env = {
+            "XDG_CONFIG_HOME": self.xdg,
+            "Z_HARNESS_REPO_CONFIG": repo_cfg,
+        }
+        r = run(["export-env"], env=env)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        lines = [l for l in r.stdout.splitlines() if l.strip()]
+        for line in lines:
+            self.assertNotIn(
+                "Z_HARNESS_ROLES_", line,
+                f"export-env must not output roles lines; got: {line!r}"
+            )
+
+    def test_export_env_no_roles_lines_defaults_still_present(self):
+        """export-env still outputs standard 2-level keys when roles are configured."""
+        repo_cfg = write_repo_config(
+            self.repo,
+            '[roles.z_plan.consultant_primary]\npersona = "X"\n',
+        )
+        env = {
+            "XDG_CONFIG_HOME": self.xdg,
+            "Z_HARNESS_REPO_CONFIG": repo_cfg,
+        }
+        r = run(["export-env"], env=env)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        self.assertIn("Z_HARNESS_NOTIFY_LEVEL", r.stdout)
+        self.assertIn("Z_HARNESS_DOCS_ALWAYS_APPLY", r.stdout)
+
+    # -------------------------------------------------------------------------
+    # Criterion 4: cmd_explain traverses 3-level paths
+    # -------------------------------------------------------------------------
+
+    def test_explain_shows_value_and_source_for_role_key(self):
+        """cmd_explain roles.z_plan.consultant_primary.persona shows value + source."""
+        repo_cfg = write_repo_config(
+            self.repo,
+            '[roles.z_plan.consultant_primary]\npersona = "test-persona"\n',
+        )
+        env = {
+            "XDG_CONFIG_HOME": self.xdg,
+            "Z_HARNESS_REPO_CONFIG": repo_cfg,
+        }
+        r = run(["explain", "roles.z_plan.consultant_primary.persona"], env=env)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        self.assertIn("test-persona", r.stdout)
+        self.assertIn("source:", r.stdout)
+
+    def test_explain_source_shows_repo_path_for_role_key(self):
+        """cmd_explain shows the repo config file path as source for a roles key."""
+        repo_cfg = write_repo_config(
+            self.repo,
+            '[roles.z_plan.consultant_primary]\npersona = "test-persona"\n',
+        )
+        env = {
+            "XDG_CONFIG_HOME": self.xdg,
+            "Z_HARNESS_REPO_CONFIG": repo_cfg,
+        }
+        r = run(["explain", "roles.z_plan.consultant_primary.persona"], env=env)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        self.assertIn(repo_cfg, r.stdout)
+
+    def test_explain_unset_role_key_exits_3(self):
+        """cmd_explain for a roles key not in any config exits 3 (unknown key)."""
+        env = {
+            "XDG_CONFIG_HOME": self.xdg,
+            "Z_HARNESS_REPO_CONFIG": write_repo_config(self.repo, ""),
+        }
+        r = run(["explain", "roles.z_plan.consultant_primary.persona"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 3, f"stderr={r.stderr!r}")
+
+    # -------------------------------------------------------------------------
+    # Criterion 5: Per-field merge across global + repo layers
+    # -------------------------------------------------------------------------
+
+    def test_per_field_merge_global_persona_repo_model(self):
+        """Global defines persona='A'; repo defines model='opus'; merged has both."""
+        write_global_config(
+            self.xdg,
+            '[roles.z_plan.consultant_primary]\npersona = "A"\n',
+        )
+        repo_cfg = write_repo_config(
+            self.repo,
+            '[roles.z_plan.consultant_primary]\nmodel = "opus"\n',
+        )
+        env = {
+            "XDG_CONFIG_HOME": self.xdg,
+            "Z_HARNESS_REPO_CONFIG": repo_cfg,
+        }
+        # persona comes from global
+        r_persona = run(["get", "roles.z_plan.consultant_primary.persona"], env=env)
+        self.assertEqual(r_persona.returncode, 0, f"persona stderr={r_persona.stderr!r}")
+        self.assertEqual(r_persona.stdout.strip(), "A")
+        # model comes from repo
+        r_model = run(["get", "roles.z_plan.consultant_primary.model"], env=env)
+        self.assertEqual(r_model.returncode, 0, f"model stderr={r_model.stderr!r}")
+        self.assertEqual(r_model.stdout.strip(), "opus")
+
+    def test_per_field_merge_repo_overwrites_global_field(self):
+        """When both global and repo define the same subkey, repo wins (higher priority)."""
+        write_global_config(
+            self.xdg,
+            '[roles.z_plan.consultant_primary]\npersona = "global-persona"\nmodel = "global-model"\n',
+        )
+        repo_cfg = write_repo_config(
+            self.repo,
+            '[roles.z_plan.consultant_primary]\npersona = "repo-persona"\n',
+        )
+        env = {
+            "XDG_CONFIG_HOME": self.xdg,
+            "Z_HARNESS_REPO_CONFIG": repo_cfg,
+        }
+        # persona: repo overrides global
+        r_persona = run(["get", "roles.z_plan.consultant_primary.persona"], env=env)
+        self.assertEqual(r_persona.returncode, 0)
+        self.assertEqual(r_persona.stdout.strip(), "repo-persona")
+        # model: global value preserved (repo doesn't define it)
+        r_model = run(["get", "roles.z_plan.consultant_primary.model"], env=env)
+        self.assertEqual(r_model.returncode, 0)
+        self.assertEqual(r_model.stdout.strip(), "global-model")
+
+    # -------------------------------------------------------------------------
+    # Criterion 6: Existing 2-level keys still resolve unchanged
+    # -------------------------------------------------------------------------
+
+    def test_two_level_notify_level_unaffected(self):
+        """notify.level still resolves correctly when roles config is also present."""
+        repo_cfg = write_repo_config(
+            self.repo,
+            '[notify]\nlevel = "off"\n[roles.z_plan.consultant_primary]\npersona = "X"\n',
+        )
+        env = {
+            "XDG_CONFIG_HOME": self.xdg,
+            "Z_HARNESS_REPO_CONFIG": repo_cfg,
+        }
+        r = run(["get", "notify.level"], env=env)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        self.assertEqual(r.stdout.strip(), "off")
+
+    def test_two_level_workflow_audit_to_amend_unaffected(self):
+        """workflow.audit_to_amend still resolves correctly when roles config is present."""
+        repo_cfg = write_repo_config(
+            self.repo,
+            '[workflow]\naudit_to_amend = "amend"\n[roles.z_plan.consultant_primary]\npersona = "X"\n',
+        )
+        env = {
+            "XDG_CONFIG_HOME": self.xdg,
+            "Z_HARNESS_REPO_CONFIG": repo_cfg,
+        }
+        r = run(["get", "workflow.audit_to_amend"], env=env)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        self.assertEqual(r.stdout.strip(), "amend")
+
+    # -------------------------------------------------------------------------
+    # Validation: hyphenated sub-keys in 3-level tables are rejected
+    # -------------------------------------------------------------------------
+
+    def test_hyphenated_leaf_key_in_role_table_exits_2(self):
+        """A hyphenated key under [roles.*.*] must be rejected with exit 2."""
+        repo_cfg = write_repo_config(
+            self.repo,
+            '[roles.z_plan.consultant_primary]\npersona-name = "X"\n',
+        )
+        env = {
+            "XDG_CONFIG_HOME": self.xdg,
+            "Z_HARNESS_REPO_CONFIG": repo_cfg,
+        }
+        r = run(["get", "notify.level"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 2, f"stderr={r.stderr!r}")
+        self.assertIn("hyphenated", r.stderr)
+
+    def test_four_level_nesting_in_toml_exits_2(self):
+        """4-level TOML table nesting (>3 levels) must be rejected with exit 2."""
+        repo_cfg = write_repo_config(
+            self.repo,
+            '[roles.z_plan.consultant_primary.extra]\npersona = "X"\n',
+        )
+        env = {
+            "XDG_CONFIG_HOME": self.xdg,
+            "Z_HARNESS_REPO_CONFIG": repo_cfg,
+        }
+        r = run(["get", "notify.level"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 2, f"stderr={r.stderr!r}")
 
 
 # ---------------------------------------------------------------------------

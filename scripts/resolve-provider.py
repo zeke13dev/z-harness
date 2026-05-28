@@ -10,7 +10,7 @@ Config locations (in priority order — repo wins):
      or <repo>/.z-harness/providers.json         (repo-local default)
 
 Output (stdout): JSON with keys: role, provider, command, args_template, stdin,
-                 timeout_s, model_label
+                 timeout_s, model_label, model_arg_template, model_env_var, default_model
 
 Exit codes:
   0  success
@@ -25,6 +25,11 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+# Module-level set tracking which file paths have already emitted a
+# provider_schema_v1_upgraded event in this process.  Prevents double-emission
+# when both global and repo configs are v1.
+_v1_upgrade_emitted: set[str] = set()
 
 
 # ---------------------------------------------------------------------------
@@ -43,12 +48,60 @@ def _validate_version(data: dict, path: str) -> None:
     if not data:
         return  # empty / missing file — skip validation
     v = data.get("version")
-    if v != 1:
+    if v not in (1, 2):
         print(
-            f"[providers] {path}: schema version must be 1 (got {v!r})",
+            f"[providers] {path}: schema version must be 1 or 2 (got {v!r})",
             file=sys.stderr,
         )
         sys.exit(2)
+
+
+def _upgrade_v1_to_v2(data: dict, path: str) -> dict:
+    """
+    Upgrade a v1 provider registry to v2 in-memory.
+
+    Adds null values for new optional fields (model_arg_template, model_env_var,
+    default_model) to each provider entry. Sets version to 2. Emits
+    provider_schema_v1_upgraded event once per load.
+    """
+    if not data or data.get("version") != 1:
+        return data
+
+    upgraded = dict(data)
+    upgraded["version"] = 2
+
+    providers = dict(data.get("providers", {}))
+    for name, entry in providers.items():
+        entry = dict(entry)
+        if "args_template" not in entry:
+            entry["args_template"] = []
+        if "kind" not in entry:
+            entry["kind"] = "cli"
+        entry.setdefault("model_arg_template", None)
+        entry.setdefault("model_env_var", None)
+        entry.setdefault("default_model", None)
+        providers[name] = entry
+    upgraded["providers"] = providers
+
+    # Emit upgrade event (best-effort; non-fatal). Memoized per (process, file
+    # path) to avoid double-emission when both global and repo configs are v1.
+    if path not in _v1_upgrade_emitted:
+        _v1_upgrade_emitted.add(path)
+        script_dir = Path(__file__).parent
+        log_event = script_dir / "log-event.sh"
+        if log_event.exists() and shutil.which("bash"):
+            payload = json.dumps({"source": path, "schema_version": 1})
+            run_id = os.environ.get("Z_HARNESS_RUN_ID", "unknown-run")
+            try:
+                subprocess.run(
+                    ["bash", str(log_event), run_id, "provider_schema_v1_upgraded", payload],
+                    check=False,
+                    capture_output=True,
+                )
+            except OSError:
+                pass  # log-event.sh unavailable — ignore
+
+    return upgraded
 
 
 def _validate_provider_entry(provider_name: str, entry: dict, config_path: str) -> None:
@@ -92,6 +145,22 @@ def _validate_provider_entry(provider_name: str, entry: dict, config_path: str) 
     if not isinstance(model_label, str):
         _fail("model_label", "str", model_label)
 
+    # model_arg_template: must be list[str] or None
+    model_arg_template = entry.get("model_arg_template")
+    if model_arg_template is not None:
+        if not (isinstance(model_arg_template, list) and all(isinstance(x, str) for x in model_arg_template)):
+            _fail("model_arg_template", "list[str] or null", model_arg_template)
+
+    # model_env_var: must be str or None
+    model_env_var = entry.get("model_env_var")
+    if model_env_var is not None and not isinstance(model_env_var, str):
+        _fail("model_env_var", "str or null", model_env_var)
+
+    # default_model: must be str or None
+    default_model = entry.get("default_model")
+    if default_model is not None and not isinstance(default_model, str):
+        _fail("default_model", "str or null", default_model)
+
 
 def load_configs() -> tuple[dict, dict, str, str]:
     """
@@ -101,6 +170,7 @@ def load_configs() -> tuple[dict, dict, str, str]:
     global_path = Path(user_global) / "z-harness" / "providers.json"
     global_data = _load(global_path)
     _validate_version(global_data, str(global_path))
+    global_data = _upgrade_v1_to_v2(global_data, str(global_path))
 
     # Repo config: prefer explicit env override for testability.
     repo_env = os.environ.get("Z_HARNESS_REPO_PROVIDERS", "")
@@ -120,6 +190,7 @@ def load_configs() -> tuple[dict, dict, str, str]:
 
     repo_data = _load(repo_path)
     _validate_version(repo_data, str(repo_path))
+    repo_data = _upgrade_v1_to_v2(repo_data, str(repo_path))
 
     return global_data, repo_data, str(global_path), str(repo_path)
 
@@ -127,6 +198,26 @@ def load_configs() -> tuple[dict, dict, str, str]:
 # ---------------------------------------------------------------------------
 # Merge + shadow detection
 # ---------------------------------------------------------------------------
+
+def _validate_aliases(aliases: object, config_path: str) -> None:
+    """Validate the 'aliases' field is a dict[str, str]. Exits on violation."""
+    if aliases is None:
+        return
+    if not isinstance(aliases, dict):
+        print(
+            f"[providers] {config_path}: 'aliases' must be an object (dict), got {type(aliases).__name__!r}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    for k, v in aliases.items():
+        if not isinstance(k, str) or not isinstance(v, str):
+            print(
+                f"[providers] {config_path}: 'aliases' must be dict[str, str]; "
+                f"got key={k!r} (type {type(k).__name__}), value={v!r} (type {type(v).__name__})",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
 
 def merge_with_shadow(
     global_data: dict,
@@ -139,9 +230,13 @@ def merge_with_shadow(
     Log + emit provider_shadowed events for each key that is shadowed.
     Returns the merged dict: {"providers": {...}, "roles": {...}}.
     """
-    merged: dict = {"providers": {}, "roles": {}}
+    # Validate aliases in both configs before merging.
+    _validate_aliases(global_data.get("aliases"), global_path)
+    _validate_aliases(repo_data.get("aliases"), repo_path)
 
-    for section in ("providers", "roles"):
+    merged: dict = {"providers": {}, "roles": {}, "aliases": {}}
+
+    for section in ("providers", "roles", "aliases"):
         g_section = global_data.get(section, {})
         r_section = repo_data.get(section, {})
 
@@ -232,6 +327,9 @@ def resolve(role: str, merged: dict) -> dict:
         "stdin": provider.get("stdin", False),
         "timeout_s": provider.get("timeout_s", 300),
         "model_label": provider.get("model_label", ""),
+        "model_arg_template": provider.get("model_arg_template", None),
+        "model_env_var": provider.get("model_env_var", None),
+        "default_model": provider.get("default_model", None),
     }
 
 
