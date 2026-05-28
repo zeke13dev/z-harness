@@ -10,8 +10,10 @@
 # otherwise.
 #
 # Exit codes:
-#   0  — success (or success with unregistered callsites, unless --strict)
-#   1  — unregistered callsites found AND --strict flag was passed
+#   0  — clean (no unregistered callsites, or --strict not passed)
+#   1  — unregistered callsites found AND --strict flag was passed (advisory)
+#   2  — usage/argument error
+#   3  — hard error (missing directory, internal failure)
 #
 # This is documentation/audit tooling, NOT runtime enforcement.
 # Unregistered AskUserQuestion callsites under Z_HARNESS_NO_ASK=halt still block
@@ -35,18 +37,27 @@ SKILLS_DIR="$REPO_ROOT/skills"
 # Verify directories exist
 if [[ ! -d "$COMMANDS_DIR" ]]; then
   echo "ERROR: commands/ directory not found at $COMMANDS_DIR" >&2
-  exit 1
+  exit 3
 fi
 if [[ ! -d "$SKILLS_DIR" ]]; then
   echo "ERROR: skills/ directory not found at $SKILLS_DIR" >&2
-  exit 1
+  exit 3
 fi
 
 # Collect all files containing AskUserQuestion
 FILES=()
+askuser_files_raw="$(grep -rln "AskUserQuestion" "$COMMANDS_DIR" "$SKILLS_DIR" 2>&1)"
+grep_ec=$?
+if [ "$grep_ec" -gt 1 ]; then
+  echo "lint-askuser: hard error from grep (exit $grep_ec): $askuser_files_raw" >&2
+  exit 3
+fi
+# exit 0 = matches found; exit 1 = no matches (also fine, FILES will be empty)
+sorted_files="$(printf '%s\n' "$askuser_files_raw" | sort -u)"
 while IFS= read -r f; do
+  [ -z "$f" ] && continue
   FILES+=("$f")
-done < <(grep -rln "AskUserQuestion" "$COMMANDS_DIR" "$SKILLS_DIR" 2>/dev/null | sort)
+done <<< "$sorted_files"
 
 if [[ ${#FILES[@]} -eq 0 ]]; then
   echo "No AskUserQuestion callsites found in commands/ or skills/."
@@ -58,11 +69,15 @@ REGISTERED_FILES=()
 UNREGISTERED_FILES=()
 
 for f in "${FILES[@]}"; do
-  if grep -q "resolve-question\|check-no-ask" "$f" 2>/dev/null; then
-    REGISTERED_FILES+=("$f")
-  else
-    UNREGISTERED_FILES+=("$f")
-  fi
+  # Capture grep exit code without triggering set -e on non-zero exit.
+  # Assigning via command substitution always exits 0; status is in grep_file_ec.
+  grep_file_ec=0
+  grep -q "resolve-question\|check-no-ask" "$f" || grep_file_ec=$?
+  case $grep_file_ec in
+    0) REGISTERED_FILES+=("$f") ;;
+    1) UNREGISTERED_FILES+=("$f") ;;
+    *) echo "lint-askuser: hard error reading $f (grep exit $grep_file_ec)" >&2; exit 3 ;;
+  esac
 done
 
 # Helper: print the table for a given file list and status tag

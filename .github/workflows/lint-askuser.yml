@@ -6,6 +6,9 @@ on:
       - "commands/**"
       - "skills/**"
       - "scripts/lint-askuser.sh"
+      - "scripts/preflight.sh"
+      - "Makefile"
+      - ".github/workflows/lint-askuser.yml"
   push:
     branches:
       - main
@@ -14,8 +17,9 @@ on:
 # NOTE: This workflow is documentation/audit tooling, NOT runtime enforcement.
 # Unregistered AskUserQuestion callsites under Z_HARNESS_NO_ASK=halt still block
 # until the user responds. This lint makes the gap visible; it does not close it.
-# v1 ships with ~35 known unregistered sites (fail-OPEN). The step is annotated
-# continue-on-error so it surfaces as a workflow warning, not a blocking failure.
+# v1 ships with ~35 known unregistered sites (fail-OPEN). Exit code 1 (unregistered
+# callsites) is surfaced as a warning annotation; exit codes 2+ (hard errors) fail
+# the workflow.
 
 jobs:
   lint-askuser:
@@ -24,16 +28,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Run AskUserQuestion callsite audit (advisory)
-        # continue-on-error: surfaces unregistered callsites as a warning annotation
-        # rather than blocking the PR. Remove once all callsites are registered (v2).
-        continue-on-error: true
-        run: bash scripts/lint-askuser.sh --strict
-
-      - name: Emit advisory annotation on unregistered callsites
-        if: always()
+      - name: Run AskUserQuestion callsite audit
+        # Exit 1 = unregistered callsites (advisory, emit warning annotation).
+        # Exit 2 = usage/argument error (hard failure).
+        # Exit 3+ = internal/hard error (hard failure).
         run: |
-          COUNT=$(bash scripts/lint-askuser.sh 2>/dev/null | grep -c '\[UNREGISTERED\]' || true)
-          if [[ "$COUNT" -gt 0 ]]; then
-            echo "::warning file=scripts/lint-askuser.sh::$COUNT unregistered AskUserQuestion callsite(s) found. These are a known v1 limitation (fail-OPEN). Run 'make lint' locally to see details."
+          set +e
+          OUTPUT=$(bash scripts/lint-askuser.sh --strict 2>&1)
+          _EC=$?
+          set -e
+          echo "$OUTPUT"
+          if [[ $_EC -eq 1 ]]; then
+            COUNT=$(echo "$OUTPUT" | grep -c '\[UNREGISTERED\]' || true)
+            echo "::warning file=scripts/lint-askuser.sh::$COUNT unregistered AskUserQuestion callsite(s) found. Known v1 limitation (fail-OPEN). Run 'make lint' locally to see details."
+            exit 0
+          elif [[ $_EC -ne 0 ]]; then
+            echo "::error file=scripts/lint-askuser.sh::lint-askuser.sh exited with code $_EC (hard failure)."
+            exit $_EC
           fi

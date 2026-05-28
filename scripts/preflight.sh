@@ -16,8 +16,21 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-echo "==> preflight: AskUserQuestion callsite audit (advisory)"
-# Non-strict: exits 0 even with unregistered callsites; surfaces them as warnings.
-bash "$REPO_ROOT/scripts/lint-askuser.sh" || true
+echo "==> preflight: AskUserQuestion callsite audit (--strict; unregistered callsites are advisory)"
+# Run --strict so CI exercises the strict path locally.
+# Exit 1 (unregistered callsites) is advisory — surface as warning but do not fail.
+# Exit 2 (usage error) or 3+ (hard error) propagate as failures.
+# Use 'if' guard to prevent set -e from aborting on exit 1.
+if bash "$REPO_ROOT/scripts/lint-askuser.sh" --strict; then
+  _lint_ec=0
+else
+  _lint_ec=$?
+fi
+if [[ $_lint_ec -eq 1 ]]; then
+  echo "WARNING: unregistered AskUserQuestion callsites found (known v1 limitation, fail-OPEN)." >&2
+elif [[ $_lint_ec -ne 0 ]]; then
+  echo "ERROR: lint-askuser.sh exited with code $_lint_ec (hard failure)." >&2
+  exit $_lint_ec
+fi
 echo ""
 echo "Preflight complete."
