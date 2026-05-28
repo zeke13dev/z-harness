@@ -1,6 +1,7 @@
 # PERSONAS — Persona System Guide
 
 > Last updated: 2026-05-28
+> Covers source: scripts/resolve-persona.py, scripts/resolve-persona.sh, runtime/contract/persona.schema.json, personas/README.md, personas/builtin/codex-default-consultant.md, personas/builtin/gemini-default-consultant.md, personas/builtin/codex-default-reviewer.md, commands/z-personas.md, skills/z-personas/SKILL.md, runtime/drivers/_persona_utils.py, runtime/drivers/antigravity/persona_export.py, runtime/drivers/cursor/persona_export.py, runtime/drivers/codex/persona_export.py, runtime/drivers/claude/persona_export.py, runtime/dispatch/persona_prompt.py, runtime/dispatch/dispatcher.py
 
 ## Overview
 
@@ -132,10 +133,14 @@ in this priority:
 
 ## Orchestrator usage pattern
 
-When an orchestrator (slash command, skill, or Agent() call site) needs to
-dispatch a role with a persona body prepended, follow these four steps:
+The **orchestrator** (slash command, skill, or Agent() call site) is responsible
+for persona resolution and prompt composition.  The dispatcher stays thin —
+it accepts an already-composed prompt and never calls `resolve-persona.py`
+internally.
 
-**Step 1** — resolve persona + model + runtime for the (command, role) pair:
+### Step 1 — resolve persona + model + runtime
+
+Call `resolve-persona.py resolve` for the (command, role) pair:
 
 ```bash
 python scripts/resolve-persona.py resolve z_plan consultant_primary
@@ -143,7 +148,7 @@ python scripts/resolve-persona.py resolve z_plan consultant_primary
 #    "source": "roles_default", "persona_body_path": "/abs/path/personas/builtin/codex-default-consultant.md"}
 ```
 
-**Step 2** — read the `persona_body_path` field from the JSON envelope:
+### Step 2 — read the `persona_body_path`
 
 ```python
 import json, subprocess
@@ -156,8 +161,7 @@ envelope = json.loads(result.stdout)
 body_path = envelope["persona_body_path"]  # str | None
 ```
 
-**Step 3** — call `runtime.dispatch.persona_prompt.prepend_persona` to compose
-the final prompt:
+### Step 3 — call `prepend_persona` to compose the final prompt
 
 ```python
 from runtime.dispatch.persona_prompt import prepend_persona
@@ -168,7 +172,7 @@ final_prompt = prepend_persona(body_path, task_prompt)
 # YAML frontmatter (--- blocks) is stripped automatically.
 ```
 
-**Step 4** — pass `final_prompt` to `Dispatcher.run` as the prompt argument:
+### Step 4 — pass `final_prompt` to `Dispatcher.run`
 
 ```python
 from runtime.dispatch.dispatcher import Dispatcher
@@ -179,16 +183,16 @@ result = dispatcher.run(
     command_id="z-plan",
     caller_args=[final_prompt],
     provider_config=provider_config,
+    role="consultant_primary",
     # Optionally pass resolved fields as override kwargs:
     model=envelope.get("model") or None,
     runtime=envelope.get("runtime") or None,
 )
 ```
 
-The dispatcher itself does **not** call `resolve-persona.py` or read persona
-files — that is the orchestrator's responsibility.  This keeps
-`Dispatcher.run` thin and avoids subprocess overhead inside the dispatch hot
-path.
+The `role` kwarg is informational — it is included in the `persona_bound`
+event payload but not used for resolution.  The dispatcher itself does **not**
+call `resolve-persona.py` or read persona files.
 
 ---
 
@@ -344,10 +348,13 @@ persona with the correct contract declaration.
 
 | Event | Fired when |
 |-------|-----------|
-| `persona_bound` | Each dispatch: records `{command, role, persona, model, runtime, source}`. |
-| `persona_override_used` | A per-Agent() kwarg overrides a config default. |
+| `persona_bound` | Each dispatch: records `{command, role, persona, model, runtime, source}`.  `source` is a per-axis nested dict `{persona: <layer>, model: <layer>, runtime: <layer>}` where each layer is one of `override`, `provider_config`, or `none`. |
+| `persona_override_used` | A per-Agent() / Dispatcher.run() kwarg overrides a config default.  Payload includes `command`, `override_field`, `value`, `original`. |
+| `model_resolved` | Records `{command, model, runtime, source}` at dispatch. |
 | `persona_compat_warning` | A persona is bound to a role not in its `compatible_roles`. |
 | `persona_shadowed` | A persona name is defined in more than one layer (once per process per name). |
 | `persona_binding_chimera` | A binding's three axes resolve from ≥2 different config layers. |
 | `legacy_provider_roles_used` | Resolution falls back to `providers.json` `roles` map. |
-| `model_resolved` | Records `{command, role, source, model, runtime}` at dispatch. |
+
+> Note: as of T103, `persona_bound`, `persona_override_used`, and
+> `model_resolved` payloads use `command` (not `command_id`) as the field name.

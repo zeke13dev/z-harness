@@ -1,6 +1,6 @@
 {
   "concept": "personas-and-roles",
-  "last_updated": "2026-05-28T18:00:00Z",
+  "last_updated": "2026-05-28T00:00:00Z",
   "covers_spec": "none",
   "source_files": [
     "scripts/resolve-persona.py",
@@ -17,6 +17,8 @@
     "runtime/drivers/cursor/persona_export.py",
     "runtime/drivers/codex/persona_export.py",
     "runtime/drivers/claude/persona_export.py",
+    "runtime/dispatch/persona_prompt.py",
+    "runtime/dispatch/dispatcher.py",
     "docs/human/PERSONAS.md"
   ],
   "confidence": "high",
@@ -29,7 +31,9 @@
     {"file": "scripts/resolve-persona.py", "line": 52, "symbol": "_ROLE_REGISTRY", "kind": "var", "summary": "Maps role names to expected contracts: consultant_primary/secondary → freeform, reviewer → review-verdict"},
     {"file": "scripts/resolve-persona.py", "line": 497, "symbol": "_detect_and_emit_shadows", "kind": "fn", "summary": "Emits persona_shadowed once per (process, name) for each name defined in more than one layer"},
     {"file": "scripts/resolve-persona.py", "line": 735, "symbol": "_emit_persona_binding_chimera", "kind": "fn", "summary": "Emits persona_binding_chimera once per (process, command, role) when persona/model/runtime axes come from ≥2 config layers"},
-    {"file": "runtime/drivers/_persona_utils.py", "line": 1, "symbol": "_persona_utils", "kind": "module", "summary": "Shared stdlib-only frontmatter parser and portability header builder used by all four per-target persona_export.py modules"}
+    {"file": "runtime/drivers/_persona_utils.py", "line": 1, "symbol": "_persona_utils", "kind": "module", "summary": "Shared stdlib-only frontmatter parser and portability header builder used by all four per-target persona_export.py modules"},
+    {"file": "runtime/dispatch/persona_prompt.py", "line": 13, "symbol": "prepend_persona", "kind": "fn", "summary": "Orchestrator helper: reads persona body from body_path, strips frontmatter, returns body+task_prompt; pass None/empty to skip"},
+    {"file": "runtime/dispatch/dispatcher.py", "line": 95, "symbol": "Dispatcher.run", "kind": "fn", "summary": "Execute command via driver; accepts role/persona/model/runtime kwargs; emits persona_bound with per-axis source dict"}
   ],
   "depends_on": ["providers-registry", "scripts", "agents"],
   "consumed_by": ["commands", "skills", "multi-ide-exports"],
@@ -41,16 +45,21 @@
     "compatible_roles mismatch at bind time is a soft warning only — it emits a persona_compat_warning event but does NOT block resolution.",
     "contract mismatch between a bound persona's `contract` field and the role's expected_contract (from _ROLE_REGISTRY) is a hard error — cmd_validate exits 1.",
     "Persona name must match ^[a-z][a-z0-9-]*$ with no trailing hyphen; validated on frontmatter parse, exits 2 on violation.",
-    "Unknown frontmatter keys cause exit 2 — model/runtime belong in TOML config, not in the persona file."
+    "Unknown frontmatter keys cause exit 2 — model/runtime belong in TOML config, not in the persona file.",
+    "Orchestrator (not dispatcher) calls resolve-persona.py, reads persona_body_path, and calls prepend_persona before Dispatcher.run — the dispatcher accepts an already-composed prompt and performs no persona resolution internally.",
+    "persona_bound source field is a per-axis nested dict {persona: <layer>, model: <layer>, runtime: <layer>} where each layer value is one of: override, provider_config, none.",
+    "persona_bound, persona_override_used, and model_resolved payloads use the field name `command` (not `command_id`) as of T103.",
+    "Dispatcher.run accepts role: str | None = None kwarg; when provided, included in persona_bound payload but not used for resolution."
   ],
   "gotchas": [
     "_shadowed_emitted is keyed on name only (not on layer pair), so if a persona appears in all three layers, persona_shadowed still fires exactly once per process for that name.",
     "persona_binding_chimera is keyed on (command, role), not on the specific axis combination — if the same (command, role) binding is evaluated twice, the event fires only once.",
     "cmd_validate checks compatible_roles only against known role names in _ROLE_REGISTRY — a compatible_roles entry for an unknown role is silently ignored during validation.",
     "persona file body (the prompt prefix) is everything after the closing '---' delimiter; a leading blank line is stripped by _persona_utils.parse_persona_file but the script-side _parse_frontmatter does not strip it.",
+    "prepend_persona strips YAML frontmatter using a simple string search for '\\n---\\n'; if the closing delimiter is missing, the entire file (including frontmatter) is treated as the body.",
     "Layer 3 (repo-local) path uses git rev-parse to find repo root; falls back to cwd if git is unavailable. Z_HARNESS_REPO_ROOT, Z_HARNESS_REPO_PERSONAS_DIR, Z_HARNESS_BUILTIN_PERSONAS_DIR, and Z_HARNESS_USER_PERSONAS_DIR all override the respective layer paths for hermetic testing.",
     "resolve-persona.sh is a thin bash wrapper — all logic lives in resolve-persona.py; the shell script exists solely so dispatch sites don't need to know the Python path.",
-    "Dispatcher.run() in the runtime layer can accept persona override kwargs; these override the TOML-configured binding for that invocation only."
+    "Dispatcher.run() role kwarg is informational only — it appears in persona_bound but does not trigger any resolution or validation; the caller is already responsible for resolving the role before calling run()."
   ],
   "memories": []
 }

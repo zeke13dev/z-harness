@@ -1,6 +1,6 @@
 {
   "concept": "providers-registry",
-  "last_updated": "2026-05-28T18:00:00Z",
+  "last_updated": "2026-05-28T00:00:00Z",
   "covers_spec": "none",
   "source_file": [
     "scripts/resolve-provider.py",
@@ -10,18 +10,22 @@
     "docs/human/PROVIDERS.md",
     "runtime/compat.py",
     "runtime/contract/provider.schema.json",
-    "scripts/log-providers.sh"
+    "scripts/log-providers.sh",
+    ".z-harness/providers.json"
   ],
   "confidence": "high",
   "entry_points": [
     {"file": "scripts/resolve-provider.sh", "line": 1, "symbol": "resolve-provider.sh", "kind": "module", "summary": "Thin bash wrapper; single entrypoint for all consultant/reviewer dispatch sites"},
-    {"file": "scripts/resolve-provider.py", "line": 412, "symbol": "main", "kind": "fn", "summary": "Loads configs, merges, validates, checks PATH, enforces invariant, prints JSON descriptor"},
-    {"file": "scripts/resolve-provider.py", "line": 165, "symbol": "load_configs", "kind": "fn", "summary": "Locates and loads global + repo JSON; validates schema version; runs v1->v2 upgrade"},
-    {"file": "scripts/resolve-provider.py", "line": 59, "symbol": "_upgrade_v1_to_v2", "kind": "fn", "summary": "In-memory v1->v2 upgrade: adds model_arg_template/model_env_var/default_model nulls; emits provider_schema_v1_upgraded (memoized per process+path)"},
-    {"file": "scripts/resolve-provider.py", "line": 222, "symbol": "merge_with_shadow", "kind": "fn", "summary": "Per-key merge of global + repo configs across providers/roles/aliases with shadow detection"},
-    {"file": "scripts/resolve-provider.py", "line": 288, "symbol": "resolve", "kind": "fn", "summary": "Role->provider->command lookup with PATH presence check; exits 1 if unresolvable"},
-    {"file": "scripts/resolve-provider.py", "line": 340, "symbol": "check_consultant_distinctness", "kind": "fn", "summary": "Invariant: consultant_primary != consultant_secondary; exits 1 on collision"},
-    {"file": "scripts/resolve-provider.py", "line": 361, "symbol": "compose_argv", "kind": "fn", "summary": "Builds full argv from descriptor + effective_model; renders {model} in model_arg_template; raises ValueError if no model"},
+    {"file": "scripts/resolve-provider.py", "line": 498, "symbol": "main", "kind": "fn", "summary": "Loads configs, merges, validates, checks PATH, enforces invariant, prints JSON descriptor"},
+    {"file": "scripts/resolve-provider.py", "line": 170, "symbol": "load_configs", "kind": "fn", "summary": "Locates and loads global + repo JSON; validates schema version; runs v1->v2 upgrade"},
+    {"file": "scripts/resolve-provider.py", "line": 64, "symbol": "_upgrade_v1_to_v2", "kind": "fn", "summary": "In-memory v1->v2 upgrade: adds model_arg_template/model_env_var/default_model nulls; emits provider_schema_v1_upgraded (memoized per process+path)"},
+    {"file": "scripts/resolve-provider.py", "line": 227, "symbol": "merge_with_shadow", "kind": "fn", "summary": "Per-key merge of global + repo configs across providers/roles/aliases with shadow detection"},
+    {"file": "scripts/resolve-provider.py", "line": 359, "symbol": "resolve", "kind": "fn", "summary": "Role->provider->command lookup with alias substitution and PATH presence check; exits 1 if unresolvable"},
+    {"file": "scripts/resolve-provider.py", "line": 331, "symbol": "_apply_aliases", "kind": "fn", "summary": "Checks provider name against aliases map; substitutes canonical and emits provider_alias_used (memoized); emits legacy_provider_roles_used when is_legacy=True"},
+    {"file": "scripts/resolve-provider.py", "line": 293, "symbol": "_emit_alias_used", "kind": "fn", "summary": "Emits provider_alias_used event via log-event.sh (best-effort, non-fatal; memoization in _apply_aliases)"},
+    {"file": "scripts/resolve-provider.py", "line": 314, "symbol": "_emit_legacy_roles_used", "kind": "fn", "summary": "Emits legacy_provider_roles_used event when providers.json.roles is the active role-binding path"},
+    {"file": "scripts/resolve-provider.py", "line": 422, "symbol": "check_consultant_distinctness", "kind": "fn", "summary": "Invariant: consultant_primary != consultant_secondary; exits 1 on collision"},
+    {"file": "scripts/resolve-provider.py", "line": 443, "symbol": "compose_argv", "kind": "fn", "summary": "Builds full argv from descriptor + effective_model; renders {model} in model_arg_template; raises ValueError if no model"},
     {"file": "scripts/discover-providers.py", "line": 58, "symbol": "discover", "kind": "fn", "summary": "Probes PATH for known CLIs; returns proposed providers.json dict (never writes)"},
     {"file": "scripts/log-providers.sh", "line": 1, "symbol": "log-providers.sh", "kind": "module", "summary": "Resolves all three roles, prints summary line, emits provider_resolved events"},
     {"file": "runtime/compat.py", "line": 15, "symbol": "resolve_provider", "kind": "fn", "summary": "Python API wrapper around resolve-provider.py for runtime dispatch layer"},
@@ -30,21 +34,25 @@
   "depends_on": ["scripts", "agents"],
   "consumed_by": ["commands", "agents", "runtime-dispatch", "personas-and-roles"],
   "invariants": [
-    "consultant_primary and consultant_secondary must resolve to distinct provider names — resolver exits 1 if they collide.",
+    "consultant_primary and consultant_secondary must resolve to distinct provider names (raw roles map values) — resolver exits 1 if they collide.",
     "Repo-local config overrides user-global config per-key across providers, roles, and aliases sections. Shadowing emits provider_shadowed event and stderr warning, de-duped per parent process.",
     "Schema version field must be 1 or 2; any other value causes exit 2. Version 1 is upgraded in-memory to v2 automatically.",
     "Every provider entry in the merged config is validated on every resolver call, not just the entry being resolved.",
     "discover-providers.py never writes files — all writes go through /z-providers-discover with explicit user confirmation.",
-    "compose_argv raises ValueError (not sys.exit) when no model can be resolved from effective_model or provider default_model."
+    "compose_argv raises ValueError (not sys.exit) when no model can be resolved from effective_model or provider default_model.",
+    "providers.json.roles is the legacy fallback for role binding; TOML [roles.<command>.<role>] takes precedence when both exist. Using providers.json.roles emits legacy_provider_roles_used.",
+    ".z-harness/providers.json v2 ships both old names (codex/gemini/claude) and new -cli names (codex-cli/gemini-cli/claude-cli) as first-class provider entries; aliases map provides forward-compat without deleting old entries."
   ],
   "gotchas": [
     "Schema at runtime/contract/provider.schema.json permits kind='sdk' and optional auth_env/session_resumable/allow_cross_vendor_env, but resolve-provider.py validates only kind='cli' — SDK entries pass schema but cause exit 2 if resolved.",
     "Z_HARNESS_REPO_PROVIDERS env var overrides repo config path entirely, bypassing git-based discovery.",
     "Shadow de-dup stamp file is keyed on PPID, not PID — warning fires once per parent process tree, not once per subshell.",
-    "role with no bound provider causes immediate halt with actionable error pointing to /z-providers-discover.",
+    "Role with no bound provider causes immediate halt with actionable error pointing to /z-providers-discover.",
     "CLI not on PATH causes exit 1 even if the config entry is otherwise valid.",
     "_upgrade_v1_to_v2 is memoized per (process, file path) via module-level _v1_upgrade_emitted set — double-emission is prevented when both global and repo configs are v1.",
-    "aliases section is merged per-key but is NOT used by resolve() — it is informational for rename tooling only."
+    "aliases section IS used by resolve() via _apply_aliases — it is not merely informational. Old alias names are transparently resolved to canonical -cli names; provider_alias_used is emitted once per (process, old-name).",
+    "When the roles map in providers.json is the active binding path, both legacy_provider_roles_used AND (if an alias is matched) provider_alias_used are emitted — two distinct events for one resolution.",
+    "_alias_used_emitted memoization set is module-level; alias dedup survives multiple resolve() calls within the same process but resets on new process invocations."
   ],
   "memories": []
 }

@@ -174,9 +174,10 @@
         "docs/human/PROVIDERS.md",
         "runtime/compat.py",
         "runtime/contract/provider.schema.json",
-        "scripts/log-providers.sh"
+        "scripts/log-providers.sh",
+        ".z-harness/providers.json"
       ],
-      "last_updated": "2026-05-28T18:00:00Z",
+      "last_updated": "2026-05-28T00:00:00Z",
       "confidence": "high",
       "depends_on": [
         "scripts"
@@ -186,7 +187,7 @@
         "commands",
         "personas-and-roles"
       ],
-      "summary": "Config-file registry routing consultant/reviewer dispatches to any CLI-addressable LLM; three fixed roles mapped to named provider entries; resolution via scripts/resolve-provider.sh. Role bindings for personas are documented in personas-and-roles."
+      "summary": "Config-file registry routing consultant/reviewer dispatches to any CLI-addressable LLM; three fixed roles mapped to named provider entries; resolution via scripts/resolve-provider.sh. Schema v2 uses -cli provider names with dual-entry + aliases for forward-compat. TOML [roles.*.*] bindings are preferred; providers.json.roles is legacy fallback."
     },
     {
       "slug": "personas-and-roles",
