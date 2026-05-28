@@ -109,6 +109,8 @@ ssh "<remote-host>" "rm -rf ~/dev/qt-bot-sandbox/<slug>/<task-id>/"
 
 **NEVER delete `~/dev/qt-bot-sandbox/<slug>/base/`.** The warm base is shared across all tasks in the slug and is intentionally long-lived. It is reclaimed by the next `/z-implement-all` invocation's first-invocation seed step, not per-task cleanup. Deleting it would force a full cold rsync on the next task.
 
+**Recovery note (orphaned lock):** The base-seeding step guards against concurrent runs via `mkdir ~/dev/qt-bot-sandbox/<slug>/.base.lock`. If a runner died between creating that directory and removing it, the lock persists and future invocations will timeout at 600 s. To recover: `ssh <remote-host> 'rmdir ~/dev/qt-bot-sandbox/<slug>/.base.lock'`.
+
 On failure, leave the task sandbox for debugging — the user can clean later. For `read-only-against-shared-state` runs, no cleanup needed (no sandbox was created).
 
 <!-- future: extract cleanup to a guarded helper script with realpath canonicalization -->
