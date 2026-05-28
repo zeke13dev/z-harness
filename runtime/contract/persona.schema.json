@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PersonaFrontmatter",
+  "description": "Schema for z-harness persona file YAML frontmatter. Persona files are markdown with a YAML front block between '---' delimiters; the body after the closing '---' is the prompt prefix.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "description"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Kebab-case persona identifier. Must match ^[a-z][a-z0-9-]*$ — starts with a lowercase letter, contains only lowercase letters, digits, and hyphens, no trailing hyphen.",
+      "pattern": "^[a-z][a-z0-9-]*[a-z0-9]$|^[a-z]$"
+    },
+    "description": {
+      "type": "string",
+      "description": "One-line human-readable description of the persona.",
+      "minLength": 1
+    },
+    "compatible_roles": {
+      "type": "array",
+      "description": "Optional list of role names this persona is designed for. Absence is valid. Mismatch at bind time emits a persona_compat_warning event (soft; does not block).",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "contract": {
+      "type": "string",
+      "description": "Optional output contract hint. When the bound role declares an expected_contract, this must match or binding fails.",
+      "enum": [
+        "freeform",
+        "review-verdict",
+        "strict-json"
+      ]
+    }
+  }
+}

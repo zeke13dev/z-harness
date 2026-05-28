@@ -354,6 +354,62 @@ def check_consultant_distinctness(role: str, merged: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# compose_argv
+# ---------------------------------------------------------------------------
+
+
+def compose_argv(provider_dict: dict, effective_model: str | None) -> list[str]:
+    """Return the full argv list for a provider dispatch.
+
+    Args:
+        provider_dict: Provider descriptor dict (as returned by ``resolve()``).
+            Must contain ``args_template`` (list[str]).  May contain
+            ``model_arg_template`` (list[str] | None), ``model_env_var``
+            (str | None), and ``default_model`` (str | None).
+        effective_model: The model string requested by the caller.  Empty
+            string or None causes a fallback to ``provider_dict["default_model"]``.
+            If both are empty/null, ValueError is raised.
+
+    Returns:
+        A new list starting with a copy of ``args_template``, optionally
+        followed by the rendered ``model_arg_template`` (with ``{model}``
+        substituted by the resolved model string).  ``model_arg_template`` is
+        appended only when it is not None; a v1 provider (null template) is
+        handled without raising.
+
+    Raises:
+        ValueError: When both ``effective_model`` and ``provider_dict["default_model"]``
+            are empty or null, so no model string can be resolved.
+    """
+    argv: list[str] = list(provider_dict.get("args_template", []))
+
+    model_arg_template: list[str] | None = provider_dict.get("model_arg_template")
+    if model_arg_template is None:
+        # v1 provider: no model arg; return args_template immediately without
+        # attempting model resolution (which might raise unnecessarily).
+        return argv
+
+    # Resolve the effective model string (only needed when model_arg_template is set).
+    model: str | None = effective_model if effective_model else None
+    if not model:
+        model = provider_dict.get("default_model") or None
+    if not model:
+        raise ValueError(
+            "compose_argv: effective_model is empty/null and provider has no default_model"
+        )
+
+    # Render {model} substitution in each token.  Only the exact placeholder
+    # {model} is replaced; partial matches like {models} are left untouched.
+    rendered = [
+        token.replace("{model}", model) if "{model}" in token else token
+        for token in model_arg_template
+    ]
+    argv.extend(rendered)
+
+    return argv
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

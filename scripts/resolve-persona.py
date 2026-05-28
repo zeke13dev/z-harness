@@ -1,0 +1,633 @@
+#!/usr/bin/env python3
+"""
+resolve-persona.py <subcommand> [args]
+
+Persona registry loader and resolver for z-harness.
+
+Subcommands (T006 scope):
+  list-personas       Print JSON array of {name, source_layer, path} — winner per name only.
+  where <name>        Print all layer paths defining <name>, one per line, in load order.
+                      Exits 1 with actionable error if name not found in any layer.
+
+Subcommands (T007 scope — stubs only in T006):
+  resolve, list-bindings, validate, read
+
+Layer load order (lowest → highest priority — later layer wins per name):
+  1. personas/builtin/         (shipped with the harness)
+  2. ~/.config/z-harness/personas/   (user-global; XDG_CONFIG_HOME respected)
+  3. <repo>/.z-harness/personas/     (repo-local; git root discovered or Z_HARNESS_REPO_ROOT override)
+
+On name collision across layers: emit persona_shadowed event ONCE per (process, name).
+
+Output: stdout = JSON or plain text per subcommand; diagnostics → stderr.
+
+Exit codes:
+  0  success
+  1  name not found, I/O error, or invariant violation
+  2  bad usage or frontmatter parse error
+"""
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from typing import Optional
+
+# ---------------------------------------------------------------------------
+# Name validation
+# ---------------------------------------------------------------------------
+
+# Kebab-case: starts with letter, contains only [a-z0-9-], no trailing hyphen.
+_NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
+_NAME_TRAILING_HYPHEN_RE = re.compile(r"-$")
+
+
+def _is_valid_persona_name(name: str) -> bool:
+    """Return True if name matches ^[a-z][a-z0-9-]*$ and does not end with a hyphen."""
+    return bool(_NAME_RE.match(name)) and not name.endswith("-")
+
+
+# ---------------------------------------------------------------------------
+# Shadow-event memoization (once per process per name)
+# ---------------------------------------------------------------------------
+
+# Module-level set of (name,) tuples for which persona_shadowed has already
+# been emitted in this process.
+_shadowed_emitted: set[str] = set()
+
+
+def _emit_persona_shadowed(name: str, layers: list[str], winning_layer: str) -> None:
+    """Emit persona_shadowed once per (process, name)."""
+    if name in _shadowed_emitted:
+        return
+    _shadowed_emitted.add(name)
+
+    print(
+        f"[personas] persona_shadowed: {name!r} defined in {len(layers)} layers; "
+        f"winner is {winning_layer!r}",
+        file=sys.stderr,
+    )
+
+    script_dir = Path(__file__).parent
+    log_event = script_dir / "log-event.sh"
+    if log_event.exists() and shutil.which("bash"):
+        payload = json.dumps({
+            "persona": name,
+            "layers": layers,
+            "winning_layer": winning_layer,
+        })
+        run_id = os.environ.get("Z_HARNESS_RUN_ID", "unknown-run")
+        try:
+            subprocess.run(
+                ["bash", str(log_event), run_id, "persona_shadowed", payload],
+                check=False,
+                capture_output=True,
+            )
+        except OSError:
+            pass  # log-event.sh unavailable — ignore
+
+
+# ---------------------------------------------------------------------------
+# Minimal YAML frontmatter parser (stdlib only — no PyYAML dependency)
+# ---------------------------------------------------------------------------
+
+def _strip_inline_comment(text: str) -> str:
+    """
+    Strip a YAML inline comment (unquoted, unbracketed `# ...`) from text.
+
+    Rules:
+    - If text is a double-quoted or single-quoted string, the `#` is part of
+      the value — do not strip.
+    - If text is an inline list `[...]` (bracket not yet closed), the `#`
+      inside the brackets is part of a value — do not strip from within.
+    - Otherwise, the first unquoted, non-bracket-interior `#` that follows
+      whitespace starts a comment and is stripped along with everything after.
+    """
+    # If the value is a quoted scalar, return as-is.
+    stripped = text.strip()
+    if (stripped.startswith('"') and stripped.endswith('"')) or \
+       (stripped.startswith("'") and stripped.endswith("'")):
+        return text
+
+    # Walk character by character; track quote and bracket nesting.
+    in_double = False
+    in_single = False
+    bracket_depth = 0
+    prev_was_space = False
+
+    for idx, ch in enumerate(text):
+        if ch == '"' and not in_single:
+            in_double = not in_double
+        elif ch == "'" and not in_double:
+            in_single = not in_single
+        elif ch == '[' and not in_double and not in_single:
+            bracket_depth += 1
+        elif ch == ']' and not in_double and not in_single:
+            bracket_depth = max(0, bracket_depth - 1)
+        elif ch == '#' and not in_double and not in_single and bracket_depth == 0:
+            # A `#` that is the first char or is preceded by whitespace is a comment.
+            if idx == 0 or prev_was_space:
+                return text[:idx].rstrip()
+        prev_was_space = ch == ' ' or ch == '\t'
+
+    return text
+
+
+def _split_inline_list(inner: str) -> list[str]:
+    """
+    Split a comma-separated inline list content (the part inside [...]) into items.
+
+    Handles quoted strings: commas inside `"..."` or `'...'` are not split
+    points. Explicit REJECT with ValueError if any item contains a quoted
+    string that would be ambiguously split — i.e., if the raw inner contains
+    mixed-quote items that cannot be cleanly handled.
+
+    Strips surrounding quotes from each item after splitting.
+    """
+    items: list[str] = []
+    current: list[str] = []
+    in_double = False
+    in_single = False
+
+    for ch in inner:
+        if ch == '"' and not in_single:
+            in_double = not in_double
+            current.append(ch)
+        elif ch == "'" and not in_double:
+            in_single = not in_single
+            current.append(ch)
+        elif ch == ',' and not in_double and not in_single:
+            items.append("".join(current).strip())
+            current = []
+        else:
+            current.append(ch)
+
+    # Append last item
+    last = "".join(current).strip()
+    if last:
+        items.append(last)
+
+    # Strip surrounding quotes from each item
+    result = []
+    for item in items:
+        s = item.strip()
+        if (s.startswith('"') and s.endswith('"')) or \
+           (s.startswith("'") and s.endswith("'")):
+            result.append(s[1:-1])
+        else:
+            result.append(s)
+    return result
+
+
+def _parse_simple_yaml(text: str) -> dict:
+    """
+    Parse the subset of YAML used in persona frontmatter.
+
+    Supported constructs:
+      key: scalar value          (str; quoted or unquoted)
+      key: [item1, item2]        (inline list of strings)
+      key:                       (followed by '- item' lines — block list)
+
+    Inline YAML comments (# ...) are stripped from unquoted scalars and
+    from values after the closing bracket of inline lists.
+
+    Raises ValueError on unsupported or malformed input.
+    """
+    result: dict = {}
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        # Skip blank lines and comments
+        if not line.strip() or line.strip().startswith("#"):
+            i += 1
+            continue
+
+        if ":" not in line:
+            raise ValueError(f"line {i+1}: expected 'key: value', got {line!r}")
+
+        colon_idx = line.index(":")
+        key = line[:colon_idx].strip()
+        raw_val = line[colon_idx + 1:].strip()
+
+        # Strip inline comment from the raw value (before bracket check so
+        # that `[reviewer] # comment` works correctly).
+        raw_val = _strip_inline_comment(raw_val)
+
+        if raw_val.startswith("[") and raw_val.endswith("]"):
+            # Inline list: [item1, item2] (quote-aware split)
+            inner = raw_val[1:-1]
+            if inner.strip():
+                items = _split_inline_list(inner)
+            else:
+                items = []
+            result[key] = items
+            i += 1
+        elif raw_val == "" and i + 1 < len(lines) and lines[i + 1].lstrip().startswith("- "):
+            # Block list: next lines are '- item'
+            items = []
+            i += 1
+            while i < len(lines) and lines[i].lstrip().startswith("- "):
+                item_raw = lines[i].lstrip()[2:]
+                item_no_comment = _strip_inline_comment(item_raw).strip()
+                item = item_no_comment.strip("'\"")
+                items.append(item)
+                i += 1
+            result[key] = items
+        else:
+            # Scalar — strip optional surrounding quotes
+            val = raw_val.strip("'\"")
+            result[key] = val
+            i += 1
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Frontmatter parsing
+# ---------------------------------------------------------------------------
+
+def _parse_frontmatter(path: Path) -> tuple[dict, str]:
+    """
+    Parse a persona markdown file.
+
+    Returns (frontmatter_dict, body_text).
+    Exits 2 on parse failure or invalid name.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"[personas] cannot read {path}: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    # Expect file to start with '---\n'
+    if not text.startswith("---\n"):
+        print(
+            f"[personas] {path}: missing YAML frontmatter — file must start with '---'",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    # Find the closing '---'
+    rest = text[4:]  # strip opening '---\n'
+    close_idx = rest.find("\n---\n")
+    if close_idx == -1:
+        # Try end-of-file closing marker
+        if rest.endswith("\n---"):
+            yaml_block = rest[:-4]
+            body = ""
+        else:
+            print(
+                f"[personas] {path}: unclosed YAML frontmatter — missing closing '---'",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+    else:
+        yaml_block = rest[:close_idx]
+        body = rest[close_idx + 5:]  # skip '\n---\n'
+
+    try:
+        fm = _parse_simple_yaml(yaml_block)
+    except ValueError as exc:
+        print(f"[personas] {path}: YAML parse error: {exc}", file=sys.stderr)
+        sys.exit(2)
+
+    if not isinstance(fm, dict):
+        print(
+            f"[personas] {path}: frontmatter must be a YAML mapping, got {type(fm).__name__}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    # Reject unknown frontmatter keys (schema declares additionalProperties: false)
+    _KNOWN_FRONTMATTER_KEYS = {"name", "description", "compatible_roles", "contract"}
+    unknown_keys = set(fm.keys()) - _KNOWN_FRONTMATTER_KEYS
+    if unknown_keys:
+        print(
+            f"[personas] {path}: unknown frontmatter key(s): "
+            f"{sorted(unknown_keys)!r} — only "
+            f"{sorted(_KNOWN_FRONTMATTER_KEYS)!r} are allowed. "
+            "Note: 'model', 'runtime', and similar binding axes belong in TOML config, "
+            "not in the persona file.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    # Validate required fields
+    name = fm.get("name")
+    if not isinstance(name, str) or not name:
+        print(f"[personas] {path}: 'name' is required and must be a non-empty string", file=sys.stderr)
+        sys.exit(2)
+
+    if not _is_valid_persona_name(name):
+        print(
+            f"[personas] {path}: invalid persona name {name!r} — "
+            "must match ^[a-z][a-z0-9-]*$ with no trailing hyphen "
+            "(no uppercase, dots, slashes, or leading/trailing hyphens)",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    description = fm.get("description")
+    if not isinstance(description, str) or not description.strip():
+        print(
+            f"[personas] {path}: 'description' is required and must be a non-empty string",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    # Validate optional compatible_roles
+    compatible_roles = fm.get("compatible_roles")
+    if compatible_roles is not None:
+        if not isinstance(compatible_roles, list) or not all(
+            isinstance(r, str) and r for r in compatible_roles
+        ):
+            print(
+                f"[personas] {path}: 'compatible_roles' must be a list of non-empty strings",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
+    # Validate optional contract
+    contract = fm.get("contract")
+    valid_contracts = {"freeform", "review-verdict", "strict-json"}
+    if contract is not None and contract not in valid_contracts:
+        print(
+            f"[personas] {path}: 'contract' must be one of "
+            f"{sorted(valid_contracts)!r}, got {contract!r}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    return fm, body
+
+
+# ---------------------------------------------------------------------------
+# Layer discovery
+# ---------------------------------------------------------------------------
+
+LAYER_BUILTIN = "builtin"
+LAYER_USER_GLOBAL = "user-global"
+LAYER_REPO = "repo"
+
+
+def _discover_layers(
+    repo_root_override: Optional[str] = None,
+) -> list[tuple[str, Path]]:
+    """
+    Return a list of (layer_name, directory_path) in load order.
+
+    Directories that don't exist are included — callers check existence before
+    scanning via _scan_layer.
+
+    Test overrides (for hermetic testing without touching real fs paths):
+      Z_HARNESS_BUILTIN_PERSONAS_DIR  — override layer 1 (builtin)
+      Z_HARNESS_USER_PERSONAS_DIR     — override layer 2 (user-global)
+      Z_HARNESS_REPO_ROOT             — repo root for layer 3 (repo-local)
+    """
+    # Layer 1: builtin
+    builtin_override = os.environ.get("Z_HARNESS_BUILTIN_PERSONAS_DIR", "")
+    if builtin_override:
+        builtin_dir = Path(builtin_override)
+    else:
+        script_dir = Path(__file__).parent
+        harness_root = script_dir.parent
+        builtin_dir = harness_root / "personas" / "builtin"
+
+    # Layer 2: user-global
+    user_override = os.environ.get("Z_HARNESS_USER_PERSONAS_DIR", "")
+    if user_override:
+        user_global_dir = Path(user_override)
+    else:
+        xdg_config = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+        user_global_dir = Path(xdg_config) / "z-harness" / "personas"
+
+    # Layer 3: repo-local
+    repo_personas_override = os.environ.get("Z_HARNESS_REPO_PERSONAS_DIR", "")
+    if repo_personas_override:
+        repo_local_dir = Path(repo_personas_override)
+    elif repo_root_override:
+        repo_local_dir = Path(repo_root_override) / ".z-harness" / "personas"
+    else:
+        repo_env = os.environ.get("Z_HARNESS_REPO_ROOT", "")
+        if repo_env:
+            repo_root = Path(repo_env)
+        else:
+            try:
+                result = subprocess.run(
+                    ["git", "rev-parse", "--show-toplevel"],
+                    capture_output=True, text=True, check=True,
+                )
+                repo_root = Path(result.stdout.strip())
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                repo_root = Path.cwd()
+        repo_local_dir = repo_root / ".z-harness" / "personas"
+
+    return [
+        (LAYER_BUILTIN, builtin_dir),
+        (LAYER_USER_GLOBAL, user_global_dir),
+        (LAYER_REPO, repo_local_dir),
+    ]
+
+
+def _scan_layer(layer_name: str, directory: Path) -> list[dict]:
+    """
+    Scan a single layer directory for *.md persona files.
+
+    Returns list of {name, source_layer, path, _fm} dicts.
+    Files whose frontmatter fails name validation are skipped with a warning.
+    """
+    if not directory.exists() or not directory.is_dir():
+        return []
+
+    results = []
+    for md_file in sorted(directory.glob("*.md")):
+        fm, _body = _parse_frontmatter(md_file)
+        results.append({
+            "name": fm["name"],
+            "source_layer": layer_name,
+            "path": str(md_file),
+            "_fm": fm,
+        })
+    return results
+
+
+def _load_all_layers(
+    repo_root_override: Optional[str] = None,
+) -> list[dict]:
+    """
+    Walk all three layers in order and return every persona entry found.
+
+    Each entry: {name, source_layer, path, _fm}.
+    Entries are returned in load order (builtin first, repo last).
+    """
+    layers = _discover_layers(repo_root_override)
+    all_entries: list[dict] = []
+    for layer_name, directory in layers:
+        all_entries.extend(_scan_layer(layer_name, directory))
+    return all_entries
+
+
+# ---------------------------------------------------------------------------
+# Shared shadow detection helper
+# ---------------------------------------------------------------------------
+
+def _detect_and_emit_shadows(personas_by_name: dict[str, list[dict]]) -> None:
+    """
+    For each name in personas_by_name that appears in more than one layer,
+    emit persona_shadowed via _emit_persona_shadowed (which is already memoized
+    once-per-(process, name) so repeated calls are safe).
+    """
+    for name, entries in personas_by_name.items():
+        if len(entries) > 1:
+            layer_names = [e["source_layer"] for e in entries]
+            winner = entries[-1]
+            _emit_persona_shadowed(name, layer_names, winner["source_layer"])
+
+
+# ---------------------------------------------------------------------------
+# list-personas subcommand
+# ---------------------------------------------------------------------------
+
+def cmd_list_personas(args: list[str]) -> None:
+    """
+    Print JSON array of {name, source_layer, path} — one entry per name (winner only).
+
+    The winner is the last layer in load order that defines the name.
+    Emits persona_shadowed for each name that appears in more than one layer.
+    """
+    if args:
+        print("usage: resolve-persona.py list-personas", file=sys.stderr)
+        sys.exit(2)
+
+    all_entries = _load_all_layers()
+
+    # Collect all entries per name to detect shadowing
+    by_name: dict[str, list[dict]] = {}
+    for entry in all_entries:
+        name = entry["name"]
+        by_name.setdefault(name, []).append(entry)
+
+    # Emit persona_shadowed for any collisions (once per process per name)
+    _detect_and_emit_shadows(by_name)
+
+    output = []
+    for name, entries in sorted(by_name.items()):
+        # Winner is the last entry (highest-priority layer)
+        winner = entries[-1]
+
+        output.append({
+            "name": winner["name"],
+            "source_layer": winner["source_layer"],
+            "path": winner["path"],
+        })
+
+    print(json.dumps(output))
+
+
+# ---------------------------------------------------------------------------
+# where subcommand
+# ---------------------------------------------------------------------------
+
+def cmd_where(args: list[str]) -> None:
+    """
+    Print all layers defining <name>, one path per line, in load order.
+    Exits 1 with actionable error if name not found in any layer.
+
+    Also emits persona_shadowed (once per process per name) when the target
+    persona is defined in more than one layer, so shadow detection is
+    consistent regardless of which subcommand the caller uses.
+    """
+    if len(args) != 1:
+        print("usage: resolve-persona.py where <name>", file=sys.stderr)
+        sys.exit(2)
+
+    target_name = args[0]
+
+    all_entries = _load_all_layers()
+    matches = [e for e in all_entries if e["name"] == target_name]
+
+    if not matches:
+        print(
+            f"[personas] persona {target_name!r} not found in any layer.\n"
+            "Run 'resolve-persona.py list-personas' to see available personas.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # Emit shadow event when multiple layers define this persona
+    if len(matches) > 1:
+        by_name: dict[str, list[dict]] = {target_name: matches}
+        _detect_and_emit_shadows(by_name)
+
+    for entry in matches:
+        print(entry["path"])
+
+
+# ---------------------------------------------------------------------------
+# T007 subcommand stubs
+# ---------------------------------------------------------------------------
+
+def cmd_resolve(args: list[str]) -> None:
+    print("[personas] 'resolve' subcommand is implemented in T007.", file=sys.stderr)
+    sys.exit(2)
+
+
+def cmd_list_bindings(args: list[str]) -> None:
+    print("[personas] 'list-bindings' subcommand is implemented in T007.", file=sys.stderr)
+    sys.exit(2)
+
+
+def cmd_validate(args: list[str]) -> None:
+    print("[personas] 'validate' subcommand is implemented in T007.", file=sys.stderr)
+    sys.exit(2)
+
+
+def cmd_read(args: list[str]) -> None:
+    print("[personas] 'read' subcommand is implemented in T007.", file=sys.stderr)
+    sys.exit(2)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+SUBCOMMANDS = {
+    "list-personas": cmd_list_personas,
+    "where": cmd_where,
+    "resolve": cmd_resolve,
+    "list-bindings": cmd_list_bindings,
+    "validate": cmd_validate,
+    "read": cmd_read,
+}
+
+
+def main() -> None:
+    if len(sys.argv) < 2:
+        print(
+            "usage: resolve-persona.py <subcommand> [args]\n"
+            f"subcommands: {', '.join(sorted(SUBCOMMANDS))}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    subcommand = sys.argv[1]
+    remaining = sys.argv[2:]
+
+    handler = SUBCOMMANDS.get(subcommand)
+    if handler is None:
+        print(
+            f"[personas] unknown subcommand {subcommand!r}\n"
+            f"subcommands: {', '.join(sorted(SUBCOMMANDS))}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    handler(remaining)
+
+
+if __name__ == "__main__":
+    main()

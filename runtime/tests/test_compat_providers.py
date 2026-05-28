@@ -5,11 +5,15 @@ against provider.schema.json via runtime.validate.
 This test surfaces schema-too-strict mistakes before T007-T013 work locks in
 (per audit MAJOR M5).
 
+Also covers compose_argv (scripts/resolve-provider.py) and the extended
+build_env (runtime/dispatch/env.py) added in T004.
+
 To run:
     cd /path/to/repo-root
     python -m pytest runtime/tests/test_compat_providers.py -v
 """
 
+import importlib.util
 import json
 from pathlib import Path
 
@@ -18,6 +22,19 @@ import pytest
 import jsonschema
 
 from runtime.validate import validate
+from runtime.dispatch.env import build_env
+
+# ---------------------------------------------------------------------------
+# Import scripts/resolve-provider.py as a module so compose_argv is callable.
+# ---------------------------------------------------------------------------
+_SCRIPTS_DIR = Path(__file__).parent.parent.parent / "scripts"
+_RESOLVE_PROVIDER_SCRIPT = _SCRIPTS_DIR / "resolve-provider.py"
+_rp_spec = importlib.util.spec_from_file_location(
+    "resolve_provider_script_t004", _RESOLVE_PROVIDER_SCRIPT
+)
+_rp_module = importlib.util.module_from_spec(_rp_spec)  # type: ignore[arg-type]
+_rp_spec.loader.exec_module(_rp_module)  # type: ignore[union-attr]
+compose_argv = _rp_module.compose_argv
 
 
 # Resolve repo root as the directory containing .z-harness/
@@ -147,3 +164,162 @@ def test_schema_invariants_enforced(tmp_path):
     finally:
         validate_module._CONTRACT_DIR = original_dir
         validate_module._schema_cache.clear()
+
+
+# ---------------------------------------------------------------------------
+# compose_argv tests (T004)
+# ---------------------------------------------------------------------------
+
+# Shared provider fixtures
+_V2_PROVIDER_WITH_MODEL_ARG = {
+    "args_template": ["exec", "-"],
+    "model_arg_template": ["--model", "{model}"],
+    "model_env_var": None,
+    "default_model": "gpt-5-codex",
+}
+
+_V1_PROVIDER_NULL_TEMPLATE = {
+    "args_template": ["exec", "-"],
+    "model_arg_template": None,
+    "model_env_var": None,
+    "default_model": "gpt-5-codex",
+}
+
+
+def test_compose_argv_v2_returns_args_template_plus_model_arg():
+    """compose_argv on a v2 provider returns args_template + rendered model_arg_template."""
+    result = compose_argv(_V2_PROVIDER_WITH_MODEL_ARG, "claude-3-opus")
+    assert result == ["exec", "-", "--model", "claude-3-opus"], (
+        f"Expected args_template + rendered model_arg, got: {result!r}"
+    )
+
+
+def test_compose_argv_v1_null_template_returns_args_template_only():
+    """compose_argv on a v1 provider (null template) returns args_template only — no exception."""
+    result = compose_argv(_V1_PROVIDER_NULL_TEMPLATE, "claude-3-opus")
+    assert result == ["exec", "-"], (
+        f"Expected args_template only for v1 provider, got: {result!r}"
+    )
+
+
+def test_compose_argv_empty_model_falls_back_to_default_model():
+    """compose_argv with effective_model='' uses default_model from provider."""
+    result = compose_argv(_V2_PROVIDER_WITH_MODEL_ARG, "")
+    # default_model is "gpt-5-codex"
+    assert result == ["exec", "-", "--model", "gpt-5-codex"], (
+        f"Expected default_model fallback, got: {result!r}"
+    )
+
+
+def test_compose_argv_none_model_falls_back_to_default_model():
+    """compose_argv with effective_model=None uses default_model from provider."""
+    result = compose_argv(_V2_PROVIDER_WITH_MODEL_ARG, None)
+    assert result == ["exec", "-", "--model", "gpt-5-codex"], (
+        f"Expected default_model fallback, got: {result!r}"
+    )
+
+
+def test_compose_argv_both_empty_raises_value_error():
+    """compose_argv raises ValueError when both effective_model and default_model are empty/null."""
+    provider_no_default = {
+        "args_template": ["run"],
+        "model_arg_template": ["--model", "{model}"],
+        "model_env_var": None,
+        "default_model": None,
+    }
+    with pytest.raises(ValueError):
+        compose_argv(provider_no_default, "")
+
+
+def test_compose_argv_does_not_substitute_partial_placeholder():
+    """{models} (not {model}) is NOT substituted — only exact {model} placeholder."""
+    provider = {
+        "args_template": [],
+        "model_arg_template": ["--filter", "{models}", "--model", "{model}"],
+        "model_env_var": None,
+        "default_model": "gpt-5-codex",
+    }
+    result = compose_argv(provider, "my-model")
+    assert result == ["--filter", "{models}", "--model", "my-model"], (
+        f"Partial placeholder {{models}} should not be substituted, got: {result!r}"
+    )
+
+
+def test_compose_argv_returns_new_list_not_mutating_provider():
+    """compose_argv returns a new list; the original provider dict is not mutated."""
+    provider = dict(_V2_PROVIDER_WITH_MODEL_ARG)
+    original_template = list(provider["args_template"])
+    compose_argv(provider, "test-model")
+    assert provider["args_template"] == original_template, (
+        "compose_argv must not mutate provider['args_template']"
+    )
+
+
+# ---------------------------------------------------------------------------
+# build_env extended tests (T004)
+# ---------------------------------------------------------------------------
+
+
+def test_build_env_model_env_var_set_when_model_arg_template_null():
+    """build_env sets model_env_var when model_arg_template is null and effective_model passed."""
+    provider = {
+        "model_env_var": "OPENAI_MODEL",
+        "model_arg_template": None,
+    }
+    base = {"OTHER": "value"}
+    result = build_env(provider, base_env=base, effective_model="gpt-5-codex")
+    assert result["OPENAI_MODEL"] == "gpt-5-codex", (
+        f"Expected OPENAI_MODEL='gpt-5-codex', got: {result.get('OPENAI_MODEL')!r}"
+    )
+    assert result["OTHER"] == "value"
+
+
+def test_build_env_no_model_env_var_set_when_neither_configured():
+    """build_env returns base_env unchanged (plus CLAUDECODE) when neither model field is set."""
+    provider: dict = {}
+    base = {"SOME_VAR": "val"}
+    result = build_env(provider, base_env=base)
+    assert result["SOME_VAR"] == "val"
+    assert result["CLAUDECODE"] == ""
+    # No extra keys beyond what base has + CLAUDECODE
+    extra_keys = set(result.keys()) - set(base.keys()) - {"CLAUDECODE"}
+    assert not extra_keys, f"Unexpected extra keys: {extra_keys}"
+
+
+def test_build_env_both_model_arg_and_env_var_does_not_set_env_var(capsys):
+    """build_env does NOT set model_env_var when model_arg_template is also set (arg takes precedence)."""
+    provider = {
+        "model_env_var": "MY_MODEL_VAR",
+        "model_arg_template": ["--model", "{model}"],
+    }
+    base: dict = {}
+    result = build_env(provider, base_env=base, effective_model="my-model")
+    assert "MY_MODEL_VAR" not in result, (
+        "model_env_var must not be set when model_arg_template is also present"
+    )
+    # The warning must be emitted to stderr.
+    captured = capsys.readouterr()
+    assert "model_env_var_ignored" in captured.err, (
+        f"Expected 'model_env_var_ignored' in stderr; got: {captured.err!r}"
+    )
+
+
+def test_build_env_no_model_injection_when_effective_model_empty():
+    """build_env does not inject model_env_var when effective_model is empty string."""
+    provider = {
+        "model_env_var": "MY_MODEL_VAR",
+        "model_arg_template": None,
+    }
+    base: dict = {}
+    result = build_env(provider, base_env=base, effective_model="")
+    assert "MY_MODEL_VAR" not in result
+
+
+def test_build_env_backward_compat_no_effective_model():
+    """build_env without effective_model param behaves identically to pre-T004 behavior."""
+    provider = {"auth_env": "MY_TOKEN"}
+    base = {"MY_TOKEN": "secret", "OTHER": "val"}
+    result = build_env(provider, base_env=base)
+    assert result["MY_TOKEN"] == "secret"
+    assert result["OTHER"] == "val"
+    assert result["CLAUDECODE"] == ""
