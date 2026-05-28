@@ -15,31 +15,36 @@
   "confidence": "high",
   "entry_points": [
     {"file": "scripts/resolve-provider.sh", "line": 1, "symbol": "resolve-provider.sh", "kind": "module", "summary": "Thin bash wrapper; single entrypoint for all consultant/reviewer dispatch sites"},
-    {"file": "scripts/resolve-provider.py", "line": 262, "symbol": "main", "kind": "fn", "summary": "Loads configs, merges, validates, checks PATH, enforces invariant, prints JSON descriptor"},
-    {"file": "scripts/resolve-provider.py", "line": 96, "symbol": "load_configs", "kind": "fn", "summary": "Locates and loads global + repo JSON; validates schema version field"},
-    {"file": "scripts/resolve-provider.py", "line": 131, "symbol": "merge_with_shadow", "kind": "fn", "summary": "Per-key merge of global + repo configs with shadow detection and event emission"},
-    {"file": "scripts/resolve-provider.py", "line": 193, "symbol": "resolve", "kind": "fn", "summary": "Role→provider→command lookup with PATH presence check"},
-    {"file": "scripts/resolve-provider.py", "line": 242, "symbol": "check_consultant_distinctness", "kind": "fn", "summary": "Enforces invariant: consultant_primary != consultant_secondary"},
+    {"file": "scripts/resolve-provider.py", "line": 412, "symbol": "main", "kind": "fn", "summary": "Loads configs, merges, validates, checks PATH, enforces invariant, prints JSON descriptor"},
+    {"file": "scripts/resolve-provider.py", "line": 165, "symbol": "load_configs", "kind": "fn", "summary": "Locates and loads global + repo JSON; validates schema version; runs v1->v2 upgrade"},
+    {"file": "scripts/resolve-provider.py", "line": 59, "symbol": "_upgrade_v1_to_v2", "kind": "fn", "summary": "In-memory v1->v2 upgrade: adds model_arg_template/model_env_var/default_model nulls; emits provider_schema_v1_upgraded (memoized per process+path)"},
+    {"file": "scripts/resolve-provider.py", "line": 222, "symbol": "merge_with_shadow", "kind": "fn", "summary": "Per-key merge of global + repo configs across providers/roles/aliases with shadow detection"},
+    {"file": "scripts/resolve-provider.py", "line": 288, "symbol": "resolve", "kind": "fn", "summary": "Role->provider->command lookup with PATH presence check; exits 1 if unresolvable"},
+    {"file": "scripts/resolve-provider.py", "line": 340, "symbol": "check_consultant_distinctness", "kind": "fn", "summary": "Invariant: consultant_primary != consultant_secondary; exits 1 on collision"},
+    {"file": "scripts/resolve-provider.py", "line": 361, "symbol": "compose_argv", "kind": "fn", "summary": "Builds full argv from descriptor + effective_model; renders {model} in model_arg_template; raises ValueError if no model"},
     {"file": "scripts/discover-providers.py", "line": 58, "symbol": "discover", "kind": "fn", "summary": "Probes PATH for known CLIs; returns proposed providers.json dict (never writes)"},
     {"file": "scripts/log-providers.sh", "line": 1, "symbol": "log-providers.sh", "kind": "module", "summary": "Resolves all three roles, prints summary line, emits provider_resolved events"},
     {"file": "runtime/compat.py", "line": 15, "symbol": "resolve_provider", "kind": "fn", "summary": "Python API wrapper around resolve-provider.py for runtime dispatch layer"},
-    {"file": "runtime/contract/provider.schema.json", "line": 1, "symbol": "ProviderRegistry", "kind": "struct", "summary": "JSON Schema Draft 7 for .z-harness/providers.json; permits kind=cli|sdk"}
+    {"file": "runtime/contract/provider.schema.json", "line": 1, "symbol": "ProviderRegistry", "kind": "struct", "summary": "JSON Schema Draft 7 for .z-harness/providers.json; accepts version 1+2; permits kind=cli|sdk; allow_cross_vendor_env field"}
   ],
   "depends_on": ["scripts", "agents"],
   "consumed_by": ["commands", "agents", "runtime-dispatch"],
   "invariants": [
     "consultant_primary and consultant_secondary must resolve to distinct provider names — resolver exits 1 if they collide.",
-    "Repo-local config overrides user-global config per-key (not whole-file). Shadowing emits provider_shadowed event and stderr warning, de-duped per parent process.",
-    "Schema version field must equal exactly 1; any other value causes exit 2.",
+    "Repo-local config overrides user-global config per-key across providers, roles, and aliases sections. Shadowing emits provider_shadowed event and stderr warning, de-duped per parent process.",
+    "Schema version field must be 1 or 2; any other value causes exit 2. Version 1 is upgraded in-memory to v2 automatically.",
     "Every provider entry in the merged config is validated on every resolver call, not just the entry being resolved.",
-    "discover-providers.py never writes files — all writes go through /z-providers-discover with explicit user confirmation."
+    "discover-providers.py never writes files — all writes go through /z-providers-discover with explicit user confirmation.",
+    "compose_argv raises ValueError (not sys.exit) when no model can be resolved from effective_model or provider default_model."
   ],
   "gotchas": [
-    "Schema at runtime/contract/provider.schema.json permits kind='sdk' and optional auth_env/session_resumable, but resolve-provider.py validates only kind='cli' — SDK entries pass schema but cause exit 2 if resolved.",
+    "Schema at runtime/contract/provider.schema.json permits kind='sdk' and optional auth_env/session_resumable/allow_cross_vendor_env, but resolve-provider.py validates only kind='cli' — SDK entries pass schema but cause exit 2 if resolved.",
     "Z_HARNESS_REPO_PROVIDERS env var overrides repo config path entirely, bypassing git-based discovery.",
     "Shadow de-dup stamp file is keyed on PPID, not PID — warning fires once per parent process tree, not once per subshell.",
     "role with no bound provider causes immediate halt with actionable error pointing to /z-providers-discover.",
-    "CLI not on PATH causes exit 1 even if the config entry is otherwise valid."
+    "CLI not on PATH causes exit 1 even if the config entry is otherwise valid.",
+    "_upgrade_v1_to_v2 is memoized per (process, file path) via module-level _v1_upgrade_emitted set — double-emission is prevented when both global and repo configs are v1.",
+    "aliases section is merged per-key but is NOT used by resolve() — it is informational for rename tooling only."
   ],
   "memories": []
 }

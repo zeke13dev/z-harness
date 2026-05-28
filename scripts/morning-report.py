@@ -282,8 +282,30 @@ def _build_test_outcomes(events: list) -> str:
     return "\n".join(lines)
 
 
-def _build_recommended_next(state: dict, run_id: str) -> str:
-    """Build the ## Recommended next section."""
+def _find_halt_event(state: dict, events: list) -> dict:
+    """Return the terminal halt event dict for the halted step, or empty dict."""
+    # Find the halted step_run
+    halted_step = None
+    for sr in state.get("step_runs", []):
+        if sr.get("status") in ("halt", "halted"):
+            halted_step = sr
+            break
+    if halted_step is None:
+        return {}
+
+    step_name = halted_step.get("step", "")
+    position = halted_step.get("position")
+
+    # Look for overnight_step_halt event matching this step
+    for ev in events:
+        if ev.get("kind") == "overnight_step_halt":
+            if ev.get("step") == step_name or ev.get("position") == position:
+                return ev
+    return {}
+
+
+def _build_recommended_next(state: dict, events: list, run_id: str) -> str:
+    """Build the ## Recommended next section, branching on terminal halt event kind."""
     overall_status = state.get("status", "unknown")
     diff_stat = state.get("git_diff_stat_at_end", "")
 
@@ -291,9 +313,57 @@ def _build_recommended_next(state: dict, run_id: str) -> str:
     if overall_status == "complete":
         lines.append("All steps completed successfully. No resume required.")
     else:
-        lines.append(
-            f"Resume with: /z-overnight resume {run_id} after resolving the halt above."
+        halt_ev = _find_halt_event(state, events)
+        halt_reason = halt_ev.get("halt_reason", "")
+        halt_event_payload = halt_ev.get("halt_event", {})
+        # terminal_event_kind from the halted step_run
+        halted_step = next(
+            (sr for sr in state.get("step_runs", []) if sr.get("status") in ("halt", "halted")),
+            {},
         )
+        terminal_kind = halted_step.get("terminal_event_kind", "")
+
+        if halt_reason in ("no_ask_blocked", "unknown_ask_blocked") or terminal_kind in (
+            "no_ask_blocked",
+            "unknown_ask_blocked",
+        ):
+            question_id = halt_event_payload.get("question_id", halt_ev.get("question_id", "(unknown)"))
+            lines.append(
+                "Halted because NO_ASK=halt converted an AskUser call to a halt "
+                f"(question_id: `{question_id}`). No interactive question was asked in the conversation."
+            )
+            lines.append("To unblock, choose one of:")
+            lines.append(
+                f"  (a) Instrument the callsite: run `scripts/lint-askuser.sh --strict` "
+                f"and add `{question_id}` to the registry."
+            )
+            lines.append(
+                f"  (b) Extend the allowlist: add `{question_id}` to "
+                f"`Z_HARNESS_OVERNIGHT_AUTODECIDE` with a chosen answer."
+            )
+            lines.append("  (c) Accept the gap and review manually before resuming.")
+            lines.append(f"Then resume with: /z-overnight resume {run_id}")
+        elif terminal_kind == "slug_collision_halt" or halt_reason == "slug_collision_halt":
+            slug = halt_ev.get("slug", "(unknown)")
+            conflicting = halt_ev.get("conflicting_artifact", "(unknown)")
+            lines.append(
+                f"Halted due to slug collision: slug `{slug}` already has a finished plan "
+                f"(conflicting artifact: `{conflicting}`)."
+            )
+            lines.append("To unblock, choose one of:")
+            lines.append("  (a) Pass a fresh slug for a new run.")
+            lines.append(f"  (b) Resume the prior run: /z-overnight resume {run_id}")
+        elif terminal_kind == "skill_tool_failure" or halt_reason == "skill_tool_failure":
+            error_step = halted_step
+            error_event = error_step.get("error_event", {})
+            message = error_event.get("message", "(no message captured)")
+            lines.append(f"Halted due to a skill tool failure. Captured error: {message}")
+            lines.append("Investigate the root cause before resuming.")
+            lines.append(f"Resume with: /z-overnight resume {run_id}")
+        else:
+            lines.append(
+                f"Resume with: /z-overnight resume {run_id} after resolving the halt above."
+            )
 
     if diff_stat:
         lines.append(f"git diff --stat headline: {diff_stat}")
@@ -328,7 +398,7 @@ def generate_report(slug: str, base_dir: str, run_id: str, state: dict, events: 
 
     # Recommended next
     sections.append("## Recommended next")
-    sections.append(_build_recommended_next(state, run_id))
+    sections.append(_build_recommended_next(state, events, run_id))
 
     # Join sections with double newlines
     return "\n\n".join(sections) + "\n"
@@ -398,62 +468,83 @@ def cmd_generate(slug: str) -> int:
 # Self-test
 # ---------------------------------------------------------------------------
 
-def cmd_self_test() -> int:
-    """Run golden-file comparison against fixture data. Returns exit code."""
-    repo_root = _repo_root()
-    fixtures_dir = os.path.join(
-        repo_root,
-        "z-harness", "overnight-run", "tests", "morning-report-fixtures"
-    )
+def _run_fixture(fixture_dir: str) -> tuple:
+    """Run a single golden-file comparison for the given fixture directory.
 
-    state_path = os.path.join(fixtures_dir, "overnight-state.json")
-    events_path = os.path.join(fixtures_dir, "events.jsonl")
-    golden_path = os.path.join(fixtures_dir, "MORNING_REPORT.md.golden")
+    Returns (passed: bool, label: str, diff_lines: list).
+    """
+    import difflib
 
-    # Validate fixture files exist
+    state_path = os.path.join(fixture_dir, "overnight-state.json")
+    events_path = os.path.join(fixture_dir, "events.jsonl")
+    golden_path = os.path.join(fixture_dir, "MORNING_REPORT.md.golden")
+
+    label = os.path.basename(fixture_dir)
+
     for p in (state_path, events_path, golden_path):
         if not os.path.isfile(p):
-            print(f"FAIL: fixture file not found: {p}", file=sys.stderr)
-            return 1
+            return False, label, [f"FAIL [{label}]: fixture file not found: {p}\n"]
 
-    # Load fixtures
     try:
         state = _load_state(state_path)
     except json.JSONDecodeError as exc:
-        print(f"FAIL: Could not parse fixture overnight-state.json: {exc}", file=sys.stderr)
-        return 1
+        return False, label, [f"FAIL [{label}]: Could not parse overnight-state.json: {exc}\n"]
 
     events = _load_events(events_path)
 
-    # Determine slug and run_id from fixture state
-    # The fixture run_id is derived from the overnight_start event or we use a fixed value
     overnight_start = next(
         (e for e in events if e.get("kind") == "overnight_start"), {}
     )
-    slug = overnight_start.get("slug", "my-slug")
-    # run_id is the value in the "run" field of overnight_start event
-    run_id = overnight_start.get("run", "20260528T220000Z-overnight-my-slug")
-    base = fixtures_dir  # dummy base for self-test (not used for path in generate_report)
+    slug = overnight_start.get("slug", "unknown-slug")
+    run_id = overnight_start.get("run", f"20260528T000000Z-overnight-{slug}")
 
-    actual = generate_report(slug, base, run_id, state, events)
+    actual = generate_report(slug, fixture_dir, run_id, state, events)
 
     with open(golden_path, "r", encoding="utf-8") as fh:
         expected = fh.read()
 
     if actual == expected:
-        print("PASS: golden-file comparison passed")
-        return 0
+        return True, label, []
 
-    # Show diff
-    import difflib
     diff = list(difflib.unified_diff(
         expected.splitlines(keepends=True),
         actual.splitlines(keepends=True),
-        fromfile="expected (MORNING_REPORT.md.golden)",
-        tofile="actual (generated)",
+        fromfile=f"expected ({label}/MORNING_REPORT.md.golden)",
+        tofile=f"actual (generated for {label})",
     ))
-    print("FAIL: generated output differs from golden", file=sys.stderr)
-    print("".join(diff), file=sys.stderr)
+    return False, label, diff
+
+
+def cmd_self_test() -> int:
+    """Run golden-file comparisons against all fixture data. Returns exit code."""
+    repo_root = _repo_root()
+    fixtures_base = os.path.join(
+        repo_root,
+        "z-harness", "overnight-run", "tests", "morning-report-fixtures"
+    )
+
+    # The root fixture dir is the primary (no_ask_blocked halt) case.
+    # Sub-directories are additional halt-kind variants.
+    fixture_dirs = [fixtures_base]
+    if os.path.isdir(fixtures_base):
+        for entry in sorted(os.listdir(fixtures_base)):
+            sub = os.path.join(fixtures_base, entry)
+            if os.path.isdir(sub) and os.path.isfile(os.path.join(sub, "MORNING_REPORT.md.golden")):
+                fixture_dirs.append(sub)
+
+    overall_pass = True
+    for fixture_dir in fixture_dirs:
+        passed, label, diff_lines = _run_fixture(fixture_dir)
+        if passed:
+            print(f"PASS [{label}]: golden-file comparison passed")
+        else:
+            overall_pass = False
+            print(f"FAIL [{label}]: generated output differs from golden", file=sys.stderr)
+            print("".join(diff_lines), file=sys.stderr)
+
+    if overall_pass:
+        print("PASS: all fixtures passed")
+        return 0
     return 1
 
 

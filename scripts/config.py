@@ -1640,42 +1640,58 @@ def cmd_check_no_ask(args: list[str]) -> None:
     sys.exit(0)
 
 
+def _toml_write_scalar(lines: list, k: str, v: object) -> None:
+    """Append a single TOML key = value line to ``lines``."""
+    if isinstance(v, str):
+        lines.append(f'{k} = "{v}"\n')
+    elif isinstance(v, bool):
+        lines.append(f'{k} = {"true" if v else "false"}\n')
+    else:
+        lines.append(f"{k} = {v}\n")
+
+
 def _toml_write(path: Path, data: dict) -> None:
     """
     Write ``data`` to ``path`` atomically via tmp+rename.
 
-    Supports the two-level flat schema used by z-harness config:
+    Supports up to three-level table nesting:
       schema_version = 1
 
       [section]
       key = "value"
 
-    Only handles str values at the section level; schema_version is always int.
+      [section.subsection.role]
+      key = "value"
+
+    Only handles str, bool, and int values at leaf level.
     Raises OSError if the write fails (caller handles exit 4).
     """
     lines: list[str] = []
     # Write top-level scalars first (only schema_version in practice)
     for k, v in data.items():
         if not isinstance(v, dict):
-            if isinstance(v, str):
-                lines.append(f'{k} = "{v}"\n')
-            elif isinstance(v, bool):
-                lines.append(f'{k} = {"true" if v else "false"}\n')
-            else:
-                lines.append(f"{k} = {v}\n")
+            _toml_write_scalar(lines, k, v)
 
     # Write each section
     for section, sv in data.items():
         if not isinstance(sv, dict):
             continue
-        lines.append(f"\n[{section}]\n")
-        for sk, sv2 in sv.items():
-            if isinstance(sv2, str):
-                lines.append(f'{sk} = "{sv2}"\n')
-            elif isinstance(sv2, bool):
-                lines.append(f'{sk} = {"true" if sv2 else "false"}\n')
-            else:
-                lines.append(f"{sk} = {sv2}\n")
+        # Check if any values in this section are nested dicts (3-level tables)
+        has_nested = any(isinstance(sv2, dict) for sv2 in sv.values())
+        if not has_nested:
+            lines.append(f"\n[{section}]\n")
+            for sk, sv2 in sv.items():
+                _toml_write_scalar(lines, sk, sv2)
+        else:
+            # 3-level: emit [section.subsection.role] headers with leaf pairs
+            # (used by [roles.<command>.<role>] tables)
+            for sub_key, sub_val in sv.items():
+                if isinstance(sub_val, dict):
+                    for role_key, role_val in sub_val.items():
+                        if isinstance(role_val, dict):
+                            lines.append(f"\n[{section}.{sub_key}.{role_key}]\n")
+                            for leaf_k, leaf_v in role_val.items():
+                                _toml_write_scalar(lines, leaf_k, leaf_v)
 
     content = "".join(lines)
     parent = path.parent
@@ -1821,6 +1837,79 @@ def cmd_should_notify(args: list[str]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Migrate subcommand
+# ---------------------------------------------------------------------------
+
+_PROVIDER_RENAME: dict[str, str] = {
+    "codex": "codex-cli",
+    "gemini": "gemini-cli",
+    "claude": "claude-cli",
+}
+
+
+def _migrate_roles_data(data: dict) -> tuple[dict, int]:
+    """
+    Walk ``data["roles"]`` and rewrite old provider names in ``runtime`` fields.
+
+    Returns ``(mutated_data, rewrite_count)`` where ``rewrite_count`` is the
+    number of values that were actually changed.  The input dict is mutated
+    in-place and also returned.
+    """
+    count = 0
+    roles = data.get("roles")
+    if not isinstance(roles, dict):
+        return data, 0
+    for _cmd, cmd_val in roles.items():
+        if not isinstance(cmd_val, dict):
+            continue
+        for _role, role_val in cmd_val.items():
+            if not isinstance(role_val, dict):
+                continue
+            old = role_val.get("runtime")
+            if isinstance(old, str) and old in _PROVIDER_RENAME:
+                role_val["runtime"] = _PROVIDER_RENAME[old]
+                count += 1
+    return data, count
+
+
+def cmd_migrate(_args: list[str]) -> None:
+    """
+    migrate
+
+    Rewrites old provider names (codex, gemini, claude) in any
+    ``roles.*.runtime`` config value to the new ``-cli`` form.  Applied to
+    both the global (~/.config/z-harness/config.toml) and project
+    (.z-harness/config.toml) layers.  Layers that do not exist are skipped.
+
+    Atomic via temp-file rename.  Idempotent — running twice is a no-op.
+    Exit 0 always unless an I/O error occurs (exit 4).
+    """
+    layers: list[tuple[str, Path]] = [
+        ("global", _global_config_path()),
+        ("project", _repo_config_path(require_exists=False)),
+    ]
+
+    for label, path in layers:
+        if not path.exists():
+            continue
+        data = _load_toml(path)
+        if data is None:
+            continue
+        data, count = _migrate_roles_data(data)
+        if count == 0:
+            continue
+        try:
+            _toml_write(path, data)
+        except OSError as exc:
+            print(
+                f"[config] migrate: cannot write {path}: {exc}",
+                file=sys.stderr,
+            )
+            sys.exit(4)
+        print(f"[config] migrate: {label} — rewrote {count} runtime value(s) in {path}")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -1828,7 +1917,7 @@ def main() -> None:
     if len(sys.argv) < 2:
         print(
             "usage: config.py <get|export-env|ensure-defaults|explain|should-notify"
-            "|list-question-ids|resolve-question|check-no-ask|set> [args...]",
+            "|list-question-ids|resolve-question|check-no-ask|set|migrate> [args...]",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -1854,11 +1943,13 @@ def main() -> None:
         cmd_check_no_ask(args)
     elif subcommand == "set":
         cmd_set(args)
+    elif subcommand == "migrate":
+        cmd_migrate(args)
     else:
         print(
             f"[config] unknown subcommand {subcommand!r}; "
             "valid: get, export-env, ensure-defaults, explain, should-notify, "
-            "list-question-ids, resolve-question, check-no-ask, set",
+            "list-question-ids, resolve-question, check-no-ask, set, migrate",
             file=sys.stderr,
         )
         sys.exit(2)

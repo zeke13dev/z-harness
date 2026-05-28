@@ -360,13 +360,7 @@ If the Skill call above raised:
 1. `unset Z_HARNESS_NO_ASK` (ensure cleared even on exception path).
 2. Set `STEP_STATUS = "error"`.
 3. Set `ERROR_EVENT = {kind: "skill_tool_failure", message: "<SKILL_FAILURE_MSG>", position: <CURSOR>, step: "<STEP_NAME>"}`.
-4. Log `overnight_step_error`:
-   ```bash
-   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN_ID" overnight_step_error \
-     "$(python3 -c "import json,sys; print(json.dumps({'step':sys.argv[1],'position':int(sys.argv[2]),'error_event':json.loads(sys.argv[3])}))" \
-        "$STEP_NAME" "$CURSOR" "$(printf '%s' "$ERROR_EVENT" | python3 -c 'import json,sys; print(sys.stdin.read())')")"
-   ```
-5. Jump to Step 3.10 (terminal handling for this step).
+4. Jump to Step 3.10 (terminal handling for this step). Step 3.11 is the single emission point for `overnight_step_error`.
 
 **No retry on transient failure.** The user resumes via `/z-overnight resume <RUN_ID>`.
 
@@ -385,8 +379,25 @@ NEW_COUNT="$(printf '%s\n' "$NEW_DIRS" | grep -c '[^[:space:]]' || echo 0)"
 ```
 
 - If `NEW_COUNT == 1` → `SUB_RUN_ID="$NEW_DIRS"`. Proceed to 3.9.
-- If `NEW_COUNT == 0` → set `STEP_STATUS = "error"`, `ERROR_EVENT = {kind: "run_id_ambiguous", reason: "no new archive dir", new: []}`. Jump to 3.10.
-- If `NEW_COUNT > 1` → set `STEP_STATUS = "error"`, `ERROR_EVENT = {kind: "run_id_ambiguous", reason: "multiple new archive dirs", new: [<list>]}`. Jump to 3.10.
+- If `NEW_COUNT == 0` → emit `run_id_ambiguous` as a top-level event, then set `STEP_STATUS` / `ERROR_EVENT`, and jump to 3.10:
+  ```bash
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN_ID" run_id_ambiguous \
+    "$(printf '{"step":"%s","position":%d,"reason":"no new archive dir","new":[]}' \
+       "$STEP_NAME" "$CURSOR")"
+  STEP_STATUS="error"
+  ERROR_EVENT="$(printf '{"kind":"run_id_ambiguous","reason":"no new archive dir","new":[]}' )"
+  # Jump to Step 3.10
+  ```
+- If `NEW_COUNT > 1` → emit `run_id_ambiguous` as a top-level event, then set `STEP_STATUS` / `ERROR_EVENT`, and jump to 3.10:
+  ```bash
+  NEW_DIRS_JSON="$(printf '%s\n' "$NEW_DIRS" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().splitlines()))')"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN_ID" run_id_ambiguous \
+    "$(printf '{"step":"%s","position":%d,"reason":"multiple new archive dirs","new":%s}' \
+       "$STEP_NAME" "$CURSOR" "$NEW_DIRS_JSON")"
+  STEP_STATUS="error"
+  ERROR_EVENT="$(printf '{"kind":"run_id_ambiguous","reason":"multiple new archive dirs","new":%s}' "$NEW_DIRS_JSON")"
+  # Jump to Step 3.10
+  ```
 
 ### Step 3.9 — Classify the sub-run (SPEC C6)
 
@@ -544,46 +555,23 @@ Write flock-guarded tmp+rename.
 
 Write `$BASE/MORNING_REPORT.md`. This file is overwritten on every chain run. Because Step 4.2 has already committed the final state, `overnight-state.json` now contains the correct `status` and `ended_at` values.
 
-The report generator is `scripts/morning-report.py` (from T013). Since T013 is not yet implemented, use the placeholder:
+Invoke the report generator directly:
 
 ```bash
-# [T013] python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/morning-report.py" "$Z_HARNESS_SLUG"
-```
+MORNING_REPORT_EXIT=0
+MORNING_REPORT_STDERR=""
+MORNING_REPORT_STDERR="$(
+  python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/morning-report.py" \
+    "$Z_HARNESS_SLUG" 2>&1 >/dev/null
+)" || MORNING_REPORT_EXIT=$?
 
-Until T013 ships, write MORNING_REPORT.md inline with the five required sections, reading data from `overnight-state.json`:
-
-```markdown
-# MORNING_REPORT — <slug> — <RUN_ID>
-
-## Chain summary
-- Chain: <step1 → step2 → ...>
-- Started: <state.started_at>
-- Ended: <state.ended_at>
-- Status: <complete | halted-at-step-<N> | errored-at-step-<N>>
-- HEAD at start / end: <state.head_sha_at_start> / <current git rev-parse HEAD>
-
-## Phase results
-| # | Step | RUN_ID | Wall (ms) | Status | Terminal event |
-|---|------|--------|-----------|--------|---------------|
-<one row per step_run, populated from overnight-state.json>
-
-## Unilateral decisions
-<List any overnight_decision events from $BASE/archive/$RUN_ID/events.jsonl; format as table:>
-| Step | question_id | chosen | rule_id | source | strength |
-|------|-------------|--------|---------|--------|----------|
-<If no overnight_decision events, write: (none)>
-
-## Test outcomes
-<If any step was "test" or "implement-all", cite the path to its events.jsonl:>
-<e.g. "See $BASE/archive/<sub-run-id>/events.jsonl for test results.">
-<If no test step ran, write: (no test step in chain)>
-
-## Recommended next
-<Based on OVERALL_STATUS:>
-<If complete: "All steps completed. Review git diff:\ngit diff --stat HEAD~<n> HEAD">
-<If halted:   "Resume with: /z-overnight resume <RUN_ID> after answering the halt question above.">
-<If errored:  "Step '<STEP_NAME>' failed. Check events.jsonl at: $BASE/archive/$RUN_ID/events.jsonl\nFix the underlying issue, then: /z-overnight resume <RUN_ID>">
-git diff --stat headline: <state.git_diff_stat_at_end or "(none yet)">
+if [[ "$MORNING_REPORT_EXIT" -ne 0 ]]; then
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN_ID" morning_report_failure \
+    "$(printf '{"exit_code":%d,"stderr":"%s"}' \
+       "$MORNING_REPORT_EXIT" \
+       "$(printf '%s' "$MORNING_REPORT_STDERR" | head -c 200 | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))[1:-1]' 2>/dev/null || true)")"
+  # Best-effort: proceed to lock release regardless of failure.
+fi
 ```
 
 ### Step 4.4 — Log `overnight_end`

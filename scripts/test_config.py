@@ -1989,6 +1989,226 @@ class TestThreeLevelNesting(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Tests for T002: migrate subcommand
+# ---------------------------------------------------------------------------
+
+class TestMigrate(unittest.TestCase):
+    """
+    Covers the `migrate` subcommand acceptance criteria:
+
+    1. Old provider names (codex, gemini, claude) in roles.*.runtime are rewritten
+       to codex-cli, gemini-cli, claude-cli in both global and project layers.
+    2. Idempotent: running migrate twice produces no diff on the second run.
+    3. Existing new-form names (e.g. codex-cli) are not altered.
+    4. Returns exit 0 on success and on no-op (no-match).
+    5. Layers that do not exist are silently skipped.
+    """
+
+    def setUp(self):
+        self.xdg = make_xdg()
+        self.repo = tempfile.mkdtemp(prefix="z-harness-test-migrate-repo-")
+        self.cwd = make_isolation_dir()
+
+    def tearDown(self):
+        shutil.rmtree(self.xdg, ignore_errors=True)
+        shutil.rmtree(self.repo, ignore_errors=True)
+        shutil.rmtree(self.cwd, ignore_errors=True)
+
+    def _global_cfg_path(self) -> Path:
+        return Path(self.xdg) / "z-harness" / "config.toml"
+
+    def _repo_cfg_path(self) -> Path:
+        return Path(self.repo) / ".z-harness" / "config.toml"
+
+    def _run_migrate(self, extra_env=None) -> subprocess.CompletedProcess:
+        env = {
+            "XDG_CONFIG_HOME": self.xdg,
+            "Z_HARNESS_REPO_CONFIG": str(self._repo_cfg_path()),
+        }
+        if extra_env:
+            env.update(extra_env)
+        return run(["migrate"], env=env, cwd=self.repo)
+
+    # -------------------------------------------------------------------------
+    # Core rewrite: old names → new names
+    # -------------------------------------------------------------------------
+
+    def test_migrate_rewrites_codex_in_global(self):
+        """migrate rewrites runtime='codex' → 'codex-cli' in global config."""
+        write_global_config(
+            self.xdg,
+            '[roles.z_plan.consultant_primary]\nruntime = "codex"\n',
+        )
+        r = self._run_migrate()
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        content = self._global_cfg_path().read_text()
+        self.assertIn("codex-cli", content)
+        self.assertNotIn('runtime = "codex"', content)
+
+    def test_migrate_rewrites_gemini_in_global(self):
+        """migrate rewrites runtime='gemini' → 'gemini-cli' in global config."""
+        write_global_config(
+            self.xdg,
+            '[roles.z_plan.consultant_primary]\nruntime = "gemini"\n',
+        )
+        r = self._run_migrate()
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        content = self._global_cfg_path().read_text()
+        self.assertIn("gemini-cli", content)
+        self.assertNotIn('runtime = "gemini"', content)
+
+    def test_migrate_rewrites_claude_in_global(self):
+        """migrate rewrites runtime='claude' → 'claude-cli' in global config."""
+        write_global_config(
+            self.xdg,
+            '[roles.z_plan.consultant_primary]\nruntime = "claude"\n',
+        )
+        r = self._run_migrate()
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        content = self._global_cfg_path().read_text()
+        self.assertIn("claude-cli", content)
+        self.assertNotIn('runtime = "claude"', content)
+
+    def test_migrate_rewrites_old_names_in_project(self):
+        """migrate rewrites old runtime names in project (.z-harness) config."""
+        write_repo_config(
+            self.repo,
+            '[roles.z_plan.reviewer]\nruntime = "codex"\n',
+        )
+        r = self._run_migrate()
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        content = self._repo_cfg_path().read_text()
+        self.assertIn("codex-cli", content)
+        self.assertNotIn('runtime = "codex"', content)
+
+    def test_migrate_rewrites_both_layers_simultaneously(self):
+        """migrate rewrites old names in both global and project configs in one run."""
+        write_global_config(
+            self.xdg,
+            '[roles.z_plan.consultant_primary]\nruntime = "codex"\n',
+        )
+        write_repo_config(
+            self.repo,
+            '[roles.z_review.reviewer]\nruntime = "gemini"\n',
+        )
+        r = self._run_migrate()
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        global_content = self._global_cfg_path().read_text()
+        repo_content = self._repo_cfg_path().read_text()
+        self.assertIn("codex-cli", global_content)
+        self.assertIn("gemini-cli", repo_content)
+
+    def test_migrate_mixed_old_and_new_rewrites_only_old(self):
+        """migrate rewrites old names but leaves already-migrated names untouched."""
+        write_global_config(
+            self.xdg,
+            '[roles.z_plan.consultant_primary]\nruntime = "codex"\n'
+            '[roles.z_plan.consultant_secondary]\nruntime = "gemini-cli"\n',
+        )
+        r = self._run_migrate()
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        content = self._global_cfg_path().read_text()
+        # Old name rewritten
+        self.assertIn("codex-cli", content)
+        self.assertNotIn('runtime = "codex"', content)
+        # Already-new name unchanged
+        self.assertIn("gemini-cli", content)
+
+    # -------------------------------------------------------------------------
+    # Idempotency
+    # -------------------------------------------------------------------------
+
+    def test_migrate_idempotent_second_run_no_diff(self):
+        """Running migrate twice produces byte-identical file on second run."""
+        write_global_config(
+            self.xdg,
+            '[roles.z_plan.consultant_primary]\nruntime = "codex"\n',
+        )
+        r1 = self._run_migrate()
+        self.assertEqual(r1.returncode, 0, f"first run stderr={r1.stderr!r}")
+        bytes_after_first = self._global_cfg_path().read_bytes()
+
+        r2 = self._run_migrate()
+        self.assertEqual(r2.returncode, 0, f"second run stderr={r2.stderr!r}")
+        bytes_after_second = self._global_cfg_path().read_bytes()
+
+        self.assertEqual(
+            bytes_after_first, bytes_after_second,
+            "File changed on second migrate run (not idempotent)"
+        )
+
+    def test_migrate_already_migrated_exit_0(self):
+        """migrate on an already-migrated config exits 0 (no-op is not an error)."""
+        write_global_config(
+            self.xdg,
+            '[roles.z_plan.consultant_primary]\nruntime = "codex-cli"\n',
+        )
+        r = self._run_migrate()
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+
+    # -------------------------------------------------------------------------
+    # No-op and missing layers
+    # -------------------------------------------------------------------------
+
+    def test_migrate_no_roles_section_exit_0(self):
+        """migrate with no roles section in config exits 0 (no-op)."""
+        write_global_config(
+            self.xdg,
+            '[notify]\nlevel = "off"\n',
+        )
+        r = self._run_migrate()
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+
+    def test_migrate_missing_both_layers_exit_0(self):
+        """migrate with neither global nor project config exits 0 (skip both)."""
+        # Neither layer exists
+        r = self._run_migrate()
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+
+    def test_migrate_missing_global_only_rewrites_project(self):
+        """migrate with only project config (no global) rewrites project successfully."""
+        write_repo_config(
+            self.repo,
+            '[roles.z_plan.reviewer]\nruntime = "claude"\n',
+        )
+        r = self._run_migrate()
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        content = self._repo_cfg_path().read_text()
+        self.assertIn("claude-cli", content)
+
+    # -------------------------------------------------------------------------
+    # Invariant: non-runtime fields and other config keys are preserved
+    # -------------------------------------------------------------------------
+
+    def test_migrate_preserves_non_runtime_role_fields(self):
+        """migrate does not alter persona or model fields in role tables."""
+        write_global_config(
+            self.xdg,
+            '[roles.z_plan.consultant_primary]\npersona = "my-persona"\nmodel = "opus"\nruntime = "codex"\n',
+        )
+        r = self._run_migrate()
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        content = self._global_cfg_path().read_text()
+        self.assertIn("my-persona", content)
+        self.assertIn("opus", content)
+        self.assertIn("codex-cli", content)
+
+    def test_migrate_preserves_non_roles_config_sections(self):
+        """migrate does not alter notify.level or other 2-level config keys."""
+        write_global_config(
+            self.xdg,
+            '[notify]\nlevel = "off"\n[roles.z_plan.consultant_primary]\nruntime = "codex"\n',
+        )
+        r = self._run_migrate()
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        # Re-read and verify notify.level still resolves correctly (use isolation cwd, no repo config)
+        env = {"XDG_CONFIG_HOME": self.xdg}
+        r_get = run(["get", "notify.level"], env=env, cwd=self.cwd)
+        self.assertEqual(r_get.returncode, 0, f"get stderr={r_get.stderr!r}")
+        self.assertEqual(r_get.stdout.strip(), "off")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

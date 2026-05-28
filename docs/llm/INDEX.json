@@ -171,9 +171,12 @@
         "scripts/resolve-provider.sh",
         "scripts/discover-providers.py",
         "commands/z-providers-discover.md",
-        "docs/human/PROVIDERS.md"
+        "docs/human/PROVIDERS.md",
+        "runtime/compat.py",
+        "runtime/contract/provider.schema.json",
+        "scripts/log-providers.sh"
       ],
-      "last_updated": "2026-05-28T18:03:03Z",
+      "last_updated": "2026-05-28T20:59:29.285775Z",
       "confidence": "high",
       "depends_on": [
         "scripts"
