@@ -9,10 +9,11 @@ Subcommands (T006 scope):
   where <name>        Print all layer paths defining <name>, one per line, in load order.
                       Exits 1 with actionable error if name not found in any layer.
 
-Subcommands (T007 scope):
+Subcommands (T007/T009 scope):
   resolve <command> <role>  Resolve persona/model/runtime triple for a (command, role) pair.
   list-bindings [--command] Walk all configured bindings and print as JSON tree.
-  validate                  Check that all bound personas exist + compatible_roles are known.
+  validate                  Check that all bound personas exist + compatible_roles are known
+                            + contract matches role's expected_contract (T009).
   read <name>               Print frontmatter + body of the winning persona file.
 
 Layer load order (lowest → highest priority — later layer wins per name):
@@ -39,6 +40,20 @@ import sys
 import tomllib
 from pathlib import Path
 from typing import Optional
+
+# ---------------------------------------------------------------------------
+# Role registry — maps role name → expected contract (T009)
+# ---------------------------------------------------------------------------
+
+# Roles that enforce a specific contract for bound personas.
+# If a role is absent, any persona contract (or no contract) is accepted.
+# If a persona omits the `contract` field entirely, it is treated as "any"
+# and passes validation against all roles regardless of expected_contract.
+_ROLE_REGISTRY: dict[str, str] = {
+    "consultant_primary": "freeform",
+    "consultant_secondary": "freeform",
+    "reviewer": "review-verdict",
+}
 
 # ---------------------------------------------------------------------------
 # Name validation
@@ -989,7 +1004,10 @@ def cmd_validate(args: list[str]) -> None:
     Sanity-check all personas + TOML bindings:
     - Each persona's compatible_roles (if declared) maps to known role names.
     - All default bindings reference existing personas.
-    - TODO(T009): contract enforcement against role expected_contract.
+    - Contract enforcement: when a bound persona declares a `contract` field
+      and the role declares an expected_contract in _ROLE_REGISTRY, they must
+      match. Personas that omit `contract` entirely are treated as "any" and
+      pass regardless.
 
     Exit non-zero if any violation found.
     """
@@ -997,14 +1015,10 @@ def cmd_validate(args: list[str]) -> None:
         print("usage: resolve-persona.py validate", file=sys.stderr)
         sys.exit(2)
 
-    # TODO(T009): When role registry is added, enforce contract matching here.
-    # For now, validate persona names + compatible_roles only.
-
     errors: list[str] = []
 
-    # Known roles: from providers.json legacy + default TOML bindings
-    # For T007 scope, treat these three as the known roles.
-    known_roles = {"consultant_primary", "consultant_secondary", "reviewer"}
+    # Known roles: derived from _ROLE_REGISTRY (T009) — single source of truth.
+    known_roles = set(_ROLE_REGISTRY.keys())
 
     # Load all personas
     all_entries = _load_all_layers()
@@ -1025,7 +1039,8 @@ def cmd_validate(args: list[str]) -> None:
                         f"(known: {sorted(known_roles)})"
                     )
 
-    # 2. Check that all default TOML bindings reference existing personas
+    # 2. Check that all default TOML bindings reference existing personas,
+    #    and enforce contract matching for each bound (role, persona) pair.
     global_data = _load_toml_file(_global_toml_path())
     repo_data = _load_toml_file(_repo_toml_path())
 
@@ -1040,12 +1055,31 @@ def cmd_validate(args: list[str]) -> None:
                 if not isinstance(role_fields, dict):
                     continue
                 persona_name = role_fields.get("persona")
-                if persona_name and isinstance(persona_name, str):
-                    if persona_name not in by_name:
+                if not persona_name or not isinstance(persona_name, str):
+                    continue
+
+                # Check persona existence
+                if persona_name not in by_name:
+                    errors.append(
+                        f"[{label} TOML] roles.{cmd_key}.{role_key}.persona = {persona_name!r} "
+                        f"references a persona that does not exist in any layer. "
+                        f"Run 'resolve-persona.py list-personas' to see available personas."
+                    )
+                    continue
+
+                # Contract enforcement (T009): only when the role has an expected_contract
+                # AND the persona explicitly declares a contract (absent = "any" = accept).
+                expected_contract = _ROLE_REGISTRY.get(role_key)
+                if expected_contract is not None:
+                    persona_fm = by_name[persona_name].get("_fm", {})
+                    persona_contract = persona_fm.get("contract")
+                    if persona_contract is not None and persona_contract != expected_contract:
                         errors.append(
                             f"[{label} TOML] roles.{cmd_key}.{role_key}.persona = {persona_name!r} "
-                            f"references a persona that does not exist in any layer. "
-                            f"Run 'resolve-persona.py list-personas' to see available personas."
+                            f"declares contract={persona_contract!r} but role {role_key!r} "
+                            f"requires contract={expected_contract!r}. "
+                            f"Either update the persona's contract field or bind a different persona. "
+                            f"Run 'resolve-persona.py read {persona_name}' to inspect the persona."
                         )
 
     if errors:

@@ -13,6 +13,12 @@ You are a **consultant proxy** for the secondary consultant provider. Your job i
 
 `ROLE=consultant_secondary`
 
+## Expected contract
+
+`expected_contract: freeform`
+
+Personas bound to this role must declare `contract: freeform` (or omit `contract` entirely, which is treated as "any"). Binding a persona with `contract: review-verdict` or `contract: strict-json` to this role will fail `resolve-persona.py validate` with an actionable error.
+
 ## How to resolve and call the provider
 
 ```bash

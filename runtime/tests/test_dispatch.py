@@ -358,6 +358,156 @@ def test_malformed_stream_collects_valid_events_and_records_error(monkeypatch, t
 
 
 # ---------------------------------------------------------------------------
+# T010: Dispatcher.run override kwargs
+# ---------------------------------------------------------------------------
+
+
+def _capture_events(monkeypatch):
+    """Return a (captured list, mock_log_event fn) pair for monkeypatching."""
+    captured: list[tuple[str, dict]] = []
+
+    def mock_log_event(run_id, kind, payload, repo_root, slug=None):
+        captured.append((kind, payload))
+
+    monkeypatch.setattr("runtime.dispatch.dispatcher.log_event", mock_log_event)
+    return captured
+
+
+def test_run_no_kwargs_backward_compat(monkeypatch, tmp_path):
+    """Existing callers (no new kwargs) compile and run unchanged; persona_bound emitted."""
+    captured = _capture_events(monkeypatch)
+
+    driver = _MinimalDriver()
+    provider_config = {"args_template": []}
+    driver.init(provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    result = dispatcher.run(driver, "z-ask", [], provider_config)
+
+    assert result.exit_code == 0
+    kinds = [k for k, _ in captured]
+    assert "dispatch_start" in kinds
+    assert "dispatch_end" in kinds
+    assert "persona_bound" in kinds
+    assert "model_resolved" in kinds
+    # No override event when no kwargs passed.
+    assert "persona_override_used" not in kinds
+
+
+def test_run_persona_override_emits_event(monkeypatch, tmp_path):
+    """Passing persona='X' emits persona_override_used with override_field='persona'."""
+    captured = _capture_events(monkeypatch)
+
+    driver = _MinimalDriver()
+    provider_config = {"args_template": [], "persona": "original-persona"}
+    driver.init(provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    dispatcher.run(driver, "z-ask", [], provider_config, persona="custom-persona")
+
+    override_events = [(k, p) for k, p in captured if k == "persona_override_used"]
+    assert len(override_events) == 1, f"Expected 1 persona_override_used, got {override_events}"
+    _, payload = override_events[0]
+    assert payload["override_field"] == "persona"
+    assert payload["value"] == "custom-persona"
+    assert payload["original"] == "original-persona"
+    assert payload["command_id"] == "z-ask"
+
+
+def test_run_model_override_emits_event(monkeypatch, tmp_path):
+    """Passing model='opus' emits persona_override_used with override_field='model'."""
+    captured = _capture_events(monkeypatch)
+
+    driver = _MinimalDriver()
+    provider_config = {"args_template": [], "model": "sonnet"}
+    driver.init(provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    dispatcher.run(driver, "z-plan", [], provider_config, model="opus")
+
+    override_events = [(k, p) for k, p in captured if k == "persona_override_used"]
+    assert len(override_events) == 1, f"Expected 1 persona_override_used, got {override_events}"
+    _, payload = override_events[0]
+    assert payload["override_field"] == "model"
+    assert payload["value"] == "opus"
+    assert payload["original"] == "sonnet"
+
+
+def test_run_persona_bound_payload_reflects_resolved_triple(monkeypatch, tmp_path):
+    """persona_bound payload contains all three resolved fields after overrides."""
+    captured = _capture_events(monkeypatch)
+
+    driver = _MinimalDriver()
+    provider_config = {
+        "args_template": [],
+        "persona": "old-persona",
+        "model": "haiku",
+        "runtime": "codex-cli",
+    }
+    driver.init(provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    dispatcher.run(
+        driver, "z-implement", [], provider_config,
+        persona="new-persona",
+        model="opus",
+    )
+
+    bound_events = [(k, p) for k, p in captured if k == "persona_bound"]
+    assert len(bound_events) == 1, f"Expected 1 persona_bound, got {bound_events}"
+    _, payload = bound_events[0]
+
+    # Override wins for persona and model.
+    assert payload["persona"] == "new-persona"
+    assert payload["model"] == "opus"
+    # runtime was not overridden — falls back to provider_config.
+    assert payload["runtime"] == "codex-cli"
+    assert payload["command_id"] == "z-implement"
+    # Source per axis.
+    assert payload["source"]["persona"] == "override"
+    assert payload["source"]["model"] == "override"
+    assert payload["source"]["runtime"] == "provider_config"
+
+
+def test_run_persona_bound_no_override_source_is_provider_config(monkeypatch, tmp_path):
+    """When no kwargs passed, persona_bound source reflects provider_config for set axes."""
+    captured = _capture_events(monkeypatch)
+
+    driver = _MinimalDriver()
+    provider_config = {"args_template": [], "persona": "base-persona", "model": "haiku"}
+    driver.init(provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    dispatcher.run(driver, "z-review", [], provider_config)
+
+    bound_events = [(k, p) for k, p in captured if k == "persona_bound"]
+    assert len(bound_events) == 1
+    _, payload = bound_events[0]
+    assert payload["source"]["persona"] == "provider_config"
+    assert payload["source"]["model"] == "provider_config"
+    assert payload["source"]["runtime"] == "none"
+
+
+def test_run_all_three_overrides(monkeypatch, tmp_path):
+    """Passing all three kwargs emits three persona_override_used events."""
+    captured = _capture_events(monkeypatch)
+
+    driver = _MinimalDriver()
+    provider_config = {"args_template": []}
+    driver.init(provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    dispatcher.run(
+        driver, "z-ask", [], provider_config,
+        persona="P", model="M", runtime="R",
+    )
+
+    override_events = [(k, p) for k, p in captured if k == "persona_override_used"]
+    fields = {p["override_field"] for _, p in override_events}
+    assert fields == {"persona", "model", "runtime"}
+
+
+# ---------------------------------------------------------------------------
 # DispatchResult.success
 # ---------------------------------------------------------------------------
 

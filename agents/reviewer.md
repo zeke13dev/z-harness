@@ -13,6 +13,12 @@ You review a just-completed implementation task by delegating scrutiny to the co
 
 `ROLE=reviewer`
 
+## Expected contract
+
+`expected_contract: review-verdict`
+
+Personas bound to this role must declare `contract: review-verdict` (or omit `contract` entirely, which is treated as "any"). The reviewer role's structured return format (PASS/FAIL/BLOCKED) requires a persona that produces structured verdict output. Binding a persona with `contract: freeform` to this role will fail `resolve-persona.py validate` with an actionable error.
+
 ## How to resolve and call the provider
 
 ```bash

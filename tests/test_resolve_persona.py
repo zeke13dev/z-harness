@@ -1070,6 +1070,243 @@ runtime = "codex-cli"
 
 
 # ---------------------------------------------------------------------------
+# T009: role contract enforcement
+# ---------------------------------------------------------------------------
+
+class TestRoleContractEnforcement(unittest.TestCase):
+    """
+    validate hard-fails when a bound persona's contract disagrees with the
+    role's expected_contract from _ROLE_REGISTRY.
+
+    Cases:
+    - contract match → validate passes (exit 0)
+    - contract mismatch → validate fails (exit non-zero) with named error
+    - persona without contract → treated as "any" → passes any role
+    """
+
+    def _setup_env(
+        self,
+        builtin_dir: str,
+        user_dir: str,
+        repo_dir: str,
+        config_dir: str,
+        toml_content: str,
+    ) -> dict:
+        toml_path = Path(config_dir) / "config.toml"
+        _write_toml(toml_path, toml_content)
+        return {
+            "Z_HARNESS_BUILTIN_PERSONAS_DIR": builtin_dir,
+            "Z_HARNESS_USER_PERSONAS_DIR": user_dir,
+            "Z_HARNESS_REPO_PERSONAS_DIR": repo_dir,
+            "Z_HARNESS_REPO_CONFIG": str(toml_path),
+            "XDG_CONFIG_HOME": config_dir,
+            "Z_HARNESS_REPO_PROVIDERS": "/dev/null",
+        }
+
+    def test_contract_match_passes(self):
+        """
+        Binding a reviewer-role persona with contract:review-verdict → validate exits 0.
+
+        This verifies the happy path: matching contracts should not block.
+        Violating this would cause legitimate personas to fail incorrectly.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir, \
+             tempfile.TemporaryDirectory() as config_dir:
+
+            # Persona with contract matching what the reviewer role expects
+            _write_persona(
+                Path(builtin_dir), "correct-reviewer",
+                description="Reviewer persona with correct contract",
+                extra_frontmatter="contract: review-verdict",
+            )
+
+            env = self._setup_env(
+                builtin_dir, user_dir, repo_dir, config_dir,
+                """
+[roles.default.reviewer]
+persona = "correct-reviewer"
+runtime = "codex-cli"
+""",
+            )
+
+            result = _run(["validate"], env_extra=env)
+            self.assertEqual(
+                result.returncode, 0,
+                msg=f"validate must pass when persona contract matches role. stderr={result.stderr!r}",
+            )
+
+    def test_contract_mismatch_fails(self):
+        """
+        Binding codex-default-reviewer (contract:freeform) to reviewer role → validate exits non-zero.
+
+        This is the primary T009 invariant: a freeform persona bound to a
+        review-verdict role is a contract violation and must block startup.
+        This test uses an artificial override (persona with freeform contract
+        bound to the reviewer role, which expects review-verdict).
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir, \
+             tempfile.TemporaryDirectory() as config_dir:
+
+            # Artificial: a persona that declares freeform but is bound to reviewer
+            _write_persona(
+                Path(builtin_dir), "freeform-reviewer",
+                description="Freeform persona incorrectly bound to reviewer role",
+                extra_frontmatter="contract: freeform",
+            )
+
+            env = self._setup_env(
+                builtin_dir, user_dir, repo_dir, config_dir,
+                """
+[roles.default.reviewer]
+persona = "freeform-reviewer"
+runtime = "codex-cli"
+""",
+            )
+
+            result = _run(["validate"], env_extra=env)
+            self.assertNotEqual(
+                result.returncode, 0,
+                msg="validate must exit non-zero when persona contract mismatches role",
+            )
+            # Error message must name both the persona and role + expected contract
+            self.assertIn(
+                "freeform-reviewer", result.stderr,
+                msg=f"Error must name the offending persona. stderr={result.stderr!r}",
+            )
+            self.assertIn(
+                "reviewer", result.stderr,
+                msg=f"Error must name the offending role. stderr={result.stderr!r}",
+            )
+            self.assertIn(
+                "review-verdict", result.stderr,
+                msg=f"Error must state the expected contract. stderr={result.stderr!r}",
+            )
+
+    def test_consultant_role_rejects_review_verdict_contract(self):
+        """
+        Binding a review-verdict persona to consultant_primary → validate fails.
+
+        Symmetric of the above: wrong direction mismatch must also be caught.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir, \
+             tempfile.TemporaryDirectory() as config_dir:
+
+            _write_persona(
+                Path(builtin_dir), "verdict-consultant",
+                description="Review-verdict persona incorrectly bound to consultant",
+                extra_frontmatter="contract: review-verdict",
+            )
+
+            env = self._setup_env(
+                builtin_dir, user_dir, repo_dir, config_dir,
+                """
+[roles.default.consultant_primary]
+persona = "verdict-consultant"
+runtime = "codex-cli"
+""",
+            )
+
+            result = _run(["validate"], env_extra=env)
+            self.assertNotEqual(
+                result.returncode, 0,
+                msg="validate must exit non-zero when review-verdict persona bound to consultant_primary",
+            )
+            self.assertIn(
+                "freeform", result.stderr,
+                msg=f"Error must mention the required 'freeform' contract. stderr={result.stderr!r}",
+            )
+
+    def test_persona_without_contract_passes_any_role(self):
+        """
+        A persona that omits the contract field passes validation for any role.
+
+        This is the "any" semantics: omitting contract = no constraint.
+        If this test fails, users who author minimal personas without contract
+        will be incorrectly blocked.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir, \
+             tempfile.TemporaryDirectory() as config_dir:
+
+            # Persona with NO contract field (minimal persona)
+            _write_persona(
+                Path(builtin_dir), "no-contract-persona",
+                description="Persona without contract field",
+                # No extra_frontmatter — omits contract entirely
+            )
+
+            # Bind to reviewer (which requires review-verdict) — should still pass
+            env = self._setup_env(
+                builtin_dir, user_dir, repo_dir, config_dir,
+                """
+[roles.default.reviewer]
+persona = "no-contract-persona"
+runtime = "codex-cli"
+""",
+            )
+
+            result = _run(["validate"], env_extra=env)
+            self.assertEqual(
+                result.returncode, 0,
+                msg=(
+                    "validate must pass when persona omits contract (treated as 'any'). "
+                    f"stderr={result.stderr!r}"
+                ),
+            )
+
+    def test_contract_mismatch_error_is_actionable(self):
+        """
+        Mismatch error message must include instructions to resolve the problem.
+
+        An actionable error tells the user how to fix it, not just what broke.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir, \
+             tempfile.TemporaryDirectory() as config_dir:
+
+            _write_persona(
+                Path(builtin_dir), "bad-contract-persona",
+                description="Wrong contract persona",
+                extra_frontmatter="contract: freeform",
+            )
+
+            env = self._setup_env(
+                builtin_dir, user_dir, repo_dir, config_dir,
+                """
+[roles.default.reviewer]
+persona = "bad-contract-persona"
+""",
+            )
+
+            result = _run(["validate"], env_extra=env)
+            self.assertNotEqual(result.returncode, 0)
+            # Error must suggest a corrective action
+            actionable_hints = ["resolve-persona.py read", "bind a different persona", "contract field"]
+            found_hint = any(hint in result.stderr for hint in actionable_hints)
+            self.assertTrue(
+                found_hint,
+                msg=(
+                    f"Error message must include an actionable hint. "
+                    f"Expected one of {actionable_hints!r} in stderr. "
+                    f"Got: {result.stderr!r}"
+                ),
+            )
+
+
+# ---------------------------------------------------------------------------
 # T007: read subcommand
 # ---------------------------------------------------------------------------
 

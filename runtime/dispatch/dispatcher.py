@@ -99,6 +99,9 @@ class Dispatcher:
         caller_args: list[str],
         provider_config: dict,
         session_id: str | None = None,
+        persona: str | None = None,
+        model: str | None = None,
+        runtime: str | None = None,
     ) -> DispatchResult:
         """Execute a command via *driver* and return the final result.
 
@@ -135,6 +138,15 @@ class Dispatcher:
                 ``"args_template"`` (list of str).  May contain
                 ``"timeout_s"`` (int, default 300) and ``"auth_env"`` (str).
             session_id: Optional session identifier for resumable dispatches.
+            persona: Optional persona name override.  When set, wins over any
+                TOML binding; emits ``persona_override_used`` with
+                ``override_field="persona"``.
+            model: Optional model name override.  When set, wins over any
+                TOML binding; emits ``persona_override_used`` with
+                ``override_field="model"``.
+            runtime: Optional runtime name override.  When set, wins over any
+                TOML binding; emits ``persona_override_used`` with
+                ``override_field="runtime"``.
 
         Returns:
             :class:`~runtime.dispatch.result.DispatchResult` from
@@ -163,6 +175,67 @@ class Dispatcher:
             "driver": driver_name,
             "command_id": command_id,
             "session_id": session_id,
+        })
+
+        # 3a. Resolve persona/model/runtime overrides and emit events.
+        # Determine the original (provider_config-derived) values for each axis.
+        _pc_persona: str | None = provider_config.get("persona")
+        _pc_model: str | None = provider_config.get("model")
+        _pc_runtime: str | None = provider_config.get("runtime")
+
+        # Emit persona_override_used for each axis that was explicitly overridden.
+        if persona is not None:
+            self._emit("persona_override_used", {
+                "command_id": command_id,
+                "override_field": "persona",
+                "value": persona,
+                "original": _pc_persona,
+            })
+        if model is not None:
+            self._emit("persona_override_used", {
+                "command_id": command_id,
+                "override_field": "model",
+                "value": model,
+                "original": _pc_model,
+            })
+        if runtime is not None:
+            self._emit("persona_override_used", {
+                "command_id": command_id,
+                "override_field": "runtime",
+                "value": runtime,
+                "original": _pc_runtime,
+            })
+
+        # Build the resolved triple (explicit kwargs win over provider_config).
+        _resolved_persona = persona if persona is not None else _pc_persona
+        _resolved_model = model if model is not None else _pc_model
+        _resolved_runtime = runtime if runtime is not None else _pc_runtime
+
+        # Determine source per axis for telemetry.
+        def _axis_source(override_val: str | None, pc_val: str | None) -> str:
+            if override_val is not None:
+                return "override"
+            if pc_val is not None:
+                return "provider_config"
+            return "none"
+
+        self._emit("persona_bound", {
+            "command_id": command_id,
+            "persona": _resolved_persona,
+            "model": _resolved_model,
+            "runtime": _resolved_runtime,
+            "source": {
+                "persona": _axis_source(persona, _pc_persona),
+                "model": _axis_source(model, _pc_model),
+                "runtime": _axis_source(runtime, _pc_runtime),
+            },
+        })
+
+        self._emit("model_resolved", {
+            "command_id": command_id,
+            "model": _resolved_model,
+            "runtime": _resolved_runtime,
+            "source": _axis_source(model, _pc_model),
         })
 
         # 4. Call driver.dispatch.
