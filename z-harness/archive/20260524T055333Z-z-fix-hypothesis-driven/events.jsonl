@@ -1,3 +1,0 @@
-{"ts":"2026-05-24T06:04:43Z","run":"20260524T055333Z-z-fix-hypothesis-driven","kind":"user_wait_start","phase":3,"reason":"awaiting framing choice"}
-{"ts":"2026-05-24T06:17:35Z","run":"20260524T055333Z-z-fix-hypothesis-driven","kind":"user_wait_end","phase":3,"resolution":"hybrid-on-codex-skeleton"}
-{"ts":"2026-05-24T06:17:35Z","run":"20260524T055333Z-z-fix-hypothesis-driven","kind":"brainstorm_run_end","status":"complete","chosen_framing":"codex","ideators_failed":0,"note":"hybrid synthesis with command split"}

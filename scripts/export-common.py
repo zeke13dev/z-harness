@@ -1,3 +1,4 @@
+# DEPRECATED: frozen at v0.1.0. Remove after v0.2.0. See C6-D1.
 """
 export-common.py — shared helpers for the multi-IDE export pipeline.
 
@@ -212,3 +213,12 @@ def output_path_for(repo_root: Path, target: str, kind: str, id: str) -> Path:
 
     relative = kind_map[kind].format(id=id)
     return repo_root / "exports" / target / relative
+
+
+if __name__ == "__main__":
+    import sys
+    print(
+        "[z-harness] WARNING: export-common.py is deprecated and will be removed"
+        " in the next minor release. Use the runtime driver instead.",
+        file=sys.stderr,
+    )

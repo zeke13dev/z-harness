@@ -1,1 +1,0 @@
-{"ts":"2026-05-25T21:19:25Z","run":"20260525T211925Z-memory-self-improve-loop","kind":"research_run_start","slug":"memory-self-improve-loop","z_harness_version":"380aca6","z_harness_dirty":true,"z_harness_branch":"main","question":"Map Nous Research Hermes Agent (Atropos RL + FTS5 memory + Skill Documents) and assess portability into z-harness memory stack"}

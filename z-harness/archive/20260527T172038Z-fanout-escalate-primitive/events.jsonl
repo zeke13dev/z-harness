@@ -1,2 +1,0 @@
-{"ts":"2026-05-27T17:22:24Z","run":"20260527T172038Z-fanout-escalate-primitive","kind":"docs_staleness_halt","stale_pct":38,"threshold":20,"stale":["agents","commands","review-agent","scripts","skills"],"user_choice":"refresh_now"}
-{"ts":"2026-05-27T17:22:25Z","run":"20260527T172038Z-fanout-escalate-primitive","kind":"run_end","status":"paused_for_maintain_docs","phase":"setup"}

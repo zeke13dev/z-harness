@@ -1,6 +1,0 @@
-{"ts":"2026-05-22T05:29:22Z","run":"tasks/per-task-model-selection","kind":"review_start","id":"per-task-model-selection","cycle":1}
-{"ts":"2026-05-22T05:33:55Z","run":"tasks/per-task-model-selection","kind":"review","prompt_chars":8558,"response_chars":121678,"return_chars":2839,"wall_ms":83562}
-{"ts":"2026-05-22T05:33:55Z","run":"tasks/per-task-model-selection","kind":"review_end","id":"per-task-model-selection","cycle":1,"blockers":0,"majors":4,"prompt_chars":8558,"response_chars":121678,"return_chars":2839,"wall_ms":272821}
-{"ts":"2026-05-22T05:36:22Z","run":"tasks/per-task-model-selection","kind":"review_start","id":"per-task-model-selection","cycle":2}
-{"ts":"2026-05-22T05:39:45Z","run":"tasks/per-task-model-selection","kind":"review","prompt_chars":6136,"response_chars":44950,"return_chars":102,"wall_ms":46451}
-{"ts":"2026-05-22T05:39:45Z","run":"tasks/per-task-model-selection","kind":"review_end","id":"per-task-model-selection","cycle":2,"blockers":0,"majors":0,"prompt_chars":6136,"response_chars":44950,"return_chars":102,"wall_ms":203177}

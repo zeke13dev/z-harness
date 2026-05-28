@@ -1,6 +1,11 @@
 ---
 description: Diagnose and patch a misleading skill file — any SKILL.md under .claude/skills/ in the current repo, or any z-harness commands/*.md / agents/*.md when invoked inside the z-harness repo itself. Inline diagnosis note, surgical edit, reviewer safety gate. Repo-agnostic meta-skill — no qt-bot coupling.
 argument-hint: <skill name or path; or describe the failure>
+runtime: c1
+driver_features_required:
+  - subagent
+  - ask_user
+unsupported_driver_behavior: explicit_gate
 ---
 
 You are running **z-harness `/z-skill-fix`** — a meta-command for patching skill / command / agent files that have misled. Treat these files as living documents, not specs.
@@ -9,6 +14,7 @@ Target (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question "Which skill misled, and how?" via their native channel. Silent omission is forbidden. -->
 **If empty** — use `AskUserQuestion` to ask "Which skill misled, and how?" before proceeding.
 
 Bias toward over-triggering: a skill that misled once will mislead again. The cost of a small edit is negligible compared to the cost of repeating the failure across future conversations.
@@ -40,6 +46,7 @@ If the failure originates from a z-harness command/agent and you're NOT inside t
 ## Setup
 
 1. Resolve the target file from `$ARGUMENTS` (skill name, path, or freeform description).
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the file-disambiguation question via their native channel. Silent omission is forbidden. -->
 2. If multiple files plausibly match, use `AskUserQuestion` to disambiguate.
 3. Pick run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-skill-fix`.
 
@@ -109,6 +116,7 @@ git diff -- <patched file> > /tmp/skill-fix-$RUN.patch
 
 Spawn the reviewer:
 
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The reviewer is the correctness safety gate; drivers that skip it must warn the user that the post-edit consistency check has been bypassed. -->
 ```
 Agent(
   subagent_type="reviewer",
@@ -118,6 +126,7 @@ Agent(
 ```
 
 Parse the return:
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the second-failure decision (proceed anyway / patch manually / abandon) via their native channel. Silent omission is forbidden. -->
 - **Blockers/majors** → re-edit. Re-run the reviewer once more. Second failure → halt with `AskUserQuestion` (proceed anyway / patch manually / abandon).
 - **No blockers/majors** → accept.
 
@@ -155,3 +164,19 @@ If the repo's `CLAUDE.md` has an explicit commit-on-every-step rule, mention it;
 - **Never commit on the user's behalf** unless they've explicitly said to.
 - **Never weaken a gate or pushback rule** to make a skill more convenient.
 - **No emojis** in patched skill files.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | yes | Step 5 reviewer |
+| `ask_user` | yes | Empty-args question; Setup step 2 file disambiguation; Step 5 second-failure decision |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

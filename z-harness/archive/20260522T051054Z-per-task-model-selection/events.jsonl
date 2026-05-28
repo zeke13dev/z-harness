@@ -1,2 +1,0 @@
-{"ts":"2026-05-22T05:11:41Z","run":"20260522T051054Z-per-task-model-selection","kind":"light_run_start","z_harness_version":"aaa6f80","z_harness_dirty":true,"z_harness_branch":"main","task":"per-task model selection via Haiku classifier"}
-{"ts":"2026-05-22T05:40:15Z","run":"20260522T051054Z-per-task-model-selection","kind":"light_run_end","status":"shipped","files_changed":11,"review_cycles":2}

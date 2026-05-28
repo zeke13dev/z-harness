@@ -1,5 +1,10 @@
 ---
 description: Orchestrate implementation of ALL pending tasks in z-harness/TASKS.md, spawning a fresh implementer subagent per task and a reviewer per task. Halts on blockers, retries once on review failure, push-notifies user on every gate.
+runtime: c1
+driver_features_required:
+  - subagent
+  - ask_user
+unsupported_driver_behavior: explicit_gate
 ---
 
 You are the **z-harness `/z-implement-all`** orchestrator. Your job is to drive the task queue to completion without losing the per-task fresh-context guarantee. You do not implement code yourself — you delegate each task to a fresh `implementer` subagent and each review to a fresh `reviewer` subagent.
@@ -35,6 +40,7 @@ Both `--ack` and `--force-partial` are inert for legacy (single-slug) plans and 
    - Also check for the legacy flat layout (`z-harness/TASKS.md` directly).
    - Zero candidates → tell user to run `/z-plan` first; abort.
    - One candidate → use it.
+   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug-selection question via their native channel. Silent omission is forbidden. -->
    - Multiple candidates → `AskUserQuestion` to pick. Mixed legacy + tree-rooted slugs are allowed in the same `/z-implement-all` invocation: the user picks one, validation/expansion below depends on its kind.
    - Export `Z_HARNESS_SLUG=<slug>` (or leave unset for legacy flat) and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")`.
 
@@ -111,7 +117,18 @@ Both `--ack` and `--force-partial` are inert for legacy (single-slug) plans and 
         ```
         Continue.
 
-   **2c. Expand tree-rooted slug into cluster sequence.** On all validations passing, iterate `clusters_to_run` **sequentially**. For each cluster ID in the list, look up its row in the parsed Clusters table and read the `Path` column verbatim — this is the canonical BASE for the cluster (`BASE = <Path value>`). Do **not** synthesize `BASE = $Z_HARNESS_PLAN_DIR/<cluster-id>/` from the ID; the MANIFEST's `Path` column is the source of truth (it may differ from the naive form). Validate that the lookup resolves to exactly one row per ID (already guaranteed by 2b.4's bijection check). Run the full main loop (steps 1–8) on that cluster's `BASE/TASKS.md`, then advance to the next cluster. Within each cluster, the existing N=3 parallel-batching applies as today (intra-cluster parallelism honored; cross-cluster parallelism is v2).
+   **2c. Expand tree-rooted slug into cluster sequence.** On all validations passing, iterate `clusters_to_run` sequentially by default, with the optimization below. For each cluster ID in the list, look up its row in the parsed Clusters table and read the `Path` column verbatim — this is the canonical BASE for the cluster (`BASE = <Path value>`). Do **not** synthesize `BASE = $Z_HARNESS_PLAN_DIR/<cluster-id>/` from the ID; the MANIFEST's `Path` column is the source of truth (it may differ from the naive form). Validate that the lookup resolves to exactly one row per ID (already guaranteed by 2b.4's bijection check). Run the full main loop (steps 1–8) on that cluster's `BASE/TASKS.md`, then advance to the next cluster. Within each cluster, the existing N=3 parallel-batching applies as today (intra-cluster parallelism honored).
+
+   **Parallel-pair optimization (N=2 cross-cluster dispatch).** When the SHARED-CONCERNS.md frontmatter read in step 2b.5 returned `overlap_count: 0` (no file-path overlaps anywhere in the plan), dispatch the next two adjacent clusters in `clusters_to_run` in a single message as parallel `Agent()` calls rather than serially:
+   1. Before each iteration, check whether there are ≥ 2 remaining clusters in `clusters_to_run` AND `overlap_count == 0` from the already-parsed SHARED-CONCERNS.md frontmatter (no re-parse needed — the value was captured in 2b.5).
+   2. If both conditions hold, emit a `cross_cluster_parallel` event and dispatch the pair in one message:
+      ```bash
+      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" cross_cluster_parallel \
+        "$(printf '{"slug":"%s","cluster_ids":["%s","%s"],"overlap_count":0}' "$Z_HARNESS_SLUG" "$CLUSTER_A_ID" "$CLUSTER_B_ID")"
+      ```
+      Then dispatch both clusters' main loops as parallel `Agent()` calls in a single message. After both complete, advance the iterator by 2.
+   3. Any other case (fewer than 2 remaining clusters, or `overlap_count != 0`) → serial dispatch as before. N=3 parallel cross-cluster dispatch remains v2.
+   4. **Regression invariant:** a plan whose SHARED-CONCERNS.md frontmatter has `overlap_count != 0` MUST run clusters serially regardless of actual file-level overlap details — the global count is the conservative guard in v1.
 
    **2d. If chosen slug is legacy (TASKS.md directly under it, no MANIFEST.md),** behavior is unchanged: a single `BASE` for the whole run, no tree validation, `--ack` and `--force-partial` are no-ops.
 
@@ -157,6 +174,7 @@ Both `--ack` and `--force-partial` are inert for legacy (single-slug) plans and 
      ```json
      {"framework": "<pytest|cargo|jest|...>", "cmd_template": "<template>", "set_at": "<ISO ts>"}
      ```
+   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the test-runner template question via their native channel. Silent omission is forbidden. -->
    This is asked exactly once per slug; it's a per-plan cache so different plans can target different test frameworks.
 
 ## Compaction breakpoint policy
@@ -264,6 +282,7 @@ Scan the **entire task block** (title, Files, Depends, Acceptance — every line
 
 **Phase markers:** Phase F tasks (T050+) — explicitly wall-clock-bound, skip entirely (do not even ask, just report at finalize).
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the skip-flagged task decision (skip / run myself / defer / override) via their native channel. Silent omission is forbidden. -->
 When halting on a skip-flagged task, immediately push-notify (fires regardless of notification level; see [docs/human/config.md](docs/human/config.md)) and use `AskUserQuestion` with options:
 - **Skip entirely** — leave `[ ]`, exclude from this run's eligibility for the rest of the loop, continue with other eligible tasks.
 - **I'll run it myself** — leave `[ ]`, exclude for now; user will mark `[x]` manually when done, then re-invoke `/z-implement-all` to resume.
@@ -309,6 +328,7 @@ If INDEX.json doesn't exist or no concept matches, `relevant_docs` is empty (no 
 
 Spawn the precheck before any code is written:
 
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The spec-precheck catches spec-drift before implementation; drivers that skip it should warn the user that spec validation is unavailable. -->
 ```
 Agent(
   subagent_type="spec-precheck",
@@ -329,6 +349,7 @@ The precheck is cheap (≤30s) and saves 30-60 minutes per spec-drift incident �
 
 ### 5. Spawn implementer (fresh context)
 
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The implementer subagent performs all code edits; drivers that skip it must warn the user that task implementation has been bypassed. -->
 ```
 Agent(
   subagent_type="implementer",
@@ -343,6 +364,7 @@ Agent(
 
 **REMOTE_VERIFY pre-dispatch.** If the task block contains a `**REMOTE_VERIFY:**` line, before parsing the implementer's return, dispatch the `remote-runner` (Haiku) subagent with the verify command. If the remote build fails, treat the implementer return as if it had `STATUS: unable_to_complete` and present the build log excerpt to the user.
 
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The remote-runner verifies the build on the remote host; drivers that skip it should treat REMOTE_VERIFY tasks as unable_to_complete. -->
 ```
 Agent(
   subagent_type="remote-runner",
@@ -354,6 +376,7 @@ Agent(
 Parse the implementer's return per the `STATUS:` block. Branches:
 
 - `STATUS: ok` → go to step 6 (review)
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface implementer halt questions (needs_clarification / spec_problem / decision_needed) via their native channel. Silent omission is forbidden. -->
 - `STATUS: needs_clarification` → halt queue, push-notify, present the question to the user via `AskUserQuestion`. After answer, update SPEC.md if appropriate, then re-spawn implementer with the resolved info.
 - `STATUS: spec_problem` → halt queue, push-notify, escalate to user. Likely needs SPEC patch before any further tasks proceed.
 - `STATUS: decision_needed` → halt queue, push-notify, present the decision + options via `AskUserQuestion`. This is the "major design decision must be approved by user" gate. Record the decision in `$BASE/archive/$RUN/decisions-late.md`. After answer, re-spawn implementer.
@@ -367,6 +390,35 @@ git diff > $BASE/archive/tasks/<task-id>/diff.patch 2>/dev/null \
   || ls -la <implementer's FILES_CHANGED> > $BASE/archive/tasks/<task-id>/diff.patch
 ```
 
+**Skip-rereview on clean cycle-1.** If `CYCLE == 2` AND the cycle-1 reviewer returned `blockers=0` AND `majors=0`, do **not** spawn the reviewer. Instead, skip directly to the test step (step 7b) and then proceed to step 8.
+
+Rationale: `needs_clarification` and `decision_needed` halts are processed in step 5 — before the cycle-1 review ever fires. So if CYCLE is now 2 and cycle-1 was clean, the only reason the implementer re-ran was a non-review-side halt (e.g. the user answered a clarification or approved a design decision). Re-firing the reviewer is a no-op because the prior review found nothing actionable. The guard intentionally fires regardless of why the implementer re-ran; a clean cycle-1 means no review-side issue exists, and re-reviewing an unchanged-from-review-perspective diff cannot surface findings. This is the savings — explicit, not a bug.
+
+Emit a `review_skipped_clean_cycle1` log event before proceeding to step 7b:
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
+  "tasks/<task-id>" review_skipped_clean_cycle1 \
+  "$(printf '{"id":"%s","cycle":%d,"prior_blockers":0,"prior_majors":0}' \
+     "<task-id>" "$CYCLE")"
+```
+
+This recovers ~57s median reviewer wall-time per task on the resume-after-clarification path.
+
+**Skip-rereview on identical diff.** If the clean-cycle-1 guard above did not fire, before spawning the reviewer on cycle ≥ 2, hash both the current and prior diff:
+
+```bash
+NEW_HASH="$(shasum -a 256 "$BASE/archive/tasks/<id>/diff.patch" | awk '{print $1}')"
+OLD_HASH="$(shasum -a 256 "$BASE/archive/tasks/<id>/diff-v$((CYCLE-1)).patch" | awk '{print $1}')"
+```
+
+If `NEW_HASH == OLD_HASH`, the implementer didn't actually change anything (it pushed back on the prior reviewer's findings rather than editing). **Do not spawn the reviewer.** Instead halt the track with reason `no_change_on_retry`, push-notify, and
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the no_change_on_retry decision (override / patch manually / abandon) via their native channel. Silent omission is forbidden. -->
+ask the user via `AskUserQuestion` whether to override (accept the unchanged diff) / patch manually / abandon. Saves one full Codex review cycle on stuck tasks.
+
+If neither guard fired, spawn the reviewer:
+
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The reviewer is the correctness gate; drivers that skip it must warn the user that Codex review has been bypassed. -->
 ```
 Agent(
   subagent_type="reviewer",
@@ -375,22 +427,14 @@ Agent(
 )
 ```
 
-**Skip-rereview on identical diff.** Before spawning the reviewer on cycle ≥ 2, hash both the current and prior diff:
-
-```bash
-NEW_HASH="$(shasum -a 256 "$BASE/archive/tasks/<id>/diff.patch" | awk '{print $1}')"
-OLD_HASH="$(shasum -a 256 "$BASE/archive/tasks/<id>/diff-v$((CYCLE-1)).patch" | awk '{print $1}')"
-```
-
-If `NEW_HASH == OLD_HASH`, the implementer didn't actually change anything (it pushed back on the prior reviewer's findings rather than editing). **Do not spawn the reviewer.** Instead halt the track with reason `no_change_on_retry`, push-notify, and ask the user via `AskUserQuestion` whether to override (accept the unchanged diff) / patch manually / abandon. Saves one full Codex review cycle on stuck tasks.
-
 Parse the reviewer's response. Group findings by severity.
 
 ### 7. Handle review outcome
 
 - **No blockers, no majors** → accept; go to step 8 (done).
 - **Has blockers or majors** →
-  - **First failure**: re-spawn implementer once with the reviewer's findings as `prior-attempt reviewer feedback`. Then re-review.
+  - **First failure**: re-spawn implementer once with the reviewer's findings as `prior-attempt reviewer feedback`. Then re-review (cycle 2). Note: if the implementer was re-spawned for a non-review reason (e.g. after resolving a `decision_needed` or `needs_clarification`), the cycle-2 reviewer is skipped entirely by the **Skip-rereview on clean cycle-1** guard above — meaning a cycle-2 re-review only fires when the cycle-1 review actually found something actionable.
+  <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the second-review-failure decision (proceed anyway / patch manually / abandon task / re-spec) via their native channel. Silent omission is forbidden. -->
   - **Second failure**: halt queue. Push-notify. Present diff + reviewer findings to user; await `AskUserQuestion` for "proceed anyway / patch manually / abandon task / re-spec".
 
 #### 7a. Delta-on-retry (mandatory for cycle ≥ 2)
@@ -462,6 +506,7 @@ done
 ```
 
 - **All tests pass** → continue to step 8.
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the test-failure decision (retry implementer / edit test / proceed anyway / abandon) via their native channel. Silent omission is forbidden. -->
 - **Any test fails** → halt the track with `STATUS: test_failed`. Push-notify. Present the failure log to the user via `AskUserQuestion`:
   - **Retry implementer** — feed the test output back to the implementer as `prior-attempt reviewer feedback` (subject to MAX_ATTEMPTS).
   - **Edit the test** — the test itself may be wrong; user revises TESTS.md and re-runs the test step.
@@ -516,6 +561,9 @@ Recommended next:
 ```
    Both are safe to run in sequence; they cover different concerns (correctness vs documentation freshness).
 
+   When Phase 9 ran and produced candidates (N_CANDIDATES > 0), append to the push-notify body:
+   > Memory review: `<N_CANDIDATES>` candidate(s) written to `<CANDIDATES_FILE>`. Review with `/z-suggest-memory --from-candidate-json <CANDIDATES_FILE>`.
+
 ## Telemetry (mandatory — for iteration after each run)
 
 Every phase of every task track emits a structured event via `scripts/log-event.sh` so we can analyze where wall time goes. The orchestrator (or the subagent) records the **wall clock at phase start**, then logs an event at phase end with `wall_ms`.
@@ -532,6 +580,7 @@ For each task track, the orchestrator emits these event kinds (in order):
 | `diff_capture` | After `git diff` | `id`, `diff_bytes` |
 | `review_start` | Just before spawning `reviewer` (each cycle) | `id`, `cycle` (1, 2, ...) |
 | `review_end` | Reviewer returned | `id`, `cycle`, `wall_ms`, `response_chars`, `blockers`, `majors` |
+| `review_skipped_clean_cycle1` | Cycle-2 entered but cycle-1 was clean | `id`, `cycle`, `prior_blockers`, `prior_majors` |
 | `decision_gate` | Halted for user input | `id`, `reason` (`spec_problem`/`decision_needed`/`needs_clarification`/`review_failed`), `wait_ms` (filled in after user replies) |
 | `task_done` | Marked `[x]` | `id`, `total_retries`, `review_cycles`, `task_wall_ms` (start→done), `precheck_wall_ms`, `implement_wall_ms_sum`, `review_wall_ms_sum`, `user_wait_ms_sum` |
 | `task_skip` | Skip rule hit, user picked Skip/Run-myself/Defer | `id`, `marker_matched`, `user_choice` |
@@ -631,6 +680,7 @@ This phase fires once per run, after the Finalize push-notify, before the sessio
 
 4. **Dispatch the review-agent:**
 
+   <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The review-agent generates memory candidates; drivers that skip it should warn the user that memory review is unavailable for this run. -->
    ```
    Agent(
      subagent_type="review-agent",
@@ -684,9 +734,9 @@ This phase fires once per run, after the Finalize push-notify, before the sessio
 
    ```bash
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" review_agent_call \
-     "$(printf '{"run":"%s","parent_command":"implement-all","candidates_emitted":0,"accepted":0}' "$RUN")"
+     "$(printf '{"run":"%s","parent_command":"implement-all","candidates_emitted":0}' "$RUN")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$PHASE9_TOKEN" \
-     "$(printf '{"phase":9,"name":"memory_review","skipped":false,"candidates_emitted":0,"candidates_accepted":0,"candidates_skipped":0}')"
+     "$(printf '{"phase":9,"name":"memory_review","skipped":false,"candidates_emitted":0}')"
    ```
    Exit phase quietly — no push-notify.
 
@@ -707,72 +757,18 @@ This phase fires once per run, after the Finalize push-notify, before the sessio
    b. **Log `review_agent_call`** (with token counts from Agent return usage block):
       ```bash
       bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" review_agent_call \
-        "$(printf '{"run":"%s","parent_command":"implement-all","subagent_model":"haiku","subagent_input_tokens":%d,"subagent_output_tokens":%d,"candidates_emitted":%d,"accepted":"<filled-in-later>"}' \
+        "$(printf '{"run":"%s","parent_command":"implement-all","subagent_model":"haiku","subagent_input_tokens":%d,"subagent_output_tokens":%d,"candidates_emitted":%d}' \
            "$RUN" "$INPUT_TOKENS" "$OUTPUT_TOKENS" "$N_CANDIDATES")"
       ```
 
-   c. **Push-notify `memory_candidates_ready`:**
+   c. **Emit `memory_review_complete` and exit phase:**
       ```bash
-      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" memory_candidates_ready \
-        "$(printf '{"run":"%s","candidates_emitted":%d}' "$RUN" "$N_CANDIDATES")"
+      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" memory_review_complete \
+        "$(printf '{"run":"%s","candidates_written":%d,"path":"%s"}' "$RUN" "$N_CANDIDATES" "$CANDIDATES_FILE")"
+      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$PHASE9_TOKEN" \
+        "$(printf '{"phase":9,"name":"memory_review","skipped":false,"candidates_emitted":%d}' "$N_CANDIDATES")"
       ```
-      Push-notify: "Memory review produced `<N>` candidate(s) — please review."
-
-   d. **Sequential AskUserQuestion per candidate (max 3 candidates):**
-
-      For each candidate (index `i`, 0-based; stop after 3):
-      ```
-      AskUserQuestion(
-        title: "Memory candidate <i+1> of <total> — <candidate.candidate_kind>",
-        body: "**Suggested concept:** `<candidate.suggested_concept_slug>`\n\n**Type:** `<candidate.type>`\n\n**Text:** <candidate.text>\n\n**Tags:** <candidate.tags joined by ', '>\n\n**Rationale:** <candidate.rationale>\n\n**Evidence:** <candidate.evidence_citations joined by ', '>",
-        options: [
-          { id: "accept", label: "Accept — persist this candidate" },
-          { id: "edit",   label: "Edit — modify before persisting" },
-          { id: "skip",   label: "Skip (provide one-word reason)" },
-          { id: "skip_all", label: "Skip all remaining" }
-        ]
-      )
-      ```
-
-      - **Accept:**
-        ```bash
-        printf '%s' "$CANDIDATE_JSON" | bash -c \
-          'bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-skill.sh" z-suggest-memory \
-             --concept "<candidate.suggested_concept_slug>" \
-             --source "incident:<RUN>" \
-             --from-candidate-json -'
-        ```
-        On `STATUS: ok` → increment `ACCEPTED`.
-        On `STATUS: skipped` or `STATUS: bad_input` → log:
-        ```bash
-        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" review_agent_suggest_failed \
-          "$(printf '{"run":"%s","candidate_index":%d,"reason":"%s"}' "$RUN" "$i" "<reason>")"
-        ```
-        Continue to next candidate.
-
-      - **Edit:** Surface the candidate fields. Collect user edits. Apply edits to the candidate JSON in-memory. Re-present as Accept and dispatch `/z-suggest-memory` with the edited JSON piped via `--from-candidate-json -`.
-
-      - **Skip (one-word reason):** Ask the user for the reason word (follow-up prompt or inline if the UI allows). Then:
-        ```bash
-        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" review_candidate_skipped \
-          "$(printf '{"run":"%s","candidate_index":%d,"reason":"%s"}' "$RUN" "$i" "<user_reason>")"
-        ```
-        Increment `SKIPPED`. Continue to next candidate.
-
-      - **Skip-all-remaining:**
-        ```bash
-        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" review_skip_all \
-          "$(printf '{"run":"%s","candidates_remaining":%d}' "$RUN" "$((N_CANDIDATES - i))")"
-        ```
-        Break the loop.
-
-8. **Final `phase_end`:**
-
-   ```bash
-   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$PHASE9_TOKEN" \
-     "$(printf '{"phase":9,"name":"memory_review","skipped":false,"candidates_emitted":%d,"candidates_accepted":%d,"candidates_skipped":%d}' \
-        "$N_CANDIDATES" "$ACCEPTED" "$SKIPPED")"
-   ```
+      Store `N_CANDIDATES` and `CANDIDATES_FILE` in variables for Finalize to use in the push-notify. Exit phase.
 
 **Event-kind reference for this phase:**
 
@@ -781,9 +777,7 @@ This phase fires once per run, after the Finalize push-notify, before the sessio
 | `review_agent_call` | Agent returned candidates (including empty-array case) |
 | `review_agent_failed` | Agent returned without a fenced block |
 | `review_agent_malformed` | Agent returned with a fenced block that failed `json.loads` |
-| `memory_candidates_ready` | N ≥ 1 candidates; push-notify fired |
-| `review_candidate_skipped` | User skipped a single candidate with a reason |
-| `review_skip_all` | User chose Skip-all-remaining |
+| `memory_review_complete` | N ≥ 1 candidates written to JSONL; Finalize will surface path in push-notify |
 
 ## Hard rules
 
@@ -792,3 +786,19 @@ This phase fires once per run, after the Finalize push-notify, before the sessio
 - **Always** halt rather than guess on `decision_needed` / `spec_problem` / `needs_clarification`.
 - **Always** push-notify on halts (regardless of `approval_only` vs `all`).
 - **Never** auto-skip a non-eligible task forever — present it in the finalize summary so the user knows what's outstanding.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | yes | Setup 4.5 spec-precheck; Step 5 implementer; Step 5 remote-runner (REMOTE_VERIFY tasks); Step 6 reviewer; Phase 9 review-agent (memory review) |
+| `ask_user` | yes | Setup 2a slug selection; Setup 7.5 test-runner template; Step 2 skip-flagged task decision; Step 5 implementer halt questions (needs_clarification / spec_problem / decision_needed); Step 6 no_change_on_retry decision; Step 7 second-review-failure decision; Step 7b test-failure decision |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

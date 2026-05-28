@@ -1,0 +1,39 @@
+name: AskUser Callsite Audit
+
+on:
+  pull_request:
+    paths:
+      - "commands/**"
+      - "skills/**"
+      - "scripts/lint-askuser.sh"
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# NOTE: This workflow is documentation/audit tooling, NOT runtime enforcement.
+# Unregistered AskUserQuestion callsites under Z_HARNESS_NO_ASK=halt still block
+# until the user responds. This lint makes the gap visible; it does not close it.
+# v1 ships with ~35 known unregistered sites (fail-OPEN). The step is annotated
+# continue-on-error so it surfaces as a workflow warning, not a blocking failure.
+
+jobs:
+  lint-askuser:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run AskUserQuestion callsite audit (advisory)
+        # continue-on-error: surfaces unregistered callsites as a warning annotation
+        # rather than blocking the PR. Remove once all callsites are registered (v2).
+        continue-on-error: true
+        run: bash scripts/lint-askuser.sh --strict
+
+      - name: Emit advisory annotation on unregistered callsites
+        if: always()
+        run: |
+          COUNT=$(bash scripts/lint-askuser.sh 2>/dev/null | grep -c '\[UNREGISTERED\]' || true)
+          if [[ "$COUNT" -gt 0 ]]; then
+            echo "::warning file=scripts/lint-askuser.sh::$COUNT unregistered AskUserQuestion callsite(s) found. These are a known v1 limitation (fail-OPEN). Run 'make lint' locally to see details."
+          fi

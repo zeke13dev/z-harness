@@ -1,0 +1,6 @@
+{
+  "name": "doc-fetcher",
+  "description": "Fetches relevant documentation for a given query.",
+  "model": "haiku",
+  "schema_version": 1
+}

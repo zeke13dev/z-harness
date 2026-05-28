@@ -1,6 +1,10 @@
 ---
 description: Read-only progress + cost report for a z-harness plan. Reads metrics.jsonl + TASKS.md to summarize progress, wall time per phase, estimated token spend per subagent type, recent halts, and suggested next command. No writes, no LLM calls.
 argument-hint: [--slug <slug>] [--since <iso-date>]
+runtime: c1
+driver_features_required:
+  - ask_user
+unsupported_driver_behavior: explicit_gate
 ---
 
 You are running **z-harness `/z-stats`**. Read-only diagnostic. Cheap — uses only Bash/jq/awk on the existing event log; no subagent dispatch.
@@ -11,6 +15,7 @@ Same as `/z-implement-all` Phase 0:
 1. Enumerate `$Z_HARNESS_PLAN_DIR/` subdirs with TASKS.md; check legacy flat layout.
 2. If `--slug <slug>` arg present → use it.
 3. If one candidate → use it.
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug-selection question via their native channel. Silent omission is forbidden. -->
 4. Multiple → `AskUserQuestion` to pick.
 5. Zero → tell user "no plan found"; abort.
 
@@ -118,3 +123,19 @@ Single concise report, ~30-50 lines total. Section headers. No prose filler. The
 - **No subagent dispatch.** This command must run instantly (≤2s wall time).
 - **No LLM API calls.** Just shell + jq + awk against existing files.
 - Don't log a start/end event for `/z-stats` itself — it would pollute the metrics it's reading.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | no | — |
+| `ask_user` | yes | Phase 0 slug selection (multiple candidates) |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

@@ -1,4 +1,0 @@
-{"ts":"2026-05-27T16:55:20Z","run":"20260527T165458Z-z-harness-config-toml","kind":"brainstorm_run_start","z_harness_version":"c5fa111","z_harness_dirty":true,"z_harness_branch":"main","topic":"z-harness-config-toml + slim README"}
-{"ts":"2026-05-27T16:56:52Z","run":"20260527T165458Z-z-harness-config-toml","kind":"phase_end","phase":1,"name":"scaffolding"}
-{"ts":"2026-05-27T17:06:43Z","run":"20260527T165458Z-z-harness-config-toml","kind":"phase_end","phase":3,"name":"synthesis"}
-{"ts":"2026-05-27T17:11:42Z","run":"20260527T165458Z-z-harness-config-toml","kind":"brainstorm_run_end","status":"complete","chosen_framing":"codex","ideators_failed":0}

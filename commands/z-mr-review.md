@@ -1,6 +1,10 @@
 ---
 description: Multi-LLM code-quality review of the current branch diff against STYLE.md. Never blocks; ranks P0-P4; output is a TASKS.md-shape file you edit and feed to /z-implement-all.
 argument-hint: [--slug <slug>] [--base <git-ref>] [--include-untracked] [--deep] [--force-on-trunk]
+runtime: c1
+driver_features_required:
+  - subagent
+unsupported_driver_behavior: explicit_gate
 ---
 
 You are running the **z-harness `/z-mr-review`** pipeline.
@@ -430,6 +434,7 @@ The agent always receives one `diff_path` pointing to a single `.patch` file —
 
 **If `MODE=full`:** dispatch the agent once with the full diff.
 
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The mr-reviewer agent is the sole source of review findings; drivers that skip it must warn the user that code-quality review is unavailable. -->
 ```
 Agent(
   subagent_type="mr-reviewer",
@@ -477,6 +482,7 @@ PYEOF
 
 For each chunk listed in the manifest, dispatch one `Agent()` call. Dispatch all chunk agents in parallel — a single message with one `Agent()` call per chunk:
 
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip all per-chunk Agent() calls. The per-chunk mr-reviewer agents produce findings for large diffs; drivers that skip them must warn the user that chunked review is unavailable. -->
 ```
 # Repeat this Agent() call once per chunk, all in the same message (parallel dispatch):
 Agent(
@@ -502,6 +508,7 @@ Collect all per-chunk agent returns as a list `CHUNK_AGENT_RETURNS` (one entry p
 
 After all per-chunk agents complete, dispatch one additional abstraction-only pass with the full diff. This pass runs AFTER the per-chunk batch (sequential, not parallel with the chunks):
 
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The abstraction-only pass catches cross-file findings not visible in individual chunks; drivers that skip it should warn the user that abstraction-level review is unavailable. -->
 ```
 Agent(
   subagent_type="mr-reviewer",
@@ -867,3 +874,19 @@ To manually verify chunked dispatch, set the threshold below the diff size to fo
 - **Log everything** via `scripts/log-event.sh`. Dismissal events are emitted per-signature, every run.
 - **Archive before overwrite.** Existing `MR-REVIEW.md` is always archived before being replaced.
 - **Empty diff exits cleanly.** No review needed if there are no changes.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | yes | Phase 2 mr-reviewer (full-diff mode); Phase 2 mr-reviewer per-chunk × N chunks (per-chunk mode); Phase 2 mr-reviewer abstraction-only pass (per-chunk mode) |
+| `ask_user` | no | — |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

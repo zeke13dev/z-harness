@@ -1,9 +1,0 @@
-{"ts":"2026-05-25T00:03:12Z","run":"unknown-run","kind":"provider_resolved","slug":"compaction-cadence","role":"consultant_primary","provider":"gemini","command":"gemini","model_label":"gemini-2.5-pro"}
-{"ts":"2026-05-25T00:03:12Z","run":"unknown-run","kind":"provider_resolved","slug":"compaction-cadence","role":"consultant_secondary","provider":"codex","command":"codex","model_label":"gpt-5-codex"}
-{"ts":"2026-05-25T00:03:12Z","run":"unknown-run","kind":"provider_resolved","slug":"compaction-cadence","role":"reviewer","provider":"codex","command":"codex","model_label":"gpt-5-codex"}
-{"ts":"2026-05-25T00:31:42Z","run":"unknown-run","kind":"provider_resolved","slug":"compaction-cadence","role":"consultant_primary","provider":"gemini","command":"gemini","model_label":"gemini-2.5-pro"}
-{"ts":"2026-05-25T00:31:42Z","run":"unknown-run","kind":"provider_resolved","slug":"compaction-cadence","role":"consultant_secondary","provider":"codex","command":"codex","model_label":"gpt-5-codex"}
-{"ts":"2026-05-25T00:31:42Z","run":"unknown-run","kind":"provider_resolved","slug":"compaction-cadence","role":"reviewer","provider":"codex","command":"codex","model_label":"gpt-5-codex"}
-{"ts":"2026-05-25T08:12:21Z","run":"unknown-run","kind":"provider_resolved","slug":"compaction-cadence","role":"consultant_primary","provider":"gemini","command":"gemini","model_label":"gemini-2.5-pro"}
-{"ts":"2026-05-25T08:12:21Z","run":"unknown-run","kind":"provider_resolved","slug":"compaction-cadence","role":"consultant_secondary","provider":"codex","command":"codex","model_label":"gpt-5-codex"}
-{"ts":"2026-05-25T08:12:22Z","run":"unknown-run","kind":"provider_resolved","slug":"compaction-cadence","role":"reviewer","provider":"codex","command":"codex","model_label":"gpt-5-codex"}

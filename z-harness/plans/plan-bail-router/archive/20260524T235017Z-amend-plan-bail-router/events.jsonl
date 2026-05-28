@@ -1,2 +1,0 @@
-{"ts":"2026-05-24T23:50:17Z","run":"20260524T235017Z-amend-plan-bail-router","kind":"amend_run_start","slug":"plan-bail-router","z_harness_version":"380aca6","z_harness_dirty":true,"z_harness_branch":"main","amendment":"fix planning-router contract precheck blocker","mode":"full"}
-{"ts":"2026-05-24T23:52:10Z","run":"20260524T235017Z-amend-plan-bail-router","kind":"amend_run_end","slug":"plan-bail-router","status":"applied","mode":"full","tasks_added":0,"tasks_modified":0,"tasks_removed":0,"tasks_superseded":0,"consulted":false}

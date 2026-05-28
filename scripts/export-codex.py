@@ -1,3 +1,4 @@
+# DEPRECATED: frozen at v0.1.0. Remove after v0.2.0. See C6-D1.
 """
 export-codex.py — Build Codex CLI prompt files from z-harness commands, agents, and skills.
 
@@ -298,4 +299,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    print(
+        "[z-harness] WARNING: export-codex.py is deprecated and will be removed"
+        " in the next minor release. Use the runtime driver instead.",
+        file=sys.stderr,
+    )
     sys.exit(main())

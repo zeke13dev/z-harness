@@ -1,3 +1,0 @@
-{"ts":"2026-05-23T04:44:24Z","run":"tasks/T001","kind":"task_start","slug":"plan-decompose","id":"T001"}
-{"ts":"2026-05-23T04:45:45Z","run":"tasks/T001","kind":"spec_precheck","slug":"plan-decompose","status":"ok","count":23}
-{"ts":"2026-05-23T04:53:56Z","run":"tasks/T001","kind":"task_done","slug":"plan-decompose","id":"T001","cycles":2,"blockers":0,"majors":0}

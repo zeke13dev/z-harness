@@ -1,4 +1,0 @@
-{"ts":"2026-05-27T17:28:40Z","run":"docs/skills","kind":"doc_update_start","concept":"skills","reason":"stale","mode":"dry-run"}
-{"ts":"2026-05-27T17:28:49Z","run":"docs/skills","kind":"doc_update_end","concept":"skills","status":"ok","subagent_model":"sonnet","wall_ms":9166}
-{"ts":"2026-05-27T17:42:54Z","run":"docs/skills","kind":"doc_update_start","concept":"skills","reason":"stale","mode":"write"}
-{"ts":"2026-05-27T17:47:29Z","run":"docs/skills","kind":"doc_update_end","concept":"skills","status":"ok","subagent_model":"sonnet","wall_ms":274497}

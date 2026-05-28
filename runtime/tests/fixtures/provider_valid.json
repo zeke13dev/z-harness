@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "schema_version": 1,
+  "roles": {
+    "default": "claude-sonnet"
+  },
+  "providers": {
+    "claude-sonnet": {
+      "kind": "cli",
+      "command": "claude",
+      "args_template": ["--model", "claude-sonnet-4-5"],
+      "stdin": true,
+      "timeout_s": 120,
+      "model_label": "claude-sonnet-4-5"
+    }
+  }
+}

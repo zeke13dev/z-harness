@@ -1,9 +1,0 @@
- README.md                                          |   4 +-
- agents/external-lookup.md                          | 151 +++++++++++++++++
- docs/human/lookup-contract.md                      | 183 +++++++++++++++++++++
- docs/llm/INDEX.json                                |  29 ++++
- docs/llm/external-lookup-agent.json                |  19 +++
- docs/llm/lookup-contract.json                      |  18 ++
- z-harness/lookup-cache/.gitignore                  |   2 +
- .../lookup-subagent/staging/qt-market-lookup.md    | 175 ++++++++++++++++++++
- 8 files changed, 580 insertions(+), 1 deletion(-)

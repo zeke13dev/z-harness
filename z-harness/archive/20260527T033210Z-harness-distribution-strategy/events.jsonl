@@ -1,2 +1,0 @@
-{"ts":"2026-05-27T03:32:18Z","run":"20260527T033210Z-harness-distribution-strategy","kind":"brainstorm_run_start","z_harness_version":"874f9e8","z_harness_dirty":true,"z_harness_branch":"main","topic":"rethink install.sh approach vs standalone wrapper for supporting Claude Code / Codex / Antigravity"}
-{"ts":"2026-05-27T03:42:06Z","run":"20260527T033210Z-harness-distribution-strategy","kind":"brainstorm_run_end","status":"complete","chosen_framing":"codex","ideators_failed":0}

@@ -1,0 +1,101 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "schema_version": 1,
+  "title": "ProviderRegistry",
+  "description": "Schema for z-harness provider registry files (.z-harness/providers.json).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "roles",
+    "providers"
+  ],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "description": "Registry format version. Must be 1.",
+      "const": 1
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Optional schema version for runtime/contract convention. When present, must be 1."
+    },
+    "roles": {
+      "type": "object",
+      "description": "Named role assignments. Each key is a role name, each value is a provider key referencing an entry in 'providers'.",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "providers": {
+      "type": "object",
+      "description": "Provider entries keyed by provider name.",
+      "additionalProperties": {
+        "$ref": "#/definitions/ProviderEntry"
+      }
+    }
+  },
+  "definitions": {
+    "ProviderEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "command",
+        "args_template",
+        "stdin",
+        "timeout_s",
+        "model_label"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "cli",
+            "sdk"
+          ],
+          "description": "Provider invocation kind: 'cli' for subprocess, 'sdk' for library/API call."
+        },
+        "command": {
+          "type": "string",
+          "description": "Executable name or entry point to invoke."
+        },
+        "args_template": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Argument list template passed to the command."
+        },
+        "stdin": {
+          "type": "boolean",
+          "description": "Whether the provider reads the prompt from stdin."
+        },
+        "timeout_s": {
+          "type": "integer",
+          "description": "Maximum wall-clock seconds to wait for the provider to respond.",
+          "minimum": 1
+        },
+        "model_label": {
+          "type": "string",
+          "description": "Human-readable model identifier (e.g. 'gemini-2.5-pro')."
+        },
+        "auth_env": {
+          "type": "string",
+          "description": "Name of the environment variable holding the API key for SDK-tier auth (e.g. 'ANTHROPIC_API_KEY'). Optional; only relevant for kind='sdk'."
+        },
+        "session_resumable": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether this provider supports resuming a prior conversation session. Defaults to false."
+        },
+        "allow_cross_vendor_env": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, the driver may pass cross-vendor API key env vars (e.g. ANTHROPIC_API_KEY into a codex subprocess) instead of stripping them. Defaults to false (strip). Codex driver opt-in escape hatch; see C2 SPEC Invariant #4."
+        }
+      }
+    }
+  }
+}

@@ -1,2 +1,0 @@
-{"ts":"2026-05-24T21:17:01Z","run":"20260524T211701Z-finding-promotion-policy","kind":"light_run_start","slug":"finding-promotion-policy","z_harness_version":"380aca6","z_harness_dirty":true,"z_harness_branch":"main","task":"Turn the unified review findings brainstorm into an implementation plan"}
-{"ts":"2026-05-24T21:18:36Z","run":"20260524T211701Z-finding-promotion-policy","kind":"light_run_end","slug":"finding-promotion-policy","status":"escalated","reason":"cross-workflow scope exceeds light-mode thresholds","files_changed":2,"review_cycles":0}

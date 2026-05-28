@@ -66,7 +66,7 @@ Contextual exits:
 - `/z-amend`
 - `/z-maintain-docs`
 
-Contextual exits require their preconditions. In particular, `/z-audit-plan` requires existing plan artifacts, `/z-amend` requires an existing plan to change, `/z-fix` requires a concrete bug diagnosis, and `/z-debug` requires an observed bug symptom with unknown root cause.
+Contextual exits require their preconditions. In particular, `/z-audit-plan` requires `has_existing_plan && plan_validation_intent`, `/z-amend` requires `has_existing_plan && plan_amend_intent`, `/z-fix` requires a concrete bug diagnosis, and `/z-debug` requires an observed bug symptom with unknown root cause.
 
 ## Stable Reason Codes
 
@@ -115,12 +115,16 @@ Use only these reason codes:
 - `has_bug_diagnosis`: boolean
 - `has_unknown_bug_symptom`: boolean
 - `has_existing_plan`: boolean
+- `plan_validation_intent`: boolean
+- `plan_amend_intent`: boolean
 - `has_fix_artifact`: boolean
 - `docs_stale_or_drifted`: boolean
 
 If a relevant signal is missing, reason from what is present and lower confidence. Do not infer file counts, task counts, independent seam plannability, or artifact existence from the filesystem unless the caller supplied an `existing_artifacts` list to interpret.
 
 `non_obvious_decisions: null` means the count is unknown; it does not satisfy "no non-obvious decisions." Likewise, `/z-plan-split` requires an explicit caller-supplied `cluster_seams_independently_plannable: true` signal before recommending a split.
+
+`plan_validation_intent` and `plan_amend_intent` are only meaningful when `has_existing_plan` is true. Callers set them by inspecting `SPEC.md`/`PLAN.md`/`TASKS.md` presence and the user's task text (validation phrases: "audit", "validate", "review the plan", "check tasks/spec"; amend verbs targeting the plan: "amend", "revise plan", "add task", "change spec", "remove task"; empty task text on a finished slug counts as a weak validation signal). If neither flag is supplied, treat both as absent — do not infer.
 
 ## Decision Rules
 
@@ -130,11 +134,12 @@ Apply these rules in order:
 2. Inspect `route_chain_json` before recommending a target. If the chain already contains two prior entries, return `STATUS: ask_user` with `REASON_CODES: route_loop_risk`.
 3. If the best recommendation would send the user back to the immediate prior `from_command`, return `STATUS: ask_user` with `REASON_CODES: route_loop_risk`.
 4. Prefer contextual exits when their preconditions are explicit:
-   - `has_existing_plan` plus a plan validation request or completed plan artifacts -> `/z-audit-plan`
-   - `has_existing_plan` plus requested plan modification -> `/z-amend`
+   - `has_existing_plan && plan_amend_intent` -> `/z-amend` (takes precedence when both intent flags are true — modification is explicit)
+   - `has_existing_plan && plan_validation_intent && !plan_amend_intent` -> `/z-audit-plan`
    - `has_bug_diagnosis` -> `/z-fix`
    - `has_unknown_bug_symptom` -> `/z-debug`
    - `docs_stale_or_drifted` -> `/z-maintain-docs`
+   With `has_existing_plan` true but neither intent flag set, fall through to the remaining rules — do not infer intent from prose.
 5. If `terrain_uncertain` is true, recommend `/z-map` with `needs_terrain_map`.
 6. If `has_map_and_brainstorm` is true AND `approach_uncertain` is true, recommend `/z-research` with `needs_approach_synthesis`.
 7. If `approach_uncertain` is true and terrain is known enough to compare approaches (and `has_map_and_brainstorm` is not true), recommend `/z-brainstorm`.

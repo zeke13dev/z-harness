@@ -1,2 +1,0 @@
-{"ts":"2026-05-27T19:18:47Z","run":"20260527T191847Z-review","kind":"review_all_start","slug":"z-harness-config-toml"}
-{"ts":"2026-05-27T19:24:54Z","run":"20260527T191847Z-review","kind":"review_all_end","slug":"z-harness-config-toml","drift_findings":1,"spec_gap_findings":0,"user_action":"open-followup-tasks","followup_task_ids":["T010","T011"]}

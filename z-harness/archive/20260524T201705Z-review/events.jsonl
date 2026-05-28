@@ -1,2 +1,0 @@
-{"ts":"2026-05-24T20:21:43Z","run":"20260524T201705Z-review","kind":"review_all_findings","slug":"lookup-subagent","drift_blocker":1,"drift_minor":1,"spec_gap_major":5,"spec_gap_minor":5}
-{"ts":"2026-05-24T20:24:33Z","run":"20260524T201705Z-review","kind":"review_all_end","slug":"lookup-subagent","drift_findings":2,"spec_gap_findings":10,"user_action":"fix_blocker_amend_spec"}

@@ -26,7 +26,7 @@
         "agents/scope-reconciler-brainstorm.md",
         "agents/spec-precheck.md"
       ],
-      "last_updated": "2026-05-28T12:00:00Z",
+      "last_updated": "2026-05-28T18:03:03Z",
       "confidence": "high",
       "depends_on": [
         "scripts",
@@ -71,7 +71,7 @@
         "commands/z-update.md",
         "commands/z-uplift.md"
       ],
-      "last_updated": "2026-05-28T13:00:00Z",
+      "last_updated": "2026-05-28T18:03:03Z",
       "confidence": "high",
       "depends_on": [
         "agents",
@@ -98,7 +98,7 @@
         "scripts/config.sh",
         "scripts/test_config.py"
       ],
-      "last_updated": "2026-05-28T00:00:00Z",
+      "last_updated": "2026-05-28T18:03:03Z",
       "confidence": "high",
       "depends_on": [],
       "consumed_by": [
@@ -113,7 +113,7 @@
       "source_file": [
         "commands/z-fix.md"
       ],
-      "last_updated": "2026-05-28T00:00:00Z",
+      "last_updated": "2026-05-28T18:03:03Z",
       "confidence": "high",
       "depends_on": [
         "agents",
@@ -149,7 +149,7 @@
         "skills/z-update/SKILL.md",
         "skills/z-uplift/SKILL.md"
       ],
-      "last_updated": "2026-05-28T13:00:00Z",
+      "last_updated": "2026-05-28T18:03:03Z",
       "confidence": "high",
       "depends_on": [
         "agents",
@@ -172,7 +172,7 @@
         "commands/z-providers-discover.md",
         "docs/human/PROVIDERS.md"
       ],
-      "last_updated": "2026-05-28T00:00:00Z",
+      "last_updated": "2026-05-28T18:03:03Z",
       "confidence": "high",
       "depends_on": [
         "scripts"
@@ -197,7 +197,7 @@
         "exports/codex/CAPABILITIES.md",
         "exports/agy/CAPABILITIES.md"
       ],
-      "last_updated": "2026-05-28T00:00:00Z",
+      "last_updated": "2026-05-28T18:03:03Z",
       "confidence": "high",
       "depends_on": [
         "commands",
@@ -236,7 +236,7 @@
         "commands/z-update.md",
         "docs/human/INSTALL.md"
       ],
-      "last_updated": "2026-05-28T00:00:00Z",
+      "last_updated": "2026-05-28T18:03:03Z",
       "confidence": "high",
       "depends_on": [
         "scripts",
@@ -297,7 +297,7 @@
     },
     {
       "slug": "z-uplift",
-      "last_updated": "2026-05-28T00:00:00Z",
+      "last_updated": "2026-05-28T18:03:03Z",
       "confidence": "high",
       "depends_on": [
         "commands",
@@ -318,7 +318,7 @@
         "scripts/propose-prefs.py",
         "docs/human/config.md"
       ],
-      "last_updated": "2026-05-27",
+      "last_updated": "2026-05-28T18:03:03Z",
       "confidence": "high",
       "depends_on": [
         "scripts"

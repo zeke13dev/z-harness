@@ -68,7 +68,11 @@ Classify the command (see "Command classification" above). Before running anythi
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/remote-sandbox-sync.sh" "<remote-host>" "<slug>" "<task-id>"
 ```
 
-The sandbox path is `<remote-host>:~/dev/qt-bot-sandbox/<slug>/<task-id>/`. The rsync script honors `.z-harness-rsync-exclude` (target/, .git/, data/, parquet/duckdb files, logs/, state/). `EXEC_DIR=~/dev/qt-bot-sandbox/<slug>/<task-id>`.
+The sandbox uses a **two-level layout**:
+- `<remote-host>:~/dev/qt-bot-sandbox/<slug>/base/` — shared warm base seeded once per slug on the first invocation; subsequent invocations skip the seed step.
+- `<remote-host>:~/dev/qt-bot-sandbox/<slug>/<task-id>/` — per-task overlay populated via `--link-dest=$BASE` (hard-links unchanged files from base, only copies diffs).
+
+`EXEC_DIR=~/dev/qt-bot-sandbox/<slug>/<task-id>`. The rsync script honors `.z-harness-rsync-exclude` (target/, .git/, data/, parquet/duckdb files, logs/, state/).
 
 If rsync fails — abort with `STATUS: rsync_failed`; capture rsync stderr.
 
@@ -97,7 +101,17 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end 
 
 ### 7. Sandbox cleanup (on success only, sandboxed runs only)
 
-If the run was `needs-sandbox` and `exit_code == 0`, remove the sandbox: `ssh <remote-host> "rm -rf ~/dev/qt-bot-sandbox/<slug>/<task-id>/"`. On failure, leave it for debugging — the user can clean later. For `read-only-against-shared-state` runs, no cleanup needed (no sandbox was created).
+If the run was `needs-sandbox` and `exit_code == 0`, remove only the per-task directory:
+
+```bash
+ssh "<remote-host>" "rm -rf ~/dev/qt-bot-sandbox/<slug>/<task-id>/"
+```
+
+**NEVER delete `~/dev/qt-bot-sandbox/<slug>/base/`.** The warm base is shared across all tasks in the slug and is intentionally long-lived. It is reclaimed by the next `/z-implement-all` invocation's first-invocation seed step, not per-task cleanup. Deleting it would force a full cold rsync on the next task.
+
+On failure, leave the task sandbox for debugging — the user can clean later. For `read-only-against-shared-state` runs, no cleanup needed (no sandbox was created).
+
+<!-- future: extract cleanup to a guarded helper script with realpath canonicalization -->
 
 ## Return shape (required)
 

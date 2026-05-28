@@ -1,6 +1,6 @@
 {
   "concept": "skills",
-  "last_updated": "2026-05-27",
+  "last_updated": "2026-05-28",
   "covers_spec": "askuser-prefs-hook/20260527",
   "source_file": [
     "skills/z-amend/SKILL.md",
@@ -100,7 +100,7 @@
       "line": 1,
       "symbol": "z-do",
       "kind": "module",
-      "summary": "Plan-less small-task runner; config.py export-env at Setup step 6; should-notify guards on all PushNotifications; doc grounding; reviewer gate."
+      "summary": "Plan-less small-task runner; config.py export-env at Setup step 6; should-notify guards on all PushNotifications; doc-fetcher grounding (skipped when Z_HARNESS_DOCS_ALWAYS_APPLY=never); reviewer gate."
     },
     {
       "file": "skills/z-implement-all/SKILL.md",
@@ -142,7 +142,7 @@
       "line": 1,
       "symbol": "z-map",
       "kind": "module",
-      "summary": "Terrain-mapping; cost gate; --slug flag; doc-fetcher-first; up to 3 Explores tracked dispatched vs succeeded; bundled critique; no-recommendation invariant; slug-confirm resolver in Phase 0.5. Produces MAP.md."
+      "summary": "Terrain-mapping; cost gate (Phase 0); slug+artifact collision handling (Phase 0.5, after cost gate); --slug flag; doc-fetcher-first; up to 3 Explores tracked dispatched vs succeeded; bundled critique; no-recommendation invariant; slug-confirm resolver in Phase 0.5. Produces MAP.md."
     },
     {
       "file": "skills/z-plan-light/SKILL.md",
@@ -170,7 +170,7 @@
       "line": 1,
       "symbol": "z-research",
       "kind": "module",
-      "summary": "Meta-orchestrator: cost gate → intelligent dispatch decision → inline /z-map + /z-brainstorm sub-commands → adversarial synthesis panel (3 perspectives + research-judge Opus) → 10-section RESEARCH.md with approach decision matrix. Cost 3–6M tokens."
+      "summary": "Meta-orchestrator: dispatch decision (Phase 0, user-driven) → cost gate (Phase 0.5, always before Phase 1) → inline /z-map + /z-brainstorm sub-commands → adversarial synthesis panel (3 perspectives + research-judge Opus) → 10-section RESEARCH.md. Cost 3-6M tokens."
     },
     {
       "file": "skills/z-review-all/SKILL.md",
@@ -273,13 +273,16 @@
     "config.py emits askuser_resolved for every resolved question; resolver errors fall through to ask mode (never silently skip).",
     "z-stats Phase 4c reads askuser_resolved events; it is read-only and never writes.",
     "z-suggest-memory --kind routing-preference requires --question-id, --value, --strength, and --scope; mutually exclusive with --edit, --delete, and --from-candidate-json.",
-    "z-suggest-memory --kind routing-preference writes to docs/llm/workflow.json (global) or docs/llm/workflow-<project-slug>.json (project scope); creates stub + INDEX entry if file absent."
+    "z-suggest-memory --kind routing-preference writes to docs/llm/workflow.json (global) or docs/llm/workflow-<project-slug>.json (project scope); creates stub + INDEX entry if file absent.",
+    "z-research Phase 0 (dispatch decision, user-driven) runs before Phase 0.5 (cost gate); cost gate always runs before Phase 1 sub-command dispatch.",
+    "z-research requires at least one sub-command to succeed before launching the synthesis panel; all 3 panel perspectives must succeed before calling research-judge."
   ],
   "gotchas": [
     "z-audit-plan cannot run without SPEC/PLAN/TASKS; no-plan routes to z-plan.",
     "z-audit-plan-style has a hard STYLE.md gate with no --no-style override; this differs from z-uplift which accepts --no-style for degraded mode.",
     "z-audit-plan-style emits PLAN_STYLE_AUDIT.md (separate from PLAN_AUDIT_REPORT.md produced by z-audit-plan); findings have T-PS-NNN IDs.",
     "z-do may not route directly to z-plan-split.",
+    "z-do skips doc-fetcher entirely when Z_HARNESS_DOCS_ALWAYS_APPLY=never (config knob).",
     "Route chains cap at two entries and block ping-pong to the prior command.",
     "z-plan-split cluster_id is telemetry-only; cluster_slug is the path segment.",
     "z-implement-all --tasks derives BASE from task-file parent and skips tree gates.",
@@ -299,8 +302,9 @@
     "z-debug bisect-isolator is dispatched as a Haiku subagent, not a consultant; orchestrator-only likelihood-bucket rule still applies to its output.",
     "z-review-all pre-Phase-0 deletes stale .review_state.json if HEAD changed or artifacts missing.",
     "z-plan Phase 8 complexity-classifier strips existing **Complexity:** line before dispatch to force re-classification.",
-    "z-research --slug= token must be stripped from $ARGUMENTS before computing input_hash; do not include in canonicalized text.",
-    "z-research tracks EXPLORES_DISPATCHED vs EXPLORES_SUCCEEDED separately; frontmatter uses succeeded count.",
+    "z-research --slug= token must be stripped from $ARGUMENTS before computing input_hash; z-map does the same.",
+    "z-research Phase 0 is dispatch decision (user-driven, reads MAP_STATE + BRAINSTORM_STATE); Phase 0.5 is the cost gate. The cost gate always follows the dispatch decision.",
+    "z-research tracks EXPLORES_DISPATCHED vs EXPLORES_SUCCEEDED separately (in sub-command z-map); frontmatter uses succeeded count.",
     "z-plan Explore cap is 3 per run; prefer direct Read/Grep/Glob over a 4th Explore call.",
     "z-suggest-memory --concept-hints is comma-separated; first hint is the pre-selected recommended option.",
     "z-test cross-task tests (task: null) are not linked into TASKS.md; deferred to /z-review-all or manual follow-up.",

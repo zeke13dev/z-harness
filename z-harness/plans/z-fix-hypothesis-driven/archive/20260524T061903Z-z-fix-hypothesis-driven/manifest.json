@@ -1,9 +1,0 @@
-{
-  "slug": "z-fix-hypothesis-driven",
-  "run": "20260524T061903Z-z-fix-hypothesis-driven",
-  "status": "complete",
-  "ended_at": "2026-05-24T06:44:29Z",
-  "decisions": { "total": 14, "consult_flagged": 5 },
-  "consultations": { "bundled_decisions": 2, "plan_review": 2 },
-  "task_count": 17
-}

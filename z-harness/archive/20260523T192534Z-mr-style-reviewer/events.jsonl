@@ -1,9 +1,0 @@
-{"ts":"2026-05-23T19:25:34Z","run":"20260523T192534Z-mr-style-reviewer","kind":"brainstorm_run_start","z_harness_version":"64a3dbe","z_harness_dirty":true,"z_harness_branch":"main","topic":"Add an MR-style code-quality reviewer to z-harness"}
-{"ts":"2026-05-23T19:26:20Z","run":"20260523T192534Z-mr-style-reviewer","kind":"phase_end","phase":1,"name":"scaffolding","wall_ms":27,"user_wait_ms":0}
-{"ts":"2026-05-23T19:26:37Z","run":"20260523T192534Z-mr-style-reviewer","kind":"phase_end","phase":2,"name":"ideator-dispatch","wall_ms":0,"user_wait_ms":0}
-{"ts":"2026-05-23T19:27:29Z","run":"20260523T192534Z-mr-style-reviewer","kind":"consult","llm":"codex","mode":"brainstorm","prompt_chars":2684,"response_chars":11410,"wall_ms":19651,"transcript":"001-codex-brainstorm"}
-{"ts":"2026-05-23T19:27:34Z","run":"20260523T192534Z-mr-style-reviewer","kind":"consult","llm":"gemini","mode":"brainstorm","prompt_chars":2633,"response_chars":474,"wall_ms":3260,"transcript":"002-gemini-brainstorm"}
-{"ts":"2026-05-23T19:28:30Z","run":"20260523T192534Z-mr-style-reviewer","kind":"consult","llm":"gemini","mode":"brainstorm","prompt_chars":2384,"response_chars":3061,"wall_ms":25915,"transcript":"002-gemini-brainstorm"}
-{"ts":"2026-05-23T19:28:39Z","run":"20260523T192534Z-mr-style-reviewer","kind":"phase_end","phase":2,"name":"ideator-dispatch","wall_ms":50000,"user_wait_ms":0}
-{"ts":"2026-05-23T19:30:26Z","run":"20260523T192534Z-mr-style-reviewer","kind":"phase_end","phase":3,"name":"synthesis","wall_ms":107799,"user_wait_ms":0}
-{"ts":"2026-05-23T19:30:26Z","run":"20260523T192534Z-mr-style-reviewer","kind":"user_wait_start","phase":4,"reason":"user-framing-choice"}

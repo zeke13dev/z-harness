@@ -1,2 +1,0 @@
-{"ts":"2026-05-24T21:09:52Z","run":"consults","kind":"consult","slug":"unified-review-tasks","llm":"gemini","mode":"brainstorm","prompt_chars":10081,"response_chars":466,"wall_ms":4094,"transcript":"001-gemini-brainstorm","returncode":55}
-{"ts":"2026-05-24T21:11:30Z","run":"consults","kind":"consult","slug":"unified-review-tasks","llm":"gemini","mode":"brainstorm","prompt_chars":10081,"response_chars":3927,"wall_ms":29907,"transcript":"003-gemini-brainstorm","returncode":0}

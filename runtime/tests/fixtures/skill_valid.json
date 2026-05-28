@@ -1,0 +1,5 @@
+{
+  "id": "summarize-text",
+  "description": "Summarizes a block of text into a concise paragraph.",
+  "schema_version": 1
+}

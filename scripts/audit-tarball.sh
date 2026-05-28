@@ -8,13 +8,25 @@
 # Exits 1 on the first forbidden entry found, printing the offending path to
 # stderr and a summary message to stdout.
 #
+# ALLOWLIST:
+#   runtime/        — host-neutral runtime tree (binary + templates + config)
+#                     Note: drivers live under runtime/drivers/; there is no
+#                     separate top-level drivers/ directory in this repo.
+#
+# LEGACY-ALLOWLIST (remove at v<next-minor>):
+#   exports/codex/  — legacy per-host Codex exporter output       # REMOVE-AT: v<next-minor>
+#   exports/agy/    — legacy per-host AGY exporter output          # REMOVE-AT: v<next-minor>
+#   exports/cursor/ — legacy per-host Cursor exporter output       # REMOVE-AT: v<next-minor>
+#
 # Forbidden patterns (any match is a violation):
 #   providers.json          — provider registry (credentials/config)
 #   .z-harness/             — repo-local harness config dir
 #   z-harness/plans/        — plan artifacts
 #   z-harness/archive/      — run archives
 #   z-harness/improvements/ — improvement artifacts
-#   exports/                — re-packaging exports inside an export
+#   exports/<other>/        — re-packaging exports (non-legacy paths); see
+#                             LEGACY-ALLOWLIST above for the three permitted
+#                             exports/ subdirs during the transition window
 #   /Users/<anything>       — macOS absolute user paths
 #   /home/<anything>        — Linux absolute home paths
 #   paths containing ~/     — tilde-expanded home paths
@@ -96,8 +108,19 @@ _check_pattern ".z-harness/"            -F  ".z-harness/"
 _check_pattern "z-harness/plans/"       -F  "z-harness/plans/"
 _check_pattern "z-harness/archive/"     -F  "z-harness/archive/"
 _check_pattern "z-harness/improvements/" -F "z-harness/improvements/"
-_check_pattern "exports/"               -F  "exports/"
 _check_pattern "~/"                     -F  "~/"
+
+# exports/ is forbidden except for the three legacy subdirs that are permitted
+# during the one-minor-version transition window (see LEGACY-ALLOWLIST above).
+# REMOVE-AT: v<next-minor> — once the legacy window closes, replace this block
+# with: _check_pattern "exports/" -F "exports/"
+_exports_hit="$(printf '%s\n' "$LISTING" \
+    | grep -F "exports/" \
+    | grep -Ev "^\.?/?exports/(codex|agy|cursor)(/|$)" \
+    | head -n1 || true)"
+if [[ -n "$_exports_hit" ]]; then
+    _audit_fail "exports/ (non-legacy path)" "$_exports_hit"
+fi
 
 # Regex patterns for absolute home paths
 _check_pattern "/Users/<path>"          -E  "^/?Users/"

@@ -1,6 +1,11 @@
 ---
 description: Plan-less z-harness execution for small tasks. Brings the harness discipline — premise check, doc-fetcher grounding, codex review safety gate, structured logging — without SPEC/PLAN/TASKS/FIX.md ceremony. Logs to z-harness/adhoc/ so /z-improve can retro it. Routes to the right planning/debug workflow when scope or bug signals exceed direct execution.
 argument-hint: <small task description>
+runtime: c1
+driver_features_required:
+  - subagent
+  - ask_user
+unsupported_driver_behavior: explicit_gate
 ---
 
 You are running **z-harness `/z-do`** — the lightest harness on-ramp. No slug, no plan artifacts, no upfront cross-LLM consult. Just: premise check, doc-fetcher grounding, inline implementation, codex review.
@@ -9,6 +14,8 @@ Task (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question
+     "What's the task?" via their native channel. Silent omission is forbidden. -->
 **If empty**, use `AskUserQuestion`: "What's the task?" Block until answered.
 
 ## Setup
@@ -88,6 +95,8 @@ Save to `z-harness/adhoc/archive/$RUN/premise.md`.
 Per the global rule, if `docs/llm/INDEX.json` exists AND `$Z_HARNESS_DOCS_ALWAYS_APPLY` is `always` (the default), dispatch `doc-fetcher` (Haiku) BEFORE any other reading:
 
 ```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     requirement and skip if unavailable. Proceeds with reduced grounding. -->
 Agent(subagent_type="doc-fetcher",
       description="Doc context for: <task>",
       prompt="query: <one-sentence task>\nrepo_root: <abs path>\ndepth: standard")
@@ -145,6 +154,9 @@ git diff > z-harness/adhoc/archive/$RUN/diff.patch
 Spawn the reviewer:
 
 ```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     requirement and skip the reviewer Agent() call. The safety gate cannot run
+     without subagent support; document the gap. -->
 Agent(
   subagent_type="reviewer",
   description="Codex review of /z-do <run>",
@@ -156,6 +168,8 @@ Parse the return (capped at 8 KB, blockers + majors only).
 
 **On blockers/majors:**
 - First failure: re-edit inline. Re-run diff; if byte-identical → halt `no_change_on_retry`. Else re-spawn reviewer once.
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the reviewer
+     second-failure gate via their native channel. Silent omission is forbidden. -->
 - Second failure: `AskUserQuestion` — proceed anyway / patch manually / abandon.
 
 **No blockers/majors** → accept.
@@ -171,6 +185,8 @@ This phase is **off by default**. Only run if any of:
 If running, spawn one or both consultants on the **diff + approach**, framed as "review this small change — anything wrong?":
 
 ```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     requirement and skip the optional consult Agent() call. Phase 6 is optional. -->
 Agent(subagent_type="consultant-secondary",
       description="End-of-run consult for /z-do <RUN>",
       prompt="MODE: post-do-review\n\nTask: <approach summary>\nDiff: <inline or path>\nCodex-reviewer findings: <accepted / what was waived>\n\nAsk: is this change sound? Anything the reviewer missed?")
@@ -207,3 +223,19 @@ Apply the "one reason it might be wrong" check to each finding. If it raises a r
 ### Git history-rewrite safety
 
 Before recommending any `git reset --hard HEAD~N`, `git commit --amend`, or interactive-rebase squash on a branch tracking an upstream: for each commit being rewritten, run `git branch -r --contains <sha>`. If the upstream ref appears, STOP — recommend rebase or new-commit instead, never silent rewrite. Force-push to main requires explicit per-incident user authorization with (i) list of overwritten commits and (ii) content-equivalence/superset demonstration.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | yes | Phase 2 doc-fetcher Agent(); Phase 5 reviewer Agent(); Phase 6 optional consultant-secondary Agent() call |
+| `ask_user` | yes | Empty arguments gate; Phase 5 reviewer second-failure gate |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

@@ -1,6 +1,11 @@
 ---
 description: Audit a plan's artifacts (SPEC.md, PLAN.md, TASKS.md) for the same kind of code-quality issues /z-mr-review finds on a diff — defensive bloat, premature abstraction, DRY/KISS/SOLID violations, over-engineering, STYLE.md drift — BEFORE any code is written. Emits PLAN_STYLE_AUDIT.md with BLOCKER/MAJOR/MINOR findings suitable for /z-amend.
 argument-hint: [--slug <slug>]
+runtime: c1
+driver_features_required:
+  - subagent
+  - ask_user
+unsupported_driver_behavior: explicit_gate
 ---
 
 You are running **z-harness `/z-audit-plan-style`** — a multi-LLM code-quality audit of plan artifacts (SPEC.md, PLAN.md, TASKS.md), modelled on `/z-mr-review` but operating on a plan rather than a diff. The output is `PLAN_STYLE_AUDIT.md` under `$Z_HARNESS_PLAN_DIR/`, with findings ranked BLOCKER / MAJOR / MINOR and shaped for direct promotion into `/z-amend`.
@@ -50,6 +55,8 @@ Loop prevention: carry forward the latest route chain; if it already has two ent
 1. **Discover plan slug:**
    Enumerate subdirectories under the plans directory (`z-harness/plans/`) or legacy directory (`z-harness/`) that contain plan artifacts (`SPEC.md` / `PLAN.md` / `TASKS.md`).
    - If single candidate → use it.
+   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug
+        selection question via their native channel. Silent omission is forbidden. -->
    - If multiple candidates → use `AskUserQuestion` to select the slug (or honor `--slug <slug>` argument if provided).
    - If zero → `mkdir -p "$NO_PLAN_ARCHIVE_DIR"`, write `$NO_PLAN_ARCHIVE_DIR/route-decision.md` recommending `/z-plan`, emit `plan_route_decision` under `$NO_PLAN_RUN`, ask the user to switch or abandon, and stop. Do not create a style audit without plan artifacts.
 2. **Export variables:**
@@ -205,6 +212,9 @@ SLUG_DIR_ABS="$REPO_ROOT/$BASE"
 Dispatch:
 
 ```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     requirement to the user and skip the Agent() call. The command cannot
+     proceed without subagent support. -->
 Agent(
   subagent_type="plan-style-reviewer",
   model="sonnet",
@@ -410,6 +420,9 @@ Branch on `$RESULT`:
 - **`prefill`:** Present the `AskUserQuestion` normally, pre-select `$DEFAULT` as the recommended option (append label suffix: ` (Recommended — your preference)`).
 - **`ask`:** Present the `AskUserQuestion` normally. If `$SOURCE == "conflict"`, add to the question header text: `(Note: config says <X>, memory says <Y> — your answer below will be offered as a conflict-resolution write target.)` After the user picks an answer, if that answer differs from both config and memory values, surface a one-shot follow-up `AskUserQuestion`: "Record your answer as the new preference? (config / memory:very_strong / memory:strong / no — keep both stored, ask again next time)". Caller writes to config or dispatches `/z-suggest-memory` accordingly.
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the audit outcome
+     gate (Amend now / Review and trim / Proceed as-is) via their native channel
+     when resolver result is prefill or ask. Silent omission is forbidden. -->
 Present the summary and ask via `AskUserQuestion` (when resolver result is `prefill` or `ask`):
 - "Amend now (run `/z-amend --from z-harness/<SLUG>/PLAN_STYLE_AUDIT.md`)"
 - "Review and trim — I'll edit PLAN_STYLE_AUDIT.md first, then run /z-amend myself"
@@ -467,6 +480,9 @@ print(json.dumps({"question_id": sys.argv[1], "proposed_value": sys.argv[2], "n_
 ' "$qid" "$val" "$n" "$scope_rec")"
 ```
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the preference
+     elevation proposal question via their native channel and accept a reply.
+     Silent omission is forbidden. -->
 Present a single `AskUserQuestion`:
 
 > "You've done `<cmd_a> → z-amend` **N times** — add `<val>` as your preference for `<qid>`?"
@@ -543,3 +559,19 @@ If `$PROPOSE_OUT` is empty, skip this phase entirely — no question is asked.
 - **Archive before overwrite.** Existing `PLAN_STYLE_AUDIT.md` is always archived before being replaced — this is what powers the dismissal-extraction loop on subsequent runs.
 - **Log everything** via `scripts/log-event.sh`. Event prefix is `plan_style_*`.
 - **No emojis** anywhere in artifacts.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | yes | Phase 3 plan-style-reviewer Agent() call |
+| `ask_user` | yes | Phase 0 multiple-candidates slug selection; Phase 5 audit outcome gate (Amend now / Review and trim / Proceed as-is); Phase 9 preference elevation proposal |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

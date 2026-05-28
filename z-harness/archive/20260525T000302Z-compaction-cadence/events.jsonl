@@ -1,2 +1,0 @@
-{"ts":"2026-05-25T00:04:12Z","run":"20260525T000302Z-compaction-cadence","kind":"doc_drift_acknowledged","stale_pct":100,"reason":"day-precision last_updated vs second-precision mtimes; harness self-edits"}
-{"ts":"2026-05-25T00:25:34Z","run":"20260525T000302Z-compaction-cadence","kind":"run_end","status":"complete","task_count":10}

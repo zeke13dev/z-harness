@@ -1,6 +1,6 @@
 {
   "concept": "agents",
-  "last_updated": "2026-05-28T12:00:00Z",
+  "last_updated": "2026-05-28",
   "covers_spec": "none",
   "source_file": [
     "agents/auditor.md",
@@ -17,11 +17,11 @@
     "agents/plan-style-reviewer.md",
     "agents/planning-router.md",
     "agents/remote-runner.md",
+    "agents/research-judge.md",
     "agents/review-agent.md",
     "agents/reviewer.md",
     "agents/scope-probe.md",
     "agents/scope-reconciler-audit.md",
-    "agents/research-judge.md",
     "agents/scope-reconciler-brainstorm.md",
     "agents/spec-precheck.md"
   ],
@@ -116,7 +116,7 @@
       "line": 1,
       "symbol": "planning-router",
       "kind": "module",
-      "summary": "Haiku advisory router for ambiguous plan-family decisions; parseable route contract."
+      "summary": "Haiku advisory router; primary routes include /z-map (terrain) and /z-research (synthesis); needs_research deprecated alias."
     },
     {
       "file": "agents/research-judge.md",
@@ -191,6 +191,8 @@
     "doc-updater must preserve existing memories[] verbatim and never author memories.",
     "external-lookup must follow docs/llm/lookup-contract.json and refuse mutating commands.",
     "planning-router is read-only and advisory; malformed or unsafe routing returns ask_user/bad_input.",
+    "planning-router primary routes: /z-map for terrain_uncertain topics; /z-research for approach synthesis when has_map_and_brainstorm is true and approach_uncertain is true.",
+    "planning-router reason code needs_research is a deprecated alias for needs_terrain_map (routes to /z-map); callers should emit needs_terrain_map instead; deprecated alias is valid for one version cycle only.",
     "mr-reviewer reviews quality, not correctness, and returns JSON for the orchestrator to write.",
     "plan-style-reviewer reviews design-quality of plan artifacts, not correctness; never finds logic/correctness/race-condition bugs.",
     "plan-style-reviewer never writes PLAN_STYLE_AUDIT.md; orchestrator does.",
@@ -211,12 +213,18 @@
     "scope-reconciler-audit never smooths over chunk dissent; both conflicting findings appear verbatim in the Cross-chunk dissent section.",
     "scope-reconciler-audit never writes to disk; it returns REPORT.md content and CHUNK_ARTIFACTS for the orchestrator to persist.",
     "scope-reconciler-brainstorm always sets chosen_framing: pending; any other value is a spec violation.",
-    "scope-reconciler-brainstorm never drops a failed chunk silently; every chunk ID from the input array must appear as either a Chunk or Chunk FAILED section."
+    "scope-reconciler-brainstorm never drops a failed chunk silently; every chunk ID from the input array must appear as either a Chunk or Chunk FAILED section.",
+    "research-judge is FORBIDDEN from proposing new design recommendations; every claim must trace back to MAP.md, BRAINSTORM.md, or a panel perspective file.",
+    "research-judge self-check (Step 7) is mandatory on every invocation; research_judge_temptation field is always populated.",
+    "research-judge produces exactly 10 sections in fixed order; no additional top-level sections permitted.",
+    "research-judge fires panel_degraded mode when panel_perspective_count < 3; synthesis continues with available perspectives.",
+    "research-judge returns STATUS: unable_to_complete when perspectives array is empty or MAP.md/BRAINSTORM.md is missing."
   ],
   "gotchas": [
     "codex-consultant.md, gemini-consultant.md, and codex-reviewer.md are stale names.",
     "check-timeout.sh is sourced by proxy agents; missing timeout/gtimeout leaves TIMEOUT_CMD empty.",
     "planning-router must not infer missing quantitative signals from filesystem exploration.",
+    "planning-router needs_research reason code is a deprecated alias for needs_terrain_map — callers using needs_research should migrate to needs_terrain_map in the next version cycle.",
     "doc-updater dry-run returns proposed docs; /z-maintain-docs decides whether to write them.",
     "external-lookup's canonical contract is lookup-contract.json, not only inline agent prose.",
     "remote-runner refuses DB writes, real-money operations, destructive ops, and interpretive work.",
@@ -237,8 +245,8 @@
     "scope-probe caps walked candidates at 4 to keep context cheap; walking more than 4 is a violation.",
     "scope-probe makes at most one doc-fetcher call (step 4); chaining doc-fetcher calls is a violation.",
     "scope-probe output must have exactly one fenced JSON block; line-prefix headers (STATUS, MODE, AXIS, etc.) must appear before the fence, never inside it.",
-    "scope-probe returns STATUS: refused + MODE: MEDIUM when axis evidence is insufficient \u2014 this is not an error, it is the correct graceful-degradation path.",
-    "scope-reconciler-audit severity elevation applies only to systemic non-dissent findings (same normalized_evidence_key in \u22652 distinct chunks); dissent findings are never elevated.",
+    "scope-probe returns STATUS: refused + MODE: MEDIUM when axis evidence is insufficient — this is not an error, it is the correct graceful-degradation path.",
+    "scope-reconciler-audit severity elevation applies only to systemic non-dissent findings (same normalized_evidence_key in >=2 distinct chunks); dissent findings are never elevated.",
     "scope-reconciler-audit normalization (lowercase, collapse whitespace, strip line-number prefix, truncate to 200 chars) is an internal computation only; the original quoted evidence is always written to REPORT.md.",
     "scope-reconciler-brainstorm anti-bias check (sections A through D) is mandatory even when findings are empty; skipping any sub-check makes the output less trustworthy than a single chunk's output.",
     "scope-reconciler-brainstorm: a Claude-favoring pick requires a concrete justification naming what Claude said that peers did not; a generic preference is not accepted as justification.",

@@ -1,6 +1,11 @@
 ---
 description: Semantic test-case planner. Reads SPEC.md + PLAN.md + TASKS.md for an existing plan, risk-ranks the tasks, drafts non-trivial test cases that catch real semantic bugs (sign errors, schema/feature mismatches, time-window off-by-one, unit confusion, state-machine invariants), runs bundled cross-LLM consult (Gemini + Codex, mode test-cases) to add missed coverage and drop trivial drafts, writes TESTS.md, and cross-links TEST-NNN entries back into TASKS.md. Tests are then implemented by /z-implement-all in the same task as their production code.
 argument-hint: [--slug <slug>]
+runtime: c1
+driver_features_required:
+  - subagent
+  - ask_user
+unsupported_driver_behavior: explicit_gate
 ---
 
 You are running **z-harness `/z-test`** — the semantic test-case planner. This is an **optional planning-time step** between `/z-plan` and `/z-implement-all`. It does NOT write or run any test code. It produces a structured `TESTS.md` artifact that the implementer subagent reads alongside TASKS.md, so tests get implemented in the same diff as the code they exercise.
@@ -14,6 +19,7 @@ Same logic as `/z-implement-all` Phase 0:
 1. Enumerate `$Z_HARNESS_PLAN_DIR/` subdirs containing a `TASKS.md`; also check legacy flat `z-harness/TASKS.md`.
 2. If `--slug <slug>` arg → use it.
 3. Single candidate → use it; export `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")`.
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug selection question via their native channel. Silent omission is forbidden. -->
 4. Multiple → `AskUserQuestion` to pick.
 5. Zero → tell user "no plan found — run `/z-plan` first"; abort.
 
@@ -21,6 +27,7 @@ Set `$BASE = $Z_HARNESS_PLAN_DIR` (or `z-harness` for legacy).
 
 **Require SPEC.md + PLAN.md + TASKS.md.** Abort with "incomplete plan; run /z-plan to completion first" if any of the three is missing.
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the implementation-underway continue/abort question via their native channel. Silent omission is forbidden. -->
 **Implementation-underway warning.** If TASKS.md already has any `[x]` rows, `AskUserQuestion`:
 - "Continue — add tests that will retroactively constrain in-flight tasks"
 - "Abort — wait until implementation is complete, then run /z-test after /z-review-all"
@@ -60,6 +67,7 @@ Also extract from SPEC.md every line of these shapes and treat each as a candida
 - Numeric/quantitative assertions ("must be ≤ X", "exactly N", "monotone in Y")
 - Equality/identity claims about cross-module contracts ("strategy reads field X written by Y")
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the bug-class concerns question via their native channel. Silent omission is forbidden. -->
 **Brief user input.** Before drafting tests, `AskUserQuestion` (free-text):
 - "What specific bug classes worry you most for this plan?"
 
@@ -105,6 +113,7 @@ Save the draft list to `$BASE/archive/$RRUN/phase2-drafts.md`.
 
 Spawn **both** consultants in parallel in a single message:
 
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this parallel consultant dispatch requirement to the user and skip the Agent() calls. The cross-LLM consult is non-skippable per the hard rules; drivers that skip it must warn the user that coverage-gap detection has been bypassed. -->
 ```
 Agent(
   subagent_type="consultant-primary",
@@ -140,6 +149,7 @@ Save the synthesized list to `$BASE/archive/$RRUN/phase4-synthesis.md`.
 
 Send `PushNotification` (if policy != `off`): "Test plan ready for review."
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the test-plan approval question (accept-all / accept mandatory+recommended / edit subset / abandon) via their native channel. Silent omission is forbidden. -->
 Present counts via `AskUserQuestion`:
 - "<M> mandatory + <R> recommended + <O> optional tests drafted. Cross-LLM dropped <D> trivial drafts; added <A> coverage gaps."
 
@@ -149,6 +159,7 @@ Options:
 - **Edit subset** — orchestrator iterates each contested test (cross-LLM disagreement, or user-concern items) via per-test `AskUserQuestion`: keep / drop / modify (free-text).
 - **Abandon** — log `test_plan_end` with `status: abandoned`; exit. No TESTS.md written.
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the fixture-scaffolding approval question via their native channel. Silent omission is forbidden. -->
 **Fixture-scaffolding gate.** For any accepted test whose `setup:` field requires non-trivial new test infrastructure (a new fixture file, a new mock framework, a new test-data generation step), get separate explicit approval via `AskUserQuestion`. Same discipline as `/z-plan` shortcuts: building new test infra without buy-in is a scope expansion.
 
 ## Phase 6 — Write TESTS.md
@@ -234,3 +245,19 @@ If a task already has a `**Tests:**` line from a prior `/z-test` invocation, **m
 - Does not modify SPEC.md or PLAN.md (only appends `**Tests:**` to TASKS.md and creates TESTS.md).
 - No implementer-subagent dispatch (all ideation in orchestrator main thread + cross-LLM consult, same model as /z-plan-light).
 - No `--apply` flag — Phase 5 `AskUserQuestion` is the only write gate. The user can re-run `/z-test` later to add more tests; merge semantics in Phase 7 handle this.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | yes | Phase 3 consultant-primary + consultant-secondary parallel dispatch |
+| `ask_user` | yes | Phase 0 slug selection; Phase 0 implementation-underway warning; Phase 1 bug-class concerns; Phase 5 test-plan approval; Phase 5 fixture-scaffolding gate |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

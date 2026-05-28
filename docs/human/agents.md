@@ -1,6 +1,6 @@
 # Agents
 
-> Last updated: 2026-05-28T12:00:00Z
+> Last updated: 2026-05-28
 > Covers source: agents/auditor.md, agents/bisect-isolator.md, agents/cluster-planner.md, agents/complexity-classifier.md, agents/consultant-primary.md, agents/consultant-secondary.md, agents/doc-fetcher.md, agents/doc-updater.md, agents/external-lookup.md, agents/implementer.md, agents/mr-reviewer.md, agents/plan-style-reviewer.md, agents/planning-router.md, agents/research-judge.md, agents/remote-runner.md, agents/review-agent.md, agents/reviewer.md, agents/scope-probe.md, agents/scope-reconciler-audit.md, agents/scope-reconciler-brainstorm.md, agents/spec-precheck.md
 
 ## Overview
@@ -23,7 +23,7 @@ The suite is split by responsibility: planning route advice (`planning-router`),
 - `agents/implementer.md:1` — `implementer` — Implements exactly one task block; accepts `--tasks <path>` for promoted review artifacts (REVIEW-TASKS.md / MR-REVIEW.md); mandatory self-check before returning STATUS: ok; supports `cross_task_notes` for downstream task signaling and `tests_md_path` for TESTS.md coverage.
 - `agents/mr-reviewer.md:1` — `mr-reviewer` — Sonnet branch-diff code-quality reviewer that runs inline Claude review plus optional multi-voice dispatch; supports `deep: true` for Opus upgrade on `abstraction-only` passes; merges findings with dedup, consensus tier-bump, and dismissal-pattern matching into a fenced JSON payload.
 - `agents/plan-style-reviewer.md:1` — `plan-style-reviewer` — Sonnet plan artifact style reviewer; audits SPEC.md, PLAN.md, TASKS.md for design-quality issues (defensive bloat, premature abstraction, DRY/KISS/SOLID violations, over-engineering, style-drift, test-noise) before any code is written; multi-voice capable; returns fenced JSON + Summary block.
-- `agents/planning-router.md:1` — `planning-router` — Cheap Haiku read-only advisory router for ambiguous planning-family route decisions; returns an exact parseable route contract.
+- `agents/planning-router.md:1` — `planning-router` — Cheap Haiku read-only advisory router for ambiguous planning-family route decisions; returns an exact parseable route contract. Primary routes include `/z-map` (for terrain-uncertain topics) and `/z-research` (for approach synthesis when MAP.md + BRAINSTORM.md exist). The `needs_research` reason code is a deprecated alias for `needs_terrain_map` → `/z-map`.
 - `agents/research-judge.md:1` — `research-judge` — Opus final-judge synthesizer for `/z-research`; reads N adversarial-panel perspective outputs plus MAP.md and BRAINSTORM.md; produces a 10-section RESEARCH.md (approach decision matrix, cross-artifact contradictions, design axes, terrain summary, brainstorm frame space, high-leverage options, rejected framings, evidence gaps, adversarial perspectives summary, and mechanical rank-ordering for /z-plan handoff). Forbidden from new design recommendations; every claim must trace back to source artifacts. Read-only — returns content as text; orchestrator writes the file.
 - `agents/remote-runner.md:1` — `remote-runner` — Haiku mechanical remote verifier for sandboxed builds/tests, paper service checks, logs, disk, and read-only DB queries.
 - `agents/reviewer.md:1` — `reviewer` — Provider-agnostic correctness/spec reviewer proxy for completed implementation tasks; accepts `relevant_docs` LLM JSONs to catch contract drift.
@@ -44,7 +44,7 @@ The suite is split by responsibility: planning route advice (`planning-router`),
 
 - `consultant-primary`, `consultant-secondary`, and `reviewer` are Haiku proxy prompts that shell out to provider CLIs resolved at runtime. Old hard-coded `codex-consultant.md`, `gemini-consultant.md`, and `codex-reviewer.md` references are stale.
 - The proxy agents source `scripts/check-timeout.sh` so `$TIMEOUT_CMD` is available when GNU timeout or gtimeout exists, and they emit `consult_start` events before provider calls so liveness checks can see hangs.
-- `planning-router` is advisory only. It reads compact caller-supplied signals, performs no shell work, writes nothing, and returns `ask_user` for route-loop or conflicting-signal risk.
+- `planning-router` is advisory only. It reads compact caller-supplied signals, performs no shell work, writes nothing, and returns `ask_user` for route-loop or conflicting-signal risk. The `needs_research` reason code is a deprecated alias for the current cycle only — callers should emit `needs_terrain_map` instead (routes to `/z-map`, not `/z-research`).
 - `doc-updater` is the structural refresh path, not the memory authoring path. It must copy `memories[]` exactly; `/z-suggest-memory` is the only intended authoring and editing path for memories.
 - `external-lookup` checks every Bash command against a mutation verb-blocklist before execution and returns `STATUS: refused` instead of trying to sanitize a risky command.
 - `remote-runner` is mechanical. It can run sandboxed builds and read-only shared-state checks, but interpretive debugging or DB analysis belongs to the main reasoning thread. It also refuses naked binary launches as restart substitutes — `qtctl up <manifest>` is the only correct restart path for qtctl-supervised processes.

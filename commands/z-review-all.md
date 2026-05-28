@@ -1,6 +1,11 @@
 ---
 description: Final-gate cross-LLM review of a completed z-harness plan. Runs Gemini + Codex on the cumulative diff against SPEC.md to surface (a) implementation drift across tasks and (b) spec gaps that only surface in aggregate. Use after /z-implement-all completes.
 argument-hint: [--slug <slug>] [--base <git-ref>]
+runtime: c1
+driver_features_required:
+  - subagent
+  - ask_user
+unsupported_driver_behavior: explicit_gate
 ---
 
 You are running the **z-harness `/z-review-all`** final-gate review. This is a holistic cross-task cross-LLM review, intentionally distinct from the per-task review that `/z-implement-all` already performs. Per-task review catches per-task issues; this catches issues that only show up when looking at all tasks together.
@@ -58,6 +63,7 @@ Once `EARLY_PLAN_DIR` is known:
 Same logic as `/z-implement-all` / `/z-implement-next`:
 
 1. Enumerate subdirs of `z-harness/` containing a `TASKS.md`. Also check legacy flat `z-harness/TASKS.md`.
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug-selection question via their native channel. Silent omission is forbidden. -->
 2. Single candidate → use it. Multiple → `AskUserQuestion` to pick (or honor `--slug <slug>` argument). Zero → tell user nothing to review; stop.
 3. Export `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")` (or leave unset for legacy flat).
 4. `BASE = $Z_HARNESS_PLAN_DIR` (or `z-harness` for legacy).
@@ -89,6 +95,7 @@ fi
 Read `$BASE/TASKS.md`. Count `[ ]`, `[~]`, `[x]`, and skip-flagged tasks.
 
 - If any `[~]` (in-progress) exist → abort with "Stop — task X is still in progress."
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the incomplete-plan warning (review anyway / cancel) via their native channel. Silent omission is forbidden. -->
 - If any `[ ]` (pending, not skip-flagged) exist → warn the user via `AskUserQuestion`:
   - **Review anyway** (incomplete plan)
   - **Cancel** (finish implementation first)
@@ -102,6 +109,7 @@ The cumulative diff is `git diff <base-ref>..HEAD` across all the changes this p
 2. Otherwise:
    - Find the first `task_start` event in `$BASE/metrics.jsonl` (or `events.jsonl` for the slug-namespaced events). That's the plan's start timestamp `T_start`.
    - `BASE_REF=$(git rev-list -n1 --before="$T_start" HEAD)`
+   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the base-ref question via their native channel. Silent omission is forbidden. -->
    - If that fails or returns nothing, fall back to `BASE_REF=$(git log --oneline | head -50 | grep -i "before z-plan\|baseline\|pre-z" | head -1 | awk '{print $1}')` and if still nothing, **ask the user** for the base ref via `AskUserQuestion`.
 
 Confirm the chosen base ref with the user before diffing, showing the short commit message: `git show --no-patch --format='%h %s' $BASE_REF`.
@@ -154,6 +162,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RR
   '{"trigger":"pre_consult","phase":"review_all_phase_4"}'
 ```
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the compaction-breakpoint decision (pause for /clear / proceed now) via their native channel. Silent omission is forbidden. -->
 Present an `AskUserQuestion` with exactly two options:
 
 > **Compaction breakpoint — pre-consultant spawn**
@@ -213,6 +222,7 @@ Each is asked the **two-pronged** review:
 
 ### Calling pattern
 
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip both Agent() calls. The final-review consultants are the correctness gate; drivers that skip them must warn the user that cross-LLM review has been bypassed. -->
 ```
 Agent(
   subagent_type="consultant-primary",
@@ -400,6 +410,7 @@ The implementation is done and reviewed; the docs are what's left.
    - Line 3: `<BASE>/SPEC.md` (spec path)
    - Line 4: `docs/llm/TAGS.txt` (tags path)
 4. Dispatch:
+   <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The review-agent generates memory candidates; drivers that skip it should warn the user that memory review is unavailable. -->
    ```
    Agent(
      subagent_type="review-agent",
@@ -428,6 +439,7 @@ The implementation is done and reviewed; the docs are what's left.
           '{"subagent_model":$model,"subagent_input_tokens":$in_tok,"subagent_output_tokens":$out_tok,"candidates_emitted":$n}')"
      ```
    - **Push-notify** (`memory_candidates_ready`): "`<N>` memory candidate(s) ready for review."
+   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface per-candidate memory review questions (accept / edit / skip / skip-all) via their native channel. Silent omission is forbidden. -->
    - **Sequential AskUserQuestion per candidate** (iterate the candidates array, one prompt per candidate; stop early if user picks Skip-all-remaining):
      - Show: `candidate_kind`, `type`, `text`, `tags`, `suggested_concept_slug`, `rationale`.
      - Options:
@@ -471,3 +483,19 @@ The implementation is done and reviewed; the docs are what's left.
 - Not a substitute for per-task review. Per-task review catches per-task bugs fast; this catches cross-task bugs.
 - Not a substitute for human design review on major architecture changes.
 - Not for use during implementation — it's a final gate, not a debugging tool. (For mid-implementation debugging, just chat with Claude normally and have it read the relevant files.)
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | yes | Phase 4 consultant-primary + consultant-secondary (parallel); Phase 7 review-agent (memory review) |
+| `ask_user` | yes | Phase 0 slug selection; Phase 1 incomplete-plan warning; Phase 2 base-ref fallback question; Phase 3.7 compaction-breakpoint decision; Phase 7 per-candidate memory review |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

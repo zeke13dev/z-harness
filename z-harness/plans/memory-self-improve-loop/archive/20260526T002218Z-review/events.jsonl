@@ -1,3 +1,0 @@
-{"ts":"2026-05-26T00:22:27Z","run":"20260526T002218Z-review","kind":"review_all_start","slug":"memory-self-improve-loop","z_harness_version":"380aca6","z_harness_dirty":true,"z_harness_branch":"main"}
-{"ts":"2026-05-26T00:23:47Z","run":"20260526T002218Z-review","kind":"compaction_pause","slug":"memory-self-improve-loop","trigger":"pre_consult","phase":"review_all_phase_4"}
-{"ts":"2026-05-26T00:30:22Z","run":"20260526T002218Z-review","kind":"review_all_end","slug":"memory-self-improve-loop","drift_findings":6,"spec_gap_findings":5,"review_tasks":9,"escalations":0,"user_action":"artifact_promoted"}

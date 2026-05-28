@@ -1,4 +1,0 @@
-{"ts":"2026-05-24T10:42:07Z","run":"unknown-run","kind":"provider_shadowed","section":"roles","key":"consultant_primary","repo":"/var/folders/8h/hkmcg37d1_b6f6jq7qlhzzk00000gn/T/tmpyssw7ron/repo.json","global":"/var/folders/8h/hkmcg37d1_b6f6jq7qlhzzk00000gn/T/tmpyssw7ron/home/.config/z-harness/providers.json"}
-{"ts":"2026-05-26T06:01:26Z","run":"unknown-run","kind":"provider_resolved","role":"consultant_primary","provider":"gemini","command":"gemini","model_label":"gemini-2.5-pro"}
-{"ts":"2026-05-26T06:01:26Z","run":"unknown-run","kind":"provider_resolved","role":"consultant_secondary","provider":"codex","command":"codex","model_label":"gpt-5-codex"}
-{"ts":"2026-05-26T06:01:26Z","run":"unknown-run","kind":"provider_resolved","role":"reviewer","provider":"codex","command":"codex","model_label":"gpt-5-codex"}

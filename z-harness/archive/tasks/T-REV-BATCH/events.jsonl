@@ -1,4 +1,0 @@
-{"ts":"2026-05-26T15:03:43Z","run":"tasks/T-REV-BATCH","kind":"review_start","id":"T-REV-BATCH","cycle":2}
-{"ts":"2026-05-26T15:04:55Z","run":"tasks/T-REV-BATCH","kind":"review","prompt_chars":2520,"response_chars":6186,"return_chars":28,"wall_ms":5000}
-{"ts":"2026-05-26T15:04:55Z","run":"tasks/T-REV-BATCH","kind":"review_end","id":"T-REV-BATCH","cycle":2,"blockers":0,"majors":0,"prompt_chars":2520,"response_chars":6186,"return_chars":28,"wall_ms":72219}
-{"ts":"2026-05-26T15:05:27Z","run":"tasks/T-REV-BATCH","kind":"task_done","id":"T-REV-BATCH","retries":1,"review_blockers":1,"review_cycles":2,"tests_passed":0,"tests_failed":0,"bundled_tasks":7}

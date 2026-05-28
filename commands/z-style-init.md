@@ -1,6 +1,11 @@
 ---
 description: Author the project STYLE.md interactively, grounded in the repo's most idiomatic existing files (Capture). Required before /z-mr-review will run.
 argument-hint: [--amend] [--ingest <path-to-existing-guide>]
+runtime: c1
+driver_features_required:
+  - subagent
+  - ask_user
+unsupported_driver_behavior: explicit_gate
 ---
 
 You are running the **z-harness `/z-style-init`** pipeline.
@@ -122,6 +127,7 @@ Then exit.
 
 Dispatch a Sonnet subagent to pick the top 5 most idiomatic files from `CANDIDATES`:
 
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The capture ranking step is required to ground the style guide in idiomatic source files; drivers that skip it must warn the user that capture-set selection has been bypassed. -->
 ```
 Agent(
   subagent_type="general-purpose",
@@ -146,6 +152,7 @@ If the agent returns fewer than 5 paths (e.g. `CANDIDATES` had fewer than 5 entr
 
 ### Step 1c — User confirmation of Capture set
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the Capture file confirmation question via their native channel. Silent omission is forbidden. -->
 Present the ranked 5 to the user via `AskUserQuestion`:
 
 ```
@@ -185,6 +192,7 @@ Read the contents of the `FINAL_5` files into context (using the Read tool for e
 
 Read the file at `INGEST_PATH` into context as `EXISTING_GUIDE`. Skip the interview questions below. Set `SOURCE = ingest`. Proceed to Phase 3.
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the style interview questions via their native channel. Silent omission is forbidden. -->
 **Otherwise (no `--ingest`), ask up to 4 questions via `AskUserQuestion`:**
 
 Ask all 4 in a single `AskUserQuestion` call (multi-part prompt), then wait for a single reply. If the user skips a question or gives a blank answer for it, treat that section as "no preference stated."
@@ -209,6 +217,7 @@ Record answers as `INTERVIEW_ANSWERS`. Set `SOURCE = capture` (primary source is
 
 Dispatch a Sonnet subagent to draft the full STYLE.md:
 
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The draft phase is required to produce STYLE.md; drivers that skip it must warn the user that the style draft has been bypassed. -->
 ```
 Agent(
   subagent_type="general-purpose",
@@ -258,6 +267,7 @@ Capture the agent return as `DRAFT_STYLE_MD`. Extract the content from the fence
 
 Dispatch `consultant-secondary` and `consultant-primary` **in parallel in a single message** with `MODE: style-critique`:
 
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this parallel cross-LLM critique dispatch requirement to the user and skip the Agent() calls. Cross-LLM critique is mandatory per the operating principles; drivers that skip it must warn the user that style consistency checking has been bypassed. -->
 ```
 Agent(
   subagent_type="consultant-secondary",
@@ -304,6 +314,7 @@ Record the revised content as `REVISED_STYLE_MD`.
 
 ## Phase 5 — User approval and write
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the STYLE.md draft approval question (accept / edit-and-resave / re-critique / abandon) via their native channel. Silent omission is forbidden. -->
 Present the draft to the user via `AskUserQuestion`:
 
 ```
@@ -493,6 +504,7 @@ Read `./STYLE.md` (full content) into `CURRENT_STYLE_MD`.
 
 Dispatch a Sonnet subagent:
 
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The amendment proposal step is required to generate rule candidates from dismissal clusters; drivers that skip it must warn the user that rule proposals have been bypassed. -->
 ```
 Agent(
   subagent_type="general-purpose",
@@ -573,6 +585,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
   '{"phase":"MB-4","reason":"rule-review"}'
 ```
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface each per-cluster rule review question (add-as-drafted / reject) via their native channel. Silent omission is forbidden. -->
 For each cluster / proposed rule, send a **separate `AskUserQuestion` call** — one cluster per call, sequentially. Do not batch multiple clusters into a single `AskUserQuestion`.
 
 ```
@@ -670,3 +683,19 @@ Push-notify (if notify.level ≠ `off`; see [docs/human/config.md](docs/human/co
 - **Refuse without STYLE.md gate.** If STYLE.md already exists in Mode A, refuse immediately — do not overwrite silently. In Mode B, refuse if STYLE.md does NOT exist.
 - **Log everything** via `scripts/log-event.sh`.
 - **Never read `docs/llm/*.json` from main thread.** Dispatch `doc-fetcher` if INDEX.json exists and context is needed.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | yes | Phase 1b Sonnet capture ranker; Phase 3 Sonnet draft; Phase 4 consultant-secondary + consultant-primary parallel critique; Mode B Phase MB-3 Sonnet amendment proposer |
+| `ask_user` | yes | Phase 1c Capture file confirmation; Phase 2 style interview (4 questions); Phase 5 draft approval; Mode B Phase MB-4 per-cluster rule review |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

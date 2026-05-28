@@ -1,6 +1,11 @@
 ---
 description: Audit a target component across one or more dimensions (correctness / perf / cleanliness / design). Pre-flight scopes (target, dimensions, optional rubric file), spawns one auditor subagent per dimension in parallel, runs bundled Gemini+Codex consult on findings, emits REPORT.md + TASKS.md under $Z_HARNESS_PLAN_DIR-audit/ in the exact shape /z-implement-all consumes. Read-only — never edits the target.
 argument-hint: <target path or component name> [--scope-from <chunk-spec>]
+runtime: c1
+driver_features_required:
+  - subagent
+  - ask_user
+unsupported_driver_behavior: explicit_gate
 ---
 
 You are running **z-harness `/z-audit`** — a structured, read-only audit pipeline. The output is `REPORT.md` (everything found) plus a curated `TASKS.md` (actionable subset, in `/z-implement-all`-compatible format) under `$Z_HARNESS_PLAN_DIR-audit/`.
@@ -9,6 +14,9 @@ Target (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question
+     "What should I audit?" via their native channel and accept a text reply.
+     Silent omission is forbidden. -->
 **If the target above is empty** — use `AskUserQuestion` to ask "What should I audit?" before proceeding. Do not invent.
 
 This command is **read-only**. Never edit the target. Fixes happen later via `/z-implement-all` consuming the emitted `TASKS.md`.
@@ -50,6 +58,9 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 ## Setup
 
 1. **Sanitize `$ARGUMENTS`** — strip the `--scope-from <chunk-spec>` token pair (if present) before using `$ARGUMENTS` for slug derivation, doc-fetcher dispatch, or target parsing. The sanitized value is used for all subsequent steps.
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug
+     confirmation question via their native channel if non-obvious. Silent
+     omission is forbidden. -->
 2. **Derive slug** — short kebab-case like `audit-<component>` (e.g. target `strategies/kxbtc15m_fade_extremes` → `audit-kxbtc15m`). Confirm via `AskUserQuestion` if non-obvious. Check `ls z-harness/` first for collisions.
 3. Export `Z_HARNESS_SLUG=<slug>-audit`.
 4. Pick run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>-audit`.
@@ -67,6 +78,8 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 7. Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
 8. If `docs/llm/INDEX.json` exists → dispatch `doc-fetcher` (Haiku) to get the concept list overlapping the audit target. Do NOT read INDEX.json or per-concept JSONs from main thread.
    ```
+   <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+        requirement and skip if unavailable. Audit proceeds without doc grounding. -->
    Agent(subagent_type="doc-fetcher",
          description="Doc context for audit <slug>",
          prompt="query: which concepts cover <audit target paths>?\nrepo_root: <abs path>\ndepth: summary")
@@ -80,6 +93,42 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 **Check `SKIP_PHASE_0` first.** If `SKIP_PHASE_0=true` (set by `--scope-from` flag handling above), skip this entire section immediately and proceed to Phase 1. Do not dispatch scope-probe, do not write SCOPE files, do not log scope_probe_* events.
 
 If `SKIP_PHASE_0` is not set, execute the following:
+
+### Step 0a — Fast-path check (single-file target)
+
+Before dispatching scope-probe, evaluate whether the target qualifies for an automatic LIGHT classification:
+
+```bash
+ARG="<sanitized $ARGUMENTS>"
+ARG_LEN=${#ARG}
+case "$ARG" in
+  *"*"*|*"?"*|*"["*|*"{"*|*"}"*) IS_GLOB=1;;
+  *) IS_GLOB=0;;
+esac
+EXPANDED_ARG="${ARG/#\~/$HOME}"
+SCOPE_FAST_PATH=0
+if [ "$IS_GLOB" -eq 0 ] && [ "$ARG_LEN" -lt 200 ] && [ -f "$EXPANDED_ARG" ]; then
+  # Fast-path: single existing file, short argument, no globs → auto-classify LIGHT
+  SCOPE_FAST_PATH=1
+  PAYLOAD="$(python3 -c 'import json,sys; print(json.dumps({"command":sys.argv[1],"target":sys.argv[2],"arg_len":int(sys.argv[3])}))' "z-audit" "$EXPANDED_ARG" "$ARG_LEN")"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" scope_probe_skipped_fast_path "$PAYLOAD"
+  MODE=LIGHT
+  AXIS=none
+  CONFIDENCE=high
+  REASON_CODES=fast_path_single_file
+  REASON="single-file target auto-classified as LIGHT"
+  chunks=[]
+  seams_counted=0
+  candidates_walked=0
+  # Skip to Step 0.3 with LIGHT classification; do not dispatch scope-probe Agent.
+  # Proceed directly to Step 0.3 — Write SCOPE.json using MODE=LIGHT.
+  # dimensions_hint is derived in Step 0.3 (LIGHT branch) per normal flow.
+else
+  # Multi-file / glob / large-arg path: run full scope-probe (Steps 0.1 and 0.2 below).
+fi
+```
+
+If the fast-path branch was taken (`SCOPE_FAST_PATH=1`), skip Steps 0.1 and 0.2 entirely and jump to Step 0.3.
 
 ### Step 0.1 — Define axis taxonomy and dispatch scope-probe
 
@@ -95,6 +144,9 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 Dispatch scope-probe:
 ```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     requirement and skip if unavailable. Phase 0 scope probe cannot run
+     without subagent support; default to MEDIUM mode. -->
 Agent(
   subagent_type="scope-probe",
   description="Scope probe for audit <slug>",
@@ -223,6 +275,9 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 Dispatch N parallel `/z-audit` sub-flows (one per chunk in `chunks`), all in a single message:
 
 ```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     requirement and skip all HEAVY sub-flow Agent() calls. Without subagent
+     support the HEAVY path cannot proceed; default to MEDIUM mode. -->
 Agent(
   subagent_type="orchestrator",
   description="z-audit sub-flow chunk <chunk-id>",
@@ -234,6 +289,8 @@ Wait for all N sub-flows to return. Collect their returns.
 
 After all sub-flows complete, dispatch `scope-reconciler-audit`:
 ```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     requirement and skip the reconciler Agent() call. -->
 Agent(
   subagent_type="scope-reconciler-audit",
   description="Reconcile HEAVY fanout for audit <slug>",
@@ -340,6 +397,9 @@ If `SCOPE_HINT` is set (from `--scope-from`), use `SCOPE_HINT` as the resolved t
    - Auto-confirm the `dimensions_hint` list. Do NOT ask the user which dimensions to audit. Do NOT apply the "$ARGUMENTS named dimensions" shortcut below. Proceed as if the user selected those dimensions.
    - Inform the user: "Phase 0 scope probe suggested dimensions: <dimensions_hint list>. Proceeding with those."
 
+   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the dimensions
+        selection question via their native channel when no auto-resolved dimensions
+        are available. Silent omission is forbidden. -->
    **Only if `SCOPE-audit.json` does not exist, `last_run_id` does not match, `mode` is not `LIGHT`, or `dimensions_hint` is absent/empty:** check whether `$ARGUMENTS` supplied a target + the user already named dimensions in prose. If dimensions are named in `$ARGUMENTS`, use those. Otherwise use `AskUserQuestion` to collect:
    - `correctness` — bugs, off-by-ones, math, look-ahead, polarity, invariants
    - `perf` — slowdowns, allocations, blocking IO, redundant work
@@ -363,6 +423,9 @@ Checkpoint: `$BASE/archive/$RUN/phase1-scope.md` with the resolved (target, dime
 Spawn one `auditor` subagent **per selected dimension**, in parallel, in a single message:
 
 ```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     requirement to the user and skip all auditor Agent() calls. The audit
+     cannot proceed without subagent support. -->
 Agent(
   subagent_type="auditor",
   description="<dim> audit of <slug>",
@@ -372,6 +435,9 @@ Agent(
 
 Each auditor writes `$BASE/findings-<dim>.md` and returns a structured summary. Collect all returns.
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the auditor
+     failure gate (retry / skip / abort) via their native channel.
+     Silent omission is forbidden. -->
 **If any auditor returns `unable_to_complete`** — surface the reason via `AskUserQuestion`: retry that dimension / skip it / abort the audit.
 
 Checkpoint: `$BASE/archive/$RUN/phase2-auditor-returns.md` (concatenate the four return blocks).
@@ -414,6 +480,9 @@ Build `$BASE/REPORT.md` (full set, organized by dimension):
 Spawn both consultants in parallel against `REPORT.md`:
 
 ```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     requirement to the user and skip both consultant Agent() calls. Phase 4
+     cannot complete without subagent support; document the gap and proceed. -->
 Agent(
   subagent_type="consultant-primary",
   description="Audit findings review (Gemini) for <slug>",
@@ -490,6 +559,9 @@ This three-file set (SPEC.md / PLAN.md / TASKS.md) is what `/z-implement-all` re
 Spawn the reviewer against the audit-produced TASKS.md (the diff in this case is the TASKS.md itself):
 
 ```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     requirement to the user and skip the reviewer Agent() call. The safety
+     gate cannot run without subagent support; document the gap. -->
 Agent(
   subagent_type="reviewer",
   description="Codex review of audit TASKS for <slug>",
@@ -498,6 +570,8 @@ Agent(
 ```
 
 Parse the return (capped at 8 KB):
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the reviewer
+     second-failure gate via their native channel. Silent omission is forbidden. -->
 - **Blockers** → re-edit the affected TASKS.md entries; re-run review once. Second failure → halt with `AskUserQuestion`.
 - **Majors** → fix in place, then accept.
 - **No blockers/majors** → accept.
@@ -526,3 +600,19 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 - **One auditor per dimension, in parallel.** Never serialize.
 - **TASKS.md format must match what `/z-implement-all` consumes** — otherwise the audit is a dead-end artifact.
 - **No emojis** anywhere in artifacts.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | yes | Setup doc-fetcher Agent(); Phase 0 scope-probe, HEAVY orchestrator sub-flows, and scope-reconciler-audit Agent() calls; Phase 2 auditor Agent() calls; Phase 4 consultant-primary and consultant-secondary Agent() calls; Phase 6 reviewer Agent() call |
+| `ask_user` | yes | Empty arguments gate; Setup slug confirmation if non-obvious; Phase 1 dimensions selection; Phase 2 auditor unable_to_complete gate; Phase 6 reviewer second-failure gate |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

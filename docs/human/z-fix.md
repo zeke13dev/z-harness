@@ -1,6 +1,6 @@
 # z-fix
 
-> Last updated: 2026-05-27
+> Last updated: 2026-05-28
 > Covers source: commands/z-fix.md
 
 ## Overview
@@ -12,30 +12,40 @@
 ## Key entry points
 
 - `commands/z-fix.md:1` — `/z-fix` — top-level slash command definition; read this for the full phase-by-phase procedure
-- `commands/z-fix.md:18` — Setup — slug derivation, run-id, directory creation, version stamp, `fix_run_start` telemetry
-- `commands/z-fix.md:47` — Phase 0 — non-skippable wrong-tool gate via `AskUserQuestion`
-- `commands/z-fix.md:61` — Phase 1 — problem capture, `doc-fetcher` dispatch, auto-bail threshold check
-- `commands/z-fix.md:94` — Phase 2 — single key decision; bail to `/z-plan` if >2 non-obvious decisions
-- `commands/z-fix.md:99` — Phase 3 — bundled `light-fix` consult (Gemini + Codex in parallel)
-- `commands/z-fix.md:119` — Phase 4 — synthesize, one-reason-wrong check, cross-LLM disagreement surface
-- `commands/z-fix.md:128` — Phase 5 — approve/modify/abandon gate
-- `commands/z-fix.md:141` — Phase 6 — write FIX.md
-- `commands/z-fix.md:190` — Phase 7 — inline implementation (no implementer subagent; orchestrator applies edits directly)
-- `commands/z-fix.md:211` — Phase 8 — Codex review (non-negotiable safety gate)
-- `commands/z-fix.md:239` — Phase 9 — optional post-mortem (auto-suggested if `REVIEW_CYCLES > 1`)
-- `commands/z-fix.md:283` — Phase 10 — finalize, FIX.md status → `shipped`, log `fix_run_end`
-- `commands/z-fix.md:307` — Git history-rewrite safety — doctrine for `git reset`/`amend`/`rebase` on upstream-tracking branches
+- `commands/z-fix.md:24` — Setup — slug derivation (two-step: collision check then resolver gate), run-id, directory creation, version stamp, `fix_run_start` telemetry
+- `commands/z-fix.md:70` — auto-bail thresholds — >5 files / >2 non-obvious decisions / cross-module triggers `escalation.md` + `/z-plan`
+- `commands/z-fix.md:81` — Phase 0 — non-skippable wrong-tool gate via `AskUserQuestion`
+- `commands/z-fix.md:96` — Phase 1 — problem capture, `doc-fetcher` dispatch, auto-bail threshold check
+- `commands/z-fix.md:129` — Phase 2 — single key decision; bail to `/z-plan` if >2 non-obvious decisions
+- `commands/z-fix.md:135` — Phase 3 — bundled `light-fix` consult (Gemini + Codex in parallel, cause-explains-symptoms framing)
+- `commands/z-fix.md:155` — Phase 4 — synthesize, one-reason-wrong check, cross-LLM disagreement surface
+- `commands/z-fix.md:164` — Phase 5 — approve/modify/abandon gate; shortcuts need separate explicit approval
+- `commands/z-fix.md:178` — Phase 6 — write FIX.md (single artifact, status=approved not yet shipped)
+- `commands/z-fix.md:228` — Phase 7 — inline implementation by orchestrator; no implementer subagent; hard limit >7 files
+- `commands/z-fix.md:250` — Phase 8 — Codex review (non-negotiable); retry once on blockers; `REVIEW_CYCLES` counter
+- `commands/z-fix.md:280` — Phase 9 — optional post-mortem; auto-suggested if `REVIEW_CYCLES > 1`
+- `commands/z-fix.md:325` — Phase 10 — finalize: FIX.md status=shipped, `fix_run_end` log, `/z-maintain-docs` hint
+- `commands/z-fix.md:349` — Git history-rewrite safety — doctrine for `git reset`/`amend`/`rebase` on upstream-tracking branches
 
 ## How it interacts with others
 
 - `agents` — spawns `consultant-primary` (Gemini) and `consultant-secondary` (Codex) in parallel at Phase 3; spawns `reviewer` (Codex) at Phase 8
 - `commands` — exits to `/z-debug` when root cause is unknown; escalates to `/z-plan` when auto-bail thresholds are exceeded; suggests `/z-maintain-docs --audit` at finalize if docs were touched
-- `scripts` — uses `log-event.sh` for `fix_run_start` / `fix_run_end` telemetry; uses `plan-path.sh` to resolve plan directory; uses `version.sh` for version stamp
-- `config` — notification policy is read from `docs/human/config.md` (`notify.level` key); `PushNotification` calls at Phase 5 and Phase 10 are gated on this value
+- `scripts` — uses `log-event.sh` for `fix_run_start` / `fix_run_end` telemetry; uses `plan-path.sh` to resolve plan directory; uses `version.sh` for version stamp; uses `config.py resolve-question` for `workflow.slug_confirm` resolver
+- `config` — notification policy is read from `docs/human/config.md` (`notify.level` key); `PushNotification` calls at Phase 5 and Phase 10 are gated on this value; `workflow.slug_confirm` preference is resolved via `config.py`
 
 ## Notification policy
 
 Push notifications are sent at two points: Phase 5 (decision ready for review) and Phase 10 (fix complete). Both are gated on the `notify.level` key in the harness config — if the level is `off`, no `PushNotification` calls are made. See [docs/human/config.md](docs/human/config.md) for the full config reference, including how to set `notify.level` per-repo or globally.
+
+## Slug derivation — two-step pattern
+
+Setup step 1 uses a split safety+preference pattern:
+
+1. **Unconditional collision check** — `ls z-harness/` to detect matching dirs. If a collision is found, prompt via `AskUserQuestion` to confirm or choose a different slug. This check runs regardless of any resolver outcome and cannot be bypassed.
+2. **Soft non-obvious-slug confirmation gate** (only after collision check passes) — calls `python3 scripts/config.py resolve-question workflow.slug_confirm`, which returns `skip`, `prefill`, or `ask`. On `skip`, the derived slug is accepted silently. On `prefill`, the derived slug is pre-selected as the recommended option. On `ask`, the user is prompted normally. If `$SOURCE == "conflict"`, a conflict header is added to the question and a write-back offer is made after the user answers.
+
+The invariant: the collision check is a hard prerequisite. The resolver only governs the soft confirmation gate.
 
 ## Auto-bail thresholds
 
@@ -95,5 +105,5 @@ _No memories recorded yet._
 
 - `commands/z-fix.md` — full phase-by-phase procedure
 - `docs/human/commands.md` — index of all slash commands
-- `docs/human/config.md` — notification policy and other harness config keys
+- `docs/human/config.md` — notification policy, workflow.slug_confirm, and other harness config keys
 - `docs/human/z-debug.md` — the hypothesis-generation counterpart

@@ -1,4 +1,0 @@
-{"ts":"2026-05-25T21:20:10Z","run":"20260525T211925Z-memory-self-improve-loop","kind":"cost_gate_decision","choice":"proceed","auto_mode_default":true}
-{"ts":"2026-05-25T21:21:12Z","run":"20260525T211925Z-memory-self-improve-loop","kind":"research_collision_decision","choice":"continue","reason":"precontext-only slug dir from prior brainstorm; no existing RESEARCH.md"}
-{"ts":"2026-05-25T21:33:55Z","run":"20260525T211925Z-memory-self-improve-loop","kind":"consult","llm":"codex","mode":"research-review","prompt_chars":11419,"response_chars":9772,"transcript":"001-codex-research-review"}
-{"ts":"2026-05-25T21:37:54Z","run":"20260525T211925Z-memory-self-improve-loop","kind":"research_run_end","slug":"memory-self-improve-loop","explore_calls":3,"explore_failures":0,"status":"complete"}

@@ -1,6 +1,0 @@
-{"ts":"2026-05-26T00:32:33Z","run":"docs/scripts","kind":"doc_update_start","concept":"scripts","reason":"stale","mode":"dry-run"}
-{"ts":"2026-05-26T00:33:01Z","run":"docs/scripts","kind":"doc_update_end","concept":"scripts","status":"ok","subagent_model":"sonnet","wall_ms":28284}
-{"ts":"2026-05-27T06:38:39Z","run":"docs/scripts","kind":"doc_update_start","concept":"scripts","reason":"stale","mode":"dry-run"}
-{"ts":"2026-05-27T06:39:10Z","run":"docs/scripts","kind":"doc_update_end","concept":"scripts","status":"ok","subagent_model":"sonnet","wall_ms":31150}
-{"ts":"2026-05-27T19:54:31Z","run":"docs/scripts","kind":"doc_update_start","concept":"scripts","reason":"stale","mode":"write"}
-{"ts":"2026-05-27T19:56:29Z","run":"docs/scripts","kind":"doc_update_end","concept":"scripts","status":"ok","subagent_model":"sonnet","wall_ms":118061}

@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "schema_version": 1,
+  "title": "Skill",
+  "description": "Validates a skill definition object. Skills describe discrete capabilities that agents or providers can expose, including optional typed input/output contracts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "description",
+    "schema_version"
+  ],
+  "properties": {
+    "schema_version": {
+      "description": "Schema version for this contract. Always 1 for this version of the spec.",
+      "type": "integer",
+      "const": 1
+    },
+    "id": {
+      "description": "Skill identifier in kebab-case. Must start with a lowercase letter and contain only lowercase letters, digits, and hyphens.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "description": {
+      "description": "Human-readable description of what the skill does.",
+      "type": "string"
+    },
+    "input_schema": {
+      "description": "Optional JSON Schema object describing the expected input for this skill.",
+      "type": "object"
+    },
+    "output_schema": {
+      "description": "Optional JSON Schema object describing the expected output of this skill.",
+      "type": "object"
+    },
+    "tags": {
+      "description": "Optional list of string tags for categorizing or filtering skills.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

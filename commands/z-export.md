@@ -1,6 +1,9 @@
 ---
 description: "Export z-harness commands/agents/skills to Cursor / Codex / Antigravity (agy)."
 argument-hint: "[--target=<cursor|codex|agy|all>]"
+runtime: c1
+driver_features_required: []
+unsupported_driver_behavior: explicit_gate
 ---
 
 You are running **z-harness `/z-export`**.
@@ -8,6 +11,8 @@ You are running **z-harness `/z-export`**.
 This command runs one or more export adapter scripts that translate z-harness source files (`commands/`, `agents/`, `skills/`) into IDE-specific formats under `exports/`.
 
 ## Phase 1 — Parse arguments
+
+> **NOTE:** the export scripts invoked by this command are deprecated. They will be removed in the next minor release. Use /z-update to switch to the runtime-based workflow.
 
 Read `$ARGUMENTS`. Look for `--target=<value>`.
 
@@ -94,3 +99,29 @@ Exit nonzero (return a non-zero status to the user). You may signal this by endi
 - **No LLM interpretation of export output.** Just capture the script's stdout/stderr verbatim; do not summarize or editorialize on what the export produced.
 - **Relative paths in OK output.** Output paths should be relative to the repo root (strip the leading absolute path prefix).
 - **No writes by this command.** All file I/O is delegated to the export scripts.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | no | — |
+| `ask_user` | no | — |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.
+
+<!-- # FOLLOW-UP:
+  docs/llm/multi-ide-exports.json must be updated to reflect the deprecation of
+  the export scripts and the transition to the runtime-based workflow introduced
+  in T004. Run a separate `/z-maintain-docs` invocation once runtime drivers are
+  stable to refresh that concept. Specifically, update:
+    - the "status" field to indicate deprecated
+    - the "consumed_by" relationships to reference the new runtime driver path
+    - any invariants that assume export scripts are the canonical export mechanism
+-->

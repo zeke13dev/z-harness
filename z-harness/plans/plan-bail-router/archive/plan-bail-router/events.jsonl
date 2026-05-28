@@ -1,2 +1,0 @@
-{"ts":"2026-05-24T23:17:21Z","run":"plan-bail-router","kind":"consult","slug":"plan-bail-router","llm":"codex","mode":"bundled-decisions","prompt_chars":7417,"response_chars":22807,"wall_ms":34319,"transcript":"001-codex-bundled-decisions"}
-{"ts":"2026-05-24T23:34:09Z","run":"plan-bail-router","kind":"consult","slug":"plan-bail-router","llm":"codex","mode":"plan-review","prompt_chars":5600,"response_chars":18047,"wall_ms":26673,"transcript":"003-codex-plan-review"}

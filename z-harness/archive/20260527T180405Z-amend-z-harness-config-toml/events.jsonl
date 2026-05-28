@@ -1,2 +1,0 @@
-{"ts":"2026-05-27T18:04:05Z","run":"20260527T180405Z-amend-z-harness-config-toml","kind":"amend_run_start","slug":"z-harness-config-toml","mode":"full"}
-{"ts":"2026-05-27T18:08:54Z","run":"20260527T180405Z-amend-z-harness-config-toml","kind":"amend_run_end","status":"applied","mode":"full","tasks_added":1,"tasks_modified":6,"tasks_removed":0,"tasks_superseded":0,"consulted":false}

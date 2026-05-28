@@ -1,5 +1,10 @@
 ---
 description: Implement the next pending task from z-harness/TASKS.md, then have Codex scrutinize the diff.
+runtime: c1
+driver_features_required:
+  - subagent
+  - ask_user
+unsupported_driver_behavior: explicit_gate
 ---
 
 You are running the **z-harness `/z-implement-next`** pipeline.
@@ -15,6 +20,7 @@ Multiple plans may coexist under `$Z_HARNESS_PLAN_DIR/`. Determine which one to 
    - Also check for legacy flat layout: a `TASKS.md` directly under `z-harness/` (no slug).
 2. Choose:
    - **One candidate** → use it. If slug-namespaced, `export Z_HARNESS_SLUG=<slug>`. If legacy flat, leave `Z_HARNESS_SLUG` unset.
+   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug-selection question via their native channel. Silent omission is forbidden. -->
    - **Multiple candidates** → `AskUserQuestion` with each slug as an option. Set `Z_HARNESS_SLUG` to the chosen one.
    - **Zero candidates** → tell the user there's no plan; suggest `/z-plan`. Stop.
 3. From here on, **`BASE`** refers to `$Z_HARNESS_PLAN_DIR` (or `z-harness` if legacy). Paths below use `$BASE`.
@@ -53,6 +59,7 @@ Spawn the implementer subagent (fresh context).
     "$(printf '{"task":"%s","fallback_model":"sonnet"}' "<task-id>")"
   ```
 
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The implementer subagent performs all code edits; drivers that skip it must warn the user that task implementation has been bypassed. -->
 ```
 Agent(
   subagent_type="implementer",
@@ -75,6 +82,7 @@ Obey DRY/KISS/SOLID. No shortcuts unless PLAN.md explicitly approved one for thi
 1. Capture the diff: `git diff > $BASE/archive/tasks/<task-id>/diff.patch` (if no git, fall back to listing changed file paths).
 2. Spawn the reviewer with the diff, not just file contents:
 
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The reviewer is the correctness gate; drivers that skip it must warn the user that Codex review has been bypassed. -->
 ```
 Agent(
   subagent_type="reviewer",
@@ -101,3 +109,19 @@ Do **not** auto-advance. Wait for the user to invoke `/z-implement-next` again �
 ### Git history-rewrite safety
 
 Before recommending any `git reset --hard HEAD~N`, `git commit --amend`, or interactive-rebase squash on a branch tracking an upstream: for each commit being rewritten, run `git branch -r --contains <sha>`. If the upstream ref appears, STOP — recommend rebase or new-commit instead, never silent rewrite. Force-push to main requires explicit per-incident user authorization with (i) list of overwritten commits and (ii) content-equivalence/superset demonstration.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | yes | Phase 2 implementer; Phase 3 reviewer |
+| `ask_user` | yes | Phase 0 slug selection (multiple candidates) |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

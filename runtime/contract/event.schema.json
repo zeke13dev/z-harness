@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "schema_version": 1,
+  "title": "z-harness event (events.jsonl line)",
+  "description": "A single event line as emitted by scripts/log-event.sh after compat.py adds schema_version. Top-level keys are {ts, run, kind, optional slug, schema_version} plus payload fields merged at top level (kind-specific). Aligns with the actual shape log-event.sh writes today; do not nest payload.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "ts",
+    "run",
+    "kind",
+    "schema_version"
+  ],
+  "properties": {
+    "ts": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+      "description": "ISO 8601 UTC with Z suffix only (no offset notation). Matches `date -u +%Y-%m-%dT%H:%M:%SZ`."
+    },
+    "run": {
+      "type": "string",
+      "description": "Run id (free-form string, conventionally <ISO-stamp>-<slug>). Note: field name is `run`, not `run_id` \u2014 aligned with log-event.sh line 87."
+    },
+    "kind": {
+      "type": "string",
+      "description": "Event kind, e.g. dispatch_start, dispatch_end, task_done, schema_validation_error."
+    },
+    "slug": {
+      "type": "string",
+      "description": "Plan slug. Present only when Z_HARNESS_SLUG was set at emit time (log-event.sh lines 88-89)."
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Added by runtime/compat.py before emit. Direct callers of log-event.sh that bypass compat.py will produce events that fail validation \u2014 this is the migration signal."
+    }
+  },
+  "examples": [
+    {
+      "ts": "2026-05-27T05:05:49Z",
+      "run": "20260527T050549Z-harness-distribution-strategy",
+      "kind": "dispatch_start",
+      "slug": "harness-distribution-strategy/runtime-core",
+      "schema_version": 1,
+      "driver": "codex",
+      "command_id": "z-plan",
+      "session_id": null
+    },
+    {
+      "ts": "2026-05-27T05:06:12Z",
+      "run": "20260527T050549Z-harness-distribution-strategy",
+      "kind": "schema_validation_error",
+      "schema_version": 1,
+      "schema": "command",
+      "path": "id",
+      "message": "does not match pattern"
+    }
+  ]
+}

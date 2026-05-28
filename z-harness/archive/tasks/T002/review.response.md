@@ -1,7 +1,0 @@
-- **major**, `agents/scope-reconciler-audit.md:4` and Step 5/6: The agent is required to write `REPORT.md` and copy chunk artifacts, but frontmatter only grants `Read, Grep, Glob`, so it cannot perform its core output duties. Fix by resolving the spec/tool contract: either add `Write` to the allowed tools and update the acceptance criteria, or change the agent to return the report content for the caller to write.
-
-- **major**, Step 3: Dissent detection is structurally wrong because the inventory key includes `severity`, so “same evidence, different severity” will never hit the same map entry and will be treated as separate normal findings instead of cross-chunk dissent. Fix by indexing dissent candidates by normalized evidence/site independently of severity before dedupe, then grouping conflicting severities or recommendations under `## Cross-chunk dissent`.
-
-- **major**, Step 4: Severity elevation is narrowed to exact consensus findings with the same severity and normalized evidence, but the spec requires elevating cross-chunk patterns when two or more chunks flag the same systemic issue. Fix by defining a systemic-issue grouping key separate from exact evidence dedupe, and apply one-tier elevation when that issue group appears in at least two chunks.
-
-- **major**, Step 1: A chunk with a valid `PASS` verdict and zero findings would be classified as malformed because “no findings” is treated as failure. Fix by allowing zero-finding chunks when a valid verdict is present, counting them in chunk verdicts without adding findings.

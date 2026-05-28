@@ -1,0 +1,237 @@
+"""
+Compat shim integration tests: resolve_provider and log_event.
+
+Tests that:
+  - resolve_provider("codex", repo_root) returns a dict with keys
+    command, args_template, timeout_s when the codex provider is present.
+  - log_event writes a line to z-harness/archive/<run_id>/events.jsonl
+    containing schema_version: 1.
+
+Run:
+    cd /path/to/repo-root
+    pytest runtime/tests/test_compat.py -v
+"""
+
+import json
+import shutil
+import uuid
+from pathlib import Path
+
+import pytest
+
+from runtime.compat import log_event, resolve_provider
+
+# Resolve repo root as the directory containing runtime/
+_REPO_ROOT = Path(__file__).parent.parent.parent
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def unique_run_id() -> str:
+    """Return a unique run_id with the test-compat- prefix."""
+    return f"test-compat-{uuid.uuid4().hex[:8]}"
+
+
+@pytest.fixture()
+def archive_cleanup(unique_run_id: str):
+    """Yield the run_id; clean up archive dir unconditionally after the test."""
+    yield unique_run_id
+    archive_dir = _REPO_ROOT / "z-harness" / "archive" / unique_run_id
+    shutil.rmtree(archive_dir, ignore_errors=True)
+
+
+@pytest.fixture()
+def codex_providers_json(tmp_path: Path) -> Path:
+    """
+    Write a minimal providers.json that defines 'codex' as both a role and
+    provider, then return its path.
+
+    Using Z_HARNESS_REPO_PROVIDERS avoids relying on repo's .z-harness layout
+    and keeps the test hermetic.
+    """
+    providers = {
+        "version": 1,
+        "roles": {
+            "codex": "codex",
+        },
+        "providers": {
+            "codex": {
+                "kind": "cli",
+                "command": "codex",
+                "args_template": ["exec", "-"],
+                "stdin": True,
+                "timeout_s": 300,
+                "model_label": "gpt-5-codex",
+            }
+        },
+    }
+    path = tmp_path / "providers.json"
+    path.write_text(json.dumps(providers), encoding="utf-8")
+    return path
+
+
+# ---------------------------------------------------------------------------
+# Tests: resolve_provider
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_provider_codex_returns_required_keys(
+    codex_providers_json: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    resolve_provider("codex", repo_root) returns a dict containing at minimum
+    command, args_template, and timeout_s when the codex provider is defined.
+    """
+    monkeypatch.setenv("Z_HARNESS_REPO_PROVIDERS", str(codex_providers_json))
+
+    result = resolve_provider("codex", str(_REPO_ROOT))
+
+    assert isinstance(result, dict), "resolve_provider must return a dict"
+    for key in ("command", "args_template", "timeout_s"):
+        assert key in result, f"Expected key {key!r} in result, got keys: {list(result.keys())}"
+
+
+def test_resolve_provider_codex_command_value(
+    codex_providers_json: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """command value must be the string 'codex'."""
+    monkeypatch.setenv("Z_HARNESS_REPO_PROVIDERS", str(codex_providers_json))
+
+    result = resolve_provider("codex", str(_REPO_ROOT))
+
+    assert result["command"] == "codex"
+
+
+def test_resolve_provider_codex_args_template_is_list(
+    codex_providers_json: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """args_template must be a list."""
+    monkeypatch.setenv("Z_HARNESS_REPO_PROVIDERS", str(codex_providers_json))
+
+    result = resolve_provider("codex", str(_REPO_ROOT))
+
+    assert isinstance(result["args_template"], list)
+
+
+def test_resolve_provider_codex_timeout_s_is_positive_int(
+    codex_providers_json: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """timeout_s must be a positive integer."""
+    monkeypatch.setenv("Z_HARNESS_REPO_PROVIDERS", str(codex_providers_json))
+
+    result = resolve_provider("codex", str(_REPO_ROOT))
+
+    assert isinstance(result["timeout_s"], int) and result["timeout_s"] > 0
+
+
+def test_resolve_provider_missing_script_raises_file_not_found(
+    tmp_path: Path,
+) -> None:
+    """FileNotFoundError is raised when repo_root has no scripts/resolve-provider.py."""
+    with pytest.raises(FileNotFoundError, match="resolve-provider.py"):
+        resolve_provider("codex", str(tmp_path))
+
+
+def test_resolve_provider_unknown_role_raises_runtime_error(
+    codex_providers_json: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RuntimeError is raised when the role is not bound in the providers config."""
+    monkeypatch.setenv("Z_HARNESS_REPO_PROVIDERS", str(codex_providers_json))
+
+    with pytest.raises(RuntimeError):
+        resolve_provider("nonexistent_role_xyz", str(_REPO_ROOT))
+
+
+# ---------------------------------------------------------------------------
+# Tests: log_event
+# ---------------------------------------------------------------------------
+
+
+def test_log_event_writes_events_jsonl(archive_cleanup: str) -> None:
+    """
+    log_event writes at least one line to z-harness/archive/<run_id>/events.jsonl.
+    """
+    run_id = archive_cleanup
+    log_event(run_id, "test_event", {"x": 1}, str(_REPO_ROOT))
+
+    events_path = _REPO_ROOT / "z-harness" / "archive" / run_id / "events.jsonl"
+    assert events_path.exists(), f"events.jsonl not found at {events_path}"
+
+
+def test_log_event_schema_version_is_1(archive_cleanup: str) -> None:
+    """
+    Every line written to events.jsonl contains schema_version: 1.
+    """
+    run_id = archive_cleanup
+    log_event(run_id, "test_event", {"x": 1}, str(_REPO_ROOT))
+
+    events_path = _REPO_ROOT / "z-harness" / "archive" / run_id / "events.jsonl"
+    lines = [ln.strip() for ln in events_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    assert lines, "events.jsonl must contain at least one non-empty line"
+
+    for line in lines:
+        parsed = json.loads(line)
+        assert parsed.get("schema_version") == 1, (
+            f"Expected schema_version=1 in line: {line!r}"
+        )
+
+
+def test_log_event_payload_preserved(archive_cleanup: str) -> None:
+    """
+    The payload key 'x' is present in the written event line.
+    """
+    run_id = archive_cleanup
+    log_event(run_id, "test_event", {"x": 42}, str(_REPO_ROOT))
+
+    events_path = _REPO_ROOT / "z-harness" / "archive" / run_id / "events.jsonl"
+    lines = [ln.strip() for ln in events_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+
+    found = any(json.loads(ln).get("x") == 42 for ln in lines)
+    assert found, "Payload key 'x' with value 42 not found in any events.jsonl line"
+
+
+def test_log_event_kind_recorded(archive_cleanup: str) -> None:
+    """
+    The event kind is recorded in the written line.
+    """
+    run_id = archive_cleanup
+    log_event(run_id, "test_event", {"x": 1}, str(_REPO_ROOT))
+
+    events_path = _REPO_ROOT / "z-harness" / "archive" / run_id / "events.jsonl"
+    lines = [ln.strip() for ln in events_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+
+    found = any(json.loads(ln).get("kind") == "test_event" for ln in lines)
+    assert found, "Expected kind='test_event' in at least one events.jsonl line"
+
+
+def test_log_event_missing_script_raises_file_not_found(
+    tmp_path: Path,
+) -> None:
+    """FileNotFoundError is raised when repo_root has no scripts/log-event.sh."""
+    with pytest.raises(FileNotFoundError, match="log-event.sh"):
+        log_event("test-run-xyz", "test_event", {"x": 1}, str(tmp_path))
+
+
+def test_log_event_injects_schema_version_when_absent(archive_cleanup: str) -> None:
+    """
+    schema_version: 1 is injected even when not present in the input payload.
+
+    This is the failure-class guard: if compat.py stops injecting schema_version,
+    this test must fail.
+    """
+    run_id = archive_cleanup
+    # Payload deliberately omits schema_version
+    log_event(run_id, "test_event", {"only_key": "value"}, str(_REPO_ROOT))
+
+    events_path = _REPO_ROOT / "z-harness" / "archive" / run_id / "events.jsonl"
+    lines = [ln.strip() for ln in events_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+
+    for line in lines:
+        parsed = json.loads(line)
+        assert parsed.get("schema_version") == 1, (
+            f"schema_version not injected — found: {line!r}"
+        )

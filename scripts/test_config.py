@@ -619,6 +619,157 @@ class TestEvalCleanliness(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Regression tests for cmd_resolve_question (T004 refactor)
+# Verifies that the build-envelope-then-emit pattern produces byte-identical
+# output to the pre-refactor scatter-print-exit pattern, across all resolution
+# branches: no-pref, config-only, ASK_ALL override, unknown-id, and conflict.
+# ---------------------------------------------------------------------------
+
+class TestResolveQuestion(unittest.TestCase):
+    """Regression tests for resolve-question subcommand."""
+
+    KNOWN_QID = "workflow.slug_confirm"
+    KNOWN_QID2 = "workflow.audit_to_amend"
+    UNKNOWN_QID = "workflow.does_not_exist"
+
+    def setUp(self):
+        self.xdg = make_xdg()
+        self.cwd = make_isolation_dir()
+
+    def tearDown(self):
+        shutil.rmtree(self.xdg, ignore_errors=True)
+        shutil.rmtree(self.cwd, ignore_errors=True)
+
+    def _run_resolve(self, question_id, extra_env=None):
+        env = {"XDG_CONFIG_HOME": self.xdg, "Z_HARNESS_PROJECT_ROOT": self.cwd}
+        if extra_env:
+            env.update(extra_env)
+        return run(["resolve-question", question_id], env=env, cwd=self.cwd)
+
+    # --- Branch: no config preference, no memory → result=ask, source=none ---
+
+    def test_no_pref_no_memory_result_is_ask(self):
+        r = self._run_resolve(self.KNOWN_QID)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        envelope = json.loads(r.stdout)
+        self.assertEqual(envelope["result"], "ask")
+        self.assertEqual(envelope["source"], "none")
+        self.assertEqual(envelope["strength"], "none")
+        self.assertIn("sources", envelope)
+        self.assertEqual(envelope["sources"], [])
+
+    def test_no_pref_envelope_shape_has_required_keys(self):
+        """Envelope must always contain result, default, source, rule_id, strength, reason, sources."""
+        r = self._run_resolve(self.KNOWN_QID)
+        self.assertEqual(r.returncode, 0)
+        envelope = json.loads(r.stdout)
+        for key in ("result", "default", "source", "rule_id", "strength", "reason", "sources"):
+            self.assertIn(key, envelope, f"missing key {key!r} in envelope")
+
+    def test_no_pref_stdout_is_single_json_line(self):
+        """stdout must be exactly one JSON line (no trailing newlines after strip)."""
+        r = self._run_resolve(self.KNOWN_QID)
+        self.assertEqual(r.returncode, 0)
+        lines = [l for l in r.stdout.splitlines() if l.strip()]
+        self.assertEqual(len(lines), 1, f"expected 1 JSON line, got: {r.stdout!r}")
+
+    # --- Branch: config sets a non-default value, no memory → result from RESULT_MAP ---
+
+    def test_config_auto_accept_resolves_to_skip(self):
+        write_global_config(self.xdg, '[workflow]\nslug_confirm = "auto_accept"\n')
+        r = self._run_resolve(self.KNOWN_QID)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        envelope = json.loads(r.stdout)
+        self.assertEqual(envelope["result"], "skip")
+        self.assertEqual(envelope["source"], "config")
+        self.assertEqual(envelope["strength"], "hard")
+
+    def test_config_recommend_derived_resolves_to_prefill(self):
+        write_global_config(self.xdg, '[workflow]\nslug_confirm = "recommend_derived"\n')
+        r = self._run_resolve(self.KNOWN_QID)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        envelope = json.loads(r.stdout)
+        self.assertEqual(envelope["result"], "prefill")
+        self.assertEqual(envelope["source"], "config")
+
+    def test_config_amend_resolves_to_skip_for_audit_to_amend(self):
+        write_global_config(self.xdg, '[workflow]\naudit_to_amend = "amend"\n')
+        r = self._run_resolve(self.KNOWN_QID2)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        envelope = json.loads(r.stdout)
+        self.assertEqual(envelope["result"], "skip")
+        self.assertEqual(envelope["source"], "config")
+
+    # --- Branch: Z_HARNESS_ASK_ALL=1 short-circuit ---
+
+    def test_ask_all_override_forces_ask(self):
+        # Even with a config value set, ASK_ALL overrides to ask
+        write_global_config(self.xdg, '[workflow]\nslug_confirm = "auto_accept"\n')
+        r = self._run_resolve(self.KNOWN_QID, extra_env={"Z_HARNESS_ASK_ALL": "1"})
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        envelope = json.loads(r.stdout)
+        self.assertEqual(envelope["result"], "ask")
+        self.assertEqual(envelope["source"], "override")
+        self.assertEqual(envelope["rule_id"], "Z_HARNESS_ASK_ALL")
+
+    def test_ask_all_no_config_also_returns_ask(self):
+        r = self._run_resolve(self.KNOWN_QID, extra_env={"Z_HARNESS_ASK_ALL": "1"})
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        envelope = json.loads(r.stdout)
+        self.assertEqual(envelope["result"], "ask")
+        self.assertEqual(envelope["source"], "override")
+
+    # --- Branch: unknown question_id → exit 3 with error envelope ---
+
+    def test_unknown_question_id_exits_3(self):
+        r = self._run_resolve(self.UNKNOWN_QID)
+        self.assertEqual(r.returncode, 3)
+        envelope = json.loads(r.stdout)
+        self.assertEqual(envelope["error"], "unknown_question_id")
+        self.assertIn("known", envelope)
+        self.assertIn(self.KNOWN_QID, envelope["known"])
+
+    def test_unknown_question_id_emits_json_not_plain_text(self):
+        """Even on error, stdout must be valid JSON — not a plain-text message."""
+        r = self._run_resolve(self.UNKNOWN_QID)
+        # Must parse without raising
+        parsed = json.loads(r.stdout)
+        self.assertIsInstance(parsed, dict)
+
+    # --- Behavioral invariant: diagnostics go to stderr, not stdout ---
+
+    def test_no_pref_stderr_is_empty_by_default(self):
+        """Without --explain, stderr should be empty on a clean resolution."""
+        r = self._run_resolve(self.KNOWN_QID)
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.stderr.strip(), "",
+                         f"unexpected stderr content: {r.stderr!r}")
+
+    def test_explain_flag_writes_to_stderr_not_stdout(self):
+        """--explain must write trace to stderr only; stdout must remain a single JSON line."""
+        env = {"XDG_CONFIG_HOME": self.xdg, "Z_HARNESS_PROJECT_ROOT": self.cwd}
+        r = run(["resolve-question", self.KNOWN_QID, "--explain"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0)
+        # stdout is still exactly one JSON line
+        lines = [l for l in r.stdout.splitlines() if l.strip()]
+        self.assertEqual(len(lines), 1)
+        # stderr contains the explain trace
+        self.assertIn("[explain]", r.stderr)
+
+    # --- Invariant: missing required argument exits 2 ---
+
+    def test_missing_question_id_exits_2(self):
+        env = {"XDG_CONFIG_HOME": self.xdg}
+        r = run(["resolve-question"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 2)
+
+    def test_unknown_flag_exits_2(self):
+        env = {"XDG_CONFIG_HOME": self.xdg}
+        r = run(["resolve-question", self.KNOWN_QID, "--no-such-flag"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 2)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

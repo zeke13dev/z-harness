@@ -1,6 +1,6 @@
 # config
 
-> Last updated: 2026-05-27
+> Last updated: 2026-05-28
 > Covers source: scripts/config.py, scripts/config.sh, scripts/propose-prefs.py
 
 ## Overview
@@ -224,11 +224,11 @@ fi
 
 Atomically writes a TOML key to the user-global config (`~/.config/z-harness/config.toml`) or the
 repo-local config (`.z-harness/config.toml`).  Validates against `VALIDATORS` before writing;
-exits 2 with a clear message if the value is invalid.
+exits 2 with a clear message if the value is invalid.  Exits 0 silently on success (no stdout output).
 
 ```
 $ scripts/config.sh set workflow.audit_to_amend amend --scope=project
-wrote workflow.audit_to_amend = "amend" to /path/to/repo/.z-harness/config.toml
+(exits 0, no stdout output on success)
 ```
 
 Default scope when `--scope` is omitted: `project`.
@@ -358,8 +358,8 @@ Cross-cutting material that applies to both surfaces.
 
 ## How it interacts with others
 
-- `commands` (z-audit-plan, z-audit-plan-style, z-plan, z-fix, z-uplift, z-amend, z-do) — call `export-env` + `should-notify` during Setup; call `resolve-question` before workflow AskUserQuestions; call `set` after proposal acceptance; call `propose-prefs.py` at command end
-- `skills` (z-suggest-memory, z-map, z-plan-light, z-debug, z-brainstorm) — call `list-question-ids` to validate routing-preference question IDs; call `resolve-question` for slug-confirm gate
+- `commands` (z-audit-plan, z-audit-plan-style, z-plan, z-fix, z-uplift, z-amend, z-do, z-research) — call `export-env` + `should-notify` during Setup; call `resolve-question` before workflow AskUserQuestions; call `set` after proposal acceptance; call `propose-prefs.py` at command end
+- `skills` (z-suggest-memory, z-map, z-plan-light, z-debug, z-brainstorm, z-do, z-plan, z-research) — call `list-question-ids` to validate routing-preference question IDs; call `resolve-question` for slug-confirm gate; call `export-env` + `should-notify` during Setup
 - `scripts` — provides the `log-event.sh` + `log-phase.sh` telemetry pipeline that `config.py` writes `config_resolved` and `askuser_resolved` events through
 
 ## Examples
@@ -420,6 +420,8 @@ export Z_HARNESS_WORKFLOW_SLUG_CONFIRM=auto_accept
 - Memory entries missing required fields are logged as `routing_preference_malformed` events and skipped (no crash)
 - Resolver falls back to `git rev-parse --show-toplevel` for `project_root` when `Z_HARNESS_PROJECT_ROOT` is unset; treats all memories as global when outside a git repo
 - `_run_startup_guards()` runs at module load and raises `SystemExit(2)` if `QUESTION_IDS`, `VALIDATORS`, and `RESULT_MAP` are internally inconsistent — add to both registries when extending
+- `cmd_set` exits 0 silently on success; it does NOT print a confirmation line to stdout. Check exit code only
+- Valid event kinds for `should-notify` are `approval`, `phase_end`, `error` only — passing `run_complete` (used by some callers such as `z-research`) exits 2; guard with `|| true` if needed
 
 ## v2 deferrals
 

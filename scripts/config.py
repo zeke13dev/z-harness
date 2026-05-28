@@ -842,6 +842,229 @@ def _resolve_memory_matches(
     return None, "conflict", sources
 
 
+def _build_resolve_envelope(
+    question_id: str,
+    explain: bool = False,
+) -> tuple[dict, str, str, str, int]:
+    """
+    Build the resolution envelope for a registered question_id.
+
+    Returns ``(envelope, emit_result, emit_source, emit_strength, exit_code)``
+    where the emit_* values are the arguments to pass to ``_emit_askuser_resolved``
+    and ``exit_code`` is 0 on success or 4 on I/O error.
+
+    Precondition: ``question_id`` must be present in ``QUESTION_IDS`` (caller checks).
+    ``Z_HARNESS_ASK_ALL=1`` short-circuit is NOT applied here — the caller handles it
+    before calling this function so that the early-exit path stays in one place.
+    """
+    qmeta = QUESTION_IDS[question_id]
+    skill_default: str = qmeta["skill_default"]
+    config_key: str = qmeta["config_key"]
+
+    # Consult 4-layer config
+    try:
+        values, sources = load_config()
+    except SystemExit:
+        # load_config exits on I/O or schema errors; re-raise is the right path
+        raise
+    except OSError as exc:
+        envelope = {
+            "error": "io_error",
+            "message": str(exc),
+            "result": "ask",
+            "default": skill_default,
+            "source": "none",
+            "rule_id": config_key,
+            "strength": "none",
+            "reason": f"I/O error reading config: {exc}",
+            "sources": [],
+        }
+        print(str(exc), file=sys.stderr)
+        return envelope, "ask", "none", "none", 4
+
+    config_value: str = values.get(config_key, "ask")
+    config_source_label: str = sources.get(config_key, "defaults")
+
+    # Default value for this config key (the "ask" string means "no preference set")
+    default_config_value: str = "ask"
+    config_is_default: bool = config_value == default_config_value
+
+    # Consult memory (JSON walk over docs/llm/*.json)
+    project_root = _get_project_root()
+    memory_matches = _load_memory_matches(question_id, project_root)
+    mem_value, mem_strength, mem_sources = _resolve_memory_matches(memory_matches)
+
+    # Combine config + memory signals
+
+    # Case: no memory at all
+    if mem_value is None and mem_strength is None:
+        if config_is_default:
+            # No config preference, no memory → ask
+            if explain:
+                print(
+                    f"[explain] question_id={question_id} → config=ask (default), "
+                    "no memory → result=ask",
+                    file=sys.stderr,
+                )
+            envelope = {
+                "result": "ask",
+                "default": skill_default,
+                "source": "none",
+                "rule_id": config_key,
+                "strength": "none",
+                "reason": "No config preference set and no memory entries found",
+                "sources": [],
+            }
+            return envelope, "ask", "none", "none", 0
+        else:
+            # Config has a non-default value, no memory → config wins
+            mapped_result = RESULT_MAP.get((question_id, config_value), "ask")
+            reason = (
+                f"config key {config_key!r} = {config_value!r} "
+                f"(source: {config_source_label}); no memory entries"
+            )
+            if explain:
+                print(
+                    f"[explain] question_id={question_id} → config={config_value!r} at "
+                    f"{config_source_label} → result={mapped_result} (hard), no memory",
+                    file=sys.stderr,
+                )
+            envelope = {
+                "result": mapped_result,
+                "default": skill_default,
+                "source": "config",
+                "rule_id": config_key,
+                "strength": "hard",
+                "reason": reason,
+                "sources": [],
+            }
+            return envelope, mapped_result, "config", "hard", 0
+
+    # Case: memory conflict (multiple disagreeing entries)
+    if mem_strength == "conflict":
+        if config_is_default:
+            # Config has no opinion; memory alone is conflicted → ask, show memory sources
+            envelope = {
+                "result": "ask",
+                "default": skill_default,
+                "source": "conflict",
+                "rule_id": config_key,
+                "strength": "none",
+                "reason": "Memory entries disagree on value",
+                "sources": mem_sources,
+            }
+        else:
+            # Config has an opinion AND memory is internally conflicted → conflict
+            config_source_entry = {
+                "kind": "config",
+                "value": config_value,
+                "location": config_source_label,
+                "strength": "hard",
+            }
+            all_sources = [config_source_entry] + mem_sources
+            envelope = {
+                "result": "ask",
+                "default": skill_default,
+                "source": "conflict",
+                "rule_id": config_key,
+                "strength": "none",
+                "reason": "Config and memory entries disagree on value",
+                "sources": all_sources,
+            }
+        if explain:
+            print(
+                f"[explain] question_id={question_id} → memory conflict → result=ask",
+                file=sys.stderr,
+            )
+        return envelope, "ask", "conflict", "none", 0
+
+    # At this point: mem_value is set (single or agreeing multiple memory entries)
+    # mem_strength is one of weak | strong | very_strong
+
+    if config_is_default:
+        # Config is "ask" (default) AND memory exists → memory wins (no conflict)
+        # Derive result from memory strength
+        if mem_strength == "very_strong":
+            mem_result = "skip"
+        else:
+            # strong or weak → prefill
+            mem_result = "prefill"
+
+        if explain:
+            print(
+                f"[explain] question_id={question_id} → config=ask (default), "
+                f"memory={mem_value!r} ({mem_strength}) → result={mem_result}",
+                file=sys.stderr,
+            )
+        envelope = {
+            "result": mem_result,
+            "default": skill_default,
+            "source": "memory",
+            "rule_id": config_key,
+            "strength": mem_strength,
+            "reason": (
+                f"Memory routing-preference: question_id={question_id!r}, "
+                f"value={mem_value!r}, strength={mem_strength!r}"
+            ),
+            "sources": mem_sources,
+        }
+        return envelope, mem_result, "memory", mem_strength, 0
+
+    # Config is non-default AND memory exists
+    # Check if they agree: translate config value to result-domain then compare mem_value
+    # "Agreement" means memory's value == config's value (both are in the option-domain)
+    if mem_value == config_value:
+        # Config and memory agree → config wins, no conflict
+        mapped_result = RESULT_MAP.get((question_id, config_value), "ask")
+        if explain:
+            print(
+                f"[explain] question_id={question_id} → config={config_value!r} and "
+                f"memory={mem_value!r} agree → result={mapped_result} (config wins)",
+                file=sys.stderr,
+            )
+        envelope = {
+            "result": mapped_result,
+            "default": skill_default,
+            "source": "config",
+            "rule_id": config_key,
+            "strength": "hard",
+            "reason": (
+                f"Config and memory agree: {config_key!r} = {config_value!r} "
+                f"(config source: {config_source_label})"
+            ),
+            "sources": [],
+        }
+        return envelope, mapped_result, "config", "hard", 0
+
+    # Config is non-default AND memory disagrees → conflict tier
+    config_source_entry = {
+        "kind": "config",
+        "value": config_value,
+        "location": config_source_label,
+        "strength": "hard",
+    }
+    all_sources = [config_source_entry] + mem_sources
+    if explain:
+        print(
+            f"[explain] question_id={question_id} → config={config_value!r} "
+            f"vs memory={mem_value!r} → conflict → result=ask",
+            file=sys.stderr,
+        )
+    envelope = {
+        "result": "ask",
+        "default": skill_default,
+        "source": "conflict",
+        "rule_id": config_key,
+        "strength": "none",
+        "reason": (
+            f"Config says {config_value!r} but memory says {mem_value!r}; "
+            "showing both — resolve the conflict"
+        ),
+        "sources": all_sources,
+    }
+    return envelope, "ask", "conflict", "none", 0
+
+
 def cmd_resolve_question(args: list[str]) -> None:
     """
     resolve-question <question_id> [--scope-slug <slug>] [--explain]
@@ -894,12 +1117,10 @@ def cmd_resolve_question(args: list[str]) -> None:
         print(json.dumps(envelope))
         sys.exit(3)
 
-    qmeta = QUESTION_IDS[question_id]
-    skill_default: str = qmeta["skill_default"]
-    config_key: str = qmeta["config_key"]
-
     # Step 2: Honor Z_HARNESS_ASK_ALL=1 short-circuit
     if os.environ.get("Z_HARNESS_ASK_ALL", "") == "1":
+        qmeta = QUESTION_IDS[question_id]
+        skill_default: str = qmeta["skill_default"]
         envelope = {
             "result": "ask",
             "default": skill_default,
@@ -914,225 +1135,17 @@ def cmd_resolve_question(args: list[str]) -> None:
                 f"[explain] question_id={question_id} → Z_HARNESS_ASK_ALL=1 override → result=ask",
                 file=sys.stderr,
             )
-        print(json.dumps(envelope))
         _emit_askuser_resolved(question_id, "ask", "override", "none")
+        print(json.dumps(envelope))
         sys.exit(0)
 
-    # Step 3: Consult 4-layer config
-    try:
-        values, sources = load_config()
-    except SystemExit:
-        # load_config exits on I/O or schema errors; re-raise is the right path
-        raise
-    except OSError as exc:
-        envelope = {
-            "error": "io_error",
-            "message": str(exc),
-            "result": "ask",
-            "default": skill_default,
-            "source": "none",
-            "rule_id": config_key,
-            "strength": "none",
-            "reason": f"I/O error reading config: {exc}",
-            "sources": [],
-        }
-        print(str(exc), file=sys.stderr)
-        print(json.dumps(envelope))
-        sys.exit(4)
-
-    config_value: str = values.get(config_key, "ask")
-    config_source_label: str = sources.get(config_key, "defaults")
-
-    # Default value for this config key (the "ask" string means "no preference set")
-    default_config_value: str = "ask"
-    config_is_default: bool = config_value == default_config_value
-
-    # Steps 4-7: Consult memory (JSON walk over docs/llm/*.json)
-    project_root = _get_project_root()
-    memory_matches = _load_memory_matches(question_id, project_root)
-    mem_value, mem_strength, mem_sources = _resolve_memory_matches(memory_matches)
-
-    # Steps 8-11: Combine config + memory signals
-
-    # Case: no memory at all
-    if mem_value is None and mem_strength is None:
-        if config_is_default:
-            # No config preference, no memory → ask
-            envelope = {
-                "result": "ask",
-                "default": skill_default,
-                "source": "none",
-                "rule_id": config_key,
-                "strength": "none",
-                "reason": "No config preference set and no memory entries found",
-                "sources": [],
-            }
-            if explain:
-                print(
-                    f"[explain] question_id={question_id} → config=ask (default), "
-                    "no memory → result=ask",
-                    file=sys.stderr,
-                )
-            print(json.dumps(envelope))
-            _emit_askuser_resolved(question_id, "ask", "none", "none")
-            sys.exit(0)
-        else:
-            # Config has a non-default value, no memory → config wins (step 10 analog)
-            mapped_result = RESULT_MAP.get((question_id, config_value), "ask")
-            reason = (
-                f"config key {config_key!r} = {config_value!r} "
-                f"(source: {config_source_label}); no memory entries"
-            )
-            envelope = {
-                "result": mapped_result,
-                "default": skill_default,
-                "source": "config",
-                "rule_id": config_key,
-                "strength": "hard",
-                "reason": reason,
-                "sources": [],
-            }
-            if explain:
-                print(
-                    f"[explain] question_id={question_id} → config={config_value!r} at "
-                    f"{config_source_label} → result={mapped_result} (hard), no memory",
-                    file=sys.stderr,
-                )
-            print(json.dumps(envelope))
-            _emit_askuser_resolved(question_id, mapped_result, "config", "hard")
-            sys.exit(0)
-
-    # Case: memory conflict (multiple disagreeing entries)
-    if mem_strength == "conflict":
-        if config_is_default:
-            # Config has no opinion; memory alone is conflicted → ask, show memory sources
-            envelope = {
-                "result": "ask",
-                "default": skill_default,
-                "source": "conflict",
-                "rule_id": config_key,
-                "strength": "none",
-                "reason": "Memory entries disagree on value",
-                "sources": mem_sources,
-            }
-        else:
-            # Config has an opinion AND memory is internally conflicted → conflict
-            config_source_entry = {
-                "kind": "config",
-                "value": config_value,
-                "location": config_source_label,
-                "strength": "hard",
-            }
-            all_sources = [config_source_entry] + mem_sources
-            envelope = {
-                "result": "ask",
-                "default": skill_default,
-                "source": "conflict",
-                "rule_id": config_key,
-                "strength": "none",
-                "reason": "Config and memory entries disagree on value",
-                "sources": all_sources,
-            }
-        if explain:
-            print(
-                f"[explain] question_id={question_id} → memory conflict → result=ask",
-                file=sys.stderr,
-            )
-        print(json.dumps(envelope))
-        _emit_askuser_resolved(question_id, "ask", "conflict", "none")
-        sys.exit(0)
-
-    # At this point: mem_value is set (single or agreeing multiple memory entries)
-    # mem_strength is one of weak | strong | very_strong
-
-    if config_is_default:
-        # Step 8: Config is "ask" (default) AND memory exists → memory wins (no conflict)
-        # Derive result from memory strength
-        if mem_strength == "very_strong":
-            mem_result = "skip"
-        else:
-            # strong or weak → prefill
-            mem_result = "prefill"
-
-        envelope = {
-            "result": mem_result,
-            "default": skill_default,
-            "source": "memory",
-            "rule_id": config_key,
-            "strength": mem_strength,
-            "reason": (
-                f"Memory routing-preference: question_id={question_id!r}, "
-                f"value={mem_value!r}, strength={mem_strength!r}"
-            ),
-            "sources": mem_sources,
-        }
-        if explain:
-            print(
-                f"[explain] question_id={question_id} → config=ask (default), "
-                f"memory={mem_value!r} ({mem_strength}) → result={mem_result}",
-                file=sys.stderr,
-            )
-        print(json.dumps(envelope))
-        _emit_askuser_resolved(question_id, mem_result, "memory", mem_strength)
-        sys.exit(0)
-
-    # Config is non-default AND memory exists
-    # Check if they agree: translate config value to result-domain then compare mem_value
-    # "Agreement" means memory's value == config's value (both are in the option-domain)
-    if mem_value == config_value:
-        # Step 10: Config and memory agree → config wins, no conflict
-        mapped_result = RESULT_MAP.get((question_id, config_value), "ask")
-        envelope = {
-            "result": mapped_result,
-            "default": skill_default,
-            "source": "config",
-            "rule_id": config_key,
-            "strength": "hard",
-            "reason": (
-                f"Config and memory agree: {config_key!r} = {config_value!r} "
-                f"(config source: {config_source_label})"
-            ),
-            "sources": [],
-        }
-        if explain:
-            print(
-                f"[explain] question_id={question_id} → config={config_value!r} and "
-                f"memory={mem_value!r} agree → result={mapped_result} (config wins)",
-                file=sys.stderr,
-            )
-        print(json.dumps(envelope))
-        _emit_askuser_resolved(question_id, mapped_result, "config", "hard")
-        sys.exit(0)
-
-    # Step 9: Config is non-default AND memory disagrees → conflict tier
-    config_source_entry = {
-        "kind": "config",
-        "value": config_value,
-        "location": config_source_label,
-        "strength": "hard",
-    }
-    all_sources = [config_source_entry] + mem_sources
-    envelope = {
-        "result": "ask",
-        "default": skill_default,
-        "source": "conflict",
-        "rule_id": config_key,
-        "strength": "none",
-        "reason": (
-            f"Config says {config_value!r} but memory says {mem_value!r}; "
-            "showing both — resolve the conflict"
-        ),
-        "sources": all_sources,
-    }
-    if explain:
-        print(
-            f"[explain] question_id={question_id} → config={config_value!r} "
-            f"vs memory={mem_value!r} → conflict → result=ask",
-            file=sys.stderr,
-        )
+    # Steps 3-11: Build envelope via helper (single exit point for telemetry + print)
+    envelope, emit_result, emit_source, emit_strength, exit_code = _build_resolve_envelope(
+        question_id, explain=explain
+    )
+    _emit_askuser_resolved(question_id, emit_result, emit_source, emit_strength)
     print(json.dumps(envelope))
-    _emit_askuser_resolved(question_id, "ask", "conflict", "none")
-    sys.exit(0)
+    sys.exit(exit_code)
 
 
 def _toml_write(path: Path, data: dict) -> None:

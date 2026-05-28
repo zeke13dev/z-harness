@@ -1,6 +1,11 @@
 ---
 description: Heavy hypothesis-tournament debugging pipeline for the case where root cause is unknown. Two rounds of adversarial multi-LLM hypothesis generation (Claude + Codex + Gemini), discriminating-test matrix with consensus-first ranking + forced outlier carve-out, ordinal Bayesian scoring with orchestrator-assigned likelihoods, 3-5 isolation rounds, fix-gate requires highest posterior AND causal mechanism explaining all evidence. Single unified DEBUG.md artifact. Early gate recommends /z-fix if user already has a diagnosis.
 argument-hint: <symptom description>
+runtime: c1
+driver_features_required:
+  - subagent
+  - ask_user
+unsupported_driver_behavior: explicit_gate
 ---
 
 You are running **z-harness `/z-debug`** — heavy hypothesis-tournament pipeline for an existing bug whose root cause is unknown. This is the discipline path. If the user already has a working hypothesis they want to ship a fix for, Phase 0 will redirect them to `/z-fix`.
@@ -9,10 +14,15 @@ Symptom (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question
+     "What's the symptom?" via their native channel. Silent omission is forbidden. -->
 **If empty** — `AskUserQuestion`: "What's the symptom?" before proceeding.
 
 ## Setup
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug
+     confirmation question via their native channel if non-obvious. Silent
+     omission is forbidden. -->
 1. **Derive slug** like `debug-<symptom-slug>` (e.g. "MLB doubleheaders mislabeled" → `debug-mlb-doubleheaders-mislabeled`). Confirm via `AskUserQuestion` if non-obvious or might collide.
 2. Export `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")`.
 3. Pick run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`.
@@ -52,6 +62,8 @@ The old `>5 files touched` trigger is **dropped** — `/z-debug` is the heavy pa
 
 ## Phase 0 — Wrong-tool gate (non-skippable)
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the wrong-tool
+     gate question via their native channel. Silent omission is forbidden. -->
 `AskUserQuestion`:
 
 **"Do you already have a concrete hypothesis for what's causing this?"**
@@ -63,6 +75,8 @@ This gate is mandatory. If the user picks "yes," exit cleanly even if `$ARGUMENT
 
 ## Phase 1 — Problem statement
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the problem
+     clarification questions via their native channel. Silent omission is forbidden. -->
 Ask clarifying questions via `AskUserQuestion`:
 
 - "What was the expected behavior?"
@@ -130,6 +144,9 @@ Append `## Evidence Inventory` to `DEBUG.md`:
 
 **Each evidence entry gets a stable `EVID-NNN` ID at capture time** (zero-padded, 3 digits). These IDs are referenced by Phase 7's Evidence coverage table — never renumber, never reuse.
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the cannot-
+     reproduce gate (gather more evidence / proceed on inference / abandon) via
+     their native channel. Silent omission is forbidden. -->
 **If cannot reproduce.** Halt and ask the user via `AskUserQuestion`:
 - "Gather more evidence — what should I look at next?"
 - "Proceed on inference only (risky — debug without repro is unreliable)"
@@ -152,6 +169,9 @@ If any gate fails → skip Phase 2.5 silently and proceed to Phase 3a unchanged.
 ### Dispatch shape
 
 ```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     requirement and skip the bisect-isolator Agent() call. Phase 2.5 is a
+     fast-path only — pipeline continues to Phase 3a if skipped. -->
 Agent(
   subagent_type="bisect-isolator",
   description="Bisect regression for <slug>",
@@ -218,6 +238,9 @@ Parse the `STATUS:` line:
 2. **Dispatch both consultants in parallel (single message, both calls).** Each receives ONLY the Problem + Evidence Inventory sections of DEBUG.md (plus doc-fetcher synthesis if relevant). Never share the orchestrator's checkpoint block.
 
    ```
+   <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+        requirement to the user and skip both Round 1 consultant Agent() calls.
+        Phase 3a cannot complete without subagent support. -->
    Agent(
      subagent_type="consultant-secondary",
      description="R1 hypothesis generation for <slug>",
@@ -253,6 +276,9 @@ Parse the `STATUS:` line:
 Single-message parallel dispatch to both consultants with `MODE: generate-hypotheses-round2-adversarial`. Each receives ONLY the merged `## Hypothesis Pool` section (surgical extraction per the Phase-visibility matrix), plus Problem + Evidence Inventory. **Do NOT** include Test Matrix, Experiment Log, or Score Updates — those don't exist yet anyway.
 
 ```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     requirement to the user and skip both Round 2 consultant Agent() calls.
+     Phase 3b cannot complete without subagent support. -->
 Agent(
   subagent_type="consultant-secondary",
   description="R2 adversarial for <slug>",
@@ -373,6 +399,9 @@ For the current cycle (start at cycle 1):
 - **Fix-gate check:** if any active hypothesis has `posterior == very_high` AND there is a written causal mechanism (Phase 7's Root Cause draft) explaining every `EVID-NNN` in the Evidence Inventory → fix-gate open, proceed to Phase 7.
 - **Otherwise:** increment cycle counter, return to Phase 6 step 1 with the remaining `active` rows in updated test order.
 - **Soft warning at cycle 3** — push-notify: "z-debug cycle 3 reached without convergence. Two cycles remaining before hard halt."
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the hard cycle
+     cap gate (continue / bail to /z-plan / abandon) via their native channel.
+     Silent omission is forbidden. -->
 - **Hard cycle cap: 5.** If cycle 6 would be needed, halt and `AskUserQuestion`:
   - `continue (override cap)` — explicit user override required to enter cycle 6+.
   - `bail to /z-plan` — write `escalation.md`, recommend `/z-plan`.
@@ -424,12 +453,17 @@ If either fails: halt. Either upgrade the root cause statement (so it actually e
 1. Capture pre-fix SHA: `PRE_FIX_SHA=$(git rev-parse HEAD)`. Passed to `/z-mr-review` later as `--base`.
 2. **Bundled `light-fix` consult on the proposed fix.** Dispatch both consultants in parallel per the Phase-visibility matrix (subagents see: Problem + Evidence Inventory + winning Hypothesis Pool rows + Experiment Log + draft Root Cause + draft Evidence coverage table; subagents must NOT see Eliminated Alternatives or Score Updates history):
    ```
+   <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+        requirement and skip both fix consult Agent() calls. Phase 7 fix gate
+        cannot complete without subagent support. -->
    Agent(subagent_type="consultant-secondary", description="Fix consult for <slug>",
          prompt="MODE: light-fix\n\n<sections per Phase-visibility matrix row 7>")
    Agent(subagent_type="consultant-primary", description="Fix consult for <slug>",
          prompt="MODE: light-fix\n\n<same sections>")
    ```
 3. **Synthesize + push back.** One reason it might be wrong per recommendation. Flag shortcuts.
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the fix approval
+     question via their native channel. Silent omission is forbidden. -->
 4. **Present + approve.** `AskUserQuestion` with the synthesized fix.
 5. **Write `## Fix Plan`** section to DEBUG.md (schema mirrors `/z-plan-light` Phase 6 FIX.md):
 
@@ -530,6 +564,9 @@ Pick at least one. Be honest:
 - **Similar bugs likely elsewhere?** <list any places worth auditing; or "none — this is localized">
 ```
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the MR-review
+     gate question and the action-item conversion question via their native
+     channel. Silent omission is forbidden. -->
 After writing the Post-mortem section, ask the user via `AskUserQuestion` (before the action-item conversion prompts):
 
 **"Run MR-style quality review on the fix diff?"**
@@ -583,6 +620,9 @@ If user accepts:
 
 3. Append the collected finding lines (or the "no findings" note) to the Post-mortem section's "Action items (preventative)" list.
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the post-mortem
+     action-item disposition question via their native channel. Silent omission
+     is forbidden. -->
 After writing, ask the user via `AskUserQuestion`:
 - "Convert action items into follow-up tasks?" → If yes, the orchestrator appends them to a designated `TASKS.md` (user picks which slug, or creates a fresh `audit-<topic>` slug) and the user can later `/z-implement-all` them.
 - "Convert regression-test action items into a /z-test follow-up" → For each action item shaped like `Add regression test ...`, record the invariant + failure-class + target-file hint into `$Z_HARNESS_PLAN_DIR/test-followups.md` (a flat list of seed entries shaped like Phase 2 drafts in `/z-test`). On the next `/z-plan` + `/z-test` cycle (or if the user re-runs `/z-test` on this same slug after seeding follow-up production tasks), these become mandatory TESTS.md entries. Closes the post-mortem loop automatically — the next plan run cannot ship without the regression test the post-mortem flagged.
@@ -668,3 +708,19 @@ Orchestrator alone reads raw test output and assigns likelihood buckets (Phase 6
 - **Fix-gate is objective and binary.** Opens only when (a) winning hypothesis posterior == `very_high` AND (b) every `EVID-NNN` in the Evidence coverage table has status ∈ `{explained, falsifies_alternative, orthogonal_with_reason}` (zero `unexplained`).
 - **Phase 2.5 bisect is fast-path-only.** Bisect never blocks the pipeline, never replaces the hypothesis tournament, and never pre-fills the winning hypothesis. It augments the Evidence Inventory and seeds Phase 3a; the fix-gate still requires full posterior + evidence-coverage convergence.
 - **No emojis** anywhere in artifacts.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | yes | Phase 2.5 bisect-isolator Agent(); Phase 3a Round 1 consultant-primary and consultant-secondary Agent() calls; Phase 3b Round 2 consultant-primary and consultant-secondary Agent() calls; Phase 7 fix consult Agent() calls |
+| `ask_user` | yes | Empty arguments gate; Setup slug confirmation; Phase 0 wrong-tool gate; Phase 1 problem clarification; Phase 2 cannot-reproduce gate; Phase 6 hard cycle cap gate; Phase 7 fix approval; Phase 9 MR-review gate; Phase 9 action-item disposition |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

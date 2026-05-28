@@ -1,2 +1,0 @@
-{"ts":"2026-05-26T01:31:28Z","run":"20260526T012002Z-tiered-quality-uplift","kind":"plan_route_decision","from_command":"/z-plan","to_command":"/z-maintain-docs","route_class":"contextual","reason_codes":["docs_stale"],"signals":{"docs_stale_or_drifted":true,"stale_pct":75},"confidence":"high","classifier_used":false,"user_choice":"switch","route_chain":["/z-plan","/z-maintain-docs"]}
-{"ts":"2026-05-26T01:31:28Z","run":"20260526T012002Z-tiered-quality-uplift","kind":"run_end","status":"halted_for_route","reason":"user_chose_maintain_docs"}

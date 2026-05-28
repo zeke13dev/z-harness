@@ -7,10 +7,13 @@
 #   bash install.sh --target=all       # Claude Code + Codex install
 #   bash install.sh --tarball=<url>    # force tarball download from URL
 #   bash install.sh --force            # overwrite a non-symlink plugin dir
+#   bash install.sh --legacy           # also install frozen scripts/export-*.py exporters (deprecated)
+#   bash install.sh --help             # show this help
 #
 # Claude symlink mode (repo clone detected):
-#   Requires: cwd contains .git AND commands/ AND agents/
+#   Requires: cwd contains .git AND commands/ AND agents/ AND runtime/
 #   Creates: ~/.claude/plugins/z-harness@zeke-tools -> <cwd>
+#   Installs: commands/, agents/, runtime/ (includes runtime/drivers/)
 #
 # Codex symlink mode (repo clone detected):
 #   Requires: cwd contains .git AND .codex-plugin/plugin.json AND skills/
@@ -21,6 +24,12 @@
 # Tarball mode:
 #   Downloads tarball from Z_HARNESS_RELEASE_URL or --tarball=<url>
 #   Extracts under the selected host's plugin location.
+#   Tarball must include runtime/ tree (drivers live under runtime/drivers/).
+#
+# Legacy mode (--legacy):
+#   In addition to the standard install, copies frozen scripts/export-*.py
+#   exporters to the install target. This flag is deprecated and will be
+#   removed in the next minor release.
 
 set -euo pipefail
 
@@ -38,6 +47,7 @@ CODEX_MARKETPLACE_PATH="${CODEX_MARKETPLACE_ROOT}/marketplace.json"
 TARBALL_URL=""
 FORCE=false
 TARGET="claude"
+LEGACY=false
 
 # Parse args
 for arg in "$@"; do
@@ -57,6 +67,14 @@ for arg in "$@"; do
     --target=all|--host=all)
       TARGET="all"
       ;;
+    --legacy)
+      LEGACY=true
+      ;;
+    --help|-h)
+      # Print the header comment block (lines 2+, starting with #) up to the first non-comment line
+      awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} /^[^#]/{exit}' "$0"
+      exit 0
+      ;;
     *)
       printf 'install.sh: unknown argument: %s\n' "$arg" >&2
       exit 1
@@ -66,7 +84,8 @@ done
 
 # Detect mode
 is_repo_clone() {
-  [[ -d ".git" && -d "commands" && -d "agents" ]]
+  # runtime/ includes drivers/ (runtime/drivers/); no separate top-level drivers/ needed.
+  [[ -d ".git" && -d "commands" && -d "agents" && -d "runtime" ]]
 }
 
 is_codex_plugin_source() {
@@ -103,6 +122,14 @@ install_claude_symlink() {
 
   printf 'install.sh: symlink created\n'
   printf '  %s -> %s\n' "$CLAUDE_PLUGIN_LINK_PATH" "$repo_path"
+  # In symlink mode the symlink resolves to the whole repo, so runtime/ and
+  # runtime/drivers/ (the drivers tree) are available automatically.
+  if [[ "$LEGACY" == "true" ]]; then
+    # Symlink already exposes scripts/export-*.py via the repo; --legacy is a no-op
+    # but we still print the deprecation notice so callers are aware.
+    printf '\nNOTE: --legacy mode is available for one minor release only and will be removed in the next release.\n'
+    printf 'install.sh: legacy exporters are available via the repo symlink (no copy needed in symlink mode)\n'
+  fi
   printf '\nz-harness installed for Claude Code (symlink mode). Edits in the repo go live immediately.\n'
 }
 
@@ -168,7 +195,38 @@ install_codex_symlink() {
     printf '  codex plugin add %s@%s\n' "$CODEX_PLUGIN_NAME" "$CODEX_MARKETPLACE_NAME"
   fi
 
+  # In symlink mode the symlink resolves to the whole repo; runtime/drivers/ available automatically.
+  if [[ "$LEGACY" == "true" ]]; then
+    printf '\nNOTE: --legacy mode is available for one minor release only and will be removed in the next release.\n'
+    printf 'install.sh: legacy exporters are available via the repo symlink (no copy needed in symlink mode)\n'
+  fi
   printf '\nz-harness installed for Codex (symlink mode). Start a new Codex thread to load new skills.\n'
+}
+
+# REMOVE-AT: v<next-minor>. See C6-D1.
+install_legacy_exporters() {
+  local destination="$1"
+  local repo_path
+  repo_path="$(pwd)"
+
+  printf '\nNOTE: --legacy mode is available for one minor release only and will be removed in the next release.\n'
+
+  local src_dir="${repo_path}/scripts"
+  local dst_dir="${destination}/scripts"
+  mkdir -p "$dst_dir"
+
+  local count=0
+  for exporter in "${src_dir}"/export-*.py; do
+    [[ -f "$exporter" ]] || continue
+    cp "$exporter" "${dst_dir}/$(basename "$exporter")"
+    count=$((count + 1))
+  done
+
+  if [[ "$count" -gt 0 ]]; then
+    printf 'install.sh: legacy exporters installed (%d files -> %s)\n' "$count" "$dst_dir"
+  else
+    printf 'install.sh: WARNING: --legacy specified but no scripts/export-*.py files found in %s\n' "$src_dir" >&2
+  fi
 }
 
 extract_tarball_to() {
@@ -215,6 +273,10 @@ extract_tarball_to() {
 install_claude_tarball() {
   extract_tarball_to "$1" "$CLAUDE_PLUGIN_LINK_PATH" "Claude Code"
   printf 'install.sh: tarball extracted to %s\n' "$CLAUDE_PLUGIN_LINK_PATH"
+  # runtime/ (including runtime/drivers/) is expected to be present in the tarball.
+  if [[ "$LEGACY" == "true" ]]; then
+    install_legacy_exporters "$CLAUDE_PLUGIN_LINK_PATH"
+  fi
   printf '\nz-harness installed for Claude Code (tarball mode).\n'
   printf 'Run /z-update inside Claude Code to update in the future.\n'
 }
@@ -231,6 +293,10 @@ install_codex_tarball() {
     printf 'install.sh: codex not found on PATH; run this after installing Codex:\n'
     printf '  codex plugin add %s@%s\n' "$CODEX_PLUGIN_NAME" "$CODEX_MARKETPLACE_NAME"
   fi
+  # runtime/ (including runtime/drivers/) is expected to be present in the tarball.
+  if [[ "$LEGACY" == "true" ]]; then
+    install_legacy_exporters "$CODEX_PLUGIN_LINK_PATH"
+  fi
   printf '\nz-harness installed for Codex (tarball mode). Start a new Codex thread to load new skills.\n'
 }
 
@@ -238,7 +304,7 @@ install_target_from_repo() {
   case "$TARGET" in
     claude)
       if ! is_repo_clone; then
-        printf 'install.sh: ERROR: not a Claude plugin repo clone (need .git + commands/ + agents/).\n' >&2
+        printf 'install.sh: ERROR: not a Claude plugin repo clone (need .git + commands/ + agents/ + runtime/).\n' >&2
         exit 1
       fi
       install_claude_symlink
@@ -283,7 +349,7 @@ elif [[ -n "${Z_HARNESS_RELEASE_URL:-}" ]]; then
   install_target_from_tarball "$Z_HARNESS_RELEASE_URL"
 else
   printf 'install.sh: ERROR: not a compatible repo clone for --target=%s.\n' "$TARGET" >&2
-  printf '  Claude needs .git + commands/ + agents/.\n' >&2
+  printf '  Claude needs .git + commands/ + agents/ + runtime/.\n' >&2
   printf '  Codex needs .git + .codex-plugin/plugin.json + skills/.\n' >&2
   printf '  To install from tarball: bash install.sh --target=%s --tarball=<url>\n' "$TARGET" >&2
   printf '  Or set Z_HARNESS_RELEASE_URL and re-run.\n' >&2

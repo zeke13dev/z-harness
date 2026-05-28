@@ -1,7 +1,0 @@
-{
-  "slug": "tiered-quality-uplift",
-  "run": "20260526T020417Z-tiered-quality-uplift",
-  "status": "complete",
-  "ended_at": "2026-05-26T02:52:47Z",
-  "totals": {"decisions": 8, "consult_flagged": 4, "consultations": 2, "tasks": 10, "complexity_high": 2, "complexity_medium": 8}
-}

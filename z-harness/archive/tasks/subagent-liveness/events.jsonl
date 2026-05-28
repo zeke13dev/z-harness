@@ -1,6 +1,0 @@
-{"ts":"2026-05-24T23:19:35Z","run":"tasks/subagent-liveness","kind":"review_start","id":"subagent-liveness","cycle":1}
-{"ts":"2026-05-24T23:22:20Z","run":"tasks/subagent-liveness","kind":"review_end","id":"subagent-liveness","cycle":1,"blockers":0,"majors":6,"prompt_chars":3847,"response_chars":2500,"return_chars":4564,"wall_ms":164749}
-{"ts":"2026-05-24T23:30:18Z","run":"tasks/subagent-liveness","kind":"review_start","id":"subagent-liveness","cycle":3}
-{"ts":"2026-05-24T23:32:47Z","run":"tasks/subagent-liveness","kind":"review_end","id":"subagent-liveness","cycle":3,"blockers":1,"majors":4,"prompt_chars":18833,"response_chars":2243,"return_chars":2000,"wall_ms":148937}
-{"ts":"2026-05-24T23:37:31Z","run":"tasks/subagent-liveness","kind":"review_start","id":"subagent-liveness","cycle":4}
-{"ts":"2026-05-24T23:41:27Z","run":"tasks/subagent-liveness","kind":"review_end","id":"subagent-liveness","cycle":4,"blockers":2,"majors":0,"wall_ms":236123}

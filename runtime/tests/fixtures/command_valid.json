@@ -1,0 +1,6 @@
+{
+  "id": "z-plan",
+  "description": "Generate a task plan from a spec file.",
+  "body": "## Usage\n\nRun `/z-plan` to generate a plan.",
+  "schema_version": 1
+}

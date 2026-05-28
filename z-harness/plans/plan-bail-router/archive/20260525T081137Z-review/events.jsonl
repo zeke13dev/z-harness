@@ -1,3 +1,0 @@
-{"ts":"2026-05-25T08:11:37Z","run":"20260525T081137Z-review","kind":"review_all_start","slug":"plan-bail-router","z_harness_version":"380aca6","z_harness_dirty":true,"z_harness_branch":"main"}
-{"ts":"2026-05-25T08:16:58Z","run":"20260525T081137Z-review","kind":"consult","slug":"plan-bail-router","llm":"codex","mode":"final-review-2pronged","prompt_chars":4821,"response_chars":582655,"wall_ms":156409,"transcript":"004-codex-final-review-2pronged"}
-{"ts":"2026-05-25T08:18:33Z","run":"20260525T081137Z-review","kind":"consult","slug":"plan-bail-router","llm":"gemini","mode":"final-review-2pronged","prompt_chars":890563,"response_chars":5643,"wall_ms":230801,"transcript":"002-gemini-final-review-2pronged","status":0}

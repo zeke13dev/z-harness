@@ -1,19 +1,45 @@
 {
-  "slug": "providers-registry",
-  "summary": "Config-file-based registry for routing consultant and reviewer dispatches to any CLI-addressable LLM. Providers are defined in providers.json at user-global or repo-local scope; roles map the three logical slots (consultant_primary, consultant_secondary, reviewer) to named providers. Resolution is handled by scripts/resolve-provider.sh.",
-  "key_invariants": [
-    "consultant_primary and consultant_secondary MUST resolve to distinct providers — the resolver exits nonzero if they collide.",
-    "Repo-local config overrides user-global config per-key (per provider name and per role), not whole-file. Shadowing emits a provider_shadowed event and a stderr warning.",
-    "A role with no bound provider causes the dispatching command to halt immediately with an actionable error pointing to /z-providers-discover.",
-    "Schema version field must equal 1; the resolver exits with a schema error on any other value."
+  "concept": "providers-registry",
+  "last_updated": "2026-05-28",
+  "covers_spec": "none",
+  "source_file": [
+    "scripts/resolve-provider.py",
+    "scripts/resolve-provider.sh",
+    "scripts/discover-providers.py",
+    "commands/z-providers-discover.md",
+    "docs/human/PROVIDERS.md",
+    "runtime/compat.py",
+    "runtime/contract/provider.schema.json",
+    "scripts/log-providers.sh"
   ],
-  "key_files": [
-    { "path": "scripts/resolve-provider.sh", "why": "Single resolution entrypoint used by every consultant/reviewer dispatch site." },
-    { "path": "scripts/resolve-provider.py", "why": "Python implementation of the same resolution logic (used by export scripts and tests)." },
-    { "path": "scripts/discover-providers.py", "why": "Probes PATH for known LLM CLIs and emits a proposed providers.json — never writes files directly." },
-    { "path": "commands/z-providers-discover.md", "why": "Slash command that wraps discover-providers.py with a user-confirmation gate before writing." },
-    { "path": "docs/human/PROVIDERS.md", "why": "User-facing guide: schema reference, config locations, precedence, roles, error messages, and custom CLI patterns." }
+  "confidence": "high",
+  "entry_points": [
+    {"file": "scripts/resolve-provider.sh", "line": 1, "symbol": "resolve-provider.sh", "kind": "module", "summary": "Thin bash wrapper; single entrypoint for all consultant/reviewer dispatch sites"},
+    {"file": "scripts/resolve-provider.py", "line": 262, "symbol": "main", "kind": "fn", "summary": "Loads configs, merges, validates, checks PATH, enforces invariant, prints JSON descriptor"},
+    {"file": "scripts/resolve-provider.py", "line": 96, "symbol": "load_configs", "kind": "fn", "summary": "Locates and loads global + repo JSON; validates schema version field"},
+    {"file": "scripts/resolve-provider.py", "line": 131, "symbol": "merge_with_shadow", "kind": "fn", "summary": "Per-key merge of global + repo configs with shadow detection and event emission"},
+    {"file": "scripts/resolve-provider.py", "line": 193, "symbol": "resolve", "kind": "fn", "summary": "Role→provider→command lookup with PATH presence check"},
+    {"file": "scripts/resolve-provider.py", "line": 242, "symbol": "check_consultant_distinctness", "kind": "fn", "summary": "Enforces invariant: consultant_primary != consultant_secondary"},
+    {"file": "scripts/discover-providers.py", "line": 58, "symbol": "discover", "kind": "fn", "summary": "Probes PATH for known CLIs; returns proposed providers.json dict (never writes)"},
+    {"file": "scripts/log-providers.sh", "line": 1, "symbol": "log-providers.sh", "kind": "module", "summary": "Resolves all three roles, prints summary line, emits provider_resolved events"},
+    {"file": "runtime/compat.py", "line": 15, "symbol": "resolve_provider", "kind": "fn", "summary": "Python API wrapper around resolve-provider.py for runtime dispatch layer"},
+    {"file": "runtime/contract/provider.schema.json", "line": 1, "symbol": "ProviderRegistry", "kind": "struct", "summary": "JSON Schema Draft 7 for .z-harness/providers.json; permits kind=cli|sdk"}
   ],
-  "related_concepts": ["agents", "commands", "z-update"],
-  "last_updated": "2026-05-24"
+  "depends_on": ["scripts", "agents"],
+  "consumed_by": ["commands", "agents", "runtime-dispatch"],
+  "invariants": [
+    "consultant_primary and consultant_secondary must resolve to distinct provider names — resolver exits 1 if they collide.",
+    "Repo-local config overrides user-global config per-key (not whole-file). Shadowing emits provider_shadowed event and stderr warning, de-duped per parent process.",
+    "Schema version field must equal exactly 1; any other value causes exit 2.",
+    "Every provider entry in the merged config is validated on every resolver call, not just the entry being resolved.",
+    "discover-providers.py never writes files — all writes go through /z-providers-discover with explicit user confirmation."
+  ],
+  "gotchas": [
+    "Schema at runtime/contract/provider.schema.json permits kind='sdk' and optional auth_env/session_resumable, but resolve-provider.py validates only kind='cli' — SDK entries pass schema but cause exit 2 if resolved.",
+    "Z_HARNESS_REPO_PROVIDERS env var overrides repo config path entirely, bypassing git-based discovery.",
+    "Shadow de-dup stamp file is keyed on PPID, not PID — warning fires once per parent process tree, not once per subshell.",
+    "role with no bound provider causes immediate halt with actionable error pointing to /z-providers-discover.",
+    "CLI not on PATH causes exit 1 even if the config entry is otherwise valid."
+  ],
+  "memories": []
 }

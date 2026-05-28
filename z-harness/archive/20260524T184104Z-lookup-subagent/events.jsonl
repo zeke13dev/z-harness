@@ -1,2 +1,0 @@
-{"ts":"2026-05-24T18:53:31Z","run":"20260524T184104Z-lookup-subagent","kind":"ideator_failed","vendor":"claude","reason":"returned framing-menu prompt instead of five-section block"}
-{"ts":"2026-05-24T18:56:42Z","run":"20260524T184104Z-lookup-subagent","kind":"brainstorm_run_end","status":"complete","chosen_framing":"codex","ideators_failed":1}

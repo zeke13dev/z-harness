@@ -22,3 +22,14 @@ __pycache__/
 
 # Ad-hoc local research scratch
 /research/
+
+# Runtime state — reflects live environment, not repo state
+runtime/drivers/antigravity/READY
+runtime/drivers/codex/probe_results.json
+
+# z-harness runtime — plan artifacts, archives, telemetry, ambient plan dirs.
+# Everything under z-harness/ is local workflow output; not version-controlled.
+z-harness/
+
+# Stale tmpfiles from aborted diff captures / atomic-write fallouts
+*.tmp

@@ -1,6 +1,11 @@
 ---
 description: Pre-emptive scope splitter — fan a big topic out into N narrow cluster-planner subagents in parallel, then reconcile file-path overlaps into SHARED-CONCERNS.md + MANIFEST.md.
 argument-hint: <topic> [--slug=<root-slug>] [--clusters="a,b,c"]
+runtime: c1
+driver_features_required:
+  - subagent
+  - ask_user
+unsupported_driver_behavior: explicit_gate
 ---
 
 You are running the **z-harness `/z-plan-split`** pipeline.
@@ -9,6 +14,7 @@ Topic + flags (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question "What topic should I split?" via their native channel. Silent omission is forbidden. -->
 **If the topic above is empty or whitespace**, do this first: use `AskUserQuestion` to ask "What topic should I split?". Wait for their reply. Treat the reply as the topic and continue.
 
 `/z-plan-split` is a **pre-emptive scope splitter** for topics that would otherwise produce a sprawling ≥40-task `/z-plan` run. Instead of one mega-plan, it dispatches N parallel `cluster-planner` subagents (each producing a focused 5-15-task plan), then writes `SHARED-CONCERNS.md` (file-overlap observation, ack-gated) and `MANIFEST.md` (cluster listing + run order). It does NOT produce production code. One-level recursion only — nested MANIFESTs are explicitly out of scope.
@@ -18,6 +24,7 @@ $ARGUMENTS
 1. **Derive root slug.**
    - If `$ARGUMENTS` contains `--slug=<value>`, use that verbatim.
    - Else if `$ARGUMENTS` contains `--clusters="a,b,c"`, the slug is auto-derived from the topic (kebab-case, 2-4 words). The `--clusters` flag overrides Phase 1's automatic proposal.
+   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug-confirmation question (when non-obvious) via their native channel. Silent omission is forbidden. -->
    - Otherwise auto-derive from the topic (kebab-case, 2-4 words). If non-obvious, confirm via `AskUserQuestion`.
 2. **Validate the slug (mandatory — security gate).** The slug is interpolated into filesystem paths and must be a single safe segment. Reject (refuse with a clear error and exit cleanly) if the slug:
    - is empty or whitespace-only;
@@ -31,6 +38,7 @@ $ARGUMENTS
 4. Pick a run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`.
 5. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`.
 6. **Existing slug-dir handling.** Run `ls z-harness/` to check for a matching slug dir. If `$Z_HARNESS_PLAN_DIR/MANIFEST.md` exists, prompt the user via `AskUserQuestion`:
+   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the existing-slug decision (overwrite / abort) via their native channel. Silent omission is forbidden. -->
    - **overwrite** — move the **entire prior tree** (every file and subdirectory under `$Z_HARNESS_PLAN_DIR/` *except* the just-created `archive/<RUN>/` directory itself) into `$Z_HARNESS_PLAN_DIR/archive/<RUN>/prior-tree/`. This includes the old `MANIFEST.md`, `SHARED-CONCERNS.md`, all prior `<cluster-slug>/` subdirectories, and any other stale artifacts — so no stale cluster trees survive into the new run. Implementation sketch: `mkdir -p $Z_HARNESS_PLAN_DIR/archive/<RUN>/prior-tree && find $Z_HARNESS_PLAN_DIR/ -mindepth 1 -maxdepth 1 ! -name archive -exec mv {} $Z_HARNESS_PLAN_DIR/archive/<RUN>/prior-tree/ \;` (move any existing `archive/previous-*` subdirs separately if needed). Then start fresh.
    - **abort** — exit cleanly with no changes. Per the Early-exit telemetry contract, emit `plan_split_run_end` with `status: "aborted_existing_tree"` before returning (no `phase_end` — no phase is active yet at Setup time).
    No "append" option (D10 — append flow was under-specified; drop it).
@@ -118,6 +126,7 @@ Main thread only. **Do NOT spawn a subagent** — cluster proposal is small-cont
 
 If `docs/llm/INDEX.json` exists, dispatch ONE `doc-fetcher` (Haiku) call for topic grounding:
 
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The doc-fetcher grounds Phase 1 cluster naming; drivers that skip it should warn the user that doc context is unavailable. -->
 ```
 Agent(
   subagent_type="doc-fetcher",
@@ -144,7 +153,7 @@ If `--clusters="a,b,c"` was passed in Setup step 10, the proposed name list is t
 <!-- PLAN_ROUTE_CHECK_START -->
 ## Plan Route Check
 
-Run this route check after Phase 1b proposes cluster seams and before user confirmation or writing `proposed-clusters.md`. Preserve the 2-6 cluster invariant: fewer than 2 seams must not continue as `/z-plan-split`, and more than 6 seams must not dispatch cluster-planners without topic narrowing or a coarser split. Use only already-known signals: `cluster_seams`, `expected_tasks`, `terrain_uncertain`, `approach_uncertain`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `candidate_files`, `docs_stale_or_drifted`, and the current route chain.
+Run this route check after Phase 1b proposes cluster seams and before user confirmation or writing `proposed-clusters.md`. Preserve the 2-6 cluster invariant: fewer than 2 seams must not continue as `/z-plan-split`, and more than 6 seams must not dispatch cluster-planners without topic narrowing or a coarser split. Use only already-known signals: `cluster_seams`, `expected_tasks`, `terrain_uncertain`, `approach_uncertain`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `candidate_files`, `has_existing_plan`, `plan_validation_intent`, `plan_amend_intent`, `docs_stale_or_drifted`, and the current route chain. Set `plan_validation_intent`/`plan_amend_intent` only when the user re-enters this command on a slug with `SPEC.md`+`PLAN.md`+`TASKS.md` all present (see `agents/planning-router.md` for the language-match heuristic).
 
 Deterministic routes:
 - If `cluster_seams < 2`, write a route decision to `/z-plan` with `reason_codes: ["too_few_clusters"]`, emit the existing `aborted_too_few_clusters` terminal telemetry, and stop. This hard-refusal branch may use `user_choice: "not_asked"` because continuation would violate the split invariant.
@@ -172,6 +181,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 ### 1d. User confirmation
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the cluster-confirmation question (approve / edit / abandon) via their native channel. Silent omission is forbidden. -->
 Bracket the wait with `user_wait_start` / `user_wait_end`. Use `AskUserQuestion` with previews — one option per proposed cluster (preview = `<name>: <scope>`), plus three meta-options:
 
 - **Approve as proposed** — proceed to Phase 2 with the listed clusters.
@@ -218,6 +228,7 @@ repo-root: <abs path to repo root>
 
 Dispatch (single message, N parallel calls):
 
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip all Agent() calls. The cluster-planner subagents produce the per-cluster SPEC/PLAN/TASKS; drivers that skip them must warn the user that cluster planning is unavailable. -->
 ```
 Agent(
   subagent_type="cluster-planner",
@@ -236,6 +247,7 @@ For each cluster-planner return, branch on `STATUS:`:
 
 - **`STATUS: ok`** → mark cluster `ready` in the in-memory MANIFEST state with `attempts: 1`. Record `final_status_at: <UTC ISO>`. Stash the returned `FILES_TOUCHED` JSON array for Phase 4 reconciliation.
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface cluster decision-needed questions (options + abandon) via their native channel. Silent omission is forbidden. -->
 - **`STATUS: decision_needed`** → halt only this cluster (siblings continue / are already done). Parse the structured payload (`DECISION_ID`, `QUESTION`, `OPTIONS`, `RECOMMENDED_OPTION`, `IMPACT`, `AFFECTED_FILES`). Bracket the wait with `user_wait_start` / `user_wait_end`. Present to the user via `AskUserQuestion`:
   - **One option per entry in `OPTIONS`**, using each entry's `label` and `description` verbatim. List `RECOMMENDED_OPTION` first (if not `none`).
   - Plus a meta-option **Abandon this cluster** — marks it `failed` with `failure_reason: user_abandoned_decision`.
@@ -452,3 +464,19 @@ For the partial-tree branch, the push notification also names the failed cluster
 - **Never read `docs/llm/*.json` from main thread.** Always dispatch `doc-fetcher`.
 - **Log everything** via `scripts/log-event.sh`.
 - **No emojis.**
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | yes | Phase 1a doc-fetcher (optional); Phase 2 cluster-planner × N (parallel) |
+| `ask_user` | yes | Empty-topic question; Setup slug confirmation; Setup existing-slug decision; Phase 1d cluster confirmation (approve / edit / abandon); Phase 3 cluster decision-needed questions |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

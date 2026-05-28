@@ -1,2 +1,0 @@
-{"ts":"2026-05-27T04:20:16Z","run":"20260527T041952Z-postmortem-memory-nudge","kind":"brainstorm_run_start","z_harness_version":"fe801ff","z_harness_dirty":true,"z_harness_branch":"main","topic":"memory system review across z-harness + qt-bot; post-mortem automation after /z-implement-all; ensure skills nudge"}
-{"ts":"2026-05-27T04:34:43Z","run":"20260527T041952Z-postmortem-memory-nudge","kind":"brainstorm_run_end","status":"complete","chosen_framing":"codex","ideators_failed":0}

@@ -1,2 +1,0 @@
-{"ts":"2026-05-22T07:30:24Z","run":"20260522T071910Z-brainstorm-and-research","kind":"consult","llm":"gemini","mode":"bundled-decisions","prompt_chars":8632,"response_chars":4309,"wall_ms":36000,"transcript":"003-gemini-bundled-decisions"}
-{"ts":"2026-05-22T07:41:36Z","run":"20260522T071910Z-brainstorm-and-research","kind":"run_end","status":"complete","tasks":6,"consultations":2,"decisions":8,"consult_flagged":4}

@@ -1,6 +1,11 @@
 ---
 description: Audit a plan's artifacts (SPEC.md, PLAN.md, TASKS.md) before execution. Reality-checks references against the codebase, verifies best practices/design, and runs a cross-LLM adversarial review. Emits PLAN_AUDIT_REPORT.md.
 argument-hint: [--slug <slug>]
+runtime: c1
+driver_features_required:
+  - subagent
+  - ask_user
+unsupported_driver_behavior: explicit_gate
 ---
 
 You are running **z-harness `/z-audit-plan`** — a structured, pre-implementation plan audit pipeline. The output is a comprehensive `PLAN_AUDIT_REPORT.md` (detailing all findings) under `$Z_HARNESS_PLAN_DIR/`.
@@ -40,6 +45,8 @@ Loop prevention: carry forward the latest route chain; if it already has two ent
 1. **Discover plan slug:**
    Enumerate subdirectories under the plans directory (`z-harness/plans/`) or legacy directory (`z-harness/`) that contain plan artifacts (`SPEC.md` / `PLAN.md` / `TASKS.md`).
    - If single candidate -> use it.
+   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug
+        selection question via their native channel. Silent omission is forbidden. -->
    - If multiple candidates -> use `AskUserQuestion` to select the slug (or honor `--slug <slug>` argument if provided).
    - If zero -> `mkdir -p "$NO_PLAN_ARCHIVE_DIR"`, write `$NO_PLAN_ARCHIVE_DIR/route-decision.md` recommending `/z-plan`, emit `plan_route_decision` under `$NO_PLAN_RUN`, ask the user to switch or abandon, and stop. Do not create an audit report without plan artifacts.
 2. **Export variables:**
@@ -63,6 +70,9 @@ Loop prevention: carry forward the latest route chain; if it already has two ent
 7. **Docs Grounding:**
    If `docs/llm/INDEX.json` exists in the repo root, dispatch `doc-fetcher` (Haiku) to identify concepts touched by this plan:
    ```
+   <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+        requirement and skip if subagent support is unavailable. The audit can
+        proceed without doc grounding at reduced confidence. -->
    Agent(
      subagent_type="doc-fetcher",
      description="Doc context for plan audit <slug>",
@@ -119,6 +129,10 @@ Checkpoint: Write results to `$BASE/archive/$RUN/phase2-design.md`.
 Spawn two consultants in parallel to review the plan's artifacts (`SPEC.md`, `PLAN.md`, `TASKS.md`) and Phase 1/2 audit notes with a highly critical, adversarial mindset:
 
 ```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     requirement to the user and skip both consultant Agent() calls. Phase 3
+     cannot complete without subagent support; document the gap and proceed
+     to Phase 4 without adversarial review input. -->
 Agent(
   subagent_type="consultant-primary",
   description="Adversarial plan audit review (Gemini) for <slug>",
@@ -209,6 +223,9 @@ Both consultants return structured findings. Transcripts are archived under `$BA
    - **`prefill`:** Present the `AskUserQuestion` normally, pre-select `$DEFAULT` as the recommended option (append label suffix: ` (Recommended — your preference)`).
    - **`ask`:** Present the `AskUserQuestion` normally. If `$SOURCE == "conflict"`, add to the question header text: `(Note: config says <X>, memory says <Y> — your answer below will be offered as a conflict-resolution write target.)` After the user picks an answer, if that answer differs from both config and memory values, surface a one-shot follow-up `AskUserQuestion`: "Record your answer as the new preference? (config / memory:very_strong / memory:strong / no — keep both stored, ask again next time)". Caller writes to config or dispatches `/z-suggest-memory` accordingly.
 
+   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the audit
+        gate (Amend Plan / Proceed as-is / Reject & Re-plan) via their native
+        channel when resolver result is prefill or ask. Silent omission is forbidden. -->
    **Ask user via `AskUserQuestion`** (when resolver result is `prefill` or `ask`):
    - **Amend Plan (Run z-amend):** Trigger interactive plan amendment to address findings.
    - **Proceed as-is:** Acknowledge findings as acceptable tradeoffs and start implementation.
@@ -251,6 +268,9 @@ print(json.dumps({"question_id": sys.argv[1], "proposed_value": sys.argv[2], "n_
 ' "$qid" "$val" "$n" "$scope_rec")"
 ```
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the preference
+     elevation proposal question via their native channel and accept a reply.
+     Silent omission is forbidden. -->
 Present a single `AskUserQuestion`:
 
 > "You've done `<cmd_a> → z-amend` **N times** — add `<val>` as your preference for `<qid>`?"
@@ -324,3 +344,19 @@ If `$PROPOSE_OUT` is empty, skip this phase entirely — no question is asked.
 - **Push Back on Reviews:** Apply the "one reason it might be wrong" check to keep reports high-signal.
 - **Strictly Read-Only:** Never modify the codebase during the audit.
 - **Format Consistency:** No emojis, professional headers, clean Markdown structures.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | yes | Phase 0 doc-fetcher Agent(); Phase 3 consultant-primary and consultant-secondary Agent() calls |
+| `ask_user` | yes | Phase 0 multiple-candidates slug selection; Phase 5 audit gate (Amend Plan / Proceed as-is / Reject & Re-plan); Phase 9 preference elevation proposal |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

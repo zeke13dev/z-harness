@@ -1,2 +1,0 @@
-{"ts":"2026-05-24T17:45:19Z","run":"20260524T174504Z-review","kind":"review_all_start","z_harness_version":"338e138","z_harness_dirty":true,"z_harness_branch":"main","slug":"portable-harness"}
-{"ts":"2026-05-24T17:58:11Z","run":"20260524T174504Z-review","kind":"review_all_end","slug":"portable-harness","drift_findings_kept":4,"spec_gap_findings_kept":7,"codex_rejected":27,"presented_to_user":true}

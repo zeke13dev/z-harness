@@ -52,6 +52,40 @@ default_payload() {
   fi
 }
 
+# check_wall_ms RUN PHASE T0 T1 WALL_MS
+#
+# Emits a telemetry_anomaly event and returns exit code 1 when WALL_MS is
+# suspicious (> 86_400_000 ms, i.e. overflow/seconds-vs-ms confusion, OR
+# negative, i.e. clock skew).  Returns exit code 0 on the normal path.
+#
+# Callers MUST exit 0 (suppressing the bogus *_end event) when this function
+# returns 1.
+check_wall_ms() {
+  local run="$1" phase="$2" t0="$3" t1="$4" wall_ms="$5"
+  local reason=""
+  if [[ "$wall_ms" -gt 86400000 ]]; then
+    reason="wall_ms_overflow"
+  elif [[ "$wall_ms" -lt 0 ]]; then
+    reason="wall_ms_negative"
+  fi
+  if [[ -n "$reason" ]]; then
+    local anomaly_payload
+    anomaly_payload="$(python3 -c '
+import json, sys
+print(json.dumps({
+  "phase": sys.argv[1],
+  "reason": sys.argv[2],
+  "t_start": int(sys.argv[3]),
+  "t_end": int(sys.argv[4]),
+  "computed_wall_ms": int(sys.argv[5]),
+}, separators=(",", ":")))
+' "$phase" "$reason" "$t0" "$t1" "$wall_ms")"
+    bash "$LOG_EVENT" "$run" "telemetry_anomaly" "$anomaly_payload"
+    return 1
+  fi
+  return 0
+}
+
 mode="${1:-}"
 shift || true
 
@@ -70,6 +104,7 @@ case "$mode" in
     IFS='|' read -r RUN PHASE T0 <<< "$TOKEN"
     T1="$(now_ms)"
     WALL_MS=$((T1 - T0))
+    check_wall_ms "$RUN" "$PHASE" "$T0" "$T1" "$WALL_MS" || exit 0
     MERGED="$(python3 -c '
 import json, sys
 p = json.loads(sys.argv[1])
@@ -94,6 +129,7 @@ print(json.dumps(p, separators=(",", ":")))
     "$@" || EXIT_CODE=$?
     T1="$(now_ms)"
     WALL_MS=$((T1 - T0))
+    check_wall_ms "$RUN" "$PHASE" "$T0" "$T1" "$WALL_MS" || exit 0
     END_PAYLOAD="$(python3 -c '
 import json, sys
 p = json.loads(sys.argv[1])
