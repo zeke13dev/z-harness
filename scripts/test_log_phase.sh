@@ -88,9 +88,9 @@ events_file() {
 # ---------------------------------------------------------------------------
 #
 # Invariant: When T0 is in seconds (not ms) and T1 is in ms, the diff is
-# Unix-epoch-scale (> 86_400_000 ms) and MUST NOT be recorded as wall_ms in a
-# *_end event.  Instead, a telemetry_anomaly event must be written and the
-# script must exit 0.
+# Unix-epoch-scale (> 604_800_000 ms = 7 days) and MUST NOT be recorded as
+# wall_ms in a *_end event.  Instead, a telemetry_anomaly event must be written
+# and the script must exit 0.
 #
 # Failure class: bogus wall_ms corrupts /z-stats aggregate analysis
 # ---------------------------------------------------------------------------
@@ -102,7 +102,7 @@ PLANS_DIR_001="$(_tmpdir)"
 RUN_ID="test-run-overflow-001"
 
 # Build a token where T0 is seconds-scale (1_700_000_000 s) and the current
-# time is milliseconds-scale.  The difference will be >> 86_400_000 ms,
+# time is milliseconds-scale.  The difference will be >> 604_800_000 ms,
 # simulating the macOS BSD `date +%s%3N` fallback returning seconds instead.
 T0_SECONDS=1700000000   # seconds-scale value (Unix timestamp in seconds)
 OVERFLOW_TOKEN="${RUN_ID}|implement|${T0_SECONDS}"
@@ -261,6 +261,63 @@ else
 fi
 
 rm -rf "$PLANS_DIR_003"
+
+# ---------------------------------------------------------------------------
+# TEST-004: 26-hour wall_ms (~93_600_000 ms) does NOT trigger anomaly
+# ---------------------------------------------------------------------------
+#
+# Invariant: A session lasting exactly 26 hours is a valid long run and MUST
+# produce a normal *_end event with wall_ms recorded, NOT a telemetry_anomaly.
+# This is a regression guard confirming the raised threshold (604_800_000 ms)
+# eliminates false positives for multi-hour sessions.
+#
+# Failure class: legitimate long runs silently dropped from /z-stats aggregates
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "TEST-004: 26-hour wall_ms does NOT trigger anomaly"
+
+PLANS_DIR_004="$(_tmpdir)"
+RUN_ID_4="test-run-26h-004"
+
+# 26 hours = 93_600_000 ms.  Simulate a T0 that is 26 hours before now.
+NOW_MS="$(python3 -c 'import time; print(int(time.time()*1000))')"
+T0_26H=$(( NOW_MS - 93600000 ))
+TOKEN_26H="${RUN_ID_4}|longrun|${T0_26H}"
+
+EXIT_CODE_4=0
+run_phase "$PLANS_DIR_004" "$RUN_ID_4" \
+  end "$TOKEN_26H" '{"status":"ok"}' || EXIT_CODE_4=$?
+
+assert_eq "26h end exits 0" "0" "$EXIT_CODE_4"
+
+EVENTS_FILE_004="$(events_file "$PLANS_DIR_004" "$RUN_ID_4")"
+if [[ ! -f "$EVENTS_FILE_004" ]]; then
+  echo "  FAIL: no events.jsonl found at $EVENTS_FILE_004"
+  FAIL=$((FAIL + 1))
+else
+  EVENTS_4="$(cat "$EVENTS_FILE_004")"
+
+  # Must contain the normal longrun_end event
+  assert_contains \
+    "26h end produces longrun_end event" \
+    '"kind":"longrun_end"' \
+    "$EVENTS_4"
+
+  # Must contain wall_ms field
+  assert_contains \
+    "26h end event has wall_ms field" \
+    '"wall_ms":' \
+    "$EVENTS_4"
+
+  # Must NOT contain telemetry_anomaly (false-positive check)
+  assert_not_contains \
+    "26h end does NOT produce telemetry_anomaly" \
+    '"kind":"telemetry_anomaly"' \
+    "$EVENTS_4"
+fi
+
+rm -rf "$PLANS_DIR_004"
 
 # ---------------------------------------------------------------------------
 # Summary

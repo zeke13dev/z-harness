@@ -26,6 +26,10 @@
 #   response_chars       (int)        estimate tokens ≈ chars/4 in analysis
 #
 # Honors Z_HARNESS_SLUG just like log-event.sh.
+#
+# Anomaly detection: `check_wall_ms` emits a `telemetry_anomaly` event
+# (reason: `wall_ms_overflow` when wall_ms > 604_800_000 ms i.e. 7 days, or
+# `wall_ms_negative` on clock skew) and suppresses the bogus *_end event.
 
 set -euo pipefail
 
@@ -55,15 +59,19 @@ default_payload() {
 # check_wall_ms RUN PHASE T0 T1 WALL_MS
 #
 # Emits a telemetry_anomaly event and returns exit code 1 when WALL_MS is
-# suspicious (> 86_400_000 ms, i.e. overflow/seconds-vs-ms confusion, OR
+# suspicious (> 604_800_000 ms = 7 days, i.e. overflow/seconds-vs-ms confusion, OR
 # negative, i.e. clock skew).  Returns exit code 0 on the normal path.
+#
+# The original data-quality bug produced wall_ms > 1e12 ms (Unix-epoch-scale),
+# so 604_800_000 catches it with 1500× headroom while avoiding false positives
+# on sessions up to 7 days long.
 #
 # Callers MUST exit 0 (suppressing the bogus *_end event) when this function
 # returns 1.
 check_wall_ms() {
   local run="$1" phase="$2" t0="$3" t1="$4" wall_ms="$5"
   local reason=""
-  if [[ "$wall_ms" -gt 86400000 ]]; then
+  if [[ "$wall_ms" -gt 604800000 ]]; then
     reason="wall_ms_overflow"
   elif [[ "$wall_ms" -lt 0 ]]; then
     reason="wall_ms_negative"
