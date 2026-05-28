@@ -328,6 +328,29 @@
         "skills"
       ],
       "summary": "Unified config concept covering Loader API (4-layer TOML loader: get, export-env, ensure-defaults, explain, should-notify) and Workflow Resolver (resolve-question, set, list-question-ids, [workflow] section, routing-preference memory schema, elevation proposer). Merged from former `config-design` (slice-1) + `config` (slice-2) concepts on 2026-05-27."
+    },
+    {
+      "slug": "overnight-run",
+      "source_files": [
+        "commands/z-overnight.md",
+        "scripts/run-status.sh",
+        "scripts/normalize-task-state.sh",
+        "scripts/overnight-preflight.sh",
+        "scripts/config.py",
+        "docs/human/overnight-run.md"
+      ],
+      "last_updated": "2026-05-28T00:00:00Z",
+      "confidence": "high",
+      "depends_on": [
+        "commands",
+        "scripts",
+        "config"
+      ],
+      "consumed_by": [
+        "commands",
+        "skills"
+      ],
+      "summary": "Linear pipeline orchestrator that chains z-harness sub-commands unattended with halt-only interaction; Z_HARNESS_NO_ASK=halt set only around Skill calls; 12 instrumented callsites (9 resolver + 3 new gates); flock-guarded overnight-state.json; MORNING_REPORT.md written on every terminal transition; resume via /z-overnight resume <RUN_ID>."
     }
   ]
 }

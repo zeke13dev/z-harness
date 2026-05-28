@@ -155,6 +155,48 @@ if [[ "${1:-}" == "--self-test" ]]; then
   _assert_exit "arrow-separated chain (no PLAN.md) → exit 0" "0" "$EXIT5"
   rm -rf "$TD5"
 
+  # ---- Test 6: --chain without value → exit 2 --------------------------------
+
+  EXIT6=0
+  bash "$0" check-collisions --chain 2>/dev/null || EXIT6=$?
+  _assert_exit "--chain with no value → exit 2" "2" "$EXIT6"
+
+  # ---- Test 7: --base without value → exit 2 ---------------------------------
+
+  EXIT7=0
+  bash "$0" check-collisions --base 2>/dev/null || EXIT7=$?
+  _assert_exit "--base with no value → exit 2" "2" "$EXIT7"
+
+  # ---- Test 8: collision event written even when invoked from /tmp -----------
+  # Simulates being called with an absolute path from outside the repo to verify
+  # that log-event.sh still writes to the canonical repo path (Finding 2 fix).
+
+  TD8="$(mktemp -d "${TMPDIR_ROOT}/overnight_preflight_t8_XXXXXX")"
+  mkdir -p "$TD8/archive"
+  printf '# PLAN\n' > "$TD8/PLAN.md"
+  EXIT8=0
+  # Run from /tmp (not the repo root) using absolute path to the script
+  OUTPUT8="$(cd /tmp && Z_HARNESS_SLUG="test-slug-8" bash "$SCRIPTS_DIR/overnight-preflight.sh" check-collisions \
+    --chain "plan,test" \
+    --base "$TD8" 2>&1)" || EXIT8=$?
+  _assert_exit "collision from /tmp cwd → exit nonzero" "1" "$EXIT8"
+  # The event must appear in the canonical repo path, not /tmp
+  EVENT_FILE8="$REPO_ROOT/z-harness/plans/test-slug-8/archive/preflight-test-slug-8/events.jsonl"
+  if [[ -f "$EVENT_FILE8" ]]; then
+    if grep -q "slug_collision_halt" "$EVENT_FILE8"; then
+      echo "  PASS: slug_collision_halt event written to canonical repo path (not /tmp)"
+      PASS=$((PASS + 1))
+    else
+      echo "  FAIL: slug_collision_halt event NOT found in canonical events.jsonl"
+      FAIL=$((FAIL + 1))
+    fi
+    rm -rf "$REPO_ROOT/z-harness/plans/test-slug-8"
+  else
+    echo "  FAIL: events.jsonl not created at canonical path $EVENT_FILE8"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$TD8"
+
   # ---- Summary ---------------------------------------------------------------
 
   echo ""
@@ -194,13 +236,21 @@ cmd_check_collisions() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --chain)
+        if [[ -z "${2:-}" ]]; then
+          echo "overnight-preflight.sh check-collisions: --chain requires a value" >&2
+          exit 2
+        fi
         shift
-        chain="${1:-}"
+        chain="$1"
         shift
         ;;
       --base)
+        if [[ -z "${2:-}" ]]; then
+          echo "overnight-preflight.sh check-collisions: --base requires a value" >&2
+          exit 2
+        fi
         shift
-        base="${1:-}"
+        base="$1"
         shift
         ;;
       *)
@@ -252,9 +302,11 @@ print(json.dumps(obj))
 ' "$slug" "$conflicting_artifact" "$chain" "$first_step")"
 
   # Emit slug_collision_halt event via log-event.sh.
+  # cd to REPO_ROOT so log-event.sh resolves git rev-parse relative to the
+  # canonical repo, not the caller's working directory.
   # We set Z_HARNESS_SLUG so log-event.sh routes to the right plan dir.
-  Z_HARNESS_SLUG="$slug" \
-    bash "$SCRIPTS_DIR/log-event.sh" "$run_id" "slug_collision_halt" "$payload"
+  (cd "$REPO_ROOT" && Z_HARNESS_SLUG="$slug" \
+    bash "$SCRIPTS_DIR/log-event.sh" "$run_id" "slug_collision_halt" "$payload")
 
   # Emit remediation message to stderr
   printf 'Error: Slug %s already has a finished plan. Pass a fresh slug or run `/z-overnight resume <prior-RUN>` if you meant to continue.\n' \

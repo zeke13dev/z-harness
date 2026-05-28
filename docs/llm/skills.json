@@ -28,7 +28,9 @@
     "commands/z-audit.md",
     "commands/z-audit-plan-style.md",
     "commands/z-fix.md",
-    "commands/z-skill-fix.md"
+    "commands/z-skill-fix.md",
+    "commands/z-overnight.md",
+    "skills/z-overnight/SKILL.md"
   ],
   "confidence": "high",
   "entry_points": [
@@ -94,6 +96,13 @@
       "symbol": "z-skill-fix",
       "kind": "module",
       "summary": "Meta-skill for patching misleading SKILL.md/command/agent files; diagnosis note; surgical edit; reviewer safety gate."
+    },
+    {
+      "file": "commands/z-overnight.md",
+      "line": 1,
+      "symbol": "z-overnight",
+      "kind": "module",
+      "summary": "Overnight chain orchestrator: runs comma/arrow-separated sub-command pipeline unattended with Z_HARNESS_NO_ASK=halt carve-out, heartbeat lock, overnight-state.json, MORNING_REPORT.md, resume support, preflight slug-collision check, and push-notify on halt or completion."
     },
     {
       "file": "skills/z-do/SKILL.md",

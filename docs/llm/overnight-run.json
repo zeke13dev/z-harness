@@ -1,0 +1,202 @@
+{
+  "concept": "overnight-run",
+  "last_updated": "2026-05-28",
+  "covers_spec": "z-harness/overnight-run/SPEC.md",
+  "scope": "Linear pipeline orchestrator that chains z-harness sub-commands unattended with halt-only interaction, concurrency locking, auto-decide allowlist, resume, and MORNING_REPORT generation.",
+  "source_files": [
+    "commands/z-overnight.md",
+    "scripts/run-status.sh",
+    "scripts/normalize-task-state.sh",
+    "scripts/overnight-preflight.sh",
+    "scripts/config.py",
+    "docs/human/overnight-run.md"
+  ],
+  "confidence": "high",
+  "depends_on": [
+    "commands",
+    "scripts",
+    "config"
+  ],
+  "consumed_by": [
+    "commands",
+    "skills"
+  ],
+  "summary": "Single-command overnight pipeline runner. Chains existing z-harness sub-commands (plan, test, implement-all, review-all, research) end-to-end with Z_HARNESS_NO_ASK=halt set only around Skill-tool calls. Instrumented callsites convert ask results to halt events; 12 sites total (9 resolver + 3 new gates). Writes overnight-state.json per run (flock-guarded), emits MORNING_REPORT.md, push-notifies on completion or halt.",
+  "entry_points": [
+    {
+      "file": "commands/z-overnight.md",
+      "line": 17,
+      "symbol": "invocation forms",
+      "kind": "doc",
+      "summary": "Three invocation forms: chain form, preset:<name> form, and resume <RUN_ID> form; chain is comma/arrow-separated step names without /z- prefix"
+    },
+    {
+      "file": "commands/z-overnight.md",
+      "line": 65,
+      "symbol": "Phase 1 Setup",
+      "kind": "doc",
+      "summary": "New-run setup: derive slug, resolve plan dir, preflight slug-collision check, acquire flock-based lock, build AUTODECIDE_EFFECTIVE, init overnight-state.json, log overnight_start"
+    },
+    {
+      "file": "commands/z-overnight.md",
+      "line": 95,
+      "symbol": "lock acquisition",
+      "kind": "doc",
+      "summary": "Lock file at $BASE/.overnight.lock (JSON: owner_run_id, started_at, last_heartbeat); flock file at $BASE/.overnight.flock; stale threshold Z_HARNESS_OVERNIGHT_LOCK_STALE_S (default 7200s)"
+    },
+    {
+      "file": "commands/z-overnight.md",
+      "line": 133,
+      "symbol": "AUTODECIDE_EFFECTIVE build",
+      "kind": "doc",
+      "summary": "Merge OVERNIGHT_AUTODECIDE_QIDS_DEFAULT with Z_HARNESS_OVERNIGHT_AUTODECIDE (JSON string); exported as Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE before Skill calls"
+    },
+    {
+      "file": "commands/z-overnight.md",
+      "line": 224,
+      "symbol": "Phase 2 Resume",
+      "kind": "doc",
+      "summary": "Resume: locate state file, parse, compute cursor = first non-complete step, validate HEAD SHA against last completed step head_sha_after (warn-and-continue on mismatch), re-acquire lock"
+    },
+    {
+      "file": "commands/z-overnight.md",
+      "line": 274,
+      "symbol": "Phase 3 per-step loop",
+      "kind": "doc",
+      "summary": "Per-step: skip if complete, update state to running, log step_start, snapshot archive dirs, set Z_HARNESS_NO_ASK=halt, invoke Skill, unset Z_HARNESS_NO_ASK, identify sub-RUN via C14 algorithm, classify via run-status.sh, write state, log terminal event, break on non-complete"
+    },
+    {
+      "file": "commands/z-overnight.md",
+      "line": 504,
+      "symbol": "Phase 4 terminal handling",
+      "kind": "doc",
+      "summary": "Best-effort terminal: determine overall status, update state, write MORNING_REPORT.md, log overnight_end, release lock, push-notify via should-notify"
+    },
+    {
+      "file": "scripts/run-status.sh",
+      "line": 1,
+      "symbol": "run-status.sh",
+      "kind": "module",
+      "summary": "Subcommands: classify <run-id> [--command <name>] → clean | halted | errored | unknown; last-event <run-id> → last event JSON. classify reads last 20 lines of events.jsonl, tolerates malformed trailing JSON"
+    },
+    {
+      "file": "scripts/normalize-task-state.sh",
+      "line": 1,
+      "symbol": "normalize-task-state.sh",
+      "kind": "module",
+      "summary": "Converts [~] markers in TASKS.md to [ ] atomically; called by /z-implement-all when halt-from-ask fires mid-batch so resume re-runs the interrupted task"
+    },
+    {
+      "file": "scripts/overnight-preflight.sh",
+      "line": 1,
+      "symbol": "overnight-preflight.sh",
+      "kind": "module",
+      "summary": "check-collisions subcommand: if first step is plan and $BASE/PLAN.md exists, emit slug_collision_halt event and exit nonzero; runs before lock acquisition and before Z_HARNESS_NO_ASK is set"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 1,
+      "symbol": "_apply_overnight_overrides",
+      "kind": "fn",
+      "summary": "Post-processes the resolve-question envelope under Z_HARNESS_NO_ASK=halt: allowlist match → overnight_decision envelope; no match → halt envelope. Fires only when result==ask"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 1,
+      "symbol": "cmd_check_no_ask",
+      "kind": "fn",
+      "summary": "check-no-ask --question-id <id>: minimal API for non-resolver gates; returns JSON {result: halt|proceed, question_id, rule_id}; consults allowlist + resolver when Z_HARNESS_NO_ASK=halt"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 1,
+      "symbol": "OVERNIGHT_AUTODECIDE_QIDS_DEFAULT",
+      "kind": "const",
+      "summary": "Default allowlist: {workflow.slug_confirm: recommend_derived, workflow.audit_to_amend: amend}; merged under Z_HARNESS_OVERNIGHT_AUTODECIDE env override"
+    }
+  ],
+  "invariants": [
+    "Z_HARNESS_NO_ASK=halt is set ONLY around Skill-tool calls (Phase 3.6) and unset immediately after; parent orchestrator AskUserQuestion calls (lock contention, resume confirmation) run with NO_ASK unset",
+    "Hard halts (slug collision, lock corruption, state corruption) are NEVER bypassed by the overnight allowlist or halt-from-ask; they exit before lock acquisition",
+    "overnight-state.json writes are always flock-guarded on $BASE/.overnight.lock via tmp+rename (POSIX atomic)",
+    "Lock is released in Phase 4.5 even if MORNING_REPORT.md write fails (best-effort ordering)",
+    "No retry on Skill-tool failure; user resumes via /z-overnight resume <RUN_ID>",
+    "git_diff_stat_at_end is captured at EVERY terminal state transition (complete, halt, error), not only on chain completion",
+    "Empty chain → usage error; no lock acquired (Phase 0 guard)",
+    "Resume-after-complete → no-op with AskUserQuestion acknowledgement",
+    "would_have_asked in halt envelope captures only {default, choices} — never question text, description, or header",
+    "Allowlist env override (Z_HARNESS_OVERNIGHT_AUTODECIDE) is a JSON object merged over defaults, not a replacement",
+    "Preflight slug-collision check runs BEFORE lock acquisition and BEFORE Z_HARNESS_NO_ASK is set",
+    "New sub-RUN identification uses set-difference of archive dirs excluding *-overnight-* dirs (C14 algorithm); 0 or >1 new dirs → error with run_id_ambiguous",
+    "run-status.sh classify tail-reads last 20 events and tolerates malformed trailing JSON; no valid events → unknown",
+    "Z_HARNESS_ASK_ALL=1 AND Z_HARNESS_NO_ASK=halt is a rejected config conflict; emits config_conflict event and exits nonzero"
+  ],
+  "gotchas": [
+    "Fail-OPEN for unregistered callsites: only 12 AskUserQuestion callsites are instrumented; all other callsites will block the conversation even with Z_HARNESS_NO_ASK=halt. scripts/lint-askuser.sh is documentation/audit tooling, NOT runtime enforcement",
+    "Run scripts/lint-askuser.sh --strict before launching a long chain to identify uninstrumented callsites on your hot path",
+    "Z_HARNESS_OVERNIGHT_AUTODECIDE value must be a JSON object string, not comma-separated key=value pairs (C7 change from original design)",
+    "Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE is an internal export; do not set manually — the orchestrator overwrites it",
+    "Lock stale threshold defaults to 7200s (2h) because /z-implement-all may not yield control for extended periods; heartbeat fires only at step transitions, not inside Skill calls",
+    "run-status.sh classify for implement-all requires --command implement-all flag because /z-implement-all emits implement_end per task rather than a single chain-end event; classify then also checks TASKS.md checkbox state",
+    "HEAD SHA mismatch on resume surfaces a CRITICAL warning but proceeds (warn-and-continue, not a hard halt)",
+    "z_harness_version in overnight-state.json is stored for record only; it is NOT validated on resume (C5 correction)",
+    "would_have_asked field in halt envelope is restricted to {default, choices} to prevent leakage of context strings into events.jsonl",
+    "MORNING_REPORT.md is overwritten on every chain run; previous reports are not archived automatically",
+    "Lock file is both the concurrency lock AND the flock target for overnight-state.json writes (single lock per C4); do not use a separate flock file",
+    "Z_HARNESS_OVERNIGHT_AUTO_COMPACT=1 only logs a compact_recommended event; it does not trigger automatic context compaction — the caller must observe the event"
+  ],
+  "event_vocabulary": {
+    "overnight_start": "{chain, preset_used, slug, head_sha_at_start}",
+    "overnight_step_start": "{step, position, total_steps}",
+    "overnight_step_complete": "{step, position, run_id, wall_ms}",
+    "overnight_step_halt": "{step, position, run_id, halt_reason, halt_event}",
+    "overnight_step_error": "{step, position, run_id, error_event}",
+    "overnight_decision": "{question_id, chosen, source, strength, rule_id, sources[]}",
+    "overnight_end": "{status, total_steps, completed_steps, wall_ms}",
+    "compact_recommended": "{cumulative_chars_estimate}",
+    "head_sha_mismatch_at_resume": "{expected, actual, last_step}",
+    "state_corrupt": "{path, error}",
+    "overnight_lock_corrupt": "{path, parse_error}",
+    "slug_collision_halt": "{slug, conflicting_artifact, chain, first_step}",
+    "run_id_ambiguous": "{step, position, reason, new}",
+    "askuser_halted": "{question_id, would_have_asked}",
+    "config_conflict": "{conflict}"
+  },
+  "presets": {
+    "full-build": "plan,test,implement-all,review-all",
+    "research-build": "research,plan,test,implement-all,review-all",
+    "quick-build": "plan,implement-all"
+  },
+  "instrumented_callsites": {
+    "workflow.slug_confirm": [
+      "commands/z-plan.md:26",
+      "commands/z-fix.md:24",
+      "commands/z-uplift.md:79",
+      "skills/z-debug/SKILL.md:23",
+      "skills/z-brainstorm/SKILL.md:25",
+      "skills/z-map/SKILL.md:133",
+      "skills/z-plan-light/SKILL.md:25"
+    ],
+    "workflow.audit_to_amend": [
+      "commands/z-audit-plan.md:187",
+      "commands/z-audit-plan-style.md:388"
+    ],
+    "workflow.implement_all_proceed": [
+      "commands/z-implement-all.md (halt-resolution gate)"
+    ],
+    "workflow.review_all_proceed": [
+      "commands/z-review-all.md (Phase 3.7 proceed gate)"
+    ],
+    "workflow.plan_decisions_approval": [
+      "commands/z-plan.md (Phase 2.5 decisions-doc approval gate)"
+    ]
+  },
+  "v1_deferrals": [
+    "DAG / parallel-cluster overnight runs",
+    "Full retrofit of every AskUserQuestion callsite to halt-aware gates (v1: 12 total; rest are fail-OPEN)",
+    "Subprocess-per-step architecture (v1 uses Skill-tool composition; context accumulation risk for step 4+)",
+    "New push-notification backends beyond should-notify",
+    "Auto-compact trigger (v1 only logs compact_recommended event)",
+    "Stale-lock hard-block (v1 relies on heartbeat + 2h timeout; no PID/conversation-id check)"
+  ]
+}

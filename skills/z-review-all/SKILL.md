@@ -20,14 +20,27 @@ You are running the **z-harness `/z-review-all`** final-gate review. This is a h
 Once `EARLY_PLAN_DIR` is known:
 
 1. If `$EARLY_PLAN_DIR/.review_state.json` **does not exist** → proceed to Phase 0 normally.
-2. If it exists, attempt to parse it. **If it fails to parse (invalid JSON), or any required field is missing or the wrong type, or `phase_3_7_acknowledged` is not `true`:** treat as stale — delete the file, emit a `review_state_corrupt` event with a `reason` field, and proceed to Phase 0 for a full re-run:
-   ```bash
-   # RRUN is not yet established in pre-Phase-0; use a transient identifier
-   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "pre-resume" review_state_corrupt \
-     "$(jq -n --arg slug "$EARLY_SLUG" --arg reason 'parse_error or missing field' '{"slug":$slug,"reason":$reason}')"
-   rm "$EARLY_PLAN_DIR/.review_state.json"
-   ```
-3. If parsed successfully, validate the state file:
+2. If it exists, attempt to parse it:
+   - **If it fails to parse (invalid JSON):** treat as stale — delete the file, emit a `review_state_corrupt` event with `reason: "parse_error"`, and proceed to Phase 0:
+     ```bash
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "pre-resume" review_state_corrupt \
+       "$(jq -n --arg slug "$EARLY_SLUG" --arg reason 'parse_error' '{"slug":$slug,"reason":$reason}')"
+     rm "$EARLY_PLAN_DIR/.review_state.json"
+     ```
+   - **If parsed successfully AND `halted: true` AND `halt_reason: "no_ask_blocked"`:** valid halted-state file. Do NOT delete it. Emit `review_resume_from_halt` event, delete the file (so Phase 3.7 re-evaluates fresh), and proceed to Phase 0 (full re-run — Phase 3.7 gate will re-check `check-no-ask`):
+     ```bash
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "pre-resume" review_resume_from_halt \
+       "$(jq -n --arg slug "$EARLY_SLUG" --arg halt_reason 'no_ask_blocked' '{"slug":$slug,"halt_reason":$halt_reason}')"
+     rm "$EARLY_PLAN_DIR/.review_state.json"
+     # → proceed to Phase 0 (full re-run)
+     ```
+   - **If parsed successfully AND `phase_3_7_acknowledged` is not `true` AND not a recognized halt state:** treat as stale — delete the file, emit `review_state_corrupt` with `reason: "missing_field"`, and proceed to Phase 0:
+     ```bash
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "pre-resume" review_state_corrupt \
+       "$(jq -n --arg slug "$EARLY_SLUG" --arg reason 'missing_field' '{"slug":$slug,"reason":$reason}')"
+     rm "$EARLY_PLAN_DIR/.review_state.json"
+     ```
+3. If parsed successfully with `phase_3_7_acknowledged: true`, validate the state file:
    - Run `git rev-parse HEAD` and compare with `head_sha` in the file.
    - Check that the files at `cumulative_diff_path` **and** `cumulative_stat_path` both still exist on disk. If either is missing, treat as stale (delete state file, full re-run).
    - **If HEAD matches AND both artifact files are present:**
@@ -150,7 +163,66 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RR
   '{"trigger":"pre_consult","phase":"review_all_phase_4"}'
 ```
 
-Present an `AskUserQuestion` with exactly two options:
+**No-ask gate — run first, before the resolver:**
+
+```bash
+NOASK_JSON="$(python3 scripts/config.py check-no-ask --question-id workflow.review_all_proceed)"
+NOASK_EXIT=$?
+NOASK_RESULT="$(echo "$NOASK_JSON" | jq -r .result)"
+
+if [[ $NOASK_EXIT -eq 5 ]]; then
+  echo "config_conflict: Z_HARNESS_ASK_ALL=1 and Z_HARNESS_NO_ASK=halt are mutually exclusive" >&2
+  exit 5
+fi
+```
+
+- **If `$NOASK_RESULT == "halt"`:** Emit `review_halt` event, write partial `.review_state.json`, and exit cleanly — do NOT invoke `AskUserQuestion`:
+  ```bash
+  if [[ "$NOASK_RESULT" == "halt" ]]; then
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_halt \
+      "$(printf '{"reason":"no_ask_blocked","question_id":"workflow.review_all_proceed","rule_id":"no_ask_halt"}')"
+    echo "halt: no_ask_blocked on workflow.review_all_proceed" >&2
+    python3 -c "
+import json, datetime, sys
+state = {
+  'phase_3_7_acknowledged': False,
+  'halted': True,
+  'halt_reason': 'no_ask_blocked',
+  'halted_at': datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+}
+path = sys.argv[1]
+with open(path, 'w') as f:
+    json.dump(state, f, indent=2)
+" "$Z_HARNESS_PLAN_DIR/.review_state.json" 2>/dev/null \
+      || echo "warn: could not write .review_state.json" >&2
+    exit 0
+  fi
+  ```
+
+- **If `$NOASK_RESULT == "proceed"`:** Run the full resolver for preference-based skip/prefill/ask:
+  ```bash
+  RESOLVED="$(python3 scripts/config.py resolve-question workflow.review_all_proceed)"
+  RESOLVE_EXIT=$?
+  if [[ $RESOLVE_EXIT -ne 0 ]]; then
+    RESULT="ask"; DEFAULT=""; SOURCE="error"
+  else
+    RESULT="$(echo "$RESOLVED" | jq -r .result)"
+    DEFAULT="$(echo "$RESOLVED" | jq -r .default)"
+    SOURCE="$(echo "$RESOLVED" | jq -r .source)"
+  fi
+  ```
+
+  - **`skip`:** Skip the `AskUserQuestion`. Emit `askuser_skipped` event:
+    ```bash
+    if [[ "$RESULT" == "skip" ]]; then
+      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" askuser_skipped \
+        "$(printf '{"question_id":"workflow.review_all_proceed","source":"%s"}' "$SOURCE")"
+    fi
+    ```
+  - **`prefill`:** Present AskUserQuestion with `$DEFAULT` pre-selected.
+  - **`ask`:** Present AskUserQuestion normally.
+
+When resolver result is `prefill` or `ask`, present an `AskUserQuestion` with exactly two options:
 
 > **Compaction breakpoint — pre-consultant spawn**
 >

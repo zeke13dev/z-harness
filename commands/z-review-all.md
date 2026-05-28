@@ -25,14 +25,34 @@ You are running the **z-harness `/z-review-all`** final-gate review. This is a h
 Once `EARLY_PLAN_DIR` is known:
 
 1. If `$EARLY_PLAN_DIR/.review_state.json` **does not exist** → proceed to Phase 0 normally.
-2. If it exists, attempt to parse it. **If it fails to parse (invalid JSON), or any required field is missing or the wrong type, or `phase_3_7_acknowledged` is not `true`:** treat as stale — delete the file, emit a `review_state_corrupt` event with a `reason` field, and proceed to Phase 0 for a full re-run:
-   ```bash
-   # RRUN is not yet established in pre-Phase-0; use a transient identifier
-   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "pre-resume" review_state_corrupt \
-     "$(jq -n --arg slug "$EARLY_SLUG" --arg reason 'parse_error or missing field' '{"slug":$slug,"reason":$reason}')"
-   rm "$EARLY_PLAN_DIR/.review_state.json"
-   ```
-3. If parsed successfully, validate the state file:
+2. If it exists, attempt to parse it:
+   - **If it fails to parse (invalid JSON):** treat as stale — delete the file, emit a `review_state_corrupt` event with `reason: "parse_error"`, and proceed to Phase 0 for a full re-run:
+     ```bash
+     # RRUN is not yet established in pre-Phase-0; use a transient identifier
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "pre-resume" review_state_corrupt \
+       "$(jq -n --arg slug "$EARLY_SLUG" --arg reason 'parse_error' '{"slug":$slug,"reason":$reason}')"
+     rm "$EARLY_PLAN_DIR/.review_state.json"
+     ```
+   - **If parsed successfully AND `halted: true` AND `halt_reason: "no_ask_blocked"`:** this is a valid halted-state file from a prior Phase 3.7 no-ask block. Do NOT delete it. Emit `review_resume_from_halt` event and jump to Phase 3.7 retry (skip Phases 0–3.5, but re-run Phase 3.7 gate from scratch):
+     ```bash
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "pre-resume" review_resume_from_halt \
+       "$(jq -n --arg slug "$EARLY_SLUG" --arg halt_reason 'no_ask_blocked' '{"slug":$slug,"halt_reason":$halt_reason}')"
+     # Restore enough environment for Phase 3.7: slug and plan dir are already known.
+     # Phase 3.7 will re-run check-no-ask and either halt again or prompt the user.
+     # NOTE: We do NOT restore RRUN/cumulative paths here because Phase 3.7 re-runs
+     # the gate afresh — if no-ask is now cleared, the user will be prompted normally
+     # and a full Phase 0–3.5 run is needed to rebuild artifacts.
+     # Delete halt state file so Phase 3.7 writes a fresh one if needed.
+     rm "$EARLY_PLAN_DIR/.review_state.json"
+     # → jump to Phase 0 (full re-run; halt state cleared so Phase 3.7 gate re-evaluates)
+     ```
+   - **If parsed successfully AND `phase_3_7_acknowledged` is not `true` AND not a recognized halt state:** treat as stale — delete the file, emit a `review_state_corrupt` event with `reason: "missing_field"`, and proceed to Phase 0:
+     ```bash
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "pre-resume" review_state_corrupt \
+       "$(jq -n --arg slug "$EARLY_SLUG" --arg reason 'missing_field' '{"slug":$slug,"reason":$reason}')"
+     rm "$EARLY_PLAN_DIR/.review_state.json"
+     ```
+3. If parsed successfully with `phase_3_7_acknowledged: true`, validate the state file:
    - Run `git rev-parse HEAD` and compare with `head_sha` in the file.
    - Check that the files at `cumulative_diff_path` **and** `cumulative_stat_path` both still exist on disk. If either is missing, treat as stale (delete state file, full re-run).
    - **If HEAD matches AND both artifact files are present:**
@@ -162,8 +182,82 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RR
   '{"trigger":"pre_consult","phase":"review_all_phase_4"}'
 ```
 
+**No-ask gate — run first, before the resolver:**
+
+```bash
+# check-no-ask is the fail-closed overnight gate. It returns halt|proceed and
+# correctly handles Z_HARNESS_ASK_ALL=1 vs Z_HARNESS_NO_ASK=halt conflicts (exit 5).
+NOASK_JSON="$(python3 scripts/config.py check-no-ask --question-id workflow.review_all_proceed)"
+NOASK_EXIT=$?
+NOASK_RESULT="$(echo "$NOASK_JSON" | jq -r .result)"
+
+if [[ $NOASK_EXIT -eq 5 ]]; then
+  # Config conflict (ASK_ALL=1 + NO_ASK=halt). check-no-ask already printed error JSON.
+  # Surface to user and abort.
+  echo "config_conflict: Z_HARNESS_ASK_ALL=1 and Z_HARNESS_NO_ASK=halt are mutually exclusive" >&2
+  exit 5
+fi
+```
+
+- **If `$NOASK_RESULT == "halt"`:** Emit `review_halt` event, write a partial `.review_state.json`, and exit cleanly — do NOT proceed to `resolve-question` or `AskUserQuestion`:
+  ```bash
+  if [[ "$NOASK_RESULT" == "halt" ]]; then
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_halt \
+      "$(printf '{"reason":"no_ask_blocked","question_id":"workflow.review_all_proceed","rule_id":"no_ask_halt"}')"
+    echo "halt: no_ask_blocked on workflow.review_all_proceed" >&2
+    # Write partial state file so /z-review-all resume check recognizes this as a
+    # halted-state file (not stale/corrupt) on next invocation.
+    python3 -c "
+import json, datetime, sys
+state = {
+  'phase_3_7_acknowledged': False,
+  'halted': True,
+  'halt_reason': 'no_ask_blocked',
+  'halted_at': datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+}
+path = sys.argv[1]
+with open(path, 'w') as f:
+    json.dump(state, f, indent=2)
+" "$Z_HARNESS_PLAN_DIR/.review_state.json" 2>/dev/null \
+      || echo "warn: could not write .review_state.json" >&2
+    exit 0
+  fi
+  ```
+
+- **If `$NOASK_RESULT == "proceed"`:** Overnight gate cleared — continue to the resolver for preference-based skip/prefill/ask:
+  ```bash
+  # check-no-ask returned proceed: run the full resolver to honor user preferences.
+  RESOLVED="$(python3 scripts/config.py resolve-question workflow.review_all_proceed)"
+  RESOLVE_EXIT=$?
+
+  if [[ $RESOLVE_EXIT -ne 0 ]]; then
+    # Exit codes: 2=bad invocation, 3=unknown question_id, 4=I/O error.
+    # In all error cases, fall through to ask the user normally — never silently skip.
+    echo "resolve-question failed (exit $RESOLVE_EXIT); falling back to ask" >&2
+    RESULT="ask"; DEFAULT=""; SOURCE="error"
+  else
+    RESULT="$(echo "$RESOLVED" | jq -r .result)"
+    DEFAULT="$(echo "$RESOLVED" | jq -r .default)"
+    SOURCE="$(echo "$RESOLVED" | jq -r .source)"
+  fi
+  ```
+
+  Branch on `$RESULT` from the resolver:
+
+  - **`skip`:** Skip the `AskUserQuestion` and proceed as if the user picked `$DEFAULT`. Emit `askuser_skipped` event:
+    ```bash
+    if [[ "$RESULT" == "skip" ]]; then
+      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" askuser_skipped \
+        "$(printf '{"question_id":"workflow.review_all_proceed","source":"%s"}' "$SOURCE")"
+      # Fall through to the Proceed path below (write state file and continue to Phase 4).
+    fi
+    ```
+
+  - **`prefill`:** Present the `AskUserQuestion` normally, pre-select `$DEFAULT` as the recommended option (append label suffix: ` (Recommended — your preference)`).
+  - **`ask`:** Present the `AskUserQuestion` normally.
+
 <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the compaction-breakpoint decision (pause for /clear / proceed now) via their native channel. Silent omission is forbidden. -->
-Present an `AskUserQuestion` with exactly two options:
+When resolver result is `prefill` or `ask`, present an `AskUserQuestion` with exactly two options:
 
 > **Compaction breakpoint — pre-consultant spawn**
 >
@@ -491,7 +585,9 @@ The implementation is done and reviewed; the docs are what's left.
 | Feature | Used | Gates |
 |---------|------|-------|
 | `subagent` | yes | Phase 4 consultant-primary + consultant-secondary (parallel); Phase 7 review-agent (memory review) |
-| `ask_user` | yes | Phase 0 slug selection; Phase 1 incomplete-plan warning; Phase 2 base-ref fallback question; Phase 3.7 compaction-breakpoint decision; Phase 7 per-candidate memory review |
+| `ask_user` | yes | Phase 0 slug selection; Phase 1 incomplete-plan warning; Phase 2 base-ref fallback question; Phase 3.7 compaction-breakpoint decision (resolver `prefill`/`ask` only); Phase 7 per-candidate memory review |
+| `check-no-ask` | yes | Phase 3.7 fail-closed overnight gate — `halt` → emit `review_halt`, write partial state, exit; `proceed` → fall through to `resolve-question` |
+| `resolve-question` | yes | Phase 3.7 `workflow.review_all_proceed` (only reached when `check-no-ask` returns `proceed`) — may `skip` (emit `askuser_skipped`, fall through to proceed path) or `prefill`/`ask` (show AskUserQuestion) |
 | `skill_invoke` | no | — |
 
 Driver support requirements: see frontmatter `driver_features_required`.
