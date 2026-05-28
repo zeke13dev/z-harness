@@ -5,9 +5,9 @@ on:
     paths:
       - "commands/**"
       - "skills/**"
-      - "scripts/lint-askuser.sh"
-      - "scripts/preflight.sh"
-      - "Makefile"
+      - "scripts/**"
+      - "agents/**"
+      - "runtime/**"
       - ".github/workflows/lint-askuser.yml"
   push:
     branches:
@@ -44,5 +44,28 @@ jobs:
             exit 0
           elif [[ $_EC -ne 0 ]]; then
             echo "::error file=scripts/lint-askuser.sh::lint-askuser.sh exited with code $_EC (hard failure)."
+            exit $_EC
+          fi
+
+  ci-grep-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run provider-name grep gate
+        # Exit 0 = clean; exit 1 = violations (hard failure — bare provider names must not appear in new code).
+        # Exit 3 = internal/hard error (hard failure).
+        run: |
+          set +e
+          OUTPUT=$(bash scripts/ci-grep-gates.sh 2>&1)
+          _EC=$?
+          set -e
+          echo "$OUTPUT"
+          if [[ $_EC -eq 1 ]]; then
+            echo "::error file=scripts/ci-grep-gates.sh::Bare provider name(s) found (codex/gemini/claude without -cli suffix). Use codex-cli, gemini-cli, or claude-cli instead."
+            exit 1
+          elif [[ $_EC -ne 0 ]]; then
+            echo "::error file=scripts/ci-grep-gates.sh::ci-grep-gates.sh exited with code $_EC (hard failure)."
             exit $_EC
           fi

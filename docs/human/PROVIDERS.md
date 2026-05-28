@@ -1,17 +1,17 @@
-# PROVIDERS — Provider Registry Guide
+# PROVIDERS — Runtime Registry Guide
 
-> Last updated: 2026-05-24
+> Last updated: 2026-05-28
 
 ## Overview
 
-z-harness uses a **provider registry** to route consultant and reviewer
-dispatches to any CLI-addressable LLM.  A provider is anything reachable via a
-shell command — `codex`, `gemini`, `claude`, `ollama`, `agy`, or a custom
-wrapper you write yourself.
+z-harness uses a **provider registry** to describe how each LLM CLI is
+invoked — the executable name, argument template, model flag format, and
+timeout.  A provider is a runtime descriptor only; it does not dictate which
+persona to use or which model to select.
 
-Roles are kept separate from provider definitions so a team can share a repo
-config that says "use codex for reviews" without hard-coding credentials or
-install paths.
+Those choices live in the **role-binding layer**.  See
+[PERSONAS.md](PERSONAS.md) for how persona, model, and runtime are bound to
+roles per command.
 
 ---
 
@@ -22,14 +22,14 @@ install paths.
 | Repo-local (higher) | `<repo>/.z-harness/providers.json` | Any key present in this file |
 | User-global (lower) | `~/.config/z-harness/providers.json` | All other keys |
 
-Merge is **per-key**, not whole-file.  If both files define `providers.codex`,
+Merge is **per-key**, not whole-file.  If both files define `providers.codex-cli`,
 the repo file wins for that key only.  All other providers come from the global
-file.  Same rule applies to the `roles` map.
+file.
 
 Whenever a repo key shadows a global key, z-harness prints a warning to stderr:
 
 ```
-[providers] provider_shadowed: providers.codex — repo (.z-harness/providers.json) overrides global (~/.config/z-harness/providers.json)
+[providers] provider_shadowed: providers.codex-cli — repo (.z-harness/providers.json) overrides global (~/.config/z-harness/providers.json)
 ```
 
 …and emits a `provider_shadowed` event to `metrics.jsonl`.
@@ -41,25 +41,30 @@ any file instead of the actual repo config.  Useful in CI or test scripts.
 
 ---
 
-## Schema (version 1)
+## Schema (version 2)
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "providers": {
     "<name>": {
       "kind": "cli",
       "command": "codex",
       "args_template": ["exec", "-"],
-      "stdin": true,
+      "model_arg_template": ["--model", "{model}"],
+      "model_env_var": null,
+      "default_model": "gpt-5-codex",
       "timeout_s": 300,
-      "model_label": "gpt-5-codex"
+      "model_label": "Codex CLI"
     }
   },
   "roles": {
-    "consultant_primary":   "<provider-name>",
-    "consultant_secondary": "<provider-name>",
-    "reviewer":             "<provider-name>"
+    "consultant_primary": "<provider-name>"
+  },
+  "aliases": {
+    "codex":  "codex-cli",
+    "gemini": "gemini-cli",
+    "claude": "claude-cli"
   }
 }
 ```
@@ -68,68 +73,137 @@ any file instead of the actual repo config.  Useful in CI or test scripts.
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `version` | yes | Must be `1` — resolver exits with an error otherwise. |
+| `version` | yes | `2` is current.  `1` is accepted and upgraded in-memory (see below). |
 | `providers.<name>.kind` | yes | Must be `"cli"` (only kind supported). |
 | `providers.<name>.command` | yes | Executable name on `PATH`. |
 | `providers.<name>.args_template` | yes | Positional args passed to the command. |
 | `providers.<name>.stdin` | yes | If `true`, the prompt is piped to the command's stdin. |
+| `providers.<name>.model_arg_template` | no | Arg fragment appended for model selection.  Use `{model}` as placeholder.  Example: `["--model", "{model}"]`.  Set to `null` to use legacy mode (model embedded in `args_template`). |
+| `providers.<name>.model_env_var` | no | If set, the effective model is also injected as this env var into the subprocess.  Ignored when `model_arg_template` is present. |
+| `providers.<name>.default_model` | no | Model used when the binding supplies an empty string for model.  `null` means no fallback; resolver halts if no model is resolved. |
 | `providers.<name>.timeout_s` | no | Seconds before the CLI call is killed (default 300). |
-| `providers.<name>.model_label` | no | Human-readable model name (used in logs/summaries). |
-| `roles.consultant_primary` | required for most commands | Primary consultant CLI. |
-| `roles.consultant_secondary` | required for most commands | Secondary consultant CLI — **must differ** from primary. |
-| `roles.reviewer` | required for review commands | Reviewer CLI (may equal either consultant). |
+| `providers.<name>.model_label` | no | Human-readable display name (used in logs/summaries). |
+| `aliases` | no | Map of old provider names to new names.  Resolved at lookup time; emits `provider_alias_used` once per (run, alias). |
+
+### `roles` map — legacy fallback only
+
+`providers.json` may still contain a `roles` map for backward compatibility.
+**This is no longer the canonical place to bind roles.**  The preferred
+approach is `[roles.*.*]` tables in `config.toml` — see
+[PERSONAS.md — TOML binding](PERSONAS.md#toml-binding).
+
+When `providers.json` `roles` is the only binding present, z-harness uses it
+and emits a `legacy_provider_roles_used` event as a reminder to migrate.  The
+TOML binding always takes precedence if both exist.
 
 ---
 
-## The three roles
+## argv composition
 
-| Role | Purpose |
-|------|---------|
-| `consultant_primary` | First external LLM consulted during planning, implementation, and review. |
-| `consultant_secondary` | Second LLM for cross-model critique.  **Must resolve to a different provider** than `consultant_primary` (the resolver rejects configs where they collide). |
-| `reviewer` | LLM used by the reviewer agent.  May overlap with either consultant role. |
+Final argv is built as:
+
+```
+args_template + render(model_arg_template, model=effective_model)
+```
+
+Rules:
+1. `{model}` in any element of `model_arg_template` is replaced with `effective_model`.
+2. When `model_arg_template` is `null` or absent, no model arg is appended
+   (legacy mode — the model must already be embedded in `args_template`).
+3. When `model_env_var` is set and `model_arg_template` is absent, the env var
+   is also injected into the subprocess environment.
+4. Empty `effective_model` string → use `default_model`.  If `default_model` is
+   also null, the resolver halts with an actionable error.
 
 ---
 
-## Minimal example
+## Version 1 → 2 upgrade
+
+Schema v1 files keep working.  At load time, v1 providers are upgraded
+in-memory:
+
+| v1 | v2 equivalent |
+|----|---------------|
+| *(missing)* `model_arg_template` | `null` (legacy mode) |
+| *(missing)* `model_env_var` | `null` |
+| *(missing)* `default_model` | `null` |
+| *(missing)* `aliases` | `{}` |
+
+No file changes required for existing v1 configs.
+
+---
+
+## Provider naming
+
+Current canonical names use a `-cli` suffix to distinguish the CLI runtime
+from the model family:
+
+| Canonical name | Command | Replaces |
+|----------------|---------|---------|
+| `codex-cli` | `codex` | `codex` (v1) |
+| `gemini-cli` | `gemini` | `gemini` (v1) |
+| `claude-cli` | `claude` | `claude` (v1) |
+
+Old names continue to work via the `aliases` map.  Each use emits a
+one-time `provider_alias_used` deprecation event.  To migrate old names
+atomically, run:
+
+```
+/z-config migrate
+```
+
+This rewrites old provider names to canonical names in-place across your
+config files.
+
+---
+
+## Minimal example (v2)
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "providers": {
-    "my-codex": {
+    "codex-cli": {
       "kind": "cli",
       "command": "codex",
       "args_template": ["exec", "-"],
+      "model_arg_template": ["--model", "{model}"],
+      "model_env_var": null,
+      "default_model": "gpt-5-codex",
       "stdin": true,
       "timeout_s": 300,
-      "model_label": "gpt-5-codex"
+      "model_label": "Codex CLI"
     },
-    "my-gemini": {
+    "gemini-cli": {
       "kind": "cli",
       "command": "gemini",
       "args_template": ["-p", "@-", "--approval-mode", "plan", "--output-format", "text"],
+      "model_arg_template": ["--model", "{model}"],
+      "model_env_var": null,
+      "default_model": "gemini-2.5-pro",
       "stdin": false,
       "timeout_s": 240,
-      "model_label": "gemini-2.5-pro"
+      "model_label": "Gemini CLI"
     }
   },
-  "roles": {
-    "consultant_primary":   "my-gemini",
-    "consultant_secondary": "my-codex",
-    "reviewer":             "my-codex"
+  "aliases": {
+    "codex":  "codex-cli",
+    "gemini": "gemini-cli"
   }
 }
 ```
+
+Role binding is configured separately in `config.toml` — see
+[PERSONAS.md — TOML binding](PERSONAS.md#toml-binding).
 
 ---
 
 ## Discovery command
 
 Run `/z-providers-discover` to auto-detect installed LLM CLIs and generate a
-starter `providers.json`.  The command probes your `PATH` for `codex`, `gemini`,
-`claude`, `ollama`, `agy`, and `gpt`; shows the proposed config; and asks which
-roles to bind before writing.
+starter `providers.json`.  The command probes your `PATH` for `codex`,
+`gemini`, `claude`, `ollama`, `agy`, and `gpt`; shows the proposed config; and
+asks which roles to bind before writing.
 
 For CLIs not in the auto-detect list, add them manually following the schema
 above.
@@ -142,7 +216,8 @@ above.
    prints the response to stdout.  Exit 0 on success, nonzero on failure.
 2. Put it on your `PATH` (or supply an absolute path as `command`).
 3. Add a stanza under `providers` in your `~/.config/z-harness/providers.json`.
-4. Bind a role in the `roles` map.
+4. Bind a role in `config.toml` via `[roles.default.<role>] runtime = "<name>"`.
+   See [PERSONAS.md — TOML binding](PERSONAS.md#toml-binding).
 
 Example wrapper skeleton:
 
@@ -159,10 +234,11 @@ my-llm-api call --prompt "$PROMPT"
 
 | Message | Cause | Fix |
 |---------|-------|-----|
-| `[providers] role=<r> unbound — run /z-providers-discover` | Role not in `roles` map | Run `/z-providers-discover` or edit your `providers.json`. |
+| `[providers] role=<r> unbound — run /z-providers-discover` | No runtime bound for role | Add a `[roles.default.<r>]` entry to `config.toml` or run `/z-providers-discover`. |
 | `[providers] role=<r>, provider=<p>, command=<c> not on PATH` | CLI missing from shell `PATH` | Install the CLI or update `PATH`. |
-| `[providers] schema version must be 1` | `version` field wrong or missing | Set `"version": 1` in your config. |
+| `[providers] schema version must be 1 or 2` | `version` field wrong or missing | Set `"version": 2` in your config. |
 | `[providers] consultant_primary and consultant_secondary must resolve to DISTINCT providers` | Both consultant roles point to the same provider | Bind them to different providers. |
+| `[providers] no model resolved for provider <p>` | `model_arg_template` present but no model resolved, `default_model` is null | Set `default_model` in the provider or bind a model in `config.toml`. |
 
 ---
 
@@ -172,7 +248,11 @@ Every command that dispatches a consultant or reviewer calls
 `scripts/log-providers.sh` at start-up.  It prints a one-line summary:
 
 ```
-[providers] consultant_primary=my-gemini(gemini-2.5-pro)  consultant_secondary=my-codex(gpt-5-codex)  reviewer=my-codex(gpt-5-codex)
+[providers] consultant_primary=codex-cli(gpt-5-codex)  consultant_secondary=gemini-cli(gemini-2.5-pro)  reviewer=codex-cli(gpt-5-codex)
 ```
 
 …and emits a `provider_resolved` event per role to `metrics.jsonl`.
+
+For full role resolution details (including persona and model), see the
+`persona_bound` and `model_resolved` events documented in
+[PERSONAS.md — Telemetry events](PERSONAS.md#telemetry-events).
