@@ -12,26 +12,26 @@
 ## Key entry points
 
 - `commands/z-fix.md:1` — `/z-fix` — top-level slash command definition; read this for the full phase-by-phase procedure
-- `commands/z-fix.md:24` — Setup — slug derivation (two-step: collision check then resolver gate), run-id, directory creation, version stamp, `fix_run_start` telemetry
-- `commands/z-fix.md:70` — auto-bail thresholds — >5 files / >2 non-obvious decisions / cross-module triggers `escalation.md` + `/z-plan`
-- `commands/z-fix.md:81` — Phase 0 — non-skippable wrong-tool gate via `AskUserQuestion`
-- `commands/z-fix.md:96` — Phase 1 — problem capture, `doc-fetcher` dispatch, auto-bail threshold check
-- `commands/z-fix.md:129` — Phase 2 — single key decision; bail to `/z-plan` if >2 non-obvious decisions
-- `commands/z-fix.md:135` — Phase 3 — bundled `light-fix` consult (Gemini + Codex in parallel, cause-explains-symptoms framing)
-- `commands/z-fix.md:155` — Phase 4 — synthesize, one-reason-wrong check, cross-LLM disagreement surface
-- `commands/z-fix.md:164` — Phase 5 — approve/modify/abandon gate; shortcuts need separate explicit approval
-- `commands/z-fix.md:178` — Phase 6 — write FIX.md (single artifact, status=approved not yet shipped)
-- `commands/z-fix.md:228` — Phase 7 — inline implementation by orchestrator; no implementer subagent; hard limit >7 files
-- `commands/z-fix.md:250` — Phase 8 — Codex review (non-negotiable); retry once on blockers; `REVIEW_CYCLES` counter
-- `commands/z-fix.md:280` — Phase 9 — optional post-mortem; auto-suggested if `REVIEW_CYCLES > 1`
-- `commands/z-fix.md:325` — Phase 10 — finalize: FIX.md status=shipped, `fix_run_end` log, `/z-maintain-docs` hint
-- `commands/z-fix.md:349` — Git history-rewrite safety — doctrine for `git reset`/`amend`/`rebase` on upstream-tracking branches
+- `commands/z-fix.md:24` — Setup — slug derivation (two-step: collision check then resolver gate with halt branch), run-id, directory creation, version stamp, `fix_run_start` telemetry
+- `commands/z-fix.md:79` — auto-bail thresholds — >5 files / >2 non-obvious decisions / cross-module triggers `escalation.md` + `/z-plan`
+- `commands/z-fix.md:90` — Phase 0 — non-skippable wrong-tool gate via `AskUserQuestion`
+- `commands/z-fix.md:105` — Phase 1 — problem capture, `doc-fetcher` dispatch, auto-bail threshold check
+- `commands/z-fix.md:138` — Phase 2 — single key decision; bail to `/z-plan` if >2 non-obvious decisions
+- `commands/z-fix.md:144` — Phase 3 — bundled `light-fix` consult (Gemini + Codex in parallel, cause-explains-symptoms framing)
+- `commands/z-fix.md:164` — Phase 4 — synthesize, one-reason-wrong check, cross-LLM disagreement surface
+- `commands/z-fix.md:173` — Phase 5 — approve/modify/abandon gate; shortcuts need separate explicit approval
+- `commands/z-fix.md:187` — Phase 6 — write FIX.md (single artifact, status=approved not yet shipped)
+- `commands/z-fix.md:237` — Phase 7 — inline implementation by orchestrator; no implementer subagent; hard limit >7 files
+- `commands/z-fix.md:259` — Phase 8 — Codex review (non-negotiable); retry once on blockers; `REVIEW_CYCLES` counter
+- `commands/z-fix.md:289` — Phase 9 — optional post-mortem; auto-suggested if `REVIEW_CYCLES > 1`
+- `commands/z-fix.md:334` — Phase 10 — finalize: FIX.md status=shipped, `fix_run_end` log, `/z-maintain-docs` hint
+- `commands/z-fix.md:358` — Git history-rewrite safety — doctrine for `git reset`/`amend`/`rebase` on upstream-tracking branches
 
 ## How it interacts with others
 
 - `agents` — spawns `consultant-primary` (Gemini) and `consultant-secondary` (Codex) in parallel at Phase 3; spawns `reviewer` (Codex) at Phase 8
 - `commands` — exits to `/z-debug` when root cause is unknown; escalates to `/z-plan` when auto-bail thresholds are exceeded; suggests `/z-maintain-docs --audit` at finalize if docs were touched
-- `scripts` — uses `log-event.sh` for `fix_run_start` / `fix_run_end` telemetry; uses `plan-path.sh` to resolve plan directory; uses `version.sh` for version stamp; uses `config.py resolve-question` for `workflow.slug_confirm` resolver
+- `scripts` — uses `log-event.sh` for `fix_run_start` / `fix_run_end` / `fix_halt` telemetry; uses `plan-path.sh` to resolve plan directory; uses `version.sh` for version stamp; uses `config.py resolve-question` for `workflow.slug_confirm` resolver
 - `config` — notification policy is read from `docs/human/config.md` (`notify.level` key); `PushNotification` calls at Phase 5 and Phase 10 are gated on this value; `workflow.slug_confirm` preference is resolved via `config.py`
 
 ## Notification policy
@@ -43,7 +43,7 @@ Push notifications are sent at two points: Phase 5 (decision ready for review) a
 Setup step 1 uses a split safety+preference pattern:
 
 1. **Unconditional collision check** — `ls z-harness/` to detect matching dirs. If a collision is found, prompt via `AskUserQuestion` to confirm or choose a different slug. This check runs regardless of any resolver outcome and cannot be bypassed.
-2. **Soft non-obvious-slug confirmation gate** (only after collision check passes) — calls `python3 scripts/config.py resolve-question workflow.slug_confirm`, which returns `skip`, `prefill`, or `ask`. On `skip`, the derived slug is accepted silently. On `prefill`, the derived slug is pre-selected as the recommended option. On `ask`, the user is prompted normally. If `$SOURCE == "conflict"`, a conflict header is added to the question and a write-back offer is made after the user answers.
+2. **Soft non-obvious-slug confirmation gate** (only after collision check passes) — calls `python3 scripts/config.py resolve-question workflow.slug_confirm`, which returns `skip`, `prefill`, `ask`, or `halt`. On `skip`, the derived slug is accepted silently. On `prefill`, the derived slug is pre-selected as the recommended option. On `ask`, the user is prompted normally. If `$SOURCE == "conflict"`, a conflict header is added to the question and a write-back offer is made after the user answers. On `halt`, the command emits a `fix_halt` event and exits cleanly without invoking `AskUserQuestion` — intended for unattended/overnight automation contexts where interactive questions are prohibited.
 
 The invariant: the collision check is a hard prerequisite. The resolver only governs the soft confirmation gate.
 
@@ -85,6 +85,7 @@ If you are unsure which to pick, start with `/z-fix` Phase 0. The wrong-tool gat
 - **Never overwrite an existing `<slug>/` plan directory** without asking the user (checked at slug derivation in Setup).
 - **doc-fetcher is dispatched at Phase 1 only when `docs/llm/INDEX.json` exists.** In its absence, the orchestrator reads files directly; it never spawns the `Explore` subagent (too expensive for fix mode).
 - **Notification calls are gated on `notify.level` from `docs/human/config.md`.** Setting `notify.level = off` suppresses all `PushNotification` calls; the env var `Z_HARNESS_NOTIFY` is no longer the control point.
+- **The `halt` resolver result exits cleanly without asking any question.** When `workflow.slug_confirm` resolves to `halt` (e.g. a `no_ask_halt` rule fires in an overnight automation context), the command logs a `fix_halt` event and exits with code 0. It does not prompt, does not proceed to slug confirmation, and does not run any further phases. This is distinct from both `skip` (which silently continues) and error conditions (which fall through to `ask`).
 - **Git history-rewrite safety doctrine applies.** Before recommending any `git reset --hard HEAD~N`, `git commit --amend`, or interactive-rebase squash on a branch tracking an upstream, run `git branch -r --contains <sha>` for each commit being rewritten. If the upstream ref appears, STOP — recommend rebase or new-commit instead. Force-push to main requires explicit per-incident user authorization with the list of overwritten commits and a content-equivalence demonstration.
 
 ## Examples

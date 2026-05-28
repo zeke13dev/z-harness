@@ -130,7 +130,7 @@
       "line": 1,
       "symbol": "remote-runner",
       "kind": "module",
-      "summary": "Haiku mechanical remote verifier: sandbox builds, paper checks, logs, read-only DB."
+      "summary": "Haiku mechanical remote verifier: two-level rsync sandbox (<slug>/base/ warm base + <slug>/<task-id>/ per-task overlay via --link-dest), atomic mkdir-lock + .base-ready marker for concurrent seeding, SLUG/TASK_ID path-traversal validation; read-only DB/log queries; step-7 NEVER-delete guard for base/."
     },
     {
       "file": "agents/review-agent.md",
@@ -198,6 +198,10 @@
     "plan-style-reviewer never writes PLAN_STYLE_AUDIT.md; orchestrator does.",
     "plan-style-reviewer style-drift findings must cite a STYLE.md rule ID; premature-abstraction findings must cite file:line.",
     "remote-runner executes mechanical checks only; interpretive debugging returns to the caller.",
+    "remote-runner delegates sandbox lifecycle to scripts/remote-sandbox-sync.sh.",
+    "remote-sandbox-sync.sh validates SLUG and TASK_ID: rejects values containing '/', '..', single-quotes, empty string; TASK_ID cannot equal the literal string 'base'.",
+    "remote-sandbox-sync.sh uses atomic mkdir for .base.lock; the lock winner seeds <slug>/base/ and writes .base-ready marker containing local HEAD SHA; concurrent losers poll for the marker up to 600 s.",
+    "remote-runner step 7 NEVER deletes <slug>/base/; only the per-task <slug>/<task-id>/ directory is removed on success.",
     "cluster-planner refuses nested plan-split outputs when an ancestor MANIFEST.md exists.",
     "review-agent never writes; orchestrator owns all writes via /z-suggest-memory.",
     "review-agent returns exactly one fenced JSON block; any other form is treated as malformed.",
@@ -229,6 +233,10 @@
     "external-lookup's canonical contract is lookup-contract.json, not only inline agent prose.",
     "remote-runner refuses DB writes, real-money operations, destructive ops, and interpretive work.",
     "remote-runner refuses naked binary restarts; must use qtctl up <paper-manifest>, not direct binary invocation.",
+    "remote-sandbox-sync.sh resolves remote home via SSH before building --link-dest paths; tilde expansion is unreliable inside --link-dest on the remote side.",
+    "TASK_ID cannot be the literal string 'base'; remote-sandbox-sync.sh exits 2 on that value to prevent collisions with the shared warm-base directory.",
+    "If remote-sandbox-sync.sh dies between .base.lock acquisition and release, the lock persists and all future seeding invocations timeout after 600 s. Recovery: ssh <remote-host> 'rmdir ~/dev/qt-bot-sandbox/<slug>/.base.lock'.",
+    "On seed rsync failure, remote-sandbox-sync.sh cleans up the partial <slug>/base/ dir before releasing the lock so losers do not unblock onto a corrupt base.",
     "mr-reviewer never writes MR-REVIEW.md; callers parse its fenced JSON response.",
     "mr-reviewer Opus sub-pass fires only when mode=abstraction-only AND deep=true; otherwise Grep+definition check is sufficient.",
     "plan-style-reviewer: dismissed_signatures.json suppresses previously dismissed findings via Jaccard >= 0.6 match.",

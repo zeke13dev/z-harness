@@ -1,16 +1,16 @@
 # config
 
 > Last updated: 2026-05-28
-> Covers source: scripts/config.py, scripts/config.sh, scripts/propose-prefs.py
+> Covers source: scripts/config.py, scripts/config.sh, scripts/propose-prefs.py, docs/human/config.md
 
 ## Overview
 
 `config` is the unified z-harness configuration system. It has two semantic surfaces:
 
 - **Loader API** — the 4-layer TOML config loader (built-in defaults → `~/.config/z-harness/config.toml` → repo `.z-harness/config.toml` → `Z_HARNESS_<SECTION>_<KEY>` env vars). Subcommands: `get`, `export-env`, `ensure-defaults`, `explain`, `should-notify`. This is the slice-1 foundation.
-- **Workflow Resolver** — the `[workflow]` config section plus the question-registry, resolver, writer, and elevation proposer that sit on top of the loader. Subcommands: `resolve-question`, `set`, `list-question-ids`. This is the slice-2 layer.
+- **Workflow Resolver** — the `[workflow]` config section plus the question-registry, resolver, writer, elevation proposer, and overnight gate system that sit on top of the loader. Subcommands: `resolve-question`, `check-no-ask`, `set`, `list-question-ids`. This is the slice-2 layer.
 
-The core runtime loop for workflow preferences is: skill prose calls `config.py resolve-question <question_id>` before firing an `AskUserQuestion`; the resolver consults both the TOML config and `routing-preference` memory entries in `docs/llm/*.json`, then returns a typed JSON envelope instructing the skill to `skip`, `prefill`, or `ask`. When the user wants to make a preference permanent they run `/z-suggest-memory` (memory path) or `config.py set` (TOML path). The proposer (`propose-prefs.py`) surfaces an invitation to do so when it detects a repeated command-pair pattern in `metrics.jsonl`.
+The core runtime loop for workflow preferences is: skill prose calls `config.py resolve-question <question_id>` before firing an `AskUserQuestion`; the resolver consults both the TOML config and `routing-preference` memory entries in `docs/llm/*.json`, then returns a typed JSON envelope instructing the skill to `skip`, `prefill`, or `ask`. When running unattended (`Z_HARNESS_NO_ASK=halt`), the overnight gate either auto-decides questions on the allowlist or halts instead of asking. When the user wants to make a preference permanent they run `/z-suggest-memory` (memory path) or `config.py set` (TOML path). The proposer (`propose-prefs.py`) surfaces an invitation to do so when it detects a repeated command-pair pattern in `metrics.jsonl`.
 
 Historical note: this concept was previously split as `config-design` (Loader API) + `config` (Workflow Resolver) in docs/llm/INDEX.json. They were merged on 2026-05-27 because they shared all source files and the split caused doc-fetcher to fire both concepts on every touch. The two h2 section groupings below preserve the boundary for human readers.
 
@@ -51,7 +51,7 @@ Env-var overrides follow a deterministic rule: lowercase TOML dotted-key → pre
 | `notify.level` | `Z_HARNESS_NOTIFY_LEVEL` |
 | `docs.always_apply` | `Z_HARNESS_DOCS_ALWAYS_APPLY` |
 
-For workflow keys (`workflow.audit_to_amend`, `workflow.slug_confirm`), the rule applies identically — see [The transliteration rule (Workflow Resolver)](#the-transliteration-rule-workflow-resolver).
+For workflow keys, the rule applies identically — see [The transliteration rule (Workflow Resolver)](#the-transliteration-rule-workflow-resolver).
 
 Keys must match `^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`.  Hyphens in keys exit 2.
 Nested keys >2 levels exit 2.  Empty env vars are treated as missing.
@@ -148,7 +148,7 @@ Event payload shape:
 
 # Workflow Resolver
 
-The slice-2 layer: the `[workflow]` config section, the question-registry, the resolver subcommand, the writer, the routing-preference memory schema, and the elevation proposer. All built on top of the Loader API.
+The slice-2 layer: the `[workflow]` config section, the question-registry, the resolver subcommand, the overnight gate system, the writer, the routing-preference memory schema, and the elevation proposer. All built on top of the Loader API.
 
 ## The knobs (Workflow Resolver)
 
@@ -156,6 +156,9 @@ The slice-2 layer: the `[workflow]` config section, the question-registry, the r
 |-----|------|---------|--------|-------------|
 | `workflow.audit_to_amend` | string | `ask` | `ask` \| `amend` \| `stop` | Controls the Phase 5 AskUserQuestion in `/z-audit-plan` and `/z-audit-plan-style`. `ask` always prompts. `amend` auto-proceeds as amend (skips prompt). `stop` auto-stops (skips prompt). |
 | `workflow.slug_confirm` | string | `ask` | `ask` \| `auto_accept` \| `recommend_derived` | Controls the soft non-obvious-slug confirmation at 7 callsites. `ask` always prompts. `auto_accept` silently accepts the derived slug. `recommend_derived` pre-selects the derived slug in the AskUser prompt. **The hard slug-collision check always runs unconditionally, regardless of this setting.** |
+| `workflow.implement_all_proceed` | string | `ask` | `ask` \| `auto_resume` \| `halt` | Controls the halt-resolution gate in `/z-implement-all`. `ask` prompts. `auto_resume` skips the prompt. `halt` stops unconditionally. |
+| `workflow.review_all_proceed` | string | `ask` | `ask` \| `proceed` \| `halt` | Controls the Phase 3.7 proceed gate in `/z-review-all`. `ask` prompts. `proceed` skips the prompt. `halt` stops unconditionally. |
+| `workflow.plan_decisions_approval` | string | `ask` | `ask` \| `approve` \| `halt` | Controls the Phase 2.5 decisions-doc approval gate in `/z-plan`. `ask` prompts. `approve` skips the prompt. `halt` stops unconditionally. |
 
 ## The transliteration rule (Workflow Resolver)
 
@@ -163,6 +166,9 @@ The slice-2 layer: the `[workflow]` config section, the question-registry, the r
 |----------|---------|
 | `workflow.audit_to_amend` | `Z_HARNESS_WORKFLOW_AUDIT_TO_AMEND` |
 | `workflow.slug_confirm` | `Z_HARNESS_WORKFLOW_SLUG_CONFIRM` |
+| `workflow.implement_all_proceed` | `Z_HARNESS_WORKFLOW_IMPLEMENT_ALL_PROCEED` |
+| `workflow.review_all_proceed` | `Z_HARNESS_WORKFLOW_REVIEW_ALL_PROCEED` |
+| `workflow.plan_decisions_approval` | `Z_HARNESS_WORKFLOW_PLAN_DECISIONS_APPROVAL` |
 
 Same general rule as the Loader API surface — see [The transliteration rule](#the-transliteration-rule) for format constraints.
 
@@ -190,8 +196,9 @@ $ scripts/config.sh resolve-question workflow.audit_to_amend
 - `skip` — skip the AskUserQuestion; proceed as if the user picked `default`.
 - `prefill` — present the AskUserQuestion with `default` pre-selected (recommended option).
 - `ask` — present the AskUserQuestion normally.
+- `halt` — do not proceed; stop the run (returned when `Z_HARNESS_NO_ASK=halt` and question is not on the overnight allowlist).
 
-`source` values: `config` | `memory` | `conflict` | `none` | `override`.
+`source` values: `config` | `memory` | `conflict` | `none` | `override` | `overnight_allowlist` | `no_ask_halt`.
 
 **`conflict` source:** config and memory disagree. Result is always `ask`.  The `sources[]` array lists both entries.  After the user answers, a follow-up AskUserQuestion offers to record the answer as the new preference, resolving the conflict for future runs.
 
@@ -204,6 +211,7 @@ Exit codes:
 - 2 — bad invocation (missing question_id arg)
 - 3 — unknown question_id (JSON still emitted with `error` key)
 - 4 — I/O error (JSON still emitted)
+- 5 — config conflict: `Z_HARNESS_ASK_ALL=1` and `Z_HARNESS_NO_ASK=halt` are both set (mutually exclusive)
 
 **Error handling in skill prose:** always capture exit code separately — never pipe through chains that swallow it.  On any non-zero exit, fall through to `ask`.
 
@@ -217,6 +225,25 @@ else
   RESULT="$(echo "$RESOLVED" | jq -r .result)"
   DEFAULT="$(echo "$RESOLVED" | jq -r .default)"
   SOURCE="$(echo "$RESOLVED" | jq -r .source)"
+fi
+```
+
+### `check-no-ask --question-id <id>`
+
+Lightweight overnight-gate checker. Returns `{"result": "halt"|"proceed", "question_id": "<id>", "rule_id": "<rule>"}` without going through the full resolution envelope. Used by `/z-implement-all` and other commands that need a simpler halt/proceed decision.
+
+Paths:
+1. `Z_HARNESS_NO_ASK != halt` → `proceed`, `rule_id=no_overnight_active`
+2. `NO_ASK=halt`, question registered, on allowlist → `proceed` (treated as overnight_decision)
+3. `NO_ASK=halt`, question registered, NOT on allowlist → `halt`
+4. `NO_ASK=halt`, question NOT registered → `halt` + emits `unknown_ask_blocked` event
+
+Always exits 0 on valid invocations; exits 2 on argparse error.
+
+```bash
+NO_ASK_RESULT="$(python3 scripts/config.py check-no-ask --question-id workflow.implement_all_proceed)"
+if [[ "$(echo "$NO_ASK_RESULT" | jq -r .result)" == "halt" ]]; then
+  # stop queue
 fi
 ```
 
@@ -240,20 +267,53 @@ Consumed by `/z-suggest-memory --kind routing-preference` to validate `--questio
 
 ```
 $ scripts/config.sh list-question-ids
-["workflow.audit_to_amend", "workflow.slug_confirm"]
+["workflow.audit_to_amend", "workflow.implement_all_proceed", "workflow.plan_decisions_approval", "workflow.review_all_proceed", "workflow.slug_confirm"]
 ```
+
+## Overnight gate system
+
+When `/z-overnight` or any other caller sets `Z_HARNESS_NO_ASK=halt`, the resolver applies an additional post-processing pass (`_apply_overnight_overrides`) to every `resolve-question` call:
+
+1. If `Z_HARNESS_ASK_ALL=1` is simultaneously set → **exit 5** (config conflict; mutually exclusive).
+2. If the resolved result is already `skip` or `prefill` (no ask needed) → **no-op**.
+3. If the resolved result is `ask` and the `question_id` is in the overnight allowlist → swap to an `overnight_decision` envelope (result derived from the allowlist value via `RESULT_MAP`); emit `overnight_decision` event.
+4. If the resolved result is `ask` and the `question_id` is NOT in the allowlist → swap to `halt` envelope; emit `askuser_halted` event.
+
+**Default allowlist** (`OVERNIGHT_AUTODECIDE_QIDS_DEFAULT`):
+
+| question_id | chosen value |
+|-------------|-------------|
+| `workflow.slug_confirm` | `recommend_derived` |
+| `workflow.audit_to_amend` | `amend` |
+
+**Custom allowlist:** set `Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE` to a JSON object of `{question_id: value}` entries. These are merged over the defaults (env wins on key collision). Malformed entries are dropped with a `routing_preference_malformed` event; an unparseable JSON string causes the env layer to be skipped (defaults still apply).
+
+**New telemetry events:**
+
+| Event | Emitted when |
+|-------|-------------|
+| `overnight_decision` | Question auto-decided from allowlist |
+| `askuser_halted` | Question would have asked but is not on allowlist |
+| `unknown_ask_blocked` | `check-no-ask` called with unregistered question_id |
+| `config_conflict` | `Z_HARNESS_ASK_ALL=1` + `Z_HARNESS_NO_ASK=halt` both set |
 
 ## Key entry points
 
-- `scripts/config.py:42` — `DEFAULTS` — built-in default values for all config keys including `[workflow]` section (layer 1)
-- `scripts/config.py:56` — `VALIDATORS` — allowed enum sets per dotted-key; hard-fail on repo/env, soft-warn on global
-- `scripts/config.py:69` — `QUESTION_IDS` — single source of truth for AskUserQuestion routing-class preference keys; validated against `VALIDATORS` at module load by `_run_startup_guards`
-- `scripts/config.py:102` — `RESULT_MAP` — maps `(question_id, option-domain-value)` to resolver result-domain (`skip|prefill|ask`)
-- `scripts/config.py:845` — `cmd_resolve_question` — consults 4-layer config + memory routing-preferences; returns JSON envelope; stdout reserved for JSON
-- `scripts/config.py:1193` — `cmd_set` — atomically write a TOML key to global or project config; validates before writing
-- `scripts/config.py:590` — `cmd_list_question_ids` — print JSON array of known question IDs
-- `scripts/config.py:701` — `_load_memory_matches` — walks `docs/llm/*.json` for `routing-preference` entries matching `question_id`; respects scope
-- `scripts/config.py:809` — `_resolve_memory_matches` — merges memory entries; highest strength wins on agreement; returns `conflict` on disagreement
+- `scripts/config.py:44` — `DEFAULTS` — built-in default values for all config keys including `[workflow]` section (layer 1)
+- `scripts/config.py:61` — `VALIDATORS` — allowed enum sets per dotted-key; hard-fail on repo/env, soft-warn on global
+- `scripts/config.py:77` — `QUESTION_IDS` — single source of truth for AskUserQuestion routing-class preference keys; validated against `VALIDATORS` at module load by `_run_startup_guards`
+- `scripts/config.py:135` — `OVERNIGHT_AUTODECIDE_QIDS_DEFAULT` — default overnight allowlist; question IDs auto-decided without halting
+- `scripts/config.py:141` — `RESULT_MAP` — maps `(question_id, option-domain-value)` to resolver result-domain (`skip|prefill|ask|halt`)
+- `scripts/config.py:163` — `_run_startup_guards` — module-load consistency check; raises `SystemExit(2)` on registry inconsistency
+- `scripts/config.py:458` — `load_config` — build resolved config from all 4 layers; returns `(values, sources)` dicts
+- `scripts/config.py:952` — `_apply_overnight_overrides` — post-process resolution envelope for overnight/halt-from-ask behavior
+- `scripts/config.py:861` — `_parse_overnight_allowlist` — parse `Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE` JSON and merge with defaults
+- `scripts/config.py:1085` — `_load_memory_matches` — walks `docs/llm/*.json` for `routing-preference` entries matching `question_id`; respects scope
+- `scripts/config.py:1193` — `_resolve_memory_matches` — merges memory entries; highest strength wins on agreement; returns `conflict` on disagreement
+- `scripts/config.py:1452` — `cmd_resolve_question` — consults 4-layer config + memory + overnight overrides; returns JSON envelope; stdout reserved for JSON
+- `scripts/config.py:1575` — `cmd_check_no_ask` — lightweight overnight-gate checker; returns halt/proceed JSON
+- `scripts/config.py:1698` — `cmd_set` — atomically write a TOML key to global or project config via tmp+rename
+- `scripts/config.py:750` — `cmd_list_question_ids` — print JSON array of known question IDs
 - `scripts/propose-prefs.py:1` — `propose-prefs` (module) — walks `metrics.jsonl` for repeated command-pair patterns; emits JSON proposal if threshold met; never writes
 
 ## `routing-preference` memory type
@@ -311,6 +371,8 @@ Write a routing-preference memory via:
 | config + memory (disagreeing) | — | `ask` (conflict tier; both sources listed) |
 | none | — | `ask` |
 | `Z_HARNESS_ASK_ALL=1` | — | `ask` (override) |
+| `Z_HARNESS_NO_ASK=halt` + not in allowlist | — | `halt` |
+| `Z_HARNESS_NO_ASK=halt` + in allowlist | — | `skip`/`prefill` (via `RESULT_MAP`) |
 
 ## Elevation proposer
 
@@ -358,9 +420,9 @@ Cross-cutting material that applies to both surfaces.
 
 ## How it interacts with others
 
-- `commands` (z-audit-plan, z-audit-plan-style, z-plan, z-fix, z-uplift, z-amend, z-do, z-research) — call `export-env` + `should-notify` during Setup; call `resolve-question` before workflow AskUserQuestions; call `set` after proposal acceptance; call `propose-prefs.py` at command end
+- `commands` (z-audit-plan, z-audit-plan-style, z-plan, z-fix, z-uplift, z-amend, z-do, z-research, z-implement-all, z-review-all, z-overnight) — call `export-env` + `should-notify` during Setup; call `resolve-question` before workflow AskUserQuestions; call `check-no-ask` for overnight gate checks; call `set` after proposal acceptance; call `propose-prefs.py` at command end
 - `skills` (z-suggest-memory, z-map, z-plan-light, z-debug, z-brainstorm, z-do, z-plan, z-research) — call `list-question-ids` to validate routing-preference question IDs; call `resolve-question` for slug-confirm gate; call `export-env` + `should-notify` during Setup
-- `scripts` — provides the `log-event.sh` + `log-phase.sh` telemetry pipeline that `config.py` writes `config_resolved` and `askuser_resolved` events through
+- `scripts` — provides the `log-event.sh` + `log-phase.sh` telemetry pipeline that `config.py` writes events through (`config_resolved`, `askuser_resolved`, `overnight_decision`, `askuser_halted`, `unknown_ask_blocked`, `config_conflict`)
 
 ## Examples
 
@@ -398,6 +460,15 @@ audit_to_amend = "amend"
 
 # ask | auto_accept | recommend_derived
 slug_confirm = "recommend_derived"
+
+# ask | auto_resume | halt
+implement_all_proceed = "auto_resume"
+
+# ask | proceed | halt
+review_all_proceed = "proceed"
+
+# ask | approve | halt
+plan_decisions_approval = "approve"
 ```
 
 **Env override for CI** — covers both surfaces:
@@ -409,10 +480,20 @@ export Z_HARNESS_WORKFLOW_AUDIT_TO_AMEND=amend
 export Z_HARNESS_WORKFLOW_SLUG_CONFIRM=auto_accept
 ```
 
+**Overnight mode with custom allowlist:**
+
+```bash
+export Z_HARNESS_NO_ASK=halt
+export Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE='{"workflow.slug_confirm":"recommend_derived","workflow.plan_decisions_approval":"approve"}'
+```
+
 ## Edge cases / gotchas
 
 - `workflow.slug_confirm` value domain (`ask`/`auto_accept`/`recommend_derived`) is NOT the same as the resolver result domain (`ask`/`prefill`/`skip`); `RESULT_MAP` translates between them — `auto_accept` → `skip`, `recommend_derived` → `prefill`
 - Slug-confirm has TWO gates: hard collision check (always runs, resolver NOT consulted) + soft non-obvious confirmation (resolver-controlled). `resolve-question` only governs the soft gate
+- `Z_HARNESS_ASK_ALL=1` and `Z_HARNESS_NO_ASK=halt` are mutually exclusive — setting both causes `resolve-question` to exit 5 (not 0); check for this conflict before setting both in scripts
+- `check-no-ask` fails closed on unregistered question IDs when `NO_ASK=halt` — unknown question → `halt` + `unknown_ask_blocked` event
+- `Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE` must be valid JSON and a JSON object; malformed JSON causes the env layer to be skipped entirely (defaults still apply); malformed individual entries are dropped individually
 - Capture exit code separately from output: `RESOLVED=$(python3 scripts/config.py resolve-question ...); RESOLVE_EXIT=$?`. Never pipe through `set -e` chains that swallow exit codes
 - When `source==conflict`, AskUser surfaces a follow-up write-back question after the user picks, to prevent conflict persisting across runs
 - The proposer in v1 only watches command-pair patterns via `run_start`/`run_end` in `metrics.jsonl`; it does NOT auto-propose `workflow.slug_confirm` because AskUser responses are not yet recorded in metrics.jsonl

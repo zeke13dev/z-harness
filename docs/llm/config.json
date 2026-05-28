@@ -2,7 +2,7 @@
   "concept": "config",
   "last_updated": "2026-05-28",
   "covers_spec": "z-harness/askuser-prefs-hook/SPEC.md",
-  "scope": "Layered TOML config loader (Loader API surface) + workflow preference resolver and elevation proposer (Workflow Resolver surface). Formerly split as `config-design` (slice-1) and `config` (slice-2); merged into one concept.",
+  "scope": "Layered TOML config loader (Loader API surface) + workflow preference resolver, overnight gate system, and elevation proposer (Workflow Resolver surface). Formerly split as `config-design` (slice-1) and `config` (slice-2); merged into one concept.",
   "source_file": [
     "scripts/config.py",
     "scripts/config.sh",
@@ -13,56 +13,56 @@
   "entry_points": [
     {
       "file": "scripts/config.py",
-      "line": 42,
+      "line": 44,
       "symbol": "DEFAULTS",
       "kind": "const",
       "summary": "[Loader API] Built-in default values for all config keys including [workflow] section (layer 1)"
     },
     {
       "file": "scripts/config.py",
-      "line": 56,
+      "line": 61,
       "symbol": "VALIDATORS",
       "kind": "const",
       "summary": "[Loader API] Allowed enum sets per dotted-key; hard-fail on repo/env, soft-warn on global"
     },
     {
       "file": "scripts/config.py",
-      "line": 339,
+      "line": 458,
       "symbol": "load_config",
       "kind": "fn",
       "summary": "[Loader API] Build resolved config from all 4 layers; returns (values, sources) dicts"
     },
     {
       "file": "scripts/config.py",
-      "line": 462,
+      "line": 611,
       "symbol": "cmd_get",
       "kind": "fn",
       "summary": "[Loader API] Resolve and print single dotted-key value; exits 3 on unknown or meta key"
     },
     {
       "file": "scripts/config.py",
-      "line": 490,
+      "line": 639,
       "symbol": "cmd_export_env",
       "kind": "fn",
       "summary": "[Loader API] Print export lines for all user knobs; emit config_resolved event once per run"
     },
     {
       "file": "scripts/config.py",
-      "line": 504,
+      "line": 657,
       "symbol": "cmd_ensure_defaults",
       "kind": "fn",
       "summary": "[Loader API] Write global config with defaults + inline comments if absent; never overwrites"
     },
     {
       "file": "scripts/config.py",
-      "line": 565,
+      "line": 718,
       "symbol": "cmd_explain",
       "kind": "fn",
       "summary": "[Loader API] Print effective value and source layer for one key"
     },
     {
       "file": "scripts/config.py",
-      "line": 1287,
+      "line": 1792,
       "symbol": "cmd_should_notify",
       "kind": "fn",
       "summary": "[Loader API] Print yes|no for a given event kind; always exits 0; exits 2 on unknown event. Valid kinds: approval, phase_end, error"
@@ -76,56 +76,84 @@
     },
     {
       "file": "scripts/config.py",
-      "line": 69,
+      "line": 77,
       "symbol": "QUESTION_IDS",
       "kind": "const",
-      "summary": "[Workflow Resolver] Single source of truth for AskUserQuestion routing-class preference keys: workflow.audit_to_amend, workflow.slug_confirm; validated against VALIDATORS at module load"
+      "summary": "[Workflow Resolver] Single source of truth for AskUserQuestion routing-class preference keys: workflow.audit_to_amend, workflow.slug_confirm, workflow.implement_all_proceed, workflow.review_all_proceed, workflow.plan_decisions_approval; validated against VALIDATORS at module load"
     },
     {
       "file": "scripts/config.py",
-      "line": 102,
+      "line": 135,
+      "symbol": "OVERNIGHT_AUTODECIDE_QIDS_DEFAULT",
+      "kind": "const",
+      "summary": "[Workflow Resolver] Default overnight allowlist: {workflow.slug_confirm: recommend_derived, workflow.audit_to_amend: amend}; merged with Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 141,
       "symbol": "RESULT_MAP",
       "kind": "const",
-      "summary": "[Workflow Resolver] Maps (question_id, option-domain-value) -> resolver result-domain (skip|prefill|ask)"
+      "summary": "[Workflow Resolver] Maps (question_id, option-domain-value) -> resolver result-domain (skip|prefill|ask|halt)"
     },
     {
       "file": "scripts/config.py",
-      "line": 115,
+      "line": 163,
       "symbol": "_run_startup_guards",
       "kind": "fn",
       "summary": "[Workflow Resolver] Module-load consistency check: asserts QUESTION_IDS <= VALIDATORS and RESULT_MAP references only valid choices; raises SystemExit(2) on violation"
     },
     {
       "file": "scripts/config.py",
-      "line": 845,
-      "symbol": "cmd_resolve_question",
+      "line": 952,
+      "symbol": "_apply_overnight_overrides",
       "kind": "fn",
-      "summary": "[Workflow Resolver] Consult 4-layer config + memory routing-preferences; return JSON {result, default, source, rule_id, strength, reason, sources[]}; stdout reserved for JSON"
+      "summary": "[Workflow Resolver] Post-process resolution envelope for Z_HARNESS_NO_ASK=halt; swaps ask->overnight_decision (allowlist hit) or ask->halt (not in allowlist); exits 5 on ASK_ALL+NO_ASK conflict"
     },
     {
       "file": "scripts/config.py",
-      "line": 701,
+      "line": 861,
+      "symbol": "_parse_overnight_allowlist",
+      "kind": "fn",
+      "summary": "[Workflow Resolver] Parse Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE JSON; merge over OVERNIGHT_AUTODECIDE_QIDS_DEFAULT; drop malformed entries with routing_preference_malformed event"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 1452,
+      "symbol": "cmd_resolve_question",
+      "kind": "fn",
+      "summary": "[Workflow Resolver] Consult 4-layer config + memory + overnight overrides; return JSON {result, default, source, rule_id, strength, reason, sources[]}; stdout reserved for JSON"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 1575,
+      "symbol": "cmd_check_no_ask",
+      "kind": "fn",
+      "summary": "[Workflow Resolver] Lightweight overnight-gate checker; returns {result: halt|proceed, question_id, rule_id}; fails closed on unregistered question_id when NO_ASK=halt"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 1085,
       "symbol": "_load_memory_matches",
       "kind": "fn",
       "summary": "[Workflow Resolver] Walk docs/llm/*.json for routing-preference entries matching question_id; respects scope (global|project); skips INDEX.json and malformed entries"
     },
     {
       "file": "scripts/config.py",
-      "line": 809,
+      "line": 1193,
       "symbol": "_resolve_memory_matches",
       "kind": "fn",
       "summary": "[Workflow Resolver] Merge memory match list: highest strength wins on agreement; returns (None, 'conflict', sources) when entries disagree"
     },
     {
       "file": "scripts/config.py",
-      "line": 1193,
+      "line": 1698,
       "symbol": "cmd_set",
       "kind": "fn",
-      "summary": "[Workflow Resolver] Atomically write a TOML key to global or project config via tmp+rename; validates against VALIDATORS before writing; exit 2 on invalid value; exit 0 silently on success (no stdout)"
+      "summary": "[Workflow Resolver] Atomically write a TOML key to global or project config via tmp+rename; validates against VALIDATORS before writing; exit 2 on invalid value; exit 0 silently on success"
     },
     {
       "file": "scripts/config.py",
-      "line": 590,
+      "line": 750,
       "symbol": "cmd_list_question_ids",
       "kind": "fn",
       "summary": "[Workflow Resolver] Print sorted JSON array of registered question IDs; consumed by /z-suggest-memory for routing-preference validation"
@@ -158,12 +186,15 @@
     "[Loader API] global-layer enum violations: soft-warn + fall back to default; repo/env-layer violations: exit 2",
     "[Loader API] valid should-notify event kinds: approval, phase_end, error — any other value exits 2",
     "[Workflow Resolver] workflow.audit_to_amend valid values: ask | amend | stop; default ask",
-    "workflow.slug_confirm valid values: ask | auto_accept | recommend_derived; default ask",
-    "Z_HARNESS_WORKFLOW_AUDIT_TO_AMEND and Z_HARNESS_WORKFLOW_SLUG_CONFIRM are the env transliterations for the [workflow] keys",
+    "[Workflow Resolver] workflow.slug_confirm valid values: ask | auto_accept | recommend_derived; default ask",
+    "[Workflow Resolver] workflow.implement_all_proceed valid values: ask | auto_resume | halt; default ask",
+    "[Workflow Resolver] workflow.review_all_proceed valid values: ask | proceed | halt; default ask",
+    "[Workflow Resolver] workflow.plan_decisions_approval valid values: ask | approve | halt; default ask",
+    "Z_HARNESS_WORKFLOW_AUDIT_TO_AMEND, Z_HARNESS_WORKFLOW_SLUG_CONFIRM, Z_HARNESS_WORKFLOW_IMPLEMENT_ALL_PROCEED, Z_HARNESS_WORKFLOW_REVIEW_ALL_PROCEED, Z_HARNESS_WORKFLOW_PLAN_DECISIONS_APPROVAL are the env transliterations",
     "resolve-question stdout is reserved exclusively for JSON; all diagnostics route to stderr",
     "Z_HARNESS_ASK_ALL=1 short-circuits resolve-question to always return {result: ask, source: override}",
     "Z_HARNESS_EXPLAIN_RESOLUTION=1 or --explain flag prints a human-readable resolution trace on stderr",
-    "resolve-question exit 0 = valid JSON; exit 2 = bad invocation; exit 3 = unknown question_id (JSON with error key still emitted); exit 4 = I/O error (JSON still emitted)",
+    "resolve-question exit 0 = valid JSON; exit 2 = bad invocation; exit 3 = unknown question_id (JSON with error key still emitted); exit 4 = I/O error (JSON still emitted); exit 5 = config conflict (ASK_ALL=1 + NO_ASK=halt)",
     "QUESTION_IDS registry is the single source of truth; _run_startup_guards() asserts set(QUESTION_IDS) <= set(VALIDATORS) at module load",
     "Resolver is read-only — never writes to config or memory; all writes go through config.py set or /z-suggest-memory",
     "Conflict tier always returns result: ask; sources[] is always populated with both disagreeing entries",
@@ -173,7 +204,13 @@
     "Z_HARNESS_PROPOSE_WINDOW_S controls max gap (seconds) between command A end and B start for pattern detection; default 3600",
     "Z_HARNESS_PROPOSE_THRESHOLD controls min repetitions to propose; default 3",
     "Z_HARNESS_PROPOSE_MAX_RUNS controls number of recent run_start events to scan; default 30",
-    "routing-preference memory entries live in docs/llm/workflow.json (global scope) or docs/llm/workflow-<project-slug>.json (project scope)"
+    "routing-preference memory entries live in docs/llm/workflow.json (global scope) or docs/llm/workflow-<project-slug>.json (project scope)",
+    "[Overnight gate] Z_HARNESS_NO_ASK=halt activates overnight mode; _apply_overnight_overrides post-processes every resolve-question envelope",
+    "[Overnight gate] Z_HARNESS_ASK_ALL=1 + Z_HARNESS_NO_ASK=halt are mutually exclusive; resolve-question exits 5 on conflict",
+    "[Overnight gate] OVERNIGHT_AUTODECIDE_QIDS_DEFAULT = {workflow.slug_confirm: recommend_derived, workflow.audit_to_amend: amend}",
+    "[Overnight gate] Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE (JSON object) is merged over defaults; env wins on key collision; malformed JSON causes env layer to be skipped",
+    "[Overnight gate] check-no-ask fails closed: unregistered question_id with NO_ASK=halt -> halt + unknown_ask_blocked event",
+    "[Overnight gate] check-no-ask always exits 0 on valid invocations; exits 2 only on argparse error"
   ],
   "gotchas": [
     "[Loader API] Global config validation is soft (warn + default fallback); repo/env config validation is hard (exit 2) — same bad value has different outcomes depending on which file it appears in",
@@ -195,7 +232,10 @@
     "Memory entries missing required fields are logged as routing_preference_malformed events and treated as non-existent (no crash)",
     "Resolver falls back to git rev-parse --show-toplevel for project_root when Z_HARNESS_PROJECT_ROOT is unset; treats all memories as global if outside a git repo",
     "_run_startup_guards() raises SystemExit(2) at module load on registry inconsistency — always add new question_ids to both QUESTION_IDS and VALIDATORS",
-    "Multi-IDE export (Cursor/Codex/agy) does NOT carry the precheck; those paths fall back to raw AskUserQuestion; v2 concern"
+    "Multi-IDE export (Cursor/Codex/agy) does NOT carry the precheck; those paths fall back to raw AskUserQuestion; v2 concern",
+    "[Overnight gate] Z_HARNESS_ASK_ALL=1 + Z_HARNESS_NO_ASK=halt both set causes exit 5 from resolve-question — not a soft error; scripts must not set both",
+    "[Overnight gate] Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE must be valid JSON; unparseable string causes full env layer skip (defaults still apply)",
+    "[Overnight gate] check-no-ask --question-id with an unregistered ID when NO_ASK=halt returns halt (fail-closed), not proceed"
   ],
   "workflow_section": {
     "keys": {
@@ -225,21 +265,66 @@
           "skills/z-plan-light/SKILL.md:19"
         ],
         "description": "Controls soft non-obvious-slug confirmation at 7 callsites. ask=always prompt; auto_accept=silently accept derived slug (resolver returns skip); recommend_derived=pre-select derived slug (resolver returns prefill). Collision check always runs unconditionally"
+      },
+      "workflow.implement_all_proceed": {
+        "type": "string",
+        "default": "ask",
+        "valid_values": ["ask", "auto_resume", "halt"],
+        "env": "Z_HARNESS_WORKFLOW_IMPLEMENT_ALL_PROCEED",
+        "callsites": [
+          "commands/z-implement-all.md (halt-resolution gate)"
+        ],
+        "description": "Controls halt-resolution gate in /z-implement-all. ask=always prompt; auto_resume=skip prompt; halt=stop unconditionally"
+      },
+      "workflow.review_all_proceed": {
+        "type": "string",
+        "default": "ask",
+        "valid_values": ["ask", "proceed", "halt"],
+        "env": "Z_HARNESS_WORKFLOW_REVIEW_ALL_PROCEED",
+        "callsites": [
+          "commands/z-review-all.md (Phase 3.7 proceed gate)"
+        ],
+        "description": "Controls Phase 3.7 proceed gate in /z-review-all. ask=always prompt; proceed=skip prompt; halt=stop unconditionally"
+      },
+      "workflow.plan_decisions_approval": {
+        "type": "string",
+        "default": "ask",
+        "valid_values": ["ask", "approve", "halt"],
+        "env": "Z_HARNESS_WORKFLOW_PLAN_DECISIONS_APPROVAL",
+        "callsites": [
+          "commands/z-plan.md (Phase 2.5 decisions-doc approval gate)"
+        ],
+        "description": "Controls Phase 2.5 decisions-doc approval gate in /z-plan. ask=always prompt; approve=skip prompt; halt=stop unconditionally"
       }
     }
   },
+  "overnight_gate": {
+    "env_vars": {
+      "Z_HARNESS_NO_ASK": "Set to 'halt' to activate overnight mode; any other value is a no-op",
+      "Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE": "JSON object {question_id: value}; merged over OVERNIGHT_AUTODECIDE_QIDS_DEFAULT; env wins on collision",
+      "Z_HARNESS_ASK_ALL": "Set to '1' to force all questions to ask; mutually exclusive with Z_HARNESS_NO_ASK=halt (exit 5)"
+    },
+    "default_allowlist": {
+      "workflow.slug_confirm": "recommend_derived",
+      "workflow.audit_to_amend": "amend"
+    },
+    "telemetry_events": ["overnight_decision", "askuser_halted", "unknown_ask_blocked", "config_conflict"],
+    "exit_codes": {
+      "5": "Z_HARNESS_ASK_ALL=1 and Z_HARNESS_NO_ASK=halt both set (config conflict)"
+    }
+  },
   "resolve_question_envelope": {
-    "result": "skip | prefill | ask",
+    "result": "skip | prefill | ask | halt",
     "default": "<option-label from QUESTION_IDS[id].skill_default>",
-    "source": "config | memory | conflict | none | override",
-    "rule_id": "<question_id>",
-    "strength": "hard | very_strong | strong | weak | none",
+    "source": "config | memory | conflict | none | override | overnight_allowlist | no_ask_halt",
+    "rule_id": "<question_id or special rule name>",
+    "strength": "hard | very_strong | strong | weak | none | policy",
     "reason": "<one-line human-readable>",
     "sources": [
       {
-        "kind": "config | memory",
+        "kind": "config | memory | allowlist | env",
         "value": "<resolved value>",
-        "location": "<config file path or docs/llm/*.json>",
+        "location": "<config file path or docs/llm/*.json or env var name>",
         "strength": "<tier>"
       }
     ]
@@ -249,7 +334,7 @@
     "required_fields": ["type", "question_id", "value", "scope", "strength"],
     "fields": {
       "type": "routing-preference",
-      "question_id": "<string — must be in QUESTION_IDS registry, e.g. workflow.audit_to_amend>",
+      "question_id": "<string — must be in QUESTION_IDS registry>",
       "value": "<string — must be in QUESTION_IDS[question_id].choices>",
       "scope": "global | project",
       "strength": "weak | strong | very_strong",

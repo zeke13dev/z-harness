@@ -7,7 +7,7 @@
 
 `/z-uplift` is a bulk codebase quality uplift command for repos adopting z-harness or undergoing periodic cleanup. It decomposes the repository into components (Cargo workspace members, Python packages, JS workspaces, or top-level directories), runs a repo-wide cross-cutting pass to surface global issues (duplicated abstractions, style drift, dead code at module boundaries), dispatches per-component audits across `correctness`, `cleanliness`, and `design` dimensions, and produces per-component `TASKS.md` files that `/z-implement-all --tasks=` can directly consume.
 
-The command is resumable: it writes a `MANIFEST.md` at `z-harness/plans/<slug>/MANIFEST.md` (see Setup at `commands/z-uplift.md:70`) that tracks each component's state (`pending`, `auditing`, `audited`, `implementing`, `done`, `bailed`, `skipped`). Re-invoking `/z-uplift` with no flags resumes at the next non-terminal state. Phase 5 (`commands/z-uplift.md:2473`) drives sequential per-component implementation behind AskUser gates. It prints the `/z-implement-all --tasks=` command and marks each component `[i] implementing` in MANIFEST, then exits so you run the command yourself. This is a deliberate two-step handoff — `/z-uplift` does not invoke `/z-implement-all` automatically — giving you full control over which components to implement, skip, or defer before resuming.
+The command is resumable: it writes a `MANIFEST.md` at `z-harness/plans/<slug>/MANIFEST.md` (see Setup at `commands/z-uplift.md:70`) that tracks each component's state (`pending`, `auditing`, `audited`, `implementing`, `done`, `bailed`, `skipped`). Re-invoking `/z-uplift` with no flags resumes at the next non-terminal state. Phase 5 (`commands/z-uplift.md:2482`) drives sequential per-component implementation behind AskUser gates. It prints the `/z-implement-all --tasks=` command and marks each component `[i] implementing` in MANIFEST, then exits so you run the command yourself. This is a deliberate two-step handoff — `/z-uplift` does not invoke `/z-implement-all` automatically — giving you full control over which components to implement, skip, or defer before resuming.
 
 ## Key entry points
 
@@ -15,14 +15,14 @@ The command is resumable: it writes a `MANIFEST.md` at `z-harness/plans/<slug>/M
 |-------|------|---------|
 | Argument parsing | `commands/z-uplift.md:22` | Parse all flags before any state is initialized |
 | Setup | `commands/z-uplift.md:70` | Derive uplift slug, resolve plan dir, pick run ID, log run_start, doc-staleness gate |
-| STYLE.md gate | `commands/z-uplift.md:469` | Require STYLE.md at repo root; halt and recommend /z-style-init if missing unless --no-style |
-| Phase 0 | `commands/z-uplift.md:555` | Premise check — one-paragraph goal confirmation |
-| Phase 1 | `commands/z-uplift.md:596` | Decomposition — auto-detect components, write COMPONENTS.md, AskUser gate; slug collision resolver loops with no-progress sanity counter; `SLUG_RE` validates custom slugs as `^[a-z0-9]+(?:-[a-z0-9]+)*$` |
-| Phase 2 | `commands/z-uplift.md:1115` | Cross-cutting pass — parallel consultant dispatches, output CROSS-CUTTING.md; parser emits `cross_cutting_findings_dropped` for non-G/C/R bullets; Step 6 inserts synthetic row as `[a] audited` using atomic write |
-| Phase 3 | `commands/z-uplift.md:1659` | Per-component audits — parallel per-dimension, CRIT_HIGH parser handles `### [CRITICAL]` headers structurally, `git grep` guarded against empty OTHER_COMP_PATHS, auto-bail check, REPORT.md + TASKS.md |
-| Phase 4 | `commands/z-uplift.md:2327` | Review gate — informational queue summary only (no AskUser); cross-cutting-first ordering callout printed if synthetic row is present |
-| Phase 5 | `commands/z-uplift.md:2473` | Sequential implement — two-step handoff; prints command, marks `[i]`, exits for user; `manifest_replace_row` helper enforces exactly-one-row invariant on all state transitions |
-| Phase 6 | `commands/z-uplift.md:2855` | Finalize — log run_end, push-notify, recommend /z-maintain-docs |
+| STYLE.md gate | `commands/z-uplift.md:478` | Require STYLE.md at repo root; halt and recommend /z-style-init if missing unless --no-style |
+| Phase 0 | `commands/z-uplift.md:564` | Premise check — one-paragraph goal confirmation |
+| Phase 1 | `commands/z-uplift.md:605` | Decomposition — auto-detect components, write COMPONENTS.md, AskUser gate; slug collision resolver loops with no-progress sanity counter; `SLUG_RE` validates custom slugs as `^[a-z0-9]+(?:-[a-z0-9]+)*$` |
+| Phase 2 | `commands/z-uplift.md:1124` | Cross-cutting pass — parallel consultant dispatches, output CROSS-CUTTING.md; parser emits `cross_cutting_findings_dropped` for non-G/C/R bullets; Step 6 inserts synthetic row as `[a] audited` using atomic write |
+| Phase 3 | `commands/z-uplift.md:1668` | Per-component audits — parallel per-dimension, CRIT_HIGH parser handles `### [CRITICAL]` headers structurally, `git grep` guarded against empty OTHER_COMP_PATHS, auto-bail check, REPORT.md + TASKS.md |
+| Phase 4 | `commands/z-uplift.md:2336` | Review gate — informational queue summary only (no AskUser); cross-cutting-first ordering callout printed if synthetic row is present |
+| Phase 5 | `commands/z-uplift.md:2482` | Sequential implement — two-step handoff; prints command, marks `[i]`, exits for user; `manifest_replace_row` helper enforces exactly-one-row invariant on all state transitions |
+| Phase 6 | `commands/z-uplift.md:2864` | Finalize — log run_end, push-notify, recommend /z-maintain-docs |
 
 ## How it interacts with others
 
@@ -31,7 +31,7 @@ The command is resumable: it writes a `MANIFEST.md` at `z-harness/plans/<slug>/M
 - `/z-mr-review` — complementary tool for branch-diff review; z-uplift is for full-repo decomposition, not diffs
 - `/z-style-init` — prerequisite gate; z-uplift halts and recommends /z-style-init when STYLE.md is absent
 - `/z-maintain-docs` — Phase 6 recommends /z-maintain-docs when any task carries a `**DOCS:**` line
-- `scripts/config.py resolve-question` — consulted in Setup Step 1 for the `workflow.slug_confirm` preference; controls whether slug confirmation is skipped, pre-filled, or asked normally
+- `scripts/config.py resolve-question` — consulted in Setup Step 1 for the `workflow.slug_confirm` preference; controls whether slug confirmation is skipped, pre-filled, asked normally, or halted
 
 ## When to use `/z-uplift` vs `/z-audit` vs `/z-mr-review`
 
@@ -45,7 +45,7 @@ Both `/z-audit` and `/z-mr-review` remain the right tools for their respective s
 
 ## STYLE.md prerequisite and MANIFEST states
 
-`/z-uplift` requires a `STYLE.md` at the repo root (the same prerequisite as `/z-mr-review`). If `STYLE.md` is absent, the STYLE.md gate at `commands/z-uplift.md:469` halts and recommends running `/z-style-init` first. Pass `--no-style` to proceed without it; the cleanliness and design auditors will fall back to a generic rubric and will not cite STYLE rule IDs.
+`/z-uplift` requires a `STYLE.md` at the repo root (the same prerequisite as `/z-mr-review`). If `STYLE.md` is absent, the STYLE.md gate at `commands/z-uplift.md:478` halts and recommends running `/z-style-init` first. Pass `--no-style` to proceed without it; the cleanliness and design auditors will fall back to a generic rubric and will not cite STYLE rule IDs.
 
 MANIFEST states:
 - `[ ] pending` — not yet started
@@ -58,11 +58,12 @@ MANIFEST states:
 
 ## Slug confirmation preference resolver
 
-Setup Step 1 now calls `python3 scripts/config.py resolve-question workflow.slug_confirm` before presenting the slug confirmation AskUser. The resolver returns one of three actions:
+Setup Step 1 calls `python3 scripts/config.py resolve-question workflow.slug_confirm` before presenting the slug confirmation AskUser. The resolver returns one of four actions:
 
 - `skip` — accept the derived slug silently, emit `askuser_skipped` event; no AskUserQuestion shown
 - `prefill` — show the AskUserQuestion with the derived slug pre-selected as `(Recommended — your preference)`, wrapped in `user_wait_start` / `user_wait_end` events
 - `ask` — normal AskUserQuestion; if `$SOURCE == "conflict"`, a header note about the config/memory disagreement is added, and a one-shot follow-up offers to record the user's answer as the new preference
+- `halt` — emit `uplift_halt` event (`reason: no_ask_blocked`) and exit cleanly without invoking AskUserQuestion at all
 
 The slug collision hard-check (duplicate slug in `z-harness/plans/`) always runs unconditionally before the preference resolver gates. The resolver only controls the soft non-obvious-slug confirmation gate.
 
@@ -87,6 +88,7 @@ Push-notification behavior throughout `/z-uplift` is governed by the `notify.lev
 - **Cross-cutting skip.** Pass `--cross-cutting=skip` to omit Phase 2 entirely. Default is ON. Skipping saves significant time but misses global-task issues that cut across component boundaries.
 - **Performance dimension.** The `perf` audit dimension is excluded by default to bound cost. Pass `--dimensions=correctness,cleanliness,design,perf` to include it.
 - **Slug collision.** Two components with the identical basename trigger an AskUser at Phase 1 for disambiguation. The resolver loops until all collisions are cleared; a no-progress sanity counter aborts after 3 stalled iterations to prevent infinite loops. Custom slugs are validated against `^[a-z0-9]+(?:-[a-z0-9]+)*$` before being applied.
+- **Halt branch.** When `workflow.slug_confirm` resolves to `halt`, the command emits `uplift_halt` (`reason: no_ask_blocked`, `question_id: workflow.slug_confirm`, `rule_id: no_ask_halt`) and exits cleanly with code 0. No AskUserQuestion is invoked. This is distinct from the `skip` branch — `skip` continues, `halt` stops.
 - **Cross-cutting row ordering.** The synthetic `<slug>-cross-cutting` component is inserted first in MANIFEST (as `[a] audited`) so that global-task API changes land before per-component cleanup. Phase 4 prints a callout when this row is present. Phase 5 always processes it first regardless of physical table position.
 - **Cross-cutting parser drops.** The Phase 2 merge parser emits a `cross_cutting_findings_dropped` telemetry event for any bullets in consultant output that do not match the strict `G-NNN` / `C-NNN` / `R-NNN` prefix pattern. Watch for this in run logs if finding counts seem low.
 - **Atomic MANIFEST writes.** All MANIFEST mutations use `os.replace(tmp, path)` (write to `.tmp` then rename) to prevent partial-write corruption on interrupt.
@@ -94,6 +96,7 @@ Push-notification behavior throughout `/z-uplift` is governed by the `notify.lev
 - **Doc-staleness gate.** Setup Step 5 checks `docs/llm/INDEX.json` staleness across all concepts before Phase 0. If more than 20% are stale (configurable via `$Z_HARNESS_DOC_STALENESS_THRESHOLD`), the user is prompted to switch to `/z-maintain-docs`, continue with stale docs, or abandon. The gate does NOT auto-invoke `/z-maintain-docs`.
 - **Notification config var.** The correct environment variable for notification control is `Z_HARNESS_NOTIFY_LEVEL` (maps to `notify.level` in TOML). There is no standalone `Z_HARNESS_NOTIFY` variable. Setting `Z_HARNESS_NOTIFY` has no effect.
 - **Slug preference resolver.** `scripts/config.py resolve-question workflow.slug_confirm` is queried after the hard collision check but before the user-visible slug gate. On resolver failure (any non-zero exit), falls back to the normal ask path — never silently skips.
+- **Phase line anchors.** Line numbers shift whenever the command file is edited; always verify against grep before citing a specific line number.
 
 ## Examples
 

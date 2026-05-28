@@ -26,7 +26,7 @@
         "agents/scope-reconciler-brainstorm.md",
         "agents/spec-precheck.md"
       ],
-      "last_updated": "2026-05-28T18:03:03Z",
+      "last_updated": "2026-05-28T20:50:09Z",
       "confidence": "high",
       "depends_on": [
         "scripts",
@@ -71,7 +71,7 @@
         "commands/z-update.md",
         "commands/z-uplift.md"
       ],
-      "last_updated": "2026-05-28T18:03:03Z",
+      "last_updated": "2026-05-28T20:50:09Z",
       "confidence": "high",
       "depends_on": [
         "agents",
@@ -96,9 +96,10 @@
         "scripts/version.sh",
         "scripts/config.py",
         "scripts/config.sh",
-        "scripts/test_config.py"
+        "scripts/test_config.py",
+        "scripts/test_log_phase.sh"
       ],
-      "last_updated": "2026-05-28T18:03:03Z",
+      "last_updated": "2026-05-28T20:50:09Z",
       "confidence": "high",
       "depends_on": [],
       "consumed_by": [
@@ -113,7 +114,7 @@
       "source_file": [
         "commands/z-fix.md"
       ],
-      "last_updated": "2026-05-28T18:03:03Z",
+      "last_updated": "2026-05-28T20:50:09Z",
       "confidence": "high",
       "depends_on": [
         "agents",
@@ -149,7 +150,7 @@
         "skills/z-update/SKILL.md",
         "skills/z-uplift/SKILL.md"
       ],
-      "last_updated": "2026-05-28T18:03:03Z",
+      "last_updated": "2026-05-28T20:50:09Z",
       "confidence": "high",
       "depends_on": [
         "agents",
@@ -297,7 +298,7 @@
     },
     {
       "slug": "z-uplift",
-      "last_updated": "2026-05-28T18:03:03Z",
+      "last_updated": "2026-05-28T20:50:09Z",
       "confidence": "high",
       "depends_on": [
         "commands",
@@ -318,7 +319,7 @@
         "scripts/propose-prefs.py",
         "docs/human/config.md"
       ],
-      "last_updated": "2026-05-28T18:03:03Z",
+      "last_updated": "2026-05-28T20:50:09Z",
       "confidence": "high",
       "depends_on": [
         "scripts"
@@ -339,7 +340,7 @@
         "scripts/config.py",
         "docs/human/overnight-run.md"
       ],
-      "last_updated": "2026-05-28T00:00:00Z",
+      "last_updated": "2026-05-28T20:50:09Z",
       "confidence": "high",
       "depends_on": [
         "commands",

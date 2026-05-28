@@ -20,60 +20,60 @@
       "line": 70,
       "symbol": "Setup",
       "kind": "module",
-      "summary": "Derive uplift slug (with workflow.slug_confirm preference resolver via config.py), resolve plan dir, pick run ID, log run_start, doc-staleness gate (Step 5)."
+      "summary": "Derive uplift slug (with workflow.slug_confirm preference resolver via config.py, including new halt branch), resolve plan dir, pick run ID, log run_start, doc-staleness gate (Step 5)."
     },
     {
       "file": "commands/z-uplift.md",
-      "line": 469,
+      "line": 478,
       "symbol": "STYLE.md gate",
       "kind": "gate",
       "summary": "Require STYLE.md at repo root; halt and recommend /z-style-init if missing unless --no-style passed."
     },
     {
       "file": "commands/z-uplift.md",
-      "line": 555,
+      "line": 564,
       "symbol": "Phase 0",
       "kind": "phase",
       "summary": "Premise check — one-paragraph goal confirmation, same shape as /z-plan Phase 0."
     },
     {
       "file": "commands/z-uplift.md",
-      "line": 596,
+      "line": 605,
       "symbol": "Phase 1",
       "kind": "phase",
       "summary": "Decomposition — auto-detect components, write COMPONENTS.md, AskUser gate; slug collision resolver loops with sanity counter (aborts after 3 no-progress iterations); SLUG_RE validates ^[a-z0-9]+(?:-[a-z0-9]+)*$."
     },
     {
       "file": "commands/z-uplift.md",
-      "line": 1115,
+      "line": 1124,
       "symbol": "Phase 2",
       "kind": "phase",
       "summary": "Cross-cutting pass — dispatch consultant-primary + consultant-secondary in parallel; merge into CROSS-CUTTING.md; parser emits cross_cutting_findings_dropped for non-G/C/R bullets; Step 6 inserts synthetic row as [a] audited with atomic write."
     },
     {
       "file": "commands/z-uplift.md",
-      "line": 1659,
+      "line": 1668,
       "symbol": "Phase 3",
       "kind": "phase",
       "summary": "Per-component audits — dispatch auditor per dimension in parallel; CRIT_HIGH parser is structural (handles ### [CRITICAL] headers, inline bullet tags, Severity: key-value); git grep guarded against empty OTHER_COMP_PATHS; auto-bail check (>30 total OR >10 CRIT-HIGH); produce REPORT.md + TASKS.md; reviewer gate."
     },
     {
       "file": "commands/z-uplift.md",
-      "line": 2327,
+      "line": 2336,
       "symbol": "Phase 4",
       "kind": "phase",
       "summary": "Review gate — informational queue summary only (no AskUser); prints cross-cutting-first ordering callout when synthetic row is present; user_wait_ms=0 always."
     },
     {
       "file": "commands/z-uplift.md",
-      "line": 2473,
+      "line": 2482,
       "symbol": "Phase 5",
       "kind": "phase",
       "summary": "Sequential implement — AskUser gate per component; prints the /z-implement-all --tasks= command and marks state [i] implementing, then exits for the user to run it (two-step handoff); manifest_replace_row helper enforces exactly-one-row invariant on all state transitions."
     },
     {
       "file": "commands/z-uplift.md",
-      "line": 2855,
+      "line": 2864,
       "symbol": "Phase 6",
       "kind": "phase",
       "summary": "Finalize — log run_end, push-notify with done/skipped/bailed counts, recommend /z-maintain-docs if any task carried a **DOCS:** line."
@@ -112,7 +112,8 @@
     "Doc-staleness gate (Setup Step 5) computes stale_pct across all INDEX concepts before Phase 0; if >= Z_HARNESS_DOC_STALENESS_THRESHOLD (default 20%), user is prompted to switch to /z-maintain-docs, continue, or abandon. Never auto-invokes /z-maintain-docs.",
     "Notification behavior is controlled by the notify.level TOML key (env: Z_HARNESS_NOTIFY_LEVEL), resolved via the config system in Setup Step 4. There is no standalone Z_HARNESS_NOTIFY variable.",
     "Slug collision hard-check (existing slug dir in z-harness/plans/) always runs unconditionally before the workflow.slug_confirm preference resolver soft gate.",
-    "workflow.slug_confirm resolver (scripts/config.py resolve-question) returns skip/prefill/ask; on any non-zero exit code, falls back to the normal ask path without silently skipping."
+    "workflow.slug_confirm resolver (scripts/config.py resolve-question) returns skip/prefill/ask/halt; on any non-zero exit code, falls back to the normal ask path without silently skipping.",
+    "halt result from workflow.slug_confirm resolver emits uplift_halt event with reason=no_ask_blocked and exits cleanly (exit 0) without invoking AskUserQuestion."
   ],
   "gotchas": [
     "Phase 4 does NOT present an AskUserQuestion — it is a passive informational summary. The per-component AskUser gates are in Phase 5. Earlier doc versions incorrectly described Phase 4 as an interactive gate.",
@@ -129,7 +130,8 @@
     "cross_cutting_findings_dropped telemetry fires when consultant output contains bullets that don't match G-NNN/C-NNN/R-NNN; if finding counts seem low check run logs for this event.",
     "docs/human/z-uplift.md is NOT a source file for this concept — it is generated output. The true sources are commands/z-uplift.md and skills/z-uplift/SKILL.md.",
     "Setting Z_HARNESS_NOTIFY has no effect — the correct env var is Z_HARNESS_NOTIFY_LEVEL (maps to notify.level in TOML config). See docs/human/config.md for all notification knobs.",
-    "workflow.slug_confirm resolver failure (exit code 2/3/4) is non-fatal — falls back to ask mode; never silently skips the confirmation."
+    "workflow.slug_confirm resolver failure (exit code 2/3/4) is non-fatal — falls back to ask mode; never silently skips the confirmation.",
+    "halt branch (workflow.slug_confirm result=halt) emits uplift_halt and exits 0 — it does NOT call AskUserQuestion. Distinct from skip (which continues) and ask (which prompts). Triggered when rule_id=no_ask_halt is active in config."
   ],
   "memories": []
 }

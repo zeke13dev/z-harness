@@ -5,7 +5,6 @@
   "source_file": [
     "skills/z-amend/SKILL.md",
     "skills/z-audit-plan/SKILL.md",
-    "skills/z-audit-plan-style/SKILL.md",
     "skills/z-brainstorm/SKILL.md",
     "skills/z-debug/SKILL.md",
     "skills/z-do/SKILL.md",
@@ -60,14 +59,14 @@
       "line": 1,
       "symbol": "z-brainstorm",
       "kind": "module",
-      "summary": "Three-ideator pre-plan brainstorm; mandatory anti-bias check; slug-confirm preference resolver (skip/prefill/ask/conflict) after hard collision check."
+      "summary": "Three-ideator pre-plan brainstorm; mandatory anti-bias check; slug-confirm resolver (skip/prefill/ask/conflict/halt) after hard collision check; halt emits brainstorm_halt."
     },
     {
       "file": "skills/z-debug/SKILL.md",
       "line": 1,
       "symbol": "z-debug",
       "kind": "module",
-      "summary": "Unknown-root-cause debug flow; Phase 2.5 conditional bisect fast-path; hypothesis rounds; posterior table; MR-review on fix; post-mortem; Phase 10 memory-review (shipped branch only); slug-confirm resolver in Setup."
+      "summary": "Unknown-root-cause debug flow; Phase 2.5 conditional bisect fast-path; hypothesis rounds; posterior table; MR-review on fix; post-mortem; Phase 10 memory-review (shipped branch only); slug-confirm resolver (halt→debug_halt) in Setup; Phase 10 clears .notify-dedup-session unconditionally."
     },
     {
       "file": "commands/z-audit.md",
@@ -151,14 +150,14 @@
       "line": 1,
       "symbol": "z-map",
       "kind": "module",
-      "summary": "Terrain-mapping; cost gate (Phase 0); slug+artifact collision handling (Phase 0.5, after cost gate); --slug flag; doc-fetcher-first; up to 3 Explores tracked dispatched vs succeeded; bundled critique; no-recommendation invariant; slug-confirm resolver in Phase 0.5. Produces MAP.md."
+      "summary": "Terrain-mapping; cost gate (Phase 0); slug+artifact collision handling (Phase 0.5, after cost gate); --slug flag; doc-fetcher-first; up to 3 Explores tracked dispatched vs succeeded; bundled critique; no-recommendation invariant; slug-confirm resolver (halt→map_halt) in Phase 0.5. Produces MAP.md."
     },
     {
       "file": "skills/z-plan-light/SKILL.md",
       "line": 1,
       "symbol": "z-plan-light",
       "kind": "module",
-      "summary": "Small-fix planner; FIX.md only; inline implementation; reviewer gate; optional scope-probe agent; slug-confirm resolver in Setup."
+      "summary": "Small-fix planner; FIX.md only; inline implementation; reviewer gate; optional scope-probe agent; slug-confirm resolver (halt→light_halt) in Setup."
     },
     {
       "file": "skills/z-plan-split/SKILL.md",
@@ -186,7 +185,7 @@
       "line": 1,
       "symbol": "z-review-all",
       "kind": "module",
-      "summary": "Final diff review; pre-Phase-0 resume check; test-suite gate; Phase 3.7 compaction; REVIEW-TASKS; Phase 7 memory-review with memory_review_terminal event; clears .notify-dedup-session at Phase 0 start."
+      "summary": "Final diff review; pre-Phase-0 resume check (handles halted:no_ask_blocked state via review_resume_from_halt); test-suite gate; Phase 3.7 two-stage compaction (check-no-ask first → halt writes partial state file; then resolve-question for skip/prefill/ask); REVIEW-TASKS; Phase 7 memory-review with memory_review_terminal; clears .notify-dedup-session at Phase 0 and Phase 7 start."
     },
     {
       "file": "skills/z-stats/SKILL.md",
@@ -248,10 +247,13 @@
     "memory_review_terminal is emitted by run-memory-review.sh for all skip states; by the skill for ran_empty and needs_user states. review_agent_failed and review_agent_malformed are orthogonal failure-class events and never emit memory_review_terminal.",
     "Broken-context skip push-notify (tags_missing, no_plan_dir, missing_args) uses .notify-dedup-session keyed by slug:reason to suppress duplicate notifications within a session.",
     "z-debug memory-review (Phase 10) runs only on the status:shipped branch; abandoned debug sessions emit no memory-review telemetry.",
+    "z-debug Phase 10 clears .notify-dedup-session unconditionally before the shipped/abandoned branch split.",
     "z-plan-split emits plan_split_run_end on every exit path (success, partial, refused, abandoned).",
     "cluster_id (C1..CN) is for telemetry; cluster_slug is the on-disk directory name — never swap.",
     "z-maintain-docs always passes dedup_tags:true to doc-updater subagents.",
     "z-review-all Phase 3.7 compaction breakpoint always runs between Phase 3.5 and Phase 4.",
+    "z-review-all Phase 3.7 runs check-no-ask before resolve-question; halt result writes partial .review_state.json (halted:true, halt_reason:no_ask_blocked) and exits without AskUserQuestion.",
+    "z-review-all Pre-Phase 0 handles halted state files: emits review_resume_from_halt, deletes the file, proceeds to full Phase 0 re-run (not fast-forward).",
     "z-debug fix-gate requires posterior==very_high AND zero unexplained evidence rows before any fix.",
     "z-uplift MANIFEST.md is the single resume authority; state transitions are atomic via tmp-then-rename.",
     "z-uplift never writes production code directly; it orchestrates audits via auditor subagents and delegates implementation to z-implement-all.",
@@ -278,7 +280,8 @@
     "config.py export-env is called at startup in z-do (Setup step 6) and z-plan (Setup step 4a) to populate all Z_HARNESS_* env vars; skills that do not yet call export-env must use Z_HARNESS_NOTIFY_LEVEL with a default fallback.",
     "All PushNotification calls gated by config.py should-notify --event <type> returning yes, except hard-pause notifications (compaction breakpoints, halt-on-skip-flagged) which fire regardless of notify level.",
     "Notification policy knobs (notify.level, docs.always_apply) are documented in docs/human/config.md; skills reference that file rather than inline documentation.",
-    "Slug-confirm resolver (config.py resolve-question workflow.slug_confirm) is a soft gate only; the hard unconditional slug-dir collision check runs before it and is never bypassed by resolver outcome.",
+    "Slug-confirm resolver (config.py resolve-question workflow.slug_confirm) now has four results: skip, prefill, ask, halt. halt fires when Z_HARNESS_NO_ASK=halt is active; each skill emits its own halt event (brainstorm_halt, debug_halt, light_halt, map_halt) and exits without AskUserQuestion.",
+    "The hard unconditional slug-dir collision check runs before the slug-confirm resolver and is never bypassed by resolver outcome.",
     "config.py emits askuser_resolved for every resolved question; resolver errors fall through to ask mode (never silently skip).",
     "z-stats Phase 4c reads askuser_resolved events; it is read-only and never writes.",
     "z-suggest-memory --kind routing-preference requires --question-id, --value, --strength, and --scope; mutually exclusive with --edit, --delete, and --from-candidate-json.",
@@ -304,12 +307,13 @@
     "Phase 4c in z-stats reads askuser_resolved events; if none found, prints a 'none found' note and skips the conflict-rate line; read-only.",
     "review_agent_malformed and review_agent_failed are orthogonal failure-class events — they do NOT emit memory_review_terminal. In z-implement-all Phase 9, review_agent_malformed triggers a push-notify hint; review_agent_failed also triggers a push-notify. Neither halts the run.",
     "z-debug Phase 10 memory-review only runs on the shipped branch. Abandoned debug sessions (status:abandoned) do not call run-memory-review.sh.",
-    "Broken-context skip push-notify uses .notify-dedup-session (keyed slug:reason); z-review-all clears this file at Phase 0 start; z-debug clears it at the top of Phase 10; z-implement-all clears it before first task dispatch.",
+    "Broken-context skip push-notify uses .notify-dedup-session (keyed slug:reason); z-review-all clears this file at Phase 0 start AND again at Phase 7 start; z-debug clears it at the top of Phase 10 (before shipped/abandoned split); z-implement-all clears it before first task dispatch.",
     "z-debug auto-bail no longer triggers on >5 files; only cross-module/arch/public-surface change triggers escalation.",
     "z-debug hard cycle cap is 5 (halt when cycle 6 would be needed); soft warning fires at cycle 3. Cycle cap overridable via AskUserQuestion only.",
     "z-debug Phase 2.5 bisect is conditional: only fires when bug is a regression with known-good baseline and scriptable repro.",
     "z-debug bisect-isolator is dispatched as a Haiku subagent, not a consultant; orchestrator-only likelihood-bucket rule still applies to its output.",
-    "z-review-all pre-Phase-0 deletes stale .review_state.json if HEAD changed or artifacts missing.",
+    "z-review-all pre-Phase-0 deletes stale .review_state.json if HEAD changed or artifacts missing. A halted:no_ask_blocked state file is NOT treated as stale: it emits review_resume_from_halt, deletes the file, and triggers a full Phase 0 re-run (not fast-forward).",
+    "z-review-all Phase 3.7 is a two-stage gate: check-no-ask fires first (halt→write partial state file with halted:true + exit 0); then if proceed, resolve-question runs for skip/prefill/ask. The halt state file is not a fast-forward token — Pre-Phase 0 always does a full re-run after halt.",
     "z-plan Phase 8 complexity-classifier strips existing **Complexity:** line before dispatch to force re-classification.",
     "z-research --slug= token must be stripped from $ARGUMENTS before computing input_hash; z-map does the same.",
     "z-research Phase 0 is dispatch decision (user-driven, reads MAP_STATE + BRAINSTORM_STATE); Phase 0.5 is the cost gate. The cost gate always follows the dispatch decision.",
@@ -332,6 +336,7 @@
     "z-skill-fix never weakens a gate or pushback rule even if the gate was inconvenient in a specific case.",
     "config.py export-env is only invoked in z-do and z-plan; z-implement-all, z-review-all, and z-debug still reference Z_HARNESS_NOTIFY_LEVEL directly with a default fallback — they have not yet been updated to use export-env.",
     "should-notify --event <type> accepts approval, error, and phase_end event types; hard-pause notifications bypass this check entirely.",
+    "Slug-confirm resolver now has a halt result in addition to skip/prefill/ask/conflict. halt means Z_HARNESS_NO_ASK=halt is blocking the question; each skill emits its own halt event without calling AskUserQuestion.",
     "Slug-confirm preference resolver (resolve-question workflow.slug_confirm) runs only after the hard collision check passes; the collision check is never gated by resolver outcome.",
     "On slug-confirm conflict (config says X, memory says Y), the question header surfaces the conflict, and a one-shot follow-up offers to record the user's answer (config / memory:very_strong / memory:strong / no).",
     "z-suggest-memory --kind routing-preference is mutually exclusive with --edit, --delete, and --from-candidate-json; combining any two returns STATUS: bad_input.",
