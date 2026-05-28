@@ -222,6 +222,15 @@ Both consultants return structured findings. Transcripts are archived under `$BA
      ```
    - **`prefill`:** Present the `AskUserQuestion` normally, pre-select `$DEFAULT` as the recommended option (append label suffix: ` (Recommended — your preference)`).
    - **`ask`:** Present the `AskUserQuestion` normally. If `$SOURCE == "conflict"`, add to the question header text: `(Note: config says <X>, memory says <Y> — your answer below will be offered as a conflict-resolution write target.)` After the user picks an answer, if that answer differs from both config and memory values, surface a one-shot follow-up `AskUserQuestion`: "Record your answer as the new preference? (config / memory:very_strong / memory:strong / no — keep both stored, ask again next time)". Caller writes to config or dispatches `/z-suggest-memory` accordingly.
+   - **`halt`:** Emit `audit_halt` event and exit cleanly — do NOT invoke `AskUserQuestion`:
+     ```bash
+     if [[ "$RESULT" == "halt" ]]; then
+       bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" audit_halt \
+         "$(printf '{"reason":"no_ask_blocked","question_id":"workflow.audit_to_amend","rule_id":"no_ask_halt"}')"
+       echo "halt: no_ask_blocked on workflow.audit_to_amend" >&2
+       exit 0
+     fi
+     ```
 
    <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the audit
         gate (Amend Plan / Proceed as-is / Reject & Re-plan) via their native

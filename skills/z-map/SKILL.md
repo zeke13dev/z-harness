@@ -149,6 +149,15 @@ This phase runs **only if** the user picked `proceed` or `reduce` in Phase 0. Th
    - `skip`: accept the derived slug silently — no AskUserQuestion. Emit `askuser_skipped` event with `{question_id: "workflow.slug_confirm", source: "$SOURCE"}`.
    - `prefill`: present the AskUserQuestion normally, pre-select the derived slug as the recommended option (label suffix: ` (Recommended — your preference)`).
    - `ask`: if the auto-derived slug is non-obvious, confirm via `AskUserQuestion` normally. If `$SOURCE == "conflict"`, add to the question header: `(Note: config says <X>, memory says <Y> — your answer below will be offered as a conflict-resolution write target.)` After the user picks an answer that differs from both stored values, surface a one-shot follow-up: "Record your answer as the new preference? (config / memory:very_strong / memory:strong / no)".
+   - `halt`: emit `map_halt` event and exit cleanly — do NOT invoke `AskUserQuestion`:
+     ```bash
+     if [[ "$RESULT" == "halt" ]]; then
+       bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" map_halt \
+         "$(printf '{"reason":"no_ask_blocked","question_id":"workflow.slug_confirm","rule_id":"no_ask_halt"}')"
+       echo "halt: no_ask_blocked on workflow.slug_confirm" >&2
+       exit 0
+     fi
+     ```
 
 2. **Existing-MAP.md handling (deferred from old Setup step 7).** If `$Z_HARNESS_PLAN_DIR/MAP.md` exists, prompt the user via `AskUserQuestion` with three options:
    - **archive-and-start-fresh** — archive the existing note (`mv $Z_HARNESS_PLAN_DIR/MAP.md $Z_HARNESS_PLAN_DIR/archive/$RUN/MAP.previous.md`) and proceed with a clean draft.

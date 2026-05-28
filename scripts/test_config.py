@@ -23,8 +23,13 @@ from pathlib import Path
 SCRIPTS_DIR = Path(__file__).parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-# We import only the pure function; we do NOT call main().
+# We import only pure functions; we do NOT call main().
 from config import _dotted_to_env  # noqa: E402
+from config import (  # noqa: E402
+    _parse_overnight_allowlist,
+    OVERNIGHT_AUTODECIDE_QIDS_DEFAULT,
+    QUESTION_IDS,
+)
 
 
 PYTHON = sys.executable
@@ -767,6 +772,922 @@ class TestResolveQuestion(unittest.TestCase):
         env = {"XDG_CONFIG_HOME": self.xdg}
         r = run(["resolve-question", self.KNOWN_QID, "--no-such-flag"], env=env, cwd=self.cwd)
         self.assertEqual(r.returncode, 2)
+
+
+# ---------------------------------------------------------------------------
+# Tests for T005: _apply_overnight_overrides + halt-from-ask integration
+# ---------------------------------------------------------------------------
+
+class TestApplyOvernightOverrides(unittest.TestCase):
+    """
+    Regression tests for _apply_overnight_overrides() and the halt-from-ask
+    integration in cmd_resolve_question.
+
+    Four branches:
+    (A) no-op pass-through: Z_HARNESS_NO_ASK not set (or != halt)
+    (B) allowlist hit: Z_HARNESS_NO_ASK=halt + qid in allowlist → overnight_decision
+    (C) halt: Z_HARNESS_NO_ASK=halt + qid not in allowlist → halt envelope
+    (D) conflict: Z_HARNESS_ASK_ALL=1 + Z_HARNESS_NO_ASK=halt → exit 5
+    """
+
+    KNOWN_QID = "workflow.slug_confirm"
+    KNOWN_QID2 = "workflow.audit_to_amend"
+
+    def setUp(self):
+        self.xdg = make_xdg()
+        self.cwd = make_isolation_dir()
+
+    def tearDown(self):
+        shutil.rmtree(self.xdg, ignore_errors=True)
+        shutil.rmtree(self.cwd, ignore_errors=True)
+
+    def _run_resolve(self, question_id, extra_env=None):
+        env = {"XDG_CONFIG_HOME": self.xdg, "Z_HARNESS_PROJECT_ROOT": self.cwd}
+        if extra_env:
+            env.update(extra_env)
+        return run(["resolve-question", question_id], env=env, cwd=self.cwd)
+
+    # (A) No-op pass-through: Z_HARNESS_NO_ASK not set
+
+    def test_no_ask_unset_result_is_ask(self):
+        """Without Z_HARNESS_NO_ASK, envelope passes through unchanged (result=ask)."""
+        r = self._run_resolve(self.KNOWN_QID)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        envelope = json.loads(r.stdout)
+        self.assertEqual(envelope["result"], "ask")
+
+    def test_no_ask_wrong_value_does_not_halt(self):
+        """Z_HARNESS_NO_ASK=something-else is ignored (not halt); envelope unchanged."""
+        r = self._run_resolve(self.KNOWN_QID, extra_env={"Z_HARNESS_NO_ASK": "ignore"})
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        envelope = json.loads(r.stdout)
+        self.assertEqual(envelope["result"], "ask")
+
+    def test_no_ask_halt_with_skip_result_is_passthrough(self):
+        """When result is already skip (config=auto_accept), NO_ASK=halt is a no-op."""
+        write_global_config(self.xdg, '[workflow]\nslug_confirm = "auto_accept"\n')
+        r = self._run_resolve(
+            self.KNOWN_QID,
+            extra_env={"Z_HARNESS_NO_ASK": "halt"},
+        )
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        envelope = json.loads(r.stdout)
+        # result was already skip — override should NOT fire
+        self.assertEqual(envelope["result"], "skip")
+        self.assertEqual(envelope["source"], "config")
+
+    # (B) Allowlist hit: Z_HARNESS_NO_ASK=halt + qid in default allowlist
+
+    def test_no_ask_halt_allowlist_hit_returns_overnight_decision(self):
+        """slug_confirm is in the default allowlist → overnight_decision envelope."""
+        r = self._run_resolve(
+            self.KNOWN_QID,
+            extra_env={"Z_HARNESS_NO_ASK": "halt"},
+        )
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        envelope = json.loads(r.stdout)
+        self.assertEqual(envelope["source"], "overnight_allowlist")
+        self.assertIn("chosen", envelope)
+        self.assertEqual(envelope["chosen"], "recommend_derived")
+
+    def test_no_ask_halt_allowlist_hit_result_mapped_from_result_map(self):
+        """slug_confirm=recommend_derived maps to result=prefill via RESULT_MAP."""
+        r = self._run_resolve(
+            self.KNOWN_QID,
+            extra_env={"Z_HARNESS_NO_ASK": "halt"},
+        )
+        self.assertEqual(r.returncode, 0)
+        envelope = json.loads(r.stdout)
+        # recommend_derived → prefill in RESULT_MAP
+        self.assertEqual(envelope["result"], "prefill")
+
+    def test_no_ask_halt_allowlist_hit_audit_to_amend(self):
+        """audit_to_amend is in the default allowlist → amend chosen → result=skip."""
+        r = self._run_resolve(
+            self.KNOWN_QID2,
+            extra_env={"Z_HARNESS_NO_ASK": "halt"},
+        )
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        envelope = json.loads(r.stdout)
+        self.assertEqual(envelope["source"], "overnight_allowlist")
+        self.assertEqual(envelope["chosen"], "amend")
+        # amend → skip
+        self.assertEqual(envelope["result"], "skip")
+
+    def test_no_ask_halt_env_allowlist_override_wins(self):
+        """Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE env entry overrides default for a qid."""
+        import json as _json
+        env_allowlist = _json.dumps({"workflow.slug_confirm": "auto_accept"})
+        r = self._run_resolve(
+            self.KNOWN_QID,
+            extra_env={
+                "Z_HARNESS_NO_ASK": "halt",
+                "Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE": env_allowlist,
+            },
+        )
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        envelope = json.loads(r.stdout)
+        self.assertEqual(envelope["chosen"], "auto_accept")
+        # auto_accept → skip
+        self.assertEqual(envelope["result"], "skip")
+
+    def test_no_ask_halt_allowlist_hit_envelope_has_required_keys(self):
+        """overnight_decision envelope has result, default, source, rule_id, strength, reason, sources."""
+        r = self._run_resolve(
+            self.KNOWN_QID,
+            extra_env={"Z_HARNESS_NO_ASK": "halt"},
+        )
+        self.assertEqual(r.returncode, 0)
+        envelope = json.loads(r.stdout)
+        for key in ("result", "default", "source", "rule_id", "strength", "reason", "sources"):
+            self.assertIn(key, envelope, f"overnight_decision envelope missing key {key!r}")
+
+    # (C) Halt: Z_HARNESS_NO_ASK=halt + qid NOT in allowlist
+
+    def test_no_ask_halt_not_in_allowlist_returns_halt(self):
+        """workflow.implement_all_proceed is not in the default allowlist → halt envelope."""
+        r = self._run_resolve(
+            "workflow.implement_all_proceed",
+            extra_env={"Z_HARNESS_NO_ASK": "halt"},
+        )
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        envelope = json.loads(r.stdout)
+        self.assertEqual(envelope["result"], "halt")
+        self.assertEqual(envelope["halt_reason"], "no_ask_blocked")
+        self.assertEqual(envelope["question_id"], "workflow.implement_all_proceed")
+
+    def test_no_ask_halt_envelope_has_would_have_asked(self):
+        """Halt envelope includes would_have_asked with exactly {default, choices}."""
+        r = self._run_resolve(
+            "workflow.implement_all_proceed",
+            extra_env={"Z_HARNESS_NO_ASK": "halt"},
+        )
+        self.assertEqual(r.returncode, 0)
+        envelope = json.loads(r.stdout)
+        self.assertIn("would_have_asked", envelope)
+        wha = envelope["would_have_asked"]
+        self.assertIn("default", wha)
+        self.assertIn("choices", wha)
+        # Per D4: ONLY default and choices — no question/header/description
+        self.assertNotIn("question", wha)
+        self.assertNotIn("header", wha)
+        self.assertNotIn("description", wha)
+
+    def test_no_ask_halt_envelope_would_have_asked_choices_correct(self):
+        """would_have_asked.choices matches the registered choices for the qid."""
+        r = self._run_resolve(
+            "workflow.implement_all_proceed",
+            extra_env={"Z_HARNESS_NO_ASK": "halt"},
+        )
+        self.assertEqual(r.returncode, 0)
+        envelope = json.loads(r.stdout)
+        wha = envelope["would_have_asked"]
+        self.assertEqual(sorted(wha["choices"]), ["ask", "auto_resume", "halt"])
+
+    def test_no_ask_halt_envelope_has_source_no_ask_halt(self):
+        """Halt envelope source field is 'no_ask_halt'."""
+        r = self._run_resolve(
+            "workflow.implement_all_proceed",
+            extra_env={"Z_HARNESS_NO_ASK": "halt"},
+        )
+        self.assertEqual(r.returncode, 0)
+        envelope = json.loads(r.stdout)
+        self.assertEqual(envelope["source"], "no_ask_halt")
+        self.assertEqual(envelope["rule_id"], "no_ask_halt")
+
+    def test_no_ask_halt_stdout_is_single_json_line(self):
+        """Halt envelope stdout is exactly one JSON line."""
+        r = self._run_resolve(
+            "workflow.implement_all_proceed",
+            extra_env={"Z_HARNESS_NO_ASK": "halt"},
+        )
+        self.assertEqual(r.returncode, 0)
+        lines = [l for l in r.stdout.splitlines() if l.strip()]
+        self.assertEqual(len(lines), 1, f"expected 1 JSON line, got: {r.stdout!r}")
+
+    def test_no_ask_halt_removes_qid_from_allowlist_via_empty_env(self):
+        """Empty Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE falls back to default allowlist."""
+        r = self._run_resolve(
+            self.KNOWN_QID,
+            extra_env={
+                "Z_HARNESS_NO_ASK": "halt",
+                "Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE": "",
+            },
+        )
+        self.assertEqual(r.returncode, 0)
+        envelope = json.loads(r.stdout)
+        # slug_confirm is in the default allowlist → still overnight_decision
+        self.assertEqual(envelope["source"], "overnight_allowlist")
+
+    # (D) Conflict: Z_HARNESS_ASK_ALL=1 AND Z_HARNESS_NO_ASK=halt
+
+    def test_ask_all_and_no_ask_conflict_exits_5(self):
+        """Z_HARNESS_ASK_ALL=1 + Z_HARNESS_NO_ASK=halt must exit with code 5."""
+        r = self._run_resolve(
+            self.KNOWN_QID,
+            extra_env={
+                "Z_HARNESS_ASK_ALL": "1",
+                "Z_HARNESS_NO_ASK": "halt",
+            },
+        )
+        self.assertEqual(r.returncode, 5, f"expected exit 5; stderr={r.stderr!r}")
+
+    def test_ask_all_and_no_ask_conflict_stdout_is_json(self):
+        """Conflict exit still produces a JSON envelope on stdout."""
+        r = self._run_resolve(
+            self.KNOWN_QID,
+            extra_env={
+                "Z_HARNESS_ASK_ALL": "1",
+                "Z_HARNESS_NO_ASK": "halt",
+            },
+        )
+        self.assertEqual(r.returncode, 5)
+        # Must be parseable JSON
+        parsed = json.loads(r.stdout)
+        self.assertIsInstance(parsed, dict)
+        self.assertIn("error", parsed)
+        self.assertEqual(parsed["error"], "config_conflict")
+
+    def test_ask_all_and_no_ask_conflict_stderr_mentions_conflict(self):
+        """Conflict must emit a diagnostic to stderr."""
+        r = self._run_resolve(
+            self.KNOWN_QID,
+            extra_env={
+                "Z_HARNESS_ASK_ALL": "1",
+                "Z_HARNESS_NO_ASK": "halt",
+            },
+        )
+        self.assertEqual(r.returncode, 5)
+        combined = r.stderr + r.stdout
+        self.assertIn("config_conflict", combined)
+
+    def test_ask_all_without_no_ask_still_works(self):
+        """Z_HARNESS_ASK_ALL=1 alone (no NO_ASK) must not exit 5."""
+        r = self._run_resolve(
+            self.KNOWN_QID,
+            extra_env={"Z_HARNESS_ASK_ALL": "1"},
+        )
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        envelope = json.loads(r.stdout)
+        self.assertEqual(envelope["result"], "ask")
+        self.assertEqual(envelope["source"], "override")
+
+    def test_no_ask_halt_without_ask_all_does_not_conflict(self):
+        """Z_HARNESS_NO_ASK=halt alone (no ASK_ALL) must not exit 5."""
+        r = self._run_resolve(
+            "workflow.implement_all_proceed",
+            extra_env={"Z_HARNESS_NO_ASK": "halt"},
+        )
+        # Should be 0, not 5
+        self.assertNotEqual(r.returncode, 5, f"unexpected conflict exit; stderr={r.stderr!r}")
+        self.assertEqual(r.returncode, 0)
+
+
+# ---------------------------------------------------------------------------
+# Tests for T007: list-question-ids returns exactly 5 registered question IDs
+# ---------------------------------------------------------------------------
+
+class TestQuestionIds(unittest.TestCase):
+    """
+    Verify that QUESTION_IDS contains the 5 expected registered question IDs:
+    2 original (workflow.audit_to_amend, workflow.slug_confirm) and
+    3 new from T007 (workflow.implement_all_proceed, workflow.review_all_proceed,
+    workflow.plan_decisions_approval).
+
+    The list-question-ids subcommand must return a sorted JSON array of exactly
+    these 5 IDs. If a new ID is added without updating this test, the length
+    assertion will catch it; if an expected ID is missing or renamed, the
+    content assertion will catch it.
+    """
+
+    EXPECTED_IDS = [
+        "workflow.audit_to_amend",
+        "workflow.implement_all_proceed",
+        "workflow.plan_decisions_approval",
+        "workflow.review_all_proceed",
+        "workflow.slug_confirm",
+    ]
+
+    def setUp(self):
+        self.xdg = make_xdg()
+        self.cwd = make_isolation_dir()
+
+    def tearDown(self):
+        shutil.rmtree(self.xdg, ignore_errors=True)
+        shutil.rmtree(self.cwd, ignore_errors=True)
+
+    def test_list_question_ids_returns_five_ids(self):
+        """list-question-ids must return exactly 5 IDs (2 original + 3 from T007)."""
+        r = run(["list-question-ids"], env={"XDG_CONFIG_HOME": self.xdg}, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0, f"list-question-ids exited {r.returncode}; stderr={r.stderr!r}")
+        ids = json.loads(r.stdout)
+        self.assertEqual(len(ids), 5, f"Expected 5 question IDs, got {len(ids)}: {ids}")
+
+    def test_list_question_ids_contains_all_expected_ids(self):
+        """list-question-ids must contain all 5 expected question IDs."""
+        r = run(["list-question-ids"], env={"XDG_CONFIG_HOME": self.xdg}, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0)
+        ids = json.loads(r.stdout)
+        self.assertEqual(sorted(ids), self.EXPECTED_IDS,
+                         f"Mismatch: got {sorted(ids)!r}, expected {self.EXPECTED_IDS!r}")
+
+    def test_list_question_ids_output_is_sorted_json_array(self):
+        """list-question-ids must return a sorted JSON array (not object or other type)."""
+        r = run(["list-question-ids"], env={"XDG_CONFIG_HOME": self.xdg}, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0)
+        ids = json.loads(r.stdout)
+        self.assertIsInstance(ids, list, f"Expected list, got {type(ids)}")
+        self.assertEqual(ids, sorted(ids), f"List is not sorted: {ids!r}")
+
+    def test_list_question_ids_includes_three_new_t007_ids(self):
+        """The 3 new T007 question IDs must be present; failing means T007 registration is incomplete."""
+        r = run(["list-question-ids"], env={"XDG_CONFIG_HOME": self.xdg}, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0)
+        ids = set(json.loads(r.stdout))
+        new_ids = {
+            "workflow.implement_all_proceed",
+            "workflow.review_all_proceed",
+            "workflow.plan_decisions_approval",
+        }
+        missing = new_ids - ids
+        self.assertEqual(missing, set(),
+                         f"T007 question IDs missing from registry: {missing!r}")
+
+
+# ---------------------------------------------------------------------------
+# Tests for T006: check-no-ask subcommand — 5 paths
+# ---------------------------------------------------------------------------
+
+class TestCheckNoAsk(unittest.TestCase):
+    """
+    Covers all 5 behavioral paths of `check-no-ask --question-id <id>`:
+
+    Path 1: Z_HARNESS_NO_ASK != halt → proceed, rule_id=no_overnight_active
+    Path 2: NO_ASK=halt, qid registered, in allowlist → proceed (overnight_decision)
+    Path 3: NO_ASK=halt, qid registered, NOT in allowlist → halt
+    Path 4: NO_ASK=halt, qid NOT registered → halt + unknown_ask_blocked
+    Path 5: Bad invocation (missing --question-id, wrong flag) → exit 2
+    """
+
+    # A qid that IS in the default allowlist (OVERNIGHT_AUTODECIDE_QIDS_DEFAULT)
+    QID_IN_ALLOWLIST = "workflow.slug_confirm"
+    # A qid that IS registered but NOT in the default allowlist
+    QID_NOT_IN_ALLOWLIST = "workflow.implement_all_proceed"
+    # A qid that is NOT registered at all
+    QID_UNREGISTERED = "workflow.does_not_exist"
+
+    def setUp(self):
+        self.xdg = make_xdg()
+        self.cwd = make_isolation_dir()
+
+    def tearDown(self):
+        shutil.rmtree(self.xdg, ignore_errors=True)
+        shutil.rmtree(self.cwd, ignore_errors=True)
+
+    def _run_check(self, question_id, extra_env=None):
+        env = {"XDG_CONFIG_HOME": self.xdg, "Z_HARNESS_PROJECT_ROOT": self.cwd}
+        if extra_env:
+            env.update(extra_env)
+        return run(["check-no-ask", "--question-id", question_id], env=env, cwd=self.cwd)
+
+    # -------------------------------------------------------------------------
+    # Path 1: Z_HARNESS_NO_ASK not set (or != halt) → proceed
+    # -------------------------------------------------------------------------
+
+    def test_path1_no_ask_unset_returns_proceed(self):
+        """Without Z_HARNESS_NO_ASK, any question_id returns proceed."""
+        r = self._run_check(self.QID_IN_ALLOWLIST)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        result = json.loads(r.stdout)
+        self.assertEqual(result["result"], "proceed")
+
+    def test_path1_no_ask_unset_rule_id_is_no_overnight_active(self):
+        """proceed result must carry rule_id=no_overnight_active."""
+        r = self._run_check(self.QID_IN_ALLOWLIST)
+        self.assertEqual(r.returncode, 0)
+        result = json.loads(r.stdout)
+        self.assertEqual(result["rule_id"], "no_overnight_active")
+
+    def test_path1_no_ask_wrong_value_returns_proceed(self):
+        """Z_HARNESS_NO_ASK=something-else (not halt) → proceed, no_overnight_active."""
+        r = self._run_check(
+            self.QID_IN_ALLOWLIST,
+            extra_env={"Z_HARNESS_NO_ASK": "pause"},
+        )
+        self.assertEqual(r.returncode, 0)
+        result = json.loads(r.stdout)
+        self.assertEqual(result["result"], "proceed")
+        self.assertEqual(result["rule_id"], "no_overnight_active")
+
+    def test_path1_unregistered_qid_no_ask_unset_still_proceeds(self):
+        """Even for unregistered qids, if NO_ASK != halt → proceed (not blocked)."""
+        r = self._run_check(self.QID_UNREGISTERED)
+        self.assertEqual(r.returncode, 0)
+        result = json.loads(r.stdout)
+        self.assertEqual(result["result"], "proceed")
+        self.assertEqual(result["rule_id"], "no_overnight_active")
+
+    def test_path1_output_contains_question_id(self):
+        """Output JSON must contain the question_id field."""
+        r = self._run_check(self.QID_IN_ALLOWLIST)
+        self.assertEqual(r.returncode, 0)
+        result = json.loads(r.stdout)
+        self.assertIn("question_id", result)
+        self.assertEqual(result["question_id"], self.QID_IN_ALLOWLIST)
+
+    # -------------------------------------------------------------------------
+    # Path 2: NO_ASK=halt, qid registered, in allowlist → proceed
+    # -------------------------------------------------------------------------
+
+    def test_path2_allowlist_hit_returns_proceed(self):
+        """workflow.slug_confirm is in the default allowlist → proceed."""
+        r = self._run_check(
+            self.QID_IN_ALLOWLIST,
+            extra_env={"Z_HARNESS_NO_ASK": "halt"},
+        )
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        result = json.loads(r.stdout)
+        self.assertEqual(result["result"], "proceed")
+
+    def test_path2_allowlist_hit_rule_id_not_no_ask_halt(self):
+        """Allowlist-resolved proceed must not carry rule_id=no_ask_halt."""
+        r = self._run_check(
+            self.QID_IN_ALLOWLIST,
+            extra_env={"Z_HARNESS_NO_ASK": "halt"},
+        )
+        self.assertEqual(r.returncode, 0)
+        result = json.loads(r.stdout)
+        self.assertNotEqual(result.get("rule_id"), "no_ask_halt",
+                            "rule_id should not be no_ask_halt when allowlist matched")
+
+    def test_path2_env_allowlist_override_proceeds(self):
+        """A qid added to Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE env is resolved as proceed."""
+        env_allowlist = json.dumps({"workflow.implement_all_proceed": "auto_resume"})
+        r = self._run_check(
+            self.QID_NOT_IN_ALLOWLIST,
+            extra_env={
+                "Z_HARNESS_NO_ASK": "halt",
+                "Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE": env_allowlist,
+            },
+        )
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        result = json.loads(r.stdout)
+        self.assertEqual(result["result"], "proceed")
+
+    def test_path2_output_is_valid_json_with_required_keys(self):
+        """check-no-ask output must be valid JSON with result, question_id, rule_id."""
+        r = self._run_check(
+            self.QID_IN_ALLOWLIST,
+            extra_env={"Z_HARNESS_NO_ASK": "halt"},
+        )
+        self.assertEqual(r.returncode, 0)
+        result = json.loads(r.stdout)
+        for key in ("result", "question_id", "rule_id"):
+            self.assertIn(key, result, f"missing key {key!r}")
+
+    # -------------------------------------------------------------------------
+    # Path 3: NO_ASK=halt, qid registered, NOT in allowlist → halt
+    # -------------------------------------------------------------------------
+
+    def test_path3_not_in_allowlist_returns_halt(self):
+        """workflow.implement_all_proceed is not in the default allowlist → halt."""
+        r = self._run_check(
+            self.QID_NOT_IN_ALLOWLIST,
+            extra_env={"Z_HARNESS_NO_ASK": "halt"},
+        )
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        result = json.loads(r.stdout)
+        self.assertEqual(result["result"], "halt")
+
+    def test_path3_halt_rule_id_is_no_ask_halt(self):
+        """Halt result from an unallisted registered qid must carry rule_id=no_ask_halt."""
+        r = self._run_check(
+            self.QID_NOT_IN_ALLOWLIST,
+            extra_env={"Z_HARNESS_NO_ASK": "halt"},
+        )
+        self.assertEqual(r.returncode, 0)
+        result = json.loads(r.stdout)
+        self.assertEqual(result["rule_id"], "no_ask_halt")
+
+    def test_path3_halt_exit_code_is_0(self):
+        """Halt is a valid outcome, not an error — exit code must be 0."""
+        r = self._run_check(
+            self.QID_NOT_IN_ALLOWLIST,
+            extra_env={"Z_HARNESS_NO_ASK": "halt"},
+        )
+        # Exit 0 means "I successfully determined the answer is halt"
+        self.assertEqual(r.returncode, 0)
+
+    def test_path3_removing_qid_from_env_allowlist_halts(self):
+        """
+        Providing an empty env allowlist falls back to defaults; a qid not in
+        defaults (implement_all_proceed) still halts.
+        """
+        r = self._run_check(
+            self.QID_NOT_IN_ALLOWLIST,
+            extra_env={
+                "Z_HARNESS_NO_ASK": "halt",
+                "Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE": "{}",
+            },
+        )
+        self.assertEqual(r.returncode, 0)
+        result = json.loads(r.stdout)
+        self.assertEqual(result["result"], "halt")
+
+    # -------------------------------------------------------------------------
+    # Path 4: NO_ASK=halt, qid NOT registered → halt + unknown_ask_blocked event
+    # -------------------------------------------------------------------------
+
+    def test_path4_unregistered_returns_halt(self):
+        """Unregistered question_id with NO_ASK=halt → halt, rule_id=unknown_ask_blocked."""
+        r = self._run_check(
+            self.QID_UNREGISTERED,
+            extra_env={"Z_HARNESS_NO_ASK": "halt"},
+        )
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        result = json.loads(r.stdout)
+        self.assertEqual(result["result"], "halt")
+
+    def test_path4_unregistered_rule_id_is_unknown_ask_blocked(self):
+        """rule_id must be unknown_ask_blocked for unregistered qids."""
+        r = self._run_check(
+            self.QID_UNREGISTERED,
+            extra_env={"Z_HARNESS_NO_ASK": "halt"},
+        )
+        self.assertEqual(r.returncode, 0)
+        result = json.loads(r.stdout)
+        self.assertEqual(result["rule_id"], "unknown_ask_blocked")
+
+    def test_path4_unregistered_exit_code_is_0(self):
+        """unknown_ask_blocked is a valid outcome — exit 0, not exit 2 or 3."""
+        r = self._run_check(
+            self.QID_UNREGISTERED,
+            extra_env={"Z_HARNESS_NO_ASK": "halt"},
+        )
+        self.assertEqual(r.returncode, 0)
+
+    def test_path4_registered_qid_with_no_ask_halt_does_not_emit_unknown_ask_blocked(self):
+        """
+        A REGISTERED qid must not produce rule_id=unknown_ask_blocked even when halting.
+        This ensures path 3 and path 4 are distinct.
+        """
+        r = self._run_check(
+            self.QID_NOT_IN_ALLOWLIST,
+            extra_env={"Z_HARNESS_NO_ASK": "halt"},
+        )
+        self.assertEqual(r.returncode, 0)
+        result = json.loads(r.stdout)
+        self.assertNotEqual(result.get("rule_id"), "unknown_ask_blocked",
+                            "Registered qid must not produce unknown_ask_blocked rule_id")
+
+    # -------------------------------------------------------------------------
+    # Path 5: Bad invocation → exit 2
+    # -------------------------------------------------------------------------
+
+    def test_path5_missing_question_id_flag_exits_2(self):
+        """check-no-ask with no --question-id must exit 2."""
+        env = {"XDG_CONFIG_HOME": self.xdg}
+        r = run(["check-no-ask"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 2)
+
+    def test_path5_unknown_flag_exits_2(self):
+        """check-no-ask with an unrecognized flag must exit 2."""
+        env = {"XDG_CONFIG_HOME": self.xdg}
+        r = run(["check-no-ask", "--unknown-flag", "value"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 2)
+
+    def test_path5_missing_flag_value_exits_2(self):
+        """check-no-ask --question-id with no value must exit 2."""
+        env = {"XDG_CONFIG_HOME": self.xdg}
+        r = run(["check-no-ask", "--question-id"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 2)
+
+    def test_path5_positional_arg_without_flag_exits_2(self):
+        """check-no-ask <qid> (positional, no flag) must exit 2."""
+        env = {"XDG_CONFIG_HOME": self.xdg}
+        r = run(["check-no-ask", "workflow.slug_confirm"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 2)
+
+    def test_path5_stderr_contains_usage(self):
+        """On bad invocation, stderr must contain usage hint."""
+        env = {"XDG_CONFIG_HOME": self.xdg}
+        r = run(["check-no-ask"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("--question-id", r.stderr)
+
+    def test_path5_stdout_is_empty_on_exit_2(self):
+        """On argparse error (exit 2), stdout must be empty — no partial JSON."""
+        env = {"XDG_CONFIG_HOME": self.xdg}
+        r = run(["check-no-ask"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 2)
+        self.assertEqual(r.stdout.strip(), "", f"unexpected stdout: {r.stdout!r}")
+
+
+# ---------------------------------------------------------------------------
+# Tests for T017: _parse_overnight_allowlist validator
+# ---------------------------------------------------------------------------
+
+class TestParseOvernightAllowlist(unittest.TestCase):
+    """
+    Unit tests for the _parse_overnight_allowlist() pure function.
+
+    Acceptance criteria (T017):
+    - Valid JSON object with qid→value pairs → validated dict returned.
+    - Malformed JSON → returns defaults + logs to stderr.
+    - Unregistered qid → entry dropped + routing_preference_malformed emitted.
+    - Invalid value for registered qid → entry dropped + event emitted.
+    - Empty / whitespace string → empty dict (no-op merge; only defaults returned).
+    - Non-JSON-object (e.g. list, string) → falls back to defaults.
+    - Non-string key or value → entry dropped + event emitted.
+    - Nested (non-string) value → entry dropped + event emitted.
+    """
+
+    # Known valid qid and its valid choices
+    VALID_QID = "workflow.slug_confirm"
+    VALID_QID_CHOICES = {"ask", "auto_accept", "recommend_derived"}
+
+    # A qid in the default allowlist
+    DEFAULT_ALLOWLIST_QID = "workflow.audit_to_amend"
+    DEFAULT_ALLOWLIST_VALUE = "amend"
+
+    # An unregistered qid
+    UNKNOWN_QID = "workflow.does_not_exist"
+
+    def _parse(self, s: str) -> dict:
+        """Thin wrapper so tests stay readable."""
+        return _parse_overnight_allowlist(s)
+
+    # -------------------------------------------------------------------------
+    # Empty / unset → defaults only
+    # -------------------------------------------------------------------------
+
+    def test_empty_string_returns_defaults(self):
+        """Empty string returns the default allowlist unchanged."""
+        result = self._parse("")
+        self.assertEqual(result, dict(OVERNIGHT_AUTODECIDE_QIDS_DEFAULT))
+
+    def test_whitespace_only_returns_defaults(self):
+        """Whitespace-only string is treated as empty; defaults returned."""
+        result = self._parse("   \t\n  ")
+        self.assertEqual(result, dict(OVERNIGHT_AUTODECIDE_QIDS_DEFAULT))
+
+    def test_defaults_are_present_in_empty_result(self):
+        """Even when the env string is empty, default qids are present in the result."""
+        result = self._parse("")
+        for qid, val in OVERNIGHT_AUTODECIDE_QIDS_DEFAULT.items():
+            self.assertIn(qid, result)
+            self.assertEqual(result[qid], val)
+
+    # -------------------------------------------------------------------------
+    # Valid JSON object → accepted entries merged over defaults
+    # -------------------------------------------------------------------------
+
+    def test_valid_json_object_accepted_entry_merged(self):
+        """A valid qid=value pair from JSON is accepted and present in result."""
+        payload = json.dumps({"workflow.slug_confirm": "auto_accept"})
+        result = self._parse(payload)
+        self.assertEqual(result["workflow.slug_confirm"], "auto_accept")
+
+    def test_valid_json_env_overrides_default(self):
+        """Env entry overrides a default-allowlist entry on key collision."""
+        # Default has slug_confirm = recommend_derived; override to auto_accept
+        payload = json.dumps({"workflow.slug_confirm": "auto_accept"})
+        result = self._parse(payload)
+        # Override must win
+        self.assertEqual(result["workflow.slug_confirm"], "auto_accept")
+        # Other default entries still present
+        self.assertEqual(result["workflow.audit_to_amend"], "amend")
+
+    def test_valid_json_multiple_entries_all_accepted(self):
+        """Multiple valid entries are all accepted and merged."""
+        payload = json.dumps({
+            "workflow.slug_confirm": "auto_accept",
+            "workflow.implement_all_proceed": "auto_resume",
+        })
+        result = self._parse(payload)
+        self.assertEqual(result["workflow.slug_confirm"], "auto_accept")
+        self.assertEqual(result["workflow.implement_all_proceed"], "auto_resume")
+
+    def test_valid_json_result_is_superset_of_defaults(self):
+        """When env adds new valid entries, result is a superset of defaults."""
+        payload = json.dumps({"workflow.implement_all_proceed": "auto_resume"})
+        result = self._parse(payload)
+        # All defaults still present
+        for qid, val in OVERNIGHT_AUTODECIDE_QIDS_DEFAULT.items():
+            self.assertIn(qid, result)
+            self.assertEqual(result[qid], val)
+        # New entry also present
+        self.assertIn("workflow.implement_all_proceed", result)
+
+    def test_all_valid_choices_for_slug_confirm_accepted(self):
+        """Every valid choice for workflow.slug_confirm is accepted."""
+        for choice in self.VALID_QID_CHOICES:
+            payload = json.dumps({self.VALID_QID: choice})
+            result = self._parse(payload)
+            self.assertEqual(result[self.VALID_QID], choice,
+                             f"Expected choice {choice!r} to be accepted")
+
+    # -------------------------------------------------------------------------
+    # Malformed JSON → falls back to defaults, logs to stderr
+    # -------------------------------------------------------------------------
+
+    def test_malformed_json_returns_defaults(self):
+        """Malformed JSON string falls back to default allowlist."""
+        result = self._parse("{not valid json}")
+        self.assertEqual(result, dict(OVERNIGHT_AUTODECIDE_QIDS_DEFAULT))
+
+    def test_malformed_json_logs_to_stderr(self, capsys=None):
+        """Malformed JSON emits a warning to stderr (routing_preference_malformed or parse error)."""
+        import io
+        from contextlib import redirect_stderr
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            _parse_overnight_allowlist("{not valid json}")
+        stderr_output = buf.getvalue()
+        self.assertIn("Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE", stderr_output,
+                      f"Expected location name in stderr; got: {stderr_output!r}")
+
+    def test_truncated_json_returns_defaults(self):
+        """Truncated/incomplete JSON falls back to defaults."""
+        result = self._parse('{"workflow.slug_confirm": "auto')
+        self.assertEqual(result, dict(OVERNIGHT_AUTODECIDE_QIDS_DEFAULT))
+
+    def test_empty_json_object_returns_defaults_only(self):
+        """Empty JSON object '{}' → only defaults, no new entries."""
+        result = self._parse("{}")
+        self.assertEqual(result, dict(OVERNIGHT_AUTODECIDE_QIDS_DEFAULT))
+
+    # -------------------------------------------------------------------------
+    # Non-object JSON → falls back to defaults
+    # -------------------------------------------------------------------------
+
+    def test_json_array_falls_back_to_defaults(self):
+        """JSON array (not object) causes fallback to defaults."""
+        result = self._parse('[{"key": "value"}]')
+        self.assertEqual(result, dict(OVERNIGHT_AUTODECIDE_QIDS_DEFAULT))
+
+    def test_json_string_falls_back_to_defaults(self):
+        """JSON string (not object) causes fallback to defaults."""
+        result = self._parse('"just a string"')
+        self.assertEqual(result, dict(OVERNIGHT_AUTODECIDE_QIDS_DEFAULT))
+
+    def test_json_number_falls_back_to_defaults(self):
+        """JSON number causes fallback to defaults."""
+        result = self._parse("42")
+        self.assertEqual(result, dict(OVERNIGHT_AUTODECIDE_QIDS_DEFAULT))
+
+    # -------------------------------------------------------------------------
+    # Unregistered qid → dropped, routing_preference_malformed event emitted
+    # -------------------------------------------------------------------------
+
+    def test_unregistered_qid_is_dropped(self):
+        """An unregistered qid is dropped from the result."""
+        payload = json.dumps({self.UNKNOWN_QID: "some_value"})
+        result = self._parse(payload)
+        self.assertNotIn(self.UNKNOWN_QID, result,
+                         "Unregistered qid must be dropped from result")
+
+    def test_unregistered_qid_does_not_pollute_defaults(self):
+        """Dropping an unregistered qid leaves default entries intact."""
+        payload = json.dumps({self.UNKNOWN_QID: "some_value"})
+        result = self._parse(payload)
+        for qid, val in OVERNIGHT_AUTODECIDE_QIDS_DEFAULT.items():
+            self.assertIn(qid, result)
+            self.assertEqual(result[qid], val)
+
+    def test_unregistered_qid_logs_routing_preference_malformed(self):
+        """Unregistered qid emits routing_preference_malformed to stderr."""
+        import io
+        from contextlib import redirect_stderr
+        payload = json.dumps({self.UNKNOWN_QID: "some_value"})
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            _parse_overnight_allowlist(payload)
+        stderr_output = buf.getvalue()
+        self.assertIn("routing_preference_malformed", stderr_output,
+                      f"Expected routing_preference_malformed in stderr; got: {stderr_output!r}")
+
+    def test_unregistered_qid_with_valid_entry_keeps_valid(self):
+        """If one entry is unregistered and another is valid, the valid entry is kept."""
+        payload = json.dumps({
+            self.UNKNOWN_QID: "some_value",
+            "workflow.slug_confirm": "auto_accept",
+        })
+        result = self._parse(payload)
+        self.assertNotIn(self.UNKNOWN_QID, result)
+        self.assertEqual(result["workflow.slug_confirm"], "auto_accept")
+
+    # -------------------------------------------------------------------------
+    # Invalid value for registered qid → dropped, routing_preference_malformed
+    # -------------------------------------------------------------------------
+
+    def test_invalid_value_for_registered_qid_is_dropped(self):
+        """Invalid value for a registered qid is dropped from the result."""
+        payload = json.dumps({"workflow.slug_confirm": "not_a_real_choice"})
+        result = self._parse(payload)
+        # The default value should be present (from OVERNIGHT_AUTODECIDE_QIDS_DEFAULT)
+        self.assertEqual(result["workflow.slug_confirm"], "recommend_derived",
+                         "Invalid value must be dropped; default allowlist value should remain")
+
+    def test_invalid_value_logs_routing_preference_malformed(self):
+        """Invalid value emits routing_preference_malformed to stderr."""
+        import io
+        from contextlib import redirect_stderr
+        payload = json.dumps({"workflow.slug_confirm": "not_a_real_choice"})
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            _parse_overnight_allowlist(payload)
+        stderr_output = buf.getvalue()
+        self.assertIn("routing_preference_malformed", stderr_output,
+                      f"Expected routing_preference_malformed in stderr; got: {stderr_output!r}")
+
+    def test_invalid_value_does_not_override_default(self):
+        """An invalid value does NOT overwrite the default entry for that qid."""
+        # slug_confirm default is recommend_derived; invalid override must be dropped
+        payload = json.dumps({"workflow.slug_confirm": "invalid_choice"})
+        result = self._parse(payload)
+        self.assertEqual(result["workflow.slug_confirm"], "recommend_derived")
+
+    def test_invalid_value_for_qid_not_in_defaults_leaves_qid_absent(self):
+        """Invalid value for a qid not in defaults means that qid stays absent."""
+        # implement_all_proceed is not in OVERNIGHT_AUTODECIDE_QIDS_DEFAULT
+        payload = json.dumps({"workflow.implement_all_proceed": "bad_choice"})
+        result = self._parse(payload)
+        self.assertNotIn("workflow.implement_all_proceed", result)
+
+    # -------------------------------------------------------------------------
+    # Non-string key or value → dropped, routing_preference_malformed
+    # -------------------------------------------------------------------------
+
+    def test_non_string_value_is_dropped(self):
+        """A non-string value (e.g. integer) is dropped with routing_preference_malformed."""
+        # JSON parsed from: {"workflow.slug_confirm": 42}
+        # json.dumps produces a valid JSON object with a non-string value
+        payload = '{"workflow.slug_confirm": 42}'
+        result = self._parse(payload)
+        # Invalid value type → default remains
+        self.assertEqual(result["workflow.slug_confirm"], "recommend_derived")
+
+    def test_non_string_value_logs_routing_preference_malformed(self):
+        """Non-string value emits routing_preference_malformed to stderr."""
+        import io
+        from contextlib import redirect_stderr
+        payload = '{"workflow.slug_confirm": 42}'
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            _parse_overnight_allowlist(payload)
+        stderr_output = buf.getvalue()
+        self.assertIn("routing_preference_malformed", stderr_output)
+
+    def test_nested_object_value_is_dropped(self):
+        """Nested dict value (non-string) is dropped with routing_preference_malformed."""
+        payload = '{"workflow.slug_confirm": {"nested": "value"}}'
+        result = self._parse(payload)
+        self.assertEqual(result["workflow.slug_confirm"], "recommend_derived")
+
+    def test_null_value_is_dropped(self):
+        """JSON null value (non-string) is dropped."""
+        payload = '{"workflow.slug_confirm": null}'
+        result = self._parse(payload)
+        self.assertEqual(result["workflow.slug_confirm"], "recommend_derived")
+
+    def test_boolean_value_is_dropped(self):
+        """JSON boolean value (non-string) is dropped."""
+        payload = '{"workflow.slug_confirm": true}'
+        result = self._parse(payload)
+        self.assertEqual(result["workflow.slug_confirm"], "recommend_derived")
+
+    # -------------------------------------------------------------------------
+    # Return type invariants
+    # -------------------------------------------------------------------------
+
+    def test_return_type_is_dict(self):
+        """Return type is always dict[str, str]."""
+        for s in ("", "{}", '{"workflow.slug_confirm": "auto_accept"}', "not json"):
+            result = self._parse(s)
+            self.assertIsInstance(result, dict, f"Expected dict for input {s!r}, got {type(result)}")
+
+    def test_all_values_in_result_are_strings(self):
+        """All values in the returned dict are strings."""
+        payload = json.dumps({
+            "workflow.slug_confirm": "auto_accept",
+            "workflow.implement_all_proceed": "auto_resume",
+        })
+        result = self._parse(payload)
+        for k, v in result.items():
+            self.assertIsInstance(v, str,
+                                  f"Value for {k!r} should be str, got {type(v)}: {v!r}")
+
+    def test_all_keys_in_result_are_registered_qids(self):
+        """All keys in the returned dict are registered question_ids."""
+        payload = json.dumps({
+            "workflow.slug_confirm": "auto_accept",
+            self.UNKNOWN_QID: "some_value",
+        })
+        result = self._parse(payload)
+        for k in result:
+            self.assertIn(k, QUESTION_IDS,
+                          f"Key {k!r} in result is not a registered question_id")
 
 
 # ---------------------------------------------------------------------------

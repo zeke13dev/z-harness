@@ -694,6 +694,29 @@ For the abandoned branch, the push notification just says "Brainstorm abandoned"
 
 ---
 
+## Telemetry reference
+
+| Event kind | When / meaning | Required fields |
+|---|---|---|
+| `brainstorm_run_start` | Brainstorm run begins | version fields, `topic` |
+| `brainstorm_run_end` | Brainstorm run completes | `status`, `chosen_framing`, `ideators_failed` |
+| `ideator_failed` | One of the three ideators failed | `vendor`, `reason` |
+| `total_ideator_failure` | All three ideators failed; hard halt | — |
+| `scope_probe_start` | Scope-probe Agent dispatched | `host_command`, `axis_taxonomy` |
+| `scope_probe_classified` | Scope-probe returned a classification | `host_command`, `mode`, `axis`, `confidence`, `chunks_count` |
+| `scope_probe_malformed` | Scope-probe return failed to parse | `host_command`, `raw_response_len` |
+| `scope_probe_low_confidence` | Scope-probe returned `CONFIDENCE: low`; downgraded to MEDIUM | — |
+| `scope_probe_refused` | Scope-probe returned `STATUS: refused`; MEDIUM fallback | `host_command` |
+| `scope_probe_bad_input` | Scope-probe returned `STATUS: bad_input`; MEDIUM fallback | `host_command` |
+| `scope_probe_archive_write_failed` | Archive write for SCOPE.json failed | — |
+| `scope_probe_skipped_fast_path` | Single-file target auto-classified LIGHT, scope-probe Agent skipped | `command` (`z-brainstorm`), `target`, `arg_len` |
+| `scope_fanout_dispatched` | HEAVY mode: N sub-flows launched | `host_command`, `axis`, `chunks_count` |
+| `scope_fanout_reconciled` | HEAVY mode: reconciler finished | `host_command`, `axis`, `chunks_total`, `chunks_succeeded`, `reconciler_ok` |
+| `heavy_pair_selected` | HEAVY mode: user chose a (chunk, framing) pair | `chunk_id`, `framing` |
+| `doc_drift` | doc-fetcher returned a DRIFT WARNING for a concept | `concept`, `claim`, `reality`, `file` |
+
+---
+
 ## Operating principles
 
 - **Cheap and parallel.** Three ideators in one message, no per-ideator round-trips.

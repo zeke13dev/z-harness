@@ -54,6 +54,15 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
         recommendation via their native channel when result is "prefill" or "ask". -->
    - `prefill`: present the AskUserQuestion normally, pre-select the derived slug as the recommended option (label suffix: ` (Recommended — your preference)`).
    - `ask`: if the auto-derived slug is non-obvious, confirm with the user via `AskUserQuestion` normally. If `$SOURCE == "conflict"`, add to the question header: `(Note: config says <X>, memory says <Y> — your answer below will be offered as a conflict-resolution write target.)` After the user picks an answer that differs from both stored values, surface a one-shot follow-up: "Record your answer as the new preference? (config / memory:very_strong / memory:strong / no)".
+   - `halt`: emit `plan_halt` event and exit cleanly — do NOT invoke `AskUserQuestion`:
+     ```bash
+     if [[ "$RESULT" == "halt" ]]; then
+       bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "${RUN:-z-plan}" plan_halt \
+         "$(printf '{"reason":"no_ask_blocked","question_id":"workflow.slug_confirm","rule_id":"no_ask_halt"}')"
+       echo "halt: no_ask_blocked on workflow.slug_confirm" >&2
+       exit 0
+     fi
+     ```
 
    **Invariant:** the collision check above is a hard safety prerequisite that runs unconditionally regardless of resolver outcome. The resolver only governs the soft non-obvious-slug confirmation gate.
 2. **Export** `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")` for all subsequent shell calls and subagents — this is what namespaces every output path.
@@ -123,13 +132,14 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
 
     If only one signal fired, the question naturally collapses to a single per-source bullet and two options (per-source remedy + proceed + abandon).
 
-    On user choice, emit `plan_route_decision` with `from_command: "/z-plan"`, `to_command: <the computed remedy from the route-decision.md step above>`, `route_class: "contextual"`, `reason_codes` (built above), `signals.docs_stale_or_drifted: <docs_stale>`, `signals.research_stale: <research_stale>`, `signals.map_stale: <map_stale>`, `confidence: "high"`, `classifier_used: false`, `artifact_path`, `route_chain`, and `user_choice: <the user's selection>`. Then:
-    - **Re-run remedy**: halt. Do not auto-invoke the remedy command.
-    - **Proceed with all stale**:
+    On user choice:
+
+    - **Re-run remedy**: Update `route-decision.md` with the user's chosen remedy. Emit `plan_route_decision` with `from_command: "/z-plan"`, `to_command: <the computed remedy from the route-decision.md step above>`, `route_class: "contextual"`, `reason_codes` (built above), `signals.docs_stale_or_drifted: <docs_stale>`, `signals.research_stale: <research_stale>`, `signals.map_stale: <map_stale>`, `confidence: "high"`, `classifier_used: false`, `artifact_path`, `route_chain`, and `user_choice: <the user's selection>`. Halt. Do not auto-invoke the remedy command.
+    - **Proceed with all stale**: Update `route-decision.md` to record "no remedy command selected — user accepted stale inputs." Emit `plan_route_decision` with `from_command: "/z-plan"`, **`to_command: null`** (omit the field or set it to `null` explicitly — `/z-stats` must be able to distinguish this from a real remedy), `route_class: "contextual"`, `reason_codes` (built above), `signals.docs_stale_or_drifted: <docs_stale>`, `signals.research_stale: <research_stale>`, `signals.map_stale: <map_stale>`, `confidence: "high"`, `classifier_used: false`, `artifact_path`, `route_chain`, and `user_choice: "proceed_with_all_stale"`. Then:
       - If `docs_stale=true`: emit a `doc_drift_acknowledged` event. Phase 1 still uses INDEX.json but the orchestrator should weight `relevant_concepts` hints less and verify against current code more aggressively.
       - If `research_stale=true OR map_stale=true` (regardless of `docs_stale`): emit a `precontext_freshness_acknowledged` event with `sources: ["research"]` / `["map"]` / `["research","map"]` as applicable.
       - Continue to Phase 1.
-    - **Abandon**: halt.
+    - **Abandon**: Emit `plan_route_decision` with `from_command: "/z-plan"`, `to_command: null`, `route_class: "contextual"`, `reason_codes` (built above), `signals.docs_stale_or_drifted: <docs_stale>`, `signals.research_stale: <research_stale>`, `signals.map_stale: <map_stale>`, `confidence: "high"`, `classifier_used: false`, `artifact_path`, `route_chain`, and `user_choice: "abandon"`. Halt.
 
     If **no** signal fired, skip the gate entirely — no AskUserQuestion, no route-decision.md write.
 
@@ -326,6 +336,39 @@ Show `decisions.md` to the user. They are the gate:
 
 **Hard cap: 5 consult-flagged decisions per bundle.** If more, ask the user to pick the top 5 or split the plan into multiple `/z-plan` runs.
 
+Before presenting the decisions doc for approval, run the `check-no-ask` resolver for `workflow.plan_decisions_approval`:
+
+```bash
+RESOLVED_DECISIONS="$(python3 scripts/config.py resolve-question workflow.plan_decisions_approval)"
+RESOLVE_DECISIONS_EXIT=$?
+
+if [[ $RESOLVE_DECISIONS_EXIT -ne 0 ]]; then
+  # Exit codes: 2=bad invocation, 3=unknown question_id, 4=I/O error.
+  # In all error cases, fall through to ask the user normally — never silently skip.
+  echo "resolve-question failed (exit $RESOLVE_DECISIONS_EXIT); falling back to ask" >&2
+  RESULT_DECISIONS="ask"; SOURCE_DECISIONS="error"
+else
+  RESULT_DECISIONS="$(echo "$RESOLVED_DECISIONS" | jq -r .result)"
+  SOURCE_DECISIONS="$(echo "$RESOLVED_DECISIONS" | jq -r .source)"
+fi
+```
+
+Branch on `$RESULT_DECISIONS`:
+- `halt`: emit `plan_halt` event and exit cleanly — do NOT invoke `AskUserQuestion`. A subsequent `/z-plan` resume re-enters at Phase 2.5:
+  ```bash
+  if [[ "$RESULT_DECISIONS" == "halt" ]]; then
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "${RUN:-z-plan}" plan_halt \
+      "$(printf '{"reason":"no_ask_blocked","question_id":"workflow.plan_decisions_approval","rule_id":"no_ask_halt"}')"
+    echo "halt: no_ask_blocked on workflow.plan_decisions_approval" >&2
+    exit 0
+  fi
+  ```
+- `skip`: accept the decisions doc silently — no AskUserQuestion. Emit `askuser_skipped` event with `{question_id: "workflow.plan_decisions_approval", source: "$SOURCE_DECISIONS"}` and proceed to Phase 3.
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the decisions doc
+     approval question via their native channel when result is "prefill" or "ask".
+     Silent omission is forbidden. -->
+- `prefill` or `ask`: proceed normally — block here until the user has approved the decisions doc.
+
 Block here until the user has approved the decisions doc.
 ```bash
 [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event approval)" = yes ] && <PushNotification: decisions ready for approval>
@@ -468,6 +511,29 @@ The `/z-test` step is optional but high-value when the plan touches money, order
 
 ---
 
+## Telemetry reference
+
+Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema see `z-implement-all.md`.
+
+| Event kind | When / meaning | Required fields |
+|---|---|---|
+| `run_start` | Planning run begins | version fields, `task` |
+| `plan_route_decision` | Route check fired and a route was chosen | `from_command`, `to_command`, `route_class`, `reason_codes`, `signals`, `confidence`, `classifier_used`, `artifact_path`, `route_chain`, `user_choice` |
+| `plan_halt` | Run halted (e.g. `no_ask_blocked` on slug gate) | `reason`, `question_id`, `rule_id` |
+| `askuser_skipped` | AskUserQuestion suppressed by resolver | `question_id`, `source` |
+| `legacy_map_artifact_detected` | RESEARCH.md had no `artifact_kind` field and was treated as MAP.md terrain | — |
+| `precontext_research_incomplete` | RESEARCH.md `status: incomplete`; run halted | — |
+| `precontext_source_deleted` | A file cited in precontext artifact no longer exists | `path`, `artifact` |
+| `precontext_freshness_check_failed` | Citation-regex parse failed for a precontext artifact | `artifact`, `reason` |
+| `precontext_freshness_acknowledged` | User accepted stale precontext after consolidated 9c gate | `sources` (list of `"research"` / `"map"` / `"docs"`), `user_choice` |
+| `doc_drift_acknowledged` | User accepted stale docs in the consolidated 9c gate | `stale_pct`, `stale_concepts` |
+| `doc_drift` | doc-fetcher returned a DRIFT WARNING for a concept | `concept`, `claim`, `reality`, `file` |
+| `task_classified` | complexity-classifier stamped a task block | `task`, `tier`, `reason` |
+| `telemetry_anomaly` | `log-phase.sh` detected impossible `wall_ms` | `phase`, `reason` (`wall_ms_overflow` / `wall_ms_negative`), `t_start`, `t_end`, `computed_wall_ms` |
+| `next_step_choice` | User picked a next step at Phase 9 | `choice` |
+
+---
+
 ## Operating principles
 
 - **Premise first.** Challenge the request before planning around it.
@@ -484,7 +550,7 @@ The `/z-test` step is optional but high-value when the plan touches money, order
 | Feature | Used | Gates |
 |---------|------|-------|
 | `subagent` | yes | Phase 1a doc-fetcher Agent(); Phase 1b Explore Agent(); Phase 3 consultant-primary/secondary Agent() calls; Phase 7 consultant-primary/secondary Agent() calls; Phase 8 complexity-classifier Agent() calls |
-| `ask_user` | yes | Setup step 0 (empty arguments); Setup step 1 (slug collision + resolver prefill/ask branches); Setup step 9c (consolidated freshness gate — one AskUserQuestion covering docs / research / map staleness); Phase 0 (premise concern); Phase 5 (design decision + shortcut approval); Phase 8 (task-count overflow); Phase 9 (next-step recommendation choice) |
+| `ask_user` | yes | Setup step 0 (empty arguments); Setup step 1 (slug collision + resolver prefill/ask branches); Setup step 9c (consolidated freshness gate — one AskUserQuestion covering docs / research / map staleness); Phase 0 (premise concern); Phase 2.5 (decisions doc approval — guarded by `workflow.plan_decisions_approval` resolver); Phase 5 (design decision + shortcut approval); Phase 8 (task-count overflow); Phase 9 (next-step recommendation choice) |
 | `skill_invoke` | no | — |
 
 Driver support requirements: see frontmatter `driver_features_required`.

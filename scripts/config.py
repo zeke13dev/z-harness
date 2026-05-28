@@ -10,6 +10,7 @@ Subcommands:
   should-notify --event <kind>            Print yes/no notification gate.
   list-question-ids                       Print sorted JSON array of registered question IDs.
   resolve-question <question_id>          Return JSON resolver envelope for a question ID.
+  check-no-ask --question-id <id>        Return JSON halt/proceed for overnight gate checks.
 
 Layer order (lowest → highest priority):
   1. Built-in defaults (DEFAULTS)
@@ -22,6 +23,7 @@ Exit codes:
   2  Schema / validation error
   3  Unknown dotted-key
   4  I/O error (ensure-defaults edge cases, permission denied)
+  5  Config conflict (Z_HARNESS_ASK_ALL=1 and Z_HARNESS_NO_ASK=halt both set)
 """
 
 import json
@@ -48,8 +50,11 @@ DEFAULTS: dict = {
         "always_apply": "always",   # always | never
     },
     "workflow": {
-        "audit_to_amend": "ask",    # ask | amend | stop
-        "slug_confirm":   "ask",    # ask | auto_accept | recommend_derived
+        "audit_to_amend": "ask",          # ask | amend | stop
+        "slug_confirm":   "ask",          # ask | auto_accept | recommend_derived
+        "implement_all_proceed": "ask",   # ask | auto_resume | halt
+        "review_all_proceed":    "ask",   # ask | proceed | halt
+        "plan_decisions_approval": "ask", # ask | approve | halt
     },
 }
 
@@ -58,6 +63,9 @@ VALIDATORS: dict = {
     "docs.always_apply": {"always", "never"},
     "workflow.audit_to_amend": {"ask", "amend", "stop"},
     "workflow.slug_confirm":   {"ask", "auto_accept", "recommend_derived"},
+    "workflow.implement_all_proceed":    {"ask", "auto_resume", "halt"},
+    "workflow.review_all_proceed":       {"ask", "proceed", "halt"},
+    "workflow.plan_decisions_approval":  {"ask", "approve", "halt"},
 }
 
 META_KEYS: set = {"schema_version"}
@@ -96,6 +104,37 @@ QUESTION_IDS: dict[str, dict] = {
         # unconditionally. The resolver only governs the soft non-obvious-slug confirmation.
         "safety_check_runs_unconditionally": True,
     },
+    "workflow.implement_all_proceed": {
+        "config_key": "workflow.implement_all_proceed",
+        "choices": {"ask", "auto_resume", "halt"},
+        "skill_default": "ask",
+        "callsites": [
+            "commands/z-implement-all.md (halt-resolution gate)",
+        ],
+    },
+    "workflow.review_all_proceed": {
+        "config_key": "workflow.review_all_proceed",
+        "choices": {"ask", "proceed", "halt"},
+        "skill_default": "proceed",
+        "callsites": [
+            "commands/z-review-all.md (Phase 3.7 proceed gate)",
+        ],
+    },
+    "workflow.plan_decisions_approval": {
+        "config_key": "workflow.plan_decisions_approval",
+        "choices": {"ask", "approve", "halt"},
+        "skill_default": "approve",
+        "callsites": [
+            "commands/z-plan.md (Phase 2.5 decisions-doc approval gate)",
+        ],
+    },
+}
+
+# Default overnight auto-decide allowlist: question_ids that /z-overnight
+# handles autonomously without halting, mapped to the chosen option-domain value.
+OVERNIGHT_AUTODECIDE_QIDS_DEFAULT: dict[str, str] = {
+    "workflow.slug_confirm": "recommend_derived",
+    "workflow.audit_to_amend": "amend",
 }
 
 # Map each question_id's option-domain value → resolver result-domain
@@ -106,6 +145,15 @@ RESULT_MAP: dict[tuple[str, str], str] = {
     ("workflow.slug_confirm",   "ask"):             "ask",
     ("workflow.slug_confirm",   "auto_accept"):     "skip",
     ("workflow.slug_confirm",   "recommend_derived"): "prefill",
+    ("workflow.implement_all_proceed", "ask"):       "ask",
+    ("workflow.implement_all_proceed", "auto_resume"): "skip",
+    ("workflow.implement_all_proceed", "halt"):      "halt",
+    ("workflow.review_all_proceed",    "ask"):       "ask",
+    ("workflow.review_all_proceed",    "proceed"):   "skip",
+    ("workflow.review_all_proceed",    "halt"):      "halt",
+    ("workflow.plan_decisions_approval", "ask"):     "ask",
+    ("workflow.plan_decisions_approval", "approve"): "skip",
+    ("workflow.plan_decisions_approval", "halt"):    "halt",
 }
 
 # ---------------------------------------------------------------------------
@@ -694,6 +742,230 @@ def _emit_routing_preference_malformed(location: str, index: int, reason: str) -
     )
 
 
+# ---------------------------------------------------------------------------
+# Overnight override helpers (halt-from-ask integration)
+# ---------------------------------------------------------------------------
+
+def _parse_overnight_allowlist(s: str) -> dict[str, str]:
+    """
+    Parse the Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE env var (a JSON object
+    string) into a {question_id: chosen_value} dict.
+
+    Returns the merged allowlist: OVERNIGHT_AUTODECIDE_QIDS_DEFAULT entries
+    overlaid by the parsed env entries (env wins on key collision).
+
+    Malformed entries (non-string keys/values, invalid question_id, or invalid
+    choice for the question_id) are dropped with a routing_preference_malformed
+    event and a stderr warning.  An unparseable JSON string causes the env
+    layer to be skipped entirely (defaults still apply).
+    """
+    merged: dict[str, str] = dict(OVERNIGHT_AUTODECIDE_QIDS_DEFAULT)
+
+    if not s.strip():
+        return merged
+
+    try:
+        env_data = json.loads(s)
+    except json.JSONDecodeError as exc:
+        print(
+            f"[config] Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE is not valid JSON: {exc}; "
+            "falling back to default allowlist",
+            file=sys.stderr,
+        )
+        return merged
+
+    if not isinstance(env_data, dict):
+        print(
+            "[config] Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE must be a JSON object; "
+            "falling back to default allowlist",
+            file=sys.stderr,
+        )
+        return merged
+
+    for idx, (qid, value) in enumerate(env_data.items()):
+        if not isinstance(qid, str) or not isinstance(value, str):
+            _emit_routing_preference_malformed(
+                "Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE", idx,
+                "key and value must both be strings"
+            )
+            continue
+        if qid not in QUESTION_IDS:
+            _emit_routing_preference_malformed(
+                "Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE", idx,
+                f"unknown question_id {qid!r}"
+            )
+            continue
+        if value not in QUESTION_IDS[qid]["choices"]:
+            _emit_routing_preference_malformed(
+                "Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE", idx,
+                f"invalid value {value!r} for question_id {qid!r}; "
+                f"allowed: {sorted(QUESTION_IDS[qid]['choices'])}"
+            )
+            continue
+        merged[qid] = value
+
+    return merged
+
+
+def _emit_config_conflict(conflict: str, payload: dict) -> None:
+    """
+    Emit a config_conflict event via log-event.sh.
+    Non-fatal: silently skips if Z_HARNESS_RUN is unset or log-event.sh unavailable.
+    Also prints a warning to stderr.
+    """
+    run_id = os.environ.get("Z_HARNESS_RUN", "")
+    print(
+        f"[config] config_conflict: {conflict}",
+        file=sys.stderr,
+    )
+    if not run_id:
+        return
+
+    script_dir = Path(__file__).parent
+    log_event = script_dir / "log-event.sh"
+    if not log_event.exists() or not shutil.which("bash"):
+        return
+
+    event_payload = json.dumps({"conflict": conflict, **payload})
+    try:
+        subprocess.run(
+            ["bash", str(log_event), run_id, "config_conflict", event_payload],
+            check=False,
+            capture_output=True,
+        )
+    except OSError:
+        pass  # non-fatal — observability is best-effort
+
+
+def _apply_overnight_overrides(
+    envelope: dict,
+    question_id: str,
+) -> dict:
+    """
+    Post-process the resolution envelope for overnight/halt-from-ask behavior.
+
+    This function is called from cmd_resolve_question AFTER building the envelope
+    and BEFORE emitting telemetry + printing to stdout.
+
+    Rules (in priority order):
+    1. If Z_HARNESS_NO_ASK != 'halt' → no-op, return envelope unchanged.
+    2. If Z_HARNESS_ASK_ALL=1 AND Z_HARNESS_NO_ASK=halt → conflict: emit
+       config_conflict event, print error JSON, exit 5.
+    3. If envelope['result'] == 'ask' and question_id in allowlist →
+       swap to overnight_decision envelope; emit overnight_decision event.
+    4. If envelope['result'] == 'ask' and question_id not in allowlist →
+       swap to halt envelope; emit askuser_halted event.
+    5. Else (result is skip/prefill — no ask needed) → no-op.
+
+    Returns the (possibly modified) envelope.  Never returns on cases 2+.
+    """
+    no_ask = os.environ.get("Z_HARNESS_NO_ASK", "")
+    if no_ask != "halt":
+        return envelope
+
+    # Case 2: conflicting config
+    ask_all = os.environ.get("Z_HARNESS_ASK_ALL", "")
+    if ask_all == "1":
+        conflict_envelope = {
+            "error": "config_conflict",
+            "conflict": "Z_HARNESS_ASK_ALL=1 and Z_HARNESS_NO_ASK=halt are mutually exclusive",
+            "result": "error",
+        }
+        _emit_config_conflict(
+            "Z_HARNESS_ASK_ALL=1 and Z_HARNESS_NO_ASK=halt",
+            {"question_id": question_id},
+        )
+        print(json.dumps(conflict_envelope))
+        sys.exit(5)
+
+    # Only override when the resolved result is 'ask'
+    if envelope.get("result") != "ask":
+        return envelope
+
+    skill_default: str = envelope.get("default", "")
+    qmeta = QUESTION_IDS.get(question_id, {})
+    choices: list[str] = sorted(qmeta.get("choices", []))
+
+    # Build would_have_asked (D4: only default + choices — no question/header text)
+    would_have_asked = {
+        "default": skill_default,
+        "choices": choices,
+    }
+
+    allowlist = _parse_overnight_allowlist(
+        os.environ.get("Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE", "")
+    )
+
+    if question_id in allowlist:
+        # Case 3: allowlist hit → overnight_decision
+        chosen_value = allowlist[question_id]
+        mapped_result = RESULT_MAP.get((question_id, chosen_value), "ask")
+        overnight_envelope = {
+            "result": mapped_result,
+            "default": skill_default,
+            "source": "overnight_allowlist",
+            "rule_id": f"{question_id}:{chosen_value}",
+            "strength": "policy",
+            "reason": f"overnight allowlist: {question_id} = {chosen_value}",
+            "sources": [{"kind": "allowlist", "value": chosen_value,
+                         "location": "OVERNIGHT_AUTODECIDE_QIDS or env"}],
+            "chosen": chosen_value,
+        }
+        _emit_overnight_event("overnight_decision", {
+            "question_id": question_id,
+            "chosen": chosen_value,
+            "source": "overnight_allowlist",
+            "strength": "policy",
+            "rule_id": f"{question_id}:{chosen_value}",
+            "sources": overnight_envelope["sources"],
+        })
+        return overnight_envelope
+    else:
+        # Case 4: not in allowlist → halt
+        halt_envelope = {
+            "result": "halt",
+            "default": skill_default,
+            "source": "no_ask_halt",
+            "rule_id": "no_ask_halt",
+            "strength": "policy",
+            "reason": "Z_HARNESS_NO_ASK=halt and question_id not in overnight allowlist",
+            "sources": [{"kind": "env", "value": "halt", "location": "Z_HARNESS_NO_ASK"}],
+            "halt_reason": "no_ask_blocked",
+            "question_id": question_id,
+            "would_have_asked": would_have_asked,
+        }
+        _emit_overnight_event("askuser_halted", {
+            "question_id": question_id,
+            "would_have_asked": would_have_asked,
+        })
+        return halt_envelope
+
+
+def _emit_overnight_event(kind: str, payload: dict) -> None:
+    """
+    Emit an overnight-related event (overnight_decision, askuser_halted) via log-event.sh.
+    Non-fatal: silently skips if Z_HARNESS_RUN is unset or log-event.sh unavailable.
+    """
+    run_id = os.environ.get("Z_HARNESS_RUN", "")
+    if not run_id:
+        return
+
+    script_dir = Path(__file__).parent
+    log_event = script_dir / "log-event.sh"
+    if not log_event.exists() or not shutil.which("bash"):
+        return
+
+    event_payload = json.dumps(payload)
+    try:
+        subprocess.run(
+            ["bash", str(log_event), run_id, kind, event_payload],
+            check=False,
+            capture_output=True,
+        )
+    except OSError:
+        pass  # non-fatal — observability is best-effort
+
+
 # Required fields for a routing-preference memory entry
 _ROUTING_PREF_REQUIRED_FIELDS = {"type", "question_id", "value", "scope", "strength"}
 
@@ -1070,7 +1342,12 @@ def cmd_resolve_question(args: list[str]) -> None:
     resolve-question <question_id> [--scope-slug <slug>] [--explain]
 
     Returns a JSON envelope to stdout. All diagnostics go to stderr.
-    Exit codes: 0=ok, 2=bad invocation, 3=unknown question_id, 4=I/O error.
+    Exit codes:
+      0  Success
+      2  Bad invocation
+      3  Unknown question_id (JSON with error key still emitted)
+      4  I/O error (JSON still emitted)
+      5  Config conflict (Z_HARNESS_ASK_ALL=1 and Z_HARNESS_NO_ASK=halt)
     """
     if not args:
         print("usage: config.py resolve-question <question_id> [--scope-slug <slug>] [--explain]",
@@ -1117,7 +1394,9 @@ def cmd_resolve_question(args: list[str]) -> None:
         print(json.dumps(envelope))
         sys.exit(3)
 
-    # Step 2: Honor Z_HARNESS_ASK_ALL=1 short-circuit
+    # Step 2: Honor Z_HARNESS_ASK_ALL=1 short-circuit (but check for conflict first).
+    # _apply_overnight_overrides handles the ASK_ALL + NO_ASK=halt conflict case
+    # (exits 5), so we build the ASK_ALL envelope and pass it through the override.
     if os.environ.get("Z_HARNESS_ASK_ALL", "") == "1":
         qmeta = QUESTION_IDS[question_id]
         skill_default: str = qmeta["skill_default"]
@@ -1135,17 +1414,118 @@ def cmd_resolve_question(args: list[str]) -> None:
                 f"[explain] question_id={question_id} → Z_HARNESS_ASK_ALL=1 override → result=ask",
                 file=sys.stderr,
             )
+        # Post-process through overnight overrides: detects ASK_ALL+NO_ASK conflict → exit 5
+        envelope = _apply_overnight_overrides(envelope, question_id)
         _emit_askuser_resolved(question_id, "ask", "override", "none")
         print(json.dumps(envelope))
         sys.exit(0)
 
-    # Steps 3-11: Build envelope via helper (single exit point for telemetry + print)
+    # Steps 3-11: Build envelope via helper, then apply overnight overrides before
+    # emitting telemetry and printing to stdout.
     envelope, emit_result, emit_source, emit_strength, exit_code = _build_resolve_envelope(
         question_id, explain=explain
     )
+    # Post-process: halt-from-ask / overnight allowlist (no-op when NO_ASK != halt)
+    envelope = _apply_overnight_overrides(envelope, question_id)
     _emit_askuser_resolved(question_id, emit_result, emit_source, emit_strength)
     print(json.dumps(envelope))
     sys.exit(exit_code)
+
+
+def _emit_unknown_ask_blocked(question_id: str, callsite_hint: str = "") -> None:
+    """
+    Emit an unknown_ask_blocked event via log-event.sh.
+    Non-fatal: silently skips if Z_HARNESS_RUN is unset or log-event.sh unavailable.
+    """
+    run_id = os.environ.get("Z_HARNESS_RUN", "")
+    if not run_id:
+        return
+
+    script_dir = Path(__file__).parent
+    log_event = script_dir / "log-event.sh"
+    if not log_event.exists() or not shutil.which("bash"):
+        return
+
+    payload = json.dumps({
+        "question_id": question_id,
+        "callsite_hint": callsite_hint,
+    })
+    try:
+        subprocess.run(
+            ["bash", str(log_event), run_id, "unknown_ask_blocked", payload],
+            check=False,
+            capture_output=True,
+        )
+    except OSError:
+        pass  # non-fatal — observability is best-effort
+
+
+def cmd_check_no_ask(args: list[str]) -> None:
+    """
+    check-no-ask --question-id <id>
+
+    Returns JSON: {"result": "halt"|"proceed", "question_id": "<id>", "rule_id": "<rule>"}
+
+    Paths:
+      1. Z_HARNESS_NO_ASK != halt  → proceed, rule_id=no_overnight_active
+      2. NO_ASK=halt, qid registered, in allowlist → proceed (resolved as overnight_decision)
+      3. NO_ASK=halt, qid registered, NOT in allowlist → halt
+      4. NO_ASK=halt, qid NOT registered → halt + unknown_ask_blocked event
+      5. Bad invocation (missing --question-id) → exit 2
+
+    Exit 0 on all valid invocations, exit 2 on argparse error.
+    """
+    question_id: str = ""
+    i = 0
+    while i < len(args):
+        if args[i] == "--question-id":
+            if i + 1 >= len(args):
+                print("usage: config.py check-no-ask --question-id <id>", file=sys.stderr)
+                sys.exit(2)
+            question_id = args[i + 1]
+            i += 2
+        elif args[i].startswith("--"):
+            print(f"[config] unknown flag {args[i]!r}", file=sys.stderr)
+            sys.exit(2)
+        else:
+            print(f"[config] unexpected argument {args[i]!r}", file=sys.stderr)
+            sys.exit(2)
+
+    if not question_id:
+        print("usage: config.py check-no-ask --question-id <id>", file=sys.stderr)
+        sys.exit(2)
+
+    # Path 1: overnight mode not active
+    no_ask = os.environ.get("Z_HARNESS_NO_ASK", "")
+    if no_ask != "halt":
+        result = {"result": "proceed", "question_id": question_id, "rule_id": "no_overnight_active"}
+        print(json.dumps(result))
+        sys.exit(0)
+
+    # Path 4: question_id not registered → fail-closed
+    if question_id not in QUESTION_IDS:
+        _emit_unknown_ask_blocked(question_id)
+        result = {"result": "halt", "question_id": question_id, "rule_id": "unknown_ask_blocked"}
+        print(json.dumps(result))
+        sys.exit(0)
+
+    # Paths 2 & 3: registered question_id — build envelope, apply overnight overrides,
+    # then map envelope result to halt/proceed.
+    envelope, _emit_result, _emit_source, _emit_strength, _exit_code = _build_resolve_envelope(
+        question_id, explain=False
+    )
+    # Post-process: applies allowlist / halt logic for NO_ASK=halt
+    envelope = _apply_overnight_overrides(envelope, question_id)
+
+    envelope_result = envelope.get("result", "ask")
+    if envelope_result == "halt":
+        result = {"result": "halt", "question_id": question_id, "rule_id": envelope.get("rule_id", "no_ask_halt")}
+    else:
+        rule_id = envelope.get("rule_id", "no_ask_halt")
+        result = {"result": "proceed", "question_id": question_id, "rule_id": rule_id}
+
+    print(json.dumps(result))
+    sys.exit(0)
 
 
 def _toml_write(path: Path, data: dict) -> None:
@@ -1336,7 +1716,7 @@ def main() -> None:
     if len(sys.argv) < 2:
         print(
             "usage: config.py <get|export-env|ensure-defaults|explain|should-notify"
-            "|list-question-ids|resolve-question|set> [args...]",
+            "|list-question-ids|resolve-question|check-no-ask|set> [args...]",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -1358,13 +1738,15 @@ def main() -> None:
         cmd_list_question_ids(args)
     elif subcommand == "resolve-question":
         cmd_resolve_question(args)
+    elif subcommand == "check-no-ask":
+        cmd_check_no_ask(args)
     elif subcommand == "set":
         cmd_set(args)
     else:
         print(
             f"[config] unknown subcommand {subcommand!r}; "
             "valid: get, export-env, ensure-defaults, explain, should-notify, "
-            "list-question-ids, resolve-question, set",
+            "list-question-ids, resolve-question, check-no-ask, set",
             file=sys.stderr,
         )
         sys.exit(2)
