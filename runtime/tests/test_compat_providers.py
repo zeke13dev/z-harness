@@ -568,3 +568,111 @@ class TestLegacyRolesFallback:
         assert len(legacy_events) == 1, (
             f"Expected 1 legacy_provider_roles_used event, got: {legacy_events}"
         )
+
+
+# ---------------------------------------------------------------------------
+# T100: providers.json v2 upgrade with aliases
+# ---------------------------------------------------------------------------
+
+class TestProvidersJsonV2Upgrade:
+    """Shipped .z-harness/providers.json must be version 2 with old + new entries and aliases."""
+
+    def test_providers_json_is_version_2(self):
+        """providers.json must declare version: 2 (not version 1)."""
+        with _PROVIDERS_PATH.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        assert data.get("version") == 2, (
+            f"Expected version=2, got version={data.get('version')!r}. "
+            "Run the T100 task to upgrade providers.json to v2."
+        )
+
+    def test_old_entries_still_present(self):
+        """Backward-compat: codex, gemini entries must still exist after v2 upgrade."""
+        with _PROVIDERS_PATH.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        providers = data.get("providers", {})
+        for old_name in ("codex", "gemini"):
+            assert old_name in providers, (
+                f"Old provider entry '{old_name}' must still be present in providers.json "
+                f"for backward compatibility."
+            )
+
+    def test_new_cli_entries_present(self):
+        """New -cli entries (codex-cli, gemini-cli, claude-cli) must exist in providers.json."""
+        with _PROVIDERS_PATH.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        providers = data.get("providers", {})
+        for new_name in ("codex-cli", "gemini-cli", "claude-cli"):
+            assert new_name in providers, (
+                f"New provider entry '{new_name}' must exist in providers.json "
+                f"after the v2 upgrade."
+            )
+
+    def test_aliases_map_populated(self):
+        """Top-level aliases must map old names to new -cli names."""
+        with _PROVIDERS_PATH.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        aliases = data.get("aliases", {})
+        expected = {"codex": "codex-cli", "gemini": "gemini-cli", "claude": "claude-cli"}
+        for old_name, new_name in expected.items():
+            assert aliases.get(old_name) == new_name, (
+                f"aliases['{old_name}'] must be '{new_name}', got {aliases.get(old_name)!r}"
+            )
+
+    def test_new_entries_match_old_command_and_args(self):
+        """-cli entries must have identical command/args_template/timeout_s as their old counterparts."""
+        with _PROVIDERS_PATH.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        providers = data.get("providers", {})
+        for old_name, new_name in (("codex", "codex-cli"), ("gemini", "gemini-cli")):
+            if old_name not in providers or new_name not in providers:
+                continue
+            old = providers[old_name]
+            new = providers[new_name]
+            assert old["command"] == new["command"], (
+                f"{new_name}.command must match {old_name}.command: "
+                f"{new['command']!r} != {old['command']!r}"
+            )
+            assert old["args_template"] == new["args_template"], (
+                f"{new_name}.args_template must match {old_name}.args_template"
+            )
+            assert old["timeout_s"] == new["timeout_s"], (
+                f"{new_name}.timeout_s must match {old_name}.timeout_s"
+            )
+
+    def test_resolve_consultant_primary_via_cli_entry(self, monkeypatch):
+        """Integration: resolve(consultant_primary) succeeds when role points at a -cli entry.
+
+        Simulates ensure-defaults writing runtime='codex-cli' into roles, then
+        resolve-provider resolving it to a valid provider record (no 'provider not found' error).
+        """
+        with _PROVIDERS_PATH.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+
+        # Simulate ensure-defaults having written codex-cli as the runtime for consultant_primary.
+        merged = {
+            "roles": {"consultant_primary": "codex-cli"},
+            "providers": data.get("providers", {}),
+            "aliases": data.get("aliases", {}),
+        }
+
+        # Make shutil.which always succeed so we don't need real CLIs installed.
+        import importlib
+        resolve_provider_spec = importlib.util.spec_from_file_location(
+            "resolve_provider_t100", _RESOLVE_PROVIDER_SCRIPT
+        )
+        resolve_provider_mod = importlib.util.module_from_spec(resolve_provider_spec)  # type: ignore[arg-type]
+        resolve_provider_spec.loader.exec_module(resolve_provider_mod)  # type: ignore[union-attr]
+        monkeypatch.setattr(resolve_provider_mod.shutil, "which", lambda cmd: f"/usr/bin/{cmd}")
+
+        result = resolve_provider_mod.resolve("consultant_primary", merged)
+
+        assert result["provider"] == "codex-cli", (
+            f"Expected provider='codex-cli' for consultant_primary, got {result['provider']!r}"
+        )
+        assert result["command"] == "codex", (
+            f"Expected command='codex' for codex-cli provider, got {result['command']!r}"
+        )
+        assert isinstance(result["args_template"], list), (
+            "Expected args_template to be a list in provider record"
+        )

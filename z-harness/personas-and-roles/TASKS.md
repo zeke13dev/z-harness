@@ -359,7 +359,7 @@ Parallelizable batches: {T001, T003} → {T002, T004, T005, T006} → {T007, T00
 
 Opened in response to final review findings. See archive/20260528T224612Z-review/findings.md.
 
-## T100 — providers.json v2 upgrade with aliases (fixes A1 blocker) [ ]
+## T100 — providers.json v2 upgrade with aliases (fixes A1 blocker) [x]
 
 **Files:** `.z-harness/providers.json` (or wherever the shipped providers config lives), `runtime/tests/test_compat_providers.py`
 
@@ -375,7 +375,7 @@ Opened in response to final review findings. See archive/20260528T224612Z-review
 
 ---
 
-## T101 — Dispatcher.run wires effective_model into build_env (fixes A2 blocker) [ ]
+## T101 — Dispatcher.run wires effective_model into build_env (fixes A2 blocker) [x]
 
 **Files:** `runtime/dispatch/dispatcher.py`, `runtime/tests/test_dispatch.py`
 
@@ -390,7 +390,7 @@ Opened in response to final review findings. See archive/20260528T224612Z-review
 
 ---
 
-## T102 — Persona body prepend integration (fixes A3 major) [ ]
+## T102 — Persona body prepend integration (fixes A3 major) [x]
 
 **Files:** `runtime/dispatch/dispatcher.py` (extend) OR new helper in `runtime/dispatch/persona_prompt.py`, `runtime/tests/test_dispatch.py`, `docs/human/PERSONAS.md` (update example)
 
@@ -405,7 +405,7 @@ Opened in response to final review findings. See archive/20260528T224612Z-review
 
 ---
 
-## T103 — persona_bound payload align with SPEC (fixes A4 major) [ ]
+## T103 — persona_bound payload align with SPEC (fixes A4 major) [x]
 
 **Files:** `runtime/dispatch/dispatcher.py`, `runtime/tests/test_dispatch.py`, SPEC.md §H
 

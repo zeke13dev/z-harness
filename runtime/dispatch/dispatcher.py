@@ -102,23 +102,26 @@ class Dispatcher:
         persona: str | None = None,
         model: str | None = None,
         runtime: str | None = None,
+        role: str | None = None,
     ) -> DispatchResult:
         """Execute a command via *driver* and return the final result.
 
         Sequence
         --------
         1. Compose ``final_args = provider_config["args_template"] + caller_args``.
-        2. Build subprocess env via :func:`~runtime.dispatch.env.build_env`.
-        3. Emit ``dispatch_start`` event.
-        4. Call ``driver.dispatch(command_id, final_args, env)`` → handle.
-        5. Iterate ``handle.events()`` under a wall-clock timeout guard (phase a),
+        2. Emit ``dispatch_start`` event.
+        3. Resolve persona/model/runtime overrides; emit override events.
+        4. Build subprocess env via :func:`~runtime.dispatch.env.build_env`,
+           passing the resolved effective_model so ``model_env_var`` is set.
+        5. Call ``driver.dispatch(command_id, final_args, env)`` → handle.
+        6. Iterate ``handle.events()`` under a wall-clock timeout guard (phase a),
            collecting yielded dicts into ``stdout_events``.
-        6. Call ``handle.wait()`` on a background thread, joining with the
+        7. Call ``handle.wait()`` on a background thread, joining with the
            remaining timeout budget (phase b).
-        7. Attach collected ``stdout_events`` to the returned ``DispatchResult``.
-        8. Emit ``dispatch_end`` event.
-        9. Call ``driver.teardown()``.
-        10. Return the ``DispatchResult``.
+        8. Attach collected ``stdout_events`` to the returned ``DispatchResult``.
+        9. Emit ``dispatch_end`` event.
+        10. Call ``driver.teardown()``.
+        11. Return the ``DispatchResult``.
 
         On timeout (either phase), ``dispatch_end`` is emitted with
         ``exit_code=-1, is_error=True`` and ``DispatchTimeoutError`` is
@@ -147,6 +150,10 @@ class Dispatcher:
             runtime: Optional runtime name override.  When set, wins over any
                 TOML binding; emits ``persona_override_used`` with
                 ``override_field="runtime"``.
+            role: Optional role identifier (e.g. ``"reviewer"``).  When
+                provided, included in the ``persona_bound`` event payload.
+                Not used for resolution — the caller resolves the role before
+                calling ``run()`` (see SPEC §D resolution-ownership note).
 
         Returns:
             :class:`~runtime.dispatch.result.DispatchResult` from
@@ -166,9 +173,6 @@ class Dispatcher:
         # 1. Compose final argv (B3).
         final_args: list[str] = list(provider_config["args_template"]) + list(caller_args)
 
-        # 2. Build env (SPEC Invariant #7: never logged).
-        env = build_env(provider_config)
-
         # 3. Emit dispatch_start (payload MUST NOT include env fields).
         t0 = time.monotonic()
         self._emit("dispatch_start", {
@@ -186,21 +190,21 @@ class Dispatcher:
         # Emit persona_override_used for each axis that was explicitly overridden.
         if persona is not None:
             self._emit("persona_override_used", {
-                "command_id": command_id,
+                "command": command_id,
                 "override_field": "persona",
                 "value": persona,
                 "original": _pc_persona,
             })
         if model is not None:
             self._emit("persona_override_used", {
-                "command_id": command_id,
+                "command": command_id,
                 "override_field": "model",
                 "value": model,
                 "original": _pc_model,
             })
         if runtime is not None:
             self._emit("persona_override_used", {
-                "command_id": command_id,
+                "command": command_id,
                 "override_field": "runtime",
                 "value": runtime,
                 "original": _pc_runtime,
@@ -211,6 +215,10 @@ class Dispatcher:
         _resolved_model = model if model is not None else _pc_model
         _resolved_runtime = runtime if runtime is not None else _pc_runtime
 
+        # 2. Build env AFTER resolving _resolved_model so model_env_var is set
+        #    correctly (SPEC Invariant #7: env dict is never logged).
+        env = build_env(provider_config, effective_model=_resolved_model)
+
         # Determine source per axis for telemetry.
         def _axis_source(override_val: str | None, pc_val: str | None) -> str:
             if override_val is not None:
@@ -219,8 +227,8 @@ class Dispatcher:
                 return "provider_config"
             return "none"
 
-        self._emit("persona_bound", {
-            "command_id": command_id,
+        _persona_bound_payload: dict = {
+            "command": command_id,
             "persona": _resolved_persona,
             "model": _resolved_model,
             "runtime": _resolved_runtime,
@@ -229,10 +237,13 @@ class Dispatcher:
                 "model": _axis_source(model, _pc_model),
                 "runtime": _axis_source(runtime, _pc_runtime),
             },
-        })
+        }
+        if role is not None:
+            _persona_bound_payload["role"] = role
+        self._emit("persona_bound", _persona_bound_payload)
 
         self._emit("model_resolved", {
-            "command_id": command_id,
+            "command": command_id,
             "model": _resolved_model,
             "runtime": _resolved_runtime,
             "source": _axis_source(model, _pc_model),

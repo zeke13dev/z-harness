@@ -1,0 +1,81 @@
+{
+  "version": 2,
+  "roles": {
+    "consultant_primary": "gemini-cli",
+    "consultant_secondary": "codex-cli",
+    "reviewer": "codex-cli"
+  },
+  "providers": {
+    "gemini": {
+      "kind": "cli",
+      "command": "gemini",
+      "args_template": ["-p", "-", "--approval-mode", "plan", "--output-format", "text"],
+      "stdin": true,
+      "timeout_s": 300,
+      "model_label": "gemini-2.5-pro",
+      "model_arg_template": null,
+      "model_env_var": null,
+      "default_model": null
+    },
+    "codex": {
+      "kind": "cli",
+      "command": "codex",
+      "args_template": ["exec", "-"],
+      "stdin": true,
+      "timeout_s": 300,
+      "model_label": "gpt-5-codex",
+      "model_arg_template": null,
+      "model_env_var": null,
+      "default_model": null
+    },
+    "claude": {
+      "kind": "cli",
+      "command": "claude",
+      "args_template": ["-p", "--output-format", "text"],
+      "stdin": true,
+      "timeout_s": 300,
+      "model_label": "claude-opus-4",
+      "model_arg_template": null,
+      "model_env_var": null,
+      "default_model": null
+    },
+    "gemini-cli": {
+      "kind": "cli",
+      "command": "gemini",
+      "args_template": ["-p", "-", "--approval-mode", "plan", "--output-format", "text"],
+      "stdin": true,
+      "timeout_s": 300,
+      "model_label": "gemini-2.5-pro",
+      "model_arg_template": null,
+      "model_env_var": null,
+      "default_model": null
+    },
+    "codex-cli": {
+      "kind": "cli",
+      "command": "codex",
+      "args_template": ["exec", "-"],
+      "stdin": true,
+      "timeout_s": 300,
+      "model_label": "gpt-5-codex",
+      "model_arg_template": null,
+      "model_env_var": null,
+      "default_model": null
+    },
+    "claude-cli": {
+      "kind": "cli",
+      "command": "claude",
+      "args_template": ["-p", "--output-format", "text"],
+      "stdin": true,
+      "timeout_s": 300,
+      "model_label": "claude-opus-4",
+      "model_arg_template": null,
+      "model_env_var": null,
+      "default_model": null
+    }
+  },
+  "aliases": {
+    "codex": "codex-cli",
+    "gemini": "gemini-cli",
+    "claude": "claude-cli"
+  }
+}

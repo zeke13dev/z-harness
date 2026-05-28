@@ -411,7 +411,7 @@ def test_run_persona_override_emits_event(monkeypatch, tmp_path):
     assert payload["override_field"] == "persona"
     assert payload["value"] == "custom-persona"
     assert payload["original"] == "original-persona"
-    assert payload["command_id"] == "z-ask"
+    assert payload["command"] == "z-ask"
 
 
 def test_run_model_override_emits_event(monkeypatch, tmp_path):
@@ -462,7 +462,7 @@ def test_run_persona_bound_payload_reflects_resolved_triple(monkeypatch, tmp_pat
     assert payload["model"] == "opus"
     # runtime was not overridden — falls back to provider_config.
     assert payload["runtime"] == "codex-cli"
-    assert payload["command_id"] == "z-implement"
+    assert payload["command"] == "z-implement"
     # Source per axis.
     assert payload["source"]["persona"] == "override"
     assert payload["source"]["model"] == "override"
@@ -488,6 +488,55 @@ def test_run_persona_bound_no_override_source_is_provider_config(monkeypatch, tm
     assert payload["source"]["runtime"] == "none"
 
 
+def test_run_role_kwarg_appears_in_persona_bound_payload(monkeypatch, tmp_path):
+    """Passing role='reviewer' includes role in the persona_bound payload.
+
+    Failure class: If the role kwarg is ignored or not forwarded into the
+    persona_bound event, payload['role'] will be absent — this test catches
+    that regression.
+    """
+    captured = _capture_events(monkeypatch)
+
+    driver = _MinimalDriver()
+    provider_config = {"args_template": [], "persona": "base-persona", "model": "haiku"}
+    driver.init(provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    dispatcher.run(driver, "z-review", [], provider_config, role="reviewer")
+
+    bound_events = [(k, p) for k, p in captured if k == "persona_bound"]
+    assert len(bound_events) == 1, f"Expected 1 persona_bound, got {bound_events}"
+    _, payload = bound_events[0]
+    assert "role" in payload, f"Expected 'role' key in persona_bound payload; got {payload}"
+    assert payload["role"] == "reviewer", (
+        f"Expected role='reviewer', got {payload['role']!r}"
+    )
+    assert payload["command"] == "z-review"
+
+
+def test_run_role_kwarg_absent_when_not_passed(monkeypatch, tmp_path):
+    """persona_bound payload omits 'role' key when role kwarg is not passed.
+
+    Failure class: If role is always included (e.g. as None), the SPEC
+    requirement that 'role is omitted when caller did not supply it' is violated.
+    """
+    captured = _capture_events(monkeypatch)
+
+    driver = _MinimalDriver()
+    provider_config = {"args_template": []}
+    driver.init(provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    dispatcher.run(driver, "z-ask", [], provider_config)  # no role kwarg
+
+    bound_events = [(k, p) for k, p in captured if k == "persona_bound"]
+    assert len(bound_events) == 1
+    _, payload = bound_events[0]
+    assert "role" not in payload, (
+        f"Expected 'role' to be absent from persona_bound when not passed; got {payload}"
+    )
+
+
 def test_run_all_three_overrides(monkeypatch, tmp_path):
     """Passing all three kwargs emits three persona_override_used events."""
     captured = _capture_events(monkeypatch)
@@ -505,6 +554,98 @@ def test_run_all_three_overrides(monkeypatch, tmp_path):
     override_events = [(k, p) for k, p in captured if k == "persona_override_used"]
     fields = {p["override_field"] for _, p in override_events}
     assert fields == {"persona", "model", "runtime"}
+
+
+# ---------------------------------------------------------------------------
+# T101: model_env_var wired through Dispatcher.run → build_env
+# ---------------------------------------------------------------------------
+
+
+class _EnvCapturingDriver(HostDriver):
+    """Driver that captures the env dict passed to dispatch()."""
+
+    def init(self, provider_config, context=None):
+        self._captured_env: dict | None = None
+
+    def dispatch(self, command_id, args, env):
+        self._captured_env = dict(env)
+        return DispatchHandle(
+            _events_fn=lambda: iter([]),
+            _wait_fn=lambda: DispatchResult(exit_code=0, is_error=False),
+        )
+
+
+def test_dispatcher_run_passes_resolved_model_to_build_env_via_model_env_var(
+    monkeypatch, tmp_path
+):
+    """Dispatcher.run wires effective_model into build_env when model_env_var is configured.
+
+    Failure class: If build_env is called without effective_model (or before
+    _resolved_model is computed), model_env_var will be absent from the
+    subprocess env — verifiable by inspecting the env dict captured inside
+    dispatch().
+    """
+
+    def mock_log_event(run_id, kind, payload, repo_root, slug=None):
+        pass  # suppress shell calls
+
+    monkeypatch.setattr("runtime.dispatch.dispatcher.log_event", mock_log_event)
+
+    provider_config = {
+        "args_template": [],
+        "model": "haiku",  # base model from provider_config
+        "model_env_var": "CLAUDE_MODEL",
+    }
+
+    driver = _EnvCapturingDriver()
+    driver.init(provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    # Pass a caller-side model override; this becomes _resolved_model="opus".
+    dispatcher.run(driver, "z-ask", [], provider_config, model="opus")
+
+    assert driver._captured_env is not None, "dispatch() was never called"
+    assert "CLAUDE_MODEL" in driver._captured_env, (
+        "model_env_var 'CLAUDE_MODEL' missing from subprocess env"
+    )
+    assert driver._captured_env["CLAUDE_MODEL"] == "opus", (
+        f"Expected CLAUDE_MODEL='opus' (resolved override), "
+        f"got {driver._captured_env['CLAUDE_MODEL']!r}"
+    )
+
+
+def test_dispatcher_run_model_env_var_uses_provider_config_model_when_no_override(
+    monkeypatch, tmp_path
+):
+    """Without a model override, model_env_var is set to provider_config['model'].
+
+    Failure class: If build_env receives effective_model=None (regression),
+    the env var will not be set from provider_config['model'], causing the
+    subprocess to receive no model.
+    """
+
+    def mock_log_event(run_id, kind, payload, repo_root, slug=None):
+        pass
+
+    monkeypatch.setattr("runtime.dispatch.dispatcher.log_event", mock_log_event)
+
+    provider_config = {
+        "args_template": [],
+        "model": "sonnet",
+        "model_env_var": "CLAUDE_MODEL",
+    }
+
+    driver = _EnvCapturingDriver()
+    driver.init(provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    dispatcher.run(driver, "z-ask", [], provider_config)  # no model kwarg
+
+    assert driver._captured_env is not None
+    assert driver._captured_env.get("CLAUDE_MODEL") == "sonnet", (
+        f"Expected CLAUDE_MODEL='sonnet' from provider_config, "
+        f"got {driver._captured_env.get('CLAUDE_MODEL')!r}"
+    )
 
 
 # ---------------------------------------------------------------------------

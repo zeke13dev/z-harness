@@ -318,8 +318,11 @@ Add `personas/` directory to the allowlist (it ships with the harness now). Exis
 
 ## Telemetry events (new)
 
-- `persona_bound` — `{command, role, persona, model, runtime, source}`
-- `persona_override_used` — `{command, role, override_field, persona_or_model_or_runtime, original}`
+- `persona_bound` — `{command, role, persona, model, runtime, source: {persona: <layer>, model: <layer>, runtime: <layer>}}`
+  where `<layer>` is one of `override | provider_config | none`.
+  `role` is omitted from the payload when the caller did not supply it (i.e. `None`).
+  `command` is the kebab-case command identifier (e.g. `"z-ask"`).
+- `persona_override_used` — `{command, override_field, value, original}`
 - `persona_compat_warning` — `{persona, declared_roles, bound_role}`
 - `persona_shadowed` — `{persona, layers, winning_layer}` (emitted once per process per name)
 - `persona_binding_chimera` — `{command, role, sources: {persona: layer, model: layer, runtime: layer}}` (emitted when the three axes resolve from ≥2 layers)

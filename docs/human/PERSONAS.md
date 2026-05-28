@@ -130,6 +130,68 @@ in this priority:
 
 ---
 
+## Orchestrator usage pattern
+
+When an orchestrator (slash command, skill, or Agent() call site) needs to
+dispatch a role with a persona body prepended, follow these four steps:
+
+**Step 1** — resolve persona + model + runtime for the (command, role) pair:
+
+```bash
+python scripts/resolve-persona.py resolve z_plan consultant_primary
+# → {"persona": "codex-default-consultant", "model": "", "runtime": "codex-cli",
+#    "source": "roles_default", "persona_body_path": "/abs/path/personas/builtin/codex-default-consultant.md"}
+```
+
+**Step 2** — read the `persona_body_path` field from the JSON envelope:
+
+```python
+import json, subprocess
+
+result = subprocess.run(
+    ["python", "scripts/resolve-persona.py", "resolve", "z_plan", "consultant_primary"],
+    capture_output=True, text=True, check=True,
+)
+envelope = json.loads(result.stdout)
+body_path = envelope["persona_body_path"]  # str | None
+```
+
+**Step 3** — call `runtime.dispatch.persona_prompt.prepend_persona` to compose
+the final prompt:
+
+```python
+from runtime.dispatch.persona_prompt import prepend_persona
+
+final_prompt = prepend_persona(body_path, task_prompt)
+# If body_path is None/empty, task_prompt is returned unchanged.
+# If body_path points to a missing file, FileNotFoundError is raised.
+# YAML frontmatter (--- blocks) is stripped automatically.
+```
+
+**Step 4** — pass `final_prompt` to `Dispatcher.run` as the prompt argument:
+
+```python
+from runtime.dispatch.dispatcher import Dispatcher
+
+dispatcher = Dispatcher(repo_root=repo_root, run_id=run_id)
+result = dispatcher.run(
+    driver,
+    command_id="z-plan",
+    caller_args=[final_prompt],
+    provider_config=provider_config,
+    # Optionally pass resolved fields as override kwargs:
+    model=envelope.get("model") or None,
+    runtime=envelope.get("runtime") or None,
+)
+```
+
+The dispatcher itself does **not** call `resolve-persona.py` or read persona
+files — that is the orchestrator's responsibility.  This keeps
+`Dispatcher.run` thin and avoids subprocess overhead inside the dispatch hot
+path.
+
+---
+
 ## Per-Agent() override kwargs
 
 Command authors can override any axis dynamically at the call site without
