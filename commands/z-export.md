@@ -1,6 +1,6 @@
 ---
-description: "Export z-harness commands/agents/skills to Cursor / Codex / Antigravity (agy)."
-argument-hint: "[--target=<cursor|codex|agy|all>]"
+description: "Export z-harness commands/agents/skills/personas to Cursor / Codex / Antigravity (agy)."
+argument-hint: "[--target=<cursor|codex|agy|all>] [--include=personas]"
 runtime: c1
 driver_features_required: []
 unsupported_driver_behavior: explicit_gate
@@ -8,19 +8,23 @@ unsupported_driver_behavior: explicit_gate
 
 You are running **z-harness `/z-export`**.
 
-This command runs one or more export adapter scripts that translate z-harness source files (`commands/`, `agents/`, `skills/`) into IDE-specific formats under `exports/`.
+This command runs one or more export adapter scripts that translate z-harness source files (`commands/`, `agents/`, `skills/`) into IDE-specific formats under `exports/`. It also exports persona files from `personas/` via the per-target `runtime/drivers/<target>/persona_export.py` modules.
 
 ## Phase 1 — Parse arguments
 
-> **NOTE:** the export scripts invoked by this command are deprecated. They will be removed in the next minor release. Use /z-update to switch to the runtime-based workflow.
+> **NOTE:** the legacy export scripts (`scripts/export-{cursor,codex,agy}.py`) are deprecated. They will be removed in the next minor release. Use /z-update to switch to the runtime-based workflow.
 
-Read `$ARGUMENTS`. Look for `--target=<value>`.
+Read `$ARGUMENTS`. Look for `--target=<value>` and `--include=<value>`.
 
-Valid values: `cursor`, `codex`, `agy`, `all`.
+Valid `--target` values: `cursor`, `codex`, `agy`, `all`.
 
 Default (no `--target` flag): `all`.
 
-If an unrecognized value is given, immediately print:
+Valid `--include` values: `personas`. May be specified multiple times or comma-separated.
+
+Default (no `--include` flag): include personas automatically (personas are always exported in v1).
+
+If an unrecognized `--target` value is given, immediately print:
 
 ```
 [z-export] error: --target must be one of: cursor, codex, agy, all
@@ -65,6 +69,59 @@ For each target:
    ---
    ```
    Then **continue to the next target** — do not abort.
+
+## Phase 2b — Export personas per target
+
+After the legacy export script for each target completes (regardless of its exit code), export all persona files found under `personas/builtin/` and `personas/user/` (if present) using the per-target `persona_export.py` module.
+
+For each target, run:
+
+```bash
+python3 - <<'EOF'
+import sys, pathlib
+
+repo_root = pathlib.Path("${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}").parent
+target = "<target>"  # Replace with actual target name: antigravity, cursor, or codex
+export_root = repo_root / "exports" / target
+
+# Map z-export target names to driver directory names
+driver_map = {"agy": "antigravity", "cursor": "cursor", "codex": "codex", "claude": "claude"}
+driver = driver_map.get(target, target)
+
+sys.path.insert(0, str(repo_root))
+from runtime.drivers import _persona_utils  # noqa: F401 — ensures package importable
+import importlib
+mod = importlib.import_module(f"runtime.drivers.{driver}.persona_export")
+
+persona_dirs = [
+    repo_root / "personas" / "builtin",
+    repo_root / "personas" / "user",
+]
+written = []
+for persona_dir in persona_dirs:
+    if not persona_dir.exists():
+        continue
+    for persona_file in sorted(persona_dir.glob("*.md")):
+        try:
+            out_path = mod.export_persona(persona_file, export_root)
+            written.append(out_path)
+        except Exception as exc:
+            print(f"[persona-export/{driver}] WARNING: skipped {persona_file.name}: {exc}", file=sys.stderr)
+
+print(f"personas written to exports/{target}/: {len(written)} file(s)")
+EOF
+```
+
+Capture stdout and stderr. On success, print:
+```
+[<target>/personas] OK — <count> persona file(s) written to exports/<target>/
+```
+
+On failure (nonzero exit or unhandled exception in stderr), print:
+```
+[<target>/personas] FAILED — <last error line from stderr>
+```
+Mark this target's persona export as FAILED but continue to the next target.
 
 ## Phase 3 — Final summary
 

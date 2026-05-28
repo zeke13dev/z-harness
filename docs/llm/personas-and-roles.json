@@ -1,0 +1,56 @@
+{
+  "concept": "personas-and-roles",
+  "last_updated": "2026-05-28T18:00:00Z",
+  "covers_spec": "none",
+  "source_files": [
+    "scripts/resolve-persona.py",
+    "scripts/resolve-persona.sh",
+    "runtime/contract/persona.schema.json",
+    "personas/README.md",
+    "personas/builtin/codex-default-consultant.md",
+    "personas/builtin/codex-default-reviewer.md",
+    "personas/builtin/gemini-default-consultant.md",
+    "commands/z-personas.md",
+    "skills/z-personas/SKILL.md",
+    "runtime/drivers/_persona_utils.py",
+    "runtime/drivers/antigravity/persona_export.py",
+    "runtime/drivers/cursor/persona_export.py",
+    "runtime/drivers/codex/persona_export.py",
+    "runtime/drivers/claude/persona_export.py",
+    "docs/human/PERSONAS.md"
+  ],
+  "confidence": "high",
+  "entry_points": [
+    {"file": "scripts/resolve-persona.py", "line": 891, "symbol": "cmd_resolve", "kind": "fn", "summary": "Resolve persona/model/runtime triple for a (command, role) pair from merged TOML config; emits chimera event when axes come from ≥2 layers"},
+    {"file": "scripts/resolve-persona.py", "line": 514, "symbol": "cmd_list_personas", "kind": "fn", "summary": "Print JSON array of {name, source_layer, path} — winner per name only; emits persona_shadowed on collisions"},
+    {"file": "scripts/resolve-persona.py", "line": 1000, "symbol": "cmd_validate", "kind": "fn", "summary": "Validate all bound personas exist, compatible_roles are known, and contract matches role's expected_contract"},
+    {"file": "scripts/resolve-persona.py", "line": 554, "symbol": "cmd_where", "kind": "fn", "summary": "Print all layer paths defining a named persona in load order; exits 1 if not found"},
+    {"file": "scripts/resolve-persona.py", "line": 1097, "symbol": "cmd_read", "kind": "fn", "summary": "Print frontmatter + body of the winning persona file for a given name"},
+    {"file": "scripts/resolve-persona.py", "line": 52, "symbol": "_ROLE_REGISTRY", "kind": "var", "summary": "Maps role names to expected contracts: consultant_primary/secondary → freeform, reviewer → review-verdict"},
+    {"file": "scripts/resolve-persona.py", "line": 497, "symbol": "_detect_and_emit_shadows", "kind": "fn", "summary": "Emits persona_shadowed once per (process, name) for each name defined in more than one layer"},
+    {"file": "scripts/resolve-persona.py", "line": 735, "symbol": "_emit_persona_binding_chimera", "kind": "fn", "summary": "Emits persona_binding_chimera once per (process, command, role) when persona/model/runtime axes come from ≥2 config layers"},
+    {"file": "runtime/drivers/_persona_utils.py", "line": 1, "symbol": "_persona_utils", "kind": "module", "summary": "Shared stdlib-only frontmatter parser and portability header builder used by all four per-target persona_export.py modules"}
+  ],
+  "depends_on": ["providers-registry", "scripts", "agents"],
+  "consumed_by": ["commands", "skills", "multi-ide-exports"],
+  "invariants": [
+    "Persona/model/runtime are orthogonal axes — persona controls the prompt prefix, model controls which LLM is called, runtime controls the dispatch target. None implies the others.",
+    "Layer load order is builtin < user-global < repo-local; last definition wins per name. Shadowing emits persona_shadowed once per (process, name).",
+    "persona_shadowed is de-duped by module-level _shadowed_emitted set keyed on name alone (not layer pair) — fires once per process per shadowed name.",
+    "persona_binding_chimera fires when the three binding axes (persona, model, runtime) originate from two or more different config layers for the same (command, role) pair; de-duped per (process, command, role).",
+    "compatible_roles mismatch at bind time is a soft warning only — it emits a persona_compat_warning event but does NOT block resolution.",
+    "contract mismatch between a bound persona's `contract` field and the role's expected_contract (from _ROLE_REGISTRY) is a hard error — cmd_validate exits 1.",
+    "Persona name must match ^[a-z][a-z0-9-]*$ with no trailing hyphen; validated on frontmatter parse, exits 2 on violation.",
+    "Unknown frontmatter keys cause exit 2 — model/runtime belong in TOML config, not in the persona file."
+  ],
+  "gotchas": [
+    "_shadowed_emitted is keyed on name only (not on layer pair), so if a persona appears in all three layers, persona_shadowed still fires exactly once per process for that name.",
+    "persona_binding_chimera is keyed on (command, role), not on the specific axis combination — if the same (command, role) binding is evaluated twice, the event fires only once.",
+    "cmd_validate checks compatible_roles only against known role names in _ROLE_REGISTRY — a compatible_roles entry for an unknown role is silently ignored during validation.",
+    "persona file body (the prompt prefix) is everything after the closing '---' delimiter; a leading blank line is stripped by _persona_utils.parse_persona_file but the script-side _parse_frontmatter does not strip it.",
+    "Layer 3 (repo-local) path uses git rev-parse to find repo root; falls back to cwd if git is unavailable. Z_HARNESS_REPO_ROOT, Z_HARNESS_REPO_PERSONAS_DIR, Z_HARNESS_BUILTIN_PERSONAS_DIR, and Z_HARNESS_USER_PERSONAS_DIR all override the respective layer paths for hermetic testing.",
+    "resolve-persona.sh is a thin bash wrapper — all logic lives in resolve-persona.py; the shell script exists solely so dispatch sites don't need to know the Python path.",
+    "Dispatcher.run() in the runtime layer can accept persona override kwargs; these override the TOML-configured binding for that invocation only."
+  ],
+  "memories": []
+}

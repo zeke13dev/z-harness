@@ -176,16 +176,50 @@
         "runtime/contract/provider.schema.json",
         "scripts/log-providers.sh"
       ],
-      "last_updated": "2026-05-28T20:59:29.285775Z",
+      "last_updated": "2026-05-28T18:00:00Z",
       "confidence": "high",
       "depends_on": [
         "scripts"
       ],
       "consumed_by": [
         "agents",
-        "commands"
+        "commands",
+        "personas-and-roles"
       ],
-      "summary": "Config-file registry routing consultant/reviewer dispatches to any CLI-addressable LLM; three fixed roles mapped to named provider entries; resolution via scripts/resolve-provider.sh."
+      "summary": "Config-file registry routing consultant/reviewer dispatches to any CLI-addressable LLM; three fixed roles mapped to named provider entries; resolution via scripts/resolve-provider.sh. Role bindings for personas are documented in personas-and-roles."
+    },
+    {
+      "slug": "personas-and-roles",
+      "source_files": [
+        "scripts/resolve-persona.py",
+        "scripts/resolve-persona.sh",
+        "runtime/contract/persona.schema.json",
+        "personas/README.md",
+        "personas/builtin/codex-default-consultant.md",
+        "personas/builtin/codex-default-reviewer.md",
+        "personas/builtin/gemini-default-consultant.md",
+        "commands/z-personas.md",
+        "skills/z-personas/SKILL.md",
+        "runtime/drivers/_persona_utils.py",
+        "runtime/drivers/antigravity/persona_export.py",
+        "runtime/drivers/cursor/persona_export.py",
+        "runtime/drivers/codex/persona_export.py",
+        "runtime/drivers/claude/persona_export.py",
+        "docs/human/PERSONAS.md"
+      ],
+      "last_updated": "2026-05-28T18:00:00Z",
+      "confidence": "high",
+      "depends_on": [
+        "providers-registry",
+        "scripts",
+        "agents"
+      ],
+      "consumed_by": [
+        "commands",
+        "skills",
+        "multi-ide-exports"
+      ],
+      "summary": "Persona feature surface: layered persona registry (builtin < user-global < repo-local, last wins), three-axis binding (persona/model/runtime), contract enforcement per role, and per-target export adapters. resolve-persona.py is the authoritative resolver; persona files are markdown with YAML frontmatter."
     },
     {
       "slug": "multi-ide-exports",

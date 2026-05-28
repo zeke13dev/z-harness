@@ -1,6 +1,6 @@
 {
   "concept": "providers-registry",
-  "last_updated": "2026-05-28",
+  "last_updated": "2026-05-28T18:00:00Z",
   "covers_spec": "none",
   "source_file": [
     "scripts/resolve-provider.py",
@@ -28,7 +28,7 @@
     {"file": "runtime/contract/provider.schema.json", "line": 1, "symbol": "ProviderRegistry", "kind": "struct", "summary": "JSON Schema Draft 7 for .z-harness/providers.json; accepts version 1+2; permits kind=cli|sdk; allow_cross_vendor_env field"}
   ],
   "depends_on": ["scripts", "agents"],
-  "consumed_by": ["commands", "agents", "runtime-dispatch"],
+  "consumed_by": ["commands", "agents", "runtime-dispatch", "personas-and-roles"],
   "invariants": [
     "consultant_primary and consultant_secondary must resolve to distinct provider names — resolver exits 1 if they collide.",
     "Repo-local config overrides user-global config per-key across providers, roles, and aliases sections. Shadowing emits provider_shadowed event and stderr warning, de-duped per parent process.",

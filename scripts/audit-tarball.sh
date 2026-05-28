@@ -12,6 +12,9 @@
 #   runtime/        — host-neutral runtime tree (binary + templates + config)
 #                     Note: drivers live under runtime/drivers/; there is no
 #                     separate top-level drivers/ directory in this repo.
+#   personas/       — persona preset files (.md) for builtin and user layers.
+#                     Per-target persona exports land under exports/<target>/personas/
+#                     (Cursor), exports/<target>/.agent/personas/ (agy), etc.
 #
 # LEGACY-ALLOWLIST (remove at v<next-minor>):
 #   exports/codex/  — legacy per-host Codex exporter output       # REMOVE-AT: v<next-minor>
@@ -103,6 +106,9 @@ _check_pattern() {
 }
 
 # Fixed-string patterns (literal substring matches)
+# Note: personas/ (top-level persona preset files) is NOT forbidden — it is explicitly
+# allowlisted (see ALLOWLIST header comment above).  Per-target persona exports under
+# exports/<target>/personas/ are also allowed via the exports/ filter below.
 _check_pattern "providers.json"         -F  "providers.json"
 _check_pattern ".z-harness/"            -F  ".z-harness/"
 _check_pattern "z-harness/plans/"       -F  "z-harness/plans/"
@@ -114,6 +120,10 @@ _check_pattern "~/"                     -F  "~/"
 # during the one-minor-version transition window (see LEGACY-ALLOWLIST above).
 # REMOVE-AT: v<next-minor> — once the legacy window closes, replace this block
 # with: _check_pattern "exports/" -F "exports/"
+#
+# Per-target persona exports (e.g. exports/cursor/personas/, exports/agy/.agent/personas/,
+# exports/codex/personas/) are implicitly allowed because they fall under the permitted
+# exports/<target>/ prefix checked by the regex below.
 _exports_hit="$(printf '%s\n' "$LISTING" \
     | grep -F "exports/" \
     | grep -Ev "^\.?/?exports/(codex|agy|cursor)(/|$)" \
