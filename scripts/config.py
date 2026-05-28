@@ -423,8 +423,12 @@ def _validate_roles_value(dotted_key: str, value: object, source_label: str, is_
     if dotted_key in VALIDATORS:
         return _validate_enum(dotted_key, value, source_label, is_global)
 
-    # Default validation: must be a non-empty string
-    if not isinstance(value, str) or not value:
+    # Default validation: must be a string.
+    # Empty string is permitted for the 'model' leaf key (semantics: use provider's
+    # default_model). All other role fields must be non-empty strings.
+    leaf_key = dotted_key.rsplit(".", 1)[-1] if "." in dotted_key else dotted_key
+    allow_empty = leaf_key == "model"
+    if not isinstance(value, str) or (not allow_empty and not value):
         msg = (
             f"[config] {source_label}: invalid value for {dotted_key!r}: "
             f"{value!r} — must be a non-empty string"
@@ -703,6 +707,22 @@ def cmd_ensure_defaults(args: list[str]) -> None:
         "[docs]\n"
         "# Whether to auto-apply docs in light flows. Values: always | never\n"
         'always_apply = "always"\n'
+        "\n"
+        "# Default role bindings — persona + model + runtime per logical role.\n"
+        "# Override per command with [roles.<command>.<role>] sections.\n"
+        "\n"
+        "[roles.default.consultant_primary]\n"
+        'persona = "codex-default-consultant"\n'
+        'model = ""              # empty = use provider\'s default_model\n'
+        'runtime = "codex-cli"\n'
+        "\n"
+        "[roles.default.consultant_secondary]\n"
+        'persona = "gemini-default-consultant"\n'
+        'runtime = "gemini-cli"\n'
+        "\n"
+        "[roles.default.reviewer]\n"
+        'persona = "codex-default-reviewer"\n'
+        'runtime = "codex-cli"\n'
     )
     try:
         global_path.write_text(content)

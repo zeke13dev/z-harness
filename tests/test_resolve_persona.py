@@ -652,5 +652,560 @@ class TestWhereShadowEvent(unittest.TestCase):
                              msg="persona_shadowed must not fire for a unique persona")
 
 
+# ---------------------------------------------------------------------------
+# T007: resolve subcommand
+# ---------------------------------------------------------------------------
+
+def _write_toml(path: Path, content: str) -> None:
+    """Write a TOML config file at path (creates parents)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+class TestResolveCommandNormalization(unittest.TestCase):
+    """resolve normalizes /z-plan → z_plan; z-plan → z_plan; z_plan → z_plan."""
+
+    def test_slash_prefix_normalized(self):
+        """/z-plan and z_plan both resolve to the same binding."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir, \
+             tempfile.TemporaryDirectory() as config_dir:
+
+            persona_name = "test-persona"
+            _write_persona(Path(builtin_dir), persona_name, description="Test")
+
+            # Write a repo TOML with [roles.z_plan.consultant_primary]
+            toml_path = Path(config_dir) / "config.toml"
+            _write_toml(toml_path, f"""
+[roles.z_plan.consultant_primary]
+persona = "{persona_name}"
+model = "opus"
+runtime = "codex-cli"
+""")
+            env = {
+                "Z_HARNESS_BUILTIN_PERSONAS_DIR": builtin_dir,
+                "Z_HARNESS_USER_PERSONAS_DIR": user_dir,
+                "Z_HARNESS_REPO_PERSONAS_DIR": repo_dir,
+                "Z_HARNESS_REPO_CONFIG": str(toml_path),
+                # Point XDG_CONFIG_HOME to a dir with no config.toml
+                "XDG_CONFIG_HOME": config_dir,
+            }
+
+            result_slash = _run(["resolve", "/z-plan", "consultant_primary"], env_extra=env)
+            result_plain = _run(["resolve", "z_plan", "consultant_primary"], env_extra=env)
+
+            self.assertEqual(result_slash.returncode, 0, msg=result_slash.stderr)
+            self.assertEqual(result_plain.returncode, 0, msg=result_plain.stderr)
+
+            data_slash = json.loads(result_slash.stdout)
+            data_plain = json.loads(result_plain.stdout)
+
+            # Both must resolve identically
+            self.assertEqual(data_slash["persona"], data_plain["persona"])
+            self.assertEqual(data_slash["model"], data_plain["model"])
+            self.assertEqual(data_slash["runtime"], data_plain["runtime"])
+            self.assertEqual(data_slash["source"], data_plain["source"])
+
+    def test_hyphen_command_normalized(self):
+        """z-plan (hyphen) resolves the same as z_plan (underscore)."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir, \
+             tempfile.TemporaryDirectory() as config_dir:
+
+            persona_name = "hyphen-test-persona"
+            _write_persona(Path(builtin_dir), persona_name, description="Hyphen test")
+
+            toml_path = Path(config_dir) / "config.toml"
+            _write_toml(toml_path, f"""
+[roles.z_plan.consultant_primary]
+persona = "{persona_name}"
+runtime = "codex-cli"
+""")
+            env = {
+                "Z_HARNESS_BUILTIN_PERSONAS_DIR": builtin_dir,
+                "Z_HARNESS_USER_PERSONAS_DIR": user_dir,
+                "Z_HARNESS_REPO_PERSONAS_DIR": repo_dir,
+                "Z_HARNESS_REPO_CONFIG": str(toml_path),
+                "XDG_CONFIG_HOME": config_dir,
+            }
+
+            result_hyphen = _run(["resolve", "z-plan", "consultant_primary"], env_extra=env)
+            result_underscore = _run(["resolve", "z_plan", "consultant_primary"], env_extra=env)
+
+            self.assertEqual(result_hyphen.returncode, 0, msg=result_hyphen.stderr)
+            data_hyphen = json.loads(result_hyphen.stdout)
+            data_underscore = json.loads(result_underscore.stdout)
+            self.assertEqual(data_hyphen["persona"], data_underscore["persona"])
+
+
+class TestResolveResolutionOrder(unittest.TestCase):
+    """resolve applies correct priority: roles_command > roles_default > providers_legacy."""
+
+    def test_roles_command_wins_over_default(self):
+        """[roles.<cmd>.<role>] takes priority over [roles.default.<role>]."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir, \
+             tempfile.TemporaryDirectory() as config_dir:
+
+            _write_persona(Path(builtin_dir), "cmd-specific-persona", description="Cmd specific")
+            _write_persona(Path(builtin_dir), "default-persona", description="Default")
+
+            toml_path = Path(config_dir) / "config.toml"
+            _write_toml(toml_path, """
+[roles.default.consultant_primary]
+persona = "default-persona"
+runtime = "codex-cli"
+
+[roles.z_plan.consultant_primary]
+persona = "cmd-specific-persona"
+runtime = "gemini-cli"
+""")
+            env = {
+                "Z_HARNESS_BUILTIN_PERSONAS_DIR": builtin_dir,
+                "Z_HARNESS_USER_PERSONAS_DIR": user_dir,
+                "Z_HARNESS_REPO_PERSONAS_DIR": repo_dir,
+                "Z_HARNESS_REPO_CONFIG": str(toml_path),
+                "XDG_CONFIG_HOME": config_dir,
+                "Z_HARNESS_REPO_PROVIDERS": "/dev/null",  # no legacy providers
+            }
+
+            result = _run(["resolve", "z_plan", "consultant_primary"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            data = json.loads(result.stdout)
+            self.assertEqual(data["persona"], "cmd-specific-persona")
+            self.assertEqual(data["source"], "roles_command")
+
+    def test_default_fallback_when_no_command_binding(self):
+        """[roles.default.<role>] is used when no command-specific binding exists."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir, \
+             tempfile.TemporaryDirectory() as config_dir:
+
+            _write_persona(Path(builtin_dir), "default-persona", description="Default persona")
+
+            toml_path = Path(config_dir) / "config.toml"
+            _write_toml(toml_path, """
+[roles.default.consultant_primary]
+persona = "default-persona"
+runtime = "codex-cli"
+""")
+            env = {
+                "Z_HARNESS_BUILTIN_PERSONAS_DIR": builtin_dir,
+                "Z_HARNESS_USER_PERSONAS_DIR": user_dir,
+                "Z_HARNESS_REPO_PERSONAS_DIR": repo_dir,
+                "Z_HARNESS_REPO_CONFIG": str(toml_path),
+                "XDG_CONFIG_HOME": config_dir,
+                "Z_HARNESS_REPO_PROVIDERS": "/dev/null",
+            }
+
+            result = _run(["resolve", "z_plan", "consultant_primary"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            data = json.loads(result.stdout)
+            self.assertEqual(data["persona"], "default-persona")
+            self.assertEqual(data["source"], "roles_default")
+
+    def test_providers_legacy_fallback(self):
+        """When no TOML binding, resolve falls back to providers.json roles."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir, \
+             tempfile.TemporaryDirectory() as config_dir, \
+             tempfile.TemporaryDirectory() as providers_dir:
+
+            providers_path = Path(providers_dir) / "providers.json"
+            providers_path.write_text(json.dumps({
+                "version": 1,
+                "providers": {},
+                "roles": {"consultant_primary": "codex-cli"},
+            }), encoding="utf-8")
+
+            empty_toml = Path(config_dir) / "config.toml"
+            _write_toml(empty_toml, "")
+
+            env = {
+                "Z_HARNESS_BUILTIN_PERSONAS_DIR": builtin_dir,
+                "Z_HARNESS_USER_PERSONAS_DIR": user_dir,
+                "Z_HARNESS_REPO_PERSONAS_DIR": repo_dir,
+                "Z_HARNESS_REPO_CONFIG": str(empty_toml),
+                "XDG_CONFIG_HOME": config_dir,
+                "Z_HARNESS_REPO_PROVIDERS": str(providers_path),
+            }
+
+            result = _run(["resolve", "z_plan", "consultant_primary"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            data = json.loads(result.stdout)
+            self.assertEqual(data["source"], "providers_legacy")
+            self.assertEqual(data["runtime"], "codex-cli")
+
+    def test_resolve_output_shape(self):
+        """resolve returns JSON with persona, model, runtime, source, persona_body_path keys."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir, \
+             tempfile.TemporaryDirectory() as config_dir:
+
+            empty_toml = Path(config_dir) / "config.toml"
+            _write_toml(empty_toml, "")
+
+            env = {
+                "Z_HARNESS_BUILTIN_PERSONAS_DIR": builtin_dir,
+                "Z_HARNESS_USER_PERSONAS_DIR": user_dir,
+                "Z_HARNESS_REPO_PERSONAS_DIR": repo_dir,
+                "Z_HARNESS_REPO_CONFIG": str(empty_toml),
+                "XDG_CONFIG_HOME": config_dir,
+                "Z_HARNESS_REPO_PROVIDERS": "/dev/null",
+            }
+
+            result = _run(["resolve", "z_plan", "consultant_primary"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            data = json.loads(result.stdout)
+            for key in ("persona", "model", "runtime", "source", "persona_body_path"):
+                self.assertIn(key, data, msg=f"Missing key {key!r} in output")
+
+    def test_persona_body_path_populated(self):
+        """resolve populates persona_body_path when persona exists in a layer."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir, \
+             tempfile.TemporaryDirectory() as config_dir:
+
+            persona_name = "body-path-persona"
+            written_path = _write_persona(Path(builtin_dir), persona_name, description="Body path test")
+
+            toml_path = Path(config_dir) / "config.toml"
+            _write_toml(toml_path, f"""
+[roles.z_plan.consultant_primary]
+persona = "{persona_name}"
+""")
+            env = {
+                "Z_HARNESS_BUILTIN_PERSONAS_DIR": builtin_dir,
+                "Z_HARNESS_USER_PERSONAS_DIR": user_dir,
+                "Z_HARNESS_REPO_PERSONAS_DIR": repo_dir,
+                "Z_HARNESS_REPO_CONFIG": str(toml_path),
+                "XDG_CONFIG_HOME": config_dir,
+            }
+
+            result = _run(["resolve", "z_plan", "consultant_primary"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            data = json.loads(result.stdout)
+            self.assertIsNotNone(data["persona_body_path"],
+                                 msg="persona_body_path must be set when persona exists")
+            self.assertEqual(data["persona_body_path"], str(written_path))
+
+
+class TestResolveChimeraEvent(unittest.TestCase):
+    """persona_binding_chimera is emitted when axes resolve from >=2 distinct sources."""
+
+    def test_chimera_emitted_when_axes_from_different_layers(self):
+        """
+        Chimera fires when persona comes from [roles.default] but runtime from providers_legacy.
+        This is a mixed-source scenario (roles_default + providers_legacy).
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir, \
+             tempfile.TemporaryDirectory() as config_dir, \
+             tempfile.TemporaryDirectory() as providers_dir:
+
+            _write_persona(Path(builtin_dir), "my-persona", description="Chimera test persona")
+
+            # TOML sets persona only (from roles_default), no runtime
+            toml_path = Path(config_dir) / "config.toml"
+            _write_toml(toml_path, """
+[roles.default.consultant_primary]
+persona = "my-persona"
+""")
+
+            # providers.json provides runtime (providers_legacy)
+            providers_path = Path(providers_dir) / "providers.json"
+            providers_path.write_text(json.dumps({
+                "version": 1,
+                "providers": {},
+                "roles": {"consultant_primary": "codex-cli"},
+            }), encoding="utf-8")
+
+            env = {
+                "Z_HARNESS_BUILTIN_PERSONAS_DIR": builtin_dir,
+                "Z_HARNESS_USER_PERSONAS_DIR": user_dir,
+                "Z_HARNESS_REPO_PERSONAS_DIR": repo_dir,
+                "Z_HARNESS_REPO_CONFIG": str(toml_path),
+                "XDG_CONFIG_HOME": config_dir,
+                "Z_HARNESS_REPO_PROVIDERS": str(providers_path),
+            }
+
+            result = _run(["resolve", "z_plan", "consultant_primary"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            # Chimera event must appear in stderr
+            self.assertIn("persona_binding_chimera", result.stderr,
+                          msg=f"Expected persona_binding_chimera in stderr. Got: {result.stderr!r}")
+
+    def test_no_chimera_when_all_from_same_source(self):
+        """No chimera when all axes come from the same TOML layer."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir, \
+             tempfile.TemporaryDirectory() as config_dir:
+
+            _write_persona(Path(builtin_dir), "mono-persona", description="Mono source")
+
+            toml_path = Path(config_dir) / "config.toml"
+            _write_toml(toml_path, """
+[roles.default.consultant_primary]
+persona = "mono-persona"
+model = "opus"
+runtime = "codex-cli"
+""")
+            env = {
+                "Z_HARNESS_BUILTIN_PERSONAS_DIR": builtin_dir,
+                "Z_HARNESS_USER_PERSONAS_DIR": user_dir,
+                "Z_HARNESS_REPO_PERSONAS_DIR": repo_dir,
+                "Z_HARNESS_REPO_CONFIG": str(toml_path),
+                "XDG_CONFIG_HOME": config_dir,
+                "Z_HARNESS_REPO_PROVIDERS": "/dev/null",
+            }
+
+            result = _run(["resolve", "z_plan", "consultant_primary"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            self.assertNotIn("persona_binding_chimera", result.stderr,
+                             msg="No chimera when all axes from same source")
+
+
+# ---------------------------------------------------------------------------
+# T007: validate subcommand
+# ---------------------------------------------------------------------------
+
+class TestValidateMissingPersona(unittest.TestCase):
+    """validate exits non-zero when a default binding references a missing persona."""
+
+    def test_missing_default_persona_exits_nonzero(self):
+        """validate fails when default binding references a persona not in any layer."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir, \
+             tempfile.TemporaryDirectory() as config_dir:
+
+            # Bind to a persona that does not exist in any layer
+            toml_path = Path(config_dir) / "config.toml"
+            _write_toml(toml_path, """
+[roles.default.consultant_primary]
+persona = "nonexistent-persona"
+runtime = "codex-cli"
+""")
+            env = {
+                "Z_HARNESS_BUILTIN_PERSONAS_DIR": builtin_dir,
+                "Z_HARNESS_USER_PERSONAS_DIR": user_dir,
+                "Z_HARNESS_REPO_PERSONAS_DIR": repo_dir,
+                "Z_HARNESS_REPO_CONFIG": str(toml_path),
+                "XDG_CONFIG_HOME": config_dir,
+            }
+
+            result = _run(["validate"], env_extra=env)
+            self.assertNotEqual(result.returncode, 0,
+                                msg="validate must exit non-zero when persona is missing")
+            self.assertIn("nonexistent-persona", result.stderr,
+                          msg="Error message must name the missing persona")
+
+    def test_validate_ok_when_persona_exists(self):
+        """validate exits 0 when all bound personas exist."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir, \
+             tempfile.TemporaryDirectory() as config_dir:
+
+            _write_persona(Path(builtin_dir), "real-persona", description="Real persona")
+
+            toml_path = Path(config_dir) / "config.toml"
+            _write_toml(toml_path, """
+[roles.default.consultant_primary]
+persona = "real-persona"
+runtime = "codex-cli"
+""")
+            env = {
+                "Z_HARNESS_BUILTIN_PERSONAS_DIR": builtin_dir,
+                "Z_HARNESS_USER_PERSONAS_DIR": user_dir,
+                "Z_HARNESS_REPO_PERSONAS_DIR": repo_dir,
+                "Z_HARNESS_REPO_CONFIG": str(toml_path),
+                "XDG_CONFIG_HOME": config_dir,
+            }
+
+            result = _run(["validate"], env_extra=env)
+            self.assertEqual(result.returncode, 0,
+                             msg=f"validate must pass when persona exists. stderr={result.stderr!r}")
+
+    def test_validate_no_toml_ok(self):
+        """validate exits 0 with no TOML config (no bindings to check)."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir, \
+             tempfile.TemporaryDirectory() as config_dir:
+
+            # No TOML written — both paths don't exist
+            env = {
+                "Z_HARNESS_BUILTIN_PERSONAS_DIR": builtin_dir,
+                "Z_HARNESS_USER_PERSONAS_DIR": user_dir,
+                "Z_HARNESS_REPO_PERSONAS_DIR": repo_dir,
+                "Z_HARNESS_REPO_CONFIG": str(Path(config_dir) / "nonexistent.toml"),
+                "XDG_CONFIG_HOME": config_dir,
+            }
+
+            result = _run(["validate"], env_extra=env)
+            self.assertEqual(result.returncode, 0,
+                             msg=f"validate must pass with empty config. stderr={result.stderr!r}")
+
+
+# ---------------------------------------------------------------------------
+# T007: read subcommand
+# ---------------------------------------------------------------------------
+
+class TestReadSubcommand(unittest.TestCase):
+    """read <name> prints frontmatter + body; exits non-zero for missing names."""
+
+    def test_read_missing_exits_nonzero(self):
+        """read <missing> exits non-zero with actionable error."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            env = {
+                "Z_HARNESS_BUILTIN_PERSONAS_DIR": builtin_dir,
+                "Z_HARNESS_USER_PERSONAS_DIR": user_dir,
+                "Z_HARNESS_REPO_PERSONAS_DIR": repo_dir,
+            }
+            result = _run(["read", "definitely-missing"], env_extra=env)
+            self.assertNotEqual(result.returncode, 0,
+                                msg="read <missing> must exit non-zero")
+            # Error must be actionable (mention list-personas)
+            self.assertIn("list-personas", result.stderr,
+                          msg=f"Error must mention 'list-personas'. Got: {result.stderr!r}")
+
+    def test_read_existing_exits_zero(self):
+        """read <existing> exits 0 and emits JSON with frontmatter and body."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            name = "readable-persona"
+            _write_persona(Path(builtin_dir), name, description="A readable persona")
+
+            env = {
+                "Z_HARNESS_BUILTIN_PERSONAS_DIR": builtin_dir,
+                "Z_HARNESS_USER_PERSONAS_DIR": user_dir,
+                "Z_HARNESS_REPO_PERSONAS_DIR": repo_dir,
+            }
+            result = _run(["read", name], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            data = json.loads(result.stdout)
+            self.assertEqual(data["name"], name)
+            self.assertIn("frontmatter", data)
+            self.assertIn("body", data)
+            self.assertIn("path", data)
+
+    def test_read_winner_is_last_layer(self):
+        """read returns the winning layer (last) when persona is in multiple layers."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            name = "multi-layer-persona"
+            _write_persona(Path(builtin_dir), name, description="From builtin")
+            repo_path = _write_persona(Path(repo_dir), name, description="From repo — winner")
+
+            env = {
+                "Z_HARNESS_BUILTIN_PERSONAS_DIR": builtin_dir,
+                "Z_HARNESS_USER_PERSONAS_DIR": user_dir,
+                "Z_HARNESS_REPO_PERSONAS_DIR": repo_dir,
+            }
+            result = _run(["read", name], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            data = json.loads(result.stdout)
+            self.assertEqual(data["path"], str(repo_path),
+                             msg="read must return the winning (last-layer) path")
+            self.assertEqual(data["source_layer"], "repo")
+
+
+# ---------------------------------------------------------------------------
+# T007: list-bindings subcommand
+# ---------------------------------------------------------------------------
+
+class TestListBindings(unittest.TestCase):
+    """list-bindings outputs a JSON tree of all resolved bindings."""
+
+    def test_list_bindings_empty(self):
+        """list-bindings with no TOML config returns empty JSON object."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir, \
+             tempfile.TemporaryDirectory() as config_dir:
+
+            env = {
+                "Z_HARNESS_BUILTIN_PERSONAS_DIR": builtin_dir,
+                "Z_HARNESS_USER_PERSONAS_DIR": user_dir,
+                "Z_HARNESS_REPO_PERSONAS_DIR": repo_dir,
+                "Z_HARNESS_REPO_CONFIG": str(Path(config_dir) / "nonexistent.toml"),
+                "XDG_CONFIG_HOME": config_dir,
+            }
+            result = _run(["list-bindings"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            data = json.loads(result.stdout)
+            self.assertIsInstance(data, dict)
+
+    def test_list_bindings_with_command_filter(self):
+        """list-bindings --command z_plan returns only that command's bindings."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir, \
+             tempfile.TemporaryDirectory() as config_dir:
+
+            _write_persona(Path(builtin_dir), "filter-persona", description="Filter test")
+
+            toml_path = Path(config_dir) / "config.toml"
+            _write_toml(toml_path, """
+[roles.z_plan.consultant_primary]
+persona = "filter-persona"
+
+[roles.z_review.reviewer]
+runtime = "codex-cli"
+""")
+            env = {
+                "Z_HARNESS_BUILTIN_PERSONAS_DIR": builtin_dir,
+                "Z_HARNESS_USER_PERSONAS_DIR": user_dir,
+                "Z_HARNESS_REPO_PERSONAS_DIR": repo_dir,
+                "Z_HARNESS_REPO_CONFIG": str(toml_path),
+                "XDG_CONFIG_HOME": config_dir,
+                "Z_HARNESS_REPO_PROVIDERS": "/dev/null",
+            }
+
+            result = _run(["list-bindings", "--command", "z_plan"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            data = json.loads(result.stdout)
+            # Only z_plan should be present
+            self.assertIn("z_plan", data,
+                          msg="z_plan must be in filtered output")
+            self.assertNotIn("z_review", data,
+                             msg="z_review must be excluded when filtering by z_plan")
+
+
 if __name__ == "__main__":
     unittest.main()

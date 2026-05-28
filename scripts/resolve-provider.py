@@ -31,6 +31,11 @@ from pathlib import Path
 # when both global and repo configs are v1.
 _v1_upgrade_emitted: set[str] = set()
 
+# Module-level set tracking which alias old-names have already emitted a
+# provider_alias_used event in this process.  Ensures one emission per
+# (process, old-name) regardless of how many times resolve() is called.
+_alias_used_emitted: set[str] = set()
+
 
 # ---------------------------------------------------------------------------
 # Config loading
@@ -282,6 +287,72 @@ def _emit_shadow(section: str, key: str, global_path: str, repo_path: str) -> No
 
 
 # ---------------------------------------------------------------------------
+# Alias resolution helpers
+# ---------------------------------------------------------------------------
+
+def _emit_alias_used(old_name: str, new_name: str) -> None:
+    """Emit provider_alias_used event via log-event.sh (best-effort, non-fatal).
+
+    Does NOT perform memoization — callers are responsible for checking
+    _alias_used_emitted before calling this function.
+    """
+    script_dir = Path(__file__).parent
+    log_event = script_dir / "log-event.sh"
+    if log_event.exists() and shutil.which("bash"):
+        payload = json.dumps({"old_name": old_name, "new_name": new_name})
+        run_id = os.environ.get("Z_HARNESS_RUN_ID", "unknown-run")
+        try:
+            subprocess.run(
+                ["bash", str(log_event), run_id, "provider_alias_used", payload],
+                check=False,
+                capture_output=True,
+            )
+        except OSError:
+            pass  # log-event.sh unavailable — ignore
+
+
+def _emit_legacy_roles_used(role: str, provider_name: str) -> None:
+    """Emit legacy_provider_roles_used event (best-effort, non-memoized)."""
+    script_dir = Path(__file__).parent
+    log_event = script_dir / "log-event.sh"
+    if log_event.exists() and shutil.which("bash"):
+        payload = json.dumps({"role": role, "provider": provider_name})
+        run_id = os.environ.get("Z_HARNESS_RUN_ID", "unknown-run")
+        try:
+            subprocess.run(
+                ["bash", str(log_event), run_id, "legacy_provider_roles_used", payload],
+                check=False,
+                capture_output=True,
+            )
+        except OSError:
+            pass  # log-event.sh unavailable — ignore
+
+
+def _apply_aliases(provider_name: str, aliases: dict, role: str, is_legacy: bool) -> str:
+    """
+    Check if provider_name is an alias; if so, substitute the canonical name
+    and emit provider_alias_used (memoized via _alias_used_emitted).
+    When is_legacy is True, also emit legacy_provider_roles_used.
+
+    Memoization guard lives here (not inside _emit_alias_used) so that tests
+    can monkeypatch _emit_alias_used while the dedup logic remains testable.
+
+    Returns the (possibly substituted) provider name.
+    """
+    if is_legacy:
+        _emit_legacy_roles_used(role, provider_name)
+
+    canonical = aliases.get(provider_name)
+    if canonical is not None:
+        if provider_name not in _alias_used_emitted:
+            _alias_used_emitted.add(provider_name)
+            _emit_alias_used(provider_name, canonical)
+        return canonical
+
+    return provider_name
+
+
+# ---------------------------------------------------------------------------
 # Resolution
 # ---------------------------------------------------------------------------
 
@@ -290,17 +361,28 @@ def resolve(role: str, merged: dict) -> dict:
     Resolve *role* to a provider descriptor.
     Returns dict with keys matching the output schema.
     Calls sys.exit on unresolvable situations.
+
+    Resolution applies alias substitution: if the looked-up provider name
+    matches an entry in the 'aliases' mapping, the canonical name is used
+    and a memoized provider_alias_used event is emitted.  When the role
+    comes from the legacy providers.json 'roles' mapping, legacy_provider_roles_used
+    is also emitted.
     """
     roles = merged.get("roles", {})
     providers = merged.get("providers", {})
+    aliases = merged.get("aliases", {})
 
-    provider_name = roles.get(role)
-    if not provider_name:
+    raw_provider_name = roles.get(role)
+    if not raw_provider_name:
         print(
             f"[providers] role={role} unbound — run /z-providers-discover",
             file=sys.stderr,
         )
         sys.exit(1)
+
+    # The roles mapping in providers.json is the legacy fallback path.
+    # Apply alias substitution and emit telemetry events accordingly.
+    provider_name = _apply_aliases(raw_provider_name, aliases, role, is_legacy=True)
 
     provider = providers.get(provider_name)
     if not provider:

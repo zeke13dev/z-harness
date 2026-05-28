@@ -15,6 +15,7 @@ To run:
 
 import importlib.util
 import json
+import types
 from pathlib import Path
 
 import pytest
@@ -25,7 +26,8 @@ from runtime.validate import validate
 from runtime.dispatch.env import build_env
 
 # ---------------------------------------------------------------------------
-# Import scripts/resolve-provider.py as a module so compose_argv is callable.
+# Import scripts/resolve-provider.py as a module so compose_argv and
+# resolve-related functions are callable.
 # ---------------------------------------------------------------------------
 _SCRIPTS_DIR = Path(__file__).parent.parent.parent / "scripts"
 _RESOLVE_PROVIDER_SCRIPT = _SCRIPTS_DIR / "resolve-provider.py"
@@ -35,6 +37,8 @@ _rp_spec = importlib.util.spec_from_file_location(
 _rp_module = importlib.util.module_from_spec(_rp_spec)  # type: ignore[arg-type]
 _rp_spec.loader.exec_module(_rp_module)  # type: ignore[union-attr]
 compose_argv = _rp_module.compose_argv
+_apply_aliases = _rp_module._apply_aliases
+_emit_alias_used = _rp_module._emit_alias_used
 
 
 # Resolve repo root as the directory containing .z-harness/
@@ -323,3 +327,244 @@ def test_build_env_backward_compat_no_effective_model():
     assert result["MY_TOKEN"] == "secret"
     assert result["OTHER"] == "val"
     assert result["CLAUDECODE"] == ""
+
+
+# ---------------------------------------------------------------------------
+# T005: Provider alias resolution + memoized provider_alias_used event
+# ---------------------------------------------------------------------------
+
+def _make_merged(
+    roles: dict,
+    providers: dict,
+    aliases: dict,
+) -> dict:
+    """Build a minimal merged config dict for resolve() calls."""
+    return {"roles": roles, "providers": providers, "aliases": aliases}
+
+
+def _make_fake_provider(command: str = "true") -> dict:
+    """Return a minimal v2-upgraded provider descriptor."""
+    return {
+        "kind": "cli",
+        "command": command,
+        "args_template": [],
+        "stdin": False,
+        "timeout_s": 30,
+        "model_label": "Test",
+        "model_arg_template": None,
+        "model_env_var": None,
+        "default_model": None,
+    }
+
+
+def _fresh_rp_module() -> types.ModuleType:
+    """
+    Return a freshly-imported copy of resolve-provider.py with its module-level
+    sets reset to empty.  Used to isolate memoization state between tests.
+    """
+    spec = importlib.util.spec_from_file_location(
+        f"resolve_provider_fresh_{id(object())}",
+        _RESOLVE_PROVIDER_SCRIPT,
+    )
+    mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    return mod
+
+
+class TestAliasSubstitution:
+    """resolve() passes the looked-up provider name through alias resolution."""
+
+    def test_alias_substitutes_old_name_to_new(self, monkeypatch):
+        """aliases: {codex: codex-cli} + role bound to 'codex' resolves to 'codex-cli'."""
+        mod = _fresh_rp_module()
+        aliases = {"codex": "codex-cli"}
+        providers = {"codex-cli": _make_fake_provider()}
+        merged = _make_merged(
+            roles={"consultant_primary": "codex"},
+            providers=providers,
+            aliases=aliases,
+        )
+
+        emitted: list[tuple] = []
+
+        def fake_emit_alias(old, new):
+            emitted.append((old, new))
+
+        monkeypatch.setattr(mod, "_emit_alias_used", fake_emit_alias)
+        # Patch shutil.which to make the 'true' command appear on PATH
+        monkeypatch.setattr(mod.shutil, "which", lambda cmd: f"/usr/bin/{cmd}")
+
+        result = mod.resolve("consultant_primary", merged)
+
+        assert result["provider"] == "codex-cli", (
+            f"Expected provider='codex-cli' after alias substitution, got {result['provider']!r}"
+        )
+        assert ("codex", "codex-cli") in emitted, (
+            "Expected provider_alias_used event for (codex → codex-cli)"
+        )
+
+    def test_no_alias_match_resolves_directly(self, monkeypatch):
+        """When provider name is NOT in aliases, resolution is direct (no event)."""
+        mod = _fresh_rp_module()
+        aliases = {"codex": "codex-cli"}
+        providers = {"gemini-cli": _make_fake_provider()}
+        merged = _make_merged(
+            roles={"consultant_secondary": "gemini-cli"},
+            providers=providers,
+            aliases=aliases,
+        )
+
+        emitted: list = []
+        monkeypatch.setattr(mod, "_emit_alias_used", lambda old, new: emitted.append((old, new)))
+        monkeypatch.setattr(mod.shutil, "which", lambda cmd: f"/usr/bin/{cmd}")
+
+        result = mod.resolve("consultant_secondary", merged)
+
+        assert result["provider"] == "gemini-cli"
+        assert emitted == [], f"Expected no alias events, got: {emitted}"
+
+
+class TestMemoization:
+    """provider_alias_used fires exactly once per (process, old_name)."""
+
+    def test_same_alias_100_times_emits_once(self, monkeypatch):
+        """Resolving the same alias 100 times emits provider_alias_used exactly once."""
+        mod = _fresh_rp_module()
+        aliases = {"codex": "codex-cli"}
+        providers = {"codex-cli": _make_fake_provider()}
+        merged = _make_merged(
+            roles={"consultant_primary": "codex"},
+            providers=providers,
+            aliases=aliases,
+        )
+
+        emit_count = 0
+
+        def counting_emit(old, new):
+            nonlocal emit_count
+            emit_count += 1
+
+        monkeypatch.setattr(mod, "_emit_alias_used", counting_emit)
+        monkeypatch.setattr(mod.shutil, "which", lambda cmd: f"/usr/bin/{cmd}")
+
+        for _ in range(100):
+            mod.resolve("consultant_primary", merged)
+
+        assert emit_count == 1, (
+            f"Expected exactly 1 provider_alias_used emission for 100 resolves; got {emit_count}"
+        )
+
+    def test_two_different_aliases_emit_two_events(self, monkeypatch):
+        """Two distinct aliases (codex, gemini) each emit one provider_alias_used event."""
+        mod = _fresh_rp_module()
+        aliases = {"codex": "codex-cli", "gemini": "gemini-cli"}
+        providers = {
+            "codex-cli": _make_fake_provider(),
+            "gemini-cli": _make_fake_provider(),
+        }
+
+        emitted: list[tuple] = []
+
+        def capturing_emit(old, new):
+            emitted.append((old, new))
+
+        monkeypatch.setattr(mod, "_emit_alias_used", capturing_emit)
+        monkeypatch.setattr(mod.shutil, "which", lambda cmd: f"/usr/bin/{cmd}")
+
+        merged_primary = _make_merged(
+            roles={"consultant_primary": "codex"},
+            providers=providers,
+            aliases=aliases,
+        )
+        merged_secondary = _make_merged(
+            roles={"consultant_secondary": "gemini"},
+            providers=providers,
+            aliases=aliases,
+        )
+
+        mod.resolve("consultant_primary", merged_primary)
+        mod.resolve("consultant_secondary", merged_secondary)
+
+        assert len(emitted) == 2, f"Expected 2 alias events (one per alias), got: {emitted}"
+        old_names = {e[0] for e in emitted}
+        assert old_names == {"codex", "gemini"}, (
+            f"Expected events for 'codex' and 'gemini', got: {old_names}"
+        )
+
+
+class TestLegacyRolesFallback:
+    """legacy_provider_roles_used fires alongside provider_alias_used when roles mapping is used."""
+
+    def test_legacy_roles_with_alias_emits_both_events(self, monkeypatch):
+        """When providers.json.roles[role]='codex' (alias), both events fire."""
+        mod = _fresh_rp_module()
+        aliases = {"codex": "codex-cli"}
+        providers = {"codex-cli": _make_fake_provider()}
+        # The roles section IS the legacy path; 'codex' is an alias
+        merged = _make_merged(
+            roles={"consultant_primary": "codex"},
+            providers=providers,
+            aliases=aliases,
+        )
+
+        alias_events: list[tuple] = []
+        legacy_events: list[tuple] = []
+
+        def capture_alias(old, new):
+            alias_events.append((old, new))
+
+        def capture_legacy(role, provider):
+            legacy_events.append((role, provider))
+
+        monkeypatch.setattr(mod, "_emit_alias_used", capture_alias)
+        monkeypatch.setattr(mod, "_emit_legacy_roles_used", capture_legacy)
+        monkeypatch.setattr(mod.shutil, "which", lambda cmd: f"/usr/bin/{cmd}")
+
+        mod.resolve("consultant_primary", merged)
+
+        assert len(alias_events) == 1, (
+            f"Expected 1 provider_alias_used event, got: {alias_events}"
+        )
+        assert alias_events[0] == ("codex", "codex-cli"), (
+            f"Wrong alias event payload: {alias_events[0]}"
+        )
+        assert len(legacy_events) == 1, (
+            f"Expected 1 legacy_provider_roles_used event, got: {legacy_events}"
+        )
+        assert legacy_events[0] == ("consultant_primary", "codex"), (
+            f"Wrong legacy event payload: {legacy_events[0]}"
+        )
+
+    def test_legacy_roles_without_alias_emits_only_legacy_event(self, monkeypatch):
+        """When providers.json.roles[role]='codex-cli' (canonical), only legacy event fires."""
+        mod = _fresh_rp_module()
+        aliases = {"codex": "codex-cli"}
+        providers = {"codex-cli": _make_fake_provider()}
+        # canonical name in roles — no alias substitution needed
+        merged = _make_merged(
+            roles={"consultant_primary": "codex-cli"},
+            providers=providers,
+            aliases=aliases,
+        )
+
+        alias_events: list = []
+        legacy_events: list = []
+
+        monkeypatch.setattr(
+            mod, "_emit_alias_used",
+            lambda old, new: alias_events.append((old, new)),
+        )
+        monkeypatch.setattr(
+            mod, "_emit_legacy_roles_used",
+            lambda role, provider: legacy_events.append((role, provider)),
+        )
+        monkeypatch.setattr(mod.shutil, "which", lambda cmd: f"/usr/bin/{cmd}")
+
+        mod.resolve("consultant_primary", merged)
+
+        assert alias_events == [], (
+            f"Expected no alias events for canonical provider name, got: {alias_events}"
+        )
+        assert len(legacy_events) == 1, (
+            f"Expected 1 legacy_provider_roles_used event, got: {legacy_events}"
+        )
