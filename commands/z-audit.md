@@ -592,6 +592,23 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
   "$(printf '{"status":"complete","findings":%d,"tasks":%d,"dimensions":"%s"}' "$N_FINDINGS" "$N_TASKS" "$DIMS")"
 ```
 
+## Telemetry reference
+
+| Event kind | When / meaning | Required fields |
+|---|---|---|
+| `audit_run_start` | Audit run begins | version fields, `target` |
+| `audit_run_end` | Audit run completes | `status`, `findings`, `tasks`, `dimensions` |
+| `scope_from_resolved` | `--scope-from` chunk resolved successfully | `chunk_id`, `scope_hint`, `parent_scope_json` |
+| `scope_probe_start` | Scope-probe Agent dispatched | `axis_taxonomy` |
+| `scope_probe_classified` | Scope-probe returned `STATUS: classified` | `status`, `mode`, `axis`, `confidence`, `reason_codes`, `reason`, `seams_counted`, `candidates_walked` |
+| `scope_probe_malformed` | Scope-probe return failed to parse | `reason`, `raw_truncated` |
+| `scope_probe_skipped_fast_path` | Single-file target auto-classified LIGHT, scope-probe Agent skipped | `command` (`z-audit`), `target`, `arg_len` |
+| `scope_artifact_rejected` | A CHUNK_ARTIFACTS path failed validation | `reason`, `dest` |
+| `scope_fanout_dispatched` | HEAVY mode: N sub-flows launched | `chunk_count`, `chunks`, `axis` |
+| `scope_fanout_reconciled` | HEAVY mode: reconciler finished | `unified_verdict`, `chunks_total`, `chunks_failed`, `findings_after_dedup` |
+
+---
+
 ## Hard rules
 
 - **Read-only.** Never edit the target. Ever.
