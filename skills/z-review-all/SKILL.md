@@ -93,6 +93,12 @@ print(json.dumps(v))
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_all_start "$START_PAYLOAD"
 ```
 
+**Kernel path resolution (once per run, immediately after review_all_start):**
+```bash
+KERNEL_PATH="$(bash scripts/resolve-kernel.sh 2>/dev/null || true)"
+```
+Resolve the kernel path exactly once here. When `KERNEL_PATH` is non-empty, inject `kernel_path: <KERNEL_PATH>` as a line in the `Agent(prompt=...)` of every behavioral-agent dispatch in this run (consultant-primary, consultant-secondary). Omit the line entirely when `KERNEL_PATH` is empty — the agent's static fallback handles self-resolution in that case. Do NOT inject kernel content — inject the path string only.
+
 ## Phase 1 — Sanity check task status
 
 Read `$BASE/TASKS.md`. Count `[ ]`, `[~]`, `[x]`, and skip-flagged tasks.
@@ -285,12 +291,12 @@ Each is asked the **two-pronged** review:
 Agent(
   subagent_type="consultant-primary",
   description="Final-review (Gemini) for plan <slug>",
-  prompt="MODE: final-review-2pronged\n\n<full prompt with both prongs, plus paths to SPEC/PLAN/TASKS and cumulative.diff>"
+  prompt="MODE: final-review-2pronged\n\n<full prompt with both prongs, plus paths to SPEC/PLAN/TASKS and cumulative.diff>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 Agent(
   subagent_type="consultant-secondary",
   description="Final-review (Codex) for plan <slug>",
-  prompt="MODE: final-review-2pronged\n\n<same>"
+  prompt="MODE: final-review-2pronged\n\n<same>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 ```
 

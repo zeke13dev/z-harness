@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://z-harness/schemas/decision-event.schema.json",
+  "title": "DecisionEvent",
+  "description": "A normalized decision event emitted by log-decision.sh and appended to metrics.jsonl / run events.jsonl. The base fields (ts, run, kind) are merged in by log-event.sh; this schema documents the full merged object.",
+  "type": "object",
+  "required": ["ts", "run", "kind", "question_id", "decision_key", "chosen", "options", "event_id"],
+  "additionalProperties": true,
+  "properties": {
+    "ts": {
+      "type": "string",
+      "description": "ISO-8601 UTC timestamp of emission, merged in by log-event.sh (e.g. 2026-05-29T14:00:00Z)."
+    },
+    "run": {
+      "type": "string",
+      "description": "Run identifier passed to log-decision.sh, merged in by log-event.sh."
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["user_choice", "user_override"],
+      "description": "user_choice when chosen == tentative (or no tentative given); user_override when chosen != tentative. May be set explicitly by caller."
+    },
+    "slug": {
+      "type": "string",
+      "description": "Optional plan slug, added by log-event.sh when Z_HARNESS_SLUG is set."
+    },
+    "question_id": {
+      "type": "string",
+      "description": "Stable normalized id for the decision (e.g. provider_for_task, dirty_tree_strategy). Kebab-cased normalization of the question when no natural id exists."
+    },
+    "decision_key": {
+      "type": "string",
+      "description": "Grouping key used by axiom-extract.py (R8). Always equals question_id."
+    },
+    "chosen": {
+      "type": "string",
+      "description": "The option label the user picked (normalized)."
+    },
+    "options": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "JSON array of option labels offered to the user. Empty array when not provided."
+    },
+    "tentative": {
+      "oneOf": [
+        {"type": "string"},
+        {"type": "null"}
+      ],
+      "description": "The orchestrator's pre-pick / recommended option, or null when the orchestrator had no recommendation."
+    },
+    "source_command": {
+      "oneOf": [
+        {"type": "string"},
+        {"type": "null"}
+      ],
+      "description": "The slash command or script that emitted this event (e.g. z-plan, z-implement-next), or null when not provided."
+    },
+    "event_id": {
+      "type": "string",
+      "pattern": "^e-[0-9a-f]{8}$",
+      "description": "Stable event identifier: e-<sha1(run + question_id + chosen + ts)[:8]>. Used by axiom evidence citations."
+    }
+  }
+}

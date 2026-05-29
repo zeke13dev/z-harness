@@ -408,6 +408,38 @@
         "skills"
       ],
       "summary": "Linear pipeline orchestrator that chains z-harness sub-commands unattended with halt-only interaction; Z_HARNESS_NO_ASK=halt set only around Skill calls; 12 instrumented callsites (9 resolver + 3 new gates); flock-guarded overnight-state.json; MORNING_REPORT.md written on every terminal transition; resume via /z-overnight resume <RUN_ID>."
+    },
+    {
+      "slug": "axioms",
+      "source_file": [
+        "scripts/axiom-store.py",
+        "scripts/axiom-extract.py",
+        "scripts/build-kernel.py",
+        "scripts/resolve-kernel.sh",
+        "scripts/build-skill-index.py",
+        "agents/axiom-extractor.md",
+        "commands/z-axiom-scan.md",
+        "commands/z-axiom-list.md",
+        "commands/z-axiom-approve.md",
+        "commands/z-axiom-reject.md",
+        "commands/z-axiom-edit.md",
+        "docs/schemas/axiom.schema.json",
+        "scripts/config.py",
+        "scripts/setup.py"
+      ],
+      "last_updated": "2026-05-29T00:00:00Z",
+      "confidence": "high",
+      "depends_on": [
+        "config",
+        "scripts",
+        "agents"
+      ],
+      "consumed_by": [
+        "config",
+        "commands",
+        "agents"
+      ],
+      "summary": "Advisory behavioral rules mined from z-harness interaction history; lifecycle raw->candidate->approved with explicit user approval gate; five /z-axiom-* commands; KERNEL.md compiled by build-kernel.py and read by six behavioral subagents; axioms are the lowest-authority signal in the resolver — config/memory win direct conflicts but the conflict is surfaced via axiom_conflict envelope."
     }
   ]
 }

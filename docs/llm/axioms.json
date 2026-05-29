@@ -1,0 +1,149 @@
+{
+  "concept": "axioms",
+  "last_updated": "2026-05-29T00:00:00Z",
+  "covers_spec": "z-harness/inherited-agents-axioms/SPEC.md",
+  "source_file": [
+    "scripts/axiom-store.py",
+    "scripts/axiom-extract.py",
+    "scripts/build-kernel.py",
+    "scripts/resolve-kernel.sh",
+    "scripts/build-skill-index.py",
+    "agents/axiom-extractor.md",
+    "commands/z-axiom-scan.md",
+    "commands/z-axiom-list.md",
+    "commands/z-axiom-approve.md",
+    "commands/z-axiom-reject.md",
+    "commands/z-axiom-edit.md",
+    "docs/schemas/axiom.schema.json",
+    "scripts/config.py",
+    "scripts/setup.py"
+  ],
+  "confidence": "high",
+  "entry_points": [
+    {
+      "file": "scripts/axiom-store.py",
+      "line": 1,
+      "symbol": "axiom-store",
+      "kind": "module",
+      "summary": "CRUD + validation for the two-layer (global+project) axiom store. Subcommands: path, add, list, get, validate, approve, reject, edit. All output JSON to stdout; diagnostics to stderr. Atomic writes via tmp+os.replace. O_EXCL lock (.approve.lock) on approve to prevent concurrent approvals producing a graph-invalid state."
+    },
+    {
+      "file": "scripts/axiom-store.py",
+      "line": 336,
+      "symbol": "validate_graph",
+      "kind": "fn",
+      "summary": "R1: THE single shared graph validator used by both approve and build-kernel.py. Checks referential integrity (supersedes/conflicts_with targets exist), mutual approved conflicts, and acyclicity of the supersedes graph. Returns {ok, errors, warns}."
+    },
+    {
+      "file": "scripts/axiom-store.py",
+      "line": 488,
+      "symbol": "_load_active_set",
+      "kind": "fn",
+      "summary": "R1: Shared load semantics for approve and build-kernel.py. scope=None or project loads global then project (project shadows global by id). scope=global loads global only. Loads all statuses (candidate+approved+rejected) for graph validation context."
+    },
+    {
+      "file": "scripts/axiom-store.py",
+      "line": 927,
+      "symbol": "cmd_approve",
+      "kind": "fn",
+      "summary": "Atomically promote candidate to approved. Algorithm: load candidate, schema-validate, needs_ack gate (no boundary/counterexamples without --ack-observation), O_EXCL lock, build prospective set, validate_graph, demote supersedes target to rejected/, write approved/<id>.json, remove candidate, regen kernel (synchronous). Returns needs_ack | graph_invalid | busy | approved | approved_kernel_stale."
+    },
+    {
+      "file": "scripts/axiom-extract.py",
+      "line": 1,
+      "symbol": "axiom-extract",
+      "kind": "module",
+      "summary": "Mine candidate axioms from metrics.jsonl. Mined kinds: user_choice, user_override (log-decision.sh), cost_gate_decision, critique_failure_decision, map_collision_decision, shared_concerns_ack_override. Grouping key: (event_kind, decision_key, normalized_value). Candidate proposed when group count >= axioms.extract_min_recurrence (default 3). confidence = min(0.95, rec/(rec+2)). Two-stage in-run dedup: exact statement+scope hash, then fuzzy token-set Jaccard >= 0.9. Advisory MEMORY.md overlap note on stderr. Invariant 8: never writes the store, never approves."
+    },
+    {
+      "file": "scripts/build-kernel.py",
+      "line": 1,
+      "symbol": "build-kernel",
+      "kind": "module",
+      "summary": "Compile KERNEL.md for a scope. Steps: (1) build skill index via build-skill-index.py, (2) load full active set via _load_active_set (R1 semantics), (3) graph-validate full set, (4) drop graph-invalid APPROVED records with axiom_integrity_warning event (R2), (5) sort approved by scope/discipline/confidence/recency (D3), (6) compute source_hash (SHA-256 over skill text + sorted id+statement, NO timestamp, R6), (7) budget-select axioms with exact rendered-size accounting, (8) atomic write KERNEL.md, (9) emit kernel_built event. --print-hash: non-mutating mode, prints 12-char prefix."
+    },
+    {
+      "file": "scripts/resolve-kernel.sh",
+      "line": 1,
+      "symbol": "resolve-kernel",
+      "kind": "module",
+      "summary": "Resolve absolute KERNEL.md path. Resolution chain: Z_HARNESS_KERNEL_PATH (if set+exists) > <git-root>/.z-harness/KERNEL.md > $XDG_CONFIG_HOME/z-harness/KERNEL.md > exit 1. Non-blocking staleness check: parses source_hash from header, recomputes via build-kernel.py --print-hash, emits loud stderr warning on mismatch. Never changes exit code or resolved path on staleness."
+    },
+    {
+      "file": "scripts/build-skill-index.py",
+      "line": 1,
+      "symbol": "build-skill-index",
+      "kind": "module",
+      "summary": "Crawl commands/*.md and skills/*/SKILL.md frontmatter, emit compact one-line-per-skill dispatch table (markdown). Sorted alphabetically by command name. Deduplicates command+skill with same name (command description wins). Used by build-kernel.py to populate the skill dispatch section of KERNEL.md."
+    },
+    {
+      "file": "agents/axiom-extractor.md",
+      "line": 1,
+      "symbol": "axiom-extractor",
+      "kind": "module",
+      "summary": "Sonnet-tier retrospective policy-mining agent. Wraps axiom-extract.py with LLM judgement: merge near-duplicates, sharpen statements to imperative form, draft boundary_conditions + counterexamples, drop MEMORY.md overlap candidates, cap at <=5 candidates. Returns ONE fenced JSON array. Never writes the store, never approves (Invariant 8)."
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 1334,
+      "symbol": "_load_axiom_matches",
+      "kind": "fn",
+      "summary": "Load graph-valid approved axioms whose applies_to array contains a <question_id>:<value> entry matching the given question_id. Gates on axioms.enabled (default true). Delegates to axiom-store._load_active_set and validate_graph. Returns [] on any error (fail-open for the store, fail-closed for participation)."
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 1706,
+      "symbol": "_build_resolve_envelope",
+      "kind": "fn",
+      "summary": "Core resolver applying axiom layer on top of config+memory. Three axiom outcomes: (1) agree with resolved value -> listed in sources[] only, no result change; (2) gap-fill (config=ask default, memory silent) -> source='axiom', strength='soft', result via RESULT_MAP; (3) conflict with resolved value -> source='axiom_conflict', nested axiom:{id, statement, conflict:true}. No axiom match -> envelope byte-identical to pre-axiom (R7)."
+    },
+    {
+      "file": "scripts/setup.py",
+      "line": 1303,
+      "symbol": "_wizard_axioms",
+      "kind": "fn",
+      "summary": "Wizard section for the axioms scope. Configures axioms.enabled, axioms.auto_extract_post_run, axioms.kernel_budget_chars (int), axioms.extract_min_recurrence (int). Offers to add .z-harness/axioms/ and .z-harness/KERNEL.md to project .gitignore."
+    }
+  ],
+  "depends_on": [
+    "config",
+    "scripts",
+    "agents"
+  ],
+  "consumed_by": [
+    "config",
+    "commands",
+    "agents"
+  ],
+  "invariants": [
+    "Axioms are advisory: authority order is config/env > routing-preference memory > approved axioms > persona/built-in defaults. Config/memory always win direct conflicts.",
+    "axiom_conflict envelope: when an axiom value differs from the config/memory-resolved value, source='axiom_conflict' is emitted and a nested axiom:{id, statement, conflict:true} object is added. The conflict is surfaced — never silently swallowed.",
+    "Axiom lifecycle: raw events (metrics.jsonl) -> candidate -> approved (KERNEL.md). Candidate-to-approved transition requires explicit user approval via /z-axiom-approve (ask_user gate). No auto-approval path exists.",
+    "Invariant 8 (extractor proposes-only): axiom-extract.py and axiom-extractor agent NEVER write the axiom store and NEVER approve anything. They emit candidate JSON only.",
+    "R1 (single shared validator): validate_graph() in axiom-store.py is the ONE shared graph validator used by both approve (prospective-set check) and build-kernel.py (full active-set check). Load semantics are identical (_load_active_set).",
+    "R2 (loud drop, not silent skip): approved records that fail graph validation at compile time are excluded from KERNEL.md AND emit an axiom_integrity_warning event. drop_count is recorded in the kernel header.",
+    "R4 (O_EXCL lock on approve): approve acquires .approve.lock via O_EXCL before loading the active set and running validate_graph. Two concurrent approves cannot both validate against a stale set and then serialize into a graph-invalid state.",
+    "R6 (deterministic hash): source_hash is SHA-256 over (skill index text + sorted approved id+statement pairs). NO timestamp is included. Same inputs -> byte-identical body + identical source_hash. generated_at is the only volatile field and lives outside the hashed region.",
+    "Kernel regen is synchronous on approve, reject (if was-approved), and edit (if was/is-approved). A kernel_regen_failed result from build-kernel.py causes the command to exit with status *_kernel_stale and exit code 1.",
+    "Project axioms shadow global axioms on the same id (last-write-wins into records_by_id when loading). Project scope is a SUPERSET of global: project-scope approve/validate loads global first then project.",
+    "Cross-store supersede (supersedes target in a different store) is unsupported in v1; approve returns cross_store_supersede_unsupported and exits 1 without writing anything.",
+    "needs_ack gate: candidates with no boundary_conditions AND no counterexamples emit observation_not_axiom warning; approve requires --ack-observation to proceed. This is enforced by axiom-store.py approve before the O_EXCL lock is acquired.",
+    "axiom id format: ax-<sha256(statement+scope)[:8]> (8 lowercase hex chars). Derived deterministically; no random component.",
+    "Store directories: global = $XDG_CONFIG_HOME/z-harness/axioms/{candidates,approved,rejected}/; project = <git-root>/.z-harness/axioms/{candidates,approved,rejected}/. Both survive /z-update.",
+    "axioms.enabled=false causes _load_axiom_matches to return [] immediately; the resolver behaves identically to a pre-axioms run (backward-compatible). The axiom key is ABSENT entirely from the envelope when no axiom participates (R7).",
+    "Kernel budget selection: greedy include-in-sort-order, then verify-and-trim loop. First axiom always kept even if it alone exceeds budget. Budget accounts for exact rendered-size including header widths, n_axioms, and omitted-count comment."
+  ],
+  "gotchas": [
+    "Axioms advisory — config/memory win direct conflicts but conflict is surfaced: a config or memory entry that disagrees with an axiom produces source='axiom_conflict' in the resolve-question envelope. The result/strength/rule_id from config/memory still apply; the axiom object is informational. Callers must handle the axiom_conflict source value.",
+    "Kernel regen synchronous on approve/reject/edit: any of these three mutations blocks until build-kernel.py completes. If the kernel cannot be written (e.g., disk full), the command exits with *_kernel_stale and the mutation HAS already been committed to the store. The store mutation is NOT rolled back on kernel failure.",
+    "Store in user-space survives /z-update: $XDG_CONFIG_HOME/z-harness/axioms/ (global) and <git-root>/.z-harness/axioms/ (project) are outside the plugin install tree. /z-update (git pull or tarball swap) does not touch these directories.",
+    "Gap-fill vs agree vs conflict: axioms only change the resolution outcome in the gap-fill case (config=ask default + memory silent). When config or memory has a non-default value, the axiom layer records the axiom in sources[] (agree) or emits axiom_conflict (disagree) but does NOT change result/strength. Treat strength='soft' as the marker for an axiom-driven gap-fill.",
+    "Free-form behavioral axioms (no applies_to field) never enter the resolver. They appear only in KERNEL.md and are read by behavioral subagents at task start. The resolver only consults axioms that have a matching applies_to entry.",
+    "axiom-extract.py writes extractor-only fields (possible_duplicate_of, notes) onto candidates during mining, then STRIPS them before emitting to stdout. These fields are NOT in the schema (additionalProperties:false) and would cause axiom-store.py add to reject the record. The stripped annotations appear on stderr as {advisories:[...]}.",
+    "Fuzzy dedup in axiom-extract.py uses token-set Jaccard >= 0.9 to flag possible_duplicate_of, but does NOT drop the duplicate — it annotates it on stderr. The axiom-extractor AGENT (T015) is responsible for actually merging near-duplicates before returning candidates to the caller.",
+    "resolve-kernel.sh staleness check is non-blocking and best-effort. It shells out to build-kernel.py --print-hash; if that fails for any reason (missing script, non-zero exit, parse error), it silently skips the check. A stale kernel does not prevent agents from reading the file.",
+    "validate_graph check 2 (mutual conflict between approved records): the exemption (one supersedes the other) only applies when the superseded record is NOT approved. If both records are approved and one supersedes the other, it is still an error — the superseded record must be demoted (rejected) for the exemption to apply.",
+    "Project scope _load_active_set always includes global records too (project is a SUPERSET). This means a project-scope approve sees global approved records for graph validation — a conflict between a project candidate and a global approved record will be caught. Passing --scope=project to validate --all also loads both stores."
+  ],
+  "memories": []
+}

@@ -63,7 +63,35 @@ DEFAULTS: dict = {
         "review_all_proceed":    "ask",   # ask | proceed | halt
         "plan_decisions_approval": "ask", # ask | approve | halt
     },
+    "axioms": {
+        "enabled":               True,   # bool: enable axioms extraction pipeline
+        "kernel_budget_chars":   6000,   # int: max chars of axiom text in context kernel
+        "extract_min_recurrence": 3,     # int: minimum recurrences before auto-extracting an axiom
+        "auto_extract_post_run": True,   # bool: run axiom extraction automatically after each run
+    },
 }
+
+
+def _validate_bool(value: object) -> bool:
+    """Accept Python bools or the strings 'true'/'false' (case-insensitive)."""
+    if isinstance(value, bool):
+        return True
+    if isinstance(value, str) and value.lower() in {"true", "false"}:
+        return True
+    return False
+
+
+def _validate_positive_int(value: object) -> bool:
+    """Accept Python ints > 0, or decimal string representations of same."""
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return True
+    if isinstance(value, str):
+        try:
+            return int(value) > 0
+        except ValueError:
+            return False
+    return False
+
 
 VALIDATORS: dict = {
     "notify.level": {"off", "approval_only", "all"},
@@ -73,9 +101,44 @@ VALIDATORS: dict = {
     "workflow.implement_all_proceed":    {"ask", "auto_resume", "halt"},
     "workflow.review_all_proceed":       {"ask", "proceed", "halt"},
     "workflow.plan_decisions_approval":  {"ask", "approve", "halt"},
+    "axioms.enabled":               _validate_bool,
+    "axioms.kernel_budget_chars":   _validate_positive_int,
+    "axioms.extract_min_recurrence": _validate_positive_int,
+    "axioms.auto_extract_post_run": _validate_bool,
+}
+
+# Coercers: applied after validation to normalize values (esp. env-var strings).
+# Keys that need no coercion (string enums) are absent.
+_COERCERS: dict[str, object] = {
+    "axioms.enabled": lambda v: (
+        v if isinstance(v, bool) else v.lower() == "true"
+    ),
+    "axioms.kernel_budget_chars": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    "axioms.extract_min_recurrence": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    "axioms.auto_extract_post_run": lambda v: (
+        v if isinstance(v, bool) else v.lower() == "true"
+    ),
 }
 
 META_KEYS: set = {"schema_version"}
+
+
+def _describe_allowed(allowed: object) -> object:
+    """Return a human-readable description of an ``allowed`` validator.
+
+    When ``allowed`` is callable (e.g. ``_validate_bool``), returns its
+    ``__doc__`` string (trimmed to first line) or ``repr(allowed)``.
+    When ``allowed`` is a set/frozenset of string literals, returns a sorted
+    list so error messages are deterministic and readable.
+    """
+    if callable(allowed):
+        doc = getattr(allowed, "__doc__", None)
+        return doc.splitlines()[0].strip() if doc else repr(allowed)
+    return sorted(allowed)
 
 # ---------------------------------------------------------------------------
 # Question registry (single source of truth for resolver and /z-suggest-memory)
@@ -397,9 +460,10 @@ def _validate_enum(dotted_key: str, value: object, source_label: str, is_global:
     else:
         valid = value in allowed
     if not valid:
+        allowed_desc = _describe_allowed(allowed)
         msg = (
             f"[config] {source_label}: invalid value for {dotted_key!r}: "
-            f"{value!r} — allowed: {sorted(allowed)}"
+            f"{value!r} — allowed: {allowed_desc}"
         )
         if is_global:
             print(f"WARNING: {msg}; falling back to default", file=sys.stderr)
@@ -515,6 +579,8 @@ def load_config() -> tuple[dict[str, object], dict[str, str]]:
                     if dotted not in flat_defaults:
                         continue
                     v = _validate_enum(dotted, v, str(global_path), is_global=True)
+                    if dotted in _COERCERS:
+                        v = _COERCERS[dotted](v)
                     values[dotted] = v
                     sources[dotted] = str(global_path)
 
@@ -550,6 +616,8 @@ def load_config() -> tuple[dict[str, object], dict[str, str]]:
                     if dotted not in flat_defaults:
                         continue
                     v = _validate_enum(dotted, v, str(repo_path), is_global=False)
+                    if dotted in _COERCERS:
+                        v = _COERCERS[dotted](v)
                     values[dotted] = v
                     sources[dotted] = str(repo_path)
 
@@ -560,6 +628,8 @@ def load_config() -> tuple[dict[str, object], dict[str, str]]:
         if env_val == "":
             continue
         env_val = _validate_enum(dotted_key, env_val, f"env {env_var}", is_global=False)
+        if dotted_key in _COERCERS:
+            env_val = _COERCERS[dotted_key](env_val)
         values[dotted_key] = env_val
         sources[dotted_key] = f"env {env_var}"
 
@@ -1213,6 +1283,149 @@ def _load_memory_matches(question_id: str, project_root: str) -> list[dict]:
     return matches
 
 
+# ---------------------------------------------------------------------------
+# Axiom layer (lowest behavioral-authority signal — advisory, conflict-surfaced)
+# ---------------------------------------------------------------------------
+
+# Cache the dynamically-loaded axiom-store module (its filename has a hyphen, so
+# it cannot be imported with a plain `import`). Resolved as a sibling of config.py.
+_AXIOM_STORE_MODULE = None
+_AXIOM_STORE_LOAD_FAILED = False
+
+
+def _load_axiom_store_module():
+    """
+    Dynamically load scripts/axiom-store.py (sibling of config.py) by file path.
+
+    The store module's filename contains a hyphen, so a normal `import` is not
+    possible; we resolve it relative to config.py (the same way other helpers
+    locate sibling scripts via ``Path(__file__).parent``) and load it through
+    importlib. Returns the module, or None if it is absent / fails to import.
+    Result is cached so the resolver only pays the import cost once per process.
+    """
+    global _AXIOM_STORE_MODULE, _AXIOM_STORE_LOAD_FAILED
+    if _AXIOM_STORE_MODULE is not None:
+        return _AXIOM_STORE_MODULE
+    if _AXIOM_STORE_LOAD_FAILED:
+        return None
+
+    import importlib.util
+
+    store_path = Path(__file__).parent / "axiom-store.py"
+    if not store_path.exists():
+        _AXIOM_STORE_LOAD_FAILED = True
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location("axiom_store", str(store_path))
+        if spec is None or spec.loader is None:
+            _AXIOM_STORE_LOAD_FAILED = True
+            return None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    except (OSError, ImportError, SyntaxError) as exc:
+        print(f"[config] could not load axiom-store.py: {exc}", file=sys.stderr)
+        _AXIOM_STORE_LOAD_FAILED = True
+        return None
+
+    _AXIOM_STORE_MODULE = module
+    return module
+
+
+def _load_axiom_matches(question_id: str, project_root: str) -> list[dict]:
+    """
+    Load graph-valid, approved axioms that answer ``question_id`` and return the
+    option values they recommend. Mirrors ``_load_memory_matches`` in shape.
+
+    Pipeline (SPEC `## scripts/config.py` + R3):
+      1. If ``axioms.enabled`` is false → return ``[]`` (no participation).
+      2. Load the merged global+project active set through axiom-store's
+         ``_load_active_set`` (project shadows global by id).
+      3. Keep only ``approved`` records, then filter through the SINGLE shared
+         ``validate_graph`` (R3): only records in the validated active set
+         participate. If the whole set fails graph validation, none participate.
+      4. For each surviving record, scan ``applies_to`` for an entry whose
+         ``<question_id>`` half (split on the FIRST ``:``) equals the requested
+         ``question_id``. Records with no matching entry never participate.
+      5. Extract the ``<value>`` half. DROP the match if ``<value>`` is not a
+         legal choice in ``QUESTION_IDS[question_id]["choices"]`` — choice
+         membership is validated HERE, not in the store (SPEC line 78).
+
+    Returns list of dicts: ``{value, id, statement, scope}``.
+
+    ``project_root`` is forwarded to the store loader for project-scope
+    resolution. When the store module is absent or unloadable, returns ``[]``
+    (axioms simply do not participate — backward-compatible).
+    """
+    # Step 1: axioms.enabled gate. Read it from the resolved 4-layer config
+    # (a second load_config() within one resolver invocation is the per-invocation
+    # snapshot R10 explicitly scopes correctness to — no cross-invocation atomicity
+    # is promised). On any config error, fail closed (axioms do not participate).
+    try:
+        values, _sources = load_config()
+    except (SystemExit, OSError):
+        return []
+    if not values.get("axioms.enabled", True):
+        return []
+
+    qmeta = QUESTION_IDS.get(question_id)
+    if qmeta is None:
+        return []
+    choices = qmeta["choices"]
+
+    store = _load_axiom_store_module()
+    if store is None:
+        return []
+
+    # Step 2: merged active set (global+project, project shadows global by id).
+    try:
+        records = store._load_active_set(None, project_root or None)
+    except (OSError, AttributeError) as exc:
+        print(f"[config] axiom active-set load failed: {exc}", file=sys.stderr)
+        return []
+
+    # Step 3: keep approved records, then graph-validate via the SINGLE shared
+    # validator (R3). Only the validated active set participates.
+    approved = [r for r in records if isinstance(r, dict) and r.get("status") == "approved"]
+    if not approved:
+        return []
+    try:
+        graph = store.validate_graph(approved)
+    except (AttributeError, TypeError) as exc:
+        print(f"[config] axiom graph validation failed: {exc}", file=sys.stderr)
+        return []
+    if not graph.get("ok", False):
+        # Corrupt active set → no axiom participates (resolver stays in agreement
+        # with the kernel compiler, which also refuses to emit a bad set).
+        return []
+
+    matches: list[dict] = []
+    for rec in approved:
+        applies_to = rec.get("applies_to") or []
+        if not isinstance(applies_to, list):
+            continue
+        for entry in applies_to:
+            if not isinstance(entry, str) or ":" not in entry:
+                continue
+            # Step 4: split on the FIRST ':'. Left half = question_id, right = value.
+            entry_qid, value = entry.split(":", 1)
+            if entry_qid != question_id:
+                continue
+            # Step 5: choice-membership validation lives HERE, not in the store.
+            if value not in choices:
+                continue
+            matches.append({
+                "value": value,
+                "id": rec.get("id"),
+                "statement": rec.get("statement"),
+                "scope": rec.get("scope"),
+            })
+
+    # Sort by id (ascending, lexicographic) so the caller always sees a deterministic
+    # order regardless of dict-iteration order in _load_active_set.
+    matches.sort(key=lambda m: (m["id"] or ""))
+    return matches
+
+
 # Strength ordering for "highest strength wins"
 _STRENGTH_ORDER = {"very_strong": 3, "strong": 2, "weak": 1}
 
@@ -1253,16 +1466,24 @@ def _resolve_memory_matches(
     return None, "conflict", sources
 
 
-def _build_resolve_envelope(
+def _resolve_config_memory_envelope(
     question_id: str,
     explain: bool = False,
-) -> tuple[dict, str, str, str, int]:
+) -> tuple[dict, str, str, str, int, str | None, bool]:
     """
-    Build the resolution envelope for a registered question_id.
+    Build the config+memory resolution envelope for a registered question_id.
 
-    Returns ``(envelope, emit_result, emit_source, emit_strength, exit_code)``
-    where the emit_* values are the arguments to pass to ``_emit_askuser_resolved``
-    and ``exit_code`` is 0 on success or 4 on I/O error.
+    This is the pre-axiom resolution (config + routing-pref memory only). The
+    axiom layer is applied on top by ``_build_resolve_envelope``.
+
+    Returns ``(envelope, emit_result, emit_source, emit_strength, exit_code,
+    resolved_value, memory_silent)`` where:
+      - the first five elements are the historical 5-tuple (unchanged meaning);
+      - ``resolved_value`` is the winning *option-domain* value a higher layer
+        set, or ``None`` when nothing was set (gap) or the layers conflict;
+      - ``memory_silent`` is True when no routing-pref memory entry matched.
+    These last two are internal signals the axiom layer uses to decide
+    agree / gap-fill / direct-conflict; callers outside this module never see them.
 
     Precondition: ``question_id`` must be present in ``QUESTION_IDS`` (caller checks).
     ``Z_HARNESS_ASK_ALL=1`` short-circuit is NOT applied here — the caller handles it
@@ -1291,7 +1512,7 @@ def _build_resolve_envelope(
             "sources": [],
         }
         print(str(exc), file=sys.stderr)
-        return envelope, "ask", "none", "none", 4
+        return envelope, "ask", "none", "none", 4, None, True
 
     config_value: str = values.get(config_key, "ask")
     config_source_label: str = sources.get(config_key, "defaults")
@@ -1326,7 +1547,7 @@ def _build_resolve_envelope(
                 "reason": "No config preference set and no memory entries found",
                 "sources": [],
             }
-            return envelope, "ask", "none", "none", 0
+            return envelope, "ask", "none", "none", 0, None, True
         else:
             # Config has a non-default value, no memory → config wins
             mapped_result = RESULT_MAP.get((question_id, config_value), "ask")
@@ -1349,7 +1570,7 @@ def _build_resolve_envelope(
                 "reason": reason,
                 "sources": [],
             }
-            return envelope, mapped_result, "config", "hard", 0
+            return envelope, mapped_result, "config", "hard", 0, config_value, True
 
     # Case: memory conflict (multiple disagreeing entries)
     if mem_strength == "conflict":
@@ -1387,7 +1608,7 @@ def _build_resolve_envelope(
                 f"[explain] question_id={question_id} → memory conflict → result=ask",
                 file=sys.stderr,
             )
-        return envelope, "ask", "conflict", "none", 0
+        return envelope, "ask", "conflict", "none", 0, None, False
 
     # At this point: mem_value is set (single or agreeing multiple memory entries)
     # mem_strength is one of weak | strong | very_strong
@@ -1419,7 +1640,7 @@ def _build_resolve_envelope(
             ),
             "sources": mem_sources,
         }
-        return envelope, mem_result, "memory", mem_strength, 0
+        return envelope, mem_result, "memory", mem_strength, 0, mem_value, False
 
     # Config is non-default AND memory exists
     # Check if they agree: translate config value to result-domain then compare mem_value
@@ -1445,7 +1666,7 @@ def _build_resolve_envelope(
             ),
             "sources": [],
         }
-        return envelope, mapped_result, "config", "hard", 0
+        return envelope, mapped_result, "config", "hard", 0, config_value, False
 
     # Config is non-default AND memory disagrees → conflict tier
     config_source_entry = {
@@ -1473,7 +1694,154 @@ def _build_resolve_envelope(
         ),
         "sources": all_sources,
     }
-    return envelope, "ask", "conflict", "none", 0
+    return envelope, "ask", "conflict", "none", 0, None, False
+
+
+def _build_resolve_envelope(
+    question_id: str,
+    explain: bool = False,
+) -> tuple[dict, str, str, str, int]:
+    """
+    Build the final resolution envelope for a registered ``question_id``,
+    applying the axiom layer (lowest behavioral-authority signal) on top of the
+    config + routing-pref-memory resolution.
+
+    Returns the historical ``(envelope, emit_result, emit_source, emit_strength,
+    exit_code)`` 5-tuple. Existing envelope fields (``result``, ``default``,
+    ``source``, ``rule_id``, ``strength``, ``reason``, ``sources``) keep their
+    meaning. The axiom layer only ADDS an optional nested ``axiom`` object and
+    grows the ``source`` enum by ``"axiom"`` / ``"axiom_conflict"``.
+
+    R10 precedence snapshot: config, memory, and axioms are each read within this
+    single invocation; the precedence-correctness claim is scoped to this
+    per-invocation snapshot (no cross-invocation atomicity is promised — fine for
+    a CLI flow).
+
+    Axiom precedence (SPEC `## scripts/config.py`, R7):
+      - agree (axiom value == already-resolved value): config/memory still wins;
+        the axiom is recorded in ``sources`` only — no ``source``/``result``
+        change, NO nested ``axiom`` object.
+      - gap-fill (config at default AND memory silent — nothing higher spoke):
+        axiom fills the gap → ``source:"axiom"``, ``strength:"soft"``,
+        ``result = RESULT_MAP[(question_id, axiom_value)]``, nested
+        ``axiom:{id, statement}`` (no ``conflict`` key).
+      - direct conflict (a higher layer set a DIFFERENT value): higher layer wins
+        the value/result/strength/rule_id; emit ``source:"axiom_conflict"`` and
+        nested ``axiom:{id, statement, conflict: true}``.
+      - no axiom match: envelope is BYTE-IDENTICAL to the pre-axiom result — the
+        ``axiom`` key is ABSENT entirely (R7 structural backward-compat).
+    """
+    (
+        envelope,
+        emit_result,
+        emit_source,
+        emit_strength,
+        exit_code,
+        resolved_value,
+        memory_silent,
+    ) = _resolve_config_memory_envelope(question_id, explain=explain)
+
+    # On I/O error or an internally-conflicted higher layer, axioms do not
+    # participate (there is no single winning value to compare against, and we do
+    # not let an advisory layer mask a config/memory conflict).
+    if exit_code != 0 or emit_source == "conflict":
+        return envelope, emit_result, emit_source, emit_strength, exit_code
+
+    project_root = _get_project_root()
+    axiom_matches = _load_axiom_matches(question_id, project_root)
+    if not axiom_matches:
+        # No axiom participated → envelope byte-identical to pre-axiom (R7).
+        return envelope, emit_result, emit_source, emit_strength, exit_code
+
+    # Determine whether a higher layer set a value (gap vs. higher-layer-wins).
+    # Gap-fill requires BOTH: config at its default AND memory silent. The only
+    # pre-axiom branch with no winning value AND memory silent is the pure-gap
+    # branch (source == "none"); resolved_value is None there.
+    higher_layer_spoke = resolved_value is not None
+
+    # Pick the participating axiom deterministically: prefer one that agrees with
+    # the resolved value (so an agreeing axiom is not reported as a conflict);
+    # otherwise take the first match (stable order from _load_axiom_matches).
+    chosen = None
+    if higher_layer_spoke:
+        for m in axiom_matches:
+            if m["value"] == resolved_value:
+                chosen = m
+                break
+    if chosen is None:
+        chosen = axiom_matches[0]
+
+    axiom_value = chosen["value"]
+    axiom_id = chosen["id"]
+    axiom_statement = chosen["statement"]
+
+    if higher_layer_spoke:
+        if axiom_value == resolved_value:
+            # AGREE: config/memory wins; record the axiom in `sources` only.
+            # No source/result change, NO nested `axiom` object.
+            envelope.setdefault("sources", [])
+            envelope["sources"] = list(envelope["sources"]) + [{
+                "kind": "axiom",
+                "value": axiom_value,
+                "id": axiom_id,
+                "statement": axiom_statement,
+            }]
+            if explain:
+                print(
+                    f"[explain] question_id={question_id} → axiom {axiom_id} agrees "
+                    f"({axiom_value!r}); {emit_source} wins, axiom listed in sources",
+                    file=sys.stderr,
+                )
+            return envelope, emit_result, emit_source, emit_strength, exit_code
+
+        # DIRECT CONFLICT: higher layer wins the value/result/strength/rule_id,
+        # but surface the conflict via source="axiom_conflict" + nested axiom obj.
+        envelope["source"] = "axiom_conflict"
+        envelope["reason"] = (
+            f"axiom {axiom_id} says {axiom_value!r}; {emit_source} says "
+            f"{resolved_value!r} — higher layer wins, surfacing conflict"
+        )
+        envelope["axiom"] = {
+            "id": axiom_id,
+            "statement": axiom_statement,
+            "conflict": True,
+        }
+        if explain:
+            print(
+                f"[explain] question_id={question_id} → axiom {axiom_id} "
+                f"({axiom_value!r}) conflicts with {emit_source} ({resolved_value!r}); "
+                "higher layer wins, surfacing conflict",
+                file=sys.stderr,
+            )
+        # result/strength/rule_id stay the higher layer's; only `source` changes.
+        return envelope, emit_result, "axiom_conflict", emit_strength, exit_code
+
+    # GAP-FILL: nothing higher spoke (config default + memory silent) → axiom
+    # fills the gap. Map the axiom's option value to the result domain.
+    if not memory_silent:
+        # Defensive: a no-value branch where memory was NOT silent is the conflict
+        # tier already filtered above; nothing should reach here. Leave untouched.
+        return envelope, emit_result, emit_source, emit_strength, exit_code
+
+    mapped_result = RESULT_MAP.get((question_id, axiom_value), "ask")
+    envelope["result"] = mapped_result
+    envelope["source"] = "axiom"
+    envelope["strength"] = "soft"
+    envelope["reason"] = (
+        f"axiom {axiom_id} recommends {axiom_value!r} (no config/memory "
+        "preference set) — axiom fills the gap"
+    )
+    envelope["axiom"] = {
+        "id": axiom_id,
+        "statement": axiom_statement,
+    }
+    if explain:
+        print(
+            f"[explain] question_id={question_id} → axiom {axiom_id} fills gap with "
+            f"{axiom_value!r} → result={mapped_result} (soft)",
+            file=sys.stderr,
+        )
+    return envelope, mapped_result, "axiom", "soft", exit_code
 
 
 def cmd_resolve_question(args: list[str]) -> None:
@@ -1866,10 +2234,15 @@ def cmd_set(args: list[str]) -> None:
         valid = value in allowed
     if not valid:
         print(
-            f"[config] invalid value for {key!r}: {value!r} — allowed: {sorted(allowed)}",
+            f"[config] invalid value for {key!r}: {value!r} — allowed: {_describe_allowed(allowed)}",
             file=sys.stderr,
         )
         sys.exit(2)
+
+    # Coerce value to the correct Python type before writing to TOML
+    # (e.g. "7000" → 7000 for int keys, "false" → False for bool keys)
+    if key in _COERCERS:
+        value = _COERCERS[key](value)
 
     # Resolve target path; writers pass require_exists=False to allow creating new files
     if scope == "global":

@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://z-harness/schemas/axiom.schema.json",
+  "title": "Axiom",
+  "description": "One axiom record in the z-harness axiom store.",
+  "type": "object",
+  "required": ["id", "statement", "scope", "status", "confidence", "evidence", "source_run", "created_at"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^ax-[0-9a-f]{8}$",
+      "description": "Stable identifier derived from sha256(statement+scope)[:8]."
+    },
+    "statement": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "Imperative behavioral rule; single sentence, non-empty, <=200 chars."
+    },
+    "scope": {
+      "type": "string",
+      "enum": ["global", "project"],
+      "description": "Whether this axiom applies globally or only to the current project."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["candidate", "approved", "rejected"],
+      "description": "Lifecycle status of the axiom."
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Extractor-assigned confidence score, user-editable; range [0,1]."
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Cites events (not file:line). Each entry has run + (event_id or quote).",
+      "items": {
+        "type": "object",
+        "required": ["run"],
+        "additionalProperties": true,
+        "anyOf": [
+          {
+            "required": ["run", "event_id"]
+          },
+          {
+            "required": ["run", "quote"]
+          }
+        ],
+        "properties": {
+          "run": {
+            "type": "string",
+            "description": "Run identifier that produced this evidence."
+          },
+          "event_id": {
+            "type": "string",
+            "description": "Event ID within the run."
+          },
+          "kind": {
+            "type": "string",
+            "description": "Optional event kind tag (e.g. user_choice, user_override)."
+          },
+          "quote": {
+            "type": "string",
+            "description": "Verbatim quote from the run that supports this axiom."
+          }
+        }
+      }
+    },
+    "source_run": {
+      "type": "string",
+      "description": "Run identifier that first proposed this axiom."
+    },
+    "created_at": {
+      "type": "string",
+      "description": "ISO-8601 timestamp when the axiom was created."
+    },
+    "discipline": {
+      "type": "string",
+      "description": "Optional free-form tag; compiler filter hint only."
+    },
+    "applies_to": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9_.]+:[^:]+$"
+      },
+      "description": "Optional routing-question entries this axiom answers. Each entry is \"<question_id>:<value>\" — the routing question id and the option value the axiom recommends, joined by a single colon (e.g. \"workflow.slug_confirm:recommend_derived\"). The <question_id> half matches [a-z0-9_.]+ (lowercase alnum, underscore, and dot — to match config.py's dotted QUESTION_IDS like workflow.slug_confirm); the <value> half is the recommended option value (non-empty, colon-free). At most one entry per <question_id>. Absence means free-form behavioral guidance (KERNEL.md only, never enters the resolver)."
+    },
+    "boundary_conditions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Optional list of conditions under which this axiom does not apply."
+    },
+    "counterexamples": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Optional list of counterexamples that bound the axiom's scope."
+    },
+    "conflicts_with": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^ax-[0-9a-f]{8}$"
+      },
+      "description": "Optional list of conflicting axiom ids (symmetric; checked by graph validation)."
+    },
+    "supersedes": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^ax-[0-9a-f]{8}$"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional axiom id this record replaces, or null."
+    },
+    "approved_at": {
+      "type": "string",
+      "description": "ISO-8601 timestamp when the axiom was approved. Set on approve."
+    },
+    "review_after": {
+      "type": "string",
+      "description": "Optional date (YYYY-MM-DD) after which this axiom should be reviewed. Lazily checked, never daemon."
+    }
+  }
+}

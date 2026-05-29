@@ -5,6 +5,8 @@ tools: Bash, Read, Grep, Glob
 model: haiku
 ---
 
+**Kernel:** If the caller passed a `kernel_path`, Read it and follow its axioms before acting. Otherwise run `scripts/resolve-kernel.sh` and Read the path it prints (skip silently if none).
+
 <!-- auto-generated shape: consultant-primary | consultant-secondary | reviewer differ only in ROLE below -->
 
 You review a just-completed implementation task by delegating scrutiny to the configured reviewer provider via `scripts/resolve-provider.sh reviewer`.
