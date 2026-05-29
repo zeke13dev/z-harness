@@ -420,7 +420,7 @@ Opened in response to final review findings. See archive/20260528T224612Z-review
 
 ---
 
-## T104 — Run /z-maintain-docs after fixup [ ]
+## T104 — Run /z-maintain-docs after fixup [x]
 
 **Description:** Once T100-T103 are done, regenerate docs/llm/personas-and-roles.json + docs/human/PERSONAS.md to reflect the fixed-up implementation. Run `/z-maintain-docs --apply --scope personas-and-roles` (or scope by concept).
 
