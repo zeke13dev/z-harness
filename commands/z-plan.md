@@ -84,6 +84,13 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_start "$START_PAYLOAD"
    ```
    Output lands under `$Z_HARNESS_PLAN_DIR/archive/$RUN/events.jsonl` (log-event.sh honors `Z_HARNESS_SLUG`).
+
+   **Kernel path resolution (once per run, immediately after run_start):**
+   ```bash
+   KERNEL_PATH="$(bash scripts/resolve-kernel.sh 2>/dev/null || true)"
+   ```
+   Resolve the kernel path exactly once here. When `KERNEL_PATH` is non-empty, inject `kernel_path: <KERNEL_PATH>` as a line in the `Agent(prompt=...)` of every behavioral-agent dispatch in this run (consultant-primary, consultant-secondary). Omit the line entirely when `KERNEL_PATH` is empty — the agent's static fallback handles self-resolution in that case. Do NOT inject kernel content — inject the path string only.
+
    Then log provider resolution (once per run, guarded against re-emission):
    ```bash
    if [ ! -f "$Z_HARNESS_PLAN_DIR/archive/$RUN/.providers-logged" ]; then
@@ -382,8 +389,8 @@ Block here until the user has approved the decisions doc.
      phase3-decisions-final.md and proceed to Phase 4 without cross-LLM input. -->
 Spawn **both** consultants in parallel in a single message:
 
-- `Agent(subagent_type="consultant-primary", ...)`
-- `Agent(subagent_type="consultant-secondary", ...)`
+- `Agent(subagent_type="consultant-primary", ..., prompt="...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
+- `Agent(subagent_type="consultant-secondary", ..., prompt="...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
 
 Each gets the **entire approved decisions doc** with the consult-flagged decisions highlighted. They can see all decisions and flag interactions between them. Two calls total, regardless of feature size.
 
@@ -443,7 +450,7 @@ Both obey **DRY / KISS / SOLID**. State explicitly how the plan respects each.
      requirement to the user and skip both Phase 7 consultant Agent() calls.
      Document the gap in the archive and proceed to Phase 8 without final
      review input. -->
-Spawn both consultants in parallel, each handed the full SPEC.md + PLAN.md:
+Spawn both consultants in parallel, each handed the full SPEC.md + PLAN.md. Include `kernel_path: <KERNEL_PATH>` in each `Agent(prompt=...)` when `KERNEL_PATH` is non-empty (resolved in Setup):
 - consultant-primary: "Critique this plan. What's wrong, missing, or fragile?"
 - consultant-secondary: same.
 

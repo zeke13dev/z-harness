@@ -130,6 +130,12 @@ print(json.dumps(v))
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_all_start "$START_PAYLOAD"
 ```
 
+**Kernel path resolution (once per run, immediately after review_all_start):**
+```bash
+KERNEL_PATH="$(bash scripts/resolve-kernel.sh 2>/dev/null || true)"
+```
+Resolve the kernel path exactly once here. When `KERNEL_PATH` is non-empty, inject `kernel_path: <KERNEL_PATH>` as a line in the `Agent(prompt=...)` of every behavioral-agent dispatch in this run (consultant-primary, consultant-secondary). Omit the line entirely when `KERNEL_PATH` is empty — the agent's static fallback handles self-resolution in that case. Do NOT inject kernel content — inject the path string only.
+
 Log provider resolution (once per run, guarded against re-emission):
 ```bash
 if [ ! -f "$BASE/archive/$RRUN/.providers-logged" ]; then
@@ -397,12 +403,12 @@ Each is asked the **two-pronged** review:
 Agent(
   subagent_type="consultant-primary",
   description="Final-review (Gemini) for plan <slug>",
-  prompt="MODE: final-review-2pronged\n\n<full prompt with both prongs, plus paths to SPEC/PLAN/TASKS and cumulative.diff>"
+  prompt="MODE: final-review-2pronged\n\n<full prompt with both prongs, plus paths to SPEC/PLAN/TASKS and cumulative.diff>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 Agent(
   subagent_type="consultant-secondary",
   description="Final-review (Codex) for plan <slug>",
-  prompt="MODE: final-review-2pronged\n\n<same>"
+  prompt="MODE: final-review-2pronged\n\n<same>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 ```
 
@@ -588,6 +594,25 @@ The implementation is done and reviewed; the docs are what's left.
      prompt="run_dir: <RUN_DIR>\ncumulative_diff_path: <cumulative.diff path>\nspec_path: $BASE/SPEC.md\ntags_path: docs/llm/TAGS.txt\nindex_path: docs/llm/INDEX.json\nrun_id: <RRUN>\nparent_command: review-all"
    )
    ```
+4a. **Optionally dispatch the axiom-extractor (if `AXIOM_READY` was emitted):**
+
+    If `run-memory-review.sh` output contains a line starting with `AXIOM_READY`, parse the artifact path from that line and dispatch the axiom-extractor **alongside** the review-agent (parallel, fresh context):
+
+    ```bash
+    AXIOM_READY_LINE="$(printf '%s' "$MEMORY_REVIEW_OUT" | grep '^AXIOM_READY ' || true)"
+    ```
+
+    ```
+    Agent(
+      subagent_type="axiom-extractor",
+      description="Axiom extraction for <slug>",
+      prompt="mode: post-run <RRUN>
+    repo_root: <REPO_ROOT>"
+    )
+    ```
+
+    **Proposes only — no auto-approve:** the axiom-extractor returns ≤5 candidate axioms as a fenced JSON array; nothing is written to the axiom store and no axiom is approved automatically. The candidates surface opportunities for later `/z-axiom-scan` / `/z-axiom-approve` review. Do not block on the axiom-extractor's return or error if it is unavailable.
+
 5. Parse the agent's return: extract the single fenced ```json block. On parse failure → emit `review_agent_malformed` event, soft-skip with a push-notify hint, and exit phase:
    ```bash
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_agent_malformed \
@@ -640,6 +665,24 @@ The implementation is done and reviewed; the docs are what's left.
 | `review_candidate_skipped` | User skipped a single candidate with a reason |
 | `review_skip_all` | User chose Skip-all-remaining |
 | `review_agent_suggest_failed` | `/z-suggest-memory` dispatch failed for an Accepted candidate |
+
+## Decision emission (standing instruction)
+
+After **any** `AskUserQuestion` resolves, emit a normalized decision event:
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-decision.sh" \
+  "$RUN" "<question_id>" "<chosen_label>" \
+  --options '["<opt1>","<opt2>",...]' \
+  [--tentative "<recommended_option>"]
+```
+
+- `<question_id>` — stable kebab-case identifier for this decision point (e.g. `workflow.implement_all_proceed`, `workflow.slug_confirm`).
+- `<chosen_label>` — the option label the user selected, verbatim.
+- `--options` — full list of offered option labels as a JSON array.
+- `--tentative` — the orchestrator's recommended option label; omit when the orchestrator had no recommendation.
+
+Emission is gated by `Z_HARNESS_AXIOM_EXTRACT` (default on); when set to `"0"`, the script exits silently — no guard is needed here. Do **not** modify existing structured gate events (`cost_gate_decision`, `critique_failure_decision`, `map_collision_decision`, `shared_concerns_ack_override`); those are normalized separately by the extractor. This emission **records signal only** — it never approves, overrides, or influences any decision (proposes-only invariant).
 
 ## Hard rules
 

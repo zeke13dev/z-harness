@@ -170,4 +170,10 @@ if [[ "$PARENT_COMMAND" == "debug" ]]; then
   echo "$BASE/DEBUG.md"
 fi
 
+# --- Emit AXIOM_READY when Z_HARNESS_AXIOM_EXTRACT is enabled (default on) ---
+# Gating: only "0" suppresses; unset or any other value (including "false") = emit.
+if [[ "${Z_HARNESS_AXIOM_EXTRACT:-}" != "0" ]]; then
+  echo "AXIOM_READY $DIFF_FILE"
+fi
+
 exit 0

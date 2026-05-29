@@ -394,6 +394,7 @@ _SCOPE_SECTIONS = {
     "personas": "Personas",
     "docs": "Docs",
     "memories": "Memories",
+    "axioms": "Axioms",
 }
 
 # Which toml_keys prefixes belong to each scope
@@ -405,6 +406,7 @@ _SCOPE_TOML_PREFIXES: dict[str, list[str]] = {
     "personas": [],
     "docs": ["docs."],
     "memories": [],
+    "axioms": ["axioms."],
 }
 
 # Which env_only_knobs belong to each scope
@@ -421,6 +423,12 @@ _SCOPE_ENV_KNOBS: dict[str, list[str]] = {
     "personas": [],
     "docs": [],
     "memories": [],
+    "axioms": [
+        "Z_HARNESS_AXIOMS_ENABLED",
+        "Z_HARNESS_AXIOMS_KERNEL_BUDGET_CHARS",
+        "Z_HARNESS_AXIOMS_EXTRACT_MIN_RECURRENCE",
+        "Z_HARNESS_AXIOMS_AUTO_EXTRACT_POST_RUN",
+    ],
 }
 
 
@@ -1025,6 +1033,228 @@ def _wizard_docs(inspect_data: dict) -> dict:
     return {"toml": {}, "env": {}}
 
 
+# ---------------------------------------------------------------------------
+# Kernel-pointer / CLAUDE.md helpers
+# ---------------------------------------------------------------------------
+
+_KERNEL_POINTER_BEGIN = "<!-- z-harness-kernel-pointer BEGIN -->"
+_KERNEL_POINTER_END = "<!-- z-harness-kernel-pointer END -->"
+
+_KERNEL_POINTER_CANONICAL = (
+    "<!-- z-harness-kernel-pointer BEGIN -->\n"
+    "When working in a z-harness repo, before acting, Read the z-harness kernel:\n"
+    "run `scripts/resolve-kernel.sh` (in the z-harness plugin) and Read the path it prints; follow its axioms.\n"
+    "<!-- z-harness-kernel-pointer END -->"
+)
+
+
+def _kernel_pointer_blocks_differ(existing_block: str) -> bool:
+    """
+    Return True if the existing marker block (including the BEGIN/END delimiters)
+    differs from the canonical block.
+
+    This is a pure function (no I/O) so it can be unit-tested without filesystem access.
+    """
+    return existing_block.strip() != _KERNEL_POINTER_CANONICAL.strip()
+
+
+def _extract_all_kernel_pointer_blocks(text: str) -> list[str]:
+    """
+    Extract ALL marker blocks (including delimiters) from *text*.
+    Returns a list of block strings.  An empty list means no block is present.
+
+    This correctly handles the anomalous case where a CLAUDE.md accumulated
+    multiple marker blocks due to manual editing or an interrupted prior run.
+    """
+    blocks: list[str] = []
+    search_start = 0
+    while True:
+        begin_idx = text.find(_KERNEL_POINTER_BEGIN, search_start)
+        if begin_idx == -1:
+            break
+        end_idx = text.find(_KERNEL_POINTER_END, begin_idx + len(_KERNEL_POINTER_BEGIN))
+        if end_idx == -1:
+            break
+        end_pos = end_idx + len(_KERNEL_POINTER_END)
+        blocks.append(text[begin_idx:end_pos])
+        search_start = end_pos
+    return blocks
+
+
+def _extract_kernel_pointer_block(text: str) -> str | None:
+    """
+    Extract the FIRST existing marker block (including delimiters) from *text*.
+    Returns the block string (with delimiters) or None if not present.
+
+    Kept for backward compatibility with _kernel_pointer_blocks_differ callers.
+    Use _extract_all_kernel_pointer_blocks when multiple-block detection matters.
+    """
+    blocks = _extract_all_kernel_pointer_blocks(text)
+    return blocks[0] if blocks else None
+
+
+def _remove_all_kernel_pointer_blocks(text: str) -> str:
+    """
+    Remove every BEGIN...END marker block from *text* and return the result.
+    Collapses any blank lines that are left behind by removing a block that was
+    on its own line, but does not touch non-marker content.
+    """
+    result = text
+    while True:
+        begin_idx = result.find(_KERNEL_POINTER_BEGIN)
+        if begin_idx == -1:
+            break
+        end_idx = result.find(_KERNEL_POINTER_END, begin_idx + len(_KERNEL_POINTER_BEGIN))
+        if end_idx == -1:
+            break
+        end_pos = end_idx + len(_KERNEL_POINTER_END)
+        # Consume a trailing newline so we don't leave a blank line
+        if end_pos < len(result) and result[end_pos] == "\n":
+            end_pos += 1
+        # Consume a leading newline/blank-line that belonged to the block
+        prefix = result[:begin_idx]
+        if prefix.endswith("\n"):
+            begin_idx -= 0  # keep: the newline belongs to the previous line
+        result = result[:begin_idx] + result[end_pos:]
+    return result
+
+
+def _install_kernel_pointer(claude_md_path: str) -> str:
+    """
+    Idempotently install the canonical kernel-pointer marker block into the file
+    at *claude_md_path*.
+
+    Returns a status string for display:
+      "appended"    — first install
+      "no_op"       — block already matches canonical; nothing written
+      "skipped"     — user declined to overwrite a manually-edited block
+      "updated"     — user confirmed overwrite of a manually-edited block
+      "error:<msg>" — I/O failure
+    """
+    import difflib
+
+    # Read existing content (file may not exist yet)
+    if os.path.isfile(claude_md_path):
+        try:
+            with open(claude_md_path, encoding="utf-8") as fh:
+                content = fh.read()
+        except OSError as exc:
+            return f"error:{exc}"
+    else:
+        content = ""
+
+    all_blocks = _extract_all_kernel_pointer_blocks(content)
+    block_count = len(all_blocks)
+
+    if block_count == 0:
+        # Fresh install — append
+        sep = "\n" if content and not content.endswith("\n") else ""
+        new_content = content + sep + _KERNEL_POINTER_CANONICAL + "\n"
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(claude_md_path)), exist_ok=True)
+            tmp = claude_md_path + f".tmp.{os.getpid()}"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(new_content)
+            os.replace(tmp, claude_md_path)
+        except OSError as exc:
+            return f"error:{exc}"
+        return "appended"
+
+    if block_count == 1 and not _kernel_pointer_blocks_differ(all_blocks[0]):
+        # Exactly one block and it already matches canonical — no-op
+        return "no_op"
+
+    # Either a single block that differs from canonical (manual edit),
+    # OR multiple blocks (anomalous accumulation). Either way we need to
+    # collapse to a single canonical block.
+
+    if block_count == 1:
+        # Show diff so the user can see what changed
+        a_lines = (all_blocks[0] + "\n").splitlines(keepends=True)
+        b_lines = (_KERNEL_POINTER_CANONICAL + "\n").splitlines(keepends=True)
+        diff_lines = list(difflib.unified_diff(
+            a_lines, b_lines,
+            fromfile="existing CLAUDE.md block",
+            tofile="canonical block",
+            lineterm="",
+        ))
+        print(f"\n  [setup] Existing kernel-pointer block in {claude_md_path!r} differs from canonical.")
+        for line in diff_lines:
+            print("  " + line)
+    else:
+        print(
+            f"\n  [setup] Found {block_count} kernel-pointer blocks in {claude_md_path!r}."
+            " These will be collapsed into one canonical block."
+        )
+
+    no_ask = os.environ.get("Z_HARNESS_NO_ASK", "")
+    if no_ask == "halt":
+        print("  [setup] Z_HARNESS_NO_ASK=halt — skipping overwrite.")
+        return "skipped"
+
+    print("  Overwrite with canonical? [y/N]")
+    try:
+        answer = input("  > ").strip().lower()
+    except EOFError:
+        answer = ""
+
+    if answer not in ("y", "yes"):
+        print("  [setup] Skipped — existing block(s) preserved.")
+        return "skipped"
+
+    # Remove all existing marker blocks, then append exactly one canonical block
+    stripped = _remove_all_kernel_pointer_blocks(content)
+    sep = "\n" if stripped and not stripped.endswith("\n") else ""
+    new_content = stripped + sep + _KERNEL_POINTER_CANONICAL + "\n"
+    try:
+        tmp = claude_md_path + f".tmp.{os.getpid()}"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(new_content)
+        os.replace(tmp, claude_md_path)
+    except OSError as exc:
+        return f"error:{exc}"
+    return "updated"
+
+
+def _ensure_gitignore_entry(gitignore_path: str, entry: str) -> str:
+    """
+    Idempotently add *entry* to the .gitignore at *gitignore_path*.
+
+    Returns "added" if a new line was appended, "already_present" if *entry*
+    is already present (exact-line match), or "error:<msg>" on I/O failure.
+    """
+    if os.path.isfile(gitignore_path):
+        try:
+            with open(gitignore_path, encoding="utf-8") as fh:
+                existing = fh.read()
+        except OSError as exc:
+            return f"error:{exc}"
+    else:
+        existing = ""
+
+    # Exact-line dedup check
+    for line in existing.splitlines():
+        if line.strip() == entry.strip():
+            return "already_present"
+
+    sep = "\n" if existing and not existing.endswith("\n") else ""
+    new_content = existing + sep + entry + "\n"
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(gitignore_path)), exist_ok=True)
+        tmp = gitignore_path + f".tmp.{os.getpid()}"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(new_content)
+        os.replace(tmp, gitignore_path)
+    except OSError as exc:
+        return f"error:{exc}"
+    return "added"
+
+
+# ---------------------------------------------------------------------------
+# Wizard sections
+# ---------------------------------------------------------------------------
+
+
 def _wizard_memories(inspect_data: dict) -> dict:
     """Wizard section: Memories — read-only display of routing-preference entries."""
     _print_section_header("Memories")
@@ -1068,6 +1298,115 @@ def _wizard_memories(inspect_data: dict) -> dict:
           " --question-id <id> --value <v> --strength weak|strong|very_strong`.")
 
     return {"toml": {}, "env": {}}
+
+
+def _wizard_axioms(inspect_data: dict) -> dict:
+    """Wizard section: Axioms — configure axioms keys and install the CLAUDE.md kernel pointer."""
+    _print_section_header("Axioms")
+    toml_keys = inspect_data.get("toml_keys") or {}
+
+    axioms_keys = [
+        ("axioms.enabled", "bool", ["true", "false"]),
+        ("axioms.auto_extract_post_run", "bool", ["true", "false"]),
+        ("axioms.kernel_budget_chars", "int", None),
+    ]
+
+    for key, _ktype, choices in axioms_keys:
+        meta = toml_keys.get(key, {})
+        val = meta.get("value", "(not set)")
+        src = _fmt_source(meta.get("source", "default"))
+        print(f"  {key} = {val}  (from {src})")
+
+    pending: dict = {"toml": {}, "env": {}}
+
+    no_ask = os.environ.get("Z_HARNESS_NO_ASK", "")
+    if no_ask == "halt":
+        return pending
+
+    # Prompt for each key
+    for key, ktype, choices in axioms_keys:
+        meta = toml_keys.get(key, {})
+        current_val = meta.get("value", "(not set)")
+        if choices:
+            choice_display = ", ".join(choices)
+            print(f"  Set {key}? [{choice_display}, keep] (current: {current_val})")
+        else:
+            print(f"  Set {key}? [integer, keep] (current: {current_val})")
+        try:
+            answer = input("  > ").strip()
+        except EOFError:
+            answer = ""
+
+        if not answer or answer.lower() == "keep":
+            continue
+
+        if ktype == "bool" and choices and answer.lower() in choices:
+            if answer.lower() != str(current_val).lower():
+                pending["toml"][key] = answer.lower()
+        elif ktype == "int":
+            try:
+                int_val = int(answer)
+                if int_val > 0 and str(int_val) != str(current_val):
+                    pending["toml"][key] = int_val
+            except ValueError:
+                print(f"  [setup] invalid integer {answer!r}; skipping {key}")
+
+    # CLAUDE.md kernel-pointer install
+    print()
+    print("  Install kernel-pointer block in ~/.claude/CLAUDE.md?")
+    print("  (idempotent — safe to re-run; shows diff if block was manually edited)")
+
+    home = os.environ.get("HOME") or os.path.expanduser("~")
+    global_claude_md = os.path.join(home, ".claude", "CLAUDE.md")
+
+    print(f"  [yes/no] (target: {global_claude_md})")
+    try:
+        install_answer = input("  > ").strip().lower()
+    except EOFError:
+        install_answer = ""
+
+    if install_answer in ("y", "yes"):
+        status = _install_kernel_pointer(global_claude_md)
+        if status == "appended":
+            print(f"  [setup] Kernel pointer appended to {global_claude_md!r}.")
+        elif status == "no_op":
+            print(f"  [setup] Kernel pointer already present and up-to-date — no-op.")
+        elif status == "updated":
+            print(f"  [setup] Kernel pointer block updated in {global_claude_md!r}.")
+        elif status == "skipped":
+            print(f"  [setup] Kernel pointer install skipped.")
+        elif status.startswith("error:"):
+            print(f"  [setup] Could not write {global_claude_md!r}: {status[6:]}", file=sys.stderr)
+
+    # Per-project gitignore prompt
+    print()
+    print("  Add .z-harness/axioms/ and .z-harness/KERNEL.md to project .gitignore?")
+    print("  [yes/no] (default: yes)")
+    try:
+        gi_answer = input("  > ").strip().lower()
+    except EOFError:
+        gi_answer = ""
+
+    if gi_answer in ("", "y", "yes"):
+        try:
+            git_result = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                capture_output=True, text=True, check=True,
+            )
+            git_root = git_result.stdout.strip()
+            gitignore_path = os.path.join(git_root, ".gitignore")
+            for entry in [".z-harness/axioms/", ".z-harness/KERNEL.md"]:
+                result = _ensure_gitignore_entry(gitignore_path, entry)
+                if result == "added":
+                    print(f"  [setup] Added {entry!r} to {gitignore_path!r}.")
+                elif result == "already_present":
+                    print(f"  [setup] {entry!r} already in .gitignore — skipped.")
+                elif result.startswith("error:"):
+                    print(f"  [setup] Could not update .gitignore: {result[6:]}", file=sys.stderr)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            print("  [setup] Not in a git repo; skipping .gitignore update.")
+
+    return pending
 
 
 def _wizard_final_review(pending: dict) -> int:
@@ -1179,6 +1518,7 @@ _WIZARD_SECTIONS: list[tuple[str, object]] = [
     ("personas", _wizard_personas),
     ("docs", _wizard_docs),
     ("memories", _wizard_memories),
+    ("axioms", _wizard_axioms),
 ]
 
 
@@ -1493,7 +1833,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_inspect.add_argument(
         "--scope",
-        choices=["notifications", "workflow", "overnight", "providers", "personas", "docs", "memories"],
+        choices=["notifications", "workflow", "overnight", "providers", "personas", "docs", "memories", "axioms"],
         default=None,
         help="Filter output to one concern section.",
     )
@@ -1506,7 +1846,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_wizard.add_argument(
         "--scope",
-        choices=["all", "notifications", "workflow", "overnight", "providers", "personas", "docs", "memories"],
+        choices=["all", "notifications", "workflow", "overnight", "providers", "personas", "docs", "memories", "axioms"],
         default="all",
         help="Run only the named section (default: all).",
     )

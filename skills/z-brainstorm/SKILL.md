@@ -363,6 +363,24 @@ For the abandoned branch, the push notification just says "Brainstorm abandoned"
 
 ---
 
+## Decision emission (standing instruction)
+
+After **any** `AskUserQuestion` resolves, emit a normalized decision event:
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-decision.sh" \
+  "$RUN" "<question_id>" "<chosen_label>" \
+  --options '["<opt1>","<opt2>",...]' \
+  [--tentative "<recommended_option>"]
+```
+
+- `<question_id>` — stable kebab-case identifier for this decision point (e.g. `workflow.implement_all_proceed`, `workflow.slug_confirm`).
+- `<chosen_label>` — the option label the user selected, verbatim.
+- `--options` — full list of offered option labels as a JSON array.
+- `--tentative` — the orchestrator's recommended option label; omit when the orchestrator had no recommendation.
+
+Emission is gated by `Z_HARNESS_AXIOM_EXTRACT` (default on); when set to `"0"`, the script exits silently — no guard is needed here. Do **not** modify existing structured gate events (`cost_gate_decision`, `critique_failure_decision`, `map_collision_decision`, `shared_concerns_ack_override`); those are normalized separately by the extractor. This emission **records signal only** — it never approves, overrides, or influences any decision (proposes-only invariant).
+
 ## Operating principles
 
 - **Cheap and parallel.** Three ideators in one message, no per-ideator round-trips.
