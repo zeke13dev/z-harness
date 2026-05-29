@@ -2209,6 +2209,320 @@ class TestMigrate(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# TestTomlkitPreservesComments
+# ---------------------------------------------------------------------------
+
+class TestTomlkitPreservesComments(unittest.TestCase):
+    """
+    Verify that cmd_set (via _toml_write_key_preserving) preserves leading
+    comments in an existing TOML config file when tomlkit is available.
+
+    If tomlkit is not installed the test is skipped — the fallback path
+    explicitly strips comments, so the invariant only applies when tomlkit
+    is present.
+    """
+
+    def setUp(self):
+        self.xdg = make_xdg()
+        self.cwd = make_isolation_dir()
+
+    def tearDown(self):
+        shutil.rmtree(self.xdg, ignore_errors=True)
+        shutil.rmtree(self.cwd, ignore_errors=True)
+
+    def _tomlkit_available(self) -> bool:
+        try:
+            import importlib
+            importlib.import_module("tomlkit")
+            return True
+        except ImportError:
+            return False
+
+    def test_comment_preserved_after_set(self):
+        """
+        Write a config with a leading comment, call `config.py set`, and
+        verify the comment survives the round-trip.
+        """
+        if not self._tomlkit_available():
+            self.skipTest("tomlkit not installed — comment preservation unavailable")
+
+        # Seed a global config with a user comment
+        comment_line = "# user comment: do not delete"
+        initial_content = (
+            f"{comment_line}\n"
+            '[notify]\n'
+            'level = "approval_only"\n'
+        )
+        cfg_path = write_global_config(self.xdg, initial_content)
+
+        env = {"XDG_CONFIG_HOME": self.xdg}
+        r = run(["set", "notify.level", "off", "--scope=global"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0, f"set failed: stderr={r.stderr!r}")
+
+        content_after = Path(cfg_path).read_text()
+        self.assertIn(
+            comment_line,
+            content_after,
+            "Leading comment was stripped by cmd_set (tomlkit should preserve it)",
+        )
+
+        # Also verify the value was actually written
+        r_get = run(["get", "notify.level"], env=env, cwd=self.cwd)
+        self.assertEqual(r_get.returncode, 0, f"get failed: stderr={r_get.stderr!r}")
+        self.assertEqual(r_get.stdout.strip(), "off")
+
+    def test_comment_preserved_on_new_section(self):
+        """
+        Write a config with a comment in one section, then set a key in a
+        different section. The original comment must survive.
+        """
+        if not self._tomlkit_available():
+            self.skipTest("tomlkit not installed — comment preservation unavailable")
+
+        comment_line = "# hand-edited: keep this"
+        initial_content = (
+            '[notify]\n'
+            f'{comment_line}\n'
+            'level = "all"\n'
+        )
+        cfg_path = write_global_config(self.xdg, initial_content)
+
+        env = {"XDG_CONFIG_HOME": self.xdg}
+        r = run(["set", "docs.always_apply", "never", "--scope=global"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0, f"set failed: stderr={r.stderr!r}")
+
+        content_after = Path(cfg_path).read_text()
+        self.assertIn(
+            comment_line,
+            content_after,
+            "Inline section comment was stripped when setting a key in another section",
+        )
+
+    def test_write_to_nonexistent_file_creates_valid_toml(self):
+        """
+        When the global config file does not yet exist, cmd_set must create it with
+        valid TOML and no spurious content.  There are no existing comments to preserve,
+        so the file must contain only the key written and its section header — not
+        comment artefacts, blank lines from a ghost-document, or encoding errors.
+        Failure class: if _toml_write_key_preserving creates a corrupt or non-parseable
+        file when the target path does not yet exist, subsequent reads will error out.
+        """
+        # Ensure global config does NOT exist
+        cfg_path = Path(self.xdg) / "z-harness" / "config.toml"
+        self.assertFalse(cfg_path.exists(), "config.toml already exists before test")
+
+        env = {"XDG_CONFIG_HOME": self.xdg}
+        r = run(["set", "notify.level", "off", "--scope=global"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0, f"set to non-existent file failed: stderr={r.stderr!r}")
+
+        self.assertTrue(cfg_path.exists(), "config.toml was not created by cmd_set")
+        content = cfg_path.read_text()
+
+        # Must be parseable — use stdlib tomllib / tomli; fall back to config get round-trip
+        try:
+            import tomllib  # Python 3.11+
+            parsed = tomllib.loads(content)
+        except ImportError:
+            try:
+                import tomli as tomllib  # type: ignore
+                parsed = tomllib.loads(content)
+            except ImportError:
+                # Fall back to subprocess get to verify round-trip
+                r_get = run(["get", "notify.level"], env=env, cwd=self.cwd)
+                self.assertEqual(r_get.returncode, 0, "get after set-to-new-file failed")
+                self.assertEqual(r_get.stdout.strip(), "off")
+                return
+
+        self.assertEqual(
+            parsed.get("notify", {}).get("level"), "off",
+            f"Expected notify.level='off' in newly-created file; parsed={parsed!r}",
+        )
+        # No ghost comment artefacts — file should not have unexpected # lines
+        lines = content.splitlines()
+        comment_lines = [l for l in lines if l.strip().startswith("#")]
+        self.assertEqual(
+            comment_lines, [],
+            f"Unexpected comment lines in newly-created file: {comment_lines!r}",
+        )
+
+
+# ---------------------------------------------------------------------------
+# TestInspectAll — tests for the inspect-all subcommand (T002)
+# ---------------------------------------------------------------------------
+
+class TestInspectAll(unittest.TestCase):
+    """
+    ~6 tests covering the three sections of `config.py inspect-all [--json]`:
+    1. Keys-in-DEFAULTS are present in JSON output with expected persistence_class.
+    2. Registered question_ids are present in JSON output.
+    3. Env-only knobs are present with persistence_class="env".
+    4. JSON output is a valid object with the three top-level sections.
+    5. Source layer is reported correctly when a global config is present.
+    6. Env-only knob value is surfaced when the env var is set.
+    """
+
+    def setUp(self):
+        self.xdg = make_xdg()
+        self.cwd = make_isolation_dir()
+        self.env = {"XDG_CONFIG_HOME": self.xdg}
+
+    def tearDown(self):
+        shutil.rmtree(self.xdg, ignore_errors=True)
+        shutil.rmtree(self.cwd, ignore_errors=True)
+
+    def _run_inspect(self, extra_env=None, extra_args=None):
+        env = dict(self.env)
+        if extra_env:
+            env.update(extra_env)
+        args = ["inspect-all", "--json"]
+        if extra_args:
+            args += extra_args
+        return run(args, env=env, cwd=self.cwd)
+
+    def test_json_output_is_valid_object_with_three_sections(self):
+        """--json must emit a valid JSON object with toml_keys, question_ids, env_only_knobs."""
+        r = self._run_inspect()
+        self.assertEqual(r.returncode, 0, f"inspect-all exited {r.returncode}; stderr={r.stderr!r}")
+        data = json.loads(r.stdout)
+        self.assertIsInstance(data, dict)
+        for section in ("toml_keys", "question_ids", "env_only_knobs"):
+            self.assertIn(section, data, f"JSON output missing section {section!r}")
+
+    def test_toml_keys_contains_all_defaults_keys(self):
+        """
+        Every key in DEFAULTS (excluding meta keys) must appear in toml_keys.
+        Failure class: if a new default key is added to DEFAULTS without updating
+        cmd_inspect_all, this test catches the omission.
+        """
+        from config import DEFAULTS, META_KEYS
+        r = self._run_inspect()
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        data = json.loads(r.stdout)
+        toml_keys = data["toml_keys"]
+        # Build expected key set from DEFAULTS (mirroring _flatten_defaults)
+        expected_keys = set()
+        for section, sv in DEFAULTS.items():
+            if section in META_KEYS:
+                continue
+            if isinstance(sv, dict):
+                for k in sv:
+                    expected_keys.add(f"{section}.{k}")
+        for key in expected_keys:
+            self.assertIn(key, toml_keys, f"DEFAULTS key {key!r} missing from inspect-all toml_keys")
+
+    def test_toml_keys_default_persistence_class_is_default(self):
+        """
+        Keys resolved from the built-in defaults layer must have persistence_class='default'.
+        Failure class: if persistence_class is wrong for the 'defaults' source, tooling
+        consuming this output will misclassify which layer owns the value.
+        """
+        r = self._run_inspect()
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        data = json.loads(r.stdout)
+        for key, meta in data["toml_keys"].items():
+            if meta["source"] == "default":
+                self.assertEqual(
+                    meta["persistence_class"], "default",
+                    f"{key!r}: source=default but persistence_class={meta['persistence_class']!r}",
+                )
+
+    def test_registered_question_ids_are_in_output(self):
+        """
+        All keys registered in QUESTION_IDS must appear in the question_ids section.
+        Failure class: if a question_id is registered but not surfaced, the inspect
+        view is incomplete and skips routing-preference configuration.
+        """
+        from config import QUESTION_IDS
+        r = self._run_inspect()
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        data = json.loads(r.stdout)
+        qid_keys = data["question_ids"]
+        for qid in QUESTION_IDS:
+            self.assertIn(qid, qid_keys, f"question_id {qid!r} missing from inspect-all output")
+
+    def test_env_only_knobs_have_persistence_class_env(self):
+        """
+        All env-only knobs must appear in env_only_knobs with persistence_class='env'.
+        Failure class: if persistence_class is wrong, consumers may attempt to write
+        these knobs to TOML (they are not writable; they only live in the environment).
+        """
+        from config import ENV_ONLY_KNOBS
+        r = self._run_inspect()
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        data = json.loads(r.stdout)
+        env_knobs = data["env_only_knobs"]
+        for knob in ENV_ONLY_KNOBS:
+            self.assertIn(knob, env_knobs, f"env-only knob {knob!r} missing from inspect-all output")
+            self.assertEqual(
+                env_knobs[knob]["persistence_class"], "env",
+                f"{knob!r}: expected persistence_class='env', got {env_knobs[knob]['persistence_class']!r}",
+            )
+
+    def test_global_config_source_reflected_correctly(self):
+        """
+        When a key is overridden in the global config file, its source must be 'global'
+        and persistence_class must be 'global'.
+        Failure class: if the source layer is reported as 'default' despite a global
+        override, inspect-all gives a misleading lineage to the user.
+        """
+        write_global_config(self.xdg, '[notify]\nlevel = "off"\n')
+        r = self._run_inspect()
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        data = json.loads(r.stdout)
+        notify_meta = data["toml_keys"].get("notify.level")
+        self.assertIsNotNone(notify_meta, "notify.level missing from toml_keys")
+        self.assertEqual(notify_meta["value"], "off")
+        self.assertEqual(notify_meta["source"], "global",
+                         f"Expected source='global', got {notify_meta['source']!r}")
+        self.assertEqual(notify_meta["persistence_class"], "global",
+                         f"Expected persistence_class='global', got {notify_meta['persistence_class']!r}")
+
+    def test_env_only_knob_value_surfaced_when_set(self):
+        """
+        When an env-only knob env var is set, its value must be surfaced in the output
+        and source must be 'env'.
+        Failure class: if the output always shows None/none regardless of environment,
+        the inspect view cannot be used to verify whether a knob is active.
+        """
+        r = self._run_inspect(extra_env={"Z_HARNESS_NO_ASK": "halt"})
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        data = json.loads(r.stdout)
+        knob_meta = data["env_only_knobs"].get("Z_HARNESS_NO_ASK")
+        self.assertIsNotNone(knob_meta, "Z_HARNESS_NO_ASK missing from env_only_knobs")
+        self.assertEqual(knob_meta["value"], "halt",
+                         f"Expected value='halt', got {knob_meta['value']!r}")
+        self.assertEqual(knob_meta["source"], "env",
+                         f"Expected source='env', got {knob_meta['source']!r}")
+
+    def test_sources_list_reflects_winning_layer_on_env_override(self):
+        """
+        When a TOML key is overridden by an env var, sources[] must contain an entry
+        with layer='env' as the winning source, and source must also be 'env'.
+        Failure class: if sources[] does not reflect the env override, consumers of
+        inspect-all cannot detect that an env var is silently winning over global config.
+        """
+        # Set notify.level in global config
+        write_global_config(self.xdg, '[notify]\nlevel = "all"\n')
+        # Override via env var (Z_HARNESS_NOTIFY_LEVEL)
+        r = self._run_inspect(extra_env={"Z_HARNESS_NOTIFY_LEVEL": "off"})
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        data = json.loads(r.stdout)
+        notify_meta = data["toml_keys"].get("notify.level")
+        self.assertIsNotNone(notify_meta, "notify.level missing from toml_keys")
+        # The env var must win
+        self.assertEqual(notify_meta["value"], "off",
+                         "env var override not reflected in value")
+        self.assertEqual(notify_meta["source"], "env",
+                         f"Expected source='env', got {notify_meta['source']!r}")
+        # sources[] must show the env layer as the winner
+        sources_list = notify_meta.get("sources", [])
+        self.assertTrue(
+            any(s.get("layer", "").startswith("env") for s in sources_list),
+            f"sources[] does not contain an env entry; got: {sources_list!r}",
+        )
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

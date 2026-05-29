@@ -1,0 +1,194 @@
+{
+  "concept": "setup",
+  "last_updated": "2026-05-28",
+  "covers_spec": "z-harness/interactive-setup/SPEC.md",
+  "scope": "Configuration cockpit: single entry point for all z-harness configuration surfaces (TOML config, env-only knobs, providers, personas, docs/llm bootstrap state, routing-preference memories). Surfaces as scripts/setup.py CLI and /z-setup skill. Three modes: inspect (read-only precedence lineage), wizard (concern-grouped guided flow), apply (posture-preset one-shot bootstrap).",
+  "source_files": [
+    "scripts/setup.py",
+    "scripts/setup.sh",
+    "commands/z-setup.md",
+    "docs/human/SETUP.md"
+  ],
+  "confidence": "high",
+  "entry_points": [
+    {
+      "file": "scripts/setup.py",
+      "line": 1573,
+      "symbol": "main",
+      "kind": "fn",
+      "summary": "Top-level CLI entry: dispatches to cmd_inspect, cmd_wizard, cmd_apply, cmd_explain, or cmd_status based on subcommand arg"
+    },
+    {
+      "file": "scripts/setup.py",
+      "line": 431,
+      "symbol": "cmd_inspect",
+      "kind": "fn",
+      "summary": "Inspect subcommand: delegates to --json, --flat, or grouped view; reads all config surfaces read-only"
+    },
+    {
+      "file": "scripts/setup.py",
+      "line": 447,
+      "symbol": "_cmd_inspect_json",
+      "kind": "fn",
+      "summary": "Machine-parseable JSON output of all resolved config keys with source, strength, and persistence_class"
+    },
+    {
+      "file": "scripts/setup.py",
+      "line": 564,
+      "symbol": "_cmd_inspect_flat",
+      "kind": "fn",
+      "summary": "Flat key=value view with source column (git-config style); --flat flag"
+    },
+    {
+      "file": "scripts/setup.py",
+      "line": 626,
+      "symbol": "_cmd_inspect_grouped",
+      "kind": "fn",
+      "summary": "Default concern-grouped inspect view; groups keys by section"
+    },
+    {
+      "file": "scripts/setup.py",
+      "line": 1185,
+      "symbol": "cmd_wizard",
+      "kind": "fn",
+      "summary": "Wizard subcommand: runs concern-grouped guided flow; --scope limits to single section; emits wizard_section_start/end events"
+    },
+    {
+      "file": "scripts/setup.py",
+      "line": 1257,
+      "symbol": "cmd_apply",
+      "kind": "fn",
+      "summary": "Apply subcommand: one-shot posture-preset bootstrap; computes diff, confirms, writes atomically via tomlkit; emits setup_apply_done"
+    },
+    {
+      "file": "scripts/setup.py",
+      "line": 1360,
+      "symbol": "cmd_explain",
+      "kind": "fn",
+      "summary": "Explain subcommand: pass-through to scripts/config.py explain <key>"
+    },
+    {
+      "file": "scripts/setup.py",
+      "line": 1426,
+      "symbol": "cmd_status",
+      "kind": "fn",
+      "summary": "Status subcommand: compact one-line summary of configured layers, posture detected, providers bound, docs initialized, routing-preference count"
+    },
+    {
+      "file": "scripts/setup.py",
+      "line": 42,
+      "symbol": "_inspect_all_json",
+      "kind": "fn",
+      "summary": "Core read helper: calls config.py inspect-all, parses JSON output; used by inspect, wizard, apply, and status"
+    },
+    {
+      "file": "scripts/setup.py",
+      "line": 268,
+      "symbol": "POSTURE_PRESETS",
+      "kind": "const",
+      "summary": "Hardcoded dict of posture name -> {toml_keys: {key: value}, env_vars: {VAR: value}}; three presets: interactive, overnight, ci-batch"
+    },
+    {
+      "file": "scripts/setup.py",
+      "line": 308,
+      "symbol": "_compute_posture_diff",
+      "kind": "fn",
+      "summary": "Computes diff between posture target and current effective config; returns dict of keys that need changes"
+    },
+    {
+      "file": "scripts/setup.py",
+      "line": 1379,
+      "symbol": "_detect_posture",
+      "kind": "fn",
+      "summary": "Heuristically identifies which posture (if any) the current config matches; used by cmd_status"
+    },
+    {
+      "file": "scripts/setup.sh",
+      "line": 1,
+      "symbol": "setup.sh",
+      "kind": "module",
+      "summary": "Thin bash wrapper: exec python3 setup.py $@"
+    },
+    {
+      "file": "commands/z-setup.md",
+      "line": 1,
+      "symbol": "/z-setup",
+      "kind": "module",
+      "summary": "Skill surface: parses invocation args, shells out to setup.py, renders output; uses AskUserQuestion for wizard prompts"
+    }
+  ],
+  "depends_on": [
+    "config",
+    "providers-registry"
+  ],
+  "consumed_by": [],
+  "invariants": [
+    "setup.py apply is atomic: full TOML write via tomlkit + tmp+rename, or no write at all",
+    "setup.py inspect and _inspect_all_json are READ-ONLY: no file writes of any kind",
+    "Memories are never written by setup.py; edits route to /z-suggest-memory",
+    "The wizard always shows current effective state before any prompt — no blind first-run overwrite without consent",
+    "Posture presets are hardcoded constants in POSTURE_PRESETS; adding a new posture requires a code change",
+    "/z-setup skill shells out to setup.py; never reimplements config logic inline",
+    "Env-only knobs (NO_ASK, OVERNIGHT_AUTODECIDE, OVERNIGHT_AUTODECIDE_EFFECTIVE, PAUSE_AT_PCT, etc.) are surfaced read-only in inspect; configured via shell snippet, never written to TOML",
+    "Re-run is idempotent: diff-and-confirm always shown; silent overwrite is forbidden",
+    "setup.py apply --dry-run exits 0 after printing diff, with no writes",
+    "Wizard --scope values are canonicalized to lowercase (e.g. 'notifications', 'workflow', 'overnight') to match _SCOPE_SECTIONS keys; passing a capitalized name fails with exit 2"
+  ],
+  "gotchas": [
+    "_inspect_all_json delegates to config.py inspect-all via subprocess; if config.py is unavailable or inspect-all is not registered, it returns None and all subcommands fail gracefully",
+    "Wizard sections for providers and docs are suggest-only: they detect gaps and print a tip to run /z-providers-discover or /z-init-docs but do NOT shell out to those commands",
+    "Memories section in the wizard is read-only display only; the tip instructs use of /z-suggest-memory --kind routing-preference",
+    "POSTURE_PRESETS env_vars are emitted as a shell snippet to stdout (or --env-file); they are not written to any config file",
+    "setup.py apply --yes skips the confirm prompt; use only in automation where user consent is established upstream",
+    "The overnight posture snippet sets Z_HARNESS_NO_ASK=halt; this activates overnight mode globally for the shell session and is mutually exclusive with Z_HARNESS_ASK_ALL=1",
+    "cmd_explain is a pure pass-through to config.py explain; it does not add new logic",
+    "_detect_posture is heuristic: if the current config partially matches a posture it returns None (no detected posture); it is not authoritative",
+    "Stale comments at setup.py:597-598 and setup.py:717-718 claim Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE is not in ENV_ONLY_KNOBS; this was true in a prior iteration but is now false — config.py added it at position 3. The guard code at those lines is now harmless redundancy, but the comment text is incorrect and should be removed."
+  ],
+  "env_vocabulary": [
+    "Z_HARNESS_NO_ASK",
+    "Z_HARNESS_OVERNIGHT_AUTODECIDE",
+    "Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE",
+    "Z_HARNESS_PAUSE_AT_PCT",
+    "Z_HARNESS_PARALLEL",
+    "Z_HARNESS_ASK_ALL",
+    "Z_HARNESS_NOTIFY",
+    "Z_HARNESS_REPO_PROVIDERS",
+    "Z_HARNESS_PLANS_DIR",
+    "Z_HARNESS_EXPLAIN_RESOLUTION",
+    "Z_HARNESS_MAX_EXPLORE"
+  ],
+  "event_vocabulary": [
+    {
+      "event": "setup_run_start",
+      "emitted_by": "_log_run_start",
+      "payload": "{subcommand, args}",
+      "description": "Emitted at the start of every setup.py invocation before subcommand dispatch"
+    },
+    {
+      "event": "setup_apply_done",
+      "emitted_by": "_log_apply_done",
+      "payload": "{posture, changes_count, env_count, scope}",
+      "description": "Emitted after a successful apply write; includes posture name, number of TOML keys changed, number of env vars in snippet, and scope (global|repo)"
+    },
+    {
+      "event": "wizard_section_start",
+      "emitted_by": "_log_wizard_event",
+      "payload": "{section}",
+      "description": "Emitted at the start of each wizard section (notifications, workflow, overnight, providers, personas, docs, memories, final_review)"
+    },
+    {
+      "event": "wizard_section_end",
+      "emitted_by": "_log_wizard_event",
+      "payload": "{section}",
+      "description": "Emitted at the end of each wizard section after prompts and optional writes"
+    },
+    {
+      "event": "wizard_apply_done",
+      "emitted_by": "_wizard_final_review (via _log_wizard_event)",
+      "payload": "{changes_count}",
+      "description": "Emitted after the wizard final-review section writes accumulated changes"
+    }
+  ],
+  "memories": []
+}

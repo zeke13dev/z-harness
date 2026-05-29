@@ -13,7 +13,13 @@
     "scripts/config.py",
     "scripts/config.sh",
     "scripts/test_config.py",
-    "scripts/test_log_phase.sh"
+    "scripts/test_log_phase.sh",
+    "scripts/run-status.sh",
+    "scripts/normalize-task-state.sh",
+    "scripts/lint-askuser.sh",
+    "scripts/overnight-preflight.sh",
+    "scripts/morning-report.py",
+    "scripts/preflight.sh"
   ],
   "confidence": "high",
   "entry_points": [
@@ -27,18 +33,29 @@
     {"file": "scripts/extract-dismissals.py", "line": 384, "symbol": "extract_dismissals_from_runs", "kind": "fn", "summary": "Pairwise algorithm: R_i snapshot vs R_{i+1}.previous-* user-edited copy to find dismissed findings."},
     {"file": "scripts/remote-sandbox-sync.sh", "line": 1, "symbol": "remote-sandbox-sync.sh", "kind": "module", "summary": "Rsync local tree to two-level remote layout: <slug>/base/ (seeded once, atomic mkdir lock) + <slug>/<task-id>/ overlay via --link-dest; REMOTE_HOME resolved via SSH printf; SLUG/TASK_ID validated."},
     {"file": "scripts/remote-sandbox-sync.sh", "line": 105, "symbol": "seed_base", "kind": "fn", "summary": "Acquires remote lock via mkdir, seeds shared base via rsync, writes .base-ready marker with HEAD SHA, releases lock; losers poll up to 600s."},
-    {"file": "scripts/config.py", "line": 1, "symbol": "config.py", "kind": "module", "summary": "Layered TOML config loader; 9 subcommands: get, export-env, ensure-defaults, explain, should-notify, list-question-ids, resolve-question, check-no-ask, set; QUESTION_IDS registry + RESULT_MAP; startup guards at module load."},
+    {"file": "scripts/config.py", "line": 1, "symbol": "config.py", "kind": "module", "summary": "Layered TOML config loader; subcommands: get, export-env, ensure-defaults, explain, should-notify, list-question-ids, resolve-question, check-no-ask, set, migrate; QUESTION_IDS registry + RESULT_MAP; startup guards at module load."},
     {"file": "scripts/config.py", "line": 163, "symbol": "_run_startup_guards", "kind": "fn", "summary": "Module-load guard: asserts QUESTION_IDS keys exist in VALIDATORS, have skill_default, RESULT_MAP choices are valid; exits 2 on violation."},
     {"file": "scripts/config.py", "line": 750, "symbol": "cmd_list_question_ids", "kind": "fn", "summary": "Prints sorted JSON array of registered question IDs from QUESTION_IDS registry."},
     {"file": "scripts/config.py", "line": 1452, "symbol": "cmd_resolve_question", "kind": "fn", "summary": "Returns JSON resolver envelope {result,default,source,rule_id,strength,reason,sources}; consults 4-layer config then routing-preference memories; honors Z_HARNESS_ASK_ALL, Z_HARNESS_NO_ASK, Z_HARNESS_EXPLAIN_RESOLUTION; post-processes via _apply_overnight_overrides."},
     {"file": "scripts/config.py", "line": 1575, "symbol": "cmd_check_no_ask", "kind": "fn", "summary": "Returns JSON {result:halt|proceed, question_id, rule_id}; fail-closed gate for overnight mode; unregistered qids always halt with unknown_ask_blocked event."},
     {"file": "scripts/config.py", "line": 1698, "symbol": "cmd_set", "kind": "fn", "summary": "Atomic read-modify-write of config key in global or project TOML; validates key+value before writing; exit 2 on validation, 4 on I/O."},
     {"file": "scripts/config.sh", "line": 1, "symbol": "config.sh", "kind": "module", "summary": "Thin shell wrapper: exec python3 scripts/config.py \"$@\"."},
-    {"file": "scripts/test_config.py", "line": 1, "symbol": "test_config.py", "kind": "module", "summary": "End-to-end smoke tests for config.py using hermetic XDG_CONFIG_HOME temp dirs; covers defaults, env overrides, repo-local precedence, schema errors, ensure-defaults, export-env event dedup, resolve-question, overnight overrides, check-no-ask, list-question-ids."},
+    {"file": "scripts/run-status.sh", "line": 1, "symbol": "run-status.sh", "kind": "module", "summary": "Classifies terminal state of a run as clean|halted|errored|unknown; subcommands: classify <run-id-or-path> [--command <name>], last-event <run-id-or-path>; sources plan-path.sh; supports canonical and legacy layouts."},
+    {"file": "scripts/run-status.sh", "line": 198, "symbol": "classify_by_kind", "kind": "fn", "summary": "Matches event kind against clean allowlist, halt allowlist, and *_error/fatal pattern; returns one of four terminal states."},
+    {"file": "scripts/run-status.sh", "line": 250, "symbol": "cmd_classify", "kind": "fn", "summary": "Subcommand entry; implement-all special case: requires last event=implement_end|compaction_pause AND all TASKS.md checkboxes [x]|[~] for clean."},
+    {"file": "scripts/normalize-task-state.sh", "line": 1, "symbol": "normalize-task-state.sh", "kind": "module", "summary": "Resets - [~] in-progress markers to - [ ] in <plan-dir>/TASKS.md; atomic via .tmp.$$ rename; always exits 0; --self-test mode with 4 assertions."},
+    {"file": "scripts/lint-askuser.sh", "line": 1, "symbol": "lint-askuser.sh", "kind": "module", "summary": "Audits AskUserQuestion callsites in commands/ and skills/; tags REGISTERED (file also has resolve-question or check-no-ask) or UNREGISTERED; --strict exits 1 on unregistered."},
+    {"file": "scripts/overnight-preflight.sh", "line": 1, "symbol": "overnight-preflight.sh", "kind": "module", "summary": "Phase-0 preflight for /z-overnight; check-collisions --chain <steps> --base <dir>: exits 0 if safe, emits slug_collision_halt event and exits 1 on collision; --self-test runs 8 assertions."},
+    {"file": "scripts/overnight-preflight.sh", "line": 233, "symbol": "cmd_check_collisions", "kind": "fn", "summary": "v1 rule (SPEC C13): collision when first chain step is plan|research AND <base>/PLAN.md exists; cds to REPO_ROOT before calling log-event.sh."},
+    {"file": "scripts/morning-report.py", "line": 427, "symbol": "cmd_generate", "kind": "fn", "summary": "Locates latest overnight run dir, loads overnight-state.json + events.jsonl, calls generate_report, writes MORNING_REPORT.md atomically; exits 1 on I/O or parse error."},
+    {"file": "scripts/morning-report.py", "line": 376, "symbol": "generate_report", "kind": "fn", "summary": "Assembles five sections: chain summary (HEAD SHA mismatch banner), phase results table, unilateral decisions table, test outcomes, recommended next (branches on halt reason: no_ask_blocked, slug_collision_halt, skill_tool_failure, generic)."},
+    {"file": "scripts/morning-report.py", "line": 518, "symbol": "cmd_self_test", "kind": "fn", "summary": "Golden-file comparison against fixtures in z-harness/overnight-run/tests/morning-report-fixtures/; runs root fixture + subdirs with MORNING_REPORT.md.golden."},
+    {"file": "scripts/preflight.sh", "line": 1, "symbol": "preflight.sh", "kind": "module", "summary": "Local pre-commit/pre-PR harness; runs lint-askuser.sh --strict; maps exit 1 to advisory warning, propagates exit 2+ as hard failures."},
+    {"file": "scripts/test_config.py", "line": 1, "symbol": "test_config.py", "kind": "module", "summary": "End-to-end smoke tests for config.py; 18+ test classes with hermetic XDG_CONFIG_HOME temp dirs; covers defaults, env overrides, repo-local precedence, schema errors, ensure-defaults, export-env dedup, resolve-question, overnight overrides, check-no-ask, list-question-ids, 3-level nesting (roles.*), migrate, _KEY_RE."},
     {"file": "scripts/test_log_phase.sh", "line": 1, "symbol": "test_log_phase.sh", "kind": "module", "summary": "Bash regression harness for log-phase.sh; 4 TEST groups, 21 assertions; hermetic via Z_HARNESS_PLANS_DIR+Z_HARNESS_SLUG temp dirs; covers overflow, normal path, negative wall_ms, 26h false-positive."}
   ],
   "depends_on": [],
-  "consumed_by": ["agents", "commands", "skills", "review-agent", "remote-runner", "config"],
+  "consumed_by": ["agents", "commands", "skills", "review-agent", "remote-runner", "config", "overnight-run"],
   "invariants": [
     "All scripts require python3 for JSON handling, timing fallbacks, and document generation.",
     "All scripts resolve the repo root via git rev-parse or pwd fallback.",
@@ -62,7 +79,17 @@
     "config.py export-env emits config_resolved event at most once per Z_HARNESS_RUN via O_EXCL stamp file in TMPDIR.",
     "remote-sandbox-sync.sh two-level layout: base/ seeded once per slug with atomic remote mkdir lock; per-task overlay uses --link-dest for hard-linked unchanged files.",
     "remote-sandbox-sync.sh resolves REMOTE_HOME via ssh printf (tilde expansion unreliable in --link-dest).",
-    "remote-sandbox-sync.sh TASK_ID rejects the literal value 'base' and all path-traversal patterns."
+    "remote-sandbox-sync.sh TASK_ID rejects the literal value 'base' and all path-traversal patterns.",
+    "run-status.sh always exits 0; terminal state is communicated as a printed string on stdout.",
+    "run-status.sh classify with --command implement-all requires both a clean last-event kind AND all TASKS.md checkboxes [x]|[~] before returning clean.",
+    "normalize-task-state.sh always exits 0 (best-effort); no events emitted.",
+    "normalize-task-state.sh only rewrites the - [~] prefix; - [ ] and - [x] markers are never modified.",
+    "overnight-preflight.sh check-collisions exits 0 when the chain's first step is not plan or research, regardless of artifacts.",
+    "overnight-preflight.sh cds to REPO_ROOT before calling log-event.sh to ensure canonical path resolution regardless of caller cwd.",
+    "morning-report.py writes MORNING_REPORT.md atomically via tempfile + os.rename; exits 1 on missing overnight-state.json.",
+    "morning-report.py finds the latest run by lexical sort of directories containing '-overnight-' in the archive dir.",
+    "lint-askuser.sh classification is file-level: all AskUserQuestion callsites in a file tagged REGISTERED if the file also contains resolve-question or check-no-ask anywhere.",
+    "preflight.sh maps lint-askuser.sh exit 1 to advisory warning; exit 2+ propagates as hard failure."
   ],
   "gotchas": [
     "log-phase.sh check_wall_ms threshold 604_800_000ms catches seconds-vs-ms overflow (1500x headroom) while allowing sessions up to 7 days; wall_ms_negative covers NTP jumps / clock skew.",
@@ -86,7 +113,14 @@
     "extract-dismissals.py drops findings lacking a title field; does NOT fall back to T-MR-NNN ids (renumbered each run, would produce spurious dismissal matches).",
     "extract-dismissals.py --filename allows targeting PLAN_STYLE_AUDIT.md instead of the default MR-REVIEW.md.",
     "remote-sandbox-sync.sh warns but does not fail when no .z-harness-rsync-exclude is found.",
-    "remote-sandbox-sync.sh seed_base: failed rsync cleans up partial base dir before releasing lock to avoid a dangerously incomplete base."
+    "remote-sandbox-sync.sh seed_base: failed rsync cleans up partial base dir before releasing lock to avoid a dangerously incomplete base.",
+    "run-status.sh classify --command implement-all: a TASKS.md with zero checkboxes is treated as incomplete (guards against wrong TASKS.md path).",
+    "run-status.sh last-event reads the last 20 lines of events.jsonl, iterating in reverse to find the latest valid JSON line.",
+    "morning-report.py _build_recommended_next: halt reason no_ask_blocked or unknown_ask_blocked shows lint-askuser.sh remediation steps with question_id; slug_collision_halt shows conflicting artifact and slug; skill_tool_failure shows captured error message.",
+    "morning-report.py emits CRITICAL HEAD SHA mismatch banner when head_sha_mismatch_at_resume event found in events.jsonl.",
+    "overnight-preflight.sh uses Z_HARNESS_SLUG env var for the slug in the emitted event; falls back to basename of --base if unset.",
+    "lint-askuser.sh --strict makes the script advisory-fail for CI; the default (no --strict) always exits 0 regardless of findings.",
+    "preflight.sh is documentation/audit tooling, not runtime enforcement; unregistered AskUserQuestion callsites under Z_HARNESS_NO_ASK=halt still block until the user responds."
   ],
   "memories": []
 }

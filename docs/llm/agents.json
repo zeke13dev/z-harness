@@ -60,14 +60,14 @@
       "line": 1,
       "symbol": "consultant-primary",
       "kind": "module",
-      "summary": "Primary provider proxy; supports 12 modes including generate-hypotheses-round1/round2-adversarial."
+      "summary": "Primary provider proxy; expected_contract: freeform; supports 12 modes including generate-hypotheses-round1/round2-adversarial."
     },
     {
       "file": "agents/consultant-secondary.md",
       "line": 1,
       "symbol": "consultant-secondary",
       "kind": "module",
-      "summary": "Secondary provider proxy; same 12-mode surface as primary, distinct provider role."
+      "summary": "Secondary provider proxy; expected_contract: freeform; same 12-mode surface as primary, distinct provider role."
     },
     {
       "file": "agents/doc-fetcher.md",
@@ -144,7 +144,7 @@
       "line": 1,
       "symbol": "reviewer",
       "kind": "module",
-      "summary": "Provider proxy for task correctness/spec review; accepts relevant_docs LLM JSONs; blockers+majors only return."
+      "summary": "Provider proxy for task correctness/spec review; expected_contract: review-verdict; accepts relevant_docs LLM JSONs; blockers+majors only return."
     },
     {
       "file": "agents/scope-probe.md",
@@ -177,7 +177,8 @@
   ],
   "depends_on": [
     "scripts",
-    "lookup-contract"
+    "lookup-contract",
+    "personas-and-roles"
   ],
   "consumed_by": [
     "commands",
@@ -188,6 +189,9 @@
     "Commands/skills own orchestration, user interaction, artifact writes, and final routing decisions.",
     "consultant-primary, consultant-secondary, and reviewer resolve providers via scripts/resolve-provider.sh.",
     "Proxy agents emit consult_start before provider calls so liveness checks can detect hangs.",
+    "consultant-primary and consultant-secondary declare expected_contract: freeform; binding a persona with contract: review-verdict or contract: strict-json to either role fails resolve-persona.py validate.",
+    "reviewer declares expected_contract: review-verdict; binding a persona with contract: freeform to this role fails resolve-persona.py validate.",
+    "Personas that omit the contract field are treated as 'any' and pass all role contract checks.",
     "doc-updater must preserve existing memories[] verbatim and never author memories.",
     "external-lookup must follow docs/llm/lookup-contract.json and refuse mutating commands.",
     "planning-router is read-only and advisory; malformed or unsafe routing returns ask_user/bad_input.",
@@ -262,7 +266,10 @@
     "research-judge is read-only; it returns RESEARCH.md content as text; the orchestrator writes the file.",
     "research-judge fires panel_degraded mode when panel_perspective_count < 3; synthesis continues with available perspectives.",
     "research-judge self-check (Step 7) is mandatory on every invocation; research_judge_temptation field is always populated.",
-    "research-judge produces exactly 10 sections in fixed order; no additional top-level sections permitted."
+    "research-judge produces exactly 10 sections in fixed order; no additional top-level sections permitted.",
+    "expected_contract mismatch: binding a persona with contract: review-verdict or contract: strict-json to consultant_primary or consultant_secondary roles fails resolve-persona.py validate with an error naming persona/role/declared/expected.",
+    "expected_contract mismatch: binding a persona with contract: freeform to the reviewer role fails resolve-persona.py validate; reviewer requires structured verdict output.",
+    "Personas that omit the contract field pass all role contract checks — contract is optional in persona definitions."
   ],
   "memories": []
 }

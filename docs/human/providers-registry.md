@@ -1,6 +1,6 @@
 # Providers Registry
 
-> Last updated: 2026-05-28T00:00:00Z
+> Last updated: 2026-05-28
 > Covers source: scripts/resolve-provider.py, scripts/resolve-provider.sh, scripts/discover-providers.py, commands/z-providers-discover.md, docs/human/PROVIDERS.md, runtime/compat.py, runtime/contract/provider.schema.json, scripts/log-providers.sh, .z-harness/providers.json
 
 ## Overview
@@ -16,12 +16,13 @@ As of schema v2, provider naming uses a `-cli` suffix to distinguish the CLI run
 - `scripts/resolve-provider.py:170` — `load_configs()` — locates and loads global + repo JSON; validates schema version; runs v1→v2 upgrade
 - `scripts/resolve-provider.py:64` — `_upgrade_v1_to_v2()` — in-memory upgrade of v1 registries to v2; adds null fields and emits `provider_schema_v1_upgraded` event (memoized per process per path)
 - `scripts/resolve-provider.py:227` — `merge_with_shadow()` — per-key merge of global + repo configs across `providers`, `roles`, `aliases` with shadow detection and event emission
-- `scripts/resolve-provider.py:359` — `resolve()` — role→provider→command lookup with alias substitution and PATH presence check
-- `scripts/resolve-provider.py:331` — `_apply_aliases()` — checks if a provider name is an alias; substitutes canonical name and emits `provider_alias_used` (memoized); also emits `legacy_provider_roles_used` when resolution comes from `providers.json.roles`
+- `scripts/resolve-provider.py:359` — `resolve()` — role→provider→command lookup with alias substitution and PATH presence check; exits 1 if unresolvable
+- `scripts/resolve-provider.py:331` — `_apply_aliases()` — checks if a provider name is an alias; substitutes canonical name and emits `provider_alias_used` (memoized); also emits `legacy_provider_roles_used` when `is_legacy=True`
 - `scripts/resolve-provider.py:293` — `_emit_alias_used()` — emits `provider_alias_used` event via `log-event.sh` (best-effort, non-fatal; memoization guard lives in `_apply_aliases`)
 - `scripts/resolve-provider.py:314` — `_emit_legacy_roles_used()` — emits `legacy_provider_roles_used` event when `providers.json.roles` is the active role binding path
 - `scripts/resolve-provider.py:422` — `check_consultant_distinctness()` — invariant: `consultant_primary != consultant_secondary`
 - `scripts/resolve-provider.py:443` — `compose_argv()` — builds full argv from descriptor + effective model; renders `{model}` in `model_arg_template`; raises `ValueError` if no model can be resolved
+- `scripts/resolve-provider.py:112` — `_validate_provider_entry()` — validates all required fields for a single provider entry; exits 2 on violation
 - `scripts/discover-providers.py:58` — `discover()` — probes PATH for known CLIs; returns proposed `providers.json` dict (never writes)
 - `scripts/log-providers.sh:1` — `log-providers.sh` — resolves all three roles, prints summary line, emits `provider_resolved` events
 - `runtime/compat.py:15` — `resolve_provider()` — Python API wrapper around `resolve-provider.py` for runtime dispatch layer
@@ -45,9 +46,10 @@ As of schema v2, provider naming uses a `-cli` suffix to distinguish the CLI run
 - The schema at `runtime/contract/provider.schema.json` permits `kind: "sdk"` and optional `auth_env`, `session_resumable`, and `allow_cross_vendor_env` fields, but `resolve-provider.py` validates only `kind: "cli"` — SDK entries pass schema validation but cause exit 2 if actually resolved.
 - `compose_argv()` raises `ValueError` (not exit) when both `effective_model` and `provider_dict["default_model"]` are empty or null — callers must handle this exception.
 - Setting `Z_HARNESS_REPO_PROVIDERS` to any path overrides the git-discovered repo config path entirely, which is useful in CI and test fixtures.
-- The `aliases` section IS now used by `resolve()` via `_apply_aliases` — it is not merely informational. When a role binding (from `providers.json.roles`) names an alias key, it is transparently substituted with the canonical provider name and a `provider_alias_used` event is emitted (memoized per process per old-name). Using old names also triggers `legacy_provider_roles_used`.
+- The `aliases` section IS used by `resolve()` via `_apply_aliases` — it is not merely informational. When a role binding names an alias key, it is transparently substituted with the canonical provider name and a `provider_alias_used` event is emitted (memoized per process per old-name). Using old names also triggers `legacy_provider_roles_used`.
 - The repo-local `.z-harness/providers.json` deliberately contains both old names (`codex`, `gemini`, `claude`) and new `-cli` names as first-class provider entries. This dual-entry pattern means the file is larger than necessary but avoids breaking any site that has persisted old names in a user-global config.
 - `providers.json.roles` is now a **legacy fallback**. The TOML `[roles.<command>.<role>]` binding always takes precedence when both exist. Using the `roles` map in `providers.json` emits `legacy_provider_roles_used`.
+- `_alias_used_emitted` is a module-level set; alias dedup survives multiple `resolve()` calls within the same process but resets on new process invocations.
 
 ## Memories
 

@@ -270,6 +270,15 @@ $ scripts/config.sh list-question-ids
 ["workflow.audit_to_amend", "workflow.implement_all_proceed", "workflow.plan_decisions_approval", "workflow.review_all_proceed", "workflow.slug_confirm"]
 ```
 
+### `migrate`
+
+Rewrites old provider names (`codex`, `gemini`, `claude`) in `roles.*.runtime` config values to the new `-cli` suffixed form (`codex-cli`, `gemini-cli`, `claude-cli`). Applied to both global and project layers. Idempotent; skips missing files. Exits 4 on I/O error, else exits 0.
+
+```
+$ scripts/config.sh migrate
+[config] migrate: global — rewrote 2 runtime value(s) in /Users/you/.config/z-harness/config.toml
+```
+
 ## Overnight gate system
 
 When `/z-overnight` or any other caller sets `Z_HARNESS_NO_ASK=halt`, the resolver applies an additional post-processing pass (`_apply_overnight_overrides`) to every `resolve-question` call:
@@ -305,15 +314,18 @@ When `/z-overnight` or any other caller sets `Z_HARNESS_NO_ASK=halt`, the resolv
 - `scripts/config.py:135` — `OVERNIGHT_AUTODECIDE_QIDS_DEFAULT` — default overnight allowlist; question IDs auto-decided without halting
 - `scripts/config.py:141` — `RESULT_MAP` — maps `(question_id, option-domain-value)` to resolver result-domain (`skip|prefill|ask|halt`)
 - `scripts/config.py:163` — `_run_startup_guards` — module-load consistency check; raises `SystemExit(2)` on registry inconsistency
-- `scripts/config.py:458` — `load_config` — build resolved config from all 4 layers; returns `(values, sources)` dicts
-- `scripts/config.py:952` — `_apply_overnight_overrides` — post-process resolution envelope for overnight/halt-from-ask behavior
-- `scripts/config.py:861` — `_parse_overnight_allowlist` — parse `Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE` JSON and merge with defaults
-- `scripts/config.py:1085` — `_load_memory_matches` — walks `docs/llm/*.json` for `routing-preference` entries matching `question_id`; respects scope
-- `scripts/config.py:1193` — `_resolve_memory_matches` — merges memory entries; highest strength wins on agreement; returns `conflict` on disagreement
-- `scripts/config.py:1452` — `cmd_resolve_question` — consults 4-layer config + memory + overnight overrides; returns JSON envelope; stdout reserved for JSON
-- `scripts/config.py:1575` — `cmd_check_no_ask` — lightweight overnight-gate checker; returns halt/proceed JSON
-- `scripts/config.py:1698` — `cmd_set` — atomically write a TOML key to global or project config via tmp+rename
-- `scripts/config.py:750` — `cmd_list_question_ids` — print JSON array of known question IDs
+- `scripts/config.py:462` — `load_config` — build resolved config from all 4 layers; returns `(values, sources)` dicts
+- `scripts/config.py:972` — `_apply_overnight_overrides` — post-process resolution envelope for overnight/halt-from-ask behavior
+- `scripts/config.py:881` — `_parse_overnight_allowlist` — parse `Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE` JSON and merge with defaults
+- `scripts/config.py:1105` — `_load_memory_matches` — walks `docs/llm/*.json` for `routing-preference` entries matching `question_id`; respects scope
+- `scripts/config.py:1213` — `_resolve_memory_matches` — merges memory entries; highest strength wins on agreement; returns `conflict` on disagreement
+- `scripts/config.py:1249` — `_build_resolve_envelope` — core resolver logic: config + memory signal combination; returns `(envelope, emit_result, emit_source, emit_strength, exit_code)`
+- `scripts/config.py:1472` — `cmd_resolve_question` — consults 4-layer config + memory + overnight overrides; returns JSON envelope; stdout reserved for JSON
+- `scripts/config.py:1595` — `cmd_check_no_ask` — lightweight overnight-gate checker; returns halt/proceed JSON
+- `scripts/config.py:1734` — `cmd_set` — atomically write a TOML key to global or project config via tmp+rename
+- `scripts/config.py:770` — `cmd_list_question_ids` — print JSON array of known question IDs
+- `scripts/config.py:1828` — `cmd_should_notify` — print yes|no for a given event kind; always exits 0; exits 2 on unknown event
+- `scripts/config.py:1895` — `cmd_migrate` — rewrite old provider names in `roles.*.runtime` values to `-cli` suffixed form; idempotent
 - `scripts/propose-prefs.py:1` — `propose-prefs` (module) — walks `metrics.jsonl` for repeated command-pair patterns; emits JSON proposal if threshold met; never writes
 
 ## `routing-preference` memory type

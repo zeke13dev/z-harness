@@ -1,6 +1,6 @@
 {
   "concept": "providers-registry",
-  "last_updated": "2026-05-28T00:00:00Z",
+  "last_updated": "2026-05-28",
   "covers_spec": "none",
   "source_file": [
     "scripts/resolve-provider.py",
@@ -26,6 +26,7 @@
     {"file": "scripts/resolve-provider.py", "line": 314, "symbol": "_emit_legacy_roles_used", "kind": "fn", "summary": "Emits legacy_provider_roles_used event when providers.json.roles is the active role-binding path"},
     {"file": "scripts/resolve-provider.py", "line": 422, "symbol": "check_consultant_distinctness", "kind": "fn", "summary": "Invariant: consultant_primary != consultant_secondary; exits 1 on collision"},
     {"file": "scripts/resolve-provider.py", "line": 443, "symbol": "compose_argv", "kind": "fn", "summary": "Builds full argv from descriptor + effective_model; renders {model} in model_arg_template; raises ValueError if no model"},
+    {"file": "scripts/resolve-provider.py", "line": 112, "symbol": "_validate_provider_entry", "kind": "fn", "summary": "Validates all required fields for a single provider entry; exits 2 on any field violation"},
     {"file": "scripts/discover-providers.py", "line": 58, "symbol": "discover", "kind": "fn", "summary": "Probes PATH for known CLIs; returns proposed providers.json dict (never writes)"},
     {"file": "scripts/log-providers.sh", "line": 1, "symbol": "log-providers.sh", "kind": "module", "summary": "Resolves all three roles, prints summary line, emits provider_resolved events"},
     {"file": "runtime/compat.py", "line": 15, "symbol": "resolve_provider", "kind": "fn", "summary": "Python API wrapper around resolve-provider.py for runtime dispatch layer"},

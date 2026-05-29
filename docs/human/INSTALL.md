@@ -207,3 +207,25 @@ untouched.
   `agy`) installed and reachable on your `PATH`. Run `/z-providers-discover` to
   auto-configure roles after install. See [PROVIDERS.md](PROVIDERS.md).
 - Claude Code with `PushNotification` available (for mobile notifications).
+
+### Python dependencies
+
+z-harness scripts require Python 3.11+ (for `tomllib` stdlib).
+
+`scripts/config.py` optionally uses **tomlkit** (`>=0.12,<1.0`) for
+comment-preserving TOML writes. Without it the script falls back to comment-
+stripping writes (all other semantics are identical).
+
+Install tomlkit with:
+
+```bash
+pip install "tomlkit>=0.12,<1.0"
+```
+
+Or, if using a virtual environment (recommended):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install "tomlkit>=0.12,<1.0"
+```

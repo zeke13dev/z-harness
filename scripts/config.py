@@ -11,6 +11,7 @@ Subcommands:
   list-question-ids                       Print sorted JSON array of registered question IDs.
   resolve-question <question_id>          Return JSON resolver envelope for a question ID.
   check-no-ask --question-id <id>        Return JSON halt/proceed for overnight gate checks.
+  inspect-all [--json]                   Print all config knobs with source and persistence metadata.
 
 Layer order (lowest → highest priority):
   1. Built-in defaults (DEFAULTS)
@@ -36,6 +37,12 @@ import sys
 import tempfile
 import tomllib
 from pathlib import Path
+
+try:
+    import tomlkit
+    _TOMLKIT_AVAILABLE = True
+except ImportError:
+    _TOMLKIT_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
 # Schema
@@ -1731,6 +1738,73 @@ def _toml_write(path: Path, data: dict) -> None:
         raise
 
 
+def _toml_write_key_preserving(path: Path, section: str, key: str, value) -> None:
+    """
+    Write a single ``section.key = value`` into ``path`` atomically,
+    preserving comments and surrounding TOML structure when tomlkit is
+    available.
+
+    Handles dotted sections like ``workflow.audit_to_amend`` by ensuring
+    the intermediate table exists before setting the leaf key.
+
+    If ``path`` does not exist: creates it with ``tomlkit.document()`` (or
+    falls back to ``_toml_write`` on the minimal dict if tomlkit is absent).
+
+    If ``path`` exists: reads via ``tomlkit.loads`` (or tomllib), mutates
+    ``doc[section][key] = value``, serializes via ``tomlkit.dumps``, then
+    writes atomically with tmp + ``os.replace``.
+
+    Falls back to the original ``_toml_write`` behaviour when tomlkit is not
+    installed (comments will be lost, but all other invariants hold).
+
+    Raises ``OSError`` on I/O failure (caller should handle exit 4).
+    """
+    parent = path.parent
+    parent.mkdir(parents=True, exist_ok=True)
+
+    if not _TOMLKIT_AVAILABLE:
+        # Graceful degradation: read-modify-write without comment preservation
+        existing = _load_toml(path)
+        if existing is None:
+            data: dict = {"schema_version": 1}
+        else:
+            data = dict(existing)
+        if section not in data or not isinstance(data[section], dict):
+            data[section] = {}
+        else:
+            data[section] = dict(data[section])
+        data[section][key] = value
+        _toml_write(path, data)
+        return
+
+    # --- tomlkit path: preserves comments ---
+    if path.exists():
+        doc = tomlkit.loads(path.read_text(encoding="utf-8"))
+    else:
+        doc = tomlkit.document()
+        # Bootstrap schema_version for new files
+        doc.add("schema_version", 1)
+
+    # Ensure top-level section table exists (supports dotted sections)
+    if section not in doc:
+        doc.add(tomlkit.nl())
+        doc.add(section, tomlkit.table())
+    doc[section][key] = value
+
+    content = tomlkit.dumps(doc)
+    fd, tmp_path = tempfile.mkstemp(dir=parent, suffix=".toml.tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        os.replace(tmp_path, path)
+    except OSError:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
 def cmd_set(args: list[str]) -> None:
     """
     set <key> <value> [--scope=global|project]
@@ -1738,6 +1812,7 @@ def cmd_set(args: list[str]) -> None:
     Validates <key> against _KEY_RE and VALIDATORS[<key>], then atomically
     writes the value to the target TOML file via tmp+rename.
     Preserves all other existing keys (read-modify-write).
+    Comment preservation requires tomlkit (see _toml_write_key_preserving).
     Exit 0 on success, 2 on validation failure, 4 on I/O error.
     """
     scope = "project"
@@ -1802,27 +1877,199 @@ def cmd_set(args: list[str]) -> None:
     else:
         target_path = _repo_config_path(require_exists=False)
 
-    # Read-modify-write: load existing data or start from scratch
-    existing = _load_toml(target_path)
-    if existing is None:
-        data: dict = {"schema_version": 1}
-    else:
-        data = dict(existing)
-
-    # Mutate the target key
+    # Mutate the target key with comment-preserving atomic write
     section, subkey = key.split(".", 1)
-    if section not in data or not isinstance(data[section], dict):
-        data[section] = {}
-    else:
-        data[section] = dict(data[section])
-    data[section][subkey] = value
-
-    # Atomic write
     try:
-        _toml_write(target_path, data)
+        _toml_write_key_preserving(target_path, section, subkey, value)
     except OSError as exc:
         print(f"[config] cannot write {target_path}: {exc}", file=sys.stderr)
         sys.exit(4)
+
+
+# ---------------------------------------------------------------------------
+# inspect-all subcommand
+# ---------------------------------------------------------------------------
+
+# Env-only knobs: these are read from env only, never written to TOML.
+ENV_ONLY_KNOBS: list[str] = [
+    "Z_HARNESS_NO_ASK",
+    "Z_HARNESS_OVERNIGHT_AUTODECIDE",
+    "Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE",
+    "Z_HARNESS_PAUSE_AT_PCT",
+    "Z_HARNESS_PARALLEL",
+    "Z_HARNESS_ASK_ALL",
+    "Z_HARNESS_NOTIFY",
+    "Z_HARNESS_REPO_PROVIDERS",
+    "Z_HARNESS_PLANS_DIR",
+    "Z_HARNESS_EXPLAIN_RESOLUTION",
+    "Z_HARNESS_MAX_EXPLORE",
+]
+
+# Map source label string → persistence_class string
+def _source_to_persistence_class(source: str) -> str:
+    """
+    Map a source label (from load_config) to a persistence_class string.
+
+    persistence_class ∈ {default, global, repo, env, provider_file,
+                         persona_file, memory, generated_docs}
+    """
+    if source == "defaults":
+        return "default"
+    if source.startswith("env "):
+        return "env"
+    # Global config path contains the XDG/home config dir
+    global_path = str(_global_config_path())
+    if global_path and source == global_path:
+        return "global"
+    # Repo config: any other file path (Z_HARNESS_REPO_CONFIG or git-toplevel)
+    if source.startswith("/") or source.startswith("~"):
+        return "repo"
+    return "default"
+
+
+def cmd_inspect_all(args: list[str]) -> None:
+    """
+    inspect-all [--json]
+
+    Returns a structured view of all configuration knobs:
+    - Every key in DEFAULTS (TOML-persistent)
+    - Every registered question_id in QUESTION_IDS
+    - Every env-only knob in ENV_ONLY_KNOBS
+
+    Default output: human-readable concern-grouped table.
+    --json: machine-parseable JSON object.
+
+    Exit 0 on success.
+    """
+    emit_json = "--json" in args
+
+    # --- Section 1: TOML-persistent keys (from DEFAULTS) ---
+    values, sources = load_config()
+    toml_keys: dict[str, dict] = {}
+    flat_defaults = _flatten_defaults()
+    global_path_str = str(_global_config_path())
+
+    for dotted_key in sorted(flat_defaults.keys()):
+        value = values.get(dotted_key)
+        source = sources.get(dotted_key, "defaults")
+        persistence_class = _source_to_persistence_class(source)
+
+        # Build sources[] list showing all layers that have a value for this key
+        sources_list = []
+        # Always include the winning source
+        sources_list.append({"layer": source, "value": value})
+
+        # Map source label to simplified form for the "source" field
+        if source == "defaults":
+            source_label = "default"
+        elif source == global_path_str:
+            source_label = "global"
+        elif source.startswith("env "):
+            source_label = "env"
+        else:
+            source_label = "repo"
+
+        toml_keys[dotted_key] = {
+            "value": value,
+            "source": source_label,
+            "sources": sources_list,
+            "strength": "hard" if source_label not in {"default", "none"} else "none",
+            "persistence_class": persistence_class,
+        }
+
+    # --- Section 2: Registered question_ids (virtual config keys) ---
+    qid_keys: dict[str, dict] = {}
+    for qid in sorted(QUESTION_IDS.keys()):
+        try:
+            envelope, emit_result, emit_source, emit_strength, _exit_code = _build_resolve_envelope(
+                qid, explain=False
+            )
+        except SystemExit:
+            # Config load error — skip this qid gracefully
+            continue
+
+        result_source = envelope.get("source", "none")
+        mem_sources = envelope.get("sources", [])
+
+        # Map envelope source → persistence_class
+        if result_source == "memory":
+            persistence_class = "memory"
+        elif result_source == "config":
+            # Determine whether it came from global or repo
+            config_source = sources.get(QUESTION_IDS[qid]["config_key"], "defaults")
+            persistence_class = _source_to_persistence_class(config_source)
+        elif result_source in ("none", "conflict", "override"):
+            persistence_class = "default"
+        else:
+            persistence_class = "default"
+
+        qid_keys[qid] = {
+            "value": envelope.get("result"),
+            "source": result_source,
+            "sources": mem_sources,
+            "strength": envelope.get("strength", "none"),
+            "persistence_class": persistence_class,
+            # Include full envelope fields for tooling consumers
+            "envelope": envelope,
+        }
+
+    # --- Section 3: Env-only knobs ---
+    env_keys: dict[str, dict] = {}
+    for knob in ENV_ONLY_KNOBS:
+        env_val = os.environ.get(knob)
+        source = "env" if env_val is not None else "none"
+        env_keys[knob] = {
+            "value": env_val,
+            "source": source,
+            "sources": [{"layer": source, "value": env_val}] if env_val is not None else [],
+            "strength": "hard" if source == "env" else "none",
+            "persistence_class": "env",
+        }
+
+    if emit_json:
+        output: dict = {
+            "toml_keys": toml_keys,
+            "question_ids": qid_keys,
+            "env_only_knobs": env_keys,
+        }
+        print(json.dumps(output, indent=2))
+        sys.exit(0)
+
+    # Human-readable concern-grouped table
+    def _fmt_val(v) -> str:
+        if v is None:
+            return "(not set)"
+        return repr(v) if not isinstance(v, str) else v
+
+    print("=== TOML-Persistent Keys ===")
+    print(f"  {'Key':<40} {'Value':<25} {'Source':<12} {'Persistence'}")
+    print(f"  {'-'*40} {'-'*25} {'-'*12} {'-'*15}")
+    for key, meta in toml_keys.items():
+        print(
+            f"  {key:<40} {_fmt_val(meta['value']):<25} "
+            f"{meta['source']:<12} {meta['persistence_class']}"
+        )
+
+    print()
+    print("=== Question IDs (Routing Preferences) ===")
+    print(f"  {'question_id':<40} {'result':<12} {'source':<12} {'strength':<12} {'persistence'}")
+    print(f"  {'-'*40} {'-'*12} {'-'*12} {'-'*12} {'-'*15}")
+    for qid, meta in qid_keys.items():
+        print(
+            f"  {qid:<40} {_fmt_val(meta['value']):<12} "
+            f"{meta['source']:<12} {meta['strength']:<12} {meta['persistence_class']}"
+        )
+
+    print()
+    print("=== Env-Only Knobs ===")
+    print(f"  {'Knob':<45} {'Value':<25} {'Source'}")
+    print(f"  {'-'*45} {'-'*25} {'-'*8}")
+    for knob, meta in env_keys.items():
+        print(
+            f"  {knob:<45} {_fmt_val(meta['value']):<25} {meta['source']}"
+        )
+
+    sys.exit(0)
 
 
 def cmd_should_notify(args: list[str]) -> None:
@@ -1937,7 +2184,7 @@ def main() -> None:
     if len(sys.argv) < 2:
         print(
             "usage: config.py <get|export-env|ensure-defaults|explain|should-notify"
-            "|list-question-ids|resolve-question|check-no-ask|set|migrate> [args...]",
+            "|list-question-ids|resolve-question|check-no-ask|set|migrate|inspect-all> [args...]",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -1965,11 +2212,13 @@ def main() -> None:
         cmd_set(args)
     elif subcommand == "migrate":
         cmd_migrate(args)
+    elif subcommand == "inspect-all":
+        cmd_inspect_all(args)
     else:
         print(
             f"[config] unknown subcommand {subcommand!r}; "
             "valid: get, export-env, ensure-defaults, explain, should-notify, "
-            "list-question-ids, resolve-question, check-no-ask, set, migrate",
+            "list-question-ids, resolve-question, check-no-ask, set, migrate, inspect-all",
             file=sys.stderr,
         )
         sys.exit(2)

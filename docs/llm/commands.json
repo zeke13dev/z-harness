@@ -19,6 +19,7 @@
     "commands/z-maintain-docs.md",
     "commands/z-map.md",
     "commands/z-mr-review.md",
+    "commands/z-overnight.md",
     "commands/z-plan-light.md",
     "commands/z-plan-split.md",
     "commands/z-plan.md",
@@ -54,14 +55,14 @@
       "line": 1,
       "symbol": "z-audit-plan",
       "kind": "module",
-      "summary": "Audits existing SPEC/PLAN/TASKS; Phase 5 resolver pre-check (workflow.audit_to_amend); Phase 9 elevation proposer."
+      "summary": "Audits existing SPEC/PLAN/TASKS; Phase 5 resolver pre-check (workflow.audit_to_amend); check-no-ask halt branch emitting audit_halt; Phase 9 elevation proposer."
     },
     {
       "file": "commands/z-audit-plan-style.md",
       "line": 1,
       "symbol": "z-audit-plan-style",
       "kind": "module",
-      "summary": "Audits plan artifacts for code-quality issues before implementation; requires STYLE.md (hard gate); Phase 5 resolver pre-check; Phase 9 elevation proposer; emits PLAN_STYLE_AUDIT.md."
+      "summary": "Audits plan artifacts for code-quality issues before implementation; requires STYLE.md (hard gate); Phase 5 resolver pre-check; check-no-ask halt branch emitting plan_style_halt; Phase 9 elevation proposer; emits PLAN_STYLE_AUDIT.md."
     },
     {
       "file": "commands/z-brainstorm.md",
@@ -96,14 +97,14 @@
       "line": 1,
       "symbol": "z-fix",
       "kind": "module",
-      "summary": "Ships diagnosed bug fixes with consult and Codex review; slug-confirm resolver gate (workflow.slug_confirm) after hard collision check."
+      "summary": "Ships diagnosed bug fixes with consult and Codex review; slug-confirm resolver gate (workflow.slug_confirm) after hard collision check; check-no-ask halt branch emitting fix_halt."
     },
     {
       "file": "commands/z-implement-all.md",
       "line": 1,
       "symbol": "z-implement-all",
       "kind": "module",
-      "summary": "Orchestrates task queues with fresh subagents, reviewers, and auto memory review (Phase 9). N=2 cross-cluster parallel dispatch when overlap_count==0 (cross_cluster_parallel event); cycle-2 skip-on-clean-cycle-1 (review_skipped_clean_cycle1 event); Phase 9 persists candidates to JSONL and emits memory_review_complete — no in-phase AskUser loop."
+      "summary": "Orchestrates task queues with fresh subagents, reviewers, and auto memory review (Phase 9). N=2 cross-cluster parallel dispatch when overlap_count==0; cycle-2 skip-on-clean-cycle-1; check-no-ask halt branch on second review failure emitting task_halt+implement_end (workflow.implement_all_proceed); Phase 9 emits memory_review_complete — no in-phase AskUser loop."
     },
     {
       "file": "commands/z-implement-next.md",
@@ -141,6 +142,13 @@
       "summary": "Reviews branch diffs into ranked task-shaped findings; requires STYLE.md."
     },
     {
+      "file": "commands/z-overnight.md",
+      "line": 1,
+      "symbol": "z-overnight",
+      "kind": "module",
+      "summary": "Unattended pipeline orchestrator. Chains sub-commands via Z_HARNESS_NO_ASK=halt. Presets: full-build, research-build, quick-build. Supports resume <RUN_ID>. Writes MORNING_REPORT.md via morning-report.py; push-notifies on completion/halt. Lock: $BASE/.overnight.lock (flock-guarded). State: overnight-state.json. v1 limit: 12 registered halt-from-ask callsites."
+    },
+    {
       "file": "commands/z-plan-light.md",
       "line": 1,
       "symbol": "z-plan-light",
@@ -159,7 +167,7 @@
       "line": 1,
       "symbol": "z-plan",
       "kind": "module",
-      "summary": "Produces SPEC.md, PLAN.md, TASKS.md. Calls config.py export-env during Setup. Slug-confirm resolver gate (workflow.slug_confirm) after hard collision check. Step 9c consolidated freshness gate emits precontext_freshness_acknowledged; proceed-with-stale and abandon set to_command: null in plan_route_decision."
+      "summary": "Produces SPEC.md, PLAN.md, TASKS.md. Calls config.py export-env during Setup. Slug-confirm resolver gate (workflow.slug_confirm) after hard collision check; check-no-ask halt branches at workflow.slug_confirm and workflow.plan_decisions_approval (both emit plan_halt). Step 9c consolidated freshness gate emits precontext_freshness_acknowledged; proceed-with-stale and abandon set to_command: null in plan_route_decision."
     },
     {
       "file": "commands/z-providers-discover.md",
@@ -187,7 +195,7 @@
       "line": 1,
       "symbol": "z-review-all",
       "kind": "module",
-      "summary": "Final-gate reviews cumulative implementation, then auto-runs memory review (Phase 7)."
+      "summary": "Final-gate reviews cumulative implementation, then auto-runs memory review (Phase 7). check-no-ask halt branch at workflow.review_all_proceed emits review_halt and writes partial .review_state.json (halted: true, halt_reason: no_ask_blocked); re-invocation detects this and resumes at Phase 3.7 via review_resume_from_halt event."
     },
     {
       "file": "commands/z-skill-fix.md",
@@ -236,7 +244,7 @@
       "line": 1,
       "symbol": "z-uplift",
       "kind": "module",
-      "summary": "Tiered bulk codebase quality uplift: decompose repo, cross-cut pass, per-component audits, sequential implement. Slug-confirm resolver gate (workflow.slug_confirm) after hard collision check."
+      "summary": "Tiered bulk codebase quality uplift: decompose repo, cross-cut pass, per-component audits, sequential implement. Slug-confirm resolver gate (workflow.slug_confirm) after hard collision check; check-no-ask halt branch emitting uplift_halt."
     }
   ],
   "depends_on": [
@@ -293,7 +301,15 @@
     "z-plan step 9c is the sole consolidated freshness gate covering docs-staleness, research-staleness, and map-staleness in one AskUserQuestion. Proceed-with-all-stale emits precontext_freshness_acknowledged (sources list = research/map as applicable) and sets to_command: null in plan_route_decision. Abandon also sets to_command: null.",
     "z-research Phase 1 dispatches /z-map and /z-brainstorm in a single parallel message when DISPATCH_MAP=ran AND DISPATCH_BRAINSTORM=ran. Sub-run archive identification uses the first event's kind field (map_run_start vs brainstorm_run_start) in each archive's events.jsonl — not the directory name. If identification fails, the orchestrator aborts with a run_end error rather than guessing.",
     "z-implement-all N=2 cross-cluster parallel dispatch fires only when overlap_count==0 in SHARED-CONCERNS.md frontmatter; emits cross_cluster_parallel event before dispatching the pair. Plans with overlap_count!=0 always run serially. N=3 parallel cross-cluster dispatch is v2.",
-    "z-implement-all cycle-2 skip-on-clean-cycle-1 fires when CYCLE==2 AND cycle-1 reviewer returned blockers=0 AND majors=0, regardless of the reason the implementer re-ran. Emits review_skipped_clean_cycle1 before skipping to step 7b."
+    "z-implement-all cycle-2 skip-on-clean-cycle-1 fires when CYCLE==2 AND cycle-1 reviewer returned blockers=0 AND majors=0, regardless of the reason the implementer re-ran. Emits review_skipped_clean_cycle1 before skipping to step 7b.",
+    "check-no-ask is fail-closed: it returns halt|proceed and correctly handles Z_HARNESS_ASK_ALL=1 vs Z_HARNESS_NO_ASK=halt conflicts (exit 5). A resolver error (non-zero from resolve-question) does NOT cause halt — it falls back to asking. check-no-ask exit 5 is a hard config-conflict error, distinct from resolver error paths.",
+    "Seven commands are instrumented with check-no-ask halt branches: z-plan (workflow.slug_confirm → plan_halt; workflow.plan_decisions_approval → plan_halt), z-fix (workflow.slug_confirm → fix_halt), z-uplift (workflow.slug_confirm → uplift_halt), z-audit-plan (workflow.audit_to_amend → audit_halt), z-audit-plan-style (workflow.audit_to_amend → plan_style_halt), z-review-all (workflow.review_all_proceed → review_halt + .review_state.json), z-implement-all (workflow.implement_all_proceed → task_halt + implement_end on second review failure).",
+    "z-overnight sets Z_HARNESS_NO_ASK=halt ONLY around each Skill call; the parent orchestrator's own AskUserQuestion prompts run with NO_ASK unset. Hard halts (slug collision from overnight-preflight.sh, lock corruption, state corruption, empty chain) are never bypassed by the allowlist or halt-from-ask.",
+    "z-overnight overnight-state.json writes are always flock-guarded on $BASE/.overnight.lock using tmp+rename. Lock is released in Phase 4.5 even if MORNING_REPORT.md write fails.",
+    "z-overnight sub-run archive identification uses a directory snapshot diff of $BASE/archive/ (excluding *-overnight-* dirs); NEW_COUNT=0 or NEW_COUNT>1 → error + run_id_ambiguous event.",
+    "z-overnight resume HEAD SHA validation emits head_sha_mismatch_at_resume warning and proceeds anyway — it does not halt.",
+    "z-review-all halted-state resume: if .review_state.json has halted: true AND halt_reason: no_ask_blocked, emit review_resume_from_halt and jump to Phase 3.7 re-run; do NOT delete the state file. Phase 3.7 re-runs check-no-ask from scratch.",
+    "z-plan workflow.plan_decisions_approval halt branch emits plan_halt with question_id: workflow.plan_decisions_approval; a subsequent /z-plan resume re-enters at Phase 2.5."
   ],
   "gotchas": [
     "Do not add z-audit-plan as a front-door planning route when no plan exists; route to z-plan instead.",
@@ -335,7 +351,12 @@
     "z-plan step 9c to_command: null means the user chose to proceed with stale inputs or abandon — not that a remedy command was selected. /z-stats must not interpret null as a routing failure.",
     "z-research Phase 1 parallel dispatch: when both sub-commands run, two new archive directories appear after the Agent() calls return. The same second-precision RUN-ID timestamp may produce colliding directory names; identification must use the kind field from events.jsonl, not the directory name.",
     "z-implement-all N=2 parallel dispatch uses the global overlap_count from SHARED-CONCERNS.md as a conservative guard; per-pair overlap checking is v2. A plan with overlap_count=1 runs entirely serially even if the specific pair being dispatched has no file overlap.",
-    "z-implement-all cycle-2 skip-on-clean-cycle-1 fires regardless of why the implementer re-ran (clarification resolved, decision answered, etc.). The intent is: if cycle-1 found nothing actionable, there is nothing for cycle-2 to find — the guard is not about diff identity."
+    "z-implement-all cycle-2 skip-on-clean-cycle-1 fires regardless of why the implementer re-ran (clarification resolved, decision answered, etc.). The intent is: if cycle-1 found nothing actionable, there is nothing for cycle-2 to find — the guard is not about diff identity.",
+    "check-no-ask exit 5 means Z_HARNESS_ASK_ALL=1 and Z_HARNESS_NO_ASK=halt are both set — this is a hard config conflict, not a normal halt. Commands must surface it as an error rather than silently proceeding or silently skipping.",
+    "z-overnight v1 known limit: only 12 AskUserQuestion callsites are instrumented for halt-from-ask. Any sub-command callsite outside this set will block the conversation even with Z_HARNESS_NO_ASK=halt. Run scripts/lint-askuser.sh --strict before launching a long overnight chain.",
+    "z-overnight resume-after-complete path: if overnight-state.json top-level status==complete, orchestrator presents AskUserQuestion informing the user and exits — it does NOT re-run the chain.",
+    "z-overnight AUTODECIDE_EFFECTIVE merge: env var Z_HARNESS_OVERNIGHT_AUTODECIDE (JSON) overrides hardcoded defaults; unknown keys in the env override are silently merged in (not rejected).",
+    "z-implement-all check-no-ask halt fires ONLY on second review failure (not first). First failure still re-spawns the implementer normally."
   ],
   "memories": []
 }

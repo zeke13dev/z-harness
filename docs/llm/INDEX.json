@@ -26,7 +26,7 @@
         "agents/scope-reconciler-brainstorm.md",
         "agents/spec-precheck.md"
       ],
-      "last_updated": "2026-05-28T20:50:09Z",
+      "last_updated": "2026-05-29T02:04:35.466240Z",
       "confidence": "high",
       "depends_on": [
         "scripts",
@@ -57,6 +57,7 @@
         "commands/z-maintain-docs.md",
         "commands/z-map.md",
         "commands/z-mr-review.md",
+        "commands/z-overnight.md",
         "commands/z-plan-light.md",
         "commands/z-plan-split.md",
         "commands/z-plan.md",
@@ -71,7 +72,7 @@
         "commands/z-update.md",
         "commands/z-uplift.md"
       ],
-      "last_updated": "2026-05-28T20:50:09Z",
+      "last_updated": "2026-05-29T02:04:35.466240Z",
       "confidence": "high",
       "depends_on": [
         "agents",
@@ -82,7 +83,7 @@
       "consumed_by": [
         "skills"
       ],
-      "summary": "Slash command surfaces, including planning-family route checks, contextual exits, plan_route_decision telemetry, review-family finding promotion, config.py export-env/should-notify wrappers, and /z-implement-all --tasks consumption."
+      "summary": "Slash command surfaces, including planning-family route checks, contextual exits, plan_route_decision telemetry, review-family finding promotion, config.py export-env/should-notify wrappers, check-no-ask halt branches (7 commands), and the /z-overnight unattended pipeline orchestrator."
     },
     {
       "slug": "scripts",
@@ -99,7 +100,7 @@
         "scripts/test_config.py",
         "scripts/test_log_phase.sh"
       ],
-      "last_updated": "2026-05-28T20:50:09Z",
+      "last_updated": "2026-05-29T02:04:35.466240Z",
       "confidence": "high",
       "depends_on": [],
       "consumed_by": [
@@ -177,7 +178,7 @@
         "scripts/log-providers.sh",
         ".z-harness/providers.json"
       ],
-      "last_updated": "2026-05-28T00:00:00Z",
+      "last_updated": "2026-05-29T02:04:35.466240Z",
       "confidence": "high",
       "depends_on": [
         "scripts"
@@ -275,7 +276,7 @@
         "commands/z-update.md",
         "docs/human/INSTALL.md"
       ],
-      "last_updated": "2026-05-28T18:03:03Z",
+      "last_updated": "2026-05-29T03:50:12Z",
       "confidence": "high",
       "depends_on": [
         "scripts",
@@ -357,7 +358,7 @@
         "scripts/propose-prefs.py",
         "docs/human/config.md"
       ],
-      "last_updated": "2026-05-28T20:50:09Z",
+      "last_updated": "2026-05-29T02:04:35.466240Z",
       "confidence": "high",
       "depends_on": [
         "scripts"
@@ -369,6 +370,23 @@
       "summary": "Unified config concept covering Loader API (4-layer TOML loader: get, export-env, ensure-defaults, explain, should-notify) and Workflow Resolver (resolve-question, set, list-question-ids, [workflow] section, routing-preference memory schema, elevation proposer). Merged from former `config-design` (slice-1) + `config` (slice-2) concepts on 2026-05-27."
     },
     {
+      "slug": "setup",
+      "last_updated": "2026-05-28",
+      "source_files": [
+        "scripts/setup.py",
+        "scripts/setup.sh",
+        "commands/z-setup.md",
+        "docs/human/SETUP.md"
+      ],
+      "depends_on": [
+        "config",
+        "providers-registry"
+      ],
+      "consumed_by": [],
+      "confidence": "high",
+      "summary": "Configuration cockpit: inspect resolved state, run guided concern-grouped wizard, or apply a posture preset (interactive/overnight/ci-batch). CLI is scripts/setup.py; /z-setup skill is the slash-command surface. Seven wizard scopes (all lowercase): notifications, workflow, overnight, providers, personas, docs, memories."
+    },
+    {
       "slug": "overnight-run",
       "source_files": [
         "commands/z-overnight.md",
@@ -378,7 +396,7 @@
         "scripts/config.py",
         "docs/human/overnight-run.md"
       ],
-      "last_updated": "2026-05-28T20:50:09Z",
+      "last_updated": "2026-05-29T02:04:35.466240Z",
       "confidence": "high",
       "depends_on": [
         "commands",

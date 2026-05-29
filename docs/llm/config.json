@@ -27,42 +27,42 @@
     },
     {
       "file": "scripts/config.py",
-      "line": 458,
+      "line": 462,
       "symbol": "load_config",
       "kind": "fn",
       "summary": "[Loader API] Build resolved config from all 4 layers; returns (values, sources) dicts"
     },
     {
       "file": "scripts/config.py",
-      "line": 611,
+      "line": 615,
       "symbol": "cmd_get",
       "kind": "fn",
       "summary": "[Loader API] Resolve and print single dotted-key value; exits 3 on unknown or meta key"
     },
     {
       "file": "scripts/config.py",
-      "line": 639,
+      "line": 643,
       "symbol": "cmd_export_env",
       "kind": "fn",
       "summary": "[Loader API] Print export lines for all user knobs; emit config_resolved event once per run"
     },
     {
       "file": "scripts/config.py",
-      "line": 657,
+      "line": 661,
       "symbol": "cmd_ensure_defaults",
       "kind": "fn",
       "summary": "[Loader API] Write global config with defaults + inline comments if absent; never overwrites"
     },
     {
       "file": "scripts/config.py",
-      "line": 718,
+      "line": 738,
       "symbol": "cmd_explain",
       "kind": "fn",
       "summary": "[Loader API] Print effective value and source layer for one key"
     },
     {
       "file": "scripts/config.py",
-      "line": 1792,
+      "line": 1828,
       "symbol": "cmd_should_notify",
       "kind": "fn",
       "summary": "[Loader API] Print yes|no for a given event kind; always exits 0; exits 2 on unknown event. Valid kinds: approval, phase_end, error"
@@ -104,59 +104,73 @@
     },
     {
       "file": "scripts/config.py",
-      "line": 952,
+      "line": 972,
       "symbol": "_apply_overnight_overrides",
       "kind": "fn",
       "summary": "[Workflow Resolver] Post-process resolution envelope for Z_HARNESS_NO_ASK=halt; swaps ask->overnight_decision (allowlist hit) or ask->halt (not in allowlist); exits 5 on ASK_ALL+NO_ASK conflict"
     },
     {
       "file": "scripts/config.py",
-      "line": 861,
+      "line": 881,
       "symbol": "_parse_overnight_allowlist",
       "kind": "fn",
       "summary": "[Workflow Resolver] Parse Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE JSON; merge over OVERNIGHT_AUTODECIDE_QIDS_DEFAULT; drop malformed entries with routing_preference_malformed event"
     },
     {
       "file": "scripts/config.py",
-      "line": 1452,
-      "symbol": "cmd_resolve_question",
-      "kind": "fn",
-      "summary": "[Workflow Resolver] Consult 4-layer config + memory + overnight overrides; return JSON {result, default, source, rule_id, strength, reason, sources[]}; stdout reserved for JSON"
-    },
-    {
-      "file": "scripts/config.py",
-      "line": 1575,
-      "symbol": "cmd_check_no_ask",
-      "kind": "fn",
-      "summary": "[Workflow Resolver] Lightweight overnight-gate checker; returns {result: halt|proceed, question_id, rule_id}; fails closed on unregistered question_id when NO_ASK=halt"
-    },
-    {
-      "file": "scripts/config.py",
-      "line": 1085,
+      "line": 1105,
       "symbol": "_load_memory_matches",
       "kind": "fn",
       "summary": "[Workflow Resolver] Walk docs/llm/*.json for routing-preference entries matching question_id; respects scope (global|project); skips INDEX.json and malformed entries"
     },
     {
       "file": "scripts/config.py",
-      "line": 1193,
+      "line": 1213,
       "symbol": "_resolve_memory_matches",
       "kind": "fn",
       "summary": "[Workflow Resolver] Merge memory match list: highest strength wins on agreement; returns (None, 'conflict', sources) when entries disagree"
     },
     {
       "file": "scripts/config.py",
-      "line": 1698,
+      "line": 1249,
+      "symbol": "_build_resolve_envelope",
+      "kind": "fn",
+      "summary": "[Workflow Resolver] Core resolver: combine config + memory signals; returns (envelope, emit_result, emit_source, emit_strength, exit_code); called by cmd_resolve_question and cmd_check_no_ask"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 1472,
+      "symbol": "cmd_resolve_question",
+      "kind": "fn",
+      "summary": "[Workflow Resolver] Consult 4-layer config + memory + overnight overrides; return JSON {result, default, source, rule_id, strength, reason, sources[]}; stdout reserved for JSON"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 1595,
+      "symbol": "cmd_check_no_ask",
+      "kind": "fn",
+      "summary": "[Workflow Resolver] Lightweight overnight-gate checker; returns {result: halt|proceed, question_id, rule_id}; fails closed on unregistered question_id when NO_ASK=halt"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 1734,
       "symbol": "cmd_set",
       "kind": "fn",
       "summary": "[Workflow Resolver] Atomically write a TOML key to global or project config via tmp+rename; validates against VALIDATORS before writing; exit 2 on invalid value; exit 0 silently on success"
     },
     {
       "file": "scripts/config.py",
-      "line": 750,
+      "line": 770,
       "symbol": "cmd_list_question_ids",
       "kind": "fn",
       "summary": "[Workflow Resolver] Print sorted JSON array of registered question IDs; consumed by /z-suggest-memory for routing-preference validation"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 1895,
+      "symbol": "cmd_migrate",
+      "kind": "fn",
+      "summary": "[Loader API] Rewrite old provider names (codex, gemini, claude) in roles.*.runtime to -cli suffixed form; applied to global + project layers; idempotent; exits 4 on I/O error"
     },
     {
       "file": "scripts/propose-prefs.py",
@@ -246,7 +260,7 @@
         "env": "Z_HARNESS_WORKFLOW_AUDIT_TO_AMEND",
         "callsites": [
           "commands/z-audit-plan.md:183",
-          "commands/z-audit-plan-style.md:384"
+          "commands/z-audit-plan-style.md:398"
         ],
         "description": "Controls Phase 5 AskUserQuestion in /z-audit-plan and /z-audit-plan-style. ask=always prompt; amend=auto-proceed as amend (skips prompt); stop=auto-stop (skips prompt)"
       },
@@ -256,11 +270,11 @@
         "valid_values": ["ask", "auto_accept", "recommend_derived"],
         "env": "Z_HARNESS_WORKFLOW_SLUG_CONFIRM",
         "callsites": [
-          "commands/z-plan.md:21",
-          "commands/z-fix.md:18",
-          "commands/z-uplift.md:71",
-          "skills/z-debug/SKILL.md:17",
-          "skills/z-brainstorm/SKILL.md:19",
+          "commands/z-plan.md:36",
+          "commands/z-fix.md:32",
+          "commands/z-uplift.md:85",
+          "skills/z-debug/SKILL.md:23",
+          "skills/z-brainstorm/SKILL.md:25",
           "skills/z-map/SKILL.md:133",
           "skills/z-plan-light/SKILL.md:19"
         ],
@@ -272,7 +286,7 @@
         "valid_values": ["ask", "auto_resume", "halt"],
         "env": "Z_HARNESS_WORKFLOW_IMPLEMENT_ALL_PROCEED",
         "callsites": [
-          "commands/z-implement-all.md (halt-resolution gate)"
+          "commands/z-implement-all.md:441 (check-no-ask gate)"
         ],
         "description": "Controls halt-resolution gate in /z-implement-all. ask=always prompt; auto_resume=skip prompt; halt=stop unconditionally"
       },
@@ -282,7 +296,7 @@
         "valid_values": ["ask", "proceed", "halt"],
         "env": "Z_HARNESS_WORKFLOW_REVIEW_ALL_PROCEED",
         "callsites": [
-          "commands/z-review-all.md (Phase 3.7 proceed gate)"
+          "commands/z-review-all.md:190 (check-no-ask gate), :230 (resolve-question)"
         ],
         "description": "Controls Phase 3.7 proceed gate in /z-review-all. ask=always prompt; proceed=skip prompt; halt=stop unconditionally"
       },
@@ -292,7 +306,7 @@
         "valid_values": ["ask", "approve", "halt"],
         "env": "Z_HARNESS_WORKFLOW_PLAN_DECISIONS_APPROVAL",
         "callsites": [
-          "commands/z-plan.md (Phase 2.5 decisions-doc approval gate)"
+          "commands/z-plan.md:342 (resolve-question gate)"
         ],
         "description": "Controls Phase 2.5 decisions-doc approval gate in /z-plan. ask=always prompt; approve=skip prompt; halt=stop unconditionally"
       }
