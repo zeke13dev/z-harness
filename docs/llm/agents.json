@@ -1,6 +1,6 @@
 {
   "concept": "agents",
-  "last_updated": "2026-05-28",
+  "last_updated": "2026-05-29",
   "covers_spec": "none",
   "source_file": [
     "agents/auditor.md",
@@ -18,6 +18,7 @@
     "agents/planning-router.md",
     "agents/remote-runner.md",
     "agents/research-judge.md",
+    "agents/resolver.md",
     "agents/review-agent.md",
     "agents/reviewer.md",
     "agents/scope-probe.md",
@@ -133,6 +134,13 @@
       "summary": "Haiku mechanical remote verifier: two-level rsync sandbox (<slug>/base/ warm base + <slug>/<task-id>/ per-task overlay via --link-dest), atomic mkdir-lock + .base-ready marker for concurrent seeding, SLUG/TASK_ID path-traversal validation; read-only DB/log queries; step-7 NEVER-delete guard for base/."
     },
     {
+      "file": "agents/resolver.md",
+      "line": 1,
+      "symbol": "resolver",
+      "kind": "module",
+      "summary": "Reference for workflow question resolver (scripts/config.py cmd_resolve_question); maps question_id to skip|prefill|ask|halt|defer-to-sink; defer-to-sink routes question to sink-add.sh instead of interactive prompt."
+    },
+    {
       "file": "agents/review-agent.md",
       "line": 1,
       "symbol": "review-agent",
@@ -144,7 +152,7 @@
       "line": 1,
       "symbol": "reviewer",
       "kind": "module",
-      "summary": "Provider proxy for task correctness/spec review; expected_contract: review-verdict; accepts relevant_docs LLM JSONs; blockers+majors only return."
+      "summary": "Provider proxy for task correctness/spec review; expected_contract: review-verdict; accepts relevant_docs LLM JSONs; blockers+majors sections + **FOLLOWUPS:** fenced JSON array for minors/nits; parsed by scripts/parse-followups-block.py; orchestrator calls sink-add.sh per entry."
     },
     {
       "file": "agents/scope-probe.md",
@@ -226,9 +234,18 @@
     "research-judge self-check (Step 7) is mandatory on every invocation; research_judge_temptation field is always populated.",
     "research-judge produces exactly 10 sections in fixed order; no additional top-level sections permitted.",
     "research-judge fires panel_degraded mode when panel_perspective_count < 3; synthesis continues with available perspectives.",
-    "research-judge returns STATUS: unable_to_complete when perspectives array is empty or MAP.md/BRAINSTORM.md is missing."
+    "research-judge returns STATUS: unable_to_complete when perspectives array is empty or MAP.md/BRAINSTORM.md is missing.",
+    "reviewer **FOLLOWUPS:** block is optional; when present it MUST appear after ### Major and MUST contain exactly one fenced json array.",
+    "reviewer minors and nits MUST be placed in **FOLLOWUPS:** (P3/P2) and are never silently dropped from the reviewer return.",
+    "reviewer **FOLLOWUPS:** block is parsed by scripts/parse-followups-block.py; parse failure logs followup_block_parse_failed and never crashes the reviewer return path.",
+    "resolver result domain: skip|prefill|ask|halt|defer-to-sink; all five are valid results from scripts/config.py cmd_resolve_question.",
+    "resolver defer-to-sink: orchestrator must NOT prompt the user; must call scripts/sink-add.sh and log followup_deferred_from_resolver; must fall back to ask if sink-add.sh exits non-zero.",
+    "resolver defer-to-sink is a result-domain value only; it does not appear in VALIDATORS or QUESTION_IDS[id][choices].",
+    "resolver defer-to-sink is never applied by the overnight gate (_apply_overnight_overrides); it is a config-layer result only."
   ],
   "gotchas": [
+    "reviewer emits **FOLLOWUPS:** fenced JSON array block after ### Major; minors/nits MUST go here (never silently dropped). Orchestrator parses via scripts/parse-followups-block.py and calls scripts/sink-add.sh per entry. Parse failure logs followup_block_parse_failed and continues. Required per-entry fields: priority, name, recommended_command, cited_paths. Optional: recommended_command_safe_to_retry (default false), auto_close_eligible (default false; reviewer on producer-class allowlist may set true).",
+    "resolver new result class defer-to-sink (T017): orchestrator must NOT invoke AskUserQuestion; must call scripts/sink-add.sh with question context as entry body, log followup_deferred_from_resolver, then proceed. If sink-add.sh exits non-zero, fall back to ask — question cannot be silently dropped.",
     "codex-consultant.md, gemini-consultant.md, and codex-reviewer.md are stale names.",
     "check-timeout.sh is sourced by proxy agents; missing timeout/gtimeout leaves TIMEOUT_CMD empty.",
     "planning-router must not infer missing quantitative signals from filesystem exploration.",

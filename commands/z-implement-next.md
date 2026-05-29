@@ -11,7 +11,42 @@ You are running the **z-harness `/z-implement-next`** pipeline.
 
 Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
 
-## Phase 0 — Discover plan slug
+## Phase 0 — Lock check + Discover plan slug
+
+### Phase 0.1 — Global cross-tool lock check
+
+Before doing any work, check for concurrent follow-up consumer activity in this repo:
+
+```bash
+SINK_LOCK="$HOME/.z-harness/.followup-vs-implement.lock"
+mkdir -p "$(dirname "$SINK_LOCK")"
+# Try-acquire with timeout=5s (non-blocking check first, then brief wait)
+PROJECT_SINK="$(pwd)/z-harness/followups/index.view.json"
+if [ -f "$PROJECT_SINK" ]; then
+  RUNNING_COUNT="$(python3 -c "
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+    entries_obj = data.get('entries', {})
+    entries = list(entries_obj.values())
+    running = [e for e in entries if e.get('status') == 'running']
+    print(len(running))
+except (json.JSONDecodeError, OSError, KeyError, AttributeError):
+    print(0)
+" "$PROJECT_SINK" 2>/dev/null || echo 0)"
+  if [ "${RUNNING_COUNT:-0}" -gt 0 ]; then
+    echo "halt: follow-up consumer is active ($RUNNING_COUNT running entry/entries in project sink)" >&2
+    echo "Run /z-followup-status to see what is running. Wait for it to complete or dismiss before implementing." >&2
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" implement_halted_followup_running \
+      "$(printf '{"running_count":%d,"sink_path":"%s"}' "$RUNNING_COUNT" "$PROJECT_SINK")" 2>/dev/null || true
+    exit 1
+  fi
+fi
+```
+
+If there are running follow-up consumer entries, **halt** — do not proceed. Tell the user to check `/z-followup-status` before retrying.
+
+### Phase 0.2 — Discover plan slug
 
 Multiple plans may coexist under `$Z_HARNESS_PLAN_DIR/`. Determine which one to operate on:
 
@@ -93,9 +128,85 @@ Agent(
 
 Apply findings that hold up. Push back on those that don't and document the pushback.
 
+## Phase 3.5 — Parse FOLLOWUPS block and route to sink
+
+After the reviewer returns, parse the `**FOLLOWUPS:**` block from `$RETURN` and route each entry to the follow-up sink:
+
+```bash
+FOLLOWUPS_JSON="$(printf '%s' "$RETURN" | python3 scripts/parse-followups-block.py 2>/dev/null || echo '[]')"
+FOLLOWUP_COUNT="$(printf '%s' "$FOLLOWUPS_JSON" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null || echo 0)"
+
+if [ "${FOLLOWUP_COUNT:-0}" -gt 0 ]; then
+  printf '%s' "$FOLLOWUPS_JSON" | python3 -c "
+import json, subprocess, sys
+
+entries = json.load(sys.stdin)
+task_id = sys.argv[1]
+source_artifact = sys.argv[2]
+script = sys.argv[3]
+
+for i, e in enumerate(entries):
+    cited = ','.join(e.get('cited_paths', []))
+    args = [
+        'bash', script,
+        '--sink=project',
+        f'--priority={e[\"priority\"]}',
+        f'--name={e[\"name\"]}',
+        f'--recommended-command={e[\"recommended_command\"]}',
+        f'--source-artifact={source_artifact}',
+        f'--cited-paths={cited}',
+    ]
+    if e.get('auto_close_eligible'):
+        args.append('--auto-close-eligible')
+    if e.get('recommended_command_safe_to_retry'):
+        args.append('--safe-to-retry')
+    result = subprocess.run(args, capture_output=True, text=True)
+    if result.returncode not in (0, 3):  # 3 = dedup-skip (ok)
+        print(f'warn: sink-add.sh exit {result.returncode} for entry {i}: {result.stderr[:200]}', file=sys.stderr)
+" "$TASK_ID" "$BASE/archive/tasks/$TASK_ID/diff.patch" "scripts/sink-add.sh" 2>/dev/null || true
+fi
+```
+
+Per-entry errors are logged + skipped. This step never blocks the reviewer return path. If `scripts/sink-add.sh` is not yet present (deps not implemented), this step is silently skipped.
+
 ## Phase 4 — Spec retro
 
 If during implementation you discovered `$BASE/SPEC.md` was wrong, incomplete, or ambiguous — update it now so the next task starts from accurate ground truth. Log the retro: `log-event.sh "tasks/<task-id>" spec_retro '{"summary":"..."}'`.
+
+### Defer-to-sink branch
+
+If the implementer's return flags an **out-of-current-SPEC discovery** (a finding that is real but out of scope for this task), consult the resolver before editing SPEC.md inline:
+
+```bash
+RESOLVED="$(python3 scripts/config.py resolve-question workflow.spec_retro_discovery 2>/dev/null)"
+RESOLVE_EXIT=$?
+RESULT="$(printf '%s' "$RESOLVED" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("result","ask"))' 2>/dev/null || echo ask)"
+```
+
+- **`result == "defer-to-sink"`**: do NOT edit SPEC.md mid-run. Instead, call `scripts/sink-add.sh` to park the finding as a P2 follow-up:
+
+  ```bash
+  bash scripts/sink-add.sh \
+    --sink=project \
+    --priority=P2 \
+    --name='<short title from discovery>' \
+    --recommended-command='/z-do "amend SPEC.md: <discovery summary>"' \
+    --source-artifact="$BASE/archive/tasks/<task-id>/diff.patch" \
+    --cited-paths='<affected file paths, comma-separated>' \
+    --prompt-body='<implementer discovery text verbatim>'
+  ```
+
+  Then log the deferral event and continue to Phase 5 without modifying SPEC.md:
+
+  ```bash
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
+    "tasks/<task-id>" followup_deferred_from_resolver \
+    "$(printf '{"question_id":"workflow.spec_retro_discovery","task":"<task-id>","summary":"<one-line>"}' )"
+  ```
+
+  If `sink-add.sh` exits non-zero, surface the error to the user and fall back to asking interactively — the discovery must not be silently dropped.
+
+- **`result == "ask"` (or resolver error)**: present the discovery to the user with `AskUserQuestion`. If user confirms it needs a spec fix, update `$BASE/SPEC.md` now. If user says it's deferred, call `sink-add.sh` manually.
 
 ## Phase 5 — Mark done + notify
 

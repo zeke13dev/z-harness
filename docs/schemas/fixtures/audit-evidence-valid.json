@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "entry_id": "20260528T123456Z-fix-stale-readme-badge",
+  "review_verdict_path": "z-harness/some-plan/archive/20260529T010000Z/verdict.md",
+  "review_verdict": "PASS",
+  "test_exit_code": 0,
+  "diff_artifact_path": "z-harness/some-plan/archive/20260529T010000Z/cumulative.diff",
+  "capture_head": "abc123def456abc1",
+  "verify_head": "def456abc123def4",
+  "verified_at": "2026-05-29T01:00:00Z",
+  "verified_by_run": "20260529T010000Z-verify-run"
+}

@@ -26,7 +26,7 @@
         "agents/scope-reconciler-brainstorm.md",
         "agents/spec-precheck.md"
       ],
-      "last_updated": "2026-05-29T02:04:35.466240Z",
+      "last_updated": "2026-05-29T07:20:01.339117Z",
       "confidence": "high",
       "depends_on": [
         "scripts",
@@ -72,7 +72,7 @@
         "commands/z-update.md",
         "commands/z-uplift.md"
       ],
-      "last_updated": "2026-05-29T02:04:35.466240Z",
+      "last_updated": "2026-05-29T07:20:01.339117Z",
       "confidence": "high",
       "depends_on": [
         "agents",
@@ -100,7 +100,7 @@
         "scripts/test_config.py",
         "scripts/test_log_phase.sh"
       ],
-      "last_updated": "2026-05-29T02:04:35.466240Z",
+      "last_updated": "2026-05-29T07:20:01.339117Z",
       "confidence": "high",
       "depends_on": [],
       "consumed_by": [
@@ -333,7 +333,7 @@
         "z-review-all",
         "z-debug"
       ],
-      "summary": "Post-run Haiku subagent that proposes 0-3 candidate memories from a completed /z-implement-all (Phase 9), /z-review-all (Phase 7), or /z-debug (Phase 10, shipped branch only) run. Reads run events, cumulative diff, SPEC.md or DEBUG.md; emits structured candidates as a fenced JSON block. Does not write \u2014 orchestrator owns all writes via /z-suggest-memory. Dispatched after skip-conditions check by scripts/run-memory-review.sh."
+      "summary": "Post-run Haiku subagent that proposes 0-3 candidate memories from a completed /z-implement-all (Phase 9), /z-review-all (Phase 7), or /z-debug (Phase 10, shipped branch only) run. Reads run events, cumulative diff, SPEC.md or DEBUG.md; emits structured candidates as a fenced JSON block. Does not write — orchestrator owns all writes via /z-suggest-memory. Dispatched after skip-conditions check by scripts/run-memory-review.sh."
     },
     {
       "slug": "z-uplift",
@@ -358,7 +358,7 @@
         "scripts/propose-prefs.py",
         "docs/human/config.md"
       ],
-      "last_updated": "2026-05-29T02:04:35.466240Z",
+      "last_updated": "2026-05-29T22:00:00Z",
       "confidence": "high",
       "depends_on": [
         "scripts"
@@ -385,6 +385,52 @@
       "consumed_by": [],
       "confidence": "high",
       "summary": "Configuration cockpit: inspect resolved state, run guided concern-grouped wizard, or apply a posture preset (interactive/overnight/ci-batch). CLI is scripts/setup.py; /z-setup skill is the slash-command surface. Seven wizard scopes (all lowercase): notifications, workflow, overnight, providers, personas, docs, memories."
+    },
+    {
+      "slug": "followup-sink",
+      "source_file": [
+        "scripts/sink-add.sh",
+        "scripts/sink-claim.sh",
+        "scripts/sink-status-set.sh",
+        "scripts/sink-view-rebuild.sh",
+        "scripts/sink-lock.sh",
+        "scripts/sink-compact.sh",
+        "scripts/sink-migrate.sh",
+        "scripts/followup-reconcile-notion.sh",
+        "scripts/validate-followup-schemas.sh",
+        "scripts/followup_common.py",
+        "scripts/followup-view-lookup.py",
+        "scripts/sink-view-reducer.py",
+        "scripts/sink-add-helpers.py",
+        "scripts/sink-claim-helpers.py",
+        "scripts/sink-status-set-impl.py",
+        "scripts/sink-compact-impl.py",
+        "scripts/sink-auto-close-check.py",
+        "scripts/sink-audit-validate.py",
+        "scripts/notion-push.py",
+        "scripts/followup-reconcile-notion-impl.py",
+        "scripts/parse-followups-block.py",
+        "commands/z-followup-list.md",
+        "commands/z-followup-status.md",
+        "commands/z-followup-confirm.md",
+        "commands/z-followup-dismiss.md",
+        "commands/z-followup-refresh.md",
+        "commands/z-followup-next.md",
+        "docs/schemas/followup-entry.schema.json",
+        "docs/schemas/audit-evidence.schema.json"
+      ],
+      "last_updated": "2026-05-29T22:00:00Z",
+      "confidence": "high",
+      "depends_on": [
+        "scripts",
+        "config",
+        "commands"
+      ],
+      "consumed_by": [
+        "commands",
+        "agents"
+      ],
+      "summary": "Durable follow-up registry draining out-of-scope discoveries into a priority-ordered lifecycle-tracked work queue. Three sinks (project, global, Notion mirror); conservative open->running->verify->done state machine; three completion paths (human-confirmed, audit-confirmed, auto-closed-low-risk). Shared module followup_common.py centralizes the two-tier lock model (per-entry + global cross-tool flock with .hb.lock-serialized holder JSON), batched config reads, and backgrounded Notion push. Event-sourced index.jsonl with incremental checkpoint rebuild (T010), compaction to index.archive.jsonl, corruption detection/repair, and materialized notion_sync_pending state."
     },
     {
       "slug": "overnight-run",

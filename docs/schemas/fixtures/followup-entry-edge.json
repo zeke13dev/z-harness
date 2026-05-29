@@ -1,0 +1,73 @@
+{
+  "id": "20260528T235959Z-edge-case-dir-hash-entry",
+  "schema_version": 1,
+  "priority": "P0",
+  "name": "Edge case with dir blob hashes",
+  "status": "verify",
+  "sink": "global",
+  "created_at": "2026-05-28T23:59:59Z",
+  "created_by_run": "20260528T230000Z-large-refactor-plan",
+  "capture_head": "deadbeefdeadbeef",
+  "source_artifact": "z-harness/large-refactor-plan/archive/20260528T230000Z/task-T010/diff.patch",
+  "prompt_page_link": "pages/20260528T235959Z-edge-case-dir-hash-entry.md",
+  "recommended_command": "/z-implement-next \"refactor scripts/config.py\"",
+  "recommended_command_safe_to_retry": false,
+  "cited_paths": [
+    "scripts/file01.py", "scripts/file02.py", "scripts/file03.py",
+    "scripts/file04.py", "scripts/file05.py", "scripts/file06.py",
+    "scripts/file07.py", "scripts/file08.py", "scripts/file09.py",
+    "scripts/file10.py", "scripts/file11.py", "scripts/file12.py",
+    "scripts/file13.py", "scripts/file14.py", "scripts/file15.py",
+    "scripts/file16.py"
+  ],
+  "dir_blob_hashes": {
+    "scripts": "sha256:c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
+  },
+  "depth": 1,
+  "auto_close_eligible": true,
+  "completion_mode": null,
+  "audit_evidence_path": null,
+  "closed_at": null,
+  "closed_by_run": null,
+  "failure_reason": null,
+  "attempt_count": 2,
+  "status_history": [
+    {
+      "ts": "2026-05-28T23:59:59Z",
+      "from": null,
+      "to": "open",
+      "by": "scripts/sink-add.sh"
+    },
+    {
+      "ts": "2026-05-29T00:01:00Z",
+      "from": "open",
+      "to": "running",
+      "by": "scripts/sink-claim.sh"
+    },
+    {
+      "ts": "2026-05-29T00:05:00Z",
+      "from": "running",
+      "to": "failed",
+      "by": "scripts/sink-status-set.sh"
+    },
+    {
+      "ts": "2026-05-29T00:06:00Z",
+      "from": "failed",
+      "to": "open",
+      "by": "scripts/sink-claim.sh"
+    },
+    {
+      "ts": "2026-05-29T00:07:00Z",
+      "from": "open",
+      "to": "running",
+      "by": "scripts/sink-claim.sh"
+    },
+    {
+      "ts": "2026-05-29T00:10:00Z",
+      "from": "running",
+      "to": "verify",
+      "by": "scripts/sink-status-set.sh"
+    }
+  ],
+  "notion_remote_id": "notion-page-id-abc123"
+}

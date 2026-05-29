@@ -62,6 +62,24 @@ DEFAULTS: dict = {
         "implement_all_proceed": "ask",   # ask | auto_resume | halt
         "review_all_proceed":    "ask",   # ask | proceed | halt
         "plan_decisions_approval": "ask", # ask | approve | halt
+        "spec_retro_discovery": "ask",    # ask | defer_to_sink_p2
+    },
+    "followup": {
+        "default_sink":                      "project",    # project | global
+        "notion_enabled":                    False,
+        "notion_database_id":                "",
+        "notion_token_path":                 "~/.z-harness/secrets.toml",
+        "auto_close_low_risk_enabled":       True,   # master kill-switch; on by default, flip to False to disable auto-close
+        "auto_close_low_risk_path_allowlist": ["docs/**/*.md", "**/CHANGELOG", "**/CHANGELOG.md"],
+        # Pathspec semantics: a pattern with no slash (like *.md) matches any
+        # depth; root-anchoring with a leading slash (/*.md) restricts it to
+        # top-level files only, matching the intended "block root-level .md"
+        # behaviour without accidentally blocking docs/**/*.md entries.
+        "auto_close_low_risk_path_denylist":  ["commands/**/*.md", "agents/**/*.md", ".claude/**/*.md", "/*.md"],
+        "staleness_commit_window":           50,
+        "staleness_warn_days":               30,
+        "staleness_hard_dismiss_days":       0,
+        "audit_evidence_required_artifacts": ["z_review_all_verdict", "test_exit", "cumulative_diff"],
     },
 }
 
@@ -73,6 +91,10 @@ VALIDATORS: dict = {
     "workflow.implement_all_proceed":    {"ask", "auto_resume", "halt"},
     "workflow.review_all_proceed":       {"ask", "proceed", "halt"},
     "workflow.plan_decisions_approval":  {"ask", "approve", "halt"},
+    "workflow.spec_retro_discovery":     {"ask", "defer_to_sink_p2"},
+    "followup.default_sink":                   {"project", "global"},
+    "followup.notion_enabled":                 {True, False},
+    "followup.auto_close_low_risk_enabled":    {True, False},
 }
 
 META_KEYS: set = {"schema_version"}
@@ -135,6 +157,18 @@ QUESTION_IDS: dict[str, dict] = {
             "commands/z-plan.md (Phase 2.5 decisions-doc approval gate)",
         ],
     },
+    "workflow.spec_retro_discovery": {
+        # Controls how Phase 4 of /z-implement-next handles out-of-current-SPEC discoveries
+        # reported by the implementer.
+        # ask             — interactively prompt the user about the discovery (default)
+        # defer_to_sink_p2 — park the discovery as a P2 follow-up in the project sink (no prompt)
+        "config_key": "workflow.spec_retro_discovery",
+        "choices": {"ask", "defer_to_sink_p2"},
+        "skill_default": "ask",
+        "callsites": [
+            "commands/z-implement-next.md (Phase 4 spec-retro defer branch)",
+        ],
+    },
 }
 
 # Default overnight auto-decide allowlist: question_ids that /z-overnight
@@ -161,6 +195,10 @@ RESULT_MAP: dict[tuple[str, str], str] = {
     ("workflow.plan_decisions_approval", "ask"):     "ask",
     ("workflow.plan_decisions_approval", "approve"): "skip",
     ("workflow.plan_decisions_approval", "halt"):    "halt",
+    # defer-to-sink: park the question as a follow-up entry instead of asking interactively.
+    # Orchestrators receiving this result call scripts/sink-add.sh with the question context.
+    ("workflow.spec_retro_discovery", "ask"):              "ask",
+    ("workflow.spec_retro_discovery", "defer_to_sink_p2"): "defer-to-sink",
 }
 
 # ---------------------------------------------------------------------------
@@ -645,6 +683,35 @@ def cmd_get(args: list[str]) -> None:
         print("true" if val else "false")
     else:
         print(val)
+
+
+def cmd_get_batch(args: list[str]) -> None:
+    """get-batch <key1> <key2> ...
+
+    Resolve multiple config keys in a single process and print a JSON object
+    mapping each key to its value.  Unknown keys are included with a null value
+    and a warning to stderr.  Meta keys are excluded.
+
+    Output: JSON object {"key1": "val1", "key2": true, ...}
+    Exit 0 always (best-effort; callers fall back to defaults for null values).
+    """
+    if not args:
+        print("usage: config.py get-batch <key1> [key2 ...]", file=sys.stderr)
+        sys.exit(2)
+
+    values, _ = load_config()
+    result: dict[str, object] = {}
+    for key in args:
+        if key in META_KEYS:
+            print(f"[config] get-batch: {key!r} is a meta key; skipping", file=sys.stderr)
+            result[key] = None
+            continue
+        if key not in values:
+            print(f"[config] get-batch: unknown key {key!r}; returning null", file=sys.stderr)
+            result[key] = None
+            continue
+        result[key] = values[key]
+    print(json.dumps(result))
 
 
 def cmd_export_env(args: list[str]) -> None:
@@ -2183,7 +2250,7 @@ def cmd_migrate(_args: list[str]) -> None:
 def main() -> None:
     if len(sys.argv) < 2:
         print(
-            "usage: config.py <get|export-env|ensure-defaults|explain|should-notify"
+            "usage: config.py <get|get-batch|export-env|ensure-defaults|explain|should-notify"
             "|list-question-ids|resolve-question|check-no-ask|set|migrate|inspect-all> [args...]",
             file=sys.stderr,
         )
@@ -2194,6 +2261,8 @@ def main() -> None:
 
     if subcommand == "get":
         cmd_get(args)
+    elif subcommand == "get-batch":
+        cmd_get_batch(args)
     elif subcommand == "export-env":
         cmd_export_env(args)
     elif subcommand == "ensure-defaults":
@@ -2217,7 +2286,7 @@ def main() -> None:
     else:
         print(
             f"[config] unknown subcommand {subcommand!r}; "
-            "valid: get, export-env, ensure-defaults, explain, should-notify, "
+            "valid: get, get-batch, export-env, ensure-defaults, explain, should-notify, "
             "list-question-ids, resolve-question, check-no-ask, set, migrate, inspect-all",
             file=sys.stderr,
         )

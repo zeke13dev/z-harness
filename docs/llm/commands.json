@@ -1,6 +1,6 @@
 {
   "concept": "commands",
-  "last_updated": "2026-05-28",
+  "last_updated": "2026-05-29",
   "covers_spec": "none",
   "source_file": [
     "commands/z-amend.md",
@@ -12,6 +12,12 @@
     "commands/z-do.md",
     "commands/z-export.md",
     "commands/z-fix.md",
+    "commands/z-followup-confirm.md",
+    "commands/z-followup-dismiss.md",
+    "commands/z-followup-list.md",
+    "commands/z-followup-next.md",
+    "commands/z-followup-refresh.md",
+    "commands/z-followup-status.md",
     "commands/z-implement-all.md",
     "commands/z-implement-next.md",
     "commands/z-improve.md",
@@ -100,18 +106,60 @@
       "summary": "Ships diagnosed bug fixes with consult and Codex review; slug-confirm resolver gate (workflow.slug_confirm) after hard collision check; check-no-ask halt branch emitting fix_halt."
     },
     {
+      "file": "commands/z-followup-confirm.md",
+      "line": 1,
+      "symbol": "z-followup-confirm",
+      "kind": "module",
+      "summary": "Transitions a follow-up entry from verify to done via human approval (--via=human) or 11-point audit evidence validation (--via=audit --evidence=<path>). Nest-guarded."
+    },
+    {
+      "file": "commands/z-followup-dismiss.md",
+      "line": 1,
+      "symbol": "z-followup-dismiss",
+      "kind": "module",
+      "summary": "Transitions any-state follow-up entry to dismissed (terminal). Requires --reason. Nest-guarded."
+    },
+    {
+      "file": "commands/z-followup-list.md",
+      "line": 1,
+      "symbol": "z-followup-list",
+      "kind": "module",
+      "summary": "Read-only merged view of project+global follow-up sinks, priority-sorted. Filters: --status=, --sink=, --priority=. --json for machine consumers. Nest-guarded. Never rebuilds views."
+    },
+    {
+      "file": "commands/z-followup-next.md",
+      "line": 1,
+      "symbol": "z-followup-next",
+      "kind": "module",
+      "summary": "Interactive follow-up consumer: priority-sorted (P0 first), worktree check, staleness check, claim under lock, execute recommended_command, status writeback, auto-close attempt. Nest-guarded."
+    },
+    {
+      "file": "commands/z-followup-refresh.md",
+      "line": 1,
+      "symbol": "z-followup-refresh",
+      "kind": "module",
+      "summary": "Re-stamps capture_head and file_blob_hashes for a blocked (staleness) entry, transitions back to open. Only valid for staleness-blocked entries. Nest-guarded."
+    },
+    {
+      "file": "commands/z-followup-status.md",
+      "line": 1,
+      "symbol": "z-followup-status",
+      "kind": "module",
+      "summary": "Diagnostic: counts per status, per-entry and global lock state (flock-probed), oldest open entry, last Notion sync failure. Read-only. Never rebuilds views. Nest-guarded."
+    },
+    {
       "file": "commands/z-implement-all.md",
       "line": 1,
       "symbol": "z-implement-all",
       "kind": "module",
-      "summary": "Orchestrates task queues with fresh subagents, reviewers, and auto memory review (Phase 9). N=2 cross-cluster parallel dispatch when overlap_count==0; cycle-2 skip-on-clean-cycle-1; check-no-ask halt branch on second review failure emitting task_halt+implement_end (workflow.implement_all_proceed); Phase 9 emits memory_review_complete — no in-phase AskUser loop."
+      "summary": "Orchestrates task queues with fresh subagents, reviewers, and auto memory review (Phase 9). Phase 0 consumer check: halts with implement_halted_followup_running if project sink has status=running entries (dict-safe parse). N=2 cross-cluster parallel dispatch when overlap_count==0; cycle-2 skip-on-clean-cycle-1; check-no-ask halt branch on second review failure emitting task_halt+implement_end (workflow.implement_all_proceed); Phase 9 emits memory_review_complete — no in-phase AskUser loop."
     },
     {
       "file": "commands/z-implement-next.md",
       "line": 1,
       "symbol": "z-implement-next",
       "kind": "module",
-      "summary": "Implements one pending task with model selection and review."
+      "summary": "Implements one pending task with model selection and review. Phase 0.1 consumer check: halts with implement_halted_followup_running if project sink has status=running entries (dict-safe parse)."
     },
     {
       "file": "commands/z-improve.md",
@@ -195,7 +243,7 @@
       "line": 1,
       "symbol": "z-review-all",
       "kind": "module",
-      "summary": "Final-gate reviews cumulative implementation, then auto-runs memory review (Phase 7). check-no-ask halt branch at workflow.review_all_proceed emits review_halt and writes partial .review_state.json (halted: true, halt_reason: no_ask_blocked); re-invocation detects this and resumes at Phase 3.7 via review_resume_from_halt event."
+      "summary": "Final-gate reviews cumulative implementation, then auto-runs memory review (Phase 7). Phase 0 consumer check: halts with review_halted_followup_running if project sink has status=running entries (dict-safe parse). Phase 3.7.5 routes non-halting (major/minor) findings to project sink via scripts/sink-add.sh + parse-followups-block.py; emits followups_routed_to_sink. check-no-ask halt branch at workflow.review_all_proceed emits review_halt and writes partial .review_state.json (halted: true, halt_reason: no_ask_blocked); re-invocation detects this and resumes at Phase 3.7 via review_resume_from_halt event."
     },
     {
       "file": "commands/z-skill-fix.md",
@@ -251,7 +299,8 @@
     "agents",
     "scripts",
     "skills",
-    "config"
+    "config",
+    "followup-sink"
   ],
   "consumed_by": [
     "skills"
@@ -309,7 +358,14 @@
     "z-overnight sub-run archive identification uses a directory snapshot diff of $BASE/archive/ (excluding *-overnight-* dirs); NEW_COUNT=0 or NEW_COUNT>1 → error + run_id_ambiguous event.",
     "z-overnight resume HEAD SHA validation emits head_sha_mismatch_at_resume warning and proceeds anyway — it does not halt.",
     "z-review-all halted-state resume: if .review_state.json has halted: true AND halt_reason: no_ask_blocked, emit review_resume_from_halt and jump to Phase 3.7 re-run; do NOT delete the state file. Phase 3.7 re-runs check-no-ask from scratch.",
-    "z-plan workflow.plan_decisions_approval halt branch emits plan_halt with question_id: workflow.plan_decisions_approval; a subsequent /z-plan resume re-enters at Phase 2.5."
+    "z-plan workflow.plan_decisions_approval halt branch emits plan_halt with question_id: workflow.plan_decisions_approval; a subsequent /z-plan resume re-enters at Phase 2.5.",
+    "Phase 0 consumer check in z-implement-all, z-implement-next, and z-review-all reads index.view.json as a dict with entries as an object (not a list); uses entries_obj.values() for iteration. A missing or malformed index.view.json yields RUNNING_COUNT=0 — never causes a false halt.",
+    "z-implement-all and z-implement-next emit implement_halted_followup_running on consumer-check halt; z-review-all emits review_halted_followup_running (distinct event kind).",
+    "z-review-all Phase 3.7.5 sink writes are best-effort: per-entry errors are logged and skipped; the step never blocks the review pipeline. If scripts/sink-add.sh is absent, the step is silently skipped.",
+    "All six z-followup-* commands carry a nest guard (Z_HARNESS_FOLLOWUP_CALLER_DEPTH >= 1) that fires before any other logic; nested invocations from within a running follow-up entry's recommended command always fail immediately.",
+    "z-followup-list and z-followup-status are read-only and never trigger view rebuilds or acquire locks.",
+    "z-followup-next is the only followup command that acquires per-entry locks; it checks the global cross-tool lock ($HOME/.z-harness/.followup-vs-implement.lock) before claiming.",
+    "z-followup-refresh is only valid for blocked entries whose block reason is staleness; other block reasons are rejected with an explicit error."
   ],
   "gotchas": [
     "Do not add z-audit-plan as a front-door planning route when no plan exists; route to z-plan instead.",
@@ -356,7 +412,11 @@
     "z-overnight v1 known limit: only 12 AskUserQuestion callsites are instrumented for halt-from-ask. Any sub-command callsite outside this set will block the conversation even with Z_HARNESS_NO_ASK=halt. Run scripts/lint-askuser.sh --strict before launching a long overnight chain.",
     "z-overnight resume-after-complete path: if overnight-state.json top-level status==complete, orchestrator presents AskUserQuestion informing the user and exits — it does NOT re-run the chain.",
     "z-overnight AUTODECIDE_EFFECTIVE merge: env var Z_HARNESS_OVERNIGHT_AUTODECIDE (JSON) overrides hardcoded defaults; unknown keys in the env override are silently merged in (not rejected).",
-    "z-implement-all check-no-ask halt fires ONLY on second review failure (not first). First failure still re-spawns the implementer normally."
+    "z-implement-all check-no-ask halt fires ONLY on second review failure (not first). First failure still re-spawns the implementer normally.",
+    "Phase 0 consumer check parses index.view.json as a dict (entries is an object keyed by entry-id, not a list). A list-style parse would silently iterate keys rather than values and always report 0 running entries — the T100 fix uses entries_obj.values().",
+    "z-followup-confirm --via=audit requires --evidence=<path>; --via=human is mutually exclusive with --evidence. Mixing the flags or omitting required flags is a hard argument-parse error before any state reads.",
+    "z-followup-refresh only accepts entries in blocked state; providing a non-blocked entry ID is an error that exits before acquiring any lock.",
+    "z-review-all Phase 3.7.5: sink-add.sh exit code 3 means dedup-skip (entry already exists) — this is not an error. Only non-zero exit codes other than 3 trigger the per-entry warning."
   ],
   "memories": []
 }

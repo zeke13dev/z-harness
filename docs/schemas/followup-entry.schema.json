@@ -1,0 +1,261 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12",
+  "$id": "https://z-harness/schemas/followup-entry.schema.json",
+  "title": "FollowupEntry",
+  "description": "A follow-up registry entry (schema_version = 1). See SPEC.md §Entry-schema.",
+  "type": "object",
+  "required": [
+    "id",
+    "schema_version",
+    "priority",
+    "name",
+    "status",
+    "sink",
+    "created_at",
+    "created_by_run",
+    "capture_head",
+    "source_artifact",
+    "prompt_page_link",
+    "recommended_command",
+    "recommended_command_safe_to_retry",
+    "cited_paths",
+    "depth",
+    "auto_close_eligible",
+    "completion_mode",
+    "audit_evidence_path",
+    "closed_at",
+    "closed_by_run",
+    "failure_reason",
+    "attempt_count",
+    "status_history",
+    "notion_remote_id"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique entry id: <ISO-timestamp>-<slugified-name>",
+      "pattern": "^[0-9]{8}T[0-9]{6}Z-.+$"
+    },
+    "schema_version": {
+      "const": 1,
+      "description": "Must be the integer 1"
+    },
+    "priority": {
+      "type": "string",
+      "enum": ["P0", "P1", "P2", "P3"],
+      "description": "Priority tier"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Short human-readable title"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["open", "running", "verify", "done", "failed", "blocked", "dismissed"],
+      "description": "Current lifecycle status"
+    },
+    "sink": {
+      "type": "string",
+      "enum": ["project", "global"],
+      "description": "Storage sink. Notion is a passive mirror, never a primary sink."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 creation timestamp"
+    },
+    "created_by_run": {
+      "type": "string",
+      "description": "Run ID that created this entry"
+    },
+    "capture_head": {
+      "type": "string",
+      "description": "git commit SHA at creation time",
+      "pattern": "^[0-9a-f]{7,40}$"
+    },
+    "source_artifact": {
+      "type": "string",
+      "description": "Path of the artifact (diff, task file, etc.) that prompted creation"
+    },
+    "prompt_page_link": {
+      "type": "string",
+      "description": "Relative path to the prompt page markdown file"
+    },
+    "recommended_command": {
+      "type": "string",
+      "description": "The /z-* command to execute. Must start with /z- followed by kebab-case word(s).",
+      "pattern": "^/z-[a-z][a-z-]*[a-z](\\s.*)?$",
+      "maxLength": 2048
+    },
+    "recommended_command_safe_to_retry": {
+      "type": "boolean",
+      "description": "Whether the recommended command is idempotent / safe to retry"
+    },
+    "cited_paths": {
+      "type": "array",
+      "items": { "type": "string" },
+      "maxItems": 16,
+      "description": "File paths this follow-up is concerned with (max 16; use dir_blob_hashes for larger sets)"
+    },
+    "depth": {
+      "type": "integer",
+      "enum": [0, 1],
+      "description": "Nesting depth: 0 = mainline, 1 = spawned inside a consumer execution"
+    },
+    "auto_close_eligible": {
+      "type": "boolean",
+      "description": "Whether this entry qualifies for the auto-close-low-risk path"
+    },
+    "completion_mode": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "string",
+          "enum": ["human_confirmed", "audit_confirmed", "auto_closed_low_risk"]
+        }
+      ],
+      "description": "How this entry was completed. Null while not yet done."
+    },
+    "audit_evidence_path": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string" }
+      ],
+      "description": "Path to audit evidence JSON blob (null until audit_confirmed)"
+    },
+    "closed_at": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "format": "date-time" }
+      ],
+      "description": "ISO 8601 close timestamp (null while open/running/verify/failed/blocked)"
+    },
+    "closed_by_run": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string" }
+      ],
+      "description": "Run ID that closed this entry (null while not yet closed)"
+    },
+    "failure_reason": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string" }
+      ],
+      "description": "Human-readable reason for failure or block (null when not failed/blocked)"
+    },
+    "attempt_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of execution attempts (incremented on failed transitions)"
+    },
+    "status_history": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["ts", "from", "to", "by"],
+        "properties": {
+          "ts": { "type": "string", "format": "date-time" },
+          "from": { "oneOf": [{ "type": "null" }, { "type": "string" }] },
+          "to": { "type": "string" },
+          "by": { "type": "string" }
+        },
+        "additionalProperties": true
+      },
+      "description": "Ordered list of status transitions"
+    },
+    "notion_remote_id": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string" }
+      ],
+      "description": "Notion page ID for the mirrored page (null if Notion disabled or not yet pushed)"
+    },
+    "file_blob_hashes": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/file_blob_hashes" }
+      ],
+      "description": "Map of path -> sha256:<hex> blob hash for cited files (null when dir_blob_hashes is used)"
+    },
+    "dir_blob_hashes": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/dir_blob_hashes" }
+      ],
+      "description": "Map of ancestor dir -> sha256:<hex> tree hash (null when file_blob_hashes is used)"
+    }
+  },
+  "$defs": {
+    "blob_hashes_mutex": {
+      "description": "Exactly one of file_blob_hashes / dir_blob_hashes must be non-null and non-empty. sink-add always sets exactly one; neither-set is not a valid state.",
+      "allOf": [
+        {
+          "description": "At most one may be non-null (mutual exclusion).",
+          "not": {
+            "allOf": [
+              {
+                "required": ["file_blob_hashes"],
+                "properties": {
+                  "file_blob_hashes": { "not": { "type": "null" } }
+                }
+              },
+              {
+                "required": ["dir_blob_hashes"],
+                "properties": {
+                  "dir_blob_hashes": { "not": { "type": "null" } }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "description": "At least one must be non-null and non-empty (neither-set is rejected).",
+          "anyOf": [
+            {
+              "required": ["file_blob_hashes"],
+              "properties": {
+                "file_blob_hashes": {
+                  "not": { "type": "null" },
+                  "minProperties": 1
+                }
+              }
+            },
+            {
+              "required": ["dir_blob_hashes"],
+              "properties": {
+                "dir_blob_hashes": {
+                  "not": { "type": "null" },
+                  "minProperties": 1
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "file_blob_hashes": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^sha256:[0-9a-f]{64}$"
+      },
+      "description": "Map of path -> sha256:<hex> blob hash for cited files (must have at least 1 entry)"
+    },
+    "dir_blob_hashes": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^sha256:[0-9a-f]{64}$"
+      },
+      "description": "Map of ancestor dir -> sha256:<hex> tree hash (used when cited_paths > 16; must have at least 1 entry)"
+    }
+  },
+  "allOf": [
+    { "$ref": "#/$defs/blob_hashes_mutex" }
+  ]
+}

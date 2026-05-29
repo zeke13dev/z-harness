@@ -19,6 +19,36 @@ Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.le
 
 Both `--ack` and `--force-partial` are inert for legacy (single-slug) plans and only affect tree-rooted discovery in Setup step 2.
 
+## Phase 0 — Global cross-tool lock check
+
+Before any slug discovery or task dispatch, check for concurrent follow-up consumer activity:
+
+```bash
+PROJECT_SINK="$(pwd)/z-harness/followups/index.view.json"
+if [ -f "$PROJECT_SINK" ]; then
+  RUNNING_COUNT="$(python3 -c "
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+    entries_obj = data.get('entries', {})
+    entries = list(entries_obj.values())
+    running = [e for e in entries if e.get('status') == 'running']
+    print(len(running))
+except (json.JSONDecodeError, OSError, KeyError, AttributeError):
+    print(0)
+" "$PROJECT_SINK" 2>/dev/null || echo 0)"
+  if [ "${RUNNING_COUNT:-0}" -gt 0 ]; then
+    echo "halt: follow-up consumer is active ($RUNNING_COUNT running entry/entries in project sink)" >&2
+    echo "Run /z-followup-status to see what is running. Wait for it to complete or dismiss before implementing." >&2
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" implement_halted_followup_running \
+      "$(printf '{"running_count":%d,"sink_path":"%s"}' "$RUNNING_COUNT" "$PROJECT_SINK")" 2>/dev/null || true
+    exit 1
+  fi
+fi
+```
+
+If there are running follow-up consumer entries, **halt** — do not proceed with any slug discovery or task dispatch. Tell the user to check `/z-followup-status` before retrying.
+
 ## Setup
 
 1. `cd` to the repo root. Abort if no `z-harness/` directory.

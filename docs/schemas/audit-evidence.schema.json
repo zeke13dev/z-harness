@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12",
+  "$id": "https://z-harness/schemas/audit-evidence.schema.json",
+  "title": "AuditEvidence",
+  "description": "Signed audit evidence blob used by /z-followup-confirm --via=audit. schema_version must be 1, review_verdict must be literal PASS, test_exit_code must be 0.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "entry_id",
+    "review_verdict_path",
+    "review_verdict",
+    "test_exit_code",
+    "diff_artifact_path",
+    "capture_head",
+    "verify_head",
+    "verified_at",
+    "verified_by_run"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "description": "Must be the integer 1"
+    },
+    "entry_id": {
+      "type": "string",
+      "description": "ID of the followup entry this evidence is for",
+      "pattern": "^[0-9]{8}T[0-9]{6}Z-.+$"
+    },
+    "review_verdict_path": {
+      "type": "string",
+      "description": "Path to the verdict.md artifact from /z-review-all"
+    },
+    "review_verdict": {
+      "const": "PASS",
+      "description": "Must be the literal string PASS"
+    },
+    "test_exit_code": {
+      "const": 0,
+      "description": "Must be the integer 0"
+    },
+    "diff_artifact_path": {
+      "type": "string",
+      "description": "Path to the cumulative.diff artifact from the run"
+    },
+    "capture_head": {
+      "type": "string",
+      "description": "git commit SHA at follow-up entry creation time",
+      "pattern": "^[0-9a-f]{7,40}$"
+    },
+    "verify_head": {
+      "type": "string",
+      "description": "git commit SHA at verification time; must be a descendant of capture_head",
+      "pattern": "^[0-9a-f]{7,40}$"
+    },
+    "verified_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when verification was performed"
+    },
+    "verified_by_run": {
+      "type": "string",
+      "description": "Run ID that produced this audit evidence"
+    }
+  }
+}

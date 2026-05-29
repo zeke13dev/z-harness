@@ -78,6 +78,35 @@ Once `EARLY_PLAN_DIR` is known:
      - Delete the stale state file: `rm "$EARLY_PLAN_DIR/.review_state.json"`
      - Proceed to Phase 0 for a full re-run.
 
+## Phase 0 — Concurrent follow-up consumer check
+
+Before doing any plan discovery, check whether a follow-up consumer is actively running in this project. Running `/z-review-all` while a follow-up consumer is modifying files risks race conditions on shared state (plan dir, sink index).
+
+```bash
+SINK_LOCK="$HOME/.z-harness/.followup-vs-implement.lock"
+PROJECT_SINK="$(pwd)/z-harness/followups/index.view.json"
+if [ -f "$PROJECT_SINK" ]; then
+  RUNNING_COUNT="$(python3 -c "
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+    entries_obj = data.get('entries', {})
+    entries = list(entries_obj.values())
+    running = [e for e in entries if e.get('status') == 'running']
+    print(len(running))
+except (json.JSONDecodeError, OSError, KeyError, AttributeError):
+    print(0)
+" "$PROJECT_SINK" 2>/dev/null || echo 0)"
+  if [ "${RUNNING_COUNT:-0}" -gt 0 ]; then
+    echo "halt: follow-up consumer is active ($RUNNING_COUNT running entry/entries in project sink)" >&2
+    echo "Run /z-followup-status to see what is running. Wait for it to complete or dismiss before reviewing." >&2
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" review_halted_followup_running \
+      "$(printf '{"running_count":%d,"sink_path":"%s"}' "$RUNNING_COUNT" "$PROJECT_SINK")" 2>/dev/null || true
+    exit 1
+  fi
+fi
+```
+
 ## Phase 0 — Discover plan slug
 
 Same logic as `/z-implement-all` / `/z-implement-next`:
@@ -286,6 +315,53 @@ When resolver result is `prefill` or `ask`, present an `AskUserQuestion` with ex
   ```
   If the write fails, log a warning to stderr and proceed (do not block on a filesystem hiccup).
 - Continue to Phase 4.
+
+## Phase 3.7.5 — Route non-halting findings to follow-up sink
+
+After the user picks "Proceed now" in Phase 3.7 (or the resolver auto-proceeds), before spawning consultants, check if the reviewer return from any prior per-task reviews produced `**FOLLOWUPS:**` blocks that haven't been routed yet. Additionally, at the end of Phase 5 (after `findings.md` is built), route non-halting minor/major findings from the cumulative review into the sink.
+
+**After Phase 5 findings are aggregated**, for each finding in `findings.md` that is NOT in the `Blockers` sections (i.e. severity is `major` or `minor`), invoke `scripts/parse-followups-block.py` on the findings text to extract any `**FOLLOWUPS:**` block written by the consultants, then route via `scripts/sink-add.sh`:
+
+```bash
+# Route non-halting findings from cumulative review to sink
+FINDINGS_FILE="$BASE/archive/$RRUN/findings.md"
+if [ -f "$FINDINGS_FILE" ] && [ -f "scripts/parse-followups-block.py" ] && [ -f "scripts/sink-add.sh" ]; then
+  FOLLOWUPS_JSON="$(python3 scripts/parse-followups-block.py --reviewer-output "$FINDINGS_FILE" 2>/dev/null || echo '[]')"
+  FOLLOWUP_COUNT="$(printf '%s' "$FOLLOWUPS_JSON" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null || echo 0)"
+  if [ "${FOLLOWUP_COUNT:-0}" -gt 0 ]; then
+    printf '%s' "$FOLLOWUPS_JSON" | python3 -c "
+import json, subprocess, sys
+
+entries = json.load(sys.stdin)
+source_artifact = sys.argv[1]
+script = sys.argv[2]
+
+for i, e in enumerate(entries):
+    cited = ','.join(e.get('cited_paths', []))
+    args = [
+        'bash', script,
+        '--sink=project',
+        f'--priority={e[\"priority\"]}',
+        f'--name={e[\"name\"]}',
+        f'--recommended-command={e[\"recommended_command\"]}',
+        f'--source-artifact={source_artifact}',
+        f'--cited-paths={cited}',
+    ]
+    if e.get('auto_close_eligible'):
+        args.append('--auto-close-eligible')
+    if e.get('recommended_command_safe_to_retry'):
+        args.append('--safe-to-retry')
+    result = subprocess.run(args, capture_output=True, text=True)
+    if result.returncode not in (0, 3):  # 3 = dedup-skip (ok)
+        print(f'warn: sink-add.sh exit {result.returncode} for entry {i}: {result.stderr[:200]}', file=sys.stderr)
+" "$FINDINGS_FILE" "scripts/sink-add.sh" 2>/dev/null || true
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" followups_routed_to_sink \
+      "$(printf '{"count":%d,"source":"review_all_findings"}' "$FOLLOWUP_COUNT")" 2>/dev/null || true
+  fi
+fi
+```
+
+Per-entry errors are logged + skipped. This step never blocks the review pipeline. If `scripts/sink-add.sh` is not yet present (deps not implemented), this step is silently skipped.
 
 ## Phase 4 — Spawn final-review consultants (parallel)
 

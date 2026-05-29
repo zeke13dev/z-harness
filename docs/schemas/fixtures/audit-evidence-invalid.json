@@ -1,0 +1,12 @@
+{
+  "schema_version": 2,
+  "entry_id": "bad-id-no-timestamp",
+  "review_verdict_path": "some/path.md",
+  "review_verdict": "FAIL",
+  "test_exit_code": 1,
+  "diff_artifact_path": "some/path.diff",
+  "capture_head": "not-a-sha",
+  "verify_head": "not-a-sha",
+  "verified_at": "not-a-date",
+  "verified_by_run": ""
+}

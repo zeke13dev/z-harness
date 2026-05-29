@@ -173,16 +173,50 @@ If awk yields nothing (the provider returned the verbatim "No blockers or majors
 
 ## Output format (the structured `$RETURN`, ≤8 KB)
 
-```
-## Reviewer review: task <ID>
+    ## Reviewer review: task <ID>
 
-### Blockers
-<findings>
+    ### Blockers
+    <findings>
 
-### Major
-<findings>
-```
+    ### Major
+    <findings>
 
-Minors / nits are intentionally **dropped from the return** (blockers+majors only; the implementer self-check already handles minors). They remain in the on-disk transcript for retro analysis.
+    **FOLLOWUPS:**
+    ```json
+    [
+      {
+        "priority": "P3",
+        "name": "<short title for the follow-up>",
+        "recommended_command": "/z-do \"<command>\"",
+        "cited_paths": ["<path1>", "<path2>"],
+        "recommended_command_safe_to_retry": false,
+        "auto_close_eligible": false
+      }
+    ]
+    ```
+
+Minors / nits are intentionally **dropped from the blockers/majors return** but MUST be captured in the `**FOLLOWUPS:**` section instead (priority P3 or P2). This ensures minor/nit findings are never silently dropped — they are routed to the follow-up sink for later resolution.
+
+### `**FOLLOWUPS:**` section spec
+
+The `**FOLLOWUPS:**` section is **optional** — omit it entirely if there are no follow-ups to capture. When present, it MUST appear after `### Major` and MUST contain exactly one fenced ` ```json ` array block.
+
+**Per-entry fields:**
+
+| Field | Required | Description |
+|---|---|---|
+| `priority` | yes | `P0` \| `P1` \| `P2` \| `P3`. Minors → `P3`; non-blocking-but-important → `P2`; use `P0`/`P1` sparingly. |
+| `name` | yes | Short title (≤80 chars). |
+| `recommended_command` | yes | Must start with `/z-`. No raw shell. |
+| `cited_paths` | yes | Array of file paths relevant to the follow-up. ≤16 entries. |
+| `recommended_command_safe_to_retry` | no | Boolean. Default `false`. |
+| `auto_close_eligible` | no | Boolean. Default `false`. Reviewer is on the producer-class allowlist and MAY set `true` for low-risk items. |
+
+**Routing semantics for the caller:**
+- Minors/nits → P3 entry in `**FOLLOWUPS:**`
+- Non-blocking-but-important findings → P2 entry
+- Blockers/majors → `### Blockers` / `### Major` sections only (NOT in `**FOLLOWUPS:**`)
+
+The caller (orchestrator) parses this block via `scripts/parse-followups-block.py` and routes each entry to `scripts/sink-add.sh`. Parse failures are logged as `followup_block_parse_failed` events and never crash the reviewer return path.
 
 If the CLI errors, report the exact error in ≤200 chars.
