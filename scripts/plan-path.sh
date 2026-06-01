@@ -148,7 +148,7 @@ _z_harness_anchor_write() {
 # Returns the artifact base directory for the current repo.
 #
 # Fallback chain (first writable tier wins):
-#   1. $Z_HARNESS_BASE_DIR             — explicit absolute override
+#   1. $Z_HARNESS_BASE_DIR             — explicit absolute override (TRUE ESCAPE HATCH)
 #   2. $XDG_STATE_HOME/z-harness/<repo-id>  — if Z_HARNESS_EXTERNAL_DEFAULT=1
 #   3. $HOME/.local/state/z-harness/<repo-id>   — if Z_HARNESS_EXTERNAL_DEFAULT=1
 #   4. <git-common-dir>/z-harness      — if Z_HARNESS_EXTERNAL_DEFAULT=1
@@ -162,9 +162,13 @@ _z_harness_anchor_write() {
 # Anchor invariant (SPEC invariant 7):
 #   After resolving the path, writes/validates <git-common-dir>/.z-harness-base.
 #   Mismatch → emits base_mismatch_detected to stderr + hard-fails.
-#   Exception: tier-1 (Z_HARNESS_BASE_DIR explicitly set) validates against an
-#   existing anchor but does NOT write one.  This prevents split-brain without
-#   breaking hermetic test repos that have no pre-existing anchor.
+#   Exception: tier-1 (Z_HARNESS_BASE_DIR explicitly set) is a TRUE ESCAPE HATCH —
+#   it bypasses the anchor entirely (no read, no validate, no write).  Rationale:
+#   the anchor's split-brain protection governs AUTOMATIC tier selection (tiers 2-5).
+#   An explicit Z_HARNESS_BASE_DIR is a deliberate user/CI/benchmark override (e.g.
+#   the deepswe-pier benchmark relocates artifacts to a hermetic temp dir) and MUST
+#   NOT hard-fail against a dev machine's pre-existing anchor.  The caller owns
+#   consistency when using an explicit BASE_DIR.
 #
 # Source-loop guard:
 #   log-event.sh sources plan-path.sh. To avoid recursion when z_harness_base()
@@ -172,33 +176,20 @@ _z_harness_anchor_write() {
 #   _Z_HARNESS_RESOLVING_BASE is NOT set. Callers (CLI wrapper) set this sentinel
 #   before invoking log-event.sh so recursive calls no-op on event emission.
 z_harness_base() {
-  # --- Tier 1: explicit override ---
-  # When Z_HARNESS_BASE_DIR is set, validate against any existing anchor but do NOT
-  # write a new anchor. The anchor prevents split-brain in *automatic* tier selection
-  # (tiers 2-5); an explicit override is already deterministic. We validate-but-don't-
-  # write so that a pre-existing anchor from an automatic tier can still detect
-  # conflict (split-brain hole: process A uses explicit BASE_DIR, process B auto-
-  # resolved a different path and wrote the anchor → mismatch → hard-fail).
+  # --- Tier 1: explicit override (TRUE ESCAPE HATCH) ---
+  # When Z_HARNESS_BASE_DIR is set, return it directly. Do NOT read, validate, OR
+  # write the .z-harness-base anchor. The anchor's split-brain protection governs
+  # AUTOMATIC tier selection (tiers 2-5); an explicit override is a deliberate
+  # user/CI/benchmark choice (e.g. deepswe-pier relocating artifacts to a hermetic
+  # temp dir) and must not hard-fail against a dev machine's pre-existing anchor.
+  # The caller owns consistency when using an explicit BASE_DIR.
   local base_dir_env="${Z_HARNESS_BASE_DIR:-}"
   if [[ -n "$base_dir_env" ]]; then
     if [[ "$base_dir_env" != /* ]]; then
       printf '[z-harness] Z_HARNESS_BASE_DIR must be an absolute path, got: %s\n' "$base_dir_env" >&2
       exit 1
     fi
-    # Validate against existing anchor (do NOT write one).
-    local tier1_anchor
-    tier1_anchor="$(_z_harness_anchor_path)"
-    if [[ -n "$tier1_anchor" && -f "$tier1_anchor" ]]; then
-      local stored_path
-      stored_path="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("path",""))' "$tier1_anchor" 2>/dev/null || true)"
-      if [[ -n "$stored_path" && "$stored_path" != "$base_dir_env" ]]; then
-        printf '[z-harness] plan-path.sh: base_mismatch_detected: anchor=%s resolved=%s\n' \
-          "$stored_path" "$base_dir_env" >&2
-        printf '[z-harness] plan-path.sh: FATAL base_mismatch_detected — anchor and resolved base disagree. Aborting.\n' >&2
-        exit 1
-      fi
-    fi
-    # No anchor written for tier-1 (validate-but-don't-write).
+    # Return directly — no anchor interaction whatsoever.
     printf '%s' "$base_dir_env"
     return 0
   fi
@@ -304,11 +295,13 @@ _z_harness_emit_base_resolved() {
   local log_event_sh
   log_event_sh="$(dirname "${BASH_SOURCE[0]}")/log-event.sh"
   if [[ -n "${Z_HARNESS_RUN_ID:-}" && -x "$log_event_sh" ]]; then
-    export _Z_HARNESS_RESOLVING_BASE=1
-    bash "$log_event_sh" "${Z_HARNESS_RUN_ID}" "base_resolved" \
+    # Pass the sentinel as an inline env-var assignment so the child subprocess
+    # inherits it without modifying the parent shell's environment.  This
+    # guarantees the unset is a no-op (parent env unchanged) even if the
+    # subprocess is killed by a signal or exits non-zero.
+    _Z_HARNESS_RESOLVING_BASE=1 bash "$log_event_sh" "${Z_HARNESS_RUN_ID}" "base_resolved" \
       "$(printf '{"tier":"%s","path":"%s","repo_id":"%s"}' "$tier" "$path" "$repo_id")" \
       2>/dev/null || true
-    unset _Z_HARNESS_RESOLVING_BASE
   fi
 }
 

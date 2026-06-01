@@ -37,24 +37,22 @@ if [ -z "$_CT_RUN" ]; then
   return 0 2>/dev/null || exit 0
 fi
 
-# Locate the run dir to drop the marker file. Mirrors log-event.sh's resolution.
-_CT_REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+# Locate the run dir to drop the marker file. Delegate base resolution to
+# plan-path.sh so the full 5-tier fallback chain and anchor invariant are
+# honoured — identical to log-event.sh.
+_CT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/plan-path.sh
+source "$_CT_SCRIPT_DIR/plan-path.sh"
 
-# Resolve the artifact base dir (same logic as log-event.sh):
-#   Z_HARNESS_BASE_DIR (absolute) if set → use it directly.
-#   Otherwise → $REPO_ROOT/z-harness.
-_CT_BASE_OVERRIDE="${Z_HARNESS_BASE_DIR:-}"
-if [ -n "$_CT_BASE_OVERRIDE" ]; then
-  _CT_ZH_BASE="$_CT_BASE_OVERRIDE"
-else
-  _CT_ZH_BASE="$_CT_REPO_ROOT/z-harness"
-fi
+# Resolve base via z_harness_base(); set sentinel to suppress base_resolved
+# event emission that would re-invoke this script via log-event.sh.
+_CT_ZH_BASE="$(_Z_HARNESS_RESOLVING_BASE=1 z_harness_base)"
 
 if [ -n "${Z_HARNESS_SLUG:-}" ]; then
   # Validate PLANS_DIR in parent shell: relative path + BASE_DIR set → fail loudly.
-  # (Mirrors plan-path.sh:39. Must be checked here in the parent shell because
-  # any exit 1 inside $(...) command substitution only kills the subshell.)
-  if [ -n "$_CT_BASE_OVERRIDE" ] && [ -n "${Z_HARNESS_PLANS_DIR:-}" ]; then
+  # (Must be checked here in the parent shell because any exit 1 inside $(...)
+  # command substitution only kills the subshell.)
+  if [ -n "${Z_HARNESS_BASE_DIR:-}" ] && [ -n "${Z_HARNESS_PLANS_DIR:-}" ]; then
     case "${Z_HARNESS_PLANS_DIR}" in
       /*) : ;;  # absolute — OK
       *)
@@ -65,18 +63,14 @@ if [ -n "${Z_HARNESS_SLUG:-}" ]; then
   fi
   if [ -n "${Z_HARNESS_PLANS_DIR:-}" ]; then
     _CT_PLANS_DIR="$Z_HARNESS_PLANS_DIR"
-  elif [ -n "$_CT_BASE_OVERRIDE" ]; then
-    _CT_PLANS_DIR="$_CT_BASE_OVERRIDE/plans"
   else
-    _CT_PLANS_DIR="z-harness/plans"
+    _CT_PLANS_DIR="$_CT_ZH_BASE/plans"
   fi
-  case "$_CT_PLANS_DIR" in
-    /*) _CT_RUN_DIR="$_CT_PLANS_DIR/$Z_HARNESS_SLUG/archive/$_CT_RUN" ;;
-    *)  _CT_RUN_DIR="$_CT_REPO_ROOT/$_CT_PLANS_DIR/$Z_HARNESS_SLUG/archive/$_CT_RUN" ;;
-  esac
+  _CT_RUN_DIR="$_CT_PLANS_DIR/$Z_HARNESS_SLUG/archive/$_CT_RUN"
   # Legacy mid-flight fallback: only when Z_HARNESS_BASE_DIR is NOT set
   # (setting it disables repo-local writes to preserve the model.patch invariant).
-  if [ -z "$_CT_BASE_OVERRIDE" ]; then
+  if [ -z "${Z_HARNESS_BASE_DIR:-}" ]; then
+    _CT_REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
     _CT_LEGACY_RUN_DIR="$_CT_REPO_ROOT/z-harness/$Z_HARNESS_SLUG/archive/$_CT_RUN"
     if [ -d "$_CT_LEGACY_RUN_DIR" ] && [ ! -d "$_CT_RUN_DIR" ]; then
       _CT_RUN_DIR="$_CT_LEGACY_RUN_DIR"

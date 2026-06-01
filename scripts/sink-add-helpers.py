@@ -44,6 +44,7 @@ from followup_common import (  # noqa: E402
     _notion_push_entry_bg,
     log_metrics_event,
     log_sink_event,
+    project_followups_dir,
 )
 
 GLOBAL_LOCK_FILE = Path(os.environ.get(
@@ -155,9 +156,15 @@ def content_hash(name: str, recommended_command: str, source_artifact: str = "")
 
 
 def sink_root(sink: str, project_root: Path) -> Path:
-    """Return the root directory for the given sink."""
+    """Return the root directory for the given sink.
+
+    The PROJECT sink root is resolved via plan-path.sh at call time so it
+    honours Z_HARNESS_BASE_DIR and the full 5-tier fallback chain.  The
+    GLOBAL sink root is always Path.home() / ".z-harness" / "followups" —
+    intentionally outside the repo and not subject to base-dir overrides.
+    """
     if sink == "project":
-        return project_root / "z-harness" / "followups"
+        return project_followups_dir(project_root)
     elif sink == "global":
         return Path.home() / ".z-harness" / "followups"
     raise ValueError(f"Unknown sink: {sink!r}")

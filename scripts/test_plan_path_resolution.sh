@@ -567,11 +567,13 @@ assert_eq "T001-Q: repo-id is stable across two calls" "$REPOID_Q" "$REPOID_Q2"
 rm -rf "$REPO_Q"
 
 # ---------------------------------------------------------------------------
-# TEST T001-R: tier-1 (Z_HARNESS_BASE_DIR set) validates against a conflicting
-# existing anchor and hard-fails with non-zero exit.
+# TEST T001-R: tier-1 (Z_HARNESS_BASE_DIR set) is a TRUE ESCAPE HATCH — it
+# bypasses the anchor entirely. A conflicting pre-existing anchor must NOT
+# cause a hard-fail; tier-1 must succeed and return Z_HARNESS_BASE_DIR
+# verbatim without modifying the anchor.
 # ---------------------------------------------------------------------------
 echo ""
-echo "T001-R: tier-1 validates against a conflicting anchor → hard-fail"
+echo "T001-R: tier-1 with conflicting anchor succeeds (escape hatch — anchor ignored)"
 
 REPO_R="$(_tmpdir)"
 git -C "$REPO_R" init -q
@@ -579,6 +581,7 @@ git -C "$REPO_R" config user.email "test@test.local"
 git -C "$REPO_R" config user.name "Test"
 
 ANCHOR_R="$(_realpath "$REPO_R")/.git/.z-harness-base"
+ANCHOR_ORIGINAL_PATH="/some/other/path/from/anchor"
 
 # Write an anchor whose path differs from our tier-1 BASE_DIR
 python3 -c '
@@ -589,10 +592,15 @@ json.dump({"tier":"pwd","path":"/some/other/path/from/anchor","repo_id":"fake-id
 
 BASE_R="/tmp/zh-tier1-test-$$"
 EXIT_R=0
-ERR_R="$(cd "$REPO_R" && Z_HARNESS_BASE_DIR="$BASE_R" bash "$PLAN_PATH" z_harness_base 2>&1)" || EXIT_R=$?
+RESULT_R="$(cd "$REPO_R" && Z_HARNESS_BASE_DIR="$BASE_R" bash "$PLAN_PATH" z_harness_base 2>&1)" || EXIT_R=$?
 
-assert_exit_nonzero "T001-R: tier-1 with conflicting anchor exits non-zero" "$EXIT_R"
-assert_contains "T001-R: stderr mentions mismatch" "mismatch" "$ERR_R"
+assert_eq "T001-R: tier-1 with conflicting anchor exits zero (escape hatch)" "0" "$EXIT_R"
+assert_eq "T001-R: tier-1 returns Z_HARNESS_BASE_DIR verbatim" "$BASE_R" "$RESULT_R"
+
+# Anchor must NOT have been modified (original path still stored)
+STORED_R="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("path",""))' "$ANCHOR_R" 2>/dev/null || true)"
+assert_eq "T001-R: anchor not modified by tier-1 (escape hatch does not write anchor)" \
+  "$ANCHOR_ORIGINAL_PATH" "$STORED_R"
 
 rm -rf "$REPO_R"
 

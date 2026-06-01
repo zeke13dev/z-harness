@@ -159,8 +159,11 @@ assert_file_exists "TEST-001: metrics.jsonl under repo z-harness/ (default)" "$E
 METRICS_CONTENT_001="$(cat "$EXPECTED_METRICS_001")"
 assert_contains "TEST-001: metrics.jsonl contains test_event" '"kind":"test_event"' "$METRICS_CONTENT_001"
 
-# Clean up test state
+# Clean up test state (also remove the anchor written by z_harness_base() so
+# subsequent tests that use a different Z_HARNESS_BASE_DIR are not blocked by
+# the mismatch-detection invariant — each test that needs tier-1 uses a fresh base).
 rm -rf "$REPO/zh-plans" "$REPO/z-harness"
+rm -f "$REPO/.git/.z-harness-base"
 
 # ---------------------------------------------------------------------------
 # TEST-002: Z_HARNESS_BASE_DIR set → events and metrics under override dir
