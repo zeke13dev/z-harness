@@ -49,13 +49,15 @@ migrate_one() {
 }
 
 migrate_all() {
-  echo "Searching for legacy plans to migrate in z-harness/..."
+  local _legacy_root
+  _legacy_root="$(legacy_plan_dir "")"
+  echo "Searching for legacy plans to migrate in ${_legacy_root}/..."
   # A legacy plan dir contains PLAN.md, SPEC.md, or TASKS.md at its root.
   # Exclude infra dirs: plans, archive, improvements; also skip metrics.jsonl (it's a file, not a dir).
-  for d in z-harness/*/; do
+  for d in "${_legacy_root}"/*/; do
     [ -d "$d" ] || continue   # defensive: skip if not a directory
     d="${d%/}"                 # strip trailing slash
-    slug="${d#z-harness/}"
+    slug="${d#${_legacy_root}/}"
 
     case "$slug" in
       plans|archive|improvements) continue ;;

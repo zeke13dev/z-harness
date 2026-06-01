@@ -84,7 +84,7 @@ Before doing any plan discovery, check whether a follow-up consumer is actively 
 
 ```bash
 SINK_LOCK="$HOME/.z-harness/.followup-vs-implement.lock"
-PROJECT_SINK="$(pwd)/z-harness/followups/index.view.json"
+PROJECT_SINK="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" followups_dir)/index.view.json"
 if [ -f "$PROJECT_SINK" ]; then
   RUNNING_COUNT="$(python3 -c "
 import json, sys

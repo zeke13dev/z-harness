@@ -57,7 +57,7 @@ Store: `ENTRY_ID`, `DISMISS_REASON`.
 ## Phase 1 — Resolve sink paths
 
 ```bash
-PROJECT_SINK="$PWD/z-harness/followups"
+PROJECT_SINK="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" followups_dir)"
 PROJECT_VIEW="$PROJECT_SINK/index.view.json"
 
 GLOBAL_SINK="${HOME}/.z-harness/followups"
@@ -100,7 +100,7 @@ Exit 0.
 
 ```bash
 if [[ "$ENTRY_SINK" == "project" ]]; then
-  SINK_ROOT="$PWD/z-harness/followups"
+  SINK_ROOT="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" followups_dir)"
 else
   SINK_ROOT="${HOME}/.z-harness/followups"
 fi

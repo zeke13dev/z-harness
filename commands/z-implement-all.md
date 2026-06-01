@@ -24,7 +24,7 @@ Both `--ack` and `--force-partial` are inert for legacy (single-slug) plans and 
 Before any slug discovery or task dispatch, check for concurrent follow-up consumer activity:
 
 ```bash
-PROJECT_SINK="$(pwd)/z-harness/followups/index.view.json"
+PROJECT_SINK="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" followups_dir)/index.view.json"
 if [ -f "$PROJECT_SINK" ]; then
   RUNNING_COUNT="$(python3 -c "
 import json, sys

@@ -49,7 +49,7 @@ Store: `ENTRY_ID`.
 ## Phase 1 — Resolve sink paths
 
 ```bash
-PROJECT_SINK="$PWD/z-harness/followups"
+PROJECT_SINK="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" followups_dir)"
 PROJECT_VIEW="$PROJECT_SINK/index.view.json"
 PROJECT_JSONL="$PROJECT_SINK/index.jsonl"
 
@@ -98,7 +98,7 @@ fi
 
 ```bash
 if [[ "$ENTRY_SINK" == "project" ]]; then
-  SINK_ROOT="$PWD/z-harness/followups"
+  SINK_ROOT="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" followups_dir)"
   SINK_JSONL="$PROJECT_JSONL"
 else
   SINK_ROOT="${HOME}/.z-harness/followups"

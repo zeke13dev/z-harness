@@ -332,7 +332,8 @@ base_dir() {
 # Returns the directory for the active-plan registry JSON files.
 active_plans_dir() {
   local base
-  base="$(z_harness_base)"
+  base="$(z_harness_base)" || return 1
+  [[ -n "$base" ]] || { printf '[z-harness] plan-path.sh: FATAL empty base — refusing to compose paths\n' >&2; return 1; }
   printf '%s/active-plans' "$base"
 }
 
@@ -340,7 +341,8 @@ active_plans_dir() {
 # Returns the directory for the follow-up queue.
 followups_dir() {
   local base
-  base="$(z_harness_base)"
+  base="$(z_harness_base)" || return 1
+  [[ -n "$base" ]] || { printf '[z-harness] plan-path.sh: FATAL empty base — refusing to compose paths\n' >&2; return 1; }
   printf '%s/followups' "$base"
 }
 
@@ -456,6 +458,55 @@ resolve_plan_path() {
   echo "$new_path"
 }
 
+# all_plan_slugs
+# Prints the deduplicated set of plan slugs from BOTH layouts:
+#   - New layout:    <base>/plans/<slug>/   (subdirectories under plans/)
+#   - Legacy flat:   <base>/<slug>/         (subdirectories directly under base)
+# Infrastructure directories and files are excluded:
+#   plans, archive, adhoc, followups, improvements, active-plans, metrics.jsonl, bench
+# One slug per line, sorted and deduplicated.
+# Returns non-zero and prints nothing to stdout if z_harness_base() fails.
+all_plan_slugs() {
+  local base
+  base="$(z_harness_base)" || return 1
+  [[ -n "$base" ]] || { printf '[z-harness] plan-path.sh: FATAL empty base — refusing to compose paths\n' >&2; return 1; }
+
+  # Infrastructure names to exclude (directories and files)
+  local -a INFRA_EXCLUDES=(plans archive adhoc followups improvements active-plans metrics.jsonl bench)
+
+  # Helper: is a name in the infra exclude list?
+  _is_infra() {
+    local name="$1"
+    local excl
+    for excl in "${INFRA_EXCLUDES[@]}"; do
+      if [[ "$name" == "$excl" ]]; then
+        return 0
+      fi
+    done
+    return 1
+  }
+
+  {
+    # New layout: <base>/plans/*/
+    if [[ -d "$base/plans" ]]; then
+      for d in "$base/plans"/*/; do
+        [[ -d "$d" ]] || continue
+        local slug
+        slug="$(basename "$d")"
+        _is_infra "$slug" || printf '%s\n' "$slug"
+      done
+    fi
+
+    # Legacy flat layout: <base>/*/
+    for d in "$base"/*/; do
+      [[ -d "$d" ]] || continue
+      local slug
+      slug="$(basename "$d")"
+      _is_infra "$slug" || printf '%s\n' "$slug"
+    done
+  } | sort -u
+}
+
 # CLI wrapper
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   cmd="$1"
@@ -476,8 +527,11 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     followups_dir)
       followups_dir "$@"
       ;;
+    all_plan_slugs)
+      all_plan_slugs "$@"
+      ;;
     *)
-      echo "Usage: $0 {plan_dir|legacy_plan_dir|legacy_plan_dir_secondary|resolve_plan_path|z_harness_base_override|z_harness_base|z_harness_repo_id|active_plans_dir|followups_dir|base_dir} [args...]" >&2
+      echo "Usage: $0 {plan_dir|legacy_plan_dir|legacy_plan_dir_secondary|resolve_plan_path|z_harness_base_override|z_harness_base|z_harness_repo_id|active_plans_dir|followups_dir|base_dir|all_plan_slugs} [args...]" >&2
       exit 1
       ;;
   esac

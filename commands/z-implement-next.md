@@ -21,7 +21,7 @@ Before doing any work, check for concurrent follow-up consumer activity in this 
 SINK_LOCK="$HOME/.z-harness/.followup-vs-implement.lock"
 mkdir -p "$(dirname "$SINK_LOCK")"
 # Try-acquire with timeout=5s (non-blocking check first, then brief wait)
-PROJECT_SINK="$(pwd)/z-harness/followups/index.view.json"
+PROJECT_SINK="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" followups_dir)/index.view.json"
 if [ -f "$PROJECT_SINK" ]; then
   RUNNING_COUNT="$(python3 -c "
 import json, sys

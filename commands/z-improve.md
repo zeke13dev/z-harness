@@ -23,7 +23,12 @@ $ARGUMENTS
 - `$Z_HARNESS_PLAN_DIR/<run-id>` → exact run
 - `adhoc/<run-id>` → a `/z-do` run
 <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the run-selection question via their native channel. Silent omission is forbidden. -->
-- (empty) → list the 10 most recent runs across all slugs (via `ls -t z-harness/*/archive/* 2>/dev/null | head -10`) and `AskUserQuestion` to pick
+- (empty) → list the 10 most recent runs across all slugs (covering both new layout `<base>/plans/*/archive/*` and legacy flat `<base>/*/archive/*` including adhoc):
+  ```bash
+  BASE="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" base_dir)"
+  ls -dt "$BASE"/plans/*/archive/* "$BASE"/*/archive/* "$BASE"/adhoc/archive/* 2>/dev/null | awk '!seen[$0]++' | head -10
+  ```
+  Then `AskUserQuestion` to pick.
 
 Resolve to absolute paths:
 - `$RUN_DIR = $Z_HARNESS_PLAN_DIR/archive/<run-id>` (or `z-harness/adhoc/archive/<run-id>`)

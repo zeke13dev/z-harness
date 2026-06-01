@@ -738,6 +738,238 @@ assert_contains "T001-U: stderr mentions missing sha256 utility" "sha256" "$ERR_
 rm -rf "$REPO_U" "$FAKE_BIN_U"
 
 # ---------------------------------------------------------------------------
+# TEST T001-V: all_plan_slugs() returns slugs from BOTH layouts and excludes infra dirs
+# Creates a hermetic temp repo with:
+#   - New layout:    <base>/plans/new-slug/
+#   - Legacy flat:   <base>/legacy-slug/
+#   - Infra dirs:    <base>/plans/, <base>/archive/, <base>/adhoc/, <base>/followups/
+#   - Infra file:    <base>/metrics.jsonl
+# Asserts:
+#   - Output includes "new-slug" (new layout)
+#   - Output includes "legacy-slug" (legacy flat layout)
+#   - Output does NOT include any infra name: plans, archive, adhoc, followups, metrics.jsonl
+# ---------------------------------------------------------------------------
+echo ""
+echo "T001-V: all_plan_slugs() includes both layouts and excludes infra dirs"
+
+REPO_V="$(_tmpdir)"
+git -C "$REPO_V" init -q
+git -C "$REPO_V" config user.email "test@test.local"
+git -C "$REPO_V" config user.name "Test"
+
+BASE_V="$(_tmpdir)"
+
+# New layout: <base>/plans/new-slug/
+mkdir -p "$BASE_V/plans/new-slug"
+
+# Legacy flat: <base>/legacy-slug/
+mkdir -p "$BASE_V/legacy-slug"
+
+# Infrastructure directories (must be excluded)
+mkdir -p "$BASE_V/archive"
+mkdir -p "$BASE_V/adhoc"
+mkdir -p "$BASE_V/followups"
+mkdir -p "$BASE_V/improvements"
+mkdir -p "$BASE_V/active-plans"
+mkdir -p "$BASE_V/bench"
+
+# Infrastructure file (must be excluded)
+touch "$BASE_V/metrics.jsonl"
+
+SLUGS_V="$(cd "$REPO_V" && Z_HARNESS_BASE_DIR="$BASE_V" bash "$PLAN_PATH" all_plan_slugs)"
+
+# Must include new-slug
+if printf '%s\n' "$SLUGS_V" | grep -qxF "new-slug"; then
+  echo "  PASS: T001-V: new-slug (new layout) appears in all_plan_slugs output"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: T001-V: new-slug missing from all_plan_slugs output"
+  echo "        got: $SLUGS_V"
+  FAIL=$((FAIL + 1))
+fi
+
+# Must include legacy-slug
+if printf '%s\n' "$SLUGS_V" | grep -qxF "legacy-slug"; then
+  echo "  PASS: T001-V: legacy-slug (legacy flat layout) appears in all_plan_slugs output"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: T001-V: legacy-slug missing from all_plan_slugs output"
+  echo "        got: $SLUGS_V"
+  FAIL=$((FAIL + 1))
+fi
+
+# Must NOT include infra dirs/files
+for INFRA_NAME in plans archive adhoc followups improvements active-plans metrics.jsonl bench; do
+  if printf '%s\n' "$SLUGS_V" | grep -qxF "$INFRA_NAME"; then
+    echo "  FAIL: T001-V: infra name '$INFRA_NAME' must not appear in all_plan_slugs output"
+    echo "        got: $SLUGS_V"
+    FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: T001-V: infra name '$INFRA_NAME' correctly excluded"
+    PASS=$((PASS + 1))
+  fi
+done
+
+# No duplicates: each slug appears exactly once
+NEW_SLUG_COUNT="$(printf '%s\n' "$SLUGS_V" | grep -cxF "new-slug" || true)"
+LEGACY_SLUG_COUNT="$(printf '%s\n' "$SLUGS_V" | grep -cxF "legacy-slug" || true)"
+assert_eq "T001-V: new-slug appears exactly once (deduplication)" "1" "$NEW_SLUG_COUNT"
+assert_eq "T001-V: legacy-slug appears exactly once (deduplication)" "1" "$LEGACY_SLUG_COUNT"
+
+rm -rf "$REPO_V" "$BASE_V"
+
+# ---------------------------------------------------------------------------
+# TEST T001-W: mismatch-anchor → all_plan_slugs exits non-zero with EMPTY stdout
+# Regression for the fatal base-mismatch propagation bug:
+#   When z_harness_base() detects a base_mismatch and exits 1 inside $(),
+#   all_plan_slugs must NOT compose paths with an empty base (which would
+#   glob "/" and list filesystem root like Applications, Library, System, Users).
+# ---------------------------------------------------------------------------
+echo ""
+echo "T001-W: mismatch-anchor → all_plan_slugs exits non-zero with empty stdout (no root glob)"
+
+REPO_W="$(_tmpdir)"
+git -C "$REPO_W" init -q
+git -C "$REPO_W" config user.email "test@test.local"
+git -C "$REPO_W" config user.name "Test"
+
+# Plant a conflicting anchor at the repo's .git dir
+ANCHOR_W="$(_realpath "$REPO_W")/.git/.z-harness-base"
+python3 -c '
+import json, sys
+json.dump({"tier":"pwd","path":"/some/totally/different/path","repo_id":"fake-id"}, open(sys.argv[1],"w"))
+' "$ANCHOR_W"
+
+SLUGS_W=""
+EXIT_W=0
+SLUGS_W="$(cd "$REPO_W" && bash "$PLAN_PATH" all_plan_slugs 2>/dev/null)" || EXIT_W=$?
+
+assert_exit_nonzero "T001-W: mismatch-anchor all_plan_slugs exits non-zero" "$EXIT_W"
+
+# Stdout must be completely empty
+if [[ -z "$SLUGS_W" ]]; then
+  echo "  PASS: T001-W: all_plan_slugs stdout is empty on mismatch"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: T001-W: all_plan_slugs stdout must be empty on mismatch"
+  echo "        got: $SLUGS_W"
+  FAIL=$((FAIL + 1))
+fi
+
+# Must NOT contain any filesystem root entries
+for ROOT_ENTRY in "Applications" "Library" "System" "Users" "Volumes" "bin" "usr" "etc"; do
+  if printf '%s\n' "$SLUGS_W" | grep -qxF "$ROOT_ENTRY"; then
+    echo "  FAIL: T001-W: stdout must not contain filesystem root entry '$ROOT_ENTRY'"
+    echo "        got: $SLUGS_W"
+    FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: T001-W: stdout does not contain '$ROOT_ENTRY'"
+    PASS=$((PASS + 1))
+  fi
+done
+
+rm -rf "$REPO_W"
+
+# ---------------------------------------------------------------------------
+# TEST T001-X: mismatch-anchor → active_plans_dir / followups_dir / base_dir
+# Each must exit non-zero and NOT print a bare path like "/active-plans" or "/followups"
+# (i.e. empty-base composition must be blocked).
+# ---------------------------------------------------------------------------
+echo ""
+echo "T001-X: mismatch-anchor → active_plans_dir / followups_dir / base_dir exit non-zero, no empty-base paths"
+
+REPO_X="$(_tmpdir)"
+git -C "$REPO_X" init -q
+git -C "$REPO_X" config user.email "test@test.local"
+git -C "$REPO_X" config user.name "Test"
+
+ANCHOR_X="$(_realpath "$REPO_X")/.git/.z-harness-base"
+python3 -c '
+import json, sys
+json.dump({"tier":"pwd","path":"/some/totally/different/path","repo_id":"fake-id"}, open(sys.argv[1],"w"))
+' "$ANCHOR_X"
+
+# active_plans_dir
+EXIT_X_APD=0
+OUT_X_APD=""
+OUT_X_APD="$(cd "$REPO_X" && bash "$PLAN_PATH" active_plans_dir 2>/dev/null)" || EXIT_X_APD=$?
+assert_exit_nonzero "T001-X: mismatch-anchor active_plans_dir exits non-zero" "$EXIT_X_APD"
+if printf '%s' "$OUT_X_APD" | grep -qE '^/active-plans'; then
+  echo "  FAIL: T001-X: active_plans_dir must not print bare /active-plans path"
+  echo "        got: $OUT_X_APD"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: T001-X: active_plans_dir does not print bare /active-plans path"
+  PASS=$((PASS + 1))
+fi
+
+# followups_dir
+EXIT_X_FD=0
+OUT_X_FD=""
+OUT_X_FD="$(cd "$REPO_X" && bash "$PLAN_PATH" followups_dir 2>/dev/null)" || EXIT_X_FD=$?
+assert_exit_nonzero "T001-X: mismatch-anchor followups_dir exits non-zero" "$EXIT_X_FD"
+if printf '%s' "$OUT_X_FD" | grep -qE '^/followups'; then
+  echo "  FAIL: T001-X: followups_dir must not print bare /followups path"
+  echo "        got: $OUT_X_FD"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: T001-X: followups_dir does not print bare /followups path"
+  PASS=$((PASS + 1))
+fi
+
+# base_dir
+EXIT_X_BD=0
+OUT_X_BD=""
+OUT_X_BD="$(cd "$REPO_X" && bash "$PLAN_PATH" base_dir 2>/dev/null)" || EXIT_X_BD=$?
+assert_exit_nonzero "T001-X: mismatch-anchor base_dir exits non-zero" "$EXIT_X_BD"
+
+rm -rf "$REPO_X"
+
+# ---------------------------------------------------------------------------
+# TEST T001-Y: happy-path regression — all_plan_slugs returns correct slugs
+# when there is no base mismatch (verifies the fix didn't break normal operation).
+# ---------------------------------------------------------------------------
+echo ""
+echo "T001-Y: happy-path regression — all_plan_slugs returns correct slugs (no mismatch)"
+
+REPO_Y="$(_tmpdir)"
+git -C "$REPO_Y" init -q
+git -C "$REPO_Y" config user.email "test@test.local"
+git -C "$REPO_Y" config user.name "Test"
+
+BASE_Y="$(_tmpdir)"
+
+# Create both new-layout and legacy-flat slugs
+mkdir -p "$BASE_Y/plans/new-happy-slug"
+mkdir -p "$BASE_Y/old-happy-slug"
+
+SLUGS_Y=""
+EXIT_Y=0
+SLUGS_Y="$(cd "$REPO_Y" && Z_HARNESS_BASE_DIR="$BASE_Y" bash "$PLAN_PATH" all_plan_slugs)" || EXIT_Y=0
+
+assert_eq "T001-Y: happy-path all_plan_slugs exits zero" "0" "$EXIT_Y"
+
+if printf '%s\n' "$SLUGS_Y" | grep -qxF "new-happy-slug"; then
+  echo "  PASS: T001-Y: new-happy-slug (new layout) appears in all_plan_slugs"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: T001-Y: new-happy-slug missing from all_plan_slugs"
+  echo "        got: $SLUGS_Y"
+  FAIL=$((FAIL + 1))
+fi
+
+if printf '%s\n' "$SLUGS_Y" | grep -qxF "old-happy-slug"; then
+  echo "  PASS: T001-Y: old-happy-slug (legacy flat) appears in all_plan_slugs"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: T001-Y: old-happy-slug missing from all_plan_slugs"
+  echo "        got: $SLUGS_Y"
+  FAIL=$((FAIL + 1))
+fi
+
+rm -rf "$REPO_Y" "$BASE_Y"
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 

@@ -71,7 +71,7 @@ if [ -n "${Z_HARNESS_SLUG:-}" ]; then
   # (setting it disables repo-local writes to preserve the model.patch invariant).
   if [ -z "${Z_HARNESS_BASE_DIR:-}" ]; then
     _CT_REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-    _CT_LEGACY_RUN_DIR="$_CT_REPO_ROOT/z-harness/$Z_HARNESS_SLUG/archive/$_CT_RUN"
+    _CT_LEGACY_RUN_DIR="$_CT_REPO_ROOT/$(legacy_plan_dir "$Z_HARNESS_SLUG")/archive/$_CT_RUN"
     if [ -d "$_CT_LEGACY_RUN_DIR" ] && [ ! -d "$_CT_RUN_DIR" ]; then
       _CT_RUN_DIR="$_CT_LEGACY_RUN_DIR"
     fi

@@ -49,8 +49,8 @@ Usage: /z-followup-list [--status=<status>] [--sink=<project|global>] [--priorit
 Resolve the two canonical sink roots per SPEC §Persistence layout:
 
 ```bash
-# Project sink: $PWD/z-harness/followups/ (relative to repo root)
-PROJECT_SINK="$PWD/z-harness/followups"
+# Project sink: resolved via plan-path.sh followups_dir helper
+PROJECT_SINK="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" followups_dir)"
 PROJECT_VIEW="$PROJECT_SINK/index.view.json"
 
 # Global sink: ~/.z-harness/followups/

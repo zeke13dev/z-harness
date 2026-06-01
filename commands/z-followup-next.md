@@ -45,7 +45,7 @@ Usage: /z-followup-next [--sink=<project|global|both>] [--force-dirty] [--non-in
 Resolve canonical paths:
 
 ```bash
-PROJECT_SINK="$PWD/z-harness/followups"
+PROJECT_SINK="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" followups_dir)"
 GLOBAL_SINK="${HOME}/.z-harness/followups"
 GLOBAL_CROSS_TOOL_LOCK="${HOME}/.z-harness/.followup-vs-implement.lock"
 mkdir -p "${HOME}/.z-harness"

@@ -41,7 +41,17 @@ while [ $# -gt 0 ]; do
 done
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-PLANS_DIR="${Z_HARNESS_PLANS_DIR:-z-harness/plans}"
+# Resolve base dir via plan-path.sh helper (DRY — no inline z-harness/ literals)
+_ZH_PLAN_PATH_SH="$(dirname "$0")/plan-path.sh"
+if [[ -f "$_ZH_PLAN_PATH_SH" ]]; then
+  # shellcheck source=scripts/plan-path.sh
+  source "$_ZH_PLAN_PATH_SH"
+  _ZH_BASE="$(z_harness_base 2>/dev/null || echo "$REPO_ROOT/z-harness")"
+else
+  _ZH_BASE="${Z_HARNESS_BASE_DIR:-$REPO_ROOT/z-harness}"
+fi
+_ZH_ARCHIVE_DIR="$_ZH_BASE/archive"
+PLANS_DIR="${Z_HARNESS_PLANS_DIR:-${_ZH_BASE}/plans}"
 case "$PLANS_DIR" in
   /*) PLANS_ABS="$PLANS_DIR" ;;
   *)  PLANS_ABS="$REPO_ROOT/$PLANS_DIR" ;;
@@ -54,7 +64,7 @@ esac
 CANDIDATES=()
 if [ -n "$RUN" ]; then
   while IFS= read -r -d '' f; do CANDIDATES+=("$f"); done < <(
-    find "$PLANS_ABS" "$REPO_ROOT/z-harness/archive" -maxdepth 6 -type f -name events.jsonl -path "*/$RUN/*" -print0 2>/dev/null
+    find "$PLANS_ABS" "$_ZH_ARCHIVE_DIR" -maxdepth 6 -type f -name events.jsonl -path "*/$RUN/*" -print0 2>/dev/null
   )
 elif [ -n "$SLUG" ]; then
   while IFS= read -r -d '' f; do CANDIDATES+=("$f"); done < <(
@@ -62,7 +72,7 @@ elif [ -n "$SLUG" ]; then
   )
 else
   while IFS= read -r -d '' f; do CANDIDATES+=("$f"); done < <(
-    find "$PLANS_ABS" "$REPO_ROOT/z-harness/archive" -maxdepth 6 -type f -name events.jsonl -print0 2>/dev/null
+    find "$PLANS_ABS" "$_ZH_ARCHIVE_DIR" -maxdepth 6 -type f -name events.jsonl -print0 2>/dev/null
   )
 fi
 
