@@ -4,9 +4,13 @@
 # Usage: log-event.sh <run-id-or-relpath> <kind> <json-payload>
 #
 # Slug namespacing: if env var Z_HARNESS_SLUG is set (non-empty), all output
-# paths are namespaced under ${Z_HARNESS_PLANS_DIR:-z-harness/plans}/<slug>/
+# paths are namespaced under ${Z_HARNESS_PLANS_DIR:-<base>/plans}/<slug>/
 # so multiple plans can coexist in the same repo. If unset, the legacy flat
-# layout (z-harness/archive/...) is used for backward compat with old plans.
+# layout (<base>/archive/...) is used for backward compat with old plans.
+#
+# <base> is Z_HARNESS_BASE_DIR (must be absolute) when set, otherwise <repo>/z-harness.
+# Setting Z_HARNESS_BASE_DIR redirects ALL artifacts (events, metrics, archive) away
+# from the repo, which is required when running inside a benchmark task's working tree.
 #
 # Example:
 #   Z_HARNESS_SLUG=add-rate-limit \
@@ -14,15 +18,15 @@
 #     '{"llm":"gemini","phase":3,"prompt_chars":4821,"wall_ms":18204,"transcript":"001-gemini.md"}'
 #
 # Writes to (with Z_HARNESS_SLUG set):
-#   ${Z_HARNESS_PLANS_DIR:-z-harness/plans}/<slug>/archive/<run>/events.jsonl  (new canonical)
+#   ${Z_HARNESS_PLANS_DIR:-<base>/plans}/<slug>/archive/<run>/events.jsonl  (new canonical)
 #   z-harness/<slug>/archive/<run>/events.jsonl  (legacy mid-flight fallback — if run dir
 #     already exists at legacy path, writes there to avoid splitting a run's events;
 #     run 'scripts/migrate-plan-layout.sh <slug>' to move to the new layout)
-#   z-harness/metrics.jsonl  (repo-wide aggregate, slug added to event)
+#   <base>/metrics.jsonl  (aggregate; <base> = Z_HARNESS_BASE_DIR or <repo>/z-harness)
 #
 # Writes to (legacy, no slug):
-#   z-harness/archive/<run>/events.jsonl
-#   z-harness/metrics.jsonl
+#   <base>/archive/<run>/events.jsonl
+#   <base>/metrics.jsonl
 #
 # Both files are JSON Lines. Append-safe under concurrent calls via flock when available.
 
@@ -44,6 +48,13 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 # shellcheck source=scripts/plan-path.sh
 source "$(dirname "$0")/plan-path.sh"
 
+# Resolve the artifact base dir:
+#   Z_HARNESS_BASE_DIR (absolute) if set → use it directly.
+#   Otherwise → $REPO_ROOT/z-harness (default, unchanged behavior).
+# Validation (absolute-path check) is performed inside z_harness_base_override.
+_ZH_BASE_OVERRIDE="$(z_harness_base_override)"
+ZH_BASE="${_ZH_BASE_OVERRIDE:-$REPO_ROOT/z-harness}"
+
 # Join a base dir (may be relative or absolute) with a suffix under REPO_ROOT.
 # If the base is absolute it is used verbatim; if relative it is resolved
 # relative to REPO_ROOT. This handles Z_HARNESS_PLANS_DIR=/tmp/p correctly.
@@ -61,18 +72,31 @@ if [[ -n "$SLUG" ]]; then
   # Mid-flight legacy run detection: if the legacy archive dir for this run
   # already exists (meaning the run was started before the plan-layout migration),
   # write there to avoid splitting a run's events across two locations.
-  # Otherwise, use the new canonical path from plan_dir.
-  LEGACY_RUN_DIR="$(abs_plan_dir "$(legacy_plan_dir "$SLUG")")/archive/$RUN"
-  if [[ -d "$LEGACY_RUN_DIR" ]]; then
-    RUN_DIR="$LEGACY_RUN_DIR"
+  # IMPORTANT: when Z_HARNESS_BASE_DIR is set, skip the repo-local legacy fallback
+  # entirely — writing to the repo would corrupt the model.patch invariant.
+  if [[ -z "${Z_HARNESS_BASE_DIR:-}" ]]; then
+    LEGACY_RUN_DIR="$(abs_plan_dir "$(legacy_plan_dir "$SLUG")")/archive/$RUN"
+    if [[ -d "$LEGACY_RUN_DIR" ]]; then
+      RUN_DIR="$LEGACY_RUN_DIR"
+    else
+      RUN_DIR="$(abs_plan_dir "$(plan_dir "$SLUG")")/archive/$RUN"
+    fi
   else
-    RUN_DIR="$(abs_plan_dir "$(plan_dir "$SLUG")")/archive/$RUN"
+    # Validate PLANS_DIR in parent shell BEFORE command substitution so plan_dir's
+    # exit 1 propagates correctly (exit inside $(...) only kills the subshell).
+    if [[ -n "${Z_HARNESS_PLANS_DIR:-}" && "${Z_HARNESS_PLANS_DIR}" != /* ]]; then
+      echo "[z-harness] Z_HARNESS_PLANS_DIR must be absolute when Z_HARNESS_BASE_DIR is set, got: $Z_HARNESS_PLANS_DIR" >&2
+      exit 1
+    fi
+    _PLAN_DIR_OUT="$(plan_dir "$SLUG")" || exit 1
+    RUN_DIR="$(abs_plan_dir "$_PLAN_DIR_OUT")/archive/$RUN"
   fi
 else
-  # Global archive fallback (no slug)
-  RUN_DIR="$REPO_ROOT/z-harness/archive/$RUN"
+  # Global archive fallback (no slug) — respects Z_HARNESS_BASE_DIR.
+  RUN_DIR="$ZH_BASE/archive/$RUN"
 fi
 mkdir -p "$RUN_DIR"
+mkdir -p "$ZH_BASE"
 
 TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -101,4 +125,4 @@ append() {
 }
 
 append "$RUN_DIR/events.jsonl"
-append "$REPO_ROOT/z-harness/metrics.jsonl"
+append "$ZH_BASE/metrics.jsonl"

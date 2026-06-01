@@ -39,18 +39,51 @@ fi
 
 # Locate the run dir to drop the marker file. Mirrors log-event.sh's resolution.
 _CT_REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+# Resolve the artifact base dir (same logic as log-event.sh):
+#   Z_HARNESS_BASE_DIR (absolute) if set → use it directly.
+#   Otherwise → $REPO_ROOT/z-harness.
+_CT_BASE_OVERRIDE="${Z_HARNESS_BASE_DIR:-}"
+if [ -n "$_CT_BASE_OVERRIDE" ]; then
+  _CT_ZH_BASE="$_CT_BASE_OVERRIDE"
+else
+  _CT_ZH_BASE="$_CT_REPO_ROOT/z-harness"
+fi
+
 if [ -n "${Z_HARNESS_SLUG:-}" ]; then
-  _CT_PLANS_DIR="${Z_HARNESS_PLANS_DIR:-z-harness/plans}"
+  # Validate PLANS_DIR in parent shell: relative path + BASE_DIR set → fail loudly.
+  # (Mirrors plan-path.sh:39. Must be checked here in the parent shell because
+  # any exit 1 inside $(...) command substitution only kills the subshell.)
+  if [ -n "$_CT_BASE_OVERRIDE" ] && [ -n "${Z_HARNESS_PLANS_DIR:-}" ]; then
+    case "${Z_HARNESS_PLANS_DIR}" in
+      /*) : ;;  # absolute — OK
+      *)
+        echo "[z-harness] Z_HARNESS_PLANS_DIR must be absolute when Z_HARNESS_BASE_DIR is set, got: $Z_HARNESS_PLANS_DIR" >&2
+        return 1 2>/dev/null || exit 1
+        ;;
+    esac
+  fi
+  if [ -n "${Z_HARNESS_PLANS_DIR:-}" ]; then
+    _CT_PLANS_DIR="$Z_HARNESS_PLANS_DIR"
+  elif [ -n "$_CT_BASE_OVERRIDE" ]; then
+    _CT_PLANS_DIR="$_CT_BASE_OVERRIDE/plans"
+  else
+    _CT_PLANS_DIR="z-harness/plans"
+  fi
   case "$_CT_PLANS_DIR" in
     /*) _CT_RUN_DIR="$_CT_PLANS_DIR/$Z_HARNESS_SLUG/archive/$_CT_RUN" ;;
     *)  _CT_RUN_DIR="$_CT_REPO_ROOT/$_CT_PLANS_DIR/$Z_HARNESS_SLUG/archive/$_CT_RUN" ;;
   esac
-  _CT_LEGACY_RUN_DIR="$_CT_REPO_ROOT/z-harness/$Z_HARNESS_SLUG/archive/$_CT_RUN"
-  if [ -d "$_CT_LEGACY_RUN_DIR" ] && [ ! -d "$_CT_RUN_DIR" ]; then
-    _CT_RUN_DIR="$_CT_LEGACY_RUN_DIR"
+  # Legacy mid-flight fallback: only when Z_HARNESS_BASE_DIR is NOT set
+  # (setting it disables repo-local writes to preserve the model.patch invariant).
+  if [ -z "$_CT_BASE_OVERRIDE" ]; then
+    _CT_LEGACY_RUN_DIR="$_CT_REPO_ROOT/z-harness/$Z_HARNESS_SLUG/archive/$_CT_RUN"
+    if [ -d "$_CT_LEGACY_RUN_DIR" ] && [ ! -d "$_CT_RUN_DIR" ]; then
+      _CT_RUN_DIR="$_CT_LEGACY_RUN_DIR"
+    fi
   fi
 else
-  _CT_RUN_DIR="$_CT_REPO_ROOT/z-harness/archive/$_CT_RUN"
+  _CT_RUN_DIR="$_CT_ZH_BASE/archive/$_CT_RUN"
 fi
 
 mkdir -p "$_CT_RUN_DIR"
