@@ -75,12 +75,13 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
     ```
 5. Capture the z-harness plugin version stamp and log the run start (merge version blob into the payload):
    ```bash
+   export Z_HARNESS_SESSION_ID="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" session-id)"
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
    START_PAYLOAD="$(python3 -c '
    import json, sys
-   v = json.loads(sys.argv[1]); v["task"] = sys.argv[2]
+   v = json.loads(sys.argv[1]); v["task"] = sys.argv[2]; v["session_id"] = sys.argv[3]
    print(json.dumps(v))
-   ' "$VERSION_BLOB" "<arguments>")"
+   ' "$VERSION_BLOB" "<arguments>" "$Z_HARNESS_SESSION_ID")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_start "$START_PAYLOAD"
    ```
    Output lands under `$Z_HARNESS_PLAN_DIR/archive/$RUN/events.jsonl` (log-event.sh honors `Z_HARNESS_SLUG`).

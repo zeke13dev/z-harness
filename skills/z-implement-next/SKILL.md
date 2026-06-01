@@ -27,12 +27,13 @@ Multiple plans may coexist under `$Z_HARNESS_PLAN_DIR/`. Determine which one to 
 4. Create task archive dir: `mkdir -p $BASE/archive/tasks/<task-id>`
 5. **Version stamp + task_start:**
    ```bash
+   export Z_HARNESS_SESSION_ID="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" session-id)"
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
    START_PAYLOAD="$(python3 -c '
    import json, sys
-   v = json.loads(sys.argv[1]); v["id"] = sys.argv[2]
+   v = json.loads(sys.argv[1]); v["id"] = sys.argv[2]; v["session_id"] = sys.argv[3]
    print(json.dumps(v))
-   ' "$VERSION_BLOB" "<task-id>")"
+   ' "$VERSION_BLOB" "<task-id>" "$Z_HARNESS_SESSION_ID")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tasks/<task-id>" task_start "$START_PAYLOAD"
    ```
 

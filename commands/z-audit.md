@@ -67,12 +67,13 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 5. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`.
 6. **Version stamp + log:**
    ```bash
+   export Z_HARNESS_SESSION_ID="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" session-id)"
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
    START_PAYLOAD="$(python3 -c '
    import json, sys
-   v = json.loads(sys.argv[1]); v["target"] = sys.argv[2]
+   v = json.loads(sys.argv[1]); v["target"] = sys.argv[2]; v["session_id"] = sys.argv[3]
    print(json.dumps(v))
-   ' "$VERSION_BLOB" "<arguments>")"
+   ' "$VERSION_BLOB" "<arguments>" "$Z_HARNESS_SESSION_ID")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" audit_run_start "$START_PAYLOAD"
    ```
 

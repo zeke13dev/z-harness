@@ -12,6 +12,15 @@ Writes are atomic (tmpfile in same dir + os.replace). No global lock is taken.
 The per-entry→global lock ordering in followup_common.py is NOT affected.
 
 Subcommands:
+  session-id
+      Print a stable session id for the current shell session.
+      Returns $Z_HARNESS_SESSION_ID if set (stable across repeated calls within
+      the same run). Otherwise derives <ppid>-<start_epoch> from the parent
+      shell's PID and its start time (so repeated calls from the same session
+      return the same value). Output is always a safe token with no spaces.
+      Callers should export Z_HARNESS_SESSION_ID="$(registry.py session-id)"
+      once at run start so all later calls (register, heartbeat, etc.) reuse it.
+
   register --run-id ID --slug S --command C --phase P [--session SID]
       Write <active>/<ID>.json atomically. Validate ID is a safe basename.
       Populate schema v1. Idempotent (re-register overwrites own record).
@@ -73,12 +82,20 @@ import argparse
 import errno
 import json
 import os
+
+# macOS fork-safety workaround: when Python is invoked via `bash script.py`, bash
+# has already initialised CoreFoundation; any subsequent fork+exec (subprocess with
+# cwd= or env=) causes the forked child to abort.  Setting this env var before any
+# subprocess call makes the child inherit it and skip the CF abort check.
+os.environ.setdefault("OBJC_DISABLE_INITIALIZE_FORK_SAFETY", "YES")
+
 import platform
 import re
 import socket
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -287,7 +304,7 @@ def _build_record(
         "session_id": session_id,
         "slug": slug,
         "command": command,
-        "command_version": "",  # filled in by T009 session stamping
+        "command_version": "",  # caller may populate via version.sh
         "phase": phase,
         "status": "running",
         "pid": os.getpid(),
@@ -302,6 +319,77 @@ def _build_record(
         "current_task": "",
         "scope": [],
     }
+
+
+# ── session id ────────────────────────────────────────────────────────────────
+
+def _derive_session_id() -> str:
+    """Derive a stable session id from the parent process.
+
+    Strategy: on Linux, read PPID start time from /proc to get a stable token
+    across repeated calls from the same shell session.  On macOS (no /proc),
+    fall back immediately to a pure-Python ``<ppid>-<epoch>`` token — no
+    subprocess is spawned on macOS, eliminating the CoreFoundation fork-safety
+    crash surface entirely.
+
+    The Setup blocks export Z_HARNESS_SESSION_ID once at run start, so
+    cross-independent-call stability is not required for the macOS fallback.
+
+    Returns a safe token with no spaces, suitable for use in filenames and
+    JSON fields.
+    """
+    ppid = os.getppid()
+
+    # Try to read the parent's start time from /proc/<ppid>/stat (Linux only).
+    proc_stat = Path(f"/proc/{ppid}/stat")
+    if proc_stat.exists():
+        try:
+            parts = proc_stat.read_text(encoding="utf-8").split()
+            # Field 22 (0-indexed: 21) is starttime in clock ticks since boot.
+            start_ticks = int(parts[21])
+            # Convert to epoch seconds via boot time from /proc/stat.
+            boot_time = 0
+            btime_path = Path("/proc/stat")
+            if btime_path.exists():
+                for line in btime_path.read_text(encoding="utf-8").splitlines():
+                    if line.startswith("btime "):
+                        boot_time = int(line.split()[1])
+                        break
+            if boot_time:
+                # Use os.sysconf (pure Python, no subprocess) to avoid fork-safety crash.
+                try:
+                    clk_tck = os.sysconf("SC_CLK_TCK")
+                except (OSError, ValueError):
+                    clk_tck = 100  # safe default when sysconf unavailable
+                start_epoch = boot_time + (start_ticks // clk_tck)
+                return f"{ppid}-{start_epoch}"
+        except (IndexError, ValueError, OSError):
+            pass
+
+    # macOS / BSD: no /proc, so skip all subprocess calls (they cause CoreFoundation
+    # fork-safety crashes when invoked via `bash script.py`).  Fall back to a
+    # pure-Python token: <ppid>-<current_epoch>.  This is less stable across repeated
+    # standalone calls but is fine in practice because callers export
+    # Z_HARNESS_SESSION_ID once at run start, making later calls read the env var
+    # instead of deriving a new value.
+    return f"{ppid}-{int(time.time())}"
+
+
+def cmd_session_id(args: argparse.Namespace) -> int:  # noqa: ARG001
+    """session-id subcommand.
+
+    Prints a stable session id token for the current shell session.
+    If $Z_HARNESS_SESSION_ID is already set, echoes it unchanged (stable
+    across repeated calls within a run). Otherwise derives one from the
+    parent shell's PID + start time and prints it.
+
+    Always exits 0. Output is a single line with no trailing spaces.
+    """
+    sid = os.environ.get("Z_HARNESS_SESSION_ID", "").strip()
+    if not sid:
+        sid = _derive_session_id()
+    print(sid)
+    return 0
 
 
 # ── subcommand implementations ─────────────────────────────────────────────────
@@ -843,6 +931,16 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="subcommand", required=True)
 
+    # session-id
+    sub.add_parser(
+        "session-id",
+        help=(
+            "Print a stable session id for the current shell session. "
+            "Returns $Z_HARNESS_SESSION_ID if set; otherwise derives <ppid>-<start_epoch>. "
+            "Callers should: export Z_HARNESS_SESSION_ID=\"$(session-id)\" once at run start."
+        ),
+    )
+
     # register
     p_reg = sub.add_parser("register", help="Register a new run.")
     p_reg.add_argument("--run-id", required=True, help="Unique run identifier (safe basename).")
@@ -917,6 +1015,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     dispatch = {
+        "session-id": cmd_session_id,
         "register": cmd_register,
         "heartbeat": cmd_heartbeat,
         "update-scope": cmd_update_scope,

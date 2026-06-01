@@ -19,6 +19,14 @@ Cases covered (T007 — overlaps + reap):
   reap_remote_host_stale    — remote host past threshold → status:stale, NOT deleted
   reap_two_reapers_race     — two reapers racing on the same record do not crash
 
+Cases covered (T009 — session-id stamping):
+  session_id_returns_env    — session-id returns Z_HARNESS_SESSION_ID when set
+  session_id_stable_shape   — session-id without env returns '<digits>-<digits>' token
+  session_id_no_spaces      — session-id output contains no spaces (safe token)
+  session_id_env_priority   — env var takes priority over any derived value
+  register_session_in_list  — register --session X → list shows session_id == X
+  register_no_session       — register without --session stores session_id as empty string
+
 All tests use a hermetic temp base via Z_HARNESS_BASE_DIR so no anchor pollution
 occurs at /Users/zeke/dev/z-harness/.git/.z-harness-base or the real registry.
 """
@@ -940,6 +948,318 @@ class TestReapTwoReapersRace(unittest.TestCase):
             active_dir.mkdir(parents=True, exist_ok=True)
             r = _run_registry("reap", base_dir=base)
             self.assertEqual(r.returncode, 0, f"reap on empty dir crashed: {r.stderr}")
+
+
+# ── T009: session-id tests ─────────────────────────────────────────────────────
+
+class TestSessionId(unittest.TestCase):
+    """session-id subcommand returns Z_HARNESS_SESSION_ID when set; stable token when not."""
+
+    def _run_session_id(self, base: str, env_extra: dict | None = None) -> subprocess.CompletedProcess:
+        return _run_registry("session-id", base_dir=base, env_extra=env_extra)
+
+    def test_returns_env_when_set(self):
+        """session-id returns $Z_HARNESS_SESSION_ID unchanged when it is set."""
+        with tempfile.TemporaryDirectory() as base:
+            expected_sid = "12345-1717200000"
+            r = self._run_session_id(base, env_extra={"Z_HARNESS_SESSION_ID": expected_sid})
+            self.assertEqual(r.returncode, 0, f"session-id failed: {r.stderr}")
+            self.assertEqual(r.stdout.strip(), expected_sid,
+                             "session-id must return Z_HARNESS_SESSION_ID unchanged")
+
+    def test_stable_token_shape_when_env_unset(self):
+        """session-id without Z_HARNESS_SESSION_ID returns a '<digits>-<digits>' shaped token."""
+        with tempfile.TemporaryDirectory() as base:
+            # Unset Z_HARNESS_SESSION_ID in env_extra by passing an empty string,
+            # which _run_registry merges (overwriting any parent env value).
+            env_without_sid = {k: v for k, v in os.environ.items()
+                               if k != "Z_HARNESS_SESSION_ID"}
+            r = subprocess.run(
+                [sys.executable, REGISTRY_PY, "session-id"],
+                capture_output=True,
+                text=True,
+                cwd=str(REPO_ROOT),
+                env={**env_without_sid, "Z_HARNESS_BASE_DIR": base},
+            )
+            self.assertEqual(r.returncode, 0, f"session-id failed: {r.stderr}")
+            sid = r.stdout.strip()
+            self.assertRegex(
+                sid,
+                r"^\d+-\d+$",
+                f"session-id without env must match '<digits>-<digits>', got: {sid!r}"
+            )
+
+    def test_no_spaces_in_token(self):
+        """session-id output must be a single safe token with no spaces."""
+        with tempfile.TemporaryDirectory() as base:
+            env_without_sid = {k: v for k, v in os.environ.items()
+                               if k != "Z_HARNESS_SESSION_ID"}
+            r = subprocess.run(
+                [sys.executable, REGISTRY_PY, "session-id"],
+                capture_output=True,
+                text=True,
+                cwd=str(REPO_ROOT),
+                env={**env_without_sid, "Z_HARNESS_BASE_DIR": base},
+            )
+            self.assertEqual(r.returncode, 0, f"session-id failed: {r.stderr}")
+            sid = r.stdout.strip()
+            self.assertNotIn(" ", sid, f"session-id token must not contain spaces: {sid!r}")
+            self.assertNotIn("\t", sid, f"session-id token must not contain tabs: {sid!r}")
+
+    def test_env_takes_priority_over_derived(self):
+        """When Z_HARNESS_SESSION_ID is set, it is returned even if it looks non-standard."""
+        with tempfile.TemporaryDirectory() as base:
+            custom_sid = "custom-session-token-abc123"
+            r = self._run_session_id(base, env_extra={"Z_HARNESS_SESSION_ID": custom_sid})
+            self.assertEqual(r.returncode, 0)
+            self.assertEqual(r.stdout.strip(), custom_sid,
+                             "env var must take priority over any derived value")
+
+
+class TestSessionIdInRegister(unittest.TestCase):
+    """register --session X then list shows session_id == X in the record."""
+
+    def test_register_with_session_shows_in_list(self):
+        """register --session SID stores session_id; list --json returns it."""
+        with tempfile.TemporaryDirectory() as base:
+            run_id = "test-session-reg-001"
+            session_id = "99999-1717200001"
+
+            r = _run_registry(
+                "register",
+                "--run-id", run_id,
+                "--slug", "my-slug",
+                "--command", "/z-plan",
+                "--phase", "plan",
+                "--session", session_id,
+                base_dir=base,
+            )
+            self.assertEqual(r.returncode, 0, f"register failed: {r.stderr}")
+
+            # Read the record directly and verify session_id.
+            active_dir = Path(base) / "active-plans"
+            rec = json.loads((active_dir / f"{run_id}.json").read_text())
+            self.assertEqual(
+                rec.get("session_id"), session_id,
+                f"session_id in record must match --session arg; got {rec.get('session_id')!r}"
+            )
+
+            # Also verify via list --json.
+            r2 = _run_registry("list", "--json", base_dir=base)
+            self.assertEqual(r2.returncode, 0)
+            records = json.loads(r2.stdout)
+            matching = [x for x in records if x.get("run_id") == run_id]
+            self.assertEqual(len(matching), 1, "run_id must appear exactly once in list")
+            self.assertEqual(
+                matching[0].get("session_id"), session_id,
+                "list --json must return session_id matching --session arg"
+            )
+
+    def test_register_without_session_has_empty_session_id(self):
+        """register without --session stores session_id as empty string."""
+        with tempfile.TemporaryDirectory() as base:
+            run_id = "test-no-session-001"
+            r = _run_registry(
+                "register",
+                "--run-id", run_id,
+                "--slug", "s",
+                "--command", "/z-plan",
+                "--phase", "plan",
+                base_dir=base,
+            )
+            self.assertEqual(r.returncode, 0)
+            active_dir = Path(base) / "active-plans"
+            rec = json.loads((active_dir / f"{run_id}.json").read_text())
+            self.assertEqual(
+                rec.get("session_id", None), "",
+                f"session_id must be empty string when --session not provided; got {rec.get('session_id')!r}"
+            )
+
+
+# ── T009 (RETRY v2): subprocess-CLI fork-safety regression tests ──────────────
+#
+# These tests invoke the registry as a SUBPROCESS (not in-process import) with
+# Z_HARNESS_SESSION_ID UNSET and a hermetic Z_HARNESS_BASE_DIR.  They catch the
+# macOS CoreFoundation fork-safety crash that in-process tests can't detect
+# because the crash only manifests in the forked child process.
+#
+# The regression being guarded: prior to the fix, the macOS `ps -p <ppid> -o lstart=`
+# and `getconf CLK_TCK` subprocess calls in _derive_session_id triggered:
+#   "The process has forked and you cannot use this CoreFoundation functionality safely"
+#   followed by "Segmentation fault: 11"
+# Fix 1: os.environ.setdefault("OBJC_DISABLE_INITIALIZE_FORK_SAFETY", "YES") at module top.
+# Fix 2: _derive_session_id on macOS falls back to a pure-Python token (no subprocess).
+
+
+def _run_registry_unset_session(
+    *args: str,
+    base_dir: str,
+    cwd: str | None = None,
+) -> subprocess.CompletedProcess:
+    """Invoke active-plan-registry.py as a subprocess with Z_HARNESS_SESSION_ID UNSET.
+
+    Builds a clean env with Z_HARNESS_SESSION_ID explicitly removed so the
+    script must derive the session id internally (exercising _derive_session_id).
+    """
+    env = {k: v for k, v in os.environ.items() if k != "Z_HARNESS_SESSION_ID"}
+    env["Z_HARNESS_BASE_DIR"] = base_dir
+    return subprocess.run(
+        [sys.executable, REGISTRY_PY] + list(args),
+        capture_output=True,
+        text=True,
+        cwd=cwd or str(REPO_ROOT),
+        env=env,
+    )
+
+
+class TestSubprocessCliForkSafety(unittest.TestCase):
+    """Subprocess-CLI invocations with Z_HARNESS_SESSION_ID UNSET must not crash.
+
+    These tests reproduce the macOS CoreFoundation fork-safety crash that
+    in-process tests cannot detect.  Each test asserts:
+      (a) returncode 0
+      (b) stderr does NOT contain "has forked" or "Segmentation fault"
+      (c) output is correct (correct shape / expected content)
+    """
+
+    def _assert_no_fork_crash(self, result: subprocess.CompletedProcess, label: str) -> None:
+        """Assert that the subprocess did not crash with a CF fork-safety error."""
+        self.assertNotIn(
+            "has forked", result.stderr,
+            f"{label}: CoreFoundation fork-safety crash detected in stderr: {result.stderr[:400]}",
+        )
+        self.assertNotIn(
+            "Segmentation fault", result.stderr,
+            f"{label}: Segmentation fault detected in stderr: {result.stderr[:400]}",
+        )
+
+    def test_session_id_no_crash_unset_env(self):
+        """session-id with Z_HARNESS_SESSION_ID UNSET must not crash and return a valid token."""
+        with tempfile.TemporaryDirectory() as base:
+            r = _run_registry_unset_session("session-id", base_dir=base)
+            # (a) exit 0
+            self.assertEqual(
+                r.returncode, 0,
+                f"session-id must exit 0; got {r.returncode}; stderr={r.stderr[:400]}",
+            )
+            # (b) no CF crash
+            self._assert_no_fork_crash(r, "session-id")
+            # (c) output must be a safe token matching <digits>-<digits>
+            sid = r.stdout.strip()
+            self.assertRegex(
+                sid, r"^\d+-\d+$",
+                f"session-id must return '<digits>-<digits>' token; got {sid!r}",
+            )
+
+    def test_register_no_crash_unset_session(self):
+        """register with Z_HARNESS_SESSION_ID UNSET must not crash and create a record."""
+        with tempfile.TemporaryDirectory() as base:
+            run_id = "subprocess-cli-register-001"
+            r = _run_registry_unset_session(
+                "register",
+                "--run-id", run_id,
+                "--slug", "test-slug",
+                "--command", "/z-test",
+                "--phase", "test",
+                base_dir=base,
+            )
+            # (a) exit 0
+            self.assertEqual(
+                r.returncode, 0,
+                f"register must exit 0; got {r.returncode}; stderr={r.stderr[:400]}",
+            )
+            # (b) no CF crash
+            self._assert_no_fork_crash(r, "register")
+            # (c) record exists and list shows it
+            r2 = _run_registry_unset_session("list", "--json", base_dir=base)
+            self.assertEqual(r2.returncode, 0)
+            self._assert_no_fork_crash(r2, "list after register")
+            records = json.loads(r2.stdout)
+            ids = [x["run_id"] for x in records]
+            self.assertIn(
+                run_id, ids,
+                f"register then list must show the record; got ids={ids}",
+            )
+            # (c) non-empty git fields when run from a git repo
+            matching = [x for x in records if x["run_id"] == run_id]
+            self.assertEqual(len(matching), 1)
+            rec = matching[0]
+            # branch and repo_root should be populated (we run from a git repo)
+            self.assertNotEqual(
+                rec.get("branch", ""), "",
+                "branch must be non-empty when run from a git repo",
+            )
+            self.assertNotEqual(
+                rec.get("repo_root", ""), "",
+                "repo_root must be non-empty when run from a git repo",
+            )
+
+    def test_heartbeat_no_crash_unset_session(self):
+        """heartbeat with Z_HARNESS_SESSION_ID UNSET must not crash."""
+        with tempfile.TemporaryDirectory() as base:
+            run_id = "subprocess-cli-heartbeat-001"
+            # First register
+            r_reg = _run_registry_unset_session(
+                "register",
+                "--run-id", run_id,
+                "--slug", "s",
+                "--command", "/z-test",
+                "--phase", "test",
+                base_dir=base,
+            )
+            self.assertEqual(r_reg.returncode, 0)
+            self._assert_no_fork_crash(r_reg, "register before heartbeat")
+
+            # Then heartbeat
+            r_hb = _run_registry_unset_session(
+                "heartbeat",
+                "--run-id", run_id,
+                "--phase", "impl",
+                base_dir=base,
+            )
+            # (a) exit 0 (heartbeat is NON-FATAL)
+            self.assertEqual(
+                r_hb.returncode, 0,
+                f"heartbeat must exit 0; got {r_hb.returncode}; stderr={r_hb.stderr[:400]}",
+            )
+            # (b) no CF crash
+            self._assert_no_fork_crash(r_hb, "heartbeat")
+
+    def test_full_repro_sequence_no_crash(self):
+        """Exact repro sequence from the bug report must succeed end-to-end.
+
+        Sequence: register → session-id (unset) → heartbeat
+        Each step must return 0 and must not produce 'has forked' or 'Segmentation fault'.
+        """
+        with tempfile.TemporaryDirectory() as base:
+            # Step 1: register
+            r1 = _run_registry_unset_session(
+                "register",
+                "--run-id", "t1",
+                "--slug", "d",
+                "--command", "/x",
+                "--phase", "plan",
+                base_dir=base,
+            )
+            self.assertEqual(r1.returncode, 0, f"register: {r1.stderr[:400]}")
+            self._assert_no_fork_crash(r1, "register")
+
+            # Step 2: session-id (Z_HARNESS_SESSION_ID unset — must derive, no subprocess crash)
+            r2 = _run_registry_unset_session("session-id", base_dir=base)
+            self.assertEqual(r2.returncode, 0, f"session-id: {r2.stderr[:400]}")
+            self._assert_no_fork_crash(r2, "session-id")
+            sid = r2.stdout.strip()
+            self.assertRegex(sid, r"^\d+-\d+$", f"session-id shape: {sid!r}")
+
+            # Step 3: heartbeat
+            r3 = _run_registry_unset_session(
+                "heartbeat",
+                "--run-id", "t1",
+                "--phase", "impl",
+                base_dir=base,
+            )
+            self.assertEqual(r3.returncode, 0, f"heartbeat: {r3.stderr[:400]}")
+            self._assert_no_fork_crash(r3, "heartbeat")
 
 
 if __name__ == "__main__":

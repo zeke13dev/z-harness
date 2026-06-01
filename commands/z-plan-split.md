@@ -44,14 +44,16 @@ $ARGUMENTS
    No "append" option (D10 — append flow was under-specified; drop it).
 7. **Version stamp + log run start.** Merge the version blob with the topic and emit `plan_split_run_start` with `topic_chars`:
    ```bash
+   export Z_HARNESS_SESSION_ID="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" session-id)"
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
    START_PAYLOAD="$(python3 -c '
    import json, sys
    v = json.loads(sys.argv[1])
    v["topic"] = sys.argv[2]
    v["topic_chars"] = len(sys.argv[2])
+   v["session_id"] = sys.argv[3]
    print(json.dumps(v))
-   ' "$VERSION_BLOB" "<topic-text>")"
+   ' "$VERSION_BLOB" "<topic-text>" "$Z_HARNESS_SESSION_ID")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_split_run_start "$START_PAYLOAD"
    ```
    Output lands under `z-harness/<root-slug>/archive/$RUN/events.jsonl`.

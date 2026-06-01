@@ -31,6 +31,14 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+
+# macOS fork-safety workaround: when Python is invoked via `bash script.py`, bash
+# has already initialised CoreFoundation; any subsequent fork+exec (subprocess with
+# cwd= or env=) in _resolved_base_dir / project_followups_dir causes the forked
+# child to abort.  Setting this env var before any subprocess call makes the child
+# inherit it and skip the CF abort check.
+os.environ.setdefault("OBJC_DISABLE_INITIALIZE_FORK_SAFETY", "YES")
+
 import subprocess
 import sys
 import tempfile
