@@ -54,6 +54,82 @@
       "schema": "command",
       "path": "id",
       "message": "does not match pattern"
+    },
+    {
+      "ts": "2026-06-01T12:00:00Z",
+      "run": "20260601T120000Z-persona-rotation",
+      "kind": "persona_bound",
+      "schema_version": 1,
+      "run_id": "20260601T120000Z-persona-rotation",
+      "command": "z-implement",
+      "role": "implementer",
+      "task_id": "T007",
+      "attempt_id": "T007-v1",
+      "persona": "terse-pragmatist",
+      "persona_id": "terse-pragmatist",
+      "model": "claude-sonnet-4-6",
+      "runtime": "claude",
+      "selection_source": "random_role_pool",
+      "draw_id": "T007-implementer-T007-v1-a1b2c3",
+      "source": {
+        "persona": "override",
+        "model": "provider_config",
+        "runtime": "provider_config"
+      }
+    },
+    {
+      "ts": "2026-06-01T12:00:01Z",
+      "run": "20260601T120000Z-persona-rotation",
+      "kind": "persona_bound",
+      "schema_version": 1,
+      "run_id": "20260601T120000Z-persona-rotation",
+      "command": "z-plan",
+      "role": "consultant_primary",
+      "persona": "codex-default-consultant",
+      "persona_id": "codex-default-consultant",
+      "model": null,
+      "runtime": "codex-cli",
+      "selection_source": "fixed_panel",
+      "draw_id": "plan-consultant-20260601T120001Z-d4e5f6",
+      "source": {
+        "persona": "provider_config",
+        "model": "none",
+        "runtime": "provider_config"
+      }
+    },
+    {
+      "ts": "2026-06-01T12:00:02Z",
+      "run": "20260601T120000Z-persona-rotation",
+      "kind": "persona_random_selected",
+      "schema_version": 1,
+      "role": "implementer",
+      "selected": "terse-pragmatist",
+      "candidates": ["terse-pragmatist", "systems-thinker", "devil-s-advocate"],
+      "draw_id": "T007-implementer-T007-v1-a1b2c3",
+      "selection_source": "random_role_pool",
+      "task_id": "T007",
+      "attempt_id": "T007-v1",
+      "persona_id": "terse-pragmatist"
+    },
+    {
+      "ts": "2026-06-01T13:00:00Z",
+      "run": "20260601T120000Z-persona-rotation",
+      "kind": "persona_attempt_outcome",
+      "schema_version": 1,
+      "run_id": "20260601T120000Z-persona-rotation",
+      "command": "z-implement-all",
+      "role": "implementer",
+      "task_id": "T007",
+      "attempt_id": "T007-v1",
+      "persona_id": "terse-pragmatist",
+      "draw_id": "T007-implementer-T007-v1-a1b2c3",
+      "complexity_tier": "medium",
+      "diff_size": 142,
+      "review_cycles": 1,
+      "retries": 0,
+      "blocker_count": 0,
+      "wall_ms": 58320,
+      "status": "done"
     }
   ]
 }

@@ -1,6 +1,6 @@
 # config
 
-> Last updated: 2026-05-29
+> Last updated: 2026-06-01
 > Covers source: scripts/config.py, scripts/config.sh, scripts/propose-prefs.py, docs/human/config.md
 
 ## Overview
@@ -39,8 +39,10 @@ Set `$Z_HARNESS_REPO_CONFIG` to override the git-root discovery path (exits 2 if
 |-----|------|---------|--------|-------------|
 | `notify.level` | string | `approval_only` | `off` \| `approval_only` \| `all` | Controls when PushNotification fires. `off` silences all notifications. `approval_only` notifies on `approval` and `error` events. `all` notifies on every `approval`, `phase_end`, and `error` event. |
 | `docs.always_apply` | string | `always` | `always` \| `never` | Whether light flows auto-dispatch doc-fetcher when `docs/llm/INDEX.json` exists. `always` matches current /z-do default behavior. `never` skips doc-fetcher. **Applies only to light flows (slice 1: /z-do). Heavy flows always dispatch doc-fetcher regardless of this knob.** |
+| `experiment.persona_rotation` | bool | `true` | `true` \| `false` | Master kill-switch for the persona-rotation experiment. When `true` (default), `/z-implement-all` and `/z-implement-next` draw a random persona for each implementer attempt, dispatch a dual reviewer (base codex + random-arm advisory), and emit `persona_attempt_outcome` events. `/z-plan` and `/z-debug` use the fixed 5-panel consult. When `false`, all rotation behavior is a no-op — previous behavior is restored. Set to `false` to pause data collection. |
+| `experiment.control_every_n` | int | `5` | positive integer | Forced-control cadence: every Nth implementer attempt **across the entire repo** uses `boring-anchor` (the baseline persona) instead of a random draw. Counter persists in `.z-harness/.persona-control-counter`. Default 5 means every 5th attempt is a control sample. |
 
-For `[workflow]` and `[followup]` knobs, see the sections below.
+For `[workflow]`, `[followup]`, and `[experiment]` knobs, see the sections below.
 
 ## The transliteration rule
 
@@ -50,8 +52,10 @@ Env-var overrides follow a deterministic rule: lowercase TOML dotted-key → pre
 |----------|---------|
 | `notify.level` | `Z_HARNESS_NOTIFY_LEVEL` |
 | `docs.always_apply` | `Z_HARNESS_DOCS_ALWAYS_APPLY` |
+| `experiment.persona_rotation` | `Z_HARNESS_EXPERIMENT_PERSONA_ROTATION` |
+| `experiment.control_every_n` | `Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N` |
 
-For workflow and followup keys, the rule applies identically.
+For workflow, followup, and experiment keys, the rule applies identically.
 
 Keys must match `^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`.  Hyphens in keys exit 2.
 Nested keys >2 levels exit 2.  Empty env vars are treated as missing.
@@ -547,11 +551,43 @@ scripts/sink-add.sh \
 
 Cross-cutting material that applies to both surfaces.
 
+## The knobs ([experiment] section)
+
+The `[experiment]` section contains feature-flag knobs that are **on by default**. These govern the persona-rotation data-collection experiment. Disabling them reverts the commands to their pre-experiment behavior exactly — no events, no state files, no prompt changes.
+
+| Key | Type | Default | Env var | Description |
+|-----|------|---------|---------|-------------|
+| `experiment.persona_rotation` | bool | `true` | `Z_HARNESS_EXPERIMENT_PERSONA_ROTATION` | Master on/off switch for all persona-rotation behavior in `/z-implement-all`, `/z-implement-next`, `/z-plan`, and `/z-debug`. Set to `false` to pause data collection and restore pre-experiment behavior. |
+| `experiment.control_every_n` | int | `5` | `Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N` | Forced-control cadence. Every Nth implementer attempt (counted repo-wide, persisted in `.z-harness/.persona-control-counter`) uses `boring-anchor` instead of a random draw. Default 5 means 1-in-5 attempts is a control sample. |
+
+**TOML example** (`.z-harness/config.toml`):
+
+```toml
+[experiment]
+persona_rotation = true
+control_every_n = 5
+```
+
+**Kill-switch** — to pause the experiment entirely:
+
+```bash
+export Z_HARNESS_EXPERIMENT_PERSONA_ROTATION=false
+# or persistently:
+scripts/config.sh set experiment.persona_rotation false --scope=project
+```
+
+**Invariants:**
+- `experiment.persona_rotation = false` is a complete no-op: no draw events, no state files written, no `PERSONA_PREFIX` prepended, no `persona_attempt_outcome` emitted. Previous `/z-implement-all` behavior is restored exactly.
+- `experiment.control_every_n` has no effect when `persona_rotation = false`.
+- Validation: `persona_rotation` must be `true` or `false`; `control_every_n` must be a positive integer (≥1). Repo/env layer violations exit 2 (hard fail); global layer violations soft-warn and fall back to defaults.
+
+---
+
 ## How it interacts with others
 
-- `commands` (z-audit-plan, z-audit-plan-style, z-plan, z-fix, z-uplift, z-amend, z-do, z-research, z-implement-all, z-review-all, z-overnight, z-implement-next) — call `export-env` + `should-notify` during Setup; call `resolve-question` before workflow AskUserQuestions; call `check-no-ask` for overnight gate checks; call `set` after proposal acceptance; call `propose-prefs.py` at command end
+- `commands` (z-audit-plan, z-audit-plan-style, z-plan, z-fix, z-uplift, z-amend, z-do, z-research, z-implement-all, z-review-all, z-overnight, z-implement-next, z-debug) — call `export-env` + `should-notify` during Setup; call `resolve-question` before workflow AskUserQuestions; call `check-no-ask` for overnight gate checks; call `set` after proposal acceptance; call `propose-prefs.py` at command end; read `experiment.persona_rotation` and `experiment.control_every_n` at each implementer dispatch
 - `skills` (z-suggest-memory, z-map, z-plan-light, z-debug, z-brainstorm, z-do, z-plan, z-research) — call `list-question-ids` to validate routing-preference question IDs; call `resolve-question` for slug-confirm gate; call `export-env` + `should-notify` during Setup
-- `scripts` — provides the `log-event.sh` + `log-phase.sh` telemetry pipeline that `config.py` writes events through (`config_resolved`, `askuser_resolved`, `overnight_decision`, `askuser_halted`, `unknown_ask_blocked`, `config_conflict`)
+- `scripts` — provides the `log-event.sh` + `log-phase.sh` telemetry pipeline that `config.py` writes events through (`config_resolved`, `askuser_resolved`, `overnight_decision`, `askuser_halted`, `unknown_ask_blocked`, `config_conflict`); `scripts/persona-stats.py` reads `metrics.jsonl` and calls `config.py get experiment.*` for context
 - `followup-sink` — `sink-add.sh` called by orchestrators when `resolve-question` returns `defer-to-sink`; creates follow-up entries in the project or global sink; `notion-push.py` reads `Z_HARNESS_NOTION_TOKEN` env override or `followup.notion_token_path` secrets file for Notion auth
 
 ## Examples

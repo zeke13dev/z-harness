@@ -384,17 +384,73 @@ Block here until the user has approved the decisions doc.
 ## Phase 3 — Bundled cross-LLM consultation
 
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
-     requirement to the user and skip both consultant Agent() calls. Phase 3
+     requirement to the user and skip all consultant Agent() calls. Phase 3
      cannot complete without subagent support; document the gap in
      phase3-decisions-final.md and proceed to Phase 4 without cross-LLM input. -->
-Spawn **both** consultants in parallel in a single message:
+
+**Consult-off guard.** Before spawning any consultant, check the runtime signal:
+
+```bash
+CONSULT_PROVIDER="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-provider.py" consultant_primary 2>/dev/null)"
+```
+
+If `CONSULT_PROVIDER == "none"` (i.e. `Z_HARNESS_CONSULT=off`):
+- Skip all consultant Agent() calls entirely.
+- Record tentative decisions as final in `phase3-decisions-final.md`.
+- Emit a `consult_skipped` event:
+  ```bash
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
+    "$RUN" consult_skipped \
+    '{"phase":3,"reason":"Z_HARNESS_CONSULT=off"}'
+  ```
+- Proceed directly to Phase 4.
+
+**Fixed 5-panel dispatch (when `experiment.persona_rotation` is on):**
+
+Check the config knob:
+
+```bash
+PERSONA_ROTATION="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get experiment.persona_rotation 2>/dev/null || echo "true")"
+```
+
+If `PERSONA_ROTATION == "true"`, use the **fixed 5-member panel** instead of the standard 2-consultant dispatch. The panel arms are fixed (no randomness):
+
+| Arm | Provider | Model |
+|---|---|---|
+| gemini | `agy` | (default) |
+| claude-sonnet | `cursor` | `claude-4.6-sonnet` (via `--model claude-4.6-sonnet`) |
+| grok | `cursor` | `grok-4.3` (via `--model grok-4.3`) |
+| composer | `cursor` | `composer-2.5` (via `--model composer-2.5`) |
+| codex-5.5 | `codex-cli` | (default) |
+
+Before dispatching each panel member, emit a `persona_bound` event logging the arm:
+
+```bash
+for ARM in gemini claude-sonnet grok composer codex-5.5; do
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
+    "$(printf '{"run_id":"%s","command":"z-plan","role":"consultant","arm":"%s","selection_source":"fixed_panel","phase":3}' \
+       "$RUN" "$ARM")"
+done
+```
+
+Spawn all 5 panel members in parallel in a single message. Each receives the **entire approved decisions doc** with the consult-flagged decisions highlighted. Cursor-based arms pass their model via `--model <model>`:
+
+- `Agent(subagent_type="agy", description="Phase 3 consult — gemini arm", prompt="...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
+- `Agent(subagent_type="cursor", model="claude-4.6-sonnet", description="Phase 3 consult — claude-sonnet arm", prompt="...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
+- `Agent(subagent_type="cursor", model="grok-4.3", description="Phase 3 consult — grok arm", prompt="...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
+- `Agent(subagent_type="cursor", model="composer-2.5", description="Phase 3 consult — composer arm", prompt="...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
+- `Agent(subagent_type="codex-cli", description="Phase 3 consult — codex-5.5 arm", prompt="...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
+
+Five calls total. When all return, synthesize across all five responses.
+
+If `PERSONA_ROTATION == "false"`, fall back to the standard 2-consultant behavior: spawn **both** consultants in parallel in a single message:
 
 - `Agent(subagent_type="consultant-primary", ..., prompt="...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
 - `Agent(subagent_type="consultant-secondary", ..., prompt="...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
 
-Each gets the **entire approved decisions doc** with the consult-flagged decisions highlighted. They can see all decisions and flag interactions between them. Two calls total, regardless of feature size.
+Each gets the **entire approved decisions doc** with the consult-flagged decisions highlighted. Two calls total, regardless of feature size.
 
-When both return:
+When all consultants return (from either the 5-panel or 2-consultant path):
 1. For each recommendation, articulate **one concrete reason it might be wrong** before accepting it. This is mechanical, not optional.
 2. Synthesize. Make the final call yourself, citing which inputs you weighed.
 3. Flag any shortcut over the robust long-lasting solution — requires explicit user approval in Phase 5.
@@ -447,10 +503,48 @@ Both obey **DRY / KISS / SOLID**. State explicitly how the plan respects each.
 ## Phase 7 — Bundled final review
 
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
-     requirement to the user and skip both Phase 7 consultant Agent() calls.
+     requirement to the user and skip all Phase 7 consultant Agent() calls.
      Document the gap in the archive and proceed to Phase 8 without final
      review input. -->
-Spawn both consultants in parallel, each handed the full SPEC.md + PLAN.md. Include `kernel_path: <KERNEL_PATH>` in each `Agent(prompt=...)` when `KERNEL_PATH` is non-empty (resolved in Setup):
+
+**Consult-off guard.** Before spawning any consultant, check the runtime signal:
+
+```bash
+CONSULT_PROVIDER_P7="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-provider.py" consultant_primary 2>/dev/null)"
+```
+
+If `CONSULT_PROVIDER_P7 == "none"` (i.e. `Z_HARNESS_CONSULT=off`):
+- Skip all Phase 7 consultant Agent() calls entirely.
+- Document the gap in the archive.
+- Emit a `consult_skipped` event:
+  ```bash
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
+    "$RUN" consult_skipped \
+    '{"phase":7,"reason":"Z_HARNESS_CONSULT=off"}'
+  ```
+- Proceed directly to Phase 8.
+
+**Fixed 5-panel dispatch (when `experiment.persona_rotation` is on):**
+
+Reuse the `PERSONA_ROTATION` value resolved in Phase 3 (already set). If `PERSONA_ROTATION == "true"`, use the same **fixed 5-member panel** for Phase 7. Before dispatching, emit `persona_bound` events for each arm (same pattern as Phase 3, with `"phase":7`):
+
+```bash
+for ARM in gemini claude-sonnet grok composer codex-5.5; do
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
+    "$(printf '{"run_id":"%s","command":"z-plan","role":"consultant","arm":"%s","selection_source":"fixed_panel","phase":7}' \
+       "$RUN" "$ARM")"
+done
+```
+
+Spawn all 5 panel members in parallel, each handed the full SPEC.md + PLAN.md. Include `kernel_path: <KERNEL_PATH>` in each `Agent(prompt=...)` when `KERNEL_PATH` is non-empty (resolved in Setup). All 5 arms receive: "Critique this plan. What's wrong, missing, or fragile?" Cursor arms pass their model via `--model <model>`:
+
+- `Agent(subagent_type="agy", description="Phase 7 final review — gemini arm", prompt="Critique this plan...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
+- `Agent(subagent_type="cursor", model="claude-4.6-sonnet", description="Phase 7 final review — claude-sonnet arm", prompt="Critique this plan...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
+- `Agent(subagent_type="cursor", model="grok-4.3", description="Phase 7 final review — grok arm", prompt="Critique this plan...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
+- `Agent(subagent_type="cursor", model="composer-2.5", description="Phase 7 final review — composer arm", prompt="Critique this plan...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
+- `Agent(subagent_type="codex-cli", description="Phase 7 final review — codex-5.5 arm", prompt="Critique this plan...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
+
+If `PERSONA_ROTATION == "false"`, fall back to the standard 2-consultant behavior: spawn both consultants in parallel, each handed the full SPEC.md + PLAN.md. Include `kernel_path: <KERNEL_PATH>` in each `Agent(prompt=...)` when `KERNEL_PATH` is non-empty (resolved in Setup):
 - consultant-primary: "Critique this plan. What's wrong, missing, or fragile?"
 - consultant-secondary: same.
 
@@ -556,7 +650,7 @@ Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema
 
 | Feature | Used | Gates |
 |---------|------|-------|
-| `subagent` | yes | Phase 1a doc-fetcher Agent(); Phase 1b Explore Agent(); Phase 3 consultant-primary/secondary Agent() calls; Phase 7 consultant-primary/secondary Agent() calls; Phase 8 complexity-classifier Agent() calls |
+| `subagent` | yes | Phase 1a doc-fetcher Agent(); Phase 1b Explore Agent(); Phase 3 consultant-primary/secondary Agent() calls (2-consultant fallback when `experiment.persona_rotation=false`) or fixed 5-panel Agent() calls (agy, cursor@claude-4.6-sonnet, cursor@grok-4.3, cursor@composer-2.5, codex-cli — when `experiment.persona_rotation=true`); Phase 7 same panel structure as Phase 3; Phase 8 complexity-classifier Agent() calls |
 | `ask_user` | yes | Setup step 0 (empty arguments); Setup step 1 (slug collision + resolver prefill/ask branches); Setup step 9c (consolidated freshness gate — one AskUserQuestion covering docs / research / map staleness); Phase 0 (premise concern); Phase 2.5 (decisions doc approval — guarded by `workflow.plan_decisions_approval` resolver); Phase 5 (design decision + shortcut approval); Phase 8 (task-count overflow); Phase 9 (next-step recommendation choice) |
 | `skill_invoke` | no | — |
 

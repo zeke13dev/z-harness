@@ -87,6 +87,10 @@ DEFAULTS: dict = {
         "extract_min_recurrence": 3,     # int: minimum recurrences before auto-extracting an axiom
         "auto_extract_post_run": True,   # bool: run axiom extraction automatically after each run
     },
+    "experiment": {
+        "persona_rotation":  True,   # bool: enable persona rotation across z-harness roles
+        "control_every_n":   5,      # int>0: forced-control cadence (every Nth implementer attempt)
+    },
 }
 
 
@@ -127,6 +131,8 @@ VALIDATORS: dict = {
     "axioms.kernel_budget_chars":   _validate_positive_int,
     "axioms.extract_min_recurrence": _validate_positive_int,
     "axioms.auto_extract_post_run": _validate_bool,
+    "experiment.persona_rotation":  _validate_bool,
+    "experiment.control_every_n":   _validate_positive_int,
 }
 
 # Coercers: applied after validation to normalize values (esp. env-var strings).
@@ -143,6 +149,12 @@ _COERCERS: dict[str, object] = {
     ),
     "axioms.auto_extract_post_run": lambda v: (
         v if isinstance(v, bool) else v.lower() == "true"
+    ),
+    "experiment.persona_rotation": lambda v: (
+        v if isinstance(v, bool) else v.lower() == "true"
+    ),
+    "experiment.control_every_n": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
     ),
 }
 
@@ -325,6 +337,7 @@ def _dotted_to_env(key: str) -> str:
 
     notify.level  ->  Z_HARNESS_NOTIFY_LEVEL
     docs.always_apply  ->  Z_HARNESS_DOCS_ALWAYS_APPLY
+    experiment.persona_rotation  ->  Z_HARNESS_EXPERIMENT_PERSONA_ROTATION
 
     Raises SystemExit(2) if key does not match ``^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$``
     (exactly 2 segments; 3-level role keys are not exported as env vars).
@@ -2006,6 +2019,50 @@ def cmd_resolve_question(args: list[str]) -> None:
     sys.exit(exit_code)
 
 
+def _is_policy_mode() -> bool:
+    """
+    Return True when running in benchmark/policy mode.
+
+    Policy mode is active when Z_HARNESS_NO_ASK=halt AND either
+    Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE or Z_HARNESS_OVERNIGHT_AUTODECIDE
+    is set to a non-empty string (indicating a frozen policy is in use).
+    """
+    if os.environ.get("Z_HARNESS_NO_ASK", "") != "halt":
+        return False
+    return bool(
+        os.environ.get("Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE", "").strip()
+        or os.environ.get("Z_HARNESS_OVERNIGHT_AUTODECIDE", "").strip()
+    )
+
+
+def _emit_unhandled_gate(question_id: str) -> None:
+    """
+    Emit an unhandled_gate event via log-event.sh.
+    Non-fatal: silently skips if Z_HARNESS_RUN is unset or log-event.sh unavailable.
+    """
+    run_id = os.environ.get("Z_HARNESS_RUN", "")
+    if not run_id:
+        return
+
+    script_dir = Path(__file__).parent
+    log_event = script_dir / "log-event.sh"
+    if not log_event.exists() or not shutil.which("bash"):
+        return
+
+    payload = json.dumps({
+        "question_id": question_id,
+        "reason": "reachable gate not resolved by frozen policy",
+    })
+    try:
+        subprocess.run(
+            ["bash", str(log_event), run_id, "unhandled_gate", payload],
+            check=False,
+            capture_output=True,
+        )
+    except OSError:
+        pass  # non-fatal — observability is best-effort
+
+
 def _emit_unknown_ask_blocked(question_id: str, callsite_hint: str = "") -> None:
     """
     Emit an unknown_ask_blocked event via log-event.sh.
@@ -2038,14 +2095,21 @@ def cmd_check_no_ask(args: list[str]) -> None:
     """
     check-no-ask --question-id <id>
 
-    Returns JSON: {"result": "halt"|"proceed", "question_id": "<id>", "rule_id": "<rule>"}
+    Returns JSON: {"result": "halt"|"proceed"|"unhandled_gate", "question_id": "<id>", "rule_id": "<rule>"}
 
     Paths:
       1. Z_HARNESS_NO_ASK != halt  → proceed, rule_id=no_overnight_active
       2. NO_ASK=halt, qid registered, in allowlist → proceed (resolved as overnight_decision)
-      3. NO_ASK=halt, qid registered, NOT in allowlist → halt
+      3. NO_ASK=halt, qid registered, NOT in allowlist, non-policy mode → halt
+      3b.NO_ASK=halt, qid registered, NOT in allowlist, policy mode active → unhandled_gate (loud abort)
       4. NO_ASK=halt, qid NOT registered → halt + unknown_ask_blocked event
       5. Bad invocation (missing --question-id) → exit 2
+
+    Policy mode (path 3b) is active when Z_HARNESS_NO_ASK=halt AND either
+    Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE or Z_HARNESS_OVERNIGHT_AUTODECIDE is
+    set to a non-empty string.  In this mode a reachable gate not covered by the
+    frozen policy is a configuration error: it must ABORT LOUD via unhandled_gate
+    rather than silently blocking (fail-open) or returning a plain halt.
 
     Exit 0 on all valid invocations, exit 2 on argparse error.
     """
@@ -2093,7 +2157,23 @@ def cmd_check_no_ask(args: list[str]) -> None:
 
     envelope_result = envelope.get("result", "ask")
     if envelope_result == "halt":
-        result = {"result": "halt", "question_id": question_id, "rule_id": envelope.get("rule_id", "no_ask_halt")}
+        rule_id = envelope.get("rule_id", "no_ask_halt")
+        # In policy mode a registered gate not covered by the frozen policy is a
+        # configuration error — abort loud with unhandled_gate, not a silent halt.
+        if _is_policy_mode() and rule_id in {"no_ask_halt", "no_ask_blocked"}:
+            _emit_unhandled_gate(question_id)
+            result = {
+                "result": "unhandled_gate",
+                "question_id": question_id,
+                "rule_id": "unhandled_gate",
+                "reason": (
+                    "reachable gate not resolved by frozen benchmark policy; "
+                    "add this question_id to benchmark-autonomy.yaml or ensure "
+                    "it is unreachable on the quick-build hot path"
+                ),
+            }
+        else:
+            result = {"result": "halt", "question_id": question_id, "rule_id": rule_id}
     else:
         rule_id = envelope.get("rule_id", "no_ask_halt")
         result = {"result": "proceed", "question_id": question_id, "rule_id": rule_id}

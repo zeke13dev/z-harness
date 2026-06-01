@@ -1,7 +1,7 @@
 {
   "version": "1",
-  "generated_at": "2026-05-27T04:56:33Z",
-  "z_harness_version": "380aca6",
+  "generated_at": "2026-06-01T00:00:00Z",
+  "z_harness_version": "7c8d09a",
   "concepts": [
     {
       "slug": "agents",
@@ -72,7 +72,7 @@
         "commands/z-update.md",
         "commands/z-uplift.md"
       ],
-      "last_updated": "2026-05-29T07:20:01.339117Z",
+      "last_updated": "2026-06-01T00:00:00Z",
       "confidence": "high",
       "depends_on": [
         "agents",
@@ -83,7 +83,7 @@
       "consumed_by": [
         "skills"
       ],
-      "summary": "Slash command surfaces, including planning-family route checks, contextual exits, plan_route_decision telemetry, review-family finding promotion, config.py export-env/should-notify wrappers, check-no-ask halt branches (7 commands), and the /z-overnight unattended pipeline orchestrator."
+      "summary": "Slash command surfaces, including planning-family route checks, contextual exits, plan_route_decision telemetry, review-family finding promotion, config.py export-env/should-notify wrappers, check-no-ask halt branches (7 commands), the /z-overnight unattended pipeline orchestrator, and persona-rotation (experiment.persona_rotation knob): random implementer draw + dual reviewer dispatch in z-implement-all/z-implement-next, fixed 5-panel consult in z-plan/z-debug."
     },
     {
       "slug": "scripts",
@@ -98,9 +98,10 @@
         "scripts/config.py",
         "scripts/config.sh",
         "scripts/test_config.py",
-        "scripts/test_log_phase.sh"
+        "scripts/test_log_phase.sh",
+        "scripts/persona-stats.py"
       ],
-      "last_updated": "2026-05-29T07:20:01.339117Z",
+      "last_updated": "2026-06-01T00:00:00Z",
       "confidence": "high",
       "depends_on": [],
       "consumed_by": [
@@ -108,7 +109,7 @@
         "commands",
         "skills"
       ],
-      "summary": "Appends standard JSON events to run and global logs."
+      "summary": "Appends standard JSON events to run and global logs. Also includes persona-stats.py, a read-only analysis tool for the persona-rotation experiment (joins persona_random_selected + persona_attempt_outcome events, computes delta vs boring-anchor per stratum)."
     },
     {
       "slug": "z-fix",
@@ -178,7 +179,7 @@
         "scripts/log-providers.sh",
         ".z-harness/providers.json"
       ],
-      "last_updated": "2026-05-29T02:04:35.466240Z",
+      "last_updated": "2026-06-01T00:00:00Z",
       "confidence": "high",
       "depends_on": [
         "scripts"
@@ -207,9 +208,10 @@
         "runtime/drivers/cursor/persona_export.py",
         "runtime/drivers/codex/persona_export.py",
         "runtime/drivers/claude/persona_export.py",
+        "runtime/contract/event.schema.json",
         "docs/human/PERSONAS.md"
       ],
-      "last_updated": "2026-05-28T18:00:00Z",
+      "last_updated": "2026-06-01T00:00:00Z",
       "confidence": "high",
       "depends_on": [
         "providers-registry",
@@ -221,7 +223,7 @@
         "skills",
         "multi-ide-exports"
       ],
-      "summary": "Persona feature surface: layered persona registry (builtin < user-global < repo-local, last wins), three-axis binding (persona/model/runtime), contract enforcement per role, and per-target export adapters. resolve-persona.py is the authoritative resolver; persona files are markdown with YAML frontmatter."
+      "summary": "Persona feature surface: layered persona registry (builtin < user-global < repo-local, last wins), three-axis binding (persona/model/runtime), contract enforcement per role, per-target export adapters, and persona-rotation experiment (random-for-role, forced-control, control-counter subcommands; boring-anchor as control; selection_source enum; persona_random_selected + persona_attempt_outcome + extended persona_bound telemetry)."
     },
     {
       "slug": "multi-ide-exports",
@@ -358,7 +360,7 @@
         "scripts/propose-prefs.py",
         "docs/human/config.md"
       ],
-      "last_updated": "2026-05-29T22:00:00Z",
+      "last_updated": "2026-06-01T00:00:00Z",
       "confidence": "high",
       "depends_on": [
         "scripts"
@@ -367,7 +369,7 @@
         "commands",
         "skills"
       ],
-      "summary": "Unified config concept covering Loader API (4-layer TOML loader: get, export-env, ensure-defaults, explain, should-notify) and Workflow Resolver (resolve-question, set, list-question-ids, [workflow] section, routing-preference memory schema, elevation proposer). Merged from former `config-design` (slice-1) + `config` (slice-2) concepts on 2026-05-27."
+      "summary": "Unified config concept covering Loader API (4-layer TOML loader: get, export-env, ensure-defaults, explain, should-notify) and Workflow Resolver (resolve-question, set, list-question-ids, [workflow] section, routing-preference memory schema, elevation proposer), and the [experiment] section (experiment.persona_rotation default true, experiment.control_every_n default 5) governing the persona-rotation feature."
     },
     {
       "slug": "setup",
@@ -440,9 +442,10 @@
         "scripts/normalize-task-state.sh",
         "scripts/overnight-preflight.sh",
         "scripts/config.py",
-        "docs/human/overnight-run.md"
+        "docs/human/overnight-run.md",
+        "scripts/bench-autonomy-check.sh"
       ],
-      "last_updated": "2026-05-29T02:04:35.466240Z",
+      "last_updated": "2026-06-01T00:00:00Z",
       "confidence": "high",
       "depends_on": [
         "commands",

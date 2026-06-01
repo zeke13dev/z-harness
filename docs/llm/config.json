@@ -1,6 +1,6 @@
 {
   "concept": "config",
-  "last_updated": "2026-05-29",
+  "last_updated": "2026-06-01",
   "covers_spec": "z-harness/askuser-prefs-hook/SPEC.md",
   "scope": "Layered TOML config loader (Loader API surface) + workflow preference resolver, overnight gate system, elevation proposer, and follow-up namespace (Workflow Resolver + [followup] surface). Formerly split as `config-design` (slice-1) and `config` (slice-2); merged into one concept.",
   "source_file": [
@@ -215,6 +215,11 @@
     "[Loader API] should-notify always exits 0 on valid event kind (yes|no on stdout); exits 2 on unknown event",
     "[Loader API] config_resolved event emitted at most once per $Z_HARNESS_RUN via O_EXCL temp-file de-dup",
     "[Loader API] slice-1 enums: notify.level in {off, approval_only, all}; docs.always_apply in {always, never}",
+    "[experiment] experiment.persona_rotation valid values: true | false; default true",
+    "[experiment] experiment.control_every_n valid values: positive integer; default 5",
+    "[experiment] Z_HARNESS_EXPERIMENT_PERSONA_ROTATION and Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N are the env transliterations",
+    "[experiment] experiment.persona_rotation = false is a complete no-op: no draw events, no state files, no PERSONA_PREFIX, no persona_attempt_outcome",
+    "[experiment] control counter persisted at .z-harness/.persona-control-counter (repo-level, flock-guarded); incremented by resolve-persona.py control-counter --increment",
     "[Loader API] transliteration rule: dotted.key -> Z_HARNESS_<SECTION>_<KEY> (uppercase, dot to underscore)",
     "[Loader API] keys must match ^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$; hyphens or >2-level nesting exit 2",
     "[Loader API] empty env vars are treated as missing (not as override)",
@@ -260,6 +265,7 @@
     "[followup] Z_HARNESS_NOTION_TOKEN is env-only (not a TOML key); read by notion-push.py _resolve_token() before falling back to secrets.toml; never log it"
   ],
   "gotchas": [
+    "[experiment] Global layer experiment.* violations are soft (warn + default); repo/env layer violations exit 2 (hard fail) — same rule as all other Loader API keys",
     "[Loader API] Global config validation is soft (warn + default fallback); repo/env config validation is hard (exit 2) — same bad value has different outcomes depending on which file it appears in",
     "[Loader API] docs.always_apply=never only suppresses doc-fetcher in light flows (/z-do); heavy flows always dispatch doc-fetcher regardless",
     "[Loader API] Z_HARNESS_REPO_CONFIG env var overrides git-root discovery entirely — exits 2 if path does not exist",
@@ -497,6 +503,31 @@
       "date": "2026-05-27",
       "project_root": "/Users/you/dev/myproject"
     }
+  },
+  "experiment_section": {
+    "section": "[experiment]",
+    "description": "Feature-flag knobs for the persona-rotation data-collection experiment. All keys are on by default. Setting persona_rotation=false fully reverts all rotation behavior.",
+    "keys": {
+      "experiment.persona_rotation": {
+        "type": "bool",
+        "default": true,
+        "valid_values": [true, false],
+        "env": "Z_HARNESS_EXPERIMENT_PERSONA_ROTATION",
+        "description": "Master on/off switch for persona rotation in z-implement-all, z-implement-next, z-plan, and z-debug. false = complete no-op."
+      },
+      "experiment.control_every_n": {
+        "type": "int",
+        "default": 5,
+        "env": "Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N",
+        "description": "Forced-control cadence: every Nth implementer attempt (repo-wide counter in .z-harness/.persona-control-counter) uses boring-anchor instead of random draw."
+      }
+    },
+    "callsites": [
+      "commands/z-implement-all.md (step 5.0 persona-rotation block)",
+      "commands/z-implement-next.md (Phase 2 persona-rotation block)",
+      "commands/z-plan.md (Phase 3 and Phase 7 fixed 5-panel gate)",
+      "commands/z-debug.md (Phase 3a, Phase 3b, Phase 7 fixed 5-panel gate)"
+    ]
   },
   "v2_deferrals": [
     "Stale-memory hygiene: when routing-preference memory exists and user later writes same question_id to config, v1 only warns (memory_potentially_superseded); v2 will add cleanup prompt or auto-archive",

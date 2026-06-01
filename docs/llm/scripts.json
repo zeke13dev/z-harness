@@ -1,6 +1,6 @@
 {
   "concept": "scripts",
-  "last_updated": "2026-05-29",
+  "last_updated": "2026-06-01",
   "covers_spec": "none",
   "source_file": [
     "scripts/extract-dismissals.py",
@@ -35,7 +35,8 @@
     "scripts/followup-reconcile-notion.sh",
     "scripts/followup-reconcile-notion-impl.py",
     "scripts/parse-followups-block.py",
-    "scripts/validate-followup-schemas.sh"
+    "scripts/validate-followup-schemas.sh",
+    "scripts/persona-stats.py"
   ],
   "confidence": "high",
   "entry_points": [
@@ -88,7 +89,10 @@
     {"file": "scripts/followup-reconcile-notion.sh", "line": 1, "symbol": "followup-reconcile-notion.sh", "kind": "module", "summary": "Thin shell wrapper: exec python3 followup-reconcile-notion-impl.py \"$@\"; accepts --project-sink-root, --global-sink-root, --dry-run."},
     {"file": "scripts/followup-reconcile-notion-impl.py", "line": 291, "symbol": "main", "kind": "fn", "summary": "Sweeps project+global sinks; re-invokes notion-push.py for each notion_sync_pending entry; on success appends notion_synced+notion_sync_cleared events; outputs {swept_count,succeeded,failed,conflicts} JSON; exits 0 always."},
     {"file": "scripts/parse-followups-block.py", "line": 228, "symbol": "main", "kind": "fn", "summary": "Tolerant parser: reads reviewer output from --reviewer-output or stdin; finds **FOLLOWUPS:** + ```json fence; validates required fields per entry; per-entry errors log+skip; outputs JSON list (may be []); logs followup_block_parse_failed on parse failure; exits 0 on empty result."},
-    {"file": "scripts/validate-followup-schemas.sh", "line": 1, "symbol": "validate-followup-schemas.sh", "kind": "module", "summary": "JSON Schema test runner (draft-2020-12); 3 followup-entry fixtures + 2 audit-evidence fixtures + mutex test + enum literal tests via Python jsonschema; exits 0 on all pass, 1 on any fail."}
+    {"file": "scripts/validate-followup-schemas.sh", "line": 1, "symbol": "validate-followup-schemas.sh", "kind": "module", "summary": "JSON Schema test runner (draft-2020-12); 3 followup-entry fixtures + 2 audit-evidence fixtures + mutex test + enum literal tests via Python jsonschema; exits 0 on all pass, 1 on any fail."},
+    {"file": "scripts/persona-stats.py", "line": 1, "symbol": "persona-stats", "kind": "module", "summary": "[rotation] Read-only analysis for persona-rotation experiment. Reads metrics.jsonl; joins persona_random_selected (draw) ↔ persona_attempt_outcome (terminal) by draw_id/attempt_id; groups by persona_id × role × complexity_tier; reports outcome metrics (review_cycles, retries, blocker_count, wall_ms, completion_rate) and delta vs boring-anchor baseline within each stratum. Quarantines fallback_empty_pool draws (separate table, never in persona stats). Filters incomplete attempts. Supports --json and --min-diff-size. Always read-only."},
+    {"file": "scripts/persona-stats.py", "line": 41, "symbol": "CONTROL_PERSONA", "kind": "const", "summary": "[rotation] String constant 'boring-anchor' — the baseline for delta computation within each (role, complexity_tier) stratum."},
+    {"file": "scripts/persona-stats.py", "line": 49, "symbol": "OUTCOME_KIND", "kind": "const", "summary": "[rotation] Event kind string 'persona_attempt_outcome' — the terminal event joined against draw events."}
   ],
   "depends_on": [],
   "consumed_by": ["agents", "commands", "skills", "review-agent", "remote-runner", "config", "overnight-run"],
@@ -145,7 +149,11 @@
     "notion-push.py token resolution order: Z_HARNESS_NOTION_TOKEN env var first, then secrets.toml.",
     "followup-reconcile-notion-impl.py always exits 0 (best-effort sweep; not a transaction).",
     "parse-followups-block.py always exits 0 on empty result (even after parse failure); only exits 1 on fatal I/O error.",
-    "validate-followup-schemas.sh exits 2 (before assertions) if Python jsonschema library or schema/fixture files are missing."
+    "validate-followup-schemas.sh exits 2 (before assertions) if Python jsonschema library or schema/fixture files are missing.",
+    "[rotation] persona-stats.py is always read-only — never modifies metrics.jsonl or any state file.",
+    "[rotation] persona-stats.py quarantines fallback_empty_pool: reports them in a separate section, never folds them into any persona's stats or boring-anchor baseline.",
+    "[rotation] persona-stats.py filters incomplete attempts (draw event without matching persona_attempt_outcome) — they are NOT included in any statistic.",
+    "[rotation] persona-stats.py delta vs boring-anchor is computed WITHIN the same (role, complexity_tier) stratum — never cross-stratum."
   ],
   "gotchas": [
     "log-phase.sh check_wall_ms threshold 604_800_000ms catches seconds-vs-ms overflow (1500x headroom); wall_ms_negative covers NTP jumps / clock skew.",

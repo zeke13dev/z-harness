@@ -62,7 +62,7 @@ Multiple plans may coexist under `$Z_HARNESS_PLAN_DIR/`. Determine which one to 
 
 ## Phase 1 — Load context
 
-1. Read `$BASE/TASKS.md`. Find the first task with status `[ ]`.
+1. Read `$BASE/TASKS.md`. Find the first task with status `[ ]`. **Store the full task block text in `TASK_BLOCK`** (the verbatim lines from the `## T<id>` heading through the last line before the next heading). This variable is needed in Phase 2 to parse `COMPLEXITY_TIER` from the `**Complexity:**` stamp without re-reading TASKS.md.
 2. **Do NOT pre-extract SPEC/PLAN slices in main thread.** Pass `$BASE` to the implementer; the implementer subagent reads `$BASE/SPEC.md` and `$BASE/PLAN.md` itself with its Read tool. Saves main-thread context.
 3. (Skip — implementer reads the files it touches.)
 4. Create task archive dir: `mkdir -p $BASE/archive/tasks/<task-id>`
@@ -100,19 +100,161 @@ Spawn the implementer subagent (fresh context).
     "$(printf '{"task":"%s","fallback_model":"sonnet"}' "<task-id>")"
   ```
 
+**Persona rotation (implementer dispatch — gated on `experiment.persona_rotation`).** When the knob is ON, draw a persona for this attempt, persist the draw to `$BASE/archive/tasks/<task-id>/persona-draw.json`, and prepend the persona body to the implementer prompt. When the knob is OFF, the entire block is a no-op — `PERSONA_PREFIX` is empty, no draw file is written, no draw event is emitted; behavior is identical to before this feature. All of the code below is adapted from the z-implement-all pattern for the single-shot (cycle = 1) path. On a re-invocation (the user runs `/z-implement-next` again for the same task after a prior attempt), a retry counter file under `.z-harness/` is incremented so the new attempt gets a distinct `attempt_id` (`<task-id>-v2`, `<task-id>-v3`, …) and a fresh persona draw:
+
+```bash
+PERSONA_ROTATION="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get experiment.persona_rotation 2>/dev/null || echo "true")"
+
+# Initialize ALL stratification fields to safe defaults at attempt start.
+# An early-terminal (e.g. unable_to_complete) closes before any review runs;
+# emit_persona_outcome's int() casts must not crash on empty strings.
+BLOCKER_COUNT=0
+WALL_MS=0
+REVIEW_CYCLES=1
+DIFF_SIZE=0
+# Parse COMPLEXITY_TIER from the task block's **Complexity:** stamp, exactly as
+# z-implement-all does — read directly from the TASKS file by task-id so there
+# is no dependency on the TASK_BLOCK shell variable (which is described in prose
+# but never populated by actual bash).  Extracts only the tier token (first word
+# after the label — e.g. "low", "medium", or "high"; ignores trailing metadata
+# like "· **DOCS:** config").
+COMPLEXITY_TIER="$(python3 -c '
+import sys, re
+content = open(sys.argv[1]).read()
+task_id = sys.argv[2]
+m = re.search(r"(## " + re.escape(task_id) + r"\b.*?)(?=^## T|\Z)", content, re.M | re.S)
+block = m.group(1) if m else ""
+cm = re.search(r"\*\*Complexity:\*\*\s*(\S+)", block)
+print(cm.group(1) if cm else "")
+' "$BASE/TASKS.md" "<task-id>" 2>/dev/null || echo "")"
+
+# --- Persona draw (only when knob is on) ---
+PERSONA_PREFIX=""
+PERSONA_ID=""
+DRAW_ID=""
+SELECTION_SOURCE=""
+ATTEMPT_ID="<task-id>-v1"
+RETRIES=0
+if [ "$PERSONA_ROTATION" = "true" ]; then
+  # --- Determine ATTEMPT_ID (distinct per re-invocation) ---
+  # The retry counter file persists how many times /z-implement-next has been invoked
+  # for this task.  Each fresh invocation (including the very first) bumps the counter
+  # exactly once — at the start of Phase 2, before the implementer is dispatched.  A
+  # WITHIN-invocation resume (e.g. the user answers a needs_clarification question and
+  # the implementer is re-dispatched in the same LLM session) does NOT re-execute this
+  # Phase 2 block, so the counter is only bumped once per invocation as required.
+  #
+  # After bumping: ATTEMPT_ID = "<task-id>-v<counter>".
+  # On the very first invocation ATTEMPT_ID = "<task-id>-v1".
+  # On re-invocations ATTEMPT_ID = "<task-id>-v2", "<task-id>-v3", etc.
+  #
+  # The counter file lives at $BASE/archive/tasks/<task-id>/.retry-counter so it is
+  # co-located with the other per-task artefacts and automatically scoped per task.
+  mkdir -p "$BASE/archive/tasks/<task-id>"
+  RETRY_COUNTER_FILE="$BASE/archive/tasks/<task-id>/.retry-counter"
+  CURRENT_COUNTER="$(cat "$RETRY_COUNTER_FILE" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+  # Validate: must be a non-negative integer; treat garbage as 0.
+  case "$CURRENT_COUNTER" in
+    ''|*[!0-9]*) CURRENT_COUNTER=0 ;;
+  esac
+  CURRENT_COUNTER=$((CURRENT_COUNTER + 1))
+  printf '%d' "$CURRENT_COUNTER" > "$RETRY_COUNTER_FILE"
+  ATTEMPT_ID="<task-id>-v${CURRENT_COUNTER}"
+  RETRIES=$((CURRENT_COUNTER - 1))
+
+  DRAW_FILE="$BASE/archive/tasks/<task-id>/persona-draw.json"
+  EXISTING_ATTEMPT_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("attempt_id",""))' "$DRAW_FILE" 2>/dev/null || echo "")"
+
+  # Export join keys so resolve-persona.py stamps task_id + attempt_id onto draw events.
+  export Z_HARNESS_TASK_ID="<task-id>"
+  export Z_HARNESS_ATTEMPT_ID="$ATTEMPT_ID"
+  export Z_HARNESS_RUN_ID="$RUN"
+  REUSE=0
+  if [ -f "$DRAW_FILE" ]; then
+    [ "$EXISTING_ATTEMPT_ID" = "$ATTEMPT_ID" ] && REUSE=1
+  fi
+  if [ "$REUSE" -eq 0 ]; then
+    # Fresh draw: increment control counter and apply forced-control cadence.
+    # On a re-invocation (CURRENT_COUNTER >= 2), exclude the prior attempt's
+    # persona to force diversity, exactly as z-implement-all does on retry.
+    CONTROL_EVERY_N="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get experiment.control_every_n 2>/dev/null || echo 5)"
+    CONTROL_COUNT="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-persona.py" control-counter --increment)"
+    if [ "$CONTROL_EVERY_N" -gt 0 ] && [ $(( CONTROL_COUNT % CONTROL_EVERY_N )) -eq 0 ]; then
+      DRAW_JSON="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-persona.py" forced-control implementer)"
+    else
+      EXCLUDE_ARG=""
+      if [ "$CURRENT_COUNTER" -ge 2 ] && [ -f "$DRAW_FILE" ]; then
+        PRIOR_PERSONA="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("persona_id",""))' "$DRAW_FILE" 2>/dev/null || echo "")"
+        [ -n "$PRIOR_PERSONA" ] && EXCLUDE_ARG="--exclude=$PRIOR_PERSONA"
+      fi
+      DRAW_JSON="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-persona.py" random-for-role implementer $EXCLUDE_ARG)"
+    fi
+    # Persist the draw so a same-cycle resume reuses it.
+    python3 -c '
+import json, sys
+draw = json.loads(sys.argv[1]); attempt_id = sys.argv[2]; out = sys.argv[3]
+rec = {"attempt_id": attempt_id, "persona_id": draw.get("persona"),
+       "draw_id": draw.get("draw_id"), "selection_source": draw.get("selection_source"),
+       "persona_body_path": draw.get("persona_body_path")}
+json.dump(rec, open(out, "w"))
+' "$DRAW_JSON" "$ATTEMPT_ID" "$DRAW_FILE"
+  fi
+  # Read attribution from the draw file (works on both fresh draw and resume).
+  PERSONA_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("persona_id",""))' "$DRAW_FILE" 2>/dev/null || echo "")"
+  DRAW_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("draw_id",""))' "$DRAW_FILE" 2>/dev/null || echo "")"
+  SELECTION_SOURCE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("selection_source",""))' "$DRAW_FILE" 2>/dev/null || echo "")"
+  PERSONA_BODY_PATH="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("persona_body_path",""))' "$DRAW_FILE" 2>/dev/null || echo "")"
+  if [ -n "$PERSONA_BODY_PATH" ] && [ -f "$PERSONA_BODY_PATH" ]; then
+    PERSONA_PREFIX="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/runtime/dispatch/persona_prompt.py" "$PERSONA_BODY_PATH" "" 2>/dev/null | head -c 4096 || true)"
+    [ -n "$PERSONA_PREFIX" ] && PERSONA_PREFIX="${PERSONA_PREFIX}
+
+"
+  fi
+fi
+
+# --- Define emit_persona_outcome (called at every TRUE terminal path) ---
+# Emits persona_attempt_outcome exactly once per attempt (idempotence guard).
+# The function is a no-op when the knob is off (first guard line).
+PERSONA_OUTCOME_EMITTED=0
+emit_persona_outcome() {  # $1 = terminal status (done|unable_to_complete|abandoned)
+  [ "$PERSONA_ROTATION" = "true" ] || return 0
+  [ "$PERSONA_OUTCOME_EMITTED" -eq 1 ] && return 0
+  PERSONA_OUTCOME_EMITTED=1
+  local status="$1"
+  local diff_lines
+  diff_lines="$(wc -l < "$BASE/archive/tasks/<task-id>/diff.patch" 2>/dev/null | tr -d ' ')"
+  [ -z "$diff_lines" ] && diff_lines=0
+  local payload
+  payload="$(python3 -c '
+import json, sys
+print(json.dumps({
+  "run_id": sys.argv[1], "command": "z-implement-next", "role": "implementer",
+  "task_id": sys.argv[2], "attempt_id": sys.argv[3], "persona_id": sys.argv[4],
+  "draw_id": sys.argv[5], "complexity_tier": sys.argv[6], "diff_size": int(sys.argv[7]),
+  "review_cycles": int(sys.argv[8]), "retries": int(sys.argv[9]),
+  "blocker_count": int(sys.argv[10]), "wall_ms": int(sys.argv[11]), "status": sys.argv[12],
+}))' "$RUN" "<task-id>" "$ATTEMPT_ID" "$PERSONA_ID" "$DRAW_ID" "$COMPLEXITY_TIER" \
+      "$diff_lines" "$REVIEW_CYCLES" "$RETRIES" "$BLOCKER_COUNT" "$WALL_MS" "$status")"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
+    "tasks/<task-id>" persona_attempt_outcome "$payload"
+}
+```
+
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The implementer subagent performs all code edits; drivers that skip it must warn the user that task implementation has been bypassed. -->
 ```
 Agent(
   subagent_type="implementer",
   description="Implement <task-id>",
   model="<sonnet|opus per the rules above>",
-  prompt="<task-id>\n\n<task block verbatim from TASKS.md>\n\n$BASE: <abs path to $Z_HARNESS_PLAN_DIR>\nRepo root: <abs path>\nrelevant_docs (paths — Read these for cross-file invariants): <paths>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+  prompt="<PERSONA_PREFIX (empty when persona_rotation is off)><task-id>\n\n<task block verbatim from TASKS.md>\n\n$BASE: <abs path to $Z_HARNESS_PLAN_DIR>\nRepo root: <abs path>\nrelevant_docs (paths — Read these for cross-file invariants): <paths>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 ```
 
 This replaces the prior `Z_HARNESS_RETRY_UPGRADE=opus` env-var pattern; `Agent(...)` supports per-call `model` override directly.
 
 `/z-implement-next` is a single-shot command and does not auto-retry on Codex review failure. If you want a retry with `model="opus"` (the "always-Opus-on-retry" policy from `/z-implement-all`), re-invoke `/z-implement-next` after manually flipping the task's stamp to `**Complexity:** high`, or run `/z-implement-all` which handles the retry loop internally.
+
+Parse the implementer's return `STATUS:`. If `STATUS: unable_to_complete`, call `emit_persona_outcome "unable_to_complete"` (no-op when the knob is off) before surfacing the reason to the user — this is a TRUE terminal for the attempt. `needs_clarification`, `spec_problem`, and `decision_needed` are PAUSES (the same attempt resumes after the user answers) — do NOT call `emit_persona_outcome` on these.
 
 Implement the task exactly as specified. No scope expansion. If the spec is wrong or ambiguous, **stop and ask the user** rather than improvising. After the answer, **update SPEC.md** to match the resolved decision before continuing — the spec must stay the source of truth.
 
@@ -121,18 +263,104 @@ Obey DRY/KISS/SOLID. No shortcuts unless PLAN.md explicitly approved one for thi
 ## Phase 3 — Codex review
 
 1. Capture the diff: `git diff > $BASE/archive/tasks/<task-id>/diff.patch` (if no git, fall back to listing changed file paths).
-2. Spawn the reviewer with the diff, not just file contents:
+2. `PERSONA_ROTATION` and `ATTEMPT_ID` were initialized in Phase 2 before the implementer dispatch; they are already in scope here. No re-read is needed. For reference:
+   - `PERSONA_ROTATION` — the `experiment.persona_rotation` knob value (`"true"` or `"false"`).
+   - `ATTEMPT_ID` — `"<task-id>-v<N>"` where N is the current invocation counter (1 on first invocation, increments on re-invocations).
+
+3. Spawn the reviewer(s) with the diff, not just file contents.
+
+   **Dual-reviewer dispatch (gated on `experiment.persona_rotation`).** When the knob is ON, dispatch the base codex reviewer AND one advisory random-arm reviewer as two SEPARATE `Agent()` calls — both share `attempt_id = <task-id>-v1`, each with its own `draw_id`. When the knob is OFF, only the base codex reviewer runs (today's behavior, unchanged).
+
+   **Base codex reviewer** (always the gating reviewer):
 
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The reviewer is the correctness gate; drivers that skip it must warn the user that Codex review has been bypassed. -->
 ```
 Agent(
   subagent_type="reviewer",
   description="Codex scrutiny of task <ID>",
-  prompt="task id: <id>\ntask description: <title>\nacceptance criteria: <verbatim from task block>\ndiff.patch path: <abs path>\nchanged files: <abs paths>\nrelevant_docs (paths — verify the diff didn't break invariants stated here): <paths>\n$BASE: <abs path>  (read SPEC.md yourself for relevant sections)\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+  prompt="task id: <id>\nreviewer_participant: base_codex\ntask description: <title>\nacceptance criteria: <verbatim from task block>\ndiff.patch path: <abs path>\nchanged files: <abs paths>\nrelevant_docs (paths — verify the diff didn't break invariants stated here): <paths>\n$BASE: <abs path>  (read SPEC.md yourself for relevant sections)\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 ```
 
-Apply findings that hold up. Push back on those that don't and document the pushback.
+   Log the base codex reviewer as `persona_bound` (tag `reviewer_participant=base_codex`). The base reviewer is not a random draw, so its `draw_id` is the deterministic synthetic id `<attempt_id>-base_codex`. Only emit when `experiment.persona_rotation` is on — knob-off must be a true no-op:
+   ```bash
+   if [ "$PERSONA_ROTATION" = "true" ]; then
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
+       "tasks/<task-id>" persona_bound \
+       "$(python3 -c 'import json,sys; print(json.dumps({"command":"z-implement-next","role":"reviewer","task_id":sys.argv[1],"attempt_id":sys.argv[2],"draw_id":sys.argv[2]+"-base_codex","reviewer_participant":"base_codex","cycle":1}))' "<task-id>" "$ATTEMPT_ID")"
+   fi
+   ```
+
+   **Random-arm reviewer (advisory — only when `experiment.persona_rotation == "true"`).** Verdict is recorded for data-collection; it must NOT change review outcome. Draw a reviewer persona, prepend it to the prompt:
+
+   ```bash
+   if [ "$PERSONA_ROTATION" = "true" ]; then
+     # Re-export join keys so the reviewer draw event carries task_id + attempt_id.
+     # ATTEMPT_ID is set above as <task-id>-v1; these exports make it available to
+     # resolve-persona.py even if this block runs after a shell scope change.
+     export Z_HARNESS_TASK_ID="<task-id>"
+     export Z_HARNESS_ATTEMPT_ID="$ATTEMPT_ID"
+     export Z_HARNESS_RUN_ID="$RUN"
+     REVIEWER_DRAW_JSON="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-persona.py" \
+       random-for-role reviewer 2>/dev/null || echo '{}')"
+     REVIEWER_PERSONA_BODY_PATH="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("persona_body_path",""))' "$REVIEWER_DRAW_JSON" 2>/dev/null || echo "")"
+     REVIEWER_DRAW_ID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("draw_id",""))' "$REVIEWER_DRAW_JSON" 2>/dev/null || echo "")"
+     REVIEWER_PERSONA_ID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("persona",""))' "$REVIEWER_DRAW_JSON" 2>/dev/null || echo "")"
+     if [ -n "$REVIEWER_PERSONA_BODY_PATH" ] && [ -f "$REVIEWER_PERSONA_BODY_PATH" ]; then
+       REVIEWER_PERSONA_PREFIX="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/runtime/dispatch/persona_prompt.py" "$REVIEWER_PERSONA_BODY_PATH" "" 2>/dev/null | head -c 4096 || true)"
+       [ -n "$REVIEWER_PERSONA_PREFIX" ] && REVIEWER_PERSONA_PREFIX="${REVIEWER_PERSONA_PREFIX}
+
+"
+     else
+       REVIEWER_PERSONA_PREFIX=""
+     fi
+   fi
+   ```
+
+<!-- RUNTIME-GATE: subagent; non-supporting drivers may skip the random-arm reviewer — it is advisory only. The base codex reviewer above is the required correctness gate. -->
+```
+# Only dispatch when PERSONA_ROTATION == "true":
+Agent(
+  subagent_type="reviewer",
+  description="Advisory review (random arm) task <ID>",
+  prompt="<REVIEWER_PERSONA_PREFIX><ADVISORY: this review is for data-collection only — verdict is recorded but does not gate the task>\ntask id: <id>\nreviewer_participant: random_arm\ntask description: <title>\nacceptance criteria: <verbatim from task block>\ndiff.patch path: <abs path>\nchanged files: <abs paths>\nrelevant_docs (paths — verify the diff didn't break invariants stated here): <paths>\n$BASE: <abs path>  (read SPEC.md yourself for relevant sections)\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+)
+```
+
+   Log the random-arm reviewer as `persona_bound` (tag `reviewer_participant=random_arm`, same `attempt_id`):
+   ```bash
+   if [ "$PERSONA_ROTATION" = "true" ]; then
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
+       "tasks/<task-id>" persona_bound \
+       "$(python3 -c 'import json,sys; print(json.dumps({"command":"z-implement-next","role":"reviewer","task_id":sys.argv[1],"attempt_id":sys.argv[2],"reviewer_participant":"random_arm","persona_id":sys.argv[3],"draw_id":sys.argv[4],"cycle":1}))' "<task-id>" "$ATTEMPT_ID" "$REVIEWER_PERSONA_ID" "$REVIEWER_DRAW_ID")"
+   fi
+   ```
+
+   **Advisory verdict handling.** Capture each reviewer's response into a SEPARATE variable — `BASE_CODEX_RESPONSE` for the base codex reviewer and `RANDOM_ARM_RESPONSE` for the advisory arm. The two responses must NEVER be merged into a single variable. Parse and act on ONLY `BASE_CODEX_RESPONSE` when deciding which findings to apply. `RANDOM_ARM_RESPONSE` is stored for telemetry/logging only; the advisory arm's verdict must NOT change which findings are raised or acted upon.
+
+**Handle review outcome.** Parse `BASE_CODEX_RESPONSE`. Group findings by severity (blockers, majors, minors).
+
+- **No blockers, no majors** → accept. Apply findings that hold up; push back on those that don't and document the pushback. Proceed to Phase 3.5.
+
+- **Has blockers or majors** → `/z-implement-next` is single-shot and does not auto-retry. Present the diff and reviewer findings to the user and push-notify. Before presenting, run the `check-no-ask` resolver for `workflow.implement_all_proceed`:
+
+  ```bash
+  NO_ASK_RESULT="$(python3 scripts/config.py check-no-ask --question-id workflow.implement_all_proceed 2>/dev/null || echo '{}')"
+  NO_ASK_CHECK="$(printf '%s' "$NO_ASK_RESULT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("result","proceed"))' 2>/dev/null || echo proceed)"
+  ```
+
+  If `$NO_ASK_CHECK == "halt"`: do NOT invoke `AskUserQuestion`. Call `emit_persona_outcome "abandoned"` (no-op when the knob is off), then flip `[ ]` back on this task and surface the halt reason to the user. This is a TRUE terminal — the emit fires here.
+
+  Otherwise (`$NO_ASK_CHECK == "proceed"`): present the diff + reviewer findings to the user. **Do NOT emit the outcome before the user chooses** — a speculative emit here would mis-record the status and the idempotence guard would block the real terminal emit. After the user answers, emit `emit_persona_outcome` with the status that choice produces (no-op when the knob is off; idempotent so exactly one row lands per attempt):
+
+  <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the review-failure decision (proceed anyway / patch manually / abandon task / re-spec) via their native channel. Silent omission is forbidden. -->
+  Use `AskUserQuestion` with options: **proceed anyway / patch manually / abandon task / re-spec**.
+
+  - **proceed anyway** → the attempt is accepted as-is. Call `emit_persona_outcome "done"` (TRUE terminal), then proceed to Phase 3.5 and Phase 5 (mark done).
+  - **patch manually** → the user takes over; this is NOT an automated attempt close. Do NOT call `emit_persona_outcome` here. The attempt closes later when the user resumes and reaches a real terminal.
+  - **abandon task / re-spec** → the attempt is abandoned. Call `emit_persona_outcome "abandoned"` (TRUE terminal) before halting. Do not mark the task done.
+
+  In all cases apply findings from the base codex reviewer that hold up before presenting; push back on those that don't and document the pushback.
 
 ## Phase 3.5 — Parse FOLLOWUPS block and route to sink
 
@@ -218,8 +446,12 @@ RESULT="$(printf '%s' "$RESOLVED" | python3 -c 'import json,sys; print(json.load
 
 1. Flip `[ ]` to `[x]` in `$BASE/TASKS.md`. Add a one-line completion note under the task.
 2. Log task end with summary stats.
-3. If notification policy ≠ `off`: send `PushNotification` — "Task <ID> complete. <N> remaining. Run /z-implement-next to continue."
-4. Brief user summary: what changed, what the reviewer flagged, what's next.
+3. **Emit `persona_attempt_outcome` (attempt close — only when `experiment.persona_rotation == "true"`).** This is a TRUE terminal for the attempt. `REVIEW_CYCLES` and `RETRIES` were initialized from `CURRENT_COUNTER` in Phase 2 (`REVIEW_CYCLES=1`, `RETRIES=CURRENT_COUNTER-1`). Populate `BLOCKER_COUNT` from the base codex reviewer's response (0 if the reviewer was skipped or found none), and `WALL_MS` from the phase timing token if available. Then:
+   ```bash
+   emit_persona_outcome "done"   # no-op when the knob is off; idempotent
+   ```
+4. If notification policy ≠ `off`: send `PushNotification` — "Task <ID> complete. <N> remaining. Run /z-implement-next to continue."
+5. Brief user summary: what changed, what the reviewer flagged, what's next.
 
 Do **not** auto-advance. Wait for the user to invoke `/z-implement-next` again — this forces a fresh context per task.
 
@@ -251,7 +483,7 @@ Emission is gated by `Z_HARNESS_AXIOM_EXTRACT` (default on); when set to `"0"`, 
 
 | Feature | Used | Gates |
 |---------|------|-------|
-| `subagent` | yes | Phase 2 implementer; Phase 3 reviewer |
+| `subagent` | yes | Phase 2 implementer; Phase 3 base codex reviewer (required); Phase 3 random-arm reviewer (advisory, only when `experiment.persona_rotation` is on) |
 | `ask_user` | yes | Phase 0 slug selection (multiple candidates) |
 | `skill_invoke` | no | — |
 

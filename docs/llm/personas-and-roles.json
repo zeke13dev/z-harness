@@ -1,6 +1,6 @@
 {
   "concept": "personas-and-roles",
-  "last_updated": "2026-05-28T00:00:00Z",
+  "last_updated": "2026-06-01T00:00:00Z",
   "covers_spec": "none",
   "source_files": [
     "scripts/resolve-persona.py",
@@ -19,6 +19,7 @@
     "runtime/drivers/claude/persona_export.py",
     "runtime/dispatch/persona_prompt.py",
     "runtime/dispatch/dispatcher.py",
+    "runtime/contract/event.schema.json",
     "docs/human/PERSONAS.md"
   ],
   "confidence": "high",
@@ -28,12 +29,15 @@
     {"file": "scripts/resolve-persona.py", "line": 1000, "symbol": "cmd_validate", "kind": "fn", "summary": "Validate all bound personas exist, compatible_roles are known, and contract matches role's expected_contract"},
     {"file": "scripts/resolve-persona.py", "line": 554, "symbol": "cmd_where", "kind": "fn", "summary": "Print all layer paths defining a named persona in load order; exits 1 if not found"},
     {"file": "scripts/resolve-persona.py", "line": 1097, "symbol": "cmd_read", "kind": "fn", "summary": "Print frontmatter + body of the winning persona file for a given name"},
-    {"file": "scripts/resolve-persona.py", "line": 52, "symbol": "_ROLE_REGISTRY", "kind": "var", "summary": "Maps role names to expected contracts: consultant_primary/secondary → freeform, reviewer → review-verdict"},
+    {"file": "scripts/resolve-persona.py", "line": 73, "symbol": "_ROLE_REGISTRY", "kind": "var", "summary": "Maps role names to expected contracts: consultant_primary/secondary → freeform, reviewer → review-verdict, implementer → None (any contract). Single source of truth for known roles in cmd_validate and cmd_random_for_role."},
     {"file": "scripts/resolve-persona.py", "line": 497, "symbol": "_detect_and_emit_shadows", "kind": "fn", "summary": "Emits persona_shadowed once per (process, name) for each name defined in more than one layer"},
     {"file": "scripts/resolve-persona.py", "line": 735, "symbol": "_emit_persona_binding_chimera", "kind": "fn", "summary": "Emits persona_binding_chimera once per (process, command, role) when persona/model/runtime axes come from ≥2 config layers"},
     {"file": "runtime/drivers/_persona_utils.py", "line": 1, "symbol": "_persona_utils", "kind": "module", "summary": "Shared stdlib-only frontmatter parser and portability header builder used by all four per-target persona_export.py modules"},
     {"file": "runtime/dispatch/persona_prompt.py", "line": 13, "symbol": "prepend_persona", "kind": "fn", "summary": "Orchestrator helper: reads persona body from body_path, strips frontmatter, returns body+task_prompt; pass None/empty to skip"},
-    {"file": "runtime/dispatch/dispatcher.py", "line": 95, "symbol": "Dispatcher.run", "kind": "fn", "summary": "Execute command via driver; accepts role/persona/model/runtime kwargs; emits persona_bound with per-axis source dict"}
+    {"file": "runtime/dispatch/dispatcher.py", "line": 95, "symbol": "Dispatcher.run", "kind": "fn", "summary": "Execute command via driver; accepts role/persona/model/runtime kwargs; emits persona_bound with per-axis source dict"},
+    {"file": "scripts/resolve-persona.py", "line": 1335, "symbol": "cmd_random_for_role", "kind": "fn", "summary": "[rotation] random-for-role <role> [--exclude=<ids>] [--seed=<s>]: enumerate compatible personas (excluding boring-anchor + excludes), draw uniformly, emit persona_random_selected, return resolve-shaped JSON + {selection_source, draw_id, candidates}. Empty pool → returns boring-anchor tagged fallback_empty_pool."},
+    {"file": "scripts/resolve-persona.py", "line": 1437, "symbol": "cmd_forced_control", "kind": "fn", "summary": "[rotation] forced-control <role>: return boring-anchor with selection_source=forced_control. Emits persona_random_selected. Used on the cadence-Nth attempt."},
+    {"file": "scripts/resolve-persona.py", "line": 1167, "symbol": "_BORING_ANCHOR_NAME", "kind": "const", "summary": "[rotation] String constant 'boring-anchor' — the control persona. Excluded from random pool; drawn only via forced-control or as fallback_empty_pool."}
   ],
   "depends_on": ["providers-registry", "scripts", "agents"],
   "consumed_by": ["commands", "skills", "multi-ide-exports"],
@@ -49,7 +53,15 @@
     "Orchestrator (not dispatcher) calls resolve-persona.py, reads persona_body_path, and calls prepend_persona before Dispatcher.run — the dispatcher accepts an already-composed prompt and performs no persona resolution internally.",
     "persona_bound source field is a per-axis nested dict {persona: <layer>, model: <layer>, runtime: <layer>} where each layer value is one of: override, provider_config, none.",
     "persona_bound, persona_override_used, and model_resolved payloads use the field name `command` (not `command_id`) as of T103.",
-    "Dispatcher.run accepts role: str | None = None kwarg; when provided, included in persona_bound payload but not used for resolution."
+    "Dispatcher.run accepts role: str | None = None kwarg; when provided, included in persona_bound payload but not used for resolution.",
+    "[rotation] boring-anchor is NEVER in the random pool; it is selected only via forced-control (on the cadence) or as fallback_empty_pool (when pool is empty). fallback_empty_pool draws are quarantined in analysis.",
+    "[rotation] persona_random_selected is emitted BEFORE the agent runs (at draw time), not at dispatch time. draw_id is the join key between this event and persona_attempt_outcome. Optional join fields task_id, attempt_id, persona_id are stamped on the payload when the corresponding env vars are exported at dispatch time.",
+    "[rotation] persona_attempt_outcome is emitted by the ORCHESTRATOR at attempt close (not by resolve-persona.py). TRUE terminals that trigger it: done (success or proceed-anyway), unable_to_complete, abandoned, test_failed, halt (forced no_ask). NEVER emitted on needs_clarification, decision_needed, or spec_problem — those are PAUSES that resume the same attempt with the same persona. 'ok' is an implementer INTERMEDIATE status and is NEVER a persona_attempt_outcome.status value. Only emitted when experiment.persona_rotation=true.",
+    "[rotation] persona_bound extended payload for rotation: adds {run_id, command, role, task_id, attempt_id, persona_id, model, runtime, selection_source, draw_id} plus existing per-axis source. reviewer events additionally carry reviewer_participant in {base_codex, random_arm}.",
+    "[rotation] attempt_id = <task_id>-v<cycle>. Resume = same cycle → same attempt_id → reuse persona-draw.json. Retry = cycle incremented → new attempt_id → new draw.",
+    "[rotation] _ROLE_REGISTRY now includes 'implementer': None (expected_contract=None = any). Added so random-for-role implementer passes role validation.",
+    "[rotation] selection_source enum: random_role_pool | forced_control | fallback_empty_pool | fixed_panel",
+    "[rotation] control-counter subcommand increments .z-harness/.persona-control-counter atomically (flock-guarded). Returns new counter value. Called once per fresh implementer attempt."
   ],
   "gotchas": [
     "_shadowed_emitted is keyed on name only (not on layer pair), so if a persona appears in all three layers, persona_shadowed still fires exactly once per process for that name.",
@@ -59,7 +71,11 @@
     "prepend_persona strips YAML frontmatter using a simple string search for '\\n---\\n'; if the closing delimiter is missing, the entire file (including frontmatter) is treated as the body.",
     "Layer 3 (repo-local) path uses git rev-parse to find repo root; falls back to cwd if git is unavailable. Z_HARNESS_REPO_ROOT, Z_HARNESS_REPO_PERSONAS_DIR, Z_HARNESS_BUILTIN_PERSONAS_DIR, and Z_HARNESS_USER_PERSONAS_DIR all override the respective layer paths for hermetic testing.",
     "resolve-persona.sh is a thin bash wrapper — all logic lives in resolve-persona.py; the shell script exists solely so dispatch sites don't need to know the Python path.",
-    "Dispatcher.run() role kwarg is informational only — it appears in persona_bound but does not trigger any resolution or validation; the caller is already responsible for resolving the role before calling run()."
+    "Dispatcher.run() role kwarg is informational only — it appears in persona_bound but does not trigger any resolution or validation; the caller is already responsible for resolving the role before calling run().",
+    "[rotation] random-for-role exits 2 on unknown role (not in _ROLE_REGISTRY). Add to _ROLE_REGISTRY before calling.",
+    "[rotation] fallback_empty_pool always returns boring-anchor body; this is NOT a forced_control sample and must NOT be counted as boring-anchor baseline in analysis.",
+    "[rotation] reviewer dual-dispatch: both base_codex and random_arm share attempt_id; each has its own draw_id. ONE persona_attempt_outcome per attempt. Analysis groups reviewer rows by reviewer_participant (many-to-one).",
+    "[rotation] persona-draw.json records {attempt_id, persona_id, draw_id, selection_source, persona_body_path}. Orchestrator checks attempt_id field to detect resume vs retry."
   ],
   "memories": []
 }

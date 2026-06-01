@@ -241,7 +241,61 @@ Parse the `STATUS:` line:
 
    `parallel_safe: true` only if the discriminating test mutates no shared state.
 
-2. **Dispatch both consultants in parallel (single message, both calls).** Each receives ONLY the Problem + Evidence Inventory sections of DEBUG.md (plus doc-fetcher synthesis if relevant). Never share the orchestrator's checkpoint block.
+2. **Dispatch consultants in parallel (single message).** Each receives ONLY the Problem + Evidence Inventory sections of DEBUG.md (plus doc-fetcher synthesis if relevant). Never share the orchestrator's checkpoint block.
+
+   Check the config knob (resolve once here; reuse in subsequent phases):
+
+   ```bash
+   PERSONA_ROTATION="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get experiment.persona_rotation 2>/dev/null || echo "true")"
+   ```
+
+   **If `PERSONA_ROTATION == "true"`**, use the **fixed 5-member panel** (no randomness). Before dispatching, emit `persona_bound` events for each arm:
+
+   ```bash
+   for ARM in gemini claude-sonnet grok composer codex-5.5; do
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
+       "$(printf '{"run_id":"%s","command":"z-debug","role":"consultant","arm":"%s","selection_source":"fixed_panel","phase":"3a"}' \
+          "$RUN" "$ARM")"
+   done
+   ```
+
+   Then spawn all 5 panel members in parallel. Cursor arms pass their model via `--model <model>`:
+
+   ```
+   <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+        requirement to the user and skip all Round 1 consultant Agent() calls.
+        Phase 3a cannot complete without subagent support. -->
+   Agent(
+     subagent_type="agy",
+     description="R1 hypothesis generation for <slug> — gemini arm",
+     prompt="MODE: generate-hypotheses-round1\n\nProblem (verbatim):\n<## Problem section>\n\nEvidence Inventory (verbatim):\n<## Evidence Inventory section>\n\nRelevant code (quoted with file:line, brief):\n<short snippets>\n\ndoc-fetcher synthesis (if relevant):\n<synthesis>\n\nAsk: independently propose 3-5 hypotheses for the root cause. Each must include a discriminating test that confirms if true AND refutes if false. Do not assume any context outside the problem statement and evidence inventory provided.\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+   )
+   Agent(
+     subagent_type="cursor",
+     model="claude-4.6-sonnet",
+     description="R1 hypothesis generation for <slug> — claude-sonnet arm",
+     prompt="MODE: generate-hypotheses-round1\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+   )
+   Agent(
+     subagent_type="cursor",
+     model="grok-4.3",
+     description="R1 hypothesis generation for <slug> — grok arm",
+     prompt="MODE: generate-hypotheses-round1\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+   )
+   Agent(
+     subagent_type="cursor",
+     model="composer-2.5",
+     description="R1 hypothesis generation for <slug> — composer arm",
+     prompt="MODE: generate-hypotheses-round1\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+   )
+   Agent(
+     subagent_type="codex-cli",
+     description="R1 hypothesis generation for <slug> — codex-5.5 arm",
+     prompt="MODE: generate-hypotheses-round1\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+   )
+   ```
+
+   **If `PERSONA_ROTATION == "false"`**, fall back to the standard 2-consultant dispatch:
 
    ```
    <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
@@ -259,11 +313,11 @@ Parse the `STATUS:` line:
    )
    ```
 
-3. **Merge.** After both return:
+3. **Merge.** After all consultants return:
    - Read the orchestrator checkpoint FROM DISK (`archive/$RUN/round1-orchestrator.md`) — NOT from conversation state.
-   - Merge all three lists into a single `## Hypothesis Pool` section in DEBUG.md.
+   - **If `PERSONA_ROTATION == "true"`** (5-panel path): merge all six lists (orchestrator + gemini, claude-sonnet, grok, composer, codex-5.5) into a single `## Hypothesis Pool` section in DEBUG.md. Tag each row `proposed_by: [models]` and `overlap_count: N` (1–6 — how many of the six sources contained this hypothesis).
+   - **If `PERSONA_ROTATION == "false"`** (2-consultant path): merge all three lists (orchestrator + consultant-primary + consultant-secondary) into a single `## Hypothesis Pool` section in DEBUG.md. Tag each row `proposed_by: [models]` and `overlap_count: N` (1, 2, or 3 — how many of the three sources contained this hypothesis).
    - Assign each row a stable ID `H<NNN>` (zero-padded, 3 digits).
-   - Tag each row `proposed_by: [models]` and `overlap_count: N` (1, 2, or 3 — how many of the three lists contained this hypothesis).
    - **Semantic dedup uses the exact written text of each row, not the orchestrator's recall of intent.** Two rows with the same `claim` text (or close paraphrase, judged by content not source) merge into one row with `overlap_count += 1`. Each merge decision is documented as a one-line note alongside the merged row (e.g., `_merged: H003 (orchestrator) + H007 (codex) — same claim about cache key collision._`).
 
    Append to DEBUG.md:
@@ -279,7 +333,55 @@ Parse the `STATUS:` line:
 
 ## Phase 3b — Round 2 adversarial
 
-Single-message parallel dispatch to both consultants with `MODE: generate-hypotheses-round2-adversarial`. Each receives ONLY the merged `## Hypothesis Pool` section (surgical extraction per the Phase-visibility matrix), plus Problem + Evidence Inventory. **Do NOT** include Test Matrix, Experiment Log, or Score Updates — those don't exist yet anyway.
+Single-message parallel dispatch with `MODE: generate-hypotheses-round2-adversarial`. Each receives ONLY the merged `## Hypothesis Pool` section (surgical extraction per the Phase-visibility matrix), plus Problem + Evidence Inventory. **Do NOT** include Test Matrix, Experiment Log, or Score Updates — those don't exist yet anyway.
+
+**If `PERSONA_ROTATION == "true"`**, use the fixed 5-panel. Before dispatching, emit `persona_bound` events for each arm (same pattern as Phase 3a, with `"phase":"3b"`):
+
+```bash
+for ARM in gemini claude-sonnet grok composer codex-5.5; do
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
+    "$(printf '{"run_id":"%s","command":"z-debug","role":"consultant","arm":"%s","selection_source":"fixed_panel","phase":"3b"}' \
+       "$RUN" "$ARM")"
+done
+```
+
+Then spawn all 5 panel members in parallel. Cursor arms pass their model via `--model <model>`:
+
+```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     requirement to the user and skip all Round 2 consultant Agent() calls.
+     Phase 3b cannot complete without subagent support. -->
+Agent(
+  subagent_type="agy",
+  description="R2 adversarial for <slug> — gemini arm",
+  prompt="MODE: generate-hypotheses-round2-adversarial\nschema_version: hypothesis_round2_v1\n\nProblem (verbatim):\n<## Problem>\n\nEvidence Inventory (verbatim):\n<## Evidence Inventory>\n\nHypothesis Pool (verbatim, with H<NNN> IDs):\n<## Hypothesis Pool table>\n\nAsk: given this merged hypothesis pool, return exactly TWO markdown tables in this order. Do not restate existing pool entries — your value is orthogonality and critique, not endorsement.\n\nTABLE 1 — NEW hypotheses (orthogonality hunt — failure modes absent from the pool). Columns (exact, in order):\n| claim | prediction_if_true | prediction_if_false | discriminating_test | test_cost | parallel_safe | reasoning | orthogonality_to |\n  - `test_cost` ∈ {free, cheap, medium, expensive}\n  - `parallel_safe` ∈ {true, false} — true ONLY if the discriminating test mutates no shared state\n  - `orthogonality_to` — comma-separated list of H<NNN> IDs this row fills a gap relative to (e.g. `H001, H004`)\n\nTABLE 2 — CRITIQUES of existing pool rows. Columns (exact, in order):\n| target_id | critique_type | problem | recommended_action | merge_with_id |\n  - `target_id` — H<NNN> of the row being critiqued (required; rows missing this will be dropped)\n  - `critique_type` MUST be one of: `non_discriminating_test`, `false_parallel_safe`, `duplicate`, `weak_claim`, `unclear_prediction`\n  - `problem` — concrete description; no 'looks good', no 'agree', no empty cells, no pure restatement of the target row's claim\n  - `false_parallel_safe` rows MUST cite the specific mutation in the `problem` cell (e.g. 'writes to ~/.cache/foo'), not just 'mutates state'\n  - `merge_with_id` — populated ONLY when `critique_type == duplicate` (the H<NNN> the target should merge into)\n\nTag the response with `schema_version: hypothesis_round2_v1` at the top.\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+)
+Agent(
+  subagent_type="cursor",
+  model="claude-4.6-sonnet",
+  description="R2 adversarial for <slug> — claude-sonnet arm",
+  prompt="MODE: generate-hypotheses-round2-adversarial\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+)
+Agent(
+  subagent_type="cursor",
+  model="grok-4.3",
+  description="R2 adversarial for <slug> — grok arm",
+  prompt="MODE: generate-hypotheses-round2-adversarial\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+)
+Agent(
+  subagent_type="cursor",
+  model="composer-2.5",
+  description="R2 adversarial for <slug> — composer arm",
+  prompt="MODE: generate-hypotheses-round2-adversarial\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+)
+Agent(
+  subagent_type="codex-cli",
+  description="R2 adversarial for <slug> — codex-5.5 arm",
+  prompt="MODE: generate-hypotheses-round2-adversarial\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+)
+```
+
+**If `PERSONA_ROTATION == "false"`**, fall back to the standard 2-consultant dispatch:
 
 ```
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
@@ -300,7 +402,9 @@ Agent(
 **Orchestrator post-process (filter step) — apply each filter explicitly:**
 
 For NEW rows:
-- (a1) **Inter-consultant dedup (apply FIRST).** Merge the NEW tables from both consultants into a single candidate list. Before assigning H<NNN> IDs, dedup the candidate list against itself using the same text-only semantic dedup rule from Phase 3a (compare `claim` text / close paraphrase, judged by content). If both Codex and Gemini proposed the same NEW hypothesis, collapse into a single candidate row with `proposed_by: [codex, gemini]`; document each merge as a one-line note. Do NOT assign two separate H<NNN> IDs for the same claim.
+- (a1) **Inter-consultant dedup (apply FIRST).** Merge the NEW tables from all returning consultants into a single candidate list. Before assigning H<NNN> IDs, dedup the candidate list against itself using the same text-only semantic dedup rule from Phase 3a (compare `claim` text / close paraphrase, judged by content). If multiple panel members proposed the same NEW hypothesis, collapse into a single candidate row with `proposed_by` listing all sources; document each merge as a one-line note. Do NOT assign two separate H<NNN> IDs for the same claim.
+  - **5-panel path (`PERSONA_ROTATION == "true"`):** merge NEW tables from all five arms (gemini, claude-sonnet, grok, composer, codex-5.5).
+  - **2-consultant path (`PERSONA_ROTATION == "false"`):** merge NEW tables from both consultants. If both Codex and Gemini proposed the same NEW hypothesis, collapse into a single candidate row with `proposed_by: [codex, gemini]`.
 - (a2) **Pool dedup (apply SECOND).** Drop any surviving candidate NEW row whose `claim` semantically duplicates an existing pool row (same dedup rule; document the drop).
 
 For CRITIQUES:
@@ -309,10 +413,14 @@ For CRITIQUES:
 - (d) Drop any `false_parallel_safe` critique that does not cite a specific mutation in the `problem` cell (e.g., must say `"writes to ~/.cache/foo"`, not just `"mutates state"`).
 
 **Apply surviving critiques and additions:**
-- NEW rows: append each surviving candidate from step (a2) to Hypothesis Pool with a new `H<NNN>` ID. Set `proposed_by` to the merged list from step (a1) (e.g. `[codex]`, `[gemini]`, or `[codex, gemini]` if both proposed it). Recompute `overlap_count = len(set(proposed_by))` capped at 3 — never arithmetic-sum.
+- NEW rows: append each surviving candidate from step (a2) to Hypothesis Pool with a new `H<NNN>` ID. Set `proposed_by` to the merged list from step (a1). Recompute `overlap_count = len(set(proposed_by))` — never arithmetic-sum.
+  - **5-panel path:** `overlap_count` can range 1–6 (orchestrator + up to 5 panel arms). Prior assignment in Phase 4 uses: `≥3 → high`, `2 → med`, `1 → low`.
+  - **2-consultant path:** `overlap_count` capped at 3 (e.g. `[codex]`, `[gemini]`, or `[codex, gemini]` if both proposed it).
 - `non_discriminating_test` / `weak_claim` / `unclear_prediction` critiques: refine the target row's `discriminating_test` / `claim` / `prediction_*` cells (or, if irreparable, drop the row and note in `## Eliminated Alternatives`).
 - `false_parallel_safe` critiques: flip the target row's `parallel_safe` from `true` to `false`.
-- `duplicate` critiques: merge `target_id` into `merge_with_id` — union the two rows' `proposed_by` lists (set-union, no duplicates), recompute `overlap_count = len(set(proposed_by))` capped at 3 (the number of unique independent sources from {orchestrator, codex, gemini}), then drop the duplicate row. Never arithmetic-sum the old `overlap_count` values — that can exceed 3, which the Phase 4 `prior` table does not support.
+- `duplicate` critiques: merge `target_id` into `merge_with_id` — union the two rows' `proposed_by` lists (set-union, no duplicates), recompute `overlap_count = len(set(proposed_by))`, then drop the duplicate row. Never arithmetic-sum the old `overlap_count` values.
+  - **5-panel path:** the independent sources are {orchestrator, gemini, claude-sonnet, grok, composer, codex-5.5}; `overlap_count` reflects how many of these six sources proposed the surviving row.
+  - **2-consultant path:** the independent sources are {orchestrator, codex, gemini}; `overlap_count` capped at 3, which the Phase 4 `prior` table supports.
 
 Commit the updated `## Hypothesis Pool` to DEBUG.md after Phase 3b.
 
@@ -457,7 +565,38 @@ If either fails: halt. Either upgrade the root cause statement (so it actually e
 **Once the gate opens:**
 
 1. Capture pre-fix SHA: `PRE_FIX_SHA=$(git rev-parse HEAD)`. Passed to `/z-mr-review` later as `--base`.
-2. **Bundled `light-fix` consult on the proposed fix.** Dispatch both consultants in parallel per the Phase-visibility matrix (subagents see: Problem + Evidence Inventory + winning Hypothesis Pool rows + Experiment Log + draft Root Cause + draft Evidence coverage table; subagents must NOT see Eliminated Alternatives or Score Updates history):
+2. **Bundled `light-fix` consult on the proposed fix.** Dispatch consultants in parallel per the Phase-visibility matrix (subagents see: Problem + Evidence Inventory + winning Hypothesis Pool rows + Experiment Log + draft Root Cause + draft Evidence coverage table; subagents must NOT see Eliminated Alternatives or Score Updates history).
+
+   **If `PERSONA_ROTATION == "true"`**, use the fixed 5-panel. Before dispatching, emit `persona_bound` events for each arm (same pattern as Phase 3a, with `"phase":"7"`):
+
+   ```bash
+   for ARM in gemini claude-sonnet grok composer codex-5.5; do
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
+       "$(printf '{"run_id":"%s","command":"z-debug","role":"consultant","arm":"%s","selection_source":"fixed_panel","phase":"7"}' \
+          "$RUN" "$ARM")"
+   done
+   ```
+
+   Spawn all 5 panel members in parallel. Cursor arms pass their model via `--model <model>`:
+
+   ```
+   <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+        requirement and skip all fix consult Agent() calls. Phase 7 fix gate
+        cannot complete without subagent support. -->
+   Agent(subagent_type="agy", description="Fix consult for <slug> — gemini arm",
+         prompt="MODE: light-fix\n\n<sections per Phase-visibility matrix row 7>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]")
+   Agent(subagent_type="cursor", model="claude-4.6-sonnet", description="Fix consult for <slug> — claude-sonnet arm",
+         prompt="MODE: light-fix\n\n<same sections>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]")
+   Agent(subagent_type="cursor", model="grok-4.3", description="Fix consult for <slug> — grok arm",
+         prompt="MODE: light-fix\n\n<same sections>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]")
+   Agent(subagent_type="cursor", model="composer-2.5", description="Fix consult for <slug> — composer arm",
+         prompt="MODE: light-fix\n\n<same sections>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]")
+   Agent(subagent_type="codex-cli", description="Fix consult for <slug> — codex-5.5 arm",
+         prompt="MODE: light-fix\n\n<same sections>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]")
+   ```
+
+   **If `PERSONA_ROTATION == "false"`**, fall back to the standard 2-consultant dispatch:
+
    ```
    <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
         requirement and skip both fix consult Agent() calls. Phase 7 fix gate
@@ -706,7 +845,7 @@ Orchestrator alone reads raw test output and assigns likelihood buckets (Phase 6
 - **Never debug without repro.** If repro is impossible and user picks "proceed on inference," document that decision in the Problem section and flag in the Post-mortem Confidence section.
 - **Never skip the post-mortem.** Even on a trivial bug — the preventative action-items habit is what makes `/z-debug` different from `/z-fix`.
 - **Never skip Codex review on the fix** — the safety gate is non-negotiable.
-- **Always emit BOTH Round 1 and Round 2 hypothesis-generation consults** — four subagent calls total during generation (2 in R1 + 2 in R2). Plus a fifth pair in Phase 7 for the fix consult.
+- **Always emit BOTH Round 1 and Round 2 hypothesis-generation consults** — when `experiment.persona_rotation=true`: ten subagent calls total during generation (5 in R1 + 5 in R2), plus five more in Phase 7 for the fix consult; when `experiment.persona_rotation=false`: four subagent calls total (2 in R1 + 2 in R2), plus two more in Phase 7.
 - **Likelihood-bucket assignment is orchestrator-only.** Never delegate the `{strongly_falsified, …, strongly_supported}` call to a consultant. Never pass raw test output to a consultant.
 - **Orchestrator's Round 1 block MUST be checkpointed to disk** (`archive/<run>/round1-orchestrator.md`) BEFORE consultant dispatch. Re-read from disk at merge time, not from conversation state.
 - **Wrong-tool gate (Phase 0) is non-skippable.** If the user already has a hypothesis, exit with a `/z-fix` recommendation — do not proceed.
@@ -721,7 +860,7 @@ Orchestrator alone reads raw test output and assigns likelihood buckets (Phase 6
 
 | Feature | Used | Gates |
 |---------|------|-------|
-| `subagent` | yes | Phase 2.5 bisect-isolator Agent(); Phase 3a Round 1 consultant-primary and consultant-secondary Agent() calls; Phase 3b Round 2 consultant-primary and consultant-secondary Agent() calls; Phase 7 fix consult Agent() calls |
+| `subagent` | yes | Phase 2.5 bisect-isolator Agent(); Phase 3a Round 1 Agent() calls (2-consultant fallback when `experiment.persona_rotation=false`, or fixed 5-panel when `experiment.persona_rotation=true`: agy, cursor@claude-4.6-sonnet, cursor@grok-4.3, cursor@composer-2.5, codex-cli); Phase 3b Round 2 Agent() calls (same panel structure as Phase 3a); Phase 7 fix consult Agent() calls (same panel structure) |
 | `ask_user` | yes | Empty arguments gate; Setup slug confirmation; Phase 0 wrong-tool gate; Phase 1 problem clarification; Phase 2 cannot-reproduce gate; Phase 6 hard cycle cap gate; Phase 7 fix approval; Phase 9 MR-review gate; Phase 9 action-item disposition |
 | `skill_invoke` | no | — |
 

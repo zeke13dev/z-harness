@@ -1444,5 +1444,865 @@ runtime = "codex-cli"
                              msg="z_review must be excluded when filtering by z_plan")
 
 
+# ---------------------------------------------------------------------------
+# T001: implementer role in _ROLE_REGISTRY
+# ---------------------------------------------------------------------------
+
+class TestImplementerRole(unittest.TestCase):
+    """
+    implementer is registered in _ROLE_REGISTRY with expected_contract = None,
+    meaning any persona contract (or no contract) is accepted when binding to
+    the implementer role.
+    """
+
+    def _setup_env(
+        self,
+        builtin_dir: str,
+        user_dir: str,
+        repo_dir: str,
+        config_dir: str,
+        toml_content: str,
+    ) -> dict:
+        toml_path = Path(config_dir) / "config.toml"
+        _write_toml(toml_path, toml_content)
+        return {
+            "Z_HARNESS_BUILTIN_PERSONAS_DIR": builtin_dir,
+            "Z_HARNESS_USER_PERSONAS_DIR": user_dir,
+            "Z_HARNESS_REPO_PERSONAS_DIR": repo_dir,
+            "Z_HARNESS_REPO_CONFIG": str(toml_path),
+            "XDG_CONFIG_HOME": config_dir,
+            "Z_HARNESS_REPO_PROVIDERS": "/dev/null",
+        }
+
+    def test_implementer_in_role_registry(self):
+        """
+        _ROLE_REGISTRY must contain 'implementer' with value None (any-contract).
+
+        If this test fails, random-for-role implementer will fail validation
+        because the role is unknown.
+        """
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("rp", str(_REPO_ROOT / "scripts" / "resolve-persona.py"))
+        rp = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rp)
+        self.assertIn(
+            "implementer", rp._ROLE_REGISTRY,
+            msg="'implementer' must be present in _ROLE_REGISTRY",
+        )
+        self.assertIsNone(
+            rp._ROLE_REGISTRY["implementer"],
+            msg="_ROLE_REGISTRY['implementer'] must be None (any-contract semantics)",
+        )
+
+    def test_implementer_known_role_so_compatible_roles_passes_validate(self):
+        """
+        A persona with compatible_roles: [implementer] must pass validate (no unknown-role error).
+
+        validate checks each compatible_roles entry against known roles in _ROLE_REGISTRY.
+        If 'implementer' is absent from the registry, validate emits an unknown-role error.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir, \
+             tempfile.TemporaryDirectory() as config_dir:
+
+            _write_persona(
+                Path(builtin_dir), "impl-persona",
+                description="Implementer persona",
+                extra_frontmatter="compatible_roles: [implementer]",
+            )
+
+            env = self._setup_env(
+                builtin_dir, user_dir, repo_dir, config_dir,
+                """
+[roles.default.implementer]
+persona = "impl-persona"
+runtime = "claude-cli"
+""",
+            )
+
+            result = _run(["validate"], env_extra=env)
+            self.assertEqual(
+                result.returncode, 0,
+                msg=(
+                    "validate must pass when persona is bound to implementer role. "
+                    f"stderr={result.stderr!r}"
+                ),
+            )
+
+    def test_implementer_accepts_any_explicit_contract(self):
+        """
+        A persona that explicitly declares contract: freeform bound to implementer must pass validate.
+
+        implementer has expected_contract = None → contract check is skipped entirely.
+        Violation would mean personas with non-None contracts are wrongly rejected for implementer.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir, \
+             tempfile.TemporaryDirectory() as config_dir:
+
+            _write_persona(
+                Path(builtin_dir), "freeform-impl-persona",
+                description="Persona with explicit freeform contract",
+                extra_frontmatter="contract: freeform",
+            )
+
+            env = self._setup_env(
+                builtin_dir, user_dir, repo_dir, config_dir,
+                """
+[roles.default.implementer]
+persona = "freeform-impl-persona"
+runtime = "claude-cli"
+""",
+            )
+
+            result = _run(["validate"], env_extra=env)
+            self.assertEqual(
+                result.returncode, 0,
+                msg=(
+                    "validate must accept any contract (e.g. freeform) for the implementer role. "
+                    f"stderr={result.stderr!r}"
+                ),
+            )
+
+    def test_implementer_accepts_no_contract(self):
+        """
+        A persona with no contract field bound to implementer must pass validate.
+
+        Omitting contract = 'any' semantics; combined with implementer's None
+        expected_contract, this must always pass.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir, \
+             tempfile.TemporaryDirectory() as config_dir:
+
+            # No extra_frontmatter → no contract field
+            _write_persona(
+                Path(builtin_dir), "no-contract-impl",
+                description="Minimal implementer persona",
+            )
+
+            env = self._setup_env(
+                builtin_dir, user_dir, repo_dir, config_dir,
+                """
+[roles.default.implementer]
+persona = "no-contract-impl"
+runtime = "claude-cli"
+""",
+            )
+
+            result = _run(["validate"], env_extra=env)
+            self.assertEqual(
+                result.returncode, 0,
+                msg=(
+                    "validate must pass when persona has no contract and role is implementer. "
+                    f"stderr={result.stderr!r}"
+                ),
+            )
+
+    def test_existing_role_contracts_unchanged(self):
+        """
+        Adding implementer must not change existing role contracts.
+
+        reviewer still requires review-verdict; consultant_primary/secondary still require freeform.
+        A freeform persona bound to reviewer must still be rejected after T001.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir, \
+             tempfile.TemporaryDirectory() as config_dir:
+
+            _write_persona(
+                Path(builtin_dir), "wrong-contract-reviewer",
+                description="Freeform persona incorrectly bound to reviewer",
+                extra_frontmatter="contract: freeform",
+            )
+
+            env = self._setup_env(
+                builtin_dir, user_dir, repo_dir, config_dir,
+                """
+[roles.default.reviewer]
+persona = "wrong-contract-reviewer"
+runtime = "codex-cli"
+""",
+            )
+
+            result = _run(["validate"], env_extra=env)
+            self.assertNotEqual(
+                result.returncode, 0,
+                msg=(
+                    "reviewer role must still require review-verdict contract after T001. "
+                    f"stderr={result.stderr!r}"
+                ),
+            )
+
+
+# ---------------------------------------------------------------------------
+# T004: random-for-role subcommand
+# ---------------------------------------------------------------------------
+
+class TestRandomForRole(unittest.TestCase):
+    """
+    random-for-role draws a uniformly random persona for a given role,
+    excluding boring-anchor from the pool, and returns the resolve-shaped JSON
+    plus selection metadata.
+    """
+
+    def _make_env(
+        self,
+        builtin_dir: str,
+        user_dir: str,
+        repo_dir: str,
+    ) -> dict:
+        return {
+            "Z_HARNESS_BUILTIN_PERSONAS_DIR": builtin_dir,
+            "Z_HARNESS_USER_PERSONAS_DIR": user_dir,
+            "Z_HARNESS_REPO_PERSONAS_DIR": repo_dir,
+        }
+
+    def test_returns_valid_persona_for_reviewer(self):
+        """
+        random-for-role reviewer returns a valid persona with selection_source=random_role_pool.
+
+        Invariant: the drawn persona must be in the candidates list and the
+        candidates must not include boring-anchor.
+        Failure class: if boring-anchor leaks into the random pool, controlled
+        experiments are contaminated and analysis loses the clean comparison arm.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            # Two reviewer-compatible personas.
+            _write_persona(
+                Path(builtin_dir), "persona-alpha",
+                description="Alpha reviewer",
+                extra_frontmatter="compatible_roles: [reviewer]",
+            )
+            _write_persona(
+                Path(builtin_dir), "persona-beta",
+                description="Beta reviewer",
+                extra_frontmatter="compatible_roles: [reviewer]",
+            )
+            # boring-anchor MUST exist but MUST NOT appear in the pool.
+            _write_persona(Path(builtin_dir), "boring-anchor", description="Control persona")
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+            result = _run(["random-for-role", "reviewer", "--seed=1"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            data = json.loads(result.stdout)
+            # Required keys from resolve shape + selection metadata.
+            for key in ("persona", "model", "runtime", "source",
+                        "persona_body_path", "selection_source", "draw_id", "candidates"):
+                self.assertIn(key, data, msg=f"Missing key {key!r}")
+
+            self.assertEqual(data["selection_source"], "random_role_pool")
+            self.assertIn(data["persona"], data["candidates"],
+                          msg="Drawn persona must be in candidates list")
+            self.assertNotIn("boring-anchor", data["candidates"],
+                             msg="boring-anchor must be excluded from random pool")
+            self.assertIn(data["persona"], {"persona-alpha", "persona-beta"})
+
+    def test_returns_valid_persona_for_implementer(self):
+        """
+        random-for-role implementer returns a valid persona; implementer accepts any contract.
+
+        Failure class: if implementer is not in _ROLE_REGISTRY the subcommand
+        exits 2 and no persona is drawn (T001 dependency).
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            _write_persona(
+                Path(builtin_dir), "impl-persona-x",
+                description="Implementer persona",
+                extra_frontmatter="compatible_roles: [implementer]",
+            )
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+            result = _run(["random-for-role", "implementer", "--seed=7"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            data = json.loads(result.stdout)
+            self.assertEqual(data["selection_source"], "random_role_pool")
+            self.assertEqual(data["persona"], "impl-persona-x")
+
+    def test_seed_is_reproducible(self):
+        """
+        Two invocations with the same --seed must select the same persona.
+
+        Failure class: if seeding is not applied, the draw is not reproducible
+        and test suites cannot verify specific persona assignments.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            _write_persona(Path(builtin_dir), "seed-persona-a", description="Seed A",
+                           extra_frontmatter="compatible_roles: [reviewer]")
+            _write_persona(Path(builtin_dir), "seed-persona-b", description="Seed B",
+                           extra_frontmatter="compatible_roles: [reviewer]")
+            _write_persona(Path(builtin_dir), "seed-persona-c", description="Seed C",
+                           extra_frontmatter="compatible_roles: [reviewer]")
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+
+            result1 = _run(["random-for-role", "reviewer", "--seed=42"], env_extra=env)
+            result2 = _run(["random-for-role", "reviewer", "--seed=42"], env_extra=env)
+
+            self.assertEqual(result1.returncode, 0, msg=result1.stderr)
+            self.assertEqual(result2.returncode, 0, msg=result2.stderr)
+
+            data1 = json.loads(result1.stdout)
+            data2 = json.loads(result2.stdout)
+
+            self.assertEqual(
+                data1["persona"], data2["persona"],
+                msg=f"Same seed must produce same persona. Got {data1['persona']!r} vs {data2['persona']!r}",
+            )
+
+    def test_different_seeds_may_differ(self):
+        """
+        Different seeds with ≥3 candidates should (almost certainly) produce different draws.
+
+        This is probabilistic: failure probability = (1/N)^(attempts) which is
+        negligible for N=5. It exists to catch a broken seeding implementation
+        that returns the same item regardless of seed.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            for i in range(5):
+                _write_persona(Path(builtin_dir), f"diff-seed-persona-{i}",
+                               description=f"Diff seed persona {i}",
+                               extra_frontmatter="compatible_roles: [reviewer]")
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+            results = set()
+            for seed in range(20):
+                r = _run(["random-for-role", "reviewer", f"--seed={seed}"], env_extra=env)
+                self.assertEqual(r.returncode, 0)
+                results.add(json.loads(r.stdout)["persona"])
+
+            self.assertGreater(
+                len(results), 1,
+                msg="Different seeds must produce different personas across 20 draws with 5 candidates",
+            )
+
+    def test_empty_pool_returns_fallback_without_crashing(self):
+        """
+        When no compatible personas exist, returns boring-anchor with
+        selection_source=fallback_empty_pool and exits 0.
+
+        Invariant: empty pool must never crash; fallback_empty_pool is quarantined
+        from persona stats so the run still completes.
+        Failure class: KeyError or sys.exit(1) on empty pool breaks all runs
+        where no personas are configured.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            # No personas at all — directories exist but are empty.
+            Path(builtin_dir).mkdir(parents=True, exist_ok=True)
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+            result = _run(["random-for-role", "reviewer"], env_extra=env)
+            self.assertEqual(result.returncode, 0,
+                             msg=f"Empty pool must exit 0, got {result.returncode}. "
+                                 f"stderr={result.stderr!r}")
+
+            data = json.loads(result.stdout)
+            self.assertEqual(data["persona"], "boring-anchor",
+                             msg="Empty pool must return boring-anchor")
+            self.assertEqual(data["selection_source"], "fallback_empty_pool",
+                             msg="Empty pool must use fallback_empty_pool source")
+            self.assertEqual(data["candidates"], [],
+                             msg="Empty pool must return empty candidates list")
+
+    def test_empty_pool_event_emitted(self):
+        """
+        persona_random_selected event is emitted even on empty pool.
+
+        Failure class: if the event is not emitted on empty pool, telemetry
+        has a gap and analysis cannot detect fallback frequency.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+            result = _run(["random-for-role", "reviewer"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            self.assertIn("persona_random_selected", result.stderr,
+                          msg="persona_random_selected must be emitted even for fallback_empty_pool")
+            self.assertIn("fallback_empty_pool", result.stderr)
+
+    def test_event_emitted_before_return(self):
+        """
+        persona_random_selected event appears in stderr before stdout JSON.
+
+        (Verified structurally: subprocess stdout+stderr are captured; if stderr
+        is empty after a successful run, the event was not emitted.)
+        Failure class: if event is emitted after stdout, the orchestrator may
+        log a terminal-outcome before the draw event, breaking join semantics.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            _write_persona(Path(builtin_dir), "event-test-persona", description="Event test",
+                           extra_frontmatter="compatible_roles: [reviewer]")
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+            result = _run(["random-for-role", "reviewer", "--seed=5"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            # Event must appear in stderr.
+            self.assertIn("persona_random_selected", result.stderr,
+                          msg="persona_random_selected must appear in stderr")
+            # draw_id in event must match draw_id in JSON output.
+            data = json.loads(result.stdout)
+            self.assertIn(data["draw_id"], result.stderr,
+                          msg="draw_id in stderr event must match draw_id in JSON output")
+
+    def test_exclude_removes_from_pool(self):
+        """
+        --exclude=<id> removes that persona from the candidate pool.
+
+        Invariant: excluded IDs must not appear in candidates or be selected.
+        Failure class: if --exclude is ignored, retry diversification is broken
+        and the same persona may recur across attempts.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            _write_persona(Path(builtin_dir), "keep-me", description="Keep",
+                           extra_frontmatter="compatible_roles: [reviewer]")
+            _write_persona(Path(builtin_dir), "exclude-me", description="Exclude",
+                           extra_frontmatter="compatible_roles: [reviewer]")
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+            result = _run(["random-for-role", "reviewer", "--exclude=exclude-me"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            data = json.loads(result.stdout)
+            self.assertNotIn("exclude-me", data["candidates"],
+                             msg="excluded persona must not appear in candidates")
+            self.assertEqual(data["persona"], "keep-me")
+
+    def test_boring_anchor_excluded_even_if_present_in_layer(self):
+        """
+        boring-anchor persona in a layer must never appear in the candidate pool.
+
+        Invariant: boring-anchor is the forced_control and must only appear via
+        forced-control subcommand, not in random draws.
+        Failure class: if boring-anchor leaks into random_role_pool, the
+        experiment loses its clean control arm.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            _write_persona(Path(builtin_dir), "boring-anchor", description="Control",
+                           extra_frontmatter="compatible_roles: [reviewer]")
+            _write_persona(Path(builtin_dir), "real-reviewer", description="Real",
+                           extra_frontmatter="compatible_roles: [reviewer]")
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+            result = _run(["random-for-role", "reviewer", "--seed=0"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            data = json.loads(result.stdout)
+            self.assertNotIn("boring-anchor", data["candidates"],
+                             msg="boring-anchor must never appear in random pool candidates")
+            self.assertNotEqual(data["persona"], "boring-anchor",
+                                msg="boring-anchor must not be selected in normal pool draw")
+
+    def test_output_shape_matches_resolve(self):
+        """
+        Output JSON must contain all keys from the resolve subcommand output
+        plus selection_source, draw_id, candidates.
+
+        Failure class: if keys are missing, callers that treat random-for-role
+        output uniformly with resolve output will KeyError.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            _write_persona(Path(builtin_dir), "shape-test-persona", description="Shape test",
+                           extra_frontmatter="compatible_roles: [implementer]")
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+            result = _run(["random-for-role", "implementer", "--seed=1"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            data = json.loads(result.stdout)
+            # Keys from resolve shape.
+            for key in ("persona", "model", "runtime", "source", "persona_body_path"):
+                self.assertIn(key, data, msg=f"resolve-shape key {key!r} missing from output")
+            # Selection metadata keys.
+            for key in ("selection_source", "draw_id", "candidates"):
+                self.assertIn(key, data, msg=f"selection metadata key {key!r} missing from output")
+
+    def test_unknown_role_exits_2(self):
+        """
+        random-for-role with an unknown role must exit 2 with an error message.
+
+        Failure class: silently returning no candidates for an unknown role would
+        hide configuration bugs; exit 2 forces the caller to fix the role name.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+            result = _run(["random-for-role", "not-a-real-role"], env_extra=env)
+            self.assertEqual(result.returncode, 2,
+                             msg="Unknown role must exit 2")
+            self.assertIn("not-a-real-role", result.stderr,
+                          msg="Error message must name the unknown role")
+
+    def test_contract_filtering_excludes_incompatible_personas(self):
+        """
+        Personas with a contract that mismatches the role's expected_contract
+        must be excluded from the candidate pool.
+
+        Invariant: contract filtering in _enumerate_role_compatible_personas
+        ensures only contract-valid personas are candidates.
+        Failure class: if a freeform persona slips into the reviewer pool, the
+        reviewer may not produce a valid VERDICT verdict, breaking review gating.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            # Correct contract for reviewer.
+            _write_persona(Path(builtin_dir), "good-reviewer", description="Good reviewer",
+                           extra_frontmatter="compatible_roles: [reviewer]\ncontract: review-verdict")
+            # Wrong contract — must be excluded.
+            _write_persona(Path(builtin_dir), "bad-reviewer", description="Bad reviewer",
+                           extra_frontmatter="compatible_roles: [reviewer]\ncontract: freeform")
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+            result = _run(["random-for-role", "reviewer", "--seed=0"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            data = json.loads(result.stdout)
+            self.assertNotIn("bad-reviewer", data["candidates"],
+                             msg="Persona with wrong contract must be excluded from pool")
+            self.assertIn("good-reviewer", data["candidates"],
+                          msg="Persona with correct contract must be in pool")
+            self.assertEqual(data["persona"], "good-reviewer")
+
+
+# ---------------------------------------------------------------------------
+# T005 tests: forced-control and control-counter subcommands
+# ---------------------------------------------------------------------------
+
+class TestForcedControl(unittest.TestCase):
+    """forced-control <role> always returns boring-anchor tagged forced_control."""
+
+    def _make_env(self, builtin_dir: str, user_dir: str, repo_dir: str) -> dict:
+        return {
+            "Z_HARNESS_BUILTIN_PERSONAS_DIR": builtin_dir,
+            "Z_HARNESS_USER_PERSONAS_DIR": user_dir,
+            "Z_HARNESS_REPO_PERSONAS_DIR": repo_dir,
+        }
+
+    def test_forced_control_returns_boring_anchor(self):
+        """
+        forced-control <role> must return boring-anchor regardless of which other
+        personas are present.
+
+        Invariant: boring-anchor is the control and must be reachable via
+        forced-control even when other personas are present.
+        Failure class: if forced-control returns a random persona, the control
+        arm of the experiment is contaminated.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            # Write boring-anchor in builtin layer.
+            _write_persona(Path(builtin_dir), "boring-anchor", description="Control anchor",
+                           extra_frontmatter="compatible_roles: [implementer]")
+            # Write another persona — must NOT be returned.
+            _write_persona(Path(builtin_dir), "fancy-persona", description="Fancy",
+                           extra_frontmatter="compatible_roles: [implementer]")
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+            result = _run(["forced-control", "implementer"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            data = json.loads(result.stdout)
+            self.assertEqual(data["persona"], "boring-anchor",
+                             msg="forced-control must always return boring-anchor")
+            self.assertEqual(data["selection_source"], "forced_control",
+                             msg="selection_source must be forced_control")
+
+    def test_forced_control_selection_source_is_forced_control(self):
+        """
+        Output selection_source must be exactly 'forced_control', not
+        'random_role_pool' or 'fallback_empty_pool'.
+
+        Failure class: if the tag is wrong, analysis queries that segment by
+        selection_source will misclassify control observations as random draws.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            _write_persona(Path(builtin_dir), "boring-anchor", description="Control",
+                           extra_frontmatter="compatible_roles: [reviewer]")
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+            result = _run(["forced-control", "reviewer"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            data = json.loads(result.stdout)
+            self.assertEqual(data["selection_source"], "forced_control")
+            # Specifically must not be these alternative tags.
+            self.assertNotEqual(data["selection_source"], "random_role_pool")
+            self.assertNotEqual(data["selection_source"], "fallback_empty_pool")
+
+    def test_forced_control_output_has_resolve_shape(self):
+        """
+        Output JSON must include all keys from the resolve subcommand output
+        (persona, model, runtime, source, persona_body_path) plus
+        selection_source, draw_id, candidates.
+
+        Failure class: missing keys would cause callers that treat forced-control
+        output uniformly with resolve/random-for-role output to KeyError.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            _write_persona(Path(builtin_dir), "boring-anchor", description="Control",
+                           extra_frontmatter="compatible_roles: [implementer]")
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+            result = _run(["forced-control", "implementer"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            data = json.loads(result.stdout)
+            # Resolve-shape keys.
+            for key in ("persona", "model", "runtime", "source", "persona_body_path"):
+                self.assertIn(key, data, msg=f"resolve-shape key {key!r} missing")
+            # Selection metadata keys.
+            for key in ("selection_source", "draw_id", "candidates"):
+                self.assertIn(key, data, msg=f"selection metadata key {key!r} missing")
+
+    def test_forced_control_emits_draw_event(self):
+        """
+        forced-control must emit a draw event (persona_random_selected) tagged
+        selection_source=forced_control, mirroring random-for-role's emission.
+
+        Invariant (SPEC: attribution before execution): every fresh attempt —
+        including control attempts — logs a draw event so it is joinable to its
+        terminal-outcome row.
+        Failure class: if forced-control emits NO draw event, control attempts
+        have no draw row and cannot be joined to persona_attempt_outcome in
+        log-only analysis; the control arm becomes invisible to the join.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            _write_persona(Path(builtin_dir), "boring-anchor", description="Control",
+                           extra_frontmatter="compatible_roles: [implementer]")
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+            result = _run(["forced-control", "implementer"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            # A draw event must be emitted (stderr is the visibility channel,
+            # same as random-for-role's persona_random_selected).
+            self.assertIn("persona_random_selected", result.stderr,
+                          msg="forced-control must emit a draw event")
+            self.assertIn("forced_control", result.stderr,
+                          msg="draw event must be tagged selection_source=forced_control")
+            # draw_id in the event must match draw_id in the JSON output (join key).
+            data = json.loads(result.stdout)
+            self.assertIn(data["draw_id"], result.stderr,
+                          msg="draw_id in event must match draw_id in JSON output")
+
+    def test_draw_event_carries_join_keys(self):
+        """
+        Both draw subcommands stamp task_id + attempt_id + persona_id onto the
+        draw event when the orchestrator exports Z_HARNESS_TASK_ID /
+        Z_HARNESS_ATTEMPT_ID.
+
+        Invariant (SPEC: draw_id + attempt_id + persona_id appear on BOTH the
+        draw event and the terminal-outcome event so they join).
+        Failure class: if the draw event lacks task_id/attempt_id/persona_id, it
+        cannot be joined to persona_attempt_outcome by anything other than
+        draw_id, defeating the directly-queryable join the SPEC requires.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            _write_persona(Path(builtin_dir), "boring-anchor", description="Control",
+                           extra_frontmatter="compatible_roles: [implementer]")
+            _write_persona(Path(builtin_dir), "drawable", description="Drawable",
+                           extra_frontmatter="compatible_roles: [implementer]")
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+            env["Z_HARNESS_TASK_ID"] = "T999"
+            env["Z_HARNESS_ATTEMPT_ID"] = "T999-v2"
+            env["Z_HARNESS_RUN_ID"] = "joinrun"
+
+            # forced-control (control arm) must carry the join keys.
+            fc = _run(["forced-control", "implementer"], env_extra=env)
+            self.assertEqual(fc.returncode, 0, msg=fc.stderr)
+            self.assertIn("task_id='T999'", fc.stderr,
+                          msg="forced-control draw event must carry task_id join key")
+            self.assertIn("attempt_id='T999-v2'", fc.stderr,
+                          msg="forced-control draw event must carry attempt_id join key")
+            self.assertIn("boring-anchor", fc.stderr,
+                          msg="forced-control draw event must carry the selected persona_id")
+
+            # random-for-role (random arm) must carry the same join keys.
+            rr = _run(["random-for-role", "implementer", "--seed=3"], env_extra=env)
+            self.assertEqual(rr.returncode, 0, msg=rr.stderr)
+            self.assertIn("task_id='T999'", rr.stderr,
+                          msg="random-for-role draw event must carry task_id join key")
+            self.assertIn("attempt_id='T999-v2'", rr.stderr,
+                          msg="random-for-role draw event must carry attempt_id join key")
+
+    def test_forced_control_unknown_role_exits_2(self):
+        """
+        forced-control with an unknown role must exit 2.
+
+        Failure class: silently succeeding for an unknown role would hide
+        misconfiguration in the orchestrator.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+            result = _run(["forced-control", "not-a-real-role"], env_extra=env)
+            self.assertEqual(result.returncode, 2,
+                             msg="Unknown role must exit 2")
+            self.assertIn("not-a-real-role", result.stderr,
+                          msg="Error message must name the unknown role")
+
+
+class TestControlCounter(unittest.TestCase):
+    """control-counter --increment persists and increments atomically across processes."""
+
+    def test_counter_starts_at_one_when_file_absent(self):
+        """
+        When the counter file does not exist, the first increment returns 1.
+
+        Invariant: counter initializes to 0 (absent) and increments to 1 on
+        first call.
+        Failure class: if counter starts at a non-zero value, the cadence
+        formula (count % N == 0) would fire on the wrong iteration.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            counter_path = Path(tmpdir) / ".persona-control-counter"
+            env = {"Z_HARNESS_CONTROL_COUNTER_PATH": str(counter_path)}
+            result = _run(["control-counter", "--increment"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            self.assertEqual(result.stdout.strip(), "1",
+                             msg="First increment of absent counter must return 1")
+
+    def test_counter_persists_across_processes(self):
+        """
+        Counter value increments on each separate process invocation.
+
+        Invariant: the counter file is durably written; subsequent processes
+        see the accumulated value.
+        Failure class: if each process resets to 0, the cadence never fires.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            counter_path = Path(tmpdir) / ".persona-control-counter"
+            env = {"Z_HARNESS_CONTROL_COUNTER_PATH": str(counter_path)}
+
+            for expected in range(1, 6):
+                result = _run(["control-counter", "--increment"], env_extra=env)
+                self.assertEqual(result.returncode, 0, msg=result.stderr)
+                self.assertEqual(result.stdout.strip(), str(expected),
+                                 msg=f"Call {expected}: expected counter={expected}")
+
+    def test_counter_missing_flag_exits_2(self):
+        """
+        control-counter without --increment must exit 2 with usage message.
+
+        Failure class: calling without a flag should never silently succeed or
+        corrupt the counter.
+        """
+        result = _run(["control-counter"])
+        self.assertEqual(result.returncode, 2,
+                         msg="control-counter with no flags must exit 2")
+
+    def test_counter_concurrent_increments_are_consistent(self):
+        """
+        N concurrent process invocations each increment the counter; final
+        value equals N.
+
+        Invariant: flock-guarded write is atomic across processes — no
+        lost-update races.
+        Failure class: if flock is missing or incorrect, concurrent increments
+        can read the same value and write the same result, causing the final
+        count to be < N.
+        """
+        import concurrent.futures
+        import tempfile
+
+        N = 10
+        with tempfile.TemporaryDirectory() as tmpdir:
+            counter_path = Path(tmpdir) / ".persona-control-counter"
+            env = {"Z_HARNESS_CONTROL_COUNTER_PATH": str(counter_path)}
+
+            def increment_once(_):
+                return _run(["control-counter", "--increment"], env_extra=env)
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=N) as pool:
+                results = list(pool.map(increment_once, range(N)))
+
+            for i, r in enumerate(results):
+                self.assertEqual(r.returncode, 0, msg=f"Call {i} stderr: {r.stderr}")
+
+            final = int(counter_path.read_text(encoding="utf-8").strip())
+            self.assertEqual(final, N,
+                             msg=f"Expected final counter={N} after {N} concurrent increments, got {final}")
+
+
 if __name__ == "__main__":
     unittest.main()

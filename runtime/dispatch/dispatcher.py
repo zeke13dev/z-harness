@@ -16,8 +16,9 @@ Design decisions applied here:
   ``{driver, command_id, session_id}`` for ``dispatch_start`` and
   ``{driver, command_id, wall_ms, exit_code, is_error}`` for ``dispatch_end``.
 
-- **B3** — Args composition is the dispatcher's responsibility:
-  ``final_args = provider_config["args_template"] + caller_args``.
+- **B3** — Args composition is the dispatcher's responsibility.
+  ``final_args`` is produced by :func:`_compose_argv` (which honors
+  ``model_arg_template`` ``{model}`` substitution) followed by ``caller_args``.
   Drivers receive a ready-to-use flat argv and must not re-compose it.
 
 Timeout strategy
@@ -64,6 +65,48 @@ from runtime.dispatch.result import DispatchResult
 from runtime.dispatch.timeout import DispatchTimeoutError
 
 
+def _compose_argv(provider_config: dict, effective_model: str | None) -> list[str]:
+    """Compose the base argv from *provider_config*, honoring ``model_arg_template``.
+
+    Ported from ``scripts/resolve-provider.py::compose_argv``.
+
+    When ``model_arg_template`` is None (v1 provider), returns
+    ``list(provider_config["args_template"])`` unchanged — no model resolution
+    is attempted.
+
+    When ``model_arg_template`` is set, resolves the model string (caller value
+    then ``default_model`` fallback) and renders ``{model}`` in each token.
+
+    Raises:
+        ValueError: When ``model_arg_template`` is set but no model can be
+            resolved from ``effective_model`` or ``provider_config["default_model"]``.
+    """
+    argv: list[str] = list(provider_config.get("args_template", []))
+
+    model_arg_template: list[str] | None = provider_config.get("model_arg_template")
+    if model_arg_template is None:
+        # v1 provider: no model arg; return args_template without model resolution.
+        return argv
+
+    # Resolve the effective model string.
+    model: str | None = effective_model if effective_model else None
+    if not model:
+        model = provider_config.get("default_model") or None
+    if not model:
+        raise ValueError(
+            "_compose_argv: effective_model is empty/null and provider has no default_model"
+        )
+
+    # Render {model} substitution in each token of model_arg_template.
+    rendered = [
+        token.replace("{model}", model) if "{model}" in token else token
+        for token in model_arg_template
+    ]
+    argv.extend(rendered)
+
+    return argv
+
+
 class Dispatcher:
     """Coordinates argument composition, env hygiene, event streaming, and
     telemetry bracketing for a single ``HostDriver.dispatch()`` call.
@@ -103,12 +146,19 @@ class Dispatcher:
         model: str | None = None,
         runtime: str | None = None,
         role: str | None = None,
+        task_id: str | None = None,
+        attempt_id: str | None = None,
+        persona_id: str | None = None,
+        selection_source: str | None = None,
+        draw_id: str | None = None,
+        reviewer_participant: str | None = None,
     ) -> DispatchResult:
         """Execute a command via *driver* and return the final result.
 
         Sequence
         --------
-        1. Compose ``final_args = provider_config["args_template"] + caller_args``.
+        1. Compose ``final_args`` via :func:`_compose_argv` (honors
+           ``model_arg_template`` ``{model}`` substitution) + ``caller_args``.
         2. Emit ``dispatch_start`` event.
         3. Resolve persona/model/runtime overrides; emit override events.
         4. Build subprocess env via :func:`~runtime.dispatch.env.build_env`,
@@ -154,6 +204,26 @@ class Dispatcher:
                 provided, included in the ``persona_bound`` event payload.
                 Not used for resolution — the caller resolves the role before
                 calling ``run()`` (see SPEC §D resolution-ownership note).
+            task_id: Optional task identifier for the current task attempt
+                (e.g. ``"T007"``).  Included in ``persona_bound`` when provided.
+            attempt_id: Optional attempt identifier (e.g. ``"T007-v1"``).
+                Included in ``persona_bound`` when provided.
+            persona_id: Optional persona identifier from the draw result
+                (i.e. the ``name`` field from ``random-for-role`` JSON).
+                Always present in ``persona_bound`` — falls back to the
+                resolved persona name, or ``null`` when neither is available.
+            selection_source: Optional selection source tag from the draw
+                (e.g. ``"random_role_pool"``, ``"forced_control"``,
+                ``"fixed_panel"``, ``"fallback_empty_pool"``).  Included in
+                ``persona_bound`` when provided.
+            draw_id: Optional draw identifier from ``random-for-role`` or
+                ``forced-control``.  Included in ``persona_bound`` when
+                provided.  Acts as the join key between draw and outcome
+                events.
+            reviewer_participant: Optional discriminator for reviewer role
+                dispatches — must be one of ``"base_codex"`` or ``"random_arm"``
+                when provided.  Included in ``persona_bound`` when provided.
+                Raises :exc:`ValueError` on an invalid value.
 
         Returns:
             :class:`~runtime.dispatch.result.DispatchResult` from
@@ -171,7 +241,10 @@ class Dispatcher:
         timeout_s: float = float(provider_config.get("timeout_s", 300))
 
         # 1. Compose final argv (B3).
-        final_args: list[str] = list(provider_config["args_template"]) + list(caller_args)
+        # Determine the effective model early (caller kwarg wins over provider_config).
+        # Model is needed here for {model} substitution in model_arg_template.
+        _early_model: str | None = model if model is not None else provider_config.get("model")
+        final_args: list[str] = _compose_argv(provider_config, _early_model) + list(caller_args)
 
         # 3. Emit dispatch_start (payload MUST NOT include env fields).
         t0 = time.monotonic()
@@ -227,9 +300,25 @@ class Dispatcher:
                 return "provider_config"
             return "none"
 
+        # Validate reviewer_participant before emitting into telemetry.
+        _REVIEWER_PARTICIPANT_VALUES = {"base_codex", "random_arm"}
+        if reviewer_participant is not None and reviewer_participant not in _REVIEWER_PARTICIPANT_VALUES:
+            raise ValueError(
+                f"reviewer_participant must be one of {sorted(_REVIEWER_PARTICIPANT_VALUES)!r},"
+                f" got {reviewer_participant!r}"
+            )
+
+        # persona_id in the attribution tuple: use the explicitly-supplied
+        # persona_id (from the draw result) if given; otherwise fall back to
+        # the resolved persona name.  Always present — emits null when neither
+        # kwarg nor resolved persona is available so downstream joins are robust.
+        _effective_persona_id = persona_id if persona_id is not None else _resolved_persona
+
         _persona_bound_payload: dict = {
+            "run_id": self._run_id,
             "command": command_id,
             "persona": _resolved_persona,
+            "persona_id": _effective_persona_id,
             "model": _resolved_model,
             "runtime": _resolved_runtime,
             "source": {
@@ -238,8 +327,19 @@ class Dispatcher:
                 "runtime": _axis_source(runtime, _pc_runtime),
             },
         }
+        # Attribution tuple fields — include only when provided by the caller.
         if role is not None:
             _persona_bound_payload["role"] = role
+        if task_id is not None:
+            _persona_bound_payload["task_id"] = task_id
+        if attempt_id is not None:
+            _persona_bound_payload["attempt_id"] = attempt_id
+        if selection_source is not None:
+            _persona_bound_payload["selection_source"] = selection_source
+        if draw_id is not None:
+            _persona_bound_payload["draw_id"] = draw_id
+        if reviewer_participant is not None:
+            _persona_bound_payload["reviewer_participant"] = reviewer_participant
         self._emit("persona_bound", _persona_bound_payload)
 
         self._emit("model_resolved", {

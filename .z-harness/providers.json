@@ -79,9 +79,9 @@
       "stdin": true,
       "timeout_s": 300,
       "model_label": "auto",
-      "model_arg_template": null,
+      "model_arg_template": ["--model", "{model}"],
       "model_env_var": null,
-      "default_model": null
+      "default_model": "auto"
     },
     "cursor-cli": {
       "kind": "cli",
@@ -90,9 +90,9 @@
       "stdin": true,
       "timeout_s": 300,
       "model_label": "auto",
-      "model_arg_template": null,
+      "model_arg_template": ["--model", "{model}"],
       "model_env_var": null,
-      "default_model": null
+      "default_model": "auto"
     },
     "agy": {
       "kind": "cli",

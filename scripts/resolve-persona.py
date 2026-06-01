@@ -16,6 +16,24 @@ Subcommands (T007/T009 scope):
                             + contract matches role's expected_contract (T009).
   read <name>               Print frontmatter + body of the winning persona file.
 
+Subcommands (T004 scope):
+  random-for-role <role> [--exclude=<id,...>] [--seed=<s>]
+                            Draw a uniformly random persona compatible with <role>.
+                            Excludes boring-anchor and any --exclude ids. Seeded for
+                            reproducibility when --seed is given. Emits
+                            persona_random_selected event. Empty pool → returns
+                            boring-anchor tagged selection_source=fallback_empty_pool.
+
+Subcommands (T005 scope):
+  forced-control <role>     Return boring-anchor resolved object tagged
+                            selection_source=forced_control. Used when the
+                            control cadence counter triggers.
+  control-counter --increment
+                            Read, increment, and persist the per-repo forced-control
+                            cadence counter in .z-harness/.persona-control-counter.
+                            Prints the new counter value as a plain integer on stdout.
+                            Counter file is flock-guarded for process-safety.
+
 Layer load order (lowest → highest priority — later layer wins per name):
   1. personas/builtin/         (shipped with the harness)
   2. ~/.config/z-harness/personas/   (user-global; XDG_CONFIG_HOME respected)
@@ -31,13 +49,16 @@ Exit codes:
   2  bad usage or frontmatter parse error
 """
 
+import fcntl
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
 import sys
 import tomllib
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -49,10 +70,11 @@ from typing import Optional
 # If a role is absent, any persona contract (or no contract) is accepted.
 # If a persona omits the `contract` field entirely, it is treated as "any"
 # and passes validation against all roles regardless of expected_contract.
-_ROLE_REGISTRY: dict[str, str] = {
+_ROLE_REGISTRY: dict[str, Optional[str]] = {
     "consultant_primary": "freeform",
     "consultant_secondary": "freeform",
     "reviewer": "review-verdict",
+    "implementer": None,
 }
 
 # ---------------------------------------------------------------------------
@@ -1139,16 +1161,432 @@ def cmd_read(args: list[str]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# T004: random-for-role helpers
+# ---------------------------------------------------------------------------
+
+_BORING_ANCHOR_NAME = "boring-anchor"
+
+
+def _is_contract_compatible(persona_fm: dict, role: str) -> bool:
+    """
+    Return True if persona_fm is contract-compatible with role.
+
+    Rules:
+    - If the role has no expected_contract (None in _ROLE_REGISTRY): always True.
+    - If persona omits `contract` field entirely: True (treated as "any").
+    - If persona declares a contract: must equal the role's expected_contract.
+    """
+    expected = _ROLE_REGISTRY.get(role)
+    if expected is None:
+        # Role accepts any contract.
+        return True
+    persona_contract = persona_fm.get("contract")
+    if persona_contract is None:
+        # Persona omits contract → "any" semantics.
+        return True
+    return persona_contract == expected
+
+
+def _enumerate_role_compatible_personas(role: str, exclude_ids: set[str]) -> list[dict]:
+    """
+    Return winning-layer personas compatible with role, excluding boring-anchor and exclude_ids.
+
+    A persona is compatible if:
+    - Its compatible_roles list includes role (or compatible_roles is absent — treated as "any").
+    - Its contract is compatible with the role's expected_contract.
+    - Its name is not boring-anchor.
+    - Its name is not in exclude_ids.
+
+    Returns list of winning-layer persona dicts {name, source_layer, path, _fm}.
+    Applies layer precedence (last layer wins per name) and emits shadow events.
+    """
+    all_entries = _load_all_layers()
+
+    # Build by-name dict respecting layer priority (later wins).
+    by_name: dict[str, dict] = {}
+    for entry in all_entries:
+        by_name[entry["name"]] = entry
+
+    # Detect and emit shadow events for collisions.
+    personas_by_name_list: dict[str, list[dict]] = {}
+    for entry in all_entries:
+        personas_by_name_list.setdefault(entry["name"], []).append(entry)
+    _detect_and_emit_shadows(personas_by_name_list)
+
+    result = []
+    for name, winner in by_name.items():
+        # Exclude boring-anchor (control persona — selected separately).
+        if name == _BORING_ANCHOR_NAME:
+            continue
+        # Exclude explicitly requested IDs.
+        if name in exclude_ids:
+            continue
+
+        fm = winner.get("_fm", {})
+
+        # compatible_roles filter: if omitted, persona is universal (compatible with any role).
+        compatible_roles = fm.get("compatible_roles")
+        if compatible_roles is not None and role not in compatible_roles:
+            continue
+
+        # Contract compatibility filter.
+        if not _is_contract_compatible(fm, role):
+            continue
+
+        result.append(winner)
+
+    return result
+
+
+def _emit_persona_random_selected(
+    role: str,
+    selected: str,
+    candidates: list[str],
+    draw_id: str,
+    selection_source: str,
+) -> None:
+    """
+    Emit the draw event before returning from random-for-role / forced-control.
+
+    Logs to stderr for visibility and calls log-event.sh → metrics.jsonl.
+
+    The payload carries the join keys task_id + attempt_id + persona_id (read
+    from Z_HARNESS_TASK_ID / Z_HARNESS_ATTEMPT_ID when the orchestrator exports
+    them) so the draw row joins directly to the per-attempt
+    persona_attempt_outcome row in log-only analysis. draw_id remains the
+    primary key; task_id/attempt_id make it directly queryable.
+    """
+    task_id = os.environ.get("Z_HARNESS_TASK_ID", "")
+    attempt_id = os.environ.get("Z_HARNESS_ATTEMPT_ID", "")
+
+    print(
+        f"[personas] persona_random_selected: role={role!r} selected={selected!r} "
+        f"draw_id={draw_id!r} selection_source={selection_source!r} "
+        f"task_id={task_id!r} attempt_id={attempt_id!r} "
+        f"candidates_count={len(candidates)}",
+        file=sys.stderr,
+    )
+
+    script_dir = Path(__file__).parent
+    log_event = script_dir / "log-event.sh"
+    if log_event.exists() and shutil.which("bash"):
+        payload = json.dumps({
+            "role": role,
+            "selected": selected,
+            "candidates": candidates,
+            "draw_id": draw_id,
+            "selection_source": selection_source,
+            "task_id": task_id,
+            "attempt_id": attempt_id,
+            "persona_id": selected,
+        })
+        run_id = os.environ.get("Z_HARNESS_RUN_ID", "unknown-run")
+        try:
+            subprocess.run(
+                ["bash", str(log_event), run_id, "persona_random_selected", payload],
+                check=False,
+                capture_output=True,
+            )
+        except OSError:
+            pass  # log-event.sh unavailable — ignore
+
+
+def _make_draw_id(role: str) -> str:
+    """
+    Compute a draw_id.
+
+    Uses env vars Z_HARNESS_RUN_ID, Z_HARNESS_TASK_ID, Z_HARNESS_ATTEMPT_ID
+    when available to produce '<run>-<role>-<task>-<attempt>'.
+    Falls back to a short UUID when those vars are absent.
+    """
+    run_id = os.environ.get("Z_HARNESS_RUN_ID", "")
+    task_id = os.environ.get("Z_HARNESS_TASK_ID", "")
+    attempt_id = os.environ.get("Z_HARNESS_ATTEMPT_ID", "")
+
+    if run_id and task_id and attempt_id:
+        return f"{run_id}-{role}-{task_id}-{attempt_id}"
+    if run_id:
+        return f"{run_id}-{role}-{uuid.uuid4().hex[:8]}"
+    return f"{role}-{uuid.uuid4().hex[:12]}"
+
+
+def _resolve_boring_anchor() -> dict:
+    """
+    Resolve boring-anchor as the fallback/control persona.
+
+    Returns the resolve-shaped dict for boring-anchor. If the boring-anchor
+    persona file does not exist in any layer, returns a minimal dict with
+    persona_body_path=None (never crashes).
+    """
+    body_path = _find_persona_path(_BORING_ANCHOR_NAME)
+    return {
+        "persona": _BORING_ANCHOR_NAME,
+        "model": None,
+        "runtime": None,
+        "source": _SOURCE_NONE,
+        "persona_body_path": body_path,
+    }
+
+
+# ---------------------------------------------------------------------------
+# T004: random-for-role subcommand
+# ---------------------------------------------------------------------------
+
+def cmd_random_for_role(args: list[str]) -> None:
+    """
+    random-for-role <role> [--exclude=<id,...>] [--seed=<s>]
+
+    Enumerate personas compatible with <role> across all layers (applying layer
+    precedence and shadow rules), exclude boring-anchor and any --exclude ids,
+    draw uniformly using seeded random (reproducible when --seed given), compute
+    a draw_id, emit persona_random_selected, and print resolve-shaped JSON with
+    selection metadata.
+
+    Empty pool → return boring-anchor tagged selection_source=fallback_empty_pool.
+    Never crashes.
+    """
+    if not args:
+        print("usage: resolve-persona.py random-for-role <role> [--exclude=<id,...>] [--seed=<s>]",
+              file=sys.stderr)
+        sys.exit(2)
+
+    role = args[0]
+    remaining = args[1:]
+
+    # Validate role is known.
+    if role not in _ROLE_REGISTRY:
+        print(
+            f"[personas] unknown role {role!r}. Known roles: {sorted(_ROLE_REGISTRY.keys())}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    # Parse optional flags.
+    exclude_ids: set[str] = set()
+    seed_value: Optional[str] = None
+
+    for arg in remaining:
+        if arg.startswith("--exclude="):
+            raw_ids = arg[len("--exclude="):]
+            for id_part in raw_ids.split(","):
+                id_part = id_part.strip()
+                if id_part:
+                    exclude_ids.add(id_part)
+        elif arg.startswith("--seed="):
+            seed_value = arg[len("--seed="):]
+        else:
+            print(f"[personas] unknown flag {arg!r}", file=sys.stderr)
+            sys.exit(2)
+
+    # Build the candidate pool.
+    candidates = _enumerate_role_compatible_personas(role, exclude_ids)
+    candidate_ids = [c["name"] for c in candidates]
+
+    draw_id = _make_draw_id(role)
+
+    if not candidates:
+        # Empty pool — return boring-anchor tagged as fallback.
+        selection_source = "fallback_empty_pool"
+        selected_name = _BORING_ANCHOR_NAME
+        base = _resolve_boring_anchor()
+        _emit_persona_random_selected(role, selected_name, candidate_ids, draw_id, selection_source)
+        output = {
+            **base,
+            "selection_source": selection_source,
+            "draw_id": draw_id,
+            "candidates": candidate_ids,
+        }
+        print(json.dumps(output))
+        return
+
+    # Seeded draw for reproducibility.
+    rng = random.Random()
+    if seed_value is not None:
+        rng.seed(seed_value)
+    else:
+        # Use secrets-quality seed when not fixed.
+        import secrets
+        rng.seed(secrets.randbits(128))
+
+    winner_entry = rng.choice(candidates)
+    selected_name = winner_entry["name"]
+    selection_source = "random_role_pool"
+
+    # Emit event before returning.
+    _emit_persona_random_selected(role, selected_name, candidate_ids, draw_id, selection_source)
+
+    # Build resolve-shaped output.
+    body_path = winner_entry.get("path")
+    output = {
+        "persona": selected_name,
+        "model": None,
+        "runtime": None,
+        "source": _SOURCE_NONE,
+        "persona_body_path": body_path,
+        "selection_source": selection_source,
+        "draw_id": draw_id,
+        "candidates": candidate_ids,
+    }
+    print(json.dumps(output))
+
+
+# ---------------------------------------------------------------------------
+# T005: forced-control subcommand
+# ---------------------------------------------------------------------------
+
+def cmd_forced_control(args: list[str]) -> None:
+    """
+    forced-control <role>
+
+    Return the boring-anchor resolved object tagged selection_source=forced_control.
+    Used on the control cadence (every Nth implementer attempt per repo) instead
+    of random-for-role. Always uses boring-anchor regardless of role; role is
+    validated for consistency but does not affect persona selection.
+
+    Output JSON shape is identical to random-for-role output (resolve-shape +
+    selection_source + draw_id + candidates).
+    """
+    if len(args) != 1:
+        print("usage: resolve-persona.py forced-control <role>", file=sys.stderr)
+        sys.exit(2)
+
+    role = args[0]
+
+    # Validate role is known — keeps interface consistent with random-for-role.
+    if role not in _ROLE_REGISTRY:
+        print(
+            f"[personas] unknown role {role!r}. Known roles: {sorted(_ROLE_REGISTRY.keys())}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    draw_id = _make_draw_id(role)
+    selection_source = "forced_control"
+
+    base = _resolve_boring_anchor()
+
+    # Emit a draw event before returning, mirroring random-for-role's
+    # persona_random_selected emission. Without this a forced-control attempt
+    # would have no draw row and could not be joined to its
+    # persona_attempt_outcome row in analysis. The control persona is always
+    # boring-anchor; candidates is empty by definition (control is not a draw
+    # from the random pool).
+    _emit_persona_random_selected(role, base["persona"], [], draw_id, selection_source)
+
+    output = {
+        **base,
+        "selection_source": selection_source,
+        "draw_id": draw_id,
+        "candidates": [],
+    }
+    print(json.dumps(output))
+
+
+# ---------------------------------------------------------------------------
+# T005: control-counter subcommand helpers
+# ---------------------------------------------------------------------------
+
+def _control_counter_path() -> Path:
+    """
+    Return the path to the per-repo control counter file.
+
+    Respects Z_HARNESS_REPO_ROOT override (for hermetic testing).
+    Falls back to git rev-parse, then cwd.
+    """
+    counter_env = os.environ.get("Z_HARNESS_CONTROL_COUNTER_PATH", "")
+    if counter_env:
+        return Path(counter_env)
+
+    repo_env = os.environ.get("Z_HARNESS_REPO_ROOT", "")
+    if repo_env:
+        repo_root = Path(repo_env)
+    else:
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                capture_output=True, text=True, check=True,
+            )
+            repo_root = Path(result.stdout.strip())
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            repo_root = Path.cwd()
+    return repo_root / ".z-harness" / ".persona-control-counter"
+
+
+def _increment_counter(counter_path: Path) -> int:
+    """
+    Atomically read, increment, and persist the control counter.
+
+    Uses a companion lock file (<counter_path>.lock) and fcntl.flock(LOCK_EX)
+    to serialize concurrent access. Creates the counter file at 0 if absent.
+
+    Returns the new counter value (after increment).
+    """
+    lock_path = Path(str(counter_path) + ".lock")
+    counter_path.parent.mkdir(parents=True, exist_ok=True)
+
+    lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        try:
+            # Read current value (0 if file missing or empty/corrupt).
+            if counter_path.exists():
+                raw = counter_path.read_text(encoding="utf-8").strip()
+                try:
+                    current = int(raw)
+                except ValueError:
+                    current = 0
+            else:
+                current = 0
+
+            new_value = current + 1
+            counter_path.write_text(str(new_value) + "\n", encoding="utf-8")
+            return new_value
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    finally:
+        os.close(lock_fd)
+
+
+# ---------------------------------------------------------------------------
+# T005: control-counter subcommand
+# ---------------------------------------------------------------------------
+
+def cmd_control_counter(args: list[str]) -> None:
+    """
+    control-counter --increment
+
+    Atomically increment the per-repo forced-control cadence counter stored in
+    .z-harness/.persona-control-counter. Prints the new integer value on stdout.
+
+    The caller uses: (new_value % experiment.control_every_n == 0) to decide
+    whether to use forced-control instead of random-for-role.
+
+    The counter file is flock-guarded (LOCK_EX on a companion .lock file) so
+    concurrent invocations from parallel shells are safe.
+    """
+    if args != ["--increment"]:
+        print("usage: resolve-persona.py control-counter --increment", file=sys.stderr)
+        sys.exit(2)
+
+    counter_path = _control_counter_path()
+    new_value = _increment_counter(counter_path)
+    print(new_value)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 SUBCOMMANDS = {
+    "control-counter": cmd_control_counter,
+    "forced-control": cmd_forced_control,
     "list-personas": cmd_list_personas,
     "where": cmd_where,
     "resolve": cmd_resolve,
     "list-bindings": cmd_list_bindings,
     "validate": cmd_validate,
     "read": cmd_read,
+    "random-for-role": cmd_random_for_role,
 }
 
 

@@ -1,6 +1,6 @@
 # PERSONAS — Persona System Guide
 
-> Last updated: 2026-05-28
+> Last updated: 2026-06-01
 > Covers source: scripts/resolve-persona.py, scripts/resolve-persona.sh, runtime/contract/persona.schema.json, personas/README.md, personas/builtin/codex-default-consultant.md, personas/builtin/gemini-default-consultant.md, personas/builtin/codex-default-reviewer.md, commands/z-personas.md, skills/z-personas/SKILL.md, runtime/drivers/_persona_utils.py, runtime/drivers/antigravity/persona_export.py, runtime/drivers/cursor/persona_export.py, runtime/drivers/codex/persona_export.py, runtime/drivers/claude/persona_export.py, runtime/dispatch/persona_prompt.py, runtime/dispatch/dispatcher.py
 
 ## Overview
@@ -355,6 +355,83 @@ persona with the correct contract declaration.
 | `persona_shadowed` | A persona name is defined in more than one layer (once per process per name). |
 | `persona_binding_chimera` | A binding's three axes resolve from ≥2 different config layers. |
 | `legacy_provider_roles_used` | Resolution falls back to `providers.json` `roles` map. |
+| `persona_random_selected` | A random draw was made via `random-for-role` or `forced-control`. Payload: `{role, selected, candidates, draw_id, selection_source}`. Optional join fields (stamped when env vars are exported): `task_id`, `attempt_id`, `persona_id`. Emitted BEFORE the agent runs. |
+| `persona_attempt_outcome` | Per-attempt terminal outcome (only when `experiment.persona_rotation=true`). Payload: `{run_id, command, role, task_id, attempt_id, persona_id, draw_id, complexity_tier, diff_size, review_cycles, retries, blocker_count, wall_ms, status}`. Join key: `attempt_id` + `draw_id`. |
 
 > Note: as of T103, `persona_bound`, `persona_override_used`, and
 > `model_resolved` payloads use `command` (not `command_id`) as the field name.
+
+---
+
+## Persona rotation (experimental)
+
+The persona-rotation experiment rotates which persona is used for the `implementer` and `reviewer` roles across z-harness runs, collecting passive outcome data to compare persona effectiveness. It is **on by default** and gated by `experiment.persona_rotation` in config (see `docs/human/config.md`).
+
+### How it works
+
+**Implementer rotation (`/z-implement-all` and `/z-implement-next`):**
+
+Every task attempt gets a persona drawn by `resolve-persona.py random-for-role implementer`. The draw:
+1. Enumerates all personas across all layers whose `compatible_roles` includes `implementer`.
+2. Excludes `boring-anchor` (the control) and any explicitly excluded IDs (`--exclude`).
+3. Draws uniformly at random using `secrets`/`random` (seeded for reproducibility if `--seed` given).
+4. Emits `persona_random_selected` before the agent runs.
+
+Every `experiment.control_every_n`-th attempt (default every 5th, counted repo-wide via `.z-harness/.persona-control-counter`) calls `forced-control implementer` instead, which returns `boring-anchor` tagged `selection_source: forced_control`. This ensures a baseline sample accrues automatically.
+
+The draw result is persisted to `$BASE/archive/tasks/<task-id>/persona-draw.json`. On **resume** (same attempt_id), the draw is reused verbatim. On **retry** (new attempt_id = new cycle), a fresh draw is made, optionally excluding the prior attempt's persona via `--exclude`.
+
+**Reviewer dispatch:** both a base codex reviewer (`reviewer_participant: base_codex`) and one advisory random-arm reviewer (`reviewer_participant: random_arm`) are dispatched as separate `Agent()` calls. The random-arm verdict is advisory only — it never changes halt/retry behavior. Both reviewers share `attempt_id`; each has its own `draw_id`.
+
+**Fixed 5-panel consult (`/z-plan` and `/z-debug`):**
+When `experiment.persona_rotation=true`, the Phase 3 / Phase 7 consultant dispatch uses a fixed 5-panel instead of the standard 2-consultant path. Panel members: agy (gemini), cursor@claude-4.6-sonnet, cursor@grok-4.3, cursor@composer-2.5, codex-cli. Each arm logs `persona_bound` with `selection_source: fixed_panel`. No random draw — the panel composition is deterministic.
+
+### Selection sources
+
+| `selection_source` | Meaning |
+|-------------------|---------|
+| `random_role_pool` | Normal random draw from eligible personas. |
+| `forced_control` | Forced `boring-anchor` draw on the Nth-attempt cadence. |
+| `fallback_empty_pool` | No eligible personas found; fell back to `boring-anchor`. **Quarantined in analysis** — never counted as a persona sample. |
+| `fixed_panel` | Panel member in a fixed 5-panel consult (plan/debug phases). |
+
+### `boring-anchor` — the control persona
+
+`boring-anchor` is the baseline persona that ships with the harness. It is:
+- **Never in the random pool.** `random-for-role` always excludes it.
+- **Drawn only via `forced-control`** (cadence) or as a `fallback_empty_pool` fallback.
+- **The delta baseline** in `persona-stats.py` analysis. All outcome metrics are reported relative to `boring-anchor` within the same `(role, complexity_tier)` stratum.
+
+### New subcommands in `resolve-persona.py`
+
+| Subcommand | Purpose |
+|-----------|---------|
+| `random-for-role <role> [--exclude=<ids>] [--seed=<s>]` | Draw a random persona for the role; returns resolve-shaped JSON + `{selection_source, draw_id, candidates}`. |
+| `forced-control <role>` | Return `boring-anchor` tagged `selection_source: forced_control`. |
+| `control-counter --increment` | Atomically read + increment + persist the repo-level forced-control cadence counter in `.z-harness/.persona-control-counter`. Returns the new counter value. |
+
+### Join keys for analysis
+
+| Field | Present on | Purpose |
+|-------|-----------|---------|
+| `attempt_id` | `persona_bound`, `persona_attempt_outcome` | Links all events for one task attempt |
+| `draw_id` | `persona_random_selected`, `persona_bound`, `persona_attempt_outcome` | Links draw event to outcome |
+| `reviewer_participant` | `persona_bound` (reviewer) | `base_codex` or `random_arm` — disambiguates the two reviewer arms |
+
+> Use `scripts/persona-stats.py` to join these events and compute per-persona outcome deltas. See `docs/human/scripts.md` for usage.
+
+### Turning off
+
+```toml
+# .z-harness/config.toml
+[experiment]
+persona_rotation = false
+```
+
+Or temporarily via env:
+
+```bash
+export Z_HARNESS_EXPERIMENT_PERSONA_ROTATION=false
+```
+
+When `false`, the entire rotation block is a no-op: no draw events, no state files, no persona prefix, no outcome events, no dual reviewer. Behavior is identical to before the experiment was added.

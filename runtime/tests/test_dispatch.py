@@ -26,7 +26,7 @@ import time
 import pytest
 
 from runtime.dispatch.driver import DispatchHandle, HostDriver
-from runtime.dispatch.dispatcher import Dispatcher
+from runtime.dispatch.dispatcher import Dispatcher, _compose_argv
 from runtime.dispatch.env import build_env
 from runtime.dispatch.result import DispatchResult
 from runtime.dispatch.timeout import DispatchTimeoutError, TimeoutReaper
@@ -669,3 +669,362 @@ def test_dispatch_result_success_exit0_with_error():
     """DispatchResult.success is False when is_error=True even if exit_code=0."""
     r = DispatchResult(exit_code=0, is_error=True)
     assert r.success is False
+
+
+# ---------------------------------------------------------------------------
+# T003: {model} substitution in model_arg_template
+# ---------------------------------------------------------------------------
+
+
+class _ArgsCapturingDriver(HostDriver):
+    """Driver that captures the args list passed to dispatch()."""
+
+    def init(self, provider_config, context=None):
+        self._captured_args: list[str] | None = None
+
+    def dispatch(self, command_id, args, env):
+        self._captured_args = list(args)
+        return DispatchHandle(
+            _events_fn=lambda: iter([]),
+            _wait_fn=lambda: DispatchResult(exit_code=0, is_error=False),
+        )
+
+
+def test_compose_argv_model_arg_template_substituted():
+    """_compose_argv renders {model} from model_arg_template when model_arg_template is set.
+
+    Failure class: If {model} substitution is missing, the returned argv will
+    contain the literal string '{model}' instead of the resolved model name,
+    causing the provider CLI to receive an invalid model argument.
+    """
+    provider_config = {
+        "args_template": ["-p", "--output-format", "text"],
+        "model_arg_template": ["--model", "{model}"],
+        "default_model": "auto",
+    }
+    argv = _compose_argv(provider_config, effective_model="grok-4.3")
+    assert "--model" in argv, f"Expected '--model' in argv; got {argv}"
+    assert "grok-4.3" in argv, f"Expected 'grok-4.3' in argv; got {argv}"
+    assert "{model}" not in argv, f"Unreplaced '{{model}}' placeholder remains in {argv}"
+
+
+def test_compose_argv_null_model_arg_template_unaffected():
+    """_compose_argv with null model_arg_template returns args_template unchanged.
+
+    Failure class: If the null-template guard is removed, providers without
+    model_arg_template would attempt model resolution and may raise ValueError
+    or inject unexpected args.
+    """
+    provider_config = {
+        "args_template": ["exec", "-"],
+        "model_arg_template": None,
+        "default_model": None,
+    }
+    argv = _compose_argv(provider_config, effective_model="grok-4.3")
+    assert argv == ["exec", "-"], f"Unexpected argv modification; got {argv}"
+
+
+def test_compose_argv_uses_default_model_when_no_effective_model():
+    """_compose_argv falls back to default_model when effective_model is None.
+
+    Failure class: If the fallback to default_model is not implemented,
+    dispatching with no explicit model override will raise ValueError even
+    when the provider declares a default_model.
+    """
+    provider_config = {
+        "args_template": ["-p"],
+        "model_arg_template": ["--model", "{model}"],
+        "default_model": "auto",
+    }
+    argv = _compose_argv(provider_config, effective_model=None)
+    assert "auto" in argv, f"Expected 'auto' (default_model) in argv; got {argv}"
+
+
+def test_compose_argv_raises_when_no_model_resolvable():
+    """_compose_argv raises ValueError when model_arg_template is set but no model available.
+
+    Failure class: If ValueError is not raised, the provider CLI receives
+    '--model {model}' literally — a silent misconfiguration that is harder to
+    debug than an explicit error.
+    """
+    provider_config = {
+        "args_template": ["-p"],
+        "model_arg_template": ["--model", "{model}"],
+        "default_model": None,
+    }
+    with pytest.raises(ValueError, match="default_model"):
+        _compose_argv(provider_config, effective_model=None)
+
+
+def test_dispatcher_run_cursor_with_model_yields_model_in_argv(monkeypatch, tmp_path):
+    """Dispatcher.run with cursor provider config and effective model grok-4.3 includes --model grok-4.3 in final_args.
+
+    Failure class: If the dispatcher still uses raw args_template + caller_args
+    (without model_arg_template substitution), dispatching cursor@grok-4.3 will
+    silently omit the --model flag, causing the wrong model to run.
+    """
+
+    def mock_log_event(run_id, kind, payload, repo_root, slug=None):
+        pass
+
+    monkeypatch.setattr("runtime.dispatch.dispatcher.log_event", mock_log_event)
+
+    # Cursor provider config as it appears in .z-harness/providers.json after T003.
+    cursor_provider_config = {
+        "args_template": ["-p", "--output-format", "text"],
+        "model_arg_template": ["--model", "{model}"],
+        "default_model": "auto",
+    }
+
+    driver = _ArgsCapturingDriver()
+    driver.init(cursor_provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    dispatcher.run(driver, "z-plan", [], cursor_provider_config, model="grok-4.3")
+
+    assert driver._captured_args is not None, "dispatch() was never called"
+    assert "--model" in driver._captured_args, (
+        f"'--model' missing from final_args; got {driver._captured_args}"
+    )
+    assert "grok-4.3" in driver._captured_args, (
+        f"'grok-4.3' missing from final_args; got {driver._captured_args}"
+    )
+
+
+def test_dispatcher_run_null_model_arg_template_unaffected(monkeypatch, tmp_path):
+    """Dispatcher.run with a provider that has null model_arg_template does not inject model arg.
+
+    Failure class: If the null-template guard is missing in the dispatcher,
+    providers like codex-cli (which control model selection internally)
+    would receive unexpected --model flags.
+    """
+
+    def mock_log_event(run_id, kind, payload, repo_root, slug=None):
+        pass
+
+    monkeypatch.setattr("runtime.dispatch.dispatcher.log_event", mock_log_event)
+
+    codex_provider_config = {
+        "args_template": ["exec", "-"],
+        "model_arg_template": None,
+        "default_model": None,
+    }
+
+    driver = _ArgsCapturingDriver()
+    driver.init(codex_provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    dispatcher.run(driver, "z-review", [], codex_provider_config, model="gpt-5-codex")
+
+    assert driver._captured_args is not None
+    # caller_args is empty; args_template unchanged; no --model injected.
+    assert driver._captured_args == ["exec", "-"], (
+        f"Expected unchanged argv for null model_arg_template; got {driver._captured_args}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# T007: persona_bound attribution tuple extension
+# ---------------------------------------------------------------------------
+
+
+def test_persona_bound_run_id_always_present(monkeypatch, tmp_path):
+    """persona_bound always contains run_id from the Dispatcher constructor.
+
+    Failure class: If run_id is absent from persona_bound (e.g. because it was
+    accidentally gated behind an 'if' condition), downstream join queries on
+    run_id will silently drop all rows for this dispatch.
+    """
+    captured = _capture_events(monkeypatch)
+
+    driver = _MinimalDriver()
+    provider_config = {"args_template": []}
+    driver.init(provider_config)
+
+    dispatcher = Dispatcher(repo_root=str(tmp_path), run_id="run-abc-123")
+    dispatcher.run(driver, "z-ask", [], provider_config)
+
+    bound_events = [(k, p) for k, p in captured if k == "persona_bound"]
+    assert len(bound_events) == 1
+    _, payload = bound_events[0]
+    assert "run_id" in payload, f"Expected 'run_id' in persona_bound payload; got {payload}"
+    assert payload["run_id"] == "run-abc-123", (
+        f"Expected run_id='run-abc-123', got {payload['run_id']!r}"
+    )
+
+
+def test_persona_bound_attribution_tuple_all_fields(monkeypatch, tmp_path):
+    """persona_bound carries the full attribution tuple when all new kwargs are supplied.
+
+    Failure class: If any of task_id/attempt_id/persona_id/selection_source/draw_id/
+    reviewer_participant are omitted from the payload, the join query in
+    persona-stats.py will fail to correlate draw and outcome events.
+    """
+    captured = _capture_events(monkeypatch)
+
+    driver = _MinimalDriver()
+    provider_config = {"args_template": [], "persona": "terse-pragmatist", "model": "haiku"}
+    driver.init(provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    dispatcher.run(
+        driver, "z-implement", [], provider_config,
+        role="implementer",
+        task_id="T007",
+        attempt_id="T007-v1",
+        persona_id="terse-pragmatist",
+        selection_source="random_role_pool",
+        draw_id="T007-impl-T007-v1-abc",
+    )
+
+    bound_events = [(k, p) for k, p in captured if k == "persona_bound"]
+    assert len(bound_events) == 1
+    _, payload = bound_events[0]
+
+    assert payload["task_id"] == "T007", f"task_id missing or wrong: {payload}"
+    assert payload["attempt_id"] == "T007-v1", f"attempt_id missing or wrong: {payload}"
+    assert payload["persona_id"] == "terse-pragmatist", f"persona_id missing or wrong: {payload}"
+    assert payload["selection_source"] == "random_role_pool", (
+        f"selection_source missing or wrong: {payload}"
+    )
+    assert payload["draw_id"] == "T007-impl-T007-v1-abc", (
+        f"draw_id missing or wrong: {payload}"
+    )
+    assert payload["role"] == "implementer", f"role missing or wrong: {payload}"
+    assert payload["run_id"] == "test-run-001", f"run_id missing or wrong: {payload}"
+
+
+def test_persona_bound_reviewer_participant_included(monkeypatch, tmp_path):
+    """persona_bound includes reviewer_participant when passed for reviewer dispatches.
+
+    Failure class: If reviewer_participant is not forwarded into the payload,
+    the analysis layer cannot segment reviewer rows by arm (base_codex vs
+    random_arm), defeating the dual-reviewer attribution scheme.
+    """
+    captured = _capture_events(monkeypatch)
+
+    driver = _MinimalDriver()
+    provider_config = {"args_template": [], "persona": "codex-default-reviewer"}
+    driver.init(provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    dispatcher.run(
+        driver, "z-review", [], provider_config,
+        role="reviewer",
+        task_id="T007",
+        attempt_id="T007-v1",
+        draw_id="T007-reviewer-base-d4e5f6",
+        reviewer_participant="base_codex",
+    )
+
+    bound_events = [(k, p) for k, p in captured if k == "persona_bound"]
+    assert len(bound_events) == 1
+    _, payload = bound_events[0]
+    assert payload.get("reviewer_participant") == "base_codex", (
+        f"Expected reviewer_participant='base_codex'; got {payload}"
+    )
+
+
+def test_persona_bound_attribution_fields_absent_when_not_passed(monkeypatch, tmp_path):
+    """New attribution fields are absent from persona_bound when not passed (additive-only).
+
+    Failure class: If any attribution field defaults to a non-None sentinel value
+    instead of being omitted, existing parsers that treat key-presence as a signal
+    (e.g. 'does this event have draw_id?') would misinterpret legacy events.
+    """
+    captured = _capture_events(monkeypatch)
+
+    driver = _MinimalDriver()
+    provider_config = {"args_template": []}
+    driver.init(provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    # Call with no new attribution kwargs — simulates an existing caller.
+    dispatcher.run(driver, "z-ask", [], provider_config)
+
+    bound_events = [(k, p) for k, p in captured if k == "persona_bound"]
+    assert len(bound_events) == 1
+    _, payload = bound_events[0]
+
+    for field in ("task_id", "attempt_id", "selection_source", "draw_id", "reviewer_participant"):
+        assert field not in payload, (
+            f"Field '{field}' should be absent when not passed; found in payload: {payload}"
+        )
+
+
+def test_persona_bound_persona_id_falls_back_to_resolved_persona(monkeypatch, tmp_path):
+    """persona_id in persona_bound falls back to the resolved persona name when not explicitly passed.
+
+    Failure class: If persona_id is always omitted when the kwarg is not passed
+    (instead of falling back to _resolved_persona), the persona_id field would
+    be absent on all legacy callers, making it impossible to join on persona_id
+    without also checking the 'persona' field.
+    """
+    captured = _capture_events(monkeypatch)
+
+    driver = _MinimalDriver()
+    provider_config = {"args_template": [], "persona": "boring-anchor"}
+    driver.init(provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    # No persona_id kwarg; persona resolves from provider_config.
+    dispatcher.run(driver, "z-implement", [], provider_config)
+
+    bound_events = [(k, p) for k, p in captured if k == "persona_bound"]
+    assert len(bound_events) == 1
+    _, payload = bound_events[0]
+    assert payload.get("persona_id") == "boring-anchor", (
+        f"Expected persona_id='boring-anchor' (fallback from _resolved_persona); got {payload}"
+    )
+
+
+def test_persona_bound_persona_id_always_present_as_null(monkeypatch, tmp_path):
+    """persona_id is always present in persona_bound — emits null when neither kwarg nor resolved persona exists.
+
+    Failure class: If persona_id is omitted when both the kwarg and the resolved
+    persona are None, downstream join queries on persona_id will silently drop
+    all rows for dispatches that have no persona configured.
+    """
+    captured = _capture_events(monkeypatch)
+
+    driver = _MinimalDriver()
+    # provider_config has no 'persona' key, and no persona_id kwarg is passed.
+    provider_config = {"args_template": []}
+    driver.init(provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    dispatcher.run(driver, "z-ask", [], provider_config)
+
+    bound_events = [(k, p) for k, p in captured if k == "persona_bound"]
+    assert len(bound_events) == 1
+    _, payload = bound_events[0]
+    assert "persona_id" in payload, (
+        f"Expected 'persona_id' key always present in persona_bound; got keys: {list(payload)}"
+    )
+    assert payload["persona_id"] is None, (
+        f"Expected persona_id=None when no persona is configured; got {payload['persona_id']!r}"
+    )
+
+
+def test_reviewer_participant_invalid_value_raises(monkeypatch, tmp_path):
+    """reviewer_participant with an invalid value raises ValueError before emitting.
+
+    Failure class: If the enum guard is absent, a typo like 'base_codex_arm'
+    would be silently emitted into telemetry, making arm-segmentation queries
+    return nonsense results that are hard to diagnose post-hoc.
+    """
+    monkeypatch.setattr(
+        "runtime.dispatch.dispatcher.log_event",
+        lambda run_id, kind, payload, repo_root, slug=None: None,
+    )
+
+    driver = _MinimalDriver()
+    provider_config = {"args_template": []}
+    driver.init(provider_config)
+
+    dispatcher = _make_dispatcher(tmp_path)
+    with pytest.raises(ValueError, match="reviewer_participant"):
+        dispatcher.run(
+            driver, "z-review", [], provider_config,
+            reviewer_participant="base_codex_arm",  # typo / invalid value
+        )

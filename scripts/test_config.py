@@ -1279,10 +1279,12 @@ class TestCheckNoAsk(unittest.TestCase):
         # Exit 0 means "I successfully determined the answer is halt"
         self.assertEqual(r.returncode, 0)
 
-    def test_path3_removing_qid_from_env_allowlist_halts(self):
+    def test_path3_removing_qid_from_env_allowlist_yields_unhandled_gate(self):
         """
-        Providing an empty env allowlist falls back to defaults; a qid not in
-        defaults (implement_all_proceed) still halts.
+        When OVERNIGHT_AUTODECIDE_EFFECTIVE is set (policy mode active), a registered
+        qid not covered by the merged allowlist yields unhandled_gate (H4 fail-closed).
+        OVERNIGHT_AUTODECIDE_EFFECTIVE={} merges with defaults; implement_all_proceed
+        is absent from both defaults and the empty env payload → unhandled_gate.
         """
         r = self._run_check(
             self.QID_NOT_IN_ALLOWLIST,
@@ -1293,7 +1295,7 @@ class TestCheckNoAsk(unittest.TestCase):
         )
         self.assertEqual(r.returncode, 0)
         result = json.loads(r.stdout)
-        self.assertEqual(result["result"], "halt")
+        self.assertEqual(result["result"], "unhandled_gate")
 
     # -------------------------------------------------------------------------
     # Path 4: NO_ASK=halt, qid NOT registered → halt + unknown_ask_blocked event
@@ -2520,6 +2522,157 @@ class TestInspectAll(unittest.TestCase):
             any(s.get("layer", "").startswith("env") for s in sources_list),
             f"sources[] does not contain an env entry; got: {sources_list!r}",
         )
+
+
+# ---------------------------------------------------------------------------
+# Tests for T002: [experiment] config section (persona_rotation + control_every_n)
+# ---------------------------------------------------------------------------
+
+class TestExperimentSection(unittest.TestCase):
+    """
+    Covers the new [experiment] TOML section added in T002:
+    - experiment.persona_rotation defaults to true.
+    - experiment.control_every_n defaults to 5.
+    - Invalid values for persona_rotation exit 2 on repo/env layer.
+    - Invalid values for control_every_n (0 or negative or non-int) exit 2 on env layer.
+    - Valid env overrides (Z_HARNESS_EXPERIMENT_PERSONA_ROTATION / Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N) take effect.
+    - Existing keys are unaffected by the new section.
+    """
+
+    def setUp(self):
+        self.xdg = make_xdg()
+        self.cwd = make_isolation_dir()
+        self.env = {"XDG_CONFIG_HOME": self.xdg}
+
+    def tearDown(self):
+        shutil.rmtree(self.xdg, ignore_errors=True)
+        shutil.rmtree(self.cwd, ignore_errors=True)
+
+    # -------------------------------------------------------------------------
+    # Default values
+    # -------------------------------------------------------------------------
+
+    def test_persona_rotation_default_is_true(self):
+        """experiment.persona_rotation default must be true."""
+        r = run(["get", "experiment.persona_rotation"], env=self.env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        self.assertEqual(r.stdout.strip(), "true")
+
+    def test_control_every_n_default_is_5(self):
+        """experiment.control_every_n default must be 5."""
+        r = run(["get", "experiment.control_every_n"], env=self.env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        self.assertEqual(r.stdout.strip(), "5")
+
+    # -------------------------------------------------------------------------
+    # Valid env overrides
+    # -------------------------------------------------------------------------
+
+    def test_env_persona_rotation_false(self):
+        """Z_HARNESS_EXPERIMENT_PERSONA_ROTATION=false overrides default true."""
+        env = dict(self.env)
+        env["Z_HARNESS_EXPERIMENT_PERSONA_ROTATION"] = "false"
+        r = run(["get", "experiment.persona_rotation"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        self.assertEqual(r.stdout.strip(), "false")
+
+    def test_env_persona_rotation_true_explicit(self):
+        """Z_HARNESS_EXPERIMENT_PERSONA_ROTATION=true keeps value as true."""
+        env = dict(self.env)
+        env["Z_HARNESS_EXPERIMENT_PERSONA_ROTATION"] = "true"
+        r = run(["get", "experiment.persona_rotation"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        self.assertEqual(r.stdout.strip(), "true")
+
+    def test_env_control_every_n_override(self):
+        """Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N=10 overrides default 5."""
+        env = dict(self.env)
+        env["Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N"] = "10"
+        r = run(["get", "experiment.control_every_n"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        self.assertEqual(r.stdout.strip(), "10")
+
+    # -------------------------------------------------------------------------
+    # Invalid env values exit 2 (repo/env layer hard-fail)
+    # -------------------------------------------------------------------------
+
+    def test_invalid_persona_rotation_env_exits_2(self):
+        """Invalid Z_HARNESS_EXPERIMENT_PERSONA_ROTATION value must exit 2."""
+        env = dict(self.env)
+        env["Z_HARNESS_EXPERIMENT_PERSONA_ROTATION"] = "maybe"
+        r = run(["get", "experiment.persona_rotation"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 2,
+                         f"Expected exit 2 for invalid value; stderr={r.stderr!r}")
+
+    def test_invalid_control_every_n_zero_exits_2(self):
+        """Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N=0 is not a positive int; must exit 2."""
+        env = dict(self.env)
+        env["Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N"] = "0"
+        r = run(["get", "experiment.control_every_n"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 2,
+                         f"Expected exit 2 for 0; stderr={r.stderr!r}")
+
+    def test_invalid_control_every_n_negative_exits_2(self):
+        """Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N=-1 is not a positive int; must exit 2."""
+        env = dict(self.env)
+        env["Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N"] = "-1"
+        r = run(["get", "experiment.control_every_n"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 2,
+                         f"Expected exit 2 for -1; stderr={r.stderr!r}")
+
+    def test_invalid_control_every_n_string_exits_2(self):
+        """Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N=abc must exit 2."""
+        env = dict(self.env)
+        env["Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N"] = "abc"
+        r = run(["get", "experiment.control_every_n"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 2,
+                         f"Expected exit 2 for non-integer string; stderr={r.stderr!r}")
+
+    # -------------------------------------------------------------------------
+    # Invalid repo-layer values exit 2
+    # -------------------------------------------------------------------------
+
+    def test_invalid_persona_rotation_in_repo_config_exits_2(self):
+        """Invalid experiment.persona_rotation in repo config must exit 2."""
+        repo = tempfile.mkdtemp(prefix="z-harness-test-repo-")
+        try:
+            repo_cfg = write_repo_config(repo, '[experiment]\npersona_rotation = "maybe"\n')
+            env = dict(self.env)
+            env["Z_HARNESS_REPO_CONFIG"] = repo_cfg
+            r = run(["get", "experiment.persona_rotation"], env=env, cwd=self.cwd)
+            self.assertEqual(r.returncode, 2,
+                             f"Expected exit 2 for repo-layer invalid value; stderr={r.stderr!r}")
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
+
+    def test_invalid_control_every_n_zero_in_repo_config_exits_2(self):
+        """experiment.control_every_n = 0 in repo config must exit 2 (not a positive int)."""
+        repo = tempfile.mkdtemp(prefix="z-harness-test-repo-")
+        try:
+            repo_cfg = write_repo_config(repo, "[experiment]\ncontrol_every_n = 0\n")
+            env = dict(self.env)
+            env["Z_HARNESS_REPO_CONFIG"] = repo_cfg
+            r = run(["get", "experiment.control_every_n"], env=env, cwd=self.cwd)
+            self.assertEqual(r.returncode, 2,
+                             f"Expected exit 2 for repo-layer control_every_n=0; stderr={r.stderr!r}")
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
+
+    # -------------------------------------------------------------------------
+    # Existing keys are unaffected
+    # -------------------------------------------------------------------------
+
+    def test_existing_notify_level_unaffected(self):
+        """Adding [experiment] keys must not disturb notify.level resolution."""
+        r = run(["get", "notify.level"], env=self.env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.stdout.strip(), "approval_only")
+
+    def test_existing_axioms_enabled_unaffected(self):
+        """Adding [experiment] keys must not disturb axioms.enabled resolution."""
+        r = run(["get", "axioms.enabled"], env=self.env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.stdout.strip(), "true")
 
 
 # ---------------------------------------------------------------------------
