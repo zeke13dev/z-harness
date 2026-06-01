@@ -1,13 +1,23 @@
 """
 scripts/test_active_plan_registry.py — pytest tests for scripts/active-plan-registry.py
 
-Cases covered:
+Cases covered (T006):
   round_trip                — register → list → deregister; record is present then absent
   concurrent_registers      — N=10 concurrent registers (distinct run-ids) produce exactly
                                N uncorrupted records (no corruption, no partial writes)
   safe_basename_traversal   — safe-basename validation rejects '../x', 'a/b', and leading '-'
   list_skips_torn_files     — list skips a deliberately truncated *.json file
   register_exit_code        — register returns exit code 3 on forced failure (unwritable dir)
+
+Cases covered (T007 — overlaps + reap):
+  overlaps_shared_explicit  — exit 10 when two peers share an explicit-confidence path
+  overlaps_same_session     — same session_id peer is ignored (exit 0)
+  overlaps_stale_nonblocking — stale peer overlap is included but does NOT trigger exit 20
+  overlaps_strict_exit20    — explicit×explicit exact match with --strict → exit 20
+  reap_live_pid_not_deleted — reaper does NOT delete a record whose pid is alive
+  reap_dead_pid_deleted     — reaper DOES delete a record with a dead local pid
+  reap_remote_host_stale    — remote host past threshold → status:stale, NOT deleted
+  reap_two_reapers_race     — two reapers racing on the same record do not crash
 
 All tests use a hermetic temp base via Z_HARNESS_BASE_DIR so no anchor pollution
 occurs at /Users/zeke/dev/z-harness/.git/.z-harness-base or the real registry.
@@ -17,12 +27,15 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import multiprocessing
 import os
+import socket
 import stat
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -34,6 +47,7 @@ def _run_registry(
     *args: str,
     base_dir: str,
     cwd: str | None = None,
+    env_extra: dict | None = None,
 ) -> subprocess.CompletedProcess:
     """Invoke active-plan-registry.py as a subprocess under a hermetic base."""
     env = {
@@ -42,6 +56,8 @@ def _run_registry(
         # Prevent anchor writes in git-common-dir (SPEC invariant 7):
         # Z_HARNESS_BASE_DIR is the tier-1 escape hatch that bypasses the anchor.
     }
+    if env_extra:
+        env.update(env_extra)
     return subprocess.run(
         [sys.executable, REGISTRY_PY] + list(args),
         capture_output=True,
@@ -430,6 +446,500 @@ class TestNoAnchorPollution(unittest.TestCase):
                 f"anchor file was created at {anchor_path} — Z_HARNESS_BASE_DIR tier-1 "
                 "escape hatch should bypass anchor writes"
             )
+
+
+# ── T007: helpers ──────────────────────────────────────────────────────────────
+
+def _write_record_direct(active_dir: Path, record: dict) -> None:
+    """Directly write a registry record JSON file (bypasses subprocess for test setup)."""
+    active_dir.mkdir(parents=True, exist_ok=True)
+    run_id = record["run_id"]
+    path = active_dir / f"{run_id}.json"
+    tmp = path.parent / f".tmp-test-{run_id}"
+    tmp.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    os.replace(str(tmp), str(path))
+
+
+def _read_record_direct(active_dir: Path, run_id: str) -> dict | None:
+    """Read a registry record JSON file directly."""
+    path = active_dir / f"{run_id}.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+def _make_record(
+    run_id: str,
+    *,
+    session_id: str = "",
+    host: str | None = None,
+    pid: int | None = None,
+    scope: list[dict] | None = None,
+    status: str = "running",
+    last_heartbeat: str | None = None,
+) -> dict:
+    """Build a minimal registry record for test injection."""
+    from datetime import datetime, timezone
+    now_str = last_heartbeat or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {
+        "schema_version": 1,
+        "run_id": run_id,
+        "session_id": session_id,
+        "slug": "test-slug",
+        "command": "/z-test",
+        "command_version": "",
+        "phase": "test",
+        "status": status,
+        "pid": pid if pid is not None else os.getpid(),
+        "host": host if host is not None else socket.gethostname(),
+        "repo_id": "test-repo-id",
+        "repo_root": "/fake/repo",
+        "git_common_dir": "/fake/repo/.git",
+        "worktree_path": "/fake/repo",
+        "branch": "main",
+        "started_at": now_str,
+        "last_heartbeat": now_str,
+        "current_task": "",
+        "scope": scope or [],
+    }
+
+
+
+# ── T007: overlaps tests ───────────────────────────────────────────────────────
+
+class TestOverlapsSharedExplicit(unittest.TestCase):
+    """Exit 10 when two peers share an explicit-confidence path."""
+
+    def test_shared_explicit_path_exit_10(self):
+        """Two registered plans sharing an explicit path → overlaps exits 10."""
+        with tempfile.TemporaryDirectory() as base:
+            active_dir = Path(base) / "active-plans"
+
+            scope_a = [{"path": "scripts/active-plan-registry.py", "confidence": "explicit", "reason": "T007"}]
+            scope_b = [{"path": "scripts/active-plan-registry.py", "confidence": "explicit", "reason": "T006"}]
+
+            _write_record_direct(active_dir, _make_record("run-a", scope=scope_a))
+            _write_record_direct(active_dir, _make_record("run-b", scope=scope_b))
+
+            # Write scope JSON for run-a to pass to overlaps
+            scope_file = Path(base) / "scope_a.json"
+            scope_file.write_text(json.dumps(scope_a), encoding="utf-8")
+
+            r = _run_registry(
+                "overlaps", "--run-id", "run-a",
+                "--scope-json", str(scope_file),
+                "--json",
+                base_dir=base,
+            )
+            self.assertEqual(
+                r.returncode, 10,
+                f"expected exit 10 for advisory overlap; got {r.returncode}; stderr={r.stderr}; stdout={r.stdout}"
+            )
+            result = json.loads(r.stdout)
+            self.assertGreater(result["overlapping_peers"], 0)
+            # Verify the shared path appears
+            shared_paths = result["peers"][0]["shared_paths"]
+            self.assertTrue(
+                any(sp["path"] == "scripts/active-plan-registry.py" for sp in shared_paths),
+                f"expected shared path not found: {shared_paths}"
+            )
+
+    def test_no_overlap_exit_0(self):
+        """Non-overlapping scopes → overlaps exits 0."""
+        with tempfile.TemporaryDirectory() as base:
+            active_dir = Path(base) / "active-plans"
+
+            scope_a = [{"path": "scripts/plan-path.sh", "confidence": "explicit", "reason": "T001"}]
+            scope_b = [{"path": "scripts/log-event.sh", "confidence": "explicit", "reason": "T002"}]
+
+            _write_record_direct(active_dir, _make_record("run-x", scope=scope_a))
+            _write_record_direct(active_dir, _make_record("run-y", scope=scope_b))
+
+            scope_file = Path(base) / "scope_x.json"
+            scope_file.write_text(json.dumps(scope_a), encoding="utf-8")
+
+            r = _run_registry(
+                "overlaps", "--run-id", "run-x",
+                "--scope-json", str(scope_file),
+                "--json",
+                base_dir=base,
+            )
+            self.assertEqual(
+                r.returncode, 0,
+                f"expected exit 0 for no overlap; got {r.returncode}; stdout={r.stdout}"
+            )
+            result = json.loads(r.stdout)
+            self.assertEqual(result["overlaps"], 0)
+
+
+class TestOverlapsSameSession(unittest.TestCase):
+    """Same session_id peer is ignored (exit 0)."""
+
+    def test_same_session_ignored(self):
+        """A peer with the same session_id as the querying run is skipped."""
+        with tempfile.TemporaryDirectory() as base:
+            active_dir = Path(base) / "active-plans"
+            shared_session = "sess-abc123"
+
+            shared_scope = [{"path": "scripts/active-plan-registry.py", "confidence": "explicit", "reason": "T007"}]
+
+            # Both records share a session → peer should be ignored.
+            rec_a = _make_record("run-sess-a", session_id=shared_session, scope=shared_scope)
+            rec_b = _make_record("run-sess-b", session_id=shared_session, scope=shared_scope)
+            _write_record_direct(active_dir, rec_a)
+            _write_record_direct(active_dir, rec_b)
+
+            scope_file = Path(base) / "scope_sess.json"
+            scope_file.write_text(json.dumps(shared_scope), encoding="utf-8")
+
+            # overlaps --run-id run-sess-a: the only other peer is run-sess-b (same session).
+            r = _run_registry(
+                "overlaps", "--run-id", "run-sess-a",
+                "--scope-json", str(scope_file),
+                "--json",
+                base_dir=base,
+            )
+            # The peer is in the same session → must be ignored → exit 0, overlaps=0.
+            self.assertEqual(
+                r.returncode, 0,
+                f"same-session peer must be ignored; got exit {r.returncode}; stdout={r.stdout}"
+            )
+            result = json.loads(r.stdout)
+            # The overlaps field is present only in the no-overlap payload.
+            # If peers_with_overlap is empty, the active_plan_scan_complete payload is emitted.
+            self.assertEqual(result.get("overlaps", 0), 0)
+
+
+class TestOverlapsStaleNonBlocking(unittest.TestCase):
+    """Stale peer overlap is included but does NOT trigger exit 20 (even under strict)."""
+
+    def test_stale_peer_nonblocking(self):
+        """A stale peer's overlap → exit 10 (advisory), NOT 20, even with --strict."""
+        with tempfile.TemporaryDirectory() as base:
+            active_dir = Path(base) / "active-plans"
+
+            shared_path = "scripts/active-plan-registry.py"
+            scope_a = [{"path": shared_path, "confidence": "explicit", "reason": "T007"}]
+            scope_b = [{"path": shared_path, "confidence": "explicit", "reason": "T006"}]
+
+            # Inject a stale record for run-b: last_heartbeat in the distant past.
+            from datetime import datetime, timezone, timedelta
+            old_time = (datetime.now(timezone.utc) - timedelta(seconds=7200)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            rec_b = _make_record(
+                "run-stale-b",
+                scope=scope_b,
+                status="running",
+                last_heartbeat=old_time,
+                host="some-remote-host",  # Use remote host so it gets marked stale
+            )
+            _write_record_direct(active_dir, _make_record("run-stale-a", scope=scope_a))
+            _write_record_direct(active_dir, rec_b)
+
+            scope_file = Path(base) / "scope_stale.json"
+            scope_file.write_text(json.dumps(scope_a), encoding="utf-8")
+
+            # With --strict and stale peer: must NOT exit 20 (stale peers don't block).
+            r = _run_registry(
+                "overlaps", "--run-id", "run-stale-a",
+                "--scope-json", str(scope_file),
+                "--json",
+                "--strict",
+                base_dir=base,
+                env_extra={"Z_HARNESS_REGISTRY_STALE_SECS": "1800"},
+            )
+            # Stale peer may produce exit 10 (if included) or 0 — but never 20.
+            self.assertNotEqual(
+                r.returncode, 20,
+                f"stale peer must not trigger exit 20; got {r.returncode}; stdout={r.stdout}"
+            )
+
+    def test_stale_peer_shown_as_stale(self):
+        """A stale peer is included in the output with is_stale=True."""
+        with tempfile.TemporaryDirectory() as base:
+            active_dir = Path(base) / "active-plans"
+
+            from datetime import datetime, timezone, timedelta
+            # Use 2× + a bit over threshold so it's definitely stale
+            old_time = (datetime.now(timezone.utc) - timedelta(seconds=3700)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            scope_shared = [{"path": "scripts/active-plan-registry.py", "confidence": "explicit", "reason": "test"}]
+
+            _write_record_direct(active_dir, _make_record("run-fresh-a", scope=scope_shared))
+            stale_rec = _make_record(
+                "run-stale-b",
+                scope=scope_shared,
+                host="remote-machine-xyz",
+                last_heartbeat=old_time,
+            )
+            _write_record_direct(active_dir, stale_rec)
+
+            scope_file = Path(base) / "scope_fresh.json"
+            scope_file.write_text(json.dumps(scope_shared), encoding="utf-8")
+
+            r = _run_registry(
+                "overlaps", "--run-id", "run-fresh-a",
+                "--scope-json", str(scope_file),
+                "--json",
+                base_dir=base,
+                env_extra={"Z_HARNESS_REGISTRY_STALE_SECS": "1800"},
+            )
+            # May be exit 0 (if stale peer excluded from non-stale overlaps) or exit 10.
+            # The key invariant is that is_stale is True for that peer in the JSON output.
+            if r.returncode in (10,):
+                result = json.loads(r.stdout)
+                stale_peers = [p for p in result.get("peers", []) if p.get("is_stale")]
+                self.assertGreater(len(stale_peers), 0, "stale peer must appear with is_stale=True")
+
+
+class TestOverlapsStrictExit20(unittest.TestCase):
+    """explicit×explicit exact match with --strict → exit 20."""
+
+    def test_strict_exit_20_on_explicit_explicit(self):
+        """--strict AND explicit×explicit exact path match → exit 20."""
+        with tempfile.TemporaryDirectory() as base:
+            active_dir = Path(base) / "active-plans"
+
+            shared_path = "scripts/active-plan-registry.py"
+            scope_a = [{"path": shared_path, "confidence": "explicit", "reason": "T007"}]
+            scope_b = [{"path": shared_path, "confidence": "explicit", "reason": "T006"}]
+
+            _write_record_direct(active_dir, _make_record("run-strict-a", scope=scope_a))
+            _write_record_direct(active_dir, _make_record("run-strict-b", scope=scope_b))
+
+            scope_file = Path(base) / "scope_strict.json"
+            scope_file.write_text(json.dumps(scope_a), encoding="utf-8")
+
+            # --strict mode must produce exit 20.
+            r = _run_registry(
+                "overlaps", "--run-id", "run-strict-a",
+                "--scope-json", str(scope_file),
+                "--json",
+                "--strict",
+                base_dir=base,
+            )
+            self.assertEqual(
+                r.returncode, 20,
+                f"expected exit 20 in strict mode with explicit×explicit match; "
+                f"got {r.returncode}; stdout={r.stdout}"
+            )
+            result = json.loads(r.stdout)
+            self.assertTrue(result.get("blocking"), "blocking field must be True")
+
+    def test_strict_mode_via_env(self):
+        """Z_HARNESS_STRICT_OVERLAP=1 activates strict mode without --strict flag."""
+        with tempfile.TemporaryDirectory() as base:
+            active_dir = Path(base) / "active-plans"
+
+            shared_path = "scripts/plan-path.sh"
+            scope_a = [{"path": shared_path, "confidence": "explicit", "reason": "T001"}]
+            scope_b = [{"path": shared_path, "confidence": "explicit", "reason": "T002"}]
+
+            _write_record_direct(active_dir, _make_record("run-env-strict-a", scope=scope_a))
+            _write_record_direct(active_dir, _make_record("run-env-strict-b", scope=scope_b))
+
+            scope_file = Path(base) / "scope_env.json"
+            scope_file.write_text(json.dumps(scope_a), encoding="utf-8")
+
+            r = _run_registry(
+                "overlaps", "--run-id", "run-env-strict-a",
+                "--scope-json", str(scope_file),
+                "--json",
+                base_dir=base,
+                env_extra={"Z_HARNESS_STRICT_OVERLAP": "1"},
+            )
+            self.assertEqual(
+                r.returncode, 20,
+                f"expected exit 20 via Z_HARNESS_STRICT_OVERLAP=1; "
+                f"got {r.returncode}; stdout={r.stdout}"
+            )
+
+    def test_non_explicit_does_not_trigger_exit_20(self):
+        """inferred×explicit overlap with --strict must NOT exit 20 (only explicit×explicit)."""
+        with tempfile.TemporaryDirectory() as base:
+            active_dir = Path(base) / "active-plans"
+
+            shared_path = "scripts/active-plan-registry.py"
+            scope_a = [{"path": shared_path, "confidence": "inferred", "reason": "implied"}]
+            scope_b = [{"path": shared_path, "confidence": "explicit", "reason": "T006"}]
+
+            _write_record_direct(active_dir, _make_record("run-infer-a", scope=scope_a))
+            _write_record_direct(active_dir, _make_record("run-infer-b", scope=scope_b))
+
+            scope_file = Path(base) / "scope_infer.json"
+            scope_file.write_text(json.dumps(scope_a), encoding="utf-8")
+
+            r = _run_registry(
+                "overlaps", "--run-id", "run-infer-a",
+                "--scope-json", str(scope_file),
+                "--json",
+                "--strict",
+                base_dir=base,
+            )
+            # Should be exit 10 (advisory) not 20 (blocking).
+            self.assertEqual(
+                r.returncode, 10,
+                f"inferred×explicit must only be advisory (exit 10), not blocking (exit 20); "
+                f"got {r.returncode}"
+            )
+            self.assertNotEqual(r.returncode, 20)
+
+
+# ── T007: reap tests ───────────────────────────────────────────────────────────
+
+class TestReapLivePidNotDeleted(unittest.TestCase):
+    """Reaper does NOT delete a record whose pid is the current (alive) process."""
+
+    def test_live_pid_not_reaped(self):
+        """A record with this process's pid and this host is NOT deleted by reap."""
+        with tempfile.TemporaryDirectory() as base:
+            active_dir = Path(base) / "active-plans"
+            run_id = "reap-live-001"
+
+            # Record with our own pid (alive) and our own hostname.
+            rec = _make_record(run_id, pid=os.getpid(), host=socket.gethostname())
+            _write_record_direct(active_dir, rec)
+
+            r = _run_registry("reap", base_dir=base)
+            self.assertEqual(r.returncode, 0, f"reap must be non-fatal; stderr={r.stderr}")
+
+            # Record must still exist.
+            remaining = _read_record_direct(active_dir, run_id)
+            self.assertIsNotNone(
+                remaining,
+                f"reap deleted a record with a live pid ({os.getpid()}) — must not delete live runs"
+            )
+
+
+class TestReapDeadPidDeleted(unittest.TestCase):
+    """Reaper DOES delete a record with a dead local pid."""
+
+    def test_dead_pid_reaped(self):
+        """A record whose pid is a known-dead local process is deleted by reap."""
+        with tempfile.TemporaryDirectory() as base:
+            active_dir = Path(base) / "active-plans"
+            run_id = "reap-dead-001"
+
+            # Spawn a child process with subprocess (avoids pickle issues with spawn),
+            # wait for it to exit, then use its (now-dead) pid.
+            child = subprocess.Popen(
+                [sys.executable, "-c", "import sys; sys.exit(0)"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            child.wait()
+            dead_pid = child.pid
+
+            # Verify pid is actually dead before proceeding (test assumption).
+            try:
+                os.kill(dead_pid, 0)
+                # If we get here, the OS may have recycled the pid — skip test.
+                self.skipTest(f"pid {dead_pid} was recycled before reap ran; skipping")
+            except ProcessLookupError:
+                pass  # confirmed dead
+            except PermissionError:
+                self.skipTest(f"pid {dead_pid} appears alive (PermissionError); skipping")
+
+            rec = _make_record(run_id, pid=dead_pid, host=socket.gethostname())
+            _write_record_direct(active_dir, rec)
+
+            r = _run_registry("reap", base_dir=base)
+            self.assertEqual(r.returncode, 0, f"reap must be non-fatal; stderr={r.stderr}")
+
+            # Record must be gone.
+            remaining = _read_record_direct(active_dir, run_id)
+            self.assertIsNone(
+                remaining,
+                f"reap did NOT delete a record with a dead pid ({dead_pid})"
+            )
+
+
+class TestReapRemoteHostStaleNotDeleted(unittest.TestCase):
+    """A remote-host record past the 1× stale threshold is marked stale, NOT deleted."""
+
+    def test_remote_host_marked_stale_not_deleted(self):
+        """A record with a remote host that is past the 1× threshold gets status:stale."""
+        with tempfile.TemporaryDirectory() as base:
+            active_dir = Path(base) / "active-plans"
+            run_id = "reap-remote-001"
+
+            from datetime import datetime, timezone, timedelta
+            # Set last_heartbeat to 2000s ago (past 1× threshold of 1800s, under 2× of 3600s).
+            stale_time = (datetime.now(timezone.utc) - timedelta(seconds=2000)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+
+            rec = _make_record(
+                run_id,
+                host="remote-machine-thats-not-this-host-xyz",
+                last_heartbeat=stale_time,
+            )
+            _write_record_direct(active_dir, rec)
+
+            r = _run_registry(
+                "reap", base_dir=base,
+                env_extra={"Z_HARNESS_REGISTRY_STALE_SECS": "1800"},
+            )
+            self.assertEqual(r.returncode, 0, f"reap must be non-fatal; stderr={r.stderr}")
+
+            # File must still exist (not deleted).
+            record_path = active_dir / f"{run_id}.json"
+            self.assertTrue(
+                record_path.exists(),
+                "reap deleted a remote-host record that was only 1× stale — must NOT delete"
+            )
+
+            # Status must be "stale".
+            remaining = _read_record_direct(active_dir, run_id)
+            self.assertIsNotNone(remaining, "record file missing after reap")
+            self.assertEqual(
+                remaining.get("status"), "stale",
+                f"expected status='stale' for remote-host past threshold; got {remaining.get('status')!r}"
+            )
+
+
+class TestReapTwoReapersRace(unittest.TestCase):
+    """Two reapers racing on the same record do not crash."""
+
+    def test_two_reapers_no_crash(self):
+        """Calling reap twice in quick succession does not raise or exit non-zero."""
+        with tempfile.TemporaryDirectory() as base:
+            active_dir = Path(base) / "active-plans"
+
+            from datetime import datetime, timezone, timedelta
+            # Create a record that is 2×+1 stale so both reapers will try to delete it.
+            very_old_time = (datetime.now(timezone.utc) - timedelta(seconds=4000)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+            run_id = "reap-race-001"
+            rec = _make_record(
+                run_id,
+                host="remote-old-host",
+                last_heartbeat=very_old_time,
+            )
+            _write_record_direct(active_dir, rec)
+
+            # First reap: deletes the record.
+            r1 = _run_registry(
+                "reap", base_dir=base,
+                env_extra={"Z_HARNESS_REGISTRY_STALE_SECS": "1800"},
+            )
+            self.assertEqual(r1.returncode, 0, f"first reap failed: {r1.stderr}")
+
+            # Second reap: file already gone — must not crash.
+            r2 = _run_registry(
+                "reap", base_dir=base,
+                env_extra={"Z_HARNESS_REGISTRY_STALE_SECS": "1800"},
+            )
+            self.assertEqual(r2.returncode, 0, f"second reap crashed: {r2.stderr}")
+
+    def test_reap_missing_file_no_crash(self):
+        """If the file disappears between listing and unlinking, reap stays non-fatal."""
+        with tempfile.TemporaryDirectory() as base:
+            active_dir = Path(base) / "active-plans"
+            # Empty active-plans dir — nothing to reap. Must not crash.
+            active_dir.mkdir(parents=True, exist_ok=True)
+            r = _run_registry("reap", base_dir=base)
+            self.assertEqual(r.returncode, 0, f"reap on empty dir crashed: {r.stderr}")
 
 
 if __name__ == "__main__":

@@ -31,24 +31,46 @@ Subcommands:
       Scan <active>/*.json. Skip torn/partial files silently (try/except json).
       Print records in human-readable or JSON form.
 
+  overlaps --run-id ID [--strict] [--scope-json FILE]
+      Compute path intersection of ID's scope against every other live record's scope.
+      Per overlapping peer: shared paths, min-confidence pair, actionability fields.
+      Exit 0 = no overlap; 10 = advisory overlap; 20 = blocking overlap (only when
+      --strict or Z_HARNESS_STRICT_OVERLAP=1 AND explicit×explicit exact path match).
+      Same run-id OR same session_id → ignored (not an overlap with self).
+      Stale peers → included but marked non-blocking.
+      Emits scope_overlap_detected (with peers) or active_plan_scan_complete.
+
+  reap
+      Conservative reaper. Deletes a record ONLY if:
+        (a) host == THIS host AND pid is dead (os.kill(pid, 0) raises ESRCH), OR
+        (b) now - last_heartbeat > Z_HARNESS_REGISTRY_STALE_SECS (default 1800)
+            by a 2× margin (i.e. > 3600s).
+      Otherwise if merely past the 1× threshold AND host is unknown/remote (not this
+      host) → set status:"stale" via atomic rewrite (do NOT delete).
+      unlink is wrapped in try/except FileNotFoundError so two reapers racing on the
+      same record do not crash.
+      REAPER EXCEPTION (single-writer invariant): reap is the ONE allowed cross-record
+      write — marking a PEER's record status:"stale". This write is atomic + tolerant of
+      the owner concurrently updating (last-writer-wins for an advisory stale flag; if
+      the owner heartbeats after, it overwrites stale back to running, which is correct).
+      Emits plan_reaped / plan_marked_stale. NON-FATAL overall.
+
   deregister --run-id ID [--status complete|aborted]
       Atomically unlink <active>/<ID>.json.
       Emit plan_deregistered. NON-FATAL on error.
 
 Exit codes:
-  0   — success
+  0   — success (also: heartbeat / update-scope / deregister / reap failure — NON-FATAL)
   2   — usage / argument error
   3   — register failure (LOUD; callers MUST gate on this)
-  4   — internal error in a normally-loud subcommand (reserved for overlaps/T007)
-  0   — heartbeat / update-scope / deregister failure (NON-FATAL; exit 0 always)
-
-Future subcommands (T007): overlaps, reap — leave the file structured to accept
-  them as new argparse subcommands and new record field `overlaps`.
+  10  — overlaps: advisory overlap found
+  20  — overlaps: blocking overlap (strict mode + explicit×explicit exact match)
 """
 
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import platform
@@ -59,6 +81,36 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Default stale margin in seconds. Overridable via Z_HARNESS_REGISTRY_STALE_SECS.
+_DEFAULT_STALE_SECS = 1800
+
+
+def _stale_secs() -> int:
+    """Return the stale threshold in seconds from env or default."""
+    try:
+        return int(os.environ.get("Z_HARNESS_REGISTRY_STALE_SECS", _DEFAULT_STALE_SECS))
+    except ValueError:
+        return _DEFAULT_STALE_SECS
+
+
+# Confidence ordering: explicit > inferred > broad > unknown (higher index = higher confidence).
+_CONFIDENCE_ORDER = ["unknown", "broad", "inferred", "explicit"]
+
+
+def _confidence_rank(conf: str) -> int:
+    """Return a numeric rank for a confidence string (higher = more confident)."""
+    try:
+        return _CONFIDENCE_ORDER.index(conf)
+    except ValueError:
+        return 0  # unknown rank for unrecognised values
+
+
+def _min_confidence(conf_a: str, conf_b: str) -> str:
+    """Return the weaker (lower-confidence) of two confidence strings."""
+    if _confidence_rank(conf_a) <= _confidence_rank(conf_b):
+        return conf_a
+    return conf_b
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -458,6 +510,330 @@ def cmd_deregister(args: argparse.Namespace) -> int:
     return 0
 
 
+# ── pid liveness ──────────────────────────────────────────────────────────────
+
+def _pid_alive(pid: int) -> bool:
+    """Return True if pid is alive on this host.
+
+    Uses os.kill(pid, 0): raises ProcessLookupError (ESRCH) if dead,
+    PermissionError (EPERM) if alive but not owned by us.
+    """
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Process exists but we don't have permission to signal it → alive.
+        return True
+
+
+def _is_stale(record: dict, stale_threshold: int) -> bool:
+    """Return True if the record's last_heartbeat is past the 1× stale threshold."""
+    hb_str = record.get("last_heartbeat", "")
+    if not hb_str:
+        return False
+    try:
+        hb = datetime.fromisoformat(hb_str.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        age_secs = (now - hb).total_seconds()
+        return age_secs > stale_threshold
+    except ValueError:
+        return False
+
+
+def _heartbeat_age_secs(record: dict) -> float:
+    """Return seconds since last_heartbeat, or infinity if unreadable."""
+    hb_str = record.get("last_heartbeat", "")
+    if not hb_str:
+        return float("inf")
+    try:
+        hb = datetime.fromisoformat(hb_str.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        return (now - hb).total_seconds()
+    except ValueError:
+        return float("inf")
+
+
+# ── overlaps subcommand ────────────────────────────────────────────────────────
+
+def cmd_overlaps(args: argparse.Namespace) -> int:
+    """overlaps subcommand.
+
+    Exit codes:
+      0  — no overlap
+      10 — advisory overlap (any non-stale overlap)
+      20 — blocking overlap (strict mode AND explicit×explicit exact path match with live peer)
+    """
+    run_id = args.run_id
+    strict = getattr(args, "strict", False) or (
+        os.environ.get("Z_HARNESS_STRICT_OVERLAP", "").strip() == "1"
+    )
+
+    try:
+        active_dir = _active_plans_dir()
+    except RuntimeError as exc:
+        print(
+            f"[active-plan-registry] ERROR overlaps: cannot resolve active_plans_dir: {exc}",
+            file=sys.stderr,
+        )
+        return 4
+
+    # Always load own record first (for session_id — needed for same-session filtering
+    # regardless of whether --scope-json overrides the scope).
+    own_record_path = active_dir / f"{run_id}.json"
+    own_record = _atomic_read(own_record_path)
+    my_session_id: str = (own_record or {}).get("session_id", "") or ""
+
+    # Load scope: prefer --scope-json if provided, else fall back to own record.
+    my_scope: list[dict] = []
+
+    if getattr(args, "scope_json", None):
+        scope_path = Path(args.scope_json)
+        try:
+            with scope_path.open("r", encoding="utf-8") as fh:
+                my_scope = json.load(fh)
+            if not isinstance(my_scope, list):
+                my_scope = []
+        except (OSError, json.JSONDecodeError) as exc:
+            print(
+                f"[active-plan-registry] ERROR overlaps: cannot read --scope-json: {exc}",
+                file=sys.stderr,
+            )
+            return 4
+    else:
+        # Load scope from own record (already read above).
+        if own_record is not None:
+            my_scope = own_record.get("scope", []) or []
+
+    # Build a dict of {path → confidence} for fast intersection.
+    def _scope_map(scope: list[dict]) -> dict[str, str]:
+        return {item["path"]: item.get("confidence", "unknown") for item in scope if "path" in item}
+
+    my_scope_map = _scope_map(my_scope)
+
+    # Scan all peer records.
+    stale_threshold = _stale_secs()
+    peers_with_overlap: list[dict] = []
+    scanned = 0
+    live_count = 0
+
+    if active_dir.is_dir():
+        for p in sorted(active_dir.glob("*.json")):
+            rec = _atomic_read(p)
+            if rec is None:
+                continue
+            scanned += 1
+            peer_run_id = rec.get("run_id", "")
+            peer_session_id = rec.get("session_id", "") or ""
+
+            # Skip self (same run_id) and same session.
+            if peer_run_id == run_id:
+                continue
+            if peer_session_id and my_session_id and peer_session_id == my_session_id:
+                continue
+
+            # Determine staleness.
+            is_stale_peer = (rec.get("status") == "stale") or _is_stale(rec, stale_threshold)
+
+            if not is_stale_peer:
+                live_count += 1
+
+            # Compute path intersection.
+            peer_scope = rec.get("scope", []) or []
+            peer_scope_map = _scope_map(peer_scope)
+
+            shared: list[dict] = []
+            for path, my_conf in my_scope_map.items():
+                if path in peer_scope_map:
+                    peer_conf = peer_scope_map[path]
+                    shared.append({
+                        "path": path,
+                        "my_confidence": my_conf,
+                        "peer_confidence": peer_conf,
+                        "min_confidence": _min_confidence(my_conf, peer_conf),
+                    })
+
+            if not shared:
+                continue
+
+            peers_with_overlap.append({
+                "peer": {
+                    "run_id": peer_run_id,
+                    "slug": rec.get("slug", ""),
+                    "branch": rec.get("branch", ""),
+                    "worktree_path": rec.get("worktree_path", ""),
+                    "host": rec.get("host", ""),
+                    "pid": rec.get("pid"),
+                    "current_task": rec.get("current_task", ""),
+                },
+                "shared_paths": shared,
+                "is_stale": is_stale_peer,
+            })
+
+    # Determine exit code.
+    exit_code = 0
+    has_blocking = False
+
+    if peers_with_overlap:
+        # Check for non-stale overlapping peers.
+        non_stale_overlaps = [p for p in peers_with_overlap if not p["is_stale"]]
+        if non_stale_overlaps:
+            exit_code = 10
+            # Check for blocking: strict mode AND explicit×explicit exact path match.
+            if strict:
+                for peer_info in non_stale_overlaps:
+                    for shared_path in peer_info["shared_paths"]:
+                        if (
+                            shared_path.get("my_confidence") == "explicit"
+                            and shared_path.get("peer_confidence") == "explicit"
+                        ):
+                            has_blocking = True
+                            break
+                    if has_blocking:
+                        break
+                if has_blocking:
+                    exit_code = 20
+
+    # Emit events and print output.
+    if peers_with_overlap:
+        payload = {
+            "run_id": run_id,
+            "scanned": scanned,
+            "live": live_count,
+            "overlapping_peers": len(peers_with_overlap),
+            "blocking": has_blocking,
+            "peers": peers_with_overlap,
+        }
+        _emit_event(run_id, "scope_overlap_detected", payload)
+
+        if getattr(args, "json", False):
+            print(json.dumps(payload, indent=2))
+        else:
+            # Human-readable summary.
+            blocking_label = " [BLOCKING]" if has_blocking else ""
+            print(
+                f"[overlap{blocking_label}] {len(peers_with_overlap)} peer(s) share paths with run {run_id!r}"
+            )
+            for peer_info in peers_with_overlap:
+                peer = peer_info["peer"]
+                stale_label = " (stale)" if peer_info["is_stale"] else ""
+                print(
+                    f"  peer={peer['run_id']!r}  slug={peer['slug']!r}  "
+                    f"host={peer['host']!r}  branch={peer['branch']!r}{stale_label}"
+                )
+                for sp in peer_info["shared_paths"]:
+                    print(
+                        f"    path={sp['path']!r}  "
+                        f"min_confidence={sp['min_confidence']!r}"
+                    )
+    else:
+        payload = {
+            "run_id": run_id,
+            "scanned": scanned,
+            "live": live_count,
+            "overlaps": 0,
+        }
+        _emit_event(run_id, "active_plan_scan_complete", payload)
+
+        if getattr(args, "json", False):
+            print(json.dumps(payload, indent=2))
+        else:
+            print(f"[no overlap] scanned={scanned} live={live_count} overlaps=0")
+
+    return exit_code
+
+
+# ── reap subcommand ────────────────────────────────────────────────────────────
+
+def cmd_reap(args: argparse.Namespace) -> int:  # noqa: ARG001
+    """reap subcommand. Conservative reaper. NON-FATAL overall — always returns 0.
+
+    REAPER EXCEPTION: reap is the ONE allowed cross-record write (marking a peer's
+    status as "stale"). This is documented in the module docstring and is acceptable
+    because:
+      - It is atomic (tmpfile + os.replace).
+      - The owner may overwrite it at any time with a fresh heartbeat (last-writer-wins).
+      - Two reapers racing on the same record cannot crash (FileNotFoundError is caught).
+    """
+    try:
+        active_dir = _active_plans_dir()
+    except RuntimeError:
+        return 0  # non-fatal
+
+    stale_threshold = _stale_secs()
+    this_host = socket.gethostname()
+
+    if not active_dir.is_dir():
+        return 0
+
+    for p in sorted(active_dir.glob("*.json")):
+        rec = _atomic_read(p)
+        if rec is None:
+            continue  # torn / missing — skip silently
+
+        run_id = rec.get("run_id", str(p.stem))
+        rec_host = rec.get("host", "")
+        pid = rec.get("pid")
+        age_secs = _heartbeat_age_secs(rec)
+
+        # Case (a): dead local pid → delete.
+        is_local_host = rec_host == this_host
+        if is_local_host and isinstance(pid, int):
+            if not _pid_alive(pid):
+                # Dead local process — delete the record.
+                try:
+                    p.unlink()
+                    _emit_event(run_id, "plan_reaped", {
+                        "run_id": run_id,
+                        "reason": "dead_local_pid",
+                        "pid": pid,
+                        "host": rec_host,
+                    })
+                except FileNotFoundError:
+                    pass  # two reapers racing — benign
+                except OSError:
+                    pass  # non-fatal
+                continue
+
+        # Case (b): 2× stale margin exceeded → delete regardless of host.
+        if age_secs > stale_threshold * 2:
+            try:
+                p.unlink()
+                _emit_event(run_id, "plan_reaped", {
+                    "run_id": run_id,
+                    "reason": "2x_stale_margin",
+                    "age_secs": age_secs,
+                    "stale_threshold": stale_threshold,
+                })
+            except FileNotFoundError:
+                pass  # two reapers racing — benign
+            except OSError:
+                pass  # non-fatal
+            continue
+
+        # Case (c): past 1× threshold AND host is remote/unknown → mark stale (do NOT delete).
+        if age_secs > stale_threshold and not is_local_host:
+            # Only mark if not already stale.
+            if rec.get("status") != "stale":
+                rec["status"] = "stale"
+                try:
+                    _atomic_write(p, rec)
+                    _emit_event(run_id, "plan_marked_stale", {
+                        "run_id": run_id,
+                        "reason": "remote_host_stale",
+                        "host": rec_host,
+                        "age_secs": age_secs,
+                        "stale_threshold": stale_threshold,
+                    })
+                except FileNotFoundError:
+                    pass  # two reapers racing — benign
+                except OSError:
+                    pass  # non-fatal
+
+    return 0
+
+
 # ── argument parser ────────────────────────────────────────────────────────────
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -500,6 +876,37 @@ def _build_parser() -> argparse.ArgumentParser:
         default="complete",
     )
 
+    # overlaps
+    p_overlaps = sub.add_parser(
+        "overlaps",
+        help="Compute path-intersection overlap with peer active plans.",
+    )
+    p_overlaps.add_argument("--run-id", required=True, help="Run ID to check overlaps for.")
+    p_overlaps.add_argument(
+        "--strict",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable blocking-overlap mode: exit 20 on explicit×explicit exact path match. "
+            "Also activated by Z_HARNESS_STRICT_OVERLAP=1."
+        ),
+    )
+    p_overlaps.add_argument(
+        "--scope-json",
+        default=None,
+        dest="scope_json",
+        help="Path to a JSON scope array; overrides the scope stored in the run's record.",
+    )
+    p_overlaps.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        help="Output result as JSON instead of human-readable text.",
+    )
+
+    # reap
+    sub.add_parser("reap", help="Conservative reaper: remove dead/2x-stale records.")
+
     return parser
 
 
@@ -515,6 +922,8 @@ def main(argv: list[str] | None = None) -> int:
         "update-scope": cmd_update_scope,
         "list": cmd_list,
         "deregister": cmd_deregister,
+        "overlaps": cmd_overlaps,
+        "reap": cmd_reap,
     }
     handler = dispatch.get(args.subcommand)
     if handler is None:
