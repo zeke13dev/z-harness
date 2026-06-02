@@ -35,7 +35,7 @@ find ./commands -maxdepth 1 -name '*.md' 2>/dev/null
 find ./agents -maxdepth 1 -name '*.md' 2>/dev/null
 ```
 
-If the failure originates from a z-harness command/agent and you're NOT inside the z-harness repo, the file is in the plugin install path — patch the source in `/Users/zeke/dev/z-harness/` (or wherever the user has the source) rather than the installed copy.
+If the failure originates from a z-harness command/agent and you're NOT inside the z-harness repo, the file is in the plugin install path — patch the source in the user's z-harness source checkout (e.g. `${CLAUDE_PLUGIN_ROOT}`, or wherever they cloned it) rather than the installed copy.
 
 ## Setup
 
