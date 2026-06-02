@@ -260,14 +260,69 @@ Block here until the user has approved the decisions doc.
 
 ## Phase 3 — Bundled cross-LLM consultation
 
-Spawn **both** consultants in parallel in a single message:
+Read config knobs:
+
+```bash
+PERSONA_ROTATION="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get experiment.persona_rotation 2>/dev/null || echo "true")"
+CRITIQUE_PANEL="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get personas.critique_panel 2>/dev/null || echo "true")"
+```
+
+If `PERSONA_ROTATION == "true"`, use the **fixed 5-member panel** (agy, cursor@claude-4.6-sonnet, cursor@grok-4.3, cursor@composer-2.5, codex-cli). When `CRITIQUE_PANEL == "true"` as well, draw 5 distinct `consultant` personas and positionally prepend one body to each arm's prompt (graceful underflow — fewer personas than arms is fine, remaining arms run vanilla). This draw is Phase 3-specific; Phase 7 gets its own independent draw.
+
+```bash
+PLUGIN="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+P3_GEMINI_PREFIX=""; P3_SONNET_PREFIX=""; P3_GROK_PREFIX=""; P3_COMPOSER_PREFIX=""; P3_CODEX_PREFIX=""
+P3_GEMINI_NAME="<none>"; P3_SONNET_NAME="<none>"; P3_GROK_NAME="<none>"; P3_COMPOSER_NAME="<none>"; P3_CODEX_NAME="<none>"
+P3_GEMINI_DRAW=""; P3_SONNET_DRAW=""; P3_GROK_DRAW=""; P3_COMPOSER_DRAW=""; P3_CODEX_DRAW=""
+
+if [ "$PERSONA_ROTATION" = "true" ] && [ "$CRITIQUE_PANEL" = "true" ]; then
+  P3_PERSONAS_JSON=$(python3 "$PLUGIN/scripts/resolve-persona.py" random-distinct-for-role consultant --count=5 \
+    2>>"$Z_HARNESS_PLAN_DIR/archive/$RUN/persona-draw.log")
+  for slot in 0:GEMINI 1:SONNET 2:GROK 3:COMPOSER 4:CODEX; do
+    idx="${slot%%:*}"; who="${slot##*:}"
+    name=$(echo "$P3_PERSONAS_JSON" | jq -r ".[$idx].persona // \"\"")
+    path=$(echo "$P3_PERSONAS_JSON" | jq -r ".[$idx].persona_body_path // \"\"")
+    draw=$(echo "$P3_PERSONAS_JSON" | jq -r ".[$idx].draw_id // \"\"")
+    [ -z "$name" ] && continue
+    prefix=$(python3 "$PLUGIN/runtime/dispatch/persona_prompt.py" "$path" "" 2>/dev/null | head -c 4096)
+    eval "P3_${who}_NAME=\$name"; eval "P3_${who}_PREFIX=\$prefix"; eval "P3_${who}_DRAW=\$draw"
+  done
+fi
+```
+
+Emit `persona_bound` per arm before dispatch. Arms with a drawn persona use `selection_source=random_role_pool_distinct` and include `persona_id` + `draw_id`; vanilla arms use `selection_source=fixed_panel`:
+
+```bash
+declare -A P3_ARM_NAMES=([gemini]="$P3_GEMINI_NAME" [claude-sonnet]="$P3_SONNET_NAME" [grok]="$P3_GROK_NAME" [composer]="$P3_COMPOSER_NAME" [codex-5.5]="$P3_CODEX_NAME")
+declare -A P3_ARM_DRAWS=([gemini]="$P3_GEMINI_DRAW" [claude-sonnet]="$P3_SONNET_DRAW" [grok]="$P3_GROK_DRAW" [composer]="$P3_COMPOSER_DRAW" [codex-5.5]="$P3_CODEX_DRAW")
+for ARM in gemini claude-sonnet grok composer codex-5.5; do
+  pname="${P3_ARM_NAMES[$ARM]}"; pdraw="${P3_ARM_DRAWS[$ARM]}"
+  if [ "$pname" != "<none>" ] && [ -n "$pname" ]; then
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
+      "$(printf '{"run_id":"%s","command":"z-plan","role":"consultant","arm":"%s","selection_source":"random_role_pool_distinct","persona_id":"%s","draw_id":"%s","phase":3}' "$RUN" "$ARM" "$pname" "$pdraw")"
+  else
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
+      "$(printf '{"run_id":"%s","command":"z-plan","role":"consultant","arm":"%s","selection_source":"fixed_panel","phase":3}' "$RUN" "$ARM")"
+  fi
+done
+```
+
+Spawn all 5 panel members in parallel in a single message. Each receives the **entire approved decisions doc** with the consult-flagged decisions highlighted. Prepend the arm's persona body to its prompt when available (empty string = vanilla, byte-identical to pre-feature dispatch). Cursor arms pass their model via `--model <model>`:
+
+- `Agent(subagent_type="agy", description="Phase 3 consult — gemini arm", prompt="<P3_GEMINI_PREFIX>...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
+- `Agent(subagent_type="cursor", model="claude-4.6-sonnet", description="Phase 3 consult — claude-sonnet arm", prompt="<P3_SONNET_PREFIX>...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
+- `Agent(subagent_type="cursor", model="grok-4.3", description="Phase 3 consult — grok arm", prompt="<P3_GROK_PREFIX>...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
+- `Agent(subagent_type="cursor", model="composer-2.5", description="Phase 3 consult — composer arm", prompt="<P3_COMPOSER_PREFIX>...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
+- `Agent(subagent_type="codex-cli", description="Phase 3 consult — codex-5.5 arm", prompt="<P3_CODEX_PREFIX>...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
+
+If `PERSONA_ROTATION == "false"`, fall back to the standard 2-consultant behavior:
 
 - `Agent(subagent_type="consultant-primary", ..., prompt="...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
 - `Agent(subagent_type="consultant-secondary", ..., prompt="...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
 
-Each gets the **entire approved decisions doc** with the consult-flagged decisions highlighted. They can see all decisions and flag interactions between them. Two calls total, regardless of feature size.
+Each gets the **entire approved decisions doc** with the consult-flagged decisions highlighted. Two calls total, regardless of feature size.
 
-When both return:
+When all consultants return (from either path):
 1. For each recommendation, articulate **one concrete reason it might be wrong** before accepting it. This is mechanical, not optional.
 2. Synthesize. Make the final call yourself, citing which inputs you weighed.
 3. Flag any shortcut over the robust long-lasting solution — requires explicit user approval in Phase 5.
@@ -315,7 +370,55 @@ Both obey **DRY / KISS / SOLID**. State explicitly how the plan respects each.
 
 ## Phase 7 — Bundled final review
 
-Spawn both consultants in parallel, each handed the full SPEC.md + PLAN.md. Include `kernel_path: <KERNEL_PATH>` in each `Agent(prompt=...)` when `KERNEL_PATH` is non-empty (resolved in Setup):
+Reuse `PERSONA_ROTATION` and `CRITIQUE_PANEL` values from Phase 3. If `PERSONA_ROTATION == "true"`, use the same **fixed 5-member panel** for Phase 7. Draw a fresh, independent set of 5 distinct `consultant` personas — do NOT reuse the Phase 3 draw.
+
+```bash
+PLUGIN="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+P7_GEMINI_PREFIX=""; P7_SONNET_PREFIX=""; P7_GROK_PREFIX=""; P7_COMPOSER_PREFIX=""; P7_CODEX_PREFIX=""
+P7_GEMINI_NAME="<none>"; P7_SONNET_NAME="<none>"; P7_GROK_NAME="<none>"; P7_COMPOSER_NAME="<none>"; P7_CODEX_NAME="<none>"
+P7_GEMINI_DRAW=""; P7_SONNET_DRAW=""; P7_GROK_DRAW=""; P7_COMPOSER_DRAW=""; P7_CODEX_DRAW=""
+
+if [ "$PERSONA_ROTATION" = "true" ] && [ "$CRITIQUE_PANEL" = "true" ]; then
+  P7_PERSONAS_JSON=$(python3 "$PLUGIN/scripts/resolve-persona.py" random-distinct-for-role consultant --count=5 \
+    2>>"$Z_HARNESS_PLAN_DIR/archive/$RUN/persona-draw.log")
+  for slot in 0:GEMINI 1:SONNET 2:GROK 3:COMPOSER 4:CODEX; do
+    idx="${slot%%:*}"; who="${slot##*:}"
+    name=$(echo "$P7_PERSONAS_JSON" | jq -r ".[$idx].persona // \"\"")
+    path=$(echo "$P7_PERSONAS_JSON" | jq -r ".[$idx].persona_body_path // \"\"")
+    draw=$(echo "$P7_PERSONAS_JSON" | jq -r ".[$idx].draw_id // \"\"")
+    [ -z "$name" ] && continue
+    prefix=$(python3 "$PLUGIN/runtime/dispatch/persona_prompt.py" "$path" "" 2>/dev/null | head -c 4096)
+    eval "P7_${who}_NAME=\$name"; eval "P7_${who}_PREFIX=\$prefix"; eval "P7_${who}_DRAW=\$draw"
+  done
+fi
+```
+
+Emit `persona_bound` per arm (same pattern as Phase 3, with `"phase":7`):
+
+```bash
+declare -A P7_ARM_NAMES=([gemini]="$P7_GEMINI_NAME" [claude-sonnet]="$P7_SONNET_NAME" [grok]="$P7_GROK_NAME" [composer]="$P7_COMPOSER_NAME" [codex-5.5]="$P7_CODEX_NAME")
+declare -A P7_ARM_DRAWS=([gemini]="$P7_GEMINI_DRAW" [claude-sonnet]="$P7_SONNET_DRAW" [grok]="$P7_GROK_DRAW" [composer]="$P7_COMPOSER_DRAW" [codex-5.5]="$P7_CODEX_DRAW")
+for ARM in gemini claude-sonnet grok composer codex-5.5; do
+  pname="${P7_ARM_NAMES[$ARM]}"; pdraw="${P7_ARM_DRAWS[$ARM]}"
+  if [ "$pname" != "<none>" ] && [ -n "$pname" ]; then
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
+      "$(printf '{"run_id":"%s","command":"z-plan","role":"consultant","arm":"%s","selection_source":"random_role_pool_distinct","persona_id":"%s","draw_id":"%s","phase":7}' "$RUN" "$ARM" "$pname" "$pdraw")"
+  else
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
+      "$(printf '{"run_id":"%s","command":"z-plan","role":"consultant","arm":"%s","selection_source":"fixed_panel","phase":7}' "$RUN" "$ARM")"
+  fi
+done
+```
+
+Spawn all 5 panel members in parallel, each handed the full SPEC.md + PLAN.md. Include `kernel_path: <KERNEL_PATH>` in each `Agent(prompt=...)` when `KERNEL_PATH` is non-empty (resolved in Setup). All 5 arms receive: "Critique this plan. What's wrong, missing, or fragile?" Prepend the arm's Phase 7 persona body when available. Cursor arms pass their model via `--model <model>`:
+
+- `Agent(subagent_type="agy", description="Phase 7 final review — gemini arm", prompt="<P7_GEMINI_PREFIX>Critique this plan...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
+- `Agent(subagent_type="cursor", model="claude-4.6-sonnet", description="Phase 7 final review — claude-sonnet arm", prompt="<P7_SONNET_PREFIX>Critique this plan...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
+- `Agent(subagent_type="cursor", model="grok-4.3", description="Phase 7 final review — grok arm", prompt="<P7_GROK_PREFIX>Critique this plan...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
+- `Agent(subagent_type="cursor", model="composer-2.5", description="Phase 7 final review — composer arm", prompt="<P7_COMPOSER_PREFIX>Critique this plan...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
+- `Agent(subagent_type="codex-cli", description="Phase 7 final review — codex-5.5 arm", prompt="<P7_CODEX_PREFIX>Critique this plan...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
+
+If `PERSONA_ROTATION == "false"`, fall back to the standard 2-consultant behavior: spawn both consultants in parallel, each handed the full SPEC.md + PLAN.md. Include `kernel_path: <KERNEL_PATH>` when non-empty:
 - consultant-primary: "Critique this plan. What's wrong, missing, or fragile?"
 - consultant-secondary: same.
 

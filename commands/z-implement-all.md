@@ -1483,6 +1483,131 @@ Emission is gated by `Z_HARNESS_AXIOM_EXTRACT` (default on); when set to `"0"`, 
 
 ---
 
+<!-- ADVISORY-EVAL-REVIEWER: canonical shared snippet — referenced by z-plan-light.md, z-fix.md, z-do.md; do NOT copy-paste this block into those files, point here instead. -->
+## Advisory eval-reviewer (shared snippet) {#ADVISORY-EVAL-REVIEWER}
+
+**Purpose.** This block is the single canonical definition of the advisory eval-reviewer pattern.
+Commands that need the same behaviour (z-plan-light Phase 8, z-fix, z-do) MUST reference this
+section — "see the Advisory eval-reviewer shared snippet in commands/z-implement-all.md" — and
+must NOT duplicate the mechanism.  The inline dual-reviewer logic already in steps 6 and 7a
+implements this pattern; this section codifies it as a referenceable unit.
+
+### Knob read
+
+```bash
+REVIEW_EVAL="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" \
+  get personas.review_eval 2>/dev/null || echo true)"
+```
+
+Default: `true` (advisory arm runs unless explicitly disabled).  The outer gate on
+`experiment.persona_rotation` must also be `"true"` — the advisory arm only makes sense when
+persona rotation is active.  Full condition:
+
+```bash
+if [ "$PERSONA_ROTATION" = "true" ] && [ "$REVIEW_EVAL" = "true" ]; then
+  # ... draw + dispatch + log (below)
+fi
+```
+
+When either knob is `false` / off, ONLY the base codex reviewer runs (today's gating-only
+behaviour, unchanged).
+
+### Single random draw
+
+Draw exactly ONE reviewer persona.  This is always `random-for-role reviewer`
+(`selection_source=random_role_pool`); it is NOT a distinct-draw panel.  Re-export the join keys
+before the draw so the `persona_random_selected` event carries `task_id` + `attempt_id`:
+
+```bash
+export Z_HARNESS_TASK_ID="<task-id>"
+export Z_HARNESS_ATTEMPT_ID="$ATTEMPT_ID"
+export Z_HARNESS_RUN_ID="$RUN"
+REVIEWER_DRAW_JSON="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-persona.py" \
+  random-for-role reviewer 2>/dev/null || echo '{}')"
+REVIEWER_PERSONA_BODY_PATH="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("persona_body_path",""))' \
+  "$REVIEWER_DRAW_JSON" 2>/dev/null || echo "")"
+REVIEWER_DRAW_ID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("draw_id",""))' \
+  "$REVIEWER_DRAW_JSON" 2>/dev/null || echo "")"
+REVIEWER_PERSONA_ID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("persona",""))' \
+  "$REVIEWER_DRAW_JSON" 2>/dev/null || echo "")"
+```
+
+### Persona prefix build
+
+Strip frontmatter using `persona_prompt.py` (same helper as the implementer path); cap at 4096
+chars; append a trailing double-newline so the advisory notice is the first substantive line of
+the prompt:
+
+```bash
+if [ -n "$REVIEWER_PERSONA_BODY_PATH" ] && [ -f "$REVIEWER_PERSONA_BODY_PATH" ]; then
+  REVIEWER_PERSONA_PREFIX="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/runtime/dispatch/persona_prompt.py" \
+    "$REVIEWER_PERSONA_BODY_PATH" "" 2>/dev/null | head -c 4096 || true)"
+  [ -n "$REVIEWER_PERSONA_PREFIX" ] && REVIEWER_PERSONA_PREFIX="${REVIEWER_PERSONA_PREFIX}
+
+"
+else
+  REVIEWER_PERSONA_PREFIX=""
+fi
+```
+
+### Parallel dispatch
+
+The advisory arm is dispatched as a parallel `Agent()` call alongside the base codex reviewer
+(both in the same message).  The base codex reviewer is the gating reviewer; the advisory arm is
+purely for data collection.  The prompt MUST include the advisory notice as its first substantive
+line (after the persona prefix):
+
+```
+# Only dispatch when PERSONA_ROTATION == "true" AND REVIEW_EVAL == "true":
+Agent(
+  subagent_type="reviewer",
+  description="Advisory review (random arm) <task-id>",
+  prompt="<REVIEWER_PERSONA_PREFIX><ADVISORY: this review is for data-collection only — verdict is recorded but does not gate the task>
+task id: <id>
+reviewer_participant: random_arm
+..."
+)
+```
+
+Capture the response into a SEPARATE variable (`RANDOM_ARM_RESPONSE`).  It must NEVER be merged
+with `BASE_CODEX_RESPONSE`.  It is never parsed into the gating decision.
+
+### persona_bound logging
+
+Emit one `persona_bound` event for the advisory arm immediately after the parallel dispatch
+returns, gated on the same two knobs:
+
+```bash
+if [ "$PERSONA_ROTATION" = "true" ] && [ "$REVIEW_EVAL" = "true" ]; then
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
+    "tasks/<task-id>" persona_bound \
+    "$(python3 -c 'import json,sys; print(json.dumps({
+      "command":"z-implement-all","role":"reviewer",
+      "task_id":sys.argv[1],"attempt_id":sys.argv[2],
+      "reviewer_participant":"random_arm",
+      "persona_id":sys.argv[3],"draw_id":sys.argv[4],
+      "cycle":int(sys.argv[5])
+    }))' "<task-id>" "$ATTEMPT_ID" "$REVIEWER_PERSONA_ID" "$REVIEWER_DRAW_ID" "$CYCLE")"
+fi
+```
+
+`selection_source` for this arm is always `random_role_pool` (single draw, NOT `_distinct`).
+`reviewer_participant` is always `random_arm`.
+
+### HARD RULE — advisory only, NEVER gates
+
+> **The advisory eval-reviewer verdict MUST NOT change pass/fail outcome.  It MUST NOT trigger a
+> retry.  It MUST NOT surface as a blocking finding.  Its response is stored for telemetry ONLY.**
+>
+> The authoritative gate is always the base codex reviewer (`reviewer_participant=base_codex`).
+> Only its `blockers` / `majors` counts drive retry and halt behaviour.
+
+Referencing commands implement this rule by parsing only `BASE_CODEX_RESPONSE` in their step-7
+outcome branch.  `RANDOM_ARM_RESPONSE` is stored and logged; it is never fed into any
+conditional that can halt or retry the task.
+
+<!-- END ADVISORY-EVAL-REVIEWER -->
+
 ## Runtime contract conformance
 
 | Feature | Used | Gates |

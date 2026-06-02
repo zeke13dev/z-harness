@@ -148,6 +148,77 @@ Agent(
 
 Both transcripts archive themselves under `$Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts/`.
 
+### Phase 3 — Measured persona advisory arm (CONVERGENT site)
+
+**This arm is ADDITIVE and ADVISORY only. The neutral consult's synthesis (Phase 4) is the decision of record. The persona arm's output is NEVER folded into the Phase 4 synthesis.**
+
+Read the `personas.consult_eval` knob:
+
+```bash
+PLUGIN="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+CONSULT_EVAL="$(python3 "$PLUGIN/scripts/config.py" get personas.consult_eval 2>/dev/null || echo false)"
+```
+
+**When `CONSULT_EVAL` is `true`:** draw ONE `consultant` persona and dispatch an additional advisory arm IN PARALLEL with the two neutral consultants above (include it in the same parallel message):
+
+```bash
+# Draw one consultant persona. Graceful underflow: if the pool is empty,
+# the command returns [] and exits 0 — skip the advisory arm entirely.
+ADVISORY_PERSONA_JSON=$(python3 "$PLUGIN/scripts/resolve-persona.py" \
+  random-distinct-for-role consultant --count=1 \
+  2>>"$Z_HARNESS_PLAN_DIR/archive/$RUN/persona-draw.log")
+
+ADVISORY_PERSONA_NAME=$(echo "$ADVISORY_PERSONA_JSON" | jq -r '.[0].persona // ""')
+ADVISORY_PERSONA_PATH=$(echo "$ADVISORY_PERSONA_JSON" | jq -r '.[0].persona_body_path // ""')
+ADVISORY_DRAW_ID=$(echo "$ADVISORY_PERSONA_JSON" | jq -r '.[0].draw_id // ""')
+
+if [ -n "$ADVISORY_PERSONA_NAME" ]; then
+  # Prepend persona body to the advisory prompt (strips frontmatter).
+  ADVISORY_PREFIX=$(python3 "$PLUGIN/runtime/dispatch/persona_prompt.py" \
+    "$ADVISORY_PERSONA_PATH" "" 2>/dev/null | head -c 4096)
+
+  # Emit persona_bound for the advisory arm (attribution; no outcome tracking).
+  bash "$PLUGIN/scripts/log-event.sh" "$RUN" persona_bound \
+    "$(python3 -c 'import json,sys; print(json.dumps({
+      "command":"z-plan-light","role":"consultant",
+      "arm":"advisory","persona_id":sys.argv[1],
+      "draw_id":sys.argv[2],"selection_source":"random_role_pool_distinct"
+    }))' "$ADVISORY_PERSONA_NAME" "$ADVISORY_DRAW_ID")"
+fi
+```
+
+**If `ADVISORY_PERSONA_NAME` is non-empty**, include a third Agent() call IN THE SAME parallel message as the two neutral consultants:
+
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the advisory Agent() call when personas.consult_eval is on. The advisory arm is advisory only — skipping it does not affect the neutral synthesis. -->
+```
+Agent(
+  subagent_type="consultant-primary",
+  description="Advisory persona consult for <slug>",
+  prompt="<ADVISORY_PREFIX>MODE: light-fix\n\n<same prompt body as neutral arms>"
+)
+```
+
+**Capture the advisory arm's output in a separate variable** (e.g. `ADVISORY_RECOMMENDATION`). Do NOT pass it to Phase 4 synthesis. After Phase 3 returns, log it as a dedicated telemetry event:
+
+```bash
+if [ -n "$ADVISORY_PERSONA_NAME" ]; then
+  bash "$PLUGIN/scripts/log-event.sh" "$RUN" persona_advisory_recommendation \
+    "$(python3 -c 'import json,sys; print(json.dumps({
+      "command":"z-plan-light","phase":3,
+      "persona_id":sys.argv[1],"draw_id":sys.argv[2],
+      "recommendation": sys.argv[3][:2000]
+    }))' "$ADVISORY_PERSONA_NAME" "$ADVISORY_DRAW_ID" "$ADVISORY_RECOMMENDATION")"
+fi
+```
+
+**Neutral-authority contract (mechanical, load-bearing):**
+- The neutral consult's synthesis is the decision of record.
+- The persona advisory arm's recommendation is emitted under `persona_advisory_recommendation` — it is NEVER merged into the Phase 4 synthesis.
+- No prose path in Phase 4 may instruct the orchestrator to read the advisory arm's output into the final recommendation.
+- **Acceptance criterion (mock-disagreement):** If the persona advisory arm recommends option B and the two neutral arms both recommend option A, Phase 4 synthesizes option A unchanged. The `persona_advisory_recommendation` event records option B for later analysis. To verify: set `personas.consult_eval=true`, run a scenario where the advisory arm's prompt is seeded to produce a different option than the neutral arms; assert that Phase 4's synthesis cites only the neutral arms' output and that FIX.md "Cross-LLM consensus" contains no reference to the advisory arm's recommendation.
+
+**When `CONSULT_EVAL` is `false` (default) or `ADVISORY_PERSONA_NAME` is empty (underflow):** skip the advisory arm entirely. The Phase 3 dispatch is byte-identical to the pre-feature two-arm neutral consult. No draw event, no prefix, no `persona_bound`, no `persona_advisory_recommendation`.
+
 ## Phase 4 — Synthesize + push back
 
 When both return:
@@ -298,7 +369,7 @@ Parse the return (already capped at 8 KB, blockers + majors only).
 
 | Feature | Used | Gates |
 |---------|------|-------|
-| `subagent` | yes | Phase 1 doc-fetcher; Phase 3 consultant-primary + consultant-secondary; Phase 8 reviewer |
+| `subagent` | yes | Phase 1 doc-fetcher; Phase 3 consultant-primary + consultant-secondary + advisory persona arm (when personas.consult_eval on); Phase 8 reviewer |
 | `ask_user` | yes | Empty-args question; Setup slug confirmation; Plan Route Check route-gate decision; Phase 1 premise-concern questions; Phase 5 approval + shortcut approval; Phase 7 mid-implementation scope-growth decision; Phase 8 second-review-failure decision |
 | `skill_invoke` | no | — |
 
