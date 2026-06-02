@@ -622,7 +622,7 @@ if [ -n "$ADVISORY_PERSONA_NAME" ]; then
     "$(python3 -c 'import json,sys; print(json.dumps({
       "command":"z-audit","role":"consultant",
       "arm":"advisory","persona_id":sys.argv[1],
-      "draw_id":sys.argv[2],"selection_source":"random_role_pool_distinct"
+      "draw_id":sys.argv[2],"selection_source":"random_role_pool"
     }))' "$ADVISORY_PERSONA_NAME" "$ADVISORY_DRAW_ID")"
 fi
 ```
