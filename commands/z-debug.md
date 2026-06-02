@@ -73,6 +73,23 @@ $ARGUMENTS
 6. Record start time `T0_DEBUG=$(date -u +%Y-%m-%dT%H:%M:%SZ)` — used for post-mortem timeline.
 7. If `docs/llm/INDEX.json` exists → note it. Phase 2 (Evidence) and Phase 3a (Round 1 hypotheses) will dispatch `doc-fetcher` (Haiku) instead of reading INDEX.json or per-concept JSONs from main thread. The orchestrator never reads `docs/llm/*.json` directly.
 
+8. **Soft cost estimate (non-blocking).** Call the gate helper and display the estimate. No AskUser, no halt — always proceeds.
+   ```bash
+   # workflow.pre_run_cost_gate
+   COST_GATE_JSON="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/pre-run-cost-gate.sh" \
+     z-debug soft "$RUN" 2>/dev/null)" || COST_GATE_JSON=""
+   if [ -n "$COST_GATE_JSON" ]; then
+     COST_HUMAN_BLOCK="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("human_block",""))' "$COST_GATE_JSON" 2>/dev/null || true)"
+     [ -n "$COST_HUMAN_BLOCK" ] && printf '%s\n' "$COST_HUMAN_BLOCK"
+     COST_ESTIMATED_TOKENS="$(python3 -c 'import json,sys; e=json.loads(sys.argv[1]).get("estimate",{}); print(e.get("estimated_tokens","null"))' "$COST_GATE_JSON" 2>/dev/null || echo "null")"
+     COST_CONFIDENCE="$(python3 -c 'import json,sys; e=json.loads(sys.argv[1]).get("estimate",{}); print(e.get("confidence","unknown"))' "$COST_GATE_JSON" 2>/dev/null || echo "unknown")"
+     COST_BASIS="$(python3 -c 'import json,sys; e=json.loads(sys.argv[1]).get("estimate",{}); print(e.get("basis","unknown"))' "$COST_GATE_JSON" 2>/dev/null || echo "unknown")"
+   fi
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cost_gate_decision \
+     "$(python3 -c 'import json,sys; print(json.dumps({"command":"z-debug","choice":"auto_proceed","reason":"soft_gate","estimated_tokens":sys.argv[1],"confidence":sys.argv[2],"basis":sys.argv[3]}))' \
+        "${COST_ESTIMATED_TOKENS:-null}" "${COST_CONFIDENCE:-unknown}" "${COST_BASIS:-unknown}")"
+   ```
+
 ## Auto-bail thresholds (softened — heavy path)
 
 If at any phase you discover that the root cause / fix requires any of:

@@ -1121,6 +1121,103 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 ---
 
+## Phase 1.5 — Pre-fanout cost gate
+
+Skip this phase entirely if `SKIP_TO_PHASE` is set (resume path — the gate already ran on the original invocation).
+
+```bash
+if [ "${SKIP_TO_PHASE:-0}" -eq 0 ]; then
+```
+
+Record `T0=$(date +%s%3N)` and `USER_WAIT_MS_THIS_PHASE=0` at phase start.
+
+Extract the component count from `COMPONENTS_JSON`:
+
+```bash
+N_COMPONENTS="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(len(d.get("components",[])))' "$COMPONENTS_JSON")"
+```
+
+Call the shared gate helper. Pass `--dispatch per_component=$N_COMPONENTS` since the count is known at this point:
+
+```bash
+GATE_JSON="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/pre-run-cost-gate.sh" \
+  z-uplift hard "$RUN" --dispatch "per_component=$N_COMPONENTS")"
+GATE_DISPOSITION="$(printf '%s' "$GATE_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["disposition"])')"
+GATE_HUMAN_BLOCK="$(printf '%s' "$GATE_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["human_block"])')"
+GATE_EST_TOKENS="$(printf '%s' "$GATE_JSON" | python3 -c 'import json,sys; e=json.load(sys.stdin)["estimate"]; print(e.get("estimated_tokens",0))')"
+GATE_CONFIDENCE="$(printf '%s' "$GATE_JSON" | python3 -c 'import json,sys; e=json.load(sys.stdin)["estimate"]; print(e.get("confidence","low"))')"
+GATE_BASIS="$(printf '%s' "$GATE_JSON" | python3 -c 'import json,sys; e=json.load(sys.stdin)["estimate"]; print(e.get("basis","unknown"))')"
+```
+
+Print the estimate block to the user:
+
+```
+$GATE_HUMAN_BLOCK
+```
+
+Branch on `$GATE_DISPOSITION`:
+
+- **`auto_proceed`**: log `cost_gate_decision` with `choice: auto_proceed` and continue.
+- **`halt`**: log `cost_gate_decision` with `choice: halt`, emit `run_end status: aborted_by_user`, and exit.
+- **`unhandled_gate`**: treat as `halt` (log + exit).
+- **`ask`**: present AskUser gate below.
+
+<!-- RUNTIME-GATE: ask_user; workflow.pre_run_cost_gate; non-supporting drivers must surface the cost gate (proceed / abandon) via their native channel. Silent omission is forbidden. -->
+When `GATE_DISPOSITION == "ask"`, bracket the wait with `user_wait_start` / `user_wait_end` and present `AskUserQuestion`:
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start \
+  '{"phase":"1.5","reason":"cost_gate"}'
+_WAIT_T0=$(date +%s%3N)
+```
+
+> **Cost gate for `/z-uplift`**
+>
+> $GATE_HUMAN_BLOCK
+>
+> This run will fan out across $N_COMPONENTS component(s). Proceed?
+> 1. **Proceed** — continue to cross-cutting and per-component audits
+> 2. **Abandon** — exit cleanly, write nothing further
+
+```bash
+USER_WAIT_MS_THIS_PHASE=$(( USER_WAIT_MS_THIS_PHASE + $(date +%s%3N) - _WAIT_T0 ))
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end \
+  "$(printf '{"phase":"1.5","wall_ms":%d}' "$(( $(date +%s%3N) - _WAIT_T0 ))")"
+```
+
+Handle response:
+
+- **Proceed**: log `cost_gate_decision` and continue.
+- **Abandon**: log `cost_gate_decision` with `choice: abandon`, emit `run_end status: aborted_by_user`, and exit:
+
+  ```bash
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
+    "$(printf '{"command":"z-uplift","slug":"%s","status":"aborted_by_user","reason":"cost_gate_abandoned"}' "$SLUG")"
+  ```
+
+In all non-abandon branches, emit `cost_gate_decision` after logging user_wait_end (or immediately for `auto_proceed`/`halt`):
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cost_gate_decision \
+  "$(printf '{"command":"z-uplift","choice":"%s","estimated_tokens":%d,"confidence":"%s","basis":"%s"}' \
+     "<proceed|abandon|auto_proceed|halt>" "$GATE_EST_TOKENS" "$GATE_CONFIDENCE" "$GATE_BASIS")"
+```
+
+Log phase end:
+
+```bash
+WALL_MS=$(( $(date +%s%3N) - T0 ))
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" phase_end \
+  "$(printf '{"phase":"1.5","name":"pre-fanout-cost-gate","wall_ms":%d,"user_wait_ms":%d}' \
+     "$WALL_MS" "$USER_WAIT_MS_THIS_PHASE")"
+```
+
+```bash
+fi  # end SKIP_TO_PHASE guard
+```
+
+---
+
 ## Phase 2 — Cross-cutting pass
 
 Record `T0=$(date +%s%3N)` at phase start.

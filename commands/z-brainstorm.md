@@ -225,6 +225,23 @@ When `MODE: HEAVY`:
      "$(printf '{"host_command":"z-brainstorm","axis":"%s","chunks_count":%d}' "<AXIS>" "<N>")"
    ```
 
+1a. **Soft cost estimate (non-blocking).** Call the gate helper with the HEAVY chunk count, display the estimate, and log the decision. This fires only here (HEAVY path); LIGHT/MEDIUM runs skip it entirely.
+   ```bash
+   # workflow.pre_run_cost_gate
+   COST_GATE_JSON="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/pre-run-cost-gate.sh" \
+     z-brainstorm soft "$RUN" --dispatch per_heavy_chunk=<N> 2>/dev/null)" || COST_GATE_JSON=""
+   if [ -n "$COST_GATE_JSON" ]; then
+     COST_HUMAN_BLOCK="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("human_block",""))' "$COST_GATE_JSON" 2>/dev/null || true)"
+     [ -n "$COST_HUMAN_BLOCK" ] && printf '%s\n' "$COST_HUMAN_BLOCK"
+     COST_ESTIMATED_TOKENS="$(python3 -c 'import json,sys; e=json.loads(sys.argv[1]).get("estimate",{}); print(e.get("estimated_tokens","null"))' "$COST_GATE_JSON" 2>/dev/null || echo "null")"
+     COST_CONFIDENCE="$(python3 -c 'import json,sys; e=json.loads(sys.argv[1]).get("estimate",{}); print(e.get("confidence","unknown"))' "$COST_GATE_JSON" 2>/dev/null || echo "unknown")"
+     COST_BASIS="$(python3 -c 'import json,sys; e=json.loads(sys.argv[1]).get("estimate",{}); print(e.get("basis","unknown"))' "$COST_GATE_JSON" 2>/dev/null || echo "unknown")"
+   fi
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cost_gate_decision \
+     "$(python3 -c 'import json,sys; print(json.dumps({"command":"z-brainstorm","choice":"auto_proceed","reason":"soft_gate","estimated_tokens":sys.argv[1],"confidence":sys.argv[2],"basis":sys.argv[3]}))' \
+        "${COST_ESTIMATED_TOKENS:-null}" "${COST_CONFIDENCE:-unknown}" "${COST_BASIS:-unknown}")"
+   ```
+
 2. **Dispatch N parallel `/z-brainstorm` sub-flows** — one per chunk from the `chunks` array. Each sub-flow runs Phases 1 (scaffolding), 2 (ideator dispatch), and **3 (synthesis)** for its chunk's `scope_hint` sub-topic, producing its own per-chunk BRAINSTORM.md. Dispatch all N in a single message (parallel).
 
    For each chunk `C` in `chunks`, call:
