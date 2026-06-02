@@ -1,6 +1,6 @@
 # z-harness
 
-A Claude Code plugin that wraps planning and implementation in a rigorous, cross-LLM-reviewed pipeline. Every command writes artifacts to `z-harness/<slug>/`, with run-frozen archives and aggregated telemetry in `z-harness/metrics.jsonl`. Designed for engineers who want AI-assisted code changes to go through a real review loop rather than land silently.
+A Claude Code plugin that wraps planning and implementation in a rigorous, cross-LLM-reviewed pipeline. Every command writes artifacts to a per-repo state directory — by default an external location outside your working tree (`$XDG_STATE_HOME/z-harness/<repo-id>/`, e.g. `~/.local/state/z-harness/...`) — with run-frozen archives and aggregated telemetry in `<base>/metrics.jsonl`. Set `Z_HARNESS_EXTERNAL_DEFAULT=0` for the legacy in-repo `z-harness/` layout, or `Z_HARNESS_BASE_DIR=<abs path>` to redirect it anywhere; run `/z-where` to see the resolved base. Designed for engineers who want AI-assisted code changes to go through a real review loop rather than land silently.
 
 ## Install
 
