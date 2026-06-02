@@ -13,7 +13,8 @@ Exit 0 on any producible envelope; exit non-zero only if <command> arg is missin
 Tiers:
   1. Static  — reads profile range from token-cost-profiles.json.
   2. Dispatch — adds Σ multipliers[key]*N for each --dispatch KEY=N given.
-  3. Empirical — (T004: stub, returns None) parent-run rollup from metrics.jsonl.
+  3. Empirical — parent-run rollup from metrics.jsonl (bounded, race-safe,
+                 completion-filtered).
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -126,7 +128,116 @@ def _default_metrics_path() -> Path:
 
 
 # ---------------------------------------------------------------------------
-# T004: empirical tier (stub — returns None, no-op)
+# Empirical tier helpers
+# ---------------------------------------------------------------------------
+
+# Maps start/end event `kind` values to canonical command keys.
+# Covers the 6 profiled commands that have distinct start kinds in the wild.
+_KIND_TO_COMMAND: dict[str, str] = {
+    "research_run_start": "z-research",
+    "research_run_end": "z-research",
+    "brainstorm_run_start": "z-brainstorm",
+    "brainstorm_run_end": "z-brainstorm",
+    "run_start": "z-plan",
+    "run_end": "z-plan",
+    "plan_audit_start": "z-audit",
+    "plan_audit_end": "z-audit",
+    "uplift_run_start": "z-uplift",
+    "uplift_run_end": "z-uplift",
+    "plan_split_run_start": "z-plan-split",
+    "plan_split_run_end": "z-plan-split",
+    "debug_run_start": "z-debug",
+    "debug_run_end": "z-debug",
+}
+
+# Terminal event kind suffixes that mark normal completion.
+_TERMINAL_KINDS: frozenset[str] = frozenset({
+    "run_end",
+    "research_run_end",
+    "brainstorm_run_end",
+    "plan_audit_end",
+    "uplift_run_end",
+    "plan_split_run_end",
+    "debug_run_end",
+})
+
+# Statuses that mark abnormal (excluded) completions.
+_EXCLUDED_STATUSES: frozenset[str] = frozenset({
+    "aborted_by_user",
+    "halted",
+    "errored",
+})
+
+# 5 minutes in seconds — in-flight grace window.
+_INFLIGHT_GRACE_SECS: float = 5 * 60.0
+
+
+def _parse_ts(ts_str: str | None) -> float | None:
+    """Parse an ISO-8601 timestamp string to a UTC POSIX timestamp.
+
+    Returns None on any parse failure.
+    """
+    if not ts_str:
+        return None
+    try:
+        # Python 3.7+ fromisoformat doesn't handle trailing 'Z'.
+        normalized = ts_str.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(normalized)
+        if dt.tzinfo is None:
+            # Assume UTC if no timezone given.
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except (ValueError, TypeError):
+        return None
+
+
+def _event_tokens(event: dict) -> int:
+    """Return the token count for a single event using the z-stats fallback chain.
+
+    Chain:
+      subagent_input_tokens  // prompt_chars/4  // 0
+    + subagent_output_tokens // response_chars/4 // 0
+    """
+    def _get_int(event: dict, key: str) -> int | None:
+        v = event.get(key)
+        if v is None:
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
+    raw_in = _get_int(event, "subagent_input_tokens")
+    if raw_in is None:
+        pc = _get_int(event, "prompt_chars")
+        raw_in = (pc // 4) if pc is not None else 0
+
+    raw_out = _get_int(event, "subagent_output_tokens")
+    if raw_out is None:
+        rc = _get_int(event, "response_chars")
+        raw_out = (rc // 4) if rc is not None else 0
+
+    return (raw_in or 0) + (raw_out or 0)
+
+
+def _percentile(sorted_values: list[int], pct: float) -> float:
+    """Return the p-th percentile (0–100) of a sorted list using linear interpolation."""
+    n = len(sorted_values)
+    if n == 0:
+        return 0.0
+    if n == 1:
+        return float(sorted_values[0])
+    idx = (pct / 100.0) * (n - 1)
+    lo = int(idx)
+    hi = lo + 1
+    if hi >= n:
+        return float(sorted_values[-1])
+    frac = idx - lo
+    return sorted_values[lo] * (1 - frac) + sorted_values[hi] * frac
+
+
+# ---------------------------------------------------------------------------
+# T004: empirical tier — parent-run rollup, completion-filtered
 # ---------------------------------------------------------------------------
 
 def _empirical_tier(
@@ -135,11 +246,205 @@ def _empirical_tier(
     tail_lines: int,
     min_samples: int,
 ) -> dict | None:
-    # T004: empirical tier — not implemented in this task.
-    # When T004 implements this, it should return a dict:
-    #   {"p50": int, "p90": int, "samples": int}
-    # or None if insufficient data / file absent.
-    return None
+    """Compute p50/p90 over parent-rolled-up token totals for `command`.
+
+    Returns {"p50": int, "p90": int, "samples": int} or None if insufficient
+    data / file absent / errors reading.
+
+    Algorithm:
+    1. Read the last `tail_lines` lines of metrics_path (bounded tail).
+    2. Parse JSON line-by-line; skip malformed lines.
+    3. Bucket every event by effective_run = parent_run_id or run.
+    4. Attribute each bucket to parent_command or command (field first, then
+       _KIND_TO_COMMAND, else "unknown").
+    5. Track per-parent-run:
+       - command attribution
+       - sum of event token counts
+       - terminal event (kind + status)
+       - whether a cost_gate_decision{choice:abandon} appeared
+       - latest timestamp
+    6. Find max_ts across ALL events in the tail window.
+    7. Filter parent runs: keep only normally-completed parents.
+    8. Collect token sums for parent runs attributed to `command`.
+    9. Compute p50/p90; return if samples >= min_samples.
+    """
+    if not metrics_path.exists():
+        return None
+
+    # --- Bounded tail read ---
+    try:
+        with open(metrics_path, encoding="utf-8", errors="replace") as fh:
+            raw_lines = fh.readlines()
+    except OSError as exc:
+        print(
+            f"estimate-tokens: error reading metrics file {metrics_path}: {exc}",
+            file=sys.stderr,
+        )
+        return None
+
+    lines = raw_lines[-tail_lines:] if len(raw_lines) > tail_lines else raw_lines
+
+    # --- Parse events ---
+    events: list[dict] = []
+    skipped_malformed = 0
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+            if isinstance(obj, dict):
+                events.append(obj)
+        except json.JSONDecodeError:
+            skipped_malformed += 1
+
+    if skipped_malformed:
+        print(
+            f"estimate-tokens: skipped {skipped_malformed} malformed JSON lines "
+            f"in {metrics_path}",
+            file=sys.stderr,
+        )
+
+    if not events:
+        return None
+
+    # --- Find max_ts across all events in the tail window ---
+    max_ts: float | None = None
+    for ev in events:
+        ts = _parse_ts(ev.get("ts"))
+        if ts is not None:
+            if max_ts is None or ts > max_ts:
+                max_ts = ts
+
+    # --- Bucket events by effective_run; build per-bucket state ---
+    # bucket_command[eff_run] = command string or "unknown"
+    # bucket_tokens[eff_run] = cumulative token count
+    # bucket_terminal[eff_run] = (kind, status) of the terminal event, or None
+    # bucket_abandoned[eff_run] = True if cost_gate_decision{choice:abandon} seen
+    # bucket_latest_ts[eff_run] = latest event timestamp (float) or None
+
+    bucket_command: dict[str, str] = {}
+    bucket_tokens: dict[str, int] = {}
+    bucket_terminal: dict[str, tuple[str, str | None]] = {}
+    bucket_abandoned: dict[str, bool] = {}
+    bucket_latest_ts: dict[str, float | None] = {}
+
+    for ev in events:
+        run_id = ev.get("run", "")
+        parent_run_id = ev.get("parent_run_id", "")
+        eff_run: str = parent_run_id if parent_run_id else run_id
+        if not eff_run:
+            continue
+
+        # Initialize bucket defaults on first encounter.
+        if eff_run not in bucket_tokens:
+            bucket_tokens[eff_run] = 0
+            bucket_terminal[eff_run] = None  # type: ignore[assignment]
+            bucket_abandoned[eff_run] = False
+            bucket_latest_ts[eff_run] = None
+            bucket_command[eff_run] = "unknown"
+
+        # --- Update command attribution ---
+        # For a child event (has parent_run_id), the event's parent_command is
+        # authoritative for the parent bucket.
+        cmd_from_event: str | None = None
+        if parent_run_id:
+            # Child event: prefer parent_command, then command on the event.
+            cmd_from_event = ev.get("parent_command") or ev.get("command")
+        else:
+            # This event IS the parent run's own event.
+            cmd_from_event = ev.get("command")
+
+        if cmd_from_event:
+            # Only update if we don't already have a known (non-unknown) command.
+            if bucket_command[eff_run] == "unknown":
+                bucket_command[eff_run] = cmd_from_event
+        else:
+            # Fall back to kind-based inference for this bucket if still unknown.
+            kind = ev.get("kind", "")
+            if bucket_command[eff_run] == "unknown" and kind in _KIND_TO_COMMAND:
+                bucket_command[eff_run] = _KIND_TO_COMMAND[kind]
+
+        # --- Accumulate token count for ALL events in the bucket ---
+        bucket_tokens[eff_run] += _event_tokens(ev)
+
+        # --- Track latest timestamp for the bucket ---
+        ts = _parse_ts(ev.get("ts"))
+        if ts is not None:
+            cur = bucket_latest_ts[eff_run]
+            if cur is None or ts > cur:
+                bucket_latest_ts[eff_run] = ts
+
+        # --- Detect terminal events on PARENT run events only ---
+        # A terminal event's run_id must equal eff_run (i.e. this is a top-level
+        # parent event, not a child event attributed to the parent bucket).
+        if not parent_run_id:
+            kind = ev.get("kind", "")
+            if kind in _TERMINAL_KINDS:
+                status = ev.get("status") or ev.get("exit_status") or None
+                bucket_terminal[eff_run] = (kind, status)
+
+        # --- Detect cost_gate_decision{choice:abandon} on the parent run ---
+        if not parent_run_id:
+            kind = ev.get("kind", "")
+            if kind == "cost_gate_decision":
+                if ev.get("choice") == "abandon":
+                    bucket_abandoned[eff_run] = True
+
+    # --- Completion filter: keep only normally-completed parent runs ---
+    qualifying_totals: list[int] = []
+
+    for eff_run, total_tokens in bucket_tokens.items():
+        cmd = bucket_command.get(eff_run, "unknown")
+
+        # Only consider buckets attributed to the requested command.
+        if cmd != command:
+            continue
+
+        terminal = bucket_terminal.get(eff_run)
+        abandoned = bucket_abandoned.get(eff_run, False)
+        latest_ts = bucket_latest_ts.get(eff_run)
+
+        # Abandoned run → exclude.
+        if abandoned:
+            continue
+
+        if terminal is None:
+            # No terminal event: could be in-flight.
+            # Exclude if in-flight (latest_ts within 5 min of max_ts).
+            if max_ts is not None and latest_ts is not None:
+                if (max_ts - latest_ts) <= _INFLIGHT_GRACE_SECS:
+                    # In-flight — exclude.
+                    continue
+            # If no terminal and NOT in-flight window, it's a stale/unknown-state run.
+            # Conservative: exclude it (we can only trust completed runs).
+            continue
+
+        _term_kind, status = terminal
+
+        # Abnormal terminal status → exclude.
+        if status in _EXCLUDED_STATUSES:
+            continue
+
+        # Normally completed — include.
+        qualifying_totals.append(total_tokens)
+
+    if not qualifying_totals:
+        return None
+
+    samples = len(qualifying_totals)
+    if samples < min_samples:
+        return None
+
+    qualifying_totals.sort()
+    p50 = _percentile(qualifying_totals, 50)
+    p90 = _percentile(qualifying_totals, 90)
+
+    return {
+        "p50": round(p50),
+        "p90": round(p90),
+        "samples": samples,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +521,7 @@ def estimate(
                 {"tier": "dispatch", "add": dispatch_add, "keys": used_dispatch_keys}
             )
 
-    # ------------------------------------------------------------------ Tier 3: Empirical (stub)
+    # ------------------------------------------------------------------ Tier 3: Empirical
     empirical = _empirical_tier(canonical_key, metrics_path, tail_lines, min_samples)
 
     # ------------------------------------------------------------------ Compose envelope
