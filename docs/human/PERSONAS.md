@@ -131,6 +131,41 @@ in this priority:
 
 ---
 
+## The `ideator` role (brainstorm persona diversity)
+
+`ideator` is a role used by `/z-brainstorm` to give its three parallel ideators
+(Claude, Codex, Gemini) **distinct** personas — persona diversity layered on top
+of vendor diversity. Unlike the `implementer` rotation, this is **not** an
+experiment: there are no control / no-persona baseline arms and no per-ideator
+outcome tracking (an ideator has no measurable terminal). It is gated on the
+`brainstorm.personas` config knob (default ON); when OFF the brainstorm dispatch
+is byte-identical to the vendor-only behaviour.
+
+A persona joins the ideator pool by listing `ideator` in its `compatible_roles`.
+The shipped pool is the set of bold, perspective-driven builtins (e.g.
+`pattern-oracle`, `anti-consensus-surgeon`, `cut-it-half`, `brutalist-architect`,
+`biomimetic-architect`, `physics-reductionist`, `fossil-whisperer`,
+`cobol-greybeard`). Review-shaped personas (e.g. those with `contract:
+review-verdict`) are intentionally excluded — they produce findings, not framings.
+
+Drawing is done by a dedicated subcommand that omits the control arms and draws
+without replacement:
+
+```bash
+# Draw up to 3 distinct ideator personas (never boring-anchor / no-persona):
+python scripts/resolve-persona.py random-distinct-for-role ideator --count=3
+# → JSON array of resolve-shaped objects (one per ideator slot)
+```
+
+**Graceful degradation:** if the ideator pool holds fewer than the requested
+count, the subcommand returns a shorter array (or `[]` when empty), notes the
+underflow on stderr, and exits 0. `/z-brainstorm` binds the returned personas
+positionally (claude → codex → gemini) and runs any unfilled slot vanilla,
+recording the binding (or `<none>`) in the BRAINSTORM.md `ideator_personas`
+frontmatter map. Each bound ideator emits a `persona_bound` event for attribution.
+
+---
+
 ## Orchestrator usage pattern
 
 The **orchestrator** (slash command, skill, or Agent() call site) is responsible

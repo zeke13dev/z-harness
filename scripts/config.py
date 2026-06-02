@@ -87,6 +87,9 @@ DEFAULTS: dict = {
         "extract_min_recurrence": 3,     # int: minimum recurrences before auto-extracting an axiom
         "auto_extract_post_run": True,   # bool: run axiom extraction automatically after each run
     },
+    "brainstorm": {
+        "personas":              True,   # bool: inject persona diversity in /z-brainstorm
+    },
     "experiment": {
         "persona_rotation":  True,   # bool: enable persona rotation across z-harness roles
         "control_every_n":   5,      # int>0: forced-control cadence (every Nth implementer attempt)
@@ -137,6 +140,7 @@ VALIDATORS: dict = {
     "axioms.kernel_budget_chars":   _validate_positive_int,
     "axioms.extract_min_recurrence": _validate_positive_int,
     "axioms.auto_extract_post_run": _validate_bool,
+    "brainstorm.personas":          _validate_bool,
     "experiment.persona_rotation":  _validate_bool,
     "experiment.control_every_n":   _validate_positive_int,
     "runtime.consult":              {"on", "off"},
@@ -155,6 +159,9 @@ _COERCERS: dict[str, object] = {
         v if isinstance(v, int) and not isinstance(v, bool) else int(v)
     ),
     "axioms.auto_extract_post_run": lambda v: (
+        v if isinstance(v, bool) else v.lower() == "true"
+    ),
+    "brainstorm.personas": lambda v: (
         v if isinstance(v, bool) else v.lower() == "true"
     ),
     "experiment.persona_rotation": lambda v: (
