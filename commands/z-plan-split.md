@@ -52,6 +52,7 @@ $ARGUMENTS
    v["topic"] = sys.argv[2]
    v["topic_chars"] = len(sys.argv[2])
    v["session_id"] = sys.argv[3]
+   v["command"] = "z-plan-split"
    print(json.dumps(v))
    ' "$VERSION_BLOB" "<topic-text>" "$Z_HARNESS_SESSION_ID")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_split_run_start "$START_PAYLOAD"
@@ -113,7 +114,7 @@ Payload shape for early exits (when full counts aren't available yet, use `null`
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_split_run_end \
-  "$(printf '{"status":"%s","total_clusters":%s,"clusters_ready":%s,"clusters_failed":%s,"overlap_count":%s,"partial_tree":%s,"reason":"%s"}' \
+  "$(printf '{"command":"z-plan-split","status":"%s","total_clusters":%s,"clusters_ready":%s,"clusters_failed":%s,"overlap_count":%s,"partial_tree":%s,"reason":"%s"}' \
      "$STATUS" "${N:-0}" "${K:-0}" "${F:-0}" "${O:-0}" "${PT:-false}" "$REASON_SHORT")"
 ```
 
@@ -242,6 +243,94 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 ```
 
 Send a `PushNotification` if notify.level is `approval_only` or `all` (see [docs/human/config.md](docs/human/config.md)).
+
+---
+
+## Phase 1.5 — Pre-fanout cost gate
+
+This phase runs after Phase 1 cluster confirmation (N is now known) and before Phase 2 dispatch.
+
+Record `T0=$(date +%s%3N)` and `USER_WAIT_MS_THIS_PHASE=0` at phase start.
+
+`N_CLUSTERS` is the count of confirmed clusters from Phase 1d/1e (the length of the confirmed cluster list).
+
+Call the shared gate helper with the confirmed cluster count:
+
+```bash
+GATE_JSON="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/pre-run-cost-gate.sh" \
+  z-plan-split hard "$RUN" --dispatch "per_cluster=$N_CLUSTERS")"
+GATE_DISPOSITION="$(printf '%s' "$GATE_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["disposition"])')"
+GATE_HUMAN_BLOCK="$(printf '%s' "$GATE_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["human_block"])')"
+GATE_EST_TOKENS="$(printf '%s' "$GATE_JSON" | python3 -c 'import json,sys; e=json.load(sys.stdin)["estimate"]; print(e.get("estimated_tokens",0))')"
+GATE_CONFIDENCE="$(printf '%s' "$GATE_JSON" | python3 -c 'import json,sys; e=json.load(sys.stdin)["estimate"]; print(e.get("confidence","low"))')"
+GATE_BASIS="$(printf '%s' "$GATE_JSON" | python3 -c 'import json,sys; e=json.load(sys.stdin)["estimate"]; print(e.get("basis","unknown"))')"
+```
+
+Print the estimate block to the user:
+
+```
+$GATE_HUMAN_BLOCK
+```
+
+Branch on `$GATE_DISPOSITION`:
+
+- **`auto_proceed`**: log `cost_gate_decision` with `choice: auto_proceed` and continue.
+- **`halt`**: log `cost_gate_decision` with `choice: halt`, emit `plan_split_run_end status: aborted_by_user` + deregister, and exit.
+- **`unhandled_gate`**: treat as `halt` (log + exit).
+- **`ask`**: present AskUser gate below.
+
+<!-- RUNTIME-GATE: ask_user; workflow.pre_run_cost_gate; non-supporting drivers must surface the cost gate (proceed / abandon) via their native channel. Silent omission is forbidden. -->
+When `GATE_DISPOSITION == "ask"`, bracket the wait with `user_wait_start` / `user_wait_end` and present `AskUserQuestion`:
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start \
+  '{"phase":"1.5","reason":"cost_gate"}'
+_WAIT_T0=$(date +%s%3N)
+```
+
+> **Cost gate for `/z-plan-split`**
+>
+> $GATE_HUMAN_BLOCK
+>
+> This run will dispatch $N_CLUSTERS cluster-planner(s) in parallel. Proceed?
+> 1. **Proceed** — continue to Phase 2 (parallel cluster-planner dispatch)
+> 2. **Abandon** — exit cleanly, write nothing further
+
+```bash
+USER_WAIT_MS_THIS_PHASE=$(( USER_WAIT_MS_THIS_PHASE + $(date +%s%3N) - _WAIT_T0 ))
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end \
+  "$(printf '{"phase":"1.5","wall_ms":%d}' "$(( $(date +%s%3N) - _WAIT_T0 ))")"
+```
+
+Handle response:
+
+- **Proceed**: log `cost_gate_decision` and continue.
+- **Abandon**: log `cost_gate_decision` with `choice: abandon`, then per the Early-exit telemetry contract emit `phase_end` for Phase 1.5, then `plan_split_run_end` with `status: "abandoned_by_user"`, deregister, and exit:
+
+  ```bash
+  FINALIZE_STATUS=aborted
+  python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+    --run-id "$RUN" --status aborted 2>/dev/null || true
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_split_run_end \
+    "$(printf '{"command":"z-plan-split","status":"abandoned_by_user","total_clusters":%d,"clusters_ready":0,"clusters_failed":0,"overlap_count":0,"partial_tree":false,"reason":"cost_gate_abandoned"}' "$N_CLUSTERS")"
+  ```
+
+In all non-abandon branches, emit `cost_gate_decision` (after `user_wait_end` for the `ask` path, or immediately for `auto_proceed`/`halt`):
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cost_gate_decision \
+  "$(printf '{"command":"z-plan-split","choice":"%s","estimated_tokens":%d,"confidence":"%s","basis":"%s"}' \
+     "<proceed|abandon|auto_proceed|halt>" "$GATE_EST_TOKENS" "$GATE_CONFIDENCE" "$GATE_BASIS")"
+```
+
+Log phase end:
+
+```bash
+WALL_MS=$(( $(date +%s%3N) - T0 ))
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" phase_end \
+  "$(printf '{"phase":"1.5","name":"pre-fanout-cost-gate","wall_ms":%d,"user_wait_ms":%d}' \
+     "$WALL_MS" "$USER_WAIT_MS_THIS_PHASE")"
+```
 
 ---
 
@@ -472,7 +561,7 @@ Emit `phase_end` for Phase 5, then log `plan_split_run_end` with the full payloa
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_split_run_end \
-  "$(printf '{"status":"%s","total_clusters":%d,"clusters_ready":%d,"clusters_failed":%d,"overlap_count":%d,"partial_tree":%s}' \
+  "$(printf '{"command":"z-plan-split","status":"%s","total_clusters":%d,"clusters_ready":%d,"clusters_failed":%d,"overlap_count":%d,"partial_tree":%s}' \
      "$STATUS" "$N" "$K" "$F" "$O" "$PT")"
 ```
 

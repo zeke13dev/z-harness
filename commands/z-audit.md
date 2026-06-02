@@ -77,7 +77,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
    START_PAYLOAD="$(python3 -c '
    import json, sys
-   v = json.loads(sys.argv[1]); v["target"] = sys.argv[2]; v["session_id"] = sys.argv[3]
+   v = json.loads(sys.argv[1]); v["target"] = sys.argv[2]; v["session_id"] = sys.argv[3]; v["command"] = "z-audit"
    print(json.dumps(v))
    ' "$VERSION_BLOB" "<arguments>" "$Z_HARNESS_SESSION_ID")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" audit_run_start "$START_PAYLOAD"
@@ -301,6 +301,24 @@ Log event `scope_fanout_dispatched`:
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" scope_fanout_dispatched \
   "$(python3 -c "import json,sys; chunks=json.loads(sys.argv[1]); print(json.dumps({'chunk_count':len(chunks),'chunks':[c['id'] for c in chunks],'axis':sys.argv[2]}))" "$CHUNKS_JSON" "$AXIS")"
+```
+
+**Soft cost estimate (non-blocking).** Call the gate helper with the HEAVY chunk count (N), display the estimate, and log the decision. This fires only here (HEAVY path); LIGHT/MEDIUM runs skip it entirely.
+```bash
+# workflow.pre_run_cost_gate
+N_CHUNKS="$(python3 -c 'import json,sys; print(len(json.loads(sys.argv[1])))' "$CHUNKS_JSON" 2>/dev/null || echo "0")"
+COST_GATE_JSON="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/pre-run-cost-gate.sh" \
+  z-audit soft "$RUN" --dispatch per_dimension=$N_CHUNKS 2>/dev/null)" || COST_GATE_JSON=""
+if [ -n "$COST_GATE_JSON" ]; then
+  COST_HUMAN_BLOCK="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("human_block",""))' "$COST_GATE_JSON" 2>/dev/null || true)"
+  [ -n "$COST_HUMAN_BLOCK" ] && printf '%s\n' "$COST_HUMAN_BLOCK"
+  COST_ESTIMATED_TOKENS="$(python3 -c 'import json,sys; e=json.loads(sys.argv[1]).get("estimate",{}); print(json.dumps(e.get("estimated_tokens")))' "$COST_GATE_JSON" 2>/dev/null || echo "null")"
+  COST_CONFIDENCE="$(python3 -c 'import json,sys; e=json.loads(sys.argv[1]).get("estimate",{}); print(e.get("confidence","unknown"))' "$COST_GATE_JSON" 2>/dev/null || echo "unknown")"
+  COST_BASIS="$(python3 -c 'import json,sys; e=json.loads(sys.argv[1]).get("estimate",{}); print(e.get("basis","unknown"))' "$COST_GATE_JSON" 2>/dev/null || echo "unknown")"
+fi
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cost_gate_decision \
+  "$(python3 -c 'import json,sys; print(json.dumps({"command":"z-audit","choice":"auto_proceed","reason":"soft_gate","estimated_tokens":json.loads(sys.argv[1]),"confidence":sys.argv[2],"basis":sys.argv[3]}))' \
+     "${COST_ESTIMATED_TOKENS:-null}" "${COST_CONFIDENCE:-unknown}" "${COST_BASIS:-unknown}")"
 ```
 
 Dispatch N parallel `/z-audit` sub-flows (one per chunk in `chunks`), all in a single message:
@@ -778,7 +796,7 @@ Brief summary to user (3-5 bullets):
 Log run end:
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" audit_run_end \
-  "$(printf '{"status":"complete","findings":%d,"tasks":%d,"dimensions":"%s"}' "$N_FINDINGS" "$N_TASKS" "$DIMS")"
+  "$(printf '{"command":"z-audit","status":"complete","findings":%d,"tasks":%d,"dimensions":"%s"}' "$N_FINDINGS" "$N_TASKS" "$DIMS")"
 ```
 
 **Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the FINALIZE_STATUS rule (Setup step 6): normal completion deregisters with `complete`.
@@ -791,8 +809,8 @@ python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-reg
 
 | Event kind | When / meaning | Required fields |
 |---|---|---|
-| `audit_run_start` | Audit run begins | version fields, `target` |
-| `audit_run_end` | Audit run completes | `status`, `findings`, `tasks`, `dimensions` |
+| `audit_run_start` | Audit run begins | version fields, `target`, `command` |
+| `audit_run_end` | Audit run completes | `command`, `status`, `findings`, `tasks`, `dimensions` |
 | `scope_from_resolved` | `--scope-from` chunk resolved successfully | `chunk_id`, `scope_hint`, `parent_scope_json` |
 | `scope_probe_start` | Scope-probe Agent dispatched | `axis_taxonomy` |
 | `scope_probe_classified` | Scope-probe returned `STATUS: classified` | `status`, `mode`, `axis`, `confidence`, `reason_codes`, `reason`, `seams_counted`, `candidates_walked` |

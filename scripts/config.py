@@ -11,6 +11,8 @@ Subcommands:
   list-question-ids                       Print sorted JSON array of registered question IDs.
   resolve-question <question_id>          Return JSON resolver envelope for a question ID.
   check-no-ask --question-id <id>        Return JSON halt/proceed for overnight gate checks.
+                [--range-high N]         Token estimate ceiling (cost-gate delegation path).
+                [--severity hard|soft]   Gate severity; soft→always auto_proceed.
   inspect-all [--json]                   Print all config knobs with source and persistence metadata.
 
 Layer order (lowest → highest priority):
@@ -63,6 +65,7 @@ DEFAULTS: dict = {
         "review_all_proceed":    "ask",   # ask | proceed | halt
         "plan_decisions_approval": "ask", # ask | approve | halt
         "spec_retro_discovery": "ask",    # ask | defer_to_sink_p2
+        "pre_run_cost_gate": "ask",       # ask | auto_proceed | halt
     },
     "followup": {
         "default_sink":                      "project",    # project | global
@@ -107,6 +110,9 @@ DEFAULTS: dict = {
         # as Z_HARNESS_CONSULT (see _ENV_VAR_ALIASES), which resolve-provider reads.
         "consult": "on",
     },
+    "cost": {
+        "token_budget": None,             # int > 0 or None (unset)
+    },
 }
 
 
@@ -131,6 +137,13 @@ def _validate_positive_int(value: object) -> bool:
     return False
 
 
+def _validate_positive_int_or_none(value: object) -> bool:
+    """Accept None (unset), Python ints > 0, or decimal string representations of same."""
+    if value is None:
+        return True
+    return _validate_positive_int(value)
+
+
 VALIDATORS: dict = {
     "notify.level": {"off", "approval_only", "all"},
     "docs.always_apply": {"always", "never"},
@@ -140,6 +153,8 @@ VALIDATORS: dict = {
     "workflow.review_all_proceed":       {"ask", "proceed", "halt"},
     "workflow.plan_decisions_approval":  {"ask", "approve", "halt"},
     "workflow.spec_retro_discovery":     {"ask", "defer_to_sink_p2"},
+    "workflow.pre_run_cost_gate":        {"ask", "auto_proceed", "halt"},
+    "cost.token_budget":                 _validate_positive_int_or_none,
     "followup.default_sink":                   {"project", "global"},
     "followup.notion_enabled":                 {True, False},
     "followup.auto_close_low_risk_enabled":    {True, False},
@@ -193,6 +208,11 @@ _COERCERS: dict[str, object] = {
     ),
     "experiment.control_every_n": lambda v: (
         v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    "cost.token_budget": lambda v: (
+        None if (v is None or v == "") else (
+            v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+        )
     ),
 }
 
@@ -282,6 +302,17 @@ QUESTION_IDS: dict[str, dict] = {
             "commands/z-implement-next.md (Phase 4 spec-retro defer branch)",
         ],
     },
+    "workflow.pre_run_cost_gate": {
+        "config_key": "workflow.pre_run_cost_gate",
+        "choices": {"ask", "auto_proceed", "halt"},
+        "skill_default": "ask",
+        "callsites": [
+            "scripts/pre-run-cost-gate.sh",
+            "commands/z-research.md",
+            "commands/z-uplift.md",
+            "commands/z-plan-split.md",
+        ],
+    },
 }
 
 # Default overnight auto-decide allowlist: question_ids that /z-overnight
@@ -312,6 +343,9 @@ RESULT_MAP: dict[tuple[str, str], str] = {
     # Orchestrators receiving this result call scripts/sink-add.sh with the question context.
     ("workflow.spec_retro_discovery", "ask"):              "ask",
     ("workflow.spec_retro_discovery", "defer_to_sink_p2"): "defer-to-sink",
+    ("workflow.pre_run_cost_gate", "ask"):                 "ask",
+    ("workflow.pre_run_cost_gate", "auto_proceed"):        "skip",
+    ("workflow.pre_run_cost_gate", "halt"):                "halt",
 }
 
 # ---------------------------------------------------------------------------
@@ -2137,13 +2171,108 @@ def _emit_unknown_ask_blocked(question_id: str, callsite_hint: str = "") -> None
         pass  # non-fatal — observability is best-effort
 
 
+def _resolve_cost_gate(question_id: str, range_high: int | None, severity: str) -> dict:
+    """
+    Core budget-aware resolution for the cost gate (Phase-7 single-authority path).
+
+    Called by cmd_check_no_ask when --range-high / --severity are provided.
+    Returns a result dict: {"result": ask|auto_proceed|halt|unhandled_gate, "rule_id": ...}.
+
+    Decision tree (SPEC "New resolution entrypoint"):
+      soft severity → auto_proceed always.
+      hard, NO_ASK unset → ask.
+      hard, NO_ASK=halt → run _apply_overnight_overrides; then:
+        overnight allowlist hit (envelope.result != ask) → return that result.
+        overnight allowlist MISS (envelope.result == ask still) → apply budget rule:
+          range_high missing → halt (rule_id: cost_estimate_missing).
+          budget <= 0  → halt (rule_id: cost_budget_invalid).
+          budget unset → halt (rule_id: cost_budget_missing).
+          range_high <= budget → auto_proceed.
+          range_high > budget → halt (rule_id: cost_over_budget).
+        registered gate not covered by active policy allowlist → unhandled_gate.
+    """
+    # soft severity → always auto_proceed, no policy check needed
+    if severity == "soft":
+        return {"result": "auto_proceed", "rule_id": "soft_gate"}
+
+    # hard severity from here on
+    no_ask = os.environ.get("Z_HARNESS_NO_ASK", "")
+    if no_ask != "halt":
+        # Interactive mode: no policy active
+        if range_high is None:
+            # Estimate unavailable → ask rather than silently proceeding
+            return {"result": "ask", "rule_id": "cost_estimate_missing"}
+        return {"result": "ask", "rule_id": "interactive"}
+
+    # NO_ASK=halt: policy mode — run overnight overrides for the gate qid first.
+    # Overnight can yield:
+    #   - A non-halt, non-ask result (e.g. skip) when the gate is in the allowlist → resolved.
+    #   - halt with rule_id "no_ask_halt" when NOT in the allowlist → fall through to budget rule.
+    envelope, _er, _es, _estr, _ec = _build_resolve_envelope(question_id, explain=False)
+    envelope = _apply_overnight_overrides(envelope, question_id)
+    envelope_result = envelope.get("result", "ask")
+    overnight_rule_id = envelope.get("rule_id", "no_ask_halt")
+
+    if envelope_result not in {"ask", "halt"} or (
+        envelope_result == "halt" and overnight_rule_id not in {"no_ask_halt", "no_ask_blocked"}
+    ):
+        # Allowlist positively resolved it (skip/prefill) or explicit halt from overnight policy
+        # Map skip/prefill → auto_proceed for the cost-gate result contract
+        mapped = "auto_proceed" if envelope_result in {"skip", "prefill"} else envelope_result
+        return {"result": mapped, "rule_id": overnight_rule_id}
+
+    # Envelope is ask or halt(no_ask_halt/no_ask_blocked) → apply the budget rule
+    # (overnight did not positively resolve the gate)
+    if range_high is None:
+        # --range-high missing: estimate unavailable → fail-closed under policy
+        return {"result": "halt", "rule_id": "cost_estimate_missing"}
+
+    # Read cost.token_budget from resolved config
+    try:
+        values, _sources = load_config()
+    except SystemExit:
+        # Config load failure under policy → fail-closed
+        return {"result": "halt", "rule_id": "cost_budget_missing"}
+
+    budget = values.get("cost.token_budget")
+    if budget is None:
+        # Budget not configured → fail-closed under policy
+        return {"result": "halt", "rule_id": "cost_budget_missing"}
+
+    # Defense-in-depth: budget <= 0 is invalid config (validator should have caught it)
+    if not isinstance(budget, int) or isinstance(budget, bool) or budget <= 0:
+        return {"result": "halt", "rule_id": "cost_budget_invalid"}
+
+    if range_high <= budget:
+        return {"result": "auto_proceed", "rule_id": "within_budget"}
+
+    # range_high > budget — check whether this is a policy-mode unhandled_gate
+    if _is_policy_mode():
+        _emit_unhandled_gate(question_id)
+        return {
+            "result": "unhandled_gate",
+            "rule_id": "unhandled_gate",
+            "reason": (
+                "reachable cost gate not resolved by frozen benchmark policy; "
+                "set cost.token_budget above the estimate or add workflow.pre_run_cost_gate "
+                "to benchmark-autonomy.yaml"
+            ),
+        }
+    return {"result": "halt", "rule_id": "cost_over_budget"}
+
+
 def cmd_check_no_ask(args: list[str]) -> None:
     """
-    check-no-ask --question-id <id>
+    check-no-ask --question-id <id> [--range-high N] [--severity hard|soft]
 
-    Returns JSON: {"result": "halt"|"proceed"|"unhandled_gate", "question_id": "<id>", "rule_id": "<rule>"}
+    Returns JSON: {"result": "halt"|"proceed"|"unhandled_gate"|"ask"|"auto_proceed",
+                   "question_id": "<id>", "rule_id": "<rule>"}
 
-    Paths:
+    When --range-high and --severity are provided (cost-gate delegation path), applies
+    the budget-aware resolution via _resolve_cost_gate instead of the generic overnight
+    path. This is the single authority the pre-run-cost-gate.sh helper delegates to.
+
+    Generic paths (no --range-high / --severity):
       1. Z_HARNESS_NO_ASK != halt  → proceed, rule_id=no_overnight_active
       2. NO_ASK=halt, qid registered, in allowlist → proceed (resolved as overnight_decision)
       3. NO_ASK=halt, qid registered, NOT in allowlist, non-policy mode → halt
@@ -2160,13 +2289,38 @@ def cmd_check_no_ask(args: list[str]) -> None:
     Exit 0 on all valid invocations, exit 2 on argparse error.
     """
     question_id: str = ""
+    range_high: int | None = None
+    severity: str | None = None
     i = 0
     while i < len(args):
         if args[i] == "--question-id":
             if i + 1 >= len(args):
-                print("usage: config.py check-no-ask --question-id <id>", file=sys.stderr)
+                print("usage: config.py check-no-ask --question-id <id> [--range-high N] [--severity hard|soft]",
+                      file=sys.stderr)
                 sys.exit(2)
             question_id = args[i + 1]
+            i += 2
+        elif args[i] == "--range-high":
+            if i + 1 >= len(args):
+                print("usage: config.py check-no-ask --question-id <id> [--range-high N] [--severity hard|soft]",
+                      file=sys.stderr)
+                sys.exit(2)
+            raw_rh = args[i + 1]
+            try:
+                range_high = int(raw_rh)
+            except ValueError:
+                print(f"[config] --range-high must be an integer, got {raw_rh!r}", file=sys.stderr)
+                sys.exit(2)
+            i += 2
+        elif args[i] == "--severity":
+            if i + 1 >= len(args):
+                print("usage: config.py check-no-ask --question-id <id> [--range-high N] [--severity hard|soft]",
+                      file=sys.stderr)
+                sys.exit(2)
+            severity = args[i + 1]
+            if severity not in {"hard", "soft"}:
+                print(f"[config] --severity must be hard or soft, got {severity!r}", file=sys.stderr)
+                sys.exit(2)
             i += 2
         elif args[i].startswith("--"):
             print(f"[config] unknown flag {args[i]!r}", file=sys.stderr)
@@ -2176,8 +2330,18 @@ def cmd_check_no_ask(args: list[str]) -> None:
             sys.exit(2)
 
     if not question_id:
-        print("usage: config.py check-no-ask --question-id <id>", file=sys.stderr)
+        print("usage: config.py check-no-ask --question-id <id> [--range-high N] [--severity hard|soft]",
+              file=sys.stderr)
         sys.exit(2)
+
+    # Cost-gate delegation path: when severity is provided, use the budget-aware resolver
+    if severity is not None:
+        cost_result = _resolve_cost_gate(question_id, range_high, severity)
+        output = {"question_id": question_id, **cost_result}
+        print(json.dumps(output))
+        sys.exit(0)
+
+    # Generic check-no-ask path (no severity flag) — original behavior preserved.
 
     # Path 1: overnight mode not active
     no_ask = os.environ.get("Z_HARNESS_NO_ASK", "")
