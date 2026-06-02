@@ -41,12 +41,13 @@ Set `$Z_HARNESS_REPO_CONFIG` to override the git-root discovery path (exits 2 if
 | `docs.always_apply` | string | `always` | `always` \| `never` | Whether light flows auto-dispatch doc-fetcher when `docs/llm/INDEX.json` exists. `always` matches current /z-do default behavior. `never` skips doc-fetcher. **Applies only to light flows (slice 1: /z-do). Heavy flows always dispatch doc-fetcher regardless of this knob.** |
 | `experiment.persona_rotation` | bool | `true` | `true` \| `false` | Master kill-switch for the persona-rotation experiment. When `true` (default), `/z-implement-all` and `/z-implement-next` draw a random persona for each implementer attempt, dispatch a dual reviewer (base codex + random-arm advisory), and emit `persona_attempt_outcome` events. `/z-plan` and `/z-debug` use the fixed 5-panel consult. When `false`, all rotation behavior is a no-op — previous behavior is restored. Set to `false` to pause data collection. |
 | `experiment.control_every_n` | int | `5` | positive integer | Forced-control cadence: every Nth implementer attempt **across the entire repo** uses `boring-anchor` (the baseline persona) instead of a random draw. Counter persists in `.z-harness/.persona-control-counter`. Default 5 means every 5th attempt is a control sample. |
+| `runtime.consult` | string | `on` | `on` \| `off` | Single-model mode. When `off`, the `consultant_primary`, `consultant_secondary`, and `reviewer` roles resolve to the `none` sentinel, so cross-LLM consultation and review are skipped (no Gemini/Codex dispatch). Exported as `Z_HARNESS_CONSULT` (not `Z_HARNESS_RUNTIME_CONSULT` — see the transliteration note), which `resolve-provider.py` reads. |
 
 For `[workflow]`, `[followup]`, `[axioms]`, and `[experiment]` knobs, see the sections below.
 
 ## The transliteration rule
 
-Env-var overrides follow a deterministic rule: lowercase TOML dotted-key → prefix `Z_HARNESS_` + uppercase + `.` to `_`.
+Env-var overrides follow a deterministic rule: lowercase TOML dotted-key → prefix `Z_HARNESS_` + uppercase + `.` to `_`. One key is an explicit alias exception: `runtime.consult` exports as `Z_HARNESS_CONSULT` (the legacy name `resolve-provider.py` reads), not the mechanical `Z_HARNESS_RUNTIME_CONSULT`.
 
 | TOML key | Env var |
 |----------|---------|
@@ -58,6 +59,7 @@ Env-var overrides follow a deterministic rule: lowercase TOML dotted-key → pre
 | `axioms.kernel_budget_chars` | `Z_HARNESS_AXIOMS_KERNEL_BUDGET_CHARS` |
 | `axioms.extract_min_recurrence` | `Z_HARNESS_AXIOMS_EXTRACT_MIN_RECURRENCE` |
 | `axioms.auto_extract_post_run` | `Z_HARNESS_AXIOMS_AUTO_EXTRACT_POST_RUN` |
+| `runtime.consult` | `Z_HARNESS_CONSULT` (alias — **not** the mechanical `Z_HARNESS_RUNTIME_CONSULT`) |
 
 For workflow, followup, and experiment keys, the rule applies identically.
 
