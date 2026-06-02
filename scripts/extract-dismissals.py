@@ -21,10 +21,40 @@ Exit codes:
 
 import argparse
 import json
+import os
 import re
 import string
+import subprocess
 import sys
 from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+
+
+def _resolved_base_dir(repo_root: Path) -> Path:
+    """Return the resolved artifact base dir via plan-path.sh base_dir.
+
+    Since the Phase-D flip the default base is EXTERNAL (XDG_STATE_HOME/...),
+    so the archives a --global scan needs no longer live under repo_root/z-harness.
+    Resolve at call time (honouring the full 5-tier fallback) and fall back to
+    repo_root/z-harness when plan-path.sh is unavailable. Best-effort; never raises.
+    """
+    plan_path_sh = SCRIPT_DIR / "plan-path.sh"
+    if plan_path_sh.exists():
+        try:
+            result = subprocess.run(
+                ["bash", str(plan_path_sh), "base_dir"],
+                capture_output=True,
+                text=True,
+                cwd=str(repo_root),
+                env={**os.environ, "_Z_HARNESS_RESOLVING_BASE": "1"},
+            )
+            base = result.stdout.strip()
+            if result.returncode == 0 and base:
+                return Path(base)
+        except (FileNotFoundError, OSError):
+            pass
+    return repo_root / "z-harness"
 
 
 # ---------------------------------------------------------------------------
@@ -442,34 +472,44 @@ def collect_run_dirs_for_slug(slug_dir: Path, filename: str = "MR-REVIEW.md") ->
 
 def collect_slug_run_dirs_global(repo_root: Path, filename: str = "MR-REVIEW.md") -> dict[Path, list[Path]]:
     """
-    Walk z-harness/*/archive/ and z-harness/plans/*/archive/ and return a mapping of slug_dir → sorted run_dirs.
+    Walk <base>/*/archive/ and <base>/plans/*/archive/ and return a mapping of slug_dir → sorted run_dirs.
+
+    Since the Phase-D flip the artifact base defaults to an EXTERNAL location, so
+    the canonical archives live under the resolved base (not repo_root/z-harness).
+    Both the resolved base and the legacy in-repo z-harness/ are scanned so plans
+    that predate migration are still found.
 
     The pairwise dismissal algorithm (R_i → R_{i+1}) must be applied WITHIN each
     slug independently, not across slugs.  Callers receive this grouped structure
     so they can iterate per-slug rather than interleaving runs from different slugs.
     """
-    harness_root = repo_root / "z-harness"
+    # Candidate harness roots: resolved (external) base + legacy in-repo, deduped.
+    harness_roots: list[Path] = []
+    for cand in (_resolved_base_dir(repo_root), repo_root / "z-harness"):
+        if cand.is_dir() and cand not in harness_roots:
+            harness_roots.append(cand)
+
     slug_runs: dict[Path, list[Path]] = {}
-    if not harness_root.is_dir():
-        return slug_runs
+    for harness_root in harness_roots:
+        # Roots to search for slugs
+        plans_root = harness_root / "plans"
+        search_roots = [harness_root]
+        if plans_root.is_dir():
+            search_roots.append(plans_root)
 
-    # Roots to search for slugs
-    search_roots = [harness_root]
-    plans_root = harness_root / "plans"
-    if plans_root.is_dir():
-        search_roots.append(plans_root)
-
-    for root in search_roots:
-        for slug_dir in sorted(root.iterdir()):
-            if not slug_dir.is_dir():
-                continue
-            # Skip plans root itself if we are in harness_root
-            if root == harness_root and slug_dir == plans_root:
-                continue
-            archive_dir = slug_dir / "archive"
-            runs = discover_archive_runs(archive_dir, filename)
-            if runs:
-                slug_runs[slug_dir] = runs
+        for root in search_roots:
+            for slug_dir in sorted(root.iterdir()):
+                if not slug_dir.is_dir():
+                    continue
+                # Skip plans root itself if we are in harness_root
+                if root == harness_root and slug_dir == plans_root:
+                    continue
+                if slug_dir in slug_runs:
+                    continue
+                archive_dir = slug_dir / "archive"
+                runs = discover_archive_runs(archive_dir, filename)
+                if runs:
+                    slug_runs[slug_dir] = runs
     return slug_runs
 
 
@@ -515,11 +555,14 @@ def main() -> None:
         sys.exit(1)
 
     if args.global_scan:
-        # Resolve repo root: go up from the cwd until we find z-harness/ or hit /
+        # Resolve repo root: walk up from cwd until we find a repo marker (.git)
+        # or a legacy in-repo z-harness/ dir. With the external base default a
+        # repo may have neither archives nor z-harness/ in-tree, so .git is the
+        # reliable marker; base resolution itself is delegated to plan-path.sh.
         cwd = Path.cwd()
         repo_root = cwd
         for candidate in [cwd] + list(cwd.parents):
-            if (candidate / "z-harness").is_dir():
+            if (candidate / ".git").exists() or (candidate / "z-harness").is_dir():
                 repo_root = candidate
                 break
 
