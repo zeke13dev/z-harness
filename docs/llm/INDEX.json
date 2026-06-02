@@ -258,7 +258,7 @@
         "scripts/log-event.sh",
         "docs/human/PLAN-LAYOUT.md"
       ],
-      "last_updated": "2026-05-28T00:00:00Z",
+      "last_updated": "2026-06-02",
       "confidence": "high",
       "depends_on": [
         "scripts",
@@ -335,7 +335,7 @@
         "z-review-all",
         "z-debug"
       ],
-      "summary": "Post-run Haiku subagent that proposes 0-3 candidate memories from a completed /z-implement-all (Phase 9), /z-review-all (Phase 7), or /z-debug (Phase 10, shipped branch only) run. Reads run events, cumulative diff, SPEC.md or DEBUG.md; emits structured candidates as a fenced JSON block. Does not write — orchestrator owns all writes via /z-suggest-memory. Dispatched after skip-conditions check by scripts/run-memory-review.sh."
+      "summary": "Post-run Haiku subagent that proposes 0-3 candidate memories from a completed /z-implement-all (Phase 9), /z-review-all (Phase 7), or /z-debug (Phase 10, shipped branch only) run. Reads run events, cumulative diff, SPEC.md or DEBUG.md; emits structured candidates as a fenced JSON block. Does not write \u2014 orchestrator owns all writes via /z-suggest-memory. Dispatched after skip-conditions check by scripts/run-memory-review.sh."
     },
     {
       "slug": "z-uplift",
@@ -481,7 +481,7 @@
         "commands",
         "agents"
       ],
-      "summary": "Durable external artifact base + lockless cross-session awareness registry. Five-tier base fallback (Z_HARNESS_BASE_DIR > XDG_STATE_HOME > HOME/.local/state > git-common-dir > pwd/z-harness) with anchor enforcement prevents split-brain. Per-run JSON records in <base>/active-plans/ let concurrent sessions see each other's scope; overlap advisory at implement Phase 0 (Z_HARNESS_STRICT_OVERLAP=1 makes explicit×explicit exact path match a hard halt). Addresses the 2026-06-01 git clean incident."
+      "summary": "Durable external artifact base + lockless cross-session awareness registry. Five-tier base fallback (Z_HARNESS_BASE_DIR > XDG_STATE_HOME > HOME/.local/state > git-common-dir > pwd/z-harness) with anchor enforcement prevents split-brain. Per-run JSON records in <base>/active-plans/ let concurrent sessions see each other's scope; overlap advisory at implement Phase 0 (Z_HARNESS_STRICT_OVERLAP=1 makes explicit\u00d7explicit exact path match a hard halt). Addresses the 2026-06-01 git clean incident."
     },
     {
       "slug": "axioms",
@@ -513,7 +513,7 @@
         "commands",
         "agents"
       ],
-      "summary": "Advisory behavioral rules mined from z-harness interaction history; lifecycle raw->candidate->approved with explicit user approval gate; five /z-axiom-* commands; KERNEL.md compiled by build-kernel.py and read by six behavioral subagents; axioms are the lowest-authority signal in the resolver — config/memory win direct conflicts but the conflict is surfaced via axiom_conflict envelope."
+      "summary": "Advisory behavioral rules mined from z-harness interaction history; lifecycle raw->candidate->approved with explicit user approval gate; five /z-axiom-* commands; KERNEL.md compiled by build-kernel.py and read by six behavioral subagents; axioms are the lowest-authority signal in the resolver \u2014 config/memory win direct conflicts but the conflict is surfaced via axiom_conflict envelope."
     }
   ]
 }

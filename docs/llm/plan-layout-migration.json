@@ -1,18 +1,21 @@
 {
   "slug": "plan-layout-migration",
-  "summary": "Plan output is namespaced under z-harness/plans/<slug>/ (canonical) instead of z-harness/<slug>/ (legacy). All commands use scripts/plan-path.sh to construct paths; they try the new path first and fall back to legacy with a one-line warning. scripts/migrate-plan-layout.sh handles bulk or per-slug migration with --dry-run support.",
+  "summary": "All z-harness plan artifacts resolve under an external artifact base via scripts/plan-path.sh: a 5-tier fallback chain (Z_HARNESS_BASE_DIR > $XDG_STATE_HOME > $HOME/.local/state > <git-common-dir>/z-harness > ./z-harness) that is EXTERNAL BY DEFAULT (Z_HARNESS_EXTERNAL_DEFAULT unset == 1), so a parallel `git clean` can no longer wipe gitignored plans. A <git-common-dir>/.z-harness-base anchor pins the chosen base (split-brain guard); tier-1 explicit Z_HARNESS_BASE_DIR bypasses the anchor (CI/benchmark escape hatch). Within the base: plans at <base>/plans/<slug>/, registry at <base>/active-plans/, followups at <base>/followups/, metrics at <base>/metrics.jsonl. scripts/migrate-plan-layout.sh is a full-scope NON-DESTRUCTIVE migrator (copy->verify->rm) for moving existing in-repo artifacts out.",
   "key_invariants": [
-    "commands MUST try ${Z_HARNESS_PLANS_DIR:-z-harness/plans}/<slug>/ first; if absent, fall back to z-harness/<slug>/ with a printed warning — never write new artifacts to the legacy path.",
-    "Z_HARNESS_PLANS_DIR when set is respected verbatim (no normalization); default is 'z-harness/plans'.",
-    "scripts/migrate-plan-layout.sh refuses to overwrite a non-empty existing directory at the new path; idempotent if already migrated.",
-    "Path construction MUST go through scripts/plan-path.sh — inline literal path construction is a DRY violation."
+    "Path construction MUST go through scripts/plan-path.sh helpers (base_dir/plan_dir/active_plans_dir/followups_dir/all_plan_slugs/resolve_plan_path) — inline z-harness/ literals are a DRY violation.",
+    "z_harness_base() writes/validates the <git-common-dir>/.z-harness-base anchor on tiers 2-5; anchor mismatch is a hard FATAL (split-brain protection). Tier-1 explicit Z_HARNESS_BASE_DIR neither reads nor writes the anchor (escape hatch); must be absolute.",
+    "External base is the DEFAULT (Z_HARNESS_EXTERNAL_DEFAULT unset == 1); =0 (or Z_HARNESS_BASE_DIR=$(pwd)/z-harness) reverts to in-repo, which requires deleting a stale external anchor first.",
+    "Helpers that compose on z_harness_base() propagate its failure and refuse to build paths on an empty base (never glob or write under /).",
+    "migrate-plan-layout.sh safe_move is always copy -> verify(byte-equal AND source mtime unchanged) -> rm; the source is removed only after verify passes; refuse-on-conflict (never overwrite a non-empty target, except metrics.jsonl which is dedup-merged).",
+    "migrate-plan-layout.sh REFUSES a real move while any active-plan registry record is status:running (live-run barrier, invariant 8); --dry-run warns but still previews.",
+    "metrics.jsonl migration is dedup-append (idempotent across crash/re-run); followups/ migration is opt-in (--with-followups) to avoid stranding in-flight locks."
   ],
   "key_files": [
-    { "path": "scripts/plan-path.sh", "why": "Exports plan_dir and legacy_plan_dir functions; the single source of truth for plan path construction." },
-    { "path": "scripts/migrate-plan-layout.sh", "why": "Moves legacy z-harness/<slug>/ directories to z-harness/plans/<slug>/; supports --all and --dry-run." },
-    { "path": "scripts/log-event.sh", "why": "Respects Z_HARNESS_PLANS_DIR when constructing the metrics.jsonl path." },
-    { "path": "docs/human/PLAN-LAYOUT.md", "why": "User-facing guide: canonical layout, override env var, dual-read fallback, migration commands." }
+    { "path": "scripts/plan-path.sh", "why": "Single source of truth for path resolution: z_harness_repo_id, z_harness_base/base_dir (5-tier chain + anchor), active_plans_dir, followups_dir, plan_dir, resolve_plan_path (dual-read), all_plan_slugs (both layouts)." },
+    { "path": "scripts/migrate-plan-layout.sh", "why": "Full-scope non-destructive migrator: --dry-run/--all/--with-followups/--slug; live-run barrier; safe_move copy/verify/rm; merge_metrics; canonicalize_path self-migration guard; empty-dir cleanup." },
+    { "path": "scripts/log-event.sh", "why": "Routes events + metrics.jsonl through z_harness_base(); source-loop-guarded (_Z_HARNESS_RESOLVING_BASE) so emitting base_resolved doesn't recurse." },
+    { "path": "docs/human/PLAN-LAYOUT.md", "why": "User-facing guide: fallback chain, anchor, external-default flip + opt-out, migration commands, command-coverage checklist." }
   ],
-  "related_concepts": ["commands", "scripts", "z-update"],
-  "last_updated": "2026-05-24"
+  "related_concepts": ["active-plan-registry", "commands", "scripts", "followup-sink", "z-update"],
+  "last_updated": "2026-06-02"
 }
