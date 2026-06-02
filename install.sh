@@ -341,7 +341,9 @@ install_target_from_tarball() {
 # Main dispatch
 if [[ -n "$TARBALL_URL" ]]; then
   install_target_from_tarball "$TARBALL_URL"
-elif [[ "$TARGET" == "claude" && is_repo_clone ]] || [[ "$TARGET" == "codex" && is_codex_plugin_source ]] || [[ "$TARGET" == "all" && is_repo_clone && is_codex_plugin_source ]]; then
+elif { [[ "$TARGET" == "claude" ]] && is_repo_clone; } \
+  || { [[ "$TARGET" == "codex" ]] && is_codex_plugin_source; } \
+  || { [[ "$TARGET" == "all" ]] && is_repo_clone && is_codex_plugin_source; }; then
   printf 'install.sh: detected repo clone at %s\n' "$(pwd)"
   install_target_from_repo
 elif [[ -n "${Z_HARNESS_RELEASE_URL:-}" ]]; then
