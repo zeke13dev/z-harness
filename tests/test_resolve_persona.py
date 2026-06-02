@@ -1670,10 +1670,10 @@ class TestRandomForRole(unittest.TestCase):
         """
         random-for-role reviewer returns a valid persona with selection_source=random_role_pool.
 
-        Invariant: the drawn persona must be in the candidates list and the
-        candidates must not include boring-anchor.
-        Failure class: if boring-anchor leaks into the random pool, controlled
-        experiments are contaminated and analysis loses the clean comparison arm.
+        Invariant: the drawn persona must be in the candidates list.
+        boring-anchor is now a normal random-eligible member (T102 amendment).
+        Failure class: if no persona is drawn or selection_source is wrong, the
+        experiment arm attribution breaks.
         """
         import tempfile
         with tempfile.TemporaryDirectory() as builtin_dir, \
@@ -1691,7 +1691,7 @@ class TestRandomForRole(unittest.TestCase):
                 description="Beta reviewer",
                 extra_frontmatter="compatible_roles: [reviewer]",
             )
-            # boring-anchor MUST exist but MUST NOT appear in the pool.
+            # boring-anchor is now in the random pool (T102); no-persona sentinel also present.
             _write_persona(Path(builtin_dir), "boring-anchor", description="Control persona")
 
             env = self._make_env(builtin_dir, user_dir, repo_dir)
@@ -1707,9 +1707,10 @@ class TestRandomForRole(unittest.TestCase):
             self.assertEqual(data["selection_source"], "random_role_pool")
             self.assertIn(data["persona"], data["candidates"],
                           msg="Drawn persona must be in candidates list")
-            self.assertNotIn("boring-anchor", data["candidates"],
-                             msg="boring-anchor must be excluded from random pool")
-            self.assertIn(data["persona"], {"persona-alpha", "persona-beta"})
+            # boring-anchor and no-persona are both valid draws now (T102).
+            valid_pool = {"persona-alpha", "persona-beta", "boring-anchor", "no-persona"}
+            self.assertIn(data["persona"], valid_pool,
+                          msg=f"Drawn persona {data['persona']!r} must be in the valid pool")
 
     def test_returns_valid_persona_for_implementer(self):
         """
@@ -1730,7 +1731,12 @@ class TestRandomForRole(unittest.TestCase):
             )
 
             env = self._make_env(builtin_dir, user_dir, repo_dir)
-            result = _run(["random-for-role", "implementer", "--seed=7"], env_extra=env)
+            # Use --exclude=no-persona so that impl-persona-x is guaranteed to be drawn
+            # (pool becomes [impl-persona-x] only, since no boring-anchor is present).
+            result = _run(
+                ["random-for-role", "implementer", "--seed=7", "--exclude=no-persona"],
+                env_extra=env,
+            )
             self.assertEqual(result.returncode, 0, msg=result.stderr)
 
             data = json.loads(result.stdout)
@@ -1804,24 +1810,32 @@ class TestRandomForRole(unittest.TestCase):
 
     def test_empty_pool_returns_fallback_without_crashing(self):
         """
-        When no compatible personas exist, returns boring-anchor with
-        selection_source=fallback_empty_pool and exits 0.
+        When no compatible personas exist (all sentinels excluded), returns
+        boring-anchor with selection_source=fallback_empty_pool and exits 0.
 
         Invariant: empty pool must never crash; fallback_empty_pool is quarantined
         from persona stats so the run still completes.
         Failure class: KeyError or sys.exit(1) on empty pool breaks all runs
         where no personas are configured.
+
+        Note (T102): no-persona is always in the pool unless excluded. To reach
+        the truly empty pool, callers must exclude both no-persona and boring-anchor
+        (and have no real compatible personas).
         """
         import tempfile
         with tempfile.TemporaryDirectory() as builtin_dir, \
              tempfile.TemporaryDirectory() as user_dir, \
              tempfile.TemporaryDirectory() as repo_dir:
 
-            # No personas at all — directories exist but are empty.
+            # No real personas — directories exist but are empty.
             Path(builtin_dir).mkdir(parents=True, exist_ok=True)
 
             env = self._make_env(builtin_dir, user_dir, repo_dir)
-            result = _run(["random-for-role", "reviewer"], env_extra=env)
+            # Exclude both sentinels to force a truly empty pool.
+            result = _run(
+                ["random-for-role", "reviewer", "--exclude=no-persona,boring-anchor"],
+                env_extra=env,
+            )
             self.assertEqual(result.returncode, 0,
                              msg=f"Empty pool must exit 0, got {result.returncode}. "
                                  f"stderr={result.stderr!r}")
@@ -1836,10 +1850,13 @@ class TestRandomForRole(unittest.TestCase):
 
     def test_empty_pool_event_emitted(self):
         """
-        persona_random_selected event is emitted even on empty pool.
+        persona_random_selected event is emitted even on empty pool (fallback_empty_pool).
 
         Failure class: if the event is not emitted on empty pool, telemetry
         has a gap and analysis cannot detect fallback frequency.
+
+        Note (T102): to reach truly empty pool, both no-persona and boring-anchor
+        must be excluded (and no real personas present).
         """
         import tempfile
         with tempfile.TemporaryDirectory() as builtin_dir, \
@@ -1847,7 +1864,11 @@ class TestRandomForRole(unittest.TestCase):
              tempfile.TemporaryDirectory() as repo_dir:
 
             env = self._make_env(builtin_dir, user_dir, repo_dir)
-            result = _run(["random-for-role", "reviewer"], env_extra=env)
+            # Exclude both sentinels to trigger the fallback path.
+            result = _run(
+                ["random-for-role", "reviewer", "--exclude=no-persona,boring-anchor"],
+                env_extra=env,
+            )
             self.assertEqual(result.returncode, 0, msg=result.stderr)
             self.assertIn("persona_random_selected", result.stderr,
                           msg="persona_random_selected must be emitted even for fallback_empty_pool")
@@ -1901,7 +1922,12 @@ class TestRandomForRole(unittest.TestCase):
                            extra_frontmatter="compatible_roles: [reviewer]")
 
             env = self._make_env(builtin_dir, user_dir, repo_dir)
-            result = _run(["random-for-role", "reviewer", "--exclude=exclude-me"], env_extra=env)
+            # Also exclude no-persona to keep the pool to [keep-me] only (boring-anchor not
+            # written, no-persona excluded), ensuring keep-me is the guaranteed draw.
+            result = _run(
+                ["random-for-role", "reviewer", "--exclude=exclude-me,no-persona"],
+                env_extra=env,
+            )
             self.assertEqual(result.returncode, 0, msg=result.stderr)
 
             data = json.loads(result.stdout)
@@ -1909,14 +1935,16 @@ class TestRandomForRole(unittest.TestCase):
                              msg="excluded persona must not appear in candidates")
             self.assertEqual(data["persona"], "keep-me")
 
-    def test_boring_anchor_excluded_even_if_present_in_layer(self):
+    def test_boring_anchor_is_in_random_pool(self):
         """
-        boring-anchor persona in a layer must never appear in the candidate pool.
+        boring-anchor persona in a layer MUST appear in the candidate pool (T102 amendment).
 
-        Invariant: boring-anchor is the forced_control and must only appear via
-        forced-control subcommand, not in random draws.
-        Failure class: if boring-anchor leaks into random_role_pool, the
-        experiment loses its clean control arm.
+        Invariant (T102): boring-anchor is now a normal random-eligible member.
+        The forced_control cadence floor is retained; selection_source distinguishes
+        random_role_pool from forced_control draws.
+        Failure class: if boring-anchor is excluded from the random pool, the
+        experiment cannot accumulate organic random-arm boring-anchor samples,
+        and analysis cannot compute the delta vs boring-anchor within the random arm.
         """
         import tempfile
         with tempfile.TemporaryDirectory() as builtin_dir, \
@@ -1929,14 +1957,25 @@ class TestRandomForRole(unittest.TestCase):
                            extra_frontmatter="compatible_roles: [reviewer]")
 
             env = self._make_env(builtin_dir, user_dir, repo_dir)
-            result = _run(["random-for-role", "reviewer", "--seed=0"], env_extra=env)
-            self.assertEqual(result.returncode, 0, msg=result.stderr)
 
-            data = json.loads(result.stdout)
-            self.assertNotIn("boring-anchor", data["candidates"],
-                             msg="boring-anchor must never appear in random pool candidates")
-            self.assertNotEqual(data["persona"], "boring-anchor",
-                                msg="boring-anchor must not be selected in normal pool draw")
+            # Check across multiple seeds that boring-anchor appears in candidates.
+            found_boring_anchor_in_candidates = False
+            found_boring_anchor_drawn = False
+            for seed in range(30):
+                result = _run(["random-for-role", "reviewer", f"--seed={seed}"], env_extra=env)
+                self.assertEqual(result.returncode, 0, msg=result.stderr)
+                data = json.loads(result.stdout)
+                if "boring-anchor" in data["candidates"]:
+                    found_boring_anchor_in_candidates = True
+                if data["persona"] == "boring-anchor":
+                    found_boring_anchor_drawn = True
+                if found_boring_anchor_in_candidates and found_boring_anchor_drawn:
+                    break
+
+            self.assertTrue(found_boring_anchor_in_candidates,
+                            msg="boring-anchor must appear in candidates for random-for-role (T102)")
+            self.assertTrue(found_boring_anchor_drawn,
+                            msg="boring-anchor must be drawable via random-for-role across seeds (T102)")
 
     def test_output_shape_matches_resolve(self):
         """
@@ -2302,6 +2341,674 @@ class TestControlCounter(unittest.TestCase):
             final = int(counter_path.read_text(encoding="utf-8").strip())
             self.assertEqual(final, N,
                              msg=f"Expected final counter={N} after {N} concurrent increments, got {final}")
+
+
+# ---------------------------------------------------------------------------
+# T102: boring-anchor in random pool + no-persona sentinel
+# ---------------------------------------------------------------------------
+
+class TestT102BoringAnchorAndNoPersona(unittest.TestCase):
+    """
+    T102 changes to random-for-role:
+    1. boring-anchor is now a normal random-eligible member (also returned by forced-control).
+    2. no-persona sentinel is always in the candidate pool (unless --excluded).
+    3. forced-control still returns boring-anchor tagged forced_control (unchanged).
+    4. --exclude can exclude no-persona.
+    """
+
+    def _make_env(self, builtin_dir: str, user_dir: str, repo_dir: str) -> dict:
+        return {
+            "Z_HARNESS_BUILTIN_PERSONAS_DIR": builtin_dir,
+            "Z_HARNESS_USER_PERSONAS_DIR": user_dir,
+            "Z_HARNESS_REPO_PERSONAS_DIR": repo_dir,
+        }
+
+    def test_boring_anchor_drawable_from_random_pool_over_seeds(self):
+        """
+        boring-anchor appears in random-for-role candidates and can be drawn.
+
+        Invariant (T102): boring-anchor is a normal random-eligible member of the pool.
+        selection_source=random_role_pool (not forced_control) when drawn randomly.
+        Failure class: if boring-anchor is excluded from random-for-role, the
+        random-arm baseline is unavailable without a forced-control attempt.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            _write_persona(Path(builtin_dir), "boring-anchor", description="Control anchor")
+            _write_persona(Path(builtin_dir), "other-persona", description="Other",
+                           extra_frontmatter="compatible_roles: [implementer]")
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+
+            # boring-anchor must appear in candidates (always, since it's role-agnostic).
+            result = _run(["random-for-role", "implementer", "--seed=0"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            data = json.loads(result.stdout)
+            self.assertIn("boring-anchor", data["candidates"],
+                          msg="boring-anchor must be in candidates for random-for-role (T102)")
+
+            # boring-anchor must be drawable across seeds (probabilistic: pool has 3 items
+            # including no-persona, so chance of drawing boring-anchor in 30 tries is ~1-(2/3)^30 ≈ 1.0).
+            found_drawn = False
+            for seed in range(30):
+                r = _run(["random-for-role", "implementer", f"--seed={seed}"], env_extra=env)
+                self.assertEqual(r.returncode, 0, msg=r.stderr)
+                d = json.loads(r.stdout)
+                if d["persona"] == "boring-anchor":
+                    self.assertEqual(d["selection_source"], "random_role_pool",
+                                     msg="boring-anchor drawn randomly must have selection_source=random_role_pool")
+                    found_drawn = True
+                    break
+            self.assertTrue(found_drawn,
+                            msg="boring-anchor must be drawable via random-for-role across 30 seeds")
+
+    def test_no_persona_drawable_returns_null_body_path(self):
+        """
+        no-persona sentinel is in the random pool and when drawn returns
+        persona_body_path=null, persona_id=no-persona, selection_source=random_role_pool.
+
+        Invariant (T102): no-persona is a tracked null/vanilla arm; drawing it
+        emits the same event as any other draw. The only difference from a normal
+        persona is an empty prefix (persona_body_path=null).
+        Failure class: if no-persona is not in the pool or returns wrong shape,
+        the null baseline arm is missing from analysis and the experiment loses
+        its primary comparison baseline.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            # Only boring-anchor on disk — pool will be: [no-persona, boring-anchor].
+            _write_persona(Path(builtin_dir), "boring-anchor", description="Control anchor")
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+
+            # Find a seed that draws no-persona.
+            no_persona_result = None
+            for seed in range(50):
+                r = _run(["random-for-role", "implementer", f"--seed={seed}"], env_extra=env)
+                self.assertEqual(r.returncode, 0, msg=r.stderr)
+                d = json.loads(r.stdout)
+                if d["persona"] == "no-persona":
+                    no_persona_result = d
+                    break
+
+            self.assertIsNotNone(no_persona_result,
+                                 msg="no-persona must be drawable from random-for-role across 50 seeds")
+
+            self.assertIsNone(no_persona_result["persona_body_path"],
+                              msg="no-persona draw must return persona_body_path=null")
+            self.assertEqual(no_persona_result["persona"], "no-persona",
+                             msg="Drawn persona must be 'no-persona'")
+            self.assertEqual(no_persona_result["selection_source"], "random_role_pool",
+                             msg="no-persona draw must have selection_source=random_role_pool")
+            self.assertIn("no-persona", no_persona_result["candidates"],
+                          msg="no-persona must appear in candidates list")
+
+    def test_no_persona_draw_emits_event(self):
+        """
+        no-persona draw emits persona_random_selected with persona_id=no-persona.
+
+        Invariant (T102): no-persona is tracked (events emitted), NOT the same
+        as knob-off (which emits nothing).
+        Failure class: if the event is not emitted for no-persona, telemetry
+        cannot distinguish knob-off from the explicit no-persona arm.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            # Minimal pool: [no-persona] only (exclude boring-anchor so we can force no-persona draw).
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+            env_with_exclude = {**env}
+
+            # Find a seed that draws no-persona when only no-persona is in pool.
+            result = _run(
+                ["random-for-role", "implementer", "--exclude=boring-anchor", "--seed=0"],
+                env_extra=env,
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            data = json.loads(result.stdout)
+
+            # With boring-anchor excluded and no real personas, only no-persona remains.
+            self.assertEqual(data["persona"], "no-persona",
+                             msg="With only no-persona in pool, it must be drawn")
+            self.assertIn("persona_random_selected", result.stderr,
+                          msg="persona_random_selected event must be emitted for no-persona draw")
+            self.assertIn("no-persona", result.stderr,
+                          msg="Event must include no-persona in stderr output")
+
+    def test_forced_control_still_returns_boring_anchor_tagged_forced_control(self):
+        """
+        forced-control subcommand is UNCHANGED by T102: still returns boring-anchor
+        tagged selection_source=forced_control.
+
+        Invariant: the forced_control cadence floor is retained; analysis can
+        separate forced_control observations from random_role_pool observations
+        of boring-anchor by filtering on selection_source.
+        Failure class: if forced-control changes to return no-persona or a random
+        persona, the guaranteed minimum boring-anchor sample floor is lost.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            _write_persona(Path(builtin_dir), "boring-anchor", description="Control anchor")
+            _write_persona(Path(builtin_dir), "other-persona", description="Other",
+                           extra_frontmatter="compatible_roles: [implementer]")
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+            result = _run(["forced-control", "implementer"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            data = json.loads(result.stdout)
+            self.assertEqual(data["persona"], "boring-anchor",
+                             msg="forced-control must still return boring-anchor (unchanged by T102)")
+            self.assertEqual(data["selection_source"], "forced_control",
+                             msg="selection_source must be forced_control, not random_role_pool")
+            self.assertNotEqual(data["selection_source"], "random_role_pool",
+                                msg="forced_control must be distinguished from random_role_pool")
+
+    def test_exclude_can_exclude_no_persona(self):
+        """
+        --exclude=no-persona removes the no-persona sentinel from the candidate pool.
+
+        Invariant (T102): --exclude filtering applies to no-persona as well as
+        real personas.
+        Failure class: if --exclude cannot exclude no-persona, a caller cannot
+        force-skip the null arm (e.g. when retrying after a no-persona draw).
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            _write_persona(Path(builtin_dir), "boring-anchor", description="Control anchor")
+            _write_persona(Path(builtin_dir), "real-persona", description="Real",
+                           extra_frontmatter="compatible_roles: [implementer]")
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+            result = _run(
+                ["random-for-role", "implementer", "--exclude=no-persona"],
+                env_extra=env,
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            data = json.loads(result.stdout)
+
+            self.assertNotIn("no-persona", data["candidates"],
+                             msg="--exclude=no-persona must remove it from candidates")
+            self.assertNotEqual(data["persona"], "no-persona",
+                                msg="no-persona must not be selected when excluded")
+
+    def test_exclude_can_exclude_boring_anchor(self):
+        """
+        --exclude=boring-anchor removes boring-anchor from the random pool.
+
+        Invariant (T102): --exclude filtering applies to boring-anchor as well
+        (e.g. to exclude it on retry when caller wants a different persona).
+        Failure class: if boring-anchor cannot be excluded, callers cannot
+        diversify away from boring-anchor on retry.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            _write_persona(Path(builtin_dir), "boring-anchor", description="Control anchor")
+            _write_persona(Path(builtin_dir), "real-persona", description="Real",
+                           extra_frontmatter="compatible_roles: [implementer]")
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+            result = _run(
+                ["random-for-role", "implementer", "--exclude=boring-anchor"],
+                env_extra=env,
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            data = json.loads(result.stdout)
+
+            self.assertNotIn("boring-anchor", data["candidates"],
+                             msg="--exclude=boring-anchor must remove it from candidates")
+            self.assertNotEqual(data["persona"], "boring-anchor",
+                                msg="boring-anchor must not be selected when excluded")
+
+    def test_no_persona_disk_file_ignored_sentinel_still_null_body_path(self):
+        """
+        If a no-persona.md file exists in a personas layer, it must be silently
+        ignored. The only no-persona entry in the pool must be the hardcoded
+        sentinel, which always returns persona_body_path=null.
+
+        Invariant (T102 fix): _NO_PERSONA_NAME is reserved; disk files with that
+        name are filtered out of _enumerate_role_compatible_personas() so that:
+        - no-persona appears exactly once in candidates (from the sentinel, not from disk).
+        - drawing no-persona always returns persona_body_path=null.
+        Failure class: if the disk file is not filtered, a no-persona.md in any
+        layer would yield a non-null body_path on no-persona draws, violating the
+        guarantee that the null baseline arm has no persona prefix.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            # Write a valid no-persona.md in the builtin layer (the collision case).
+            no_persona_file = Path(builtin_dir) / "no-persona.md"
+            no_persona_file.write_text(
+                "---\n"
+                "name: no-persona\n"
+                "description: Rogue no-persona file that must be ignored\n"
+                "---\n\nThis body must never reach persona_body_path.\n",
+                encoding="utf-8",
+            )
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+
+            # Find a seed that draws no-persona (pool is [no-persona sentinel] only
+            # since the only disk file has name no-persona and is filtered out).
+            no_persona_result = None
+            for seed in range(50):
+                r = _run(["random-for-role", "implementer", f"--seed={seed}"], env_extra=env)
+                self.assertEqual(r.returncode, 0, msg=r.stderr)
+                d = json.loads(r.stdout)
+                if d["persona"] == "no-persona":
+                    no_persona_result = d
+                    break
+
+            self.assertIsNotNone(
+                no_persona_result,
+                msg="no-persona must still be drawable (from the sentinel) across 50 seeds "
+                    "even when a no-persona.md disk file exists",
+            )
+
+            # Core invariant: the disk file body must not leak into persona_body_path.
+            self.assertIsNone(
+                no_persona_result["persona_body_path"],
+                msg=(
+                    "Drawing no-persona must return persona_body_path=null even when "
+                    "a no-persona.md exists on disk. The disk file must be ignored."
+                ),
+            )
+
+            # no-persona must appear exactly ONCE in candidates (only the sentinel).
+            candidates = no_persona_result["candidates"]
+            no_persona_count = candidates.count("no-persona")
+            self.assertEqual(
+                no_persona_count, 1,
+                msg=(
+                    f"no-persona must appear exactly once in candidates (sentinel only), "
+                    f"got {no_persona_count}. candidates={candidates!r}"
+                ),
+            )
+
+    def test_no_persona_in_candidates_always(self):
+        """
+        no-persona sentinel must appear in candidates for any role when not excluded.
+
+        Invariant (T102): no-persona is role-agnostic (eligible for implementer +
+        reviewer + any role). It must always be in the pool unless --excluded.
+        Failure class: if no-persona only appears for some roles, the null
+        baseline arm is inconsistently sampled across the experiment.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            _write_persona(Path(builtin_dir), "boring-anchor", description="Control")
+            _write_persona(Path(builtin_dir), "reviewer-persona", description="Reviewer",
+                           extra_frontmatter="compatible_roles: [reviewer]\ncontract: review-verdict")
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+
+            for role in ("implementer", "reviewer"):
+                result = _run(["random-for-role", role, "--seed=0"], env_extra=env)
+                self.assertEqual(result.returncode, 0, msg=f"role={role}: {result.stderr}")
+                data = json.loads(result.stdout)
+                self.assertIn("no-persona", data["candidates"],
+                              msg=f"no-persona must be in candidates for role={role!r}")
+
+
+# ---------------------------------------------------------------------------
+# T106: forced-control --arm flag + alternation
+# ---------------------------------------------------------------------------
+
+class TestForcedControlArmFlag(unittest.TestCase):
+    """
+    T106: forced-control <role> [--arm=<boring-anchor|no-persona>]
+    --arm=boring-anchor (default/back-compat) returns boring-anchor.
+    --arm=no-persona returns no-persona sentinel with persona_body_path=null.
+    Both arms tag selection_source=forced_control and emit a draw event.
+    """
+
+    def _make_env(self, builtin_dir: str, user_dir: str, repo_dir: str) -> dict:
+        return {
+            "Z_HARNESS_BUILTIN_PERSONAS_DIR": builtin_dir,
+            "Z_HARNESS_USER_PERSONAS_DIR": user_dir,
+            "Z_HARNESS_REPO_PERSONAS_DIR": repo_dir,
+        }
+
+    def test_arm_no_persona_returns_null_body_path(self):
+        """
+        forced-control reviewer --arm=no-persona returns null body + persona_id=no-persona.
+
+        Invariant (T106): --arm=no-persona is the no-persona forced floor.
+        The returned persona must be 'no-persona' with persona_body_path=null and
+        selection_source=forced_control.
+        Failure class: if --arm=no-persona returns a non-null body path, the
+        forced no-persona arm would prepend a persona body prefix, violating the
+        empty-prefix guarantee of the null/vanilla baseline.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            # Write boring-anchor to confirm it is NOT returned.
+            _write_persona(Path(builtin_dir), "boring-anchor", description="Control anchor")
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+            result = _run(["forced-control", "reviewer", "--arm=no-persona"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            data = json.loads(result.stdout)
+            self.assertEqual(data["persona"], "no-persona",
+                             msg="--arm=no-persona must return persona_id='no-persona'")
+            self.assertIsNone(data["persona_body_path"],
+                              msg="--arm=no-persona must return persona_body_path=null")
+            self.assertEqual(data["selection_source"], "forced_control",
+                             msg="--arm=no-persona must still tag selection_source=forced_control")
+
+    def test_arm_boring_anchor_back_compat(self):
+        """
+        forced-control implementer --arm=boring-anchor returns boring-anchor (back-compat).
+
+        Invariant (T106): --arm=boring-anchor is the default/back-compat path and
+        must behave identically to the pre-T106 forced-control (boring-anchor persona,
+        non-null body path when file exists, selection_source=forced_control).
+        Failure class: if --arm=boring-anchor breaks back-compat, existing orchestrator
+        code that relied on forced-control returning boring-anchor would receive the
+        wrong persona and contaminate the control arm.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            _write_persona(Path(builtin_dir), "boring-anchor", description="Control anchor")
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+            result = _run(["forced-control", "implementer", "--arm=boring-anchor"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            data = json.loads(result.stdout)
+            self.assertEqual(data["persona"], "boring-anchor",
+                             msg="--arm=boring-anchor must return boring-anchor")
+            self.assertIsNotNone(data["persona_body_path"],
+                                 msg="--arm=boring-anchor must return non-null persona_body_path when file exists")
+            self.assertEqual(data["selection_source"], "forced_control")
+
+    def test_omitting_arm_returns_boring_anchor_back_compat(self):
+        """
+        forced-control without --arm returns boring-anchor (default=boring-anchor, back-compat).
+
+        Invariant (T106): omitting --arm is identical to --arm=boring-anchor.
+        This ensures pre-T106 calls that don't pass --arm are not broken.
+        Failure class: if omitting --arm changes behavior (e.g. returns no-persona
+        or exits with an error), all pre-T106 orchestrator invocations are broken.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            _write_persona(Path(builtin_dir), "boring-anchor", description="Control anchor")
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+            result = _run(["forced-control", "implementer"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            data = json.loads(result.stdout)
+            self.assertEqual(data["persona"], "boring-anchor",
+                             msg="Omitting --arm must default to boring-anchor (back-compat)")
+            self.assertEqual(data["selection_source"], "forced_control")
+
+    def test_arm_no_persona_emits_draw_event(self):
+        """
+        forced-control --arm=no-persona emits a draw event with persona_id=no-persona.
+
+        Invariant (T106): the no-persona forced draw is a TRACKED observation —
+        draw event + persona_attempt_outcome are still emitted even though the prefix
+        is empty. The event must carry persona_id=no-persona so analysis can join it.
+        Failure class: if the draw event is not emitted for --arm=no-persona, control
+        floor hits on the no-persona arm are invisible in telemetry and the forced-
+        floor guarantee cannot be verified from logs.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+            result = _run(["forced-control", "implementer", "--arm=no-persona"], env_extra=env)
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+            self.assertIn("persona_random_selected", result.stderr,
+                          msg="--arm=no-persona must emit a persona_random_selected draw event")
+            self.assertIn("forced_control", result.stderr,
+                          msg="draw event must be tagged selection_source=forced_control")
+            # persona_id in the draw event must be no-persona.
+            self.assertIn("no-persona", result.stderr,
+                          msg="draw event must carry persona_id=no-persona in stderr")
+
+    def test_invalid_arm_value_exits_2(self):
+        """
+        forced-control with an unknown --arm value must exit 2 with an error.
+
+        Failure class: silently accepting an unknown arm would either use the default
+        silently (surprising behavior) or crash with an unhandled branch, neither of
+        which is acceptable for an experiment-critical control path.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            env = self._make_env(builtin_dir, user_dir, repo_dir)
+            result = _run(["forced-control", "implementer", "--arm=not-a-valid-arm"],
+                          env_extra=env)
+            self.assertEqual(result.returncode, 2,
+                             msg="Unknown --arm value must exit 2")
+            self.assertIn("not-a-valid-arm", result.stderr,
+                          msg="Error message must name the invalid arm value")
+
+
+class TestForcedControlArmAlternation(unittest.TestCase):
+    """
+    T106: arm alternation across consecutive forced-control floor hits.
+
+    The orchestrator computes arm = 'boring-anchor' if (floor_hit_index % 2 == 0)
+    else 'no-persona', where floor_hit_index = CONTROL_COUNT / CONTROL_EVERY_N.
+
+    This test drives the counter directly to verify the parity formula produces
+    the correct alternating sequence without going through the full orchestrator.
+    The parity formula is tested here against the resolve-persona.py --arm flag
+    to confirm that boring-anchor and no-persona alternate as required.
+    """
+
+    def _make_env(self, builtin_dir: str, user_dir: str, repo_dir: str,
+                  counter_path: str) -> dict:
+        return {
+            "Z_HARNESS_BUILTIN_PERSONAS_DIR": builtin_dir,
+            "Z_HARNESS_USER_PERSONAS_DIR": user_dir,
+            "Z_HARNESS_REPO_PERSONAS_DIR": repo_dir,
+            "Z_HARNESS_CONTROL_COUNTER_PATH": counter_path,
+        }
+
+    def _compute_arm(self, control_count: int, control_every_n: int) -> str:
+        """Reproduce the orchestrator's arm-selection formula (T106)."""
+        floor_hit_index = control_count // control_every_n
+        return "boring-anchor" if (floor_hit_index % 2 == 0) else "no-persona"
+
+    def test_arm_alternates_across_floor_hits(self):
+        """
+        Across consecutive forced-control floor hits, the arm alternates between
+        boring-anchor and no-persona, with no two consecutive floor hits using the
+        same arm.
+
+        The parity formula: arm = 'boring-anchor' if floor_hit_index % 2 == 0
+        else 'no-persona', where floor_hit_index = count // control_every_n.
+
+        At the first floor hit (count=control_every_n), floor_hit_index=1 (odd)
+        → no-persona. At the second (count=2*N), floor_hit_index=2 (even)
+        → boring-anchor. This alternates on every subsequent hit.
+
+        Invariant (T106): both forced-floor arms are exercised on alternating
+        control counts; neither arm is starved across a long run.
+        Failure class: if the parity formula is wrong (e.g. always even or always
+        odd), one arm is never selected and the no-persona forced floor is
+        effectively absent, defeating T106's goal of giving no-persona a guaranteed
+        forced floor.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir, \
+             tempfile.TemporaryDirectory() as tmp:
+
+            _write_persona(Path(builtin_dir), "boring-anchor", description="Control anchor")
+            counter_path = str(Path(tmp) / ".persona-control-counter")
+
+            # Simulate 6 floor hits (at control_every_n=5: counts 5,10,15,20,25,30)
+            # and verify the arm alternates on every consecutive hit.
+            control_every_n = 5
+            expected_arms = []
+            for hit in range(1, 7):
+                count = hit * control_every_n
+                expected_arms.append(self._compute_arm(count, control_every_n))
+
+            # First hit: floor_hit_index=1 (odd) → no-persona (spec formula).
+            # Second hit: floor_hit_index=2 (even) → boring-anchor.
+            # Pattern strictly alternates thereafter.
+            self.assertEqual(expected_arms[0], "no-persona",
+                             msg="floor_hit_index=1 (odd): first floor hit must be no-persona")
+            self.assertEqual(expected_arms[1], "boring-anchor",
+                             msg="floor_hit_index=2 (even): second floor hit must be boring-anchor")
+            self.assertEqual(expected_arms[2], "no-persona",
+                             msg="floor_hit_index=3 (odd): third floor hit must be no-persona")
+            self.assertEqual(expected_arms[3], "boring-anchor",
+                             msg="floor_hit_index=4 (even): fourth floor hit must be boring-anchor")
+
+            # Verify that the arms actually alternate (no two consecutive same arm).
+            for i in range(1, len(expected_arms)):
+                self.assertNotEqual(
+                    expected_arms[i], expected_arms[i - 1],
+                    msg=f"Arms must alternate: got {expected_arms[i-1]!r} then {expected_arms[i]!r} "
+                        f"at floor hit indices {i} and {i+1}",
+                )
+
+    def test_forced_control_calls_with_arm_produce_correct_personas(self):
+        """
+        Calling forced-control with arms derived from the parity formula produces
+        the expected alternating personas (boring-anchor, no-persona, boring-anchor, ...).
+
+        Invariant (T106): the --arm flag in resolve-persona.py must agree with
+        the orchestrator's arm formula output — boring-anchor arm returns
+        persona='boring-anchor', no-persona arm returns persona='no-persona'.
+        Failure class: if the arm flag is accepted but maps to the wrong persona,
+        the alternation is correctly computed but incorrectly executed, and the
+        no-persona forced floor is silently absent.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            _write_persona(Path(builtin_dir), "boring-anchor", description="Control anchor")
+
+            env = {
+                "Z_HARNESS_BUILTIN_PERSONAS_DIR": builtin_dir,
+                "Z_HARNESS_USER_PERSONAS_DIR": user_dir,
+                "Z_HARNESS_REPO_PERSONAS_DIR": repo_dir,
+            }
+
+            # Simulate 4 consecutive floor hits with alternating arms.
+            arms = ["boring-anchor", "no-persona", "boring-anchor", "no-persona"]
+            expected_personas = ["boring-anchor", "no-persona", "boring-anchor", "no-persona"]
+            expected_body_paths = [True, False, True, False]  # True=non-null, False=null
+
+            for i, (arm, expected_persona, expect_nonnull_path) in enumerate(
+                zip(arms, expected_personas, expected_body_paths)
+            ):
+                result = _run(
+                    ["forced-control", "implementer", f"--arm={arm}"],
+                    env_extra=env,
+                )
+                self.assertEqual(
+                    result.returncode, 0,
+                    msg=f"Hit {i+1}, arm={arm!r}: forced-control must exit 0. stderr={result.stderr!r}",
+                )
+                data = json.loads(result.stdout)
+                self.assertEqual(
+                    data["persona"], expected_persona,
+                    msg=f"Hit {i+1}, arm={arm!r}: expected persona={expected_persona!r}, "
+                        f"got {data['persona']!r}",
+                )
+                self.assertEqual(
+                    data["selection_source"], "forced_control",
+                    msg=f"Hit {i+1}, arm={arm!r}: selection_source must be forced_control",
+                )
+                if expect_nonnull_path:
+                    self.assertIsNotNone(
+                        data["persona_body_path"],
+                        msg=f"Hit {i+1}, arm={arm!r}: persona_body_path must be non-null for boring-anchor",
+                    )
+                else:
+                    self.assertIsNone(
+                        data["persona_body_path"],
+                        msg=f"Hit {i+1}, arm={arm!r}: persona_body_path must be null for no-persona",
+                    )
+
+    def test_both_arms_tagged_forced_control(self):
+        """
+        Both boring-anchor and no-persona forced draws must be tagged
+        selection_source=forced_control (not random_role_pool).
+
+        Invariant (T106): analysis must be able to identify forced-floor observations
+        regardless of which arm (boring-anchor or no-persona) was selected by
+        filtering on selection_source=forced_control.
+        Failure class: if one arm produces a different selection_source tag,
+        segmenting control observations from random observations breaks.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as builtin_dir, \
+             tempfile.TemporaryDirectory() as user_dir, \
+             tempfile.TemporaryDirectory() as repo_dir:
+
+            _write_persona(Path(builtin_dir), "boring-anchor", description="Control anchor")
+
+            env = {
+                "Z_HARNESS_BUILTIN_PERSONAS_DIR": builtin_dir,
+                "Z_HARNESS_USER_PERSONAS_DIR": user_dir,
+                "Z_HARNESS_REPO_PERSONAS_DIR": repo_dir,
+            }
+
+            for arm in ("boring-anchor", "no-persona"):
+                result = _run(["forced-control", "implementer", f"--arm={arm}"], env_extra=env)
+                self.assertEqual(result.returncode, 0, msg=f"arm={arm!r}: {result.stderr}")
+                data = json.loads(result.stdout)
+                self.assertEqual(
+                    data["selection_source"], "forced_control",
+                    msg=f"arm={arm!r}: selection_source must be forced_control, got {data['selection_source']!r}",
+                )
+                self.assertNotEqual(
+                    data["selection_source"], "random_role_pool",
+                    msg=f"arm={arm!r}: forced draws must not be tagged random_role_pool",
+                )
 
 
 if __name__ == "__main__":

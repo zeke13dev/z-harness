@@ -372,10 +372,11 @@ The persona-rotation experiment rotates which persona is used for the `implement
 **Implementer rotation (`/z-implement-all` and `/z-implement-next`):**
 
 Every task attempt gets a persona drawn by `resolve-persona.py random-for-role implementer`. The draw:
-1. Enumerates all personas across all layers whose `compatible_roles` includes `implementer`.
-2. Excludes `boring-anchor` (the control) and any explicitly excluded IDs (`--exclude`).
-3. Draws uniformly at random using `secrets`/`random` (seeded for reproducibility if `--seed` given).
-4. Emits `persona_random_selected` before the agent runs.
+1. Enumerates all personas across all layers whose `compatible_roles` includes `implementer` (including `boring-anchor` — amended as of T102).
+2. Prepends the `no-persona` sentinel (null/vanilla baseline arm) to the candidate pool.
+3. Excludes only explicitly listed IDs (`--exclude`).
+4. Draws uniformly at random using `secrets`/`random` (seeded for reproducibility if `--seed` given).
+5. Emits `persona_random_selected` before the agent runs.
 
 Every `experiment.control_every_n`-th attempt (default every 5th, counted repo-wide via `.z-harness/.persona-control-counter`) calls `forced-control implementer` instead, which returns `boring-anchor` tagged `selection_source: forced_control`. This ensures a baseline sample accrues automatically.
 
@@ -397,10 +398,30 @@ When `experiment.persona_rotation=true`, the Phase 3 / Phase 7 consultant dispat
 
 ### `boring-anchor` — the control persona
 
-`boring-anchor` is the baseline persona that ships with the harness. It is:
-- **Never in the random pool.** `random-for-role` always excludes it.
-- **Drawn only via `forced-control`** (cadence) or as a `fallback_empty_pool` fallback.
-- **The delta baseline** in `persona-stats.py` analysis. All outcome metrics are reported relative to `boring-anchor` within the same `(role, complexity_tier)` stratum.
+`boring-anchor` is the baseline persona that ships with the harness. As of T102 (amended):
+- **Eligible for random draws.** `boring-anchor` is now a normal member of the `random_role_pool` and may be drawn stochastically alongside other personas.
+- **Also drawn via `forced-control`** (cadence — every `experiment.control_every_n`-th attempt). The cadence is a **floor** that guarantees a minimum `boring-anchor` sample rate regardless of random-pool outcomes.
+- **Secondary delta baseline** in `persona-stats.py` analysis. Within each `(role, complexity_tier)` stratum, `boring-anchor` is used as the baseline only when the stratum has zero `no-persona` samples.
+
+> Note: the prior invariant "boring-anchor is NEVER in the random pool" is REVERSED by T102. `selection_source` distinguishes a `random_role_pool` draw from a `forced_control` cadence draw.
+
+### `no-persona` — the null baseline arm
+
+`no-persona` is a reserved sentinel that represents the vanilla implementer: no persona prefix at all.
+- **No file on disk.** `persona_body_path=null`; the implementer runs with zero prompt prefix.
+- **Always in the random pool** (prepended to the candidate list by `random-for-role` before any disk enumeration, unless explicitly `--exclude`d).
+- **Fully tracked.** A `no-persona` draw emits `persona_random_selected` and `persona_attempt_outcome` with `persona_id="no-persona"` — it is a **tracked baseline arm**, not the same as knob-off (which emits no events at all).
+- **Primary delta baseline** in `persona-stats.py`. All per-stratum `delta_vs_baseline` values are computed against `no-persona` when the stratum has at least one no-persona sample.
+- **Disk filtering.** `_enumerate_role_compatible_personas` filters out any `no-persona.md` found on disk so the hardcoded sentinel is the only source of `no-persona` draws.
+
+### Analysis baseline resolution
+
+`persona-stats.py` resolves the delta baseline per `(role, complexity_tier)` stratum in this order:
+1. `no-persona` — primary null baseline (true vanilla, zero prefix). Used when the stratum has at least one `no-persona` sample.
+2. `boring-anchor` — secondary bland-control fallback. Used only when the stratum has no `no-persona` samples.
+3. `None` — raw metrics reported without a delta if neither baseline exists in the stratum.
+
+Both `no-persona` and `boring-anchor` appear as normal tracked arms in every report section. `fallback_empty_pool` draws are quarantined and never enter any baseline.
 
 ### New subcommands in `resolve-persona.py`
 

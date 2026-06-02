@@ -11,14 +11,23 @@ joins persona draw events (``persona_random_selected``, including the
 join key), and reports outcome metrics grouped by
 ``persona_id × role × complexity_tier``.
 
-For each group it also reports the delta of each metric versus the
-``boring-anchor`` control WITHIN THE SAME stratum (same ``role`` ×
-``complexity_tier``). Every section is segmented by ``selection_source``.
+For each group it also reports the delta of each metric versus the PRIMARY
+baseline WITHIN THE SAME stratum (same ``role`` × ``complexity_tier``). The
+baseline resolution order is:
+
+  1. ``no-persona`` (primary null baseline, true null) within the stratum.
+  2. ``boring-anchor`` (secondary bland control) within the stratum, if no
+     ``no-persona`` samples exist.
+  3. ``None`` — raw metrics reported without a delta if neither exists.
+
+Both ``no-persona`` and ``boring-anchor`` appear as their own tracked arms in
+every section; neither is quarantined. Every section is segmented by
+``selection_source``.
 
 ``fallback_empty_pool`` draws are QUARANTINED: they are reported in a separate
-section and are never folded into any persona's stats or into the
-``boring-anchor`` baseline. Draws with no matching ``persona_attempt_outcome``
-(incomplete attempts) are excluded entirely.
+section and are never folded into any persona's stats or into either baseline.
+Draws with no matching ``persona_attempt_outcome`` (incomplete attempts) are
+excluded entirely.
 
 Reviewer rows are derived from ``persona_bound`` events and segmented by
 ``reviewer_participant`` (base_codex vs random_arm).
@@ -38,7 +47,8 @@ import json
 import os
 import sys
 
-CONTROL_PERSONA = "boring-anchor"
+NO_PERSONA = "no-persona"       # primary null baseline (true null, empty prefix)
+CONTROL_PERSONA = "boring-anchor"  # secondary bland control
 FALLBACK_SOURCE = "fallback_empty_pool"
 
 # Numeric outcome metrics carried by persona_attempt_outcome that we aggregate
@@ -191,10 +201,19 @@ def build_report(joined, min_diff_size=0):
 
     Returns a dict with three top-level keys:
       - "segments": per selection_source (excluding fallback) → list of groups,
-        each carrying its own aggregate metrics AND a delta-vs-control computed
-        within the group's stratum.
+        each carrying its own aggregate metrics AND a delta-vs-baseline computed
+        within the group's stratum. ``baseline_source`` indicates which arm was
+        used (``"no-persona"``, ``"boring-anchor"``, or ``None``).
       - "quarantine": fallback_empty_pool aggregate (never folded elsewhere).
       - "reviewer": reviewer attempts segmented by reviewer_participant.
+
+    Baseline resolution order per stratum:
+      1. no-persona (primary null baseline).
+      2. boring-anchor (secondary bland control), if no no-persona samples exist.
+      3. None — raw metrics reported without a delta if neither exists.
+
+    Both no-persona and boring-anchor are tracked as normal arms and appear in
+    their own segment groups. fallback_empty_pool rows never enter any baseline.
     """
     # --min-diff-size noise filter: drop attempts below the threshold. A None
     # diff_size is treated as 0 (no diff recorded → trivial).
@@ -207,16 +226,24 @@ def build_report(joined, min_diff_size=0):
     fallback = [r for r in filtered if r.get("selection_source") == FALLBACK_SOURCE]
     analyzable = [r for r in filtered if r.get("selection_source") != FALLBACK_SOURCE]
 
-    # Control baselines, keyed by stratum, are computed from boring-anchor rows
-    # ONLY within the analyzable (non-fallback) population. A fallback row that
-    # happens to resolve to boring-anchor must NOT contaminate the baseline.
-    control_by_stratum = {}
-    control_records = [r for r in analyzable if r.get("persona_id") == CONTROL_PERSONA]
-    strata = {}
-    for r in control_records:
-        strata.setdefault(_stratum_key(r), []).append(r)
-    for stratum, recs in strata.items():
-        control_by_stratum[stratum] = _aggregate(recs)
+    # Primary baseline: no-persona rows per stratum, from analyzable population only.
+    no_persona_by_stratum = {}
+    no_persona_strata = {}
+    for r in analyzable:
+        if r.get("persona_id") == NO_PERSONA:
+            no_persona_strata.setdefault(_stratum_key(r), []).append(r)
+    for stratum, recs in no_persona_strata.items():
+        no_persona_by_stratum[stratum] = _aggregate(recs)
+
+    # Secondary baseline: boring-anchor rows per stratum, from analyzable population only.
+    # A fallback row that resolves to boring-anchor must NOT contaminate the baseline.
+    boring_anchor_by_stratum = {}
+    boring_anchor_strata = {}
+    for r in analyzable:
+        if r.get("persona_id") == CONTROL_PERSONA:
+            boring_anchor_strata.setdefault(_stratum_key(r), []).append(r)
+    for stratum, recs in boring_anchor_strata.items():
+        boring_anchor_by_stratum[stratum] = _aggregate(recs)
 
     # Group every analyzable record by selection_source → group key.
     segments = {}
@@ -230,8 +257,18 @@ def build_report(joined, min_diff_size=0):
         for gkey, recs in sorted(groups.items()):
             persona_id, role, tier = gkey
             agg = _aggregate(recs)
-            baseline = control_by_stratum.get((role, tier))
-            delta = _compute_delta(agg, baseline, persona_id)
+            stratum = (role, tier)
+            # Resolve baseline: no-persona first, boring-anchor second, none last.
+            if no_persona_by_stratum.get(stratum) is not None:
+                baseline = no_persona_by_stratum[stratum]
+                baseline_source = NO_PERSONA
+            elif boring_anchor_by_stratum.get(stratum) is not None:
+                baseline = boring_anchor_by_stratum[stratum]
+                baseline_source = CONTROL_PERSONA
+            else:
+                baseline = None
+                baseline_source = None
+            delta = _compute_delta(agg, baseline, persona_id, baseline_source)
             out_groups.append({
                 "persona_id": persona_id,
                 "role": role,
@@ -240,7 +277,8 @@ def build_report(joined, min_diff_size=0):
                 "completion_rate": agg["completion_rate"],
                 "status_counts": agg["status_counts"],
                 "metrics": agg["metrics"],
-                "delta_vs_boring_anchor": delta,
+                "baseline_source": baseline_source,
+                "delta_vs_baseline": delta,
             })
         out_segments[src] = out_groups
 
@@ -256,14 +294,21 @@ def build_report(joined, min_diff_size=0):
     }
 
 
-def _compute_delta(agg, baseline, persona_id):
-    """Per-metric delta (group mean − control mean) within the stratum.
+def _compute_delta(agg, baseline, persona_id, baseline_source):
+    """Per-metric delta (group mean − baseline mean) within the stratum.
 
-    Returns None when this group IS the control, when there is no control in the
-    stratum, or for metrics the control lacks. completion_rate delta is also
-    included.
+    Returns None when this group IS the baseline arm, when there is no baseline
+    in the stratum, or for metrics the baseline lacks. completion_rate delta is
+    also included.
+
+    ``baseline_source`` is the persona_id of the arm used as baseline
+    (``"no-persona"`` or ``"boring-anchor"``), used to suppress delta for the
+    arm that is its own baseline.
     """
-    if persona_id == CONTROL_PERSONA or baseline is None:
+    if baseline is None:
+        return None
+    # The baseline arm reports delta=None (it IS the baseline).
+    if persona_id == baseline_source:
         return None
     delta = {}
     for metric in NUMERIC_METRICS:
@@ -373,10 +418,11 @@ def render_table(report):
                 + " ".join(f"{_fmt_metric(g['metrics'].get(m)):>11}" for m in NUMERIC_METRICS)
             )
             lines.append(row)
-            delta = g.get("delta_vs_boring_anchor")
+            delta = g.get("delta_vs_baseline")
             if delta is not None:
+                bsrc = g.get("baseline_source") or "baseline"
                 drow = (
-                    f"  {'  Δ vs boring-anchor':<20} {'':<12} {'':<8} "
+                    f"  {'  Δ vs ' + bsrc:<20} {'':<12} {'':<8} "
                     f"{'':>3} {_fmt_delta(delta.get('completion_rate')):>6} "
                     + " ".join(f"{_fmt_delta(delta.get(m)):>11}" for m in NUMERIC_METRICS)
                 )

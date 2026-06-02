@@ -196,23 +196,26 @@ class PersonaStatsFixture(unittest.TestCase):
 
     def test_delta_within_stratum(self):
         report = self._report()
+        # No no-persona in this fixture, so boring-anchor is the fallback baseline.
         # HIGH control mean review_cycles = (2+4)/2 = 3; wall_ms = (1000+3000)/2 = 2000.
         # spicy-rebel HIGH review_cycles = 5 -> delta +2; wall_ms 5000 -> +3000.
         high = self._find_group(report, "random_role_pool", "spicy-rebel", "implementer", "high")
-        delta = high["delta_vs_boring_anchor"]
+        delta = high["delta_vs_baseline"]
         self.assertIsNotNone(delta)
         self.assertAlmostEqual(delta["review_cycles"], 2.0)
         self.assertAlmostEqual(delta["wall_ms"], 3000.0)
+        # baseline_source should be boring-anchor (no-persona absent in this fixture).
+        self.assertEqual(high["baseline_source"], "boring-anchor")
 
         # LOW control review_cycles = 1; spicy-rebel LOW = 2 -> delta +1 (NOT
         # measured against the HIGH control of 3).
         low = self._find_group(report, "random_role_pool", "spicy-rebel", "implementer", "low")
-        self.assertAlmostEqual(low["delta_vs_boring_anchor"]["review_cycles"], 1.0)
+        self.assertAlmostEqual(low["delta_vs_baseline"]["review_cycles"], 1.0)
 
         # The control's own group has delta None (it is the baseline).
         ctrl = self._find_group(report, "forced_control", "boring-anchor", "implementer", "high")
         self.assertIsNotNone(ctrl)
-        self.assertIsNone(ctrl["delta_vs_boring_anchor"])
+        self.assertIsNone(ctrl["delta_vs_baseline"])
 
     def test_fallback_quarantined_and_excluded_from_baseline(self):
         report = self._report()
@@ -229,7 +232,7 @@ class PersonaStatsFixture(unittest.TestCase):
         # be (2+4+99)/3 = 35 and spicy-rebel's delta would be 5-35 = -30.
         # Assert the delta is the clean +2 instead.
         high = self._find_group(report, "random_role_pool", "spicy-rebel", "implementer", "high")
-        self.assertAlmostEqual(high["delta_vs_boring_anchor"]["review_cycles"], 2.0)
+        self.assertAlmostEqual(high["delta_vs_baseline"]["review_cycles"], 2.0)
 
     def test_incomplete_attempts_excluded(self):
         report = self._report()
@@ -271,6 +274,158 @@ class PersonaStatsFixture(unittest.TestCase):
         # boring-anchor HIGH had 2 done -> completion 1.0.
         ctrl = self._find_group(report, "forced_control", "boring-anchor", "implementer", "high")
         self.assertAlmostEqual(ctrl["completion_rate"], 1.0)
+
+
+class NoPersonaBaselineFixture(unittest.TestCase):
+    """T104 acceptance criteria: no-persona as primary delta baseline.
+
+    Builds a fixture where BOTH no-persona and boring-anchor are present within
+    the same stratum, plus a separate stratum with only boring-anchor (to verify
+    the fallback path), plus the usual fallback_empty_pool quarantine row.
+
+    Assertions:
+      - delta is computed vs no-persona within stratum (primary null baseline).
+      - boring-anchor reported as a secondary arm (has its own group entry).
+      - no-persona NOT quarantined (appears in segments, not only in quarantine).
+      - boring-anchor delta is also vs no-persona when no-persona is present.
+      - fallback_empty_pool still quarantined (unchanged behavior).
+      - In a stratum with only boring-anchor (no no-persona), delta falls back
+        to boring-anchor as baseline.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.metrics = os.path.join(self.tmp, "metrics.jsonl")
+        lines = []
+
+        # === Stratum: role=implementer, tier=high ===
+        # no-persona (primary null baseline): 2 attempts, review_cycles 2 and 4
+        # -> mean review_cycles = 3.0, wall_ms mean = (1000+3000)/2 = 2000.
+        lines.append(_draw("NP-v1", "d-np-1", "no-persona", "implementer", "random_role_pool"))
+        lines.append(_outcome("NP-v1", "d-np-1", "no-persona", "implementer", "high",
+                              review_cycles=2, retries=0, blocker_count=0, wall_ms=1000,
+                              diff_size=200))
+        lines.append(_draw("NP-v2", "d-np-2", "no-persona", "implementer", "random_role_pool"))
+        lines.append(_outcome("NP-v2", "d-np-2", "no-persona", "implementer", "high",
+                              review_cycles=4, retries=0, blocker_count=0, wall_ms=3000,
+                              diff_size=200))
+
+        # boring-anchor (secondary bland control): 1 attempt, review_cycles=10.
+        # With no-persona as primary baseline: delta = 10 - 3 = +7 (not zero).
+        lines.append(_draw("BA-v1", "d-ba-1", "boring-anchor", "implementer", "forced_control"))
+        lines.append(_outcome("BA-v1", "d-ba-1", "boring-anchor", "implementer", "high",
+                              review_cycles=10, retries=0, blocker_count=0, wall_ms=8000,
+                              diff_size=200))
+
+        # spicy-rebel: 1 attempt, review_cycles=7. Delta vs no-persona = 7-3 = +4.
+        lines.append(_draw("SR-v1", "d-sr-1", "spicy-rebel", "implementer", "random_role_pool"))
+        lines.append(_outcome("SR-v1", "d-sr-1", "spicy-rebel", "implementer", "high",
+                              review_cycles=7, retries=0, blocker_count=0, wall_ms=5000,
+                              diff_size=300))
+
+        # === Stratum: role=implementer, tier=low ===
+        # Only boring-anchor exists here (no no-persona). Delta for other arms
+        # should fall back to boring-anchor as baseline.
+        lines.append(_draw("BA-low-v1", "d-ba-low", "boring-anchor", "implementer", "forced_control"))
+        lines.append(_outcome("BA-low-v1", "d-ba-low", "boring-anchor", "implementer", "low",
+                              review_cycles=1, retries=0, blocker_count=0, wall_ms=500,
+                              diff_size=50))
+        lines.append(_draw("SR-low-v1", "d-sr-low", "spicy-rebel", "implementer", "random_role_pool"))
+        lines.append(_outcome("SR-low-v1", "d-sr-low", "spicy-rebel", "implementer", "low",
+                              review_cycles=3, retries=0, blocker_count=0, wall_ms=900,
+                              diff_size=60))
+
+        # === QUARANTINE: fallback_empty_pool — unchanged behavior ===
+        lines.append(_draw("FB-v1", "d-fb-1", "boring-anchor", "implementer", "fallback_empty_pool"))
+        lines.append(_outcome("FB-v1", "d-fb-1", "boring-anchor", "implementer", "high",
+                              review_cycles=99, retries=99, blocker_count=99, wall_ms=99999,
+                              diff_size=999))
+
+        with open(self.metrics, "w", encoding="utf-8") as fh:
+            for obj in lines:
+                fh.write(json.dumps(obj) + "\n")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _report(self, min_diff_size=0):
+        return persona_stats.analyze(self.metrics, min_diff_size=min_diff_size)
+
+    def _find_group(self, report, src, persona_id, role, tier):
+        for g in report["segments"].get(src, []):
+            if (g["persona_id"], g["role"], g["complexity_tier"]) == (persona_id, role, tier):
+                return g
+        return None
+
+    def test_delta_computed_vs_no_persona_within_stratum(self):
+        """Delta for spicy-rebel HIGH is vs no-persona (primary null), not boring-anchor."""
+        report = self._report()
+        # no-persona HIGH mean review_cycles = (2+4)/2 = 3.
+        # spicy-rebel HIGH review_cycles = 7 -> delta = +4.0
+        sr = self._find_group(report, "random_role_pool", "spicy-rebel", "implementer", "high")
+        self.assertIsNotNone(sr, "spicy-rebel HIGH group must exist")
+        self.assertEqual(sr["baseline_source"], "no-persona")
+        self.assertIsNotNone(sr["delta_vs_baseline"])
+        self.assertAlmostEqual(sr["delta_vs_baseline"]["review_cycles"], 4.0)
+
+    def test_boring_anchor_reported_as_secondary_arm(self):
+        """boring-anchor appears as its own segment group (not quarantined).
+
+        Its delta is also vs no-persona (since no-persona exists in that stratum),
+        confirming boring-anchor is just another tracked arm.
+        """
+        report = self._report()
+        ba = self._find_group(report, "forced_control", "boring-anchor", "implementer", "high")
+        self.assertIsNotNone(ba, "boring-anchor HIGH group must appear as a tracked arm")
+        self.assertEqual(ba["n_attempts"], 1)
+        # boring-anchor is NOT its own baseline in this stratum (no-persona is primary),
+        # so it gets a delta: 10 - 3 = +7.
+        self.assertEqual(ba["baseline_source"], "no-persona")
+        self.assertIsNotNone(ba["delta_vs_baseline"])
+        self.assertAlmostEqual(ba["delta_vs_baseline"]["review_cycles"], 7.0)
+
+    def test_no_persona_not_quarantined(self):
+        """no-persona must appear in segments (as a tracked arm), not only in quarantine."""
+        report = self._report()
+        # Must appear in segments.
+        np_group = self._find_group(report, "random_role_pool", "no-persona", "implementer", "high")
+        self.assertIsNotNone(np_group, "no-persona HIGH must appear as a tracked arm in segments")
+        self.assertEqual(np_group["n_attempts"], 2)
+        # no-persona IS the primary baseline so its own delta_vs_baseline is None.
+        self.assertIsNone(np_group["delta_vs_baseline"])
+        # Must NOT appear in quarantine section.
+        q = report["quarantine_fallback_empty_pool"]
+        # Quarantine has only the fallback row (review_cycles=99), not no-persona rows.
+        self.assertEqual(q["n_attempts"], 1)
+        self.assertEqual(q["metrics"]["review_cycles"], 99)
+
+    def test_fallback_still_quarantined(self):
+        """fallback_empty_pool quarantine behavior is unchanged."""
+        report = self._report()
+        q = report["quarantine_fallback_empty_pool"]
+        self.assertEqual(q["n_attempts"], 1)
+        self.assertEqual(q["metrics"]["review_cycles"], 99)
+        self.assertNotIn("fallback_empty_pool", report["segments"])
+        # Quarantine must NOT bleed into no-persona baseline.
+        # If fallback contaminated no-persona, mean review_cycles would be
+        # (2+4+99)/3 = 35; spicy-rebel delta would be 7-35 = -28 (not +4).
+        sr = self._find_group(report, "random_role_pool", "spicy-rebel", "implementer", "high")
+        self.assertAlmostEqual(sr["delta_vs_baseline"]["review_cycles"], 4.0)
+
+    def test_boring_anchor_fallback_when_no_persona_absent(self):
+        """In a stratum with no no-persona samples, boring-anchor is the baseline."""
+        report = self._report()
+        # LOW stratum: only boring-anchor exists, no no-persona.
+        # spicy-rebel LOW review_cycles=3, boring-anchor LOW=1 -> delta=+2.
+        sr_low = self._find_group(report, "random_role_pool", "spicy-rebel", "implementer", "low")
+        self.assertIsNotNone(sr_low, "spicy-rebel LOW group must exist")
+        self.assertEqual(sr_low["baseline_source"], "boring-anchor")
+        self.assertAlmostEqual(sr_low["delta_vs_baseline"]["review_cycles"], 2.0)
+        # boring-anchor LOW is its own baseline in this stratum, so delta is None.
+        ba_low = self._find_group(report, "forced_control", "boring-anchor", "implementer", "low")
+        self.assertIsNotNone(ba_low)
+        self.assertIsNone(ba_low["delta_vs_baseline"])
 
 
 class PersonaStatsCLI(unittest.TestCase):

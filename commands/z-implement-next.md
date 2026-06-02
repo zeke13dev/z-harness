@@ -180,7 +180,17 @@ if [ "$PERSONA_ROTATION" = "true" ]; then
     CONTROL_EVERY_N="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get experiment.control_every_n 2>/dev/null || echo 5)"
     CONTROL_COUNT="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-persona.py" control-counter --increment)"
     if [ "$CONTROL_EVERY_N" -gt 0 ] && [ $(( CONTROL_COUNT % CONTROL_EVERY_N )) -eq 0 ]; then
-      DRAW_JSON="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-persona.py" forced-control implementer)"
+      # Compute the floor-hit parity arm: alternate boring-anchor and no-persona
+      # across consecutive forced-control hits (T106). Floor-hit index =
+      # CONTROL_COUNT / CONTROL_EVERY_N (integer division); even index →
+      # boring-anchor, odd index → no-persona.
+      FLOOR_HIT_INDEX=$(( CONTROL_COUNT / CONTROL_EVERY_N ))
+      if [ $(( FLOOR_HIT_INDEX % 2 )) -eq 0 ]; then
+        FORCED_ARM="boring-anchor"
+      else
+        FORCED_ARM="no-persona"
+      fi
+      DRAW_JSON="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-persona.py" forced-control implementer --arm="$FORCED_ARM")"
     else
       EXCLUDE_ARG=""
       if [ "$CURRENT_COUNTER" -ge 2 ] && [ -f "$DRAW_FILE" ]; then
@@ -204,7 +214,8 @@ json.dump(rec, open(out, "w"))
   DRAW_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("draw_id",""))' "$DRAW_FILE" 2>/dev/null || echo "")"
   SELECTION_SOURCE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("selection_source",""))' "$DRAW_FILE" 2>/dev/null || echo "")"
   PERSONA_BODY_PATH="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("persona_body_path",""))' "$DRAW_FILE" 2>/dev/null || echo "")"
-  if [ -n "$PERSONA_BODY_PATH" ] && [ -f "$PERSONA_BODY_PATH" ]; then
+  # no-persona is a tracked baseline arm: empty prefix, but draw event + outcome event still fire.
+  if [ "$PERSONA_ID" != "no-persona" ] && [ -n "$PERSONA_BODY_PATH" ] && [ -f "$PERSONA_BODY_PATH" ]; then
     PERSONA_PREFIX="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/runtime/dispatch/persona_prompt.py" "$PERSONA_BODY_PATH" "" 2>/dev/null | head -c 4096 || true)"
     [ -n "$PERSONA_PREFIX" ] && PERSONA_PREFIX="${PERSONA_PREFIX}
 

@@ -16,18 +16,24 @@ Subcommands (T007/T009 scope):
                             + contract matches role's expected_contract (T009).
   read <name>               Print frontmatter + body of the winning persona file.
 
-Subcommands (T004 scope):
+Subcommands (T004/T102 scope):
   random-for-role <role> [--exclude=<id,...>] [--seed=<s>]
                             Draw a uniformly random persona compatible with <role>.
-                            Excludes boring-anchor and any --exclude ids. Seeded for
+                            Pool includes boring-anchor (T102) and no-persona sentinel
+                            (T102). --exclude ids removed from pool. Seeded for
                             reproducibility when --seed is given. Emits
                             persona_random_selected event. Empty pool → returns
                             boring-anchor tagged selection_source=fallback_empty_pool.
+                            no-persona draw returns persona_body_path=null.
 
-Subcommands (T005 scope):
-  forced-control <role>     Return boring-anchor resolved object tagged
-                            selection_source=forced_control. Used when the
-                            control cadence counter triggers.
+Subcommands (T005/T106 scope):
+  forced-control <role> [--arm=<boring-anchor|no-persona>]
+                            Return forced-control resolved object tagged
+                            selection_source=forced_control. Default arm is
+                            boring-anchor (back-compat). --arm=no-persona
+                            returns the no-persona sentinel with
+                            persona_body_path=null. Used when the control
+                            cadence counter triggers.
   control-counter --increment
                             Read, increment, and persist the per-repo forced-control
                             cadence counter in .z-harness/.persona-control-counter.
@@ -1189,13 +1195,16 @@ def _is_contract_compatible(persona_fm: dict, role: str) -> bool:
 
 def _enumerate_role_compatible_personas(role: str, exclude_ids: set[str]) -> list[dict]:
     """
-    Return winning-layer personas compatible with role, excluding boring-anchor and exclude_ids.
+    Return winning-layer personas compatible with role, excluding only the ids in exclude_ids.
 
     A persona is compatible if:
     - Its compatible_roles list includes role (or compatible_roles is absent — treated as "any").
     - Its contract is compatible with the role's expected_contract.
-    - Its name is not boring-anchor.
     - Its name is not in exclude_ids.
+
+    Note: boring-anchor is now included in the random pool (T102 amendment).
+    boring-anchor and no-persona bypass contract checks (boring-anchor is multi-role/any;
+    no-persona is a hardcoded sentinel with no contract).
 
     Returns list of winning-layer persona dicts {name, source_layer, path, _fm}.
     Applies layer precedence (last layer wins per name) and emits shadow events.
@@ -1215,14 +1224,23 @@ def _enumerate_role_compatible_personas(role: str, exclude_ids: set[str]) -> lis
 
     result = []
     for name, winner in by_name.items():
-        # Exclude boring-anchor (control persona — selected separately).
-        if name == _BORING_ANCHOR_NAME:
-            continue
         # Exclude explicitly requested IDs.
         if name in exclude_ids:
             continue
 
+        # Filter out the reserved no-persona name from disk files.
+        # no-persona can only originate from the hardcoded sentinel — never from a
+        # disk file — so that a no-persona.md in any layer cannot collide with the
+        # sentinel and produce a duplicate (or a non-null body_path) draw.
+        if name == _NO_PERSONA_NAME:
+            continue
+
         fm = winner.get("_fm", {})
+
+        # boring-anchor bypasses compatible_roles and contract checks (multi-role/any).
+        if name == _BORING_ANCHOR_NAME:
+            result.append(winner)
+            continue
 
         # compatible_roles filter: if omitted, persona is universal (compatible with any role).
         compatible_roles = fm.get("compatible_roles")
@@ -1332,15 +1350,33 @@ def _resolve_boring_anchor() -> dict:
 # T004: random-for-role subcommand
 # ---------------------------------------------------------------------------
 
+# Reserved sentinel for the no-persona (null/vanilla) baseline arm.
+# This is a hardcoded entry — it has no persona file on disk.
+_NO_PERSONA_NAME = "no-persona"
+
+# Sentinel dict used as a virtual candidate entry for no-persona.
+# path is None (no file on disk); _fm is empty (no contract, no roles filter).
+_NO_PERSONA_SENTINEL: dict = {
+    "name": _NO_PERSONA_NAME,
+    "source_layer": "builtin",
+    "path": None,
+    "_fm": {},
+}
+
+
 def cmd_random_for_role(args: list[str]) -> None:
     """
     random-for-role <role> [--exclude=<id,...>] [--seed=<s>]
 
     Enumerate personas compatible with <role> across all layers (applying layer
-    precedence and shadow rules), exclude boring-anchor and any --exclude ids,
-    draw uniformly using seeded random (reproducible when --seed given), compute
-    a draw_id, emit persona_random_selected, and print resolve-shaped JSON with
-    selection metadata.
+    precedence and shadow rules), apply --exclude filtering, add the no-persona
+    sentinel (T102), draw uniformly using seeded random (reproducible when --seed
+    given), compute a draw_id, emit persona_random_selected, and print
+    resolve-shaped JSON with selection metadata.
+
+    boring-anchor is now included in the random pool (T102 amendment).
+    no-persona is a reserved sentinel with no file on disk — draws it return
+    persona_body_path=null.
 
     Empty pool → return boring-anchor tagged selection_source=fallback_empty_pool.
     Never crashes.
@@ -1378,8 +1414,13 @@ def cmd_random_for_role(args: list[str]) -> None:
             print(f"[personas] unknown flag {arg!r}", file=sys.stderr)
             sys.exit(2)
 
-    # Build the candidate pool.
+    # Build the candidate pool from real personas (boring-anchor now included).
     candidates = _enumerate_role_compatible_personas(role, exclude_ids)
+
+    # Add the no-persona sentinel unless explicitly excluded.
+    if _NO_PERSONA_NAME not in exclude_ids:
+        candidates = [_NO_PERSONA_SENTINEL] + candidates
+
     candidate_ids = [c["name"] for c in candidates]
 
     draw_id = _make_draw_id(role)
@@ -1416,7 +1457,8 @@ def cmd_random_for_role(args: list[str]) -> None:
     _emit_persona_random_selected(role, selected_name, candidate_ids, draw_id, selection_source)
 
     # Build resolve-shaped output.
-    body_path = winner_entry.get("path")
+    # no-persona has no file on disk — persona_body_path is null.
+    body_path = winner_entry.get("path")  # None for no-persona sentinel
     output = {
         "persona": selected_name,
         "model": None,
@@ -1436,21 +1478,49 @@ def cmd_random_for_role(args: list[str]) -> None:
 
 def cmd_forced_control(args: list[str]) -> None:
     """
-    forced-control <role>
+    forced-control <role> [--arm=<boring-anchor|no-persona>]
 
-    Return the boring-anchor resolved object tagged selection_source=forced_control.
+    Return the forced-control resolved object tagged selection_source=forced_control.
     Used on the control cadence (every Nth implementer attempt per repo) instead
-    of random-for-role. Always uses boring-anchor regardless of role; role is
-    validated for consistency but does not affect persona selection.
+    of random-for-role. Role is validated for consistency but does not affect
+    persona selection.
+
+    --arm=boring-anchor (default, back-compat): returns boring-anchor resolved object.
+    --arm=no-persona: returns no-persona sentinel (persona_body_path=null,
+        persona_id="no-persona"), same forced_control tag and draw event.
 
     Output JSON shape is identical to random-for-role output (resolve-shape +
     selection_source + draw_id + candidates).
     """
-    if len(args) != 1:
-        print("usage: resolve-persona.py forced-control <role>", file=sys.stderr)
+    # Parse args: role is positional, --arm= is optional.
+    role: Optional[str] = None
+    arm = "boring-anchor"  # default — back-compat
+
+    for arg in args:
+        if arg.startswith("--arm="):
+            arm = arg[len("--arm="):]
+        elif arg.startswith("--"):
+            print(f"[personas] unknown flag {arg!r}", file=sys.stderr)
+            sys.exit(2)
+        elif role is None:
+            role = arg
+        else:
+            print("usage: resolve-persona.py forced-control <role> [--arm=<boring-anchor|no-persona>]",
+                  file=sys.stderr)
+            sys.exit(2)
+
+    if role is None:
+        print("usage: resolve-persona.py forced-control <role> [--arm=<boring-anchor|no-persona>]",
+              file=sys.stderr)
         sys.exit(2)
 
-    role = args[0]
+    valid_arms = {"boring-anchor", "no-persona"}
+    if arm not in valid_arms:
+        print(
+            f"[personas] unknown --arm value {arm!r}. Valid values: {sorted(valid_arms)}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     # Validate role is known — keeps interface consistent with random-for-role.
     if role not in _ROLE_REGISTRY:
@@ -1463,22 +1533,37 @@ def cmd_forced_control(args: list[str]) -> None:
     draw_id = _make_draw_id(role)
     selection_source = "forced_control"
 
-    base = _resolve_boring_anchor()
+    if arm == "no-persona":
+        # no-persona sentinel: no file on disk, persona_body_path=null.
+        selected_name = _NO_PERSONA_NAME
+        output = {
+            "persona": selected_name,
+            "model": None,
+            "runtime": None,
+            "source": _SOURCE_NONE,
+            "persona_body_path": None,
+            "selection_source": selection_source,
+            "draw_id": draw_id,
+            "candidates": [],
+        }
+    else:
+        # boring-anchor arm (default / back-compat).
+        selected_name = _BORING_ANCHOR_NAME
+        base = _resolve_boring_anchor()
+        output = {
+            **base,
+            "selection_source": selection_source,
+            "draw_id": draw_id,
+            "candidates": [],
+        }
 
     # Emit a draw event before returning, mirroring random-for-role's
     # persona_random_selected emission. Without this a forced-control attempt
     # would have no draw row and could not be joined to its
-    # persona_attempt_outcome row in analysis. The control persona is always
-    # boring-anchor; candidates is empty by definition (control is not a draw
-    # from the random pool).
-    _emit_persona_random_selected(role, base["persona"], [], draw_id, selection_source)
+    # persona_attempt_outcome row in analysis. Candidates is empty by
+    # definition (control is not a draw from the random pool).
+    _emit_persona_random_selected(role, selected_name, [], draw_id, selection_source)
 
-    output = {
-        **base,
-        "selection_source": selection_source,
-        "draw_id": draw_id,
-        "candidates": [],
-    }
     print(json.dumps(output))
 
 

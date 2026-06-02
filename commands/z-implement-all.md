@@ -461,7 +461,17 @@ export Z_HARNESS_RUN_ID="$RUN"
      CONTROL_EVERY_N="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get experiment.control_every_n 2>/dev/null || echo 5)"
      CONTROL_COUNT="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-persona.py" control-counter --increment)"
      if [ "$CONTROL_EVERY_N" -gt 0 ] && [ $(( CONTROL_COUNT % CONTROL_EVERY_N )) -eq 0 ]; then
-       DRAW_JSON="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-persona.py" forced-control implementer)"
+       # Compute the floor-hit parity arm: alternate boring-anchor and no-persona
+       # across consecutive forced-control hits (T106). Floor-hit index =
+       # CONTROL_COUNT / CONTROL_EVERY_N (integer division); even index →
+       # boring-anchor, odd index → no-persona.
+       FLOOR_HIT_INDEX=$(( CONTROL_COUNT / CONTROL_EVERY_N ))
+       if [ $(( FLOOR_HIT_INDEX % 2 )) -eq 0 ]; then
+         FORCED_ARM="boring-anchor"
+       else
+         FORCED_ARM="no-persona"
+       fi
+       DRAW_JSON="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-persona.py" forced-control implementer --arm="$FORCED_ARM")"
      else
        # On RETRY (CYCLE >= 2), exclude the prior attempt's persona to force diversity.
        EXCLUDE_ARG=""
@@ -490,7 +500,22 @@ export Z_HARNESS_RUN_ID="$RUN"
    fi   # end of the `if [ "$REUSE" -eq 0 ]` fresh-draw block opened in sub-step 2
    ```
 
-4. **Build the persona prefix and retain attribution.** From the recorded (or reused) `persona_body_path`, read the persona body — strip YAML frontmatter (everything after the closing `---`) exactly as `runtime/dispatch/persona_prompt.py:prepend_persona` does — and set `PERSONA_PREFIX` to `<body>.rstrip() + "\n\n"`. If `persona_body_path` is null/empty (e.g. `fallback_empty_pool` could not locate the boring-anchor file), `PERSONA_PREFIX` is empty. Retain the attribution in shell vars `PERSONA_ID` (= the file's `persona_id`), `DRAW_ID` (= `draw_id`), and `SELECTION_SOURCE` (= `selection_source`) for the `persona_attempt_outcome` event in step 8 — read them from `$DRAW_FILE` whether this was a reuse or a fresh draw so the same vars are populated on both paths.
+4. **Build the persona prefix and retain attribution.** From the recorded (or reused) `persona_body_path`, read the persona body — strip YAML frontmatter (everything after the closing `---`) exactly as `runtime/dispatch/persona_prompt.py:prepend_persona` does — and set `PERSONA_PREFIX` to `<body>.rstrip() + "\n\n"`. If `persona_id` is `"no-persona"` OR `persona_body_path` is null/empty (e.g. `no-persona` sentinel draw, or `fallback_empty_pool` could not locate the boring-anchor file), `PERSONA_PREFIX` is empty (vanilla implementer — no prefix prepended). The no-persona arm is a TRACKED baseline: draw event + `persona_attempt_outcome` are still emitted as normal; the ONLY difference is the empty prefix. Retain the attribution in shell vars `PERSONA_ID` (= the file's `persona_id`), `DRAW_ID` (= `draw_id`), and `SELECTION_SOURCE` (= `selection_source`) for the `persona_attempt_outcome` event in step 8 — read them from `$DRAW_FILE` whether this was a reuse or a fresh draw so the same vars are populated on both paths.
+
+   ```bash
+   PERSONA_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("persona_id",""))' "$DRAW_FILE" 2>/dev/null || echo "")"
+   DRAW_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("draw_id",""))' "$DRAW_FILE" 2>/dev/null || echo "")"
+   SELECTION_SOURCE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("selection_source",""))' "$DRAW_FILE" 2>/dev/null || echo "")"
+   PERSONA_BODY_PATH="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("persona_body_path",""))' "$DRAW_FILE" 2>/dev/null || echo "")"
+   PERSONA_PREFIX=""
+   # no-persona is a tracked baseline arm: empty prefix, but draw event + outcome event still fire.
+   if [ "$PERSONA_ID" != "no-persona" ] && [ -n "$PERSONA_BODY_PATH" ] && [ -f "$PERSONA_BODY_PATH" ]; then
+     PERSONA_PREFIX="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/runtime/dispatch/persona_prompt.py" "$PERSONA_BODY_PATH" "" 2>/dev/null | head -c 4096 || true)"
+     [ -n "$PERSONA_PREFIX" ] && PERSONA_PREFIX="${PERSONA_PREFIX}
+
+"
+   fi
+   ```
 
 5. **(Both paths) Define the terminal-outcome emitter** now that the attribution vars (`PERSONA_ID` / `DRAW_ID` / `SELECTION_SOURCE` / `ATTEMPT_ID`) are populated and in scope for every downstream terminal path (step 5 rollback, step 7 halt, step 7b test-failure, step 8 success). The function `emit_persona_outcome <status>` builds the `persona_attempt_outcome` payload with `python3 … json.dumps` (NOT `printf`, so quotes/backslashes in any field can't malform the JSON), is a no-op when the knob is off, and is idempotent within an attempt so exactly one row is emitted regardless of which terminal path closes the attempt. Its full body is given in **step 8 sub-step 3a** — define it here, call it at each terminal path.
 
