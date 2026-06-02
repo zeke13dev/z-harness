@@ -1,7 +1,7 @@
 {
   "concept": "skills",
   "last_updated": "2026-06-02",
-  "covers_spec": "registry-lifecycle-impl/20260601",
+  "covers_spec": "none",
   "source_file": [
     "skills/z-amend/SKILL.md",
     "skills/z-audit-plan/SKILL.md",
@@ -23,14 +23,7 @@
     "skills/z-suggest-memory/SKILL.md",
     "skills/z-test/SKILL.md",
     "skills/z-update/SKILL.md",
-    "skills/z-uplift/SKILL.md",
-    "skills/z-where/SKILL.md",
-    "commands/z-audit.md",
-    "commands/z-audit-plan-style.md",
-    "commands/z-fix.md",
-    "commands/z-skill-fix.md",
-    "commands/z-overnight.md",
-    "skills/z-overnight/SKILL.md"
+    "skills/z-uplift/SKILL.md"
   ],
   "confidence": "high",
   "entry_points": [
@@ -49,60 +42,18 @@
       "summary": "Read-only plan audit; route when no plan, changes, or doc drift."
     },
     {
-      "file": "skills/z-audit-plan-style/SKILL.md",
-      "line": 1,
-      "symbol": "z-audit-plan-style",
-      "kind": "module",
-      "summary": "Plan style audit pre-implementation; dispatches plan-style-reviewer; PLAN_STYLE_AUDIT.md; hard STYLE.md gate; no --no-style escape."
-    },
-    {
       "file": "skills/z-brainstorm/SKILL.md",
       "line": 1,
       "symbol": "z-brainstorm",
       "kind": "module",
-      "summary": "Three-ideator pre-plan brainstorm; mandatory anti-bias check; slug-confirm resolver (skip/prefill/ask/conflict/halt) after hard collision check; halt emits brainstorm_halt."
+      "summary": "Three-ideator pre-plan brainstorm; Phase 2a draws up to 3 distinct ideator personas (brainstorm.personas knob, default ON); persona_bound events emitted per bound ideator; ideator_personas frontmatter; mandatory anti-bias check; slug-confirm resolver (skip/prefill/ask/conflict/halt) after hard collision check; halt emits brainstorm_halt."
     },
     {
       "file": "skills/z-debug/SKILL.md",
       "line": 1,
       "symbol": "z-debug",
       "kind": "module",
-      "summary": "Unknown-root-cause debug flow; Phase 2.5 conditional bisect fast-path; hypothesis rounds; posterior table; MR-review on fix; post-mortem; Phase 10 memory-review (shipped branch only); slug-confirm resolver (halt→debug_halt) in Setup; active-plan registration in Setup after debug_run_start; FINALIZE_STATUS rule covers all exit paths."
-    },
-    {
-      "file": "commands/z-audit.md",
-      "line": 1,
-      "symbol": "z-audit",
-      "kind": "module",
-      "summary": "Read-only component audit; parallel auditor subagents per dimension; bundled consult; REPORT.md + TASKS.md for /z-implement-all."
-    },
-    {
-      "file": "commands/z-audit-plan-style.md",
-      "line": 1,
-      "symbol": "z-audit-plan-style (command)",
-      "kind": "module",
-      "summary": "Authoritative pipeline for plan-style auditing; STYLE.md hard gate; dismissal-extraction loop; plan-style-reviewer agent fanout; PLAN_STYLE_AUDIT.md with T-PS-NNN IDs."
-    },
-    {
-      "file": "commands/z-fix.md",
-      "line": 1,
-      "symbol": "z-fix",
-      "kind": "module",
-      "summary": "Fast-path fix for known-diagnosis bugs; Phase 0 wrong-tool gate; light-fix consult; inline implementation; Codex review; optional post-mortem; slug-confirm resolver in Setup."
-    },
-    {
-      "file": "commands/z-skill-fix.md",
-      "line": 1,
-      "symbol": "z-skill-fix",
-      "kind": "module",
-      "summary": "Meta-skill for patching misleading SKILL.md/command/agent files; diagnosis note; surgical edit; reviewer safety gate."
-    },
-    {
-      "file": "commands/z-overnight.md",
-      "line": 1,
-      "symbol": "z-overnight",
-      "kind": "module",
-      "summary": "Overnight chain orchestrator: runs comma/arrow-separated sub-command pipeline unattended with Z_HARNESS_NO_ASK=halt carve-out, heartbeat lock, overnight-state.json, MORNING_REPORT.md, resume support, preflight slug-collision check, and push-notify on halt or completion."
+      "summary": "Unknown-root-cause debug flow; Phase 2.5 conditional bisect fast-path; Phase 3a/3b use fixed 5-panel (agy/claude-sonnet/grok/composer/codex) when experiment.persona_rotation=true; personas.critique_panel gates per-arm persona draws; falls back to 2-consultant when false; hypothesis rounds; posterior table; MR-review on fix; post-mortem; Phase 10 memory-review (shipped branch only); slug-confirm resolver (halt→debug_halt) in Setup; active-plan registration in Setup after debug_run_start; FINALIZE_STATUS rule covers all exit paths."
     },
     {
       "file": "skills/z-do/SKILL.md",
@@ -158,7 +109,7 @@
       "line": 1,
       "symbol": "z-plan-light",
       "kind": "module",
-      "summary": "Small-fix planner; FIX.md only; inline implementation; reviewer gate; active-plan registration in Setup after light_run_start; FINALIZE_STATUS rule; slug-confirm resolver (halt→light_halt) in Setup."
+      "summary": "Small-fix planner; FIX.md only; Phase 3 gains measured advisory arm (personas.consult_eval, default OFF): one consultant persona drawn, dispatched in parallel with neutral arms, output captured as persona_advisory_recommendation telemetry only (never merged into Phase 4 synthesis, neutral-authority contract load-bearing); Phase 8 gains advisory eval-reviewer arm (personas.review_eval, default ON) per shared snippet in commands/z-implement-all.md; base codex reviewer remains authoritative gate; inline implementation; reviewer gate; active-plan registration in Setup after light_run_start; FINALIZE_STATUS rule; slug-confirm resolver (halt→light_halt) in Setup."
     },
     {
       "file": "skills/z-plan-split/SKILL.md",
@@ -172,7 +123,7 @@
       "line": 1,
       "symbol": "z-plan",
       "kind": "module",
-      "summary": "Full planner; active-plan registration in Setup immediately after run_start; config.py export-env at Setup step 4a; should-notify guards on PushNotifications; docs-freshness gate; consult; SPEC/PLAN/TASKS; parallel complexity-classifier; scope-extractor seed after TASKS.md finalized; heartbeat at Phase 8 boundary."
+      "summary": "Full planner; active-plan registration in Setup immediately after run_start; config.py export-env at Setup step 4a; should-notify guards on PushNotifications; docs-freshness gate; consult; SPEC/PLAN/TASKS; Phase 3 + Phase 7 each use fixed 5-panel (agy/claude-sonnet/grok/composer/codex) when experiment.persona_rotation=true, with independent persona draws per phase gated by personas.critique_panel; parallel complexity-classifier; scope-extractor seed after TASKS.md finalized; heartbeat at Phase 8 boundary."
     },
     {
       "file": "skills/z-research/SKILL.md",
@@ -222,13 +173,6 @@
       "symbol": "z-uplift",
       "kind": "module",
       "summary": "Bulk codebase quality uplift: decompose into components, cross-cutting pass, parallel auditor subagents, sequential z-implement-all."
-    },
-    {
-      "file": "skills/z-where/SKILL.md",
-      "line": 1,
-      "symbol": "z-where",
-      "kind": "module",
-      "summary": "Read-only registry diagnostic; Phase 0 prints base+repo-id header; Phase 1 renders live active-plan table (slug, command, phase, branch, current_task, age, status; stale if last_heartbeat >30min); Phase 2 optional overlap check via --run-id or Z_HARNESS_RUN_ID (OVL_RC 0/10/20). No writes, no LLM calls, no subagent dispatch."
     }
   ],
   "depends_on": [
@@ -275,14 +219,6 @@
     "z-fix Phase 0 wrong-tool gate is non-skippable even if $ARGUMENTS is non-empty; a symptom description is not a hypothesis.",
     "z-fix inline implementation self-check mirrors the implementer subagent checklist; main thread applies edits directly for 1-5 file changes.",
     "z-fix mid-implementation scope growth triggers an unconditional halt and escalation.md write; no continue or subagent spawn.",
-    "z-audit is read-only; it never edits the target; fixes happen later via /z-implement-all consuming the emitted TASKS.md.",
-    "z-audit Phase 4 cross-LLM consult (both Gemini and Codex in parallel) is non-skippable.",
-    "z-audit Phase 6 Codex reviewer safety gate on the produced TASKS.md is non-skippable.",
-    "z-audit-plan-style STYLE.md gate is non-skippable; no --no-style flag exists; missing STYLE.md causes immediate exit recommending /z-style-init.",
-    "z-audit-plan-style is read-only; PLAN_STYLE_AUDIT.md findings are shaped for /z-amend promotion; correctness findings belong to /z-audit-plan.",
-    "z-audit-plan-style archives any existing PLAN_STYLE_AUDIT.md before overwriting to power the dismissal-extraction loop.",
-    "z-skill-fix Codex reviewer safety gate on every patched skill file is non-skippable.",
-    "z-skill-fix never auto-commits; commit decision is always delegated to the user.",
     "z-debug Phase 2.5 bisect fast-path never blocks the pipeline; refused/failed/bisect_unusable all fall through to Phase 3a.",
     "z-debug bisect offending SHA does not pre-fill the winning hypothesis; fix-gate still requires full posterior + evidence-coverage convergence.",
     "Before any git reset --hard, commit --amend, or interactive-rebase squash on a tracked branch, run git branch -r --contains <sha>; STOP if upstream ref appears.",
@@ -304,12 +240,15 @@
     "Heartbeat calls use || true and must never block task dispatch on a registry error (best-effort, non-fatal); the CLI self-logs registry_error on internal failure.",
     "z-where does not emit start/end telemetry events for itself; it is read-only against the registry and never writes.",
     "z-stats Phase 0b always prints the resolved base + repo-id + active-plan count header unconditionally (not gated behind Z_HARNESS_EXPLAIN_RESOLUTION).",
-    "z-implement-next execution order is Phase 0.2 (slug-discovery, binds $BASE) → Phase 0.0 (register) → Phase 0.1 (lock-check); the document order differs from the execution order."
+    "z-implement-next execution order is Phase 0.2 (slug-discovery, binds $BASE) → Phase 0.0 (register) → Phase 0.1 (lock-check); the document order differs from the execution order.",
+    "Persona behavior (brainstorm.personas, experiment.persona_rotation, personas.critique_panel, personas.consult_eval, personas.review_eval) degrades gracefully — knob OFF or resolve-persona.py underflow leaves each arm's prompt byte-identical to the pre-persona baseline; no arm is skipped.",
+    "z-brainstorm persona draw (Phase 2a) uses brainstorm.personas knob; draws up to 3 distinct ideator personas; ideator_personas frontmatter map records per-ideator persona_id or <none>; persona_bound events emitted per bound ideator.",
+    "z-debug Phases 3a and 3b share the same persona draw (same persona_id and draw_id in persona_bound events for phase 3b); z-plan Phase 3 and Phase 7 use independent draws.",
+    "z-plan-light neutral-authority contract: the advisory arm (personas.consult_eval) output is captured as persona_advisory_recommendation telemetry only; no prose path in Phase 4 may read it into the final synthesis.",
+    "z-plan-light advisory eval-reviewer (personas.review_eval) is defined by the canonical shared snippet in commands/z-implement-all.md (HTML anchor ADVISORY-EVAL-REVIEWER); the base codex reviewer's blockers/majors counts remain the sole authoritative gate."
   ],
   "gotchas": [
     "z-audit-plan cannot run without SPEC/PLAN/TASKS; no-plan routes to z-plan.",
-    "z-audit-plan-style has a hard STYLE.md gate with no --no-style override; this differs from z-uplift which accepts --no-style for degraded mode.",
-    "z-audit-plan-style emits PLAN_STYLE_AUDIT.md (separate from PLAN_AUDIT_REPORT.md produced by z-audit-plan); findings have T-PS-NNN IDs.",
     "z-do may not route directly to z-plan-split.",
     "z-do skips doc-fetcher entirely when Z_HARNESS_DOCS_ALWAYS_APPLY=never (config knob).",
     "Route chains cap at two entries and block ping-pong to the prior command.",
@@ -347,11 +286,6 @@
     "z-fix hard inline implementation limit is 7 files; halt unconditionally at that threshold regardless of FIX.md scope.",
     "z-fix REVIEW_CYCLES counter gates the optional post-mortem default: default=NO when <=1, default=YES when >1.",
     "z-fix does NOT auto-trigger MR-review; run /z-mr-review separately if needed.",
-    "z-audit auto-bail thresholds are >30 total findings OR >10 CRITICAL/HIGH findings post-consult; check after Phase 4.",
-    "z-audit escalation writes escalation.md and recommends /z-plan; no TASKS.md is generated on bail.",
-    "z-audit TASKS.md must include a minimal SPEC.md and PLAN.md for /z-implement-all to resolve context.",
-    "z-skill-fix only patches skill/command/agent files; bugs in repo code, missing CLAUDE.md conventions, and policy disputes are out of scope.",
-    "z-skill-fix never weakens a gate or pushback rule even if the gate was inconvenient in a specific case.",
     "config.py export-env is only invoked in z-do and z-plan; z-implement-all, z-review-all, and z-debug still reference Z_HARNESS_NOTIFY_LEVEL directly with a default fallback — they have not yet been updated to use export-env.",
     "should-notify --event <type> accepts approval, error, and phase_end event types; hard-pause notifications bypass this check entirely.",
     "Slug-confirm resolver now has a halt result in addition to skip/prefill/ask/conflict. halt means Z_HARNESS_NO_ASK=halt is blocking the question; each skill emits its own halt event without calling AskUserQuestion.",
@@ -365,9 +299,14 @@
     "The scope-extractor subagent (Haiku) is best-effort: update-scope returns 0 by design and self-logs registry_error on internal failure; orchestrators call it with || true and do NOT add a || log after it (that would be dead code).",
     "Heartbeat subcommand also returns 0 by design and self-logs registry_error on internal failure; orchestrators call it with || true and must not add a misleading || log after it.",
     "z-implement-all Phase 0.0 must run INSIDE Setup, immediately after Setup step 3 binds $BASE — after all slug-discovery and tree-validation gates. Early-exit gates (tree_depth_exceeded, shared_concerns_missing, etc.) that fire before Phase 0.0 leave no registry record to clean up.",
-    "z-where Phase 2 overlap check exit codes: 0=none, 10=advisory (display human-readable output), 20=blocking (prepend [BLOCKING] to header), any other nonzero=registry error (display error message).",
-    "z-where staleness threshold for active-plan records is 30 minutes since last_heartbeat; records older than that display as 'stale' regardless of status field.",
-    "z-stats Phase 0b active-plan count falls back to '(registry unavailable)' if the registry call fails or returns empty; this is a display-only field and never fails the command."
+    "z-stats Phase 0b active-plan count falls back to '(registry unavailable)' if the registry call fails or returns empty; this is a display-only field and never fails the command.",
+    "z-brainstorm persona draw uses resolve-persona.py random-distinct-for-role ideator --count=3; underflow (pool has < 3 members) returns a shorter array — unfilled slots run vanilla, no error; the ideator_personas frontmatter map records <none> for those slots. When brainstorm.personas knob is OFF, the draw is skipped entirely and persona_bound events are not emitted.",
+    "z-debug and z-plan fixed 5-panel arms: agy (gemini), cursor@claude-4.6-sonnet, cursor@grok-4.3, cursor@composer-2.5, codex-cli. When experiment.persona_rotation=false, the skill falls back to the 2-consultant dispatch (consultant-primary + consultant-secondary) with no persona draws.",
+    "z-debug Phases 3a and 3b share the same persona prefix strings — the Phase 3a draw is reused in 3b; a separate draw call is not made for 3b.",
+    "z-plan Phase 3 and Phase 7 are independent draws: P3_*_PREFIX variables are scoped to Phase 3; P7_*_PREFIX variables are drawn fresh for Phase 7. Do not reuse Phase 3 draw in Phase 7.",
+    "z-plan-light advisory arm (personas.consult_eval): ADVISORY_PERSONA_NAME empty or knob false → skip the advisory arm entirely; the Phase 3 dispatch is byte-identical to the pre-feature two-arm neutral consult. No draw event, no prefix, no persona_bound, no persona_advisory_recommendation.",
+    "z-plan-light advisory eval-reviewer (personas.review_eval): do not copy the advisory arm bash inline; follow the canonical shared snippet in commands/z-implement-all.md verbatim. The base codex reviewer's verdict drives all re-edit/halt decisions; the advisory arm's verdict is logged for data collection only.",
+    "persona_bound events carry selection_source: random_role_pool_distinct (drawn persona) or fixed_panel (vanilla slot); in z-plan-light advisory arm they carry selection_source: random_role_pool."
   ],
   "memories": []
 }

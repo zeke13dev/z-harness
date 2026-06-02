@@ -55,7 +55,7 @@
       "line": 1,
       "symbol": "z-audit",
       "kind": "module",
-      "summary": "Read-only multi-dimension audits; Phase 0 scope probe (LIGHT/MEDIUM/HEAVY) with single-file fast-path; --scope-from for HEAVY sub-flow fan-out. Active-plan registry lifecycle: register after slug derivation, seed scope, overlap scan, deregister on completion or abort (FINALIZE_STATUS rule)."
+      "summary": "Read-only multi-dimension audits; Phase 0 scope probe (LIGHT/MEDIUM/HEAVY) with single-file fast-path; --scope-from for HEAVY sub-flow fan-out. Phase 2a draws up to 4 distinct audit_persona personas (personas.audit, default ON). Phase 4a measured advisory consult arm (personas.consult_eval, default OFF): advisory only, logged under persona_advisory_recommendation, never merged into synthesis. Active-plan registry lifecycle: register after slug derivation, seed scope, overlap scan, deregister (FINALIZE_STATUS rule)."
     },
     {
       "file": "commands/z-audit-plan.md",
@@ -76,21 +76,21 @@
       "line": 1,
       "symbol": "z-brainstorm",
       "kind": "module",
-      "summary": "Seeds planning with parallel ideation and anti-bias checks. Phase 0 scope probe (LIGHT/MEDIUM/HEAVY) with single-file fast-path (scope_probe_skipped_fast_path); per_vendor/per_framing axis taxonomy. HEAVY Phase 4 presents a (chunk x framing) selection matrix."
+      "summary": "Seeds planning with parallel ideation and anti-bias checks. Phase 0 scope probe (LIGHT/MEDIUM/HEAVY) with single-file fast-path (scope_probe_skipped_fast_path); per_vendor/per_framing axis taxonomy. HEAVY Phase 4 presents a (chunk x framing) selection matrix. Phase 2a draws 3 distinct ideator personas (brainstorm.personas, default ON): one per ideator (claude/codex/gemini), persona diversity layered on top of vendor diversity; knob OFF is a complete no-op (byte-identical dispatch)."
     },
     {
       "file": "commands/z-debug.md",
       "line": 1,
       "symbol": "z-debug",
       "kind": "module",
-      "summary": "Runs heavy hypothesis-tournament debugging with post-mortem and Phase 10 memory review (shipped branch only); sequential AskUser loop capped at 3 candidates; emits memory_review_terminal. Active-plan registry lifecycle: registers in Setup, deregisters on all exit paths (FINALIZE_STATUS rule). When experiment.persona_rotation=true, Phases 3a/3b/7 use fixed 5-panel (agy, cursor@claude-4.6-sonnet, cursor@grok-4.3, cursor@composer-2.5, codex-cli) instead of 2-consultant path; each arm logs persona_bound with selection_source=fixed_panel."
+      "summary": "Runs heavy hypothesis-tournament debugging with post-mortem and Phase 10 memory review (shipped branch only); sequential AskUser loop capped at 3 candidates; emits memory_review_terminal. Active-plan registry lifecycle: registers in Setup, deregisters on all exit paths (FINALIZE_STATUS rule). When experiment.persona_rotation=true, Phases 3a/3b/7 use fixed 5-panel (agy, cursor@claude-4.6-sonnet, cursor@grok-4.3, cursor@composer-2.5, codex-cli) instead of 2-consultant path; Phases 3a/3b additionally draw distinct consultant personas per arm when personas.critique_panel=true (same draw reused at 3b); Phase 7 fix-consult uses fixed 5-panel with selection_source=fixed_panel for all arms — no persona prefix draw by design."
     },
     {
       "file": "commands/z-do.md",
       "line": 1,
       "symbol": "z-do",
       "kind": "module",
-      "summary": "Executes tiny plan-free changes with review gates. Calls config.py export-env during Setup; guards notifications via should-notify wrappers. Doc-fetcher dispatch gated on Z_HARNESS_DOCS_ALWAYS_APPLY (skipped when=never, Phase 2). Active-plan registry lifecycle: registers after do_run_start, seeds scope, runs overlap scan, deregisters on completion or abort (FINALIZE_STATUS rule)."
+      "summary": "Executes tiny plan-free changes with review gates. Calls config.py export-env during Setup; guards notifications via should-notify wrappers. Doc-fetcher dispatch gated on Z_HARNESS_DOCS_ALWAYS_APPLY (skipped when=never, Phase 2). Active-plan registry lifecycle: registers after do_run_start, seeds scope, runs overlap scan, deregisters on completion or abort (FINALIZE_STATUS rule). Advisory eval-reviewer at Codex gate (personas.review_eval, default ON) per shared snippet in commands/z-implement-all.md."
     },
     {
       "file": "commands/z-export.md",
@@ -104,7 +104,7 @@
       "line": 1,
       "symbol": "z-fix",
       "kind": "module",
-      "summary": "Ships diagnosed bug fixes with consult and Codex review; slug-confirm resolver gate (workflow.slug_confirm) after hard collision check; check-no-ask halt branch emitting fix_halt."
+      "summary": "Ships diagnosed bug fixes with consult and Codex review; slug-confirm resolver gate (workflow.slug_confirm) after hard collision check; check-no-ask halt branch emitting fix_halt. Advisory eval-reviewer at Codex gate (personas.review_eval, default ON) per shared snippet in commands/z-implement-all.md."
     },
     {
       "file": "commands/z-followup-confirm.md",
@@ -153,14 +153,14 @@
       "line": 1,
       "symbol": "z-implement-all",
       "kind": "module",
-      "summary": "Orchestrates task queues with fresh subagents, reviewers, and auto memory review (Phase 9). Phase 0.0 active-plan registry: registers after structural validation (after Setup steps 1-2b-3), seeds scope via scope-extractor, runs graduated overlap scan (OVL_RC 0/10/20/other), sends heartbeats, deregisters via FINALIZE_STATUS rule. Phase 0.1 consumer check: halts with implement_halted_followup_running if project sink has status=running entries (dict-safe parse). N=2 cross-cluster parallel dispatch when overlap_count==0; cycle-2 skip-on-clean-cycle-1; check-no-ask halt branch on second review failure emitting task_halt+implement_end (workflow.implement_all_proceed); Phase 9 emits memory_review_complete — no in-phase AskUser loop. Step 5.0 persona-rotation block (gated on experiment.persona_rotation): random-for-role implementer draw (or forced-control on Nth cadence), persona-draw.json state, PERSONA_PREFIX prepended to prompt, dual reviewer (base_codex + random_arm advisory). Emits persona_attempt_outcome at attempt close. Step 6 reviewer gate and Step 7a retry reviewer gate are consult-aware: when resolve-provider.py reviewer returns none (Z_HARNESS_CONSULT=off), skips external codex-reviewer and dispatches self-reviewer subagent (agents/self-reviewer.md, read-only, Opus), emitting no_consult_dispatch + self_review_completed per task-cycle; consult=on path unchanged."
+      "summary": "Orchestrates task queues with fresh subagents, reviewers, and auto memory review (Phase 9). Phase 0.0 active-plan registry: registers after structural validation (after Setup steps 1-2b-3), seeds scope via scope-extractor, runs graduated overlap scan (OVL_RC 0/10/20/other), sends heartbeats, deregisters via FINALIZE_STATUS rule. Phase 0.1 consumer check: halts with implement_halted_followup_running if project sink has status=running entries (dict-safe parse). N=2 cross-cluster parallel dispatch when overlap_count==0; cycle-2 skip-on-clean-cycle-1; check-no-ask halt branch on second review failure emitting task_halt+implement_end (workflow.implement_all_proceed); Phase 9 emits memory_review_complete — no in-phase AskUser loop. Step 5.0 persona-rotation block (gated on experiment.persona_rotation): random-for-role implementer draw (or forced-control on Nth cadence), persona-draw.json state, PERSONA_PREFIX prepended to prompt, personas.implementer_retry knob (default 'same': reuse cycle-1 anchor across all cycles; 'new': fresh draw to per-cycle sidecar persona-draw-v<CYCLE>.json, cycle-1 anchor never overwritten). Defines canonical Advisory eval-reviewer shared snippet (<!-- ADVISORY-EVAL-REVIEWER --> anchor). Step 6 reviewer gate and Step 7a retry reviewer gate are consult-aware: when resolve-provider.py reviewer returns none (Z_HARNESS_CONSULT=off), skips external codex-reviewer and dispatches self-reviewer subagent (agents/self-reviewer.md, read-only, Opus), emitting no_consult_dispatch + self_review_completed per task-cycle; consult=on path: dual-reviewer dispatch (base_codex always + advisory random-arm when personas.review_eval=true)."
     },
     {
       "file": "commands/z-implement-next.md",
       "line": 1,
       "symbol": "z-implement-next",
       "kind": "module",
-      "summary": "Implements one pending task with model selection and review. Phase 0.0 active-plan registry (ordering: 0.2 slug discovery -> 0.0 register -> 0.1 consumer check): registers, seeds scope, runs overlap scan, deregisters via FINALIZE_STATUS rule. Phase 0.1 consumer check: halts with implement_halted_followup_running if project sink has status=running entries (dict-safe parse). Phase 2 persona-rotation block mirrors z-implement-all step 5.0 (gated on experiment.persona_rotation): single attempt_id=<task-id>-v1, random-for-role implementer or forced-control, dual reviewer dispatch."
+      "summary": "Implements one pending task with model selection and review. Phase 0.0 active-plan registry (ordering: 0.2 slug discovery -> 0.0 register -> 0.1 consumer check): registers, seeds scope, runs overlap scan, deregisters via FINALIZE_STATUS rule. Phase 0.1 consumer check: halts with implement_halted_followup_running if project sink has status=running entries (dict-safe parse). Phase 2 persona-rotation block mirrors z-implement-all step 5.0 (gated on experiment.persona_rotation): single attempt_id=<task-id>-v1, personas.implementer_retry knob governs retry behavior. Reviewer gate: base codex (authoritative) + advisory random-arm reviewer when personas.review_eval=true."
     },
     {
       "file": "commands/z-improve.md",
@@ -202,7 +202,7 @@
       "line": 1,
       "symbol": "z-plan-light",
       "kind": "module",
-      "summary": "Plans and ships small focused changes via FIX.md."
+      "summary": "Plans and ships small focused changes via FIX.md. Phase 3 measured advisory consult arm (personas.consult_eval, default OFF): one consultant persona drawn in parallel with neutral consultants, advisory only — recommendation logged under persona_advisory_recommendation, never merged into synthesis. Phase 8 advisory eval-reviewer (personas.review_eval, default ON) per shared snippet in commands/z-implement-all.md; base codex reviewer is the authoritative gate."
     },
     {
       "file": "commands/z-plan-split.md",
@@ -216,7 +216,7 @@
       "line": 1,
       "symbol": "z-plan",
       "kind": "module",
-      "summary": "Produces SPEC.md, PLAN.md, TASKS.md. Calls config.py export-env during Setup. Active-plan registry lifecycle: registers immediately after run_start, seeds scope via scope-extractor subagent (Phase 8), sends heartbeat at Phase 8 boundary, deregisters via FINALIZE_STATUS rule. Slug discovery uses all_plan_slugs; slug-confirm resolver gate (workflow.slug_confirm) after hard collision check; check-no-ask halt branches at workflow.slug_confirm and workflow.plan_decisions_approval (both emit plan_halt). Step 9c consolidated freshness gate emits precontext_freshness_acknowledged; proceed-with-stale and abandon set to_command: null in plan_route_decision. Phase 3 and Phase 7 honor Z_HARNESS_CONSULT=off: when resolve-provider.py consultant_primary returns none, all consultant Agent() calls are skipped, tentative decisions recorded as final, consult_skipped event emitted (phase:3 or phase:7). When experiment.persona_rotation=true, Phases 3 and 7 use fixed 5-panel (agy, cursor@claude-4.6-sonnet, cursor@grok-4.3, cursor@composer-2.5, codex-cli) instead of 2-consultant path; selection_source=fixed_panel."
+      "summary": "Produces SPEC.md, PLAN.md, TASKS.md. Calls config.py export-env during Setup. Active-plan registry lifecycle: registers immediately after run_start, seeds scope via scope-extractor subagent (Phase 8), sends heartbeat at Phase 8 boundary, deregisters via FINALIZE_STATUS rule. Slug discovery uses all_plan_slugs; slug-confirm resolver gate (workflow.slug_confirm) after hard collision check; check-no-ask halt branches at workflow.slug_confirm and workflow.plan_decisions_approval (both emit plan_halt). Step 9c consolidated freshness gate emits precontext_freshness_acknowledged; proceed-with-stale and abandon set to_command: null in plan_route_decision. Phase 3 and Phase 7 honor Z_HARNESS_CONSULT=off: when resolve-provider.py consultant_primary returns none, all consultant Agent() calls are skipped, tentative decisions recorded as final, consult_skipped event emitted (phase:3 or phase:7). When experiment.persona_rotation=true, Phases 3 and 7 use fixed 5-panel (agy, cursor@claude-4.6-sonnet, cursor@grok-4.3, cursor@composer-2.5, codex-cli) instead of 2-consultant path; each phase additionally draws distinct consultant personas per arm when personas.critique_panel=true; Phase 3 and Phase 7 draws are independent."
     },
     {
       "file": "commands/z-providers-discover.md",
@@ -331,9 +331,16 @@
     "[registry] z-plan heartbeat fires at Phase 8 boundary (best-effort, non-fatal, || true). z-implement-all heartbeats fire at equivalent implementation phase boundaries.",
     "[registry] z-where is purely read-only: no events, no writes, no LLM calls, no subagent dispatch. Always exits cleanly even when registry is unavailable.",
     "[registry] z-stats Phase 0b reads active-plan count unconditionally (NOT gated behind Z_HARNESS_EXPLAIN_RESOLUTION or any env var). Fallback on registry failure: print 'Active plans: (registry unavailable)' and continue.",
-    "[rotation] When experiment.persona_rotation=true, z-implement-all and z-implement-next each draw one implementer persona per attempt via random-for-role (or forced-control on cadence); dual reviewer (base_codex + random_arm advisory); ONE persona_attempt_outcome per attempt at close.",
+    "[rotation] When experiment.persona_rotation=true, z-implement-all and z-implement-next each draw one implementer persona per attempt via random-for-role (or forced-control on cadence); dual reviewer (base_codex + random_arm advisory when personas.review_eval=true); ONE persona_attempt_outcome per attempt at close.",
+    "[rotation] personas.implementer_retry knob (default 'same'): 'same' reuses cycle-1 persona-draw.json anchor across all cycles of a task — one persona_id per task for lifecycle traceability; 'new' draws a fresh persona excluding the prior one and writes to persona-draw-v<CYCLE>.json sidecar; cycle-1 anchor is NEVER overwritten on retry regardless of knob value.",
     "[rotation] When experiment.persona_rotation=false, all rotation behavior is a complete no-op — no draw events, no state files, no PERSONA_PREFIX, no outcome events, identical behavior to pre-experiment.",
-    "[rotation] z-plan and z-debug use fixed 5-panel (selection_source=fixed_panel) when experiment.persona_rotation=true; no random draw for consultant phases.",
+    "[rotation] z-plan and z-debug use fixed 5-panel (selection_source=fixed_panel) when experiment.persona_rotation=true; no random draw for consultant phases unless personas.critique_panel=true, in which case each arm additionally gets a distinct drawn consultant persona prefix.",
+    "[rotation] z-plan Phases 3 and 7 draw independent persona sets (random-distinct-for-role consultant --count=5) when personas.critique_panel=true. The Phase 3 draw MUST NOT be reused for Phase 7.",
+    "[rotation] z-debug Phases 3a and 3b share the same consultant persona draw (drawn once before Phase 3a, reused at 3b). Phase 7 fix-consult uses fixed_panel for all arms — no persona prefix draw by design.",
+    "[rotation] z-brainstorm Phase 2a draws 3 distinct ideator personas (random-distinct-for-role ideator --count=3) when brainstorm.personas=true (default ON). Knob OFF is a complete no-op: all *_PERSONA_PREFIX stays empty, no draw event, no persona_bound emit, dispatch is byte-identical to pre-feature.",
+    "[rotation] z-audit Phase 2a draws up to 4 distinct audit_persona personas (random-distinct-for-role audit_persona --count=4) when personas.audit=true (default ON). Underflow is graceful: shorter array returned, unfilled slots run vanilla (no persona_bound for unfilled slots).",
+    "[rotation] personas.consult_eval (advisory consult arm, default OFF) applies to z-audit Phase 4a and z-plan-light Phase 3. The advisory arm draws ONE consultant persona, runs in parallel with neutral consultants, and logs its recommendation under persona_advisory_recommendation. Its output is NEVER merged into the neutral synthesis. The neutral consultants' synthesis is the decision of record.",
+    "[rotation] personas.review_eval (advisory eval-reviewer, default ON) applies to z-fix, z-do, z-plan-light, z-implement-all, and z-implement-next. The advisory arm draws ONE reviewer persona, runs in parallel with the base codex reviewer, and its verdict is logged for data-collection only. It NEVER changes pass/fail outcome, NEVER triggers a retry, NEVER surfaces as a blocking finding. The canonical implementation is the shared snippet in commands/z-implement-all.md (<!-- ADVISORY-EVAL-REVIEWER --> anchor).",
     "[rotation] persona_attempt_outcome status field uses 'done' (not 'ok') — aligns with implement_end status values.",
     "[rotation] Random-arm reviewer verdict is advisory only — it must NOT change halt/retry behavior. Only base_codex reviewer determines review outcome.",
     "Long consult-heavy phases use explicit compaction breakpoints or resumable state files where specified.",
@@ -401,8 +408,16 @@
     "[registry] scope-extractor subagent: update-scope returns 0 by design and self-logs registry_error on internal failure. Do NOT add a redundant || log after the call — that would be dead code.",
     "[registry] z-where overlap query exit codes mirror active-plan-registry.py overlaps exit codes (0/10/20/other). z-where renders them as human text but does NOT emit its own telemetry events.",
     "[rotation] persona_attempt_outcome is emitted by the orchestrator at attempt close, not by the implementer subagent. Passes/pauses (needs_clarification, decision_needed, spec_problem) are NOT attempt closes — they resume the same attempt with the same persona.",
-    "[rotation] On retry, the draw is excluded from the previous persona via --exclude so the retry gets a different persona. This is per-spec; the prior persona is not guaranteed to be excluded when the pool is large.",
+    "[rotation] personas.implementer_retry='same' (default): REUSE=1 is set from the cycle-1 anchor persona-draw.json. ATTEMPT_ID changes across cycles but PERSONA_ID/DRAW_ID/PERSONA_PREFIX remain the same. The cycle-1 anchor persona-draw.json is NEVER overwritten on retry.",
+    "[rotation] personas.implementer_retry='new': DRAW_FILE is set to persona-draw-v<CYCLE>.json (per-cycle sidecar). Fresh draw with --exclude of prior persona. The cycle-1 anchor persona-draw.json is NEVER overwritten, regardless of sidecar writes.",
+    "[rotation] On retry, when implementer_retry='new', the draw uses --exclude so the retry gets a different persona. This is per-spec; the prior persona is not guaranteed to be excluded when the pool is large.",
     "[rotation] persona-draw.json check: compare its attempt_id against current attempt_id to detect resume vs retry. File absent = fresh draw; file present with matching attempt_id = resume.",
+    "[rotation] z-debug Phase 7 fix-consult emits selection_source=fixed_panel for all arms even when experiment.persona_rotation=true — there is no persona prefix draw for Phase 7. This is by design (Phase 7 is convergent). Do not attempt to reuse the Phase 3a draw for Phase 7.",
+    "[rotation] z-plan Phases 3 and 7 draws are independent: each phase calls random-distinct-for-role consultant --count=5 separately. The Phase 3 draw result must NOT be forwarded to Phase 7.",
+    "[rotation] personas.consult_eval default is false (OFF). Unlike personas.review_eval which defaults ON, the advisory consult arm in z-audit Phase 4a and z-plan-light Phase 3 must be explicitly enabled. Do not assume it is active.",
+    "[rotation] personas.review_eval advisory arm: canonical implementation is the shared snippet in commands/z-implement-all.md (<!-- ADVISORY-EVAL-REVIEWER --> HTML anchor). z-fix, z-do, and z-plan-light reference it by anchor — do not copy the bash inline. The advisory arm fires ONLY when BOTH experiment.persona_rotation AND personas.review_eval are both true.",
+    "[rotation] brainstorm.personas knob OFF is a true byte-identical no-op for Phase 2b dispatch: all three *_PERSONA_PREFIX vars remain empty strings, no persona_bound event is emitted, no draw is performed. The ideator dispatch is identical to pre-feature behavior.",
+    "[rotation] personas.audit draws use audit_persona role, not consultant. Attempting to pass role=consultant to draw for z-audit's dimension auditors would draw from the wrong pool.",
     "Do not add z-audit-plan as a front-door planning route when no plan exists; route to z-plan instead.",
     "Route chains prevent ping-pong; after two entries or immediate return-to-prior, ask the user to choose.",
     "z-implement-all --tasks derives BASE from the provided tasks file and bypasses normal slug/tree discovery.",
@@ -439,7 +454,7 @@
     "Resolver pre-check for workflow.audit_to_amend is used in BOTH z-audit-plan (Phase 5) and z-audit-plan-style (Phase 5); the same question_id is shared between the two commands.",
     "The hard slug-collision check runs unconditionally before resolve-question in z-plan, z-fix, and z-uplift; a resolver result of 'skip' does NOT bypass the collision check.",
     "z-suggest-memory --kind routing-preference does not prompt interactively; it writes the memory entry directly. All required flags must be passed at invocation — unlike the default interactive path.",
-    "z-plan step 9c to_command: null means the user chose to proceed with stale inputs or abandon — not that a remedy command was selected. /z-stats must not interpret null as a routing failure.",
+    "z-plan step 9c to_command: null means the user chose to proceed with stale inputs or abandon — not that a routing failure occurred. /z-stats must not interpret null as an error.",
     "z-research Phase 1 parallel dispatch: when both sub-commands run, two new archive directories appear after the Agent() calls return. The same second-precision RUN-ID timestamp may produce colliding directory names; identification must use the kind field from events.jsonl, not the directory name.",
     "z-implement-all N=2 parallel dispatch uses the global overlap_count from SHARED-CONCERNS.md as a conservative guard; per-pair overlap checking is v2. A plan with overlap_count=1 runs entirely serially even if the specific pair being dispatched has no file overlap.",
     "z-implement-all cycle-2 skip-on-clean-cycle-1 fires regardless of why the implementer re-ran (clarification resolved, decision answered, etc.). The intent is: if cycle-1 found nothing actionable, there is nothing for cycle-2 to find — the guard is not about diff identity.",

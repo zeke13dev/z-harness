@@ -39,11 +39,9 @@ Set `$Z_HARNESS_REPO_CONFIG` to override the git-root discovery path (exits 2 if
 |-----|------|---------|--------|-------------|
 | `notify.level` | string | `approval_only` | `off` \| `approval_only` \| `all` | Controls when PushNotification fires. `off` silences all notifications. `approval_only` notifies on `approval` and `error` events. `all` notifies on every `approval`, `phase_end`, and `error` event. |
 | `docs.always_apply` | string | `always` | `always` \| `never` | Whether light flows auto-dispatch doc-fetcher when `docs/llm/INDEX.json` exists. `always` matches current /z-do default behavior. `never` skips doc-fetcher. **Applies only to light flows (slice 1: /z-do). Heavy flows always dispatch doc-fetcher regardless of this knob.** |
-| `experiment.persona_rotation` | bool | `true` | `true` \| `false` | Master kill-switch for the persona-rotation experiment. When `true` (default), `/z-implement-all` and `/z-implement-next` draw a random persona for each implementer attempt, dispatch a dual reviewer (base codex + random-arm advisory), and emit `persona_attempt_outcome` events. `/z-plan` and `/z-debug` use the fixed 5-panel consult. When `false`, all rotation behavior is a no-op — previous behavior is restored. Set to `false` to pause data collection. |
-| `experiment.control_every_n` | int | `5` | positive integer | Forced-control cadence: every Nth implementer attempt **across the entire repo** uses `boring-anchor` (the baseline persona) instead of a random draw. Counter persists in `.z-harness/.persona-control-counter`. Default 5 means every 5th attempt is a control sample. |
 | `runtime.consult` | string | `on` | `on` \| `off` | Single-model mode. When `off`, the `consultant_primary`, `consultant_secondary`, and `reviewer` roles resolve to the `none` sentinel, so cross-LLM consultation and review are skipped (no Gemini/Codex dispatch). Exported as `Z_HARNESS_CONSULT` (not `Z_HARNESS_RUNTIME_CONSULT` — see the transliteration note), which `resolve-provider.py` reads. |
 
-For `[personas]`, `[workflow]`, `[followup]`, `[axioms]`, and `[experiment]` knobs, see the sections below.
+For `[brainstorm]`, `[personas]`, `[workflow]`, `[followup]`, `[axioms]`, and `[experiment]` knobs, see the sections below.
 
 ## The transliteration rule
 
@@ -53,13 +51,14 @@ Env-var overrides follow a deterministic rule: lowercase TOML dotted-key → pre
 |----------|---------|
 | `notify.level` | `Z_HARNESS_NOTIFY_LEVEL` |
 | `docs.always_apply` | `Z_HARNESS_DOCS_ALWAYS_APPLY` |
-| `experiment.persona_rotation` | `Z_HARNESS_EXPERIMENT_PERSONA_ROTATION` |
-| `experiment.control_every_n` | `Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N` |
+| `brainstorm.personas` | `Z_HARNESS_BRAINSTORM_PERSONAS` |
 | `personas.critique_panel` | `Z_HARNESS_PERSONAS_CRITIQUE_PANEL` |
 | `personas.audit` | `Z_HARNESS_PERSONAS_AUDIT` |
 | `personas.review_eval` | `Z_HARNESS_PERSONAS_REVIEW_EVAL` |
 | `personas.consult_eval` | `Z_HARNESS_PERSONAS_CONSULT_EVAL` |
 | `personas.implementer_retry` | `Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY` |
+| `experiment.persona_rotation` | `Z_HARNESS_EXPERIMENT_PERSONA_ROTATION` |
+| `experiment.control_every_n` | `Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N` |
 | `axioms.enabled` | `Z_HARNESS_AXIOMS_ENABLED` |
 | `axioms.kernel_budget_chars` | `Z_HARNESS_AXIOMS_KERNEL_BUDGET_CHARS` |
 | `axioms.extract_min_recurrence` | `Z_HARNESS_AXIOMS_EXTRACT_MIN_RECURRENCE` |
@@ -81,7 +80,7 @@ Prints the effective value for one key (no quotes).  Unknown or meta keys exit 3
 
 ```
 $ scripts/config.sh get notify.level       → approval_only
-$ scripts/config.sh get docs.always_apply  → always
+$ scripts/config.sh get personas.consult_eval  → false
 ```
 
 ### `get-batch <key1> [key2 ...]`
@@ -93,12 +92,8 @@ Resolves multiple config keys in a **single process** (one config load) and prin
 - Always exits 0 (best-effort; callers fall back to defaults for `null` values).
 
 ```
-$ scripts/config.sh get-batch notify.level followup.notion_enabled
-{"notify.level": "approval_only", "followup.notion_enabled": false}
-
-$ scripts/config.sh get-batch notify.level unknown.key
-# stderr: [config] get-batch: unknown key 'unknown.key'; returning null
-{"notify.level": "approval_only", "unknown.key": null}
+$ scripts/config.sh get-batch personas.critique_panel personas.consult_eval
+{"personas.critique_panel": true, "personas.consult_eval": false}
 ```
 
 ### `export-env`
@@ -108,8 +103,12 @@ Designed for `eval "$(scripts/config.sh export-env)"`.  Emits `config_resolved`
 event once per `$Z_HARNESS_RUN`.
 
 ```
-export Z_HARNESS_DOCS_ALWAYS_APPLY='always'
-export Z_HARNESS_NOTIFY_LEVEL='approval_only'
+export Z_HARNESS_BRAINSTORM_PERSONAS='true'
+export Z_HARNESS_PERSONAS_AUDIT='true'
+export Z_HARNESS_PERSONAS_CONSULT_EVAL='false'
+export Z_HARNESS_PERSONAS_CRITIQUE_PANEL='true'
+export Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY='same'
+export Z_HARNESS_PERSONAS_REVIEW_EVAL='true'
 ```
 
 ### `ensure-defaults`
@@ -118,21 +117,16 @@ Writes the user-global config with defaults + inline comments if absent.
 Idempotent — prints `exists <path>` if already present.  Exits 4 if the file
 exists but is empty or unparseable (never silently overwrites).
 
-```
-$ scripts/config.sh ensure-defaults
-created /Users/you/.config/z-harness/config.toml
-```
-
 ### `explain <dotted.key>`
 
 Prints the effective value and its source layer.
 
 ```
-$ scripts/config.sh explain notify.level
-notify.level = "approval_only"   (source: defaults)
+$ scripts/config.sh explain personas.consult_eval
+personas.consult_eval = "false"   (source: defaults)
 
-$ Z_HARNESS_NOTIFY_LEVEL=all scripts/config.sh explain notify.level
-notify.level = "all"   (source: env Z_HARNESS_NOTIFY_LEVEL)
+$ Z_HARNESS_PERSONAS_CONSULT_EVAL=true scripts/config.sh explain personas.consult_eval
+personas.consult_eval = "true"   (source: env Z_HARNESS_PERSONAS_CONSULT_EVAL)
 ```
 
 ### `should-notify --event <kind>`
@@ -140,19 +134,13 @@ notify.level = "all"   (source: env Z_HARNESS_NOTIFY_LEVEL)
 Prints `yes` or `no`; always exits 0 (safe for `set -e`).  Unknown event → exit 2.
 Valid event kinds: `approval`, `phase_end`, `error`.
 
-```bash
-[ "$(scripts/config.sh should-notify --event approval)" = yes ] && <PushNotification ...>
-```
-
 ### `inspect-all [--json]`
 
 Prints all configuration knobs with their current effective value, source layer, and persistence class. Covers three categories:
 
-1. **TOML-persistent keys** — every key in `DEFAULTS` (all `notify.*`, `docs.*`, `workflow.*`, `followup.*`, `axioms.*`, `experiment.*`)
+1. **TOML-persistent keys** — every key in `DEFAULTS` (all `notify.*`, `docs.*`, `brainstorm.*`, `personas.*`, `workflow.*`, `followup.*`, `axioms.*`, `experiment.*`, `runtime.*`)
 2. **Registered question_ids** — every entry in `QUESTION_IDS`, showing the resolver envelope result
 3. **Env-only knobs** — environment variables that affect behavior but are never written to TOML
-
-Default output is a human-readable concern-grouped table. `--json` emits a machine-parseable JSON object.
 
 **Env-only knobs** surfaced by `inspect-all` (not settable via TOML):
 
@@ -194,29 +182,6 @@ The full base fallback chain (active when `Z_HARNESS_EXTERNAL_DEFAULT` is unset 
 4. `<git-common-dir>/z-harness` — survives `git clean`; writable if `.git/` is writable
 5. `$(pwd)/z-harness` — last resort (clean-vulnerable; also the only tier active when `Z_HARNESS_EXTERNAL_DEFAULT=0`)
 
-### Reverting to in-repo behavior
-
-Two equivalent revert methods:
-
-```bash
-# Method A: explicit base override (tier 1 escape hatch)
-export Z_HARNESS_BASE_DIR=$(pwd)/z-harness
-
-# Method B: opt-out the Phase-D flip
-export Z_HARNESS_EXTERNAL_DEFAULT=0
-```
-
-Both restore the pre-flip behavior. Method A is preferred for one-off per-session overrides. Method B is appropriate for persisting the opt-out across all sessions (e.g. in `.bashrc` or CI env).
-
-### Operator note: quiesce before relying on the flip
-
-If you have a pre-existing `.z-harness-base` anchor written by a previous in-repo session, the anchor's stored path will mismatch the new external tier, triggering `base_mismatch_detected`. To resolve: run `/z-where` to inspect the current anchor, wait for any active runs to complete, then remove `<git-common-dir>/.z-harness-base` (one-time). The next `z_harness_base()` call will write a fresh anchor for the external tier.
-
-```
-$ scripts/config.sh inspect-all
-$ scripts/config.sh inspect-all --json
-```
-
 **Exit code reference (Loader API):**
 
 | Code | Meaning |
@@ -231,23 +196,6 @@ $ scripts/config.sh inspect-all --json
 Every time `export-env` runs inside a `/z-*` run, it emits a `config_resolved`
 event to `metrics.jsonl` (once per `$Z_HARNESS_RUN`, de-duplicated via an
 O_EXCL temp file).
-
-Event payload shape:
-
-```json
-{
-  "values": {
-    "notify.level": "approval_only",
-    "docs.always_apply": "always"
-  },
-  "sources": {
-    "notify.level": "defaults",
-    "docs.always_apply": "/Users/you/.config/z-harness/config.toml"
-  }
-}
-```
-
-`sources` values: `"defaults"`, an absolute file path (global or repo-local), or `"env Z_HARNESS_<VAR>"`.
 
 ---
 
@@ -266,19 +214,6 @@ The slice-2 layer: the `[workflow]` config section, the question-registry, the r
 | `workflow.plan_decisions_approval` | string | `ask` | `ask` \| `approve` \| `halt` | Controls the Phase 2.5 decisions-doc approval gate in `/z-plan`. `ask` prompts. `approve` skips the prompt. `halt` stops unconditionally. |
 | `workflow.spec_retro_discovery` | string | `ask` | `ask` \| `defer_to_sink_p2` | Controls how Phase 4 of `/z-implement-next` handles out-of-current-SPEC discoveries reported by the implementer. `ask` prompts interactively (default). `defer_to_sink_p2` parks the discovery as a P2 follow-up in the project sink without prompting — resolver returns `defer-to-sink`; orchestrator calls `scripts/sink-add.sh` with the question context. |
 
-## The transliteration rule (Workflow Resolver)
-
-| TOML key | Env var |
-|----------|---------|
-| `workflow.audit_to_amend` | `Z_HARNESS_WORKFLOW_AUDIT_TO_AMEND` |
-| `workflow.slug_confirm` | `Z_HARNESS_WORKFLOW_SLUG_CONFIRM` |
-| `workflow.implement_all_proceed` | `Z_HARNESS_WORKFLOW_IMPLEMENT_ALL_PROCEED` |
-| `workflow.review_all_proceed` | `Z_HARNESS_WORKFLOW_REVIEW_ALL_PROCEED` |
-| `workflow.plan_decisions_approval` | `Z_HARNESS_WORKFLOW_PLAN_DECISIONS_APPROVAL` |
-| `workflow.spec_retro_discovery` | `Z_HARNESS_WORKFLOW_SPEC_RETRO_DISCOVERY` |
-
-Same general rule as the Loader API surface — see [The transliteration rule](#the-transliteration-rule) for format constraints.
-
 ## CLI reference (Workflow Resolver)
 
 ### `resolve-question <question_id> [--scope-slug <slug>] [--explain]`
@@ -286,276 +221,44 @@ Same general rule as the Loader API surface — see [The transliteration rule](#
 Returns a typed JSON envelope on stdout indicating how an AskUserQuestion should behave.
 Consulted by skill prose before AskUserQuestion fires.  Never writes to config or memory.
 
-```
-$ scripts/config.sh resolve-question workflow.audit_to_amend
-{
-  "result":   "skip",
-  "default":  "amend",
-  "source":   "config",
-  "rule_id":  "workflow.audit_to_amend",
-  "strength": "hard",
-  "reason":   "config key workflow.audit_to_amend = amend",
-  "sources":  [{"kind": "config", "value": "amend", "location": ".z-harness/config.toml", "strength": "hard"}]
-}
-```
+`result` values: `skip`, `prefill`, `ask`, `halt`, `defer-to-sink`.
+`source` values: `config | memory | axiom | axiom_conflict | conflict | none | override | overnight_allowlist | no_ask_halt`.
 
-`result` values:
-- `skip` — skip the AskUserQuestion; proceed as if the user picked `default`.
-- `prefill` — present the AskUserQuestion with `default` pre-selected (recommended option).
-- `ask` — present the AskUserQuestion normally.
-- `halt` — do not proceed; stop the run (returned when `Z_HARNESS_NO_ASK=halt` and question is not on the overnight allowlist).
-- `defer-to-sink` — do not ask interactively; instead call `scripts/sink-add.sh` with the question context to park it as a follow-up work item. Currently produced only by `workflow.spec_retro_discovery = defer_to_sink_p2`.
+Exit codes: 0 (valid JSON), 2 (bad invocation), 3 (unknown question_id; JSON with error key still emitted), 4 (I/O error; JSON still emitted), 5 (config conflict: ASK_ALL=1 + NO_ASK=halt both set).
 
-`source` values: `config` | `memory` | `axiom` | `axiom_conflict` | `conflict` | `none` | `override` | `overnight_allowlist` | `no_ask_halt`.
-
-**`conflict` source:** config and memory disagree. Result is always `ask`.  The `sources[]` array lists both entries.  After the user answers, a follow-up AskUserQuestion offers to record the answer as the new preference, resolving the conflict for future runs.
-
-**`axiom` source:** no config or memory preference was set (pure gap); a graph-validated approved axiom recommends a value. Strength is always `soft`. The envelope includes a nested `axiom:{id, statement}` object. Config/memory always win over axioms.
-
-**`axiom_conflict` source:** a higher layer (config or memory) set a value that differs from what an axiom recommends. The higher layer's value/result/strength wins; the axiom conflict is surfaced via `source:"axiom_conflict"` and a nested `axiom:{id, statement, conflict:true}` object.
-
-**`--explain` flag (or `Z_HARNESS_EXPLAIN_RESOLUTION=1`):** prints a human-readable resolution trace on stderr.  Default off.
-
-**`Z_HARNESS_ASK_ALL=1`:** short-circuits resolution to always return `{result: ask, source: override}`.  Use for debugging or temporary full-control.
-
-Exit codes:
-- 0 — valid JSON returned
-- 2 — bad invocation (missing question_id arg)
-- 3 — unknown question_id (JSON still emitted with `error` key)
-- 4 — I/O error (JSON still emitted)
-- 5 — config conflict: `Z_HARNESS_ASK_ALL=1` and `Z_HARNESS_NO_ASK=halt` are both set (mutually exclusive)
-
-**Error handling in skill prose:** always capture exit code separately — never pipe through chains that swallow it.  On any non-zero exit, fall through to `ask`.
-
-```bash
-RESOLVED="$(python3 scripts/config.py resolve-question workflow.audit_to_amend)"
-RESOLVE_EXIT=$?
-if [[ $RESOLVE_EXIT -ne 0 ]]; then
-  echo "resolve-question failed (exit $RESOLVE_EXIT); falling back to ask" >&2
-  RESULT="ask"; DEFAULT=""; SOURCE="error"
-else
-  RESULT="$(echo "$RESOLVED" | jq -r .result)"
-  DEFAULT="$(echo "$RESOLVED" | jq -r .default)"
-  SOURCE="$(echo "$RESOLVED" | jq -r .source)"
-fi
-```
+**Always capture exit code separately.** Never pipe through chains that swallow it. On any non-zero exit, fall through to `ask`.
 
 ### `check-no-ask --question-id <id>`
 
-Lightweight overnight-gate checker. Returns `{"result": "halt"|"proceed"|"unhandled_gate", "question_id": "<id>", "rule_id": "<rule>"}` without going through the full resolution envelope. Used by `/z-implement-all` and other commands that need a simpler halt/proceed decision.
-
-Paths:
-1. `Z_HARNESS_NO_ASK != halt` → `proceed`, `rule_id=no_overnight_active`
-2. `NO_ASK=halt`, question registered, on allowlist → `proceed` (treated as overnight_decision)
-3. `NO_ASK=halt`, question registered, NOT on allowlist → `halt`
-3b. `NO_ASK=halt`, question registered, NOT on allowlist, **policy mode active** → `unhandled_gate` (loud abort; emits `unhandled_gate` event)
-4. `NO_ASK=halt`, question NOT registered → `halt` + emits `unknown_ask_blocked` event
-
-Policy mode is active when `Z_HARNESS_NO_ASK=halt` AND either `Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE` or `Z_HARNESS_OVERNIGHT_AUTODECIDE` is non-empty.
-
-Always exits 0 on valid invocations; exits 2 on argparse error.
-
-```bash
-NO_ASK_RESULT="$(python3 scripts/config.py check-no-ask --question-id workflow.implement_all_proceed)"
-if [[ "$(echo "$NO_ASK_RESULT" | jq -r .result)" == "halt" ]]; then
-  # stop queue
-fi
-```
+Lightweight overnight-gate checker. Returns `{"result": "halt"|"proceed"|"unhandled_gate", "question_id": "<id>", "rule_id": "<rule>"}`. Always exits 0 on valid invocations.
 
 ### `set <dotted.key> <value> [--scope=global|project]`
 
-Atomically writes a TOML key to the user-global config (`~/.config/z-harness/config.toml`) or the
-repo-local config (`.z-harness/config.toml`).  Validates against `VALIDATORS` before writing;
-exits 2 with a clear message if the value is invalid.  Exits 0 silently on success (no stdout output).
-
-```
-$ scripts/config.sh set workflow.audit_to_amend amend --scope=project
-(exits 0, no stdout output on success)
-```
-
-Default scope when `--scope` is omitted: `project`.
+Atomically writes a TOML key. Validates against `VALIDATORS` before writing. Exits 0 silently on success (no stdout output). Default scope: `project`.
 
 ### `list-question-ids`
 
-Prints a JSON array of all known question IDs in the `QUESTION_IDS` registry.
-Consumed by `/z-suggest-memory --kind routing-preference` to validate `--question-id` inputs.
-
-```
-$ scripts/config.sh list-question-ids
-["workflow.audit_to_amend", "workflow.implement_all_proceed", "workflow.plan_decisions_approval", "workflow.review_all_proceed", "workflow.slug_confirm", "workflow.spec_retro_discovery"]
-```
+Prints a JSON array of all known question IDs. Consumed by `/z-suggest-memory --kind routing-preference` for validation.
 
 ### `migrate`
 
-Rewrites old provider names (`codex`, `gemini`, `claude`) in `roles.*.runtime` config values to the new `-cli` suffixed form (`codex-cli`, `gemini-cli`, `claude-cli`). Applied to both global and project layers. Idempotent; skips missing files. Exits 4 on I/O error, else exits 0.
-
-```
-$ scripts/config.sh migrate
-[config] migrate: global — rewrote 2 runtime value(s) in /Users/you/.config/z-harness/config.toml
-```
+Rewrites old provider names in `roles.*.runtime` config values to the new `-cli` suffixed form. Idempotent.
 
 ## Overnight gate system
 
-When `/z-overnight` or any other caller sets `Z_HARNESS_NO_ASK=halt`, the resolver applies an additional post-processing pass (`_apply_overnight_overrides`) to every `resolve-question` call:
-
-1. If `Z_HARNESS_ASK_ALL=1` is simultaneously set → **exit 5** (config conflict; mutually exclusive).
-2. If the resolved result is already `skip` or `prefill` (no ask needed) → **no-op**.
-3. If the resolved result is `ask` and the `question_id` is in the overnight allowlist → swap to an `overnight_decision` envelope (result derived from the allowlist value via `RESULT_MAP`); emit `overnight_decision` event.
-4. If the resolved result is `ask` and the `question_id` is NOT in the allowlist → swap to `halt` envelope; emit `askuser_halted` event.
-
-**Default allowlist** (`OVERNIGHT_AUTODECIDE_QIDS_DEFAULT`):
-
-| question_id | chosen value |
-|-------------|-------------|
-| `workflow.slug_confirm` | `recommend_derived` |
-| `workflow.audit_to_amend` | `amend` |
-
-**Custom allowlist:** set `Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE` to a JSON object of `{question_id: value}` entries. These are merged over the defaults (env wins on key collision). Malformed entries are dropped with a `routing_preference_malformed` event; an unparseable JSON string causes the env layer to be skipped (defaults still apply).
-
-**New telemetry events:**
-
-| Event | Emitted when |
-|-------|-------------|
-| `overnight_decision` | Question auto-decided from allowlist |
-| `askuser_halted` | Question would have asked but is not on allowlist |
-| `unknown_ask_blocked` | `check-no-ask` called with unregistered question_id |
-| `unhandled_gate` | `check-no-ask` reached a registered gate not covered by the frozen policy |
-| `config_conflict` | `Z_HARNESS_ASK_ALL=1` + `Z_HARNESS_NO_ASK=halt` both set |
+When `Z_HARNESS_NO_ASK=halt`, the resolver applies an additional post-processing pass to every `resolve-question` call. The default allowlist auto-decides `workflow.slug_confirm=recommend_derived` and `workflow.audit_to_amend=amend`. Set `Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE` to a JSON object to customize the allowlist.
 
 ## Axiom layer
 
-The axiom layer sits at the lowest precedence in the resolution hierarchy. After config and memory are consulted, `_build_resolve_envelope` loads graph-validated approved axioms (via `axiom-store.py`) that reference the `question_id`. Axiom participation is gated on `axioms.enabled = true` (the default). Three axiom outcomes:
-
-- **agree** — axiom value matches the already-resolved value. Config/memory still wins; the axiom is silently appended to `sources[]`. No `axiom` key added to envelope.
-- **gap-fill** — config is at default AND memory is silent. Axiom fills the gap: `source:"axiom"`, `strength:"soft"`, `result = RESULT_MAP[(question_id, axiom_value)]`, `axiom:{id, statement}` nested object.
-- **direct conflict** — a higher layer set a different value. Higher layer wins. `source:"axiom_conflict"`, nested `axiom:{id, statement, conflict:true}`.
-
-When `axioms.enabled = false` (or `axiom-store.py` is absent), the axiom layer is a complete no-op — the envelope is byte-identical to the pre-axiom result.
-
-## Key entry points
-
-- `scripts/config.py:51` — `DEFAULTS` — built-in default values for all config keys including `[workflow]`, `[followup]`, `[axioms]`, and `[experiment]` sections (layer 1)
-- `scripts/config.py:118` — `VALIDATORS` — allowed enum sets per dotted-key; hard-fail on repo/env, soft-warn on global; includes all workflow, followup, axioms, and experiment keys
-- `scripts/config.py:181` — `QUESTION_IDS` — single source of truth for AskUserQuestion routing-class preference keys; validated against `VALIDATORS` at module load by `_run_startup_guards`
-- `scripts/config.py:251` — `OVERNIGHT_AUTODECIDE_QIDS_DEFAULT` — default overnight allowlist; question IDs auto-decided without halting
-- `scripts/config.py:257` — `RESULT_MAP` — maps `(question_id, option-domain-value)` to resolver result-domain (`skip|prefill|ask|halt|defer-to-sink`)
-- `scripts/config.py:283` — `_run_startup_guards` — module-load consistency check; raises `SystemExit(2)` on registry inconsistency
-- `scripts/config.py:584` — `load_config` — build resolved config from all 4 layers; returns `(values, sources)` dicts
-- `scripts/config.py:743` — `cmd_get` — resolve and print single key; exits 3 on unknown or meta key
-- `scripts/config.py:771` — `cmd_get_batch` — resolve multiple keys in one process; outputs JSON object; always exits 0
-- `scripts/config.py:800` — `cmd_export_env` — print export lines for all user knobs; emit `config_resolved` once per run
-- `scripts/config.py:818` — `cmd_ensure_defaults` — write global config with defaults + inline comments if absent
-- `scripts/config.py:895` — `cmd_explain` — print effective value and source layer for one key
-- `scripts/config.py:927` — `cmd_list_question_ids` — print JSON array of known question IDs
-- `scripts/config.py:1376` — `_load_axiom_store_module` — dynamically load `scripts/axiom-store.py` by file path (hyphen prevents normal import); cached per process
-- `scripts/config.py:1414` — `_load_axiom_matches` — load graph-valid approved axioms for a question_id; gated on `axioms.enabled`; returns `[]` when store absent or disabled
-- `scripts/config.py:1549` — `_resolve_config_memory_envelope` — pre-axiom resolution: config + routing-pref memory; returns 7-tuple including internal signals for axiom layer
-- `scripts/config.py:1780` — `_build_resolve_envelope` — full resolver: apply axiom layer on top of config+memory envelope; returns 5-tuple
-- `scripts/config.py:1927` — `cmd_resolve_question` — consults 4-layer config + memory + axioms + overnight overrides; returns JSON envelope
-- `scripts/config.py:2094` — `cmd_check_no_ask` — lightweight overnight-gate checker; returns halt/proceed/unhandled_gate JSON; policy mode abort on reachable gate not covered by frozen policy
-- `scripts/config.py:2323` — `cmd_set` — atomically write a TOML key to global or project config via tmp+rename
-- `scripts/config.py:2414` — `ENV_ONLY_KNOBS` — list of env-only knob names surfaced by `inspect-all`
-- `scripts/config.py:2450` — `cmd_inspect_all` — print all config knobs with source and persistence metadata; supports `--json`
-- `scripts/config.py:2595` — `cmd_should_notify` — print yes|no for a given event kind; always exits 0; exits 2 on unknown event
-- `scripts/config.py:2662` — `cmd_migrate` — rewrite old provider names in `roles.*.runtime` values to `-cli` suffixed form; idempotent
-- `scripts/propose-prefs.py:1` — `propose-prefs` (module) — walks `metrics.jsonl` for repeated command-pair patterns; emits JSON proposal if threshold met; never writes
+The axiom layer sits at the lowest precedence. After config and memory are consulted, `_build_resolve_envelope` loads graph-validated approved axioms. Axiom participation is gated on `axioms.enabled = true` (the default). Three outcomes: **agree** (no change), **gap-fill** (`source:"axiom"`, `strength:"soft"`), **direct conflict** (higher layer wins, `source:"axiom_conflict"`).
 
 ## `routing-preference` memory type
 
-Workflow preferences can also live as memory entries in `docs/llm/workflow.json`
-(global scope) or `docs/llm/workflow-<project-slug>.json` (project scope).
-The resolver reads these alongside the TOML config and applies a 5-tier
-signal-strength model.
-
-Write a routing-preference memory via:
-
-```bash
-/z-suggest-memory --kind routing-preference \
-  --question-id workflow.audit_to_amend \
-  --value amend \
-  --strength very_strong \
-  --scope project
-```
-
-### Memory entry shape
-
-```json
-{
-  "type": "routing-preference",
-  "question_id": "workflow.audit_to_amend",
-  "value": "amend",
-  "scope": "project",
-  "strength": "very_strong",
-  "reason": "Always amend after audit on this project",
-  "date": "2026-05-27",
-  "project_root": "/Users/you/dev/myproject"
-}
-```
-
-| Field | Required | Values | Description |
-|-------|----------|--------|-------------|
-| `type` | yes | `routing-preference` | Identifies this as a routing-preference memory |
-| `question_id` | yes | any key in `QUESTION_IDS` registry | Which AskUserQuestion this governs |
-| `value` | yes | valid choices for `question_id` | The preferred option |
-| `scope` | yes | `global` \| `project` | `global` applies everywhere; `project` applies only when `Z_HARNESS_PROJECT_ROOT` matches `project_root` |
-| `strength` | yes | `weak` \| `strong` \| `very_strong` | Signal strength; `very_strong` → `skip`, `strong`/`weak` → `prefill` |
-| `reason` | yes | string | Human-readable rationale |
-| `date` | yes | ISO 8601 | When the entry was written |
-| `project_root` | when `scope=project` | absolute path | Must match `Z_HARNESS_PROJECT_ROOT` (or `git rev-parse --show-toplevel`) |
-
-### Resolver tier-mapping
-
-| Source | Strength | Result |
-|--------|----------|--------|
-| config (any non-default value) | `hard` | `RESULT_MAP[(question_id, config_value)]` |
-| memory | `very_strong` | `skip` |
-| memory | `strong` | `prefill` |
-| memory | `weak` | `prefill` |
-| axiom (gap-fill only) | `soft` | `RESULT_MAP[(question_id, axiom_value)]` |
-| config + memory (agreeing) | highest | config wins |
-| config + memory (disagreeing) | — | `ask` (conflict tier; both sources listed) |
-| none | — | `ask` |
-| `Z_HARNESS_ASK_ALL=1` | — | `ask` (override) |
-| `Z_HARNESS_NO_ASK=halt` + not in allowlist | — | `halt` |
-| `Z_HARNESS_NO_ASK=halt` + in allowlist | — | `skip`/`prefill` (via `RESULT_MAP`) |
+Workflow preferences can also live as memory entries in `docs/llm/workflow.json` (global scope) or `docs/llm/workflow-<project-slug>.json` (project scope). The resolver reads these alongside the TOML config with a 5-tier signal-strength model (`weak|strong|very_strong`).
 
 ## Elevation proposer
 
-`scripts/propose-prefs.py` walks `metrics.jsonl` for repeated command-pair
-patterns and surfaces a one-shot AskUserQuestion when the threshold is met.
-
-Configurable via env:
-
-| Env var | Default | Description |
-|---------|---------|-------------|
-| `Z_HARNESS_PROPOSE_WINDOW_S` | `3600` | Max seconds between command A end and B start |
-| `Z_HARNESS_PROPOSE_THRESHOLD` | `3` | Min repetitions to propose |
-| `Z_HARNESS_PROPOSE_MAX_RUNS` | `30` | Number of recent run_start events to scan |
-
-v1 watched patterns:
-- `/z-audit-plan → /z-amend` — propose `workflow.audit_to_amend = "amend"`
-- `/z-audit-plan-style → /z-amend` — propose `workflow.audit_to_amend = "amend"`
-
-The proposer never writes automatically.  The user picks: accept as config, accept
-as memory (very_strong / strong), or no.  Rejecting suppresses the proposal for
-30 days, scoped to `(project_root, question_id)` in `.z-harness/.propose-suppress`.
-
-## `askuser_resolved` event
-
-Every successful `resolve-question` call emits an `askuser_resolved` event to
-`metrics.jsonl`.
-
-```json
-{
-  "kind": "askuser_resolved",
-  "question_id": "workflow.audit_to_amend",
-  "result": "skip",
-  "source": "config",
-  "strength": "hard"
-}
-```
-
-`/z-stats` Phase 4c aggregates these by result, source, question_id, and conflict rate.
+`scripts/propose-prefs.py` walks `metrics.jsonl` for repeated command-pair patterns and surfaces a one-shot AskUserQuestion when the threshold (default 3) is met. Never writes automatically.
 
 ---
 
@@ -571,56 +274,63 @@ The `[followup]` TOML section controls the follow-up registry (notion-followup-s
 | `followup.notion_enabled` | bool | `false` | `true` \| `false` | Enable one-way Notion push mirror. When false, Notion sync is skipped entirely. |
 | `followup.notion_database_id` | string | `""` | any string | Notion database ID for the follow-up mirror. Required when `notion_enabled=true`. |
 | `followup.notion_token_path` | string | `~/.z-harness/secrets.toml` | path | Path to TOML secrets file containing `[notion].token`. Mode 0600 required. Env override: `Z_HARNESS_NOTION_TOKEN` (see below). |
-| `followup.auto_close_low_risk_enabled` | bool | `true` | `true` \| `false` | Master kill-switch for the auto-close-low-risk completion path. Defaults to `true` (on). Set to `false` to disable auto-close entirely. When false, `auto_close_eligible` entries still flow through verify but the ceiling never fires. |
-| `followup.auto_close_low_risk_path_allowlist` | array\<string\> | `["docs/**/*.md", "**/CHANGELOG", "**/CHANGELOG.md"]` | glob patterns | Paths safe for auto-close. All touched paths must match at least one allowlist pattern. Default deliberately excludes `commands/**`, `agents/**`, and top-level `*.md`. |
-| `followup.auto_close_low_risk_path_denylist` | array\<string\> | `["commands/**/*.md", "agents/**/*.md", ".claude/**/*.md", "/*.md"]` | glob patterns | Paths that block auto-close regardless of allowlist. Denylist takes precedence. Note: the last entry is `/*.md` (root-anchored, blocks top-level `.md` files) not `*.md` (would block all `.md` at any depth). |
-| `followup.staleness_commit_window` | int | `50` | positive int | Commit distance (`git rev-list --count capture_head..HEAD`) above which staleness prompt fires at claim time. |
-| `followup.staleness_warn_days` | int | `30` | positive int | Age in days after which a soft staleness warning is shown at claim time. Does not block. |
-| `followup.staleness_hard_dismiss_days` | int | `0` | int | Age in days after which entries are auto-dismissed. `0` = disabled (default). Enable by setting a positive integer. |
+| `followup.auto_close_low_risk_enabled` | bool | `true` | `true` \| `false` | Master kill-switch for the auto-close-low-risk completion path. Defaults to `true` (on). Set to `false` to disable auto-close entirely. |
+| `followup.staleness_commit_window` | int | `50` | positive int | Commit distance above which staleness prompt fires at claim time. |
+| `followup.staleness_warn_days` | int | `30` | positive int | Age in days after which a soft staleness warning is shown at claim time. |
+| `followup.staleness_hard_dismiss_days` | int | `0` | int | Age in days after which entries are auto-dismissed. `0` = disabled (default). |
 | `followup.audit_evidence_required_artifacts` | array\<string\> | `["z_review_all_verdict", "test_exit", "cumulative_diff"]` | artifact kinds | Named artifact kinds that must be present in an `audit_evidence.json` blob. |
 
 ### `Z_HARNESS_NOTION_TOKEN` — env-only secret
 
-`Z_HARNESS_NOTION_TOKEN` is an **env-only** Notion API token override. It is NOT a TOML config key and does not appear in `DEFAULTS` or `VALIDATORS`. When set to a non-empty string, `scripts/notion-push.py`'s `_resolve_token()` uses it directly, bypassing the `followup.notion_token_path` secrets file lookup entirely.
-
-Use this for CI environments where writing a secrets file is inconvenient:
-```bash
-export Z_HARNESS_NOTION_TOKEN="secret_xxxx..."
-```
-
-Callers and wrappers of `notion-push.py` **must not run under `set -x`** — doing so would leak the token value into logs.
-
-**Validators** (hard-fail on repo/env layer, soft-warn on global layer):
-- `followup.default_sink`: must be `project` or `global`
-- `followup.notion_enabled`: must be `true` or `false`
-- `followup.auto_close_low_risk_enabled`: must be `true` or `false`
-
-All other `[followup]` keys are not in `VALIDATORS` and are accepted as-is (type check only by Python's TOML parser).
-
-## defer-to-sink resolver result
-
-`defer-to-sink` is a resolver result value added alongside `skip|prefill|ask|halt`. When a question callsite resolves to `defer-to-sink`, the orchestrator does NOT present an `AskUserQuestion`. Instead it calls `scripts/sink-add.sh` with the question context to park it as a P2 follow-up work item.
-
-**Currently produced by:** `workflow.spec_retro_discovery = defer_to_sink_p2` (Phase 4 of `/z-implement-next`).
-
-**Orchestrator handler pattern:**
-```bash
-# On result == defer-to-sink:
-scripts/sink-add.sh \
-  --sink=<followup.default_sink> \
-  --priority=P2 \
-  --name="<question-id> decision deferred" \
-  --recommended-command="/z-do \"<question context>\"" \
-  --source-artifact="<current plan artifact>" \
-  --cited-paths="<relevant paths>"
-# Defaults: auto_close_eligible=false, safe_to_retry=false
-```
+`Z_HARNESS_NOTION_TOKEN` is an **env-only** Notion API token override. It is NOT a TOML config key and does not appear in `DEFAULTS` or `VALIDATORS`. Callers and wrappers of `notion-push.py` **must not run under `set -x`** — doing so would leak the token value into logs.
 
 ---
 
 # Common
 
 Cross-cutting material that applies to both surfaces.
+
+## The knobs ([brainstorm] section)
+
+The `[brainstorm]` section currently contains one knob. It remains in `[brainstorm]` rather than `[personas]` to avoid churn in existing configs — do NOT move it.
+
+| Key | Type | Default | Env var | Description |
+|-----|------|---------|---------|-------------|
+| `brainstorm.personas` | bool | `true` | `Z_HARNESS_BRAINSTORM_PERSONAS` | Enable persona injection for ideators in `/z-brainstorm`. When ON, up to 3 distinct `ideator` personas are drawn and positionally prepended. When OFF the dispatch is byte-identical to the pre-feature vendor-only brainstorm. |
+
+## The knobs ([personas] section)
+
+The `[personas]` section controls per-surface persona dispatch across all z-harness commands. Each boolean knob enables or disables persona injection at one class of dispatch site; disabling a knob is byte-identical to pre-feature behavior at that site.
+
+| Key | Type | Default | Env var | Description |
+|-----|------|---------|---------|-------------|
+| `personas.critique_panel` | bool | `true` | `Z_HARNESS_PERSONAS_CRITIQUE_PANEL` | Enable persona injection at the z-plan Phase 3 + Phase 7 fixed 5-panel critique arms (DIVERGENT). When ON, 5 distinct `consultant` personas are drawn and positionally prepended. |
+| `personas.audit` | bool | `true` | `Z_HARNESS_PERSONAS_AUDIT` | Enable persona injection at z-audit dimension auditors (DIVERGENT). When ON, one distinct `audit_persona` is drawn per dimension (correctness / perf / cleanliness / design). |
+| `personas.review_eval` | bool | `true` | `Z_HARNESS_PERSONAS_REVIEW_EVAL` | Enable the advisory persona reviewer at code-review gates — z-implement-all, z-implement-next, z-plan-light, z-fix, z-do (CONVERGENT). When ON, one `reviewer`-role persona is dispatched advisory-only alongside the authoritative neutral codex gate. |
+| `personas.consult_eval` | bool | `false` | `Z_HARNESS_PERSONAS_CONSULT_EVAL` | Enable the advisory persona consult arm at convergent evaluation sites — z-plan-light bundled consult and z-audit bundled consult (CONVERGENT). **Default OFF** — this is the most expensive and lowest-signal advisory arm. When ON, one additional `consultant`-persona advisory arm is dispatched alongside the neutral consult; its output is logged advisory-only. |
+| `personas.implementer_retry` | string | `"same"` | `Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY` | Controls how the implementer persona is handled across retries. `same` (default) — reuse the cycle-1 persona for all retries of the same task. `new` — fresh draw excluding the prior persona on each retry. No effect when `experiment.persona_rotation = false`. |
+
+**Key design constraint:** There is NO `personas.debug` knob — it was removed as dead code. Do not document or implement it.
+
+**TOML example** (`.z-harness/config.toml`):
+
+```toml
+[brainstorm]
+personas = true
+
+[personas]
+critique_panel = true
+audit = true
+review_eval = true
+consult_eval = false          # default OFF — most expensive/lowest-signal advisory arm
+implementer_retry = "same"    # "same" | "new"
+```
+
+**Invariants:**
+- All boolean knobs accept `true` or `false` only. Repo/env layer violations exit 2 (hard fail); global layer violations soft-warn and fall back to defaults.
+- `personas.implementer_retry` accepts only `"same"` or `"new"`. Any other value is a hard validation failure.
+- `personas.consult_eval` defaults OFF. At convergent sites the neutral arm always runs; the persona advisory arm adds overhead with the lowest measured signal gain.
+- The neutral-authority invariant applies at all CONVERGENT sites regardless of knob state: the neutral arm is always the decision of record.
 
 ## The knobs ([axioms] section)
 
@@ -633,55 +343,6 @@ The `[axioms]` TOML section controls the axiom extraction pipeline and how axiom
 | `axioms.extract_min_recurrence` | int | `3` | `Z_HARNESS_AXIOMS_EXTRACT_MIN_RECURRENCE` | Minimum recurrence count before a behavioral pattern is auto-extracted as an axiom candidate. Positive integer. |
 | `axioms.auto_extract_post_run` | bool | `true` | `Z_HARNESS_AXIOMS_AUTO_EXTRACT_POST_RUN` | When `true`, runs the axiom extraction pipeline automatically at the end of each `/z-*` run. Set to `false` to disable automatic extraction (manual extraction still possible). |
 
-**TOML example** (`.z-harness/config.toml`):
-
-```toml
-[axioms]
-enabled = true
-kernel_budget_chars = 6000
-extract_min_recurrence = 3
-auto_extract_post_run = true
-```
-
-**Invariants:**
-- `axioms.enabled` and `axioms.auto_extract_post_run` must be `true` or `false`; `axioms.kernel_budget_chars` and `axioms.extract_min_recurrence` must be positive integers (≥1).
-- Repo/env layer violations exit 2 (hard fail); global layer violations soft-warn and fall back to defaults.
-- `axioms.enabled = false` is a complete no-op for resolution: `_load_axiom_matches` returns `[]` and the envelope is byte-identical to the pre-axiom result.
-
-## The knobs ([personas] section)
-
-The `[personas]` section controls per-surface persona dispatch across all z-harness commands. Each boolean knob enables or disables persona injection at one class of dispatch site; disabling a knob is byte-identical to pre-feature behavior at that site.
-
-| Key | Type | Default | Env var | Description |
-|-----|------|---------|---------|-------------|
-| `personas.critique_panel` | bool | `true` | `Z_HARNESS_PERSONAS_CRITIQUE_PANEL` | Enable persona injection at the z-plan Phase 3 + Phase 7 fixed 5-panel critique arms (DIVERGENT). When ON, 5 distinct `consultant` personas are drawn and positionally prepended. |
-| `personas.audit` | bool | `true` | `Z_HARNESS_PERSONAS_AUDIT` | Enable persona injection at z-audit dimension auditors (DIVERGENT). When ON, one distinct `audit_persona` is drawn per dimension (correctness / perf / cleanliness / design). |
-| `personas.review_eval` | bool | `true` | `Z_HARNESS_PERSONAS_REVIEW_EVAL` | Enable the advisory persona reviewer at code-review gates — z-implement-all, z-implement-next, z-plan-light, z-fix, z-do (CONVERGENT). When ON, one `reviewer`-role persona is dispatched advisory-only alongside the authoritative neutral codex gate. |
-| `personas.consult_eval` | bool | `false` | `Z_HARNESS_PERSONAS_CONSULT_EVAL` | Enable the advisory persona consult arm at convergent evaluation sites — z-plan-light bundled consult and z-audit bundled consult (CONVERGENT). **Default OFF** — this is the most expensive and lowest-signal advisory arm. When ON, one additional `consultant`-persona advisory arm is dispatched alongside the neutral consult; its output is logged advisory-only. |
-| `personas.implementer_retry` | string | `"same"` | `Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY` | Controls how the implementer persona is handled across retries. `same` (default) — reuse the cycle-1 persona for all retries of the same task (lifecycle traceability: one persona_id across a task's cycles). `new` — fresh draw excluding the prior persona on each retry. No effect when `experiment.persona_rotation = false`. |
-
-**Back-compat alias:** `brainstorm.personas` (in the `[brainstorm]` section) controls ideator persona injection for `/z-brainstorm`. It is a member of the persona family but remains in `[brainstorm]` to avoid churn in existing configs. Do NOT move it to `[personas]`.
-
-**TOML example** (`.z-harness/config.toml`):
-
-```toml
-[personas]
-critique_panel = true
-audit = true
-review_eval = true
-consult_eval = false          # default OFF — most expensive/lowest-signal advisory arm
-implementer_retry = "same"    # "same" | "new"
-```
-
-**Invariants:**
-- All boolean knobs accept `true` or `false` only. Repo/env layer violations exit 2 (hard fail); global layer violations soft-warn and fall back to defaults.
-- `personas.implementer_retry` accepts only `"same"` or `"new"`. Any other value is a hard validation failure.
-- Knob-OFF at any site is byte-identical to pre-feature behavior: no draw, no prefix, no `persona_bound` event.
-- `personas.consult_eval` OFF (the default) means the neutral consult arm runs alone at convergent sites — no advisory overhead.
-- The neutral-authority invariant applies at all CONVERGENT sites regardless of knob state: the neutral arm is always the decision of record.
-
----
-
 ## The knobs ([experiment] section)
 
 The `[experiment]` section contains feature-flag knobs that are **on by default**. These govern the persona-rotation data-collection experiment. Disabling them reverts the commands to their pre-experiment behavior exactly — no events, no state files, no prompt changes.
@@ -691,14 +352,6 @@ The `[experiment]` section contains feature-flag knobs that are **on by default*
 | `experiment.persona_rotation` | bool | `true` | `Z_HARNESS_EXPERIMENT_PERSONA_ROTATION` | Master on/off switch for all persona-rotation behavior in `/z-implement-all`, `/z-implement-next`, `/z-plan`, and `/z-debug`. Set to `false` to pause data collection and restore pre-experiment behavior. |
 | `experiment.control_every_n` | int | `5` | `Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N` | Forced-control cadence. Every Nth implementer attempt (counted repo-wide, persisted in `.z-harness/.persona-control-counter`) uses `boring-anchor` instead of a random draw. Default 5 means 1-in-5 attempts is a control sample. |
 
-**TOML example** (`.z-harness/config.toml`):
-
-```toml
-[experiment]
-persona_rotation = true
-control_every_n = 5
-```
-
 **Kill-switch** — to pause the experiment entirely:
 
 ```bash
@@ -707,100 +360,85 @@ export Z_HARNESS_EXPERIMENT_PERSONA_ROTATION=false
 scripts/config.sh set experiment.persona_rotation false --scope=project
 ```
 
-**Invariants:**
-- `experiment.persona_rotation = false` is a complete no-op: no draw events, no state files written, no `PERSONA_PREFIX` prepended, no `persona_attempt_outcome` emitted. Previous `/z-implement-all` behavior is restored exactly.
-- `experiment.control_every_n` has no effect when `persona_rotation = false`.
-- Validation: `persona_rotation` must be `true` or `false`; `control_every_n` must be a positive integer (≥1). Repo/env layer violations exit 2 (hard fail); global layer violations soft-warn and fall back to defaults.
-
 ---
 
 ## How it interacts with others
 
-- `commands` (z-audit-plan, z-audit-plan-style, z-plan, z-fix, z-uplift, z-amend, z-do, z-research, z-implement-all, z-review-all, z-overnight, z-implement-next, z-debug) — call `export-env` + `should-notify` during Setup; call `resolve-question` before workflow AskUserQuestions; call `check-no-ask` for overnight gate checks; call `set` after proposal acceptance; call `propose-prefs.py` at command end; read `experiment.persona_rotation` and `experiment.control_every_n` at each implementer dispatch
+- `commands` (z-audit-plan, z-audit-plan-style, z-plan, z-fix, z-uplift, z-amend, z-do, z-research, z-implement-all, z-review-all, z-overnight, z-implement-next, z-debug, z-audit, z-brainstorm, z-plan-light) — call `export-env` + `should-notify` during Setup; call `resolve-question` before workflow AskUserQuestions; call `check-no-ask` for overnight gate checks; call `set` after proposal acceptance; call `propose-prefs.py` at command end; read `brainstorm.personas`, `personas.*`, `experiment.*` at each persona-dispatch site
 - `skills` (z-suggest-memory, z-map, z-plan-light, z-debug, z-brainstorm, z-do, z-plan, z-research) — call `list-question-ids` to validate routing-preference question IDs; call `resolve-question` for slug-confirm gate; call `export-env` + `should-notify` during Setup
-- `scripts` — provides the `log-event.sh` + `log-phase.sh` telemetry pipeline that `config.py` writes events through (`config_resolved`, `askuser_resolved`, `overnight_decision`, `askuser_halted`, `unknown_ask_blocked`, `unhandled_gate`, `config_conflict`); `scripts/persona-stats.py` reads `metrics.jsonl` and calls `config.py get experiment.*` for context; `scripts/axiom-store.py` loaded dynamically by `_load_axiom_store_module` for axiom resolution
-- `followup-sink` — `sink-add.sh` called by orchestrators when `resolve-question` returns `defer-to-sink`; creates follow-up entries in the project or global sink; `notion-push.py` reads `Z_HARNESS_NOTION_TOKEN` env override or `followup.notion_token_path` secrets file for Notion auth
+- `scripts` — provides the `log-event.sh` + `log-phase.sh` telemetry pipeline that `config.py` writes events through; `scripts/axiom-store.py` loaded dynamically by `_load_axiom_store_module` for axiom resolution
+- `followup-sink` — `sink-add.sh` called by orchestrators when `resolve-question` returns `defer-to-sink`; `notion-push.py` reads `Z_HARNESS_NOTION_TOKEN` env override
 - `active-plan-registry` — `Z_HARNESS_REGISTRY_ENABLED`, `Z_HARNESS_REGISTRY_STALE_SECS`, `Z_HARNESS_STRICT_OVERLAP`, `Z_HARNESS_EXTERNAL_DEFAULT`, and `Z_HARNESS_BASE_DIR` are env-only knobs (not in config.py's DEFAULTS) consumed by `plan-path.sh` and `active-plan-registry.py`
+
+## Key entry points
+
+- `scripts/config.py:51` — `DEFAULTS` — built-in default values for all config keys including `[brainstorm]`, `[personas]`, `[workflow]`, `[followup]`, `[axioms]`, `[experiment]` sections (layer 1)
+- `scripts/config.py:134` — `VALIDATORS` — allowed enum sets per dotted-key; hard-fail on repo/env, soft-warn on global; includes all `personas.*`, workflow, axioms, experiment keys
+- `scripts/config.py:163` — `_COERCERS` — post-validation normalizers; converts env-var strings to typed Python values for bool/int knobs (including all `personas.*` bool knobs)
+- `scripts/config.py:181` — `QUESTION_IDS` — single source of truth for AskUserQuestion routing-class preference keys
+- `scripts/config.py:251` — `OVERNIGHT_AUTODECIDE_QIDS_DEFAULT` — default overnight allowlist
+- `scripts/config.py:257` — `RESULT_MAP` — maps `(question_id, option-domain-value)` to resolver result-domain
+- `scripts/config.py:321` — `_run_startup_guards` — module-load consistency check
+- `scripts/config.py:630` — `load_config` — build resolved config from all 4 layers; returns `(values, sources)` dicts
+- `scripts/config.py:846` — `cmd_export_env` — print export lines for all user knobs; emit `config_resolved` once per run
+- `scripts/config.py:1927` — `cmd_resolve_question` — consults 4-layer config + memory + axioms + overnight overrides; returns JSON envelope
+- `scripts/config.py:2094` — `cmd_check_no_ask` — lightweight overnight-gate checker
+- `scripts/config.py:2323` — `cmd_set` — atomically write a TOML key to global or project config via tmp+rename
+- `scripts/propose-prefs.py:1` — `propose-prefs` (module) — walks `metrics.jsonl` for repeated command-pair patterns; emits JSON proposal if threshold met; never writes
 
 ## Examples
 
-**User-global config** (`~/.config/z-harness/config.toml`) — Loader API knobs only:
+**Repo-local override with all persona knobs** (`.z-harness/config.toml`):
 
 ```toml
 schema_version = 1
 
-[notify]
-# off | approval_only | all
-level = "all"
+[brainstorm]
+personas = true
 
-[docs]
-# always | never  (applies to light flows only)
-always_apply = "never"
+[personas]
+critique_panel = true
+audit = true
+review_eval = true
+consult_eval = false          # default OFF — most expensive advisory arm; enable to collect data
+implementer_retry = "same"    # "same" | "new"
+
+[experiment]
+persona_rotation = true
+control_every_n = 5
 ```
 
-**Repo-local override** (`.z-harness/config.toml` at git root) — silence notifications for this repo only (Loader API):
+**Env override to disable the most expensive advisory arm:**
 
-```toml
-schema_version = 1
-
-[notify]
-level = "off"
+```bash
+export Z_HARNESS_PERSONAS_CONSULT_EVAL=false   # already the default
+export Z_HARNESS_PERSONAS_REVIEW_EVAL=true
+export Z_HARNESS_PERSONAS_CRITIQUE_PANEL=true
 ```
 
-**Workflow preferences** (`.z-harness/config.toml` at git root) — Workflow Resolver knobs:
+**Env override for CI — disable persona injection entirely:**
+
+```bash
+export Z_HARNESS_BRAINSTORM_PERSONAS=false
+export Z_HARNESS_PERSONAS_CRITIQUE_PANEL=false
+export Z_HARNESS_PERSONAS_AUDIT=false
+export Z_HARNESS_PERSONAS_REVIEW_EVAL=false
+export Z_HARNESS_PERSONAS_CONSULT_EVAL=false
+export Z_HARNESS_EXPERIMENT_PERSONA_ROTATION=false
+```
+
+**Workflow preferences** (`.z-harness/config.toml` at git root):
 
 ```toml
 schema_version = 1
 
 [workflow]
-# ask | amend | stop
 audit_to_amend = "amend"
-
-# ask | auto_accept | recommend_derived
 slug_confirm = "recommend_derived"
-
-# ask | auto_resume | halt
 implement_all_proceed = "auto_resume"
-
-# ask | proceed | halt
 review_all_proceed = "proceed"
-
-# ask | approve | halt
 plan_decisions_approval = "approve"
-
-# ask | defer_to_sink_p2
 spec_retro_discovery = "defer_to_sink_p2"
-```
-
-**Axioms config** (`.z-harness/config.toml`):
-
-```toml
-[axioms]
-enabled = true
-kernel_budget_chars = 8000
-extract_min_recurrence = 3
-auto_extract_post_run = true
-```
-
-**Follow-up namespace** (`.z-harness/config.toml` at git root):
-
-```toml
-[followup]
-default_sink = "project"
-notion_enabled = false
-auto_close_low_risk_enabled = true
-staleness_commit_window = 50
-staleness_warn_days = 30
-staleness_hard_dismiss_days = 0
-```
-
-**Env override for CI** — covers both surfaces:
-
-```bash
-export Z_HARNESS_NOTIFY_LEVEL=off
-export Z_HARNESS_DOCS_ALWAYS_APPLY=never
-export Z_HARNESS_WORKFLOW_AUDIT_TO_AMEND=amend
-export Z_HARNESS_WORKFLOW_SLUG_CONFIRM=auto_accept
 ```
 
 **Overnight mode with custom allowlist:**
@@ -810,42 +448,24 @@ export Z_HARNESS_NO_ASK=halt
 export Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE='{"workflow.slug_confirm":"recommend_derived","workflow.plan_decisions_approval":"approve"}'
 ```
 
-**Batch key lookup (reduce N forks to 1):**
-
-```bash
-BATCH="$(python3 scripts/config.py get-batch notify.level followup.notion_enabled followup.default_sink)"
-NOTIFY_LEVEL="$(echo "$BATCH" | jq -r '.["notify.level"]')"
-NOTION_ENABLED="$(echo "$BATCH" | jq -r '.["followup.notion_enabled"]')"
-```
-
 ## Edge cases / gotchas
 
+- `personas.consult_eval` defaults to `false` (OFF) — it is the most expensive and lowest-signal advisory arm; turning it on adds one extra subagent call at every convergent eval site
+- There is NO `personas.debug` knob — it was removed as dead code. Do not attempt to configure it; it will be silently ignored or may trigger a validation error on future schema revisions
+- `brainstorm.personas` remains in `[brainstorm]` (not `[personas]`) by design; do NOT move it
+- `personas.implementer_retry` only has effect when `experiment.persona_rotation = true`; when rotation is off, `implementer_retry` is a no-op regardless of its value
 - `workflow.slug_confirm` value domain (`ask`/`auto_accept`/`recommend_derived`) is NOT the same as the resolver result domain (`ask`/`prefill`/`skip`); `RESULT_MAP` translates between them — `auto_accept` → `skip`, `recommend_derived` → `prefill`
-- Slug-confirm has TWO gates: hard collision check (always runs, resolver NOT consulted) + soft non-obvious confirmation (resolver-controlled). `resolve-question` only governs the soft gate
 - `Z_HARNESS_ASK_ALL=1` and `Z_HARNESS_NO_ASK=halt` are mutually exclusive — setting both causes `resolve-question` to exit 5 (not 0); check for this conflict before setting both in scripts
 - `check-no-ask` fails closed on unregistered question IDs when `NO_ASK=halt` — unknown question → `halt` + `unknown_ask_blocked` event
-- `check-no-ask` in policy mode (NO_ASK=halt + AUTODECIDE_EFFECTIVE set) returns `unhandled_gate` instead of `halt` for registered gates not on the policy; this is a loud abort, not a soft block
-- `Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE` must be valid JSON and a JSON object; malformed JSON causes the env layer to be skipped entirely (defaults still apply); malformed individual entries are dropped individually
 - Capture exit code separately from output: `RESOLVED=$(python3 scripts/config.py resolve-question ...); RESOLVE_EXIT=$?`. Never pipe through `set -e` chains that swallow exit codes
-- When `source==conflict`, AskUser surfaces a follow-up write-back question after the user picks, to prevent conflict persisting across runs
-- The proposer in v1 only watches command-pair patterns via `run_start`/`run_end` in `metrics.jsonl`; it does NOT auto-propose `workflow.slug_confirm` because AskUser responses are not yet recorded in metrics.jsonl
-- Stale routing-preference memory after config supersedes it: v1 emits `memory_potentially_superseded` warning; cleanup is a v2 concern
-- Memory entries missing required fields are logged as `routing_preference_malformed` events and skipped (no crash)
-- Resolver falls back to `git rev-parse --show-toplevel` for `project_root` when `Z_HARNESS_PROJECT_ROOT` is unset; treats all memories as global when outside a git repo
-- `_run_startup_guards()` runs at module load and raises `SystemExit(2)` if `QUESTION_IDS`, `VALIDATORS`, and `RESULT_MAP` are internally inconsistent — add to both registries when extending
-- `cmd_set` exits 0 silently on success; it does NOT print a confirmation line to stdout. Check exit code only
-- Valid event kinds for `should-notify` are `approval`, `phase_end`, `error` only — passing `run_complete` (used by some callers such as `z-research`) exits 2; guard with `|| true` if needed
-- `defer-to-sink` result must NOT be treated as `skip` — the orchestrator must explicitly call `scripts/sink-add.sh`; absence of that call silently drops the discovery
-- `[followup]` keys that are arrays (e.g. `auto_close_low_risk_path_allowlist`) are NOT in `VALIDATORS` and receive no enum validation; the TOML parser accepts any array
+- `cmd_set` exits 0 silently on success — no stdout output; do not parse stdout from `cmd_set`
+- Valid event kinds for `should-notify`: `approval`, `phase_end`, `error` only. Passing `run_complete` exits 2; guard invocations with `|| true` if needed
+- `get-batch` always exits 0 unlike `get` which exits 3 on unknown keys — callers must check for `null` values in JSON output to detect missing keys
+- `[followup]` keys that are arrays (e.g. `auto_close_low_risk_path_allowlist`) are NOT in `VALIDATORS` and receive no enum validation
 - `followup.auto_close_low_risk_enabled` defaults to `true` (on by default); set to `false` to disable — do not assume the default is off
-- `followup.auto_close_low_risk_path_denylist` last entry is `"/*.md"` (root-anchored, blocks top-level `.md` files only), NOT `"*.md"` (which would block all `.md` at any depth including `docs/**/*.md`). Pathspecs with a leading slash are restricted to top-level only.
-- `Z_HARNESS_NOTION_TOKEN` is env-only (not a TOML key); it overrides `followup.notion_token_path` secrets file lookup in `notion-push.py`. Never log it; never run `notion-push.py` wrappers under `set -x`.
-- `get-batch` always exits 0 — it does NOT exit 3 for unknown keys the way `get` does. Callers must check for `null` values in the JSON output to detect missing keys.
-- `inspect-all` is the canonical introspection tool — use it (not repeated `get` calls) when you need to audit the full current configuration state.
-- Axiom participation requires `axioms.enabled = true` (the default) AND `scripts/axiom-store.py` present. When the store is absent, axioms are a silent no-op — not an error.
-- Axioms never override config or memory; they only fill gaps (no higher-layer preference set). `source:"axiom_conflict"` means the higher layer still wins.
-- `axioms.kernel_budget_chars` and `axioms.extract_min_recurrence` must be positive integers; the string `"0"` fails validation (positive int means ≥1).
-- `Z_HARNESS_REGISTRY_ENABLED`, `Z_HARNESS_REGISTRY_STALE_SECS`, `Z_HARNESS_STRICT_OVERLAP`, `Z_HARNESS_EXTERNAL_DEFAULT`, and `Z_HARNESS_BASE_DIR` are NOT in config.py's DEFAULTS or VALIDATORS — they are consumed exclusively by `plan-path.sh` and `active-plan-registry.py`. `inspect-all` does not surface them.
+- `Z_HARNESS_NOTION_TOKEN` is env-only (not a TOML key); never log it; never run `notion-push.py` wrappers under `set -x`
+- Axiom participation requires `axioms.enabled = true` (the default) AND `scripts/axiom-store.py` present. When the store is absent, axioms are a silent no-op — not an error
+- `Z_HARNESS_REGISTRY_ENABLED`, `Z_HARNESS_REGISTRY_STALE_SECS`, `Z_HARNESS_STRICT_OVERLAP`, `Z_HARNESS_EXTERNAL_DEFAULT`, and `Z_HARNESS_BASE_DIR` are NOT in config.py's DEFAULTS or VALIDATORS — consumed exclusively by `plan-path.sh` and `active-plan-registry.py`; `inspect-all` does NOT surface them
 
 ## v2 deferrals
 
@@ -859,11 +479,4 @@ The following are known issues documented in SPEC but deferred to v2:
 
 ## Future knobs
 
-Slices 2 and 3 of this feature (see `z-harness/z-harness-config-toml/BRAINSTORM.md`)
-plan additional knobs for consult preferences, escalation budgets, archive
-retention, and prompt-fragment injection.
-
-**Do not add knobs without a `/z-plan` run.** Schema sprawl is the most common
-failure mode for config systems — every new knob must be designed, documented,
-and validated before it ships.  Undocumented knobs break the two-tier doc
-contract and silently diverge from `docs/llm/config.json`.
+Do not add knobs without a `/z-plan` run. Schema sprawl is the most common failure mode for config systems — every new knob must be designed, documented, and validated before it ships. Undocumented knobs break the two-tier doc contract and silently diverge from `docs/llm/config.json`.
