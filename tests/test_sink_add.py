@@ -62,6 +62,12 @@ def _run_sink_add(
     lock_file: str | None = None,
 ) -> subprocess.CompletedProcess:
     env = {**os.environ, **(env_extra or {})}
+    # Pin the artifact base into the per-test tmpdir. The default base is now
+    # external (XDG state dir), so without this the sink would be created under
+    # ~/.local/state/z-harness/<repo>-<hash>/followups instead of the
+    # tmp/z-harness/followups the assertions read.
+    if cwd and "Z_HARNESS_BASE_DIR" not in env:
+        env["Z_HARNESS_BASE_DIR"] = str(Path(cwd) / "z-harness")
     if lock_file:
         env["Z_HARNESS_FOLLOWUP_GLOBAL_LOCK"] = lock_file
     return subprocess.run(

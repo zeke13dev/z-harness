@@ -81,7 +81,11 @@ def _write_axiom(repo_root: Path, rec: dict) -> None:
 def _run(repo_root: Path, xdg: Path, run_id: str = "test-run",
          extra_args: list[str] | None = None) -> subprocess.CompletedProcess:
     """Run build-kernel.py with cwd inside the temp repo so metrics land there."""
-    env = {**os.environ, "XDG_CONFIG_HOME": str(xdg), "Z_HARNESS_RUN": run_id}
+    # Pin the artifact base into the temp repo so emitted events land in
+    # repo_root/z-harness/metrics.jsonl (the default base is now the external
+    # XDG state dir, which _metrics_events does not read).
+    env = {**os.environ, "XDG_CONFIG_HOME": str(xdg), "Z_HARNESS_RUN": run_id,
+           "Z_HARNESS_BASE_DIR": str(repo_root / "z-harness")}
     args = [sys.executable, _SCRIPT, "--scope", "project", "--repo-root", str(repo_root)]
     args += extra_args or []
     return subprocess.run(
@@ -396,7 +400,8 @@ class TestSupersederoundtrip(unittest.TestCase):
             # Remove B from approved/.
             (store_dir / "approved" / f"{b_id}.json").unlink()
 
-            env = {**os.environ, "XDG_CONFIG_HOME": str(xdg), "Z_HARNESS_RUN": "supersede-test"}
+            env = {**os.environ, "XDG_CONFIG_HOME": str(xdg), "Z_HARNESS_RUN": "supersede-test",
+                   "Z_HARNESS_BASE_DIR": str(repo / "z-harness")}
             r = subprocess.run(
                 [sys.executable, _SCRIPT, "--scope", "project",
                  "--repo-root", str(repo)],
@@ -439,6 +444,8 @@ class TestApproveRejectKernelRegen(unittest.TestCase):
             **os.environ,
             "XDG_CONFIG_HOME": str(xdg),
             "Z_HARNESS_RUN": "regen-test",
+            # Pin the base into the temp repo (default base is now external).
+            "Z_HARNESS_BASE_DIR": str(repo / "z-harness"),
         }
 
     def test_approve_regenerates_kernel_with_new_axiom(self):
@@ -531,7 +538,8 @@ class TestTamperedApprovedDropped(unittest.TestCase):
             _write_axiom_in_dir(store_dir, "approved", good)
             _write_axiom_in_dir(store_dir, "approved", bad)
 
-            env = {**os.environ, "XDG_CONFIG_HOME": str(xdg), "Z_HARNESS_RUN": "tamper-test"}
+            env = {**os.environ, "XDG_CONFIG_HOME": str(xdg), "Z_HARNESS_RUN": "tamper-test",
+                   "Z_HARNESS_BASE_DIR": str(repo / "z-harness")}
             r = subprocess.run(
                 [sys.executable, _SCRIPT, "--scope", "project",
                  "--repo-root", str(repo)],

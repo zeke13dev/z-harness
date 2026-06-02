@@ -52,6 +52,12 @@ def _run_script(
     # Unset any existing AXIOM_EXTRACT override so tests are not affected by the
     # caller's environment.
     env.pop("Z_HARNESS_AXIOM_EXTRACT", None)
+    # Pin the artifact base into the per-test tmpdir. The default base is now
+    # external (XDG state dir), so without this the emitted events would land in
+    # ~/.local/state/z-harness/<repo>-<hash>/metrics.jsonl instead of the
+    # tmp/z-harness/metrics.jsonl that _read_metrics reads — breaking both the
+    # assertions and the hermeticity claimed in this module's docstring.
+    env.setdefault("Z_HARNESS_BASE_DIR", str(Path(cwd) / "z-harness"))
     if env_extra:
         env.update(env_extra)
     return subprocess.run(
@@ -271,6 +277,7 @@ class TestLogDecision(unittest.TestCase):
         """Unset Z_HARNESS_AXIOM_EXTRACT means emit (default on)."""
         env = os.environ.copy()
         env.pop("Z_HARNESS_AXIOM_EXTRACT", None)
+        env.setdefault("Z_HARNESS_BASE_DIR", str(self._tmp_path / "z-harness"))
         result = subprocess.run(
             ["bash", _SCRIPT, "run-default", "q", "chosen", "--kind", "user_choice"],
             cwd=str(self._tmp_path),
