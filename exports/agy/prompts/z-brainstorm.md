@@ -398,6 +398,59 @@ Checkpoint: write the assembled scaffolding to `$Z_HARNESS_PLAN_DIR/archive/$RUN
 
 ## Phase 2 — Parallel ideator dispatch
 
+### 2a. Resolve ideator personas
+
+Gated on the `brainstorm.personas` config knob (default ON). **When the knob is OFF the entire block is a no-op** — every `*_PERSONA_PREFIX` stays empty and the dispatch in 2b is byte-identical to the pre-feature vendor-only brainstorm (no draw, no prefix, no `persona_bound` event). When ON, draw up to 3 **distinct** personas for the `ideator` role and prepend each persona body to one ideator's prompt — persona diversity layered on top of vendor diversity.
+
+```bash
+PLUGIN="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+USE_PERSONAS=$(python3 "$PLUGIN/scripts/config.py" get brainstorm.personas 2>/dev/null || echo "true")
+
+# Vanilla defaults: empty prefix + "<none>" name for all three. Knob OFF leaves
+# these untouched, so 2b dispatch is identical to the pre-persona behavior.
+CLAUDE_PERSONA_PREFIX=""; CODEX_PERSONA_PREFIX=""; GEMINI_PERSONA_PREFIX=""
+CLAUDE_PERSONA_NAME="<none>"; CODEX_PERSONA_NAME="<none>"; GEMINI_PERSONA_NAME="<none>"
+CLAUDE_DRAW_ID=""; CODEX_DRAW_ID=""; GEMINI_DRAW_ID=""
+
+if [ "$USE_PERSONAS" = "true" ]; then
+  # Draw up to 3 distinct personas. GRACEFUL DEGRADATION: if the ideator pool has
+  # fewer than 3 members, the subcommand returns a shorter array (or [] when empty)
+  # and notes it on stderr — it never exits non-zero. Unfilled slots stay vanilla.
+  PERSONAS_JSON=$(python3 "$PLUGIN/scripts/resolve-persona.py" random-distinct-for-role ideator --count=3 2>>"$Z_HARNESS_PLAN_DIR/archive/$RUN/persona-draw.log")
+
+  # Positional bind: [0]->claude, [1]->codex, [2]->gemini. `// ""` yields an empty
+  # string for absent indices under underflow, so those ideators run vanilla.
+  for slot in 0:CLAUDE 1:CODEX 2:GEMINI; do
+    idx="${slot%%:*}"; who="${slot##*:}"
+    name=$(echo "$PERSONAS_JSON" | jq -r ".[$idx].persona // \"\"")
+    path=$(echo "$PERSONAS_JSON" | jq -r ".[$idx].persona_body_path // \"\"")
+    draw=$(echo "$PERSONAS_JSON" | jq -r ".[$idx].draw_id // \"\"")
+    [ -z "$name" ] && continue   # underflow slot — leave vanilla
+    # prepend_persona(path, "") strips frontmatter and returns "<body>\n\n".
+    prefix=$(python3 "$PLUGIN/runtime/dispatch/persona_prompt.py" "$path" "" 2>/dev/null | head -c 4096)
+    eval "${who}_PERSONA_NAME=\$name"
+    eval "${who}_PERSONA_PREFIX=\$prefix"
+    eval "${who}_DRAW_ID=\$draw"
+  done
+fi
+```
+
+**Emit `persona_bound` per ideator that received a persona** (attribution only — no outcome tracking; brainstorm ideators have no measurable terminal). Skip the emit for any vanilla slot and skip the whole step when the knob is OFF:
+
+```bash
+if [ "$USE_PERSONAS" = "true" ]; then
+  for v in claude:CLAUDE codex:CODEX gemini:GEMINI; do
+    vendor="${v%%:*}"; who="${v##*:}"
+    eval "pname=\$${who}_PERSONA_NAME"; eval "pdraw=\$${who}_DRAW_ID"
+    [ "$pname" = "<none>" ] && continue
+    bash "$PLUGIN/scripts/log-event.sh" "$RUN" persona_bound \
+      "$(python3 -c 'import json,sys; print(json.dumps({"command":"z-brainstorm","role":"ideator","vendor":sys.argv[1],"persona_id":sys.argv[2],"draw_id":sys.argv[3]}))' "$vendor" "$pname" "$pdraw")"
+  done
+fi
+```
+
+### 2b. Dispatch
+
 Spawn **all three ideators in parallel in a single message**, each receiving the **identical** scaffolding payload from Phase 1 (topic + doc-fetcher synthesis + Explore findings if any + RESEARCH content/summary if any). No read-by-reference asymmetry.
 
 Define a shared instruction block `IDEATOR_SCHEMA` (used verbatim in all three prompts):
@@ -416,21 +469,21 @@ Then dispatch:
   subagent_type="general-purpose",
   model="sonnet",
   description="Claude ideator for <slug>",
-  prompt="MODE: brainstorm\n\nTopic: <topic>\n\nScaffolding:\n<paste assembled payload>\n\n<IDEATOR_SCHEMA>"
+  prompt="<CLAUDE_PERSONA_PREFIX>MODE: brainstorm\n\nTopic: <topic>\n\nScaffolding:\n<paste assembled payload>\n\n<IDEATOR_SCHEMA>"
 )
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="consultant-secondary",
   description="Codex ideator for <slug>",
-  prompt="MODE: brainstorm\n\nTopic: <topic>\n\nScaffolding:\n<same payload>\n\n<IDEATOR_SCHEMA>"
+  prompt="<CODEX_PERSONA_PREFIX>MODE: brainstorm\n\nTopic: <topic>\n\nScaffolding:\n<same payload>\n\n<IDEATOR_SCHEMA>"
 )
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="consultant-primary",
   description="Gemini ideator for <slug>",
-  prompt="MODE: brainstorm\n\nTopic: <topic>\n\nScaffolding:\n<same payload>\n\n<IDEATOR_SCHEMA>"
+  prompt="<GEMINI_PERSONA_PREFIX>MODE: brainstorm\n\nTopic: <topic>\n\nScaffolding:\n<same payload>\n\n<IDEATOR_SCHEMA>"
 )
 ```
 
-All three ideators see byte-identical scaffolding AND byte-identical schema instructions. The consultants return RAW (per the `MODE: brainstorm` contract in their agent files) — no standard wrapper. The Claude ideator (general-purpose Sonnet) returns the same five-section block.
+Each `<*_PERSONA_PREFIX>` is the persona body followed by a blank line (from 2a), or **empty** when that ideator drew no persona (underflow slot) or the `brainstorm.personas` knob is OFF — in the empty case the prompt is byte-identical to the pre-persona dispatch. All three ideators still see byte-identical **scaffolding** and **schema** instructions; only the persona prefix differs, which is the entire point — persona diversity on top of vendor diversity. The persona is a **prompt-prefix only**: model and runtime per ideator are unchanged. The consultants return RAW (per the `MODE: brainstorm` contract in their agent files) — no standard wrapper. The Claude ideator (general-purpose Sonnet) returns the same five-section block.
 
 ### Ideator failure policy
 
@@ -477,10 +530,16 @@ Log every individual failure as `ideator_failed` regardless of the bucket above.
      claude: sonnet
      codex: default
      gemini: default
+   ideator_personas:        # persona bound to each ideator (brainstorm.personas knob)
+     claude: <persona-id or "<none>">   # "<none>" = vanilla (knob OFF or underflow slot)
+     codex: <persona-id or "<none>">
+     gemini: <persona-id or "<none>">
    status: complete
    chosen_framing: pending
    ---
    ```
+
+   `ideator_personas` records the distinct persona drawn for each ideator (the `*_PERSONA_NAME` values from Phase 2a). A value of `<none>` means that ideator ran vanilla — either the `brainstorm.personas` knob was OFF, or the ideator pool underflowed and this slot got no persona. When an ideator also failed, its persona binding is still recorded here even though the member appears as `<id>:failed` in `ideators`.
 
    `chosen_framing` is written as `pending` here and updated in Phase 4 to one of `claude | codex | gemini | restart | abandoned` per SPEC.
 

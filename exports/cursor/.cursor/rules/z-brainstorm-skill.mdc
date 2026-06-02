@@ -198,6 +198,43 @@ Checkpoint: write the assembled scaffolding to `$Z_HARNESS_PLAN_DIR/archive/$RUN
 
 Spawn **all three ideators in parallel in a single message**, each receiving the **identical** scaffolding payload from Phase 1 (topic + doc-fetcher synthesis + Explore findings if any + RESEARCH content/summary if any). No read-by-reference asymmetry.
 
+### 2a. Resolve ideator personas
+
+Gated on the `brainstorm.personas` knob (default ON). **Knob OFF = no-op** (no draw, no prefix, no `persona_bound`; 2b is byte-identical to the vendor-only dispatch). When ON, draw up to 3 **distinct** personas for the `ideator` role and prepend one per ideator — persona diversity on top of vendor diversity.
+
+```bash
+PLUGIN="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+USE_PERSONAS=$(python3 "$PLUGIN/scripts/config.py" get brainstorm.personas 2>/dev/null || echo "true")
+CLAUDE_PERSONA_PREFIX=""; CODEX_PERSONA_PREFIX=""; GEMINI_PERSONA_PREFIX=""
+CLAUDE_PERSONA_NAME="<none>"; CODEX_PERSONA_NAME="<none>"; GEMINI_PERSONA_NAME="<none>"
+CLAUDE_DRAW_ID=""; CODEX_DRAW_ID=""; GEMINI_DRAW_ID=""
+if [ "$USE_PERSONAS" = "true" ]; then
+  # GRACEFUL DEGRADATION: underflow returns a shorter array (or []), never exits
+  # non-zero; unfilled slots stay vanilla.
+  PERSONAS_JSON=$(python3 "$PLUGIN/scripts/resolve-persona.py" random-distinct-for-role ideator --count=3 2>>"$Z_HARNESS_PLAN_DIR/archive/$RUN/persona-draw.log")
+  for slot in 0:CLAUDE 1:CODEX 2:GEMINI; do
+    idx="${slot%%:*}"; who="${slot##*:}"
+    name=$(echo "$PERSONAS_JSON" | jq -r ".[$idx].persona // \"\"")
+    path=$(echo "$PERSONAS_JSON" | jq -r ".[$idx].persona_body_path // \"\"")
+    draw=$(echo "$PERSONAS_JSON" | jq -r ".[$idx].draw_id // \"\"")
+    [ -z "$name" ] && continue
+    prefix=$(python3 "$PLUGIN/runtime/dispatch/persona_prompt.py" "$path" "" 2>/dev/null | head -c 4096)
+    eval "${who}_PERSONA_NAME=\$name"; eval "${who}_PERSONA_PREFIX=\$prefix"; eval "${who}_DRAW_ID=\$draw"
+  done
+  # Emit persona_bound per bound ideator (attribution only — no outcome tracking).
+  for v in claude:CLAUDE codex:CODEX gemini:GEMINI; do
+    vendor="${v%%:*}"; who="${v##*:}"; eval "pname=\$${who}_PERSONA_NAME"; eval "pdraw=\$${who}_DRAW_ID"
+    [ "$pname" = "<none>" ] && continue
+    bash "$PLUGIN/scripts/log-event.sh" "$RUN" persona_bound \
+      "$(python3 -c 'import json,sys; print(json.dumps({"command":"z-brainstorm","role":"ideator","vendor":sys.argv[1],"persona_id":sys.argv[2],"draw_id":sys.argv[3]}))' "$vendor" "$pname" "$pdraw")"
+  done
+fi
+```
+
+Record the bound persona per ideator (or `<none>`) in the BRAINSTORM.md `ideator_personas` frontmatter map (see Phase 3).
+
+### 2b. Dispatch
+
 Define a shared instruction block `IDEATOR_SCHEMA` (used verbatim in all three prompts):
 
 ```
@@ -211,21 +248,21 @@ Then dispatch:
   subagent_type="general-purpose",
   model="sonnet",
   description="Claude ideator for <slug>",
-  prompt="MODE: brainstorm\n\nTopic: <topic>\n\nScaffolding:\n<paste assembled payload>\n\n<IDEATOR_SCHEMA>"
+  prompt="<CLAUDE_PERSONA_PREFIX>MODE: brainstorm\n\nTopic: <topic>\n\nScaffolding:\n<paste assembled payload>\n\n<IDEATOR_SCHEMA>"
 )
 <!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
   subagent_type="consultant-secondary",
   description="Codex ideator for <slug>",
-  prompt="MODE: brainstorm\n\nTopic: <topic>\n\nScaffolding:\n<same payload>\n\n<IDEATOR_SCHEMA>"
+  prompt="<CODEX_PERSONA_PREFIX>MODE: brainstorm\n\nTopic: <topic>\n\nScaffolding:\n<same payload>\n\n<IDEATOR_SCHEMA>"
 )
 <!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
   subagent_type="consultant-primary",
   description="Gemini ideator for <slug>",
-  prompt="MODE: brainstorm\n\nTopic: <topic>\n\nScaffolding:\n<same payload>\n\n<IDEATOR_SCHEMA>"
+  prompt="<GEMINI_PERSONA_PREFIX>MODE: brainstorm\n\nTopic: <topic>\n\nScaffolding:\n<same payload>\n\n<IDEATOR_SCHEMA>"
 )
 ```
 
-All three ideators see byte-identical scaffolding AND byte-identical schema instructions. The consultants return RAW (per the `MODE: brainstorm` contract in their agent files) — no standard wrapper. The Claude ideator (general-purpose Sonnet) returns the same five-section block.
+Each `<*_PERSONA_PREFIX>` is the persona body + a blank line, or **empty** when that ideator drew no persona (underflow) or the knob is OFF — in the empty case the prompt is byte-identical to the pre-persona dispatch. All three ideators see byte-identical scaffolding AND byte-identical schema instructions; only the persona prefix differs (model/runtime unchanged). The consultants return RAW (per the `MODE: brainstorm` contract in their agent files) — no standard wrapper. The Claude ideator (general-purpose Sonnet) returns the same five-section block.
 
 ### Ideator failure policy
 
@@ -269,6 +306,10 @@ Log every individual failure as `ideator_failed` regardless of the bucket above.
      claude: sonnet
      codex: default
      gemini: default
+   ideator_personas:        # persona bound to each ideator (brainstorm.personas knob); "<none>" = vanilla
+     claude: <persona-id or "<none>">
+     codex: <persona-id or "<none>">
+     gemini: <persona-id or "<none>">
    status: complete
    chosen_framing: pending
    ---
