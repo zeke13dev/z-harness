@@ -2690,12 +2690,11 @@ class TestExperimentSection(unittest.TestCase):
 class TestPersonasSection(unittest.TestCase):
     """
     Verify the [personas] DEFAULTS section:
-      - personas.debug, critique_panel, audit, review_eval default True
+      - critique_panel, audit, review_eval default True
       - personas.consult_eval defaults False (off)
       - personas.implementer_retry defaults "same"
       - env-export emits Z_HARNESS_PERSONAS_* names
       - bad implementer_retry value (e.g. "maybe") is rejected with exit 2
-      - env override for bool knobs (e.g. Z_HARNESS_PERSONAS_DEBUG=false) works
       - env override for implementer_retry (Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY=new) works
     """
 
@@ -2723,12 +2722,6 @@ class TestPersonasSection(unittest.TestCase):
         r = run(["get", "personas.implementer_retry"], env=self.env, cwd=self.cwd)
         self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
         self.assertEqual(r.stdout.strip(), "same")
-
-    def test_debug_default_is_true(self):
-        """personas.debug must default to true."""
-        r = run(["get", "personas.debug"], env=self.env, cwd=self.cwd)
-        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
-        self.assertEqual(r.stdout.strip(), "true")
 
     def test_critique_panel_default_is_true(self):
         """personas.critique_panel must default to true."""
@@ -2793,12 +2786,6 @@ class TestPersonasSection(unittest.TestCase):
     # Env-var name translation (export-env)
     # -------------------------------------------------------------------------
 
-    def test_export_env_emits_personas_debug(self):
-        """export-env must emit Z_HARNESS_PERSONAS_DEBUG."""
-        r = run(["export-env"], env=self.env, cwd=self.cwd)
-        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
-        self.assertIn("Z_HARNESS_PERSONAS_DEBUG", r.stdout)
-
     def test_export_env_emits_personas_consult_eval(self):
         """export-env must emit Z_HARNESS_PERSONAS_CONSULT_EVAL."""
         r = run(["export-env"], env=self.env, cwd=self.cwd)
@@ -2838,14 +2825,6 @@ class TestPersonasSection(unittest.TestCase):
     # -------------------------------------------------------------------------
     # Bool env override coercion
     # -------------------------------------------------------------------------
-
-    def test_env_override_debug_false(self):
-        """Z_HARNESS_PERSONAS_DEBUG=false must coerce to bool false and be returned."""
-        env = dict(self.env)
-        env["Z_HARNESS_PERSONAS_DEBUG"] = "false"
-        r = run(["get", "personas.debug"], env=env, cwd=self.cwd)
-        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
-        self.assertEqual(r.stdout.strip(), "false")
 
     def test_env_override_consult_eval_true(self):
         """Z_HARNESS_PERSONAS_CONSULT_EVAL=true must coerce to bool true and be returned."""

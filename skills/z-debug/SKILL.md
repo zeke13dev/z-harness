@@ -585,7 +585,35 @@ If either fails: halt. Either upgrade the root cause statement (so it actually e
 **Once the gate opens:**
 
 1. Capture pre-fix SHA: `PRE_FIX_SHA=$(git rev-parse HEAD)`. Passed to `/z-mr-review` later as `--base`.
-2. **Bundled `light-fix` consult on the proposed fix.** Dispatch both consultants in parallel per the Phase-visibility matrix (subagents see: Problem + Evidence Inventory + winning Hypothesis Pool rows + Experiment Log + draft Root Cause + draft Evidence coverage table; subagents must NOT see Eliminated Alternatives or Score Updates history):
+2. **Bundled `light-fix` consult on the proposed fix.** Dispatch consultants in parallel per the Phase-visibility matrix (subagents see: Problem + Evidence Inventory + winning Hypothesis Pool rows + Experiment Log + draft Root Cause + draft Evidence coverage table; subagents must NOT see Eliminated Alternatives or Score Updates history).
+
+   **If `PERSONA_ROTATION == "true"`**, use the fixed 5-panel. Before dispatching, emit `persona_bound` events for each arm (same pattern as Phase 3a, with `"phase":"7"`):
+
+   ```bash
+   for ARM in gemini claude-sonnet grok composer codex-5.5; do
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
+       "$(printf '{"run_id":"%s","command":"z-debug","role":"consultant","arm":"%s","selection_source":"fixed_panel","phase":"7"}' \
+          "$RUN" "$ARM")"
+   done
+   ```
+
+   Spawn all 5 panel members in parallel. Cursor arms pass their model via `--model <model>`:
+
+   ```
+   Agent(subagent_type="agy", description="Fix consult for <slug> — gemini arm",
+         prompt="MODE: light-fix\n\n<sections per Phase-visibility matrix row 7>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]")
+   Agent(subagent_type="cursor", model="claude-4.6-sonnet", description="Fix consult for <slug> — claude-sonnet arm",
+         prompt="MODE: light-fix\n\n<same sections>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]")
+   Agent(subagent_type="cursor", model="grok-4.3", description="Fix consult for <slug> — grok arm",
+         prompt="MODE: light-fix\n\n<same sections>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]")
+   Agent(subagent_type="cursor", model="composer-2.5", description="Fix consult for <slug> — composer arm",
+         prompt="MODE: light-fix\n\n<same sections>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]")
+   Agent(subagent_type="codex-cli", description="Fix consult for <slug> — codex-5.5 arm",
+         prompt="MODE: light-fix\n\n<same sections>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]")
+   ```
+
+   **If `PERSONA_ROTATION == "false"`**, fall back to the standard 2-consultant dispatch:
+
    ```
    Agent(subagent_type="consultant-secondary", description="Fix consult for <slug>",
          prompt="MODE: light-fix\n\n<sections per Phase-visibility matrix row 7>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]")

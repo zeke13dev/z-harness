@@ -604,16 +604,22 @@ PERSONA_ROTATION="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scr
 
 **If `PERSONA_ROTATION != "true"`:** skip the draw/state/prefix work (sub-steps 1–4) entirely. `PERSONA_PREFIX` is empty (no persona is prepended); no `persona-draw.json` is written; no draw event is emitted. Still define the `emit_persona_outcome` function from sub-step 5 — its first line `[ "$PERSONA_ROTATION" = "true" ] || return 0` makes it an unconditional no-op when the knob is off, so the halt paths in steps 5/7/7b can call it unconditionally without a guard and emit nothing. Proceed to the implementer `Agent()` call below exactly as before (knob-OFF remains a true no-op — the function exists but never emits).
 
-Initialize `ATTEMPT_ID` safely before the knob-on block so persona-gated log calls that reference `$ATTEMPT_ID` never see an unset variable:
+Initialize `ATTEMPT_ID` and persona vars safely before the knob-on block so downstream references are always safe regardless of which path runs:
 
 ```bash
 ATTEMPT_ID="<task-id>-v$CYCLE"   # safe default for both knob-off and knob-on paths
+PERSONA_PREFIX=""                 # empty → byte-identical vanilla implementer when knob is off
+PERSONA_ID=""
+DRAW_ID=""
+SELECTION_SOURCE=""
 ```
 
 **If `PERSONA_ROTATION == "true"`:** resolve the persona for `attempt_id = <task-id>-v$CYCLE` (the addendum pins `attempt_id` to the existing cycle counter — a deterministic function of state, no new field):
 
 ```bash
 ATTEMPT_ID="<task-id>-v$CYCLE"
+# DRAW_FILE is set below in sub-step 1 based on IMPLEMENTER_RETRY and CYCLE;
+# initialize to the cycle-1 anchor path as a safe default.
 DRAW_FILE="$BASE/archive/tasks/<task-id>/persona-draw.json"
 mkdir -p "$BASE/archive/tasks/<task-id>"
 # Initialize ALL stratification fields read by emit_persona_outcome to sane
@@ -650,17 +656,49 @@ export Z_HARNESS_ATTEMPT_ID="$ATTEMPT_ID"
 export Z_HARNESS_RUN_ID="$RUN"
 ```
 
-1. **Resume vs. fresh draw.** If `DRAW_FILE` exists AND its `attempt_id` field equals `$ATTEMPT_ID`, this is a RESUME of the same attempt — **reuse** the recorded draw verbatim (do NOT redraw, do NOT re-increment the control counter, do NOT re-emit a draw event). Read `persona_id`, `draw_id`, `selection_source`, and `persona_body_path` from the file. Otherwise (file absent, or its `attempt_id` is from a prior cycle — i.e. a RETRY) perform a fresh draw in sub-steps 2–4 and overwrite the file.
+**2x2 behavior matrix for `personas.implementer_retry`:**
+
+| `experiment.persona_rotation` | `personas.implementer_retry` | On RETRY (cycle ≥ 2) |
+|-------------------------------|------------------------------|----------------------|
+| OFF | any | No-op. Byte-identical vanilla implementer. No draw, no prefix, no outcome event. `implementer_retry` value is irrelevant. |
+| ON | `"same"` (default) | Reuse the cycle-1 `persona-draw.json` anchor: same `persona_id`, `draw_id`, and `PERSONA_PREFIX` across all cycles. No redraw, no `--exclude`, no control-counter increment. **Rationale: lifecycle traceability** — one `persona_id` per task across all its cycles, enabling per-persona retry-rate analysis. |
+| ON | `"new"` | Fresh draw excluding the prior cycle's persona (forces diversity). Write the new draw to `persona-draw-v<CYCLE>.json` (a per-cycle sidecar) so the cycle-1 anchor `persona-draw.json` is NOT clobbered. `DRAW_FILE` for sub-steps 2–4 is set to the per-cycle path. |
+| ON | either | If `persona-draw.json` is MISSING on a retry (e.g. older run): fall back to a fresh draw regardless of the knob value. |
+
+Read the `personas.implementer_retry` knob once (default `"same"`) — this governs whether a RETRY reuses the cycle-1 persona or draws a new one (only consulted when `PERSONA_ROTATION == "true"`):
+
+```bash
+IMPLEMENTER_RETRY="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get personas.implementer_retry 2>/dev/null || echo "same")"
+```
+
+1. **Resume vs. fresh draw.** If `DRAW_FILE` exists AND its `attempt_id` field equals `$ATTEMPT_ID`, this is a RESUME of the same attempt — **reuse** the recorded draw verbatim (do NOT redraw, do NOT re-increment the control counter, do NOT re-emit a draw event). Read `persona_id`, `draw_id`, `selection_source`, and `persona_body_path` from the file. Otherwise determine whether this is a same-persona retry or a new-persona retry per the `IMPLEMENTER_RETRY` knob:
+
+   - **cycle 1 (first attempt):** always perform a fresh draw; set `DRAW_FILE` to the cycle-1 anchor (`persona-draw.json`).
+   - **cycle ≥ 2 and `IMPLEMENTER_RETRY == "same"`:** if `persona-draw.json` exists, set `REUSE=1` and `DRAW_FILE` to the cycle-1 anchor — the same persona carries across all cycles of this task. No redraw, no control-counter increment. If `persona-draw.json` is missing, fall back to fresh draw (treat as "new").
+   - **cycle ≥ 2 and `IMPLEMENTER_RETRY == "new"` (or fallback from missing anchor):** set `DRAW_FILE` to the per-cycle sidecar (`persona-draw-v$CYCLE.json`) and perform a fresh draw with `--exclude` of the prior persona. The cycle-1 anchor (`persona-draw.json`) is **never overwritten** on retry.
 
    ```bash
    REUSE=0
-   if [ -f "$DRAW_FILE" ]; then
-     EXISTING_ATTEMPT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("attempt_id",""))' "$DRAW_FILE" 2>/dev/null || echo "")"
-     [ "$EXISTING_ATTEMPT" = "$ATTEMPT_ID" ] && REUSE=1
+   CYCLE1_DRAW_FILE="$BASE/archive/tasks/<task-id>/persona-draw.json"
+   if [ "$CYCLE" -ge 2 ] && [ "$IMPLEMENTER_RETRY" = "same" ] && [ -f "$CYCLE1_DRAW_FILE" ]; then
+     # "same" knob: reuse the cycle-1 anchor for all cycles of this task.
+     DRAW_FILE="$CYCLE1_DRAW_FILE"
+     REUSE=1
+   elif [ "$CYCLE" -ge 2 ] && [ "$IMPLEMENTER_RETRY" = "new" ]; then
+     # "new" knob: fresh draw into a per-cycle sidecar; anchor is never touched.
+     DRAW_FILE="$BASE/archive/tasks/<task-id>/persona-draw-v${CYCLE}.json"
+     # REUSE stays 0; fall through to fresh draw in sub-steps 2–3.
+   else
+     # cycle 1 (or fallback: "same" but anchor is missing).
+     DRAW_FILE="$CYCLE1_DRAW_FILE"
+     if [ -f "$DRAW_FILE" ]; then
+       EXISTING_ATTEMPT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("attempt_id",""))' "$DRAW_FILE" 2>/dev/null || echo "")"
+       [ "$EXISTING_ATTEMPT" = "$ATTEMPT_ID" ] && REUSE=1
+     fi
    fi
    ```
 
-   **Sub-steps 2 and 3 below run ONLY on a fresh attempt (`REUSE -eq 0`).** On a RESUME (`REUSE -eq 1`) the control counter is NOT incremented, no new draw is performed, and NO draw event is re-emitted — the recorded draw in `$DRAW_FILE` is reused verbatim. The entire fresh-draw block is therefore wrapped in `if [ "$REUSE" -eq 0 ]; then … fi`.
+   **Sub-steps 2 and 3 below run ONLY on a fresh draw (`REUSE -eq 0`).** On a RESUME or `IMPLEMENTER_RETRY == "same"` reuse (`REUSE -eq 1`) the control counter is NOT incremented, no new draw is performed, and NO draw event is re-emitted — the recorded draw in `$DRAW_FILE` is reused verbatim. The entire fresh-draw block is therefore wrapped in `if [ "$REUSE" -eq 0 ]; then … fi`.
 
 2. **(Fresh draw only) Control vs. random via the per-repo control counter.** Increment the counter and apply the forced-control cadence (`experiment.control_every_n`, default 5):
 
@@ -681,10 +719,11 @@ export Z_HARNESS_RUN_ID="$RUN"
        fi
        DRAW_JSON="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-persona.py" forced-control implementer --arm="$FORCED_ARM")"
      else
-       # On RETRY (CYCLE >= 2), exclude the prior attempt's persona to force diversity.
+       # On a fresh draw for RETRY (IMPLEMENTER_RETRY == "new" or missing anchor fallback),
+       # exclude the prior cycle's persona to force diversity.
        EXCLUDE_ARG=""
-       if [ -f "$DRAW_FILE" ]; then
-         PRIOR_PERSONA="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("persona_id",""))' "$DRAW_FILE" 2>/dev/null || echo "")"
+       if [ "$CYCLE" -ge 2 ] && [ -f "$CYCLE1_DRAW_FILE" ]; then
+         PRIOR_PERSONA="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("persona_id",""))' "$CYCLE1_DRAW_FILE" 2>/dev/null || echo "")"
          [ -n "$PRIOR_PERSONA" ] && EXCLUDE_ARG="--exclude=$PRIOR_PERSONA"
        fi
        DRAW_JSON="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-persona.py" random-for-role implementer $EXCLUDE_ARG)"
@@ -694,7 +733,7 @@ export Z_HARNESS_RUN_ID="$RUN"
 
    Both draw subcommands emit exactly one draw event before returning the resolve-shaped JSON: `random-for-role` emits `persona_random_selected` with `selection_source: random_role_pool` (or `fallback_empty_pool`); `forced-control` emits the SAME `persona_random_selected` event with `selection_source: forced_control`. Both events carry the `Z_HARNESS_TASK_ID` / `Z_HARNESS_ATTEMPT_ID` join keys exported above plus `persona_id`. Acceptance requires exactly one draw event per fresh attempt — the script handles emission; do not emit a second one here, and (per the `REUSE` guard) do not invoke the script at all on a resume.
 
-3. **(Fresh draw only) Persist the state file** so a same-cycle resume reuses it. The draw JSON carries `persona` (→ `persona_id`), `draw_id`, `selection_source`, and `persona_body_path`:
+3. **(Fresh draw only) Persist the state file** so a same-cycle resume reuses it. On a cycle-1 draw (or fallback fresh draw), write to `$DRAW_FILE` (the cycle-1 anchor). On a `IMPLEMENTER_RETRY == "new"` retry, `$DRAW_FILE` is already set to the per-cycle sidecar path — write there instead. The cycle-1 anchor (`persona-draw.json`) is NEVER overwritten on a retry. The draw JSON carries `persona` (→ `persona_id`), `draw_id`, `selection_source`, and `persona_body_path`:
 
    ```bash
      python3 -c '
@@ -956,7 +995,11 @@ cp $BASE/archive/tasks/<task-id>/diff.patch \
    $BASE/archive/tasks/<task-id>/diff-v$((CYCLE-1)).patch
 ```
 
-**Persona redraw on retry.** This is a RETRY, so `CYCLE` has incremented and `attempt_id = <task-id>-v$CYCLE` is new. Re-run step 5.0's persona-rotation block now (same knob gate): because the existing `persona-draw.json` records the prior cycle's `attempt_id`, sub-step 1 takes the fresh-draw path — it increments the control counter, draws (excluding the prior attempt's persona via `--exclude` per sub-step 2), and overwrites the state file. Knob OFF → `PERSONA_PREFIX` empty, no redraw, behavior unchanged.
+**Persona on retry (knob-aware).** This is a RETRY, so `CYCLE` has incremented and `attempt_id = <task-id>-v$CYCLE` is new. Re-run step 5.0's persona-rotation block now (same knob gate). The behavior depends on `IMPLEMENTER_RETRY` (already read in step 5.0):
+
+- **Knob OFF (`experiment.persona_rotation == "false"`):** `PERSONA_PREFIX` is empty, no draw at all — byte-identical vanilla implementer. This path is unchanged.
+- **`IMPLEMENTER_RETRY == "same"` (default):** sub-step 1 sets `REUSE=1` from the cycle-1 anchor `persona-draw.json` (same `persona_id` / `DRAW_FILE`). No redraw, no control-counter increment, no `--exclude`. The `ATTEMPT_ID` has changed to `<task-id>-v$CYCLE`, but `PERSONA_ID` / `DRAW_ID` / `PERSONA_PREFIX` remain the same as cycle 1. The persona-draw.json anchor is NOT overwritten. This is the **lifecycle traceability** path — one `persona_id` across all cycles of a task's attempt.
+- **`IMPLEMENTER_RETRY == "new"`:** sub-step 1 sets `DRAW_FILE` to `persona-draw-v$CYCLE.json` (per-cycle sidecar) and `REUSE=0`. Sub-step 2 increments the control counter and draws excluding the cycle-1 persona (`--exclude`). Sub-step 3 writes the new draw to the sidecar. The cycle-1 anchor `persona-draw.json` is **never overwritten**.
 
 Implementer prompt on cycle ≥ 2 is shorter than cycle 1:
 

@@ -3520,6 +3520,88 @@ class TestBuiltinRolePoolSize(unittest.TestCase):
             ),
         )
 
+    def test_consultant_large_count_underflow_graceful(self):
+        """
+        random-distinct-for-role consultant --count=50 against the real builtin pool
+        must exit 0 and return a SHORTER array (real pool is < 50).
+
+        Invariant: requesting more personas than exist in the pool never crashes; the
+        result is capped at the actual pool size (graceful underflow).
+        Failure class: if the script exits non-zero or raises an exception on count > pool,
+        any caller requesting a large panel would crash instead of degrading gracefully.
+        """
+        env = self._make_real_builtin_env()
+        result = _run(
+            ["random-distinct-for-role", "consultant", "--count=50", "--seed=42"],
+            env_extra=env,
+        )
+        self.assertEqual(
+            result.returncode, 0,
+            msg=(
+                "random-distinct-for-role consultant --count=50 must exit 0 on underflow. "
+                f"stderr={result.stderr!r}"
+            ),
+        )
+        data = json.loads(result.stdout)
+        self.assertGreater(
+            len(data), 0,
+            msg="Real consultant pool must be non-empty; got empty array",
+        )
+        self.assertLess(
+            len(data), 50,
+            msg=(
+                f"Real consultant pool is smaller than 50; len(data)={len(data)} should be < 50. "
+                "If >= 50 personas are tagged, this test is vacuously true and should be updated."
+            ),
+        )
+        # All returned names must be distinct (no replacement even on underflow)
+        names = [d["persona"] for d in data]
+        self.assertEqual(
+            len(set(names)), len(names),
+            msg=f"Returned personas must be distinct even on underflow. Got: {names}",
+        )
+
+    def test_audit_persona_large_count_underflow_graceful(self):
+        """
+        random-distinct-for-role audit_persona --count=50 against the real builtin pool
+        must exit 0 and return a SHORTER array (real pool is < 50).
+
+        Invariant: requesting more personas than exist in the pool never crashes; the
+        result is capped at the actual pool size (graceful underflow).
+        Failure class: if the script exits non-zero or raises an exception on count > pool,
+        any caller requesting a large audit panel would crash instead of degrading gracefully.
+        """
+        env = self._make_real_builtin_env()
+        result = _run(
+            ["random-distinct-for-role", "audit_persona", "--count=50", "--seed=42"],
+            env_extra=env,
+        )
+        self.assertEqual(
+            result.returncode, 0,
+            msg=(
+                "random-distinct-for-role audit_persona --count=50 must exit 0 on underflow. "
+                f"stderr={result.stderr!r}"
+            ),
+        )
+        data = json.loads(result.stdout)
+        self.assertGreater(
+            len(data), 0,
+            msg="Real audit_persona pool must be non-empty; got empty array",
+        )
+        self.assertLess(
+            len(data), 50,
+            msg=(
+                f"Real audit_persona pool is smaller than 50; len(data)={len(data)} should be < 50. "
+                "If >= 50 personas are tagged, this test is vacuously true and should be updated."
+            ),
+        )
+        # All returned names must be distinct (no replacement even on underflow)
+        names = [d["persona"] for d in data]
+        self.assertEqual(
+            len(set(names)), len(names),
+            msg=f"Returned personas must be distinct even on underflow. Got: {names}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

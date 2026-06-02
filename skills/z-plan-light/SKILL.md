@@ -358,6 +358,22 @@ Parse the return (already capped at 8 KB, blockers + majors only).
 
 **No blockers/majors** → accept.
 
+### Phase 8 — Advisory eval-reviewer (CONVERGENT site)
+
+When `personas.review_eval` is `true` (default ON), an advisory persona reviewer also runs
+alongside the base codex reviewer above, per the shared snippet defined in
+[`commands/z-implement-all.md` — "Advisory eval-reviewer (shared snippet)" {#ADVISORY-EVAL-REVIEWER}](commands/z-implement-all.md#ADVISORY-EVAL-REVIEWER)
+(HTML anchor `<!-- ADVISORY-EVAL-REVIEWER -->`).
+
+The base codex reviewer (`reviewer_participant=base_codex`) remains the **authoritative gate**:
+its blockers and majors counts are the sole driver of the re-edit / halt logic above. The advisory
+arm (`reviewer_participant=random_arm`) is dispatched in parallel with the base reviewer using a
+single `random-for-role reviewer` draw (`selection_source=random_role_pool`); its verdict is
+logged for data collection only and **never changes the gate's pass/fail outcome, never triggers a
+re-edit, and never surfaces as a blocking finding**.
+
+Do not copy the advisory arm's bash here. Follow the canonical snippet verbatim.
+
 ## Phase 9 — Finalize
 
 1. Update FIX.md `Status:` to `shipped` and check off the acceptance boxes you verified.

@@ -199,6 +199,8 @@ Parse the return (capped at 8 KB, blockers + majors only).
 
 **No blockers/majors** → accept.
 
+**Advisory eval-reviewer.** When `personas.review_eval` is ON (default), an advisory persona reviewer also runs in parallel with the base codex reviewer, per the shared snippet at [## Advisory eval-reviewer (shared snippet)](#ADVISORY-EVAL-REVIEWER) in `commands/z-implement-all.md`. The advisory arm draws a single `random-for-role reviewer` persona (`reviewer_participant=random_arm`), dispatches alongside the base reviewer, and logs its verdict for data-collection only. It is advisory and logged only — it NEVER changes the pass/fail outcome of this phase. Only the base codex reviewer's blockers/majors drive the retry/halt logic above.
+
 ## Phase 6 — (Optional) end-of-run cross-LLM consult
 
 This phase is **off by default**. Only run if any of:
@@ -260,7 +262,7 @@ Before recommending any `git reset --hard HEAD~N`, `git commit --amend`, or inte
 
 | Feature | Used | Gates |
 |---------|------|-------|
-| `subagent` | yes | Phase 2 doc-fetcher Agent(); Phase 5 reviewer Agent(); Phase 6 optional consultant-secondary Agent() call |
+| `subagent` | yes | Phase 2 doc-fetcher Agent(); Phase 5 base codex reviewer Agent(); Phase 5 advisory eval-reviewer Agent() (when `personas.review_eval` ON — advisory only, see shared snippet); Phase 6 optional consultant-secondary Agent() call |
 | `ask_user` | yes | Empty arguments gate; Phase 5 reviewer second-failure gate |
 | `skill_invoke` | no | — |
 

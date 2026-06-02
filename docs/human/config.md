@@ -43,7 +43,7 @@ Set `$Z_HARNESS_REPO_CONFIG` to override the git-root discovery path (exits 2 if
 | `experiment.control_every_n` | int | `5` | positive integer | Forced-control cadence: every Nth implementer attempt **across the entire repo** uses `boring-anchor` (the baseline persona) instead of a random draw. Counter persists in `.z-harness/.persona-control-counter`. Default 5 means every 5th attempt is a control sample. |
 | `runtime.consult` | string | `on` | `on` \| `off` | Single-model mode. When `off`, the `consultant_primary`, `consultant_secondary`, and `reviewer` roles resolve to the `none` sentinel, so cross-LLM consultation and review are skipped (no Gemini/Codex dispatch). Exported as `Z_HARNESS_CONSULT` (not `Z_HARNESS_RUNTIME_CONSULT` — see the transliteration note), which `resolve-provider.py` reads. |
 
-For `[workflow]`, `[followup]`, `[axioms]`, and `[experiment]` knobs, see the sections below.
+For `[personas]`, `[workflow]`, `[followup]`, `[axioms]`, and `[experiment]` knobs, see the sections below.
 
 ## The transliteration rule
 
@@ -55,6 +55,11 @@ Env-var overrides follow a deterministic rule: lowercase TOML dotted-key → pre
 | `docs.always_apply` | `Z_HARNESS_DOCS_ALWAYS_APPLY` |
 | `experiment.persona_rotation` | `Z_HARNESS_EXPERIMENT_PERSONA_ROTATION` |
 | `experiment.control_every_n` | `Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N` |
+| `personas.critique_panel` | `Z_HARNESS_PERSONAS_CRITIQUE_PANEL` |
+| `personas.audit` | `Z_HARNESS_PERSONAS_AUDIT` |
+| `personas.review_eval` | `Z_HARNESS_PERSONAS_REVIEW_EVAL` |
+| `personas.consult_eval` | `Z_HARNESS_PERSONAS_CONSULT_EVAL` |
+| `personas.implementer_retry` | `Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY` |
 | `axioms.enabled` | `Z_HARNESS_AXIOMS_ENABLED` |
 | `axioms.kernel_budget_chars` | `Z_HARNESS_AXIOMS_KERNEL_BUDGET_CHARS` |
 | `axioms.extract_min_recurrence` | `Z_HARNESS_AXIOMS_EXTRACT_MIN_RECURRENCE` |
@@ -642,6 +647,40 @@ auto_extract_post_run = true
 - `axioms.enabled` and `axioms.auto_extract_post_run` must be `true` or `false`; `axioms.kernel_budget_chars` and `axioms.extract_min_recurrence` must be positive integers (≥1).
 - Repo/env layer violations exit 2 (hard fail); global layer violations soft-warn and fall back to defaults.
 - `axioms.enabled = false` is a complete no-op for resolution: `_load_axiom_matches` returns `[]` and the envelope is byte-identical to the pre-axiom result.
+
+## The knobs ([personas] section)
+
+The `[personas]` section controls per-surface persona dispatch across all z-harness commands. Each boolean knob enables or disables persona injection at one class of dispatch site; disabling a knob is byte-identical to pre-feature behavior at that site.
+
+| Key | Type | Default | Env var | Description |
+|-----|------|---------|---------|-------------|
+| `personas.critique_panel` | bool | `true` | `Z_HARNESS_PERSONAS_CRITIQUE_PANEL` | Enable persona injection at the z-plan Phase 3 + Phase 7 fixed 5-panel critique arms (DIVERGENT). When ON, 5 distinct `consultant` personas are drawn and positionally prepended. |
+| `personas.audit` | bool | `true` | `Z_HARNESS_PERSONAS_AUDIT` | Enable persona injection at z-audit dimension auditors (DIVERGENT). When ON, one distinct `audit_persona` is drawn per dimension (correctness / perf / cleanliness / design). |
+| `personas.review_eval` | bool | `true` | `Z_HARNESS_PERSONAS_REVIEW_EVAL` | Enable the advisory persona reviewer at code-review gates — z-implement-all, z-implement-next, z-plan-light, z-fix, z-do (CONVERGENT). When ON, one `reviewer`-role persona is dispatched advisory-only alongside the authoritative neutral codex gate. |
+| `personas.consult_eval` | bool | `false` | `Z_HARNESS_PERSONAS_CONSULT_EVAL` | Enable the advisory persona consult arm at convergent evaluation sites — z-plan-light bundled consult and z-audit bundled consult (CONVERGENT). **Default OFF** — this is the most expensive and lowest-signal advisory arm. When ON, one additional `consultant`-persona advisory arm is dispatched alongside the neutral consult; its output is logged advisory-only. |
+| `personas.implementer_retry` | string | `"same"` | `Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY` | Controls how the implementer persona is handled across retries. `same` (default) — reuse the cycle-1 persona for all retries of the same task (lifecycle traceability: one persona_id across a task's cycles). `new` — fresh draw excluding the prior persona on each retry. No effect when `experiment.persona_rotation = false`. |
+
+**Back-compat alias:** `brainstorm.personas` (in the `[brainstorm]` section) controls ideator persona injection for `/z-brainstorm`. It is a member of the persona family but remains in `[brainstorm]` to avoid churn in existing configs. Do NOT move it to `[personas]`.
+
+**TOML example** (`.z-harness/config.toml`):
+
+```toml
+[personas]
+critique_panel = true
+audit = true
+review_eval = true
+consult_eval = false          # default OFF — most expensive/lowest-signal advisory arm
+implementer_retry = "same"    # "same" | "new"
+```
+
+**Invariants:**
+- All boolean knobs accept `true` or `false` only. Repo/env layer violations exit 2 (hard fail); global layer violations soft-warn and fall back to defaults.
+- `personas.implementer_retry` accepts only `"same"` or `"new"`. Any other value is a hard validation failure.
+- Knob-OFF at any site is byte-identical to pre-feature behavior: no draw, no prefix, no `persona_bound` event.
+- `personas.consult_eval` OFF (the default) means the neutral consult arm runs alone at convergent sites — no advisory overhead.
+- The neutral-authority invariant applies at all CONVERGENT sites regardless of knob state: the neutral arm is always the decision of record.
+
+---
 
 ## The knobs ([experiment] section)
 

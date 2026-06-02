@@ -1,6 +1,6 @@
 # PERSONAS — Persona System Guide
 
-> Last updated: 2026-06-01
+> Last updated: 2026-06-02
 > Covers source: scripts/resolve-persona.py, scripts/resolve-persona.sh, runtime/contract/persona.schema.json, personas/README.md, personas/builtin/codex-default-consultant.md, personas/builtin/gemini-default-consultant.md, personas/builtin/codex-default-reviewer.md, commands/z-personas.md, skills/z-personas/SKILL.md, runtime/drivers/_persona_utils.py, runtime/drivers/antigravity/persona_export.py, runtime/drivers/cursor/persona_export.py, runtime/drivers/codex/persona_export.py, runtime/drivers/claude/persona_export.py, runtime/dispatch/persona_prompt.py, runtime/dispatch/dispatcher.py
 
 ## Overview
@@ -283,6 +283,81 @@ Example output of `/z-personas roles`:
   consultant_secondary→ persona: gemini-default-consultant  model: gemini-2.5-pro  runtime: gemini-cli  (source: roles.default)
   reviewer            → persona: codex-default-reviewer    model: gpt-5-codex  runtime: codex-cli  (source: roles.default)
 ```
+
+---
+
+## Roles
+
+### New roles (personas-everywhere)
+
+Two additional roles were added to `_ROLE_REGISTRY` as part of the personas-everywhere feature:
+
+| Role | Contract | Purpose |
+|------|----------|---------|
+| `consultant` | `None` (any) | Convergent eval lenses — used by the z-plan/z-debug 5-panel critique arms AND the z-plan-light/z-audit measured advisory consult arms. Freeform and review-shaped personas both qualify because contract=None means any. |
+| `audit_persona` | `None` (any) | Dimension auditors for z-audit — one persona drawn per audit dimension (correctness / perf / cleanliness / design). Finding-oriented (review-shaped) personas are appropriate here because auditing IS finding-oriented. |
+
+### Builtin pool sizes
+
+The shipped builtin pool satisfies the draw requirements for each role:
+
+| Role | Builtin count | Examples |
+|------|--------------|---------|
+| `consultant` | 7 | `cold-bench-scientist`, `quiet-systems-cartographer`, `paranoid-ledger-keeper`, `anti-consensus-surgeon`, `cut-it-half`, `physics-reductionist`, `fossil-whisperer` |
+| `audit_persona` | 6 | `correctness-nihilist`, `bug-bounty-feralist`, `paranoid-guard`, `nanosecond-miser`, `contract-lawyer-bot`, `spec-literalist` |
+
+Pool must be >= the max arm count drawn: consultant pool >= 5 (5-panel), audit_persona pool >= 4 (4 dimensions). Both invariants are verified by tests.
+
+---
+
+## Per-site persona behavior
+
+Dispatch sites are classified as divergent (generation) or convergent (evaluation). The two categories differ in how personas participate:
+
+| Site | Kind | Gating knob | Persona behavior |
+|------|------|-------------|-----------------|
+| z-debug Phase 3a + 3b (hypothesis generators) | DIVERGENT | `personas.critique_panel` | Draw 5 distinct `consultant` personas; positionally prepend onto the 5 fixed panel arms. Persona IS the generator. |
+| z-plan Phase 3 + Phase 7 (critique panel) | DIVERGENT | `personas.critique_panel` | Draw 5 distinct `consultant` personas; positionally prepend onto the 5 fixed panel arms. |
+| z-audit dimension auditors (correctness/perf/cleanliness/design) | DIVERGENT | `personas.audit` | Draw 1 distinct `audit_persona` per dimension; prepend directly. |
+| z-brainstorm ideators (3 parallel ideators) | DIVERGENT | `brainstorm.personas` | Draw 3 distinct `ideator` personas; positional assignment. Pre-existing feature. |
+| z-plan-light bundled consult | CONVERGENT | `personas.consult_eval` (default OFF) | Advisory persona arm alongside neutral arm. Neutral stays authoritative. |
+| z-audit bundled consult | CONVERGENT | `personas.consult_eval` (default OFF) | Advisory persona arm alongside neutral arm. Neutral stays authoritative. |
+| Code-review gates (z-implement-all, z-implement-next, z-plan-light, z-fix, z-do) | CONVERGENT | `personas.review_eval` (default ON) | One advisory `reviewer`-role persona drawn with `random-for-role`. Neutral codex gate is authoritative. |
+
+**z-research is intentionally excluded.** Its three perspectives (architecture-conservative / product-expansive / failure-mode-adversarial) are already fixed semantic lenses; adding random personas on top would conflict with those assigned roles.
+
+---
+
+## NEUTRAL-AUTHORITY invariant
+
+At every **convergent** site, the following is a mechanical contract (not prose-only):
+
+- The **neutral arm's output is the decision of record**. The persona arm is ADDITIVE and advisory only.
+- The persona arm's recommendation is logged under a **separate telemetry field**: `persona_advisory_recommendation` for consults; `reviewer_participant=random_arm` for eval-reviewers.
+- **No code path reads both** the neutral and persona outputs into the authoritative decision or synthesis.
+- The persona arm NEVER changes halt/retry behavior at code-review gates.
+- Enforced by acceptance tests (T006/T007): construct a mock case where the persona arm disagrees with the neutral arm and assert the neutral output stands unchanged.
+
+### Advisory eval-reviewer at code-review gates
+
+At z-implement-all / z-implement-next / z-plan-light / z-fix / z-do review gates:
+
+- The **neutral codex reviewer** runs as the authoritative gate. Its PASS/FAIL/BLOCKED verdict is the decision.
+- When `personas.review_eval = true` (default ON), **one advisory reviewer** is dispatched in parallel with a `random-for-role reviewer` draw (`selection_source=random_role_pool`). Its verdict is logged advisory-only (`reviewer_participant=random_arm`).
+- Both reviewers share `attempt_id`; each has its own `draw_id`.
+- The shared advisory eval-reviewer pattern is defined **once** (a referenced snippet) and reused across all 5 gate sites — not copy-pasted.
+- `personas.review_eval = false` restores neutral-gate-only behavior (identical to pre-feature).
+
+---
+
+## Implementer retry-persona behavior
+
+The `personas.implementer_retry` knob (enum: `same` | `new`, default `same`) controls how the implementer's persona is handled across retries within a single task:
+
+- **`same` (default):** `persona-draw.json` is written once on cycle 1 and **never overwritten** on retry. The same persona is reused for the task's entire lifecycle, giving one persona_id across all cycles. This enables lifecycle traceability — a persona's effect on a task is measured end-to-end rather than confounded by mid-task persona switches.
+- **`new`:** A fresh draw is made on each retry, excluding the prior attempt's persona (today's behavior before this knob was added). A per-cycle record is written but does not clobber the cycle-1 anchor.
+- If `persona-draw.json` is missing on a retry (e.g. an older run that predates the feature), a fresh draw is made regardless of the knob value.
+- When `experiment.persona_rotation = false`, the `personas.implementer_retry` knob is a complete no-op — no persona is drawn at all.
 
 ---
 

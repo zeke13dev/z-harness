@@ -91,7 +91,6 @@ DEFAULTS: dict = {
         "personas":              True,   # bool: inject persona diversity in /z-brainstorm
     },
     "personas": {
-        "debug":               True,    # bool: inject persona diversity in /z-debug panels
         "critique_panel":      True,    # bool: inject persona diversity in /z-plan critique panels
         "audit":               True,    # bool: inject persona diversity in /z-audit dimension auditors
         "review_eval":         True,    # bool: add advisory eval-reviewer arm at code-review gates
@@ -149,7 +148,6 @@ VALIDATORS: dict = {
     "axioms.extract_min_recurrence": _validate_positive_int,
     "axioms.auto_extract_post_run": _validate_bool,
     "brainstorm.personas":          _validate_bool,
-    "personas.debug":               _validate_bool,
     "personas.critique_panel":      _validate_bool,
     "personas.audit":               _validate_bool,
     "personas.review_eval":         _validate_bool,
@@ -176,9 +174,6 @@ _COERCERS: dict[str, object] = {
         v if isinstance(v, bool) else v.lower() == "true"
     ),
     "brainstorm.personas": lambda v: (
-        v if isinstance(v, bool) else v.lower() == "true"
-    ),
-    "personas.debug": lambda v: (
         v if isinstance(v, bool) else v.lower() == "true"
     ),
     "personas.critique_panel": lambda v: (
