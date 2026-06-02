@@ -91,6 +91,12 @@ DEFAULTS: dict = {
         "persona_rotation":  True,   # bool: enable persona rotation across z-harness roles
         "control_every_n":   5,      # int>0: forced-control cadence (every Nth implementer attempt)
     },
+    "runtime": {
+        # on | off — off = single-model mode: consultant/reviewer roles resolve to
+        # the "none" sentinel so cross-LLM consult and review are skipped. Exported
+        # as Z_HARNESS_CONSULT (see _ENV_VAR_ALIASES), which resolve-provider reads.
+        "consult": "on",
+    },
 }
 
 
@@ -133,6 +139,7 @@ VALIDATORS: dict = {
     "axioms.auto_extract_post_run": _validate_bool,
     "experiment.persona_rotation":  _validate_bool,
     "experiment.control_every_n":   _validate_positive_int,
+    "runtime.consult":              {"on", "off"},
 }
 
 # Coercers: applied after validation to normalize values (esp. env-var strings).
@@ -350,6 +357,14 @@ def _dotted_to_env(key: str) -> str:
         )
         sys.exit(2)
     return "Z_HARNESS_" + key.upper().replace(".", "_")
+
+
+# Dotted keys whose exported env var name differs from the mechanical
+# _dotted_to_env() mapping. runtime.consult exports as Z_HARNESS_CONSULT — the
+# legacy name resolve-provider.py reads — not Z_HARNESS_RUNTIME_CONSULT.
+_ENV_VAR_ALIASES: dict[str, str] = {
+    "runtime.consult": "Z_HARNESS_CONSULT",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -804,7 +819,7 @@ def cmd_export_env(args: list[str]) -> None:
         first_segment = dotted_key.split(".", 1)[0]
         if first_segment == "roles":
             continue
-        env_var = _dotted_to_env(dotted_key)
+        env_var = _ENV_VAR_ALIASES.get(dotted_key) or _dotted_to_env(dotted_key)
         val = values[dotted_key]
         # Coerce to shell string
         if isinstance(val, bool):
