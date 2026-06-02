@@ -6,27 +6,37 @@ Topic (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question
+     "What topic should I brainstorm?" via their native channel and accept a
+     text reply. Silent omission is forbidden. -->
 **If the topic above is empty or whitespace**, do this first: use `AskUserQuestion` to ask "What topic should I brainstorm?". Wait for their reply. Treat the reply as the topic and continue.
 
 `/z-brainstorm` is **cheap, opt-in pre-planning**. It does not produce SPEC/PLAN/TASKS — those come from `/z-plan` later. Cost target: ≤200K tokens end-to-end. If you exceed that, log a warning and continue.
 
 ## Setup
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug
+     confirmation question via their native channel if non-obvious. Silent
+     omission is forbidden. -->
 1. **Derive slug.** If `$ARGUMENTS` contains `--slug=<value>`, use that verbatim. Otherwise auto-derive from the topic: short kebab-case, 2-4 words (e.g. "rethink batting order model" → `rethink-batting-order`). If the auto-derived slug is non-obvious, confirm via `AskUserQuestion`.
 2. **Export** `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")` for all subsequent shell calls and subagents.
 3. Pick a run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`.
 4. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`.
-5. **Existing slug-dir handling.** Run `ls z-harness/` to check for a matching slug dir. If `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md` exists, prompt the user via `AskUserQuestion`:
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the overwrite
+     confirmation question (overwrite / abort) via their native channel when
+     BRAINSTORM.md already exists. Silent omission is forbidden. -->
+5. **Existing slug-dir handling.** Run `bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" all_plan_slugs` to check for existing slug names. If `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md` exists, prompt the user via `AskUserQuestion`:
    - **overwrite** — archive existing `BRAINSTORM.md` to `$Z_HARNESS_PLAN_DIR/archive/$RUN/BRAINSTORM.md.previous-<N>` (where `<N>` is the next free integer in that archive dir) and start fresh
    - **abort** — exit cleanly with no changes
 6. **Version stamp + log run start:**
    ```bash
+   export Z_HARNESS_SESSION_ID="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" session-id)"
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
    START_PAYLOAD="$(python3 -c '
    import json, sys
-   v = json.loads(sys.argv[1]); v["topic"] = sys.argv[2]
+   v = json.loads(sys.argv[1]); v["topic"] = sys.argv[2]; v["session_id"] = sys.argv[3]
    print(json.dumps(v))
-   ' "$VERSION_BLOB" "<arguments>")"
+   ' "$VERSION_BLOB" "<arguments>" "$Z_HARNESS_SESSION_ID")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" brainstorm_run_start "$START_PAYLOAD"
    ```
 7. **Parent attribution (sub-command contract).** If `$Z_HARNESS_PARENT_RUN_ID` is set in the environment (i.e. this sub-command is being dispatched by a meta-orchestrator like `/z-research`), include `parent_run_id` and `parent_command` fields in every subsequent `log-event.sh` payload. Example:
@@ -59,13 +69,50 @@ AXIS_TAXONOMY=["per_vendor","per_framing"]
 
 This is the fixed brainstorm axis taxonomy for v1a. Pass it verbatim to scope-probe.
 
-### 0b. Dispatch scope-probe
+### 0b. Fast-path check (single-file target)
+
+Before dispatching scope-probe, evaluate whether the target qualifies for an automatic LIGHT classification:
+
+```bash
+ARG="<sanitized $ARGUMENTS>"
+ARG_LEN=${#ARG}
+case "$ARG" in
+  *"*"*|*"?"*|*"["*|*"{"*|*"}"*) IS_GLOB=1;;
+  *) IS_GLOB=0;;
+esac
+EXPANDED_ARG="${ARG/#\~/$HOME}"
+SCOPE_FAST_PATH=0
+if [ "$IS_GLOB" -eq 0 ] && [ "$ARG_LEN" -lt 200 ] && [ -f "$EXPANDED_ARG" ]; then
+  # Fast-path: single existing file, short argument, no globs → auto-classify LIGHT
+  SCOPE_FAST_PATH=1
+  PAYLOAD="$(python3 -c 'import json,sys; print(json.dumps({"command":sys.argv[1],"target":sys.argv[2],"arg_len":int(sys.argv[3])}))' "z-brainstorm" "$EXPANDED_ARG" "$ARG_LEN")"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" scope_probe_skipped_fast_path "$PAYLOAD"
+  MODE=LIGHT
+  AXIS=none
+  CONFIDENCE=high
+  REASON_CODES=fast_path_single_file
+  REASON="single-file target auto-classified as LIGHT"
+  chunks=[]
+  seams_counted=0
+  candidates_walked=0
+  # Skip to 0e with LIGHT classification; do not dispatch scope-probe Agent.
+  # Proceed directly to 0e — use the values above as if scope-probe returned STATUS=classified, MODE=LIGHT.
+else
+  # Multi-file / glob / large-arg path: run full scope-probe dispatch below.
+fi
+```
+
+If the fast-path branch was taken (`SCOPE_FAST_PATH=1`), skip steps 0c and 0d (scope-probe dispatch and parse) and proceed directly to step 0e (treating the fast-path values as the parsed result).
+
+### 0c. Dispatch scope-probe (non-fast-path only)
 
 ```
 T0_PHASE0=$(date +%s%3N)
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" scope_probe_start \
   '{"host_command":"z-brainstorm","axis_taxonomy":["per_vendor","per_framing"]}'
 
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
   subagent_type="scope-probe",
   description="Scope probe for z-brainstorm: <slug>",
@@ -77,7 +124,7 @@ run_id: <RUN>"
 )
 ```
 
-### 0c. Parse scope-probe return
+### 0d. Parse scope-probe return
 
 Parse the hybrid return using the two-step parser (line-prefix headers BEFORE the first ` ```json ` fence, JSON block via fence regex `^```json\n(.*?)^```$`). Extract:
 
@@ -93,7 +140,7 @@ Parse the hybrid return using the two-step parser (line-prefix headers BEFORE th
 
 **Low-confidence handling:** If `CONFIDENCE: low`, log a warning event (`scope_probe_low_confidence`), downgrade the result to `MODE: MEDIUM`, and continue. Do not AskUser in v1a.
 
-### 0d. Write SCOPE artifacts (archive-first)
+### 0e. Write SCOPE artifacts (archive-first)
 
 **Step 1 — Write archive copy first (must succeed):**
 
@@ -124,7 +171,7 @@ If the archive write fails: emit `scope_probe_archive_write_failed` event, skip 
 
 Write the same JSON to `$Z_HARNESS_PLAN_DIR/SCOPE-brainstorm.json` atomically (tmp+rename). The live file is namespaced per host command; it is overwritten on each run.
 
-### 0e. Log classification result
+### 0f. Log classification result
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" scope_probe_classified \
@@ -132,7 +179,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
      "<MODE>" "<AXIS>" "<CONFIDENCE>" "<N chunks>")"
 ```
 
-### 0f. Branch on STATUS, then MODE
+### 0g. Branch on STATUS, then MODE
 
 **Branch on STATUS first:**
 
@@ -174,6 +221,9 @@ When `MODE: HEAVY`:
 
    For each chunk `C` in `chunks`, call:
    ```
+   <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+        <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+        support the HEAVY path cannot proceed; default to MEDIUM mode. -->
    <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
      subagent_type="general-purpose",
      model="sonnet",
@@ -202,6 +252,8 @@ Scaffolding instructions: follow /z-brainstorm Phase 1 (doc-fetcher, optional Ex
 
 4. **Dispatch scope-reconciler-brainstorm** to merge the per-chunk BRAINSTORM.md files. The reconciler is **read-only** — it returns merged BRAINSTORM.md text as its output; the orchestrator (/z-brainstorm) writes the file. Do NOT include `output_path` in the reconciler prompt.
    ```
+   <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+        <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
    <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
      subagent_type="scope-reconciler-brainstorm",
      description="Reconcile HEAVY brainstorm chunks for <slug>",
@@ -231,7 +283,7 @@ axis: <AXIS>"
 
 Run this route check after Phase 1 scaffolding is assembled and before Phase 2 ideator dispatch. `/z-brainstorm` may route only before ideators are spawned; once ideation starts, finish the brainstorm flow instead of switching commands mid-run.
 
-Use only already-known signals from the topic, doc-fetcher synthesis, optional Explore, and any ingested `MAP.md` (or legacy `RESEARCH.md` with `artifact_kind: map`): `candidate_files`, `expected_tasks`, `non_obvious_decisions`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `terrain_uncertain`, `approach_uncertain`, `has_existing_plan`, `has_fix_artifact`, and `docs_stale_or_drifted`.
+Use only already-known signals from the topic, doc-fetcher synthesis, optional Explore, and any ingested `MAP.md` (or legacy `RESEARCH.md` with `artifact_kind: map`): `candidate_files`, `expected_tasks`, `non_obvious_decisions`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `terrain_uncertain`, `approach_uncertain`, `has_existing_plan`, `plan_validation_intent`, `plan_amend_intent`, `has_fix_artifact`, and `docs_stale_or_drifted`. Set `plan_validation_intent`/`plan_amend_intent` only when the user re-enters a planning entry command on a slug with `SPEC.md`+`PLAN.md`+`TASKS.md` all present (see `agents/planning-router.md` for the language-match heuristic).
 
 Deterministic routes:
 - Route unknown terrain, missing citations, or insufficient source facts to `/z-research`.
@@ -278,6 +330,8 @@ Build a shared scaffolding payload that **all three ideators receive identically
 If `docs/llm/INDEX.json` exists in the repo root, dispatch ONE `doc-fetcher` (Haiku) call. **Never read INDEX.json or per-concept `<slug>.json` from main thread** — that's what doc-fetcher is for.
 
 ```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     requirement and skip if unavailable. Brainstorm proceeds without doc grounding. -->
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
   subagent_type="doc-fetcher",
   description="Doc context for <slug>",
@@ -292,6 +346,8 @@ It returns a tight synthesis (matched concepts, key files with line ranges, inva
 If env `Z_HARNESS_BRAINSTORM_EXPLORE=1`, dispatch ONE Explore subagent (Haiku by default) to fill scaffolding gaps:
 
 ```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
   subagent_type="Explore",
   model: "haiku",
@@ -350,6 +406,9 @@ Return exactly five sections: (1) Framing, (2) Core hypothesis, (3) Risks, (4) P
 Then dispatch:
 
 ```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+     cannot complete without subagent support. -->
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
   subagent_type="general-purpose",
   model="sonnet",
@@ -375,6 +434,9 @@ All three ideators see byte-identical scaffolding AND byte-identical schema inst
 Treat an ideator as failed if it returns an error, times out, or returns no parseable five-section block.
 
 - **1/3 fail** → proceed with the surviving two. Record the failed member as `"<id>:failed"` in the `ideators` frontmatter list using the canonical id (`claude:failed` | `codex:failed` | `gemini:failed`). The Phase 3 anti-bias check becomes a two-way comparison (still mandatory). Log `ideator_failed` with `{vendor, reason}`.
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the 2/3 ideator
+     failure gate (retry / proceed-with-1 / abandon) via their native channel.
+     Silent omission is forbidden. -->
 - **2/3 fail** → halt. Use `AskUserQuestion` with options:
   - **retry** (default) — re-dispatch the failed ideators once
   - **proceed-with-1** — record the two failed members and run Phase 3 with a single framing (anti-bias check becomes "single framing — no comparison possible; flag inherent bias risk")
@@ -452,6 +514,9 @@ Log every individual failure as `ideator_failed` regardless of the bucket above.
 
    Do **not** write a `## User choice` section in Phase 3 — Phase 4 writes it for the first time (no placeholder, no duplication).
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the framing
+     selection question (Claude / Codex / Gemini / Restart / Abandon) via their
+     native channel. Silent omission is forbidden. -->
 5. **Present** the three framings + anti-bias check + recommendation to the user via `AskUserQuestion`. Options:
    - One option per available framing (e.g. **Claude framing**, **Codex framing**, **Gemini framing** — only for ideators that succeeded)
    - **Restart** — discard this run and re-run with a refined topic
@@ -480,6 +545,8 @@ Let `N_PAIRS = len(pairs)`.
 
 #### Step 4H-2 — Present the selection matrix to the user
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the chunk×framing
+     selection matrix via their native channel. Silent omission is forbidden. -->
 **Case A — N_PAIRS ≤ 12 (single AskUserQuestion):**
 
 Present a single `AskUserQuestion` listing all pairs as labeled options plus two standard exits:
@@ -582,6 +649,8 @@ Branch on the user's Phase 3 choice:
 #### User picked Restart
 
 1. Archive the just-written BRAINSTORM.md to `$Z_HARNESS_PLAN_DIR/archive/$RUN/BRAINSTORM.md.previous-<N>` (next free integer). Before archiving, update the archived copy's frontmatter to `status: complete`, `chosen_framing: restart` so the historical record is spec-valid.
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the refined
+     topic question via their native channel. Silent omission is forbidden. -->
 2. Ask the user (free-text or `AskUserQuestion`) for the refined topic.
 3. Start a fresh RUN: regenerate `RUN`, re-mkdir, re-emit `brainstorm_run_start`, and loop back to Phase 1 with the refined topic.
 
@@ -618,6 +687,29 @@ For the abandoned branch, the push notification just says "Brainstorm abandoned"
 
 ---
 
+## Telemetry reference
+
+| Event kind | When / meaning | Required fields |
+|---|---|---|
+| `brainstorm_run_start` | Brainstorm run begins | version fields, `topic` |
+| `brainstorm_run_end` | Brainstorm run completes | `status`, `chosen_framing`, `ideators_failed` |
+| `ideator_failed` | One of the three ideators failed | `vendor`, `reason` |
+| `total_ideator_failure` | All three ideators failed; hard halt | — |
+| `scope_probe_start` | Scope-probe Agent dispatched | `host_command`, `axis_taxonomy` |
+| `scope_probe_classified` | Scope-probe returned a classification | `host_command`, `mode`, `axis`, `confidence`, `chunks_count` |
+| `scope_probe_malformed` | Scope-probe return failed to parse | `host_command`, `raw_response_len` |
+| `scope_probe_low_confidence` | Scope-probe returned `CONFIDENCE: low`; downgraded to MEDIUM | — |
+| `scope_probe_refused` | Scope-probe returned `STATUS: refused`; MEDIUM fallback | `host_command` |
+| `scope_probe_bad_input` | Scope-probe returned `STATUS: bad_input`; MEDIUM fallback | `host_command` |
+| `scope_probe_archive_write_failed` | Archive write for SCOPE.json failed | — |
+| `scope_probe_skipped_fast_path` | Single-file target auto-classified LIGHT, scope-probe Agent skipped | `command` (`z-brainstorm`), `target`, `arg_len` |
+| `scope_fanout_dispatched` | HEAVY mode: N sub-flows launched | `host_command`, `axis`, `chunks_count` |
+| `scope_fanout_reconciled` | HEAVY mode: reconciler finished | `host_command`, `axis`, `chunks_total`, `chunks_succeeded`, `reconciler_ok` |
+| `heavy_pair_selected` | HEAVY mode: user chose a (chunk, framing) pair | `chunk_id`, `framing` |
+| `doc_drift` | doc-fetcher returned a DRIFT WARNING for a concept | `concept`, `claim`, `reality`, `file` |
+
+---
+
 ## Operating principles
 
 - **Cheap and parallel.** Three ideators in one message, no per-ideator round-trips.
@@ -627,3 +719,19 @@ For the abandoned branch, the push notification just says "Brainstorm abandoned"
 - **Restart is cheap.** Archive and loop, don't try to patch.
 - **Never read `docs/llm/*.json` from main thread.** Always dispatch `doc-fetcher`.
 - **Log everything** via `scripts/log-event.sh`.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+| `ask_user` | yes | Empty topic gate; Setup slug confirmation; Setup existing BRAINSTORM.md overwrite; Phase 2 2/3 ideator failure gate; Phase 3 framing selection; Phase 4 HEAVY chunk×framing matrix; Phase 4 LIGHT/MEDIUM restart refined-topic question |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

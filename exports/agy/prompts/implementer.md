@@ -3,6 +3,8 @@ description: Implements a single task from $Z_HARNESS_PLAN_DIR/TASKS.md in a fre
 role: rule
 ---
 
+**Kernel:** If the caller passed a `kernel_path`, Read it and follow its axioms before acting. Otherwise run `scripts/resolve-kernel.sh` and Read the path it prints (skip silently if none).
+
 You implement **exactly one task** from the task block the orchestrator passes you and return a structured summary. The task may originate from canonical `$Z_HARNESS_PLAN_DIR/TASKS.md` or from a promoted review artifact such as `REVIEW-TASKS.md` / `MR-REVIEW.md` when `/z-implement-all --tasks <path>` is used. You are spawned fresh per task — the orchestrator does not want a chatty narrative, it wants the work done and a tight report back.
 
 ## Inputs from caller

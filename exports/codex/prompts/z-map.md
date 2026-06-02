@@ -6,6 +6,9 @@ Question (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question
+     "What question should I research?" to the user via their native channel and
+     accept a text reply. Silent omission is forbidden. -->
 **If the question above is empty or whitespace**, do this first: use `AskUserQuestion` (or a direct question if a free-text answer is needed) to ask "What question should I research?". Wait for their reply. Treat their reply as the question and continue. Do not proceed past this point without a concrete question.
 
 Strict, multi-phase. Do not skip phases. `/z-map` produces a map note only — it maps terrain, it does not pick an approach. Implementation and approach-selection happen later via `/z-brainstorm` or `/z-plan`.
@@ -16,7 +19,7 @@ Strict, multi-phase. Do not skip phases. `/z-map` produces a map note only — i
 
 1. **Parse `--slug=<value>` flag** from `$ARGUMENTS` first. If present, strip the entire `--slug=<value>` token from the arguments — the remainder is the research question, and the explicit slug overrides auto-derivation. The stripped `--slug=` token MUST NOT appear in any prompt to subagents and MUST NOT be included in the canonical text fed into `input_hash` (use only the cleaned research question + any non-`--slug` flags). Store the original normalized invocation (question + supported flags) separately for the final `command:` frontmatter.
 
-   **Derive a research slug** (only if `--slug=` was not provided): from the cleaned question, short kebab-case, 2-4 words (e.g. "how does the retry logic interact with token bucket limits?" → `retry-token-bucket`). Run `ls z-harness/` to check for existing slug dirs. Slug-collision handling (precontext-only vs finished-plan dir, and the auto-derived-slug confirmation) is deferred to **Phase 0.5** below so we do not mutate the workspace before the user clears the cost gate.
+   **Derive a research slug** (only if `--slug=` was not provided): from the cleaned question, short kebab-case, 2-4 words (e.g. "how does the retry logic interact with token bucket limits?" → `retry-token-bucket`). Run `bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" all_plan_slugs` to check for existing slug names across both new and legacy plan layouts. Slug-collision handling (precontext-only vs finished-plan dir, and the auto-derived-slug confirmation) is deferred to **Phase 0.5** below so we do not mutate the workspace before the user clears the cost gate.
 
    If `--slug=` was explicitly provided, skip auto-derivation but still defer collision handling to Phase 0.5.
 2. **Export** `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")` for all subsequent shell calls and subagents.
@@ -30,7 +33,7 @@ Strict, multi-phase. Do not skip phases. `/z-map` produces a map note only — i
    v = json.loads(sys.argv[1]); v["question"] = sys.argv[2]
    print(json.dumps(v))
    ' "$VERSION_BLOB" "<arguments>")"
-   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" research_run_start "$START_PAYLOAD"
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" map_run_start "$START_PAYLOAD"
    ```
 6. **Parent attribution (sub-command contract).** If `$Z_HARNESS_PARENT_RUN_ID` is set in the environment (i.e. this sub-command is being dispatched by a meta-orchestrator like `/z-research`), include `parent_run_id` and `parent_command` fields in every subsequent `log-event.sh` payload. Example:
 
@@ -57,7 +60,7 @@ Strict, multi-phase. Do not skip phases. `/z-map` produces a map note only — i
 
 Run this route check before the Phase 0 cost gate when the request is clearly not mapping. After Phase 6 finalization, route language may appear only as a next-step handoff outside `MAP.md`; never put approach recommendations in the map note.
 
-Use only already-known signals from the question, slug/artifact collision check, and docs availability: `candidate_files`, `expected_tasks`, `non_obvious_decisions`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `terrain_uncertain`, `approach_uncertain`, `has_existing_plan`, `has_fix_artifact`, and `docs_stale_or_drifted`.
+Use only already-known signals from the question, slug/artifact collision check, and docs availability: `candidate_files`, `expected_tasks`, `non_obvious_decisions`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `terrain_uncertain`, `approach_uncertain`, `has_existing_plan`, `plan_validation_intent`, `plan_amend_intent`, `has_fix_artifact`, and `docs_stale_or_drifted`. Set `plan_validation_intent`/`plan_amend_intent` only when the user re-enters this command on a slug with `SPEC.md`+`PLAN.md`+`TASKS.md` all present (see `agents/planning-router.md` for the language-match heuristic).
 
 Deterministic routes:
 - Stay in `/z-map` when terrain is uncertain, citations/source facts are missing, or the user asks to map code constraints before choosing an approach.
@@ -97,6 +100,9 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 Research can be expensive. The default fan-out is up to 3 parallel `Explore` subagents (Haiku) plus a bundled cross-LLM critique pass. Target spend: **≤2M tokens / 5-10 min wall time.** If you exceed 2M tokens at any point, log a `cost_warning` event and surface it to the user.
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the cost-gate
+     question (Proceed/Reduce/Abandon) via their native channel and accept a
+     reply before any subagent dispatch. Silent omission is forbidden. -->
 Present the cost up front via `AskUserQuestion` with three options:
 
 - **Proceed (~2M tokens)** — full fan-out, up to 3 parallel Explores.
@@ -120,9 +126,14 @@ This phase runs **only if** the user picked `proceed` or `reduce` in Phase 0. Th
 
 1. **Slug-dir collision (deferred from Setup step 1).** If the chosen slug (auto-derived or `--slug=`) matches an existing `$Z_HARNESS_PLAN_DIR/` dir:
    - **Precontext-only slug dir** (only `BRAINSTORM.md` and/or `MAP.md` present, no `PLAN.md`/`SPEC.md`/`TASKS.md`): treat as continuation — no prompt, proceed with the existing slug.
+   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug-collision
+        confirmation question via their native channel. Silent omission is forbidden. -->
    - **Finished-plan slug dir** (`PLAN.md` or `TASKS.md` exists): collision — prompt the user via `AskUserQuestion` to confirm or choose a different slug.
    If the auto-derived slug is non-obvious (and `--slug=` was not provided), confirm with the user via `AskUserQuestion`.
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the existing-MAP.md
+     collision decision (archive-and-start-fresh/continue/abort) via their native
+     channel and accept a reply. Silent omission is forbidden. -->
 2. **Existing-MAP.md handling (deferred from old Setup step 7).** If `$Z_HARNESS_PLAN_DIR/MAP.md` exists, prompt the user via `AskUserQuestion` with three options:
    - **archive-and-start-fresh** — archive the existing note (`mv $Z_HARNESS_PLAN_DIR/MAP.md $Z_HARNESS_PLAN_DIR/archive/$RUN/MAP.previous.md`) and proceed with a clean draft.
    - **continue (re-use existing)** — leave the existing MAP.md in place and treat this run as a refinement; the existing note's findings become inputs to Phase 3.
@@ -140,6 +151,9 @@ Checkpoint: `phase0_5-collision.md`.
 
 **Rule: doc-fetcher FIRST.** If Setup step 8 noted `docs/llm/INDEX.json` exists, spawn **ONE** `doc-fetcher` call with the question's keywords:
 
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+     will be skipped and Phase 2 Explores will proceed without doc grounding. -->
 ```
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
   subagent_type="doc-fetcher",
@@ -168,6 +182,9 @@ Dispatch up to `EXPLORE_BUDGET` parallel `Explore` subagents (Haiku) on **distin
 
 Send all calls in **one message** so they run in parallel:
 
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+     proceed without subagent support — terrain mapping requires Explore calls. -->
 ```
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
   subagent_type="Explore",
@@ -244,6 +261,9 @@ Checkpoint: `research-draft.md` (this file).
 
 Spawn **both** consultants in parallel in a single message with `MODE: research-review`. They return RAW critique (Gaps / Errors / Missing constraints) — no standard wrapper. They are explicitly forbidden from recommending an approach.
 
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+     and consultant-secondary calls require subagent support. -->
 ```
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
   subagent_type="consultant-primary",
@@ -267,6 +287,9 @@ Save the raw transcripts under `archive/$RUN/transcripts/` (the consultant subag
 **Aggregate decision** (after both consultants resolve):
 
 - **At least one consultant succeeded** → proceed to Phase 5 with the available critique; the `status:` frontmatter field may be `complete`.
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the critique-failure
+     decision (proceed-with-no-critique/retry-both/abandon) via their native channel
+     and accept a reply. Silent omission is forbidden. -->
 - **Both consultants failed (after retry)** → DO NOT mark `status: complete`. Prompt the user via `AskUserQuestion` with three options:
   - **proceed-with-no-critique** — finalize with `status: complete_no_critique` and an explicit `## Cross-LLM review notes` entry stating both consultants failed.
   - **retry-both** — dispatch Phase 4 from scratch once more.
@@ -377,3 +400,19 @@ Recommended next step:
 - **Citations are non-negotiable.** No `file:line` → not a finding.
 - **Cost discipline.** Phase 0 is the user's gate; respect their pick. If you exceed 2M tokens, warn.
 - **Log everything.** Every Explore dispatch, consultant call, temptation, and demotion — via `scripts/log-event.sh`.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

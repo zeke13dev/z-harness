@@ -1,5 +1,5 @@
 ---
-description: z-harness z-update workflow
+description: Update the z-harness plugin to the latest version. Detects symlink vs tarball install mode and runs the appropriate update path.
 ---
 
 # /z-update
@@ -8,7 +8,7 @@ Update the z-harness plugin to the latest version.
 
 ## What it does
 
-Detects whether z-harness is installed as a **symlink** (dev/clone mode) or a **tarball** (extracted mode), then runs the appropriate update path.
+Detects whether z-harness is installed as a **symlink** (dev/clone mode), a **tarball** (extracted mode), or a **runtime** (runtime/ tree present) install, then runs the appropriate update path.
 
 Emits a `harness_updated` event with old and new version stamps.
 
@@ -49,8 +49,35 @@ if [ -L "$PLUGIN_DIR" ]; then
   PLUGIN_DIR="$(readlink "$PLUGIN_DIR")"
 elif git -C "$PLUGIN_DIR" rev-parse --git-dir >/dev/null 2>&1; then
   MODE="symlink"
+elif [ -d "${PLUGIN_DIR}/runtime" ]; then
+  MODE="runtime"
 else
   MODE="tarball"
+fi
+```
+
+### 2b. Detect legacy layout
+
+```bash
+LEGACY_LAYOUT=false
+if [ -d "${PLUGIN_DIR}/exports/codex" ] || \
+   [ -d "${PLUGIN_DIR}/exports/agy" ] || \
+   [ -d "${PLUGIN_DIR}/exports/cursor" ]; then
+  if [ ! -d "${PLUGIN_DIR}/runtime" ]; then
+    LEGACY_LAYOUT=true
+  fi
+fi
+```
+
+If `LEGACY_LAYOUT=true`:
+
+```bash
+if [ "$LEGACY_LAYOUT" = "true" ]; then
+  echo "[z-update] Your install uses the legacy export layout. Run install.sh to migrate to the runtime-based layout."
+  bash "${PLUGIN_DIR}/scripts/log-event.sh" \
+    "z-update-nudge-$(date -u +%Y%m%dT%H%M%SZ)" \
+    migration_nudge \
+    '{"layout":"legacy","action":"nudge"}'
 fi
 ```
 
@@ -60,7 +87,7 @@ fi
 OLD_VERSION="$(Z_HARNESS_PLUGIN_ROOT="$PLUGIN_DIR" bash "${PLUGIN_DIR}/scripts/version.sh")"
 ```
 
-### 4. Symlink mode — git pull
+### 4. Symlink mode — git pull (skip if MODE is tarball or runtime)
 
 Pre-flight: abort on dirty tree.
 
@@ -83,7 +110,9 @@ git -C "$PLUGIN_DIR" pull --ff-only
 
 If `git pull --ff-only` fails (e.g. diverged), print the error and advise the user to resolve manually. Do not force-merge or reset.
 
-### 5. Tarball mode — atomic swap
+### 5. Tarball / runtime mode — atomic swap
+
+This step runs when `MODE` is `tarball` or `runtime`.
 
 ```bash
 RELEASE_URL="${Z_HARNESS_RELEASE_URL:-}"
@@ -102,6 +131,11 @@ Steps:
 5. Atomically swap: `mv "$PLUGIN_DIR" "${PLUGIN_DIR}.old" && mv "$TMP_EXTRACT" "$PLUGIN_DIR"`.
 6. Remove the old dir: `rm -rf "${PLUGIN_DIR}.old"`.
 7. On any failure during swap, restore: `mv "${PLUGIN_DIR}.old" "$PLUGIN_DIR"`.
+
+In `runtime` mode the tarball is expected to contain the `runtime/` tree (which
+includes `runtime/drivers/`). The atomic swap of the full plugin dir is sufficient
+— no extra step is needed, because the `runtime/` tree (and all subdirectories
+within it) is part of the extracted archive that replaces `$PLUGIN_DIR` wholesale.
 
 ```bash
 TMP_DIR="$(mktemp -d)"
@@ -130,7 +164,7 @@ if [ "$TOP_COUNT" -eq 1 ]; then
   TMP_EXTRACT="${TMP_EXTRACT}/${TOP_DIR}"
 fi
 
-# Atomic swap
+# Atomic swap (covers runtime/ tree when MODE=runtime)
 mv "$PLUGIN_DIR" "${PLUGIN_DIR}.old"
 if mv "$TMP_EXTRACT" "$PLUGIN_DIR"; then
   rm -rf "${PLUGIN_DIR}.old"
@@ -151,7 +185,7 @@ echo "  old: ${OLD_VERSION}"
 echo "  new: ${NEW_VERSION}"
 ```
 
-Emit event:
+Emit event (`MODE` will be one of `symlink`, `tarball`, or `runtime`):
 
 ```bash
 PLUGIN_ROOT="${PLUGIN_DIR}"
@@ -185,4 +219,22 @@ fi
 
 - In symlink mode, the plugin dir is the live repo — no extraction needed.
 - In tarball mode, `--ff-only` is not applicable; the atomic swap is the equivalent safety guarantee.
-- If you want to switch from tarball to symlink mode, clone the repo and re-run `install.sh` from inside it.
+- In runtime mode, the tarball includes the `runtime/` tree (which contains `runtime/drivers/`). The full-dir atomic swap automatically updates all runtime content.
+- If you want to switch from tarball or runtime mode to symlink mode, clone the repo and re-run `install.sh` from inside it.
+- If `LEGACY_LAYOUT=true` (exports present, no `runtime/` dir), z-update prints a one-time nudge and emits a `migration_nudge` telemetry event, but still completes the update normally.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | no | — |
+| `ask_user` | no | — |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

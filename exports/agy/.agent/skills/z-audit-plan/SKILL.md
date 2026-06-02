@@ -35,7 +35,7 @@ Loop prevention: carry forward the latest route chain; if it already has two ent
    Before discovering a plan slug, define a route archive for the "no artifacts found" branch:
    ```bash
    NO_PLAN_RUN=$(date -u +%Y%m%dT%H%M%SZ)-audit-plan-no-plan
-   NO_PLAN_ARCHIVE_DIR="z-harness/archive/$NO_PLAN_RUN"
+   NO_PLAN_ARCHIVE_DIR="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" base_dir)/archive/$NO_PLAN_RUN"
    ```
 1. **Discover plan slug:**
    Enumerate subdirectories under the plans directory (`z-harness/plans/`) or legacy directory (`z-harness/`) that contain plan artifacts (`SPEC.md` / `PLAN.md` / `TASKS.md`).

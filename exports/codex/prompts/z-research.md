@@ -38,6 +38,7 @@ TOPIC="$(echo "$TOPIC" | xargs)"  # trim leading/trailing whitespace
 
 ### Step 1 — Topic gate
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question "What research topic should I synthesize?" via their native channel. Silent omission is forbidden. -->
 If `$TOPIC` is empty or whitespace, do NOT auto-invent a topic. Use `AskUserQuestion` to ask: "What research topic should I synthesize? (question or technical area)" Wait for the reply. Treat the reply as `$TOPIC` and continue.
 
 ### Step 2 — Derive slug
@@ -234,6 +235,7 @@ fi
 
 ### Step 3 — AskUser dispatch gate
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the dispatch decision (confirm / override / abandon) via their native channel. Silent omission is forbidden. -->
 Present the suggested dispatch via `AskUserQuestion` with three options:
 
 ```bash
@@ -320,6 +322,7 @@ COST_BREAKDOWN="$COST_BREAKDOWN synthesis panel (3 perspectives): ~3M tokens | j
 
 ### Step 2 — AskUser cost gate
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the cost gate (proceed / change dispatch / abandon) via their native channel. Silent omission is forbidden. -->
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start \
   '{"phase":"0.5","reason":"cost_gate"}'
@@ -383,10 +386,13 @@ mkdir -p "$Z_HARNESS_PLAN_DIR/archive/$RUN/subruns"
 
 ### Step 2 — Dispatch /z-map (if `DISPATCH_MAP=ran`)
 
-If `DISPATCH_MAP=ran`:
+**When both `DISPATCH_MAP=ran` AND `DISPATCH_BRAINSTORM=ran`, skip this step and go directly to Step 2+3 (parallel dispatch) below.**
+
+If `DISPATCH_MAP=ran` (and `DISPATCH_BRAINSTORM != ran`):
 
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 
+   <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
    ```
    <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
      subagent_type="z-map",
@@ -464,10 +470,13 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 ### Step 3 — Dispatch /z-brainstorm (if `DISPATCH_BRAINSTORM=ran`)
 
-If `DISPATCH_BRAINSTORM=ran`:
+**When both `DISPATCH_MAP=ran` AND `DISPATCH_BRAINSTORM=ran`, skip this step — it was already handled in Step 2+3 (parallel dispatch) below.**
+
+If `DISPATCH_BRAINSTORM=ran` (and `DISPATCH_MAP != ran`):
 
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 
+   <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
    ```
    <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
      subagent_type="z-brainstorm",
@@ -483,7 +492,7 @@ If `DISPATCH_BRAINSTORM=ran`:
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 
    ```bash
-   BRAINSTORM_SUB_RUN="$(ls -1t "$Z_HARNESS_PLAN_DIR/archive/" | grep -v "^${RUN}$" | grep "$SLUG" | grep -v "$MAP_SUB_RUN" | head -1 || true)"
+   BRAINSTORM_SUB_RUN="$(ls -1t "$Z_HARNESS_PLAN_DIR/archive/" | grep -v "^${RUN}$" | grep "$SLUG" | head -1 || true)"
    BRAINSTORM_ARCHIVE_PATH="$Z_HARNESS_PLAN_DIR/archive/$BRAINSTORM_SUB_RUN"
    ```
 
@@ -523,6 +532,166 @@ If `DISPATCH_BRAINSTORM=ran`:
    ```
 
 If `DISPATCH_BRAINSTORM=reused` or `DISPATCH_BRAINSTORM=skipped`, emit accordingly (same pattern as /z-map above).
+
+### Step 2+3 — Parallel dispatch (when `DISPATCH_MAP=ran` AND `DISPATCH_BRAINSTORM=ran`)
+
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+
+1. Snapshot existing archive entries before dispatch:
+
+   ```bash
+   PRE_DISPATCH_ARCHIVE="$(ls -1 "$Z_HARNESS_PLAN_DIR/archive/" | grep -v "^${RUN}$" | grep "$SLUG" || true)"
+   ```
+
+2. Dispatch **both** sub-commands in one message:
+
+   <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+   ```
+   <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+     subagent_type="z-map",
+     description="Terrain mapping for /z-research: $TOPIC",
+     prompt="$TOPIC --slug=$SLUG",
+     env={
+       "Z_HARNESS_PARENT_RUN_ID": "$RUN",
+       "Z_HARNESS_PARENT_COMMAND": "/z-research"
+     }
+   )
+   <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+     subagent_type="z-brainstorm",
+     description="Brainstorm framings for /z-research: $TOPIC",
+     prompt="$TOPIC --slug=$SLUG",
+     env={
+       "Z_HARNESS_PARENT_RUN_ID": "$RUN",
+       "Z_HARNESS_PARENT_COMMAND": "/z-research"
+     }
+   )
+   ```
+
+   Both agents run in parallel and both must complete before continuing.
+
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+
+   ```bash
+   POST_DISPATCH_ARCHIVE="$(ls -1 "$Z_HARNESS_PLAN_DIR/archive/" | grep -v "^${RUN}$" | grep "$SLUG" || true)"
+   NEW_ARCHIVE_DIRS="$(comm -13 <(echo "$PRE_DISPATCH_ARCHIVE" | sort) <(echo "$POST_DISPATCH_ARCHIVE" | sort))"
+
+   # Abort if we don't have exactly two new archive directories
+   NEW_COUNT="$(echo "$NEW_ARCHIVE_DIRS" | grep -c '[^[:space:]]' || true)"
+   if [ "$NEW_COUNT" -ne 2 ]; then
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
+       "$(printf '{"status":"error","reason":"parallel_dispatch_archive_count_unexpected","expected":2,"actual":%d}' "$NEW_COUNT")"
+     echo "ERROR: expected exactly 2 new archive directories after parallel dispatch, found $NEW_COUNT. Cannot identify sub-run archives. Aborting." >&2
+     exit 1
+   fi
+
+   MAP_SUB_RUN=""
+   BRAINSTORM_SUB_RUN=""
+
+   while IFS= read -r dir; do
+     [ -z "$dir" ] && continue
+     events_file="$Z_HARNESS_PLAN_DIR/archive/$dir/events.jsonl"
+     if [ -f "$events_file" ]; then
+       first_kind="$(python3 -c "import sys,json
+line=open(sys.argv[1]).readline().strip()
+if line: print(json.loads(line).get('kind',''))
+" "$events_file" 2>/dev/null || true)"
+       case "$first_kind" in
+         map_run_start)        MAP_SUB_RUN="$dir" ;;
+         brainstorm_run_start) BRAINSTORM_SUB_RUN="$dir" ;;
+       esac
+     fi
+   done <<< "$NEW_ARCHIVE_DIRS"
+
+   # No fallback: if identification failed, abort with a clear error rather than guess
+   if [ -z "$MAP_SUB_RUN" ] || [ -z "$BRAINSTORM_SUB_RUN" ]; then
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
+       "$(printf '{"status":"error","reason":"parallel_dispatch_archive_identification_failed","map_found":"%s","brainstorm_found":"%s"}' \
+          "${MAP_SUB_RUN:-none}" "${BRAINSTORM_SUB_RUN:-none}")"
+     echo "ERROR: could not positively identify both sub-run archives from events.jsonl kind fields. map='${MAP_SUB_RUN:-not found}' brainstorm='${BRAINSTORM_SUB_RUN:-not found}'. Aborting." >&2
+     exit 1
+   fi
+
+   if [ "$MAP_SUB_RUN" = "$BRAINSTORM_SUB_RUN" ]; then
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
+       "$(printf '{"status":"error","reason":"parallel_dispatch_archive_collision","map_sub_run":"%s","brainstorm_sub_run":"%s"}' \
+          "$MAP_SUB_RUN" "$BRAINSTORM_SUB_RUN")"
+     echo "ERROR: MAP and BRAINSTORM sub-runs resolved to the same archive directory '$MAP_SUB_RUN'. Aborting." >&2
+     exit 1
+   fi
+
+   MAP_ARCHIVE_PATH="$Z_HARNESS_PLAN_DIR/archive/$MAP_SUB_RUN"
+   BRAINSTORM_ARCHIVE_PATH="$Z_HARNESS_PLAN_DIR/archive/$BRAINSTORM_SUB_RUN"
+   ```
+
+4. Verify MAP.md was written:
+
+   ```bash
+   python3 -c "
+   import sys, os, re
+   path = sys.argv[1]
+   if not os.path.isfile(path):
+       print('MISSING'); sys.exit(1)
+   if os.path.getsize(path) < 100:
+       print('TOO_SMALL'); sys.exit(1)
+   with open(path) as f:
+       content = f.read()
+   if not re.search(r'^artifact:', content, re.MULTILINE):
+       print('NO_ARTIFACT_FIELD'); sys.exit(1)
+   print('OK')
+   " "$Z_HARNESS_PLAN_DIR/MAP.md"
+   MAP_VERIFY_STATUS=$?
+   ```
+
+   If MAP.md verification fails: abort the current run, log `research_subcommand_failed {sub: z-map, reason: artifact_missing_or_malformed}`, push-notify, surface to user. Do NOT attempt to fix the sub-command's output.
+
+5. Verify BRAINSTORM.md was written:
+
+   ```bash
+   python3 -c "
+   import sys, os, re
+   path = sys.argv[1]
+   if not os.path.isfile(path):
+       print('MISSING'); sys.exit(1)
+   if os.path.getsize(path) < 100:
+       print('TOO_SMALL'); sys.exit(1)
+   with open(path) as f:
+       content = f.read()
+   if not re.search(r'^artifact:', content, re.MULTILINE):
+       print('NO_ARTIFACT_FIELD'); sys.exit(1)
+   print('OK')
+   " "$Z_HARNESS_PLAN_DIR/BRAINSTORM.md"
+   BRAINSTORM_VERIFY_STATUS=$?
+   ```
+
+   If BRAINSTORM.md verification fails: abort, log `research_subcommand_failed {sub: z-brainstorm, reason: artifact_missing_or_malformed}`, push-notify, surface to user. Preserve the partial artifacts already written.
+
+6. Create symlinks (gated on directory existence and non-collision):
+
+   ```bash
+   if [ -d "$MAP_ARCHIVE_PATH" ] && [ -d "$BRAINSTORM_ARCHIVE_PATH" ] && [ "$MAP_SUB_RUN" != "$BRAINSTORM_SUB_RUN" ]; then
+     ln -sfn "$MAP_ARCHIVE_PATH"        "$Z_HARNESS_PLAN_DIR/archive/$RUN/subruns/z-map"
+     ln -sfn "$BRAINSTORM_ARCHIVE_PATH" "$Z_HARNESS_PLAN_DIR/archive/$RUN/subruns/z-brainstorm"
+   else
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
+       "$(printf '{"status":"error","reason":"symlink_precondition_failed","map_dir_exists":%s,"brainstorm_dir_exists":%s,"collision":%s}' \
+          "$([ -d "$MAP_ARCHIVE_PATH" ] && echo true || echo false)" \
+          "$([ -d "$BRAINSTORM_ARCHIVE_PATH" ] && echo true || echo false)" \
+          "$([ "$MAP_SUB_RUN" = "$BRAINSTORM_SUB_RUN" ] && echo true || echo false)")"
+     echo "ERROR: symlink precondition failed — archive directories must exist and must differ. Aborting." >&2
+     exit 1
+   fi
+   ```
+
+7. Emit completion events for both (only reached if symlinks were created successfully):
+
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" research_subcommand_complete \
+     "$(printf '{"sub":"z-map","status":"complete","sub_run_id":"%s","sub_archive_path":"%s"}' \
+        "$MAP_SUB_RUN" "$MAP_ARCHIVE_PATH")"
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" research_subcommand_complete \
+     "$(printf '{"sub":"z-brainstorm","status":"complete","sub_run_id":"%s","sub_archive_path":"%s"}' \
+        "$BRAINSTORM_SUB_RUN" "$BRAINSTORM_ARCHIVE_PATH")"
+   ```
 
 ### Step 4 — Final artifact readiness check
 
@@ -624,6 +793,7 @@ Lens: What fails first in each framing (per BRAINSTORM.md approaches)? Where doe
 
 Dispatch all three in **one message**:
 
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 ```
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
   subagent_type="general-purpose",
@@ -675,6 +845,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 **1/3 fail:** proceed with the surviving two perspectives. Record the failed perspective (its panel file will be absent). The judge handles `N=2` by emitting the matrix with 2-perspective citations and setting `panel_degraded: true` in its return notes.
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the 2/3 panel failure decision (retry / proceed-with-1 / abandon) via their native channel. Silent omission is forbidden. -->
 **2/3 fail:** halt and present `AskUserQuestion`:
 
 ```bash
@@ -749,6 +920,7 @@ Record `T0=$(date +%s%3N)` and `USER_WAIT_MS_THIS_PHASE=0` at phase start.
 
 ### Step 1 — Dispatch research-judge
 
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 ```
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
   subagent_type="research-judge",
@@ -1143,3 +1315,19 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 - **Judge failure or empty return:** halt Phase 3; preserve all panel outputs; surface to user.
 - **`/z-plan` finds RESEARCH.md with corrupt frontmatter:** /z-plan falls back to component-file injection + warns user. This is /z-plan's responsibility; /z-research has no action.
 - **Phase 0 loop-back from cost gate:** capped at 3 iterations before falling through to Abandon to prevent infinite dispatch/cost-gate cycling.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | yes | Phase 1 Step 2 z-map; Phase 1 Step 3 z-brainstorm; Phase 2 Step 3 general-purpose + consultant-primary + consultant-secondary (panel, parallel); Phase 3 Step 1 research-judge |
+| `ask_user` | yes | Setup Step 1 empty-topic question; Phase 0 Step 3 dispatch decision; Phase 0.5 Step 2 cost gate; Phase 2 Step 4 panel 2/3 failure decision |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

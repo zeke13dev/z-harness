@@ -69,6 +69,7 @@ Derive a slug from the repository name or the first 2–4 words of the user's de
 
 **First, run the slug collision check unconditionally** — check for an existing slug dir in the canonical plans directory (`z-harness/plans/`). This collision check is a hard prerequisite that is never bypassed by the resolver below.
 - If a MANIFEST.md is found there, this is a **resume** — skip decomposition phases and jump to the next non-terminal MANIFEST state.
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug collision confirmation question via their native channel. Silent omission is forbidden. -->
 - If only a slug collision without MANIFEST, prompt the user to confirm or choose a different slug via `AskUserQuestion`.
 
 After the collision check passes (no collision found, or the user confirmed a new slug), apply the soft non-obvious-slug confirmation gate. If the auto-derived slug is non-obvious, consult the resolver:
@@ -92,6 +93,7 @@ fi
 
 Branch on `$RESULT`:
 - `skip`: accept the derived slug silently — no AskUserQuestion. Emit `askuser_skipped` event with `{question_id: "workflow.slug_confirm", source: "$SOURCE"}`.
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug confirmation question via their native channel. Silent omission is forbidden. -->
 - `prefill`: present the AskUserQuestion normally, pre-select the derived slug as the recommended option (label suffix: ` (Recommended — your preference)`). Wrap with `user_wait_start` / `user_wait_end` logging:
 
   ```bash
@@ -104,6 +106,15 @@ Branch on `$RESULT`:
   ```
 
 - `ask`: if non-obvious, confirm with the user via `AskUserQuestion` normally, wrapped with `user_wait_start` / `user_wait_end` logging (as shown above). If `$SOURCE == "conflict"`, add to the question header: `(Note: config says <X>, memory says <Y> — your answer below will be offered as a conflict-resolution write target.)` After the user picks an answer that differs from both stored values, surface a one-shot follow-up: "Record your answer as the new preference? (config / memory:very_strong / memory:strong / no)".
+- `halt`: emit `uplift_halt` event and exit cleanly — do NOT invoke `AskUserQuestion`:
+  ```bash
+  if [[ "$RESULT" == "halt" ]]; then
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "${RUN:-z-uplift}" uplift_halt \
+      "$(printf '{"reason":"no_ask_blocked","question_id":"workflow.slug_confirm","rule_id":"no_ask_halt"}')"
+    echo "halt: no_ask_blocked on workflow.slug_confirm" >&2
+    exit 0
+  fi
+  ```
 
 **Invariant:** the collision check above is a hard safety prerequisite that runs unconditionally regardless of resolver outcome. The resolver only governs the soft non-obvious-slug confirmation gate.
 
@@ -157,6 +168,7 @@ Compute `stale_pct = stale_concepts / total_concepts`. Threshold: `$Z_HARNESS_DO
 
 If `stale_pct >= threshold`:
 - Write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md` (artifact for audit trail). Set `ARTIFACT_PATH="$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md"`.
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the doc-staleness route question (switch to /z-maintain-docs / continue with stale docs / abandon) via their native channel. Silent omission is forbidden. -->
 - Log `user_wait_start`, push-notify, and present `AskUserQuestion`: switch to `/z-maintain-docs` / continue here with stale docs / abandon.
 
   ```bash
@@ -473,6 +485,7 @@ if [ "$NO_STYLE" != "true" ]; then
 fi
 ```
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the missing STYLE.md gate question (run /z-style-init / continue without STYLE / abort) via their native channel. Silent omission is forbidden. -->
 If STYLE.md is missing and `NO_STYLE` is not set, log `user_wait_start`, push-notify, and present `AskUserQuestion`:
 
 ```bash
@@ -554,6 +567,7 @@ Record `T0=$(date +%s%3N)` and `USER_WAIT_MS_THIS_PHASE=0` at phase start.
 
 If any concern surfaces:
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the premise concern question via their native channel. Silent omission is forbidden. -->
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start \
   '{"phase":0,"reason":"premise_concern"}'
@@ -885,6 +899,7 @@ PYEOF
 )"
 ```
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface each slug collision disambiguation question via their native channel. Silent omission is forbidden. -->
 For each `COLLISION:` block printed above, log `user_wait_start`, call `AskUserQuestion` with the offered options, log `user_wait_end`, then apply the choice:
 
 ```bash
@@ -1028,6 +1043,7 @@ PYEOF
 
 Push-notify the user that decomposition is ready.
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the decomposition confirm question (proceed / abort) via their native channel. Silent omission is forbidden. -->
 Log `user_wait_start`, present `AskUserQuestion`, then log `user_wait_end`:
 
 ```bash
@@ -1266,6 +1282,7 @@ CRITICAL FORMAT REQUIREMENT: Each finding MUST be a bullet beginning with \`G-NN
 
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
 
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
 ```
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="consultant-primary",
@@ -1820,6 +1837,7 @@ Build the `rubric_path` for each dimension: pass `$STYLE_MD_PATH` when the dimen
 
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
 
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
 ```
 # Example for DIMENSIONS="correctness,cleanliness,design"
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
@@ -1862,6 +1880,7 @@ Key dispatch rules:
 - `rubric_path` is the **absolute path** to STYLE.md (or empty string). Never inline STYLE.md content.
 - `rubric_path` is non-empty **only** when `dim ∈ {cleanliness, design}` AND `STYLE_MD_PATH` is non-empty.
 - All auditors for this component are dispatched simultaneously in one message — never serialized.
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the auditor-failed recovery question (retry / skip dimension / skip component / abort Phase 3) via their native channel. Silent omission is forbidden. -->
 - If any auditor returns `unable_to_complete`:
 
   ```bash
@@ -1916,6 +1935,7 @@ After all auditors for this component return, merge their findings files into `$
 
 Dispatch `consultant-primary` and `consultant-secondary` in a **single message** (parallel):
 
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
 ```
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="consultant-primary",
@@ -2203,6 +2223,7 @@ Severity prefix: `[CRITICAL] | [HIGH] | [MED] | [LOW]`. Group by phase (Phase A 
 
 #### Step 2i — Dispatch reviewer over TASKS.md (mandatory safety gate)
 
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
 ```
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="reviewer",
@@ -2221,6 +2242,7 @@ Flag: tasks that would regress invariants, tasks with vague acceptance, severity
 
 Parse the return:
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the reviewer second-failure decision (continue / skip component / abort Phase 3) via their native channel. Silent omission is forbidden. -->
 - **Blockers** → re-edit the affected TASKS.md entries in-place; re-run the reviewer once. If the second review still has Blockers:
 
   ```bash
@@ -2549,6 +2571,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 If `RESUME_PENDING_COUNT > 0`:
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the interrupted-resume question (resume / mark as done / skip / abort) via their native channel. Silent omission is forbidden. -->
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start \
   "$(printf '{"phase":5,"reason":"interrupted_resume","component":"%s"}' "$COMP_SLUG")"
@@ -2620,6 +2643,7 @@ PYEOF
 )"
 ```
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the per-component implement gate question (proceed / skip / abort) via their native channel. Silent omission is forbidden. -->
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start \
   "$(printf '{"phase":5,"reason":"implement_gate","component":"%s"}' "$COMP_SLUG")"
@@ -2859,3 +2883,19 @@ WALL_MS=$(( $(date +%s%3N) - T0 ))
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" phase_end \
   "$(printf '{"phase":6,"name":"finalize","wall_ms":%d,"user_wait_ms":0}' "$WALL_MS")"
 ```
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | yes | Setup Step 5 docs-staleness route; Phase 2 Step 4 cross-cutting consultants (primary + secondary); Phase 3 Step 2d dimension auditors (parallel per-component); Phase 3 Step 2f audit-review consultants (primary + secondary); Phase 3 Step 2i reviewer over TASKS.md |
+| `ask_user` | yes | Setup Step 1 slug collision confirmation; Setup Step 1 non-obvious slug confirmation; Setup Step 5 docs-staleness route decision; STYLE.md gate missing-style decision; Phase 0 premise concern; Phase 1 Step 2 slug collision disambiguation; Phase 1 Step 5 decomposition confirm; Phase 3 Step 2d auditor-failed recovery; Phase 3 Step 2i reviewer second-failure decision; Phase 5 Step 2a interrupted-resume decision; Phase 5 Step 2b per-component implement gate |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

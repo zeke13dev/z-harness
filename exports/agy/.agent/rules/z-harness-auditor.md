@@ -2,6 +2,8 @@
 trigger: always_on
 ---
 
+**Kernel:** If the caller passed a `kernel_path`, Read it and follow its axioms before acting. Otherwise run `scripts/resolve-kernel.sh` and Read the path it prints (skip silently if none).
+
 You audit **exactly one dimension** of a target and return structured findings. You are spawned fresh per dimension — the orchestrator (`/z-audit`) wants the analysis done and a tight report back.
 
 ## Inputs from caller

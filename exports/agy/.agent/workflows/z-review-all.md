@@ -19,14 +19,34 @@ You are running the **z-harness `/z-review-all`** final-gate review. This is a h
 Once `EARLY_PLAN_DIR` is known:
 
 1. If `$EARLY_PLAN_DIR/.review_state.json` **does not exist** → proceed to Phase 0 normally.
-2. If it exists, attempt to parse it. **If it fails to parse (invalid JSON), or any required field is missing or the wrong type, or `phase_3_7_acknowledged` is not `true`:** treat as stale — delete the file, emit a `review_state_corrupt` event with a `reason` field, and proceed to Phase 0 for a full re-run:
-   ```bash
-   # RRUN is not yet established in pre-Phase-0; use a transient identifier
-   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "pre-resume" review_state_corrupt \
-     "$(jq -n --arg slug "$EARLY_SLUG" --arg reason 'parse_error or missing field' '{"slug":$slug,"reason":$reason}')"
-   rm "$EARLY_PLAN_DIR/.review_state.json"
-   ```
-3. If parsed successfully, validate the state file:
+2. If it exists, attempt to parse it:
+   - **If it fails to parse (invalid JSON):** treat as stale — delete the file, emit a `review_state_corrupt` event with `reason: "parse_error"`, and proceed to Phase 0 for a full re-run:
+     ```bash
+     # RRUN is not yet established in pre-Phase-0; use a transient identifier
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "pre-resume" review_state_corrupt \
+       "$(jq -n --arg slug "$EARLY_SLUG" --arg reason 'parse_error' '{"slug":$slug,"reason":$reason}')"
+     rm "$EARLY_PLAN_DIR/.review_state.json"
+     ```
+   - **If parsed successfully AND `halted: true` AND `halt_reason: "no_ask_blocked"`:** this is a valid halted-state file from a prior Phase 3.7 no-ask block. Do NOT delete it. Emit `review_resume_from_halt` event and jump to Phase 3.7 retry (skip Phases 0–3.5, but re-run Phase 3.7 gate from scratch):
+     ```bash
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "pre-resume" review_resume_from_halt \
+       "$(jq -n --arg slug "$EARLY_SLUG" --arg halt_reason 'no_ask_blocked' '{"slug":$slug,"halt_reason":$halt_reason}')"
+     # Restore enough environment for Phase 3.7: slug and plan dir are already known.
+     # Phase 3.7 will re-run check-no-ask and either halt again or prompt the user.
+     # NOTE: We do NOT restore RRUN/cumulative paths here because Phase 3.7 re-runs
+     # the gate afresh — if no-ask is now cleared, the user will be prompted normally
+     # and a full Phase 0–3.5 run is needed to rebuild artifacts.
+     # Delete halt state file so Phase 3.7 writes a fresh one if needed.
+     rm "$EARLY_PLAN_DIR/.review_state.json"
+     # → jump to Phase 0 (full re-run; halt state cleared so Phase 3.7 gate re-evaluates)
+     ```
+   - **If parsed successfully AND `phase_3_7_acknowledged` is not `true` AND not a recognized halt state:** treat as stale — delete the file, emit a `review_state_corrupt` event with `reason: "missing_field"`, and proceed to Phase 0:
+     ```bash
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "pre-resume" review_state_corrupt \
+       "$(jq -n --arg slug "$EARLY_SLUG" --arg reason 'missing_field' '{"slug":$slug,"reason":$reason}')"
+     rm "$EARLY_PLAN_DIR/.review_state.json"
+     ```
+3. If parsed successfully with `phase_3_7_acknowledged: true`, validate the state file:
    - Run `git rev-parse HEAD` and compare with `head_sha` in the file.
    - Check that the files at `cumulative_diff_path` **and** `cumulative_stat_path` both still exist on disk. If either is missing, treat as stale (delete state file, full re-run).
    - **If HEAD matches AND both artifact files are present:**
@@ -52,11 +72,41 @@ Once `EARLY_PLAN_DIR` is known:
      - Delete the stale state file: `rm "$EARLY_PLAN_DIR/.review_state.json"`
      - Proceed to Phase 0 for a full re-run.
 
+## Phase 0 — Concurrent follow-up consumer check
+
+Before doing any plan discovery, check whether a follow-up consumer is actively running in this project. Running `/z-review-all` while a follow-up consumer is modifying files risks race conditions on shared state (plan dir, sink index).
+
+```bash
+SINK_LOCK="$HOME/.z-harness/.followup-vs-implement.lock"
+PROJECT_SINK="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" followups_dir)/index.view.json"
+if [ -f "$PROJECT_SINK" ]; then
+  RUNNING_COUNT="$(python3 -c "
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+    entries_obj = data.get('entries', {})
+    entries = list(entries_obj.values())
+    running = [e for e in entries if e.get('status') == 'running']
+    print(len(running))
+except (json.JSONDecodeError, OSError, KeyError, AttributeError):
+    print(0)
+" "$PROJECT_SINK" 2>/dev/null || echo 0)"
+  if [ "${RUNNING_COUNT:-0}" -gt 0 ]; then
+    echo "halt: follow-up consumer is active ($RUNNING_COUNT running entry/entries in project sink)" >&2
+    echo "Run /z-followup-status to see what is running. Wait for it to complete or dismiss before reviewing." >&2
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" review_halted_followup_running \
+      "$(printf '{"running_count":%d,"sink_path":"%s"}' "$RUNNING_COUNT" "$PROJECT_SINK")" 2>/dev/null || true
+    exit 1
+  fi
+fi
+```
+
 ## Phase 0 — Discover plan slug
 
 Same logic as `/z-implement-all` / `/z-implement-next`:
 
 1. Enumerate subdirs of `z-harness/` containing a `TASKS.md`. Also check legacy flat `z-harness/TASKS.md`.
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug-selection question via their native channel. Silent omission is forbidden. -->
 2. Single candidate → use it. Multiple → `AskUserQuestion` to pick (or honor `--slug <slug>` argument). Zero → tell user nothing to review; stop.
 3. Export `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")` (or leave unset for legacy flat).
 4. `BASE = $Z_HARNESS_PLAN_DIR` (or `z-harness` for legacy).
@@ -74,6 +124,12 @@ print(json.dumps(v))
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_all_start "$START_PAYLOAD"
 ```
 
+**Kernel path resolution (once per run, immediately after review_all_start):**
+```bash
+KERNEL_PATH="$(bash scripts/resolve-kernel.sh 2>/dev/null || true)"
+```
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+
 Log provider resolution (once per run, guarded against re-emission):
 ```bash
 if [ ! -f "$BASE/archive/$RRUN/.providers-logged" ]; then
@@ -88,6 +144,7 @@ fi
 Read `$BASE/TASKS.md`. Count `[ ]`, `[~]`, `[x]`, and skip-flagged tasks.
 
 - If any `[~]` (in-progress) exist → abort with "Stop — task X is still in progress."
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the incomplete-plan warning (review anyway / cancel) via their native channel. Silent omission is forbidden. -->
 - If any `[ ]` (pending, not skip-flagged) exist → warn the user via `AskUserQuestion`:
   - **Review anyway** (incomplete plan)
   - **Cancel** (finish implementation first)
@@ -101,6 +158,7 @@ The cumulative diff is `git diff <base-ref>..HEAD` across all the changes this p
 2. Otherwise:
    - Find the first `task_start` event in `$BASE/metrics.jsonl` (or `events.jsonl` for the slug-namespaced events). That's the plan's start timestamp `T_start`.
    - `BASE_REF=$(git rev-list -n1 --before="$T_start" HEAD)`
+   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the base-ref question via their native channel. Silent omission is forbidden. -->
    - If that fails or returns nothing, fall back to `BASE_REF=$(git log --oneline | head -50 | grep -i "before z-plan\|baseline\|pre-z" | head -1 | awk '{print $1}')` and if still nothing, **ask the user** for the base ref via `AskUserQuestion`.
 
 Confirm the chosen base ref with the user before diffing, showing the short commit message: `git show --no-patch --format='%h %s' $BASE_REF`.
@@ -153,7 +211,82 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RR
   '{"trigger":"pre_consult","phase":"review_all_phase_4"}'
 ```
 
-Present an `AskUserQuestion` with exactly two options:
+**No-ask gate — run first, before the resolver:**
+
+```bash
+# check-no-ask is the fail-closed overnight gate. It returns halt|proceed and
+# correctly handles Z_HARNESS_ASK_ALL=1 vs Z_HARNESS_NO_ASK=halt conflicts (exit 5).
+NOASK_JSON="$(python3 scripts/config.py check-no-ask --question-id workflow.review_all_proceed)"
+NOASK_EXIT=$?
+NOASK_RESULT="$(echo "$NOASK_JSON" | jq -r .result)"
+
+if [[ $NOASK_EXIT -eq 5 ]]; then
+  # Config conflict (ASK_ALL=1 + NO_ASK=halt). check-no-ask already printed error JSON.
+  # Surface to user and abort.
+  echo "config_conflict: Z_HARNESS_ASK_ALL=1 and Z_HARNESS_NO_ASK=halt are mutually exclusive" >&2
+  exit 5
+fi
+```
+
+- **If `$NOASK_RESULT == "halt"`:** Emit `review_halt` event, write a partial `.review_state.json`, and exit cleanly — do NOT proceed to `resolve-question` or `AskUserQuestion`:
+  ```bash
+  if [[ "$NOASK_RESULT" == "halt" ]]; then
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_halt \
+      "$(printf '{"reason":"no_ask_blocked","question_id":"workflow.review_all_proceed","rule_id":"no_ask_halt"}')"
+    echo "halt: no_ask_blocked on workflow.review_all_proceed" >&2
+    # Write partial state file so /z-review-all resume check recognizes this as a
+    # halted-state file (not stale/corrupt) on next invocation.
+    python3 -c "
+import json, datetime, sys
+state = {
+  'phase_3_7_acknowledged': False,
+  'halted': True,
+  'halt_reason': 'no_ask_blocked',
+  'halted_at': datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+}
+path = sys.argv[1]
+with open(path, 'w') as f:
+    json.dump(state, f, indent=2)
+" "$Z_HARNESS_PLAN_DIR/.review_state.json" 2>/dev/null \
+      || echo "warn: could not write .review_state.json" >&2
+    exit 0
+  fi
+  ```
+
+- **If `$NOASK_RESULT == "proceed"`:** Overnight gate cleared — continue to the resolver for preference-based skip/prefill/ask:
+  ```bash
+  # check-no-ask returned proceed: run the full resolver to honor user preferences.
+  RESOLVED="$(python3 scripts/config.py resolve-question workflow.review_all_proceed)"
+  RESOLVE_EXIT=$?
+
+  if [[ $RESOLVE_EXIT -ne 0 ]]; then
+    # Exit codes: 2=bad invocation, 3=unknown question_id, 4=I/O error.
+    # In all error cases, fall through to ask the user normally — never silently skip.
+    echo "resolve-question failed (exit $RESOLVE_EXIT); falling back to ask" >&2
+    RESULT="ask"; DEFAULT=""; SOURCE="error"
+  else
+    RESULT="$(echo "$RESOLVED" | jq -r .result)"
+    DEFAULT="$(echo "$RESOLVED" | jq -r .default)"
+    SOURCE="$(echo "$RESOLVED" | jq -r .source)"
+  fi
+  ```
+
+  Branch on `$RESULT` from the resolver:
+
+  - **`skip`:** Skip the `AskUserQuestion` and proceed as if the user picked `$DEFAULT`. Emit `askuser_skipped` event:
+    ```bash
+    if [[ "$RESULT" == "skip" ]]; then
+      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" askuser_skipped \
+        "$(printf '{"question_id":"workflow.review_all_proceed","source":"%s"}' "$SOURCE")"
+      # Fall through to the Proceed path below (write state file and continue to Phase 4).
+    fi
+    ```
+
+  - **`prefill`:** Present the `AskUserQuestion` normally, pre-select `$DEFAULT` as the recommended option (append label suffix: ` (Recommended — your preference)`).
+  - **`ask`:** Present the `AskUserQuestion` normally.
+
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the compaction-breakpoint decision (pause for /clear / proceed now) via their native channel. Silent omission is forbidden. -->
+When resolver result is `prefill` or `ask`, present an `AskUserQuestion` with exactly two options:
 
 > **Compaction breakpoint — pre-consultant spawn**
 >
@@ -182,6 +315,53 @@ Present an `AskUserQuestion` with exactly two options:
   ```
   If the write fails, log a warning to stderr and proceed (do not block on a filesystem hiccup).
 - Continue to Phase 4.
+
+## Phase 3.7.5 — Route non-halting findings to follow-up sink
+
+After the user picks "Proceed now" in Phase 3.7 (or the resolver auto-proceeds), before spawning consultants, check if the reviewer return from any prior per-task reviews produced `**FOLLOWUPS:**` blocks that haven't been routed yet. Additionally, at the end of Phase 5 (after `findings.md` is built), route non-halting minor/major findings from the cumulative review into the sink.
+
+**After Phase 5 findings are aggregated**, for each finding in `findings.md` that is NOT in the `Blockers` sections (i.e. severity is `major` or `minor`), invoke `scripts/parse-followups-block.py` on the findings text to extract any `**FOLLOWUPS:**` block written by the consultants, then route via `scripts/sink-add.sh`:
+
+```bash
+# Route non-halting findings from cumulative review to sink
+FINDINGS_FILE="$BASE/archive/$RRUN/findings.md"
+if [ -f "$FINDINGS_FILE" ] && [ -f "scripts/parse-followups-block.py" ] && [ -f "scripts/sink-add.sh" ]; then
+  FOLLOWUPS_JSON="$(python3 scripts/parse-followups-block.py --reviewer-output "$FINDINGS_FILE" 2>/dev/null || echo '[]')"
+  FOLLOWUP_COUNT="$(printf '%s' "$FOLLOWUPS_JSON" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null || echo 0)"
+  if [ "${FOLLOWUP_COUNT:-0}" -gt 0 ]; then
+    printf '%s' "$FOLLOWUPS_JSON" | python3 -c "
+import json, subprocess, sys
+
+entries = json.load(sys.stdin)
+source_artifact = sys.argv[1]
+script = sys.argv[2]
+
+for i, e in enumerate(entries):
+    cited = ','.join(e.get('cited_paths', []))
+    args = [
+        'bash', script,
+        '--sink=project',
+        f'--priority={e[\"priority\"]}',
+        f'--name={e[\"name\"]}',
+        f'--recommended-command={e[\"recommended_command\"]}',
+        f'--source-artifact={source_artifact}',
+        f'--cited-paths={cited}',
+    ]
+    if e.get('auto_close_eligible'):
+        args.append('--auto-close-eligible')
+    if e.get('recommended_command_safe_to_retry'):
+        args.append('--safe-to-retry')
+    result = subprocess.run(args, capture_output=True, text=True)
+    if result.returncode not in (0, 3):  # 3 = dedup-skip (ok)
+        print(f'warn: sink-add.sh exit {result.returncode} for entry {i}: {result.stderr[:200]}', file=sys.stderr)
+" "$FINDINGS_FILE" "scripts/sink-add.sh" 2>/dev/null || true
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" followups_routed_to_sink \
+      "$(printf '{"count":%d,"source":"review_all_findings"}' "$FOLLOWUP_COUNT")" 2>/dev/null || true
+  fi
+fi
+```
+
+Per-entry errors are logged + skipped. This step never blocks the review pipeline. If `scripts/sink-add.sh` is not yet present (deps not implemented), this step is silently skipped.
 
 ## Phase 4 — Spawn final-review consultants (parallel)
 
@@ -212,16 +392,17 @@ Each is asked the **two-pronged** review:
 
 ### Calling pattern
 
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
 ```
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="consultant-primary",
   description="Final-review (Gemini) for plan <slug>",
-  prompt="MODE: final-review-2pronged\n\n<full prompt with both prongs, plus paths to SPEC/PLAN/TASKS and cumulative.diff>"
+  prompt="MODE: final-review-2pronged\n\n<full prompt with both prongs, plus paths to SPEC/PLAN/TASKS and cumulative.diff>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="consultant-secondary",
   description="Final-review (Codex) for plan <slug>",
-  prompt="MODE: final-review-2pronged\n\n<same>"
+  prompt="MODE: final-review-2pronged\n\n<same>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 ```
 
@@ -399,6 +580,7 @@ The implementation is done and reviewed; the docs are what's left.
    - Line 3: `<BASE>/SPEC.md` (spec path)
    - Line 4: `docs/llm/TAGS.txt` (tags path)
 4. Dispatch:
+   <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
    ```
    <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
      subagent_type="review-agent",
@@ -406,6 +588,25 @@ The implementation is done and reviewed; the docs are what's left.
      prompt="run_dir: <RUN_DIR>\ncumulative_diff_path: <cumulative.diff path>\nspec_path: $BASE/SPEC.md\ntags_path: docs/llm/TAGS.txt\nindex_path: docs/llm/INDEX.json\nrun_id: <RRUN>\nparent_command: review-all"
    )
    ```
+4a. **Optionally dispatch the axiom-extractor (if `AXIOM_READY` was emitted):**
+
+    If `run-memory-review.sh` output contains a line starting with `AXIOM_READY`, parse the artifact path from that line and dispatch the axiom-extractor **alongside** the review-agent (parallel, fresh context):
+
+    ```bash
+    AXIOM_READY_LINE="$(printf '%s' "$MEMORY_REVIEW_OUT" | grep '^AXIOM_READY ' || true)"
+    ```
+
+    ```
+    <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+      subagent_type="axiom-extractor",
+      description="Axiom extraction for <slug>",
+      prompt="mode: post-run <RRUN>
+    repo_root: <REPO_ROOT>"
+    )
+    ```
+
+    **Proposes only — no auto-approve:** the axiom-extractor returns ≤5 candidate axioms as a fenced JSON array; nothing is written to the axiom store and no axiom is approved automatically. The candidates surface opportunities for later `/z-axiom-scan` / `/z-axiom-approve` review. Do not block on the axiom-extractor's return or error if it is unavailable.
+
 5. Parse the agent's return: extract the single fenced ```json block. On parse failure → emit `review_agent_malformed` event, soft-skip with a push-notify hint, and exit phase:
    ```bash
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_agent_malformed \
@@ -427,6 +628,7 @@ The implementation is done and reviewed; the docs are what's left.
           '{"subagent_model":$model,"subagent_input_tokens":$in_tok,"subagent_output_tokens":$out_tok,"candidates_emitted":$n}')"
      ```
    - **Push-notify** (`memory_candidates_ready`): "`<N>` memory candidate(s) ready for review."
+   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface per-candidate memory review questions (accept / edit / skip / skip-all) via their native channel. Silent omission is forbidden. -->
    - **Sequential AskUserQuestion per candidate** (iterate the candidates array, one prompt per candidate; stop early if user picks Skip-all-remaining):
      - Show: `candidate_kind`, `type`, `text`, `tags`, `suggested_concept_slug`, `rationale`.
      - Options:
@@ -458,6 +660,24 @@ The implementation is done and reviewed; the docs are what's left.
 | `review_skip_all` | User chose Skip-all-remaining |
 | `review_agent_suggest_failed` | `/z-suggest-memory` dispatch failed for an Accepted candidate |
 
+## Decision emission (standing instruction)
+
+After **any** `AskUserQuestion` resolves, emit a normalized decision event:
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-decision.sh" \
+  "$RUN" "<question_id>" "<chosen_label>" \
+  --options '["<opt1>","<opt2>",...]' \
+  [--tentative "<recommended_option>"]
+```
+
+- `<question_id>` — stable kebab-case identifier for this decision point (e.g. `workflow.implement_all_proceed`, `workflow.slug_confirm`).
+- `<chosen_label>` — the option label the user selected, verbatim.
+- `--options` — full list of offered option labels as a JSON array.
+- `--tentative` — the orchestrator's recommended option label; omit when the orchestrator had no recommendation.
+
+Emission is gated by `Z_HARNESS_AXIOM_EXTRACT` (default on); when set to `"0"`, the script exits silently — no guard is needed here. Do **not** modify existing structured gate events (`cost_gate_decision`, `critique_failure_decision`, `map_collision_decision`, `shared_concerns_ack_override`); those are normalized separately by the extractor. This emission **records signal only** — it never approves, overrides, or influences any decision (proposes-only invariant).
+
 ## Hard rules
 
 - **Never** edit SPEC.md or TASKS.md automatically. Stage review findings in `REVIEW-TASKS.md` or an amendment proposal and let the user prune/apply them.
@@ -470,3 +690,21 @@ The implementation is done and reviewed; the docs are what's left.
 - Not a substitute for per-task review. Per-task review catches per-task bugs fast; this catches cross-task bugs.
 - Not a substitute for human design review on major architecture changes.
 - Not for use during implementation — it's a final gate, not a debugging tool. (For mid-implementation debugging, just chat with Claude normally and have it read the relevant files.)
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | yes | Phase 4 consultant-primary + consultant-secondary (parallel); Phase 7 review-agent (memory review) |
+| `ask_user` | yes | Phase 0 slug selection; Phase 1 incomplete-plan warning; Phase 2 base-ref fallback question; Phase 3.7 compaction-breakpoint decision (resolver `prefill`/`ask` only); Phase 7 per-candidate memory review |
+| `check-no-ask` | yes | Phase 3.7 fail-closed overnight gate — `halt` → emit `review_halt`, write partial state, exit; `proceed` → fall through to `resolve-question` |
+| `resolve-question` | yes | Phase 3.7 `workflow.review_all_proceed` (only reached when `check-no-ask` returns `proceed`) — may `skip` (emit `askuser_skipped`, fall through to proceed path) or `prefill`/`ask` (show AskUserQuestion) |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

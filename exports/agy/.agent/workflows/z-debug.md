@@ -8,24 +8,54 @@ Symptom (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question
+     "What's the symptom?" via their native channel. Silent omission is forbidden. -->
 **If empty** — `AskUserQuestion`: "What's the symptom?" before proceeding.
 
 ## Setup
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug
+     confirmation question via their native channel if non-obvious. Silent
+     omission is forbidden. -->
 1. **Derive slug** like `debug-<symptom-slug>` (e.g. "MLB doubleheaders mislabeled" → `debug-mlb-doubleheaders-mislabeled`). Confirm via `AskUserQuestion` if non-obvious or might collide.
 2. Export `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")`.
 3. Pick run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`.
 4. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`.
 5. **Version stamp + log:**
    ```bash
+   export Z_HARNESS_SESSION_ID="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" session-id)"
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
    START_PAYLOAD="$(python3 -c '
    import json, sys
-   v = json.loads(sys.argv[1]); v["symptom"] = sys.argv[2]
+   v = json.loads(sys.argv[1]); v["symptom"] = sys.argv[2]; v["session_id"] = sys.argv[3]
    print(json.dumps(v))
-   ' "$VERSION_BLOB" "<arguments>")"
+   ' "$VERSION_BLOB" "<arguments>" "$Z_HARNESS_SESSION_ID")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" debug_run_start "$START_PAYLOAD"
    ```
+
+   **Active-plan registration (immediately after debug_run_start).** Register this run in the shared registry. Graduated failure policy — never silent-continue on failure:
+   ```bash
+   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" register \
+     --run-id "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-debug --phase debug \
+     --session "$Z_HARNESS_SESSION_ID"
+   REG_RC=$?
+   ```
+   - `REG_RC == 0` → registered; proceed.
+   - `REG_RC == 3` (no record written) → emit `registry_error` event; interactive → `AskUserQuestion` proceed/abort; unattended → proceed+log (or halt if `Z_HARNESS_STRICT_OVERLAP=1`). No deregister on abort (no record).
+   - Any OTHER nonzero → treat as `REG_RC == 3`.
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" registry_error \
+     "$(printf '{"op":"register","run_id":"%s","rc":%d}' "$RUN" "$REG_RC")"
+   ```
+
+   **FINALIZE_STATUS rule:** On any run-ending halt after `REG_RC == 0`, set `FINALIZE_STATUS=aborted` + `deregister --status aborted`. On normal completion (Phase 10 shipped or abandoned branches), deregister with `complete`. If register failed, do NOT deregister.
+
+   **Kernel path resolution (once per run, immediately after debug_run_start):**
+   ```bash
+   KERNEL_PATH="$(bash scripts/resolve-kernel.sh 2>/dev/null || true)"
+   ```
+   <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+
    Then log provider resolution (once per run, guarded against re-emission):
    ```bash
    if [ ! -f "$Z_HARNESS_PLAN_DIR/archive/$RUN/.providers-logged" ]; then
@@ -45,23 +75,37 @@ If at any phase you discover that the root cause / fix requires any of:
 - **Architectural change**
 - **New public surface** / new wire format / new schema
 
-→ STOP. Write `$Z_HARNESS_PLAN_DIR/escalation.md` documenting findings so far. Push-notify: "Debug requires architectural change — recommend `/z-plan` to design properly." Do not improvise a sprawling fix.
+→ STOP. Write `$Z_HARNESS_PLAN_DIR/escalation.md` documenting findings so far. Push-notify: "Debug requires architectural change — recommend `/z-plan` to design properly." Do not improvise a sprawling fix. Per the FINALIZE_STATUS rule, set `FINALIZE_STATUS=aborted` and deregister before exiting:
+```bash
+FINALIZE_STATUS=aborted
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+  --run-id "$RUN" --status aborted 2>/dev/null || true
+```
 
 The old `>5 files touched` trigger is **dropped** — `/z-debug` is the heavy path, larger localized fixes are expected. Cycle cap is enforced separately in Phase 6 (soft warning at 3, hard halt at 6).
 
 ## Phase 0 — Wrong-tool gate (non-skippable)
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the wrong-tool
+     gate question via their native channel. Silent omission is forbidden. -->
 `AskUserQuestion`:
 
 **"Do you already have a concrete hypothesis for what's causing this?"**
 
 - **"no — proceed with /z-debug"** (default) — continue to Phase 1.
-- **"yes — recommend /z-fix"** — exit with one-line recommendation: "You already have a diagnosis. Run `/z-fix <symptom>` for the lightweight fix-with-known-cause flow." Do not proceed.
+- **"yes — recommend /z-fix"** — exit with one-line recommendation: "You already have a diagnosis. Run `/z-fix <symptom>` for the lightweight fix-with-known-cause flow." Do not proceed. Per the FINALIZE_STATUS rule, set `FINALIZE_STATUS=aborted` and deregister before exiting (this halt occurs after a successful register):
+  ```bash
+  FINALIZE_STATUS=aborted
+  python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+    --run-id "$RUN" --status aborted 2>/dev/null || true
+  ```
 
 This gate is mandatory. If the user picks "yes," exit cleanly even if `$ARGUMENTS` was non-empty.
 
 ## Phase 1 — Problem statement
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the problem
+     clarification questions via their native channel. Silent omission is forbidden. -->
 Ask clarifying questions via `AskUserQuestion`:
 
 - "What was the expected behavior?"
@@ -129,6 +173,9 @@ Append `## Evidence Inventory` to `DEBUG.md`:
 
 **Each evidence entry gets a stable `EVID-NNN` ID at capture time** (zero-padded, 3 digits). These IDs are referenced by Phase 7's Evidence coverage table — never renumber, never reuse.
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the cannot-
+     reproduce gate (gather more evidence / proceed on inference / abandon) via
+     their native channel. Silent omission is forbidden. -->
 **If cannot reproduce.** Halt and ask the user via `AskUserQuestion`:
 - "Gather more evidence — what should I look at next?"
 - "Proceed on inference only (risky — debug without repro is unreliable)"
@@ -151,6 +198,9 @@ If any gate fails → skip Phase 2.5 silently and proceed to Phase 3a unchanged.
 ### Dispatch shape
 
 ```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+     fast-path only — pipeline continues to Phase 3a if skipped. -->
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="bisect-isolator",
   description="Bisect regression for <slug>",
@@ -217,15 +267,18 @@ Parse the `STATUS:` line:
 2. **Dispatch both consultants in parallel (single message, both calls).** Each receives ONLY the Problem + Evidence Inventory sections of DEBUG.md (plus doc-fetcher synthesis if relevant). Never share the orchestrator's checkpoint block.
 
    ```
+   <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+        <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+        Phase 3a cannot complete without subagent support. -->
    <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
      subagent_type="consultant-secondary",
      description="R1 hypothesis generation for <slug>",
-     prompt="MODE: generate-hypotheses-round1\n\nProblem (verbatim):\n<## Problem section>\n\nEvidence Inventory (verbatim):\n<## Evidence Inventory section>\n\nRelevant code (quoted with file:line, brief):\n<short snippets>\n\ndoc-fetcher synthesis (if relevant):\n<synthesis>\n\nAsk: independently propose 3-5 hypotheses for the root cause. Each must include a discriminating test that confirms if true AND refutes if false. Do not assume any context outside the problem statement and evidence inventory provided."
+     prompt="MODE: generate-hypotheses-round1\n\nProblem (verbatim):\n<## Problem section>\n\nEvidence Inventory (verbatim):\n<## Evidence Inventory section>\n\nRelevant code (quoted with file:line, brief):\n<short snippets>\n\ndoc-fetcher synthesis (if relevant):\n<synthesis>\n\nAsk: independently propose 3-5 hypotheses for the root cause. Each must include a discriminating test that confirms if true AND refutes if false. Do not assume any context outside the problem statement and evidence inventory provided.\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
    )
    <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
      subagent_type="consultant-primary",
      description="R1 hypothesis generation for <slug>",
-     prompt="MODE: generate-hypotheses-round1\n\n<same prompt body>"
+     prompt="MODE: generate-hypotheses-round1\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
    )
    ```
 
@@ -252,15 +305,18 @@ Parse the `STATUS:` line:
 Single-message parallel dispatch to both consultants with `MODE: generate-hypotheses-round2-adversarial`. Each receives ONLY the merged `## Hypothesis Pool` section (surgical extraction per the Phase-visibility matrix), plus Problem + Evidence Inventory. **Do NOT** include Test Matrix, Experiment Log, or Score Updates — those don't exist yet anyway.
 
 ```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+     Phase 3b cannot complete without subagent support. -->
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="consultant-secondary",
   description="R2 adversarial for <slug>",
-  prompt="MODE: generate-hypotheses-round2-adversarial\nschema_version: hypothesis_round2_v1\n\nProblem (verbatim):\n<## Problem>\n\nEvidence Inventory (verbatim):\n<## Evidence Inventory>\n\nHypothesis Pool (verbatim, with H<NNN> IDs):\n<## Hypothesis Pool table>\n\nAsk: given this merged hypothesis pool, return exactly TWO markdown tables in this order. Do not restate existing pool entries — your value is orthogonality and critique, not endorsement.\n\nTABLE 1 — NEW hypotheses (orthogonality hunt — failure modes absent from the pool). Columns (exact, in order):\n| claim | prediction_if_true | prediction_if_false | discriminating_test | test_cost | parallel_safe | reasoning | orthogonality_to |\n  - `test_cost` ∈ {free, cheap, medium, expensive}\n  - `parallel_safe` ∈ {true, false} — true ONLY if the discriminating test mutates no shared state\n  - `orthogonality_to` — comma-separated list of H<NNN> IDs this row fills a gap relative to (e.g. `H001, H004`)\n\nTABLE 2 — CRITIQUES of existing pool rows. Columns (exact, in order):\n| target_id | critique_type | problem | recommended_action | merge_with_id |\n  - `target_id` — H<NNN> of the row being critiqued (required; rows missing this will be dropped)\n  - `critique_type` MUST be one of: `non_discriminating_test`, `false_parallel_safe`, `duplicate`, `weak_claim`, `unclear_prediction`\n  - `problem` — concrete description; no 'looks good', no 'agree', no empty cells, no pure restatement of the target row's claim\n  - `false_parallel_safe` rows MUST cite the specific mutation in the `problem` cell (e.g. 'writes to ~/.cache/foo'), not just 'mutates state'\n  - `merge_with_id` — populated ONLY when `critique_type == duplicate` (the H<NNN> the target should merge into)\n\nTag the response with `schema_version: hypothesis_round2_v1` at the top."
+  prompt="MODE: generate-hypotheses-round2-adversarial\nschema_version: hypothesis_round2_v1\n\nProblem (verbatim):\n<## Problem>\n\nEvidence Inventory (verbatim):\n<## Evidence Inventory>\n\nHypothesis Pool (verbatim, with H<NNN> IDs):\n<## Hypothesis Pool table>\n\nAsk: given this merged hypothesis pool, return exactly TWO markdown tables in this order. Do not restate existing pool entries — your value is orthogonality and critique, not endorsement.\n\nTABLE 1 — NEW hypotheses (orthogonality hunt — failure modes absent from the pool). Columns (exact, in order):\n| claim | prediction_if_true | prediction_if_false | discriminating_test | test_cost | parallel_safe | reasoning | orthogonality_to |\n  - `test_cost` ∈ {free, cheap, medium, expensive}\n  - `parallel_safe` ∈ {true, false} — true ONLY if the discriminating test mutates no shared state\n  - `orthogonality_to` — comma-separated list of H<NNN> IDs this row fills a gap relative to (e.g. `H001, H004`)\n\nTABLE 2 — CRITIQUES of existing pool rows. Columns (exact, in order):\n| target_id | critique_type | problem | recommended_action | merge_with_id |\n  - `target_id` — H<NNN> of the row being critiqued (required; rows missing this will be dropped)\n  - `critique_type` MUST be one of: `non_discriminating_test`, `false_parallel_safe`, `duplicate`, `weak_claim`, `unclear_prediction`\n  - `problem` — concrete description; no 'looks good', no 'agree', no empty cells, no pure restatement of the target row's claim\n  - `false_parallel_safe` rows MUST cite the specific mutation in the `problem` cell (e.g. 'writes to ~/.cache/foo'), not just 'mutates state'\n  - `merge_with_id` — populated ONLY when `critique_type == duplicate` (the H<NNN> the target should merge into)\n\nTag the response with `schema_version: hypothesis_round2_v1` at the top.\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="consultant-primary",
   description="R2 adversarial for <slug>",
-  prompt="MODE: generate-hypotheses-round2-adversarial\n\n<same prompt body>"
+  prompt="MODE: generate-hypotheses-round2-adversarial\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 ```
 
@@ -372,10 +428,18 @@ For the current cycle (start at cycle 1):
 - **Fix-gate check:** if any active hypothesis has `posterior == very_high` AND there is a written causal mechanism (Phase 7's Root Cause draft) explaining every `EVID-NNN` in the Evidence Inventory → fix-gate open, proceed to Phase 7.
 - **Otherwise:** increment cycle counter, return to Phase 6 step 1 with the remaining `active` rows in updated test order.
 - **Soft warning at cycle 3** — push-notify: "z-debug cycle 3 reached without convergence. Two cycles remaining before hard halt."
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the hard cycle
+     cap gate (continue / bail to /z-plan / abandon) via their native channel.
+     Silent omission is forbidden. -->
 - **Hard cycle cap: 5.** If cycle 6 would be needed, halt and `AskUserQuestion`:
   - `continue (override cap)` — explicit user override required to enter cycle 6+.
-  - `bail to /z-plan` — write `escalation.md`, recommend `/z-plan`.
-  - `abandon` — log `debug_run_end {status: "abandoned"}` and stop.
+  - `bail to /z-plan` — write `escalation.md`, recommend `/z-plan`. Per the FINALIZE_STATUS rule, set `FINALIZE_STATUS=aborted` and deregister before exiting:
+    ```bash
+    FINALIZE_STATUS=aborted
+    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+      --run-id "$RUN" --status aborted 2>/dev/null || true
+    ```
+  - `abandon` — log `debug_run_end {status: "abandoned"}` and stop (the abandoned finalize branch in Phase 10 handles deregister).
 - **Pool collapse (all eliminated, no `very_high` survivor):** optionally spawn a **Round 3 generation pass**.
 
 ### Optional Round 3 (pool-collapse recovery)
@@ -423,12 +487,17 @@ If either fails: halt. Either upgrade the root cause statement (so it actually e
 1. Capture pre-fix SHA: `PRE_FIX_SHA=$(git rev-parse HEAD)`. Passed to `/z-mr-review` later as `--base`.
 2. **Bundled `light-fix` consult on the proposed fix.** Dispatch both consultants in parallel per the Phase-visibility matrix (subagents see: Problem + Evidence Inventory + winning Hypothesis Pool rows + Experiment Log + draft Root Cause + draft Evidence coverage table; subagents must NOT see Eliminated Alternatives or Score Updates history):
    ```
+   <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+        <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+        cannot complete without subagent support. -->
    <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
-         prompt="MODE: light-fix\n\n<sections per Phase-visibility matrix row 7>")
+         prompt="MODE: light-fix\n\n<sections per Phase-visibility matrix row 7>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]")
    <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
-         prompt="MODE: light-fix\n\n<same sections>")
+         prompt="MODE: light-fix\n\n<same sections>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]")
    ```
 3. **Synthesize + push back.** One reason it might be wrong per recommendation. Flag shortcuts.
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the fix approval
+     question via their native channel. Silent omission is forbidden. -->
 4. **Present + approve.** `AskUserQuestion` with the synthesized fix.
 5. **Write `## Fix Plan`** section to DEBUG.md (schema mirrors `/z-plan-light` Phase 6 FIX.md):
 
@@ -529,6 +598,9 @@ Pick at least one. Be honest:
 - **Similar bugs likely elsewhere?** <list any places worth auditing; or "none — this is localized">
 ```
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the MR-review
+     gate question and the action-item conversion question via their native
+     channel. Silent omission is forbidden. -->
 After writing the Post-mortem section, ask the user via `AskUserQuestion` (before the action-item conversion prompts):
 
 **"Run MR-style quality review on the fix diff?"**
@@ -582,6 +654,9 @@ If user accepts:
 
 3. Append the collected finding lines (or the "no findings" note) to the Post-mortem section's "Action items (preventative)" list.
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the post-mortem
+     action-item disposition question via their native channel. Silent omission
+     is forbidden. -->
 After writing, ask the user via `AskUserQuestion`:
 - "Convert action items into follow-up tasks?" → If yes, the orchestrator appends them to a designated `TASKS.md` (user picks which slug, or creates a fresh `audit-<topic>` slug) and the user can later `/z-implement-all` them.
 - "Convert regression-test action items into a /z-test follow-up" → For each action item shaped like `Add regression test ...`, record the invariant + failure-class + target-file hint into `$Z_HARNESS_PLAN_DIR/test-followups.md` (a flat list of seed entries shaped like Phase 2 drafts in `/z-test`). On the next `/z-plan` + `/z-test` cycle (or if the user re-runs `/z-test` on this same slug after seeding follow-up production tasks), these become mandatory TESTS.md entries. Closes the post-mortem loop automatically — the next plan run cannot ship without the regression test the post-mortem flagged.
@@ -606,6 +681,11 @@ Push-notify: "Post-mortem ready: `$Z_HARNESS_PLAN_DIR/DEBUG.md` Post-mortem sect
 2. Push-notify if policy != `off`: "Debug complete. Root cause: <one-line, H<NNN>>. DEBUG.md in `$Z_HARNESS_PLAN_DIR/`."
 
 3. **Memory review:** After logging `debug_run_end` with `status: shipped`, invoke `bash scripts/run-memory-review.sh "$RUN" "debug"` and parse its stdout with `mapfile`. On `STATUS: skipped`, the helper has already emitted the terminal event; honor the D11 push-notify policy (push-notify once per `(slug, skip_reason)` for `skipped_broken_context` states, deduped via `.notify-dedup-session`). On `STATUS: ready`, dispatch the review-agent with `parent_command: debug`, `debug_md_path` from line 5 (the path to DEBUG.md), `spec_path` from line 3 (may be empty), `cumulative_diff_path` from line 2, and `tags_path` from line 4. Run the sequential AskUserQuestion loop (hard cap 3 candidates) with source `incident:debug-<slug>-<RUN>`. Emit exactly one `memory_review_terminal` event per invocation: the helper emits it on skip paths; the orchestrator emits it after the user-gate loop for `ran_empty` and `needs_user` paths. See `skills/z-debug/SKILL.md` Phase 10 for the full step-by-step procedure.
+4. **Deregister this run** (best-effort, non-fatal):
+   ```bash
+   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+     --run-id "$RUN" --status "complete" || true   # CLI self-logs registry_error on failure
+   ```
 
 ### Branch: `status: abandoned` (debug was inconclusive — no fix shipped)
 
@@ -613,6 +693,12 @@ Log:
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" debug_run_end \
   "$(printf '{"status":"abandoned","hypothesis_cycles":%d,"total_hypotheses_generated":%d}' "$CYCLES" "$N_HYPOTHESES")"
+```
+
+**Deregister this run** (best-effort, non-fatal):
+```bash
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+  --run-id "$RUN" --status "complete" || true   # CLI self-logs registry_error on failure
 ```
 
 Do NOT invoke `run-memory-review.sh` on the abandoned branch. No memory-review telemetry is emitted for inconclusive debug sessions.
@@ -667,3 +753,19 @@ Orchestrator alone reads raw test output and assigns likelihood buckets (Phase 6
 - **Fix-gate is objective and binary.** Opens only when (a) winning hypothesis posterior == `very_high` AND (b) every `EVID-NNN` in the Evidence coverage table has status ∈ `{explained, falsifies_alternative, orthogonal_with_reason}` (zero `unexplained`).
 - **Phase 2.5 bisect is fast-path-only.** Bisect never blocks the pipeline, never replaces the hypothesis tournament, and never pre-fills the winning hypothesis. It augments the Evidence Inventory and seeds Phase 3a; the fix-gate still requires full posterior + evidence-coverage convergence.
 - **No emojis** anywhere in artifacts.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+| `ask_user` | yes | Empty arguments gate; Setup slug confirmation; Phase 0 wrong-tool gate; Phase 1 problem clarification; Phase 2 cannot-reproduce gate; Phase 6 hard cycle cap gate; Phase 7 fix approval; Phase 9 MR-review gate; Phase 9 action-item disposition |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

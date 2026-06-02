@@ -1,21 +1,27 @@
 ---
-description: "Export z-harness commands/agents/skills to Cursor / Codex / Antigravity (agy)."
+description: "Export z-harness commands/agents/skills/personas to Cursor / Codex / Antigravity (agy)."
 role: workflow
 ---
 
 You are running **z-harness `/z-export`**.
 
-This command runs one or more export adapter scripts that translate z-harness source files (`commands/`, `agents/`, `skills/`) into IDE-specific formats under `exports/`.
+This command runs one or more export adapter scripts that translate z-harness source files (`commands/`, `agents/`, `skills/`) into IDE-specific formats under `exports/`. It also exports persona files from `personas/` via the per-target `runtime/drivers/<target>/persona_export.py` modules.
 
 ## Phase 1 — Parse arguments
 
-Read `$ARGUMENTS`. Look for `--target=<value>`.
+> **NOTE:** the legacy export scripts (`scripts/export-{cursor,codex,agy}.py`) are deprecated. They will be removed in the next minor release. Use /z-update to switch to the runtime-based workflow.
 
-Valid values: `cursor`, `codex`, `agy`, `all`.
+Read `$ARGUMENTS`. Look for `--target=<value>` and `--include=<value>`.
+
+Valid `--target` values: `cursor`, `codex`, `agy`, `all`.
 
 Default (no `--target` flag): `all`.
 
-If an unrecognized value is given, immediately print:
+Valid `--include` values: `personas`. May be specified multiple times or comma-separated.
+
+Default (no `--include` flag): include personas automatically (personas are always exported in v1).
+
+If an unrecognized `--target` value is given, immediately print:
 
 ```
 [z-export] error: --target must be one of: cursor, codex, agy, all
@@ -61,6 +67,59 @@ For each target:
    ```
    Then **continue to the next target** — do not abort.
 
+## Phase 2b — Export personas per target
+
+After the legacy export script for each target completes (regardless of its exit code), export all persona files found under `personas/builtin/` and `personas/user/` (if present) using the per-target `persona_export.py` module.
+
+For each target, run:
+
+```bash
+python3 - <<'EOF'
+import sys, pathlib
+
+repo_root = pathlib.Path("${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}").parent
+target = "<target>"  # Replace with actual target name: antigravity, cursor, or codex
+export_root = repo_root / "exports" / target
+
+# Map z-export target names to driver directory names
+driver_map = {"agy": "antigravity", "cursor": "cursor", "codex": "codex", "claude": "claude"}
+driver = driver_map.get(target, target)
+
+sys.path.insert(0, str(repo_root))
+from runtime.drivers import _persona_utils  # noqa: F401 — ensures package importable
+import importlib
+mod = importlib.import_module(f"runtime.drivers.{driver}.persona_export")
+
+persona_dirs = [
+    repo_root / "personas" / "builtin",
+    repo_root / "personas" / "user",
+]
+written = []
+for persona_dir in persona_dirs:
+    if not persona_dir.exists():
+        continue
+    for persona_file in sorted(persona_dir.glob("*.md")):
+        try:
+            out_path = mod.export_persona(persona_file, export_root)
+            written.append(out_path)
+        except Exception as exc:
+            print(f"[persona-export/{driver}] WARNING: skipped {persona_file.name}: {exc}", file=sys.stderr)
+
+print(f"personas written to exports/{target}/: {len(written)} file(s)")
+EOF
+```
+
+Capture stdout and stderr. On success, print:
+```
+[<target>/personas] OK — <count> persona file(s) written to exports/<target>/
+```
+
+On failure (nonzero exit or unhandled exception in stderr), print:
+```
+[<target>/personas] FAILED — <last error line from stderr>
+```
+Mark this target's persona export as FAILED but continue to the next target.
+
 ## Phase 3 — Final summary
 
 After all targets have been attempted:
@@ -94,3 +153,29 @@ Exit nonzero (return a non-zero status to the user). You may signal this by endi
 - **No LLM interpretation of export output.** Just capture the script's stdout/stderr verbatim; do not summarize or editorialize on what the export produced.
 - **Relative paths in OK output.** Output paths should be relative to the repo root (strip the leading absolute path prefix).
 - **No writes by this command.** All file I/O is delegated to the export scripts.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | no | — |
+| `ask_user` | no | — |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.
+
+<!-- # FOLLOW-UP:
+  docs/llm/multi-ide-exports.json must be updated to reflect the deprecation of
+  the export scripts and the transition to the runtime-based workflow introduced
+  in T004. Run a separate `/z-maintain-docs` invocation once runtime drivers are
+  stable to refresh that concept. Specifically, update:
+    - the "status" field to indicate deprecated
+    - the "consumed_by" relationships to reference the new runtime driver path
+    - any invariants that assume export scripts are the canonical export mechanism
+-->

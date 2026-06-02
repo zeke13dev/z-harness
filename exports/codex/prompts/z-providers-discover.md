@@ -27,6 +27,7 @@ Tell the user which target will be written.
 
 ### Step 3 — Bind roles interactively
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the per-CLI role-binding multi-select question via their native channel. Silent omission is forbidden. -->
 For **each detected CLI** in the discovered providers list, use `AskUserQuestion` with a multiSelect to ask which roles to bind to it. Present all three role names as options:
 
 - `consultant_primary`
@@ -45,6 +46,7 @@ After collecting all role bindings, check: if `roles.consultant_primary` and `ro
 
 When a collision is detected:
 1. Tell the user: "consultant_primary and consultant_secondary must be different providers. Currently both are bound to `<name>`."
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the consultant_secondary collision-resolution question via their native channel. Silent omission is forbidden. -->
 2. Use `AskUserQuestion` to reprompt: ask the user to choose a **different** provider for `consultant_secondary` from the remaining detected CLIs (excluding the one already bound to `consultant_primary`).
 3. Repeat the collision check until the constraint is satisfied or the user picks `(none)` for one of the roles.
 
@@ -116,3 +118,19 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orc
 ```
 
 Tell the user: "providers.json written to `$TARGET_PATH`."
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | no | — |
+| `ask_user` | yes | Step 3 per-CLI role-binding multi-select; Step 4 consultant_secondary collision resolution |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

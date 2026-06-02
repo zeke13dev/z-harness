@@ -55,6 +55,7 @@ for slug in stale_concepts:
 
 For each stale concept, spawn a `doc-updater` subagent. In dry-run mode, leave `mode: dry-run` (default); in apply mode, set `mode: write`.
 
+<!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
 ```
 <!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
   subagent_type="doc-updater",
@@ -99,6 +100,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "doc
 Push-notify (this is a hard pause prompt — fires regardless of notification level; see [docs/human/config.md](docs/human/config.md)):
 > "About to audit <N> concept docs via consultants. Recommended: `/clear`, then re-invoke `/z-maintain-docs --audit` to continue. Dismiss to proceed now."
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the compaction-pause decision (pause for /clear / proceed now) via their native channel. Silent omission is forbidden. -->
 `AskUserQuestion` with two options:
 - **(a) Pause for /clear** — exit cleanly. Do **NOT** write the state file. On the next invocation, Phase 2.3 will fire again.
 - **(b) Proceed now** — write the state file and continue into Phase 2.5:
@@ -115,6 +117,7 @@ Push-notify (this is a hard pause prompt — fires regardless of notification le
 
 <!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
 
+<!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
 ```
 <!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
   subagent_type="consultant-primary",
@@ -184,6 +187,7 @@ Stale memory in <slug> (index <N>):
   Reason: expired / age > 547 days
 ```
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the stale-memory disposition question (keep / edit / delete) for each stale entry via their native channel. Silent omission is forbidden. -->
 For each stale entry, ask via inline `AskUserQuestion` with three choices:
 - **Keep** (default) — no change, memory remains as-is.
 - **Edit** — hand off to `/z-suggest-memory --edit <slug> <index>` and return after the edit completes.
@@ -216,6 +220,7 @@ Tag collisions detected:
   • <slug>: "cache" (3 uses) vs "caching" (1 use) — consider consolidating
 ```
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the tag-collision resolution question (keep both / rename one / add alias / skip) for each collision via their native channel. Silent omission is forbidden. -->
 For each collision, ask via an inline `AskUserQuestion` with four options:
 
 - **Keep both** — leave both tags as-is; the collision will re-appear on the next run.
@@ -232,6 +237,7 @@ For each collision, ask via an inline `AskUserQuestion` with four options:
   **Deferral note:** adding an alias here only records the mapping in `TAGS.txt`. The alias-collapse logic (doc-updater step 3.5 step A) is **not** triggered in the current run — no memory `tags[]` arrays are rewritten now. In-memory tag state for this run remains at the collision-tag values. On the next `/z-maintain-docs` (or doc-updater) invocation, step 3.5 reads the updated `TAGS.txt`, auto-collapses the alias in any memory that carries it, and emits `tag_aliased` log lines. Do not expect collapsed tags to appear in MEMORIES-FLAT.md until after that subsequent run.
 - **Skip** — do nothing for this collision in this run.
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the doc-refresh action question (apply all / apply subset / skip) via their native channel. Silent omission is forbidden. -->
 After all per-collision questions, ask the top-level `AskUserQuestion` for the doc-refresh action:
 - **Apply all** → re-run this command with `--apply` (or apply now in-place; user choice).
 - **Apply a subset** → user picks which concepts.
@@ -286,3 +292,19 @@ If the script exits non-zero, surface the error to the user and halt (do not pro
 - After `/z-review-all` accepts a plan, same.
 - Standalone: user runs whenever they suspect drift.
 - Could be wired into CI as `claude /z-maintain-docs --apply` if the user wants automated freshness.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | yes | Phase 2 doc-updater (one per stale concept, up to 3 in parallel); Phase 2.5 consultant-primary + consultant-secondary (only with `--audit`) |
+| `ask_user` | yes | Phase 2.3 compaction-pause decision (only with `--audit`); Phase 3 stale-memory disposition (keep / edit / delete); Phase 3 tag-collision resolution; Phase 3 doc-refresh action (apply all / apply subset / skip) |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

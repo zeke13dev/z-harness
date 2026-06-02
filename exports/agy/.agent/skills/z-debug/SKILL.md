@@ -13,7 +13,7 @@ $ARGUMENTS
 
 ## Setup
 
-1. **Derive slug** like `debug-<symptom-slug>` (e.g. "MLB doubleheaders mislabeled" → `debug-mlb-doubleheaders-mislabeled`). Check for an existing slug collision first (`ls z-harness/` to detect matching dirs). **If a collision is found, prompt the user via `AskUserQuestion` to confirm or choose a different slug. This collision check runs UNCONDITIONALLY and is never bypassed by the resolver below.**
+1. **Derive slug** like `debug-<symptom-slug>` (e.g. "MLB doubleheaders mislabeled" → `debug-mlb-doubleheaders-mislabeled`). Check for an existing slug collision first (`bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" all_plan_slugs` to detect matching slugs across both new and legacy plan layouts). **If a collision is found, prompt the user via `AskUserQuestion` to confirm or choose a different slug. This collision check runs UNCONDITIONALLY and is never bypassed by the resolver below.**
 
    After the collision check passes (no collision found, or the user confirmed a new slug), apply the soft non-obvious-slug confirmation gate:
 
@@ -38,6 +38,15 @@ $ARGUMENTS
    - `skip`: accept the derived slug silently — no AskUserQuestion. Emit `askuser_skipped` event with `{question_id: "workflow.slug_confirm", source: "$SOURCE"}`.
    - `prefill`: present the AskUserQuestion normally, pre-select the derived slug as the recommended option (label suffix: ` (Recommended — your preference)`).
    - `ask`: if non-obvious, confirm via `AskUserQuestion` normally. If `$SOURCE == "conflict"`, add to the question header: `(Note: config says <X>, memory says <Y> — your answer below will be offered as a conflict-resolution write target.)` After the user picks an answer that differs from both stored values, surface a one-shot follow-up: "Record your answer as the new preference? (config / memory:very_strong / memory:strong / no)".
+   - `halt`: emit `debug_halt` event and exit cleanly — do NOT invoke `AskUserQuestion`:
+     ```bash
+     if [[ "$RESULT" == "halt" ]]; then
+       bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "${RUN:-z-debug}" debug_halt \
+         "$(printf '{"reason":"no_ask_blocked","question_id":"workflow.slug_confirm","rule_id":"no_ask_halt"}')"
+       echo "halt: no_ask_blocked on workflow.slug_confirm" >&2
+       exit 0
+     fi
+     ```
 
    **Invariant:** the collision check above is a hard safety prerequisite that runs unconditionally regardless of resolver outcome. The resolver only governs the soft non-obvious-slug confirmation gate.
 2. Export `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")`.
@@ -45,14 +54,39 @@ $ARGUMENTS
 4. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`.
 5. **Version stamp + log:**
    ```bash
+   export Z_HARNESS_SESSION_ID="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" session-id)"
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
    START_PAYLOAD="$(python3 -c '
    import json, sys
-   v = json.loads(sys.argv[1]); v["symptom"] = sys.argv[2]
+   v = json.loads(sys.argv[1]); v["symptom"] = sys.argv[2]; v["session_id"] = sys.argv[3]
    print(json.dumps(v))
-   ' "$VERSION_BLOB" "<arguments>")"
+   ' "$VERSION_BLOB" "<arguments>" "$Z_HARNESS_SESSION_ID")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" debug_run_start "$START_PAYLOAD"
    ```
+
+   **Active-plan registration (immediately after debug_run_start).** Register this run in the shared registry. Graduated failure policy — never silent-continue on failure:
+   ```bash
+   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" register \
+     --run-id "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-debug --phase debug \
+     --session "$Z_HARNESS_SESSION_ID"
+   REG_RC=$?
+   ```
+   - `REG_RC == 0` → registered; proceed.
+   - `REG_RC == 3` (no record written) → emit `registry_error` event; interactive → `AskUserQuestion` proceed/abort; unattended → proceed+log (or halt if `Z_HARNESS_STRICT_OVERLAP=1`). No deregister on abort (no record).
+   - Any OTHER nonzero → treat as `REG_RC == 3`.
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" registry_error \
+     "$(printf '{"op":"register","run_id":"%s","rc":%d}' "$RUN" "$REG_RC")"
+   ```
+
+   **FINALIZE_STATUS rule:** On any run-ending halt after `REG_RC == 0`, set `FINALIZE_STATUS=aborted` + `deregister --status aborted`. On normal completion (Phase 10 shipped or abandoned branches), deregister with `complete`. If register failed, do NOT deregister.
+
+   **Kernel path resolution (once per run, immediately after debug_run_start):**
+   ```bash
+   KERNEL_PATH="$(bash scripts/resolve-kernel.sh 2>/dev/null || true)"
+   ```
+   <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+
 6. Record start time `T0_DEBUG=$(date -u +%Y-%m-%dT%H:%M:%SZ)` — used for post-mortem timeline.
 7. If `docs/llm/INDEX.json` exists → note it. Phase 2 (Evidence) and Phase 3a (Round 1 hypotheses) will dispatch `doc-fetcher` (Haiku) instead of reading INDEX.json or per-concept JSONs from main thread. The orchestrator never reads `docs/llm/*.json` directly.
 
@@ -64,7 +98,12 @@ If at any phase you discover that the root cause / fix requires any of:
 - **Architectural change**
 - **New public surface** / new wire format / new schema
 
-→ STOP. Write `$Z_HARNESS_PLAN_DIR/escalation.md` documenting findings so far. Push-notify: "Debug requires architectural change — recommend `/z-plan` to design properly." Do not improvise a sprawling fix.
+→ STOP. Write `$Z_HARNESS_PLAN_DIR/escalation.md` documenting findings so far. Push-notify: "Debug requires architectural change — recommend `/z-plan` to design properly." Do not improvise a sprawling fix. Per the FINALIZE_STATUS rule, set `FINALIZE_STATUS=aborted` and deregister before exiting:
+```bash
+FINALIZE_STATUS=aborted
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+  --run-id "$RUN" --status aborted 2>/dev/null || true
+```
 
 The old `>5 files touched` trigger is **dropped** — `/z-debug` is the heavy path, larger localized fixes are expected. Cycle cap is enforced separately in Phase 6 (soft warning at 3, hard halt at 6).
 
@@ -75,7 +114,12 @@ The old `>5 files touched` trigger is **dropped** — `/z-debug` is the heavy pa
 **"Do you already have a concrete hypothesis for what's causing this?"**
 
 - **"no — proceed with /z-debug"** (default) — continue to Phase 1.
-- **"yes — recommend /z-fix"** — exit with one-line recommendation: "You already have a diagnosis. Run `/z-fix <symptom>` for the lightweight fix-with-known-cause flow." Do not proceed.
+- **"yes — recommend /z-fix"** — exit with one-line recommendation: "You already have a diagnosis. Run `/z-fix <symptom>` for the lightweight fix-with-known-cause flow." Do not proceed. Per the FINALIZE_STATUS rule, set `FINALIZE_STATUS=aborted` and deregister before exiting (this halt occurs after a successful register):
+  ```bash
+  FINALIZE_STATUS=aborted
+  python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+    --run-id "$RUN" --status aborted 2>/dev/null || true
+  ```
 
 This gate is mandatory. If the user picks "yes," exit cleanly even if `$ARGUMENTS` was non-empty.
 
@@ -179,12 +223,12 @@ Default recommendation: gather more evidence. Debug-on-inference often fixes the
    <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
      subagent_type="consultant-secondary",
      description="R1 hypothesis generation for <slug>",
-     prompt="MODE: generate-hypotheses-round1\n\nProblem (verbatim):\n<## Problem section>\n\nEvidence Inventory (verbatim):\n<## Evidence Inventory section>\n\nRelevant code (quoted with file:line, brief):\n<short snippets>\n\ndoc-fetcher synthesis (if relevant):\n<synthesis>\n\nAsk: independently propose 3-5 hypotheses for the root cause. Each must include a discriminating test that confirms if true AND refutes if false. Do not assume any context outside the problem statement and evidence inventory provided."
+     prompt="MODE: generate-hypotheses-round1\n\nProblem (verbatim):\n<## Problem section>\n\nEvidence Inventory (verbatim):\n<## Evidence Inventory section>\n\nRelevant code (quoted with file:line, brief):\n<short snippets>\n\ndoc-fetcher synthesis (if relevant):\n<synthesis>\n\nAsk: independently propose 3-5 hypotheses for the root cause. Each must include a discriminating test that confirms if true AND refutes if false. Do not assume any context outside the problem statement and evidence inventory provided.\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
    )
    <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
      subagent_type="consultant-primary",
      description="R1 hypothesis generation for <slug>",
-     prompt="MODE: generate-hypotheses-round1\n\n<same prompt body>"
+     prompt="MODE: generate-hypotheses-round1\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
    )
    ```
 
@@ -214,12 +258,12 @@ Single-message parallel dispatch to both consultants with `MODE: generate-hypoth
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="consultant-secondary",
   description="R2 adversarial for <slug>",
-  prompt="MODE: generate-hypotheses-round2-adversarial\nschema_version: hypothesis_round2_v1\n\nProblem (verbatim):\n<## Problem>\n\nEvidence Inventory (verbatim):\n<## Evidence Inventory>\n\nHypothesis Pool (verbatim, with H<NNN> IDs):\n<## Hypothesis Pool table>\n\nAsk: given this merged hypothesis pool, return exactly TWO markdown tables in this order. Do not restate existing pool entries — your value is orthogonality and critique, not endorsement.\n\nTABLE 1 — NEW hypotheses (orthogonality hunt — failure modes absent from the pool). Columns (exact, in order):\n| claim | prediction_if_true | prediction_if_false | discriminating_test | test_cost | parallel_safe | reasoning | orthogonality_to |\n  - `test_cost` ∈ {free, cheap, medium, expensive}\n  - `parallel_safe` ∈ {true, false} — true ONLY if the discriminating test mutates no shared state\n  - `orthogonality_to` — comma-separated list of H<NNN> IDs this row fills a gap relative to (e.g. `H001, H004`)\n\nTABLE 2 — CRITIQUES of existing pool rows. Columns (exact, in order):\n| target_id | critique_type | problem | recommended_action | merge_with_id |\n  - `target_id` — H<NNN> of the row being critiqued (required; rows missing this will be dropped)\n  - `critique_type` MUST be one of: `non_discriminating_test`, `false_parallel_safe`, `duplicate`, `weak_claim`, `unclear_prediction`\n  - `problem` — concrete description; no 'looks good', no 'agree', no empty cells, no pure restatement of the target row's claim\n  - `false_parallel_safe` rows MUST cite the specific mutation in the `problem` cell (e.g. 'writes to ~/.cache/foo'), not just 'mutates state'\n  - `merge_with_id` — populated ONLY when `critique_type == duplicate` (the H<NNN> the target should merge into)\n\nTag the response with `schema_version: hypothesis_round2_v1` at the top."
+  prompt="MODE: generate-hypotheses-round2-adversarial\nschema_version: hypothesis_round2_v1\n\nProblem (verbatim):\n<## Problem>\n\nEvidence Inventory (verbatim):\n<## Evidence Inventory>\n\nHypothesis Pool (verbatim, with H<NNN> IDs):\n<## Hypothesis Pool table>\n\nAsk: given this merged hypothesis pool, return exactly TWO markdown tables in this order. Do not restate existing pool entries — your value is orthogonality and critique, not endorsement.\n\nTABLE 1 — NEW hypotheses (orthogonality hunt — failure modes absent from the pool). Columns (exact, in order):\n| claim | prediction_if_true | prediction_if_false | discriminating_test | test_cost | parallel_safe | reasoning | orthogonality_to |\n  - `test_cost` ∈ {free, cheap, medium, expensive}\n  - `parallel_safe` ∈ {true, false} — true ONLY if the discriminating test mutates no shared state\n  - `orthogonality_to` — comma-separated list of H<NNN> IDs this row fills a gap relative to (e.g. `H001, H004`)\n\nTABLE 2 — CRITIQUES of existing pool rows. Columns (exact, in order):\n| target_id | critique_type | problem | recommended_action | merge_with_id |\n  - `target_id` — H<NNN> of the row being critiqued (required; rows missing this will be dropped)\n  - `critique_type` MUST be one of: `non_discriminating_test`, `false_parallel_safe`, `duplicate`, `weak_claim`, `unclear_prediction`\n  - `problem` — concrete description; no 'looks good', no 'agree', no empty cells, no pure restatement of the target row's claim\n  - `false_parallel_safe` rows MUST cite the specific mutation in the `problem` cell (e.g. 'writes to ~/.cache/foo'), not just 'mutates state'\n  - `merge_with_id` — populated ONLY when `critique_type == duplicate` (the H<NNN> the target should merge into)\n\nTag the response with `schema_version: hypothesis_round2_v1` at the top.\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="consultant-primary",
   description="R2 adversarial for <slug>",
-  prompt="MODE: generate-hypotheses-round2-adversarial\n\n<same prompt body>"
+  prompt="MODE: generate-hypotheses-round2-adversarial\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 ```
 
@@ -333,8 +377,13 @@ For the current cycle (start at cycle 1):
 - **Soft warning at cycle 3** — push-notify: "z-debug cycle 3 reached without convergence. Two cycles remaining before hard halt."
 - **Hard cycle cap: 5.** If cycle 6 would be needed, halt and `AskUserQuestion`:
   - `continue (override cap)` — explicit user override required to enter cycle 6+.
-  - `bail to /z-plan` — write `escalation.md`, recommend `/z-plan`.
-  - `abandon` — log `debug_run_end {status: "abandoned"}` and stop.
+  - `bail to /z-plan` — write `escalation.md`, recommend `/z-plan`. Per the FINALIZE_STATUS rule, set `FINALIZE_STATUS=aborted` and deregister before exiting:
+    ```bash
+    FINALIZE_STATUS=aborted
+    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+      --run-id "$RUN" --status aborted 2>/dev/null || true
+    ```
+  - `abandon` — log `debug_run_end {status: "abandoned"}` and stop (the abandoned finalize branch in Phase 10 handles deregister).
 - **Pool collapse (all eliminated, no `very_high` survivor):** optionally spawn a **Round 3 generation pass**.
 
 ### Optional Round 3 (pool-collapse recovery)
@@ -383,9 +432,9 @@ If either fails: halt. Either upgrade the root cause statement (so it actually e
 2. **Bundled `light-fix` consult on the proposed fix.** Dispatch both consultants in parallel per the Phase-visibility matrix (subagents see: Problem + Evidence Inventory + winning Hypothesis Pool rows + Experiment Log + draft Root Cause + draft Evidence coverage table; subagents must NOT see Eliminated Alternatives or Score Updates history):
    ```
    <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
-         prompt="MODE: light-fix\n\n<sections per Phase-visibility matrix row 7>")
+         prompt="MODE: light-fix\n\n<sections per Phase-visibility matrix row 7>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]")
    <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
-         prompt="MODE: light-fix\n\n<same sections>")
+         prompt="MODE: light-fix\n\n<same sections>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]")
    ```
 3. **Synthesize + push back.** One reason it might be wrong per recommendation. Flag shortcuts.
 4. **Present + approve.** `AskUserQuestion` with the synthesized fix.
@@ -611,6 +660,27 @@ Push-notify: "Post-mortem ready: `$Z_HARNESS_PLAN_DIR/DEBUG.md` Post-mortem sect
       )
       ```
 
+   d2. **Optionally dispatch the axiom-extractor (if `AXIOM_READY` was emitted):**
+
+       If `run-memory-review.sh` output contains a line starting with `AXIOM_READY`, parse the artifact path from that line and dispatch the axiom-extractor **alongside** the review-agent (parallel, fresh context):
+
+       ```bash
+       AXIOM_READY_LINE="$(printf '%s' "${LINES[*]}" | tr ' ' '\n' | grep '^AXIOM_READY ' || true)"
+       ```
+
+       Alternatively, scan `LINES` array directly for an element starting with `AXIOM_READY `.
+
+       ```
+       <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+         subagent_type="axiom-extractor",
+         description="Axiom extraction for <SLUG_FOR_DESC>",
+         prompt="mode: post-run <RUN>
+       repo_root: <REPO_ROOT>"
+       )
+       ```
+
+       **Proposes only — no auto-approve:** the axiom-extractor returns ≤5 candidate axioms as a fenced JSON array; nothing is written to the axiom store and no axiom is approved automatically. The candidates surface opportunities for later `/z-axiom-scan` / `/z-axiom-approve` review. Do not block on the axiom-extractor's return or error if it is unavailable.
+
    e. **Parse agent return — extract single fenced ```json block:**
       ```python
       import re, json
@@ -688,12 +758,24 @@ Push-notify: "Post-mortem ready: `$Z_HARNESS_PLAN_DIR/DEBUG.md` Post-mortem sect
                "$N_CANDIDATES" "$ACCEPTED" "$SLUG_JSON")"
           ```
 
+**Deregister this run** (best-effort, non-fatal, shipped branch):
+```bash
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+  --run-id "$RUN" --status "complete" || true   # CLI self-logs registry_error on failure
+```
+
 ### Branch: `status: abandoned` (debug was inconclusive — no fix shipped)
 
 Log:
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" debug_run_end \
   "$(printf '{"status":"abandoned","hypothesis_cycles":%d,"total_hypotheses_generated":%d}' "$CYCLES" "$N_HYPOTHESES")"
+```
+
+**Deregister this run** (best-effort, non-fatal, abandoned branch):
+```bash
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+  --run-id "$RUN" --status "complete" || true   # CLI self-logs registry_error on failure
 ```
 
 Do NOT invoke `run-memory-review.sh` on the abandoned branch. No memory-review telemetry is emitted for inconclusive debug sessions.
@@ -732,6 +814,24 @@ Source of truth for what each subagent dispatch sees. Subagent prompts must neve
 | 7 (fix consult) | both, MODE `light-fix` | Problem; Evidence Inventory; winning Hypothesis Pool rows; Experiment Log; draft Root Cause; draft Evidence coverage table | Eliminated Alternatives; Score Updates history | No |
 
 Orchestrator alone reads raw test output and assigns likelihood buckets (Phase 6, step 2). This row never appears in the table.
+
+## Decision emission (standing instruction)
+
+After **any** `AskUserQuestion` resolves, emit a normalized decision event:
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-decision.sh" \
+  "$RUN" "<question_id>" "<chosen_label>" \
+  --options '["<opt1>","<opt2>",...]' \
+  [--tentative "<recommended_option>"]
+```
+
+- `<question_id>` — stable kebab-case identifier for this decision point (e.g. `workflow.implement_all_proceed`, `workflow.slug_confirm`).
+- `<chosen_label>` — the option label the user selected, verbatim.
+- `--options` — full list of offered option labels as a JSON array.
+- `--tentative` — the orchestrator's recommended option label; omit when the orchestrator had no recommendation.
+
+Emission is gated by `Z_HARNESS_AXIOM_EXTRACT` (default on); when set to `"0"`, the script exits silently — no guard is needed here. Do **not** modify existing structured gate events (`cost_gate_decision`, `critique_failure_decision`, `map_collision_decision`, `shared_concerns_ack_override`); those are normalized separately by the extractor. This emission **records signal only** — it never approves, overrides, or influences any decision (proposes-only invariant).
 
 ## Hard rules
 

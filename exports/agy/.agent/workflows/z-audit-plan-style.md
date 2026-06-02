@@ -44,11 +44,13 @@ Loop prevention: carry forward the latest route chain; if it already has two ent
    Before discovering a plan slug, define a route archive for the "no artifacts found" branch:
    ```bash
    NO_PLAN_RUN=$(date -u +%Y%m%dT%H%M%SZ)-audit-plan-style-no-plan
-   NO_PLAN_ARCHIVE_DIR="z-harness/archive/$NO_PLAN_RUN"
+   NO_PLAN_ARCHIVE_DIR="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" base_dir)/archive/$NO_PLAN_RUN"
    ```
 1. **Discover plan slug:**
    Enumerate subdirectories under the plans directory (`z-harness/plans/`) or legacy directory (`z-harness/`) that contain plan artifacts (`SPEC.md` / `PLAN.md` / `TASKS.md`).
    - If single candidate → use it.
+   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug
+        selection question via their native channel. Silent omission is forbidden. -->
    - If multiple candidates → use `AskUserQuestion` to select the slug (or honor `--slug <slug>` argument if provided).
    - If zero → `mkdir -p "$NO_PLAN_ARCHIVE_DIR"`, write `$NO_PLAN_ARCHIVE_DIR/route-decision.md` recommending `/z-plan`, emit `plan_route_decision` under `$NO_PLAN_RUN`, ask the user to switch or abandon, and stop. Do not create a style audit without plan artifacts.
 2. **Export variables:**
@@ -204,6 +206,9 @@ SLUG_DIR_ABS="$REPO_ROOT/$BASE"
 Dispatch:
 
 ```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+     proceed without subagent support. -->
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="plan-style-reviewer",
   model="sonnet",
@@ -408,7 +413,19 @@ Branch on `$RESULT`:
   ```
 - **`prefill`:** Present the `AskUserQuestion` normally, pre-select `$DEFAULT` as the recommended option (append label suffix: ` (Recommended — your preference)`).
 - **`ask`:** Present the `AskUserQuestion` normally. If `$SOURCE == "conflict"`, add to the question header text: `(Note: config says <X>, memory says <Y> — your answer below will be offered as a conflict-resolution write target.)` After the user picks an answer, if that answer differs from both config and memory values, surface a one-shot follow-up `AskUserQuestion`: "Record your answer as the new preference? (config / memory:very_strong / memory:strong / no — keep both stored, ask again next time)". Caller writes to config or dispatches `/z-suggest-memory` accordingly.
+- **`halt`:** Emit `plan_style_halt` event and exit cleanly — do NOT invoke `AskUserQuestion`:
+  ```bash
+  if [[ "$RESULT" == "halt" ]]; then
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_style_halt \
+      "$(printf '{"reason":"no_ask_blocked","question_id":"workflow.audit_to_amend","rule_id":"no_ask_halt"}')"
+    echo "halt: no_ask_blocked on workflow.audit_to_amend" >&2
+    exit 0
+  fi
+  ```
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the audit outcome
+     gate (Amend now / Review and trim / Proceed as-is) via their native channel
+     when resolver result is prefill or ask. Silent omission is forbidden. -->
 Present the summary and ask via `AskUserQuestion` (when resolver result is `prefill` or `ask`):
 - "Amend now (run `/z-amend --from z-harness/<SLUG>/PLAN_STYLE_AUDIT.md`)"
 - "Review and trim — I'll edit PLAN_STYLE_AUDIT.md first, then run /z-amend myself"
@@ -466,6 +483,9 @@ print(json.dumps({"question_id": sys.argv[1], "proposed_value": sys.argv[2], "n_
 ' "$qid" "$val" "$n" "$scope_rec")"
 ```
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the preference
+     elevation proposal question via their native channel and accept a reply.
+     Silent omission is forbidden. -->
 Present a single `AskUserQuestion`:
 
 > "You've done `<cmd_a> → z-amend` **N times** — add `<val>` as your preference for `<qid>`?"
@@ -542,3 +562,19 @@ If `$PROPOSE_OUT` is empty, skip this phase entirely — no question is asked.
 - **Archive before overwrite.** Existing `PLAN_STYLE_AUDIT.md` is always archived before being replaced — this is what powers the dismissal-extraction loop on subsequent runs.
 - **Log everything** via `scripts/log-event.sh`. Event prefix is `plan_style_*`.
 - **No emojis** anywhere in artifacts.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+| `ask_user` | yes | Phase 0 multiple-candidates slug selection; Phase 5 audit outcome gate (Amend now / Review and trim / Proceed as-is); Phase 9 preference elevation proposal |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

@@ -119,6 +119,7 @@ Then exit.
 
 Dispatch a Sonnet subagent to pick the top 5 most idiomatic files from `CANDIDATES`:
 
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 ```
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
   subagent_type="general-purpose",
@@ -143,6 +144,7 @@ If the agent returns fewer than 5 paths (e.g. `CANDIDATES` had fewer than 5 entr
 
 ### Step 1c — User confirmation of Capture set
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the Capture file confirmation question via their native channel. Silent omission is forbidden. -->
 Present the ranked 5 to the user via `AskUserQuestion`:
 
 ```
@@ -182,6 +184,7 @@ Read the contents of the `FINAL_5` files into context (using the Read tool for e
 
 Read the file at `INGEST_PATH` into context as `EXISTING_GUIDE`. Skip the interview questions below. Set `SOURCE = ingest`. Proceed to Phase 3.
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the style interview questions via their native channel. Silent omission is forbidden. -->
 **Otherwise (no `--ingest`), ask up to 4 questions via `AskUserQuestion`:**
 
 Ask all 4 in a single `AskUserQuestion` call (multi-part prompt), then wait for a single reply. If the user skips a question or gives a blank answer for it, treat that section as "no preference stated."
@@ -206,6 +209,7 @@ Record answers as `INTERVIEW_ANSWERS`. Set `SOURCE = capture` (primary source is
 
 Dispatch a Sonnet subagent to draft the full STYLE.md:
 
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 ```
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
   subagent_type="general-purpose",
@@ -255,6 +259,7 @@ Capture the agent return as `DRAFT_STYLE_MD`. Extract the content from the fence
 
 Dispatch `consultant-secondary` and `consultant-primary` **in parallel in a single message** with `MODE: style-critique`:
 
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 ```
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
   subagent_type="consultant-secondary",
@@ -301,6 +306,7 @@ Record the revised content as `REVISED_STYLE_MD`.
 
 ## Phase 5 — User approval and write
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the STYLE.md draft approval question (accept / edit-and-resave / re-critique / abandon) via their native channel. Silent omission is forbidden. -->
 Present the draft to the user via `AskUserQuestion`:
 
 ```
@@ -383,9 +389,10 @@ Push-notify (if notify.level ≠ `off`; see [docs/human/config.md](docs/human/co
    ```bash
    BRANCH="$(git branch --show-current 2>/dev/null)"
    SLUG="$(printf '%s' "$BRANCH" | tr '[:upper:]' '[:lower:]' | tr '/' '-' | sed 's/[^a-z0-9-]//g')"
-   SLUG_DIR="z-harness/${SLUG}/"
+   _ZH_PLANS_DIR="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" base_dir)/plans"
+   SLUG_DIR="${_ZH_PLANS_DIR}/${SLUG}/"
    ```
-   If the branch is empty/detached or `SLUG_DIR` does not exist as a directory, use the first available `z-harness/*/` directory (via `ls -d z-harness/*/`). If no `z-harness/*/` directory exists at all, `SLUG_DIR` can be any valid path string — the `--global` flag causes `extract-dismissals.py` to scan all slugs, so a missing slug-dir simply yields an empty result set.
+   If the branch is empty/detached or `SLUG_DIR` does not exist as a directory, use the first available plans dir (via `ls -d "${_ZH_PLANS_DIR}"/*/`). If no plan dir exists at all, `SLUG_DIR` can be any valid path string — the `--global` flag causes `extract-dismissals.py` to scan all slugs, so a missing slug-dir simply yields an empty result set.
 
 5. **Notification policy:** see [docs/human/config.md](docs/human/config.md) (notify.level key).
 
@@ -490,6 +497,7 @@ Read `./STYLE.md` (full content) into `CURRENT_STYLE_MD`.
 
 Dispatch a Sonnet subagent:
 
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 ```
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
   subagent_type="general-purpose",
@@ -570,6 +578,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
   '{"phase":"MB-4","reason":"rule-review"}'
 ```
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface each per-cluster rule review question (add-as-drafted / reject) via their native channel. Silent omission is forbidden. -->
 For each cluster / proposed rule, send a **separate `AskUserQuestion` call** — one cluster per call, sequentially. Do not batch multiple clusters into a single `AskUserQuestion`.
 
 ```
@@ -667,3 +676,19 @@ Push-notify (if notify.level ≠ `off`; see [docs/human/config.md](docs/human/co
 - **Refuse without STYLE.md gate.** If STYLE.md already exists in Mode A, refuse immediately — do not overwrite silently. In Mode B, refuse if STYLE.md does NOT exist.
 - **Log everything** via `scripts/log-event.sh`.
 - **Never read `docs/llm/*.json` from main thread.** Dispatch `doc-fetcher` if INDEX.json exists and context is needed.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | yes | Phase 1b Sonnet capture ranker; Phase 3 Sonnet draft; Phase 4 consultant-secondary + consultant-primary parallel critique; Mode B Phase MB-3 Sonnet amendment proposer |
+| `ask_user` | yes | Phase 1c Capture file confirmation; Phase 2 style interview (4 questions); Phase 5 draft approval; Mode B Phase MB-4 per-cluster rule review |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.
