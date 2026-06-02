@@ -216,6 +216,12 @@ The test exercises (under a temp external base via `Z_HARNESS_BASE_DIR`):
 
 ---
 
+## Active-plan registry
+
+The external base also hosts the active-plan coordination registry. See `docs/human/active-plan-registry.md` for the full design reference, including the lockless per-run JSON registry under `<base>/active-plans/`, the scope-extractor integration, and the overlap advisory protocol.
+
+---
+
 ## Plugin directory layout
 
 The z-harness plugin itself is laid out as follows:

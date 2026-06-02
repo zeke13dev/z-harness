@@ -1,0 +1,193 @@
+{
+  "slug": "active-plan-registry",
+  "summary": "Durable external artifact base + lockless cross-session awareness registry. Relocates z-harness plans/metrics/followups outside the gitignored working tree (five-tier fallback: Z_HARNESS_BASE_DIR > XDG_STATE_HOME > HOME/.local/state > git-common-dir > pwd/z-harness) so git clean cannot destroy them. Per-run JSON records in <base>/active-plans/ let concurrent sessions discover each other's scope and receive advisory overlap warnings at implement Phase 0.",
+  "key_invariants": [
+    "Lockless registry is safe ONLY because overlap is advisory — no code may make overlap a hard gate without replacing lockless delete with compare-and-delete or a registry lock.",
+    "Never invert the followup_common.py lock order — the registry takes NO global lock and cannot participate in the per-entry→global ordering.",
+    "Single-writer-per-record — each <run-id>.json is written ONLY by the process that owns that run; subagents RETURN data, orchestrator performs writes.",
+    "Base anchor enforces split-brain prevention — all processes of a repo MUST agree on base; mismatch emits base_mismatch_detected and hard-fails before any artifact write.",
+    "No mutation of the base while a run is live — migrate-plan-layout.sh refuses if active-plan-registry.py list shows any status:running record.",
+    "Z_HARNESS_BASE_DIR bypasses the anchor entirely (TRUE ESCAPE HATCH); non-absolute path is a hard error.",
+    "All path construction goes through plan-path.sh helpers — inline z-harness/ literals are forbidden."
+  ],
+  "key_files": [
+    {
+      "path": "scripts/active-plan-registry.py",
+      "why": "Registry implementation: register, heartbeat, update-scope, overlaps, list, reap, deregister subcommands. Operates on active_plans_dir(). Header carries lockless-advisory invariant verbatim."
+    },
+    {
+      "path": "scripts/plan-path.sh",
+      "why": "Base resolution: z_harness_base() (five-tier fallback chain + anchor enforcement), z_harness_repo_id() (stable per-repo basename), active_plans_dir(), followups_dir(), base_dir(). Single source of truth for all path construction."
+    },
+    {
+      "path": "scripts/migrate-plan-layout.sh",
+      "why": "Migration script extended with live-run barrier (refuses if status:running records exist), --dry-run --all manifest mode covering plans/archive/metrics/followups, copy-verify-before-rm safety."
+    },
+    {
+      "path": "agents/scope-extractor.md",
+      "why": "Haiku subagent: reads SPEC.md + PLAN.md + TASKS.md, emits JSON [{path, confidence, reason}] scope array. confidence rubric: explicit > inferred > broad > unknown. Mechanical fallback documented for offline use."
+    },
+    {
+      "path": "commands/z-implement-all.md",
+      "why": "Phase 0.0 wiring: register, scope-extractor dispatch, overlaps check, graduated response per exit code, heartbeat at task boundaries, deregister on complete/aborted."
+    },
+    {
+      "path": "commands/z-implement-next.md",
+      "why": "Same Phase 0 register/overlap/heartbeat/deregister as z-implement-all, scoped to single task."
+    },
+    {
+      "path": "commands/z-plan.md",
+      "why": "register at run_start, scope-extractor after TASKS.md written (Phase 8), deregister at run end."
+    },
+    {
+      "path": "docs/human/active-plan-registry.md",
+      "why": "Human-tier concept doc: durability problem, base fallback chain, registry layout, subcommands, scope-extractor, overlap protocol, invariants, env knobs."
+    },
+    {
+      "path": "docs/handoff-parallel-session-safety.md",
+      "why": "Incident record (2026-06-01 git clean loss), root-cause analysis, and resolution note pointing to this design."
+    }
+  ],
+  "entry_points": [
+    {
+      "file": "scripts/active-plan-registry.py",
+      "symbol": "register",
+      "kind": "subcommand",
+      "summary": "Creates/overwrites <active>/<run-id>.json atomically via tmpfile+os.replace. Validates run_id safe basename (^[A-Za-z0-9._-]+$). Idempotent. Emits plan_registered."
+    },
+    {
+      "file": "scripts/active-plan-registry.py",
+      "symbol": "heartbeat",
+      "kind": "subcommand",
+      "summary": "Updates last_heartbeat, phase, current_task, status in own record. Recreates record if reaped (benign). NON-FATAL on failure."
+    },
+    {
+      "file": "scripts/active-plan-registry.py",
+      "symbol": "update-scope",
+      "kind": "subcommand",
+      "summary": "Merges scope array [{path, confidence, reason}] into own record. Paths normalized repo-relative. NON-FATAL on failure."
+    },
+    {
+      "file": "scripts/active-plan-registry.py",
+      "symbol": "overlaps",
+      "kind": "subcommand",
+      "summary": "Computes path intersection of own scope vs all other live records. Exit 0: none; 10: advisory overlap; 20: blocking (only with --strict or Z_HARNESS_STRICT_OVERLAP=1 AND explicit×explicit exact match). Emits scope_overlap_detected or active_plan_scan_complete."
+    },
+    {
+      "file": "scripts/active-plan-registry.py",
+      "symbol": "reap",
+      "kind": "subcommand",
+      "summary": "Conservative: deletes record if (a) host=localhost AND pid dead, OR (b) now-last_heartbeat > 2x Z_HARNESS_REGISTRY_STALE_SECS. Sets status:stale (no delete) for remote/unknown-host records past 1x threshold. FileNotFoundError on concurrent reap is benign."
+    },
+    {
+      "file": "scripts/active-plan-registry.py",
+      "symbol": "deregister",
+      "kind": "subcommand",
+      "summary": "Atomic unlink of <active>/<run-id>.json. Emits plan_deregistered."
+    },
+    {
+      "file": "scripts/plan-path.sh",
+      "symbol": "z_harness_base",
+      "kind": "function",
+      "summary": "Five-tier base resolution with anchor enforcement. Tier 1: Z_HARNESS_BASE_DIR (bypass anchor). Tiers 2-4 active only when Z_HARNESS_EXTERNAL_DEFAULT=1 (default). Tier 5: pwd/z-harness. Writes/validates <git-common-dir>/.z-harness-base anchor JSON. Emits base_resolved once per process."
+    },
+    {
+      "file": "scripts/plan-path.sh",
+      "symbol": "z_harness_repo_id",
+      "kind": "function",
+      "summary": "Stable per-repo safe basename: <repo-basename>-<8hex> where 8hex=sha256(realpath(git-common-dir))[0:8]. All worktrees of one repo produce the same id."
+    },
+    {
+      "file": "scripts/plan-path.sh",
+      "symbol": "active_plans_dir",
+      "kind": "function",
+      "summary": "Returns <base>/active-plans — the registry home. Never inline z-harness/active-plans."
+    },
+    {
+      "file": "scripts/plan-path.sh",
+      "symbol": "followups_dir",
+      "kind": "function",
+      "summary": "Returns <base>/followups — the followup-sink root. Resolves dynamically so in-flight flock fds remain stable if migration runs later."
+    },
+    {
+      "file": "agents/scope-extractor.md",
+      "symbol": "scope-extractor",
+      "kind": "agent",
+      "summary": "Haiku subagent. Reads SPEC.md + PLAN.md + TASKS.md (+ task block if task_id given). Emits JSON [{path, confidence, reason}]. Confidence: explicit > inferred > broad > unknown. Mechanical **Files:** parse documented as offline fallback."
+    }
+  ],
+  "record_schema": {
+    "schema_version": 1,
+    "fields": {
+      "schema_version": "int — must be 1",
+      "run_id": "string — safe basename ^[A-Za-z0-9._-]+$; immutable after register",
+      "session_id": "string — session stamp (optional; from --session SID)",
+      "slug": "string — plan slug",
+      "command": "string — e.g. /z-implement-all",
+      "command_version": "string — z_harness_version at register time",
+      "phase": "string — e.g. implement, plan",
+      "status": "string — running | paused | stale",
+      "pid": "int — process ID of orchestrator",
+      "host": "string — hostname",
+      "repo_id": "string — z_harness_repo_id() output",
+      "repo_root": "string — absolute path",
+      "git_common_dir": "string — absolute path to .git common dir",
+      "worktree_path": "string — absolute path to worktree",
+      "branch": "string — current git branch",
+      "started_at": "ISO-UTC string",
+      "last_heartbeat": "ISO-UTC string — updated by heartbeat subcommand",
+      "current_task": "string | null — task ID currently executing",
+      "scope": "array of {path: string, confidence: string, reason: string}"
+    }
+  },
+  "base_fallback_chain": {
+    "tier_1": "$Z_HARNESS_BASE_DIR — explicit absolute override; bypasses anchor; non-absolute is hard error",
+    "tier_2": "$XDG_STATE_HOME/z-harness/<repo-id> — if set and writable",
+    "tier_3": "$HOME/.local/state/z-harness/<repo-id> — if HOME set and writable",
+    "tier_4": "<git-common-dir>/z-harness — survives git clean; shared across worktrees",
+    "tier_5": "$(pwd)/z-harness — last resort; clean-vulnerable; only active tier when Z_HARNESS_EXTERNAL_DEFAULT=0",
+    "external_default_gate": "Z_HARNESS_EXTERNAL_DEFAULT=1 (default after Phase-D flip) enables tiers 2-4; =0 skips them"
+  },
+  "env_knobs": {
+    "Z_HARNESS_EXTERNAL_DEFAULT": {"default": "1 (after Phase-D flip)", "effect": "1 enables tiers 2-4; 0 restricts to tiers 1 and 5 only"},
+    "Z_HARNESS_BASE_DIR": {"default": "unset", "effect": "absolute override; bypasses anchor; non-absolute is hard error"},
+    "Z_HARNESS_REGISTRY_ENABLED": {"default": "1", "effect": "0 makes register/heartbeat/update-scope/overlaps/reap/deregister silent no-ops; list and session-id still work"},
+    "Z_HARNESS_REGISTRY_STALE_SECS": {"default": "1800", "effect": "threshold for last_heartbeat staleness; reaper deletes at 2x margin for local dead pids; marks remote as stale at 1x"},
+    "Z_HARNESS_STRICT_OVERLAP": {"default": "unset (advisory)", "effect": "1 causes explicit×explicit exact path overlap to exit 20 (blocking), which /z-implement-all treats as hard halt"}
+  },
+  "overlap_exit_codes": {
+    "0": "No overlap detected",
+    "10": "Advisory overlap (inferred/broad or non-strict explicit)",
+    "20": "Blocking overlap (explicit×explicit exact match AND strict mode active)"
+  },
+  "failure_handling": {
+    "register_overlaps_failure": "Loud registry_error event + warning banner; interactive: AskUserQuestion (proceed-without-coordination/abort); unattended (Z_HARNESS_NO_ASK): proceed + log; Z_HARNESS_STRICT_OVERLAP=1: halt. NEVER silent continue.",
+    "heartbeat_update_scope_reap_deregister_failure": "NON-FATAL: log registry_error and continue."
+  },
+  "events_emitted": [
+    "plan_registered",
+    "plan_reaped",
+    "plan_marked_stale",
+    "plan_deregistered",
+    "scope_overlap_detected",
+    "active_plan_scan_complete",
+    "base_resolved",
+    "base_mismatch_detected",
+    "registry_error"
+  ],
+  "related_concepts": ["plan-layout-migration", "config", "scripts", "commands", "followup-sink"],
+  "depends_on": ["scripts", "plan-layout-migration"],
+  "consumed_by": ["commands", "agents"],
+  "gotchas": [
+    "Z_HARNESS_BASE_DIR bypasses the anchor — two sessions with different Z_HARNESS_BASE_DIR values will partition their registries silently; the anchor exists to prevent exactly this.",
+    "Z_HARNESS_REGISTRY_ENABLED=0 makes overlaps a silent no-op; do not use in multi-session interactive environments.",
+    "Reaper deletes only when host=localhost AND pid is dead OR 2x stale threshold; remote hosts are never deleted (marked stale only) — a remote-running session's record persists until manually reaped or the session deregisters.",
+    "scope_extractor Haiku fallback (mechanical **Files:** parse) produces only explicit confidence entries — inferred/broad entries require the Haiku model.",
+    "Overlap comparison is path-string equality only (normalized repo-relative); no glob or prefix matching. Two tasks editing the same file but named differently in scope arrays will match; tasks editing different files won't.",
+    "The anchor is written atomically only if absent — if two sessions race on a brand-new repo, one wins and the other reads the winner's anchor. This is correct; both will independently resolve the same base tier.",
+    "Z_HARNESS_STRICT_OVERLAP=1 + Z_HARNESS_REGISTRY_ENABLED=0 is a contradictory config: strict mode has no effect when registry is disabled. No error is emitted; strict mode silently does nothing.",
+    "Heartbeat recreating a reaped record is intentional and benign; the reaped record may have been stale/dead-pid reaped while the process was temporarily unresponsive."
+  ],
+  "last_updated": "2026-06-02",
+  "confidence": "high"
+}

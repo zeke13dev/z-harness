@@ -159,7 +159,7 @@ Default output is a human-readable concern-grouped table. `--json` emits a machi
 
 ## Base-dir + registry env knobs (active-plan-coordination)
 
-These env vars govern the external artifact base and the active-plan registry introduced in the active-plan-coordination plan. They are **env-only** (not TOML keys) and take effect in `scripts/plan-path.sh` and `scripts/active-plan-registry.py`.
+These env vars govern the external artifact base and the active-plan registry introduced in the active-plan-coordination plan. They are **env-only** (not TOML keys) and take effect in `scripts/plan-path.sh` and `scripts/active-plan-registry.py`. For a full design reference including the registry layout, overlap protocol, and migration guide, see `docs/human/active-plan-registry.md`.
 
 | Env var | Default | Description |
 |---------|---------|-------------|
