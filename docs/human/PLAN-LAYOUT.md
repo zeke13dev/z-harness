@@ -126,6 +126,96 @@ Scripts that also respect `Z_HARNESS_PLANS_DIR`: `scripts/log-event.sh`,
 
 ---
 
+---
+
+## Command-coverage checklist (Phase-D flip gate)
+
+> **GATE:** The Phase-D default flip (T015 / `Z_HARNESS_EXTERNAL_DEFAULT=1`) MUST NOT
+> proceed until:
+>
+> 1. Every checkbox in this section is checked (confirming all run-creating and
+>    run-consuming commands route exclusively through `plan-path.sh` helpers), AND
+> 2. `bash scripts/test_external_base_smoke.sh` passes (hermetic external-base
+>    end-to-end verification).
+>
+> If either condition is not met, T015 is blocked. Inform the user and stop.
+
+### What "routes through helpers" means
+
+A command routes all paths through `plan-path.sh` helpers when every path it
+constructs for plan artifacts (`TASKS.md`, `SPEC.md`, `archive/`, `active-plans/`,
+`followups/`, etc.) is derived from one of the following functions (never from an
+inline `z-harness/` literal):
+
+| Helper | Returns |
+|--------|---------|
+| `base_dir()` / `z_harness_base()` | Resolved artifact base |
+| `plan_dir <slug>` | `<base>/plans/<slug>` |
+| `active_plans_dir()` | `<base>/active-plans` |
+| `followups_dir()` | `<base>/followups` |
+| `all_plan_slugs()` | All slugs (new layout + legacy flat) |
+| `resolve_plan_path <slug>` | Existing plan dir (new → legacy dual-read) |
+
+The audit task (T003) verified each command below against this criterion.
+
+### Run-creating commands
+
+- [x] **`/z-plan`** — slug discovery and plan-dir construction route through
+  `plan_dir()` / `all_plan_slugs()`; register/heartbeat/deregister use
+  `active_plans_dir()`. No inline `z-harness/` literals.
+
+- [x] **`/z-plan-light`** — shares the same helper-routed plumbing as `/z-plan`;
+  register/heartbeat/deregister wired to `active_plans_dir()`.
+
+- [x] **`/z-debug`** — plan artifact paths use `plan_dir()`; registry calls use
+  `active_plans_dir()`.
+
+- [x] **`/z-do`** — plan path resolved via `resolve_plan_path()` /
+  `plan_dir()`; registry register/deregister use `active_plans_dir()`.
+
+- [x] **`/z-audit`** — reads plan artifacts via `resolve_plan_path()`;
+  no inline `z-harness/` path construction.
+
+- [x] **`/z-plan-split`** — uses `plan_dir()` for both source and target slugs;
+  register/heartbeat/deregister use `active_plans_dir()`.
+
+### Run-consuming commands
+
+- [x] **`/z-implement-all`** — `PROJECT_SINK` constructed via `followups_dir()`;
+  slug discovery via `all_plan_slugs()`; phase-0 register + scope-extract +
+  overlaps + heartbeat + deregister all use `active_plans_dir()`.
+
+- [x] **`/z-implement-next`** — single-task variant of `/z-implement-all`;
+  same phase-0 register + overlap + heartbeat + deregister wiring.
+
+- [x] **`/z-where`** — read-only query: calls `base_dir()`, `active_plans_dir()`,
+  and `all_plan_slugs()`; no plan artifact writes.
+
+- [x] **`/z-stats`** — always prints resolved base via `base_dir()` + repo-id;
+  one-line active-plan count from `active_plans_dir()`. No inline literals.
+
+### Smoke test gate
+
+Run the hermetic end-to-end verification before flipping:
+
+```bash
+bash scripts/test_external_base_smoke.sh
+```
+
+The test exercises (under a temp external base via `Z_HARNESS_BASE_DIR`):
+
+1. `base_dir()` resolves to the external base (not the in-repo `z-harness/`).
+2. `all_plan_slugs()` discovers both new-layout (`<base>/plans/<slug>/`) and
+   legacy-flat (`<base>/<slug>/`) plans.
+3. `active-plan-registry.py register` lands the record under `<base>/active-plans/`.
+4. Mechanical `**Files:**`-parse fallback → `update-scope` → scope stored in record.
+5. `overlaps` exits 0 with no peers.
+6. `list` / direct read-back confirms the record is correct.
+7. **Nothing is written under the in-repo `z-harness/`** (the durability guarantee).
+8. No anchor pollution at the real repo's `.git/.z-harness-base`.
+
+---
+
 ## Plugin directory layout
 
 The z-harness plugin itself is laid out as follows:
