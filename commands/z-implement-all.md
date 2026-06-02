@@ -19,9 +19,189 @@ Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.le
 
 Both `--ack` and `--force-partial` are inert for legacy (single-slug) plans and only affect tree-rooted discovery in Setup step 2.
 
-## Phase 0 — Global cross-tool lock check
+## Phase 0.0 — Active-plan registration + cross-session overlap scan
 
-Before any slug discovery or task dispatch, check for concurrent follow-up consumer activity:
+Register this run in the shared active-plan registry, seed its file scope, and surface overlap
+with any concurrent session. This is advisory by design (registry invariant 1: lockless is safe
+ONLY because overlap is advisory) except under `Z_HARNESS_STRICT_OVERLAP`, which adds a single
+hard gate. This command never mutates the base or migrates anything (registry invariant 8); it
+only register/heartbeat/deregisters its own record (single-writer, invariant 6).
+
+**ORDERING (mandatory — read before running any command in this phase).** This phase needs a
+NON-EMPTY `$Z_HARNESS_SLUG` and a real `$BASE`, and it must not create a record before any
+structural-validation halt. Therefore run this phase **inside Setup, immediately after Setup
+step 3 binds `$BASE`** — i.e. AFTER all of:
+
+- Setup step 1 (repo-root / `z-harness/` existence check, and the `--tasks` fast path which sets
+  `BASE`/`Z_HARNESS_SLUG` directly),
+- Setup step 2 + 2a (slug discovery — this is what `export`s `Z_HARNESS_SLUG`; without it the
+  slug is empty and register would record a useless empty-slug entry),
+- Setup step 2b's tree-validation gates for tree-rooted plans, in their existing order:
+  `tree_depth_exceeded`, `shared_concerns_missing`, `manifest_frontmatter_inconsistent`,
+  `manifest_run_order_invalid`, `partial_tree_blocked`, `cluster_not_ready`,
+  `shared_concerns_unacknowledged`,
+- Setup step 3 (binds `$BASE`).
+
+Those early Setup gates abort the run **before** this phase runs, so when any of them fires
+there is NO registry record yet → nothing to deregister, no zombie. Only once the plan is
+structurally valid and `$Z_HARNESS_SLUG` + `$BASE` are bound do we register.
+For tree-rooted plans, register ONE record for the whole `/z-implement-all` invocation using the
+chosen top-level slug bound in step 2; per-cluster `$BASE` rebinding (Setup 2c) does not create
+additional records.
+
+**Bind the run id and session id (the two values this phase introduces).** `$Z_HARNESS_SLUG`
+and `$BASE` are already bound by Setup steps 2–3 above; only `RUN` and the session id are
+established here:
+
+```bash
+# Run id — the SAME timestamp id used later for run_start / archive (IMPL_RUN). Bind it here
+# once (it is just a timestamp; a safe basename) and reuse it verbatim in Setup step 5's
+# archive paths and the registry --run-id, so there is exactly one run id per invocation.
+IMPL_RUN="$(date -u +%Y%m%dT%H%M%SZ)-implement"
+RUN="$IMPL_RUN"   # registry --run-id; also the $RUN used later for archive/memory-review paths
+
+# Session id (same value Setup step 5 stamps onto run_start).
+export Z_HARNESS_SESSION_ID="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" session-id)"
+
+# Sanity-guard: $Z_HARNESS_SLUG must be non-empty here (legacy-flat plans are the one allowed
+# empty case — they have no slug). $BASE must be a real path. If $BASE is unset, Setup step 3
+# did not run yet — STOP; this phase is mis-ordered.
+: "${BASE:?Phase 0.0 ran before Setup step 3 bound \$BASE — fix ordering}"
+```
+
+**1. Register the run.** Graduated failure policy (registry SPEC): a silent register failure
+defeats the whole mechanism, so NEVER silent-continue. Spell out every exit code:
+
+```bash
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" register \
+  --run-id "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-implement-all --phase implement \
+  --session "$Z_HARNESS_SESSION_ID"
+REG_RC=$?
+```
+
+- `REG_RC == 0` → registered; a record now exists; proceed to step 2.
+- `REG_RC == 3` (register FAILED — no record was written) → emit a loud `registry_error` event
+  (the register subcommand does NOT self-log its own failure; it returns 3 loudly, so the
+  orchestrator logs it here), then branch:
+  - **Interactive** (not `Z_HARNESS_NO_ASK`) → `AskUserQuestion`: *proceed without coordination* /
+    *abort*.
+    - **proceed without coordination** → continue WITHOUT a record. Skip step 2 (scope seed) and
+      step 3 (overlap scan) entirely — there is no record to scope or scan against — and fall
+      through to Phase 0.1. (No heartbeat/deregister later either; there is nothing to update.)
+    - **abort** → because register FAILED there is **NO record**, so do **NOT** call deregister
+      (deregistering a nonexistent record is a no-op at best and misleading at worst). Just
+      push-notify and `exit 1`.
+  - **Unattended (`Z_HARNESS_NO_ASK`)** → proceed without coordination (as the interactive
+    *proceed* branch above) and log prominently, UNLESS `Z_HARNESS_STRICT_OVERLAP=1`, in which
+    case **halt**: push-notify (this is the only register-failure hard stop) and `exit 1`. Again,
+    do **NOT** deregister — register failed, so no record exists.
+- **Any OTHER nonzero `REG_RC`** (not 0, not 3 — should not happen, but be defensive) → treat it
+  exactly as `REG_RC == 3` (loud `registry_error`, same graduated proceed/abort policy, same
+  "no record exists → no deregister" rule).
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" registry_error \
+  "$(printf '{"op":"register","run_id":"%s","rc":%d}' "$RUN" "$REG_RC")"
+```
+
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the register-failure proceed/abort question via their native channel. Silent omission is forbidden. -->
+
+**2. Seed scope (best-effort, non-fatal).** Dispatch the `scope-extractor` (Haiku) subagent with
+`repo_root` + `base` to produce a scope JSON array, write it to a temp file, and feed it to
+`update-scope`. Failure here is non-fatal — overlap detection just runs with an empty/own-record
+scope. The `update-scope` subcommand returns 0 by design and **self-logs** a `registry_error`
+event (op:`update-scope`) internally on any failure, so the orchestrator calls it best-effort
+with `|| true` and does NOT add a misleading `|| log` (that would be dead code, since the
+subcommand returns 0 by design).
+
+```
+Agent(
+  subagent_type="scope-extractor",
+  description="Scope for /z-implement-all overlap scan",
+  prompt="repo_root: <repo root abs path>\nbase: $BASE"
+)
+```
+
+Write the returned JSON array to `"$(mktemp -t z-scope.XXXXXX.json)"`, then:
+
+```bash
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" update-scope \
+  --run-id "$RUN" --scope-json "$SCOPE_JSON" || true   # CLI self-logs registry_error on failure
+```
+
+**3. Overlap scan (graduated advisory).** Add `--strict` when `Z_HARNESS_STRICT_OVERLAP=1`.
+
+```bash
+OVL_ARGS=(--run-id "$RUN")
+[ "${Z_HARNESS_STRICT_OVERLAP:-}" = "1" ] && OVL_ARGS+=(--strict)
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" overlaps "${OVL_ARGS[@]}"
+OVL_RC=$?
+```
+
+Handle the exit code (the registry self-emits `active_plan_scan_complete` /
+`scope_overlap_detected`, so absence of overlap is observable without an extra event here).
+Spell out every code:
+
+- `OVL_RC == 0` (no overlap) → proceed silently (the registry already self-emitted
+  `active_plan_scan_complete`).
+- `OVL_RC == 10` (advisory overlap) → present the overlapping peers (each peer's `slug`,
+  `branch`, `current_task`, `host`, and the shared paths — re-run with `--json` to render them)
+  via `AskUserQuestion`: **proceed** / **wait** (re-scan after the peer finishes) / **abort**.
+  Under `Z_HARNESS_NO_ASK` → proceed and log (advisory is non-blocking unattended).
+  On **abort** → a record EXISTS, so `FINALIZE_STATUS=aborted`, `deregister --status aborted`,
+  push-notify, `exit 1` (see the FINALIZE_STATUS rule below).
+- `OVL_RC == 20` (blocking overlap — only under strict mode AND an `explicit`×`explicit` exact
+  path match with a live peer) → **HALT**: a record EXISTS, so `FINALIZE_STATUS=aborted`,
+  push-notify (hard pause, fires regardless of notify level), `deregister --status aborted`, and
+  `exit 1` without dispatching any task. This is the one hard gate (registry invariant 1 permits
+  it only under strict mode).
+- **Any OTHER nonzero `OVL_RC` (including `4` — overlaps could not resolve the registry)** → this
+  is NOT a hard block and NOT a silent "no overlap". Log a `registry_error` event (op:`overlaps`)
+  and **PROCEED** (the scan was inconclusive; overlap is advisory, so an inconclusive scan
+  degrades to "ran without coordination" rather than halting):
+  ```bash
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" registry_error \
+    "$(printf '{"op":"overlaps","run_id":"%s","rc":%d}' "$RUN" "$OVL_RC")"
+  ```
+
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the overlap proceed/wait/abort question via their native channel. Silent omission is forbidden. -->
+
+### FINALIZE_STATUS / deregister rule (single source of truth)
+
+One rule governs the record's lifecycle for the entire run:
+
+> **On any abort/halt that ENDS the run AND occurs after a record exists (i.e. after a `REG_RC == 0`
+> register), set `FINALIZE_STATUS=aborted` and `deregister --status aborted` before exiting. On a
+> normal completion, leave `FINALIZE_STATUS` unset so Finalize deregisters with the default
+> `complete`. On a pause-for-resume (compaction breakpoint), do NOT deregister at all — the run is
+> paused, not finished.**
+
+Concretely, the run-ending halt paths that MUST set `FINALIZE_STATUS=aborted` and deregister
+(each is reached only after `REG_RC == 0`, so a record exists):
+
+- Phase 0.0 overlap abort (`OVL_RC == 10` → abort) and overlap block (`OVL_RC == 20`) — handled inline above.
+- Phase 0.1 follow-up-running halt (below).
+- Main-loop hard halt (condition 2: `spec_problem` / `decision_needed` / `needs_clarification` /
+  `unable_to_complete` / repeated review failure the user did not resolve) — Finalize deregisters
+  with `aborted`.
+- `MAX_ATTEMPTS` exhaustion and wall-clock-cap halts that end the run — set `FINALIZE_STATUS=aborted`
+  before reaching Finalize.
+
+Paths that must NOT deregister:
+
+- **Register-failure abort/halt (`REG_RC == 3` or other nonzero)** — no record was ever written,
+  so there is nothing to deregister; just `exit 1`.
+- **Compaction-pause exit (Main-loop condition 3)** — a PAUSE, not an abort. Skip Finalize
+  entirely; do NOT deregister (the next invocation re-registers idempotently and resumes).
+
+Keep this gate consistent with the Phase 0.1 follow-up-running halt below — same push-notify
+pattern, same "do not proceed to slug dispatch on a hard stop." Do not create a second
+conflicting halt mechanism.
+
+## Phase 0.1 — Global cross-tool lock check
+
+After Phase 0.0 (and still within Setup, after `$BASE` is bound), before any task dispatch, check
+for concurrent follow-up consumer activity:
 
 ```bash
 PROJECT_SINK="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" followups_dir)/index.view.json"
@@ -42,6 +222,13 @@ except (json.JSONDecodeError, OSError, KeyError, AttributeError):
     echo "Run /z-followup-status to see what is running. Wait for it to complete or dismiss before implementing." >&2
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" implement_halted_followup_running \
       "$(printf '{"running_count":%d,"sink_path":"%s"}' "$RUNNING_COUNT" "$PROJECT_SINK")" 2>/dev/null || true
+    # Run-ending halt after a record exists → FINALIZE_STATUS=aborted + deregister (the
+    # single FINALIZE_STATUS rule from Phase 0.0). If register failed earlier (no record),
+    # deregister is a harmless no-op (the CLI self-logs nothing and returns 0). The CLI
+    # self-logs any internal deregister failure, so this is best-effort `|| true`.
+    FINALIZE_STATUS=aborted
+    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+      --run-id "$RUN" --status "$FINALIZE_STATUS" || true
     exit 1
   fi
 fi
@@ -170,9 +357,9 @@ If there are running follow-up consumer entries, **halt** — do not proceed wit
    ```
 
 4. Read `$TASKS_FILE` into memory — always set by step 1's fast path or step 3's default above. You'll re-read between batches to pick up status flips. **Do NOT pre-extract SPEC/PLAN slices in main thread** — subagents will Read them directly from `$BASE/SPEC.md` and `$BASE/PLAN.md` themselves. This keeps the orchestrator main-thread context light across many tasks.
-5. **Version stamp + run_start event:**
+5. **Version stamp + run_start event:** (`Z_HARNESS_SESSION_ID` was already exported in Phase 0.0; the `:-` default below leaves it alone if set.)
    ```bash
-   export Z_HARNESS_SESSION_ID="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" session-id)"
+   export Z_HARNESS_SESSION_ID="${Z_HARNESS_SESSION_ID:-$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" session-id)}"
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
    START_PAYLOAD="$(python3 -c '
    import json, sys
@@ -197,7 +384,7 @@ If there are running follow-up consumer entries, **halt** — do not proceed wit
 
    Then log provider resolution (once per run, guarded against re-emission):
    ```bash
-   IMPL_RUN="$(date -u +%Y%m%dT%H%M%SZ)-implement"
+   IMPL_RUN="${IMPL_RUN:-$(date -u +%Y%m%dT%H%M%SZ)-implement}"   # already set in Phase 0.0; reuse the same run id
    if [ ! -f "$BASE/archive/$IMPL_RUN/.providers-logged" ]; then
      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-providers.sh" || true
      mkdir -p "$BASE/archive/$IMPL_RUN"
@@ -285,9 +472,9 @@ These exist because the T006 saga (4 attempts spanning ~20 wall-clock hours, eac
 ## Main loop
 
 Repeat until one of the following three exit conditions is met:
-1. **No eligible task remaining** — all `[ ]` tasks are blocked, skip-flagged, or done; jump to Finalize.
-2. **Hard halt from collected user-blocking findings** — a `spec_problem`, `decision_needed`, `needs_clarification`, or repeated review failure that the user did not resolve; jump to Finalize.
-3. **Compaction trigger fired** (step 8 sub-step 6) — emit `compaction_pause`, push-notify, and exit without running Finalize. Resume on next invocation.
+1. **No eligible task remaining** — all `[ ]` tasks are blocked, skip-flagged, or done; jump to Finalize (leave `FINALIZE_STATUS` unset → Finalize deregisters with `complete`).
+2. **Hard halt from collected user-blocking findings** — a `spec_problem`, `decision_needed`, `needs_clarification`, `unable_to_complete`, or repeated review failure that the user did not resolve, OR a `MAX_ATTEMPTS`/wall-clock-cap halt that ends the run; **set `FINALIZE_STATUS=aborted`** then jump to Finalize (per the FINALIZE_STATUS rule in Phase 0.0 — Finalize then deregisters with `aborted`).
+3. **Compaction trigger fired** (step 8 sub-step 6) — emit `compaction_pause`, push-notify, and exit without running Finalize. Resume on next invocation. (A pause, not an abort — do NOT deregister; do NOT set `FINALIZE_STATUS`.)
 
 Only conditions (1) and (2) lead to the Finalize block. Condition (3) exits immediately after the push notification.
 
@@ -331,10 +518,18 @@ Critical: **never retry a skip-flagged task in the same run** unless the user pi
 
 ### 3. Mark in-progress
 
-Edit `$TASKS_FILE`: flip the chosen task's `[ ]` to `[~]`. Log:
+Edit `$TASKS_FILE`: flip the chosen task's `[ ]` to `[~]`. Log, then heartbeat the registry at
+this task-dispatch boundary (best-effort, non-fatal — never block dispatch on a registry error).
+The `heartbeat` subcommand returns 0 by design and **self-logs** a `registry_error` event
+(op:`heartbeat`) internally on any failure, so call it with `|| true` and do NOT add a
+misleading `|| log` (a `|| log` would be dead code since the subcommand returns 0 by design):
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tasks/<task-id>" task_start '{"id":"<task-id>"}'
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" heartbeat \
+  --run-id "$RUN" --phase implement --current-task "<task-id>" || true   # CLI self-logs registry_error on failure
 ```
+For a parallel batch, emit one heartbeat per task as it flips to `[~]` (last write wins on
+`current_task`; this is opportunistic liveness, not exact tracking).
 
 ### 4. Identify related-file context + relevant docs (paths only — no slice extraction)
 
@@ -604,6 +799,23 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tas
 
 When the loop exits (no more eligible tasks, or you halted):
 
+0. **Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the single
+   FINALIZE_STATUS rule (Phase 0.0): `${FINALIZE_STATUS:-complete}` resolves to `complete` on a
+   normal exit (condition 1, no eligible task remaining) and to `aborted` when a hard-halt path
+   set `FINALIZE_STATUS=aborted` before reaching here (condition 2 — a `spec_problem`,
+   `decision_needed`, `needs_clarification`, `unable_to_complete`, repeated review failure the
+   user did not resolve, or a `MAX_ATTEMPTS`/wall-clock-cap halt that ends the run). Either way,
+   do not leave a zombie record. The `deregister` subcommand returns 0 by design and self-logs a
+   `registry_error` on internal failure, so call it with `|| true` (not `|| log`). If register
+   failed earlier (no record was ever written), this is a harmless no-op.
+   ```bash
+   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+     --run-id "$RUN" --status "${FINALIZE_STATUS:-complete}" || true   # CLI self-logs registry_error on failure
+   ```
+   **Compaction-pause exits (Main-loop condition 3) deliberately skip Finalize — do NOT
+   deregister there.** The run is paused, not finished; the next `/z-implement-all` invocation
+   re-registers (idempotent) and resumes. Deregistering on a pause would erase the live record
+   and hide a still-active run from concurrent sessions.
 1. Re-read `$TASKS_FILE` for final counts: `done`, `pending`, `in_progress`, `skipped`.
 2. Write a summary message to the user:
    - Counts

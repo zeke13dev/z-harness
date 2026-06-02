@@ -30,11 +30,16 @@ Subcommands:
             [--status running|paused]
       Read own record, update last_heartbeat/phase/current_task, atomic rewrite.
       If file was reaped while alive, recreate it (benign). NON-FATAL on error.
+      SELF-LOGS: on an internal error it emits a registry_error event
+      (op:"heartbeat") via log-event.sh before returning 0, so the non-fatal
+      failure is still observable in telemetry (a caller `|| log` would be dead
+      code since this always returns 0).
 
   update-scope --run-id ID --scope-json FILE
       Merge a scope array [{path, confidence, reason}] into the record.
       Paths are stored as-is (caller is responsible for repo-relative normalisation).
-      NON-FATAL on error.
+      NON-FATAL on error. SELF-LOGS a registry_error event (op:"update-scope")
+      on any internal error before returning 0 (same rationale as heartbeat).
 
   list [--json]
       Scan <active>/*.json. Skip torn/partial files silently (try/except json).
@@ -66,7 +71,11 @@ Subcommands:
 
   deregister --run-id ID [--status complete|aborted]
       Atomically unlink <active>/<ID>.json.
-      Emit plan_deregistered. NON-FATAL on error.
+      Emit plan_deregistered. NON-FATAL on error. SELF-LOGS a registry_error
+      event (op:"deregister") on a genuine internal error (unsafe id, unresolvable
+      active_plans_dir, or a non-FileNotFoundError OSError on unlink) before
+      returning 0. A FileNotFoundError on unlink (record already gone) is benign
+      and does NOT emit an error.
 
 Exit codes:
   0   — success (also: heartbeat / update-scope / deregister / reap failure — NON-FATAL)
@@ -442,14 +451,26 @@ def cmd_register(args: argparse.Namespace) -> int:
 
 
 def cmd_heartbeat(args: argparse.Namespace) -> int:
-    """heartbeat subcommand. NON-FATAL — always returns 0."""
+    """heartbeat subcommand. NON-FATAL — always returns 0.
+
+    Self-logging: because this subcommand always returns 0 by design, a caller's
+    ``|| log registry_error`` would be dead code. Instead, on any caught internal
+    error we emit a ``registry_error`` event (op:"heartbeat") via log-event.sh
+    BEFORE returning 0, so the failure is still observable in telemetry.
+    """
     run_id = args.run_id
     if not _is_safe_basename(run_id):
+        _emit_event(run_id, "registry_error", {
+            "op": "heartbeat", "run_id": run_id, "reason": "unsafe_run_id",
+        })
         return 0  # non-fatal; invalid id would be a bug in the caller
 
     try:
         active_dir = _active_plans_dir()
-    except RuntimeError:
+    except RuntimeError as exc:
+        _emit_event(run_id, "registry_error", {
+            "op": "heartbeat", "run_id": run_id, "reason": "active_plans_dir", "error": str(exc),
+        })
         return 0  # non-fatal
 
     record_path = active_dir / f"{run_id}.json"
@@ -487,20 +508,34 @@ def cmd_heartbeat(args: argparse.Namespace) -> int:
             if getattr(args, "status", None):
                 record["status"] = args.status
         _atomic_write(record_path, record)
-    except OSError:
-        pass  # non-fatal
+    except OSError as exc:
+        _emit_event(run_id, "registry_error", {
+            "op": "heartbeat", "run_id": run_id, "reason": "write_failed", "error": str(exc),
+        })
+        # non-fatal — still return 0
     return 0
 
 
 def cmd_update_scope(args: argparse.Namespace) -> int:
-    """update-scope subcommand. NON-FATAL — always returns 0."""
+    """update-scope subcommand. NON-FATAL — always returns 0.
+
+    Self-logging: same rationale as ``cmd_heartbeat`` — a ``|| log`` from the
+    caller is dead code because this returns 0 by design, so an internal error
+    self-emits a ``registry_error`` event (op:"update-scope") before returning.
+    """
     run_id = args.run_id
     if not _is_safe_basename(run_id):
+        _emit_event(run_id, "registry_error", {
+            "op": "update-scope", "run_id": run_id, "reason": "unsafe_run_id",
+        })
         return 0  # non-fatal
 
     try:
         active_dir = _active_plans_dir()
-    except RuntimeError:
+    except RuntimeError as exc:
+        _emit_event(run_id, "registry_error", {
+            "op": "update-scope", "run_id": run_id, "reason": "active_plans_dir", "error": str(exc),
+        })
         return 0  # non-fatal
 
     record_path = active_dir / f"{run_id}.json"
@@ -509,17 +544,26 @@ def cmd_update_scope(args: argparse.Namespace) -> int:
         with scope_path.open("r", encoding="utf-8") as fh:
             new_scope = json.load(fh)
         if not isinstance(new_scope, list):
+            _emit_event(run_id, "registry_error", {
+                "op": "update-scope", "run_id": run_id, "reason": "scope_not_a_list",
+            })
             return 0  # non-fatal: malformed scope is a caller bug
 
         record = _atomic_read(record_path)
         if record is None:
+            _emit_event(run_id, "registry_error", {
+                "op": "update-scope", "run_id": run_id, "reason": "record_missing",
+            })
             return 0  # record gone — non-fatal
 
         record["scope"] = new_scope
         record["last_heartbeat"] = _iso_now()
         _atomic_write(record_path, record)
-    except (OSError, json.JSONDecodeError):
-        pass  # non-fatal
+    except (OSError, json.JSONDecodeError) as exc:
+        _emit_event(run_id, "registry_error", {
+            "op": "update-scope", "run_id": run_id, "reason": "read_or_write_failed", "error": str(exc),
+        })
+        # non-fatal — still return 0
     return 0
 
 
@@ -568,14 +612,27 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 
 def cmd_deregister(args: argparse.Namespace) -> int:
-    """deregister subcommand. NON-FATAL — always returns 0."""
+    """deregister subcommand. NON-FATAL — always returns 0.
+
+    Self-logging: same rationale as ``cmd_heartbeat`` — on a genuine internal
+    error (unresolvable active_plans_dir, unsafe id, or an OSError on unlink that
+    is NOT FileNotFoundError) we emit a ``registry_error`` event (op:"deregister")
+    before returning 0. A FileNotFoundError on unlink (record already gone) is
+    benign and does NOT emit an error.
+    """
     run_id = args.run_id
     if not _is_safe_basename(run_id):
+        _emit_event(run_id, "registry_error", {
+            "op": "deregister", "run_id": run_id, "reason": "unsafe_run_id",
+        })
         return 0  # non-fatal
 
     try:
         active_dir = _active_plans_dir()
-    except RuntimeError:
+    except RuntimeError as exc:
+        _emit_event(run_id, "registry_error", {
+            "op": "deregister", "run_id": run_id, "reason": "active_plans_dir", "error": str(exc),
+        })
         return 0  # non-fatal
 
     record_path = active_dir / f"{run_id}.json"
@@ -586,9 +643,12 @@ def cmd_deregister(args: argparse.Namespace) -> int:
         record = _atomic_read(record_path)
         record_path.unlink()
     except FileNotFoundError:
-        record = None  # already gone — benign
-    except OSError:
-        record = None  # non-fatal
+        record = None  # already gone — benign (no registry_error)
+    except OSError as exc:
+        record = None  # non-fatal, but a genuine error → self-log
+        _emit_event(run_id, "registry_error", {
+            "op": "deregister", "run_id": run_id, "reason": "unlink_failed", "error": str(exc),
+        })
 
     _emit_event(run_id, "plan_deregistered", {
         "run_id": run_id,

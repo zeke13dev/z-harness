@@ -1262,6 +1262,106 @@ class TestSubprocessCliForkSafety(unittest.TestCase):
             self._assert_no_fork_crash(r3, "heartbeat")
 
 
+class TestNonFatalSelfLogsRegistryError(unittest.TestCase):
+    """T010: non-fatal subcommands (heartbeat / update-scope / deregister) return 0
+    by design, so a caller's `|| log registry_error` is dead code. The CLI must
+    instead SELF-EMIT a registry_error event on an internal failure while still
+    returning 0.
+
+    Forced internal failure: create `<base>/active-plans` as a FILE (not a dir).
+    Then any record write (heartbeat's atomic rewrite) or unlink (deregister)
+    raises an OSError subclass that is NOT FileNotFoundError, exercising the
+    self-log branch. log-event.sh resolves its own paths under <base> and is
+    unaffected by the `active-plans` file, so the registry_error event still
+    lands in <base>/metrics.jsonl.
+    """
+
+    def _registry_error_ops(self, base: str) -> list[str]:
+        """Return the list of `op` values from registry_error events in metrics.jsonl."""
+        metrics = Path(base) / "metrics.jsonl"
+        ops: list[str] = []
+        if not metrics.exists():
+            return ops
+        for line in metrics.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            # log-event.sh merges payload keys flat into the top-level event obj
+            # ({"ts","run","kind", ...payload}), so `op` is a top-level key.
+            if ev.get("kind") == "registry_error":
+                op = ev.get("op")
+                if op:
+                    ops.append(op)
+        return ops
+
+    def test_heartbeat_internal_failure_self_logs_and_returns_0(self):
+        with tempfile.TemporaryDirectory() as base:
+            # Force internal failure: active-plans is a file, so the atomic record
+            # rewrite cannot create/replace under it.
+            (Path(base) / "active-plans").write_text("not a dir\n", encoding="utf-8")
+
+            r = _run_registry(
+                "heartbeat", "--run-id", "selflog-hb-001",
+                "--phase", "implement", "--current-task", "T001",
+                base_dir=base,
+            )
+            # (a) still returns 0 (NON-FATAL contract preserved)
+            self.assertEqual(
+                r.returncode, 0,
+                f"heartbeat must remain NON-FATAL (exit 0); got {r.returncode}; stderr={r.stderr[:400]}",
+            )
+            # (b) a registry_error event with op:"heartbeat" was self-emitted
+            ops = self._registry_error_ops(base)
+            self.assertIn(
+                "heartbeat", ops,
+                f"heartbeat internal failure must self-emit registry_error(op=heartbeat); got ops={ops}",
+            )
+
+    def test_deregister_internal_failure_self_logs_and_returns_0(self):
+        with tempfile.TemporaryDirectory() as base:
+            (Path(base) / "active-plans").write_text("not a dir\n", encoding="utf-8")
+
+            r = _run_registry(
+                "deregister", "--run-id", "selflog-dereg-001", "--status", "aborted",
+                base_dir=base,
+            )
+            self.assertEqual(
+                r.returncode, 0,
+                f"deregister must remain NON-FATAL (exit 0); got {r.returncode}; stderr={r.stderr[:400]}",
+            )
+            ops = self._registry_error_ops(base)
+            self.assertIn(
+                "deregister", ops,
+                f"deregister internal failure must self-emit registry_error(op=deregister); got ops={ops}",
+            )
+
+    def test_clean_deregister_does_not_self_log_error(self):
+        """Guard against false positives: a normal register→deregister round-trip
+        must NOT emit any registry_error event (the self-log fires only on failure)."""
+        with tempfile.TemporaryDirectory() as base:
+            run_id = "selflog-clean-001"
+            r_reg = _run_registry(
+                "register", "--run-id", run_id,
+                "--slug", "s", "--command", "/z-implement-all", "--phase", "implement",
+                base_dir=base,
+            )
+            self.assertEqual(r_reg.returncode, 0, f"register: {r_reg.stderr[:400]}")
+            r_dereg = _run_registry(
+                "deregister", "--run-id", run_id, "--status", "complete",
+                base_dir=base,
+            )
+            self.assertEqual(r_dereg.returncode, 0, f"deregister: {r_dereg.stderr[:400]}")
+            ops = self._registry_error_ops(base)
+            self.assertEqual(
+                ops, [],
+                f"clean round-trip must not self-emit any registry_error; got ops={ops}",
+            )
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
