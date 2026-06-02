@@ -484,6 +484,32 @@
       "summary": "Durable external artifact base + lockless cross-session awareness registry. Five-tier base fallback (Z_HARNESS_BASE_DIR > XDG_STATE_HOME > HOME/.local/state > git-common-dir > pwd/z-harness) with anchor enforcement prevents split-brain. Per-run JSON records in <base>/active-plans/ let concurrent sessions see each other's scope; overlap advisory at implement Phase 0 (Z_HARNESS_STRICT_OVERLAP=1 makes explicit×explicit exact path match a hard halt). Addresses the 2026-06-01 git clean incident."
     },
     {
+      "slug": "cost-estimation",
+      "source_files": [
+        "scripts/estimate-tokens.py",
+        "scripts/pre-run-cost-gate.sh",
+        "scripts/token-cost-profiles.json",
+        "scripts/config.py",
+        "commands/z-research.md",
+        "commands/z-uplift.md",
+        "commands/z-plan-split.md",
+        "commands/z-brainstorm.md",
+        "commands/z-audit.md",
+        "commands/z-debug.md"
+      ],
+      "last_updated": "2026-06-02",
+      "confidence": "high",
+      "depends_on": [
+        "scripts",
+        "config"
+      ],
+      "consumed_by": [
+        "commands",
+        "skills"
+      ],
+      "summary": "LLM-free pre-run token-cost estimator (3 tiers: static/dispatch/empirical with parent-rollup + static-floor clamp), profile schema (token-cost-profiles.json), gate helper (pre-run-cost-gate.sh), workflow.pre_run_cost_gate enum gate + cost.token_budget integer knob; hard gates (z-research/z-uplift/z-plan-split) require user confirmation; soft gates (z-brainstorm HEAVY/z-audit HEAVY/z-debug) auto-proceed; overnight/no-ask budget rule; cost_gate_decision event."
+    },
+    {
       "slug": "axioms",
       "source_file": [
         "scripts/axiom-store.py",
