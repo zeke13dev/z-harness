@@ -1066,6 +1066,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
+    # Z_HARNESS_REGISTRY_ENABLED=0 disables coordination writes (register/overlaps).
+    # Non-mutating read commands (list, session-id) are always allowed.
+    # NON-FATAL writes (heartbeat, update-scope, deregister, reap) are also skipped
+    # when the registry is disabled, since there are no records to update.
+    if os.environ.get("Z_HARNESS_REGISTRY_ENABLED", "1") == "0":
+        _REGISTRY_DISABLED_SUBCMDS = frozenset(
+            {"register", "heartbeat", "update-scope", "overlaps", "reap", "deregister"}
+        )
+        if args.subcommand in _REGISTRY_DISABLED_SUBCMDS:
+            # Silent no-op: registry is disabled. For overlaps, exit 0 (no overlap).
+            return 0
+
     dispatch = {
         "session-id": cmd_session_id,
         "register": cmd_register,

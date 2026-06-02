@@ -149,15 +149,15 @@ _z_harness_anchor_write() {
 #
 # Fallback chain (first writable tier wins):
 #   1. $Z_HARNESS_BASE_DIR             — explicit absolute override (TRUE ESCAPE HATCH)
-#   2. $XDG_STATE_HOME/z-harness/<repo-id>  — if Z_HARNESS_EXTERNAL_DEFAULT=1
-#   3. $HOME/.local/state/z-harness/<repo-id>   — if Z_HARNESS_EXTERNAL_DEFAULT=1
-#   4. <git-common-dir>/z-harness      — if Z_HARNESS_EXTERNAL_DEFAULT=1
-#   5. $(pwd)/z-harness                — last resort / current behavior (always effective in stage 1)
+#   2. $XDG_STATE_HOME/z-harness/<repo-id>  — unless Z_HARNESS_EXTERNAL_DEFAULT=0
+#   3. $HOME/.local/state/z-harness/<repo-id>   — unless Z_HARNESS_EXTERNAL_DEFAULT=0
+#   4. <git-common-dir>/z-harness      — unless Z_HARNESS_EXTERNAL_DEFAULT=0
+#   5. $(pwd)/z-harness                — opt-out (Z_HARNESS_EXTERNAL_DEFAULT=0) or last resort
 #
-# EXTERNAL_DEFAULT gating (stage 1):
-#   When Z_HARNESS_EXTERNAL_DEFAULT is unset or 0, tiers 2-4 are computed for a
-#   shadow diagnostic only. The effective base remains tier 1 (if set) or tier 5.
-#   Set Z_HARNESS_EXTERNAL_DEFAULT=1 to activate the full fallback chain.
+# EXTERNAL_DEFAULT gating (Phase D flip — default is NOW external):
+#   When Z_HARNESS_EXTERNAL_DEFAULT is UNSET, the full fallback chain (tiers 2-5) is ACTIVE.
+#   Set Z_HARNESS_EXTERNAL_DEFAULT=0 to force the old in-repo tier-5 behavior (opt-out).
+#   Reverting to in-repo: either Z_HARNESS_BASE_DIR=$(pwd)/z-harness OR Z_HARNESS_EXTERNAL_DEFAULT=0.
 #
 # Anchor invariant (SPEC invariant 7):
 #   After resolving the path, writes/validates <git-common-dir>/.z-harness-base.
@@ -197,7 +197,9 @@ z_harness_base() {
   local repo_id
   repo_id="$(z_harness_repo_id)" || exit 1
 
-  local external_default="${Z_HARNESS_EXTERNAL_DEFAULT:-0}"
+  # Phase D flip: external is now the DEFAULT. Unset = external active.
+  # Only Z_HARNESS_EXTERNAL_DEFAULT=0 opts back in to the old in-repo tier-5 behavior.
+  local external_default="${Z_HARNESS_EXTERNAL_DEFAULT:-1}"
 
   # --- Shadow diagnostics (tiers 2-4): computed regardless of gating, for diagnostics ---
   local shadow_tier="" shadow_path=""
@@ -256,12 +258,14 @@ z_harness_base() {
       exit 1
     fi
   else
-    # Stage 1: only tier 1 (handled above) or tier 5 is effective
+    # Opt-out (Z_HARNESS_EXTERNAL_DEFAULT=0): only tier 1 (handled above) or tier 5 is effective.
+    # This restores the old in-repo behavior. Revert by setting Z_HARNESS_EXTERNAL_DEFAULT=0
+    # or Z_HARNESS_BASE_DIR=$(pwd)/z-harness.
     if _z_harness_probe_writable "$t5_path"; then
       effective_tier="pwd"
       effective_path="$t5_path"
     else
-      printf 'plan-path.sh: FATAL no writable base found (Z_HARNESS_EXTERNAL_DEFAULT not set, tried pwd)\n' >&2
+      printf 'plan-path.sh: FATAL no writable base found (Z_HARNESS_EXTERNAL_DEFAULT=0, tried pwd)\n' >&2
       exit 1
     fi
   fi

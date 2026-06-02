@@ -11,8 +11,8 @@
 #   T001-B: fallback tier 2 (XDG_STATE_HOME) chosen when writable + EXTERNAL_DEFAULT=1
 #   T001-C: fallback tier 3 (HOME/.local/state) chosen when XDG absent + EXTERNAL_DEFAULT=1
 #   T001-D: fallback tier 4 (git-common-dir/z-harness) chosen when HOME absent + EXTERNAL_DEFAULT=1
-#   T001-E: fallback tier 5 (pwd/z-harness) is effective base in stage 1 (EXTERNAL_DEFAULT unset)
-#   T001-F: EXTERNAL_DEFAULT=0 → effective base = pwd/z-harness regardless of XDG/HOME
+#   T001-E: EXTERNAL_DEFAULT unset → external tier chosen (default is now external after Phase-D flip)
+#   T001-F: EXTERNAL_DEFAULT=0 → effective base = pwd/z-harness regardless of XDG/HOME (opt-out)
 #   T001-G: anchor written on first call; second call with same path → no mismatch
 #   T001-H: anchor mismatch (two paths disagree) → hard-fail (non-zero exit)
 #   T001-I: dual-read: resolve_plan_path finds z-harness/plans/<slug> (secondary legacy)
@@ -219,10 +219,13 @@ assert_contains "T001-D: z_harness_base returns path ending in .git/z-harness" \
 rm -rf "$REPO_D"
 
 # ---------------------------------------------------------------------------
-# TEST T001-E: Stage 1 (EXTERNAL_DEFAULT unset): effective base = pwd/z-harness
+# TEST T001-E: Phase-D flip (EXTERNAL_DEFAULT unset): effective base = external tier
+# After the Phase-D flip, unset Z_HARNESS_EXTERNAL_DEFAULT → external is active.
+# With XDG_STATE_HOME set and writable, tier 2 (XDG) is chosen.
+# This verifies the NEW default: unset → external (not pwd/z-harness).
 # ---------------------------------------------------------------------------
 echo ""
-echo "T001-E: stage 1 (EXTERNAL_DEFAULT unset) → effective base = pwd/z-harness"
+echo "T001-E: Phase-D flip (EXTERNAL_DEFAULT unset) → external tier chosen (new default)"
 
 REPO_E="$(_tmpdir)"
 git -C "$REPO_E" init -q
@@ -232,27 +235,41 @@ git -C "$REPO_E" config user.name "Test"
 XDG_E="$(_tmpdir)"
 HOME_E="$(_tmpdir)"
 
+REPOID_E="$(cd "$REPO_E" && bash "$PLAN_PATH" z_harness_repo_id)"
+
 RESULT_E="$(cd "$REPO_E" && \
   XDG_STATE_HOME="$XDG_E" \
   HOME="$HOME_E" \
   bash "$PLAN_PATH" z_harness_base)"
 
-# In stage 1, result should be pwd/z-harness.
-# Use realpath on both sides to handle macOS /tmp→/private/tmp symlink.
+# With EXTERNAL_DEFAULT unset (new default = external) and XDG writable,
+# the result should be under XDG_STATE_HOME (tier 2), NOT pwd/z-harness.
 REPO_E_REAL="$(_realpath "$REPO_E")"
-EXPECTED_E="$REPO_E_REAL/z-harness"
+EXPECTED_E_PWD="$REPO_E_REAL/z-harness"
 RESULT_E_REAL="$(_realpath "$(dirname "$RESULT_E")")/$(basename "$RESULT_E")"
 
-assert_eq "T001-E: z_harness_base returns pwd/z-harness in stage 1 (EXTERNAL_DEFAULT unset)" \
-  "$EXPECTED_E" "$RESULT_E_REAL"
+# Verify the result is NOT the old in-repo pwd/z-harness path
+if [[ "$RESULT_E_REAL" == "$EXPECTED_E_PWD" ]]; then
+  echo "  FAIL: T001-E: z_harness_base returned pwd/z-harness (old behavior) — should have chosen external tier"
+  echo "        result: $RESULT_E_REAL"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: T001-E: z_harness_base chose an external tier (not pwd/z-harness) when EXTERNAL_DEFAULT unset"
+  PASS=$((PASS + 1))
+fi
+
+# Verify the result is under XDG_STATE_HOME (tier 2) — our new default path
+assert_contains "T001-E: result is under XDG_STATE_HOME (tier 2) — new default" \
+  "z-harness/$REPOID_E" "$RESULT_E"
 
 rm -rf "$REPO_E" "$XDG_E" "$HOME_E"
 
 # ---------------------------------------------------------------------------
 # TEST T001-F: EXTERNAL_DEFAULT=0 → effective base = pwd/z-harness regardless of XDG/HOME
+# This is the OPT-OUT path: explicitly setting =0 restores the old in-repo behavior.
 # ---------------------------------------------------------------------------
 echo ""
-echo "T001-F: EXTERNAL_DEFAULT=0 → effective base = pwd/z-harness"
+echo "T001-F: EXTERNAL_DEFAULT=0 → effective base = pwd/z-harness (explicit opt-out)"
 
 REPO_F="$(_tmpdir)"
 git -C "$REPO_F" init -q
@@ -642,11 +659,12 @@ fi
 rm -rf "$REPO_S"
 
 # ---------------------------------------------------------------------------
-# TEST T001-T: stage-1 shadow probe (EXTERNAL_DEFAULT unset) leaves no stray
-# directories under XDG_STATE_HOME or HOME when those tiers are not selected.
+# TEST T001-T: EXTERNAL_DEFAULT=0 (opt-out) probe leaves no stray directories
+# under XDG_STATE_HOME or HOME — the shadow diagnostic runs tiers 2-3 but
+# they are not selected; the effective tier is 5 (pwd).
 # ---------------------------------------------------------------------------
 echo ""
-echo "T001-T: stage-1 probe leaves no stray tier dirs under XDG/HOME"
+echo "T001-T: EXTERNAL_DEFAULT=0 (opt-out) leaves no stray tier dirs under XDG/HOME"
 
 REPO_T="$(_tmpdir)"
 git -C "$REPO_T" init -q
@@ -656,12 +674,13 @@ git -C "$REPO_T" config user.name "Test"
 XDG_T="$(_tmpdir)"
 HOME_T="$(_tmpdir)"
 
-# Run in stage 1 (EXTERNAL_DEFAULT not set) with XDG and HOME pointing at
+# Run with EXTERNAL_DEFAULT=0 (explicit opt-out) and XDG/HOME pointing at
 # writable temp dirs. The shadow probe runs tiers 2-3 for diagnostics but
-# the effective tier is 5 (pwd). No stray dirs must be left behind.
+# the effective tier is 5 (pwd). No stray dirs must be left behind under XDG/HOME.
 RESULT_T="$(cd "$REPO_T" && \
   XDG_STATE_HOME="$XDG_T" \
   HOME="$HOME_T" \
+  Z_HARNESS_EXTERNAL_DEFAULT=0 \
   bash "$PLAN_PATH" z_harness_base)"
 
 # Tier 2 (XDG) path would be: $XDG_T/z-harness/
@@ -673,7 +692,7 @@ if [[ -d "$XDG_STRAY" ]]; then
   echo "  FAIL: T001-T: stray directory left behind under XDG: $XDG_STRAY"
   FAIL=$((FAIL + 1))
 else
-  echo "  PASS: T001-T: no stray dir under XDG after stage-1 probe"
+  echo "  PASS: T001-T: no stray dir under XDG after EXTERNAL_DEFAULT=0 probe"
   PASS=$((PASS + 1))
 fi
 
@@ -681,15 +700,15 @@ if [[ -d "$HOME_STRAY" ]]; then
   echo "  FAIL: T001-T: stray directory left behind under HOME: $HOME_STRAY"
   FAIL=$((FAIL + 1))
 else
-  echo "  PASS: T001-T: no stray dir under HOME after stage-1 probe"
+  echo "  PASS: T001-T: no stray dir under HOME after EXTERNAL_DEFAULT=0 probe"
   PASS=$((PASS + 1))
 fi
 
-# The result must be pwd/z-harness (tier 5)
+# The result must be pwd/z-harness (tier 5) when EXTERNAL_DEFAULT=0
 REPO_T_REAL="$(_realpath "$REPO_T")"
 EXPECTED_T="$REPO_T_REAL/z-harness"
 RESULT_T_REAL="$(_realpath "$(dirname "$RESULT_T")")/$(basename "$RESULT_T")"
-assert_eq "T001-T: effective base is pwd/z-harness (tier 5) in stage 1" "$EXPECTED_T" "$RESULT_T_REAL"
+assert_eq "T001-T: effective base is pwd/z-harness (tier 5) when EXTERNAL_DEFAULT=0" "$EXPECTED_T" "$RESULT_T_REAL"
 
 rm -rf "$REPO_T" "$XDG_T" "$HOME_T"
 
