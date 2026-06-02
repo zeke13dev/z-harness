@@ -52,6 +52,13 @@ def run(args: list, *, env=None, cwd=None) -> subprocess.CompletedProcess:
             del full_env[key]
     if env:
         full_env.update(env)
+    # Pin the artifact base into the test's cwd. Since the Phase-D flip the
+    # default base is external (XDG_STATE_HOME/...), so emitted events would
+    # otherwise land outside the tmp tree the tests read from — silently, making
+    # event assertions pass vacuously. Tier-1 Z_HARNESS_BASE_DIR keeps it
+    # hermetic. Skipped if the caller pinned it explicitly.
+    if cwd and "Z_HARNESS_BASE_DIR" not in full_env:
+        full_env["Z_HARNESS_BASE_DIR"] = str(Path(cwd) / "z-harness")
     return subprocess.run(
         [PYTHON, CONFIG_PY] + args,
         capture_output=True,
@@ -1045,18 +1052,18 @@ class TestApplyOvernightOverrides(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Tests for T007: list-question-ids returns exactly 5 registered question IDs
+# Tests for T007: list-question-ids returns exactly 6 registered question IDs
 # ---------------------------------------------------------------------------
 
 class TestQuestionIds(unittest.TestCase):
     """
-    Verify that QUESTION_IDS contains the 5 expected registered question IDs:
-    2 original (workflow.audit_to_amend, workflow.slug_confirm) and
-    3 new from T007 (workflow.implement_all_proceed, workflow.review_all_proceed,
-    workflow.plan_decisions_approval).
+    Verify that QUESTION_IDS contains the 6 expected registered question IDs:
+    2 original (workflow.audit_to_amend, workflow.slug_confirm),
+    3 from T007 (workflow.implement_all_proceed, workflow.review_all_proceed,
+    workflow.plan_decisions_approval), and workflow.spec_retro_discovery.
 
     The list-question-ids subcommand must return a sorted JSON array of exactly
-    these 5 IDs. If a new ID is added without updating this test, the length
+    these 6 IDs. If a new ID is added without updating this test, the length
     assertion will catch it; if an expected ID is missing or renamed, the
     content assertion will catch it.
     """
@@ -1067,6 +1074,7 @@ class TestQuestionIds(unittest.TestCase):
         "workflow.plan_decisions_approval",
         "workflow.review_all_proceed",
         "workflow.slug_confirm",
+        "workflow.spec_retro_discovery",
     ]
 
     def setUp(self):
@@ -1077,15 +1085,15 @@ class TestQuestionIds(unittest.TestCase):
         shutil.rmtree(self.xdg, ignore_errors=True)
         shutil.rmtree(self.cwd, ignore_errors=True)
 
-    def test_list_question_ids_returns_five_ids(self):
-        """list-question-ids must return exactly 5 IDs (2 original + 3 from T007)."""
+    def test_list_question_ids_returns_six_ids(self):
+        """list-question-ids must return exactly 6 IDs (2 original + 3 from T007 + spec_retro_discovery)."""
         r = run(["list-question-ids"], env={"XDG_CONFIG_HOME": self.xdg}, cwd=self.cwd)
         self.assertEqual(r.returncode, 0, f"list-question-ids exited {r.returncode}; stderr={r.stderr!r}")
         ids = json.loads(r.stdout)
-        self.assertEqual(len(ids), 5, f"Expected 5 question IDs, got {len(ids)}: {ids}")
+        self.assertEqual(len(ids), 6, f"Expected 6 question IDs, got {len(ids)}: {ids}")
 
     def test_list_question_ids_contains_all_expected_ids(self):
-        """list-question-ids must contain all 5 expected question IDs."""
+        """list-question-ids must contain all 6 expected question IDs."""
         r = run(["list-question-ids"], env={"XDG_CONFIG_HOME": self.xdg}, cwd=self.cwd)
         self.assertEqual(r.returncode, 0)
         ids = json.loads(r.stdout)

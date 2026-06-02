@@ -1,0 +1,60 @@
+name: Tests
+
+# Primary regression gate for the z-harness Python test suite.
+#
+# Before this workflow existed, CI ran ONLY tests/conformance/ (see
+# conformance.yml) plus the AskUser lint — leaving the ~1600-test main suite
+# (tests/ + scripts/) completely ungated. A repo-wide change such as the
+# external-artifact-base flip could break dozens of tests and still merge green.
+# This job closes that gap.
+
+on:
+  pull_request:
+    paths:
+      - "scripts/**"
+      - "tests/**"
+      - "runtime/**"
+      - "Makefile"
+      - ".github/workflows/tests.yml"
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # 3.11+ is required: scripts/config.py imports the stdlib tomllib.
+          python-version: "3.11"
+
+      - name: Install dependencies
+        # pytest is the runner; tomlkit is an optional dep config.py uses for
+        # comment-preserving TOML writes — install it so CI exercises the same
+        # path as local dev rather than the ImportError fallback.
+        run: pip install pytest tomlkit
+
+      - name: Configure git identity
+        # Many tests git-init throwaway repos and commit; a global identity must
+        # exist or those subprocess commits fail on a bare CI runner.
+        run: |
+          git config --global user.email "ci@z-harness.test"
+          git config --global user.name "z-harness CI"
+
+      - name: Run Python test suite (tests/ + scripts/)
+        run: python3 -m pytest tests/ scripts/ --junitxml=pytest-report.xml
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-report
+          path: pytest-report.xml

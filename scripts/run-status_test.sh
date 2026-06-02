@@ -127,7 +127,10 @@ run_classify_with_root() {
       mkdir -p '$fake_root/bin'
       printf '#!/bin/bash\n[ \"\$1\" = \"rev-parse\" ] && echo \"$fake_root\" && exit 0\nexec /usr/bin/git \"\$@\"\n' > '$fake_root/bin/git'
       chmod +x '$fake_root/bin/git'
-      PATH='$fake_root/bin:$PATH' bash '$RUN_STATUS' classify '$run_id' \"\$@\"
+      # Pin the artifact base into the fake repo so plan-path.sh resolves the
+      # in-tmp layout (<base>/plans/<slug>/archive and legacy <base>/<slug>/archive).
+      # The default base is now external (XDG state), which never contains these fixtures.
+      PATH='$fake_root/bin:$PATH' Z_HARNESS_BASE_DIR='$fake_root/z-harness' bash '$RUN_STATUS' classify '$run_id' \"\$@\"
     " -- "$@"
   )
 }

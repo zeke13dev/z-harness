@@ -1,5 +1,21 @@
 SHELL := /usr/bin/env bash
-.PHONY: conformance conformance-live conformance-record lint lint-strict preflight bench-autonomy-check
+.PHONY: test test-sh conformance conformance-live conformance-record lint lint-strict preflight bench-autonomy-check
+
+# Full Python test suite: the unit/integration tests under tests/ plus the
+# script-level tests under scripts/. This is the primary regression gate and is
+# what CI (.github/workflows/tests.yml) runs. Requires Python 3.11+ (tomllib).
+test:
+	python3 -m pytest tests/ scripts/
+
+# Standalone shell test scripts (bash assertion harnesses, not pytest).
+# Run for local verification; each script self-reports pass/fail counts.
+test-sh:
+	@_fail=0; \
+	for t in $$(ls scripts/*test*.sh | grep -v research); do \
+	  echo "==> $$t"; \
+	  bash "$$t" || { echo "FAILED: $$t" >&2; _fail=1; }; \
+	done; \
+	exit $$_fail
 
 conformance:
 	python3 -m pytest tests/conformance/ -v
