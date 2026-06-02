@@ -14,6 +14,7 @@ Run:
 
 import importlib.util
 import json
+import os
 import shutil
 import sys
 import uuid
@@ -37,6 +38,17 @@ _spec.loader.exec_module(_resolve_provider_module)  # type: ignore[union-attr]
 
 # Resolve repo root as the directory containing runtime/
 _REPO_ROOT = Path(__file__).parent.parent.parent
+
+
+def _events_path(run_id: str) -> Path:
+    """Path to a run's events.jsonl under the resolved artifact base.
+
+    The hermetic conftest fixture pins Z_HARNESS_BASE_DIR to a temp dir (the
+    default base is now external), so events land at <base>/archive/<run>/.
+    Falls back to the legacy in-repo path when the env var is unset.
+    """
+    base = os.environ.get("Z_HARNESS_BASE_DIR") or str(_REPO_ROOT / "z-harness")
+    return Path(base) / "archive" / run_id / "events.jsonl"
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +81,7 @@ def unique_run_id() -> str:
 def archive_cleanup(unique_run_id: str):
     """Yield the run_id; clean up archive dir unconditionally after the test."""
     yield unique_run_id
-    archive_dir = _REPO_ROOT / "z-harness" / "archive" / unique_run_id
+    archive_dir = _events_path(unique_run_id).parent
     shutil.rmtree(archive_dir, ignore_errors=True)
 
 
@@ -248,7 +260,7 @@ def test_log_event_writes_events_jsonl(archive_cleanup: str) -> None:
     run_id = archive_cleanup
     log_event(run_id, "test_event", {"x": 1}, str(_REPO_ROOT))
 
-    events_path = _REPO_ROOT / "z-harness" / "archive" / run_id / "events.jsonl"
+    events_path = _events_path(run_id)
     assert events_path.exists(), f"events.jsonl not found at {events_path}"
 
 
@@ -259,7 +271,7 @@ def test_log_event_schema_version_is_1(archive_cleanup: str) -> None:
     run_id = archive_cleanup
     log_event(run_id, "test_event", {"x": 1}, str(_REPO_ROOT))
 
-    events_path = _REPO_ROOT / "z-harness" / "archive" / run_id / "events.jsonl"
+    events_path = _events_path(run_id)
     lines = [ln.strip() for ln in events_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
     assert lines, "events.jsonl must contain at least one non-empty line"
 
@@ -277,7 +289,7 @@ def test_log_event_payload_preserved(archive_cleanup: str) -> None:
     run_id = archive_cleanup
     log_event(run_id, "test_event", {"x": 42}, str(_REPO_ROOT))
 
-    events_path = _REPO_ROOT / "z-harness" / "archive" / run_id / "events.jsonl"
+    events_path = _events_path(run_id)
     lines = [ln.strip() for ln in events_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
 
     found = any(json.loads(ln).get("x") == 42 for ln in lines)
@@ -291,7 +303,7 @@ def test_log_event_kind_recorded(archive_cleanup: str) -> None:
     run_id = archive_cleanup
     log_event(run_id, "test_event", {"x": 1}, str(_REPO_ROOT))
 
-    events_path = _REPO_ROOT / "z-harness" / "archive" / run_id / "events.jsonl"
+    events_path = _events_path(run_id)
     lines = [ln.strip() for ln in events_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
 
     found = any(json.loads(ln).get("kind") == "test_event" for ln in lines)
@@ -317,7 +329,7 @@ def test_log_event_injects_schema_version_when_absent(archive_cleanup: str) -> N
     # Payload deliberately omits schema_version
     log_event(run_id, "test_event", {"only_key": "value"}, str(_REPO_ROOT))
 
-    events_path = _REPO_ROOT / "z-harness" / "archive" / run_id / "events.jsonl"
+    events_path = _events_path(run_id)
     lines = [ln.strip() for ln in events_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
 
     for line in lines:
