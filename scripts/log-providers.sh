@@ -29,6 +29,21 @@ for ROLE in "${ROLES[@]}"; do
     continue
   }
 
+  # Z_HARNESS_CONSULT=off: resolver prints the sentinel "none" (not JSON).
+  # Emit a provider_resolution_skipped event and move on — no JSON parsing.
+  if [[ "$DESCRIPTOR" == "none" ]]; then
+    SUMMARY_PARTS+=("${ROLE}=skipped(consult=off)")
+    if [[ -x "$LOG_EVENT" ]]; then
+      PAYLOAD="$(python3 -c '
+import json, sys
+role = sys.argv[1]
+print(json.dumps({"role": role, "reason": "Z_HARNESS_CONSULT=off"}))
+' "$ROLE")"
+      bash "$LOG_EVENT" "$RUN_ID" "provider_resolution_skipped" "$PAYLOAD" 2>/dev/null || true
+    fi
+    continue
+  fi
+
   PROVIDER="$(python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); print(d["provider"])' <<<"$DESCRIPTOR")"
   MODEL_LABEL="$(python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); print(d.get("model_label",""))' <<<"$DESCRIPTOR")"
   COMMAND="$(python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); print(d["command"])' <<<"$DESCRIPTOR")"

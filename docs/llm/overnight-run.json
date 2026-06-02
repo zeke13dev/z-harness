@@ -1,6 +1,6 @@
 {
   "concept": "overnight-run",
-  "last_updated": "2026-05-28",
+  "last_updated": "2026-06-01",
   "covers_spec": "z-harness/overnight-run/SPEC.md",
   "source_file": [
     "commands/z-overnight.md",
@@ -8,7 +8,7 @@
     "scripts/normalize-task-state.sh",
     "scripts/overnight-preflight.sh",
     "scripts/config.py",
-    "scripts/morning-report.py",
+    "scripts/bench-autonomy-check.sh",
     "docs/human/overnight-run.md"
   ],
   "confidence": "high",
@@ -64,7 +64,7 @@
     },
     {
       "file": "commands/z-overnight.md",
-      "line": 504,
+      "line": 519,
       "symbol": "Phase 4 terminal handling",
       "kind": "doc",
       "summary": "Best-effort terminal: determine overall status, update state, invoke morning-report.py, log overnight_end, release lock, push-notify via should-notify"
@@ -99,45 +99,45 @@
     },
     {
       "file": "scripts/config.py",
-      "line": 972,
+      "line": 1129,
       "symbol": "_apply_overnight_overrides",
       "kind": "fn",
       "summary": "Post-processes the resolve-question envelope under Z_HARNESS_NO_ASK=halt: allowlist match -> overnight_decision envelope; no match -> halt envelope. Fires only when result==ask"
     },
     {
       "file": "scripts/config.py",
-      "line": 1595,
-      "symbol": "cmd_check_no_ask",
+      "line": 2022,
+      "symbol": "_is_policy_mode",
       "kind": "fn",
-      "summary": "check-no-ask --question-id <id>: minimal API for non-resolver gates; returns JSON {result: halt|proceed, question_id, rule_id}; consults allowlist + resolver when Z_HARNESS_NO_ASK=halt"
+      "summary": "Returns True when Z_HARNESS_NO_ASK=halt AND either Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE or Z_HARNESS_OVERNIGHT_AUTODECIDE is non-empty (frozen policy active)"
     },
     {
       "file": "scripts/config.py",
-      "line": 135,
+      "line": 2038,
+      "symbol": "_emit_unhandled_gate",
+      "kind": "fn",
+      "summary": "Emits unhandled_gate event via log-event.sh for a registered gate not covered by the frozen policy; non-fatal, skips if Z_HARNESS_RUN unset"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 2094,
+      "symbol": "cmd_check_no_ask",
+      "kind": "fn",
+      "summary": "check-no-ask --question-id <id>: returns JSON {result: halt|proceed|unhandled_gate, question_id, rule_id}; unhandled_gate fires when policy mode is active and a registered gate is not covered by the frozen allowlist"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 251,
       "symbol": "OVERNIGHT_AUTODECIDE_QIDS_DEFAULT",
       "kind": "const",
       "summary": "Default allowlist: {workflow.slug_confirm: recommend_derived, workflow.audit_to_amend: amend}; merged under Z_HARNESS_OVERNIGHT_AUTODECIDE env override"
     },
     {
-      "file": "scripts/morning-report.py",
-      "line": 427,
-      "symbol": "cmd_generate",
-      "kind": "fn",
-      "summary": "Entry point: resolves plan base for slug, finds lexically-latest *-overnight-* archive dir, loads overnight-state.json + events.jsonl, calls generate_report, writes MORNING_REPORT.md atomically"
-    },
-    {
-      "file": "scripts/morning-report.py",
-      "line": 307,
-      "symbol": "_build_recommended_next",
-      "kind": "fn",
-      "summary": "Branches on terminal_event_kind/halt_reason: no_ask_blocked -> list 3 unblock options; slug_collision_halt -> slug collision guidance; skill_tool_failure -> error message + root cause advice; default -> generic resume"
-    },
-    {
-      "file": "scripts/morning-report.py",
-      "line": 376,
-      "symbol": "generate_report",
-      "kind": "fn",
-      "summary": "Pure function of state + events; builds Chain summary, Phase results table, Unilateral decisions table, Test outcomes, Recommended next sections"
+      "file": "scripts/bench-autonomy-check.sh",
+      "line": 1,
+      "symbol": "bench-autonomy-check.sh",
+      "kind": "module",
+      "summary": "Pre-run gate for benchmark policy-mode runs (make bench-autonomy-check): step 1 asserts quick-build hot-path AskUserQuestion callsites are registered; step 2 asserts frozen policy covers every hot-path gate. Exit 0 required before unattended policy-mode run"
     }
   ],
   "depends_on": [
@@ -158,21 +158,26 @@
     "git_diff_stat_at_end is captured at EVERY terminal state transition (complete, halt, error), not only on chain completion",
     "Empty chain -> usage error; no lock acquired (Phase 0 guard)",
     "Resume-after-complete -> no-op with AskUserQuestion acknowledgement",
-    "would_have_asked in halt envelope captures only {default, choices} \u2014 never question text, description, or header",
+    "would_have_asked in halt envelope captures only {default, choices} — never question text, description, or header",
     "Allowlist env override (Z_HARNESS_OVERNIGHT_AUTODECIDE) is a JSON object merged over defaults, not a replacement",
     "Preflight slug-collision check runs BEFORE lock acquisition and BEFORE Z_HARNESS_NO_ASK is set; triggers when first step is plan OR research and PLAN.md already exists",
     "New sub-RUN identification uses set-difference of archive dirs excluding *-overnight-* dirs (C14 algorithm); 0 or >1 new dirs emits run_id_ambiguous as top-level event (to overnight run_id) then errors the step",
     "run-status.sh classify tail-reads last 20 events and tolerates malformed trailing JSON; no valid events -> unknown",
     "Z_HARNESS_ASK_ALL=1 AND Z_HARNESS_NO_ASK=halt is a rejected config conflict; emits config_conflict event and exits nonzero",
     "morning-report.py is invoked directly (not inlined) in Phase 4.3; failure is advisory-only and does not block lock release",
-    "overnight_lock_corrupt is in the HALT events allowlist in run-status.sh classify"
+    "overnight_lock_corrupt is in the HALT events allowlist in run-status.sh classify",
+    "Policy mode (fail-closed H4): cmd_check_no_ask returns unhandled_gate instead of halt when _is_policy_mode() is true and a registered gate is not covered by the frozen allowlist",
+    "Hard-halt list and truly-unregistered gates (path 4: unknown_ask_blocked) are never promoted to unhandled_gate even in policy mode",
+    "bench-autonomy-check.sh (make bench-autonomy-check) must exit 0 before any unattended policy-mode overnight run; it checks callsite registration AND policy gate coverage"
   ],
   "gotchas": [
-    "Fail-OPEN for unregistered callsites: only 12 AskUserQuestion callsites are instrumented; all other callsites will block the conversation even with Z_HARNESS_NO_ASK=halt. scripts/lint-askuser.sh is documentation/audit tooling, NOT runtime enforcement",
-    "Run scripts/lint-askuser.sh --strict before launching a long chain to identify uninstrumented callsites on your hot path",
+    "Fail-OPEN for unregistered callsites: AskUserQuestion callsites not in QUESTION_IDS will block the conversation even with Z_HARNESS_NO_ASK=halt. Use make bench-autonomy-check before policy-mode runs; use scripts/lint-askuser.sh --strict before standard overnight runs",
+    "unhandled_gate result from cmd_check_no_ask is a LOUD abort signal distinct from halt: orchestrators must abort the run, not merely stop the step; it means the frozen policy is incomplete",
+    "Policy mode is active when BOTH Z_HARNESS_NO_ASK=halt AND Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE (or Z_HARNESS_OVERNIGHT_AUTODECIDE) is non-empty; setting NO_ASK=halt alone without an allowlist does NOT activate policy mode",
+    "bench-autonomy-check.sh step 2 imports zharness_pier.policy from z-harness/bench/pier; the pier package must be present. Use --policy <path> to override the default benchmark-autonomy.yaml location",
     "Preflight now triggers on first step = plan OR research (not just plan); research-build preset will halt if PLAN.md already exists",
     "Z_HARNESS_OVERNIGHT_AUTODECIDE value must be a JSON object string, not comma-separated key=value pairs",
-    "Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE is an internal export; visible via `config.py inspect-all`; do not set manually \u2014 the orchestrator overwrites it",
+    "Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE is an internal export; visible via config.py inspect-all; do not set manually — the orchestrator overwrites it",
     "Lock stale threshold defaults to 7200s (2h) because /z-implement-all may not yield control for extended periods; heartbeat fires only at step transitions, not inside Skill calls",
     "run-status.sh classify for implement-all requires --command implement-all flag because /z-implement-all emits implement_end per task rather than a single chain-end event; classify then also checks TASKS.md checkbox state",
     "HEAD SHA mismatch on resume surfaces a CRITICAL warning but proceeds (warn-and-continue, not a hard halt)",
@@ -180,7 +185,7 @@
     "would_have_asked field in halt envelope is restricted to {default, choices} to prevent leakage of context strings into events.jsonl",
     "MORNING_REPORT.md is overwritten on every chain run; previous reports are not archived automatically",
     "Lock file is both the concurrency lock AND the flock target for overnight-state.json writes (single lock per C4); do not use a separate flock file",
-    "Z_HARNESS_OVERNIGHT_AUTO_COMPACT=1 only logs a compact_recommended event; it does not trigger automatic context compaction \u2014 the caller must observe the event",
+    "Z_HARNESS_OVERNIGHT_AUTO_COMPACT=1 only logs a compact_recommended event; it does not trigger automatic context compaction — the caller must observe the event",
     "morning-report.py finds the latest overnight run by lexical sort of *-overnight-* dirs in the archive; if the wrong run is selected, MORNING_REPORT.md will reflect it silently",
     "run_id_ambiguous is a top-level event emitted to the overnight run_id (not the sub-run), so it appears in the overnight events.jsonl even when the sub-run cannot be identified"
   ],
@@ -206,12 +211,13 @@
     "brainstorm_halt": "{reason, question_id, rule_id}",
     "plan_halt": "{reason, question_id, rule_id}",
     "review_halt": "{reason, question_id, rule_id}",
-    "implement_all_halt": "{reason, question_id, rule_id} \u2014 reserved kind recognized by run-status.sh; v1 uses task_halt per-task; reserved for a future batch-level halt event",
+    "implement_all_halt": "{reason, question_id, rule_id} — reserved kind recognized by run-status.sh; v1 uses task_halt per-task; reserved for a future batch-level halt event",
     "slug_collision_halt": "{slug, conflicting_artifact, chain, first_step}",
     "overnight_lock_corrupt": "{path, parse_error}",
     "state_corrupt": "{path, error}",
     "head_sha_mismatch_at_resume": "{expected, actual, last_step}",
     "askuser_halted": "{question_id, would_have_asked}",
+    "unhandled_gate": "{question_id, reason} — emitted by _emit_unhandled_gate when policy mode is active and a registered gate is not covered by the frozen allowlist",
     "unknown_ask_blocked": "{question_id, callsite_hint}",
     "config_conflict": "{conflict, question_id}",
     "skill_tool_failure": "{step, position, message}",
@@ -246,9 +252,17 @@
       "commands/z-plan.md (Phase 2.5 decisions-doc approval gate)"
     ]
   },
+  "bench_autonomy_check": {
+    "make_target": "bench-autonomy-check",
+    "script": "scripts/bench-autonomy-check.sh",
+    "step1": "lint-askuser --strict scoped to commands/z-plan.md and commands/z-implement-all.md; asserts AskUserQuestion callsites are paired with resolve-question or check-no-ask",
+    "step2": "policy coverage assertion: loads z-harness/bench/pier/benchmark-autonomy.yaml via zharness_pier.policy.load_policy; checks every workflow.* gate referenced in z-plan.md, z-implement-all.md, z-implement-next.md is present in policy gates map",
+    "policy_path_default": "z-harness/bench/pier/benchmark-autonomy.yaml",
+    "policy_path_override_flag": "--policy <path>"
+  },
   "v1_deferrals": [
     "DAG / parallel-cluster overnight runs",
-    "Full retrofit of every AskUserQuestion callsite to halt-aware gates (v1: 12 total; rest are fail-OPEN)",
+    "Full retrofit of every AskUserQuestion callsite to halt-aware gates (v1: instrumented set only; rest are fail-OPEN)",
     "Subprocess-per-step architecture (v1 uses Skill-tool composition; context accumulation risk for step 4+)",
     "New push-notification backends beyond should-notify",
     "Auto-compact trigger (v1 only logs compact_recommended event)",

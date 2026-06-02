@@ -1,6 +1,7 @@
 # PROVIDERS — Runtime Registry Guide
 
-> Last updated: 2026-05-28
+> Last updated: 2026-06-01
+> Covers source: scripts/resolve-provider.py, scripts/resolve-provider.sh, scripts/discover-providers.py, commands/z-providers-discover.md, runtime/compat.py, runtime/contract/provider.schema.json, scripts/log-providers.sh, .z-harness/providers.json
 
 ## Overview
 
@@ -95,6 +96,67 @@ approach is `[roles.*.*]` tables in `config.toml` — see
 When `providers.json` `roles` is the only binding present, z-harness uses it
 and emits a `legacy_provider_roles_used` event as a reminder to migrate.  The
 TOML binding always takes precedence if both exist.
+
+---
+
+## Disabling providers: Z_HARNESS_CONSULT=off
+
+Set `Z_HARNESS_CONSULT=off` to run all commands in **single-model mode**.
+When this variable is set, `resolve-provider.py` returns the plaintext
+sentinel `none` (not JSON) and exits 0 for the three roles that would
+normally require a separate external model:
+
+- `consultant_primary`
+- `consultant_secondary`
+- `reviewer`
+
+The `none` sentinel is detected **before** any config file is loaded and
+**before** the `consultant_primary != consultant_secondary` distinctness check
+runs (lines 514-517 of `scripts/resolve-provider.py`).  The resolver skips
+both steps entirely for any off-mode role.
+
+### What consumers do on `none`
+
+Consumers that receive the `none` sentinel must not attempt JSON parsing.
+Their behavior by role:
+
+| Role | Consumer | Behavior on `none` |
+|------|----------|--------------------|
+| `consultant_primary` | `/z-plan` Phase 3 | Skips the external consult entirely; logs `{"phase":3,"reason":"Z_HARNESS_CONSULT=off"}` |
+| `consultant_secondary` | `/z-plan` Phase 7 | Skips the external consult entirely; logs `{"phase":7,"reason":"Z_HARNESS_CONSULT=off"}` |
+| `reviewer` | `/z-implement-all` review gate | Replaces external reviewer with a same-model self-review (`self-reviewer` agent subagent) |
+
+The `self-reviewer` agent (`agents/self-reviewer.md`) is a read-only
+inspection agent.  It produces the same response shape as the standard
+reviewer (blockers/majors/minors) but never calls `resolve-provider.sh` or
+any external CLI.
+
+### Observability
+
+`scripts/log-providers.sh` checks for the `none` sentinel before any JSON
+parse (line 34).  On `none`, it appends `${ROLE}=skipped(consult=off)` to the
+summary line and emits a `provider_resolution_skipped` event with payload
+`{"role": "<role>", "reason": "Z_HARNESS_CONSULT=off"}`.
+
+Normal summary (consult on):
+```
+[providers] consultant_primary=gemini-cli(gemini-2.5-pro)  consultant_secondary=codex-cli(gpt-5-codex)  reviewer=codex-cli(gpt-5-codex)
+```
+
+Single-model summary (consult off):
+```
+[providers] consultant_primary=skipped(consult=off)  consultant_secondary=skipped(consult=off)  reviewer=skipped(consult=off)
+```
+
+### When to use
+
+`Z_HARNESS_CONSULT=off` is intended for:
+
+- Local quick-turnaround runs where you do not want to pay for two model calls.
+- CI pipelines that have access to only one model credential.
+- Debugging command logic without triggering external provider bindings.
+
+Leave `Z_HARNESS_CONSULT` unset (or set to `on`) for normal multi-model operation.
 
 ---
 

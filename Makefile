@@ -1,5 +1,5 @@
 SHELL := /usr/bin/env bash
-.PHONY: conformance conformance-live conformance-record lint lint-strict preflight
+.PHONY: conformance conformance-live conformance-record lint lint-strict preflight bench-autonomy-check
 
 conformance:
 	python3 -m pytest tests/conformance/ -v
@@ -29,3 +29,10 @@ lint-strict:
 
 preflight:
 	bash scripts/preflight.sh
+
+# Benchmark autonomy pre-run gate.
+# Asserts (a) quick-build hot-path AskUserQuestion callsites are REGISTERED
+# and (b) every hot-path gate is present in the frozen benchmark-autonomy.yaml policy.
+# Exit 0 only if both pass; non-zero (loud) otherwise.
+bench-autonomy-check:
+	bash scripts/bench-autonomy-check.sh

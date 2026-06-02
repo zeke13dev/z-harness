@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+# bench-autonomy-check.sh — pre-run gate for benchmark autonomy policy.
+#
+# Checks:
+#   1. lint-askuser --strict: asserts that all AskUserQuestion callsites in the
+#      quick-build hot-path files (commands/z-plan.md, commands/z-implement-all.md)
+#      are REGISTERED (paired with a resolve-question or check-no-ask call).
+#   2. Policy coverage: every quick-build hot-path gate (question_id referenced in
+#      those files) is present in z-harness/bench/pier/benchmark-autonomy.yaml
+#      and the policy loads without validation errors.
+#
+# Exit 0 only if both checks pass; non-zero (loud) otherwise.
+#
+# Usage:
+#   scripts/bench-autonomy-check.sh [--policy <path>]
+#
+# --policy: optional override for the benchmark-autonomy.yaml path.
+#           Defaults to z-harness/bench/pier/benchmark-autonomy.yaml (relative
+#           to the repo root resolved from this script's location).
+
+set -euo pipefail
+
+SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPTS_DIR/.." && pwd)"
+
+# ---------------------------------------------------------------------------
+# Parse arguments
+# ---------------------------------------------------------------------------
+
+POLICY_PATH=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --policy)
+      shift
+      POLICY_PATH="$1"
+      shift
+      ;;
+    *)
+      echo "bench-autonomy-check: unknown argument: $1" >&2
+      echo "Usage: $0 [--policy <path>]" >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ -z "$POLICY_PATH" ]]; then
+  POLICY_PATH="$REPO_ROOT/z-harness/bench/pier/benchmark-autonomy.yaml"
+fi
+
+FAIL=0
+
+# ---------------------------------------------------------------------------
+# Step 1: lint-askuser --strict scoped to quick-build hot-path files
+# ---------------------------------------------------------------------------
+
+echo "==> bench-autonomy-check step 1: lint-askuser --strict (hot-path callsite audit)"
+echo "    Scoping to: commands/z-plan.md, commands/z-implement-all.md"
+
+HOT_PATH_FILES=(
+  "$REPO_ROOT/commands/z-plan.md"
+  "$REPO_ROOT/commands/z-implement-all.md"
+)
+
+UNREGISTERED_HOT=0
+for f in "${HOT_PATH_FILES[@]}"; do
+  if [[ ! -f "$f" ]]; then
+    echo "  ERROR: hot-path file not found: $f" >&2
+    FAIL=1
+    continue
+  fi
+
+  # Check if the file has AskUserQuestion callsites
+  if ! grep -q "AskUserQuestion" "$f" 2>/dev/null; then
+    echo "  OK: no AskUserQuestion in $f"
+    continue
+  fi
+
+  # A callsite is REGISTERED if the same file has resolve-question or check-no-ask
+  if grep -q "resolve-question\|check-no-ask" "$f" 2>/dev/null; then
+    echo "  OK: REGISTERED callsite(s) in ${f#"$REPO_ROOT/"}"
+  else
+    echo "  FAIL: UNREGISTERED AskUserQuestion callsite(s) in ${f#"$REPO_ROOT/"}" >&2
+    UNREGISTERED_HOT=$((UNREGISTERED_HOT + 1))
+    FAIL=1
+  fi
+done
+
+if [[ "$UNREGISTERED_HOT" -gt 0 ]]; then
+  echo "  ERROR: $UNREGISTERED_HOT hot-path file(s) have unregistered AskUserQuestion callsites." >&2
+  echo "  These gates will fail-open (block headless runs) under Z_HARNESS_NO_ASK=halt." >&2
+  echo "  Register them with resolve-question or check-no-ask before running the benchmark." >&2
+else
+  echo "  All hot-path callsites are registered."
+fi
+
+# ---------------------------------------------------------------------------
+# Step 2: Policy coverage assertion
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "==> bench-autonomy-check step 2: policy coverage assertion"
+echo "    Policy file: $POLICY_PATH"
+
+if [[ ! -f "$POLICY_PATH" ]]; then
+  echo "  ERROR: policy file not found: $POLICY_PATH" >&2
+  FAIL=1
+else
+  # Use Python to load + validate the policy and check coverage of hot-path gates.
+  PIER_PKG_DIR="$REPO_ROOT/z-harness/bench/pier"
+
+  python3 - <<PYEOF
+import sys
+import os
+
+# Add pier package to path so we can import zharness_pier.policy
+pier_pkg = "$PIER_PKG_DIR"
+sys.path.insert(0, pier_pkg)
+
+try:
+    from zharness_pier.policy import load_policy, PolicyError
+except ImportError as e:
+    print(f"  ERROR: cannot import zharness_pier.policy: {e}", file=sys.stderr)
+    sys.exit(1)
+
+policy_path = "$POLICY_PATH"
+try:
+    policy = load_policy(policy_path)
+except PolicyError as e:
+    print(f"  ERROR: policy validation failed: {e}", file=sys.stderr)
+    sys.exit(1)
+
+gates_in_policy = set(policy.get("gates", {}).keys())
+policy_version = policy.get("policy_version", "<unknown>")
+print(f"  Policy version: {policy_version}")
+print(f"  Gates in policy: {sorted(gates_in_policy)}")
+
+# Quick-build hot-path gate set: question_ids referenced in z-plan.md and
+# z-implement-all.md (and z-implement-next.md which is called by z-implement-all).
+import re
+repo_root = "$REPO_ROOT"
+hot_path_files = [
+    os.path.join(repo_root, "commands", "z-plan.md"),
+    os.path.join(repo_root, "commands", "z-implement-all.md"),
+    os.path.join(repo_root, "commands", "z-implement-next.md"),
+]
+
+pattern = re.compile(r'workflow\.[a-z_]+')
+hot_path_gates = set()
+for fp in hot_path_files:
+    if not os.path.exists(fp):
+        continue
+    with open(fp) as fh:
+        content = fh.read()
+    for m in pattern.findall(content):
+        hot_path_gates.add(m)
+
+print(f"  Hot-path gates (from command files): {sorted(hot_path_gates)}")
+
+# Every hot-path gate must be in the policy
+missing = hot_path_gates - gates_in_policy
+if missing:
+    print(f"  ERROR: missing from policy: {sorted(missing)}", file=sys.stderr)
+    print(f"  Add these gate(s) to {policy_path} with a deliberate value + rationale.", file=sys.stderr)
+    sys.exit(1)
+
+print(f"  Coverage OK: all {len(hot_path_gates)} hot-path gate(s) are present in the policy.")
+sys.exit(0)
+PYEOF
+  if [[ $? -ne 0 ]]; then
+    FAIL=1
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# Final verdict
+# ---------------------------------------------------------------------------
+
+echo ""
+if [[ "$FAIL" -ne 0 ]]; then
+  echo "bench-autonomy-check FAILED — fix the above errors before running the benchmark." >&2
+  exit 1
+else
+  echo "bench-autonomy-check PASSED — policy is complete and all hot-path gates are registered."
+  exit 0
+fi

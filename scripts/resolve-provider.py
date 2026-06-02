@@ -495,12 +495,26 @@ def compose_argv(provider_dict: dict, effective_model: str | None) -> list[str]:
 # Entry point
 # ---------------------------------------------------------------------------
 
+_CONSULT_OFF_ROLES: frozenset[str] = frozenset(
+    {"consultant_primary", "consultant_secondary", "reviewer"}
+)
+
+
 def main() -> None:
     if len(sys.argv) != 2:
         print("usage: resolve-provider.py <role>", file=sys.stderr)
         sys.exit(2)
 
     role = sys.argv[1]
+
+    # Z_HARNESS_CONSULT=off: return sentinel "none" for consultant/reviewer roles
+    # and skip the distinctness check.  Consumers that see "none" must skip the
+    # external-model dispatch entirely (see z-plan.md Phase 3/7 and
+    # z-implement-all.md reviewer gate).
+    consult_val = os.environ.get("Z_HARNESS_CONSULT", "on").strip().lower()
+    if consult_val == "off" and role in _CONSULT_OFF_ROLES:
+        print("none")
+        sys.exit(0)
 
     global_data, repo_data, global_path, repo_path = load_configs()
     merged = merge_with_shadow(global_data, repo_data, global_path, repo_path)

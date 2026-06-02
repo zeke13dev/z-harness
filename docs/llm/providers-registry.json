@@ -1,6 +1,6 @@
 {
   "concept": "providers-registry",
-  "last_updated": "2026-05-28",
+  "last_updated": "2026-06-01",
   "covers_spec": "none",
   "source_file": [
     "scripts/resolve-provider.py",
@@ -16,7 +16,9 @@
   "confidence": "high",
   "entry_points": [
     {"file": "scripts/resolve-provider.sh", "line": 1, "symbol": "resolve-provider.sh", "kind": "module", "summary": "Thin bash wrapper; single entrypoint for all consultant/reviewer dispatch sites"},
-    {"file": "scripts/resolve-provider.py", "line": 498, "symbol": "main", "kind": "fn", "summary": "Loads configs, merges, validates, checks PATH, enforces invariant, prints JSON descriptor"},
+    {"file": "scripts/resolve-provider.py", "line": 503, "symbol": "main", "kind": "fn", "summary": "Loads configs, merges, validates, checks PATH, enforces invariant, prints JSON descriptor or sentinel 'none'"},
+    {"file": "scripts/resolve-provider.py", "line": 498, "symbol": "_CONSULT_OFF_ROLES", "kind": "const", "summary": "frozenset of roles that return sentinel 'none' when Z_HARNESS_CONSULT=off: consultant_primary, consultant_secondary, reviewer"},
+    {"file": "scripts/resolve-provider.py", "line": 514, "symbol": "consult_val", "kind": "fn", "summary": "Z_HARNESS_CONSULT=off gate: prints 'none' and exits 0 before config load for _CONSULT_OFF_ROLES"},
     {"file": "scripts/resolve-provider.py", "line": 170, "symbol": "load_configs", "kind": "fn", "summary": "Locates and loads global + repo JSON; validates schema version; runs v1->v2 upgrade"},
     {"file": "scripts/resolve-provider.py", "line": 64, "symbol": "_upgrade_v1_to_v2", "kind": "fn", "summary": "In-memory v1->v2 upgrade: adds model_arg_template/model_env_var/default_model nulls; emits provider_schema_v1_upgraded (memoized per process+path)"},
     {"file": "scripts/resolve-provider.py", "line": 227, "symbol": "merge_with_shadow", "kind": "fn", "summary": "Per-key merge of global + repo configs across providers/roles/aliases with shadow detection"},
@@ -24,18 +26,20 @@
     {"file": "scripts/resolve-provider.py", "line": 331, "symbol": "_apply_aliases", "kind": "fn", "summary": "Checks provider name against aliases map; substitutes canonical and emits provider_alias_used (memoized); emits legacy_provider_roles_used when is_legacy=True"},
     {"file": "scripts/resolve-provider.py", "line": 293, "symbol": "_emit_alias_used", "kind": "fn", "summary": "Emits provider_alias_used event via log-event.sh (best-effort, non-fatal; memoization in _apply_aliases)"},
     {"file": "scripts/resolve-provider.py", "line": 314, "symbol": "_emit_legacy_roles_used", "kind": "fn", "summary": "Emits legacy_provider_roles_used event when providers.json.roles is the active role-binding path"},
-    {"file": "scripts/resolve-provider.py", "line": 422, "symbol": "check_consultant_distinctness", "kind": "fn", "summary": "Invariant: consultant_primary != consultant_secondary; exits 1 on collision"},
+    {"file": "scripts/resolve-provider.py", "line": 422, "symbol": "check_consultant_distinctness", "kind": "fn", "summary": "Invariant: consultant_primary != consultant_secondary; exits 1 on collision; SKIPPED when Z_HARNESS_CONSULT=off"},
     {"file": "scripts/resolve-provider.py", "line": 443, "symbol": "compose_argv", "kind": "fn", "summary": "Builds full argv from descriptor + effective_model; renders {model} in model_arg_template; raises ValueError if no model"},
     {"file": "scripts/resolve-provider.py", "line": 112, "symbol": "_validate_provider_entry", "kind": "fn", "summary": "Validates all required fields for a single provider entry; exits 2 on any field violation"},
     {"file": "scripts/discover-providers.py", "line": 58, "symbol": "discover", "kind": "fn", "summary": "Probes PATH for known CLIs; returns proposed providers.json dict (never writes)"},
-    {"file": "scripts/log-providers.sh", "line": 1, "symbol": "log-providers.sh", "kind": "module", "summary": "Resolves all three roles, prints summary line, emits provider_resolved events"},
+    {"file": "scripts/log-providers.sh", "line": 34, "symbol": "none-sentinel-guard", "kind": "module", "summary": "Detects 'none' sentinel before JSON parse; emits provider_resolution_skipped event; appends role=skipped(consult=off) to summary"},
     {"file": "runtime/compat.py", "line": 15, "symbol": "resolve_provider", "kind": "fn", "summary": "Python API wrapper around resolve-provider.py for runtime dispatch layer"},
     {"file": "runtime/contract/provider.schema.json", "line": 1, "symbol": "ProviderRegistry", "kind": "struct", "summary": "JSON Schema Draft 7 for .z-harness/providers.json; accepts version 1+2; permits kind=cli|sdk; allow_cross_vendor_env field"}
   ],
   "depends_on": ["scripts", "agents"],
   "consumed_by": ["commands", "agents", "runtime-dispatch", "personas-and-roles"],
   "invariants": [
-    "consultant_primary and consultant_secondary must resolve to distinct provider names (raw roles map values) — resolver exits 1 if they collide.",
+    "consultant_primary and consultant_secondary must resolve to distinct provider names (raw roles map values) — resolver exits 1 if they collide. This check is SKIPPED entirely when Z_HARNESS_CONSULT=off.",
+    "When Z_HARNESS_CONSULT=off, resolve-provider.py prints the plaintext sentinel 'none' (exit 0) for roles consultant_primary, consultant_secondary, and reviewer — before any config file is loaded.",
+    "The sentinel 'none' is a plaintext string, not JSON. Any consumer that receives 'none' must skip JSON parsing and must not dispatch to an external model CLI.",
     "Repo-local config overrides user-global config per-key across providers, roles, and aliases sections. Shadowing emits provider_shadowed event and stderr warning, de-duped per parent process.",
     "Schema version field must be 1 or 2; any other value causes exit 2. Version 1 is upgraded in-memory to v2 automatically.",
     "Every provider entry in the merged config is validated on every resolver call, not just the entry being resolved.",
@@ -45,6 +49,9 @@
     ".z-harness/providers.json v2 ships both old names (codex/gemini/claude) and new -cli names (codex-cli/gemini-cli/claude-cli) as first-class provider entries; aliases map provides forward-compat without deleting old entries."
   ],
   "gotchas": [
+    "Z_HARNESS_CONSULT=off bypasses config loading and the distinctness check entirely — setting it is sufficient; no providers.json change needed.",
+    "log-providers.sh checks for 'none' at line 34 BEFORE calling any python JSON parse. Previously, receiving 'none' caused json.load to crash. The guard ensures a clean provider_resolution_skipped event is emitted instead.",
+    "Consumer contract for 'none': /z-plan skips Phase 3 and Phase 7 external consults; /z-implement-all routes its reviewer gate to a self-reviewer subagent (agents/self-reviewer.md) that never calls resolve-provider or any external CLI.",
     "Schema at runtime/contract/provider.schema.json permits kind='sdk' and optional auth_env/session_resumable/allow_cross_vendor_env, but resolve-provider.py validates only kind='cli' — SDK entries pass schema but cause exit 2 if resolved.",
     "Z_HARNESS_REPO_PROVIDERS env var overrides repo config path entirely, bypassing git-based discovery.",
     "Shadow de-dup stamp file is keyed on PPID, not PID — warning fires once per parent process tree, not once per subshell.",
