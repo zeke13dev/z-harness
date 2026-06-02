@@ -1,7 +1,7 @@
 # PERSONAS — Persona System Guide
 
-> Last updated: 2026-06-01
-> Covers source: scripts/resolve-persona.py, scripts/resolve-persona.sh, runtime/contract/persona.schema.json, personas/README.md, personas/builtin/codex-default-consultant.md, personas/builtin/gemini-default-consultant.md, personas/builtin/codex-default-reviewer.md, commands/z-personas.md, skills/z-personas/SKILL.md, runtime/drivers/_persona_utils.py, runtime/drivers/antigravity/persona_export.py, runtime/drivers/cursor/persona_export.py, runtime/drivers/codex/persona_export.py, runtime/drivers/claude/persona_export.py, runtime/dispatch/persona_prompt.py, runtime/dispatch/dispatcher.py
+> Last updated: 2026-06-02
+> Covers source: scripts/resolve-persona.py, scripts/resolve-persona.sh, runtime/contract/persona.schema.json, personas/README.md, personas/builtin/codex-default-consultant.md, personas/builtin/gemini-default-consultant.md, personas/builtin/codex-default-reviewer.md, commands/z-personas.md, skills/z-personas/SKILL.md, runtime/drivers/_persona_utils.py, runtime/drivers/antigravity/persona_export.py, runtime/drivers/cursor/persona_export.py, runtime/drivers/codex/persona_export.py, runtime/drivers/claude/persona_export.py, runtime/contract/event.schema.json
 
 ## Overview
 
@@ -45,8 +45,8 @@ VERDICT: PASS | FAIL | BLOCKED
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `name` | yes | Unique identifier.  Must match `^[a-z0-9-]+$` (kebab-case; no dots or slashes). |
-| `description` | no | Human-readable summary shown by `/z-personas list`. |
+| `name` | yes | Unique identifier.  Must match `^[a-z][a-z0-9-]*$` (kebab-case; starts with a lowercase letter; no dots, slashes, underscores, or trailing hyphen). |
+| `description` | yes | Human-readable summary shown by `/z-personas list`. |
 | `compatible_roles` | no | Soft hint: list of roles this persona is designed for.  A mismatch emits a `persona_compat_warning` event but does not block. |
 | `contract` | no | Expected output structure: `freeform`, `review-verdict`, or `strict-json`.  When the bound role declares an `expected_contract`, a mismatch here is a hard failure at startup. |
 
@@ -131,22 +131,50 @@ in this priority:
 
 ---
 
+## Role registry
+
+The role registry (`_ROLE_REGISTRY` in `scripts/resolve-persona.py`, line 88)
+is the single source of truth for known roles and their expected contracts:
+
+| Role | Expected contract | Description |
+|------|------------------|-------------|
+| `consultant_primary` | `freeform` | Primary consultant slot in `/z-plan`, `/z-debug`, etc. |
+| `consultant_secondary` | `freeform` | Secondary consultant slot. |
+| `reviewer` | `review-verdict` | Code reviewer; requires PASS/FAIL/BLOCKED output. |
+| `implementer` | _(any)_ | Task implementer in persona rotation. |
+| `ideator` | _(any)_ | Brainstorm ideator; drawn distinctly by `/z-brainstorm`. |
+
+A role not in `_ROLE_REGISTRY` causes `random-for-role` and `random-distinct-for-role`
+to exit 2. Add new roles to `_ROLE_REGISTRY` before calling either subcommand.
+
+---
+
 ## The `ideator` role (brainstorm persona diversity)
 
 `ideator` is a role used by `/z-brainstorm` to give its three parallel ideators
 (Claude, Codex, Gemini) **distinct** personas — persona diversity layered on top
-of vendor diversity. Unlike the `implementer` rotation, this is **not** an
+of vendor diversity.  Unlike the `implementer` rotation, this is **not** an
 experiment: there are no control / no-persona baseline arms and no per-ideator
-outcome tracking (an ideator has no measurable terminal). It is gated on the
+outcome tracking (an ideator has no measurable terminal).  It is gated on the
 `brainstorm.personas` config knob (default ON); when OFF the brainstorm dispatch
 is byte-identical to the vendor-only behaviour.
 
 A persona joins the ideator pool by listing `ideator` in its `compatible_roles`.
-The shipped pool is the set of bold, perspective-driven builtins (e.g.
-`pattern-oracle`, `anti-consensus-surgeon`, `cut-it-half`, `brutalist-architect`,
-`biomimetic-architect`, `physics-reductionist`, `fossil-whisperer`,
-`cobol-greybeard`). Review-shaped personas (e.g. those with `contract:
-review-verdict`) are intentionally excluded — they produce findings, not framings.
+The shipped pool (8 builtins with `compatible_roles: [..., ideator]`) is:
+
+| Persona | Primary roles also declared |
+|---------|----------------------------|
+| `pattern-oracle` | consultant_primary, consultant_secondary |
+| `anti-consensus-surgeon` | consultant_secondary, reviewer |
+| `cut-it-half` | reviewer, consultant_primary |
+| `brutalist-architect` | consultant_primary, implementer, reviewer |
+| `biomimetic-architect` | consultant_primary, consultant_secondary |
+| `physics-reductionist` | consultant_secondary, implementer |
+| `fossil-whisperer` | consultant_primary, consultant_secondary |
+| `cobol-greybeard` | consultant_primary, reviewer |
+
+Review-shaped personas (those with `contract: review-verdict`) are intentionally
+excluded from the ideator pool — they produce findings, not framings.
 
 Drawing is done by a dedicated subcommand that omits the control arms and draws
 without replacement:
@@ -159,10 +187,11 @@ python scripts/resolve-persona.py random-distinct-for-role ideator --count=3
 
 **Graceful degradation:** if the ideator pool holds fewer than the requested
 count, the subcommand returns a shorter array (or `[]` when empty), notes the
-underflow on stderr, and exits 0. `/z-brainstorm` binds the returned personas
+underflow on stderr, and exits 0.  `/z-brainstorm` binds the returned personas
 positionally (claude → codex → gemini) and runs any unfilled slot vanilla,
 recording the binding (or `<none>`) in the BRAINSTORM.md `ideator_personas`
-frontmatter map. Each bound ideator emits a `persona_bound` event for attribution.
+frontmatter map.  Each bound ideator emits a `persona_bound` event for
+attribution.
 
 ---
 
@@ -288,7 +317,9 @@ Example output of `/z-personas roles`:
 
 ## Builtin personas
 
-Three personas ship with the harness under `personas/builtin/`:
+Three default-binding personas ship under `personas/builtin/` for consultant and
+reviewer roles.  Eight additional builtins carry `compatible_roles: [..., ideator]`
+for `/z-brainstorm` pool membership (see the ideator table above).
 
 | Name | Compatible roles | Contract |
 |------|-----------------|----------|
@@ -296,7 +327,7 @@ Three personas ship with the harness under `personas/builtin/`:
 | `gemini-default-consultant` | `consultant_primary`, `consultant_secondary` | `freeform` |
 | `codex-default-reviewer` | `reviewer` | `review-verdict` |
 
-These form the default bindings used when no TOML overrides are present.
+These three form the default bindings used when no TOML overrides are present.
 
 ---
 
@@ -335,7 +366,7 @@ Output:
 ```
 my-custom-consultant
   [1] personas/builtin/my-custom-consultant.md      (builtin)
-  [2] ~/.config/z-harness/personas/my-custom-consultant.md  (user-global) ← winner
+  [2] ~/.config/z-harness/personas/my-custom-consultant.md  (user-global) <- winner
 ```
 
 If your edits to a repo-local persona seem to have no effect, check whether
@@ -368,7 +399,7 @@ persona with the correct contract declaration.
 ## Authoring a custom persona
 
 1. Create `<repo>/.z-harness/personas/<your-name>.md`.
-2. Add frontmatter with at least `name: <your-name>`.
+2. Add frontmatter with at least `name: <your-name>` and `description: <...>`.
 3. Write the prompt prefix in the body.
 4. Bind it in `config.toml`:
    ```toml
@@ -376,6 +407,10 @@ persona with the correct contract declaration.
    persona = "<your-name>"
    ```
 5. Run `/z-personas validate` to check for contract/compat issues.
+
+To make a persona eligible for `/z-brainstorm` ideator draws, add `ideator`
+to its `compatible_roles` list.  Do not declare `contract: review-verdict` on
+ideator personas — that contract is filtered for brainstorm use.
 
 ---
 
@@ -388,9 +423,9 @@ persona with the correct contract declaration.
 | `model_resolved` | Records `{command, model, runtime, source}` at dispatch. |
 | `persona_compat_warning` | A persona is bound to a role not in its `compatible_roles`. |
 | `persona_shadowed` | A persona name is defined in more than one layer (once per process per name). |
-| `persona_binding_chimera` | A binding's three axes resolve from ≥2 different config layers. |
+| `persona_binding_chimera` | A binding's three axes resolve from >=2 different config layers. |
 | `legacy_provider_roles_used` | Resolution falls back to `providers.json` `roles` map. |
-| `persona_random_selected` | A random draw was made via `random-for-role` or `forced-control`. Payload: `{role, selected, candidates, draw_id, selection_source}`. Optional join fields (stamped when env vars are exported): `task_id`, `attempt_id`, `persona_id`. Emitted BEFORE the agent runs. |
+| `persona_random_selected` | A random draw was made via `random-for-role`, `random-distinct-for-role`, or `forced-control`. Payload: `{role, selected, candidates, draw_id, selection_source}`. Optional join fields (stamped when env vars are exported): `task_id`, `attempt_id`, `persona_id`. Emitted BEFORE the agent runs.  For `random-distinct-for-role`, one event is emitted per picked persona, all sharing the same `draw_id`. |
 | `persona_attempt_outcome` | Per-attempt terminal outcome (only when `experiment.persona_rotation=true`). Payload: `{run_id, command, role, task_id, attempt_id, persona_id, draw_id, complexity_tier, diff_size, review_cycles, retries, blocker_count, wall_ms, status}`. Join key: `attempt_id` + `draw_id`. |
 
 > Note: as of T103, `persona_bound`, `persona_override_used`, and
@@ -400,7 +435,7 @@ persona with the correct contract declaration.
 
 ## Persona rotation (experimental)
 
-The persona-rotation experiment rotates which persona is used for the `implementer` and `reviewer` roles across z-harness runs, collecting passive outcome data to compare persona effectiveness. It is **on by default** and gated by `experiment.persona_rotation` in config (see `docs/human/config.md`).
+The persona-rotation experiment rotates which persona is used for the `implementer` and `reviewer` roles across z-harness runs, collecting passive outcome data to compare persona effectiveness.  It is **on by default** and gated by `experiment.persona_rotation` in config (see `docs/human/config.md`).
 
 ### How it works
 
@@ -426,7 +461,8 @@ When `experiment.persona_rotation=true`, the Phase 3 / Phase 7 consultant dispat
 
 | `selection_source` | Meaning |
 |-------------------|---------|
-| `random_role_pool` | Normal random draw from eligible personas. |
+| `random_role_pool` | Normal random draw from eligible personas (single draw, with replacement allowed across attempts). |
+| `random_role_pool_distinct` | Draw from `random-distinct-for-role` — no replacement within the same batch (used by `/z-brainstorm` ideator). |
 | `forced_control` | Forced `boring-anchor` draw on the Nth-attempt cadence. |
 | `fallback_empty_pool` | No eligible personas found; fell back to `boring-anchor`. **Quarantined in analysis** — never counted as a persona sample. |
 | `fixed_panel` | Panel member in a fixed 5-panel consult (plan/debug phases). |
@@ -449,6 +485,8 @@ When `experiment.persona_rotation=true`, the Phase 3 / Phase 7 consultant dispat
 - **Primary delta baseline** in `persona-stats.py`. All per-stratum `delta_vs_baseline` values are computed against `no-persona` when the stratum has at least one no-persona sample.
 - **Disk filtering.** `_enumerate_role_compatible_personas` filters out any `no-persona.md` found on disk so the hardcoded sentinel is the only source of `no-persona` draws.
 
+> Note: `boring-anchor` and `no-persona` are both **excluded** from the `random-distinct-for-role` pool (the ideator path). That subcommand draws only real content personas for diversity.
+
 ### Analysis baseline resolution
 
 `persona-stats.py` resolves the delta baseline per `(role, complexity_tier)` stratum in this order:
@@ -458,12 +496,13 @@ When `experiment.persona_rotation=true`, the Phase 3 / Phase 7 consultant dispat
 
 Both `no-persona` and `boring-anchor` appear as normal tracked arms in every report section. `fallback_empty_pool` draws are quarantined and never enter any baseline.
 
-### New subcommands in `resolve-persona.py`
+### Subcommands in `resolve-persona.py`
 
 | Subcommand | Purpose |
 |-----------|---------|
-| `random-for-role <role> [--exclude=<ids>] [--seed=<s>]` | Draw a random persona for the role; returns resolve-shaped JSON + `{selection_source, draw_id, candidates}`. |
-| `forced-control <role>` | Return `boring-anchor` tagged `selection_source: forced_control`. |
+| `random-for-role <role> [--exclude=<ids>] [--seed=<s>]` | Draw a random persona for the role; returns resolve-shaped JSON + `{selection_source, draw_id, candidates}`. Pool includes boring-anchor and no-persona. |
+| `random-distinct-for-role <role> --count=<N> [--exclude=<ids>] [--seed=<s>]` | Draw up to N distinct personas without replacement, **excluding** boring-anchor and no-persona. Returns JSON array. Underflow returns shorter array (or `[]`), notes on stderr, exits 0. Used by `/z-brainstorm` (`brainstorm.personas` knob). Each pick emits `persona_random_selected` with `selection_source=random_role_pool_distinct`; all picks share one `draw_id`. |
+| `forced-control <role> [--arm=<boring-anchor\|no-persona>]` | Return the forced-control arm tagged `selection_source=forced_control`. Default arm is `boring-anchor`. |
 | `control-counter --increment` | Atomically read + increment + persist the repo-level forced-control cadence counter in `.z-harness/.persona-control-counter`. Returns the new counter value. |
 
 ### Join keys for analysis
@@ -471,7 +510,7 @@ Both `no-persona` and `boring-anchor` appear as normal tracked arms in every rep
 | Field | Present on | Purpose |
 |-------|-----------|---------|
 | `attempt_id` | `persona_bound`, `persona_attempt_outcome` | Links all events for one task attempt |
-| `draw_id` | `persona_random_selected`, `persona_bound`, `persona_attempt_outcome` | Links draw event to outcome |
+| `draw_id` | `persona_random_selected`, `persona_bound`, `persona_attempt_outcome` | Links draw event to outcome; shared across all picks in a single `random-distinct-for-role` call |
 | `reviewer_participant` | `persona_bound` (reviewer) | `base_codex` or `random_arm` — disambiguates the two reviewer arms |
 
 > Use `scripts/persona-stats.py` to join these events and compute per-persona outcome deltas. See `docs/human/scripts.md` for usage.

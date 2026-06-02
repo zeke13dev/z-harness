@@ -41,9 +41,10 @@ Set `$Z_HARNESS_REPO_CONFIG` to override the git-root discovery path (exits 2 if
 | `docs.always_apply` | string | `always` | `always` \| `never` | Whether light flows auto-dispatch doc-fetcher when `docs/llm/INDEX.json` exists. `always` matches current /z-do default behavior. `never` skips doc-fetcher. **Applies only to light flows (slice 1: /z-do). Heavy flows always dispatch doc-fetcher regardless of this knob.** |
 | `experiment.persona_rotation` | bool | `true` | `true` \| `false` | Master kill-switch for the persona-rotation experiment. When `true` (default), `/z-implement-all` and `/z-implement-next` draw a random persona for each implementer attempt, dispatch a dual reviewer (base codex + random-arm advisory), and emit `persona_attempt_outcome` events. `/z-plan` and `/z-debug` use the fixed 5-panel consult. When `false`, all rotation behavior is a no-op — previous behavior is restored. Set to `false` to pause data collection. |
 | `experiment.control_every_n` | int | `5` | positive integer | Forced-control cadence: every Nth implementer attempt **across the entire repo** uses `boring-anchor` (the baseline persona) instead of a random draw. Counter persists in `.z-harness/.persona-control-counter`. Default 5 means every 5th attempt is a control sample. |
+| `brainstorm.personas` | bool | `true` | `true` \| `false` | Whether `/z-brainstorm` injects persona diversity when generating ideas. When `true` (default), brainstorm sessions draw from a diverse persona set. When `false`, brainstorm runs without persona injection. Exported as `Z_HARNESS_BRAINSTORM_PERSONAS`. |
 | `runtime.consult` | string | `on` | `on` \| `off` | Single-model mode. When `off`, the `consultant_primary`, `consultant_secondary`, and `reviewer` roles resolve to the `none` sentinel, so cross-LLM consultation and review are skipped (no Gemini/Codex dispatch). Exported as `Z_HARNESS_CONSULT` (not `Z_HARNESS_RUNTIME_CONSULT` — see the transliteration note), which `resolve-provider.py` reads. |
 
-For `[workflow]`, `[followup]`, `[axioms]`, and `[experiment]` knobs, see the sections below.
+For `[workflow]`, `[followup]`, `[axioms]`, `[brainstorm]`, and `[experiment]` knobs, see the sections below.
 
 ## The transliteration rule
 
@@ -59,6 +60,7 @@ Env-var overrides follow a deterministic rule: lowercase TOML dotted-key → pre
 | `axioms.kernel_budget_chars` | `Z_HARNESS_AXIOMS_KERNEL_BUDGET_CHARS` |
 | `axioms.extract_min_recurrence` | `Z_HARNESS_AXIOMS_EXTRACT_MIN_RECURRENCE` |
 | `axioms.auto_extract_post_run` | `Z_HARNESS_AXIOMS_AUTO_EXTRACT_POST_RUN` |
+| `brainstorm.personas` | `Z_HARNESS_BRAINSTORM_PERSONAS` |
 | `runtime.consult` | `Z_HARNESS_CONSULT` (alias — **not** the mechanical `Z_HARNESS_RUNTIME_CONSULT`) |
 
 For workflow, followup, and experiment keys, the rule applies identically.
@@ -143,7 +145,7 @@ Valid event kinds: `approval`, `phase_end`, `error`.
 
 Prints all configuration knobs with their current effective value, source layer, and persistence class. Covers three categories:
 
-1. **TOML-persistent keys** — every key in `DEFAULTS` (all `notify.*`, `docs.*`, `workflow.*`, `followup.*`, `axioms.*`, `experiment.*`)
+1. **TOML-persistent keys** — every key in `DEFAULTS` (all `notify.*`, `docs.*`, `workflow.*`, `followup.*`, `axioms.*`, `brainstorm.*`, `experiment.*`)
 2. **Registered question_ids** — every entry in `QUESTION_IDS`, showing the resolver envelope result
 3. **Env-only knobs** — environment variables that affect behavior but are never written to TOML
 
@@ -642,6 +644,33 @@ auto_extract_post_run = true
 - `axioms.enabled` and `axioms.auto_extract_post_run` must be `true` or `false`; `axioms.kernel_budget_chars` and `axioms.extract_min_recurrence` must be positive integers (≥1).
 - Repo/env layer violations exit 2 (hard fail); global layer violations soft-warn and fall back to defaults.
 - `axioms.enabled = false` is a complete no-op for resolution: `_load_axiom_matches` returns `[]` and the envelope is byte-identical to the pre-axiom result.
+
+## The knobs ([brainstorm] section)
+
+The `[brainstorm]` TOML section controls persona-diversity behavior in `/z-brainstorm`.
+
+| Key | Type | Default | Env var | Description |
+|-----|------|---------|---------|-------------|
+| `brainstorm.personas` | bool | `true` | `Z_HARNESS_BRAINSTORM_PERSONAS` | When `true` (default), `/z-brainstorm` injects persona diversity when generating ideas. When `false`, brainstorm sessions run without persona injection — all ideas come from a single neutral perspective. |
+
+**TOML example** (`.z-harness/config.toml`):
+
+```toml
+[brainstorm]
+personas = true
+```
+
+**Kill-switch** — to disable persona injection in brainstorm:
+
+```bash
+export Z_HARNESS_BRAINSTORM_PERSONAS=false
+# or persistently:
+scripts/config.sh set brainstorm.personas false --scope=project
+```
+
+**Invariants:**
+- `brainstorm.personas` must be `true` or `false`. Repo/env layer violations exit 2 (hard fail); global layer violations soft-warn and fall back to the default (`true`).
+- `brainstorm.personas = false` is a no-op for all non-brainstorm commands — it gates only `/z-brainstorm` persona diversity.
 
 ## The knobs ([experiment] section)
 
