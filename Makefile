@@ -10,12 +10,18 @@ test:
 	python3 -m pytest tests/ scripts/ runtime/
 
 # Standalone shell test scripts (bash assertion harnesses, not pytest).
-# Run for local verification; each script self-reports pass/fail counts.
+# Each script self-reports pass/fail counts. Gated in CI (tests.yml).
+# The *test*.sh scripts run with no args; overnight-preflight.sh and
+# normalize-task-state.sh expose their tests behind a --self-test subcommand.
 test-sh:
 	@_fail=0; \
 	for t in $$(ls scripts/*test*.sh | grep -v research); do \
 	  echo "==> $$t"; \
 	  bash "$$t" || { echo "FAILED: $$t" >&2; _fail=1; }; \
+	done; \
+	for t in scripts/overnight-preflight.sh scripts/normalize-task-state.sh; do \
+	  echo "==> $$t --self-test"; \
+	  bash "$$t" --self-test || { echo "FAILED: $$t" >&2; _fail=1; }; \
 	done; \
 	exit $$_fail
 

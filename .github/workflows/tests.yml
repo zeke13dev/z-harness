@@ -1,12 +1,13 @@
 name: Tests
 
-# Primary regression gate for the z-harness Python test suite.
+# Primary regression gate for the z-harness test suites (Python + shell).
 #
 # Before this workflow existed, CI ran ONLY tests/conformance/ (see
-# conformance.yml) plus the AskUser lint — leaving the ~1800-test main suite
-# (tests/ + scripts/ + runtime/tests/) completely ungated. A repo-wide change
-# such as the external-artifact-base flip could break dozens of tests and still
-# merge green. This job closes that gap.
+# conformance.yml) plus the AskUser lint — leaving the ~1800-test main Python
+# suite (tests/ + scripts/ + runtime/) and all the bash assertion harnesses
+# (scripts/*test*.sh) completely ungated. A repo-wide change such as the
+# external-artifact-base flip could break dozens of tests and still merge green.
+# The `pytest` and `shell` jobs below close that gap.
 
 on:
   pull_request:
@@ -58,3 +59,31 @@ jobs:
         with:
           name: pytest-report
           path: pytest-report.xml
+
+  shell:
+    # Standalone bash assertion harnesses (scripts/*test*.sh + the two
+    # --self-test scripts). Previously ungated; `make test-sh` runs them all.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # The shell tests shell out to Python helpers (config.py needs tomllib).
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install pytest tomlkit
+
+      - name: Configure git identity
+        # The shell tests git-init throwaway repos and commit.
+        run: |
+          git config --global user.email "ci@z-harness.test"
+          git config --global user.name "z-harness CI"
+
+      - name: Run shell test suite
+        run: make test-sh
