@@ -427,14 +427,70 @@ Block here until the user has approved the decisions doc.
      <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
      cannot complete without subagent support; document the gap in
      phase3-decisions-final.md and proceed to Phase 4 without cross-LLM input. -->
-Spawn **both** consultants in parallel in a single message:
+
+**Consult-off guard.** Before spawning any consultant, check the runtime signal:
+
+```bash
+CONSULT_PROVIDER="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-provider.py" consultant_primary 2>/dev/null)"
+```
+
+If `CONSULT_PROVIDER == "none"` (i.e. `Z_HARNESS_CONSULT=off`):
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+- Record tentative decisions as final in `phase3-decisions-final.md`.
+- Emit a `consult_skipped` event:
+  ```bash
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
+    "$RUN" consult_skipped \
+    '{"phase":3,"reason":"Z_HARNESS_CONSULT=off"}'
+  ```
+- Proceed directly to Phase 4.
+
+**Fixed 5-panel dispatch (when `experiment.persona_rotation` is on):**
+
+Check the config knob:
+
+```bash
+PERSONA_ROTATION="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get experiment.persona_rotation 2>/dev/null || echo "true")"
+```
+
+If `PERSONA_ROTATION == "true"`, use the **fixed 5-member panel** instead of the standard 2-consultant dispatch. The panel arms are fixed (no randomness):
+
+| Arm | Provider | Model |
+|---|---|---|
+| gemini | `agy` | (default) |
+| claude-sonnet | `cursor` | `claude-4.6-sonnet` (via `--model claude-4.6-sonnet`) |
+| grok | `cursor` | `grok-4.3` (via `--model grok-4.3`) |
+| composer | `cursor` | `composer-2.5` (via `--model composer-2.5`) |
+| codex-5.5 | `codex-cli` | (default) |
+
+Before dispatching each panel member, emit a `persona_bound` event logging the arm:
+
+```bash
+for ARM in gemini claude-sonnet grok composer codex-5.5; do
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
+    "$(printf '{"run_id":"%s","command":"z-plan","role":"consultant","arm":"%s","selection_source":"fixed_panel","phase":3}' \
+       "$RUN" "$ARM")"
+done
+```
+
+Spawn all 5 panel members in parallel in a single message. Each receives the **entire approved decisions doc** with the consult-flagged decisions highlighted. Cursor-based arms pass their model via `--model <model>`:
+
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+
+Five calls total. When all return, synthesize across all five responses.
+
+If `PERSONA_ROTATION == "false"`, fall back to the standard 2-consultant behavior: spawn **both** consultants in parallel in a single message:
 
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 
-Each gets the **entire approved decisions doc** with the consult-flagged decisions highlighted. They can see all decisions and flag interactions between them. Two calls total, regardless of feature size.
+Each gets the **entire approved decisions doc** with the consult-flagged decisions highlighted. Two calls total, regardless of feature size.
 
-When both return:
+When all consultants return (from either the 5-panel or 2-consultant path):
 1. For each recommendation, articulate **one concrete reason it might be wrong** before accepting it. This is mechanical, not optional.
 2. Synthesize. Make the final call yourself, citing which inputs you weighed.
 3. Flag any shortcut over the robust long-lasting solution — requires explicit user approval in Phase 5.
@@ -490,6 +546,44 @@ Both obey **DRY / KISS / SOLID**. State explicitly how the plan respects each.
      <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
      Document the gap in the archive and proceed to Phase 8 without final
      review input. -->
+
+**Consult-off guard.** Before spawning any consultant, check the runtime signal:
+
+```bash
+CONSULT_PROVIDER_P7="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-provider.py" consultant_primary 2>/dev/null)"
+```
+
+If `CONSULT_PROVIDER_P7 == "none"` (i.e. `Z_HARNESS_CONSULT=off`):
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+- Document the gap in the archive.
+- Emit a `consult_skipped` event:
+  ```bash
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
+    "$RUN" consult_skipped \
+    '{"phase":7,"reason":"Z_HARNESS_CONSULT=off"}'
+  ```
+- Proceed directly to Phase 8.
+
+**Fixed 5-panel dispatch (when `experiment.persona_rotation` is on):**
+
+Reuse the `PERSONA_ROTATION` value resolved in Phase 3 (already set). If `PERSONA_ROTATION == "true"`, use the same **fixed 5-member panel** for Phase 7. Before dispatching, emit `persona_bound` events for each arm (same pattern as Phase 3, with `"phase":7`):
+
+```bash
+for ARM in gemini claude-sonnet grok composer codex-5.5; do
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
+    "$(printf '{"run_id":"%s","command":"z-plan","role":"consultant","arm":"%s","selection_source":"fixed_panel","phase":7}' \
+       "$RUN" "$ARM")"
+done
+```
+
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 - consultant-primary: "Critique this plan. What's wrong, missing, or fragile?"
 - consultant-secondary: same.

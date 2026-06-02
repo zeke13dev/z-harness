@@ -306,6 +306,11 @@ rules:
     output: .agent/rules/z-harness-scope-reconciler-brainstorm.md
     trigger: model_decision
     description: "Post-fanout Sonnet reconciler for HEAVY /z-brainstorm runs. Reads N per-chunk BRAINSTORM.md files, concatenates their framing sections under per-chunk headers, runs a cross-chunk anti-bias check to surface unique framings and contradictions, then ..."
+  - id: self-reviewer
+    source: agents/self-reviewer.md
+    output: .agent/rules/z-harness-self-reviewer.md
+    trigger: model_decision
+    description: "Read-only self-review agent used when Z_HARNESS_CONSULT=off. Reviews a diff vs SPEC.md and returns the same response shape as the standard reviewer (blockers/majors/minors). Does NOT call resolve-provider or any external model CLI."
   - id: spec-precheck
     source: agents/spec-precheck.md
     output: .agent/rules/z-harness-spec-precheck.md
