@@ -5,11 +5,12 @@ described in z-followup-next.md Phase 5.
 Test scenario:
   1. Create a temp lock dir + lock file.
   2. Acquire the lock via sink-lock.sh acquire.
-  3. Start a heartbeat-loop subprocess (1s sleep instead of 30s) that calls
+  3. Record the acquire-time last_heartbeat.
+  4. Start a heartbeat-loop subprocess (1s sleep instead of 30s) that calls
      sink-lock.sh heartbeat in a shell background loop.
-  4. Record capture_time immediately after the heartbeat loop starts.
   5. Wait 3 seconds.
-  6. Read the lock JSON; assert last_heartbeat > capture_time + 1s.
+  6. Read the lock JSON; assert last_heartbeat advanced past the acquire-time
+     value (whole-second granularity, so compare timestamps, not a float delta).
   7. Kill heartbeat subprocess; release lock.
 
 This verifies:
@@ -67,6 +68,7 @@ class TestHeartbeatLoop(unittest.TestCase):
             self.assertTrue(lock_path.exists(), "Lock file must exist after acquire")
             lock_data = _read_lock_json(lock_path)
             self.assertIn("last_heartbeat", lock_data)
+            last_hb_before = _iso_to_epoch(lock_data["last_heartbeat"])
 
             # Step 2: Start heartbeat loop with 1s sleep (instead of 30s) for test speed.
             # This mirrors the Phase 5 bash snippet from z-followup-next.md, using a
@@ -83,10 +85,7 @@ class TestHeartbeatLoop(unittest.TestCase):
                 stderr=subprocess.DEVNULL,
             )
 
-            # Step 3: Record capture_time just after loop starts
-            capture_time = time.time()
-
-            # Step 4: Wait 3 seconds for at least two heartbeat cycles
+            # Step 3: Wait 3 seconds for at least two heartbeat cycles
             time.sleep(3)
 
             # Step 5: Read lock JSON and check last_heartbeat advanced
@@ -94,14 +93,19 @@ class TestHeartbeatLoop(unittest.TestCase):
             lock_data_after = _read_lock_json(lock_path)
             self.assertIn("last_heartbeat", lock_data_after)
 
-            last_hb_epoch = _iso_to_epoch(lock_data_after["last_heartbeat"])
-            # last_heartbeat must be at least 1 second after capture_time
+            last_hb_after = _iso_to_epoch(lock_data_after["last_heartbeat"])
+            # The heartbeat loop must have advanced last_heartbeat beyond its
+            # acquire-time value. Compare against the initial timestamp rather
+            # than capture_time+1.0: last_heartbeat is stored at whole-second
+            # granularity, so comparing a floored second against a sub-second
+            # float is flaky when capture_time's fraction is high and only one
+            # cycle has fired. The 3s window guarantees >=2s of advancement, so
+            # after > before is robust.
             self.assertGreater(
-                last_hb_epoch,
-                capture_time + 1.0,
-                f"Expected last_heartbeat > capture_time+1s, "
-                f"got last_heartbeat={lock_data_after['last_heartbeat']} "
-                f"capture_time={capture_time:.3f}",
+                last_hb_after,
+                last_hb_before,
+                f"Expected last_heartbeat to advance past the acquire-time value; "
+                f"before={lock_data['last_heartbeat']} after={lock_data_after['last_heartbeat']}",
             )
 
             # Step 6: Kill heartbeat subprocess (mirrors Phase 9 kill $HEARTBEAT_PID)
