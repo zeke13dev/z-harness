@@ -57,6 +57,24 @@ $ARGUMENTS
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_split_run_start "$START_PAYLOAD"
    ```
    Output lands under `z-harness/<root-slug>/archive/$RUN/events.jsonl`.
+
+   **Active-plan registration (immediately after plan_split_run_start).** Register this run in the shared registry. Graduated failure policy — never silent-continue on failure:
+   ```bash
+   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" register \
+     --run-id "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan-split --phase split \
+     --session "$Z_HARNESS_SESSION_ID"
+   REG_RC=$?
+   ```
+   - `REG_RC == 0` → registered; proceed.
+   - `REG_RC == 3` (no record written) → emit `registry_error` event; interactive → `AskUserQuestion` proceed/abort; unattended → proceed+log (or halt if `Z_HARNESS_STRICT_OVERLAP=1`). No deregister on abort (no record).
+   - Any OTHER nonzero → treat as `REG_RC == 3`.
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" registry_error \
+     "$(printf '{"op":"register","run_id":"%s","rc":%d}' "$RUN" "$REG_RC")"
+   ```
+
+   **FINALIZE_STATUS rule:** On any run-ending halt after `REG_RC == 0`, set `FINALIZE_STATUS=aborted` + `deregister --status aborted`. On normal completion (Phase 5), deregister with `complete`. If register failed, do NOT deregister.
+
 8. Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
 9. **Check for LLM-tier docs.** If `docs/llm/INDEX.json` exists in the repo root, do NOT read it from main thread. Note its existence; Phase 1 may dispatch `doc-fetcher` (Haiku) for one-shot topic grounding. Skip the docs-freshness gate — this command does not itself touch INDEX.json; cluster-planners handle their own doc reads.
 10. **Cluster proposal seed.** If `--clusters="a,b,c"` was passed, parse the comma-separated list into proposed cluster names (kebab-case, 2-6 entries — each name must independently pass the same `^[a-z0-9]+(-[a-z0-9]+)*$` validator from step 2; reject the entire flag on any invalid name). **`--clusters=` supplies names only, not scopes** — Phase 1 must still derive a one-line scope per cluster (either auto-derived from the topic text by Phase 1's main-thread reasoning, or interactively asked via `AskUserQuestion` if scopes can't be inferred unambiguously). Skip Phase 1's automatic name proposal (jump straight to Phase 1's scope-derivation + user confirmation, 1d). Otherwise proceed to Phase 1 normally.
@@ -147,8 +165,18 @@ Read the topic (+ doc-fetcher synthesis if present). Propose **2-6 narrow scopes
 - A **1-line scope description** stating what the cluster IS responsible for and what it is NOT (handoff boundary with siblings).
 
 **Hard limits:**
-- If fewer than 2 distinct seams surface, **refuse** the split: print "Topic does not warrant /z-plan-split — only 1 coherent seam found. Run /z-plan <topic> directly." Then emit `phase_end` for Phase 1 and `plan_split_run_end` with `status: "aborted_too_few_clusters"` (per the Early-exit telemetry contract), and exit cleanly. Do not write MANIFEST.md.
-- If more than 6 seams surface, **refuse** the split: print "Topic too broad — >6 seams found. Narrow the topic and re-invoke, or accept a coarser split." Then emit `phase_end` for Phase 1 and `plan_split_run_end` with `status: "aborted_too_many_clusters"`, and exit cleanly.
+- If fewer than 2 distinct seams surface, **refuse** the split: print "Topic does not warrant /z-plan-split — only 1 coherent seam found. Run /z-plan <topic> directly." Then emit `phase_end` for Phase 1 and `plan_split_run_end` with `status: "aborted_too_few_clusters"` (per the Early-exit telemetry contract), and exit cleanly. Do not write MANIFEST.md. Per the FINALIZE_STATUS rule, set `FINALIZE_STATUS=aborted` and deregister before exiting:
+  ```bash
+  FINALIZE_STATUS=aborted
+  python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+    --run-id "$RUN" --status aborted 2>/dev/null || true
+  ```
+- If more than 6 seams surface, **refuse** the split: print "Topic too broad — >6 seams found. Narrow the topic and re-invoke, or accept a coarser split." Then emit `phase_end` for Phase 1 and `plan_split_run_end` with `status: "aborted_too_many_clusters"`, and exit cleanly. Per the FINALIZE_STATUS rule, set `FINALIZE_STATUS=aborted` and deregister before exiting:
+  ```bash
+  FINALIZE_STATUS=aborted
+  python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+    --run-id "$RUN" --status aborted 2>/dev/null || true
+  ```
 
 If `--clusters="a,b,c"` was passed in Setup step 10, the proposed name list is the parsed flag value; still validate 2-6 bounds. Phase 1 must still derive a one-line scope per name — either inferred from the topic text or asked interactively (see Setup step 10). Same refusal + telemetry rules apply if the post-derivation list violates 2-6 bounds.
 
@@ -167,6 +195,13 @@ Deterministic routes:
 Call `planning-router` only when the seam count is plausible but conflicting signals make `/z-plan`, `/z-plan-split`, and `/z-map` comparably reasonable. It receives a compact signal payload plus the route chain and is advisory; malformed or unavailable classifier output falls back to deterministic routing or an explicit AskUser choice.
 
 If routing, write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md`, emit `plan_route_decision` with `from_command`, `to_command`, `route_class`, `reason_codes`, `signals`, `confidence`, `classifier_used`, `artifact_path`, `route_chain`, and `user_choice`, then present the AskUser handoff gate when continuation is allowed: switch, continue, or abandon. Do not execute the next command automatically.
+
+When the user chooses **switch** or **abandon** at the route gate (ending the run), per the FINALIZE_STATUS rule set `FINALIZE_STATUS=aborted` and deregister before exiting:
+```bash
+FINALIZE_STATUS=aborted
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+  --run-id "$RUN" --status aborted 2>/dev/null || true
+```
 
 Loop prevention: carry forward the latest route chain; if it already has two entries, ask the user to choose explicitly. If the recommended target equals the immediate prior `from_command`, block ping-pong, show both route artifacts, and ask the user to choose. If the user continues here, log the override and do not route again for the same `reason_codes` in this run.
 <!-- PLAN_ROUTE_CHECK_END -->
@@ -188,7 +223,12 @@ Bracket the wait with `user_wait_start` / `user_wait_end`. Use `AskUserQuestion`
 
 - **Approve as proposed** — proceed to Phase 2 with the listed clusters.
 - **Edit** — free-text follow-up; user can rename clusters, rewrite scopes, add/drop clusters (still bounded 2-6).
-- **Abandon** — exit cleanly with no further work. Per the Early-exit telemetry contract: emit `phase_end` for Phase 1 first, then `plan_split_run_end` with `status: "abandoned_by_user"` and a short `reason` (e.g. `user_abandoned_phase1`).
+- **Abandon** — exit cleanly with no further work. Per the Early-exit telemetry contract: emit `phase_end` for Phase 1 first, then `plan_split_run_end` with `status: "abandoned_by_user"` and a short `reason` (e.g. `user_abandoned_phase1`). Per the FINALIZE_STATUS rule, set `FINALIZE_STATUS=aborted` and deregister before exiting:
+  ```bash
+  FINALIZE_STATUS=aborted
+  python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+    --run-id "$RUN" --status aborted 2>/dev/null || true
+  ```
 
 If the user picks **Edit**, re-loop Phase 1c after applying their edits (re-write `proposed-clusters.md`, re-confirm). Maximum 3 edit iterations to avoid pathological loops — after that, ask the user to abandon or commit.
 
@@ -450,6 +490,12 @@ Recommended next:
 ```
 
 For the partial-tree branch, the push notification also names the failed clusters and reminds the user that `/z-implement-all` will refuse without `--force-partial` until the failures are addressed (drop the cluster, re-plan it, or override the gate).
+
+**Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the FINALIZE_STATUS rule (Setup step 7): normal completion deregisters with `complete`.
+```bash
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+  --run-id "$RUN" --status "${FINALIZE_STATUS:-complete}" || true   # CLI self-logs registry_error on failure
+```
 
 ---
 

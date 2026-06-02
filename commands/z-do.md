@@ -35,6 +35,24 @@ $ARGUMENTS
    ' "$VERSION_BLOB" "<arguments>" "$Z_HARNESS_SESSION_ID")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" do_run_start "$START_PAYLOAD"
    ```
+
+   **Active-plan registration (immediately after do_run_start).** Register this run in the shared registry. Graduated failure policy — never silent-continue on failure:
+   ```bash
+   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" register \
+     --run-id "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-do --phase do \
+     --session "$Z_HARNESS_SESSION_ID"
+   REG_RC=$?
+   ```
+   - `REG_RC == 0` → registered; proceed.
+   - `REG_RC == 3` (no record written) → emit `registry_error` event; interactive → `AskUserQuestion` proceed/abort; unattended → proceed+log (or halt if `Z_HARNESS_STRICT_OVERLAP=1`). No deregister on abort (no record).
+   - Any OTHER nonzero → treat as `REG_RC == 3`.
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" registry_error \
+     "$(printf '{"op":"register","run_id":"%s","rc":%d}' "$RUN" "$REG_RC")"
+   ```
+
+   **FINALIZE_STATUS rule:** On any run-ending halt after `REG_RC == 0`, set `FINALIZE_STATUS=aborted` + `deregister --status aborted`. On normal completion (Phase 7), deregister with `complete`. If register failed, do NOT deregister.
+
 6. **Config resolution:**
    ```bash
    export Z_HARNESS_RUN="$RUN"
@@ -71,7 +89,13 @@ If at any point you discover:
 [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event approval)" = yes ] && \
   PushNotification("z-do: route decision reached — your input is needed to proceed.")
 ```
-If the user chooses switch, stop after presenting the exact next command invocation; do not execute it.
+If the user chooses switch or abandon (ending the run), per the FINALIZE_STATUS rule set `FINALIZE_STATUS=aborted` and deregister before exiting:
+```bash
+FINALIZE_STATUS=aborted
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+  --run-id "$RUN" --status aborted 2>/dev/null || true
+```
+If the user chooses **continue**, deregister is NOT called here — the run continues and Phase 7 handles it normally.
 
 `route-decision.md` must include the recommended command, reason, deterministic signals, route chain, and resume context. Emit `plan_route_decision` with `from_command`, `to_command`, `route_class`, `reason_codes`, `signals`, `confidence`, `classifier_used`, `artifact_path`, `route_chain`, and `user_choice`.
 
@@ -210,6 +234,11 @@ Apply the "one reason it might be wrong" check to each finding. If it raises a r
    ```
 3. Brief 2-3 sentence summary to user: what changed, what's next.
 4. If non-trivial friction surfaced during the run (auto-bail considered, doc_drift, retry on review), suggest: "Consider `/z-improve adhoc/$RUN` to retro this run."
+5. **Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the FINALIZE_STATUS rule (Setup step 5): normal completion deregisters with `complete`.
+   ```bash
+   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+     --run-id "$RUN" --status "${FINALIZE_STATUS:-complete}" || true   # CLI self-logs registry_error on failure
+   ```
 
 ## Hard rules
 
