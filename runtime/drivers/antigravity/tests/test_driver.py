@@ -30,8 +30,13 @@ from unittest.mock import MagicMock, patch, call
 
 import pytest
 
-# Ensure repo root is importable
-_REPO_ROOT = Path(__file__).resolve().parents[5]
+# Ensure repo root is importable. Walk up to the dir holding both runtime/ and
+# scripts/ rather than counting path levels — robust to non-standard checkout
+# depths (e.g. a git worktree).
+_REPO_ROOT = next(
+    p for p in Path(__file__).resolve().parents
+    if (p / "runtime").is_dir() and (p / "scripts").is_dir()
+)
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 

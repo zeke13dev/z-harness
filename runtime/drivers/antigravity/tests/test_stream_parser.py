@@ -13,8 +13,13 @@ from pathlib import Path
 
 import pytest
 
-# Ensure the repo root is on sys.path so the runtime package is importable
-_REPO_ROOT = Path(__file__).resolve().parents[5]  # …/z-harness
+# Ensure the repo root is on sys.path so the runtime package is importable.
+# Walk up to the dir that holds both runtime/ and scripts/ rather than counting
+# path levels — robust to non-standard checkout depths (e.g. a git worktree).
+_REPO_ROOT = next(
+    p for p in Path(__file__).resolve().parents
+    if (p / "runtime").is_dir() and (p / "scripts").is_dir()
+)
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 

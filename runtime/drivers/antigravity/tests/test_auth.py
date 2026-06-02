@@ -23,6 +23,14 @@ from unittest.mock import patch
 
 import pytest
 
+# Repo root = the ancestor holding both runtime/ and scripts/. Walk up rather
+# than counting path levels so it stays correct at non-standard checkout depths
+# (e.g. a git worktree).
+_REPO_ROOT = next(
+    p for p in Path(__file__).resolve().parents
+    if (p / "runtime").is_dir() and (p / "scripts").is_dir()
+)
+
 from runtime.drivers.antigravity.auth import (
     _CLI_AUTH_MISSING_WARNING,
     _SDK_DEFERRED_WARNING,
@@ -193,7 +201,7 @@ def test_standalone_main_prints_json(fake_home, no_sdk_key):
         [sys.executable, "-m", "runtime.drivers.antigravity.auth"],
         capture_output=True,
         text=True,
-        env={**os.environ, "HOME": str(fake_home), "PYTHONPATH": str(Path(__file__).parents[4])},
+        env={**os.environ, "HOME": str(fake_home), "PYTHONPATH": str(_REPO_ROOT)},
     )
     assert result.returncode == 0, f"stderr: {result.stderr}"
     data = json.loads(result.stdout)
