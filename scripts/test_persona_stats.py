@@ -7,14 +7,18 @@ Run with:
 
 Builds a self-contained metrics.jsonl fixture in a temp dir (it does NOT read
 the live z-harness/metrics.jsonl) and asserts the stratified analysis against
-the acceptance criteria for T012:
+the acceptance criteria for T012, T104, and T107:
 
   - correct stratified table grouped by persona_id × role × complexity_tier;
   - fallback_empty_pool quarantined (separate section, excluded from baseline);
   - incomplete attempts (draw with no outcome) excluded;
   - reviewer rows segmented by reviewer_participant;
   - --json emits valid JSON;
-  - delta-vs-boring-anchor computed within the SAME stratum.
+  - delta-vs-boring-anchor computed within the SAME stratum;
+  - unknown-run events excluded by default (T107);
+  - --include-unknown-run re-includes them (T107);
+  - --since filters events by ts (T107);
+  - existing real-run fixtures unchanged by new default filters (T107).
 """
 import json
 import os
@@ -36,11 +40,17 @@ persona_stats = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(persona_stats)
 
 
-def _draw(attempt_id, draw_id, persona_id, role, source, task_id="T001"):
-    """Build a persona_random_selected line (the draw event)."""
+def _draw(attempt_id, draw_id, persona_id, role, source, task_id="T001",
+          run=None, ts="2026-06-01T00:00:00Z"):
+    """Build a persona_random_selected line (the draw event).
+
+    ``run`` defaults to ``"tasks/<task_id>"``; pass ``run="unknown-run"`` to
+    simulate ad-hoc dev-noise draws.  ``ts`` defaults to a fixed 2026-06-01
+    timestamp.
+    """
     return {
-        "ts": "2026-06-01T00:00:00Z",
-        "run": f"tasks/{task_id}",
+        "ts": ts,
+        "run": run if run is not None else f"tasks/{task_id}",
         "kind": "persona_random_selected",
         "role": role,
         "selected": persona_id,
@@ -55,11 +65,16 @@ def _draw(attempt_id, draw_id, persona_id, role, source, task_id="T001"):
 
 def _outcome(attempt_id, draw_id, persona_id, role, tier, *, status="done",
              review_cycles=0, retries=0, blocker_count=0, wall_ms=1000,
-             diff_size=100, task_id="T001"):
-    """Build a persona_attempt_outcome line (the terminal-outcome event)."""
+             diff_size=100, task_id="T001", run=None, ts="2026-06-01T00:00:05Z"):
+    """Build a persona_attempt_outcome line (the terminal-outcome event).
+
+    ``run`` defaults to ``"tasks/<task_id>"``; pass ``run="unknown-run"`` to
+    simulate dev-noise outcomes.  ``ts`` defaults to a fixed 2026-06-01
+    timestamp.
+    """
     return {
-        "ts": "2026-06-01T00:00:05Z",
-        "run": f"tasks/{task_id}",
+        "ts": ts,
+        "run": run if run is not None else f"tasks/{task_id}",
         "kind": "persona_attempt_outcome",
         "run_id": "run-1",
         "command": "z-implement-all",
@@ -78,11 +93,16 @@ def _outcome(attempt_id, draw_id, persona_id, role, tier, *, status="done",
     }
 
 
-def _bound_reviewer(attempt_id, draw_id, persona_id, participant, task_id="T001"):
-    """Build a persona_bound line for a reviewer arm."""
+def _bound_reviewer(attempt_id, draw_id, persona_id, participant, task_id="T001",
+                    run=None, ts="2026-06-01T00:00:03Z"):
+    """Build a persona_bound line for a reviewer arm.
+
+    ``run`` defaults to ``"tasks/<task_id>"``.  ``ts`` defaults to a fixed
+    2026-06-01 timestamp.
+    """
     return {
-        "ts": "2026-06-01T00:00:03Z",
-        "run": f"tasks/{task_id}",
+        "ts": ts,
+        "run": run if run is not None else f"tasks/{task_id}",
         "kind": "persona_bound",
         "run_id": "run-1",
         "command": "z-implement-all",
@@ -487,6 +507,384 @@ class PersonaStatsCLI(unittest.TestCase):
             capture_output=True, text=True,
         )
         self.assertEqual(proc.returncode, 1)
+
+
+class UnknownRunFilterFixture(unittest.TestCase):
+    """T107: unknown-run events excluded by default; re-included with --include-unknown-run.
+
+    Invariant: events with run == "unknown-run" are dev noise and must be
+    invisible to the stratified analysis unless the caller explicitly opts in.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.metrics = os.path.join(self.tmp, "metrics.jsonl")
+        lines = []
+
+        # Real-run attempt: should always appear regardless of filter.
+        lines.append(_draw("REAL-v1", "d-real-1", "boring-anchor", "implementer", "forced_control",
+                           task_id="T200"))
+        lines.append(_outcome("REAL-v1", "d-real-1", "boring-anchor", "implementer", "high",
+                              review_cycles=2, diff_size=200, task_id="T200"))
+
+        # Unknown-run attempt: draw + outcome both carry run="unknown-run".
+        lines.append(_draw("UNK-v1", "d-unk-1", "spicy-rebel", "implementer", "random_role_pool",
+                           task_id="T200", run="unknown-run"))
+        lines.append(_outcome("UNK-v1", "d-unk-1", "spicy-rebel", "implementer", "high",
+                              review_cycles=99, diff_size=300, task_id="T200", run="unknown-run"))
+
+        with open(self.metrics, "w", encoding="utf-8") as fh:
+            for obj in lines:
+                fh.write(json.dumps(obj) + "\n")
+
+        self.script = str(SCRIPTS_DIR / "persona-stats.py")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _report(self, include_unknown_run=False):
+        return persona_stats.analyze(
+            self.metrics, include_unknown_run=include_unknown_run
+        )
+
+    def _find_group(self, report, src, persona_id, role, tier):
+        for g in report["segments"].get(src, []):
+            if (g["persona_id"], g["role"], g["complexity_tier"]) == (persona_id, role, tier):
+                return g
+        return None
+
+    def test_unknown_run_excluded_by_default(self):
+        """By default, unknown-run events are invisible — spicy-rebel must not appear."""
+        report = self._report(include_unknown_run=False)
+        # The unknown-run spicy-rebel draw+outcome must be filtered out entirely.
+        sr = self._find_group(report, "random_role_pool", "spicy-rebel", "implementer", "high")
+        self.assertIsNone(sr, "unknown-run spicy-rebel must be excluded by default")
+        # The real-run boring-anchor must still appear.
+        ba = self._find_group(report, "forced_control", "boring-anchor", "implementer", "high")
+        self.assertIsNotNone(ba, "real-run boring-anchor must remain visible")
+
+    def test_include_unknown_run_readds_events(self):
+        """--include-unknown-run re-adds the dev-noise events."""
+        report = self._report(include_unknown_run=True)
+        # With the flag, the unknown-run spicy-rebel attempt must appear.
+        sr = self._find_group(report, "random_role_pool", "spicy-rebel", "implementer", "high")
+        self.assertIsNotNone(sr, "unknown-run spicy-rebel must appear with --include-unknown-run")
+        self.assertEqual(sr["n_attempts"], 1)
+        self.assertEqual(sr["metrics"]["review_cycles"], 99)
+
+    def test_real_run_events_unchanged_by_default_filter(self):
+        """Default filter must not affect events that have a real run id."""
+        # The default (exclude unknown-run) must leave real-run results identical
+        # to include_unknown_run=True minus the unknown-run rows.
+        report_default = self._report(include_unknown_run=False)
+        ba_default = self._find_group(report_default, "forced_control", "boring-anchor", "implementer", "high")
+        self.assertIsNotNone(ba_default)
+        self.assertEqual(ba_default["n_attempts"], 1)
+        self.assertEqual(ba_default["metrics"]["review_cycles"], 2)
+
+
+class SinceFilterFixture(unittest.TestCase):
+    """T107: --since filters events by ts; older events dropped, newer kept.
+
+    Invariant: when --since is set, only events whose ts >= threshold survive
+    the filter.  Events with missing/unparseable ts are excluded (conservative).
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.metrics = os.path.join(self.tmp, "metrics.jsonl")
+        lines = []
+
+        # OLD attempt: ts 2026-05-01 — before the --since cutoff.
+        lines.append(_draw("OLD-v1", "d-old-1", "boring-anchor", "implementer", "forced_control",
+                           task_id="T300", ts="2026-05-01T00:00:00Z"))
+        lines.append(_outcome("OLD-v1", "d-old-1", "boring-anchor", "implementer", "high",
+                              review_cycles=10, diff_size=200, task_id="T300",
+                              ts="2026-05-01T00:00:05Z"))
+
+        # NEW attempt: ts 2026-06-15 — on/after the --since cutoff.
+        lines.append(_draw("NEW-v1", "d-new-1", "spicy-rebel", "implementer", "random_role_pool",
+                           task_id="T300", ts="2026-06-15T00:00:00Z"))
+        lines.append(_outcome("NEW-v1", "d-new-1", "spicy-rebel", "implementer", "high",
+                              review_cycles=3, diff_size=150, task_id="T300",
+                              ts="2026-06-15T00:00:05Z"))
+
+        # MISSING-TS attempt: no ts field — should be excluded when --since set.
+        bad_draw = _draw("BAD-v1", "d-bad-1", "boring-anchor", "implementer", "forced_control",
+                         task_id="T300")
+        bad_draw.pop("ts")
+        lines.append(bad_draw)
+        bad_outcome = _outcome("BAD-v1", "d-bad-1", "boring-anchor", "implementer", "high",
+                               review_cycles=5, diff_size=200, task_id="T300")
+        bad_outcome.pop("ts")
+        lines.append(bad_outcome)
+
+        with open(self.metrics, "w", encoding="utf-8") as fh:
+            for obj in lines:
+                fh.write(json.dumps(obj) + "\n")
+
+        self.script = str(SCRIPTS_DIR / "persona-stats.py")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _parse_since(self, s):
+        return persona_stats._parse_since(s)
+
+    def _report(self, since=None):
+        return persona_stats.analyze(
+            self.metrics,
+            since=self._parse_since(since) if since else None,
+        )
+
+    def _find_group(self, report, src, persona_id, role, tier):
+        for g in report["segments"].get(src, []):
+            if (g["persona_id"], g["role"], g["complexity_tier"]) == (persona_id, role, tier):
+                return g
+        return None
+
+    def test_since_drops_older_events(self):
+        """Events older than --since cutoff must be dropped."""
+        report = self._report(since="2026-06-01")
+        # OLD attempt (2026-05-01) must be gone.
+        ba = self._find_group(report, "forced_control", "boring-anchor", "implementer", "high")
+        self.assertIsNone(ba, "boring-anchor from 2026-05-01 must be excluded by --since 2026-06-01")
+
+    def test_since_keeps_newer_events(self):
+        """Events at or after --since cutoff must be retained."""
+        report = self._report(since="2026-06-01")
+        sr = self._find_group(report, "random_role_pool", "spicy-rebel", "implementer", "high")
+        self.assertIsNotNone(sr, "spicy-rebel from 2026-06-15 must survive --since 2026-06-01")
+        self.assertEqual(sr["n_attempts"], 1)
+        self.assertEqual(sr["metrics"]["review_cycles"], 3)
+
+    def test_since_excludes_missing_ts_events_conservatively(self):
+        """Events with missing ts are excluded when --since is set (conservative)."""
+        # Without --since, the missing-ts boring-anchor attempt should appear.
+        report_no_since = self._report(since=None)
+        # The BAD-v1 attempt has no ts — without --since it passes the filter.
+        # It contributes to boring-anchor forced_control HIGH counts.
+        # (Also OLD-v1 boring-anchor is in there too without --since.)
+        # With --since 2026-06-01: both OLD-v1 AND BAD-v1 must be excluded.
+        report_since = self._report(since="2026-06-01")
+        ba_since = self._find_group(report_since, "forced_control", "boring-anchor", "implementer", "high")
+        # Neither OLD (2026-05-01) nor BAD (no ts) survives the --since filter.
+        self.assertIsNone(ba_since, "boring-anchor with missing/old ts must be excluded by --since")
+
+    def test_no_since_includes_all_events(self):
+        """Without --since all parseable events (except unknown-run) are kept."""
+        report = self._report(since=None)
+        # OLD boring-anchor appears.
+        ba = self._find_group(report, "forced_control", "boring-anchor", "implementer", "high")
+        self.assertIsNotNone(ba, "boring-anchor must appear when no --since is set")
+        # OLD + BAD both resolve to boring-anchor forced_control HIGH.
+        # We should have 2 attempts (OLD-v1 and BAD-v1 both joined).
+        self.assertEqual(ba["n_attempts"], 2)
+
+    def test_since_iso8601_full_timestamp_accepted(self):
+        """--since accepts a full ISO8601 timestamp (not just a date)."""
+        since_dt = self._parse_since("2026-06-14T23:59:59Z")
+        report = persona_stats.analyze(self.metrics, since=since_dt)
+        sr = self._find_group(report, "random_role_pool", "spicy-rebel", "implementer", "high")
+        self.assertIsNotNone(sr, "spicy-rebel at 2026-06-15 must survive --since 2026-06-14T23:59:59Z")
+
+    def test_since_fractional_seconds_parses(self):
+        """_parse_since must accept fractional-seconds ISO8601 (e.g. 2026-06-14T23:59:59.500Z).
+
+        Invariant: a --since value with sub-second precision must parse without
+        error and produce the correct UTC-aware datetime.
+        Failure class: ValueError raised for a valid fractional-seconds timestamp.
+        """
+        import datetime as dt_mod
+        since_dt = self._parse_since("2026-06-14T23:59:59.500Z")
+        self.assertIsNotNone(since_dt)
+        self.assertIsNotNone(since_dt.tzinfo, "parsed datetime must be timezone-aware")
+        # Verify the fractional second is preserved (500ms = 500000 microseconds).
+        self.assertEqual(since_dt.microsecond, 500000)
+        # Verify the date/time components.
+        self.assertEqual(since_dt.year, 2026)
+        self.assertEqual(since_dt.month, 6)
+        self.assertEqual(since_dt.day, 14)
+        self.assertEqual(since_dt.hour, 23)
+        self.assertEqual(since_dt.minute, 59)
+        self.assertEqual(since_dt.second, 59)
+
+    def test_fractional_seconds_event_ts_included_and_excluded(self):
+        """Event ts with fractional seconds is correctly compared against --since.
+
+        Invariant: _parse_event_ts must parse "2026-06-02T00:05:24.123Z" and the
+        event must be included when since <= ts and excluded when since > ts.
+        Failure class: fractional-seconds event ts returns None from _parse_event_ts,
+        causing conservative exclusion even when the event should be included.
+        """
+        # Write a fixture with a fractional-seconds event ts.
+        import tempfile, os, json as _json
+        tmp = tempfile.mkdtemp()
+        try:
+            metrics = os.path.join(tmp, "frac_metrics.jsonl")
+            frac_ts_draw = "2026-06-02T00:05:24.123Z"
+            frac_ts_outcome = "2026-06-02T00:05:25.456Z"
+            lines = [
+                _draw("FRAC-v1", "d-frac-1", "spicy-rebel", "implementer",
+                      "random_role_pool", task_id="T999", ts=frac_ts_draw),
+                _outcome("FRAC-v1", "d-frac-1", "spicy-rebel", "implementer", "high",
+                         review_cycles=7, diff_size=200, task_id="T999",
+                         ts=frac_ts_outcome),
+            ]
+            with open(metrics, "w", encoding="utf-8") as fh:
+                for obj in lines:
+                    fh.write(_json.dumps(obj) + "\n")
+
+            # _parse_event_ts must not return None for a fractional-seconds string.
+            parsed_ts = persona_stats._parse_event_ts(frac_ts_draw)
+            self.assertIsNotNone(parsed_ts,
+                                 "_parse_event_ts must parse fractional-seconds ts, not return None")
+            self.assertIsNotNone(parsed_ts.tzinfo, "parsed event ts must be timezone-aware")
+
+            # With --since before the event, it must be INCLUDED.
+            since_before = self._parse_since("2026-06-01T00:00:00Z")
+            report_incl = persona_stats.analyze(metrics, since=since_before)
+            sr_incl = None
+            for g in report_incl["segments"].get("random_role_pool", []):
+                if g["persona_id"] == "spicy-rebel":
+                    sr_incl = g
+                    break
+            self.assertIsNotNone(sr_incl,
+                                 "fractional-seconds event must be included when since < ts")
+            self.assertEqual(sr_incl["n_attempts"], 1)
+
+            # With --since after the event, it must be EXCLUDED.
+            since_after = self._parse_since("2026-06-03T00:00:00Z")
+            report_excl = persona_stats.analyze(metrics, since=since_after)
+            sr_excl = None
+            for g in report_excl["segments"].get("random_role_pool", []):
+                if g["persona_id"] == "spicy-rebel":
+                    sr_excl = g
+                    break
+            self.assertIsNone(sr_excl,
+                              "fractional-seconds event must be excluded when since > ts")
+        finally:
+            import shutil
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class SinceCLIFixture(unittest.TestCase):
+    """T107: CLI --since and --include-unknown-run flags work end-to-end."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.metrics = os.path.join(self.tmp, "metrics.jsonl")
+        lines = [
+            # Real-run event with a real ts.
+            _draw("CLI-v1", "d-cli-1", "boring-anchor", "implementer", "forced_control",
+                  ts="2026-06-10T00:00:00Z"),
+            _outcome("CLI-v1", "d-cli-1", "boring-anchor", "implementer", "high",
+                     review_cycles=2, ts="2026-06-10T00:00:05Z"),
+            # unknown-run event.
+            _draw("CLI-unk", "d-cli-unk", "spicy-rebel", "implementer", "random_role_pool",
+                  run="unknown-run", ts="2026-06-10T00:00:00Z"),
+            _outcome("CLI-unk", "d-cli-unk", "spicy-rebel", "implementer", "high",
+                     review_cycles=7, run="unknown-run", ts="2026-06-10T00:00:05Z"),
+        ]
+        with open(self.metrics, "w", encoding="utf-8") as fh:
+            for obj in lines:
+                fh.write(json.dumps(obj) + "\n")
+        self.script = str(SCRIPTS_DIR / "persona-stats.py")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_cli_include_unknown_run_flag(self):
+        """--include-unknown-run via CLI causes unknown-run draws to appear."""
+        # Default: unknown-run hidden.
+        proc_default = subprocess.run(
+            [sys.executable, self.script, "--metrics", self.metrics, "--json"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(proc_default.returncode, 0, proc_default.stderr)
+        parsed_default = json.loads(proc_default.stdout)
+        # spicy-rebel should not appear in default mode.
+        all_persona_ids = [
+            g["persona_id"]
+            for groups in parsed_default["segments"].values()
+            for g in groups
+        ]
+        self.assertNotIn("spicy-rebel", all_persona_ids,
+                         "spicy-rebel (unknown-run) must be absent by default")
+
+        # With --include-unknown-run: spicy-rebel must appear.
+        proc_incl = subprocess.run(
+            [sys.executable, self.script, "--metrics", self.metrics,
+             "--json", "--include-unknown-run"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(proc_incl.returncode, 0, proc_incl.stderr)
+        parsed_incl = json.loads(proc_incl.stdout)
+        all_persona_ids_incl = [
+            g["persona_id"]
+            for groups in parsed_incl["segments"].values()
+            for g in groups
+        ]
+        self.assertIn("spicy-rebel", all_persona_ids_incl,
+                      "spicy-rebel (unknown-run) must appear with --include-unknown-run")
+
+    def test_cli_since_flag(self):
+        """--since via CLI filters events by date."""
+        # Events are at 2026-06-10; --since 2026-06-11 should exclude them.
+        proc = subprocess.run(
+            [sys.executable, self.script, "--metrics", self.metrics,
+             "--json", "--since", "2026-06-11"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        parsed = json.loads(proc.stdout)
+        all_persona_ids = [
+            g["persona_id"]
+            for groups in parsed["segments"].values()
+            for g in groups
+        ]
+        self.assertEqual(all_persona_ids, [],
+                         "All events are before 2026-06-11 cutoff; segments must be empty")
+
+    def test_cli_since_invalid_value_errors(self):
+        """--since with an unparseable value exits with return code 1."""
+        proc = subprocess.run(
+            [sys.executable, self.script, "--metrics", self.metrics,
+             "--json", "--since", "not-a-date"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("not parseable", proc.stderr)
+
+    def test_cli_since_fractional_seconds_accepted(self):
+        """--since with a fractional-seconds ISO8601 value must not error (exit 0).
+
+        Invariant: the CLI must parse a fractional-seconds --since value and
+        apply it as a filter.
+        Failure class: exit code 1 with "not parseable" when the --since value
+        contains sub-second precision.
+        """
+        # Events in this fixture are at 2026-06-10; --since with fractional
+        # seconds just before midnight 2026-06-11 should exclude them.
+        proc = subprocess.run(
+            [sys.executable, self.script, "--metrics", self.metrics,
+             "--json", "--since", "2026-06-10T23:59:59.999Z"],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(proc.returncode, 0,
+                         f"--since with fractional seconds must not error; stderr: {proc.stderr}")
+        parsed = json.loads(proc.stdout)
+        # All events are at 2026-06-10T00:00:00Z / T00:00:05Z, before the cutoff.
+        all_persona_ids = [
+            g["persona_id"]
+            for groups in parsed["segments"].values()
+            for g in groups
+        ]
+        self.assertEqual(all_persona_ids, [],
+                         "All events are before the fractional-seconds since cutoff")
 
 
 if __name__ == "__main__":

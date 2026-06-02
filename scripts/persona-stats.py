@@ -3,6 +3,7 @@
 
 Usage:
     python3 scripts/persona-stats.py [--metrics PATH] [--json] [--min-diff-size N]
+                                     [--since YYYY-MM-DD|ISO8601] [--include-unknown-run]
 
 Reads the repo-wide aggregate event log (z-harness/metrics.jsonl by default),
 joins persona draw events (``persona_random_selected``, including the
@@ -34,18 +35,36 @@ Reviewer rows are derived from ``persona_bound`` events and segmented by
 
 This tool is strictly READ-ONLY — it never writes any file.
 
+Cleanliness filters (applied to ALL events before join/stratification):
+
+  - By default, events with ``run == "unknown-run"`` are excluded. These are
+    ad-hoc subcommand/test draws with no real run/task/attempt context (dev
+    noise). Pass ``--include-unknown-run`` to opt back in.
+  - ``--since YYYY-MM-DD|ISO8601``: include only events whose ``ts`` is at or
+    after the given timestamp. The ``ts`` field must be an ISO8601 string (e.g.
+    ``"2026-06-02T00:05:24Z"`` or ``"2026-06-02T00:05:24.123Z"`` with fractional
+    seconds). A date-only value for ``--since`` is treated as midnight UTC on that
+    day. Events with a missing or unparseable ``ts`` when ``--since`` is set are
+    excluded (conservative).
+
 Flags:
-    --metrics PATH      Path to the metrics.jsonl aggregate (default: the
-                        repo-wide z-harness/metrics.jsonl).
-    --json              Emit machine-readable JSON instead of a table.
-    --min-diff-size N   Drop attempts whose diff_size is below N lines (treats
-                        trivial diffs as noise). Default 0 (keep everything).
+    --metrics PATH          Path to the metrics.jsonl aggregate (default: the
+                            repo-wide z-harness/metrics.jsonl).
+    --json                  Emit machine-readable JSON instead of a table.
+    --min-diff-size N       Drop attempts whose diff_size is below N lines (treats
+                            trivial diffs as noise). Default 0 (keep everything).
+    --since DATE            Include only events at or after DATE (YYYY-MM-DD or
+                            full ISO8601). Events with missing/unparseable ts are
+                            excluded when this flag is set.
+    --include-unknown-run   Re-include events whose run field is "unknown-run"
+                            (excluded by default as dev noise).
 """
 
 import argparse
 import json
 import os
 import sys
+from datetime import datetime, timezone
 
 NO_PERSONA = "no-persona"       # primary null baseline (true null, empty prefix)
 CONTROL_PERSONA = "boring-anchor"  # secondary bland control
@@ -96,6 +115,77 @@ def load_events(path):
             if isinstance(obj, dict):
                 events.append(obj)
     return events
+
+
+UNKNOWN_RUN = "unknown-run"
+
+
+def _parse_since(since_str):
+    """Parse a --since value (YYYY-MM-DD or full ISO8601) into a UTC-aware datetime.
+
+    Returns a timezone-aware datetime or raises ValueError on parse failure.
+    Date-only input (``YYYY-MM-DD``) is interpreted as midnight UTC on that day.
+    Accepts fractional seconds (e.g. ``"2026-06-14T23:59:59.500Z"``).
+    """
+    # Try fromisoformat first: Python 3.11+ handles fractional seconds and
+    # UTC offsets natively.  Replacing "Z" -> "+00:00" makes it a valid
+    # RFC 3339 string that fromisoformat accepts on all supported versions.
+    if "T" in since_str:
+        try:
+            dt = datetime.fromisoformat(since_str.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except ValueError:
+            pass
+    # Date-only fallback (YYYY-MM-DD).
+    dt = datetime.strptime(since_str, "%Y-%m-%d")
+    return dt.replace(tzinfo=timezone.utc)
+
+
+def _parse_event_ts(ts_str):
+    """Parse an event's ts field (ISO8601) into a UTC-aware datetime.
+
+    Returns None when ts_str is falsy or cannot be parsed.
+    Accepts fractional seconds (e.g. ``"2026-06-02T00:05:24.123Z"``).
+    """
+    if not ts_str:
+        return None
+    # fromisoformat handles fractional seconds and offsets on Python 3.11+.
+    # Replacing "Z" -> "+00:00" covers the common UTC shorthand.
+    try:
+        dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except ValueError:
+        return None
+
+
+def filter_events(events, include_unknown_run=False, since=None):
+    """Apply cleanliness filters to ALL events before join/stratification.
+
+    Filters applied (in order):
+
+    1. Unknown-run filter: exclude events where ``run == "unknown-run"`` unless
+       ``include_unknown_run`` is True.
+    2. Since filter: when ``since`` is a datetime, exclude events whose ``ts``
+       is before ``since``, or whose ``ts`` is missing/unparseable (conservative).
+
+    Returns a new list; the original list is not mutated.
+    """
+    result = []
+    for ev in events:
+        # 1. Unknown-run filter.
+        if not include_unknown_run and ev.get("run") == UNKNOWN_RUN:
+            continue
+        # 2. Since filter.
+        if since is not None:
+            event_dt = _parse_event_ts(ev.get("ts"))
+            if event_dt is None or event_dt < since:
+                continue
+        result.append(ev)
+    return result
 
 
 def _join_key(event):
@@ -455,9 +545,15 @@ def render_table(report):
     return "\n".join(lines)
 
 
-def analyze(metrics_path, min_diff_size=0):
-    """Top-level: load, join, and build the full report dict."""
-    events = load_events(metrics_path)
+def analyze(metrics_path, min_diff_size=0, include_unknown_run=False, since=None):
+    """Top-level: load, filter, join, and build the full report dict.
+
+    ``include_unknown_run`` and ``since`` are the cleanliness filters applied
+    to ALL events before any join or stratification step. See ``filter_events``
+    for semantics.
+    """
+    raw_events = load_events(metrics_path)
+    events = filter_events(raw_events, include_unknown_run=include_unknown_run, since=since)
     joined = join_attempts(events)
     report = build_report(joined, min_diff_size=min_diff_size)
     report["reviewer"] = build_reviewer_report(events, joined, min_diff_size=min_diff_size)
@@ -485,6 +581,25 @@ def main(argv=None):
         metavar="N",
         help="Drop attempts whose diff_size is below N lines (noise filter).",
     )
+    parser.add_argument(
+        "--since",
+        default=None,
+        metavar="DATE",
+        help=(
+            "Include only events at or after DATE (YYYY-MM-DD or full ISO8601). "
+            "Events with a missing or unparseable ts field are excluded when this "
+            "flag is set (conservative)."
+        ),
+    )
+    parser.add_argument(
+        "--include-unknown-run",
+        action="store_true",
+        default=False,
+        help=(
+            "Re-include events whose run field is \"unknown-run\". By default "
+            "these ad-hoc dev-noise draws are excluded."
+        ),
+    )
     args = parser.parse_args(argv)
 
     metrics_path = args.metrics or _default_metrics_path()
@@ -492,7 +607,23 @@ def main(argv=None):
         print(f"persona-stats: metrics file not found: {metrics_path}", file=sys.stderr)
         return 1
 
-    report = analyze(metrics_path, min_diff_size=args.min_diff_size)
+    since_dt = None
+    if args.since is not None:
+        try:
+            since_dt = _parse_since(args.since)
+        except ValueError:
+            print(
+                f"persona-stats: --since value not parseable as YYYY-MM-DD or ISO8601: {args.since!r}",
+                file=sys.stderr,
+            )
+            return 1
+
+    report = analyze(
+        metrics_path,
+        min_diff_size=args.min_diff_size,
+        include_unknown_run=args.include_unknown_run,
+        since=since_dt,
+    )
 
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
