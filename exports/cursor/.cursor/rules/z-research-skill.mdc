@@ -621,11 +621,8 @@ T1–T4 require multiple production runs to evaluate; flag if observed post-run 
 ### Step 5 — Push-notify + final message
 
 ```bash
-if bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event run_complete | grep -q yes; then
-  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/notify.sh" \
-    "/z-research complete: $SLUG" \
-    "RESEARCH.md written to $Z_HARNESS_PLAN_DIR/RESEARCH.md. Panel: $PANEL_PERSPECTIVE_COUNT/3 perspectives. Tripwires: ${TRIPWIRES_FIRED:-none}."
-fi
+[ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end)" = yes ] && \
+  PushNotification("/z-research complete: $SLUG — RESEARCH.md written to $Z_HARNESS_PLAN_DIR/RESEARCH.md. Panel: $PANEL_PERSPECTIVE_COUNT/3 perspectives. Tripwires: ${TRIPWIRES_FIRED:-none}.")
 ```
 
 Output final summary to user:

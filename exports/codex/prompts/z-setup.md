@@ -167,10 +167,8 @@ Where `INVOCATION_FORM` is one of `inspect | wizard | apply | explain | status |
 ## Push-notify on completion
 
 ```bash
-bash "$PLUGIN_ROOT/scripts/should-notify.sh" \
-  --event phase_end \
-  --message "/z-setup $INVOCATION_FORM complete" \
-  2>/dev/null || true
+[ "$(bash "$PLUGIN_ROOT/scripts/config.py" should-notify --event phase_end)" = yes ] && \
+  PushNotification("/z-setup $INVOCATION_FORM complete")
 ```
 
 ## Invariants

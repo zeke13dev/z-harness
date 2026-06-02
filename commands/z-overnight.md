@@ -593,15 +593,11 @@ rm -f "$LOCK_FILE"
 
 ```bash
 if [[ "$OVERALL_STATUS" == "complete" ]]; then
-  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/should-notify.sh" \
-    --event phase_end \
-    --message "/z-overnight $Z_HARNESS_SLUG complete: all ${#CHAIN_STEPS[@]} steps finished. MORNING_REPORT.md written." \
-    2>/dev/null || true
+  [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end)" = yes ] && \
+    PushNotification("/z-overnight $Z_HARNESS_SLUG complete: all ${#CHAIN_STEPS[@]} steps finished. MORNING_REPORT.md written.")
 else
-  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/should-notify.sh" \
-    --event approval \
-    --message "/z-overnight $Z_HARNESS_SLUG ${OVERALL_STATUS} at step ${HALTED_AT_STEP:-?}. Check MORNING_REPORT.md: $BASE/MORNING_REPORT.md" \
-    2>/dev/null || true
+  [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event approval)" = yes ] && \
+    PushNotification("/z-overnight $Z_HARNESS_SLUG ${OVERALL_STATUS} at step ${HALTED_AT_STEP:-?}. Check MORNING_REPORT.md: $BASE/MORNING_REPORT.md")
 fi
 ```
 

@@ -599,13 +599,9 @@ This phase fires once per run, after Phase 6, before the session ends. It is a s
       )
       ```
 
-      - **Accept:**
-        ```bash
-        printf '%s' "$CANDIDATE_JSON" | bash -c \
-          'bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-skill.sh" z-suggest-memory \
-             --concept "<candidate.suggested_concept_slug>" \
-             --source "incident:<RRUN>" \
-             --from-candidate-json -'
+      - **Accept:** dispatch the `/z-suggest-memory` skill, piping `$CANDIDATE_JSON` to its stdin:
+        ```
+        /z-suggest-memory --concept "<candidate.suggested_concept_slug>" --source "incident:<RRUN>" --from-candidate-json -
         ```
         On `STATUS: ok` → increment `ACCEPTED`.
         On `STATUS: skipped` or `STATUS: bad_input` → log:

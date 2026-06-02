@@ -120,19 +120,13 @@ print("ok")
 PY "$RECORD" "$TMPFILE"
 ```
 
-Then invoke `/z-suggest-memory` in **dry-run** mode (advisory only — we do NOT write a memory at this stage):
+Then dispatch the `/z-suggest-memory` skill in **dry-run** mode (advisory only — we do NOT write a memory at this stage) with these arguments:
 
-```bash
-bash scripts/run-skill.sh z-suggest-memory \
-  --concept axioms \
-  --from-candidate-json "$TMPFILE" \
-  --dry-run \
-  --no-refresh-human \
-  --source "incident:axiom-approve-preflight" \
-  2>&1 | head -20
+```
+/z-suggest-memory --concept axioms --from-candidate-json "$TMPFILE" --dry-run --no-refresh-human --source "incident:axiom-approve-preflight"
 ```
 
-Surface any MEMORY-overlap advisory printed to stdout (lines containing "overlap" or "duplicate"). If none, continue silently.
+Surface any MEMORY-overlap advisory it prints (lines containing "overlap" or "duplicate"). If none, continue silently.
 
 Clean up:
 ```bash
