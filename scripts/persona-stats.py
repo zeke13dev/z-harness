@@ -84,16 +84,47 @@ def _repo_root():
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def _resolved_metrics_path(repo_root):
+    """Aggregate metrics.jsonl under the resolved (external-by-default) base.
+
+    Since the Phase-D flip, even this repo's own metrics live under the external
+    base rather than <repo>/z-harness. Resolve via plan-path.sh base_dir; fall
+    back to the legacy in-repo path when plan-path.sh is unavailable or the
+    resolved location does not exist yet. Best-effort; never raises.
+    """
+    import subprocess
+    plan_path_sh = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plan-path.sh")
+    resolved = None
+    if os.path.exists(plan_path_sh):
+        try:
+            result = subprocess.run(
+                ["bash", plan_path_sh, "base_dir"],
+                capture_output=True, text=True,
+                cwd=repo_root,
+                env={**os.environ, "_Z_HARNESS_RESOLVING_BASE": "1"},
+            )
+            base = result.stdout.strip()
+            if result.returncode == 0 and base:
+                resolved = os.path.join(base, "metrics.jsonl")
+        except (FileNotFoundError, OSError):
+            pass
+    legacy = os.path.join(repo_root, "z-harness", "metrics.jsonl")
+    if resolved is not None and (os.path.exists(resolved) or not os.path.exists(legacy)):
+        return resolved
+    return legacy
+
+
 def _default_metrics_path():
     """Resolve the repo-wide aggregate metrics.jsonl path.
 
     Honors Z_HARNESS_BASE_DIR (where log-event.sh writes the aggregate) when
-    set; otherwise falls back to <repo>/z-harness/metrics.jsonl.
+    set; otherwise resolves the external-by-default base via plan-path.sh, with
+    a legacy <repo>/z-harness/metrics.jsonl fallback.
     """
     base = os.environ.get("Z_HARNESS_BASE_DIR")
     if base:
         return os.path.join(base, "metrics.jsonl")
-    return os.path.join(_repo_root(), "z-harness", "metrics.jsonl")
+    return _resolved_metrics_path(_repo_root())
 
 
 def load_events(path):

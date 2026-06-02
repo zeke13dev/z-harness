@@ -102,6 +102,43 @@ def _repo_root(explicit: str | None) -> Path:
         return Path.cwd()
 
 
+def _resolved_base_dir(repo_root: Path) -> Path:
+    """Resolve the artifact base via plan-path.sh base_dir.
+
+    Since the Phase-D flip the default base is EXTERNAL (XDG_STATE_HOME/...), so
+    metrics.jsonl no longer lives under repo_root/z-harness. Resolve at call time
+    (honouring the full 5-tier fallback); fall back to repo_root/z-harness when
+    plan-path.sh is unavailable. Best-effort; never raises.
+    """
+    plan_path_sh = _SCRIPT_DIR / "plan-path.sh"
+    if plan_path_sh.exists():
+        try:
+            result = subprocess.run(
+                ["bash", str(plan_path_sh), "base_dir"],
+                capture_output=True, text=True,
+                cwd=str(repo_root),
+                env={**os.environ, "_Z_HARNESS_RESOLVING_BASE": "1"},
+            )
+            base = result.stdout.strip()
+            if result.returncode == 0 and base:
+                return Path(base)
+        except (FileNotFoundError, OSError):
+            pass
+    return repo_root / "z-harness"
+
+
+def _resolved_metrics_path(repo_root: Path) -> Path:
+    """Aggregate metrics.jsonl under the resolved base, with a legacy in-repo
+    fallback when the resolved location does not exist yet."""
+    resolved = _resolved_base_dir(repo_root) / "metrics.jsonl"
+    if resolved.exists():
+        return resolved
+    legacy = repo_root / "z-harness" / "metrics.jsonl"
+    if legacy.exists():
+        return legacy
+    return resolved
+
+
 def _read_events(metrics_path: Path) -> list[dict]:
     """Read metrics.jsonl; tolerate a missing file (returns []) and skip bad lines."""
     if not metrics_path.exists():
@@ -426,7 +463,7 @@ def main(argv: list[str] | None = None) -> None:
     args = _build_parser().parse_args(argv)
 
     repo_root = _repo_root(args.repo_root)
-    metrics_path = repo_root / "z-harness" / "metrics.jsonl"
+    metrics_path = _resolved_metrics_path(repo_root)
     all_events = _read_events(metrics_path)
 
     if args.historical:

@@ -63,6 +63,37 @@ def _repo_root() -> Path:
         return Path.cwd()
 
 
+def _resolved_metrics_path(repo_root: Path) -> Path:
+    """Aggregate metrics.jsonl under the resolved artifact base.
+
+    Since the Phase-D flip the default base is EXTERNAL (XDG_STATE_HOME/...), so
+    metrics.jsonl no longer lives under repo_root/z-harness by default. Resolve
+    via plan-path.sh base_dir (honouring the full 5-tier fallback); fall back to
+    the legacy in-repo path when plan-path.sh is unavailable or the resolved
+    location does not exist yet. Best-effort; never raises.
+    """
+    import subprocess
+    plan_path_sh = Path(__file__).resolve().parent / "plan-path.sh"
+    resolved = None
+    if plan_path_sh.exists():
+        try:
+            result = subprocess.run(
+                ["bash", str(plan_path_sh), "base_dir"],
+                capture_output=True, text=True,
+                cwd=str(repo_root),
+                env={**os.environ, "_Z_HARNESS_RESOLVING_BASE": "1"},
+            )
+            base = result.stdout.strip()
+            if result.returncode == 0 and base:
+                resolved = Path(base) / "metrics.jsonl"
+        except (FileNotFoundError, OSError):
+            pass
+    legacy = repo_root / "z-harness" / "metrics.jsonl"
+    if resolved is not None and (resolved.exists() or not legacy.exists()):
+        return resolved
+    return legacy
+
+
 # ---------------------------------------------------------------------------
 # Timestamp parsing
 # ---------------------------------------------------------------------------
@@ -373,7 +404,7 @@ def main() -> None:
     metrics_path = Path(
         args.metrics
         or os.environ.get("Z_HARNESS_METRICS", "")
-        or (repo_root / "z-harness" / "metrics.jsonl")
+        or _resolved_metrics_path(repo_root)
     )
     project_root = str(repo_root)
 
