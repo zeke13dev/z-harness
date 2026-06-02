@@ -190,6 +190,83 @@ class TestRoundTrip(unittest.TestCase):
             # last_heartbeat must be >= started_at (both ISO strings, lexicographic compare works)
             self.assertGreaterEqual(after["last_heartbeat"], before["last_heartbeat"])
 
+    def test_heartbeat_on_missing_is_noop(self):
+        """heartbeat on a missing record must be a no-op: no file created, returns 0.
+
+        B1 regression guard: before the fix, heartbeat fabricated a zombie record
+        (empty slug/session/repo_id, status:running) when the target <run-id>.json
+        was absent. This polluted other sessions' overlap detection. After the fix,
+        heartbeat on a missing record must:
+          (a) return 0 (non-fatal)
+          (b) create NO file in the active-plans directory
+          (c) self-emit a registry_error event (op:heartbeat, reason:missing_record)
+        """
+        with tempfile.TemporaryDirectory() as base:
+            run_id = "never-registered-run-id"
+            active_dir = Path(base) / "active-plans"
+
+            # Precondition: no record exists
+            if active_dir.exists():
+                files_before = list(active_dir.glob("*.json"))
+            else:
+                files_before = []
+            self.assertEqual(files_before, [], "precondition: no records exist before heartbeat")
+
+            # Invoke heartbeat on a run-id that was never registered
+            r = _run_registry(
+                "heartbeat", "--run-id", run_id,
+                "--phase", "implement",
+                base_dir=base,
+            )
+
+            # (a) must return 0 (non-fatal)
+            self.assertEqual(
+                r.returncode, 0,
+                f"heartbeat on missing record must return 0; got {r.returncode}; stderr={r.stderr[:400]}",
+            )
+
+            # (b) no file must have been created
+            if active_dir.exists():
+                files_after = list(active_dir.glob("*.json"))
+            else:
+                files_after = []
+            self.assertEqual(
+                files_after, [],
+                f"heartbeat on missing record must NOT create any file; found: {files_after}",
+            )
+
+            # (c) list must be empty (no zombie record)
+            r2 = _run_registry("list", "--json", base_dir=base)
+            self.assertEqual(r2.returncode, 0)
+            records = json.loads(r2.stdout)
+            self.assertEqual(
+                records, [],
+                f"list must be empty after heartbeat on missing record; got: {records}",
+            )
+
+            # (d) a registry_error event with op:heartbeat and reason:missing_record was emitted
+            metrics = Path(base) / "metrics.jsonl"
+            found_error = False
+            if metrics.exists():
+                for line in metrics.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        ev = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if (ev.get("kind") == "registry_error"
+                            and ev.get("op") == "heartbeat"
+                            and ev.get("reason") == "missing_record"):
+                        found_error = True
+                        break
+            self.assertTrue(
+                found_error,
+                "heartbeat on missing record must self-emit registry_error(op=heartbeat, reason=missing_record); "
+                f"events in metrics.jsonl: {metrics.read_text() if metrics.exists() else '(none)'}",
+            )
+
     def test_update_scope(self):
         """update-scope merges a scope array into the record."""
         with tempfile.TemporaryDirectory() as base:

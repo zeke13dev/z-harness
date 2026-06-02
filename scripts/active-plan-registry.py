@@ -29,9 +29,11 @@ Subcommands:
   heartbeat --run-id ID [--phase P] [--current-task T]
             [--status running|paused]
       Read own record, update last_heartbeat/phase/current_task, atomic rewrite.
-      If file was reaped while alive, recreate it (benign). NON-FATAL on error.
-      SELF-LOGS: on an internal error it emits a registry_error event
-      (op:"heartbeat") via log-event.sh before returning 0, so the non-fatal
+      If the record is ABSENT (not registered, or already deregistered/reaped),
+      emit registry_error(op:heartbeat, reason:missing_record) and return 0
+      (no-op). Does NOT fabricate a zombie record with empty fields.
+      NON-FATAL on error. SELF-LOGS: on an internal error it emits a registry_error
+      event (op:"heartbeat") via log-event.sh before returning 0, so the non-fatal
       failure is still observable in telemetry (a caller `|| log` would be dead
       code since this always returns 0).
 
@@ -457,6 +459,12 @@ def cmd_heartbeat(args: argparse.Namespace) -> int:
     ``|| log registry_error`` would be dead code. Instead, on any caught internal
     error we emit a ``registry_error`` event (op:"heartbeat") via log-event.sh
     BEFORE returning 0, so the failure is still observable in telemetry.
+
+    IMPORTANT: heartbeat does NOT fabricate a record when the target <run-id>.json
+    is absent. If the file is missing (never registered, or already reaped/deregistered),
+    emit a registry_error(reason:missing_record) and return 0 (no-op). Recreating
+    with empty fields is worse than skipping: empty slug/session/repo_id pollutes
+    other sessions' overlap detection with phantom zombie records.
     """
     run_id = args.run_id
     if not _is_safe_basename(run_id):
@@ -477,36 +485,20 @@ def cmd_heartbeat(args: argparse.Namespace) -> int:
     try:
         record = _atomic_read(record_path)
         if record is None:
-            # File was reaped while alive — recreate minimal record (benign).
-            record = {
-                "schema_version": 1,
-                "run_id": run_id,
-                "session_id": "",
-                "slug": "",
-                "command": "",
-                "command_version": "",
-                "phase": getattr(args, "phase", "") or "",
-                "status": "running",
-                "pid": os.getpid(),
-                "host": socket.gethostname(),
-                "repo_id": "",
-                "repo_root": "",
-                "git_common_dir": "",
-                "worktree_path": "",
-                "branch": "",
-                "started_at": _iso_now(),
-                "last_heartbeat": _iso_now(),
-                "current_task": getattr(args, "current_task", "") or "",
-                "scope": [],
-            }
-        else:
-            record["last_heartbeat"] = _iso_now()
-            if getattr(args, "phase", None):
-                record["phase"] = args.phase
-            if getattr(args, "current_task", None) is not None:
-                record["current_task"] = args.current_task
-            if getattr(args, "status", None):
-                record["status"] = args.status
+            # Record is absent (never registered, or already reaped/deregistered).
+            # Do NOT fabricate a zombie record with empty fields — that would pollute
+            # other sessions' overlap detection. Emit a registry_error and return 0.
+            _emit_event(run_id, "registry_error", {
+                "op": "heartbeat", "run_id": run_id, "reason": "missing_record",
+            })
+            return 0  # non-fatal no-op
+        record["last_heartbeat"] = _iso_now()
+        if getattr(args, "phase", None):
+            record["phase"] = args.phase
+        if getattr(args, "current_task", None) is not None:
+            record["current_task"] = args.current_task
+        if getattr(args, "status", None):
+            record["status"] = args.status
         _atomic_write(record_path, record)
     except OSError as exc:
         _emit_event(run_id, "registry_error", {

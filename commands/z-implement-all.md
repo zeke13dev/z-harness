@@ -57,6 +57,8 @@ established here:
 # Run id — the SAME timestamp id used later for run_start / archive (IMPL_RUN). Bind it here
 # once (it is just a timestamp; a safe basename) and reuse it verbatim in Setup step 5's
 # archive paths and the registry --run-id, so there is exactly one run id per invocation.
+# Canonical variable for this command: $RUN (alias $IMPL_RUN). Every register / heartbeat /
+# overlaps / deregister call in this file uses $RUN (never any other variable).
 IMPL_RUN="$(date -u +%Y%m%dT%H%M%SZ)-implement"
 RUN="$IMPL_RUN"   # registry --run-id; also the $RUN used later for archive/memory-review paths
 
@@ -148,13 +150,23 @@ Spell out every code:
   `branch`, `current_task`, `host`, and the shared paths — re-run with `--json` to render them)
   via `AskUserQuestion`: **proceed** / **wait** (re-scan after the peer finishes) / **abort**.
   Under `Z_HARNESS_NO_ASK` → proceed and log (advisory is non-blocking unattended).
-  On **abort** → a record EXISTS, so `FINALIZE_STATUS=aborted`, `deregister --status aborted`,
-  push-notify, `exit 1` (see the FINALIZE_STATUS rule below).
+  On **abort** → a record EXISTS; run:
+  ```bash
+  FINALIZE_STATUS=aborted
+  python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+    --run-id "$RUN" --status aborted 2>/dev/null || true
+  # push-notify + exit 1
+  ```
 - `OVL_RC == 20` (blocking overlap — only under strict mode AND an `explicit`×`explicit` exact
-  path match with a live peer) → **HALT**: a record EXISTS, so `FINALIZE_STATUS=aborted`,
-  push-notify (hard pause, fires regardless of notify level), `deregister --status aborted`, and
-  `exit 1` without dispatching any task. This is the one hard gate (registry invariant 1 permits
-  it only under strict mode).
+  path match with a live peer) → **HALT**: a record EXISTS; push-notify (hard pause, fires
+  regardless of notify level), then run:
+  ```bash
+  FINALIZE_STATUS=aborted
+  python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+    --run-id "$RUN" --status aborted 2>/dev/null || true
+  # exit 1 without dispatching any task
+  ```
+  This is the one hard gate (registry invariant 1 permits it only under strict mode).
 - **Any OTHER nonzero `OVL_RC` (including `4` — overlaps could not resolve the registry)** → this
   is NOT a hard block and NOT a silent "no overlap". Log a `registry_error` event (op:`overlaps`)
   and **PROCEED** (the scan was inconclusive; overlap is advisory, so an inconclusive scan
@@ -463,8 +475,8 @@ The numbered steps below describe a **single task track** — one task's journey
 
 These exist because the T006 saga (4 attempts spanning ~20 wall-clock hours, each a *different* failure mode — OOM, degenerate model, load avg 156, load avg 211) was not caught by the skip-marker list. Skip-markers match static text in the task block; they cannot catch novel runtime failures. The caps below are unconditional.
 
-- **`MAX_ATTEMPTS=2` per task ID for the entire `/z-implement-all` run.** "Attempt" = a fresh dispatch through step 5 (implementer). Retries inside step 7 (review-failure re-spawn) count as part of the same attempt. After 2 attempts that don't reach `task_done`, halt the task, push-notify, and present to the user with options: skip / override / re-spec / abandon. Override via `Z_HARNESS_MAX_ATTEMPTS=N`.
-- **`MAX_TASK_WALL_MS=2700000` (45 min) per task track.** Wall time start = `task_start` event; end = `task_done` or halt. If a track exceeds this, the orchestrator halts the track regardless of subagent state, logs `task_halt` with `reason: "wall_clock_cap"`, and surfaces to the user. Override via `Z_HARNESS_MAX_TASK_WALL_MS=ms`.
+- **`MAX_ATTEMPTS=2` per task ID for the entire `/z-implement-all` run.** "Attempt" = a fresh dispatch through step 5 (implementer). Retries inside step 7 (review-failure re-spawn) count as part of the same attempt. After 2 attempts that don't reach `task_done`, halt the task, push-notify, and present to the user with options: skip / override / re-spec / abandon. Override via `Z_HARNESS_MAX_ATTEMPTS=N`. If the user chooses **abandon** (ending the run), this is a run-ending halt — **set `FINALIZE_STATUS=aborted`** before reaching Finalize (per the FINALIZE_STATUS rule in Phase 0.0).
+- **`MAX_TASK_WALL_MS=2700000` (45 min) per task track.** Wall time start = `task_start` event; end = `task_done` or halt. If a track exceeds this, the orchestrator halts the track regardless of subagent state, logs `task_halt` with `reason: "wall_clock_cap"`, and surfaces to the user. If this ends the run (user chooses to abandon), **set `FINALIZE_STATUS=aborted`** before reaching Finalize. Override via `Z_HARNESS_MAX_TASK_WALL_MS=ms`.
 - **`MAX_DISTINCT_HALTS=3` per task ID.** If a task has been halted with 3 different `reason` values across all attempts (e.g. `spec_problem`, `unable_to_complete`, `environmental`), auto-flag it as skip for the rest of the run and present to the user with a one-line summary of the three failure modes. Prevents the T006 pattern.
 - **`MAX_BATCH_STALL_MS=1800000` (30 min) per batch.** If a batch goes 30 min with no `task_done` or `task_halt` event from *any* in-flight track, the orchestrator considers it stalled. Push-notify the user with a list of in-flight task IDs and ask: continue waiting / cancel batch / kill specific tracks.
 - **Halt taxonomy that doesn't burn an attempt.** A task halted with `reason: "needs_clarification"` or `reason: "decision_needed"` where the user resolves it and asks to resume *does not* count toward `MAX_ATTEMPTS`. Resolved spec/decision halts reset the attempt counter for that task. (Otherwise a 3-decision-gate task could exhaust its attempts before implementer ever wrote code.)
@@ -614,6 +626,13 @@ Parse the implementer's return per the `STATUS:` block. Branches:
 - `STATUS: spec_problem` → halt queue, push-notify, escalate to user. Likely needs SPEC patch before any further tasks proceed.
 - `STATUS: decision_needed` → halt queue, push-notify, present the decision + options via `AskUserQuestion`. This is the "major design decision must be approved by user" gate. Record the decision in `$BASE/archive/$RUN/decisions-late.md`. After answer, re-spawn implementer.
 - `STATUS: unable_to_complete` → flip `[~]` back to `[ ]`, halt queue, push-notify with the reason.
+  This is a run-ending halt (Main-loop condition 2). Per the FINALIZE_STATUS rule in Phase 0.0:
+  **set `FINALIZE_STATUS=aborted`** before jumping to Finalize so the record is deregistered as
+  `aborted` (not `complete`). Example:
+  ```bash
+  FINALIZE_STATUS=aborted
+  # ... jump to Finalize (which calls deregister --status aborted) ...
+  ```
 
 ### 6. Capture diff and spawn reviewer (fresh context)
 
