@@ -29,7 +29,7 @@ raw decision events  →  candidate  →  approved  (or rejected)
 
 ### 1. Raw events
 
-Every workflow decision you make is logged to `z-harness/metrics.jsonl` as a structured event (via `scripts/log-decision.sh`). The axiom extractor reads these events to find recurring patterns.
+Every workflow decision you make is logged to `<base>/metrics.jsonl` (the resolved artifact base — see [telemetry](telemetry.md)) as a structured event (via `scripts/log-decision.sh`). The axiom extractor reads these events to find recurring patterns.
 
 ### 2. Candidate
 

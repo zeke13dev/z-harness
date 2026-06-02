@@ -2,7 +2,11 @@
 
 > Last updated: 2026-05-27
 
-All events are appended to `z-harness/metrics.jsonl` via `scripts/log-event.sh`.
+All events are appended to `<base>/metrics.jsonl` via `scripts/log-event.sh`,
+where `<base>` is the resolved artifact base — external by default
+(`$XDG_STATE_HOME/z-harness/<repo-id>/`, e.g. `~/.local/state/z-harness/...`);
+see the README for the `Z_HARNESS_EXTERNAL_DEFAULT` / `Z_HARNESS_BASE_DIR`
+overrides, or run `/z-where` to print it.
 Standard fields on every event: `ts`, `run`, `kind` (and `slug` when set). The
 fields `prompt_chars`, `response_chars`, and `wall_ms` are optional — they
 appear only on subagent-bracket events, not on lifecycle or gate events.

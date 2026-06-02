@@ -162,7 +162,7 @@ performs an atomic swap if a newer version is found. Rolls back automatically
 on any swap failure.
 
 After a successful update, both modes emit a `harness_updated` event to
-`z-harness/metrics.jsonl` with `old_version` and `new_version`.
+`<base>/metrics.jsonl` (the resolved artifact base) with `old_version` and `new_version`.
 
 ```
 [z-update] Updated successfully.

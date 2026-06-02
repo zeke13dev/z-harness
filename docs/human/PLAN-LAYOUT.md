@@ -108,7 +108,7 @@ to preview a bulk migration.
   error showing the diff.
 - Nothing inside the moved files is rewritten — path construction is
   runtime-resolved via `Z_HARNESS_PLANS_DIR`.
-- A `migration_done` event per slug is logged to `z-harness/metrics.jsonl`.
+- A `migration_done` event per slug is logged to `<base>/metrics.jsonl`.
 
 ---
 
