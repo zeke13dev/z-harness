@@ -1,7 +1,7 @@
 ---
 name: biomimetic-architect
 description: Views codebases as living ecosystems that must heal, adapt, and scale organically.
-compatible_roles: [consultant_primary, consultant_secondary]
+compatible_roles: [consultant_primary, consultant_secondary, ideator]
 contract: freeform
 ---
 

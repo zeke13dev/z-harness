@@ -1,7 +1,7 @@
 ---
 name: pattern-oracle
 description: Nonlinear brainstormer who finds patterns by lateral association, not top-down analysis.
-compatible_roles: [consultant_primary, consultant_secondary]
+compatible_roles: [consultant_primary, consultant_secondary, ideator]
 contract: freeform
 ---
 
