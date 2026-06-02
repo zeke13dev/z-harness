@@ -477,7 +477,7 @@ Obey DRY/KISS/SOLID. No shortcuts unless PLAN.md explicitly approved one for thi
 
 3. Spawn the reviewer(s) with the diff, not just file contents.
 
-   **Dual-reviewer dispatch (gated on `experiment.persona_rotation`).** When the knob is ON, dispatch the base codex reviewer AND one advisory random-arm reviewer as two SEPARATE `Agent()` calls — both share `attempt_id = <task-id>-v1`, each with its own `draw_id`. When the knob is OFF, only the base codex reviewer runs (today's behavior, unchanged).
+   **Dual-reviewer dispatch (gated on `experiment.persona_rotation`).** When the knob is ON, dispatch the base codex reviewer AND one advisory random-arm reviewer as two SEPARATE `Agent()` calls — both share `attempt_id = <task-id>-v1`, each with its own `draw_id`. When the knob is OFF, only the base codex reviewer runs (today's behavior, unchanged). The neutral base codex reviewer is the authoritative gate: its verdict is the decision of record and the only input to pass/fail outcome. The advisory random-arm reviewer (a single `random-for-role reviewer` draw, `selection_source=random_role_pool`) fires only when BOTH `experiment.persona_rotation` AND `personas.review_eval` are on; its verdict is logged for data-collection and never changes pass/fail outcome.
 
    **Base codex reviewer** (always the gating reviewer):
 
@@ -499,10 +499,11 @@ Agent(
    fi
    ```
 
-   **Random-arm reviewer (advisory — only when `experiment.persona_rotation == "true"`).** Verdict is recorded for data-collection; it must NOT change review outcome. Draw a reviewer persona, prepend it to the prompt:
+   **Random-arm reviewer (advisory — only when BOTH `experiment.persona_rotation == "true"` AND `personas.review_eval == "true"`).** Verdict is recorded for data-collection; it must NOT change review outcome. Draw a reviewer persona, prepend it to the prompt:
 
    ```bash
-   if [ "$PERSONA_ROTATION" = "true" ]; then
+   REVIEW_EVAL="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get personas.review_eval 2>/dev/null || echo true)"
+   if [ "$PERSONA_ROTATION" = "true" ] && [ "$REVIEW_EVAL" = "true" ]; then
      # Re-export join keys so the reviewer draw event carries task_id + attempt_id.
      # ATTEMPT_ID is set above as <task-id>-v1; these exports make it available to
      # resolve-persona.py even if this block runs after a shell scope change.
@@ -527,7 +528,7 @@ Agent(
 
 <!-- RUNTIME-GATE: subagent; non-supporting drivers may skip the random-arm reviewer — it is advisory only. The base codex reviewer above is the required correctness gate. -->
 ```
-# Only dispatch when PERSONA_ROTATION == "true":
+# Only dispatch when PERSONA_ROTATION == "true" AND REVIEW_EVAL == "true":
 Agent(
   subagent_type="reviewer",
   description="Advisory review (random arm) task <ID>",
@@ -537,7 +538,7 @@ Agent(
 
    Log the random-arm reviewer as `persona_bound` (tag `reviewer_participant=random_arm`, same `attempt_id`):
    ```bash
-   if [ "$PERSONA_ROTATION" = "true" ]; then
+   if [ "$PERSONA_ROTATION" = "true" ] && [ "$REVIEW_EVAL" = "true" ]; then
      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
        "tasks/<task-id>" persona_bound \
        "$(python3 -c 'import json,sys; print(json.dumps({"command":"z-implement-next","role":"reviewer","task_id":sys.argv[1],"attempt_id":sys.argv[2],"reviewer_participant":"random_arm","persona_id":sys.argv[3],"draw_id":sys.argv[4],"cycle":1}))' "<task-id>" "$ATTEMPT_ID" "$REVIEWER_PERSONA_ID" "$REVIEWER_DRAW_ID")"

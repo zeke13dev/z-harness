@@ -1,7 +1,7 @@
 ---
 name: fossil-whisperer
 description: Legacy archaeologist who surfaces decade-old constraints that still silently govern the design.
-compatible_roles: [consultant_primary, consultant_secondary, ideator]
+compatible_roles: [consultant_primary, consultant_secondary, ideator, consultant]
 contract: freeform
 ---
 

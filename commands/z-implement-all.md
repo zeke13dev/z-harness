@@ -837,7 +837,7 @@ If `REVIEWER_PROVIDER == "none"` (i.e. `Z_HARNESS_CONSULT=off`): skip the extern
 
 Otherwise (consult=on), spawn the external reviewer(s):
 
-**Dual-reviewer dispatch (gated on `experiment.persona_rotation`).** When the knob is ON, dispatch the base codex reviewer AND one advisory random-arm reviewer as two SEPARATE `Agent()` calls (both share the attempt's `attempt_id`, each with its own `draw_id`). When the knob is OFF, only the base codex reviewer runs — today's behavior, unchanged.
+**Dual-reviewer dispatch (gated on `experiment.persona_rotation`).** When the knob is ON, dispatch the base codex reviewer AND one advisory random-arm reviewer as two SEPARATE `Agent()` calls (both share the attempt's `attempt_id`, each with its own `draw_id`). When the knob is OFF, only the base codex reviewer runs — today's behavior, unchanged. The neutral base codex reviewer is the authoritative gate: its blockers/majors determine retry/halt behavior and its verdict is the decision of record. The advisory random-arm reviewer (a single `random-for-role reviewer` draw, `selection_source=random_role_pool`) fires only when BOTH `experiment.persona_rotation` AND `personas.review_eval` are on; its verdict is logged for data-collection and never changes pass/fail outcome.
 
 **Base codex reviewer** (always the gating reviewer — its blockers/majors drive retry/halt):
 
@@ -859,10 +859,11 @@ if [ "$PERSONA_ROTATION" = "true" ]; then
 fi
 ```
 
-**Random-arm reviewer (advisory — only when `experiment.persona_rotation == "true"`).** Emit verdict as advisory; it must NOT change halt/retry behavior. Draw a reviewer persona, prepend it to the prompt, then dispatch as a parallel `Agent()` call alongside the base reviewer:
+**Random-arm reviewer (advisory — only when BOTH `experiment.persona_rotation == "true"` AND `personas.review_eval == "true"`).** Emit verdict as advisory; it must NOT change halt/retry behavior. Draw a reviewer persona, prepend it to the prompt, then dispatch as a parallel `Agent()` call alongside the base reviewer:
 
 ```bash
-if [ "$PERSONA_ROTATION" = "true" ]; then
+REVIEW_EVAL="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get personas.review_eval 2>/dev/null || echo true)"
+if [ "$PERSONA_ROTATION" = "true" ] && [ "$REVIEW_EVAL" = "true" ]; then
   # Re-export join keys so the reviewer draw event carries task_id + attempt_id.
   # These were exported in step 5.0 but are re-exported here to guarantee they
   # are in scope even if the shell has been reset or this block runs in a
@@ -888,7 +889,7 @@ fi
 
 <!-- RUNTIME-GATE: subagent; non-supporting drivers may skip the random-arm reviewer — it is advisory only. The base codex reviewer above is the required correctness gate. -->
 ```
-# Only dispatch when PERSONA_ROTATION == "true":
+# Only dispatch when PERSONA_ROTATION == "true" AND REVIEW_EVAL == "true":
 Agent(
   subagent_type="reviewer",
   description="Advisory review (random arm) <task-id>",
@@ -898,7 +899,7 @@ Agent(
 
 Log the random-arm reviewer as `persona_bound` (tag `reviewer_participant=random_arm`, same `attempt_id`):
 ```bash
-if [ "$PERSONA_ROTATION" = "true" ]; then
+if [ "$PERSONA_ROTATION" = "true" ] && [ "$REVIEW_EVAL" = "true" ]; then
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
     "tasks/<task-id>" persona_bound \
     "$(python3 -c 'import json,sys; print(json.dumps({"command":"z-implement-all","role":"reviewer","task_id":sys.argv[1],"attempt_id":sys.argv[2],"reviewer_participant":"random_arm","persona_id":sys.argv[3],"draw_id":sys.argv[4],"cycle":int(sys.argv[5])}))' "<task-id>" "$ATTEMPT_ID" "$REVIEWER_PERSONA_ID" "$REVIEWER_DRAW_ID" "$CYCLE")"
@@ -996,7 +997,7 @@ If `REVIEWER_PROVIDER_RETRY == "none"` (i.e. `Z_HARNESS_CONSULT=off`): skip the 
 - Emit `self_review_completed` event after the self-review returns.
 - Parse the response exactly as you would a standard reviewer response.
 
-Otherwise (consult=on), spawn the external reviewer(s). Same dual-reviewer pattern as step 6 applies here — gated on `PERSONA_ROTATION`.
+Otherwise (consult=on), spawn the external reviewer(s). Same dual-reviewer pattern as step 6 applies here — base codex reviewer always runs; advisory random-arm reviewer gated on both `PERSONA_ROTATION` and `REVIEW_EVAL`.
 
 **Base codex reviewer** (gating, cycle ≥ 2):
 
@@ -1017,10 +1018,11 @@ if [ "$PERSONA_ROTATION" = "true" ]; then
 fi
 ```
 
-**Random-arm reviewer (advisory, cycle ≥ 2 — only when `experiment.persona_rotation == "true"`).** Re-draw a reviewer persona for the new cycle (fresh draw per cycle; the cycle-level draw ensures the random arm rotates alongside the implementer retry). Same draw pattern as step 6:
+**Random-arm reviewer (advisory, cycle ≥ 2 — only when BOTH `experiment.persona_rotation == "true"` AND `personas.review_eval == "true"`).** Re-draw a reviewer persona for the new cycle (fresh draw per cycle; the cycle-level draw ensures the random arm rotates alongside the implementer retry). Same draw pattern as step 6:
 
 ```bash
-if [ "$PERSONA_ROTATION" = "true" ]; then
+REVIEW_EVAL="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get personas.review_eval 2>/dev/null || echo true)"
+if [ "$PERSONA_ROTATION" = "true" ] && [ "$REVIEW_EVAL" = "true" ]; then
   # Re-export join keys so the reviewer draw event carries task_id + attempt_id.
   export Z_HARNESS_TASK_ID="<task-id>"
   export Z_HARNESS_ATTEMPT_ID="$ATTEMPT_ID"
@@ -1043,7 +1045,7 @@ fi
 
 <!-- RUNTIME-GATE: subagent; non-supporting drivers may skip the random-arm reviewer — it is advisory only. The base codex reviewer above is the required correctness gate. -->
 ```
-# Only dispatch when PERSONA_ROTATION == "true":
+# Only dispatch when PERSONA_ROTATION == "true" AND REVIEW_EVAL == "true":
 Agent(
   subagent_type="reviewer",
   description="Advisory review (random arm) <task-id> v<CYCLE>",
@@ -1053,7 +1055,7 @@ Agent(
 
 Log the random-arm reviewer as `persona_bound` (tag `reviewer_participant=random_arm`, same `attempt_id`):
 ```bash
-if [ "$PERSONA_ROTATION" = "true" ]; then
+if [ "$PERSONA_ROTATION" = "true" ] && [ "$REVIEW_EVAL" = "true" ]; then
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
     "tasks/<task-id>" persona_bound \
     "$(python3 -c 'import json,sys; print(json.dumps({"command":"z-implement-all","role":"reviewer","task_id":sys.argv[1],"attempt_id":sys.argv[2],"reviewer_participant":"random_arm","persona_id":sys.argv[3],"draw_id":sys.argv[4],"cycle":int(sys.argv[5])}))' "<task-id>" "$ATTEMPT_ID" "$REVIEWER_PERSONA_ID" "$REVIEWER_DRAW_ID" "$CYCLE")"

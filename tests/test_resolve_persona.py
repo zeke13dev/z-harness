@@ -3137,6 +3137,389 @@ class TestRandomDistinctForRole(unittest.TestCase):
                           env_extra=self._make_env(b, u, r))
             self.assertEqual(result.returncode, 2)
 
+    # -----------------------------------------------------------------------
+    # T001: consultant and audit_persona roles
+    # -----------------------------------------------------------------------
+
+    def _seed_consultant_pool(self, builtin_dir: str, n: int) -> None:
+        """Write n consultant-compatible personas + boring-anchor."""
+        for i in range(n):
+            _write_persona(
+                Path(builtin_dir), f"consultant-persona-{i}",
+                description=f"Consultant persona {i}",
+                extra_frontmatter="compatible_roles: [consultant]",
+            )
+        _write_persona(Path(builtin_dir), "boring-anchor", description="Control persona")
+
+    def _seed_audit_pool(self, builtin_dir: str, n: int) -> None:
+        """Write n audit_persona-compatible personas + boring-anchor."""
+        for i in range(n):
+            _write_persona(
+                Path(builtin_dir), f"audit-persona-{i}",
+                description=f"Audit persona {i}",
+                extra_frontmatter="compatible_roles: [audit_persona]",
+            )
+        _write_persona(Path(builtin_dir), "boring-anchor", description="Control persona")
+
+    def test_consultant_is_a_known_role(self):
+        """
+        The 'consultant' role must be registered in _ROLE_REGISTRY.
+
+        Failure class: if 'consultant' is absent, random-distinct-for-role exits 2
+        and brainstorm-style diversity draws for that role can never run.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as b, tempfile.TemporaryDirectory() as u, \
+             tempfile.TemporaryDirectory() as r:
+            self._seed_consultant_pool(b, 3)
+            result = _run(
+                ["random-distinct-for-role", "consultant", "--count=1", "--seed=1"],
+                env_extra=self._make_env(b, u, r),
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+    def test_audit_persona_is_a_known_role(self):
+        """
+        The 'audit_persona' role must be registered in _ROLE_REGISTRY.
+
+        Failure class: if 'audit_persona' is absent, random-distinct-for-role exits 2
+        and audit-diversity draws can never run.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as b, tempfile.TemporaryDirectory() as u, \
+             tempfile.TemporaryDirectory() as r:
+            self._seed_audit_pool(b, 3)
+            result = _run(
+                ["random-distinct-for-role", "audit_persona", "--count=1", "--seed=1"],
+                env_extra=self._make_env(b, u, r),
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+    def test_consultant_draws_n_distinct(self):
+        """
+        random-distinct-for-role consultant --count=5 returns 5 distinct persona_ids.
+
+        Invariant: drawn personas must be unique (no replacement).
+        Failure class: if sampling is done with replacement, the same persona could
+        appear twice in one brainstorm batch, which breaks diversity guarantees.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as b, tempfile.TemporaryDirectory() as u, \
+             tempfile.TemporaryDirectory() as r:
+            self._seed_consultant_pool(b, 7)
+            result = _run(
+                ["random-distinct-for-role", "consultant", "--count=5", "--seed=11"],
+                env_extra=self._make_env(b, u, r),
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            data = json.loads(result.stdout)
+            self.assertEqual(len(data), 5, msg=f"Expected 5 results, got {len(data)}")
+            names = [d["persona"] for d in data]
+            self.assertEqual(
+                len(set(names)), 5,
+                msg=f"Draws must be distinct (no replacement). Got: {names}",
+            )
+
+    def test_audit_persona_draws_n_distinct(self):
+        """
+        random-distinct-for-role audit_persona --count=5 returns 5 distinct persona_ids.
+
+        Invariant: drawn personas must be unique (no replacement).
+        Failure class: if sampling is done with replacement, the same persona could
+        appear twice, breaking diversity guarantees.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as b, tempfile.TemporaryDirectory() as u, \
+             tempfile.TemporaryDirectory() as r:
+            self._seed_audit_pool(b, 7)
+            result = _run(
+                ["random-distinct-for-role", "audit_persona", "--count=5", "--seed=13"],
+                env_extra=self._make_env(b, u, r),
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            data = json.loads(result.stdout)
+            self.assertEqual(len(data), 5, msg=f"Expected 5 results, got {len(data)}")
+            names = [d["persona"] for d in data]
+            self.assertEqual(
+                len(set(names)), 5,
+                msg=f"Draws must be distinct (no replacement). Got: {names}",
+            )
+
+    def test_consultant_distinct_across_several_seeds(self):
+        """
+        Multiple seeds for consultant role each return distinct persona_ids within the draw.
+
+        Tests uniqueness across a range of seeds to ensure no seed produces
+        a repeated persona in the same batch.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as b, tempfile.TemporaryDirectory() as u, \
+             tempfile.TemporaryDirectory() as r:
+            self._seed_consultant_pool(b, 6)
+            env = self._make_env(b, u, r)
+            for seed in range(8):
+                result = _run(
+                    ["random-distinct-for-role", "consultant", "--count=5", f"--seed={seed}"],
+                    env_extra=env,
+                )
+                self.assertEqual(result.returncode, 0, msg=f"seed={seed}: {result.stderr}")
+                names = [d["persona"] for d in json.loads(result.stdout)]
+                self.assertEqual(
+                    len(set(names)), len(names),
+                    msg=f"seed={seed}: draws must be distinct. Got: {names}",
+                )
+
+    def test_audit_persona_distinct_across_several_seeds(self):
+        """
+        Multiple seeds for audit_persona role each return distinct persona_ids within the draw.
+
+        Tests uniqueness across a range of seeds to ensure no seed produces
+        a repeated persona in the same batch.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as b, tempfile.TemporaryDirectory() as u, \
+             tempfile.TemporaryDirectory() as r:
+            self._seed_audit_pool(b, 6)
+            env = self._make_env(b, u, r)
+            for seed in range(8):
+                result = _run(
+                    ["random-distinct-for-role", "audit_persona", "--count=5", f"--seed={seed}"],
+                    env_extra=env,
+                )
+                self.assertEqual(result.returncode, 0, msg=f"seed={seed}: {result.stderr}")
+                names = [d["persona"] for d in json.loads(result.stdout)]
+                self.assertEqual(
+                    len(set(names)), len(names),
+                    msg=f"seed={seed}: draws must be distinct. Got: {names}",
+                )
+
+    def test_consultant_never_draws_control_arms(self):
+        """
+        boring-anchor and no-persona must never appear in consultant draws.
+
+        Failure class: if control arms leak into the distinct pool, the diversity
+        contract is broken — brainstorm slots would waste a position on a control arm.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as b, tempfile.TemporaryDirectory() as u, \
+             tempfile.TemporaryDirectory() as r:
+            self._seed_consultant_pool(b, 4)
+            env = self._make_env(b, u, r)
+            for seed in range(10):
+                result = _run(
+                    ["random-distinct-for-role", "consultant", "--count=4", f"--seed={seed}"],
+                    env_extra=env,
+                )
+                self.assertEqual(result.returncode, 0, msg=result.stderr)
+                names = {d["persona"] for d in json.loads(result.stdout)}
+                self.assertNotIn("boring-anchor", names,
+                                 msg=f"seed={seed}: boring-anchor must not appear in consultant draw")
+                self.assertNotIn("no-persona", names,
+                                 msg=f"seed={seed}: no-persona must not appear in consultant draw")
+
+    def test_audit_persona_never_draws_control_arms(self):
+        """
+        boring-anchor and no-persona must never appear in audit_persona draws.
+
+        Failure class: if control arms leak into the distinct pool, the diversity
+        contract is broken — audit slots would waste a position on a control arm.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as b, tempfile.TemporaryDirectory() as u, \
+             tempfile.TemporaryDirectory() as r:
+            self._seed_audit_pool(b, 4)
+            env = self._make_env(b, u, r)
+            for seed in range(10):
+                result = _run(
+                    ["random-distinct-for-role", "audit_persona", "--count=4", f"--seed={seed}"],
+                    env_extra=env,
+                )
+                self.assertEqual(result.returncode, 0, msg=result.stderr)
+                names = {d["persona"] for d in json.loads(result.stdout)}
+                self.assertNotIn("boring-anchor", names,
+                                 msg=f"seed={seed}: boring-anchor must not appear in audit_persona draw")
+                self.assertNotIn("no-persona", names,
+                                 msg=f"seed={seed}: no-persona must not appear in audit_persona draw")
+
+    def test_consultant_underflow_degrades_gracefully(self):
+        """
+        Requesting more consultant personas than exist returns all available,
+        exits 0, and notes underflow on stderr.
+
+        Failure class: if underflow crashes or exits non-zero, any caller requesting
+        more personas than exist in the pool will fail unexpectedly.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as b, tempfile.TemporaryDirectory() as u, \
+             tempfile.TemporaryDirectory() as r:
+            self._seed_consultant_pool(b, 2)
+            result = _run(
+                ["random-distinct-for-role", "consultant", "--count=5", "--seed=1"],
+                env_extra=self._make_env(b, u, r),
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            data = json.loads(result.stdout)
+            self.assertEqual(len(data), 2, msg="underflow returns all available, not requested count")
+            self.assertEqual(len({d["persona"] for d in data}), 2)
+            self.assertIn("underflow", result.stderr)
+
+    def test_audit_persona_underflow_degrades_gracefully(self):
+        """
+        Requesting more audit_persona personas than exist returns all available,
+        exits 0, and notes underflow on stderr.
+
+        Failure class: if underflow crashes or exits non-zero, any caller requesting
+        more personas than exist in the pool will fail unexpectedly.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as b, tempfile.TemporaryDirectory() as u, \
+             tempfile.TemporaryDirectory() as r:
+            self._seed_audit_pool(b, 2)
+            result = _run(
+                ["random-distinct-for-role", "audit_persona", "--count=5", "--seed=1"],
+                env_extra=self._make_env(b, u, r),
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            data = json.loads(result.stdout)
+            self.assertEqual(len(data), 2, msg="underflow returns all available, not requested count")
+            self.assertEqual(len({d["persona"] for d in data}), 2)
+            self.assertIn("underflow", result.stderr)
+
+    def test_consultant_in_role_registry_with_none_contract(self):
+        """
+        _ROLE_REGISTRY must contain 'consultant' with value None (any-contract).
+
+        Failure class: if 'consultant' is absent or has a non-None contract value,
+        random-distinct-for-role will reject the role or incorrectly filter personas.
+        """
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("rp", str(_REPO_ROOT / "scripts" / "resolve-persona.py"))
+        rp = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rp)
+        self.assertIn(
+            "consultant", rp._ROLE_REGISTRY,
+            msg="'consultant' must be present in _ROLE_REGISTRY",
+        )
+        self.assertIsNone(
+            rp._ROLE_REGISTRY["consultant"],
+            msg="_ROLE_REGISTRY['consultant'] must be None (any-contract semantics)",
+        )
+
+    def test_audit_persona_in_role_registry_with_none_contract(self):
+        """
+        _ROLE_REGISTRY must contain 'audit_persona' with value None (any-contract).
+
+        Failure class: if 'audit_persona' is absent or has a non-None contract value,
+        random-distinct-for-role will reject the role or incorrectly filter personas.
+        """
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("rp", str(_REPO_ROOT / "scripts" / "resolve-persona.py"))
+        rp = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rp)
+        self.assertIn(
+            "audit_persona", rp._ROLE_REGISTRY,
+            msg="'audit_persona' must be present in _ROLE_REGISTRY",
+        )
+        self.assertIsNone(
+            rp._ROLE_REGISTRY["audit_persona"],
+            msg="_ROLE_REGISTRY['audit_persona'] must be None (any-contract semantics)",
+        )
+
+
+# ---------------------------------------------------------------------------
+# T002: builtin pool size per role (consultant >= 5, audit_persona >= 4)
+# ---------------------------------------------------------------------------
+
+class TestBuiltinRolePoolSize(unittest.TestCase):
+    """
+    Verify the real builtin persona pool meets minimum pool-size requirements for
+    the 'consultant' and 'audit_persona' roles by calling random-distinct-for-role
+    against the actual builtin directory.
+
+    Invariant: consultant pool >= 5 distinct personas; audit_persona pool >= 4.
+    Failure class: if any of the 7 consultant or 6 audit_persona builtin personas
+    lacks the correct compatible_roles tag, the draw underflows and the test fails.
+    """
+
+    _BUILTIN_DIR = str(_REPO_ROOT / "personas" / "builtin")
+
+    def _make_real_builtin_env(self) -> dict:
+        """Point the script at the real builtin directory with empty user/repo layers."""
+        import tempfile
+        # We need stable temp dirs for user/repo, but they must live until the test ends.
+        # Use a single shared empty dir for both (read-only, no cleanup needed mid-test).
+        empty = str(_REPO_ROOT / "personas" / "builtin")  # placeholder; will be overridden
+        return {
+            "Z_HARNESS_BUILTIN_PERSONAS_DIR": self._BUILTIN_DIR,
+            # Point user and repo layers at a non-existent path so only builtin is loaded.
+            "Z_HARNESS_USER_PERSONAS_DIR": "/tmp/__z_harness_empty_user__",
+            "Z_HARNESS_REPO_PERSONAS_DIR": "/tmp/__z_harness_empty_repo__",
+        }
+
+    def test_consultant_pool_meets_minimum_via_random_distinct(self):
+        """
+        random-distinct-for-role consultant --count=5 against the real builtin pool
+        must return exactly 5 personas (exit 0, no underflow warning).
+
+        Invariant: >= 5 builtin personas carry compatible_roles: [..., consultant].
+        Failure class: if fewer than 5 personas are tagged, the result array is short
+        and/or stderr contains 'underflow', revealing a tagging gap.
+        """
+        env = self._make_real_builtin_env()
+        result = _run(
+            ["random-distinct-for-role", "consultant", "--count=5", "--seed=42"],
+            env_extra=env,
+        )
+        self.assertEqual(result.returncode, 0,
+                         msg=f"random-distinct-for-role consultant must exit 0. stderr={result.stderr!r}")
+        data = json.loads(result.stdout)
+        self.assertEqual(
+            len(data), 5,
+            msg=(
+                f"Builtin consultant pool must supply >= 5 distinct personas. "
+                f"Got {len(data)}. stderr={result.stderr!r}"
+            ),
+        )
+        self.assertNotIn(
+            "underflow", result.stderr,
+            msg=(
+                "Underflow must not occur when >= 5 consultant personas are tagged. "
+                f"stderr={result.stderr!r}"
+            ),
+        )
+
+    def test_audit_persona_pool_meets_minimum_via_random_distinct(self):
+        """
+        random-distinct-for-role audit_persona --count=4 against the real builtin pool
+        must return exactly 4 personas (exit 0, no underflow warning).
+
+        Invariant: >= 4 builtin personas carry compatible_roles: [..., audit_persona].
+        Failure class: if fewer than 4 personas are tagged, the result array is short
+        and/or stderr contains 'underflow', revealing a tagging gap.
+        """
+        env = self._make_real_builtin_env()
+        result = _run(
+            ["random-distinct-for-role", "audit_persona", "--count=4", "--seed=42"],
+            env_extra=env,
+        )
+        self.assertEqual(result.returncode, 0,
+                         msg=f"random-distinct-for-role audit_persona must exit 0. stderr={result.stderr!r}")
+        data = json.loads(result.stdout)
+        self.assertEqual(
+            len(data), 4,
+            msg=(
+                f"Builtin audit_persona pool must supply >= 4 distinct personas. "
+                f"Got {len(data)}. stderr={result.stderr!r}"
+            ),
+        )
+        self.assertNotIn(
+            "underflow", result.stderr,
+            msg=(
+                "Underflow must not occur when >= 4 audit_persona personas are tagged. "
+                f"stderr={result.stderr!r}"
+            ),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

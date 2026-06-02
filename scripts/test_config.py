@@ -2684,6 +2684,189 @@ class TestExperimentSection(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Tests for T003: [personas] section knobs
+# ---------------------------------------------------------------------------
+
+class TestPersonasSection(unittest.TestCase):
+    """
+    Verify the [personas] DEFAULTS section:
+      - personas.debug, critique_panel, audit, review_eval default True
+      - personas.consult_eval defaults False (off)
+      - personas.implementer_retry defaults "same"
+      - env-export emits Z_HARNESS_PERSONAS_* names
+      - bad implementer_retry value (e.g. "maybe") is rejected with exit 2
+      - env override for bool knobs (e.g. Z_HARNESS_PERSONAS_DEBUG=false) works
+      - env override for implementer_retry (Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY=new) works
+    """
+
+    def setUp(self):
+        self.xdg = make_xdg()
+        self.cwd = make_isolation_dir()
+        self.env = {"XDG_CONFIG_HOME": self.xdg}
+
+    def tearDown(self):
+        shutil.rmtree(self.xdg, ignore_errors=True)
+        shutil.rmtree(self.cwd, ignore_errors=True)
+
+    # -------------------------------------------------------------------------
+    # Default values
+    # -------------------------------------------------------------------------
+
+    def test_consult_eval_default_is_false(self):
+        """personas.consult_eval must default to false (off by default)."""
+        r = run(["get", "personas.consult_eval"], env=self.env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        self.assertEqual(r.stdout.strip(), "false")
+
+    def test_implementer_retry_default_is_same(self):
+        """personas.implementer_retry must default to 'same'."""
+        r = run(["get", "personas.implementer_retry"], env=self.env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        self.assertEqual(r.stdout.strip(), "same")
+
+    def test_debug_default_is_true(self):
+        """personas.debug must default to true."""
+        r = run(["get", "personas.debug"], env=self.env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        self.assertEqual(r.stdout.strip(), "true")
+
+    def test_critique_panel_default_is_true(self):
+        """personas.critique_panel must default to true."""
+        r = run(["get", "personas.critique_panel"], env=self.env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        self.assertEqual(r.stdout.strip(), "true")
+
+    def test_audit_default_is_true(self):
+        """personas.audit must default to true."""
+        r = run(["get", "personas.audit"], env=self.env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        self.assertEqual(r.stdout.strip(), "true")
+
+    def test_review_eval_default_is_true(self):
+        """personas.review_eval must default to true."""
+        r = run(["get", "personas.review_eval"], env=self.env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        self.assertEqual(r.stdout.strip(), "true")
+
+    # -------------------------------------------------------------------------
+    # Enum validation: implementer_retry rejects bad values
+    # -------------------------------------------------------------------------
+
+    def test_bad_implementer_retry_env_exits_2(self):
+        """Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY=maybe must be rejected with exit 2."""
+        env = dict(self.env)
+        env["Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY"] = "maybe"
+        r = run(["get", "personas.implementer_retry"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 2,
+                         f"Expected exit 2 for invalid implementer_retry; stderr={r.stderr!r}")
+
+    def test_bad_implementer_retry_repo_exits_2(self):
+        """personas.implementer_retry = 'always' in repo config must exit 2."""
+        repo = tempfile.mkdtemp(prefix="z-harness-test-repo-")
+        try:
+            repo_cfg = write_repo_config(repo, '[personas]\nimplementer_retry = "always"\n')
+            env = dict(self.env)
+            env["Z_HARNESS_REPO_CONFIG"] = repo_cfg
+            r = run(["get", "personas.implementer_retry"], env=env, cwd=self.cwd)
+            self.assertEqual(r.returncode, 2,
+                             f"Expected exit 2 for repo-layer bad implementer_retry; stderr={r.stderr!r}")
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
+
+    def test_implementer_retry_new_accepted(self):
+        """Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY=new must be accepted and returned."""
+        env = dict(self.env)
+        env["Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY"] = "new"
+        r = run(["get", "personas.implementer_retry"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        self.assertEqual(r.stdout.strip(), "new")
+
+    def test_implementer_retry_same_accepted(self):
+        """Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY=same must be accepted and returned."""
+        env = dict(self.env)
+        env["Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY"] = "same"
+        r = run(["get", "personas.implementer_retry"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        self.assertEqual(r.stdout.strip(), "same")
+
+    # -------------------------------------------------------------------------
+    # Env-var name translation (export-env)
+    # -------------------------------------------------------------------------
+
+    def test_export_env_emits_personas_debug(self):
+        """export-env must emit Z_HARNESS_PERSONAS_DEBUG."""
+        r = run(["export-env"], env=self.env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        self.assertIn("Z_HARNESS_PERSONAS_DEBUG", r.stdout)
+
+    def test_export_env_emits_personas_consult_eval(self):
+        """export-env must emit Z_HARNESS_PERSONAS_CONSULT_EVAL."""
+        r = run(["export-env"], env=self.env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("Z_HARNESS_PERSONAS_CONSULT_EVAL", r.stdout)
+
+    def test_export_env_emits_personas_implementer_retry(self):
+        """export-env must emit Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY."""
+        r = run(["export-env"], env=self.env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY", r.stdout)
+
+    def test_export_env_consult_eval_default_value_is_false(self):
+        """export-env line for Z_HARNESS_PERSONAS_CONSULT_EVAL must carry value 'false'."""
+        r = run(["export-env"], env=self.env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0)
+        for line in r.stdout.splitlines():
+            if "Z_HARNESS_PERSONAS_CONSULT_EVAL" in line:
+                self.assertIn("false", line,
+                              f"Expected 'false' in export line; got: {line!r}")
+                break
+        else:
+            self.fail("Z_HARNESS_PERSONAS_CONSULT_EVAL not found in export-env output")
+
+    def test_export_env_implementer_retry_default_value_is_same(self):
+        """export-env line for Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY must carry value 'same'."""
+        r = run(["export-env"], env=self.env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0)
+        for line in r.stdout.splitlines():
+            if "Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY" in line:
+                self.assertIn("same", line,
+                              f"Expected 'same' in export line; got: {line!r}")
+                break
+        else:
+            self.fail("Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY not found in export-env output")
+
+    # -------------------------------------------------------------------------
+    # Bool env override coercion
+    # -------------------------------------------------------------------------
+
+    def test_env_override_debug_false(self):
+        """Z_HARNESS_PERSONAS_DEBUG=false must coerce to bool false and be returned."""
+        env = dict(self.env)
+        env["Z_HARNESS_PERSONAS_DEBUG"] = "false"
+        r = run(["get", "personas.debug"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        self.assertEqual(r.stdout.strip(), "false")
+
+    def test_env_override_consult_eval_true(self):
+        """Z_HARNESS_PERSONAS_CONSULT_EVAL=true must coerce to bool true and be returned."""
+        env = dict(self.env)
+        env["Z_HARNESS_PERSONAS_CONSULT_EVAL"] = "true"
+        r = run(["get", "personas.consult_eval"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        self.assertEqual(r.stdout.strip(), "true")
+
+    # -------------------------------------------------------------------------
+    # brainstorm.personas is unaffected
+    # -------------------------------------------------------------------------
+
+    def test_brainstorm_personas_unaffected(self):
+        """brainstorm.personas must still default to true (not moved to [personas])."""
+        r = run(["get", "brainstorm.personas"], env=self.env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        self.assertEqual(r.stdout.strip(), "true")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
