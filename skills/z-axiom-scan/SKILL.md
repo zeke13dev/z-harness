@@ -20,7 +20,7 @@ Determine `mode`:
 - `--run <id>` present → `mode: post-run <id>`
 - neither present → attempt to read the last run id from metrics.jsonl:
   ```bash
-  LAST_RUN="$(jq -r '.run // empty' z-harness/metrics.jsonl 2>/dev/null | tail -1)"
+  LAST_RUN="$(jq -r '.run // empty' "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" base_dir)/metrics.jsonl" 2>/dev/null | tail -1)"
   ```
   If `$LAST_RUN` is non-empty → `mode: post-run $LAST_RUN`. Otherwise → `mode: historical` (fallback, with the expensive-scan warning).
 

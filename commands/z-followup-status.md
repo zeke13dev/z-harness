@@ -42,7 +42,7 @@ Store in `FILTER_SINK` (default `both`).
 ## Phase 1 — Resolve sink paths
 
 ```bash
-PROJECT_SINK="$PWD/z-harness/followups"
+PROJECT_SINK="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" followups_dir)"
 PROJECT_VIEW="$PROJECT_SINK/index.view.json"
 PROJECT_JSONL="$PROJECT_SINK/index.jsonl"
 PROJECT_PAGES_DIR="$PROJECT_SINK/pages"

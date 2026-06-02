@@ -114,14 +114,16 @@ resolve_events_file() {
     return 0
   fi
 
-  # Fall back: global archive z-harness/archive/<run>/
-  if [[ -d "$REPO_ROOT/z-harness/archive/$arg" ]]; then
-    echo "$REPO_ROOT/z-harness/archive/$arg/events.jsonl"
+  # Fall back: global archive <base>/archive/<run>/
+  local _zh_base
+  _zh_base="$(z_harness_base 2>/dev/null || echo "$REPO_ROOT/z-harness")"
+  if [[ -d "$_zh_base/archive/$arg" ]]; then
+    echo "$_zh_base/archive/$arg/events.jsonl"
     return 0
   fi
 
   # Return the best-guess path even if it doesn't exist (caller handles missing)
-  echo "$REPO_ROOT/z-harness/archive/$arg/events.jsonl"
+  echo "$_zh_base/archive/$arg/events.jsonl"
 }
 
 # Resolve the $BASE directory for a run-id-or-path argument (for TASKS.md lookup).

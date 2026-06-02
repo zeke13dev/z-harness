@@ -119,7 +119,7 @@ Pick a run ID and create the archive directory **before** any telemetry calls:
 
 ```bash
 RUN="$(date -u +%Y%m%dT%H%M%SZ)-mr-review"
-SLUG_DIR="z-harness/$SLUG"
+SLUG_DIR="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" plan_dir "$SLUG")"
 ARCHIVE_DIR="$SLUG_DIR/archive/$RUN"
 mkdir -p "$ARCHIVE_DIR/chunks"
 export SLUG RUN ARCHIVE_DIR SLUG_DIR
@@ -340,7 +340,7 @@ Invoke `scripts/extract-dismissals.py` to compute prior dismissal signatures:
 
 ```bash
 if ! python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/extract-dismissals.py" \
-  "z-harness/$SLUG/" \
+  "$SLUG_DIR/" \
   --max-runs 10 \
   > "$ARCHIVE_DIR/dismissed_signatures.json" 2>/dev/null; then
   echo '{"signatures":[],"n_runs_scanned":0}' > "$ARCHIVE_DIR/dismissed_signatures.json"
@@ -427,6 +427,7 @@ The agent always receives one `diff_path` pointing to a single `.patch` file —
 
 **If `MODE=full`:** dispatch the agent once with the full diff.
 
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 ```
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
   subagent_type="mr-reviewer",
@@ -474,6 +475,7 @@ PYEOF
 
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 ```
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
@@ -499,6 +501,7 @@ Collect all per-chunk agent returns as a list `CHUNK_AGENT_RETURNS` (one entry p
 
 After all per-chunk agents complete, dispatch one additional abstraction-only pass with the full diff. This pass runs AFTER the per-chunk batch (sequential, not parallel with the chunks):
 
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 ```
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
   subagent_type="mr-reviewer",
@@ -864,3 +867,19 @@ To manually verify chunked dispatch, set the threshold below the diff size to fo
 - **Log everything** via `scripts/log-event.sh`. Dismissal events are emitted per-signature, every run.
 - **Archive before overwrite.** Existing `MR-REVIEW.md` is always archived before being replaced.
 - **Empty diff exits cleanly.** No review needed if there are no changes.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | yes | Phase 2 mr-reviewer (full-diff mode); Phase 2 mr-reviewer per-chunk × N chunks (per-chunk mode); Phase 2 mr-reviewer abstraction-only pass (per-chunk mode) |
+| `ask_user` | no | — |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

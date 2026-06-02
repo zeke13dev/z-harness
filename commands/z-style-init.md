@@ -397,9 +397,10 @@ Push-notify (if notify.level ≠ `off`; see [docs/human/config.md](docs/human/co
    ```bash
    BRANCH="$(git branch --show-current 2>/dev/null)"
    SLUG="$(printf '%s' "$BRANCH" | tr '[:upper:]' '[:lower:]' | tr '/' '-' | sed 's/[^a-z0-9-]//g')"
-   SLUG_DIR="z-harness/${SLUG}/"
+   _ZH_PLANS_DIR="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" base_dir)/plans"
+   SLUG_DIR="${_ZH_PLANS_DIR}/${SLUG}/"
    ```
-   If the branch is empty/detached or `SLUG_DIR` does not exist as a directory, use the first available `z-harness/*/` directory (via `ls -d z-harness/*/`). If no `z-harness/*/` directory exists at all, `SLUG_DIR` can be any valid path string — the `--global` flag causes `extract-dismissals.py` to scan all slugs, so a missing slug-dir simply yields an empty result set.
+   If the branch is empty/detached or `SLUG_DIR` does not exist as a directory, use the first available plans dir (via `ls -d "${_ZH_PLANS_DIR}"/*/`). If no plan dir exists at all, `SLUG_DIR` can be any valid path string — the `--global` flag causes `extract-dismissals.py` to scan all slugs, so a missing slug-dir simply yields an empty result set.
 
 5. **Notification policy:** see [docs/human/config.md](docs/human/config.md) (notify.level key).
 

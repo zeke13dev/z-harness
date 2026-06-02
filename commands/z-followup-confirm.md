@@ -72,7 +72,7 @@ Store: `ENTRY_ID`, `VIA`, `EVIDENCE_PATH` (empty string if not provided).
 ## Phase 1 — Resolve sink paths
 
 ```bash
-PROJECT_SINK="$PWD/z-harness/followups"
+PROJECT_SINK="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" followups_dir)"
 PROJECT_VIEW="$PROJECT_SINK/index.view.json"
 
 GLOBAL_SINK="${HOME}/.z-harness/followups"
@@ -139,8 +139,16 @@ Exit 0 (no-op, not an error).
 If the user answers `yes`:
 
 Resolve `SINK_ROOT` based on `ENTRY_SINK`:
-- `project` → `$PWD/z-harness/followups`
+- `project` → `$PROJECT_SINK` (resolved via `followups_dir`)
 - `global` → `$HOME/.z-harness/followups`
+
+```bash
+if [[ "$ENTRY_SINK" == "project" ]]; then
+  SINK_ROOT="$PROJECT_SINK"
+else
+  SINK_ROOT="${HOME}/.z-harness/followups"
+fi
+```
 
 Invoke the status-set primitive:
 
@@ -188,11 +196,10 @@ fi
 ### Step 4b-2: Delegate audit evidence validation to sink-audit-validate.py
 
 ```bash
-if ! ENTRY_JSON_PATH="$(python3 - "$ENTRY_ID" "$PWD" <<'PY'
+if ! ENTRY_JSON_PATH="$(python3 - "$ENTRY_ID" "$PROJECT_VIEW" <<'PY'
 import json, os, sys, tempfile
 entry_id = sys.argv[1]
-pwd = sys.argv[2]
-project_view = os.path.join(pwd, 'z-harness/followups/index.view.json')
+project_view = sys.argv[2]
 global_view = os.path.expanduser('~/.z-harness/followups/index.view.json')
 for view_path in [project_view, global_view]:
     if os.path.exists(view_path):
@@ -246,8 +253,16 @@ fi
 ### Step 4b-3: Apply the transition
 
 Resolve `SINK_ROOT` based on `ENTRY_SINK`:
-- `project` → `$PWD/z-harness/followups`
+- `project` → `$PROJECT_SINK` (resolved via `followups_dir`)
 - `global` → `$HOME/.z-harness/followups`
+
+```bash
+if [[ "$ENTRY_SINK" == "project" ]]; then
+  SINK_ROOT="$PROJECT_SINK"
+else
+  SINK_ROOT="${HOME}/.z-harness/followups"
+fi
+```
 
 ```bash
 bash "$CLAUDE_PLUGIN_ROOT/scripts/sink-status-set.sh" \

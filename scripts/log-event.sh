@@ -8,9 +8,10 @@
 # so multiple plans can coexist in the same repo. If unset, the legacy flat
 # layout (<base>/archive/...) is used for backward compat with old plans.
 #
-# <base> is Z_HARNESS_BASE_DIR (must be absolute) when set, otherwise <repo>/z-harness.
-# Setting Z_HARNESS_BASE_DIR redirects ALL artifacts (events, metrics, archive) away
-# from the repo, which is required when running inside a benchmark task's working tree.
+# <base> is resolved via scripts/plan-path.sh z_harness_base() (5-tier fallback):
+#   tier 1: Z_HARNESS_BASE_DIR (must be absolute) — redirects ALL artifacts away from repo
+#   tier 5 (default, stage-1): <repo>/z-harness  — unchanged from legacy behaviour
+# Setting Z_HARNESS_BASE_DIR is required when running inside a benchmark task's working tree.
 #
 # Example:
 #   Z_HARNESS_SLUG=add-rate-limit \
@@ -22,7 +23,7 @@
 #   z-harness/<slug>/archive/<run>/events.jsonl  (legacy mid-flight fallback — if run dir
 #     already exists at legacy path, writes there to avoid splitting a run's events;
 #     run 'scripts/migrate-plan-layout.sh <slug>' to move to the new layout)
-#   <base>/metrics.jsonl  (aggregate; <base> = Z_HARNESS_BASE_DIR or <repo>/z-harness)
+#   <base>/metrics.jsonl  (aggregate; <base> = z_harness_base() resolved path)
 #
 # Writes to (legacy, no slug):
 #   <base>/archive/<run>/events.jsonl
@@ -48,12 +49,11 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 # shellcheck source=scripts/plan-path.sh
 source "$(dirname "$0")/plan-path.sh"
 
-# Resolve the artifact base dir:
-#   Z_HARNESS_BASE_DIR (absolute) if set → use it directly.
-#   Otherwise → $REPO_ROOT/z-harness (default, unchanged behavior).
-# Validation (absolute-path check) is performed inside z_harness_base_override.
-_ZH_BASE_OVERRIDE="$(z_harness_base_override)"
-ZH_BASE="${_ZH_BASE_OVERRIDE:-$REPO_ROOT/z-harness}"
+# Resolve the artifact base dir via z_harness_base() so the full 5-tier fallback
+# chain (and the anchor invariant) are honoured.  The _Z_HARNESS_RESOLVING_BASE
+# sentinel prevents the recursive loop that would occur if z_harness_base() tried
+# to emit a base_resolved event via this very script while we are sourcing it.
+_Z_HARNESS_RESOLVING_BASE=1 ZH_BASE="$(z_harness_base)"
 
 # Join a base dir (may be relative or absolute) with a suffix under REPO_ROOT.
 # If the base is absolute it is used verbatim; if relative it is resolved

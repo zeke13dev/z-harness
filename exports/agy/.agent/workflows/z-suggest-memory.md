@@ -52,3 +52,19 @@ When `--kind routing-preference` is present, the skill writes a structured routi
 The `reason` and `project_root` fields are omitted when not applicable. MEMORIES-FLAT.md is regenerated after the write. This mode is used by the elevation proposer flow when the user accepts a proposal as a memory:strength entry.
 
 Read and execute `skills/z-suggest-memory/SKILL.md` in full, passing `$ARGUMENTS` through verbatim.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | no | — |
+| `ask_user` | no | — |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

@@ -459,6 +459,31 @@
       "summary": "Linear pipeline orchestrator that chains z-harness sub-commands unattended with halt-only interaction; Z_HARNESS_NO_ASK=halt set only around Skill calls; 12 instrumented callsites (9 resolver + 3 new gates); flock-guarded overnight-state.json; MORNING_REPORT.md written on every terminal transition; resume via /z-overnight resume <RUN_ID>."
     },
     {
+      "slug": "active-plan-registry",
+      "source_files": [
+        "scripts/active-plan-registry.py",
+        "scripts/plan-path.sh",
+        "scripts/migrate-plan-layout.sh",
+        "agents/scope-extractor.md",
+        "commands/z-implement-all.md",
+        "commands/z-implement-next.md",
+        "commands/z-plan.md",
+        "docs/human/active-plan-registry.md",
+        "docs/handoff-parallel-session-safety.md"
+      ],
+      "last_updated": "2026-06-02",
+      "confidence": "high",
+      "depends_on": [
+        "scripts",
+        "plan-layout-migration"
+      ],
+      "consumed_by": [
+        "commands",
+        "agents"
+      ],
+      "summary": "Durable external artifact base + lockless cross-session awareness registry. Five-tier base fallback (Z_HARNESS_BASE_DIR > XDG_STATE_HOME > HOME/.local/state > git-common-dir > pwd/z-harness) with anchor enforcement prevents split-brain. Per-run JSON records in <base>/active-plans/ let concurrent sessions see each other's scope; overlap advisory at implement Phase 0 (Z_HARNESS_STRICT_OVERLAP=1 makes explicit×explicit exact path match a hard halt). Addresses the 2026-06-01 git clean incident."
+    },
+    {
       "slug": "axioms",
       "source_file": [
         "scripts/axiom-store.py",

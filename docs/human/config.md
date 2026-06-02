@@ -159,6 +159,48 @@ Default output is a human-readable concern-grouped table. `--json` emits a machi
 | `Z_HARNESS_EXPLAIN_RESOLUTION` | Set to `1` to print resolution trace on stderr (same as `--explain`) |
 | `Z_HARNESS_MAX_EXPLORE` | Maximum explore depth |
 
+---
+
+## Base-dir + registry env knobs (active-plan-coordination)
+
+These env vars govern the external artifact base and the active-plan registry introduced in the active-plan-coordination plan. They are **env-only** (not TOML keys) and take effect in `scripts/plan-path.sh` and `scripts/active-plan-registry.py`. For a full design reference including the registry layout, overlap protocol, and migration guide, see `docs/human/active-plan-registry.md`.
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `Z_HARNESS_EXTERNAL_DEFAULT` | `1` (on after Phase-D flip) | Controls whether tiers 2–4 of the base fallback chain are active. **Unset or `1`**: external resolution is active (XDG → HOME/.local/state → .git/z-harness → pwd). **`0`**: opt-out — forces old in-repo `$(pwd)/z-harness` behavior (tier 5 only). Revert to in-repo base without this knob: `Z_HARNESS_BASE_DIR=$(pwd)/z-harness`. |
+| `Z_HARNESS_BASE_DIR` | _(unset)_ | Explicit absolute override for the artifact base directory. When set, this is a TRUE ESCAPE HATCH: bypasses the anchor entirely (no read/validate/write of `.z-harness-base`). Must be an absolute path; non-absolute → hard error. The caller owns consistency when using this override. |
+| `Z_HARNESS_REGISTRY_ENABLED` | `1` (on) | Set to `0` to disable the active-plan registry. When `0`, the following subcommands become silent no-ops: `register`, `heartbeat`, `update-scope`, `overlaps`, `reap`, `deregister`. The read-only `list` and `session-id` subcommands are still allowed. Use in CI environments where no registry coordination is needed. |
+| `Z_HARNESS_REGISTRY_STALE_SECS` | `1800` | Number of seconds after which a run's `last_heartbeat` timestamp is considered stale. The reaper deletes at 2× this margin (3600s by default) for local dead pids; at 1× it marks remote/unknown hosts as `status:"stale"` (no delete). Override to tighten or loosen the staleness window. |
+| `Z_HARNESS_STRICT_OVERLAP` | _(unset / off)_ | Set to `1` to enable blocking-overlap mode in `active-plan-registry.py overlaps`. When active, an `explicit`×`explicit` exact path match between two live runs causes exit code `20` (blocking), which `/z-implement-all` and `/z-implement-next` treat as a hard halt requiring user resolution. By default (unset) overlaps are advisory only (exit `10`) and runs may proceed with a warning. |
+
+### Base fallback chain summary
+
+The full base fallback chain (active when `Z_HARNESS_EXTERNAL_DEFAULT` is unset or `1`):
+
+1. `$Z_HARNESS_BASE_DIR` — explicit absolute override (TRUE ESCAPE HATCH; bypasses anchor)
+2. `$XDG_STATE_HOME/z-harness/<repo-id>` — if set and writable
+3. `$HOME/.local/state/z-harness/<repo-id>` — if `HOME` set and writable
+4. `<git-common-dir>/z-harness` — survives `git clean`; writable if `.git/` is writable
+5. `$(pwd)/z-harness` — last resort (clean-vulnerable; also the only tier active when `Z_HARNESS_EXTERNAL_DEFAULT=0`)
+
+### Reverting to in-repo behavior
+
+Two equivalent revert methods:
+
+```bash
+# Method A: explicit base override (tier 1 escape hatch)
+export Z_HARNESS_BASE_DIR=$(pwd)/z-harness
+
+# Method B: opt-out the Phase-D flip
+export Z_HARNESS_EXTERNAL_DEFAULT=0
+```
+
+Both restore the pre-flip behavior. Method A is preferred for one-off per-session overrides. Method B is appropriate for persisting the opt-out across all sessions (e.g. in `.bashrc` or CI env).
+
+### Operator note: quiesce before relying on the flip
+
+If you have a pre-existing `.z-harness-base` anchor written by a previous in-repo session, the anchor's stored path will mismatch the new external tier, triggering `base_mismatch_detected`. To resolve: run `/z-where` to inspect the current anchor, wait for any active runs to complete, then remove `<git-common-dir>/.z-harness-base` (one-time). The next `z_harness_base()` call will write a fresh anchor for the external tier.
+
 ```
 $ scripts/config.sh inspect-all
 $ scripts/config.sh inspect-all --json

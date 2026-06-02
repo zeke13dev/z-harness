@@ -9,27 +9,48 @@ Task (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question "What's the fix?" via their native channel. Silent omission is forbidden. -->
 **If the task above is empty** — use `AskUserQuestion` to ask "What's the fix?" before proceeding. Do not invent.
 
 This command is for **small, focused changes**. If at any phase you realize the task is genuinely bigger than the Plan Route Check thresholds below, STOP, save context in `route-decision.md`, and recommend the routed command instead.
 
 ## Setup
 
-1. **Derive slug** — short kebab-case like `fix-<short-description>` (e.g. "off-by-one in nba parser" → `fix-nba-parser-off-by-one`). Confirm via `AskUserQuestion` if non-obvious or might collide with an existing slug (`ls z-harness/` first).
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug-confirmation question (when non-obvious or collides) via their native channel. Silent omission is forbidden. -->
+1. **Derive slug** — short kebab-case like `fix-<short-description>` (e.g. "off-by-one in nba parser" → `fix-nba-parser-off-by-one`). Confirm via `AskUserQuestion` if non-obvious or might collide with an existing slug (`bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" all_plan_slugs` to check both new and legacy plan layouts first).
 2. Export `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")`.
 3. Pick run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`.
 4. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`.
 5. `CURRENT_ARCHIVE_DIR="$Z_HARNESS_PLAN_DIR/archive/$RUN"`
 6. **Version stamp + log:**
    ```bash
+   export Z_HARNESS_SESSION_ID="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" session-id)"
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
    START_PAYLOAD="$(python3 -c '
    import json, sys
-   v = json.loads(sys.argv[1]); v["task"] = sys.argv[2]
+   v = json.loads(sys.argv[1]); v["task"] = sys.argv[2]; v["session_id"] = sys.argv[3]
    print(json.dumps(v))
-   ' "$VERSION_BLOB" "<arguments>")"
+   ' "$VERSION_BLOB" "<arguments>" "$Z_HARNESS_SESSION_ID")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" light_run_start "$START_PAYLOAD"
    ```
+
+   **Active-plan registration (immediately after light_run_start).** Register this run in the shared registry. Graduated failure policy — never silent-continue on failure:
+   ```bash
+   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" register \
+     --run-id "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan-light --phase plan \
+     --session "$Z_HARNESS_SESSION_ID"
+   REG_RC=$?
+   ```
+   - `REG_RC == 0` → registered; proceed.
+   - `REG_RC == 3` (no record written) → emit `registry_error` event; interactive → `AskUserQuestion` proceed/abort; unattended → proceed+log (or halt if `Z_HARNESS_STRICT_OVERLAP=1`). No deregister on abort (no record).
+   - Any OTHER nonzero → treat as `REG_RC == 3`.
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" registry_error \
+     "$(printf '{"op":"register","run_id":"%s","rc":%d}' "$RUN" "$REG_RC")"
+   ```
+
+   **FINALIZE_STATUS rule:** On any run-ending halt after `REG_RC == 0`, set `FINALIZE_STATUS=aborted` + `deregister --status aborted`. On normal completion (Phase 9), deregister with `complete`. If register failed, do NOT deregister.
+
 7. Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
 8. If `docs/llm/INDEX.json` exists → note it. Phase 1 will dispatch `doc-fetcher` (Haiku). Do NOT read INDEX.json or per-concept JSONs from main thread.
 
@@ -38,7 +59,7 @@ This command is for **small, focused changes**. If at any phase you realize the 
 <!-- PLAN_ROUTE_CHECK_START -->
 Run this check after quick exploration and before Phase 2 decision selection; run it again before inline implementation if scope grows. `/z-plan-light` may route down, up, sideways, or to contextual bug workflows only under the conditions below.
 
-Collect only already-known deterministic signals: `candidate_files`, `non_obvious_decisions`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `terrain_uncertain`, `approach_uncertain`, `has_bug_diagnosis`, `has_unknown_bug_symptom`, `has_existing_plan`, `has_fix_artifact`, and `docs_stale_or_drifted`.
+Collect only already-known deterministic signals: `candidate_files`, `non_obvious_decisions`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `terrain_uncertain`, `approach_uncertain`, `has_bug_diagnosis`, `has_unknown_bug_symptom`, `has_existing_plan`, `plan_validation_intent`, `plan_amend_intent`, `has_fix_artifact`, and `docs_stale_or_drifted`. Set `plan_validation_intent`/`plan_amend_intent` only when the user re-enters this command on a slug with `SPEC.md`+`PLAN.md`+`TASKS.md` all present (see `agents/planning-router.md` for the language-match heuristic).
 
 Deterministic routes:
 - Route down to `/z-do <task>` only before writing `FIX.md` when this is a tiny implementation task with `candidate_files <= 3`, no non-obvious decisions, and no cross-module, schema, persistence, public API, or wire-format impact.
@@ -57,7 +78,15 @@ At any phase, if you discover:
 - **Cross-module / cross-crate impact** (the fix touches multiple crates, public APIs, wire formats, or schemas)
 - **The user explicitly says** "this might be bigger than I thought"
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the route-gate decision (switch / continue / abandon) via their native channel. Silent omission is forbidden. -->
 → STOP behind a route gate. Write `$CURRENT_ARCHIVE_DIR/route-decision.md`, emit `plan_route_decision`, preserve `light_run_end` and any legacy escalation status as compatibility telemetry, and push-notify. Use `AskUserQuestion` with switch / continue if the hard threshold allows continuation / abandon. If the user chooses switch, stop after presenting the exact next command invocation; do not execute it.
+
+When the user chooses **switch** or **abandon** at the route gate (ending the run), per the FINALIZE_STATUS rule set `FINALIZE_STATUS=aborted` and deregister before exiting:
+```bash
+FINALIZE_STATUS=aborted
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+  --run-id "$RUN" --status aborted 2>/dev/null || true
+```
 
 `route-decision.md` must include the recommended command, reason, deterministic signals, route chain, and resume context. Emit `plan_route_decision` with `from_command`, `to_command`, `route_class`, `reason_codes`, `signals`, `confidence`, `classifier_used`, `artifact_path`, `route_chain`, and `user_choice`.
 
@@ -71,10 +100,12 @@ Loop prevention: carry forward the latest route chain from any supplied or disco
 - Will the proposed fix (if the user named one) actually solve the underlying problem?
 - Is there a materially better path the user hasn't considered?
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface premise-concern questions via their native channel. Silent omission is forbidden. -->
 If any concern surfaces → raise it with the user via `AskUserQuestion` before proceeding. Don't plan around a flawed premise.
 
 **Quick exploration.**
 1. **If `docs/llm/INDEX.json` exists, dispatch `doc-fetcher` (Haiku) FIRST** — it's the cheapest grounding available. One call, returns ≤2 KB synthesis:
+   <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
    ```
    <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
          description="Doc context for <slug>",
@@ -96,6 +127,7 @@ If there are >2 truly non-obvious decisions, use the Plan Route Check to recomme
 
 Spawn both consultants in parallel in a single message:
 
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
 ```
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="consultant-primary",
@@ -124,6 +156,7 @@ When both return:
 
 Send `PushNotification` (if policy != `off`): "Light-mode decision ready for review."
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the Phase 5 approval question (approve / modify / abandon) and any shortcut approval questions via their native channel. Silent omission is forbidden. -->
 Present a brief synthesis (3-5 bullets) via `AskUserQuestion`:
 - "Approve fix as proposed"
 - "Modify — I want to change <X>" (free-text follow-up)
@@ -131,7 +164,12 @@ Present a brief synthesis (3-5 bullets) via `AskUserQuestion`:
 
 For any flagged shortcut: separate explicit approval via `AskUserQuestion` (default to robust if not approved).
 
-If user picks **Abandon** → write nothing more; log `light_run_end` with `status: abandoned`; exit.
+If user picks **Abandon** → write nothing more; log `light_run_end` with `status: abandoned`. Per the FINALIZE_STATUS rule, set `FINALIZE_STATUS=aborted` and deregister before exiting:
+```bash
+FINALIZE_STATUS=aborted
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+  --run-id "$RUN" --status aborted 2>/dev/null || true
+```
 
 ## Phase 6 — Write FIX.md
 
@@ -188,6 +226,7 @@ The orchestrator (you, in main thread) reads the files listed in FIX.md "Files t
 
 If you applied any fix from the checklist, note it in the user-facing summary later.
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the mid-implementation scope-growth decision (switch / continue / spawn implementer) via their native channel. Silent omission is forbidden. -->
 **Escape hatch — mid-implementation scope growth.** If you discover mid-edit that the change needs more files than FIX.md anticipated, OR a new non-obvious decision surfaces, STOP and ask the user via `AskUserQuestion`:
 - "Switch to the recommended routed command"
 - "Continue in light mode — update FIX.md and proceed" (only if no hard threshold forbids continuation)
@@ -205,6 +244,7 @@ git diff > $Z_HARNESS_PLAN_DIR/archive/$RUN/diff.patch
 
 Spawn the reviewer:
 
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
 ```
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="reviewer",
@@ -217,6 +257,7 @@ Parse the return (already capped at 8 KB, blockers + majors only).
 
 **On blockers or majors:**
 - **First failure**: re-edit inline based on findings. Re-run `git diff`; if byte-identical to prior diff (you pushed back instead of editing), halt with `no_change_on_retry`. Otherwise re-spawn `reviewer` once.
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the second-review-failure decision (proceed anyway / patch manually / abandon) via their native channel. Silent omission is forbidden. -->
 - **Second failure**: halt; `AskUserQuestion` — proceed anyway / patch manually / abandon.
 
 **No blockers/majors** → accept.
@@ -232,6 +273,11 @@ Parse the return (already capped at 8 KB, blockers + majors only).
 3. Push-notify (if policy != `off`): "Fix complete. <N> files changed; review passed (<N> blockers/<M> majors resolved across <C> cycles)."
 4. **If FIX.md "Docs touched" is non-empty**, suggest: "Run `/z-maintain-docs --audit` to refresh affected concepts."
 5. Brief summary to user (3-5 sentences): what changed, what the reviewer flagged, what's next.
+6. **Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the FINALIZE_STATUS rule (Setup step 6): normal completion deregisters with `complete`.
+   ```bash
+   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+     --run-id "$RUN" --status "${FINALIZE_STATUS:-complete}" || true   # CLI self-logs registry_error on failure
+   ```
 
 ## Hard rules
 
@@ -240,3 +286,19 @@ Parse the return (already capped at 8 KB, blockers + majors only).
 - **Always emit cross-LLM consult** — both Gemini and Codex, in parallel.
 - **Never overwrite an existing `$Z_HARNESS_PLAN_DIR/` directory** without asking the user.
 - **No emojis** anywhere in artifacts.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | yes | Phase 1 doc-fetcher; Phase 3 consultant-primary + consultant-secondary; Phase 8 reviewer |
+| `ask_user` | yes | Empty-args question; Setup slug confirmation; Plan Route Check route-gate decision; Phase 1 premise-concern questions; Phase 5 approval + shortcut approval; Phase 7 mid-implementation scope-growth decision; Phase 8 second-review-failure decision |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

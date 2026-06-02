@@ -27,6 +27,26 @@ workflows:
     source: commands/z-audit.md
     output: .agent/workflows/z-audit.md
     description: "Audit a target component across one or more dimensions (correctness / perf / cleanliness / design). Pre-flight scopes (target, dimensions, optional rubric file), spawns one auditor subagent per dimension in parallel, runs bundled Gemini+Codex cons..."
+  - id: z-axiom-approve
+    source: commands/z-axiom-approve.md
+    output: .agent/workflows/z-axiom-approve.md
+    description: "Approve a candidate axiom. Shows the candidate, its evidence, and falsifiability state. Requires explicit user confirmation before approving. Reuses /z-suggest-memory --from-candidate-json for the MEMORY-overlap advisory. Regenerates the kernel sy..."
+  - id: z-axiom-edit
+    source: commands/z-axiom-edit.md
+    output: .agent/workflows/z-axiom-edit.md
+    description: "Edit a field on a candidate or approved axiom record. On approved records, re-validates the graph and regenerates the kernel."
+  - id: z-axiom-list
+    source: commands/z-axiom-list.md
+    output: .agent/workflows/z-axiom-list.md
+    description: "List axiom records from the store, rendered as a readable table. Supports filtering by status, scope, and discipline."
+  - id: z-axiom-reject
+    source: commands/z-axiom-reject.md
+    output: .agent/workflows/z-axiom-reject.md
+    description: "Reject a candidate or approved axiom, moving it to the rejected/ tombstone store. Optionally records a rejection reason."
+  - id: z-axiom-scan
+    source: commands/z-axiom-scan.md
+    output: .agent/workflows/z-axiom-scan.md
+    description: "Mine candidate axioms from z-harness interaction history by dispatching the axiom-extractor agent, then writing returned candidates to the axiom store. Use --historical for a full metrics.jsonl scan (expensive). Proposes only — never auto-approves."
   - id: z-brainstorm
     source: commands/z-brainstorm.md
     output: .agent/workflows/z-brainstorm.md
@@ -42,11 +62,35 @@ workflows:
   - id: z-export
     source: commands/z-export.md
     output: .agent/workflows/z-export.md
-    description: "\"Export z-harness commands/agents/skills to Cursor / Codex / Antigravity (agy).\""
+    description: "\"Export z-harness commands/agents/skills/personas to Cursor / Codex / Antigravity (agy).\""
   - id: z-fix
     source: commands/z-fix.md
     output: .agent/workflows/z-fix.md
     description: "Lightweight bug-fix command for the case where the user already has a diagnosis. Captures problem + repro, single light-fix sanity consult (\"does the proposed cause explain all symptoms?\"), inline implementation, non-negotiable Codex review. Optio..."
+  - id: z-followup-confirm
+    source: commands/z-followup-confirm.md
+    output: .agent/workflows/z-followup-confirm.md
+    description: "Transition a follow-up entry from verify → done via human confirmation or audit evidence validation."
+  - id: z-followup-dismiss
+    source: commands/z-followup-dismiss.md
+    output: .agent/workflows/z-followup-dismiss.md
+    description: "Dismiss a follow-up entry from any state (terminal transition). Requires a reason."
+  - id: z-followup-list
+    source: commands/z-followup-list.md
+    output: .agent/workflows/z-followup-list.md
+    description: "Read-only listing of follow-up entries from project and global sinks, priority-sorted and filterable."
+  - id: z-followup-next
+    source: commands/z-followup-next.md
+    output: .agent/workflows/z-followup-next.md
+    description: "Claim and execute the next pending follow-up entry from the project or global sink, with staleness check, lock management, and status writeback."
+  - id: z-followup-refresh
+    source: commands/z-followup-refresh.md
+    output: .agent/workflows/z-followup-refresh.md
+    description: "Refresh a blocked (staleness) follow-up entry — re-stamps capture_head and file_blob_hashes, then transitions back to open."
+  - id: z-followup-status
+    source: commands/z-followup-status.md
+    output: .agent/workflows/z-followup-status.md
+    description: "Read-only diagnostic summary of the follow-up sink — counts per status, lock state, oldest open entry, and last sync failure."
   - id: z-implement-all
     source: commands/z-implement-all.md
     output: .agent/workflows/z-implement-all.md
@@ -75,6 +119,14 @@ workflows:
     source: commands/z-mr-review.md
     output: .agent/workflows/z-mr-review.md
     description: "Multi-LLM code-quality review of the current branch diff against STYLE.md. Never blocks; ranks P0-P4; output is a TASKS.md-shape file you edit and feed to /z-implement-all."
+  - id: z-overnight
+    source: commands/z-overnight.md
+    output: .agent/workflows/z-overnight.md
+    description: "Run a chain of z-harness workflows unattended overnight with halt-only user interaction. Chains existing sub-commands end-to-end, writes MORNING_REPORT.md, and push-notifies on halt or completion."
+  - id: z-personas
+    source: commands/z-personas.md
+    output: .agent/workflows/z-personas.md
+    description: "Inspect persona registry, role bindings, and persona files. Subcommands: list, roles, validate, read <name>, where <name>. Default (no args) = roles."
   - id: z-plan-light
     source: commands/z-plan-light.md
     output: .agent/workflows/z-plan-light.md
@@ -99,6 +151,10 @@ workflows:
     source: commands/z-review-all.md
     output: .agent/workflows/z-review-all.md
     description: "Final-gate cross-LLM review of a completed z-harness plan. Runs Gemini + Codex on the cumulative diff against SPEC.md to surface (a) implementation drift across tasks and (b) spec gaps that only surface in aggregate. Use after /z-implement-all com..."
+  - id: z-setup
+    source: commands/z-setup.md
+    output: .agent/workflows/z-setup.md
+    description: "Configuration cockpit for z-harness: inspect resolved state, run guided setup wizard, or apply a posture preset."
   - id: z-skill-fix
     source: commands/z-skill-fix.md
     output: .agent/workflows/z-skill-fix.md
@@ -122,11 +178,15 @@ workflows:
   - id: z-update
     source: commands/z-update.md
     output: .agent/workflows/z-update.md
-    description: "z-harness z-update workflow"
+    description: "Update the z-harness plugin to the latest version. Detects symlink vs tarball install mode and runs the appropriate update path."
   - id: z-uplift
     source: commands/z-uplift.md
     output: .agent/workflows/z-uplift.md
     description: "Tiered bulk codebase quality uplift — decompose repo into components, run a repo-wide cross-cutting pass, dispatch per-component audits, produce per-component TASKS.md files, and drive sequential implementation via /z-implement-all."
+  - id: z-where
+    source: commands/z-where.md
+    output: .agent/workflows/z-where.md
+    description: "Read-only \"what's active / why am I blocked\" query. Prints resolved base + repo-id, lists all active plans (slug, command, phase, branch, current_task, age, status), and optionally shows path-overlap with the current run. No writes, no LLM calls."
 
 # Agents → .agent/rules/*.md
 # No subagent dispatch in agy; agents become role-specific rule files
@@ -136,6 +196,11 @@ rules:
     output: .agent/rules/z-harness-auditor.md
     trigger: always_on
     description: "Fresh-context Sonnet auditor for a single dimension (correctness | perf | cleanliness | design). Reads target files + optional rubric file, returns structured findings (Location / Evidence / Recommendation / Severity). Read-only — never edits. Spa..."
+  - id: axiom-extractor
+    source: agents/axiom-extractor.md
+    output: .agent/rules/z-harness-axiom-extractor.md
+    trigger: model_decision
+    description: "Retrospective policy-mining agent. Wraps axiom-extract.py with LLM judgement to produce ≤5 sharpened axiom candidates from z-harness interaction history. Sibling to the reviewer agent — NOT an extension of any candidate_kind enum. Proposes only; n..."
   - id: bisect-isolator
     source: agents/bisect-isolator.md
     output: .agent/rules/z-harness-bisect-isolator.md
@@ -206,6 +271,11 @@ rules:
     output: .agent/rules/z-harness-research-judge.md
     trigger: model_decision
     description: "Final-judge synthesizer for /z-research. Reads N=3 adversarial-panel perspective outputs + the MAP.md + BRAINSTORM.md source artifacts; produces the final RESEARCH.md content (10 sections per SPEC) including the approach decision matrix with manda..."
+  - id: resolver
+    source: agents/resolver.md
+    output: .agent/rules/z-harness-resolver.md
+    trigger: model_decision
+    description: "Documents the workflow question resolver — the read-only subsystem that maps registered question_ids to a result-domain value (skip|prefill|ask|halt|defer-to-sink) by consulting config layers, memory, and overnight-gate overrides."
   - id: review-agent
     source: agents/review-agent.md
     output: .agent/rules/z-harness-review-agent.md
@@ -216,6 +286,11 @@ rules:
     output: .agent/rules/z-harness-reviewer.md
     trigger: always_on
     description: "Routes to the reviewer LLM (resolved via providers registry) to scrutinize a just-completed implementation task. Finds bugs, spec violations, missed edge cases, and DRY/KISS/SOLID violations."
+  - id: scope-extractor
+    source: agents/scope-extractor.md
+    output: .agent/rules/z-harness-scope-extractor.md
+    trigger: model_decision
+    description: "Reads SPEC.md, PLAN.md, and TASKS.md from a plan artifact directory and emits a JSON array of likely file changes with confidence labels. Used by run-creating commands (z-implement-all, z-plan, etc.) to seed the active-plan registry scope before o..."
   - id: scope-probe
     source: agents/scope-probe.md
     output: .agent/rules/z-harness-scope-probe.md
@@ -252,6 +327,26 @@ skills:
     source: skills/z-audit-plan-style/SKILL.md
     output: .agent/skills/z-audit-plan-style/SKILL.md
     description: "Audit a plan's artifacts (SPEC.md, PLAN.md, TASKS.md) for the same kind of code-quality issues /z-mr-review finds on a diff — defensive bloat, premature abstraction, DRY/KISS/SOLID violations, over-engineering, STYLE.md drift — BEFORE any code is ..."
+  - id: z-axiom-approve
+    source: skills/z-axiom-approve/SKILL.md
+    output: .agent/skills/z-axiom-approve/SKILL.md
+    description: "Approve a candidate axiom. Shows the candidate, its evidence, and falsifiability state. Requires explicit user confirmation before approving. Reuses /z-suggest-memory --from-candidate-json for the MEMORY-overlap advisory. Regenerates the kernel sy..."
+  - id: z-axiom-edit
+    source: skills/z-axiom-edit/SKILL.md
+    output: .agent/skills/z-axiom-edit/SKILL.md
+    description: "Edit a field on a candidate or approved axiom record. On approved records, re-validates the graph and regenerates the kernel."
+  - id: z-axiom-list
+    source: skills/z-axiom-list/SKILL.md
+    output: .agent/skills/z-axiom-list/SKILL.md
+    description: "List axiom records from the store, rendered as a readable table. Supports filtering by status, scope, and discipline."
+  - id: z-axiom-reject
+    source: skills/z-axiom-reject/SKILL.md
+    output: .agent/skills/z-axiom-reject/SKILL.md
+    description: "Reject a candidate or approved axiom, moving it to the rejected/ tombstone store. Optionally records a rejection reason."
+  - id: z-axiom-scan
+    source: skills/z-axiom-scan/SKILL.md
+    output: .agent/skills/z-axiom-scan/SKILL.md
+    description: "Mine candidate axioms from z-harness interaction history by dispatching the axiom-extractor agent, then writing returned candidates to the axiom store. Proposes only — never auto-approves."
   - id: z-brainstorm
     source: skills/z-brainstorm/SKILL.md
     output: .agent/skills/z-brainstorm/SKILL.md
@@ -288,6 +383,10 @@ skills:
     source: skills/z-map/SKILL.md
     output: .agent/skills/z-map/SKILL.md
     description: "Maps terrain with citations + cross-LLM critique. No recommendations — terrain only. See `/z-research` for synthesis across map + brainstorm."
+  - id: z-personas
+    source: skills/z-personas/SKILL.md
+    output: .agent/skills/z-personas/SKILL.md
+    description: "Inspect the z-harness persona registry, role bindings, and persona files. Subcommands: list, roles, validate, read <name>, where <name>. Default (no args) = roles."
   - id: z-plan
     source: skills/z-plan/SKILL.md
     output: .agent/skills/z-plan/SKILL.md
@@ -328,6 +427,10 @@ skills:
     source: skills/z-uplift/SKILL.md
     output: .agent/skills/z-uplift/SKILL.md
     description: "Bulk codebase quality uplift. Triggers on \"uplift the codebase\", \"audit the whole repo\", \"review every component\", \"quality pass\". Decomposes repo into components, runs cross-cutting audit, dispatches per-component reviews, and outputs TASKS.md."
+  - id: z-where
+    source: skills/z-where/SKILL.md
+    output: .agent/skills/z-where/SKILL.md
+    description: "Read-only \"what's active / why am I blocked\" query. Prints resolved base + repo-id, lists all active plans (slug, command, phase, branch, current_task, age, status), and optionally shows path-overlap with the current run. No writes, no LLM calls."
 
 # MCP tools — optional; registered separately by the user
 # Listed here for documentation only; export-agy.py does not write mcp_config.json

@@ -14,6 +14,235 @@ Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.le
 
 Both `--ack` and `--force-partial` are inert for legacy (single-slug) plans and only affect tree-rooted discovery in Setup step 2.
 
+## Phase 0.0 — Active-plan registration + cross-session overlap scan
+
+Register this run in the shared active-plan registry, seed its file scope, and surface overlap
+with any concurrent session. This is advisory by design (registry invariant 1: lockless is safe
+ONLY because overlap is advisory) except under `Z_HARNESS_STRICT_OVERLAP`, which adds a single
+hard gate. This command never mutates the base or migrates anything (registry invariant 8); it
+only register/heartbeat/deregisters its own record (single-writer, invariant 6).
+
+**ORDERING (mandatory — read before running any command in this phase).** This phase needs a
+NON-EMPTY `$Z_HARNESS_SLUG` and a real `$BASE`, and it must not create a record before any
+structural-validation halt. Therefore run this phase **inside Setup, immediately after Setup
+step 3 binds `$BASE`** — i.e. AFTER all of:
+
+- Setup step 1 (repo-root / `z-harness/` existence check, and the `--tasks` fast path which sets
+  `BASE`/`Z_HARNESS_SLUG` directly),
+- Setup step 2 + 2a (slug discovery — this is what `export`s `Z_HARNESS_SLUG`; without it the
+  slug is empty and register would record a useless empty-slug entry),
+- Setup step 2b's tree-validation gates for tree-rooted plans, in their existing order:
+  `tree_depth_exceeded`, `shared_concerns_missing`, `manifest_frontmatter_inconsistent`,
+  `manifest_run_order_invalid`, `partial_tree_blocked`, `cluster_not_ready`,
+  `shared_concerns_unacknowledged`,
+- Setup step 3 (binds `$BASE`).
+
+Those early Setup gates abort the run **before** this phase runs, so when any of them fires
+there is NO registry record yet → nothing to deregister, no zombie. Only once the plan is
+structurally valid and `$Z_HARNESS_SLUG` + `$BASE` are bound do we register.
+For tree-rooted plans, register ONE record for the whole `/z-implement-all` invocation using the
+chosen top-level slug bound in step 2; per-cluster `$BASE` rebinding (Setup 2c) does not create
+additional records.
+
+**Bind the run id and session id (the two values this phase introduces).** `$Z_HARNESS_SLUG`
+and `$BASE` are already bound by Setup steps 2–3 above; only `RUN` and the session id are
+established here:
+
+```bash
+# Run id — the SAME timestamp id used later for run_start / archive (IMPL_RUN). Bind it here
+# once (it is just a timestamp; a safe basename) and reuse it verbatim in Setup step 5's
+# archive paths and the registry --run-id, so there is exactly one run id per invocation.
+# Canonical variable for this command: $RUN (alias $IMPL_RUN). Every register / heartbeat /
+# overlaps / deregister call in this file uses $RUN (never any other variable).
+IMPL_RUN="$(date -u +%Y%m%dT%H%M%SZ)-implement"
+RUN="$IMPL_RUN"   # registry --run-id; also the $RUN used later for archive/memory-review paths
+
+# Session id (same value Setup step 5 stamps onto run_start).
+export Z_HARNESS_SESSION_ID="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" session-id)"
+
+# Sanity-guard: $Z_HARNESS_SLUG must be non-empty here (legacy-flat plans are the one allowed
+# empty case — they have no slug). $BASE must be a real path. If $BASE is unset, Setup step 3
+# did not run yet — STOP; this phase is mis-ordered.
+: "${BASE:?Phase 0.0 ran before Setup step 3 bound \$BASE — fix ordering}"
+```
+
+**1. Register the run.** Graduated failure policy (registry SPEC): a silent register failure
+defeats the whole mechanism, so NEVER silent-continue. Spell out every exit code:
+
+```bash
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" register \
+  --run-id "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-implement-all --phase implement \
+  --session "$Z_HARNESS_SESSION_ID"
+REG_RC=$?
+```
+
+- `REG_RC == 0` → registered; a record now exists; proceed to step 2.
+- `REG_RC == 3` (register FAILED — no record was written) → emit a loud `registry_error` event
+  (the register subcommand does NOT self-log its own failure; it returns 3 loudly, so the
+  orchestrator logs it here), then branch:
+  - **Interactive** (not `Z_HARNESS_NO_ASK`) → `AskUserQuestion`: *proceed without coordination* /
+    *abort*.
+    - **proceed without coordination** → continue WITHOUT a record. Skip step 2 (scope seed) and
+      step 3 (overlap scan) entirely — there is no record to scope or scan against — and fall
+      through to Phase 0.1. (No heartbeat/deregister later either; there is nothing to update.)
+    - **abort** → because register FAILED there is **NO record**, so do **NOT** call deregister
+      (deregistering a nonexistent record is a no-op at best and misleading at worst). Just
+      push-notify and `exit 1`.
+  - **Unattended (`Z_HARNESS_NO_ASK`)** → proceed without coordination (as the interactive
+    *proceed* branch above) and log prominently, UNLESS `Z_HARNESS_STRICT_OVERLAP=1`, in which
+    case **halt**: push-notify (this is the only register-failure hard stop) and `exit 1`. Again,
+    do **NOT** deregister — register failed, so no record exists.
+- **Any OTHER nonzero `REG_RC`** (not 0, not 3 — should not happen, but be defensive) → treat it
+  exactly as `REG_RC == 3` (loud `registry_error`, same graduated proceed/abort policy, same
+  "no record exists → no deregister" rule).
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" registry_error \
+  "$(printf '{"op":"register","run_id":"%s","rc":%d}' "$RUN" "$REG_RC")"
+```
+
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the register-failure proceed/abort question via their native channel. Silent omission is forbidden. -->
+
+**2. Seed scope (best-effort, non-fatal).** Dispatch the `scope-extractor` (Haiku) subagent with
+`repo_root` + `base` to produce a scope JSON array, write it to a temp file, and feed it to
+`update-scope`. Failure here is non-fatal — overlap detection just runs with an empty/own-record
+scope. The `update-scope` subcommand returns 0 by design and **self-logs** a `registry_error`
+event (op:`update-scope`) internally on any failure, so the orchestrator calls it best-effort
+with `|| true` and does NOT add a misleading `|| log` (that would be dead code, since the
+subcommand returns 0 by design).
+
+```
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+  subagent_type="scope-extractor",
+  description="Scope for /z-implement-all overlap scan",
+  prompt="repo_root: <repo root abs path>\nbase: $BASE"
+)
+```
+
+Write the returned JSON array to `"$(mktemp -t z-scope.XXXXXX.json)"`, then:
+
+```bash
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" update-scope \
+  --run-id "$RUN" --scope-json "$SCOPE_JSON" || true   # CLI self-logs registry_error on failure
+```
+
+**3. Overlap scan (graduated advisory).** Add `--strict` when `Z_HARNESS_STRICT_OVERLAP=1`.
+
+```bash
+OVL_ARGS=(--run-id "$RUN")
+[ "${Z_HARNESS_STRICT_OVERLAP:-}" = "1" ] && OVL_ARGS+=(--strict)
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" overlaps "${OVL_ARGS[@]}"
+OVL_RC=$?
+```
+
+Handle the exit code (the registry self-emits `active_plan_scan_complete` /
+`scope_overlap_detected`, so absence of overlap is observable without an extra event here).
+Spell out every code:
+
+- `OVL_RC == 0` (no overlap) → proceed silently (the registry already self-emitted
+  `active_plan_scan_complete`).
+- `OVL_RC == 10` (advisory overlap) → present the overlapping peers (each peer's `slug`,
+  `branch`, `current_task`, `host`, and the shared paths — re-run with `--json` to render them)
+  via `AskUserQuestion`: **proceed** / **wait** (re-scan after the peer finishes) / **abort**.
+  Under `Z_HARNESS_NO_ASK` → proceed and log (advisory is non-blocking unattended).
+  On **abort** → a record EXISTS; run:
+  ```bash
+  FINALIZE_STATUS=aborted
+  python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+    --run-id "$RUN" --status aborted 2>/dev/null || true
+  # push-notify + exit 1
+  ```
+- `OVL_RC == 20` (blocking overlap — only under strict mode AND an `explicit`×`explicit` exact
+  path match with a live peer) → **HALT**: a record EXISTS; push-notify (hard pause, fires
+  regardless of notify level), then run:
+  ```bash
+  FINALIZE_STATUS=aborted
+  python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+    --run-id "$RUN" --status aborted 2>/dev/null || true
+  # exit 1 without dispatching any task
+  ```
+  This is the one hard gate (registry invariant 1 permits it only under strict mode).
+- **Any OTHER nonzero `OVL_RC` (including `4` — overlaps could not resolve the registry)** → this
+  is NOT a hard block and NOT a silent "no overlap". Log a `registry_error` event (op:`overlaps`)
+  and **PROCEED** (the scan was inconclusive; overlap is advisory, so an inconclusive scan
+  degrades to "ran without coordination" rather than halting):
+  ```bash
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" registry_error \
+    "$(printf '{"op":"overlaps","run_id":"%s","rc":%d}' "$RUN" "$OVL_RC")"
+  ```
+
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the overlap proceed/wait/abort question via their native channel. Silent omission is forbidden. -->
+
+### FINALIZE_STATUS / deregister rule (single source of truth)
+
+One rule governs the record's lifecycle for the entire run:
+
+> **On any abort/halt that ENDS the run AND occurs after a record exists (i.e. after a `REG_RC == 0`
+> register), set `FINALIZE_STATUS=aborted` and `deregister --status aborted` before exiting. On a
+> normal completion, leave `FINALIZE_STATUS` unset so Finalize deregisters with the default
+> `complete`. On a pause-for-resume (compaction breakpoint), do NOT deregister at all — the run is
+> paused, not finished.**
+
+Concretely, the run-ending halt paths that MUST set `FINALIZE_STATUS=aborted` and deregister
+(each is reached only after `REG_RC == 0`, so a record exists):
+
+- Phase 0.0 overlap abort (`OVL_RC == 10` → abort) and overlap block (`OVL_RC == 20`) — handled inline above.
+- Phase 0.1 follow-up-running halt (below).
+- Main-loop hard halt (condition 2: `spec_problem` / `decision_needed` / `needs_clarification` /
+  `unable_to_complete` / repeated review failure the user did not resolve) — Finalize deregisters
+  with `aborted`.
+- `MAX_ATTEMPTS` exhaustion and wall-clock-cap halts that end the run — set `FINALIZE_STATUS=aborted`
+  before reaching Finalize.
+
+Paths that must NOT deregister:
+
+- **Register-failure abort/halt (`REG_RC == 3` or other nonzero)** — no record was ever written,
+  so there is nothing to deregister; just `exit 1`.
+- **Compaction-pause exit (Main-loop condition 3)** — a PAUSE, not an abort. Skip Finalize
+  entirely; do NOT deregister (the next invocation re-registers idempotently and resumes).
+
+Keep this gate consistent with the Phase 0.1 follow-up-running halt below — same push-notify
+pattern, same "do not proceed to slug dispatch on a hard stop." Do not create a second
+conflicting halt mechanism.
+
+## Phase 0.1 — Global cross-tool lock check
+
+After Phase 0.0 (and still within Setup, after `$BASE` is bound), before any task dispatch, check
+for concurrent follow-up consumer activity:
+
+```bash
+PROJECT_SINK="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" followups_dir)/index.view.json"
+if [ -f "$PROJECT_SINK" ]; then
+  RUNNING_COUNT="$(python3 -c "
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+    entries_obj = data.get('entries', {})
+    entries = list(entries_obj.values())
+    running = [e for e in entries if e.get('status') == 'running']
+    print(len(running))
+except (json.JSONDecodeError, OSError, KeyError, AttributeError):
+    print(0)
+" "$PROJECT_SINK" 2>/dev/null || echo 0)"
+  if [ "${RUNNING_COUNT:-0}" -gt 0 ]; then
+    echo "halt: follow-up consumer is active ($RUNNING_COUNT running entry/entries in project sink)" >&2
+    echo "Run /z-followup-status to see what is running. Wait for it to complete or dismiss before implementing." >&2
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" implement_halted_followup_running \
+      "$(printf '{"running_count":%d,"sink_path":"%s"}' "$RUNNING_COUNT" "$PROJECT_SINK")" 2>/dev/null || true
+    # Run-ending halt after a record exists → FINALIZE_STATUS=aborted + deregister (the
+    # single FINALIZE_STATUS rule from Phase 0.0). If register failed earlier (no record),
+    # deregister is a harmless no-op (the CLI self-logs nothing and returns 0). The CLI
+    # self-logs any internal deregister failure, so this is best-effort `|| true`.
+    FINALIZE_STATUS=aborted
+    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+      --run-id "$RUN" --status "$FINALIZE_STATUS" || true
+    exit 1
+  fi
+fi
+```
+
+If there are running follow-up consumer entries, **halt** — do not proceed with any slug discovery or task dispatch. Tell the user to check `/z-followup-status` before retrying.
+
 ## Setup
 
 1. `cd` to the repo root. Abort if no `z-harness/` directory.
@@ -35,6 +264,7 @@ Both `--ack` and `--force-partial` are inert for legacy (single-slug) plans and 
    - Also check for the legacy flat layout (`z-harness/TASKS.md` directly).
    - Zero candidates → tell user to run `/z-plan` first; abort.
    - One candidate → use it.
+   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug-selection question via their native channel. Silent omission is forbidden. -->
    - Multiple candidates → `AskUserQuestion` to pick. Mixed legacy + tree-rooted slugs are allowed in the same `/z-implement-all` invocation: the user picks one, validation/expansion below depends on its kind.
    - Export `Z_HARNESS_SLUG=<slug>` (or leave unset for legacy flat) and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")`.
 
@@ -111,7 +341,18 @@ Both `--ack` and `--force-partial` are inert for legacy (single-slug) plans and 
         ```
         Continue.
 
-   **2c. Expand tree-rooted slug into cluster sequence.** On all validations passing, iterate `clusters_to_run` **sequentially**. For each cluster ID in the list, look up its row in the parsed Clusters table and read the `Path` column verbatim — this is the canonical BASE for the cluster (`BASE = <Path value>`). Do **not** synthesize `BASE = $Z_HARNESS_PLAN_DIR/<cluster-id>/` from the ID; the MANIFEST's `Path` column is the source of truth (it may differ from the naive form). Validate that the lookup resolves to exactly one row per ID (already guaranteed by 2b.4's bijection check). Run the full main loop (steps 1–8) on that cluster's `BASE/TASKS.md`, then advance to the next cluster. Within each cluster, the existing N=3 parallel-batching applies as today (intra-cluster parallelism honored; cross-cluster parallelism is v2).
+   **2c. Expand tree-rooted slug into cluster sequence.** On all validations passing, iterate `clusters_to_run` sequentially by default, with the optimization below. For each cluster ID in the list, look up its row in the parsed Clusters table and read the `Path` column verbatim — this is the canonical BASE for the cluster (`BASE = <Path value>`). Do **not** synthesize `BASE = $Z_HARNESS_PLAN_DIR/<cluster-id>/` from the ID; the MANIFEST's `Path` column is the source of truth (it may differ from the naive form). Validate that the lookup resolves to exactly one row per ID (already guaranteed by 2b.4's bijection check). Run the full main loop (steps 1–8) on that cluster's `BASE/TASKS.md`, then advance to the next cluster. Within each cluster, the existing N=3 parallel-batching applies as today (intra-cluster parallelism honored).
+
+   <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+   1. Before each iteration, check whether there are ≥ 2 remaining clusters in `clusters_to_run` AND `overlap_count == 0` from the already-parsed SHARED-CONCERNS.md frontmatter (no re-parse needed — the value was captured in 2b.5).
+   2. If both conditions hold, emit a `cross_cluster_parallel` event and dispatch the pair in one message:
+      ```bash
+      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" cross_cluster_parallel \
+        "$(printf '{"slug":"%s","cluster_ids":["%s","%s"],"overlap_count":0}' "$Z_HARNESS_SLUG" "$CLUSTER_A_ID" "$CLUSTER_B_ID")"
+      ```
+      <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+   3. Any other case (fewer than 2 remaining clusters, or `overlap_count != 0`) → serial dispatch as before. N=3 parallel cross-cluster dispatch remains v2.
+   4. **Regression invariant:** a plan whose SHARED-CONCERNS.md frontmatter has `overlap_count != 0` MUST run clusters serially regardless of actual file-level overlap details — the global count is the conservative guard in v1.
 
    **2d. If chosen slug is legacy (TASKS.md directly under it, no MANIFEST.md),** behavior is unchanged: a single `BASE` for the whole run, no tree validation, `--ack` and `--force-partial` are no-ops.
 
@@ -123,16 +364,24 @@ Both `--ack` and `--force-partial` are inert for legacy (single-slug) plans and 
    ```
 
 4. Read `$TASKS_FILE` into memory — always set by step 1's fast path or step 3's default above. You'll re-read between batches to pick up status flips. **Do NOT pre-extract SPEC/PLAN slices in main thread** — subagents will Read them directly from `$BASE/SPEC.md` and `$BASE/PLAN.md` themselves. This keeps the orchestrator main-thread context light across many tasks.
-5. **Version stamp + run_start event:**
+5. **Version stamp + run_start event:** (`Z_HARNESS_SESSION_ID` was already exported in Phase 0.0; the `:-` default below leaves it alone if set.)
    ```bash
+   export Z_HARNESS_SESSION_ID="${Z_HARNESS_SESSION_ID:-$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" session-id)}"
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
    START_PAYLOAD="$(python3 -c '
    import json, sys
-   v = json.loads(sys.argv[1]); v["slug"] = sys.argv[2]
+   v = json.loads(sys.argv[1]); v["slug"] = sys.argv[2]; v["session_id"] = sys.argv[3]
    print(json.dumps(v))
-   ' "$VERSION_BLOB" "$Z_HARNESS_SLUG")"
+   ' "$VERSION_BLOB" "$Z_HARNESS_SLUG" "$Z_HARNESS_SESSION_ID")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" run_start "$START_PAYLOAD"
    ```
+
+   **Kernel path resolution (once per run, immediately after run_start):**
+   ```bash
+   KERNEL_PATH="$(bash scripts/resolve-kernel.sh 2>/dev/null || true)"
+   ```
+   <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+
    **Initialize compaction counters** (immediately after emitting `run_start`, before any task dispatch):
    ```bash
    tasks_since_pause=0
@@ -142,7 +391,7 @@ Both `--ack` and `--force-partial` are inert for legacy (single-slug) plans and 
 
    Then log provider resolution (once per run, guarded against re-emission):
    ```bash
-   IMPL_RUN="$(date -u +%Y%m%dT%H%M%SZ)-implement"
+   IMPL_RUN="${IMPL_RUN:-$(date -u +%Y%m%dT%H%M%SZ)-implement}"   # already set in Phase 0.0; reuse the same run id
    if [ ! -f "$BASE/archive/$IMPL_RUN/.providers-logged" ]; then
      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-providers.sh" || true
      mkdir -p "$BASE/archive/$IMPL_RUN"
@@ -157,6 +406,7 @@ Both `--ack` and `--force-partial` are inert for legacy (single-slug) plans and 
      ```json
      {"framework": "<pytest|cargo|jest|...>", "cmd_template": "<template>", "set_at": "<ISO ts>"}
      ```
+   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the test-runner template question via their native channel. Silent omission is forbidden. -->
    This is asked exactly once per slug; it's a per-plan cache so different plans can target different test frameworks.
 
 ## Compaction breakpoint policy
@@ -220,8 +470,8 @@ The numbered steps below describe a **single task track** — one task's journey
 
 These exist because the T006 saga (4 attempts spanning ~20 wall-clock hours, each a *different* failure mode — OOM, degenerate model, load avg 156, load avg 211) was not caught by the skip-marker list. Skip-markers match static text in the task block; they cannot catch novel runtime failures. The caps below are unconditional.
 
-- **`MAX_ATTEMPTS=2` per task ID for the entire `/z-implement-all` run.** "Attempt" = a fresh dispatch through step 5 (implementer). Retries inside step 7 (review-failure re-spawn) count as part of the same attempt. After 2 attempts that don't reach `task_done`, halt the task, push-notify, and present to the user with options: skip / override / re-spec / abandon. Override via `Z_HARNESS_MAX_ATTEMPTS=N`.
-- **`MAX_TASK_WALL_MS=2700000` (45 min) per task track.** Wall time start = `task_start` event; end = `task_done` or halt. If a track exceeds this, the orchestrator halts the track regardless of subagent state, logs `task_halt` with `reason: "wall_clock_cap"`, and surfaces to the user. Override via `Z_HARNESS_MAX_TASK_WALL_MS=ms`.
+- **`MAX_ATTEMPTS=2` per task ID for the entire `/z-implement-all` run.** "Attempt" = a fresh dispatch through step 5 (implementer). Retries inside step 7 (review-failure re-spawn) count as part of the same attempt. After 2 attempts that don't reach `task_done`, halt the task, push-notify, and present to the user with options: skip / override / re-spec / abandon. Override via `Z_HARNESS_MAX_ATTEMPTS=N`. If the user chooses **abandon** (ending the run), this is a run-ending halt — **set `FINALIZE_STATUS=aborted`** before reaching Finalize (per the FINALIZE_STATUS rule in Phase 0.0).
+- **`MAX_TASK_WALL_MS=2700000` (45 min) per task track.** Wall time start = `task_start` event; end = `task_done` or halt. If a track exceeds this, the orchestrator halts the track regardless of subagent state, logs `task_halt` with `reason: "wall_clock_cap"`, and surfaces to the user. If this ends the run (user chooses to abandon), **set `FINALIZE_STATUS=aborted`** before reaching Finalize. Override via `Z_HARNESS_MAX_TASK_WALL_MS=ms`.
 - **`MAX_DISTINCT_HALTS=3` per task ID.** If a task has been halted with 3 different `reason` values across all attempts (e.g. `spec_problem`, `unable_to_complete`, `environmental`), auto-flag it as skip for the rest of the run and present to the user with a one-line summary of the three failure modes. Prevents the T006 pattern.
 - **`MAX_BATCH_STALL_MS=1800000` (30 min) per batch.** If a batch goes 30 min with no `task_done` or `task_halt` event from *any* in-flight track, the orchestrator considers it stalled. Push-notify the user with a list of in-flight task IDs and ask: continue waiting / cancel batch / kill specific tracks.
 - **Halt taxonomy that doesn't burn an attempt.** A task halted with `reason: "needs_clarification"` or `reason: "decision_needed"` where the user resolves it and asks to resume *does not* count toward `MAX_ATTEMPTS`. Resolved spec/decision halts reset the attempt counter for that task. (Otherwise a 3-decision-gate task could exhaust its attempts before implementer ever wrote code.)
@@ -229,9 +479,9 @@ These exist because the T006 saga (4 attempts spanning ~20 wall-clock hours, eac
 ## Main loop
 
 Repeat until one of the following three exit conditions is met:
-1. **No eligible task remaining** — all `[ ]` tasks are blocked, skip-flagged, or done; jump to Finalize.
-2. **Hard halt from collected user-blocking findings** — a `spec_problem`, `decision_needed`, `needs_clarification`, or repeated review failure that the user did not resolve; jump to Finalize.
-3. **Compaction trigger fired** (step 8 sub-step 6) — emit `compaction_pause`, push-notify, and exit without running Finalize. Resume on next invocation.
+1. **No eligible task remaining** — all `[ ]` tasks are blocked, skip-flagged, or done; jump to Finalize (leave `FINALIZE_STATUS` unset → Finalize deregisters with `complete`).
+2. **Hard halt from collected user-blocking findings** — a `spec_problem`, `decision_needed`, `needs_clarification`, `unable_to_complete`, or repeated review failure that the user did not resolve, OR a `MAX_ATTEMPTS`/wall-clock-cap halt that ends the run; **set `FINALIZE_STATUS=aborted`** then jump to Finalize (per the FINALIZE_STATUS rule in Phase 0.0 — Finalize then deregisters with `aborted`).
+3. **Compaction trigger fired** (step 8 sub-step 6) — emit `compaction_pause`, push-notify, and exit without running Finalize. Resume on next invocation. (A pause, not an abort — do NOT deregister; do NOT set `FINALIZE_STATUS`.)
 
 Only conditions (1) and (2) lead to the Finalize block. Condition (3) exits immediately after the push notification.
 
@@ -264,6 +514,7 @@ Scan the **entire task block** (title, Files, Depends, Acceptance — every line
 
 **Phase markers:** Phase F tasks (T050+) — explicitly wall-clock-bound, skip entirely (do not even ask, just report at finalize).
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the skip-flagged task decision (skip / run myself / defer / override) via their native channel. Silent omission is forbidden. -->
 When halting on a skip-flagged task, immediately push-notify (fires regardless of notification level; see [docs/human/config.md](docs/human/config.md)) and use `AskUserQuestion` with options:
 - **Skip entirely** — leave `[ ]`, exclude from this run's eligibility for the rest of the loop, continue with other eligible tasks.
 - **I'll run it myself** — leave `[ ]`, exclude for now; user will mark `[x]` manually when done, then re-invoke `/z-implement-all` to resume.
@@ -274,10 +525,18 @@ Critical: **never retry a skip-flagged task in the same run** unless the user pi
 
 ### 3. Mark in-progress
 
-Edit `$TASKS_FILE`: flip the chosen task's `[ ]` to `[~]`. Log:
+Edit `$TASKS_FILE`: flip the chosen task's `[ ]` to `[~]`. Log, then heartbeat the registry at
+this task-dispatch boundary (best-effort, non-fatal — never block dispatch on a registry error).
+The `heartbeat` subcommand returns 0 by design and **self-logs** a `registry_error` event
+(op:`heartbeat`) internally on any failure, so call it with `|| true` and do NOT add a
+misleading `|| log` (a `|| log` would be dead code since the subcommand returns 0 by design):
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tasks/<task-id>" task_start '{"id":"<task-id>"}'
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" heartbeat \
+  --run-id "$RUN" --phase implement --current-task "<task-id>" || true   # CLI self-logs registry_error on failure
 ```
+For a parallel batch, emit one heartbeat per task as it flips to `[~]` (last write wins on
+`current_task`; this is opportunistic liveness, not exact tracking).
 
 ### 4. Identify related-file context + relevant docs (paths only — no slice extraction)
 
@@ -309,11 +568,12 @@ If INDEX.json doesn't exist or no concept matches, `relevant_docs` is empty (no 
 
 Spawn the precheck before any code is written:
 
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
 ```
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="spec-precheck",
   description="Spec precheck <task-id>",
-  prompt="<task-id>\n\n<task block verbatim>\n\n$BASE: <abs path to $Z_HARNESS_PLAN_DIR>\nRepo root: <abs path>\nrelevant_docs (paths from step 4b — Read these for concept grounding): <paths>"
+  prompt="<task-id>\n\n<task block verbatim>\n\n$BASE: <abs path to $Z_HARNESS_PLAN_DIR>\nRepo root: <abs path>\nrelevant_docs (paths from step 4b — Read these for concept grounding): <paths>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 ```
 
@@ -329,11 +589,12 @@ The precheck is cheap (≤30s) and saves 30-60 minutes per spec-drift incident �
 
 ### 5. Spawn implementer (fresh context)
 
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
 ```
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="implementer",
   description="Implement <task-id>",
-  prompt="<task-id>\n\n<task block verbatim from $TASKS_FILE>\n\n$BASE: <abs path>  (read SPEC.md / PLAN.md yourself from here)\nRepo root: <abs path>\nrelevant_docs (paths — Read these for cross-file invariants and consumer contracts): <paths from step 4b>\ntests_md_path: <$BASE/TESTS.md if it exists, else empty>  (if the task block contains a **Tests:** line, Read TESTS.md and produce test code for each listed TEST-NNN at its Target file path, in the same diff as the production code)"
+  prompt="<task-id>\n\n<task block verbatim from $TASKS_FILE>\n\n$BASE: <abs path>  (read SPEC.md / PLAN.md yourself from here)\nRepo root: <abs path>\nrelevant_docs (paths — Read these for cross-file invariants and consumer contracts): <paths from step 4b>\ntests_md_path: <$BASE/TESTS.md if it exists, else empty>  (if the task block contains a **Tests:** line, Read TESTS.md and produce test code for each listed TEST-NNN at its Target file path, in the same diff as the production code)\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 ```
 
@@ -343,6 +604,7 @@ The precheck is cheap (≤30s) and saves 30-60 minutes per spec-drift incident �
 
 **REMOTE_VERIFY pre-dispatch.** If the task block contains a `**REMOTE_VERIFY:**` line, before parsing the implementer's return, dispatch the `remote-runner` (Haiku) subagent with the verify command. If the remote build fails, treat the implementer return as if it had `STATUS: unable_to_complete` and present the build log excerpt to the user.
 
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
 ```
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="remote-runner",
@@ -354,10 +616,18 @@ The precheck is cheap (≤30s) and saves 30-60 minutes per spec-drift incident �
 Parse the implementer's return per the `STATUS:` block. Branches:
 
 - `STATUS: ok` → go to step 6 (review)
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface implementer halt questions (needs_clarification / spec_problem / decision_needed) via their native channel. Silent omission is forbidden. -->
 - `STATUS: needs_clarification` → halt queue, push-notify, present the question to the user via `AskUserQuestion`. After answer, update SPEC.md if appropriate, then re-spawn implementer with the resolved info.
 - `STATUS: spec_problem` → halt queue, push-notify, escalate to user. Likely needs SPEC patch before any further tasks proceed.
 - `STATUS: decision_needed` → halt queue, push-notify, present the decision + options via `AskUserQuestion`. This is the "major design decision must be approved by user" gate. Record the decision in `$BASE/archive/$RUN/decisions-late.md`. After answer, re-spawn implementer.
 - `STATUS: unable_to_complete` → flip `[~]` back to `[ ]`, halt queue, push-notify with the reason.
+  This is a run-ending halt (Main-loop condition 2). Per the FINALIZE_STATUS rule in Phase 0.0:
+  **set `FINALIZE_STATUS=aborted`** before jumping to Finalize so the record is deregistered as
+  `aborted` (not `complete`). Example:
+  ```bash
+  FINALIZE_STATUS=aborted
+  # ... jump to Finalize (which calls deregister --status aborted) ...
+  ```
 
 ### 6. Capture diff and spawn reviewer (fresh context)
 
@@ -367,22 +637,42 @@ git diff > $BASE/archive/tasks/<task-id>/diff.patch 2>/dev/null \
   || ls -la <implementer's FILES_CHANGED> > $BASE/archive/tasks/<task-id>/diff.patch
 ```
 
-```
-<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
-  subagent_type="reviewer",
-  description="Codex review <task-id>",
-  prompt="task id: <id>\ntask description: <title>\nacceptance criteria: <criteria verbatim from task block>\ndiff.patch path: <abs path>\nchanged files: <abs paths>\nrelated downstream files (paths only; reviewer Reads them itself): <related_files paths from step 4a>\nrelevant_docs (paths — verify the diff didn't break invariants stated in these): <paths from step 4b>\n$BASE: <abs path>  (read SPEC.md yourself for relevant sections)"
-)
+**Skip-rereview on clean cycle-1.** If `CYCLE == 2` AND the cycle-1 reviewer returned `blockers=0` AND `majors=0`, do **not** spawn the reviewer. Instead, skip directly to the test step (step 7b) and then proceed to step 8.
+
+Rationale: `needs_clarification` and `decision_needed` halts are processed in step 5 — before the cycle-1 review ever fires. So if CYCLE is now 2 and cycle-1 was clean, the only reason the implementer re-ran was a non-review-side halt (e.g. the user answered a clarification or approved a design decision). Re-firing the reviewer is a no-op because the prior review found nothing actionable. The guard intentionally fires regardless of why the implementer re-ran; a clean cycle-1 means no review-side issue exists, and re-reviewing an unchanged-from-review-perspective diff cannot surface findings. This is the savings — explicit, not a bug.
+
+Emit a `review_skipped_clean_cycle1` log event before proceeding to step 7b:
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
+  "tasks/<task-id>" review_skipped_clean_cycle1 \
+  "$(printf '{"id":"%s","cycle":%d,"prior_blockers":0,"prior_majors":0}' \
+     "<task-id>" "$CYCLE")"
 ```
 
-**Skip-rereview on identical diff.** Before spawning the reviewer on cycle ≥ 2, hash both the current and prior diff:
+This recovers ~57s median reviewer wall-time per task on the resume-after-clarification path.
+
+**Skip-rereview on identical diff.** If the clean-cycle-1 guard above did not fire, before spawning the reviewer on cycle ≥ 2, hash both the current and prior diff:
 
 ```bash
 NEW_HASH="$(shasum -a 256 "$BASE/archive/tasks/<id>/diff.patch" | awk '{print $1}')"
 OLD_HASH="$(shasum -a 256 "$BASE/archive/tasks/<id>/diff-v$((CYCLE-1)).patch" | awk '{print $1}')"
 ```
 
-If `NEW_HASH == OLD_HASH`, the implementer didn't actually change anything (it pushed back on the prior reviewer's findings rather than editing). **Do not spawn the reviewer.** Instead halt the track with reason `no_change_on_retry`, push-notify, and ask the user via `AskUserQuestion` whether to override (accept the unchanged diff) / patch manually / abandon. Saves one full Codex review cycle on stuck tasks.
+If `NEW_HASH == OLD_HASH`, the implementer didn't actually change anything (it pushed back on the prior reviewer's findings rather than editing). **Do not spawn the reviewer.** Instead halt the track with reason `no_change_on_retry`, push-notify, and
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the no_change_on_retry decision (override / patch manually / abandon) via their native channel. Silent omission is forbidden. -->
+ask the user via `AskUserQuestion` whether to override (accept the unchanged diff) / patch manually / abandon. Saves one full Codex review cycle on stuck tasks.
+
+If neither guard fired, spawn the reviewer:
+
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+```
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+  subagent_type="reviewer",
+  description="Codex review <task-id>",
+  prompt="task id: <id>\ntask description: <title>\nacceptance criteria: <criteria verbatim from task block>\ndiff.patch path: <abs path>\nchanged files: <abs paths>\nrelated downstream files (paths only; reviewer Reads them itself): <related_files paths from step 4a>\nrelevant_docs (paths — verify the diff didn't break invariants stated in these): <paths from step 4b>\n$BASE: <abs path>  (read SPEC.md yourself for relevant sections)\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+)
+```
 
 Parse the reviewer's response. Group findings by severity.
 
@@ -390,8 +680,30 @@ Parse the reviewer's response. Group findings by severity.
 
 - **No blockers, no majors** → accept; go to step 8 (done).
 - **Has blockers or majors** →
-  - **First failure**: re-spawn implementer once with the reviewer's findings as `prior-attempt reviewer feedback`. Then re-review.
-  - **Second failure**: halt queue. Push-notify. Present diff + reviewer findings to user; await `AskUserQuestion` for "proceed anyway / patch manually / abandon task / re-spec".
+  - **First failure**: re-spawn implementer once with the reviewer's findings as `prior-attempt reviewer feedback`. Then re-review (cycle 2). Note: if the implementer was re-spawned for a non-review reason (e.g. after resolving a `decision_needed` or `needs_clarification`), the cycle-2 reviewer is skipped entirely by the **Skip-rereview on clean cycle-1** guard above — meaning a cycle-2 re-review only fires when the cycle-1 review actually found something actionable.
+  <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the second-review-failure decision (proceed anyway / patch manually / abandon task / re-spec) via their native channel. Silent omission is forbidden. -->
+  - **Second failure**: halt queue. Push-notify. Before presenting to the user, run the `check-no-ask` resolver for `workflow.implement_all_proceed`:
+
+    ```bash
+    NO_ASK_RESULT="$(python3 scripts/config.py check-no-ask --question-id workflow.implement_all_proceed)"
+    NO_ASK_CHECK="$(echo "$NO_ASK_RESULT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"])')"
+    ```
+
+    Branch on `$NO_ASK_CHECK`:
+    - `halt`: normalize state, emit `task_halt` and `implement_end`, and exit cleanly — do NOT invoke `AskUserQuestion`:
+      ```bash
+      if [[ "$NO_ASK_CHECK" == "halt" ]]; then
+        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/normalize-task-state.sh" "$BASE"
+        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tasks/<task-id>" task_halt \
+          "$(printf '{"id":"%s","reason":"no_ask_blocked","question_id":"workflow.implement_all_proceed"}' "<task-id>")"
+        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tasks/<task-id>" implement_end \
+          "$(printf '{"id":"%s","retry":%d,"status":"halt","files_changed_count":0}' "<task-id>" "$CYCLE")"
+        exit 0
+      fi
+      ```
+    - `proceed`: fall through to the `AskUserQuestion` below.
+
+    Present diff + reviewer findings to user; await `AskUserQuestion` for "proceed anyway / patch manually / abandon task / re-spec".
 
 #### 7a. Delta-on-retry (mandatory for cycle ≥ 2)
 
@@ -412,7 +724,7 @@ Implementer prompt on cycle ≥ 2 is shorter than cycle 1:
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="implementer",
   description="Implement <task-id> v<CYCLE>",
-  prompt="<task-id> RETRY v<CYCLE>\n\n<task block verbatim — unchanged>\n\nPrior attempt diff (already on disk at $BASE/archive/tasks/<id>/diff-v<CYCLE-1>.patch — READ IT FIRST, then patch ONLY what the reviewer flagged):\n\n=== Reviewer findings to address ===\n<verbatim ≤8K return from reviewer>\n\nDo NOT rewrite from scratch. Apply targeted fixes. Return the same STATUS report shape."
+  prompt="<task-id> RETRY v<CYCLE>\n\n<task block verbatim — unchanged>\n\nPrior attempt diff (already on disk at $BASE/archive/tasks/<id>/diff-v<CYCLE-1>.patch — READ IT FIRST, then patch ONLY what the reviewer flagged):\n\n=== Reviewer findings to address ===\n<verbatim ≤8K return from reviewer>\n\nDo NOT rewrite from scratch. Apply targeted fixes. Return the same STATUS report shape.\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 ```
 
@@ -431,7 +743,7 @@ Reviewer prompt on cycle ≥ 2:
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="reviewer",
   description="Codex review <task-id> v<CYCLE>",
-  prompt="task id: <id>\ntask description: <title>\nReview ROUND v<CYCLE> — focus on whether the prior findings were addressed; do NOT re-flag issues outside the delta.\n\nPrior findings (v<CYCLE-1>):\n<verbatim ≤8K reviewer return from prior cycle>\n\nImplementer's claim of what changed: <SUMMARY from implementer return>\n\nDelta patch (between-attempts): $BASE/archive/tasks/<id>/delta-v<CYCLE>.patch\nFull current diff: $BASE/archive/tasks/<id>/diff.patch\nSPEC excerpt: <slice>\nchanged files: <abs paths>"
+  prompt="task id: <id>\ntask description: <title>\nReview ROUND v<CYCLE> — focus on whether the prior findings were addressed; do NOT re-flag issues outside the delta.\n\nPrior findings (v<CYCLE-1>):\n<verbatim ≤8K reviewer return from prior cycle>\n\nImplementer's claim of what changed: <SUMMARY from implementer return>\n\nDelta patch (between-attempts): $BASE/archive/tasks/<id>/delta-v<CYCLE>.patch\nFull current diff: $BASE/archive/tasks/<id>/diff.patch\nSPEC excerpt: <slice>\nchanged files: <abs paths>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 ```
 
@@ -462,6 +774,7 @@ done
 ```
 
 - **All tests pass** → continue to step 8.
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the test-failure decision (retry implementer / edit test / proceed anyway / abandon) via their native channel. Silent omission is forbidden. -->
 - **Any test fails** → halt the track with `STATUS: test_failed`. Push-notify. Present the failure log to the user via `AskUserQuestion`:
   - **Retry implementer** — feed the test output back to the implementer as `prior-attempt reviewer feedback` (subject to MAX_ATTEMPTS).
   - **Edit the test** — the test itself may be wrong; user revises TESTS.md and re-runs the test step.
@@ -500,6 +813,23 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tas
 
 When the loop exits (no more eligible tasks, or you halted):
 
+0. **Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the single
+   FINALIZE_STATUS rule (Phase 0.0): `${FINALIZE_STATUS:-complete}` resolves to `complete` on a
+   normal exit (condition 1, no eligible task remaining) and to `aborted` when a hard-halt path
+   set `FINALIZE_STATUS=aborted` before reaching here (condition 2 — a `spec_problem`,
+   `decision_needed`, `needs_clarification`, `unable_to_complete`, repeated review failure the
+   user did not resolve, or a `MAX_ATTEMPTS`/wall-clock-cap halt that ends the run). Either way,
+   do not leave a zombie record. The `deregister` subcommand returns 0 by design and self-logs a
+   `registry_error` on internal failure, so call it with `|| true` (not `|| log`). If register
+   failed earlier (no record was ever written), this is a harmless no-op.
+   ```bash
+   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+     --run-id "$RUN" --status "${FINALIZE_STATUS:-complete}" || true   # CLI self-logs registry_error on failure
+   ```
+   **Compaction-pause exits (Main-loop condition 3) deliberately skip Finalize — do NOT
+   deregister there.** The run is paused, not finished; the next `/z-implement-all` invocation
+   re-registers (idempotent) and resumes. Deregistering on a pause would erase the live record
+   and hide a still-active run from concurrent sessions.
 1. Re-read `$TASKS_FILE` for final counts: `done`, `pending`, `in_progress`, `skipped`.
 2. Write a summary message to the user:
    - Counts
@@ -515,6 +845,9 @@ Recommended next:
   /z-maintain-docs   — refresh docs for any concepts the implementation touched
 ```
    Both are safe to run in sequence; they cover different concerns (correctness vs documentation freshness).
+
+   When Phase 9 ran and produced candidates (N_CANDIDATES > 0), append to the push-notify body:
+   > Memory review: `<N_CANDIDATES>` candidate(s) written to `<CANDIDATES_FILE>`. Review with `/z-suggest-memory --from-candidate-json <CANDIDATES_FILE>`.
 
 ## Telemetry (mandatory — for iteration after each run)
 
@@ -532,6 +865,7 @@ For each task track, the orchestrator emits these event kinds (in order):
 | `diff_capture` | After `git diff` | `id`, `diff_bytes` |
 | `review_start` | Just before spawning `reviewer` (each cycle) | `id`, `cycle` (1, 2, ...) |
 | `review_end` | Reviewer returned | `id`, `cycle`, `wall_ms`, `response_chars`, `blockers`, `majors` |
+| `review_skipped_clean_cycle1` | Cycle-2 entered but cycle-1 was clean | `id`, `cycle`, `prior_blockers`, `prior_majors` |
 | `decision_gate` | Halted for user input | `id`, `reason` (`spec_problem`/`decision_needed`/`needs_clarification`/`review_failed`), `wait_ms` (filled in after user replies) |
 | `task_done` | Marked `[x]` | `id`, `total_retries`, `review_cycles`, `task_wall_ms` (start→done), `precheck_wall_ms`, `implement_wall_ms_sum`, `review_wall_ms_sum`, `user_wait_ms_sum` |
 | `task_skip` | Skip rule hit, user picked Skip/Run-myself/Defer | `id`, `marker_matched`, `user_choice` |
@@ -631,6 +965,7 @@ This phase fires once per run, after the Finalize push-notify, before the sessio
 
 4. **Dispatch the review-agent:**
 
+   <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
    ```
    <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
      subagent_type="review-agent",
@@ -644,6 +979,25 @@ This phase fires once per run, after the Finalize push-notify, before the sessio
    parent_command: implement-all"
    )
    ```
+
+4a. **Optionally dispatch the axiom-extractor (if `AXIOM_READY` was emitted):**
+
+    If `run-memory-review.sh` output contains a line starting with `AXIOM_READY`, parse the artifact path from that line and dispatch the axiom-extractor **alongside** the review-agent (parallel, fresh context):
+
+    ```bash
+    AXIOM_READY_LINE="$(printf '%s' "$MEMORY_REVIEW_OUT" | grep '^AXIOM_READY ' || true)"
+    ```
+
+    ```
+    <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+      subagent_type="axiom-extractor",
+      description="Axiom extraction for <SLUG_FOR_DESC>",
+      prompt="mode: post-run <RUN>
+    repo_root: <REPO_ROOT>"
+    )
+    ```
+
+    **Proposes only — no auto-approve:** the axiom-extractor returns ≤5 candidate axioms as a fenced JSON array; nothing is written to the axiom store and no axiom is approved automatically. The candidates surface opportunities for later `/z-axiom-scan` / `/z-axiom-approve` review. Do not block on the axiom-extractor's return or error if it is unavailable.
 
 5. **Parse agent return — extract single fenced ```json block:**
 
@@ -684,9 +1038,9 @@ This phase fires once per run, after the Finalize push-notify, before the sessio
 
    ```bash
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" review_agent_call \
-     "$(printf '{"run":"%s","parent_command":"implement-all","candidates_emitted":0,"accepted":0}' "$RUN")"
+     "$(printf '{"run":"%s","parent_command":"implement-all","candidates_emitted":0}' "$RUN")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$PHASE9_TOKEN" \
-     "$(printf '{"phase":9,"name":"memory_review","skipped":false,"candidates_emitted":0,"candidates_accepted":0,"candidates_skipped":0}')"
+     "$(printf '{"phase":9,"name":"memory_review","skipped":false,"candidates_emitted":0}')"
    ```
    Exit phase quietly — no push-notify.
 
@@ -707,72 +1061,18 @@ This phase fires once per run, after the Finalize push-notify, before the sessio
    b. **Log `review_agent_call`** (with token counts from Agent return usage block):
       ```bash
       bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" review_agent_call \
-        "$(printf '{"run":"%s","parent_command":"implement-all","subagent_model":"haiku","subagent_input_tokens":%d,"subagent_output_tokens":%d,"candidates_emitted":%d,"accepted":"<filled-in-later>"}' \
+        "$(printf '{"run":"%s","parent_command":"implement-all","subagent_model":"haiku","subagent_input_tokens":%d,"subagent_output_tokens":%d,"candidates_emitted":%d}' \
            "$RUN" "$INPUT_TOKENS" "$OUTPUT_TOKENS" "$N_CANDIDATES")"
       ```
 
-   c. **Push-notify `memory_candidates_ready`:**
+   c. **Emit `memory_review_complete` and exit phase:**
       ```bash
-      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" memory_candidates_ready \
-        "$(printf '{"run":"%s","candidates_emitted":%d}' "$RUN" "$N_CANDIDATES")"
+      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" memory_review_complete \
+        "$(printf '{"run":"%s","candidates_written":%d,"path":"%s"}' "$RUN" "$N_CANDIDATES" "$CANDIDATES_FILE")"
+      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$PHASE9_TOKEN" \
+        "$(printf '{"phase":9,"name":"memory_review","skipped":false,"candidates_emitted":%d}' "$N_CANDIDATES")"
       ```
-      Push-notify: "Memory review produced `<N>` candidate(s) — please review."
-
-   d. **Sequential AskUserQuestion per candidate (max 3 candidates):**
-
-      For each candidate (index `i`, 0-based; stop after 3):
-      ```
-      <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
-        title: "Memory candidate <i+1> of <total> — <candidate.candidate_kind>",
-        body: "**Suggested concept:** `<candidate.suggested_concept_slug>`\n\n**Type:** `<candidate.type>`\n\n**Text:** <candidate.text>\n\n**Tags:** <candidate.tags joined by ', '>\n\n**Rationale:** <candidate.rationale>\n\n**Evidence:** <candidate.evidence_citations joined by ', '>",
-        options: [
-          { id: "accept", label: "Accept — persist this candidate" },
-          { id: "edit",   label: "Edit — modify before persisting" },
-          { id: "skip",   label: "Skip (provide one-word reason)" },
-          { id: "skip_all", label: "Skip all remaining" }
-        ]
-      )
-      ```
-
-      - **Accept:**
-        ```bash
-        printf '%s' "$CANDIDATE_JSON" | bash -c \
-          'bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-skill.sh" z-suggest-memory \
-             --concept "<candidate.suggested_concept_slug>" \
-             --source "incident:<RUN>" \
-             --from-candidate-json -'
-        ```
-        On `STATUS: ok` → increment `ACCEPTED`.
-        On `STATUS: skipped` or `STATUS: bad_input` → log:
-        ```bash
-        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" review_agent_suggest_failed \
-          "$(printf '{"run":"%s","candidate_index":%d,"reason":"%s"}' "$RUN" "$i" "<reason>")"
-        ```
-        Continue to next candidate.
-
-      - **Edit:** Surface the candidate fields. Collect user edits. Apply edits to the candidate JSON in-memory. Re-present as Accept and dispatch `/z-suggest-memory` with the edited JSON piped via `--from-candidate-json -`.
-
-      - **Skip (one-word reason):** Ask the user for the reason word (follow-up prompt or inline if the UI allows). Then:
-        ```bash
-        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" review_candidate_skipped \
-          "$(printf '{"run":"%s","candidate_index":%d,"reason":"%s"}' "$RUN" "$i" "<user_reason>")"
-        ```
-        Increment `SKIPPED`. Continue to next candidate.
-
-      - **Skip-all-remaining:**
-        ```bash
-        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" review_skip_all \
-          "$(printf '{"run":"%s","candidates_remaining":%d}' "$RUN" "$((N_CANDIDATES - i))")"
-        ```
-        Break the loop.
-
-8. **Final `phase_end`:**
-
-   ```bash
-   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$PHASE9_TOKEN" \
-     "$(printf '{"phase":9,"name":"memory_review","skipped":false,"candidates_emitted":%d,"candidates_accepted":%d,"candidates_skipped":%d}' \
-        "$N_CANDIDATES" "$ACCEPTED" "$SKIPPED")"
-   ```
+      Store `N_CANDIDATES` and `CANDIDATES_FILE` in variables for Finalize to use in the push-notify. Exit phase.
 
 **Event-kind reference for this phase:**
 
@@ -781,9 +1081,25 @@ This phase fires once per run, after the Finalize push-notify, before the sessio
 | `review_agent_call` | Agent returned candidates (including empty-array case) |
 | `review_agent_failed` | Agent returned without a fenced block |
 | `review_agent_malformed` | Agent returned with a fenced block that failed `json.loads` |
-| `memory_candidates_ready` | N ≥ 1 candidates; push-notify fired |
-| `review_candidate_skipped` | User skipped a single candidate with a reason |
-| `review_skip_all` | User chose Skip-all-remaining |
+| `memory_review_complete` | N ≥ 1 candidates written to JSONL; Finalize will surface path in push-notify |
+
+## Decision emission (standing instruction)
+
+After **any** `AskUserQuestion` resolves, emit a normalized decision event:
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-decision.sh" \
+  "$RUN" "<question_id>" "<chosen_label>" \
+  --options '["<opt1>","<opt2>",...]' \
+  [--tentative "<recommended_option>"]
+```
+
+- `<question_id>` — stable kebab-case identifier for this decision point (e.g. `workflow.implement_all_proceed`, `workflow.slug_confirm`).
+- `<chosen_label>` — the option label the user selected, verbatim.
+- `--options` — full list of offered option labels as a JSON array.
+- `--tentative` — the orchestrator's recommended option label; omit when the orchestrator had no recommendation.
+
+Emission is gated by `Z_HARNESS_AXIOM_EXTRACT` (default on); when set to `"0"`, the script exits silently — no guard is needed here. Do **not** modify existing structured gate events (`cost_gate_decision`, `critique_failure_decision`, `map_collision_decision`, `shared_concerns_ack_override`); those are normalized separately by the extractor. This emission **records signal only** — it never approves, overrides, or influences any decision (proposes-only invariant).
 
 ## Hard rules
 
@@ -792,3 +1108,19 @@ This phase fires once per run, after the Finalize push-notify, before the sessio
 - **Always** halt rather than guess on `decision_needed` / `spec_problem` / `needs_clarification`.
 - **Always** push-notify on halts (regardless of `approval_only` vs `all`).
 - **Never** auto-skip a non-eligible task forever — present it in the finalize summary so the user knows what's outstanding.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | yes | Setup 4.5 spec-precheck; Step 5 implementer; Step 5 remote-runner (REMOTE_VERIFY tasks); Step 6 reviewer; Phase 9 review-agent (memory review) |
+| `ask_user` | yes | Setup 2a slug selection; Setup 7.5 test-runner template; Step 2 skip-flagged task decision; Step 5 implementer halt questions (needs_clarification / spec_problem / decision_needed); Step 6 no_change_on_retry decision; Step 7 second-review-failure decision; Step 7b test-failure decision |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

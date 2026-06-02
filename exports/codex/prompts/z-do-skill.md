@@ -12,18 +12,37 @@ $ARGUMENTS
 
 1. Pick run id: `RUN=$(date -u +%Y-%m-%dT%H:%M:%SZ)-do`
 2. `export Z_HARNESS_SLUG=adhoc`
-3. `mkdir -p z-harness/adhoc/archive/$RUN`
-4. `CURRENT_ARCHIVE_DIR="z-harness/adhoc/archive/$RUN"`
+3. `CURRENT_ARCHIVE_DIR="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" base_dir)/adhoc/archive/$RUN"; mkdir -p "$CURRENT_ARCHIVE_DIR"`
+4. (CURRENT_ARCHIVE_DIR already set in step 3)
 5. **Version stamp + log:**
    ```bash
+   export Z_HARNESS_SESSION_ID="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" session-id)"
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
    START_PAYLOAD="$(python3 -c '
    import json, sys
-   v = json.loads(sys.argv[1]); v["task"] = sys.argv[2]
+   v = json.loads(sys.argv[1]); v["task"] = sys.argv[2]; v["session_id"] = sys.argv[3]
    print(json.dumps(v))
-   ' "$VERSION_BLOB" "<arguments>")"
+   ' "$VERSION_BLOB" "<arguments>" "$Z_HARNESS_SESSION_ID")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" do_run_start "$START_PAYLOAD"
    ```
+
+   **Active-plan registration (immediately after do_run_start).** Register this run in the shared registry. Graduated failure policy — never silent-continue on failure:
+   ```bash
+   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" register \
+     --run-id "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-do --phase do \
+     --session "$Z_HARNESS_SESSION_ID"
+   REG_RC=$?
+   ```
+   - `REG_RC == 0` → registered; proceed.
+   - `REG_RC == 3` (no record written) → emit `registry_error` event; interactive → `AskUserQuestion` proceed/abort; unattended → proceed+log (or halt if `Z_HARNESS_STRICT_OVERLAP=1`). No deregister on abort (no record).
+   - Any OTHER nonzero → treat as `REG_RC == 3`.
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" registry_error \
+     "$(printf '{"op":"register","run_id":"%s","rc":%d}' "$RUN" "$REG_RC")"
+   ```
+
+   **FINALIZE_STATUS rule:** On any run-ending halt after `REG_RC == 0`, set `FINALIZE_STATUS=aborted` + `deregister --status aborted`. On normal completion (Phase 7), deregister with `complete`. If register failed, do NOT deregister.
+
 6. **Config resolution:**
    ```bash
    export Z_HARNESS_RUN="$RUN"
@@ -34,14 +53,14 @@ $ARGUMENTS
 ## Plan Route Check
 
 <!-- PLAN_ROUTE_CHECK_START -->
-Run this check after premise/doc grounding and before writing `approach.md`; run it again before implementation if the file count or decision count grows. `/z-do` may route only to `/z-plan-light`, `/z-plan`, `/z-research`, `/z-brainstorm`, `/z-fix`, or `/z-debug` under the conditions below. It must not route to `/z-plan-split` directly.
+Run this check after premise/doc grounding and before writing `approach.md`; run it again before implementation if the file count or decision count grows. `/z-do` may route only to `/z-plan-light`, `/z-plan`, `/z-map`, `/z-brainstorm`, `/z-fix`, or `/z-debug` under the conditions below. It must not route to `/z-plan-split` directly.
 
 Collect only already-known deterministic signals: `candidate_files`, `non_obvious_decisions`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `terrain_uncertain`, `approach_uncertain`, `has_bug_diagnosis`, `has_unknown_bug_symptom`, and `docs_stale_or_drifted`.
 
 Deterministic routes:
 - Route to `/z-plan-light <task>` when this is still a small targeted implementation/fix but exceeds `/z-do` limits: `candidate_files > 3` or `non_obvious_decisions > 0`, while `candidate_files <= 5`, `non_obvious_decisions <= 2`, and there is no cross-module, schema, persistence, public API, or wire-format impact.
 - Route to `/z-plan <task>` when the task has cross-module impact, schema/persistence impact, public API or wire-format impact, more than 5 candidate files, or more than 2 non-obvious decisions.
-- Route to `/z-research <topic>` when terrain is uncertain, source facts cannot yet be cited, or this is no-code terrain mapping.
+- Route to `/z-map <topic>` when terrain is uncertain, source facts cannot yet be cited, or this is no-code terrain mapping.
 - Route to `/z-brainstorm <topic>` when terrain is sufficiently known but multiple plausible framings or approaches would materially change the plan.
 - Route to `/z-fix <diagnosis>` only when the user has a concrete bug hypothesis or diagnosis.
 - Route to `/z-debug <symptom>` only when the user has an observed bug/symptom and the root cause is unknown.
@@ -60,7 +79,13 @@ If at any point you discover:
 [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event approval)" = yes ] && \
   PushNotification("z-do: route decision reached — your input is needed to proceed.")
 ```
-If the user chooses switch, stop after presenting the exact next command invocation; do not execute it.
+If the user chooses switch or abandon (ending the run), per the FINALIZE_STATUS rule set `FINALIZE_STATUS=aborted` and deregister before exiting:
+```bash
+FINALIZE_STATUS=aborted
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+  --run-id "$RUN" --status aborted 2>/dev/null || true
+```
+If the user chooses **continue**, deregister is NOT called here — the run continues and Phase 7 handles it normally.
 
 `route-decision.md` must include the recommended command, reason, deterministic signals, route chain, and resume context. Emit `plan_route_decision` with `from_command`, `to_command`, `route_class`, `reason_codes`, `signals`, `confidence`, `classifier_used`, `artifact_path`, `route_chain`, and `user_choice`.
 
@@ -78,7 +103,7 @@ If a concern surfaces → notify and raise via `AskUserQuestion` before proceedi
 ```
 Otherwise, write a single-sentence "premise accepted: <restated goal>" and continue.
 
-Save to `z-harness/adhoc/archive/$RUN/premise.md`.
+Save to `$CURRENT_ARCHIVE_DIR/premise.md`.
 
 ## Phase 2 — Ground (doc-fetcher first)
 
@@ -105,7 +130,7 @@ In a single short message to yourself, state:
 - Files to touch (list)
 - Acceptance: how you'll know it worked
 
-Save to `z-harness/adhoc/archive/$RUN/approach.md`. This is the entire "plan" — no PLAN.md, no TASKS.md, no FIX.md.
+Save to `$CURRENT_ARCHIVE_DIR/approach.md`. This is the entire "plan" — no PLAN.md, no TASKS.md, no FIX.md.
 
 **Check the Plan Route Check before implementing.** If the file list is >3 or any item is a non-obvious decision, use `$CURRENT_ARCHIVE_DIR/route-decision.md` and the `plan_route_decision` gate instead of a separate escalation prompt.
 
@@ -136,7 +161,7 @@ Hard limit: if you find yourself touching >5 files inline, halt regardless.
 Non-negotiable. This is what makes `/z-do` z-harness rather than freewheeling.
 
 ```bash
-git diff > z-harness/adhoc/archive/$RUN/diff.patch
+git diff > "$CURRENT_ARCHIVE_DIR/diff.patch"
 ```
 
 Spawn the reviewer:
@@ -145,7 +170,7 @@ Spawn the reviewer:
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
   subagent_type="reviewer",
   description="Codex review of /z-do <run>",
-  prompt="task id: <RUN>\ntask description: <approach.md body, ≤500 chars>\nacceptance criteria: <approach.md Acceptance line>\ndiff.patch path: <abs path>\nchanged files: <abs paths>\n$BASE: z-harness/adhoc/archive/$RUN  (read approach.md and premise.md yourself if you need more context)"
+  prompt="task id: <RUN>\ntask description: <approach.md body, ≤500 chars>\nacceptance criteria: <approach.md Acceptance line>\ndiff.patch path: <abs path>\nchanged files: <abs paths>\n$BASE: $CURRENT_ARCHIVE_DIR  (read approach.md and premise.md yourself if you need more context)"
 )
 ```
 
@@ -190,6 +215,11 @@ Apply the "one reason it might be wrong" check to each finding. If it raises a r
    ```
 3. Brief 2-3 sentence summary to user: what changed, what's next.
 4. If non-trivial friction surfaced during the run (auto-bail considered, doc_drift, retry on review), suggest: "Consider `/z-improve adhoc/$RUN` to retro this run."
+5. **Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the FINALIZE_STATUS rule (Setup step 5): normal completion deregisters with `complete`.
+   ```bash
+   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+     --run-id "$RUN" --status "${FINALIZE_STATUS:-complete}" || true   # CLI self-logs registry_error on failure
+   ```
 
 ## Hard rules
 
@@ -198,5 +228,5 @@ Apply the "one reason it might be wrong" check to each finding. If it raises a r
 - **Codex review is non-negotiable.** Skipping it makes /z-do not-z-harness.
 - **Never proceed past Plan Route Check hard thresholds** without explicit user override.
 - **Never read `docs/llm/*.json` from main thread.**
-- **Always log to `z-harness/adhoc/archive/$RUN/`** — `/z-improve` reads this.
+- **Always log to `$CURRENT_ARCHIVE_DIR/`** — `/z-improve` reads this.
 - **No emojis.**

@@ -9,6 +9,9 @@ Target (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question
+     "What should I audit?" via their native channel and accept a text reply.
+     Silent omission is forbidden. -->
 **If the target above is empty** — use `AskUserQuestion` to ask "What should I audit?" before proceeding. Do not invent.
 
 This command is **read-only**. Never edit the target. Fixes happen later via `/z-implement-all` consuming the emitted `TASKS.md`.
@@ -38,7 +41,13 @@ Parse `$ARGUMENTS` for `--scope-from <chunk-spec>` **immediately — before slug
 5. Set `SCOPE_HINT` to the matched chunk's `scope_hint` field.
 6. **Defer all `log-event.sh` calls to after Setup.** At this pre-Setup stage, `$RUN` does not yet exist, so no events may be logged. Store `SCOPE_FROM_RESOLVED_PAYLOAD='{"chunk_id": "<id>", "scope_hint": "<SCOPE_HINT>", "parent_scope_json": "<path>"}'` for logging after Setup initializes `$RUN`.
 
-**After Setup completes (RUN and archive dirs exist):** If `SCOPE_FROM_ERROR` is set, halt with `AskUserQuestion`: "Chunk `<id>` not found in SCOPE.json. Valid chunk ids: <SCOPE_FROM_VALID_IDS>." Otherwise log:
+**After Setup completes (RUN and archive dirs exist):** If `SCOPE_FROM_ERROR` is set, halt with `AskUserQuestion`: "Chunk `<id>` not found in SCOPE.json. Valid chunk ids: <SCOPE_FROM_VALID_IDS>." Per the FINALIZE_STATUS rule, set `FINALIZE_STATUS=aborted` and deregister before exiting:
+```bash
+FINALIZE_STATUS=aborted
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+  --run-id "$RUN" --status aborted 2>/dev/null || true
+```
+Otherwise log:
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" scope_from_resolved "$SCOPE_FROM_RESOLVED_PAYLOAD"
 ```
@@ -50,23 +59,53 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 ## Setup
 
 1. **Sanitize `$ARGUMENTS`** — strip the `--scope-from <chunk-spec>` token pair (if present) before using `$ARGUMENTS` for slug derivation, doc-fetcher dispatch, or target parsing. The sanitized value is used for all subsequent steps.
-2. **Derive slug** — short kebab-case like `audit-<component>` (e.g. target `strategies/kxbtc15m_fade_extremes` → `audit-kxbtc15m`). Confirm via `AskUserQuestion` if non-obvious. Check `ls z-harness/` first for collisions.
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug
+     confirmation question via their native channel if non-obvious. Silent
+     omission is forbidden. -->
+2. **Derive slug** — short kebab-case like `audit-<component>` (e.g. target `strategies/kxbtc15m_fade_extremes` → `audit-kxbtc15m`). Confirm via `AskUserQuestion` if non-obvious. Check `bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" all_plan_slugs` first for collisions.
 3. Export `Z_HARNESS_SLUG=<slug>-audit`.
 4. Pick run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>-audit`.
 5. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`.
 6. **Version stamp + log:**
    ```bash
+   export Z_HARNESS_SESSION_ID="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" session-id)"
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
    START_PAYLOAD="$(python3 -c '
    import json, sys
-   v = json.loads(sys.argv[1]); v["target"] = sys.argv[2]
+   v = json.loads(sys.argv[1]); v["target"] = sys.argv[2]; v["session_id"] = sys.argv[3]
    print(json.dumps(v))
-   ' "$VERSION_BLOB" "<arguments>")"
+   ' "$VERSION_BLOB" "<arguments>" "$Z_HARNESS_SESSION_ID")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" audit_run_start "$START_PAYLOAD"
    ```
+
+   **Active-plan registration (immediately after audit_run_start).** Register this run in the shared registry. Graduated failure policy — never silent-continue on failure:
+   ```bash
+   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" register \
+     --run-id "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-audit --phase audit \
+     --session "$Z_HARNESS_SESSION_ID"
+   REG_RC=$?
+   ```
+   - `REG_RC == 0` → registered; proceed.
+   - `REG_RC == 3` (no record written) → emit `registry_error` event; interactive → `AskUserQuestion` proceed/abort; unattended → proceed+log (or halt if `Z_HARNESS_STRICT_OVERLAP=1`). No deregister on abort (no record).
+   - Any OTHER nonzero → treat as `REG_RC == 3`.
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" registry_error \
+     "$(printf '{"op":"register","run_id":"%s","rc":%d}' "$RUN" "$REG_RC")"
+   ```
+
+   **FINALIZE_STATUS rule:** On any run-ending halt after `REG_RC == 0`, set `FINALIZE_STATUS=aborted` + `deregister --status aborted`. On normal completion (Phase 7), deregister with `complete`. If register failed, do NOT deregister.
+
+   **Kernel path resolution (once per run, immediately after audit_run_start):**
+   ```bash
+   KERNEL_PATH="$(bash scripts/resolve-kernel.sh 2>/dev/null || true)"
+   ```
+   <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+
 7. Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
 8. If `docs/llm/INDEX.json` exists → dispatch `doc-fetcher` (Haiku) to get the concept list overlapping the audit target. Do NOT read INDEX.json or per-concept JSONs from main thread.
    ```
+   <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+        requirement and skip if unavailable. Audit proceeds without doc grounding. -->
    <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
          description="Doc context for audit <slug>",
          prompt="query: which concepts cover <audit target paths>?\nrepo_root: <abs path>\ndepth: summary")
@@ -80,6 +119,42 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 **Check `SKIP_PHASE_0` first.** If `SKIP_PHASE_0=true` (set by `--scope-from` flag handling above), skip this entire section immediately and proceed to Phase 1. Do not dispatch scope-probe, do not write SCOPE files, do not log scope_probe_* events.
 
 If `SKIP_PHASE_0` is not set, execute the following:
+
+### Step 0a — Fast-path check (single-file target)
+
+Before dispatching scope-probe, evaluate whether the target qualifies for an automatic LIGHT classification:
+
+```bash
+ARG="<sanitized $ARGUMENTS>"
+ARG_LEN=${#ARG}
+case "$ARG" in
+  *"*"*|*"?"*|*"["*|*"{"*|*"}"*) IS_GLOB=1;;
+  *) IS_GLOB=0;;
+esac
+EXPANDED_ARG="${ARG/#\~/$HOME}"
+SCOPE_FAST_PATH=0
+if [ "$IS_GLOB" -eq 0 ] && [ "$ARG_LEN" -lt 200 ] && [ -f "$EXPANDED_ARG" ]; then
+  # Fast-path: single existing file, short argument, no globs → auto-classify LIGHT
+  SCOPE_FAST_PATH=1
+  PAYLOAD="$(python3 -c 'import json,sys; print(json.dumps({"command":sys.argv[1],"target":sys.argv[2],"arg_len":int(sys.argv[3])}))' "z-audit" "$EXPANDED_ARG" "$ARG_LEN")"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" scope_probe_skipped_fast_path "$PAYLOAD"
+  MODE=LIGHT
+  AXIS=none
+  CONFIDENCE=high
+  REASON_CODES=fast_path_single_file
+  REASON="single-file target auto-classified as LIGHT"
+  chunks=[]
+  seams_counted=0
+  candidates_walked=0
+  # Skip to Step 0.3 with LIGHT classification; do not dispatch scope-probe Agent.
+  # Proceed directly to Step 0.3 — Write SCOPE.json using MODE=LIGHT.
+  # dimensions_hint is derived in Step 0.3 (LIGHT branch) per normal flow.
+else
+  # Multi-file / glob / large-arg path: run full scope-probe (Steps 0.1 and 0.2 below).
+fi
+```
+
+If the fast-path branch was taken (`SCOPE_FAST_PATH=1`), skip Steps 0.1 and 0.2 entirely and jump to Step 0.3.
 
 ### Step 0.1 — Define axis taxonomy and dispatch scope-probe
 
@@ -95,6 +170,9 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 Dispatch scope-probe:
 ```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     requirement and skip if unavailable. Phase 0 scope probe cannot run
+     without subagent support; default to MEDIUM mode. -->
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="scope-probe",
   description="Scope probe for audit <slug>",
@@ -223,6 +301,9 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 Dispatch N parallel `/z-audit` sub-flows (one per chunk in `chunks`), all in a single message:
 
 ```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+     support the HEAVY path cannot proceed; default to MEDIUM mode. -->
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="orchestrator",
   description="z-audit sub-flow chunk <chunk-id>",
@@ -234,6 +315,8 @@ Wait for all N sub-flows to return. Collect their returns.
 
 After all sub-flows complete, dispatch `scope-reconciler-audit`:
 ```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="scope-reconciler-audit",
   description="Reconcile HEAVY fanout for audit <slug>",
@@ -328,7 +411,12 @@ If the merged findings count exceeds:
 - **>30 findings total**, OR
 - **>10 CRITICAL/HIGH findings** (indicates structural problems, not point fixes)
 
-→ STOP. Write `$BASE/escalation.md` summarizing the scope. Push-notify: "Audit surfaced N findings; recommend `/z-plan` for a full restructure rather than a TASKS.md queue." Do not generate TASKS.md.
+→ STOP. Write `$BASE/escalation.md` summarizing the scope. Push-notify: "Audit surfaced N findings; recommend `/z-plan` for a full restructure rather than a TASKS.md queue." Do not generate TASKS.md. Per the FINALIZE_STATUS rule, set `FINALIZE_STATUS=aborted` and deregister before exiting:
+```bash
+FINALIZE_STATUS=aborted
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+  --run-id "$RUN" --status aborted 2>/dev/null || true
+```
 
 ## Phase 1 — Pre-flight scoping
 
@@ -340,6 +428,9 @@ If `SCOPE_HINT` is set (from `--scope-from`), use `SCOPE_HINT` as the resolved t
    - Auto-confirm the `dimensions_hint` list. Do NOT ask the user which dimensions to audit. Do NOT apply the "$ARGUMENTS named dimensions" shortcut below. Proceed as if the user selected those dimensions.
    - Inform the user: "Phase 0 scope probe suggested dimensions: <dimensions_hint list>. Proceeding with those."
 
+   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the dimensions
+        selection question via their native channel when no auto-resolved dimensions
+        are available. Silent omission is forbidden. -->
    **Only if `SCOPE-audit.json` does not exist, `last_run_id` does not match, `mode` is not `LIGHT`, or `dimensions_hint` is absent/empty:** check whether `$ARGUMENTS` supplied a target + the user already named dimensions in prose. If dimensions are named in `$ARGUMENTS`, use those. Otherwise use `AskUserQuestion` to collect:
    - `correctness` — bugs, off-by-ones, math, look-ahead, polarity, invariants
    - `perf` — slowdowns, allocations, blocking IO, redundant work
@@ -363,16 +454,27 @@ Checkpoint: `$BASE/archive/$RUN/phase1-scope.md` with the resolved (target, dime
 Spawn one `auditor` subagent **per selected dimension**, in parallel, in a single message:
 
 ```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+     cannot proceed without subagent support. -->
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="auditor",
   description="<dim> audit of <slug>",
-  prompt="DIMENSION: <dim>\nTARGET: <abs path> — <one-line description>\nRUBRIC_PATH: <abs path or empty>\n$BASE: <abs path to $BASE>\nrelevant_docs:\n  - <doc1>\n  - <doc2>\n\nFollow your agent definition. Emit findings to $BASE/findings-<dim>.md and return STATUS + COUNTS + VERDICT."
+  prompt="DIMENSION: <dim>\nTARGET: <abs path> — <one-line description>\nRUBRIC_PATH: <abs path or empty>\n$BASE: <abs path to $BASE>\nrelevant_docs:\n  - <doc1>\n  - <doc2>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]\n\nFollow your agent definition. Emit findings to $BASE/findings-<dim>.md and return STATUS + COUNTS + VERDICT."
 )
 ```
 
 Each auditor writes `$BASE/findings-<dim>.md` and returns a structured summary. Collect all returns.
 
-**If any auditor returns `unable_to_complete`** — surface the reason via `AskUserQuestion`: retry that dimension / skip it / abort the audit.
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the auditor
+     failure gate (retry / skip / abort) via their native channel.
+     Silent omission is forbidden. -->
+**If any auditor returns `unable_to_complete`** — surface the reason via `AskUserQuestion`: retry that dimension / skip it / abort the audit. If the user chooses **abort the audit**, per the FINALIZE_STATUS rule set `FINALIZE_STATUS=aborted` and deregister before exiting:
+```bash
+FINALIZE_STATUS=aborted
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+  --run-id "$RUN" --status aborted 2>/dev/null || true
+```
 
 Checkpoint: `$BASE/archive/$RUN/phase2-auditor-returns.md` (concatenate the four return blocks).
 
@@ -414,15 +516,18 @@ Build `$BASE/REPORT.md` (full set, organized by dimension):
 Spawn both consultants in parallel against `REPORT.md`:
 
 ```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+     cannot complete without subagent support; document the gap and proceed. -->
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="consultant-primary",
   description="Audit findings review (Gemini) for <slug>",
-  prompt="MODE: audit-review\n\nA target has been audited across <dimensions>. Here is the full REPORT:\n\n<paste REPORT.md>\n\nTwo asks:\n1. What significant findings are MISSING — issues the dimension auditors should have caught but didn't?\n2. Which listed findings are TRIVIAL or speculative and should be dropped before promotion to TASKS.md?\n\nBe specific. Cite path:line. Severity-rank any additions."
+  prompt="MODE: audit-review\n\nA target has been audited across <dimensions>. Here is the full REPORT:\n\n<paste REPORT.md>\n\nTwo asks:\n1. What significant findings are MISSING — issues the dimension auditors should have caught but didn't?\n2. Which listed findings are TRIVIAL or speculative and should be dropped before promotion to TASKS.md?\n\nBe specific. Cite path:line. Severity-rank any additions.\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="consultant-secondary",
   description="Audit findings review (Codex) for <slug>",
-  prompt="MODE: audit-review\n\n<same prompt body>"
+  prompt="MODE: audit-review\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 ```
 
@@ -434,7 +539,12 @@ Both transcripts archive themselves under `$BASE/archive/$RUN/transcripts/`.
 2. For each suggested drop: confirm by re-reading the cited code.
 3. Update `REPORT.md` with `## Consult additions` and `## Consult drops` sections noting what changed and which consultant flagged it.
 
-**Check auto-bail thresholds now** (see top). If the post-consult count exceeds the bail thresholds, escalate to `/z-plan`.
+**Check auto-bail thresholds now** (see top). If the post-consult count exceeds the bail thresholds, escalate to `/z-plan`. Per the FINALIZE_STATUS rule, set `FINALIZE_STATUS=aborted` and deregister before exiting:
+```bash
+FINALIZE_STATUS=aborted
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+  --run-id "$RUN" --status aborted 2>/dev/null || true
+```
 
 ## Phase 5 — Promote to TASKS.md
 
@@ -490,14 +600,19 @@ This three-file set (SPEC.md / PLAN.md / TASKS.md) is what `/z-implement-all` re
 Spawn the reviewer against the audit-produced TASKS.md (the diff in this case is the TASKS.md itself):
 
 ```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+     gate cannot run without subagent support; document the gap. -->
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="reviewer",
   description="Codex review of audit TASKS for <slug>",
-  prompt="task id: <slug>-audit-tasks\ntask description: review the audit-produced TASKS.md for soundness — would executing these tasks make the target better or risk regression?\nacceptance criteria: every task addresses a real finding in REPORT.md with a verifiable acceptance line\ndiff.patch path: (n/a — review the file directly)\nchanged files: <abs path to $BASE/TASKS.md>\nrelevant_docs: <any docs/llm paths from Setup step 7>\n$BASE: <abs path to $BASE>\n\nFlag: tasks that would regress invariants, tasks with vague acceptance, severity inflation, scope creep beyond the cited finding."
+  prompt="task id: <slug>-audit-tasks\ntask description: review the audit-produced TASKS.md for soundness — would executing these tasks make the target better or risk regression?\nacceptance criteria: every task addresses a real finding in REPORT.md with a verifiable acceptance line\ndiff.patch path: (n/a — review the file directly)\nchanged files: <abs path to $BASE/TASKS.md>\nrelevant_docs: <any docs/llm paths from Setup step 7>\n$BASE: <abs path to $BASE>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]\n\nFlag: tasks that would regress invariants, tasks with vague acceptance, severity inflation, scope creep beyond the cited finding."
 )
 ```
 
 Parse the return (capped at 8 KB):
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the reviewer
+     second-failure gate via their native channel. Silent omission is forbidden. -->
 - **Blockers** → re-edit the affected TASKS.md entries; re-run review once. Second failure → halt with `AskUserQuestion`.
 - **Majors** → fix in place, then accept.
 - **No blockers/majors** → accept.
@@ -518,6 +633,47 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
   "$(printf '{"status":"complete","findings":%d,"tasks":%d,"dimensions":"%s"}' "$N_FINDINGS" "$N_TASKS" "$DIMS")"
 ```
 
+**Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the FINALIZE_STATUS rule (Setup step 6): normal completion deregisters with `complete`.
+```bash
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+  --run-id "$RUN" --status "${FINALIZE_STATUS:-complete}" || true   # CLI self-logs registry_error on failure
+```
+
+## Telemetry reference
+
+| Event kind | When / meaning | Required fields |
+|---|---|---|
+| `audit_run_start` | Audit run begins | version fields, `target` |
+| `audit_run_end` | Audit run completes | `status`, `findings`, `tasks`, `dimensions` |
+| `scope_from_resolved` | `--scope-from` chunk resolved successfully | `chunk_id`, `scope_hint`, `parent_scope_json` |
+| `scope_probe_start` | Scope-probe Agent dispatched | `axis_taxonomy` |
+| `scope_probe_classified` | Scope-probe returned `STATUS: classified` | `status`, `mode`, `axis`, `confidence`, `reason_codes`, `reason`, `seams_counted`, `candidates_walked` |
+| `scope_probe_malformed` | Scope-probe return failed to parse | `reason`, `raw_truncated` |
+| `scope_probe_skipped_fast_path` | Single-file target auto-classified LIGHT, scope-probe Agent skipped | `command` (`z-audit`), `target`, `arg_len` |
+| `scope_artifact_rejected` | A CHUNK_ARTIFACTS path failed validation | `reason`, `dest` |
+| `scope_fanout_dispatched` | HEAVY mode: N sub-flows launched | `chunk_count`, `chunks`, `axis` |
+| `scope_fanout_reconciled` | HEAVY mode: reconciler finished | `unified_verdict`, `chunks_total`, `chunks_failed`, `findings_after_dedup` |
+
+## Decision emission (standing instruction)
+
+After **any** `AskUserQuestion` resolves, emit a normalized decision event:
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-decision.sh" \
+  "$RUN" "<question_id>" "<chosen_label>" \
+  --options '["<opt1>","<opt2>",...]' \
+  [--tentative "<recommended_option>"]
+```
+
+- `<question_id>` — stable kebab-case identifier for this decision point (e.g. `workflow.implement_all_proceed`, `workflow.slug_confirm`).
+- `<chosen_label>` — the option label the user selected, verbatim.
+- `--options` — full list of offered option labels as a JSON array.
+- `--tentative` — the orchestrator's recommended option label; omit when the orchestrator had no recommendation.
+
+Emission is gated by `Z_HARNESS_AXIOM_EXTRACT` (default on); when set to `"0"`, the script exits silently — no guard is needed here. Do **not** modify existing structured gate events (`cost_gate_decision`, `critique_failure_decision`, `map_collision_decision`, `shared_concerns_ack_override`); those are normalized separately by the extractor. This emission **records signal only** — it never approves, overrides, or influences any decision (proposes-only invariant).
+
+---
+
 ## Hard rules
 
 - **Read-only.** Never edit the target. Ever.
@@ -526,3 +682,19 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 - **One auditor per dimension, in parallel.** Never serialize.
 - **TASKS.md format must match what `/z-implement-all` consumes** — otherwise the audit is a dead-end artifact.
 - **No emojis** anywhere in artifacts.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+| `ask_user` | yes | Empty arguments gate; Setup slug confirmation if non-obvious; Phase 1 dimensions selection; Phase 2 auditor unable_to_complete gate; Phase 6 reviewer second-failure gate |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

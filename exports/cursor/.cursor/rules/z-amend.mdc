@@ -9,6 +9,9 @@ Task (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question
+     "What amendment should I make to the plan?" via their native channel and
+     accept a text reply. Silent omission is forbidden. -->
 **If the task above is empty** — use `AskUserQuestion` to ask "What amendment should I make to the plan?" before proceeding. Do not invent.
 
 This command modifies an **already-produced** planning artifact set. It does NOT do exploration / consult-everywhere / full premise check — that's `/z-plan`. It does the surgical work of changing one or more decisions / scope items and making sure every downstream artifact (SPEC.md, PLAN.md, TASKS.md, or FIX.md) reflects the change consistently.
@@ -20,6 +23,8 @@ Multiple plans may coexist under `$Z_HARNESS_PLAN_DIR/`. Determine which one to 
 1. Enumerate candidates: immediate subdirs of `z-harness/` that contain **any** of `SPEC.md`, `PLAN.md`, `TASKS.md`, or `FIX.md`. Also check for legacy flat layout.
 2. Choose:
    - **One candidate** → use it. `export Z_HARNESS_SLUG=<slug>` (or leave unset for legacy).
+   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug
+        selection question via their native channel. Silent omission is forbidden. -->
    - **Multiple candidates** → `AskUserQuestion` with each slug as an option (annotate each with mode: `full` if SPEC.md exists, `light` if only FIX.md). Set `Z_HARNESS_SLUG` to chosen.
    - **Zero candidates** → tell the user there's no plan to amend; suggest `/z-plan` or `/z-plan-light`. Stop.
 3. From here on, **`$BASE`** refers to `$Z_HARNESS_PLAN_DIR` (or `z-harness` if legacy).
@@ -94,12 +99,18 @@ Articulate, in plain prose, what the amendment changes. Write `$BASE/archive/$RU
 
 ## Phase 4 — User gate
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the amendment
+     approval question (Approve / Revise / Abandon) via their native channel and
+     await a response. Silent omission is forbidden. -->
 Show `amendment.md` to the user via `AskUserQuestion`:
 
 - **Approve as drafted** → proceed to Phase 5
 - **Revise** (free-text) → loop back to Phase 3 with their tweak
 - **Abandon** → log `amend_run_end` with `status: abandoned`; exit
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the completed-task
+     disposition question for each touched-but-completed task via their native channel.
+     Silent omission is forbidden. -->
 If `Touched-but-completed tasks` is non-empty, ask a **separate explicit** `AskUserQuestion` for each:
 - "Add superseding task (recommended)"
 - "Re-open T0NN (flip `[x]` → `[ ]`) — work needs to be redone"
@@ -119,6 +130,9 @@ If `amendment.md`'s Risk section flagged any of these triggers, run a **bundled*
 
 Spawn both in parallel:
 ```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     <!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
+     proceed without subagent support. -->
 <!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
       prompt="MODE: amend\n\nExisting plan: <inline brief — 2-3 paragraphs from SPEC/PLAN summary>\nAmendment: <amendment.md body>\nKey concern: <the risk trigger>\n\nAsk: is the amendment sound? what's likely to break? what did I miss?")
 <!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
@@ -164,6 +178,9 @@ Run a self-check. Read each amended file fresh and verify:
 - No duplicate task IDs.
 - For light mode: every file in FIX.md "Files to change" exists or has a clear creation directive.
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the consistency
+     error choice (Fix automatically / revise / abort) via their native channel.
+     Silent omission is forbidden. -->
 If any check fails, do **not** silently fix — surface to user via `AskUserQuestion` ("inconsistency found: <X>. Fix automatically / revise / abort").
 
 ## Phase 8 — Finalize
@@ -208,6 +225,9 @@ print(json.dumps({"question_id": sys.argv[1], "proposed_value": sys.argv[2], "n_
 ' "$qid" "$val" "$n" "$scope_rec")"
 ```
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the preference
+     elevation proposal question via their native channel and accept a reply.
+     Silent omission is forbidden. -->
 Present a single `AskUserQuestion`:
 
 > "You've done `<cmd_a> → z-amend` **N times** — add `<val>` as your preference for `<qid>`?"
@@ -284,3 +304,19 @@ If `$PROPOSE_OUT` is empty, skip this phase entirely — no question is asked.
 - **Cross-LLM consult only when triggered** — amendments are surgical; full consult is overkill for "rename this field".
 - **If the amendment grows past ~30% of the plan** (e.g. >5 new tasks, or the core premise of SPEC.md changes), STOP and recommend `/z-plan` from scratch instead — at that point you're not amending, you're replanning.
 - **No emojis** anywhere in artifacts.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+<!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
+| `ask_user` | yes | Empty arguments gate; Phase 0 multiple-candidates slug selection; Phase 4 amendment approval; Phase 4 completed-task disposition; Phase 7 consistency error choice; Phase 9 preference elevation proposal |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

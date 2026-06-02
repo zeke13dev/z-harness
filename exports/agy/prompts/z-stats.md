@@ -11,10 +11,38 @@ Same as `/z-implement-all` Phase 0:
 1. Enumerate `$Z_HARNESS_PLAN_DIR/` subdirs with TASKS.md; check legacy flat layout.
 2. If `--slug <slug>` arg present → use it.
 3. If one candidate → use it.
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug-selection question via their native channel. Silent omission is forbidden. -->
 4. Multiple → `AskUserQuestion` to pick.
 5. Zero → tell user "no plan found"; abort.
 
 Set `$BASE = $Z_HARNESS_PLAN_DIR` (or `z-harness` for legacy). Set `$METRICS = $BASE/metrics.jsonl` (if exists) else `z-harness/metrics.jsonl`.
+
+## Phase 0b — Resolved base header
+
+Print a small header at the very top of the output (unconditionally — NOT gated behind `Z_HARNESS_EXPLAIN_RESOLUTION`):
+
+```bash
+_zh_base="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" base_dir 2>/dev/null)"
+_zh_repo_id="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" z_harness_repo_id 2>/dev/null)"
+_zh_active_count="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" list --json 2>/dev/null \
+  | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null)"
+```
+
+Display as:
+
+```
+Base:        <_zh_base>
+Repo-id:     <_zh_repo_id>
+Active plans: <_zh_active_count>
+```
+
+Fallback rules:
+- If `_zh_base` is empty → print `Base: (unavailable)`
+- If `_zh_repo_id` is empty → print `Repo-id: (unavailable)`
+- If the registry call fails or `_zh_active_count` is empty → print `Active plans: (registry unavailable)`
+- If the registry returns 0 → print `Active plans: 0`
+
+This block is read-only. No writes, no LLM calls.
 
 ## Phase 1 — Plan progress
 
@@ -118,3 +146,19 @@ Single concise report, ~30-50 lines total. Section headers. No prose filler. The
 - **No subagent dispatch.** This command must run instantly (≤2s wall time).
 - **No LLM API calls.** Just shell + jq + awk against existing files.
 - Don't log a start/end event for `/z-stats` itself — it would pollute the metrics it's reading.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | no | — |
+| `ask_user` | yes | Phase 0 slug selection (multiple candidates) |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

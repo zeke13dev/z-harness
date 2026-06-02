@@ -124,18 +124,24 @@ git -C "$REPO" config user.email "test@test.local"
 git -C "$REPO" config user.name "Test"
 
 # ---------------------------------------------------------------------------
-# TEST-001: unset Z_HARNESS_BASE_DIR → default path under repo
+# TEST-001: Z_HARNESS_EXTERNAL_DEFAULT=0 (opt-out) + unset Z_HARNESS_BASE_DIR
+#           → default path under repo (old in-repo behavior)
 # ---------------------------------------------------------------------------
 #
-# Invariant: When Z_HARNESS_BASE_DIR is unset, log-event.sh writes
-#   events.jsonl  → <repo>/z-harness/archive/<run>/events.jsonl
+# Invariant: When Z_HARNESS_BASE_DIR is unset AND Z_HARNESS_EXTERNAL_DEFAULT=0,
+#   log-event.sh writes:
+#   events.jsonl  → <repo>/z-harness/archive/<run>/events.jsonl (via PLANS_DIR override)
 #   metrics.jsonl → <repo>/z-harness/metrics.jsonl
 #
-# Failure class: default relocation breaks existing plans
+# Note: After the Phase-D flip, the true default (EXTERNAL_DEFAULT unset) routes
+#   to the external tier. This test explicitly sets =0 to assert the opt-out behavior.
+#   See TEST-001b for the new default assertion (unset → external).
+#
+# Failure class: explicit in-repo opt-out (=0) must still write under repo
 # ---------------------------------------------------------------------------
 
 echo ""
-echo "TEST-001: unset Z_HARNESS_BASE_DIR → events under repo z-harness/"
+echo "TEST-001: EXTERNAL_DEFAULT=0 (opt-out) + unset BASE_DIR → events under repo z-harness/"
 
 RUN_001="test-base-dir-001"
 SLUG_001="test-slug-001"
@@ -145,6 +151,7 @@ EXIT_001=0
   cd "$REPO"
   Z_HARNESS_SLUG="$SLUG_001" \
   Z_HARNESS_PLANS_DIR="$REPO/zh-plans" \
+  Z_HARNESS_EXTERNAL_DEFAULT=0 \
   bash "$LOG_EVENT" "$RUN_001" "test_event" '{"msg":"default"}' 2>/dev/null
 ) || EXIT_001=$?
 
@@ -153,14 +160,65 @@ EXPECTED_EVENTS_001="$REPO/zh-plans/$SLUG_001/archive/$RUN_001/events.jsonl"
 EXPECTED_METRICS_001="$REPO/z-harness/metrics.jsonl"
 
 assert_file_exists "TEST-001: events.jsonl created under Z_HARNESS_PLANS_DIR" "$EXPECTED_EVENTS_001"
-assert_file_exists "TEST-001: metrics.jsonl under repo z-harness/ (default)" "$EXPECTED_METRICS_001"
+assert_file_exists "TEST-001: metrics.jsonl under repo z-harness/ (EXTERNAL_DEFAULT=0 opt-out)" "$EXPECTED_METRICS_001"
 
 # metrics must NOT be under any tmp dir (it's in the repo)
 METRICS_CONTENT_001="$(cat "$EXPECTED_METRICS_001")"
 assert_contains "TEST-001: metrics.jsonl contains test_event" '"kind":"test_event"' "$METRICS_CONTENT_001"
 
-# Clean up test state
+# Clean up test state (also remove the anchor written by z_harness_base() so
+# subsequent tests that use a different Z_HARNESS_BASE_DIR are not blocked by
+# the mismatch-detection invariant — each test that needs tier-1 uses a fresh base).
 rm -rf "$REPO/zh-plans" "$REPO/z-harness"
+rm -f "$REPO/.git/.z-harness-base"
+
+# ---------------------------------------------------------------------------
+# TEST-001b: unset Z_HARNESS_EXTERNAL_DEFAULT + unset Z_HARNESS_BASE_DIR
+#            → NEW default: external tier (not repo/z-harness)
+# ---------------------------------------------------------------------------
+#
+# Invariant: After the Phase-D flip, when BOTH Z_HARNESS_BASE_DIR and
+#   Z_HARNESS_EXTERNAL_DEFAULT are unset, z_harness_base() resolves to an
+#   external tier (XDG, HOME/.local/state, or .git/z-harness) — NOT pwd/z-harness.
+#
+# This is the key assertion that the flip is in effect.
+#
+# Failure class: flip not applied — unset still behaves like old stage-1 in-repo behavior
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "TEST-001b: unset EXTERNAL_DEFAULT + unset BASE_DIR → external tier (new default)"
+
+REPO_001b="$(_tmpdir)"
+git -C "$REPO_001b" init -q
+git -C "$REPO_001b" config user.email "test@test.local"
+git -C "$REPO_001b" config user.name "Test"
+
+XDG_001b="$(_tmpdir)"
+
+RESULT_001b="$(cd "$REPO_001b" && \
+  XDG_STATE_HOME="$XDG_001b" \
+  HOME="/nonexistent-home-$$" \
+  bash "$PLAN_PATH" z_harness_base 2>/dev/null)"
+
+# The result must NOT be under REPO_001b (not pwd/z-harness)
+REPO_001b_REAL="$(realpath "$REPO_001b" 2>/dev/null || echo "$REPO_001b")"
+if printf '%s' "$RESULT_001b" | grep -qF "$REPO_001b_REAL"; then
+  echo "  FAIL: TEST-001b: z_harness_base returned path under repo (old behavior) — flip not in effect"
+  echo "        result: $RESULT_001b"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: TEST-001b: z_harness_base did NOT return repo-local path (external default active)"
+  PASS=$((PASS + 1))
+fi
+
+# The result must contain the XDG base path (tier 2 is first writable external tier)
+REPOID_001b="$(cd "$REPO_001b" && bash "$PLAN_PATH" z_harness_repo_id 2>/dev/null)"
+assert_contains "TEST-001b: z_harness_base resolves to external XDG tier (new default)" \
+  "z-harness/$REPOID_001b" "$RESULT_001b"
+
+rm -rf "$REPO_001b" "$XDG_001b"
+rm -f "$REPO_001b/.git/.z-harness-base" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # TEST-002: Z_HARNESS_BASE_DIR set → events and metrics under override dir

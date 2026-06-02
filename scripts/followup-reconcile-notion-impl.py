@@ -35,6 +35,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from followup_common import (  # noqa: E402
     iso_now,
     get_config_batch,
+    project_followups_dir,
 )
 
 
@@ -296,7 +297,9 @@ def main(argv: list[str] | None = None) -> int:
     if "project_sink_root" in args:
         project_sink_root = Path(args["project_sink_root"])
     else:
-        project_sink_root = proj_root / "z-harness" / "followups"
+        # Resolve via plan-path.sh at call time so Z_HARNESS_BASE_DIR and the
+        # full 5-tier fallback chain are honoured.
+        project_sink_root = project_followups_dir(proj_root)
 
     if "global_sink_root" in args:
         global_sink_root = Path(args["global_sink_root"])

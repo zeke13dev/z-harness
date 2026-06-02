@@ -126,7 +126,7 @@ Pick a run ID and create the archive directory **before** any telemetry calls:
 
 ```bash
 RUN="$(date -u +%Y%m%dT%H%M%SZ)-mr-review"
-SLUG_DIR="z-harness/$SLUG"
+SLUG_DIR="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" plan_dir "$SLUG")"
 ARCHIVE_DIR="$SLUG_DIR/archive/$RUN"
 mkdir -p "$ARCHIVE_DIR/chunks"
 export SLUG RUN ARCHIVE_DIR SLUG_DIR
@@ -347,7 +347,7 @@ Invoke `scripts/extract-dismissals.py` to compute prior dismissal signatures:
 
 ```bash
 if ! python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/extract-dismissals.py" \
-  "z-harness/$SLUG/" \
+  "$SLUG_DIR/" \
   --max-runs 10 \
   > "$ARCHIVE_DIR/dismissed_signatures.json" 2>/dev/null; then
   echo '{"signatures":[],"n_runs_scanned":0}' > "$ARCHIVE_DIR/dismissed_signatures.json"

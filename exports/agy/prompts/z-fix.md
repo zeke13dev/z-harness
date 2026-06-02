@@ -9,13 +9,16 @@ Task (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question
+     "What's the symptom and your hypothesis for the cause?" via their native
+     channel. Silent omission is forbidden. -->
 **If the task above is empty** — use `AskUserQuestion` to ask "What's the symptom and your hypothesis for the cause?" before proceeding. Do not invent.
 
 This command is for **targeted fixes with a known diagnosis**. If at any phase you realize scope is broader or the root cause is unclear, STOP and recommend `/z-debug` instead.
 
 ## Setup
 
-1. **Derive slug** — short kebab-case like `fix-<short-description>` (e.g. "null pointer on login" → `fix-null-pointer-login`). Check for an existing slug collision first (`ls z-harness/` to detect matching dirs). **If a collision is found, prompt the user via `AskUserQuestion` to confirm or choose a different slug. This collision check runs UNCONDITIONALLY and is never bypassed by the resolver below.**
+1. **Derive slug** — short kebab-case like `fix-<short-description>` (e.g. "null pointer on login" → `fix-null-pointer-login`). Check for an existing slug collision first (`bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" all_plan_slugs` to detect matching slugs across both new and legacy plan layouts). **If a collision is found, prompt the user via `AskUserQuestion` to confirm or choose a different slug. This collision check runs UNCONDITIONALLY and is never bypassed by the resolver below.**
 
    After the collision check passes (no collision found, or the user confirmed a new slug), apply the soft non-obvious-slug confirmation gate:
 
@@ -40,6 +43,15 @@ This command is for **targeted fixes with a known diagnosis**. If at any phase y
    - `skip`: accept the derived slug silently — no AskUserQuestion. Emit `askuser_skipped` event with `{question_id: "workflow.slug_confirm", source: "$SOURCE"}`.
    - `prefill`: present the AskUserQuestion normally, pre-select the derived slug as the recommended option (label suffix: ` (Recommended — your preference)`).
    - `ask`: if non-obvious, confirm via `AskUserQuestion` normally. If `$SOURCE == "conflict"`, add to the question header: `(Note: config says <X>, memory says <Y> — your answer below will be offered as a conflict-resolution write target.)` After the user picks an answer that differs from both stored values, surface a one-shot follow-up: "Record your answer as the new preference? (config / memory:very_strong / memory:strong / no)".
+   - `halt`: emit `fix_halt` event and exit cleanly — do NOT invoke `AskUserQuestion`:
+     ```bash
+     if [[ "$RESULT" == "halt" ]]; then
+       bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "${RUN:-z-fix}" fix_halt \
+         "$(printf '{"reason":"no_ask_blocked","question_id":"workflow.slug_confirm","rule_id":"no_ask_halt"}')"
+       echo "halt: no_ask_blocked on workflow.slug_confirm" >&2
+       exit 0
+     fi
+     ```
 
    **Invariant:** the collision check above is a hard safety prerequisite that runs unconditionally regardless of resolver outcome. The resolver only governs the soft non-obvious-slug confirmation gate.
 2. Export `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")`.
@@ -72,6 +84,8 @@ At any phase, if you discover:
 
 ## Phase 0 — Wrong-tool gate (NON-SKIPPABLE)
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the wrong-tool
+     gate question via their native channel. Silent omission is forbidden. -->
 Before any exploration, ask via `AskUserQuestion`:
 
 > "Do you already have a hypothesis for what's causing this?"
@@ -104,6 +118,7 @@ These become sections in FIX.md at Phase 6.
 
 **Quick exploration:**
 1. **If `docs/llm/INDEX.json` exists, dispatch `doc-fetcher` (Haiku) FIRST** — cheapest grounding available:
+   <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
    ```
    <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
          description="Doc context for <slug>",
@@ -125,6 +140,7 @@ If there are >2 truly non-obvious decisions (new dep, public API change, algorit
 
 Spawn both consultants in parallel in a single message. The consult question is framed around the user's hypothesis — NOT a generic "what's the best fix?" framing:
 
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
 ```
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="consultant-primary",
@@ -153,6 +169,7 @@ When both return:
 
 Send `PushNotification` (if policy != `off`): "Fix-mode decision ready for review."
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the Phase 5 approval question (approve / modify / abandon) and any shortcut approval questions via their native channel. Silent omission is forbidden. -->
 Present a brief synthesis (3-5 bullets) via `AskUserQuestion`:
 - "Approve fix as proposed"
 - "Modify — I want to change <X>" (free-text follow-up)
@@ -244,6 +261,7 @@ git diff > $Z_HARNESS_PLAN_DIR/archive/$RUN/diff.patch
 
 Spawn the reviewer:
 
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
 ```
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="reviewer",
@@ -258,12 +276,14 @@ Parse the return (already capped at 8 KB, blockers + majors only).
 
 **On blockers or majors:**
 - **First failure**: re-edit inline based on findings. Re-run `git diff`; if byte-identical to prior diff (you pushed back instead of editing), halt with `no_change_on_retry`. Otherwise re-spawn `reviewer` once. Increment `REVIEW_CYCLES` by 1.
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the second-failure decision (proceed anyway / patch manually / abandon) via their native channel. Silent omission is forbidden. -->
 - **Second failure**: halt; `AskUserQuestion` — proceed anyway / patch manually / abandon.
 
 **No blockers/majors** → accept.
 
 ## Phase 9 — Optional post-mortem
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the post-mortem decision (yes / skip) via their native channel. Silent omission is forbidden. -->
 Ask via `AskUserQuestion`:
 
 - **Default = NO** if `REVIEW_CYCLES <= 1`: "Write post-mortem? (optional — default: skip)"
@@ -333,3 +353,19 @@ If user picks **no** → skip; nothing written.
 ### Git history-rewrite safety
 
 Before recommending any `git reset --hard HEAD~N`, `git commit --amend`, or interactive-rebase squash on a branch tracking an upstream: for each commit being rewritten, run `git branch -r --contains <sha>`. If the upstream ref appears, STOP — recommend rebase or new-commit instead, never silent rewrite. Force-push to main requires explicit per-incident user authorization with (i) list of overwritten commits and (ii) content-equivalence/superset demonstration.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | yes | Phase 1 doc-fetcher; Phase 3 consultant-primary + consultant-secondary; Phase 8 reviewer |
+| `ask_user` | yes | Empty-args question; Phase 0 wrong-tool gate; Phase 1 clarification (premise check); Phase 5 approval + shortcut approval; Phase 8 second-failure decision; Phase 9 post-mortem decision |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

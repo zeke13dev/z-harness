@@ -16,6 +16,7 @@ Exported surface:
   _notion_push_entry_bg(entry, sink_root_path, proj_root) -> None
   log_sink_event(sink_root_path, kind, payload) -> None
   log_metrics_event(proj_root, kind, payload) -> None
+  project_followups_dir(proj_root) -> Path
 
   GlobalLockContext(lock_file, holder_id, timeout) — context manager for the
       global cross-tool lock; holder JSON written/cleared under .hb.lock.
@@ -30,6 +31,14 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+
+# macOS fork-safety workaround: when Python is invoked via `bash script.py`, bash
+# has already initialised CoreFoundation; any subsequent fork+exec (subprocess with
+# cwd= or env=) in _resolved_base_dir / project_followups_dir causes the forked
+# child to abort.  Setting this env var before any subprocess call makes the child
+# inherit it and skip the CF abort check.
+os.environ.setdefault("OBJC_DISABLE_INITIALIZE_FORK_SAFETY", "YES")
+
 import subprocess
 import sys
 import tempfile
@@ -160,9 +169,73 @@ def _log_event_sh(event_kind: str, payload: dict) -> None:
         pass
 
 
+def _resolved_base_dir(proj_root: Path) -> Path:
+    """Return the resolved artifact base dir via plan-path.sh base_dir.
+
+    Falls back to proj_root/z-harness when plan-path.sh is unavailable or
+    fails (best-effort; never raises).  The call is intentionally made at
+    invocation time so that a base change (barrier-gated migration) is
+    reflected immediately rather than being frozen at process start.
+    """
+    plan_path_sh = SCRIPT_DIR / "plan-path.sh"
+    if plan_path_sh.exists():
+        try:
+            result = subprocess.run(
+                ["bash", str(plan_path_sh), "base_dir"],
+                capture_output=True,
+                text=True,
+                cwd=str(proj_root),
+                env={**os.environ, "_Z_HARNESS_RESOLVING_BASE": "1"},
+            )
+            base = result.stdout.strip()
+            if result.returncode == 0 and base:
+                return Path(base)
+        except (FileNotFoundError, OSError):
+            pass
+    return proj_root / "z-harness"
+
+
+def project_followups_dir(proj_root: Path) -> Path:
+    """Return the PROJECT sink followups directory, resolved via plan-path.sh.
+
+    Delegates to ``plan-path.sh followups_dir`` so the path honours the full
+    5-tier base fallback chain (Z_HARNESS_BASE_DIR, XDG_STATE_HOME, etc.) at
+    call time rather than being frozen at import.  The resolution is performed
+    with cwd=proj_root so git-common-dir is always found relative to the right
+    repo even when the Python process CWD differs.
+
+    Falls back to proj_root/z-harness/followups when plan-path.sh is
+    unavailable or fails (best-effort; never raises).
+
+    Do NOT use this for the GLOBAL sink — that is always Path.home() / ".z-harness" / "followups"
+    and is intentionally outside the repo.
+    """
+    plan_path_sh = SCRIPT_DIR / "plan-path.sh"
+    if plan_path_sh.exists():
+        try:
+            result = subprocess.run(
+                ["bash", str(plan_path_sh), "followups_dir"],
+                capture_output=True,
+                text=True,
+                cwd=str(proj_root),
+                env={**os.environ, "_Z_HARNESS_RESOLVING_BASE": "1"},
+            )
+            resolved = result.stdout.strip()
+            if result.returncode == 0 and resolved:
+                return Path(resolved)
+        except (FileNotFoundError, OSError):
+            pass
+    return proj_root / "z-harness" / "followups"
+
+
 def log_metrics_event(proj_root: Path, kind: str, payload: dict) -> None:
-    """Append a structured event to z-harness/metrics.jsonl (best-effort)."""
-    metrics_path = proj_root / "z-harness" / "metrics.jsonl"
+    """Append a structured event to <base>/metrics.jsonl (best-effort).
+
+    The base directory is resolved via plan-path.sh at call time so all event
+    writers land under the same resolved base as telemetry and plan artifacts.
+    """
+    base = _resolved_base_dir(proj_root)
+    metrics_path = base / "metrics.jsonl"
     try:
         obj = {"ts": iso_now(), "kind": kind}
         obj.update(payload)

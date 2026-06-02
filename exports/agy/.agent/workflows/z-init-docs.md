@@ -10,6 +10,7 @@ This is a **one-time setup per repo** (safe to re-run for additional scope). Aft
 
 1. `cd` to repo root. Confirm a `z-harness/` dir exists (we want this command run in a repo where z-harness is or will be active; if not, ask user whether to proceed anyway).
 2. Check whether `docs/human/` and/or `docs/llm/` already exist:
+   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the docs-exist question (extend / overwrite / abort) via their native channel. Silent omission is forbidden. -->
    - **Both present** → ask the user via `AskUserQuestion`: "Docs exist — extend with new scope / overwrite specific concepts / abort".
    - **Neither present** → fresh init; create both dirs.
    - **One missing** → fill in the missing tier; report.
@@ -77,6 +78,7 @@ Each binary entry point gets its own concept (because they're often the orchestr
 
 ### 1c. User confirmation
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the concept-selection multi-select question via their native channel. Silent omission is forbidden. -->
 Present the candidate list via `AskUserQuestion` (multi-select). Show: slug, source-file count, ~20-char summary. Cap at the user's pick.
 
 If the user picks zero concepts → abort cleanly with "no scope; nothing to do."
@@ -87,12 +89,14 @@ Output of Phase 1: a list `CONCEPTS = [{slug, source_files[]}, ...]` for Phase 2
 
 ### 1d. Per-concept overwrite confirmation
 
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the per-concept overwrite confirmation question via their native channel. Silent omission is forbidden. -->
 For any concept where `docs/llm/<slug>.json` OR `docs/human/<slug>.md` already exists, ask the user via a SINGLE batched `AskUserQuestion`: "These N concepts already have docs. Overwrite / preserve / overwrite only LLM tier?" Default: preserve (do not overwrite without explicit consent).
 
 ## Phase 2 — Per-concept doc generation (parallel)
 
 For each chosen concept, spawn a `doc-updater` subagent in `mode: write` (since this is init and there's nothing to dry-run against). Run up to 3 in parallel:
 
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
 ```
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="doc-updater",
@@ -240,4 +244,21 @@ If `<repo-root>/.z-harness-rsync-exclude` doesn't exist, copy the default from `
 - **Idempotent.** Re-running with the same scope replaces those concepts' docs; doesn't blow away unrelated ones.
 - **Never write outside `docs/human/`, `docs/llm/`, `docs/human/INDEX.md`, `docs/llm/INDEX.json`, and `.z-harness-rsync-exclude`.**
 - **No emojis** in docs.
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the not_enough_info decision (drop concept / provide more context) via their native channel. Silent omission is forbidden. -->
 - If a `doc-updater` returns `STATUS: not_enough_info`, surface to user (`AskUserQuestion`) and let them decide whether to drop that concept or provide more context.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | yes | Phase 2 doc-updater (one per chosen concept, up to 3 in parallel) |
+| `ask_user` | yes | Phase 0 docs-exist decision; Phase 1c concept-selection multi-select; Phase 1d per-concept overwrite confirmation; Hard rules not_enough_info fallback |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent
+omission is forbidden. Each gated call site is annotated with a
+`<!-- RUNTIME-GATE: ... -->` comment immediately before the call.
