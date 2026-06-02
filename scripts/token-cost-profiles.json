@@ -1,0 +1,26 @@
+{
+  "schema_version": "1",
+  "_grounding": {
+    "source": "z-harness/metrics.jsonl (worktree copy absent; checked main-tree /Users/zeke/dev/z-harness/z-harness/metrics.jsonl, 1349 events, parent-rollup aggregation per SPEC empirical tier)",
+    "method": "bucket events by effective_run = (parent_run_id or run), attribute to (parent_command or command), sum subagent_input_tokens+subagent_output_tokens // prompt_chars/4 // 0 per run, filter to normally-completed parents only",
+    "z-research":   "ungrounded: 0 samples (no research_run_start/research_run_end events found; range kept at SPEC initial estimate)",
+    "z-uplift":     "ungrounded: 0 samples (no uplift run events found; range kept at SPEC initial estimate)",
+    "z-plan-split": "ungrounded: 0 samples (no plan-split run events found; range kept at SPEC initial estimate)",
+    "z-brainstorm": "ungrounded: 0 samples with token data (4 brainstorm_run_start events found, 2 brainstorm_run_end; none carry subagent_input_tokens, subagent_output_tokens, prompt_chars, or response_chars fields; token sum = 0 for all; range kept at SPEC initial estimate)",
+    "z-audit":      "ungrounded: 0 samples (no audit run events found; range kept at SPEC initial estimate)",
+    "z-debug":      "ungrounded: 0 samples (no debug run events found; range kept at SPEC initial estimate)"
+  },
+  "profiles": {
+    "z-research":    {"range": [3000000, 6000000], "gate": "hard",
+                      "multipliers": {"map": 2000000, "brainstorm": 200000}},
+    "z-uplift":      {"range": [2000000, 8000000], "gate": "hard",
+                      "multipliers": {"per_component": 600000}},
+    "z-plan-split":  {"range": [1500000, 5000000], "gate": "hard",
+                      "multipliers": {"per_cluster": 700000}},
+    "z-brainstorm":  {"range": [80000, 220000], "gate": "soft",
+                      "multipliers": {"per_heavy_chunk": 200000}},
+    "z-audit":       {"range": [200000, 1200000], "gate": "soft",
+                      "multipliers": {"per_dimension": 250000}},
+    "z-debug":       {"range": [300000, 1500000], "gate": "soft"}
+  }
+}

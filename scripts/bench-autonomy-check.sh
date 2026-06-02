@@ -172,6 +172,95 @@ PYEOF
 fi
 
 # ---------------------------------------------------------------------------
+# Step 3: Targeted assertion — config.py-registered gates must be in the policy
+#
+# For each question_id produced by `config.py list-question-ids`, if the id
+# looks like a workflow gate that could appear in the quick-build hot path,
+# assert it is present as a key in benchmark-autonomy.yaml's `gates:` block.
+#
+# Currently scoped to workflow.pre_run_cost_gate: this gate was added by
+# T005 (token-estimates plan) and must appear in the policy so that headless
+# benchmark runs never encounter an unhandled_gate abort on the cost gate.
+#
+# Extend the REQUIRED_IN_POLICY list below when additional gates need explicit
+# benchmark coverage.  Do NOT add gates that are legitimately out-of-scope for
+# the quick-build hot path (e.g. gates only reachable via full-build presets).
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "==> bench-autonomy-check step 3: targeted gate-coverage assertion"
+echo "    Checking that config.py-registered gates required for the benchmark"
+echo "    are present as keys in the policy's gates: block."
+
+# Gates that MUST be explicitly covered in the policy file.
+REQUIRED_IN_POLICY=(
+  "workflow.pre_run_cost_gate"
+)
+
+# Fetch the registered question_ids once.
+REGISTERED_IDS_JSON=""
+if REGISTERED_IDS_JSON=$(python3 "$REPO_ROOT/scripts/config.py" list-question-ids 2>/dev/null); then
+  : # success
+else
+  echo "  ERROR: 'config.py list-question-ids' failed (exit $?)" >&2
+  FAIL=1
+fi
+
+if [[ -n "$REGISTERED_IDS_JSON" ]]; then
+  STEP3_FAIL=0
+  for qid in "${REQUIRED_IN_POLICY[@]}"; do
+    # Check that the qid is registered in config.py.
+    if ! python3 -c "import json, sys; ids=json.loads('$REGISTERED_IDS_JSON'); sys.exit(0 if '$qid' in ids else 1)" 2>/dev/null; then
+      echo "  SKIP: $qid is not in config.py list-question-ids — no assertion needed."
+      continue
+    fi
+
+    # The qid IS registered; it must also be a key in the policy's gates: block.
+    if python3 - <<PYEOF2
+import sys
+try:
+    import yaml
+except ImportError:
+    print("  ERROR: PyYAML not available; cannot parse policy file.", file=sys.stderr)
+    sys.exit(1)
+policy_path = "$POLICY_PATH"
+qid = "$qid"
+try:
+    with open(policy_path) as fh:
+        data = yaml.safe_load(fh)
+except (yaml.YAMLError, OSError) as e:
+    print(f"  ERROR: could not parse {policy_path}: {e}", file=sys.stderr)
+    sys.exit(1)
+gates = data.get("gates", {}) if isinstance(data, dict) else {}
+if qid in gates:
+    print(f"  OK: {qid} is present in the policy gates.")
+    sys.exit(0)
+else:
+    print(
+        f"  ERROR: {qid} is registered in config.py but is MISSING from "
+        f"{policy_path} gates: block.",
+        file=sys.stderr,
+    )
+    print(
+        f"  Add a '{qid}:' entry under 'gates:' with a deliberate value + rationale.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+PYEOF2
+    then
+      : # gate found in policy
+    else
+      STEP3_FAIL=$((STEP3_FAIL + 1))
+      FAIL=1
+    fi
+  done
+
+  if [[ "$STEP3_FAIL" -eq 0 ]]; then
+    echo "  All required gates are present in the policy."
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # Final verdict
 # ---------------------------------------------------------------------------
 

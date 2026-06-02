@@ -52,6 +52,7 @@ $ARGUMENTS
    v["topic"] = sys.argv[2]
    v["topic_chars"] = len(sys.argv[2])
    v["session_id"] = sys.argv[3]
+   v["command"] = "z-plan-split"
    print(json.dumps(v))
    ' "$VERSION_BLOB" "<topic-text>" "$Z_HARNESS_SESSION_ID")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_split_run_start "$START_PAYLOAD"
@@ -113,7 +114,7 @@ Payload shape for early exits (when full counts aren't available yet, use `null`
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_split_run_end \
-  "$(printf '{"status":"%s","total_clusters":%s,"clusters_ready":%s,"clusters_failed":%s,"overlap_count":%s,"partial_tree":%s,"reason":"%s"}' \
+  "$(printf '{"command":"z-plan-split","status":"%s","total_clusters":%s,"clusters_ready":%s,"clusters_failed":%s,"overlap_count":%s,"partial_tree":%s,"reason":"%s"}' \
      "$STATUS" "${N:-0}" "${K:-0}" "${F:-0}" "${O:-0}" "${PT:-false}" "$REASON_SHORT")"
 ```
 
@@ -472,7 +473,7 @@ Emit `phase_end` for Phase 5, then log `plan_split_run_end` with the full payloa
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_split_run_end \
-  "$(printf '{"status":"%s","total_clusters":%d,"clusters_ready":%d,"clusters_failed":%d,"overlap_count":%d,"partial_tree":%s}' \
+  "$(printf '{"command":"z-plan-split","status":"%s","total_clusters":%d,"clusters_ready":%d,"clusters_failed":%d,"overlap_count":%d,"partial_tree":%s}' \
      "$STATUS" "$N" "$K" "$F" "$O" "$PT")"
 ```
 

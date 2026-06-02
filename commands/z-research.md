@@ -77,7 +77,7 @@ export RUN
 VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
 START_PAYLOAD="$(python3 -c '
 import json, sys
-v = json.loads(sys.argv[1]); v["topic"] = sys.argv[2]; v["arguments"] = sys.argv[3]
+v = json.loads(sys.argv[1]); v["topic"] = sys.argv[2]; v["arguments"] = sys.argv[3]; v["command"] = "z-research"
 print(json.dumps(v))
 ' "$VERSION_BLOB" "$TOPIC" "$ARGUMENTS")"
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_start "$START_PAYLOAD"
@@ -280,7 +280,12 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
   - `reuse_map_run_brainstorm` → `DISPATCH_MAP=reused DISPATCH_BRAINSTORM=ran`
   - `reuse_both` → `DISPATCH_MAP=reused DISPATCH_BRAINSTORM=reused`
 - **Option 2 (override):** Parse the user's free-text override. Accept inputs like "skip map", "run both", "force brainstorm only", "skip both". Set `DISPATCH_MAP` and `DISPATCH_BRAINSTORM` accordingly. If the override is ambiguous, AskUser again with clarifying options.
-- **Option 3 (abandon):** Set `DISPATCH_MAP=abandoned DISPATCH_BRAINSTORM=abandoned`. Log `research_dispatch_decision` with abandoned status, emit `run_end status: aborted_by_user`, and exit.
+- **Option 3 (abandon):** Set `DISPATCH_MAP=abandoned DISPATCH_BRAINSTORM=abandoned`. Log `research_dispatch_decision` with abandoned status, emit `run_end status: aborted_by_user`, and exit:
+
+  ```bash
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
+    "$(printf '{"command":"z-research","status":"aborted_by_user","reason":"dispatch_abandoned"}')"
+  ```
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" research_dispatch_decision \
@@ -357,7 +362,12 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 Handle response:
 - **Proceed:** log `research_cost_gate_decision {choice: proceed, estimated_tokens: $COST_TOTAL}` and continue.
 - **Change dispatch:** log `research_cost_gate_decision {choice: change_dispatch, estimated_tokens: $COST_TOTAL}`, then loop back to Phase 0 (re-run the dispatch decision, then return here). Cap at 3 loop-backs before falling through to Abandon.
-- **Abandon:** log `research_cost_gate_decision {choice: abandon}`, emit `run_end status: aborted_by_user`, exit.
+- **Abandon:** log `research_cost_gate_decision {choice: abandon}`, emit `run_end status: aborted_by_user`, exit:
+
+  ```bash
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
+    "$(printf '{"command":"z-research","status":"aborted_by_user","reason":"cost_gate_abandoned"}')"
+  ```
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" research_cost_gate_decision \
@@ -588,7 +598,7 @@ This step fires only when both sub-commands need to run (i.e., `DISPATCH_MAP=ran
    NEW_COUNT="$(echo "$NEW_ARCHIVE_DIRS" | grep -c '[^[:space:]]' || true)"
    if [ "$NEW_COUNT" -ne 2 ]; then
      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
-       "$(printf '{"status":"error","reason":"parallel_dispatch_archive_count_unexpected","expected":2,"actual":%d}' "$NEW_COUNT")"
+       "$(printf '{"command":"z-research","status":"error","reason":"parallel_dispatch_archive_count_unexpected","expected":2,"actual":%d}' "$NEW_COUNT")"
      echo "ERROR: expected exactly 2 new archive directories after parallel dispatch, found $NEW_COUNT. Cannot identify sub-run archives. Aborting." >&2
      exit 1
    fi
@@ -614,7 +624,7 @@ if line: print(json.loads(line).get('kind',''))
    # No fallback: if identification failed, abort with a clear error rather than guess
    if [ -z "$MAP_SUB_RUN" ] || [ -z "$BRAINSTORM_SUB_RUN" ]; then
      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
-       "$(printf '{"status":"error","reason":"parallel_dispatch_archive_identification_failed","map_found":"%s","brainstorm_found":"%s"}' \
+       "$(printf '{"command":"z-research","status":"error","reason":"parallel_dispatch_archive_identification_failed","map_found":"%s","brainstorm_found":"%s"}' \
           "${MAP_SUB_RUN:-none}" "${BRAINSTORM_SUB_RUN:-none}")"
      echo "ERROR: could not positively identify both sub-run archives from events.jsonl kind fields. map='${MAP_SUB_RUN:-not found}' brainstorm='${BRAINSTORM_SUB_RUN:-not found}'. Aborting." >&2
      exit 1
@@ -622,7 +632,7 @@ if line: print(json.loads(line).get('kind',''))
 
    if [ "$MAP_SUB_RUN" = "$BRAINSTORM_SUB_RUN" ]; then
      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
-       "$(printf '{"status":"error","reason":"parallel_dispatch_archive_collision","map_sub_run":"%s","brainstorm_sub_run":"%s"}' \
+       "$(printf '{"command":"z-research","status":"error","reason":"parallel_dispatch_archive_collision","map_sub_run":"%s","brainstorm_sub_run":"%s"}' \
           "$MAP_SUB_RUN" "$BRAINSTORM_SUB_RUN")"
      echo "ERROR: MAP and BRAINSTORM sub-runs resolved to the same archive directory '$MAP_SUB_RUN'. Aborting." >&2
      exit 1
@@ -682,7 +692,7 @@ if line: print(json.loads(line).get('kind',''))
      ln -sfn "$BRAINSTORM_ARCHIVE_PATH" "$Z_HARNESS_PLAN_DIR/archive/$RUN/subruns/z-brainstorm"
    else
      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
-       "$(printf '{"status":"error","reason":"symlink_precondition_failed","map_dir_exists":%s,"brainstorm_dir_exists":%s,"collision":%s}' \
+       "$(printf '{"command":"z-research","status":"error","reason":"symlink_precondition_failed","map_dir_exists":%s,"brainstorm_dir_exists":%s,"collision":%s}' \
           "$([ -d "$MAP_ARCHIVE_PATH" ] && echo true || echo false)" \
           "$([ -d "$BRAINSTORM_ARCHIVE_PATH" ] && echo true || echo false)" \
           "$([ "$MAP_SUB_RUN" = "$BRAINSTORM_SUB_RUN" ] && echo true || echo false)")"
@@ -714,7 +724,7 @@ ARTIFACTS_READY=true
 if [ "$ARTIFACTS_READY" = "false" ]; then
   # Surface to user which artifact is missing; halt with clear message.
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
-    "$(printf '{"slug":"%s","status":"aborted","reason":"required_artifacts_missing"}' "$SLUG")"
+    "$(printf '{"command":"z-research","slug":"%s","status":"aborted","reason":"required_artifacts_missing"}' "$SLUG")"
   exit 1
 fi
 ```
@@ -1292,7 +1302,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
      "$WALL_MS" "$USER_WAIT_MS_THIS_PHASE")"
 
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
-  "$(printf '{"slug":"%s","status":"complete","research_md_path":"%s","panel_perspective_count":%d,"tripwires_fired":%s}' \
+  "$(printf '{"command":"z-research","slug":"%s","status":"complete","research_md_path":"%s","panel_perspective_count":%d,"tripwires_fired":%s}' \
      "$SLUG" "$Z_HARNESS_PLAN_DIR/RESEARCH.md" "$PANEL_PERSPECTIVE_COUNT" \
      "$(echo "$TRIPWIRES_FIRED" | python3 -c 'import sys, json; print(json.dumps(sys.stdin.read().split()))' || echo '[]')")"
 ```

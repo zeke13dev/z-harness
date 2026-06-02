@@ -42,7 +42,7 @@ $ARGUMENTS
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
    START_PAYLOAD="$(python3 -c '
    import json, sys
-   v = json.loads(sys.argv[1]); v["topic"] = sys.argv[2]; v["session_id"] = sys.argv[3]
+   v = json.loads(sys.argv[1]); v["topic"] = sys.argv[2]; v["session_id"] = sys.argv[3]; v["command"] = "z-brainstorm"
    print(json.dumps(v))
    ' "$VERSION_BLOB" "<arguments>" "$Z_HARNESS_SESSION_ID")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" brainstorm_run_start "$START_PAYLOAD"
@@ -734,7 +734,7 @@ Log `brainstorm_run_end`:
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" brainstorm_run_end \
-  "$(printf '{"status":"%s","chosen_framing":"%s","ideators_failed":%d}' \
+  "$(printf '{"command":"z-brainstorm","status":"%s","chosen_framing":"%s","ideators_failed":%d}' \
      "<complete|abandoned>" "<framing-or-empty>" "<N>")"
 ```
 
@@ -758,8 +758,8 @@ For the abandoned branch, the push notification just says "Brainstorm abandoned"
 
 | Event kind | When / meaning | Required fields |
 |---|---|---|
-| `brainstorm_run_start` | Brainstorm run begins | version fields, `topic` |
-| `brainstorm_run_end` | Brainstorm run completes | `status`, `chosen_framing`, `ideators_failed` |
+| `brainstorm_run_start` | Brainstorm run begins | version fields, `topic`, `command` |
+| `brainstorm_run_end` | Brainstorm run completes | `command`, `status`, `chosen_framing`, `ideators_failed` |
 | `ideator_failed` | One of the three ideators failed | `vendor`, `reason` |
 | `total_ideator_failure` | All three ideators failed; hard halt | — |
 | `scope_probe_start` | Scope-probe Agent dispatched | `host_command`, `axis_taxonomy` |

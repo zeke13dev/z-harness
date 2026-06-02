@@ -1,0 +1,69 @@
+policy_version: "1.0.0"
+
+# Frozen per-gate autonomy policy for the z-harness quick-build hot path
+# (z-plan → z-implement-all).
+#
+# Each gate specifies the option-domain value the benchmark driver selects
+# autonomously, plus a rationale explaining why that choice is deliberate.
+# This file is the source of truth consumed by zharness_pier/policy.py to
+# generate Z_HARNESS_OVERNIGHT_AUTODECIDE JSON.
+#
+# Gates NOT on the quick-build path (e.g. workflow.review_all_proceed, which
+# is only reachable via the full-build preset that includes review-all) are
+# deliberately excluded. Only quick-build-reachable gates appear here.
+#
+# policy_version must be bumped (semver) whenever any gate's value changes.
+# The version is recorded in every trial's manifest.
+
+gates:
+  workflow.slug_confirm:
+    value: auto_accept
+    rationale: >
+      The benchmark driver derives a deterministic task slug from the task_id
+      (e.g. deep-swe task hash). Non-obvious slugs would block headless runs.
+      auto_accept skips the soft confirmation; the mandatory collision check
+      still runs unconditionally per the safety_check_runs_unconditionally flag.
+
+  workflow.plan_decisions_approval:
+    value: approve
+    rationale: >
+      Decisions surfaced during planning reflect the planner's best judgment
+      under the 90-min cap. Halting for human approval would break the headless
+      run and introduce non-random missingness in the benchmark sample.
+      approve records the decisions and continues — the decisions doc is
+      persisted in the run archive for post-hoc audit.
+
+  workflow.implement_all_proceed:
+    value: auto_resume
+    rationale: >
+      When z-implement-all hits a halt-resolution gate (e.g. after a second
+      reviewer failure), auto_resume skips the interactive prompt and continues
+      implementing. This is the expected autonomous behavior: a benchmark run
+      must not block on human input. Review failures are still recorded in the
+      run archive and count against the task in the primary statistic.
+
+  workflow.spec_retro_discovery:
+    value: defer_to_sink_p2
+    rationale: >
+      Out-of-SPEC discoveries reported by an implementer during a benchmark run
+      are not actionable interactively — there is no human to consult. Parking
+      them as P2 follow-ups preserves the finding for post-run analysis without
+      blocking the hot path. The discovery is logged with full context in the
+      sink so it can be reviewed after the benchmark completes.
+
+  # workflow.pre_run_cost_gate: controls how the pre-run token-cost gate behaves
+  # in a headless benchmark run. Set to "ask" (the safe default) so that any
+  # trial whose estimated cost exceeds cost.token_budget will halt rather than
+  # silently proceeding. Benchmark operators who set cost.token_budget explicitly
+  # can flip this to "auto_proceed" to let the budget rule govern autonomously.
+  workflow.pre_run_cost_gate:
+    value: ask
+    rationale: >
+      The pre-run cost gate runs before every expensive command (z-research,
+      z-uplift, z-plan-split). In a headless benchmark context "ask" means the
+      overnight policy layer applies: if cost.token_budget is configured and the
+      estimate is within budget, the gate auto-proceeds; if the budget is
+      missing, the gate halts (rule_id: cost_budget_missing). This is the
+      safest default — it prevents runaway spend without an explicit budget
+      ceiling while still allowing unattended runs when the operator has
+      configured cost.token_budget.

@@ -147,7 +147,7 @@ Capture the z-harness version stamp and log `run_start`:
 VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
 START_PAYLOAD="$(python3 -c '
 import json, sys
-v = json.loads(sys.argv[1]); v["arguments"] = sys.argv[2]
+v = json.loads(sys.argv[1]); v["arguments"] = sys.argv[2]; v["command"] = "z-uplift"
 print(json.dumps(v))
 ' "$VERSION_BLOB" "$ARGUMENTS")"
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_start "$START_PAYLOAD"
@@ -534,7 +534,7 @@ Handle the response (emit the outcome-specific event AFTER `user_wait_end` is lo
 
   ```bash
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
-    "$(printf '{"slug":"%s","status":"aborted_by_user","reason":"no_style_md"}' "$SLUG")"
+    "$(printf '{"command":"z-uplift","slug":"%s","status":"aborted_by_user","reason":"no_style_md"}' "$SLUG")"
   exit 1
   ```
 
@@ -2761,7 +2761,7 @@ Then **exit** the current `/z-uplift` invocation cleanly (do not attempt to wait
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
-  "$(printf '{"slug":"%s","status":"pending_implement","component":"%s","tasks_md":"%s"}' \
+  "$(printf '{"command":"z-uplift","slug":"%s","status":"pending_implement","component":"%s","tasks_md":"%s"}' \
      "$SLUG" "$COMP_SLUG" "$COMP_TASKS_MD")"
 ```
 
@@ -2830,7 +2830,7 @@ When the user chooses "Abort" in any AskUser gate above:
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
-  "$(printf '{"slug":"%s","status":"aborted_by_user","aborted_at_component":"%s"}' \
+  "$(printf '{"command":"z-uplift","slug":"%s","status":"aborted_by_user","aborted_at_component":"%s"}' \
      "$SLUG" "$COMP_SLUG")"
 ```
 
@@ -2871,7 +2871,7 @@ Phase 6 closes the uplift run by recording final telemetry, notifying the user w
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
-  "$(printf '{"slug":"%s","status":"complete","components_done":%d,"components_skipped":%d,"components_bailed":%d}' \
+  "$(printf '{"command":"z-uplift","slug":"%s","status":"complete","components_done":%d,"components_skipped":%d,"components_bailed":%d}' \
      "$SLUG" "$DONE_COUNT" "$SKIPPED_COUNT" "$BAILED_COUNT")"
 ```
 

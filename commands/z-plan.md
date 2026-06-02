@@ -79,7 +79,7 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
    START_PAYLOAD="$(python3 -c '
    import json, sys
-   v = json.loads(sys.argv[1]); v["task"] = sys.argv[2]; v["session_id"] = sys.argv[3]
+   v = json.loads(sys.argv[1]); v["task"] = sys.argv[2]; v["session_id"] = sys.argv[3]; v["command"] = "z-plan"
    print(json.dumps(v))
    ' "$VERSION_BLOB" "<arguments>" "$Z_HARNESS_SESSION_ID")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_start "$START_PAYLOAD"
@@ -695,7 +695,7 @@ Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema
 
 | Event kind | When / meaning | Required fields |
 |---|---|---|
-| `run_start` | Planning run begins | version fields, `task` |
+| `run_start` | Planning run begins | version fields, `task`, `command` |
 | `plan_route_decision` | Route check fired and a route was chosen | `from_command`, `to_command`, `route_class`, `reason_codes`, `signals`, `confidence`, `classifier_used`, `artifact_path`, `route_chain`, `user_choice` |
 | `plan_halt` | Run halted (e.g. `no_ask_blocked` on slug gate) | `reason`, `question_id`, `rule_id` |
 | `askuser_skipped` | AskUserQuestion suppressed by resolver | `question_id`, `source` |
