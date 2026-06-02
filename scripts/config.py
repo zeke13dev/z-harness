@@ -90,6 +90,13 @@ DEFAULTS: dict = {
     "brainstorm": {
         "personas":              True,   # bool: inject persona diversity in /z-brainstorm
     },
+    "personas": {
+        "critique_panel":      True,    # bool: inject persona diversity in /z-plan critique panels
+        "audit":               True,    # bool: inject persona diversity in /z-audit dimension auditors
+        "review_eval":         True,    # bool: add advisory eval-reviewer arm at code-review gates
+        "implementer_retry":   "same",  # same | new: persona draw strategy on implementer retry
+        "consult_eval":        False,   # bool: add advisory persona consult arm (OFF by default — most expensive, lowest-signal)
+    },
     "experiment": {
         "persona_rotation":  True,   # bool: enable persona rotation across z-harness roles
         "control_every_n":   5,      # int>0: forced-control cadence (every Nth implementer attempt)
@@ -141,6 +148,11 @@ VALIDATORS: dict = {
     "axioms.extract_min_recurrence": _validate_positive_int,
     "axioms.auto_extract_post_run": _validate_bool,
     "brainstorm.personas":          _validate_bool,
+    "personas.critique_panel":      _validate_bool,
+    "personas.audit":               _validate_bool,
+    "personas.review_eval":         _validate_bool,
+    "personas.implementer_retry":   {"same", "new"},
+    "personas.consult_eval":        _validate_bool,
     "experiment.persona_rotation":  _validate_bool,
     "experiment.control_every_n":   _validate_positive_int,
     "runtime.consult":              {"on", "off"},
@@ -162,6 +174,18 @@ _COERCERS: dict[str, object] = {
         v if isinstance(v, bool) else v.lower() == "true"
     ),
     "brainstorm.personas": lambda v: (
+        v if isinstance(v, bool) else v.lower() == "true"
+    ),
+    "personas.critique_panel": lambda v: (
+        v if isinstance(v, bool) else v.lower() == "true"
+    ),
+    "personas.audit": lambda v: (
+        v if isinstance(v, bool) else v.lower() == "true"
+    ),
+    "personas.review_eval": lambda v: (
+        v if isinstance(v, bool) else v.lower() == "true"
+    ),
+    "personas.consult_eval": lambda v: (
         v if isinstance(v, bool) else v.lower() == "true"
     ),
     "experiment.persona_rotation": lambda v: (

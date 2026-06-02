@@ -91,6 +91,8 @@ _ROLE_REGISTRY: dict[str, Optional[str]] = {
     "reviewer": "review-verdict",
     "implementer": None,
     "ideator": None,
+    "consultant": None,
+    "audit_persona": None,
 }
 
 # ---------------------------------------------------------------------------

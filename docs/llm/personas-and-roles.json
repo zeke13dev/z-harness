@@ -2,7 +2,7 @@
   "concept": "personas-and-roles",
   "last_updated": "2026-06-02",
   "covers_spec": "none",
-  "source_files": [
+  "source_file": [
     "scripts/resolve-persona.py",
     "scripts/resolve-persona.sh",
     "runtime/contract/persona.schema.json",
@@ -13,9 +13,6 @@
     "commands/z-personas.md",
     "skills/z-personas/SKILL.md",
     "runtime/drivers/_persona_utils.py",
-    "runtime/drivers/antigravity/persona_export.py",
-    "runtime/drivers/cursor/persona_export.py",
-    "runtime/drivers/codex/persona_export.py",
     "runtime/drivers/claude/persona_export.py",
     "runtime/contract/event.schema.json",
     "docs/human/PERSONAS.md"
@@ -26,188 +23,191 @@
       "file": "scripts/resolve-persona.py",
       "line": 88,
       "symbol": "_ROLE_REGISTRY",
-      "kind": "var",
-      "summary": "Maps role->expected_contract: consultant_primary/secondary->freeform, reviewer->review-verdict, implementer->None, ideator->None. Single source of truth for known roles in validate, random-for-role, random-distinct-for-role."
+      "kind": "const",
+      "summary": "Maps role names to expected contracts: consultant_primary/secondary -> freeform, reviewer -> review-verdict, implementer/ideator/consultant/audit_persona -> None (any). 7 roles total. Single source of truth for known roles in cmd_validate and cmd_random_for_role."
     },
     {
       "file": "scripts/resolve-persona.py",
-      "line": 929,
+      "line": 931,
       "symbol": "cmd_resolve",
       "kind": "fn",
-      "summary": "resolve <command> <role>: resolve persona/model/runtime triple from merged TOML config; emits chimera event when axes come from >=2 layers."
+      "summary": "Resolve persona/model/runtime triple for (command, role) from merged TOML config; emits chimera event when axes come from >=2 layers."
     },
     {
       "file": "scripts/resolve-persona.py",
-      "line": 552,
+      "line": 554,
       "symbol": "cmd_list_personas",
       "kind": "fn",
       "summary": "Print JSON array of {name, source_layer, path} -- winner per name only; emits persona_shadowed on collisions."
     },
     {
       "file": "scripts/resolve-persona.py",
-      "line": 1038,
+      "line": 1040,
       "symbol": "cmd_validate",
       "kind": "fn",
-      "summary": "Validate all bound personas exist, compatible_roles are known, and contract matches role expected_contract (T009). Exits 1 on any violation."
+      "summary": "Validate all bound personas exist, compatible_roles are known, and contract matches role expected_contract. Exits 1 on any violation."
     },
     {
       "file": "scripts/resolve-persona.py",
-      "line": 592,
+      "line": 594,
       "symbol": "cmd_where",
       "kind": "fn",
       "summary": "Print all layer paths defining a named persona in load order; exits 1 if not found."
     },
     {
       "file": "scripts/resolve-persona.py",
-      "line": 1135,
+      "line": 1137,
       "symbol": "cmd_read",
       "kind": "fn",
       "summary": "Print frontmatter + body of the winning persona file for a given name."
     },
     {
       "file": "scripts/resolve-persona.py",
-      "line": 535,
+      "line": 1379,
+      "symbol": "cmd_random_for_role",
+      "kind": "fn",
+      "summary": "random-for-role <role>: enumerate compatible personas (including boring-anchor), prepend no-persona sentinel, apply --exclude, draw uniformly, emit persona_random_selected, return resolve-shaped JSON + {selection_source=random_role_pool, draw_id, candidates}. Empty pool -> boring-anchor tagged fallback_empty_pool."
+    },
+    {
+      "file": "scripts/resolve-persona.py",
+      "line": 1491,
+      "symbol": "cmd_random_distinct_for_role",
+      "kind": "fn",
+      "summary": "random-distinct-for-role <role> --count=<N>: draw up to N distinct personas without replacement, excluding boring-anchor and no-persona. Graceful underflow (shorter array, never exits non-zero). selection_source=random_role_pool_distinct. Backs /z-brainstorm ideator diversity and multi-arm panels."
+    },
+    {
+      "file": "scripts/resolve-persona.py",
+      "line": 1608,
+      "symbol": "cmd_forced_control",
+      "kind": "fn",
+      "summary": "forced-control <role> [--arm=boring-anchor|no-persona]: return forced-control arm tagged selection_source=forced_control. Emits persona_random_selected. Used on the cadence-Nth attempt as a floor guarantee."
+    },
+    {
+      "file": "scripts/resolve-persona.py",
+      "line": 1768,
+      "symbol": "cmd_control_counter",
+      "kind": "fn",
+      "summary": "control-counter --increment: atomically read + increment + persist .z-harness/.persona-control-counter (flock-guarded). Returns new integer value."
+    },
+    {
+      "file": "scripts/resolve-persona.py",
+      "line": 537,
       "symbol": "_detect_and_emit_shadows",
       "kind": "fn",
       "summary": "Emits persona_shadowed once per (process, name) for each name defined in more than one layer."
     },
     {
       "file": "scripts/resolve-persona.py",
-      "line": 773,
+      "line": 775,
       "symbol": "_emit_persona_binding_chimera",
       "kind": "fn",
       "summary": "Emits persona_binding_chimera once per (process, command, role) when persona/model/runtime axes come from >=2 config layers."
     },
     {
-      "file": "runtime/drivers/_persona_utils.py",
-      "line": 1,
-      "symbol": "_persona_utils",
-      "kind": "module",
-      "summary": "Shared stdlib-only frontmatter parser and portability header builder used by all four per-target persona_export.py modules."
-    },
-    {
       "file": "scripts/resolve-persona.py",
-      "line": 1377,
-      "symbol": "cmd_random_for_role",
+      "line": 1208,
+      "symbol": "_enumerate_role_compatible_personas",
       "kind": "fn",
-      "summary": "[rotation] random-for-role <role> [--exclude=<ids>] [--seed=<s>]: enumerate compatible personas (including boring-anchor, T102), prepend no-persona sentinel, apply --exclude, draw uniformly, emit persona_random_selected (selection_source=random_role_pool), return resolve-shaped JSON + {selection_source, draw_id, candidates}. Empty pool -> boring-anchor tagged fallback_empty_pool."
+      "summary": "Return winning-layer personas compatible with role, excluding explicit exclude_ids. boring-anchor bypasses compatible_roles/contract checks. Filters out any no-persona.md disk file. Used by both random-for-role and random-distinct-for-role."
     },
     {
       "file": "scripts/resolve-persona.py",
-      "line": 1489,
-      "symbol": "cmd_random_distinct_for_role",
-      "kind": "fn",
-      "summary": "[ideator] random-distinct-for-role <role> --count=<N> [--exclude=<ids>] [--seed=<s>]: draw up to N distinct personas without replacement, EXCLUDING boring-anchor and no-persona. Returns JSON array of resolve-shaped objects. Underflow returns shorter array (or []) and notes on stderr, exits 0. Each pick emits persona_random_selected with selection_source=random_role_pool_distinct sharing one draw_id. Backs /z-brainstorm ideator diversity (brainstorm.personas knob)."
-    },
-    {
-      "file": "scripts/resolve-persona.py",
-      "line": 1606,
-      "symbol": "cmd_forced_control",
-      "kind": "fn",
-      "summary": "[rotation] forced-control <role> [--arm=boring-anchor|no-persona]: return control arm tagged selection_source=forced_control. Default arm boring-anchor. Emits persona_random_selected. Used on the cadence-Nth attempt as a floor guarantee."
-    },
-    {
-      "file": "scripts/resolve-persona.py",
-      "line": 1766,
-      "symbol": "cmd_control_counter",
-      "kind": "fn",
-      "summary": "[rotation] control-counter --increment: atomically read+increment+persist the per-repo forced-control cadence counter in .z-harness/.persona-control-counter (flock-guarded). Returns new counter value."
-    },
-    {
-      "file": "scripts/resolve-persona.py",
-      "line": 1183,
+      "line": 1185,
       "symbol": "_BORING_ANCHOR_NAME",
       "kind": "const",
-      "summary": "[rotation] String constant \"boring-anchor\" -- the control persona. In random pool (T102); also drawn on forced-control cadence as floor. fallback_empty_pool draws are quarantined. EXCLUDED from random-distinct-for-role pool."
+      "summary": "String constant 'boring-anchor' -- the control persona. In random pool (T102); also drawn on forced-control cadence as a floor. fallback_empty_pool draws are quarantined."
     },
     {
       "file": "scripts/resolve-persona.py",
-      "line": 1365,
+      "line": 1367,
       "symbol": "_NO_PERSONA_NAME",
       "kind": "const",
-      "summary": "[rotation/ideator] String constant \"no-persona\" -- reserved null baseline sentinel. No disk file; persona_body_path=null. Always prepended to random-for-role pool; EXCLUDED from random-distinct-for-role pool. Primary delta baseline in persona-stats.py."
+      "summary": "String constant 'no-persona' -- the reserved null baseline sentinel. No disk file; persona_body_path=null. Always prepended to random pool unless --excluded. Primary delta baseline in persona-stats.py."
     },
     {
-      "file": "scripts/resolve-persona.py",
-      "line": 1369,
-      "symbol": "_NO_PERSONA_SENTINEL",
-      "kind": "const",
-      "summary": "[rotation] Hardcoded candidate dict for no-persona: {name, source_layer, path=None, _fm={}}. Injected at head of candidate list by cmd_random_for_role before disk enumeration. Never injected by cmd_random_distinct_for_role."
-    },
-    {
-      "file": "scripts/persona-stats.py",
-      "line": 50,
-      "symbol": "NO_PERSONA",
-      "kind": "const",
-      "summary": "[rotation] String constant \"no-persona\" used as the primary per-stratum delta baseline in build_report(). Replaces boring-anchor as the primary baseline (T104)."
-    },
-    {
-      "file": "scripts/persona-stats.py",
-      "line": 199,
-      "symbol": "build_report",
+      "file": "runtime/drivers/_persona_utils.py",
+      "line": 28,
+      "symbol": "parse_persona_file",
       "kind": "fn",
-      "summary": "[rotation] Build stratified report: resolves per-stratum baseline as no-persona first, boring-anchor second, None third. Emits delta_vs_baseline and baseline_source per group."
+      "summary": "Minimal stdlib-only frontmatter parser shared by all per-target persona_export.py modules. Returns (name, frontmatter_text, body); strips leading blank line from body."
+    },
+    {
+      "file": "runtime/drivers/_persona_utils.py",
+      "line": 76,
+      "symbol": "build_portability_header",
+      "kind": "fn",
+      "summary": "Returns a portability comment block for exported persona files, describing target, native flag, and usage description."
+    },
+    {
+      "file": "runtime/drivers/claude/persona_export.py",
+      "line": 38,
+      "symbol": "export_persona",
+      "kind": "fn",
+      "summary": "Export a persona file to the Claude subagent target as a flat .md at <export_root>/personas/<name>.md with portability header."
     }
   ],
   "depends_on": [
     "providers-registry",
-    "scripts",
-    "agents"
+    "config-toml",
+    "telemetry-events"
   ],
   "consumed_by": [
-    "commands",
-    "skills",
-    "multi-ide-exports",
-    "z-brainstorm"
+    "z-plan",
+    "z-debug",
+    "z-audit",
+    "z-brainstorm",
+    "z-plan-light",
+    "z-implement-all",
+    "z-implement-next",
+    "z-fix",
+    "z-do",
+    "z-personas",
+    "z-review-all",
+    "multi-ide-exports"
   ],
   "invariants": [
     "Persona/model/runtime are orthogonal axes -- persona controls the prompt prefix, model controls which LLM is called, runtime controls the dispatch target. None implies the others.",
     "Layer load order is builtin < user-global < repo-local; last definition wins per name. Shadowing emits persona_shadowed once per (process, name).",
-    "persona_shadowed is de-duped by module-level _shadowed_emitted set keyed on name alone (not layer pair) -- fires once per process per shadowed name.",
-    "persona_binding_chimera fires when the three binding axes (persona, model, runtime) originate from two or more different config layers for the same (command, role) pair; de-duped per (process, command, role).",
-    "compatible_roles mismatch at bind time is a soft warning only -- it emits a persona_compat_warning event but does NOT block resolution.",
-    "contract mismatch between a bound persona contract field and the role expected_contract (from _ROLE_REGISTRY) is a hard error -- cmd_validate exits 1.",
+    "_ROLE_REGISTRY contains 7 roles: consultant_primary (freeform), consultant_secondary (freeform), reviewer (review-verdict), implementer (None), ideator (None), consultant (None), audit_persona (None). This is the single source of truth for known roles.",
+    "consultant role (contract None): used for 5-panel critique arms in /z-plan and /z-debug AND the measured advisory consult arms in /z-plan-light and /z-audit. Freeform and review-shaped personas both qualify because contract=None means any.",
+    "audit_persona role (contract None): one persona drawn per z-audit dimension (correctness/perf/cleanliness/design). Builtin pool of 6; must be >=4 (4 dimensions). Finding-oriented personas are appropriate here.",
+    "ideator role (contract None): used by /z-brainstorm for distinct persona diversity across ideator arms. Builtin pool of 8.",
+    "random-distinct-for-role is used for multi-arm distinct draws (panels, dimensions) with selection_source=random_role_pool_distinct. random-for-role is used for single-draw advisory arms with selection_source=random_role_pool.",
+    "NEUTRAL-AUTHORITY invariant: at every convergent site, the neutral arm is the decision of record. The persona arm is advisory only, logged separately under persona_advisory_recommendation (consults) or reviewer_participant=random_arm (reviewers). No code path merges both into the authoritative decision.",
+    "persona_shadowed is de-duped by module-level _shadowed_emitted set keyed on name alone -- fires once per process per shadowed name.",
+    "persona_binding_chimera fires when the three binding axes originate from two or more different config layers for the same (command, role) pair; de-duped per (process, command, role).",
+    "Contract mismatch between a bound persona contract field and the role expected_contract (from _ROLE_REGISTRY) is a hard error -- cmd_validate exits 1. Personas that omit contract are treated as 'any' and always pass.",
+    "Unknown frontmatter keys cause exit 2 -- model/runtime belong in TOML config, not in the persona file. Allowed keys: name, description, compatible_roles, contract.",
     "Persona name must match ^[a-z][a-z0-9-]*$ with no trailing hyphen; validated on frontmatter parse, exits 2 on violation.",
-    "Unknown frontmatter keys cause exit 2 -- model/runtime belong in TOML config, not in the persona file.",
     "Orchestrator (not dispatcher) calls resolve-persona.py, reads persona_body_path, and calls prepend_persona before Dispatcher.run -- the dispatcher accepts an already-composed prompt and performs no persona resolution internally.",
-    "persona_bound source field is a per-axis nested dict {persona: <layer>, model: <layer>, runtime: <layer>} where each layer value is one of: override, provider_config, none.",
-    "persona_bound, persona_override_used, and model_resolved payloads use the field name `command` (not `command_id`) as of T103.",
-    "Dispatcher.run accepts role: str | None = None kwarg; when provided, included in persona_bound payload but not used for resolution.",
-    "_ROLE_REGISTRY contains exactly five roles: consultant_primary (freeform), consultant_secondary (freeform), reviewer (review-verdict), implementer (None), ideator (None). ideator contract=None means any persona contract (or no contract) is accepted.",
-    "[ideator] random-distinct-for-role EXCLUDES boring-anchor and no-persona from its pool -- the subcommand draws only real content personas for brainstorm diversity. This is opposite to random-for-role which INCLUDES both.",
-    "[ideator] random-distinct-for-role draws without replacement (rng.sample). Underflow (pool smaller than count) returns a shorter array and exits 0 -- NEVER exits non-zero on underflow.",
-    "[ideator] Each persona picked by random-distinct-for-role emits one persona_random_selected event with selection_source=random_role_pool_distinct. All picks from the same call share one draw_id (computed once before the loop).",
-    "[ideator] 8 builtins carry compatible_roles: [..., ideator]: pattern-oracle, anti-consensus-surgeon, cut-it-half, brutalist-architect, biomimetic-architect, physics-reductionist, fossil-whisperer, cobol-greybeard. Personas with contract: review-verdict are excluded from the ideator pool by contract-compatibility filtering (ideator role has expected_contract=None but review-verdict personas can still be filtered by /z-brainstorm dispatch logic -- confirm with brainstorm source if needed).",
-    "[rotation T102 AMENDED -- REVERSES PRIOR INVARIANT] boring-anchor IS now a member of the random_role_pool and can be drawn stochastically. The forced_control cadence (every experiment.control_every_n attempts) is a FLOOR guarantee for minimum boring-anchor samples, not the only path. selection_source distinguishes a random_role_pool draw (may be boring-anchor) from a forced_control cadence draw (always boring-anchor).",
-    "[rotation] no-persona is a reserved sentinel (persona_id=\"no-persona\", persona_body_path=null) representing the vanilla implementer with zero prompt prefix. It is always prepended to the random candidate pool by random-for-role before disk enumeration (unless --excluded). A no-persona draw emits persona_random_selected + persona_attempt_outcome with persona_id=\"no-persona\" -- it is a tracked baseline arm, NOT the same as knob-off (experiment.persona_rotation=false, which emits nothing).",
-    "[rotation] _enumerate_role_compatible_personas filters out any disk file named no-persona.md so the hardcoded _NO_PERSONA_SENTINEL is the only source of no-persona draws. No disk file can produce a no-persona candidate.",
-    "[rotation] persona-stats.py resolves the per-stratum delta baseline as: (1) no-persona [primary, when stratum has >=1 no-persona sample], (2) boring-anchor [secondary, when stratum has 0 no-persona samples], (3) None [no delta reported]. Both no-persona and boring-anchor appear as normal tracked arms. fallback_empty_pool draws are quarantined and never enter any baseline.",
-    "[rotation] persona_random_selected is emitted BEFORE the agent runs (at draw time), not at dispatch time. draw_id is the join key between this event and persona_attempt_outcome. Optional join fields task_id, attempt_id, persona_id are stamped on the payload when the corresponding env vars are exported at dispatch time.",
-    "[rotation] persona_attempt_outcome is emitted by the ORCHESTRATOR at attempt close (not by resolve-persona.py). TRUE terminals that trigger it: done (success or proceed-anyway), unable_to_complete, abandoned, test_failed, halt (forced no_ask). NEVER emitted on needs_clarification, decision_needed, or spec_problem -- those are PAUSES that resume the same attempt with the same persona. Only emitted when experiment.persona_rotation=true.",
-    "[rotation] persona_bound extended payload for rotation: adds {run_id, command, role, task_id, attempt_id, persona_id, model, runtime, selection_source, draw_id} plus existing per-axis source. reviewer events additionally carry reviewer_participant in {base_codex, random_arm}.",
-    "[rotation] attempt_id = <task_id>-v<cycle>. Resume = same cycle -> same attempt_id -> reuse persona-draw.json. Retry = cycle incremented -> new attempt_id -> new draw.",
-    "[rotation] selection_source enum: random_role_pool | random_role_pool_distinct | forced_control | fallback_empty_pool | fixed_panel",
-    "[rotation] control-counter subcommand increments .z-harness/.persona-control-counter atomically (flock-guarded). Returns new counter value. Called once per fresh implementer attempt."
+    "boring-anchor IS now a member of the random_role_pool and can be drawn stochastically (T102 amended). The forced_control cadence is a FLOOR guarantee, not the only path. selection_source distinguishes random_role_pool from forced_control.",
+    "no-persona is a reserved sentinel (persona_body_path=null). Always prepended to random candidate pool by random-for-role before disk enumeration (unless --excluded). A no-persona draw emits persona_random_selected + persona_attempt_outcome -- it is a tracked baseline arm, NOT the same as knob-off.",
+    "_enumerate_role_compatible_personas filters out any disk file named no-persona.md -- only _NO_PERSONA_SENTINEL can produce a no-persona draw.",
+    "persona-stats.py resolves the per-stratum delta baseline as: (1) no-persona [primary], (2) boring-anchor [secondary], (3) None [no delta]. fallback_empty_pool draws are quarantined and never enter any baseline.",
+    "persona_random_selected is emitted BEFORE the agent runs (at draw time), not at dispatch time. draw_id is the join key between this event and persona_attempt_outcome.",
+    "persona_attempt_outcome is emitted by the ORCHESTRATOR at attempt close. True terminals: done, unable_to_complete, abandoned, test_failed, halt. NEVER emitted on needs_clarification, decision_needed, or spec_problem (those are pauses). Only emitted when experiment.persona_rotation=true.",
+    "random-distinct-for-role excludes boring-anchor and no-persona from its pool (diversity only, not experiment). random-for-role includes both.",
+    "selection_source enum: random_role_pool | random_role_pool_distinct | forced_control | fallback_empty_pool | fixed_panel.",
+    "persona_bound extended payload for rotation: adds {run_id, command, role, task_id, attempt_id, persona_id, model, runtime, selection_source, draw_id} plus per-axis source. reviewer events additionally carry reviewer_participant in {base_codex, random_arm}.",
+    "attempt_id = <task_id>-v<cycle>. Resume = same cycle -> same attempt_id -> reuse persona-draw.json. Retry = cycle incremented -> new attempt_id -> new draw.",
+    "control-counter subcommand increments .z-harness/.persona-control-counter atomically (flock-guarded). Returns new counter value. Called once per fresh implementer attempt."
   ],
   "gotchas": [
-    "_shadowed_emitted is keyed on name only (not on layer pair), so if a persona appears in all three layers, persona_shadowed still fires exactly once per process for that name.",
-    "persona_binding_chimera is keyed on (command, role), not on the specific axis combination -- if the same (command, role) binding is evaluated twice, the event fires only once.",
-    "cmd_validate checks compatible_roles only against known role names in _ROLE_REGISTRY -- a compatible_roles entry for an unknown role is a validation error, not silent.",
-    "persona file body (the prompt prefix) is everything after the closing '---' delimiter; a leading blank line is stripped by _persona_utils.parse_persona_file but the script-side _parse_frontmatter does not strip it.",
+    "_shadowed_emitted is keyed on name only (not on layer pair), so persona_shadowed fires exactly once per process per shadowed name regardless of how many layers define it.",
+    "persona_binding_chimera is keyed on (command, role), not on the specific axis combination -- fires only once per process per (command, role) pair.",
+    "boring-anchor bypasses compatible_roles and contract checks in _enumerate_role_compatible_personas -- it enters the pool for any role.",
+    "random-distinct-for-role EXCLUDES boring-anchor and no-persona; random-for-role INCLUDES them. Do not confuse the two subcommands.",
+    "A no-persona.md file in any layer is silently filtered out by _enumerate_role_compatible_personas -- only the hardcoded _NO_PERSONA_SENTINEL can produce a no-persona draw.",
+    "fallback_empty_pool always returns boring-anchor body; this is NOT a forced_control sample and must NOT be counted as boring-anchor baseline in analysis.",
     "prepend_persona strips YAML frontmatter using a simple string search for '\n---\n'; if the closing delimiter is missing, the entire file (including frontmatter) is treated as the body.",
-    "Layer 3 (repo-local) path uses git rev-parse to find repo root; falls back to cwd if git is unavailable. Z_HARNESS_REPO_ROOT, Z_HARNESS_REPO_PERSONAS_DIR, Z_HARNESS_BUILTIN_PERSONAS_DIR, and Z_HARNESS_USER_PERSONAS_DIR all override the respective layer paths for hermetic testing.",
+    "Layer 3 (repo-local) path uses git rev-parse to find repo root; falls back to cwd if git is unavailable. Z_HARNESS_REPO_ROOT, Z_HARNESS_REPO_PERSONAS_DIR, Z_HARNESS_BUILTIN_PERSONAS_DIR, and Z_HARNESS_USER_PERSONAS_DIR all override layer paths for hermetic testing.",
     "resolve-persona.sh is a thin bash wrapper -- all logic lives in resolve-persona.py; the shell script exists solely so dispatch sites do not need to know the Python path.",
     "Dispatcher.run() role kwarg is informational only -- it appears in persona_bound but does not trigger any resolution or validation; the caller is already responsible for resolving the role before calling run().",
-    "[rotation] random-for-role exits 2 on unknown role (not in _ROLE_REGISTRY). Add to _ROLE_REGISTRY before calling.",
-    "[rotation] random-distinct-for-role also exits 2 on unknown role. Add ideator (or any new role) to _ROLE_REGISTRY before calling either subcommand.",
-    "[rotation] fallback_empty_pool always returns boring-anchor body; this is NOT a forced_control sample and must NOT be counted as boring-anchor baseline in analysis.",
-    "[rotation] boring-anchor bypasses compatible_roles and contract checks in _enumerate_role_compatible_personas (treated as multi-role/any). It is included in the pool for any role -- BUT is explicitly excluded by cmd_random_distinct_for_role before calling _enumerate_role_compatible_personas.",
-    "[rotation] A no-persona.md file in any layer is silently filtered out by _enumerate_role_compatible_personas -- it cannot contribute a disk-backed candidate entry. Only the hardcoded _NO_PERSONA_SENTINEL can produce a no-persona draw.",
-    "[rotation] no-persona and boring-anchor both have delta_vs_baseline=None for their own rows (a baseline arm is never compared against itself). baseline_source in the output indicates which arm was used.",
-    "[rotation] reviewer dual-dispatch: both base_codex and random_arm share attempt_id; each has its own draw_id. ONE persona_attempt_outcome per attempt. Analysis groups reviewer rows by reviewer_participant (many-to-one).",
-    "[rotation] persona-draw.json records {attempt_id, persona_id, draw_id, selection_source, persona_body_path}. Orchestrator checks attempt_id field to detect resume vs retry.",
-    "[ideator] brainstorm.personas knob defaults ON. When OFF, the entire 2a block in /z-brainstorm is a no-op -- no draw, no prefix, no persona_bound event. The ideator dispatch is byte-identical to the pre-persona vendor-only brainstorm.",
-    "[ideator] /z-brainstorm binds the returned personas positionally: first element -> claude ideator, second -> codex ideator, third -> gemini ideator. Unfilled slots run vanilla and record <none> in ideator_personas frontmatter."
+    "random-for-role exits 2 on unknown role (not in _ROLE_REGISTRY). Add to _ROLE_REGISTRY before calling.",
+    "/z-research is intentionally excluded from the persona system -- its three perspectives are fixed semantic lenses, not random draws.",
+    "cmd_validate checks compatible_roles entries against known roles in _ROLE_REGISTRY -- a compatible_roles entry for an unknown role is flagged as an error (unlike at random-for-role time which just silently skips it).",
+    "persona_advisory_recommendation is logged separately at convergent sites; it NEVER folds into the authoritative decision or synthesis.",
+    "reviewer dual-dispatch: both base_codex and random_arm share attempt_id; each has its own draw_id. ONE persona_attempt_outcome per attempt. Analysis groups reviewer rows by reviewer_participant."
   ],
   "memories": []
 }

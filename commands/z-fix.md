@@ -275,6 +275,8 @@ Agent(
 )
 ```
 
+When `personas.review_eval` is ON (default ON), an advisory persona reviewer also runs in parallel with the Codex reviewer above, per the [Advisory eval-reviewer shared snippet in commands/z-implement-all.md](commands/z-implement-all.md#ADVISORY-EVAL-REVIEWER). The advisory arm uses `reviewer_participant=random_arm` and is logged for telemetry only — its verdict never changes pass/fail and never triggers a retry. Only the base Codex reviewer outcome determines whether Phase 8 passes or retries.
+
 Increment `REVIEW_CYCLES` by 1.
 
 Parse the return (already capped at 8 KB, blockers + majors only).
@@ -365,7 +367,7 @@ Before recommending any `git reset --hard HEAD~N`, `git commit --amend`, or inte
 
 | Feature | Used | Gates |
 |---------|------|-------|
-| `subagent` | yes | Phase 1 doc-fetcher; Phase 3 consultant-primary + consultant-secondary; Phase 8 reviewer |
+| `subagent` | yes | Phase 1 doc-fetcher; Phase 3 consultant-primary + consultant-secondary; Phase 8 reviewer (base codex gate + optional advisory eval-reviewer when personas.review_eval ON) |
 | `ask_user` | yes | Empty-args question; Phase 0 wrong-tool gate; Phase 1 clarification (premise check); Phase 5 approval + shortcut approval; Phase 8 second-failure decision; Phase 9 post-mortem decision |
 | `skill_invoke` | no | — |
 
