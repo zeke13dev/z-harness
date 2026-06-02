@@ -1,7 +1,7 @@
 # Follow-up Sink
 
-> Last updated: 2026-05-29
-> Covers source: scripts/sink-add.sh, scripts/sink-claim.sh, scripts/sink-status-set.sh, scripts/sink-view-rebuild.sh, scripts/sink-lock.sh, scripts/sink-compact.sh, scripts/sink-migrate.sh, scripts/followup-reconcile-notion.sh, scripts/validate-followup-schemas.sh, scripts/followup_common.py, scripts/followup-view-lookup.py, scripts/sink-view-reducer.py, scripts/sink-add-helpers.py, scripts/sink-claim-helpers.py, scripts/sink-status-set-impl.py, scripts/sink-compact-impl.py, scripts/sink-auto-close-check.py, scripts/sink-audit-validate.py, scripts/notion-push.py, scripts/followup-reconcile-notion-impl.py, scripts/parse-followups-block.py, commands/z-followup-list.md, commands/z-followup-status.md, commands/z-followup-confirm.md, commands/z-followup-dismiss.md, commands/z-followup-refresh.md, commands/z-followup-next.md, docs/schemas/followup-entry.schema.json, docs/schemas/audit-evidence.schema.json
+> Last updated: 2026-06-02
+> Covers source: scripts/followup_common.py, scripts/sink-add-helpers.py, scripts/followup-reconcile-notion-impl.py, scripts/sink-claim.sh, scripts/sink-lock.sh, scripts/sink-view-reducer.py, scripts/sink-status-set-impl.py, scripts/sink-add.sh, scripts/sink-status-set.sh, scripts/sink-view-rebuild.sh, scripts/sink-compact.sh, scripts/sink-migrate.sh, scripts/followup-reconcile-notion.sh, scripts/validate-followup-schemas.sh, scripts/followup-view-lookup.py, scripts/sink-claim-helpers.py, scripts/sink-compact-impl.py, scripts/sink-auto-close-check.py, scripts/sink-audit-validate.py, scripts/notion-push.py, scripts/parse-followups-block.py, commands/z-followup-list.md, commands/z-followup-status.md, commands/z-followup-confirm.md, commands/z-followup-dismiss.md, commands/z-followup-refresh.md, commands/z-followup-next.md, docs/schemas/followup-entry.schema.json, docs/schemas/audit-evidence.schema.json
 
 ## Overview
 
@@ -26,9 +26,11 @@ Entries live in exactly one of two canonical sinks. The `sink` field is an enum 
 
 | Sink | Path | Scope |
 |---|---|---|
-| `project` | `z-harness/followups/` (inside the repo) | Repo-specific debt, continuation tasks |
+| `project` | resolved via `plan-path.sh followups_dir` at call time | Repo-specific debt, continuation tasks |
 | `global` | `~/.z-harness/followups/` | Harness-wide or cross-project discoveries |
 | Notion | n/a (mirror only) | Optional read mirror; one-way push, never primary |
+
+The **project sink root** is resolved by calling `plan-path.sh followups_dir` at invocation time (not frozen at import). This honours the full 5-tier base fallback chain — `Z_HARNESS_BASE_DIR`, `XDG_STATE_HOME`, and others — so the sink follows any external base reconfiguration automatically. The fallback when `plan-path.sh` is unavailable is `<proj_root>/z-harness/followups`. The global sink is always `~/.z-harness/followups` and is intentionally outside this chain.
 
 Notion is a **passive observer** — it mirrors entries from project or global sinks based on `followup.notion_enabled` config. The filesystem is always canonical. Notion sync failure never blocks any local operation.
 
@@ -62,8 +64,10 @@ All Python implementations import from `scripts/followup_common.py`, the single 
 
 - **Global lock helpers** — `GlobalLockContext` (context manager), `acquire_global_lock`, `release_global_lock`, and the private `_hb_lock_fd` serializer. Every caller uses these identical primitives; there is no per-caller reimplementation.
 - **Config helpers** — `get_config_batch(keys, proj_root)` fetches multiple config keys in a single `config.py` subprocess fork. Use this instead of per-key calls.
+- **Project sink path** — `project_followups_dir(proj_root)` delegates to `plan-path.sh followups_dir` at call time. Falls back to `proj_root/z-harness/followups` when `plan-path.sh` is unavailable.
+- **macOS fork-safety guard** — `os.environ.setdefault("OBJC_DISABLE_INITIALIZE_FORK_SAFETY", "YES")` is set at module import. This prevents CoreFoundation abort when Python is invoked from bash (which has already initialised CoreFoundation) and then forks a subprocess with `cwd=` or `env=`.
 - **Notion push** — `_notion_push_entry` (synchronous) and `_notion_push_entry_bg` (non-blocking, detached child process). The bg variant launches `followup_common.py --push-entry ...` as a new session so the parent process always returns promptly.
-- **Event logging** — `log_sink_event` (appends to `index.jsonl`), `log_metrics_event` (appends to `z-harness/metrics.jsonl`), `_log_event_sh` (via `log-event.sh`).
+- **Event logging** — `log_sink_event` (appends to `index.jsonl`), `log_metrics_event` (appends to `<base>/metrics.jsonl` — base resolved via `plan-path.sh` at call time), `_log_event_sh` (via `log-event.sh`).
 - **Utility** — `iso_now()`, `git_head()` (raises `RuntimeError` on failure; never falls back to a sentinel).
 
 ## Lock model
@@ -99,7 +103,7 @@ Path: `pages/<id>.lock` under the sink root.
 
 Heartbeat interval: 30 seconds. Stale threshold: 7200 seconds (2 hours). Stale-takeover logs `followup_lock_takeover` and appends a `running → open` recovery event.
 
-**Lock ordering invariant (MANDATORY):** any code path that needs both locks MUST acquire per-entry FIRST, then global. Inverting the order is a deadlock risk.
+**Lock ordering invariant (MANDATORY):** any code path that needs both locks MUST acquire per-entry FIRST, then global. Inverting the order is a deadlock risk. This ordering is UNCHANGED.
 
 ### Wrappers exit 4 when global lock is not held
 
@@ -107,7 +111,7 @@ Heartbeat interval: 30 seconds. Stale threshold: 7200 seconds (2 hours). Stale-t
 
 ## View reducer: incremental rebuild + checkpoint (T010)
 
-`sink-view-reducer.py` replays `index.jsonl` into `index.view.json` via an atomic tmpfile+rename. The reducer now supports **incremental rebuild**:
+`sink-view-reducer.py` replays `index.jsonl` into `index.view.json` via an atomic tmpfile+rename. The reducer supports **incremental rebuild**:
 
 `index.view.json` carries a `_checkpoint` field:
 ```json
@@ -154,7 +158,7 @@ The script MUST be invoked while the global cross-tool lock is held. It does NOT
 
 ## Notion sync state (T018)
 
-The reducer now materializes `entry["notion_sync_pending"]` from three event kinds:
+The reducer materializes `entry["notion_sync_pending"]` from three event kinds:
 
 | Event | Effect on `notion_sync_pending` |
 |---|---|
@@ -260,7 +264,7 @@ Typical session:
 - **Condition A for auto-close requires both `diff_stat == 0` AND no touched paths.** A binary rename or mode-only change can produce `diff_stat == 0` but still has touched paths and must pass the allowlist check.
 - **Staleness hard-dismiss is disabled by default.** Set `followup.staleness_hard_dismiss_days` to a positive integer to enable TTL-based auto-dismiss.
 - **The global lock is never held during command execution.** Holding it longer would create a deadlock risk with `/z-implement-*`. The lock is only held briefly for the claim transaction, view rebuild, and evidence validation.
-- **Lock order is mandatory: per-entry first, then global.** Any code that inverts this order risks deadlock.
+- **Lock order is mandatory: per-entry first, then global.** Any code that inverts this order risks deadlock. This ordering is UNCHANGED.
 - **Notion sync failure is silent.** If Notion push fails after 3 retries, `notion_sync_pending` is stamped in the event log and the local operation continues. Run `/z-followup-reconcile-notion` manually to retry pending pushes.
 - **Compaction must delete `index.view.json` before rebuilding.** After any in-place journal rewrite, the T010 checkpoint is invalid. `sink-compact-impl.py` does this. Any custom compaction that skips this step will produce a corrupt incremental rebuild.
 - **`Z_HARNESS_NOTION_TOKEN` must not appear under `set -x`.** Bash `set -x` echo mode would log the token value to stderr.
@@ -269,11 +273,13 @@ Typical session:
 - **`/z-implement-*` checks for running follow-ups.** Phase 0 scans the project sink for any entry with `status=running`. If found, it refuses to start. This is separate from the lock check and fires even if the global lock is currently free.
 - **Dedup hash uses only `name` and `recommended_command`.** `source_artifact` is intentionally excluded so the same logical follow-up is deduped regardless of which artifact (per-task diff vs. cumulative findings) surfaced it.
 - **`sink-view-rebuild.sh` exits 4 when the lock is not held.** It verifies lock-held state at startup (JSON content check OR OS flock check). Calling it without the lock causes an exit 4 error.
+- **Project sink root is resolved at call time.** `project_followups_dir()` calls `plan-path.sh followups_dir` on every invocation so the path follows any live base reconfiguration. It is not frozen at process start or module import.
+- **`OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES` is set at module import.** `followup_common.py` sets this env var via `os.environ.setdefault` before any subprocess call. Without it, Python processes forked from a bash parent that initialised CoreFoundation can abort on macOS.
 
 ## Persistence layout
 
 ```
-z-harness/followups/          # project sink
+z-harness/followups/          # project sink (path from plan-path.sh followups_dir)
 ├── index.jsonl               # append-only event log (never edit directly)
 ├── index.view.json           # materialized view (rebuilt under lock; carries _checkpoint)
 ├── index.archive.jsonl       # archived terminal-entry events (append-only; compaction output)

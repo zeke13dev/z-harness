@@ -1,6 +1,6 @@
 # config
 
-> Last updated: 2026-06-01
+> Last updated: 2026-06-02
 > Covers source: scripts/config.py, scripts/config.sh, scripts/propose-prefs.py, docs/human/config.md
 
 ## Overview
@@ -10,7 +10,7 @@
 - **Loader API** — the 4-layer TOML config loader (built-in defaults → `~/.config/z-harness/config.toml` → repo `.z-harness/config.toml` → `Z_HARNESS_<SECTION>_<KEY>` env vars). Subcommands: `get`, `get-batch`, `export-env`, `ensure-defaults`, `explain`, `should-notify`, `inspect-all`. This is the slice-1 foundation.
 - **Workflow Resolver** — the `[workflow]` config section plus the question-registry, resolver, writer, elevation proposer, and overnight gate system that sit on top of the loader. Subcommands: `resolve-question`, `check-no-ask`, `set`, `list-question-ids`. This is the slice-2 layer.
 
-The core runtime loop for workflow preferences is: skill prose calls `config.py resolve-question <question_id>` before firing an `AskUserQuestion`; the resolver consults both the TOML config and `routing-preference` memory entries in `docs/llm/*.json`, then returns a typed JSON envelope instructing the skill to `skip`, `prefill`, `ask`, `halt`, or `defer-to-sink`. When running unattended (`Z_HARNESS_NO_ASK=halt`), the overnight gate either auto-decides questions on the allowlist or halts instead of asking. When the user wants to make a preference permanent they run `/z-suggest-memory` (memory path) or `config.py set` (TOML path). The proposer (`propose-prefs.py`) surfaces an invitation to do so when it detects a repeated command-pair pattern in `metrics.jsonl`.
+The core runtime loop for workflow preferences is: skill prose calls `config.py resolve-question <question_id>` before firing an `AskUserQuestion`; the resolver consults the TOML config, `routing-preference` memory entries in `docs/llm/*.json`, and (at the lowest tier) graph-validated axioms from `axiom-store.py`, then returns a typed JSON envelope instructing the skill to `skip`, `prefill`, `ask`, `halt`, or `defer-to-sink`. When running unattended (`Z_HARNESS_NO_ASK=halt`), the overnight gate either auto-decides questions on the allowlist or halts instead of asking. When the user wants to make a preference permanent they run `/z-suggest-memory` (memory path) or `config.py set` (TOML path). The proposer (`propose-prefs.py`) surfaces an invitation to do so when it detects a repeated command-pair pattern in `metrics.jsonl`.
 
 Historical note: this concept was previously split as `config-design` (Loader API) + `config` (Workflow Resolver) in docs/llm/INDEX.json. They were merged on 2026-05-27 because they shared all source files and the split caused doc-fetcher to fire both concepts on every touch. The two h2 section groupings below preserve the boundary for human readers.
 
@@ -42,7 +42,7 @@ Set `$Z_HARNESS_REPO_CONFIG` to override the git-root discovery path (exits 2 if
 | `experiment.persona_rotation` | bool | `true` | `true` \| `false` | Master kill-switch for the persona-rotation experiment. When `true` (default), `/z-implement-all` and `/z-implement-next` draw a random persona for each implementer attempt, dispatch a dual reviewer (base codex + random-arm advisory), and emit `persona_attempt_outcome` events. `/z-plan` and `/z-debug` use the fixed 5-panel consult. When `false`, all rotation behavior is a no-op — previous behavior is restored. Set to `false` to pause data collection. |
 | `experiment.control_every_n` | int | `5` | positive integer | Forced-control cadence: every Nth implementer attempt **across the entire repo** uses `boring-anchor` (the baseline persona) instead of a random draw. Counter persists in `.z-harness/.persona-control-counter`. Default 5 means every 5th attempt is a control sample. |
 
-For `[workflow]`, `[followup]`, and `[experiment]` knobs, see the sections below.
+For `[workflow]`, `[followup]`, `[axioms]`, and `[experiment]` knobs, see the sections below.
 
 ## The transliteration rule
 
@@ -54,6 +54,10 @@ Env-var overrides follow a deterministic rule: lowercase TOML dotted-key → pre
 | `docs.always_apply` | `Z_HARNESS_DOCS_ALWAYS_APPLY` |
 | `experiment.persona_rotation` | `Z_HARNESS_EXPERIMENT_PERSONA_ROTATION` |
 | `experiment.control_every_n` | `Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N` |
+| `axioms.enabled` | `Z_HARNESS_AXIOMS_ENABLED` |
+| `axioms.kernel_budget_chars` | `Z_HARNESS_AXIOMS_KERNEL_BUDGET_CHARS` |
+| `axioms.extract_min_recurrence` | `Z_HARNESS_AXIOMS_EXTRACT_MIN_RECURRENCE` |
+| `axioms.auto_extract_post_run` | `Z_HARNESS_AXIOMS_AUTO_EXTRACT_POST_RUN` |
 
 For workflow, followup, and experiment keys, the rule applies identically.
 
@@ -137,7 +141,7 @@ Valid event kinds: `approval`, `phase_end`, `error`.
 
 Prints all configuration knobs with their current effective value, source layer, and persistence class. Covers three categories:
 
-1. **TOML-persistent keys** — every key in `DEFAULTS` (all `notify.*`, `docs.*`, `workflow.*`, `followup.*`)
+1. **TOML-persistent keys** — every key in `DEFAULTS` (all `notify.*`, `docs.*`, `workflow.*`, `followup.*`, `axioms.*`, `experiment.*`)
 2. **Registered question_ids** — every entry in `QUESTION_IDS`, showing the resolver envelope result
 3. **Env-only knobs** — environment variables that affect behavior but are never written to TOML
 
@@ -242,7 +246,7 @@ Event payload shape:
 
 # Workflow Resolver
 
-The slice-2 layer: the `[workflow]` config section, the question-registry, the resolver subcommand, the overnight gate system, the writer, the routing-preference memory schema, and the elevation proposer. All built on top of the Loader API.
+The slice-2 layer: the `[workflow]` config section, the question-registry, the resolver subcommand, the overnight gate system, the writer, the routing-preference memory schema, the axiom layer, and the elevation proposer. All built on top of the Loader API.
 
 ## The knobs (Workflow Resolver)
 
@@ -295,9 +299,13 @@ $ scripts/config.sh resolve-question workflow.audit_to_amend
 - `halt` — do not proceed; stop the run (returned when `Z_HARNESS_NO_ASK=halt` and question is not on the overnight allowlist).
 - `defer-to-sink` — do not ask interactively; instead call `scripts/sink-add.sh` with the question context to park it as a follow-up work item. Currently produced only by `workflow.spec_retro_discovery = defer_to_sink_p2`.
 
-`source` values: `config` | `memory` | `conflict` | `none` | `override` | `overnight_allowlist` | `no_ask_halt`.
+`source` values: `config` | `memory` | `axiom` | `axiom_conflict` | `conflict` | `none` | `override` | `overnight_allowlist` | `no_ask_halt`.
 
 **`conflict` source:** config and memory disagree. Result is always `ask`.  The `sources[]` array lists both entries.  After the user answers, a follow-up AskUserQuestion offers to record the answer as the new preference, resolving the conflict for future runs.
+
+**`axiom` source:** no config or memory preference was set (pure gap); a graph-validated approved axiom recommends a value. Strength is always `soft`. The envelope includes a nested `axiom:{id, statement}` object. Config/memory always win over axioms.
+
+**`axiom_conflict` source:** a higher layer (config or memory) set a value that differs from what an axiom recommends. The higher layer's value/result/strength wins; the axiom conflict is surfaced via `source:"axiom_conflict"` and a nested `axiom:{id, statement, conflict:true}` object.
 
 **`--explain` flag (or `Z_HARNESS_EXPLAIN_RESOLUTION=1`):** prints a human-readable resolution trace on stderr.  Default off.
 
@@ -327,13 +335,16 @@ fi
 
 ### `check-no-ask --question-id <id>`
 
-Lightweight overnight-gate checker. Returns `{"result": "halt"|"proceed", "question_id": "<id>", "rule_id": "<rule>"}` without going through the full resolution envelope. Used by `/z-implement-all` and other commands that need a simpler halt/proceed decision.
+Lightweight overnight-gate checker. Returns `{"result": "halt"|"proceed"|"unhandled_gate", "question_id": "<id>", "rule_id": "<rule>"}` without going through the full resolution envelope. Used by `/z-implement-all` and other commands that need a simpler halt/proceed decision.
 
 Paths:
 1. `Z_HARNESS_NO_ASK != halt` → `proceed`, `rule_id=no_overnight_active`
 2. `NO_ASK=halt`, question registered, on allowlist → `proceed` (treated as overnight_decision)
 3. `NO_ASK=halt`, question registered, NOT on allowlist → `halt`
+3b. `NO_ASK=halt`, question registered, NOT on allowlist, **policy mode active** → `unhandled_gate` (loud abort; emits `unhandled_gate` event)
 4. `NO_ASK=halt`, question NOT registered → `halt` + emits `unknown_ask_blocked` event
+
+Policy mode is active when `Z_HARNESS_NO_ASK=halt` AND either `Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE` or `Z_HARNESS_OVERNIGHT_AUTODECIDE` is non-empty.
 
 Always exits 0 on valid invocations; exits 2 on argparse error.
 
@@ -401,35 +412,45 @@ When `/z-overnight` or any other caller sets `Z_HARNESS_NO_ASK=halt`, the resolv
 | `overnight_decision` | Question auto-decided from allowlist |
 | `askuser_halted` | Question would have asked but is not on allowlist |
 | `unknown_ask_blocked` | `check-no-ask` called with unregistered question_id |
+| `unhandled_gate` | `check-no-ask` reached a registered gate not covered by the frozen policy |
 | `config_conflict` | `Z_HARNESS_ASK_ALL=1` + `Z_HARNESS_NO_ASK=halt` both set |
+
+## Axiom layer
+
+The axiom layer sits at the lowest precedence in the resolution hierarchy. After config and memory are consulted, `_build_resolve_envelope` loads graph-validated approved axioms (via `axiom-store.py`) that reference the `question_id`. Axiom participation is gated on `axioms.enabled = true` (the default). Three axiom outcomes:
+
+- **agree** — axiom value matches the already-resolved value. Config/memory still wins; the axiom is silently appended to `sources[]`. No `axiom` key added to envelope.
+- **gap-fill** — config is at default AND memory is silent. Axiom fills the gap: `source:"axiom"`, `strength:"soft"`, `result = RESULT_MAP[(question_id, axiom_value)]`, `axiom:{id, statement}` nested object.
+- **direct conflict** — a higher layer set a different value. Higher layer wins. `source:"axiom_conflict"`, nested `axiom:{id, statement, conflict:true}`.
+
+When `axioms.enabled = false` (or `axiom-store.py` is absent), the axiom layer is a complete no-op — the envelope is byte-identical to the pre-axiom result.
 
 ## Key entry points
 
-- `scripts/config.py:51` — `DEFAULTS` — built-in default values for all config keys including `[workflow]` and `[followup]` sections (layer 1)
-- `scripts/config.py:86` — `VALIDATORS` — allowed enum sets per dotted-key; hard-fail on repo/env, soft-warn on global
-- `scripts/config.py:102` — `QUESTION_IDS` — single source of truth for AskUserQuestion routing-class preference keys; validated against `VALIDATORS` at module load by `_run_startup_guards`
-- `scripts/config.py:172` — `OVERNIGHT_AUTODECIDE_QIDS_DEFAULT` — default overnight allowlist; question IDs auto-decided without halting
-- `scripts/config.py:178` — `RESULT_MAP` — maps `(question_id, option-domain-value)` to resolver result-domain (`skip|prefill|ask|halt|defer-to-sink`)
-- `scripts/config.py:204` — `_run_startup_guards` — module-load consistency check; raises `SystemExit(2)` on registry inconsistency
-- `scripts/config.py:507` — `load_config` — build resolved config from all 4 layers; returns `(values, sources)` dicts
-- `scripts/config.py:660` — `cmd_get` — resolve and print single key; exits 3 on unknown or meta key
-- `scripts/config.py:688` — `cmd_get_batch` — resolve multiple keys in one process; outputs JSON object; always exits 0
-- `scripts/config.py:717` — `cmd_export_env` — print export lines for all user knobs; emit `config_resolved` once per run
-- `scripts/config.py:735` — `cmd_ensure_defaults` — write global config with defaults + inline comments if absent
-- `scripts/config.py:812` — `cmd_explain` — print effective value and source layer for one key
-- `scripts/config.py:844` — `cmd_list_question_ids` — print JSON array of known question IDs
-- `scripts/config.py:1013` — `_apply_overnight_overrides` — post-process resolution envelope for overnight/halt-from-ask behavior
-- `scripts/config.py:955` — `_parse_overnight_allowlist` — parse `Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE` JSON and merge with defaults
-- `scripts/config.py:1179` — `_load_memory_matches` — walks `docs/llm/*.json` for `routing-preference` entries matching `question_id`; respects scope
-- `scripts/config.py:1287` — `_resolve_memory_matches` — merges memory entries; highest strength wins on agreement; returns `conflict` on disagreement
-- `scripts/config.py:1323` — `_build_resolve_envelope` — core resolver logic: config + memory signal combination
-- `scripts/config.py:1546` — `cmd_resolve_question` — consults 4-layer config + memory + overnight overrides; returns JSON envelope
-- `scripts/config.py:1669` — `cmd_check_no_ask` — lightweight overnight-gate checker; returns halt/proceed JSON
-- `scripts/config.py:1875` — `cmd_set` — atomically write a TOML key to global or project config via tmp+rename
-- `scripts/config.py:1957` — `ENV_ONLY_KNOBS` — list of env-only knob names surfaced by `inspect-all`
-- `scripts/config.py:1997` — `cmd_inspect_all` — print all config knobs with source and persistence metadata; supports `--json`
-- `scripts/config.py:2109` — `cmd_should_notify` — print yes|no for a given event kind; always exits 0; exits 2 on unknown event
-- `scripts/config.py:2176` — `cmd_migrate` — rewrite old provider names in `roles.*.runtime` values to `-cli` suffixed form; idempotent
+- `scripts/config.py:51` — `DEFAULTS` — built-in default values for all config keys including `[workflow]`, `[followup]`, `[axioms]`, and `[experiment]` sections (layer 1)
+- `scripts/config.py:118` — `VALIDATORS` — allowed enum sets per dotted-key; hard-fail on repo/env, soft-warn on global; includes all workflow, followup, axioms, and experiment keys
+- `scripts/config.py:181` — `QUESTION_IDS` — single source of truth for AskUserQuestion routing-class preference keys; validated against `VALIDATORS` at module load by `_run_startup_guards`
+- `scripts/config.py:251` — `OVERNIGHT_AUTODECIDE_QIDS_DEFAULT` — default overnight allowlist; question IDs auto-decided without halting
+- `scripts/config.py:257` — `RESULT_MAP` — maps `(question_id, option-domain-value)` to resolver result-domain (`skip|prefill|ask|halt|defer-to-sink`)
+- `scripts/config.py:283` — `_run_startup_guards` — module-load consistency check; raises `SystemExit(2)` on registry inconsistency
+- `scripts/config.py:584` — `load_config` — build resolved config from all 4 layers; returns `(values, sources)` dicts
+- `scripts/config.py:743` — `cmd_get` — resolve and print single key; exits 3 on unknown or meta key
+- `scripts/config.py:771` — `cmd_get_batch` — resolve multiple keys in one process; outputs JSON object; always exits 0
+- `scripts/config.py:800` — `cmd_export_env` — print export lines for all user knobs; emit `config_resolved` once per run
+- `scripts/config.py:818` — `cmd_ensure_defaults` — write global config with defaults + inline comments if absent
+- `scripts/config.py:895` — `cmd_explain` — print effective value and source layer for one key
+- `scripts/config.py:927` — `cmd_list_question_ids` — print JSON array of known question IDs
+- `scripts/config.py:1376` — `_load_axiom_store_module` — dynamically load `scripts/axiom-store.py` by file path (hyphen prevents normal import); cached per process
+- `scripts/config.py:1414` — `_load_axiom_matches` — load graph-valid approved axioms for a question_id; gated on `axioms.enabled`; returns `[]` when store absent or disabled
+- `scripts/config.py:1549` — `_resolve_config_memory_envelope` — pre-axiom resolution: config + routing-pref memory; returns 7-tuple including internal signals for axiom layer
+- `scripts/config.py:1780` — `_build_resolve_envelope` — full resolver: apply axiom layer on top of config+memory envelope; returns 5-tuple
+- `scripts/config.py:1927` — `cmd_resolve_question` — consults 4-layer config + memory + axioms + overnight overrides; returns JSON envelope
+- `scripts/config.py:2094` — `cmd_check_no_ask` — lightweight overnight-gate checker; returns halt/proceed/unhandled_gate JSON; policy mode abort on reachable gate not covered by frozen policy
+- `scripts/config.py:2323` — `cmd_set` — atomically write a TOML key to global or project config via tmp+rename
+- `scripts/config.py:2414` — `ENV_ONLY_KNOBS` — list of env-only knob names surfaced by `inspect-all`
+- `scripts/config.py:2450` — `cmd_inspect_all` — print all config knobs with source and persistence metadata; supports `--json`
+- `scripts/config.py:2595` — `cmd_should_notify` — print yes|no for a given event kind; always exits 0; exits 2 on unknown event
+- `scripts/config.py:2662` — `cmd_migrate` — rewrite old provider names in `roles.*.runtime` values to `-cli` suffixed form; idempotent
 - `scripts/propose-prefs.py:1` — `propose-prefs` (module) — walks `metrics.jsonl` for repeated command-pair patterns; emits JSON proposal if threshold met; never writes
 
 ## `routing-preference` memory type
@@ -483,6 +504,7 @@ Write a routing-preference memory via:
 | memory | `very_strong` | `skip` |
 | memory | `strong` | `prefill` |
 | memory | `weak` | `prefill` |
+| axiom (gap-fill only) | `soft` | `RESULT_MAP[(question_id, axiom_value)]` |
 | config + memory (agreeing) | highest | config wins |
 | config + memory (disagreeing) | — | `ask` (conflict tier; both sources listed) |
 | none | — | `ask` |
@@ -593,6 +615,32 @@ scripts/sink-add.sh \
 
 Cross-cutting material that applies to both surfaces.
 
+## The knobs ([axioms] section)
+
+The `[axioms]` TOML section controls the axiom extraction pipeline and how axioms participate in question resolution.
+
+| Key | Type | Default | Env var | Description |
+|-----|------|---------|---------|-------------|
+| `axioms.enabled` | bool | `true` | `Z_HARNESS_AXIOMS_ENABLED` | Master on/off switch for axiom participation in resolve-question. When `false`, `_load_axiom_matches` returns `[]` immediately — no axiom ever participates. Also gates `auto_extract_post_run`. |
+| `axioms.kernel_budget_chars` | int | `6000` | `Z_HARNESS_AXIOMS_KERNEL_BUDGET_CHARS` | Maximum characters of axiom text included in the context kernel passed to implementers/consultants. Positive integer. |
+| `axioms.extract_min_recurrence` | int | `3` | `Z_HARNESS_AXIOMS_EXTRACT_MIN_RECURRENCE` | Minimum recurrence count before a behavioral pattern is auto-extracted as an axiom candidate. Positive integer. |
+| `axioms.auto_extract_post_run` | bool | `true` | `Z_HARNESS_AXIOMS_AUTO_EXTRACT_POST_RUN` | When `true`, runs the axiom extraction pipeline automatically at the end of each `/z-*` run. Set to `false` to disable automatic extraction (manual extraction still possible). |
+
+**TOML example** (`.z-harness/config.toml`):
+
+```toml
+[axioms]
+enabled = true
+kernel_budget_chars = 6000
+extract_min_recurrence = 3
+auto_extract_post_run = true
+```
+
+**Invariants:**
+- `axioms.enabled` and `axioms.auto_extract_post_run` must be `true` or `false`; `axioms.kernel_budget_chars` and `axioms.extract_min_recurrence` must be positive integers (≥1).
+- Repo/env layer violations exit 2 (hard fail); global layer violations soft-warn and fall back to defaults.
+- `axioms.enabled = false` is a complete no-op for resolution: `_load_axiom_matches` returns `[]` and the envelope is byte-identical to the pre-axiom result.
+
 ## The knobs ([experiment] section)
 
 The `[experiment]` section contains feature-flag knobs that are **on by default**. These govern the persona-rotation data-collection experiment. Disabling them reverts the commands to their pre-experiment behavior exactly — no events, no state files, no prompt changes.
@@ -629,8 +677,9 @@ scripts/config.sh set experiment.persona_rotation false --scope=project
 
 - `commands` (z-audit-plan, z-audit-plan-style, z-plan, z-fix, z-uplift, z-amend, z-do, z-research, z-implement-all, z-review-all, z-overnight, z-implement-next, z-debug) — call `export-env` + `should-notify` during Setup; call `resolve-question` before workflow AskUserQuestions; call `check-no-ask` for overnight gate checks; call `set` after proposal acceptance; call `propose-prefs.py` at command end; read `experiment.persona_rotation` and `experiment.control_every_n` at each implementer dispatch
 - `skills` (z-suggest-memory, z-map, z-plan-light, z-debug, z-brainstorm, z-do, z-plan, z-research) — call `list-question-ids` to validate routing-preference question IDs; call `resolve-question` for slug-confirm gate; call `export-env` + `should-notify` during Setup
-- `scripts` — provides the `log-event.sh` + `log-phase.sh` telemetry pipeline that `config.py` writes events through (`config_resolved`, `askuser_resolved`, `overnight_decision`, `askuser_halted`, `unknown_ask_blocked`, `config_conflict`); `scripts/persona-stats.py` reads `metrics.jsonl` and calls `config.py get experiment.*` for context
+- `scripts` — provides the `log-event.sh` + `log-phase.sh` telemetry pipeline that `config.py` writes events through (`config_resolved`, `askuser_resolved`, `overnight_decision`, `askuser_halted`, `unknown_ask_blocked`, `unhandled_gate`, `config_conflict`); `scripts/persona-stats.py` reads `metrics.jsonl` and calls `config.py get experiment.*` for context; `scripts/axiom-store.py` loaded dynamically by `_load_axiom_store_module` for axiom resolution
 - `followup-sink` — `sink-add.sh` called by orchestrators when `resolve-question` returns `defer-to-sink`; creates follow-up entries in the project or global sink; `notion-push.py` reads `Z_HARNESS_NOTION_TOKEN` env override or `followup.notion_token_path` secrets file for Notion auth
+- `active-plan-registry` — `Z_HARNESS_REGISTRY_ENABLED`, `Z_HARNESS_REGISTRY_STALE_SECS`, `Z_HARNESS_STRICT_OVERLAP`, `Z_HARNESS_EXTERNAL_DEFAULT`, and `Z_HARNESS_BASE_DIR` are env-only knobs (not in config.py's DEFAULTS) consumed by `plan-path.sh` and `active-plan-registry.py`
 
 ## Examples
 
@@ -682,6 +731,16 @@ plan_decisions_approval = "approve"
 spec_retro_discovery = "defer_to_sink_p2"
 ```
 
+**Axioms config** (`.z-harness/config.toml`):
+
+```toml
+[axioms]
+enabled = true
+kernel_budget_chars = 8000
+extract_min_recurrence = 3
+auto_extract_post_run = true
+```
+
 **Follow-up namespace** (`.z-harness/config.toml` at git root):
 
 ```toml
@@ -724,6 +783,7 @@ NOTION_ENABLED="$(echo "$BATCH" | jq -r '.["followup.notion_enabled"]')"
 - Slug-confirm has TWO gates: hard collision check (always runs, resolver NOT consulted) + soft non-obvious confirmation (resolver-controlled). `resolve-question` only governs the soft gate
 - `Z_HARNESS_ASK_ALL=1` and `Z_HARNESS_NO_ASK=halt` are mutually exclusive — setting both causes `resolve-question` to exit 5 (not 0); check for this conflict before setting both in scripts
 - `check-no-ask` fails closed on unregistered question IDs when `NO_ASK=halt` — unknown question → `halt` + `unknown_ask_blocked` event
+- `check-no-ask` in policy mode (NO_ASK=halt + AUTODECIDE_EFFECTIVE set) returns `unhandled_gate` instead of `halt` for registered gates not on the policy; this is a loud abort, not a soft block
 - `Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE` must be valid JSON and a JSON object; malformed JSON causes the env layer to be skipped entirely (defaults still apply); malformed individual entries are dropped individually
 - Capture exit code separately from output: `RESOLVED=$(python3 scripts/config.py resolve-question ...); RESOLVE_EXIT=$?`. Never pipe through `set -e` chains that swallow exit codes
 - When `source==conflict`, AskUser surfaces a follow-up write-back question after the user picks, to prevent conflict persisting across runs
@@ -741,6 +801,10 @@ NOTION_ENABLED="$(echo "$BATCH" | jq -r '.["followup.notion_enabled"]')"
 - `Z_HARNESS_NOTION_TOKEN` is env-only (not a TOML key); it overrides `followup.notion_token_path` secrets file lookup in `notion-push.py`. Never log it; never run `notion-push.py` wrappers under `set -x`.
 - `get-batch` always exits 0 — it does NOT exit 3 for unknown keys the way `get` does. Callers must check for `null` values in the JSON output to detect missing keys.
 - `inspect-all` is the canonical introspection tool — use it (not repeated `get` calls) when you need to audit the full current configuration state.
+- Axiom participation requires `axioms.enabled = true` (the default) AND `scripts/axiom-store.py` present. When the store is absent, axioms are a silent no-op — not an error.
+- Axioms never override config or memory; they only fill gaps (no higher-layer preference set). `source:"axiom_conflict"` means the higher layer still wins.
+- `axioms.kernel_budget_chars` and `axioms.extract_min_recurrence` must be positive integers; the string `"0"` fails validation (positive int means ≥1).
+- `Z_HARNESS_REGISTRY_ENABLED`, `Z_HARNESS_REGISTRY_STALE_SECS`, `Z_HARNESS_STRICT_OVERLAP`, `Z_HARNESS_EXTERNAL_DEFAULT`, and `Z_HARNESS_BASE_DIR` are NOT in config.py's DEFAULTS or VALIDATORS — they are consumed exclusively by `plan-path.sh` and `active-plan-registry.py`. `inspect-all` does not surface them.
 
 ## v2 deferrals
 

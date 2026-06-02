@@ -1,6 +1,6 @@
 {
   "concept": "followup-sink",
-  "last_updated": "2026-05-29",
+  "last_updated": "2026-06-02",
   "covers_spec": "z-harness/notion-followup-sink/SPEC.md",
   "source_file": [
     "scripts/sink-add.sh",
@@ -40,7 +40,7 @@
       "line": 1,
       "symbol": "followup_common",
       "kind": "module",
-      "summary": "Shared helpers: GlobalLockContext, acquire/release_global_lock, get_config_batch, _notion_push_entry_bg, log_sink_event, log_metrics_event, iso_now, git_head"
+      "summary": "Shared helpers: GlobalLockContext, acquire/release_global_lock, get_config_batch, project_followups_dir (via plan-path.sh followups_dir at call time), _notion_push_entry_bg, log_sink_event, log_metrics_event, iso_now, git_head; OBJC_DISABLE_INITIALIZE_FORK_SAFETY set at import"
     },
     {
       "file": "scripts/sink-add.sh",
@@ -117,7 +117,7 @@
       "line": 1,
       "symbol": "followup-reconcile-notion-impl",
       "kind": "module",
-      "summary": "Sweeps notion_sync_pending entries in both sinks; fetches config once with get_config_batch; uses --check-existing to dedup before create; appends notion_synced+notion_sync_cleared on success; returns JSON summary"
+      "summary": "Sweeps notion_sync_pending entries in both sinks; project sink root resolved via project_followups_dir (plan-path.sh at call time); fetches config once with get_config_batch; uses --check-existing to dedup before create; appends notion_synced+notion_sync_cleared on success; returns JSON summary"
     },
     {
       "file": "scripts/parse-followups-block.py",
@@ -205,6 +205,7 @@
       "_notion_push_entry_bg",
       "log_sink_event",
       "log_metrics_event",
+      "project_followups_dir",
       "GlobalLockContext",
       "acquire_global_lock",
       "release_global_lock"
@@ -215,7 +216,21 @@
       "scripts/sink-status-set-impl.py",
       "scripts/followup-reconcile-notion-impl.py"
     ],
-    "note": "Single home for all lock primitives and Notion push; eliminates per-caller reimplementation"
+    "note": "Single home for all lock primitives and Notion push; eliminates per-caller reimplementation. Sets OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES at module import to prevent macOS fork-safety abort when Python is invoked from bash."
+  },
+  "project_sink_root_resolution": {
+    "function": "project_followups_dir(proj_root)",
+    "mechanism": "calls plan-path.sh followups_dir at invocation time with cwd=proj_root",
+    "honours": "Z_HARNESS_BASE_DIR and full 5-tier fallback chain",
+    "call_time_semantics": "resolved on every call, not frozen at import or process start",
+    "fallback": "proj_root/z-harness/followups when plan-path.sh absent or fails",
+    "global_sink_is_fixed": "~/.z-harness/followups — intentionally outside this chain"
+  },
+  "macos_fork_safety": {
+    "guard": "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES",
+    "set_in": "scripts/followup_common.py module-level via os.environ.setdefault",
+    "reason": "bash initialises CoreFoundation before Python; any subsequent fork+exec (subprocess with cwd= or env=) in the child can abort on macOS without this guard",
+    "inherited_by": "all child processes spawned by any importer of followup_common"
   },
   "global_lock": {
     "path": "~/.z-harness/.followup-vs-implement.lock",
@@ -239,7 +254,7 @@
     "stale_takeover_event": "followup_lock_takeover",
     "held_during": "status transitions, evidence writes, command execution"
   },
-  "lock_ordering": "MANDATORY: per-entry FIRST then global. Any code path needing both locks must follow this order. Inversion causes deadlock.",
+  "lock_ordering": "MANDATORY AND UNCHANGED: per-entry FIRST then global. Any code path needing both locks must follow this order. Inversion causes deadlock.",
   "incremental_checkpoint": {
     "field": "_checkpoint",
     "keys": ["event_count", "journal_byte_length", "tail_sha256", "tail_len"],
@@ -392,7 +407,7 @@
     "prompt_options": ["proceed", "refresh (re-stamp; transitions to blocked, then user runs /z-followup-refresh)", "dismiss"]
   },
   "persistence_layout": {
-    "project_sink": "z-harness/followups/",
+    "project_sink": "resolved via plan-path.sh followups_dir at call time (fallback: <proj_root>/z-harness/followups)",
     "global_sink": "~/.z-harness/followups/",
     "structure": {
       "index.jsonl": "append-only event log",
@@ -427,7 +442,7 @@
     "retry": "3 attempts, exponential backoff 1s/4s/16s; honors Retry-After header on 429",
     "on_final_failure": "exit 4; caller stamps notion_sync_pending event; logs followup_notion_sync_failure; never blocks local operation",
     "idempotency": "page ownership verified via z_harness_entry_id immutable property; mismatch exits 5 (followup_notion_remote_id_mismatch)",
-    "reconciler": "scripts/followup-reconcile-notion-impl.py; fetches config once with get_config_batch; uses --check-existing to dedup before create"
+    "reconciler": "scripts/followup-reconcile-notion-impl.py; project sink root resolved via project_followups_dir at call time; fetches config once with get_config_batch; uses --check-existing to dedup before create"
   },
   "config_namespace": {
     "section": "[followup]",
@@ -493,7 +508,7 @@
     "Global cross-tool lock held briefly (claim + view rebuild + evidence validate only); NEVER during command execution",
     "Per-entry lock held for duration of command execution; heartbeat at 30s via daemon; stale takeover after 2h",
     "cited_paths cap at 16; if exceeded use dir_blob_hashes for common ancestor (reject if ancestor is repo root or depth < 2)",
-    "Lock ordering: per-entry FIRST then global; no path may invert this order",
+    "Lock ordering: per-entry FIRST then global; no path may invert this order — UNCHANGED",
     "sink field enum is {project, global} only; Notion is a mirror tracked via notion_remote_id + notion_sync_pending",
     "index.jsonl is append-only; all readers tolerate unknown event kinds and fields (forward-compat)",
     "All lock callers use GlobalLockContext or acquire/release_global_lock from followup_common.py — no reimplementation",
@@ -501,7 +516,9 @@
     "File blob hashes are sha256 of raw file bytes; NOT git hash-object",
     "sink-view-rebuild.sh exits 4 (not 1) when global lock is not held; wrappers must hold the lock before calling it",
     "done→dismissed transition stamps dismissed_after_done=True; metrics consumers must filter this to count clean done states",
-    "Dedup hash excludes source_artifact; same logical task from different artifacts is one entry"
+    "Dedup hash excludes source_artifact; same logical task from different artifacts is one entry",
+    "Project sink root resolved at call time via plan-path.sh followups_dir — not frozen at import or process start",
+    "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES set at followup_common.py import time via os.environ.setdefault — prevents macOS fork abort"
   ],
   "gotchas": [
     "sink enum is {project, global} only; attempting sink=notion is a schema validation error",
@@ -512,7 +529,7 @@
     "auto-close kill-switch (followup.auto_close_low_risk_enabled) fails CLOSED when config.py exists but returns a non-bool or errors",
     "diff_stat==0 alone is not condition A — touched_paths must also be empty; binary/rename/mode-only changes produce non-empty touched_paths",
     "Global lock is never held during command execution; holding it longer (wrapping the Skill invocation) is a deadlock risk with /z-implement-*",
-    "Lock ordering violation (global before per-entry) is a deadlock risk; sink-claim.sh is the canonical reference implementation",
+    "Lock ordering violation (global before per-entry) is a deadlock risk; sink-claim.sh is the canonical reference implementation — ordering is UNCHANGED",
     "notion_remote_id mismatch silently blocks future syncs; reconciler --check-existing resolves this",
     "followup_block_parse_failed in reviewer return never crashes the reviewer; follow-ups are opportunistic",
     "Z_HARNESS_FOLLOWUP_CALLER_DEPTH=1 must be set (not just passed as arg) before invoking the entry's recommended_command",
@@ -524,7 +541,9 @@
     "Schema files have moved: old paths schemas/followup-entry.json and schemas/audit-evidence.json no longer exist",
     "Phase 0.1 lock probe in /z-followup-next is a HEURISTIC ONLY — it is NOT a mutual-exclusion guarantee; acquire+release proves nothing about concurrent access",
     "sink-view-rebuild.sh exits 4 (not an error in the consumer sense) when global lock is not held; callers must not treat 4 as success",
-    "git_head() in followup_common.py raises RuntimeError on failure; callers treat this as a hard rejection and NEVER fall back to a sentinel value"
+    "git_head() in followup_common.py raises RuntimeError on failure; callers treat this as a hard rejection and NEVER fall back to a sentinel value",
+    "project_followups_dir() calls plan-path.sh followups_dir at invocation time; the path is NOT frozen at import — a live base change is reflected immediately",
+    "OBJC_DISABLE_INITIALIZE_FORK_SAFETY guard is set in followup_common.py at module import; without it, Python forked from bash can CoreFoundation-abort on macOS"
   ],
   "memories": []
 }

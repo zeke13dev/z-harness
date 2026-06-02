@@ -1,7 +1,7 @@
 {
   "concept": "skills",
-  "last_updated": "2026-05-28",
-  "covers_spec": "askuser-prefs-hook/20260527",
+  "last_updated": "2026-06-02",
+  "covers_spec": "registry-lifecycle-impl/20260601",
   "source_file": [
     "skills/z-amend/SKILL.md",
     "skills/z-audit-plan/SKILL.md",
@@ -24,6 +24,7 @@
     "skills/z-test/SKILL.md",
     "skills/z-update/SKILL.md",
     "skills/z-uplift/SKILL.md",
+    "skills/z-where/SKILL.md",
     "commands/z-audit.md",
     "commands/z-audit-plan-style.md",
     "commands/z-fix.md",
@@ -66,7 +67,7 @@
       "line": 1,
       "symbol": "z-debug",
       "kind": "module",
-      "summary": "Unknown-root-cause debug flow; Phase 2.5 conditional bisect fast-path; hypothesis rounds; posterior table; MR-review on fix; post-mortem; Phase 10 memory-review (shipped branch only); slug-confirm resolver (halt→debug_halt) in Setup; Phase 10 clears .notify-dedup-session unconditionally."
+      "summary": "Unknown-root-cause debug flow; Phase 2.5 conditional bisect fast-path; hypothesis rounds; posterior table; MR-review on fix; post-mortem; Phase 10 memory-review (shipped branch only); slug-confirm resolver (halt→debug_halt) in Setup; active-plan registration in Setup after debug_run_start; FINALIZE_STATUS rule covers all exit paths."
     },
     {
       "file": "commands/z-audit.md",
@@ -108,21 +109,21 @@
       "line": 1,
       "symbol": "z-do",
       "kind": "module",
-      "summary": "Plan-less small-task runner; config.py export-env at Setup step 6; should-notify guards on all PushNotifications; doc-fetcher grounding (skipped when Z_HARNESS_DOCS_ALWAYS_APPLY=never); reviewer gate."
+      "summary": "Plan-less small-task runner; active-plan registration in Setup after do_run_start; config.py export-env at Setup step 6; should-notify guards on all PushNotifications; doc-fetcher grounding (skipped when Z_HARNESS_DOCS_ALWAYS_APPLY=never); reviewer gate."
     },
     {
       "file": "skills/z-implement-all/SKILL.md",
       "line": 1,
       "symbol": "z-implement-all",
       "kind": "module",
-      "summary": "Full task queue orchestration; --tasks fast path; tree gates; batching; caps; Phase 9 memory-review with memory_review_terminal event; deduped push-notify via .notify-dedup-session; notify policy via docs/human/config.md."
+      "summary": "Full task queue orchestration; --tasks fast path; tree gates; batching; caps; Phase 0.0 registration inside Setup after slug-discovery + tree-validation bind $BASE; scope-extractor seeds scope; graduated overlap policy (OVL_RC 0/10/20/other); heartbeat at each task-dispatch boundary; FINALIZE_STATUS rule; Phase 9 memory-review; deduped push-notify via .notify-dedup-session."
     },
     {
       "file": "skills/z-implement-next/SKILL.md",
       "line": 1,
       "symbol": "z-implement-next",
       "kind": "module",
-      "summary": "Single-task implementation; model from **Complexity:** stamp; reviewer gate; no auto-retry."
+      "summary": "Single-task implementation; model from **Complexity:** stamp; execution order: Phase 0.2 slug-discovery → Phase 0.0 register → Phase 0.1 lock-check; heartbeat at task-dispatch boundary; reviewer gate; no auto-retry."
     },
     {
       "file": "skills/z-improve/SKILL.md",
@@ -157,21 +158,21 @@
       "line": 1,
       "symbol": "z-plan-light",
       "kind": "module",
-      "summary": "Small-fix planner; FIX.md only; inline implementation; reviewer gate; optional scope-probe agent; slug-confirm resolver (halt→light_halt) in Setup."
+      "summary": "Small-fix planner; FIX.md only; inline implementation; reviewer gate; active-plan registration in Setup after light_run_start; FINALIZE_STATUS rule; slug-confirm resolver (halt→light_halt) in Setup."
     },
     {
       "file": "skills/z-plan-split/SKILL.md",
       "line": 1,
       "symbol": "z-plan-split",
       "kind": "module",
-      "summary": "Split 2-6 clusters; cluster_id vs cluster_slug; strict early-exit telemetry; overlap reconciliation."
+      "summary": "Split 2-6 clusters; cluster_id vs cluster_slug; strict early-exit telemetry; overlap reconciliation; active-plan registration in Setup after plan_split_run_start; FINALIZE_STATUS rule covers all hard-refuse exits."
     },
     {
       "file": "skills/z-plan/SKILL.md",
       "line": 1,
       "symbol": "z-plan",
       "kind": "module",
-      "summary": "Full planner; config.py export-env at Setup step 4a; should-notify guards on PushNotifications; docs-freshness gate; consult; SPEC/PLAN/TASKS; parallel complexity-classifier."
+      "summary": "Full planner; active-plan registration in Setup immediately after run_start; config.py export-env at Setup step 4a; should-notify guards on PushNotifications; docs-freshness gate; consult; SPEC/PLAN/TASKS; parallel complexity-classifier; scope-extractor seed after TASKS.md finalized; heartbeat at Phase 8 boundary."
     },
     {
       "file": "skills/z-research/SKILL.md",
@@ -192,7 +193,7 @@
       "line": 1,
       "symbol": "z-stats",
       "kind": "module",
-      "summary": "Read-only shell metrics; Phase 4b reads review_agent_call + memory_review_terminal events with old-shape phase_end back-compat; Phase 4c reads askuser_resolved events (preference resolutions by result/source/question_id + conflict rate)."
+      "summary": "Read-only shell metrics; Phase 0b prints resolved base + repo-id + active plan count from registry; Phase 4b reads review_agent_call + memory_review_terminal events with old-shape phase_end back-compat; Phase 4c reads askuser_resolved events (preference resolutions by result/source/question_id + conflict rate)."
     },
     {
       "file": "skills/z-suggest-memory/SKILL.md",
@@ -221,10 +222,18 @@
       "symbol": "z-uplift",
       "kind": "module",
       "summary": "Bulk codebase quality uplift: decompose into components, cross-cutting pass, parallel auditor subagents, sequential z-implement-all."
+    },
+    {
+      "file": "skills/z-where/SKILL.md",
+      "line": 1,
+      "symbol": "z-where",
+      "kind": "module",
+      "summary": "Read-only registry diagnostic; Phase 0 prints base+repo-id header; Phase 1 renders live active-plan table (slug, command, phase, branch, current_task, age, status; stale if last_heartbeat >30min); Phase 2 optional overlap check via --run-id or Z_HARNESS_RUN_ID (OVL_RC 0/10/20). No writes, no LLM calls, no subagent dispatch."
     }
   ],
   "depends_on": [
     "agents",
+    "active-plan-registry",
     "commands",
     "providers-registry",
     "scripts"
@@ -287,7 +296,15 @@
     "z-suggest-memory --kind routing-preference requires --question-id, --value, --strength, and --scope; mutually exclusive with --edit, --delete, and --from-candidate-json.",
     "z-suggest-memory --kind routing-preference writes to docs/llm/workflow.json (global) or docs/llm/workflow-<project-slug>.json (project scope); creates stub + INDEX entry if file absent.",
     "z-research Phase 0 (dispatch decision, user-driven) runs before Phase 0.5 (cost gate); cost gate always runs before Phase 1 sub-command dispatch.",
-    "z-research requires at least one sub-command to succeed before launching the synthesis panel; all 3 panel perspectives must succeed before calling research-judge."
+    "z-research requires at least one sub-command to succeed before launching the synthesis panel; all 3 panel perspectives must succeed before calling research-judge.",
+    "Registry Phase 0.0 runs after slug/base discovery binds $Z_HARNESS_SLUG and $BASE; it must not create a record before any structural-validation halt that would leave an uncleanable zombie.",
+    "FINALIZE_STATUS rule: any run-ending halt AFTER REG_RC==0 (a record exists) sets FINALIZE_STATUS=aborted and calls deregister --status aborted; on register failure (REG_RC!=0) do NOT deregister (no record was written).",
+    "Compaction-pause exits (condition 3 in z-implement-all) are pauses not aborts; do NOT deregister; the next invocation re-registers idempotently.",
+    "Overlap scan exit codes: 0=no overlap (silent proceed); 10=advisory overlap (proceed/wait/abort gate, unattended proceeds); 20=blocking (only under Z_HARNESS_STRICT_OVERLAP=1 with explicit*explicit path match) — unconditional halt.",
+    "Heartbeat calls use || true and must never block task dispatch on a registry error (best-effort, non-fatal); the CLI self-logs registry_error on internal failure.",
+    "z-where does not emit start/end telemetry events for itself; it is read-only against the registry and never writes.",
+    "z-stats Phase 0b always prints the resolved base + repo-id + active-plan count header unconditionally (not gated behind Z_HARNESS_EXPLAIN_RESOLUTION).",
+    "z-implement-next execution order is Phase 0.2 (slug-discovery, binds $BASE) → Phase 0.0 (register) → Phase 0.1 (lock-check); the document order differs from the execution order."
   ],
   "gotchas": [
     "z-audit-plan cannot run without SPEC/PLAN/TASKS; no-plan routes to z-plan.",
@@ -298,6 +315,7 @@
     "Route chains cap at two entries and block ping-pong to the prior command.",
     "z-plan-split cluster_id is telemetry-only; cluster_slug is the path segment.",
     "z-implement-all --tasks derives BASE from task-file parent and skips tree gates.",
+    "z-implement-next Phase 0.1 lock check halts the entire run if a follow-up consumer is running; it fires after Phase 0.0 registration so a record exists and must be deregistered (FINALIZE_STATUS=aborted) before exit.",
     "z-implement-next has no auto-retry; flip stamp to **Complexity:** high and re-invoke, or use z-implement-all.",
     "z-maintain-docs --audit may pause before consultant audit and fast-forward via state.",
     "Adding a tag alias records TAGS.txt only; memory tags collapse on a later run.",
@@ -342,7 +360,14 @@
     "z-suggest-memory --kind routing-preference is mutually exclusive with --edit, --delete, and --from-candidate-json; combining any two returns STATUS: bad_input.",
     "z-suggest-memory --kind routing-preference validates question_id via config.py list-question-ids; unknown IDs return bad_input immediately.",
     "z-suggest-memory Phase 3a routing-flavored text detection only fires when candidate text is already available AND no explicit type is set; no-match or no-text cases proceed silently to Phase 3b.",
-    "z-suggest-memory yes-config branch in Phase 3a invokes config.py set, which is not yet shipped as of this writing — the call is documented for when it lands."
+    "z-suggest-memory yes-config branch in Phase 3a invokes config.py set, which is not yet shipped as of this writing — the call is documented for when it lands.",
+    "Registry REG_RC==3 means register FAILED and no record was written; do NOT call deregister on this branch. Any other nonzero REG_RC is treated identically to REG_RC==3 by all skills.",
+    "The scope-extractor subagent (Haiku) is best-effort: update-scope returns 0 by design and self-logs registry_error on internal failure; orchestrators call it with || true and do NOT add a || log after it (that would be dead code).",
+    "Heartbeat subcommand also returns 0 by design and self-logs registry_error on internal failure; orchestrators call it with || true and must not add a misleading || log after it.",
+    "z-implement-all Phase 0.0 must run INSIDE Setup, immediately after Setup step 3 binds $BASE — after all slug-discovery and tree-validation gates. Early-exit gates (tree_depth_exceeded, shared_concerns_missing, etc.) that fire before Phase 0.0 leave no registry record to clean up.",
+    "z-where Phase 2 overlap check exit codes: 0=none, 10=advisory (display human-readable output), 20=blocking (prepend [BLOCKING] to header), any other nonzero=registry error (display error message).",
+    "z-where staleness threshold for active-plan records is 30 minutes since last_heartbeat; records older than that display as 'stale' regardless of status field.",
+    "z-stats Phase 0b active-plan count falls back to '(registry unavailable)' if the registry call fails or returns empty; this is a display-only field and never fails the command."
   ],
   "memories": []
 }
