@@ -49,8 +49,8 @@ jobs:
           git config --global user.email "ci@z-harness.test"
           git config --global user.name "z-harness CI"
 
-      - name: Run Python test suite (tests/ + scripts/ + runtime/tests/)
-        run: python3 -m pytest tests/ scripts/ runtime/tests/ --junitxml=pytest-report.xml
+      - name: Run Python test suite (tests/ + scripts/ + runtime/)
+        run: python3 -m pytest tests/ scripts/ runtime/ --junitxml=pytest-report.xml
 
       - name: Upload test report
         if: always()

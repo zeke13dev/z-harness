@@ -2,11 +2,12 @@ SHELL := /usr/bin/env bash
 .PHONY: test test-sh conformance conformance-live conformance-record lint lint-strict preflight bench-autonomy-check
 
 # Full Python test suite: the unit/integration tests under tests/, the
-# script-level tests under scripts/, and the runtime driver/dispatch tests under
-# runtime/tests/. This is the primary regression gate and is what CI
-# (.github/workflows/tests.yml) runs. Requires Python 3.11+ (tomllib).
+# script-level tests under scripts/, and the runtime dispatch + driver tests
+# under runtime/ (runtime/tests/ + runtime/drivers/*/tests/). This is the primary
+# regression gate and is what CI (.github/workflows/tests.yml) runs.
+# Requires Python 3.11+ (tomllib).
 test:
-	python3 -m pytest tests/ scripts/ runtime/tests/
+	python3 -m pytest tests/ scripts/ runtime/
 
 # Standalone shell test scripts (bash assertion harnesses, not pytest).
 # Run for local verification; each script self-reports pass/fail counts.

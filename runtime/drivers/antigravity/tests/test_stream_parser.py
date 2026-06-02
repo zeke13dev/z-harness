@@ -159,17 +159,37 @@ def test_whitespace_only_lines_skipped():
 
 def test_stream_parser_does_not_import_driver():
     """
-    Importing stream_parser must NOT cause driver to appear in sys.modules.
-    This guards against the circular-dep invariant stated in the spec.
+    stream_parser.py must not import driver.py (the circular-dep invariant from
+    the spec: driver imports stream_parser, so stream_parser must not import back).
+
+    Verified by source/AST inspection rather than a sys.modules probe. Importing
+    the submodule `runtime.drivers.antigravity.stream_parser` necessarily runs the
+    package __init__, which eagerly imports driver to expose AntigravityDriver as
+    the public API — so sys.modules is not a valid probe for this invariant. The
+    real, spec-level invariant is that stream_parser's own code never imports driver.
     """
-    import importlib
-    import sys
+    import ast
+    from pathlib import Path
 
-    # Remove any cached import so we get a fresh load
-    mods_to_purge = [k for k in sys.modules if "antigravity" in k]
-    for mod in mods_to_purge:
-        sys.modules.pop(mod, None)
+    src = Path(__file__).resolve().parent.parent / "stream_parser.py"
+    tree = ast.parse(src.read_text(encoding="utf-8"))
 
-    import runtime.drivers.antigravity.stream_parser  # noqa: F401
+    def _is_driver_module(name: str | None) -> bool:
+        return bool(name) and (name == "driver" or name.endswith(".driver"))
 
-    assert "runtime.drivers.antigravity.driver" not in sys.modules
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            # from .driver import X  /  from runtime.drivers.antigravity.driver import X
+            assert not _is_driver_module(node.module), (
+                f"stream_parser must not import from driver (found: from {node.module} import ...)"
+            )
+            # from . import driver
+            for alias in node.names:
+                assert alias.name != "driver", (
+                    "stream_parser must not import the driver module (found: from . import driver)"
+                )
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                assert not _is_driver_module(alias.name), (
+                    f"stream_parser must not import driver (found: import {alias.name})"
+                )
