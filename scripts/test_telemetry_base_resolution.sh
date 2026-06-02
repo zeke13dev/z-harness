@@ -182,14 +182,18 @@ assert_dir_not_exists "T002-B: repo z-harness/ NOT created" \
 rm -rf "$REPO_B" "$BASE_B"
 
 # ---------------------------------------------------------------------------
-# T002-C: stage-1 invariant — unset Z_HARNESS_BASE_DIR, unset Z_HARNESS_EXTERNAL_DEFAULT
-#   → log-event.sh resolves base to <repo>/z-harness (tier 5, same as before T002)
+# T002-C: opt-out invariant — Z_HARNESS_EXTERNAL_DEFAULT=0, unset Z_HARNESS_BASE_DIR
+#   → log-event.sh resolves base to <repo>/z-harness (tier 5, in-repo opt-out)
 #
-# Failure class: default relocation breaks existing plans (stage-1 regression)
+# After the Phase-D flip, the true default (EXTERNAL_DEFAULT unset) routes to
+# the external tier. This test explicitly sets =0 to assert the opt-out (in-repo)
+# behavior — mirroring how test_base_dir.sh TEST-001 was updated.
+#
+# Failure class: explicit in-repo opt-out (=0) must still write under repo
 # ---------------------------------------------------------------------------
 
 echo ""
-echo "T002-C: stage-1 invariant — unset BASE_DIR → base is <repo>/z-harness"
+echo "T002-C: in-repo opt-out (EXTERNAL_DEFAULT=0) — BASE_DIR unset → base is <repo>/z-harness"
 
 REPO_C="$(_tmpdir)"
 git -C "$REPO_C" init -q
@@ -200,7 +204,8 @@ RUN_C="t002-c-run"
 
 (
   cd "$REPO_C"
-  bash "$LOG_EVENT" "$RUN_C" "t002_stage1_event" '{"t":"T002-C"}' 2>/dev/null
+  Z_HARNESS_EXTERNAL_DEFAULT=0 \
+    bash "$LOG_EVENT" "$RUN_C" "t002_stage1_event" '{"t":"T002-C"}' 2>/dev/null
 )
 
 assert_file_exists "T002-C: metrics.jsonl under repo z-harness/ in stage 1" \
@@ -209,6 +214,43 @@ assert_file_exists "T002-C: events.jsonl under repo z-harness/archive/" \
   "$REPO_C/z-harness/archive/$RUN_C/events.jsonl"
 
 rm -rf "$REPO_C"
+
+# ---------------------------------------------------------------------------
+# T002-C2: external-default assertion — unset EXTERNAL_DEFAULT, unset BASE_DIR
+#   → log-event.sh resolves base to an EXTERNAL tier (the new default after Phase-D flip)
+#
+# Failure class: flip not applied — unset still behaves like old in-repo default
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "T002-C2: external default (EXTERNAL_DEFAULT unset) — BASE_DIR unset → base is external tier"
+
+REPO_C2="$(_tmpdir)"
+git -C "$REPO_C2" init -q
+git -C "$REPO_C2" config user.email "test@test.local"
+git -C "$REPO_C2" config user.name "Test"
+
+XDG_C2="$(_tmpdir)"
+RUN_C2="t002-c2-run"
+
+(
+  cd "$REPO_C2"
+  XDG_STATE_HOME="$XDG_C2" \
+  HOME="/nonexistent-home-$$" \
+    bash "$LOG_EVENT" "$RUN_C2" "t002_external_event" '{"t":"T002-C2"}' 2>/dev/null
+)
+
+# Must NOT have written under repo z-harness/ (external tier chosen)
+REPO_C2_REAL="$(realpath "$REPO_C2" 2>/dev/null || echo "$REPO_C2")"
+if [[ -f "$REPO_C2_REAL/z-harness/metrics.jsonl" ]]; then
+  echo "  FAIL: T002-C2: metrics.jsonl landed under repo z-harness/ (old behavior) — flip not in effect"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: T002-C2: metrics.jsonl did NOT land under repo z-harness/ (external default active)"
+  PASS=$((PASS + 1))
+fi
+
+rm -rf "$REPO_C2" "$XDG_C2"
 
 # ---------------------------------------------------------------------------
 # T002-D: followup_common.py log_metrics_event resolves base at call time
@@ -344,10 +386,12 @@ EXPECTED_GLOBAL_F="$HOME/.z-harness/followups"
 assert_eq "T002-F: global sink root is always ~/.z-harness/followups" \
   "$EXPECTED_GLOBAL_F" "$GLOBAL_SINK_F"
 
-# Verify: if Z_HARNESS_BASE_DIR is unset, project_followups_dir() returns <repo>/z-harness/followups
+# Verify: with Z_HARNESS_BASE_DIR unset and EXTERNAL_DEFAULT=0 (opt-out),
+# project_followups_dir() returns <repo>/z-harness/followups (in-repo tier).
+# After the Phase-D flip, EXTERNAL_DEFAULT must be explicitly =0 for in-repo behavior.
 PROJECT_SINK_F_UNSET="$(
   cd "$REPO_F"
-  _Z_HARNESS_RESOLVING_BASE=1 \
+  Z_HARNESS_EXTERNAL_DEFAULT=0 _Z_HARNESS_RESOLVING_BASE=1 \
     python3 -c "
 import sys
 sys.path.insert(0, '${SCRIPTS_DIR}')
@@ -356,7 +400,7 @@ from followup_common import project_followups_dir
 print(project_followups_dir(Path('${REPO_F}')))
 " 2>/dev/null
 )"
-assert_eq "T002-F: project_followups_dir() defaults to <repo>/z-harness/followups" \
+assert_eq "T002-F: project_followups_dir() with EXTERNAL_DEFAULT=0 defaults to <repo>/z-harness/followups" \
   "${REPO_F}/z-harness/followups" "$PROJECT_SINK_F_UNSET"
 
 rm -rf "$REPO_F" "$BASE_F"
