@@ -83,14 +83,18 @@ if [[ "${1:-}" == "--self-test" ]]; then
   TD2="$(mktemp -d "${TMPDIR_ROOT}/overnight_preflight_t2_XXXXXX")"
   mkdir -p "$TD2/archive"
   printf '# PLAN\n' > "$TD2/PLAN.md"
+  # Pin the artifact base to a temp dir (the default base is now external).
+  # The collision event must land under the configured canonical base, not under
+  # the --base plan dir or cwd; this keeps that assertion hermetic.
+  ZH_BASE2="$(mktemp -d "${TMPDIR_ROOT}/overnight_preflight_zhbase2_XXXXXX")"
   EXIT2=0
-  OUTPUT2="$(Z_HARNESS_SLUG="test-slug-2" bash "$0" check-collisions \
+  OUTPUT2="$(Z_HARNESS_BASE_DIR="$ZH_BASE2" Z_HARNESS_SLUG="test-slug-2" bash "$0" check-collisions \
     --chain "plan,test,implement-all,review-all" \
     --base "$TD2" 2>&1)" || EXIT2=$?
   _assert_exit "PLAN.md exists + plan chain → exit nonzero" "1" "$EXIT2"
   # Verify a slug_collision_halt event was written.
-  # log-event.sh routes to the canonical plan dir: z-harness/plans/<slug>/archive/<run>/events.jsonl
-  EVENT_FILE2="$REPO_ROOT/z-harness/plans/test-slug-2/archive/preflight-test-slug-2/events.jsonl"
+  # log-event.sh routes to the canonical plan dir: <base>/plans/<slug>/archive/<run>/events.jsonl
+  EVENT_FILE2="$ZH_BASE2/plans/test-slug-2/archive/preflight-test-slug-2/events.jsonl"
   if [[ -f "$EVENT_FILE2" ]]; then
     EVENT_CONTENT2="$(cat "$EVENT_FILE2")"
     if printf '%s' "$EVENT_CONTENT2" | grep -q "slug_collision_halt"; then
@@ -101,12 +105,11 @@ if [[ "${1:-}" == "--self-test" ]]; then
       printf "        content: %s\n" "$EVENT_CONTENT2"
       FAIL=$((FAIL + 1))
     fi
-    # Clean up the test artifact
-    rm -rf "$REPO_ROOT/z-harness/plans/test-slug-2"
   else
     echo "  FAIL: events.jsonl not created at $EVENT_FILE2"
     FAIL=$((FAIL + 1))
   fi
+  rm -rf "$ZH_BASE2"
   # Verify remediation message in output
   if printf '%s' "$OUTPUT2" | grep -q "already has a finished plan"; then
     echo "  PASS: remediation message emitted"
@@ -174,28 +177,32 @@ if [[ "${1:-}" == "--self-test" ]]; then
   TD8="$(mktemp -d "${TMPDIR_ROOT}/overnight_preflight_t8_XXXXXX")"
   mkdir -p "$TD8/archive"
   printf '# PLAN\n' > "$TD8/PLAN.md"
+  # Pin the artifact base to an absolute temp dir. The point of this test is
+  # cwd-independence: invoked from /tmp, the event must still land under the
+  # configured canonical base (not a cwd-derived path), which the pinned
+  # absolute Z_HARNESS_BASE_DIR makes verifiable and hermetic.
+  ZH_BASE8="$(mktemp -d "${TMPDIR_ROOT}/overnight_preflight_zhbase8_XXXXXX")"
   EXIT8=0
   # Run from /tmp (not the repo root) using absolute path to the script
-  OUTPUT8="$(cd /tmp && Z_HARNESS_SLUG="test-slug-8" bash "$SCRIPTS_DIR/overnight-preflight.sh" check-collisions \
+  OUTPUT8="$(cd /tmp && Z_HARNESS_BASE_DIR="$ZH_BASE8" Z_HARNESS_SLUG="test-slug-8" bash "$SCRIPTS_DIR/overnight-preflight.sh" check-collisions \
     --chain "plan,test" \
     --base "$TD8" 2>&1)" || EXIT8=$?
   _assert_exit "collision from /tmp cwd → exit nonzero" "1" "$EXIT8"
-  # The event must appear in the canonical repo path, not /tmp
-  EVENT_FILE8="$REPO_ROOT/z-harness/plans/test-slug-8/archive/preflight-test-slug-8/events.jsonl"
+  # The event must appear under the configured canonical base, not /tmp
+  EVENT_FILE8="$ZH_BASE8/plans/test-slug-8/archive/preflight-test-slug-8/events.jsonl"
   if [[ -f "$EVENT_FILE8" ]]; then
     if grep -q "slug_collision_halt" "$EVENT_FILE8"; then
-      echo "  PASS: slug_collision_halt event written to canonical repo path (not /tmp)"
+      echo "  PASS: slug_collision_halt event written to canonical base path (not /tmp)"
       PASS=$((PASS + 1))
     else
       echo "  FAIL: slug_collision_halt event NOT found in canonical events.jsonl"
       FAIL=$((FAIL + 1))
     fi
-    rm -rf "$REPO_ROOT/z-harness/plans/test-slug-8"
   else
     echo "  FAIL: events.jsonl not created at canonical path $EVENT_FILE8"
     FAIL=$((FAIL + 1))
   fi
-  rm -rf "$TD8"
+  rm -rf "$ZH_BASE8" "$TD8"
 
   # ---- Summary ---------------------------------------------------------------
 
