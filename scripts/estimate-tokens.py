@@ -132,30 +132,36 @@ def _default_metrics_path() -> Path:
 # ---------------------------------------------------------------------------
 
 # Maps start/end event `kind` values to canonical command keys.
-# Covers the 6 profiled commands that have distinct start kinds in the wild.
+# Used ONLY as a legacy fallback when an event lacks the `command` field (pre-T001
+# events). The `command` field added by T001 is the authoritative attribution source.
+#
+# NOTE: generic `run_start`/`run_end` is emitted by BOTH /z-plan AND /z-research
+# (see commands/z-research.md:83 and commands/z-plan.md). Kind alone cannot
+# disambiguate them. The kind-fallback maps them to z-plan as a best-effort default
+# for legacy events; for pre-T001 z-research events the attribution will be wrong.
+# The `command` field (added by T001) is the only reliable way to distinguish the two.
 _KIND_TO_COMMAND: dict[str, str] = {
-    "research_run_start": "z-research",
-    "research_run_end": "z-research",
-    "brainstorm_run_start": "z-brainstorm",
-    "brainstorm_run_end": "z-brainstorm",
+    # generic run_start/run_end is emitted by both /z-plan and /z-research;
+    # attribution to z-plan here is ambiguous for pre-T001 legacy events only.
     "run_start": "z-plan",
     "run_end": "z-plan",
-    "plan_audit_start": "z-audit",
-    "plan_audit_end": "z-audit",
+    "brainstorm_run_start": "z-brainstorm",
+    "brainstorm_run_end": "z-brainstorm",
+    "audit_run_start": "z-audit",   # confirmed: commands/z-audit.md:83
+    "audit_run_end": "z-audit",
     "uplift_run_start": "z-uplift",
     "uplift_run_end": "z-uplift",
     "plan_split_run_start": "z-plan-split",
     "plan_split_run_end": "z-plan-split",
-    "debug_run_start": "z-debug",
+    "debug_run_start": "z-debug",   # confirmed: commands/z-debug.md:39
     "debug_run_end": "z-debug",
 }
 
 # Terminal event kind suffixes that mark normal completion.
 _TERMINAL_KINDS: frozenset[str] = frozenset({
     "run_end",
-    "research_run_end",
     "brainstorm_run_end",
-    "plan_audit_end",
+    "audit_run_end",
     "uplift_run_end",
     "plan_split_run_end",
     "debug_run_end",

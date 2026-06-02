@@ -73,7 +73,9 @@ def _completed_research_run(
     events: list[dict] = [
         {
             "run": run_id,
-            "kind": "research_run_start",
+            # z-research emits generic run_start/run_end (commands/z-research.md:83),
+            # not research_run_start. The command field provides attribution.
+            "kind": "run_start",
             "command": "z-research",
             "ts": f"{ts_base}T00:00:00Z",
             "subagent_input_tokens": half_own,
@@ -81,7 +83,7 @@ def _completed_research_run(
         },
         {
             "run": run_id,
-            "kind": "research_run_end",
+            "kind": "run_end",
             "command": "z-research",
             "ts": f"{ts_base}T00:30:00Z",
             "status": "ok",
@@ -180,13 +182,13 @@ class TestEmpericalFires(unittest.TestCase):
                 run = f"precise-r{i}"
                 # start: input=own, output=0 → tokens = own
                 events.append({
-                    "run": run, "kind": "research_run_start", "command": "z-research",
+                    "run": run, "kind": "run_start", "command": "z-research",
                     "ts": f"2026-05-{i+1:02d}T01:00:00Z",
                     "subagent_input_tokens": own, "subagent_output_tokens": 0,
                 })
                 # end: input=0, output=0 → tokens = 0
                 events.append({
-                    "run": run, "kind": "research_run_end", "command": "z-research",
+                    "run": run, "kind": "run_end", "command": "z-research",
                     "ts": f"2026-05-{i+1:02d}T01:30:00Z",
                     "status": "ok",
                     "subagent_input_tokens": 0, "subagent_output_tokens": 0,
@@ -269,7 +271,7 @@ class TestEmpericalHygiene(unittest.TestCase):
             events.extend(_completed_research_run("r1", "2026-05-02", own_tokens=3_000_000))
             # Abandoned run
             events.extend([
-                {"run": "r-ab", "kind": "research_run_start", "command": "z-research",
+                {"run": "r-ab", "kind": "run_start", "command": "z-research",
                  "ts": "2026-05-03T00:00:00Z", "subagent_input_tokens": 10000, "subagent_output_tokens": 5000},
                 {"run": "r-ab", "kind": "cost_gate_decision", "command": "z-research",
                  "ts": "2026-05-03T00:01:00Z", "choice": "abandon"},
@@ -290,9 +292,9 @@ class TestEmpericalHygiene(unittest.TestCase):
             events.extend(_completed_research_run("r1", "2026-05-02", own_tokens=3_000_000))
             # Halted run
             events.extend([
-                {"run": "r-halt", "kind": "research_run_start", "command": "z-research",
+                {"run": "r-halt", "kind": "run_start", "command": "z-research",
                  "ts": "2026-05-03T00:00:00Z", "subagent_input_tokens": 10000, "subagent_output_tokens": 5000},
-                {"run": "r-halt", "kind": "research_run_end", "command": "z-research",
+                {"run": "r-halt", "kind": "run_end", "command": "z-research",
                  "ts": "2026-05-03T00:01:00Z", "status": "halted",
                  "subagent_input_tokens": 0, "subagent_output_tokens": 0},
             ])
@@ -310,9 +312,9 @@ class TestEmpericalHygiene(unittest.TestCase):
             events.extend(_completed_research_run("r0", "2026-05-01", own_tokens=2_000_000))
             # Errored run
             events.extend([
-                {"run": "r-err", "kind": "research_run_start", "command": "z-research",
+                {"run": "r-err", "kind": "run_start", "command": "z-research",
                  "ts": "2026-05-02T00:00:00Z", "subagent_input_tokens": 10000, "subagent_output_tokens": 5000},
-                {"run": "r-err", "kind": "research_run_end", "command": "z-research",
+                {"run": "r-err", "kind": "run_end", "command": "z-research",
                  "ts": "2026-05-02T00:01:00Z", "status": "errored",
                  "subagent_input_tokens": 0, "subagent_output_tokens": 0},
             ])
@@ -330,9 +332,9 @@ class TestEmpericalHygiene(unittest.TestCase):
             events.extend(_completed_research_run("r0", "2026-05-01", own_tokens=2_000_000))
             # Aborted run
             events.extend([
-                {"run": "r-abort", "kind": "research_run_start", "command": "z-research",
+                {"run": "r-abort", "kind": "run_start", "command": "z-research",
                  "ts": "2026-05-02T00:00:00Z", "subagent_input_tokens": 10000, "subagent_output_tokens": 5000},
-                {"run": "r-abort", "kind": "research_run_end", "command": "z-research",
+                {"run": "r-abort", "kind": "run_end", "command": "z-research",
                  "ts": "2026-05-02T00:01:00Z", "status": "aborted_by_user",
                  "subagent_input_tokens": 0, "subagent_output_tokens": 0},
             ])
@@ -352,7 +354,7 @@ class TestEmpericalHygiene(unittest.TestCase):
             # In-flight run: latest event is 3 min before max_ts (2026-05-03T00:07:00Z)
             # max_ts is determined by the last event overall
             events.extend([
-                {"run": "r-inflight", "kind": "research_run_start", "command": "z-research",
+                {"run": "r-inflight", "kind": "run_start", "command": "z-research",
                  "ts": "2026-05-03T00:04:00Z",  # 3 min before max_ts → in-flight
                  "subagent_input_tokens": 10000, "subagent_output_tokens": 5000},
                 # This is max_ts — a separate completed run sets it later
@@ -380,11 +382,11 @@ class TestEmpericalHygiene(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             mpath = Path(tmpdir) / "metrics.jsonl"
             events = [
-                {"run": "r0", "kind": "research_run_start", "command": "z-research",
+                {"run": "r0", "kind": "run_start", "command": "z-research",
                  "ts": "2026-05-01T00:00:00Z",
                  "prompt_chars": 4000000,  # 4M chars / 4 = 1M tokens
                  "response_chars": 2000000},  # 2M chars / 4 = 500K tokens
-                {"run": "r0", "kind": "research_run_end", "command": "z-research",
+                {"run": "r0", "kind": "run_end", "command": "z-research",
                  "ts": "2026-05-01T00:30:00Z", "status": "ok",
                  "subagent_input_tokens": 0, "subagent_output_tokens": 0},
             ]
@@ -422,10 +424,10 @@ class TestParentRunRollup(unittest.TestCase):
 
                 # Parent own events
                 events.extend([
-                    {"run": run_p, "kind": "research_run_start", "command": "z-research",
+                    {"run": run_p, "kind": "run_start", "command": "z-research",
                      "ts": f"{ts_date}T00:00:00Z",
                      "subagent_input_tokens": parent_own // 2, "subagent_output_tokens": parent_own // 4},
-                    {"run": run_p, "kind": "research_run_end", "command": "z-research",
+                    {"run": run_p, "kind": "run_end", "command": "z-research",
                      "ts": f"{ts_date}T01:00:00Z", "status": "ok",
                      "subagent_input_tokens": parent_own // 4, "subagent_output_tokens": parent_own // 8},
                 ])
@@ -480,7 +482,7 @@ class TestParentRunRollup(unittest.TestCase):
                 run_c = f"child-bst-{i}"
                 ts_date = f"2026-05-{i+1:02d}"
                 events.extend([
-                    {"run": run_p, "kind": "research_run_start", "command": "z-research",
+                    {"run": run_p, "kind": "run_start", "command": "z-research",
                      "ts": f"{ts_date}T00:00:00Z",
                      "subagent_input_tokens": 100_000, "subagent_output_tokens": 50_000},
                     {"run": run_c, "kind": "brainstorm_run_start", "parent_run_id": run_p,
@@ -491,7 +493,7 @@ class TestParentRunRollup(unittest.TestCase):
                      "parent_command": "z-research", "command": "z-brainstorm",
                      "ts": f"{ts_date}T00:20:00Z", "status": "ok",
                      "subagent_input_tokens": 100_000, "subagent_output_tokens": 50_000},
-                    {"run": run_p, "kind": "research_run_end", "command": "z-research",
+                    {"run": run_p, "kind": "run_end", "command": "z-research",
                      "ts": f"{ts_date}T00:25:00Z", "status": "ok",
                      "subagent_input_tokens": 50_000, "subagent_output_tokens": 20_000},
                 ])
@@ -527,10 +529,10 @@ class TestParentRunRollup(unittest.TestCase):
                 run = f"tiny-r{i}"
                 ts_date = f"2026-05-{i+1:02d}"
                 events.extend([
-                    {"run": run, "kind": "research_run_start", "command": "z-research",
+                    {"run": run, "kind": "run_start", "command": "z-research",
                      "ts": f"{ts_date}T00:00:00Z",
                      "subagent_input_tokens": 10_000, "subagent_output_tokens": 5_000},
-                    {"run": run, "kind": "research_run_end", "command": "z-research",
+                    {"run": run, "kind": "run_end", "command": "z-research",
                      "ts": f"{ts_date}T00:30:00Z", "status": "ok",
                      "subagent_input_tokens": 0, "subagent_output_tokens": 0},
                 ])
@@ -569,10 +571,10 @@ class TestParentRunRollup(unittest.TestCase):
                 run = f"big-r{i}"
                 ts_date = f"2026-05-{i+1:02d}"
                 events.extend([
-                    {"run": run, "kind": "research_run_start", "command": "z-research",
+                    {"run": run, "kind": "run_start", "command": "z-research",
                      "ts": f"{ts_date}T00:00:00Z",
                      "subagent_input_tokens": tok, "subagent_output_tokens": 0},
-                    {"run": run, "kind": "research_run_end", "command": "z-research",
+                    {"run": run, "kind": "run_end", "command": "z-research",
                      "ts": f"{ts_date}T00:30:00Z", "status": "ok",
                      "subagent_input_tokens": 0, "subagent_output_tokens": 0},
                 ])
@@ -604,10 +606,10 @@ class TestParentRunRollup(unittest.TestCase):
                 run = f"huge-r{i}"
                 ts_date = f"2026-05-{i+1:02d}"
                 events.extend([
-                    {"run": run, "kind": "research_run_start", "command": "z-research",
+                    {"run": run, "kind": "run_start", "command": "z-research",
                      "ts": f"{ts_date}T00:00:00Z",
                      "subagent_input_tokens": tok, "subagent_output_tokens": 0},
-                    {"run": run, "kind": "research_run_end", "command": "z-research",
+                    {"run": run, "kind": "run_end", "command": "z-research",
                      "ts": f"{ts_date}T00:30:00Z", "status": "ok",
                      "subagent_input_tokens": 0, "subagent_output_tokens": 0},
                 ])
@@ -627,24 +629,29 @@ class TestParentRunRollup(unittest.TestCase):
         # range_high = max(6M, 9M) = 9M
         self.assertEqual(result["range_high"], 9_000_000)
 
-    def test_kind_inference_attribution(self):
-        """Command attributed correctly via _KIND_TO_COMMAND when 'command' field absent."""
+    def test_kind_inference_attribution_audit(self):
+        """audit_run_start/end (no 'command' field) is correctly attributed to z-audit via kind fallback.
+
+        This is a regression test for the old plan_audit_start/plan_audit_end mapping which
+        was wrong — /z-audit actually emits audit_run_start/audit_run_end (commands/z-audit.md:83).
+        """
         with tempfile.TemporaryDirectory() as tmpdir:
             mpath = Path(tmpdir) / "metrics.jsonl"
-            # Use legacy events without 'command' field — only kind
+            # Legacy pre-T001 events: no 'command' field; only kind for attribution.
             events = [
-                {"run": "r0", "kind": "research_run_start",
+                {"run": "a0", "kind": "audit_run_start",
                  "ts": "2026-05-01T00:00:00Z",
-                 "subagent_input_tokens": 2_000_000, "subagent_output_tokens": 500_000},
-                {"run": "r0", "kind": "research_run_end",
-                 "ts": "2026-05-01T01:00:00Z", "status": "ok",
+                 "subagent_input_tokens": 1_000_000, "subagent_output_tokens": 200_000},
+                {"run": "a0", "kind": "audit_run_end",
+                 "ts": "2026-05-01T00:45:00Z", "status": "ok",
                  "subagent_input_tokens": 0, "subagent_output_tokens": 0},
             ]
             _write_metrics(mpath, events)
-            result = _empirical_tier("z-research", mpath, tail_lines=2000, min_samples=1)
+            result = _empirical_tier("z-audit", mpath, tail_lines=2000, min_samples=1)
 
-        self.assertIsNotNone(result, "Kind-based inference should attribute run to z-research")
-        self.assertEqual(result["samples"], 1)
+        self.assertIsNotNone(result, "Kind-based inference should attribute run to z-audit")
+        self.assertEqual(result["samples"], 1,
+                         "audit_run_start/end must map to z-audit via _KIND_TO_COMMAND fallback")
 
 
 # ---------------------------------------------------------------------------
