@@ -3011,5 +3011,132 @@ class TestForcedControlArmAlternation(unittest.TestCase):
                 )
 
 
+class TestRandomDistinctForRole(unittest.TestCase):
+    """
+    random-distinct-for-role draws up to N DISTINCT personas for a role without
+    the no-persona/boring-anchor control arms, and degrades gracefully on underflow.
+    Backs the /z-brainstorm ideator-diversity feature.
+    """
+
+    def _make_env(self, builtin_dir: str, user_dir: str, repo_dir: str) -> dict:
+        return {
+            "Z_HARNESS_BUILTIN_PERSONAS_DIR": builtin_dir,
+            "Z_HARNESS_USER_PERSONAS_DIR": user_dir,
+            "Z_HARNESS_REPO_PERSONAS_DIR": repo_dir,
+        }
+
+    def _seed_ideator_pool(self, builtin_dir: str, n: int) -> None:
+        """Write n ideator-compatible personas + boring-anchor (a control arm)."""
+        for i in range(n):
+            _write_persona(
+                Path(builtin_dir), f"ideator-{i}",
+                description=f"Ideator persona {i}",
+                extra_frontmatter="compatible_roles: [ideator]",
+            )
+        # boring-anchor present in the layer but must NOT be drawn for diversity.
+        _write_persona(Path(builtin_dir), "boring-anchor", description="Control persona")
+
+    def test_ideator_is_a_known_role(self):
+        """
+        The 'ideator' role must be registered; an unknown role exits 2. If this
+        fails the brainstorm draw can never run.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as b, tempfile.TemporaryDirectory() as u, \
+             tempfile.TemporaryDirectory() as r:
+            self._seed_ideator_pool(b, 3)
+            result = _run(["random-distinct-for-role", "ideator", "--count=1", "--seed=1"],
+                          env_extra=self._make_env(b, u, r))
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+    def test_draws_n_distinct(self):
+        """count=3 over a pool of 5 returns exactly 3 distinct personas."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as b, tempfile.TemporaryDirectory() as u, \
+             tempfile.TemporaryDirectory() as r:
+            self._seed_ideator_pool(b, 5)
+            result = _run(["random-distinct-for-role", "ideator", "--count=3", "--seed=7"],
+                          env_extra=self._make_env(b, u, r))
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            data = json.loads(result.stdout)
+            self.assertEqual(len(data), 3)
+            names = [d["persona"] for d in data]
+            self.assertEqual(len(set(names)), 3, msg="draws must be distinct (no replacement)")
+            for d in data:
+                self.assertEqual(d["selection_source"], "random_role_pool_distinct")
+                for key in ("persona", "model", "runtime", "source", "persona_body_path", "draw_id"):
+                    self.assertIn(key, d, msg=f"missing key {key!r}")
+
+    def test_never_draws_control_arms(self):
+        """
+        boring-anchor and no-persona must never appear, even when boring-anchor is
+        present in the layer — these are experiment control arms, not diversity picks.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as b, tempfile.TemporaryDirectory() as u, \
+             tempfile.TemporaryDirectory() as r:
+            self._seed_ideator_pool(b, 4)
+            env = self._make_env(b, u, r)
+            # Draw the full pool across several seeds; control arms must be absent every time.
+            for seed in range(12):
+                result = _run(["random-distinct-for-role", "ideator", "--count=4", f"--seed={seed}"],
+                              env_extra=env)
+                self.assertEqual(result.returncode, 0, msg=result.stderr)
+                names = {d["persona"] for d in json.loads(result.stdout)}
+                self.assertNotIn("boring-anchor", names)
+                self.assertNotIn("no-persona", names)
+
+    def test_underflow_degrades_gracefully(self):
+        """
+        Requesting more than the pool holds returns all available (shorter array),
+        exits 0, and notes the underflow on stderr — never crashes (matches the
+        never-crash ethos of random-for-role's empty-pool fallback).
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as b, tempfile.TemporaryDirectory() as u, \
+             tempfile.TemporaryDirectory() as r:
+            self._seed_ideator_pool(b, 2)  # pool of 2, ask for 3
+            result = _run(["random-distinct-for-role", "ideator", "--count=3", "--seed=1"],
+                          env_extra=self._make_env(b, u, r))
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            data = json.loads(result.stdout)
+            self.assertEqual(len(data), 2, msg="underflow returns all available, not N")
+            self.assertEqual(len({d["persona"] for d in data}), 2)
+            self.assertIn("underflow", result.stderr)
+
+    def test_empty_pool_returns_empty_array(self):
+        """An empty ideator pool returns [] and exits 0 (all slots run vanilla)."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as b, tempfile.TemporaryDirectory() as u, \
+             tempfile.TemporaryDirectory() as r:
+            # Only boring-anchor present — it is excluded, so the real pool is empty.
+            _write_persona(Path(b), "boring-anchor", description="Control persona")
+            result = _run(["random-distinct-for-role", "ideator", "--count=3", "--seed=1"],
+                          env_extra=self._make_env(b, u, r))
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            self.assertEqual(json.loads(result.stdout), [])
+
+    def test_seed_is_reproducible(self):
+        """Same seed yields the same ordered draw."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as b, tempfile.TemporaryDirectory() as u, \
+             tempfile.TemporaryDirectory() as r:
+            self._seed_ideator_pool(b, 5)
+            env = self._make_env(b, u, r)
+            a = _run(["random-distinct-for-role", "ideator", "--count=3", "--seed=42"], env_extra=env)
+            c = _run(["random-distinct-for-role", "ideator", "--count=3", "--seed=42"], env_extra=env)
+            self.assertEqual([d["persona"] for d in json.loads(a.stdout)],
+                             [d["persona"] for d in json.loads(c.stdout)])
+
+    def test_unknown_role_exits_2(self):
+        """An unknown role exits 2 (consistent with random-for-role)."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as b, tempfile.TemporaryDirectory() as u, \
+             tempfile.TemporaryDirectory() as r:
+            result = _run(["random-distinct-for-role", "not-a-role", "--count=3"],
+                          env_extra=self._make_env(b, u, r))
+            self.assertEqual(result.returncode, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

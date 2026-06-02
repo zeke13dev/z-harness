@@ -25,6 +25,15 @@ Subcommands (T004/T102 scope):
                             persona_random_selected event. Empty pool → returns
                             boring-anchor tagged selection_source=fallback_empty_pool.
                             no-persona draw returns persona_body_path=null.
+  random-distinct-for-role <role> --count=<N> [--exclude=<id,...>] [--seed=<s>]
+                            Draw up to N DISTINCT personas (no replacement) for
+                            <role>, EXCLUDING the boring-anchor and no-persona
+                            control arms (diversity, not experiment). Returns a
+                            JSON array of resolve-shaped objects. Graceful
+                            degradation: an underflowing pool returns a shorter
+                            array (or [] when empty) and notes it on stderr —
+                            never exits non-zero. Backs /z-brainstorm ideator
+                            diversity (brainstorm.personas knob).
 
 Subcommands (T005/T106 scope):
   forced-control <role> [--arm=<boring-anchor|no-persona>]
@@ -81,6 +90,7 @@ _ROLE_REGISTRY: dict[str, Optional[str]] = {
     "consultant_secondary": "freeform",
     "reviewer": "review-verdict",
     "implementer": None,
+    "ideator": None,
 }
 
 # ---------------------------------------------------------------------------
@@ -1473,6 +1483,123 @@ def cmd_random_for_role(args: list[str]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# T102: random-distinct-for-role subcommand
+# ---------------------------------------------------------------------------
+
+def cmd_random_distinct_for_role(args: list[str]) -> None:
+    """
+    random-distinct-for-role <role> --count=<N> [--exclude=<id,...>] [--seed=<s>]
+
+    Enumerate personas compatible with <role>, filter out boring-anchor and
+    no-persona (only real personas allowed), apply --exclude filtering, and
+    draw up to N distinct personas without replacement.
+
+    Graceful degradation: if the pool has fewer than N candidates, draw all of
+    them (a shorter array) and emit a stderr note. Callers bind the returned
+    personas positionally and leave any unfilled slots vanilla. An empty pool
+    returns [] (never crashes, never exits non-zero on underflow).
+
+    Output: a JSON array of resolve-shaped objects (length min(N, pool size)).
+    """
+    if not args:
+        print("usage: resolve-persona.py random-distinct-for-role <role> --count=<N> [--exclude=<id,...>] [--seed=<s>]",
+              file=sys.stderr)
+        sys.exit(2)
+
+    role = args[0]
+    remaining = args[1:]
+
+    # Validate role is known.
+    if role not in _ROLE_REGISTRY:
+        print(
+            f"[personas] unknown role {role!r}. Known roles: {sorted(_ROLE_REGISTRY.keys())}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    # Parse optional flags.
+    count = 1
+    exclude_ids: set[str] = set()
+    seed_value: Optional[str] = None
+
+    for arg in remaining:
+        if arg.startswith("--count="):
+            try:
+                count = int(arg[len("--count="):])
+            except ValueError:
+                print(f"[personas] invalid count {arg!r}", file=sys.stderr)
+                sys.exit(2)
+        elif arg.startswith("--exclude="):
+            raw_ids = arg[len("--exclude="):]
+            for id_part in raw_ids.split(","):
+                id_part = id_part.strip()
+                if id_part:
+                    exclude_ids.add(id_part)
+        elif arg.startswith("--seed="):
+            seed_value = arg[len("--seed="):]
+        else:
+            print(f"[personas] unknown flag {arg!r}", file=sys.stderr)
+            sys.exit(2)
+
+    # Build the candidate pool from real personas.
+    # For distinct selection, we EXCLUDE boring-anchor and no-persona.
+    exclude_ids.add(_BORING_ANCHOR_NAME)
+    exclude_ids.add(_NO_PERSONA_NAME)
+    candidates = _enumerate_role_compatible_personas(role, exclude_ids)
+
+    # Graceful degradation: draw up to `count` distinct personas. When the pool
+    # underflows, draw all available and note it on stderr; the caller binds the
+    # returned personas positionally and leaves the remaining slots vanilla.
+    draw_count = min(count, len(candidates))
+    if draw_count < count:
+        print(
+            f"[personas] underflow for role {role!r}: requested {count} distinct personas "
+            f"but only {len(candidates)} available in the pool — binding {draw_count}, "
+            f"remaining slots run vanilla.",
+            file=sys.stderr,
+        )
+
+    # Empty pool — return an empty array (caller runs all ideators vanilla).
+    if draw_count == 0:
+        print(json.dumps([]))
+        return
+
+    # Seeded draw for reproducibility.
+    rng = random.Random()
+    if seed_value is not None:
+        rng.seed(seed_value)
+    else:
+        import secrets
+        rng.seed(secrets.randbits(128))
+
+    # Sample without replacement.
+    winners = rng.sample(candidates, draw_count)
+    draw_id = _make_draw_id(role)
+    all_candidate_ids = [c["name"] for c in candidates]
+
+    results = []
+    for winner_entry in winners:
+        selected_name = winner_entry["name"]
+        selection_source = "random_role_pool_distinct"
+
+        # Emit event for each selection.
+        _emit_persona_random_selected(role, selected_name, all_candidate_ids, draw_id, selection_source)
+
+        body_path = winner_entry.get("path")
+        results.append({
+            "persona": selected_name,
+            "model": None,
+            "runtime": None,
+            "source": _SOURCE_NONE,
+            "persona_body_path": body_path,
+            "selection_source": selection_source,
+            "draw_id": draw_id,
+        })
+
+    print(json.dumps(results))
+
+
+# ---------------------------------------------------------------------------
 # T005: forced-control subcommand
 # ---------------------------------------------------------------------------
 
@@ -1672,6 +1799,7 @@ SUBCOMMANDS = {
     "validate": cmd_validate,
     "read": cmd_read,
     "random-for-role": cmd_random_for_role,
+    "random-distinct-for-role": cmd_random_distinct_for_role,
 }
 
 
