@@ -162,6 +162,37 @@ awareness registry + session-id stamp. C (worktrees) and D (snapshot) were defer
 
 ---
 
+## Worktree-per-session convention (the front-line fix)
+
+The registry + external-base work above makes *concurrent runs* safe at the artifact layer. The
+complementary front-line practice is **one git worktree per parallel session** so two sessions never
+share a single dirty working tree / index in the first place.
+
+- **Location:** a sibling container one level above the repo — `../<repo>-worktrees/<slug>`
+  (e.g. `../qt-bot-worktrees/<slug>`, `../z-harness-worktrees/<slug>`). Named `-worktrees`, never
+  `-sandbox` (the latter collides with the remote rsync target `~/dev/qt-bot-sandbox`). Living
+  outside the repo tree, these are immune to a `git clean` run from the main checkout — which sidesteps
+  the entire incident class above for working trees, the same way the external base dir sidesteps it
+  for plan artifacts.
+- **Lifecycle:** `git worktree add ../<repo>-worktrees/<slug> -b f/claude/z/<slug>` → `cd` in →
+  edit/commit/push/PR/merge → **`cd` back to the main checkout** →
+  `git worktree remove ../<repo>-worktrees/<slug>` → `git worktree prune` →
+  `git branch -d f/claude/z/<slug>`. Cleanup must run from the main checkout (git won't remove the
+  worktree you stand in, and the relative path only resolves from there); remove the worktree before
+  deleting its branch.
+- **Already worktree-safe by design:** the active-plan registry keys on `sha256(realpath(git-common-dir))`,
+  so every worktree of a repo shares ONE registry (parallel awareness works across worktrees), and the
+  resolved base dir lives outside the worktree (survives `git worktree remove`). No registry/base change
+  was needed for worktrees.
+- **remote-runner cwd-safety:** `scripts/remote-sandbox-sync.sh` rsyncs the git work tree of the current
+  cwd (`git rev-parse --show-toplevel`, which for a linked worktree returns the worktree path). Operate
+  with cwd = the worktree, or set `Z_HARNESS_WORKTREE_ROOT=<worktree-abs-path>` — otherwise the main tree
+  is shipped and remote verify silently checks stale code (the historical
+  `feedback-worktree-edit-path` burn). The script now echoes `syncing local root: <path>` to stderr so a
+  wrong-tree sync is visible, not silent.
+
+---
+
 ## Pointers
 
 - Gitignore line: `.gitignore:32` (`z-harness/`).

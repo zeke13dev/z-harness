@@ -50,7 +50,23 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-LOCAL_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+# Resolve the local tree to ship. Default: the git work tree of the current cwd,
+# which for a linked worktree is the WORKTREE root (verified: `git rev-parse
+# --show-toplevel` returns the worktree path, not the common dir). This is correct
+# ONLY when cwd is the worktree. When the orchestrator's cwd is the main checkout but
+# edits land in a worktree via absolute paths, set Z_HARNESS_WORKTREE_ROOT to the
+# worktree abs path so we rsync the right tree instead of silently shipping stale main.
+if [[ -n "${Z_HARNESS_WORKTREE_ROOT:-}" ]]; then
+  LOCAL_ROOT="$Z_HARNESS_WORKTREE_ROOT"
+  if [[ ! -d "$LOCAL_ROOT" ]]; then
+    echo "remote-sandbox-sync.sh: Z_HARNESS_WORKTREE_ROOT='$LOCAL_ROOT' is not a directory" >&2
+    exit 2
+  fi
+else
+  LOCAL_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+fi
+# Surface the resolved root so a wrong-tree sync is visible in logs, not silent.
+echo "remote-sandbox-sync.sh: syncing local root: $LOCAL_ROOT" >&2
 PLUGIN_ROOT="${ANTIGRAVITY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}}"
 
 EXCLUDE_FILE=""
