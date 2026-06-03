@@ -425,7 +425,7 @@
     "z-implement-all --tasks derives BASE from the provided tasks file and bypasses normal slug/tree discovery.",
     "Promoted REVIEW-TASKS.md and MR-REVIEW.md artifacts should be pruned by the user before z-implement-all --tasks consumes them.",
     "z-suggest-memory is a thin delegator; memory mutation lives in skills/z-suggest-memory/SKILL.md.",
-    "Plain z-maintain-docs is dry-run by default; docs writes require --apply or explicit confirmation.",
+    "Plain z-maintain-docs applies refreshed docs by default; pass --dry-run to preview without writing. It stops for a per-concept confirmation only on genuine-risk signals (memories_lost mismatch, or audit reject/needs-review under --audit); clean concepts apply with no prompt.",
     "--from-candidate-json on z-suggest-memory accepts a file path or - (stdin); it is the automated path used by Phase 9/Phase 7/Phase 10 only \u2014 interactive callers should omit it.",
     "z-stats Phase 4b reads review_agent_call events from metrics.jsonl; these are emitted by z-implement-all Phase 9, z-review-all Phase 7, and z-debug Phase 10. The section is empty if none of these phases have run yet for the selected slug.",
     "z-implement-all Phase 9 does NOT present a sequential AskUserQuestion loop for candidates \u2014 it persists all candidates to JSONL and push-notifies the user to review them via /z-suggest-memory --from-candidate-json. The 3-candidate per-run cap applies only to z-debug Phase 10's in-phase AskUser loop.",

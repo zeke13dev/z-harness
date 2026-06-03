@@ -484,13 +484,14 @@ Log run end. Send a PushNotification (guarded by notify level) with FOUR recomme
 Plan complete. <N> tasks queued.
 
 Recommended:
-  /compact          — free planning context before next phase
-  /z-audit-plan     — (recommended) audit spec & tasks against codebase reality and best practices
-  /z-test           — (optional, recommended for risky / financial code) draft semantic test cases before implementation
-  /z-implement-all  — orchestrate the queue (auto-includes TESTS.md if present, or /z-implement-next for one-at-a-time)
+  /compact             — free planning context before next phase
+  /z-audit-plan        — (recommended) audit spec & tasks against codebase reality and best practices
+  /z-audit-plan-style  — (recommended) MR-style code-quality audit of the plan: defensive bloat, premature abstraction, DRY/KISS/SOLID, STYLE.md drift
+  /z-test              — (optional, recommended for risky / financial code) draft semantic test cases before implementation
+  /z-implement-all     — orchestrate the queue (auto-includes TESTS.md if present, or /z-implement-next for one-at-a-time)
 ```
 
-Then surface the same choice interactively via `AskUserQuestion` so users who don't read OS notifications still see it. Phrase the question as "Plan complete. What's next?" with options in this order: `/z-audit-plan` (label: `Audit the plan (recommended)` — recommended because cheap pre-implementation reality check against codebase), `/z-test` (label: `Draft semantic test cases` — recommended only for risky/financial code), `/z-implement-all` (label: `Start implementation now` — only when user has high confidence in the plan), `Skip — I'll decide later`. Default selection is `/z-audit-plan`. The user's choice is advisory — log it as a `next_step_choice` event but do not auto-dispatch the chosen command; the user invokes it themselves so they retain control of context boundaries (e.g. running `/compact` between phases).
+Then surface the same choice interactively via `AskUserQuestion` so users who don't read OS notifications still see it. Phrase the question as "Plan complete. What's next?" with these four options (the `AskUserQuestion` four-option cap is why the two plan audits share one option — the push-notification above still lists them separately): `/z-audit-plan` (label: `Audit the plan (recommended)` — recommended cheap pre-implementation reality check against the codebase; the description also points the user at `/z-audit-plan-style` for the companion MR-style quality pass on the plan artifacts), `/z-test` (label: `Draft semantic test cases` — recommended only for risky/financial code), `/z-implement-all` (label: `Start implementation now` — only when user has high confidence in the plan), `Skip — I'll decide later`. Default selection is `/z-audit-plan`. The user's choice is advisory — log it as a `next_step_choice` event but do not auto-dispatch the chosen command; the user invokes it themselves so they retain control of context boundaries (e.g. running `/compact` between phases).
 
 **Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the FINALIZE_STATUS rule (Setup step 5): normal completion deregisters with `complete`. The `deregister` subcommand returns 0 by design and self-logs a `registry_error` on internal failure, so call it with `|| true`. If register failed earlier (no record was ever written), this is a harmless no-op.
 ```bash
