@@ -1,6 +1,6 @@
 {
   "concept": "z-update",
-  "last_updated": "2026-05-28",
+  "last_updated": "2026-06-03",
   "covers_spec": "none",
   "source_file": [
     "install.sh",
@@ -12,14 +12,17 @@
   "confidence": "high",
   "entry_points": [
     {"file": "commands/z-update.md", "line": 1, "symbol": "z-update", "kind": "module", "summary": "Slash command: locate plugin root, detect mode (symlink/runtime/tarball), pull or atomic-swap, emit harness_updated"},
-    {"file": "install.sh", "line": 114, "symbol": "install_claude_symlink", "kind": "fn", "summary": "Creates ~/.claude/plugins/z-harness@zeke-tools -> repo symlink for Claude Code"},
-    {"file": "install.sh", "line": 176, "symbol": "install_codex_symlink", "kind": "fn", "summary": "Creates ~/plugins/z-harness symlink and writes personal marketplace.json for Codex"},
-    {"file": "install.sh", "line": 273, "symbol": "install_claude_tarball", "kind": "fn", "summary": "Extracts tarball into Claude plugin location; future updates use atomic-swap path"},
-    {"file": "install.sh", "line": 284, "symbol": "install_codex_tarball", "kind": "fn", "summary": "Extracts tarball into Codex plugin location and updates marketplace.json"},
-    {"file": "install.sh", "line": 303, "symbol": "install_target_from_repo", "kind": "fn", "summary": "Routes --target=claude|codex|all to the appropriate symlink installer"},
-    {"file": "install.sh", "line": 330, "symbol": "install_target_from_tarball", "kind": "fn", "summary": "Routes --target=claude|codex|all to the appropriate tarball installer"},
-    {"file": "scripts/version.sh", "line": 1, "symbol": "version.sh", "kind": "module", "summary": "Emits JSON: z_harness_version (git SHA), z_harness_dirty, z_harness_branch, z_harness_tag; resolves via Z_HARNESS_PLUGIN_ROOT first"},
-    {"file": "scripts/bundle-plugin.sh", "line": 1, "symbol": "bundle-plugin.sh", "kind": "module", "summary": "Builds dist/z-harness-<version>.tar.gz; excludes plans/archive/exports/providers.json; runs audit, deletes on failure"}
+    {"file": "install.sh", "line": 114, "symbol": "install_claude_symlink", "kind": "fn", "summary": "Creates ~/.claude/plugins/z-harness@zeke-tools -> repo symlink; requires .git+commands+agents+runtime"},
+    {"file": "install.sh", "line": 136, "symbol": "write_codex_marketplace", "kind": "fn", "summary": "Writes or updates ~/.agents/plugins/marketplace.json with z-harness personal marketplace entry"},
+    {"file": "install.sh", "line": 176, "symbol": "install_codex_symlink", "kind": "fn", "summary": "Creates ~/plugins/z-harness symlink, calls write_codex_marketplace, runs codex plugin add z-harness@personal"},
+    {"file": "install.sh", "line": 207, "symbol": "install_legacy_exporters", "kind": "fn", "summary": "Copies scripts/export-*.py to install destination; only invoked with --legacy; deprecated, REMOVE-AT next minor"},
+    {"file": "install.sh", "line": 232, "symbol": "extract_tarball_to", "kind": "fn", "summary": "Downloads tarball (curl/wget), extracts to temp, handles single-top-dir shape, atomically moves to destination"},
+    {"file": "install.sh", "line": 273, "symbol": "install_claude_tarball", "kind": "fn", "summary": "Extracts tarball into Claude plugin location; optionally installs legacy exporters"},
+    {"file": "install.sh", "line": 284, "symbol": "install_codex_tarball", "kind": "fn", "summary": "Extracts tarball into Codex plugin location, updates marketplace.json, registers with codex plugin add"},
+    {"file": "install.sh", "line": 303, "symbol": "install_target_from_repo", "kind": "fn", "summary": "Routes --target=claude|codex|all to appropriate symlink installer"},
+    {"file": "install.sh", "line": 330, "symbol": "install_target_from_tarball", "kind": "fn", "summary": "Routes --target=claude|codex|all to appropriate tarball installer"},
+    {"file": "scripts/version.sh", "line": 1, "symbol": "version.sh", "kind": "module", "summary": "Emits JSON: z_harness_version (git SHA), z_harness_dirty, z_harness_branch, optional z_harness_tag; Z_HARNESS_PLUGIN_ROOT|ANTIGRAVITY_PLUGIN_ROOT|CLAUDE_PLUGIN_ROOT resolution; non-git sentinels on missing history"},
+    {"file": "scripts/bundle-plugin.sh", "line": 1, "symbol": "bundle-plugin.sh", "kind": "module", "summary": "Builds dist/z-harness-<version>.tar.gz; excludes plans/archive/exports/providers.json + auto-detected legacy plan dirs; runs audit, deletes on failure"}
   ],
   "depends_on": ["scripts", "commands"],
   "consumed_by": [],
@@ -32,16 +35,20 @@
     "bundle-plugin.sh deletes the output tarball and exits non-zero if audit-tarball.sh fails.",
     "version.sh emits non-git sentinel values (non-git/unknown) rather than erroring when plugin dir has no git history.",
     "Plugin root resolution checks Z_HARNESS_PLUGIN_ROOT -> ANTIGRAVITY_PLUGIN_ROOT -> CLAUDE_PLUGIN_ROOT -> candidate paths.",
-    "If Z_HARNESS_RELEASE_URL is unset and the URL is still the example.com placeholder, /z-update halts and prompts the user."
+    "If Z_HARNESS_RELEASE_URL is unset and the URL is still the example.com placeholder, /z-update halts and prompts the user.",
+    "install.sh --legacy is deprecated; available for one minor release only; REMOVE-AT annotation present in source."
   ],
   "gotchas": [
     "Three install modes: symlink (-L or git rev-parse succeeds), runtime (runtime/ dir present, no git), tarball (everything else).",
+    "Runtime mode is now distinct: runtime/ present but no .git/; atomic swap updates the full dir including runtime/drivers/ tree.",
+    "Legacy layout detection: if exports/codex|agy|cursor present but runtime/ absent, /z-update emits migration_nudge event and prints a one-line prompt; update still completes.",
     "Tarball release URL is a placeholder in commands/z-update.md; Z_HARNESS_RELEASE_URL must be set for tarball/runtime updates to work.",
     "Codex caches plugin skills; after symlink update /z-update reruns codex plugin add z-harness@personal, but a new thread is still required.",
     "Symlink-mode detection checks -L (symlink) OR git rev-parse success; a tarball with .git/ inside would be misclassified as symlink mode.",
-    "bundle-plugin.sh excludes legacy plan dirs by scanning z-harness/<slug>/ for PLAN.md/SPEC.md/TASKS.md at bundle time — new plan dirs are auto-excluded.",
-    "--force in install.sh removes a non-symlink existing install (rm -rf); it does not affect symlink installs, which are always replaced.",
-    "install.sh --target=all requires both Claude plugin layout (.git+commands+agents+runtime) and Codex layout (.git+.codex-plugin/plugin.json+skills)."
+    "bundle-plugin.sh excludes legacy plan dirs by scanning z-harness/<slug>/ for PLAN.md/SPEC.md/TASKS.md at bundle time — new plan dirs auto-excluded.",
+    "--force in install.sh removes a non-symlink existing install (rm -rf); does not affect symlink installs, which are always replaced.",
+    "install.sh --target=all requires both Claude layout (.git+commands+agents+runtime) and Codex layout (.git+.codex-plugin/plugin.json+skills).",
+    "--legacy flag in install.sh is a no-op in symlink mode (repo symlink exposes scripts directly) but still prints the deprecation notice."
   ],
   "memories": []
 }

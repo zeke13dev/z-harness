@@ -1,6 +1,6 @@
 {
   "concept": "overnight-run",
-  "last_updated": "2026-06-01",
+  "last_updated": "2026-06-03",
   "covers_spec": "z-harness/overnight-run/SPEC.md",
   "source_file": [
     "commands/z-overnight.md",
@@ -92,52 +92,59 @@
     },
     {
       "file": "scripts/overnight-preflight.sh",
-      "line": 233,
+      "line": 240,
       "symbol": "cmd_check_collisions",
       "kind": "fn",
       "summary": "check-collisions: if first step is plan OR research and $BASE/PLAN.md exists, emit slug_collision_halt event and exit nonzero; runs before lock acquisition and before Z_HARNESS_NO_ASK is set"
     },
     {
       "file": "scripts/config.py",
-      "line": 1129,
+      "line": 1209,
       "symbol": "_apply_overnight_overrides",
       "kind": "fn",
       "summary": "Post-processes the resolve-question envelope under Z_HARNESS_NO_ASK=halt: allowlist match -> overnight_decision envelope; no match -> halt envelope. Fires only when result==ask"
     },
     {
       "file": "scripts/config.py",
-      "line": 2022,
+      "line": 2102,
       "symbol": "_is_policy_mode",
       "kind": "fn",
       "summary": "Returns True when Z_HARNESS_NO_ASK=halt AND either Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE or Z_HARNESS_OVERNIGHT_AUTODECIDE is non-empty (frozen policy active)"
     },
     {
       "file": "scripts/config.py",
-      "line": 2038,
+      "line": 2118,
       "symbol": "_emit_unhandled_gate",
       "kind": "fn",
       "summary": "Emits unhandled_gate event via log-event.sh for a registered gate not covered by the frozen policy; non-fatal, skips if Z_HARNESS_RUN unset"
     },
     {
       "file": "scripts/config.py",
-      "line": 2094,
+      "line": 2264,
       "symbol": "cmd_check_no_ask",
       "kind": "fn",
-      "summary": "check-no-ask --question-id <id>: returns JSON {result: halt|proceed|unhandled_gate, question_id, rule_id}; unhandled_gate fires when policy mode is active and a registered gate is not covered by the frozen allowlist"
+      "summary": "check-no-ask --question-id <id> [--range-high N] [--severity hard|soft]: returns JSON {result: halt|proceed|unhandled_gate, question_id, rule_id}; --range-high/--severity activates budget-aware _resolve_cost_gate path; unhandled_gate fires when policy mode is active and a registered gate is not covered by the frozen allowlist"
     },
     {
       "file": "scripts/config.py",
-      "line": 251,
+      "line": 320,
       "symbol": "OVERNIGHT_AUTODECIDE_QIDS_DEFAULT",
       "kind": "const",
       "summary": "Default allowlist: {workflow.slug_confirm: recommend_derived, workflow.audit_to_amend: amend}; merged under Z_HARNESS_OVERNIGHT_AUTODECIDE env override"
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 1118,
+      "symbol": "_parse_overnight_allowlist",
+      "kind": "fn",
+      "summary": "Parses Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE (JSON object); merges over OVERNIGHT_AUTODECIDE_QIDS_DEFAULT"
     },
     {
       "file": "scripts/bench-autonomy-check.sh",
       "line": 1,
       "symbol": "bench-autonomy-check.sh",
       "kind": "module",
-      "summary": "Pre-run gate for benchmark policy-mode runs (make bench-autonomy-check): step 1 asserts quick-build hot-path AskUserQuestion callsites are registered; step 2 asserts frozen policy covers every hot-path gate. Exit 0 required before unattended policy-mode run"
+      "summary": "Pre-run gate for benchmark policy-mode runs (make bench-autonomy-check): 3 steps — step 1 asserts quick-build hot-path AskUserQuestion callsites are registered; step 2 asserts frozen policy covers every hot-path gate; step 3 asserts config.py-registered gates required for the benchmark (currently workflow.pre_run_cost_gate) are present in the policy's gates: block. Exit 0 required before unattended policy-mode run"
     }
   ],
   "depends_on": [
@@ -168,13 +175,16 @@
     "overnight_lock_corrupt is in the HALT events allowlist in run-status.sh classify",
     "Policy mode (fail-closed H4): cmd_check_no_ask returns unhandled_gate instead of halt when _is_policy_mode() is true and a registered gate is not covered by the frozen allowlist",
     "Hard-halt list and truly-unregistered gates (path 4: unknown_ask_blocked) are never promoted to unhandled_gate even in policy mode",
-    "bench-autonomy-check.sh (make bench-autonomy-check) must exit 0 before any unattended policy-mode overnight run; it checks callsite registration AND policy gate coverage"
+    "bench-autonomy-check.sh (make bench-autonomy-check) must exit 0 before any unattended policy-mode overnight run; it checks callsite registration (step 1), policy gate coverage (step 2), AND targeted assertion that config.py-registered required gates (e.g. workflow.pre_run_cost_gate) are in the policy (step 3)",
+    "cmd_check_no_ask --range-high/--severity activates the budget-aware _resolve_cost_gate path for cost gates; without these flags, the generic overnight path applies"
   ],
   "gotchas": [
     "Fail-OPEN for unregistered callsites: AskUserQuestion callsites not in QUESTION_IDS will block the conversation even with Z_HARNESS_NO_ASK=halt. Use make bench-autonomy-check before policy-mode runs; use scripts/lint-askuser.sh --strict before standard overnight runs",
     "unhandled_gate result from cmd_check_no_ask is a LOUD abort signal distinct from halt: orchestrators must abort the run, not merely stop the step; it means the frozen policy is incomplete",
     "Policy mode is active when BOTH Z_HARNESS_NO_ASK=halt AND Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE (or Z_HARNESS_OVERNIGHT_AUTODECIDE) is non-empty; setting NO_ASK=halt alone without an allowlist does NOT activate policy mode",
     "bench-autonomy-check.sh step 2 imports zharness_pier.policy from z-harness/bench/pier; the pier package must be present. Use --policy <path> to override the default benchmark-autonomy.yaml location",
+    "bench-autonomy-check.sh step 3 requires PyYAML (for yaml.safe_load) and a running config.py list-question-ids; failure in either aborts the check",
+    "workflow.pre_run_cost_gate is a config.py-registered gate that must appear in benchmark-autonomy.yaml's gates: block; added as a REQUIRED_IN_POLICY entry in bench-autonomy-check.sh step 3 after the token-estimates plan (T010)",
     "Preflight now triggers on first step = plan OR research (not just plan); research-build preset will halt if PLAN.md already exists",
     "Z_HARNESS_OVERNIGHT_AUTODECIDE value must be a JSON object string, not comma-separated key=value pairs",
     "Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE is an internal export; visible via config.py inspect-all; do not set manually — the orchestrator overwrites it",
@@ -257,6 +267,7 @@
     "script": "scripts/bench-autonomy-check.sh",
     "step1": "lint-askuser --strict scoped to commands/z-plan.md and commands/z-implement-all.md; asserts AskUserQuestion callsites are paired with resolve-question or check-no-ask",
     "step2": "policy coverage assertion: loads z-harness/bench/pier/benchmark-autonomy.yaml via zharness_pier.policy.load_policy; checks every workflow.* gate referenced in z-plan.md, z-implement-all.md, z-implement-next.md is present in policy gates map",
+    "step3": "targeted gate-coverage assertion: for each qid in REQUIRED_IN_POLICY (currently [workflow.pre_run_cost_gate]), checks that the qid is registered in config.py list-question-ids AND is a key in the policy's gates: block; requires PyYAML",
     "policy_path_default": "z-harness/bench/pier/benchmark-autonomy.yaml",
     "policy_path_override_flag": "--policy <path>"
   },

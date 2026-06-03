@@ -1,6 +1,6 @@
 # active-plan-registry — Cross-session awareness registry
 
-> Last updated: 2026-06-02
+> Last updated: 2026-06-03
 > Covers source: scripts/active-plan-registry.py, scripts/plan-path.sh, scripts/migrate-plan-layout.sh, agents/scope-extractor.md, commands/z-implement-all.md, commands/z-implement-next.md, commands/z-plan.md
 
 ## Overview
@@ -103,17 +103,18 @@ Each `<run-id>.json` record (schema_version 1) contains:
 
 | Subcommand | Purpose |
 |------------|---------|
+| `session-id` | Prints a stable session id for the current shell session. Returns `$Z_HARNESS_SESSION_ID` if set; otherwise derives `<ppid>-<start_epoch>` (Linux: from `/proc`; macOS: pure-Python fallback). Callers should `export Z_HARNESS_SESSION_ID="$(session-id)"` once at run start. |
 | `register --run-id ID --slug S --command C --phase P [--session SID]` | Creates/overwrites `<active>/ID.json` atomically. Idempotent. Emits `plan_registered`. |
-| `heartbeat --run-id ID [--phase P] [--current-task T] [--status running\|paused]` | Updates `last_heartbeat`, `phase`, `current_task` in own record. Recreates if reaped (benign). |
+| `heartbeat --run-id ID [--phase P] [--current-task T] [--status running\|paused]` | Updates `last_heartbeat`, `phase`, `current_task` in own record. If the record is absent (reaped or never registered), emits `registry_error(reason:missing_record)` and returns 0 — does NOT recreate a zombie record. |
 | `update-scope --run-id ID --scope-json FILE` | Merges a scope array `[{path, confidence, reason}]` into the record. |
 | `overlaps --run-id ID [--strict] [--scope-json FILE]` | Computes path intersection against every other live record's scope. Exit codes: `0` none, `10` advisory, `20` blocking (strict mode + explicit×explicit exact match). |
-| `list [--json]` | Returns live (non-stale) records. |
+| `list [--json]` | Returns all records (live and stale). |
 | `reap` | Deletes records where (a) host=localhost AND pid is dead, OR (b) `last_heartbeat` older than 2× stale threshold. Marks remote/unknown-host records as `status:"stale"` at 1× threshold (no delete). |
 | `deregister --run-id ID [--status complete\|aborted]` | Removes `<active>/ID.json`. Emits `plan_deregistered`. |
 
 ### Scope-extractor integration
 
-At Phase 0 of `/z-implement-all`, `/z-implement-next`, and `/z-plan`, a Haiku subagent (`agents/scope-extractor.md`) reads SPEC.md + PLAN.md + TASKS.md (and optionally a specific task block) and emits a JSON scope array `[{path, confidence, reason}]`. The orchestrator writes the result via `update-scope`.
+At Phase 0 of `/z-implement-all`, `/z-implement-next`, and Phase 8 of `/z-plan`, a Haiku subagent (`agents/scope-extractor.md`) reads SPEC.md + PLAN.md + TASKS.md (and optionally a specific task block) and emits a JSON scope array `[{path, confidence, reason}]`. The orchestrator writes the result via `update-scope`.
 
 Confidence levels: `explicit` (path literally named in a Files: line) > `inferred` (strongly implied) > `broad` (directory/glob) > `unknown` (work named but files not).
 
@@ -154,7 +155,7 @@ New Phase 0.0 (runs before the existing follow-up-running check):
 
 ### `/z-plan`, `/z-plan-light`, `/z-debug`, `/z-do`, `/z-audit`, `/z-plan-split`
 
-All run-creating commands get the same register/heartbeat/deregister 3-line block. `scope-extractor` runs after TASKS.md is written (for `/z-plan`) to seed scope for overlap detection.
+All run-creating commands get the same register/heartbeat/deregister 3-line block. In `/z-plan`, `scope-extractor` runs after TASKS.md is written (Phase 8) to seed scope for overlap detection.
 
 ---
 

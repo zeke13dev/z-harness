@@ -1,7 +1,7 @@
 # SETUP — z-harness configuration runbook
 
-> Last updated: 2026-05-28
-> Covers: scripts/setup.py, scripts/config.py, /z-setup, /z-providers-discover, /z-init-docs, /z-suggest-memory
+> Last updated: 2026-06-03
+> Covers source: scripts/setup.py, scripts/setup.sh, commands/z-setup.md, docs/human/SETUP.md
 
 ---
 
@@ -38,7 +38,7 @@ Shows the current resolved state across all surfaces. Look for `(not set)` or `(
 /z-setup wizard
 ```
 
-Guided concern-grouped flow: notifications → workflow → overnight → providers → personas → docs → memories → Final review. Asks about each gap and writes confirmed changes. Safe to re-run: diffs are shown and confirmed before any write.
+Guided concern-grouped flow: notifications → workflow → overnight → providers → personas → docs → memories → axioms → Final review. Asks about each gap and writes confirmed changes. Safe to re-run: diffs are shown and confirmed before any write.
 
 Alternatively, for a one-shot bootstrap:
 
@@ -120,6 +120,22 @@ Env vars emitted by `apply`:
 ```bash
 export Z_HARNESS_NO_ASK='halt'
 export Z_HARNESS_PAUSE_AT_PCT='85'
+```
+
+---
+
+## Axioms wizard section
+
+The `axioms` wizard section (added after the memories section) handles two things:
+
+1. **Axioms TOML keys** — prompts to set `axioms.enabled`, `axioms.auto_extract_post_run`, and `axioms.kernel_budget_chars`.
+2. **Kernel-pointer install** — idempotently installs a `<!-- z-harness-kernel-pointer BEGIN/END -->` block into `~/.claude/CLAUDE.md`. If the block exists but differs from the canonical text, a diff is shown and the user is asked to confirm an overwrite. If multiple marker blocks are found (e.g. from a prior interrupted run), they are collapsed into one.
+3. **Gitignore entries** — offers to add `.z-harness/axioms/` and `.z-harness/KERNEL.md` to the project's `.gitignore`.
+
+Run only the axioms section:
+
+```bash
+/z-setup wizard --scope axioms
 ```
 
 ---
@@ -277,3 +293,14 @@ ENV_ONLY_KNOBS = [
 ```
 
 These knobs are never written to TOML. They are read from the process environment only. See `docs/human/environment-knobs.md` for per-knob descriptions.
+
+### Axioms env knobs (setup scope only)
+
+These are surfaced read-only in the axioms wizard section but are not in the core `ENV_ONLY_KNOBS` list:
+
+```
+Z_HARNESS_AXIOMS_ENABLED
+Z_HARNESS_AXIOMS_KERNEL_BUDGET_CHARS
+Z_HARNESS_AXIOMS_EXTRACT_MIN_RECURRENCE
+Z_HARNESS_AXIOMS_AUTO_EXTRACT_POST_RUN
+```

@@ -50,6 +50,14 @@
         "commands/z-do.md",
         "commands/z-export.md",
         "commands/z-fix.md",
+        "commands/z-followup-confirm.md",
+        "commands/z-followup-dismiss.md",
+        "commands/z-followup-list.md",
+        "commands/z-followup-next.md",
+        "commands/z-followup-refresh.md",
+        "commands/z-followup-status.md",
+        "commands/z-git-guardrails.md",
+        "commands/z-grill.md",
         "commands/z-implement-all.md",
         "commands/z-implement-next.md",
         "commands/z-improve.md",
@@ -70,24 +78,29 @@
         "commands/z-suggest-memory.md",
         "commands/z-test.md",
         "commands/z-update.md",
-        "commands/z-uplift.md"
+        "commands/z-uplift.md",
+        "commands/z-where.md"
       ],
-      "last_updated": "2026-06-02",
+      "last_updated": "2026-06-03",
       "confidence": "high",
       "depends_on": [
         "agents",
         "scripts",
         "skills",
-        "config"
+        "config",
+        "followup-sink",
+        "active-plan-registry"
       ],
       "consumed_by": [
         "skills"
       ],
-      "summary": "Slash command surfaces, including planning-family route checks, contextual exits, plan_route_decision telemetry, review-family finding promotion, config.py export-env/should-notify wrappers, check-no-ask halt branches (7 commands), the /z-overnight unattended pipeline orchestrator, and persona-rotation (experiment.persona_rotation knob): random implementer draw + dual reviewer dispatch in z-implement-all/z-implement-next, fixed 5-panel consult in z-plan/z-debug."
+      "summary": "Slash command surfaces: planning-family route checks, contextual exits, plan_route_decision telemetry, review-family finding promotion, config.py export-env/should-notify wrappers, check-no-ask halt branches (7 commands), /z-overnight unattended pipeline orchestrator, /z-grill requirements-interview, /z-git-guardrails PreToolUse hook installer, follow-up sink consumer commands (6 /z-followup-* commands), /z-where concurrent-run diagnostic, and persona-rotation (experiment.persona_rotation knob): random implementer draw + dual reviewer dispatch in z-implement-all/z-implement-next, fixed 5-panel consult in z-plan/z-debug, ideator/audit_persona/advisory-consult-arm draws."
     },
     {
       "slug": "scripts",
       "source_file": [
+        "scripts/block-dangerous-git.sh",
+        "scripts/test_block_dangerous_git.sh",
         "scripts/extract-dismissals.py",
         "scripts/log-event.sh",
         "scripts/log-phase.sh",
@@ -99,9 +112,10 @@
         "scripts/config.sh",
         "scripts/test_config.py",
         "scripts/test_log_phase.sh",
-        "scripts/persona-stats.py"
+        "scripts/persona-stats.py",
+        "scripts/active-plan-registry.py"
       ],
-      "last_updated": "2026-06-02",
+      "last_updated": "2026-06-03",
       "confidence": "high",
       "depends_on": [],
       "consumed_by": [
@@ -109,7 +123,7 @@
         "commands",
         "skills"
       ],
-      "summary": "Appends standard JSON events to run and global logs. Also includes persona-stats.py, a read-only analysis tool for the persona-rotation experiment (joins persona_random_selected + persona_attempt_outcome events, computes delta vs boring-anchor per stratum)."
+      "summary": "Utility shell/Python scripts forming the operational backbone: structured event telemetry (log-event.sh/log-phase.sh), config/workflow resolver (config.py), git-safety PreToolUse hook (block-dangerous-git.sh), active-plan registry (active-plan-registry.py), persona-rotation analysis (persona-stats.py), follow-up sink subsystem (sink-*), and supporting test/preflight scripts."
     },
     {
       "slug": "z-fix",
@@ -152,7 +166,7 @@
         "skills/z-update/SKILL.md",
         "skills/z-uplift/SKILL.md"
       ],
-      "last_updated": "2026-06-02",
+      "last_updated": "2026-06-03",
       "confidence": "high",
       "depends_on": [
         "agents",
@@ -164,7 +178,7 @@
         "commands",
         "multi-ide-exports"
       ],
-      "summary": "Amend plans/FIX; preserve completed tasks; reclassify changed tasks."
+      "summary": "Operational playbooks for z-harness slash commands: planning, debugging, implementation, review, docs-maintenance, memory authoring, stats, and quality uplift. Execution skills register with active-plan-registry; persona behavior (brainstorm/debug/plan/plan-light) augments neutral consults; kernel-path injection in z-debug/z-plan/z-implement-all; z-maintain-docs default=apply with --dry-run flag."
     },
     {
       "slug": "providers-registry",

@@ -1,6 +1,6 @@
 # config
 
-> Last updated: 2026-06-02
+> Last updated: 2026-06-03
 > Covers source: scripts/config.py, scripts/config.sh, scripts/propose-prefs.py, docs/human/config.md
 
 ## Overview
@@ -40,6 +40,7 @@ Set `$Z_HARNESS_REPO_CONFIG` to override the git-root discovery path (exits 2 if
 | `notify.level` | string | `approval_only` | `off` \| `approval_only` \| `all` | Controls when PushNotification fires. `off` silences all notifications. `approval_only` notifies on `approval` and `error` events. `all` notifies on every `approval`, `phase_end`, and `error` event. |
 | `docs.always_apply` | string | `always` | `always` \| `never` | Whether light flows auto-dispatch doc-fetcher when `docs/llm/INDEX.json` exists. `always` matches current /z-do default behavior. `never` skips doc-fetcher. **Applies only to light flows (slice 1: /z-do). Heavy flows always dispatch doc-fetcher regardless of this knob.** |
 | `runtime.consult` | string | `on` | `on` \| `off` | Single-model mode. When `off`, the `consultant_primary`, `consultant_secondary`, and `reviewer` roles resolve to the `none` sentinel, so cross-LLM consultation and review are skipped (no Gemini/Codex dispatch). Exported as `Z_HARNESS_CONSULT` (not `Z_HARNESS_RUNTIME_CONSULT` — see the transliteration note), which `resolve-provider.py` reads. |
+| `cost.token_budget` | int or null | `null` | positive int or null | Token budget ceiling for cost-gate delegation. When set, `check-no-ask` with `--range-high` compares the estimate against this value. `null` (unset) means no budget is configured; any cost gate under policy will halt with `cost_budget_missing`. |
 
 For `[brainstorm]`, `[personas]`, `[workflow]`, `[followup]`, `[axioms]`, and `[experiment]` knobs, see the sections below.
 
@@ -63,7 +64,7 @@ Env-var overrides follow a deterministic rule: lowercase TOML dotted-key → pre
 | `axioms.kernel_budget_chars` | `Z_HARNESS_AXIOMS_KERNEL_BUDGET_CHARS` |
 | `axioms.extract_min_recurrence` | `Z_HARNESS_AXIOMS_EXTRACT_MIN_RECURRENCE` |
 | `axioms.auto_extract_post_run` | `Z_HARNESS_AXIOMS_AUTO_EXTRACT_POST_RUN` |
-| `brainstorm.personas` | `Z_HARNESS_BRAINSTORM_PERSONAS` |
+| `cost.token_budget` | `Z_HARNESS_COST_TOKEN_BUDGET` |
 | `runtime.consult` | `Z_HARNESS_CONSULT` (alias — **not** the mechanical `Z_HARNESS_RUNTIME_CONSULT`) |
 
 For workflow, followup, and experiment keys, the rule applies identically.
@@ -139,7 +140,7 @@ Valid event kinds: `approval`, `phase_end`, `error`.
 
 Prints all configuration knobs with their current effective value, source layer, and persistence class. Covers three categories:
 
-1. **TOML-persistent keys** — every key in `DEFAULTS` (all `notify.*`, `docs.*`, `brainstorm.*`, `personas.*`, `workflow.*`, `followup.*`, `axioms.*`, `experiment.*`, `runtime.*`)
+1. **TOML-persistent keys** — every key in `DEFAULTS` (all `notify.*`, `docs.*`, `brainstorm.*`, `personas.*`, `workflow.*`, `followup.*`, `axioms.*`, `experiment.*`, `runtime.*`, `cost.*`)
 2. **Registered question_ids** — every entry in `QUESTION_IDS`, showing the resolver envelope result
 3. **Env-only knobs** — environment variables that affect behavior but are never written to TOML
 
@@ -214,6 +215,7 @@ The slice-2 layer: the `[workflow]` config section, the question-registry, the r
 | `workflow.review_all_proceed` | string | `ask` | `ask` \| `proceed` \| `halt` | Controls the Phase 3.7 proceed gate in `/z-review-all`. `ask` prompts. `proceed` skips the prompt. `halt` stops unconditionally. |
 | `workflow.plan_decisions_approval` | string | `ask` | `ask` \| `approve` \| `halt` | Controls the Phase 2.5 decisions-doc approval gate in `/z-plan`. `ask` prompts. `approve` skips the prompt. `halt` stops unconditionally. |
 | `workflow.spec_retro_discovery` | string | `ask` | `ask` \| `defer_to_sink_p2` | Controls how Phase 4 of `/z-implement-next` handles out-of-current-SPEC discoveries reported by the implementer. `ask` prompts interactively (default). `defer_to_sink_p2` parks the discovery as a P2 follow-up in the project sink without prompting — resolver returns `defer-to-sink`; orchestrator calls `scripts/sink-add.sh` with the question context. |
+| `workflow.pre_run_cost_gate` | string | `ask` | `ask` \| `auto_proceed` \| `halt` | Controls the pre-run cost gate for high-cost commands (z-research, z-uplift, z-plan-split). `ask` prompts. `auto_proceed` skips the gate check. `halt` stops unconditionally. Also consumed by `check-no-ask --question-id workflow.pre_run_cost_gate --range-high N --severity hard|soft`. |
 
 ## CLI reference (Workflow Resolver)
 
@@ -229,9 +231,11 @@ Exit codes: 0 (valid JSON), 2 (bad invocation), 3 (unknown question_id; JSON wit
 
 **Always capture exit code separately.** Never pipe through chains that swallow it. On any non-zero exit, fall through to `ask`.
 
-### `check-no-ask --question-id <id>`
+### `check-no-ask --question-id <id> [--range-high N] [--severity hard|soft]`
 
-Lightweight overnight-gate checker. Returns `{"result": "halt"|"proceed"|"unhandled_gate", "question_id": "<id>", "rule_id": "<rule>"}`. Always exits 0 on valid invocations.
+Lightweight overnight-gate checker. Returns `{"result": "halt"|"proceed"|"auto_proceed"|"unhandled_gate", "question_id": "<id>", "rule_id": "<rule>"}`. Always exits 0 on valid invocations.
+
+The `--range-high` and `--severity` flags activate cost-gate delegation: `soft` severity always returns `auto_proceed`; `hard` severity under `NO_ASK=halt` applies the budget rule against `cost.token_budget`.
 
 ### `set <dotted.key> <value> [--scope=global|project]`
 
@@ -363,6 +367,22 @@ scripts/config.sh set experiment.persona_rotation false --scope=project
 
 ---
 
+## Key entry points
+
+- `scripts/config.py:53` — `DEFAULTS` — built-in default values for all config keys including `[brainstorm]`, `[personas]`, `[workflow]`, `[followup]`, `[axioms]`, `[experiment]`, `[cost]` sections (layer 1)
+- `scripts/config.py:147` — `VALIDATORS` — allowed enum sets per dotted-key; hard-fail on repo/env, soft-warn on global; includes all `personas.*`, workflow, axioms, experiment, cost keys
+- `scripts/config.py:178` — `_COERCERS` — post-validation normalizers; converts env-var strings to typed Python values for bool/int knobs (including all `personas.*` bool knobs)
+- `scripts/config.py:239` — `QUESTION_IDS` — single source of truth for AskUserQuestion routing-class preference keys
+- `scripts/config.py:320` — `OVERNIGHT_AUTODECIDE_QIDS_DEFAULT` — default overnight allowlist
+- `scripts/config.py:326` — `RESULT_MAP` — maps `(question_id, option-domain-value)` to resolver result-domain
+- `scripts/config.py:355` — `_run_startup_guards` — module-load consistency check
+- `scripts/config.py:664` — `load_config` — build resolved config from all 4 layers; returns `(values, sources)` dicts
+- `scripts/config.py:880` — `cmd_export_env` — print export lines for all user knobs; emit `config_resolved` once per run
+- `scripts/config.py:2007` — `cmd_resolve_question` — consults 4-layer config + memory + axioms + overnight overrides; returns JSON envelope
+- `scripts/config.py:2264` — `cmd_check_no_ask` — lightweight overnight-gate checker with cost-gate delegation path
+- `scripts/config.py:2533` — `cmd_set` — atomically write a TOML key to global or project config via tmp+rename
+- `scripts/propose-prefs.py:1` — `propose-prefs` (module) — walks `metrics.jsonl` for repeated command-pair patterns; emits JSON proposal if threshold met; never writes
+
 ## How it interacts with others
 
 - `commands` (z-audit-plan, z-audit-plan-style, z-plan, z-fix, z-uplift, z-amend, z-do, z-research, z-implement-all, z-review-all, z-overnight, z-implement-next, z-debug, z-audit, z-brainstorm, z-plan-light) — call `export-env` + `should-notify` during Setup; call `resolve-question` before workflow AskUserQuestions; call `check-no-ask` for overnight gate checks; call `set` after proposal acceptance; call `propose-prefs.py` at command end; read `brainstorm.personas`, `personas.*`, `experiment.*` at each persona-dispatch site
@@ -370,22 +390,29 @@ scripts/config.sh set experiment.persona_rotation false --scope=project
 - `scripts` — provides the `log-event.sh` + `log-phase.sh` telemetry pipeline that `config.py` writes events through; `scripts/axiom-store.py` loaded dynamically by `_load_axiom_store_module` for axiom resolution
 - `followup-sink` — `sink-add.sh` called by orchestrators when `resolve-question` returns `defer-to-sink`; `notion-push.py` reads `Z_HARNESS_NOTION_TOKEN` env override
 - `active-plan-registry` — `Z_HARNESS_REGISTRY_ENABLED`, `Z_HARNESS_REGISTRY_STALE_SECS`, `Z_HARNESS_STRICT_OVERLAP`, `Z_HARNESS_EXTERNAL_DEFAULT`, and `Z_HARNESS_BASE_DIR` are env-only knobs (not in config.py's DEFAULTS) consumed by `plan-path.sh` and `active-plan-registry.py`
+- `cost-estimation` — `cost.token_budget` is read by `check-no-ask --range-high N --severity hard` as the budget ceiling; `workflow.pre_run_cost_gate` gates the cost-gate question for z-research/z-uplift/z-plan-split
 
-## Key entry points
+## Edge cases / gotchas
 
-- `scripts/config.py:51` — `DEFAULTS` — built-in default values for all config keys including `[brainstorm]`, `[personas]`, `[workflow]`, `[followup]`, `[axioms]`, `[experiment]` sections (layer 1)
-- `scripts/config.py:134` — `VALIDATORS` — allowed enum sets per dotted-key; hard-fail on repo/env, soft-warn on global; includes all `personas.*`, workflow, axioms, experiment keys
-- `scripts/config.py:163` — `_COERCERS` — post-validation normalizers; converts env-var strings to typed Python values for bool/int knobs (including all `personas.*` bool knobs)
-- `scripts/config.py:181` — `QUESTION_IDS` — single source of truth for AskUserQuestion routing-class preference keys
-- `scripts/config.py:251` — `OVERNIGHT_AUTODECIDE_QIDS_DEFAULT` — default overnight allowlist
-- `scripts/config.py:257` — `RESULT_MAP` — maps `(question_id, option-domain-value)` to resolver result-domain
-- `scripts/config.py:321` — `_run_startup_guards` — module-load consistency check
-- `scripts/config.py:630` — `load_config` — build resolved config from all 4 layers; returns `(values, sources)` dicts
-- `scripts/config.py:846` — `cmd_export_env` — print export lines for all user knobs; emit `config_resolved` once per run
-- `scripts/config.py:1927` — `cmd_resolve_question` — consults 4-layer config + memory + axioms + overnight overrides; returns JSON envelope
-- `scripts/config.py:2094` — `cmd_check_no_ask` — lightweight overnight-gate checker
-- `scripts/config.py:2323` — `cmd_set` — atomically write a TOML key to global or project config via tmp+rename
-- `scripts/propose-prefs.py:1` — `propose-prefs` (module) — walks `metrics.jsonl` for repeated command-pair patterns; emits JSON proposal if threshold met; never writes
+- `personas.consult_eval` defaults to `false` (OFF) — it is the most expensive and lowest-signal advisory arm; turning it on adds one extra subagent call at every convergent eval site
+- There is NO `personas.debug` knob — it was removed as dead code. Do not attempt to configure it; it will be silently ignored or may trigger a validation error on future schema revisions
+- `brainstorm.personas` remains in `[brainstorm]` (not `[personas]`) by design; do NOT move it
+- `personas.implementer_retry` only has effect when `experiment.persona_rotation = true`; when rotation is off, `implementer_retry` is a no-op regardless of its value
+- `workflow.slug_confirm` value domain (`ask`/`auto_accept`/`recommend_derived`) is NOT the same as the resolver result domain (`ask`/`prefill`/`skip`); `RESULT_MAP` translates between them — `auto_accept` → `skip`, `recommend_derived` → `prefill`
+- `Z_HARNESS_ASK_ALL=1` and `Z_HARNESS_NO_ASK=halt` are mutually exclusive — setting both causes `resolve-question` to exit 5 (not 0); check for this conflict before setting both in scripts
+- `check-no-ask` fails closed on unregistered question IDs when `NO_ASK=halt` — unknown question → `halt` + `unknown_ask_blocked` event
+- Capture exit code separately from output: `RESOLVED=$(python3 scripts/config.py resolve-question ...); RESOLVE_EXIT=$?`. Never pipe through `set -e` chains that swallow exit codes
+- `cmd_set` exits 0 silently on success — no stdout output; do not parse stdout from `cmd_set`
+- Valid event kinds for `should-notify`: `approval`, `phase_end`, `error` only. Passing `run_complete` exits 2; guard invocations with `|| true` if needed
+- `get-batch` always exits 0 unlike `get` which exits 3 on unknown keys — callers must check for `null` values in JSON output to detect missing keys
+- `[followup]` keys that are arrays (e.g. `auto_close_low_risk_path_allowlist`) are NOT in `VALIDATORS` and receive no enum validation
+- `followup.auto_close_low_risk_enabled` defaults to `true` (on by default); set to `false` to disable — do not assume the default is off
+- `Z_HARNESS_NOTION_TOKEN` is env-only (not a TOML key); never log it; never run `notion-push.py` wrappers under `set -x`
+- Axiom participation requires `axioms.enabled = true` (the default) AND `scripts/axiom-store.py` present. When the store is absent, axioms are a silent no-op — not an error
+- `Z_HARNESS_REGISTRY_ENABLED`, `Z_HARNESS_REGISTRY_STALE_SECS`, `Z_HARNESS_STRICT_OVERLAP`, `Z_HARNESS_EXTERNAL_DEFAULT`, and `Z_HARNESS_BASE_DIR` are NOT in config.py's DEFAULTS or VALIDATORS — consumed exclusively by `plan-path.sh` and `active-plan-registry.py`; `inspect-all` does NOT surface them
+- `cost.token_budget = null` (the default) means no budget is configured; `check-no-ask` with `--severity hard` under `NO_ASK=halt` will return `halt` with `rule_id: cost_budget_missing` when unset
+- `workflow.pre_run_cost_gate` governs the z-research/z-uplift/z-plan-split pre-run gate; it is a registered question_id and participates in the overnight allowlist system
+- `check-no-ask --severity soft` always returns `auto_proceed` regardless of policy — soft-severity gates are never blocking
 
 ## Examples
 
@@ -440,6 +467,7 @@ implement_all_proceed = "auto_resume"
 review_all_proceed = "proceed"
 plan_decisions_approval = "approve"
 spec_retro_discovery = "defer_to_sink_p2"
+pre_run_cost_gate = "auto_proceed"
 ```
 
 **Overnight mode with custom allowlist:**
@@ -449,24 +477,12 @@ export Z_HARNESS_NO_ASK=halt
 export Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE='{"workflow.slug_confirm":"recommend_derived","workflow.plan_decisions_approval":"approve"}'
 ```
 
-## Edge cases / gotchas
+**Token budget for policy mode:**
 
-- `personas.consult_eval` defaults to `false` (OFF) — it is the most expensive and lowest-signal advisory arm; turning it on adds one extra subagent call at every convergent eval site
-- There is NO `personas.debug` knob — it was removed as dead code. Do not attempt to configure it; it will be silently ignored or may trigger a validation error on future schema revisions
-- `brainstorm.personas` remains in `[brainstorm]` (not `[personas]`) by design; do NOT move it
-- `personas.implementer_retry` only has effect when `experiment.persona_rotation = true`; when rotation is off, `implementer_retry` is a no-op regardless of its value
-- `workflow.slug_confirm` value domain (`ask`/`auto_accept`/`recommend_derived`) is NOT the same as the resolver result domain (`ask`/`prefill`/`skip`); `RESULT_MAP` translates between them — `auto_accept` → `skip`, `recommend_derived` → `prefill`
-- `Z_HARNESS_ASK_ALL=1` and `Z_HARNESS_NO_ASK=halt` are mutually exclusive — setting both causes `resolve-question` to exit 5 (not 0); check for this conflict before setting both in scripts
-- `check-no-ask` fails closed on unregistered question IDs when `NO_ASK=halt` — unknown question → `halt` + `unknown_ask_blocked` event
-- Capture exit code separately from output: `RESOLVED=$(python3 scripts/config.py resolve-question ...); RESOLVE_EXIT=$?`. Never pipe through `set -e` chains that swallow exit codes
-- `cmd_set` exits 0 silently on success — no stdout output; do not parse stdout from `cmd_set`
-- Valid event kinds for `should-notify`: `approval`, `phase_end`, `error` only. Passing `run_complete` exits 2; guard invocations with `|| true` if needed
-- `get-batch` always exits 0 unlike `get` which exits 3 on unknown keys — callers must check for `null` values in JSON output to detect missing keys
-- `[followup]` keys that are arrays (e.g. `auto_close_low_risk_path_allowlist`) are NOT in `VALIDATORS` and receive no enum validation
-- `followup.auto_close_low_risk_enabled` defaults to `true` (on by default); set to `false` to disable — do not assume the default is off
-- `Z_HARNESS_NOTION_TOKEN` is env-only (not a TOML key); never log it; never run `notion-push.py` wrappers under `set -x`
-- Axiom participation requires `axioms.enabled = true` (the default) AND `scripts/axiom-store.py` present. When the store is absent, axioms are a silent no-op — not an error
-- `Z_HARNESS_REGISTRY_ENABLED`, `Z_HARNESS_REGISTRY_STALE_SECS`, `Z_HARNESS_STRICT_OVERLAP`, `Z_HARNESS_EXTERNAL_DEFAULT`, and `Z_HARNESS_BASE_DIR` are NOT in config.py's DEFAULTS or VALIDATORS — consumed exclusively by `plan-path.sh` and `active-plan-registry.py`; `inspect-all` does NOT surface them
+```toml
+[cost]
+token_budget = 50000
+```
 
 ## v2 deferrals
 
