@@ -1,5 +1,5 @@
 ---
-description: Implement the next pending task from z-harness/TASKS.md, then have Codex scrutinize the diff.
+description: "Implement the next pending task from z-harness/TASKS.md, then have Codex scrutinize the diff."
 role: skill
 ---
 

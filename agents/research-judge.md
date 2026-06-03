@@ -1,6 +1,6 @@
 ---
 name: research-judge
-description: Final-judge synthesizer for /z-research. Reads N=3 adversarial-panel perspective outputs + the MAP.md + BRAINSTORM.md source artifacts; produces the final RESEARCH.md content (10 sections per SPEC) including the approach decision matrix with mandatory citations. Read-only — returns text; orchestrator writes the file. HARD INVARIANT: forbidden from proposing new design recommendations. ALLOWED: collision-flagging, framing rank-ordering by constraint-fit, evidence-gap surfacing.
+description: "Final-judge synthesizer for /z-research. Reads N=3 adversarial-panel perspective outputs + the MAP.md + BRAINSTORM.md source artifacts; produces the final RESEARCH.md content (10 sections per SPEC) including the approach decision matrix with mandatory citations. Read-only — returns text; orchestrator writes the file. HARD INVARIANT: forbidden from proposing new design recommendations. ALLOWED: collision-flagging, framing rank-ordering by constraint-fit, evidence-gap surfacing."
 tools: Read
 model: opus
 ---

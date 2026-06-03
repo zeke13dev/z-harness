@@ -1,5 +1,5 @@
 ---
-description: Author the project STYLE.md interactively, grounded in the repo's most idiomatic existing files (Capture). Required before /z-mr-review will run.
+description: "Author the project STYLE.md interactively, grounded in the repo's most idiomatic existing files (Capture). Required before /z-mr-review will run."
 role: workflow
 ---
 

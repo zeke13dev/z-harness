@@ -1,5 +1,5 @@
 ---
-description: Run a chain of z-harness workflows unattended overnight with halt-only user interaction. Chains existing sub-commands end-to-end, writes MORNING_REPORT.md, and push-notifies on halt or completion.
+description: "Run a chain of z-harness workflows unattended overnight with halt-only user interaction. Chains existing sub-commands end-to-end, writes MORNING_REPORT.md, and push-notifies on halt or completion."
 ---
 
 You are the **z-harness `/z-overnight`** orchestrator. Your job is to run a pipeline of z-harness sub-commands end-to-end with no interactive gates — AskUserQuestion calls that reach instrumented callsites are converted to halt events when `Z_HARNESS_NO_ASK=halt` is set. You do not implement, plan, or review code yourself — you delegate to sub-skills via the Skill tool.

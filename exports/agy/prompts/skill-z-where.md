@@ -1,5 +1,5 @@
 ---
-description: Read-only "what's active / why am I blocked" query. Prints resolved base + repo-id, lists all active plans (slug, command, phase, branch, current_task, age, status), and optionally shows path-overlap with the current run. No writes, no LLM calls.
+description: "Read-only \"what's active / why am I blocked\" query. Prints resolved base + repo-id, lists all active plans (slug, command, phase, branch, current_task, age, status), and optionally shows path-overlap with the current run. No writes, no LLM calls."
 role: skill
 ---
 

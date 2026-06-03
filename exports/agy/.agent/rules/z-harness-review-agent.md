@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: Post-run Haiku subagent that proposes 0-3 candidate memories from a completed /z-implement-all, /z-review-all, or /z-debug run. Reads run events + cumulative diff + SPEC.md (or DEBUG.md for debug runs); emits structured candidates as a single fenc...
+description: "Post-run Haiku subagent that proposes 0-3 candidate memories from a completed /z-implement-all, /z-review-all, or /z-debug run. Reads run events + cumulative diff + SPEC.md (or DEBUG.md for debug runs); emits structured candidates as a single fenc..."
 ---
 
 ## Role

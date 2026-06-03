@@ -1,5 +1,5 @@
 ---
-description: Fast Haiku context-fetcher for the two-tier docs system (docs/llm/INDEX.json + per-concept LLM JSONs + human-tier markdown). Caller asks "I need context on X"; this agent reads INDEX.json, picks the matching concept(s), reads their JSONs (and opti...
+description: "Fast Haiku context-fetcher for the two-tier docs system (docs/llm/INDEX.json + per-concept LLM JSONs + human-tier markdown). Caller asks \"I need context on X\"; this agent reads INDEX.json, picks the matching concept(s), reads their JSONs (and opti..."
 role: rule
 ---
 

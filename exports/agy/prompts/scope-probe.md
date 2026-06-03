@@ -1,5 +1,5 @@
 ---
-description: Pre-dispatch Haiku scope classifier. Runs as Phase 0 of host z-* commands (initially /z-audit and /z-brainstorm). Classifies the topic as LIGHT / MEDIUM / HEAVY by walking codebase structure and counting natural seams, with a caller-supplied axis ...
+description: "Pre-dispatch Haiku scope classifier. Runs as Phase 0 of host z-* commands (initially /z-audit and /z-brainstorm). Classifies the topic as LIGHT / MEDIUM / HEAVY by walking codebase structure and counting natural seams, with a caller-supplied axis ..."
 role: rule
 ---
 

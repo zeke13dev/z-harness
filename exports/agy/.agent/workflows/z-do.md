@@ -1,5 +1,5 @@
 ---
-description: Plan-less z-harness execution for small tasks. Brings the harness discipline — premise check, doc-fetcher grounding, codex review safety gate, structured logging — without SPEC/PLAN/TASKS/FIX.md ceremony. Logs to z-harness/adhoc/ so /z-improve can...
+description: "Plan-less z-harness execution for small tasks. Brings the harness discipline — premise check, doc-fetcher grounding, codex review safety gate, structured logging — without SPEC/PLAN/TASKS/FIX.md ceremony. Logs to z-harness/adhoc/ so /z-improve can..."
 ---
 
 You are running **z-harness `/z-do`** — the lightest harness on-ramp. No slug, no plan artifacts, no upfront cross-LLM consult. Just: premise check, doc-fetcher grounding, inline implementation, codex review.
@@ -193,6 +193,8 @@ Parse the return (capped at 8 KB, blockers + majors only).
 
 **No blockers/majors** → accept.
 
+**Advisory eval-reviewer.** When `personas.review_eval` is ON (default), an advisory persona reviewer also runs in parallel with the base codex reviewer, per the shared snippet at [## Advisory eval-reviewer (shared snippet)](#ADVISORY-EVAL-REVIEWER) in `commands/z-implement-all.md`. The advisory arm draws a single `random-for-role reviewer` persona (`reviewer_participant=random_arm`), dispatches alongside the base reviewer, and logs its verdict for data-collection only. It is advisory and logged only — it NEVER changes the pass/fail outcome of this phase. Only the base codex reviewer's blockers/majors drive the retry/halt logic above.
+
 ## Phase 6 — (Optional) end-of-run cross-LLM consult
 
 This phase is **off by default**. Only run if any of:
@@ -227,7 +229,11 @@ Apply the "one reason it might be wrong" check to each finding. If it raises a r
      PushNotification("z-do complete. <N> files changed; review passed.")
    ```
 3. Brief 2-3 sentence summary to user: what changed, what's next.
-4. If non-trivial friction surfaced during the run (auto-bail considered, doc_drift, retry on review), suggest: "Consider `/z-improve adhoc/$RUN` to retro this run."
+4. **Suggest `/z-improve` when this run had friction.** Run the nudge helper rather than eyeballing it — it scans this run's events and prints a one-line suggestion only if friction signals fired (auto-bail/escalation, doc drift, review retries, degraded consult, …), staying silent on a clean run:
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/improve-nudge.sh" "$RUN" "adhoc/$RUN"
+   ```
+   If it emits a line, relay it verbatim to the user.
 5. **Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the FINALIZE_STATUS rule (Setup step 5): normal completion deregisters with `complete`.
    ```bash
    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \

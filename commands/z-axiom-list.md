@@ -1,6 +1,6 @@
 ---
 description: List axiom records from the store, rendered as a readable table. Supports filtering by status, scope, and discipline.
-argument-hint: [--status <candidate|approved|rejected>] [--scope <global|project>] [--discipline <tag>] [--repo-root <path>]
+argument-hint: "[--status <candidate|approved|rejected>] [--scope <global|project>] [--discipline <tag>] [--repo-root <path>]"
 runtime: c1
 driver_features_required: []
 unsupported_driver_behavior: explicit_gate

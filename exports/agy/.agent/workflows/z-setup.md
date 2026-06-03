@@ -1,5 +1,5 @@
 ---
-description: Configuration cockpit for z-harness: inspect resolved state, run guided setup wizard, or apply a posture preset.
+description: "Configuration cockpit for z-harness: inspect resolved state, run guided setup wizard, or apply a posture preset."
 ---
 
 You are the **z-harness `/z-setup`** skill. Your job is to provide a single entry point for all z-harness configuration: inspecting the current resolved state, running a guided setup wizard, or applying a posture preset. You delegate the heavy lifting to `scripts/setup.py`.

@@ -1,5 +1,5 @@
 ---
-description: Audit a target component across one or more dimensions (correctness / perf / cleanliness / design). Pre-flight scopes (target, dimensions, optional rubric file), spawns one auditor subagent per dimension in parallel, runs bundled Gemini+Codex cons...
+description: "Audit a target component across one or more dimensions (correctness / perf / cleanliness / design). Pre-flight scopes (target, dimensions, optional rubric file), spawns one auditor subagent per dimension in parallel, runs bundled Gemini+Codex cons..."
 ---
 
 You are running **z-harness `/z-audit`** — a structured, read-only audit pipeline. The output is `REPORT.md` (everything found) plus a curated `TASKS.md` (actionable subset, in `/z-implement-all`-compatible format) under `$Z_HARNESS_PLAN_DIR-audit/`.
@@ -71,7 +71,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
    START_PAYLOAD="$(python3 -c '
    import json, sys
-   v = json.loads(sys.argv[1]); v["target"] = sys.argv[2]; v["session_id"] = sys.argv[3]
+   v = json.loads(sys.argv[1]); v["target"] = sys.argv[2]; v["session_id"] = sys.argv[3]; v["command"] = "z-audit"
    print(json.dumps(v))
    ' "$VERSION_BLOB" "<arguments>" "$Z_HARNESS_SESSION_ID")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" audit_run_start "$START_PAYLOAD"
@@ -297,6 +297,24 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
   "$(python3 -c "import json,sys; chunks=json.loads(sys.argv[1]); print(json.dumps({'chunk_count':len(chunks),'chunks':[c['id'] for c in chunks],'axis':sys.argv[2]}))" "$CHUNKS_JSON" "$AXIS")"
 ```
 
+**Soft cost estimate (non-blocking).** Call the gate helper with the HEAVY chunk count (N), display the estimate, and log the decision. This fires only here (HEAVY path); LIGHT/MEDIUM runs skip it entirely.
+```bash
+# workflow.pre_run_cost_gate
+N_CHUNKS="$(python3 -c 'import json,sys; print(len(json.loads(sys.argv[1])))' "$CHUNKS_JSON" 2>/dev/null || echo "0")"
+COST_GATE_JSON="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/pre-run-cost-gate.sh" \
+  z-audit soft "$RUN" --dispatch per_dimension=$N_CHUNKS 2>/dev/null)" || COST_GATE_JSON=""
+if [ -n "$COST_GATE_JSON" ]; then
+  COST_HUMAN_BLOCK="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("human_block",""))' "$COST_GATE_JSON" 2>/dev/null || true)"
+  [ -n "$COST_HUMAN_BLOCK" ] && printf '%s\n' "$COST_HUMAN_BLOCK"
+  COST_ESTIMATED_TOKENS="$(python3 -c 'import json,sys; e=json.loads(sys.argv[1]).get("estimate",{}); print(json.dumps(e.get("estimated_tokens")))' "$COST_GATE_JSON" 2>/dev/null || echo "null")"
+  COST_CONFIDENCE="$(python3 -c 'import json,sys; e=json.loads(sys.argv[1]).get("estimate",{}); print(e.get("confidence","unknown"))' "$COST_GATE_JSON" 2>/dev/null || echo "unknown")"
+  COST_BASIS="$(python3 -c 'import json,sys; e=json.loads(sys.argv[1]).get("estimate",{}); print(e.get("basis","unknown"))' "$COST_GATE_JSON" 2>/dev/null || echo "unknown")"
+fi
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cost_gate_decision \
+  "$(python3 -c 'import json,sys; print(json.dumps({"command":"z-audit","choice":"auto_proceed","reason":"soft_gate","estimated_tokens":json.loads(sys.argv[1]),"confidence":sys.argv[2],"basis":sys.argv[3]}))' \
+     "${COST_ESTIMATED_TOKENS:-null}" "${COST_CONFIDENCE:-unknown}" "${COST_BASIS:-unknown}")"
+```
+
 Dispatch N parallel `/z-audit` sub-flows (one per chunk in `chunks`), all in a single message:
 
 ```
@@ -450,6 +468,70 @@ Checkpoint: `$BASE/archive/$RUN/phase1-scope.md` with the resolved (target, dime
 
 ## Phase 2 — Parallel auditor dispatch
 
+### Phase 2a — Resolve auditor personas (DIVERGENT site)
+
+**Gated on `personas.audit` (default `true`). When the knob is OFF this entire block is a no-op** — every `DIM_*_PERSONA_PREFIX` stays empty and the dispatch in Phase 2b is byte-identical to the pre-feature single-prompt per dimension (no draw, no prefix, no `persona_bound` event). When ON, draw up to 4 **distinct** `audit_persona` personas and prepend one per dimension auditor — persona diversity layered on top of dimension-specific instructions.
+
+The 4 fixed dimensions and their positional slots are: `correctness` (slot 0), `perf` (slot 1), `cleanliness` (slot 2), `design` (slot 3).
+
+```bash
+PLUGIN="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+AUDIT_PERSONAS="$(python3 "$PLUGIN/scripts/config.py" get personas.audit 2>/dev/null || echo true)"
+
+# Vanilla defaults: empty prefix for all four dimension slots. Knob OFF leaves
+# these untouched, so 2b dispatch is identical to the pre-persona behavior.
+CORRECTNESS_PERSONA_PREFIX=""; CORRECTNESS_PERSONA_NAME=""; CORRECTNESS_DRAW_ID=""
+PERF_PERSONA_PREFIX="";        PERF_PERSONA_NAME="";        PERF_DRAW_ID=""
+CLEANLINESS_PERSONA_PREFIX=""; CLEANLINESS_PERSONA_NAME=""; CLEANLINESS_DRAW_ID=""
+DESIGN_PERSONA_PREFIX="";      DESIGN_PERSONA_NAME="";      DESIGN_DRAW_ID=""
+
+if [ "$AUDIT_PERSONAS" = "true" ]; then
+  # Draw up to 4 distinct audit_persona personas. GRACEFUL DEGRADATION: if the
+  # audit_persona pool has fewer than 4 members, the subcommand returns a shorter
+  # array (or [] when empty) and exits 0 — never exits non-zero. Unfilled slots
+  # stay vanilla (empty prefix).
+  AUDIT_PERSONAS_JSON=$(python3 "$PLUGIN/scripts/resolve-persona.py" \
+    random-distinct-for-role audit_persona --count=4 \
+    2>>"$BASE/archive/$RUN/persona-draw.log")
+
+  # Positional bind: [0]->correctness, [1]->perf, [2]->cleanliness, [3]->design.
+  # `// ""` yields an empty string for absent indices under underflow.
+  for slot in 0:CORRECTNESS 1:PERF 2:CLEANLINESS 3:DESIGN; do
+    idx="${slot%%:*}"; dim="${slot##*:}"
+    name=$(echo "$AUDIT_PERSONAS_JSON" | jq -r ".[$idx].persona // \"\"")
+    path=$(echo "$AUDIT_PERSONAS_JSON" | jq -r ".[$idx].persona_body_path // \"\"")
+    draw=$(echo "$AUDIT_PERSONAS_JSON" | jq -r ".[$idx].draw_id // \"\"")
+    [ -z "$name" ] && continue   # underflow slot — leave vanilla
+    # prepend_persona(path, "") strips frontmatter; re-append blank-line separator
+    # because command substitution strips trailing newlines.
+    prefix="$(python3 "$PLUGIN/runtime/dispatch/persona_prompt.py" "$path" "" 2>/dev/null | head -c 4096 || true)"
+    [ -n "$prefix" ] && prefix="${prefix}
+
+"
+    printf -v "${dim}_PERSONA_NAME" '%s' "$name"
+    printf -v "${dim}_PERSONA_PREFIX" '%s' "$prefix"
+    printf -v "${dim}_DRAW_ID" '%s' "$draw"
+  done
+
+  # Emit persona_bound per auditor that received a persona (attribution;
+  # no outcome tracking — auditors have no measurable terminal).
+  # Skip any vanilla slot and skip the whole step when the knob is OFF.
+  for slot in correctness:CORRECTNESS perf:PERF cleanliness:CLEANLINESS design:DESIGN; do
+    dim="${slot%%:*}"; who="${slot##*:}"
+    eval "pname=\$${who}_PERSONA_NAME"; eval "pdraw=\$${who}_DRAW_ID"
+    [ -z "$pname" ] && continue
+    bash "$PLUGIN/scripts/log-event.sh" "$RUN" persona_bound \
+      "$(python3 -c 'import json,sys; print(json.dumps({
+        "command":"z-audit","role":"audit_persona",
+        "dimension":sys.argv[1],"persona_id":sys.argv[2],
+        "draw_id":sys.argv[3],"selection_source":"random_role_pool_distinct"
+      }))' "$dim" "$pname" "$pdraw")"
+  done
+fi
+```
+
+### Phase 2b — Dispatch
+
 Spawn one `auditor` subagent **per selected dimension**, in parallel, in a single message:
 
 ```
@@ -459,9 +541,11 @@ Spawn one `auditor` subagent **per selected dimension**, in parallel, in a singl
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="auditor",
   description="<dim> audit of <slug>",
-  prompt="DIMENSION: <dim>\nTARGET: <abs path> — <one-line description>\nRUBRIC_PATH: <abs path or empty>\n$BASE: <abs path to $BASE>\nrelevant_docs:\n  - <doc1>\n  - <doc2>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]\n\nFollow your agent definition. Emit findings to $BASE/findings-<dim>.md and return STATUS + COUNTS + VERDICT."
+  prompt="<DIM_PERSONA_PREFIX>DIMENSION: <dim>\nTARGET: <abs path> — <one-line description>\nRUBRIC_PATH: <abs path or empty>\n$BASE: <abs path to $BASE>\nrelevant_docs:\n  - <doc1>\n  - <doc2>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]\n\nFollow your agent definition. Emit findings to $BASE/findings-<dim>.md and return STATUS + COUNTS + VERDICT."
 )
 ```
+
+Each `<DIM_PERSONA_PREFIX>` is the persona body for that dimension followed by a blank line (from Phase 2a), or **empty** when that dimension drew no persona (underflow slot) or the `personas.audit` knob is OFF — in the empty case the prompt is byte-identical to the pre-persona dispatch.
 
 Each auditor writes `$BASE/findings-<dim>.md` and returns a structured summary. Collect all returns.
 
@@ -512,7 +596,52 @@ Build `$BASE/REPORT.md` (full set, organized by dimension):
 
 ## Phase 4 — Bundled cross-LLM consult on findings
 
-Spawn both consultants in parallel against `REPORT.md`:
+### Phase 4a — Measured persona advisory arm (CONVERGENT site)
+
+**This arm is ADDITIVE and ADVISORY only. The neutral consult's synthesis (Phase 4b) is the decision of record. The persona arm's output is NEVER folded into the Phase 4b synthesis.**
+
+Read the `personas.consult_eval` knob:
+
+```bash
+PLUGIN="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+CONSULT_EVAL="$(python3 "$PLUGIN/scripts/config.py" get personas.consult_eval 2>/dev/null || echo false)"
+```
+
+**When `CONSULT_EVAL` is `true`:** draw ONE `consultant` persona and dispatch an additional advisory arm IN PARALLEL with the two neutral consultants in Phase 4b (include it in the same parallel message):
+
+```bash
+# Draw one consultant persona. Graceful underflow: if the pool is empty,
+# the command returns [] and exits 0 — skip the advisory arm entirely.
+ADVISORY_PERSONA_JSON=$(python3 "$PLUGIN/scripts/resolve-persona.py" \
+  random-distinct-for-role consultant --count=1 \
+  2>>"$BASE/archive/$RUN/persona-draw.log")
+
+ADVISORY_PERSONA_NAME=$(echo "$ADVISORY_PERSONA_JSON" | jq -r '.[0].persona // ""')
+ADVISORY_PERSONA_PATH=$(echo "$ADVISORY_PERSONA_JSON" | jq -r '.[0].persona_body_path // ""')
+ADVISORY_DRAW_ID=$(echo "$ADVISORY_PERSONA_JSON" | jq -r '.[0].draw_id // ""')
+
+if [ -n "$ADVISORY_PERSONA_NAME" ]; then
+  # Prepend persona body to the advisory prompt (strips frontmatter); re-append
+  # blank-line separator because command substitution strips trailing newlines.
+  ADVISORY_PREFIX="$(python3 "$PLUGIN/runtime/dispatch/persona_prompt.py" \
+    "$ADVISORY_PERSONA_PATH" "" 2>/dev/null | head -c 4096 || true)"
+  [ -n "$ADVISORY_PREFIX" ] && ADVISORY_PREFIX="${ADVISORY_PREFIX}
+
+"
+
+  # Emit persona_bound for the advisory arm (attribution; no outcome tracking).
+  bash "$PLUGIN/scripts/log-event.sh" "$RUN" persona_bound \
+    "$(python3 -c 'import json,sys; print(json.dumps({
+      "command":"z-audit","role":"consultant",
+      "arm":"advisory","persona_id":sys.argv[1],
+      "draw_id":sys.argv[2],"selection_source":"random_role_pool"
+    }))' "$ADVISORY_PERSONA_NAME" "$ADVISORY_DRAW_ID")"
+fi
+```
+
+### Phase 4b — Neutral consult dispatch
+
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
 
 ```
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
@@ -530,9 +659,41 @@ Spawn both consultants in parallel against `REPORT.md`:
 )
 ```
 
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+```
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+  subagent_type="consultant-primary",
+  description="Advisory persona consult for audit <slug>",
+  prompt="<ADVISORY_PREFIX>MODE: audit-review\n\n<same prompt body as neutral arms>"
+)
+```
+
+**Capture the advisory arm's output in a separate variable** (e.g. `ADVISORY_RECOMMENDATION`). Do NOT pass it to the synthesis step below. After Phase 4b returns, log the advisory recommendation as a dedicated telemetry event:
+
+```bash
+if [ -n "$ADVISORY_PERSONA_NAME" ]; then
+  bash "$PLUGIN/scripts/log-event.sh" "$RUN" persona_advisory_recommendation \
+    "$(python3 -c 'import json,sys; print(json.dumps({
+      "command":"z-audit","phase":4,
+      "persona_id":sys.argv[1],"draw_id":sys.argv[2],
+      "recommendation": sys.argv[3][:2000]
+    }))' "$ADVISORY_PERSONA_NAME" "$ADVISORY_DRAW_ID" "$ADVISORY_RECOMMENDATION")"
+fi
+```
+
+**Neutral-authority contract (mechanical, load-bearing):**
+- The neutral consult's synthesis is the decision of record.
+- The persona advisory arm's recommendation is emitted under `persona_advisory_recommendation` — it is NEVER merged into the synthesis below.
+- No prose path in the synthesis step may instruct the orchestrator to read the advisory arm's output into the final REPORT.md additions/drops.
+- **Acceptance criterion (mock-disagreement):** If the persona advisory arm recommends dropping finding F and the two neutral arms both recommend keeping F, the synthesis keeps F unchanged. The `persona_advisory_recommendation` event records the drop recommendation for later analysis.
+
+**When `CONSULT_EVAL` is `false` (default) or `ADVISORY_PERSONA_NAME` is empty (underflow):** skip the advisory arm entirely. The Phase 4b dispatch is byte-identical to the pre-feature two-arm neutral consult. No draw event, no prefix, no `persona_bound`, no `persona_advisory_recommendation`.
+
 Both transcripts archive themselves under `$BASE/archive/$RUN/transcripts/`.
 
-**When both return:**
+**When both neutral arms return (advisory arm output is captured separately):**
 
 1. For each addition: apply the "one reason this might be wrong" check before accepting.
 2. For each suggested drop: confirm by re-reading the cited code.
@@ -629,7 +790,7 @@ Brief summary to user (3-5 bullets):
 Log run end:
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" audit_run_end \
-  "$(printf '{"status":"complete","findings":%d,"tasks":%d,"dimensions":"%s"}' "$N_FINDINGS" "$N_TASKS" "$DIMS")"
+  "$(printf '{"command":"z-audit","status":"complete","findings":%d,"tasks":%d,"dimensions":"%s"}' "$N_FINDINGS" "$N_TASKS" "$DIMS")"
 ```
 
 **Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the FINALIZE_STATUS rule (Setup step 6): normal completion deregisters with `complete`.
@@ -642,8 +803,8 @@ python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-reg
 
 | Event kind | When / meaning | Required fields |
 |---|---|---|
-| `audit_run_start` | Audit run begins | version fields, `target` |
-| `audit_run_end` | Audit run completes | `status`, `findings`, `tasks`, `dimensions` |
+| `audit_run_start` | Audit run begins | version fields, `target`, `command` |
+| `audit_run_end` | Audit run completes | `command`, `status`, `findings`, `tasks`, `dimensions` |
 | `scope_from_resolved` | `--scope-from` chunk resolved successfully | `chunk_id`, `scope_hint`, `parent_scope_json` |
 | `scope_probe_start` | Scope-probe Agent dispatched | `axis_taxonomy` |
 | `scope_probe_classified` | Scope-probe returned `STATUS: classified` | `status`, `mode`, `axis`, `confidence`, `reason_codes`, `reason`, `seams_counted`, `candidates_walked` |
@@ -652,6 +813,8 @@ python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-reg
 | `scope_artifact_rejected` | A CHUNK_ARTIFACTS path failed validation | `reason`, `dest` |
 | `scope_fanout_dispatched` | HEAVY mode: N sub-flows launched | `chunk_count`, `chunks`, `axis` |
 | `scope_fanout_reconciled` | HEAVY mode: reconciler finished | `unified_verdict`, `chunks_total`, `chunks_failed`, `findings_after_dedup` |
+| `persona_bound` | Persona bound to an auditor (Phase 2a) or advisory consult arm (Phase 4a) | `command`, `role`, `dimension` (auditors only), `arm` (advisory arm only), `persona_id`, `draw_id`, `selection_source` |
+| `persona_advisory_recommendation` | Advisory consult arm's recommendation logged separately (Phase 4b) | `command`, `phase`, `persona_id`, `draw_id`, `recommendation` |
 
 ## Decision emission (standing instruction)
 
@@ -689,7 +852,7 @@ Emission is gated by `Z_HARNESS_AXIOM_EXTRACT` (default on); when set to `"0"`, 
 | Feature | Used | Gates |
 |---------|------|-------|
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
-| `ask_user` | yes | Empty arguments gate; Setup slug confirmation if non-obvious; Phase 1 dimensions selection; Phase 2 auditor unable_to_complete gate; Phase 6 reviewer second-failure gate |
+| `ask_user` | yes | Empty arguments gate; Setup slug confirmation if non-obvious; Phase 1 dimensions selection; Phase 2b auditor unable_to_complete gate; Phase 6 reviewer second-failure gate |
 | `skill_invoke` | no | — |
 
 Driver support requirements: see frontmatter `driver_features_required`.

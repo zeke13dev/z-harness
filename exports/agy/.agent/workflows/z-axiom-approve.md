@@ -1,5 +1,5 @@
 ---
-description: Approve a candidate axiom. Shows the candidate, its evidence, and falsifiability state. Requires explicit user confirmation before approving. Reuses /z-suggest-memory --from-candidate-json for the MEMORY-overlap advisory. Regenerates the kernel sy...
+description: "Approve a candidate axiom. Shows the candidate, its evidence, and falsifiability state. Requires explicit user confirmation before approving. Reuses /z-suggest-memory --from-candidate-json for the MEMORY-overlap advisory. Regenerates the kernel sy..."
 ---
 
 You are running **z-harness `/z-axiom-approve`**.

@@ -1,6 +1,6 @@
 ---
 description: Audit a plan's artifacts (SPEC.md, PLAN.md, TASKS.md) for the same kind of code-quality issues /z-mr-review finds on a diff — defensive bloat, premature abstraction, DRY/KISS/SOLID violations, over-engineering, STYLE.md drift — BEFORE any code is written. Emits PLAN_STYLE_AUDIT.md with BLOCKER/MAJOR/MINOR findings suitable for /z-amend.
-argument-hint: [--slug <slug>]
+argument-hint: "[--slug <slug>]"
 runtime: c1
 driver_features_required:
   - subagent

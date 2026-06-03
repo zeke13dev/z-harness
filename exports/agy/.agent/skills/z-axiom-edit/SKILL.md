@@ -1,6 +1,6 @@
 ---
 name: z-axiom-edit
-description: Edit a field on a candidate or approved axiom record. On approved records, re-validates the graph and regenerates the kernel.
+description: "Edit a field on a candidate or approved axiom record. On approved records, re-validates the graph and regenerates the kernel."
 ---
 
 You are running **z-harness `/z-axiom-edit`**. Thin command that maps `<id> --set <field>=<value>` to `axiom-store.py edit`. On approved records, the store re-validates the graph and regenerates the kernel automatically.

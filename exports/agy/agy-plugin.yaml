@@ -62,7 +62,7 @@ workflows:
   - id: z-export
     source: commands/z-export.md
     output: .agent/workflows/z-export.md
-    description: "\"Export z-harness commands/agents/skills/personas to Cursor / Codex / Antigravity (agy).\""
+    description: "Export z-harness commands/agents/skills/personas to Cursor / Codex / Antigravity (agy)."
   - id: z-fix
     source: commands/z-fix.md
     output: .agent/workflows/z-fix.md
@@ -110,7 +110,7 @@ workflows:
   - id: z-maintain-docs
     source: commands/z-maintain-docs.md
     output: .agent/workflows/z-maintain-docs.md
-    description: "Refresh stale docs in docs/human/ and docs/llm/. Reads docs/llm/INDEX.json to find concepts whose source files changed since each doc's last_updated. Spawns doc-updater subagents (Sonnet) per stale concept. Dry-run preview by default — user review..."
+    description: "Refresh stale docs in docs/human/ and docs/llm/. Reads docs/llm/INDEX.json to find concepts whose source files changed since each doc's last_updated. Spawns doc-updater subagents (Sonnet) per stale concept. Applies refreshed docs by default; pass ..."
   - id: z-map
     source: commands/z-map.md
     output: .agent/workflows/z-map.md
@@ -383,7 +383,7 @@ skills:
   - id: z-maintain-docs
     source: skills/z-maintain-docs/SKILL.md
     output: .agent/skills/z-maintain-docs/SKILL.md
-    description: "Refresh stale docs in docs/human/ and docs/llm/. Reads docs/llm/INDEX.json to find concepts whose source files changed since each doc's last_updated. Spawns doc-updater subagents (Sonnet) per stale concept. Dry-run preview by default — user review..."
+    description: "Refresh stale docs in docs/human/ and docs/llm/. Reads docs/llm/INDEX.json to find concepts whose source files changed since each doc's last_updated. Spawns doc-updater subagents (Sonnet) per stale concept. Applies refreshed docs by default; pass ..."
   - id: z-map
     source: skills/z-map/SKILL.md
     output: .agent/skills/z-map/SKILL.md

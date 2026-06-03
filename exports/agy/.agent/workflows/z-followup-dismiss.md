@@ -1,5 +1,5 @@
 ---
-description: Dismiss a follow-up entry from any state (terminal transition). Requires a reason.
+description: "Dismiss a follow-up entry from any state (terminal transition). Requires a reason."
 ---
 
 You are running **z-harness `/z-followup-dismiss`**. Transitions a follow-up entry from any state to `dismissed` (terminal). A reason is mandatory.

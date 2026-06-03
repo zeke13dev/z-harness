@@ -1,5 +1,5 @@
 ---
-description: Claim and execute the next pending follow-up entry from the project or global sink, with staleness check, lock management, and status writeback.
+description: "Claim and execute the next pending follow-up entry from the project or global sink, with staleness check, lock management, and status writeback."
 ---
 
 You are running **z-harness `/z-followup-next`**. Interactive consumer for one follow-up entry. Claims the highest-priority open entry (P0→P3, then oldest first), executes its recommended command, and writes back status.

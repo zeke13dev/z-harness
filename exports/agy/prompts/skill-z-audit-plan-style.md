@@ -1,5 +1,5 @@
 ---
-description: Audit a plan's artifacts (SPEC.md, PLAN.md, TASKS.md) for the same kind of code-quality issues /z-mr-review finds on a diff — defensive bloat, premature abstraction, DRY/KISS/SOLID violations, over-engineering, STYLE.md drift — BEFORE any code is ...
+description: "Audit a plan's artifacts (SPEC.md, PLAN.md, TASKS.md) for the same kind of code-quality issues /z-mr-review finds on a diff — defensive bloat, premature abstraction, DRY/KISS/SOLID violations, over-engineering, STYLE.md drift — BEFORE any code is ..."
 role: skill
 ---
 

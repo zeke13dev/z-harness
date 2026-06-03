@@ -1,5 +1,5 @@
 ---
-description: Refresh a blocked (staleness) follow-up entry — re-stamps capture_head and file_blob_hashes, then transitions back to open.
+description: "Refresh a blocked (staleness) follow-up entry — re-stamps capture_head and file_blob_hashes, then transitions back to open."
 role: workflow
 ---
 

@@ -1,5 +1,5 @@
 ---
-description: Mine candidate axioms from z-harness interaction history by dispatching the axiom-extractor agent, then writing returned candidates to the axiom store. Proposes only — never auto-approves.
+description: "Mine candidate axioms from z-harness interaction history by dispatching the axiom-extractor agent, then writing returned candidates to the axiom store. Proposes only — never auto-approves."
 role: skill
 ---
 

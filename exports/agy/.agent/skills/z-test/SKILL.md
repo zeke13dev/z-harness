@@ -1,6 +1,6 @@
 ---
 name: z-test
-description: Semantic test-case planner. Reads SPEC.md + PLAN.md + TASKS.md for an existing plan, risk-ranks the tasks, drafts non-trivial test cases that catch real semantic bugs (sign errors, schema/feature mismatches, time-window off-by-one, unit confusion,...
+description: "Semantic test-case planner. Reads SPEC.md + PLAN.md + TASKS.md for an existing plan, risk-ranks the tasks, drafts non-trivial test cases that catch real semantic bugs (sign errors, schema/feature mismatches, time-window off-by-one, unit confusion,..."
 ---
 
 You are running **z-harness `/z-test`** — the semantic test-case planner. This is an **optional planning-time step** between `/z-plan` and `/z-implement-all`. It does NOT write or run any test code. It produces a structured `TESTS.md` artifact that the implementer subagent reads alongside TASKS.md, so tests get implemented in the same diff as the code they exercise.

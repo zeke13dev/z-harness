@@ -1,6 +1,6 @@
 ---
 name: z-uplift
-description: Bulk codebase quality uplift. Triggers on "uplift the codebase", "audit the whole repo", "review every component", "quality pass". Decomposes repo into components, runs cross-cutting audit, dispatches per-component reviews, and outputs TASKS.md.
+description: "Bulk codebase quality uplift. Triggers on \"uplift the codebase\", \"audit the whole repo\", \"review every component\", \"quality pass\". Decomposes repo into components, runs cross-cutting audit, dispatches per-component reviews, and outputs TASKS.md."
 ---
 
 You are running **z-harness `/z-uplift`** — the bulk codebase quality uplift command.

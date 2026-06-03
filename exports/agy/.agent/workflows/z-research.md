@@ -1,5 +1,5 @@
 ---
-description: Higher-order meta-orchestrator. Composes /z-map (terrain) and /z-brainstorm (framings), then runs adversarial synthesis panel (3 perspectives + judge) producing RESEARCH.md with 10-section schema including approach decision matrix. Cost 3–6M token...
+description: "Higher-order meta-orchestrator. Composes /z-map (terrain) and /z-brainstorm (framings), then runs adversarial synthesis panel (3 perspectives + judge) producing RESEARCH.md with 10-section schema including approach decision matrix. Cost 3–6M token..."
 ---
 
 You are running the **z-harness `/z-research`** meta-orchestrator pipeline.
@@ -70,7 +70,7 @@ export RUN
 VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
 START_PAYLOAD="$(python3 -c '
 import json, sys
-v = json.loads(sys.argv[1]); v["topic"] = sys.argv[2]; v["arguments"] = sys.argv[3]
+v = json.loads(sys.argv[1]); v["topic"] = sys.argv[2]; v["arguments"] = sys.argv[3]; v["command"] = "z-research"
 print(json.dumps(v))
 ' "$VERSION_BLOB" "$TOPIC" "$ARGUMENTS")"
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_start "$START_PAYLOAD"
@@ -273,7 +273,12 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
   - `reuse_map_run_brainstorm` → `DISPATCH_MAP=reused DISPATCH_BRAINSTORM=ran`
   - `reuse_both` → `DISPATCH_MAP=reused DISPATCH_BRAINSTORM=reused`
 - **Option 2 (override):** Parse the user's free-text override. Accept inputs like "skip map", "run both", "force brainstorm only", "skip both". Set `DISPATCH_MAP` and `DISPATCH_BRAINSTORM` accordingly. If the override is ambiguous, AskUser again with clarifying options.
-- **Option 3 (abandon):** Set `DISPATCH_MAP=abandoned DISPATCH_BRAINSTORM=abandoned`. Log `research_dispatch_decision` with abandoned status, emit `run_end status: aborted_by_user`, and exit.
+- **Option 3 (abandon):** Set `DISPATCH_MAP=abandoned DISPATCH_BRAINSTORM=abandoned`. Log `research_dispatch_decision` with abandoned status, emit `run_end status: aborted_by_user`, and exit:
+
+  ```bash
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
+    "$(printf '{"command":"z-research","status":"aborted_by_user","reason":"dispatch_abandoned"}')"
+  ```
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" research_dispatch_decision \
@@ -294,35 +299,78 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 Record `T0=$(date +%s%3N)` and `USER_WAIT_MS_THIS_PHASE=0` at phase start.
 
-### Step 1 — Estimate cost
-
-Compute the estimated token cost from the dispatch decision:
+Initialize the loop-back counter on first entry (or preserve across loop-backs):
 
 ```bash
-COST_MAP=0
-COST_BRAINSTORM=0
-COST_PANEL=3000000   # 3 perspectives @ ~1M each
-COST_JUDGE=500000    # judge @ ~0.5M
-
-[ "$DISPATCH_MAP" = "ran" ] && COST_MAP=2000000
-[ "$DISPATCH_BRAINSTORM" = "ran" ] && COST_BRAINSTORM=200000
-
-COST_TOTAL=$(( COST_MAP + COST_BRAINSTORM + COST_PANEL + COST_JUDGE ))
-
-# Format as human-readable
-COST_TOTAL_M="$(python3 -c "print(f'{$COST_TOTAL / 1_000_000:.1f}M')")"
+# Initialized to 0 on first entry; preserved across Phase-0 loop-backs.
+COST_GATE_LOOPBACKS="${COST_GATE_LOOPBACKS:-0}"
 ```
 
-Build cost breakdown line:
+### Step 1 — Invoke shared cost gate helper
+
+Translate dispatch values to N counts (1 if "ran", 0 otherwise) and call
+`pre-run-cost-gate.sh`. Capture the single-JSON stdout. workflow.pre_run_cost_gate
 
 ```bash
-COST_BREAKDOWN=""
-[ "$DISPATCH_MAP" = "ran" ]        && COST_BREAKDOWN="$COST_BREAKDOWN /z-map: ~2M tokens |"
-[ "$DISPATCH_BRAINSTORM" = "ran" ] && COST_BREAKDOWN="$COST_BREAKDOWN /z-brainstorm: ~200K tokens |"
-COST_BREAKDOWN="$COST_BREAKDOWN synthesis panel (3 perspectives): ~3M tokens | judge: ~0.5M tokens"
+[ "$DISPATCH_MAP" = "ran" ]        && DISPATCH_MAP_N=1 || DISPATCH_MAP_N=0
+[ "$DISPATCH_BRAINSTORM" = "ran" ] && DISPATCH_BRAINSTORM_N=1 || DISPATCH_BRAINSTORM_N=0
+
+GATE_JSON="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/pre-run-cost-gate.sh" \
+  z-research hard "$RUN" \
+  --dispatch map="$DISPATCH_MAP_N" brainstorm="$DISPATCH_BRAINSTORM_N" 2>/dev/null)" || GATE_JSON=""
+
+# Parse the three fields out of the JSON envelope (fail-open: default to ask on parse error)
+GATE_DISPOSITION="$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('disposition','ask'))" \
+  "$GATE_JSON" 2>/dev/null)" || GATE_DISPOSITION="ask"
+GATE_HUMAN_BLOCK="$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('human_block','Token estimate unavailable.'))" \
+  "$GATE_JSON" 2>/dev/null)" || GATE_HUMAN_BLOCK="Token estimate unavailable."
+GATE_EST_TOKENS="$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d['estimate'].get('estimated_tokens',0))" \
+  "$GATE_JSON" 2>/dev/null)" || GATE_EST_TOKENS=0
+GATE_CONFIDENCE="$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d['estimate'].get('confidence','low'))" \
+  "$GATE_JSON" 2>/dev/null)" || GATE_CONFIDENCE="low"
+GATE_BASIS="$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d['estimate'].get('basis','unknown'))" \
+  "$GATE_JSON" 2>/dev/null)" || GATE_BASIS="unknown"
 ```
 
-### Step 2 — AskUser cost gate
+Print `human_block` to the user so they see the estimate regardless of disposition:
+
+```
+$GATE_HUMAN_BLOCK
+```
+
+### Step 2 — Branch on disposition
+
+**If `GATE_DISPOSITION=auto_proceed`:** skip AskUser entirely, log `cost_gate_decision {choice: auto_proceed}`, and fall through to Phase 1.
+
+```bash
+if [ "$GATE_DISPOSITION" = "auto_proceed" ]; then
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cost_gate_decision \
+    "$(printf '{"command":"z-research","choice":"auto_proceed","estimated_tokens":%d,"confidence":"%s","basis":"%s"}' \
+       "$GATE_EST_TOKENS" "$GATE_CONFIDENCE" "$GATE_BASIS")"
+  # fall through to Phase 1
+fi
+```
+
+**If `GATE_DISPOSITION=halt`:** log `cost_gate_decision {choice: abandon}`, emit `run_end status: aborted_by_user`, exit:
+
+```bash
+if [ "$GATE_DISPOSITION" = "halt" ] || [ "$GATE_DISPOSITION" = "unhandled_gate" ]; then
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cost_gate_decision \
+    "$(printf '{"command":"z-research","choice":"abandon","estimated_tokens":%d,"confidence":"%s","basis":"%s","reason":"gate_policy_halt"}' \
+       "$GATE_EST_TOKENS" "$GATE_CONFIDENCE" "$GATE_BASIS")"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
+    "$(printf '{"command":"z-research","status":"aborted_by_user","reason":"cost_gate_abandoned"}')"
+  # exit — do not proceed
+fi
+```
+
+**If `GATE_DISPOSITION=ask`:** present the AskUser cost gate below.
+
+### Step 3 — AskUser cost gate (when disposition=ask)
+
+```bash
+if [ "$GATE_DISPOSITION" = "ask" ]; then
+```
 
 <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the cost gate (proceed / change dispatch / abandon) via their native channel. Silent omission is forbidden. -->
 ```bash
@@ -331,10 +379,9 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 _WAIT_T0=$(date +%s%3N)
 ```
 
-> **Cost estimate for `/z-research $TOPIC`**
+> **Cost gate for `/z-research $TOPIC`**
 >
-> Breakdown: $COST_BREAKDOWN
-> **Total estimated: ~$COST_TOTAL_M tokens**
+> $GATE_HUMAN_BLOCK
 >
 > Options:
 > 1. **Proceed** — run as planned
@@ -348,16 +395,48 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 ```
 
 Handle response:
-- **Proceed:** log `research_cost_gate_decision {choice: proceed, estimated_tokens: $COST_TOTAL}` and continue.
-- **Change dispatch:** log `research_cost_gate_decision {choice: change_dispatch, estimated_tokens: $COST_TOTAL}`, then loop back to Phase 0 (re-run the dispatch decision, then return here). Cap at 3 loop-backs before falling through to Abandon.
-- **Abandon:** log `research_cost_gate_decision {choice: abandon}`, emit `run_end status: aborted_by_user`, exit.
+- **Proceed:** log `cost_gate_decision {command:"z-research", choice: proceed, estimated_tokens, confidence, basis}` and continue.
+
+  ```bash
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cost_gate_decision \
+    "$(printf '{"command":"z-research","choice":"proceed","estimated_tokens":%d,"confidence":"%s","basis":"%s"}' \
+       "$GATE_EST_TOKENS" "$GATE_CONFIDENCE" "$GATE_BASIS")"
+  ```
+
+- **Change dispatch:** log `cost_gate_decision {command:"z-research", choice: change_dispatch, ...}`, increment the loop-back counter, then loop back to Phase 0 (re-run the dispatch decision). On re-entry to Phase 0.5 the gate is re-invoked with the updated `--dispatch` flags (so the estimate recomputes). Cap at 3 loop-backs — if `COST_GATE_LOOPBACKS > 3`, fall through to Abandon instead.
+
+  ```bash
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cost_gate_decision \
+    "$(printf '{"command":"z-research","choice":"change_dispatch","estimated_tokens":%d,"confidence":"%s","basis":"%s"}' \
+       "$GATE_EST_TOKENS" "$GATE_CONFIDENCE" "$GATE_BASIS")"
+  COST_GATE_LOOPBACKS=$(( COST_GATE_LOOPBACKS + 1 ))
+  if [ "$COST_GATE_LOOPBACKS" -gt 3 ]; then
+    # Cap reached — treat as Abandon
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cost_gate_decision \
+      "$(printf '{"command":"z-research","choice":"abandon","estimated_tokens":%d,"confidence":"%s","basis":"%s","reason":"loopback_cap_reached"}' \
+         "$GATE_EST_TOKENS" "$GATE_CONFIDENCE" "$GATE_BASIS")"
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
+      "$(printf '{"command":"z-research","status":"aborted_by_user","reason":"cost_gate_loopback_cap"}')"
+    # exit
+  else
+    # Loop back to Phase 0; export COST_GATE_LOOPBACKS so it persists across the re-entry
+    export COST_GATE_LOOPBACKS
+    # goto Phase 0 (re-run dispatch decision, then return to Phase 0.5 which re-invokes this gate)
+  fi
+  ```
+
+- **Abandon:** log `cost_gate_decision {command:"z-research", choice: abandon, ...}`, emit `run_end status: aborted_by_user`, exit:
+
+  ```bash
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cost_gate_decision \
+    "$(printf '{"command":"z-research","choice":"abandon","estimated_tokens":%d,"confidence":"%s","basis":"%s"}' \
+       "$GATE_EST_TOKENS" "$GATE_CONFIDENCE" "$GATE_BASIS")"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
+    "$(printf '{"command":"z-research","status":"aborted_by_user","reason":"cost_gate_abandoned"}')"
+  ```
 
 ```bash
-bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" research_cost_gate_decision \
-  "$(printf '{"choice":"%s","estimated_tokens":%d}' "<proceed|change_dispatch|abandon>" "$COST_TOTAL")"
-```
-
-```bash
+fi # end if GATE_DISPOSITION=ask
 WALL_MS=$(( $(date +%s%3N) - T0 ))
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" phase_end \
   "$(printf '{"phase":"0.5","name":"cost-gate","wall_ms":%d,"user_wait_ms":%d}' \
@@ -581,7 +660,7 @@ If `DISPATCH_BRAINSTORM=reused` or `DISPATCH_BRAINSTORM=skipped`, emit according
    NEW_COUNT="$(echo "$NEW_ARCHIVE_DIRS" | grep -c '[^[:space:]]' || true)"
    if [ "$NEW_COUNT" -ne 2 ]; then
      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
-       "$(printf '{"status":"error","reason":"parallel_dispatch_archive_count_unexpected","expected":2,"actual":%d}' "$NEW_COUNT")"
+       "$(printf '{"command":"z-research","status":"error","reason":"parallel_dispatch_archive_count_unexpected","expected":2,"actual":%d}' "$NEW_COUNT")"
      echo "ERROR: expected exactly 2 new archive directories after parallel dispatch, found $NEW_COUNT. Cannot identify sub-run archives. Aborting." >&2
      exit 1
    fi
@@ -607,7 +686,7 @@ if line: print(json.loads(line).get('kind',''))
    # No fallback: if identification failed, abort with a clear error rather than guess
    if [ -z "$MAP_SUB_RUN" ] || [ -z "$BRAINSTORM_SUB_RUN" ]; then
      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
-       "$(printf '{"status":"error","reason":"parallel_dispatch_archive_identification_failed","map_found":"%s","brainstorm_found":"%s"}' \
+       "$(printf '{"command":"z-research","status":"error","reason":"parallel_dispatch_archive_identification_failed","map_found":"%s","brainstorm_found":"%s"}' \
           "${MAP_SUB_RUN:-none}" "${BRAINSTORM_SUB_RUN:-none}")"
      echo "ERROR: could not positively identify both sub-run archives from events.jsonl kind fields. map='${MAP_SUB_RUN:-not found}' brainstorm='${BRAINSTORM_SUB_RUN:-not found}'. Aborting." >&2
      exit 1
@@ -615,7 +694,7 @@ if line: print(json.loads(line).get('kind',''))
 
    if [ "$MAP_SUB_RUN" = "$BRAINSTORM_SUB_RUN" ]; then
      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
-       "$(printf '{"status":"error","reason":"parallel_dispatch_archive_collision","map_sub_run":"%s","brainstorm_sub_run":"%s"}' \
+       "$(printf '{"command":"z-research","status":"error","reason":"parallel_dispatch_archive_collision","map_sub_run":"%s","brainstorm_sub_run":"%s"}' \
           "$MAP_SUB_RUN" "$BRAINSTORM_SUB_RUN")"
      echo "ERROR: MAP and BRAINSTORM sub-runs resolved to the same archive directory '$MAP_SUB_RUN'. Aborting." >&2
      exit 1
@@ -675,7 +754,7 @@ if line: print(json.loads(line).get('kind',''))
      ln -sfn "$BRAINSTORM_ARCHIVE_PATH" "$Z_HARNESS_PLAN_DIR/archive/$RUN/subruns/z-brainstorm"
    else
      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
-       "$(printf '{"status":"error","reason":"symlink_precondition_failed","map_dir_exists":%s,"brainstorm_dir_exists":%s,"collision":%s}' \
+       "$(printf '{"command":"z-research","status":"error","reason":"symlink_precondition_failed","map_dir_exists":%s,"brainstorm_dir_exists":%s,"collision":%s}' \
           "$([ -d "$MAP_ARCHIVE_PATH" ] && echo true || echo false)" \
           "$([ -d "$BRAINSTORM_ARCHIVE_PATH" ] && echo true || echo false)" \
           "$([ "$MAP_SUB_RUN" = "$BRAINSTORM_SUB_RUN" ] && echo true || echo false)")"
@@ -707,7 +786,7 @@ ARTIFACTS_READY=true
 if [ "$ARTIFACTS_READY" = "false" ]; then
   # Surface to user which artifact is missing; halt with clear message.
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
-    "$(printf '{"slug":"%s","status":"aborted","reason":"required_artifacts_missing"}' "$SLUG")"
+    "$(printf '{"command":"z-research","slug":"%s","status":"aborted","reason":"required_artifacts_missing"}' "$SLUG")"
   exit 1
 fi
 ```
@@ -1285,7 +1364,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
      "$WALL_MS" "$USER_WAIT_MS_THIS_PHASE")"
 
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
-  "$(printf '{"slug":"%s","status":"complete","research_md_path":"%s","panel_perspective_count":%d,"tripwires_fired":%s}' \
+  "$(printf '{"command":"z-research","slug":"%s","status":"complete","research_md_path":"%s","panel_perspective_count":%d,"tripwires_fired":%s}' \
      "$SLUG" "$Z_HARNESS_PLAN_DIR/RESEARCH.md" "$PANEL_PERSPECTIVE_COUNT" \
      "$(echo "$TRIPWIRES_FIRED" | python3 -c 'import sys, json; print(json.dumps(sys.stdin.read().split()))' || echo '[]')")"
 ```

@@ -1,5 +1,5 @@
 ---
-description: Edit a field on a candidate or approved axiom record. On approved records, re-validates the graph and regenerates the kernel.
+description: "Edit a field on a candidate or approved axiom record. On approved records, re-validates the graph and regenerates the kernel."
 role: workflow
 ---
 

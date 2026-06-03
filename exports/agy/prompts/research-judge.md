@@ -1,5 +1,5 @@
 ---
-description: Final-judge synthesizer for /z-research. Reads N=3 adversarial-panel perspective outputs + the MAP.md + BRAINSTORM.md source artifacts; produces the final RESEARCH.md content (10 sections per SPEC) including the approach decision matrix with manda...
+description: "Final-judge synthesizer for /z-research. Reads N=3 adversarial-panel perspective outputs + the MAP.md + BRAINSTORM.md source artifacts; produces the final RESEARCH.md content (10 sections per SPEC) including the approach decision matrix with manda..."
 role: rule
 ---
 

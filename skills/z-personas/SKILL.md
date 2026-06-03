@@ -1,7 +1,7 @@
 ---
 name: z-personas
-description: Inspect the z-harness persona registry, role bindings, and persona files. Subcommands: list, roles, validate, read <name>, where <name>. Default (no args) = roles.
-argument-hint: [list | roles | validate | read <name> | where <name>]
+description: "Inspect the z-harness persona registry, role bindings, and persona files. Subcommands: list, roles, validate, read <name>, where <name>. Default (no args) = roles."
+argument-hint: "[list | roles | validate | read <name> | where <name>]"
 ---
 
 You are running the **z-harness `z-personas`** skill.

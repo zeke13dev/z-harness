@@ -1,6 +1,6 @@
 ---
 description: Semantic test-case planner. Reads SPEC.md + PLAN.md + TASKS.md for an existing plan, risk-ranks the tasks, drafts non-trivial test cases that catch real semantic bugs (sign errors, schema/feature mismatches, time-window off-by-one, unit confusion, state-machine invariants), runs bundled cross-LLM consult (Gemini + Codex, mode test-cases) to add missed coverage and drop trivial drafts, writes TESTS.md, and cross-links TEST-NNN entries back into TASKS.md. Tests are then implemented by /z-implement-all in the same task as their production code.
-argument-hint: [--slug <slug>]
+argument-hint: "[--slug <slug>]"
 runtime: c1
 driver_features_required:
   - subagent

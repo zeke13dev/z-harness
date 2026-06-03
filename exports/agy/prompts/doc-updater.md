@@ -1,5 +1,5 @@
 ---
-description: Sonnet subagent invoked by /z-maintain-docs to refresh ONE doc concept (one human-tier markdown + one llm-tier JSON entry) so they reflect current code. Returns the proposed updates as text (dry-run by default); does NOT write to disk unless expli...
+description: "Sonnet subagent invoked by /z-maintain-docs to refresh ONE doc concept (one human-tier markdown + one llm-tier JSON entry) so they reflect current code. Returns the proposed updates as text (dry-run by default); does NOT write to disk unless expli..."
 role: rule
 ---
 

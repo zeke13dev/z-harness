@@ -1,5 +1,5 @@
 ---
-description: Configuration cockpit for z-harness: inspect resolved state, run guided setup wizard, or apply a posture preset.
+description: "Configuration cockpit for z-harness: inspect resolved state, run guided setup wizard, or apply a posture preset."
 role: workflow
 ---
 

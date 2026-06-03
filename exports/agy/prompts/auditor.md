@@ -1,5 +1,5 @@
 ---
-description: Fresh-context Sonnet auditor for a single dimension (correctness | perf | cleanliness | design). Reads target files + optional rubric file, returns structured findings (Location / Evidence / Recommendation / Severity). Read-only — never edits. Spa...
+description: "Fresh-context Sonnet auditor for a single dimension (correctness | perf | cleanliness | design). Reads target files + optional rubric file, returns structured findings (Location / Evidence / Recommendation / Severity). Read-only — never edits. Spa..."
 role: rule
 ---
 

@@ -1,5 +1,5 @@
 ---
-description: Post-run retrospective. Analyzes ONE z-harness run's events.jsonl + artifacts, identifies friction signals (slow phases, retries, doc drift, blocked askings, reviewer cycles), and opens a discussion with the user about concrete edits to the z-harn...
+description: "Post-run retrospective. Analyzes ONE z-harness run's events.jsonl + artifacts, identifies friction signals (slow phases, retries, doc drift, blocked askings, reviewer cycles), and opens a discussion with the user about concrete edits to the z-harn..."
 role: workflow
 ---
 

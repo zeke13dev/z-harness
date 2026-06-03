@@ -1,5 +1,5 @@
 ---
-description: Read-only listing of follow-up entries from project and global sinks, priority-sorted and filterable.
+description: "Read-only listing of follow-up entries from project and global sinks, priority-sorted and filterable."
 ---
 
 You are running **z-harness `/z-followup-list`**. Read-only. Prints the merged follow-up queue from project and global sinks, priority-sorted, with optional filters.

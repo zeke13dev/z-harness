@@ -1,5 +1,5 @@
 ---
-description: Diagnose and patch a misleading skill file — any SKILL.md under .claude/skills/ in the current repo, or any z-harness commands/*.md / agents/*.md when invoked inside the z-harness repo itself. Inline diagnosis note, surgical edit, reviewer safety ...
+description: "Diagnose and patch a misleading skill file — any SKILL.md under .claude/skills/ in the current repo, or any z-harness commands/*.md / agents/*.md when invoked inside the z-harness repo itself. Inline diagnosis note, surgical edit, reviewer safety ..."
 role: workflow
 ---
 

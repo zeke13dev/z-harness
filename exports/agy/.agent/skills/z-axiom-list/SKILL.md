@@ -1,6 +1,6 @@
 ---
 name: z-axiom-list
-description: List axiom records from the store, rendered as a readable table. Supports filtering by status, scope, and discipline.
+description: "List axiom records from the store, rendered as a readable table. Supports filtering by status, scope, and discipline."
 ---
 
 You are running **z-harness `/z-axiom-list`**. Read-only. Renders `axiom-store.py list` output as a human-readable table.

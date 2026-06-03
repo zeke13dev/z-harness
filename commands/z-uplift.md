@@ -1,6 +1,6 @@
 ---
 description: Tiered bulk codebase quality uplift — decompose repo into components, run a repo-wide cross-cutting pass, dispatch per-component audits, produce per-component TASKS.md files, and drive sequential implementation via /z-implement-all.
-argument-hint: [--components=<file>] [--component <path>] [--retry-bailed] [--refresh-component <name>] [--dimensions=<csv>] [--cross-cutting=skip] [--no-style]
+argument-hint: "[--components=<file>] [--component <path>] [--retry-bailed] [--refresh-component <name>] [--dimensions=<csv>] [--cross-cutting=skip] [--no-style]"
 model: opus
 runtime: c1
 driver_features_required:

@@ -1,5 +1,5 @@
 ---
-description: Cheap parallel pre-plan ideation — dispatch 3 vendor-diverse ideators (Claude + Codex + Gemini), perform a mandatory anti-bias check, and produce BRAINSTORM.md to seed /z-plan.
+description: "Cheap parallel pre-plan ideation — dispatch 3 vendor-diverse ideators (Claude + Codex + Gemini), perform a mandatory anti-bias check, and produce BRAINSTORM.md to seed /z-plan."
 ---
 
 You are running the **z-harness `/z-brainstorm`** pipeline.
@@ -36,7 +36,7 @@ $ARGUMENTS
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
    START_PAYLOAD="$(python3 -c '
    import json, sys
-   v = json.loads(sys.argv[1]); v["topic"] = sys.argv[2]; v["session_id"] = sys.argv[3]
+   v = json.loads(sys.argv[1]); v["topic"] = sys.argv[2]; v["session_id"] = sys.argv[3]; v["command"] = "z-brainstorm"
    print(json.dumps(v))
    ' "$VERSION_BLOB" "<arguments>" "$Z_HARNESS_SESSION_ID")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" brainstorm_run_start "$START_PAYLOAD"
@@ -217,6 +217,23 @@ When `MODE: HEAVY`:
    ```bash
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" scope_fanout_dispatched \
      "$(printf '{"host_command":"z-brainstorm","axis":"%s","chunks_count":%d}' "<AXIS>" "<N>")"
+   ```
+
+1a. **Soft cost estimate (non-blocking).** Call the gate helper with the HEAVY chunk count, display the estimate, and log the decision. This fires only here (HEAVY path); LIGHT/MEDIUM runs skip it entirely.
+   ```bash
+   # workflow.pre_run_cost_gate
+   COST_GATE_JSON="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/pre-run-cost-gate.sh" \
+     z-brainstorm soft "$RUN" --dispatch per_heavy_chunk=<N> 2>/dev/null)" || COST_GATE_JSON=""
+   if [ -n "$COST_GATE_JSON" ]; then
+     COST_HUMAN_BLOCK="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("human_block",""))' "$COST_GATE_JSON" 2>/dev/null || true)"
+     [ -n "$COST_HUMAN_BLOCK" ] && printf '%s\n' "$COST_HUMAN_BLOCK"
+     COST_ESTIMATED_TOKENS="$(python3 -c 'import json,sys; e=json.loads(sys.argv[1]).get("estimate",{}); print(json.dumps(e.get("estimated_tokens")))' "$COST_GATE_JSON" 2>/dev/null || echo "null")"
+     COST_CONFIDENCE="$(python3 -c 'import json,sys; e=json.loads(sys.argv[1]).get("estimate",{}); print(e.get("confidence","unknown"))' "$COST_GATE_JSON" 2>/dev/null || echo "unknown")"
+     COST_BASIS="$(python3 -c 'import json,sys; e=json.loads(sys.argv[1]).get("estimate",{}); print(e.get("basis","unknown"))' "$COST_GATE_JSON" 2>/dev/null || echo "unknown")"
+   fi
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cost_gate_decision \
+     "$(python3 -c 'import json,sys; print(json.dumps({"command":"z-brainstorm","choice":"auto_proceed","reason":"soft_gate","estimated_tokens":json.loads(sys.argv[1]),"confidence":sys.argv[2],"basis":sys.argv[3]}))' \
+        "${COST_ESTIMATED_TOKENS:-null}" "${COST_CONFIDENCE:-unknown}" "${COST_BASIS:-unknown}")"
    ```
 
 2. **Dispatch N parallel `/z-brainstorm` sub-flows** — one per chunk from the `chunks` array. Each sub-flow runs Phases 1 (scaffolding), 2 (ideator dispatch), and **3 (synthesis)** for its chunk's `scope_hint` sub-topic, producing its own per-chunk BRAINSTORM.md. Dispatch all N in a single message (parallel).
@@ -728,7 +745,7 @@ Log `brainstorm_run_end`:
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" brainstorm_run_end \
-  "$(printf '{"status":"%s","chosen_framing":"%s","ideators_failed":%d}' \
+  "$(printf '{"command":"z-brainstorm","status":"%s","chosen_framing":"%s","ideators_failed":%d}' \
      "<complete|abandoned>" "<framing-or-empty>" "<N>")"
 ```
 
@@ -752,8 +769,8 @@ For the abandoned branch, the push notification just says "Brainstorm abandoned"
 
 | Event kind | When / meaning | Required fields |
 |---|---|---|
-| `brainstorm_run_start` | Brainstorm run begins | version fields, `topic` |
-| `brainstorm_run_end` | Brainstorm run completes | `status`, `chosen_framing`, `ideators_failed` |
+| `brainstorm_run_start` | Brainstorm run begins | version fields, `topic`, `command` |
+| `brainstorm_run_end` | Brainstorm run completes | `command`, `status`, `chosen_framing`, `ideators_failed` |
 | `ideator_failed` | One of the three ideators failed | `vendor`, `reason` |
 | `total_ideator_failure` | All three ideators failed; hard halt | — |
 | `scope_probe_start` | Scope-probe Agent dispatched | `host_command`, `axis_taxonomy` |

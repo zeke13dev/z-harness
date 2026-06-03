@@ -1,5 +1,5 @@
 ---
-description: Haiku subagent that drives `git bisect run` between a known-good ref and HEAD using a caller-supplied repro script, then returns the offending commit SHA + line-level diff. Mechanical only — no interpretation of WHY the change broke things. Trigge...
+description: "Haiku subagent that drives `git bisect run` between a known-good ref and HEAD using a caller-supplied repro script, then returns the offending commit SHA + line-level diff. Mechanical only — no interpretation of WHY the change broke things. Trigge..."
 role: rule
 ---
 

@@ -1,18 +1,18 @@
 ---
-description: Refresh stale docs in docs/human/ and docs/llm/. Reads docs/llm/INDEX.json to find concepts whose source files changed since each doc's last_updated. Spawns doc-updater subagents (Sonnet) per stale concept. Dry-run preview by default — user review...
+description: "Refresh stale docs in docs/human/ and docs/llm/. Reads docs/llm/INDEX.json to find concepts whose source files changed since each doc's last_updated. Spawns doc-updater subagents (Sonnet) per stale concept. Applies refreshed docs by default; pass ..."
 role: workflow
 ---
 
 You are running **z-harness `/z-maintain-docs`**. Goal: keep `docs/human/` and `docs/llm/` in sync with the current state of the code.
 
-This command runs in **dry-run preview mode by default**. Pass `--apply` to actually write the changes (after the user has reviewed). For scoped refresh, pass `--scope <concept-slug>`. Pass `--audit` to additionally run cross-LLM verification on each proposed doc update (recommended when you don't fully trust the `doc-updater`'s output).
+This command **applies refreshed docs by default** — routine updates are written without asking. Pass `--dry-run` to preview the diffs without writing anything. It stops for a targeted per-concept confirmation only when a genuine-risk signal fires (a `memories_lost` mismatch, or — under `--audit` — a doc the consultants flagged as inaccurate or disputed). For scoped refresh, pass `--scope <concept-slug>`. Pass `--audit` to additionally run cross-LLM verification on each proposed doc update (recommended when you don't fully trust the `doc-updater`'s output).
 
 ## Phase 0 — Preflight
 
 1. `cd` to repo root. Read `docs/llm/INDEX.json`. If missing, tell the user to run `/z-init-docs` first; abort.
 2. Determine mode:
-   - `--apply` flag present → write changes after preview.
-   - Otherwise → dry-run preview only; user must re-run with `--apply` to commit.
+   - `--dry-run` flag present → preview only; present proposed diffs and write nothing.
+   - Otherwise (default) → apply: write accepted updates directly (after the risk triage in Phase 3).
 3. **Version stamp + log:**
    ```bash
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
@@ -53,7 +53,7 @@ for slug in stale_concepts:
         baseline_memories[slug] = 0
 ```
 
-For each stale concept, spawn a `doc-updater` subagent. In dry-run mode, leave `mode: dry-run` (default); in apply mode, set `mode: write`.
+For each stale concept, spawn a `doc-updater` subagent. **Always pass `mode: dry-run`** — the updater returns proposed text but writes nothing. This command owns all writes (Phase 4) in both apply and `--dry-run` mode, so it can inspect the risk signals (`memories_lost`, audit verdicts) and gate before anything lands on disk.
 
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
 ```
@@ -155,23 +155,37 @@ Aggregate findings per concept into `z-harness/archive/docs/<RRUN>/audit-<concep
 
 Cross-LLM audit doubles wall time of `/z-maintain-docs --audit` vs the default but provides the cross-LLM safety net the user wants on doc updates.
 
-## Phase 3 — Present diffs (dry-run only)
+## Phase 3 — Risk triage + targeted review
 
-For each doc-updater return, compute the diff between the current doc on disk and the proposed update. Present a summary to the user:
+For each doc-updater return, compute the diff between the current doc on disk and the proposed update, and write the proposed update to `z-harness/archive/docs/<RRUN>/proposed/<concept>.human.md` and `<concept>.llm.json` so it's inspectable regardless of mode.
+
+Classify each concept:
+- **deferred** — `STATUS: not_enough_info`. The doc-updater couldn't produce confident output; never written. Reported, not prompted.
+- **flagged** — a genuine-risk signal fired: a `memories_lost` mismatch (Phase 2), OR (only under `--audit`) an audit verdict of `rejected` or `needs review`.
+- **clean** — everything else.
+
+Present a summary to the user:
 
 ```
-Stale concepts to refresh:
-  • kalshi-trades-projection — 8 lines changed in human, 3 fields changed in LLM [audit: passed]
-  • sport-ticker-parser      — 22 lines changed in human, 6 fields changed in LLM [audit: needs review]
-  • backfill-runner          — 15 lines changed in human, 4 fields changed in LLM [audit: rejected — claim mismatch]
+Concepts to refresh:
+  • kalshi-trades-projection — 8 lines (human), 3 fields (LLM) [clean → applying]
+  • sport-ticker-parser      — 22 lines (human), 6 fields (LLM) [flagged: audit needs review]
+  • backfill-runner          — 15 lines (human), 4 fields (LLM) [flagged: audit rejected — claim mismatch]
+  • feed-router              — 5 lines  (human), 1 field  (LLM) [flagged: memories_lost — preserved 3 of 4]
+  • alpha-eval               — (deferred: not_enough_info — left unchanged)
 
 [full diffs at z-harness/archive/docs/<RRUN>/proposed/]
 [audit findings at z-harness/archive/docs/<RRUN>/audit-<concept>.md]
 ```
 
-When `--audit` was used, prefix each entry with the audit verdict so the user can prioritize review. Sort: `needs review` > `rejected` > `passed`.
+**Clean concepts apply with no prompt** (in default mode; in `--dry-run` they are previewed only). Sort flagged entries first so the user sees what needs attention: `audit rejected` > `audit needs review` > `memories_lost`.
 
-Write the proposed updates to `z-harness/archive/docs/<RRUN>/proposed/<concept>.human.md` and `<concept>.llm.json` so the user can inspect before applying.
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the per-flagged-concept review question (apply anyway / skip) via their native channel. Silent omission is forbidden. -->
+For each **flagged** concept (default mode only — `--dry-run` writes nothing so it skips this), ask via inline `AskUserQuestion`:
+- **Apply anyway** — include this concept in Phase 4's write set despite the flag.
+- **Skip this concept** — leave it unchanged; it stays flagged for the next run.
+
+Default selection: `Skip this concept` for `audit rejected`; `Apply anyway` for `memories_lost` / `audit needs review` (lower-severity). Concepts the user skips are excluded from Phase 4.
 
 ### Stale memories
 
@@ -212,42 +226,28 @@ If no stale memories are found, skip this section silently.
 
 ### TAG_COLLISIONS
 
-If any doc-updater subagent from Phase 2 was invoked with `dedup_tags: true` and returned a `TAG_COLLISIONS` block, surface those collisions here before the AskUserQuestion:
+If any doc-updater subagent from Phase 2 was invoked with `dedup_tags: true` and returned a `TAG_COLLISIONS` block, surface those collisions here as a **non-blocking report** — they're advisory (cosmetic tag drift), so they do not gate the doc apply:
 
 ```
-Tag collisions detected:
+Tag collisions detected (advisory — not blocking):
   • <slug>: "perf" (5 uses) vs "performance" (2 uses) — consider consolidating
   • <slug>: "cache" (3 uses) vs "caching" (1 use) — consider consolidating
+
+  To consolidate: /z-suggest-memory --edit <slug> <index> to rename a tag, or add a
+  canonical = alias line to docs/llm/TAGS.txt section 2 (the next run auto-collapses it).
 ```
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the tag-collision resolution question (keep both / rename one / add alias / skip) for each collision via their native channel. Silent omission is forbidden. -->
-For each collision, ask via an inline `AskUserQuestion` with four options:
+Do not prompt per collision. The user acts on them later if they care; tags are not on the doc-content critical path.
 
-- **Keep both** — leave both tags as-is; the collision will re-appear on the next run.
-- **Rename one** — hand off to `/z-suggest-memory --edit` to update individual memory entries manually.
-- **Add alias** — prompt the user to pick which of the two tags is canonical (radio; both options shown with their use counts to guide the decision). Then append the alias line to `docs/llm/TAGS.txt` section 2 using an atomic write:
-  1. Read `docs/llm/TAGS.txt` into memory.
-  2. Append `<canonical> = <alias>` after the last non-blank, non-comment line in section 2 (or after the blank separator if section 2 is empty).
-  3. Write atomically via tmpfile + `os.replace()`.
-  4. Log the alias addition:
-     ```bash
-     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "docs" tag_alias_added \
-       "$(printf '{"canonical":"%s","alias":"%s","concept":"%s"}' "<canonical>" "<alias>" "<slug>")"
-     ```
-  **Deferral note:** adding an alias here only records the mapping in `TAGS.txt`. The alias-collapse logic (doc-updater step 3.5 step A) is **not** triggered in the current run — no memory `tags[]` arrays are rewritten now. In-memory tag state for this run remains at the collision-tag values. On the next `/z-maintain-docs` (or doc-updater) invocation, step 3.5 reads the updated `TAGS.txt`, auto-collapses the alias in any memory that carries it, and emits `tag_aliased` log lines. Do not expect collapsed tags to appear in MEMORIES-FLAT.md until after that subsequent run.
-- **Skip** — do nothing for this collision in this run.
+## Phase 4 — Apply
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the doc-refresh action question (apply all / apply subset / skip) via their native channel. Silent omission is forbidden. -->
-After all per-collision questions, ask the top-level `AskUserQuestion` for the doc-refresh action:
-- **Apply all** → re-run this command with `--apply` (or apply now in-place; user choice).
-- **Apply a subset** → user picks which concepts.
-- **Skip** → leave docs as-is; concepts stay flagged for next run.
+The **apply set** = every `clean` concept, plus every `flagged` concept the user chose **Apply anyway** in Phase 3. `deferred` (not_enough_info) and user-skipped concepts are excluded.
 
-## Phase 4 — Apply (apply mode only)
+**Default mode:** for each concept in the apply set, write the proposed `human_path` and `llm_path` files. Update `docs/llm/INDEX.json` with the new `last_updated`, `confidence`, `depends_on`, `consumed_by`, `summary` fields.
 
-For each accepted concept, write the proposed `human_path` and `llm_path` files. Update `docs/llm/INDEX.json` with the new `last_updated`, `confidence`, `depends_on`, `consumed_by`, `summary` fields.
+**`--dry-run` mode:** write nothing. The presented diffs + the `proposed/` archive are the deliverable; tell the user to re-run without `--dry-run` to apply.
 
-If any concept's source files changed enough that the doc-updater couldn't produce confident output (`STATUS: not_enough_info`), DO NOT write — surface to user.
+`deferred` concepts are never written — surface them to the user so they know those docs stayed stale.
 
 ## Phase 4.5 — Regenerate MEMORIES-FLAT.md
 
@@ -257,7 +257,7 @@ After all accepted concept files have been written in Phase 4, unconditionally r
 python3 scripts/regenerate-memories-flat.py --repo-root <abs_path>
 ```
 
-This step runs in both `--apply` mode (after writes) and whenever a memory was deleted during Phase 3's stale-memories review. It covers the case where a memory was edited or deleted but no source file changed. Do not skip this step even if zero concepts were updated.
+This step runs after Phase 4 writes (default mode) and whenever a memory was deleted during Phase 3's stale-memories review. It covers the case where a memory was edited or deleted but no source file changed. Do not skip this step even if zero concepts were updated. (In `--dry-run` mode nothing was written, so there is nothing to regenerate — skip it.)
 
 If the script exits non-zero, surface the error to the user and halt (do not proceed to Phase 5 with a potentially corrupt MEMORIES-FLAT.md).
 
@@ -267,7 +267,7 @@ If the script exits non-zero, surface the error to the user and halt (do not pro
 2. Summary to user:
    ```
    docs/ refreshed:
-     <N> concepts updated, <M> deferred (not_enough_info), <K> skipped.
+     <N> concepts updated, <M> deferred (not_enough_info), <K> skipped (flagged → user skipped).
    
    Recommended next:
      git add docs/ && git commit -m "Refresh z-harness docs"
@@ -280,7 +280,7 @@ If the script exits non-zero, surface the error to the user and halt (do not pro
 
 ## Hard rules
 
-- **Default = dry-run.** Never write to `docs/` without an explicit `--apply` or per-concept user confirmation.
+- **Default = apply.** Routine (`clean`) concepts are written without asking. Pass `--dry-run` to preview without writing. Only `flagged` concepts (`memories_lost`, or audit `rejected`/`needs review` under `--audit`) require per-concept confirmation before writing.
 - **Never modify code files.** This command only touches `docs/`.
 - **Atomic per-concept writes.** A concept's human + LLM tiers update together or not at all (don't leave them out of sync).
 - **Preserve git history.** Write to existing paths; don't create _v2 files.
@@ -291,7 +291,7 @@ If the script exits non-zero, surface the error to the user and halt (do not pro
 - After `/z-implement-all` finalizes, the orchestrator's recommended-next push-notification lists `/z-maintain-docs`.
 - After `/z-review-all` accepts a plan, same.
 - Standalone: user runs whenever they suspect drift.
-- Could be wired into CI as `claude /z-maintain-docs --apply` if the user wants automated freshness.
+- Could be wired into CI as `claude /z-maintain-docs` (applies by default) if the user wants automated freshness.
 
 ---
 
@@ -300,7 +300,7 @@ If the script exits non-zero, surface the error to the user and halt (do not pro
 | Feature | Used | Gates |
 |---------|------|-------|
 | `subagent` | yes | Phase 2 doc-updater (one per stale concept, up to 3 in parallel); Phase 2.5 consultant-primary + consultant-secondary (only with `--audit`) |
-| `ask_user` | yes | Phase 2.3 compaction-pause decision (only with `--audit`); Phase 3 stale-memory disposition (keep / edit / delete); Phase 3 tag-collision resolution; Phase 3 doc-refresh action (apply all / apply subset / skip) |
+| `ask_user` | yes | Phase 2.3 compaction-pause decision (only with `--audit`); Phase 3 per-flagged-concept review (apply anyway / skip — fires only on `memories_lost` or audit reject/needs-review); Phase 3 stale-memory disposition (keep / edit / delete) |
 | `skill_invoke` | no | — |
 
 Driver support requirements: see frontmatter `driver_features_required`.
