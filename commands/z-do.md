@@ -235,7 +235,11 @@ Apply the "one reason it might be wrong" check to each finding. If it raises a r
      PushNotification("z-do complete. <N> files changed; review passed.")
    ```
 3. Brief 2-3 sentence summary to user: what changed, what's next.
-4. If non-trivial friction surfaced during the run (auto-bail considered, doc_drift, retry on review), suggest: "Consider `/z-improve adhoc/$RUN` to retro this run."
+4. **Suggest `/z-improve` when this run had friction.** Run the nudge helper rather than eyeballing it — it scans this run's events and prints a one-line suggestion only if friction signals fired (auto-bail/escalation, doc drift, review retries, degraded consult, …), staying silent on a clean run:
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/improve-nudge.sh" "$RUN" "adhoc/$RUN"
+   ```
+   If it emits a line, relay it verbatim to the user.
 5. **Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the FINALIZE_STATUS rule (Setup step 5): normal completion deregisters with `complete`.
    ```bash
    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \

@@ -1,0 +1,59 @@
+diff --git a/scripts/log-phase.sh b/scripts/log-phase.sh
+index 87d484d..e791791 100755
+--- a/scripts/log-phase.sh
++++ b/scripts/log-phase.sh
+@@ -121,6 +121,45 @@ print(json.dumps(p, separators=(",", ":")))
+ ' "$PAYLOAD" "$WALL_MS")"
+     bash "$LOG_EVENT" "$RUN" "${PHASE}_end" "$MERGED"
+     ;;
++  begin)
++    # File-persisted phase start. Unlike `start`, this carries NO token across
++    # the caller — the stamp path is derived from (run, phase) alone, so it
++    # survives across separate Bash tool-call boundaries (a `T0=$(date ...)`
++    # shell variable does not, which is why orchestrated phases logged wall_ms:0).
++    RUN="${1:?usage: begin <run> <phase>}"
++    PHASE="${2:?usage: begin <run> <phase>}"
++    STAMP_DIR="${TMPDIR:-/tmp}/z-harness-phase"
++    mkdir -p "$STAMP_DIR"
++    KEY="$(printf '%s__%s' "$RUN" "$PHASE" | tr -c 'A-Za-z0-9._-' '_')"
++    now_ms > "$STAMP_DIR/$KEY.start"
++    ;;
++  finish)
++    # Reads the stamp written by `begin`, computes wall_ms, emits phase_end.
++    # Fail-open: if no stamp exists (begin was skipped), emit nothing rather
++    # than a bogus wall_ms:0 event.
++    RUN="${1:?usage: finish <run> <phase> <json-payload>}"
++    PHASE="${2:?usage: finish <run> <phase> <json-payload>}"
++    PAYLOAD="$(default_payload "${3:-}")"
++    STAMP_DIR="${TMPDIR:-/tmp}/z-harness-phase"
++    KEY="$(printf '%s__%s' "$RUN" "$PHASE" | tr -c 'A-Za-z0-9._-' '_')"
++    STAMP_FILE="$STAMP_DIR/$KEY.start"
++    if [[ ! -f "$STAMP_FILE" ]]; then
++      echo "log-phase.sh finish: no start stamp for run=$RUN phase=$PHASE (skipping phase_end)" >&2
++      exit 0
++    fi
++    T0="$(cat "$STAMP_FILE")"
++    T1="$(now_ms)"
++    WALL_MS=$((T1 - T0))
++    rm -f "$STAMP_FILE"
++    check_wall_ms "$RUN" "$PHASE" "$T0" "$T1" "$WALL_MS" || exit 0
++    MERGED="$(python3 -c '
++import json, sys
++p = json.loads(sys.argv[1])
++p["wall_ms"] = int(sys.argv[2])
++print(json.dumps(p, separators=(",", ":")))
++' "$PAYLOAD" "$WALL_MS")"
++    bash "$LOG_EVENT" "$RUN" "phase_end" "$MERGED"
++    ;;
+   wrap)
+     RUN="${1:?usage: wrap <run> <phase> <json-payload> -- <cmd> [args...]}"
+     PHASE="${2:?usage: wrap <run> <phase> <json-payload> -- <cmd> [args...]}"
+@@ -149,7 +188,7 @@ print(json.dumps(p, separators=(",", ":")))
+     exit "$EXIT_CODE"
+     ;;
+   *)
+-    echo "usage: log-phase.sh {start|end|wrap} ..." >&2
++    echo "usage: log-phase.sh {start|end|begin|finish|wrap} ..." >&2
+     exit 2
+     ;;
+ esac

@@ -1,0 +1,105 @@
+diff --git a/scripts/improve-nudge.sh b/scripts/improve-nudge.sh
+new file mode 100755
+index 0000000..4102914
+--- /dev/null
++++ b/scripts/improve-nudge.sh
+@@ -0,0 +1,99 @@
++#!/usr/bin/env bash
++# improve-nudge.sh <run-id> [suggest-target]
++#
++# Read-only, fail-open. Scans a completed run's events.jsonl for friction-class
++# signals; if any fired, prints a single one-line suggestion to run /z-improve
++# on the run. Prints NOTHING (and exits 0) on a clean run, a missing events
++# file, or any error — it must never disrupt the caller's finalize path.
++#
++# Why this exists: /z-improve is opt-in and was never surfaced, so retros never
++# happened (the improvements/ loop sat empty). This nudge makes the suggestion
++# appear at the end of an orchestrated run, but only when the run had something
++# worth learning from — no nudge-fatigue on clean runs.
++#
++# <run-id>         the run identifier the caller logged events under (e.g. "$RUN"
++#                  or "orchestration"). The events.jsonl path is resolved via
++#                  `log-event.sh resolve-run-dir`, honouring Z_HARNESS_SLUG /
++#                  Z_HARNESS_BASE_DIR exactly like the writer.
++# [suggest-target] what to put after `/z-improve ` in the message (defaults to
++#                  <run-id>). Callers pass the form /z-improve expects, e.g.
++#                  "adhoc/$RUN" for /z-do runs.
++set -uo pipefail
++
++RUN="${1:-}"
++[ -n "$RUN" ] || exit 0
++TARGET="${2:-$RUN}"
++
++SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
++RUN_DIR="$(bash "$SELF_DIR/log-event.sh" resolve-run-dir "$RUN" 2>/dev/null)" || exit 0
++EVENTS="$RUN_DIR/events.jsonl"
++[ -n "$RUN_DIR" ] && [ -f "$EVENTS" ] || exit 0
++
++python3 - "$EVENTS" "$TARGET" <<'PY' 2>/dev/null || exit 0
++import json, sys
++
++events_path, target = sys.argv[1], sys.argv[2]
++
++# Discrete friction-class event kinds -> human label.
++FRICTION_KINDS = {
++    "run_halt": "halt",
++    "doc_drift_acknowledged": "doc drift",
++    "precontext_freshness_acknowledged": "stale precontext",
++    "precontext_source_deleted": "deleted source cited",
++    "telemetry_anomaly": "telemetry anomaly",
++    "do_escalation": "escalation",
++    "escalation": "escalation",
++    "premise_redirect": "premise redirect",
++    "no_change_on_retry": "push-back-instead-of-fix",
++    "review_agent_malformed": "memory-review parse failure",
++}
++DEGRADE_TOKENS = ("rate_limit", "fallback", "unavailable", "degraded", "error")
++
++signals = {}
++def bump(label):
++    signals[label] = signals.get(label, 0) + 1
++
++def as_int(v):
++    try:
++        return int(v or 0)
++    except (TypeError, ValueError):
++        return 0
++
++for line in open(events_path):
++    line = line.strip()
++    if not line:
++        continue
++    try:
++        d = json.loads(line)
++    except Exception:
++        continue
++    kind = d.get("kind", "")
++    if kind in FRICTION_KINDS:
++        bump(FRICTION_KINDS[kind])
++    if kind == "task_done" and (
++        as_int(d.get("retries")) > 0
++        or as_int(d.get("review_cycles")) > 1
++        or as_int(d.get("review_blockers")) > 0
++    ):
++        bump("review retries")
++    if kind in ("consult", "consult_done") and any(
++        t in json.dumps(d).lower() for t in DEGRADE_TOKENS
++    ):
++        bump("degraded consult")
++    if kind == "review_all_end" and as_int(d.get("escalations")) > 0:
++        bump("review escalations")
++    if kind == "spec_precheck" and str(d.get("status", "")).startswith("spec_problem"):
++        bump("spec drift")
++
++if not signals:
++    sys.exit(0)
++
++parts = [
++    label + (f" x{n}" if n > 1 else "")
++    for label, n in sorted(signals.items(), key=lambda kv: (-kv[1], kv[0]))
++]
++print(
++    f"This run logged friction worth retro-ing ({', '.join(parts)}). "
++    f"Consider `/z-improve {target}` to capture the learnings."
++)
++PY
