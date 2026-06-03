@@ -1,5 +1,5 @@
 ---
-description: Final-gate cross-LLM review of a completed z-harness plan. Runs Gemini + Codex on the cumulative diff against SPEC.md to surface (a) implementation drift across tasks and (b) spec gaps that only surface in aggregate. Use after /z-implement-all com...
+description: "Final-gate cross-LLM review of a completed z-harness plan. Runs Gemini + Codex on the cumulative diff against SPEC.md to surface (a) implementation drift across tasks and (b) spec gaps that only surface in aggregate. Use after /z-implement-all com..."
 role: workflow
 ---
 
@@ -559,6 +559,12 @@ Present a short summary to the user:
 - next command: `/z-implement-all --tasks $BASE/REVIEW-TASKS.md` after deleting rejected candidates, or `/z-amend` for amendment proposals that should be applied first
 
 Log: `bash ${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh "$RRUN" review_all_end '{"slug":"<slug>","drift_findings":<a>,"spec_gap_findings":<b>,"review_tasks":<t>,"escalations":<k>,"user_action":"artifact_promoted"}'`.
+
+**Suggest `/z-improve` when this review had friction.** After logging `review_all_end`, run the nudge helper — it prints a one-line `/z-improve` suggestion only if friction signals fired (escalations, degraded consult, …) and stays silent otherwise:
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/improve-nudge.sh" "$RRUN" "$Z_HARNESS_SLUG"
+```
+If it emits a line, include it verbatim in the summary to the user.
 
 **On a clean review or after promoted tasks complete**, also push-notify the user:
 ```

@@ -1,6 +1,6 @@
 ---
 name: z-suggest-memory
-description: Authoring skill for the docs/llm/ memory layer. Called mandatorily from /z-debug post-mortem and /z-improve retro. Validates input against the memory schema, writes to docs/llm/<slug>.json, regenerates docs/llm/MEMORIES-FLAT.md, optionally extract...
+description: "Authoring skill for the docs/llm/ memory layer. Called mandatorily from /z-debug post-mortem and /z-improve retro. Validates input against the memory schema, writes to docs/llm/<slug>.json, regenerates docs/llm/MEMORIES-FLAT.md, optionally extract..."
 ---
 
 You are running **z-harness `/z-suggest-memory`**. Goal: author one memory entry into `docs/llm/<slug>.json`, regenerate `docs/llm/MEMORIES-FLAT.md`, and optionally refresh the human-tier doc.

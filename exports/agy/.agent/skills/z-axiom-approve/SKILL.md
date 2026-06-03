@@ -1,6 +1,6 @@
 ---
 name: z-axiom-approve
-description: Approve a candidate axiom. Shows the candidate, its evidence, and falsifiability state. Requires explicit user confirmation before approving. Reuses /z-suggest-memory --from-candidate-json for the MEMORY-overlap advisory. Regenerates the kernel sy...
+description: "Approve a candidate axiom. Shows the candidate, its evidence, and falsifiability state. Requires explicit user confirmation before approving. Reuses /z-suggest-memory --from-candidate-json for the MEMORY-overlap advisory. Regenerates the kernel sy..."
 ---
 
 You are running **z-harness `/z-axiom-approve`**. This command is the **explicit approval gate** for the axiom lifecycle. Approval is never automatic — the user must confirm before any candidate is promoted to `approved` and the kernel is regenerated.

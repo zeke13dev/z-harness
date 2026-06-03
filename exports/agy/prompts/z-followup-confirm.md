@@ -1,5 +1,5 @@
 ---
-description: Transition a follow-up entry from verify → done via human confirmation or audit evidence validation.
+description: "Transition a follow-up entry from verify → done via human confirmation or audit evidence validation."
 role: workflow
 ---
 

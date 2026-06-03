@@ -1,5 +1,5 @@
 ---
-description: Implement the next pending task from z-harness/TASKS.md, then have Codex scrutinize the diff.
+description: "Implement the next pending task from z-harness/TASKS.md, then have Codex scrutinize the diff."
 role: workflow
 ---
 
@@ -276,7 +276,16 @@ Spawn the implementer subagent (fresh context).
     "$(printf '{"task":"%s","fallback_model":"sonnet"}' "<task-id>")"
   ```
 
-**Persona rotation (implementer dispatch — gated on `experiment.persona_rotation`).** When the knob is ON, draw a persona for this attempt, persist the draw to `$BASE/archive/tasks/<task-id>/persona-draw.json`, and prepend the persona body to the implementer prompt. When the knob is OFF, the entire block is a no-op — `PERSONA_PREFIX` is empty, no draw file is written, no draw event is emitted; behavior is identical to before this feature. All of the code below is adapted from the z-implement-all pattern for the single-shot (cycle = 1) path. On a re-invocation (the user runs `/z-implement-next` again for the same task after a prior attempt), a retry counter file under `.z-harness/` is incremented so the new attempt gets a distinct `attempt_id` (`<task-id>-v2`, `<task-id>-v3`, …) and a fresh persona draw:
+**Persona rotation (implementer dispatch — gated on `experiment.persona_rotation`).** When the knob is ON, draw a persona for this attempt, persist the draw, and prepend the persona body to the implementer prompt. When the knob is OFF, the entire block is a no-op — `PERSONA_PREFIX` is empty, no draw file is written, no draw event is emitted; behavior is identical to before this feature. On a re-invocation (the user runs `/z-implement-next` again for the same task after a prior attempt), a retry counter file is incremented so the new attempt gets a distinct `attempt_id` (`<task-id>-v2`, `<task-id>-v3`, …). Whether a fresh persona draw is performed or the cycle-1 anchor is reused depends on the `personas.implementer_retry` knob (default `"same"`).
+
+**2x2 behavior matrix for `personas.implementer_retry` in `/z-implement-next`:**
+
+| `experiment.persona_rotation` | `personas.implementer_retry` | On re-invocation (CURRENT_COUNTER ≥ 2) |
+|-------------------------------|------------------------------|----------------------------------------|
+| OFF | any | No-op. Byte-identical vanilla implementer. `implementer_retry` value is irrelevant. |
+| ON | `"same"` (default) | Reuse the cycle-1 `persona-draw.json` anchor: same `persona_id` and `PERSONA_PREFIX` across all invocations. No redraw, no `--exclude`, no control-counter increment. **Rationale: lifecycle traceability** — one `persona_id` per task across all retry invocations. |
+| ON | `"new"` | Fresh draw excluding the prior invocation's persona (forces diversity). Write the new draw to `persona-draw-v<CURRENT_COUNTER>.json` (per-invocation sidecar); cycle-1 anchor `persona-draw.json` is NOT overwritten. |
+| ON | either | If `persona-draw.json` is MISSING on a re-invocation (e.g. older run): fall back to a fresh draw regardless of the knob. |
 
 ```bash
 PERSONA_ROTATION="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get experiment.persona_rotation 2>/dev/null || echo "true")"
@@ -312,6 +321,8 @@ SELECTION_SOURCE=""
 ATTEMPT_ID="<task-id>-v1"
 RETRIES=0
 if [ "$PERSONA_ROTATION" = "true" ]; then
+  # Read the retry-persona knob only when rotation is on (no persona config I/O on the knob-OFF path).
+  IMPLEMENTER_RETRY="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get personas.implementer_retry 2>/dev/null || echo "same")"
   # --- Determine ATTEMPT_ID (distinct per re-invocation) ---
   # The retry counter file persists how many times /z-implement-next has been invoked
   # for this task.  Each fresh invocation (including the very first) bumps the counter
@@ -338,21 +349,38 @@ if [ "$PERSONA_ROTATION" = "true" ]; then
   ATTEMPT_ID="<task-id>-v${CURRENT_COUNTER}"
   RETRIES=$((CURRENT_COUNTER - 1))
 
-  DRAW_FILE="$BASE/archive/tasks/<task-id>/persona-draw.json"
-  EXISTING_ATTEMPT_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("attempt_id",""))' "$DRAW_FILE" 2>/dev/null || echo "")"
+  CYCLE1_DRAW_FILE="$BASE/archive/tasks/<task-id>/persona-draw.json"
 
   # Export join keys so resolve-persona.py stamps task_id + attempt_id onto draw events.
   export Z_HARNESS_TASK_ID="<task-id>"
   export Z_HARNESS_ATTEMPT_ID="$ATTEMPT_ID"
   export Z_HARNESS_RUN_ID="$RUN"
+
+  # Determine DRAW_FILE and REUSE based on the implementer_retry knob.
   REUSE=0
-  if [ -f "$DRAW_FILE" ]; then
-    [ "$EXISTING_ATTEMPT_ID" = "$ATTEMPT_ID" ] && REUSE=1
+  if [ "$CURRENT_COUNTER" -ge 2 ] && [ "$IMPLEMENTER_RETRY" = "same" ] && [ -f "$CYCLE1_DRAW_FILE" ]; then
+    # "same" knob on re-invocation: reuse cycle-1 anchor — one persona_id across all
+    # invocations for lifecycle traceability. No redraw, no control-counter increment.
+    DRAW_FILE="$CYCLE1_DRAW_FILE"
+    REUSE=1
+  elif [ "$CURRENT_COUNTER" -ge 2 ] && [ "$IMPLEMENTER_RETRY" = "new" ]; then
+    # "new" knob on re-invocation: fresh draw into a per-invocation sidecar file;
+    # the cycle-1 anchor (persona-draw.json) is never overwritten.
+    DRAW_FILE="$BASE/archive/tasks/<task-id>/persona-draw-v${CURRENT_COUNTER}.json"
+    # REUSE stays 0; fall through to fresh draw below.
+  else
+    # First invocation (CURRENT_COUNTER == 1), or "same" with missing anchor (fallback).
+    DRAW_FILE="$CYCLE1_DRAW_FILE"
+    if [ -f "$DRAW_FILE" ]; then
+      EXISTING_ATTEMPT_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("attempt_id",""))' "$DRAW_FILE" 2>/dev/null || echo "")"
+      [ "$EXISTING_ATTEMPT_ID" = "$ATTEMPT_ID" ] && REUSE=1
+    fi
   fi
+
   if [ "$REUSE" -eq 0 ]; then
     # Fresh draw: increment control counter and apply forced-control cadence.
-    # On a re-invocation (CURRENT_COUNTER >= 2), exclude the prior attempt's
-    # persona to force diversity, exactly as z-implement-all does on retry.
+    # On a re-invocation with IMPLEMENTER_RETRY == "new" (or missing anchor fallback),
+    # exclude the prior attempt's persona to force diversity.
     CONTROL_EVERY_N="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get experiment.control_every_n 2>/dev/null || echo 5)"
     CONTROL_COUNT="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-persona.py" control-counter --increment)"
     if [ "$CONTROL_EVERY_N" -gt 0 ] && [ $(( CONTROL_COUNT % CONTROL_EVERY_N )) -eq 0 ]; then
@@ -368,14 +396,16 @@ if [ "$PERSONA_ROTATION" = "true" ]; then
       fi
       DRAW_JSON="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-persona.py" forced-control implementer --arm="$FORCED_ARM")"
     else
+      # Exclude the prior cycle's persona on a re-invocation fresh draw.
       EXCLUDE_ARG=""
-      if [ "$CURRENT_COUNTER" -ge 2 ] && [ -f "$DRAW_FILE" ]; then
-        PRIOR_PERSONA="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("persona_id",""))' "$DRAW_FILE" 2>/dev/null || echo "")"
+      if [ "$CURRENT_COUNTER" -ge 2 ] && [ -f "$CYCLE1_DRAW_FILE" ]; then
+        PRIOR_PERSONA="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("persona_id",""))' "$CYCLE1_DRAW_FILE" 2>/dev/null || echo "")"
         [ -n "$PRIOR_PERSONA" ] && EXCLUDE_ARG="--exclude=$PRIOR_PERSONA"
       fi
       DRAW_JSON="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-persona.py" random-for-role implementer $EXCLUDE_ARG)"
     fi
-    # Persist the draw so a same-cycle resume reuses it.
+    # Persist the draw. On cycle-1 or fallback, $DRAW_FILE is the anchor (persona-draw.json).
+    # On a "new" re-invocation, $DRAW_FILE is the per-invocation sidecar — anchor is untouched.
     python3 -c '
 import json, sys
 draw = json.loads(sys.argv[1]); attempt_id = sys.argv[2]; out = sys.argv[3]
@@ -385,7 +415,7 @@ rec = {"attempt_id": attempt_id, "persona_id": draw.get("persona"),
 json.dump(rec, open(out, "w"))
 ' "$DRAW_JSON" "$ATTEMPT_ID" "$DRAW_FILE"
   fi
-  # Read attribution from the draw file (works on both fresh draw and resume).
+  # Read attribution from the draw file (works on both fresh draw and resume/reuse).
   PERSONA_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("persona_id",""))' "$DRAW_FILE" 2>/dev/null || echo "")"
   DRAW_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("draw_id",""))' "$DRAW_FILE" 2>/dev/null || echo "")"
   SELECTION_SOURCE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("selection_source",""))' "$DRAW_FILE" 2>/dev/null || echo "")"
@@ -495,10 +525,11 @@ Obey DRY/KISS/SOLID. No shortcuts unless PLAN.md explicitly approved one for thi
    fi
    ```
 
-   **Random-arm reviewer (advisory — only when `experiment.persona_rotation == "true"`).** Verdict is recorded for data-collection; it must NOT change review outcome. Draw a reviewer persona, prepend it to the prompt:
+   **Random-arm reviewer (advisory — only when BOTH `experiment.persona_rotation == "true"` AND `personas.review_eval == "true"`).** Verdict is recorded for data-collection; it must NOT change review outcome. Draw a reviewer persona, prepend it to the prompt:
 
    ```bash
-   if [ "$PERSONA_ROTATION" = "true" ]; then
+   REVIEW_EVAL="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get personas.review_eval 2>/dev/null || echo true)"
+   if [ "$PERSONA_ROTATION" = "true" ] && [ "$REVIEW_EVAL" = "true" ]; then
      # Re-export join keys so the reviewer draw event carries task_id + attempt_id.
      # ATTEMPT_ID is set above as <task-id>-v1; these exports make it available to
      # resolve-persona.py even if this block runs after a shell scope change.
@@ -523,7 +554,7 @@ Obey DRY/KISS/SOLID. No shortcuts unless PLAN.md explicitly approved one for thi
 
 <!-- RUNTIME-GATE: subagent; non-supporting drivers may skip the random-arm reviewer — it is advisory only. The base codex reviewer above is the required correctness gate. -->
 ```
-# Only dispatch when PERSONA_ROTATION == "true":
+# Only dispatch when PERSONA_ROTATION == "true" AND REVIEW_EVAL == "true":
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="reviewer",
   description="Advisory review (random arm) task <ID>",
@@ -533,7 +564,7 @@ Obey DRY/KISS/SOLID. No shortcuts unless PLAN.md explicitly approved one for thi
 
    Log the random-arm reviewer as `persona_bound` (tag `reviewer_participant=random_arm`, same `attempt_id`):
    ```bash
-   if [ "$PERSONA_ROTATION" = "true" ]; then
+   if [ "$PERSONA_ROTATION" = "true" ] && [ "$REVIEW_EVAL" = "true" ]; then
      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
        "tasks/<task-id>" persona_bound \
        "$(python3 -c 'import json,sys; print(json.dumps({"command":"z-implement-next","role":"reviewer","task_id":sys.argv[1],"attempt_id":sys.argv[2],"reviewer_participant":"random_arm","persona_id":sys.argv[3],"draw_id":sys.argv[4],"cycle":1}))' "<task-id>" "$ATTEMPT_ID" "$REVIEWER_PERSONA_ID" "$REVIEWER_DRAW_ID")"

@@ -1,5 +1,5 @@
 ---
-description: Bootstrap a two-tier docs system in the current repo — docs/human/ (Markdown for humans) and docs/llm/ (token-compacted JSON for fast-lookup by future /z-plan runs). Idempotent; re-runnable to extend coverage.
+description: "Bootstrap a two-tier docs system in the current repo — docs/human/ (Markdown for humans) and docs/llm/ (token-compacted JSON for fast-lookup by future /z-plan runs). Idempotent; re-runnable to extend coverage."
 role: workflow
 ---
 
@@ -218,20 +218,101 @@ print("wrote docs/human/INDEX.md")
 PY
 ```
 
-## Phase 5 — Copy default `.z-harness-rsync-exclude`
+## Phase 5 — CONTEXT.md domain-glossary bootstrap
+
+**Skip this phase if `--no-glossary` was passed.**
+
+Goal: create `CONTEXT.md` at repo root as a domain ubiquitous-language glossary. This is the single authoritative vocabulary for the project — `/z-plan` and `/z-grill` can read it to stay on-terminology.
+
+### 5a. Idempotency check
+
+If `CONTEXT.md` already exists at repo root:
+- Parse its existing term blocks (lines matching `### <Term>`).
+- Collect the set of existing terms.
+- Continue to 5b to discover candidate additions; skip any term already present.
+
+If it does not exist, continue to 5b.
+
+### 5b. Extract candidate domain terms
+
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must skip this Explore dispatch and notify the user that glossary bootstrap is unavailable without subagent support. -->
+Dispatch `Explore` (haiku; upgrade to sonnet only if haiku misses structural patterns) to scan module names, type names, function names, and identifier tokens across the repo. Extract candidate domain nouns: recurring terms that are **not** common English words, not framework names, and not language keywords. Return a ranked list (top ~20) with occurrence counts and one representative usage each.
+
+```
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+  subagent_type="Explore",
+  model="haiku",
+  description="Extract domain terms for glossary",
+  prompt="Scan all source files in this repo. List the top ~20 recurring domain-specific nouns that appear in module names, type names, function names, or identifier tokens. Exclude: common English words, framework names (e.g. tokio, serde, react), language keywords. For each, provide: term (as it appears in code), occurrence count, one representative file:line usage, and a proposed one-line definition. Repo root: <abs path>."
+)
+```
+
+### 5c. User confirmation
+
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the glossary term confirmation question via their native channel. Silent omission is forbidden. -->
+Present the candidate list (minus any terms already in CONTEXT.md) to the user via `AskUserQuestion`. For each term show: the raw token, occurrence count, representative usage, and the proposed definition. Ask the user to:
+- Confirm or edit each proposed definition.
+- Supply an `_Avoid:_` synonym list (zero or more) for any term that has known aliases or common misnomers.
+- Flag any terms to drop.
+- Optionally add terms the Explore pass missed.
+
+If the user confirms zero terms → skip writing CONTEXT.md this run; report "no terms confirmed; glossary bootstrap skipped."
+
+### 5d. Write CONTEXT.md
+
+Write (or extend) `CONTEXT.md` at repo root using the confirmed terms. Schema:
+
+```markdown
+# <Project> — Domain Language
+
+> This file is the authoritative domain vocabulary for <Project>.
+> Keep definitions short (one line). Use these exact spellings in code, docs, and plans.
+> Re-run `/z-init-docs` to extend coverage; use `/z-maintain-docs --glossary` to refresh.
+
+## Terms
+
+### <Term>
+
+<One-line definition.>
+
+_Avoid:_ <synonym-1>, <synonym-2>
+
+### <Term>
+
+...
+
+## Relationships
+
+<!-- Describe how key terms relate to each other (e.g. "A Plan contains many Tasks"). -->
+
+## Flagged ambiguities
+
+<!-- Terms whose meaning was disputed or unclear during extraction. -->
+```
+
+**Idempotent merge rules:**
+- Existing term blocks (matched by `### <Term>` heading) are preserved verbatim — never overwrite user-edited content.
+- New confirmed terms are appended after the last existing term block, before `## Relationships`.
+- `## Relationships` and `## Flagged ambiguities` section bodies are also preserved; do not overwrite user-authored content in those sections.
+- When creating CONTEXT.md for the first time, substitute `<Project>` with the repo name (basename of `git rev-parse --show-toplevel`).
+
+After writing, report the path and term count to the user.
+
+## Phase 6 — Copy default `.z-harness-rsync-exclude`
 
 If `<repo-root>/.z-harness-rsync-exclude` doesn't exist, copy the default from `${Z_HARNESS_PLUGIN_ROOT}/.z-harness-rsync-exclude` when that file exists. This file is used by the `remote-runner` subagent during `/z-implement-all` remote verification. If the default file is missing from the install, skip the copy and report it; do not fail docs initialization.
 
-## Phase 6 — Finalize
+## Phase 7 — Finalize
 
 1. Summary to user:
    ```
    Initialized docs:
      docs/human/   — <N> concept pages + INDEX.md
      docs/llm/     — <N> concept JSONs + INDEX.json
+     CONTEXT.md    — <M> domain terms  (omit line if --no-glossary or zero terms confirmed)
    
    Recommended next:
-     git add docs/ && git commit -m "Initialize z-harness docs"
+     git add docs/ CONTEXT.md && git commit -m "Initialize z-harness docs"
      /z-plan <next feature>   — /z-plan Phase 1 will now read docs/llm/INDEX.json first
    ```
 2. Log:
@@ -243,7 +324,7 @@ If `<repo-root>/.z-harness-rsync-exclude` doesn't exist, copy the default from `
 ## Hard rules
 
 - **Idempotent.** Re-running with the same scope replaces those concepts' docs; doesn't blow away unrelated ones.
-- **Never write outside `docs/human/`, `docs/llm/`, `docs/human/INDEX.md`, `docs/llm/INDEX.json`, and `.z-harness-rsync-exclude`.**
+- **Never write outside `docs/human/`, `docs/llm/`, `docs/human/INDEX.md`, `docs/llm/INDEX.json`, `CONTEXT.md` (repo root), and `.z-harness-rsync-exclude`.**
 - **No emojis** in docs.
 <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the not_enough_info decision (drop concept / provide more context) via their native channel. Silent omission is forbidden. -->
 - If a `doc-updater` returns `STATUS: not_enough_info`, surface to user (`AskUserQuestion`) and let them decide whether to drop that concept or provide more context.
@@ -254,8 +335,8 @@ If `<repo-root>/.z-harness-rsync-exclude` doesn't exist, copy the default from `
 
 | Feature | Used | Gates |
 |---------|------|-------|
-| `subagent` | yes | Phase 2 doc-updater (one per chosen concept, up to 3 in parallel) |
-| `ask_user` | yes | Phase 0 docs-exist decision; Phase 1c concept-selection multi-select; Phase 1d per-concept overwrite confirmation; Hard rules not_enough_info fallback |
+| `subagent` | yes | Phase 2 doc-updater (one per chosen concept, up to 3 in parallel); Phase 5b Explore dispatch for domain term extraction |
+| `ask_user` | yes | Phase 0 docs-exist decision; Phase 1c concept-selection multi-select; Phase 1d per-concept overwrite confirmation; Phase 5c glossary term confirmation; Hard rules not_enough_info fallback |
 | `skill_invoke` | no | — |
 
 Driver support requirements: see frontmatter `driver_features_required`.

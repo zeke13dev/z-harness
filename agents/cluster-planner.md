@@ -1,6 +1,6 @@
 ---
 name: cluster-planner
-description: A `model: sonnet` subagent that runs a stripped-down `/z-plan`-equivalent for ONE narrow scope (one cluster) within a `/z-plan-split` run. Produces SPEC.md + PLAN.md + TASKS.md for the cluster, resolves small decisions unilaterally, and escalates risky decisions back to the main thread via a structured `decision_needed` payload. Used only by `/z-plan-split`; never invoked directly by the user.
+description: "A `model: sonnet` subagent that runs a stripped-down `/z-plan`-equivalent for ONE narrow scope (one cluster) within a `/z-plan-split` run. Produces SPEC.md + PLAN.md + TASKS.md for the cluster, resolves small decisions unilaterally, and escalates risky decisions back to the main thread via a structured `decision_needed` payload. Used only by `/z-plan-split`; never invoked directly by the user."
 tools: Read, Write, Edit, Bash, Grep, Glob, Agent, AskUserQuestion
 model: sonnet
 ---

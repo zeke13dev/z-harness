@@ -1,5 +1,5 @@
 ---
-description: Read-only progress + cost report for a z-harness plan. Reads metrics.jsonl + TASKS.md to summarize progress, wall time per phase, estimated token spend per subagent type, recent halts, and suggested next command. No writes, no LLM calls.
+description: "Read-only progress + cost report for a z-harness plan. Reads metrics.jsonl + TASKS.md to summarize progress, wall time per phase, estimated token spend per subagent type, recent halts, and suggested next command. No writes, no LLM calls."
 ---
 
 You are running **z-harness `/z-stats`**. Read-only diagnostic. Cheap — uses only Bash/jq/awk on the existing event log; no subagent dispatch.
@@ -105,6 +105,15 @@ jq -c 'select(.kind == "review_agent_call")' "$METRICS" | tail -10
 Output format per line: `<ts> review-agent <parent_command>: candidates=<N> accepted=<A> tokens=<input>/<output>`
 
 Where `<input>` and `<output>` come from the event's `subagent_input_tokens` / `subagent_output_tokens` fields.
+
+## Phase 4c — Cost-gate decisions
+
+```bash
+jq -r 'select(.kind == "cost_gate_decision") | [.command, .choice, (.estimated_tokens // "n/a")] | @tsv' "$METRICS" \
+  | awk -F'\t' '{ printf "%-20s choice=%-14s estimated_tokens=%s\n", $1, $2, $3 }'
+```
+
+Shows every `cost_gate_decision` event: which command triggered the gate, the disposition chosen (`ask`, `auto_proceed`, `abandon`, `halt`), and the token estimate that drove the decision.
 
 ## Phase 5 — Stalls (post-run gap detection)
 

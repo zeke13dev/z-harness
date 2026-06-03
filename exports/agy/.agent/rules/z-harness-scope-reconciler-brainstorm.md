@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: Post-fanout Sonnet reconciler for HEAVY /z-brainstorm runs. Reads N per-chunk BRAINSTORM.md files, concatenates their framing sections under per-chunk headers, runs a cross-chunk anti-bias check to surface unique framings and contradictions, then ...
+description: "Post-fanout Sonnet reconciler for HEAVY /z-brainstorm runs. Reads N per-chunk BRAINSTORM.md files, concatenates their framing sections under per-chunk headers, runs a cross-chunk anti-bias check to surface unique framings and contradictions, then ..."
 ---
 
 ## Mission

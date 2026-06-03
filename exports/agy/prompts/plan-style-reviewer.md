@@ -1,5 +1,5 @@
 ---
-description: Multi-LLM code-quality reviewer for plan artifacts (SPEC.md, PLAN.md, TASKS.md). Targets proposed defensive bloat, premature abstraction, DRY/KISS/SOLID violations, over-engineering, and STYLE.md drift BEFORE any code is written. Ranks BLOCKER / M...
+description: "Multi-LLM code-quality reviewer for plan artifacts (SPEC.md, PLAN.md, TASKS.md). Targets proposed defensive bloat, premature abstraction, DRY/KISS/SOLID violations, over-engineering, and STYLE.md drift BEFORE any code is written. Ranks BLOCKER / M..."
 role: rule
 ---
 

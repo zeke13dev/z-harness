@@ -1,6 +1,6 @@
 ---
 name: z-map
-description: Maps terrain with citations + cross-LLM critique. No recommendations — terrain only. See `/z-research` for synthesis across map + brainstorm.
+description: "Maps terrain with citations + cross-LLM critique. No recommendations — terrain only. See `/z-research` for synthesis across map + brainstorm."
 ---
 
 You are running the **z-harness `/z-map`** pipeline.

@@ -1,6 +1,6 @@
 ---
 description: Final-gate cross-LLM review of a completed z-harness plan. Runs Gemini + Codex on the cumulative diff against SPEC.md to surface (a) implementation drift across tasks and (b) spec gaps that only surface in aggregate. Use after /z-implement-all completes.
-argument-hint: [--slug <slug>] [--base <git-ref>]
+argument-hint: "[--slug <slug>] [--base <git-ref>]"
 runtime: c1
 driver_features_required:
   - subagent

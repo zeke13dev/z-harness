@@ -1,5 +1,5 @@
 ---
-description: Diagnose and patch a misleading skill file — any SKILL.md under .claude/skills/ in the current repo, or any z-harness commands/*.md / agents/*.md when invoked inside the z-harness repo itself. Inline diagnosis note, surgical edit, reviewer safety ...
+description: "Diagnose and patch a misleading skill file — any SKILL.md under .claude/skills/ in the current repo, or any z-harness commands/*.md / agents/*.md when invoked inside the z-harness repo itself. Inline diagnosis note, surgical edit, reviewer safety ..."
 ---
 
 You are running **z-harness `/z-skill-fix`** — a meta-command for patching skill / command / agent files that have misled. Treat these files as living documents, not specs.

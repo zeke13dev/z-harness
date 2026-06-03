@@ -1,5 +1,5 @@
 ---
-description: Read-only diagnostic summary of the follow-up sink — counts per status, lock state, oldest open entry, and last sync failure.
+description: "Read-only diagnostic summary of the follow-up sink — counts per status, lock state, oldest open entry, and last sync failure."
 ---
 
 You are running **z-harness `/z-followup-status`**. Read-only diagnostic. Reports entry counts per status, per-entry and global lock state, oldest open entry age, and the most recent Notion sync failure.

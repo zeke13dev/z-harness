@@ -1,5 +1,5 @@
 ---
-description: Reject a candidate or approved axiom, moving it to the rejected/ tombstone store. Optionally records a rejection reason.
+description: "Reject a candidate or approved axiom, moving it to the rejected/ tombstone store. Optionally records a rejection reason."
 role: skill
 ---
 

@@ -1,5 +1,5 @@
 ---
-description: Read-only listing of follow-up entries from project and global sinks, priority-sorted and filterable.
+description: "Read-only listing of follow-up entries from project and global sinks, priority-sorted and filterable."
 role: workflow
 ---
 

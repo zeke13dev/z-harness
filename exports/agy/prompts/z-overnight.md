@@ -1,5 +1,5 @@
 ---
-description: Run a chain of z-harness workflows unattended overnight with halt-only user interaction. Chains existing sub-commands end-to-end, writes MORNING_REPORT.md, and push-notifies on halt or completion.
+description: "Run a chain of z-harness workflows unattended overnight with halt-only user interaction. Chains existing sub-commands end-to-end, writes MORNING_REPORT.md, and push-notifies on halt or completion."
 role: workflow
 ---
 

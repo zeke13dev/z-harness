@@ -1,5 +1,5 @@
 ---
-description: Sonnet reconciler for HEAVY /z-audit fanout runs. Reads N per-chunk auditor findings, dedupes by normalized-evidence-line, preserves cross-chunk dissent verbatim in a dedicated section, and elevates issues flagged by ≥2 chunks by one severity tier...
+description: "Sonnet reconciler for HEAVY /z-audit fanout runs. Reads N per-chunk auditor findings, dedupes by normalized-evidence-line, preserves cross-chunk dissent verbatim in a dedicated section, and elevates issues flagged by ≥2 chunks by one severity tier..."
 role: rule
 ---
 

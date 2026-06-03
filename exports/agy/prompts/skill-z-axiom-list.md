@@ -1,5 +1,5 @@
 ---
-description: List axiom records from the store, rendered as a readable table. Supports filtering by status, scope, and discipline.
+description: "List axiom records from the store, rendered as a readable table. Supports filtering by status, scope, and discipline."
 role: skill
 ---
 

@@ -107,7 +107,7 @@ def _render_workflow(entry: dict) -> str:
     if rewritten_body and not rewritten_body.startswith("\n"):
         rewritten_body = "\n" + rewritten_body
 
-    return f"---\ndescription: {description}\n---\n{rewritten_body}"
+    return f"---\ndescription: {_yaml_str(description)}\n---\n{rewritten_body}"
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +147,7 @@ def _render_rule(entry: dict) -> str:
 
     frontmatter_lines = [f"trigger: {trigger}"]
     if trigger == "model_decision":
-        frontmatter_lines.append(f"description: {description}")
+        frontmatter_lines.append(f"description: {_yaml_str(description)}")
 
     fm_block = "---\n" + "\n".join(frontmatter_lines) + "\n---\n"
     return fm_block + rewritten_body
@@ -168,7 +168,7 @@ def _render_skill(entry: dict) -> str:
     if rewritten_body and not rewritten_body.startswith("\n"):
         rewritten_body = "\n" + rewritten_body
 
-    return f"---\nname: {skill_id}\ndescription: {description}\n---\n{rewritten_body}"
+    return f"---\nname: {skill_id}\ndescription: {_yaml_str(description)}\n---\n{rewritten_body}"
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +189,7 @@ def _render_prompt(entry: dict, role: str) -> str:
     if rewritten_body and not rewritten_body.startswith("\n"):
         rewritten_body = "\n" + rewritten_body
 
-    return f"---\ndescription: {description}\nrole: {role}\n---\n{rewritten_body}"
+    return f"---\ndescription: {_yaml_str(description)}\nrole: {role}\n---\n{rewritten_body}"
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +200,7 @@ def _yaml_str(value: str) -> str:
     """Emit a YAML scalar, quoting if the value contains special characters."""
     needs_quotes = any(c in value for c in (':', '#', '"', "'", '{', '}', '[', ']', ',', '&', '*', '?', '|', '-', '<', '>', '=', '!', '%', '@', '`', '\n'))
     if needs_quotes:
-        escaped = value.replace('"', '\\"')
+        escaped = value.replace('\\', '\\\\').replace('"', '\\"')
         return f'"{escaped}"'
     return value
 

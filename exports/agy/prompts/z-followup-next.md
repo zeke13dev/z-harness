@@ -1,5 +1,5 @@
 ---
-description: Claim and execute the next pending follow-up entry from the project or global sink, with staleness check, lock management, and status writeback.
+description: "Claim and execute the next pending follow-up entry from the project or global sink, with staleness check, lock management, and status writeback."
 role: workflow
 ---
 

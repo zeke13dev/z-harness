@@ -1,5 +1,5 @@
 ---
-description: Mine candidate axioms from z-harness interaction history by dispatching the axiom-extractor agent, then writing returned candidates to the axiom store. Use --historical for a full metrics.jsonl scan (expensive). Proposes only — never auto-approves.
+description: "Mine candidate axioms from z-harness interaction history by dispatching the axiom-extractor agent, then writing returned candidates to the axiom store. Use --historical for a full metrics.jsonl scan (expensive). Proposes only — never auto-approves."
 ---
 
 You are running **z-harness `/z-axiom-scan`**.

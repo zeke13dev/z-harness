@@ -1,6 +1,6 @@
 ---
 name: z-brainstorm
-description: Cheap parallel pre-plan ideation — dispatch 3 vendor-diverse ideators (Claude + Codex + Gemini), perform a mandatory anti-bias check, and produce BRAINSTORM.md to seed /z-plan.
+description: "Cheap parallel pre-plan ideation — dispatch 3 vendor-diverse ideators (Claude + Codex + Gemini), perform a mandatory anti-bias check, and produce BRAINSTORM.md to seed /z-plan."
 ---
 
 You are running the **z-harness `/z-brainstorm`** pipeline.

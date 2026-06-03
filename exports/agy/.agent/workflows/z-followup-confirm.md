@@ -1,5 +1,5 @@
 ---
-description: Transition a follow-up entry from verify → done via human confirmation or audit evidence validation.
+description: "Transition a follow-up entry from verify → done via human confirmation or audit evidence validation."
 ---
 
 You are running **z-harness `/z-followup-confirm`**. Transitions a follow-up entry from `verify` to `done` via one of two paths: human approval (`--via=human`) or audit-evidence validation (`--via=audit`).

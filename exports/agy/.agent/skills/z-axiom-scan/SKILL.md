@@ -1,6 +1,6 @@
 ---
 name: z-axiom-scan
-description: Mine candidate axioms from z-harness interaction history by dispatching the axiom-extractor agent, then writing returned candidates to the axiom store. Proposes only — never auto-approves.
+description: "Mine candidate axioms from z-harness interaction history by dispatching the axiom-extractor agent, then writing returned candidates to the axiom store. Proposes only — never auto-approves."
 ---
 
 You are running **z-harness `/z-axiom-scan`**. Mine candidate axioms by dispatching the `axiom-extractor` agent, collecting the returned fenced JSON array, and writing each candidate to the axiom store via `axiom-store.py add`. This command **proposes only** — it never approves any candidate. Approval is always a separate explicit user step via `/z-axiom-approve`.

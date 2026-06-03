@@ -1,5 +1,5 @@
 ---
-description: Read-only diagnostic summary of the follow-up sink — counts per status, lock state, oldest open entry, and last sync failure.
+description: "Read-only diagnostic summary of the follow-up sink — counts per status, lock state, oldest open entry, and last sync failure."
 role: workflow
 ---
 

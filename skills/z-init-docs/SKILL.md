@@ -1,7 +1,7 @@
 ---
 name: z-init-docs
 description: Bootstrap a two-tier docs system in the current repo — docs/human/ (Markdown for humans) and docs/llm/ (token-compacted JSON for fast-lookup by future /z-plan runs). Idempotent; re-runnable to extend coverage.
-argument-hint: [--scope <module-or-dir>]
+argument-hint: "[--scope <module-or-dir>]"
 ---
 You are running **z-harness `/z-init-docs`**. Goal: stand up the two-tier documentation system in this repo so future plans can ground themselves cheaply and so humans get readable navigable docs.
 

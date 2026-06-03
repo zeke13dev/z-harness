@@ -1,6 +1,6 @@
 ---
 name: z-stats
-description: Read-only progress + cost report for a z-harness plan. Reads metrics.jsonl + TASKS.md to summarize progress, wall time per phase, estimated token spend per subagent type, recent halts, and suggested next command. No writes, no LLM calls.
+description: "Read-only progress + cost report for a z-harness plan. Reads metrics.jsonl + TASKS.md to summarize progress, wall time per phase, estimated token spend per subagent type, recent halts, and suggested next command. No writes, no LLM calls."
 ---
 
 You are running **z-harness `/z-stats`**. Read-only diagnostic. Cheap — uses only Bash/jq/awk on the existing event log; no subagent dispatch.

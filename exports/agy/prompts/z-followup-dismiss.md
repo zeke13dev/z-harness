@@ -1,5 +1,5 @@
 ---
-description: Dismiss a follow-up entry from any state (terminal transition). Requires a reason.
+description: "Dismiss a follow-up entry from any state (terminal transition). Requires a reason."
 role: workflow
 ---
 

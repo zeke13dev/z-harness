@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: Documents the workflow question resolver — the read-only subsystem that maps registered question_ids to a result-domain value (skip|prefill|ask|halt|defer-to-sink) by consulting config layers, memory, and overnight-gate overrides.
+description: "Documents the workflow question resolver — the read-only subsystem that maps registered question_ids to a result-domain value (skip|prefill|ask|halt|defer-to-sink) by consulting config layers, memory, and overnight-gate overrides."
 ---
 
 # Resolver — result vocabulary reference

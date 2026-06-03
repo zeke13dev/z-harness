@@ -1,5 +1,5 @@
 ---
-description: Refresh a blocked (staleness) follow-up entry — re-stamps capture_head and file_blob_hashes, then transitions back to open.
+description: "Refresh a blocked (staleness) follow-up entry — re-stamps capture_head and file_blob_hashes, then transitions back to open."
 ---
 
 You are running **z-harness `/z-followup-refresh`**. Re-stamps a `blocked` follow-up entry with the current `capture_head` and re-computed `file_blob_hashes`, then transitions it back to `open`.

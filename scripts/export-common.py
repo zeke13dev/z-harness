@@ -22,6 +22,21 @@ from typing import Any
 # Frontmatter parsing
 # ---------------------------------------------------------------------------
 
+def _unquote_scalar(value: str) -> str:
+    """Strip matching surrounding YAML quotes from a flat scalar value.
+
+    Source frontmatter quotes ``description``/``argument-hint`` values that
+    contain YAML-significant characters (``:``, ``[``).  Downstream emitters
+    want the bare string, so undo the quoting here.  Handles the common escape
+    forms: ``\\"`` / ``\\\\`` in double quotes, ``''`` in single quotes.
+    """
+    if len(value) >= 2 and value[0] == value[-1] == '"':
+        return value[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+    if len(value) >= 2 and value[0] == value[-1] == "'":
+        return value[1:-1].replace("''", "'")
+    return value
+
+
 def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
     """Parse YAML-fenced frontmatter at the top of *text*.
 
@@ -51,7 +66,7 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
             continue
         match = re.match(r'^([A-Za-z0-9_-]+)\s*:\s*(.*)', stripped)
         if match:
-            frontmatter[match.group(1)] = match.group(2).strip()
+            frontmatter[match.group(1)] = _unquote_scalar(match.group(2).strip())
 
     body = "".join(lines[end_fence + 1:])
     return frontmatter, body

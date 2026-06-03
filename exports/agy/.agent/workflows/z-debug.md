@@ -1,5 +1,5 @@
 ---
-description: Heavy hypothesis-tournament debugging pipeline for the case where root cause is unknown. Two rounds of adversarial multi-LLM hypothesis generation (Claude + Codex + Gemini), discriminating-test matrix with consensus-first ranking + forced outlier ...
+description: "Heavy hypothesis-tournament debugging pipeline for the case where root cause is unknown. Two rounds of adversarial multi-LLM hypothesis generation (Claude + Codex + Gemini), discriminating-test matrix with consensus-first ranking + forced outlier ..."
 ---
 
 You are running **z-harness `/z-debug`** — heavy hypothesis-tournament pipeline for an existing bug whose root cause is unknown. This is the discipline path. If the user already has a working hypothesis they want to ship a fix for, Phase 0 will redirect them to `/z-fix`.
@@ -27,7 +27,7 @@ $ARGUMENTS
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
    START_PAYLOAD="$(python3 -c '
    import json, sys
-   v = json.loads(sys.argv[1]); v["symptom"] = sys.argv[2]; v["session_id"] = sys.argv[3]
+   v = json.loads(sys.argv[1]); v["symptom"] = sys.argv[2]; v["session_id"] = sys.argv[3]; v["command"] = "z-debug"
    print(json.dumps(v))
    ' "$VERSION_BLOB" "<arguments>" "$Z_HARNESS_SESSION_ID")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" debug_run_start "$START_PAYLOAD"
@@ -66,6 +66,23 @@ $ARGUMENTS
    ```
 6. Record start time `T0_DEBUG=$(date -u +%Y-%m-%dT%H:%M:%SZ)` — used for post-mortem timeline.
 7. If `docs/llm/INDEX.json` exists → note it. Phase 2 (Evidence) and Phase 3a (Round 1 hypotheses) will dispatch `doc-fetcher` (Haiku) instead of reading INDEX.json or per-concept JSONs from main thread. The orchestrator never reads `docs/llm/*.json` directly.
+
+8. **Soft cost estimate (non-blocking).** Call the gate helper and display the estimate. No AskUser, no halt — always proceeds.
+   ```bash
+   # workflow.pre_run_cost_gate
+   COST_GATE_JSON="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/pre-run-cost-gate.sh" \
+     z-debug soft "$RUN" 2>/dev/null)" || COST_GATE_JSON=""
+   if [ -n "$COST_GATE_JSON" ]; then
+     COST_HUMAN_BLOCK="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("human_block",""))' "$COST_GATE_JSON" 2>/dev/null || true)"
+     [ -n "$COST_HUMAN_BLOCK" ] && printf '%s\n' "$COST_HUMAN_BLOCK"
+     COST_ESTIMATED_TOKENS="$(python3 -c 'import json,sys; e=json.loads(sys.argv[1]).get("estimate",{}); print(json.dumps(e.get("estimated_tokens")))' "$COST_GATE_JSON" 2>/dev/null || echo "null")"
+     COST_CONFIDENCE="$(python3 -c 'import json,sys; e=json.loads(sys.argv[1]).get("estimate",{}); print(e.get("confidence","unknown"))' "$COST_GATE_JSON" 2>/dev/null || echo "unknown")"
+     COST_BASIS="$(python3 -c 'import json,sys; e=json.loads(sys.argv[1]).get("estimate",{}); print(e.get("basis","unknown"))' "$COST_GATE_JSON" 2>/dev/null || echo "unknown")"
+   fi
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cost_gate_decision \
+     "$(python3 -c 'import json,sys; print(json.dumps({"command":"z-debug","choice":"auto_proceed","reason":"soft_gate","estimated_tokens":json.loads(sys.argv[1]),"confidence":sys.argv[2],"basis":sys.argv[3]}))' \
+        "${COST_ESTIMATED_TOKENS:-null}" "${COST_CONFIDENCE:-unknown}" "${COST_BASIS:-unknown}")"
+   ```
 
 ## Auto-bail thresholds (softened — heavy path)
 
@@ -152,6 +169,21 @@ Try to reproduce. Methods (in priority order):
 4. **Production-only** → ask user for log timestamps; use `qt-bot-remote` skill (if available) or other log access to fetch the relevant slice. **DB queries** here stay with the main thread (interpretive), not `remote-runner` (which refuses DB).
 5. **DB state snapshot** → if the bug involves data shape, query the DB read-only via `qt-bot-remote` to confirm the actual state matches the user's description.
 
+**Feedback-loop escalation ladder.** Goal: produce a deterministic, agent-runnable pass/fail signal. Try strategies in this order — stop at the first one that yields a clean pass/fail:
+
+1. **Failing unit test** — if a test already exists that exercises the code path, run it directly.
+2. **`curl`/CLI one-liner** — a single shell invocation whose exit code or stdout unambiguously signals pass/fail.
+3. **CLI output diff** — capture expected vs actual output; diff exits non-zero on divergence.
+4. **Playwright/browser script** — for UI or HTTP regressions; automates the browser interaction and asserts on DOM state or response code.
+5. **Trace replay** — replay a captured request trace against the current code; assert on matching response or behavior.
+6. **Throwaway harness** — minimal ad-hoc test file that exercises the suspect code path; discard after isolation.
+7. **Fuzz loop** — short fuzzing run over the failing input space; useful when the input boundary triggering the bug is unclear.
+8. **`git bisect run`** — for regressions with a known-good baseline; see Phase 2.5 for the full bisect fast-path. Do not re-implement bisect here — Phase 2.5 handles it.
+9. **Differential run vs known-good** — run the same command on two versions (e.g. a pinned dependency or a branch snapshot) and diff outputs.
+10. **HITL bash script** — hand the user a script they run manually and paste back stdout/stderr; last resort when full automation is blocked by auth, network, or hardware constraints.
+
+If none of the above yields a deterministic signal, document why in the Evidence Inventory and use the soft AskUser valve below.
+
 Append `## Evidence Inventory` to `DEBUG.md`:
 
 ```markdown
@@ -161,8 +193,12 @@ Append `## Evidence Inventory` to `DEBUG.md`:
 1. ...
 2. ...
 
-### Reproducibility confirmed
-<yes | no | partial; if no, explain>
+### repro_confidence
+<high | low | none>
+<!-- high = deterministic, agent-runnable pass/fail signal achieved (via ladder above);
+     low  = partial repro or repro requires manual steps;
+     none = cannot reproduce; explain in a following line -->
+<!-- Previously "Reproducibility confirmed: yes|no|partial" — this field supersedes it. -->
 
 ### Inventory
 - **EVID-001:** <text or quoted log line / fixture / metric>
@@ -190,7 +226,7 @@ When the bug is a regression with a known-good baseline and a scriptable repro, 
 ### Gate (all three must hold)
 
 1. **`Started:` field from Phase 1 is not "unknown"** — user supplied a last-good ref / SHA / tag / branch.
-2. **`Reproducibility confirmed: yes`** in Phase 2's Evidence Inventory — not partial, not no.
+2. **`repro_confidence: high`** in Phase 2's Evidence Inventory — `low` or `none` is insufficient.
 3. **Repro is scriptable** — the orchestrator can produce a single shell command that exits 0 when the bug is absent (good) and non-zero when present (bad). If repro requires interactive input, multiple manual steps, or a long-running service, the repro is not scriptable — skip Phase 2.5.
 
 If any gate fails → skip Phase 2.5 silently and proceed to Phase 3a unchanged. Do not push-notify the skip.
@@ -266,23 +302,68 @@ Parse the `STATUS:` line:
 
 2. **Dispatch consultants in parallel (single message).** Each receives ONLY the Problem + Evidence Inventory sections of DEBUG.md (plus doc-fetcher synthesis if relevant). Never share the orchestrator's checkpoint block.
 
-   Check the config knob (resolve once here; reuse in subsequent phases):
+   Check the config knobs (resolve once here; reuse in subsequent phases):
 
    ```bash
    PERSONA_ROTATION="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get experiment.persona_rotation 2>/dev/null || echo "true")"
+   CRITIQUE_PANEL="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get personas.critique_panel 2>/dev/null || echo "true")"
    ```
 
-   **If `PERSONA_ROTATION == "true"`**, use the **fixed 5-member panel** (no randomness). Before dispatching, emit `persona_bound` events for each arm:
+   **If `PERSONA_ROTATION == "true"`**, use the **fixed 5-member panel** (no randomness). Before dispatching, resolve persona prefixes (when `CRITIQUE_PANEL == "true"`) and emit `persona_bound` events for each arm:
 
    ```bash
-   for ARM in gemini claude-sonnet grok composer codex-5.5; do
-     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
-       "$(printf '{"run_id":"%s","command":"z-debug","role":"consultant","arm":"%s","selection_source":"fixed_panel","phase":"3a"}' \
-          "$RUN" "$ARM")"
+   PLUGIN="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+
+   # Vanilla defaults: empty prefix for all 5 arms. Knob OFF (CRITIQUE_PANEL!=true OR
+   # PERSONA_ROTATION!=true) leaves these untouched, so dispatch is byte-identical to before.
+   AGY_PERSONA_PREFIX=""; CLAUDE_PERSONA_PREFIX=""; GROK_PERSONA_PREFIX=""
+   COMPOSER_PERSONA_PREFIX=""; CODEX_PERSONA_PREFIX=""
+   AGY_PERSONA_ID=""; CLAUDE_PERSONA_ID=""; GROK_PERSONA_ID=""
+   COMPOSER_PERSONA_ID=""; CODEX_PERSONA_ID=""
+   AGY_DRAW_ID=""; CLAUDE_DRAW_ID=""; GROK_DRAW_ID=""
+   COMPOSER_DRAW_ID=""; CODEX_DRAW_ID=""
+
+   if [ "$CRITIQUE_PANEL" = "true" ]; then
+     # Draw up to 5 distinct consultant personas. GRACEFUL DEGRADATION: if the consultant
+     # pool has fewer than 5 members, the subcommand returns a shorter array (or [] when
+     # empty) and notes it on stderr — it never exits non-zero. Unfilled slots stay vanilla.
+     PERSONAS_JSON=$(python3 "$PLUGIN/scripts/resolve-persona.py" random-distinct-for-role consultant --count=5 \
+       2>>"$Z_HARNESS_PLAN_DIR/archive/$RUN/persona-draw.log")
+
+     # Positional bind: [0]->agy, [1]->claude-sonnet, [2]->grok, [3]->composer, [4]->codex.
+     # `// ""` yields an empty string for absent indices under underflow, so those arms run vanilla.
+     for slot in 0:AGY 1:CLAUDE 2:GROK 3:COMPOSER 4:CODEX; do
+       idx="${slot%%:*}"; who="${slot##*:}"
+       pname=$(echo "$PERSONAS_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d[$idx]['persona'] if $idx < len(d) else '')" 2>/dev/null || true)
+       ppath=$(echo "$PERSONAS_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d[$idx]['persona_body_path'] if $idx < len(d) else '')" 2>/dev/null || true)
+       pdraw=$(echo "$PERSONAS_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d[$idx]['draw_id'] if $idx < len(d) else '')" 2>/dev/null || true)
+       [ -z "$pname" ] && continue   # underflow slot — leave vanilla
+       prefix=$(python3 "$PLUGIN/runtime/dispatch/persona_prompt.py" "$ppath" "" 2>/dev/null | head -c 4096)
+       eval "${who}_PERSONA_ID=\$pname"
+       eval "${who}_PERSONA_PREFIX=\$prefix"
+       eval "${who}_DRAW_ID=\$pdraw"
+     done
+   fi
+
+   # Emit persona_bound for each arm. When CRITIQUE_PANEL==true and a persona was drawn,
+   # use selection_source=random_role_pool_distinct and include persona_id + draw_id.
+   # When no persona was drawn (vanilla slot or CRITIQUE_PANEL==false), use selection_source=fixed_panel.
+   for slot in agy:AGY claude-sonnet:CLAUDE grok:GROK composer:COMPOSER codex-5.5:CODEX; do
+     arm="${slot%%:*}"; who="${slot##*:}"
+     eval "pid=\$${who}_PERSONA_ID"; eval "pdraw=\$${who}_DRAW_ID"
+     if [ -n "$pid" ]; then
+       bash "$PLUGIN/scripts/log-event.sh" "$RUN" persona_bound \
+         "$(python3 -c 'import json,sys; print(json.dumps({"run_id":sys.argv[1],"command":"z-debug","role":"consultant","arm":sys.argv[2],"selection_source":"random_role_pool_distinct","phase":"3a","persona_id":sys.argv[3],"draw_id":sys.argv[4]}))' \
+            "$RUN" "$arm" "$pid" "$pdraw")"
+     else
+       bash "$PLUGIN/scripts/log-event.sh" "$RUN" persona_bound \
+         "$(printf '{"run_id":"%s","command":"z-debug","role":"consultant","arm":"%s","selection_source":"fixed_panel","phase":"3a"}' \
+            "$RUN" "$arm")"
+     fi
    done
    ```
 
-   Then spawn all 5 panel members in parallel. Cursor arms pass their model via `--model <model>`:
+   Then spawn all 5 panel members in parallel. Cursor arms pass their model via `--model <model>`. Each `<ARM_PERSONA_PREFIX>` is the persona body followed by a blank line (from the draw above), or **empty** when that arm drew no persona (underflow slot) or `CRITIQUE_PANEL` is OFF — in the empty case the prompt is byte-identical to the pre-persona dispatch.
 
    ```
    <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
@@ -291,30 +372,30 @@ Parse the `STATUS:` line:
    <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
      subagent_type="agy",
      description="R1 hypothesis generation for <slug> — gemini arm",
-     prompt="MODE: generate-hypotheses-round1\n\nProblem (verbatim):\n<## Problem section>\n\nEvidence Inventory (verbatim):\n<## Evidence Inventory section>\n\nRelevant code (quoted with file:line, brief):\n<short snippets>\n\ndoc-fetcher synthesis (if relevant):\n<synthesis>\n\nAsk: independently propose 3-5 hypotheses for the root cause. Each must include a discriminating test that confirms if true AND refutes if false. Do not assume any context outside the problem statement and evidence inventory provided.\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+     prompt="<AGY_PERSONA_PREFIX>MODE: generate-hypotheses-round1\n\nProblem (verbatim):\n<## Problem section>\n\nEvidence Inventory (verbatim):\n<## Evidence Inventory section>\n\nRelevant code (quoted with file:line, brief):\n<short snippets>\n\ndoc-fetcher synthesis (if relevant):\n<synthesis>\n\nAsk: independently propose 3-5 hypotheses for the root cause. Each must include a discriminating test that confirms if true AND refutes if false. Do not assume any context outside the problem statement and evidence inventory provided.\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
    )
    <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
      subagent_type="cursor",
      model="claude-4.6-sonnet",
      description="R1 hypothesis generation for <slug> — claude-sonnet arm",
-     prompt="MODE: generate-hypotheses-round1\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+     prompt="<CLAUDE_PERSONA_PREFIX>MODE: generate-hypotheses-round1\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
    )
    <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
      subagent_type="cursor",
      model="grok-4.3",
      description="R1 hypothesis generation for <slug> — grok arm",
-     prompt="MODE: generate-hypotheses-round1\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+     prompt="<GROK_PERSONA_PREFIX>MODE: generate-hypotheses-round1\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
    )
    <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
      subagent_type="cursor",
      model="composer-2.5",
      description="R1 hypothesis generation for <slug> — composer arm",
-     prompt="MODE: generate-hypotheses-round1\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+     prompt="<COMPOSER_PERSONA_PREFIX>MODE: generate-hypotheses-round1\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
    )
    <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
      subagent_type="codex-cli",
      description="R1 hypothesis generation for <slug> — codex-5.5 arm",
-     prompt="MODE: generate-hypotheses-round1\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+     prompt="<CODEX_PERSONA_PREFIX>MODE: generate-hypotheses-round1\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
    )
    ```
 
@@ -358,17 +439,25 @@ Parse the `STATUS:` line:
 
 Single-message parallel dispatch with `MODE: generate-hypotheses-round2-adversarial`. Each receives ONLY the merged `## Hypothesis Pool` section (surgical extraction per the Phase-visibility matrix), plus Problem + Evidence Inventory. **Do NOT** include Test Matrix, Experiment Log, or Score Updates — those don't exist yet anyway.
 
-**If `PERSONA_ROTATION == "true"`**, use the fixed 5-panel. Before dispatching, emit `persona_bound` events for each arm (same pattern as Phase 3a, with `"phase":"3b"`):
+**If `PERSONA_ROTATION == "true"`**, use the fixed 5-panel. Before dispatching, reuse the persona prefixes drawn in Phase 3a (same draw, same positional binding — `AGY_PERSONA_PREFIX`, `CLAUDE_PERSONA_PREFIX`, etc. are still set). Emit `persona_bound` events for each arm at phase 3b, carrying the same `persona_id` + `draw_id` from the Phase 3a draw (or `selection_source=fixed_panel` for vanilla slots):
 
 ```bash
-for ARM in gemini claude-sonnet grok composer codex-5.5; do
-  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
-    "$(printf '{"run_id":"%s","command":"z-debug","role":"consultant","arm":"%s","selection_source":"fixed_panel","phase":"3b"}' \
-       "$RUN" "$ARM")"
+for slot in agy:AGY claude-sonnet:CLAUDE grok:GROK composer:COMPOSER codex-5.5:CODEX; do
+  arm="${slot%%:*}"; who="${slot##*:}"
+  eval "pid=\$${who}_PERSONA_ID"; eval "pdraw=\$${who}_DRAW_ID"
+  if [ -n "$pid" ]; then
+    bash "$PLUGIN/scripts/log-event.sh" "$RUN" persona_bound \
+      "$(python3 -c 'import json,sys; print(json.dumps({"run_id":sys.argv[1],"command":"z-debug","role":"consultant","arm":sys.argv[2],"selection_source":"random_role_pool_distinct","phase":"3b","persona_id":sys.argv[3],"draw_id":sys.argv[4]}))' \
+         "$RUN" "$arm" "$pid" "$pdraw")"
+  else
+    bash "$PLUGIN/scripts/log-event.sh" "$RUN" persona_bound \
+      "$(printf '{"run_id":"%s","command":"z-debug","role":"consultant","arm":"%s","selection_source":"fixed_panel","phase":"3b"}' \
+         "$RUN" "$arm")"
+  fi
 done
 ```
 
-Then spawn all 5 panel members in parallel. Cursor arms pass their model via `--model <model>`:
+Then spawn all 5 panel members in parallel. Cursor arms pass their model via `--model <model>`. Each `<ARM_PERSONA_PREFIX>` is the same prefix from Phase 3a (persona body + blank line), or **empty** for vanilla slots — in the empty case the prompt is byte-identical to the pre-persona dispatch:
 
 ```
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
@@ -377,30 +466,30 @@ Then spawn all 5 panel members in parallel. Cursor arms pass their model via `--
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="agy",
   description="R2 adversarial for <slug> — gemini arm",
-  prompt="MODE: generate-hypotheses-round2-adversarial\nschema_version: hypothesis_round2_v1\n\nProblem (verbatim):\n<## Problem>\n\nEvidence Inventory (verbatim):\n<## Evidence Inventory>\n\nHypothesis Pool (verbatim, with H<NNN> IDs):\n<## Hypothesis Pool table>\n\nAsk: given this merged hypothesis pool, return exactly TWO markdown tables in this order. Do not restate existing pool entries — your value is orthogonality and critique, not endorsement.\n\nTABLE 1 — NEW hypotheses (orthogonality hunt — failure modes absent from the pool). Columns (exact, in order):\n| claim | prediction_if_true | prediction_if_false | discriminating_test | test_cost | parallel_safe | reasoning | orthogonality_to |\n  - `test_cost` ∈ {free, cheap, medium, expensive}\n  - `parallel_safe` ∈ {true, false} — true ONLY if the discriminating test mutates no shared state\n  - `orthogonality_to` — comma-separated list of H<NNN> IDs this row fills a gap relative to (e.g. `H001, H004`)\n\nTABLE 2 — CRITIQUES of existing pool rows. Columns (exact, in order):\n| target_id | critique_type | problem | recommended_action | merge_with_id |\n  - `target_id` — H<NNN> of the row being critiqued (required; rows missing this will be dropped)\n  - `critique_type` MUST be one of: `non_discriminating_test`, `false_parallel_safe`, `duplicate`, `weak_claim`, `unclear_prediction`\n  - `problem` — concrete description; no 'looks good', no 'agree', no empty cells, no pure restatement of the target row's claim\n  - `false_parallel_safe` rows MUST cite the specific mutation in the `problem` cell (e.g. 'writes to ~/.cache/foo'), not just 'mutates state'\n  - `merge_with_id` — populated ONLY when `critique_type == duplicate` (the H<NNN> the target should merge into)\n\nTag the response with `schema_version: hypothesis_round2_v1` at the top.\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+  prompt="<AGY_PERSONA_PREFIX>MODE: generate-hypotheses-round2-adversarial\nschema_version: hypothesis_round2_v1\n\nProblem (verbatim):\n<## Problem>\n\nEvidence Inventory (verbatim):\n<## Evidence Inventory>\n\nHypothesis Pool (verbatim, with H<NNN> IDs):\n<## Hypothesis Pool table>\n\nAsk: given this merged hypothesis pool, return exactly TWO markdown tables in this order. Do not restate existing pool entries — your value is orthogonality and critique, not endorsement.\n\nTABLE 1 — NEW hypotheses (orthogonality hunt — failure modes absent from the pool). Columns (exact, in order):\n| claim | prediction_if_true | prediction_if_false | discriminating_test | test_cost | parallel_safe | reasoning | orthogonality_to |\n  - `test_cost` ∈ {free, cheap, medium, expensive}\n  - `parallel_safe` ∈ {true, false} — true ONLY if the discriminating test mutates no shared state\n  - `orthogonality_to` — comma-separated list of H<NNN> IDs this row fills a gap relative to (e.g. `H001, H004`)\n\nTABLE 2 — CRITIQUES of existing pool rows. Columns (exact, in order):\n| target_id | critique_type | problem | recommended_action | merge_with_id |\n  - `target_id` — H<NNN> of the row being critiqued (required; rows missing this will be dropped)\n  - `critique_type` MUST be one of: `non_discriminating_test`, `false_parallel_safe`, `duplicate`, `weak_claim`, `unclear_prediction`\n  - `problem` — concrete description; no 'looks good', no 'agree', no empty cells, no pure restatement of the target row's claim\n  - `false_parallel_safe` rows MUST cite the specific mutation in the `problem` cell (e.g. 'writes to ~/.cache/foo'), not just 'mutates state'\n  - `merge_with_id` — populated ONLY when `critique_type == duplicate` (the H<NNN> the target should merge into)\n\nTag the response with `schema_version: hypothesis_round2_v1` at the top.\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="cursor",
   model="claude-4.6-sonnet",
   description="R2 adversarial for <slug> — claude-sonnet arm",
-  prompt="MODE: generate-hypotheses-round2-adversarial\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+  prompt="<CLAUDE_PERSONA_PREFIX>MODE: generate-hypotheses-round2-adversarial\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="cursor",
   model="grok-4.3",
   description="R2 adversarial for <slug> — grok arm",
-  prompt="MODE: generate-hypotheses-round2-adversarial\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+  prompt="<GROK_PERSONA_PREFIX>MODE: generate-hypotheses-round2-adversarial\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="cursor",
   model="composer-2.5",
   description="R2 adversarial for <slug> — composer arm",
-  prompt="MODE: generate-hypotheses-round2-adversarial\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+  prompt="<COMPOSER_PERSONA_PREFIX>MODE: generate-hypotheses-round2-adversarial\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="codex-cli",
   description="R2 adversarial for <slug> — codex-5.5 arm",
-  prompt="MODE: generate-hypotheses-round2-adversarial\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+  prompt="<CODEX_PERSONA_PREFIX>MODE: generate-hypotheses-round2-adversarial\n\n<same prompt body>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 ```
 
@@ -523,6 +612,8 @@ For the current cycle (start at cycle 1):
    - H002: prior=low + likelihood=strongly_falsified → posterior=eliminated (rule fired: any×strongly_falsified)
    ...
    ```
+
+   Hypotheses formed when `repro_confidence` is `low` or `none` carry lower initial credence and are tagged "unverified — needs a clean repro to validate."
 
 5. **Move eliminated rows** to a `## Eliminated Alternatives` section (preserve the row + the cycle that eliminated it + the falsifying test):
 
@@ -815,7 +906,7 @@ Push-notify: "Post-mortem ready: `$Z_HARNESS_PLAN_DIR/DEBUG.md` Post-mortem sect
 1. Log:
    ```bash
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" debug_run_end \
-     "$(printf '{"status":"shipped","hypothesis_cycles":%d,"total_hypotheses_generated":%d,"action_items":%d,"postmortem_written":true}' "$CYCLES" "$N_HYPOTHESES" "$N_ACTIONS")"
+     "$(printf '{"command":"z-debug","status":"shipped","hypothesis_cycles":%d,"total_hypotheses_generated":%d,"action_items":%d,"postmortem_written":true}' "$CYCLES" "$N_HYPOTHESES" "$N_ACTIONS")"
    ```
 2. Push-notify if policy != `off`: "Debug complete. Root cause: <one-line, H<NNN>>. DEBUG.md in `$Z_HARNESS_PLAN_DIR/`."
 
@@ -831,7 +922,7 @@ Push-notify: "Post-mortem ready: `$Z_HARNESS_PLAN_DIR/DEBUG.md` Post-mortem sect
 Log:
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" debug_run_end \
-  "$(printf '{"status":"abandoned","hypothesis_cycles":%d,"total_hypotheses_generated":%d}' "$CYCLES" "$N_HYPOTHESES")"
+  "$(printf '{"command":"z-debug","status":"abandoned","hypothesis_cycles":%d,"total_hypotheses_generated":%d}' "$CYCLES" "$N_HYPOTHESES")"
 ```
 
 **Deregister this run** (best-effort, non-fatal):
@@ -884,7 +975,7 @@ Orchestrator alone reads raw test output and assigns likelihood buckets (Phase 6
 - **Never debug without repro.** If repro is impossible and user picks "proceed on inference," document that decision in the Problem section and flag in the Post-mortem Confidence section.
 - **Never skip the post-mortem.** Even on a trivial bug — the preventative action-items habit is what makes `/z-debug` different from `/z-fix`.
 - **Never skip Codex review on the fix** — the safety gate is non-negotiable.
-- **Always emit BOTH Round 1 and Round 2 hypothesis-generation consults** — when `experiment.persona_rotation=true`: ten subagent calls total during generation (5 in R1 + 5 in R2), plus five more in Phase 7 for the fix consult; when `experiment.persona_rotation=false`: four subagent calls total (2 in R1 + 2 in R2), plus two more in Phase 7.
+- **Always emit BOTH Round 1 and Round 2 hypothesis-generation consults** — when `experiment.persona_rotation=true`: ten subagent calls total during generation (5 in R1 + 5 in R2), plus five more in Phase 7 for the fix consult; when `experiment.persona_rotation=false`: four subagent calls total (2 in R1 + 2 in R2), plus two more in Phase 7. Persona prefixes (when `personas.critique_panel=true`) are drawn once before Phase 3a and reused at Phase 3b — the same draw populates both rounds.
 - **Likelihood-bucket assignment is orchestrator-only.** Never delegate the `{strongly_falsified, …, strongly_supported}` call to a consultant. Never pass raw test output to a consultant.
 - **Orchestrator's Round 1 block MUST be checkpointed to disk** (`archive/<run>/round1-orchestrator.md`) BEFORE consultant dispatch. Re-read from disk at merge time, not from conversation state.
 - **Wrong-tool gate (Phase 0) is non-skippable.** If the user already has a hypothesis, exit with a `/z-fix` recommendation — do not proceed.

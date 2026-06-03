@@ -1,5 +1,5 @@
 ---
-description: Inspect the z-harness persona registry, role bindings, and persona files. Subcommands: list, roles, validate, read <name>, where <name>. Default (no args) = roles.
+description: "Inspect the z-harness persona registry, role bindings, and persona files. Subcommands: list, roles, validate, read <name>, where <name>. Default (no args) = roles."
 role: skill
 ---
 

@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: Retrospective policy-mining agent. Wraps axiom-extract.py with LLM judgement to produce ≤5 sharpened axiom candidates from z-harness interaction history. Sibling to the reviewer agent — NOT an extension of any candidate_kind enum. Proposes only; n...
+description: "Retrospective policy-mining agent. Wraps axiom-extract.py with LLM judgement to produce ≤5 sharpened axiom candidates from z-harness interaction history. Sibling to the reviewer agent — NOT an extension of any candidate_kind enum. Proposes only; n..."
 ---
 
 You mine behavioral axioms from z-harness interaction history by running the deterministic extractor and then applying LLM judgement to sharpen, merge, and filter the raw output.

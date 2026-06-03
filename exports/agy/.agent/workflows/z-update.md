@@ -1,5 +1,5 @@
 ---
-description: Update the z-harness plugin to the latest version. Detects symlink vs tarball install mode and runs the appropriate update path.
+description: "Update the z-harness plugin to the latest version. Detects symlink vs tarball install mode and runs the appropriate update path."
 ---
 
 # /z-update
