@@ -44,7 +44,7 @@ The command surface is organized around explicit routing, durable artifacts, and
 - `commands/z-implement-next.md:1` — `z-implement-next` — Implements one pending task with model selection and review. Phase 0.0 active-plan registry lifecycle (ordering: 0.2 slug discovery → 0.0 register → 0.1 consumer check): registers, seeds scope, runs overlap scan, deregisters on exit (FINALIZE_STATUS rule). Phase 0.1 consumer check halts if any project-sink entry has status=running (emits `implement_halted_followup_running`). Phase 2 persona-rotation block mirrors z-implement-all step 5.0: single attempt_id=<task-id>-v1, `personas.implementer_retry` knob governs retry behavior. Reviewer gate: base codex (authoritative) + advisory random-arm reviewer when `personas.review_eval` ON.
 - `commands/z-improve.md:1` — `z-improve` — Retrospects one run and proposes harness improvements.
 - `commands/z-init-docs.md:1` — `z-init-docs` — Bootstraps two-tier human and LLM documentation.
-- `commands/z-maintain-docs.md:1` — `z-maintain-docs` — Refreshes stale docs and previews proposed updates.
+- `commands/z-maintain-docs.md:1` — `z-maintain-docs` — Refreshes stale docs, applying by default (`--dry-run` to preview).
 - `commands/z-mr-review.md:1` — `z-mr-review` — Reviews branch diffs into ranked task-shaped findings.
 - `commands/z-overnight.md:1` — `z-overnight` — Unattended pipeline orchestrator; chains existing sub-commands end-to-end with `Z_HARNESS_NO_ASK=halt`; writes MORNING_REPORT.md; supports resume, presets, and concurrency lock. Known v1 limit: only 12 registered callsites participate in halt-from-ask.
 - `commands/z-plan-light.md:1` — `z-plan-light` — Plans and ships small focused changes via FIX.md. Phase 3 measured advisory consult arm (`personas.consult_eval`, default OFF): one `consultant` persona drawn in parallel with the two neutral consultants, advisory only — recommendation logged under `persona_advisory_recommendation`, never merged into synthesis. Phase 8 advisory eval-reviewer (`personas.review_eval`, default ON) per the shared snippet in `commands/z-implement-all.md`; base codex reviewer remains the authoritative gate.
@@ -153,7 +153,7 @@ Typical chains:
 ### Docs
 
 - **`/z-init-docs`** — Bootstrap two-tier docs (`docs/human/` + `docs/llm/INDEX.json`).
-- **`/z-maintain-docs`** — Refresh stale concepts. Dry-run preview by default.
+- **`/z-maintain-docs`** — Refresh stale concepts. Applies by default; `--dry-run` previews. Stops for review only on genuine-risk signals (memories_lost, audit reject/needs-review).
 - **`/z-suggest-memory`** — Author a memory entry into a concept's `docs/llm/<slug>.json`. Use `--kind routing-preference` to write a structured workflow preference entry to `docs/llm/workflow.json` (global) or `docs/llm/workflow-<project-slug>.json` (project).
 
 ### Telemetry and diagnostics
