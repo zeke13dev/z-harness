@@ -1,6 +1,6 @@
 {
   "concept": "commands",
-  "last_updated": "2026-06-02",
+  "last_updated": "2026-06-03",
   "covers_spec": "none",
   "source_file": [
     "commands/z-amend.md",
@@ -18,6 +18,8 @@
     "commands/z-followup-next.md",
     "commands/z-followup-refresh.md",
     "commands/z-followup-status.md",
+    "commands/z-git-guardrails.md",
+    "commands/z-grill.md",
     "commands/z-implement-all.md",
     "commands/z-implement-next.md",
     "commands/z-improve.md",
@@ -76,14 +78,14 @@
       "line": 1,
       "symbol": "z-brainstorm",
       "kind": "module",
-      "summary": "Seeds planning with parallel ideation and anti-bias checks. Phase 0 scope probe (LIGHT/MEDIUM/HEAVY) with single-file fast-path (scope_probe_skipped_fast_path); per_vendor/per_framing axis taxonomy. HEAVY Phase 4 presents a (chunk x framing) selection matrix. Phase 2a draws 3 distinct ideator personas (brainstorm.personas, default ON): one per ideator (claude/codex/gemini), persona diversity layered on top of vendor diversity; knob OFF is a complete no-op (byte-identical dispatch)."
+      "summary": "Seeds planning with parallel ideation and anti-bias checks. Phase 0 scope probe (LIGHT/MEDIUM/HEAVY) with single-file fast-path (scope_probe_skipped_fast_path); per_vendor/per_framing axis taxonomy. HEAVY Phase 4 presents a (chunk x framing) selection matrix. Phase 2a draws 3 distinct ideator personas (brainstorm.personas, default ON): one per ideator (claude/codex/gemini), persona diversity layered on top of vendor diversity; knob OFF is a complete no-op (byte-identical dispatch). Detects $Z_HARNESS_PLAN_DIR/GRILL.md at terrain-ingestion (Phase 1 §1c); if present, injects ## Sharpened problem + ## Open branches as seed framing for ideators; GRILL.md content also included in §1d input_hash to prevent stale cache hits."
     },
     {
       "file": "commands/z-debug.md",
       "line": 1,
       "symbol": "z-debug",
       "kind": "module",
-      "summary": "Runs heavy hypothesis-tournament debugging with post-mortem and Phase 10 memory review (shipped branch only); sequential AskUser loop capped at 3 candidates; emits memory_review_terminal. Active-plan registry lifecycle: registers in Setup, deregisters on all exit paths (FINALIZE_STATUS rule). When experiment.persona_rotation=true, Phases 3a/3b/7 use fixed 5-panel (agy, cursor@claude-4.6-sonnet, cursor@grok-4.3, cursor@composer-2.5, codex-cli) instead of 2-consultant path; Phases 3a/3b additionally draw distinct consultant personas per arm when personas.critique_panel=true (same draw reused at 3b); Phase 7 fix-consult uses fixed 5-panel with selection_source=fixed_panel for all arms — no persona prefix draw by design."
+      "summary": "Runs heavy hypothesis-tournament debugging with post-mortem and Phase 10 memory review (shipped branch only); sequential AskUser loop capped at 3 candidates; emits memory_review_terminal. Phase 2 uses a 10-strategy feedback-loop escalation ladder (cheapest-first) to reach a deterministic pass/fail signal; bisect cross-referenced at Phase 2.5. repro_confidence field (high|low|none) extends the existing Reproducibility confirmed field; Phase 6 scoring applies lower initial credence and 'unverified' tag to low/none hypotheses. Active-plan registry lifecycle: registers in Setup, deregisters on all exit paths (FINALIZE_STATUS rule). When experiment.persona_rotation=true, Phases 3a/3b/7 use fixed 5-panel (agy, cursor@claude-4.6-sonnet, cursor@grok-4.3, cursor@composer-2.5, codex-cli) instead of 2-consultant path; Phases 3a/3b additionally draw distinct consultant personas per arm when personas.critique_panel=true (same draw reused at 3b); Phase 7 fix-consult uses fixed 5-panel with selection_source=fixed_panel for all arms — no persona prefix draw by design."
     },
     {
       "file": "commands/z-do.md",
@@ -149,6 +151,20 @@
       "summary": "Diagnostic: counts per status, per-entry and global lock state (flock-probed), oldest open entry, last Notion sync failure. Read-only. Never rebuilds views. Nest-guarded."
     },
     {
+      "file": "commands/z-git-guardrails.md",
+      "line": 1,
+      "symbol": "z-git-guardrails",
+      "kind": "module",
+      "summary": "Installer command for the git-safety PreToolUse hook (block-dangerous-git.sh). Subcommands: install (global vs project scope via AskUser; idempotent additive merge into settings.json; verify dry-run), remove, status. RUNTIME-GATE before scope AskUser."
+    },
+    {
+      "file": "commands/z-grill.md",
+      "line": 1,
+      "symbol": "z-grill",
+      "kind": "module",
+      "summary": "Depth-first requirements interview: one question at a time with recommended answers; self-serves codebase questions via Explore (Haiku); adaptive termination with standing stop offer. Stages to <plans-base>/.grill-pending.md then finalizes to $Z_HARNESS_PLAN_DIR/<slug>/GRILL.md. Telemetry: grill_run_start / grill_question / grill_finalized / phase_end. Handoff recommends /z-plan or /z-brainstorm."
+    },
+    {
       "file": "commands/z-implement-all.md",
       "line": 1,
       "symbol": "z-implement-all",
@@ -174,14 +190,14 @@
       "line": 1,
       "symbol": "z-init-docs",
       "kind": "module",
-      "summary": "Bootstraps two-tier human and LLM documentation."
+      "summary": "Bootstraps two-tier human and LLM documentation; also creates repo-root CONTEXT.md (domain glossary) by default — pass --no-glossary to skip. Idempotent: extends without clobbering user terms. RUNTIME-GATE before Explore and AskUser."
     },
     {
       "file": "commands/z-maintain-docs.md",
       "line": 1,
       "symbol": "z-maintain-docs",
       "kind": "module",
-      "summary": "Refreshes stale docs and previews proposed updates."
+      "summary": "Refreshes stale concept docs (applies by default; --dry-run previews). New --glossary flag also refreshes repo-root CONTEXT.md. Default path unchanged when --glossary is absent."
     },
     {
       "file": "commands/z-mr-review.md",
@@ -216,7 +232,7 @@
       "line": 1,
       "symbol": "z-plan",
       "kind": "module",
-      "summary": "Produces SPEC.md, PLAN.md, TASKS.md. Calls config.py export-env during Setup. Active-plan registry lifecycle: registers immediately after run_start, seeds scope via scope-extractor subagent (Phase 8), sends heartbeat at Phase 8 boundary, deregisters via FINALIZE_STATUS rule. Slug discovery uses all_plan_slugs; slug-confirm resolver gate (workflow.slug_confirm) after hard collision check; check-no-ask halt branches at workflow.slug_confirm and workflow.plan_decisions_approval (both emit plan_halt). Step 9c consolidated freshness gate emits precontext_freshness_acknowledged; proceed-with-stale and abandon set to_command: null in plan_route_decision. Phase 3 and Phase 7 honor Z_HARNESS_CONSULT=off: when resolve-provider.py consultant_primary returns none, all consultant Agent() calls are skipped, tentative decisions recorded as final, consult_skipped event emitted (phase:3 or phase:7). When experiment.persona_rotation=true, Phases 3 and 7 use fixed 5-panel (agy, cursor@claude-4.6-sonnet, cursor@grok-4.3, cursor@composer-2.5, codex-cli) instead of 2-consultant path; each phase additionally draws distinct consultant personas per arm when personas.critique_panel=true; Phase 3 and Phase 7 draws are independent."
+      "summary": "Produces SPEC.md, PLAN.md, TASKS.md. Calls config.py export-env during Setup. Active-plan registry lifecycle: registers immediately after run_start, seeds scope via scope-extractor subagent (Phase 8), sends heartbeat at Phase 8 boundary, deregisters via FINALIZE_STATUS rule. Slug discovery uses all_plan_slugs; slug-confirm resolver gate (workflow.slug_confirm) after hard collision check; check-no-ask halt branches at workflow.slug_confirm and workflow.plan_decisions_approval (both emit plan_halt). Step 9c consolidated freshness gate emits precontext_freshness_acknowledged; proceed-with-stale and abandon set to_command: null in plan_route_decision. GRILL.md detected as 4th precontext artifact (alongside MAP/BRAINSTORM/RESEARCH) in Setup step 9; ## Sharpened problem / ## Killed scope / ## Open branches injected into Phase 0 premise and Phase 2 decision seeding; Planning Inputs SPEC.md table includes a GRILL.md row. Phase 3 and Phase 7 honor Z_HARNESS_CONSULT=off: when resolve-provider.py consultant_primary returns none, all consultant Agent() calls are skipped, tentative decisions recorded as final, consult_skipped event emitted (phase:3 or phase:7). When experiment.persona_rotation=true, Phases 3 and 7 use fixed 5-panel (agy, cursor@claude-4.6-sonnet, cursor@grok-4.3, cursor@composer-2.5, codex-cli) instead of 2-consultant path; each phase additionally draws distinct consultant personas per arm when personas.critique_panel=true; Phase 3 and Phase 7 draws are independent."
     },
     {
       "file": "commands/z-providers-discover.md",

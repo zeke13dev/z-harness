@@ -1,11 +1,11 @@
 # Scripts
 
-> Last updated: 2026-06-02
-> Covers source: scripts/extract-dismissals.py, scripts/log-event.sh, scripts/log-phase.sh, scripts/regenerate-memories-flat.py, scripts/remote-sandbox-sync.sh, scripts/run-memory-review.sh, scripts/version.sh, scripts/config.py, scripts/config.sh, scripts/test_config.py, scripts/test_log_phase.sh, scripts/persona-stats.py, scripts/active-plan-registry.py
+> Last updated: 2026-06-03
+> Covers source: scripts/block-dangerous-git.sh, scripts/extract-dismissals.py, scripts/log-event.sh, scripts/log-phase.sh, scripts/regenerate-memories-flat.py, scripts/remote-sandbox-sync.sh, scripts/run-memory-review.sh, scripts/version.sh, scripts/config.py, scripts/config.sh, scripts/test_config.py, scripts/test_log_phase.sh, scripts/persona-stats.py, scripts/active-plan-registry.py
 
 ## Overview
 
-The scripts concept covers the shell and Python utility scripts that form the operational backbone of the z-harness pipeline. The core cohort handles structured event telemetry (`log-event.sh` / `log-phase.sh`), memory document regeneration (`regenerate-memories-flat.py`), plugin version introspection (`version.sh`), memory-review lifecycle gating (`run-memory-review.sh`), MR-review dismissal signature extraction (`extract-dismissals.py`), rsync-based remote sandbox synchronization (`remote-sandbox-sync.sh`), layered TOML configuration and workflow-question resolution (`config.py` / `config.sh`), run terminal-state classification (`run-status.sh`), TASKS.md normalization (`normalize-task-state.sh`), AskUserQuestion callsite auditing (`lint-askuser.sh`), overnight preflight collision detection (`overnight-preflight.sh`), morning-report generation (`morning-report.py`), and the local preflight harness (`preflight.sh`). Test scripts (`test_config.py`, `test_log_phase.sh`) provide regression coverage. `log-event.sh` routes all base-path resolution through `z_harness_base()` from `plan-path.sh`, which implements a 5-tier fallback chain and supports the `Z_HARNESS_BASE_DIR` external-base redirect required for benchmark task isolation.
+The scripts concept covers the shell and Python utility scripts that form the operational backbone of the z-harness pipeline. The core cohort handles structured event telemetry (`log-event.sh` / `log-phase.sh`), memory document regeneration (`regenerate-memories-flat.py`), plugin version introspection (`version.sh`), memory-review lifecycle gating (`run-memory-review.sh`), MR-review dismissal signature extraction (`extract-dismissals.py`), rsync-based remote sandbox synchronization (`remote-sandbox-sync.sh`), layered TOML configuration and workflow-question resolution (`config.py` / `config.sh`), run terminal-state classification (`run-status.sh`), TASKS.md normalization (`normalize-task-state.sh`), AskUserQuestion callsite auditing (`lint-askuser.sh`), overnight preflight collision detection (`overnight-preflight.sh`), morning-report generation (`morning-report.py`), the local preflight harness (`preflight.sh`), and the git-safety PreToolUse hook (`block-dangerous-git.sh`). Test scripts (`test_config.py`, `test_log_phase.sh`) provide regression coverage. `log-event.sh` routes all base-path resolution through `z_harness_base()` from `plan-path.sh`, which implements a 5-tier fallback chain and supports the `Z_HARNESS_BASE_DIR` external-base redirect required for benchmark task isolation.
 
 `scripts/active-plan-registry.py` is a lockless per-run active-plan registry. Each run owns exactly one record at `<active_plans_dir>/<run-id>.json`; all writes are atomic (`tmpfile + os.replace`) and no global lock is taken. Subcommands: `session-id` (derive or echo a stable session token), `register` (write schema-v1 record, emits `plan_registered`), `heartbeat` (update `last_heartbeat`/phase/task — non-fatal), `update-scope` (merge a scope array of `{path, confidence, reason}` items — non-fatal), `list [--json]` (scan active dir, skip torn files), `overlaps [--strict] [--scope-json]` (compute path intersection against live peers; exit 0=none, 10=advisory, 20=blocking), `reap` (conservative reaper: delete on dead-local-pid or 2× stale margin; mark `status:stale` on 1× remote stale), `deregister [--status complete|aborted]` (atomic unlink, emits `plan_deregistered` — non-fatal). The registry is consumed by `/z-plan`, `/z-audit`, `/z-do`, `/z-brainstorm`, `/z-debug`, `/z-where`, `/z-stats`, and `migrate-plan-layout.sh`. The `Z_HARNESS_REGISTRY_ENABLED=0` env var disables all coordination writes (mutating subcommands become silent no-ops); non-mutating reads (`list`, `session-id`) are always permitted.
 
@@ -15,6 +15,7 @@ A second cohort — added by the notion-followup-sink plan — implements the fo
 
 ## Key entry points
 
+- `scripts/block-dangerous-git.sh:1` — `block-dangerous-git.sh` — PreToolUse hook that classifies Bash `git` commands and enforces git safety. Reads hook JSON from stdin (`tool_input.command`, matcher `"Bash"`). Two verb classes: (1) rewrite verbs (`reset --hard`, `commit --amend`, `push --force`/`--force-with-lease`) — shells out to `git branch -r --contains <sha>` and blocks only when the SHA is upstream-reachable; (2) working-tree-destructive verbs (`clean -f*`, `checkout .`, `restore .`, `branch -D`) — blanket-blocked. Override: `Z_HARNESS_GIT_GUARDRAILS_OVERRIDE=1` allows through and appends to a guardrails audit log. Fail-closed on git errors. Non-git commands pass through unconditionally. Installed via `/z-git-guardrails install`.
 - `scripts/log-event.sh:1` — `log-event.sh` — Appends a structured JSON event line to `<run>/events.jsonl` and the repo-wide `z-harness/metrics.jsonl`; resolves the artifact base via `z_harness_base()` (5-tier fallback from `plan-path.sh`); uses `flock` for concurrent-safe appends; supports mid-flight legacy run detection and `Z_HARNESS_BASE_DIR` external-base redirect.
 - `scripts/log-phase.sh:1` — `log-phase.sh` — Sugar layer over `log-event.sh`; supports three modes: `start` (emits `<phase>_start`, returns an opaque timing token), `end` (emits `<phase>_end` with `wall_ms` merged in), and `wrap` (wraps an arbitrary command end-to-end and captures its exit code); anomaly detection via `check_wall_ms`.
 - `scripts/log-phase.sh:71` — `check_wall_ms` — Anomaly guard: emits a `telemetry_anomaly` event and returns exit code 1 (suppressing the bogus `*_end` event) when `wall_ms > 604_800_000 ms` (7-day threshold) or when `wall_ms < 0` (clock skew / NTP jump).
@@ -91,6 +92,9 @@ A second cohort — added by the notion-followup-sink plan — implements the fo
 
 ## Edge cases / gotchas
 
+- `block-dangerous-git.sh` is fail-closed: if the `git branch -r --contains` subprocess errors (detached HEAD, no remote), it blocks the rewrite verb rather than allowing it through.
+- `block-dangerous-git.sh` only shells out for rewrite verbs that need the upstream-reachability check; working-tree-destructive verbs are blocked synchronously without any subprocess.
+- `Z_HARNESS_GIT_GUARDRAILS_OVERRIDE=1` allows a blocked command through exactly once per invocation and appends an audit entry; it does not permanently disable the hook.
 - `log-event.sh` resolves all artifact paths via `z_harness_base()` from `plan-path.sh` (5-tier fallback). When `Z_HARNESS_BASE_DIR` is set, the mid-flight legacy fallback is skipped entirely to preserve the model.patch invariant.
 - `log-phase.sh` `check_wall_ms`: threshold is 604_800_000 ms (7 days). Values above this indicate seconds-vs-ms confusion. Values below 0 indicate clock skew. Both cases emit `telemetry_anomaly` and suppress the bogus `*_end` event.
 - `log-phase.sh` uses a `python3` fallback (`time.time()*1000`) to get millisecond timestamps because macOS BSD `date` does not support `%3N`.
@@ -122,6 +126,8 @@ A second cohort — added by the notion-followup-sink plan — implements the fo
 
 ## Examples
 
+- Install git guardrails (via command): `/z-git-guardrails install`
+- Allow one blocked git operation via override: `Z_HARNESS_GIT_GUARDRAILS_OVERRIDE=1 git reset --hard HEAD~1`
 - Start a named phase and capture the timing token:
   `TOKEN="$(bash scripts/log-phase.sh start "tasks/T020" precheck '{"id":"T020"}')"`
 - End the phase with status:
