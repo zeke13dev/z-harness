@@ -1,6 +1,6 @@
 # Axioms
 
-> Last updated: 2026-05-29
+> Last updated: 2026-06-02
 > Covers source: scripts/axiom-store.py, scripts/axiom-extract.py, scripts/build-kernel.py, scripts/resolve-kernel.sh, scripts/build-skill-index.py, agents/axiom-extractor.md, commands/z-axiom-scan.md, commands/z-axiom-list.md, commands/z-axiom-approve.md, commands/z-axiom-reject.md, commands/z-axiom-edit.md, docs/schemas/axiom.schema.json, scripts/config.py, scripts/setup.py
 
 ## Overview
@@ -29,7 +29,7 @@ raw decision events  →  candidate  →  approved  (or rejected)
 
 ### 1. Raw events
 
-Every workflow decision you make is logged to `<base>/metrics.jsonl` (the resolved artifact base — see [telemetry](telemetry.md)) as a structured event (via `scripts/log-decision.sh`). The axiom extractor reads these events to find recurring patterns.
+Every workflow decision you make is logged to `<base>/metrics.jsonl` (the resolved artifact base — see [telemetry](telemetry.md)) as a structured event (via `scripts/log-decision.sh`). The axiom extractor reads these events to find recurring patterns. Since the Phase-D flip, the default artifact base is external (`XDG_STATE_HOME/...`), so `axiom-extract.py` resolves `metrics.jsonl` via `plan-path.sh base_dir` (with a legacy in-repo fallback).
 
 ### 2. Candidate
 
@@ -116,7 +116,7 @@ The kernel header carries `source_hash` (SHA-256 over skill index + sorted appro
 
 **Staleness check:** `scripts/resolve-kernel.sh` resolves the correct `KERNEL.md` path (checking `Z_HARNESS_KERNEL_PATH` override, then `.z-harness/KERNEL.md`, then the global path) and emits a loud stderr warning if the embedded `source_hash` does not match a non-mutating recompute via `build-kernel.py --print-hash`. This check is non-blocking and never changes exit code.
 
-**Inheritance:** Six behavioral subagents (implementer, reviewers, and consultant roles) read `KERNEL.md` at invocation time via the `CLAUDE.md` kernel pointer that `/z-setup` installs. The main thread does not read `KERNEL.md` directly — this is an agent-tier inheritance mechanism.
+**Inheritance:** Behavioral subagents (implementer, reviewers, and consultant roles) read `KERNEL.md` at invocation time via the `CLAUDE.md` kernel pointer that `/z-setup` installs. The main thread does not read `KERNEL.md` directly — this is an agent-tier inheritance mechanism.
 
 ---
 
@@ -136,6 +136,7 @@ Configure via the 4-layer TOML system (see `docs/human/config.md`) or run `/z-se
 ## How it interacts with others
 
 - `config` — The resolver (`scripts/config.py _build_resolve_envelope`) applies the axiom layer as the last (lowest-authority) input. `_load_axiom_matches` gates on `axioms.enabled` and delegates store access to `axiom-store.py`. Config/memory always win direct conflicts; conflicts are surfaced, not silenced.
-- `agents` — The `axiom-extractor` agent (Sonnet) wraps `axiom-extract.py` with LLM judgement; it is dispatched by `/z-axiom-scan`. The six behavioral subagents (implementer, reviewer, consultants) read `KERNEL.md` at task start.
+- `agents` — The `axiom-extractor` agent (Sonnet) wraps `axiom-extract.py` with LLM judgement; it is dispatched by `/z-axiom-scan`. Behavioral subagents (implementer, reviewer, consultants) read `KERNEL.md` at task start.
 - `commands` — The five `/z-axiom-*` commands are the user-facing surface. `/z-setup` (axioms scope) configures keys and installs the `CLAUDE.md` kernel pointer.
-- `scripts` — `axiom-store.py` is the CRUD + validation layer; `axiom-extract.py` is the miner; `build-kernel.py` is the compiler; `resolve-kernel.sh` is the path resolver + staleness checker; `build-skill-index.py` generates the skill dispatch section of the kernel.
+- `scripts` — `axiom-store.py` is the CRUD + validation layer; `axiom-extract.py` is the miner (now resolves metrics.jsonl via `plan-path.sh base_dir` for external-base compatibility); `build-kernel.py` is the compiler; `resolve-kernel.sh` is the path resolver + staleness checker; `build-skill-index.py` generates the skill dispatch section of the kernel.
+- `external-base` — Since the Phase-D flip, `axiom-extract.py` calls `plan-path.sh base_dir` to locate `metrics.jsonl` rather than assuming it lives at `<repo_root>/z-harness/metrics.jsonl`. A legacy fallback to the in-repo path is retained when the resolved external path does not yet exist.

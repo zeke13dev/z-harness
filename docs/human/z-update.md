@@ -1,6 +1,6 @@
 # z-update
 
-> Last updated: 2026-05-28
+> Last updated: 2026-06-02
 > Covers source: install.sh, scripts/bundle-plugin.sh, scripts/version.sh, commands/z-update.md, docs/human/INSTALL.md
 
 ## Overview
@@ -29,7 +29,7 @@ The command is intentionally explicit: there is no autoupdate mechanism. Every u
 
 ## Edge cases / gotchas
 
-- **Three install modes.** `/z-update` now classifies installs as `symlink` (the plugin path is a symlink, or `git rev-parse` succeeds inside it), `runtime` (a `runtime/` subdirectory is present but no git history), or `tarball` (everything else). Symlink mode uses `git pull --ff-only`; tarball and runtime modes use the atomic swap path.
+- **Three install modes.** `/z-update` classifies installs as `symlink` (the plugin path is a symlink, or `git rev-parse` succeeds inside it), `runtime` (a `runtime/` subdirectory is present but no git history), or `tarball` (everything else). Symlink mode uses `git pull --ff-only`; tarball and runtime modes use the atomic swap path.
 - **Plugin root discovery order.** The command checks `Z_HARNESS_PLUGIN_ROOT`, then `ANTIGRAVITY_PLUGIN_ROOT`, then `CLAUDE_PLUGIN_ROOT`, then walks candidate paths (`~/plugins/z-harness`, `~/.claude/plugins/z-harness@zeke-tools`, `$(pwd)`). The first candidate with `scripts/version.sh` and `install.sh` wins. `version.sh` uses the same priority chain.
 - **Dirty-tree abort in symlink mode.** If `git status --porcelain` is non-empty, `/z-update` prints `git status` output and halts. The user must commit or stash before re-running.
 - **`--ff-only` pull.** If the local clone has diverged from the remote (e.g. local commits exist), `git pull --ff-only` fails. `/z-update` prints the error and tells the user to resolve manually — it never force-merges or resets.
@@ -38,7 +38,8 @@ The command is intentionally explicit: there is no autoupdate mechanism. Every u
 - **Codex cache after symlink update.** Codex snapshots plugin skills into its cache. After a symlink-mode update, `/z-update` reruns `codex plugin add z-harness@personal` (if `codex` is on PATH and `~/.agents/plugins/marketplace.json` exists) so the cache reflects the new version. A new Codex thread is required to pick up changed skills.
 - **Symlink vs. git-in-dir detection.** The command treats a path as symlink-mode if the plugin dir is itself a symlink OR if running `git rev-parse --git-dir` inside it succeeds. An extracted tarball that happens to contain a `.git/` directory would be misclassified as symlink mode.
 - **`bundle-plugin.sh` deletes the tarball on audit failure.** If `audit-tarball.sh` finds a violation (e.g. a `providers.json` slipped in), the tarball is deleted and the script exits non-zero. No partial artifact is left behind.
-- **`--target` flag in `install.sh`.** The main dispatch in `install.sh` is now split into `install_target_from_repo` and `install_target_from_tarball`, each routing `claude`, `codex`, or `all` targets. The `--host` alias is also accepted.
+- **`--target` flag in `install.sh`.** The main dispatch in `install.sh` uses `{ ...; }` command-groups to call detection functions (`is_repo_clone`, `is_codex_plugin_source`) outside of `[[ ]]` — calling them inside `[[ ]]` would treat the bare function name as a constant non-empty string (shellcheck SC2078) and always evaluate to true, making the tarball fallback path unreachable.
+- **`harness_updated` event destination.** The telemetry event is written to `<base>/metrics.jsonl`, where `<base>` is the resolved artifact base directory (external by default after the Phase-D flip). It is not written to the in-repo `z-harness/metrics.jsonl`.
 
 ## Examples
 

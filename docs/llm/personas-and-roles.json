@@ -13,6 +13,9 @@
     "commands/z-personas.md",
     "skills/z-personas/SKILL.md",
     "runtime/drivers/_persona_utils.py",
+    "runtime/drivers/antigravity/persona_export.py",
+    "runtime/drivers/cursor/persona_export.py",
+    "runtime/drivers/codex/persona_export.py",
     "runtime/drivers/claude/persona_export.py",
     "runtime/contract/event.schema.json",
     "docs/human/PERSONAS.md"
@@ -24,7 +27,7 @@
       "line": 88,
       "symbol": "_ROLE_REGISTRY",
       "kind": "const",
-      "summary": "Maps role names to expected contracts: consultant_primary/secondary -> freeform, reviewer -> review-verdict, implementer/ideator/consultant/audit_persona -> None (any). 7 roles total. Single source of truth for known roles in cmd_validate and cmd_random_for_role."
+      "summary": "Maps role names to expected contracts: consultant_primary/secondary->freeform, reviewer->review-verdict, implementer/ideator/consultant/audit_persona->None. 7 roles. Single source of truth for known roles in validate and random-for-role."
     },
     {
       "file": "scripts/resolve-persona.py",
@@ -115,7 +118,7 @@
       "line": 1185,
       "symbol": "_BORING_ANCHOR_NAME",
       "kind": "const",
-      "summary": "String constant 'boring-anchor' -- the control persona. In random pool (T102); also drawn on forced-control cadence as a floor. fallback_empty_pool draws are quarantined."
+      "summary": "String constant 'boring-anchor' -- the control persona. In random pool (T102); also drawn on forced-control cadence. fallback_empty_pool draws are quarantined."
     },
     {
       "file": "scripts/resolve-persona.py",
@@ -129,7 +132,7 @@
       "line": 28,
       "symbol": "parse_persona_file",
       "kind": "fn",
-      "summary": "Minimal stdlib-only frontmatter parser shared by all per-target persona_export.py modules. Returns (name, frontmatter_text, body); strips leading blank line from body."
+      "summary": "Minimal stdlib-only frontmatter parser shared by all four per-target persona_export.py modules. Returns (name, frontmatter_text, body); strips leading blank line from body."
     },
     {
       "file": "runtime/drivers/_persona_utils.py",
@@ -139,11 +142,32 @@
       "summary": "Returns a portability comment block for exported persona files, describing target, native flag, and usage description."
     },
     {
+      "file": "runtime/drivers/antigravity/persona_export.py",
+      "line": 36,
+      "symbol": "export_persona",
+      "kind": "fn",
+      "summary": "Export persona to Antigravity (agy) target: <root>/.agent/personas/<name>.md. NATIVE target -- agy reads persona files natively."
+    },
+    {
+      "file": "runtime/drivers/cursor/persona_export.py",
+      "line": 48,
+      "symbol": "export_persona",
+      "kind": "fn",
+      "summary": "Export persona to Cursor target: <root>/.cursor/personas/<name>.mdc as a context-injection rule (alwaysApply: true, glob **/*). NOT native."
+    },
+    {
+      "file": "runtime/drivers/codex/persona_export.py",
+      "line": 37,
+      "symbol": "export_persona",
+      "kind": "fn",
+      "summary": "Export persona to Codex CLI target: <root>/prompts/personas/<name>.md. Flat .md; orchestrator concatenates as system-prompt prefix. NOT native."
+    },
+    {
       "file": "runtime/drivers/claude/persona_export.py",
       "line": 38,
       "symbol": "export_persona",
       "kind": "fn",
-      "summary": "Export a persona file to the Claude subagent target as a flat .md at <export_root>/personas/<name>.md with portability header."
+      "summary": "Export persona to Claude subagent target: <root>/personas/<name>.md. Flat .md injected as system-prompt prefix by Claude subagent dispatcher. NOT native."
     }
   ],
   "depends_on": [
@@ -190,7 +214,9 @@
     "selection_source enum: random_role_pool | random_role_pool_distinct | forced_control | fallback_empty_pool | fixed_panel.",
     "persona_bound extended payload for rotation: adds {run_id, command, role, task_id, attempt_id, persona_id, model, runtime, selection_source, draw_id} plus per-axis source. reviewer events additionally carry reviewer_participant in {base_codex, random_arm}.",
     "attempt_id = <task_id>-v<cycle>. Resume = same cycle -> same attempt_id -> reuse persona-draw.json. Retry = cycle incremented -> new attempt_id -> new draw.",
-    "control-counter subcommand increments .z-harness/.persona-control-counter atomically (flock-guarded). Returns new counter value. Called once per fresh implementer attempt."
+    "control-counter subcommand increments .z-harness/.persona-control-counter atomically (flock-guarded). Returns new counter value. Called once per fresh implementer attempt.",
+    "Persona export adapters: four per-target modules in runtime/drivers/<target>/persona_export.py all expose export_persona(persona_file_path, target_export_root)->Path. Antigravity is the only NATIVE target (.agent/personas/). Cursor emits .mdc rules; Codex and Claude emit flat .md files.",
+    "30 builtin personas shipped under personas/builtin/ as of 2026-06-02."
   ],
   "gotchas": [
     "_shadowed_emitted is keyed on name only (not on layer pair), so persona_shadowed fires exactly once per process per shadowed name regardless of how many layers define it.",
@@ -207,7 +233,8 @@
     "/z-research is intentionally excluded from the persona system -- its three perspectives are fixed semantic lenses, not random draws.",
     "cmd_validate checks compatible_roles entries against known roles in _ROLE_REGISTRY -- a compatible_roles entry for an unknown role is flagged as an error (unlike at random-for-role time which just silently skips it).",
     "persona_advisory_recommendation is logged separately at convergent sites; it NEVER folds into the authoritative decision or synthesis.",
-    "reviewer dual-dispatch: both base_codex and random_arm share attempt_id; each has its own draw_id. ONE persona_attempt_outcome per attempt. Analysis groups reviewer rows by reviewer_participant."
+    "reviewer dual-dispatch: both base_codex and random_arm share attempt_id; each has its own draw_id. ONE persona_attempt_outcome per attempt. Analysis groups reviewer rows by reviewer_participant.",
+    "Cursor export produces .mdc files (not .md) at .cursor/personas/. Antigravity export is the only NATIVE target; all others require orchestrator injection of the persona body."
   ],
   "memories": []
 }

@@ -1,10 +1,9 @@
 {
   "concept": "agents",
-  "last_updated": "2026-05-29",
+  "last_updated": "2026-06-02",
   "covers_spec": "none",
   "source_file": [
     "agents/auditor.md",
-    "agents/bisect-isolator.md",
     "agents/cluster-planner.md",
     "agents/complexity-classifier.md",
     "agents/consultant-primary.md",
@@ -14,11 +13,9 @@
     "agents/external-lookup.md",
     "agents/implementer.md",
     "agents/mr-reviewer.md",
-    "agents/plan-style-reviewer.md",
     "agents/planning-router.md",
     "agents/remote-runner.md",
     "agents/research-judge.md",
-    "agents/resolver.md",
     "agents/review-agent.md",
     "agents/reviewer.md",
     "agents/scope-probe.md",
@@ -34,13 +31,6 @@
       "symbol": "auditor",
       "kind": "module",
       "summary": "Read-only Sonnet single-dimension auditor; writes findings file, returns counts."
-    },
-    {
-      "file": "agents/bisect-isolator.md",
-      "line": 1,
-      "symbol": "bisect-isolator",
-      "kind": "module",
-      "summary": "Haiku mechanical bisect runner; returns offending SHA+diff; refuses destructive repros and interpretive work."
     },
     {
       "file": "agents/cluster-planner.md",
@@ -106,13 +96,6 @@
       "summary": "Sonnet branch-diff quality reviewer; deep=true triggers Opus abstraction sub-pass; dedup+consensus+dismissal merge."
     },
     {
-      "file": "agents/plan-style-reviewer.md",
-      "line": 1,
-      "symbol": "plan-style-reviewer",
-      "kind": "module",
-      "summary": "Sonnet plan artifact style reviewer; 7 categories; multi-voice; returns fenced JSON+Summary."
-    },
-    {
       "file": "agents/planning-router.md",
       "line": 1,
       "symbol": "planning-router",
@@ -131,14 +114,7 @@
       "line": 1,
       "symbol": "remote-runner",
       "kind": "module",
-      "summary": "Haiku mechanical remote verifier: two-level rsync sandbox (<slug>/base/ warm base + <slug>/<task-id>/ per-task overlay via --link-dest), atomic mkdir-lock + .base-ready marker for concurrent seeding, SLUG/TASK_ID path-traversal validation; read-only DB/log queries; step-7 NEVER-delete guard for base/."
-    },
-    {
-      "file": "agents/resolver.md",
-      "line": 1,
-      "symbol": "resolver",
-      "kind": "module",
-      "summary": "Reference for workflow question resolver (scripts/config.py cmd_resolve_question); maps question_id to skip|prefill|ask|halt|defer-to-sink; defer-to-sink routes question to sink-add.sh instead of interactive prompt."
+      "summary": "Haiku mechanical remote verifier: two-level rsync sandbox, atomic mkdir-lock, SLUG/TASK_ID path-traversal validation; Z_HARNESS_WORKTREE_ROOT for worktree sessions; step-7 NEVER-delete guard for base/."
     },
     {
       "file": "agents/review-agent.md",
@@ -152,7 +128,7 @@
       "line": 1,
       "symbol": "reviewer",
       "kind": "module",
-      "summary": "Provider proxy for task correctness/spec review; expected_contract: review-verdict; accepts relevant_docs LLM JSONs; blockers+majors sections + **FOLLOWUPS:** fenced JSON array for minors/nits; parsed by scripts/parse-followups-block.py; orchestrator calls sink-add.sh per entry."
+      "summary": "Provider proxy for task correctness/spec review; expected_contract: review-verdict; accepts relevant_docs LLM JSONs; **FOLLOWUPS:** fenced JSON array for minors/nits; parsed by scripts/parse-followups-block.py; orchestrator calls sink-add.sh per entry."
     },
     {
       "file": "agents/scope-probe.md",
@@ -206,11 +182,9 @@
     "planning-router primary routes: /z-map for terrain_uncertain topics; /z-research for approach synthesis when has_map_and_brainstorm is true and approach_uncertain is true.",
     "planning-router reason code needs_research is a deprecated alias for needs_terrain_map (routes to /z-map); callers should emit needs_terrain_map instead; deprecated alias is valid for one version cycle only.",
     "mr-reviewer reviews quality, not correctness, and returns JSON for the orchestrator to write.",
-    "plan-style-reviewer reviews design-quality of plan artifacts, not correctness; never finds logic/correctness/race-condition bugs.",
-    "plan-style-reviewer never writes PLAN_STYLE_AUDIT.md; orchestrator does.",
-    "plan-style-reviewer style-drift findings must cite a STYLE.md rule ID; premature-abstraction findings must cite file:line.",
     "remote-runner executes mechanical checks only; interpretive debugging returns to the caller.",
     "remote-runner delegates sandbox lifecycle to scripts/remote-sandbox-sync.sh.",
+    "remote-runner worktree cwd-safety: when the session runs inside a git worktree, set Z_HARNESS_WORKTREE_ROOT=<worktree-abs-path> before the sync call; without it rsync ships the main checkout and remote verify silently checks stale code.",
     "remote-sandbox-sync.sh validates SLUG and TASK_ID: rejects values containing '/', '..', single-quotes, empty string; TASK_ID cannot equal the literal string 'base'.",
     "remote-sandbox-sync.sh uses atomic mkdir for .base.lock; the lock winner seeds <slug>/base/ and writes .base-ready marker containing local HEAD SHA; concurrent losers poll for the marker up to 600 s.",
     "remote-runner step 7 NEVER deletes <slug>/base/; only the per-task <slug>/<task-id>/ directory is removed on success.",
@@ -218,9 +192,6 @@
     "review-agent never writes; orchestrator owns all writes via /z-suggest-memory.",
     "review-agent returns exactly one fenced JSON block; any other form is treated as malformed.",
     "review-agent parent_command=debug: debug_md_path is primary artifact; spec_path is supplementary.",
-    "bisect-isolator always runs git bisect reset in a finally-block trap; never leaves repo in bisect-in-progress state.",
-    "bisect-isolator runs a sanity gate verifying the repro inverts across the range before git bisect run.",
-    "bisect-isolator never interprets the offending commit; returns SHA+diff only; why-it-broke analysis belongs to caller.",
     "implementer's cross_task_notes target task must exist in the same TASKS.md; absent target is logged and silently skipped.",
     "spec-precheck and reviewer both consume relevant_docs LLM JSONs as a second source of truth alongside SPEC.",
     "scope-probe is advisory only; the orchestrator owns the final dispatch decision, including whether to treat a low-confidence classification as MEDIUM.",
@@ -237,15 +208,10 @@
     "research-judge returns STATUS: unable_to_complete when perspectives array is empty or MAP.md/BRAINSTORM.md is missing.",
     "reviewer **FOLLOWUPS:** block is optional; when present it MUST appear after ### Major and MUST contain exactly one fenced json array.",
     "reviewer minors and nits MUST be placed in **FOLLOWUPS:** (P3/P2) and are never silently dropped from the reviewer return.",
-    "reviewer **FOLLOWUPS:** block is parsed by scripts/parse-followups-block.py; parse failure logs followup_block_parse_failed and never crashes the reviewer return path.",
-    "resolver result domain: skip|prefill|ask|halt|defer-to-sink; all five are valid results from scripts/config.py cmd_resolve_question.",
-    "resolver defer-to-sink: orchestrator must NOT prompt the user; must call scripts/sink-add.sh and log followup_deferred_from_resolver; must fall back to ask if sink-add.sh exits non-zero.",
-    "resolver defer-to-sink is a result-domain value only; it does not appear in VALIDATORS or QUESTION_IDS[id][choices].",
-    "resolver defer-to-sink is never applied by the overnight gate (_apply_overnight_overrides); it is a config-layer result only."
+    "reviewer **FOLLOWUPS:** block is parsed by scripts/parse-followups-block.py; parse failure logs followup_block_parse_failed and never crashes the reviewer return path."
   ],
   "gotchas": [
     "reviewer emits **FOLLOWUPS:** fenced JSON array block after ### Major; minors/nits MUST go here (never silently dropped). Orchestrator parses via scripts/parse-followups-block.py and calls scripts/sink-add.sh per entry. Parse failure logs followup_block_parse_failed and continues. Required per-entry fields: priority, name, recommended_command, cited_paths. Optional: recommended_command_safe_to_retry (default false), auto_close_eligible (default false; reviewer on producer-class allowlist may set true).",
-    "resolver new result class defer-to-sink (T017): orchestrator must NOT invoke AskUserQuestion; must call scripts/sink-add.sh with question context as entry body, log followup_deferred_from_resolver, then proceed. If sink-add.sh exits non-zero, fall back to ask — question cannot be silently dropped.",
     "codex-consultant.md, gemini-consultant.md, and codex-reviewer.md are stale names.",
     "check-timeout.sh is sourced by proxy agents; missing timeout/gtimeout leaves TIMEOUT_CMD empty.",
     "planning-router must not infer missing quantitative signals from filesystem exploration.",
@@ -254,21 +220,17 @@
     "external-lookup's canonical contract is lookup-contract.json, not only inline agent prose.",
     "remote-runner refuses DB writes, real-money operations, destructive ops, and interpretive work.",
     "remote-runner refuses naked binary restarts; must use qtctl up <paper-manifest>, not direct binary invocation.",
+    "remote-runner worktree cwd-safety: set Z_HARNESS_WORKTREE_ROOT before sync when running in a git worktree; the script echoes 'syncing local root: <path>' to stderr as a confirmation signal; absence of this env var when cwd is main checkout silently ships stale code to remote.",
     "remote-sandbox-sync.sh resolves remote home via SSH before building --link-dest paths; tilde expansion is unreliable inside --link-dest on the remote side.",
     "TASK_ID cannot be the literal string 'base'; remote-sandbox-sync.sh exits 2 on that value to prevent collisions with the shared warm-base directory.",
     "If remote-sandbox-sync.sh dies between .base.lock acquisition and release, the lock persists and all future seeding invocations timeout after 600 s. Recovery: ssh <remote-host> 'rmdir ~/dev/qt-bot-sandbox/<slug>/.base.lock'.",
     "On seed rsync failure, remote-sandbox-sync.sh cleans up the partial <slug>/base/ dir before releasing the lock so losers do not unblock onto a corrupt base.",
     "mr-reviewer never writes MR-REVIEW.md; callers parse its fenced JSON response.",
     "mr-reviewer Opus sub-pass fires only when mode=abstraction-only AND deep=true; otherwise Grep+definition check is sufficient.",
-    "plan-style-reviewer: dismissed_signatures.json suppresses previously dismissed findings via Jaccard >= 0.6 match.",
-    "plan-style-reviewer: voices that return malformed JSON are logged as plan_style_voice_failed and skipped (no retry).",
     "spec-precheck validates factual SPEC references, not design quality or runtime semantics.",
     "doc-fetcher Ripgrep is a soft dependency; falls back to Python word-boundary scan if rg is missing.",
     "review-agent caps candidates at 3 and emits [] rather than padding; slug anti-patterns banned (PR-number refs, library-name-alone, session-specific names, negative-capability claims, model-specific slugs).",
     "review-agent debug mode: debug_md_path must be passed when parent_command=debug; absent for implement-all/review-all.",
-    "bisect-isolator refusal checks use POSIX-ERE split patterns (not Perl lookaheads) for macOS/BSD grep compat.",
-    "bisect-isolator returns bisect_unusable (not refused) when the repro does not invert across the good/bad ref range.",
-    "bisect-isolator captures ORIG_HEAD before any checkout and installs cleanup_bisect trap covering refusal-after-checkout paths.",
     "consultant modes generate-hypotheses-round1 and generate-hypotheses-round2-adversarial return RAW (no standard wrapper); callers must parse provider output directly.",
     "implementer's cross_task_notes are optional; omitting the field or emitting [] is backward-compatible.",
     "scope-probe caps walked candidates at 4 to keep context cheap; walking more than 4 is a violation.",

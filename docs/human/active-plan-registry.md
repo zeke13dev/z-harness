@@ -1,7 +1,7 @@
 # active-plan-registry — Cross-session awareness registry
 
 > Last updated: 2026-06-02
-> Covers source: scripts/active-plan-registry.py, scripts/plan-path.sh, scripts/migrate-plan-layout.sh, agents/scope-extractor.md, commands/z-implement-all.md, commands/z-implement-next.md, commands/z-plan.md
+> Covers source: scripts/active-plan-registry.py, scripts/plan-path.sh, scripts/migrate-plan-layout.sh, agents/scope-extractor.md, commands/z-implement-all.md, commands/z-implement-next.md, commands/z-plan.md, docs/human/active-plan-registry.md, docs/handoff-parallel-session-safety.md
 
 ## Overview
 
@@ -95,6 +95,8 @@ Each `<run-id>.json` record (schema_version 1) contains:
 }
 ```
 
+`worktree_path` equals `repo_root` for the main checkout; for a linked git worktree it holds that worktree's absolute path. The `repo_id` (and therefore the shared registry directory) is the same for all worktrees of one repo.
+
 ---
 
 ## Registry subcommands
@@ -103,13 +105,14 @@ Each `<run-id>.json` record (schema_version 1) contains:
 
 | Subcommand | Purpose |
 |------------|---------|
-| `register --run-id ID --slug S --command C --phase P [--session SID]` | Creates/overwrites `<active>/ID.json` atomically. Idempotent. Emits `plan_registered`. |
-| `heartbeat --run-id ID [--phase P] [--current-task T] [--status running\|paused]` | Updates `last_heartbeat`, `phase`, `current_task` in own record. Recreates if reaped (benign). |
-| `update-scope --run-id ID --scope-json FILE` | Merges a scope array `[{path, confidence, reason}]` into the record. |
+| `session-id` | Prints a stable session id token. Returns `$Z_HARNESS_SESSION_ID` if already set; otherwise derives `<ppid>-<start_epoch>` from the parent shell. Callers should `export Z_HARNESS_SESSION_ID="$(session-id)"` once at run start. |
+| `register --run-id ID --slug S --command C --phase P [--session SID]` | Creates/overwrites `<active>/ID.json` atomically. Validates ID is a safe basename. Idempotent. Emits `plan_registered`. Exit 3 on failure (LOUD). |
+| `heartbeat --run-id ID [--phase P] [--current-task T] [--status running\|paused]` | Updates `last_heartbeat`, `phase`, `current_task` in own record. If the record is absent (already reaped/deregistered), emits `registry_error(reason:missing_record)` and returns 0 (no-op; does NOT recreate). NON-FATAL. |
+| `update-scope --run-id ID --scope-json FILE` | Merges a scope array `[{path, confidence, reason}]` into the record. NON-FATAL; self-logs `registry_error` on failure. |
 | `overlaps --run-id ID [--strict] [--scope-json FILE]` | Computes path intersection against every other live record's scope. Exit codes: `0` none, `10` advisory, `20` blocking (strict mode + explicit×explicit exact match). |
-| `list [--json]` | Returns live (non-stale) records. |
+| `list [--json]` | Scans `<active>/*.json`, skips torn/partial files silently. |
 | `reap` | Deletes records where (a) host=localhost AND pid is dead, OR (b) `last_heartbeat` older than 2× stale threshold. Marks remote/unknown-host records as `status:"stale"` at 1× threshold (no delete). |
-| `deregister --run-id ID [--status complete\|aborted]` | Removes `<active>/ID.json`. Emits `plan_deregistered`. |
+| `deregister --run-id ID [--status complete\|aborted]` | Removes `<active>/ID.json`. Emits `plan_deregistered`. NON-FATAL. |
 
 ### Scope-extractor integration
 
@@ -145,12 +148,13 @@ A mechanical fallback is documented for offline use (parse `**Files:**` lines di
 
 New Phase 0.0 (runs before the existing follow-up-running check):
 
-1. `register` the current run
-2. Invoke `scope-extractor` (Haiku) to populate scope
-3. Call `active-plan-registry.py overlaps --run-id $RUN`
-4. Respond per overlap exit code (see table above)
-5. Heartbeat at each task-dispatch boundary (`--current-task`)
-6. `deregister` in finalize phase (complete) and on halt (aborted)
+1. `session-id` (export `Z_HARNESS_SESSION_ID`)
+2. `register` the current run
+3. Invoke `scope-extractor` (Haiku) to populate scope
+4. Call `active-plan-registry.py overlaps --run-id $RUN`
+5. Respond per overlap exit code (see table above)
+6. Heartbeat at each task-dispatch boundary (`--current-task`)
+7. `deregister` in finalize phase (complete) and on halt (aborted)
 
 ### `/z-plan`, `/z-plan-light`, `/z-debug`, `/z-do`, `/z-audit`, `/z-plan-split`
 
@@ -174,6 +178,20 @@ See `docs/human/PLAN-LAYOUT.md` for the full migration guide.
 
 ---
 
+## Worktree-per-session safety
+
+The registry and external base are both designed to be worktree-safe without any extra configuration:
+
+- **Shared registry across worktrees.** The registry directory is `<z_harness_base()>/active-plans/`. Because `z_harness_repo_id()` keys on `sha256(realpath(git-common-dir))`, all linked worktrees of the same repo resolve to the same `repo_id` and therefore the same `<base>/active-plans/` directory. Each worktree's run records its own `worktree_path`, so the list output correctly attributes which worktree each run is in.
+
+- **Base dir survives `git worktree remove`.** The resolved base for tiers 2–4 lives outside any worktree tree. Removing a worktree with `git worktree remove` does not touch `<base>/active-plans/`, the plans, metrics, or followups. In-flight heartbeats for a removed worktree will fail (the process is gone), but the registry entry is reaped normally by the local-dead-pid check.
+
+- **Anchor in `git-common-dir`.** The anchor file (`<git-common-dir>/.z-harness-base`) lives in the repo's shared `.git/` directory, not in any worktree. It is set once and shared automatically — no setup needed when adding a new worktree.
+
+- **No registry/base change needed for worktrees.** All worktree-safety guarantees flow from the `git-common-dir`-keyed design. See `docs/handoff-parallel-session-safety.md` (section "Worktree-per-session convention") for the recommended lifecycle.
+
+---
+
 ## Cross-cutting invariants
 
 1. **Lockless registry is safe ONLY because overlap is advisory.** No code may make overlap a hard gate without first replacing lockless delete with compare-and-delete or a registry lock.
@@ -190,7 +208,7 @@ See `docs/human/PLAN-LAYOUT.md` for the full migration guide.
 |---------|---------|-------------|
 | `Z_HARNESS_EXTERNAL_DEFAULT` | `1` | Controls whether external tiers 2–4 are active. `0` opts out to in-repo behavior (tier 5 only). |
 | `Z_HARNESS_BASE_DIR` | _(unset)_ | Explicit absolute override for artifact base. Bypasses anchor entirely. |
-| `Z_HARNESS_REGISTRY_ENABLED` | `1` | Set to `0` to make all registry subcommands silent no-ops (for CI). |
+| `Z_HARNESS_REGISTRY_ENABLED` | `1` | Set to `0` to make all registry subcommands silent no-ops (for CI). `list` and `session-id` still work. |
 | `Z_HARNESS_REGISTRY_STALE_SECS` | `1800` | Seconds after which `last_heartbeat` is considered stale. Reaper deletes at 2× margin. |
 | `Z_HARNESS_STRICT_OVERLAP` | _(unset)_ | Set to `1` to make `explicit`×`explicit` exact path overlaps a hard halt (exit 20). |
 
@@ -213,7 +231,7 @@ This answers the "where are my plans?" and "what else is running?" questions wit
 
 - `docs/human/config.md` — base-dir env knobs + full fallback chain + revert methods
 - `docs/human/PLAN-LAYOUT.md` — plan directory layout + migration guide
-- `docs/handoff-parallel-session-safety.md` — incident record + root-cause analysis + resolution note
+- `docs/handoff-parallel-session-safety.md` — incident record + root-cause analysis + worktree-per-session convention
 - `scripts/active-plan-registry.py` — registry implementation
 - `scripts/plan-path.sh` — base resolution + all path helpers
 - `scripts/migrate-plan-layout.sh` — migration script (--dry-run, --all, --with-followups)

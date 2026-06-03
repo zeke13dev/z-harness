@@ -9,6 +9,20 @@ The cost-estimation subsystem provides LLM-free pre-run token-cost estimates for
 
 The design is intentionally DRY: one estimator (`estimate-tokens.py`), one gate helper (`pre-run-cost-gate.sh`), one event kind (`cost_gate_decision`), and one profile file (`token-cost-profiles.json`). No per-command cost logic is duplicated.
 
+## Key entry points
+
+- `scripts/estimate-tokens.py:1` — `estimate-tokens.py` — LLM-free CLI; positional `<command>`; stdout is one JSON envelope; stderr for warnings; exit 0 on any producible envelope (fail-open); exit 1 only when `<command>` arg is missing
+- `scripts/estimate-tokens.py:477` — `estimate` — Core estimator: loads profiles, resolves profile for command, computes static + dispatch + empirical tiers, applies static-floor clamp, returns envelope dict
+- `scripts/estimate-tokens.py:249` — `_empirical_tier` — Reads metrics.jsonl tail (bounded), buckets by parent-run, filters to normally-completed runs (terminal event + non-excluded status + no cost_gate_decision{abandon}), computes p50/p90; returns None when insufficient data
+- `scripts/estimate-tokens.py:79` — `_load_profiles` — Loads token-cost-profiles.json; uses data.get('profiles', {}); warns and returns {} on FileNotFoundError or JSONDecodeError (fail-open)
+- `scripts/estimate-tokens.py:51` — `_resolve_profile` — Match order: exact after stripping '/'; then try prepending 'z-'; returns (canonical_key, profile_dict|None)
+- `scripts/pre-run-cost-gate.sh:1` — `pre-run-cost-gate.sh` — Gate driver: estimate → delegate disposition to config.py check-no-ask → render human_block → emit single JSON {disposition, estimate, human_block}; fail-open; stdout is pure JSON; stderr for diagnostics
+- `scripts/token-cost-profiles.json:1` — `token-cost-profiles.json` — Profile registry: schema_version 1; profiles object keyed by command name (z-research, z-uplift, z-plan-split, z-brainstorm, z-audit, z-debug); each entry: range [low, high], gate hard|soft, optional multipliers {key: per_unit_tokens}
+- `scripts/config.py:68` — `workflow.pre_run_cost_gate (DEFAULTS)` — Enum question_id in DEFAULTS workflow block; default 'ask'; valid values ask|auto_proceed|halt
+- `scripts/config.py:114` — `cost.token_budget (DEFAULTS)` — Integer budget knob; default None (unset); NOT a question_id; validator: _validate_positive_int_or_none; coercer converts string env values to int
+- `scripts/config.py:305` — `workflow.pre_run_cost_gate (QUESTION_IDS)` — Registered question_id; choices {ask, auto_proceed, halt}; skill_default ask; callsites: scripts/pre-run-cost-gate.sh, commands/z-research.md, commands/z-uplift.md, commands/z-plan-split.md, commands/z-brainstorm.md, commands/z-audit.md, commands/z-debug.md
+- `scripts/config.py:2174` — `_resolve_cost_gate` — Budget-aware resolver invoked by check-no-ask when --range-high and --severity are both provided; applies overnight envelope first, then budget rule; returns {result, rule_id}
+
 ## The estimator: `scripts/estimate-tokens.py`
 
 `estimate-tokens.py` is a standalone Python CLI that emits a single JSON envelope on stdout. It is LLM-free and fail-open: on any error it returns a usable (possibly zeroed) envelope and exits 0; it exits non-zero only when the positional `<command>` argument is missing.
@@ -245,6 +259,12 @@ The empirical tier reads the same `metrics.jsonl` that `z-stats` uses. Each run 
 
 The `cost_gate_decision` events form a calibration record: `estimated_tokens` vs actual run cost (sum of child token events in the same parent-run bucket) can be compared post-run to assess profile accuracy.
 
+## How it interacts with others
+
+- `scripts` — estimate-tokens.py and pre-run-cost-gate.sh live alongside config.py; gate helper invokes both estimator and config.py as subprocesses
+- `commands` — z-research, z-uplift, z-plan-split, z-brainstorm, z-audit, z-debug all invoke pre-run-cost-gate.sh and own the AskUser interaction + cost_gate_decision logging
+- `skills` — workflow.pre_run_cost_gate question_id is resolved via the config/skills layer
+
 ## Edge cases / gotchas
 
 - `cost.token_budget` string env values (e.g. `Z_HARNESS_COST_TOKEN_BUDGET="5000000"`) are coerced to int by `_COERCERS`. If the coercion fails, the validator rejects the value at the repo/env layer (hard exit 2).
@@ -255,3 +275,11 @@ The `cost_gate_decision` events form a calibration record: `estimated_tokens` vs
 - The empirical tier uses `parent_command` or `command` field on events for attribution. Legacy events without these fields fall back to kind-inference via `_KIND_TO_COMMAND`. Both `run_start` and `run_end` carry a `command` field (stamped by Phase-7 hardening) so a tail window that scrolled past `run_start` can still attribute via `run_end`.
 - Soft gates fire only on the HEAVY classification path for `/z-brainstorm` and `/z-audit`. LIGHT/MEDIUM runs skip the gate entirely.
 - The `cost_gate_decision` event replaces the legacy `research_cost_gate_decision` event for `/z-research`. Do not emit both.
+- `_KIND_TO_COMMAND` maps generic `run_start`/`run_end` to `z-plan` as a best-effort default for pre-T001 legacy events; pre-T001 z-research events will be misattributed. The `command` field (added by T001) is the only reliable attribution source.
+- The QUESTION_IDS callsites list in config.py (lines 309-314) omits z-brainstorm.md, z-audit.md, and z-debug.md — all three commands do call pre-run-cost-gate.sh in practice.
+
+## Examples
+
+- Profiled command with dispatch: `python3 scripts/estimate-tokens.py z-research --dispatch map=1 brainstorm=2`
+- Gate helper invocation: `bash scripts/pre-run-cost-gate.sh z-uplift hard $RUN --dispatch per_component=5`
+- Overnight budget check: set `cost.token_budget = 4000000` in TOML; hard-gate commands with `range_high <= 4M` auto-proceed unattended; above budget they halt.
