@@ -264,7 +264,7 @@ def _validate_record(record: dict) -> tuple[bool, list[str], list[str]]:
                     errors.append(
                         f"applies_to[{i}] must have exactly one ':' separator"
                         f" (got {colon_count}) — entries must be"
-                        f" '<question_id>:<value>' (e.g. 'provider_for_task:gemini'): got {entry!r}"
+                        f" '<question_id>:<value>' (e.g. 'provider_for_task:gemini-cli'): got {entry!r}"
                     )
                     continue
                 qid, value = entry.split(":", 1)

@@ -41,7 +41,7 @@ jobs:
         # pytest is the runner; tomlkit is an optional dep config.py uses for
         # comment-preserving TOML writes — install it so CI exercises the same
         # path as local dev rather than the ImportError fallback.
-        run: pip install pytest tomlkit
+        run: pip install pytest tomlkit jsonschema pyyaml
 
       - name: Configure git identity
         # Many tests git-init throwaway repos and commit; a global identity must
@@ -77,7 +77,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install pytest tomlkit
+        run: pip install pytest tomlkit jsonschema pyyaml
 
       - name: Configure git identity
         # The shell tests git-init throwaway repos and commit.
