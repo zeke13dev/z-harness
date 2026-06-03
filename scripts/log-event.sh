@@ -33,14 +33,28 @@
 
 set -euo pipefail
 
-if [[ $# -lt 3 ]]; then
-  echo "usage: log-event.sh <run-id-or-relpath> <kind> <json-payload>" >&2
-  exit 2
+# Read-only resolver subcommand: `log-event.sh resolve-run-dir <run-id>` prints
+# the run's archive directory (using the same slug-aware, 5-tier logic the write
+# path uses) and exits without creating or writing anything. Lets other tools
+# (e.g. improve-nudge.sh) locate a run's events.jsonl without duplicating the
+# resolution logic.
+RESOLVE_ONLY=""
+if [[ "${1:-}" == "resolve-run-dir" ]]; then
+  RESOLVE_ONLY=1
+  RUN="${2:-}"
+  if [[ -z "$RUN" ]]; then
+    echo "usage: log-event.sh resolve-run-dir <run-id>" >&2
+    exit 2
+  fi
+else
+  if [[ $# -lt 3 ]]; then
+    echo "usage: log-event.sh <run-id-or-relpath> <kind> <json-payload>" >&2
+    exit 2
+  fi
+  RUN="$1"
+  KIND="$2"
+  PAYLOAD="$3"
 fi
-
-RUN="$1"
-KIND="$2"
-PAYLOAD="$3"
 
 # Resolve repo root (caller's cwd is assumed to be inside the target repo).
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -66,35 +80,53 @@ abs_plan_dir() {
   esac
 }
 
-# Slug namespacing — see header comment.
+# Slug namespacing — global (also consumed later when constructing the event).
 SLUG="${Z_HARNESS_SLUG:-}"
-if [[ -n "$SLUG" ]]; then
-  # Mid-flight legacy run detection: if the legacy archive dir for this run
-  # already exists (meaning the run was started before the plan-layout migration),
-  # write there to avoid splitting a run's events across two locations.
-  # IMPORTANT: when Z_HARNESS_BASE_DIR is set, skip the repo-local legacy fallback
-  # entirely — writing to the repo would corrupt the model.patch invariant.
-  if [[ -z "${Z_HARNESS_BASE_DIR:-}" ]]; then
-    LEGACY_RUN_DIR="$(abs_plan_dir "$(legacy_plan_dir "$SLUG")")/archive/$RUN"
-    if [[ -d "$LEGACY_RUN_DIR" ]]; then
-      RUN_DIR="$LEGACY_RUN_DIR"
+
+# Resolve the run's archive directory using slug namespacing (see header comment).
+# Sets the global RUN_DIR; does NOT create it. Runs in the CURRENT shell (no
+# command-substitution subshell) so the no-slug write path stays fork-free,
+# matching the original inline behaviour — an extra fork here segfaults under
+# macOS objc fork-safety. Shared by the resolver subcommand and the write path.
+resolve_run_dir() {
+  if [[ -n "$SLUG" ]]; then
+    # Mid-flight legacy run detection: if the legacy archive dir for this run
+    # already exists (run started before the plan-layout migration), write there
+    # to avoid splitting a run's events across two locations. When
+    # Z_HARNESS_BASE_DIR is set, skip the repo-local legacy fallback entirely —
+    # writing to the repo would corrupt the model.patch invariant.
+    if [[ -z "${Z_HARNESS_BASE_DIR:-}" ]]; then
+      local LEGACY_RUN_DIR
+      LEGACY_RUN_DIR="$(abs_plan_dir "$(legacy_plan_dir "$SLUG")")/archive/$RUN"
+      if [[ -d "$LEGACY_RUN_DIR" ]]; then
+        RUN_DIR="$LEGACY_RUN_DIR"
+      else
+        RUN_DIR="$(abs_plan_dir "$(plan_dir "$SLUG")")/archive/$RUN"
+      fi
     else
-      RUN_DIR="$(abs_plan_dir "$(plan_dir "$SLUG")")/archive/$RUN"
+      # Validate PLANS_DIR before the plan_dir command substitution so the
+      # exit propagates from this (non-subshell) function context.
+      if [[ -n "${Z_HARNESS_PLANS_DIR:-}" && "${Z_HARNESS_PLANS_DIR}" != /* ]]; then
+        echo "[z-harness] Z_HARNESS_PLANS_DIR must be absolute when Z_HARNESS_BASE_DIR is set, got: $Z_HARNESS_PLANS_DIR" >&2
+        exit 1
+      fi
+      local _PLAN_DIR_OUT
+      _PLAN_DIR_OUT="$(plan_dir "$SLUG")" || exit 1
+      RUN_DIR="$(abs_plan_dir "$_PLAN_DIR_OUT")/archive/$RUN"
     fi
   else
-    # Validate PLANS_DIR in parent shell BEFORE command substitution so plan_dir's
-    # exit 1 propagates correctly (exit inside $(...) only kills the subshell).
-    if [[ -n "${Z_HARNESS_PLANS_DIR:-}" && "${Z_HARNESS_PLANS_DIR}" != /* ]]; then
-      echo "[z-harness] Z_HARNESS_PLANS_DIR must be absolute when Z_HARNESS_BASE_DIR is set, got: $Z_HARNESS_PLANS_DIR" >&2
-      exit 1
-    fi
-    _PLAN_DIR_OUT="$(plan_dir "$SLUG")" || exit 1
-    RUN_DIR="$(abs_plan_dir "$_PLAN_DIR_OUT")/archive/$RUN"
+    # Global archive fallback (no slug) — respects Z_HARNESS_BASE_DIR.
+    RUN_DIR="$ZH_BASE/archive/$RUN"
   fi
-else
-  # Global archive fallback (no slug) — respects Z_HARNESS_BASE_DIR.
-  RUN_DIR="$ZH_BASE/archive/$RUN"
+}
+
+if [[ -n "$RESOLVE_ONLY" ]]; then
+  resolve_run_dir
+  printf '%s\n' "$RUN_DIR"
+  exit 0
 fi
+
+resolve_run_dir
 mkdir -p "$RUN_DIR"
 mkdir -p "$ZH_BASE"
 

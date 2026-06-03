@@ -413,6 +413,23 @@ If there are running follow-up consumer entries, **halt** — do not proceed wit
      ```
    <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the test-runner template question via their native channel. Silent omission is forbidden. -->
    This is asked exactly once per slug; it's a per-plan cache so different plans can target different test frameworks.
+8. **Foundation-quiescence pre-flight** (fresh-start only; before the first implementer dispatch). A run that begins with an un-committed foundation and a dirty tree cannot attribute per-task diffs and risks parallel sessions clobbering each other — the failure mode that surfaced as a mid-run `run_halt {reason: repo_not_quiesced}`. Catch it up front instead of reactively:
+   ```bash
+   DONE_COUNT="$(grep -cE '^\s*[-*]?\s*\[x\]' "$TASKS_FILE" 2>/dev/null || echo 0)"
+   DIRTY="$(git status --porcelain 2>/dev/null)"
+   ```
+   Only gate on a **fresh start** (`DONE_COUNT == 0`): a resume legitimately carries in-progress task commits, so skip the check when `DONE_COUNT > 0`. If `DONE_COUNT == 0` and `DIRTY` is non-empty:
+   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface this pre-flight question (commit foundation / proceed anyway / abort) via their native channel. Silent omission is forbidden. -->
+   present an `AskUserQuestion`:
+   - **Commit the foundation now** — the user commits (or authorizes you to commit) the foundation, then re-checks `git status --porcelain` is clean before dispatch. Never auto-stage or auto-commit without explicit selection of this arm.
+   - **Proceed anyway** — record the acknowledgment and continue with the dirty tree.
+   - **Abort** — set `FINALIZE_STATUS=aborted`, deregister, and exit.
+   Emit the disposition either way:
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" quiescence_precheck \
+     "$(printf '{"done_count":%s,"uncommitted_files":%s,"disposition":"%s"}' \
+        "$DONE_COUNT" "$(printf '%s\n' "$DIRTY" | grep -c . || echo 0)" "<commit|proceed|abort>")"
+   ```
 
 ## Compaction breakpoint policy
 
@@ -1249,6 +1266,11 @@ When the loop exits (no more eligible tasks, or you halted):
    - Skipped tasks with reasons (REMOTE / wall-clock / human action required)
    - Tasks that halted on review failure or decision gate
    - Suggested next manual step (e.g. "T006 needs to run on zeke-pc; use `/z-implement-next` from main thread with qt-bot-remote available")
+2.5. **Suggest `/z-improve` when this run had friction.** Run the nudge helper — it scans this run's events and prints a one-line suggestion only if friction signals fired (halt, review retries, doc drift, degraded consult, escalation, telemetry anomaly, …); it stays silent on a clean run, so there is no nudge-fatigue:
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/improve-nudge.sh" "orchestration" "$Z_HARNESS_SLUG"
+   ```
+   If it emits a line, include it verbatim in the summary message to the user (and the push-notify body below).
 3. Push-notify with recommended next commands:
 ```
 Orchestration complete: X done, Y skipped, Z blocked.

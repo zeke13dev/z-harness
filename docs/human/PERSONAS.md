@@ -1,7 +1,7 @@
 # PERSONAS — Persona System Guide
 
 > Last updated: 2026-06-02
-> Covers source: scripts/resolve-persona.py, scripts/resolve-persona.sh, runtime/contract/persona.schema.json, personas/README.md, personas/builtin/codex-default-consultant.md, personas/builtin/codex-default-reviewer.md, personas/builtin/gemini-default-consultant.md, commands/z-personas.md, skills/z-personas/SKILL.md, runtime/drivers/_persona_utils.py, runtime/drivers/claude/persona_export.py, runtime/contract/event.schema.json
+> Covers source: scripts/resolve-persona.py, scripts/resolve-persona.sh, runtime/contract/persona.schema.json, personas/README.md, personas/builtin/codex-default-consultant.md, personas/builtin/codex-default-reviewer.md, personas/builtin/gemini-default-consultant.md, commands/z-personas.md, skills/z-personas/SKILL.md, runtime/drivers/_persona_utils.py, runtime/drivers/antigravity/persona_export.py, runtime/drivers/cursor/persona_export.py, runtime/drivers/codex/persona_export.py, runtime/drivers/claude/persona_export.py, runtime/contract/event.schema.json, docs/human/PERSONAS.md
 
 ## Overview
 
@@ -11,7 +11,9 @@ A **persona** is a saved prompt-prefix preset that gets prepended to a role's ta
 - **Model** — which model to use (e.g. `gpt-5-codex`, `gemini-2.5-pro`).
 - **Runtime** — which CLI provider executes the call (e.g. `codex-cli`, `gemini-cli`).
 
-You can mix any combination: a Gemini-tuned persona body with the `codex-cli` runtime and any model string your CLI accepts. The persona system is now applied across many dispatch sites — critique panels (`z-plan`, `z-debug`), audit dimensions (`z-audit`), advisory consult arms (`z-plan-light`, `z-audit`), code-review gates, and brainstorm ideators — with all convergent sites governed by the NEUTRAL-AUTHORITY invariant.
+You can mix any combination: a Gemini-tuned persona body with the `codex-cli` runtime and any model string your CLI accepts. The persona system is applied across many dispatch sites — critique panels (`z-plan`, `z-debug`), audit dimensions (`z-audit`), advisory consult arms (`z-plan-light`, `z-audit`), code-review gates, and brainstorm ideators — with all convergent sites governed by the NEUTRAL-AUTHORITY invariant.
+
+Personas can also be exported to external IDE targets (Antigravity/agy, Cursor, Codex CLI, Claude subagent) via per-target `persona_export.py` adapters in `runtime/drivers/`. Each adapter writes the persona body to the target's native or injected location. See [MULTI-IDE.md](MULTI-IDE.md) for the export pipeline.
 
 See [PROVIDERS.md](PROVIDERS.md) for the runtime registry that describes how each CLI is invoked.
 
@@ -45,6 +47,8 @@ VERDICT: PASS | FAIL | BLOCKED
 | `description` | yes | Human-readable summary shown by `/z-personas list`. |
 | `compatible_roles` | no | Soft hint: list of roles this persona is designed for. A mismatch emits a `persona_compat_warning` event but does not block. |
 | `contract` | no | Expected output structure: `freeform`, `review-verdict`, or `strict-json`. When the bound role declares an `expected_contract`, a mismatch is a hard failure at startup. |
+
+**Unknown frontmatter keys cause exit 2.** `model` and `runtime` belong in TOML config, not in the persona file. Allowed keys: `name`, `description`, `compatible_roles`, `contract`.
 
 ### Body
 
@@ -92,7 +96,7 @@ A persona joins a role's pool by listing that role in its `compatible_roles` fro
 
 ## Builtin persona pools
 
-The harness ships 30 builtin personas under `personas/builtin/`. The table below shows the pool size per role:
+The harness ships **30 builtin personas** under `personas/builtin/`. The table below shows the pool size per role:
 
 | Role | Builtin count | Example members |
 |------|--------------|-----------------|
@@ -205,6 +209,21 @@ python scripts/resolve-persona.py random-distinct-for-role ideator --count=3
 ```
 
 **Graceful degradation:** if the pool holds fewer than the requested count, the subcommand returns a shorter array (or `[]` when empty), notes the underflow on stderr, and exits 0. `/z-brainstorm` binds the returned personas positionally and runs any unfilled slot vanilla.
+
+---
+
+## Persona export adapters
+
+Each runtime target has a dedicated export adapter in `runtime/drivers/<target>/persona_export.py`. All four share the same public surface: `export_persona(persona_file_path, target_export_root) -> Path`.
+
+| Target | Output path | Native? | Notes |
+|--------|-------------|---------|-------|
+| `antigravity` | `<root>/.agent/personas/<name>.md` | yes | agy reads persona files natively from `.agent/personas/`. |
+| `cursor` | `<root>/.cursor/personas/<name>.mdc` | no | Emitted as a Cursor MDC context-injection rule (`alwaysApply: true`, glob `**/*`). |
+| `codex` | `<root>/prompts/personas/<name>.md` | no | Flat `.md`; orchestrator concatenates as system-prompt prefix at dispatch time. |
+| `claude` | `<root>/personas/<name>.md` | no | Flat `.md`; injected as system-prompt prefix by the Claude subagent dispatcher. |
+
+All adapters use `_persona_utils.parse_persona_file` and `_persona_utils.build_portability_header` from `runtime/drivers/_persona_utils.py`. The portability header (`<!-- persona-export: portability header -->`) identifies the target and whether it is native.
 
 ---
 
@@ -372,6 +391,7 @@ ideator personas — that contract is filtered for brainstorm use.
 - Unknown frontmatter keys cause exit 2 — `model` and `runtime` belong in TOML config, not in the persona file.
 - `cmd_validate` checks `compatible_roles` only against known role names in `_ROLE_REGISTRY` — a `compatible_roles` entry for an unknown role is flagged as an error.
 - `resolve-persona.sh` is a thin bash wrapper — all logic lives in `resolve-persona.py`; the shell script exists solely so dispatch sites do not need to know the Python path.
+- The Cursor export adapter produces `.mdc` files (not `.md`), structured as MDC context-injection rules with `alwaysApply: true` and glob `**/*`. The Antigravity adapter is the only NATIVE target; all others require the orchestrator to inject the body.
 
 ---
 

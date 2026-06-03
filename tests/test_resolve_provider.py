@@ -10,6 +10,7 @@ Three cases:
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,28 @@ import unittest
 from pathlib import Path
 
 SCRIPT = str(Path(__file__).parent.parent / "scripts" / "resolve-provider.py")
+
+# resolve-provider.py validates that a provider's `command` is on PATH
+# (shutil.which) before returning it. The real provider CLIs (gemini, codex,
+# claude, ...) are not installed in CI, so we stage no-op stub executables on a
+# temp PATH for the duration of the module. This replicates a dev box where the
+# CLIs are present, exercising the resolution logic without the real binaries.
+_STUB_BIN = None
+
+
+def setUpModule() -> None:
+    global _STUB_BIN
+    _STUB_BIN = tempfile.mkdtemp(prefix="zh-stub-bin-")
+    for name in ("gemini", "codex", "claude", "agy", "cursor"):
+        p = os.path.join(_STUB_BIN, name)
+        with open(p, "w") as fh:
+            fh.write("#!/bin/sh\nexit 0\n")
+        os.chmod(p, 0o755)
+
+
+def tearDownModule() -> None:
+    if _STUB_BIN:
+        shutil.rmtree(_STUB_BIN, ignore_errors=True)
 
 # A minimal valid provider entry shape.
 def _make_provider(command: str, model_label: str) -> dict:
@@ -38,6 +61,8 @@ def _write_config(path: str, providers: dict, roles: dict) -> None:
 
 def _run(role: str, config_path: str) -> subprocess.CompletedProcess:
     env = {**os.environ, "Z_HARNESS_REPO_PROVIDERS": config_path}
+    if _STUB_BIN:
+        env["PATH"] = _STUB_BIN + os.pathsep + env.get("PATH", "")
     return subprocess.run(
         [sys.executable, SCRIPT, role],
         env=env,

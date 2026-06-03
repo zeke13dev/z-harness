@@ -2,7 +2,6 @@
   "concept": "cost-estimation",
   "last_updated": "2026-06-02",
   "covers_spec": "z-harness/token-estimates/SPEC.md",
-  "scope": "LLM-free pre-run token-cost estimator (estimate-tokens.py) + gate helper (pre-run-cost-gate.sh) + profile schema (token-cost-profiles.json) + config knobs (workflow.pre_run_cost_gate, cost.token_budget). Covers 3-tier estimation (static/dispatch/empirical), parent-run rollup, static-floor clamp, hard vs soft gate severity, overnight/no-ask budget rule, and the cost_gate_decision event.",
   "source_file": [
     "scripts/estimate-tokens.py",
     "scripts/pre-run-cost-gate.sh",
@@ -13,8 +12,7 @@
     "commands/z-plan-split.md",
     "commands/z-brainstorm.md",
     "commands/z-audit.md",
-    "commands/z-debug.md",
-    "docs/human/cost-estimation.md"
+    "commands/z-debug.md"
   ],
   "confidence": "high",
   "entry_points": [
@@ -27,14 +25,14 @@
     },
     {
       "file": "scripts/estimate-tokens.py",
-      "line": 471,
+      "line": 477,
       "symbol": "estimate",
       "kind": "fn",
       "summary": "Core estimator: loads profiles, resolves profile for command, computes static + dispatch + empirical tiers, applies static-floor clamp, returns envelope dict"
     },
     {
       "file": "scripts/estimate-tokens.py",
-      "line": 243,
+      "line": 249,
       "symbol": "_empirical_tier",
       "kind": "fn",
       "summary": "Reads metrics.jsonl tail (bounded), buckets by parent-run, filters to normally-completed runs (terminal event + non-excluded status + no cost_gate_decision{abandon}), computes p50/p90; returns None when insufficient data"
@@ -76,21 +74,21 @@
     },
     {
       "file": "scripts/config.py",
-      "line": 107,
+      "line": 114,
       "symbol": "cost.token_budget (DEFAULTS)",
       "kind": "const",
       "summary": "[Cost gate] Integer budget knob; default None (unset); NOT a question_id; validator: _validate_positive_int_or_none; coercer converts string env values to int"
     },
     {
       "file": "scripts/config.py",
-      "line": 281,
+      "line": 305,
       "symbol": "workflow.pre_run_cost_gate (QUESTION_IDS)",
       "kind": "const",
-      "summary": "[Cost gate] Registered question_id; choices {ask, auto_proceed, halt}; skill_default ask; callsites: scripts/pre-run-cost-gate.sh, commands/z-research.md, commands/z-uplift.md, commands/z-plan-split.md"
+      "summary": "[Cost gate] Registered question_id; choices {ask, auto_proceed, halt}; skill_default ask; callsites: scripts/pre-run-cost-gate.sh, commands/z-research.md, commands/z-uplift.md, commands/z-plan-split.md, commands/z-brainstorm.md, commands/z-audit.md, commands/z-debug.md"
     },
     {
       "file": "scripts/config.py",
-      "line": 2190,
+      "line": 2174,
       "symbol": "_resolve_cost_gate",
       "kind": "fn",
       "summary": "[Cost gate] Budget-aware resolver invoked by check-no-ask when --range-high and --severity are both provided; applies overnight envelope first, then budget rule; returns {result, rule_id}"
@@ -124,7 +122,8 @@
     "Both run_start and run_end top-level events carry a command field (Phase-7 stamping); empirical attribution prefers event command field over kind-inference (_KIND_TO_COMMAND fallback)",
     "Z_HARNESS_COST_TAIL_LINES (default 2000) and Z_HARNESS_COST_MIN_SAMPLES (default 3) control empirical tier behavior via env vars",
     "No-profile envelope: confidence=low, range [0,0], gate=null, basis='no profile', estimated_tokens=0; gate helper treats this as estimate-unavailable",
-    "OVERNIGHT_AUTODECIDE_QIDS_DEFAULT does NOT include workflow.pre_run_cost_gate; operators must opt in via OVERNIGHT_AUTODECIDE_EFFECTIVE or direct config"
+    "OVERNIGHT_AUTODECIDE_QIDS_DEFAULT does NOT include workflow.pre_run_cost_gate; operators must opt in via OVERNIGHT_AUTODECIDE_EFFECTIVE or direct config",
+    "_KIND_TO_COMMAND maps generic run_start/run_end to z-plan as best-effort default for pre-T001 legacy events; pre-T001 z-research events will be misattributed to z-plan"
   ],
   "gotchas": [
     "Z_HARNESS_COST_TOKEN_BUDGET string env value must coerce to int; the coercer in _COERCERS handles this; if coercion fails at repo/env layer, config.py exits 2 (hard fail, not soft warn)",
@@ -137,19 +136,35 @@
     "empirical token counting uses subagent_input_tokens + subagent_output_tokens; falls back to prompt_chars/4 + response_chars/4; events with neither field contribute 0 tokens",
     "The empirical tier counts ALL events in the parent bucket (including child subagent events); this is intentional — it reflects the full run cost including sub-dispatches",
     "In-flight grace window is 5 minutes (300s): if a run's latest event is within 5 min of the file's global max_ts, it is considered in-flight and excluded regardless of terminal event presence",
-    "Token env transliteration: Z_HARNESS_COST_TOKEN_BUDGET (not Z_HARNESS_COST_TOKEN_BUDGET_INT); the coercer produces int from string"
+    "Token env transliteration: Z_HARNESS_COST_TOKEN_BUDGET (not Z_HARNESS_COST_TOKEN_BUDGET_INT); the coercer produces int from string",
+    "config.py QUESTION_IDS callsites list omits z-brainstorm.md, z-audit.md, z-debug.md; all three call pre-run-cost-gate.sh in practice — the source list is the authoritative callsite record"
   ],
   "envelope_schema": {
     "command": "<canonical command key, e.g. z-research>",
     "estimated_tokens": "<int; static_low+dispatch when no empirical; max(static_low+dispatch, p50) when empirical>",
     "range_low": "<int; static_low + dispatch_add; never lowered by empirical>",
-    "range_high": "<int|null; max(static_high+dispatch, p90) when empirical; null for no-profile>",
+    "range_high": "<int|null; max(static_high+dispatch, p90) when empirical; null for estimator-unavailable fallback only (not no-profile: no-profile returns 0)>",
     "confidence": "high | medium | low",
     "basis": "<human-readable string describing data sources>",
     "breakdown": [
-      {"tier": "static", "low": "<int>", "high": "<int>"},
-      {"tier": "dispatch", "add": "<int>", "keys": ["<key>"]},
-      {"tier": "empirical", "p50": "<float>", "p90": "<float>", "samples": "<int>"}
+      {
+        "tier": "static",
+        "low": "<int>",
+        "high": "<int>"
+      },
+      {
+        "tier": "dispatch",
+        "add": "<int>",
+        "keys": [
+          "<key>"
+        ]
+      },
+      {
+        "tier": "empirical",
+        "p50": "<float>",
+        "p90": "<float>",
+        "samples": "<int>"
+      }
     ],
     "gate": "hard | soft | null"
   },
@@ -171,7 +186,11 @@
     "workflow.pre_run_cost_gate": {
       "type": "string",
       "default": "ask",
-      "valid_values": ["ask", "auto_proceed", "halt"],
+      "valid_values": [
+        "ask",
+        "auto_proceed",
+        "halt"
+      ],
       "env": "Z_HARNESS_WORKFLOW_PRE_RUN_COST_GATE",
       "is_question_id": true,
       "description": "Controls hard-gate AskUser behavior. ask=prompt; auto_proceed=skip prompt; halt=unconditional halt"
@@ -185,12 +204,68 @@
     }
   },
   "profiled_commands": {
-    "z-research":   {"gate": "hard", "range": [3000000, 6000000], "dispatch_keys": ["map", "brainstorm"]},
-    "z-uplift":     {"gate": "hard", "range": [2000000, 8000000], "dispatch_keys": ["per_component"]},
-    "z-plan-split": {"gate": "hard", "range": [1500000, 5000000], "dispatch_keys": ["per_cluster"]},
-    "z-brainstorm": {"gate": "soft", "range": [80000, 220000],    "dispatch_keys": ["per_heavy_chunk"], "fires_on": "HEAVY path only"},
-    "z-audit":      {"gate": "soft", "range": [200000, 1200000],  "dispatch_keys": ["per_dimension"],   "fires_on": "HEAVY path only"},
-    "z-debug":      {"gate": "soft", "range": [300000, 1500000],  "dispatch_keys": [],                  "fires_on": "always (Phase 0)"}
+    "z-research": {
+      "gate": "hard",
+      "range": [
+        3000000,
+        6000000
+      ],
+      "dispatch_keys": [
+        "map",
+        "brainstorm"
+      ]
+    },
+    "z-uplift": {
+      "gate": "hard",
+      "range": [
+        2000000,
+        8000000
+      ],
+      "dispatch_keys": [
+        "per_component"
+      ]
+    },
+    "z-plan-split": {
+      "gate": "hard",
+      "range": [
+        1500000,
+        5000000
+      ],
+      "dispatch_keys": [
+        "per_cluster"
+      ]
+    },
+    "z-brainstorm": {
+      "gate": "soft",
+      "range": [
+        80000,
+        220000
+      ],
+      "dispatch_keys": [
+        "per_heavy_chunk"
+      ],
+      "fires_on": "HEAVY path only"
+    },
+    "z-audit": {
+      "gate": "soft",
+      "range": [
+        200000,
+        1200000
+      ],
+      "dispatch_keys": [
+        "per_dimension"
+      ],
+      "fires_on": "HEAVY path only"
+    },
+    "z-debug": {
+      "gate": "soft",
+      "range": [
+        300000,
+        1500000
+      ],
+      "dispatch_keys": [],
+      "fires_on": "always (Phase 0)"
+    }
   },
   "memories": []
 }

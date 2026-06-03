@@ -1,6 +1,6 @@
 # overnight-run
 
-> Last updated: 2026-06-01
+> Last updated: 2026-06-02
 > Covers source: commands/z-overnight.md, scripts/run-status.sh, scripts/normalize-task-state.sh, scripts/overnight-preflight.sh, scripts/config.py, scripts/bench-autonomy-check.sh, docs/human/overnight-run.md
 
 ## Overview
@@ -104,11 +104,13 @@ Hard-halt conditions (slug collision, lock corruption, state corruption) are nev
 
 ## Pre-run autonomy gate (`make bench-autonomy-check`)
 
-`scripts/bench-autonomy-check.sh` (invoked via `make bench-autonomy-check`) is a mandatory pre-run gate for unattended policy-mode runs. It must exit 0 before launching a benchmark overnight run. It performs two checks:
+`scripts/bench-autonomy-check.sh` (invoked via `make bench-autonomy-check`) is a mandatory pre-run gate for unattended policy-mode runs. It must exit 0 before launching a benchmark overnight run. It performs three checks:
 
 **Step 1 — Callsite registration audit (lint-askuser --strict):** scans the quick-build hot-path files (`commands/z-plan.md`, `commands/z-implement-all.md`) for `AskUserQuestion` callsites and asserts that each file using `AskUserQuestion` also contains a `resolve-question` or `check-no-ask` call. Unregistered callsites will fail-open (silently block) under `Z_HARNESS_NO_ASK=halt`, violating the policy-mode contract.
 
 **Step 2 — Policy coverage assertion:** loads `z-harness/bench/pier/benchmark-autonomy.yaml` via `zharness_pier.policy.load_policy` and checks that every `workflow.*` pattern found in the hot-path command files (`z-plan.md`, `z-implement-all.md`, `z-implement-next.md`) is present in the policy's `gates` map. If any gate is missing from the policy, the check fails with an actionable error.
+
+**Step 3 — Targeted gate-coverage assertion:** checks that config.py-registered gates required for the benchmark (currently `workflow.pre_run_cost_gate`) are present as keys in the policy's `gates:` block. This catches gates added to `config.py` that may not appear in the hot-path command files by text-pattern matching. Requires `PyYAML`.
 
 Use `--policy <path>` to override the default policy file path.
 
@@ -320,6 +322,7 @@ The instrumented callsites are:
 - **workflow.implement_all_proceed** (1): `/z-implement-all` halt-resolution gate
 - **workflow.review_all_proceed** (1): `/z-review-all` Phase 3.7 proceed gate
 - **workflow.plan_decisions_approval** (1): `/z-plan` Phase 2.5 decisions-doc approval gate
+- **workflow.pre_run_cost_gate** (multiple): `/z-research`, `/z-uplift`, `/z-plan-split`, `/z-brainstorm` (HEAVY mode), `/z-audit` (HEAVY mode), `/z-debug` (HEAVY mode)
 
 ### Linear chains only
 
