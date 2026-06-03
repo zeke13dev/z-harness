@@ -399,6 +399,27 @@ Once a terrain file is resolved (MAP.md or accepted legacy RESEARCH.md):
 
 Record `depends_on: [MAP.md]` in the eventual BRAINSTORM.md frontmatter if a terrain artifact was ingested (use the resolved filename — `MAP.md` or `RESEARCH.md` — as the value).
 
+### 1c-ii. GRILL.md seed framing (if present)
+
+If `$Z_HARNESS_PLAN_DIR/GRILL.md` exists, read it and extract two sections:
+
+- `## Sharpened problem` — the refined problem statement from the grill interview
+- `## Open branches` — unresolved decisions that remain after grilling
+
+Inline both sections as **seed framing** in the scaffolding payload, placed after any terrain content. Prefix the block with a brief label so ideators understand its provenance:
+
+```
+--- GRILL.md seed framing ---
+<contents of ## Sharpened problem section>
+
+<contents of ## Open branches section>
+--- end GRILL.md seed framing ---
+```
+
+If GRILL.md is absent, skip this step entirely — no placeholder, no warning. The seed framing is additive; it does not replace terrain content.
+
+Record the GRILL.md content (the extracted two sections concatenated) in `GRILL_SEED_CONTENT` for use in the §1d input_hash computation.
+
 ### 1d. Assemble and hash
 
 Compute the `input_hash` per SPEC:
@@ -408,9 +429,12 @@ input_hash = sha256(canonicalize(
     topic + "\n---\n" +
     doc_fetcher_synthesis_or_empty + "\n---\n" +
     explore_synthesis_or_empty + "\n---\n" +
-    research_md_or_summary_or_empty
+    research_md_or_summary_or_empty + "\n---\n" +
+    grill_seed_content_or_empty
 )).hexdigest()[:16]
 ```
+
+`grill_seed_content_or_empty` is the value of `GRILL_SEED_CONTENT` from §1c-ii, or an empty string if GRILL.md was absent. Including GRILL.md in the hash ensures that a changed GRILL.md invalidates any stale cache hit and forces brainstorm to regenerate.
 
 `canonicalize`: strip leading/trailing whitespace; collapse all internal runs of whitespace to a single space.
 

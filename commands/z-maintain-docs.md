@@ -1,6 +1,6 @@
 ---
-description: Refresh stale docs in docs/human/ and docs/llm/. Reads docs/llm/INDEX.json to find concepts whose source files changed since each doc's last_updated. Spawns doc-updater subagents (Sonnet) per stale concept. Applies refreshed docs by default; pass --dry-run to preview without writing. Stops for review only on genuine-risk signals (memories_lost, audit reject/needs-review).
-argument-hint: [--scope <concept-slug>] [--dry-run] [--audit]
+description: Refresh stale docs in docs/human/ and docs/llm/. Reads docs/llm/INDEX.json to find concepts whose source files changed since each doc's last_updated. Spawns doc-updater subagents (Sonnet) per stale concept. Applies refreshed docs by default; pass --dry-run to preview without writing. Pass --glossary to also refresh the CONTEXT.md domain-language glossary. Stops for review only on genuine-risk signals (memories_lost, audit reject/needs-review).
+argument-hint: [--scope <concept-slug>] [--glossary] [--dry-run] [--audit]
 runtime: c1
 driver_features_required:
   - subagent
@@ -10,13 +10,14 @@ unsupported_driver_behavior: explicit_gate
 
 You are running **z-harness `/z-maintain-docs`**. Goal: keep `docs/human/` and `docs/llm/` in sync with the current state of the code.
 
-This command **applies refreshed docs by default** — routine updates are written without asking. Pass `--dry-run` to preview the diffs without writing anything. It stops for a targeted per-concept confirmation only when a genuine-risk signal fires (a `memories_lost` mismatch, or — under `--audit` — a doc the consultants flagged as inaccurate or disputed). For scoped refresh, pass `--scope <concept-slug>`. Pass `--audit` to additionally run cross-LLM verification on each proposed doc update (recommended when you don't fully trust the `doc-updater`'s output).
+This command **applies refreshed docs by default** — routine updates are written without asking. Pass `--dry-run` to preview the diffs without writing anything. It stops for a targeted per-concept confirmation only when a genuine-risk signal fires (a `memories_lost` mismatch, or — under `--audit` — a doc the consultants flagged as inaccurate or disputed). For scoped refresh, pass `--scope <concept-slug>`. Pass `--glossary` to additionally refresh the `CONTEXT.md` domain-language glossary (user-initiated; see Phase 1.5). Pass `--audit` to additionally run cross-LLM verification on each proposed doc update (recommended when you don't fully trust the `doc-updater`'s output).
 
 ## Phase 0 — Preflight
 
 1. `cd` to repo root. Read `docs/llm/INDEX.json`. If missing, tell the user to run `/z-init-docs` first; abort.
 2. Determine mode:
    - `--dry-run` flag present → preview only; present proposed diffs and write nothing.
+   - `--glossary` flag present → also run Phase 1.5 (CONTEXT.md glossary refresh) after Phase 1.
    - Otherwise (default) → apply: write accepted updates directly (after the risk triage in Phase 3).
 3. **Version stamp + log:**
    ```bash
@@ -39,7 +40,66 @@ Also include in the stale list:
 
 If `--scope <slug>` was passed, restrict to that one concept (even if not detected as stale).
 
-If nothing is stale → tell the user "All docs are current."; log `maintain_docs_end` with `stale_count: 0`; stop.
+If nothing is stale and `--glossary` was not passed → tell the user "All docs are current."; log `maintain_docs_end` with `stale_count: 0`; stop.
+
+If nothing is stale but `--glossary` was passed → skip directly to Phase 1.5.
+
+## Phase 1.5 — Glossary refresh (only if `--glossary` flag set)
+
+This phase runs when the user explicitly passes `--glossary`. It refreshes the `CONTEXT.md` domain-language glossary at the repo root. Glossary staleness has no natural mtime trigger — there is no hard staleness gate here, and this phase is never triggered automatically. If `CONTEXT.md` looks potentially outdated (last commit older than 90 days), you may note "glossary may be stale" as an advisory, but this advisory does not block or gate the workflow.
+
+If `CONTEXT.md` does not exist at the repo root, recommend the user run `/z-init-docs` to bootstrap it and skip the rest of this phase.
+
+**Step 1: Re-extract candidate domain terms.**
+
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The Explore subagent re-extracts candidate domain terms for the glossary refresh; drivers that skip it should warn the user that glossary refresh is unavailable. -->
+```
+Agent(
+  subagent_type="explore",
+  model="haiku",
+  description="Re-extract domain terms for glossary refresh",
+  prompt="Re-extract candidate domain terms from the codebase — recurring nouns in module, type, and function names that are not standard English dictionary words. For each term: provide a concise one-line definition and note any synonyms or aliases in use. Return a flat list of (term, definition, avoid-list) triples.\nrepo_root: <abs path>"
+)
+```
+
+**Step 2: Diff against current CONTEXT.md.**
+
+Read `CONTEXT.md`. Parse all `### <Term>` headings under the `## Terms` section. Compute:
+- **New terms** — extracted by Explore but not yet in CONTEXT.md.
+- **Changed terms** — existing entries whose definition or avoid-list appears to have drifted (compare extracted definition against current prose).
+- **Unchanged terms** — no action needed.
+
+Terms that exist in CONTEXT.md but were not extracted by Explore are left untouched; do not propose deletions automatically (user-authored terms must be preserved).
+
+**Step 3: Propose additions/edits.**
+
+Present a summary of the proposed changes:
+
+```
+Glossary refresh — proposed changes:
+  New terms (N):
+    + <Term>: <one-line definition>  [Avoid: <synonyms>]
+    + ...
+  Changed terms (M):
+    ~ <Term>: current: "<old>" → proposed: "<new>"
+    ~ ...
+  Unchanged: <K> terms — no action.
+```
+
+**Step 4: Apply or preview.**
+
+- **Default mode (no `--dry-run`):** write the proposed additions and edits to `CONTEXT.md` directly. Extend the existing `## Terms` section: append new `### <Term>` blocks at the end; update changed definitions in-place. Never remove existing `### <Term>` entries. Never overwrite any section other than `## Terms`.
+- **`--dry-run` mode:** present the proposed changes above but write nothing. Tell the user to re-run with `--glossary` (without `--dry-run`) to apply.
+
+Log the glossary refresh outcome:
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "docs" glossary_refresh \
+  "$(printf '{"mode":"%s","new_terms":%d,"changed_terms":%d,"unchanged_terms":%d}' \
+     "<dry-run|apply>" "$NEW" "$CHANGED" "$UNCHANGED")"
+```
+
+If nothing is stale (concept docs are current) and `--glossary` was the only flag, finalize after this phase: log `maintain_docs_end` with `stale_count: 0` and stop.
 
 ## Phase 2 — Spawn doc-updaters (parallel, up to 3 concurrent)
 
@@ -273,9 +333,15 @@ If the script exits non-zero, surface the error to the user and halt (do not pro
    ```
    docs/ refreshed:
      <N> concepts updated, <M> deferred (not_enough_info), <K> skipped (flagged → user skipped).
-   
+   ```
+   If `--glossary` was used, append:
+   ```
+     Glossary: <NEW> terms added, <CHANGED> terms updated, <UNCHANGED> unchanged.
+   ```
+   Always end with:
+   ```
    Recommended next:
-     git add docs/ && git commit -m "Refresh z-harness docs"
+     git add docs/ CONTEXT.md && git commit -m "Refresh z-harness docs"
    ```
 3. Log:
    ```bash
@@ -285,10 +351,11 @@ If the script exits non-zero, surface the error to the user and halt (do not pro
 
 ## Hard rules
 
-- **Default = apply.** Routine (`clean`) concepts are written without asking. Pass `--dry-run` to preview without writing. Only `flagged` concepts (`memories_lost`, or audit `rejected`/`needs review` under `--audit`) require per-concept confirmation before writing.
-- **Never modify code files.** This command only touches `docs/`.
+- **Default = apply.** Routine (`clean`) concepts are written without asking. Pass `--dry-run` to preview without writing. Only `flagged` concepts (`memories_lost`, or audit `rejected`/`needs review` under `--audit`) require per-concept confirmation before writing. The `--glossary` path follows the same apply-by-default posture.
+- **Never modify code files.** This command only touches `docs/` and (with `--glossary`) `CONTEXT.md`.
 - **Atomic per-concept writes.** A concept's human + LLM tiers update together or not at all (don't leave them out of sync).
 - **Preserve git history.** Write to existing paths; don't create _v2 files.
+- **Glossary is additive.** The `--glossary` refresh never removes existing `### <Term>` entries — only adds new ones or updates definitions. User-authored terms are preserved.
 - **No emojis** in docs.
 
 ## Trigger patterns
@@ -304,7 +371,7 @@ If the script exits non-zero, surface the error to the user and halt (do not pro
 
 | Feature | Used | Gates |
 |---------|------|-------|
-| `subagent` | yes | Phase 2 doc-updater (one per stale concept, up to 3 in parallel); Phase 2.5 consultant-primary + consultant-secondary (only with `--audit`) |
+| `subagent` | yes | Phase 1.5 Explore term extraction (only with `--glossary`); Phase 2 doc-updater (one per stale concept, up to 3 in parallel); Phase 2.5 consultant-primary + consultant-secondary (only with `--audit`) |
 | `ask_user` | yes | Phase 2.3 compaction-pause decision (only with `--audit`); Phase 3 per-flagged-concept review (apply anyway / skip — fires only on `memories_lost` or audit reject/needs-review); Phase 3 stale-memory disposition (keep / edit / delete) |
 | `skill_invoke` | no | — |
 

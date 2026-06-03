@@ -1,6 +1,6 @@
 # Docs index
 
-_Updated: 2026-05-27_  
+_Updated: 2026-06-03_  
 _Plugin: z-harness_
 
 Concepts grouped by top-level module. Each entry links to its human-tier page.
@@ -16,7 +16,7 @@ Companion LLM-tier JSON lives at `../llm/<slug>.json`.
 
 | Concept | Confidence | Source files | Summary |
 |---|---|---|---|
-| [commands](./commands.md) | high | `commands/z-amend.md`, `commands/z-audit.md`, `commands/z-brainstorm.md` | Propagates targeted plan amendments consistently across plan artifacts. |
+| [commands](./commands.md) | high | `commands/z-amend.md`, `commands/z-audit.md`, `commands/z-brainstorm.md`, `commands/z-git-guardrails.md`, `commands/z-grill.md` | Propagates targeted plan amendments consistently across plan artifacts. New: `/z-grill` (requirements interview, produces GRILL.md), `/z-git-guardrails` (installs git-safety PreToolUse hook). Updated: `/z-init-docs` (bootstraps CONTEXT.md by default, `--no-glossary` opts out), `/z-maintain-docs` (new `--glossary` flag), `/z-debug` (Phase 2 feedback-loop ladder + `repro_confidence`), `/z-plan` + `/z-brainstorm` (GRILL.md precontext detection). |
 
 ## config
 
@@ -28,13 +28,22 @@ Companion LLM-tier JSON lives at `../llm/<slug>.json`.
 
 | Concept | Confidence | Source files | Summary |
 |---|---|---|---|
-| [scripts](./scripts.md) | high | `scripts/log-event.sh`, `scripts/log-phase.sh`, `scripts/regenerate-memories-flat.py` | Appends standard JSON events to run and global logs. |
+| [scripts](./scripts.md) | high | `scripts/block-dangerous-git.sh`, `scripts/log-event.sh`, `scripts/log-phase.sh`, `scripts/regenerate-memories-flat.py` | Appends standard JSON events to run and global logs. New: `block-dangerous-git.sh` PreToolUse hook — classifies git commands, blocks rewrite verbs when upstream-reachable, blanket-blocks working-tree-destructive verbs, supports `Z_HARNESS_GIT_GUARDRAILS_OVERRIDE=1`. |
 
 ## skills
 
 | Concept | Confidence | Source files | Summary |
 |---|---|---|---|
 | [skills](./skills.md) | high | `skills/z-amend/SKILL.md`, `skills/z-brainstorm/SKILL.md`, `skills/z-debug/SKILL.md` | Checklists for amending spec, plan, and task checklists consistently. |
+
+## repo-root artifacts
+
+Artifacts managed by z-harness at the repository root (not under `docs/`).
+
+| Artifact | Created by | Summary |
+|---|---|---|
+| `CONTEXT.md` | `/z-init-docs` (default), `/z-maintain-docs --glossary` | Domain glossary: term / definition / avoid + Relationships + Flagged ambiguities sections. Bootstrapped via Explore + AskUser; idempotent (extends, never clobbers user terms). Pass `--no-glossary` to skip on init. |
+| `GRILL.md` | `/z-grill` | Finalized requirements-interview transcript, staged under `$Z_HARNESS_PLAN_DIR/<slug>/GRILL.md`. Detected as precontext by `/z-plan` (step 9) and `/z-brainstorm` (Phase 1 §1c). |
 
 ## reference
 

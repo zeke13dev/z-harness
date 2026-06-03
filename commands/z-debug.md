@@ -175,6 +175,21 @@ Try to reproduce. Methods (in priority order):
 4. **Production-only** → ask user for log timestamps; use `qt-bot-remote` skill (if available) or other log access to fetch the relevant slice. **DB queries** here stay with the main thread (interpretive), not `remote-runner` (which refuses DB).
 5. **DB state snapshot** → if the bug involves data shape, query the DB read-only via `qt-bot-remote` to confirm the actual state matches the user's description.
 
+**Feedback-loop escalation ladder.** Goal: produce a deterministic, agent-runnable pass/fail signal. Try strategies in this order — stop at the first one that yields a clean pass/fail:
+
+1. **Failing unit test** — if a test already exists that exercises the code path, run it directly.
+2. **`curl`/CLI one-liner** — a single shell invocation whose exit code or stdout unambiguously signals pass/fail.
+3. **CLI output diff** — capture expected vs actual output; diff exits non-zero on divergence.
+4. **Playwright/browser script** — for UI or HTTP regressions; automates the browser interaction and asserts on DOM state or response code.
+5. **Trace replay** — replay a captured request trace against the current code; assert on matching response or behavior.
+6. **Throwaway harness** — minimal ad-hoc test file that exercises the suspect code path; discard after isolation.
+7. **Fuzz loop** — short fuzzing run over the failing input space; useful when the input boundary triggering the bug is unclear.
+8. **`git bisect run`** — for regressions with a known-good baseline; see Phase 2.5 for the full bisect fast-path. Do not re-implement bisect here — Phase 2.5 handles it.
+9. **Differential run vs known-good** — run the same command on two versions (e.g. a pinned dependency or a branch snapshot) and diff outputs.
+10. **HITL bash script** — hand the user a script they run manually and paste back stdout/stderr; last resort when full automation is blocked by auth, network, or hardware constraints.
+
+If none of the above yields a deterministic signal, document why in the Evidence Inventory and use the soft AskUser valve below.
+
 Append `## Evidence Inventory` to `DEBUG.md`:
 
 ```markdown
@@ -184,8 +199,12 @@ Append `## Evidence Inventory` to `DEBUG.md`:
 1. ...
 2. ...
 
-### Reproducibility confirmed
-<yes | no | partial; if no, explain>
+### repro_confidence
+<high | low | none>
+<!-- high = deterministic, agent-runnable pass/fail signal achieved (via ladder above);
+     low  = partial repro or repro requires manual steps;
+     none = cannot reproduce; explain in a following line -->
+<!-- Previously "Reproducibility confirmed: yes|no|partial" — this field supersedes it. -->
 
 ### Inventory
 - **EVID-001:** <text or quoted log line / fixture / metric>
@@ -213,7 +232,7 @@ When the bug is a regression with a known-good baseline and a scriptable repro, 
 ### Gate (all three must hold)
 
 1. **`Started:` field from Phase 1 is not "unknown"** — user supplied a last-good ref / SHA / tag / branch.
-2. **`Reproducibility confirmed: yes`** in Phase 2's Evidence Inventory — not partial, not no.
+2. **`repro_confidence: high`** in Phase 2's Evidence Inventory — `low` or `none` is insufficient.
 3. **Repro is scriptable** — the orchestrator can produce a single shell command that exits 0 when the bug is absent (good) and non-zero when present (bad). If repro requires interactive input, multiple manual steps, or a long-running service, the repro is not scriptable — skip Phase 2.5.
 
 If any gate fails → skip Phase 2.5 silently and proceed to Phase 3a unchanged. Do not push-notify the skip.
@@ -599,6 +618,8 @@ For the current cycle (start at cycle 1):
    - H002: prior=low + likelihood=strongly_falsified → posterior=eliminated (rule fired: any×strongly_falsified)
    ...
    ```
+
+   Hypotheses formed when `repro_confidence` is `low` or `none` carry lower initial credence and are tagged "unverified — needs a clean repro to validate."
 
 5. **Move eliminated rows** to a `## Eliminated Alternatives` section (preserve the row + the cycle that eliminated it + the falsifying test):
 
