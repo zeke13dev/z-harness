@@ -4,9 +4,14 @@ runtime/drivers — host-driver implementations and driver selection for z-harne
 Each sub-package implements a HostDriver for a specific CLI or SDK backend.
 Currently implemented:
 
-- claude:  SelfHostDriver (in-process) and SubprocessClaudeDriver (subprocess)
-- cursor:  CursorCLIDriver (subprocess); CursorSDKDriver stubbed (v2 milestone)
-- codex:   Codex CLI driver (runtime/drivers/codex/)
+- claude:       SubprocessClaudeDriver (subprocess)
+- cursor:       CursorCLIDriver (subprocess); CursorSDKDriver stubbed (v2 milestone)
+- codex:        CodexDriver — Codex CLI driver (runtime/drivers/codex/)
+- antigravity:  AntigravityHostDriverShim — HostDriver wrapper around AntigravityDriver
+                (runtime/drivers/antigravity/host_driver_shim.py)
+
+Note: SelfHostDriver (formerly an in-process driver for Claude Code) is tombstoned
+and not reachable via select_driver(). See docs/human/runtime-dispatch.md.
 
 Public surface
 --------------
@@ -23,9 +28,9 @@ from __future__ import annotations
 import sys
 from typing import TYPE_CHECKING
 
-from runtime.drivers.claude.env_hygiene import detect_self_hosted
-from runtime.drivers.claude.self_host_driver import SelfHostDriver
+from runtime.drivers.antigravity.host_driver_shim import AntigravityHostDriverShim
 from runtime.drivers.claude.subprocess_driver import SubprocessClaudeDriver
+from runtime.drivers.codex.driver import CodexDriver
 from runtime.drivers.cursor.cli_driver import CursorCLIDriver
 
 try:
@@ -62,18 +67,19 @@ def select_driver(
     ----------
     host:
         The provider host identifier.  Supported values: ``"claude"``,
-        ``"cursor"``.  Any other value raises :class:`DriverNotFoundError`.
+        ``"cursor"``, ``"codex"``, ``"antigravity"``.  Any other value raises
+        :class:`DriverNotFoundError`.
     driver_override:
         Optional explicit driver selection.  When provided, bypasses
         auto-detection and uses the specified driver directly.
 
         Supported overrides:
 
-        - ``"claude-self"`` — force :class:`SelfHostDriver` regardless of
-          env detection (useful when CLAUDECODE is not set but the caller
-          knows the context).
         - ``"cursor-sdk"`` — raises :exc:`NotImplementedError` immediately
           (CursorSDKDriver is a v2 milestone; @cursor/sdk is in public beta).
+
+        Note: ``"claude-self"`` is no longer a supported override.
+        SelfHostDriver is tombstoned; use ``SubprocessClaudeDriver`` instead.
 
     Returns
     -------
@@ -87,20 +93,11 @@ def select_driver(
         If ``driver_override="cursor-sdk"`` is requested (v2 milestone).
     """
     if host == "claude":
-        detection_method: str
-        driver_instance: object
-
-        if driver_override == "claude-self" or detect_self_hosted():
-            detection_method = "override" if driver_override == "claude-self" else "env"
-            driver_instance = SelfHostDriver(force=True)
-        else:
-            detection_method = "env"
-            driver_instance = SubprocessClaudeDriver()
-
+        driver_instance: object = SubprocessClaudeDriver()
         _emit_driver_selected(
-            driver_class=type(driver_instance).__name__,
+            driver_class="SubprocessClaudeDriver",
             host=host,
-            detection_method=detection_method,
+            detection_method="default",
         )
         return driver_instance
 
@@ -121,9 +118,27 @@ def select_driver(
         )
         return driver_instance
 
+    elif host == "codex":
+        driver_instance = CodexDriver()
+        _emit_driver_selected(
+            driver_class="CodexDriver",
+            host=host,
+            detection_method="default",
+        )
+        return driver_instance
+
+    elif host == "antigravity":
+        driver_instance = AntigravityHostDriverShim()
+        _emit_driver_selected(
+            driver_class="AntigravityHostDriverShim",
+            host=host,
+            detection_method="default",
+        )
+        return driver_instance
+
     else:
         raise DriverNotFoundError(
-            f"Unknown host {host!r}. Supported hosts: 'claude', 'cursor'."
+            f"Unknown host {host!r}. Supported hosts: 'claude', 'cursor', 'codex', 'antigravity'."
         )
 
 

@@ -2,11 +2,13 @@
 tests/drivers/test_select_driver.py — Unit tests for select_driver factory.
 
 Covers:
-  - host="claude" + detect_self_hosted() True → SelfHostDriver returned
-  - host="claude" + detect_self_hosted() False → SubprocessClaudeDriver returned
-  - host="claude" + driver_override="claude-self" → SelfHostDriver always
+  - host="claude" → SubprocessClaudeDriver returned (SelfHostDriver is tombstoned)
+  - host="claude" + driver_override="claude-self" → SubprocessClaudeDriver returned
+    (not SelfHostDriver; the claude-self override is removed)
   - host="cursor" (no override) → CursorCLIDriver returned
   - host="cursor" + driver_override="cursor-sdk" → NotImplementedError raised
+  - host="codex" → CodexDriver returned
+  - host="antigravity" → AntigravityHostDriverShim returned
   - host="unknown" → DriverNotFoundError raised
   - driver_selected event emitted for each successful selection
 
@@ -23,8 +25,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from runtime.drivers import DriverNotFoundError, select_driver
+from runtime.drivers.antigravity.host_driver_shim import AntigravityHostDriverShim
 from runtime.drivers.claude.self_host_driver import SelfHostDriver
 from runtime.drivers.claude.subprocess_driver import SubprocessClaudeDriver
+from runtime.drivers.codex.driver import CodexDriver
 from runtime.drivers.cursor.cli_driver import CursorCLIDriver
 
 
@@ -32,17 +36,9 @@ from runtime.drivers.cursor.cli_driver import CursorCLIDriver
 # Helpers
 # ---------------------------------------------------------------------------
 
-_DETECT_PATH = "runtime.drivers.detect_self_hosted"
-_SELF_HOST_DRIVER_PATH = "runtime.drivers.SelfHostDriver"
 _SUBPROCESS_DRIVER_PATH = "runtime.drivers.SubprocessClaudeDriver"
 _CURSOR_CLI_DRIVER_PATH = "runtime.drivers.CursorCLIDriver"
 _EMIT_PATH = "runtime.drivers._emit_driver_selected"
-
-
-def _mock_self_host_driver() -> MagicMock:
-    """Return a MagicMock instance that passes isinstance checks as SelfHostDriver."""
-    mock = MagicMock(spec=SelfHostDriver)
-    return mock
 
 
 def _mock_subprocess_driver() -> MagicMock:
@@ -58,30 +54,17 @@ def _mock_cursor_cli_driver() -> MagicMock:
 
 
 # ---------------------------------------------------------------------------
-# host="claude" — auto-detection via detect_self_hosted
+# host="claude" — always routes to SubprocessClaudeDriver (SelfHostDriver tombstoned)
 # ---------------------------------------------------------------------------
 
 
 class TestClaudeHostAutoDetection:
-    """select_driver("claude") routes based on detect_self_hosted()."""
+    """select_driver("claude") always routes to SubprocessClaudeDriver."""
 
-    def test_self_hosted_true_returns_self_host_driver(self):
-        """When detect_self_hosted() is True, SelfHostDriver is returned."""
-        mock_instance = _mock_self_host_driver()
-        with (
-            patch(_DETECT_PATH, return_value=True),
-            patch(_SELF_HOST_DRIVER_PATH, return_value=mock_instance) as MockCls,
-            patch(_EMIT_PATH),
-        ):
-            result = select_driver("claude")
-        MockCls.assert_called_once_with(force=True)
-        assert result is mock_instance
-
-    def test_self_hosted_false_returns_subprocess_driver(self):
-        """When detect_self_hosted() is False, SubprocessClaudeDriver is returned."""
+    def test_claude_returns_subprocess_driver(self):
+        """select_driver('claude') must always return SubprocessClaudeDriver."""
         mock_instance = _mock_subprocess_driver()
         with (
-            patch(_DETECT_PATH, return_value=False),
             patch(_SUBPROCESS_DRIVER_PATH, return_value=mock_instance) as MockCls,
             patch(_EMIT_PATH),
         ):
@@ -89,75 +72,36 @@ class TestClaudeHostAutoDetection:
         MockCls.assert_called_once_with()
         assert result is mock_instance
 
-    def test_self_hosted_true_does_not_instantiate_subprocess_driver(self):
-        """SelfHostDriver env path must never construct SubprocessClaudeDriver."""
-        mock_self = _mock_self_host_driver()
+    def test_claude_never_returns_self_host_driver(self):
+        """select_driver('claude') must never return a SelfHostDriver instance."""
+        mock_instance = _mock_subprocess_driver()
         with (
-            patch(_DETECT_PATH, return_value=True),
-            patch(_SELF_HOST_DRIVER_PATH, return_value=mock_self),
-            patch(_SUBPROCESS_DRIVER_PATH) as MockSubprocess,
+            patch(_SUBPROCESS_DRIVER_PATH, return_value=mock_instance),
             patch(_EMIT_PATH),
         ):
-            select_driver("claude")
-        MockSubprocess.assert_not_called()
+            result = select_driver("claude")
+        assert not isinstance(result, SelfHostDriver)
 
-    def test_self_hosted_false_does_not_instantiate_self_host_driver(self):
-        """SubprocessClaudeDriver path must never construct SelfHostDriver."""
-        mock_sub = _mock_subprocess_driver()
+    def test_claude_with_claude_self_override_returns_subprocess_driver(self):
+        """driver_override='claude-self' must route to SubprocessClaudeDriver (override removed)."""
+        mock_instance = _mock_subprocess_driver()
         with (
-            patch(_DETECT_PATH, return_value=False),
-            patch(_SUBPROCESS_DRIVER_PATH, return_value=mock_sub),
-            patch(_SELF_HOST_DRIVER_PATH) as MockSelf,
-            patch(_EMIT_PATH),
-        ):
-            select_driver("claude")
-        MockSelf.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# host="claude" + driver_override="claude-self"
-# ---------------------------------------------------------------------------
-
-
-class TestClaudeHostOverride:
-    """driver_override="claude-self" forces SelfHostDriver regardless of env."""
-
-    def test_override_claude_self_forces_self_host_driver_when_env_false(self):
-        """Override must win even when detect_self_hosted() returns False."""
-        mock_instance = _mock_self_host_driver()
-        with (
-            patch(_DETECT_PATH, return_value=False),
-            patch(_SELF_HOST_DRIVER_PATH, return_value=mock_instance) as MockCls,
+            patch(_SUBPROCESS_DRIVER_PATH, return_value=mock_instance) as MockCls,
             patch(_EMIT_PATH),
         ):
             result = select_driver("claude", driver_override="claude-self")
-        MockCls.assert_called_once_with(force=True)
+        MockCls.assert_called_once_with()
         assert result is mock_instance
 
-    def test_override_claude_self_does_not_instantiate_subprocess_driver(self):
-        """With override="claude-self", SubprocessClaudeDriver must not be constructed."""
-        mock_instance = _mock_self_host_driver()
+    def test_claude_with_claude_self_override_never_returns_self_host_driver(self):
+        """driver_override='claude-self' must not produce a SelfHostDriver (tombstoned)."""
+        mock_instance = _mock_subprocess_driver()
         with (
-            patch(_DETECT_PATH, return_value=False),
-            patch(_SELF_HOST_DRIVER_PATH, return_value=mock_instance),
-            patch(_SUBPROCESS_DRIVER_PATH) as MockSub,
+            patch(_SUBPROCESS_DRIVER_PATH, return_value=mock_instance),
             patch(_EMIT_PATH),
         ):
-            select_driver("claude", driver_override="claude-self")
-        MockSub.assert_not_called()
-
-    def test_override_claude_self_detection_method_is_override(self):
-        """detection_method in telemetry must be 'override' when driver_override used."""
-        mock_instance = _mock_self_host_driver()
-        with (
-            patch(_DETECT_PATH, return_value=False),
-            patch(_SELF_HOST_DRIVER_PATH, return_value=mock_instance),
-            patch(_EMIT_PATH) as mock_emit,
-        ):
-            select_driver("claude", driver_override="claude-self")
-        mock_emit.assert_called_once()
-        _, kwargs = mock_emit.call_args
-        assert kwargs.get("detection_method") == "override" or mock_emit.call_args[0][2] == "override"
+            result = select_driver("claude", driver_override="claude-self")
+        assert not isinstance(result, SelfHostDriver)
 
 
 # ---------------------------------------------------------------------------
@@ -239,18 +183,7 @@ class TestDriverSelectedTelemetry:
     def test_driver_selected_emitted_for_claude_subprocess(self):
         mock_instance = _mock_subprocess_driver()
         with (
-            patch(_DETECT_PATH, return_value=False),
             patch(_SUBPROCESS_DRIVER_PATH, return_value=mock_instance),
-            patch(_EMIT_PATH) as mock_emit,
-        ):
-            select_driver("claude")
-        mock_emit.assert_called_once()
-
-    def test_driver_selected_emitted_for_claude_self_host(self):
-        mock_instance = _mock_self_host_driver()
-        with (
-            patch(_DETECT_PATH, return_value=True),
-            patch(_SELF_HOST_DRIVER_PATH, return_value=mock_instance),
             patch(_EMIT_PATH) as mock_emit,
         ):
             select_driver("claude")
@@ -278,7 +211,6 @@ class TestDriverSelectedTelemetry:
         """driver_class in telemetry matches the concrete class name."""
         mock_instance = _mock_subprocess_driver()
         with (
-            patch(_DETECT_PATH, return_value=False),
             patch(_SUBPROCESS_DRIVER_PATH, return_value=mock_instance),
             patch(_EMIT_PATH) as mock_emit,
         ):
@@ -300,3 +232,129 @@ class TestDriverSelectedTelemetry:
         # _emit_driver_selected is called with keyword arguments
         called_host = kwargs.get("host") if kwargs else (args[1] if len(args) > 1 else None)
         assert called_host == "cursor"
+
+
+# ---------------------------------------------------------------------------
+# host="codex" — MF1 gate
+# ---------------------------------------------------------------------------
+
+_CODEX_DRIVER_PATH = "runtime.drivers.CodexDriver"
+_AGY_SHIM_PATH = "runtime.drivers.AntigravityHostDriverShim"
+
+
+def _mock_codex_driver() -> MagicMock:
+    """Return a MagicMock instance that passes isinstance checks as CodexDriver."""
+    return MagicMock(spec=CodexDriver)
+
+
+def _mock_agy_shim() -> MagicMock:
+    """Return a MagicMock instance that passes isinstance checks as AntigravityHostDriverShim."""
+    return MagicMock(spec=AntigravityHostDriverShim)
+
+
+class TestCodexHost:
+    """select_driver("codex") routes to CodexDriver — MF1 gate."""
+
+    def test_codex_returns_codex_driver(self):
+        """select_driver('codex') must return a CodexDriver instance."""
+        mock_instance = _mock_codex_driver()
+        with (
+            patch(_CODEX_DRIVER_PATH, return_value=mock_instance) as MockCls,
+            patch(_EMIT_PATH),
+        ):
+            result = select_driver("codex")
+        MockCls.assert_called_once_with()
+        assert result is mock_instance
+
+    def test_codex_emits_driver_selected(self):
+        """driver_selected telemetry fires for host='codex'."""
+        mock_instance = _mock_codex_driver()
+        with (
+            patch(_CODEX_DRIVER_PATH, return_value=mock_instance),
+            patch(_EMIT_PATH) as mock_emit,
+        ):
+            select_driver("codex")
+        mock_emit.assert_called_once()
+
+    def test_codex_telemetry_host_field(self):
+        """host field in driver_selected telemetry must be 'codex'."""
+        mock_instance = _mock_codex_driver()
+        with (
+            patch(_CODEX_DRIVER_PATH, return_value=mock_instance),
+            patch(_EMIT_PATH) as mock_emit,
+        ):
+            select_driver("codex")
+        _, kwargs = mock_emit.call_args
+        assert kwargs.get("host") == "codex"
+
+    def test_codex_driver_class_is_host_driver_subclass(self):
+        """CodexDriver must be importable and subclass HostDriver."""
+        from runtime.dispatch.driver import HostDriver
+        assert issubclass(CodexDriver, HostDriver)
+
+
+# ---------------------------------------------------------------------------
+# host="antigravity" — MF1 gate + shim
+# ---------------------------------------------------------------------------
+
+
+class TestAntigravityHost:
+    """select_driver("antigravity") routes to AntigravityHostDriverShim — MF1 gate."""
+
+    def test_antigravity_returns_shim(self):
+        """select_driver('antigravity') must return an AntigravityHostDriverShim instance."""
+        mock_instance = _mock_agy_shim()
+        with (
+            patch(_AGY_SHIM_PATH, return_value=mock_instance) as MockCls,
+            patch(_EMIT_PATH),
+        ):
+            result = select_driver("antigravity")
+        MockCls.assert_called_once_with()
+        assert result is mock_instance
+
+    def test_antigravity_emits_driver_selected(self):
+        """driver_selected telemetry fires for host='antigravity'."""
+        mock_instance = _mock_agy_shim()
+        with (
+            patch(_AGY_SHIM_PATH, return_value=mock_instance),
+            patch(_EMIT_PATH) as mock_emit,
+        ):
+            select_driver("antigravity")
+        mock_emit.assert_called_once()
+
+    def test_antigravity_telemetry_host_field(self):
+        """host field in driver_selected telemetry must be 'antigravity'."""
+        mock_instance = _mock_agy_shim()
+        with (
+            patch(_AGY_SHIM_PATH, return_value=mock_instance),
+            patch(_EMIT_PATH) as mock_emit,
+        ):
+            select_driver("antigravity")
+        _, kwargs = mock_emit.call_args
+        assert kwargs.get("host") == "antigravity"
+
+    def test_antigravity_shim_is_host_driver_subclass(self):
+        """AntigravityHostDriverShim must subclass HostDriver."""
+        from runtime.dispatch.driver import HostDriver
+        assert issubclass(AntigravityHostDriverShim, HostDriver)
+
+
+# ---------------------------------------------------------------------------
+# DriverNotFoundError host list — updated to include codex + antigravity
+# ---------------------------------------------------------------------------
+
+
+class TestDriverNotFoundErrorHostList:
+    """DriverNotFoundError message must list all four supported hosts."""
+
+    def test_error_mentions_codex(self):
+        """Error message for unknown host must mention 'codex'."""
+        with pytest.raises(DriverNotFoundError) as exc_info:
+            select_driver("gemini")
+        assert "codex" in str(exc_info.value)
+
+    def test_error_mentions_antigravity(self):
+        """Error message for unknown host must mention 'antigravity'."""
+        with pytest.raises(DriverNotFoundError) as exc_info:
+            select_driver("gemini")
+        assert "antigravity" in str(exc_info.value)

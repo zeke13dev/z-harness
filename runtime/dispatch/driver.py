@@ -137,10 +137,10 @@ class HostDriver(abc.ABC):
     that knows the format, so parsing lives exclusively in the driver.
 
     **Context injection** (C1-D5) — :meth:`init` accepts an optional
-    ``context`` dict for driver-specific runtime injections.  For example,
-    ``SelfHostDriver`` (C4) expects ``context={"tools_registry": {...}}``.
-    Drivers MUST silently ignore any context keys they do not recognise —
-    this preserves Liskov substitutability at the call-site.
+    ``context`` dict for driver-specific runtime injections.  Drivers MUST
+    silently ignore any context keys they do not recognise — this preserves
+    Liskov substitutability at the call-site.  (Note: SelfHostDriver, which
+    previously used ``context={"tools_registry": {...}}``, is tombstoned.)
 
     Implementing a driver::
 
@@ -182,11 +182,10 @@ class HostDriver(abc.ABC):
 
         **Context injection (C1-D5)** — ``context`` carries driver-specific
         runtime injections that cannot be expressed in ``provider_config`` (a
-        static, serialisable dict).  ``SelfHostDriver`` uses
-        ``context={"tools_registry": {...}}`` to receive the live tool
-        registry from the calling process.  Other drivers MUST silently ignore
-        context keys they do not recognise — callers are not required to tailor
-        context to each driver.
+        static, serialisable dict).  Drivers MUST silently ignore context keys
+        they do not recognise — callers are not required to tailor context to
+        each driver.  (Note: SelfHostDriver, which formerly used
+        ``context={"tools_registry": {...}}``, is tombstoned.)
 
         Args:
             provider_config: The provider block from ``.z-harness/providers.json``
