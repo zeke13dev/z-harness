@@ -153,11 +153,24 @@ assert_exit_zero "TEST3: exit 0" "$EC"
 assert_json_field "TEST3: result=proceed" "result" "proceed" "$OUT"
 
 # ---------------------------------------------------------------------------
+# TEST 4 + 5 invoke bench-autonomy-check.sh, which imports the pier bench rig
+# (zharness_pier.policy). That package lives under the gitignored z-harness/ tree
+# and is therefore absent in CI and fresh clones — the check then exits nonzero
+# regardless of policy content. Skip both tests when the rig is absent rather
+# than failing on a missing fixture (the rig itself is what they exercise).
+# ---------------------------------------------------------------------------
+PIER_AVAILABLE=1
+[[ -d "$REPO_ROOT/z-harness/bench/pier/zharness_pier" ]] || PIER_AVAILABLE=0
+
+# ---------------------------------------------------------------------------
 # TEST 4: bench-autonomy-check.sh FAILS on incomplete policy
 # ---------------------------------------------------------------------------
 echo ""
 echo "--- TEST 4: bench-autonomy-check.sh fails on incomplete policy ---"
 
+if [[ $PIER_AVAILABLE -eq 0 ]]; then
+  echo "  SKIP: pier rig (zharness_pier) not present — bench-autonomy-check unavailable"
+else
 TMPDIR_POLICY="$(mktemp -d /tmp/zhtest-policy-XXXXXX)"
 
 # Write an incomplete policy that is missing workflow.implement_all_proceed
@@ -179,6 +192,7 @@ bash "$BENCH_CHECK" --policy "$TMPDIR_POLICY/benchmark-autonomy-incomplete.yaml"
 assert_exit_nonzero "TEST4: bench-autonomy-check exits non-zero on incomplete policy" "$EC_CHECK"
 
 rm -rf "$TMPDIR_POLICY"
+fi
 
 # ---------------------------------------------------------------------------
 # TEST 5: bench-autonomy-check.sh PASSES on complete policy
@@ -188,7 +202,9 @@ echo "--- TEST 5: bench-autonomy-check.sh passes on complete (real) policy ---"
 
 REAL_POLICY="$REPO_ROOT/z-harness/bench/pier/benchmark-autonomy.yaml"
 
-if [[ ! -f "$REAL_POLICY" ]]; then
+if [[ $PIER_AVAILABLE -eq 0 ]]; then
+  echo "  SKIP: pier rig (zharness_pier) not present — bench-autonomy-check unavailable"
+elif [[ ! -f "$REAL_POLICY" ]]; then
   echo "  SKIP: real policy not found at $REAL_POLICY"
 else
   EC_CHECK=0
