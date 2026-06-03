@@ -1,8 +1,7 @@
 {
   "concept": "config",
-  "last_updated": "2026-06-02",
+  "last_updated": "2026-06-03",
   "covers_spec": "z-harness/askuser-prefs-hook/SPEC.md",
-  "scope": "Layered TOML config loader (Loader API surface) + workflow preference resolver, overnight gate system, axiom layer, elevation proposer, follow-up namespace, brainstorm/personas feature-flag sections (Workflow Resolver + [brainstorm] + [personas] + [followup] + [axioms] surface). Formerly split as config-design (slice-1) and config (slice-2); merged into one concept.",
   "source_file": [
     "scripts/config.py",
     "scripts/config.sh",
@@ -13,182 +12,182 @@
   "entry_points": [
     {
       "file": "scripts/config.py",
-      "line": 51,
+      "line": 53,
       "symbol": "DEFAULTS",
       "kind": "const",
-      "summary": "[Loader API] Built-in defaults for all config keys: [notify],[docs],[brainstorm],[personas],[workflow],[followup],[axioms],[experiment],[runtime] sections (layer 1)"
+      "summary": "[Loader API] Built-in defaults for all config keys: [notify],[docs],[brainstorm],[personas],[workflow],[followup],[axioms],[experiment],[runtime],[cost] sections (layer 1)"
     },
     {
       "file": "scripts/config.py",
-      "line": 134,
+      "line": 147,
       "symbol": "VALIDATORS",
       "kind": "const",
-      "summary": "[Loader API] Allowed enum sets per dotted-key; hard-fail on repo/env, soft-warn on global; covers brainstorm, personas, workflow, axioms, experiment keys"
+      "summary": "[Loader API] Allowed enum sets per dotted-key; hard-fail on repo/env, soft-warn on global; covers brainstorm, personas, workflow, axioms, experiment, cost keys"
     },
     {
       "file": "scripts/config.py",
-      "line": 163,
+      "line": 178,
       "symbol": "_COERCERS",
       "kind": "const",
       "summary": "[Loader API] Post-validation normalizers; converts env-var strings to typed Python values for all bool/int knobs including personas.* and brainstorm.personas"
     },
     {
       "file": "scripts/config.py",
-      "line": 181,
+      "line": 239,
       "symbol": "QUESTION_IDS",
       "kind": "const",
-      "summary": "[Workflow Resolver] Single source of truth for AskUserQuestion routing-class preference keys; validated against VALIDATORS at module load by _run_startup_guards"
+      "summary": "[Workflow Resolver] Single source of truth for AskUserQuestion routing-class preference keys (6 workflow.* + pre_run_cost_gate); validated against VALIDATORS at module load by _run_startup_guards"
     },
     {
       "file": "scripts/config.py",
-      "line": 251,
+      "line": 320,
       "symbol": "OVERNIGHT_AUTODECIDE_QIDS_DEFAULT",
       "kind": "const",
       "summary": "[Workflow Resolver] Default overnight allowlist: {workflow.slug_confirm: recommend_derived, workflow.audit_to_amend: amend}"
     },
     {
       "file": "scripts/config.py",
-      "line": 257,
+      "line": 326,
       "symbol": "RESULT_MAP",
       "kind": "const",
       "summary": "[Workflow Resolver] Maps (question_id, option-domain-value) -> resolver result-domain (skip|prefill|ask|halt|defer-to-sink)"
     },
     {
       "file": "scripts/config.py",
-      "line": 321,
+      "line": 355,
       "symbol": "_run_startup_guards",
       "kind": "fn",
       "summary": "[Workflow Resolver] Module-load consistency check: asserts QUESTION_IDS <= VALIDATORS and RESULT_MAP references only valid choices; raises SystemExit(2) on violation"
     },
     {
       "file": "scripts/config.py",
-      "line": 630,
+      "line": 664,
       "symbol": "load_config",
       "kind": "fn",
       "summary": "[Loader API] Build resolved config from all 4 layers; returns (values, sources) dicts"
     },
     {
       "file": "scripts/config.py",
-      "line": 743,
+      "line": 823,
       "symbol": "cmd_get",
       "kind": "fn",
       "summary": "[Loader API] Resolve and print single dotted-key value; exits 3 on unknown or meta key"
     },
     {
       "file": "scripts/config.py",
-      "line": 771,
+      "line": 851,
       "symbol": "cmd_get_batch",
       "kind": "fn",
       "summary": "[Loader API] Resolve multiple keys in one process; output JSON object {key: value}; unknown/meta keys -> null + stderr; always exits 0"
     },
     {
       "file": "scripts/config.py",
-      "line": 800,
+      "line": 880,
       "symbol": "cmd_export_env",
       "kind": "fn",
       "summary": "[Loader API] Print export lines for all user knobs (including Z_HARNESS_BRAINSTORM_PERSONAS and Z_HARNESS_PERSONAS_*); emit config_resolved event once per run"
     },
     {
       "file": "scripts/config.py",
-      "line": 818,
+      "line": 898,
       "symbol": "cmd_ensure_defaults",
       "kind": "fn",
       "summary": "[Loader API] Write global config with defaults + inline comments if absent; never overwrites"
     },
     {
       "file": "scripts/config.py",
-      "line": 895,
+      "line": 975,
       "symbol": "cmd_explain",
       "kind": "fn",
       "summary": "[Loader API] Print effective value and source layer for one key"
     },
     {
       "file": "scripts/config.py",
-      "line": 927,
+      "line": 1007,
       "symbol": "cmd_list_question_ids",
       "kind": "fn",
       "summary": "[Workflow Resolver] Print sorted JSON array of registered question IDs; consumed by /z-suggest-memory for routing-preference validation"
     },
     {
       "file": "scripts/config.py",
-      "line": 1376,
+      "line": 1456,
       "symbol": "_load_axiom_store_module",
       "kind": "fn",
       "summary": "[Axiom Layer] Dynamically load scripts/axiom-store.py (hyphen in filename prevents normal import); cached per process; returns None when store absent or fails to import"
     },
     {
       "file": "scripts/config.py",
-      "line": 1414,
+      "line": 1494,
       "symbol": "_load_axiom_matches",
       "kind": "fn",
       "summary": "[Axiom Layer] Load graph-valid approved axioms for a question_id; gated on axioms.enabled; returns [] when disabled, store absent, or graph validation fails"
     },
     {
       "file": "scripts/config.py",
-      "line": 1559,
+      "line": 1593,
       "symbol": "_resolve_memory_matches",
       "kind": "fn",
       "summary": "[Workflow Resolver] Merge memory match list: highest strength wins on agreement; returns (None, 'conflict', sources) when entries disagree"
     },
     {
       "file": "scripts/config.py",
-      "line": 1595,
+      "line": 1629,
       "symbol": "_resolve_config_memory_envelope",
       "kind": "fn",
       "summary": "[Workflow Resolver] Pre-axiom resolution: config + routing-pref memory; returns 7-tuple (envelope, emit_result, emit_source, emit_strength, exit_code, resolved_value, memory_silent)"
     },
     {
       "file": "scripts/config.py",
-      "line": 1826,
+      "line": 1860,
       "symbol": "_build_resolve_envelope",
       "kind": "fn",
       "summary": "[Workflow Resolver] Full resolver: apply axiom layer on top of config+memory envelope; agree/gap-fill/direct-conflict axiom outcomes; returns 5-tuple"
     },
     {
       "file": "scripts/config.py",
-      "line": 1927,
+      "line": 2007,
       "symbol": "cmd_resolve_question",
       "kind": "fn",
       "summary": "[Workflow Resolver] Consult 4-layer config + memory + axioms + overnight overrides; return JSON {result, default, source, rule_id, strength, reason, sources[]}; stdout reserved for JSON"
     },
     {
       "file": "scripts/config.py",
-      "line": 2094,
+      "line": 2264,
       "symbol": "cmd_check_no_ask",
       "kind": "fn",
-      "summary": "[Workflow Resolver] Lightweight overnight-gate checker; returns {result: halt|proceed|unhandled_gate, question_id, rule_id}; policy mode aborts loud on registered gate not covered by frozen policy"
+      "summary": "[Workflow Resolver] Overnight-gate checker with cost-gate delegation path (--range-high/--severity); returns {result: halt|proceed|auto_proceed|unhandled_gate, question_id, rule_id}; always exits 0"
     },
     {
       "file": "scripts/config.py",
-      "line": 2323,
+      "line": 2533,
       "symbol": "cmd_set",
       "kind": "fn",
       "summary": "[Workflow Resolver] Atomically write a TOML key to global or project config via tmp+rename; validates against VALIDATORS before writing; exit 2 on invalid value; exit 0 silently on success"
     },
     {
       "file": "scripts/config.py",
-      "line": 2414,
+      "line": 2624,
       "symbol": "ENV_ONLY_KNOBS",
       "kind": "const",
       "summary": "[Loader API] List of env-only knob names (Z_HARNESS_NO_ASK, Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE, Z_HARNESS_ASK_ALL, etc.) surfaced by inspect-all; not settable via TOML"
     },
     {
       "file": "scripts/config.py",
-      "line": 2450,
+      "line": 2660,
       "symbol": "cmd_inspect_all",
       "kind": "fn",
-      "summary": "[Loader API] Print all config knobs with value/source/persistence_class; covers DEFAULTS keys (incl. brainstorm.*, personas.*) + QUESTION_IDS + ENV_ONLY_KNOBS; --json for machine-parseable output"
+      "summary": "[Loader API] Print all config knobs with value/source/persistence_class; covers DEFAULTS keys (incl. brainstorm.*, personas.*, cost.*) + QUESTION_IDS + ENV_ONLY_KNOBS; --json for machine-parseable output"
     },
     {
       "file": "scripts/config.py",
-      "line": 2595,
+      "line": 2805,
       "symbol": "cmd_should_notify",
       "kind": "fn",
       "summary": "[Loader API] Print yes|no for a given event kind; always exits 0; exits 2 on unknown event. Valid kinds: approval, phase_end, error"
     },
     {
       "file": "scripts/config.py",
-      "line": 2662,
+      "line": 2872,
       "symbol": "cmd_migrate",
       "kind": "fn",
       "summary": "[Loader API] Rewrite old provider names (codex, gemini, claude) in roles.*.runtime to -cli suffixed form; applied to global + project layers; idempotent; exits 4 on I/O error"
@@ -198,11 +197,11 @@
       "line": 1,
       "symbol": "propose-prefs",
       "kind": "module",
-      "summary": "[Workflow Resolver] Walk metrics.jsonl for repeated command-pair patterns; emit JSON proposal if threshold met; never writes \u2014 caller owns write"
+      "summary": "[Workflow Resolver] Walk metrics.jsonl for repeated command-pair patterns; emit JSON proposal if threshold met; never writes — caller owns write"
     }
   ],
   "depends_on": ["scripts"],
-  "consumed_by": ["commands", "skills", "followup-sink"],
+  "consumed_by": ["commands", "skills", "followup-sink", "cost-estimation"],
   "invariants": [
     "[Loader API] schema_version must equal 1 (else exit 2)",
     "[Loader API] ensure-defaults never writes repo-local; only writes the global user path",
@@ -235,12 +234,15 @@
     "[experiment] experiment.persona_rotation valid values: true | false; default true; env Z_HARNESS_EXPERIMENT_PERSONA_ROTATION",
     "[experiment] experiment.control_every_n valid values: positive integer; default 5; env Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N",
     "[experiment] experiment.persona_rotation = false is a complete no-op: no draw events, no state files, no PERSONA_PREFIX, no persona_attempt_outcome",
+    "[cost] cost.token_budget valid values: positive int or null; default null; env Z_HARNESS_COST_TOKEN_BUDGET",
+    "[cost] cost.token_budget=null means no budget; check-no-ask with --severity hard under NO_ASK=halt halts with rule_id: cost_budget_missing",
     "[Workflow Resolver] workflow.audit_to_amend valid values: ask | amend | stop; default ask",
     "[Workflow Resolver] workflow.slug_confirm valid values: ask | auto_accept | recommend_derived; default ask",
     "[Workflow Resolver] workflow.implement_all_proceed valid values: ask | auto_resume | halt; default ask",
     "[Workflow Resolver] workflow.review_all_proceed valid values: ask | proceed | halt; default ask",
     "[Workflow Resolver] workflow.plan_decisions_approval valid values: ask | approve | halt; default ask",
     "[Workflow Resolver] workflow.spec_retro_discovery valid values: ask | defer_to_sink_p2; default ask",
+    "[Workflow Resolver] workflow.pre_run_cost_gate valid values: ask | auto_proceed | halt; default ask",
     "resolve-question stdout is reserved exclusively for JSON; all diagnostics route to stderr",
     "Z_HARNESS_ASK_ALL=1 short-circuits resolve-question to always return {result: ask, source: override}",
     "resolve-question exit 0 = valid JSON; exit 2 = bad invocation; exit 3 = unknown question_id; exit 4 = I/O error; exit 5 = config conflict (ASK_ALL=1 + NO_ASK=halt)",
@@ -251,6 +253,7 @@
     "[Overnight gate] Z_HARNESS_ASK_ALL=1 + Z_HARNESS_NO_ASK=halt are mutually exclusive; resolve-question exits 5 on conflict",
     "[Overnight gate] OVERNIGHT_AUTODECIDE_QIDS_DEFAULT = {workflow.slug_confirm: recommend_derived, workflow.audit_to_amend: amend}",
     "[Overnight gate] check-no-ask fails closed: unregistered question_id with NO_ASK=halt -> halt + unknown_ask_blocked event",
+    "[Overnight gate] check-no-ask --severity soft always returns auto_proceed regardless of policy",
     "[followup] followup.default_sink valid values: project | global; default project",
     "[followup] followup.notion_enabled valid values: true | false; default false",
     "[followup] followup.auto_close_low_risk_enabled valid values: true | false; default TRUE (on by default)",
@@ -266,12 +269,14 @@
     "[axioms] axioms.kernel_budget_chars and axioms.extract_min_recurrence must be positive integers; string '0' fails validation (positive means >=1)",
     "[axioms] axiom-store.py is loaded via importlib (not normal import) because the filename has a hyphen; module load failures are silently tolerated",
     "[experiment] Global layer experiment.* violations are soft; repo/env layer violations exit 2 (hard fail)",
+    "[cost] cost.token_budget=null (default) causes check-no-ask to halt with cost_budget_missing under NO_ASK=halt policy; must be explicitly set for overnight cost-gate to auto-proceed",
     "[Loader API] Global config validation is soft (warn + default fallback); repo/env config validation is hard (exit 2)",
     "[Loader API] docs.always_apply=never only suppresses doc-fetcher in light flows (/z-do); heavy flows always dispatch doc-fetcher regardless",
     "[Loader API] cmd_set exits 0 silently on success — no stdout output; do not parse stdout from cmd_set",
     "[Loader API] Valid event kinds for should-notify: approval, phase_end, error only. Passing run_complete exits 2; guard with || true if needed",
     "[Loader API] get-batch always exits 0 unlike get which exits 3 on unknown keys — callers must check for null values in JSON output",
     "[Workflow Resolver] workflow.slug_confirm value domain (ask/auto_accept/recommend_derived) is NOT the same as the resolver result domain; RESULT_MAP translates between them",
+    "[Workflow Resolver] workflow.pre_run_cost_gate is a registered question_id; overnight allowlist can auto-decide it via Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE",
     "[Overnight gate] Z_HARNESS_ASK_ALL=1 + Z_HARNESS_NO_ASK=halt both set causes exit 5 from resolve-question — not a soft error",
     "[defer-to-sink] result==defer-to-sink must NOT be treated as skip — orchestrator must explicitly call scripts/sink-add.sh",
     "[followup] Array-typed followup keys (path_allowlist, path_denylist, audit_evidence_required_artifacts) are not in VALIDATORS; no enum validation",
@@ -279,6 +284,62 @@
     "[followup] Z_HARNESS_NOTION_TOKEN is env-only; callers must NOT run notion-push.py under set -x (token leaks into logs)",
     "[active-plan] Z_HARNESS_REGISTRY_ENABLED, Z_HARNESS_REGISTRY_STALE_SECS, Z_HARNESS_STRICT_OVERLAP, Z_HARNESS_EXTERNAL_DEFAULT, Z_HARNESS_BASE_DIR are NOT surfaced by inspect-all"
   ],
+  "workflow_section": {
+    "keys": {
+      "workflow.audit_to_amend": {
+        "type": "string",
+        "default": "ask",
+        "valid_values": ["ask", "amend", "stop"],
+        "env": "Z_HARNESS_WORKFLOW_AUDIT_TO_AMEND",
+        "callsites": ["commands/z-audit-plan.md:183", "commands/z-audit-plan-style.md:398"],
+        "description": "Controls Phase 5 AskUserQuestion in /z-audit-plan and /z-audit-plan-style. ask=always prompt; amend=auto-proceed as amend; stop=auto-stop"
+      },
+      "workflow.slug_confirm": {
+        "type": "string",
+        "default": "ask",
+        "valid_values": ["ask", "auto_accept", "recommend_derived"],
+        "env": "Z_HARNESS_WORKFLOW_SLUG_CONFIRM",
+        "callsites": ["commands/z-plan.md:36", "commands/z-fix.md:32", "commands/z-uplift.md:85", "skills/z-debug/SKILL.md:23", "skills/z-brainstorm/SKILL.md:25", "skills/z-map/SKILL.md:133", "skills/z-plan-light/SKILL.md:19"],
+        "description": "Controls soft non-obvious-slug confirmation at 7 callsites. ask=always prompt; auto_accept=silently accept (resolver returns skip); recommend_derived=pre-select (resolver returns prefill). Collision check always runs unconditionally."
+      },
+      "workflow.implement_all_proceed": {
+        "type": "string",
+        "default": "ask",
+        "valid_values": ["ask", "auto_resume", "halt"],
+        "env": "Z_HARNESS_WORKFLOW_IMPLEMENT_ALL_PROCEED",
+        "description": "Controls halt-resolution gate in /z-implement-all. ask=always prompt; auto_resume=skip prompt; halt=stop unconditionally"
+      },
+      "workflow.review_all_proceed": {
+        "type": "string",
+        "default": "ask",
+        "valid_values": ["ask", "proceed", "halt"],
+        "env": "Z_HARNESS_WORKFLOW_REVIEW_ALL_PROCEED",
+        "description": "Controls Phase 3.7 proceed gate in /z-review-all"
+      },
+      "workflow.plan_decisions_approval": {
+        "type": "string",
+        "default": "ask",
+        "valid_values": ["ask", "approve", "halt"],
+        "env": "Z_HARNESS_WORKFLOW_PLAN_DECISIONS_APPROVAL",
+        "description": "Controls Phase 2.5 decisions-doc approval gate in /z-plan"
+      },
+      "workflow.spec_retro_discovery": {
+        "type": "string",
+        "default": "ask",
+        "valid_values": ["ask", "defer_to_sink_p2"],
+        "env": "Z_HARNESS_WORKFLOW_SPEC_RETRO_DISCOVERY",
+        "description": "Controls how Phase 4 of /z-implement-next handles out-of-current-SPEC discoveries. ask=interactive prompt; defer_to_sink_p2=park as P2 follow-up in project sink"
+      },
+      "workflow.pre_run_cost_gate": {
+        "type": "string",
+        "default": "ask",
+        "valid_values": ["ask", "auto_proceed", "halt"],
+        "env": "Z_HARNESS_WORKFLOW_PRE_RUN_COST_GATE",
+        "callsites": ["scripts/pre-run-cost-gate.sh", "commands/z-research.md", "commands/z-uplift.md", "commands/z-plan-split.md"],
+        "description": "Controls pre-run cost gate for z-research/z-uplift/z-plan-split. ask=prompt; auto_proceed=skip gate; halt=stop unconditionally. Also consumed by check-no-ask --range-high/--severity delegation path."
+      }
+    }
+  },
   "brainstorm_section": {
     "section": "[brainstorm]",
     "description": "Controls persona injection in /z-brainstorm. Back-compat location — do not move to [personas].",
@@ -339,77 +400,6 @@
       }
     }
   },
-  "workflow_section": {
-    "keys": {
-      "workflow.audit_to_amend": {
-        "type": "string",
-        "default": "ask",
-        "valid_values": [
-          "ask",
-          "amend",
-          "stop"
-        ],
-        "env": "Z_HARNESS_WORKFLOW_AUDIT_TO_AMEND",
-        "callsites": ["commands/z-audit-plan.md:183", "commands/z-audit-plan-style.md:398"],
-        "description": "Controls Phase 5 AskUserQuestion in /z-audit-plan and /z-audit-plan-style. ask=always prompt; amend=auto-proceed as amend; stop=auto-stop"
-      },
-      "workflow.slug_confirm": {
-        "type": "string",
-        "default": "ask",
-        "valid_values": [
-          "ask",
-          "auto_accept",
-          "recommend_derived"
-        ],
-        "env": "Z_HARNESS_WORKFLOW_SLUG_CONFIRM",
-        "callsites": ["commands/z-plan.md:36", "commands/z-fix.md:32", "commands/z-uplift.md:85", "skills/z-debug/SKILL.md:23", "skills/z-brainstorm/SKILL.md:25", "skills/z-map/SKILL.md:133", "skills/z-plan-light/SKILL.md:19"],
-        "description": "Controls soft non-obvious-slug confirmation at 7 callsites. ask=always prompt; auto_accept=silently accept (resolver returns skip); recommend_derived=pre-select (resolver returns prefill). Collision check always runs unconditionally."
-      },
-      "workflow.implement_all_proceed": {
-        "type": "string",
-        "default": "ask",
-        "valid_values": [
-          "ask",
-          "auto_resume",
-          "halt"
-        ],
-        "env": "Z_HARNESS_WORKFLOW_IMPLEMENT_ALL_PROCEED",
-        "description": "Controls halt-resolution gate in /z-implement-all. ask=always prompt; auto_resume=skip prompt; halt=stop unconditionally"
-      },
-      "workflow.review_all_proceed": {
-        "type": "string",
-        "default": "ask",
-        "valid_values": [
-          "ask",
-          "proceed",
-          "halt"
-        ],
-        "env": "Z_HARNESS_WORKFLOW_REVIEW_ALL_PROCEED",
-        "description": "Controls Phase 3.7 proceed gate in /z-review-all"
-      },
-      "workflow.plan_decisions_approval": {
-        "type": "string",
-        "default": "ask",
-        "valid_values": [
-          "ask",
-          "approve",
-          "halt"
-        ],
-        "env": "Z_HARNESS_WORKFLOW_PLAN_DECISIONS_APPROVAL",
-        "description": "Controls Phase 2.5 decisions-doc approval gate in /z-plan"
-      },
-      "workflow.spec_retro_discovery": {
-        "type": "string",
-        "default": "ask",
-        "valid_values": [
-          "ask",
-          "defer_to_sink_p2"
-        ],
-        "env": "Z_HARNESS_WORKFLOW_SPEC_RETRO_DISCOVERY",
-        "description": "Controls how Phase 4 of /z-implement-next handles out-of-current-SPEC discoveries. ask=interactive prompt; defer_to_sink_p2=park as P2 follow-up in project sink"
-      }
-    }
-  },
   "axioms_section": {
     "section": "[axioms]",
     "description": "Configuration for the axiom extraction pipeline and axiom resolver layer. Axioms are the lowest-precedence signal in resolve-question.",
@@ -426,6 +416,18 @@
     "keys": {
       "experiment.persona_rotation": {"type": "bool", "default": true, "valid_values": [true, false], "env": "Z_HARNESS_EXPERIMENT_PERSONA_ROTATION", "description": "Master on/off switch for persona rotation in z-implement-all, z-implement-next, z-plan, z-debug. false = complete no-op."},
       "experiment.control_every_n": {"type": "int", "default": 5, "env": "Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N", "description": "Forced-control cadence: every Nth implementer attempt (repo-wide counter in .z-harness/.persona-control-counter) uses boring-anchor."}
+    }
+  },
+  "cost_section": {
+    "section": "[cost]",
+    "description": "Token budget configuration for cost-gate delegation. Used by check-no-ask when invoked with --range-high and --severity.",
+    "keys": {
+      "cost.token_budget": {
+        "type": "int_or_null",
+        "default": null,
+        "env": "Z_HARNESS_COST_TOKEN_BUDGET",
+        "description": "Token budget ceiling. When set, check-no-ask --severity hard compares range_high against this value. null=budget not configured; hard gates under NO_ASK=halt will halt with cost_budget_missing."
+      }
     }
   },
   "followup_namespace": {
@@ -478,21 +480,5 @@
     "Multi-IDE export precheck integration: Cursor/Codex/agy fall back to raw AskUserQuestion in v1",
     "Halt-class bypass (spec_problem, decision_needed): explicitly out of v1"
   ],
-  "memories": [],
-  "brainstorm_section": {
-    "section": "[brainstorm]",
-    "description": "Configuration for persona-diversity behavior in /z-brainstorm. Added alongside experiment.persona_rotation / experiment.control_every_n as the brainstorm-specific gate.",
-    "keys": {
-      "brainstorm.personas": {
-        "type": "bool",
-        "default": true,
-        "valid_values": [
-          true,
-          false
-        ],
-        "env": "Z_HARNESS_BRAINSTORM_PERSONAS",
-        "description": "When true (default), /z-brainstorm injects persona diversity when generating ideas. When false, brainstorm sessions run without persona injection. No-op for non-brainstorm commands."
-      }
-    }
-  }
+  "memories": []
 }

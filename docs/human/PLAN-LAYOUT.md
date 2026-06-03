@@ -1,250 +1,85 @@
-# PLAN-LAYOUT — Plan Directory Layout and Migration Guide
+# Plan Layout Migration
 
-> Last updated: 2026-05-24
+> Last updated: 2026-06-03
+> Covers source: scripts/plan-path.sh, scripts/migrate-plan-layout.sh, scripts/log-event.sh, docs/human/PLAN-LAYOUT.md
 
 ## Overview
 
-Plan output is namespaced under `z-harness/plans/<slug>/`. This is the
-canonical layout since the portable-harness restructure. The legacy path
-(`z-harness/<slug>/`) is supported as a read-only fallback so existing plans
-continue to work without immediate migration.
+All z-harness plan artifacts resolve under an external artifact base directory, returned by `z_harness_base()` in `scripts/plan-path.sh`. The base follows a 5-tier fallback chain: an explicit `Z_HARNESS_BASE_DIR` env var (tier 1, escape hatch), then `$XDG_STATE_HOME/z-harness/<repo-id>` (tier 2), then `$HOME/.local/state/z-harness/<repo-id>` (tier 3), then `<git-common-dir>/z-harness` (tier 4), then `$(pwd)/z-harness` (tier 5, last resort). The external tiers are active by default (`Z_HARNESS_EXTERNAL_DEFAULT` unset equals 1), meaning plans are stored outside the repo worktree and survive a `git clean`. Set `Z_HARNESS_EXTERNAL_DEFAULT=0` to revert to the old in-repo tier-5 behavior.
 
----
+Within the chosen base the directory structure is: `<base>/plans/<slug>/` for plan artifacts, `<base>/active-plans/` for the coordination registry, `<base>/followups/` for the follow-up queue, and `<base>/metrics.jsonl` for the aggregate event log. A `<git-common-dir>/.z-harness-base` anchor file locks tiers 2-5 to a single resolved path (split-brain guard); any mismatch is a hard fatal. Tier-1 explicit `Z_HARNESS_BASE_DIR` bypasses the anchor entirely so CI and benchmark environments can relocate artifacts without conflicting with a developer machine's pre-existing anchor.
 
-## Canonical layout
+## Key entry points
 
-```
-z-harness/
-└── plans/
-    └── <slug>/
-        ├── SPEC.md
-        ├── PLAN.md
-        ├── TASKS.md
-        ├── TESTS.md              (if /z-test was run)
-        ├── BRAINSTORM.md         (if /z-brainstorm was run)
-        ├── RESEARCH.md           (if /z-research was run)
-        ├── archive/
-        │   └── <run-id>/
-        │       └── events.jsonl
-        └── improvements/
-```
+- `scripts/plan-path.sh:9` — `z_harness_repo_id` — stable `<basename>-<8hex>` identifier from `git-common-dir` SHA-256; identical across all worktrees of one repo
+- `scripts/plan-path.sh:52` — `_z_harness_probe_writable` — non-littering writability probe; creates and removes temp tree without side effects
+- `scripts/plan-path.sh:112` — `_z_harness_anchor_write` — atomic tmpfile+rename anchor creation; validates on existing anchor, no-ops on tier-1
+- `scripts/plan-path.sh:178` — `z_harness_base` — 5-tier base resolver with anchor enforcement; source-loop guard via `_Z_HARNESS_RESOLVING_BASE`
+- `scripts/plan-path.sh:331` — `base_dir` — alias for `z_harness_base`; used in diagnostics and stats
+- `scripts/plan-path.sh:337` — `active_plans_dir` — returns `<base>/active-plans`; propagates `z_harness_base` failures
+- `scripts/plan-path.sh:346` — `followups_dir` — returns `<base>/followups`; propagates `z_harness_base` failures
+- `scripts/plan-path.sh:366` — `plan_dir` — `<base>/plans/<slug>` with `Z_HARNESS_PLANS_DIR` override; enforces absolute constraint when `Z_HARNESS_BASE_DIR` is also set
+- `scripts/plan-path.sh:404` — `legacy_plan_dir` — returns `z-harness/<slug>` (flat legacy path)
+- `scripts/plan-path.sh:416` — `legacy_plan_dir_secondary` — returns `z-harness/plans/<slug>` (in-repo plans/ legacy path)
+- `scripts/plan-path.sh:429` — `resolve_plan_path` — dual-read: tries new path first, then `z-harness/plans/<slug>`, then `z-harness/<slug>`; emits deprecation warning (once per parent PID)
+- `scripts/plan-path.sh:473` — `all_plan_slugs` — deduplicated slugs from both new layout and legacy flat under the resolved base
+- `scripts/plan-path.sh:317` — `z_harness_base_override` — validates and returns `Z_HARNESS_BASE_DIR` or empty
+- `scripts/migrate-plan-layout.sh:121` — `canonicalize_path` — resolves paths via Python3 realpath; exits on unresolvable path; prevents self-migration false-negative
+- `scripts/migrate-plan-layout.sh:167` — `detect_live_runs` — queries active-plan registry for `status:running`; exits on liveness query failure
+- `scripts/migrate-plan-layout.sh:299` — `safe_move` — copy -> byte-verify -> mtime-verify -> rm; refuse-on-conflict; idempotent
+- `scripts/migrate-plan-layout.sh:370` — `merge_metrics` — dedup-append of `metrics.jsonl`; idempotent across crash/re-run
+- `scripts/migrate-plan-layout.sh:485` — `migrate_plan_slug` — migrates one slug from both legacy sources to `<base>/plans/<slug>`
+- `scripts/migrate-plan-layout.sh:612` — `migrate_full` — full migration: all plan slugs, archive, metrics, followups, flat TASKS.md, empty-dir cleanup
 
----
+## How it interacts with others
 
-## Z_HARNESS_PLANS_DIR override
+- `active-plan-registry` — `active_plans_dir()` feeds the registry's storage path; `migrate-plan-layout.sh` calls `active-plan-registry.py list --json` for the live-run barrier before any real move
+- `scripts` — `log-event.sh` sources `plan-path.sh` to route events and metrics under the resolved base; source-loop guard (`_Z_HARNESS_RESOLVING_BASE`) prevents infinite recursion when `z_harness_base()` tries to emit `base_resolved`
+- `followup-sink` — `followups_dir()` from plan-path.sh is the canonical path for the follow-up queue; `migrate-plan-layout.sh` skips followups by default (`--with-followups` opts in) to avoid stranding in-flight locks
+- `commands` — every command that constructs plan-relative paths sources or invokes `plan-path.sh` helpers; inline `z-harness/` literals are a DRY violation and fail the command-coverage audit
 
-The plans root directory can be overridden with the `Z_HARNESS_PLANS_DIR`
-environment variable:
+## Edge cases / gotchas
 
-```bash
-Z_HARNESS_PLANS_DIR=/tmp/my-plans /z-plan my-task
-```
+- `Z_HARNESS_BASE_DIR` must be an absolute path. A relative value causes an immediate `exit 1` in `z_harness_base()` and `z_harness_base_override()`.
+- When both `Z_HARNESS_BASE_DIR` and `Z_HARNESS_PLANS_DIR` are set, `Z_HARNESS_PLANS_DIR` must also be absolute, otherwise `plan_dir()` exits 1 to prevent repo-local writes that would defeat the base override guarantee.
+- Tier-1 (`Z_HARNESS_BASE_DIR`) bypasses the anchor entirely — no read, no write, no validate. This is intentional: it is the CI/benchmark escape hatch. The developer's anchor is not touched.
+- The `base_resolved` telemetry event is emitted at most once per process (per-PID stamp file) and only when `Z_HARNESS_RUN_ID` is set and `_Z_HARNESS_RESOLVING_BASE` is not set, preventing recursive log-event.sh invocations.
+- `migrate-plan-layout.sh --dry-run` still runs the live-run barrier check and warns on active runs; the preview is always produced even when a real migration would refuse.
+- `metrics.jsonl` is the only item where a non-empty target does not cause a skip: lines are dedup-appended (crash-safe: source lines already present in the target are not duplicated on re-run).
+- `followups/` migration is opt-in via `--with-followups`. Default behavior is to leave it in place because the follow-up queue lock paths resolve dynamically via `followups_dir()`, so an in-repo followups directory continues to work.
+- `all_plan_slugs()` excludes the infrastructure names `plans`, `archive`, `adhoc`, `followups`, `improvements`, `active-plans`, `metrics.jsonl`, and `bench`.
+- The `--slug NAME` flag is required to migrate a flat `z-harness/TASKS.md` (no-slug layout); without it the file is skipped with a loud warning.
 
-When set, the variable is used verbatim — no normalization or relative
-expansion. This is the recommended way to isolate plans in CI or test
-environments.
+## Memories
 
-Default (variable unset): `z-harness/plans`
+<!-- DO NOT EDIT this section by hand — regenerated from docs/llm/plan-layout-migration.json by doc-updater. Use /z-suggest-memory to add or edit memories. -->
 
----
+_No memories recorded yet._
 
-## Dual-read fallback
-
-All commands try the new path first. If the new path does not exist, they fall
-back to the legacy path and emit a one-line warning:
-
-```
-[plan-path] WARNING: using legacy path z-harness/<slug>/ — run:
-  bash scripts/migrate-plan-layout.sh <slug>
-```
-
-This fallback is read-only: commands never write new artifacts to the legacy
-path. Once a plan has been migrated, the fallback warning disappears.
-
-The `scripts/plan-path.sh` helper exposes two functions used by all commands:
+## Examples
 
 ```bash
-plan_dir <slug>         # echoes ${Z_HARNESS_PLANS_DIR:-z-harness/plans}/<slug>
-legacy_plan_dir <slug>  # echoes z-harness/<slug>
-```
+# Preview full migration without changes
+bash scripts/migrate-plan-layout.sh --dry-run --all
 
----
+# Migrate a single plan slug
+bash scripts/migrate-plan-layout.sh my-feature-slug
 
-## Migrating existing plans
+# Migrate everything including followups
+bash scripts/migrate-plan-layout.sh --all --with-followups
 
-### Single slug
+# Migrate flat TASKS.md (no-slug layout) to a named slug
+bash scripts/migrate-plan-layout.sh --all --slug my-old-plan
 
-```bash
-bash scripts/migrate-plan-layout.sh my-slug
-```
+# Force an external base for CI/benchmark (bypasses anchor)
+Z_HARNESS_BASE_DIR=/tmp/bench-artifacts /z-plan my-task
 
-This moves `z-harness/my-slug/` to `z-harness/plans/my-slug/`. The operation
-is idempotent: if the plan is already at the new path, the script exits with
-a success message and does nothing.
+# Revert to in-repo layout (opt-out of external default)
+Z_HARNESS_EXTERNAL_DEFAULT=0 /z-plan my-task
 
-### All plans at once
+# Query the resolved base directory
+bash scripts/plan-path.sh z_harness_base
 
-```bash
-bash scripts/migrate-plan-layout.sh --all
-```
-
-Scans `z-harness/` for any subdirectory that contains `PLAN.md`, `SPEC.md`,
-or `TASKS.md` at its root and migrates each one.
-
-### Dry run
-
-```bash
-bash scripts/migrate-plan-layout.sh --dry-run my-slug
-bash scripts/migrate-plan-layout.sh --all --dry-run
-```
-
-Prints what would be moved without making any changes. Combine with `--all`
-to preview a bulk migration.
-
-### Safety
-
-- The script refuses to overwrite an existing directory at the new path. If
-  `z-harness/plans/<slug>/` already exists and is non-empty, it exits with an
-  error showing the diff.
-- Nothing inside the moved files is rewritten — path construction is
-  runtime-resolved via `Z_HARNESS_PLANS_DIR`.
-- A `migration_done` event per slug is logged to `<base>/metrics.jsonl`.
-
----
-
-## Summary of affected commands
-
-Every command that constructs plan-relative paths uses `scripts/plan-path.sh`.
-The affected list includes: `z-plan`, `z-plan-light`, `z-plan-split`,
-`z-amend`, `z-implement-all`, `z-implement-next`, `z-debug`, `z-fix`,
-`z-improve`, `z-research`, `z-brainstorm`, `z-audit`, `z-test`,
-`z-maintain-docs`, `z-mr-review`, `z-style-init`, `z-stats`, `z-review-all`,
-`z-do`, `z-skill-fix`, `z-init-docs`.
-
-Scripts that also respect `Z_HARNESS_PLANS_DIR`: `scripts/log-event.sh`,
-`scripts/log-phase.sh`.
-
----
-
----
-
-## Command-coverage checklist (Phase-D flip gate)
-
-> **GATE:** The Phase-D default flip (T015 / `Z_HARNESS_EXTERNAL_DEFAULT=1`) MUST NOT
-> proceed until:
->
-> 1. Every checkbox in this section is checked (confirming all run-creating and
->    run-consuming commands route exclusively through `plan-path.sh` helpers), AND
-> 2. `bash scripts/test_external_base_smoke.sh` passes (hermetic external-base
->    end-to-end verification).
->
-> If either condition is not met, T015 is blocked. Inform the user and stop.
-
-### What "routes through helpers" means
-
-A command routes all paths through `plan-path.sh` helpers when every path it
-constructs for plan artifacts (`TASKS.md`, `SPEC.md`, `archive/`, `active-plans/`,
-`followups/`, etc.) is derived from one of the following functions (never from an
-inline `z-harness/` literal):
-
-| Helper | Returns |
-|--------|---------|
-| `base_dir()` / `z_harness_base()` | Resolved artifact base |
-| `plan_dir <slug>` | `<base>/plans/<slug>` |
-| `active_plans_dir()` | `<base>/active-plans` |
-| `followups_dir()` | `<base>/followups` |
-| `all_plan_slugs()` | All slugs (new layout + legacy flat) |
-| `resolve_plan_path <slug>` | Existing plan dir (new → legacy dual-read) |
-
-The audit task (T003) verified each command below against this criterion.
-
-### Run-creating commands
-
-- [x] **`/z-plan`** — slug discovery and plan-dir construction route through
-  `plan_dir()` / `all_plan_slugs()`; register/heartbeat/deregister use
-  `active_plans_dir()`. No inline `z-harness/` literals.
-
-- [x] **`/z-plan-light`** — shares the same helper-routed plumbing as `/z-plan`;
-  register/heartbeat/deregister wired to `active_plans_dir()`.
-
-- [x] **`/z-debug`** — plan artifact paths use `plan_dir()`; registry calls use
-  `active_plans_dir()`.
-
-- [x] **`/z-do`** — plan path resolved via `resolve_plan_path()` /
-  `plan_dir()`; registry register/deregister use `active_plans_dir()`.
-
-- [x] **`/z-audit`** — reads plan artifacts via `resolve_plan_path()`;
-  no inline `z-harness/` path construction.
-
-- [x] **`/z-plan-split`** — uses `plan_dir()` for both source and target slugs;
-  register/heartbeat/deregister use `active_plans_dir()`.
-
-### Run-consuming commands
-
-- [x] **`/z-implement-all`** — `PROJECT_SINK` constructed via `followups_dir()`;
-  slug discovery via `all_plan_slugs()`; phase-0 register + scope-extract +
-  overlaps + heartbeat + deregister all use `active_plans_dir()`.
-
-- [x] **`/z-implement-next`** — single-task variant of `/z-implement-all`;
-  same phase-0 register + overlap + heartbeat + deregister wiring.
-
-- [x] **`/z-where`** — read-only query: calls `base_dir()`, `active_plans_dir()`,
-  and `all_plan_slugs()`; no plan artifact writes.
-
-- [x] **`/z-stats`** — always prints resolved base via `base_dir()` + repo-id;
-  one-line active-plan count from `active_plans_dir()`. No inline literals.
-
-### Smoke test gate
-
-Run the hermetic end-to-end verification before flipping:
-
-```bash
-bash scripts/test_external_base_smoke.sh
-```
-
-The test exercises (under a temp external base via `Z_HARNESS_BASE_DIR`):
-
-1. `base_dir()` resolves to the external base (not the in-repo `z-harness/`).
-2. `all_plan_slugs()` discovers both new-layout (`<base>/plans/<slug>/`) and
-   legacy-flat (`<base>/<slug>/`) plans.
-3. `active-plan-registry.py register` lands the record under `<base>/active-plans/`.
-4. Mechanical `**Files:**`-parse fallback → `update-scope` → scope stored in record.
-5. `overlaps` exits 0 with no peers.
-6. `list` / direct read-back confirms the record is correct.
-7. **Nothing is written under the in-repo `z-harness/`** (the durability guarantee).
-8. No anchor pollution at the real repo's `.git/.z-harness-base`.
-
----
-
-## Active-plan registry
-
-The external base also hosts the active-plan coordination registry. See `docs/human/active-plan-registry.md` for the full design reference, including the lockless per-run JSON registry under `<base>/active-plans/`, the scope-extractor integration, and the overlap advisory protocol.
-
----
-
-## Plugin directory layout
-
-The z-harness plugin itself is laid out as follows:
-
-```
-z-harness/
-├── .claude-plugin/
-│   ├── plugin.json
-│   └── marketplace.json
-├── commands/
-│   └── z-*.md
-├── agents/
-│   └── *.md
-├── scripts/
-│   ├── config.py
-│   ├── config.sh
-│   ├── extract-dismissals.py
-│   ├── log-event.sh
-│   ├── log-phase.sh
-│   ├── remote-sandbox-sync.sh
-│   └── version.sh
-├── docs/
-│   ├── human/    ← human-readable reference
-│   └── llm/      ← LLM-tier fast-lookup JSONs
-└── README.md
+# Get the canonical plan directory for a slug
+bash scripts/plan-path.sh plan_dir my-feature-slug
 ```

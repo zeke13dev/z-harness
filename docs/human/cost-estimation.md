@@ -1,6 +1,6 @@
 # Cost Estimation
 
-> Last updated: 2026-06-02
+> Last updated: 2026-06-03
 > Covers source: scripts/estimate-tokens.py, scripts/token-cost-profiles.json, scripts/pre-run-cost-gate.sh, scripts/config.py (workflow.pre_run_cost_gate, cost.token_budget), commands/z-research.md, commands/z-uplift.md, commands/z-plan-split.md, commands/z-brainstorm.md, commands/z-audit.md, commands/z-debug.md
 
 ## Overview
@@ -46,7 +46,7 @@ estimate-tokens.py <command> [--dispatch KEY=N ...] [--metrics PATH]
 }
 ```
 
-`gate` reflects the profile's declared severity (`"hard"` | `"soft"` | `null`). A no-profile command returns a zeroed envelope with `confidence: "low"` and `gate: null`.
+`gate` reflects the profile's declared severity (`"hard"` | `"soft"` | `null`). A no-profile command returns a zeroed envelope with `confidence: "low"`, `range_high: 0`, and `gate: null`.
 
 ### Three estimation tiers
 
@@ -99,13 +99,13 @@ range_low        = static_low + dispatch_add   (never lowered)
 
 - `range`: `[low, high]` integer token estimate forming the static floor/ceiling.
 - `gate`: `"hard"` | `"soft"` | (absent = no gate). Consumed by `pre-run-cost-gate.sh`.
-- `multipliers`: optional map of dispatch key → per-unit token cost. A command passes `--dispatch key=N` to apply `multipliers[key] * N`. Absent key = 0.
+- `multipliers`: optional map of dispatch key to per-unit token cost. A command passes `--dispatch key=N` to apply `multipliers[key] * N`. Absent key = 0.
 
-An unknown command produces a `confidence: "low"` envelope with a zeroed range and `gate: null`; the caller treats this as estimate-unavailable and proceeds.
+An unknown command produces a `confidence: "low"` envelope with `range_high: 0` and `gate: null`; the caller treats this as estimate-unavailable and proceeds.
 
 ## The gate helper: `scripts/pre-run-cost-gate.sh`
 
-`pre-run-cost-gate.sh` is the DRY gate driver called by each gating command. It encapsulates the estimate → resolve-disposition → render-human-block pipeline. It does NOT call `AskUserQuestion` (that's the command's job) and does NOT log events (the caller logs `cost_gate_decision`).
+`pre-run-cost-gate.sh` is the DRY gate driver called by each gating command. It encapsulates the estimate — resolve-disposition — render-human-block pipeline. It does NOT call `AskUserQuestion` (that is the command's job) and does NOT log events (the caller logs `cost_gate_decision`).
 
 ### CLI
 
@@ -125,7 +125,7 @@ A single JSON object (no bare text):
 }
 ```
 
-All diagnostics and warnings go to stderr only.
+All diagnostics and warnings go to stderr only. When the estimator is unavailable the fallback envelope uses `range_high: null` (not `0`).
 
 ### Gate disposition logic
 
@@ -172,10 +172,10 @@ This is NOT added to `OVERNIGHT_AUTODECIDE_QIDS_DEFAULT`; operators must opt in 
 
 Sets the token ceiling used by the overnight/batch gate. When `workflow.pre_run_cost_gate` resolves to `ask` but `Z_HARNESS_NO_ASK=halt` is active, config.py compares `range_high` against this budget:
 
-- `range_high <= budget` → `auto_proceed` (`rule_id: within_budget`)
-- `range_high > budget` → `halt` (`rule_id: cost_over_budget`)
-- budget unset (null) → `halt` (`rule_id: cost_budget_missing`)
-- budget <= 0 (invalid) → `halt` (`rule_id: cost_budget_invalid`)
+- `range_high <= budget` — `auto_proceed` (`rule_id: within_budget`)
+- `range_high > budget` — `halt` (`rule_id: cost_over_budget`)
+- budget unset (null) — `halt` (`rule_id: cost_budget_missing`)
+- budget <= 0 (invalid) — `halt` (`rule_id: cost_budget_invalid`)
 
 TOML key: `cost.token_budget` (under `[cost]` section, default `None`).
 Env var: `Z_HARNESS_COST_TOKEN_BUDGET` (string value is coerced to int).
@@ -189,8 +189,8 @@ This knob is NOT a question_id and does NOT appear in `QUESTION_IDS` or `RESULT_
 | Command | Severity | Gate fires on |
 |---------|----------|---------------|
 | `/z-research` | hard | Always (Phase 0.5, after dispatch decision) |
-| `/z-uplift` | hard | Always (Phase 0) |
-| `/z-plan-split` | hard | Always (Phase 0) |
+| `/z-uplift` | hard | Always (Phase 1.5) |
+| `/z-plan-split` | hard | Always (Phase 1.5) |
 | `/z-brainstorm` | soft | HEAVY classification path only |
 | `/z-audit` | soft | HEAVY classification path only |
 | `/z-debug` | soft | Always (Phase 0) |
@@ -245,13 +245,22 @@ The empirical tier reads the same `metrics.jsonl` that `z-stats` uses. Each run 
 
 The `cost_gate_decision` events form a calibration record: `estimated_tokens` vs actual run cost (sum of child token events in the same parent-run bucket) can be compared post-run to assess profile accuracy.
 
+## How it interacts with others
+
+- `config` — `_resolve_cost_gate` in config.py is the single authority for cost-gate disposition; pre-run-cost-gate.sh delegates to it via `check-no-ask`; `cost.token_budget` and `workflow.pre_run_cost_gate` are both defined in config.py DEFAULTS
+- `scripts` — estimate-tokens.py and pre-run-cost-gate.sh live in scripts/; they share no state beyond the gate helper invoking the estimator as a subprocess
+- `commands` — six commands (z-research, z-uplift, z-plan-split, z-brainstorm, z-audit, z-debug) call pre-run-cost-gate.sh and own AskUser + cost_gate_decision event logging
+- `skills` — skills mirror the command gate invocations for their respective workflows
+
 ## Edge cases / gotchas
 
-- `cost.token_budget` string env values (e.g. `Z_HARNESS_COST_TOKEN_BUDGET="5000000"`) are coerced to int by `_COERCERS`. If the coercion fails, the validator rejects the value at the repo/env layer (hard exit 2).
+- `cost.token_budget` string env values (e.g. `Z_HARNESS_COST_TOKEN_BUDGET="5000000"`) are coerced to int by `_COERCERS`. If coercion fails, config.py exits 2 (hard fail, not soft warn).
 - `workflow.pre_run_cost_gate = halt` in TOML will halt ALL hard-gate commands unconditionally, including interactive sessions. Use only for CI or specialized environments.
 - `--range-high` missing (estimator unavailable) causes the cost-gate delegation path to return `ask` in interactive mode and `halt` in overnight mode (`rule_id: cost_estimate_missing`). It never silently auto-proceeds.
 - `budget <= 0` is invalid config (validator should catch it at write time); the `within_budget` comparison also guards against it with `rule_id: cost_budget_invalid`.
+- The no-profile envelope produced by `_no_profile_envelope()` returns `range_high: 0`; the gate fallback envelope (when the estimator binary is unavailable) returns `range_high: null`. These are distinct cases.
 - The `brainstorm` multiplier in the z-research profile assumes a non-HEAVY brainstorm sub-run. A HEAVY brainstorm sub-run has a higher cost; there is no per-invocation budget override (change-dispatch is the lever).
 - The empirical tier uses `parent_command` or `command` field on events for attribution. Legacy events without these fields fall back to kind-inference via `_KIND_TO_COMMAND`. Both `run_start` and `run_end` carry a `command` field (stamped by Phase-7 hardening) so a tail window that scrolled past `run_start` can still attribute via `run_end`.
 - Soft gates fire only on the HEAVY classification path for `/z-brainstorm` and `/z-audit`. LIGHT/MEDIUM runs skip the gate entirely.
 - The `cost_gate_decision` event replaces the legacy `research_cost_gate_decision` event for `/z-research`. Do not emit both.
+- `_KIND_TO_COMMAND` maps generic `run_start`/`run_end` to `z-plan` as a best-effort default for legacy pre-T001 events; if pre-T001 z-research events appear in the tail window, attribution will be wrong for those runs only.

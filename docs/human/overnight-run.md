@@ -1,6 +1,6 @@
 # overnight-run
 
-> Last updated: 2026-06-01
+> Last updated: 2026-06-03
 > Covers source: commands/z-overnight.md, scripts/run-status.sh, scripts/normalize-task-state.sh, scripts/overnight-preflight.sh, scripts/config.py, scripts/bench-autonomy-check.sh, docs/human/overnight-run.md
 
 ## Overview
@@ -74,7 +74,7 @@ The gate logic lives entirely in `scripts/config.py`. Key constants and function
 | `_apply_overnight_overrides` | `fn` | Post-processes the resolver envelope when `Z_HARNESS_NO_ASK=halt`; routes to allowlist hit, halt, or no-op |
 | `_is_policy_mode` | `fn` | Returns `True` when `Z_HARNESS_NO_ASK=halt` AND either `Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE` or `Z_HARNESS_OVERNIGHT_AUTODECIDE` is non-empty (a frozen policy is active) |
 | `_emit_unhandled_gate` | `fn` | Emits an `unhandled_gate` event for a registered gate that is reachable under a frozen policy but not covered by it |
-| `cmd_check_no_ask` | `fn` | `check-no-ask --question-id <id>`: lightweight halt/proceed/unhandled_gate answer for non-resolver gate callsites |
+| `cmd_check_no_ask` | `fn` | `check-no-ask --question-id <id> [--range-high N] [--severity hard\|soft]`: lightweight halt/proceed/unhandled_gate answer for non-resolver gate callsites; `--range-high`/`--severity` flags activate the budget-aware `_resolve_cost_gate` path for cost gates |
 | `_parse_overnight_allowlist` | `fn` | Parses `Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE` (JSON object); merges over `OVERNIGHT_AUTODECIDE_QIDS_DEFAULT` |
 
 The resolver (`cmd_resolve_question`) uses a 4-layer config stack (defaults → global `~/.config/z-harness/config.toml` → repo `.z-harness/config.toml` → env vars) plus memory-based routing preferences read from `docs/llm/*.json`. The overnight override layer sits on top of the resolver and fires only when `Z_HARNESS_NO_ASK=halt`.
@@ -104,11 +104,13 @@ Hard-halt conditions (slug collision, lock corruption, state corruption) are nev
 
 ## Pre-run autonomy gate (`make bench-autonomy-check`)
 
-`scripts/bench-autonomy-check.sh` (invoked via `make bench-autonomy-check`) is a mandatory pre-run gate for unattended policy-mode runs. It must exit 0 before launching a benchmark overnight run. It performs two checks:
+`scripts/bench-autonomy-check.sh` (invoked via `make bench-autonomy-check`) is a mandatory pre-run gate for unattended policy-mode runs. It must exit 0 before launching a benchmark overnight run. It performs three checks:
 
 **Step 1 — Callsite registration audit (lint-askuser --strict):** scans the quick-build hot-path files (`commands/z-plan.md`, `commands/z-implement-all.md`) for `AskUserQuestion` callsites and asserts that each file using `AskUserQuestion` also contains a `resolve-question` or `check-no-ask` call. Unregistered callsites will fail-open (silently block) under `Z_HARNESS_NO_ASK=halt`, violating the policy-mode contract.
 
 **Step 2 — Policy coverage assertion:** loads `z-harness/bench/pier/benchmark-autonomy.yaml` via `zharness_pier.policy.load_policy` and checks that every `workflow.*` pattern found in the hot-path command files (`z-plan.md`, `z-implement-all.md`, `z-implement-next.md`) is present in the policy's `gates` map. If any gate is missing from the policy, the check fails with an actionable error.
+
+**Step 3 — Targeted gate-coverage assertion:** for each question_id in `REQUIRED_IN_POLICY` (currently `["workflow.pre_run_cost_gate"]`), verifies that the gate is registered in `config.py list-question-ids` AND is a key in the policy's `gates:` block. This step requires PyYAML. `workflow.pre_run_cost_gate` was added to `REQUIRED_IN_POLICY` by the token-estimates plan (T010) to ensure benchmark runs are never blocked by an unhandled cost-gate prompt.
 
 Use `--policy <path>` to override the default policy file path.
 
@@ -332,3 +334,35 @@ If a sub-skill's Skill-tool invocation itself fails (exception, timeout), the st
 ### Skill-tool composition over subprocess
 
 Context accumulation risk for step 4+ on large implementations. Deferred to v2.
+
+## Key entry points
+
+- `commands/z-overnight.md:17` — `invocation forms` — Three invocation forms: chain, preset:<name>, and resume <RUN_ID>
+- `commands/z-overnight.md:65` — `Phase 1 Setup` — New-run setup: slug derivation, preflight, lock, AUTODECIDE_EFFECTIVE, state init
+- `commands/z-overnight.md:274` — `Phase 3 per-step loop` — Per-step execution: NO_ASK carve-out, Skill call, C14 archive detection, run-status classification
+- `commands/z-overnight.md:519` — `Phase 4 terminal handling` — Best-effort terminal: state update, morning-report.py, overnight_end, lock release, push-notify
+- `scripts/config.py:1209` — `_apply_overnight_overrides` — Post-processes resolver envelope under Z_HARNESS_NO_ASK=halt
+- `scripts/config.py:2102` — `_is_policy_mode` — Detects frozen-policy mode (fail-closed H4)
+- `scripts/config.py:2264` — `cmd_check_no_ask` — check-no-ask CLI; budget-aware via --range-high/--severity
+- `scripts/overnight-preflight.sh:240` — `cmd_check_collisions` — Phase 0 slug-collision guard
+- `scripts/bench-autonomy-check.sh:1` — `bench-autonomy-check.sh` — 3-step pre-run gate for policy-mode runs
+- `scripts/run-status.sh:1` — `run-status.sh` — classify and last-event subcommands for step-status classification
+- `scripts/normalize-task-state.sh:1` — `normalize-task-state.sh` — resets [~] to [ ] in TASKS.md on halt-from-ask
+
+## How it interacts with others
+
+- `config` — `scripts/config.py` owns the entire gate decision logic (resolve-question, check-no-ask, overnight overrides, policy mode); this concept is the primary consumer of the config concept's overnight knobs
+- `commands` — `/z-overnight` delegates each step to a z-harness sub-skill via the Skill tool; it is itself a command in the commands concept
+- `scripts` — uses log-event.sh, log-phase.sh, plan-path.sh, version.sh, and the morning-report.py script
+- `active-plan-registry` — plan-path.sh (consumed by overnight-preflight.sh and run-status.sh) uses the five-tier base fallback from active-plan-registry to resolve plan dirs
+
+## Edge cases / gotchas
+
+- Fail-OPEN for unregistered AskUserQuestion callsites — only 12 instrumented callsites participate; all others block headless runs silently
+- `unhandled_gate` is distinct from `halt`: it means the frozen policy is misconfigured and the run must be aborted (not just paused)
+- `Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE` must not be set manually; the orchestrator overwrites it during Phase 1 step 6
+- bench-autonomy-check.sh step 3 now checks `workflow.pre_run_cost_gate` explicitly; runs that skip step 3 may silently miss this required gate
+- `cmd_check_no_ask --range-high/--severity` activates a different code path (`_resolve_cost_gate`) from the generic overnight path; passing these flags to a non-cost gate yields undefined behavior
+- `run-status.sh classify --command implement-all` has special logic: clean requires BOTH `implement_end`/`compaction_pause` as last event AND all TASKS.md checkboxes being `[x]` or `[~]`
+- morning-report.py selects the latest overnight run by lexical sort of `*-overnight-*` dirs; if a run produces no archive dir the wrong run may be selected
+

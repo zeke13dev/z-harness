@@ -1,6 +1,6 @@
 {
   "concept": "providers-registry",
-  "last_updated": "2026-06-01",
+  "last_updated": "2026-06-03",
   "covers_spec": "none",
   "source_file": [
     "scripts/resolve-provider.py",
@@ -18,7 +18,6 @@
     {"file": "scripts/resolve-provider.sh", "line": 1, "symbol": "resolve-provider.sh", "kind": "module", "summary": "Thin bash wrapper; single entrypoint for all consultant/reviewer dispatch sites"},
     {"file": "scripts/resolve-provider.py", "line": 503, "symbol": "main", "kind": "fn", "summary": "Loads configs, merges, validates, checks PATH, enforces invariant, prints JSON descriptor or sentinel 'none'"},
     {"file": "scripts/resolve-provider.py", "line": 498, "symbol": "_CONSULT_OFF_ROLES", "kind": "const", "summary": "frozenset of roles that return sentinel 'none' when Z_HARNESS_CONSULT=off: consultant_primary, consultant_secondary, reviewer"},
-    {"file": "scripts/resolve-provider.py", "line": 514, "symbol": "consult_val", "kind": "fn", "summary": "Z_HARNESS_CONSULT=off gate: prints 'none' and exits 0 before config load for _CONSULT_OFF_ROLES"},
     {"file": "scripts/resolve-provider.py", "line": 170, "symbol": "load_configs", "kind": "fn", "summary": "Locates and loads global + repo JSON; validates schema version; runs v1->v2 upgrade"},
     {"file": "scripts/resolve-provider.py", "line": 64, "symbol": "_upgrade_v1_to_v2", "kind": "fn", "summary": "In-memory v1->v2 upgrade: adds model_arg_template/model_env_var/default_model nulls; emits provider_schema_v1_upgraded (memoized per process+path)"},
     {"file": "scripts/resolve-provider.py", "line": 227, "symbol": "merge_with_shadow", "kind": "fn", "summary": "Per-key merge of global + repo configs across providers/roles/aliases with shadow detection"},
@@ -27,14 +26,14 @@
     {"file": "scripts/resolve-provider.py", "line": 293, "symbol": "_emit_alias_used", "kind": "fn", "summary": "Emits provider_alias_used event via log-event.sh (best-effort, non-fatal; memoization in _apply_aliases)"},
     {"file": "scripts/resolve-provider.py", "line": 314, "symbol": "_emit_legacy_roles_used", "kind": "fn", "summary": "Emits legacy_provider_roles_used event when providers.json.roles is the active role-binding path"},
     {"file": "scripts/resolve-provider.py", "line": 422, "symbol": "check_consultant_distinctness", "kind": "fn", "summary": "Invariant: consultant_primary != consultant_secondary; exits 1 on collision; SKIPPED when Z_HARNESS_CONSULT=off"},
-    {"file": "scripts/resolve-provider.py", "line": 443, "symbol": "compose_argv", "kind": "fn", "summary": "Builds full argv from descriptor + effective_model; renders {model} in model_arg_template; raises ValueError if no model"},
+    {"file": "scripts/resolve-provider.py", "line": 443, "symbol": "compose_argv", "kind": "fn", "summary": "Builds full argv from descriptor + effective_model; renders {model} in model_arg_template; raises ValueError if no model; returns args_template immediately when model_arg_template is null (v1 legacy)"},
     {"file": "scripts/resolve-provider.py", "line": 112, "symbol": "_validate_provider_entry", "kind": "fn", "summary": "Validates all required fields for a single provider entry; exits 2 on any field violation"},
-    {"file": "scripts/discover-providers.py", "line": 58, "symbol": "discover", "kind": "fn", "summary": "Probes PATH for known CLIs; returns proposed providers.json dict (never writes)"},
+    {"file": "scripts/discover-providers.py", "line": 58, "symbol": "discover", "kind": "fn", "summary": "Probes PATH for known CLIs; returns proposed v1 providers.json dict (never writes; v1 is auto-upgraded on load)"},
     {"file": "scripts/log-providers.sh", "line": 34, "symbol": "none-sentinel-guard", "kind": "module", "summary": "Detects 'none' sentinel before JSON parse; emits provider_resolution_skipped event; appends role=skipped(consult=off) to summary"},
-    {"file": "runtime/compat.py", "line": 15, "symbol": "resolve_provider", "kind": "fn", "summary": "Python API wrapper around resolve-provider.py for runtime dispatch layer"},
+    {"file": "runtime/compat.py", "line": 15, "symbol": "resolve_provider", "kind": "fn", "summary": "Python API wrapper around resolve-provider.py for runtime dispatch layer (runtime/dispatch/dispatcher.py)"},
     {"file": "runtime/contract/provider.schema.json", "line": 1, "symbol": "ProviderRegistry", "kind": "struct", "summary": "JSON Schema Draft 7 for .z-harness/providers.json; accepts version 1+2; permits kind=cli|sdk; allow_cross_vendor_env field"}
   ],
-  "depends_on": ["scripts", "agents"],
+  "depends_on": ["scripts"],
   "consumed_by": ["commands", "agents", "runtime-dispatch", "personas-and-roles"],
   "invariants": [
     "consultant_primary and consultant_secondary must resolve to distinct provider names (raw roles map values) — resolver exits 1 if they collide. This check is SKIPPED entirely when Z_HARNESS_CONSULT=off.",
@@ -43,10 +42,11 @@
     "Repo-local config overrides user-global config per-key across providers, roles, and aliases sections. Shadowing emits provider_shadowed event and stderr warning, de-duped per parent process.",
     "Schema version field must be 1 or 2; any other value causes exit 2. Version 1 is upgraded in-memory to v2 automatically.",
     "Every provider entry in the merged config is validated on every resolver call, not just the entry being resolved.",
-    "discover-providers.py never writes files — all writes go through /z-providers-discover with explicit user confirmation.",
-    "compose_argv raises ValueError (not sys.exit) when no model can be resolved from effective_model or provider default_model.",
+    "discover-providers.py never writes files and outputs v1 format JSON — all writes go through /z-providers-discover with explicit user confirmation.",
+    "compose_argv raises ValueError (not sys.exit) when no model can be resolved from effective_model or provider default_model. When model_arg_template is null (v1 legacy), returns args_template immediately without model resolution.",
     "providers.json.roles is the legacy fallback for role binding; TOML [roles.<command>.<role>] takes precedence when both exist. Using providers.json.roles emits legacy_provider_roles_used.",
-    ".z-harness/providers.json v2 ships both old names (codex/gemini/claude) and new -cli names (codex-cli/gemini-cli/claude-cli) as first-class provider entries; aliases map provides forward-compat without deleting old entries."
+    ".z-harness/providers.json v2 ships both old names (codex/gemini/claude/cursor/agy) and new -cli names (codex-cli/gemini-cli/claude-cli/cursor-cli/agy-cli) as first-class provider entries; aliases map provides forward-compat without deleting old entries.",
+    "resolve() unconditionally passes is_legacy=True when resolving from the roles section of providers.json, so legacy_provider_roles_used fires for every role lookup through that path regardless of alias involvement."
   ],
   "gotchas": [
     "Z_HARNESS_CONSULT=off bypasses config loading and the distinctness check entirely — setting it is sufficient; no providers.json change needed.",
@@ -58,9 +58,11 @@
     "Role with no bound provider causes immediate halt with actionable error pointing to /z-providers-discover.",
     "CLI not on PATH causes exit 1 even if the config entry is otherwise valid.",
     "_upgrade_v1_to_v2 is memoized per (process, file path) via module-level _v1_upgrade_emitted set — double-emission is prevented when both global and repo configs are v1.",
-    "aliases section IS used by resolve() via _apply_aliases — it is not merely informational. Old alias names are transparently resolved to canonical -cli names; provider_alias_used is emitted once per (process, old-name).",
+    "aliases section IS used by resolve() via _apply_aliases — it is not merely informational. The shipped aliases map covers five entries: codex, gemini, claude, cursor, agy -> their -cli canonical names. Old alias names are transparently resolved; provider_alias_used is emitted once per (process, old-name).",
     "When the roles map in providers.json is the active binding path, both legacy_provider_roles_used AND (if an alias is matched) provider_alias_used are emitted — two distinct events for one resolution.",
-    "_alias_used_emitted memoization set is module-level; alias dedup survives multiple resolve() calls within the same process but resets on new process invocations."
+    "_alias_used_emitted memoization set is module-level; alias dedup survives multiple resolve() calls within the same process but resets on new process invocations.",
+    "cursor-cli and agy-cli are the only shipped providers with non-null model_arg_template (['--model', '{model}']) and a default_model set — all other shipped providers use null model_arg_template (v1 legacy mode).",
+    "discover-providers.py KNOWN_CLIS still uses old v1-style names (codex, gemini, claude, ollama, agy, gpt) and outputs version:1. This is intentional — the v1 output is upgraded transparently on load."
   ],
   "memories": []
 }

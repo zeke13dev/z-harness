@@ -1,9 +1,10 @@
 {
   "concept": "agents",
-  "last_updated": "2026-05-29",
+  "last_updated": "2026-06-03",
   "covers_spec": "none",
   "source_file": [
     "agents/auditor.md",
+    "agents/axiom-extractor.md",
     "agents/bisect-isolator.md",
     "agents/cluster-planner.md",
     "agents/complexity-classifier.md",
@@ -21,9 +22,11 @@
     "agents/resolver.md",
     "agents/review-agent.md",
     "agents/reviewer.md",
+    "agents/scope-extractor.md",
     "agents/scope-probe.md",
     "agents/scope-reconciler-audit.md",
     "agents/scope-reconciler-brainstorm.md",
+    "agents/self-reviewer.md",
     "agents/spec-precheck.md"
   ],
   "confidence": "high",
@@ -34,6 +37,13 @@
       "symbol": "auditor",
       "kind": "module",
       "summary": "Read-only Sonnet single-dimension auditor; writes findings file, returns counts."
+    },
+    {
+      "file": "agents/axiom-extractor.md",
+      "line": 1,
+      "symbol": "axiom-extractor",
+      "kind": "module",
+      "summary": "Sonnet policy-mining agent; wraps axiom-extract.py; proposes ≤5 axiom candidates; never writes store."
     },
     {
       "file": "agents/bisect-isolator.md",
@@ -124,21 +134,21 @@
       "line": 1,
       "symbol": "research-judge",
       "kind": "module",
-      "summary": "Opus final-judge synthesizer for /z-research; reads N adversarial-panel perspectives + MAP.md + BRAINSTORM.md; produces 10-section RESEARCH.md; forbidden from new design recommendations; read-only."
+      "summary": "Opus final-judge synthesizer for /z-research; 10-section RESEARCH.md; forbidden from new design recommendations; read-only."
     },
     {
       "file": "agents/remote-runner.md",
       "line": 1,
       "symbol": "remote-runner",
       "kind": "module",
-      "summary": "Haiku mechanical remote verifier: two-level rsync sandbox (<slug>/base/ warm base + <slug>/<task-id>/ per-task overlay via --link-dest), atomic mkdir-lock + .base-ready marker for concurrent seeding, SLUG/TASK_ID path-traversal validation; read-only DB/log queries; step-7 NEVER-delete guard for base/."
+      "summary": "Haiku mechanical remote verifier: two-level rsync sandbox; atomic mkdir-lock+.base-ready; step-7 NEVER-delete guard for base/."
     },
     {
       "file": "agents/resolver.md",
       "line": 1,
       "symbol": "resolver",
       "kind": "module",
-      "summary": "Reference for workflow question resolver (scripts/config.py cmd_resolve_question); maps question_id to skip|prefill|ask|halt|defer-to-sink; defer-to-sink routes question to sink-add.sh instead of interactive prompt."
+      "summary": "Reference for workflow question resolver (scripts/config.py cmd_resolve_question); maps question_id to skip|prefill|ask|halt|defer-to-sink."
     },
     {
       "file": "agents/review-agent.md",
@@ -152,7 +162,14 @@
       "line": 1,
       "symbol": "reviewer",
       "kind": "module",
-      "summary": "Provider proxy for task correctness/spec review; expected_contract: review-verdict; accepts relevant_docs LLM JSONs; blockers+majors sections + **FOLLOWUPS:** fenced JSON array for minors/nits; parsed by scripts/parse-followups-block.py; orchestrator calls sink-add.sh per entry."
+      "summary": "Provider proxy for task correctness/spec review; expected_contract: review-verdict; FOLLOWUPS: fenced JSON for minors/nits."
+    },
+    {
+      "file": "agents/scope-extractor.md",
+      "line": 1,
+      "symbol": "scope-extractor",
+      "kind": "module",
+      "summary": "Haiku plan-scope extractor; emits JSON array of file changes with explicit|inferred|broad|unknown confidence; seeds active-plan registry."
     },
     {
       "file": "agents/scope-probe.md",
@@ -166,14 +183,21 @@
       "line": 1,
       "symbol": "scope-reconciler-audit",
       "kind": "module",
-      "summary": "Sonnet post-fanout reconciler for HEAVY z-audit runs; dedupes N per-chunk findings, preserves cross-chunk dissent verbatim, elevates systemic findings; never writes to disk."
+      "summary": "Sonnet post-fanout reconciler for HEAVY z-audit runs; dedupes N per-chunk findings, preserves cross-chunk dissent verbatim; never writes to disk."
     },
     {
       "file": "agents/scope-reconciler-brainstorm.md",
       "line": 1,
       "symbol": "scope-reconciler-brainstorm",
       "kind": "module",
-      "summary": "Sonnet post-fanout reconciler for HEAVY z-brainstorm runs; concatenates N per-chunk BRAINSTORM.md files verbatim, runs cross-chunk anti-bias check; sets chosen_framing: pending for user selection."
+      "summary": "Sonnet post-fanout reconciler for HEAVY z-brainstorm runs; concatenates N per-chunk BRAINSTORM.md files; anti-bias check; chosen_framing: pending."
+    },
+    {
+      "file": "agents/self-reviewer.md",
+      "line": 1,
+      "symbol": "self-reviewer",
+      "kind": "module",
+      "summary": "Opus self-review fallback when Z_HARNESS_CONSULT=off; expected_contract: review-verdict; no external CLI call."
     },
     {
       "file": "agents/spec-precheck.md",
@@ -190,7 +214,9 @@
   ],
   "consumed_by": [
     "commands",
-    "skills"
+    "skills",
+    "active-plan-registry",
+    "axioms"
   ],
   "invariants": [
     "Each agent is spawned fresh per invocation; callers pass all required context.",
@@ -198,13 +224,12 @@
     "consultant-primary, consultant-secondary, and reviewer resolve providers via scripts/resolve-provider.sh.",
     "Proxy agents emit consult_start before provider calls so liveness checks can detect hangs.",
     "consultant-primary and consultant-secondary declare expected_contract: freeform; binding a persona with contract: review-verdict or contract: strict-json to either role fails resolve-persona.py validate.",
-    "reviewer declares expected_contract: review-verdict; binding a persona with contract: freeform to this role fails resolve-persona.py validate.",
+    "reviewer and self-reviewer declare expected_contract: review-verdict; binding a persona with contract: freeform to either role fails resolve-persona.py validate.",
     "Personas that omit the contract field are treated as 'any' and pass all role contract checks.",
     "doc-updater must preserve existing memories[] verbatim and never author memories.",
     "external-lookup must follow docs/llm/lookup-contract.json and refuse mutating commands.",
     "planning-router is read-only and advisory; malformed or unsafe routing returns ask_user/bad_input.",
-    "planning-router primary routes: /z-map for terrain_uncertain topics; /z-research for approach synthesis when has_map_and_brainstorm is true and approach_uncertain is true.",
-    "planning-router reason code needs_research is a deprecated alias for needs_terrain_map (routes to /z-map); callers should emit needs_terrain_map instead; deprecated alias is valid for one version cycle only.",
+    "planning-router reason code needs_research is a deprecated alias for needs_terrain_map (routes to /z-map); callers should emit needs_terrain_map instead.",
     "mr-reviewer reviews quality, not correctness, and returns JSON for the orchestrator to write.",
     "plan-style-reviewer reviews design-quality of plan artifacts, not correctness; never finds logic/correctness/race-condition bugs.",
     "plan-style-reviewer never writes PLAN_STYLE_AUDIT.md; orchestrator does.",
@@ -220,12 +245,12 @@
     "review-agent parent_command=debug: debug_md_path is primary artifact; spec_path is supplementary.",
     "bisect-isolator always runs git bisect reset in a finally-block trap; never leaves repo in bisect-in-progress state.",
     "bisect-isolator runs a sanity gate verifying the repro inverts across the range before git bisect run.",
-    "bisect-isolator never interprets the offending commit; returns SHA+diff only; why-it-broke analysis belongs to caller.",
+    "bisect-isolator never interprets the offending commit; returns SHA+diff only.",
     "implementer's cross_task_notes target task must exist in the same TASKS.md; absent target is logged and silently skipped.",
     "spec-precheck and reviewer both consume relevant_docs LLM JSONs as a second source of truth alongside SPEC.",
-    "scope-probe is advisory only; the orchestrator owns the final dispatch decision, including whether to treat a low-confidence classification as MEDIUM.",
+    "scope-probe is advisory only; the orchestrator owns the final dispatch decision.",
     "scope-probe never invents axis names; only names from the caller-supplied axis_taxonomy or the special value 'none' on refusal are valid returns.",
-    "scope-probe archive file is written before the live file (archive-first invariant); if archive write fails, Phase 0 aborts and the host command proceeds as MEDIUM.",
+    "scope-probe archive file is written before the live file (archive-first invariant); if archive write fails, Phase 0 aborts.",
     "scope-reconciler-audit never smooths over chunk dissent; both conflicting findings appear verbatim in the Cross-chunk dissent section.",
     "scope-reconciler-audit never writes to disk; it returns REPORT.md content and CHUNK_ARTIFACTS for the orchestrator to persist.",
     "scope-reconciler-brainstorm always sets chosen_framing: pending; any other value is a spec violation.",
@@ -236,20 +261,28 @@
     "research-judge fires panel_degraded mode when panel_perspective_count < 3; synthesis continues with available perspectives.",
     "research-judge returns STATUS: unable_to_complete when perspectives array is empty or MAP.md/BRAINSTORM.md is missing.",
     "reviewer **FOLLOWUPS:** block is optional; when present it MUST appear after ### Major and MUST contain exactly one fenced json array.",
-    "reviewer minors and nits MUST be placed in **FOLLOWUPS:** (P3/P2) and are never silently dropped from the reviewer return.",
+    "reviewer minors and nits MUST be placed in **FOLLOWUPS:** (P3/P2) and are never silently dropped.",
     "reviewer **FOLLOWUPS:** block is parsed by scripts/parse-followups-block.py; parse failure logs followup_block_parse_failed and never crashes the reviewer return path.",
+    "self-reviewer has the same **FOLLOWUPS:** contract as reviewer and emits the same review_start/review_end telemetry.",
+    "self-reviewer MUST NOT call resolve-provider.sh or any external CLI; it reviews the diff directly.",
     "resolver result domain: skip|prefill|ask|halt|defer-to-sink; all five are valid results from scripts/config.py cmd_resolve_question.",
     "resolver defer-to-sink: orchestrator must NOT prompt the user; must call scripts/sink-add.sh and log followup_deferred_from_resolver; must fall back to ask if sink-add.sh exits non-zero.",
     "resolver defer-to-sink is a result-domain value only; it does not appear in VALIDATORS or QUESTION_IDS[id][choices].",
-    "resolver defer-to-sink is never applied by the overnight gate (_apply_overnight_overrides); it is a config-layer result only."
+    "resolver defer-to-sink is never applied by the overnight gate (_apply_overnight_overrides); it is a config-layer result only.",
+    "scope-extractor output is consumed exclusively by scripts/active-plan-registry.py update-scope; the agent emits only valid JSON to stdout.",
+    "scope-extractor never emits absolute paths; all path values in its output are repo-relative.",
+    "axiom-extractor proposes only; it never writes the axiom store (candidates/, approved/, rejected/) and never approves a candidate."
   ],
   "gotchas": [
-    "reviewer emits **FOLLOWUPS:** fenced JSON array block after ### Major; minors/nits MUST go here (never silently dropped). Orchestrator parses via scripts/parse-followups-block.py and calls scripts/sink-add.sh per entry. Parse failure logs followup_block_parse_failed and continues. Required per-entry fields: priority, name, recommended_command, cited_paths. Optional: recommended_command_safe_to_retry (default false), auto_close_eligible (default false; reviewer on producer-class allowlist may set true).",
-    "resolver new result class defer-to-sink (T017): orchestrator must NOT invoke AskUserQuestion; must call scripts/sink-add.sh with question context as entry body, log followup_deferred_from_resolver, then proceed. If sink-add.sh exits non-zero, fall back to ask — question cannot be silently dropped.",
+    "reviewer and self-reviewer emit **FOLLOWUPS:** fenced JSON array block after ### Major; minors/nits MUST go here. Orchestrator parses via scripts/parse-followups-block.py and calls scripts/sink-add.sh per entry. Parse failure logs followup_block_parse_failed and continues. Required per-entry fields: priority, name, recommended_command, cited_paths. Optional: recommended_command_safe_to_retry (default false), auto_close_eligible (default false; reviewer on producer-class allowlist may set true).",
+    "self-reviewer is invoked when Z_HARNESS_CONSULT=off; it is Opus-model and reads the diff directly without any provider CLI. It still emits review_start/review_end telemetry in the same shape as reviewer.",
+    "scope-extractor is best-effort non-fatal: if seeding fails, active-plan-registry.py self-logs registry_error and the run continues. Overlap detection for the current run may miss some files.",
+    "axiom-extractor returns a fenced JSON array; no auto-approve happens. Candidates must go through /z-axiom-approve before entering the axiom store.",
+    "resolver new result class defer-to-sink: orchestrator must NOT invoke AskUserQuestion; must call scripts/sink-add.sh with question context as entry body, log followup_deferred_from_resolver, then proceed. If sink-add.sh exits non-zero, fall back to ask — question cannot be silently dropped.",
     "codex-consultant.md, gemini-consultant.md, and codex-reviewer.md are stale names.",
     "check-timeout.sh is sourced by proxy agents; missing timeout/gtimeout leaves TIMEOUT_CMD empty.",
     "planning-router must not infer missing quantitative signals from filesystem exploration.",
-    "planning-router needs_research reason code is a deprecated alias for needs_terrain_map — callers using needs_research should migrate to needs_terrain_map in the next version cycle.",
+    "planning-router needs_research reason code is a deprecated alias for needs_terrain_map — callers should migrate to needs_terrain_map.",
     "doc-updater dry-run returns proposed docs; /z-maintain-docs decides whether to write them.",
     "external-lookup's canonical contract is lookup-contract.json, not only inline agent prose.",
     "remote-runner refuses DB writes, real-money operations, destructive ops, and interpretive work.",
@@ -259,7 +292,7 @@
     "If remote-sandbox-sync.sh dies between .base.lock acquisition and release, the lock persists and all future seeding invocations timeout after 600 s. Recovery: ssh <remote-host> 'rmdir ~/dev/qt-bot-sandbox/<slug>/.base.lock'.",
     "On seed rsync failure, remote-sandbox-sync.sh cleans up the partial <slug>/base/ dir before releasing the lock so losers do not unblock onto a corrupt base.",
     "mr-reviewer never writes MR-REVIEW.md; callers parse its fenced JSON response.",
-    "mr-reviewer Opus sub-pass fires only when mode=abstraction-only AND deep=true; otherwise Grep+definition check is sufficient.",
+    "mr-reviewer Opus sub-pass fires only when mode=abstraction-only AND deep=true.",
     "plan-style-reviewer: dismissed_signatures.json suppresses previously dismissed findings via Jaccard >= 0.6 match.",
     "plan-style-reviewer: voices that return malformed JSON are logged as plan_style_voice_failed and skipped (no retry).",
     "spec-precheck validates factual SPEC references, not design quality or runtime semantics.",
@@ -284,9 +317,11 @@
     "research-judge fires panel_degraded mode when panel_perspective_count < 3; synthesis continues with available perspectives.",
     "research-judge self-check (Step 7) is mandatory on every invocation; research_judge_temptation field is always populated.",
     "research-judge produces exactly 10 sections in fixed order; no additional top-level sections permitted.",
-    "expected_contract mismatch: binding a persona with contract: review-verdict or contract: strict-json to consultant_primary or consultant_secondary roles fails resolve-persona.py validate with an error naming persona/role/declared/expected.",
-    "expected_contract mismatch: binding a persona with contract: freeform to the reviewer role fails resolve-persona.py validate; reviewer requires structured verdict output.",
-    "Personas that omit the contract field pass all role contract checks — contract is optional in persona definitions."
+    "expected_contract mismatch: binding a persona with contract: review-verdict or contract: strict-json to consultant_primary or consultant_secondary roles fails resolve-persona.py validate.",
+    "expected_contract mismatch: binding a persona with contract: freeform to reviewer or self-reviewer role fails resolve-persona.py validate.",
+    "Personas that omit the contract field pass all role contract checks — contract is optional in persona definitions.",
+    "scope-extractor: brace-expanded paths like commands/{z-plan,z-plan-light}.md are expanded to explicit entries; paths with * or ? are emitted as broad confidence.",
+    "axiom-extractor: --historical mode is CPU/token-heavy; only invoke when the caller explicitly passed mode: historical."
   ],
   "memories": []
 }

@@ -1,6 +1,6 @@
 {
   "concept": "skills",
-  "last_updated": "2026-06-02",
+  "last_updated": "2026-06-03",
   "covers_spec": "none",
   "source_file": [
     "skills/z-amend/SKILL.md",
@@ -53,7 +53,7 @@
       "line": 1,
       "symbol": "z-debug",
       "kind": "module",
-      "summary": "Unknown-root-cause debug flow; Phase 2.5 conditional bisect fast-path; Phase 3a/3b use fixed 5-panel (agy/claude-sonnet/grok/composer/codex) when experiment.persona_rotation=true; personas.critique_panel gates per-arm persona draws; falls back to 2-consultant when false; hypothesis rounds; posterior table; MR-review on fix; post-mortem; Phase 10 memory-review (shipped branch only); slug-confirm resolver (halt→debug_halt) in Setup; active-plan registration in Setup after debug_run_start; FINALIZE_STATUS rule covers all exit paths."
+      "summary": "Unknown-root-cause debug flow; Phase 2.5 conditional bisect fast-path; Phase 3a/3b use fixed 5-panel (agy/claude-sonnet/grok/composer/codex) when experiment.persona_rotation=true; personas.critique_panel gates per-arm persona draws; falls back to 2-consultant when false; hypothesis rounds; posterior table; MR-review on fix; post-mortem; Phase 10 memory-review (shipped branch only) — also dispatches axiom-extractor in parallel when run-memory-review.sh returns AXIOM_READY; slug-confirm resolver (halt→debug_halt) in Setup; kernel path resolved once at Setup via resolve-kernel.sh; active-plan registration in Setup after debug_run_start; FINALIZE_STATUS rule covers all exit paths."
     },
     {
       "file": "skills/z-do/SKILL.md",
@@ -67,14 +67,14 @@
       "line": 1,
       "symbol": "z-implement-all",
       "kind": "module",
-      "summary": "Full task queue orchestration; --tasks fast path; tree gates; batching; caps; Phase 0.0 registration inside Setup after slug-discovery + tree-validation bind $BASE; scope-extractor seeds scope; graduated overlap policy (OVL_RC 0/10/20/other); heartbeat at each task-dispatch boundary; FINALIZE_STATUS rule; Phase 9 memory-review; deduped push-notify via .notify-dedup-session."
+      "summary": "Full task queue orchestration; --tasks fast path; tree gates; batching; caps; Phase 0.0 registration inside Setup after slug-discovery + tree-validation bind $BASE; kernel path resolved once at Setup via resolve-kernel.sh; scope-extractor seeds scope; graduated overlap policy (OVL_RC 0/10/20/other); heartbeat at each task-dispatch boundary; FINALIZE_STATUS rule; Phase 9 memory-review; deduped push-notify via .notify-dedup-session."
     },
     {
       "file": "skills/z-implement-next/SKILL.md",
       "line": 1,
       "symbol": "z-implement-next",
       "kind": "module",
-      "summary": "Single-task implementation; model from **Complexity:** stamp; execution order: Phase 0.2 slug-discovery \u2192 Phase 0.0 register \u2192 Phase 0.1 lock-check; heartbeat at task-dispatch boundary; reviewer gate; no auto-retry."
+      "summary": "Single-task implementation; model from **Complexity:** stamp; execution order: Phase 0.2 slug-discovery → Phase 0.0 register → Phase 0.1 lock-check; heartbeat at task-dispatch boundary; reviewer gate; no auto-retry."
     },
     {
       "file": "skills/z-improve/SKILL.md",
@@ -95,21 +95,21 @@
       "line": 1,
       "symbol": "z-maintain-docs",
       "kind": "module",
-      "summary": "Refresh stale docs; dedup_tags:true; preserve memories; pre-audit compaction state; tags; flat-memory regen."
+      "summary": "Default=apply: writes clean concepts without prompting; --dry-run to preview; only flagged concepts (memories_lost or audit rejected/needs-review) require per-concept AskUserQuestion. Phase 3 stale-memory scan (keep/edit/delete per entry). TAG_COLLISIONS from doc-updater surfaced as advisory. dedup_tags:true always. MEMORIES-FLAT regen after writes."
     },
     {
       "file": "skills/z-map/SKILL.md",
       "line": 1,
       "symbol": "z-map",
       "kind": "module",
-      "summary": "Terrain-mapping; cost gate (Phase 0); slug+artifact collision handling (Phase 0.5, after cost gate); --slug flag; doc-fetcher-first; up to 3 Explores tracked dispatched vs succeeded; bundled critique; no-recommendation invariant; slug-confirm resolver (halt\u2192map_halt) in Phase 0.5. Produces MAP.md."
+      "summary": "Terrain-mapping; cost gate (Phase 0); slug+artifact collision handling (Phase 0.5, after cost gate); --slug flag; doc-fetcher-first; up to 3 Explores tracked dispatched vs succeeded; bundled critique; no-recommendation invariant; slug-confirm resolver (halt→map_halt) in Phase 0.5. Produces MAP.md."
     },
     {
       "file": "skills/z-plan-light/SKILL.md",
       "line": 1,
       "symbol": "z-plan-light",
       "kind": "module",
-      "summary": "Small-fix planner; FIX.md only; Phase 3 gains measured advisory arm (personas.consult_eval, default OFF): one consultant persona drawn, dispatched in parallel with neutral arms, output captured as persona_advisory_recommendation telemetry only (never merged into Phase 4 synthesis, neutral-authority contract load-bearing); Phase 8 gains advisory eval-reviewer arm (personas.review_eval, default ON) per shared snippet in commands/z-implement-all.md; base codex reviewer remains authoritative gate; inline implementation; reviewer gate; active-plan registration in Setup after light_run_start; FINALIZE_STATUS rule; slug-confirm resolver (halt→light_halt) in Setup."
+      "summary": "Small-fix planner; FIX.md only; Phase 3 gains measured advisory arm (personas.consult_eval, default OFF): one consultant persona drawn (selection_source=random_role_pool), dispatched in parallel with neutral arms, output captured as persona_advisory_recommendation telemetry only (never merged into Phase 4 synthesis, neutral-authority contract load-bearing); Phase 8 gains advisory eval-reviewer arm (personas.review_eval, default ON, selection_source=random_role_pool) per shared snippet in commands/z-implement-all.md; base codex reviewer remains authoritative gate; inline implementation; reviewer gate; active-plan registration in Setup after light_run_start; FINALIZE_STATUS rule; slug-confirm resolver (halt→light_halt) in Setup."
     },
     {
       "file": "skills/z-plan-split/SKILL.md",
@@ -123,21 +123,21 @@
       "line": 1,
       "symbol": "z-plan",
       "kind": "module",
-      "summary": "Full planner; active-plan registration in Setup immediately after run_start; config.py export-env at Setup step 4a; should-notify guards on PushNotifications; docs-freshness gate; consult; SPEC/PLAN/TASKS; Phase 3 + Phase 7 each use fixed 5-panel (agy/claude-sonnet/grok/composer/codex) when experiment.persona_rotation=true, with independent persona draws per phase gated by personas.critique_panel; parallel complexity-classifier; scope-extractor seed after TASKS.md finalized; heartbeat at Phase 8 boundary."
+      "summary": "Full planner; active-plan registration in Setup immediately after run_start; config.py export-env at Setup step 4a; kernel path resolved once at Setup via resolve-kernel.sh; should-notify guards on PushNotifications; docs-freshness gate; consult; SPEC/PLAN/TASKS; Phase 3 + Phase 7 each use fixed 5-panel (agy/claude-sonnet/grok/composer/codex) when experiment.persona_rotation=true, with independent persona draws per phase gated by personas.critique_panel; parallel complexity-classifier; scope-extractor seed after TASKS.md finalized; Phase 9 push-notify lists /z-audit-plan-style separately + AskUserQuestion 4-option 'What's next?' logs next_step_choice event (advisory, never auto-dispatched)."
     },
     {
       "file": "skills/z-research/SKILL.md",
       "line": 1,
       "symbol": "z-research",
       "kind": "module",
-      "summary": "Meta-orchestrator: dispatch decision (Phase 0, user-driven) \u2192 cost gate (Phase 0.5, always before Phase 1) \u2192 inline /z-map + /z-brainstorm sub-commands \u2192 adversarial synthesis panel (3 perspectives + research-judge Opus) \u2192 10-section RESEARCH.md. Cost 3-6M tokens."
+      "summary": "Meta-orchestrator: dispatch decision (Phase 0, user-driven) → cost gate (Phase 0.5, always before Phase 1) → inline /z-map + /z-brainstorm sub-commands → adversarial synthesis panel (3 perspectives + research-judge Opus) → 10-section RESEARCH.md. Cost 3-6M tokens."
     },
     {
       "file": "skills/z-review-all/SKILL.md",
       "line": 1,
       "symbol": "z-review-all",
       "kind": "module",
-      "summary": "Final diff review; pre-Phase-0 resume check (handles halted:no_ask_blocked state via review_resume_from_halt); test-suite gate; Phase 3.7 two-stage compaction (check-no-ask first \u2192 halt writes partial state file; then resolve-question for skip/prefill/ask); REVIEW-TASKS; Phase 7 memory-review with memory_review_terminal; clears .notify-dedup-session at Phase 0 and Phase 7 start."
+      "summary": "Final diff review; pre-Phase-0 resume check (handles halted:no_ask_blocked state via review_resume_from_halt); test-suite gate; Phase 3.7 two-stage compaction (check-no-ask first → halt writes partial state file; then resolve-question for skip/prefill/ask); REVIEW-TASKS; Phase 7 memory-review with memory_review_terminal; clears .notify-dedup-session at Phase 0 and Phase 7 start."
     },
     {
       "file": "skills/z-stats/SKILL.md",
@@ -202,8 +202,9 @@
     "z-debug memory-review (Phase 10) runs only on the status:shipped branch; abandoned debug sessions emit no memory-review telemetry.",
     "z-debug Phase 10 clears .notify-dedup-session unconditionally before the shipped/abandoned branch split.",
     "z-plan-split emits plan_split_run_end on every exit path (success, partial, refused, abandoned).",
-    "cluster_id (C1..CN) is for telemetry; cluster_slug is the on-disk directory name \u2014 never swap.",
+    "cluster_id (C1..CN) is for telemetry; cluster_slug is the on-disk directory name — never swap.",
     "z-maintain-docs always passes dedup_tags:true to doc-updater subagents.",
+    "z-maintain-docs default mode (no flags) writes clean concepts directly; --dry-run previews without writing; only flagged concepts (memories_lost or audit rejected/needs-review) require per-concept AskUserQuestion before writing.",
     "z-review-all Phase 3.7 compaction breakpoint always runs between Phase 3.5 and Phase 4.",
     "z-review-all Phase 3.7 runs check-no-ask before resolve-question; halt result writes partial .review_state.json (halted:true, halt_reason:no_ask_blocked) and exits without AskUserQuestion.",
     "z-review-all Pre-Phase 0 handles halted state files: emits review_resume_from_halt, deletes the file, proceeds to full Phase 0 re-run (not fast-forward).",
@@ -236,7 +237,7 @@
     "Registry Phase 0.0 runs after slug/base discovery binds $Z_HARNESS_SLUG and $BASE; it must not create a record before any structural-validation halt that would leave an uncleanable zombie.",
     "FINALIZE_STATUS rule: any run-ending halt AFTER REG_RC==0 (a record exists) sets FINALIZE_STATUS=aborted and calls deregister --status aborted; on register failure (REG_RC!=0) do NOT deregister (no record was written).",
     "Compaction-pause exits (condition 3 in z-implement-all) are pauses not aborts; do NOT deregister; the next invocation re-registers idempotently.",
-    "Overlap scan exit codes: 0=no overlap (silent proceed); 10=advisory overlap (proceed/wait/abort gate, unattended proceeds); 20=blocking (only under Z_HARNESS_STRICT_OVERLAP=1 with explicit*explicit path match) \u2014 unconditional halt.",
+    "Overlap scan exit codes: 0=no overlap (silent proceed); 10=advisory overlap (proceed/wait/abort gate, unattended proceeds); 20=blocking (only under Z_HARNESS_STRICT_OVERLAP=1 with explicit*explicit path match) — unconditional halt.",
     "Heartbeat calls use || true and must never block task dispatch on a registry error (best-effort, non-fatal); the CLI self-logs registry_error on internal failure.",
     "z-where does not emit start/end telemetry events for itself; it is read-only against the registry and never writes.",
     "z-stats Phase 0b always prints the resolved base + repo-id + active-plan count header unconditionally (not gated behind Z_HARNESS_EXPLAIN_RESOLUTION).",
@@ -245,7 +246,11 @@
     "z-brainstorm persona draw (Phase 2a) uses brainstorm.personas knob; draws up to 3 distinct ideator personas; ideator_personas frontmatter map records per-ideator persona_id or <none>; persona_bound events emitted per bound ideator.",
     "z-debug Phases 3a and 3b share the same persona draw (same persona_id and draw_id in persona_bound events for phase 3b); z-plan Phase 3 and Phase 7 use independent draws.",
     "z-plan-light neutral-authority contract: the advisory arm (personas.consult_eval) output is captured as persona_advisory_recommendation telemetry only; no prose path in Phase 4 may read it into the final synthesis.",
-    "z-plan-light advisory eval-reviewer (personas.review_eval) is defined by the canonical shared snippet in commands/z-implement-all.md (HTML anchor ADVISORY-EVAL-REVIEWER); the base codex reviewer's blockers/majors counts remain the sole authoritative gate."
+    "z-plan-light advisory eval-reviewer (personas.review_eval) is defined by the canonical shared snippet in commands/z-implement-all.md (HTML anchor ADVISORY-EVAL-REVIEWER); the base codex reviewer's blockers/majors counts remain the sole authoritative gate.",
+    "z-plan-light advisory consult arm (personas.consult_eval) emits persona_bound with selection_source=random_role_pool (single draw, not random_role_pool_distinct). Same applies to Phase 8 advisory eval-reviewer draw.",
+    "Kernel path is resolved once per run at Setup in z-debug, z-plan, and z-implement-all via bash scripts/resolve-kernel.sh. When KERNEL_PATH is non-empty it is injected as kernel_path: <path> into every behavioral-agent prompt; when empty the line is omitted entirely — never inject kernel content, only the path string.",
+    "z-plan Phase 9 next-step AskUserQuestion logs next_step_choice event but never auto-dispatches the chosen command.",
+    "z-debug Phase 10 axiom-extractor dispatch is parallel with review-agent, proposes only (no auto-approve), and orchestrators do not block on its return."
   ],
   "gotchas": [
     "z-audit-plan cannot run without SPEC/PLAN/TASKS; no-plan routes to z-plan.",
@@ -256,13 +261,14 @@
     "z-implement-all --tasks derives BASE from task-file parent and skips tree gates.",
     "z-implement-next Phase 0.1 lock check halts the entire run if a follow-up consumer is running; it fires after Phase 0.0 registration so a record exists and must be deregistered (FINALIZE_STATUS=aborted) before exit.",
     "z-implement-next has no auto-retry; flip stamp to **Complexity:** high and re-invoke, or use z-implement-all.",
-    "z-maintain-docs --audit may pause before consultant audit and fast-forward via state.",
+    "z-maintain-docs default mode applies clean concepts without a prompt; pass --dry-run to preview. flagged concepts (memories_lost or audit rejected/needs-review) get per-concept AskUserQuestion; deferred (not_enough_info) are never written.",
+    "z-maintain-docs Phase 3 stale-memory scan (expired or age > 547 days) prompts keep/edit/delete per entry; never auto-deletes.",
     "Adding a tag alias records TAGS.txt only; memory tags collapse on a later run.",
     "MEMORIES-FLAT.md regen is mandatory after doc writes or memory mutations.",
     "--from-candidate-json bypasses z-suggest-memory Phases 3a-3f; candidate must have type and text or returns bad_input.",
     "Phase 4b in z-stats reads review_agent_call events AND memory_review_terminal events with old-shape phase_end back-compat; it is read-only and never writes.",
     "Phase 4c in z-stats reads askuser_resolved events; if none found, prints a 'none found' note and skips the conflict-rate line; read-only.",
-    "review_agent_malformed and review_agent_failed are orthogonal failure-class events \u2014 they do NOT emit memory_review_terminal. In z-implement-all Phase 9, review_agent_malformed triggers a push-notify hint; review_agent_failed also triggers a push-notify. Neither halts the run.",
+    "review_agent_malformed and review_agent_failed are orthogonal failure-class events — they do NOT emit memory_review_terminal. In z-implement-all Phase 9, review_agent_malformed triggers a push-notify hint; review_agent_failed also triggers a push-notify. Neither halts the run.",
     "z-debug Phase 10 memory-review only runs on the shipped branch. Abandoned debug sessions (status:abandoned) do not call run-memory-review.sh.",
     "Broken-context skip push-notify uses .notify-dedup-session (keyed slug:reason); z-review-all clears this file at Phase 0 start AND again at Phase 7 start; z-debug clears it at the top of Phase 10 (before shipped/abandoned split); z-implement-all clears it before first task dispatch.",
     "z-debug auto-bail no longer triggers on >5 files; only cross-module/arch/public-surface change triggers escalation.",
@@ -270,7 +276,7 @@
     "z-debug Phase 2.5 bisect is conditional: only fires when bug is a regression with known-good baseline and scriptable repro.",
     "z-debug bisect-isolator is dispatched as a Haiku subagent, not a consultant; orchestrator-only likelihood-bucket rule still applies to its output.",
     "z-review-all pre-Phase-0 deletes stale .review_state.json if HEAD changed or artifacts missing. A halted:no_ask_blocked state file is NOT treated as stale: it emits review_resume_from_halt, deletes the file, and triggers a full Phase 0 re-run (not fast-forward).",
-    "z-review-all Phase 3.7 is a two-stage gate: check-no-ask fires first (halt\u2192write partial state file with halted:true + exit 0); then if proceed, resolve-question runs for skip/prefill/ask. The halt state file is not a fast-forward token \u2014 Pre-Phase 0 always does a full re-run after halt.",
+    "z-review-all Phase 3.7 is a two-stage gate: check-no-ask fires first (halt→write partial state file with halted:true + exit 0); then if proceed, resolve-question runs for skip/prefill/ask. The halt state file is not a fast-forward token — Pre-Phase 0 always does a full re-run after halt.",
     "z-plan Phase 8 complexity-classifier strips existing **Complexity:** line before dispatch to force re-classification.",
     "z-research --slug= token must be stripped from $ARGUMENTS before computing input_hash; z-map does the same.",
     "z-research Phase 0 is dispatch decision (user-driven, reads MAP_STATE + BRAINSTORM_STATE); Phase 0.5 is the cost gate. The cost gate always follows the dispatch decision.",
@@ -282,7 +288,7 @@
     "z-uplift slug collision detection presents one AskUserQuestion per colliding slug before COMPONENTS.md is written.",
     "z-uplift --refresh-component archives both REPORT.md and TASKS.md atomically before resetting the MANIFEST row; both files must exist or command exits with error.",
     "z-uplift cross-cutting context (C-NNN lines) is filtered per component slug using exact-match on component: field; global or mismatched slugs are silently excluded.",
-    "z-fix auto-bail threshold is >5 candidate files OR >2 non-obvious decisions OR cross-module/cross-crate impact \u2014 check at both Phase 1 end and throughout.",
+    "z-fix auto-bail threshold is >5 candidate files OR >2 non-obvious decisions OR cross-module/cross-crate impact — check at both Phase 1 end and throughout.",
     "z-fix hard inline implementation limit is 7 files; halt unconditionally at that threshold regardless of FIX.md scope.",
     "z-fix REVIEW_CYCLES counter gates the optional post-mortem default: default=NO when <=1, default=YES when >1.",
     "z-fix does NOT auto-trigger MR-review; run /z-mr-review separately if needed.",
@@ -294,7 +300,7 @@
     "z-suggest-memory --kind routing-preference is mutually exclusive with --edit, --delete, and --from-candidate-json; combining any two returns STATUS: bad_input.",
     "z-suggest-memory --kind routing-preference validates question_id via config.py list-question-ids; unknown IDs return bad_input immediately.",
     "z-suggest-memory Phase 3a routing-flavored text detection only fires when candidate text is already available AND no explicit type is set; no-match or no-text cases proceed silently to Phase 3b.",
-    "z-suggest-memory yes-config branch in Phase 3a invokes config.py set, which is not yet shipped as of this writing \u2014 the call is documented for when it lands.",
+    "z-suggest-memory yes-config branch in Phase 3a invokes config.py set, which is not yet shipped as of this writing — the call is documented for when it lands.",
     "Registry REG_RC==3 means register FAILED and no record was written; do NOT call deregister on this branch. Any other nonzero REG_RC is treated identically to REG_RC==3 by all skills.",
     "The scope-extractor subagent (Haiku) is best-effort: update-scope returns 0 by design and self-logs registry_error on internal failure; orchestrators call it with || true and do NOT add a || log after it (that would be dead code).",
     "Heartbeat subcommand also returns 0 by design and self-logs registry_error on internal failure; orchestrators call it with || true and must not add a misleading || log after it.",
@@ -306,7 +312,10 @@
     "z-plan Phase 3 and Phase 7 are independent draws: P3_*_PREFIX variables are scoped to Phase 3; P7_*_PREFIX variables are drawn fresh for Phase 7. Do not reuse Phase 3 draw in Phase 7.",
     "z-plan-light advisory arm (personas.consult_eval): ADVISORY_PERSONA_NAME empty or knob false → skip the advisory arm entirely; the Phase 3 dispatch is byte-identical to the pre-feature two-arm neutral consult. No draw event, no prefix, no persona_bound, no persona_advisory_recommendation.",
     "z-plan-light advisory eval-reviewer (personas.review_eval): do not copy the advisory arm bash inline; follow the canonical shared snippet in commands/z-implement-all.md verbatim. The base codex reviewer's verdict drives all re-edit/halt decisions; the advisory arm's verdict is logged for data collection only.",
-    "persona_bound events carry selection_source: random_role_pool_distinct (drawn persona) or fixed_panel (vanilla slot); in z-plan-light advisory arm they carry selection_source: random_role_pool."
+    "z-plan-light advisory arm persona_bound carries selection_source=random_role_pool (single consultant draw, not random_role_pool_distinct). Likewise the Phase 8 advisory eval-reviewer draw.",
+    "z-plan Phase 9 AskUserQuestion has four options due to the cap: /z-audit-plan (description points to /z-audit-plan-style as companion), /z-test, /z-implement-all, Skip. The push-notify above it lists /z-audit-plan-style separately. User choice logged as next_step_choice; not auto-dispatched.",
+    "Kernel path resolved at Setup start in z-debug (immediately after debug_run_start), z-plan (Setup step 4a area), and z-implement-all (Phase 0.0 / Setup). When KERNEL_PATH is empty, omit the kernel_path: line from agent prompts entirely — do NOT pass an empty string.",
+    "z-debug Phase 10 axiom-extractor: dispatched only when run-memory-review.sh output contains AXIOM_READY line; runs in parallel with review-agent; proposes only; orchestrator does not block on or error on its absence."
   ],
   "memories": []
 }
