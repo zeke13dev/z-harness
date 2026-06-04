@@ -68,6 +68,14 @@ Classify the command (see "Command classification" above). Before running anythi
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/remote-sandbox-sync.sh" "<remote-host>" "<slug>" "<task-id>"
 ```
 
+**Worktree cwd-safety.** The rsync source is the git work tree of the current cwd. When the
+session runs inside a git worktree (the standard parallel-session layout —
+`../<repo>-worktrees/<slug>`), run this from a cwd inside that worktree so the right tree
+ships. If your cwd is the main checkout but the edits live in a worktree, set
+`Z_HARNESS_WORKTREE_ROOT=<worktree-abs-path>` before the sync — otherwise the unmodified main
+tree is rsynced and remote verify silently checks stale code. The script echoes
+`syncing local root: <path>` to stderr; confirm it matches the worktree you edited.
+
 The sandbox uses a **nested layout** — `~/dev/qt-bot-sandbox/` is the container and every ephemeral slug tree lives under its `sandbox/` subdir, so anything that lands directly in the container root (and is not `sandbox/`) is unambiguously stray:
 - `<remote-host>:~/dev/qt-bot-sandbox/sandbox/<slug>/base/` — shared warm base seeded once per slug on the first invocation; subsequent invocations skip the seed step.
 - `<remote-host>:~/dev/qt-bot-sandbox/sandbox/<slug>/<task-id>/` — per-task overlay populated via `--link-dest=$BASE` (hard-links unchanged files from base, only copies diffs).

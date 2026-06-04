@@ -36,7 +36,13 @@
 #   - scripts/log-event.sh      — only comment example text
 #   - scripts/log-phase.sh      — only comment example text
 #   - scripts/ci-grep-gates.sh  — this file itself (comments reference old names)
+#   - scripts/test_consult_off.sh — provider config fixtures use bare names as keys
+#   - scripts/test_persona_stats.py — model fixtures use bare names as test input
 #   - scripts/calibration-*.json — data/calibration files
+#
+# Exempt token:
+#   - ".claude" path references (e.g. ~/.claude/CLAUDE.md) — the Claude Code config
+#     directory, a filesystem path rather than a bare provider identifier.
 
 set -euo pipefail
 
@@ -93,6 +99,10 @@ EXEMPT_PATHS=(
     "scripts/log-phase.sh"
     # This script itself (comments reference old names by necessity)
     "scripts/ci-grep-gates.sh"
+    # Consult-off tests: provider config fixtures use bare names as JSON keys
+    "scripts/test_consult_off.sh"
+    # Persona-stats tests: model fixtures use bare names as test input
+    "scripts/test_persona_stats.py"
 )
 
 # Build a sed-friendly file for post-filtering by path prefix
@@ -199,7 +209,10 @@ for f in "${SCAN_FILES[@]}"; do
         # 2. Check if ALL occurrences of the bare name on this line are
         #    actually part of a -cli form.  We strip all -cli suffixed forms
         #    and check if any bare form remains.
-        stripped="$(echo "$match_line" | sed -E 's/(codex|gemini|claude)-[a-z][a-z0-9-]*/EXEMPT/g')"
+        #    Also strip ".claude" path references (the Claude Code config dir,
+        #    e.g. ~/.claude/CLAUDE.md or ".claude/**/*.md") — these are filesystem
+        #    paths, not bare provider identifiers.
+        stripped="$(echo "$match_line" | sed -E -e 's/(codex|gemini|claude)-[a-z][a-z0-9-]*/EXEMPT/g' -e 's/\.claude/.EXEMPT/g')"
         if ! echo "$stripped" | grep -qE '\b(codex|gemini|claude)\b'; then
             continue
         fi

@@ -26,7 +26,7 @@
         "agents/scope-reconciler-brainstorm.md",
         "agents/spec-precheck.md"
       ],
-      "last_updated": "2026-05-29T07:20:01.339117Z",
+      "last_updated": "2026-06-02",
       "confidence": "high",
       "depends_on": [
         "scripts",
@@ -130,7 +130,7 @@
       "source_file": [
         "commands/z-fix.md"
       ],
-      "last_updated": "2026-05-28T20:50:09Z",
+      "last_updated": "2026-06-02",
       "confidence": "high",
       "depends_on": [
         "agents",
@@ -193,7 +193,7 @@
         "scripts/log-providers.sh",
         ".z-harness/providers.json"
       ],
-      "last_updated": "2026-06-01T00:00:00Z",
+      "last_updated": "2026-06-02",
       "confidence": "high",
       "depends_on": [
         "scripts"
@@ -292,7 +292,7 @@
         "commands/z-update.md",
         "docs/human/INSTALL.md"
       ],
-      "last_updated": "2026-05-29T03:50:12Z",
+      "last_updated": "2026-06-02",
       "confidence": "high",
       "depends_on": [
         "scripts",
@@ -338,7 +338,7 @@
         "agents/review-agent.md",
         "scripts/run-memory-review.sh"
       ],
-      "last_updated": "2026-05-28T00:00:00Z",
+      "last_updated": "2026-06-02",
       "confidence": "high",
       "depends_on": [
         "z-suggest-memory",
@@ -349,11 +349,11 @@
         "z-review-all",
         "z-debug"
       ],
-      "summary": "Post-run Haiku subagent that proposes 0-3 candidate memories from a completed /z-implement-all (Phase 9), /z-review-all (Phase 7), or /z-debug (Phase 10, shipped branch only) run. Reads run events, cumulative diff, SPEC.md or DEBUG.md; emits structured candidates as a fenced JSON block. Does not write \u2014 orchestrator owns all writes via /z-suggest-memory. Dispatched after skip-conditions check by scripts/run-memory-review.sh."
+      "summary": "Post-run Haiku subagent that proposes 0-3 candidate memories from a completed /z-implement-all (Phase 9), /z-review-all (Phase 7), or /z-debug (Phase 10, shipped branch only) run. Reads run events, cumulative diff, SPEC.md or DEBUG.md; emits structured candidates as a fenced JSON block. Does not write — orchestrator owns all writes via /z-suggest-memory. Dispatched after skip-conditions check by scripts/run-memory-review.sh."
     },
     {
       "slug": "z-uplift",
-      "last_updated": "2026-05-28T20:50:09Z",
+      "last_updated": "2026-06-02",
       "confidence": "high",
       "depends_on": [
         "commands",
@@ -459,7 +459,7 @@
         "docs/human/overnight-run.md",
         "scripts/bench-autonomy-check.sh"
       ],
-      "last_updated": "2026-06-01T00:00:00Z",
+      "last_updated": "2026-06-02",
       "confidence": "high",
       "depends_on": [
         "commands",
@@ -495,7 +495,7 @@
         "commands",
         "agents"
       ],
-      "summary": "Durable external artifact base + lockless cross-session awareness registry. Five-tier base fallback (Z_HARNESS_BASE_DIR > XDG_STATE_HOME > HOME/.local/state > git-common-dir > pwd/z-harness) with anchor enforcement prevents split-brain. Per-run JSON records in <base>/active-plans/ let concurrent sessions see each other's scope; overlap advisory at implement Phase 0 (Z_HARNESS_STRICT_OVERLAP=1 makes explicit\u00d7explicit exact path match a hard halt). Addresses the 2026-06-01 git clean incident."
+      "summary": "Durable external artifact base + lockless cross-session awareness registry. Five-tier base fallback (Z_HARNESS_BASE_DIR > XDG_STATE_HOME > HOME/.local/state > git-common-dir > pwd/z-harness) with anchor enforcement prevents split-brain. Per-run JSON records in <base>/active-plans/ let concurrent sessions see each other's scope; overlap advisory at implement Phase 0 (Z_HARNESS_STRICT_OVERLAP=1 makes explicit×explicit exact path match a hard halt). Addresses the 2026-06-01 git clean incident."
     },
     {
       "slug": "cost-estimation",
@@ -541,7 +541,7 @@
         "scripts/config.py",
         "scripts/setup.py"
       ],
-      "last_updated": "2026-05-29T00:00:00Z",
+      "last_updated": "2026-06-02",
       "confidence": "high",
       "depends_on": [
         "config",
@@ -553,7 +553,7 @@
         "commands",
         "agents"
       ],
-      "summary": "Advisory behavioral rules mined from z-harness interaction history; lifecycle raw->candidate->approved with explicit user approval gate; five /z-axiom-* commands; KERNEL.md compiled by build-kernel.py and read by six behavioral subagents; axioms are the lowest-authority signal in the resolver \u2014 config/memory win direct conflicts but the conflict is surfaced via axiom_conflict envelope."
+      "summary": "Advisory behavioral rules mined from z-harness interaction history; lifecycle raw->candidate->approved with explicit user approval gate; five /z-axiom-* commands; KERNEL.md compiled by build-kernel.py and read by six behavioral subagents; axioms are the lowest-authority signal in the resolver — config/memory win direct conflicts but the conflict is surfaced via axiom_conflict envelope."
     }
   ]
 }

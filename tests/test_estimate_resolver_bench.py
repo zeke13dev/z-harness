@@ -43,6 +43,12 @@ _SCRIPT_CONFIG = str(_SCRIPTS_DIR / "config.py")
 _PROFILES_PATH = _SCRIPTS_DIR / "token-cost-profiles.json"
 _BENCH_SCRIPT = str(_SCRIPTS_DIR / "bench-autonomy-check.sh")
 _BENCH_YAML = _REPO_ROOT / "z-harness" / "bench" / "pier" / "benchmark-autonomy.yaml"
+# The bench-autonomy check imports the pier rig (zharness_pier), which lives under
+# the gitignored z-harness/ tree and is therefore absent in CI / fresh clones.
+# Without it the check exits 1 regardless of policy content, so skip these tests
+# when the rig package is not present (the benchmark-autonomy.yaml is tracked but
+# the Python rig is not).
+_PIER_PKG = _REPO_ROOT / "z-harness" / "bench" / "pier" / "zharness_pier"
 
 # Load estimate-tokens module for internal API access.
 _spec_est = importlib.util.spec_from_file_location("estimate_tokens", _SCRIPT_ESTIMATE)
@@ -451,6 +457,8 @@ class TestBenchAutonomyAssertion(unittest.TestCase):
             self.skipTest("bench-autonomy-check.sh not found")
         if not _BENCH_YAML.exists():
             self.skipTest("benchmark-autonomy.yaml not found")
+        if not _PIER_PKG.is_dir():
+            self.skipTest("pier rig (zharness_pier) not present — bench-autonomy-check unavailable")
 
         cp = subprocess.run(
             ["bash", _BENCH_SCRIPT, "--policy", str(_BENCH_YAML)],
@@ -467,6 +475,8 @@ class TestBenchAutonomyAssertion(unittest.TestCase):
             self.skipTest("bench-autonomy-check.sh not found")
         if not _BENCH_YAML.exists():
             self.skipTest("benchmark-autonomy.yaml not found")
+        if not _PIER_PKG.is_dir():
+            self.skipTest("pier rig (zharness_pier) not present — bench-autonomy-check unavailable")
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # Build a stripped-down policy YAML that deliberately omits

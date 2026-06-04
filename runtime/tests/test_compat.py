@@ -66,6 +66,25 @@ def clear_upgrade_tracker() -> None:
     yield  # type: ignore[misc]
 
 
+@pytest.fixture(autouse=True)
+def stub_provider_clis_on_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    resolve_provider validates a provider's `command` is on PATH (shutil.which)
+    before returning it. The real provider CLIs (codex, gemini, claude, ...) are
+    not installed in CI, so stage no-op stub executables on PATH for each test.
+    This replicates a dev box with the CLIs present, exercising the resolution
+    logic without the real binaries.
+    """
+    bindir = tmp_path / "stub-bin"
+    bindir.mkdir()
+    for name in ("codex", "gemini", "claude", "agy", "cursor"):
+        p = bindir / name
+        p.write_text("#!/bin/sh\nexit 0\n")
+        p.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bindir) + os.pathsep + os.environ.get("PATH", ""))
+    yield  # type: ignore[misc]
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
