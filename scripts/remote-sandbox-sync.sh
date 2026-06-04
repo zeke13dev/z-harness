@@ -10,9 +10,16 @@
 #   remote-sandbox-sync.sh zeke-pc expand-sports-ml T030
 #   remote-sandbox-sync.sh zeke-pc data-overhaul C-001 --no-delete
 #
-# Remote path layout (two-level):
-#   <user@host>:~/dev/qt-bot-sandbox/<slug>/base/        ← shared warm base (seeded once per slug)
-#   <user@host>:~/dev/qt-bot-sandbox/<slug>/<task-id>/   ← per-task overlay via --link-dest
+# Remote path layout:
+#   <host>:~/dev/qt-bot-sandbox/                     ← CONTAINER (may hold helpers/README)
+#   <host>:~/dev/qt-bot-sandbox/sandbox/             ← all ephemeral slug trees live here
+#   <host>:~/dev/qt-bot-sandbox/sandbox/<slug>/base/        ← shared warm base (seeded once per slug)
+#   <host>:~/dev/qt-bot-sandbox/sandbox/<slug>/<task-id>/   ← per-task overlay via --link-dest
+#
+# Everything ephemeral is nested under .../sandbox/ so the container root stays
+# clean: anything that lands directly in qt-bot-sandbox/ (and is not `sandbox/`)
+# is unambiguously stray and safe for the GC reaper to remove. A misdirected
+# rsync can no longer pollute alongside real slug dirs.
 #
 # Exclude file lookup order:
 #   1. $(pwd)/.z-harness-rsync-exclude         (per-project override)
@@ -65,7 +72,9 @@ fi
 # Resolve the remote home directory once to build absolute paths.
 # Tilde expansion is unreliable inside --link-dest on the remote side.
 REMOTE_HOME="$(ssh "$REMOTE_HOST" 'printf %s "$HOME"')"
-REMOTE_SANDBOX_ROOT="$REMOTE_HOME/dev/qt-bot-sandbox"
+# All slug trees nest under <container>/sandbox/ (see layout note in header).
+# Changing this one line cascades to base/overlay/lock/marker paths below.
+REMOTE_SANDBOX_ROOT="$REMOTE_HOME/dev/qt-bot-sandbox/sandbox"
 REMOTE_BASE_ABS="$REMOTE_SANDBOX_ROOT/$SLUG/base"
 REMOTE_TASK_ABS="$REMOTE_SANDBOX_ROOT/$SLUG/$TASK_ID"
 REMOTE_LOCK_DIR="$REMOTE_SANDBOX_ROOT/$SLUG/.base.lock"
