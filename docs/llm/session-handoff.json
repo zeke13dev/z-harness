@@ -1,0 +1,174 @@
+{
+  "concept": "session-handoff",
+  "last_updated": "2026-06-05",
+  "covers_spec": "none",
+  "source_file": [
+    "scripts/session-helpers.sh",
+    "agents/context-curator.md",
+    "commands/z-implement-all.md"
+  ],
+  "confidence": "high",
+  "entry_points": [
+    {
+      "file": "scripts/session-helpers.sh",
+      "line": 66,
+      "symbol": "done_set_hash",
+      "kind": "fn",
+      "summary": "sha256 of sorted, newline-joined [x] task-ids from TASKS.md; empty set hashes ''; order-independent; the single shared hash function used by both the curator (writer) and E1 (reader) — DRY contract for resume."
+    },
+    {
+      "file": "scripts/session-helpers.sh",
+      "line": 146,
+      "symbol": "last_done_task",
+      "kind": "fn",
+      "summary": "Prints the id of the last [x] heading in TASKS.md; human hint only, not load-bearing for resume."
+    },
+    {
+      "file": "scripts/session-helpers.sh",
+      "line": 197,
+      "symbol": "next_pending_task",
+      "kind": "fn",
+      "summary": "Prints the first [ ] task id whose deps are all [x]; dep-gated; human hint only."
+    },
+    {
+      "file": "scripts/session-helpers.sh",
+      "line": 321,
+      "symbol": "last_curated_marker",
+      "kind": "fn",
+      "summary": "Prints the ts of the most recent context_curated event in events_file; prints 'none' if absent. Used by E3 to compute since_marker for the next curation delta."
+    },
+    {
+      "file": "scripts/session-helpers.sh",
+      "line": 369,
+      "symbol": "session_frontmatter_field",
+      "kind": "fn",
+      "summary": "Prints a scalar YAML frontmatter field from SESSION.md (or empty if absent). Used by E1 to read done_ids_hash, schema_version, next_pending, last_gate_task_id cheaply without loading the body."
+    },
+    {
+      "file": "agents/context-curator.md",
+      "line": 1,
+      "symbol": "context-curator",
+      "kind": "module",
+      "summary": "Haiku subagent (model: haiku); dispatched synchronously at the compaction breakpoint; folds events delta + git diff + TASKS.md + prior SESSION.md into a bounded SESSION.md; never edits production code."
+    },
+    {
+      "file": "agents/context-curator.md",
+      "line": 12,
+      "symbol": "Inputs from caller",
+      "kind": "module",
+      "summary": "Required prompt fields: plan_dir, run_id, repo_root, last_gate_task_id, tasks_file, event_source ($ZH_BASE/metrics.jsonl), slug, since_marker."
+    },
+    {
+      "file": "agents/context-curator.md",
+      "line": 25,
+      "symbol": "Behavior (ordered)",
+      "kind": "module",
+      "summary": "8-step ordered behavior: read prior SESSION.md; read metrics.jsonl delta backward from EOF (O(delta), not O(total)); read TASKS.md + git diff --stat; fold into 4 capped sections with overflow rule; compute metadata via helpers; atomic write; emit context_curated; return STATUS line."
+    },
+    {
+      "file": "agents/context-curator.md",
+      "line": 75,
+      "symbol": "Step 5 — Compute metadata",
+      "kind": "module",
+      "summary": "Computes done_ids_hash by calling bash scripts/session-helpers.sh done_set_hash — must NOT re-implement inline. Writer and reader must produce byte-identical hashes or resume silently never fires."
+    },
+    {
+      "file": "agents/context-curator.md",
+      "line": 117,
+      "symbol": "Invariants",
+      "kind": "module",
+      "summary": "Key invariants: never touches non-SESSION.md files; incremental O(delta) read; done_ids_hash always via shared helper; idempotent under retry via atomic rename; diff_unavailable on git error (never hard-fail)."
+    },
+    {
+      "file": "agents/context-curator.md",
+      "line": 156,
+      "symbol": "Failure-stub path",
+      "kind": "module",
+      "summary": "On persistent failure: write frontmatter-only stub with done_ids_hash from done_set_hash helper (event-independent), overflow: true, empty sections. Stub's resume key is always valid even when event read failed."
+    },
+    {
+      "file": "commands/z-implement-all.md",
+      "line": 373,
+      "symbol": "E1 — Resume injection",
+      "kind": "module",
+      "summary": "After TASKS.md read, before first dispatch: compute CUR_HASH via done_set_hash; read SESSION.md frontmatter; use SESSION.md iff schema_version supported AND done_ids_hash==CUR_HASH AND pending remain; inline body via explicit Read; emit session_resumed. Else emit session_resume_skipped {reason}."
+    },
+    {
+      "file": "commands/z-implement-all.md",
+      "line": 403,
+      "symbol": "session_resumed emit",
+      "kind": "module",
+      "summary": "Emits session_resumed {done_ids_hash, last_gate_task_id, next_pending} when E1 predicate matches and SESSION.md body is inlined."
+    },
+    {
+      "file": "commands/z-implement-all.md",
+      "line": 418,
+      "symbol": "session_resume_skipped emit",
+      "kind": "module",
+      "summary": "Emits session_resume_skipped {reason} on any E1 skip; reason in {no_file, done_set_mismatch, no_pending, schema_version}. On done_set_mismatch, surfaces a one-line user note."
+    },
+    {
+      "file": "commands/z-implement-all.md",
+      "line": 497,
+      "symbol": "Env knobs Z_SESSION_CURATOR_TIMEOUT_S / Z_SESSION_MAX_CHARS",
+      "kind": "module",
+      "summary": "Z_SESSION_CURATOR_TIMEOUT_S (default 120; 0 disables curator) and Z_SESSION_MAX_CHARS (default 28000) are the two env knobs for session-handoff. Defined here as the canonical reference."
+    },
+    {
+      "file": "commands/z-implement-all.md",
+      "line": 529,
+      "symbol": "E3 — Curator at breakpoint",
+      "kind": "module",
+      "summary": "After compaction_pause emit, before push-notify: dispatch context-curator synchronously with Z_SESSION_CURATOR_TIMEOUT_S. One inline retry at 2x timeout. On success emit '/clear & resume'; on persistent failure emit context_curation_failed + /compact notice; exit 0 always."
+    },
+    {
+      "file": "commands/z-implement-all.md",
+      "line": 1427,
+      "symbol": "E2 — Notable-only breadcrumb",
+      "kind": "module",
+      "summary": "After a task hits [x]: emit context_breadcrumb {task, intent} ONLY when a concrete trigger held (decision/override, task_halt, shortcut/spec-deviation, reviewer retry). Clean completions emit nothing — keeps curator mining high-signal."
+    },
+    {
+      "file": "commands/z-implement-all.md",
+      "line": 1537,
+      "symbol": "context_breadcrumb telemetry table entry",
+      "kind": "module",
+      "summary": "Telemetry table row for context_breadcrumb; fields: task, intent (decision_gate|task_halt_recovered|spec_deviation|reviewer_retry)."
+    }
+  ],
+  "depends_on": [
+    "commands",
+    "scripts",
+    "agents"
+  ],
+  "consumed_by": [
+    "commands"
+  ],
+  "invariants": [
+    "done_ids_hash is always computed via scripts/session-helpers.sh done_set_hash — never inline; writer and reader use the same helper to guarantee byte-identical hashes.",
+    "The '/clear & resume' notice fires ONLY when context-curator returned STATUS: curated AND the curator's done_ids_hash matches the current TASKS.md done-set.",
+    "context-curator never touches files other than SESSION.md (+ its .tmp.<PID> staging file). Never edits TASKS.md, SPEC.md, PLAN.md, or any production code.",
+    "Curator reads event_source ($ZH_BASE/metrics.jsonl) — not the per-plan events.jsonl or orchestration-only events.jsonl — because only metrics.jsonl aggregates both task-tier and orchestration-tier events.",
+    "Curator reads events backward from EOF, stopping at ts <= since_marker (O(delta), not O(total log)).",
+    "SESSION.md is written atomically via tmp+rename; a partial prior write is overwritten cleanly on retry.",
+    "E1 resume predicate is set-based and position-independent: same [x] set in any TASKS.md line order → same hash → resume fires. Any change to the [x] set → hash mismatch → safe skip.",
+    "Z_SESSION_CURATOR_TIMEOUT_S=0 disables the curator; behavior identical to pre-handoff (no SESSION.md written, no '/clear & resume' notice).",
+    "All [x] detection in session-helpers.sh uses the orchestrator's canonical pattern ^\\s*[-*]?\\s*\\[x\\] — no divergence.",
+    "Failure-stub path writes a valid done_ids_hash from TASKS.md directly (event-independent) so the stub's resume key is valid even when the event read failed.",
+    "session-helpers.sh functions are stdout-only, no side effects, exit 0 always (empty output = not found).",
+    "context_curated event is emitted with label 'orchestration' so the next curation's since_marker lookup finds it in metrics.jsonl."
+  ],
+  "gotchas": [
+    "Re-implementing done_set_hash inline in the curator or any other caller breaks the DRY contract: the writer and reader will produce different hashes and resume will silently never fire.",
+    "Reading the per-plan events.jsonl or orchestration-only events.jsonl instead of metrics.jsonl makes the landmine backstop inert — task-tier events only appear in metrics.jsonl.",
+    "The '/clear & resume' notice must NOT be emitted until AFTER curation succeeds and the done-set hash matches. Emitting it before curation is a security-of-resume contract violation.",
+    "done_set_mismatch on E1 resume means TASKS.md was modified between the pause and the resume (e.g. a task marked [x] offline). SESSION.md is NOT inlined — the user sees a one-line note.",
+    "schema_version mismatch on E1 triggers session_resume_skipped {reason: schema_version} — the orchestrator must never attempt to parse an unknown schema.",
+    "Z_SESSION_CURATOR_TIMEOUT_S=0 disables the whole subsystem. Callers testing resume behavior must set this to a positive value.",
+    "Overflow order matters: apply entry caps FIRST, then collapse resolved decisions, then drop oldest entries if still over ceiling. Applying in a different order changes which entries are preserved.",
+    "context_curated must be emitted AFTER the atomic rename succeeds (not before); otherwise a crash between write and event leaves metrics.jsonl with a stale since_marker.",
+    "The failure-stub SESSION.md has overflow: true and empty sections; E1 will still resume from the stub (the done_ids_hash is valid), but the body inlining provides no useful context.",
+    "git diff --stat only — never capture full hunks; full hunks can be arbitrarily large and would blow the SESSION.md ceiling immediately."
+  ],
+  "memories": []
+}

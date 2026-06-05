@@ -369,6 +369,68 @@ If there are running follow-up consumer entries, **halt** — do not proceed wit
    ```
 
 4. Read `$TASKS_FILE` into memory — always set by step 1's fast path or step 3's default above. You'll re-read between batches to pick up status flips. **Do NOT pre-extract SPEC/PLAN slices in main thread** — subagents will Read them directly from `$BASE/SPEC.md` and `$BASE/PLAN.md` themselves. This keeps the orchestrator main-thread context light across many tasks.
+
+4a. **Resume from SESSION.md if present and current.** Immediately after TASKS.md is in memory, before any task is dispatched:
+
+   ```bash
+   SESSION_FILE="$BASE/SESSION.md"
+   CUR_HASH="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/session-helpers.sh" done_set_hash "$TASKS_FILE")"
+   ```
+
+   Read the SESSION.md frontmatter fields cheaply (no body load yet):
+   ```bash
+   SV="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/session-helpers.sh" session_frontmatter_field "$SESSION_FILE" schema_version)"
+   DH="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/session-helpers.sh" session_frontmatter_field "$SESSION_FILE" done_ids_hash)"
+   NP="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/session-helpers.sh" session_frontmatter_field "$SESSION_FILE" next_pending)"
+   LG="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/session-helpers.sh" session_frontmatter_field "$SESSION_FILE" last_gate_task_id)"
+   # Pending detection MUST reuse the canonical helper, not a bespoke grep. A line-start
+   # bullet grep (`^\s*[-*]?\s*\[ \]`) does NOT match the inline-heading status format
+   # (`## T002 — title `[ ]``) that real TASKS.md files use, so it returns 0 and makes the
+   # resume predicate fall through to `no_pending` for every production plan (feature inert).
+   # `next_pending_task` does the same Python-side `[x]`/`[ ]` detection as `done_set_hash`,
+   # so done- and pending-detection stay in lockstep; non-empty => >=1 actionable pending task.
+   NEXT_PENDING_NOW="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/session-helpers.sh" next_pending_task "$TASKS_FILE" 2>/dev/null)"
+   if [ -n "$NEXT_PENDING_NOW" ]; then PENDING_COUNT=1; else PENDING_COUNT=0; fi
+   ```
+
+   **Supported schema versions:** `"1"` (the only version produced by the context-curator as of this spec; extend this set when the curator bumps the version).
+
+   **Resume predicate** — all four conditions must hold:
+   1. `$SESSION_FILE` exists (non-empty `$SV` is sufficient evidence; the file-existence check is implicit).
+   2. `$SV` is in the supported set (currently: `"1"`).
+   3. `$DH == $CUR_HASH` (done-set has not changed since the SESSION.md was written).
+   4. `$PENDING_COUNT >= 1` (at least one pending task remains).
+
+   **On pass — inline the body and resume:**
+   ```bash
+   export SESSION_MD_PATH="$SESSION_FILE"
+   ```
+   Read the SESSION.md body (the content below the closing `---` of the frontmatter) into orchestrator working context using an explicit Read tool call. This bounded inline (≤~7 K tokens) is the deliberate re-seed that replaces re-reading the full prior conversation. Then emit:
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" session_resumed \
+     "$(printf '{"done_ids_hash":"%s","last_gate_task_id":"%s","next_pending":"%s"}' \
+        "$DH" "$LG" "$NP")"
+   ```
+
+   **On any fail — skip injection:**
+
+   | Condition that failed | `reason` value | Extra user note? |
+   |---|---|---|
+   | `$SESSION_FILE` does not exist | `no_session_file` | — |
+   | `$SV` not in supported set | `schema_unsupported` | — |
+   | `$DH != $CUR_HASH` | `done_set_mismatch` | Yes (see below) |
+   | `$PENDING_COUNT == 0` | `no_pending` | — |
+
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" session_resume_skipped \
+     "$(printf '{"reason":"%s"}' "$RESUME_SKIP_REASON")"
+   ```
+
+   On `done_set_mismatch` only, surface a one-line note to the user (inline, no `AskUserQuestion` needed):
+   > "SESSION.md present but TASKS.md done-set changed since last pause — resuming without re-seed."
+
+   Do **not** inline the SESSION.md body in any skip case. Continue to step 5.
+
 5. **Version stamp + run_start event:** (`Z_HARNESS_SESSION_ID` was already exported in Phase 0.0; the `:-` default below leaves it alone if set.)
    ```bash
    export Z_HARNESS_SESSION_ID="${Z_HARNESS_SESSION_ID:-$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" session-id)}"
@@ -439,6 +501,8 @@ High-context runs (many tasks, long wall time) accumulate orchestrator context p
 - `Z_IMPLEMENT_PAUSE_TASKS` (default `5`) — number of completed (`[x]`) tasks since last pause that triggers a breakpoint.
 - `Z_IMPLEMENT_PAUSE_MINUTES` (default `30`) — wall minutes since last pause (or run start) that triggers a breakpoint.
 - Either env var set to `0` disables that trigger; both `0` disables compaction breakpoints entirely for this command.
+- `Z_SESSION_CURATOR_TIMEOUT_S` (default `120`) — per-attempt timeout for the context-curator dispatch. Set to `0` to disable curator dispatch entirely (falls back to today's plain pause notice without SESSION.md curation).
+- `Z_SESSION_MAX_CHARS` (default `28000`) — character ceiling for the SESSION.md body; passed to the curator as its overflow collapse threshold.
 
 **Counters (orchestrator-side, in-memory; reset on every pause and on re-invocation):**
 - `tasks_since_pause`: incremented when a task transitions to `[x]` (done). **Not** incremented on retries (a single task with 3 retries counts as 1 completion). **Not** incremented when a task is rolled back to `[ ]` after a halt or abandon. A task surfaced as a halt and explicitly deferred by the user (left `[ ]` with a `**Note:**`) also does not increment — only `[x]` transitions count.
@@ -469,11 +533,141 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orc
      "$TRIGGER" "$tasks_since_pause" "$WALL_MINUTES" "$PENDING_REMAINING")"
 ```
 
-Then push-notify (this is a hard pause — fires regardless of notification level; see [docs/human/config.md](docs/human/config.md)):
+**Context-curator dispatch (synchronous, before push-notify).** After emitting `compaction_pause`, and before the push-notify fires, dispatch the context-curator — unless `Z_SESSION_CURATOR_TIMEOUT_S=0` (curator disabled → skip to the plain push-notify below).
 
-> "Compaction breakpoint: `<N>` tasks completed (or `<M>` min wall). `<K>` pending tasks remain. Run `/clear`, then re-invoke `/z-implement-all` to resume from TASKS.md. Use `/compact` instead if you need chat history for debugging."
+```bash
+Z_SESSION_CURATOR_TIMEOUT_S="${Z_SESSION_CURATOR_TIMEOUT_S:-120}"
+Z_SESSION_MAX_CHARS="${Z_SESSION_MAX_CHARS:-28000}"
+CURATOR_SUCCESS=0
+CURATOR_HASH=""
+CURATOR_REASON="not_run"
 
-Finalize the loop cleanly: do **not** dispatch any new task. Exit with status 0. On the next `/z-implement-all` invocation, counters reset — if the user ran `/clear`, context is fresh and a new window is correct. If they did not `/clear`, they chose to forgo the breakpoint's benefit; the run proceeds with a new window.
+if [ "${Z_SESSION_CURATOR_TIMEOUT_S}" -gt 0 ]; then
+  # Compute the since_marker from the last context_curated event in metrics.jsonl.
+  # ZH_BASE is the repo-wide base for metrics (same var used in log-event.sh).
+  ZH_BASE="${ZH_BASE:-$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" base 2>/dev/null || echo "$BASE")}"
+  SINCE_MARKER="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/session-helpers.sh" \
+    last_curated_marker "$ZH_BASE/metrics.jsonl" 2>/dev/null || echo "none")"
+  LAST_GATE_TASK="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/session-helpers.sh" \
+    last_done_task "$TASKS_FILE" 2>/dev/null || echo "")"
+
+  # Attempt 1 — timeout = Z_SESSION_CURATOR_TIMEOUT_S
+  CURATOR_TIMEOUT_1="$Z_SESSION_CURATOR_TIMEOUT_S"
+  # Attempt 2 (retry on timeout/error) — timeout = 2× the first
+  CURATOR_TIMEOUT_2=$(( Z_SESSION_CURATOR_TIMEOUT_S * 2 ))
+
+  _run_curator() {
+    local timeout_s="$1"
+    # Export timeout so the curator subagent can respect it.
+    export Z_SESSION_CURATOR_TIMEOUT_S="$timeout_s"
+    export Z_SESSION_MAX_CHARS
+    # Dispatch context-curator synchronously.
+    # The Agent() call blocks until the curator returns its STATUS line.
+    CURATOR_RETURN="$(Agent(
+      subagent_type="context-curator",
+      description="Context curation at compaction breakpoint",
+      prompt="plan_dir: $BASE
+run_id: $RUN
+repo_root: $REPO_ROOT
+last_gate_task_id: $LAST_GATE_TASK
+tasks_file: $TASKS_FILE
+event_source: $ZH_BASE/metrics.jsonl
+slug: $Z_HARNESS_SLUG
+since_marker: $SINCE_MARKER"
+    ))"
+    printf '%s' "$CURATOR_RETURN"
+  }
+```
+
+<!-- RUNTIME-GATE: subagent context-curator; non-supporting drivers must skip the curator dispatch and fall through to the plain push-notify below, as if Z_SESSION_CURATOR_TIMEOUT_S=0. -->
+
+```bash
+  # Parse the curator return for the STATUS line.
+  # Success: STATUS: curated done_ids_hash=<hash> bytes=<n>
+  # Failure: STATUS: failed reason=<reason>
+  _parse_curator_status() {
+    local output="$1"
+    local status_line
+    status_line="$(printf '%s' "$output" | grep '^STATUS:' | head -1)"
+    printf '%s' "$status_line"
+  }
+
+  # Attempt 1
+  CURATOR_OUT1="$(_run_curator "$CURATOR_TIMEOUT_1")"
+  STATUS_LINE1="$(_parse_curator_status "$CURATOR_OUT1")"
+
+  if printf '%s' "$STATUS_LINE1" | grep -q '^STATUS: curated'; then
+    # Success on attempt 1
+    CURATOR_SUCCESS=1
+    CURATOR_HASH="$(printf '%s' "$STATUS_LINE1" | sed -E 's/.*done_ids_hash=([^ ]+).*/\1/')"
+  else
+    # Timeout or error on attempt 1 — retry ONCE at 2×
+    CURATOR_REASON="$(printf '%s' "$STATUS_LINE1" | sed -E 's/.*reason=([^ ]+).*/\1/')"
+    # sed returns the full input unchanged when there is no match; detect and fallback
+    if [ -z "$CURATOR_REASON" ] || [ "$CURATOR_REASON" = "$STATUS_LINE1" ]; then CURATOR_REASON="timeout_or_error"; fi
+    CURATOR_OUT2="$(_run_curator "$CURATOR_TIMEOUT_2")"
+    STATUS_LINE2="$(_parse_curator_status "$CURATOR_OUT2")"
+
+    if printf '%s' "$STATUS_LINE2" | grep -q '^STATUS: curated'; then
+      # Success on attempt 2
+      CURATOR_SUCCESS=1
+      CURATOR_HASH="$(printf '%s' "$STATUS_LINE2" | sed -E 's/.*done_ids_hash=([^ ]+).*/\1/')"
+    else
+      # Persistent failure — both attempts failed
+      _r="$(printf '%s' "$STATUS_LINE2" | sed -E 's/.*reason=([^ ]+).*/\1/')"
+      CURATOR_REASON="${_r:-timeout_or_error}"
+      [ "$CURATOR_REASON" = "$STATUS_LINE2" ] && CURATOR_REASON="timeout_or_error"
+      CURATOR_SUCCESS=0
+    fi
+  fi
+fi  # end: Z_SESSION_CURATOR_TIMEOUT_S > 0
+```
+
+**Verify the done-set hash matches** (guards against a stale curator return being trusted when TASKS.md was written between dispatch and return; a mismatch means the curator wrote SESSION.md for a different done-set and is treated as a curation failure, degrading to the /compact notice):
+
+```bash
+if [ "$CURATOR_SUCCESS" -eq 1 ] && [ -n "$CURATOR_HASH" ]; then
+  CURRENT_DONE_HASH="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/session-helpers.sh" \
+    done_set_hash "$TASKS_FILE" 2>/dev/null || echo "")"
+  if [ "$CURATOR_HASH" != "$CURRENT_DONE_HASH" ]; then
+    # Hash mismatch — curator wrote SESSION.md for a different done-set; treat as failure
+    CURATOR_SUCCESS=0
+    CURATOR_REASON="done_ids_hash_mismatch"
+  fi
+fi
+```
+
+**Notice routing — exactly one notice fires per pause.** The following if/else is unconditional: `CURATOR_SUCCESS` is `1` only when the curator was dispatched (TIMEOUT_S > 0), returned `STATUS: curated`, AND the returned hash matches the current TASKS.md done-set. Every other case (disabled, failed, hash mismatch) falls to the else branch.
+
+```bash
+# NOTE: context_curation_failed is emitted here (inside the else branch) only when
+# the curator was actually dispatched (TIMEOUT_S > 0) and persistently failed.
+# It never fires when curator is disabled (TIMEOUT_S=0) — CURATOR_SUCCESS stays 0
+# but CURATOR_REASON="not_run" in that case.
+if [ "$CURATOR_SUCCESS" -eq 1 ]; then
+  # SUCCESS PATH — curator ran successfully and hashes match.
+  # Emit /clear & resume push-notify (hard pause).
+  push_notify "Compaction breakpoint: <N> tasks completed (or <M> min wall). <K> pending tasks remain. Run \`/clear\`, then re-invoke \`/z-implement-all\` to resume from TASKS.md. Use \`/compact\` instead if you need chat history for debugging."
+else
+  # FAILURE/DISABLED PATH — curator disabled (TIMEOUT_S=0), or failed both attempts,
+  # or hash mismatch between curator return and current TASKS.md done-set.
+  # Emit context_curation_failed ONLY when curator was dispatched and failed
+  # (i.e. TIMEOUT_S > 0; when disabled CURATOR_REASON="not_run" — skip event).
+  if [ "${Z_SESSION_CURATOR_TIMEOUT_S}" -gt 0 ] && [ "$CURATOR_REASON" != "not_run" ]; then
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" context_curation_failed \
+      "$(printf '{"reason":"%s"}' "$CURATOR_REASON")"
+  fi
+  # Emphatic push-notify — NEVER suggests /clear; always /compact-or-continue.
+  # When curator was disabled (TIMEOUT_S=0), this is the plain pause notice per today's behavior.
+  if [ "${Z_SESSION_CURATOR_TIMEOUT_S}" -gt 0 ]; then
+    push_notify "Context flush failed (\`${CURATOR_REASON}\`). SESSION.md not fully updated. Continue \`/z-implement-all\` as-is (history retained), or \`/compact\` to reduce context now — if the failure was reading events.jsonl, \`/compact\` may be affected too. Retrying next breakpoint."
+  else
+    push_notify "Compaction breakpoint: <N> tasks completed (or <M> min wall). <K> pending tasks remain. Run \`/clear\`, then re-invoke \`/z-implement-all\` to resume from TASKS.md. Use \`/compact\` instead if you need chat history for debugging."
+  fi
+fi
+```
+
+Finalize the loop cleanly: do **not** dispatch any new task. Exit with status 0. On the next `/z-implement-all` invocation, counters reset — if the user ran `/clear` (success path only), context is fresh and a new window is correct. If they did not `/clear`, they chose to forgo the breakpoint's benefit; the run proceeds with a new window.
 
 **No trigger:** continue to the next outer loop iteration (step 1).
 
@@ -556,6 +750,10 @@ misleading `|| log` (a `|| log` would be dead code since the subcommand returns 
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tasks/<task-id>" task_start '{"id":"<task-id>"}'
 python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" heartbeat \
   --run-id "$RUN" --phase implement --current-task "<task-id>" || true   # CLI self-logs registry_error on failure
+# Initialize breadcrumb trigger flags for this task track (step 8 sub-step 3b reads these).
+DECISION_GATE_FIRED=0   # set to 1 when a decision_needed gate is resolved in step 5
+TASK_HALT_FIRED=0       # set to 1 when a task_halt event is emitted for this track
+SPEC_DEVIATION_FIRED=0  # set to 1 when the implementer flags a deviation or user waives a review failure
 ```
 For a parallel batch, emit one heartbeat per task as it flips to `[~]` (last write wins on
 `current_task`; this is opportunistic liveness, not exact tracking).
@@ -1233,6 +1431,45 @@ print(json.dumps({
    Emitting only after the user's terminal choice (never a speculative pre-choice `halt`/`test_failed`) means the recorded `status` matches the attempt's real outcome, and the `PERSONA_OUTCOME_EMITTED` guard then permits the single correct terminal emit instead of being burned by a wrong speculative one.
 
    The `PERSONA_OUTCOME_EMITTED` guard guarantees no double-emit on the success path and the function's knob check guarantees no emission when rotation is off. Halts that occur *before* the implementer ran (skip-flagged tasks in step 2, spec-precheck `spec_problem` in step 4.5) never drew a persona and never call this function, so they emit no outcome event.
+3b. **Notable-only breadcrumb (emit `context_breadcrumb` iff a concrete trigger held).** This is the E2 signal consumed by the context-curator's `## Decisions` / `## Open threads` mining. Emit ONLY when at least one of these triggers held for this task; otherwise emit nothing (clean completions stay silent — this keeps the curator's mining high-signal):
+
+   | Trigger | `intent` value | Detection |
+   |---|---|---|
+   | A `decision_needed` or default-override gate was resolved | `"decision_gate"` | The task passed through an `AskUserQuestion` for `decision_needed` in step 5 |
+   | A `task_halt` occurred and was recovered (e.g. `wall_clock_cap`, `no_change_on_retry`, or user-resolved spec/decision halt) | `"task_halt_recovered"` | `task_halt` event was emitted for this task in the current attempt |
+   | The implementer's return included a shortcut or spec-deviation (`ISSUES:` or `cross_task_notes` flagged it, or the implementer returned a non-ok status that was overridden by the user) | `"spec_deviation"` | Implementer `SUMMARY` or `ISSUES` block mentioned a deviation; or user chose "proceed anyway" after a review failure |
+   | The reviewer forced a retry (review ran ≥ 2 cycles, i.e. `$CYCLE >= 2` at the time step 8 is reached) | `"reviewer_retry"` | `$CYCLE >= 2` (review_cycles ≥ 2) |
+
+   If more than one trigger held, use the first that applies in the order above (decision_gate > task_halt_recovered > spec_deviation > reviewer_retry) — one breadcrumb per task is enough.
+
+   ```bash
+   # Evaluate triggers in priority order; emit at most one breadcrumb.
+   BREADCRUMB_INTENT=""
+   if [ "${DECISION_GATE_FIRED:-0}" -eq 1 ]; then
+     BREADCRUMB_INTENT="decision_gate"
+   elif [ "${TASK_HALT_FIRED:-0}" -eq 1 ]; then
+     BREADCRUMB_INTENT="task_halt_recovered"
+   elif [ "${SPEC_DEVIATION_FIRED:-0}" -eq 1 ]; then
+     BREADCRUMB_INTENT="spec_deviation"
+   elif [ "${CYCLE:-1}" -ge 2 ]; then
+     BREADCRUMB_INTENT="reviewer_retry"
+   fi
+
+   if [ -n "$BREADCRUMB_INTENT" ]; then
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tasks/<task-id>" context_breadcrumb \
+       "$(printf '{"task":"%s","intent":"%s"}' "<task-id>" "$BREADCRUMB_INTENT")"
+   fi
+   # else: clean completion — emit nothing (notable-only invariant)
+   ```
+
+   **Boolean flags** — the orchestrator sets these in the task track as events occur:
+   - `DECISION_GATE_FIRED=1`: set when an `AskUserQuestion` resolves a `decision_needed` gate in step 5 (not for `needs_clarification`; those are pure pauses with no intent signal).
+   - `TASK_HALT_FIRED=1`: set when a `task_halt` event is emitted for this task in the current run (covers `wall_clock_cap`, `no_change_on_retry`, and any user-resolved halt that eventually reached `[x]`). Unresolved halts that end the run never reach step 8, so this flag is only set when the halt was recovered.
+   - `SPEC_DEVIATION_FIRED=1`: set when the implementer's `ISSUES:` block names a spec deviation, OR when the user chose "proceed anyway" on a second review failure (the intent is: something notable was waived). This flag is the orchestrator's responsibility — parse the implementer's structured return for a non-empty `ISSUES:` section that mentions "deviation", "shortcut", or "spec_problem".
+   - `CYCLE` is the existing retry counter; `$CYCLE >= 2` is the reviewer_retry signal (already in scope at step 8).
+
+   Initialize all three boolean flags to `0` at task-track start (step 3, alongside `task_start`), before any dispatch. Do NOT set them on pauses (`needs_clarification`, `decision_needed` before resolution) — only on events that actually reach the `[x]` gate.
+
 4. If notify.level is `all` (see [docs/human/config.md](docs/human/config.md)): push-notify per-task. (For `approval_only` default: only notify on halts.)
 5. Increment `tasks_since_pause` by 1 (this task reached `[x]`; retries and rollbacks do not count).
 6. **Batch-settle compaction check (once per batch, after all tracks finish).** When all parallel tracks in this outer iteration have completed (all have reached terminal status, the atomic TASKS.md write is done, `batch_done` is emitted, and all halt signals have been surfaced and resolved or deferred by the user), run the trigger check documented in the "Compaction breakpoint policy" section above. If a trigger fires: emit the `compaction_pause` event, push-notify, and exit cleanly with no new dispatch. If no trigger fires: continue to step 1.
@@ -1304,7 +1541,13 @@ For each task track, the orchestrator emits these event kinds (in order):
 | `persona_bound` (reviewer × 2) | Once per reviewer arm per cycle — only when `experiment.persona_rotation` is on (step 6 / 7a). Two events share `attempt_id`; each has its own `draw_id` + `reviewer_participant` (`base_codex` or `random_arm`). | `command`, `role`, `task_id`, `attempt_id`, `reviewer_participant`, `persona_id`?, `draw_id`?, `cycle` |
 | `decision_gate` | Halted for user input | `id`, `reason` (`spec_problem`/`decision_needed`/`needs_clarification`/`review_failed`), `wait_ms` (filled in after user replies) |
 | `task_done` | Marked `[x]` | `id`, `total_retries`, `review_cycles`, `task_wall_ms` (start→done), `precheck_wall_ms`, `implement_wall_ms_sum`, `review_wall_ms_sum`, `user_wait_ms_sum` |
+| `context_breadcrumb` | Notable event on a `[x]` task (step 8.3b) — omitted on clean completion | `task`, `intent` (`decision_gate`\|`task_halt_recovered`\|`spec_deviation`\|`reviewer_retry`) |
+| `context_curation_failed` | Curator failed/timed out after the one retry | `reason` |
+| `context_curation_truncated` | Overflow forced entry drops in SESSION.md | `sections`, `dropped` |
+| `context_curated` | Curator wrote SESSION.md successfully | `last_gate`, `done_count`, `done_ids_hash`, `context_hash`, `bytes` |
 | `persona_attempt_outcome` | Attempt close (only when `experiment.persona_rotation` is on) — see step 8.3a | `run_id`, `command`, `role`, `task_id`, `attempt_id`, `persona_id`, `draw_id`, `complexity_tier`, `diff_size`, `review_cycles`, `retries`, `blocker_count`, `wall_ms`, `status` |
+| `session_resume_skipped` | SESSION.md present but not used, or absent | `reason` |
+| `session_resumed` | Orchestrator inlined SESSION.md at startup | `done_ids_hash`, `last_gate_task_id`, `next_pending` |
 | `task_skip` | Skip rule hit, user picked Skip/Run-myself/Defer | `id`, `marker_matched`, `user_choice` |
 
 **Implementation pattern for any subagent call:**
