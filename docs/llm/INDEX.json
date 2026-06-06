@@ -485,7 +485,7 @@
         "docs/human/active-plan-registry.md",
         "docs/handoff-parallel-session-safety.md"
       ],
-      "last_updated": "2026-06-02",
+      "last_updated": "2026-06-05",
       "confidence": "high",
       "depends_on": [
         "scripts",
@@ -495,7 +495,7 @@
         "commands",
         "agents"
       ],
-      "summary": "Durable external artifact base + lockless cross-session awareness registry. Five-tier base fallback (Z_HARNESS_BASE_DIR > XDG_STATE_HOME > HOME/.local/state > git-common-dir > pwd/z-harness) with anchor enforcement prevents split-brain. Per-run JSON records in <base>/active-plans/ let concurrent sessions see each other's scope; overlap advisory at implement Phase 0 (Z_HARNESS_STRICT_OVERLAP=1 makes explicit×explicit exact path match a hard halt). Addresses the 2026-06-01 git clean incident."
+      "summary": "Durable external artifact base + lockless cross-session awareness registry with per-file lease/wait system. Five-tier base fallback (Z_HARNESS_BASE_DIR > XDG_STATE_HOME > HOME/.local/state > git-common-dir > pwd/z-harness) with anchor enforcement prevents split-brain. Per-run schema-v2 JSON records (held_paths, waiting_on) enable advisory per-file leases: claim (lexicographic tiebreak, won-set-only persist), release (per-task success), wait-for (poll loop with budget, waiting_on cleared on every exit via finally), overlaps (scope + held_conflict). Five wait/lease env knobs: Z_HARNESS_AUTO_WAIT, Z_HARNESS_AUTO_WAIT_BUDGET_SECS, Z_HARNESS_WAIT_POLL_SECS, Z_HARNESS_WAIT_TIMEOUT_SECS, Z_HARNESS_WAIT_REQUIRE_MERGE (deferred). Reaper live-local-pid carve-out: confirmed-alive local pids past 2x stale are marked stale but NOT deleted. Addresses the 2026-06-01 git clean incident."
     },
     {
       "slug": "cost-estimation",
