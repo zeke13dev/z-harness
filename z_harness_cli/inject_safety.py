@@ -43,6 +43,7 @@ import os
 import shutil
 import subprocess
 import time
+import warnings
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -358,6 +359,21 @@ def cleanup(project: Path) -> None:
     manifest = _load_manifest(manifest_file)
     for entry in manifest.get("entries", []):
         path = Path(entry["path"])
+
+        # Path-bounds guard: a corrupt or tampered manifest entry pointing
+        # outside the git root must not cause cleanup() to delete or restore
+        # arbitrary filesystem paths.  Skip and warn — do not unlink.
+        try:
+            path.relative_to(git_root)
+        except ValueError:
+            warnings.warn(
+                f"inject_safety.cleanup: manifest entry {path!r} is outside "
+                f"the git root {git_root!r}; skipping to prevent out-of-bounds "
+                "file deletion.",
+                stacklevel=2,
+            )
+            continue
+
         backup = entry.get("backup")
         if entry.get("existed") and backup:
             backup_path = Path(backup)

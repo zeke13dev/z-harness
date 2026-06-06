@@ -434,7 +434,7 @@ class TestLaunch(unittest.TestCase):
             project = Path(tmp)
             with patch("shutil.which", return_value="/usr/local/bin/claude"):
                 with patch(
-                    "z_harness_cli.adapters.claude.pty_launch", return_value=0
+                    "z_harness_cli.pty_launch.pty_launch", return_value=0
                 ) as mock_pty:
                     exit_code = adapter.launch(project, {"SOME": "env"})
 
@@ -452,7 +452,7 @@ class TestLaunch(unittest.TestCase):
             project = Path(tmp)
             with patch("shutil.which", return_value="/usr/local/bin/claude"):
                 with patch(
-                    "z_harness_cli.adapters.claude.pty_launch", return_value=0
+                    "z_harness_cli.pty_launch.pty_launch", return_value=0
                 ) as mock_pty:
                     adapter.launch(project, env)
 
@@ -467,7 +467,7 @@ class TestLaunch(unittest.TestCase):
             project = Path(tmp).resolve()
             with patch("shutil.which", return_value="/usr/local/bin/claude"):
                 with patch(
-                    "z_harness_cli.adapters.claude.pty_launch", return_value=0
+                    "z_harness_cli.pty_launch.pty_launch", return_value=0
                 ) as mock_pty:
                     adapter.launch(project, {})
 
@@ -481,7 +481,7 @@ class TestLaunch(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with patch("shutil.which", return_value="/usr/local/bin/claude"):
                 with patch(
-                    "z_harness_cli.adapters.claude.pty_launch", return_value=42
+                    "z_harness_cli.pty_launch.pty_launch", return_value=42
                 ):
                     code = adapter.launch(Path(tmp), {})
         self.assertEqual(code, 42)
@@ -492,7 +492,7 @@ class TestLaunch(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with patch("shutil.which", return_value=None):
                 with patch(
-                    "z_harness_cli.adapters.claude.pty_launch", return_value=0
+                    "z_harness_cli.pty_launch.pty_launch", return_value=0
                 ) as mock_pty:
                     adapter.launch(Path(tmp), {})
 
@@ -511,7 +511,7 @@ class TestLaunch(unittest.TestCase):
             try:
                 with patch("shutil.which", return_value="/usr/local/bin/claude"):
                     with patch(
-                        "z_harness_cli.adapters.claude.pty_launch", return_value=0
+                        "z_harness_cli.pty_launch.pty_launch", return_value=0
                     ):
                         code = adapter.launch(project, inj.env)
                 self.assertEqual(code, 0)
@@ -595,7 +595,7 @@ class TestRoundTrip(_RepoCase):
 
         # 3. launch (stubbed — no real PTY)
         with patch("shutil.which", return_value="/usr/local/bin/claude"):
-            with patch("z_harness_cli.adapters.claude.pty_launch", return_value=0) as mock_pty:
+            with patch("z_harness_cli.pty_launch.pty_launch", return_value=0) as mock_pty:
                 exit_code = self.adapter.launch(self.repo, inj.env)
 
         self.assertEqual(exit_code, 0)

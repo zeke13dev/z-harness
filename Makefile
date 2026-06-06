@@ -1,5 +1,5 @@
 SHELL := /usr/bin/env bash
-.PHONY: test test-sh conformance conformance-live conformance-record lint lint-strict preflight bench-autonomy-check
+.PHONY: test test-sh conformance conformance-live conformance-record conformance-strict lint lint-strict preflight bench-autonomy-check
 
 # Full Python test suite: the unit/integration tests under tests/, the
 # script-level tests under scripts/, and the runtime dispatch + driver tests
@@ -33,6 +33,23 @@ conformance-live:
 
 conformance-record:
 	python3 tests/conformance/run_conformance.py --command z-do --mode live --record --drivers $(DRIVER)
+
+# Strict, fail-loud conformance gate (MF2 / audit-finding F7). A REAL
+# integration check — NOT a placeholder:
+#   - select_driver(host) must return a LIVE HostDriver for each of
+#     claude/cursor/codex/antigravity (a missing host FAILS unless
+#     ALLOW_MISSING=1 sets --allow-missing);
+#   - select_driver("unknown") must raise DriverNotFoundError with a clear msg;
+#   - each driver .init() with unset auth must not crash (clear config error);
+#   - FAIL on zero actual driver coverage and on placeholder/missing fixtures.
+# Both the standalone runner AND the pytest module (run with
+# Z_HARNESS_CONFORMANCE_STRICT=1 so the fail-loud fixture check is enabled
+# rather than skipped) must pass.
+# This target is EXPECTED to fail until real fixtures are recorded
+# (run_conformance.py --mode live --record) — that is the point of the gate.
+conformance-strict:
+	python3 tests/conformance/run_strict.py --command z-do $(if $(ALLOW_MISSING),--allow-missing,)
+	Z_HARNESS_CONFORMANCE_STRICT=1 python3 -m pytest tests/conformance/test_strict.py -v
 
 # AskUserQuestion callsite audit — documentation/audit tooling, NOT runtime enforcement.
 # Unregistered callsites under Z_HARNESS_NO_ASK=halt still block until the user responds.

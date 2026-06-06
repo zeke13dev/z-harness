@@ -162,15 +162,51 @@ def resolve_config_env(repo_root: str | os.PathLike) -> dict[str, str]:
 # Public: plugin-root injection (D14)
 # ---------------------------------------------------------------------------
 
+#: Mode strings accepted by the env-bundle resolvers.  Two naming schemes meet
+#: here: this module historically used ``"installed"`` for the non-injecting
+#: (host-resolves-its-own-plugin-root) case, while the adapter ``inject()`` API
+#: (``z_harness_cli/adapters/base.py``) names the same case ``"in_place"``.  To
+#: kill the cross-module footgun (a caller that builds the bundle AND calls
+#: ``inject()`` must otherwise translate the string by hand — see the T013
+#: note), both spellings are accepted as synonyms here.  ``"installed"`` and
+#: ``"in_place"`` both mean "do NOT inject a plugin-root"; ``"ephemeral"`` means
+#: "inject the plugin-root".
+BundleMode = Literal["ephemeral", "installed", "in_place"]
+
+#: The inject-style spelling of the non-injecting mode, accepted as an alias of
+#: ``"installed"`` so a single ``mode`` variable can be threaded into both
+#: ``resolve_env_bundle()`` and ``adapter.inject()``.
+_NO_INJECT_MODES = frozenset({"installed", "in_place"})
+
+
+def _normalize_mode(mode: BundleMode) -> Literal["ephemeral", "installed"]:
+    """Collapse the accepted mode spellings onto this module's two cases.
+
+    ``"in_place"`` (the adapter ``inject()`` spelling) is treated as an alias of
+    ``"installed"`` (this module's historical spelling).  Any other value raises
+    ``ValueError`` so a typo fails loud rather than silently injecting the wrong
+    plugin-root.
+    """
+    if mode == "ephemeral":
+        return "ephemeral"
+    if mode in _NO_INJECT_MODES:
+        return "installed"
+    raise ValueError(
+        f"Unknown env-bundle mode {mode!r}; expected one of "
+        "'ephemeral', 'installed', or 'in_place'."
+    )
+
+
 def resolve_plugin_root_env(
     host: str,
-    mode: Literal["ephemeral", "installed"],
+    mode: BundleMode,
     harness_root: str | os.PathLike | None = None,
 ) -> dict[str, str]:
     """Return the plugin-root env var(s) appropriate for this host + mode.
 
-    For ``mode="installed"`` the host's own environment already provides the
-    correct plugin-root (no injection needed) — returns an empty dict.
+    For ``mode="installed"`` (alias ``"in_place"``) the host's own environment
+    already provides the correct plugin-root (no injection needed) — returns an
+    empty dict.
 
     For ``mode="ephemeral"`` the CLI must inject the plugin-root so that
     harness scripts executed inside the spawned host can locate commands/,
@@ -186,7 +222,7 @@ def resolve_plugin_root_env(
     The ``harness_root`` argument allows overriding the auto-detected path
     (useful in tests).
     """
-    if mode == "installed":
+    if _normalize_mode(mode) == "installed":
         return {}
 
     if harness_root is None:
@@ -236,7 +272,7 @@ def resolve_providers_env(repo_root: str | os.PathLike) -> dict[str, str]:
 def resolve_env_bundle(
     repo_root: str | os.PathLike,
     host: str,
-    mode: Literal["ephemeral", "installed"],
+    mode: BundleMode,
 ) -> dict[str, str]:
     """Build the full injected-env bundle for a spawned host.
 
@@ -259,7 +295,10 @@ def resolve_env_bundle(
         host:       Host identifier string (e.g. ``"claude"``, ``"cursor"``,
                     ``"codex"``, ``"antigravity"``).
         mode:       ``"ephemeral"`` = CLI-managed injection (plugin-root is set);
-                    ``"installed"`` = host manages its own plugin-root.
+                    ``"installed"`` (alias ``"in_place"``) = host manages its own
+                    plugin-root.  The ``"in_place"`` alias lets a caller pass the
+                    same ``mode`` string to both this function and
+                    ``adapter.inject()`` without translation (T013 footgun fix).
 
     Returns:
         A plain ``dict[str, str]`` ready to be merged into ``os.environ`` of a

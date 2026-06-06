@@ -1,6 +1,6 @@
 # review-agent
 
-> Last updated: 2026-05-27
+> Last updated: 2026-06-05
 > Covers source: agents/review-agent.md, scripts/run-memory-review.sh
 
 ## Overview
@@ -17,14 +17,16 @@ The agent reasons but does not write. It returns a single fenced JSON block cont
 - `agents/review-agent.md:46` — `## Output contract` — fenced JSON schema for candidate objects; any other output is malformed
 - `scripts/run-memory-review.sh:1` — `run-memory-review` — skip-condition guard and artifact-prep helper; called by all three parent commands before any agent dispatch
 - `scripts/run-memory-review.sh:135` — `debug_md_missing` skip condition — fires when `parent_command: debug` and `DEBUG.md` is absent or unreadable
+- `scripts/run-memory-review.sh:173` — `AXIOM_READY` emission — optional extra stdout line emitted when `Z_HARNESS_AXIOM_EXTRACT != "0"`; consumed by orchestrators to optionally dispatch axiom-extractor in parallel
 
 ## How it interacts with others
 
 - `z-implement-all` — Phase 9 calls `run-memory-review.sh`, then dispatches `review-agent`, then runs the accept/skip loop
 - `z-review-all` — Phase 7 does the same; signals differ (no `all_tasks_skipped` skip condition here)
-- `z-debug` — Phase 10 (shipped branch only) does the same; `debug_md_path` is passed as primary artifact; abandoned sessions are excluded
+- `z-debug` — Phase 10 (shipped branch only) does the same; `debug_md_path` is passed as primary artifact; abandoned sessions are excluded; also optionally dispatches axiom-extractor in parallel when `AXIOM_READY` line is present
 - `z-suggest-memory` — sole write path for accepted candidates; called with `--from-candidate-json` and `--source "incident:<RUN_ID>"`
 - `z-stats` — surfaces `review_agent_call`, `review_agent_failed`, and `review_agent_malformed` events for debugging
+- `axioms` — `run-memory-review.sh` emits `AXIOM_READY <diff_path>` as a coordination signal for axiom extraction; gated by `Z_HARNESS_AXIOM_EXTRACT` env var (default on)
 
 ## When it fires
 
@@ -48,6 +50,16 @@ Before dispatching the agent, `scripts/run-memory-review.sh` performs a skip-con
 When `parent_command: debug`, `debug_md_path` is the **primary artifact** the agent reasons over. `spec_path` is supplementary context for recognizing affected invariants. The agent filters candidates for generalizable invariants, root-cause patterns, and "why we didn't catch it" gaps — single-run patches and fix-specific minutiae are not memories.
 
 When `parent_command: implement-all` or `review-all`, `spec_path` is primary and `debug_md_path` is unset.
+
+## AXIOM_READY coordination signal
+
+When `STATUS: ready` is returned and `Z_HARNESS_AXIOM_EXTRACT` is not set to `"0"` (default on), `run-memory-review.sh` emits one additional line:
+
+```
+AXIOM_READY <abs-path-to-cumulative.diff>
+```
+
+This line appears after the standard artifact paths in the stdout block. The orchestrator (currently only `z-debug` Phase 10) uses it to optionally dispatch the axiom-extractor **in parallel** with the review-agent. The signal is advisory — it does not gate the review-agent dispatch. Setting `Z_HARNESS_AXIOM_EXTRACT=0` suppresses the line entirely without affecting any other behavior.
 
 ## What the user sees
 
@@ -112,6 +124,7 @@ One JSON object per line. This file is ephemeral — it lives with the run archi
 - `run-memory-review.sh` requires `$Z_HARNESS_PLAN_DIR` to be set; if unset, the script emits `STATUS: skipped no_plan_dir` and exits 0 without error.
 - `run-memory-review.sh` soft-skips (exit 0) on missing `docs/llm/TAGS.txt` rather than failing hard; the orchestrator sees `STATUS: skipped tags_missing`.
 - When `parent_command: debug`, line 5 of the helper's stdout is the absolute path to `DEBUG.md`; `LINES[4]` in the orchestrator.
+- `AXIOM_READY <path>` may appear as an extra line after the standard artifact paths when `Z_HARNESS_AXIOM_EXTRACT != "0"`. Orchestrators that do not handle it must not treat it as an artifact path. Currently only z-debug Phase 10 consumes it.
 - The diff base ref is resolved in order: merge-base with `origin/main`, then `HEAD~5`, then the empty-tree hash. An empty diff causes skip before any agent dispatch.
 - Parse failure on agent return is a soft-skip (`review_agent_malformed` event), not a hard error — the phase exits with a push-notify hint.
 - No per-call wall-clock timeout on the Agent dispatch in v1; user ctrl-c is the only escape if the Haiku call hangs. The primary-deliverable push-notify has already fired at that point.

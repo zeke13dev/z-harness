@@ -1,6 +1,6 @@
 {
   "concept": "axioms",
-  "last_updated": "2026-05-29T00:00:00Z",
+  "last_updated": "2026-06-05",
   "covers_spec": "z-harness/inherited-agents-axioms/SPEC.md",
   "source_file": [
     "scripts/axiom-store.py",
@@ -46,14 +46,21 @@
       "line": 927,
       "symbol": "cmd_approve",
       "kind": "fn",
-      "summary": "Atomically promote candidate to approved. Algorithm: load candidate, schema-validate, needs_ack gate (no boundary/counterexamples without --ack-observation), O_EXCL lock, build prospective set, validate_graph, demote supersedes target to rejected/, write approved/<id>.json, remove candidate, regen kernel (synchronous). Returns needs_ack | graph_invalid | busy | approved | approved_kernel_stale."
+      "summary": "Atomically promote candidate to approved. Algorithm: load candidate, schema-validate, needs_ack gate (no boundary/counterexamples without --ack-observation), O_EXCL lock, build prospective set, validate_graph, demote supersedes target to rejected/, write approved/<id>.json, remove candidate, regen kernel (synchronous). Returns needs_ack | graph_invalid | busy | cross_store_supersede_unsupported | approved | approved_kernel_stale."
     },
     {
       "file": "scripts/axiom-extract.py",
       "line": 1,
       "symbol": "axiom-extract",
       "kind": "module",
-      "summary": "Mine candidate axioms from metrics.jsonl. Mined kinds: user_choice, user_override (log-decision.sh), cost_gate_decision, critique_failure_decision, map_collision_decision, shared_concerns_ack_override. Grouping key: (event_kind, decision_key, normalized_value). Candidate proposed when group count >= axioms.extract_min_recurrence (default 3). confidence = min(0.95, rec/(rec+2)). Two-stage in-run dedup: exact statement+scope hash, then fuzzy token-set Jaccard >= 0.9. Advisory MEMORY.md overlap note on stderr. Invariant 8: never writes the store, never approves."
+      "summary": "Mine candidate axioms from metrics.jsonl. Resolves metrics.jsonl via plan-path.sh base_dir (Phase-D external-base flip); falls back to repo_root/z-harness/metrics.jsonl. Mined kinds: user_choice, user_override (log-decision.sh), cost_gate_decision, critique_failure_decision, map_collision_decision, shared_concerns_ack_override. Grouping key: (event_kind, decision_key, normalized_value). Candidate proposed when group count >= axioms.extract_min_recurrence (default 3). confidence = min(0.95, rec/(rec+2)). Two-stage in-run dedup: exact statement+scope hash, then fuzzy token-set Jaccard >= 0.9. Advisory MEMORY.md overlap note on stderr. Invariant 8: never writes the store, never approves."
+    },
+    {
+      "file": "scripts/axiom-extract.py",
+      "line": 105,
+      "symbol": "_resolved_base_dir",
+      "kind": "fn",
+      "summary": "Resolve the artifact base directory via plan-path.sh base_dir, honouring the full 5-tier fallback. Falls back to repo_root/z-harness when plan-path.sh is unavailable. Best-effort; never raises. Added in the Phase-D external-base fix."
     },
     {
       "file": "scripts/build-kernel.py",
@@ -85,14 +92,14 @@
     },
     {
       "file": "scripts/config.py",
-      "line": 1334,
+      "line": 1494,
       "symbol": "_load_axiom_matches",
       "kind": "fn",
       "summary": "Load graph-valid approved axioms whose applies_to array contains a <question_id>:<value> entry matching the given question_id. Gates on axioms.enabled (default true). Delegates to axiom-store._load_active_set and validate_graph. Returns [] on any error (fail-open for the store, fail-closed for participation)."
     },
     {
       "file": "scripts/config.py",
-      "line": 1706,
+      "line": 1860,
       "symbol": "_build_resolve_envelope",
       "kind": "fn",
       "summary": "Core resolver applying axiom layer on top of config+memory. Three axiom outcomes: (1) agree with resolved value -> listed in sources[] only, no result change; (2) gap-fill (config=ask default, memory silent) -> source='axiom', strength='soft', result via RESULT_MAP; (3) conflict with resolved value -> source='axiom_conflict', nested axiom:{id, statement, conflict:true}. No axiom match -> envelope byte-identical to pre-axiom (R7)."
@@ -131,7 +138,8 @@
     "axiom id format: ax-<sha256(statement+scope)[:8]> (8 lowercase hex chars). Derived deterministically; no random component.",
     "Store directories: global = $XDG_CONFIG_HOME/z-harness/axioms/{candidates,approved,rejected}/; project = <git-root>/.z-harness/axioms/{candidates,approved,rejected}/. Both survive /z-update.",
     "axioms.enabled=false causes _load_axiom_matches to return [] immediately; the resolver behaves identically to a pre-axioms run (backward-compatible). The axiom key is ABSENT entirely from the envelope when no axiom participates (R7).",
-    "Kernel budget selection: greedy include-in-sort-order, then verify-and-trim loop. First axiom always kept even if it alone exceeds budget. Budget accounts for exact rendered-size including header widths, n_axioms, and omitted-count comment."
+    "Kernel budget selection: greedy include-in-sort-order, then verify-and-trim loop. First axiom always kept even if it alone exceeds budget. Budget accounts for exact rendered-size including header widths, n_axioms, and omitted-count comment.",
+    "axiom-extract.py resolves metrics.jsonl via plan-path.sh base_dir (Phase-D external-base flip). Falls back to repo_root/z-harness/metrics.jsonl when plan-path.sh is unavailable or exits non-zero. Without a properly configured external base, /z-axiom-scan mines zero candidates from a missing file."
   ],
   "gotchas": [
     "Axioms advisory — config/memory win direct conflicts but conflict is surfaced: a config or memory entry that disagrees with an axiom produces source='axiom_conflict' in the resolve-question envelope. The result/strength/rule_id from config/memory still apply; the axiom object is informational. Callers must handle the axiom_conflict source value.",
@@ -140,10 +148,11 @@
     "Gap-fill vs agree vs conflict: axioms only change the resolution outcome in the gap-fill case (config=ask default + memory silent). When config or memory has a non-default value, the axiom layer records the axiom in sources[] (agree) or emits axiom_conflict (disagree) but does NOT change result/strength. Treat strength='soft' as the marker for an axiom-driven gap-fill.",
     "Free-form behavioral axioms (no applies_to field) never enter the resolver. They appear only in KERNEL.md and are read by behavioral subagents at task start. The resolver only consults axioms that have a matching applies_to entry.",
     "axiom-extract.py writes extractor-only fields (possible_duplicate_of, notes) onto candidates during mining, then STRIPS them before emitting to stdout. These fields are NOT in the schema (additionalProperties:false) and would cause axiom-store.py add to reject the record. The stripped annotations appear on stderr as {advisories:[...]}.",
-    "Fuzzy dedup in axiom-extract.py uses token-set Jaccard >= 0.9 to flag possible_duplicate_of, but does NOT drop the duplicate — it annotates it on stderr. The axiom-extractor AGENT (T015) is responsible for actually merging near-duplicates before returning candidates to the caller.",
+    "Fuzzy dedup in axiom-extract.py uses token-set Jaccard >= 0.9 to flag possible_duplicate_of, but does NOT drop the duplicate — it annotates it on stderr. The axiom-extractor AGENT is responsible for actually merging near-duplicates before returning candidates to the caller.",
     "resolve-kernel.sh staleness check is non-blocking and best-effort. It shells out to build-kernel.py --print-hash; if that fails for any reason (missing script, non-zero exit, parse error), it silently skips the check. A stale kernel does not prevent agents from reading the file.",
     "validate_graph check 2 (mutual conflict between approved records): the exemption (one supersedes the other) only applies when the superseded record is NOT approved. If both records are approved and one supersedes the other, it is still an error — the superseded record must be demoted (rejected) for the exemption to apply.",
-    "Project scope _load_active_set always includes global records too (project is a SUPERSET). This means a project-scope approve sees global approved records for graph validation — a conflict between a project candidate and a global approved record will be caught. Passing --scope=project to validate --all also loads both stores."
+    "Project scope _load_active_set always includes global records too (project is a SUPERSET). This means a project-scope approve sees global approved records for graph validation — a conflict between a project candidate and a global approved record will be caught. Passing --scope=project to validate --all also loads both stores.",
+    "Phase-D external-base: axiom-extract.py previously hardcoded repo_root/z-harness/metrics.jsonl. After the fix it calls plan-path.sh base_dir. If plan-path.sh is absent or the external base is not initialised, the legacy fallback path is used — meaning a new install that has never run /z-plan may silently scan an empty or missing metrics file."
   ],
   "memories": []
 }

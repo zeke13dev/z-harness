@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # install.sh — install z-harness for Claude Code and/or Codex
 #
+# NOTE: This script handles Claude Code and Codex *plugin* install only.
+# To install the z-harness Python CLI (z-harness / zh) via uv tool install,
+# use scripts/curl-install.sh instead:
+#   curl -fsSL https://releases.zeketools.dev/z-harness/install.sh | sh
+# Cursor and Antigravity plugin injection is handled by each adapter's inject()
+# method, not by this script. [RC5]
+#
 # Usage:
 #   bash install.sh                    # Claude Code install, auto-detect mode
 #   bash install.sh --target=codex     # Codex plugin install

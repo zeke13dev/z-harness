@@ -116,11 +116,13 @@
       "source_file": [
         "commands/z-fix.md"
       ],
-      "last_updated": "2026-05-28T20:50:09Z",
+      "last_updated": "2026-06-05",
       "confidence": "high",
       "depends_on": [
         "agents",
-        "commands"
+        "scripts",
+        "commands",
+        "config"
       ],
       "consumed_by": [
         "commands"
@@ -324,11 +326,12 @@
         "agents/review-agent.md",
         "scripts/run-memory-review.sh"
       ],
-      "last_updated": "2026-05-28T00:00:00Z",
+      "last_updated": "2026-06-05",
       "confidence": "high",
       "depends_on": [
         "z-suggest-memory",
-        "z-stats"
+        "z-stats",
+        "axioms"
       ],
       "consumed_by": [
         "z-implement-all",
@@ -339,11 +342,13 @@
     },
     {
       "slug": "z-uplift",
-      "last_updated": "2026-05-28T20:50:09Z",
+      "last_updated": "2026-06-05",
       "confidence": "high",
       "depends_on": [
         "commands",
-        "agents"
+        "agents",
+        "config",
+        "cost-estimation"
       ],
       "consumed_by": [],
       "summary": "Tiered bulk codebase quality uplift: decompose into components, repo-wide cross-cutting pass, per-component audits, sequential implement via /z-implement-all.",
@@ -527,7 +532,7 @@
         "scripts/config.py",
         "scripts/setup.py"
       ],
-      "last_updated": "2026-05-29T00:00:00Z",
+      "last_updated": "2026-06-05",
       "confidence": "high",
       "depends_on": [
         "config",
@@ -540,6 +545,24 @@
         "agents"
       ],
       "summary": "Advisory behavioral rules mined from z-harness interaction history; lifecycle raw->candidate->approved with explicit user approval gate; five /z-axiom-* commands; KERNEL.md compiled by build-kernel.py and read by six behavioral subagents; axioms are the lowest-authority signal in the resolver \u2014 config/memory win direct conflicts but the conflict is surfaced via axiom_conflict envelope."
+    },
+    {
+      "slug": "capabilities-matrix",
+      "source_file": [
+        "z_harness_cli/adapters/claude.py",
+        "z_harness_cli/adapters/antigravity.py",
+        "z_harness_cli/adapters/cursor.py",
+        "z_harness_cli/adapters/codex.py",
+        "z_harness_cli/adapters/base.py",
+        "z_harness_cli/adapters/registry.py"
+      ],
+      "last_updated": "2026-06-04",
+      "confidence": "high",
+      "depends_on": [
+        "multi-ide-exports"
+      ],
+      "consumed_by": [],
+      "summary": "Per-host fidelity tiers and command-capability grid for the z-harness CLI adapters. native (claude) = full orchestration + native personas; high (antigravity) = native skills/personas, single-agent, multi-agent commands degraded; flattened (cursor, codex) = transliterated rules, single-agent, multi-agent commands blocked."
     }
   ]
 }

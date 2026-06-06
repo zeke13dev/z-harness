@@ -1,6 +1,6 @@
 {
   "concept": "review-agent",
-  "last_updated": "2026-05-27",
+  "last_updated": "2026-06-05",
   "covers_spec": "z-harness/plans/memory-self-improve-loop/SPEC.md",
   "source_file": [
     "agents/review-agent.md",
@@ -17,13 +17,15 @@
     {"file": "agents/review-agent.md", "line": 46, "symbol": "Output contract", "kind": "module", "summary": "Fenced JSON schema for candidate objects; any other output treated as malformed"},
     {"file": "scripts/run-memory-review.sh", "line": 1, "symbol": "run-memory-review", "kind": "module", "summary": "Skip-condition guard and artifact-prep helper; called before every review-agent dispatch"},
     {"file": "scripts/run-memory-review.sh", "line": 135, "symbol": "debug_md_missing", "kind": "module", "summary": "Skip condition: fires when parent_command=debug and DEBUG.md is absent or unreadable"},
+    {"file": "scripts/run-memory-review.sh", "line": 173, "symbol": "AXIOM_READY", "kind": "module", "summary": "Emits AXIOM_READY <diff_path> when Z_HARNESS_AXIOM_EXTRACT != 0; consumed by orchestrators for parallel axiom extraction"},
     {"file": "skills/z-implement-all/SKILL.md", "line": 593, "symbol": "Phase 9", "kind": "module", "summary": "Orchestrator Phase 9: helper call, skip handling, agent dispatch, parse, accept/skip loop"},
     {"file": "skills/z-review-all/SKILL.md", "line": 369, "symbol": "Phase 7", "kind": "module", "summary": "Orchestrator Phase 7: same as Phase 9 but without all_tasks_skipped skip condition"},
-    {"file": "skills/z-debug/SKILL.md", "line": 521, "symbol": "Phase 10 memory review", "kind": "module", "summary": "Orchestrator Phase 10 (shipped branch only): debug_md_path as primary artifact; abandoned sessions excluded"}
+    {"file": "skills/z-debug/SKILL.md", "line": 521, "symbol": "Phase 10 memory review", "kind": "module", "summary": "Orchestrator Phase 10 (shipped branch only): debug_md_path as primary artifact; AXIOM_READY parsed for parallel axiom-extractor dispatch"}
   ],
   "depends_on": [
     "z-suggest-memory",
-    "z-stats"
+    "z-stats",
+    "axioms"
   ],
   "consumed_by": [
     "z-implement-all",
@@ -39,12 +41,14 @@
     "agent receives index_path and must prefer extending an existing slug over coining a new one",
     "when parent_command=debug, debug_md_path is primary artifact; spec_path is supplementary only",
     "memory_review_terminal event emitted at terminal state of every review pass regardless of path taken",
-    "review_agent_failed and review_agent_malformed do NOT emit memory_review_terminal; they are orthogonal failure classes"
+    "review_agent_failed and review_agent_malformed do NOT emit memory_review_terminal; they are orthogonal failure classes",
+    "AXIOM_READY line is advisory signal only; does not gate review-agent dispatch or any existing behavior"
   ],
   "gotchas": [
     "run-memory-review.sh requires $Z_HARNESS_PLAN_DIR to be set; unset yields STATUS: skipped no_plan_dir",
     "run-memory-review.sh soft-skips (exit 0) on missing TAGS.txt rather than failing hard; emits skipped_broken_context state",
     "when parent_command=debug, line 5 of helper stdout is DEBUG.md path; LINES[4] in orchestrator",
+    "AXIOM_READY <path> may appear as an extra stdout line after standard artifact paths when Z_HARNESS_AXIOM_EXTRACT != 0; orchestrators not consuming it must not treat it as an artifact path",
     "debug_md_missing skip fires when DEBUG.md absent — distinct from empty_diff skip",
     "abandoned debug sessions never invoke run-memory-review.sh; no telemetry emitted",
     "empty diff causes skip with skip_reason: empty_diff before any Agent dispatch",

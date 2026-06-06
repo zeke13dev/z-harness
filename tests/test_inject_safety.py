@@ -318,5 +318,102 @@ class TestNonGitFailsLoud(unittest.TestCase):
                 preflight_targets([target], Path(tmp), force=False)
 
 
+# ---------------------------------------------------------------------------
+# Path-bounds guard in cleanup() (T-REV-005)
+# ---------------------------------------------------------------------------
+
+
+class TestCleanupPathBounds(_RepoCase):
+    """cleanup() must skip manifest entries that resolve outside the git root.
+
+    A corrupt or tampered injected_files.json could contain absolute paths
+    outside the repo (e.g. /etc/passwd).  The bounds guard must skip+warn
+    rather than unlinking arbitrary filesystem paths.
+    """
+
+    def _inject_out_of_bounds_entry(self, out_of_bounds_path: Path) -> None:
+        """Write a manifest with one normal entry and one out-of-bounds entry."""
+        import json
+        import time as _time
+        from z_harness_cli.inject_safety import _state_dir, _git_root, _MANIFEST_NAME
+
+        git_root = _git_root(self.repo)
+        state = _state_dir(git_root)
+        state.mkdir(parents=True, exist_ok=True)
+        manifest = {
+            "schema": 1,
+            "created": _time.time(),
+            "git_root": str(git_root),
+            "entries": [
+                {
+                    "path": str(out_of_bounds_path),
+                    "existed": False,
+                    "authored": True,
+                }
+            ],
+        }
+        manifest_file = state / _MANIFEST_NAME
+        manifest_file.write_text(
+            json.dumps(manifest, indent=2), encoding="utf-8"
+        )
+
+    def test_out_of_bounds_path_is_skipped_not_unlinked(self):
+        """A manifest entry outside the git root must be skipped, not deleted.
+
+        The invariant: cleanup() must not touch files outside the git root,
+        even when the manifest says to.  The out-of-bounds file must survive.
+        """
+        import warnings as _warnings
+
+        # Create a real file OUTSIDE the repo that the manifest points at.
+        with tempfile.NamedTemporaryFile(
+            prefix="zh-oob-target-", delete=False, suffix=".txt"
+        ) as f:
+            oob_path = Path(f.name)
+            f.write(b"sensitive content\n")
+
+        try:
+            self._inject_out_of_bounds_entry(oob_path)
+
+            # cleanup() must warn and skip the out-of-bounds entry.
+            with _warnings.catch_warnings(record=True) as caught:
+                _warnings.simplefilter("always")
+                cleanup(self.repo)
+
+            # The out-of-bounds file must NOT have been deleted.
+            self.assertTrue(
+                oob_path.exists(),
+                f"cleanup() deleted out-of-bounds file {oob_path} — path-bounds guard missing.",
+            )
+
+            # A warning must have been emitted.
+            self.assertTrue(
+                any("outside" in str(w.message).lower() for w in caught),
+                f"Expected a 'outside' warning for OOB path; got: {[str(w.message) for w in caught]}",
+            )
+        finally:
+            try:
+                oob_path.unlink()
+            except FileNotFoundError:
+                pass
+
+    def test_in_bounds_path_is_still_cleaned(self):
+        """After adding the bounds guard, normal in-bounds cleanup still works."""
+        agents = self.repo / "AGENTS.md"
+        preflight_targets([agents], self.repo, force=False)
+        # Simulate the adapter writing the file.
+        from z_harness_cli.inject_safety import MAGIC_MARKER
+        agents.write_text(f"<!-- {MAGIC_MARKER} -->\n", encoding="utf-8")
+        self.assertTrue(agents.exists())
+
+        cleanup(self.repo)
+
+        # In-bounds target must be cleaned up as usual.
+        self.assertFalse(
+            agents.exists(),
+            "cleanup() failed to remove an in-bounds z-harness file after adding path-bounds guard.",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

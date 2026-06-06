@@ -6,6 +6,8 @@ on:
       - "tests/conformance/**"
       - "runtime/**"
       - "drivers/**"
+      - "Makefile"
+      - ".github/workflows/conformance.yml"
   workflow_dispatch:
 
 jobs:
@@ -46,4 +48,43 @@ jobs:
             if ! echo "$PR_BODY" | grep -q "CONFORMANCE-BUMP:"; then
               echo "::warning::Fixture files were modified but the PR description does not contain a 'CONFORMANCE-BUMP: <reason>' line. Please add one to explain why golden fixtures changed."
             fi
+          fi
+
+  # MF2 / audit-finding F7 — strict, fail-loud conformance gate.
+  #
+  # This job runs `make conformance-strict`, which is a REAL integration check:
+  # it asserts every host (claude/cursor/codex/antigravity) routes to a LIVE
+  # HostDriver, that select_driver("unknown") raises DriverNotFoundError, that
+  # each driver .init() with unset auth does not crash, and that golden fixtures
+  # carry REAL recorded coverage (not '# PLACEHOLDER' / empty / missing).
+  #
+  # It is INTENTIONALLY allowed to fail (continue-on-error) while the golden
+  # fixtures are still placeholders: the gate is fail-loud BY DESIGN, so until
+  # real fixtures are recorded (run_conformance.py --mode live --record) it will
+  # report the missing-coverage failure as a CI annotation rather than blocking
+  # every PR. Flip `continue-on-error` to false once real fixtures land to make
+  # the gate enforcing.
+  conformance-strict:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install pytest
+
+      - name: Run strict conformance gate (fail-loud)
+        run: |
+          if ! make conformance-strict; then
+            echo "::warning title=conformance-strict::Strict conformance gate FAILED. This is expected while golden fixtures are placeholders — record real fixtures (run_conformance.py --mode live --record) and then make this job blocking by setting continue-on-error: false."
+            exit 1
           fi

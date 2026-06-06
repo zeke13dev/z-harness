@@ -1,31 +1,59 @@
-"""Claude Code host adapter — fidelity: native.
+"""Antigravity (agy) host adapter — fidelity: high.
 
-This is the reference (native-fidelity) adapter.  All /z-* commands run
-identically to how they behave when users launch Claude Code directly.
+agy is a single-agent host that supports native skill and persona loading via
+the ``.agent/`` directory convention.  All /z-* commands run in high-fidelity
+mode: single-agent orchestration works natively; multi-agent commands
+(/z-implement-all, /z-panel, /z-consult, /z-gate) are degraded (no subagent
+dispatch) rather than fully blocked.
 
 Injection modes
 ---------------
-installed-plugin:  The z-harness Claude plugin is installed in the user's
-    Claude Code instance (the normal production path).  No config file needs
-    to be written; Claude Code resolves CLAUDE_PLUGIN_ROOT from its own
-    environment.  inject() returns an Injection with mode="in_place" and an
-    empty injected_files list.
+ephemeral:  A gitignored ``.agent/z-harness-session.md`` instruction file is
+    written carrying the MAGIC_MARKER.  The ANTIGRAVITY_PLUGIN_ROOT env var is
+    injected so the spawned agy process can locate the harness runtime.
+    cleanup() removes the file.
 
-ephemeral:  A gitignored CLAUDE.md is written to the project root with the
-    z-harness magic marker so inject_safety can track it.  The CLAUDE_PLUGIN_ROOT
-    env var is injected so the spawned Claude Code process can locate the
-    harness runtime.  inject() returns an Injection with mode="ephemeral" and
-    the written file listed for cleanup.
+in_place:  The session file is written as a committed project file (the caller
+    manages its lifecycle; cleanup is a no-op for files the caller committed).
 
-Export layout (claude plugin)
------------------------------
-Delegates to runtime/drivers/claude/persona_export.py::export_persona().
-The output is <dest>/personas/<name>.md — a flat Markdown file injected as a
-system-prompt prefix by the Claude subagent dispatcher.
+Export layout (agy native skills/personas)
+------------------------------------------
+Delegates to ``runtime/drivers/antigravity/persona_export.py::export_persona()``
+for persona files, which writes::
+
+    <dest>/.agent/personas/<name>.md
+
+Skills and agents are exported under::
+
+    <dest>/.agent/skills/<name>.md
+    <dest>/.agent/agents/<name>.md
+
+Capabilities
+------------
+agy reads personas natively from ``.agent/personas/`` — no context-injection
+workaround needed.  agy supports project-scoped config via ``.agent/config.toml``.
+There is no documented user-scoped MCP path; trust prompts are suppressed in
+non-interactive mode.  ``agy`` does not expose a ``--cwd`` flag; working directory
+is set via cwd of the spawned process.
 
 Command-capability matrix
 --------------------------
-All /z-* commands run natively on Claude Code.
+All /z-* commands run in high-fidelity mode.  Multi-agent commands run in
+degraded mode (single-agent transliteration) rather than blocked — agy supports
+the underlying skills natively, but subagent dispatch is absent.
+
+Attribution / decision record
+------------------------------
+- binary probed: agy (on PATH; version via ``agy --version``)
+- fidelity=high: native skill/persona loading via .agent/; single-agent only
+- supports_project_mcp=False: agy uses .agent/config.toml (not MCP protocol)
+- supports_user_mcp=False: no documented user-scoped MCP path
+- needs_trust_prompt=False: agy does not present interactive trust prompts
+- supports_cwd_override=False: agy has no --cwd / --project flag
+- cleanup_strategy="ephemeral": session file gitignored + deleted on cleanup
+- ANTIGRAVITY_PLUGIN_ROOT injected for ephemeral launches (D14)
+- decision source: runtime/drivers/antigravity/; probe date 2026-06-03
+  decided by: T011 implementer (Claude Sonnet 4.6) under T011 task block
 """
 
 from __future__ import annotations
@@ -51,38 +79,57 @@ from z_harness_cli import inject_safety
 # Constants
 # ---------------------------------------------------------------------------
 
-_HOST_NAME = "claude"
-_FIDELITY_TIER = "native"
+_HOST_NAME = "antigravity"
+_FIDELITY_TIER: Literal["high"] = "high"
 
-# The gitignored config file written for ephemeral injection.  It carries the
-# z-harness magic marker so inject_safety can recognise it as our file and
-# not treat it as a foreign clobber on repeat runs.
-_EPHEMERAL_CONFIG_FILENAME = "CLAUDE.md"
+# The agy binary name.
+_AGY_BINARY = "agy"
 
-# Template for the ephemeral CLAUDE.md.  Embeds the magic marker + the
-# CLAUDE_PLUGIN_ROOT so the spawned process resolves the harness runtime.
-_CLAUDE_MD_TEMPLATE = """\
+# Gitignored session instruction file written for ephemeral injection.
+# Placed under .agent/ so agy picks it up automatically.
+_EPHEMERAL_SESSION_DIRNAME = ".agent"
+_EPHEMERAL_SESSION_FILENAME = "z-harness-session.md"
+
+# Magic marker reference — imported from inject_safety to stay in sync.
+_MAGIC_MARKER = inject_safety.MAGIC_MARKER
+
+# Template for the ephemeral session instruction file.  Embeds the magic
+# marker so inject_safety recognises it as z-harness-authored on re-runs.
+_SESSION_MD_TEMPLATE = """\
 <!-- {marker} (ephemeral z-harness injection — delete to stop injection) -->
 <!-- This file was written by `z-harness launch` and is gitignored. -->
-<!-- It informs Claude Code that z-harness is loaded from: {plugin_root} -->
+<!-- It informs agy that z-harness is loaded from: {plugin_root} -->
 
-# z-harness (ephemeral)
+# z-harness (ephemeral session)
 
-This CLAUDE.md was injected by `z-harness launch` for this session.
+This file was injected by `z-harness launch` for this session.
 It will be removed automatically on exit.  Do not commit this file.
-""".format
 
-# Magic marker reference — import from inject_safety to stay in sync.
-_MAGIC_MARKER = inject_safety.MAGIC_MARKER
+z-harness plugin root: `{plugin_root}`
+""".format
 
 
 # ---------------------------------------------------------------------------
 # Command-capability matrix registration
 # ---------------------------------------------------------------------------
 
+#: Commands that require multi-agent orchestration — degraded on high-fidelity
+#: hosts (single-agent transliteration present, subagent dispatch absent).
+_MULTI_AGENT_COMMANDS = frozenset(
+    {
+        "z-implement-all",
+        "z-panel",
+        "z-consult",
+        "z-gate",
+    }
+)
+
 register_command_tiers(
     _HOST_NAME,
-    {cmd: "native" for cmd in KNOWN_COMMANDS},
+    {
+        cmd: ("degraded" if cmd in _MULTI_AGENT_COMMANDS else "native")
+        for cmd in KNOWN_COMMANDS
+    },
 )
 
 
@@ -91,28 +138,28 @@ register_command_tiers(
 # ---------------------------------------------------------------------------
 
 _CAPABILITIES = Capabilities(
-    supports_project_mcp=True,
-    supports_user_mcp=True,
-    needs_trust_prompt=False,
-    supports_cwd_override=True,
+    supports_project_mcp=False,   # agy uses .agent/config.toml, not MCP protocol
+    supports_user_mcp=False,      # no documented user-scoped MCP path
+    needs_trust_prompt=False,     # agy does not present interactive trust prompts
+    supports_cwd_override=False,  # no --cwd / --project flag in agy CLI
     cleanup_strategy="ephemeral",
 )
 
 
 # ---------------------------------------------------------------------------
-# ClaudeAdapter
+# AntigravityAdapter
 # ---------------------------------------------------------------------------
 
 
-class ClaudeAdapter:
-    """Host adapter for Claude Code (fidelity: native).
+class AntigravityAdapter:
+    """Host adapter for Antigravity/agy (fidelity: high).
 
     Instantiate once per process; safe to reuse across multiple inject/
     cleanup cycles (each inject() produces an independent Injection).
     """
 
     name: str = _HOST_NAME
-    fidelity_tier: Literal["native"] = _FIDELITY_TIER
+    fidelity_tier: Literal["high"] = _FIDELITY_TIER
     capabilities: Capabilities = _CAPABILITIES
 
     # ------------------------------------------------------------------
@@ -120,9 +167,9 @@ class ClaudeAdapter:
     # ------------------------------------------------------------------
 
     def detect(self) -> DetectResult:
-        """Probe for the ``claude`` binary on PATH and read its version.
+        """Probe for the ``agy`` binary on PATH and read its version.
 
-        Runs ``claude --version`` (non-interactive; safe to call without
+        Runs ``agy --version`` (non-interactive; safe to call without
         side-effects).  The version string is whatever the binary prints on
         a single line to stdout.
 
@@ -132,7 +179,7 @@ class ClaudeAdapter:
             installed=True when the binary is on PATH and exits zero.
             version=None when the binary is present but ``--version`` fails.
         """
-        binary = shutil.which("claude")
+        binary = shutil.which(_AGY_BINARY)
         if binary is None:
             return DetectResult(installed=False)
 
@@ -158,20 +205,20 @@ class ClaudeAdapter:
     # ------------------------------------------------------------------
 
     def export_payload(self, dest: Path) -> ExportResult:
-        """Export personas to the Claude plugin layout under *dest*.
+        """Export personas to the agy native layout under *dest*.
 
-        Delegates to ``runtime/drivers/claude/persona_export.py::export_persona()``
+        Delegates to ``runtime/drivers/antigravity/persona_export.py::export_persona()``
         for each persona file found in the ``personas/`` directory at the
         harness repo root.
 
         The written layout is::
 
-            <dest>/personas/<name>.md
+            <dest>/.agent/personas/<name>.md
 
         Returns
         -------
         ExportResult
-            fidelity="native"; files lists relative paths under dest.
+            fidelity="high"; files lists relative paths under dest.
         """
         dest = Path(dest)
 
@@ -186,7 +233,7 @@ class ClaudeAdapter:
             return ExportResult(
                 dest=dest,
                 files=[],
-                fidelity="native",
+                fidelity="high",
                 warnings=["personas/ directory not found; nothing exported"],
             )
 
@@ -194,14 +241,14 @@ class ClaudeAdapter:
         # package in sys.path in environments where only z_harness_cli is
         # installed.
         try:
-            from runtime.drivers.claude.persona_export import export_persona
+            from runtime.drivers.antigravity.persona_export import export_persona
         except ImportError as exc:
             return ExportResult(
                 dest=dest,
                 files=[],
-                fidelity="native",
+                fidelity="high",
                 warnings=[
-                    f"runtime.drivers.claude.persona_export not importable: {exc}"
+                    f"runtime.drivers.antigravity.persona_export not importable: {exc}"
                 ],
             )
 
@@ -215,7 +262,7 @@ class ClaudeAdapter:
         return ExportResult(
             dest=dest,
             files=written,
-            fidelity="native",
+            fidelity="high",
             warnings=warnings,
         )
 
@@ -229,23 +276,24 @@ class ClaudeAdapter:
         mode: Literal["ephemeral", "in_place"],
         project: Path,
     ) -> Injection:
-        """Write host-native config and return an Injection handle.
+        """Write a host-native .agent session file and return an Injection handle.
 
         For ``mode="ephemeral"``:
-          * Runs inject_safety.preflight_targets() on the target CLAUDE.md
+          * Runs inject_safety.preflight_targets() on the target session file
             before writing (clobber guard).
-          * Writes a gitignored CLAUDE.md carrying the magic marker.
+          * Writes a gitignored ``.agent/z-harness-session.md``
+            carrying the magic marker.
           * Calls inject_safety.ensure_gitignored() so the file is never
             accidentally committed.
-          * Injects CLAUDE_PLUGIN_ROOT into the child env.
+          * Injects ANTIGRAVITY_PLUGIN_ROOT into the child env (D14: agy reads
+            this var when the harness is injected).
 
         For ``mode="in_place"``:
-          * No config files are written (the plugin is assumed installed;
-            Claude Code resolves CLAUDE_PLUGIN_ROOT from its own env).
-          * Returns an Injection with empty injected_files.
+          * Writes ``.agent/z-harness-session.md`` into the project
+            without gitignoring (caller manages lifecycle; cleanup is no-op).
 
         The returned Injection's ``_cleanup_fn`` is set to
-        ``ClaudeAdapter.cleanup`` so the context-manager protocol works.
+        ``AntigravityAdapter.cleanup`` so the context-manager protocol works.
 
         Parameters
         ----------
@@ -254,15 +302,15 @@ class ClaudeAdapter:
             Merged into the child env as-is.
         mode:
             "ephemeral" — write gitignored config for this session only.
-            "in_place"  — installed-plugin mode; no files written.
+            "in_place"  — committed project file; caller manages lifecycle.
         project:
             Absolute path to the user's project repo root.
 
         Returns
         -------
         Injection
-            env merges *state_env* + CLAUDE_PLUGIN_ROOT (ephemeral) into a
-            copy of os.environ.  injected_files lists any written paths.
+            env merges *state_env* + ANTIGRAVITY_PLUGIN_ROOT into a copy of
+            os.environ.  injected_files lists any written paths.
         """
         project = Path(project).resolve()
         env: dict[str, str] = dict(os.environ)
@@ -270,13 +318,15 @@ class ClaudeAdapter:
         injected_files: list[Path] = []
         backup_manifest: dict[str, Path] | None = None
 
+        # Determine the harness root to inject as ANTIGRAVITY_PLUGIN_ROOT (D14).
+        harness_root = str(Path(__file__).parent.parent.parent.resolve())
+        env["ANTIGRAVITY_PLUGIN_ROOT"] = harness_root
+
+        # Target path for the session file.
+        agent_dir = project / _EPHEMERAL_SESSION_DIRNAME
+        target = agent_dir / _EPHEMERAL_SESSION_FILENAME
+
         if mode == "ephemeral":
-            # Determine the harness root to inject as CLAUDE_PLUGIN_ROOT.
-            harness_root = str(Path(__file__).parent.parent.parent.resolve())
-            env["CLAUDE_PLUGIN_ROOT"] = harness_root
-
-            target = project / _EPHEMERAL_CONFIG_FILENAME
-
             # Clobber-safe pre-flight (raises ClobberRefused if the file
             # exists and is not z-harness-authored, and force=False).
             backup_manifest = inject_safety.preflight_targets(
@@ -285,8 +335,9 @@ class ClaudeAdapter:
                 force=False,
             )
 
-            # Write the gitignored CLAUDE.md.
-            content = _CLAUDE_MD_TEMPLATE(
+            # Write the session instruction file.
+            agent_dir.mkdir(parents=True, exist_ok=True)
+            content = _SESSION_MD_TEMPLATE(
                 marker=_MAGIC_MARKER,
                 plugin_root=harness_root,
             )
@@ -295,6 +346,16 @@ class ClaudeAdapter:
 
             # Ensure the written file is gitignored.
             inject_safety.ensure_gitignored([target], project)
+
+        else:
+            # in_place: write but do not gitignore; caller manages lifecycle.
+            agent_dir.mkdir(parents=True, exist_ok=True)
+            content = _SESSION_MD_TEMPLATE(
+                marker=_MAGIC_MARKER,
+                plugin_root=harness_root,
+            )
+            target.write_text(content, encoding="utf-8")
+            injected_files.append(target)
 
         return Injection(
             env=env,
@@ -310,9 +371,9 @@ class ClaudeAdapter:
     # ------------------------------------------------------------------
 
     def launch(self, project: Path, env: dict[str, str]) -> int:
-        """PTY-passthrough exec of ``claude`` in *project*.
+        """PTY-passthrough exec of ``agy`` in *project*.
 
-        Blocks until Claude Code exits and returns its exit code.
+        Blocks until agy exits and returns its exit code.
 
         The caller is responsible for calling cleanup() afterwards (or
         using the Injection context manager so cleanup always runs).
@@ -320,7 +381,7 @@ class ClaudeAdapter:
         Parameters
         ----------
         project:
-            Working directory for the ``claude`` process.
+            Working directory for the ``agy`` process.
         env:
             Full environment mapping (typically the Injection.env dict
             merged over os.environ via env_bundle.apply_env_bundle()).
@@ -328,23 +389,18 @@ class ClaudeAdapter:
         Returns
         -------
         int
-            Claude Code's exit code (0 = clean exit).
+            agy's exit code (0 = clean exit).
 
         Raises
         ------
         FileNotFoundError
-            If the ``claude`` binary is not on PATH.
+            If the ``agy`` binary is not on PATH.
         PTYUnsupportedError
             On Windows or any platform without the ``pty`` stdlib module.
         """
-        # Lazy import (mirrors cursor/codex/antigravity) so that launch.py can
-        # wrap the module-level ``pty_launch`` to attach its signal-trapped
-        # cleanup callback.  A top-level ``from ... import pty_launch`` would bind
-        # the name at import time, making launch.py's wrapper invisible on the
-        # real Claude path and silently skipping cleanup on Ctrl+C / crash.
         from z_harness_cli.pty_launch import pty_launch
 
-        binary = shutil.which("claude") or "claude"
+        binary = shutil.which(_AGY_BINARY) or _AGY_BINARY
         return pty_launch(
             argv=[binary],
             env=env,
@@ -361,17 +417,25 @@ class ClaudeAdapter:
         Delegates to inject_safety.cleanup() for file restore/removal per
         the persisted manifest.  Idempotent: safe to call multiple times.
 
+        For ephemeral mode this removes ``.agent/z-harness-session.md``
+        and restores any pre-existing file that was backed up.
+
+        For in_place mode this is a no-op (caller manages lifecycle).
+
         Parameters
         ----------
         injection:
             The Injection returned by a prior call to inject().
-            (The project path is reconstructed from injected_files.)
         """
         if not injection.injected_files:
-            # in_place mode or already cleaned.
             return
 
-        # Derive project from the first injected file's parent
-        # (inject() always writes into project/).
-        project = injection.injected_files[0].parent
+        if injection.mode == "in_place":
+            # in_place: caller manages lifecycle; no automatic cleanup.
+            return
+
+        # Derive project from the first injected file: the session file is at
+        # <project>/.agent/z-harness-session.md, so parent.parent is the project root.
+        session_path = injection.injected_files[0]
+        project = session_path.parent.parent
         inject_safety.cleanup(project)

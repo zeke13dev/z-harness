@@ -1,12 +1,12 @@
 {
   "concept": "z-fix",
-  "last_updated": "2026-05-28",
+  "last_updated": "2026-06-05",
   "covers_spec": "z-fix-hypothesis-driven/20260524T061903Z-z-fix-hypothesis-driven",
   "source_file": ["commands/z-fix.md"],
   "confidence": "high",
   "entry_points": [
     {"file": "commands/z-fix.md", "line": 1, "symbol": "/z-fix", "kind": "module", "summary": "Top-level slash command; fast bug-fix path for known-diagnosis cases"},
-    {"file": "commands/z-fix.md", "line": 24, "symbol": "Setup", "kind": "module", "summary": "Slug derivation (2-step: unconditional collision check then resolver gate with skip/prefill/ask/halt), run-id, plan dir, version stamp, fix_run_start log"},
+    {"file": "commands/z-fix.md", "line": 24, "symbol": "Setup", "kind": "module", "summary": "Slug derivation (2-step: plan-path.sh all_plan_slugs collision check then resolver gate with skip/prefill/ask/halt), run-id, plan dir, version stamp, fix_run_start log"},
     {"file": "commands/z-fix.md", "line": 79, "symbol": "auto-bail thresholds", "kind": "const", "summary": ">5 files / >2 non-obvious decisions / cross-module -> escalation.md + /z-plan"},
     {"file": "commands/z-fix.md", "line": 90, "symbol": "Phase 0", "kind": "module", "summary": "Non-skippable wrong-tool gate; exits to /z-debug if no hypothesis"},
     {"file": "commands/z-fix.md", "line": 105, "symbol": "Phase 1", "kind": "module", "summary": "Problem capture + doc-fetcher dispatch + auto-bail check"},
@@ -16,7 +16,7 @@
     {"file": "commands/z-fix.md", "line": 173, "symbol": "Phase 5", "kind": "module", "summary": "Approve/modify/abandon gate; shortcuts need separate explicit approval"},
     {"file": "commands/z-fix.md", "line": 187, "symbol": "Phase 6", "kind": "module", "summary": "Write FIX.md (single artifact, status=approved not yet shipped)"},
     {"file": "commands/z-fix.md", "line": 237, "symbol": "Phase 7", "kind": "module", "summary": "Inline implementation by orchestrator; no implementer subagent; hard limit >7 files"},
-    {"file": "commands/z-fix.md", "line": 259, "symbol": "Phase 8", "kind": "module", "summary": "Codex review, non-negotiable; retry once on blockers; REVIEW_CYCLES counter"},
+    {"file": "commands/z-fix.md", "line": 259, "symbol": "Phase 8", "kind": "module", "summary": "Codex review non-negotiable; advisory persona reviewer in parallel when personas.review_eval ON (telemetry-only, never changes pass/fail); retry once on blockers; REVIEW_CYCLES counter"},
     {"file": "commands/z-fix.md", "line": 289, "symbol": "Phase 9", "kind": "module", "summary": "Optional post-mortem; auto-suggested if REVIEW_CYCLES > 1"},
     {"file": "commands/z-fix.md", "line": 334, "symbol": "Phase 10", "kind": "module", "summary": "Finalize: FIX.md status=shipped, fix_run_end log, /z-maintain-docs hint"},
     {"file": "commands/z-fix.md", "line": 358, "symbol": "Git history-rewrite safety", "kind": "const", "summary": "Doctrine: check git branch -r --contains before any reset/amend/rebase on upstream branch"}
@@ -37,8 +37,9 @@
     "/z-mr-review is never auto-triggered from /z-fix",
     "Before any git reset/amend/rebase on upstream-tracking branch: run git branch -r --contains <sha>; STOP if upstream reachable",
     "PushNotification calls at Phase 5 and Phase 10 are gated on notify.level from config; when notify.level=off no notifications are sent",
-    "Slug derivation runs unconditional collision check first; resolver (workflow.slug_confirm) only governs the soft confirmation gate after collision check passes",
-    "When workflow.slug_confirm resolves to halt: emit fix_halt event and exit 0; do NOT invoke AskUserQuestion; intended for unattended/overnight automation"
+    "Slug derivation runs unconditional collision check via plan-path.sh all_plan_slugs first; resolver (workflow.slug_confirm) only governs the soft confirmation gate after collision check passes",
+    "When workflow.slug_confirm resolves to halt: emit fix_halt event and exit 0; do NOT invoke AskUserQuestion; intended for unattended/overnight automation",
+    "Advisory persona reviewer at Phase 8 is telemetry-only; its verdict never changes pass/fail and never triggers a retry; only the base Codex reviewer outcome determines pass/fail"
   ],
   "gotchas": [
     "Hard implementation file limit is >7 (halt regardless); auto-bail threshold is >5 (escalate before starting)",
@@ -48,11 +49,12 @@
     "Shortcuts flagged by either consultant require separate explicit approval at Phase 5; default is the robust solution",
     "phase1-context.md is a temporary scratch file under archive/$RUN/; its content migrates to FIX.md sections",
     "FIX.md 'Docs touched' field drives the post-fix /z-maintain-docs --audit suggestion",
-    "Plan directory collision: if slug already exists, user is asked before overwriting (unconditional check; resolver cannot bypass it)",
+    "Plan directory collision check uses plan-path.sh all_plan_slugs (covers both new and legacy plan layouts); user is asked before overwriting; resolver cannot bypass this check",
     "Force-push to main requires per-incident user authorization with list of overwritten commits and content-equivalence demonstration",
     "Notification control point is notify.level in config (docs/human/config.md), not the Z_HARNESS_NOTIFY env var; the env var no longer applies",
     "workflow.slug_confirm resolver returns one of four results: skip/prefill/ask/halt; halt is distinct from error (which falls through to ask) and skip (which silently continues)",
-    "halt exits with code 0 and logs fix_halt event; no further phases execute; the run directory is not created"
+    "halt exits with code 0 and logs fix_halt event; no further phases execute; the run directory is not created",
+    "Advisory eval-reviewer arm uses reviewer_participant=random_arm; persona diversity is the telemetry goal; the arm is defined in commands/z-implement-all.md#ADVISORY-EVAL-REVIEWER"
   ],
   "memories": []
 }

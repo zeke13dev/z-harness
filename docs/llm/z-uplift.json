@@ -1,6 +1,6 @@
 {
   "concept": "z-uplift",
-  "last_updated": "2026-05-28",
+  "last_updated": "2026-06-05",
   "covers_spec": "z-harness/plans/tiered-quality-uplift/SPEC.md",
   "source_file": [
     "commands/z-uplift.md",
@@ -20,7 +20,7 @@
       "line": 70,
       "symbol": "Setup",
       "kind": "module",
-      "summary": "Derive uplift slug (with workflow.slug_confirm preference resolver via config.py, including new halt branch), resolve plan dir, pick run ID, log run_start, doc-staleness gate (Step 5)."
+      "summary": "Derive uplift slug (with workflow.slug_confirm preference resolver via config.py, including halt branch), resolve plan dir, pick run ID, log run_start (with command field), doc-staleness gate (Step 5)."
     },
     {
       "file": "commands/z-uplift.md",
@@ -46,43 +46,51 @@
     {
       "file": "commands/z-uplift.md",
       "line": 1124,
+      "symbol": "Phase 1.5",
+      "kind": "phase",
+      "summary": "Pre-fanout cost gate — calls pre-run-cost-gate.sh with --dispatch per_component=$N_COMPONENTS; hard gate (blocks on ask/halt); skipped entirely on resume (SKIP_TO_PHASE set)."
+    },
+    {
+      "file": "commands/z-uplift.md",
+      "line": 1221,
       "symbol": "Phase 2",
       "kind": "phase",
       "summary": "Cross-cutting pass — dispatch consultant-primary + consultant-secondary in parallel; merge into CROSS-CUTTING.md; parser emits cross_cutting_findings_dropped for non-G/C/R bullets; Step 6 inserts synthetic row as [a] audited with atomic write."
     },
     {
       "file": "commands/z-uplift.md",
-      "line": 1668,
+      "line": 1765,
       "symbol": "Phase 3",
       "kind": "phase",
       "summary": "Per-component audits — dispatch auditor per dimension in parallel; CRIT_HIGH parser is structural (handles ### [CRITICAL] headers, inline bullet tags, Severity: key-value); git grep guarded against empty OTHER_COMP_PATHS; auto-bail check (>30 total OR >10 CRIT-HIGH); produce REPORT.md + TASKS.md; reviewer gate."
     },
     {
       "file": "commands/z-uplift.md",
-      "line": 2336,
+      "line": 2433,
       "symbol": "Phase 4",
       "kind": "phase",
       "summary": "Review gate — informational queue summary only (no AskUser); prints cross-cutting-first ordering callout when synthetic row is present; user_wait_ms=0 always."
     },
     {
       "file": "commands/z-uplift.md",
-      "line": 2482,
+      "line": 2579,
       "symbol": "Phase 5",
       "kind": "phase",
       "summary": "Sequential implement — AskUser gate per component; prints the /z-implement-all --tasks= command and marks state [i] implementing, then exits for the user to run it (two-step handoff); manifest_replace_row helper enforces exactly-one-row invariant on all state transitions."
     },
     {
       "file": "commands/z-uplift.md",
-      "line": 2864,
+      "line": 2961,
       "symbol": "Phase 6",
       "kind": "phase",
-      "summary": "Finalize — log run_end, push-notify with done/skipped/bailed counts, recommend /z-maintain-docs if any task carried a **DOCS:** line."
+      "summary": "Finalize — log run_end (with command field), push-notify with done/skipped/bailed counts, recommend /z-maintain-docs if any task carried a **DOCS:** line."
     }
   ],
   "depends_on": [
     "commands",
     "agents",
-    "config"
+    "config",
+    "cost-estimation"
   ],
   "consumed_by": [],
   "invariants": [
@@ -113,9 +121,13 @@
     "Notification behavior is controlled by the notify.level TOML key (env: Z_HARNESS_NOTIFY_LEVEL), resolved via the config system in Setup Step 4. There is no standalone Z_HARNESS_NOTIFY variable.",
     "Slug collision hard-check (existing slug dir in z-harness/plans/) always runs unconditionally before the workflow.slug_confirm preference resolver soft gate.",
     "workflow.slug_confirm resolver (scripts/config.py resolve-question) returns skip/prefill/ask/halt; on any non-zero exit code, falls back to the normal ask path without silently skipping.",
-    "halt result from workflow.slug_confirm resolver emits uplift_halt event with reason=no_ask_blocked and exits cleanly (exit 0) without invoking AskUserQuestion."
+    "halt result from workflow.slug_confirm resolver emits uplift_halt event with reason=no_ask_blocked and exits cleanly (exit 0) without invoking AskUserQuestion.",
+    "Phase 1.5 (pre-fanout cost gate) is a hard gate: disposition ask blocks on AskUserQuestion; disposition halt or unhandled_gate exits with run_end status aborted_by_user. Phase 1.5 is skipped entirely on resume (SKIP_TO_PHASE != 0).",
+    "run_start and run_end events include 'command':'z-uplift' in the payload for cross-command aggregation.",
+    "cost_gate_decision event is emitted in all non-abandon Phase 1.5 branches with estimated_tokens, confidence, and basis fields."
   ],
   "gotchas": [
+    "Phase 1.5 (pre-fanout cost gate) is absent from resume paths — it is guarded by [ $SKIP_TO_PHASE -eq 0 ] and skipped entirely when resuming a prior run. It only runs on first invocation.",
     "Phase 4 does NOT present an AskUserQuestion — it is a passive informational summary. The per-component AskUser gates are in Phase 5. Earlier doc versions incorrectly described Phase 4 as an interactive gate.",
     "Main tree may be transiently un-buildable between AskUser gates if a global-task API change lands and dependents are not yet updated; mitigated (but NOT eliminated) by processing <slug>-cross-cutting first. Operators should expect to manually resolve transient build failures.",
     "Text-grep dependency reporting on bail misses reflection / string-based imports — output is labeled 'Potential dependents (text-grep — incomplete)' in REPORT.md and MANIFEST.md to avoid false confidence.",
@@ -131,7 +143,8 @@
     "docs/human/z-uplift.md is NOT a source file for this concept — it is generated output. The true sources are commands/z-uplift.md and skills/z-uplift/SKILL.md.",
     "Setting Z_HARNESS_NOTIFY has no effect — the correct env var is Z_HARNESS_NOTIFY_LEVEL (maps to notify.level in TOML config). See docs/human/config.md for all notification knobs.",
     "workflow.slug_confirm resolver failure (exit code 2/3/4) is non-fatal — falls back to ask mode; never silently skips the confirmation.",
-    "halt branch (workflow.slug_confirm result=halt) emits uplift_halt and exits 0 — it does NOT call AskUserQuestion. Distinct from skip (which continues) and ask (which prompts). Triggered when rule_id=no_ask_halt is active in config."
+    "halt branch (workflow.slug_confirm result=halt) emits uplift_halt and exits 0 — it does NOT call AskUserQuestion. Distinct from skip (which continues) and ask (which prompts). Triggered when rule_id=no_ask_halt is active in config.",
+    "cost_gate_decision event uses the generic name (not a z-uplift-specific name) — it is the same event name as other commands' cost gates, differentiated by the 'command' field in the payload."
   ],
   "memories": []
 }
