@@ -606,12 +606,9 @@ if [ -n "$UNDECLARED_PATHS" ]; then
 import json, sys
 payload = json.loads(sys.argv[1])
 target = sys.argv[2]
-peers = payload.get("peers", [])
-for peer in peers:
-    hc = peer.get("held_conflict", {})
-    held_paths = hc.get("paths", [])
-    if target in held_paths:
-        print(peer.get("run_id", ""))
+for entry in payload.get("held_conflict", []):
+    if entry.get("path") == target:
+        print(entry.get("peer_run_id", ""))
         break
 ' "$OVL_JSON" "$UNDECLARED_PATH" 2>/dev/null || true)"
 
@@ -634,11 +631,12 @@ fi
 `held_paths` produces **zero** `coordination_warning` events. Only the intersection of
 (undeclared by this run) AND (held by a live peer lease) triggers a warning.
 
-**T005 `held_conflict` payload note.** The `overlaps --json` payload carries a `held_conflict`
-key (singular) per peer, per SPEC §overlaps and the T005 implementation. `/z-where` (T016) and
-the wait decision in Phase 2.5 both consume the `held_conflict.paths` field from this same
-payload — it is NOT dead reporting. The `coordination_warning` event uses the same
-`held_conflict` scan path to find `peer_run_id`, keeping all three consumers consistent.
+**T005 `held_conflict` payload note.** The `overlaps --json` payload carries `held_conflict` as a
+**top-level flat list** of `{path, peer_run_id, holder_seniority}` entries — key `path` (singular),
+not a nested sub-list keyed by peer. The F5 `coordination_warning` step iterates this flat list,
+matching each entry's `path` to read `peer_run_id`. (The Phase-2.5 wait decision uses `shared_paths`
++ run_id seniority; `/z-where` renders overlap/peer info from separate registry fields — neither
+consumes `held_conflict`.)
 
 The warning is review-blocking (surface it to the reviewer in Phase 3), but does not stop the
 Phase 3 dispatch.

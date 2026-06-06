@@ -125,7 +125,7 @@ Always show all seven event kinds in the output, even if their count is zero (ma
 - `wait_cleared` — `wait-for` unblocked successfully (peer released / deregistered)
 - `wait_timeout` — budget/timeout expired before target cleared (LOUD — warrants investigation)
 - `wait_interrupted` — SIGINT/SIGTERM received during a `wait-for` park loop
-- `coordination_warning` — a task wrote an undeclared path that a live peer had leased (F5 backstop; advisory; forward-reference: emitted by the write-set validation step, not yet implemented)
+- `coordination_warning` — a task wrote an undeclared path that a live peer had leased (F5 backstop; advisory; emitted by the write-set validation step in z-implement-all §5.5 / z-implement-next Phase 2.5)
 
 If `$METRICS` is absent, print `Coordination events: (no metrics file)`.
 

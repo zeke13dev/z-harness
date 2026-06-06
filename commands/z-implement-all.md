@@ -1149,17 +1149,14 @@ if [ -n "$UNDECLARED_PATHS" ]; then
   #    We emit exactly ONE coordination_warning per colliding (undeclared-path × peer) pair.
   while IFS= read -r UNDECLARED_PATH; do
     [ -z "$UNDECLARED_PATH" ] && continue
-    # Extract peer_run_id for any peer whose held_conflict paths contain this undeclared path.
+    # Extract peer_run_id for any entry in the top-level held_conflict list whose path matches.
     PEER_RUN_ID="$(python3 -c '
 import json, sys
 payload = json.loads(sys.argv[1])
 target = sys.argv[2]
-peers = payload.get("peers", [])
-for peer in peers:
-    hc = peer.get("held_conflict", {})
-    held_paths = hc.get("paths", [])
-    if target in held_paths:
-        print(peer.get("run_id", ""))
+for entry in payload.get("held_conflict", []):
+    if entry.get("path") == target:
+        print(entry.get("peer_run_id", ""))
         break
 ' "$OVL_JSON" "$UNDECLARED_PATH" 2>/dev/null || true)"
 
@@ -1185,11 +1182,12 @@ fi
 the narrowest detector of the three (T002 fires at claim-time regardless of contention; T005
 fires at scope-inspection regardless of lease; T012 fires only on an actual live-lease collision).
 
-**T005 `held_conflict` payload note.** The `overlaps --json` payload carries a `held_conflict`
-key (singular) per peer, per SPEC §overlaps and the T005 implementation. `/z-where` (T016) and
-the wait decision in step 3.5 both consume the `held_conflict.paths` field from this same payload
-— it is NOT dead reporting. The `coordination_warning` event uses the same `held_conflict` scan
-path to find `peer_run_id`, keeping all three consumers consistent on the single canonical key.
+**T005 `held_conflict` payload note.** The `overlaps --json` payload carries `held_conflict` as a
+**top-level flat list** of `{path, peer_run_id, holder_seniority}` entries — key `path` (singular),
+not a nested sub-list keyed by peer. The F5 `coordination_warning` step iterates this flat list,
+matching each entry's `path` to read `peer_run_id`. (The step-3.5 wait decision uses `shared_paths`
++ run_id seniority; `/z-where` renders overlap/peer info from separate registry fields — neither
+consumes `held_conflict`.)
 
 **Surface to reviewer.** Any `coordination_warning` events emitted here are review-blocking
 advisory: pass them to the reviewer in step 6 as additional context so the reviewer can assess
