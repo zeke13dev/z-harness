@@ -7,6 +7,13 @@ INVARIANT (verbatim, repeated from SPEC cross-cutting invariant 1):
   overlap a hard gate without first replacing lockless delete with
   compare-and-delete or a registry lock.
 
+INVARIANT (verbatim, from SPEC §"Cross-cutting invariant"):
+  Wait/lease gates the waiter's OWN run only; it takes no lock; it never writes
+  a peer's record (single-writer); every wait has a finite budget + loud timeout
+  (overlap is never a hard gate); the holder is never preempted. The lockless
+  registry stays safe because lease contention remains advisory and
+  self-gating — F1–F5 below are the load-bearing details.
+
 Each run owns exactly one record: <active_plans_dir>/<run-id>.json.
 Writes are atomic (tmpfile in same dir + os.replace). No global lock is taken.
 The per-entry→global lock ordering in followup_common.py is NOT affected.
@@ -79,12 +86,48 @@ Subcommands:
       returning 0. A FileNotFoundError on unlink (record already gone) is benign
       and does NOT emit an error.
 
+  claim --run-id ID --paths p1,p2[,...]
+      Stage and claim per-file leases for a run. Best-effort (advisory, never
+      hard-fails). Stages paths in memory, performs a check-after-claim (F2) by
+      re-reading all peer records, applies run_id lexicographic tiebreak: a live,
+      lease-capable peer with a lower run_id (senior) wins the path → caller
+      concedes. Multi-senior: concedes to the lowest-run_id (eldest) senior.
+      Persists only the won set into held_paths (BLOCKER-1: loser record MUST NOT
+      contain the conceded path). Emits lease_claimed. Z_HARNESS_REGISTRY_ENABLED=0
+      → {"claimed":[],"conceded":[]}, exit 0.
+      Stdout: JSON {"claimed":[...], "conceded":[{"path","holder_run_id"}]}.
+
+  release --run-id ID (--paths p1,p2 | --all)
+      Remove the named paths (or all paths) from own held_paths. Best-effort
+      (advisory, never hard-fails callers). --paths and --all are mutually
+      exclusive; exactly one is required. Atomic write. Refreshes last_heartbeat.
+      A named path not currently held is a silent no-op (no error). --all empties
+      held_paths entirely. Emits lease_released {run_id, paths} where paths is the
+      set of entries actually removed. Self-logs registry_error(op:release) on any
+      internal error before returning 0. Z_HARNESS_REGISTRY_ENABLED=0 → silent
+      no-op, exit 0. NON-FATAL — always returns 0.
+
+  wait-for --run-id ID --on RUNID[,...] [--paths p1,p2]
+      Park the current run behind one or more senior peers (run_id < mine) until
+      their records clear (gone / complete / aborted / stale) or the budget expires.
+      Eligibility: non-senior or absent targets are dropped immediately; if none
+      remain, exits 0 (nothing_to_wait_on). Poll loop every
+      Z_HARNESS_WAIT_POLL_SECS (30): sets status=paused + waiting_on in a single
+      atomic write (preserving held_paths), runs reap, rechecks targets, adds any
+      NEW senior holders of --paths (TOCTOU re-scan; junior claimers ignored).
+      All targets cleared → clear waiting_on, status=running, exit 0 (cleared).
+      Budget expired → clear waiting_on, status=running, emit LOUD wait_timeout,
+      exit 10. SIGINT/SIGTERM → clear waiting_on, status=running,
+      wait_interrupted, exit 130. waiting_on cleared on EVERY exit path (finally).
+      Z_HARNESS_REGISTRY_ENABLED=0 → silent no-op, exit 0.
+
 Exit codes:
   0   — success (also: heartbeat / update-scope / deregister / reap failure — NON-FATAL)
   2   — usage / argument error
   3   — register failure (LOUD; callers MUST gate on this)
-  10  — overlaps: advisory overlap found
+  10  — overlaps: advisory overlap found; wait-for: budget/timeout expired (LOUD)
   20  — overlaps: blocking overlap (strict mode + explicit×explicit exact match)
+  130 — wait-for: SIGINT/SIGTERM received
 """
 
 from __future__ import annotations
@@ -93,6 +136,7 @@ import argparse
 import errno
 import json
 import os
+import signal
 
 # macOS fork-safety workaround: when Python is invoked via `bash script.py`, bash
 # has already initialised CoreFoundation; any subsequent fork+exec (subprocess with
@@ -112,6 +156,12 @@ from pathlib import Path
 
 # Default stale margin in seconds. Overridable via Z_HARNESS_REGISTRY_STALE_SECS.
 _DEFAULT_STALE_SECS = 1800
+
+# Wait-for knob defaults — read inline from os.environ at use-site (T008 may later
+# add ENV_ONLY_KNOBS entries; these constants serve as the documented defaults).
+_DEFAULT_WAIT_POLL_SECS = 30
+_DEFAULT_AUTO_WAIT_BUDGET_SECS = 300
+_DEFAULT_EXPLICIT_WAIT_TIMEOUT_SECS = 1800
 
 
 def _stale_secs() -> int:
@@ -274,6 +324,102 @@ def _atomic_read(path: Path) -> dict | None:
 
 # ── record factory ─────────────────────────────────────────────────────────────
 
+def _is_lease_capable(rec: dict) -> bool:
+    """Return True iff rec is a schema-v2 record with the held_paths field present.
+
+    A record is lease-capable ONLY when schema_version >= 2 AND held_paths is
+    explicitly present. Missing held_paths is NEVER interpreted as "holds nothing"
+    — absence means the record pre-dates the lease schema and its lease state is
+    unknown (lease-incapable). Such peers contribute to soft scope overlap only,
+    never to held-path waiting.
+
+    Type-safe: a non-numeric schema_version (e.g. string "2") is treated as
+    lease-incapable rather than raising TypeError.
+    """
+    raw_version = rec.get("schema_version", 1)
+    try:
+        if int(raw_version) < 2:
+            return False
+    except (TypeError, ValueError):
+        return False  # non-conforming schema_version → treat as lease-incapable
+    return "held_paths" in rec
+
+
+def _is_senior(peer_run_id: str, my_run_id: str) -> bool:
+    """Return True iff peer_run_id is lexicographically less than my_run_id.
+
+    This is the canonical seniority predicate for the registry: a lower run_id
+    was issued earlier (total-order by lexicographic string comparison) and
+    therefore takes priority in held-path tiebreaks.
+
+    Type-safety: if either argument is not a str, return False — a non-conforming
+    run_id is treated as not-senior and never causes a TypeError at the call site.
+
+    NOTE: ``started_at`` is display-only throughout the module. It MUST NOT be
+    used for ordering comparisons; this function is the single authoritative
+    ordering predicate.
+
+    Contract: matches the inline comparison in cmd_claim exactly —
+    ``peer_run_id < my_run_id`` — so callers can substitute _is_senior without
+    any behaviour change.
+    """
+    if not isinstance(peer_run_id, str) or not isinstance(my_run_id, str):
+        return False
+    return peer_run_id < my_run_id
+
+
+def _set_waiting_on(run_id: str, targets: list[str], status: str | None = None) -> None:
+    """Atomically set (or clear) the waiting_on field of run_id's own record.
+
+    Performs a read-modify-write on <active_plans_dir>/<run_id>.json,
+    preserving held_paths and all other fields, and refreshing last_heartbeat.
+    Passing an empty list clears waiting_on (the caller is no longer parked).
+
+    When status is provided (e.g. "paused" or "running"), it is set in the same
+    single atomic write — guaranteeing that status + waiting_on change together
+    with no window where a peer reads an inconsistent state (MINOR-1).
+
+    Non-fatal: on any internal error, emits a registry_error event
+    (op:"set_waiting_on") and returns silently — callers on every wait-for
+    exit path rely on this never raising.
+
+    Single-writer invariant: only the process that owns run_id should call this.
+    """
+    if not _is_safe_basename(run_id):
+        _emit_event(run_id, "registry_error", {
+            "op": "set_waiting_on", "run_id": run_id, "reason": "unsafe_run_id",
+        })
+        return
+
+    try:
+        active_dir = _active_plans_dir()
+    except RuntimeError as exc:
+        _emit_event(run_id, "registry_error", {
+            "op": "set_waiting_on", "run_id": run_id,
+            "reason": "active_plans_dir", "error": str(exc),
+        })
+        return
+
+    record_path = active_dir / f"{run_id}.json"
+    try:
+        record = _atomic_read(record_path)
+        if not isinstance(record, dict):
+            _emit_event(run_id, "registry_error", {
+                "op": "set_waiting_on", "run_id": run_id, "reason": "missing_record",
+            })
+            return
+        record["waiting_on"] = list(targets)
+        record["last_heartbeat"] = _iso_now()
+        if status is not None:
+            record["status"] = status
+        _atomic_write(record_path, record)
+    except OSError as exc:
+        _emit_event(run_id, "registry_error", {
+            "op": "set_waiting_on", "run_id": run_id,
+            "reason": "write_failed", "error": str(exc),
+        })
+
+
 def _build_record(
     *,
     run_id: str,
@@ -282,7 +428,7 @@ def _build_record(
     phase: str,
     session_id: str = "",
 ) -> dict:
-    """Build a fresh schema-v1 record populated with current host/git state."""
+    """Build a fresh schema-v2 record populated with current host/git state."""
     now = _iso_now()
     repo_root = _git_field(["rev-parse", "--show-toplevel"])
     git_common_dir = _git_field(["rev-parse", "--git-common-dir"])
@@ -310,7 +456,7 @@ def _build_record(
             pass
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "run_id": run_id,
         "session_id": session_id,
         "slug": slug,
@@ -329,6 +475,8 @@ def _build_record(
         "last_heartbeat": now,
         "current_task": "",
         "scope": [],
+        "held_paths": [],
+        "waiting_on": [],
     }
 
 
@@ -650,6 +798,650 @@ def cmd_deregister(args: argparse.Namespace) -> int:
     return 0
 
 
+# ── claim subcommand ──────────────────────────────────────────────────────────
+
+def cmd_claim(args: argparse.Namespace) -> int:
+    """claim subcommand.
+
+    Behaviour: best-effort (advisory, never hard-fails callers). Always exits 0.
+
+    Stages the requested paths in memory, performs a check-after-claim (F2) by
+    re-reading all peer records, applies the run_id lexicographic tiebreak to
+    resolve contention, then persists only the won set into the caller's own
+    record. A tiebreak loser's persisted held_paths MUST NOT contain the conceded
+    path (BLOCKER-1).
+
+    Stdout: JSON {"claimed":[...], "conceded":[{"path","holder_run_id"}]}.
+    Z_HARNESS_REGISTRY_ENABLED=0: print {"claimed":[],"conceded":[]}, exit 0.
+    """
+    run_id = args.run_id
+
+    # Validate run_id early so error messages are coherent.
+    if not _is_safe_basename(run_id):
+        print(
+            f"[active-plan-registry] ERROR claim: run-id {run_id!r} is not a safe basename.",
+            file=sys.stderr,
+        )
+        # Still emit the silent no-op JSON so callers can parse stdout.
+        print(json.dumps({"claimed": [], "conceded": []}))
+        return 0  # best-effort — advisory, never hard-fails
+
+    # Parse and deduplicate requested paths.
+    raw_paths: list[str] = args.paths.split(",") if args.paths else []
+    # Deduplicate while preserving first occurrence order.
+    seen: set[str] = set()
+    staged_paths: list[str] = []
+    for p in raw_paths:
+        p = p.strip()
+        if p and p not in seen:
+            seen.add(p)
+            staged_paths.append(p)
+
+    if not staged_paths:
+        # Nothing to claim.
+        print(json.dumps({"claimed": [], "conceded": []}))
+        return 0
+
+    try:
+        active_dir = _active_plans_dir()
+    except RuntimeError as exc:
+        _emit_event(run_id, "registry_error", {
+            "op": "claim", "run_id": run_id, "reason": "active_plans_dir", "error": str(exc),
+        })
+        print(json.dumps({"claimed": [], "conceded": []}))
+        return 0  # best-effort
+
+    record_path = active_dir / f"{run_id}.json"
+    stale_threshold = _stale_secs()
+    now_ts = _iso_now()
+
+    try:
+        # ── Check-after-claim (F2): scan peers for held-path conflicts ─────────
+        # For each staged path, find the eldest senior (lowest run_id) that holds
+        # it and is a LIVE, lease-capable peer.  "LIVE" = not stale.
+        # Seniority: peer_run_id < my_run_id (lexicographic) → peer is senior.
+
+        # Map: path → lowest-run_id senior holding it (None if no senior).
+        path_to_eldest_senior: dict[str, str] = {}
+
+        if active_dir.is_dir():
+            for p in sorted(active_dir.glob("*.json")):
+                rec = _atomic_read(p)
+                # _atomic_read returns None on missing/malformed, but json.load can
+                # return a non-dict (list, str, …) for a valid-JSON but wrong-schema file.
+                if not isinstance(rec, dict):
+                    continue  # malformed record — skip silently
+
+                peer_run_id = rec.get("run_id", "")
+                # Guard: peer_run_id must be a non-empty string for safe comparison.
+                if not isinstance(peer_run_id, str) or not peer_run_id or peer_run_id == run_id:
+                    continue  # skip self or malformed id
+
+                # Skip non-lease-capable peers (schema < 2 or missing held_paths).
+                # _is_lease_capable already handles non-conforming records safely when
+                # rec is a dict; the isinstance(rec, dict) guard above ensures that.
+                if not _is_lease_capable(rec):
+                    continue
+
+                # Skip stale peers.
+                is_stale = (rec.get("status") == "stale") or _is_stale(rec, stale_threshold)
+                if is_stale:
+                    continue
+
+                # Only consider SENIOR peers (lexicographic: peer_run_id < my run_id).
+                # _is_senior() is the canonical predicate for this comparison; it is
+                # kept inline here for clarity but must match _is_senior exactly.
+                if not (peer_run_id < run_id):
+                    continue  # peer is junior — I keep my claim against juniors
+
+                # Collect paths this peer holds; guard against non-list held_paths.
+                peer_held_raw = rec.get("held_paths", [])
+                peer_held: list = peer_held_raw if isinstance(peer_held_raw, list) else []
+                peer_held_paths: set[str] = {
+                    entry["path"] for entry in peer_held if isinstance(entry, dict) and "path" in entry
+                }
+
+                for staged in staged_paths:
+                    if staged in peer_held_paths:
+                        # This senior holds this path. Track the eldest (lowest run_id).
+                        # _is_senior() is the canonical predicate; kept inline to match
+                        # the surrounding filter above without a second function call.
+                        current_holder = path_to_eldest_senior.get(staged)
+                        if current_holder is None or peer_run_id < current_holder:
+                            path_to_eldest_senior[staged] = peer_run_id
+
+        # ── Partition staged paths into won set and conceded set ───────────────
+        conceded_list: list[dict] = []
+        won_paths: list[str] = []
+
+        for staged in staged_paths:
+            holder = path_to_eldest_senior.get(staged)
+            if holder is not None:
+                # A senior holds this path — concede it.
+                conceded_list.append({"path": staged, "holder_run_id": holder})
+            else:
+                won_paths.append(staged)
+
+        # ── Persist the won set only (BLOCKER-1) ──────────────────────────────
+        # Read own record, merge in won_paths, write back.
+        own_record = _atomic_read(record_path)
+        if not isinstance(own_record, dict):
+            # Own record is absent or malformed — cannot persist. Emit error and degrade gracefully.
+            _emit_event(run_id, "registry_error", {
+                "op": "claim", "run_id": run_id, "reason": "missing_record",
+            })
+            print(json.dumps({"claimed": [], "conceded": conceded_list}))
+            return 0  # best-effort
+
+        # Compute the set of paths being conceded so they are never persisted (BLOCKER-1).
+        # held_paths = (existing_held ∪ staged_won) − conceded, deduped by path.
+        conceded_paths: set[str] = {c["path"] for c in conceded_list}
+
+        existing_held_raw = own_record.get("held_paths", [])
+        existing_held: list = existing_held_raw if isinstance(existing_held_raw, list) else []
+
+        # Build surviving entries: keep previously-held entries that are NOT conceded.
+        surviving: list[dict] = [
+            entry for entry in existing_held
+            if isinstance(entry, dict) and entry.get("path") not in conceded_paths
+        ]
+        surviving_paths: set[str] = {
+            entry["path"] for entry in surviving if isinstance(entry, dict) and "path" in entry
+        }
+
+        # Append newly-won paths (not already surviving, not conceded).
+        new_held = list(surviving)
+        for wp in won_paths:
+            if wp not in surviving_paths:
+                new_held.append({"path": wp, "since": now_ts})
+
+        own_record["held_paths"] = new_held
+        own_record["last_heartbeat"] = now_ts
+        _atomic_write(record_path, own_record)
+
+        # ── Emit event + write stdout ──────────────────────────────────────────
+        _emit_event(run_id, "lease_claimed", {
+            "run_id": run_id,
+            "paths": won_paths,
+            "conceded": conceded_list,
+        })
+        result = {"claimed": won_paths, "conceded": conceded_list}
+        print(json.dumps(result))
+        return 0
+
+    except (OSError, json.JSONDecodeError, TypeError, KeyError, AttributeError) as exc:
+        _emit_event(run_id, "registry_error", {
+            "op": "claim", "run_id": run_id, "reason": "internal_error", "error": str(exc),
+        })
+        print(json.dumps({"claimed": [], "conceded": []}))
+        return 0  # best-effort — advisory, never hard-fails
+
+
+# ── release subcommand ───────────────────────────────────────────────────────
+
+def cmd_release(args: argparse.Namespace) -> int:
+    """release subcommand. NON-FATAL — always returns 0.
+
+    Best-effort: removes the requested paths (or all paths) from own held_paths.
+    A named path not currently held is a silent no-op. Atomic write. Refreshes
+    last_heartbeat. Emits lease_released {run_id, paths} where paths is the set
+    of entries actually removed.
+
+    Self-logging: on any caught internal error emits registry_error(op:release)
+    before returning 0, same as cmd_heartbeat/cmd_update_scope. A caller's
+    ``|| log`` is dead code because this always returns 0 by design.
+
+    Z_HARNESS_REGISTRY_ENABLED=0: silent no-op, exit 0 (handled in main()).
+    """
+    run_id = args.run_id
+
+    if not _is_safe_basename(run_id):
+        _emit_event(run_id, "registry_error", {
+            "op": "release", "run_id": run_id, "reason": "unsafe_run_id",
+        })
+        return 0  # non-fatal
+
+    # Determine the release mode and build the requested path set.
+    release_all: bool = getattr(args, "all", False)
+    paths_arg: str | None = getattr(args, "paths", None)
+
+    if release_all:
+        requested_paths: set[str] | None = None  # sentinel → remove all
+    else:
+        raw: list[str] = paths_arg.split(",") if paths_arg else []
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for p in raw:
+            p = p.strip()
+            if p and p not in seen:
+                seen.add(p)
+                deduped.append(p)
+        requested_paths = set(deduped)
+
+    try:
+        active_dir = _active_plans_dir()
+    except RuntimeError as exc:
+        _emit_event(run_id, "registry_error", {
+            "op": "release", "run_id": run_id, "reason": "active_plans_dir", "error": str(exc),
+        })
+        return 0  # non-fatal
+
+    record_path = active_dir / f"{run_id}.json"
+
+    try:
+        own_record = _atomic_read(record_path)
+        if not isinstance(own_record, dict):
+            # Own record absent or malformed — nothing to release, no error (non-fatal no-op).
+            _emit_event(run_id, "registry_error", {
+                "op": "release", "run_id": run_id, "reason": "missing_record",
+            })
+            return 0
+
+        existing_held_raw = own_record.get("held_paths", [])
+        existing_held: list = existing_held_raw if isinstance(existing_held_raw, list) else []
+
+        if release_all:
+            # --all: collect everything currently held for the event, then clear.
+            # Only include string "path" values in removed_paths (MAJOR-2: non-string
+            # path values must not leak into the lease_released event payload).
+            removed_paths: list[str] = [
+                entry["path"]
+                for entry in existing_held
+                if isinstance(entry, dict) and isinstance(entry.get("path"), str)
+            ]
+            new_held: list[dict] = []
+        else:
+            # --paths: keep entries whose "path" is NOT in the requested set.
+            # Silently discard non-dict entries and entries with non-string "path"
+            # values — they are corrupt and cannot be matched anyway (MAJOR-1 fix:
+            # avoids TypeError when an unhashable "path" value hits `in requested_paths`).
+            assert requested_paths is not None  # mypy / type narrowing
+            removed_paths = []
+            new_held = []
+            for entry in existing_held:
+                path = entry.get("path") if isinstance(entry, dict) else None
+                if not isinstance(path, str):
+                    # Non-dict or non-string "path": silently discard (corruption).
+                    continue
+                if path in requested_paths:
+                    removed_paths.append(path)
+                else:
+                    new_held.append(entry)
+
+        own_record["held_paths"] = new_held
+        own_record["last_heartbeat"] = _iso_now()
+        _atomic_write(record_path, own_record)
+
+        _emit_event(run_id, "lease_released", {
+            "run_id": run_id,
+            "paths": removed_paths,
+        })
+    except (OSError, json.JSONDecodeError, TypeError, AttributeError) as exc:
+        _emit_event(run_id, "registry_error", {
+            "op": "release", "run_id": run_id, "reason": "internal_error", "error": str(exc),
+        })
+        # non-fatal — still return 0
+
+    return 0
+
+
+# ── wait-for subcommand ───────────────────────────────────────────────────────
+
+
+def cmd_wait_for(args: argparse.Namespace) -> int:
+    """wait-for subcommand.
+
+    Parks the CURRENT run behind one or more senior peers until their records
+    clear (gone / complete / aborted / stale) or the budget expires.
+
+    Exit codes:
+      0   — cleared (all targets gone) or nothing_to_wait_on (no senior targets)
+      2   — usage error
+      10  — budget / timeout expired (LOUD)
+      130 — SIGINT / SIGTERM received
+
+    The waiting_on field is cleared on EVERY exit path via a try/finally block
+    (EH-005) so no paused zombie record can leak.
+    """
+    run_id = args.run_id
+    if not _is_safe_basename(run_id):
+        print(
+            f"[active-plan-registry] ERROR wait-for: run-id {run_id!r} is not a safe basename.",
+            file=sys.stderr,
+        )
+        return 2
+
+    # Read the --on list.
+    raw_on: list[str] = [r.strip() for r in args.on.split(",") if r.strip()]
+    if not raw_on:
+        print(
+            "[active-plan-registry] ERROR wait-for: --on requires at least one run-id.",
+            file=sys.stderr,
+        )
+        return 2
+
+    # Read --paths (optional).
+    watch_paths: list[str] = []
+    if getattr(args, "paths", None):
+        watch_paths = [p.strip() for p in args.paths.split(",") if p.strip()]
+
+    # Determine auto vs. explicit mode and budget.
+    is_auto = os.environ.get("Z_HARNESS_AUTO_WAIT", "1").strip() == "1"
+    try:
+        budget_secs = int(os.environ.get(
+            "Z_HARNESS_AUTO_WAIT_BUDGET_SECS",
+            _DEFAULT_AUTO_WAIT_BUDGET_SECS,
+        ))
+    except ValueError:
+        budget_secs = _DEFAULT_AUTO_WAIT_BUDGET_SECS
+
+    try:
+        explicit_timeout = int(os.environ.get(
+            "Z_HARNESS_WAIT_TIMEOUT_SECS",
+            _DEFAULT_EXPLICIT_WAIT_TIMEOUT_SECS,
+        ))
+    except ValueError:
+        explicit_timeout = _DEFAULT_EXPLICIT_WAIT_TIMEOUT_SECS
+
+    try:
+        poll_secs = int(os.environ.get(
+            "Z_HARNESS_WAIT_POLL_SECS",
+            _DEFAULT_WAIT_POLL_SECS,
+        ))
+    except ValueError:
+        poll_secs = _DEFAULT_WAIT_POLL_SECS
+
+    effective_budget = budget_secs if is_auto else explicit_timeout
+
+    # Resolve active_plans_dir once; failure is a hard usage error.
+    try:
+        active_dir = _active_plans_dir()
+    except RuntimeError as exc:
+        print(
+            f"[active-plan-registry] FATAL wait-for: cannot resolve active_plans_dir: {exc}",
+            file=sys.stderr,
+        )
+        return 2
+
+    stale_threshold = _stale_secs()
+
+    def _is_target_cleared(target_run_id: str) -> bool:
+        """Return True if the target's record is gone, in a terminal status, or age-stale.
+
+        An age-stale record (last_heartbeat past stale_threshold) with status
+        still "running" must count as cleared — otherwise wait-for hangs
+        indefinitely when the reaper carve-out (T006) keeps a live-local-pid
+        record alive but the peer has effectively stopped making progress.
+        """
+        rec = _atomic_read(active_dir / f"{target_run_id}.json")
+        if rec is None:
+            return True  # record gone
+        status = rec.get("status", "")
+        if status in {"complete", "aborted", "stale"}:
+            return True
+        if _is_stale(rec, stale_threshold):
+            return True
+        # Z_HARNESS_WAIT_REQUIRE_MERGE=1 would add merge-ancestor check here (T009,
+        # deferred). Degrades to deregister-only until T009 lands.
+        return False
+
+    def _scan_new_senior_holders(current_targets: list[str]) -> list[str]:
+        """TOCTOU re-scan: return any new senior run_ids holding watch_paths.
+
+        Only considers live, lease-capable, senior peers not already in
+        current_targets. Junior claimers are ignored (MINOR-7).
+        """
+        if not watch_paths:
+            return []
+        current_set = set(current_targets)
+        new_seniors: list[str] = []
+        if not active_dir.is_dir():
+            return []
+        for p in sorted(active_dir.glob("*.json")):
+            rec = _atomic_read(p)
+            if not isinstance(rec, dict):
+                continue
+            peer_run_id = rec.get("run_id", "")
+            if not isinstance(peer_run_id, str) or not peer_run_id:
+                continue
+            if peer_run_id == run_id:
+                continue
+            if peer_run_id in current_set:
+                continue
+            # Only senior peers (MINOR-7).
+            if not _is_senior(peer_run_id, run_id):
+                continue
+            if not _is_lease_capable(rec):
+                continue
+            # Skip stale/cleared peers.
+            if (rec.get("status") in {"complete", "aborted", "stale"}) or _is_stale(rec, stale_threshold):
+                continue
+            peer_held_raw = rec.get("held_paths", [])
+            peer_held: list = peer_held_raw if isinstance(peer_held_raw, list) else []
+            peer_held_paths: set[str] = {
+                entry["path"]
+                for entry in peer_held
+                if isinstance(entry, dict) and isinstance(entry.get("path"), str)
+            }
+            if any(wp in peer_held_paths for wp in watch_paths):
+                new_seniors.append(peer_run_id)
+        return new_seniors
+
+    # ── Eligibility filter ────────────────────────────────────────────────────
+    # Keep only live, senior (run_id < mine) targets.
+    targets: list[str] = []
+    for candidate in raw_on:
+        if not _is_safe_basename(candidate):
+            print(
+                f"[active-plan-registry] NOTE wait-for: dropping unsafe run-id {candidate!r}.",
+                file=sys.stderr,
+            )
+            continue
+        if not _is_senior(candidate, run_id):
+            print(
+                f"[active-plan-registry] NOTE wait-for: dropping junior/equal run-id {candidate!r} "
+                f"(not senior to {run_id!r}).",
+                file=sys.stderr,
+            )
+            continue
+        if _is_target_cleared(candidate):
+            print(
+                f"[active-plan-registry] NOTE wait-for: target {candidate!r} already cleared; skipping.",
+                file=sys.stderr,
+            )
+            continue
+        targets.append(candidate)
+
+    if not targets:
+        _emit_event(run_id, "wait_started", {
+            "run_id": run_id, "waiting_on": [], "paths": watch_paths, "auto": is_auto,
+        })
+        print("[wait-for] nothing_to_wait_on")
+        # Nothing to clear; waiting_on already empty — no cleanup needed.
+        return 0
+
+    # ── Emit wait_started ─────────────────────────────────────────────────────
+    _emit_event(run_id, "wait_started", {
+        "run_id": run_id, "waiting_on": list(targets), "paths": watch_paths, "auto": is_auto,
+    })
+
+    start_ts = time.monotonic()
+    exit_code = 0
+    interrupted = False
+    waited_on_at_interrupt: list[str] = []
+
+    # ── Signal handling ───────────────────────────────────────────────────────
+
+    def _handle_signal(signum: int, _frame: object) -> None:
+        raise SystemExit(130)
+
+    old_sigint = signal.signal(signal.SIGINT, _handle_signal)
+    old_sigterm = signal.signal(signal.SIGTERM, _handle_signal)
+
+    try:
+        # ── Poll loop ─────────────────────────────────────────────────────────
+        while True:
+            elapsed = time.monotonic() - start_ts
+
+            # Check budget BEFORE sleeping so first-iteration timeout is consistent.
+            if elapsed >= effective_budget:
+                # Budget expired.
+                print(
+                    f"[wait-for] TIMEOUT after {elapsed:.0f}s (budget={effective_budget}s); "
+                    f"waited_on={targets!r}",
+                    file=sys.stderr,
+                )
+                _emit_event(run_id, "wait_timeout", {
+                    "run_id": run_id,
+                    "waited_on": list(targets),
+                    "elapsed_s": elapsed,
+                    "budget_s": effective_budget,
+                })
+                exit_code = 10
+                break
+
+            # Single atomic write: set status=paused + waiting_on in one shot (MINOR-1).
+            _set_waiting_on(run_id, targets, status="paused")
+
+            # Run reap to free dead peers.
+            try:
+                _reap_inline(active_dir, stale_threshold)
+            except OSError:
+                pass  # reap failure is non-fatal
+
+            # Cap sleep to the remaining budget so we never overshoot by a full
+            # poll interval when the deadline falls inside a sleep window.
+            remaining_budget = effective_budget - (time.monotonic() - start_ts)
+            time.sleep(min(poll_secs, max(0.0, remaining_budget)))
+
+            # Re-check timeout immediately on wake BEFORE running reap / target-clear
+            # / TOCTOU checks — a target clearing after the deadline must not produce
+            # a false exit-0 (cleared) when exit-10 (timeout) is correct.
+            elapsed = time.monotonic() - start_ts
+            if elapsed >= effective_budget:
+                print(
+                    f"[wait-for] TIMEOUT after {elapsed:.0f}s (budget={effective_budget}s); "
+                    f"waited_on={targets!r}",
+                    file=sys.stderr,
+                )
+                _emit_event(run_id, "wait_timeout", {
+                    "run_id": run_id,
+                    "waited_on": list(targets),
+                    "elapsed_s": elapsed,
+                    "budget_s": effective_budget,
+                })
+                exit_code = 10
+                break
+
+            # Recompute cleared targets.
+            targets = [t for t in targets if not _is_target_cleared(t)]
+
+            # TOCTOU re-scan: add any new senior holders of watch_paths (senior-only, MINOR-7).
+            new_seniors = _scan_new_senior_holders(targets)
+            for ns in new_seniors:
+                if ns not in targets:
+                    targets.append(ns)
+
+            # Check if all cleared and no new senior holders.
+            if not targets:
+                elapsed = time.monotonic() - start_ts
+                print(f"[wait-for] cleared after {elapsed:.0f}s")
+                _emit_event(run_id, "wait_cleared", {
+                    "run_id": run_id,
+                    "elapsed_s": elapsed,
+                })
+                exit_code = 0
+                break
+
+    except SystemExit as exc:
+        # Raised by our signal handler (SIGINT/SIGTERM).
+        if exc.code == 130:
+            interrupted = True
+            exit_code = 130
+            waited_on_at_interrupt = list(targets)
+        else:
+            raise
+    finally:
+        # Restore original signal handlers.
+        signal.signal(signal.SIGINT, old_sigint)
+        signal.signal(signal.SIGTERM, old_sigterm)
+
+        # ALWAYS clear waiting_on and restore status=running on every exit path (EH-005).
+        _set_waiting_on(run_id, [], status="running")
+
+        if interrupted:
+            _emit_event(run_id, "wait_interrupted", {
+                "run_id": run_id,
+                "waited_on": waited_on_at_interrupt,
+            })
+            print("[wait-for] interrupted", file=sys.stderr)
+
+    return exit_code
+
+
+def _reap_inline(active_dir: Path, stale_threshold: int) -> None:
+    """Run the reap logic for a single active_plans_dir.
+
+    Extracted from cmd_reap so wait-for can call it without re-resolving
+    active_plans_dir.  Identical semantics to cmd_reap — non-fatal overall.
+    """
+    this_host = socket.gethostname()
+    if not active_dir.is_dir():
+        return
+    for p in sorted(active_dir.glob("*.json")):
+        rec = _atomic_read(p)
+        if rec is None:
+            continue
+
+        run_id_rec = rec.get("run_id", str(p.stem))
+        rec_host = rec.get("host", "")
+        pid = rec.get("pid")
+        age_secs = _heartbeat_age_secs(rec)
+
+        is_local_host = rec_host == this_host
+        if is_local_host and isinstance(pid, int):
+            if not _pid_alive(pid):
+                try:
+                    p.unlink()
+                    _emit_event(run_id_rec, "plan_reaped", {
+                        "run_id": run_id_rec, "reason": "dead_local_pid",
+                        "pid": pid, "host": rec_host,
+                    })
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    pass
+                continue
+
+        if age_secs > stale_threshold * 2:
+            try:
+                p.unlink()
+                _emit_event(run_id_rec, "plan_reaped", {
+                    "run_id": run_id_rec, "reason": "2x_stale_margin",
+                    "age_secs": age_secs, "stale_threshold": stale_threshold,
+                })
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
+            continue
+
+        if age_secs > stale_threshold and not is_local_host:
+            if rec.get("status") != "stale":
+                rec["status"] = "stale"
+                try:
+                    _atomic_write(p, rec)
+                    _emit_event(run_id_rec, "plan_marked_stale", {
+                        "run_id": run_id_rec, "reason": "remote_host_stale",
+                        "host": rec_host, "age_secs": age_secs,
+                        "stale_threshold": stale_threshold,
+                    })
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    pass
+
+
 # ── pid liveness ──────────────────────────────────────────────────────────────
 
 def _pid_alive(pid: int) -> bool:
@@ -752,9 +1544,24 @@ def cmd_overlaps(args: argparse.Namespace) -> int:
 
     my_scope_map = _scope_map(my_scope)
 
+    # Extract my held_paths as a set of path strings for held-conflict computation.
+    # Guard: own_record may be None (no registered record yet); held_paths entries must
+    # be dicts with a string "path" key (same guard pattern used in cmd_claim/cmd_release).
+    my_held_raw = (own_record or {}).get("held_paths", [])
+    my_held_paths: set[str] = {
+        entry["path"]
+        for entry in (my_held_raw if isinstance(my_held_raw, list) else [])
+        if isinstance(entry, dict) and isinstance(entry.get("path"), str)
+    }
+
     # Scan all peer records.
     stale_threshold = _stale_secs()
     peers_with_overlap: list[dict] = []
+    # held_conflicts: flat list of per-path held-lease conflicts across ALL live
+    # lease-capable peers (independent of scope overlap).  Each entry records the
+    # conflicting path, the peer's run_id, and whether that peer is senior or junior
+    # to this run via the canonical _is_senior() predicate.
+    held_conflicts: list[dict] = []
     scanned = 0
     live_count = 0
 
@@ -779,7 +1586,7 @@ def cmd_overlaps(args: argparse.Namespace) -> int:
             if not is_stale_peer:
                 live_count += 1
 
-            # Compute path intersection.
+            # Compute scope-path intersection (unchanged behaviour).
             peer_scope = rec.get("scope", []) or []
             peer_scope_map = _scope_map(peer_scope)
 
@@ -794,22 +1601,38 @@ def cmd_overlaps(args: argparse.Namespace) -> int:
                         "min_confidence": _min_confidence(my_conf, peer_conf),
                     })
 
-            if not shared:
-                continue
+            if shared:
+                peers_with_overlap.append({
+                    "peer": {
+                        "run_id": peer_run_id,
+                        "slug": rec.get("slug", ""),
+                        "branch": rec.get("branch", ""),
+                        "worktree_path": rec.get("worktree_path", ""),
+                        "host": rec.get("host", ""),
+                        "pid": rec.get("pid"),
+                        "current_task": rec.get("current_task", ""),
+                    },
+                    "shared_paths": shared,
+                    "is_stale": is_stale_peer,
+                })
 
-            peers_with_overlap.append({
-                "peer": {
-                    "run_id": peer_run_id,
-                    "slug": rec.get("slug", ""),
-                    "branch": rec.get("branch", ""),
-                    "worktree_path": rec.get("worktree_path", ""),
-                    "host": rec.get("host", ""),
-                    "pid": rec.get("pid"),
-                    "current_task": rec.get("current_task", ""),
-                },
-                "shared_paths": shared,
-                "is_stale": is_stale_peer,
-            })
+            # Compute held-path conflict for LIVE, lease-capable peers only.
+            # Stale peers and peers without schema-v2 held_paths are skipped (F-backcompat).
+            # peer_run_id must be a non-empty string (already filtered above) for
+            # _is_senior() to give a meaningful result.
+            if not is_stale_peer and isinstance(peer_run_id, str) and peer_run_id and _is_lease_capable(rec):
+                peer_held_raw = rec.get("held_paths", [])
+                peer_held_paths: set[str] = {
+                    entry["path"]
+                    for entry in (peer_held_raw if isinstance(peer_held_raw, list) else [])
+                    if isinstance(entry, dict) and isinstance(entry.get("path"), str)
+                }
+                for conflict_path in sorted(my_held_paths & peer_held_paths):
+                    held_conflicts.append({
+                        "path": conflict_path,
+                        "peer_run_id": peer_run_id,
+                        "holder_seniority": "senior" if _is_senior(peer_run_id, run_id) else "junior",
+                    })
 
     # Determine exit code.
     exit_code = 0
@@ -845,6 +1668,10 @@ def cmd_overlaps(args: argparse.Namespace) -> int:
             "blocking": has_blocking,
             "peers": peers_with_overlap,
         }
+        # Additive: include held_conflict only when at least one conflict exists.
+        # Scope-only overlaps (no held-path intersection) never produce this key.
+        if held_conflicts:
+            payload["held_conflict"] = held_conflicts
         _emit_event(run_id, "scope_overlap_detected", payload)
 
         if getattr(args, "json", False):
@@ -867,6 +1694,13 @@ def cmd_overlaps(args: argparse.Namespace) -> int:
                         f"    path={sp['path']!r}  "
                         f"min_confidence={sp['min_confidence']!r}"
                     )
+            if held_conflicts:
+                print(f"  held_conflict: {len(held_conflicts)} path(s)")
+                for hc in held_conflicts:
+                    print(
+                        f"    path={hc['path']!r}  peer={hc['peer_run_id']!r}"
+                        f"  seniority={hc['holder_seniority']!r}"
+                    )
     else:
         payload = {
             "run_id": run_id,
@@ -874,12 +1708,22 @@ def cmd_overlaps(args: argparse.Namespace) -> int:
             "live": live_count,
             "overlaps": 0,
         }
+        # Additive: held_conflict may exist even when there is no scope overlap.
+        if held_conflicts:
+            payload["held_conflict"] = held_conflicts
         _emit_event(run_id, "active_plan_scan_complete", payload)
 
         if getattr(args, "json", False):
             print(json.dumps(payload, indent=2))
         else:
             print(f"[no overlap] scanned={scanned} live={live_count} overlaps=0")
+            if held_conflicts:
+                print(f"  held_conflict: {len(held_conflicts)} path(s)")
+                for hc in held_conflicts:
+                    print(
+                        f"    path={hc['path']!r}  peer={hc['peer_run_id']!r}"
+                        f"  seniority={hc['holder_seniority']!r}"
+                    )
 
     return exit_code
 
@@ -1057,6 +1901,71 @@ def _build_parser() -> argparse.ArgumentParser:
     # reap
     sub.add_parser("reap", help="Conservative reaper: remove dead/2x-stale records.")
 
+    # claim
+    p_claim = sub.add_parser(
+        "claim",
+        help=(
+            "Stage and claim per-file leases for a run. Best-effort (advisory, never "
+            "hard-fails). Performs check-after-claim (F2) with run_id tiebreak: a senior "
+            "peer (lower run_id) holding a path wins; caller concedes and should wait-for "
+            "that peer. Persists only the won set (BLOCKER-1). "
+            "Stdout: JSON {claimed:[...], conceded:[{path, holder_run_id}]}."
+        ),
+    )
+    p_claim.add_argument("--run-id", required=True, help="Run ID that owns the claim.")
+    p_claim.add_argument(
+        "--paths",
+        required=True,
+        help="Comma-separated repo-relative paths to claim.",
+    )
+
+    # wait-for
+    p_wait = sub.add_parser(
+        "wait-for",
+        help=(
+            "Park the current run behind one or more senior peers until their records clear "
+            "or the budget expires. Exit 0 = cleared/nothing_to_wait_on; 10 = budget expired; "
+            "130 = SIGINT/SIGTERM. Clears waiting_on on every exit path (no paused zombie)."
+        ),
+    )
+    p_wait.add_argument("--run-id", required=True, help="This run's ID (the waiter).")
+    p_wait.add_argument(
+        "--on",
+        required=True,
+        help="Comma-separated run-ids to wait on (non-senior ids are silently dropped).",
+    )
+    p_wait.add_argument(
+        "--paths",
+        default=None,
+        help=(
+            "Comma-separated repo-relative paths to watch for new senior holders "
+            "(TOCTOU re-scan). Optional."
+        ),
+    )
+
+    # release
+    p_release = sub.add_parser(
+        "release",
+        help=(
+            "Remove per-file leases from own held_paths. Best-effort (advisory, "
+            "never hard-fails). --paths and --all are mutually exclusive; exactly "
+            "one is required. Emits lease_released {run_id, paths}."
+        ),
+    )
+    p_release.add_argument("--run-id", required=True, help="Run ID that owns the leases.")
+    p_release_mx = p_release.add_mutually_exclusive_group(required=True)
+    p_release_mx.add_argument(
+        "--paths",
+        default=None,
+        help="Comma-separated repo-relative paths to release.",
+    )
+    p_release_mx.add_argument(
+        "--all",
+        action="store_true",
+        default=False,
+        help="Release all currently held paths.",
+    )
+
     return parser
 
 
@@ -1072,10 +1981,14 @@ def main(argv: list[str] | None = None) -> int:
     # when the registry is disabled, since there are no records to update.
     if os.environ.get("Z_HARNESS_REGISTRY_ENABLED", "1") == "0":
         _REGISTRY_DISABLED_SUBCMDS = frozenset(
-            {"register", "heartbeat", "update-scope", "overlaps", "reap", "deregister"}
+            {"register", "heartbeat", "update-scope", "overlaps", "reap", "deregister", "claim",
+             "release", "wait-for"}
         )
         if args.subcommand in _REGISTRY_DISABLED_SUBCMDS:
             # Silent no-op: registry is disabled. For overlaps, exit 0 (no overlap).
+            # For claim, print the expected empty JSON so callers can parse stdout.
+            if args.subcommand == "claim":
+                print(json.dumps({"claimed": [], "conceded": []}))
             return 0
 
     dispatch = {
@@ -1087,6 +2000,9 @@ def main(argv: list[str] | None = None) -> int:
         "deregister": cmd_deregister,
         "overlaps": cmd_overlaps,
         "reap": cmd_reap,
+        "claim": cmd_claim,
+        "release": cmd_release,
+        "wait-for": cmd_wait_for,
     }
     handler = dispatch.get(args.subcommand)
     if handler is None:
