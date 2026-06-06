@@ -1,0 +1,111 @@
+{
+  "concept": "capabilities-matrix",
+  "last_updated": "2026-06-04",
+  "covers_spec": "SPEC.md §HostAdapter contract (D13); §Phase 7 review — Command-capability matrix (NEW)",
+  "source_file": [
+    "z_harness_cli/adapters/claude.py",
+    "z_harness_cli/adapters/antigravity.py",
+    "z_harness_cli/adapters/cursor.py",
+    "z_harness_cli/adapters/codex.py",
+    "z_harness_cli/adapters/base.py",
+    "z_harness_cli/adapters/registry.py"
+  ],
+  "confidence": "high",
+  "depends_on": [
+    "multi-ide-exports"
+  ],
+  "consumed_by": [],
+  "fidelity_tiers": {
+    "native": {
+      "hosts": ["claude"],
+      "description": "Full orchestration + native personas. All /z-* commands run identically to the Claude Code reference. Multi-agent dispatch (subagents, panels, consults, gates) works natively."
+    },
+    "high": {
+      "hosts": ["antigravity"],
+      "description": "Native skills/personas, single-agent only. Multi-agent commands (/z-implement-all, /z-panel, /z-consult, /z-gate) are degraded (single-agent transliteration, not blocked). All other /z-* commands run at native fidelity."
+    },
+    "flattened": {
+      "hosts": ["cursor", "codex"],
+      "description": "Transliterated rules, single-agent only. z-harness rules injected via host-native config file. Single-agent /z-* commands run in degraded mode. Multi-agent commands are blocked."
+    }
+  },
+  "per_host": {
+    "claude": {
+      "binary": "claude",
+      "fidelity_tier": "native",
+      "capabilities": {
+        "supports_project_mcp": true,
+        "supports_user_mcp": true,
+        "needs_trust_prompt": false,
+        "supports_cwd_override": true,
+        "cleanup_strategy": "ephemeral"
+      },
+      "plugin_root_env": "CLAUDE_PLUGIN_ROOT",
+      "config_injection": "CLAUDE.md (ephemeral) or installed plugin (in_place)"
+    },
+    "antigravity": {
+      "binary": "agy",
+      "fidelity_tier": "high",
+      "capabilities": {
+        "supports_project_mcp": false,
+        "supports_user_mcp": false,
+        "needs_trust_prompt": false,
+        "supports_cwd_override": false,
+        "cleanup_strategy": "ephemeral"
+      },
+      "plugin_root_env": "ANTIGRAVITY_PLUGIN_ROOT",
+      "config_injection": ".agent/z-harness-session.md"
+    },
+    "cursor": {
+      "binary": "cursor-agent",
+      "fidelity_tier": "flattened",
+      "capabilities": {
+        "supports_project_mcp": true,
+        "supports_user_mcp": true,
+        "needs_trust_prompt": true,
+        "supports_cwd_override": false,
+        "cleanup_strategy": "ephemeral"
+      },
+      "plugin_root_env": "CLAUDE_PLUGIN_ROOT",
+      "config_injection": ".cursor/rules/z-harness-session.mdc"
+    },
+    "codex": {
+      "binary": "codex",
+      "fidelity_tier": "flattened",
+      "capabilities": {
+        "supports_project_mcp": true,
+        "supports_user_mcp": false,
+        "needs_trust_prompt": false,
+        "supports_cwd_override": false,
+        "cleanup_strategy": "ephemeral"
+      },
+      "plugin_root_env": "CLAUDE_PLUGIN_ROOT",
+      "config_injection": "AGENTS.md",
+      "mcp_note": "Global/persistent write to ~/.codex/config.toml; not reversed by ephemeral cleanup (F4)"
+    }
+  },
+  "command_tiers": {
+    "note": "Commands that require multi-agent orchestration are 'degraded' on high-fidelity hosts and 'blocked' on flattened hosts. All other /z-* commands are 'native' on claude, 'native' on antigravity, and 'degraded' on cursor/codex.",
+    "multi_agent_commands": ["z-implement-all", "z-panel", "z-consult", "z-gate"],
+    "per_tier": {
+      "native": {"multi_agent": "native", "single_agent": "native"},
+      "high": {"multi_agent": "degraded", "single_agent": "native"},
+      "flattened": {"multi_agent": "blocked", "single_agent": "degraded"}
+    }
+  },
+  "invariants": [
+    "fidelity_tier is a static property on each adapter class; never computed at runtime",
+    "multi-agent commands (z-implement-all, z-panel, z-consult, z-gate) are degraded on high-tier hosts and blocked on flattened hosts",
+    "flattened = single-agent transliteration only; no subagent dispatch",
+    "high = native skill/persona loading via host-native mechanism; single-agent only; subagent dispatch absent",
+    "native = full orchestration including multi-agent subagent dispatch",
+    "cleanup_strategy=ephemeral for all four adapters in v1; MCP writes are global/persistent and NOT reversed by cleanup (F4)"
+  ],
+  "gotchas": [
+    "cursor and codex both declare fidelity=flattened but differ in MCP surface: cursor has supports_user_mcp=True, codex does not",
+    "antigravity uses ANTIGRAVITY_PLUGIN_ROOT; all three other adapters inject CLAUDE_PLUGIN_ROOT",
+    "codex MCP registration is global (~/.codex/config.toml) and survives session cleanup; explicit removal only via z-harness doctor --clear-mcp",
+    "cursor needs_trust_prompt=True means inject() must not assume non-interactive; surface the prompt via PTY",
+    "canonical adapter order in registry: claude (native) > antigravity (high) > cursor (flattened) > codex (flattened)"
+  ]
+}

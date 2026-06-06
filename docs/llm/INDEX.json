@@ -349,7 +349,7 @@
         "z-review-all",
         "z-debug"
       ],
-      "summary": "Post-run Haiku subagent that proposes 0-3 candidate memories from a completed /z-implement-all (Phase 9), /z-review-all (Phase 7), or /z-debug (Phase 10, shipped branch only) run. Reads run events, cumulative diff, SPEC.md or DEBUG.md; emits structured candidates as a fenced JSON block. Does not write — orchestrator owns all writes via /z-suggest-memory. Dispatched after skip-conditions check by scripts/run-memory-review.sh."
+      "summary": "Post-run Haiku subagent that proposes 0-3 candidate memories from a completed /z-implement-all (Phase 9), /z-review-all (Phase 7), or /z-debug (Phase 10, shipped branch only) run. Reads run events, cumulative diff, SPEC.md or DEBUG.md; emits structured candidates as a fenced JSON block. Does not write \u2014 orchestrator owns all writes via /z-suggest-memory. Dispatched after skip-conditions check by scripts/run-memory-review.sh."
     },
     {
       "slug": "z-uplift",
@@ -553,7 +553,7 @@
         "commands",
         "agents"
       ],
-      "summary": "Advisory behavioral rules mined from z-harness interaction history; lifecycle raw->candidate->approved with explicit user approval gate; five /z-axiom-* commands; KERNEL.md compiled by build-kernel.py and read by six behavioral subagents; axioms are the lowest-authority signal in the resolver — config/memory win direct conflicts but the conflict is surfaced via axiom_conflict envelope."
+      "summary": "Advisory behavioral rules mined from z-harness interaction history; lifecycle raw->candidate->approved with explicit user approval gate; five /z-axiom-* commands; KERNEL.md compiled by build-kernel.py and read by six behavioral subagents; axioms are the lowest-authority signal in the resolver \u2014 config/memory win direct conflicts but the conflict is surfaced via axiom_conflict envelope."
     },
     {
       "slug": "session-handoff",
@@ -573,6 +573,24 @@
         "commands"
       ],
       "summary": "SESSION.md handoff artifact + context-curator Haiku subagent that eliminate O(N^2) cache_read growth in /z-implement-all. Notable-only breadcrumbs (E2) feed the curator; curator folds events delta + git diff + TASKS.md into a bounded SESSION.md at the compaction breakpoint (E3); done-set hash predicate re-seeds orchestrator context on resume (E1). Key env knobs: Z_SESSION_CURATOR_TIMEOUT_S (default 120, 0 disables) and Z_SESSION_MAX_CHARS (default 28000)."
+    },
+    {
+      "slug": "capabilities-matrix",
+      "source_file": [
+        "z_harness_cli/adapters/claude.py",
+        "z_harness_cli/adapters/antigravity.py",
+        "z_harness_cli/adapters/cursor.py",
+        "z_harness_cli/adapters/codex.py",
+        "z_harness_cli/adapters/base.py",
+        "z_harness_cli/adapters/registry.py"
+      ],
+      "last_updated": "2026-06-04",
+      "confidence": "high",
+      "depends_on": [
+        "multi-ide-exports"
+      ],
+      "consumed_by": [],
+      "summary": "Per-host fidelity tiers and command-capability grid for the z-harness CLI adapters. native (claude) = full orchestration + native personas; high (antigravity) = native skills/personas, single-agent, multi-agent commands degraded; flattened (cursor, codex) = transliterated rules, single-agent, multi-agent commands blocked."
     }
   ]
 }

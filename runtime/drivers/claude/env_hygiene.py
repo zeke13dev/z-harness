@@ -85,7 +85,6 @@ def detect_self_hosted() -> bool:
     """Return True iff this process is running inside Claude Code.
 
     Detection is based solely on whether CLAUDECODE is present and non-empty
-    in os.environ.  Passing ``--driver=claude-self`` can override this at a
-    higher level; that logic lives in the driver-selection layer, not here.
+    in os.environ.
     """
     return bool(os.environ.get(CLAUDECODE_VAR))
