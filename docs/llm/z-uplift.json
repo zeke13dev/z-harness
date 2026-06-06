@@ -1,6 +1,6 @@
 {
   "concept": "z-uplift",
-  "last_updated": "2026-06-03",
+  "last_updated": "2026-06-05",
   "covers_spec": "z-harness/plans/tiered-quality-uplift/SPEC.md",
   "source_file": [
     "commands/z-uplift.md",
@@ -76,7 +76,7 @@
       "line": 2579,
       "symbol": "Phase 5",
       "kind": "phase",
-      "summary": "Sequential implement — two-step handoff; Step 2c prints /z-implement-all command, marks [i] implementing, exits with run_end status:pending_implement; Step 2a auto-transitions [i]→[x] done when RESUME_PENDING_COUNT==0; manifest_replace_row enforces exactly-one-row invariant."
+      "summary": "Sequential implement — two-step handoff; Step 2c prints /z-implement-all command, marks [i] implementing, exits with run_end status:pending_implement; Step 2a auto-transitions [i]->>[x] done when RESUME_PENDING_COUNT==0; manifest_replace_row enforces exactly-one-row invariant."
     },
     {
       "file": "commands/z-uplift.md",
@@ -126,14 +126,15 @@
     "Phase 3 iteration explicitly excludes synthetic cross-cutting rows (slug ends in -cross-cutting or component column == (global)).",
     "Phase 3 Step 2f dispatches cross-LLM consult (consultant-primary + consultant-secondary) over REPORT.md before TASKS.md is written; each proposed addition must pass a 'one reason it might be wrong' check.",
     "Phase 3 Step 2i dispatches a reviewer over TASKS.md as mandatory safety gate; Blockers trigger one re-edit + re-review; second failure triggers AskUser (continue / skip component / abort Phase 3).",
-    "Phase 5 Step 2a auto-transitions [i] implementing → [x] done when RESUME_PENDING_COUNT==0 (all TASKS.md rows are [x]); no AskUser is shown in this path.",
+    "Phase 5 Step 2a auto-transitions [i] implementing -> [x] done when RESUME_PENDING_COUNT==0 (all TASKS.md rows are [x]); no AskUser is shown in this path.",
     "Phase 5 Step 2a 'Mark as done' option verifies zero [ ] rows in TASKS.md before accepting transition; refuses and re-presents the AskUser if pending tasks remain.",
-    "Phase 5 Step 2c logs run_end with status: pending_implement before exiting (not status: complete); Phase 6 is not reached on this exit path."
+    "Phase 5 Step 2c logs run_end with status: pending_implement before exiting (not status: complete); Phase 6 is not reached on this exit path.",
+    "skills/z-uplift/SKILL.md argument-hint value must be quoted with double quotes in frontmatter; unquoted bracket-containing values fail codex's strict YAML parser."
   ],
   "gotchas": [
     "Phase 4 does NOT present an AskUserQuestion — it is a passive informational summary. The per-component AskUser gates are in Phase 5. Earlier doc versions incorrectly described Phase 4 as an interactive gate.",
-    "Phase 1.5 is a new hard cost gate between decomposition and cross-cutting; it fires on fresh runs and is skipped on resume. If cost_gate_decision events are absent from run logs, the gate may have auto_proceeded silently.",
-    "Phase 3 Step 2f (cross-LLM consult on REPORT.md) and Step 2i (reviewer over TASKS.md) are new sub-steps added since the previous doc version; any run logic written against the old spec is missing these two dispatch steps.",
+    "Phase 1.5 is a hard cost gate between decomposition and cross-cutting; it fires on fresh runs and is skipped on resume. If cost_gate_decision events are absent from run logs, the gate may have auto_proceeded silently.",
+    "Phase 3 Step 2f (cross-LLM consult on REPORT.md) and Step 2i (reviewer over TASKS.md) are sub-steps added in the token-estimates branch; any run logic written against the old spec is missing these two dispatch steps.",
     "Main tree may be transiently un-buildable between AskUser gates if a global-task API change lands and dependents are not yet updated; mitigated (but NOT eliminated) by processing <slug>-cross-cutting first.",
     "Text-grep dependency reporting on bail misses reflection / string-based imports — output is labeled 'Potential dependents (text-grep — incomplete)' in REPORT.md and MANIFEST.md to avoid false confidence.",
     "git grep for bail dependents silently produces nothing (not an error) when OTHER_COMP_PATHS is empty; DEPS_FOUND will be empty string in that case.",
@@ -150,7 +151,8 @@
     "workflow.slug_confirm resolver failure (exit code 2/3/4) is non-fatal — falls back to ask mode; never silently skips the confirmation.",
     "halt branch (workflow.slug_confirm result=halt) emits uplift_halt and exits 0 — it does NOT call AskUserQuestion. Distinct from skip (which continues) and ask (which prompts). Triggered when rule_id=no_ask_halt is active in config.",
     "Phase 5 run_end on the two-step handoff path uses status: pending_implement, not status: complete. Phase 6 is NOT executed on this path — Phase 6 only runs after all components have been resolved in a single invocation.",
-    "Phase 5 auto-transition ([i]→[x] done when RESUME_PENDING_COUNT==0) requires no user input; if you are expecting an AskUser gate at resume time for a fully-done component, it will not appear."
+    "Phase 5 auto-transition ([i]->[x] done when RESUME_PENDING_COUNT==0) requires no user input; if you are expecting an AskUser gate at resume time for a fully-done component, it will not appear.",
+    "skills/z-uplift/SKILL.md argument-hint must be quoted; unquoted value with brackets breaks codex strict YAML and makes codex print 'failed to load skill' on startup — not a reviewer outage."
   ],
   "memories": []
 }

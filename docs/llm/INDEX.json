@@ -353,11 +353,13 @@
     },
     {
       "slug": "z-uplift",
-      "last_updated": "2026-06-02",
+      "last_updated": "2026-06-05",
       "confidence": "high",
       "depends_on": [
         "commands",
-        "agents"
+        "agents",
+        "config",
+        "cost-estimation"
       ],
       "consumed_by": [],
       "summary": "Tiered bulk codebase quality uplift: decompose into components, repo-wide cross-cutting pass, per-component audits, sequential implement via /z-implement-all.",
@@ -541,7 +543,7 @@
         "scripts/config.py",
         "scripts/setup.py"
       ],
-      "last_updated": "2026-06-02",
+      "last_updated": "2026-06-05",
       "confidence": "high",
       "depends_on": [
         "config",

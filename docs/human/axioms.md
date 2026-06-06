@@ -1,6 +1,6 @@
 # Axioms
 
-> Last updated: 2026-06-03
+> Last updated: 2026-06-05
 > Covers source: scripts/axiom-store.py, scripts/axiom-extract.py, scripts/build-kernel.py, scripts/resolve-kernel.sh, scripts/build-skill-index.py, agents/axiom-extractor.md, commands/z-axiom-scan.md, commands/z-axiom-list.md, commands/z-axiom-approve.md, commands/z-axiom-reject.md, commands/z-axiom-edit.md, docs/schemas/axiom.schema.json, scripts/config.py, scripts/setup.py
 
 ## Overview
@@ -29,11 +29,13 @@ raw decision events  →  candidate  →  approved  (or rejected)
 
 ### 1. Raw events
 
-Every workflow decision you make is logged to `<base>/metrics.jsonl` (the resolved artifact base — see the active-plan-registry concept) as a structured event. The axiom extractor reads these events to find recurring patterns. Since the Phase-D external-base flip, `metrics.jsonl` lives at the external base resolved by `plan-path.sh base_dir` (five-tier fallback), with a legacy `<repo-root>/z-harness/metrics.jsonl` fallback when the external location does not yet exist.
+Every workflow decision you make is logged to `<base>/metrics.jsonl` (the resolved artifact base — see [telemetry](telemetry.md)) as a structured event (via `scripts/log-decision.sh`). The axiom extractor reads these events to find recurring patterns.
+
+Since the Phase-D external-base flip, `metrics.jsonl` no longer lives under `repo_root/z-harness/` by default. `axiom-extract.py` now resolves the metrics path via `plan-path.sh base_dir` (honouring the full 5-tier fallback), with a legacy in-repo fallback when `plan-path.sh` is unavailable.
 
 ### 2. Candidate
 
-When a grouping of `(event_kind, decision_key, normalized_value)` reaches the minimum recurrence threshold (default 3, configurable via `axioms.extract_min_recurrence`), `scripts/axiom-extract.py` synthesizes a draft candidate record. The `agents/axiom-extractor.md` agent (Sonnet-tier) then sharpens the statement, merges near-duplicates, and drafts falsifiability fields (`boundary_conditions`, `counterexamples`). Candidates land in the two-layer axiom store under `candidates/` — they never participate in resolution or kernel compilation.
+When a grouping of `(event_kind, decision_key, value)` reaches the minimum recurrence threshold (default 3, configurable via `axioms.extract_min_recurrence`), `scripts/axiom-extract.py` synthesizes a draft candidate record. The `agents/axiom-extractor.md` agent (Sonnet-tier) then sharpens the statement, merges near-duplicates, and drafts falsifiability fields (`boundary_conditions`, `counterexamples`). Candidates land in the two-layer axiom store under `candidates/` — they never participate in resolution or kernel compilation.
 
 The extractor is read-only: it never writes the store and never approves anything (Invariant 8).
 
@@ -106,28 +108,17 @@ The `.z-harness/axioms/` directory and `.z-harness/KERNEL.md` should be added to
 
 ## Kernel compilation and inheritance
 
-`scripts/build-kernel.py` assembles `KERNEL.md` — the single artifact that every behavioral subagent reads at the start of each task. The compiler follows these steps:
+`scripts/build-kernel.py` assembles `KERNEL.md` — the single artifact that every behavioral subagent reads at the start of each task. The kernel contains three sections:
 
-1. Build the skill dispatch index via `build-skill-index.py`.
-2. Load the **full active set** (all statuses: candidate + approved + rejected, merged global+project, project shadows global) via `_load_active_set` — this is R1's identical-load-semantics requirement.
-3. Graph-validate over the full active set. Drop graph-invalid **approved** records and emit an `axiom_integrity_warning` event for each (R2 — loud drop, not silent skip). Candidates and rejected records are validation context only.
-4. Extract only the approved records from the validated set for rendering/hashing.
-5. Sort approved records by scope (project before global), discipline applicability, confidence (desc), and recency.
-6. Compute `source_hash` (SHA-256 over skill index text + sorted approved id+statement pairs, NO timestamp, R6).
-7. Select axioms within the character budget (`axioms.kernel_budget_chars`, default 6000 chars), using exact rendered-size accounting (greedy include + verify-and-trim). First axiom always kept.
-8. Render and atomically write `KERNEL.md`.
-9. Emit `kernel_built` event.
+1. **Authority precedence** — the authority boundary verbatim from SPEC, so agents always know axioms are advisory.
+2. **Skill dispatch index** — a compact one-line-per-command table (built by `scripts/build-skill-index.py`).
+3. **Approved axioms** — sorted by scope (project before global), discipline applicability, confidence (desc), and recency, truncated to the character budget (`axioms.kernel_budget_chars`, default 6000 chars).
 
-The kernel contains three sections:
-- **Authority precedence** — the authority boundary verbatim from SPEC.
-- **Skill dispatch index** — a compact one-line-per-command table.
-- **Approved axioms** — sorted and budget-selected as above.
-
-The kernel header carries `source_hash` (12-char prefix), `n_axioms`, `drop_count`, `compiler_version`, and `generated_at`. Same inputs always produce a byte-identical body (`generated_at` is the only volatile field, R6).
+The kernel header carries `source_hash` (SHA-256 over skill index + sorted approved axiom id+statement pairs), `n_axioms`, `drop_count`, `compiler_version`, and `generated_at`. Same inputs always produce a byte-identical body (`generated_at` is the only volatile field, R6).
 
 **Staleness check:** `scripts/resolve-kernel.sh` resolves the correct `KERNEL.md` path (checking `Z_HARNESS_KERNEL_PATH` override, then `.z-harness/KERNEL.md`, then the global path) and emits a loud stderr warning if the embedded `source_hash` does not match a non-mutating recompute via `build-kernel.py --print-hash`. This check is non-blocking and never changes exit code.
 
-**Inheritance:** Behavioral subagents (implementer, reviewers, auditor, consultant roles, spec-precheck) read `KERNEL.md` at invocation time via `scripts/resolve-kernel.sh`. The main thread does not read `KERNEL.md` directly — this is an agent-tier inheritance mechanism.
+**Inheritance:** Behavioral subagents (implementer, reviewers, and consultant roles) read `KERNEL.md` at invocation time via the `CLAUDE.md` kernel pointer that `/z-setup` installs. The main thread does not read `KERNEL.md` directly — this is an agent-tier inheritance mechanism. `/z-plan` also invokes `resolve-kernel.sh` to optionally include the kernel path in context.
 
 ---
 
@@ -147,29 +138,44 @@ Configure via the 4-layer TOML system (see `docs/human/config.md`) or run `/z-se
 ## How it interacts with others
 
 - `config` — The resolver (`scripts/config.py _build_resolve_envelope`) applies the axiom layer as the last (lowest-authority) input. `_load_axiom_matches` gates on `axioms.enabled` and delegates store access to `axiom-store.py`. Config/memory always win direct conflicts; conflicts are surfaced, not silenced.
-- `agents` — The `axiom-extractor` agent (Sonnet) wraps `axiom-extract.py` with LLM judgement; it is dispatched by `/z-axiom-scan`. Behavioral subagents (implementer, reviewer, auditor, consultant roles, spec-precheck) read `KERNEL.md` at task start via `scripts/resolve-kernel.sh`.
-- `commands` — The five `/z-axiom-*` commands are the user-facing surface. `/z-setup` (axioms scope) configures keys and offers to install `.gitignore` entries for the store and kernel.
-- `scripts` — `axiom-store.py` is the CRUD + validation layer; `axiom-extract.py` is the miner (with external-base metrics.jsonl resolution via `plan-path.sh`); `build-kernel.py` is the compiler; `resolve-kernel.sh` is the path resolver + staleness checker; `build-skill-index.py` generates the skill dispatch section of the kernel.
+- `agents` — The `axiom-extractor` agent (Sonnet) wraps `axiom-extract.py` with LLM judgement; it is dispatched by `/z-axiom-scan`. Behavioral subagents (implementer, reviewer, consultants) read `KERNEL.md` at task start.
+- `commands` — The five `/z-axiom-*` commands are the user-facing surface. `/z-setup` (axioms scope) configures keys and installs the `CLAUDE.md` kernel pointer. `/z-plan` reads `KERNEL.md` via `resolve-kernel.sh`.
+- `scripts` — `axiom-store.py` is the CRUD + validation layer; `axiom-extract.py` is the miner (resolves `metrics.jsonl` via `plan-path.sh base_dir`); `build-kernel.py` is the compiler; `resolve-kernel.sh` is the path resolver + staleness checker; `build-skill-index.py` generates the skill dispatch section of the kernel.
+
+## Key entry points
+
+- `scripts/axiom-store.py:1` — `axiom-store` — CRUD + validation for the two-layer (global+project) axiom store. Subcommands: path, add, list, get, validate, approve, reject, edit.
+- `scripts/axiom-store.py:336` — `validate_graph` — R1 shared graph validator (referential integrity, mutual conflict, acyclicity). Used by both approve and build-kernel.py.
+- `scripts/axiom-store.py:488` — `_load_active_set` — R1 shared load semantics for approve and build-kernel.py. Project shadows global by id.
+- `scripts/axiom-store.py:927` — `cmd_approve` — Atomic approve: O_EXCL lock, prospective graph validation, demote supersedes target, regen kernel.
+- `scripts/axiom-extract.py:1` — `axiom-extract` — Mine candidate axioms from metrics.jsonl. Resolves path via plan-path.sh. Invariant 8: never writes the store.
+- `scripts/axiom-extract.py:105` — `_resolved_base_dir` — Resolve artifact base directory via plan-path.sh base_dir (Phase-D external-base).
+- `scripts/build-kernel.py:1` — `build-kernel` — Compile KERNEL.md for a scope. R1/R2/R5/R6 invariants. --print-hash: non-mutating hash mode.
+- `scripts/resolve-kernel.sh:1` — `resolve-kernel` — Resolve absolute KERNEL.md path; non-blocking staleness check via --print-hash.
+- `scripts/build-skill-index.py:198` — `build_skill_index` — Crawl commands/ and skills/ frontmatter; emit compact dispatch table for KERNEL.md.
+- `agents/axiom-extractor.md:1` — `axiom-extractor` — Sonnet-tier agent: sharpen statements, merge near-duplicates, draft falsifiability fields, cap at <=5 candidates.
+- `scripts/config.py:1494` — `_load_axiom_matches` — Load graph-valid approved axioms matching a question_id. Gates on axioms.enabled.
+- `scripts/config.py:1860` — `_build_resolve_envelope` — Core resolver applying axiom layer: agree / gap-fill / conflict outcomes.
+- `scripts/setup.py:1303` — `_wizard_axioms` — /z-setup wizard for axioms scope: configure keys, offer .gitignore additions.
 
 ## Edge cases / gotchas
 
 - **Axioms advisory — config/memory win direct conflicts but conflict is surfaced:** a config or memory entry that disagrees with an axiom produces `source='axiom_conflict'` in the resolve-question envelope. The result/strength/rule_id from config/memory still apply; the axiom object is informational. Callers must handle the `axiom_conflict` source value.
 - **Kernel regen synchronous on approve/reject/edit:** any of these three mutations blocks until `build-kernel.py` completes. If the kernel cannot be written (e.g., disk full), the command exits with `*_kernel_stale` and the mutation HAS already been committed to the store. The store mutation is NOT rolled back on kernel failure.
-- **External base for metrics.jsonl:** `axiom-extract.py` resolves `metrics.jsonl` via `plan-path.sh base_dir` (the full 5-tier fallback), falling back to the legacy in-repo path. After the Phase-D flip, the default base is external. Running `/z-axiom-scan` in a repo with no `Z_HARNESS_BASE_DIR` set and no external base yet will mine zero candidates from the in-repo fallback.
 - **Store in user-space survives /z-update:** `$XDG_CONFIG_HOME/z-harness/axioms/` (global) and `<git-root>/.z-harness/axioms/` (project) are outside the plugin install tree. `/z-update` does not touch these directories.
 - **Gap-fill vs agree vs conflict:** axioms only change the resolution outcome in the gap-fill case (config=ask default + memory silent). When config or memory has a non-default value, the axiom layer records the axiom in `sources[]` (agree) or emits `axiom_conflict` (disagree) but does NOT change result/strength. Treat `strength='soft'` as the marker for an axiom-driven gap-fill.
-- **Free-form behavioral axioms (no applies_to field)** never enter the resolver. They appear only in `KERNEL.md` and are read by behavioral subagents at task start.
-- **axiom-extract.py strips extractor-only fields** (`possible_duplicate_of`, `notes`) before emitting to stdout. These fields are NOT in the schema (`additionalProperties:false`) and would cause `axiom-store.py add` to reject the record. The stripped annotations appear on stderr as `{"advisories":[...]}`.
-- **Fuzzy dedup in axiom-extract.py** uses token-set Jaccard >= 0.9 to flag `possible_duplicate_of`, but does NOT drop the duplicate — it annotates it on stderr. The `axiom-extractor` agent is responsible for actually merging near-duplicates before returning candidates to the caller.
-- **resolve-kernel.sh staleness check is non-blocking and best-effort.** It shells out to `build-kernel.py --print-hash`; if that fails for any reason, it silently skips the check.
-- **validate_graph check 2 (mutual conflict):** the exemption only applies when the superseded record is NOT approved. If both records are approved and one supersedes the other, it is still an error — the superseded record must be rejected/demoted for the exemption to apply.
-- **Project scope _load_active_set always includes global records too** (project is a SUPERSET). A project-scope approve sees global approved records for graph validation — a conflict between a project candidate and a global approved record will be caught.
-- **build-kernel.py loads the full active set** (all statuses), then filters to approved after graph validation, so demoted `supersedes` targets (in `rejected/`) are present for referential-integrity checks (R1).
+- **Free-form behavioral axioms (no `applies_to` field) never enter the resolver.** They appear only in `KERNEL.md` and are read by behavioral subagents at task start. The resolver only consults axioms that have a matching `applies_to` entry.
+- **axiom-extract.py strips extractor-only fields before emitting to stdout.** The fields `possible_duplicate_of` and `notes` are used internally during mining but are NOT in the schema (`additionalProperties:false`) and would cause `axiom-store.py add` to reject the record. These annotations appear on stderr as `{"advisories":[...]}`.
+- **Fuzzy dedup in axiom-extract.py flags but does not drop duplicates.** Token-set Jaccard >= 0.9 triggers a `possible_duplicate_of` advisory on stderr. The `axiom-extractor` agent is responsible for actually merging near-duplicates before returning candidates to the caller.
+- **resolve-kernel.sh staleness check is non-blocking and best-effort.** It shells out to `build-kernel.py --print-hash`; if that fails for any reason (missing script, non-zero exit, parse error), it silently skips the check. A stale kernel does not prevent agents from reading the file.
+- **Mutual conflict exemption requires demotion:** `validate_graph` check 2 only exempts a supersedes relationship from mutual-conflict errors if the superseded record is NOT approved. If both records are approved and one supersedes the other, it is still an error — the superseded record must be rejected first.
+- **Project scope _load_active_set always includes global records.** This means a project-scope approve sees global approved records for graph validation — a conflict between a project candidate and a global approved record will be caught.
+- **metrics.jsonl is now resolved via external base:** Since the Phase-D flip, `axiom-extract.py` calls `plan-path.sh base_dir` to find the aggregate metrics file; the hardcoded `repo_root/z-harness/metrics.jsonl` path is only a last-resort fallback. Running `/z-axiom-scan` against a repo where the external base is not set up will mine zero candidates from the wrong location.
 
 ## Examples
 
-- Run `/z-axiom-scan` after completing a z-plan session to mine candidates from that run's decisions.
-- Run `/z-axiom-scan --historical` periodically (CPU-heavy) to catch patterns across all past runs.
-- Run `/z-axiom-list --status candidate` to see what is waiting for review.
-- Run `/z-axiom-approve ax-1a2b3c4d` to promote a candidate; the kernel is regenerated immediately.
-- Set `axioms.enabled = false` in your TOML config to bypass the axiom layer entirely without removing the store.
+- Mine candidates from a finished run: `/z-axiom-scan --run 20260605T120000-foo`
+- Review candidates: `/z-axiom-list --status candidate`
+- Approve one: `/z-axiom-approve ax-1a2b3c4d --scope global`
+- Patch a field: `/z-axiom-edit ax-1a2b3c4d --set confidence=0.9`
+- Full historical scan (CPU-heavy): `/z-axiom-scan --historical`

@@ -1,13 +1,13 @@
 # /z-uplift
 
-> Last updated: 2026-06-03
+> Last updated: 2026-06-05
 > Covers source: commands/z-uplift.md, skills/z-uplift/SKILL.md
 
 ## Overview
 
 `/z-uplift` is a bulk codebase quality uplift command for repos adopting z-harness or undergoing periodic cleanup. It decomposes the repository into components (Cargo workspace members, Python packages, JS workspaces, or top-level directories), runs a repo-wide cross-cutting pass to surface global issues (duplicated abstractions, style drift, dead code at module boundaries), dispatches per-component audits across `correctness`, `cleanliness`, and `design` dimensions, and produces per-component `TASKS.md` files that `/z-implement-all --tasks=` can directly consume.
 
-The command is resumable: it writes a `MANIFEST.md` at `z-harness/plans/<slug>/MANIFEST.md` (see Setup at `commands/z-uplift.md:70`) that tracks each component's state (`pending`, `auditing`, `audited`, `implementing`, `done`, `bailed`, `skipped`). Re-invoking `/z-uplift` with no flags resumes at the next non-terminal state. Between Phases 1 and 2, a **Phase 1.5 pre-fanout cost gate** (added since the last doc version) presents a token-cost estimate and requires user confirmation before fanning out across all components — this gate is skipped on resume paths. Phase 5 (`commands/z-uplift.md:2579`) drives sequential per-component implementation behind AskUser gates. It prints the `/z-implement-all --tasks=` command, marks each component `[i] implementing` in MANIFEST, then exits with a RESUME INSTRUCTION for the user to run the command. On the next invocation, if all TASKS.md rows are `[x]`, the component transitions automatically to `[x] done` without another AskUser.
+The command is resumable: it writes a `MANIFEST.md` at `z-harness/plans/<slug>/MANIFEST.md` (see Setup at `commands/z-uplift.md:70`) that tracks each component's state (`pending`, `auditing`, `audited`, `implementing`, `done`, `bailed`, `skipped`). Re-invoking `/z-uplift` with no flags resumes at the next non-terminal state. Between Phases 1 and 2, a **Phase 1.5 pre-fanout cost gate** presents a token-cost estimate and requires user confirmation before fanning out across all components — this gate is skipped on resume paths. Phase 5 (`commands/z-uplift.md:2579`) drives sequential per-component implementation behind AskUser gates. It prints the `/z-implement-all --tasks=` command, marks each component `[i] implementing` in MANIFEST, then exits with a RESUME INSTRUCTION for the user to run the command. On the next invocation, if all TASKS.md rows are `[x]`, the component transitions automatically to `[x] done` without another AskUser.
 
 ## Key entry points
 
@@ -114,6 +114,7 @@ Push-notification behavior throughout `/z-uplift` is governed by the `notify.lev
 - **Doc-staleness gate.** Setup Step 5 checks `docs/llm/INDEX.json` staleness across all concepts before Phase 0. If more than 20% are stale (configurable via `$Z_HARNESS_DOC_STALENESS_THRESHOLD`), the user is prompted to switch to `/z-maintain-docs`, continue with stale docs, or abandon. The gate does NOT auto-invoke `/z-maintain-docs`.
 - **Notification config var.** The correct environment variable for notification control is `Z_HARNESS_NOTIFY_LEVEL` (maps to `notify.level` in TOML). There is no standalone `Z_HARNESS_NOTIFY` variable. Setting `Z_HARNESS_NOTIFY` has no effect.
 - **Slug preference resolver.** `scripts/config.py resolve-question workflow.slug_confirm` is queried after the hard collision check but before the user-visible slug gate. On resolver failure (any non-zero exit), falls back to the normal ask path — never silently skips.
+- **SKILL.md frontmatter quoting.** The `argument-hint` value in `skills/z-uplift/SKILL.md` must be quoted with double quotes (strict YAML requirement for codex's plugin loader). Unquoted values with bracket characters cause codex to print "failed to load skill" on startup.
 - **Phase line anchors.** Line numbers shift whenever the command file is edited; always verify against grep before citing a specific line number.
 
 ## Examples
