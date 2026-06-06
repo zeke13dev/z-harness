@@ -1,6 +1,6 @@
 # config
 
-> Last updated: 2026-06-03
+> Last updated: 2026-06-05
 > Covers source: scripts/config.py, scripts/config.sh, scripts/propose-prefs.py, docs/human/config.md
 
 ## Overview
@@ -164,15 +164,33 @@ Prints all configuration knobs with their current effective value, source layer,
 
 ## Base-dir + registry env knobs (active-plan-coordination)
 
-These env vars govern the external artifact base and the active-plan registry introduced in the active-plan-coordination plan. They are **env-only** (not TOML keys) and take effect in `scripts/plan-path.sh` and `scripts/active-plan-registry.py`. For a full design reference including the registry layout, overlap protocol, and migration guide, see `docs/human/active-plan-registry.md`.
+These env vars govern the external artifact base and the active-plan registry. They are **env-only** (not TOML keys) and take effect in `scripts/plan-path.sh` and `scripts/active-plan-registry.py`. They are NOT in `config.py`'s `DEFAULTS` or `VALIDATORS`, and `export-env` does NOT emit them. `inspect-all` surfaces them under the env-only category for discoverability.
+
+For a full design reference including the registry layout, lease mechanics, overlap protocol, and migration guide, see `docs/human/active-plan-registry.md`.
+
+### Base and registry knobs
 
 | Env var | Default | Description |
 |---------|---------|-------------|
 | `Z_HARNESS_EXTERNAL_DEFAULT` | `1` (on after Phase-D flip) | Controls whether tiers 2–4 of the base fallback chain are active. **Unset or `1`**: external resolution is active (XDG → HOME/.local/state → .git/z-harness → pwd). **`0`**: opt-out — forces old in-repo `$(pwd)/z-harness` behavior (tier 5 only). Revert to in-repo base without this knob: `Z_HARNESS_BASE_DIR=$(pwd)/z-harness`. |
 | `Z_HARNESS_BASE_DIR` | _(unset)_ | Explicit absolute override for the artifact base directory. When set, this is a TRUE ESCAPE HATCH: bypasses the anchor entirely (no read/validate/write of `.z-harness-base`). Must be an absolute path; non-absolute → hard error. The caller owns consistency when using this override. |
-| `Z_HARNESS_REGISTRY_ENABLED` | `1` (on) | Set to `0` to disable the active-plan registry. When `0`, the following subcommands become silent no-ops: `register`, `heartbeat`, `update-scope`, `overlaps`, `reap`, `deregister`. The read-only `list` and `session-id` subcommands are still allowed. Use in CI environments where no registry coordination is needed. |
-| `Z_HARNESS_REGISTRY_STALE_SECS` | `1800` | Number of seconds after which a run's `last_heartbeat` timestamp is considered stale. The reaper deletes at 2× this margin (3600s by default) for local dead pids; at 1× it marks remote/unknown hosts as `status:"stale"` (no delete). Override to tighten or loosen the staleness window. |
-| `Z_HARNESS_STRICT_OVERLAP` | _(unset / off)_ | Set to `1` to enable blocking-overlap mode in `active-plan-registry.py overlaps`. When active, an `explicit`×`explicit` exact path match between two live runs causes exit code `20` (blocking), which `/z-implement-all` and `/z-implement-next` treat as a hard halt requiring user resolution. By default (unset) overlaps are advisory only (exit `10`) and runs may proceed with a warning. |
+| `Z_HARNESS_REGISTRY_ENABLED` | `1` (on) | Set to `0` to disable the active-plan registry. When `0`, the following subcommands become silent no-ops: `register`, `heartbeat`, `update-scope`, `overlaps`, `reap`, `deregister`, `claim`, `release`, `wait-for`. The read-only `list` and `session-id` subcommands are still allowed. Use in CI environments where no registry coordination is needed. |
+| `Z_HARNESS_REGISTRY_STALE_SECS` | `1800` | Number of seconds after which a run's `last_heartbeat` timestamp is considered stale. Reaper behavior: (a) dead local pid → delete immediately; (b) past 2× margin AND not a live local pid → delete; (c) live local pid past 2× margin → mark `status:"stale"` only (carve-out); (d) remote/unknown host at 1× → mark stale. |
+| `Z_HARNESS_STRICT_OVERLAP` | _(unset / off)_ | Set to `1` to enable blocking-overlap mode in `active-plan-registry.py overlaps`. When active, an `explicit`×`explicit` exact scope-path match between two live runs causes exit code `20` (blocking), which `/z-implement-all` and `/z-implement-next` treat as a hard halt requiring user resolution. By default (unset) scope overlaps are advisory only (exit `10`). Does NOT affect held-path conflict behavior. |
+
+### Wait / lease knobs (cross-session-plan-coord plan)
+
+These five knobs control the per-file lease and wait-for poll loop added by the cross-session-plan-coord plan. Like the five base/registry knobs above, they are **env-only** — read directly from `os.environ` in `active-plan-registry.py` with module-level defaults. Do NOT register them in `config.py`.
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `Z_HARNESS_AUTO_WAIT` | `1` | `1` = when `claim` concedes a path to a senior peer, automatically park the run via `wait-for` using `AUTO_WAIT_BUDGET_SECS`. `0` = restore the interactive proceed/wait/abort menu for held conflicts. |
+| `Z_HARNESS_AUTO_WAIT_BUDGET_SECS` | `300` | Wall-clock ceiling (seconds) for auto-park mode. On expiry `wait-for` exits 10 (LOUD `wait_timeout` event). Orchestrator aborts the task or (interactive) prompts proceed/abort. Distinct from `WAIT_TIMEOUT_SECS`. |
+| `Z_HARNESS_WAIT_POLL_SECS` | `30` | Seconds between iterations inside the `wait-for` poll loop. Each iteration: single atomic write setting `status=paused` + `waiting_on`, runs `reap`, rechecks targets, scans for new senior holders (TOCTOU). |
+| `Z_HARNESS_WAIT_TIMEOUT_SECS` | `1800` | Hard ceiling (seconds) for an explicit interactive wait (user selected "wait" in the overlap menu). Distinct from `AUTO_WAIT_BUDGET_SECS`. |
+| `Z_HARNESS_WAIT_REQUIRE_MERGE` | `0` | **Reserved/deferred** — not yet wired. When `1` would make a target "cleared" only when its branch is an ancestor of HEAD (`git merge-base --is-ancestor`). Leave at `0`; the operative cleared signal is deregister-only. |
+
+**Dual budget summary:** `AUTO_WAIT_BUDGET_SECS` (300 s, auto mode) is the short LLM-session ceiling; `WAIT_TIMEOUT_SECS` (1800 s, explicit mode) is the long interactive ceiling. They are independent because interactive users can tolerate longer waits than an unattended orchestrator loop.
 
 ### Base fallback chain summary
 
@@ -389,7 +407,7 @@ scripts/config.sh set experiment.persona_rotation false --scope=project
 - `skills` (z-suggest-memory, z-map, z-plan-light, z-debug, z-brainstorm, z-do, z-plan, z-research) — call `list-question-ids` to validate routing-preference question IDs; call `resolve-question` for slug-confirm gate; call `export-env` + `should-notify` during Setup
 - `scripts` — provides the `log-event.sh` + `log-phase.sh` telemetry pipeline that `config.py` writes events through; `scripts/axiom-store.py` loaded dynamically by `_load_axiom_store_module` for axiom resolution
 - `followup-sink` — `sink-add.sh` called by orchestrators when `resolve-question` returns `defer-to-sink`; `notion-push.py` reads `Z_HARNESS_NOTION_TOKEN` env override
-- `active-plan-registry` — `Z_HARNESS_REGISTRY_ENABLED`, `Z_HARNESS_REGISTRY_STALE_SECS`, `Z_HARNESS_STRICT_OVERLAP`, `Z_HARNESS_EXTERNAL_DEFAULT`, and `Z_HARNESS_BASE_DIR` are env-only knobs (not in config.py's DEFAULTS) consumed by `plan-path.sh` and `active-plan-registry.py`
+- `active-plan-registry` — `Z_HARNESS_REGISTRY_ENABLED`, `Z_HARNESS_REGISTRY_STALE_SECS`, `Z_HARNESS_STRICT_OVERLAP`, `Z_HARNESS_EXTERNAL_DEFAULT`, `Z_HARNESS_BASE_DIR`, `Z_HARNESS_AUTO_WAIT`, `Z_HARNESS_AUTO_WAIT_BUDGET_SECS`, `Z_HARNESS_WAIT_POLL_SECS`, `Z_HARNESS_WAIT_TIMEOUT_SECS`, and `Z_HARNESS_WAIT_REQUIRE_MERGE` are env-only knobs (not in config.py's DEFAULTS) consumed by `plan-path.sh` and `active-plan-registry.py`
 - `cost-estimation` — `cost.token_budget` is read by `check-no-ask --range-high N --severity hard` as the budget ceiling; `workflow.pre_run_cost_gate` gates the cost-gate question for z-research/z-uplift/z-plan-split
 
 ## Edge cases / gotchas
@@ -409,7 +427,7 @@ scripts/config.sh set experiment.persona_rotation false --scope=project
 - `followup.auto_close_low_risk_enabled` defaults to `true` (on by default); set to `false` to disable — do not assume the default is off
 - `Z_HARNESS_NOTION_TOKEN` is env-only (not a TOML key); never log it; never run `notion-push.py` wrappers under `set -x`
 - Axiom participation requires `axioms.enabled = true` (the default) AND `scripts/axiom-store.py` present. When the store is absent, axioms are a silent no-op — not an error
-- `Z_HARNESS_REGISTRY_ENABLED`, `Z_HARNESS_REGISTRY_STALE_SECS`, `Z_HARNESS_STRICT_OVERLAP`, `Z_HARNESS_EXTERNAL_DEFAULT`, and `Z_HARNESS_BASE_DIR` are NOT in config.py's DEFAULTS or VALIDATORS — consumed exclusively by `plan-path.sh` and `active-plan-registry.py`; `inspect-all` does NOT surface them
+- `Z_HARNESS_REGISTRY_ENABLED`, `Z_HARNESS_REGISTRY_STALE_SECS`, `Z_HARNESS_STRICT_OVERLAP`, `Z_HARNESS_EXTERNAL_DEFAULT`, `Z_HARNESS_BASE_DIR`, `Z_HARNESS_AUTO_WAIT`, `Z_HARNESS_AUTO_WAIT_BUDGET_SECS`, `Z_HARNESS_WAIT_POLL_SECS`, `Z_HARNESS_WAIT_TIMEOUT_SECS`, and `Z_HARNESS_WAIT_REQUIRE_MERGE` are NOT in config.py's DEFAULTS or VALIDATORS — consumed exclusively by `plan-path.sh` and `active-plan-registry.py`; `inspect-all` surfaces them under env-only but does NOT treat them as TOML keys
 - `cost.token_budget = null` (the default) means no budget is configured; `check-no-ask` with `--severity hard` under `NO_ASK=halt` will return `halt` with `rule_id: cost_budget_missing` when unset
 - `workflow.pre_run_cost_gate` governs the z-research/z-uplift/z-plan-split pre-run gate; it is a registered question_id and participates in the overnight allowlist system
 - `check-no-ask --severity soft` always returns `auto_proceed` regardless of policy — soft-severity gates are never blocking

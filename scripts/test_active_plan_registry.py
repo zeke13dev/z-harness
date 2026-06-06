@@ -27,6 +27,21 @@ Cases covered (T009 — session-id stamping):
   register_session_in_list  — register --session X → list shows session_id == X
   register_no_session       — register without --session stores session_id as empty string
 
+Cases covered (T013 — claim/release/wait-for + TOCTOU/seniority/backcompat):
+  (a) F2/BLOCKER-1: double-claim TOCTOU → single winner by run_id, loser held_paths excludes conceded
+  (b) F1/F3: wait-for clears within one poll after senior deregisters
+  (c) F1: wait-for timeout → exit 10 + wait_timeout event + waiting_on cleared
+  (d) wait-for SIGINT → no paused zombie (waiting_on cleared in finally)
+  (e) F-reaper: live-local-pid carve-out keeps leases (mark stale, do NOT delete)
+  (f) F-backcompat: v1 record → _is_lease_capable() False, v2 claimant skips it as holder
+  (g) F4: DAG ordering — junior never waits on senior; no cycle in wait-for eligibility
+  (h) F5/overlaps: held×held overlaps payload includes held_conflict + seniority
+  (i) F5/coordination_warning: undeclared path held by peer → held_conflict detectable;
+      uncontended paths produce zero noise (noise gate)
+  (j) dual-budget: auto-wait (~300s) vs explicit (~1800s) via env, budget_s in wait_timeout
+  (k) MINOR-7: senior-only TOCTOU — junior C claiming while B waits on A → B ignores C
+  (l) MINOR-6: eldest-senior concede — ≥2 seniors on one path → loser concedes to lowest run_id
+
 All tests use a hermetic temp base via Z_HARNESS_BASE_DIR so no anchor pollution
 occurs at /Users/zeke/dev/z-harness/.git/.z-harness-base or the real registry.
 """
@@ -45,6 +60,7 @@ import tempfile
 import threading
 import time
 import unittest
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -98,10 +114,11 @@ class TestRoundTrip(unittest.TestCase):
             record_path = active_dir / f"{run_id}.json"
             self.assertTrue(record_path.exists(), "record file not created")
 
-            # schema check
+            # schema check — T001 bumped schema_version to 2 (_build_record now writes v2
+            # with held_paths/waiting_on); the assertion is updated to match.
             with record_path.open() as fh:
                 rec = json.load(fh)
-            self.assertEqual(rec["schema_version"], 1)
+            self.assertEqual(rec["schema_version"], 2)
             self.assertEqual(rec["run_id"], run_id)
             self.assertEqual(rec["slug"], "my-slug")
             self.assertEqual(rec["command"], "/z-implement-all")
@@ -1436,6 +1453,1127 @@ class TestNonFatalSelfLogsRegistryError(unittest.TestCase):
             self.assertEqual(
                 ops, [],
                 f"clean round-trip must not self-emit any registry_error; got ops={ops}",
+            )
+
+
+# ── T013: helpers ─────────────────────────────────────────────────────────────
+
+
+def _make_v2_record(
+    run_id: str,
+    *,
+    session_id: str = "",
+    host: str | None = None,
+    pid: int | None = None,
+    scope: list[dict] | None = None,
+    status: str = "running",
+    last_heartbeat: str | None = None,
+    held_paths: list[dict] | None = None,
+    waiting_on: list[str] | None = None,
+) -> dict:
+    """Build a schema-v2 registry record for test injection.
+
+    Schema v2 is required for lease-capable (claim/release/wait-for) records:
+    it adds 'held_paths' and 'waiting_on' to the v1 structure.
+    """
+    from datetime import datetime, timezone
+    now_str = last_heartbeat or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {
+        "schema_version": 2,
+        "run_id": run_id,
+        "session_id": session_id,
+        "slug": "test-slug",
+        "command": "/z-test",
+        "command_version": "",
+        "phase": "test",
+        "status": status,
+        "pid": pid if pid is not None else os.getpid(),
+        "host": host if host is not None else socket.gethostname(),
+        "repo_id": "test-repo-id",
+        "repo_root": "/fake/repo",
+        "git_common_dir": "/fake/repo/.git",
+        "worktree_path": "/fake/repo",
+        "branch": "main",
+        "started_at": now_str,
+        "last_heartbeat": now_str,
+        "current_task": "",
+        "scope": scope or [],
+        "held_paths": held_paths if held_paths is not None else [],
+        "waiting_on": waiting_on if waiting_on is not None else [],
+    }
+
+
+def _read_metrics_events(base: str, kind: str) -> list[dict]:
+    """Read all events of a given kind from metrics.jsonl in the base dir."""
+    metrics = Path(base) / "metrics.jsonl"
+    events: list[dict] = []
+    if not metrics.exists():
+        return events
+    for line in metrics.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if ev.get("kind") == kind:
+            events.append(ev)
+    return events
+
+
+# ── T013 (a): TOCTOU double-claim → single winner, loser excludes conceded path ─
+
+
+class TestClaimTOCTOUSingleWinner(unittest.TestCase):
+    """Case (a) F2 + BLOCKER-1: double-claim TOCTOU → deterministic single winner
+    by run_id AND the loser's persisted held_paths excludes the conceded path.
+
+    F-IDs pinned: F2 (check-after-claim), F4 (run_id tiebreak/seniority), BLOCKER-1.
+    """
+
+    def test_toctou_winner_by_run_id_and_loser_held_paths_clean(self):
+        """Two runs claim the same path simultaneously.
+
+        The senior (lexicographically lower run_id) wins. The junior concedes.
+        After both claims settle:
+          - senior's held_paths contains the path (won)
+          - junior's held_paths does NOT contain the path (BLOCKER-1: conceded path excluded)
+
+        This directly pins F2 (check-after-claim tiebreak) and BLOCKER-1.
+        """
+        with tempfile.TemporaryDirectory() as base:
+            active_dir = Path(base) / "active-plans"
+            path = "scripts/active-plan-registry.py"
+
+            # A is senior (lexicographically lower run_id), B is junior.
+            senior_run_id = "aaa-senior-001"
+            junior_run_id = "zzz-junior-001"
+
+            # Register both runs via subprocess so they have valid records.
+            for run_id in (senior_run_id, junior_run_id):
+                r = _run_registry(
+                    "register",
+                    "--run-id", run_id,
+                    "--slug", "slug",
+                    "--command", "/z-test",
+                    "--phase", "test",
+                    base_dir=base,
+                )
+                self.assertEqual(r.returncode, 0, f"register {run_id}: {r.stderr}")
+
+            # Senior claims first — this seeds its held_paths so junior's
+            # check-after-claim (F2) will see the conflict.
+            r_senior = _run_registry(
+                "claim",
+                "--run-id", senior_run_id,
+                "--paths", path,
+                base_dir=base,
+            )
+            self.assertEqual(r_senior.returncode, 0, f"senior claim: {r_senior.stderr}")
+            senior_result = json.loads(r_senior.stdout)
+            self.assertIn(path, senior_result["claimed"],
+                          "senior must win the path it claimed first")
+            self.assertEqual(senior_result["conceded"], [],
+                             "senior has no competitor at claim time — conceded must be empty")
+
+            # Junior now claims the same path. F2 check-after-claim sees the senior
+            # holds it → junior must concede to senior.
+            r_junior = _run_registry(
+                "claim",
+                "--run-id", junior_run_id,
+                "--paths", path,
+                base_dir=base,
+            )
+            self.assertEqual(r_junior.returncode, 0, f"junior claim: {r_junior.stderr}")
+            junior_result = json.loads(r_junior.stdout)
+
+            # Junior must have conceded the path to the senior (BLOCKER-1).
+            self.assertNotIn(path, junior_result.get("claimed", []),
+                             "junior must NOT appear to have claimed the contested path")
+            conceded_paths = [c["path"] for c in junior_result.get("conceded", [])]
+            self.assertIn(path, conceded_paths,
+                          "junior must list the contested path under 'conceded'")
+            # Verify holder_run_id points to senior (F4 tiebreak).
+            holder_ids = [c["holder_run_id"] for c in junior_result.get("conceded", [])
+                          if c["path"] == path]
+            self.assertEqual(holder_ids, [senior_run_id],
+                             f"conceded entry must name the senior as holder; got {holder_ids}")
+
+            # BLOCKER-1: junior's persisted record must NOT contain the conceded path.
+            junior_rec = _read_record_direct(active_dir, junior_run_id)
+            self.assertIsNotNone(junior_rec, "junior record must exist")
+            junior_held_paths = {
+                e["path"] for e in junior_rec.get("held_paths", [])
+                if isinstance(e, dict) and "path" in e
+            }
+            self.assertNotIn(
+                path, junior_held_paths,
+                f"BLOCKER-1 violation: junior's persisted held_paths contains the conceded path "
+                f"'{path}'; held_paths={junior_held_paths}"
+            )
+
+            # Senior's persisted record MUST contain the path.
+            senior_rec = _read_record_direct(active_dir, senior_run_id)
+            self.assertIsNotNone(senior_rec, "senior record must exist")
+            senior_held_paths = {
+                e["path"] for e in senior_rec.get("held_paths", [])
+                if isinstance(e, dict) and "path" in e
+            }
+            self.assertIn(
+                path, senior_held_paths,
+                f"senior's persisted held_paths must contain the won path '{path}'"
+            )
+
+
+# ── T013 (b): wait-for clears within one poll of deregister ───────────────────
+
+
+class TestWaitForClearsAfterDeregister(unittest.TestCase):
+    """Case (b) F1 + F3: wait-for clears within one poll of senior deregistering.
+
+    F-IDs pinned: F1 (wait/park loop), F3 (release/deregister clears target).
+    """
+
+    def test_wait_for_clears_after_senior_deregisters(self):
+        """wait-for senior → senior record deleted → waiter exits 0 (cleared).
+
+        Uses tiny poll interval (1s) and budget (10s) to keep the test fast.
+        The senior is injected directly with pid=os.getpid() (alive) so the reaper
+        does not prematurely delete it. A background thread deletes the senior's
+        record after 2 seconds to simulate deregistration (F3).
+
+        Pins F1 (park loop detects cleared target) and F3 (record removal = cleared).
+        """
+        with tempfile.TemporaryDirectory() as base:
+            active_dir = Path(base) / "active-plans"
+            senior_run_id = "aaa-senior-wb-001"
+            waiter_run_id = "zzz-waiter-wb-001"
+
+            # Both records injected with our live PID so reap leaves them alone.
+            # wait-for updates the waiter's record via _set_waiting_on (read-modify-write).
+            _write_record_direct(active_dir, _make_v2_record(senior_run_id, pid=os.getpid()))
+            _write_record_direct(active_dir, _make_v2_record(waiter_run_id, pid=os.getpid()))
+
+            # Delete the senior's record after a short delay to simulate deregistration.
+            senior_path = active_dir / f"{senior_run_id}.json"
+
+            def _delete_senior_later():
+                time.sleep(2)
+                try:
+                    senior_path.unlink()
+                except FileNotFoundError:
+                    pass
+
+            t = threading.Thread(target=_delete_senior_later, daemon=True)
+            t.start()
+
+            # wait-for with small poll + budget so the test runs fast.
+            r = _run_registry(
+                "wait-for",
+                "--run-id", waiter_run_id,
+                "--on", senior_run_id,
+                base_dir=base,
+                env_extra={
+                    "Z_HARNESS_WAIT_POLL_SECS": "1",
+                    "Z_HARNESS_AUTO_WAIT_BUDGET_SECS": "10",
+                    "Z_HARNESS_AUTO_WAIT": "1",
+                },
+            )
+
+            t.join(timeout=15)
+            # Must exit 0 (cleared) — senior record deleted before budget expired.
+            self.assertEqual(
+                r.returncode, 0,
+                f"wait-for must exit 0 (cleared) after senior record is deleted; "
+                f"got {r.returncode}; stderr={r.stderr[:400]}"
+            )
+
+
+# ── T013 (c): wait-for timeout → exit 10 + wait_timeout event + waiting_on cleared ──
+
+
+class TestWaitForTimeout(unittest.TestCase):
+    """Case (c) F1: wait-for timeout → exit 10 + wait_timeout event + waiting_on cleared.
+
+    F-IDs pinned: F1 (finite budget + loud timeout).
+    """
+
+    def test_timeout_exits_10_with_wait_timeout_event_and_waiting_on_cleared(self):
+        """wait-for a senior that never clears → expires → exit 10, event emitted,
+        waiter's waiting_on is empty.
+
+        Uses tiny budget (2s) and poll (1s) to keep test fast.
+        The senior is injected with pid=os.getpid() so reap does not prematurely
+        clear it (the dead-subprocess-pid problem). The budget expires before the
+        senior deregisters.
+        Pins F1: 'every wait has a finite budget + loud timeout'.
+        """
+        with tempfile.TemporaryDirectory() as base:
+            active_dir = Path(base) / "active-plans"
+            senior_run_id = "aaa-senior-to-001"
+            waiter_run_id = "zzz-waiter-to-001"
+
+            # Both records injected with our live PID so reap leaves them alone.
+            # The wait-for subprocess updates the waiter's record via _set_waiting_on
+            # (read-modify-write), so injecting it is safe — wait-for does not need
+            # to create the record, only update it.
+            _write_record_direct(active_dir, _make_v2_record(senior_run_id, pid=os.getpid()))
+            _write_record_direct(active_dir, _make_v2_record(waiter_run_id, pid=os.getpid()))
+
+            # Wait-for with a 2-second budget. Senior never clears → timeout.
+            r = _run_registry(
+                "wait-for",
+                "--run-id", waiter_run_id,
+                "--on", senior_run_id,
+                base_dir=base,
+                env_extra={
+                    "Z_HARNESS_WAIT_POLL_SECS": "1",
+                    "Z_HARNESS_AUTO_WAIT_BUDGET_SECS": "2",
+                    "Z_HARNESS_AUTO_WAIT": "1",
+                },
+            )
+
+            # Must exit 10 (timeout).
+            self.assertEqual(
+                r.returncode, 10,
+                f"wait-for must exit 10 on timeout; got {r.returncode}; stderr={r.stderr[:400]}"
+            )
+
+            # wait_timeout event must have been emitted with correct budget_s (F1).
+            events = _read_metrics_events(base, "wait_timeout")
+            self.assertGreater(len(events), 0, "wait_timeout event must be emitted on timeout")
+            budgets = [e.get("budget_s") for e in events]
+            # budget_s must equal the configured auto-wait budget (2 seconds).
+            self.assertIn(
+                2, budgets,
+                f"wait_timeout event must carry budget_s=2 (the configured auto budget); got {budgets}"
+            )
+
+            # waiting_on must be cleared after timeout (EH-005: cleared on every exit path).
+            waiter_rec = _read_record_direct(active_dir, waiter_run_id)
+            self.assertIsNotNone(waiter_rec, "waiter record must still exist after timeout")
+            self.assertEqual(
+                waiter_rec.get("waiting_on", []), [],
+                f"waiting_on must be cleared after timeout (EH-005); "
+                f"got {waiter_rec.get('waiting_on')}"
+            )
+            # Status must be restored to running after timeout.
+            self.assertEqual(
+                waiter_rec.get("status"), "running",
+                f"status must be restored to 'running' after timeout; got {waiter_rec.get('status')}"
+            )
+
+
+# ── T013 (d): SIGINT → no paused zombie ───────────────────────────────────────
+
+
+class TestWaitForSigint(unittest.TestCase):
+    """Case (d): SIGINT during wait-for → no paused zombie; waiting_on cleared.
+
+    The 'finally' block in cmd_wait_for (EH-005) guarantees waiting_on is cleared
+    on every exit path, including SIGINT.
+    """
+
+    def test_sigint_clears_waiting_on_no_paused_zombie(self):
+        """Send SIGINT to a running wait-for process.
+
+        The senior is injected with pid=os.getpid() so reap does not prematurely
+        clear the target (dead-subprocess-pid problem).
+        Long poll interval (30s) gives us time to interrupt before a poll completes.
+
+        Verifies:
+          (a) process exits 130
+          (b) waiter's waiting_on is empty after interrupt (no zombie)
+          (c) waiter's status is 'running' (not 'paused')
+        """
+        with tempfile.TemporaryDirectory() as base:
+            active_dir = Path(base) / "active-plans"
+            senior_run_id = "aaa-senior-si-001"
+            waiter_run_id = "zzz-waiter-si-001"
+
+            # Both records injected with our live PID so reap leaves them alone.
+            # The wait-for subprocess updates the waiter's record via _set_waiting_on
+            # (read-modify-write), so pre-injecting is safe.
+            _write_record_direct(active_dir, _make_v2_record(senior_run_id, pid=os.getpid()))
+            _write_record_direct(active_dir, _make_v2_record(waiter_run_id, pid=os.getpid()))
+
+            env = {
+                **os.environ,
+                "Z_HARNESS_BASE_DIR": base,
+                "Z_HARNESS_WAIT_POLL_SECS": "30",       # long poll so we can interrupt it
+                "Z_HARNESS_AUTO_WAIT_BUDGET_SECS": "60",
+                "Z_HARNESS_AUTO_WAIT": "1",
+            }
+
+            # Start wait-for as a subprocess so we can send it SIGINT.
+            proc = subprocess.Popen(
+                [sys.executable, REGISTRY_PY, "wait-for",
+                 "--run-id", waiter_run_id,
+                 "--on", senior_run_id],
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                cwd=str(REPO_ROOT),
+            )
+
+            # Give the subprocess a moment to enter its poll sleep.
+            time.sleep(1.5)
+
+            # Send SIGINT.
+            import signal as _signal
+            proc.send_signal(_signal.SIGINT)
+
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                self.fail("wait-for did not exit within 10s of SIGINT")
+
+            # (a) exit 130.
+            self.assertEqual(
+                proc.returncode, 130,
+                f"wait-for must exit 130 on SIGINT; got {proc.returncode}"
+            )
+
+            # (b) waiting_on must be cleared (no zombie).
+            waiter_rec = _read_record_direct(active_dir, waiter_run_id)
+            self.assertIsNotNone(waiter_rec, "waiter record must still exist after SIGINT")
+            self.assertEqual(
+                waiter_rec.get("waiting_on", []), [],
+                f"waiting_on must be cleared after SIGINT (EH-005, no paused zombie); "
+                f"got {waiter_rec.get('waiting_on')}"
+            )
+
+            # (c) status restored to running.
+            self.assertEqual(
+                waiter_rec.get("status"), "running",
+                f"status must be 'running' after SIGINT cleanup; got {waiter_rec.get('status')}"
+            )
+
+
+# ── T013 (e): F-reaper carve-out keeps live-local-pid leases ──────────────────
+
+
+class TestReaperLivePidCarveOut(unittest.TestCase):
+    """Case (e) F-reaper: live-local-pid carve-out prevents deletion of live process leases.
+
+    SPEC: if host == THIS host AND pid is alive AND past the 2× stale margin →
+    mark status:'stale' (do NOT delete). Deletion deferred until pid dies.
+
+    This prevents a slow local test from having its leases reaped out from under it.
+    F-IDs pinned: F-reaper (live-local-pid carve-out).
+    """
+
+    def test_live_local_pid_2x_stale_marked_stale_not_deleted(self):
+        """A local-pid record past 2× stale threshold is marked stale, NOT deleted.
+
+        Pins F-reaper carve-out: held_paths of a live process must survive reap.
+        """
+        with tempfile.TemporaryDirectory() as base:
+            active_dir = Path(base) / "active-plans"
+            run_id = "reap-live-2x-001"
+
+            from datetime import datetime, timezone, timedelta
+            # Past 2× stale margin (default 1800s → 2×=3600s → use 4000s).
+            very_old = (datetime.now(timezone.utc) - timedelta(seconds=4000)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+            # Use OUR OWN pid (alive) and this host.
+            rec = _make_v2_record(
+                run_id,
+                pid=os.getpid(),
+                host=socket.gethostname(),
+                last_heartbeat=very_old,
+                held_paths=[{"path": "scripts/active-plan-registry.py", "since": "2026-01-01T00:00:00Z"}],
+            )
+            _write_record_direct(active_dir, rec)
+
+            r = _run_registry(
+                "reap", base_dir=base,
+                env_extra={"Z_HARNESS_REGISTRY_STALE_SECS": "1800"},
+            )
+            self.assertEqual(r.returncode, 0, f"reap must be non-fatal; stderr={r.stderr}")
+
+            # Record must still exist (carve-out: live-local-pid → no deletion).
+            record_path = active_dir / f"{run_id}.json"
+            self.assertTrue(
+                record_path.exists(),
+                "F-reaper: live-local-pid record past 2× stale must NOT be deleted "
+                "(carve-out preserves leases of running local processes)"
+            )
+
+            # The held_paths must survive intact.
+            remaining = _read_record_direct(active_dir, run_id)
+            self.assertIsNotNone(remaining, "record must be readable after reap")
+            held = [e["path"] for e in remaining.get("held_paths", []) if isinstance(e, dict)]
+            self.assertIn(
+                "scripts/active-plan-registry.py", held,
+                f"F-reaper: held_paths must survive the live-local-pid carve-out; got {held}"
+            )
+
+
+# ── T013 (f): F-backcompat: v1 record → lease-incapable ──────────────────────
+
+
+class TestBackcompatV1LeaseIncapable(unittest.TestCase):
+    """Case (f) F-backcompat: a hand-written v1 record loads, _is_lease_capable()→False,
+    and a v2 claimant does NOT treat it as a holder during check-after-claim (F2).
+
+    F-IDs pinned: F-backcompat (v1 records never block a v2 claimant via held_paths).
+    """
+
+    def test_v1_record_does_not_block_v2_claim(self):
+        """A v1 peer record with no held_paths key must be ignored by claim's F2 scan.
+
+        The v1 record 'holds' a path in its scope, but since it has no held_paths,
+        the v2 claimant must NOT concede — it wins the path outright.
+
+        Pins F-backcompat: 'missing held_paths is NEVER interpreted as holds nothing'
+        → v1 record is lease-incapable and never blocks a claim.
+        """
+        with tempfile.TemporaryDirectory() as base:
+            active_dir = Path(base) / "active-plans"
+            path = "scripts/active-plan-registry.py"
+            v1_run_id = "aaa-v1-peer-001"   # senior (lower run_id)
+            v2_run_id = "zzz-v2-claimer-001"
+
+            # Inject a v1 record (no held_paths key, schema_version=1).
+            # It is senior (lower run_id), but lease-incapable.
+            v1_rec = _make_record(v1_run_id, scope=[
+                {"path": path, "confidence": "explicit", "reason": "F-backcompat test"}
+            ])
+            # _make_record produces schema_version=1 with no held_paths — matches v1 shape.
+            self.assertEqual(v1_rec["schema_version"], 1)
+            self.assertNotIn("held_paths", v1_rec,
+                             "precondition: v1 record must not have held_paths")
+            _write_record_direct(active_dir, v1_rec)
+
+            # Register the v2 claimer.
+            r = _run_registry(
+                "register",
+                "--run-id", v2_run_id,
+                "--slug", "s",
+                "--command", "/z-test",
+                "--phase", "test",
+                base_dir=base,
+            )
+            self.assertEqual(r.returncode, 0, f"register v2 claimer: {r.stderr}")
+
+            # v2 claimer attempts to claim the path.
+            r = _run_registry(
+                "claim",
+                "--run-id", v2_run_id,
+                "--paths", path,
+                base_dir=base,
+            )
+            self.assertEqual(r.returncode, 0, f"claim: {r.stderr}")
+            result = json.loads(r.stdout)
+
+            # Must WIN the path — v1 peer is lease-incapable, so it never holds anything.
+            self.assertIn(
+                path, result.get("claimed", []),
+                f"F-backcompat: v2 claimant must win path despite senior v1 peer; "
+                f"claimed={result.get('claimed')}, conceded={result.get('conceded')}"
+            )
+            self.assertEqual(
+                result.get("conceded", []), [],
+                f"F-backcompat: v1 peer must not appear in conceded list; got {result.get('conceded')}"
+            )
+
+
+# ── T013 (g): F4 DAG ordering — junior never waits on senior ─────────────────
+
+
+class TestWaitForDagOrdering(unittest.TestCase):
+    """Case (g) F4: DAG ordering — junior never waits on senior; wait-for drops non-seniors.
+
+    F-IDs pinned: F4 (run_id ordering/seniority — eligibility filter drops junior targets).
+    """
+
+    def test_junior_target_dropped_immediately_nothing_to_wait_on(self):
+        """A junior (higher run_id) target is dropped; wait-for exits 0 (nothing_to_wait_on).
+
+        F4 eligibility: 'only accept --on run_ids that are run_id < my run_id (senior)'.
+        Providing only a junior run_id must result in immediate exit 0.
+        """
+        with tempfile.TemporaryDirectory() as base:
+            my_run_id = "aaa-waiter-dag-001"       # senior (lower run_id)
+            junior_run_id = "zzz-junior-dag-001"   # junior (higher run_id)
+
+            for run_id in (my_run_id, junior_run_id):
+                r = _run_registry(
+                    "register",
+                    "--run-id", run_id,
+                    "--slug", "s",
+                    "--command", "/z-test",
+                    "--phase", "test",
+                    base_dir=base,
+                )
+                self.assertEqual(r.returncode, 0, f"register {run_id}: {r.stderr}")
+
+            # The "waiter" tries to wait on a junior — must be dropped immediately.
+            r = _run_registry(
+                "wait-for",
+                "--run-id", my_run_id,
+                "--on", junior_run_id,
+                base_dir=base,
+                env_extra={
+                    "Z_HARNESS_WAIT_POLL_SECS": "1",
+                    "Z_HARNESS_AUTO_WAIT_BUDGET_SECS": "5",
+                    "Z_HARNESS_AUTO_WAIT": "1",
+                },
+            )
+            # Must exit 0 (nothing_to_wait_on — junior was dropped).
+            self.assertEqual(
+                r.returncode, 0,
+                f"F4: wait-for on a junior must immediately exit 0 (nothing_to_wait_on); "
+                f"got {r.returncode}; stderr={r.stderr[:400]}"
+            )
+            self.assertIn(
+                "nothing_to_wait_on", r.stdout,
+                f"stdout must contain 'nothing_to_wait_on'; got {r.stdout!r}"
+            )
+
+    def test_equal_run_id_target_dropped(self):
+        """A same run_id target (self-wait) is dropped — not senior."""
+        with tempfile.TemporaryDirectory() as base:
+            my_run_id = "self-wait-dag-001"
+            r = _run_registry(
+                "register",
+                "--run-id", my_run_id,
+                "--slug", "s",
+                "--command", "/z-test",
+                "--phase", "test",
+                base_dir=base,
+            )
+            self.assertEqual(r.returncode, 0)
+            r = _run_registry(
+                "wait-for",
+                "--run-id", my_run_id,
+                "--on", my_run_id,
+                base_dir=base,
+                env_extra={
+                    "Z_HARNESS_WAIT_POLL_SECS": "1",
+                    "Z_HARNESS_AUTO_WAIT_BUDGET_SECS": "5",
+                    "Z_HARNESS_AUTO_WAIT": "1",
+                },
+            )
+            self.assertEqual(
+                r.returncode, 0,
+                f"F4: self-wait must exit 0 (nothing_to_wait_on); got {r.returncode}"
+            )
+
+
+# ── T013 (h): F5/overlaps: held×held payload + seniority ─────────────────────
+
+
+class TestOverlapsHeldConflict(unittest.TestCase):
+    """Case (h) F5 / overlaps: held×held conflict in overlaps payload includes
+    held_conflict array with peer_run_id and holder_seniority.
+
+    F-IDs pinned: F5 (write-set / coordination_warning), overlaps held-path dimension.
+    """
+
+    def test_held_conflict_in_overlaps_payload_with_seniority(self):
+        """Two peers both hold the same path → overlaps --json includes held_conflict
+        with the correct peer_run_id and seniority label.
+
+        Pins F5 / held-path dimension of overlaps.
+        """
+        with tempfile.TemporaryDirectory() as base:
+            active_dir = Path(base) / "active-plans"
+            path = "scripts/active-plan-registry.py"
+
+            my_run_id = "zzz-held-me-001"
+            peer_run_id = "aaa-held-peer-001"   # senior (lower run_id)
+
+            # Both records hold the same path in held_paths.
+            now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            my_rec = _make_v2_record(
+                my_run_id,
+                held_paths=[{"path": path, "since": now_ts}],
+            )
+            peer_rec = _make_v2_record(
+                peer_run_id,
+                held_paths=[{"path": path, "since": now_ts}],
+            )
+            _write_record_direct(active_dir, my_rec)
+            _write_record_direct(active_dir, peer_rec)
+
+            # Build a scope file for my run (can be empty — held_conflict is independent).
+            scope_file = Path(base) / "scope_me.json"
+            scope_file.write_text("[]", encoding="utf-8")
+
+            r = _run_registry(
+                "overlaps",
+                "--run-id", my_run_id,
+                "--scope-json", str(scope_file),
+                "--json",
+                base_dir=base,
+            )
+            # Exit code may be 0 or 10; what matters is the held_conflict payload (F5).
+            self.assertIn(r.returncode, (0, 10),
+                          f"overlaps exit code must be 0 or 10; got {r.returncode}")
+            result = json.loads(r.stdout)
+
+            # held_conflict must be present in the payload.
+            self.assertIn(
+                "held_conflict", result,
+                f"overlaps payload must include 'held_conflict' when both peers hold same path; "
+                f"got keys={list(result.keys())}"
+            )
+            conflicts = result["held_conflict"]
+            self.assertIsInstance(conflicts, list, "held_conflict must be a list")
+            self.assertGreater(len(conflicts), 0, "held_conflict must be non-empty")
+
+            # Find the conflict for our path.
+            matching = [c for c in conflicts if c.get("path") == path]
+            self.assertGreater(
+                len(matching), 0,
+                f"held_conflict must contain an entry for '{path}'; got {conflicts}"
+            )
+            conflict = matching[0]
+
+            # peer_run_id must name the peer.
+            self.assertEqual(
+                conflict.get("peer_run_id"), peer_run_id,
+                f"held_conflict must name the conflicting peer; got {conflict}"
+            )
+
+            # holder_seniority: peer_run_id < my_run_id → peer is senior.
+            self.assertEqual(
+                conflict.get("holder_seniority"), "senior",
+                f"peer with lower run_id must have holder_seniority='senior'; got {conflict}"
+            )
+
+    def test_junior_peer_held_conflict_seniority_junior(self):
+        """A peer with a higher run_id (junior) holding the same path → seniority='junior'."""
+        with tempfile.TemporaryDirectory() as base:
+            active_dir = Path(base) / "active-plans"
+            path = "scripts/plan-path.sh"
+
+            my_run_id = "aaa-held-me-002"          # senior
+            junior_peer_run_id = "zzz-held-peer-002"   # junior
+
+            now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            _write_record_direct(active_dir, _make_v2_record(
+                my_run_id,
+                held_paths=[{"path": path, "since": now_ts}],
+            ))
+            _write_record_direct(active_dir, _make_v2_record(
+                junior_peer_run_id,
+                held_paths=[{"path": path, "since": now_ts}],
+            ))
+
+            scope_file = Path(base) / "scope_me2.json"
+            scope_file.write_text("[]", encoding="utf-8")
+
+            r = _run_registry(
+                "overlaps",
+                "--run-id", my_run_id,
+                "--scope-json", str(scope_file),
+                "--json",
+                base_dir=base,
+            )
+            self.assertIn(r.returncode, (0, 10))
+            result = json.loads(r.stdout)
+
+            conflicts = result.get("held_conflict", [])
+            matching = [c for c in conflicts if c.get("path") == path]
+            self.assertGreater(len(matching), 0,
+                               f"held_conflict must contain entry for '{path}'")
+            conflict = matching[0]
+            self.assertEqual(
+                conflict.get("holder_seniority"), "junior",
+                f"peer with higher run_id must have holder_seniority='junior'; got {conflict}"
+            )
+
+
+# ── T013 (i): F5/coordination_warning — undeclared file held by peer ──────────
+
+
+class TestF5CoordinationWarning(unittest.TestCase):
+    """Case (i) F5: undeclared path held by a live peer → held_conflict detectable;
+    uncontested undeclared paths → zero held_conflict (noise gate).
+
+    The 'coordination_warning' is surfaced at the ORCHESTRATOR layer (F5 step in
+    /z-implement-all). This test validates the registry layer the orchestrator consumes:
+    overlaps --json must expose a 'held_conflict' entry when the path is held by a peer,
+    and must NOT include it when the path is uncontested.
+
+    F-IDs pinned: F5 (write-set / coordination_warning detectable via overlaps payload).
+    """
+
+    def test_undeclared_path_held_by_peer_appears_in_held_conflict(self):
+        """An undeclared path that a live peer holds appears in held_conflict (F5).
+
+        'Undeclared' means: my run does not list it in scope, but I hold it in held_paths
+        AND the peer also holds it in held_paths → overlap detectable.
+        """
+        with tempfile.TemporaryDirectory() as base:
+            active_dir = Path(base) / "active-plans"
+            contested_path = "scripts/undeclared-contested.py"
+
+            my_run_id = "zzz-f5-me-001"
+            peer_run_id = "aaa-f5-peer-001"   # live peer
+
+            now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            # Both hold the contested path — simulating F5 scenario.
+            _write_record_direct(active_dir, _make_v2_record(
+                my_run_id,
+                held_paths=[{"path": contested_path, "since": now_ts}],
+            ))
+            _write_record_direct(active_dir, _make_v2_record(
+                peer_run_id,
+                held_paths=[{"path": contested_path, "since": now_ts}],
+            ))
+
+            # Scope for my run does NOT list the contested path (it is 'undeclared').
+            scope_file = Path(base) / "scope_f5.json"
+            scope_file.write_text("[]", encoding="utf-8")
+
+            r = _run_registry(
+                "overlaps",
+                "--run-id", my_run_id,
+                "--scope-json", str(scope_file),
+                "--json",
+                base_dir=base,
+            )
+            self.assertIn(r.returncode, (0, 10))
+            result = json.loads(r.stdout)
+
+            # F5: held_conflict must be present and include the contested path.
+            self.assertIn(
+                "held_conflict", result,
+                f"F5: held_conflict must appear when an undeclared path is held by a live peer; "
+                f"stdout={r.stdout[:400]}"
+            )
+            conflict_paths = [c.get("path") for c in result["held_conflict"]]
+            self.assertIn(
+                contested_path, conflict_paths,
+                f"F5: held_conflict must include the contested path '{contested_path}'; "
+                f"got {conflict_paths}"
+            )
+
+    def test_uncontested_paths_produce_no_held_conflict(self):
+        """Uncontested undeclared paths produce zero held_conflict (noise gate, F5).
+
+        If my run holds a path and no peer holds it, there is no conflict to surface.
+        The noise gate ensures the F5 coordination_warning is actionable, not spurious.
+        """
+        with tempfile.TemporaryDirectory() as base:
+            active_dir = Path(base) / "active-plans"
+            my_path = "scripts/only-i-hold-this.py"
+            peer_path = "scripts/only-peer-holds-this.py"
+
+            my_run_id = "zzz-f5-noise-me-001"
+            peer_run_id = "aaa-f5-noise-peer-001"
+
+            now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            # Disjoint held_paths — no intersection.
+            _write_record_direct(active_dir, _make_v2_record(
+                my_run_id,
+                held_paths=[{"path": my_path, "since": now_ts}],
+            ))
+            _write_record_direct(active_dir, _make_v2_record(
+                peer_run_id,
+                held_paths=[{"path": peer_path, "since": now_ts}],
+            ))
+
+            scope_file = Path(base) / "scope_noise.json"
+            scope_file.write_text("[]", encoding="utf-8")
+
+            r = _run_registry(
+                "overlaps",
+                "--run-id", my_run_id,
+                "--scope-json", str(scope_file),
+                "--json",
+                base_dir=base,
+            )
+            self.assertIn(r.returncode, (0, 10))
+            result = json.loads(r.stdout)
+
+            # No held_conflict when paths are disjoint (noise gate).
+            conflicts = result.get("held_conflict", [])
+            self.assertEqual(
+                conflicts, [],
+                f"F5 noise gate: uncontested paths must produce zero held_conflict; got {conflicts}"
+            )
+
+
+# ── T013 (j): dual-budget: auto vs explicit ───────────────────────────────────
+
+
+class TestDualBudget(unittest.TestCase):
+    """Case (j): dual-budget — auto-wait enforces auto budget, explicit wait enforces
+    explicit budget, each emitting wait_timeout with the correct budget_s.
+
+    F-IDs pinned: F1 (finite budget + dual-budget distinction).
+    """
+
+    def _run_wait_for_timeout(self, base: str, waiter_id: str, senior_id: str,
+                               env_extra: dict) -> subprocess.CompletedProcess:
+        """Helper: run wait-for expecting a timeout."""
+        return _run_registry(
+            "wait-for",
+            "--run-id", waiter_id,
+            "--on", senior_id,
+            base_dir=base,
+            env_extra=env_extra,
+        )
+
+    def test_auto_mode_budget_in_wait_timeout_event(self):
+        """Auto mode (Z_HARNESS_AUTO_WAIT=1) uses AUTO budget and emits budget_s=auto_budget.
+
+        Senior is injected with pid=os.getpid() so reap does not prematurely clear
+        the target (dead-subprocess-pid problem). Uses tiny auto budget (2s) to keep
+        the test fast. Pins F1 dual-budget.
+        """
+        with tempfile.TemporaryDirectory() as base:
+            active_dir = Path(base) / "active-plans"
+            senior_run_id = "aaa-senior-db-auto-001"
+            waiter_run_id = "zzz-waiter-db-auto-001"
+
+            # Both injected with our live PID so reap leaves them alone.
+            _write_record_direct(active_dir, _make_v2_record(senior_run_id, pid=os.getpid()))
+            _write_record_direct(active_dir, _make_v2_record(waiter_run_id, pid=os.getpid()))
+
+            r = self._run_wait_for_timeout(base, waiter_run_id, senior_run_id, {
+                "Z_HARNESS_AUTO_WAIT": "1",
+                "Z_HARNESS_AUTO_WAIT_BUDGET_SECS": "2",   # tiny auto budget
+                "Z_HARNESS_WAIT_TIMEOUT_SECS": "1800",    # explicit budget untouched
+                "Z_HARNESS_WAIT_POLL_SECS": "1",
+            })
+
+            self.assertEqual(r.returncode, 10, f"auto mode must timeout with exit 10; stderr={r.stderr[:400]}")
+
+            events = _read_metrics_events(base, "wait_timeout")
+            self.assertGreater(len(events), 0, "wait_timeout event must be emitted")
+            budgets = [e.get("budget_s") for e in events]
+            # budget_s must equal the auto budget (2), NOT the explicit budget (1800).
+            self.assertIn(
+                2, budgets,
+                f"F1 dual-budget: wait_timeout in auto mode must carry budget_s=2 (auto); got {budgets}"
+            )
+            self.assertNotIn(
+                1800, budgets,
+                f"F1 dual-budget: auto mode must NOT use explicit timeout budget 1800; got {budgets}"
+            )
+
+    def test_explicit_mode_budget_in_wait_timeout_event(self):
+        """Explicit mode (Z_HARNESS_AUTO_WAIT=0) uses EXPLICIT budget and emits budget_s=explicit.
+
+        Senior is injected with pid=os.getpid() so reap does not prematurely clear
+        the target. Uses tiny explicit budget (3s) to keep the test fast.
+        Pins F1 dual-budget.
+        """
+        with tempfile.TemporaryDirectory() as base:
+            active_dir = Path(base) / "active-plans"
+            senior_run_id = "aaa-senior-db-expl-001"
+            waiter_run_id = "zzz-waiter-db-expl-001"
+
+            # Both injected with our live PID so reap leaves them alone.
+            _write_record_direct(active_dir, _make_v2_record(senior_run_id, pid=os.getpid()))
+            _write_record_direct(active_dir, _make_v2_record(waiter_run_id, pid=os.getpid()))
+
+            r = self._run_wait_for_timeout(base, waiter_run_id, senior_run_id, {
+                "Z_HARNESS_AUTO_WAIT": "0",              # explicit mode
+                "Z_HARNESS_AUTO_WAIT_BUDGET_SECS": "300",  # auto budget untouched
+                "Z_HARNESS_WAIT_TIMEOUT_SECS": "3",     # tiny explicit budget
+                "Z_HARNESS_WAIT_POLL_SECS": "1",
+            })
+
+            self.assertEqual(r.returncode, 10, f"explicit mode must timeout with exit 10; stderr={r.stderr[:400]}")
+
+            events = _read_metrics_events(base, "wait_timeout")
+            self.assertGreater(len(events), 0, "wait_timeout event must be emitted")
+            budgets = [e.get("budget_s") for e in events]
+            # budget_s must equal the explicit budget (3), NOT the auto budget (300).
+            self.assertIn(
+                3, budgets,
+                f"F1 dual-budget: wait_timeout in explicit mode must carry budget_s=3 (explicit); got {budgets}"
+            )
+            self.assertNotIn(
+                300, budgets,
+                f"F1 dual-budget: explicit mode must NOT use auto budget 300; got {budgets}"
+            )
+
+
+# ── T013 (k): MINOR-7 senior-only TOCTOU ─────────────────────────────────────
+
+
+class TestSeniorOnlyTocTou(unittest.TestCase):
+    """Case (k) MINOR-7: senior-only TOCTOU — junior C claims path while B waits
+    on senior A → B's rescan ignores C.
+
+    F-IDs pinned: F2 (TOCTOU re-scan), MINOR-7 (junior claimers ignored).
+    """
+
+    def test_junior_claimer_does_not_extend_wait(self):
+        """Three runs: A (senior), B (middle waiter), C (junior).
+        B waits on A. C claims the watched path while B is waiting.
+        B's rescan must NOT add C to the wait set (junior, MINOR-7).
+        B exits 0 when A's record is removed.
+
+        A is injected with pid=os.getpid() so reap does not prematurely clear
+        A's record. A background thread removes A's record to simulate deregister.
+        C is registered via subprocess to seed its record for the TOCTOU re-scan.
+        """
+        with tempfile.TemporaryDirectory() as base:
+            active_dir = Path(base) / "active-plans"
+            run_a = "aaa-senior-minor7-001"   # eldest senior
+            run_b = "mmm-middle-minor7-001"   # waiter
+            run_c = "zzz-junior-minor7-001"   # junior claimer
+
+            watched_path = "scripts/shared-file.py"
+            now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+            # Inject A with our live PID + the watched path in held_paths.
+            # Inject B (waiter) with our live PID so reap won't delete its record
+            # when wait-for runs its internal reap pass.
+            _write_record_direct(active_dir, _make_v2_record(
+                run_a,
+                pid=os.getpid(),
+                held_paths=[{"path": watched_path, "since": now_ts}],
+            ))
+            _write_record_direct(active_dir, _make_v2_record(run_b, pid=os.getpid()))
+
+            # Register C via subprocess (C is junior; its record will survive or not,
+            # either way MINOR-7 ensures B ignores it in the TOCTOU rescan).
+            r = _run_registry(
+                "register",
+                "--run-id", run_c,
+                "--slug", "s",
+                "--command", "/z-test",
+                "--phase", "test",
+                base_dir=base,
+            )
+            self.assertEqual(r.returncode, 0, f"register C: {r.stderr}")
+
+            # C claims the same watched path (it's a junior — MINOR-7 says B ignores it).
+            # C's claim uses its registered record. The claim subprocess exits; C's record
+            # then has a dead pid so reap may delete it — that's fine, MINOR-7 says B
+            # ignores junior claimers regardless.
+            r_c_claim = _run_registry(
+                "claim",
+                "--run-id", run_c,
+                "--paths", watched_path,
+                base_dir=base,
+            )
+            # C may or may not succeed (C is junior so A wins anyway); either way proceed.
+            _ = r_c_claim
+
+            # Background: remove A's record after a short delay (simulating deregister).
+            senior_path = active_dir / f"{run_a}.json"
+
+            def _remove_a_later():
+                time.sleep(2)
+                try:
+                    senior_path.unlink()
+                except FileNotFoundError:
+                    pass
+
+            t = threading.Thread(target=_remove_a_later, daemon=True)
+            t.start()
+
+            # B waits on A with TOCTOU re-scan on watched_path.
+            # MINOR-7: re-scan must only add NEW SENIOR holders, not junior C.
+            r = _run_registry(
+                "wait-for",
+                "--run-id", run_b,
+                "--on", run_a,
+                "--paths", watched_path,
+                base_dir=base,
+                env_extra={
+                    "Z_HARNESS_WAIT_POLL_SECS": "1",
+                    "Z_HARNESS_AUTO_WAIT_BUDGET_SECS": "10",
+                    "Z_HARNESS_AUTO_WAIT": "1",
+                },
+            )
+            t.join(timeout=15)
+
+            # B must exit 0: A cleared, and C (junior) must have been ignored (MINOR-7).
+            self.assertEqual(
+                r.returncode, 0,
+                f"MINOR-7: B must exit 0 after A deregisters; C (junior) must not extend wait; "
+                f"got {r.returncode}; stderr={r.stderr[:400]}"
+            )
+
+
+# ── T013 (l): MINOR-6 eldest-senior concede ──────────────────────────────────
+
+
+class TestEldestSeniorConcede(unittest.TestCase):
+    """Case (l) MINOR-6: ≥2 seniors on one path → loser concedes to lowest run_id (eldest).
+
+    F-IDs pinned: F2 (check-after-claim tiebreak), F4 (run_id ordering),
+                  MINOR-6 (multi-senior: concede to lowest run_id / eldest senior).
+    """
+
+    def test_two_seniors_loser_concedes_to_eldest(self):
+        """Three runs: A (eldest senior), B (middle senior), C (junior waiter).
+        Both A and B hold the path. C claims it.
+        C must concede to A (the lowest/eldest run_id), not B.
+
+        Pins MINOR-6 / F2 multi-senior tiebreak.
+        """
+        with tempfile.TemporaryDirectory() as base:
+            active_dir = Path(base) / "active-plans"
+            path = "scripts/contested-by-two.py"
+
+            run_a = "aaa-eldest-minor6-001"    # eldest (lowest run_id)
+            run_b = "mmm-senior-minor6-001"   # senior but not eldest
+            run_c = "zzz-junior-minor6-001"   # junior claimer
+
+            now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+            # Inject A and B records directly (both hold the contested path in v2 records).
+            _write_record_direct(active_dir, _make_v2_record(
+                run_a,
+                held_paths=[{"path": path, "since": now_ts}],
+            ))
+            _write_record_direct(active_dir, _make_v2_record(
+                run_b,
+                held_paths=[{"path": path, "since": now_ts}],
+            ))
+
+            # Register C via subprocess (so it has a valid record).
+            r = _run_registry(
+                "register",
+                "--run-id", run_c,
+                "--slug", "s",
+                "--command", "/z-test",
+                "--phase", "test",
+                base_dir=base,
+            )
+            self.assertEqual(r.returncode, 0, f"register C: {r.stderr}")
+
+            # C attempts to claim the contested path.
+            r = _run_registry(
+                "claim",
+                "--run-id", run_c,
+                "--paths", path,
+                base_dir=base,
+            )
+            self.assertEqual(r.returncode, 0, f"claim C: {r.stderr}")
+            result = json.loads(r.stdout)
+
+            # C must have conceded (both A and B are senior).
+            self.assertNotIn(path, result.get("claimed", []),
+                             "C must not have won a path held by two senior peers")
+            conceded = result.get("conceded", [])
+            self.assertGreater(len(conceded), 0, "C must have at least one conceded entry")
+
+            # MINOR-6: the conceded holder_run_id must be the eldest (lowest run_id = A).
+            holders = [c["holder_run_id"] for c in conceded if c.get("path") == path]
+            self.assertEqual(
+                len(holders), 1,
+                f"Must be exactly one conceded entry for the path; got {conceded}"
+            )
+            self.assertEqual(
+                holders[0], run_a,
+                f"MINOR-6: conceded holder must be eldest senior {run_a!r}; got {holders[0]!r}"
             )
 
 
