@@ -49,6 +49,7 @@ Within the chosen base the directory structure is: `<base>/plans/<slug>/` for pl
 - `followups/` migration is opt-in via `--with-followups`. Default behavior is to leave it in place because the follow-up queue lock paths resolve dynamically via `followups_dir()`, so an in-repo followups directory continues to work.
 - `all_plan_slugs()` excludes the infrastructure names `plans`, `archive`, `adhoc`, `followups`, `improvements`, `active-plans`, `metrics.jsonl`, and `bench`.
 - The `--slug NAME` flag is required to migrate a flat `z-harness/TASKS.md` (no-slug layout); without it the file is skipped with a loud warning.
+- Archiving a session **worktree** that still holds in-repo z-harness state (legacy tier-5 layout) permanently discards those logs. `migrate-plan-layout.sh` cannot rescue them: it REFUSES while a run is `status:running` (invariant 8) and SKIPs on a non-empty target. Use `rescue-worktree-state.sh` instead — the inverse operation: it COPIES (never moves) the worktree's `plans/`, `archive/`, `improvements/`, `adhoc/`, and `metrics.jsonl` to the external base with no live-run barrier, displaced destination files are preserved as `*.pre-rescue`, and `metrics.jsonl` is dedup-appended. It never copies `active-plans/` (would create a zombie `running` record), `*.lock`, or `followups/`. Run it from inside the worktree before archiving.
 
 ## Memories
 
@@ -82,4 +83,9 @@ bash scripts/plan-path.sh z_harness_base
 
 # Get the canonical plan directory for a slug
 bash scripts/plan-path.sh plan_dir my-feature-slug
+
+# Rescue in-repo state out to the external base BEFORE archiving a session worktree
+# (run from inside the worktree; works even while a run is live)
+bash scripts/rescue-worktree-state.sh --dry-run    # preview what would be copied
+bash scripts/rescue-worktree-state.sh              # copy; in-repo source left intact
 ```
