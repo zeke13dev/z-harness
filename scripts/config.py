@@ -2633,6 +2633,19 @@ ENV_ONLY_KNOBS: list[str] = [
     "Z_HARNESS_PLANS_DIR",
     "Z_HARNESS_EXPLAIN_RESOLUTION",
     "Z_HARNESS_MAX_EXPLORE",
+    # ── Active-plan registry knobs (env-only, read inline in active-plan-registry.py) ──
+    # 5 pre-existing registry knobs:
+    "Z_HARNESS_BASE_DIR",
+    "Z_HARNESS_EXTERNAL_DEFAULT",
+    "Z_HARNESS_REGISTRY_ENABLED",
+    "Z_HARNESS_REGISTRY_STALE_SECS",
+    "Z_HARNESS_STRICT_OVERLAP",
+    # 5 wait-for knobs (added with the lease/wait-for feature):
+    "Z_HARNESS_AUTO_WAIT",
+    "Z_HARNESS_AUTO_WAIT_BUDGET_SECS",
+    "Z_HARNESS_WAIT_POLL_SECS",
+    "Z_HARNESS_WAIT_TIMEOUT_SECS",
+    "Z_HARNESS_WAIT_REQUIRE_MERGE",
 ]
 
 # Map source label string → persistence_class string

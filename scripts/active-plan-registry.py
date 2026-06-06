@@ -67,7 +67,11 @@ Subcommands:
       Conservative reaper. Deletes a record ONLY if:
         (a) host == THIS host AND pid is dead (os.kill(pid, 0) raises ESRCH), OR
         (b) now - last_heartbeat > Z_HARNESS_REGISTRY_STALE_SECS (default 1800)
-            by a 2× margin (i.e. > 3600s).
+            by a 2× margin (i.e. > 3600s) AND the record does NOT have a live local
+            pid (i.e. remote/unknown-host records, or local records without a pid).
+      Live-local-pid carve-out: if host == THIS host AND pid is alive AND past the
+      2× margin → mark status:"stale" (do NOT delete). Deletion is deferred until
+      the pid dies and case (a) fires on a subsequent reap cycle.
       Otherwise if merely past the 1× threshold AND host is unknown/remote (not this
       host) → set status:"stale" via atomic rewrite (do NOT delete).
       unlink is wrapped in try/except FileNotFoundError so two reapers racing on the
@@ -157,11 +161,17 @@ from pathlib import Path
 # Default stale margin in seconds. Overridable via Z_HARNESS_REGISTRY_STALE_SECS.
 _DEFAULT_STALE_SECS = 1800
 
-# Wait-for knob defaults — read inline from os.environ at use-site (T008 may later
-# add ENV_ONLY_KNOBS entries; these constants serve as the documented defaults).
+# Wait-for knob defaults — read inline from os.environ at use-site.
+# ENV_ONLY_KNOBS entries in config.py list all five for inspect-all discoverability.
 _DEFAULT_WAIT_POLL_SECS = 30
 _DEFAULT_AUTO_WAIT_BUDGET_SECS = 300
 _DEFAULT_EXPLICIT_WAIT_TIMEOUT_SECS = 1800
+# Z_HARNESS_AUTO_WAIT: 1 = auto mode (budget-limited), 0 = explicit-timeout mode.
+_DEFAULT_AUTO_WAIT = 1
+# Z_HARNESS_WAIT_REQUIRE_MERGE: reserved for T009 (branch-ancestor cleared signal).
+# Default 0 = deregister-only (current behaviour). Read inline so the constant is
+# present and the knob is visible in config.py inspect-all output.
+_DEFAULT_WAIT_REQUIRE_MERGE = 0
 
 
 def _stale_secs() -> int:
@@ -1126,7 +1136,7 @@ def cmd_wait_for(args: argparse.Namespace) -> int:
         watch_paths = [p.strip() for p in args.paths.split(",") if p.strip()]
 
     # Determine auto vs. explicit mode and budget.
-    is_auto = os.environ.get("Z_HARNESS_AUTO_WAIT", "1").strip() == "1"
+    is_auto = os.environ.get("Z_HARNESS_AUTO_WAIT", str(_DEFAULT_AUTO_WAIT)).strip() == "1"
     try:
         budget_secs = int(os.environ.get(
             "Z_HARNESS_AUTO_WAIT_BUDGET_SECS",
@@ -1150,6 +1160,17 @@ def cmd_wait_for(args: argparse.Namespace) -> int:
         ))
     except ValueError:
         poll_secs = _DEFAULT_WAIT_POLL_SECS
+
+    # Z_HARNESS_WAIT_REQUIRE_MERGE: reserved for T009 (branch-ancestor cleared signal).
+    # Read inline here so the knob is present for observability / future use.
+    # Default 0 = deregister-only (current behaviour); 1 = T009 branch-ancestor check.
+    try:
+        _require_merge = int(os.environ.get(
+            "Z_HARNESS_WAIT_REQUIRE_MERGE",
+            _DEFAULT_WAIT_REQUIRE_MERGE,
+        ))
+    except ValueError:
+        _require_merge = _DEFAULT_WAIT_REQUIRE_MERGE
 
     effective_budget = budget_secs if is_auto else explicit_timeout
 
@@ -1733,6 +1754,15 @@ def cmd_overlaps(args: argparse.Namespace) -> int:
 def cmd_reap(args: argparse.Namespace) -> int:  # noqa: ARG001
     """reap subcommand. Conservative reaper. NON-FATAL overall — always returns 0.
 
+    Deletion policy:
+      (a) host == this host AND pid is dead → delete immediately.
+      Live-local-pid carve-out: host == this host AND pid ALIVE AND past 2× stale
+        margin → mark status:"stale" only; do NOT delete. Deletion deferred until
+        the pid dies and case (a) fires on a later reap cycle.
+      (b) past 2× stale margin AND no live-local-pid → delete (covers remote/unknown-
+        host records and local records with no pid field).
+      (c) past 1× stale margin AND host is remote/unknown → mark status:"stale" only.
+
     REAPER EXCEPTION: reap is the ONE allowed cross-record write (marking a peer's
     status as "stale"). This is documented in the module docstring and is acceptable
     because:
@@ -1780,7 +1810,30 @@ def cmd_reap(args: argparse.Namespace) -> int:  # noqa: ARG001
                     pass  # non-fatal
                 continue
 
-        # Case (b): 2× stale margin exceeded → delete regardless of host.
+            # Live local pid — even if 2× stale, do NOT delete (the process may be
+            # suspended or running inside a long-lived subtask).  Mark stale so peers
+            # can see it is overdue, but leave deletion to case (a) when the pid dies.
+            if age_secs > stale_threshold * 2:
+                if rec.get("status") != "stale":
+                    rec["status"] = "stale"
+                    try:
+                        _atomic_write(p, rec)
+                        _emit_event(run_id, "plan_marked_stale", {
+                            "run_id": run_id,
+                            "reason": "live_local_pid_2x_stale",
+                            "pid": pid,
+                            "host": rec_host,
+                            "age_secs": age_secs,
+                            "stale_threshold": stale_threshold,
+                        })
+                    except FileNotFoundError:
+                        pass  # two reapers racing — benign
+                    except OSError:
+                        pass  # non-fatal
+                continue  # do not fall through to case (b)
+
+        # Case (b): 2× stale margin exceeded → delete (remote/unknown host, or local
+        # host record with no pid field).  Live-local-pid records are handled above.
         if age_secs > stale_threshold * 2:
             try:
                 p.unlink()

@@ -1104,7 +1104,7 @@ Agent(
 
 Parse the implementer's return per the `STATUS:` block. Branches:
 
-- `STATUS: ok` → go to step 6 (review)
+- `STATUS: ok` → run write-set validation (step 5.5 below), then go to step 6 (review)
 <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface implementer halt questions (needs_clarification / spec_problem / decision_needed) via their native channel. Silent omission is forbidden. -->
 - `STATUS: needs_clarification` → halt queue, push-notify, present the question to the user via `AskUserQuestion`. After answer, update SPEC.md if appropriate, then re-spawn implementer with the resolved info.
 - `STATUS: spec_problem` → halt queue, push-notify, escalate to user. Likely needs SPEC patch before any further tasks proceed.
@@ -1117,6 +1117,83 @@ Parse the implementer's return per the `STATUS:` block. Branches:
   FINALIZE_STATUS=aborted
   # ... jump to Finalize (which calls deregister --status aborted) ...
   ```
+
+### 5.5. Write-set validation (F5 backstop — runs on `STATUS: ok`)
+
+This is the **narrowest** of the three contention detectors (T002 claim-time, T005 scope-inspection,
+T012 post-task). It is gated strictly on **live-peer-lease overlap** so unclaimed-but-uncontended
+edits produce **zero** warnings. Only when an undeclared path is ALSO held by a live peer does a
+`coordination_warning` fire — one event per colliding path.
+
+```bash
+# 1. Compute actual changed paths (repo-relative, newline-separated).
+ACTUAL_PATHS="$(git diff --name-only 2>/dev/null)"
+
+# 2. Compute undeclared = actual − CLAIM (paths the implementer touched but did not claim).
+#    CLAIM is the comma-separated won-set from step 3.5. Convert to newline form for comparison.
+CLAIM_NEWLINE="$(printf '%s' "$CLAIM" | tr ',' '\n')"
+UNDECLARED_PATHS="$(comm -23 \
+  <(printf '%s\n' "$ACTUAL_PATHS" | sort) \
+  <(printf '%s\n' "$CLAIM_NEWLINE" | sort))"
+
+# 3. If no undeclared paths, skip entirely — zero warnings, zero noise.
+if [ -n "$UNDECLARED_PATHS" ]; then
+  # 4. Fetch the current overlaps payload to find live peers with held_paths.
+  #    overlaps exits 0 (none) / 10 (advisory) / 20 (strict-blocking) — we only care about
+  #    the JSON payload, not the exit code, so redirect and capture regardless.
+  OVL_JSON="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" \
+    overlaps --run-id "$RUN" --json 2>/dev/null || echo '{}')"
+
+  # 5. For each undeclared path, check whether any live peer holds it via the held_conflict block.
+  #    The held_conflict key (singular) per the overlaps JSON schema (T005/SPEC).
+  #    We emit exactly ONE coordination_warning per colliding (undeclared-path × peer) pair.
+  while IFS= read -r UNDECLARED_PATH; do
+    [ -z "$UNDECLARED_PATH" ] && continue
+    # Extract peer_run_id for any peer whose held_conflict paths contain this undeclared path.
+    PEER_RUN_ID="$(python3 -c '
+import json, sys
+payload = json.loads(sys.argv[1])
+target = sys.argv[2]
+peers = payload.get("peers", [])
+for peer in peers:
+    hc = peer.get("held_conflict", {})
+    held_paths = hc.get("paths", [])
+    if target in held_paths:
+        print(peer.get("run_id", ""))
+        break
+' "$OVL_JSON" "$UNDECLARED_PATH" 2>/dev/null || true)"
+
+    if [ -n "$PEER_RUN_ID" ]; then
+      # Gate: only emit if the peer is live AND holds this specific path.
+      # Uncontended undeclared edits (no live peer holds the path) produce ZERO warnings.
+      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
+        "tasks/<task-id>" coordination_warning \
+        "$(printf '{"run_id":"%s","path":"%s","peer_run_id":"%s"}' \
+           "$RUN" "$UNDECLARED_PATH" "$PEER_RUN_ID")"
+      # Surface to the user (review-blocking advisory — does not hard-fail the task).
+      echo "COORDINATION WARNING: undeclared write to '$UNDECLARED_PATH'" \
+           "conflicts with live peer lease held by run '$PEER_RUN_ID'." >&2
+    fi
+    # If PEER_RUN_ID is empty: undeclared but uncontended — emit nothing (zero-noise guarantee).
+  done <<< "$UNDECLARED_PATHS"
+fi
+```
+
+**Zero-noise property (mandatory).** An undeclared path that no live peer currently holds in
+`held_paths` produces **zero** `coordination_warning` events. Only the intersection of
+(undeclared by this run) AND (held by a live peer lease) triggers a warning. This gates T012 as
+the narrowest detector of the three (T002 fires at claim-time regardless of contention; T005
+fires at scope-inspection regardless of lease; T012 fires only on an actual live-lease collision).
+
+**T005 `held_conflict` payload note.** The `overlaps --json` payload carries a `held_conflict`
+key (singular) per peer, per SPEC §overlaps and the T005 implementation. `/z-where` (T016) and
+the wait decision in step 3.5 both consume the `held_conflict.paths` field from this same payload
+— it is NOT dead reporting. The `coordination_warning` event uses the same `held_conflict` scan
+path to find `peer_run_id`, keeping all three consumers consistent on the single canonical key.
+
+**Surface to reviewer.** Any `coordination_warning` events emitted here are review-blocking
+advisory: pass them to the reviewer in step 6 as additional context so the reviewer can assess
+whether the undeclared write introduced a real conflict. They do not stop step 6 dispatch.
 
 ### 6. Capture diff and spawn reviewer (fresh context)
 

@@ -269,6 +269,80 @@ python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-reg
   --run-id "$RUN" --phase implement --current-task "<task-id>" || true   # CLI self-logs registry_error on failure
 ```
 
+### Phase 2.5 — Per-task lease lifecycle
+
+After the heartbeat and before implementer dispatch, claim the task's explicit-confidence paths,
+resolve any concessions via `wait-for` or an interactive menu, then dispatch the implementer.
+Release the lease on clean success; on halt mid-task, rely on `deregister`/`reap` to clean up.
+
+**Claim the task's explicit-confidence paths (conservative — explicit only, per SPEC D3).**
+`CLAIM` is the `explicit`-confidence entries from the scope-extractor's task-level output
+(same extractor invoked in Phase 0.0 but scoped to this task via `task_id`). If the
+scope-extractor is unavailable or returns no explicit paths, `CLAIM` is empty — proceed
+directly to implementer dispatch (no-op claim).
+
+```bash
+# CLAIM = explicit-confidence paths from the task block's Files: list + scope-extractor(task=<id>)
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" claim \
+  --run-id "$RUN" --paths "$CLAIM"   # comma-separated repo-relative paths
+CLAIM_OUT="$?"   # claim exits 0 always; parse stdout JSON for conceded list
+# stdout: {"claimed":[...], "conceded":[{"path":"...","holder_run_id":"..."}]}
+```
+
+**Handle each `conceded` entry (senior peer holds the path; eldest-senior = lowest run_id).**
+When `conceded` is non-empty, pick the eldest senior (`holder_run_id` from the entry — this
+is the lowest run_id among all seniors on that path as returned by `claim`):
+
+**If `Z_HARNESS_AUTO_WAIT=1` (default):**
+
+```bash
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" wait-for \
+  --run-id "$RUN" --on "$HOLDER_RUN_ID" --paths "$CONCEDED_PATH"
+WAIT_RC=$?
+```
+
+- `WAIT_RC == 0` (peer cleared / nothing-to-wait-on) → **re-`claim` the freed path** — this
+  is a GENUINE acquisition, not a dedup no-op, because the loser never persisted the conceded
+  path (claim persists only the won set per SPEC F-claim-wonset). Re-run `claim` with the
+  conceded path(s) and add any newly-won paths to `CLAIM`. Then continue to implementer dispatch.
+- `WAIT_RC == 10` (wait timeout — LOUD, per SPEC F1):
+  <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface this timeout decision (proceed/abort) via their native channel. Silent omission is forbidden. -->
+  - **Interactive (not `Z_HARNESS_NO_ASK`):** present `AskUserQuestion`: **proceed anyway** /
+    **abort task**. If proceed → continue to dispatch (the contended path is not leased; the
+    post-dispatch write-set validation in Phase 2.5 will catch any actual collision). If abort →
+    flip `[~]` back to `[ ]`, log `task_halt {reason:"wait_timeout_abort"}`, apply the
+    FINALIZE_STATUS rule (deregister with `aborted`), and exit.
+  - **Unattended (`Z_HARNESS_NO_ASK`) — ABORT TASK (MAJOR-4).** A held-path `wait-for` exit 10
+    in unattended mode MUST abort the current task. It MUST NOT silently proceed (that recreates
+    the collision) and MUST NOT automatically re-enter `wait-for` on the same blocker (a re-wait
+    is only legitimate after the user re-queues the task). Emit a loud log, flip `[~]` back to
+    `[ ]`, apply the FINALIZE_STATUS rule (deregister with `aborted`), and exit:
+    ```bash
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tasks/<task-id>" task_halt \
+      "$(printf '{"id":"%s","reason":"wait_timeout_unattended","holder_run_id":"%s","path":"%s"}' \
+         "<task-id>" "$HOLDER_RUN_ID" "$CONCEDED_PATH")"
+    FINALIZE_STATUS=aborted
+    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+      --run-id "$RUN" --status "$FINALIZE_STATUS" || true
+    # flip [~] → [ ]; exit 1
+    ```
+    Cross-link: see Phase 0.0 SPEC F1 — this is the same loud-abort-on-timeout invariant.
+- `WAIT_RC == 130` (SIGINT during park) → abort the task (same as unattended exit 10: apply the
+  FINALIZE_STATUS rule, deregister with `aborted`, propagate the SIGINT to the outer shell).
+
+**If `Z_HARNESS_AUTO_WAIT=0` (interactive wait mode):**
+
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the conceded-path proceed/wait/abort question via their native channel. Silent omission is forbidden. -->
+Present `AskUserQuestion`: **proceed anyway** / **wait** / **abort task**.
+- **proceed** → continue to implementer dispatch (the path is not leased; the F5 write-set
+  validation below applies as a backstop).
+- **wait** → call `wait-for --run-id $RUN --on $HOLDER_RUN_ID --paths $CONCEDED_PATH` (same
+  `WAIT_RC` handling as the auto-wait path above).
+- **abort task** → flip `[~]` back to `[ ]`, log `task_halt {reason:"user_aborted_lease"}`,
+  apply the FINALIZE_STATUS rule (deregister with `aborted`), and exit.
+
+**Dispatch implementer** (Phase 2 implementer dispatch below) with the claimed paths in scope.
+
 Spawn the implementer subagent (fresh context).
 
 **Pick the implementer model from the task block's `**Complexity:**` stamp** (stamped by `/z-plan` or `/z-amend`):
@@ -498,6 +572,96 @@ Obey DRY/KISS/SOLID. No shortcuts unless PLAN.md explicitly approved one for thi
   the issue and the orchestrator re-spawns the implementer, keep the existing record alive (no
   deregister); deregister only on the final terminal exit.
 
+**Write-set validation (F5 backstop — runs on `STATUS: ok`).**
+
+This is the **narrowest** of the three contention detectors (T002 claim-time, T005
+scope-inspection, T012 post-task). It gates strictly on **live-peer-lease overlap** so
+unclaimed-but-uncontended edits produce **zero** warnings. Only when an undeclared path is ALSO
+held by a live peer does a `coordination_warning` fire — one event per colliding path.
+
+```bash
+# 1. Compute actual changed paths (repo-relative, newline-separated).
+ACTUAL_PATHS="$(git diff --name-only 2>/dev/null)"
+
+# 2. Compute undeclared = actual − CLAIM (paths the implementer touched but did not claim).
+#    CLAIM is the comma-separated won-set from Phase 2.5. Convert to newline form for comparison.
+CLAIM_NEWLINE="$(printf '%s' "$CLAIM" | tr ',' '\n')"
+UNDECLARED_PATHS="$(comm -23 \
+  <(printf '%s\n' "$ACTUAL_PATHS" | sort) \
+  <(printf '%s\n' "$CLAIM_NEWLINE" | sort))"
+
+# 3. If no undeclared paths, skip entirely — zero warnings, zero noise.
+if [ -n "$UNDECLARED_PATHS" ]; then
+  # 4. Fetch the current overlaps payload to find live peers with held_paths.
+  #    overlaps exits 0/10/20 — we only care about the JSON payload, not the exit code.
+  OVL_JSON="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" \
+    overlaps --run-id "$RUN" --json 2>/dev/null || echo '{}')"
+
+  # 5. For each undeclared path, check whether any live peer holds it via the held_conflict block.
+  #    The held_conflict key (singular) per the overlaps JSON schema (T005/SPEC).
+  #    Emit exactly ONE coordination_warning per colliding (undeclared-path × peer) pair.
+  while IFS= read -r UNDECLARED_PATH; do
+    [ -z "$UNDECLARED_PATH" ] && continue
+    PEER_RUN_ID="$(python3 -c '
+import json, sys
+payload = json.loads(sys.argv[1])
+target = sys.argv[2]
+peers = payload.get("peers", [])
+for peer in peers:
+    hc = peer.get("held_conflict", {})
+    held_paths = hc.get("paths", [])
+    if target in held_paths:
+        print(peer.get("run_id", ""))
+        break
+' "$OVL_JSON" "$UNDECLARED_PATH" 2>/dev/null || true)"
+
+    if [ -n "$PEER_RUN_ID" ]; then
+      # Gate: only emit if the peer is live AND holds this specific path.
+      # Uncontended undeclared edits (no live peer holds the path) produce ZERO warnings.
+      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
+        "tasks/<task-id>" coordination_warning \
+        "$(printf '{"run_id":"%s","path":"%s","peer_run_id":"%s"}' \
+           "$RUN" "$UNDECLARED_PATH" "$PEER_RUN_ID")"
+      echo "COORDINATION WARNING: undeclared write to '$UNDECLARED_PATH'" \
+           "conflicts with live peer lease held by run '$PEER_RUN_ID'." >&2
+    fi
+    # If PEER_RUN_ID is empty: undeclared but uncontended — emit nothing (zero-noise guarantee).
+  done <<< "$UNDECLARED_PATHS"
+fi
+```
+
+**Zero-noise property (mandatory).** An undeclared path that no live peer currently holds in
+`held_paths` produces **zero** `coordination_warning` events. Only the intersection of
+(undeclared by this run) AND (held by a live peer lease) triggers a warning.
+
+**T005 `held_conflict` payload note.** The `overlaps --json` payload carries a `held_conflict`
+key (singular) per peer, per SPEC §overlaps and the T005 implementation. `/z-where` (T016) and
+the wait decision in Phase 2.5 both consume the `held_conflict.paths` field from this same
+payload — it is NOT dead reporting. The `coordination_warning` event uses the same
+`held_conflict` scan path to find `peer_run_id`, keeping all three consumers consistent.
+
+The warning is review-blocking (surface it to the reviewer in Phase 3), but does not stop the
+Phase 3 dispatch.
+
+**Lease release and halt semantics.**
+
+- **On clean task success (before marking `[x]` in Phase 5):** release the lease:
+  ```bash
+  python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" release \
+    --run-id "$RUN" --paths "$CLAIM"   # CLI self-logs registry_error on failure; exits 0 always
+  ```
+- **On review-fail with "patch manually" (user takes over within the same invocation):** KEEP the
+  existing lease. Do NOT release until the user signals completion and Phase 5 runs. If the user
+  subsequently asks the orchestrator to re-dispatch the implementer (e.g. after patching), expand
+  `CLAIM` with any newly-touched paths before re-dispatch. Release only on clean final success.
+- **On halt mid-task** (`unable_to_complete` or other terminal halt after implementer dispatch):
+  do NOT release. Rely on `deregister` (from the FINALIZE_STATUS rule) or `reap` (stale-timeout)
+  to clean up `held_paths`. A partially-applied edit must not release the lease before the task
+  resolves.
+- **On re-invocation** (user runs `/z-implement-next` again for the same task after a prior attempt
+  ended without `[x]`): the previous run's lease was cleaned up by its `deregister`; the new
+  invocation runs a fresh `claim` in Phase 2.5 as usual.
+
 ## Phase 3 — Codex review
 
 1. Capture the diff: `git diff > $BASE/archive/tasks/<task-id>/diff.patch` (if no git, fall back to listing changed file paths).
@@ -689,7 +853,15 @@ RESULT="$(printf '%s' "$RESOLVED" | python3 -c 'import json,sys; print(json.load
    ```bash
    emit_persona_outcome "done"   # no-op when the knob is off; idempotent
    ```
-4. **Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the single
+4. **Release the lease** (best-effort, non-fatal) before marking `[x]`. This unblocks any junior
+   peer waiting on a path this task held. The `release` subcommand returns 0 by design and
+   self-logs a `registry_error` on internal failure. If `CLAIM` is empty (no paths were claimed),
+   this is a harmless no-op.
+   ```bash
+   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" release \
+     --run-id "$RUN" --paths "$CLAIM" || true   # CLI self-logs registry_error on failure
+   ```
+5. **Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the single
    FINALIZE_STATUS rule (Phase 0.0): normal completion deregisters with `complete`. The
    `deregister` subcommand returns 0 by design and self-logs a `registry_error` on internal
    failure, so call it with `|| true` (not `|| log`). If register failed earlier (no record was
@@ -698,8 +870,8 @@ RESULT="$(printf '%s' "$RESOLVED" | python3 -c 'import json,sys; print(json.load
    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
      --run-id "$RUN" --status "complete" || true   # CLI self-logs registry_error on failure
    ```
-5. If notification policy ≠ `off`: send `PushNotification` — "Task <ID> complete. <N> remaining. Run /z-implement-next to continue."
-6. Brief user summary: what changed, what the reviewer flagged, what's next.
+6. If notification policy ≠ `off`: send `PushNotification` — "Task <ID> complete. <N> remaining. Run /z-implement-next to continue."
+7. Brief user summary: what changed, what the reviewer flagged, what's next.
 
 Do **not** auto-advance. Wait for the user to invoke `/z-implement-next` again — this forces a fresh context per task.
 
@@ -732,7 +904,7 @@ Emission is gated by `Z_HARNESS_AXIOM_EXTRACT` (default on); when set to `"0"`, 
 | Feature | Used | Gates |
 |---------|------|-------|
 | `subagent` | yes | Phase 2 implementer; Phase 3 base codex reviewer (required); Phase 3 random-arm reviewer (advisory, only when `experiment.persona_rotation` is on) |
-| `ask_user` | yes | Phase 0 slug selection (multiple candidates) |
+| `ask_user` | yes | Phase 0 slug selection (multiple candidates); Phase 2.5 lease wait-timeout proceed/abort (interactive, not NO_ASK); Phase 2.5 conceded-path proceed/wait/abort (AUTO_WAIT=0); Phase 3 review-failure decision (proceed anyway / patch manually / abandon task / re-spec) |
 | `skill_invoke` | no | — |
 
 Driver support requirements: see frontmatter `driver_features_required`.
