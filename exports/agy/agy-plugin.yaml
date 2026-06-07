@@ -59,6 +59,10 @@ workflows:
     source: commands/z-do.md
     output: .agent/workflows/z-do.md
     description: "Plan-less z-harness execution for small tasks. Brings the harness discipline — premise check, doc-fetcher grounding, codex review safety gate, structured logging — without SPEC/PLAN/TASKS/FIX.md ceremony. Logs to z-harness/adhoc/ so /z-improve can..."
+  - id: z-explain
+    source: commands/z-explain.md
+    output: .agent/workflows/z-explain.md
+    description: "One-shot structured explanation of code at a chosen depth lens. Replaces ad-hoc \"explain at high level / more detail\" prompts. Citations required. Handoff to /z-learn when interactive exploration is warranted. Read-only, no cross-LLM consult."
   - id: z-export
     source: commands/z-export.md
     output: .agent/workflows/z-export.md
@@ -115,6 +119,10 @@ workflows:
     source: commands/z-init-docs.md
     output: .agent/workflows/z-init-docs.md
     description: "Bootstrap a two-tier docs system in the current repo — docs/human/ (Markdown for humans) and docs/llm/ (token-compacted JSON for fast-lookup by future /z-plan runs). Idempotent; re-runnable to extend coverage."
+  - id: z-learn
+    source: commands/z-learn.md
+    output: .agent/workflows/z-learn.md
+    description: "Interactive progressive-disclosure tutor for understanding code. Replaces repetitive \"explain more / tell me about X\" sessions. Four depth lenses, resumable staging, optional LEARN.md artifact. Read-only, no cross-LLM consult."
   - id: z-maintain-docs
     source: commands/z-maintain-docs.md
     output: .agent/workflows/z-maintain-docs.md

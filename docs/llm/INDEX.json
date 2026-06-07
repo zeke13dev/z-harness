@@ -49,6 +49,7 @@
         "commands/z-debug.md",
         "commands/z-do.md",
         "commands/z-export.md",
+        "commands/z-explain.md",
         "commands/z-fix.md",
         "commands/z-followup-confirm.md",
         "commands/z-followup-dismiss.md",
@@ -62,6 +63,7 @@
         "commands/z-implement-next.md",
         "commands/z-improve.md",
         "commands/z-init-docs.md",
+        "commands/z-learn.md",
         "commands/z-maintain-docs.md",
         "commands/z-map.md",
         "commands/z-mr-review.md",
@@ -81,7 +83,7 @@
         "commands/z-uplift.md",
         "commands/z-where.md"
       ],
-      "last_updated": "2026-06-03",
+      "last_updated": "2026-06-07",
       "confidence": "high",
       "depends_on": [
         "agents",
@@ -94,7 +96,7 @@
       "consumed_by": [
         "skills"
       ],
-      "summary": "Slash command surfaces: planning-family route checks, contextual exits, plan_route_decision telemetry, review-family finding promotion, config.py export-env/should-notify wrappers, check-no-ask halt branches (7 commands), /z-overnight unattended pipeline orchestrator, /z-grill requirements-interview, /z-git-guardrails PreToolUse hook installer, follow-up sink consumer commands (6 /z-followup-* commands), /z-where concurrent-run diagnostic, and persona-rotation (experiment.persona_rotation knob): random implementer draw + dual reviewer dispatch in z-implement-all/z-implement-next, fixed 5-panel consult in z-plan/z-debug, ideator/audit_persona/advisory-consult-arm draws."
+      "summary": "Slash command surfaces: planning-family route checks, contextual exits, plan_route_decision telemetry, review-family finding promotion, config.py export-env/should-notify wrappers, check-no-ask halt branches (7 commands), /z-overnight unattended pipeline orchestrator, /z-grill requirements-interview, /z-explain one-shot code explanation and /z-learn interactive tutor (four shared depth lenses), /z-git-guardrails PreToolUse hook installer, follow-up sink consumer commands (6 /z-followup-* commands), /z-where concurrent-run diagnostic, and persona-rotation (experiment.persona_rotation knob): random implementer draw + dual reviewer dispatch in z-implement-all/z-implement-next, fixed 5-panel consult in z-plan/z-debug, ideator/audit_persona/advisory-consult-arm draws."
     },
     {
       "slug": "scripts",

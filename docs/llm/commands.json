@@ -1,6 +1,6 @@
 {
   "concept": "commands",
-  "last_updated": "2026-06-03",
+  "last_updated": "2026-06-07",
   "covers_spec": "none",
   "source_file": [
     "commands/z-amend.md",
@@ -11,6 +11,7 @@
     "commands/z-debug.md",
     "commands/z-do.md",
     "commands/z-export.md",
+    "commands/z-explain.md",
     "commands/z-fix.md",
     "commands/z-followup-confirm.md",
     "commands/z-followup-dismiss.md",
@@ -24,6 +25,7 @@
     "commands/z-implement-next.md",
     "commands/z-improve.md",
     "commands/z-init-docs.md",
+    "commands/z-learn.md",
     "commands/z-maintain-docs.md",
     "commands/z-map.md",
     "commands/z-mr-review.md",
@@ -100,6 +102,13 @@
       "symbol": "z-export",
       "kind": "module",
       "summary": "Exports commands/agents/skills to Cursor, Codex, or agy via adapter scripts; defaults to all targets."
+    },
+    {
+      "file": "commands/z-explain.md",
+      "line": 1,
+      "symbol": "z-explain",
+      "kind": "module",
+      "summary": "One-shot structured code explanation at a chosen depth lens (orientation, walkthrough, deep, audit-brief). File:line citations required. Handoff to /z-learn when interactive exploration warranted. Telemetry: explain_run_start / explain_run_end."
     },
     {
       "file": "commands/z-fix.md",
@@ -191,6 +200,13 @@
       "symbol": "z-init-docs",
       "kind": "module",
       "summary": "Bootstraps two-tier human and LLM documentation; also creates repo-root CONTEXT.md (domain glossary) by default — pass --no-glossary to skip. Idempotent: extends without clobbering user terms. RUNTIME-GATE before Explore and AskUser."
+    },
+    {
+      "file": "commands/z-learn.md",
+      "line": 1,
+      "symbol": "z-learn",
+      "kind": "module",
+      "summary": "Interactive progressive-disclosure tutor for understanding code. Four depth lenses, resumable .learn-pending.md staging, optional LEARN.md finalize. Standing navigation menu each turn. Ingests prior /z-explain context. Telemetry: learn_run_start / learn_turn / learn_finalized."
     },
     {
       "file": "commands/z-maintain-docs.md",

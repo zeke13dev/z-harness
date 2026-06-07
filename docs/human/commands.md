@@ -1,7 +1,7 @@
 # Commands
 
-> Last updated: 2026-06-03
-> Covers source: commands/z-amend.md, commands/z-audit.md, commands/z-audit-plan.md, commands/z-audit-plan-style.md, commands/z-brainstorm.md, commands/z-debug.md, commands/z-do.md, commands/z-export.md, commands/z-fix.md, commands/z-followup-confirm.md, commands/z-followup-dismiss.md, commands/z-followup-list.md, commands/z-followup-next.md, commands/z-followup-refresh.md, commands/z-followup-status.md, commands/z-git-guardrails.md, commands/z-grill.md, commands/z-implement-all.md, commands/z-implement-next.md, commands/z-improve.md, commands/z-init-docs.md, commands/z-maintain-docs.md, commands/z-map.md, commands/z-mr-review.md, commands/z-overnight.md, commands/z-plan-light.md, commands/z-plan-split.md, commands/z-plan.md, commands/z-providers-discover.md, commands/z-research.md, commands/z-review-all.md, commands/z-skill-fix.md, commands/z-stats.md, commands/z-style-init.md, commands/z-suggest-memory.md, commands/z-test.md, commands/z-update.md, commands/z-uplift.md, commands/z-where.md
+> Last updated: 2026-06-07
+> Covers source: commands/z-amend.md, commands/z-audit.md, commands/z-audit-plan.md, commands/z-audit-plan-style.md, commands/z-brainstorm.md, commands/z-debug.md, commands/z-do.md, commands/z-export.md, commands/z-explain.md, commands/z-fix.md, commands/z-followup-confirm.md, commands/z-followup-dismiss.md, commands/z-followup-list.md, commands/z-followup-next.md, commands/z-followup-refresh.md, commands/z-followup-status.md, commands/z-git-guardrails.md, commands/z-grill.md, commands/z-implement-all.md, commands/z-implement-next.md, commands/z-improve.md, commands/z-init-docs.md, commands/z-learn.md, commands/z-maintain-docs.md, commands/z-map.md, commands/z-mr-review.md, commands/z-overnight.md, commands/z-plan-light.md, commands/z-plan-split.md, commands/z-plan.md, commands/z-providers-discover.md, commands/z-research.md, commands/z-review-all.md, commands/z-skill-fix.md, commands/z-stats.md, commands/z-style-init.md, commands/z-suggest-memory.md, commands/z-test.md, commands/z-update.md, commands/z-uplift.md, commands/z-where.md
 
 ## Overview
 
@@ -33,6 +33,7 @@ The command surface is organized around explicit routing, durable artifacts, and
 - `commands/z-debug.md:1` — `z-debug` — Runs heavy hypothesis-tournament debugging with post-mortem and Phase 10 memory review (shipped branch only); sequential AskUser loop capped at 3 candidates; emits `memory_review_terminal`. Active-plan registry lifecycle: registers in Setup, deregisters on all exit paths (FINALIZE_STATUS rule). When `experiment.persona_rotation=true`, Phases 3a/3b/7 use fixed 5-panel (agy, cursor@claude-4.6-sonnet, cursor@grok-4.3, cursor@composer-2.5, codex-cli) instead of 2-consultant path; Phases 3a and 3b additionally draw distinct `consultant` personas per arm when `personas.critique_panel` is ON (same draw reused at 3b); Phase 7 fix-consult uses fixed 5-panel but emits `selection_source=fixed_panel` for all arms — no persona prefix draw by design.
 - `commands/z-do.md:1` — `z-do` — Executes tiny plan-free changes with review gates. Calls `config.py export-env` during Setup; guards notifications via `should-notify` wrappers. Doc-fetcher dispatch gated on `Z_HARNESS_DOCS_ALWAYS_APPLY` (skipped when=never, Phase 2). Active-plan registry lifecycle: registers after do_run_start, seeds scope, runs overlap scan, deregisters on completion or abort (FINALIZE_STATUS rule). Advisory eval-reviewer at Codex gate (`personas.review_eval`, default ON) per the shared snippet in `commands/z-implement-all.md`.
 - `commands/z-export.md:1` — `z-export` — Exports commands/agents/skills to Cursor, Codex, or agy via adapter scripts; defaults to all targets.
+- `commands/z-explain.md:1` — `z-explain` — One-shot structured code explanation at a chosen depth lens (orientation, walkthrough, deep, audit-brief). Citations required. Handoff to `/z-learn` when interactive exploration warranted. Telemetry: `explain_run_start` / `explain_run_end`.
 - `commands/z-fix.md:1` — `z-fix` — Ships diagnosed bug fixes with consult and Codex review; slug-confirm resolver gate (`workflow.slug_confirm`) after hard collision check; `check-no-ask` halt branch emitting `fix_halt`. Advisory eval-reviewer at Codex gate (`personas.review_eval`, default ON) per the shared snippet in `commands/z-implement-all.md`.
 - `commands/z-followup-confirm.md:1` — `z-followup-confirm` — verify→done transition via human approval or 11-point audit evidence validation.
 - `commands/z-followup-dismiss.md:1` — `z-followup-dismiss` — Any-state → dismissed; requires --reason; terminal.
@@ -46,6 +47,7 @@ The command surface is organized around explicit routing, durable artifacts, and
 - `commands/z-implement-next.md:1` — `z-implement-next` — Implements one pending task with model selection and review. Phase 0.0 active-plan registry lifecycle (ordering: 0.2 slug discovery → 0.0 register → 0.1 consumer check): registers, seeds scope, runs overlap scan, deregisters on exit (FINALIZE_STATUS rule). Phase 0.1 consumer check halts if any project-sink entry has status=running (emits `implement_halted_followup_running`). Phase 2 persona-rotation block mirrors z-implement-all step 5.0: single attempt_id=<task-id>-v1, `personas.implementer_retry` knob governs retry behavior. Reviewer gate: base codex (authoritative) + advisory random-arm reviewer when `personas.review_eval` ON.
 - `commands/z-improve.md:1` — `z-improve` — Retrospects one run and proposes harness improvements.
 - `commands/z-init-docs.md:1` — `z-init-docs` — Bootstraps two-tier human and LLM documentation; also creates repo-root `CONTEXT.md` (domain glossary) by default — pass `--no-glossary` to skip. Existing `--scope` semantics unchanged. Idempotent: re-run extends without clobbering user terms.
+- `commands/z-learn.md:1` — `z-learn` — Interactive progressive-disclosure tutor for understanding code. Four depth lenses; resumable `.learn-pending.md` staging; optional `LEARN.md` finalize. Standing navigation menu each turn. Ingests prior `/z-explain` context. Telemetry: `learn_run_start` / `learn_turn` / `learn_finalized`.
 - `commands/z-maintain-docs.md:1` — `z-maintain-docs` — Refreshes stale docs, applying by default (`--dry-run` to preview). New `--glossary` flag also refreshes repo-root `CONTEXT.md`; default path (no flag) refreshes concept docs only.
 - `commands/z-mr-review.md:1` — `z-mr-review` — Reviews branch diffs into ranked task-shaped findings.
 - `commands/z-overnight.md:1` — `z-overnight` — Unattended pipeline orchestrator; chains existing sub-commands end-to-end with `Z_HARNESS_NO_ASK=halt`; writes MORNING_REPORT.md; supports resume, presets, and concurrency lock. Known v1 limit: only 12 registered callsites participate in halt-from-ask.
@@ -92,6 +94,13 @@ The command surface is organized around explicit routing, durable artifacts, and
 ### Pre-planning
 
 - **`/z-grill <topic>`** — Depth-first requirements interview. Asks one question at a time, states a recommended answer each time, and self-serves codebase questions via Explore (Haiku). Terminates adaptively; the user may stop early at any time. Stages draft to `<plans-base>/.grill-pending.md`; finalizes to `$Z_HARNESS_PLAN_DIR/<slug>/GRILL.md` with collision-checked slug. GRILL.md carries `status: complete` frontmatter and is automatically detected as a precontext artifact by `/z-plan` (step 9) and `/z-brainstorm` (Phase 1). Cost target: low (single conversational session).
+
+### Understanding code
+
+- **`/z-explain <target> [lens]`** — One-shot structured explanation at a chosen depth lens: orientation (design decisions), walkthrough (flow), deep (line-level), or audit-brief (invariants/failure modes — not a real audit). Fuzzy natural language maps to lenses. Every code claim cites `file:line`. Recommends `/z-learn` when the topic warrants interactive exploration. Cost target: low (single pass).
+- **`/z-learn <target>`** — Interactive tutor for progressive disclosure. Same four lenses; one teaching chunk per turn with a standing navigation menu (deeper, next, pivot, switch lens, finalize, stop). Resumable via `<plans-base>/.learn-pending.md`; optional `LEARN.md` on finalize. Ingests prior `/z-explain` context. Cost target: low–medium (conversation-length).
+
+Typical chain: `/z-explain src/pipeline.rs orientation` then `/z-learn src/pipeline.rs` when you want to keep going.
 
 - **`/z-brainstorm <topic>`** — Cheap parallel idea generation across three vendor-diverse ideators. Phase 0 scope probe classifies topic as LIGHT/MEDIUM/HEAVY; single-file targets skip to LIGHT via fast-path. Phase 2a draws 3 distinct `ideator` personas when `brainstorm.personas` is ON (default ON). HEAVY fans out N parallel sub-flows per axis chunk and presents a chunk × framing matrix at Phase 4. Produces `BRAINSTORM.md`. Cost target: ≤200K tokens.
 - **`/z-map <question>`** — Terrain mapping via parallel Explores + cross-LLM critique. No recommendations — terrain only. Produces `MAP.md`. Cost target: ≤2M tokens.
@@ -251,6 +260,8 @@ Typical chains:
 ## Examples
 
 - Interview before planning: `/z-grill "add request timeout handling"` then `/z-plan`
+- Quick code overview: `/z-explain src/ingest.rs orientation`
+- Deep interactive study: `/z-explain order pipeline walkthrough` then `/z-learn order pipeline`
 - Install git guardrails globally: `/z-git-guardrails install`
 - Check guardrail status: `/z-git-guardrails status`
 - Start a rigorous plan: `/z-plan "add request timeout handling"`
