@@ -20,6 +20,7 @@
 #   exports/codex/  — legacy per-host Codex exporter output       # REMOVE-AT: v<next-minor>
 #   exports/agy/    — legacy per-host AGY exporter output          # REMOVE-AT: v<next-minor>
 #   exports/cursor/ — legacy per-host Cursor exporter output       # REMOVE-AT: v<next-minor>
+#   exports/pi/     — pi exporter output (agents/prompts/extension) # REMOVE-AT: v<next-minor>
 #
 # Forbidden patterns (any match is a violation):
 #   providers.json          — provider registry (credentials/config)
@@ -126,7 +127,7 @@ _check_pattern "~/"                     -F  "~/"
 # exports/<target>/ prefix checked by the regex below.
 _exports_hit="$(printf '%s\n' "$LISTING" \
     | grep -F "exports/" \
-    | grep -Ev "^\.?/?exports/(codex|agy|cursor)(/|$)" \
+    | grep -Ev "^\.?/?exports/(codex|agy|cursor|pi)(/|$)" \
     | head -n1 || true)"
 if [[ -n "$_exports_hit" ]]; then
     _audit_fail "exports/ (non-legacy path)" "$_exports_hit"

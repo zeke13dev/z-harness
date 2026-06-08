@@ -1,10 +1,4 @@
----
-description: "Export z-harness commands/agents/skills/personas to Cursor / Codex / Antigravity (agy) / pi."
-argument-hint: "[--target=<cursor|codex|agy|pi|all>] [--include=personas]"
-runtime: c1
-driver_features_required: []
-unsupported_driver_behavior: explicit_gate
----
+# /z-export
 
 You are running **z-harness `/z-export`**.
 
@@ -32,7 +26,7 @@ python3 scripts/export-common.py --self-test
 
 Read `$ARGUMENTS`. Look for `--target=<value>` and `--include=<value>`.
 
-Valid `--target` values: `cursor`, `codex`, `agy`, `pi`, `all`.
+Valid `--target` values: `cursor`, `codex`, `agy`, `all`.
 
 Default (no `--target` flag): `all`.
 
@@ -43,7 +37,7 @@ Default (no `--include` flag): include personas automatically (personas are alwa
 If an unrecognized `--target` value is given, immediately print:
 
 ```
-[z-export] error: --target must be one of: cursor, codex, agy, pi, all
+[z-export] error: --target must be one of: cursor, codex, agy, all
 ```
 
 and exit nonzero. Do not proceed.
@@ -52,10 +46,7 @@ Build the target list:
 - `cursor` → `["cursor"]`
 - `codex` → `["codex"]`
 - `agy` → `["agy"]`
-- `pi` → `["pi"]`
-- `all` → `["cursor", "codex", "agy", "pi"]`
-
-> **pi note:** the `pi` target (`scripts/export-pi.py`) emits a richer tree than the others — executable subagent files under `exports/pi/agents/`, prompts with `Agent()`/`Skill()` call sites rewritten to subagent-tool hints, and the vendored subagent extension. pi-only assets live in `scripts/pi_assets/`. The `pi` target has **no persona export** — skip it in Phase 2b (there is no `runtime/drivers/pi/persona_export.py`).
+- `all` → `["cursor", "codex", "agy"]`
 
 ## Phase 2 — Run per-target export scripts
 
@@ -93,7 +84,7 @@ For each target:
 
 After the legacy export script for each target completes (regardless of its exit code), export all persona files found under `personas/builtin/` and `personas/user/` (if present) using the per-target `persona_export.py` module.
 
-For each target **except `pi`** (which has no `persona_export.py` module — skip it here), run:
+For each target, run:
 
 ```bash
 python3 - <<'EOF'
