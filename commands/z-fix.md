@@ -72,6 +72,17 @@ This command is for **targeted fixes with a known diagnosis**. If at any phase y
    ' "$VERSION_BLOB" "<arguments>")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" fix_run_start "$START_PAYLOAD"
    ```
+
+   **Run Brief init (immediately after `fix_run_start`).** Registry: `/z-fix`, profile `full`, artifact `FIX.md`.
+   ```bash
+   CURRENT_ARCHIVE_DIR="$Z_HARNESS_PLAN_DIR/archive/$RUN"
+   RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+   FIX_INTENT="$(python3 -c 'import json,sys; t=json.loads(sys.argv[1]).get("task","").strip(); print(("Fix: "+t)[:240] if t else "Fix known diagnosis")' "$START_PAYLOAD")"
+   bash "$RB_SH" init --run "$RUN" --command /z-fix --slug "$Z_HARNESS_SLUG" --profile full --intent "$FIX_INTENT"
+   export RUN_BRIEF_PROFILE=full
+   export RUN_BRIEF_ARTIFACT="$Z_HARNESS_PLAN_DIR/FIX.md"
+   export RUN_BRIEF_ARTIFACT_FALLBACKS=""
+   ```
 6. Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
 7. Initialize `REVIEW_CYCLES=0` counter (used in Phase 9 post-mortem trigger).
 8. If `docs/llm/INDEX.json` exists → note it. Phase 1 will dispatch `doc-fetcher` (Haiku). Do NOT read INDEX.json or per-concept JSONs from main thread.
@@ -85,7 +96,7 @@ At any phase, if you discover:
 - **Cross-module / cross-crate impact** (the fix touches multiple modules, public APIs, wire formats, or schemas)
 - **The user explicitly says** "this might be bigger than I thought"
 
-→ STOP. Write `$Z_HARNESS_PLAN_DIR/escalation.md` describing what you found. Push-notify: "Scope grew past fix-mode thresholds. Recommend `/z-plan <task>`." Do not proceed to implementation.
+→ STOP. Write `$Z_HARNESS_PLAN_DIR/escalation.md` describing what you found. Do not proceed to implementation. Per **Run Brief — halt finalize** with reason `scope grew past fix-mode thresholds`, log `fix_run_end` with `{status: "escalated"}`, then exit.
 
 ## Phase 0 — Wrong-tool gate (NON-SKIPPABLE)
 
@@ -98,7 +109,7 @@ Before any exploration, ask via `AskUserQuestion`:
 > - `no — recommend /z-debug` (will exit)
 > - `modify hypothesis — let me refine it first` (free-text follow-up, then loop back to this question)
 
-If user picks **no** → output one line: "Root cause unknown — run `/z-debug <symptom>` to start a hypothesis-driven investigation." Then log `fix_run_end` with `{status: "wrong_tool"}` and exit. Do not continue.
+If user picks **no** → output one line: "Root cause unknown — run `/z-debug <symptom>` to start a hypothesis-driven investigation." Then run **Run Brief — halt finalize** with reason `wrong tool — no hypothesis`, log `fix_run_end` with `{status: "wrong_tool"}`, and exit. Do not continue.
 
 This gate is non-skippable even if the user passed an argument. A symptom description alone is not a hypothesis.
 
@@ -182,7 +193,7 @@ Present a brief synthesis (3-5 bullets) via `AskUserQuestion`:
 
 For any flagged shortcut: separate explicit approval via `AskUserQuestion` (default to robust if not approved).
 
-If user picks **Abandon** → write nothing more; log `fix_run_end` with `{status: "abandoned"}`; exit.
+If user picks **Abandon** → write nothing more; run **Run Brief — halt finalize** with reason `user abandoned fix`, log `fix_run_end` with `{status: "abandoned"}`, and exit.
 
 ## Phase 6 — Write FIX.md
 
@@ -245,14 +256,12 @@ The orchestrator (you, in main thread) reads the files listed in FIX.md "Files t
 4. No new public surface beyond what FIX.md describes.
 5. No stale docstrings / comments left behind.
 
-If you applied any fix from the checklist, note it in the user-facing summary later.
+If you applied any fix from the checklist, reflect it in the run-brief outcome when material.
 
 **Mid-implementation scope growth — halt, do not continue.** If you discover mid-edit that the change needs more files than FIX.md anticipated, OR a new non-obvious decision surfaces, STOP immediately. Do NOT offer to continue or spawn a subagent — auto-bail is non-negotiable:
 
 1. Write `$Z_HARNESS_PLAN_DIR/escalation.md` describing what you found (which new files or decisions surfaced and why they exceed fix-mode thresholds).
-2. Log `fix_run_end` with `{status: "escalated"}`.
-3. Push-notify: "Scope grew past fix-mode thresholds mid-implementation. Recommend `/z-plan <task>`."
-4. Exit. The user must restart with `/z-plan`.
+2. Run **Run Brief — halt finalize** with reason `scope grew mid-implementation`, log `fix_run_end` with `{status: "escalated"}`, and exit. The user must restart with `/z-plan`.
 
 Hard limit: if you find yourself touching >7 files inline, halt regardless — that's no longer a fix-mode change.
 
@@ -336,16 +345,55 @@ If user picks **no** → skip; nothing written.
 ## Phase 10 — Finalize
 
 1. Update FIX.md `Status:` to `shipped` and check off the acceptance boxes you verified.
-2. Mark the run done:
+2. **Run Brief finalize (registry Phase 10).** Set registry artifact env, pre-seed outcome/status/next, then include the shared fragment before `fix_run_end`. Chat and push text are rendered from `run-brief.json` only — do not author independent completion prose.
+
+   Build `$NEXT_JSON` from FIX.md: when **Docs touched** is non-empty, use `{"label":"Refresh affected docs","command":"/z-maintain-docs"}`; otherwise `{"label":"Done — no follow-up required","command":null}`.
+
+   ```bash
+   CURRENT_ARCHIVE_DIR="$Z_HARNESS_PLAN_DIR/archive/$RUN"
+   export RUN_BRIEF_PROFILE="full"
+   export RUN_BRIEF_ARTIFACT="$Z_HARNESS_PLAN_DIR/FIX.md"
+   export RUN_BRIEF_ARTIFACT_FALLBACKS=""
+   export RUN_BRIEF_ARTIFACT="${RUN_BRIEF_ARTIFACT:-}"
+   export RUN_BRIEF_ARTIFACT_FALLBACKS="${RUN_BRIEF_ARTIFACT_FALLBACKS:-}"
+
+   RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+   bash "$RB_SH" set-section --run "$RUN" --section outcome \
+     --value "Fix shipped. ${N_FILES} files changed; review passed (${REVIEW_CYCLES} review cycle(s))."
+   bash "$RB_SH" set-section --run "$RUN" --section status --value "shipped"
+   NEXT_JSON_FILE="$(mktemp -t z-rb-next.XXXXXX.json)"
+   printf '%s\n' "$NEXT_JSON" > "$NEXT_JSON_FILE"
+   bash "$RB_SH" set-section --run "$RUN" --section next --json "$NEXT_JSON_FILE"
+   rm -f "$NEXT_JSON_FILE"
+   ```
+
+   <!-- include: commands/_fragments/run-brief-finalize.md -->
+
+3. Mark the run done (after brief `--require` gate):
    ```bash
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" fix_run_end \
      "$(printf '{"status":"shipped","files_changed":%d,"review_cycles":%d,"postmortem_written":%s}' \
         "$N_FILES" "$REVIEW_CYCLES" "$POSTMORTEM_WRITTEN")"
    ```
    Where `$POSTMORTEM_WRITTEN` is `true` or `false`.
-3. Push-notify (if policy != `off`): "Fix complete. <N> files changed; review passed (<N> blockers/<M> majors resolved across <REVIEW_CYCLES> cycle(s))."
-4. **If FIX.md "Docs touched" is non-empty**, suggest: "Run `/z-maintain-docs --audit` to refresh affected concepts."
-5. Brief summary to user (3-5 sentences): what changed, what the reviewer flagged, what's next.
+
+## Run Brief — halt finalize
+
+Before logging `fix_run_end` on any terminal halt after `run-brief.sh init`. Substitute `<reason>` in the outcome line. When `FIX.md` is missing, the shared fragment auto-downgrades to **lite** (Intent + Outcome + Next).
+
+```bash
+CURRENT_ARCHIVE_DIR="$Z_HARNESS_PLAN_DIR/archive/$RUN"
+export RUN_BRIEF_PROFILE=full
+export RUN_BRIEF_ARTIFACT="${Z_HARNESS_PLAN_DIR}/FIX.md"
+export RUN_BRIEF_ARTIFACT_FALLBACKS=""
+RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+bash "$RB_SH" set-section --run "$RUN" --section outcome --value "Halted: <reason>"
+bash "$RB_SH" set-section --run "$RUN" --section next --json /dev/stdin <<'JSON'
+{"label": "Review fix status and retry or escalate", "command": null}
+JSON
+```
+
+<!-- include: commands/_fragments/run-brief-finalize.md -->
 
 ## Hard rules
 

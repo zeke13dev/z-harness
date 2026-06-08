@@ -87,7 +87,44 @@ jq -r 'select(.subagent_model != null) | [.subagent_model, (.subagent_input_toke
 
 Tells you the haiku/sonnet/opus split. Verifies that the v2 default-to-Sonnet change is actually taking effect.
 
-## Phase 4 — Recent halts
+## Phase 4 — Coordination event tallies
+
+Tally wait/lease/coordination events for the run. Filter by `run_id` if one is resolved (slug → run_id lookup via `active-plan-registry.py list --json`); otherwise tally across all events in `$METRICS`.
+
+```bash
+jq -r '
+  select(.kind | test("^(wait_timeout|wait_started|wait_cleared|wait_interrupted|lease_claimed|lease_released|coordination_warning)$"))
+  | .kind
+' "$METRICS" \
+  | sort | uniq -c | sort -rn \
+  | awk '{ printf "  %-28s %d\n", $2, $1 }'
+```
+
+Display as:
+
+```
+Coordination events:
+  lease_claimed                3
+  lease_released               2
+  wait_started                 1
+  wait_cleared                 1
+  wait_timeout                 0
+  wait_interrupted             0
+  coordination_warning         0
+```
+
+Always show all seven event kinds in the output, even if their count is zero (makes it visually obvious nothing was skipped). Use `0` for absent events. Event meanings:
+- `lease_claimed` — a `claim` call persisted new `held_paths` to the registry
+- `lease_released` — a `release` call removed paths from `held_paths`
+- `wait_started` — `wait-for` began parking (a peer held a contended path)
+- `wait_cleared` — `wait-for` unblocked successfully (peer released / deregistered)
+- `wait_timeout` — budget/timeout expired before target cleared (LOUD — warrants investigation)
+- `wait_interrupted` — SIGINT/SIGTERM received during a `wait-for` park loop
+- `coordination_warning` — a task wrote an undeclared path that a live peer had leased (F5 backstop; advisory; emitted by the write-set validation step in z-implement-all §5.5 / z-implement-next Phase 2.5)
+
+If `$METRICS` is absent, print `Coordination events: (no metrics file)`.
+
+## Phase 4c — Recent halts
 
 ```bash
 jq -c 'select(.kind == "task_halt" or .kind == "decision_gate" or .kind == "task_security_warn" or .kind == "review_agent_failed" or .kind == "review_agent_malformed")' "$METRICS" \
@@ -96,7 +133,7 @@ jq -c 'select(.kind == "task_halt" or .kind == "decision_gate" or .kind == "task
 
 Display last 10 halts with their reasons.
 
-## Phase 4b — Recent memory-review activity
+## Phase 4d — Recent memory-review activity
 
 ```bash
 jq -c 'select(.kind == "review_agent_call")' "$METRICS" | tail -10
@@ -106,7 +143,7 @@ Output format per line: `<ts> review-agent <parent_command>: candidates=<N> acce
 
 Where `<input>` and `<output>` come from the event's `subagent_input_tokens` / `subagent_output_tokens` fields.
 
-## Phase 4c — Cost-gate decisions
+## Phase 4e — Cost-gate decisions
 
 ```bash
 jq -r 'select(.kind == "cost_gate_decision") | [.command, .choice, (.estimated_tokens // "n/a")] | @tsv' "$METRICS" \

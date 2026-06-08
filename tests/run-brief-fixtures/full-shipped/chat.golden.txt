@@ -1,0 +1,16 @@
+INTENT:
+Plan a unified run brief receipt for all major z-commands
+
+APPROACH:
+- Define JSON schema contract and command registry
+- Implement run-brief.sh and render-run-brief.py
+- Wire shared finalize fragment into eleven registry commands
+
+DECISIONS:
+  rollout_scope → full_11_commands
+
+OUTCOME:
+SPEC, PLAN, and TASKS written; ready for /z-implement-all
+
+NEXT:
+Run /z-implement-all

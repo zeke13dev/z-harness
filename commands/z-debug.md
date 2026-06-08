@@ -39,6 +39,17 @@ $ARGUMENTS
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" debug_run_start "$START_PAYLOAD"
    ```
 
+   **Run Brief init (immediately after `debug_run_start`).** Registry: `/z-debug`, profile `full`, artifact `DEBUG.md`.
+   ```bash
+   CURRENT_ARCHIVE_DIR="$Z_HARNESS_PLAN_DIR/archive/$RUN"
+   RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+   DEBUG_INTENT="$(python3 -c 'import json,sys; s=json.loads(sys.argv[1]).get("symptom","").strip(); print(("Debug: "+s)[:240] if s else "Debug unknown root cause")' "$START_PAYLOAD")"
+   bash "$RB_SH" init --run "$RUN" --command /z-debug --slug "$Z_HARNESS_SLUG" --profile full --intent "$DEBUG_INTENT"
+   export RUN_BRIEF_PROFILE=full
+   export RUN_BRIEF_ARTIFACT="$Z_HARNESS_PLAN_DIR/DEBUG.md"
+   export RUN_BRIEF_ARTIFACT_FALLBACKS=""
+   ```
+
    **Active-plan registration (immediately after debug_run_start).** Register this run in the shared registry. Graduated failure policy — never silent-continue on failure:
    ```bash
    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" register \
@@ -54,7 +65,7 @@ $ARGUMENTS
      "$(printf '{"op":"register","run_id":"%s","rc":%d}' "$RUN" "$REG_RC")"
    ```
 
-   **FINALIZE_STATUS rule:** On any run-ending halt after `REG_RC == 0`, set `FINALIZE_STATUS=aborted` + `deregister --status aborted`. On normal completion (Phase 10 shipped or abandoned branches), deregister with `complete`. If register failed, do NOT deregister.
+   **FINALIZE_STATUS rule:** On any run-ending halt after `REG_RC == 0`, run **Run Brief — halt finalize** (below), set `FINALIZE_STATUS=aborted`, then `deregister --status aborted`. On normal completion (Phase 10 shipped or abandoned branches), deregister with `complete`. If register failed, do NOT deregister.
 
    **Kernel path resolution (once per run, immediately after debug_run_start):**
    ```bash
@@ -98,12 +109,7 @@ If at any phase you discover that the root cause / fix requires any of:
 - **Architectural change**
 - **New public surface** / new wire format / new schema
 
-→ STOP. Write `$Z_HARNESS_PLAN_DIR/escalation.md` documenting findings so far. Push-notify: "Debug requires architectural change — recommend `/z-plan` to design properly." Do not improvise a sprawling fix. Per the FINALIZE_STATUS rule, set `FINALIZE_STATUS=aborted` and deregister before exiting:
-```bash
-FINALIZE_STATUS=aborted
-python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-  --run-id "$RUN" --status aborted 2>/dev/null || true
-```
+→ STOP. Write `$Z_HARNESS_PLAN_DIR/escalation.md` documenting findings so far. Do not improvise a sprawling fix. Per the FINALIZE_STATUS rule, run **Run Brief — halt finalize** with reason `architectural change — recommend /z-plan`, then deregister before exiting.
 
 The old `>5 files touched` trigger is **dropped** — `/z-debug` is the heavy path, larger localized fixes are expected. Cycle cap is enforced separately in Phase 6 (soft warning at 3, hard halt at 6).
 
@@ -116,12 +122,7 @@ The old `>5 files touched` trigger is **dropped** — `/z-debug` is the heavy pa
 **"Do you already have a concrete hypothesis for what's causing this?"**
 
 - **"no — proceed with /z-debug"** (default) — continue to Phase 1.
-- **"yes — recommend /z-fix"** — exit with one-line recommendation: "You already have a diagnosis. Run `/z-fix <symptom>` for the lightweight fix-with-known-cause flow." Do not proceed. Per the FINALIZE_STATUS rule, set `FINALIZE_STATUS=aborted` and deregister before exiting (this halt occurs after a successful register):
-  ```bash
-  FINALIZE_STATUS=aborted
-  python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-    --run-id "$RUN" --status aborted 2>/dev/null || true
-  ```
+- **"yes — recommend /z-fix"** — exit with one-line recommendation: "You already have a diagnosis. Run `/z-fix <symptom>` for the lightweight fix-with-known-cause flow." Do not proceed. Per the FINALIZE_STATUS rule, run **Run Brief — halt finalize** with reason `wrong tool — user has diagnosis`, then deregister before exiting (this halt occurs after a successful register).
 
 This gate is mandatory. If the user picks "yes," exit cleanly even if `$ARGUMENTS` was non-empty.
 
@@ -638,12 +639,7 @@ For the current cycle (start at cycle 1):
      Silent omission is forbidden. -->
 - **Hard cycle cap: 5.** If cycle 6 would be needed, halt and `AskUserQuestion`:
   - `continue (override cap)` — explicit user override required to enter cycle 6+.
-  - `bail to /z-plan` — write `escalation.md`, recommend `/z-plan`. Per the FINALIZE_STATUS rule, set `FINALIZE_STATUS=aborted` and deregister before exiting:
-    ```bash
-    FINALIZE_STATUS=aborted
-    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-      --run-id "$RUN" --status aborted 2>/dev/null || true
-    ```
+  - `bail to /z-plan` — write `escalation.md`, recommend `/z-plan`. Per the FINALIZE_STATUS rule, run **Run Brief — halt finalize** with reason `cycle cap — bailed to /z-plan`, then deregister before exiting.
   - `abandon` — log `debug_run_end {status: "abandoned"}` and stop (the abandoned finalize branch in Phase 10 handles deregister).
 - **Pool collapse (all eliminated, no `very_high` survivor):** optionally spawn a **Round 3 generation pass**.
 
@@ -907,25 +903,63 @@ Push-notify: "Post-mortem ready: `$Z_HARNESS_PLAN_DIR/DEBUG.md` Post-mortem sect
 [[ -n "${Z_HARNESS_PLAN_DIR:-}" ]] && rm -f "$Z_HARNESS_PLAN_DIR/.notify-dedup-session"
 ```
 
+Set run-brief env and host sections **before** the shared fragment (classify may be `unknown` until `debug_run_end`):
+
+```bash
+CURRENT_ARCHIVE_DIR="$Z_HARNESS_PLAN_DIR/archive/$RUN"
+export RUN_BRIEF_PROFILE=full
+export RUN_BRIEF_ARTIFACT="$Z_HARNESS_PLAN_DIR/DEBUG.md"
+export RUN_BRIEF_ARTIFACT_FALLBACKS=""
+RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+RB_PY="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-run-brief.py"
+```
+
 ### Branch: `status: shipped` (fix was applied and post-mortem written)
 
-1. Log:
-   ```bash
-   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" debug_run_end \
-     "$(printf '{"command":"z-debug","status":"shipped","hypothesis_cycles":%d,"total_hypotheses_generated":%d,"action_items":%d,"postmortem_written":true}' "$CYCLES" "$N_HYPOTHESES" "$N_ACTIONS")"
-   ```
-2. Push-notify if policy != `off`: "Debug complete. Root cause: <one-line, H<NNN>>. DEBUG.md in `$Z_HARNESS_PLAN_DIR/`."
+```bash
+bash "$RB_SH" set-section --run "$RUN" --section outcome \
+  --value "Debug complete. Root cause: ${ROOT_CAUSE_LINE}. Fix shipped; ${N_ACTIONS} post-mortem action item(s)."
+bash "$RB_SH" set-section --run "$RUN" --section status --value "shipped"
+NEXT_JSON_FILE="$(mktemp -t z-rb-next.XXXXXX.json)"
+if [[ "$N_ACTIONS" -gt 0 ]]; then
+  printf '%s\n' '{"label":"Review DEBUG.md action items","command":null}' > "$NEXT_JSON_FILE"
+else
+  printf '%s\n' '{"label":"Done — no follow-up required","command":null}' > "$NEXT_JSON_FILE"
+fi
+bash "$RB_SH" set-section --run "$RUN" --section next --json "$NEXT_JSON_FILE"
+rm -f "$NEXT_JSON_FILE"
+```
 
-3. **Memory review:** After logging `debug_run_end` with `status: shipped`, invoke `bash scripts/run-memory-review.sh "$RUN" "debug"` and parse its stdout with `mapfile`. On `STATUS: skipped`, the helper has already emitted the terminal event; honor the D11 push-notify policy (push-notify once per `(slug, skip_reason)` for `skipped_broken_context` states, deduped via `.notify-dedup-session`). On `STATUS: ready`, dispatch the review-agent with `parent_command: debug`, `debug_md_path` from line 5 (the path to DEBUG.md), `spec_path` from line 3 (may be empty), `cumulative_diff_path` from line 2, and `tags_path` from line 4. Run the sequential AskUserQuestion loop (hard cap 3 candidates) with source `incident:debug-<slug>-<RUN>`. Emit exactly one `memory_review_terminal` event per invocation: the helper emits it on skip paths; the orchestrator emits it after the user-gate loop for `ran_empty` and `needs_user` paths. See `skills/z-debug/SKILL.md` Phase 10 for the full step-by-step procedure.
-4. **Deregister this run** (best-effort, non-fatal):
-   ```bash
-   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-     --run-id "$RUN" --status "complete" || true   # CLI self-logs registry_error on failure
-   ```
+<!-- include: commands/_fragments/run-brief-finalize.md -->
+
+Log (after brief `--require` gate):
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" debug_run_end \
+  "$(printf '{"command":"z-debug","status":"shipped","hypothesis_cycles":%d,"total_hypotheses_generated":%d,"action_items":%d,"postmortem_written":true}' "$CYCLES" "$N_HYPOTHESES" "$N_ACTIONS")"
+```
+
+**Memory review:** After logging `debug_run_end` with `status: shipped`, invoke `bash scripts/run-memory-review.sh "$RUN" "debug"` and parse its stdout with `mapfile`. On `STATUS: skipped`, the helper has already emitted the terminal event; honor the D11 push-notify policy (push-notify once per `(slug, skip_reason)` for `skipped_broken_context` states, deduped via `.notify-dedup-session`). On `STATUS: ready`, dispatch the review-agent with `parent_command: debug`, `debug_md_path` from line 5 (the path to DEBUG.md), `spec_path` from line 3 (may be empty), `cumulative_diff_path` from line 2, and `tags_path` from line 4. Run the sequential AskUserQuestion loop (hard cap 3 candidates) with source `incident:debug-<slug>-<RUN>`. Emit exactly one `memory_review_terminal` event per invocation: the helper emits it on skip paths; the orchestrator emits it after the user-gate loop for `ran_empty` and `needs_user` paths. See `skills/z-debug/SKILL.md` Phase 10 for the full step-by-step procedure.
+
+**Deregister this run** (best-effort, non-fatal). Per the FINALIZE_STATUS rule: normal completion deregisters with `complete` only when brief `--require` passed.
+```bash
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+  --run-id "$RUN" --status "${FINALIZE_STATUS:-complete}" || true   # CLI self-logs registry_error on failure
+```
 
 ### Branch: `status: abandoned` (debug was inconclusive — no fix shipped)
 
-Log:
+```bash
+bash "$RB_SH" set-section --run "$RUN" --section outcome \
+  --value "Debug inconclusive after ${CYCLES} hypothesis cycle(s); no fix shipped."
+bash "$RB_SH" set-section --run "$RUN" --section status --value "aborted"
+bash "$RB_SH" set-section --run "$RUN" --section next --json /dev/stdin <<'JSON'
+{"label": "Retry /z-debug or escalate via /z-plan", "command": null}
+JSON
+```
+
+<!-- include: commands/_fragments/run-brief-finalize.md -->
+
+Log (after brief `--require` gate):
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" debug_run_end \
   "$(printf '{"command":"z-debug","status":"abandoned","hypothesis_cycles":%d,"total_hypotheses_generated":%d}' "$CYCLES" "$N_HYPOTHESES")"
@@ -934,10 +968,34 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 **Deregister this run** (best-effort, non-fatal):
 ```bash
 python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-  --run-id "$RUN" --status "complete" || true   # CLI self-logs registry_error on failure
+  --run-id "$RUN" --status "${FINALIZE_STATUS:-complete}" || true   # CLI self-logs registry_error on failure
 ```
 
 Do NOT invoke `run-memory-review.sh` on the abandoned branch. No memory-review telemetry is emitted for inconclusive debug sessions.
+
+## Run Brief — halt finalize
+
+Before `deregister --status aborted` on any halt after `run-brief.sh init` (unless register failed — no deregister). Substitute `<reason>` in the outcome line. When `DEBUG.md` is missing, the shared fragment auto-downgrades to **lite** (Intent + Outcome + Next).
+
+```bash
+CURRENT_ARCHIVE_DIR="$Z_HARNESS_PLAN_DIR/archive/$RUN"
+export RUN_BRIEF_PROFILE=full
+export RUN_BRIEF_ARTIFACT="$Z_HARNESS_PLAN_DIR/DEBUG.md"
+export RUN_BRIEF_ARTIFACT_FALLBACKS=""
+RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+bash "$RB_SH" set-section --run "$RUN" --section outcome --value "Halted: <reason>"
+bash "$RB_SH" set-section --run "$RUN" --section next --json /dev/stdin <<'JSON'
+{"label": "Review debug status and retry or escalate", "command": null}
+JSON
+```
+
+<!-- include: commands/_fragments/run-brief-finalize.md -->
+
+```bash
+FINALIZE_STATUS=aborted
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+  --run-id "$RUN" --status aborted 2>/dev/null || true
+```
 
 ## Artifacts produced
 

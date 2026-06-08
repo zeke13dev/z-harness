@@ -1,0 +1,347 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://z-harness/schemas/run-brief-contract.json",
+  "title": "RunBriefContract",
+  "description": "JSON Schema contract for archive/$RUN/run-brief.json (run_brief artifact) and docs/llm/run-brief-registry.json (command registry). Draft 2020-12.",
+  "$ref": "#/$defs/run_brief",
+  "$defs": {
+    "decision": {
+      "type": "object",
+      "required": ["question_id", "chosen"],
+      "additionalProperties": false,
+      "properties": {
+        "question_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "chosen": {
+          "type": "string",
+          "minLength": 1
+        },
+        "why": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "enum": ["event", "artifact"]
+        }
+      }
+    },
+    "next_step": {
+      "type": "object",
+      "required": ["label", "command"],
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "command": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^/z-[a-z0-9-]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "sources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "intent": {
+          "type": "string",
+          "minLength": 1
+        },
+        "approach": {
+          "type": "string",
+          "minLength": 1
+        },
+        "decisions": {
+          "type": "string",
+          "minLength": 1
+        },
+        "outcome": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "approach_bullet": {
+      "type": "string",
+      "minLength": 1,
+      "not": {
+        "pattern": "(\\.[A-Za-z0-9]{1,5}:|/)"
+      },
+      "description": "Human-readable bullet; must not contain file.ext: tokens or any slash (path segments, including relative paths like docs/llm/foo.json)."
+    },
+    "run_brief": {
+      "type": "object",
+      "required": [
+        "artifact",
+        "schema_version",
+        "run_id",
+        "command",
+        "slug",
+        "profile",
+        "status",
+        "generated_at",
+        "intent",
+        "outcome",
+        "next"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "artifact": {
+          "const": "run_brief"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "command": {
+          "type": "string",
+          "pattern": "^/z-[a-z0-9-]+$"
+        },
+        "slug": {
+          "type": "string",
+          "minLength": 1
+        },
+        "profile": {
+          "type": "string",
+          "enum": ["full", "lite"]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "complete",
+            "halted",
+            "aborted",
+            "shipped",
+            "awaiting_approval"
+          ]
+        },
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "intent": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240,
+          "not": {
+            "pattern": "^/z-[a-z0-9-]+$"
+          },
+          "description": "Required, non-empty, max 240 chars; must not be the command slug alone."
+        },
+        "approach": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/approach_bullet"
+          },
+          "minItems": 1,
+          "maxItems": 4
+        },
+        "decisions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/decision"
+          }
+        },
+        "outcome": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 400
+        },
+        "next": {
+          "$ref": "#/$defs/next_step"
+        },
+        "sources": {
+          "$ref": "#/$defs/sources"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "profile": {
+                "const": "full"
+              }
+            },
+            "required": ["profile"]
+          },
+          "then": {
+            "required": ["approach", "decisions"],
+            "properties": {
+              "approach": {
+                "minItems": 1,
+                "maxItems": 4
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "profile": {
+                "const": "lite"
+              }
+            },
+            "required": ["profile"]
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": ["approach"]
+                },
+                {
+                  "required": ["decisions"]
+                }
+              ]
+            },
+            "properties": {
+              "approach": false,
+              "decisions": false
+            }
+          }
+        }
+      ],
+      "examples": [
+        {
+          "artifact": "run_brief",
+          "schema_version": 1,
+          "run_id": "20260607T120000Z-plan",
+          "command": "/z-plan",
+          "slug": "unified-command-output",
+          "profile": "full",
+          "status": "complete",
+          "generated_at": "2026-06-07T12:30:00Z",
+          "intent": "Plan a unified run brief receipt for all major z-commands",
+          "approach": [
+            "Define JSON schema contract and command registry",
+            "Implement run-brief.sh and render-run-brief.py",
+            "Wire shared finalize fragment into eleven registry commands"
+          ],
+          "decisions": [
+            {
+              "question_id": "rollout_scope",
+              "chosen": "full_11_commands",
+              "why": "User requested no pilot phase",
+              "source": "event"
+            }
+          ],
+          "outcome": "SPEC, PLAN, and TASKS written; ready for implementation",
+          "next": {
+            "label": "Run /z-implement-all",
+            "command": "/z-implement-all"
+          },
+          "sources": {
+            "intent": "run_start",
+            "approach": "PLAN.md",
+            "decisions": "events.jsonl",
+            "outcome": "run-status"
+          }
+        },
+        {
+          "artifact": "run_brief",
+          "schema_version": 1,
+          "run_id": "20260607T130000Z-do",
+          "command": "/z-do",
+          "slug": "adhoc",
+          "profile": "lite",
+          "status": "halted",
+          "generated_at": "2026-06-07T13:05:00Z",
+          "intent": "Fix typo in README heading",
+          "outcome": "Halted: scope exceeded light-mode threshold",
+          "next": {
+            "label": "Run /z-plan-light",
+            "command": "/z-plan-light"
+          },
+          "sources": {
+            "intent": "do_run_start",
+            "outcome": "run-status"
+          }
+        }
+      ]
+    },
+    "registry_command": {
+      "type": "object",
+      "required": [
+        "profile",
+        "init_after",
+        "finalize",
+        "primary_artifact"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "type": "string",
+          "enum": ["full", "lite"]
+        },
+        "init_after": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Event or phase anchor after which run-brief.sh init runs."
+        },
+        "finalize": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Phase or section name where the shared finalize fragment runs."
+        },
+        "primary_artifact": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Primary artifact path for approach/outcome derivation (may contain $RUN placeholders)."
+        },
+        "fallbacks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "artifact_env": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional env var name overriding primary artifact at finalize time."
+        },
+        "skip_brief_on": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Non-terminal exit paths that omit the brief (e.g. compaction_pause)."
+        }
+      }
+    },
+    "run_brief_registry": {
+      "type": "object",
+      "required": ["schema_version", "commands"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "commands": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^/z-[a-z0-9-]+$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/registry_command"
+          },
+          "minProperties": 1
+        }
+      }
+    }
+  }
+}

@@ -476,6 +476,93 @@ python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-reg
 For a parallel batch, emit one heartbeat per task as it flips to `[~]` (last write wins on
 `current_task`; this is opportunistic liveness, not exact tracking).
 
+### 3.5. Per-task lease lifecycle
+
+After the step-3 heartbeat and before step 4 (related-file context), claim the task's
+explicit-confidence paths, resolve any concessions via `wait-for` or an interactive menu,
+then dispatch the implementer. Release the lease on clean success; keep it on retry.
+
+**Claim the task's explicit-confidence paths (conservative — explicit only, per SPEC D3).**
+The paths are the `explicit`-confidence entries from the scope-extractor's task-level output
+(same extractor invoked in Phase 0.0 but scoped to this task via `task_id`). If the
+scope-extractor is unavailable or returns no explicit paths, `CLAIM` is empty — proceed
+directly to implementer dispatch (no-op claim).
+
+```bash
+# CLAIM = explicit-confidence paths from the task block's Files: list + scope-extractor(task=<id>)
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" claim \
+  --run-id "$RUN" --paths "$CLAIM"   # comma-separated repo-relative paths
+CLAIM_OUT="$?"   # claim exits 0 always; parse stdout JSON for conceded list
+# stdout: {"claimed":[...], "conceded":[{"path":"...","holder_run_id":"..."}]}
+```
+
+**Handle each `conceded` entry (senior peer holds the path; eldest-senior = lowest run_id).**
+When `conceded` is non-empty, pick the eldest senior (`holder_run_id` from the entry — this
+is the lowest run_id among all seniors on that path as returned by `claim`):
+
+**If `Z_HARNESS_AUTO_WAIT=1` (default):**
+
+```bash
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" wait-for \
+  --run-id "$RUN" --on "$HOLDER_RUN_ID" --paths "$CONCEDED_PATH"
+WAIT_RC=$?
+```
+
+- `WAIT_RC == 0` (peer cleared / nothing-to-wait-on) → **re-`claim` the freed path** — this
+  is a GENUINE acquisition, not a dedup no-op, because the loser never persisted the conceded
+  path (claim persists only the won set per SPEC F-claim-wonset). Re-run `claim` with the
+  conceded path(s) and add any newly-won paths to `CLAIM`. Then continue to implementer dispatch.
+- `WAIT_RC == 10` (wait timeout — LOUD, per SPEC F1):
+  <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface this timeout decision (proceed/abort) via their native channel. Silent omission is forbidden. -->
+  - **Interactive (not `Z_HARNESS_NO_ASK`):** present `AskUserQuestion`: **proceed anyway** /
+    **abort task**. If proceed → continue to dispatch (the contended path is not leased; the
+    post-dispatch write-set validation in step 6 will catch any actual collision). If abort →
+    flip `[~]` back to `[ ]`, log `task_halt {reason:"wait_timeout_abort"}`, and do NOT
+    deregister the run (the run itself continues with other tasks; only this task track is
+    aborted). *(Intentional divergence from /z-implement-next: a single-task run has no outer
+    loop, so there aborting the task aborts the run and deregisters; here the batch run keeps
+    going and the run record must not be torn down.)*
+  - **Unattended (`Z_HARNESS_NO_ASK`) — ABORT TASK (MAJOR-4).** A held-path `wait-for` exit 10
+    in unattended mode MUST abort the current task. It MUST NOT silently proceed (that recreates
+    the collision) and MUST NOT automatically re-enter `wait-for` on the same blocker within the
+    same task (a re-wait is only legitimate after the user re-queues the task). Emit a loud log,
+    flip `[~]` back to `[ ]`, and continue the outer loop with the next eligible task:
+    ```bash
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tasks/<task-id>" task_halt \
+      "$(printf '{"id":"%s","reason":"wait_timeout_unattended","holder_run_id":"%s","path":"%s"}' \
+         "<task-id>" "$HOLDER_RUN_ID" "$CONCEDED_PATH")"
+    # flip [~] → [ ]; do NOT release lease (the loser never held it); do NOT deregister the run
+    ```
+    Cross-link: see Phase 0.0 SPEC F1 — this is the same loud-abort-on-timeout invariant.
+- `WAIT_RC == 130` (SIGINT during park) → abort the task (same as unattended exit 10, except
+  propagate the SIGINT to the outer shell as appropriate).
+
+**If `Z_HARNESS_AUTO_WAIT=0` (interactive wait mode):**
+
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the conceded-path proceed/wait/abort question via their native channel. Silent omission is forbidden. -->
+Present `AskUserQuestion`: **proceed anyway** / **wait** / **abort task**.
+- **proceed** → continue to implementer dispatch (the path is not leased; F5 backstop applies).
+- **wait** → call `wait-for --run-id $RUN --on $HOLDER_RUN_ID --paths $CONCEDED_PATH` (same
+  `WAIT_RC` handling as the auto-wait path above).
+- **abort task** → flip `[~]` back to `[ ]`, log `task_halt {reason:"user_aborted_lease"}`,
+  continue outer loop. *(Intentional divergence from /z-implement-next: same reason — the
+  batch run continues, so the run record is not deregistered here.)*
+
+**Dispatch implementer** (step 4 → step 5) with the claimed paths in scope.
+
+**On clean task success (step 8):** release the lease before marking `[x]`:
+```bash
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" release \
+  --run-id "$RUN" --paths "$CLAIM"   # CLI self-logs registry_error on failure; exits 0 always
+```
+
+**On review-fail retry (step 7 → retry implementer):** KEEP the existing lease and expand it
+with any newly-touched paths before re-dispatch. Do NOT release until clean success.
+
+**On halt mid-task** (unable_to_complete, wall-clock-cap, MAX_ATTEMPTS exhaustion): do NOT
+release. Rely on `deregister` (Finalize) or `reap` (stale-timeout) to clean up `held_paths`.
+A partially-applied edit must not release the lease before the task resolves.
+
 ### 4. Identify related-file context + relevant docs (paths only — no slice extraction)
 
 **Pass paths, not slices.** Do NOT extract SPEC/PLAN slices in the main thread. Subagents have Read and will pull what they need directly from `$BASE/SPEC.md` and `$BASE/PLAN.md`. This is the single biggest token-saver in v2.

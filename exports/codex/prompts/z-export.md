@@ -4,6 +4,22 @@ You are running **z-harness `/z-export`**.
 
 This command runs one or more export adapter scripts that translate z-harness source files (`commands/`, `agents/`, `skills/`) into IDE-specific formats under `exports/`. It also exports persona files from `personas/` via the per-target `runtime/drivers/<target>/persona_export.py` modules.
 
+## Fragment includes
+
+Command, agent, and skill bodies may reference shared markdown under `commands/_fragments/` with an HTML comment marker on its own line (whole line — references inside backticks or fenced code blocks are not expanded):
+
+```markdown
+<!-- include: commands/_fragments/run-brief-finalize.md -->
+```
+
+During export, `scripts/export-common.py` inlines the fragment file at each marker (repo-relative path). Nested includes in fragment files are expanded too. Cursor/Codex/Agy copies therefore stay in sync without duplicating finalize prose.
+
+Verify expansion:
+
+```bash
+python3 scripts/export-common.py --self-test
+```
+
 ## Phase 1 — Parse arguments
 
 > **NOTE:** the legacy export scripts (`scripts/export-{cursor,codex,agy}.py`) are deprecated. They will be removed in the next minor release. Use /z-update to switch to the runtime-based workflow.

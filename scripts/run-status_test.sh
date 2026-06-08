@@ -500,6 +500,8 @@ CLEAN_KINDS=(
   "audit_run_end"
   "brainstorm_run_end"
   "debug_run_end"
+  "do_run_end"
+  "fix_run_end"
   "light_run_end"
   "plan_audit_end"
   "plan_split_run_end"

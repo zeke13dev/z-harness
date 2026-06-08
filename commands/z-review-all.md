@@ -130,6 +130,18 @@ print(json.dumps(v))
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_all_start "$START_PAYLOAD"
 ```
 
+**Run Brief init (immediately after `review_all_start`).** Registry: `/z-review-all`, profile `full`, outcome from `review_all_end` event payload at finalize.
+```bash
+export RUN="$RRUN"
+CURRENT_ARCHIVE_DIR="$BASE/archive/$RRUN"
+RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+REVIEW_INTENT="Final review of plan ${Z_HARNESS_SLUG}"
+bash "$RB_SH" init --run "$RRUN" --command /z-review-all --slug "$Z_HARNESS_SLUG" --profile full --intent "$REVIEW_INTENT"
+export RUN_BRIEF_PROFILE=full
+export RUN_BRIEF_ARTIFACT=""
+export RUN_BRIEF_ARTIFACT_FALLBACKS="$BASE/archive/$RRUN/findings.md:$BASE/REVIEW-TASKS.md"
+```
+
 **Kernel path resolution (once per run, immediately after review_all_start):**
 ```bash
 KERNEL_PATH="$(bash scripts/resolve-kernel.sh 2>/dev/null || true)"
@@ -258,6 +270,7 @@ with open(path, 'w') as f:
     exit 0
   fi
   ```
+  On this halt path (after `run-brief.sh init`), run **Run Brief — halt finalize** below (substitute `<reason>` = `no_ask_blocked on workflow.review_all_proceed`) before `exit 0`.
 
 - **If `$NOASK_RESULT == "proceed"`:** Overnight gate cleared — continue to the resolver for preference-based skip/prefill/ask:
   ```bash
@@ -554,29 +567,133 @@ rm -f "$Z_HARNESS_PLAN_DIR/.review_state.json"
 ```
 This ensures a subsequent `/z-review-all` starts a full fresh run rather than fast-forwarding into a stale Phase 4.
 
-Push-notify: "Final review complete: A=<n> drift, B=<m> spec gaps, review tasks=<t>, escalations=<k>."
+## Finalize
 
-Present a short summary to the user:
+1. **Log run end** (must precede brief outcome parse — registry `primary_artifact` is this event kind, not a file):
 
-- `findings.md` path
-- `REVIEW-TASKS.md` path, if generated
-- top blockers/escalations
-- next command: `/z-implement-all --tasks $BASE/REVIEW-TASKS.md` after deleting rejected candidates, or `/z-amend` for amendment proposals that should be applied first
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_all_end \
+  "$(printf '{"slug":"%s","drift_findings":%d,"spec_gap_findings":%d,"review_tasks":%d,"escalations":%d,"user_action":"%s"}' \
+     "$Z_HARNESS_SLUG" "<a>" "<b>" "<t>" "<k>" "<artifact_promoted|shipped_clean>")"
+```
 
-Log: `bash ${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh "$RRUN" review_all_end '{"slug":"<slug>","drift_findings":<a>,"spec_gap_findings":<b>,"review_tasks":<t>,"escalations":<k>,"user_action":"artifact_promoted"}'`.
+2. **Run Brief finalize (registry Finalize).** Parse the last `review_all_end` from `$CURRENT_ARCHIVE_DIR/events.jsonl`, set `outcome`/`next`, then include the shared fragment. Chat and push text are rendered from `run-brief.json` only — do not author independent completion prose.
 
-**Suggest `/z-improve` when this review had friction.** After logging `review_all_end`, run the nudge helper — it prints a one-line `/z-improve` suggestion only if friction signals fired (escalations, degraded consult, …) and stays silent otherwise:
+```bash
+export RUN="$RRUN"
+CURRENT_ARCHIVE_DIR="$BASE/archive/$RRUN"
+export RUN_BRIEF_PROFILE=full
+export RUN_BRIEF_ARTIFACT=""
+export RUN_BRIEF_ARTIFACT_FALLBACKS="$BASE/archive/$RRUN/findings.md:$BASE/REVIEW-TASKS.md"
+export RUN_BRIEF_ARTIFACT="${RUN_BRIEF_ARTIFACT:-}"
+export RUN_BRIEF_ARTIFACT_FALLBACKS="${RUN_BRIEF_ARTIFACT_FALLBACKS:-}"
+
+RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+RB_PY="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-run-brief.py"
+EVENTS="$CURRENT_ARCHIVE_DIR/events.jsonl"
+
+read -r _RB_DRIFT _RB_SPEC_GAPS _RB_REVIEW_TASKS _RB_ESCALATIONS _RB_USER_ACTION <<EOF
+$(python3 - "$EVENTS" <<'PY'
+import json, sys
+last = None
+with open(sys.argv[1], encoding="utf-8") as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        ev = json.loads(line)
+        if ev.get("kind") == "review_all_end":
+            last = ev
+if not last:
+    raise SystemExit("review_all_end not found in events.jsonl")
+print(
+    last.get("drift_findings", 0),
+    last.get("spec_gap_findings", 0),
+    last.get("review_tasks", 0),
+    last.get("escalations", 0),
+    last.get("user_action", "unknown"),
+)
+PY
+)
+EOF
+
+_RB_OUTCOME="${_RB_DRIFT} drift, ${_RB_SPEC_GAPS} spec gaps — ${_RB_USER_ACTION}"
+bash "$RB_SH" set-section --run "$RRUN" --section outcome --value "$_RB_OUTCOME"
+
+if [[ "${_RB_USER_ACTION}" == "shipped_clean" || "${_RB_REVIEW_TASKS:-0}" -eq 0 ]]; then
+  _RB_NEXT_LABEL="Refresh affected docs via /z-maintain-docs"
+  _RB_NEXT_CMD="/z-maintain-docs"
+else
+  _RB_NEXT_LABEL="Apply review tasks via /z-implement-all --tasks REVIEW-TASKS.md"
+  _RB_NEXT_CMD="/z-implement-all"
+fi
+bash "$RB_SH" set-section --run "$RRUN" --section next --json /dev/stdin <<JSON
+{"label": "${_RB_NEXT_LABEL}", "command": "${_RB_NEXT_CMD}"}
+JSON
+
+APPROACH_FILE=""
+if [[ -f "$BASE/archive/$RRUN/findings.md" ]]; then
+  APPROACH_FILE="$BASE/archive/$RRUN/findings.md"
+elif [[ -f "$BASE/REVIEW-TASKS.md" ]]; then
+  APPROACH_FILE="$BASE/REVIEW-TASKS.md"
+fi
+if [[ -n "$APPROACH_FILE" ]]; then
+  _RB_APPROACH_N="$(python3 -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("rrb", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+print(len(mod.extract_approach_bullets(sys.argv[2])))
+' "$RB_PY" "$APPROACH_FILE")"
+  if [[ "$_RB_APPROACH_N" -gt 0 ]]; then
+    bash "$RB_SH" set-section --run "$RRUN" --section approach --file "$APPROACH_FILE" || true
+  else
+    _RB_SEED="$CURRENT_ARCHIVE_DIR/run-brief-approach-seed.md"
+    printf '%s\n' \
+      "- Cross-LLM final review (Gemini + Codex) against cumulative diff" \
+      "- Prong A: implementation drift; Prong B: spec gaps" \
+      "- Findings promoted to REVIEW-TASKS.md when actionable" \
+      > "$_RB_SEED"
+    bash "$RB_SH" set-section --run "$RRUN" --section approach --file "$_RB_SEED" || true
+  fi
+fi
+```
+
+<!-- include: commands/_fragments/run-brief-finalize.md -->
+
+3. **Suggest `/z-improve` when this review had friction.** After finalize, run the nudge helper — it prints a one-line `/z-improve` suggestion only if friction signals fired (escalations, degraded consult, …) and stays silent otherwise:
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/improve-nudge.sh" "$RRUN" "$Z_HARNESS_SLUG"
 ```
-If it emits a line, include it verbatim in the summary to the user.
+If it emits a line, include it verbatim in the chat render follow-up to the user (after the Run Brief block).
 
-**On a clean review or after promoted tasks complete**, also push-notify the user:
+Artifact paths for the user's reference (not duplicated in push digest — push uses `render-run-brief.py --format push` from the fragment):
+
+- `$BASE/archive/$RRUN/findings.md`
+- `$BASE/REVIEW-TASKS.md`, if generated
+
+## Run Brief — halt finalize
+
+Before exit on any halt after `run-brief.sh init` (e.g. `review_halt` / `no_ask_blocked`). Substitute `<reason>` in the outcome line. Fragment auto-downgrades to **lite** when no artifact/fallback file exists.
+
+```bash
+export RUN="$RRUN"
+CURRENT_ARCHIVE_DIR="$BASE/archive/$RRUN"
+export RUN_BRIEF_PROFILE=full
+export RUN_BRIEF_ARTIFACT=""
+export RUN_BRIEF_ARTIFACT_FALLBACKS="$BASE/archive/$RRUN/findings.md:$BASE/REVIEW-TASKS.md"
+export RUN_BRIEF_ARTIFACT="${RUN_BRIEF_ARTIFACT:-}"
+export RUN_BRIEF_ARTIFACT_FALLBACKS="${RUN_BRIEF_ARTIFACT_FALLBACKS:-}"
+RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+bash "$RB_SH" set-section --run "$RRUN" --section outcome --value "Halted: <reason>"
+bash "$RB_SH" set-section --run "$RRUN" --section next --json /dev/stdin <<'JSON'
+{"label": "Clear halt condition and re-run /z-review-all", "command": "/z-review-all"}
+JSON
 ```
-Final review accepted. Recommended next:
-  /z-maintain-docs   — refresh docs/human/ and docs/llm/ for any concepts touched by this plan
-```
-The implementation is done and reviewed; the docs are what's left.
+
+<!-- include: commands/_fragments/run-brief-finalize.md -->
+
+---
 
 ## Phase 7 — Memory review (auto)
 
@@ -678,7 +795,7 @@ After **any** `AskUserQuestion` resolves, emit a normalized decision event:
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-decision.sh" \
-  "$RUN" "<question_id>" "<chosen_label>" \
+  "$RRUN" "<question_id>" "<chosen_label>" \
   --options '["<opt1>","<opt2>",...]' \
   [--tentative "<recommended_option>"]
 ```

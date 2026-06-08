@@ -7,6 +7,7 @@ other per-target adapter. Stdlib only; no third-party deps.
 
 Public surface:
   enumerate_sources(repo_root) -> dict
+  expand_includes(body, repo_root) -> str
   validate_capabilities(path) -> list[str]
   output_path_for(repo_root, target, kind, id) -> Path
 """
@@ -73,10 +74,115 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
 
 
 # ---------------------------------------------------------------------------
+# Fragment include expansion
+# ---------------------------------------------------------------------------
+
+_INCLUDE_LINE_RE = re.compile(
+    r"^[ \t]*<!--\s*include:\s*([^\s]+)\s*-->[ \t]*(?:\n|$)",
+    re.MULTILINE,
+)
+# CommonMark fenced code blocks open/close with 3+ backticks OR 3+ tildes.
+# (The naive open/close toggle below does not enforce that a closing fence
+# matches the opening run's char/length — sufficient for our doc content, which
+# never interleaves backtick and tilde fences.)
+_FENCE_LINE_RE = re.compile(r"^(?:`{3,}|~{3,}).*$", re.MULTILINE)
+
+
+def _fence_regions(text: str) -> list[tuple[int, int]]:
+    """Return ``(start, end)`` spans for content inside fenced code blocks."""
+    regions: list[tuple[int, int]] = []
+    in_fence = False
+    fence_content_start = 0
+    for match in _FENCE_LINE_RE.finditer(text):
+        if not in_fence:
+            in_fence = True
+            fence_content_start = match.end()
+        else:
+            regions.append((fence_content_start, match.start()))
+            in_fence = False
+    if in_fence:
+        regions.append((fence_content_start, len(text)))
+    return regions
+
+
+def _position_in_fence(pos: int, regions: list[tuple[int, int]]) -> bool:
+    return any(start <= pos < end for start, end in regions)
+
+
+def _next_include_match(text: str) -> re.Match[str] | None:
+    """Return the first include marker not inside a fenced code block."""
+    regions = _fence_regions(text)
+    for match in _INCLUDE_LINE_RE.finditer(text):
+        if not _position_in_fence(match.start(), regions):
+            return match
+    return None
+
+
+def expand_includes(
+    body: str,
+    repo_root: Path,
+    *,
+    _visited: frozenset[Path] | None = None,
+) -> str:
+    """Inline ``<!-- include: <repo-relative-path> -->`` markers with file bodies.
+
+    Only markers that occupy a whole line are expanded (so documentation lines
+    that mention the marker inside backticks are left alone).  Markers inside
+    fenced code blocks (`` ``` ``) are also skipped.  Paths are resolved
+    relative to *repo_root*.  Nested includes in fragment files are expanded
+    recursively.  Raises ``FileNotFoundError`` when a referenced fragment is
+    missing, ``ValueError`` when a path escapes *repo_root* or when a circular
+    include is detected.
+    """
+    repo_root = Path(repo_root).resolve()
+    visited = _visited or frozenset()
+    expanded = body
+
+    while True:
+        match = _next_include_match(expanded)
+        if not match:
+            break
+
+        rel_path = match.group(1)
+        fragment_path = (repo_root / rel_path).resolve()
+
+        try:
+            fragment_path.relative_to(repo_root)
+        except ValueError as exc:
+            raise ValueError(
+                f"Include path {rel_path!r} escapes repo root {repo_root}"
+            ) from exc
+
+        if fragment_path in visited:
+            chain = " -> ".join(
+                str(path.relative_to(repo_root)) for path in visited
+            )
+            raise ValueError(
+                f"Circular include detected: {chain} -> {rel_path}"
+            )
+
+        if not fragment_path.is_file():
+            raise FileNotFoundError(
+                f"Include fragment not found: {rel_path} "
+                f"(resolved to {fragment_path})"
+            )
+
+        fragment_body = fragment_path.read_text(encoding="utf-8")
+        nested_body = expand_includes(
+            fragment_body,
+            repo_root,
+            _visited=visited | frozenset({fragment_path}),
+        )
+        expanded = expanded[: match.start()] + nested_body + expanded[match.end() :]
+
+    return expanded
+
+
+# ---------------------------------------------------------------------------
 # Source enumeration
 # ---------------------------------------------------------------------------
 
-def _collect_entries(directory: Path) -> list[dict[str, Any]]:
+def _collect_entries(directory: Path, repo_root: Path) -> list[dict[str, Any]]:
     """Return one entry dict per markdown file in *directory* (non-recursive)."""
     if not directory.is_dir():
         return []
@@ -85,6 +191,7 @@ def _collect_entries(directory: Path) -> list[dict[str, Any]]:
     for path in sorted(directory.glob("*.md")):
         text = path.read_text(encoding="utf-8")
         frontmatter, body = _parse_frontmatter(text)
+        body = expand_includes(body, repo_root)
         entries.append(
             {
                 "id": path.stem,
@@ -96,7 +203,7 @@ def _collect_entries(directory: Path) -> list[dict[str, Any]]:
     return entries
 
 
-def _collect_skills(skills_dir: Path) -> list[dict[str, Any]]:
+def _collect_skills(skills_dir: Path, repo_root: Path) -> list[dict[str, Any]]:
     """Return one entry per skill (each skill lives in its own sub-directory
     as ``skills/<name>/SKILL.md``)."""
     if not skills_dir.is_dir():
@@ -109,6 +216,7 @@ def _collect_skills(skills_dir: Path) -> list[dict[str, Any]]:
             continue
         text = skill_file.read_text(encoding="utf-8")
         frontmatter, body = _parse_frontmatter(text)
+        body = expand_includes(body, repo_root)
         entries.append(
             {
                 "id": skill_dir.name,
@@ -134,9 +242,9 @@ def enumerate_sources(repo_root: Path) -> dict[str, list[dict[str, Any]]]:
     """
     repo_root = Path(repo_root).resolve()
     return {
-        "commands": _collect_entries(repo_root / "commands"),
-        "agents": _collect_entries(repo_root / "agents"),
-        "skills": _collect_skills(repo_root / "skills"),
+        "commands": _collect_entries(repo_root / "commands", repo_root),
+        "agents": _collect_entries(repo_root / "agents", repo_root),
+        "skills": _collect_skills(repo_root / "skills", repo_root),
     }
 
 
@@ -186,11 +294,12 @@ _TARGET_CONVENTIONS: dict[str, dict[str, str]] = {
         "agents": "prompts/{id}.md",
         "skills": "prompts/{id}.md",
     },
-    "agy": {
-        "commands": "prompts/{id}.md",
-        "agents": "prompts/{id}.md",
-        "skills": "prompts/{id}.md",
-    },
+    # NOTE: "agy" is intentionally absent. The antigravity exporter
+    # (scripts/export-agy.py) does NOT use output_path_for — it owns its own
+    # dual layout (native .agent/{workflows,rules,skills}/ AND flat prompts/),
+    # which a single output_path_for return value cannot express. Adding an
+    # "agy" entry here would be dead and misleading. Only codex/cursor route
+    # through output_path_for.
 }
 
 
@@ -199,7 +308,8 @@ def output_path_for(repo_root: Path, target: str, kind: str, id: str) -> Path:
 
     Args:
         repo_root: Absolute path to the repository root.
-        target: Export target name — one of ``cursor``, ``codex``, ``agy``.
+        target: Export target name — one of ``cursor``, ``codex``. The ``agy``
+            target is NOT handled here; export-agy.py owns its own dual layout.
         kind: Source kind — one of ``commands``, ``agents``, ``skills``.
         id: Source identifier (file stem / skill dir name).
 
@@ -209,7 +319,6 @@ def output_path_for(repo_root: Path, target: str, kind: str, id: str) -> Path:
 
         - cursor → ``exports/cursor/.cursor/rules/<id>.mdc``
         - codex  → ``exports/codex/prompts/<id>.md``
-        - agy    → ``exports/agy/prompts/<id>.md``
 
     Raises:
         ValueError: if *target* or *kind* is not recognised.
@@ -230,10 +339,151 @@ def output_path_for(repo_root: Path, target: str, kind: str, id: str) -> Path:
     return repo_root / "exports" / target / relative
 
 
+_RUN_BRIEF_FRAGMENT = "commands/_fragments/run-brief-finalize.md"
+_RUN_BRIEF_MARKER = f"<!-- include: {_RUN_BRIEF_FRAGMENT} -->"
+_RUN_BRIEF_SENTINEL = "## Run Brief finalize (shared fragment)"
+
+
+def _self_test_pass(label: str, detail: str = "") -> None:
+    suffix = f": {detail}" if detail else ""
+    print(f"PASS [{label}]{suffix}")
+
+
+def _self_test_fail(label: str, message: str) -> None:
+    import sys
+
+    print(f"FAIL [{label}]: {message}", file=sys.stderr)
+
+
+def cmd_self_test(repo_root: Path | None = None) -> int:
+    """Verify fragment include expansion against the run-brief finalize marker."""
+    import shutil
+    import sys
+    import tempfile
+
+    repo_root = (repo_root or Path(__file__).resolve().parent.parent).resolve()
+    overall_pass = True
+
+    def record_pass(label: str, detail: str = "") -> None:
+        _self_test_pass(label, detail)
+
+    def record_fail(label: str, message: str) -> None:
+        nonlocal overall_pass
+        overall_pass = False
+        _self_test_fail(label, message)
+
+    def expect_raises(label: str, exc_type: type[BaseException], fn) -> None:
+        try:
+            fn()
+        except exc_type as exc:
+            record_pass(label, str(exc))
+        except Exception as exc:
+            record_fail(
+                label,
+                f"expected {exc_type.__name__}, got {type(exc).__name__}: {exc}",
+            )
+        else:
+            record_fail(label, f"expected {exc_type.__name__}, no exception raised")
+
+    sample = f"Before marker\n{_RUN_BRIEF_MARKER}\nAfter marker\n"
+    try:
+        expanded = expand_includes(sample, repo_root)
+    except (FileNotFoundError, ValueError) as exc:
+        record_fail("run-brief-include", f"expand_includes raised {exc}")
+        return 1
+
+    if _next_include_match(expanded):
+        record_fail(
+            "run-brief-include",
+            "standalone include marker still present after expansion",
+        )
+    elif _RUN_BRIEF_SENTINEL not in expanded:
+        record_fail(
+            "run-brief-include",
+            f"expected sentinel {_RUN_BRIEF_SENTINEL!r} missing from expanded body",
+        )
+    else:
+        record_pass(
+            "run-brief-include",
+            f"{_RUN_BRIEF_FRAGMENT} inlined at marker",
+        )
+
+    fenced_sample = f"```markdown\n{_RUN_BRIEF_MARKER}\n```\n"
+    try:
+        fenced_expanded = expand_includes(fenced_sample, repo_root)
+    except (FileNotFoundError, ValueError) as exc:
+        record_fail("fence-skipped", f"expand_includes raised {exc}")
+    else:
+        if _RUN_BRIEF_MARKER not in fenced_expanded:
+            record_fail(
+                "fence-skipped",
+                "marker inside fenced code block was removed instead of preserved",
+            )
+        elif _RUN_BRIEF_SENTINEL in fenced_expanded:
+            record_fail(
+                "fence-skipped",
+                "fragment body was inlined from a fenced marker",
+            )
+        else:
+            record_pass("fence-skipped", "marker inside ``` preserved unchanged")
+
+    expect_raises(
+        "missing-fragment",
+        FileNotFoundError,
+        lambda: expand_includes(
+            "<!-- include: commands/_fragments/does-not-exist.md -->\n",
+            repo_root,
+        ),
+    )
+
+    expect_raises(
+        "path-escape",
+        ValueError,
+        lambda: expand_includes(
+            "<!-- include: ../../../etc/passwd -->\n",
+            repo_root,
+        ),
+    )
+
+    # The cycle fixtures must live UNDER repo_root (the include guard rejects
+    # paths that escape it), so a system tempdir won't do. mkdtemp gives a
+    # unique name under commands/_fragments/, avoiding a fixed-name collision
+    # between concurrent self-test runs.
+    fragments_dir = repo_root / "commands" / "_fragments"
+    cycle_dir = Path(tempfile.mkdtemp(prefix=".self-test-cycle-", dir=fragments_dir))
+    cycle_a = cycle_dir / "a.md"
+    cycle_b = cycle_dir / "b.md"
+    cycle_rel_a = f"{cycle_dir.relative_to(repo_root).as_posix()}/a.md"
+    cycle_rel_b = f"{cycle_dir.relative_to(repo_root).as_posix()}/b.md"
+    try:
+        cycle_a.write_text(f"<!-- include: {cycle_rel_b} -->\n", encoding="utf-8")
+        cycle_b.write_text(f"<!-- include: {cycle_rel_a} -->\n", encoding="utf-8")
+        expect_raises(
+            "circular-include",
+            ValueError,
+            lambda: expand_includes(
+                f"<!-- include: {cycle_rel_a} -->\n",
+                repo_root,
+            ),
+        )
+    finally:
+        shutil.rmtree(cycle_dir, ignore_errors=True)
+
+    if overall_pass:
+        print("PASS: all export-common self-tests passed")
+        return 0
+    return 1
+
+
 if __name__ == "__main__":
     import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
+        sys.exit(cmd_self_test())
+
     print(
-        "[z-harness] WARNING: export-common.py is deprecated and will be removed"
-        " in the next minor release. Use the runtime driver instead.",
+        "[z-harness] NOTE: export-common.py has no direct CLI action besides"
+        " --self-test. The module remains the live fragment-include library"
+        " imported by export-{cursor,codex,agy}.py; run /z-export to export.",
         file=sys.stderr,
     )

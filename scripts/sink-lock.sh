@@ -74,6 +74,7 @@
 #   scripts/sink-lock.sh heartbeat <lock-path>
 #   scripts/sink-lock.sh release <lock-path> [--expected-holder=X] [--expected-pid=N]
 #   scripts/sink-lock.sh check-stale <lock-path> [--ttl-seconds=N]
+#   scripts/sink-lock.sh read-holder <lock-path> [--ttl-seconds=N]
 #
 # Exit codes — acquire:
 #   0 — acquired successfully (daemon running, flock held)
@@ -93,6 +94,9 @@
 #   1 — free (no lock file or empty)
 #   2 — stale (held but PID dead or heartbeat too old; also wrong-schema JSON)
 #   3 — corrupt lock file (non-empty but JSON-unparseable); manual cleanup required
+# Exit codes — read-holder (read-only, prints JSON to stdout):
+#   0 — printed {"state":"held",...} or {"state":"free"}
+#   3 — corrupt lock file (non-empty but JSON-unparseable); manual cleanup required
 
 set -euo pipefail
 
@@ -103,6 +107,7 @@ Usage:
   scripts/sink-lock.sh heartbeat <lock-path>
   scripts/sink-lock.sh release <lock-path> [--expected-holder=X] [--expected-pid=N]
   scripts/sink-lock.sh check-stale <lock-path> [--ttl-seconds=N]
+  scripts/sink-lock.sh read-holder <lock-path> [--ttl-seconds=N]
 EOF
     exit 2
 }
@@ -1034,6 +1039,101 @@ def cmd_check_stale(lock_path: Path, ttl: int) -> int:
         os.close(hb_fd)
 
 
+def cmd_read_holder(lock_path: Path, ttl: int) -> int:
+    """Print a JSON snapshot of the current lock holder to stdout; exit 0 or 3.
+
+    Takes LOCK_SH on the .hb.lock sentinel (same discipline as check-stale) and
+    reads the holder record via read_lock_json().
+
+    Prints to stdout:
+      {"state":"held", "holder": ..., "pid": ..., "started_at": ...,
+       "last_heartbeat": ..., "heartbeat_age_s": N, "stale": bool}
+      — when the lock is held by a valid holder record.
+
+      {"state":"free"}
+      — when the lock file is absent, empty, or JSON null.
+
+    Wrong-schema JSON (parseable but not a valid holder record) is treated as a
+    held-but-stale lock (same as check-stale): the raw parsed dict is used to
+    populate the output as best-effort, with stale=true.  heartbeat_age_s is
+    computed as floor(now_epoch − last_heartbeat_epoch); -1 if unparseable.
+
+    Exit codes:
+      0 — printed {"state":"held",...} or {"state":"free"}
+      3 — corrupt lock content (non-empty but JSON-unparseable)
+    """
+    # Take LOCK_SH on .hb.lock — same shared-read discipline as check-stale.
+    hb_fd = _acquire_hb_lock(lock_path, shared=True)
+    try:
+        data = read_lock_json(lock_path)
+        if data is _CORRUPT:
+            print(
+                f"sink-lock: corrupt lock file '{lock_path}' — "
+                "non-empty but JSON-unparseable; manual cleanup required",
+                file=sys.stderr,
+            )
+            return 3
+        if data is None:
+            # Free: absent, empty, or explicit null
+            print(json.dumps({"state": "free"}))
+            return 0
+
+        now_epoch = int(datetime.now(timezone.utc).timestamp())
+
+        if data is _WRONG_SCHEMA:
+            # Parseable JSON but not a valid holder record — treat as stale.
+            # Emit what we can from the raw content (best-effort).
+            try:
+                raw = lock_path.read_text(encoding="utf-8").strip()
+                raw_dict = json.loads(raw)
+            except (OSError, json.JSONDecodeError):
+                raw_dict = {}
+            holder = raw_dict.get("holder", "") if isinstance(raw_dict, dict) else ""
+            pid = raw_dict.get("pid", None) if isinstance(raw_dict, dict) else None
+            started_at = raw_dict.get("started_at", "") if isinstance(raw_dict, dict) else ""
+            last_hb = raw_dict.get("last_heartbeat", "") if isinstance(raw_dict, dict) else ""
+            hb_age = -1
+            if last_hb:
+                try:
+                    hb_age = now_epoch - iso_to_epoch(last_hb)
+                except ValueError:
+                    pass
+            result = {
+                "state": "held",
+                "holder": holder,
+                "pid": pid,
+                "started_at": started_at,
+                "last_heartbeat": last_hb,
+                "heartbeat_age_s": hb_age,
+                "stale": True,
+            }
+            print(json.dumps(result))
+            return 0
+
+        # Valid holder record (dict with required fields).
+        last_hb = data.get("last_heartbeat", "")
+        hb_age = -1
+        if last_hb:
+            try:
+                hb_age = now_epoch - iso_to_epoch(last_hb)
+            except ValueError:
+                pass
+        stale = is_lock_stale(data, ttl)
+        result = {
+            "state": "held",
+            "holder": data["holder"],
+            "pid": data["pid"],
+            "started_at": data["started_at"],
+            "last_heartbeat": last_hb,
+            "heartbeat_age_s": hb_age,
+            "stale": stale,
+        }
+        print(json.dumps(result))
+        return 0
+    finally:
+        os.close(hb_fd)
+
+
 def main():
     args = sys.argv[1:]  # argv[0] is the subcommand (injected by bash)
     if not args:
@@ -1112,6 +1212,25 @@ def main():
                 print(f"sink-lock: unknown option: {arg}", file=sys.stderr)
                 sys.exit(2)
         rc = cmd_check_stale(lock_path, ttl)
+        sys.exit(rc)
+
+    elif subcommand == "read-holder":
+        if len(rest) < 1:
+            print("sink-lock read-holder: requires <lock-path>", file=sys.stderr)
+            sys.exit(2)
+        lock_path = Path(rest[0])
+        extra = rest[1:]
+        for arg in extra:
+            if arg.startswith("--ttl-seconds="):
+                try:
+                    ttl = int(arg.split("=", 1)[1])
+                except ValueError:
+                    print(f"sink-lock: invalid --ttl-seconds value: {arg}", file=sys.stderr)
+                    sys.exit(2)
+            else:
+                print(f"sink-lock: unknown option: {arg}", file=sys.stderr)
+                sys.exit(2)
+        rc = cmd_read_holder(lock_path, ttl)
         sys.exit(rc)
 
     else:

@@ -47,6 +47,16 @@ $ARGUMENTS
    ' "$VERSION_BLOB" "<arguments>" "$Z_HARNESS_SESSION_ID")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" brainstorm_run_start "$START_PAYLOAD"
    ```
+   **Run Brief init (immediately after `brainstorm_run_start`).** Registry: `/z-brainstorm`, profile `full`, artifact `BRAINSTORM.md` (`## User choice`).
+   ```bash
+   CURRENT_ARCHIVE_DIR="$Z_HARNESS_PLAN_DIR/archive/$RUN"
+   RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+   BRAINSTORM_INTENT="<topic from $ARGUMENTS — max 240 chars; not the command name alone>"
+   bash "$RB_SH" init --run "$RUN" --command /z-brainstorm --slug "$Z_HARNESS_SLUG" --profile full --intent "$BRAINSTORM_INTENT"
+   export RUN_BRIEF_PROFILE=full
+   export RUN_BRIEF_ARTIFACT="$Z_HARNESS_PLAN_DIR/BRAINSTORM.md"
+   export RUN_BRIEF_ARTIFACT_FALLBACKS=""
+   ```
 7. **Parent attribution (sub-command contract).** If `$Z_HARNESS_PARENT_RUN_ID` is set in the environment (i.e. this sub-command is being dispatched by a meta-orchestrator like `/z-research`), include `parent_run_id` and `parent_command` fields in every subsequent `log-event.sh` payload. Example:
 
    ```bash
@@ -542,8 +552,8 @@ Treat an ideator as failed if it returns an error, times out, or returns no pars
 - **2/3 fail** → halt. Use `AskUserQuestion` with options:
   - **retry** (default) — re-dispatch the failed ideators once
   - **proceed-with-1** — record the two failed members and run Phase 3 with a single framing (anti-bias check becomes "single framing — no comparison possible; flag inherent bias risk")
-  - **abandon** — write a minimal abandoned BRAINSTORM.md (frontmatter: `artifact`, `slug`, `generated_at`, `command`, `input_hash`, `ideators` with `:failed` suffix on the failed members, `ideator_models`, `status: abandoned`, `chosen_framing: abandoned`; body: a single `## Abandoned` section with one sentence of context) so `/z-plan` can detect the prior attempt, then exit.
-- **3/3 fail** → hard halt. Log `total_ideator_failure`, push-notify the user, exit. Do not write BRAINSTORM.md.
+  - **abandon** — write a minimal abandoned BRAINSTORM.md (frontmatter: `artifact`, `slug`, `generated_at`, `command`, `input_hash`, `ideators` with `:failed` suffix on the failed members, `ideator_models`, `status: abandoned`, `chosen_framing: abandoned`; body: a single `## Abandoned` section with one sentence of context) so `/z-plan` can detect the prior attempt, then run **Run Brief — halt finalize** below (substitute `<reason>` = `abandoned after ideator failures`), exit.
+- **3/3 fail** → hard halt. Log `total_ideator_failure`, run **Run Brief — halt finalize** below (substitute `<reason>` = `all three ideators failed`), exit. Do not write BRAINSTORM.md.
 
 Log every individual failure as `ideator_failed` regardless of the bucket above.
 
@@ -771,6 +781,64 @@ Branch on the user's Phase 3 choice:
 
 ### In all branches
 
+**Run Brief finalize (registry Phase 4).** Set outcome/next from the user's Phase 4 pick, pre-seed approach from `BRAINSTORM.md` when present, then include the shared fragment before `brainstorm_run_end`. Chat and push text are rendered from `run-brief.json` only — do not author independent completion prose.
+
+```bash
+CURRENT_ARCHIVE_DIR="$Z_HARNESS_PLAN_DIR/archive/$RUN"
+export RUN_BRIEF_PROFILE=full
+export RUN_BRIEF_ARTIFACT="$Z_HARNESS_PLAN_DIR/BRAINSTORM.md"
+export RUN_BRIEF_ARTIFACT_FALLBACKS=""
+export RUN_BRIEF_ARTIFACT="${RUN_BRIEF_ARTIFACT:-}"
+export RUN_BRIEF_ARTIFACT_FALLBACKS="${RUN_BRIEF_ARTIFACT_FALLBACKS:-}"
+
+RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+RB_PY="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-run-brief.py"
+
+# BS_STATUS: complete | abandoned; BS_CHOSEN_FRAMING: ideator id, "<chunk>:<framing>", restart, or abandoned
+if [[ "${BS_STATUS:-complete}" == "abandoned" ]]; then
+  _RB_OUTCOME="Brainstorm abandoned"
+  _RB_NEXT_LABEL="Re-run /z-brainstorm or proceed without a framing"
+  _RB_NEXT_CMD="/z-brainstorm"
+elif [[ "${BS_CHOSEN_FRAMING:-}" == *:* ]]; then
+  _RB_OUTCOME="Brainstorm complete (pair: ${BS_CHOSEN_FRAMING})"
+  _RB_NEXT_LABEL="Start planning via /z-plan (auto-detects BRAINSTORM.md)"
+  _RB_NEXT_CMD="/z-plan"
+else
+  _RB_OUTCOME="Brainstorm complete (framing: ${BS_CHOSEN_FRAMING:-unknown})"
+  _RB_NEXT_LABEL="Start planning via /z-plan (auto-detects BRAINSTORM.md)"
+  _RB_NEXT_CMD="/z-plan"
+fi
+
+bash "$RB_SH" set-section --run "$RUN" --section outcome --value "$_RB_OUTCOME"
+bash "$RB_SH" set-section --run "$RUN" --section next --json /dev/stdin <<JSON
+{"label": "${_RB_NEXT_LABEL}", "command": "${_RB_NEXT_CMD}"}
+JSON
+
+if [[ -f "$RUN_BRIEF_ARTIFACT" ]]; then
+  _RB_APPROACH_N="$(python3 -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("rrb", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+print(len(mod.extract_approach_bullets(sys.argv[2])))
+' "$RB_PY" "$RUN_BRIEF_ARTIFACT")"
+  if [[ "$_RB_APPROACH_N" -gt 0 ]]; then
+    bash "$RB_SH" set-section --run "$RUN" --section approach --file "$RUN_BRIEF_ARTIFACT" || true
+  else
+    _RB_SEED="$CURRENT_ARCHIVE_DIR/run-brief-approach-seed.md"
+    printf '%s\n' \
+      "- Parallel vendor-diverse ideation (Claude + Codex + Gemini)" \
+      "- Mandatory anti-bias reconciliation" \
+      "- User-selected framing in ## User choice seeds downstream /z-plan" \
+      > "$_RB_SEED"
+    bash "$RB_SH" set-section --run "$RUN" --section approach --file "$_RB_SEED" || true
+  fi
+fi
+bash "$RB_SH" set-section --run "$RUN" --section status --value "complete"
+```
+
+<!-- include: commands/_fragments/run-brief-finalize.md -->
+
 Log `brainstorm_run_end`:
 
 ```bash
@@ -779,19 +847,26 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
      "<complete|abandoned>" "<framing-or-empty>" "<N>")"
 ```
 
-Push-notify (if policy ≠ `off`) with a next-step recommendation:
+For the `brainstorm_run_end` event, serialize `chosen_framing` as `"<chunk_id>:<framing>"` (e.g. `"C1:codex"`) for HEAVY picks, or `"restart"` / `"abandoned"` for those exits.
 
+---
+
+## Run Brief — halt finalize
+
+Before exit on any halt after `run-brief.sh init` when `BRAINSTORM.md` is missing or the run aborts early (e.g. 3/3 ideator failure, 2/3 abandon). Substitute `<reason>` in the outcome line. Fragment auto-downgrades to **lite** when the artifact file is absent.
+
+```bash
+export RUN_BRIEF_PROFILE=full
+export RUN_BRIEF_ARTIFACT="${Z_HARNESS_PLAN_DIR}/BRAINSTORM.md"
+export RUN_BRIEF_ARTIFACT_FALLBACKS=""
+RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+bash "$RB_SH" set-section --run "$RUN" --section outcome --value "Halted: <reason>"
+bash "$RB_SH" set-section --run "$RUN" --section next --json /dev/stdin <<'JSON'
+{"label": "Retry /z-brainstorm or diagnose ideator failures", "command": "/z-brainstorm"}
+JSON
 ```
-Brainstorm complete (framing: <chosen>).
 
-Recommended next:
-  /z-research <question>  — (optional) map terrain before planning
-  /z-plan <task>          — start the rigorous planning pipeline; it will auto-detect BRAINSTORM.md
-```
-
-For HEAVY runs, the push notification uses the chosen pair: `Brainstorm complete (pair: C1:codex).`
-
-For the abandoned branch, the push notification just says "Brainstorm abandoned" with no next-step.
+<!-- include: commands/_fragments/run-brief-finalize.md -->
 
 ---
 

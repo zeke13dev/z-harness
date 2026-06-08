@@ -65,11 +65,19 @@ Classify the command (see "Command classification" above). Before running anythi
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/remote-sandbox-sync.sh" "<remote-host>" "<slug>" "<task-id>"
 ```
 
-The sandbox uses a **two-level layout**:
-- `<remote-host>:~/dev/qt-bot-sandbox/<slug>/base/` — shared warm base seeded once per slug on the first invocation; subsequent invocations skip the seed step.
-- `<remote-host>:~/dev/qt-bot-sandbox/<slug>/<task-id>/` — per-task overlay populated via `--link-dest=$BASE` (hard-links unchanged files from base, only copies diffs).
+**Worktree cwd-safety.** The rsync source is the git work tree of the current cwd. When the
+session runs inside a git worktree (the standard parallel-session layout —
+`../<repo>-worktrees/<slug>`), run this from a cwd inside that worktree so the right tree
+ships. If your cwd is the main checkout but the edits live in a worktree, set
+`Z_HARNESS_WORKTREE_ROOT=<worktree-abs-path>` before the sync — otherwise the unmodified main
+tree is rsynced and remote verify silently checks stale code. The script echoes
+`syncing local root: <path>` to stderr; confirm it matches the worktree you edited.
 
-`EXEC_DIR=~/dev/qt-bot-sandbox/<slug>/<task-id>`. The rsync script honors `.z-harness-rsync-exclude` (target/, .git/, data/, parquet/duckdb files, logs/, state/).
+The sandbox uses a **nested layout** — `~/dev/qt-bot-sandbox/` is the container and every ephemeral slug tree lives under its `sandbox/` subdir, so anything that lands directly in the container root (and is not `sandbox/`) is unambiguously stray:
+- `<remote-host>:~/dev/qt-bot-sandbox/sandbox/<slug>/base/` — shared warm base seeded once per slug on the first invocation; subsequent invocations skip the seed step.
+- `<remote-host>:~/dev/qt-bot-sandbox/sandbox/<slug>/<task-id>/` — per-task overlay populated via `--link-dest=$BASE` (hard-links unchanged files from base, only copies diffs).
+
+`EXEC_DIR=~/dev/qt-bot-sandbox/sandbox/<slug>/<task-id>`. The rsync script honors `.z-harness-rsync-exclude` (target/, .git/, data/, parquet/duckdb files, logs/, state/).
 
 If rsync fails — abort with `STATUS: rsync_failed`; capture rsync stderr.
 
@@ -84,7 +92,7 @@ Capture the exit code. If exit non-zero, also capture the first 80 lines of any 
 
 ### 5. Cargo clean cadence (run BEFORE step 4 if conditions met AND command is cargo)
 
-Only applicable when the verify command is `cargo …` (sandboxed). Maintain a small state file on remote: `~/dev/qt-bot-sandbox/<slug>/.build-counter`. Increment per successful build. When counter reaches 10 OR remote disk has <10 GB free (`df -BG /home | awk 'NR==2{print $4}' | tr -d 'G'`), run `cargo clean` in the sandbox before step 4, then reset counter to 0.
+Only applicable when the verify command is `cargo …` (sandboxed). Maintain a small state file on remote: `~/dev/qt-bot-sandbox/sandbox/<slug>/.build-counter`. Increment per successful build. When counter reaches 10 OR remote disk has <10 GB free (`df -BG /home | awk 'NR==2{print $4}' | tr -d 'G'`), run `cargo clean` in the sandbox before step 4, then reset counter to 0.
 
 Also: at the START of a fresh `/z-implement-all` invocation (caller-signaled via env var `Z_HARNESS_LOCAL_CARGO_CLEAN=1`), run a one-time `cargo clean` on the LOCAL checkout. This is the only local cargo work this agent does.
 
@@ -101,12 +109,12 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end 
 If the run was `needs-sandbox` and `exit_code == 0`, remove only the per-task directory:
 
 ```bash
-ssh "<remote-host>" "rm -rf ~/dev/qt-bot-sandbox/<slug>/<task-id>/"
+ssh "<remote-host>" "rm -rf ~/dev/qt-bot-sandbox/sandbox/<slug>/<task-id>/"
 ```
 
-**NEVER delete `~/dev/qt-bot-sandbox/<slug>/base/`.** The warm base is shared across all tasks in the slug and is intentionally long-lived. It is reclaimed by the next `/z-implement-all` invocation's first-invocation seed step, not per-task cleanup. Deleting it would force a full cold rsync on the next task.
+**NEVER delete `~/dev/qt-bot-sandbox/sandbox/<slug>/base/`.** The warm base is shared across all tasks in the slug and is intentionally long-lived. It is reclaimed by the next `/z-implement-all` invocation's first-invocation seed step, not per-task cleanup. Deleting it would force a full cold rsync on the next task.
 
-**Recovery note (orphaned lock):** The base-seeding step guards against concurrent runs via `mkdir ~/dev/qt-bot-sandbox/<slug>/.base.lock`. If a runner died between creating that directory and removing it, the lock persists and future invocations will timeout at 600 s. To recover: `ssh <remote-host> 'rmdir ~/dev/qt-bot-sandbox/<slug>/.base.lock'`.
+**Recovery note (orphaned lock):** The base-seeding step guards against concurrent runs via `mkdir ~/dev/qt-bot-sandbox/sandbox/<slug>/.base.lock`. If a runner died between creating that directory and removing it, the lock persists and future invocations will timeout at 600 s. To recover: `ssh <remote-host> 'rmdir ~/dev/qt-bot-sandbox/sandbox/<slug>/.base.lock'`.
 
 On failure, leave the task sandbox for debugging — the user can clean later. For `read-only-against-shared-state` runs, no cleanup needed (no sandbox was created).
 
@@ -131,7 +139,7 @@ For read-only DB/log queries that succeed, **also include the first ~50 lines of
 
 ## Hard rules
 
-- For `needs-sandbox` runs, never execute anything outside `~/dev/qt-bot-sandbox/<slug>/<task-id>/` on remote (except the cargo clean inside the same dir, and the build-counter state file under `~/dev/qt-bot-sandbox/<slug>/`).
+- For `needs-sandbox` runs, never execute anything outside `~/dev/qt-bot-sandbox/sandbox/<slug>/<task-id>/` on remote (except the cargo clean inside the same dir, and the build-counter state file under `~/dev/qt-bot-sandbox/sandbox/<slug>/`).
 - Never run `rm -rf` on anything you didn't create in step 7.
 - Never invoke build commands against the user's live working tree on remote (`~/dev/qt-bot/`). Read-only queries against logs/DBs at known paths there are fine.
 - For DB queries, the `-readonly` flag (DuckDB) or write-verb grep (Postgres) is non-negotiable — refuse rather than guess.

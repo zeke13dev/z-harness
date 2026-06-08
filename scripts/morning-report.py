@@ -160,6 +160,40 @@ def _build_chain_summary(state: dict, events: list, run_id: str) -> str:
     return "\n".join(lines)
 
 
+_NO_BRIEFS_ = "__NO_PER_STEP_BRIEFS__"
+
+
+def _build_per_step_briefs(state: dict, base_dir: str) -> str:
+    """Build ## Per-step briefs content from step run-brief.json files.
+
+    For each completed step, look for archive/<step-run-id>/run-brief.json under
+    base_dir. Returns _NO_BRIEFS_ when no brief files are found.
+    """
+    lines = []
+    for sr in state.get("step_runs", []):
+        if sr.get("status") != "complete":
+            continue
+        step_run_id = sr.get("run_id")
+        if not step_run_id:
+            continue
+        brief_path = os.path.join(base_dir, "archive", step_run_id, "run-brief.json")
+        if not os.path.isfile(brief_path):
+            continue
+        try:
+            with open(brief_path, "r", encoding="utf-8") as fh:
+                brief = json.load(fh)
+        except (json.JSONDecodeError, OSError):
+            continue
+        command = brief.get("command", "?")
+        intent = brief.get("intent", "?")
+        outcome = brief.get("outcome", "?")
+        lines.append(f"- **{command}** ({step_run_id}): {intent} → {outcome}")
+
+    if not lines:
+        return _NO_BRIEFS_
+    return "\n".join(lines)
+
+
 def _build_phase_results(state: dict) -> str:
     """Build the ## Phase results table."""
     step_runs = state.get("step_runs", [])
@@ -387,6 +421,12 @@ def generate_report(slug: str, base_dir: str, run_id: str, state: dict, events: 
     # Phase results
     sections.append("## Phase results")
     sections.append(_build_phase_results(state))
+
+    # Per-step briefs (omitted when no step has run-brief.json)
+    per_step_briefs = _build_per_step_briefs(state, base_dir)
+    if per_step_briefs != _NO_BRIEFS_:
+        sections.append("## Per-step briefs")
+        sections.append(per_step_briefs)
 
     # Unilateral decisions
     sections.append("## Unilateral decisions")

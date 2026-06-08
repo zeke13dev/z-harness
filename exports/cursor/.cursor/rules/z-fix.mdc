@@ -67,6 +67,17 @@ This command is for **targeted fixes with a known diagnosis**. If at any phase y
    ' "$VERSION_BLOB" "<arguments>")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" fix_run_start "$START_PAYLOAD"
    ```
+
+   **Run Brief init (immediately after `fix_run_start`).** Registry: `/z-fix`, profile `full`, artifact `FIX.md`.
+   ```bash
+   CURRENT_ARCHIVE_DIR="$Z_HARNESS_PLAN_DIR/archive/$RUN"
+   RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+   FIX_INTENT="$(python3 -c 'import json,sys; t=json.loads(sys.argv[1]).get("task","").strip(); print(("Fix: "+t)[:240] if t else "Fix known diagnosis")' "$START_PAYLOAD")"
+   bash "$RB_SH" init --run "$RUN" --command /z-fix --slug "$Z_HARNESS_SLUG" --profile full --intent "$FIX_INTENT"
+   export RUN_BRIEF_PROFILE=full
+   export RUN_BRIEF_ARTIFACT="$Z_HARNESS_PLAN_DIR/FIX.md"
+   export RUN_BRIEF_ARTIFACT_FALLBACKS=""
+   ```
 6. Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
 7. Initialize `REVIEW_CYCLES=0` counter (used in Phase 9 post-mortem trigger).
 8. If `docs/llm/INDEX.json` exists → note it. Phase 1 will dispatch `doc-fetcher` (Haiku). Do NOT read INDEX.json or per-concept JSONs from main thread.
@@ -80,7 +91,7 @@ At any phase, if you discover:
 - **Cross-module / cross-crate impact** (the fix touches multiple modules, public APIs, wire formats, or schemas)
 - **The user explicitly says** "this might be bigger than I thought"
 
-→ STOP. Write `$Z_HARNESS_PLAN_DIR/escalation.md` describing what you found. Push-notify: "Scope grew past fix-mode thresholds. Recommend `/z-plan <task>`." Do not proceed to implementation.
+→ STOP. Write `$Z_HARNESS_PLAN_DIR/escalation.md` describing what you found. Do not proceed to implementation. Per **Run Brief — halt finalize** with reason `scope grew past fix-mode thresholds`, log `fix_run_end` with `{status: "escalated"}`, then exit.
 
 ## Phase 0 — Wrong-tool gate (NON-SKIPPABLE)
 
@@ -93,7 +104,7 @@ Before any exploration, ask via `AskUserQuestion`:
 > - `no — recommend /z-debug` (will exit)
 > - `modify hypothesis — let me refine it first` (free-text follow-up, then loop back to this question)
 
-If user picks **no** → output one line: "Root cause unknown — run `/z-debug <symptom>` to start a hypothesis-driven investigation." Then log `fix_run_end` with `{status: "wrong_tool"}` and exit. Do not continue.
+If user picks **no** → output one line: "Root cause unknown — run `/z-debug <symptom>` to start a hypothesis-driven investigation." Then run **Run Brief — halt finalize** with reason `wrong tool — no hypothesis`, log `fix_run_end` with `{status: "wrong_tool"}`, and exit. Do not continue.
 
 This gate is non-skippable even if the user passed an argument. A symptom description alone is not a hypothesis.
 
@@ -177,7 +188,7 @@ Present a brief synthesis (3-5 bullets) via `AskUserQuestion`:
 
 For any flagged shortcut: separate explicit approval via `AskUserQuestion` (default to robust if not approved).
 
-If user picks **Abandon** → write nothing more; log `fix_run_end` with `{status: "abandoned"}`; exit.
+If user picks **Abandon** → write nothing more; run **Run Brief — halt finalize** with reason `user abandoned fix`, log `fix_run_end` with `{status: "abandoned"}`, and exit.
 
 ## Phase 6 — Write FIX.md
 
@@ -240,14 +251,12 @@ The orchestrator (you, in main thread) reads the files listed in FIX.md "Files t
 4. No new public surface beyond what FIX.md describes.
 5. No stale docstrings / comments left behind.
 
-If you applied any fix from the checklist, note it in the user-facing summary later.
+If you applied any fix from the checklist, reflect it in the run-brief outcome when material.
 
 **Mid-implementation scope growth — halt, do not continue.** If you discover mid-edit that the change needs more files than FIX.md anticipated, OR a new non-obvious decision surfaces, STOP immediately. Do NOT offer to continue or spawn a subagent — auto-bail is non-negotiable:
 
 1. Write `$Z_HARNESS_PLAN_DIR/escalation.md` describing what you found (which new files or decisions surfaced and why they exceed fix-mode thresholds).
-2. Log `fix_run_end` with `{status: "escalated"}`.
-3. Push-notify: "Scope grew past fix-mode thresholds mid-implementation. Recommend `/z-plan <task>`."
-4. Exit. The user must restart with `/z-plan`.
+2. Run **Run Brief — halt finalize** with reason `scope grew mid-implementation`, log `fix_run_end` with `{status: "escalated"}`, and exit. The user must restart with `/z-plan`.
 
 Hard limit: if you find yourself touching >7 files inline, halt regardless — that's no longer a fix-mode change.
 
@@ -269,6 +278,8 @@ Spawn the reviewer:
   prompt="task id: <slug>\ntask description: <FIX.md Approach summary>\nacceptance criteria: <FIX.md Acceptance list>\ndiff.patch path: <abs path>\nchanged files: <abs paths from FIX.md>\nrelevant_docs (paths — verify the diff didn't break invariants stated here): <paths from FIX.md Docs touched>\n$BASE: $Z_HARNESS_PLAN_DIR  (read FIX.md yourself if you need more context)"
 )
 ```
+
+When `personas.review_eval` is ON (default ON), an advisory persona reviewer also runs in parallel with the Codex reviewer above, per the [Advisory eval-reviewer shared snippet in commands/z-implement-all.md](commands/z-implement-all.md#ADVISORY-EVAL-REVIEWER). The advisory arm uses `reviewer_participant=random_arm` and is logged for telemetry only — its verdict never changes pass/fail and never triggers a retry. Only the base Codex reviewer outcome determines whether Phase 8 passes or retries.
 
 Increment `REVIEW_CYCLES` by 1.
 
@@ -329,16 +340,415 @@ If user picks **no** → skip; nothing written.
 ## Phase 10 — Finalize
 
 1. Update FIX.md `Status:` to `shipped` and check off the acceptance boxes you verified.
-2. Mark the run done:
+2. **Run Brief finalize (registry Phase 10).** Set registry artifact env, pre-seed outcome/status/next, then include the shared fragment before `fix_run_end`. Chat and push text are rendered from `run-brief.json` only — do not author independent completion prose.
+
+   Build `$NEXT_JSON` from FIX.md: when **Docs touched** is non-empty, use `{"label":"Refresh affected docs","command":"/z-maintain-docs"}`; otherwise `{"label":"Done — no follow-up required","command":null}`.
+
+   ```bash
+   CURRENT_ARCHIVE_DIR="$Z_HARNESS_PLAN_DIR/archive/$RUN"
+   export RUN_BRIEF_PROFILE="full"
+   export RUN_BRIEF_ARTIFACT="$Z_HARNESS_PLAN_DIR/FIX.md"
+   export RUN_BRIEF_ARTIFACT_FALLBACKS=""
+   export RUN_BRIEF_ARTIFACT="${RUN_BRIEF_ARTIFACT:-}"
+   export RUN_BRIEF_ARTIFACT_FALLBACKS="${RUN_BRIEF_ARTIFACT_FALLBACKS:-}"
+
+   RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+   bash "$RB_SH" set-section --run "$RUN" --section outcome \
+     --value "Fix shipped. ${N_FILES} files changed; review passed (${REVIEW_CYCLES} review cycle(s))."
+   bash "$RB_SH" set-section --run "$RUN" --section status --value "shipped"
+   NEXT_JSON_FILE="$(mktemp -t z-rb-next.XXXXXX.json)"
+   printf '%s\n' "$NEXT_JSON" > "$NEXT_JSON_FILE"
+   bash "$RB_SH" set-section --run "$RUN" --section next --json "$NEXT_JSON_FILE"
+   rm -f "$NEXT_JSON_FILE"
+   ```
+
+<!-- RUN-BRIEF-FINALIZE: shared finalize block — included via `<!-- include: commands/_fragments/run-brief-finalize.md -->` in registry commands; `/z-export` inlines this body (T007). -->
+
+## Run Brief finalize (shared fragment)
+
+Emit the terminal **Run Brief** before `deregister` / `*_run_end`. Chat and push text are **renders only** — never author completion prose independently; always render from `run-brief.json`.
+
+**Prerequisite:** `run-brief.sh init` ran earlier in this command (after the registry `init_after` anchor). `$CURRENT_ARCHIVE_DIR/run-brief.json` must exist before this block runs.
+
+### Placeholders (set by the host command before including this fragment)
+
+| Placeholder | Meaning |
+|-------------|---------|
+| `$RUN` | Run id (same value passed to `log-event.sh` and `run-brief.sh --run`) |
+| `$CURRENT_ARCHIVE_DIR` | Absolute path to `archive/$RUN/` for this command |
+| `$RUN_BRIEF_ARTIFACT` | Primary artifact for approach/outcome derivation (absolute or plan-relative path). May be empty on early halt. |
+| `$RUN_BRIEF_PROFILE` | `full` or `lite` — must match the profile passed to `init` (see `docs/llm/run-brief-registry.json`). `/z-do` uses `lite`; all other v1 registry commands use `full`. |
+| `$RUN_BRIEF_ARTIFACT_FALLBACKS` | Optional colon-separated fallback paths (same `$RUN` expansion rules as `run-brief.sh`). Example: `PLAN.md:SPEC.md`. Exported before finalize; consumed by `run-brief.sh finalize` via `RUN_BRIEF_ARTIFACT_FALLBACKS` env. |
+
+Host commands also export artifact env for finalize resolution:
+
+```bash
+export RUN_BRIEF_ARTIFACT="${RUN_BRIEF_ARTIFACT:-}"
+export RUN_BRIEF_ARTIFACT_FALLBACKS="${RUN_BRIEF_ARTIFACT_FALLBACKS:-}"
+```
+
+---
+
+### Finalize sequence (mandatory order)
+
+Run these steps **in order** at the command's registry `finalize` anchor (before `deregister` and before replacing any legacy "Brief summary" prose).
+
+#### 1. Aggregate decisions → `run-brief.json`
+
+For **`$RUN_BRIEF_PROFILE=full`** only: if `decisions` is empty or absent, aggregate from `$CURRENT_ARCHIVE_DIR/events.jsonl` and append via `run-brief.sh append-decision` (last wins per `question_id`). Skip when `decisions` already has rows (orchestrator may have appended mid-run).
+
+```bash
+RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+RB_PY="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-run-brief.py"
+BRIEF="$CURRENT_ARCHIVE_DIR/run-brief.json"
+EVENTS="$CURRENT_ARCHIVE_DIR/events.jsonl"
+
+PROFILE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("profile",""))' "$BRIEF")"
+DEC_COUNT="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("decisions") or []))' "$BRIEF")"
+
+if [[ "$PROFILE" == "full" && "$DEC_COUNT" -eq 0 && -f "$EVENTS" ]]; then
+  while IFS= read -r row; do
+    [[ -z "$row" ]] && continue
+    QID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["question_id"])' "$row")"
+    CHOSEN="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["chosen"])' "$row")"
+    WHY="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("why",""))' "$row")"
+    SRC="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("source","event"))' "$row")"
+    AD_ARGS=(--run "$RUN" --question-id "$QID" --chosen "$CHOSEN" --source "$SRC")
+    [[ -n "$WHY" ]] && AD_ARGS+=(--why "$WHY")
+    bash "$RB_SH" append-decision "${AD_ARGS[@]}"
+  done < <(python3 - "$RB_PY" "$EVENTS" <<'PY'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("render_run_brief", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+for entry in mod.aggregate_decisions(sys.argv[2]):
+    print(json.dumps(entry, ensure_ascii=False))
+PY
+)
+fi
+```
+
+Event kinds aggregated: `user_choice`, `user_override`, `plan_route_decision`, `next_step_choice` (see `render-run-brief.py`).
+
+#### 2. Derive from artifact / fallbacks
+
+Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` if still empty:
+
+```bash
+APPROACH_FILE=""
+if [[ -n "$RUN_BRIEF_ARTIFACT" && -f "$RUN_BRIEF_ARTIFACT" ]]; then
+  APPROACH_FILE="$RUN_BRIEF_ARTIFACT"
+elif [[ -n "$RUN_BRIEF_ARTIFACT_FALLBACKS" ]]; then
+  IFS=':' read -ra _RB_FB <<< "$RUN_BRIEF_ARTIFACT_FALLBACKS"
+  for _cand in "${_RB_FB[@]}"; do
+    [[ -z "$_cand" ]] && continue
+    _expanded="${_cand//\$RUN/$RUN}"
+    if [[ -f "$_expanded" ]]; then APPROACH_FILE="$_expanded"; break; fi
+  done
+fi
+
+APPROACH_COUNT="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("approach") or []))' "$BRIEF")"
+
+if [[ "$RUN_BRIEF_PROFILE" == "full" && -n "$APPROACH_FILE" && "$APPROACH_COUNT" -eq 0 ]]; then
+  _RB_EXTRACT_N="$(python3 -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("rrb", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+print(len(mod.extract_approach_bullets(sys.argv[2])))
+' "$RB_PY" "$APPROACH_FILE")"
+  if [[ "$_RB_EXTRACT_N" -gt 0 ]]; then
+    bash "$RB_SH" set-section --run "$RUN" --section approach --file "$APPROACH_FILE" || true
+  fi
+fi
+```
+
+Set **`outcome`** / **`next`** when the host command already knows them (recommended on halt paths before finalize):
+
+```bash
+# Example — host supplies halt outcome before including this fragment:
+# bash "$RB_SH" set-section --run "$RUN" --section outcome --value "Halted: <reason>"
+# bash "$RB_SH" set-section --run "$RUN" --section next --json /path/to/next.json
+```
+
+If `outcome` is still `Pending finalize`, `run-brief.sh finalize` fills it from `run-status.sh classify`.
+
+#### 3. Finalize → validate JSON + emit `run_brief_end`
+
+```bash
+bash "$RB_SH" finalize --run "$RUN"
+```
+
+`finalize` classifies terminal status (via `run-status.sh` when unset), resolves artifact/fallback env, auto-downgrades to **lite** when no artifact exists on a full-profile brief (see halt-safe below), validates against `docs/llm/run-brief-contract.json`, and emits `run_brief_end`.
+
+#### 4. Chat render → user (replaces hand-authored "Brief summary")
+
+Print rendered chat text to the user — **do not** write independent summary prose:
+
+```bash
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat
+```
+
+#### 5. Push render (when notify policy allows)
+
+```bash
+if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end)" = yes ]; then
+  PUSH_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+  PushNotification("$PUSH_BODY")
+fi
+```
+
+Push format: `{intent[:80]} · {outcome[:60]} · Next: {next.label}` (from JSON).
+
+#### 6. Hard gate — `--require` before deregister
+
+Run **after** chat/push renders, **before** `active-plan-registry.py deregister` or any terminal `FINALIZE_STATUS` handoff:
+
+```bash
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --require
+RB_REQUIRE_RC=$?
+if [[ "$RB_REQUIRE_RC" -ne 0 ]]; then
+  echo "run-brief: --require failed (missing or invalid run-brief.json)" >&2
+  FINALIZE_STATUS=aborted
+  # Do not deregister as complete — fix brief or abort run
+fi
+```
+
+On `--require` failure: set `FINALIZE_STATUS=aborted` and do not deregister with `complete`.
+
+---
+
+### Halt-safe: missing artifact → lite brief
+
+Early halt / abort paths often have **no** primary artifact (`FIX.md`, `REPORT.md`, `approach.md`, …). The brief is still **required** before deregister, but may be **lite** (Intent + Outcome + Next only — `approach` and `decisions` keys omitted).
+
+| Condition | Behavior |
+|-----------|----------|
+| `$RUN_BRIEF_PROFILE=full` and no artifact/fallback file exists at finalize | `run-brief.sh finalize` auto-downgrades to `profile: lite`, drops `approach`/`decisions` **only on halt/aborted paths** — never when status is `complete` or `shipped` |
+| `${FINALIZE_STATUS:-}` is `aborted` or classify → `halted` | Ensure `intent` (from init) + `outcome` (set-section or finalize default `"Halted before completion"`) + `next`; lite profile is valid |
+| `render-run-brief.py --require` on lite brief | Passes when intent, outcome, next validate — **does not** require approach/decisions |
+
+**Host command responsibilities on halt:**
+
+1. Still include this fragment before deregister (unless the command is on the registry `skip_brief_on` list, e.g. `/z-implement-all` `compaction_pause` only).
+2. Set a concrete `outcome` when possible: `bash "$RB_SH" set-section --run "$RUN" --section outcome --value "Halted: <reason>"`.
+3. Do not treat missing artifact as skip-brief — finalize produces lite JSON instead.
+
+---
+
+### Invariants
+
+1. Chat and push text are always rendered from `run-brief.json` — never independently authored at finalize.
+2. `--require` runs on every terminal exit that includes this fragment (complete, halted, aborted) before deregister.
+3. Empty `decisions: []` is valid for full profile when no decision events occurred.
+4. `/z-stats` is not auto-invoked here.
+5. Optional debug mirror: `Z_HARNESS_RUN_BRIEF_DEBUG=1` writes `run-brief.md` beside JSON (see `run-brief.sh finalize`).
+
+3. Mark the run done (after brief `--require` gate):
    ```bash
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" fix_run_end \
      "$(printf '{"status":"shipped","files_changed":%d,"review_cycles":%d,"postmortem_written":%s}' \
         "$N_FILES" "$REVIEW_CYCLES" "$POSTMORTEM_WRITTEN")"
    ```
    Where `$POSTMORTEM_WRITTEN` is `true` or `false`.
-3. Push-notify (if policy != `off`): "Fix complete. <N> files changed; review passed (<N> blockers/<M> majors resolved across <REVIEW_CYCLES> cycle(s))."
-4. **If FIX.md "Docs touched" is non-empty**, suggest: "Run `/z-maintain-docs --audit` to refresh affected concepts."
-5. Brief summary to user (3-5 sentences): what changed, what the reviewer flagged, what's next.
+
+## Run Brief — halt finalize
+
+Before logging `fix_run_end` on any terminal halt after `run-brief.sh init`. Substitute `<reason>` in the outcome line. When `FIX.md` is missing, the shared fragment auto-downgrades to **lite** (Intent + Outcome + Next).
+
+```bash
+CURRENT_ARCHIVE_DIR="$Z_HARNESS_PLAN_DIR/archive/$RUN"
+export RUN_BRIEF_PROFILE=full
+export RUN_BRIEF_ARTIFACT="${Z_HARNESS_PLAN_DIR}/FIX.md"
+export RUN_BRIEF_ARTIFACT_FALLBACKS=""
+RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+bash "$RB_SH" set-section --run "$RUN" --section outcome --value "Halted: <reason>"
+bash "$RB_SH" set-section --run "$RUN" --section next --json /dev/stdin <<'JSON'
+{"label": "Review fix status and retry or escalate", "command": null}
+JSON
+```
+
+<!-- RUN-BRIEF-FINALIZE: shared finalize block — included via `<!-- include: commands/_fragments/run-brief-finalize.md -->` in registry commands; `/z-export` inlines this body (T007). -->
+
+## Run Brief finalize (shared fragment)
+
+Emit the terminal **Run Brief** before `deregister` / `*_run_end`. Chat and push text are **renders only** — never author completion prose independently; always render from `run-brief.json`.
+
+**Prerequisite:** `run-brief.sh init` ran earlier in this command (after the registry `init_after` anchor). `$CURRENT_ARCHIVE_DIR/run-brief.json` must exist before this block runs.
+
+### Placeholders (set by the host command before including this fragment)
+
+| Placeholder | Meaning |
+|-------------|---------|
+| `$RUN` | Run id (same value passed to `log-event.sh` and `run-brief.sh --run`) |
+| `$CURRENT_ARCHIVE_DIR` | Absolute path to `archive/$RUN/` for this command |
+| `$RUN_BRIEF_ARTIFACT` | Primary artifact for approach/outcome derivation (absolute or plan-relative path). May be empty on early halt. |
+| `$RUN_BRIEF_PROFILE` | `full` or `lite` — must match the profile passed to `init` (see `docs/llm/run-brief-registry.json`). `/z-do` uses `lite`; all other v1 registry commands use `full`. |
+| `$RUN_BRIEF_ARTIFACT_FALLBACKS` | Optional colon-separated fallback paths (same `$RUN` expansion rules as `run-brief.sh`). Example: `PLAN.md:SPEC.md`. Exported before finalize; consumed by `run-brief.sh finalize` via `RUN_BRIEF_ARTIFACT_FALLBACKS` env. |
+
+Host commands also export artifact env for finalize resolution:
+
+```bash
+export RUN_BRIEF_ARTIFACT="${RUN_BRIEF_ARTIFACT:-}"
+export RUN_BRIEF_ARTIFACT_FALLBACKS="${RUN_BRIEF_ARTIFACT_FALLBACKS:-}"
+```
+
+---
+
+### Finalize sequence (mandatory order)
+
+Run these steps **in order** at the command's registry `finalize` anchor (before `deregister` and before replacing any legacy "Brief summary" prose).
+
+#### 1. Aggregate decisions → `run-brief.json`
+
+For **`$RUN_BRIEF_PROFILE=full`** only: if `decisions` is empty or absent, aggregate from `$CURRENT_ARCHIVE_DIR/events.jsonl` and append via `run-brief.sh append-decision` (last wins per `question_id`). Skip when `decisions` already has rows (orchestrator may have appended mid-run).
+
+```bash
+RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+RB_PY="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-run-brief.py"
+BRIEF="$CURRENT_ARCHIVE_DIR/run-brief.json"
+EVENTS="$CURRENT_ARCHIVE_DIR/events.jsonl"
+
+PROFILE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("profile",""))' "$BRIEF")"
+DEC_COUNT="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("decisions") or []))' "$BRIEF")"
+
+if [[ "$PROFILE" == "full" && "$DEC_COUNT" -eq 0 && -f "$EVENTS" ]]; then
+  while IFS= read -r row; do
+    [[ -z "$row" ]] && continue
+    QID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["question_id"])' "$row")"
+    CHOSEN="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["chosen"])' "$row")"
+    WHY="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("why",""))' "$row")"
+    SRC="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("source","event"))' "$row")"
+    AD_ARGS=(--run "$RUN" --question-id "$QID" --chosen "$CHOSEN" --source "$SRC")
+    [[ -n "$WHY" ]] && AD_ARGS+=(--why "$WHY")
+    bash "$RB_SH" append-decision "${AD_ARGS[@]}"
+  done < <(python3 - "$RB_PY" "$EVENTS" <<'PY'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("render_run_brief", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+for entry in mod.aggregate_decisions(sys.argv[2]):
+    print(json.dumps(entry, ensure_ascii=False))
+PY
+)
+fi
+```
+
+Event kinds aggregated: `user_choice`, `user_override`, `plan_route_decision`, `next_step_choice` (see `render-run-brief.py`).
+
+#### 2. Derive from artifact / fallbacks
+
+Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` if still empty:
+
+```bash
+APPROACH_FILE=""
+if [[ -n "$RUN_BRIEF_ARTIFACT" && -f "$RUN_BRIEF_ARTIFACT" ]]; then
+  APPROACH_FILE="$RUN_BRIEF_ARTIFACT"
+elif [[ -n "$RUN_BRIEF_ARTIFACT_FALLBACKS" ]]; then
+  IFS=':' read -ra _RB_FB <<< "$RUN_BRIEF_ARTIFACT_FALLBACKS"
+  for _cand in "${_RB_FB[@]}"; do
+    [[ -z "$_cand" ]] && continue
+    _expanded="${_cand//\$RUN/$RUN}"
+    if [[ -f "$_expanded" ]]; then APPROACH_FILE="$_expanded"; break; fi
+  done
+fi
+
+APPROACH_COUNT="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("approach") or []))' "$BRIEF")"
+
+if [[ "$RUN_BRIEF_PROFILE" == "full" && -n "$APPROACH_FILE" && "$APPROACH_COUNT" -eq 0 ]]; then
+  _RB_EXTRACT_N="$(python3 -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("rrb", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+print(len(mod.extract_approach_bullets(sys.argv[2])))
+' "$RB_PY" "$APPROACH_FILE")"
+  if [[ "$_RB_EXTRACT_N" -gt 0 ]]; then
+    bash "$RB_SH" set-section --run "$RUN" --section approach --file "$APPROACH_FILE" || true
+  fi
+fi
+```
+
+Set **`outcome`** / **`next`** when the host command already knows them (recommended on halt paths before finalize):
+
+```bash
+# Example — host supplies halt outcome before including this fragment:
+# bash "$RB_SH" set-section --run "$RUN" --section outcome --value "Halted: <reason>"
+# bash "$RB_SH" set-section --run "$RUN" --section next --json /path/to/next.json
+```
+
+If `outcome` is still `Pending finalize`, `run-brief.sh finalize` fills it from `run-status.sh classify`.
+
+#### 3. Finalize → validate JSON + emit `run_brief_end`
+
+```bash
+bash "$RB_SH" finalize --run "$RUN"
+```
+
+`finalize` classifies terminal status (via `run-status.sh` when unset), resolves artifact/fallback env, auto-downgrades to **lite** when no artifact exists on a full-profile brief (see halt-safe below), validates against `docs/llm/run-brief-contract.json`, and emits `run_brief_end`.
+
+#### 4. Chat render → user (replaces hand-authored "Brief summary")
+
+Print rendered chat text to the user — **do not** write independent summary prose:
+
+```bash
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat
+```
+
+#### 5. Push render (when notify policy allows)
+
+```bash
+if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end)" = yes ]; then
+  PUSH_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+  PushNotification("$PUSH_BODY")
+fi
+```
+
+Push format: `{intent[:80]} · {outcome[:60]} · Next: {next.label}` (from JSON).
+
+#### 6. Hard gate — `--require` before deregister
+
+Run **after** chat/push renders, **before** `active-plan-registry.py deregister` or any terminal `FINALIZE_STATUS` handoff:
+
+```bash
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --require
+RB_REQUIRE_RC=$?
+if [[ "$RB_REQUIRE_RC" -ne 0 ]]; then
+  echo "run-brief: --require failed (missing or invalid run-brief.json)" >&2
+  FINALIZE_STATUS=aborted
+  # Do not deregister as complete — fix brief or abort run
+fi
+```
+
+On `--require` failure: set `FINALIZE_STATUS=aborted` and do not deregister with `complete`.
+
+---
+
+### Halt-safe: missing artifact → lite brief
+
+Early halt / abort paths often have **no** primary artifact (`FIX.md`, `REPORT.md`, `approach.md`, …). The brief is still **required** before deregister, but may be **lite** (Intent + Outcome + Next only — `approach` and `decisions` keys omitted).
+
+| Condition | Behavior |
+|-----------|----------|
+| `$RUN_BRIEF_PROFILE=full` and no artifact/fallback file exists at finalize | `run-brief.sh finalize` auto-downgrades to `profile: lite`, drops `approach`/`decisions` **only on halt/aborted paths** — never when status is `complete` or `shipped` |
+| `${FINALIZE_STATUS:-}` is `aborted` or classify → `halted` | Ensure `intent` (from init) + `outcome` (set-section or finalize default `"Halted before completion"`) + `next`; lite profile is valid |
+| `render-run-brief.py --require` on lite brief | Passes when intent, outcome, next validate — **does not** require approach/decisions |
+
+**Host command responsibilities on halt:**
+
+1. Still include this fragment before deregister (unless the command is on the registry `skip_brief_on` list, e.g. `/z-implement-all` `compaction_pause` only).
+2. Set a concrete `outcome` when possible: `bash "$RB_SH" set-section --run "$RUN" --section outcome --value "Halted: <reason>"`.
+3. Do not treat missing artifact as skip-brief — finalize produces lite JSON instead.
+
+---
+
+### Invariants
+
+1. Chat and push text are always rendered from `run-brief.json` — never independently authored at finalize.
+2. `--require` runs on every terminal exit that includes this fragment (complete, halted, aborted) before deregister.
+3. Empty `decisions: []` is valid for full profile when no decision events occurred.
+4. `/z-stats` is not auto-invoked here.
+5. Optional debug mirror: `Z_HARNESS_RUN_BRIEF_DEBUG=1` writes `run-brief.md` beside JSON (see `run-brief.sh finalize`).
 
 ## Hard rules
 
@@ -360,7 +770,7 @@ Before recommending any `git reset --hard HEAD~N`, `git commit --amend`, or inte
 
 | Feature | Used | Gates |
 |---------|------|-------|
-| `subagent` | yes | Phase 1 doc-fetcher; Phase 3 consultant-primary + consultant-secondary; Phase 8 reviewer |
+| `subagent` | yes | Phase 1 doc-fetcher; Phase 3 consultant-primary + consultant-secondary; Phase 8 reviewer (base codex gate + optional advisory eval-reviewer when personas.review_eval ON) |
 | `ask_user` | yes | Empty-args question; Phase 0 wrong-tool gate; Phase 1 clarification (premise check); Phase 5 approval + shortcut approval; Phase 8 second-failure decision; Phase 9 post-mortem decision |
 | `skill_invoke` | no | — |
 

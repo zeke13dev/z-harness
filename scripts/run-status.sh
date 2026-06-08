@@ -16,7 +16,8 @@
 # Classification rules (per SPEC C6 REWRITTEN):
 #   CLEAN events (explicit allowlist):
 #     run_end, amend_run_end, audit_run_end, brainstorm_run_end,
-#     debug_run_end, light_run_end, plan_audit_end, plan_split_run_end,
+#     debug_run_end, do_run_end, fix_run_end, light_run_end, plan_audit_end,
+#     plan_split_run_end,
 #     research_run_end, review_all_end, review_end, test_plan_end,
 #     init_docs_end, maintain_docs_end, doc_update_end, cluster_planner_end
 #   HALT events (explicit allowlist):
@@ -203,7 +204,7 @@ classify_by_kind() {
   # Clean terminal event kinds (explicit allowlist)
   case "$kind" in
     run_end|amend_run_end|audit_run_end|brainstorm_run_end|\
-    debug_run_end|light_run_end|plan_audit_end|plan_split_run_end|\
+    debug_run_end|do_run_end|fix_run_end|light_run_end|plan_audit_end|plan_split_run_end|\
     research_run_end|review_all_end|review_end|test_plan_end|\
     init_docs_end|maintain_docs_end|doc_update_end|cluster_planner_end)
       echo "clean"

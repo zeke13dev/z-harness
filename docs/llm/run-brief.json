@@ -1,0 +1,78 @@
+{
+  "concept": "run-brief",
+  "last_updated": "2026-06-08",
+  "covers_spec": "unified-command-output",
+  "source_file": [
+    "docs/llm/run-brief-contract.json",
+    "docs/llm/run-brief-registry.json",
+    "docs/human/run-brief.md",
+    "scripts/run-brief.sh",
+    "scripts/render-run-brief.py",
+    "scripts/lint-run-brief.sh",
+    "commands/_fragments/run-brief-finalize.md",
+    "commands/_fragments/run-brief-halt-finalize-implement-all.md",
+    "commands/_fragments/run-brief-halt-finalize-implement-next.md"
+  ],
+  "confidence": "high",
+  "entry_points": [
+    {
+      "file": "docs/llm/run-brief-contract.json",
+      "line": 1,
+      "symbol": "run_brief",
+      "kind": "module",
+      "summary": "JSON Schema draft 2020-12 for archive/$RUN/run-brief.json; full vs lite profiles; embedded run_brief_registry $def for docs/llm/run-brief-registry.json."
+    },
+    {
+      "file": "docs/llm/run-brief-contract.json",
+      "line": 1,
+      "symbol": "run_brief_registry",
+      "kind": "module",
+      "summary": "Embedded registry schema mapping each v1 command to profile, init/finalize anchors, primary artifact, and fallbacks."
+    },
+    {
+      "file": "scripts/run-brief.sh",
+      "line": 1,
+      "symbol": "run-brief.sh",
+      "kind": "module",
+      "summary": "Subcommands init, set-section, append-decision, finalize; creates and validates run-brief.json under archive/$RUN/."
+    },
+    {
+      "file": "scripts/render-run-brief.py",
+      "line": 1,
+      "symbol": "render-run-brief.py",
+      "kind": "module",
+      "summary": "Renders run-brief.json to chat, push, or json; --require hard-gates before deregister; aggregate_decisions() reads events.jsonl."
+    },
+    {
+      "file": "commands/_fragments/run-brief-finalize.md",
+      "line": 1,
+      "symbol": "run-brief-finalize",
+      "kind": "module",
+      "summary": "Shared finalize block inlined by /z-export: aggregate decisions, derive sections, finalize, render chat/push, --require gate."
+    }
+  ],
+  "depends_on": [
+    "scripts",
+    "commands"
+  ],
+  "consumed_by": [
+    "commands"
+  ],
+  "invariants": [
+    "Chat and push text are always rendered from run-brief.json — never independently authored at finalize.",
+    "Hard gate (render-run-brief.py --require) runs before deregister on registry commands for complete/shipped paths; halted paths require minimal brief (intent + outcome).",
+    "Empty decisions array is valid for full profile.",
+    "/z-stats is NOT auto-invoked at command end.",
+    "Lite profile omits approach and decisions keys entirely; only intent, outcome, and next are required.",
+    "intent max 240 chars, must not equal the command name alone; outcome max 400 chars.",
+    "Full profile approach: 1-4 bullets with no file paths (no ext: tokens or slash path segments)."
+  ],
+  "gotchas": [
+    "Lite profile forbids approach and decisions properties — do not emit empty arrays.",
+    "Artifact missing on early halt triggers lite brief via registry fallback chain.",
+    "/z-implement-all compaction_pause exit skips the brief (non-terminal).",
+    "Export must inline commands/_fragments/run-brief-finalize.md so Cursor/Codex/agy copies stay in sync.",
+    "Z_HARNESS_RUN_BRIEF_DEBUG=1 optionally writes a human-readable RUN_BRIEF.md mirror for local debugging (not default)."
+  ],
+  "memories": []
+}

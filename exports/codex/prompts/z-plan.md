@@ -16,7 +16,7 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
 ## Setup
 
 1. **Derive a plan slug** from the task: short kebab-case, 2-4 words (e.g. "expand sports ML" → `expand-sports-ml`; "add rate limit middleware" → `add-rate-limit`). Run `bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" all_plan_slugs` to check for existing slug names across both new and legacy plan layouts. If a matching slug dir is found:
-   - **Precontext-only slug dir** (only `MAP.md`, `BRAINSTORM.md`, and/or `RESEARCH.md` present, no `PLAN.md`/`SPEC.md`/`TASKS.md`): treat as continuation — no prompt, proceed with the existing slug.
+   - **Precontext-only slug dir** (only `MAP.md`, `BRAINSTORM.md`, `RESEARCH.md`, and/or `GRILL.md` present, no `PLAN.md`/`SPEC.md`/`TASKS.md`): treat as continuation — no prompt, proceed with the existing slug.
    <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug-collision
         confirmation question via their native channel. Silent omission is forbidden. -->
    - **Finished-plan slug dir** (`PLAN.md` or `TASKS.md` exists): **collision — prompt the user via `AskUserQuestion` to confirm or choose a different slug. This collision check runs UNCONDITIONALLY and is never bypassed by the resolver below.**
@@ -60,9 +60,10 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
 2. **Export** `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")` for all subsequent shell calls and subagents — this is what namespaces every output path.
 3. Pick a run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`
 4. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`
-4a. Export run id and resolve config:
+4a. Export run id, archive dir, and resolve config:
     ```bash
     export Z_HARNESS_RUN="$RUN"
+    export CURRENT_ARCHIVE_DIR="$Z_HARNESS_PLAN_DIR/archive/$RUN"
     eval "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" export-env)"
     ```
 5. Capture the z-harness plugin version stamp and log the run start (merge version blob into the payload):
@@ -71,12 +72,19 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh")"
    START_PAYLOAD="$(python3 -c '
    import json, sys
-   v = json.loads(sys.argv[1]); v["task"] = sys.argv[2]; v["session_id"] = sys.argv[3]
+   v = json.loads(sys.argv[1]); v["task"] = sys.argv[2]; v["session_id"] = sys.argv[3]; v["command"] = "z-plan"
    print(json.dumps(v))
    ' "$VERSION_BLOB" "<arguments>" "$Z_HARNESS_SESSION_ID")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_start "$START_PAYLOAD"
    ```
    Output lands under `$Z_HARNESS_PLAN_DIR/archive/$RUN/events.jsonl` (log-event.sh honors `Z_HARNESS_SLUG`).
+
+   **Run Brief init (immediately after run_start).** Create `run-brief.json` for this run (registry profile `full`):
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh" init \
+     --run "$RUN" --command /z-plan --slug "$Z_HARNESS_SLUG" --profile full \
+     --intent "<task description from $ARGUMENTS — max 240 chars; not the command name alone>"
+   ```
 
    **Active-plan registration (immediately after run_start).** Register this run in the shared registry. Graduated failure policy — never silent-continue on failure:
    ```bash
@@ -98,7 +106,7 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
    ```
 
    **FINALIZE_STATUS / deregister rule (single source of truth for the entire run):**
-   > On any run-ending halt that occurs AFTER `REG_RC == 0` (a record exists), set `FINALIZE_STATUS=aborted` and call `deregister --status aborted` before exiting. On normal completion (Phase 9), leave `FINALIZE_STATUS` unset so Phase 9 deregisters with `complete`. If register failed (no record), do NOT deregister anywhere.
+   > On any run-ending halt that occurs AFTER `REG_RC == 0` (a record exists), execute **Run Brief — halt finalize** (below) before `deregister --status aborted`. On normal completion (Phase 9), leave `FINALIZE_STATUS` unset so Phase 9 deregisters with `complete`. If register failed (no record), do NOT deregister anywhere.
 
    **Kernel path resolution (once per run, immediately after run_start):**
    ```bash
@@ -117,29 +125,26 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
 6. Notification policy is resolved from config via the `export-env` step above. See `docs/human/config.md` for knob details (`notify.level`).
 7. **Check for LLM-tier docs.** If `docs/llm/INDEX.json` exists in the repo root, **do NOT read it from main thread.** Note its existence; Phase 1 will dispatch `doc-fetcher` (Haiku) to read it. The orchestrator never reads `docs/llm/*.json` directly — that's what burns main-thread context unnecessarily. If INDEX.json does not exist, note that fact and continue (Phase 1 will Explore without doc grounding).
 8. **Docs-freshness scan (inline, no gate yet).** Initialize signals before scanning: `docs_stale=false`, `research_stale=false`, `map_stale=false`; `stale_concepts_list=[]`; `stale_research_citations=[]`; `stale_map_citations=[]`. If `docs/llm/INDEX.json` exists, compute staleness across all its entries. This step is the ONE exception where main thread reads INDEX.json — but only the lightweight metadata fields (`slug`, `last_updated`, `source_file`), never the per-concept `<slug>.json` bodies. For each concept entry, compare `entry.last_updated` against the max `mtime` of its `source_files`. A concept is **stale** if any source file's mtime exceeds `last_updated`. Compute `stale_pct = stale_concepts / total_concepts`. The threshold is `$Z_HARNESS_DOC_STALENESS_THRESHOLD` (default `20` — meaning 20 percent). Record signal: `docs_stale = (stale_pct >= threshold)`. Also record `stale_concepts_list` (list of stale concept slugs) for display. **Do not present any AskUserQuestion here** — the gate fires below in step 9c after all three signals are collected.
-9. **Pre-plan artifact detection.** Check `$Z_HARNESS_PLAN_DIR/` for `MAP.md`, `BRAINSTORM.md`, and `RESEARCH.md`.
+9. **Pre-plan artifact detection.** Check `$Z_HARNESS_PLAN_DIR/` for `MAP.md`, `BRAINSTORM.md`, `RESEARCH.md`, and `GRILL.md`.
 
     **RESEARCH.md artifact_kind dispatch:** If `RESEARCH.md` exists, read its frontmatter `artifact_kind` and `status` fields first to determine the precontext mode:
 
     - **`artifact_kind: approach_synthesis` + `status: complete`** → **one-way gate active.** RESEARCH.md is canonical precontext. Skip MAP.md + BRAINSTORM.md injection entirely. Phase 1 uses matrix-based skip rules (see Phase 1 — RESEARCH.md one-way gate shortcut).
     - **`artifact_kind: map`** (legacy old-RESEARCH.md not yet renamed) → treat as a MAP.md artifact: apply freshness check (same regex/mtime logic as MAP.md below), then proceed with component-file injection (MAP.md + BRAINSTORM.md mode). Log `legacy_map_artifact_detected`.
     - **No `artifact_kind` field** → treat as legacy MAP.md artifact per above (component-file injection). Log `legacy_map_artifact_detected`.
-    - **`status: incomplete`** → halt. Emit `precontext_research_incomplete`. Recommend re-running `/z-research` before proceeding. Per the FINALIZE_STATUS rule, set `FINALIZE_STATUS=aborted` and deregister before exiting:
-      ```bash
-      FINALIZE_STATUS=aborted
-      python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-        --run-id "$RUN" --status aborted 2>/dev/null || true
-      ```
+    - **`status: incomplete`** → halt. Emit `precontext_research_incomplete`. Recommend re-running `/z-research` before proceeding. Per the FINALIZE_STATUS rule, execute **Run Brief — halt finalize** (below) with reason `RESEARCH.md status incomplete`.
 
     **Freshness scan — RESEARCH.md (inline, no gate yet)** (when one-way gate is active): parse all file citations using regex `/[A-Za-z0-9_./-]+\.(rs|py|md|ts|tsx|js|jsx|json|toml|yaml|yml|sh|sql)(:\d+(-\d+)?)?/`. Also scan for extensionless allowlist filenames (`Makefile`, `Dockerfile`). Markdown link form `[label](path:line)` — extract the inner path. For each cited path: follow symlinks; compare mtime to `generated_at`; for line-ranges, use min-line mtime (any modification within range → stale). Record signal: `research_stale = true` if any citation is stale. Deleted-source detection: if a cited file no longer exists, emit a `precontext_source_deleted` event (higher severity than stale-mtime) and set `research_stale = true`. Parse failure: emit `precontext_freshness_check_failed`, continue (fail-open). **Do not present any AskUserQuestion here** — the gate fires below in step 9c.
 
     **Freshness scan — MAP.md (inline, no gate yet)** (when one-way gate is inactive and MAP.md exists or RESEARCH.md is treated as MAP.md): parse all file citations using the same regex `/[A-Za-z0-9_./-]+\.(rs|py|md|ts|tsx|js|jsx|json|toml|yaml|yml|sh|sql)(:\d+(-\d+)?)?/` and extensionless allowlist (`Makefile`, `Dockerfile`). Markdown link form `[label](path:line)` — extract the inner path. For each cited path: follow symlinks; compare mtime to the MAP.md frontmatter `generated_at`; for line-ranges, use min-line mtime. Record signal: `map_stale = true` if any citation is stale. Deleted-source detection: emit `precontext_source_deleted` and set `map_stale = true`. Parse failure: emit `precontext_freshness_check_failed`, continue (fail-open). **Do not present any AskUserQuestion here** — the gate fires below in step 9c.
 
+    **GRILL.md detection** (independent of one-way gate): If `$Z_HARNESS_PLAN_DIR/GRILL.md` exists and its frontmatter `status` is `complete`, note it as a GRILL.md precontext artifact. Read its `## Sharpened problem`, `## Killed scope`, and `## Open branches` sections for injection in Phase 0 and Phase 2. GRILL.md is a problem-statement artifact, not a code-citation artifact — **no mandatory freshness gate applies.** Exception: if GRILL.md contains file citations (matched by the same regex `/[A-Za-z0-9_./-]+\.(rs|py|md|ts|tsx|js|jsx|json|toml|yaml|yml|sh|sql)(:\d+(-\d+)?)?/`), apply the same freshness scan as MAP.md (mtime vs GRILL.md frontmatter `generated_at`) and fold any stale signal into `map_stale` for the 9c gate. If `status` is not `complete`, skip GRILL.md silently (treat as absent).
+
 <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the consolidated
      freshness gate covering docs / research / map staleness — all three signals
      merged into one AskUser call — when stale_pct >= threshold or any precontext
      citation is stale or deleted. Silent omission is forbidden. -->
-    **9c. Consolidated freshness gate.** After all three scans complete, if `docs_stale OR research_stale OR map_stale` is true:
+    **9c. Consolidated freshness gate.** After all four scans complete (docs, RESEARCH.md, MAP.md, GRILL.md citations if present), if `docs_stale OR research_stale OR map_stale` is true:
 
     Write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md`. Build up `reason_codes` from all true signals (e.g. `["docs_stale"]`, `["research_stale"]`, `["map_stale"]`, or a combination). Set `to_command` to the most specific single remedy (prefer `"/z-maintain-docs"` if docs_stale, `"/z-research"` if only research_stale, `"/z-map"` if only map_stale; if multiple signals fire, use `"/z-maintain-docs"` and list all remedies in the route-decision.md body).
 
@@ -161,22 +166,12 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
 
     On user choice:
 
-    - **Re-run remedy**: Update `route-decision.md` with the user's chosen remedy. Emit `plan_route_decision` with `from_command: "/z-plan"`, `to_command: <the computed remedy from the route-decision.md step above>`, `route_class: "contextual"`, `reason_codes` (built above), `signals.docs_stale_or_drifted: <docs_stale>`, `signals.research_stale: <research_stale>`, `signals.map_stale: <map_stale>`, `confidence: "high"`, `classifier_used: false`, `artifact_path`, `route_chain`, and `user_choice: <the user's selection>`. Halt. Do not auto-invoke the remedy command. Per the FINALIZE_STATUS rule, set `FINALIZE_STATUS=aborted` and deregister before exiting:
-      ```bash
-      FINALIZE_STATUS=aborted
-      python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-        --run-id "$RUN" --status aborted 2>/dev/null || true
-      ```
+    - **Re-run remedy**: Update `route-decision.md` with the user's chosen remedy. Emit `plan_route_decision` with `from_command: "/z-plan"`, `to_command: <the computed remedy from the route-decision.md step above>`, `route_class: "contextual"`, `reason_codes` (built above), `signals.docs_stale_or_drifted: <docs_stale>`, `signals.research_stale: <research_stale>`, `signals.map_stale: <map_stale>`, `confidence: "high"`, `classifier_used: false`, `artifact_path`, `route_chain`, and `user_choice: <the user's selection>`. Halt. Do not auto-invoke the remedy command. Per the FINALIZE_STATUS rule, execute **Run Brief — halt finalize** (below) with reason `stale inputs — user chose remedy re-run`.
     - **Proceed with all stale**: Update `route-decision.md` to record "no remedy command selected — user accepted stale inputs." Emit `plan_route_decision` with `from_command: "/z-plan"`, **`to_command: null`** (omit the field or set it to `null` explicitly — `/z-stats` must be able to distinguish this from a real remedy), `route_class: "contextual"`, `reason_codes` (built above), `signals.docs_stale_or_drifted: <docs_stale>`, `signals.research_stale: <research_stale>`, `signals.map_stale: <map_stale>`, `confidence: "high"`, `classifier_used: false`, `artifact_path`, `route_chain`, and `user_choice: "proceed_with_all_stale"`. Then:
       - If `docs_stale=true`: emit a `doc_drift_acknowledged` event. Phase 1 still uses INDEX.json but the orchestrator should weight `relevant_concepts` hints less and verify against current code more aggressively.
       - If `research_stale=true OR map_stale=true` (regardless of `docs_stale`): emit a `precontext_freshness_acknowledged` event with `sources: ["research"]` / `["map"]` / `["research","map"]` as applicable.
       - Continue to Phase 1.
-    - **Abandon**: Emit `plan_route_decision` with `from_command: "/z-plan"`, `to_command: null`, `route_class: "contextual"`, `reason_codes` (built above), `signals.docs_stale_or_drifted: <docs_stale>`, `signals.research_stale: <research_stale>`, `signals.map_stale: <map_stale>`, `confidence: "high"`, `classifier_used: false`, `artifact_path`, `route_chain`, and `user_choice: "abandon"`. Halt. Per the FINALIZE_STATUS rule, set `FINALIZE_STATUS=aborted` and deregister before exiting:
-      ```bash
-      FINALIZE_STATUS=aborted
-      python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-        --run-id "$RUN" --status aborted 2>/dev/null || true
-      ```
+    - **Abandon**: Emit `plan_route_decision` with `from_command: "/z-plan"`, `to_command: null`, `route_class: "contextual"`, `reason_codes` (built above), `signals.docs_stale_or_drifted: <docs_stale>`, `signals.research_stale: <research_stale>`, `signals.map_stale: <map_stale>`, `confidence: "high"`, `classifier_used: false`, `artifact_path`, `route_chain`, and `user_choice: "abandon"`. Halt. Per the FINALIZE_STATUS rule, execute **Run Brief — halt finalize** (below) with reason `stale inputs — user abandoned`.
 
     If **no** signal fired, skip the gate entirely — no AskUserQuestion, no route-decision.md write.
 
@@ -210,26 +205,28 @@ Call `planning-router` only when deterministic signals conflict and no hard thre
 
 If routing, write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md`, emit `plan_route_decision` with `from_command`, `to_command`, `route_class`, `reason_codes`, `signals`, `confidence`, `classifier_used`, `artifact_path`, `route_chain`, and `user_choice`, then present the AskUser handoff gate: switch, continue when not forbidden by a hard threshold, or abandon. Do not execute the next command automatically.
 
-When the user chooses **switch** or **abandon** at the route gate (ending the run), per the FINALIZE_STATUS rule set `FINALIZE_STATUS=aborted` and deregister before exiting:
-```bash
-FINALIZE_STATUS=aborted
-python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-  --run-id "$RUN" --status aborted 2>/dev/null || true
-```
+When the user chooses **switch** or **abandon** at the route gate (ending the run), per the FINALIZE_STATUS rule execute **Run Brief — halt finalize** (below) with reason `route gate — user chose switch or abandon`.
 
 Loop prevention: carry forward the latest route chain; if it already has two entries, ask the user to choose explicitly. If the recommended target equals the immediate prior `from_command`, block ping-pong, show both route artifacts, and ask the user to choose. If the user continues here, log the override and do not route again for the same `reason_codes` in this run.
 <!-- PLAN_ROUTE_CHECK_END -->
 
 ## Phase telemetry (mandatory)
 
-At the **start** of each phase (0 through 9), record `T0=$(date +%s%3N)`. At the **end**, log:
+At the **start** of each phase (0 through 9), stamp the start time to disk:
 
 ```bash
-WALL_MS=$(( $(date +%s%3N) - T0 ))
-bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" phase_end \
-  "$(printf '{"phase":%d,"name":"%s","wall_ms":%d,"user_wait_ms":%d}' \
-     <phase-num> "<phase-name>" "$WALL_MS" "$USER_WAIT_MS_THIS_PHASE")"
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" begin "$RUN" <phase-num>
 ```
+
+At the **end**, emit `phase_end` — `log-phase.sh finish` reads the stamped start time back, computes `wall_ms`, and logs it:
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" finish "$RUN" <phase-num> \
+  "$(printf '{"phase":%d,"name":"%s","user_wait_ms":%d}' \
+     <phase-num> "<phase-name>" "$USER_WAIT_MS_THIS_PHASE")"
+```
+
+> **Why disk, not a shell variable:** each `Bash` tool call runs in a fresh shell, so a `T0=$(date +%s%3N)` recorded at phase start is gone by the phase-end call in a later turn — `WALL_MS` then resolves against an empty `T0` and logs `wall_ms: 0`. `log-phase.sh begin/finish` persists the start stamp under `${TMPDIR:-/tmp}/z-harness-phase/`, keyed by run+phase, so timing survives across tool-call boundaries. `finish` fail-opens (emits nothing) if `begin` was skipped, rather than logging a bogus zero.
 
 If the phase blocks on `AskUserQuestion`, separately log `user_wait_start` / `user_wait_end` events bracketing that wait so we can compute machine-time vs human-wait-time after the fact:
 
@@ -248,6 +245,7 @@ This makes post-run analysis trivial: total run time = sum(`phase_end.wall_ms`);
 **Do not take the prompt's premises for granted.** If precontext artifacts were detected in Setup step 9, **inject their content here** as input to the premise check:
 - **One-way gate active** (`artifact_kind: approach_synthesis`): inject RESEARCH.md content only (core hypothesis, approach decision matrix summary, mechanical rank-ordering). Do not inject MAP.md or BRAINSTORM.md.
 - **One-way gate inactive** (component-file mode): inject MAP.md (or legacy RESEARCH.md treated as MAP.md) findings and BRAINSTORM.md chosen framing.
+- **GRILL.md present** (independent of one-way gate): inject `## Sharpened problem` and `## Killed scope` sections as additional premise framing. Do not re-inject information already covered by MAP.md or RESEARCH.md — if both are present, treat GRILL.md as supplementary problem-statement context only (scope constraints, sharpened goal statement) and skip duplicating factual findings already present in MAP/RESEARCH.
 
 Do not re-derive context already covered by these artifacts.
 
@@ -343,6 +341,8 @@ Output a one-paragraph context summary. Checkpoint: `phase1-context.md`.
 
 ## Phase 2 — Decisions document
 
+**GRILL.md decision seeding** (if GRILL.md was detected in Setup step 9): before enumerating decisions, inject the `## Open branches` section from GRILL.md as candidate pre-seeded decisions. Each open branch is a decision the user already identified as unresolved — promote it to a decision entry in `decisions.md` with its stated options (if any) and a note that it originated from GRILL.md. Do not duplicate decisions already surfaced by MAP.md or RESEARCH.md analysis; if the same branch appears in multiple artifacts, merge them into one decision entry.
+
 Enumerate **every** decision needed to implement this task — obvious and non-obvious. Write `$Z_HARNESS_PLAN_DIR/archive/$RUN/decisions.md`. For each decision:
 
 - **Decision:** what's being decided
@@ -398,16 +398,12 @@ fi
 ```
 
 Branch on `$RESULT_DECISIONS`:
-- `halt`: emit `plan_halt` event and exit cleanly — do NOT invoke `AskUserQuestion`. A subsequent `/z-plan` resume re-enters at Phase 2.5. Per the FINALIZE_STATUS rule, deregister before exiting (this halt occurs after a successful register):
+- `halt`: emit `plan_halt` event — do NOT invoke `AskUserQuestion`. A subsequent `/z-plan` resume re-enters at Phase 2.5. Then execute **Run Brief — halt finalize** (below) with reason `no_ask_blocked on workflow.plan_decisions_approval` and exit (this halt occurs after a successful register):
   ```bash
   if [[ "$RESULT_DECISIONS" == "halt" ]]; then
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "${RUN:-z-plan}" plan_halt \
       "$(printf '{"reason":"no_ask_blocked","question_id":"workflow.plan_decisions_approval","rule_id":"no_ask_halt"}')"
     echo "halt: no_ask_blocked on workflow.plan_decisions_approval" >&2
-    FINALIZE_STATUS=aborted
-    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-      --run-id "$RUN" --status aborted 2>/dev/null || true
-    exit 0
   fi
   ```
 - `skip`: accept the decisions doc silently — no AskUserQuestion. Emit `askuser_skipped` event with `{question_id: "workflow.plan_decisions_approval", source: "$SOURCE_DECISIONS"}` and proceed to Phase 3.
@@ -447,10 +443,11 @@ If `CONSULT_PROVIDER == "none"` (i.e. `Z_HARNESS_CONSULT=off`):
 
 **Fixed 5-panel dispatch (when `experiment.persona_rotation` is on):**
 
-Check the config knob:
+Check the config knobs:
 
 ```bash
 PERSONA_ROTATION="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get experiment.persona_rotation 2>/dev/null || echo "true")"
+CRITIQUE_PANEL="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get personas.critique_panel 2>/dev/null || echo "true")"
 ```
 
 If `PERSONA_ROTATION == "true"`, use the **fixed 5-member panel** instead of the standard 2-consultant dispatch. The panel arms are fixed (no randomness):
@@ -463,23 +460,71 @@ If `PERSONA_ROTATION == "true"`, use the **fixed 5-member panel** instead of the
 | composer | `cursor` | `composer-2.5` (via `--model composer-2.5`) |
 | codex-5.5 | `codex-cli` | (default) |
 
-Before dispatching each panel member, emit a `persona_bound` event logging the arm:
+**Persona draw for Phase 3 (when `PERSONA_ROTATION == "true"` AND `CRITIQUE_PANEL == "true"`):**
+
+Draw 5 distinct `consultant` personas and positionally bind one body to each arm. Graceful underflow: if the pool has fewer than 5 members, the shorter array is returned (exit 0) and remaining arm slots stay vanilla. This draw is independent of Phase 7's draw — each phase draws its own set.
 
 ```bash
+PLUGIN="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+
+# Vanilla defaults: empty prefix + "<none>" name for all five arms.
+# Knob-OFF leaves these untouched — dispatch is byte-identical to the pre-feature behavior.
+P3_GEMINI_PREFIX="";     P3_GEMINI_NAME="<none>";     P3_GEMINI_DRAW=""
+P3_SONNET_PREFIX="";     P3_SONNET_NAME="<none>";     P3_SONNET_DRAW=""
+P3_GROK_PREFIX="";       P3_GROK_NAME="<none>";       P3_GROK_DRAW=""
+P3_COMPOSER_PREFIX="";   P3_COMPOSER_NAME="<none>";   P3_COMPOSER_DRAW=""
+P3_CODEX_PREFIX="";      P3_CODEX_NAME="<none>";      P3_CODEX_DRAW=""
+
+if [ "$PERSONA_ROTATION" = "true" ] && [ "$CRITIQUE_PANEL" = "true" ]; then
+  # Draw up to 5 distinct consultant personas. Underflow → shorter array, exit 0.
+  P3_PERSONAS_JSON=$(python3 "$PLUGIN/scripts/resolve-persona.py" random-distinct-for-role consultant --count=5 \
+    2>>"$Z_HARNESS_PLAN_DIR/archive/$RUN/persona-draw.log")
+
+  # Positional bind: [0]->gemini, [1]->claude-sonnet, [2]->grok, [3]->composer, [4]->codex-5.5
+  for slot in 0:GEMINI 1:SONNET 2:GROK 3:COMPOSER 4:CODEX; do
+    idx="${slot%%:*}"; who="${slot##*:}"
+    name=$(echo "$P3_PERSONAS_JSON" | jq -r ".[$idx].persona // \"\"")
+    path=$(echo "$P3_PERSONAS_JSON" | jq -r ".[$idx].persona_body_path // \"\"")
+    draw=$(echo "$P3_PERSONAS_JSON" | jq -r ".[$idx].draw_id // \"\"")
+    [ -z "$name" ] && continue   # underflow slot — leave vanilla
+    # prepend_persona(path, "") strips frontmatter and returns "<body>\n\n".
+    prefix=$(python3 "$PLUGIN/runtime/dispatch/persona_prompt.py" "$path" "" 2>/dev/null | head -c 4096)
+    eval "P3_${who}_NAME=\$name"
+    eval "P3_${who}_PREFIX=\$prefix"
+    eval "P3_${who}_DRAW=\$draw"
+  done
+fi
+```
+
+Before dispatching each panel member, emit a `persona_bound` event logging the arm. When a persona was drawn for the arm, include `persona_id`, `draw_id`, and use `selection_source=random_role_pool_distinct`; vanilla arms retain `selection_source=fixed_panel`:
+
+```bash
+declare -A P3_ARM_NAMES=([gemini]="$P3_GEMINI_NAME" [claude-sonnet]="$P3_SONNET_NAME" [grok]="$P3_GROK_NAME" [composer]="$P3_COMPOSER_NAME" [codex-5.5]="$P3_CODEX_NAME")
+declare -A P3_ARM_DRAWS=([gemini]="$P3_GEMINI_DRAW" [claude-sonnet]="$P3_SONNET_DRAW" [grok]="$P3_GROK_DRAW" [composer]="$P3_COMPOSER_DRAW" [codex-5.5]="$P3_CODEX_DRAW")
 for ARM in gemini claude-sonnet grok composer codex-5.5; do
-  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
-    "$(printf '{"run_id":"%s","command":"z-plan","role":"consultant","arm":"%s","selection_source":"fixed_panel","phase":3}' \
-       "$RUN" "$ARM")"
+  pname="${P3_ARM_NAMES[$ARM]}"
+  pdraw="${P3_ARM_DRAWS[$ARM]}"
+  if [ "$pname" != "<none>" ] && [ -n "$pname" ]; then
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
+      "$(printf '{"run_id":"%s","command":"z-plan","role":"consultant","arm":"%s","selection_source":"random_role_pool_distinct","persona_id":"%s","draw_id":"%s","phase":3}' \
+         "$RUN" "$ARM" "$pname" "$pdraw")"
+  else
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
+      "$(printf '{"run_id":"%s","command":"z-plan","role":"consultant","arm":"%s","selection_source":"fixed_panel","phase":3}' \
+         "$RUN" "$ARM")"
+  fi
 done
 ```
 
-Spawn all 5 panel members in parallel in a single message. Each receives the **entire approved decisions doc** with the consult-flagged decisions highlighted. Cursor-based arms pass their model via `--model <model>`:
+Spawn all 5 panel members in parallel in a single message. Each receives the **entire approved decisions doc** with the consult-flagged decisions highlighted. Prepend the arm's persona body (from the draw above) to the prompt when available — empty string when vanilla. Cursor-based arms pass their model via `--model <model>`:
 
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+
+Each `<P3_*_PREFIX>` is the persona body followed by a blank line (from the draw above), or **empty** when that arm drew no persona (underflow slot, `CRITIQUE_PANEL` off, or `PERSONA_ROTATION` off) — in the empty case the prompt is byte-identical to the pre-feature dispatch.
 
 Five calls total. When all return, synthesize across all five responses.
 
@@ -496,6 +541,8 @@ When all consultants return (from either the 5-panel or 2-consultant path):
 3. Flag any shortcut over the robust long-lasting solution — requires explicit user approval in Phase 5.
 
 Save transcripts (the consultants do this themselves). Checkpoint: `phase3-decisions-final.md`.
+
+**Degraded-consult disclosure.** If any consultant did not return a normal response — rate-limited, fell back, errored, or was skipped (e.g. `consult_done` carries a `*_status` other than `ok`, such as `rate_limited_fallback`) — prepend a line to the decisions summary you present in Phase 5: "Consult degraded — `<provider>` unavailable (`<reason>`); treated as effectively single-LLM, weigh the cross-check lower." Record the degraded status in the `consult_done` event payload so `/z-stats` and `/z-improve` can see it. Do not silently present a single-LLM consult as if both arms agreed.
 
 ## Phase 4 — Final clarifications
 
@@ -532,6 +579,7 @@ The SPEC.md must include a `## Planning Inputs` section near the top (after titl
 | MAP.md | $Z_HARNESS_PLAN_DIR/MAP.md | <iso timestamp or "n/a"> |
 | BRAINSTORM.md | $Z_HARNESS_PLAN_DIR/BRAINSTORM.md | <iso timestamp or "n/a"> |
 | RESEARCH.md | $Z_HARNESS_PLAN_DIR/RESEARCH.md | <iso timestamp or "n/a"> |
+| GRILL.md | $Z_HARNESS_PLAN_DIR/GRILL.md | <iso timestamp or "n/a"> |
 ```
 
 Include only rows for artifacts that were actually present. If none were present, write: `none — fresh /z-plan run.`
@@ -566,13 +614,59 @@ If `CONSULT_PROVIDER_P7 == "none"` (i.e. `Z_HARNESS_CONSULT=off`):
 
 **Fixed 5-panel dispatch (when `experiment.persona_rotation` is on):**
 
-Reuse the `PERSONA_ROTATION` value resolved in Phase 3 (already set). If `PERSONA_ROTATION == "true"`, use the same **fixed 5-member panel** for Phase 7. Before dispatching, emit `persona_bound` events for each arm (same pattern as Phase 3, with `"phase":7`):
+Reuse the `PERSONA_ROTATION` and `CRITIQUE_PANEL` values resolved in Phase 3 (already set). If `PERSONA_ROTATION == "true"`, use the same **fixed 5-member panel** for Phase 7.
+
+**Persona draw for Phase 7 (when `PERSONA_ROTATION == "true"` AND `CRITIQUE_PANEL == "true"`):**
+
+Draw a fresh, independent set of 5 distinct `consultant` personas for Phase 7 — do NOT reuse the Phase 3 draw. Positional bind and graceful underflow follow the same rules as Phase 3.
 
 ```bash
+PLUGIN="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+
+# Vanilla defaults for Phase 7: empty prefix + "<none>" name for all five arms.
+P7_GEMINI_PREFIX="";     P7_GEMINI_NAME="<none>";     P7_GEMINI_DRAW=""
+P7_SONNET_PREFIX="";     P7_SONNET_NAME="<none>";     P7_SONNET_DRAW=""
+P7_GROK_PREFIX="";       P7_GROK_NAME="<none>";       P7_GROK_DRAW=""
+P7_COMPOSER_PREFIX="";   P7_COMPOSER_NAME="<none>";   P7_COMPOSER_DRAW=""
+P7_CODEX_PREFIX="";      P7_CODEX_NAME="<none>";      P7_CODEX_DRAW=""
+
+if [ "$PERSONA_ROTATION" = "true" ] && [ "$CRITIQUE_PANEL" = "true" ]; then
+  # Phase 7 gets its own independent draw — do not share with Phase 3.
+  P7_PERSONAS_JSON=$(python3 "$PLUGIN/scripts/resolve-persona.py" random-distinct-for-role consultant --count=5 \
+    2>>"$Z_HARNESS_PLAN_DIR/archive/$RUN/persona-draw.log")
+
+  # Positional bind: [0]->gemini, [1]->claude-sonnet, [2]->grok, [3]->composer, [4]->codex-5.5
+  for slot in 0:GEMINI 1:SONNET 2:GROK 3:COMPOSER 4:CODEX; do
+    idx="${slot%%:*}"; who="${slot##*:}"
+    name=$(echo "$P7_PERSONAS_JSON" | jq -r ".[$idx].persona // \"\"")
+    path=$(echo "$P7_PERSONAS_JSON" | jq -r ".[$idx].persona_body_path // \"\"")
+    draw=$(echo "$P7_PERSONAS_JSON" | jq -r ".[$idx].draw_id // \"\"")
+    [ -z "$name" ] && continue   # underflow slot — leave vanilla
+    prefix=$(python3 "$PLUGIN/runtime/dispatch/persona_prompt.py" "$path" "" 2>/dev/null | head -c 4096)
+    eval "P7_${who}_NAME=\$name"
+    eval "P7_${who}_PREFIX=\$prefix"
+    eval "P7_${who}_DRAW=\$draw"
+  done
+fi
+```
+
+Before dispatching, emit `persona_bound` events for each arm (same pattern as Phase 3, with `"phase":7`). When a persona was drawn, use `selection_source=random_role_pool_distinct` and include `persona_id` + `draw_id`; vanilla arms use `selection_source=fixed_panel`:
+
+```bash
+declare -A P7_ARM_NAMES=([gemini]="$P7_GEMINI_NAME" [claude-sonnet]="$P7_SONNET_NAME" [grok]="$P7_GROK_NAME" [composer]="$P7_COMPOSER_NAME" [codex-5.5]="$P7_CODEX_NAME")
+declare -A P7_ARM_DRAWS=([gemini]="$P7_GEMINI_DRAW" [claude-sonnet]="$P7_SONNET_DRAW" [grok]="$P7_GROK_DRAW" [composer]="$P7_COMPOSER_DRAW" [codex-5.5]="$P7_CODEX_DRAW")
 for ARM in gemini claude-sonnet grok composer codex-5.5; do
-  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
-    "$(printf '{"run_id":"%s","command":"z-plan","role":"consultant","arm":"%s","selection_source":"fixed_panel","phase":7}' \
-       "$RUN" "$ARM")"
+  pname="${P7_ARM_NAMES[$ARM]}"
+  pdraw="${P7_ARM_DRAWS[$ARM]}"
+  if [ "$pname" != "<none>" ] && [ -n "$pname" ]; then
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
+      "$(printf '{"run_id":"%s","command":"z-plan","role":"consultant","arm":"%s","selection_source":"random_role_pool_distinct","persona_id":"%s","draw_id":"%s","phase":7}' \
+         "$RUN" "$ARM" "$pname" "$pdraw")"
+  else
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
+      "$(printf '{"run_id":"%s","command":"z-plan","role":"consultant","arm":"%s","selection_source":"fixed_panel","phase":7}' \
+         "$RUN" "$ARM")"
+  fi
 done
 ```
 
@@ -583,6 +677,8 @@ done
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+
+Each `<P7_*_PREFIX>` is the persona body followed by a blank line, or **empty** when that arm drew no persona (underflow slot, `CRITIQUE_PANEL` off, or `PERSONA_ROTATION` off) — in the empty case the prompt is byte-identical to the pre-feature dispatch.
 
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 - consultant-primary: "Critique this plan. What's wrong, missing, or fragile?"
@@ -650,26 +746,228 @@ python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-reg
 
 Copy `$Z_HARNESS_PLAN_DIR/{SPEC,PLAN,TASKS}.md` into `$Z_HARNESS_PLAN_DIR/archive/$RUN/`. Update `manifest.json` with end timestamp, status `complete`, totals (decision count, consultation count, total tokens if available).
 
-Log run end. Send a PushNotification (guarded by notify level) with FOUR recommendations:
-```bash
-[ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end)" = yes ] && <PushNotification: plan complete message below>
-```
-```
-Plan complete. <N> tasks queued.
-
-Recommended:
-  /compact          — free planning context before next phase
-  /z-audit-plan     — (recommended) audit spec & tasks against codebase reality and best practices
-  /z-test           — (optional, recommended for risky / financial code) draft semantic test cases before implementation
-  /z-implement-all  — orchestrate the queue (auto-includes TESTS.md if present, or /z-implement-next for one-at-a-time)
-```
-
 <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the next-step
      recommendation choice (/z-audit-plan / /z-test / /z-implement-all / skip)
      via their native channel. Silent omission is forbidden. -->
-Then surface the same choice interactively via `AskUserQuestion` so users who don't read OS notifications still see it. Phrase the question as "Plan complete. What's next?" with options in this order: `/z-audit-plan` (label: `Audit the plan (recommended)` — recommended because cheap pre-implementation reality check against codebase), `/z-test` (label: `Draft semantic test cases` — recommended only for risky/financial code), `/z-implement-all` (label: `Start implementation now` — only when user has high confidence in the plan), `Skip — I'll decide later`. Default selection is `/z-audit-plan`. The user's choice is advisory — log it as a `next_step_choice` event but do not auto-dispatch the chosen command; the user invokes it themselves so they retain control of context boundaries (e.g. running `/compact` between phases).
+Surface the next-step choice interactively via `AskUserQuestion`. Phrase the question as "Plan complete. What's next?" with these four options (the `AskUserQuestion` four-option cap is why the two plan audits share one option — mention `/z-audit-plan-style` in the `/z-audit-plan` option description): `/z-audit-plan` (label: `Audit the plan (recommended)` — recommended cheap pre-implementation reality check against the codebase; the description also points the user at `/z-audit-plan-style` for the companion MR-style quality pass on the plan artifacts), `/z-test` (label: `Draft semantic test cases` — recommended only for risky/financial code), `/z-implement-all` (label: `Start implementation now` — only when user has high confidence in the plan), `Skip — I'll decide later`. Default selection is `/z-audit-plan`. The user's choice is advisory — log it as a `next_step_choice` event but do not auto-dispatch the chosen command; the user invokes it themselves so they retain control of context boundaries (e.g. running `/compact` between phases).
 
-**Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the FINALIZE_STATUS rule (Setup step 5): normal completion deregisters with `complete`. The `deregister` subcommand returns 0 by design and self-logs a `registry_error` on internal failure, so call it with `|| true`. If register failed earlier (no record was ever written), this is a harmless no-op.
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" next_step_choice \
+  "$(printf '{"choice":"%s"}' "<user selection>")"
+```
+
+Map the user's choice to `$NEXT_JSON` for the run brief (examples):
+
+| Choice | `$NEXT_JSON` |
+|--------|----------------|
+| `/z-audit-plan` | `{"label":"Audit the plan","command":"/z-audit-plan"}` |
+| `/z-test` | `{"label":"Draft semantic test cases","command":"/z-test"}` |
+| `/z-implement-all` | `{"label":"Start implementation","command":"/z-implement-all"}` |
+| Skip | `{"label":"Decide later","command":null}` |
+
+**Run Brief finalize (registry Phase 9).** Set registry artifact env, pre-seed outcome/status/next, then include the shared fragment. Chat and push text are rendered from `run-brief.json` only — do not author independent completion prose.
+
+```bash
+export RUN_BRIEF_PROFILE="full"
+export RUN_BRIEF_ARTIFACT="$CURRENT_ARCHIVE_DIR/decisions.md"
+export RUN_BRIEF_ARTIFACT_FALLBACKS="PLAN.md:SPEC.md"
+export RUN_BRIEF_ARTIFACT="${RUN_BRIEF_ARTIFACT:-}"
+export RUN_BRIEF_ARTIFACT_FALLBACKS="${RUN_BRIEF_ARTIFACT_FALLBACKS:-}"
+
+RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+TASK_COUNT="$(grep -cE '^[[:space:]]*- \[[[:space:]]\] T[0-9]+' "$Z_HARNESS_PLAN_DIR/TASKS.md" 2>/dev/null || echo 0)"
+bash "$RB_SH" set-section --run "$RUN" --section outcome \
+  --value "Plan complete. ${TASK_COUNT} tasks queued in TASKS.md."
+bash "$RB_SH" set-section --run "$RUN" --section status --value "complete"
+NEXT_JSON_FILE="$(mktemp -t z-rb-next.XXXXXX.json)"
+printf '%s\n' "$NEXT_JSON" > "$NEXT_JSON_FILE"
+bash "$RB_SH" set-section --run "$RUN" --section next --json "$NEXT_JSON_FILE"
+rm -f "$NEXT_JSON_FILE"
+```
+
+<!-- RUN-BRIEF-FINALIZE: shared finalize block — included via `<!-- include: commands/_fragments/run-brief-finalize.md -->` in registry commands; `/z-export` inlines this body (T007). -->
+
+## Run Brief finalize (shared fragment)
+
+Emit the terminal **Run Brief** before `deregister` / `*_run_end`. Chat and push text are **renders only** — never author completion prose independently; always render from `run-brief.json`.
+
+**Prerequisite:** `run-brief.sh init` ran earlier in this command (after the registry `init_after` anchor). `$CURRENT_ARCHIVE_DIR/run-brief.json` must exist before this block runs.
+
+### Placeholders (set by the host command before including this fragment)
+
+| Placeholder | Meaning |
+|-------------|---------|
+| `$RUN` | Run id (same value passed to `log-event.sh` and `run-brief.sh --run`) |
+| `$CURRENT_ARCHIVE_DIR` | Absolute path to `archive/$RUN/` for this command |
+| `$RUN_BRIEF_ARTIFACT` | Primary artifact for approach/outcome derivation (absolute or plan-relative path). May be empty on early halt. |
+| `$RUN_BRIEF_PROFILE` | `full` or `lite` — must match the profile passed to `init` (see `docs/llm/run-brief-registry.json`). `/z-do` uses `lite`; all other v1 registry commands use `full`. |
+| `$RUN_BRIEF_ARTIFACT_FALLBACKS` | Optional colon-separated fallback paths (same `$RUN` expansion rules as `run-brief.sh`). Example: `PLAN.md:SPEC.md`. Exported before finalize; consumed by `run-brief.sh finalize` via `RUN_BRIEF_ARTIFACT_FALLBACKS` env. |
+
+Host commands also export artifact env for finalize resolution:
+
+```bash
+export RUN_BRIEF_ARTIFACT="${RUN_BRIEF_ARTIFACT:-}"
+export RUN_BRIEF_ARTIFACT_FALLBACKS="${RUN_BRIEF_ARTIFACT_FALLBACKS:-}"
+```
+
+---
+
+### Finalize sequence (mandatory order)
+
+Run these steps **in order** at the command's registry `finalize` anchor (before `deregister` and before replacing any legacy "Brief summary" prose).
+
+#### 1. Aggregate decisions → `run-brief.json`
+
+For **`$RUN_BRIEF_PROFILE=full`** only: if `decisions` is empty or absent, aggregate from `$CURRENT_ARCHIVE_DIR/events.jsonl` and append via `run-brief.sh append-decision` (last wins per `question_id`). Skip when `decisions` already has rows (orchestrator may have appended mid-run).
+
+```bash
+RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+RB_PY="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-run-brief.py"
+BRIEF="$CURRENT_ARCHIVE_DIR/run-brief.json"
+EVENTS="$CURRENT_ARCHIVE_DIR/events.jsonl"
+
+PROFILE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("profile",""))' "$BRIEF")"
+DEC_COUNT="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("decisions") or []))' "$BRIEF")"
+
+if [[ "$PROFILE" == "full" && "$DEC_COUNT" -eq 0 && -f "$EVENTS" ]]; then
+  while IFS= read -r row; do
+    [[ -z "$row" ]] && continue
+    QID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["question_id"])' "$row")"
+    CHOSEN="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["chosen"])' "$row")"
+    WHY="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("why",""))' "$row")"
+    SRC="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("source","event"))' "$row")"
+    AD_ARGS=(--run "$RUN" --question-id "$QID" --chosen "$CHOSEN" --source "$SRC")
+    [[ -n "$WHY" ]] && AD_ARGS+=(--why "$WHY")
+    bash "$RB_SH" append-decision "${AD_ARGS[@]}"
+  done < <(python3 - "$RB_PY" "$EVENTS" <<'PY'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("render_run_brief", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+for entry in mod.aggregate_decisions(sys.argv[2]):
+    print(json.dumps(entry, ensure_ascii=False))
+PY
+)
+fi
+```
+
+Event kinds aggregated: `user_choice`, `user_override`, `plan_route_decision`, `next_step_choice` (see `render-run-brief.py`).
+
+#### 2. Derive from artifact / fallbacks
+
+Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` if still empty:
+
+```bash
+APPROACH_FILE=""
+if [[ -n "$RUN_BRIEF_ARTIFACT" && -f "$RUN_BRIEF_ARTIFACT" ]]; then
+  APPROACH_FILE="$RUN_BRIEF_ARTIFACT"
+elif [[ -n "$RUN_BRIEF_ARTIFACT_FALLBACKS" ]]; then
+  IFS=':' read -ra _RB_FB <<< "$RUN_BRIEF_ARTIFACT_FALLBACKS"
+  for _cand in "${_RB_FB[@]}"; do
+    [[ -z "$_cand" ]] && continue
+    _expanded="${_cand//\$RUN/$RUN}"
+    if [[ -f "$_expanded" ]]; then APPROACH_FILE="$_expanded"; break; fi
+  done
+fi
+
+APPROACH_COUNT="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("approach") or []))' "$BRIEF")"
+
+if [[ "$RUN_BRIEF_PROFILE" == "full" && -n "$APPROACH_FILE" && "$APPROACH_COUNT" -eq 0 ]]; then
+  _RB_EXTRACT_N="$(python3 -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("rrb", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+print(len(mod.extract_approach_bullets(sys.argv[2])))
+' "$RB_PY" "$APPROACH_FILE")"
+  if [[ "$_RB_EXTRACT_N" -gt 0 ]]; then
+    bash "$RB_SH" set-section --run "$RUN" --section approach --file "$APPROACH_FILE" || true
+  fi
+fi
+```
+
+Set **`outcome`** / **`next`** when the host command already knows them (recommended on halt paths before finalize):
+
+```bash
+# Example — host supplies halt outcome before including this fragment:
+# bash "$RB_SH" set-section --run "$RUN" --section outcome --value "Halted: <reason>"
+# bash "$RB_SH" set-section --run "$RUN" --section next --json /path/to/next.json
+```
+
+If `outcome` is still `Pending finalize`, `run-brief.sh finalize` fills it from `run-status.sh classify`.
+
+#### 3. Finalize → validate JSON + emit `run_brief_end`
+
+```bash
+bash "$RB_SH" finalize --run "$RUN"
+```
+
+`finalize` classifies terminal status (via `run-status.sh` when unset), resolves artifact/fallback env, auto-downgrades to **lite** when no artifact exists on a full-profile brief (see halt-safe below), validates against `docs/llm/run-brief-contract.json`, and emits `run_brief_end`.
+
+#### 4. Chat render → user (replaces hand-authored "Brief summary")
+
+Print rendered chat text to the user — **do not** write independent summary prose:
+
+```bash
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat
+```
+
+#### 5. Push render (when notify policy allows)
+
+```bash
+if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end)" = yes ]; then
+  PUSH_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+  PushNotification("$PUSH_BODY")
+fi
+```
+
+Push format: `{intent[:80]} · {outcome[:60]} · Next: {next.label}` (from JSON).
+
+#### 6. Hard gate — `--require` before deregister
+
+Run **after** chat/push renders, **before** `active-plan-registry.py deregister` or any terminal `FINALIZE_STATUS` handoff:
+
+```bash
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --require
+RB_REQUIRE_RC=$?
+if [[ "$RB_REQUIRE_RC" -ne 0 ]]; then
+  echo "run-brief: --require failed (missing or invalid run-brief.json)" >&2
+  FINALIZE_STATUS=aborted
+  # Do not deregister as complete — fix brief or abort run
+fi
+```
+
+On `--require` failure: set `FINALIZE_STATUS=aborted` and do not deregister with `complete`.
+
+---
+
+### Halt-safe: missing artifact → lite brief
+
+Early halt / abort paths often have **no** primary artifact (`FIX.md`, `REPORT.md`, `approach.md`, …). The brief is still **required** before deregister, but may be **lite** (Intent + Outcome + Next only — `approach` and `decisions` keys omitted).
+
+| Condition | Behavior |
+|-----------|----------|
+| `$RUN_BRIEF_PROFILE=full` and no artifact/fallback file exists at finalize | `run-brief.sh finalize` auto-downgrades to `profile: lite`, drops `approach`/`decisions` **only on halt/aborted paths** — never when status is `complete` or `shipped` |
+| `${FINALIZE_STATUS:-}` is `aborted` or classify → `halted` | Ensure `intent` (from init) + `outcome` (set-section or finalize default `"Halted before completion"`) + `next`; lite profile is valid |
+| `render-run-brief.py --require` on lite brief | Passes when intent, outcome, next validate — **does not** require approach/decisions |
+
+**Host command responsibilities on halt:**
+
+1. Still include this fragment before deregister (unless the command is on the registry `skip_brief_on` list, e.g. `/z-implement-all` `compaction_pause` only).
+2. Set a concrete `outcome` when possible: `bash "$RB_SH" set-section --run "$RUN" --section outcome --value "Halted: <reason>"`.
+3. Do not treat missing artifact as skip-brief — finalize produces lite JSON instead.
+
+---
+
+### Invariants
+
+1. Chat and push text are always rendered from `run-brief.json` — never independently authored at finalize.
+2. `--require` runs on every terminal exit that includes this fragment (complete, halted, aborted) before deregister.
+3. Empty `decisions: []` is valid for full profile when no decision events occurred.
+4. `/z-stats` is not auto-invoked here.
+5. Optional debug mirror: `Z_HARNESS_RUN_BRIEF_DEBUG=1` writes `run-brief.md` beside JSON (see `run-brief.sh finalize`).
+
+**Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the FINALIZE_STATUS rule (Setup step 5): normal completion deregisters with `complete`; if the fragment's `--require` step set `FINALIZE_STATUS=aborted`, deregister with `aborted` instead. The `deregister` subcommand returns 0 by design and self-logs a `registry_error` on internal failure, so call it with `|| true`. If register failed earlier (no record was ever written), this is a harmless no-op.
 ```bash
 python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
   --run-id "$RUN" --status "${FINALIZE_STATUS:-complete}" || true   # CLI self-logs registry_error on failure
@@ -679,6 +977,211 @@ The `/compact` recommendation is important: the planning phase (Explore agents, 
 
 The `/z-test` step is optional but high-value when the plan touches money, ordering, signal generation, or any other domain where mechanical correctness (which `/z-implement-all`'s reviewer catches) is not enough to catch semantic bugs (notional sign flips, feature schema mismatches, unit confusion). It produces a `TESTS.md` artifact that `/z-implement-all`'s implementer subagent reads alongside TASKS.md, so test code lands in the same diff as the production code it exercises.
 
+## Run Brief — halt finalize
+
+Before `deregister --status aborted` on any halt after `run-brief.sh init` (unless register failed — no deregister). Substitute `<reason>` in the outcome line. When no planning artifact exists yet, the shared fragment auto-downgrades to **lite** (Intent + Outcome + Next).
+
+**Known gap:** halts before Setup step 5 (`run-brief.sh init`) — e.g. `workflow.slug_confirm` resolver `halt` during slug derivation — skip this block (no brief JSON yet).
+
+```bash
+export RUN_BRIEF_PROFILE=full
+export RUN_BRIEF_ARTIFACT="${RUN_BRIEF_ARTIFACT:-}"
+export RUN_BRIEF_ARTIFACT_FALLBACKS="${RUN_BRIEF_ARTIFACT_FALLBACKS:-PLAN.md:SPEC.md}"
+RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+bash "$RB_SH" set-section --run "$RUN" --section outcome --value "Halted: <reason>"
+bash "$RB_SH" set-section --run "$RUN" --section next --json /dev/stdin <<'JSON'
+{"label": "Review plan status and retry or escalate", "command": null}
+JSON
+```
+
+<!-- RUN-BRIEF-FINALIZE: shared finalize block — included via `<!-- include: commands/_fragments/run-brief-finalize.md -->` in registry commands; `/z-export` inlines this body (T007). -->
+
+## Run Brief finalize (shared fragment)
+
+Emit the terminal **Run Brief** before `deregister` / `*_run_end`. Chat and push text are **renders only** — never author completion prose independently; always render from `run-brief.json`.
+
+**Prerequisite:** `run-brief.sh init` ran earlier in this command (after the registry `init_after` anchor). `$CURRENT_ARCHIVE_DIR/run-brief.json` must exist before this block runs.
+
+### Placeholders (set by the host command before including this fragment)
+
+| Placeholder | Meaning |
+|-------------|---------|
+| `$RUN` | Run id (same value passed to `log-event.sh` and `run-brief.sh --run`) |
+| `$CURRENT_ARCHIVE_DIR` | Absolute path to `archive/$RUN/` for this command |
+| `$RUN_BRIEF_ARTIFACT` | Primary artifact for approach/outcome derivation (absolute or plan-relative path). May be empty on early halt. |
+| `$RUN_BRIEF_PROFILE` | `full` or `lite` — must match the profile passed to `init` (see `docs/llm/run-brief-registry.json`). `/z-do` uses `lite`; all other v1 registry commands use `full`. |
+| `$RUN_BRIEF_ARTIFACT_FALLBACKS` | Optional colon-separated fallback paths (same `$RUN` expansion rules as `run-brief.sh`). Example: `PLAN.md:SPEC.md`. Exported before finalize; consumed by `run-brief.sh finalize` via `RUN_BRIEF_ARTIFACT_FALLBACKS` env. |
+
+Host commands also export artifact env for finalize resolution:
+
+```bash
+export RUN_BRIEF_ARTIFACT="${RUN_BRIEF_ARTIFACT:-}"
+export RUN_BRIEF_ARTIFACT_FALLBACKS="${RUN_BRIEF_ARTIFACT_FALLBACKS:-}"
+```
+
+---
+
+### Finalize sequence (mandatory order)
+
+Run these steps **in order** at the command's registry `finalize` anchor (before `deregister` and before replacing any legacy "Brief summary" prose).
+
+#### 1. Aggregate decisions → `run-brief.json`
+
+For **`$RUN_BRIEF_PROFILE=full`** only: if `decisions` is empty or absent, aggregate from `$CURRENT_ARCHIVE_DIR/events.jsonl` and append via `run-brief.sh append-decision` (last wins per `question_id`). Skip when `decisions` already has rows (orchestrator may have appended mid-run).
+
+```bash
+RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+RB_PY="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-run-brief.py"
+BRIEF="$CURRENT_ARCHIVE_DIR/run-brief.json"
+EVENTS="$CURRENT_ARCHIVE_DIR/events.jsonl"
+
+PROFILE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("profile",""))' "$BRIEF")"
+DEC_COUNT="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("decisions") or []))' "$BRIEF")"
+
+if [[ "$PROFILE" == "full" && "$DEC_COUNT" -eq 0 && -f "$EVENTS" ]]; then
+  while IFS= read -r row; do
+    [[ -z "$row" ]] && continue
+    QID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["question_id"])' "$row")"
+    CHOSEN="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["chosen"])' "$row")"
+    WHY="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("why",""))' "$row")"
+    SRC="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("source","event"))' "$row")"
+    AD_ARGS=(--run "$RUN" --question-id "$QID" --chosen "$CHOSEN" --source "$SRC")
+    [[ -n "$WHY" ]] && AD_ARGS+=(--why "$WHY")
+    bash "$RB_SH" append-decision "${AD_ARGS[@]}"
+  done < <(python3 - "$RB_PY" "$EVENTS" <<'PY'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("render_run_brief", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+for entry in mod.aggregate_decisions(sys.argv[2]):
+    print(json.dumps(entry, ensure_ascii=False))
+PY
+)
+fi
+```
+
+Event kinds aggregated: `user_choice`, `user_override`, `plan_route_decision`, `next_step_choice` (see `render-run-brief.py`).
+
+#### 2. Derive from artifact / fallbacks
+
+Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` if still empty:
+
+```bash
+APPROACH_FILE=""
+if [[ -n "$RUN_BRIEF_ARTIFACT" && -f "$RUN_BRIEF_ARTIFACT" ]]; then
+  APPROACH_FILE="$RUN_BRIEF_ARTIFACT"
+elif [[ -n "$RUN_BRIEF_ARTIFACT_FALLBACKS" ]]; then
+  IFS=':' read -ra _RB_FB <<< "$RUN_BRIEF_ARTIFACT_FALLBACKS"
+  for _cand in "${_RB_FB[@]}"; do
+    [[ -z "$_cand" ]] && continue
+    _expanded="${_cand//\$RUN/$RUN}"
+    if [[ -f "$_expanded" ]]; then APPROACH_FILE="$_expanded"; break; fi
+  done
+fi
+
+APPROACH_COUNT="$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("approach") or []))' "$BRIEF")"
+
+if [[ "$RUN_BRIEF_PROFILE" == "full" && -n "$APPROACH_FILE" && "$APPROACH_COUNT" -eq 0 ]]; then
+  _RB_EXTRACT_N="$(python3 -c '
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("rrb", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+print(len(mod.extract_approach_bullets(sys.argv[2])))
+' "$RB_PY" "$APPROACH_FILE")"
+  if [[ "$_RB_EXTRACT_N" -gt 0 ]]; then
+    bash "$RB_SH" set-section --run "$RUN" --section approach --file "$APPROACH_FILE" || true
+  fi
+fi
+```
+
+Set **`outcome`** / **`next`** when the host command already knows them (recommended on halt paths before finalize):
+
+```bash
+# Example — host supplies halt outcome before including this fragment:
+# bash "$RB_SH" set-section --run "$RUN" --section outcome --value "Halted: <reason>"
+# bash "$RB_SH" set-section --run "$RUN" --section next --json /path/to/next.json
+```
+
+If `outcome` is still `Pending finalize`, `run-brief.sh finalize` fills it from `run-status.sh classify`.
+
+#### 3. Finalize → validate JSON + emit `run_brief_end`
+
+```bash
+bash "$RB_SH" finalize --run "$RUN"
+```
+
+`finalize` classifies terminal status (via `run-status.sh` when unset), resolves artifact/fallback env, auto-downgrades to **lite** when no artifact exists on a full-profile brief (see halt-safe below), validates against `docs/llm/run-brief-contract.json`, and emits `run_brief_end`.
+
+#### 4. Chat render → user (replaces hand-authored "Brief summary")
+
+Print rendered chat text to the user — **do not** write independent summary prose:
+
+```bash
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat
+```
+
+#### 5. Push render (when notify policy allows)
+
+```bash
+if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end)" = yes ]; then
+  PUSH_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+  PushNotification("$PUSH_BODY")
+fi
+```
+
+Push format: `{intent[:80]} · {outcome[:60]} · Next: {next.label}` (from JSON).
+
+#### 6. Hard gate — `--require` before deregister
+
+Run **after** chat/push renders, **before** `active-plan-registry.py deregister` or any terminal `FINALIZE_STATUS` handoff:
+
+```bash
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --require
+RB_REQUIRE_RC=$?
+if [[ "$RB_REQUIRE_RC" -ne 0 ]]; then
+  echo "run-brief: --require failed (missing or invalid run-brief.json)" >&2
+  FINALIZE_STATUS=aborted
+  # Do not deregister as complete — fix brief or abort run
+fi
+```
+
+On `--require` failure: set `FINALIZE_STATUS=aborted` and do not deregister with `complete`.
+
+---
+
+### Halt-safe: missing artifact → lite brief
+
+Early halt / abort paths often have **no** primary artifact (`FIX.md`, `REPORT.md`, `approach.md`, …). The brief is still **required** before deregister, but may be **lite** (Intent + Outcome + Next only — `approach` and `decisions` keys omitted).
+
+| Condition | Behavior |
+|-----------|----------|
+| `$RUN_BRIEF_PROFILE=full` and no artifact/fallback file exists at finalize | `run-brief.sh finalize` auto-downgrades to `profile: lite`, drops `approach`/`decisions` **only on halt/aborted paths** — never when status is `complete` or `shipped` |
+| `${FINALIZE_STATUS:-}` is `aborted` or classify → `halted` | Ensure `intent` (from init) + `outcome` (set-section or finalize default `"Halted before completion"`) + `next`; lite profile is valid |
+| `render-run-brief.py --require` on lite brief | Passes when intent, outcome, next validate — **does not** require approach/decisions |
+
+**Host command responsibilities on halt:**
+
+1. Still include this fragment before deregister (unless the command is on the registry `skip_brief_on` list, e.g. `/z-implement-all` `compaction_pause` only).
+2. Set a concrete `outcome` when possible: `bash "$RB_SH" set-section --run "$RUN" --section outcome --value "Halted: <reason>"`.
+3. Do not treat missing artifact as skip-brief — finalize produces lite JSON instead.
+
+---
+
+### Invariants
+
+1. Chat and push text are always rendered from `run-brief.json` — never independently authored at finalize.
+2. `--require` runs on every terminal exit that includes this fragment (complete, halted, aborted) before deregister.
+3. Empty `decisions: []` is valid for full profile when no decision events occurred.
+4. `/z-stats` is not auto-invoked here.
+5. Optional debug mirror: `Z_HARNESS_RUN_BRIEF_DEBUG=1` writes `run-brief.md` beside JSON (see `run-brief.sh finalize`).
+
+```bash
+FINALIZE_STATUS=aborted
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+  --run-id "$RUN" --status aborted 2>/dev/null || true
+```
+
 ---
 
 ## Telemetry reference
@@ -687,7 +1190,7 @@ Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema
 
 | Event kind | When / meaning | Required fields |
 |---|---|---|
-| `run_start` | Planning run begins | version fields, `task` |
+| `run_start` | Planning run begins | version fields, `task`, `command` |
 | `plan_route_decision` | Route check fired and a route was chosen | `from_command`, `to_command`, `route_class`, `reason_codes`, `signals`, `confidence`, `classifier_used`, `artifact_path`, `route_chain`, `user_choice` |
 | `plan_halt` | Run halted (e.g. `no_ask_blocked` on slug gate) | `reason`, `question_id`, `rule_id` |
 | `askuser_skipped` | AskUserQuestion suppressed by resolver | `question_id`, `source` |
@@ -699,6 +1202,7 @@ Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema
 | `doc_drift_acknowledged` | User accepted stale docs in the consolidated 9c gate | `stale_pct`, `stale_concepts` |
 | `doc_drift` | doc-fetcher returned a DRIFT WARNING for a concept | `concept`, `claim`, `reality`, `file` |
 | `task_classified` | complexity-classifier stamped a task block | `task`, `tier`, `reason` |
+| `persona_bound` | Emitted per panel arm at Phase 3 and Phase 7 (5-panel path only) | `run_id`, `command`, `role`, `arm`, `selection_source`, `phase`; additionally `persona_id` + `draw_id` when `personas.critique_panel` drew a persona for that arm (`selection_source=random_role_pool_distinct`); vanilla arms omit those fields and carry `selection_source=fixed_panel` |
 | `telemetry_anomaly` | `log-phase.sh` detected impossible `wall_ms` | `phase`, `reason` (`wall_ms_overflow` / `wall_ms_negative`), `t_start`, `t_end`, `computed_wall_ms` |
 | `next_step_choice` | User picked a next step at Phase 9 | `choice` |
 
@@ -720,7 +1224,7 @@ Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema
 | Feature | Used | Gates |
 |---------|------|-------|
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
-| `ask_user` | yes | Setup step 0 (empty arguments); Setup step 1 (slug collision + resolver prefill/ask branches); Setup step 9c (consolidated freshness gate — one AskUserQuestion covering docs / research / map staleness); Phase 0 (premise concern); Phase 2.5 (decisions doc approval — guarded by `workflow.plan_decisions_approval` resolver); Phase 5 (design decision + shortcut approval); Phase 8 (task-count overflow); Phase 9 (next-step recommendation choice) |
+| `ask_user` | yes | Setup step 0 (empty arguments); Setup step 1 (slug collision + resolver prefill/ask branches); Setup step 9c (consolidated freshness gate — one AskUserQuestion covering docs / research / map / GRILL.md-citation staleness); Phase 0 (premise concern); Phase 2.5 (decisions doc approval — guarded by `workflow.plan_decisions_approval` resolver); Phase 5 (design decision + shortcut approval); Phase 8 (task-count overflow); Phase 9 (next-step recommendation choice) |
 | `skill_invoke` | no | — |
 
 Driver support requirements: see frontmatter `driver_features_required`.

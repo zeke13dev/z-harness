@@ -341,6 +341,15 @@ active_plans_dir() {
   printf '%s/active-plans' "$base"
 }
 
+# claims_dir
+# Returns the directory holding per-slug claim lock files (slug-level hard locks).
+claims_dir() {
+  local base
+  base="$(z_harness_base)" || return 1
+  [[ -n "$base" ]] || { printf '[z-harness] plan-path.sh: FATAL empty base — refusing to compose paths\n' >&2; return 1; }
+  printf '%s/active-plans/claims' "$base"
+}
+
 # followups_dir
 # Returns the directory for the follow-up queue.
 followups_dir() {
@@ -528,6 +537,9 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     active_plans_dir)
       active_plans_dir "$@"
       ;;
+    claims_dir)
+      claims_dir "$@"
+      ;;
     followups_dir)
       followups_dir "$@"
       ;;
@@ -535,7 +547,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       all_plan_slugs "$@"
       ;;
     *)
-      echo "Usage: $0 {plan_dir|legacy_plan_dir|legacy_plan_dir_secondary|resolve_plan_path|z_harness_base_override|z_harness_base|z_harness_repo_id|active_plans_dir|followups_dir|base_dir|all_plan_slugs} [args...]" >&2
+      echo "Usage: $0 {plan_dir|legacy_plan_dir|legacy_plan_dir_secondary|resolve_plan_path|z_harness_base_override|z_harness_base|z_harness_repo_id|active_plans_dir|claims_dir|followups_dir|base_dir|all_plan_slugs} [args...]" >&2
       exit 1
       ;;
   esac

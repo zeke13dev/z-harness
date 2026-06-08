@@ -22,7 +22,11 @@ $ARGUMENTS
 
 1. Pick run id: `RUN=$(date -u +%Y-%m-%dT%H:%M:%SZ)-do`
 2. `export Z_HARNESS_SLUG=adhoc`
-3. `CURRENT_ARCHIVE_DIR="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" base_dir)/adhoc/archive/$RUN"; mkdir -p "$CURRENT_ARCHIVE_DIR"`
+3. Export archive dir (required by Run Brief finalize fragment):
+   ```bash
+   export CURRENT_ARCHIVE_DIR="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" base_dir)/adhoc/archive/$RUN"
+   mkdir -p "$CURRENT_ARCHIVE_DIR"
+   ```
 4. (CURRENT_ARCHIVE_DIR already set in step 3)
 5. **Version stamp + log:**
    ```bash
@@ -34,6 +38,16 @@ $ARGUMENTS
    print(json.dumps(v))
    ' "$VERSION_BLOB" "<arguments>" "$Z_HARNESS_SESSION_ID")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" do_run_start "$START_PAYLOAD"
+   ```
+
+   **Run Brief init (immediately after `do_run_start`).** Registry: `/z-do`, profile `lite`, artifact `approach.md` (fallback `premise.md`).
+   ```bash
+   RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+   bash "$RB_SH" init --run "$RUN" --command /z-do --slug "$Z_HARNESS_SLUG" --profile lite \
+     --intent "<task from $ARGUMENTS — max 240 chars; not the command name alone>"
+   export RUN_BRIEF_PROFILE=lite
+   export RUN_BRIEF_ARTIFACT="$CURRENT_ARCHIVE_DIR/approach.md"
+   export RUN_BRIEF_ARTIFACT_FALLBACKS="$CURRENT_ARCHIVE_DIR/premise.md"
    ```
 
    **Active-plan registration (immediately after do_run_start).** Register this run in the shared registry. Graduated failure policy — never silent-continue on failure:
@@ -51,7 +65,7 @@ $ARGUMENTS
      "$(printf '{"op":"register","run_id":"%s","rc":%d}' "$RUN" "$REG_RC")"
    ```
 
-   **FINALIZE_STATUS rule:** On any run-ending halt after `REG_RC == 0`, set `FINALIZE_STATUS=aborted` + `deregister --status aborted`. On normal completion (Phase 7), deregister with `complete`. If register failed, do NOT deregister.
+   **FINALIZE_STATUS rule:** On any run-ending halt after `REG_RC == 0`, execute **Run Brief — halt finalize** (below) before `deregister --status aborted`. On normal completion (Phase 7), deregister with `complete`. If register failed, do NOT deregister.
 
 6. **Config resolution:**
    ```bash
@@ -89,12 +103,7 @@ If at any point you discover:
 [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event approval)" = yes ] && \
   PushNotification("z-do: route decision reached — your input is needed to proceed.")
 ```
-If the user chooses switch or abandon (ending the run), per the FINALIZE_STATUS rule set `FINALIZE_STATUS=aborted` and deregister before exiting:
-```bash
-FINALIZE_STATUS=aborted
-python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-  --run-id "$RUN" --status aborted 2>/dev/null || true
-```
+If the user chooses switch or abandon (ending the run), per the FINALIZE_STATUS rule execute **Run Brief — halt finalize** (below) with reason `route gate — user chose switch or abandon`.
 If the user chooses **continue**, deregister is NOT called here — the run continues and Phase 7 handles it normally.
 
 `route-decision.md` must include the recommended command, reason, deterministic signals, route chain, and resume context. Emit `plan_route_decision` with `from_command`, `to_command`, `route_class`, `reason_codes`, `signals`, `confidence`, `classifier_used`, `artifact_path`, `route_chain`, and `user_choice`.
@@ -223,28 +232,65 @@ Apply the "one reason it might be wrong" check to each finding. If it raises a r
 
 ## Phase 7 — Finalize
 
-1. Log run end:
+1. **Run Brief finalize (registry Phase 7).** Set `outcome` / `status` / `next` before the shared fragment. Chat and push are renders only — lite profile omits `APPROACH` / `DECISIONS` in chat (see `render-run-brief.py`); do not author independent completion prose.
+
+   ```bash
+   export RUN_BRIEF_PROFILE=lite
+   export RUN_BRIEF_ARTIFACT="$CURRENT_ARCHIVE_DIR/approach.md"
+   export RUN_BRIEF_ARTIFACT_FALLBACKS="$CURRENT_ARCHIVE_DIR/premise.md"
+   export RUN_BRIEF_ARTIFACT="${RUN_BRIEF_ARTIFACT:-}"
+   export RUN_BRIEF_ARTIFACT_FALLBACKS="${RUN_BRIEF_ARTIFACT_FALLBACKS:-}"
+
+   RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+   bash "$RB_SH" set-section --run "$RUN" --section outcome \
+     --value "Shipped. ${N_FILES} files changed; review passed (${CYCLES} review cycle(s))."
+   bash "$RB_SH" set-section --run "$RUN" --section status --value "shipped"
+   bash "$RB_SH" set-section --run "$RUN" --section next --json /dev/stdin <<'JSON'
+{"label": "Done — no follow-up required", "command": null}
+JSON
+   ```
+
+   <!-- include: commands/_fragments/run-brief-finalize.md -->
+
+2. Log run end:
    ```bash
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" do_run_end \
      "$(printf '{"status":"shipped","files_changed":%d,"review_cycles":%d,"consult_at_end":%s}' \
         "$N_FILES" "$CYCLES" "$DID_CONSULT")"
    ```
-2. Push-notify on completion:
-   ```bash
-   [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end)" = yes ] && \
-     PushNotification("z-do complete. <N> files changed; review passed.")
-   ```
-3. Brief 2-3 sentence summary to user: what changed, what's next.
-4. **Suggest `/z-improve` when this run had friction.** Run the nudge helper rather than eyeballing it — it scans this run's events and prints a one-line suggestion only if friction signals fired (auto-bail/escalation, doc drift, review retries, degraded consult, …), staying silent on a clean run:
+3. **Suggest `/z-improve` when this run had friction.** Run the nudge helper rather than eyeballing it — it scans this run's events and prints a one-line suggestion only if friction signals fired (auto-bail/escalation, doc drift, review retries, degraded consult, …), staying silent on a clean run:
    ```bash
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/improve-nudge.sh" "$RUN" "adhoc/$RUN"
    ```
    If it emits a line, relay it verbatim to the user.
-5. **Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the FINALIZE_STATUS rule (Setup step 5): normal completion deregisters with `complete`.
+4. **Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the FINALIZE_STATUS rule (Setup step 5): normal completion deregisters with `complete`; if the fragment's `--require` step set `FINALIZE_STATUS=aborted`, deregister with `aborted` instead.
    ```bash
    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
      --run-id "$RUN" --status "${FINALIZE_STATUS:-complete}" || true   # CLI self-logs registry_error on failure
    ```
+
+## Run Brief — halt finalize
+
+Before `deregister --status aborted` on any halt after `run-brief.sh init` (unless register failed — no deregister). Substitute `<reason>` in the outcome line. Lite profile: Intent + Outcome + Next only (no `APPROACH` / `DECISIONS` in chat render).
+
+```bash
+export RUN_BRIEF_PROFILE=lite
+export RUN_BRIEF_ARTIFACT="$CURRENT_ARCHIVE_DIR/approach.md"
+export RUN_BRIEF_ARTIFACT_FALLBACKS="$CURRENT_ARCHIVE_DIR/premise.md"
+RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+bash "$RB_SH" set-section --run "$RUN" --section outcome --value "Halted: <reason>"
+bash "$RB_SH" set-section --run "$RUN" --section next --json /dev/stdin <<'JSON'
+{"label": "Review run status and retry or escalate", "command": null}
+JSON
+```
+
+<!-- include: commands/_fragments/run-brief-finalize.md -->
+
+```bash
+FINALIZE_STATUS=aborted
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+  --run-id "$RUN" --status aborted 2>/dev/null || true
+```
 
 ## Hard rules
 

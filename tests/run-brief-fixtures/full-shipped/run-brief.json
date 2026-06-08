@@ -1,0 +1,35 @@
+{
+  "artifact": "run_brief",
+  "schema_version": 1,
+  "run_id": "20260607T120000Z-plan",
+  "command": "/z-plan",
+  "slug": "unified-command-output",
+  "profile": "full",
+  "status": "shipped",
+  "generated_at": "2026-06-07T12:30:00Z",
+  "intent": "Plan a unified run brief receipt for all major z-commands",
+  "approach": [
+    "Define JSON schema contract and command registry",
+    "Implement run-brief.sh and render-run-brief.py",
+    "Wire shared finalize fragment into eleven registry commands"
+  ],
+  "decisions": [
+    {
+      "question_id": "rollout_scope",
+      "chosen": "full_11_commands",
+      "why": "User requested no pilot phase",
+      "source": "event"
+    }
+  ],
+  "outcome": "SPEC, PLAN, and TASKS written; ready for /z-implement-all",
+  "next": {
+    "label": "Run /z-implement-all",
+    "command": "/z-implement-all"
+  },
+  "sources": {
+    "intent": "run_start",
+    "approach": "PLAN.md",
+    "decisions": "events.jsonl",
+    "outcome": "run-status"
+  }
+}

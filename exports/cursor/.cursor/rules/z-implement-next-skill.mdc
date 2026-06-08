@@ -264,6 +264,103 @@ python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-reg
   --run-id "$RUN" --phase implement --current-task "<task-id>" || true   # CLI self-logs registry_error on failure
 ```
 
+### Phase 2.5 — Per-task lease lifecycle
+
+After the heartbeat and before implementer dispatch, claim the task's explicit-confidence paths,
+resolve any concessions via `wait-for` or an interactive menu, then dispatch the implementer.
+Release the lease on clean success; on halt mid-task, rely on `deregister`/`reap` to clean up.
+
+**Claim the task's explicit-confidence paths (conservative — explicit only, per SPEC D3).**
+`CLAIM` is the `explicit`-confidence entries from the scope-extractor's task-level output
+(same extractor invoked in Phase 0.0 but scoped to this task via `task_id`). If the
+scope-extractor is unavailable or returns no explicit paths, `CLAIM` is empty — proceed
+directly to implementer dispatch (no-op claim).
+
+```bash
+# CLAIM = explicit-confidence paths from the task block's Files: list + scope-extractor(task=<id>)
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" claim \
+  --run-id "$RUN" --paths "$CLAIM"   # comma-separated repo-relative paths
+CLAIM_OUT="$?"   # claim exits 0 always; parse stdout JSON for conceded list
+# stdout: {"claimed":[...], "conceded":[{"path":"...","holder_run_id":"..."}]}
+```
+
+**Handle each `conceded` entry (senior peer holds the path; eldest-senior = lowest run_id).**
+When `conceded` is non-empty, pick the eldest senior (`holder_run_id` from the entry — this
+is the lowest run_id among all seniors on that path as returned by `claim`):
+
+**If `Z_HARNESS_AUTO_WAIT=1` (default):**
+
+```bash
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" wait-for \
+  --run-id "$RUN" --on "$HOLDER_RUN_ID" --paths "$CONCEDED_PATH"
+WAIT_RC=$?
+```
+
+- `WAIT_RC == 0` (peer cleared / nothing-to-wait-on) → **re-`claim` the freed path** — this
+  is a GENUINE acquisition, not a dedup no-op, because the loser never persisted the conceded
+  path (claim persists only the won set per SPEC F-claim-wonset). Re-run `claim` with the
+  conceded path(s) and add any newly-won paths to `CLAIM`. Then continue to implementer dispatch.
+- `WAIT_RC == 10` (wait timeout — LOUD, per SPEC F1):
+  <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface this timeout decision (proceed/abort) via their native channel. Silent omission is forbidden. -->
+  - **Interactive (not `Z_HARNESS_NO_ASK`):** present `AskUserQuestion`: **proceed anyway** /
+    **abort task**. If proceed → continue to dispatch (the contended path is not leased; the
+    post-dispatch write-set validation in Phase 2.5 will catch any actual collision). If abort →
+    flip `[~]` back to `[ ]`, log `task_halt {reason:"wait_timeout_abort"}`, apply the
+    FINALIZE_STATUS rule (deregister with `aborted`), and exit. *(Intentional divergence from
+    /z-implement-all: a single-task run has no outer loop, so aborting the task aborts the run
+    and deregisters; the batch command keeps the run registered to continue other tasks.)*
+  - **Unattended (`Z_HARNESS_NO_ASK`) — ABORT TASK (MAJOR-4).** A held-path `wait-for` exit 10
+    in unattended mode MUST abort the current task. It MUST NOT silently proceed (that recreates
+    the collision) and MUST NOT automatically re-enter `wait-for` on the same blocker (a re-wait
+    is only legitimate after the user re-queues the task). Emit a loud log, flip `[~]` back to
+    `[ ]`, apply the FINALIZE_STATUS rule (deregister with `aborted`), and exit:
+    ```bash
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tasks/<task-id>" task_halt \
+      "$(printf '{"id":"%s","reason":"wait_timeout_unattended","holder_run_id":"%s","path":"%s"}' \
+         "<task-id>" "$HOLDER_RUN_ID" "$CONCEDED_PATH")"
+    FINALIZE_STATUS=aborted
+    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+      --run-id "$RUN" --status "$FINALIZE_STATUS" || true
+    # flip [~] → [ ]; exit 1
+    ```
+    Cross-link: see Phase 0.0 SPEC F1 — this is the same loud-abort-on-timeout invariant.
+- `WAIT_RC == 130` (SIGINT during park) → abort the task (same as unattended exit 10: apply the
+  FINALIZE_STATUS rule, deregister with `aborted`, propagate the SIGINT to the outer shell).
+
+**If `Z_HARNESS_AUTO_WAIT=0` (interactive wait mode):**
+
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the conceded-path proceed/wait/abort question via their native channel. Silent omission is forbidden. -->
+Present `AskUserQuestion`: **proceed anyway** / **wait** / **abort task**.
+- **proceed** → continue to implementer dispatch (the path is not leased; the F5 write-set
+  validation below applies as a backstop).
+- **wait** → call `wait-for --run-id $RUN --on $HOLDER_RUN_ID --paths $CONCEDED_PATH` (same
+  `WAIT_RC` handling as the auto-wait path above).
+- **abort task** → flip `[~]` back to `[ ]`, log `task_halt {reason:"user_aborted_lease"}`,
+  apply the FINALIZE_STATUS rule (deregister with `aborted`), and exit. *(Intentional
+  divergence from /z-implement-all: same reason — aborting this single-task run means the
+  run is done, so deregister; the batch command's outer loop continues instead.)*
+
+**Dispatch implementer** (Phase 2 implementer dispatch below) with the claimed paths in scope.
+
+**Lease release and halt semantics.**
+
+- **On clean task success (before marking `[x]` in Phase 5):** release the lease:
+  ```bash
+  python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" release \
+    --run-id "$RUN" --paths "$CLAIM"   # CLI self-logs registry_error on failure; exits 0 always
+  ```
+- **On review-fail with "patch manually" (user takes over within the same invocation):** KEEP the
+  existing lease. Do NOT release until the user signals completion and Phase 5 runs. If the user
+  subsequently asks the orchestrator to re-dispatch the implementer (e.g. after patching), expand
+  `CLAIM` with any newly-touched paths before re-dispatch. Release only on clean final success.
+- **On halt mid-task** (`unable_to_complete` or other terminal halt after implementer dispatch):
+  do NOT release. Rely on `deregister` (from the FINALIZE_STATUS rule) or `reap` (stale-timeout)
+  to clean up `held_paths`. A partially-applied edit must not release the lease before the task
+  resolves.
+- **On re-invocation** (user runs `/z-implement-next` again for the same task after a prior attempt
+  ended without `[x]`): the previous run's lease was cleaned up by its `deregister`; the new
+  invocation runs a fresh `claim` in Phase 2.5 as usual.
+
 Spawn the implementer subagent (fresh context).
 
 **Pick the implementer model from the task block's `**Complexity:**` stamp** (stamped by `/z-plan` or `/z-amend`):
@@ -332,7 +429,15 @@ If during implementation you discovered `$BASE/SPEC.md` was wrong, incomplete, o
 
 1. Flip `[ ]` to `[x]` in `$BASE/TASKS.md`. Add a one-line completion note under the task.
 2. Log task end with summary stats.
-3. **Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the single
+3. **Release the lease** (best-effort, non-fatal) before marking `[x]`. This unblocks any junior
+   peer waiting on a path this task held. The `release` subcommand returns 0 by design and
+   self-logs a `registry_error` on internal failure. If `CLAIM` is empty (no paths were claimed),
+   this is a harmless no-op.
+   ```bash
+   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" release \
+     --run-id "$RUN" --paths "$CLAIM" || true   # CLI self-logs registry_error on failure
+   ```
+4. **Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the single
    FINALIZE_STATUS rule (Phase 0.0): normal completion deregisters with `complete`. The
    `deregister` subcommand returns 0 by design and self-logs a `registry_error` on internal
    failure, so call it with `|| true` (not `|| log`). If register failed earlier (no record was
@@ -341,7 +446,7 @@ If during implementation you discovered `$BASE/SPEC.md` was wrong, incomplete, o
    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
      --run-id "$RUN" --status "complete" || true   # CLI self-logs registry_error on failure
    ```
-4. If notification policy ≠ `off`: send `PushNotification` — "Task <ID> complete. <N> remaining. Run /z-implement-next to continue."
-5. Brief user summary: what changed, what the reviewer flagged, what's next.
+5. If notification policy ≠ `off`: send `PushNotification` — "Task <ID> complete. <N> remaining. Run /z-implement-next to continue."
+6. Brief user summary: what changed, what the reviewer flagged, what's next.
 
 Do **not** auto-advance. Wait for the user to invoke `/z-implement-next` again — this forces a fresh context per task.

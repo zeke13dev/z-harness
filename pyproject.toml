@@ -16,6 +16,15 @@ dependencies = [
 z-harness = "z_harness_cli.__main__:app"
 zh = "z_harness_cli.__main__:app"
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "tomlkit>=0.12",
+    "pyyaml>=6",
+    "jsonschema>=4.26",
+    "referencing>=0.36",
+]
+
 [tool.hatch.version]
 source = "vcs"
 # Fallback when building outside a git repo (e.g., from a source archive)

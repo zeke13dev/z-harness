@@ -259,14 +259,69 @@ Block here until the user has approved the decisions doc.
 
 ## Phase 3 — Bundled cross-LLM consultation
 
-Spawn **both** consultants in parallel in a single message:
+Read config knobs:
+
+```bash
+PERSONA_ROTATION="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get experiment.persona_rotation 2>/dev/null || echo "true")"
+CRITIQUE_PANEL="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get personas.critique_panel 2>/dev/null || echo "true")"
+```
+
+If `PERSONA_ROTATION == "true"`, use the **fixed 5-member panel** (agy, cursor@claude-4.6-sonnet, cursor@grok-4.3, cursor@composer-2.5, codex-cli). When `CRITIQUE_PANEL == "true"` as well, draw 5 distinct `consultant` personas and positionally prepend one body to each arm's prompt (graceful underflow — fewer personas than arms is fine, remaining arms run vanilla). This draw is Phase 3-specific; Phase 7 gets its own independent draw.
+
+```bash
+PLUGIN="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+P3_GEMINI_PREFIX=""; P3_SONNET_PREFIX=""; P3_GROK_PREFIX=""; P3_COMPOSER_PREFIX=""; P3_CODEX_PREFIX=""
+P3_GEMINI_NAME="<none>"; P3_SONNET_NAME="<none>"; P3_GROK_NAME="<none>"; P3_COMPOSER_NAME="<none>"; P3_CODEX_NAME="<none>"
+P3_GEMINI_DRAW=""; P3_SONNET_DRAW=""; P3_GROK_DRAW=""; P3_COMPOSER_DRAW=""; P3_CODEX_DRAW=""
+
+if [ "$PERSONA_ROTATION" = "true" ] && [ "$CRITIQUE_PANEL" = "true" ]; then
+  P3_PERSONAS_JSON=$(python3 "$PLUGIN/scripts/resolve-persona.py" random-distinct-for-role consultant --count=5 \
+    2>>"$Z_HARNESS_PLAN_DIR/archive/$RUN/persona-draw.log")
+  for slot in 0:GEMINI 1:SONNET 2:GROK 3:COMPOSER 4:CODEX; do
+    idx="${slot%%:*}"; who="${slot##*:}"
+    name=$(echo "$P3_PERSONAS_JSON" | jq -r ".[$idx].persona // \"\"")
+    path=$(echo "$P3_PERSONAS_JSON" | jq -r ".[$idx].persona_body_path // \"\"")
+    draw=$(echo "$P3_PERSONAS_JSON" | jq -r ".[$idx].draw_id // \"\"")
+    [ -z "$name" ] && continue
+    prefix=$(python3 "$PLUGIN/runtime/dispatch/persona_prompt.py" "$path" "" 2>/dev/null | head -c 4096)
+    eval "P3_${who}_NAME=\$name"; eval "P3_${who}_PREFIX=\$prefix"; eval "P3_${who}_DRAW=\$draw"
+  done
+fi
+```
+
+Emit `persona_bound` per arm before dispatch. Arms with a drawn persona use `selection_source=random_role_pool_distinct` and include `persona_id` + `draw_id`; vanilla arms use `selection_source=fixed_panel`:
+
+```bash
+declare -A P3_ARM_NAMES=([gemini]="$P3_GEMINI_NAME" [claude-sonnet]="$P3_SONNET_NAME" [grok]="$P3_GROK_NAME" [composer]="$P3_COMPOSER_NAME" [codex-5.5]="$P3_CODEX_NAME")
+declare -A P3_ARM_DRAWS=([gemini]="$P3_GEMINI_DRAW" [claude-sonnet]="$P3_SONNET_DRAW" [grok]="$P3_GROK_DRAW" [composer]="$P3_COMPOSER_DRAW" [codex-5.5]="$P3_CODEX_DRAW")
+for ARM in gemini claude-sonnet grok composer codex-5.5; do
+  pname="${P3_ARM_NAMES[$ARM]}"; pdraw="${P3_ARM_DRAWS[$ARM]}"
+  if [ "$pname" != "<none>" ] && [ -n "$pname" ]; then
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
+      "$(printf '{"run_id":"%s","command":"z-plan","role":"consultant","arm":"%s","selection_source":"random_role_pool_distinct","persona_id":"%s","draw_id":"%s","phase":3}' "$RUN" "$ARM" "$pname" "$pdraw")"
+  else
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
+      "$(printf '{"run_id":"%s","command":"z-plan","role":"consultant","arm":"%s","selection_source":"fixed_panel","phase":3}' "$RUN" "$ARM")"
+  fi
+done
+```
+
+Spawn all 5 panel members in parallel in a single message. Each receives the **entire approved decisions doc** with the consult-flagged decisions highlighted. Prepend the arm's persona body to its prompt when available (empty string = vanilla, byte-identical to pre-feature dispatch). Cursor arms pass their model via `--model <model>`:
+
+<!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
+<!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
+<!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
+<!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
+<!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
+
+If `PERSONA_ROTATION == "false"`, fall back to the standard 2-consultant behavior:
 
 <!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
 <!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
 
-Each gets the **entire approved decisions doc** with the consult-flagged decisions highlighted. They can see all decisions and flag interactions between them. Two calls total, regardless of feature size.
+Each gets the **entire approved decisions doc** with the consult-flagged decisions highlighted. Two calls total, regardless of feature size.
 
-When both return:
+When all consultants return (from either path):
 1. For each recommendation, articulate **one concrete reason it might be wrong** before accepting it. This is mechanical, not optional.
 2. Synthesize. Make the final call yourself, citing which inputs you weighed.
 3. Flag any shortcut over the robust long-lasting solution — requires explicit user approval in Phase 5.
@@ -314,7 +369,55 @@ Both obey **DRY / KISS / SOLID**. State explicitly how the plan respects each.
 
 ## Phase 7 — Bundled final review
 
+Reuse `PERSONA_ROTATION` and `CRITIQUE_PANEL` values from Phase 3. If `PERSONA_ROTATION == "true"`, use the same **fixed 5-member panel** for Phase 7. Draw a fresh, independent set of 5 distinct `consultant` personas — do NOT reuse the Phase 3 draw.
+
+```bash
+PLUGIN="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+P7_GEMINI_PREFIX=""; P7_SONNET_PREFIX=""; P7_GROK_PREFIX=""; P7_COMPOSER_PREFIX=""; P7_CODEX_PREFIX=""
+P7_GEMINI_NAME="<none>"; P7_SONNET_NAME="<none>"; P7_GROK_NAME="<none>"; P7_COMPOSER_NAME="<none>"; P7_CODEX_NAME="<none>"
+P7_GEMINI_DRAW=""; P7_SONNET_DRAW=""; P7_GROK_DRAW=""; P7_COMPOSER_DRAW=""; P7_CODEX_DRAW=""
+
+if [ "$PERSONA_ROTATION" = "true" ] && [ "$CRITIQUE_PANEL" = "true" ]; then
+  P7_PERSONAS_JSON=$(python3 "$PLUGIN/scripts/resolve-persona.py" random-distinct-for-role consultant --count=5 \
+    2>>"$Z_HARNESS_PLAN_DIR/archive/$RUN/persona-draw.log")
+  for slot in 0:GEMINI 1:SONNET 2:GROK 3:COMPOSER 4:CODEX; do
+    idx="${slot%%:*}"; who="${slot##*:}"
+    name=$(echo "$P7_PERSONAS_JSON" | jq -r ".[$idx].persona // \"\"")
+    path=$(echo "$P7_PERSONAS_JSON" | jq -r ".[$idx].persona_body_path // \"\"")
+    draw=$(echo "$P7_PERSONAS_JSON" | jq -r ".[$idx].draw_id // \"\"")
+    [ -z "$name" ] && continue
+    prefix=$(python3 "$PLUGIN/runtime/dispatch/persona_prompt.py" "$path" "" 2>/dev/null | head -c 4096)
+    eval "P7_${who}_NAME=\$name"; eval "P7_${who}_PREFIX=\$prefix"; eval "P7_${who}_DRAW=\$draw"
+  done
+fi
+```
+
+Emit `persona_bound` per arm (same pattern as Phase 3, with `"phase":7`):
+
+```bash
+declare -A P7_ARM_NAMES=([gemini]="$P7_GEMINI_NAME" [claude-sonnet]="$P7_SONNET_NAME" [grok]="$P7_GROK_NAME" [composer]="$P7_COMPOSER_NAME" [codex-5.5]="$P7_CODEX_NAME")
+declare -A P7_ARM_DRAWS=([gemini]="$P7_GEMINI_DRAW" [claude-sonnet]="$P7_SONNET_DRAW" [grok]="$P7_GROK_DRAW" [composer]="$P7_COMPOSER_DRAW" [codex-5.5]="$P7_CODEX_DRAW")
+for ARM in gemini claude-sonnet grok composer codex-5.5; do
+  pname="${P7_ARM_NAMES[$ARM]}"; pdraw="${P7_ARM_DRAWS[$ARM]}"
+  if [ "$pname" != "<none>" ] && [ -n "$pname" ]; then
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
+      "$(printf '{"run_id":"%s","command":"z-plan","role":"consultant","arm":"%s","selection_source":"random_role_pool_distinct","persona_id":"%s","draw_id":"%s","phase":7}' "$RUN" "$ARM" "$pname" "$pdraw")"
+  else
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" persona_bound \
+      "$(printf '{"run_id":"%s","command":"z-plan","role":"consultant","arm":"%s","selection_source":"fixed_panel","phase":7}' "$RUN" "$ARM")"
+  fi
+done
+```
+
 <!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
+
+<!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
+<!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
+<!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
+<!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
+<!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
+
+If `PERSONA_ROTATION == "false"`, fall back to the standard 2-consultant behavior: spawn both consultants in parallel, each handed the full SPEC.md + PLAN.md. Include `kernel_path: <KERNEL_PATH>` when non-empty:
 - consultant-primary: "Critique this plan. What's wrong, missing, or fragile?"
 - consultant-secondary: same.
 
@@ -380,13 +483,14 @@ Log run end. Send a PushNotification (guarded by notify level) with FOUR recomme
 Plan complete. <N> tasks queued.
 
 Recommended:
-  /compact          — free planning context before next phase
-  /z-audit-plan     — (recommended) audit spec & tasks against codebase reality and best practices
-  /z-test           — (optional, recommended for risky / financial code) draft semantic test cases before implementation
-  /z-implement-all  — orchestrate the queue (auto-includes TESTS.md if present, or /z-implement-next for one-at-a-time)
+  /compact             — free planning context before next phase
+  /z-audit-plan        — (recommended) audit spec & tasks against codebase reality and best practices
+  /z-audit-plan-style  — (recommended) MR-style code-quality audit of the plan: defensive bloat, premature abstraction, DRY/KISS/SOLID, STYLE.md drift
+  /z-test              — (optional, recommended for risky / financial code) draft semantic test cases before implementation
+  /z-implement-all     — orchestrate the queue (auto-includes TESTS.md if present, or /z-implement-next for one-at-a-time)
 ```
 
-Then surface the same choice interactively via `AskUserQuestion` so users who don't read OS notifications still see it. Phrase the question as "Plan complete. What's next?" with options in this order: `/z-audit-plan` (label: `Audit the plan (recommended)` — recommended because cheap pre-implementation reality check against codebase), `/z-test` (label: `Draft semantic test cases` — recommended only for risky/financial code), `/z-implement-all` (label: `Start implementation now` — only when user has high confidence in the plan), `Skip — I'll decide later`. Default selection is `/z-audit-plan`. The user's choice is advisory — log it as a `next_step_choice` event but do not auto-dispatch the chosen command; the user invokes it themselves so they retain control of context boundaries (e.g. running `/compact` between phases).
+Then surface the same choice interactively via `AskUserQuestion` so users who don't read OS notifications still see it. Phrase the question as "Plan complete. What's next?" with these four options (the `AskUserQuestion` four-option cap is why the two plan audits share one option — the push-notification above still lists them separately): `/z-audit-plan` (label: `Audit the plan (recommended)` — recommended cheap pre-implementation reality check against the codebase; the description also points the user at `/z-audit-plan-style` for the companion MR-style quality pass on the plan artifacts), `/z-test` (label: `Draft semantic test cases` — recommended only for risky/financial code), `/z-implement-all` (label: `Start implementation now` — only when user has high confidence in the plan), `Skip — I'll decide later`. Default selection is `/z-audit-plan`. The user's choice is advisory — log it as a `next_step_choice` event but do not auto-dispatch the chosen command; the user invokes it themselves so they retain control of context boundaries (e.g. running `/compact` between phases).
 
 **Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the FINALIZE_STATUS rule (Setup step 5): normal completion deregisters with `complete`. The `deregister` subcommand returns 0 by design and self-logs a `registry_error` on internal failure, so call it with `|| true`. If register failed earlier (no record was ever written), this is a harmless no-op.
 ```bash

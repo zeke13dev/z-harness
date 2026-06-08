@@ -242,6 +242,11 @@ rules:
     output: .agent/rules/z-harness-consultant-secondary.md
     trigger: model_decision
     description: "Routes to the secondary consultant LLM (resolved via providers registry) for a second opinion on an engineering decision or to review a plan. Use during /z-plan as the cross-LLM counterpart to consultant-primary — must resolve to a distinct provider."
+  - id: context-curator
+    source: agents/context-curator.md
+    output: .agent/rules/z-harness-context-curator.md
+    trigger: model_decision
+    description: "Haiku subagent that folds the events.jsonl delta + git diff + TASKS.md + prior SESSION.md into a bounded SESSION.md handoff artifact at the /z-implement-all batch breakpoint. Mechanical curation only — never edits production code."
   - id: doc-fetcher
     source: agents/doc-fetcher.md
     output: .agent/rules/z-harness-doc-fetcher.md

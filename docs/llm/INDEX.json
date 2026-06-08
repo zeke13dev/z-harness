@@ -579,6 +579,30 @@
       "summary": "SESSION.md handoff artifact + context-curator Haiku subagent that eliminate O(N^2) cache_read growth in /z-implement-all. Notable-only breadcrumbs (E2) feed the curator; curator folds events delta + git diff + TASKS.md into a bounded SESSION.md at the compaction breakpoint (E3); done-set hash predicate re-seeds orchestrator context on resume (E1). Key env knobs: Z_SESSION_CURATOR_TIMEOUT_S (default 120, 0 disables) and Z_SESSION_MAX_CHARS (default 28000)."
     },
     {
+      "slug": "run-brief",
+      "source_file": [
+        "docs/llm/run-brief-contract.json",
+        "docs/llm/run-brief-registry.json",
+        "docs/human/run-brief.md",
+        "scripts/run-brief.sh",
+        "scripts/render-run-brief.py",
+        "scripts/lint-run-brief.sh",
+        "commands/_fragments/run-brief-finalize.md",
+        "commands/_fragments/run-brief-halt-finalize-implement-all.md",
+        "commands/_fragments/run-brief-halt-finalize-implement-next.md"
+      ],
+      "last_updated": "2026-06-08",
+      "confidence": "high",
+      "depends_on": [
+        "scripts",
+        "commands"
+      ],
+      "consumed_by": [
+        "commands"
+      ],
+      "summary": "Unified Run Brief receipt (Intent/Approach/Decisions/Outcome/Next) emitted at finalize for 11 v1 registry commands; JSON canonical in archive/$RUN/run-brief.json; chat and push rendered via render-run-brief.py."
+    },
+    {
       "slug": "capabilities-matrix",
       "source_file": [
         "z_harness_cli/adapters/claude.py",

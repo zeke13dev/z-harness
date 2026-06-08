@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "commands": {
+    "/z-plan": {
+      "profile": "full",
+      "init_after": "run_start",
+      "finalize": "Phase 9",
+      "primary_artifact": "archive/$RUN/decisions.md",
+      "fallbacks": ["PLAN.md", "SPEC.md"]
+    },
+    "/z-implement-all": {
+      "profile": "full",
+      "init_after": "register",
+      "finalize": "Finalize",
+      "primary_artifact": "PLAN.md",
+      "fallbacks": ["SPEC.md"],
+      "skip_brief_on": ["compaction_pause"]
+    },
+    "/z-implement-next": {
+      "profile": "full",
+      "init_after": "register",
+      "finalize": "Phase 5",
+      "primary_artifact": "TASKS.md"
+    },
+    "/z-audit": {
+      "profile": "full",
+      "init_after": "audit_run_start",
+      "finalize": "Phase 7",
+      "primary_artifact": "REPORT.md"
+    },
+    "/z-audit-plan": {
+      "profile": "full",
+      "init_after": "plan_audit_start",
+      "finalize": "Phase 5",
+      "primary_artifact": "PLAN_AUDIT_REPORT.md"
+    },
+    "/z-debug": {
+      "profile": "full",
+      "init_after": "debug_run_start",
+      "finalize": "Phase 10",
+      "primary_artifact": "DEBUG.md"
+    },
+    "/z-fix": {
+      "profile": "full",
+      "init_after": "fix_run_start",
+      "finalize": "Phase 10",
+      "primary_artifact": "FIX.md"
+    },
+    "/z-plan-light": {
+      "profile": "full",
+      "init_after": "light_run_start",
+      "finalize": "Phase 9",
+      "primary_artifact": "FIX.md"
+    },
+    "/z-review-all": {
+      "profile": "full",
+      "init_after": "review_all_start",
+      "finalize": "Finalize",
+      "primary_artifact": "review_all_end"
+    },
+    "/z-brainstorm": {
+      "profile": "full",
+      "init_after": "brainstorm_run_start",
+      "finalize": "Phase 4",
+      "primary_artifact": "BRAINSTORM.md"
+    },
+    "/z-do": {
+      "profile": "lite",
+      "init_after": "do_run_start",
+      "finalize": "Phase 7",
+      "primary_artifact": "approach.md",
+      "fallbacks": ["premise.md"]
+    }
+  }
+}

@@ -1,0 +1,4 @@
+{"run":"20260607T120000Z-plan","ts":"2026-06-07T12:05:00Z","kind":"user_choice","question_id":"rollout_scope","chosen":"full_11_commands","options":["pilot_3","full_11_commands"]}
+{"run":"20260607T120000Z-plan","ts":"2026-06-07T12:10:00Z","kind":"plan_route_decision","from_command":"z-brainstorm","user_choice":"proceed","to_command":"/z-plan"}
+{"run":"20260607T120000Z-plan","ts":"2026-06-07T12:15:00Z","kind":"next_step_choice","choice":"/z-implement-all"}
+{"run":"20260607T120000Z-plan","ts":"2026-06-07T12:20:00Z","kind":"user_override","question_id":"provider_for_task","chosen":"opus","tentative":"sonnet"}

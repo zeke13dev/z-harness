@@ -56,7 +56,7 @@ python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-reg
 REG_RC=$?
 ```
 
-- `REG_RC == 0` → registered; a record now exists; proceed to step 2.
+- `REG_RC == 0` → registered; a record now exists; run **Run Brief init** (step 1a), then proceed to step 2.
 - `REG_RC == 3` (register FAILED — no record was written) → emit a loud `registry_error` event
   (the register subcommand does NOT self-log its own failure; it returns 3 loudly, so the
   orchestrator logs it here), then branch:
@@ -82,6 +82,22 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orc
 ```
 
 <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the register-failure proceed/abort question via their native channel. Silent omission is forbidden. -->
+
+**1a. Run Brief init (register success only — `init_after: register` per `docs/llm/run-brief-registry.json`).** Skip when register failed and the orchestrator proceeds without a record.
+
+```bash
+if [ "$REG_RC" -eq 0 ]; then
+  CURRENT_ARCHIVE_DIR="$BASE/archive/$RUN"
+  mkdir -p "$CURRENT_ARCHIVE_DIR"
+  RUN_BRIEF_INTENT="Implement next pending task in plan ${Z_HARNESS_SLUG:-$(basename "$BASE")}"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh" init \
+    --run "$RUN" --command /z-implement-next \
+    --slug "${Z_HARNESS_SLUG:-$(basename "$BASE")}" \
+    --profile full --intent "$RUN_BRIEF_INTENT"
+  export RUN_BRIEF_PROFILE=full
+  export RUN_BRIEF_ARTIFACT="$TASKS_FILE"
+fi
+```
 
 **2. Seed scope (best-effort, non-fatal).** Dispatch the `scope-extractor` (Haiku) subagent with
 `repo_root` + `base` to produce a scope JSON array, write it to a temp file, and feed it to
@@ -125,7 +141,11 @@ Spell out every code:
   `branch`, `current_task`, `host`, and the shared paths — re-run with `--json` to render them)
   via `AskUserQuestion`: **proceed** / **wait** (re-scan after the peer finishes) / **abort**.
   Under `Z_HARNESS_NO_ASK` → proceed and log (advisory is non-blocking unattended).
-  On **abort** → a record EXISTS; run:
+  On **abort** → a record EXISTS; set `RB_HALT_REASON`, run halt-finalize, then deregister:
+  ```bash
+  RB_HALT_REASON="scope overlap abort"
+  ```
+  <!-- include: commands/_fragments/run-brief-halt-finalize-implement-next.md -->
   ```bash
   FINALIZE_STATUS=aborted
   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
@@ -134,7 +154,11 @@ Spell out every code:
   ```
 - `OVL_RC == 20` (blocking overlap — only under strict mode AND an `explicit`×`explicit` exact
   path match with a live peer) → **HALT**: a record EXISTS; push-notify (hard pause, fires
-  regardless of notify level), then run:
+  regardless of notify level), then set `RB_HALT_REASON`, run halt-finalize, then deregister:
+  ```bash
+  RB_HALT_REASON="blocking scope overlap"
+  ```
+  <!-- include: commands/_fragments/run-brief-halt-finalize-implement-next.md -->
   ```bash
   FINALIZE_STATUS=aborted
   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
@@ -158,7 +182,7 @@ Spell out every code:
 One rule governs the record's lifecycle for the entire run:
 
 > **On any abort/halt that ENDS the run AND occurs after a record exists (i.e. after a `REG_RC == 0`
-> register), set `FINALIZE_STATUS=aborted` and `deregister --status aborted` before exiting. On a
+> register), run **Run Brief — halt finalize** (when `run-brief.sh init` ran), set `FINALIZE_STATUS=aborted`, and `deregister --status aborted` before exiting. On a
 > normal completion (Phase 5), deregister with the default `complete`. On register failure (no
 > record), do NOT deregister.**
 
@@ -199,10 +223,10 @@ except (json.JSONDecodeError, OSError, KeyError, AttributeError):
     echo "Run /z-followup-status to see what is running. Wait for it to complete or dismiss before implementing." >&2
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" implement_halted_followup_running \
       "$(printf '{"running_count":%d,"sink_path":"%s"}' "$RUNNING_COUNT" "$PROJECT_SINK")" 2>/dev/null || true
-    # Run-ending halt after a record exists → FINALIZE_STATUS=aborted + deregister (the
-    # single FINALIZE_STATUS rule from Phase 0.0). If register failed earlier (no record),
-    # deregister is a harmless no-op (the CLI self-logs nothing and returns 0). The CLI
-    # self-logs any internal deregister failure, so this is best-effort `|| true`.
+    RB_HALT_REASON="follow-up consumer active"
+```
+<!-- include: commands/_fragments/run-brief-halt-finalize-implement-next.md -->
+```bash
     FINALIZE_STATUS=aborted
     python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
       --run-id "$RUN" --status "$FINALIZE_STATUS" || true
@@ -227,9 +251,14 @@ Multiple plans may coexist under `$Z_HARNESS_PLAN_DIR/`. Determine which one to 
    - **Zero candidates** → tell the user there's no plan; suggest `/z-plan`. Stop.
 3. From here on, **`BASE`** refers to `$Z_HARNESS_PLAN_DIR` (or `z-harness` if legacy). Paths below use `$BASE`.
 
+   **Set the default tasks file now that `BASE` is bound:**
+   ```bash
+   TASKS_FILE="${TASKS_FILE:-$BASE/TASKS.md}"
+   ```
+
 ## Phase 1 — Load context
 
-1. Read `$BASE/TASKS.md`. Find the first task with status `[ ]`. **Store the full task block text in `TASK_BLOCK`** (the verbatim lines from the `## T<id>` heading through the last line before the next heading). This variable is needed in Phase 2 to parse `COMPLEXITY_TIER` from the `**Complexity:**` stamp without re-reading TASKS.md.
+1. Read `$TASKS_FILE`. Find the first task with status `[ ]`. **Store the full task block text in `TASK_BLOCK`** (the verbatim lines from the `## T<id>` heading through the last line before the next heading). This variable is needed in Phase 2 to parse `COMPLEXITY_TIER` from the `**Complexity:**` stamp without re-reading TASKS.md.
 2. **Do NOT pre-extract SPEC/PLAN slices in main thread.** Pass `$BASE` to the implementer; the implementer subagent reads `$BASE/SPEC.md` and `$BASE/PLAN.md` itself with its Read tool. Saves main-thread context.
 3. (Skip — implementer reads the files it touches.)
 4. Create task archive dir: `mkdir -p $BASE/archive/tasks/<task-id>`
@@ -310,8 +339,17 @@ WAIT_RC=$?
   - **Interactive (not `Z_HARNESS_NO_ASK`):** present `AskUserQuestion`: **proceed anyway** /
     **abort task**. If proceed → continue to dispatch (the contended path is not leased; the
     post-dispatch write-set validation in Phase 2.5 will catch any actual collision). If abort →
-    flip `[~]` back to `[ ]`, log `task_halt {reason:"wait_timeout_abort"}`, apply the
-    FINALIZE_STATUS rule (deregister with `aborted`), and exit.
+    flip `[~]` back to `[ ]`, log `task_halt {reason:"wait_timeout_abort"}`, then:
+    ```bash
+    RB_HALT_REASON="lease wait timeout (interactive abort)"
+    ```
+    <!-- include: commands/_fragments/run-brief-halt-finalize-implement-next.md -->
+    ```bash
+    FINALIZE_STATUS=aborted
+    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+      --run-id "$RUN" --status aborted 2>/dev/null || true
+    exit 1
+    ```
   - **Unattended (`Z_HARNESS_NO_ASK`) — ABORT TASK (MAJOR-4).** A held-path `wait-for` exit 10
     in unattended mode MUST abort the current task. It MUST NOT silently proceed (that recreates
     the collision) and MUST NOT automatically re-enter `wait-for` on the same blocker (a re-wait
@@ -321,6 +359,10 @@ WAIT_RC=$?
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tasks/<task-id>" task_halt \
       "$(printf '{"id":"%s","reason":"wait_timeout_unattended","holder_run_id":"%s","path":"%s"}' \
          "<task-id>" "$HOLDER_RUN_ID" "$CONCEDED_PATH")"
+    RB_HALT_REASON="lease wait timeout (unattended)"
+    ```
+    <!-- include: commands/_fragments/run-brief-halt-finalize-implement-next.md -->
+    ```bash
     FINALIZE_STATUS=aborted
     python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
       --run-id "$RUN" --status "$FINALIZE_STATUS" || true
@@ -338,8 +380,17 @@ Present `AskUserQuestion`: **proceed anyway** / **wait** / **abort task**.
   validation below applies as a backstop).
 - **wait** → call `wait-for --run-id $RUN --on $HOLDER_RUN_ID --paths $CONCEDED_PATH` (same
   `WAIT_RC` handling as the auto-wait path above).
-- **abort task** → flip `[~]` back to `[ ]`, log `task_halt {reason:"user_aborted_lease"}`,
-  apply the FINALIZE_STATUS rule (deregister with `aborted`), and exit.
+- **abort task** → flip `[~]` back to `[ ]`, log `task_halt {reason:"user_aborted_lease"}`, then:
+  ```bash
+  RB_HALT_REASON="user aborted lease wait"
+  ```
+  <!-- include: commands/_fragments/run-brief-halt-finalize-implement-next.md -->
+  ```bash
+  FINALIZE_STATUS=aborted
+  python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+    --run-id "$RUN" --status aborted 2>/dev/null || true
+  exit 1
+  ```
 
 **Dispatch implementer** (Phase 2 implementer dispatch below) with the claimed paths in scope.
 
@@ -389,7 +440,7 @@ m = re.search(r"(## " + re.escape(task_id) + r"\b.*?)(?=^## T|\Z)", content, re.
 block = m.group(1) if m else ""
 cm = re.search(r"\*\*Complexity:\*\*\s*(\S+)", block)
 print(cm.group(1) if cm else "")
-' "$BASE/TASKS.md" "<task-id>" 2>/dev/null || echo "")"
+' "$TASKS_FILE" "<task-id>" 2>/dev/null || echo "")"
 
 # --- Persona draw (only when knob is on) ---
 PERSONA_PREFIX=""
@@ -558,8 +609,11 @@ Obey DRY/KISS/SOLID. No shortcuts unless PLAN.md explicitly approved one for thi
 **Parse the implementer's return.** Handle every STATUS before proceeding to Phase 3:
 
 - `STATUS: ok` → continue to Phase 3 (review).
-- `STATUS: unable_to_complete` → a record EXISTS (registered in Phase 0.0), so apply the
-  FINALIZE_STATUS rule: deregister with `aborted`, push-notify with the reason, and stop:
+- `STATUS: unable_to_complete` → a record EXISTS (registered in Phase 0.0). Set `RB_HALT_REASON` from the implementer reason, run halt-finalize, deregister, push-notify, and stop:
+  ```bash
+  RB_HALT_REASON="${IMPLEMENTER_HALT_REASON:-unable to complete task}"
+  ```
+  <!-- include: commands/_fragments/run-brief-halt-finalize-implement-next.md -->
   ```bash
   FINALIZE_STATUS=aborted
   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
@@ -843,9 +897,23 @@ RESULT="$(printf '%s' "$RESOLVED" | python3 -c 'import json,sys; print(json.load
 
 - **`result == "ask"` (or resolver error)**: present the discovery to the user with `AskUserQuestion`. If user confirms it needs a spec fix, update `$BASE/SPEC.md` now. If user says it's deferred, call `sink-add.sh` manually.
 
-## Phase 5 — Mark done + notify
+## Run Brief — halt finalize
 
-1. Flip `[ ]` to `[x]` in `$BASE/TASKS.md`. Add a one-line completion note under the task.
+Before `deregister --status aborted` on any run-ending halt after `run-brief.sh init` (unless register failed — no deregister). Set `RB_HALT_REASON`, then include the halt-finalize fragment.
+
+<!-- include: commands/_fragments/run-brief-halt-finalize-implement-next.md -->
+
+Then set `FINALIZE_STATUS=aborted` and deregister:
+
+```bash
+FINALIZE_STATUS=aborted
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+  --run-id "$RUN" --status aborted 2>/dev/null || true
+```
+
+## Phase 5 — Mark done + Run Brief finalize
+
+1. Flip `[ ]` to `[x]` in `$TASKS_FILE`. Add a one-line completion note under the task.
 2. Log task end with summary stats.
 3. **Emit `persona_attempt_outcome` (attempt close — only when `experiment.persona_rotation == "true"`).** This is a TRUE terminal for the attempt. `REVIEW_CYCLES` and `RETRIES` were initialized from `CURRENT_COUNTER` in Phase 2 (`REVIEW_CYCLES=1`, `RETRIES=CURRENT_COUNTER-1`). Populate `BLOCKER_COUNT` from the base codex reviewer's response (0 if the reviewer was skipped or found none), and `WALL_MS` from the phase timing token if available. Then:
    ```bash
@@ -859,17 +927,55 @@ RESULT="$(printf '%s' "$RESOLVED" | python3 -c 'import json,sys; print(json.load
    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" release \
      --run-id "$RUN" --paths "$CLAIM" || true   # CLI self-logs registry_error on failure
    ```
-5. **Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the single
-   FINALIZE_STATUS rule (Phase 0.0): normal completion deregisters with `complete`. The
-   `deregister` subcommand returns 0 by design and self-logs a `registry_error` on internal
-   failure, so call it with `|| true` (not `|| log`). If register failed earlier (no record was
-   ever written), this is a harmless no-op.
+5. **Run Brief — set `outcome` and `next` before the shared finalize fragment.** Primary artifact:
+   `$TASKS_FILE` (the task block lives in TASKS.md). Decisions aggregate from events inside the
+   fragment.
+
    ```bash
-   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-     --run-id "$RUN" --status "complete" || true   # CLI self-logs registry_error on failure
+   RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+   CURRENT_ARCHIVE_DIR="$BASE/archive/$RUN"
+   REMAINING="$(python3 - "$TASKS_FILE" <<'PY'
+   import re, sys
+   text = open(sys.argv[1]).read()
+   print(len(re.findall(r"\[ \]", text)))
+   PY
+   )"
+   OUTCOME="Task <task-id> complete. ${REMAINING} remaining."
+   bash "$RB_SH" set-section --run "$RUN" --section outcome --value "$OUTCOME"
+   if [ "${REMAINING:-0}" -gt 0 ]; then
+     NEXT_LABEL="Run /z-implement-next to continue"
+     NEXT_CMD="/z-implement-next"
+   else
+     NEXT_LABEL="Run /z-review-all for final-gate cross-LLM review"
+     NEXT_CMD="/z-review-all"
+   fi
+   NEXT_JSON="$(mktemp -t z-rb-next.XXXXXX.json)"
+   python3 -c 'import json,sys; print(json.dumps({"label":sys.argv[1],"command":sys.argv[2]}))' \
+     "$NEXT_LABEL" "$NEXT_CMD" > "$NEXT_JSON"
+   bash "$RB_SH" set-section --run "$RUN" --section next --json "$NEXT_JSON"
+   rm -f "$NEXT_JSON"
+   bash "$RB_SH" set-section --run "$RUN" --section status --value "complete"
+   export RUN_BRIEF_PROFILE=full
+   export RUN_BRIEF_ARTIFACT="$TASKS_FILE"
+   export RUN_BRIEF_ARTIFACT_FALLBACKS=""
    ```
-6. If notification policy ≠ `off`: send `PushNotification` — "Task <ID> complete. <N> remaining. Run /z-implement-next to continue."
-7. Brief user summary: what changed, what the reviewer flagged, what's next.
+
+6. **Run Brief finalize** — chat and push are renders only; `--require` runs before deregister:
+
+<!-- include: commands/_fragments/run-brief-finalize.md -->
+
+7. **Deregister this run** only when `--require` passed (`RB_REQUIRE_RC == 0`). Per the single
+   FINALIZE_STATUS rule (Phase 0.0): normal completion deregisters with `complete`. On
+   `--require` failure the fragment sets `FINALIZE_STATUS=aborted` — do not deregister as
+   complete. If register failed earlier (no record was ever written), deregister is a harmless
+   no-op.
+
+   ```bash
+   if [[ "${RB_REQUIRE_RC:-1}" -eq 0 ]]; then
+     python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+       --run-id "$RUN" --status "complete" || true   # CLI self-logs registry_error on failure
+   fi
+   ```
 
 Do **not** auto-advance. Wait for the user to invoke `/z-implement-next` again — this forces a fresh context per task.
 

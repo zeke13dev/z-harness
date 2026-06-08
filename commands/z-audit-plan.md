@@ -66,6 +66,95 @@ Loop prevention: carry forward the latest route chain; if it already has two ent
    ' "$VERSION_BLOB" "$Z_HARNESS_SLUG")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_audit_start "$START_PAYLOAD"
    ```
+
+   **Session id — export ONCE, persist, restore on resume (invariant 7; do this before the claim acquire).** `/z-audit-plan` has no coordination wiring today; resolve the session id exactly once here, persist it to the run archive so a crash-resume reuses the SAME id (the claim's self-reentry guard depends on a stable id), and restore it on resume BEFORE acquiring. `plan-claim.sh` never derives the session id itself — the caller always passes it via `--session`.
+   ```bash
+   # Restore a persisted session id on resume; otherwise mint one and persist it.
+   SID_FILE="$BASE/archive/$RUN/session-id"
+   if [[ -z "${Z_HARNESS_SESSION_ID:-}" && -f "$SID_FILE" ]]; then
+     export Z_HARNESS_SESSION_ID="$(cat "$SID_FILE")"
+   fi
+   if [[ -z "${Z_HARNESS_SESSION_ID:-}" ]]; then
+     export Z_HARNESS_SESSION_ID="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" session-id)"
+   fi
+   mkdir -p "$BASE/archive/$RUN"
+   printf '%s' "$Z_HARNESS_SESSION_ID" > "$SID_FILE"
+   ```
+
+   **Claim acquire — CLAIM-FIRST (invariant 2; BEFORE register, BEFORE the Run Brief init, BEFORE any artifact read).** The slug-level hard claim-lock is authoritative; the registry read below is advisory/FYI only. Acquiring before `register` avoids a register-succeeded-but-claim-aborted orphan (a registry record with no claim, needing deregister-without-release). The `--command /z-audit-plan` flag is REQUIRED on this and every later `plan-claim.sh` call (heartbeat, release) — it rebuilds the holder identity string for `--expected-holder` comparisons; omitting it makes those subcommands exit 2 or mis-compare.
+   ```bash
+   CLAIM_RC=0
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" acquire \
+     --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+     --command /z-audit-plan || CLAIM_RC=$?
+   ```
+   Branch on `CLAIM_RC` (gated; surfaced — never silent). The audit's slug is FIXED to the plan being audited, so contention/takeover offers **proceed / abort only** — there is NO use-new-slug option (unlike `/z-plan`):
+   - `0` → claimed (or self-reentry, or `Z_HARNESS_CLAIM_DISABLE=1` no-op) → proceed to register.
+   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the claim
+        contention/takeover gate (proceed / abort) via their native channel.
+        Silent omission is forbidden. -->
+   - `1` (live peer holds the claim) → show the printed holder JSON (session / command / heartbeat-age). **Interactive** → `AskUserQuestion`: **proceed anyway / abort**. **Unattended** (`Z_HARNESS_NO_ASK`) → abort (`exit 1`) UNLESS `Z_HARNESS_CLAIM_OVERRIDE=1` (then proceed). On abort here: exit WITHOUT register (nothing registered yet) and WITHOUT release (we never acquired the lock).
+   - `2` (stale-takeover succeeded — **we now hold the lock**) → show the prior holder + idle age. **Interactive** → `AskUserQuestion`: **proceed / abort** (default ABORT — the prior session's partial artifacts may exist). **Unattended** → abort UNLESS `Z_HARNESS_CLAIM_OVERRIDE=1`. **On abort here, CALL `release` FIRST** (we hold the lock we just took over), then exit WITHOUT register:
+     ```bash
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
+       --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+       --command /z-audit-plan || true
+     exit 1
+     ```
+   - `3` (corrupt / invalid — **we do NOT hold the lock**) → loud error. Proceeding does NOT acquire the slug. **Interactive** → `AskUserQuestion`: **abort (default)** / **proceed UNCOORDINATED** (clearly labeled: you and a peer may clobber each other; manual-cleanup hint `rm <claims_dir>/<slug>.lock*` then retry). **Unattended** → abort UNLESS `Z_HARNESS_CLAIM_OVERRIDE=1` (proceed uncoordinated). Do NOT call release (we never held it).
+
+   **Teardown contract for the claim gate:** on any abort at `CLAIM_RC` 0/1/3, exit WITHOUT release (we never acquired). At a `CLAIM_RC == 2` abort, release FIRST (shown above) then exit. A claim-gate abort registered NOTHING and (except exit-2) acquired nothing, so there is no deregister-without-release case. (`Z_HARNESS_CLAIM_DISABLE=1` skips claiming entirely; `Z_HARNESS_CLAIM_OVERRIDE=1` is the explicit unattended opt-in to proceed on contention/takeover/corrupt. Both are env-only knobs read inline by `plan-claim.sh`; see [docs/human/config.md](docs/human/config.md).)
+
+   **Active-plan registration — AFTER a successful claim (so a concurrent `/z-plan`'s awareness read can SEE this active audit).** Register lightly with `--phase audit`. Graduated failure policy (same as `/z-plan`) — never silent-continue on failure:
+   ```bash
+   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" register \
+     --run-id "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-audit-plan --phase audit \
+     --session "$Z_HARNESS_SESSION_ID"
+   REG_RC=$?
+   ```
+   - `REG_RC == 0` → registered; proceed.
+   - `REG_RC == 3` (register FAILED — no record was written) → emit a loud `registry_error` event, then branch:
+     - **Interactive** (not `Z_HARNESS_NO_ASK`) → `AskUserQuestion`: *proceed without coordination* / *abort*.
+       - **proceed** → continue; skip heartbeats and deregister later (no record to update). The claim is still held.
+       - **abort** → push-notify, **release the claim first** (we hold it — register failed AFTER a successful acquire), do **NOT** call deregister (no record exists), then `exit 1`:
+         ```bash
+         bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
+           --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+           --command /z-audit-plan || true
+         exit 1
+         ```
+     - **Unattended (`Z_HARNESS_NO_ASK`)** → proceed without coordination and log prominently, UNLESS `Z_HARNESS_STRICT_OVERLAP=1` → release the claim (as above) and halt (`exit 1`). No deregister either way (no record).
+   - **Any OTHER nonzero** → treat as `REG_RC == 3`.
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" registry_error \
+     "$(printf '{"op":"register","run_id":"%s","rc":%d}' "$RUN" "$REG_RC")"
+   ```
+
+   **FINALIZE_STATUS / teardown rule (single source of truth for the entire run):** the audit is now claim-first (acquire → register), so teardown is gated per-resource. On any run-ending halt that occurs AFTER a successful **claim**, `release` BEFORE `deregister` (both best-effort `|| true`); release only if the claim was acquired, deregister only if `REG_RC == 0`. The release+deregister wiring for the normal-end and halt paths is added in the downstream release task. (Heartbeat wiring is added downstream as well.)
+
+   **Plan-start awareness read (advisory; Invariant 1 — never a hard gate).** After a successful claim and register, read the lockless registry and surface concurrent peers. Read-only, deterministic, non-fatal:
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" list --json 2>/dev/null
+   AWARE_RC=$?
+   ```
+   Render any record whose `session_id != $Z_HARNESS_SESSION_ID` as a one-line advisory ("Other active sessions: <run_id> — <command> on <slug> (heartbeat <age>)"). On a non-zero `list` exit, emit `registry_error {op:"awareness_read_failed", rc:$AWARE_RC}` and **CONTINUE** — the awareness read never blocks or gates a subsequent phase:
+   ```bash
+   if [[ $AWARE_RC -ne 0 ]]; then
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" registry_error \
+       "$(printf '{"op":"awareness_read_failed","rc":%d}' "$AWARE_RC")"
+   fi
+   ```
+
+   **Run Brief init (after the claim + register + awareness read).** Registry: `/z-audit-plan`, profile `full`, artifact `PLAN_AUDIT_REPORT.md`.
+   ```bash
+   CURRENT_ARCHIVE_DIR="$BASE/archive/$RUN"
+   RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+   PLAN_AUDIT_INTENT="Pre-implementation audit of plan ${Z_HARNESS_SLUG}"
+   bash "$RB_SH" init --run "$RUN" --command /z-audit-plan --slug "$Z_HARNESS_SLUG" --profile full --intent "$PLAN_AUDIT_INTENT"
+   export RUN_BRIEF_PROFILE=full
+   export RUN_BRIEF_ARTIFACT="$BASE/PLAN_AUDIT_REPORT.md"
+   export RUN_BRIEF_ARTIFACT_FALLBACKS=""
+   ```
 6. **Notification policy:** see [docs/human/config.md](docs/human/config.md) (notify.level key).
 7. **Docs Grounding:**
    If `docs/llm/INDEX.json` exists in the repo root, dispatch `doc-fetcher` (Haiku) to identify concepts touched by this plan:
@@ -190,11 +279,7 @@ Both consultants return structured findings. Transcripts are archived under `$BA
 
 ## Phase 5 — User Gate & Action
 
-1. **Notify:**
-   If notification policy ≠ `off`, send a `PushNotification`: "Plan audit complete: N findings surfaced."
-2. **Present report:**
-   Present the list of findings to the user, highlighting BLOCKER and MAJOR severities.
-3. **Resolver pre-check — run before invoking `AskUserQuestion`:**
+1. **Resolver pre-check — run before invoking `AskUserQuestion`:**
 
    ```bash
    # Capture exit code separately — do NOT silence stderr
@@ -215,35 +300,110 @@ Both consultants return structured findings. Transcripts are archived under `$BA
 
    Branch on `$RESULT`:
 
-   - **`skip`:** Skip the `AskUserQuestion` and proceed as if the user picked `$DEFAULT`. Emit `askuser_skipped` event:
+   - **`skip`:** Skip the `AskUserQuestion` and proceed as if the user picked `$DEFAULT`. Set `AUDIT_GATE_CHOICE="$DEFAULT"`. Emit `askuser_skipped` event:
      ```bash
      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" askuser_skipped \
        "$(printf '{"question_id":"workflow.audit_to_amend","source":"%s"}' "$SOURCE")"
      ```
    - **`prefill`:** Present the `AskUserQuestion` normally, pre-select `$DEFAULT` as the recommended option (append label suffix: ` (Recommended — your preference)`).
    - **`ask`:** Present the `AskUserQuestion` normally. If `$SOURCE == "conflict"`, add to the question header text: `(Note: config says <X>, memory says <Y> — your answer below will be offered as a conflict-resolution write target.)` After the user picks an answer, if that answer differs from both config and memory values, surface a one-shot follow-up `AskUserQuestion`: "Record your answer as the new preference? (config / memory:very_strong / memory:strong / no — keep both stored, ask again next time)". Caller writes to config or dispatches `/z-suggest-memory` accordingly.
-   - **`halt`:** Emit `audit_halt` event and exit cleanly — do NOT invoke `AskUserQuestion`:
+   - **`halt`:** Emit `audit_halt` event, then execute **Run Brief — halt finalize** (below) with reason `no_ask_blocked on workflow.audit_to_amend` — do NOT invoke `AskUserQuestion`, step 2 success finalize, or Phase 9:
      ```bash
      if [[ "$RESULT" == "halt" ]]; then
        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" audit_halt \
          "$(printf '{"reason":"no_ask_blocked","question_id":"workflow.audit_to_amend","rule_id":"no_ask_halt"}')"
        echo "halt: no_ask_blocked on workflow.audit_to_amend" >&2
-       exit 0
      fi
      ```
+     **Stop here when `$RESULT` is `halt`.** Jump to **Run Brief — halt finalize** below (substitute `<reason>`), then `exit 0` — do not fall through to the AskUserQuestion gate or step 2 below.
 
    <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the audit
         gate (Amend Plan / Proceed as-is / Reject & Re-plan) via their native
         channel when resolver result is prefill or ask. Silent omission is forbidden. -->
-   **Ask user via `AskUserQuestion`** (when resolver result is `prefill` or `ask`):
+   **Ask user via `AskUserQuestion`** when resolver result is `prefill` or `ask` only — skip when `$RESULT` is `halt` or `skip`. Store the chosen option label verbatim in `AUDIT_GATE_CHOICE`:
    - **Amend Plan (Run z-amend):** Trigger interactive plan amendment to address findings.
    - **Proceed as-is:** Acknowledge findings as acceptable tradeoffs and start implementation.
    - **Reject & Re-plan:** Discard current plan artifacts and rerun `/z-plan`.
-4. **Log run end:**
+2. **Run Brief finalize (before `plan_audit_end`).** Set outcome/next from audit counts and the resolved user gate choice (`$AUDIT_GATE_CHOICE`). Chat render replaces ad-hoc notify/present prose.
+
+   ```bash
+   CURRENT_ARCHIVE_DIR="$BASE/archive/$RUN"
+   export RUN_BRIEF_PROFILE=full
+   export RUN_BRIEF_ARTIFACT="$BASE/PLAN_AUDIT_REPORT.md"
+   export RUN_BRIEF_ARTIFACT_FALLBACKS=""
+   RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+   RB_PY="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-run-brief.py"
+
+   case "${AUDIT_GATE_CHOICE:-Proceed as-is}" in
+     "Amend Plan (Run z-amend)"|*amend*)
+       _RB_NEXT_CMD="/z-amend"; _RB_NEXT_LABEL="Amend plan via /z-amend" ;;
+     "Reject & Re-plan"|*re-plan*|*replan*)
+       _RB_NEXT_CMD="/z-plan"; _RB_NEXT_LABEL="Re-plan via /z-plan" ;;
+     *)
+       _RB_NEXT_CMD="/z-implement-all"; _RB_NEXT_LABEL="Proceed to /z-implement-all" ;;
+   esac
+
+   bash "$RB_SH" set-section --run "$RUN" --section outcome \
+     --value "Plan audit: ${N_FINDINGS} findings (${N_BLOCKERS} blockers, ${N_MAJORS} majors); gate: ${AUDIT_GATE_CHOICE:-Proceed as-is}"
+   bash "$RB_SH" set-section --run "$RUN" --section next --json /dev/stdin <<JSON
+   {"label": "${_RB_NEXT_LABEL}", "command": "${_RB_NEXT_CMD}"}
+   JSON
+
+   # Pre-seed approach when PLAN_AUDIT_REPORT.md is prose-only (no extractable list bullets)
+   if [[ -f "$RUN_BRIEF_ARTIFACT" ]]; then
+     _RB_APPROACH_N="$(python3 -c '
+   import importlib.util, sys
+   spec = importlib.util.spec_from_file_location("rrb", sys.argv[1])
+   mod = importlib.util.module_from_spec(spec)
+   spec.loader.exec_module(mod)
+   print(len(mod.extract_approach_bullets(sys.argv[2])))
+   ' "$RB_PY" "$RUN_BRIEF_ARTIFACT")"
+     if [[ "$_RB_APPROACH_N" -gt 0 ]]; then
+       bash "$RB_SH" set-section --run "$RUN" --section approach --file "$RUN_BRIEF_ARTIFACT" || true
+     else
+       _RB_SEED="$CURRENT_ARCHIVE_DIR/run-brief-approach-seed.md"
+       printf '%s\n' \
+         "- Reality-check references against the codebase" \
+         "- Design and style audit against best practices" \
+         "- Adversarial cross-LLM review of plan artifacts" \
+         > "$_RB_SEED"
+       bash "$RB_SH" set-section --run "$RUN" --section approach --file "$_RB_SEED" || true
+     fi
+   fi
+   bash "$RB_SH" set-section --run "$RUN" --section status --value "complete"
+   ```
+
+   <!-- include: commands/_fragments/run-brief-finalize.md -->
+
+   3. **Log run end:**
    ```bash
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_audit_end \
      "$(printf '{"status":"complete","findings":%d,"blockers":%d,"majors":%d}' "$N_FINDINGS" "$N_BLOCKERS" "$N_MAJORS")"
    ```
+
+## Run Brief — halt finalize
+
+Before exit on any halt after `run-brief.sh init` when `PLAN_AUDIT_REPORT.md` is missing or the run aborts early. Substitute `<reason>` in the outcome line. Fragment auto-downgrades to **lite** when the report file is absent.
+
+```bash
+CURRENT_ARCHIVE_DIR="$BASE/archive/$RUN"
+export RUN_BRIEF_PROFILE=full
+export RUN_BRIEF_ARTIFACT="$BASE/PLAN_AUDIT_REPORT.md"
+export RUN_BRIEF_ARTIFACT_FALLBACKS=""
+RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+bash "$RB_SH" set-section --run "$RUN" --section outcome --value "Halted: <reason>"
+bash "$RB_SH" set-section --run "$RUN" --section next --json /dev/stdin <<'JSON'
+{"label": "Review plan audit status and retry", "command": null}
+JSON
+```
+
+<!-- include: commands/_fragments/run-brief-finalize.md -->
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_audit_end \
+  "$(printf '{"status":"halted","findings":%d,"blockers":%d,"majors":%d}' "${N_FINDINGS:-0}" "${N_BLOCKERS:-0}" "${N_MAJORS:-0}")"
+exit 0
+```
 
 ---
 
@@ -361,7 +521,7 @@ If `$PROPOSE_OUT` is empty, skip this phase entirely — no question is asked.
 | Feature | Used | Gates |
 |---------|------|-------|
 | `subagent` | yes | Phase 0 doc-fetcher Agent(); Phase 3 consultant-primary and consultant-secondary Agent() calls |
-| `ask_user` | yes | Phase 0 multiple-candidates slug selection; Phase 5 audit gate (Amend Plan / Proceed as-is / Reject & Re-plan); Phase 9 preference elevation proposal |
+| `ask_user` | yes | Phase 0 multiple-candidates slug selection; Phase 0 claim contention/takeover gate (proceed / abort) and register-failure gate (proceed without coordination / abort); Phase 5 audit gate (Amend Plan / Proceed as-is / Reject & Re-plan); Phase 9 preference elevation proposal |
 | `skill_invoke` | no | — |
 
 Driver support requirements: see frontmatter `driver_features_required`.

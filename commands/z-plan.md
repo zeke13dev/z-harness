@@ -68,9 +68,10 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
 2. **Export** `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")` for all subsequent shell calls and subagents — this is what namespaces every output path.
 3. Pick a run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`
 4. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`
-4a. Export run id and resolve config:
+4a. Export run id, archive dir, and resolve config:
     ```bash
     export Z_HARNESS_RUN="$RUN"
+    export CURRENT_ARCHIVE_DIR="$Z_HARNESS_PLAN_DIR/archive/$RUN"
     eval "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" export-env)"
     ```
 5. Capture the z-harness plugin version stamp and log the run start (merge version blob into the payload):
@@ -86,7 +87,87 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
    ```
    Output lands under `$Z_HARNESS_PLAN_DIR/archive/$RUN/events.jsonl` (log-event.sh honors `Z_HARNESS_SLUG`).
 
-   **Active-plan registration (immediately after run_start).** Register this run in the shared registry. Graduated failure policy — never silent-continue on failure:
+   **Session-id persist (export-once + persist, invariant 7).** Immediately after run_start, persist the session id so a crash-resume can restore it before the claim acquire:
+   ```bash
+   # Export-once guard: Z_HARNESS_SESSION_ID was set above; persist it now.
+   printf '%s\n' "$Z_HARNESS_SESSION_ID" > "$Z_HARNESS_PLAN_DIR/archive/$RUN/session-id"
+   ```
+
+   **Session-id restore on resume (invariant 7).** On a resume (the shell env is a fresh process), restore the persisted session id BEFORE the claim acquire so the self-reentry guard fires correctly:
+   ```bash
+   if [[ -z "$Z_HARNESS_SESSION_ID" && -f "$Z_HARNESS_PLAN_DIR/archive/$RUN/session-id" ]]; then
+     export Z_HARNESS_SESSION_ID="$(cat "$Z_HARNESS_PLAN_DIR/archive/$RUN/session-id")"
+   fi
+   ```
+
+   **Claim acquire (claim-first ordering, invariant 2).** This runs BEFORE Run-Brief init, BEFORE register, BEFORE the docs/precontext scans, and BEFORE any artifact write. Pass `--command /z-plan` so the HOLDER string is `<session>::<run>::/z-plan` (required for heartbeat/release identity checks per T003 note):
+   ```bash
+   CLAIM_RC=0
+   CLAIM_OUTPUT="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" acquire \
+     --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+     --command /z-plan)" || CLAIM_RC=$?
+   ```
+
+   Branch on `$CLAIM_RC` — every path is surfaced, no silent fall-through:
+
+   - **`CLAIM_RC == 0`** (acquired, self-reentry, or `Z_HARNESS_CLAIM_DISABLE=1`) → proceed normally.
+
+   - **`CLAIM_RC == 1`** (live peer holds the slug) → show the holder details from `$CLAIM_OUTPUT` (session / run / command / heartbeat age).
+     <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface this contention question
+          via their native channel and await a response. Silent omission is forbidden. -->
+     - **Interactive** (not `Z_HARNESS_NO_ASK`): `AskUserQuestion` — **proceed anyway / abort / use a new slug**.
+       - `proceed anyway` → continue (uncoordinated; log a `plan_claim_override` event).
+       - `abort` → exit 1. (No release — we never held the lock.)
+       - `use a new slug` → re-derive a slug and re-run the acquire **once** (loop-guard: at most 1 re-derive prompt; if the new slug also contends, abort). After a successful re-derive: re-export `Z_HARNESS_SLUG`, `Z_HARNESS_PLAN_DIR`, `RUN`, and `CURRENT_ARCHIVE_DIR` for all subsequent calls; re-persist `$Z_HARNESS_SESSION_ID` to the new archive path; re-run claim acquire with the new slug (same `CLAIM_RC` + `CLAIM_OUTPUT` pattern); branch on the new `CLAIM_RC` normally (no further re-derive).
+     - **Unattended** (`Z_HARNESS_NO_ASK`): abort (`exit 1`) unless `Z_HARNESS_CLAIM_OVERRIDE=1` → proceed anyway (log override). (No release — we never held the lock.)
+
+   - **`CLAIM_RC == 2`** (stale-takeover — **we now hold the lock**) → show prior holder + idle age from `$CLAIM_OUTPUT`.
+     <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface this stale-takeover
+          question via their native channel and await a response. Default is abort.
+          Silent omission is forbidden. -->
+     - **Interactive**: `AskUserQuestion` — **proceed / abort** (default: **ABORT** — a partial SPEC/PLAN may exist from the prior holder).
+       - `proceed` → continue.
+       - `abort` → **call `plan-claim.sh release` first** (we hold the lock), then `exit 1`.
+     - **Unattended**: abort (release first, then `exit 1`) unless `Z_HARNESS_CLAIM_OVERRIDE=1` → proceed anyway.
+     ```bash
+     # On abort at CLAIM_RC==2 (we hold the lock — must release):
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
+       --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+       --command /z-plan || true
+     ```
+
+   - **`CLAIM_RC == 3`** (corrupt / invalid args — **we do NOT hold the lock**) → emit a loud error; show manual-cleanup hint (`rm <claims_dir>/<slug>.lock*` then retry).
+     <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface this corrupt-lock
+          question via their native channel and await a response. Default is abort.
+          Silent omission is forbidden. -->
+     - **Interactive**: `AskUserQuestion` — **abort (default)** / **proceed UNCOORDINATED** (clearly labeled: you and a peer may clobber each other's artifacts).
+       - `abort` → exit 1. (No release — we never held the lock.)
+       - `proceed UNCOORDINATED` → continue (log a `plan_claim_corrupt_proceed` event).
+     - **Unattended**: abort (`exit 1`) unless `Z_HARNESS_CLAIM_OVERRIDE=1` → proceed uncoordinated. (No release either way.)
+
+   **CLAIM_HELD flag.** Set after a successful acquire (CLAIM_RC 0 with non-`disabled` output, or CLAIM_RC 2 with `proceed`) so halt-finalize paths know whether to call `release`. T007 wires release into all halt paths using this flag.
+   ```bash
+   # Set CLAIM_HELD=1 when we successfully hold the lock (used by release paths — T007).
+   # CLAIM_RC==0 and output is "acquired" or "self-reentry" → held.
+   # CLAIM_RC==0 and output is "disabled" → not held (Z_HARNESS_CLAIM_DISABLE=1).
+   # CLAIM_RC==2 and user chose proceed → held.
+   if [[ "$CLAIM_RC" -eq 0 && "$CLAIM_OUTPUT" != "disabled" ]] || \
+      [[ "$CLAIM_RC" -eq 2 && "<user chose proceed>" == "proceed" ]]; then
+     CLAIM_HELD=1
+   else
+     CLAIM_HELD=0
+   fi
+   ```
+   *(In practice the orchestrator sets `CLAIM_HELD=1` on the proceed paths and `CLAIM_HELD=0` on disable/skip paths; the pseudocode above shows the intent.)*
+
+   **Run Brief init (after claim acquire, before register).** Create `run-brief.json` for this run (registry profile `full`):
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh" init \
+     --run "$RUN" --command /z-plan --slug "$Z_HARNESS_SLUG" --profile full \
+     --intent "<task description from $ARGUMENTS — max 240 chars; not the command name alone>"
+   ```
+
+   **Active-plan registration (after claim acquire).** Register this run in the shared registry. Graduated failure policy — never silent-continue on failure:
    ```bash
    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" register \
      --run-id "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-plan --phase plan \
@@ -106,7 +187,7 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
    ```
 
    **FINALIZE_STATUS / deregister rule (single source of truth for the entire run):**
-   > On any run-ending halt that occurs AFTER `REG_RC == 0` (a record exists), set `FINALIZE_STATUS=aborted` and call `deregister --status aborted` before exiting. On normal completion (Phase 9), leave `FINALIZE_STATUS` unset so Phase 9 deregisters with `complete`. If register failed (no record), do NOT deregister anywhere.
+   > On any run-ending halt that occurs AFTER `REG_RC == 0` (a record exists), execute **Run Brief — halt finalize** (below) before `deregister --status aborted`. On normal completion (Phase 9), leave `FINALIZE_STATUS` unset so Phase 9 deregisters with `complete`. If register failed (no record), do NOT deregister anywhere.
 
    **Kernel path resolution (once per run, immediately after run_start):**
    ```bash
@@ -122,34 +203,53 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
      touch "$Z_HARNESS_PLAN_DIR/archive/$RUN/.providers-logged"
    fi
    ```
-6. Notification policy is resolved from config via the `export-env` step above. See `docs/human/config.md` for knob details (`notify.level`).
-7. **Check for LLM-tier docs.** If `docs/llm/INDEX.json` exists in the repo root, **do NOT read it from main thread.** Note its existence; Phase 1 will dispatch `doc-fetcher` (Haiku) to read it. The orchestrator never reads `docs/llm/*.json` directly — that's what burns main-thread context unnecessarily. If INDEX.json does not exist, note that fact and continue (Phase 1 will Explore without doc grounding).
-8. **Docs-freshness scan (inline, no gate yet).** Initialize signals before scanning: `docs_stale=false`, `research_stale=false`, `map_stale=false`; `stale_concepts_list=[]`; `stale_research_citations=[]`; `stale_map_citations=[]`. If `docs/llm/INDEX.json` exists, compute staleness across all its entries. This step is the ONE exception where main thread reads INDEX.json — but only the lightweight metadata fields (`slug`, `last_updated`, `source_file`), never the per-concept `<slug>.json` bodies. For each concept entry, compare `entry.last_updated` against the max `mtime` of its `source_files`. A concept is **stale** if any source file's mtime exceeds `last_updated`. Compute `stale_pct = stale_concepts / total_concepts`. The threshold is `$Z_HARNESS_DOC_STALENESS_THRESHOLD` (default `20` — meaning 20 percent). Record signal: `docs_stale = (stale_pct >= threshold)`. Also record `stale_concepts_list` (list of stale concept slugs) for display. **Do not present any AskUserQuestion here** — the gate fires below in step 9c after all three signals are collected.
-9. **Pre-plan artifact detection.** Check `$Z_HARNESS_PLAN_DIR/` for `MAP.md`, `BRAINSTORM.md`, `RESEARCH.md`, and `GRILL.md`.
+6. **Plan-start awareness read (after claim + register; non-fatal read-only).** After a successful claim and register, read the lockless registry to surface concurrent peers as an FYI — never a hard gate (Invariant 1):
+   ```bash
+   AWARENESS_JSON="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" list --json 2>/dev/null)"
+   AWARENESS_RC=$?
+   if [[ "$AWARENESS_RC" -ne 0 ]]; then
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" registry_error \
+       "$(printf '{"op":"awareness_read_failed","rc":%d}' "$AWARENESS_RC")"
+   else
+     # Render any record whose session_id != $Z_HARNESS_SESSION_ID as a one-line advisory.
+     # Example: "Other active sessions: 20240101T120000Z-other-slug — /z-plan on other-slug (heartbeat 5s)"
+     # This is purely informational — never blocks or gates a subsequent phase.
+     echo "$AWARENESS_JSON" | python3 -c "
+import json, sys, os
+records = json.load(sys.stdin)
+my_sid = os.environ.get('Z_HARNESS_SESSION_ID', '')
+peers = [r for r in records if r.get('session_id') != my_sid]
+if peers:
+    print('Other active sessions:')
+    for p in peers:
+        hb = p.get('last_heartbeat', '')
+        print(f\"  {p.get('run_id','?')} — {p.get('command','?')} on {p.get('slug','?')} (heartbeat {hb})\")
+" 2>/dev/null || true
+   fi
+   ```
+7. Notification policy is resolved from config via the `export-env` step above. See `docs/human/config.md` for knob details (`notify.level`).
+8. **Check for LLM-tier docs.** If `docs/llm/INDEX.json` exists in the repo root, **do NOT read it from main thread.** Note its existence; Phase 1 will dispatch `doc-fetcher` (Haiku) to read it. The orchestrator never reads `docs/llm/*.json` directly — that's what burns main-thread context unnecessarily. If INDEX.json does not exist, note that fact and continue (Phase 1 will Explore without doc grounding).
+9. **Docs-freshness scan (inline, no gate yet).** Initialize signals before scanning: `docs_stale=false`, `research_stale=false`, `map_stale=false`; `stale_concepts_list=[]`; `stale_research_citations=[]`; `stale_map_citations=[]`. If `docs/llm/INDEX.json` exists, compute staleness across all its entries. This step is the ONE exception where main thread reads INDEX.json — but only the lightweight metadata fields (`slug`, `last_updated`, `source_file`), never the per-concept `<slug>.json` bodies. For each concept entry, compare `entry.last_updated` against the max `mtime` of its `source_files`. A concept is **stale** if any source file's mtime exceeds `last_updated`. Compute `stale_pct = stale_concepts / total_concepts`. The threshold is `$Z_HARNESS_DOC_STALENESS_THRESHOLD` (default `20` — meaning 20 percent). Record signal: `docs_stale = (stale_pct >= threshold)`. Also record `stale_concepts_list` (list of stale concept slugs) for display. **Do not present any AskUserQuestion here** — the gate fires below in step 10c after all three signals are collected.
+10. **Pre-plan artifact detection.** Check `$Z_HARNESS_PLAN_DIR/` for `MAP.md`, `BRAINSTORM.md`, `RESEARCH.md`, and `GRILL.md`.
 
     **RESEARCH.md artifact_kind dispatch:** If `RESEARCH.md` exists, read its frontmatter `artifact_kind` and `status` fields first to determine the precontext mode:
 
     - **`artifact_kind: approach_synthesis` + `status: complete`** → **one-way gate active.** RESEARCH.md is canonical precontext. Skip MAP.md + BRAINSTORM.md injection entirely. Phase 1 uses matrix-based skip rules (see Phase 1 — RESEARCH.md one-way gate shortcut).
     - **`artifact_kind: map`** (legacy old-RESEARCH.md not yet renamed) → treat as a MAP.md artifact: apply freshness check (same regex/mtime logic as MAP.md below), then proceed with component-file injection (MAP.md + BRAINSTORM.md mode). Log `legacy_map_artifact_detected`.
     - **No `artifact_kind` field** → treat as legacy MAP.md artifact per above (component-file injection). Log `legacy_map_artifact_detected`.
-    - **`status: incomplete`** → halt. Emit `precontext_research_incomplete`. Recommend re-running `/z-research` before proceeding. Per the FINALIZE_STATUS rule, set `FINALIZE_STATUS=aborted` and deregister before exiting:
-      ```bash
-      FINALIZE_STATUS=aborted
-      python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-        --run-id "$RUN" --status aborted 2>/dev/null || true
-      ```
+    - **`status: incomplete`** → halt. Emit `precontext_research_incomplete`. Recommend re-running `/z-research` before proceeding. Per the FINALIZE_STATUS rule, execute **Run Brief — halt finalize** (below) with reason `RESEARCH.md status incomplete`.
 
-    **Freshness scan — RESEARCH.md (inline, no gate yet)** (when one-way gate is active): parse all file citations using regex `/[A-Za-z0-9_./-]+\.(rs|py|md|ts|tsx|js|jsx|json|toml|yaml|yml|sh|sql)(:\d+(-\d+)?)?/`. Also scan for extensionless allowlist filenames (`Makefile`, `Dockerfile`). Markdown link form `[label](path:line)` — extract the inner path. For each cited path: follow symlinks; compare mtime to `generated_at`; for line-ranges, use min-line mtime (any modification within range → stale). Record signal: `research_stale = true` if any citation is stale. Deleted-source detection: if a cited file no longer exists, emit a `precontext_source_deleted` event (higher severity than stale-mtime) and set `research_stale = true`. Parse failure: emit `precontext_freshness_check_failed`, continue (fail-open). **Do not present any AskUserQuestion here** — the gate fires below in step 9c.
+    **Freshness scan — RESEARCH.md (inline, no gate yet)** (when one-way gate is active): parse all file citations using regex `/[A-Za-z0-9_./-]+\.(rs|py|md|ts|tsx|js|jsx|json|toml|yaml|yml|sh|sql)(:\d+(-\d+)?)?/`. Also scan for extensionless allowlist filenames (`Makefile`, `Dockerfile`). Markdown link form `[label](path:line)` — extract the inner path. For each cited path: follow symlinks; compare mtime to `generated_at`; for line-ranges, use min-line mtime (any modification within range → stale). Record signal: `research_stale = true` if any citation is stale. Deleted-source detection: if a cited file no longer exists, emit a `precontext_source_deleted` event (higher severity than stale-mtime) and set `research_stale = true`. Parse failure: emit `precontext_freshness_check_failed`, continue (fail-open). **Do not present any AskUserQuestion here** — the gate fires below in step 10c.
 
-    **Freshness scan — MAP.md (inline, no gate yet)** (when one-way gate is inactive and MAP.md exists or RESEARCH.md is treated as MAP.md): parse all file citations using the same regex `/[A-Za-z0-9_./-]+\.(rs|py|md|ts|tsx|js|jsx|json|toml|yaml|yml|sh|sql)(:\d+(-\d+)?)?/` and extensionless allowlist (`Makefile`, `Dockerfile`). Markdown link form `[label](path:line)` — extract the inner path. For each cited path: follow symlinks; compare mtime to the MAP.md frontmatter `generated_at`; for line-ranges, use min-line mtime. Record signal: `map_stale = true` if any citation is stale. Deleted-source detection: emit `precontext_source_deleted` and set `map_stale = true`. Parse failure: emit `precontext_freshness_check_failed`, continue (fail-open). **Do not present any AskUserQuestion here** — the gate fires below in step 9c.
+    **Freshness scan — MAP.md (inline, no gate yet)** (when one-way gate is inactive and MAP.md exists or RESEARCH.md is treated as MAP.md): parse all file citations using the same regex `/[A-Za-z0-9_./-]+\.(rs|py|md|ts|tsx|js|jsx|json|toml|yaml|yml|sh|sql)(:\d+(-\d+)?)?/` and extensionless allowlist (`Makefile`, `Dockerfile`). Markdown link form `[label](path:line)` — extract the inner path. For each cited path: follow symlinks; compare mtime to the MAP.md frontmatter `generated_at`; for line-ranges, use min-line mtime. Record signal: `map_stale = true` if any citation is stale. Deleted-source detection: emit `precontext_source_deleted` and set `map_stale = true`. Parse failure: emit `precontext_freshness_check_failed`, continue (fail-open). **Do not present any AskUserQuestion here** — the gate fires below in step 10c.
 
-    **GRILL.md detection** (independent of one-way gate): If `$Z_HARNESS_PLAN_DIR/GRILL.md` exists and its frontmatter `status` is `complete`, note it as a GRILL.md precontext artifact. Read its `## Sharpened problem`, `## Killed scope`, and `## Open branches` sections for injection in Phase 0 and Phase 2. GRILL.md is a problem-statement artifact, not a code-citation artifact — **no mandatory freshness gate applies.** Exception: if GRILL.md contains file citations (matched by the same regex `/[A-Za-z0-9_./-]+\.(rs|py|md|ts|tsx|js|jsx|json|toml|yaml|yml|sh|sql)(:\d+(-\d+)?)?/`), apply the same freshness scan as MAP.md (mtime vs GRILL.md frontmatter `generated_at`) and fold any stale signal into `map_stale` for the 9c gate. If `status` is not `complete`, skip GRILL.md silently (treat as absent).
+    **GRILL.md detection** (independent of one-way gate): If `$Z_HARNESS_PLAN_DIR/GRILL.md` exists and its frontmatter `status` is `complete`, note it as a GRILL.md precontext artifact. Read its `## Sharpened problem`, `## Killed scope`, and `## Open branches` sections for injection in Phase 0 and Phase 2. GRILL.md is a problem-statement artifact, not a code-citation artifact — **no mandatory freshness gate applies.** Exception: if GRILL.md contains file citations (matched by the same regex `/[A-Za-z0-9_./-]+\.(rs|py|md|ts|tsx|js|jsx|json|toml|yaml|yml|sh|sql)(:\d+(-\d+)?)?/`), apply the same freshness scan as MAP.md (mtime vs GRILL.md frontmatter `generated_at`) and fold any stale signal into `map_stale` for the 10c gate. If `status` is not `complete`, skip GRILL.md silently (treat as absent).
 
 <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the consolidated
      freshness gate covering docs / research / map staleness — all three signals
      merged into one AskUser call — when stale_pct >= threshold or any precontext
      citation is stale or deleted. Silent omission is forbidden. -->
-    **9c. Consolidated freshness gate.** After all four scans complete (docs, RESEARCH.md, MAP.md, GRILL.md citations if present), if `docs_stale OR research_stale OR map_stale` is true:
+    **10c. Consolidated freshness gate.** After all four scans complete (docs, RESEARCH.md, MAP.md, GRILL.md citations if present), if `docs_stale OR research_stale OR map_stale` is true:
 
     Write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md`. Build up `reason_codes` from all true signals (e.g. `["docs_stale"]`, `["research_stale"]`, `["map_stale"]`, or a combination). Set `to_command` to the most specific single remedy (prefer `"/z-maintain-docs"` if docs_stale, `"/z-research"` if only research_stale, `"/z-map"` if only map_stale; if multiple signals fire, use `"/z-maintain-docs"` and list all remedies in the route-decision.md body).
 
@@ -171,22 +271,12 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
 
     On user choice:
 
-    - **Re-run remedy**: Update `route-decision.md` with the user's chosen remedy. Emit `plan_route_decision` with `from_command: "/z-plan"`, `to_command: <the computed remedy from the route-decision.md step above>`, `route_class: "contextual"`, `reason_codes` (built above), `signals.docs_stale_or_drifted: <docs_stale>`, `signals.research_stale: <research_stale>`, `signals.map_stale: <map_stale>`, `confidence: "high"`, `classifier_used: false`, `artifact_path`, `route_chain`, and `user_choice: <the user's selection>`. Halt. Do not auto-invoke the remedy command. Per the FINALIZE_STATUS rule, set `FINALIZE_STATUS=aborted` and deregister before exiting:
-      ```bash
-      FINALIZE_STATUS=aborted
-      python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-        --run-id "$RUN" --status aborted 2>/dev/null || true
-      ```
+    - **Re-run remedy**: Update `route-decision.md` with the user's chosen remedy. Emit `plan_route_decision` with `from_command: "/z-plan"`, `to_command: <the computed remedy from the route-decision.md step above>`, `route_class: "contextual"`, `reason_codes` (built above), `signals.docs_stale_or_drifted: <docs_stale>`, `signals.research_stale: <research_stale>`, `signals.map_stale: <map_stale>`, `confidence: "high"`, `classifier_used: false`, `artifact_path`, `route_chain`, and `user_choice: <the user's selection>`. Halt. Do not auto-invoke the remedy command. Per the FINALIZE_STATUS rule, execute **Run Brief — halt finalize** (below) with reason `stale inputs — user chose remedy re-run`.
     - **Proceed with all stale**: Update `route-decision.md` to record "no remedy command selected — user accepted stale inputs." Emit `plan_route_decision` with `from_command: "/z-plan"`, **`to_command: null`** (omit the field or set it to `null` explicitly — `/z-stats` must be able to distinguish this from a real remedy), `route_class: "contextual"`, `reason_codes` (built above), `signals.docs_stale_or_drifted: <docs_stale>`, `signals.research_stale: <research_stale>`, `signals.map_stale: <map_stale>`, `confidence: "high"`, `classifier_used: false`, `artifact_path`, `route_chain`, and `user_choice: "proceed_with_all_stale"`. Then:
       - If `docs_stale=true`: emit a `doc_drift_acknowledged` event. Phase 1 still uses INDEX.json but the orchestrator should weight `relevant_concepts` hints less and verify against current code more aggressively.
       - If `research_stale=true OR map_stale=true` (regardless of `docs_stale`): emit a `precontext_freshness_acknowledged` event with `sources: ["research"]` / `["map"]` / `["research","map"]` as applicable.
       - Continue to Phase 1.
-    - **Abandon**: Emit `plan_route_decision` with `from_command: "/z-plan"`, `to_command: null`, `route_class: "contextual"`, `reason_codes` (built above), `signals.docs_stale_or_drifted: <docs_stale>`, `signals.research_stale: <research_stale>`, `signals.map_stale: <map_stale>`, `confidence: "high"`, `classifier_used: false`, `artifact_path`, `route_chain`, and `user_choice: "abandon"`. Halt. Per the FINALIZE_STATUS rule, set `FINALIZE_STATUS=aborted` and deregister before exiting:
-      ```bash
-      FINALIZE_STATUS=aborted
-      python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-        --run-id "$RUN" --status aborted 2>/dev/null || true
-      ```
+    - **Abandon**: Emit `plan_route_decision` with `from_command: "/z-plan"`, `to_command: null`, `route_class: "contextual"`, `reason_codes` (built above), `signals.docs_stale_or_drifted: <docs_stale>`, `signals.research_stale: <research_stale>`, `signals.map_stale: <map_stale>`, `confidence: "high"`, `classifier_used: false`, `artifact_path`, `route_chain`, and `user_choice: "abandon"`. Halt. Per the FINALIZE_STATUS rule, execute **Run Brief — halt finalize** (below) with reason `stale inputs — user abandoned`.
 
     If **no** signal fired, skip the gate entirely — no AskUserQuestion, no route-decision.md write.
 
@@ -206,7 +296,7 @@ Each phase below ends with a checkpoint — write the phase's output to `$Z_HARN
 <!-- PLAN_ROUTE_CHECK_START -->
 ## Plan Route Check
 
-Run this route check after Setup step 9's precontext/docs gates and before Phase 1 dispatch, then run it again after Phase 5 approval if the decisions or estimated task shape make split risk clear. Use only already-known signals: `candidate_files`, `expected_tasks`, `non_obvious_decisions`, `cluster_seams`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `terrain_uncertain`, `approach_uncertain`, `has_bug_diagnosis`, `has_unknown_bug_symptom`, `has_existing_plan`, `plan_validation_intent`, `plan_amend_intent`, `has_fix_artifact`, and `docs_stale_or_drifted`. Set `plan_validation_intent`/`plan_amend_intent` only when the user re-enters this command on a slug with `SPEC.md`+`PLAN.md`+`TASKS.md` all present (see `agents/planning-router.md` for the language-match heuristic).
+Run this route check after Setup step 10's precontext/docs gates and before Phase 1 dispatch, then run it again after Phase 5 approval if the decisions or estimated task shape make split risk clear. Use only already-known signals: `candidate_files`, `expected_tasks`, `non_obvious_decisions`, `cluster_seams`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `terrain_uncertain`, `approach_uncertain`, `has_bug_diagnosis`, `has_unknown_bug_symptom`, `has_existing_plan`, `plan_validation_intent`, `plan_amend_intent`, `has_fix_artifact`, and `docs_stale_or_drifted`. Set `plan_validation_intent`/`plan_amend_intent` only when the user re-enters this command on a slug with `SPEC.md`+`PLAN.md`+`TASKS.md` all present (see `agents/planning-router.md` for the language-match heuristic).
 
 Deterministic routes:
 - Route tiny implementation-only work (`candidate_files <= 3`, no non-obvious decisions, no cross-module/schema/public surface impact) to `/z-do`.
@@ -220,12 +310,7 @@ Call `planning-router` only when deterministic signals conflict and no hard thre
 
 If routing, write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md`, emit `plan_route_decision` with `from_command`, `to_command`, `route_class`, `reason_codes`, `signals`, `confidence`, `classifier_used`, `artifact_path`, `route_chain`, and `user_choice`, then present the AskUser handoff gate: switch, continue when not forbidden by a hard threshold, or abandon. Do not execute the next command automatically.
 
-When the user chooses **switch** or **abandon** at the route gate (ending the run), per the FINALIZE_STATUS rule set `FINALIZE_STATUS=aborted` and deregister before exiting:
-```bash
-FINALIZE_STATUS=aborted
-python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-  --run-id "$RUN" --status aborted 2>/dev/null || true
-```
+When the user chooses **switch** or **abandon** at the route gate (ending the run), per the FINALIZE_STATUS rule execute **Run Brief — halt finalize** (below) with reason `route gate — user chose switch or abandon`.
 
 Loop prevention: carry forward the latest route chain; if it already has two entries, ask the user to choose explicitly. If the recommended target equals the immediate prior `from_command`, block ping-pong, show both route artifacts, and ask the user to choose. If the user continues here, log the override and do not route again for the same `reason_codes` in this run.
 <!-- PLAN_ROUTE_CHECK_END -->
@@ -262,7 +347,7 @@ This makes post-run analysis trivial: total run time = sum(`phase_end.wall_ms`);
 
 ## Phase 0 — Premise check
 
-**Do not take the prompt's premises for granted.** If precontext artifacts were detected in Setup step 9, **inject their content here** as input to the premise check:
+**Do not take the prompt's premises for granted.** If precontext artifacts were detected in Setup step 10, **inject their content here** as input to the premise check:
 - **One-way gate active** (`artifact_kind: approach_synthesis`): inject RESEARCH.md content only (core hypothesis, approach decision matrix summary, mechanical rank-ordering). Do not inject MAP.md or BRAINSTORM.md.
 - **One-way gate inactive** (component-file mode): inject MAP.md (or legacy RESEARCH.md treated as MAP.md) findings and BRAINSTORM.md chosen framing.
 - **GRILL.md present** (independent of one-way gate): inject `## Sharpened problem` and `## Killed scope` sections as additional premise framing. Do not re-inject information already covered by MAP.md or RESEARCH.md — if both are present, treat GRILL.md as supplementary problem-statement context only (scope constraints, sharpened goal statement) and skip duplicating factual findings already present in MAP/RESEARCH.
@@ -286,7 +371,7 @@ Checkpoint: `phase0-premise.md`.
 
 ## Phase 1 — Exploration
 
-**RESEARCH.md one-way gate shortcut** (when `artifact_kind: approach_synthesis` + `status: complete` detected in Setup step 9): If RESEARCH.md is non-stale, it may make doc-fetcher and/or Explore optional. The two skip conditions are **independent** — evaluate each separately using the new RESEARCH.md schema (matrix + evidence gaps):
+**RESEARCH.md one-way gate shortcut** (when `artifact_kind: approach_synthesis` + `status: complete` detected in Setup step 10): If RESEARCH.md is non-stale, it may make doc-fetcher and/or Explore optional. The two skip conditions are **independent** — evaluate each separately using the new RESEARCH.md schema (matrix + evidence gaps):
 
 - **Skip doc-fetcher** iff RESEARCH.md is non-stale AND its `## Approach decision matrix` section has ≥1 cell with `OK` or `RISKY` verdict citing a file in the task's likely-touched set.
 - **Skip Explore** iff RESEARCH.md is non-stale AND its `## Evidence gaps` section is empty (no `UNVERIFIED` cells aggregated).
@@ -297,7 +382,7 @@ The four resulting cases (one-way gate active):
 - **(c) Skip both** — matrix has OK/RISKY cell for touched files AND Evidence gaps empty → skip both, proceed to Phase 2.
 - **(d) Run both** — RESEARCH.md is stale, absent in gate-active mode, or meets neither skip condition → run both doc-fetcher and Explore.
 
-**Legacy RESEARCH.md / component-file shortcut** (when one-way gate is inactive — MAP.md or legacy RESEARCH.md detected in Setup step 9): If MAP.md (or legacy RESEARCH.md treated as MAP.md) is non-stale, it may make doc-fetcher and/or Explore optional. The two skip conditions are **independent** — evaluate each separately:
+**Legacy RESEARCH.md / component-file shortcut** (when one-way gate is inactive — MAP.md or legacy RESEARCH.md detected in Setup step 10): If MAP.md (or legacy RESEARCH.md treated as MAP.md) is non-stale, it may make doc-fetcher and/or Explore optional. The two skip conditions are **independent** — evaluate each separately:
 
 - **Skip doc-fetcher** iff MAP.md (or legacy RESEARCH.md) is non-stale AND its `Findings:` section has ≥1 entry citing a file in the task's likely-touched set.
 - **Skip Explore** iff MAP.md (or legacy RESEARCH.md) is non-stale AND its `Open questions:` section is empty.
@@ -312,7 +397,7 @@ The four resulting cases (gate inactive):
 
 ### 1a. Dispatch doc-fetcher (if INDEX.json exists)
 
-If Setup step 7 noted `docs/llm/INDEX.json` exists, spawn ONE `doc-fetcher` call with the task's keywords:
+If Setup step 8 noted `docs/llm/INDEX.json` exists, spawn ONE `doc-fetcher` call with the task's keywords:
 
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
      requirement to the user and skip the Agent() call. The doc-fetcher phase
@@ -361,7 +446,7 @@ Output a one-paragraph context summary. Checkpoint: `phase1-context.md`.
 
 ## Phase 2 — Decisions document
 
-**GRILL.md decision seeding** (if GRILL.md was detected in Setup step 9): before enumerating decisions, inject the `## Open branches` section from GRILL.md as candidate pre-seeded decisions. Each open branch is a decision the user already identified as unresolved — promote it to a decision entry in `decisions.md` with its stated options (if any) and a note that it originated from GRILL.md. Do not duplicate decisions already surfaced by MAP.md or RESEARCH.md analysis; if the same branch appears in multiple artifacts, merge them into one decision entry.
+**GRILL.md decision seeding** (if GRILL.md was detected in Setup step 10): before enumerating decisions, inject the `## Open branches` section from GRILL.md as candidate pre-seeded decisions. Each open branch is a decision the user already identified as unresolved — promote it to a decision entry in `decisions.md` with its stated options (if any) and a note that it originated from GRILL.md. Do not duplicate decisions already surfaced by MAP.md or RESEARCH.md analysis; if the same branch appears in multiple artifacts, merge them into one decision entry.
 
 Enumerate **every** decision needed to implement this task — obvious and non-obvious. Write `$Z_HARNESS_PLAN_DIR/archive/$RUN/decisions.md`. For each decision:
 
@@ -418,16 +503,12 @@ fi
 ```
 
 Branch on `$RESULT_DECISIONS`:
-- `halt`: emit `plan_halt` event and exit cleanly — do NOT invoke `AskUserQuestion`. A subsequent `/z-plan` resume re-enters at Phase 2.5. Per the FINALIZE_STATUS rule, deregister before exiting (this halt occurs after a successful register):
+- `halt`: emit `plan_halt` event — do NOT invoke `AskUserQuestion`. A subsequent `/z-plan` resume re-enters at Phase 2.5. Then execute **Run Brief — halt finalize** (below) with reason `no_ask_blocked on workflow.plan_decisions_approval` and exit (this halt occurs after a successful register):
   ```bash
   if [[ "$RESULT_DECISIONS" == "halt" ]]; then
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "${RUN:-z-plan}" plan_halt \
       "$(printf '{"reason":"no_ask_blocked","question_id":"workflow.plan_decisions_approval","rule_id":"no_ask_halt"}')"
     echo "halt: no_ask_blocked on workflow.plan_decisions_approval" >&2
-    FINALIZE_STATUS=aborted
-    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
-      --run-id "$RUN" --status aborted 2>/dev/null || true
-    exit 0
   fi
   ```
 - `skip`: accept the decisions doc silently — no AskUserQuestion. Emit `askuser_skipped` event with `{question_id: "workflow.plan_decisions_approval", source: "$SOURCE_DECISIONS"}` and proceed to Phase 3.
@@ -770,27 +851,48 @@ python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-reg
 
 Copy `$Z_HARNESS_PLAN_DIR/{SPEC,PLAN,TASKS}.md` into `$Z_HARNESS_PLAN_DIR/archive/$RUN/`. Update `manifest.json` with end timestamp, status `complete`, totals (decision count, consultation count, total tokens if available).
 
-Log run end. Send a PushNotification (guarded by notify level) with FOUR recommendations:
-```bash
-[ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end)" = yes ] && <PushNotification: plan complete message below>
-```
-```
-Plan complete. <N> tasks queued.
-
-Recommended:
-  /compact             — free planning context before next phase
-  /z-audit-plan        — (recommended) audit spec & tasks against codebase reality and best practices
-  /z-audit-plan-style  — (recommended) MR-style code-quality audit of the plan: defensive bloat, premature abstraction, DRY/KISS/SOLID, STYLE.md drift
-  /z-test              — (optional, recommended for risky / financial code) draft semantic test cases before implementation
-  /z-implement-all     — orchestrate the queue (auto-includes TESTS.md if present, or /z-implement-next for one-at-a-time)
-```
-
 <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the next-step
      recommendation choice (/z-audit-plan / /z-test / /z-implement-all / skip)
      via their native channel. Silent omission is forbidden. -->
-Then surface the same choice interactively via `AskUserQuestion` so users who don't read OS notifications still see it. Phrase the question as "Plan complete. What's next?" with these four options (the `AskUserQuestion` four-option cap is why the two plan audits share one option — the push-notification above still lists them separately): `/z-audit-plan` (label: `Audit the plan (recommended)` — recommended cheap pre-implementation reality check against the codebase; the description also points the user at `/z-audit-plan-style` for the companion MR-style quality pass on the plan artifacts), `/z-test` (label: `Draft semantic test cases` — recommended only for risky/financial code), `/z-implement-all` (label: `Start implementation now` — only when user has high confidence in the plan), `Skip — I'll decide later`. Default selection is `/z-audit-plan`. The user's choice is advisory — log it as a `next_step_choice` event but do not auto-dispatch the chosen command; the user invokes it themselves so they retain control of context boundaries (e.g. running `/compact` between phases).
+Surface the next-step choice interactively via `AskUserQuestion`. Phrase the question as "Plan complete. What's next?" with these four options (the `AskUserQuestion` four-option cap is why the two plan audits share one option — mention `/z-audit-plan-style` in the `/z-audit-plan` option description): `/z-audit-plan` (label: `Audit the plan (recommended)` — recommended cheap pre-implementation reality check against the codebase; the description also points the user at `/z-audit-plan-style` for the companion MR-style quality pass on the plan artifacts), `/z-test` (label: `Draft semantic test cases` — recommended only for risky/financial code), `/z-implement-all` (label: `Start implementation now` — only when user has high confidence in the plan), `Skip — I'll decide later`. Default selection is `/z-audit-plan`. The user's choice is advisory — log it as a `next_step_choice` event but do not auto-dispatch the chosen command; the user invokes it themselves so they retain control of context boundaries (e.g. running `/compact` between phases).
 
-**Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the FINALIZE_STATUS rule (Setup step 5): normal completion deregisters with `complete`. The `deregister` subcommand returns 0 by design and self-logs a `registry_error` on internal failure, so call it with `|| true`. If register failed earlier (no record was ever written), this is a harmless no-op.
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" next_step_choice \
+  "$(printf '{"choice":"%s"}' "<user selection>")"
+```
+
+Map the user's choice to `$NEXT_JSON` for the run brief (examples):
+
+| Choice | `$NEXT_JSON` |
+|--------|----------------|
+| `/z-audit-plan` | `{"label":"Audit the plan","command":"/z-audit-plan"}` |
+| `/z-test` | `{"label":"Draft semantic test cases","command":"/z-test"}` |
+| `/z-implement-all` | `{"label":"Start implementation","command":"/z-implement-all"}` |
+| Skip | `{"label":"Decide later","command":null}` |
+
+**Run Brief finalize (registry Phase 9).** Set registry artifact env, pre-seed outcome/status/next, then include the shared fragment. Chat and push text are rendered from `run-brief.json` only — do not author independent completion prose.
+
+```bash
+export RUN_BRIEF_PROFILE="full"
+export RUN_BRIEF_ARTIFACT="$CURRENT_ARCHIVE_DIR/decisions.md"
+export RUN_BRIEF_ARTIFACT_FALLBACKS="PLAN.md:SPEC.md"
+export RUN_BRIEF_ARTIFACT="${RUN_BRIEF_ARTIFACT:-}"
+export RUN_BRIEF_ARTIFACT_FALLBACKS="${RUN_BRIEF_ARTIFACT_FALLBACKS:-}"
+
+RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+TASK_COUNT="$(grep -cE '^[[:space:]]*- \[[[:space:]]\] T[0-9]+' "$Z_HARNESS_PLAN_DIR/TASKS.md" 2>/dev/null || echo 0)"
+bash "$RB_SH" set-section --run "$RUN" --section outcome \
+  --value "Plan complete. ${TASK_COUNT} tasks queued in TASKS.md."
+bash "$RB_SH" set-section --run "$RUN" --section status --value "complete"
+NEXT_JSON_FILE="$(mktemp -t z-rb-next.XXXXXX.json)"
+printf '%s\n' "$NEXT_JSON" > "$NEXT_JSON_FILE"
+bash "$RB_SH" set-section --run "$RUN" --section next --json "$NEXT_JSON_FILE"
+rm -f "$NEXT_JSON_FILE"
+```
+
+<!-- include: commands/_fragments/run-brief-finalize.md -->
+
+**Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the FINALIZE_STATUS rule (Setup step 5): normal completion deregisters with `complete`; if the fragment's `--require` step set `FINALIZE_STATUS=aborted`, deregister with `aborted` instead. The `deregister` subcommand returns 0 by design and self-logs a `registry_error` on internal failure, so call it with `|| true`. If register failed earlier (no record was ever written), this is a harmless no-op.
 ```bash
 python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
   --run-id "$RUN" --status "${FINALIZE_STATUS:-complete}" || true   # CLI self-logs registry_error on failure
@@ -799,6 +901,31 @@ python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-reg
 The `/compact` recommendation is important: the planning phase (Explore agents, decisions doc, consultant returns, SPEC/PLAN drafting) is the heaviest context burner in the harness. Compacting at this boundary frees ~MB of main-thread context before implementation kicks off. Subagents during implementation are fresh-context already, so no per-batch compact is needed.
 
 The `/z-test` step is optional but high-value when the plan touches money, ordering, signal generation, or any other domain where mechanical correctness (which `/z-implement-all`'s reviewer catches) is not enough to catch semantic bugs (notional sign flips, feature schema mismatches, unit confusion). It produces a `TESTS.md` artifact that `/z-implement-all`'s implementer subagent reads alongside TASKS.md, so test code lands in the same diff as the production code it exercises.
+
+## Run Brief — halt finalize
+
+Before `deregister --status aborted` on any halt after `run-brief.sh init` (unless register failed — no deregister). Substitute `<reason>` in the outcome line. When no planning artifact exists yet, the shared fragment auto-downgrades to **lite** (Intent + Outcome + Next).
+
+**Known gap:** halts before Setup step 5 (`run-brief.sh init`) — e.g. `workflow.slug_confirm` resolver `halt` during slug derivation — skip this block (no brief JSON yet).
+
+```bash
+export RUN_BRIEF_PROFILE=full
+export RUN_BRIEF_ARTIFACT="${RUN_BRIEF_ARTIFACT:-}"
+export RUN_BRIEF_ARTIFACT_FALLBACKS="${RUN_BRIEF_ARTIFACT_FALLBACKS:-PLAN.md:SPEC.md}"
+RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+bash "$RB_SH" set-section --run "$RUN" --section outcome --value "Halted: <reason>"
+bash "$RB_SH" set-section --run "$RUN" --section next --json /dev/stdin <<'JSON'
+{"label": "Review plan status and retry or escalate", "command": null}
+JSON
+```
+
+<!-- include: commands/_fragments/run-brief-finalize.md -->
+
+```bash
+FINALIZE_STATUS=aborted
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+  --run-id "$RUN" --status aborted 2>/dev/null || true
+```
 
 ---
 
@@ -842,7 +969,7 @@ Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema
 | Feature | Used | Gates |
 |---------|------|-------|
 | `subagent` | yes | Phase 1a doc-fetcher Agent(); Phase 1b Explore Agent(); Phase 3 consultant-primary/secondary Agent() calls (2-consultant fallback when `experiment.persona_rotation=false`) or fixed 5-panel Agent() calls (agy, cursor@claude-4.6-sonnet, cursor@grok-4.3, cursor@composer-2.5, codex-cli — when `experiment.persona_rotation=true`); Phase 7 same panel structure as Phase 3; Phase 8 complexity-classifier Agent() calls. When `personas.critique_panel=true` (and `experiment.persona_rotation=true`), each Phase 3 and Phase 7 arm is additionally prefixed with a drawn consultant persona — no extra Agent() calls, the prefix is injected into each arm's existing prompt. |
-| `ask_user` | yes | Setup step 0 (empty arguments); Setup step 1 (slug collision + resolver prefill/ask branches); Setup step 9c (consolidated freshness gate — one AskUserQuestion covering docs / research / map / GRILL.md-citation staleness); Phase 0 (premise concern); Phase 2.5 (decisions doc approval — guarded by `workflow.plan_decisions_approval` resolver); Phase 5 (design decision + shortcut approval); Phase 8 (task-count overflow); Phase 9 (next-step recommendation choice) |
+| `ask_user` | yes | Setup step 0 (empty arguments); Setup step 1 (slug collision + resolver prefill/ask branches); Setup step 10c (consolidated freshness gate — one AskUserQuestion covering docs / research / map / GRILL.md-citation staleness); Phase 0 (premise concern); Phase 2.5 (decisions doc approval — guarded by `workflow.plan_decisions_approval` resolver); Phase 5 (design decision + shortcut approval); Phase 8 (task-count overflow); Phase 9 (next-step recommendation choice) |
 | `skill_invoke` | no | — |
 
 Driver support requirements: see frontmatter `driver_features_required`.
