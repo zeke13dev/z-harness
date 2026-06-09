@@ -353,6 +353,7 @@ High-context runs (many tasks, long wall time) accumulate orchestrator context p
 Z_IMPLEMENT_PAUSE_TASKS="${Z_IMPLEMENT_PAUSE_TASKS:-5}"
 Z_IMPLEMENT_PAUSE_MINUTES="${Z_IMPLEMENT_PAUSE_MINUTES:-30}"
 export Z_HARNESS_PLAN_DIR="$BASE"
+export Z_HARNESS_AGENT="${Z_HARNESS_AGENT:-pi}"
 export Z_IMPLEMENT_PAUSE_TASKS
 export Z_IMPLEMENT_PAUSE_MINUTES
 
@@ -393,6 +394,13 @@ If the user chooses **Pause (recommended)** (following the recommendation, no ov
 Before exiting, write `session-status.json` with status `"paused"` and
 `halt_description: "compaction breakpoint"`. Use the atomic write pattern from
 the "Session status file" section above.
+
+Write the handoff artifact for Hermes consumption (best-effort, non-fatal):
+
+```bash
+export Z_HARNESS_PLAN_DIR Z_HARNESS_SLUG Z_HARNESS_AGENT
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/write-handoff.sh" || true
+```
 
 Finalize the loop cleanly: do **not** dispatch any new task. Exit with status 0. The script's `.last-compaction-check` state file has been updated, so the next invocation starts with a fresh window. If the user ran `/clear`, context is fresh. If they did not `/clear`, they chose to forgo the breakpoint's benefit; the run proceeds with residual context.
 

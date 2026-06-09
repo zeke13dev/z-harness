@@ -52,6 +52,7 @@ Codex reviews keep flagging the same five things across tasks. Run this checklis
 4. **New public surface beyond the spec.** Did you export a function, define a public type, or add a CLI flag not in the spec? Remove or downgrade to private/internal. The spec's "Surface:" section is authoritative.
 5. **Stale docstrings / comments.** Did your edits invalidate any nearby docstring, comment, or README claim? Update or delete the stale claim.
 6. **TESTS.md coverage.** If your task block has a `**Tests:**` line, did you produce a test for *every* listed TEST-NNN entry, at the specified `Target file:`, with an assertion that actually exercises the `Failure class:` named in the entry? A test that compiles and passes but doesn't fail on a deliberate violation of the invariant is a trivial test — strengthen it before returning `STATUS: ok`.
+7. **RATIONALE present.** Did you include a RATIONALE field explaining why you chose the approach you did? This is required on every return. If you followed SPEC/PLAN exactly, state that briefly.
 
 If you applied a fix from this checklist, mention it in `SUMMARY:`. If you intentionally kept something the checklist flags (e.g. broad catch is genuinely correct for this code), justify it in an `ISSUES:` note so the reviewer doesn't waste a cycle flagging it.
 
@@ -67,6 +68,13 @@ FILES_CHANGED:
   - <abs path>
 SUMMARY:
   <2-4 sentences on what was done>
+RATIONALE:
+  <1-3 sentences explaining why the chosen approach was taken,
+   especially when it differs from what SPEC/PLAN specified>
+TRIED: (optional — omit if no failed attempts; see note below)
+  - <approach> — <why it failed>
+DEVIATIONS: (optional — omit if implementation matches PLAN exactly)
+  - <what differed from PLAN> — <why>
 ACCEPTANCE_SELF_CHECK:
   - <criterion 1>: <pass|fail|untested + why>
   - <criterion 2>: ...
@@ -91,6 +99,26 @@ Rules:
 - **Optional** — omit the field entirely (or emit `cross_task_notes: []`) when there is nothing to signal. Backward-compatible: the orchestrator treats an absent field as an empty list.
 - **Target task must exist** in the same `TASKS.md`. If you name a task that doesn't exist, the orchestrator will log a warning and skip silently — it will not fail your task.
 - Keep notes short (one sentence). The orchestrator appends them verbatim as `**Note:** <note>` lines in the target task block.
+
+### `RATIONALE` field
+
+Explain WHY the chosen approach was taken, especially when it differs from what SPEC/PLAN specified. This feeds into Tier 2 design rationale and ADRs. 1-3 sentences. Required on every return.
+
+### `TRIED` field (optional)
+
+List approaches you attempted and why they failed. This feeds into Tier 2 tried-and-failed sections. Format: markdown list of `approach — failure reason` pairs. Omit if no approaches were attempted and discarded.
+
+**Important:** TRIED entries are self-reported and cannot be independently verified by the reviewer (the dead code was never committed). Be honest — the output documents include a caveat banner noting this limitation. Do not fabricate failed approaches for narrative drama.
+
+### `DEVIATIONS` field (optional)
+
+List anything that differs from the PLAN. This feeds into Tier 2 migration guides and plan deviation narratives. Format: markdown list of `deviation — reason` pairs. The reviewer will validate these against the diff. Omit if implementation matches PLAN exactly.
+
+| Field | Required? | Validated by | Used by Tier 2 for |
+|---|---|---|---|
+| `RATIONALE` | Yes | Reviewer (plausibility check) | Design rationale, why-decisions |
+| `TRIED` | Optional | Reviewer (code consistency only) | Tried-and-failed sections |
+| `DEVIATIONS` | Optional | Reviewer (validates against diff) | Migration guides, plan deviation narrative |
 
 ## Rules
 

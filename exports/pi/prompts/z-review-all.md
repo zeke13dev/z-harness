@@ -588,6 +588,21 @@ Diff stats: <X files, Y additions, Z deletions>
 
 Apply the **one-reason-it-might-be-wrong** rule from `/z-plan` to every finding before listing it. Push back on weak findings.
 
+### Phase 5.5 — Tier 2 review patterns accumulation
+
+After `findings.md` is built, extract aggregate review patterns and append to tier2-context.json:
+
+```bash
+python3 scripts/append-tier2-context.py --phase review --field review_patterns \
+  --json '<extracted patterns JSON>'
+```
+
+Pattern format: `{"pattern": "...", "source": "consultant-primary|consultant-secondary|consensus", "finding": "...", "recommendation": "..."}`.
+
+Extract: patterns that appeared across both consultant returns, consensus/disagreement themes, architectural observations that span multiple tasks.
+
+Non-fatal: failure logs event, continues.
+
 ## Phase 6 — Promote findings to review tasks
 
 Build `$BASE/REVIEW-TASKS.md` and snapshot the same content to `$BASE/archive/$RRUN/REVIEW-TASKS.md`. This is a candidate artifact: the user deletes anything they reject before applying it.
@@ -724,6 +739,49 @@ After `REVIEW-TASKS.md` is built, auto-apply amendment proposals based on severi
 rm -f "$Z_HARNESS_PLAN_DIR/.review_state.json"
 ```
 This ensures a subsequent `/z-review-all` starts a full fresh run rather than fast-forwarding into a stale Phase 4.
+
+### Phase 6.7 — Tier 2 context finalization + significance gate
+
+After Phase 6.5 cleanup, finalize tier2-context.json and evaluate the three-signal OR gate:
+
+```bash
+# Mark finalized
+python3 -c "
+import json, os, datetime
+dir = os.environ.get('Z_HARNESS_PLAN_DIR', '')
+if not dir: exit(0)
+path = os.path.join(dir, 'tier2-context.json')
+if not os.path.exists(path): exit(0)
+d = json.load(open(path))
+d['finalized'] = True
+d['generated_at'] = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+gaps = []
+for ov in d.get('human_overrides', []):
+    if not ov.get('reason'):
+        gaps.append({'field': 'human_overrides[].reason', 'status': 'missing', 'note': 'Override missing reason'})
+d['gaps'] = gaps
+json.dump(d, open(path, 'w'), indent=2)
+"
+
+# Three-signal OR gate
+SIGNIFICANT=$(python3 -c "
+import json, os
+dir = os.environ.get('Z_HARNESS_PLAN_DIR', '')
+path = os.path.join(dir, 'tier2-context.json')
+if not os.path.exists(path): print('false'); exit(0)
+d = json.load(open(path))
+consult = len(d.get('consultant_findings', [])) > 0
+breaking = len(d.get('breaking_changes', [])) > 0
+devis = len(d.get('deviations', [])) > 0
+print('true' if (consult or breaking or devis) else 'false')
+")
+```
+
+**If significant** (any signal fires): push-notify "Pipeline complete. Tier 2 context captured. Run /z-doc-rationale." Add `/z-doc-rationale` to recommendations.
+
+**If not significant:** "Pipeline complete. No significant design decisions. Tier 2 skipped."
+
+**Archive:** Copy `tier2-context.json` to `$BASE/archive/$RRUN/tier2-context.json`.
 
 ## Finalize
 
@@ -936,12 +994,22 @@ bash "$RB_SH" finalize --run "$RUN"
 
 `finalize` classifies terminal status (via `run-status.sh` when unset), resolves artifact/fallback env, auto-downgrades to **lite** when no artifact exists on a full-profile brief (see halt-safe below), validates against `docs/llm/run-brief-contract.json`, and emits `run_brief_end`.
 
+#### 3.5. Cost summary render → stdout (non-fatal, before chat)
+
+```bash
+COST_SUMMARY_TEXT=""
+COST_RENDERER="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-cost-summary.py"
+if [ -f "$COST_RENDERER" ] && [ -f "$CURRENT_ARCHIVE_DIR/events.jsonl" ]; then
+  COST_SUMMARY_TEXT="$(python3 "$COST_RENDERER" "$CURRENT_ARCHIVE_DIR/events.jsonl" 2>/dev/null || true)"
+fi
+```
+
 #### 4. Chat render → user (replaces hand-authored "Brief summary")
 
 Print rendered chat text to the user — **do not** write independent summary prose:
 
 ```bash
-python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat ${COST_SUMMARY_TEXT:+--cost-summary-text "$COST_SUMMARY_TEXT"}
 ```
 
 #### 5. Push render (when notify policy allows)
@@ -954,6 +1022,18 @@ fi
 ```
 
 Push format: `{intent[:80]} · {outcome[:60]} · Next: {next.label}` (from JSON).
+
+#### 5.5. Discord render (when notify policy + webhook URL allow)
+
+```bash
+if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end --channel discord)" = yes ]; then
+  DISCORD_TITLE="${RUN_BRIEF_INTENT:-z-harness run}"
+  DISCORD_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/notify-discord.sh" "$DISCORD_TITLE" "$DISCORD_BODY" || true
+fi
+```
+
+Discord uses enriched embed format — includes cost summary when available (not identical to PushNotification content). Non-fatal on failure.
 
 #### 6. Hard gate — `--require` before deregister
 
@@ -1148,12 +1228,22 @@ bash "$RB_SH" finalize --run "$RUN"
 
 `finalize` classifies terminal status (via `run-status.sh` when unset), resolves artifact/fallback env, auto-downgrades to **lite** when no artifact exists on a full-profile brief (see halt-safe below), validates against `docs/llm/run-brief-contract.json`, and emits `run_brief_end`.
 
+#### 3.5. Cost summary render → stdout (non-fatal, before chat)
+
+```bash
+COST_SUMMARY_TEXT=""
+COST_RENDERER="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-cost-summary.py"
+if [ -f "$COST_RENDERER" ] && [ -f "$CURRENT_ARCHIVE_DIR/events.jsonl" ]; then
+  COST_SUMMARY_TEXT="$(python3 "$COST_RENDERER" "$CURRENT_ARCHIVE_DIR/events.jsonl" 2>/dev/null || true)"
+fi
+```
+
 #### 4. Chat render → user (replaces hand-authored "Brief summary")
 
 Print rendered chat text to the user — **do not** write independent summary prose:
 
 ```bash
-python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat ${COST_SUMMARY_TEXT:+--cost-summary-text "$COST_SUMMARY_TEXT"}
 ```
 
 #### 5. Push render (when notify policy allows)
@@ -1166,6 +1256,18 @@ fi
 ```
 
 Push format: `{intent[:80]} · {outcome[:60]} · Next: {next.label}` (from JSON).
+
+#### 5.5. Discord render (when notify policy + webhook URL allow)
+
+```bash
+if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end --channel discord)" = yes ]; then
+  DISCORD_TITLE="${RUN_BRIEF_INTENT:-z-harness run}"
+  DISCORD_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/notify-discord.sh" "$DISCORD_TITLE" "$DISCORD_BODY" || true
+fi
+```
+
+Discord uses enriched embed format — includes cost summary when available (not identical to PushNotification content). Non-fatal on failure.
 
 #### 6. Hard gate — `--require` before deregister
 

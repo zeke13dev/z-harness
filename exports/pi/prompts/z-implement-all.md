@@ -1410,6 +1410,7 @@ High-context runs (many tasks, long wall time) accumulate orchestrator context p
 Z_IMPLEMENT_PAUSE_TASKS="${Z_IMPLEMENT_PAUSE_TASKS:-5}"
 Z_IMPLEMENT_PAUSE_MINUTES="${Z_IMPLEMENT_PAUSE_MINUTES:-30}"
 export Z_HARNESS_PLAN_DIR="$BASE"
+export Z_HARNESS_AGENT="${Z_HARNESS_AGENT:-claude}"
 export Z_IMPLEMENT_PAUSE_TASKS
 export Z_IMPLEMENT_PAUSE_MINUTES
 
@@ -1536,6 +1537,9 @@ fi
 # but CURATOR_REASON="not_run" in that case.
 if [ "$CURATOR_SUCCESS" -eq 1 ]; then
   # SUCCESS PATH — curator ran successfully and hashes match.
+  # Write handoff.json for Hermes consumption (best-effort, non-fatal)
+  export Z_HARNESS_PLAN_DIR Z_HARNESS_SLUG Z_HARNESS_AGENT
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/write-handoff.sh" || true
   # Emit /clear & resume push-notify (hard pause).
   push_notify "Compaction breakpoint: <N> tasks completed (or <M> min wall). <K> pending tasks remain. Run \`/clear\`, then re-invoke \`/z-implement-all\` to resume from TASKS.md. Or run \`/handoff\` to write a handoff artifact for a different agent. Use \`/compact\` instead if you need chat history for debugging."
 else
