@@ -332,13 +332,6 @@ Paths that must NOT deregister:
    ```
    Resolve the kernel path exactly once here. When `KERNEL_PATH` is non-empty, inject `kernel_path: <KERNEL_PATH>` as a line in the `Agent(prompt=...)` of every behavioral-agent dispatch in this run (spec-precheck, implementer, reviewer). Omit the line entirely when `KERNEL_PATH` is empty — the agent's static fallback handles self-resolution in that case. Do NOT inject kernel content — inject the path string only.
 
-   **Initialize compaction counters** (immediately after emitting `run_start`, before any task dispatch):
-   ```bash
-   tasks_since_pause=0
-   pause_clock_start="$(date +%s)"
-   ```
-   These are in-memory counters that live only for the duration of this invocation. Both reset to these initial values on every re-invocation (i.e. after a `compaction_pause` exit and `/clear`). There is no persistent state to read — TASKS.md's `[x]` count is the durable record; the counters are ephemeral rate-limiters for the current window only.
-
 6. **One-time local cargo clean** (only when remote-runner is in play): if any task in the queue has a `**REMOTE_VERIFY:**` line and the repo has a `Cargo.toml`, set env `Z_HARNESS_LOCAL_CARGO_CLEAN=1` (the remote-runner uses this to trigger a one-time `cargo clean` on the local checkout). Local cargo builds should be rare in this harness.
 7. Send initial `PushNotification` (if policy != `off`): "Orchestration started on plan `<slug>`. <N> pending tasks. Plugin version: <z_harness_version>."
 7.5. **Test-runner cache (only if `$BASE/TESTS.md` exists).** Tests written by the implementer per TESTS.md must be executable in the per-task acceptance check (step 8.5). The exact run command depends on the repo: `cargo test --test <name>` / `cargo nextest run -E 'test(<name>)'` / `pytest <path> -k <name>` / `pnpm test <name>` / etc. Look for an existing cache at `$BASE/test-runner.json`:
@@ -358,36 +351,24 @@ High-context runs (many tasks, long wall time) accumulate orchestrator context p
 - `Z_IMPLEMENT_PAUSE_MINUTES` (default `30`) — wall minutes since last pause (or run start) that triggers a breakpoint.
 - Either env var set to `0` disables that trigger; both `0` disables compaction breakpoints entirely for this command.
 
-**Counters (orchestrator-side, in-memory; reset on every pause and on re-invocation):**
-- `tasks_since_pause`: incremented when a task transitions to `[x]` (done). **Not** incremented on retries (a single task with 3 retries counts as 1 completion). **Not** incremented when a task is rolled back to `[ ]` after a halt or abandon. A task surfaced as a halt and explicitly deferred by the user (left `[ ]` with a `**Note:**`) also does not increment — only `[x]` transitions count.
-- `pause_clock_start`: epoch seconds, set at run start and reset on every pause.
-
-**Trigger check (batch-settle only):** At the end of each batch — after all in-flight task tracks reach terminal status, after the atomic TASKS.md write, after the `batch_done` event is emitted, and after all halt signals from the batch have been surfaced and resolved or deferred by the user — evaluate:
-
-```
-Z_IMPLEMENT_PAUSE_TASKS="${Z_IMPLEMENT_PAUSE_TASKS:-5}"
-Z_IMPLEMENT_PAUSE_MINUTES="${Z_IMPLEMENT_PAUSE_MINUTES:-30}"
-NOW="$(date +%s)"
-WALL_MINUTES=$(( (NOW - pause_clock_start) / 60 ))
-
-if [ "$Z_IMPLEMENT_PAUSE_TASKS" -gt 0 ] && [ "$tasks_since_pause" -ge "$Z_IMPLEMENT_PAUSE_TASKS" ]; then
-    TRIGGER="task_count"
-elif [ "$Z_IMPLEMENT_PAUSE_MINUTES" -gt 0 ] && [ "$WALL_MINUTES" -ge "$Z_IMPLEMENT_PAUSE_MINUTES" ]; then
-    TRIGGER="wall_time"
-else
-    TRIGGER=""
-fi
-```
-
-**On trigger:** count the remaining `[ ]` tasks in `$TASKS_FILE` as `PENDING_REMAINING`. Emit:
+**Trigger check (batch-settle only):** At the end of each batch — after all in-flight task tracks reach terminal status, after the atomic TASKS.md write, after the `batch_done` event is emitted, and after all halt signals from the batch have been surfaced and resolved or deferred by the user — run the deterministic check script:
 
 ```bash
-bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" compaction_pause \
-  "$(printf '{"trigger":"%s","tasks_since_pause":%d,"wall_minutes_since_pause":%d,"pending_remaining":%d}' \
-     "$TRIGGER" "$tasks_since_pause" "$WALL_MINUTES" "$PENDING_REMAINING")"
+Z_IMPLEMENT_PAUSE_TASKS="${Z_IMPLEMENT_PAUSE_TASKS:-5}"
+Z_IMPLEMENT_PAUSE_MINUTES="${Z_IMPLEMENT_PAUSE_MINUTES:-30}"
+export Z_HARNESS_PLAN_DIR="$BASE"
+export Z_IMPLEMENT_PAUSE_TASKS
+export Z_IMPLEMENT_PAUSE_MINUTES
+
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/check-compaction.sh"
+COMPACTION_TRIGGERED=$?
 ```
 
-Then push-notify (this is a hard pause — fires regardless of notification level) with the compaction breakpoint message, and ask:
+`check-compaction.sh` reads `[x]` count from `$BASE/TASKS.md`, reads/writes a `.last-compaction-check` state file in `$BASE`, and evaluates both thresholds. It emits the `compaction_pause` event on trigger (exit code 1) and exits 0 otherwise. No LLM-side counters exist — the script is the sole evaluator.
+
+If `COMPACTION_TRIGGERED` is 0: continue to the next outer loop iteration.
+
+**On trigger (exit code 1):** push-notify (this is a hard pause — fires regardless of notification level) with the compaction breakpoint message, and ask:
 
 ```
 AskUserQuestion "Compaction breakpoint: <N> tasks completed (<M> min wall). <K> pending tasks remain. Recommended: pause and /clear. Choose [Continue / Pause (recommended)]?"
@@ -409,7 +390,7 @@ If the user presses Enter (no reason), log:
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" human_override_skipped \
   "$(printf '{"decision_id":"%s","gate":"compaction_breakpoint"}' "compaction-continue-<n>")"
 ```
-Reset `tasks_since_pause=0` and `pause_clock_start="$(date +%s)"` (the window restarts), then continue the outer loop. Do **not** dispatch any new task until the next iteration.
+The script has already updated `.last-compaction-check`, so the window restarts automatically. Continue the outer loop. Do **not** dispatch any new task until the next iteration.
 
 If the user chooses **Pause (recommended)** (following the recommendation, no override):
 
@@ -417,7 +398,7 @@ Before exiting, write `session-status.json` with status `"paused"` and
 `halt_description: "compaction breakpoint"`. Use the atomic write pattern from
 the "Session status file" section above.
 
-Finalize the loop cleanly: do **not** dispatch any new task. Exit with status 0. On the next `/z-implement-all` invocation, counters reset — if the user ran `/clear`, context is fresh and a new window is correct. If they did not `/clear`, they chose to forgo the breakpoint's benefit; the run proceeds with a new window.
+Finalize the loop cleanly: do **not** dispatch any new task. Exit with status 0. The script's `.last-compaction-check` state file has been updated, so the next invocation starts with a fresh window. If the user ran `/clear`, context is fresh. If they did not `/clear`, they chose to forgo the breakpoint's benefit; the run proceeds with residual context.
 
 **No trigger:** continue to the next outer loop iteration (step 1).
 
@@ -950,8 +931,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tas
 ```
 (`tests_passed`/`tests_failed` are 0 if the task had no `**Tests:**` line.)
 4. If notify.level is `all` (see [docs/human/config.md](docs/human/config.md)): push-notify per-task. (For `approval_only` default: only notify on halts.)
-5. Increment `tasks_since_pause` by 1 (this task reached `[x]`; retries and rollbacks do not count).
-6. **Batch-settle compaction check (once per batch, after all tracks finish).** When all parallel tracks in this outer iteration have completed (all have reached terminal status, the atomic TASKS.md write is done, `batch_done` is emitted, and all halt signals have been surfaced and resolved or deferred by the user), run the trigger check documented in the "Compaction breakpoint policy" section above. If a trigger fires: emit the `compaction_pause` event, push-notify, and exit cleanly with no new dispatch. If no trigger fires: continue to step 1.
+5. **Batch-settle compaction check (once per batch, after all tracks finish).** When all parallel tracks in this outer iteration have completed (all have reached terminal status, the atomic TASKS.md write is done, `batch_done` is emitted, and all halt signals have been surfaced and resolved or deferred by the user), run the trigger check documented in the "Compaction breakpoint policy" section above (the `check-compaction.sh` invocation). If exit code 1: follow the pause protocol in that section, then exit cleanly with no new dispatch. If exit code 0: continue to step 1.
 
    If pending tasks remain but the loop exits due to a compaction trigger, the Finalize section is **skipped** — the push notification text is sufficient, and Finalize's "no more eligible tasks" summary would be misleading (tasks are not blocked, just paused).
 
