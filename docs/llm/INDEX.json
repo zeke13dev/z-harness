@@ -32,27 +32,35 @@
       "slug": "agents",
       "source_file": [
         "agents/auditor.md",
+        "agents/axiom-extractor.md",
+        "agents/bisect-isolator.md",
         "agents/cluster-planner.md",
         "agents/complexity-classifier.md",
         "agents/consultant-primary.md",
         "agents/consultant-secondary.md",
+        "agents/context-curator.md",
         "agents/doc-fetcher.md",
         "agents/doc-updater.md",
         "agents/external-lookup.md",
-        "agents/tier1-doc-updater.md",
         "agents/implementer.md",
         "agents/mr-reviewer.md",
+        "agents/plan-style-reviewer.md",
         "agents/planning-router.md",
+        "agents/pre-reviewer.md",
         "agents/remote-runner.md",
+        "agents/research-judge.md",
+        "agents/resolver.md",
         "agents/review-agent.md",
         "agents/reviewer.md",
+        "agents/scope-extractor.md",
         "agents/scope-probe.md",
         "agents/scope-reconciler-audit.md",
-        "agents/research-judge.md",
         "agents/scope-reconciler-brainstorm.md",
-        "agents/spec-precheck.md"
+        "agents/self-reviewer.md",
+        "agents/spec-precheck.md",
+        "agents/tier1-doc-updater.md"
       ],
-      "last_updated": "2026-06-02",
+      "last_updated": "2026-06-09",
       "confidence": "high",
       "depends_on": [
         "scripts",
@@ -60,9 +68,12 @@
       ],
       "consumed_by": [
         "commands",
-        "skills"
+        "skills",
+        "active-plan-registry",
+        "axioms",
+        "session-handoff"
       ],
-      "summary": "Specialized subagents, including auditors/reviewers, implementers, and the advisory planning-router for ambiguous plan-family route decisions."
+      "summary": "Specialized subagents, including auditors/reviewers, implementers, doc-updaters (Tier 1 mechanical + Tier 2 structural), consultants, scope classifiers, reconciliation judges, and the advisory planning-router for ambiguous plan-family route decisions."
     },
     {
       "slug": "axioms",
