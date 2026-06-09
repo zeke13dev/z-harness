@@ -2,6 +2,8 @@
 name: z-improve
 description: Post-run retrospective. Analyzes ONE z-harness run's events.jsonl + artifacts, identifies friction signals (slow phases, retries, doc drift, blocked askings, reviewer cycles), and opens a discussion with the user about concrete edits to the z-harness repo itself (commands, agents, scripts). Optional cross-LLM consult on proposed changes. Discussion logged to z-harness/improvements/. Opt-in; never auto-fired.
 argument-hint: <slug> | $Z_HARNESS_PLAN_DIR/<run-id> | adhoc/<run-id>
+origin: z-harness-core
+tags: [retrospective, improvement]
 ---
 
 You are running **z-harness `/z-improve`** — the self-improvement retro for a completed run.
@@ -30,6 +32,8 @@ Resolve to absolute paths:
 - `$EVENTS = $RUN_DIR/events.jsonl`
 
 If `$EVENTS` doesn't exist, tell the user this run has no telemetry and ask whether to proceed analyzing artifacts only.
+
+**Pre-retro step:** Consider running `/z-evaluate` first to automatically detect patterns (multi-review-cycle tasks, repeated explorations, task halts) from this session's telemetry. The evaluate output produces memory and skill candidates that may inform the improvement discussion.
 
 Where the z-harness plugin itself lives — needed because proposed edits target it, not the target repo:
 ```bash

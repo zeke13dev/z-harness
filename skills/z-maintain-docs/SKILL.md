@@ -2,6 +2,8 @@
 name: z-maintain-docs
 description: Refresh stale docs in docs/human/ and docs/llm/. Reads docs/llm/INDEX.json to find concepts whose source files changed since each doc's last_updated. Spawns doc-updater subagents (Sonnet) per stale concept. Applies refreshed docs by default; pass --dry-run to preview without writing. Stops for review only on genuine-risk signals (memories_lost, audit reject/needs-review).
 argument-hint: "[--scope <concept-slug>] [--dry-run] [--audit]"
+origin: z-harness-core
+tags: [docs, maintenance]
 ---
 You are running **z-harness `/z-maintain-docs`**. Goal: keep `docs/human/` and `docs/llm/` in sync with the current state of the code.
 

@@ -11,6 +11,7 @@
 
 ## Key entry points
 
+<!-- AUTO-START: entry-points -->
 - `commands/z-update.md:1` — `z-update` — slash command definition; orchestrates plugin-root discovery, mode detection (symlink/runtime/tarball), pull or atomic-swap, legacy-layout nudge, and `harness_updated` event emission
 - `install.sh:114` — `install_claude_symlink` — creates `~/.claude/plugins/z-harness@zeke-tools -> <repo>` symlink; requires `.git + commands/ + agents/ + runtime/`
 - `install.sh:136` — `write_codex_marketplace` — writes or updates `~/.agents/plugins/marketplace.json` with the z-harness personal marketplace entry
@@ -23,7 +24,7 @@
 - `install.sh:330` — `install_target_from_tarball` — dispatches `--target=claude|codex|all` to the appropriate tarball installer function
 - `scripts/version.sh:1` — `version.sh` — emits a JSON blob with `z_harness_version` (git short SHA), `z_harness_dirty`, `z_harness_branch`, and optionally `z_harness_tag`; resolves plugin dir via `Z_HARNESS_PLUGIN_ROOT` → `ANTIGRAVITY_PLUGIN_ROOT` → `CLAUDE_PLUGIN_ROOT` → script-relative parent; emits sentinel values (`non-git`, `unknown`) rather than failing when no git history is present
 - `scripts/bundle-plugin.sh:1` — `bundle-plugin.sh` — builds `dist/z-harness-<version>.tar.gz`; excludes `.git/`, `exports/`, `z-harness/plans/`, `z-harness/archive/`, `z-harness/improvements/`, `dist/`, `.z-harness/`, `__pycache__/`, `providers.json`, and auto-detected legacy plan dirs; runs `audit-tarball.sh` and deletes the tarball on any violation
-
+<!-- AUTO-END: entry-points -->
 ## How it interacts with others
 
 - `scripts` — `version.sh` and `bundle-plugin.sh` live in the `scripts` concept; `/z-update` shells out to `version.sh` before and after every update to stamp old/new version in the `harness_updated` event

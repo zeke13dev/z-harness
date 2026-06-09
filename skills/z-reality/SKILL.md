@@ -4,6 +4,8 @@ description: Interactive premise refinement — conversational on-ramp. Probes, 
   reframes, and converges a raw idea into a BRAINSTORM.md artifact before routing to
   /z-brainstorm or /z-plan.
 argument-hint: "[raw idea — or blank to start the conversation]"
+origin: z-harness-core
+tags: [planning, refinement]
 ---
 
 # /z-reality — Interactive premise refinement

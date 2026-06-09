@@ -61,6 +61,7 @@ DEFAULTS: dict = {
     "schema_version": 1,
     "notify": {
         "level": "approval_only",   # off | approval_only | all
+        "discord_webhook_url": "",  # string: Discord webhook URL (empty = disabled)
     },
     "docs": {
         "always_apply": "always",   # always | never
@@ -618,7 +619,10 @@ def _validate_enum(dotted_key: str, value: object, source_label: str, is_global:
 # 3-level role key validation
 # ---------------------------------------------------------------------------
 
-def _validate_roles_value(dotted_key: str, value: object, source_label: str, is_global: bool) -> object | None:
+from typing import Optional
+
+
+def _validate_roles_value(dotted_key: str, value: object, source_label: str, is_global: bool) -> Optional[object]:
     """
     Validate a 3-level role key value (e.g. roles.z_plan.consultant_primary.persona).
 
@@ -1599,7 +1603,7 @@ _STRENGTH_ORDER = {"very_strong": 3, "strong": 2, "weak": 1}
 
 def _resolve_memory_matches(
     matches: list[dict],
-) -> tuple[str | None, str | None, list[dict]]:
+) -> tuple[Optional[str], Optional[str], list[dict]]:
     """
     Given a list of memory match dicts, return (value, strength, sources).
 
@@ -1636,7 +1640,7 @@ def _resolve_memory_matches(
 def _resolve_config_memory_envelope(
     question_id: str,
     explain: bool = False,
-) -> tuple[dict, str, str, str, int, str | None, bool]:
+) -> tuple[dict, str, str, str, int, Optional[str], bool]:
     """
     Build the config+memory resolution envelope for a registered question_id.
 
@@ -2178,7 +2182,7 @@ def _emit_unknown_ask_blocked(question_id: str, callsite_hint: str = "") -> None
         pass  # non-fatal — observability is best-effort
 
 
-def _resolve_cost_gate(question_id: str, range_high: int | None, severity: str) -> dict:
+def _resolve_cost_gate(question_id: str, range_high: Optional[int], severity: str) -> dict:
     """
     Core budget-aware resolution for the cost gate (Phase-7 single-authority path).
 
@@ -2296,8 +2300,8 @@ def cmd_check_no_ask(args: list[str]) -> None:
     Exit 0 on all valid invocations, exit 2 on argparse error.
     """
     question_id: str = ""
-    range_high: int | None = None
-    severity: str | None = None
+    range_high: Optional[int] = None
+    severity: Optional[str] = None
     i = 0
     while i < len(args):
         if args[i] == "--question-id":
@@ -2823,11 +2827,28 @@ def cmd_inspect_all(args: list[str]) -> None:
 
 
 def cmd_should_notify(args: list[str]) -> None:
-    # Parse --event <kind>
-    if len(args) != 2 or args[0] != "--event":
-        print("usage: config.py should-notify --event <kind>", file=sys.stderr)
+    # Parse --event <kind> [--channel push|discord]
+    event = None
+    channel = "push"
+    i = 0
+    while i < len(args):
+        if args[i] == "--event" and i + 1 < len(args):
+            event = args[i + 1]
+            i += 2
+        elif args[i] == "--channel" and i + 1 < len(args):
+            channel = args[i + 1]
+            if channel not in ("push", "discord"):
+                print(f"[config] unknown channel {channel!r}; allowed: push, discord", file=sys.stderr)
+                sys.exit(2)
+            i += 2
+        else:
+            print("usage: config.py should-notify --event <kind> [--channel push|discord]", file=sys.stderr)
+            sys.exit(2)
+
+    if event is None:
+        print("usage: config.py should-notify --event <kind> [--channel push|discord]", file=sys.stderr)
         sys.exit(2)
-    event = args[1]
+
     if event not in _NOTIFY_EVENTS:
         print(
             f"[config] unknown event kind {event!r}; "
@@ -2841,7 +2862,15 @@ def cmd_should_notify(args: list[str]) -> None:
 
     if level == "off":
         print("no")
-    elif level == "approval_only":
+        return
+
+    if channel == "discord":
+        webhook_url = values.get("notify.discord_webhook_url", "")
+        if not webhook_url:
+            print("no")
+            return
+
+    if level == "approval_only":
         if event in {"approval", "error"}:
             print("yes")
         else:
@@ -2849,7 +2878,6 @@ def cmd_should_notify(args: list[str]) -> None:
     elif level == "all":
         print("yes")
     else:
-        # Should not happen — VALIDATORS would have caught it
         print("no")
 
 

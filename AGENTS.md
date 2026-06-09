@@ -49,6 +49,17 @@ Events, decisions, phase timings, failures — all logged to `events.jsonl` and
 `metrics.jsonl`. This telemetry is what makes z-reality possible: the harness
 learns from its own operation.
 
+### Config protection
+
+Before editing a linter config, validation config, or any tool configuration
+file, read the code it governs first. Fix the code, don't weaken the config.
+Linter configs (like `lint-frontmatter.sh`'s rules, `.eslintrc`, or
+`pyproject.toml`'s tool settings) encode invariants that the codebase must
+honor. If a lint check or validation rule fires, the correct response is to
+understand why the code triggers it and fix the code — not to disable the rule
+or relax its threshold. The config is the guardrail; treat it as the authority
+until proven otherwise.
+
 ---
 
 ## Harness ambassador

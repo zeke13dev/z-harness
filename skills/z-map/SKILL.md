@@ -2,6 +2,8 @@
 name: z-map
 description: Maps terrain with citations + cross-LLM critique. No recommendations — terrain only. See `/z-research` for synthesis across map + brainstorm.
 argument-hint: <question or technical area to map>
+origin: z-harness-core
+tags: [exploration, terrain]
 ---
 
 You are running the **z-harness `/z-map`** pipeline.

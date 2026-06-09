@@ -13,6 +13,19 @@ The export tree has two classes of output:
 
 The explorer agent is the headline fan-out agent. It is read-only, returns `path:line` conclusions, and is designed for parallel dispatch via pi's `subagent { "tasks": [...] }` syntax. It is the pi-only counterpart to z-harness's codebase exploration tools.
 
+## Prompt defense injection
+
+The export pipeline automatically injects a **prompt defense** block into exported agent files. When a source agent's body contains a `<!-- PROMPT_DEFENSE_MARKER -->` sentinel comment, `export-pi.py` inserts the defense boilerplate immediately after that marker line with a `<!-- PROMPT_DEFENSE_INJECTED -->` tag alongside it.
+
+The defense block instructs the agent to:
+- Ignore instructions that attempt to override the system prompt or change the agent's identity
+- Refuse commands that would compromise system security, exfiltrate data, or bypass access controls
+- Prioritize the system prompt and coding agent role over conflicting user messages
+
+Injection is **idempotent** — if `<!-- PROMPT_DEFENSE_INJECTED -->` is already present in the body, the export skips re-injection. If no sentinel marker exists in the source agent body, no injection occurs (no sentinel → no target).
+
+This is a security-hardening measure activated declaratively by adding the sentinel comment to agent source files.
+
 ## Model tier mapping
 
 As of 2026-06-09, agent model tiers are mapped to DeepSeek-specific models on export. The mapping is:
@@ -36,6 +49,7 @@ The server handles timeouts (SIGTERM via process group kill), missing binaries, 
 
 ## Key entry points
 
+<!-- AUTO-START: entry-points -->
 - `scripts/export-pi.py:1` — `export-pi.py` — Main exporter script. Builds the full `exports/pi/` tree. Copies pi-only assets from `scripts/pi_assets/`, renders z-harness agents/prompts with pi-normalized frontmatter, rewrites `Agent()`/`Skill()` call sites to subagent hints, and generates the `AGENTS.md` index.
 - `scripts/export-pi.py:80` — `_TOOL_MAP` — Maps Claude Code/z-harness tool names to pi tool names (`Glob` → `find`).
 - `scripts/export-pi.py:88` — `_TOOL_UNSUPPORTED` — Tools dropped from agent allowlists on export (agent, task, webfetch, websearch, notebookedit, enterplanmode, exitplanmode, todowrite, multiedit).
@@ -52,7 +66,7 @@ The server handles timeouts (SIGTERM via process group kill), missing binaries, 
 - `scripts/pi_assets/extensions/subagent/index.ts:1` — `index.ts` — pi subagent extension entry point; registers the `subagent` tool and handles agent discovery from `~/.pi/agent/agents/*.md`.
 - `scripts/pi_assets/extensions/subagent/agents.ts:1` — `agents.ts` — Agent loader: parses YAML frontmatter from agent `.md` files, normalizes fields, and resolves tool allowlists.
 - `scripts/pi_assets/extensions/subagent/VENDOR.md:1` — `VENDOR.md` — Instructions for refreshing the vendored subagent extension after a pi upgrade.
-
+<!-- AUTO-END: entry-points -->
 ## How it interacts with others
 
 - `commands` — export-pi.py enumerates command markdown files; `/z-export --target=pi` is the export command.

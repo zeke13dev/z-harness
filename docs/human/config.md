@@ -38,6 +38,7 @@ Set `$Z_HARNESS_REPO_CONFIG` to override the git-root discovery path (exits 2 if
 | Key | Type | Default | Values | Description |
 |-----|------|---------|--------|-------------|
 | `notify.level` | string | `approval_only` | `off` \| `approval_only` \| `all` | Controls when PushNotification fires. `off` silences all notifications. `approval_only` notifies on `approval` and `error` events. `all` notifies on every `approval`, `phase_end`, and `error` event. |
+| `notify.discord_webhook_url` | string | `""` | any Discord webhook URL | Discord webhook URL for notification delivery. Empty string (default) disables Discord notifications entirely. When set and `notify.level` permits, `should-notify --channel discord` returns `yes`. The webhook URL is a secret and must not be committed — `.gitignore` already protects `.z-harness/` where config lives. |
 | `docs.always_apply` | string | `always` | `always` \| `never` | Whether light flows auto-dispatch doc-fetcher when `docs/llm/INDEX.json` exists. `always` matches current /z-do default behavior. `never` skips doc-fetcher. **Applies only to light flows (slice 1: /z-do). Heavy flows always dispatch doc-fetcher regardless of this knob.** |
 | `runtime.consult` | string | `on` | `on` \| `off` | Single-model mode. When `off`, the `consultant_primary`, `consultant_secondary`, and `reviewer` roles resolve to the `none` sentinel, so cross-LLM consultation and review are skipped (no Gemini/Codex dispatch). Exported as `Z_HARNESS_CONSULT` (not `Z_HARNESS_RUNTIME_CONSULT` — see the transliteration note), which `resolve-provider.py` reads. |
 | `cost.token_budget` | int or null | `null` | positive int or null | Token budget ceiling for cost-gate delegation. When set, `check-no-ask` with `--range-high` compares the estimate against this value. `null` (unset) means no budget is configured; any cost gate under policy will halt with `cost_budget_missing`. |
@@ -51,6 +52,7 @@ Env-var overrides follow a deterministic rule: lowercase TOML dotted-key → pre
 | TOML key | Env var |
 |----------|---------|
 | `notify.level` | `Z_HARNESS_NOTIFY_LEVEL` |
+| `notify.discord_webhook_url` | `Z_HARNESS_NOTIFY_DISCORD_WEBHOOK_URL` |
 | `docs.always_apply` | `Z_HARNESS_DOCS_ALWAYS_APPLY` |
 | `brainstorm.personas` | `Z_HARNESS_BRAINSTORM_PERSONAS` |
 | `personas.critique_panel` | `Z_HARNESS_PERSONAS_CRITIQUE_PANEL` |
@@ -413,6 +415,7 @@ scripts/config.sh set experiment.persona_rotation false --scope=project
 
 ## Key entry points
 
+<!-- AUTO-START: entry-points -->
 - `scripts/config.py:53` — `DEFAULTS` — built-in default values for all config keys including `[brainstorm]`, `[personas]`, `[workflow]`, `[followup]`, `[axioms]`, `[experiment]`, `[cost]` sections (layer 1)
 - `scripts/config.py:147` — `VALIDATORS` — allowed enum sets per dotted-key; hard-fail on repo/env, soft-warn on global; includes all `personas.*`, workflow, axioms, experiment, cost keys
 - `scripts/config.py:178` — `_COERCERS` — post-validation normalizers; converts env-var strings to typed Python values for bool/int knobs (including all `personas.*` bool knobs)
@@ -426,7 +429,7 @@ scripts/config.sh set experiment.persona_rotation false --scope=project
 - `scripts/config.py:2264` — `cmd_check_no_ask` — lightweight overnight-gate checker with cost-gate delegation path
 - `scripts/config.py:2533` — `cmd_set` — atomically write a TOML key to global or project config via tmp+rename
 - `scripts/propose-prefs.py:1` — `propose-prefs` (module) — walks `metrics.jsonl` for repeated command-pair patterns; emits JSON proposal if threshold met; never writes
-
+<!-- AUTO-END: entry-points -->
 ## How it interacts with others
 
 - `commands` (z-audit-plan, z-audit-plan-style, z-plan, z-fix, z-uplift, z-amend, z-do, z-research, z-implement-all, z-review-all, z-overnight, z-implement-next, z-debug, z-audit, z-brainstorm, z-plan-light) — call `export-env` + `should-notify` during Setup; call `resolve-question` before workflow AskUserQuestions; call `check-no-ask` for overnight gate checks; call `set` after proposal acceptance; call `propose-prefs.py` at command end; read `brainstorm.personas`, `personas.*`, `experiment.*` at each persona-dispatch site

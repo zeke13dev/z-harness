@@ -2,6 +2,8 @@
 name: z-axiom-reject
 description: Reject a candidate or approved axiom, moving it to the rejected/ tombstone store. Optionally records a rejection reason.
 argument-hint: <id> [--reason <text>] [--scope <global|project>] [--repo-root <path>]
+origin: z-harness-core
+tags: [axiom, memory]
 ---
 
 You are running **z-harness `/z-axiom-reject`**. Thin command that maps `<id>` to `axiom-store.py reject`. Rejected records are moved to `rejected/<id>.json` as a tombstone (kept for de-dup and audit). If the rejected record was `approved`, the kernel is regenerated.

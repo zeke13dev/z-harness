@@ -596,6 +596,21 @@ Diff stats: <X files, Y additions, Z deletions>
 
 Apply the **one-reason-it-might-be-wrong** rule from `/z-plan` to every finding before listing it. Push back on weak findings.
 
+### Phase 5.5 — Tier 2 review patterns accumulation
+
+After `findings.md` is built, extract aggregate review patterns and append to tier2-context.json:
+
+```bash
+python3 scripts/append-tier2-context.py --phase review --field review_patterns \
+  --json '<extracted patterns JSON>'
+```
+
+Pattern format: `{"pattern": "...", "source": "consultant-primary|consultant-secondary|consensus", "finding": "...", "recommendation": "..."}`.
+
+Extract: patterns that appeared across both consultant returns, consensus/disagreement themes, architectural observations that span multiple tasks.
+
+Non-fatal: failure logs event, continues.
+
 ## Phase 6 — Promote findings to review tasks
 
 Build `$BASE/REVIEW-TASKS.md` and snapshot the same content to `$BASE/archive/$RRUN/REVIEW-TASKS.md`. This is a candidate artifact: the user deletes anything they reject before applying it.
@@ -732,6 +747,49 @@ After `REVIEW-TASKS.md` is built, auto-apply amendment proposals based on severi
 rm -f "$Z_HARNESS_PLAN_DIR/.review_state.json"
 ```
 This ensures a subsequent `/z-review-all` starts a full fresh run rather than fast-forwarding into a stale Phase 4.
+
+### Phase 6.7 — Tier 2 context finalization + significance gate
+
+After Phase 6.5 cleanup, finalize tier2-context.json and evaluate the three-signal OR gate:
+
+```bash
+# Mark finalized
+python3 -c "
+import json, os, datetime
+dir = os.environ.get('Z_HARNESS_PLAN_DIR', '')
+if not dir: exit(0)
+path = os.path.join(dir, 'tier2-context.json')
+if not os.path.exists(path): exit(0)
+d = json.load(open(path))
+d['finalized'] = True
+d['generated_at'] = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+gaps = []
+for ov in d.get('human_overrides', []):
+    if not ov.get('reason'):
+        gaps.append({'field': 'human_overrides[].reason', 'status': 'missing', 'note': 'Override missing reason'})
+d['gaps'] = gaps
+json.dump(d, open(path, 'w'), indent=2)
+"
+
+# Three-signal OR gate
+SIGNIFICANT=$(python3 -c "
+import json, os
+dir = os.environ.get('Z_HARNESS_PLAN_DIR', '')
+path = os.path.join(dir, 'tier2-context.json')
+if not os.path.exists(path): print('false'); exit(0)
+d = json.load(open(path))
+consult = len(d.get('consultant_findings', [])) > 0
+breaking = len(d.get('breaking_changes', [])) > 0
+devis = len(d.get('deviations', [])) > 0
+print('true' if (consult or breaking or devis) else 'false')
+")
+```
+
+**If significant** (any signal fires): push-notify "Pipeline complete. Tier 2 context captured. Run /z-doc-rationale." Add `/z-doc-rationale` to recommendations.
+
+**If not significant:** "Pipeline complete. No significant design decisions. Tier 2 skipped."
+
+**Archive:** Copy `tier2-context.json` to `$BASE/archive/$RRUN/tier2-context.json`.
 
 ## Finalize
 

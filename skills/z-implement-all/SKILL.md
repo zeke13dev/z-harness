@@ -1,6 +1,8 @@
 ---
 name: z-implement-all
 description: Orchestrate implementation of ALL pending tasks in z-harness/TASKS.md, spawning a fresh implementer subagent per task and a reviewer per task. Halts on blockers, retries once on review failure, push-notifies user on every gate.
+origin: z-harness-core
+tags: [implementation, orchestration]
 ---
 You are the **z-harness `/z-implement-all`** orchestrator. Your job is to drive the task queue to completion without losing the per-task fresh-context guarantee. You do not implement code yourself — you delegate each task to a fresh `implementer` subagent and each review to a fresh `reviewer` subagent.
 
@@ -385,9 +387,31 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orc
      "$TRIGGER" "$tasks_since_pause" "$WALL_MINUTES" "$PENDING_REMAINING")"
 ```
 
-Then push-notify (this is a hard pause — fires regardless of notification level; see [docs/human/config.md](docs/human/config.md)):
+Then push-notify (this is a hard pause — fires regardless of notification level) with the compaction breakpoint message, and ask:
 
-> "Compaction breakpoint: `<N>` tasks completed (or `<M>` min wall). `<K>` pending tasks remain. Run `/clear`, then re-invoke `/z-implement-all` to resume from TASKS.md. Use `/compact` instead if you need chat history for debugging."
+```
+AskUserQuestion "Compaction breakpoint: <N> tasks completed (<M> min wall). <K> pending tasks remain. Recommended: pause and /clear. Choose [Continue / Pause (recommended)]?"
+```
+
+If the user chooses **Continue** (overriding the recommended pause):
+```
+AskUserQuestion "Why continue over pausing? (press Enter to skip)"
+```
+If the user provides a reason:
+```bash
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/append-tier2-context.py" --phase implement --field human_overrides \
+  --json '{"phase":"implement","decision_id":"compaction-continue-<n>","override":"continue","reason":"<user reason>"}'
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" human_override_captured \
+  "$(printf '{"decision_id":"%s","gate":"compaction_breakpoint"}' "compaction-continue-<n>")"
+```
+If the user presses Enter (no reason), log:
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" human_override_skipped \
+  "$(printf '{"decision_id":"%s","gate":"compaction_breakpoint"}' "compaction-continue-<n>")"
+```
+Reset `tasks_since_pause=0` and `pause_clock_start="$(date +%s)"` (the window restarts), then continue the outer loop. Do **not** dispatch any new task until the next iteration.
+
+If the user chooses **Pause (recommended)** (following the recommendation, no override):
 
 Before exiting, write `session-status.json` with status `"paused"` and
 `halt_description: "compaction breakpoint"`. Use the atomic write pattern from
@@ -500,6 +524,23 @@ When halting on a skip-flagged task, immediately push-notify (fires regardless o
 - **I'll run it myself** — leave `[ ]`, exclude for now; user will mark `[x]` manually when done, then re-invoke `/z-implement-all` to resume.
 - **Defer** — leave `[ ]`, eligible again on the next outer loop iteration (use when waiting on a transient condition).
 - **Override and run anyway** — only if user explicitly accepts; proceed to step 3.
+
+**Human override capture:** If the user picks **Override and run anyway** (overriding the recommended skip/defer):
+```
+AskUserQuestion "Why run anyway over skip/defer? (press Enter to skip)"
+```
+If the user provides a reason:
+```bash
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/append-tier2-context.py" --phase implement --field human_overrides \
+  --json '{"phase":"implement","decision_id":"<task-id>-skip-override","override":"run anyway","reason":"<user reason>"}'
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" human_override_captured \
+  "$(printf '{"decision_id":"%s","gate":"blocked_task"}' "<task-id>-skip-override")"
+```
+If the user presses Enter (no reason), log the skip:
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" human_override_skipped \
+  "$(printf '{"decision_id":"%s","gate":"blocked_task"}' "<task-id>-skip-override")"
+```
 
 Critical: **never retry a skip-flagged task in the same run** unless the user picked "Override and run anyway". The 20+ hour T006 episode (run `20260517T223141Z-expand-sports-ml`) happened because retries kept firing despite the SPEC marking it remote-only.
 
@@ -688,12 +729,30 @@ Agent(
 )
 ```
 
-Parse the implementer's return per the `STATUS:` block. Branches:
+Parse the implementer's return per the `STATUS:` block. **Also parse RATIONALE, TRIED, DEVIATIONS fields** from the return for Tier 2 context accumulation (see step 5.6 below). Branches:
 
 - `STATUS: ok` → go to step 6 (review)
 - `STATUS: needs_clarification` → halt queue, push-notify, present the question to the user via `AskUserQuestion`. After answer, update SPEC.md if appropriate, then re-spawn implementer with the resolved info.
 - `STATUS: spec_problem` → halt queue, push-notify, escalate to user. Likely needs SPEC patch before any further tasks proceed.
 - `STATUS: decision_needed` → halt queue, push-notify, present the decision + options via `AskUserQuestion`. This is the "major design decision must be approved by user" gate. Record the decision in `$BASE/archive/$RUN/decisions-late.md`. After answer, re-spawn implementer.
+
+  **Human override capture:** After the user resolves the decision (the implementer recommended an approach; if the user chose a different path, that's an override):
+  ```
+  AskUserQuestion "Why [chosen approach] over [recommended approach]? (press Enter to skip)"
+  ```
+  If the user provides a reason:
+  ```bash
+  python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/append-tier2-context.py" --phase implement --field human_overrides \
+    --json '{"phase":"implement","decision_id":"<task-id>-decision-<n>","override":"<user choice>","reason":"<user reason>"}'
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" human_override_captured \
+    "$(printf '{"decision_id":"%s","gate":"decision_needed"}' "<task-id>-decision-<n>")"
+  ```
+  If the user followed the recommendation (no override), skip capture. If the user overrode but pressed Enter on the follow-up (no reason), log:
+  ```bash
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" human_override_skipped \
+    "$(printf '{"decision_id":"%s","gate":"decision_needed"}' "<task-id>-decision-<n>")"
+  ```
+
 - `STATUS: unable_to_complete` → flip `[~]` back to `[ ]`, halt queue, push-notify with the reason.
   This is a run-ending halt (Main-loop condition 2). Per the FINALIZE_STATUS rule in Phase 0.0:
   **set `FINALIZE_STATUS=aborted`** before jumping to Finalize so the record is deregistered as
@@ -732,10 +791,66 @@ Parse the reviewer's response. Group findings by severity.
 
 ### 7. Handle review outcome
 
-- **No blockers, no majors** → accept; go to step 8 (done).
+- **No blockers, no majors** → accept; go to step 7a.5 (Tier 1 doc sync), then step 8 (done).
 - **Has blockers or majors** →
   - **First failure**: re-spawn implementer once with the reviewer's findings as `prior-attempt reviewer feedback`. Then re-review.
   - **Second failure**: halt queue. Push-notify. Present diff + reviewer findings to user; await `AskUserQuestion` for "proceed anyway / patch manually / abandon task / re-spec".
+
+#### 7a.5 Tier 1 doc sync (after reviewer passes, before step 8)
+
+After the reviewer returns with no blockers and no majors, run Tier 1 mechanical doc sync:
+
+1. **Capture per-task diff:** Use the same diff captured in step 6 (`$BASE/archive/tasks/<task-id>/diff.patch`). Do NOT use `git diff HEAD~1` — the per-task diff is authoritative.
+
+2. **Spawn tier1-doc-updater (Flash) subagent:**
+```
+Agent(
+  subagent_type="tier1-doc-updater",
+  description="Tier 1 doc sync <task-id>",
+  prompt="Task diff: $BASE/archive/tasks/<task-id>/diff.patch\nINDEX.json path: docs/llm/INDEX.json\nPlan dir: $BASE\nRepo root: <abs path>"
+)
+```
+
+3. **Parse return:** STATUS, CONCEPTS_TOUCHED, DRIFT_WARNINGS
+4. **DRIFT_WARNINGS:** Log `doc_drift` event per affected slug:
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" doc_drift \
+     '{"concept":"<slug>","claim":"<what doc said>","reality":"<what code says>","file":"<path>"}'
+   ```
+5. **Failure:** Non-fatal. Log `tier1_failed` event, continue to step 8.
+6. **Success:** Log `tier1_complete` event with concepts_touched count.
+
+Concurrency: Tier 1 runs in the same track as the reviewer (sequential within task, parallel across tracks).
+
+#### 5.6 Tier 2 context accumulation (after implementer returns, before reviewer dispatch)
+
+After the implementer returns with STATUS: ok and RATIONALE/TRIED/DEVIATIONS are parsed, accumulate into tier2-context.json:
+
+1. **Append tried_and_failed** (if TRIED non-empty):
+   ```bash
+   python3 scripts/append-tier2-context.py --phase implement --field tried_and_failed \
+     --json '<parsed TRIED entries as JSON>' --upsert
+   ```
+
+2. **Append deviations** (if DEVIATIONS non-empty):
+   ```bash
+   python3 scripts/append-tier2-context.py --phase implement --field deviations \
+     --json '<parsed DEVIATIONS entries as JSON>' --upsert
+   ```
+
+3. **Detect and append breaking_changes:** Scan the implementer's FILES_CHANGED and diff for changed public API signatures (function signature delta in public modules). If found:
+   ```bash
+   python3 scripts/append-tier2-context.py --phase implement --field breaking_changes \
+     --json '<detected breaking changes as JSON>' --upsert
+   ```
+
+4. After reviewer validates DEVIATIONS (step 7), update the tier2-context.json entry:
+   ```bash
+   python3 scripts/append-tier2-context.py --phase implement --field deviations \
+     --json '{"task":"<id>","reviewer_validated":true}' --upsert
+   ```
+
+Non-fatal: append failures log `tier2_append_failed` event, continue.
 
 #### 7a. Delta-on-retry (mandatory for cycle ≥ 2)
 
@@ -844,7 +959,19 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tas
 
 When the loop exits (no more eligible tasks, or you halted):
 
-0. **Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the single
+0. **Tier 1 reconciliation (apply staged doc updates).** If `$BASE/tier1-staged/` has content:
+   ```bash
+   DRY_RUN_FLAG=""
+   [ "${Z_HARNESS_TIER1_DRY_RUN:-}" = "1" ] && DRY_RUN_FLAG="--dry-run"
+   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/reconcile-tier1-staged.py" $DRY_RUN_FLAG
+   RC=$?
+   ```
+   - `RC == 0`: log `tier1_reconciled` event with concept count. Continue.
+   - `RC == 1` (merge conflict): halt reconciliation; log `tier1_reconcile_failed` event; surface conflict to user.
+   - `RC == 2` (write error): log event, continue (non-fatal).
+   - Reconciliation runs even if some Tier 1 tasks failed (partial reconciliation of successful tasks).
+
+1. **Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the single
    FINALIZE_STATUS rule (Phase 0.0): `${FINALIZE_STATUS:-complete}` resolves to `complete` on a
    normal exit (condition 1, no eligible task remaining) and to `aborted` when a hard-halt path
    set `FINALIZE_STATUS=aborted` before reaching here (condition 2 — a `spec_problem`,
@@ -879,7 +1006,8 @@ Orchestration complete: X done, Y skipped, Z blocked.
 
 Recommended next:
   /z-review-all      — final-gate cross-LLM review of the cumulative diff
-  /z-maintain-docs   — refresh docs for any concepts the implementation touched
+  /z-doc-rationale   — (after /z-review-all) produce ADRs, design rationale, migration guides from accumulated Tier 2 context
+  /z-maintain-docs   — (quarterly) deep-clean fallback for prose drift, stale memories, tag collisions
 ```
    Both are safe to run in sequence; they cover different concerns (correctness vs documentation freshness).
 

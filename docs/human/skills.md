@@ -17,6 +17,7 @@ Four skills now carry **persona behavior** that augments (never replaces) the ne
 
 ## Key entry points
 
+<!-- AUTO-START: entry-points -->
 - `skills/z-amend/SKILL.md:1` — `z-amend` — Amends SPEC/PLAN/TASKS or FIX.md artifacts while preserving completed-task state; supports `--skip-user-gate` flag for programmatic callers (e.g. `/z-review-all` auto-amend); changed task blocks get complexity re-classified.
 - `skills/z-audit-plan/SKILL.md:1` — `z-audit-plan` — Read-only audit of existing plan artifacts; verifies references/design, runs adversarial consultants, and routes contextually when no plan, plan changes, or doc drift blocks confidence.
 - `skills/z-brainstorm/SKILL.md:1` — `z-brainstorm` — Cheap pre-plan ideation with three vendor-diverse ideators, mandatory anti-bias checks, and BRAINSTORM.md output. Phase 2a draws up to 3 distinct ideator personas when `brainstorm.personas == "true"` (default ON); persona prefix prepended per ideator; underflow runs vanilla. Carries the slug-confirm preference resolver: hard collision check unconditionally, then soft `resolve-question workflow.slug_confirm` gate with skip/prefill/ask/conflict branching, plus `halt` result (emits `brainstorm_halt` event and exits without AskUserQuestion).
@@ -38,7 +39,7 @@ Four skills now carry **persona behavior** that augments (never replaces) the ne
 - `skills/z-test/SKILL.md:1` — `z-test` — Optional planning-time semantic test-case planner; risk-ranks tasks, drafts non-trivial test cases, runs cross-LLM consult (mode `test-cases`), writes TESTS.md, and cross-links TEST-NNN entries into TASKS.md so tests are implemented alongside production code.
 - `skills/z-update/SKILL.md:1` — `z-update` — Updates the z-harness plugin; detects symlink (git pull) vs tarball (atomic swap) installs; emits `harness_updated` telemetry; reinstalls Codex plugin cache if applicable.
 - `skills/z-uplift/SKILL.md:1` — `z-uplift` — Bulk codebase quality uplift: decomposes repo into components, runs a cross-cutting pass for global issues, dispatches per-component `auditor` subagents across correctness/cleanliness/design dimensions in parallel, and drives sequential implementation via `/z-implement-all --tasks=`. Triggers on "bulk codebase quality", "uplift the codebase", "audit the whole repo", "review every component".
-
+<!-- AUTO-END: entry-points -->
 ## How it interacts with others
 
 - `commands` — Commands are the user-facing surfaces that mirror or invoke these skill workflows. Route-policy changes must stay aligned between command markdown and skill markdown. Several commands (`z-audit.md`, `z-audit-plan-style.md`, `z-fix.md`, `z-skill-fix.md`) define their pipelines directly in `commands/` without a corresponding `SKILL.md` re-entry alias.

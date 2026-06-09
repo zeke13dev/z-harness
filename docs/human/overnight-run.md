@@ -337,6 +337,7 @@ Context accumulation risk for step 4+ on large implementations. Deferred to v2.
 
 ## Key entry points
 
+<!-- AUTO-START: entry-points -->
 - `commands/z-overnight.md:17` — `invocation forms` — Three invocation forms: chain, preset:<name>, and resume <RUN_ID>
 - `commands/z-overnight.md:65` — `Phase 1 Setup` — New-run setup: slug derivation, preflight, lock, AUTODECIDE_EFFECTIVE, state init
 - `commands/z-overnight.md:274` — `Phase 3 per-step loop` — Per-step execution: NO_ASK carve-out, Skill call, C14 archive detection, run-status classification
@@ -348,7 +349,7 @@ Context accumulation risk for step 4+ on large implementations. Deferred to v2.
 - `scripts/bench-autonomy-check.sh:1` — `bench-autonomy-check.sh` — 3-step pre-run gate for policy-mode runs
 - `scripts/run-status.sh:1` — `run-status.sh` — classify and last-event subcommands for step-status classification
 - `scripts/normalize-task-state.sh:1` — `normalize-task-state.sh` — resets [~] to [ ] in TASKS.md on halt-from-ask
-
+<!-- AUTO-END: entry-points -->
 ## How it interacts with others
 
 - `config` — `scripts/config.py` owns the entire gate decision logic (resolve-question, check-no-ask, overnight overrides, policy mode); this concept is the primary consumer of the config concept's overnight knobs

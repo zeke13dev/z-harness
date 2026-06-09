@@ -9,13 +9,14 @@
 The agent is read-only and returns a compact Markdown synthesis instead of raw fetched content. Its output must follow the canonical `lookup-contract` envelope: one `STATUS` line, fixed `## Answer`, `## Provenance`, and `## Unresolved` sections, and an optional raw artifact pointer when fetched material is too large for the response budget.
 
 ## Key entry points
+<!-- AUTO-START: entry-points -->
 - `agents/external-lookup.md:1` — `external-lookup` — Agent module metadata: Haiku model, lookup mission, and allowed tools.
 - `agents/external-lookup.md:12` — `Output contract` — Fixed STATUS-headed Markdown envelope that every response must follow.
 - `agents/external-lookup.md:51` — `Verb-blocklist` — Regex blocklist that refuses mutating Bash commands before execution.
 - `agents/external-lookup.md:91` — `Budget` — Total response cap, normalized query rule, and raw artifact cache behavior.
 - `agents/external-lookup.md:99` — `Freshness discipline` — Requires retrieval-time UTC timestamps and marks stale cache use low confidence.
 - `agents/external-lookup.md:105` — `Refusal modes` — Defines `ok`, `partial`, and `refused` semantics and refusal categories.
-
+<!-- AUTO-END: entry-points -->
 ## How it interacts with others
 - `agents` — This concept is one specialized agent in the broader agent suite.
 - `lookup-contract` — The agent must follow `docs/llm/lookup-contract.json`; that JSON contract wins if it conflicts with inline prose.

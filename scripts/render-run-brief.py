@@ -196,6 +196,13 @@ def render_chat(brief: dict) -> str:
     lines.append("NEXT:")
     nxt = brief.get("next") or {}
     lines.append(nxt.get("label", ""))
+    lines.append("")
+
+    # Cost summary — injected from --cost-summary-text flag
+    cost_text = brief.get("_cost_summary_text") or ""
+    if cost_text.strip():
+        lines.append(cost_text.strip())
+        lines.append("")
 
     while lines and lines[-1] == "":
         lines.pop()
@@ -317,6 +324,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Exit 2 if run-brief.json is missing or invalid",
     )
     parser.add_argument(
+        "--cost-summary-text",
+        default="",
+        help="Cost summary Markdown text to append to chat output",
+    )
+    parser.add_argument(
         "--self-test",
         action="store_true",
         help="Run golden fixture checks and exit",
@@ -348,6 +360,10 @@ def main(argv: list[str] | None = None) -> int:
         for err in errors:
             print(err, file=sys.stderr)
         return 2 if args.require else 1
+
+    # Inject cost summary text if provided
+    if args.cost_summary_text:
+        brief["_cost_summary_text"] = args.cost_summary_text
 
     if args.require and args.format is None:
         return 0

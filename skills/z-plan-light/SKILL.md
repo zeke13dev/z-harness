@@ -2,6 +2,8 @@
 name: z-plan-light
 description: Lightweight planner for small targeted changes / bug fixes. Bundled cross-LLM consult, single FIX.md artifact, inline implementation in the orchestrator (no implementer subagent), codex review still runs as the safety gate. Routes down, up, sideways, or to contextual bug workflows when light mode is not the best fit.
 argument-hint: <fix description>
+origin: z-harness-core
+tags: [planning, lightweight]
 ---
 
 You are running **z-harness `/z-plan-light`** — a fast path for one-file-or-few-files fixes. Target: ≤10 min wall time end-to-end.

@@ -1,5 +1,5 @@
 SHELL := /usr/bin/env bash
-.PHONY: test test-sh conformance conformance-live conformance-record conformance-strict lint lint-strict preflight bench-autonomy-check
+.PHONY: test test-sh conformance conformance-live conformance-record conformance-strict lint lint-strict preflight bench-autonomy-check test-ecc-lessons
 
 # Full Python test suite: the unit/integration tests under tests/, the
 # script-level tests under scripts/, and the runtime dispatch + driver tests
@@ -83,3 +83,8 @@ preflight:
 # Exit 0 only if both pass; non-zero (loud) otherwise.
 bench-autonomy-check:
 	bash scripts/bench-autonomy-check.sh
+
+# ECC lessons port — regression tests for new scripts (T017).
+# Runs pytest on: test_cost_summary.py, test_context_budget.py, test_evaluate_session.py
+test-ecc-lessons:
+	python3 -m pytest scripts/test_cost_summary.py scripts/test_context_budget.py scripts/test_evaluate_session.py -v

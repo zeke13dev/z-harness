@@ -11,6 +11,7 @@ Within the chosen base the directory structure is: `<base>/plans/<slug>/` for pl
 
 ## Key entry points
 
+<!-- AUTO-START: entry-points -->
 - `scripts/plan-path.sh:9` — `z_harness_repo_id` — stable `<basename>-<8hex>` identifier from `git-common-dir` SHA-256; identical across all worktrees of one repo
 - `scripts/plan-path.sh:52` — `_z_harness_probe_writable` — non-littering writability probe; creates and removes temp tree without side effects
 - `scripts/plan-path.sh:112` — `_z_harness_anchor_write` — atomic tmpfile+rename anchor creation; validates on existing anchor, no-ops on tier-1
@@ -30,7 +31,7 @@ Within the chosen base the directory structure is: `<base>/plans/<slug>/` for pl
 - `scripts/migrate-plan-layout.sh:370` — `merge_metrics` — dedup-append of `metrics.jsonl`; idempotent across crash/re-run
 - `scripts/migrate-plan-layout.sh:485` — `migrate_plan_slug` — migrates one slug from both legacy sources to `<base>/plans/<slug>`
 - `scripts/migrate-plan-layout.sh:612` — `migrate_full` — full migration: all plan slugs, archive, metrics, followups, flat TASKS.md, empty-dir cleanup
-
+<!-- AUTO-END: entry-points -->
 ## How it interacts with others
 
 - `active-plan-registry` — `active_plans_dir()` feeds the registry's storage path; `migrate-plan-layout.sh` calls `active-plan-registry.py list --json` for the live-run barrier before any real move

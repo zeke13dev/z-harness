@@ -3,6 +3,7 @@ name: z-handoff
 description: Write a handoff.json artifact for session continuity. Dynamically gathers current context (plan state, tasks, events, git diff) and produces a machine-readable JSON contract that any orchestrator can consume to resume work in a fresh agent session. Universal — works for pi, Claude Code, and any z-harness agent.
 argument-hint: "[optional continuation prompt — overrides auto-detected next_step]"
 tags: [session, handoff, continuity, resume]
+origin: z-harness-core
 ---
 
 You are running **z-harness `/handoff`** — the session continuity protocol. You will dynamically gather the current working context and write `handoff.json` to the workspace root. Any orchestrator (Hermes) can then read it and resume work in a fresh agent session.

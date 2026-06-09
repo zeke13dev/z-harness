@@ -2,6 +2,8 @@
 name: z-plan
 description: Run the rigorous z-harness planning pipeline — challenge premises, batch decisions, cross-consult Gemini + Codex once, and produce SPEC.md / PLAN.md / TASKS.md.
 argument-hint: <feature or task description>
+origin: z-harness-core
+tags: [planning]
 ---
 
 You are running the **z-harness `/z-plan`** pipeline.
@@ -526,6 +528,29 @@ When all consultants return (from either path):
 
 Save transcripts (the consultants do this themselves). Checkpoint: `phase3-decisions-final.md`.
 
+### Phase 3.5 — Tier 2 context initialization
+
+After writing `phase3-decisions-final.md`, initialize tier2-context.json:
+
+```bash
+# Set spec_summary and plan_summary
+python3 -c "
+import json, os
+dir = os.environ['Z_HARNESS_PLAN_DIR']
+ctx = {'plan': os.environ['Z_HARNESS_SLUG'], 'spec_summary': '<1-3 sentences from Phase 0>', 'plan_summary': '<workstream overview from decisions>'}
+path = os.path.join(dir, 'tier2-context.json')
+json.dump(ctx, open(path, 'w'), indent=2)
+"
+
+# Append decisions
+python3 scripts/append-tier2-context.py --phase plan --field decisions --json '<decisions JSON>'
+
+# Append consultant findings (if consultants returned non-degraded)
+python3 scripts/append-tier2-context.py --phase plan --field consultant_findings --json '<findings JSON>' || true
+```
+
+Non-fatal: failure logs `tier2_init_failed` event; tier2-context.json won't exist for this run.
+
 ## Phase 4 — Final clarifications
 
 If anything is still unclear about scope, constraints, or success criteria — ask the user. No silent assumptions.
@@ -541,6 +566,17 @@ Present a **concise** decisions summary: one bullet per decision (what, why, wha
 Use `AskUserQuestion` for explicit approval on:
 - Each major design decision
 - Each proposed shortcut (default to robust if not approved)
+
+**Human override capture:** After any AskUserQuestion where the user overrides a recommendation:
+```
+AskUserQuestion "Why [choice] over [recommended]? (press Enter to skip)"
+```
+If the user provides a reason:
+```bash
+python3 scripts/append-tier2-context.py --phase plan --field human_overrides \
+  --json '{"phase":"planning","decision_id":"<id>","override":"<user choice>","reason":"<user reason>"}'
+```
+If the user presses Enter (no reason), skip capture — the gap will be detected at Tier 2 finalization.
 
 Block until answered.
 

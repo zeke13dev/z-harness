@@ -2,6 +2,8 @@
 name: z-amend
 description: Amend an existing z-harness plan (SPEC/PLAN/TASKS) or light-plan (FIX.md) so a change is propagated consistently across all artifacts. Preserves completed task state; adds/modifies/removes tasks as needed; optionally cross-consults if the amendment is non-obvious.
 argument-hint: <what to change about the plan> [--skip-user-gate]
+origin: z-harness-core
+tags: [planning, amend]
 ---
 
 You are running the **z-harness `/z-amend`** pipeline.

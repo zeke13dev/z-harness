@@ -11,6 +11,7 @@ The command is resumable: it writes a `MANIFEST.md` at `z-harness/plans/<slug>/M
 
 ## Key entry points
 
+<!-- AUTO-START: entry-points -->
 | Phase | Line | Purpose |
 |-------|------|---------|
 | Argument parsing | `commands/z-uplift.md:22` | Parse all flags before any state is initialized |
@@ -24,7 +25,7 @@ The command is resumable: it writes a `MANIFEST.md` at `z-harness/plans/<slug>/M
 | Phase 4 | `commands/z-uplift.md:2433` | Review gate — informational queue summary only (no AskUser); cross-cutting-first ordering callout printed if synthetic row is present |
 | Phase 5 | `commands/z-uplift.md:2579` | Sequential implement — two-step handoff; prints command, marks `[i]`, exits; auto-transitions `[i] implementing` → `[x] done` when TASKS.md is fully done; `manifest_replace_row` helper enforces exactly-one-row invariant on all state transitions |
 | Phase 6 | `commands/z-uplift.md:2961` | Finalize — log run_end, push-notify, recommend /z-maintain-docs |
-
+<!-- AUTO-END: entry-points -->
 ## How it interacts with others
 
 - `/z-audit` — z-uplift uses the same auditor primitives as /z-audit but applies them across every component; /z-audit is for single-component targeted passes

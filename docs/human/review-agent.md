@@ -11,6 +11,7 @@ The agent reasons but does not write. It returns a single fenced JSON block cont
 
 ## Key entry points
 
+<!-- AUTO-START: entry-points -->
 - `agents/review-agent.md:1` — `review-agent` — subagent definition: role, procedure, output contract, hard rules, and slug naming anti-patterns
 - `agents/review-agent.md:12` — `## Inputs from caller` — full input field list including `parent_command`, `debug_md_path`, and artifact primacy rules
 - `agents/review-agent.md:27` — `## Procedure` — six-step candidate-generation procedure (read, scan signal patterns, prefer existing slugs, cap at 3, check tags, debug filter)
@@ -21,7 +22,7 @@ The agent reasons but does not write. It returns a single fenced JSON block cont
 - `skills/z-implement-all/SKILL.md:818` — `Phase 9` — orchestrator Phase 9: helper call, skip handling, agent dispatch, parse, accept/skip loop
 - `skills/z-review-all/SKILL.md:447` — `Phase 7` — orchestrator Phase 7: same as Phase 9 but without `all_tasks_skipped` skip condition
 - `skills/z-debug/SKILL.md:795` — `Phase 10 memory review` — orchestrator Phase 10 (shipped branch only): `debug_md_path` as primary artifact; abandoned sessions excluded; optional parallel axiom-extractor dispatch on `AXIOM_READY`
-
+<!-- AUTO-END: entry-points -->
 ## How it interacts with others
 
 - `z-implement-all` — Phase 9 calls `run-memory-review.sh`, then dispatches `review-agent`, then runs the accept/skip loop

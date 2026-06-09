@@ -13,6 +13,7 @@ The suite is split by responsibility: planning route advice (`planning-router`),
 
 ## Key entry points
 
+<!-- AUTO-START: entry-points -->
 - `agents/auditor.md:1` — `auditor` — Read-only Sonnet auditor for one dimension (correctness, perf, cleanliness, or design); writes `findings-<dimension>.md` and returns counts.
 - `agents/axiom-extractor.md:1` — `axiom-extractor` — Sonnet retrospective policy-mining agent; wraps `scripts/axiom-extract.py` with LLM judgement to produce ≤5 sharpened axiom candidates from interaction history. Proposes only; never writes the axiom store.
 - `agents/bisect-isolator.md:1` — `bisect-isolator` — Haiku mechanical bisect runner; drives `git bisect run` between a known-good ref and HEAD, returns offending commit SHA and line-level diff. Refuses destructive repro scripts and interpretive work.
@@ -38,7 +39,7 @@ The suite is split by responsibility: planning route advice (`planning-router`),
 - `agents/scope-reconciler-brainstorm.md:1` — `scope-reconciler-brainstorm` — Sonnet post-fanout reconciler for HEAVY `/z-brainstorm` runs; concatenates N per-chunk `BRAINSTORM.md` files verbatim, runs a four-part cross-chunk anti-bias check, and returns unified content with `chosen_framing: pending` for user selection.
 - `agents/self-reviewer.md:1` — `self-reviewer` — Read-only Opus self-review agent invoked when `Z_HARNESS_CONSULT=off`; reviews a diff vs SPEC.md and returns the same response shape as the standard `reviewer` (blockers/majors/minors) without calling any external model CLI. `expected_contract: review-verdict`.
 - `agents/spec-precheck.md:1` — `spec-precheck` — Read-only Haiku preflight checker that validates SPEC claims about existing files, symbols, config keys, and schemas before the implementer runs; uses `relevant_docs` LLM JSONs as a second source of truth.
-
+<!-- AUTO-END: entry-points -->
 ## How it interacts with others
 
 - `commands` — Commands are the orchestrators that decide when to spawn each agent, pass compact inputs, parse exact return shapes, and write user-facing artifacts. `/z-implement-all` dispatches `scope-extractor` at Phase 0 to seed the active-plan registry, then dispatches `self-reviewer` instead of `reviewer` when `Z_HARNESS_CONSULT=off`, and dispatches `axiom-extractor` in Phase 9 alongside `review-agent` when `AXIOM_READY` is signaled. `/z-debug` dispatches `bisect-isolator` in Phase 2.5 and `review-agent` with `parent_command: debug` in Phase 10. `/z-audit-plan-style` dispatches `plan-style-reviewer` before any code is written. `/z-plan` dispatches `scope-extractor` after TASKS.md is finalized.

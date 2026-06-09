@@ -1,0 +1,41 @@
+{
+  "concept": "tier2-doc-rationale",
+  "last_updated": "2026-06-09T19:45:00Z",
+  "covers_spec": "doc-updater-agent/20260609T194026Z-doc-updater-agent",
+  "source_files": [
+    "commands/z-doc-rationale.md",
+    "scripts/append-tier2-context.py"
+  ],
+  "confidence": "high",
+  "entry_points": [
+    {
+      "file": "commands/z-doc-rationale.md",
+      "line": 1,
+      "symbol": "z-doc-rationale",
+      "kind": "command",
+      "summary": "Tier 2 narrative doc command producing ADRs, rationale, migration guides"
+    },
+    {
+      "file": "scripts/append-tier2-context.py",
+      "line": 1,
+      "symbol": "append-tier2-context",
+      "kind": "script",
+      "summary": "Incremental context accumulation across pipeline phases"
+    }
+  ],
+  "depends_on": ["tier1-doc-updater", "z-plan", "z-implement-all", "z-review-all"],
+  "consumed_by": [],
+  "invariants": [
+    "Never fabricates gap content — ships with honest gaps",
+    "Preserves human_overrides with captured-at-decision-time reasons",
+    "Memoizes: skips regeneration if tier2-context.json unchanged",
+    "Requires tier2-context.json finalized: true"
+  ],
+  "gotchas": [
+    "Significance-gated: three-signal OR (cross-LLM consult, breaking changes, plan deviations)",
+    "Tried-and-failed caveat: auto-generated from implementer self-reports",
+    "ADR numbering: reads docs/adr/ for max N, allocates N+1",
+    "Gap-fill presents only gaps, not full document review"
+  ],
+  "memories": []
+}

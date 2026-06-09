@@ -11,6 +11,7 @@ As of schema v2, canonical provider names use a `-cli` suffix to distinguish the
 
 ## Key entry points
 
+<!-- AUTO-START: entry-points -->
 - `scripts/resolve-provider.sh:1` — `resolve-provider.sh` — thin bash wrapper; single entrypoint for all command/agent dispatch sites
 - `scripts/resolve-provider.py:503` — `main()` — loads configs, merges, validates, checks PATH, enforces invariant, prints JSON descriptor or sentinel `none`
 - `scripts/resolve-provider.py:498` — `_CONSULT_OFF_ROLES` — frozenset of roles that return sentinel `none` when `Z_HARNESS_CONSULT=off`: consultant_primary, consultant_secondary, reviewer
@@ -28,7 +29,7 @@ As of schema v2, canonical provider names use a `-cli` suffix to distinguish the
 - `scripts/log-providers.sh:34` — none-sentinel guard — detects `none` before JSON parse; emits `provider_resolution_skipped` event; appends `role=skipped(consult=off)` to summary
 - `runtime/compat.py:15` — `resolve_provider()` — Python API wrapper around `resolve-provider.py` for runtime dispatch layer
 - `runtime/contract/provider.schema.json:1` — `ProviderRegistry` — JSON Schema Draft 7 for `.z-harness/providers.json`; accepts version 1 and 2; permits `kind=cli|sdk`
-
+<!-- AUTO-END: entry-points -->
 ## How it interacts with others
 
 - `agents` — `consultant-primary.md`, `consultant-secondary.md`, and `reviewer.md` call `resolve-provider.sh` to determine which CLI to invoke; `self-reviewer.md` is used when `Z_HARNESS_CONSULT=off` replaces the reviewer role

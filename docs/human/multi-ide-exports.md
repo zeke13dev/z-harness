@@ -11,6 +11,7 @@ The multi-IDE export pipeline translates the z-harness source of truth from `com
 
 ## Key entry points
 
+<!-- AUTO-START: entry-points -->
 - `scripts/export-common.py:108` — `enumerate_sources` — Collect commands, agents, and skills from the repo root into a kind-keyed dict.
 - `scripts/export-common.py:135` — `validate_capabilities` — Require `## Supported`, `## Unsupported`, and `## Notes` sections in CAPABILITIES.md.
 - `scripts/export-common.py:182` — `output_path_for` — Compute the conventional output path for a given target, kind, and id.
@@ -31,7 +32,7 @@ The multi-IDE export pipeline translates the z-harness source of truth from `com
 - `scripts/audit-tarball.sh:87` — `_audit_fail` — Exit 1 immediately when a forbidden tarball pattern is matched.
 - `scripts/audit-tarball.sh:95` — `_check_pattern` — Search a tarball listing for one forbidden pattern (fixed-string or regex).
 - `commands/z-export.md:10` — `/z-export` — Parse `--target`, run adapters sequentially, report OK/FAILED per target.
-
+<!-- AUTO-END: entry-points -->
 ## How it interacts with others
 
 - `commands` — export adapters enumerate command markdown files; `/z-export` is itself the command wrapper for the pipeline.

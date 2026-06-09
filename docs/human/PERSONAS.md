@@ -11,6 +11,7 @@ The persona system is applied across many dispatch sites: critique panels (`/z-p
 
 ## Key entry points
 
+<!-- AUTO-START: entry-points -->
 - `scripts/resolve-persona.py:88` — `_ROLE_REGISTRY` — maps role names to expected contracts; 7 roles total; single source of truth for known roles
 - `scripts/resolve-persona.py:931` — `cmd_resolve` — resolves persona/model/runtime triple for (command, role) from merged TOML config
 - `scripts/resolve-persona.py:554` — `cmd_list_personas` — prints JSON array of winner-per-name personas; emits `persona_shadowed` on collisions
@@ -27,7 +28,7 @@ The persona system is applied across many dispatch sites: critique panels (`/z-p
 - `runtime/drivers/codex/persona_export.py:37` — `export_persona` — exports persona to `prompts/personas/<name>.md` for Codex CLI (not native)
 - `runtime/drivers/claude/persona_export.py:38` — `export_persona` — exports persona to `personas/<name>.md` for Claude subagent target (not native)
 - `runtime/dispatch/persona_prompt.py:13` — `prepend_persona` — reads persona body from `body_path`, strips frontmatter, prepends to task prompt; called by orchestrator before `Dispatcher.run()`
-
+<!-- AUTO-END: entry-points -->
 ## How it interacts with others
 
 - `providers-registry` — runtime axis in the persona triple is resolved against the providers registry; TOML `[roles.*.*]` bindings overlap with provider config

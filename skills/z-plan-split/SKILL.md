@@ -2,6 +2,8 @@
 name: z-plan-split
 description: Pre-emptive scope splitter — fan a big topic out into N narrow cluster-planner subagents in parallel, then reconcile file-path overlaps into SHARED-CONCERNS.md + MANIFEST.md.
 argument-hint: <topic> [--slug=<root-slug>] [--clusters="a,b,c"]
+origin: z-harness-core
+tags: [planning, orchestration]
 ---
 
 You are running the **z-harness `/z-plan-split`** pipeline.

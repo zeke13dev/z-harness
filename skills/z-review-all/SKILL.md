@@ -2,6 +2,8 @@
 name: z-review-all
 description: Final-gate cross-LLM review of a completed z-harness plan. Runs Gemini + Codex on the cumulative diff against SPEC.md to surface (a) implementation drift across tasks and (b) spec gaps that only surface in aggregate. Use after /z-implement-all completes.
 argument-hint: "[--slug <slug>] [--base <git-ref>]"
+origin: z-harness-core
+tags: [review, final-gate]
 ---
 You are running the **z-harness `/z-review-all`** final-gate review. This is a holistic cross-task cross-LLM review, intentionally distinct from the per-task review that `/z-implement-all` already performs. Per-task review catches per-task issues; this catches issues that only show up when looking at all tasks together.
 

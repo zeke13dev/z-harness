@@ -11,6 +11,7 @@
 
 ## Key entry points
 
+<!-- AUTO-START: entry-points -->
 - `commands/z-fix.md:1` — `/z-fix` — top-level slash command definition; read this for the full phase-by-phase procedure
 - `commands/z-fix.md:24` — Setup — slug derivation (two-step: collision check then resolver gate with halt branch), run-id, directory creation, version stamp, `fix_run_start` telemetry
 - `commands/z-fix.md:79` — auto-bail thresholds — >5 files / >2 non-obvious decisions / cross-module triggers `escalation.md` + `/z-plan`
@@ -26,7 +27,7 @@
 - `commands/z-fix.md:289` — Phase 9 — optional post-mortem; auto-suggested if `REVIEW_CYCLES > 1`
 - `commands/z-fix.md:334` — Phase 10 — finalize: FIX.md status=shipped, `fix_run_end` log, `/z-maintain-docs` hint
 - `commands/z-fix.md:358` — Git history-rewrite safety — doctrine for `git reset`/`amend`/`rebase` on upstream-tracking branches
-
+<!-- AUTO-END: entry-points -->
 ## How it interacts with others
 
 - `agents` — spawns `consultant-primary` (Gemini) and `consultant-secondary` (Codex) in parallel at Phase 3; spawns `reviewer` (Codex) as base gate at Phase 8; optionally spawns an advisory eval-reviewer in parallel at Phase 8 when `personas.review_eval` is ON

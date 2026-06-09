@@ -144,6 +144,7 @@ Configure via the 4-layer TOML system (see `docs/human/config.md`) or run `/z-se
 
 ## Key entry points
 
+<!-- AUTO-START: entry-points -->
 - `scripts/axiom-store.py:1` — `axiom-store` — CRUD + validation for the two-layer (global+project) axiom store. Subcommands: path, add, list, get, validate, approve, reject, edit.
 - `scripts/axiom-store.py:336` — `validate_graph` — R1 shared graph validator (referential integrity, mutual conflict, acyclicity). Used by both approve and build-kernel.py.
 - `scripts/axiom-store.py:488` — `_load_active_set` — R1 shared load semantics for approve and build-kernel.py. Project shadows global by id.
@@ -157,7 +158,7 @@ Configure via the 4-layer TOML system (see `docs/human/config.md`) or run `/z-se
 - `scripts/config.py:1494` — `_load_axiom_matches` — Load graph-valid approved axioms matching a question_id. Gates on axioms.enabled.
 - `scripts/config.py:1860` — `_build_resolve_envelope` — Core resolver applying axiom layer: agree / gap-fill / conflict outcomes.
 - `scripts/setup.py:1303` — `_wizard_axioms` — /z-setup wizard for axioms scope: configure keys, offer .gitignore additions.
-
+<!-- AUTO-END: entry-points -->
 ## Edge cases / gotchas
 
 - **Axioms advisory — config/memory win direct conflicts but conflict is surfaced:** a config or memory entry that disagrees with an axiom produces `source='axiom_conflict'` in the resolve-question envelope. The result/strength/rule_id from config/memory still apply; the axiom object is informational. Callers must handle the `axiom_conflict` source value.

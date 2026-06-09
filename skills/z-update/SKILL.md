@@ -1,6 +1,8 @@
 ---
 name: z-update
 description: Update the local z-harness install for Codex, Claude Code, or Antigravity. Detects symlink vs extracted installs and refreshes safely without force-resetting local changes.
+origin: z-harness-core
+tags: [maintenance, update]
 ---
 
 # z-update

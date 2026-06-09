@@ -1,0 +1,48 @@
+{
+  "concept": "tier1-doc-updater",
+  "last_updated": "2026-06-09T19:45:00Z",
+  "covers_spec": "doc-updater-agent/20260609T194026Z-doc-updater-agent",
+  "source_files": [
+    "agents/tier1-doc-updater.md",
+    "scripts/reconcile-tier1-staged.py",
+    "scripts/add-doc-markers.py"
+  ],
+  "confidence": "high",
+  "entry_points": [
+    {
+      "file": "scripts/reconcile-tier1-staged.py",
+      "line": 1,
+      "symbol": "reconcile-tier1-staged",
+      "kind": "script",
+      "summary": "Reconciles staged Tier 1 doc updates into live docs/"
+    },
+    {
+      "file": "scripts/add-doc-markers.py",
+      "line": 1,
+      "symbol": "add-doc-markers",
+      "kind": "script",
+      "summary": "Adds AUTO-START/AUTO-END markers to human-tier docs"
+    },
+    {
+      "file": "agents/tier1-doc-updater.md",
+      "line": 1,
+      "symbol": "tier1-doc-updater",
+      "kind": "agent",
+      "summary": "Flash subagent for per-task mechanical doc sync"
+    }
+  ],
+  "depends_on": ["doc-updater", "doc-fetcher"],
+  "consumed_by": ["z-implement-all"],
+  "invariants": [
+    "NEVER writes to docs/ directly — staging only",
+    "Never touches memories[]",
+    "Writes only between AUTO-START/AUTO-END markers",
+    "Idempotent on same diff"
+  ],
+  "gotchas": [
+    "Skips concepts without AUTO-START/AUTO-END markers (logs markers_missing)",
+    "Visibility-only changes (pub→pub(crate)) out of scope",
+    "Latest-wins merge for overlapping staged updates"
+  ],
+  "memories": []
+}

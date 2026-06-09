@@ -2,6 +2,8 @@
 name: z-research
 description: Higher-order meta-orchestrator. Composes /z-map (terrain) and /z-brainstorm (framings), then runs adversarial synthesis panel (3 perspectives + judge) producing RESEARCH.md with 10-section schema including approach decision matrix. Cost 3–6M tokens; AskUser cost gate at invocation. Trigger on "research <topic>", "synthesize approaches for <topic>", "deep research on <topic>".
 argument-hint: <research-topic> [--slug=<kebab>]
+origin: z-harness-core
+tags: [research, planning]
 ---
 
 You are running the **z-harness `/z-research`** meta-orchestrator pipeline.

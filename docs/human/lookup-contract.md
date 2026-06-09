@@ -9,13 +9,14 @@ The `lookup-contract` concept is the output envelope that the external lookup wo
 The contract keeps noisy retrieval predictable for orchestrators and other agents: every lookup result is a small, STATUS-headed Markdown synthesis with provenance and unresolved gaps separated from the answer. The JSON tier for this concept is the canonical fast-lookup contract; `agents/external-lookup.md` explicitly says `docs/llm/lookup-contract.json` wins if the inline prose ever conflicts.
 
 ## Key entry points
+<!-- AUTO-START: entry-points -->
 - `agents/external-lookup.md:1` — `external-lookup` — Agent metadata declares the lookup role, Haiku model, and tool allowlist.
 - `agents/external-lookup.md:12` — `Output contract` — Defines the fixed `STATUS`-headed Markdown envelope and required sections.
 - `agents/external-lookup.md:51` — `Verb-blocklist` — Lists regex patterns that force `STATUS: refused` before any Bash command runs.
 - `agents/external-lookup.md:91` — `Budget` — Caps the total response at 3 KB and sends overflow to `z-harness/lookup-cache/<sha256>.raw`.
 - `agents/external-lookup.md:99` — `Freshness discipline` — Defines `freshness_ts` as retrieval time and marks stale cache answers low confidence.
 - `agents/external-lookup.md:137` — `Edge cases` — Specifies partial/refused handling for fetch failures, pagination, no results, and missing auth.
-
+<!-- AUTO-END: entry-points -->
 ## How it interacts with others
 - `agents` — The contract is authored inside the `external-lookup` agent prompt, so it follows the agent frontmatter/tooling conventions.
 - `external-lookup-agent` — The external lookup agent consumes this contract on every response and must obey the JSON contract if it differs from inline prose.

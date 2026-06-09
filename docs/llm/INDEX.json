@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "generated_at": "2026-06-09T07:00:00Z",
+  "generated_at": "2026-06-09T20:45:00Z",
   "z_harness_version": "7c8d09a",
   "concepts": [
     {
@@ -39,6 +39,7 @@
         "agents/doc-fetcher.md",
         "agents/doc-updater.md",
         "agents/external-lookup.md",
+        "agents/tier1-doc-updater.md",
         "agents/implementer.md",
         "agents/mr-reviewer.md",
         "agents/planning-router.md",
@@ -158,7 +159,8 @@
         "commands/z-update.md",
         "commands/z-uplift.md",
         "commands/z-where.md",
-        "commands/z-handoff.md"
+        "commands/z-handoff.md",
+        "commands/z-doc-rationale.md"
       ],
       "last_updated": "2026-06-09",
       "confidence": "high",
@@ -714,6 +716,27 @@
         "commands/z-handoff.md",
         "skills/z-handoff/SKILL.md"
       ]
+    },
+    {
+      "slug": "tier1-doc-updater",
+      "source_files": [
+        "agents/tier1-doc-updater.md",
+        "scripts/reconcile-tier1-staged.py",
+        "scripts/add-doc-markers.py"
+      ],
+      "last_updated": "2026-06-09T19:45:00Z",
+      "confidence": "high",
+      "summary": "Tier 1 Flash subagent for per-task mechanical doc sync. Reads task diff, reverse-lookups changed files to concepts via INDEX.json, applies surgical updates to AUTO-START/AUTO-END delimited machine-truth fields in human-tier and LLM-tier docs. Stages updates; reconciliation applies after all tasks."
+    },
+    {
+      "slug": "tier2-doc-rationale",
+      "source_files": [
+        "commands/z-doc-rationale.md",
+        "scripts/append-tier2-context.py"
+      ],
+      "last_updated": "2026-06-09T19:45:00Z",
+      "confidence": "high",
+      "summary": "Tier 2 narrative doc system. Accumulates tier2-context.json incrementally across pipeline phases (z-plan, z-implement-all, z-review-all). /z-doc-rationale command spawns Pro subagent to produce ADRs, design rationale, and migration guides. Significance-gated by three-signal OR."
     }
   ]
 }

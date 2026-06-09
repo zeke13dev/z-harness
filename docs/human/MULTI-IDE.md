@@ -11,6 +11,7 @@ The adapter scripts (`scripts/export-{cursor,codex,agy}.py`) are **deprecated** 
 
 ## Key entry points
 
+<!-- AUTO-START: entry-points -->
 - `scripts/export-common.py:108` — `enumerate_sources` — Collect commands, agents, and skills from the repo root.
 - `scripts/export-common.py:135` — `validate_capabilities` — Require Supported, Unsupported, and Notes sections.
 - `scripts/export-common.py:182` — `output_path_for` — Compute Cursor, Codex, and agy conventional output paths.
@@ -34,7 +35,7 @@ The adapter scripts (`scripts/export-{cursor,codex,agy}.py`) are **deprecated** 
 - `runtime/drivers/cursor/persona_export.py` — `export_persona` — Write persona as `.cursor/personas/<name>.mdc` (context-injection rule; not native to Cursor).
 - `runtime/drivers/antigravity/persona_export.py` — `export_persona` — Write persona as `.agent/personas/<name>.md` (native agy persona format).
 - `runtime/drivers/codex/persona_export.py` — `export_persona` — Write persona for Codex CLI target.
-
+<!-- AUTO-END: entry-points -->
 ## How it interacts with others
 
 - `commands` — export adapters enumerate command markdown files; `/z-export` and `/z-where` are both commands and are themselves exported. `/z-where` is a read-only active-plan registry query added in T005.

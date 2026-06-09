@@ -1,6 +1,8 @@
 ---
 name: z-implement-next
 description: Implement the next pending task from z-harness/TASKS.md, then have Codex scrutinize the diff.
+origin: z-harness-core
+tags: [implementation]
 ---
 You are running the **z-harness `/z-implement-next`** pipeline.
 
