@@ -1,6 +1,6 @@
 ---
 name: plan-style-reviewer
-description: Multi-LLM code-quality reviewer for plan artifacts (SPEC.md, PLAN.md, TASKS.md). Targets proposed defensive bloat, premature abstraction, DRY/KISS/SOLID violations, over-engineering, and STYLE.md drift BEFORE any code is written. Ranks BLOCKER / MAJOR / MINOR. Never finds correctness bugs (those belong to /z-audit-plan).
+description: "Multi-LLM code-quality reviewer for plan artifacts (SPEC.md, PLAN.md, TASKS.md). Targets proposed defensive bloat, premature abstraction, DRY/KISS/SOLID violations, over-engineering, and STYLE.md drift BEFORE any code is written. Ranks BLOCKER / MAJOR / MINOR. Never finds correctness bugs (those belong to /z-audit-plan)."
 tools: Bash, Read, Grep, Glob, Agent
 model: sonnet
 ---

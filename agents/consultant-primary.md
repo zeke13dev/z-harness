@@ -1,6 +1,6 @@
 ---
 name: consultant-primary
-description: Routes to the primary consultant LLM (resolved via providers registry) for a second opinion on an engineering decision or to review a plan. Use during /z-plan when a non-obvious decision needs cross-LLM input, and again to review the final plan.
+description: "Routes to the primary consultant LLM (resolved via providers registry) for a second opinion on an engineering decision or to review a plan. Use during /z-plan when a non-obvious decision needs cross-LLM input, and again to review the final plan."
 tools: Bash, Read, Grep, Glob
 model: haiku
 ---

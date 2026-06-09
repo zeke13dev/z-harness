@@ -2,6 +2,7 @@
 name: spec-precheck
 description: "Pre-flight sanity check that runs BEFORE the implementer for each task in /z-implement-all. Verifies SPEC.md references (symbols, table names, column names, config keys, file paths) actually exist in the codebase as described — so spec drift is caught before any code is written. Returns STATUS: ok or STATUS: spec_problem with the specific stale reference."
 tools: read, grep, find, bash
+model: deepseek-v4-flash
 ---
 
 **Kernel:** If the caller passed a `kernel_path`, Read it and follow its axioms before acting. Otherwise run `scripts/resolve-kernel.sh` and Read the path it prints (skip silently if none).

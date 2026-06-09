@@ -36,5 +36,5 @@ Parallel mode caps at 8 tasks, 4 concurrent. Each `explore` agent is read-only a
 
 ## Notes
 
-- Agents run as isolated `pi` processes. They inherit your default model (`deepseek-v4-pro`) unless their definition pins one. There is no cheap Haiku tier here, so the win from fan-out is **context isolation**, not cost — delegate broad reads you don't want polluting the main thread.
+- Agents run as isolated `pi` processes. They inherit your default model (`deepseek-v4-pro`) unless their definition pins one. Cheap subagents (doc-fetcher, explore, reviewer, scope-probe, etc.) are pinned to `deepseek-v4-flash` for token efficiency — the win from fan-out is **context isolation AND cost**.
 - `explore` locates; it does not audit or judge. For review/correctness work, reason in the main thread or use a dedicated reviewer agent.

@@ -1,6 +1,6 @@
 ---
 name: complexity-classifier
-description: Reads a single task block (plus optional SPEC.md slice) and returns a complexity tier — `low`, `medium`, or `high` — that the orchestrator uses to pick which model to dispatch the implementer at. Cheap Haiku call, one per task, stamped once at plan-time (or re-stamped on /z-amend for new/modified tasks).
+description: "Reads a single task block (plus optional SPEC.md slice) and returns a complexity tier — `low`, `medium`, or `high` — that the orchestrator uses to pick which model to dispatch the implementer at. Cheap Haiku call, one per task, stamped once at plan-time (or re-stamped on /z-amend for new/modified tasks)."
 tools: Read, Grep, Glob
 model: haiku
 ---

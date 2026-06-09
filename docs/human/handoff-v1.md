@@ -78,8 +78,8 @@ Each entry is `{path: string, role: string}`.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `path` | string | yes | Absolute path to the context file. The orchestrator resolves relative paths against the workspace root. |
-| `role` | enum | yes | Semantic role. `"spec"`, `"plan"`, `"tasks"`, `"workstreams"`, `"session_log"`, `"diff"`, `"handoff_chain"`, `"other"`. |
+| `path` | string | yes | Absolute or workspace-relative path to the context file. The orchestrator resolves relative paths against the workspace root. |
+| `role` | enum | yes | Semantic role. `"spec"`, `"plan"`, `"tasks"`, `"workstreams"`, `"session_log"`, `"diff"`, `"other"`. |
 
 ## Consumer contract (Hermes / orchestrator)
 
@@ -175,7 +175,6 @@ When `slug` is present and non-null, the orchestrator may also set `Z_HARNESS_SL
 
 - Auto-trigger when context crosses a configurable token threshold
 - Multi-workstream handoff coordination (one handoff per workstream in workstreams.json)
-- Handoff chaining — subsequent handoffs point to prior ones via `context_files[].role: "handoff_chain"`
 - Orchestrator-side context window estimation to pre-emptively spawn new sessions before pressure
 
 ## Out of scope (v1)
@@ -184,3 +183,7 @@ When `slug` is present and non-null, the orchestrator may also set `Z_HARNESS_SL
 - Auto-detection of context pressure (agent-side responsibility; protocol just defines the artifact)
 - Hermes implementation changes (consumer-side; protocol defines the contract)
 - Migration of existing SESSION.md or route-decision.md artifacts into handoff.json
+
+## Pre-existing handoff.json
+
+If `handoff.json` already exists in the workspace root when `/handoff` runs, it is **overwritten**. The orchestrator is responsible for consuming (and deleting) `handoff.json` after reading it. If an unconsumed `handoff.json` is overwritten, context from the prior session is lost — which is expected, as the new handoff represents the current session state.

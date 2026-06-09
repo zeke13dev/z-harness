@@ -27,7 +27,7 @@ If neither is set, search the current directory and parent directories for a z-h
 
 ```bash
 # Look for plan artifacts in common locations
-find . -maxdepth 4 -name "TASKS.md" -o -name "FIX.md" | head -10
+find . -maxdepth 4 -type f \( -name "TASKS.md" -o -name "FIX.md" \) | head -10
 ```
 
 If no plan context is found at all, the handoff is for **ad-hoc work** — set `slug: null` and gather context from current git state and files.
@@ -43,11 +43,13 @@ Gather the files that the next session will need, in priority order:
    - `events.jsonl` in `archive/<latest-run>/` (recent telemetry)
 
 2. **Ad-hoc context** — if no plan context:
-   - `git diff --stat` (recent changes)
+   - Save full diff: `git diff > /tmp/handoff-diff-$(date -u +%Y%m%dT%H%M%SZ).patch` and include it with role `"diff"`
    - Any modified/untracked files the agent was working on
    - Session logs or notes
 
 3. **Prior handoff chain** — if a previous `handoff.json` exists, include it
+
+4. **Fallback** — if no context files are found from any of the above, include at least one file from the workspace root (e.g., `README.md`, `.gitignore`) with role `"other"` so the `context_files` array is never empty.
 
 For each file, determine its `role` from this enum:
 - `spec` — SPEC.md
@@ -56,7 +58,6 @@ For each file, determine its `role` from this enum:
 - `workstreams` — workstreams.json
 - `session_log` — SESSION.md or events.jsonl
 - `diff` — git diff or patch file
-- `handoff_chain` — prior handoff.json
 - `other` — any other context file
 
 ### 1c — Determine status
@@ -69,10 +70,11 @@ Decide the `status` value:
 
 ### 1d — Determine next_step
 
-Auto-detect what to do next:
+If `$ARGUMENTS` was provided, use it as-is (overrides auto-detected next_step).
+
+Otherwise, auto-detect what to do next:
 - If TASKS.md exists, find the first unfinished task (`[ ]`) and describe it
 - If FIX.md exists, read the remaining acceptance criteria
-- If `$ARGUMENTS` was provided, use it as-is
 - For ad-hoc work, summarize what was in progress
 
 The `next_step` must be specific enough that a fresh agent can begin work without re-orientation.
@@ -100,9 +102,21 @@ Validation rules:
 - `timestamp` must be ISO-8601 UTC
 - `agent` for provenance only — consumers MUST NOT branch behavior on this field. Use `"pi"`, `"claude"`, or similar.
 - `status` must be one of the four enum values
-- `next_step` must be 1-2000 characters
+- `next_step` must be 1-2000 characters (empty string allowed when status is `"complete"`)
 - `context_files` must have at least 1 entry
 - Paths are absolute or relative to the workspace root
+
+### 2a — Identify agent
+
+Set the `agent` field to a short identifier for the current agent platform:
+
+- `"pi"` for pi
+- `"claude"` for Claude Code
+- `"codex"` for Codex CLI
+- `"gemini"` for Gemini CLI
+- `"other"` as fallback
+
+This is for **provenance only** — consumers MUST NOT branch behavior on this field.
 
 ### Alternate output: write SESSION.md
 
@@ -129,29 +143,39 @@ This SESSION.md can then be included in `context_files` with `role: "session_log
 
 ### Write handoff.json
 
-Write to the workspace root (plan dir if available, otherwise current working directory):
+Write to the **workspace root** (the directory where the agent was invoked, typically the repo root or `$PWD`):
 
 ```bash
-# Atomic write using tmp + rename
-cat > /tmp/handoff.json.tmp << 'JSONEOF'
+HANDOFF_PATH="${WORKSPACE_ROOT:-$PWD}/handoff.json"
+```
+
+Write atomically: write to a temp file in the same directory, then rename:
+
+```bash
+cat > "${HANDOFF_PATH}.tmp.$$" << 'JSONEOF'
 {...json payload...}
 JSONEOF
-mv /tmp/handoff.json.tmp ./handoff.json
-echo "handoff.json written ($(wc -c < ./handoff.json) bytes)"
+mv "${HANDOFF_PATH}.tmp.$$" "$HANDOFF_PATH"
+echo "handoff.json written ($(wc -c < "$HANDOFF_PATH") bytes)"
 ```
+
+The orchestrator (Hermes) looks for `handoff.json` in the workspace root. Do NOT write it inside `$Z_HARNESS_PLAN_DIR` or any subdirectory.
 
 Validate the output against the schema at `docs/schemas/handoff.schema.json` if available:
 
 ```bash
 python3 -c "
 import json, sys
-with open('./handoff.json') as f:
+with open('$HANDOFF_PATH') as f:
     data = json.load(f)
 # Basic validation
-assert data['protocol_version'] == '1.0'
-assert data['status'] in ('context_pressure','clean_break','complete','blocked')
-assert len(data['next_step']) >= 1
-assert len(data['context_files']) >= 1
+assert data['protocol_version'] == '1.0', 'protocol_version'
+assert data['status'] in ('context_pressure','clean_break','complete','blocked'), 'status'
+if data['status'] == 'complete':
+    assert isinstance(data['next_step'], str), 'next_step must be string'
+else:
+    assert len(data['next_step']) >= 1, 'next_step required for non-complete status'
+assert len(data['context_files']) >= 1, 'context_files'
 print('Validation passed')
 " 2>&1 || echo "Warning: validation skipped — schema check unavailable"
 ```
@@ -171,8 +195,13 @@ MDEOF
 If z-harness telemetry is available, log the handoff event:
 
 ```bash
-if command -v log-event.sh &>/dev/null; then
-  log-event.sh "$Z_HARNESS_RUN" handoff_written '{"slug":"<slug>","status":"<status>","files":<N>,"bytes":<N>}'
+if [ -f "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" ]; then
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
+    "${Z_HARNESS_RUN:-$(date -u +%Y%m%dT%H%M%SZ)-handoff}" handoff_written \
+    "$(python3 -c 'import json,sys; print(json.dumps({
+      "protocol_version":"1.0","agent":"<agent>","slug":"<slug_or_null>",
+      "status":"<status>","context_file_count":<n>
+    }))')"
 fi
 ```
 
@@ -180,12 +209,12 @@ fi
 
 Print a summary:
 ```
-/handoff complete
-  slug:       <slug or (ad-hoc)>
-  status:     <status>
-  files:      N context files
-  next_step:  <first 80 chars of next_step>
-  session_log: <path to SESSION.md if written>
+Handoff written to <path>
+  Status: <status>
+  Slug: <slug or "none (ad-hoc)">
+  Context files: <n>
+  Next step: <first 80 chars of next_step>...
+  Session log: <path to SESSION.md if written>
 
 The orchestrator (Hermes) can now detect handoff.json and resume work.
 ```
@@ -196,8 +225,11 @@ Then exit — the agent session should be cleared after /handoff.
 
 1. **Do NOT block on user input.** /handoff must complete without questions.
 2. **Do NOT modify any source code.** The handoff is read-only — it captures state, it does not change it.
-3. **Atomic writes only.** Always write to `.tmp` then `mv` — never truncate a file.
+3. **Atomic writes only.** Write to temp file in same directory then `mv` — never truncate a file. Never write to `/tmp` (cross-filesystem mv breaks atomicity).
 4. **Infer next_step from real context.** Do NOT generate a generic "continue working" — read TASKS.md or FIX.md and report the actual next pending task.
-5. **At least 1 context file.** An empty context_files array is invalid.
-6. **next_step max 2000 chars.** If the auto-detected prompt is too long, summarize.
+5. **At least 1 context file.** An empty context_files array is invalid. If no files are found, include a fallback file from the workspace root.
+6. **next_step max 2000 chars.** If the auto-detected prompt is too long, summarize. Empty string is valid when status is `"complete"`.
 7. **handoff.json goes to workspace root.** Not inside archive/, not inside a subdirectory.
+8. **No agent-specific branching.** The command works identically for pi, Claude Code, and any future agent. The `agent` field is provenance only.
+9. **Never duplicate plan state.** `context_files` points to SPEC/PLAN/TASKS — do not inline their contents in `next_step`.
+10. **Validate before writing.** `context_files` must be non-empty. `next_step` must be non-empty (unless status is `"complete"`).

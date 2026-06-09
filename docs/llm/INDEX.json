@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "generated_at": "2026-06-08T00:00:00Z",
+  "generated_at": "2026-06-09T07:00:00Z",
   "z_harness_version": "7c8d09a",
   "concepts": [
     {
@@ -157,9 +157,10 @@
         "commands/z-test.md",
         "commands/z-update.md",
         "commands/z-uplift.md",
-        "commands/z-where.md"
+        "commands/z-where.md",
+        "commands/z-handoff.md"
       ],
-      "last_updated": "2026-06-08",
+      "last_updated": "2026-06-09",
       "confidence": "high",
       "depends_on": [
         "agents",
@@ -383,6 +384,7 @@
       "slug": "pi-export",
       "source_files": [
         "scripts/export-pi.py",
+        "scripts/pi-mcp-server.py",
         "scripts/lint-frontmatter.sh",
         "Makefile",
         "scripts/pi_assets/AGENTS.preamble.md",
@@ -393,7 +395,7 @@
         "scripts/pi_assets/extensions/subagent/agents.ts",
         "scripts/pi_assets/extensions/subagent/VENDOR.md"
       ],
-      "last_updated": "2026-06-08",
+      "last_updated": "2026-06-09",
       "confidence": "high",
       "depends_on": [
         "multi-ide-exports",
@@ -403,7 +405,7 @@
         "scripts"
       ],
       "consumed_by": [],
-      "summary": "pi export target: builds pi (https://pi.dev) resources from z-harness source files. Unlike Cursor/Codex/agy, pi has no native subagent dispatch — fan-out runs through a vendored subagent extension. Agent .md files are rendered with pipelined _yaml_quote on descriptions to prevent YAML parsing failures. The explore agent (pi-only) is a read-only fan-out recon agent for parallel dispatch. Four-layer defense against YAML dispatch bug: (1) pi runtime quoteUnquotedColonValues() patch, (2) source quoting in pi_assets, (3) export-pi.py _yaml_quote for all generated agents, (4) post-export _validate_frontmatter_yaml() pass with strict YAML 1.2 parser. Standalone lint-frontmatter.sh + make lint-frontmatter for source-level validation. CI wiring recommended but not yet implemented."
+      "summary": "pi export target: builds pi (https://pi.dev) resources from z-harness source files. Unlike Cursor/Codex/agy, pi has no native subagent dispatch \u2014 fan-out runs through a vendored subagent extension. Semantic model tier mapping (haiku\u2192deepseek-v4-flash, sonnet/opus\u2192deepseek-v4-pro) with cheap subagents pinned to flash for token efficiency. Agent .md files are rendered with pipelined _yaml_quote on descriptions to prevent YAML parsing failures. The explore agent (pi-only) is a read-only fan-out recon agent for parallel dispatch. pi-mcp-server.py is an MCP server wrapping pi-cli for Hermes Agent orchestration (pi_instruct + pi_inspect_model tools). Four-layer defense against YAML dispatch bug: (1) pi runtime quoteUnquotedColonValues() patch, (2) source quoting in pi_assets, (3) export-pi.py _yaml_quote for all generated agents, (4) post-export _validate_frontmatter_yaml() pass with strict YAML 1.2 parser. Standalone lint-frontmatter.sh + make lint-frontmatter for source-level validation. CI wiring recommended but not yet implemented."
     },
     {
       "slug": "plan-claim",
@@ -603,9 +605,10 @@
         "skills/z-suggest-memory/SKILL.md",
         "skills/z-test/SKILL.md",
         "skills/z-update/SKILL.md",
-        "skills/z-uplift/SKILL.md"
+        "skills/z-uplift/SKILL.md",
+        "skills/z-handoff/SKILL.md"
       ],
-      "last_updated": "2026-06-08",
+      "last_updated": "2026-06-09",
       "confidence": "high",
       "depends_on": [
         "agents",
@@ -688,6 +691,28 @@
       "source_file": [
         "commands/z-uplift.md",
         "skills/z-uplift/SKILL.md"
+      ]
+    },
+    {
+      "slug": "handoff-protocol",
+      "last_updated": "2026-06-09",
+      "confidence": "high",
+      "depends_on": [
+        "commands",
+        "skills",
+        "scripts"
+      ],
+      "consumed_by": [
+        "commands",
+        "skills",
+        "agents"
+      ],
+      "summary": "Machine-readable agent handoff protocol for session continuity. Defines handoff.json contract (JSON Schema draft 2020-12) with 7 fields: protocol_version (const 1.0), timestamp, agent, slug, status (enum: context_pressure/clean_break/complete/blocked), next_step, context_files (array of {path, role}). Universal across pi, Claude Code, Codex CLI, and any z-harness agent. Skill + command write handoff.json to workspace root atomically; orchestrator consumes it and spawns the next session. Roles: spec, plan, tasks, workstreams, session_log, diff, other. Pre-existing handoff.json is overwritten.",
+      "source_file": [
+        "docs/human/handoff-v1.md",
+        "docs/schemas/handoff.schema.json",
+        "commands/z-handoff.md",
+        "skills/z-handoff/SKILL.md"
       ]
     }
   ]

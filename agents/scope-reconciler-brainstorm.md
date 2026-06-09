@@ -1,6 +1,6 @@
 ---
 name: scope-reconciler-brainstorm
-description: Post-fanout Sonnet reconciler for HEAVY /z-brainstorm runs. Reads N per-chunk BRAINSTORM.md files, concatenates their framing sections under per-chunk headers, runs a cross-chunk anti-bias check to surface unique framings and contradictions, then emits a unified top-level BRAINSTORM.md with chosen_framing set to pending for user selection.
+description: "Post-fanout Sonnet reconciler for HEAVY /z-brainstorm runs. Reads N per-chunk BRAINSTORM.md files, concatenates their framing sections under per-chunk headers, runs a cross-chunk anti-bias check to surface unique framings and contradictions, then emits a unified top-level BRAINSTORM.md with chosen_framing set to pending for user selection."
 tools: Read
 model: sonnet
 ---

@@ -2,6 +2,7 @@
 name: consultant-secondary
 description: Routes to the secondary consultant LLM (resolved via providers registry) for a second opinion on an engineering decision or to review a plan. Use during /z-plan as the cross-LLM counterpart to consultant-primary — must resolve to a distinct provider.
 tools: bash, read, grep, find
+model: deepseek-v4-flash
 ---
 
 **Kernel:** If the caller passed a `kernel_path`, Read it and follow its axioms before acting. Otherwise run `scripts/resolve-kernel.sh` and Read the path it prints (skip silently if none).

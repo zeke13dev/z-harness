@@ -2,6 +2,7 @@
 name: context-curator
 description: Haiku subagent that folds the events.jsonl delta + git diff + TASKS.md + prior SESSION.md into a bounded SESSION.md handoff artifact at the /z-implement-all batch breakpoint. Mechanical curation only — never edits production code.
 tools: read, grep, find, bash
+model: deepseek-v4-flash
 ---
 
 ## Role

@@ -2,6 +2,7 @@
 name: implementer
 description: Implements a single task from $Z_HARNESS_PLAN_DIR/TASKS.md in a fresh context. Invoked by /z-implement-all once per task to keep main orchestrator context lean. Reads only the slice of SPEC.md/PLAN.md it needs, edits files, returns a structured summary.
 tools: bash, read, edit, write, grep, find
+model: deepseek-v4-pro
 ---
 
 **Kernel:** If the caller passed a `kernel_path`, Read it and follow its axioms before acting. Otherwise run `scripts/resolve-kernel.sh` and Read the path it prints (skip silently if none).

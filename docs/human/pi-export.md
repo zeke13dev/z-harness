@@ -1,7 +1,7 @@
 # pi Export
 
-> Last updated: 2026-06-08
-> Covers source: scripts/export-pi.py, scripts/lint-frontmatter.sh, Makefile, scripts/pi_assets/AGENTS.preamble.md, scripts/pi_assets/CAPABILITIES.md, scripts/pi_assets/README.md, scripts/pi_assets/agents/explore.md, scripts/pi_assets/extensions/subagent/index.ts, scripts/pi_assets/extensions/subagent/agents.ts, scripts/pi_assets/extensions/subagent/VENDOR.md
+> Last updated: 2026-06-09
+> Covers source: scripts/export-pi.py, scripts/pi-mcp-server.py, scripts/lint-frontmatter.sh, Makefile, scripts/pi_assets/AGENTS.preamble.md, scripts/pi_assets/CAPABILITIES.md, scripts/pi_assets/README.md, scripts/pi_assets/agents/explore.md, scripts/pi_assets/extensions/subagent/index.ts, scripts/pi_assets/extensions/subagent/agents.ts, scripts/pi_assets/extensions/subagent/VENDOR.md
 
 ## Overview
 
@@ -13,6 +13,27 @@ The export tree has two classes of output:
 
 The explorer agent is the headline fan-out agent. It is read-only, returns `path:line` conclusions, and is designed for parallel dispatch via pi's `subagent { "tasks": [...] }` syntax. It is the pi-only counterpart to z-harness's codebase exploration tools.
 
+## Model tier mapping
+
+As of 2026-06-09, agent model tiers are mapped to DeepSeek-specific models on export. The mapping is:
+
+| Semantic tier | DeepSeek model      |
+|---------------|---------------------|
+| haiku         | deepseek-v4-flash   |
+| sonnet        | deepseek-v4-pro     |
+| opus          | deepseek-v4-pro     |
+
+Cheap subagents (doc-fetcher, explore, reviewer, scope-probe, external-lookup, planning-router, resolver, and others) are pinned to `deepseek-v4-flash` for token efficiency. Heavy agents (implementer, auditor, mr-reviewer, doc-updater, and others) run on `deepseek-v4-pro`. Agents without a model tier in their frontmatter inherit pi's configured default.
+
+## MCP server (pi-mcp-server.py)
+
+`scripts/pi-mcp-server.py` is an MCP (Model Context Protocol) server wrapping pi-cli for Hermes Agent orchestration. It exposes two tools:
+
+- **pi_instruct** — One-shot pi invocation via subprocess pipes. Supports instruction, context, model, provider, and timeout parameters. Returns output text, model used, exit code, and optional usage stats (token counts, cost).
+- **pi_inspect_model** — Lists available pi models by parsing `pi --list-models` table output into structured JSON with provider, model, context window, and max output tokens.
+
+The server handles timeouts (SIGTERM via process group kill), missing binaries, non-zero exit codes, and empty instructions. It parses pi's NDJSON output format (`message_end`, `turn_end`, `agent_end` events) to extract the final response text and usage statistics.
+
 ## Key entry points
 
 - `scripts/export-pi.py:1` — `export-pi.py` — Main exporter script. Builds the full `exports/pi/` tree. Copies pi-only assets from `scripts/pi_assets/`, renders z-harness agents/prompts with pi-normalized frontmatter, rewrites `Agent()`/`Skill()` call sites to subagent hints, and generates the `AGENTS.md` index.
@@ -20,7 +41,8 @@ The explorer agent is the headline fan-out agent. It is read-only, returns `path
 - `scripts/export-pi.py:88` — `_TOOL_UNSUPPORTED` — Tools dropped from agent allowlists on export (agent, task, webfetch, websearch, notebookedit, enterplanmode, exitplanmode, todowrite, multiedit).
 - `scripts/export-pi.py:120` — `_rewrite_line` — Rewrites `Agent(subagent_type="X")` lines to `subagent { "agent": "X" }` hints, `Skill("z-foo")` to skill-run hints, and unsupported `AskUserQuestion()`/`TaskCreate()` to inline-handling hints.
 - `scripts/export-pi.py:189` — `_yaml_quote` — Quotes YAML frontmatter values that contain colons, brackets, hashes, or quotes to prevent parsing failures in pi's YAML frontmatter parser. The preventive layer applied at export time for all generated agent descriptions.
-- `scripts/export-pi.py:196` — `_render_agent` — Renders a z-harness agent as a pi agent `.md` file with pipelined `_yaml_quote` on descriptions and `_TOOL_MAP` normalization on tools. Model is intentionally omitted.
+- `scripts/export-pi.py:196` — `_render_agent` — Renders a z-harness agent as a pi agent `.md` file with pipelined `_yaml_quote` on descriptions, semantic model tier mapping (haiku→flash, sonnet/opus→pro), and `_TOOL_MAP` normalization on tools. Agents without a model tier inherit pi's default.
+- `scripts/pi-mcp-server.py:1` — `pi-mcp-server.py` — MCP server wrapping pi-cli for Hermes Agent orchestration. Exposes `pi_instruct` (one-shot pi invocation with timeout/error handling) and `pi_inspect_model` (lists available models). Parses pi NDJSON output.
 - `scripts/export-pi.py:246` — `_validate_frontmatter_yaml` — Post-export YAML validation pass. Re-validates every generated and copied agent file with `yaml.safe_load()` (strict YAML 1.2 parser) after the custom regex frontmatter parser passes. Silently skips if PyYAML is not available (import error fallback). Called from `_validate_agent` (line 263) for every emitted agent file.
 - `scripts/export-pi.py:285` — `main` — Entry point: parses `--out`, enumerates sources, renders agents/prompts, copies pi-only assets, writes `AGENTS.md`, validates all outputs (including `_validate_frontmatter_yaml` on every agent file).
 - `scripts/lint-frontmatter.sh:1` — `lint-frontmatter.sh` — Standalone lint script. Scans `agents/`, `skills/`, `commands/`, `personas/`, `scripts/pi_assets/` for `.md` files with YAML frontmatter and validates each with a strict YAML 1.2 parser. Exits 0 if all pass, 1 on any failure. Requires PyYAML; skips gracefully if unavailable.
@@ -58,7 +80,7 @@ Additionally, `scripts/lint-frontmatter.sh` provides a standalone, source-tree-l
 
 - **Four-layer YAML defense.** See "YAML frontmatter defense layers" above. Layer 4 (`_validate_frontmatter_yaml`) + the standalone lint script provide belt-and-suspenders protection against frontmatter parse failures.
 - pi has no native subagent dispatch. Fan-out works through the vendored `extensions/subagent/` extension, which spawns isolated `pi` child processes.
-- Model pinning is dropped on export. pi agents inherit pi's configured default model. In a deepseek-only setup there is no cheap Haiku tier — the fan-out win is context isolation, not cost.
+- Model tiers are mapped on export. Semantic tiers (haiku, sonnet, opus) resolve to DeepSeek-specific models (deepseek-v4-flash, deepseek-v4-pro). Cheap subagents are pinned to flash for token efficiency — the fan-out win is context isolation AND cost.
 - Multi-line call rewrites are line-based. Only the line containing `Agent(` / `Skill(` is rewritten; argument lines on following lines are left in place.
 - Agents are discovered from `~/.pi/agent/agents/*.md` — this is NOT a pi package resource type. Even though z-harness installs as a pi package, agents must be symlinked into the discovery directory separately.
 - The subagent extension must be refreshed after pi upgrades; see `extensions/subagent/VENDOR.md`.

@@ -43,6 +43,11 @@ jobs:
         # path as local dev rather than the ImportError fallback.
         run: pip install -e ".[dev]"
 
+      - name: Lint frontmatter
+        # Fail-fast: catch unquoted colons in agent descriptions (e.g. file:line,
+        # tasks: [...]) before running the full test suite.
+        run: make lint-frontmatter
+
       - name: Configure git identity
         # Many tests git-init throwaway repos and commit; a global identity must
         # exist or those subprocess commits fail on a bare CI runner.

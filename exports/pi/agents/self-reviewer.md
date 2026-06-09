@@ -2,6 +2,7 @@
 name: self-reviewer
 description: Read-only self-review agent used when Z_HARNESS_CONSULT=off. Reviews a diff vs SPEC.md and returns the same response shape as the standard reviewer (blockers/majors/minors). Does NOT call resolve-provider or any external model CLI.
 tools: read, grep, find, bash
+model: deepseek-v4-pro
 ---
 
 **Kernel:** If the caller passed a `kernel_path`, Read it and follow its axioms before acting. Otherwise run `scripts/resolve-kernel.sh` and Read the path it prints (skip silently if none).

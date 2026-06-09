@@ -2,6 +2,7 @@
 name: auditor
 description: Fresh-context Sonnet auditor for a single dimension (correctness | perf | cleanliness | design). Reads target files + optional rubric file, returns structured findings (Location / Evidence / Recommendation / Severity). Read-only — never edits. Spawned in parallel by /z-audit, one per dimension.
 tools: bash, read, grep, find
+model: deepseek-v4-pro
 ---
 
 **Kernel:** If the caller passed a `kernel_path`, Read it and follow its axioms before acting. Otherwise run `scripts/resolve-kernel.sh` and Read the path it prints (skip silently if none).

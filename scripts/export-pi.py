@@ -202,7 +202,18 @@ def _render_agent(entry: dict, agent_names: set[str]) -> tuple[str, list[str]]:
         lines.append(f"description: {_yaml_quote(description)}\n")
     if pi_tools:
         lines.append(f"tools: {', '.join(pi_tools)}\n")
-    # model intentionally omitted — inherit pi's configured default.
+    # Map semantic model tiers to provider-specific models.
+    # pi uses DeepSeek as the default provider; map tiers accordingly.
+    raw_model = fm.get("model")
+    if raw_model:
+        model_map = {
+            "haiku": "deepseek-v4-flash",
+            "sonnet": "deepseek-v4-pro",
+            "opus": "deepseek-v4-pro",
+        }
+        mapped = model_map.get(raw_model, raw_model)
+        lines.append(f"model: {mapped}\n")
+    # else: no model → inherit pi's configured default.
     lines.append("---\n\n")
 
     body = _rewrite_body(entry["body"], agent_names).lstrip("\n")

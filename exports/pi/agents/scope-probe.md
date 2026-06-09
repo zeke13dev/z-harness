@@ -2,6 +2,7 @@
 name: scope-probe
 description: Pre-dispatch Haiku scope classifier. Runs as Phase 0 of host z-* commands (initially /z-audit and /z-brainstorm). Classifies the topic as LIGHT / MEDIUM / HEAVY by walking codebase structure and counting natural seams, with a caller-supplied axis taxonomy. Returns a parseable hybrid contract (line-prefix routing fields + fenced JSON chunks array). Advisory only — orchestrator owns final dispatch.
 tools: read, grep, find
+model: deepseek-v4-flash
 ---
 
 ## Mission

@@ -1,6 +1,6 @@
 ---
 name: scope-extractor
-description: Reads SPEC.md, PLAN.md, and TASKS.md from a plan artifact directory and emits a JSON array of likely file changes with confidence labels. Used by run-creating commands (z-implement-all, z-plan, etc.) to seed the active-plan registry scope before overlap detection. Output is consumed directly by `scripts/active-plan-registry.py update-scope --scope-json FILE`.
+description: "Reads SPEC.md, PLAN.md, and TASKS.md from a plan artifact directory and emits a JSON array of likely file changes with confidence labels. Used by run-creating commands (z-implement-all, z-plan, etc.) to seed the active-plan registry scope before overlap detection. Output is consumed directly by `scripts/active-plan-registry.py update-scope --scope-json FILE`."
 tools: Read, Grep, Glob, Bash
 model: haiku
 ---

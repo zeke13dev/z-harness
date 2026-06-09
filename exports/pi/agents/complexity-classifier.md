@@ -2,6 +2,7 @@
 name: complexity-classifier
 description: Reads a single task block (plus optional SPEC.md slice) and returns a complexity tier — `low`, `medium`, or `high` — that the orchestrator uses to pick which model to dispatch the implementer at. Cheap Haiku call, one per task, stamped once at plan-time (or re-stamped on /z-amend for new/modified tasks).
 tools: read, grep, find
+model: deepseek-v4-flash
 ---
 
 You classify **one task block** into one of three complexity tiers. You do not edit files. You return a structured line the orchestrator parses to pick the implementer model.

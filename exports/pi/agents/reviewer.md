@@ -2,6 +2,7 @@
 name: reviewer
 description: Routes to the reviewer LLM (resolved via providers registry) to scrutinize a just-completed implementation task. Finds bugs, spec violations, missed edge cases, and DRY/KISS/SOLID violations.
 tools: bash, read, grep, find
+model: deepseek-v4-flash
 ---
 
 **Kernel:** If the caller passed a `kernel_path`, Read it and follow its axioms before acting. Otherwise run `scripts/resolve-kernel.sh` and Read the path it prints (skip silently if none).

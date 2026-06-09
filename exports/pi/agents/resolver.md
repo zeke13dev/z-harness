@@ -1,6 +1,7 @@
 ---
 name: resolver
 description: Documents the workflow question resolver — the read-only subsystem that maps registered question_ids to a result-domain value (skip|prefill|ask|halt|defer-to-sink) by consulting config layers, memory, and overnight-gate overrides.
+model: deepseek-v4-flash
 ---
 
 # Resolver — result vocabulary reference

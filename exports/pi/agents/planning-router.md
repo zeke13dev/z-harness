@@ -2,6 +2,7 @@
 name: planning-router
 description: Cheap Haiku ambiguity resolver for z-harness plan-family route decisions. Reads a compact signal payload and recommends the best command or contextual exit; advisory only.
 tools: read, grep, find
+model: deepseek-v4-flash
 ---
 
 ## Mission

@@ -1,6 +1,6 @@
 ---
 name: review-agent
-description: Post-run Haiku subagent that proposes 0-3 candidate memories from a completed /z-implement-all, /z-review-all, or /z-debug run. Reads run events + cumulative diff + SPEC.md (or DEBUG.md for debug runs); emits structured candidates as a single fenced ```json block. Does NOT write — orchestrator owns all writes via /z-suggest-memory.
+description: "Post-run Haiku subagent that proposes 0-3 candidate memories from a completed /z-implement-all, /z-review-all, or /z-debug run. Reads run events + cumulative diff + SPEC.md (or DEBUG.md for debug runs); emits structured candidates as a single fenced ```json block. Does NOT write — orchestrator owns all writes via /z-suggest-memory."
 tools: Read, Grep, Glob, Bash
 model: haiku
 ---

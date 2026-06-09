@@ -1,6 +1,6 @@
 ---
 name: bisect-isolator
-description: Haiku subagent that drives `git bisect run` between a known-good ref and HEAD using a caller-supplied repro script, then returns the offending commit SHA + line-level diff. Mechanical only — no interpretation of WHY the change broke things. Triggered by /z-debug Phase 2.5 when the bug is a regression with a known-good baseline and the repro is scriptable.
+description: "Haiku subagent that drives `git bisect run` between a known-good ref and HEAD using a caller-supplied repro script, then returns the offending commit SHA + line-level diff. Mechanical only — no interpretation of WHY the change broke things. Triggered by /z-debug Phase 2.5 when the bug is a regression with a known-good baseline and the repro is scriptable."
 tools: Bash, Read, Grep, Glob
 model: haiku
 ---

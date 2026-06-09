@@ -1,6 +1,6 @@
 ---
 name: remote-runner
-description: Haiku subagent that handles MECHANICAL remote work — rsync local repo to a per-(slug, task-id) sandbox on the remote host, run cargo build/check/clean, restart paper qtctl manifests, tail logs, run READ-ONLY DB/disk/log queries against shared state. NOT for interpretive debugging (root-causing a failing test, reasoning about DB results — those need Sonnet/Opus). Triggered by tasks tagged **REMOTE_VERIFY** in TASKS.md.
+description: "Haiku subagent that handles MECHANICAL remote work — rsync local repo to a per-(slug, task-id) sandbox on the remote host, run cargo build/check/clean, restart paper qtctl manifests, tail logs, run READ-ONLY DB/disk/log queries against shared state. NOT for interpretive debugging (root-causing a failing test, reasoning about DB results — those need Sonnet/Opus). Triggered by tasks tagged **REMOTE_VERIFY** in TASKS.md."
 tools: Bash, Read, Grep, Glob
 model: haiku
 ---
