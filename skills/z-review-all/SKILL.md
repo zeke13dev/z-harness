@@ -159,6 +159,107 @@ done
 
 Skip this phase if either TESTS.md or test-runner.json is absent (no harm — older plans without /z-test predate this step).
 
+## Phase 3.6 — Pre-review cycle (opt-in)
+
+**Opt-in gate:** Only runs if `Z_HARNESS_PRE_REVIEW` is set to `1` (env var). Check at phase start:
+
+```bash
+if [ "${Z_HARNESS_PRE_REVIEW:-0}" != "1" ]; then
+  echo "Pre-review cycle skipped (Z_HARNESS_PRE_REVIEW != 1)"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" pre_review_skipped \
+    '{"reason":"opt_in_disabled"}'
+  # Jump to Phase 3.7
+  return 0
+fi
+```
+
+When enabled, spawn **3 pre-reviewers in parallel** to do a fast first-pass scan. Each pre-reviewer runs on the cheapest available model (haiku). Their findings are collected and fed as additional context into the Phase 4 consultant prompts.
+
+Each pre-reviewer gets the same inputs:
+- `$BASE/SPEC.md`
+- `$BASE/PLAN.md`
+- `$BASE/TASKS.md`
+- `$BASE/archive/$RRUN/cumulative.diff`
+- `$BASE/archive/$RRUN/cumulative.stat`
+
+Dispatch all three in a single message via parallel `Agent()` calls:
+
+```
+Agent(
+  subagent_type="pre-reviewer",
+  description="Pre-review 1 — correctness & spec drift (Flash) for <slug>",
+  prompt="MODE: final-review-prong-a
+slug: <slug>
+run_id: <RRUN>
+Kernel path: <KERNEL_PATH>
+
+SPEC.md: $BASE/SPEC.md
+PLAN.md: $BASE/PLAN.md
+TASKS.md: $BASE/TASKS.md
+cumulative_diff_path: $BASE/archive/$RRUN/cumulative.diff
+cumulative_stat_path: $BASE/archive/$RRUN/cumulative.stat
+
+Focus: PRONG A — Implementation drift. Is the cumulative diff faithful to SPEC.md? Look for files that should have changed but didn't, files that changed wrong, cross-task drift (inconsistent naming/types), stale references, and missing tests called out in acceptance criteria. Be fast and cheap — surface only clear blockers and majors."
+)
+Agent(
+  subagent_type="pre-reviewer",
+  description="Pre-review 2 — spec gaps & edge cases (Flash) for <slug>",
+  prompt="MODE: final-review-prong-b
+slug: <slug>
+run_id: <RRUN>
+Kernel path: <KERNEL_PATH>
+
+SPEC.md: $BASE/SPEC.md
+PLAN.md: $BASE/PLAN.md
+TASKS.md: $BASE/TASKS.md
+cumulative_diff_path: $BASE/archive/$RRUN/cumulative.diff
+cumulative_stat_path: $BASE/archive/$RRUN/cumulative.stat
+
+Focus: PRONG B — Spec gaps and missed edge cases. Now that the implementation is done, what's wrong with the spec itself? Decisions in PLAN.md that turned out wrong. Edge cases the spec missed. Public surfaces that should be broader/narrower. Be fast and cheap — surface only clear blockers and majors."
+)
+Agent(
+  subagent_type="pre-reviewer",
+  description="Pre-review 3 — code quality & structural issues (Flash) for <slug>",
+  prompt="MODE: final-review-quality
+slug: <slug>
+run_id: <RRUN>
+Kernel path: <KERNEL_PATH>
+
+SPEC.md: $BASE/SPEC.md
+PLAN.md: $BASE/PLAN.md
+TASKS.md: $BASE/TASKS.md
+cumulative_diff_path: $BASE/archive/$RRUN/cumulative.diff
+cumulative_stat_path: $BASE/archive/$RRUN/cumulative.stat
+
+Focus: CODE QUALITY — defensive bloat, premature abstraction, DRY/KISS/SOLID violations, test noise, stale comments, over-engineering. Not correctness — assume the code works. Focus on maintainability and quality. Be fast and cheap — surface only clear blockers and majors."
+)
+```
+
+**Collecting pre-review findings:** After all three return, read their outputs. Write a consolidated pre-review summary to `$BASE/archive/$RRUN/pre-review.md`:
+
+```markdown
+# Pre-review summary — <slug>
+Run: <RRUN>
+
+## Pre-review 1 — correctness & spec drift
+<verbatim findings from pre-reviewer 1, or "CLEAN">
+
+## Pre-review 2 — spec gaps & edge cases
+<verbatim findings from pre-reviewer 2, or "CLEAN">
+
+## Pre-review 3 — code quality & structural issues
+<verbatim findings from pre-reviewer 3, or "CLEAN">
+```
+
+**Feeding into Phase 4:** The consolidated `$BASE/archive/$RRUN/pre-review.md` path is added as a context item in the Phase 4 consultant prompts. Each consultant's prompt gains a section:
+
+```
+Pre-review findings (3 × DeepSeek V4 Flash fast scan):
+<contents of $BASE/archive/$RRUN/pre-review.md>
+
+These are cheap pre-screener findings — validate them critically before accepting. The real work is your own analysis.
+```
+
 ## Phase 3.7 — Pre-consult compaction breakpoint
 
 **Always runs** between Phase 3.5 and Phase 4 (unless fast-forwarded via the Pre-Phase 0 resume check).
