@@ -192,6 +192,32 @@ These five knobs control the per-file lease and wait-for poll loop added by the 
 
 **Dual budget summary:** `AUTO_WAIT_BUDGET_SECS` (300 s, auto mode) is the short LLM-session ceiling; `WAIT_TIMEOUT_SECS` (1800 s, explicit mode) is the long interactive ceiling. They are independent because interactive users can tolerate longer waits than an unattended orchestrator loop.
 
+### Claim-lock knobs (cross-session-claim-locks plan)
+
+These three knobs control the slug-level hard claim lock added by `/z-plan` and `/z-audit-plan`. Like the knobs above, they are **env-only** — read inline by `scripts/plan-claim.sh` from the environment. They are NOT in `config.py`'s `DEFAULTS` or `VALIDATORS`, and `export-env` does NOT emit them.
+
+For the full claim-lock design reference (contention/takeover policy, heartbeat cadence, exit codes, self-reentry guard, session-id persist+restore, daemon-leak behavior), see `docs/human/plan-claim.md`.
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `Z_HARNESS_CLAIM_TTL_SECS` | `2700` | TTL (seconds) for slug claim liveness. A heartbeat not refreshed within this window causes the next same-slug `acquire` to perform a stale-takeover (exit 2). Lower values shorten the time a dead/crashed session blocks a new one; higher values reduce false-takeover risk during slow operations. |
+| `Z_HARNESS_CLAIM_OVERRIDE` | _(unset)_ | Set to `1` to allow an unattended (`Z_HARNESS_NO_ASK`) run to proceed through contention (exit 1), stale-takeover (exit 2), or corrupt lock (exit 3) without aborting. Default-safe: absent or `0` means unattended contention always aborts rather than silently double-working. |
+| `Z_HARNESS_CLAIM_DISABLE` | _(unset)_ | Set to `1` to skip all claim locking entirely. Every `plan-claim.sh` subcommand (`acquire`, `heartbeat`, `release`) becomes an immediate exit-0 no-op. Use as an escape hatch (CI, testing, emergency). When disabled, `release` is a **safe no-op** and is not gated on an acquire event having been emitted — callers are always safe to call `release` regardless of this knob. |
+
+**Manual unlock recipe** — if a plan was abandoned abnormally (hard-kill with no resume), clear the stale lock:
+
+```bash
+# Find the claims directory
+bash scripts/plan-path.sh claims_dir
+
+# Remove lock files for the specific slug
+rm <claims_dir>/<slug>.lock <claims_dir>/<slug>.lock.hb.lock
+```
+
+Run `plan-claim.sh status --slug <slug>` first to confirm the current holder before removing.
+
+**Post-crash daemon behavior** — the `sink-lock` holder daemon is `setsid`-detached and survives an orchestrator SIGKILL. It holds the flock until its heartbeat ages past `Z_HARNESS_CLAIM_TTL_SECS`, after which the next same-slug `acquire` performs a stale-takeover (exit 2). **Exit-2 is the normal post-crash recovery path**, not a rare edge case. Unattended exit-2 default-aborts (a partial SPEC/PLAN may exist) unless `Z_HARNESS_CLAIM_OVERRIDE=1`.
+
 ### Base fallback chain summary
 
 The full base fallback chain (active when `Z_HARNESS_EXTERNAL_DEFAULT` is unset or `1`):

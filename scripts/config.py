@@ -37,8 +37,15 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import tomllib
 from pathlib import Path
+
+try:
+    import tomllib
+except ImportError:
+    try:
+        import tomli as tomllib
+    except ImportError:
+        sys.exit("config.py requires tomllib (Python 3.11+) or tomli (pip install tomli)")
 
 try:
     import tomlkit

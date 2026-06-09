@@ -1,6 +1,6 @@
 ---
 name: explore
-description: Read-only fan-out search agent for broad sweeps across many files, directories, and naming conventions. Returns the conclusion (where things live + file:line) rather than file dumps. It LOCATES code; it does not review, audit, or reason deeply about it. Use AFTER doc-fetcher, for the gaps docs could not cover. Dispatch several in parallel (subagent `tasks: [...]`) when a question spans multiple subsystems.
+description: "Read-only fan-out search agent for broad sweeps across many files, directories, and naming conventions. Returns the conclusion (where things live + file:line) rather than file dumps. It LOCATES code; it does not review, audit, or reason deeply about it. Use AFTER doc-fetcher, for the gaps docs could not cover. Dispatch several in parallel (subagent `tasks: [...]`) when a question spans multiple subsystems."
 tools: read, grep, find, ls, bash
 ---
 

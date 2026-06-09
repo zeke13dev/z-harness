@@ -26,7 +26,7 @@ python3 scripts/export-common.py --self-test
 
 Read `$ARGUMENTS`. Look for `--target=<value>` and `--include=<value>`.
 
-Valid `--target` values: `cursor`, `codex`, `agy`, `all`.
+Valid `--target` values: `cursor`, `codex`, `agy`, `pi`, `all`.
 
 Default (no `--target` flag): `all`.
 
@@ -37,7 +37,7 @@ Default (no `--include` flag): include personas automatically (personas are alwa
 If an unrecognized `--target` value is given, immediately print:
 
 ```
-[z-export] error: --target must be one of: cursor, codex, agy, all
+[z-export] error: --target must be one of: cursor, codex, agy, pi, all
 ```
 
 and exit nonzero. Do not proceed.
@@ -46,7 +46,10 @@ Build the target list:
 - `cursor` → `["cursor"]`
 - `codex` → `["codex"]`
 - `agy` → `["agy"]`
-- `all` → `["cursor", "codex", "agy"]`
+- `pi` → `["pi"]`
+- `all` → `["cursor", "codex", "agy", "pi"]`
+
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 
 ## Phase 2 — Run per-target export scripts
 
@@ -84,7 +87,7 @@ For each target:
 
 After the legacy export script for each target completes (regardless of its exit code), export all persona files found under `personas/builtin/` and `personas/user/` (if present) using the per-target `persona_export.py` module.
 
-For each target, run:
+For each target **except `pi`** (which has no `persona_export.py` module — skip it here), run:
 
 ```bash
 python3 - <<'EOF'

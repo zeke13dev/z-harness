@@ -1,11 +1,11 @@
 # Multi IDE Exports
 
-> Last updated: 2026-06-02
-> Covers source: scripts/export-common.py, scripts/export-cursor.py, scripts/export-codex.py, scripts/export-agy.py, scripts/audit-tarball.sh, commands/z-export.md, exports/cursor/CAPABILITIES.md, exports/codex/CAPABILITIES.md, exports/agy/CAPABILITIES.md
+> Last updated: 2026-06-08
+> Covers source: scripts/export-common.py, scripts/export-cursor.py, scripts/export-codex.py, scripts/export-agy.py, scripts/export-pi.py, scripts/audit-tarball.sh, commands/z-export.md, exports/cursor/CAPABILITIES.md, exports/codex/CAPABILITIES.md, exports/agy/CAPABILITIES.md, exports/pi/CAPABILITIES.md
 
 ## Overview
 
-The multi-IDE export pipeline translates z-harness source files (`commands/`, `agents/`, `skills/`, `personas/`) into target-specific files under `exports/`. Cursor receives `.cursor/rules/*.mdc` and `.cursor/personas/*.mdc`. Codex CLI receives `prompts/*.md` plus a consolidated `AGENTS.md`. Antigravity receives `.agent/workflows`, `.agent/rules`, `.agent/skills`, `.agent/personas/`, flat prompts, `agy-plugin.yaml`, `CAPABILITIES.md`, and `README.md`. Persona export is performed per-target after the main adapter runs, using `runtime/drivers/<target>/persona_export.py`.
+The multi-IDE export pipeline translates z-harness source files (`commands/`, `agents/`, `skills/`, `personas/`) into target-specific files under `exports/`. Cursor receives `.cursor/rules/*.mdc` and `.cursor/personas/*.mdc`. Codex CLI receives `prompts/*.md` plus a consolidated `AGENTS.md`. Antigravity receives `.agent/workflows`, `.agent/rules`, `.agent/skills`, `.agent/personas/`, flat prompts, `agy-plugin.yaml`, `CAPABILITIES.md`, and `README.md`. pi (https://pi.dev) receives agent `.md` files, prompts, a vendored subagent extension, and an `AGENTS.md` index — see `docs/human/pi-export.md` for the full pi target documentation. Persona export is performed per-target after the main adapter runs, using `runtime/drivers/<target>/persona_export.py`.
 
 The adapter scripts (`scripts/export-{cursor,codex,agy}.py`) are **deprecated** and frozen at v0.1.0 (C6-D1 — remove after v0.2.0). Each emits a deprecation WARNING to stderr when run directly. The runtime-based workflow under `runtime/drivers/` is the forward path. The `/z-export` command remains the user-facing wrapper; it runs the legacy adapters sequentially and then invokes persona export per target via the runtime driver modules.
 
@@ -59,11 +59,14 @@ The adapter scripts (`scripts/export-{cursor,codex,agy}.py`) are **deprecated** 
 - The tarball allowlist for legacy `exports/` subdirs has a `REMOVE-AT: v<next-minor>` marker in `audit-tarball.sh` — must be removed when the transition window closes.
 - Cursor has no native persona mechanism; personas are exported as `alwaysApply: true` glob-matched `.mdc` rules under `.cursor/personas/`.
 - `/z-export` itself performs no direct file I/O; all writes are delegated to the adapter scripts and the `persona_export.py` modules.
+- pi is a separate export target with its own exporter (`scripts/export-pi.py`), its own assets (`scripts/pi_assets/`), and its own capabilities doc (`exports/pi/CAPABILITIES.md`). Unlike Cursor/Codex/agy, pi uses a vendored subagent extension for fan-out dispatch. See `docs/human/pi-export.md`. The pi exporter is not deprecated and does not use the `runtime/drivers/` replacement path.
+- Subagent YAML dispatch bug (resolved 2026-06-08): pi's frontmatter.js parser could fail on unquoted colons in YAML description values (triggered by "subagent `tasks: [...]`" in explore.md). Three-layer fix: pi runtime patch + source quoting in pi_assets + `_yaml_quote` in export-pi.py for all generated agents. Fully resolved.
 
 ## Examples
 
 - `python3 scripts/export-cursor.py` — regenerates `exports/cursor/.cursor/rules/*.mdc` (deprecated; use runtime driver in production).
 - `python3 scripts/export-codex.py` — regenerates `exports/codex/prompts/*.md` and `exports/codex/AGENTS.md`.
 - `python3 scripts/export-agy.py` — regenerates workflows, rules, skills, prompts, manifest, `CAPABILITIES.md`, and `README.md` under `exports/agy/`.
-- `/z-export --target=all` — runs all three adapters sequentially, then exports personas via `runtime/drivers/<target>/persona_export.py`, and continues past individual target failures.
+- `python3 scripts/export-pi.py` — regenerates the full `exports/pi/` tree (agents, prompts, subagent extension, AGENTS.md).
+- `/z-export --target=all` — runs all three legacy adapters sequentially, then exports personas via `runtime/drivers/<target>/persona_export.py`; pi export must be run separately via `--target=pi`.
 - `/z-export --target=cursor` — exports only the Cursor target, including cursor persona export.

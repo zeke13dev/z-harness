@@ -240,6 +240,39 @@ def _render_agents_index(agents: list[dict], explore_present: bool) -> str:
 # Validation
 # ---------------------------------------------------------------------------
 
+def _validate_frontmatter_yaml(path: Path, text: str) -> list[str]:
+    """Re-validate frontmatter with a strict YAML parser.
+
+    The custom _parse_frontmatter regex is lenient about unquoted colons in
+    values (``file:line``, ``tasks: [...]``).  A real YAML parser catches
+    these, which the custom parser silently accepts.  If PyYAML is not
+    available the check is silently skipped.
+    """
+    errors: list[str] = []
+    if not text.startswith("---\n"):
+        return errors
+    try:
+        import yaml
+    except ImportError:
+        return errors  # no strict parser available; skip
+
+    # Isolate the frontmatter block (same logic as extractFrontmatter in pi).
+    end_idx = text.find("\n---", 3)
+    if end_idx == -1:
+        return errors
+    yaml_string = text[4:end_idx]
+
+    try:
+        parsed = yaml.safe_load(yaml_string)
+    except yaml.YAMLError as e:
+        errors.append(f"{path}: strict YAML parse failed — {e}")
+        return errors
+
+    if not isinstance(parsed, dict):
+        errors.append(f"{path}: strict YAML parse returned non-dict ({type(parsed).__name__})")
+    return errors
+
+
 def _validate_agent(path: Path) -> list[str]:
     text = path.read_text(encoding="utf-8")
     errors: list[str] = []
@@ -253,6 +286,7 @@ def _validate_agent(path: Path) -> list[str]:
         errors.append(f"{path}: frontmatter missing 'description'")
     if not body.strip():
         errors.append(f"{path}: empty body")
+    errors.extend(_validate_frontmatter_yaml(path, text))
     return errors
 
 

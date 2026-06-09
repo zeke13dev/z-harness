@@ -66,7 +66,7 @@ workflows:
   - id: z-export
     source: commands/z-export.md
     output: .agent/workflows/z-export.md
-    description: "Export z-harness commands/agents/skills/personas to Cursor / Codex / Antigravity (agy)."
+    description: "Export z-harness commands/agents/skills/personas to Cursor / Codex / Antigravity (agy) / pi."
   - id: z-fix
     source: commands/z-fix.md
     output: .agent/workflows/z-fix.md

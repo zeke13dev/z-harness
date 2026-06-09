@@ -39,7 +39,28 @@ Loop prevention: carry forward the latest route chain; if it already has two ent
    - If single candidate -> use it.
    <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug
         selection question via their native channel. Silent omission is forbidden. -->
-   - If multiple candidates -> use `AskUserQuestion` to select the slug (or honor `--slug <slug>` argument if provided).
+   > [pi] No native tool — handle inline by asking the user / tracking state yourself (see CAPABILITIES.md).
+     ```bash
+     if [[ "${CLAIM_RC:-1}" -eq 0 ]]; then
+       HB_RC=0
+       bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" heartbeat \
+         --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+         --command /z-audit-plan || HB_RC=$?
+       if [[ $HB_RC -eq 9 ]]; then
+         bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_claim_lost_during_gate \
+           "$(printf '{"slug":"%s","run_id":"%s","gate":"slug_select"}' "$Z_HARNESS_SLUG" "$RUN")"
+         # Lost-claim gate: abort (default) / continue-uncoordinated.
+         # Interactive -> AskUserQuestion: abort / continue-uncoordinated (clearly labeled: peer may clobber).
+         # Unattended (Z_HARNESS_NO_ASK) -> abort. Release first (we held the claim), no deregister
+         # (nothing registered yet at this point in Phase 0).
+         bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
+           --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+           --command /z-audit-plan || true
+         exit 1
+       fi
+     fi
+     ```
+     Then use `AskUserQuestion` to select the slug (or honor `--slug <slug>` argument if provided).
    - If zero -> `mkdir -p "$NO_PLAN_ARCHIVE_DIR"`, write `$NO_PLAN_ARCHIVE_DIR/route-decision.md` recommending `/z-plan`, emit `plan_route_decision` under `$NO_PLAN_RUN`, ask the user to switch or abandon, and stop. Do not create an audit report without plan artifacts.
 2. **Export variables:**
    Export `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")`. Define `$BASE = $Z_HARNESS_PLAN_DIR`.
@@ -122,7 +143,7 @@ Loop prevention: carry forward the latest route chain; if it already has two ent
      "$(printf '{"op":"register","run_id":"%s","rc":%d}' "$RUN" "$REG_RC")"
    ```
 
-   **FINALIZE_STATUS / teardown rule (single source of truth for the entire run):** the audit is now claim-first (acquire → register), so teardown is gated per-resource. On any run-ending halt that occurs AFTER a successful **claim**, `release` BEFORE `deregister` (both best-effort `|| true`); release only if the claim was acquired, deregister only if `REG_RC == 0`. The release+deregister wiring for the normal-end and halt paths is added in the downstream release task. (Heartbeat wiring is added downstream as well.)
+   **FINALIZE_STATUS / teardown rule (single source of truth for the entire run):** the audit is now claim-first (acquire → register), so teardown is gated per-resource. On any run-ending halt that occurs AFTER a successful **claim**, `release` BEFORE `deregister` (both best-effort `|| true`); release only if the claim was acquired, deregister only if `REG_RC == 0`. Release+deregister teardown is wired into every post-claim exit path below (normal-end after Phase 9, and all halt-finalize paths). Heartbeat is called at each phase boundary and before every AskUserQuestion gate.
 
    **Plan-start awareness read (advisory; Invariant 1 — never a hard gate).** After a successful claim and register, read the lockless registry and surface concurrent peers. Read-only, deterministic, non-fatal:
    ```bash
@@ -166,6 +187,30 @@ Loop prevention: carry forward the latest route chain; if it already has two ent
 
 ## Phase 1 — Reality Check (Reference Verification)
 
+**Heartbeat at phase boundary (before phase work begins):**
+```bash
+HB_RC=0
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" heartbeat \
+  --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+  --command /z-audit-plan || HB_RC=$?
+if [[ $HB_RC -eq 9 ]]; then
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_claim_lost_during_gate \
+    "$(printf '{"slug":"%s","run_id":"%s","gate":"phase1_start"}' "$Z_HARNESS_SLUG" "$RUN")"
+  # Lost-claim gate: warn user prominently. Offer abort (default) / continue-uncoordinated.
+  # Interactive -> AskUserQuestion: "Another session took over this slug. Abort (default) or continue-uncoordinated (you and the peer may clobber each other)?".
+  # Unattended (Z_HARNESS_NO_ASK) -> abort unless Z_HARNESS_CLAIM_OVERRIDE=1 (continue-uncoordinated).
+  # On abort: release BEFORE deregister (per invariant); per-resource gating.
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
+    --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+    --command /z-audit-plan || true
+  if [[ "${REG_RC:-1}" -eq 0 ]]; then
+    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+      --run-id "$RUN" --status aborted || true
+  fi
+  exit 1
+fi
+```
+
 Parse `$BASE/SPEC.md` and `$BASE/TASKS.md` to identify factual claims made about the active codebase. Scrutinize these references:
 
 1. **Entities to verify:**
@@ -188,6 +233,26 @@ Checkpoint: Write results to `$BASE/archive/$RUN/phase1-reality.md`.
 
 ## Phase 2 — Best Practices & Design Audit
 
+**Heartbeat at phase boundary (before phase work begins):**
+```bash
+HB_RC=0
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" heartbeat \
+  --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+  --command /z-audit-plan || HB_RC=$?
+if [[ $HB_RC -eq 9 ]]; then
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_claim_lost_during_gate \
+    "$(printf '{"slug":"%s","run_id":"%s","gate":"phase2_start"}' "$Z_HARNESS_SLUG" "$RUN")"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
+    --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+    --command /z-audit-plan || true
+  if [[ "${REG_RC:-1}" -eq 0 ]]; then
+    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+      --run-id "$RUN" --status aborted || true
+  fi
+  exit 1
+fi
+```
+
 Audit the plan's architectural, design, and styling choices against best engineering practices:
 
 1. **Standards verification:**
@@ -206,6 +271,26 @@ Checkpoint: Write results to `$BASE/archive/$RUN/phase2-design.md`.
 ---
 
 ## Phase 3 — Adversarial Cross-LLM Review
+
+**Heartbeat at phase boundary (before phase work begins):**
+```bash
+HB_RC=0
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" heartbeat \
+  --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+  --command /z-audit-plan || HB_RC=$?
+if [[ $HB_RC -eq 9 ]]; then
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_claim_lost_during_gate \
+    "$(printf '{"slug":"%s","run_id":"%s","gate":"phase3_start"}' "$Z_HARNESS_SLUG" "$RUN")"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
+    --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+    --command /z-audit-plan || true
+  if [[ "${REG_RC:-1}" -eq 0 ]]; then
+    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+      --run-id "$RUN" --status aborted || true
+  fi
+  exit 1
+fi
+```
 
 Spawn two consultants in parallel to review the plan's artifacts (`SPEC.md`, `PLAN.md`, `TASKS.md`) and Phase 1/2 audit notes with a highly critical, adversarial mindset:
 
@@ -231,6 +316,26 @@ Both consultants return structured findings. Transcripts are archived under `$BA
 ---
 
 ## Phase 4 — Merge and Synthesize Findings
+
+**Heartbeat at phase boundary (before phase work begins):**
+```bash
+HB_RC=0
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" heartbeat \
+  --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+  --command /z-audit-plan || HB_RC=$?
+if [[ $HB_RC -eq 9 ]]; then
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_claim_lost_during_gate \
+    "$(printf '{"slug":"%s","run_id":"%s","gate":"phase4_start"}' "$Z_HARNESS_SLUG" "$RUN")"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
+    --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+    --command /z-audit-plan || true
+  if [[ "${REG_RC:-1}" -eq 0 ]]; then
+    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+      --run-id "$RUN" --status aborted || true
+  fi
+  exit 1
+fi
+```
 
 1. **Aggregation:**
    Merge findings from Reality Check, Design Audit, and both adversarial consultant reviews.
@@ -270,6 +375,28 @@ Both consultants return structured findings. Transcripts are archived under `$BA
 ---
 
 ## Phase 5 — User Gate & Action
+
+**Heartbeat before Phase 5 audit gate (load-bearing — extends TTL before the AskUserQuestion wait):**
+```bash
+HB_RC=0
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" heartbeat \
+  --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+  --command /z-audit-plan || HB_RC=$?
+if [[ $HB_RC -eq 9 ]]; then
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_claim_lost_during_gate \
+    "$(printf '{"slug":"%s","run_id":"%s","gate":"audit_gate"}' "$Z_HARNESS_SLUG" "$RUN")"
+  # Lost-claim gate: Interactive -> AskUserQuestion abort (default) / continue-uncoordinated.
+  # Unattended (Z_HARNESS_NO_ASK) -> abort. Release BEFORE deregister (per invariant).
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
+    --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+    --command /z-audit-plan || true
+  if [[ "${REG_RC:-1}" -eq 0 ]]; then
+    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+      --run-id "$RUN" --status aborted || true
+  fi
+  exit 1
+fi
+```
 
 1. **Resolver pre-check — run before invoking `AskUserQuestion`:**
 
@@ -754,6 +881,16 @@ Early halt / abort paths often have **no** primary artifact (`FIX.md`, `REPORT.m
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_audit_end \
   "$(printf '{"status":"halted","findings":%d,"blockers":%d,"majors":%d}' "${N_FINDINGS:-0}" "${N_BLOCKERS:-0}" "${N_MAJORS:-0}")"
+# Halt-finalize teardown: release BEFORE deregister; per-resource gating.
+if [[ "${CLAIM_RC:-1}" -eq 0 ]]; then
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
+    --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+    --command /z-audit-plan || true
+fi
+if [[ "${REG_RC:-1}" -eq 0 ]]; then
+  python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+    --run-id "$RUN" --status aborted || true
+fi
 exit 0
 ```
 
@@ -787,6 +924,28 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 import json, sys
 print(json.dumps({"question_id": sys.argv[1], "proposed_value": sys.argv[2], "n_evidence": int(sys.argv[3]), "scope_recommendation": sys.argv[4]}))
 ' "$qid" "$val" "$n" "$scope_rec")"
+```
+
+> [pi] No native tool — handle inline by asking the user / tracking state yourself (see CAPABILITIES.md).
+```bash
+HB_RC=0
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" heartbeat \
+  --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+  --command /z-audit-plan || HB_RC=$?
+if [[ $HB_RC -eq 9 ]]; then
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_claim_lost_during_gate \
+    "$(printf '{"slug":"%s","run_id":"%s","gate":"phase9_elevation"}' "$Z_HARNESS_SLUG" "$RUN")"
+  # Lost-claim gate at Phase 9 elevation: skip elevation proposal and fall through to teardown.
+  # Release BEFORE deregister (per invariant); run is effectively complete; Phase 9 is optional.
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
+    --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+    --command /z-audit-plan || true
+  if [[ "${REG_RC:-1}" -eq 0 ]]; then
+    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+      --run-id "$RUN" --status aborted || true
+  fi
+  exit 0
+fi
 ```
 
 <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the preference
@@ -857,6 +1016,21 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 If `$PROPOSE_OUT` is empty, skip this phase entirely — no question is asked.
 
+**Normal-end teardown (after Phase 9 or when Phase 9 is skipped — release BEFORE deregister; per-resource gating):**
+```bash
+# release only if claim was acquired (CLAIM_RC==0 means acquired or self-reentry or disabled)
+if [[ "${CLAIM_RC:-1}" -eq 0 ]]; then
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
+    --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+    --command /z-audit-plan || true
+fi
+# deregister only if register succeeded
+if [[ "${REG_RC:-1}" -eq 0 ]]; then
+  python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+    --run-id "$RUN" --status complete || true
+fi
+```
+
 ---
 
 ## Operating Principles
@@ -873,7 +1047,7 @@ If `$PROPOSE_OUT` is empty, skip this phase entirely — no question is asked.
 | Feature | Used | Gates |
 |---------|------|-------|
 > [pi] Dispatch a subagent here via the subagent tool (see CAPABILITIES.md).
-| `ask_user` | yes | Phase 0 multiple-candidates slug selection; Phase 0 claim contention/takeover gate (proceed / abort) and register-failure gate (proceed without coordination / abort); Phase 5 audit gate (Amend Plan / Proceed as-is / Reject & Re-plan); Phase 9 preference elevation proposal |
+| `ask_user` | yes | Phase 0 multiple-candidates slug selection; Phase 0 claim contention/takeover gate (proceed / abort) and register-failure gate (proceed without coordination / abort); Phases 1–5 lost-claim gate (abort default / continue-uncoordinated) on heartbeat exit 9; Phase 5 audit gate (Amend Plan / Proceed as-is / Reject & Re-plan); Phase 9 preference elevation proposal |
 | `skill_invoke` | no | — |
 
 Driver support requirements: see frontmatter `driver_features_required`.

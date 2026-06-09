@@ -308,11 +308,12 @@ printf '\nTC05: post-ownership-change heartbeat → exit 9\n'
   # Sleep past the TTL
   sleep 2
 
-  # Session B performs a stale-takeover (exit 2 is the expected result)
+  # Session B performs a stale-takeover (exit 2 is the expected result).
+  # Must also pass the same small TTL so sink-lock considers A's old heartbeat stale.
   RC_B=0
   Z_HARNESS_BASE_DIR="$tmp" bash "$PLAN_CLAIM" \
     acquire --slug "$SLUG" --run-id "$RUN_B" --session "$SESSION_B" --command "$CMD" \
-    --ttl 60 >/dev/null 2>/dev/null || RC_B=$?
+    --ttl 1 >/dev/null 2>/dev/null || RC_B=$?
 
   # rc==2 means stale-takeover succeeded; rc==0 means it acquired freely (both ok here)
   if [[ "$RC_B" -eq 2 || "$RC_B" -eq 0 ]]; then
@@ -392,11 +393,12 @@ printf '\nTC07: stale-takeover via tiny TTL → exit 2\n'
   # Wait for TTL to expire
   sleep 2
 
-  # Second session acquire should succeed via stale-takeover (exit 2)
+  # Second session acquire should succeed via stale-takeover (exit 2).
+  # Must pass the same small TTL so sink-lock considers A's old heartbeat stale.
   RC_B=0
   Z_HARNESS_BASE_DIR="$tmp" bash "$PLAN_CLAIM" \
     acquire --slug "$SLUG" --run-id "$RUN_B" --session "$SESSION_B" --command "$CMD" \
-    --ttl 60 >/dev/null 2>/dev/null || RC_B=$?
+    --ttl 1 >/dev/null 2>/dev/null || RC_B=$?
 
   if [[ "$RC_B" -eq 2 ]]; then
     printf '  PASS: TC07: stale-takeover exits 2\n'
@@ -411,13 +413,13 @@ printf '\nTC07: stale-takeover via tiny TTL → exit 2\n'
   fi
 
   # Verify B now holds it (status shows B's holder)
-  HJ="$(Z_HARNESS_BASE_DIR="$tmp" bash "$PLAN_CLAIM" status --slug "$SLUG" 2>/dev/null)"
+  HJ="$(Z_HARNESS_BASE_DIR="$tmp" bash "$PLAN_CLAIM" status --slug "$SLUG" --ttl 1 2>/dev/null)"
   assert_contains "TC07: after takeover, holder contains session B" "$SESSION_B" "$HJ"
 
   # Release B
   Z_HARNESS_BASE_DIR="$tmp" bash "$PLAN_CLAIM" \
     release --slug "$SLUG" --run-id "$RUN_B" --session "$SESSION_B" --command "$CMD" \
-    >/dev/null 2>&1 || true
+    --ttl 1 >/dev/null 2>&1 || true
 }
 
 # ---------------------------------------------------------------------------

@@ -68,6 +68,12 @@ lint:
 lint-strict:
 	bash scripts/lint-askuser.sh --strict
 
+# Frontmatter YAML lint — validates all .md frontmatter with a strict YAML parser.
+# Catches unquoted colons in descriptions (file:line, tasks: [...]) that the
+# custom regex frontmatter parser silently accepts. Requires PyYAML.
+lint-frontmatter:
+	bash scripts/lint-frontmatter.sh
+
 preflight:
 	bash scripts/preflight.sh
 

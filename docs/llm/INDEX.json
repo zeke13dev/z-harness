@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "generated_at": "2026-06-01T00:00:00Z",
+  "generated_at": "2026-06-08T00:00:00Z",
   "z_harness_version": "7c8d09a",
   "concepts": [
     {
@@ -378,6 +378,32 @@
         "multi-ide-exports"
       ],
       "summary": "Persona feature surface: layered persona registry (builtin < user-global < repo-local, last wins), three-axis binding (persona/model/runtime), contract enforcement per role, per-target export adapters, and persona-rotation experiment (random-for-role, forced-control, control-counter subcommands; boring-anchor as control; selection_source enum; persona_random_selected + persona_attempt_outcome + extended persona_bound telemetry)."
+    },
+    {
+      "slug": "pi-export",
+      "source_files": [
+        "scripts/export-pi.py",
+        "scripts/lint-frontmatter.sh",
+        "Makefile",
+        "scripts/pi_assets/AGENTS.preamble.md",
+        "scripts/pi_assets/CAPABILITIES.md",
+        "scripts/pi_assets/README.md",
+        "scripts/pi_assets/agents/explore.md",
+        "scripts/pi_assets/extensions/subagent/index.ts",
+        "scripts/pi_assets/extensions/subagent/agents.ts",
+        "scripts/pi_assets/extensions/subagent/VENDOR.md"
+      ],
+      "last_updated": "2026-06-08",
+      "confidence": "high",
+      "depends_on": [
+        "multi-ide-exports",
+        "agents",
+        "commands",
+        "skills",
+        "scripts"
+      ],
+      "consumed_by": [],
+      "summary": "pi export target: builds pi (https://pi.dev) resources from z-harness source files. Unlike Cursor/Codex/agy, pi has no native subagent dispatch — fan-out runs through a vendored subagent extension. Agent .md files are rendered with pipelined _yaml_quote on descriptions to prevent YAML parsing failures. The explore agent (pi-only) is a read-only fan-out recon agent for parallel dispatch. Four-layer defense against YAML dispatch bug: (1) pi runtime quoteUnquotedColonValues() patch, (2) source quoting in pi_assets, (3) export-pi.py _yaml_quote for all generated agents, (4) post-export _validate_frontmatter_yaml() pass with strict YAML 1.2 parser. Standalone lint-frontmatter.sh + make lint-frontmatter for source-level validation. CI wiring recommended but not yet implemented."
     },
     {
       "slug": "plan-claim",

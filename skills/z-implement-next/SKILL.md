@@ -240,6 +240,10 @@ Multiple plans may coexist under `$Z_HARNESS_PLAN_DIR/`. Determine which one to 
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tasks/<task-id>" task_start "$START_PAYLOAD"
    ```
 
+   Write `session-status.json` — status `"running"`, `current_task: "<task-id>"`,
+   `tasks_done: 0`, `tasks_total: 1`. Use the atomic write pattern from the
+   "Session status file" section above.
+
 6. **Kernel path resolution (once per invocation, immediately after task_start):**
    ```bash
    KERNEL_PATH="$(bash scripts/resolve-kernel.sh 2>/dev/null || true)"
@@ -247,6 +251,41 @@ Multiple plans may coexist under `$Z_HARNESS_PLAN_DIR/`. Determine which one to 
    Resolve the kernel path exactly once here. When `KERNEL_PATH` is non-empty, inject `kernel_path: <KERNEL_PATH>` as a line in the `Agent(prompt=...)` of every behavioral-agent dispatch in this run (implementer, reviewer). Omit the line entirely when `KERNEL_PATH` is empty — the agent's static fallback handles self-resolution in that case. Do NOT inject kernel content — inject the path string only.
 
 If TASKS.md is missing or has no pending tasks, tell the user and stop.
+
+## Session status file (session-status.json)
+
+Write `$BASE/session-status.json` at each state transition so the Hermes
+orchestrator can monitor this session. Use atomic writes (temp + rename).
+
+The file is a best-effort log — if the write fails, log a warning and continue.
+
+**Write helper (use at each state transition below):**
+
+```bash
+python3 -c "
+import json, os, datetime
+status = {
+    'status': '<running|halted|done|paused>',
+    'halt_reason': '<reason or null>',
+    'halt_description': '<free-text or null>',
+    'tasks_done': <count>,
+    'tasks_total': 1,
+    'current_task': '<task-id or null>',
+    'updated_at': datetime.datetime.utcnow().isoformat() + 'Z'
+}
+path = os.path.join(os.environ.get('BASE', '.'), 'session-status.json')
+tmp = path + '.tmp'
+with open(tmp, 'w') as f:
+    json.dump(status, f, indent=2)
+os.rename(tmp, path)
+" 2>/dev/null || echo "WARNING: session-status.json write failed" >&2
+```
+
+**Write sites:**
+- **Task_start event**: write status `"running"`, `tasks_done: 0`
+- **Task halted** (any halt reason): write status `"halted"` with halt_reason
+- **Task done**: write status `"done"`, `tasks_done: 1`
+- **Compaction pause**: write status `"paused"`
 
 ## Phase 2 — Implement
 
@@ -356,6 +395,12 @@ Present `AskUserQuestion`: **proceed anyway** / **wait** / **abort task**.
   do NOT release. Rely on `deregister` (from the FINALIZE_STATUS rule) or `reap` (stale-timeout)
   to clean up `held_paths`. A partially-applied edit must not release the lease before the task
   resolves.
+
+  When the task halts for ANY reason (wait timeout, spec_problem, decision_needed,
+  needs_clarification, unable_to_complete), write `session-status.json` with
+  status `"halted"`, the halt reason, and the halt description before surfacing
+  the question to the user. Use the atomic write pattern from the
+  "Session status file" section above.
 - **On re-invocation** (user runs `/z-implement-next` again for the same task after a prior attempt
   ended without `[x]`): the previous run's lease was cleaned up by its `deregister`; the new
   invocation runs a fresh `claim` in Phase 2.5 as usual.
@@ -435,6 +480,11 @@ If during implementation you discovered `$BASE/SPEC.md` was wrong, incomplete, o
    ```bash
    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" release \
      --run-id "$RUN" --paths "$CLAIM" || true   # CLI self-logs registry_error on failure
+
+   Write `session-status.json` — status `"done"`, `tasks_done: 1`,
+   `tasks_total: 1`, `current_task: null`. Use the atomic write
+   pattern from the "Session status file" section above.
+
    ```
 4. **Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the single
    FINALIZE_STATUS rule (Phase 0.0): normal completion deregisters with `complete`. The

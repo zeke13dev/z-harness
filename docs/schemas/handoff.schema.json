@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://z-harness/schemas/handoff.schema.json",
+  "title": "Handoff",
+  "description": "A machine-readable handoff artifact produced by a z-harness agent at a clean break point (context pressure, natural stopping point, or completion). The orchestrator (Hermes or any consumer) reads handoff.json to know what files to load, what prompt to send, and what to do next. The handoff is a data artifact — the orchestrator drives all decisions about session spawning, model selection, and continuation strategy.",
+  "type": "object",
+  "required": [
+    "protocol_version",
+    "timestamp",
+    "agent",
+    "status",
+    "next_step",
+    "context_files"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "protocol_version": {
+      "type": "string",
+      "description": "Semantic version of the handoff protocol. Current: 1.0.",
+      "pattern": "^\\d+\\.\\d+$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 UTC timestamp of when the handoff was written."
+    },
+    "agent": {
+      "type": "string",
+      "description": "Which agent produced this handoff. For provenance only — consumers MUST NOT branch behavior on this field. Examples: pi, claude, codex."
+    },
+    "slug": {
+      "type": ["string", "null"],
+      "description": "The plan slug if the agent was working inside a z-harness plan. Null for ad-hoc work. When present, the orchestrator can use this to locate plan artifacts directly without parsing context_files paths."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["context_pressure", "clean_break", "complete", "blocked"],
+      "description": "Why the handoff was written. context_pressure: agent context window is near capacity and must clear. clean_break: natural stopping point in the work (phase boundary, batch complete). complete: all planned work is done. blocked: agent cannot proceed without external input (user decision, dependency, etc.)."
+    },
+    "next_step": {
+      "type": "string",
+      "description": "Human-readable continuation prompt. The orchestrator passes this (possibly verbatim) to the next agent session as its initial task. Should be specific enough that a fresh agent can begin work without re-orientation.",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "context_files": {
+      "type": "array",
+      "description": "Files the orchestrator should load into the next session. Ordered by priority — the orchestrator should load them in this order. Paths are absolute or relative to the workspace root where handoff.json was written.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["path", "role"],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Absolute or workspace-relative path to a context file. The orchestrator resolves relative paths against the workspace root where handoff.json was written.",
+            "minLength": 1
+          },
+          "role": {
+            "type": "string",
+            "enum": ["spec", "plan", "tasks", "workstreams", "session_log", "diff", "handoff_chain", "other"],
+            "description": "Semantic role of this file. spec: SPEC.md. plan: PLAN.md. tasks: TASKS.md. workstreams: workstreams.json. session_log: session transcript or events. diff: git diff or patch file. handoff_chain: prior handoff.json in a chain. other: any other context file."
+          }
+        }
+      }
+    }
+  }
+}

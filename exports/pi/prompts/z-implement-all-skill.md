@@ -387,6 +387,10 @@ Then push-notify (this is a hard pause — fires regardless of notification leve
 
 > "Compaction breakpoint: `<N>` tasks completed (or `<M>` min wall). `<K>` pending tasks remain. Run `/clear`, then re-invoke `/z-implement-all` to resume from TASKS.md. Use `/compact` instead if you need chat history for debugging."
 
+Before exiting, write `session-status.json` with status `"paused"` and
+`halt_description: "compaction breakpoint"`. Use the atomic write pattern from
+the "Session status file" section above.
+
 Finalize the loop cleanly: do **not** dispatch any new task. Exit with status 0. On the next `/z-implement-all` invocation, counters reset — if the user ran `/clear`, context is fresh and a new window is correct. If they did not `/clear`, they chose to forgo the breakpoint's benefit; the run proceeds with a new window.
 
 **No trigger:** continue to the next outer loop iteration (step 1).
@@ -411,6 +415,45 @@ These exist because the T006 saga (4 attempts spanning ~20 wall-clock hours, eac
 - **`MAX_DISTINCT_HALTS=3` per task ID.** If a task has been halted with 3 different `reason` values across all attempts (e.g. `spec_problem`, `unable_to_complete`, `environmental`), auto-flag it as skip for the rest of the run and present to the user with a one-line summary of the three failure modes. Prevents the T006 pattern.
 - **`MAX_BATCH_STALL_MS=1800000` (30 min) per batch.** If a batch goes 30 min with no `task_done` or `task_halt` event from *any* in-flight track, the orchestrator considers it stalled. Push-notify the user with a list of in-flight task IDs and ask: continue waiting / cancel batch / kill specific tracks.
 - **Halt taxonomy that doesn't burn an attempt.** A task halted with `reason: "needs_clarification"` or `reason: "decision_needed"` where the user resolves it and asks to resume *does not* count toward `MAX_ATTEMPTS`. Resolved spec/decision halts reset the attempt counter for that task. (Otherwise a 3-decision-gate task could exhaust its attempts before implementer ever wrote code.)
+
+## Session status file (session-status.json)
+
+Write `$BASE/session-status.json` at each state transition so the Hermes
+orchestrator can monitor this session. Use atomic writes (temp + rename).
+
+The file is a best-effort log — if the write fails, log a warning and continue.
+The orchestrator falls back to TASKS.md inspection when the file is absent.
+
+**Write helper (use at each state transition below):**
+
+```bash
+# Atomic write of session-status.json to $BASE
+python3 -c "
+import json, os, datetime
+status = {
+    'status': '<running|halted|done|paused>',
+    'halt_reason': '<decision_needed|spec_problem|needs_clarification|null>',
+    'halt_description': '<free-text or null>',
+    'tasks_done': <count of [x] tasks>,
+    'tasks_total': <total task count>,
+    'current_task': '<task-id or null>',
+    'updated_at': datetime.datetime.utcnow().isoformat() + 'Z'
+}
+path = os.path.join(os.environ.get('BASE', '.'), 'session-status.json')
+tmp = path + '.tmp'
+with open(tmp, 'w') as f:
+    json.dump(status, f, indent=2)
+os.rename(tmp, path)
+" 2>/dev/null || echo "WARNING: session-status.json write failed" >&2
+```
+
+**Write sites:**
+- **Task start** (Step 3, after marking `[~]`): status `"running"`, current_task `<id>`
+- **Task halted** (any halt — wait timeout, spec_problem, decision_needed, needs_clarification, unable_to_complete): status `"halted"`, halt_reason + halt_description from the halt
+- **Task done** (Step 8, after marking `[x]`): status `"running"` with updated tasks_done; if all tasks done → status `"done"`
+- **Compaction pause** (compaction_pause): status `"paused"`
+- **Finalize — all done**: status `"done"`, tasks_done == tasks_total
+- **Finalize — hard halt**: status `"halted"`, halt_reason from the final halt
 
 ## Main loop
 
@@ -472,6 +515,10 @@ python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-reg
 ```
 For a parallel batch, emit one heartbeat per task as it flips to `[~]` (last write wins on
 `current_task`; this is opportunistic liveness, not exact tracking).
+
+Write `session-status.json` — status `"running"`, `current_task` set to `<task-id>`,
+`tasks_done` from current `[x]` count. Use the atomic write pattern from the
+"Session status file" section above.
 
 ### 3.5. Per-task lease lifecycle
 
@@ -547,7 +594,9 @@ Present `AskUserQuestion`: **proceed anyway** / **wait** / **abort task**.
 
 **Dispatch implementer** (step 4 → step 5) with the claimed paths in scope.
 
-**On clean task success (step 8):** release the lease before marking `[x]`:
+**On clean task success (step 8):** release the lease before marking `[x]`.
+After marking `[x]`, write `session-status.json` with updated `tasks_done`.
+If all tasks are now done, set status `"done"`.
 ```bash
 python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" release \
   --run-id "$RUN" --paths "$CLAIM"   # CLI self-logs registry_error on failure; exits 0 always
@@ -559,6 +608,11 @@ with any newly-touched paths before re-dispatch. Do NOT release until clean succ
 **On halt mid-task** (unable_to_complete, wall-clock-cap, MAX_ATTEMPTS exhaustion): do NOT
 release. Rely on `deregister` (Finalize) or `reap` (stale-timeout) to clean up `held_paths`.
 A partially-applied edit must not release the lease before the task resolves.
+
+When a task halts for ANY reason (wait timeout, spec_problem, decision_needed,
+needs_clarification, unable_to_complete), write `session-status.json` with
+status `"halted"`, the halt reason, and the halt description before surfacing
+the question to the user.
 
 ### 4. Identify related-file context + relevant docs (paths only — no slice extraction)
 
@@ -805,6 +859,12 @@ When the loop exits (no more eligible tasks, or you halted):
    paused, not finished; the next `/z-implement-all` invocation re-registers (idempotent) and
    resumes. Deregistering on a pause would erase the live record and hide a still-active run from
    concurrent sessions.
+
+   After deregistering, write `session-status.json` with the final state:
+   - If normal exit (no eligible tasks) → status `"done"`, `tasks_done == tasks_total`
+   - If hard halt (`FINALIZE_STATUS=aborted`) → status `"halted"`, halt_reason from the
+     final halt that triggered the exit
+   Use the atomic write pattern from the "Session status file" section above.
 1. Re-read `$TASKS_FILE` for final counts: `done`, `pending`, `in_progress`, `skipped`.
 2. Write a summary message to the user:
    - Counts

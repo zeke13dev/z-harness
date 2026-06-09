@@ -1,11 +1,13 @@
 # Agents
 
-> Last updated: 2026-06-03
-> Covers source: agents/auditor.md, agents/axiom-extractor.md, agents/bisect-isolator.md, agents/cluster-planner.md, agents/complexity-classifier.md, agents/consultant-primary.md, agents/consultant-secondary.md, agents/doc-fetcher.md, agents/doc-updater.md, agents/external-lookup.md, agents/implementer.md, agents/mr-reviewer.md, agents/plan-style-reviewer.md, agents/planning-router.md, agents/remote-runner.md, agents/research-judge.md, agents/resolver.md, agents/review-agent.md, agents/reviewer.md, agents/scope-extractor.md, agents/scope-probe.md, agents/scope-reconciler-audit.md, agents/scope-reconciler-brainstorm.md, agents/self-reviewer.md, agents/spec-precheck.md
+> Last updated: 2026-06-08
+> Covers source: agents/auditor.md, ... [all existing], scripts/pi_assets/agents/explore.md
 
 ## Overview
 
 The agents concept covers the specialized subagent prompt files under `agents/`. Each file declares an isolated worker role through frontmatter (`name`, `description`, `tools`, `model`) and then defines the inputs, execution procedure, telemetry, and parseable return contract that the surrounding z-harness commands rely on. Agents are always spawned fresh per invocation; the orchestrating command owns all context, user interaction, artifact writes, and final routing decisions.
+
+The pi export target (`scripts/pi_assets/agents/explore.md`) defines a pi-only `explore` agent — a read-only fan-out recon agent for parallel dispatch via pi's `subagent { "tasks": [...] }` syntax. Its description field is quoted to prevent YAML parse failures in pi's frontmatter parser (see `docs/human/pi-export.md` for the fix details).
 
 The suite is split by responsibility: planning route advice (`planning-router`), cluster planning (`cluster-planner`), complexity stamping (`complexity-classifier`), scope classification (`scope-probe`), file-scope extraction for the plan registry (`scope-extractor`), implementation (`implementer`), post-implementation correctness review (`reviewer`), self-review when `Z_HARNESS_CONSULT=off` (`self-reviewer`), code-quality review (`mr-reviewer`), plan artifact style review (`plan-style-reviewer`), spec validation (`spec-precheck`), post-run memory candidate generation (`review-agent`), behavioral axiom mining (`axiom-extractor`), documentation (`doc-fetcher`, `doc-updater`), external lookup (`external-lookup`), remote verification (`remote-runner`), regression bisect isolation (`bisect-isolator`), auditing (`auditor`), cross-LLM consultation (`consultant-primary`, `consultant-secondary`), fanout reconciliation (`scope-reconciler-audit`, `scope-reconciler-brainstorm`), adversarial-panel final synthesis for `/z-research` (`research-judge`), and workflow question resolution (`resolver`). The three proxy agents (`consultant-primary`, `consultant-secondary`, `reviewer`) resolve provider CLIs at runtime through `scripts/resolve-provider.sh` and each declares an `expected_contract` that `resolve-persona.py validate` enforces when a persona is bound to the role.
 
@@ -67,6 +69,7 @@ The suite is split by responsibility: planning route advice (`planning-router`),
 - `scope-probe` returns `STATUS: refused` + `MODE: MEDIUM` when axis evidence is insufficient; this is not an error state, it is the designed graceful-degradation path. All line-prefix headers must appear before the fenced JSON block — headers inside the fence cause `scope_probe_malformed` events and the host falls back to MEDIUM.
 - `scope-reconciler-audit` severity elevation applies only to systemic non-dissent findings (same normalized-evidence-line in ≥2 distinct chunks). Dissent findings are never elevated.
 - `research-judge` is forbidden from proposing new design recommendations; every claim must trace back to MAP.md, BRAINSTORM.md, or a panel perspective file. The self-check (Step 7) runs on every invocation.
+- `scripts/pi_assets/agents/explore.md` is a pi-only fan-out agent not enumerated from z-harness `agents/`. Its description field is quoted to prevent YAML parse failures on unquoted colons in pi's frontmatter parser (bug fix 2026-06-08; see `docs/human/pi-export.md`). This is a preventive measure for all pi-exported agent description fields via `_yaml_quote` in `export-pi.py`.
 
 ## Subagents quick-reference
 

@@ -145,20 +145,28 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
        - `proceed UNCOORDINATED` → continue (log a `plan_claim_corrupt_proceed` event).
      - **Unattended**: abort (`exit 1`) unless `Z_HARNESS_CLAIM_OVERRIDE=1` → proceed uncoordinated. (No release either way.)
 
-   **CLAIM_HELD flag.** Set after a successful acquire (CLAIM_RC 0 with non-`disabled` output, or CLAIM_RC 2 with `proceed`) so halt-finalize paths know whether to call `release`. T007 wires release into all halt paths using this flag.
+   **CLAIM_HELD flag.** The orchestrator MUST set `CLAIM_HELD` to exactly `1` or `0` immediately after the acquire branch resolves. All downstream heartbeat guards (T007) and release guards (T008) evaluate `${CLAIM_HELD:-0}`; if `CLAIM_HELD` is never set, every guard silently evaluates to false, the lock leaks, and heartbeats never fire. This assignment is not optional.
+
+   | Outcome | CLAIM_HELD |
+   |---------|-----------|
+   | `CLAIM_RC==0`, output is `acquired` or `self-reentry` | `1` — we hold the lock |
+   | `CLAIM_RC==0`, output is `disabled` (`Z_HARNESS_CLAIM_DISABLE=1`) | `0` — no lock |
+   | `CLAIM_RC==2`, user chose **proceed** (stale-takeover accepted) | `1` — we hold the lock |
+   | `CLAIM_RC==2`, user chose **abort** (we released above) | `0` — lock released |
+   | `CLAIM_RC==1` or `CLAIM_RC==3` (never acquired) | `0` — never held |
+
    ```bash
-   # Set CLAIM_HELD=1 when we successfully hold the lock (used by release paths — T007).
-   # CLAIM_RC==0 and output is "acquired" or "self-reentry" → held.
-   # CLAIM_RC==0 and output is "disabled" → not held (Z_HARNESS_CLAIM_DISABLE=1).
-   # CLAIM_RC==2 and user chose proceed → held.
+   # DEFINITIVE CLAIM_HELD assignment — orchestrator must execute this after the branch above.
+   # Every downstream heartbeat and release guard depends on this value being set correctly.
    if [[ "$CLAIM_RC" -eq 0 && "$CLAIM_OUTPUT" != "disabled" ]] || \
-      [[ "$CLAIM_RC" -eq 2 && "<user chose proceed>" == "proceed" ]]; then
+      [[ "$CLAIM_RC" -eq 2 && "$_CLAIM_USER_CHOICE" == "proceed" ]]; then
      CLAIM_HELD=1
    else
      CLAIM_HELD=0
    fi
    ```
-   *(In practice the orchestrator sets `CLAIM_HELD=1` on the proceed paths and `CLAIM_HELD=0` on disable/skip paths; the pseudocode above shows the intent.)*
+
+   (`$_CLAIM_USER_CHOICE` is the local variable set to `"proceed"` or `"abort"` in the CLAIM_RC==2 branch above — replace with however the orchestrator captured the user's answer.)
 
    **Run Brief init (after claim acquire, before register).** Create `run-brief.json` for this run (registry profile `full`):
    ```bash
@@ -177,9 +185,17 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
    - `REG_RC == 0` → registered; proceed.
    - `REG_RC == 3` (register FAILED — no record was written) → emit a loud `registry_error` event, then branch:
      - **Interactive** (not `Z_HARNESS_NO_ASK`) → `AskUserQuestion`: *proceed without coordination* / *abort*.
-       - **proceed** → continue; skip heartbeats and deregister later (no record to update).
-       - **abort** → do **NOT** call deregister (no record exists); push-notify and `exit 1`.
-     - **Unattended (`Z_HARNESS_NO_ASK`)** → proceed without coordination and log prominently, UNLESS `Z_HARNESS_STRICT_OVERLAP=1` → halt (`exit 1`). No deregister either way (no record).
+       - **proceed** → continue; skip heartbeats and deregister later (no record to update). The claim is still held.
+       - **abort** → **release the claim first** (we hold it — register failed AFTER a successful acquire), do **NOT** call deregister (no record exists), push-notify, then `exit 1`:
+         ```bash
+         if [[ "${CLAIM_HELD:-0}" -eq 1 ]]; then
+           bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
+             --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+             --command /z-plan || true
+         fi
+         exit 1
+         ```
+     - **Unattended (`Z_HARNESS_NO_ASK`)** → proceed without coordination and log prominently, UNLESS `Z_HARNESS_STRICT_OVERLAP=1` → **release the claim** (same snippet as above) and halt (`exit 1`). No deregister either way (no record).
    - **Any OTHER nonzero** → treat as `REG_RC == 3`.
    ```bash
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" registry_error \
@@ -317,10 +333,29 @@ Loop prevention: carry forward the latest route chain; if it already has two ent
 
 ## Phase telemetry (mandatory)
 
-At the **start** of each phase (0 through 9), stamp the start time to disk:
+At the **start** of each phase (0 through 9), stamp the start time to disk and fire a claim heartbeat:
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" begin "$RUN" <phase-num>
+# Claim heartbeat at phase boundary (guard: only when CLAIM_HELD==1)
+if [[ "${CLAIM_HELD:-0}" -eq 1 ]]; then
+  _HB_RC=0
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" heartbeat \
+    --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+    --command /z-plan || _HB_RC=$?
+  if [[ "$_HB_RC" -eq 9 ]]; then
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_claim_lost_during_gate \
+      "$(printf '{"slug":"%s","run_id":"%s","phase":"begin-%d"}' "$Z_HARNESS_SLUG" "$RUN" <phase-num>)"
+    # URGENT: slug was taken over by another session while this run was active.
+    AskUserQuestion "URGENT: The claim on slug '$Z_HARNESS_SLUG' was lost (taken over by another session or freed). \
+This run may collide with a peer. Default: abort." \
+      ["Abort (safe default)", "Continue uncoordinated (you accept collision risk)"]
+    # On abort → CLAIM_HELD=0; if register succeeded → FINALIZE_STATUS=aborted + deregister; exit 1.
+    # On continue-uncoordinated → CLAIM_HELD=0 (lock already gone); log plan_claim_override; proceed.
+  fi
+  # heartbeat_error (exit 0) is a transient read failure — NOT a lost claim; log-event already emitted
+  # by plan-claim.sh; no gate fires.
+fi
 ```
 
 At the **end**, emit `phase_end` — `log-phase.sh finish` reads the stamped start time back, computes `wall_ms`, and logs it:
@@ -333,13 +368,32 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" fini
 
 > **Why disk, not a shell variable:** each `Bash` tool call runs in a fresh shell, so a `T0=$(date +%s%3N)` recorded at phase start is gone by the phase-end call in a later turn — `WALL_MS` then resolves against an empty `T0` and logs `wall_ms: 0`. `log-phase.sh begin/finish` persists the start stamp under `${TMPDIR:-/tmp}/z-harness-phase/`, keyed by run+phase, so timing survives across tool-call boundaries. `finish` fail-opens (emits nothing) if `begin` was skipped, rather than logging a bogus zero.
 
-If the phase blocks on `AskUserQuestion`, separately log `user_wait_start` / `user_wait_end` events bracketing that wait so we can compute machine-time vs human-wait-time after the fact:
+If the phase blocks on `AskUserQuestion`, separately log `user_wait_start` / `user_wait_end` events bracketing that wait so we can compute machine-time vs human-wait-time after the fact. **Immediately before the `user_wait_start` log, fire a claim heartbeat** — this is the load-bearing call that extends the TTL to survive the upcoming human wait:
 
 ```bash
+# Load-bearing heartbeat BEFORE every user wait (extends TTL to survive the wait).
+if [[ "${CLAIM_HELD:-0}" -eq 1 ]]; then
+  _HB_RC=0
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" heartbeat \
+    --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+    --command /z-plan || _HB_RC=$?
+  if [[ "$_HB_RC" -eq 9 ]]; then
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_claim_lost_during_gate \
+      "$(printf '{"slug":"%s","run_id":"%s","phase":"pre-gate-%d"}' "$Z_HARNESS_SLUG" "$RUN" <phase-num>)"
+    AskUserQuestion "URGENT: The claim on slug '$Z_HARNESS_SLUG' was lost before this gate. \
+Another session may now be planning the same slug. Default: abort." \
+      ["Abort (safe default)", "Continue uncoordinated (you accept collision risk)"]
+    # On abort → FINALIZE_STATUS=aborted + deregister; CLAIM_HELD=0; exit 1.
+    # On continue-uncoordinated → CLAIM_HELD=0; log plan_claim_override; proceed to gate.
+  fi
+  # heartbeat_error (exit 0): plan-claim.sh already emitted heartbeat_error event; proceed normally.
+fi
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start '{"phase":<n>,"reason":"<short>"}'
 # ... AskUserQuestion ...
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end '{"phase":<n>,"wall_ms":<delta>}'
 ```
+
+The AFTER-gate heartbeat (`user_wait_end` bracket) is **optional** — skip it when the next phase's begin-heartbeat is imminent (it would otherwise duplicate the TTL refresh).
 
 This makes post-run analysis trivial: total run time = sum(`phase_end.wall_ms`); machine time = that minus sum(`user_wait_end.wall_ms`); per-LLM costs already covered by the existing `consult` events.
 
@@ -503,12 +557,19 @@ fi
 ```
 
 Branch on `$RESULT_DECISIONS`:
-- `halt`: emit `plan_halt` event — do NOT invoke `AskUserQuestion`. A subsequent `/z-plan` resume re-enters at Phase 2.5. Then execute **Run Brief — halt finalize** (below) with reason `no_ask_blocked on workflow.plan_decisions_approval` and exit (this halt occurs after a successful register):
+- `halt`: emit `plan_halt` event — do NOT invoke `AskUserQuestion`. A subsequent `/z-plan` resume re-enters at Phase 2.5. This halt occurs after a successful register (`REG_RC==0`), so it MUST go through the **Run Brief — halt finalize** shared block (which includes the `CLAIM_HELD`-guarded release + deregister) before exit. The orchestrator MUST NOT skip to `exit 1` without executing that block:
   ```bash
   if [[ "$RESULT_DECISIONS" == "halt" ]]; then
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "${RUN:-z-plan}" plan_halt \
       "$(printf '{"reason":"no_ask_blocked","question_id":"workflow.plan_decisions_approval","rule_id":"no_ask_halt"}')"
     echo "halt: no_ask_blocked on workflow.plan_decisions_approval" >&2
+    # ---- Route through Run Brief — halt finalize (below) ----
+    # Sets RUN_BRIEF_PROFILE, calls run-brief.sh set-section, then:
+    #   if [[ "${CLAIM_HELD:-0}" -eq 1 ]]; then plan-claim.sh release ...; fi
+    #   active-plan-registry.py deregister --status aborted
+    # DO NOT jump to exit 1 without executing those steps.
+    # <execute Run Brief — halt finalize with reason "no_ask_blocked on workflow.plan_decisions_approval">
+    exit 1
   fi
   ```
 - `skip`: accept the decisions doc silently — no AskUserQuestion. Emit `askuser_skipped` event with `{question_id: "workflow.plan_decisions_approval", source: "$SOURCE_DECISIONS"}` and proceed to Phase 3.
@@ -892,8 +953,14 @@ rm -f "$NEXT_JSON_FILE"
 
 <!-- include: commands/_fragments/run-brief-finalize.md -->
 
-**Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the FINALIZE_STATUS rule (Setup step 5): normal completion deregisters with `complete`; if the fragment's `--require` step set `FINALIZE_STATUS=aborted`, deregister with `aborted` instead. The `deregister` subcommand returns 0 by design and self-logs a `registry_error` on internal failure, so call it with `|| true`. If register failed earlier (no record was ever written), this is a harmless no-op.
+**Release the claim and deregister this run** (best-effort, non-fatal). Release BEFORE deregister so the lock frees first (minimizes the window where the registry shows the run gone but the lock is still held). Per the FINALIZE_STATUS rule (Setup step 5): normal completion deregisters with `complete`; if the fragment's `--require` step set `FINALIZE_STATUS=aborted`, deregister with `aborted` instead. Both calls return 0 by design and self-log on internal failure, so call both with `|| true`. If register failed earlier (no record was ever written), the deregister is a harmless no-op.
 ```bash
+# Release BEFORE deregister (invariant 3 — order matters).
+if [[ "${CLAIM_HELD:-0}" -eq 1 ]]; then
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
+    --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+    --command /z-plan || true
+fi
 python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
   --run-id "$RUN" --status "${FINALIZE_STATUS:-complete}" || true   # CLI self-logs registry_error on failure
 ```
@@ -923,6 +990,12 @@ JSON
 
 ```bash
 FINALIZE_STATUS=aborted
+# Release BEFORE deregister (invariant 3). Guard: only when CLAIM_HELD==1 (i.e. we actually hold the lock).
+if [[ "${CLAIM_HELD:-0}" -eq 1 ]]; then
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
+    --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+    --command /z-plan || true
+fi
 python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
   --run-id "$RUN" --status aborted 2>/dev/null || true
 ```
@@ -943,13 +1016,14 @@ Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema
 | `precontext_research_incomplete` | RESEARCH.md `status: incomplete`; run halted | — |
 | `precontext_source_deleted` | A file cited in precontext artifact no longer exists | `path`, `artifact` |
 | `precontext_freshness_check_failed` | Citation-regex parse failed for a precontext artifact | `artifact`, `reason` |
-| `precontext_freshness_acknowledged` | User accepted stale precontext after consolidated 9c gate | `sources` (list of `"research"` / `"map"` / `"docs"`), `user_choice` |
-| `doc_drift_acknowledged` | User accepted stale docs in the consolidated 9c gate | `stale_pct`, `stale_concepts` |
+| `precontext_freshness_acknowledged` | User accepted stale precontext after consolidated 10c gate | `sources` (list of `"research"` / `"map"` / `"docs"`), `user_choice` |
+| `doc_drift_acknowledged` | User accepted stale docs in the consolidated 10c gate | `stale_pct`, `stale_concepts` |
 | `doc_drift` | doc-fetcher returned a DRIFT WARNING for a concept | `concept`, `claim`, `reality`, `file` |
 | `task_classified` | complexity-classifier stamped a task block | `task`, `tier`, `reason` |
 | `persona_bound` | Emitted per panel arm at Phase 3 and Phase 7 (5-panel path only) | `run_id`, `command`, `role`, `arm`, `selection_source`, `phase`; additionally `persona_id` + `draw_id` when `personas.critique_panel` drew a persona for that arm (`selection_source=random_role_pool_distinct`); vanilla arms omit those fields and carry `selection_source=fixed_panel` |
 | `telemetry_anomaly` | `log-phase.sh` detected impossible `wall_ms` | `phase`, `reason` (`wall_ms_overflow` / `wall_ms_negative`), `t_start`, `t_end`, `computed_wall_ms` |
 | `next_step_choice` | User picked a next step at Phase 9 | `choice` |
+| `plan_claim_lost_during_gate` | Heartbeat detected ownership change (exit 9) at a phase boundary or before a user gate; URGENT abort/continue-uncoordinated gate fires | `slug`, `run_id`, `phase` |
 
 ---
 
@@ -969,7 +1043,7 @@ Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema
 | Feature | Used | Gates |
 |---------|------|-------|
 | `subagent` | yes | Phase 1a doc-fetcher Agent(); Phase 1b Explore Agent(); Phase 3 consultant-primary/secondary Agent() calls (2-consultant fallback when `experiment.persona_rotation=false`) or fixed 5-panel Agent() calls (agy, cursor@claude-4.6-sonnet, cursor@grok-4.3, cursor@composer-2.5, codex-cli — when `experiment.persona_rotation=true`); Phase 7 same panel structure as Phase 3; Phase 8 complexity-classifier Agent() calls. When `personas.critique_panel=true` (and `experiment.persona_rotation=true`), each Phase 3 and Phase 7 arm is additionally prefixed with a drawn consultant persona — no extra Agent() calls, the prefix is injected into each arm's existing prompt. |
-| `ask_user` | yes | Setup step 0 (empty arguments); Setup step 1 (slug collision + resolver prefill/ask branches); Setup step 10c (consolidated freshness gate — one AskUserQuestion covering docs / research / map / GRILL.md-citation staleness); Phase 0 (premise concern); Phase 2.5 (decisions doc approval — guarded by `workflow.plan_decisions_approval` resolver); Phase 5 (design decision + shortcut approval); Phase 8 (task-count overflow); Phase 9 (next-step recommendation choice) |
+| `ask_user` | yes | Setup step 0 (empty arguments); Setup step 1 (slug collision + resolver prefill/ask branches); Setup step 5 claim acquire — CLAIM_RC 1 (live peer: proceed/abort/use-new-slug), CLAIM_RC 2 (stale-takeover: proceed/abort, default abort), CLAIM_RC 3 (corrupt: abort/proceed-uncoordinated, default abort); Setup step 10c (consolidated freshness gate — one AskUserQuestion covering docs / research / map / GRILL.md-citation staleness); Phase 0 (premise concern); Phase 2.5 (decisions doc approval — guarded by `workflow.plan_decisions_approval` resolver); Phase 5 (design decision + shortcut approval); Phase 8 (task-count overflow); Phase 9 (next-step recommendation choice); heartbeat exit 9 at any phase boundary or pre-gate (`plan_claim_lost_during_gate` — abort/continue-uncoordinated, default abort) |
 | `skill_invoke` | no | — |
 
 Driver support requirements: see frontmatter `driver_features_required`.

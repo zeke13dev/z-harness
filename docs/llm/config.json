@@ -1,6 +1,6 @@
 {
   "concept": "config",
-  "last_updated": "2026-06-03",
+  "last_updated": "2026-06-08",
   "covers_spec": "z-harness/askuser-prefs-hook/SPEC.md",
   "source_file": [
     "scripts/config.py",
@@ -258,7 +258,11 @@
     "[followup] followup.notion_enabled valid values: true | false; default false",
     "[followup] followup.auto_close_low_risk_enabled valid values: true | false; default TRUE (on by default)",
     "[followup] Z_HARNESS_NOTION_TOKEN is env-only (not a TOML key); read by notion-push.py _resolve_token(); never log it",
-    "[active-plan] Z_HARNESS_EXTERNAL_DEFAULT, Z_HARNESS_BASE_DIR, Z_HARNESS_REGISTRY_ENABLED, Z_HARNESS_REGISTRY_STALE_SECS, Z_HARNESS_STRICT_OVERLAP are NOT in config.py DEFAULTS/VALIDATORS; consumed by plan-path.sh and active-plan-registry.py only"
+    "[active-plan] Z_HARNESS_EXTERNAL_DEFAULT, Z_HARNESS_BASE_DIR, Z_HARNESS_REGISTRY_ENABLED, Z_HARNESS_REGISTRY_STALE_SECS, Z_HARNESS_STRICT_OVERLAP are NOT in config.py DEFAULTS/VALIDATORS; consumed by plan-path.sh and active-plan-registry.py only",
+    "[claim-lock] Z_HARNESS_CLAIM_TTL_SECS (default 2700), Z_HARNESS_CLAIM_OVERRIDE, Z_HARNESS_CLAIM_DISABLE are env-only (NOT TOML keys); read inline by plan-claim.sh; NOT emitted by export-env",
+    "[claim-lock] Z_HARNESS_CLAIM_DISABLE=1 makes every plan-claim.sh subcommand an immediate exit-0 no-op; release is a safe no-op without event-presence gate",
+    "[claim-lock] exit-2 from acquire is the normal post-crash recovery path (setsid-detached daemon survives SIGKILL, leaks until TTL); unattended exit-2 default-aborts unless Z_HARNESS_CLAIM_OVERRIDE=1",
+    "[claim-lock] heartbeat exit-9 fires ONLY on confirmed ownership change; transient read error is heartbeat_error + exit-0 (NOT exit-9)"
   ],
   "gotchas": [
     "[brainstorm] brainstorm.personas remains in [brainstorm] not [personas] — do NOT move it; existing configs already have it there",
@@ -282,7 +286,10 @@
     "[followup] Array-typed followup keys (path_allowlist, path_denylist, audit_evidence_required_artifacts) are not in VALIDATORS; no enum validation",
     "[followup] auto_close_low_risk_enabled defaults to TRUE (on) — do not assume it is off by default",
     "[followup] Z_HARNESS_NOTION_TOKEN is env-only; callers must NOT run notion-push.py under set -x (token leaks into logs)",
-    "[active-plan] Z_HARNESS_REGISTRY_ENABLED, Z_HARNESS_REGISTRY_STALE_SECS, Z_HARNESS_STRICT_OVERLAP, Z_HARNESS_EXTERNAL_DEFAULT, Z_HARNESS_BASE_DIR are NOT surfaced by inspect-all"
+    "[active-plan] Z_HARNESS_REGISTRY_ENABLED, Z_HARNESS_REGISTRY_STALE_SECS, Z_HARNESS_STRICT_OVERLAP, Z_HARNESS_EXTERNAL_DEFAULT, Z_HARNESS_BASE_DIR are NOT surfaced by inspect-all",
+    "[claim-lock] Z_HARNESS_CLAIM_TTL_SECS, Z_HARNESS_CLAIM_OVERRIDE, Z_HARNESS_CLAIM_DISABLE are NOT TOML keys and NOT emitted by export-env; set only via environment",
+    "[claim-lock] release is always safe to call even when Z_HARNESS_CLAIM_DISABLE=1; it is a true no-op (not gated on event presence)",
+    "[claim-lock] do NOT conflate heartbeat exit-9 (confirmed ownership change) with heartbeat_error (transient read, exit-0); they have opposite severities"
   ],
   "workflow_section": {
     "keys": {
@@ -466,6 +473,23 @@
       "Z_HARNESS_REGISTRY_ENABLED": {"default": "1", "description": "Set to 0 to disable active-plan registry subcommands (except list and session-id)."},
       "Z_HARNESS_REGISTRY_STALE_SECS": {"default": "1800", "description": "Seconds after which last_heartbeat is considered stale."},
       "Z_HARNESS_STRICT_OVERLAP": {"default": "(unset/off)", "description": "Set to 1 for blocking-overlap mode (exit 20 on explicit*explicit path match)."}
+    }
+  },
+  "claim_lock_env_knobs": {
+    "description": "Env-only knobs for the slug-level hard claim lock in /z-plan and /z-audit-plan. NOT in config.py DEFAULTS/VALIDATORS. Consumed by scripts/plan-claim.sh directly from the environment. NOT emitted by export-env. See docs/human/plan-claim.md for the full design reference.",
+    "knobs": {
+      "Z_HARNESS_CLAIM_TTL_SECS": {
+        "default": "2700",
+        "description": "TTL (seconds) for slug claim liveness. Heartbeat not refreshed within this window causes stale-takeover (exit 2) on next acquire."
+      },
+      "Z_HARNESS_CLAIM_OVERRIDE": {
+        "default": "(unset)",
+        "description": "Set to 1 to allow unattended (Z_HARNESS_NO_ASK) runs to proceed through contention (exit 1), stale-takeover (exit 2), or corrupt lock (exit 3) without aborting."
+      },
+      "Z_HARNESS_CLAIM_DISABLE": {
+        "default": "(unset)",
+        "description": "Set to 1 to skip all claim locking. Every plan-claim.sh subcommand (acquire, heartbeat, release) is an immediate exit-0 no-op. Release is a safe no-op without event-presence gate."
+      }
     }
   },
   "resolve_question_envelope": {
