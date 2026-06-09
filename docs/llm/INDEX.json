@@ -563,9 +563,10 @@
       "source_file": [
         "scripts/session-helpers.sh",
         "agents/context-curator.md",
-        "commands/z-implement-all.md"
+        "commands/z-implement-all.md",
+        "scripts/write-handoff.sh"
       ],
-      "last_updated": "2026-06-05",
+      "last_updated": "2026-06-09",
       "confidence": "high",
       "depends_on": [
         "commands",
@@ -720,12 +721,13 @@
         "skills",
         "agents"
       ],
-      "summary": "Machine-readable agent handoff protocol for session continuity. Defines handoff.json contract (JSON Schema draft 2020-12) with 7 fields: protocol_version (const 1.0), timestamp, agent, slug, status (enum: context_pressure/clean_break/complete/blocked), next_step, context_files (array of {path, role}). Universal across pi, Claude Code, Codex CLI, and any z-harness agent. Skill + command write handoff.json to workspace root atomically; orchestrator consumes it and spawns the next session. Roles: spec, plan, tasks, workstreams, session_log, diff, other. Pre-existing handoff.json is overwritten.",
+      "summary": "Machine-readable agent handoff protocol for session continuity. Defines handoff.json contract (JSON Schema draft 2020-12) with 7 fields: protocol_version (const 1.0), timestamp, agent, slug, status (enum: context_pressure/clean_break/complete/blocked), next_step, context_files (array of {path, role}). Universal across pi, Claude Code, Codex CLI, and any z-harness agent. Skill + command write handoff.json to workspace root atomically; orchestrator consumes it and spawns the next session. Roles: spec, plan, tasks, workstreams, session_log, diff, other. Pre-existing handoff.json is overwritten. write-handoff.sh automates producer-side at compaction breakpoints.",
       "source_file": [
         "docs/human/handoff-v1.md",
         "docs/schemas/handoff.schema.json",
         "commands/z-handoff.md",
-        "skills/z-handoff/SKILL.md"
+        "skills/z-handoff/SKILL.md",
+        "scripts/write-handoff.sh"
       ]
     },
     {

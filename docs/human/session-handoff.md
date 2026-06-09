@@ -1,7 +1,7 @@
 # session-handoff — SESSION.md context handoff for /z-implement-all
 
-> Last updated: 2026-06-05
-> Covers source: scripts/session-helpers.sh, agents/context-curator.md, commands/z-implement-all.md
+> Last updated: 2026-06-09
+> Covers source: scripts/session-helpers.sh, agents/context-curator.md, commands/z-implement-all.md, scripts/write-handoff.sh
 
 ## Overview
 
@@ -101,8 +101,8 @@ Clean completions emit nothing. The curator's event-mining (step 2 above) indepe
 **E3 — Full curation at the compaction breakpoint (`z-implement-all.md:529`):**
 After emitting `compaction_pause` (when the batch trigger fires), dispatch context-curator synchronously before the push-notify. One inline retry at 2× timeout. The full dispatch+notify is time-bounded (worst case ≈ 360 s = 120 s + one 240 s retry).
 
-On success: emit the existing "/clear & resume" push-notify.
-On persistent failure: write a frontmatter-only stub, emit `context_curation_failed`, push-notify with `/compact`-or-continue notice (never suggest `/clear`).
+On success: emit the existing "/clear & resume" push-notify. Also call `scripts/write-handoff.sh` (best-effort, `|| true`) to produce a `handoff.json` artifact for Hermes consumption.
+On persistent failure: write a frontmatter-only stub, emit `context_curation_failed`, push-notify with `/compact`-or-continue notice (never suggest `/clear`). The `/compact`-or-continue path also calls `write-handoff.sh` for the Hermes compaction-pause branch.
 
 The "/clear & resume" notice fires **only** when curation succeeded and the curator's `done_ids_hash` matches the current TASKS.md done-set.
 

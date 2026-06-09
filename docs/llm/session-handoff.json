@@ -1,11 +1,12 @@
 {
   "concept": "session-handoff",
-  "last_updated": "2026-06-05",
+  "last_updated": "2026-06-09",
   "covers_spec": "none",
   "source_file": [
     "scripts/session-helpers.sh",
     "agents/context-curator.md",
-    "commands/z-implement-all.md"
+    "commands/z-implement-all.md",
+    "scripts/write-handoff.sh"
   ],
   "confidence": "high",
   "entry_points": [
@@ -134,6 +135,13 @@
       "symbol": "context_breadcrumb telemetry table entry",
       "kind": "module",
       "summary": "Telemetry table row for context_breadcrumb; fields: task, intent (decision_gate|task_halt_recovered|spec_deviation|reviewer_retry)."
+    },
+    {
+      "file": "scripts/write-handoff.sh",
+      "line": 1,
+      "symbol": "write-handoff.sh",
+      "kind": "module",
+      "summary": "Best-effort bash script called by /z-implement-all after context-curator success at compaction breakpoints. Reads Z_HARNESS_PLAN_DIR, Z_HARNESS_SLUG, Z_HARNESS_AGENT; extracts task counts from TASKS.md and session metadata from SESSION.md; produces handoff.json conforming to handoff-v1 schema via atomic temp+rename write. STATUS: written on success; exits non-zero on missing Z_HARNESS_PLAN_DIR. Non-fatal (|| true) — never blocks the compaction pause."
     }
   ],
   "depends_on": [
@@ -156,7 +164,8 @@
     "All [x] detection in session-helpers.sh uses the orchestrator's canonical pattern ^\\s*[-*]?\\s*\\[x\\] — no divergence.",
     "Failure-stub path writes a valid done_ids_hash from TASKS.md directly (event-independent) so the stub's resume key is valid even when the event read failed.",
     "session-helpers.sh functions are stdout-only, no side effects, exit 0 always (empty output = not found).",
-    "context_curated event is emitted with label 'orchestration' so the next curation's since_marker lookup finds it in metrics.jsonl."
+    "context_curated event is emitted with label 'orchestration' so the next curation's since_marker lookup finds it in metrics.jsonl.",
+    "write-handoff.sh is called best-effort (|| true) after curator success; produces handoff.json for Hermes consumption; never blocks the compaction pause on failure."
   ],
   "gotchas": [
     "Re-implementing done_set_hash inline in the curator or any other caller breaks the DRY contract: the writer and reader will produce different hashes and resume will silently never fire.",
