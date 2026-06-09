@@ -1,6 +1,6 @@
 {
   "concept": "commands",
-  "last_updated": "2026-06-08",
+  "last_updated": "2026-06-09",
   "covers_spec": "none",
   "source_file": [
     "commands/z-amend.md",
@@ -53,7 +53,7 @@
       "line": 1,
       "symbol": "z-amend",
       "kind": "module",
-      "summary": "Propagates approved changes through plan artifacts; Phase 9 elevation proposer via propose-prefs.py after finalize."
+      "summary": "Propagates approved changes through plan artifacts; supports --skip-user-gate flag for programmatic callers (e.g. /z-review-all auto-amend) that skips Phase 4 user gate; Phase 9 elevation proposer via propose-prefs.py after finalize."
     },
     {
       "file": "commands/z-audit-plan-style.md",
@@ -284,7 +284,7 @@
       "line": 1,
       "symbol": "z-review-all",
       "kind": "module",
-      "summary": "Final-gate reviews cumulative implementation, then auto-runs memory review (Phase 7). Phase 0 consumer check: halts with review_halted_followup_running if project sink has status=running entries (dict-safe parse). Phase 3.7.5 routes non-halting (major/minor) findings to project sink via scripts/sink-add.sh + parse-followups-block.py; emits followups_routed_to_sink. check-no-ask halt branch at workflow.review_all_proceed emits review_halt and writes partial .review_state.json (halted: true, halt_reason: no_ask_blocked); re-invocation detects this and resumes at Phase 3.7 via review_resume_from_halt event."
+      "summary": "Final-gate reviews cumulative implementation, then auto-runs memory review (Phase 7). Phase 0 consumer check: halts with review_halted_followup_running if project sink has status=running entries (dict-safe parse). Phase 3.7.5 routes non-halting (major/minor) findings to project sink via scripts/sink-add.sh + parse-followups-block.py; emits followups_routed_to_sink. Phase 6.5 auto-amends amendment proposals (spec_gap) by severity via /z-amend --skip-user-gate \u2014 blocker/major/minor all auto-amend; implementation_drift stays as candidate fixup tasks; writes auto-amend-log.md and emits auto_amend_applied per amendment. check-no-ask halt branch at workflow.review_all_proceed emits review_halt and writes partial .review_state.json (halted: true, halt_reason: no_ask_blocked); re-invocation detects this and resumes at Phase 3.7 via review_resume_from_halt event."
     },
     {
       "file": "commands/z-skill-fix.md",

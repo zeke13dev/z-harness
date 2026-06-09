@@ -1,0 +1,5 @@
+ commands/z-amend.md          | 17 ++++++++++--
+ commands/z-review-all.md     | 65 ++++++++++++++++++++++++++++++++++++++++++++
+ skills/z-amend/SKILL.md      | 17 ++++++++++--
+ skills/z-review-all/SKILL.md | 65 ++++++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 160 insertions(+), 4 deletions(-)

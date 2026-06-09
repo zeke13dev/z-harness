@@ -1,7 +1,7 @@
 ---
 name: z-amend
 description: Amend an existing z-harness plan (SPEC/PLAN/TASKS) or light-plan (FIX.md) so a change is propagated consistently across all artifacts. Preserves completed task state; adds/modifies/removes tasks as needed; optionally cross-consults if the amendment is non-obvious.
-argument-hint: <what to change about the plan>
+argument-hint: <what to change about the plan> [--skip-user-gate]
 ---
 
 You are running the **z-harness `/z-amend`** pipeline.
@@ -15,6 +15,10 @@ $ARGUMENTS
 This command modifies an **already-produced** planning artifact set. It does NOT do exploration / consult-everywhere / full premise check — that's `/z-plan`. It does the surgical work of changing one or more decisions / scope items and making sure every downstream artifact (SPEC.md, PLAN.md, TASKS.md, or FIX.md) reflects the change consistently.
 
 Review-generated amendment proposals (for example from `/z-review-all` `REVIEW-TASKS.md`) are inputs to this command, not permission for an implementer to mutate planning artifacts autonomously. If a promoted review task says `Class: spec_gap` or `Disposition: amendment_proposal`, route the change through `/z-amend` so the normal impact analysis, user gate, and completed-task supersession rules still apply.
+
+### `--skip-user-gate` flag
+
+When `--skip-user-gate` is present in the arguments, Phase 4 (user gate) is skipped. The amendment proceeds directly from Phase 3 (impact analysis) to Phase 5 (consult, if triggered) then Phase 6 (propagate edits). This flag is intended for callers that have already validated the amendment via cross-LLM review (e.g. `/z-review-all` auto-amend). **Never** pass this flag in standalone invocations — it exists only for programmatic consumers.
 
 ## Phase 0 — Discover plan slug
 
@@ -96,6 +100,15 @@ Articulate, in plain prose, what the amendment changes. Write `$BASE/archive/$RU
 **Completed-task rule:** if a `[x]` task's behavior is contradicted by the amendment, do NOT edit it in place. Instead, add a new `[ ]` task whose description explicitly says "supersedes T0NN: <reason>". The user sees both in the archive trail.
 
 ## Phase 4 — User gate
+
+**If `--skip-user-gate` is present:** Skip this phase entirely. Strip the flag from `$ARGUMENTS`. Emit an `amend_user_gate_skipped` event:
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" amend_user_gate_skipped \
+  '{"reason":"skip_user_gate_flag"}'
+```
+Proceed directly to Phase 5. The caller (e.g. `/z-review-all` auto-amend) has already validated the amendment via cross-LLM review.
+
+**Otherwise** (normal invocation):
 
 Show `amendment.md` to the user via `AskUserQuestion`:
 
@@ -188,7 +201,7 @@ If any check fails, do **not** silently fix — surface to user via `AskUserQues
 - **Never delete or silently mutate a `[x]` task.** Supersede instead.
 - **Never reuse a task ID.** New tasks always get fresh IDs.
 - **Never rewrite an artifact wholesale with `Write`** when surgical `Edit` will do. Preserve byte-for-byte content outside the amendment scope.
-- **Never skip Phase 4 (user gate).** The user always sees the impact analysis before edits land.
+- **Never skip Phase 4 (user gate) when invoked standalone.** The `--skip-user-gate` flag may only be used by callers (e.g. `/z-review-all` auto-amend) that have already validated the amendment via cross-LLM review.
 - **Cross-LLM consult only when triggered** — amendments are surgical; full consult is overkill for "rename this field".
 - **If the amendment grows past ~30% of the plan** (e.g. >5 new tasks, or the core premise of SPEC.md changes), STOP and recommend `/z-plan` from scratch instead — at that point you're not amending, you're replanning.
 - **No emojis** anywhere in artifacts.

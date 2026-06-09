@@ -1,6 +1,6 @@
 {
   "concept": "skills",
-  "last_updated": "2026-06-08",
+  "last_updated": "2026-06-09",
   "covers_spec": "none",
   "source_file": [
     "skills/z-amend/SKILL.md",
@@ -33,7 +33,7 @@
       "line": 1,
       "symbol": "z-amend",
       "kind": "module",
-      "summary": "Amend plans/FIX; preserve completed tasks; reclassify changed tasks."
+      "summary": "Amends SPEC/PLAN/TASKS or FIX.md artifacts while preserving completed-task state; supports --skip-user-gate flag for programmatic callers (e.g. /z-review-all auto-amend) that skips Phase 4 user gate; changed task blocks get complexity re-classified."
     },
     {
       "file": "skills/z-audit-plan/SKILL.md",
@@ -145,7 +145,7 @@
       "line": 1,
       "symbol": "z-review-all",
       "kind": "module",
-      "summary": "Final diff review; pre-Phase-0 resume check (handles halted:no_ask_blocked state via review_resume_from_halt); test-suite gate; Phase 3.7 two-stage compaction (check-no-ask first \u2192 halt writes partial state file; then resolve-question for skip/prefill/ask); REVIEW-TASKS; Phase 7 memory-review with memory_review_terminal; clears .notify-dedup-session at Phase 0 and Phase 7 start."
+      "summary": "Final-gate review with Pre-Phase 0 resume check (.review_state.json fast-forward including halted: no_ask_blocked state handling), sanity checks, optional TESTS.md suite gate, Phase 3.7 two-stage compaction breakpoint, two-pronged consultant review (implementation faithfulness + spec correctness), REVIEW-TASKS promotion, Phase 6.5 auto-amend (applies amendment proposals by severity via /z-amend --skip-user-gate \u2014 blocker/major/minor all auto-amend; implementation_drift stays as candidate fixup tasks; writes auto-amend-log.md and emits auto_amend_applied per amendment), and Phase 7 auto memory-review."
     },
     {
       "file": "skills/z-stats/SKILL.md",

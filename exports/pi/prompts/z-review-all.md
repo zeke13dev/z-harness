@@ -211,6 +211,107 @@ done
 
 Skip this phase if either TESTS.md or test-runner.json is absent (no harm — older plans without /z-test predate this step).
 
+## Phase 3.6 — Pre-review cycle (opt-in)
+
+**Opt-in gate:** Only runs if `Z_HARNESS_PRE_REVIEW` is set to `1` (env var). Check at phase start:
+
+```bash
+if [ "${Z_HARNESS_PRE_REVIEW:-0}" != "1" ]; then
+  echo "Pre-review cycle skipped (Z_HARNESS_PRE_REVIEW != 1)"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" pre_review_skipped \
+    '{"reason":"opt_in_disabled"}'
+  # Jump to Phase 3.7
+  return 0
+fi
+```
+
+When enabled, spawn **3 pre-reviewers in parallel** to do a fast first-pass scan. Each pre-reviewer runs on the cheapest available model (haiku). Their findings are collected and fed as additional context into the Phase 4 consultant prompts.
+
+Each pre-reviewer gets the same inputs:
+- `$BASE/SPEC.md`
+- `$BASE/PLAN.md`
+- `$BASE/TASKS.md`
+- `$BASE/archive/$RRUN/cumulative.diff`
+- `$BASE/archive/$RRUN/cumulative.stat`
+
+> [pi] Dispatch a subagent here via the subagent tool (see CAPABILITIES.md).
+
+```
+> [pi] Dispatch a subagent here via the subagent tool (see CAPABILITIES.md).
+  subagent_type="pre-reviewer",
+  description="Pre-review 1 — correctness & spec drift (Flash) for <slug>",
+  prompt="MODE: final-review-prong-a
+slug: <slug>
+run_id: <RRUN>
+Kernel path: <KERNEL_PATH>
+
+SPEC.md: $BASE/SPEC.md
+PLAN.md: $BASE/PLAN.md
+TASKS.md: $BASE/TASKS.md
+cumulative_diff_path: $BASE/archive/$RRUN/cumulative.diff
+cumulative_stat_path: $BASE/archive/$RRUN/cumulative.stat
+
+Focus: PRONG A — Implementation drift. Is the cumulative diff faithful to SPEC.md? Look for files that should have changed but didn't, files that changed wrong, cross-task drift (inconsistent naming/types), stale references, and missing tests called out in acceptance criteria. Be fast and cheap — surface only clear blockers and majors."
+)
+> [pi] Dispatch a subagent here via the subagent tool (see CAPABILITIES.md).
+  subagent_type="pre-reviewer",
+  description="Pre-review 2 — spec gaps & edge cases (Flash) for <slug>",
+  prompt="MODE: final-review-prong-b
+slug: <slug>
+run_id: <RRUN>
+Kernel path: <KERNEL_PATH>
+
+SPEC.md: $BASE/SPEC.md
+PLAN.md: $BASE/PLAN.md
+TASKS.md: $BASE/TASKS.md
+cumulative_diff_path: $BASE/archive/$RRUN/cumulative.diff
+cumulative_stat_path: $BASE/archive/$RRUN/cumulative.stat
+
+Focus: PRONG B — Spec gaps and missed edge cases. Now that the implementation is done, what's wrong with the spec itself? Decisions in PLAN.md that turned out wrong. Edge cases the spec missed. Public surfaces that should be broader/narrower. Be fast and cheap — surface only clear blockers and majors."
+)
+> [pi] Dispatch a subagent here via the subagent tool (see CAPABILITIES.md).
+  subagent_type="pre-reviewer",
+  description="Pre-review 3 — code quality & structural issues (Flash) for <slug>",
+  prompt="MODE: final-review-quality
+slug: <slug>
+run_id: <RRUN>
+Kernel path: <KERNEL_PATH>
+
+SPEC.md: $BASE/SPEC.md
+PLAN.md: $BASE/PLAN.md
+TASKS.md: $BASE/TASKS.md
+cumulative_diff_path: $BASE/archive/$RRUN/cumulative.diff
+cumulative_stat_path: $BASE/archive/$RRUN/cumulative.stat
+
+Focus: CODE QUALITY — defensive bloat, premature abstraction, DRY/KISS/SOLID violations, test noise, stale comments, over-engineering. Not correctness — assume the code works. Focus on maintainability and quality. Be fast and cheap — surface only clear blockers and majors."
+)
+```
+
+**Collecting pre-review findings:** After all three return, read their outputs. Write a consolidated pre-review summary to `$BASE/archive/$RRUN/pre-review.md`:
+
+```markdown
+# Pre-review summary — <slug>
+Run: <RRUN>
+
+## Pre-review 1 — correctness & spec drift
+<verbatim findings from pre-reviewer 1, or "CLEAN">
+
+## Pre-review 2 — spec gaps & edge cases
+<verbatim findings from pre-reviewer 2, or "CLEAN">
+
+## Pre-review 3 — code quality & structural issues
+<verbatim findings from pre-reviewer 3, or "CLEAN">
+```
+
+**Feeding into Phase 4:** The consolidated `$BASE/archive/$RRUN/pre-review.md` path is added as a context item in the Phase 4 consultant prompts. Each consultant's prompt gains a section:
+
+```
+Pre-review findings (3 × DeepSeek V4 Flash fast scan):
+<contents of $BASE/archive/$RRUN/pre-review.md>
+
+These are cheap pre-screener findings — validate them critically before accepting. The real work is your own analysis.
+```
+
 ## Phase 3.7 — Pre-consult compaction breakpoint
 
 **Always runs** between Phase 3.5 and Phase 4 (unless fast-forwarded via the Pre-Phase 0 resume check).
@@ -552,6 +653,71 @@ Findings promoted from `/z-review-all`. Delete any candidate you do not want fix
 ```
 
 If there are no actionable findings and no escalations, write `$BASE/archive/$RRUN/shipped.md` acknowledging the clean final review and omit `REVIEW-TASKS.md`.
+
+## Phase 6.5 — Auto-amend review findings (severity-based)
+
+After `REVIEW-TASKS.md` is built, auto-apply amendment proposals based on severity. The cross-LLM review already validated these findings — asking "do you want to amend?" per finding wastes tokens. Plan-artifact amendments (spec_gap) are applied automatically via `/z-amend --skip-user-gate`. Implementation changes (implementation_drift) stay as candidate fixup tasks for the user to review and prune before `/z-implement-all`.
+
+**Hard rules for this phase:**
+- Do NOT ask "do you want to amend?" for blocker/major/minor amendment proposals. Just do it.
+- Do NOT auto-amend if the amendment would touch a `[x]` (completed) task — those are `superseding_task` items and stay in REVIEW-TASKS.md for user disposition.
+- Do NOT auto-implement code changes — only auto-amend plan artifacts (SPEC.md, PLAN.md, TASKS.md).
+- Log everything: write `$BASE/archive/$RRUN/auto-amend-log.md`.
+
+**Procedure:**
+
+1. **Skip if no REVIEW-TASKS.md** — a clean review produced `shipped.md` instead. Nothing to auto-amend. Continue to Cleanup.
+
+2. **Read `$BASE/REVIEW-TASKS.md`** and identify every task block where `**Disposition:** amendment_proposal`. These are spec_gap findings routed through `/z-amend`. Candidate fixup tasks (`**Disposition:** candidate_task`) and superseding tasks (`**Disposition:** superseding_task`) are left alone.
+
+3. **For each amendment proposal:**
+   - Read its `**Class:**` — if `completed_task_contradiction` (superseding_task), **skip it** (touches completed work; user must decide disposition).
+   - Read its `**Severity:**` — `blocker`, `major`, or `minor` all get auto-amended.
+   - Read its `**Acceptance:**` line — it contains the `/z-amend` command (e.g. `run /z-amend "Add error-handling invariants to SPEC.md §3.2"`).
+   - Extract the amendment text (the quoted string after `/z-amend`).
+   - Invoke `/z-amend --skip-user-gate "<amendment text>"` inline (not via subagent — same session). Follow the `/z-amend` pipeline (Phase 0–8) for this slug, with Phase 4 (user gate) skipped per the flag.
+   - After the amendment lands, verify by re-reading the affected artifacts (SPEC.md, PLAN.md, TASKS.md) to confirm the changes took effect.
+   - Log each amendment to `$BASE/archive/$RRUN/auto-amend-log.md`.
+
+4. **Escalations and report-only observations** — remain in findings.md only. No auto-action.
+
+5. **Write the auto-amend log** to `$BASE/archive/$RRUN/auto-amend-log.md`:
+
+   ```markdown
+   # Auto-amend log — <slug>
+   Run: <RRUN>
+   Auto-amended at: <ISO-8601 timestamp>
+
+   ## Amendments applied
+
+   ### T-REV-00N — [<severity>] <title>
+   - **Source:** Prong <A|B>; <gemini|codex|both>; <finding reference>
+   - **Command:** `/z-amend --skip-user-gate "<amendment text>"`
+   - **Result:** applied
+   - **Artifacts changed:** <SPEC.md | PLAN.md | TASKS.md — whichever were modified>
+
+   ## Amendments skipped
+   <list any proposals that were skipped and why, or "None">
+
+   ## Not amendable
+   - Candidate fixup tasks (implementation_drift) left in REVIEW-TASKS.md: <count>
+   - Escalations left in findings.md: <count>
+   ```
+
+6. **Emit an `auto_amend_applied` event** for each successful amendment:
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" auto_amend_applied \
+     "$(jq -n --arg finding_id "T-REV-00N" --arg severity "<severity>" \
+        '{"finding_id":$finding_id,"severity":$severity}')"
+   ```
+
+7. **If no amendment proposals are amendable** (all findings are fixup tasks, superseding tasks, or the review was clean), skip this entire phase — no log file, no events. Continue to Cleanup.
+
+**What stays in REVIEW-TASKS.md after this phase:**
+- **Candidate fixup tasks** (implementation_drift) — NEVER auto-implemented. User reviews and prunes before `/z-implement-all --tasks $BASE/REVIEW-TASKS.md`.
+- **Superseding tasks** (completed_task_contradiction touching `[x]` tasks) — user must decide disposition.
+- **Premise failure escalations** — user decides next step.
+- **Any amendment that failed to apply** — logged with reason in auto-amend-log.md, left in REVIEW-TASKS.md for manual resolution.
 
 **Cleanup (unconditional — applies to both success outcomes: REVIEW-TASKS.md generated OR clean shipped.md):** Delete `$Z_HARNESS_PLAN_DIR/.review_state.json` before emitting the final response:
 ```bash
