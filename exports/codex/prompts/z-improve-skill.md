@@ -27,6 +27,8 @@ Resolve to absolute paths:
 
 If `$EVENTS` doesn't exist, tell the user this run has no telemetry and ask whether to proceed analyzing artifacts only.
 
+**Pre-retro step:** Consider running `/z-evaluate` first to automatically detect patterns (multi-review-cycle tasks, repeated explorations, task halts) from this session's telemetry. The evaluate output produces memory and skill candidates that may inform the improvement discussion.
+
 Where the z-harness plugin itself lives — needed because proposed edits target it, not the target repo:
 ```bash
 Z_HARNESS_ROOT="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"

@@ -265,6 +265,100 @@ Checkpoint: Write results to `$BASE/archive/$RUN/phase2-design.md`.
 
 ---
 
+## Phase 2.5 — Pre-review cycle (opt-in)
+
+**Opt-in gate:** Only runs if `Z_HARNESS_PRE_REVIEW` is set to `1` (env var). Check at phase start:
+
+```bash
+if [ "${Z_HARNESS_PRE_REVIEW:-0}" != "1" ]; then
+  echo "Pre-review cycle skipped (Z_HARNESS_PRE_REVIEW != 1)"
+  # Jump to Phase 3
+  return 0
+fi
+```
+
+When enabled, spawn **3 pre-reviewers in parallel** to do a fast first-pass scan on plan artifacts before the expensive adversarial consultants.
+
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+
+```
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+  subagent_type="pre-reviewer",
+  description="Pre-review 1 — reality check (Flash) for <slug>",
+  prompt="MODE: plan-audit
+slug: <slug>
+run_id: <RUN>
+Kernel path: <KERNEL_PATH>
+
+SPEC.md: $BASE/SPEC.md
+PLAN.md: $BASE/PLAN.md
+TASKS.md: $BASE/TASKS.md
+phase1_reality: $BASE/archive/$RUN/phase1-reality.md
+phase2_design: $BASE/archive/$RUN/phase2-design.md
+
+Focus: REALITY CHECK — reference errors in SPEC.md/PLAN.md/TASKS.md. Files that don't exist, symbols that are wrong, config paths that are hallucinated, naming drift, dependency order violations. Compare plan claims against the actual codebase. Be fast and cheap — surface only clear blockers and majors."
+)
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+  subagent_type="pre-reviewer",
+  description="Pre-review 2 — design & style audit (Flash) for <slug>",
+  prompt="MODE: plan-audit
+slug: <slug>
+run_id: <RUN>
+Kernel path: <KERNEL_PATH>
+
+SPEC.md: $BASE/SPEC.md
+PLAN.md: $BASE/PLAN.md
+TASKS.md: $BASE/TASKS.md
+phase1_reality: $BASE/archive/$RUN/phase1-reality.md
+phase2_design: $BASE/archive/$RUN/phase2-design.md
+
+Focus: DESIGN & STYLE — DRY/KISS/SOLID violations, premature abstractions, over-engineering, STYLE.md drift, defensive bloat, security concerns in the plan artifacts. Do NOT check reality references (that's pre-review 1's job). Be fast and cheap — surface only clear blockers and majors."
+)
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+  subagent_type="pre-reviewer",
+  description="Pre-review 3 — logic & completeness (Flash) for <slug>",
+  prompt="MODE: plan-audit
+slug: <slug>
+run_id: <RUN>
+Kernel path: <KERNEL_PATH>
+
+SPEC.md: $BASE/SPEC.md
+PLAN.md: $BASE/PLAN.md
+TASKS.md: $BASE/TASKS.md
+phase1_reality: $BASE/archive/$RUN/phase1-reality.md
+phase2_design: $BASE/archive/$RUN/phase2-design.md
+
+Focus: LOGIC & COMPLETENESS — logic gaps in the plan, missing edge cases in acceptance criteria, task ordering issues, dependency problems, incomplete spec coverage, unstated assumptions that should be made explicit. Do NOT check reality references or design style (those are pre-review 1/2's jobs). Be fast and cheap — surface only clear blockers and majors."
+)
+```
+
+**Collecting pre-review findings:** After all three return, read their outputs. Write a consolidated pre-review summary to `$BASE/archive/$RUN/pre-review.md`:
+
+```markdown
+# Pre-review summary — <slug>
+Run: <RUN>
+
+## Pre-review 1 — reality check
+<verbatim findings from pre-reviewer 1, or "CLEAN">
+
+## Pre-review 2 — design & style
+<verbatim findings from pre-reviewer 2, or "CLEAN">
+
+## Pre-review 3 — logic & completeness
+<verbatim findings from pre-reviewer 3, or "CLEAN">
+```
+
+**Feeding into Phase 3:** The consolidated `$BASE/archive/$RUN/pre-review.md` path is added as a context item in the Phase 3 adversarial consultant prompts. Each consultant's prompt gains a section:
+
+```
+Pre-review findings (3 × DeepSeek V4 Flash fast scan):
+<contents of $BASE/archive/$RUN/pre-review.md>
+
+These are cheap pre-screener findings — validate them critically before accepting. The real adversarial review is your own analysis.
+```
+
+---
+
 ## Phase 3 — Adversarial Cross-LLM Review
 
 **Heartbeat at phase boundary (before phase work begins):**

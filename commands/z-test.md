@@ -1,6 +1,7 @@
 ---
-description: Semantic test-case planner. Reads SPEC.md + PLAN.md + TASKS.md for an existing plan, risk-ranks the tasks, drafts non-trivial test cases that catch real semantic bugs (sign errors, schema/feature mismatches, time-window off-by-one, unit confusion, state-machine invariants), runs bundled cross-LLM consult (Gemini + Codex, mode test-cases) to add missed coverage and drop trivial drafts, writes TESTS.md, and cross-links TEST-NNN entries back into TASKS.md. Tests are then implemented by /z-implement-all in the same task as their production code.
-argument-hint: "[--slug <slug>]"
+description: System-level invariant test planner. Reads INVARIANTS.json + SPEC.md + PLAN.md + TASKS.md, matches invariants to tasks via tag-based mapping, drafts behavioral tests keyed to durable system invariants, cross-LLM consult with invariant coverage analysis, writes versioned TESTS.md (v2 with invariant IDs, fixture data, per-task/full-chain layers). Backward-compatible v1 fallback when INVARIANTS.json is absent. Supports --ci flag for read-only CI validation. Tests are then implemented by /z-implement-all in the same task as their production code.
+argument-hint: "[--slug <slug>] [--ci]"
+version: 2
 runtime: c1
 driver_features_required:
   - subagent

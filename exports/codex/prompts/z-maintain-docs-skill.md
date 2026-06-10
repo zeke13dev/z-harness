@@ -29,6 +29,86 @@ Also include in the stale list:
 - Concepts referenced by any `task_done` event in `z-harness/*/metrics.jsonl` since the concept's `last_updated` (recent plans touched these).
 - Concepts with `doc_drift` events logged (a `/z-plan` Phase 1 Explore noticed the doc was wrong).
 
+### INVARIANTS.json staleness
+
+If `docs/INVARIANTS.json` exists, also scan its invariants for staleness:
+
+```bash
+python3 - <<'PY'
+import json, os, subprocess, sys
+from datetime import datetime
+
+try:
+    data = json.load(open("docs/INVARIANTS.json"))
+except Exception:
+    sys.exit(0)  # no invariants file, nothing to check
+
+stale = []
+for inv in data.get("invariants", []):
+    inv_id = inv.get("id", "?")
+    source_files = inv.get("source_files", [])
+    last_updated = inv.get("last_updated", "")
+
+    if not source_files or not last_updated:
+        continue
+
+    # Get max mtime across all source_files
+    max_mtime = None
+    for sf in source_files:
+        try:
+            result = subprocess.run(
+                ["git", "log", "-1", "--format=%cI", "--", sf],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                mtime = result.stdout.strip()
+                if max_mtime is None or mtime > max_mtime:
+                    max_mtime = mtime
+        except Exception:
+            pass
+
+    if max_mtime and max_mtime > last_updated:
+        stale.append({
+            "id": inv_id,
+            "description": inv.get("description", "")[:80],
+            "last_updated": last_updated,
+            "source_max_mtime": max_mtime,
+            "source_files": source_files,
+            "severity": inv.get("severity", "minor")
+        })
+
+if stale:
+    print(json.dumps(stale, indent=2))
+PY
+```
+
+For each stale invariant:
+- Log a `staleness_detected` event with op `invariant-staleness`:
+  ```bash
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "docs" invariant_staleness \
+    "$(printf '{"invariant_id":"%s","last_updated":"%s","source_max_mtime":"%s"}' "$INV_ID" "$LAST_UPD" "$MAX_MTIME")"
+  ```
+- Add the invariant to the stale list for processing.
+
+### Stale invariant processing
+
+For each stale invariant, dispatch a `doc-updater` subagent with `mode: invariants`:
+
+```
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+  subagent_type="doc-updater",
+  description="Refresh invariant <inv_id>",
+  prompt="concept: invariants\nmode: invariants\ninvariant_id: <inv_id>\nsource_files: <source_files list>\nreason: stale (source files changed since last_updated)\nrepo_root: <abs path>"
+)
+```
+
+The doc-updater in `mode: invariants` reads the source files, checks whether the invariant description still holds, and returns an updated entry (or confirms the existing entry is still valid). Updated entries replace the existing entry in INVARIANTS.json; confirmed entries get a bumped `last_updated` timestamp.
+
+After all stale invariant updates are collected, write the updated INVARIANTS.json atomically and regenerate INVARIANTS.md. Validate with:
+```bash
+python3 scripts/validate-invariants.py --file docs/INVARIANTS.json
+```
+
 If `--scope <slug>` was passed, restrict to that one concept (even if not detected as stale).
 
 If nothing is stale → tell the user "All docs are current."; log `maintain_docs_end` with `stale_count: 0`; stop.

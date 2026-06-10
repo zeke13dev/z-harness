@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://z-harness/schemas/invariant.schema.json",
+  "title": "Invariant Entry",
+  "description": "One system-level behavioral invariant entry stored in docs/INVARIANTS.json. Each entry declares a durable cross-cutting behavioral constraint, its severity, provenance, and optional fixture shape for automated test generation.",
+  "type": "object",
+  "required": ["id", "description", "tags", "failure_class", "severity", "source_files", "last_updated", "source"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^inv_[0-9]{3}$",
+      "description": "Stable kebab-case identifier. Format: inv_NNN with zero-padded 3-digit sequential number. Once assigned, never reused — rename = new ID + deprecate old."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "description": "One-sentence system-level behavioral truth this invariant asserts. Phrased in domain terms (not code terms)."
+    },
+    "tags": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Controlled tag set from docs/llm/TAGS.txt. At least one tag required. Used for auto-classification and invariant-to-task fuzzy matching in /z-test Phase 1.",
+      "items": {
+        "type": "string",
+        "enum": [
+          "correctness",
+          "perf",
+          "data-quality",
+          "schema",
+          "time-window",
+          "units",
+          "api-boundary",
+          "retry-loop",
+          "race-condition",
+          "dependency",
+          "deprecation",
+          "lossy-default",
+          "ux",
+          "observability",
+          "compliance"
+        ]
+      }
+    },
+    "failure_class": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300,
+      "description": "One-line description of the real-world bug this invariant prevents. Phrased in domain terms (e.g. 'Silent fee drop — feed processes but fee field is zeroed or absent'), not code terms (e.g. 'Null pointer dereference'). Every TESTS.md assertion names this failure class."
+    },
+    "fixture_schema": {
+      "description": "OPTIONAL. JSON Schema describing the shape of test fixture data. When present, must include at least one non-trivial constraint (minItems, minimum, not: {const: 0}, etc.) that prevents trivial pass-through. Absent for pure behavioral invariants that don't require fixture data.",
+      "type": "object",
+      "minProperties": 1
+    },
+    "fixture_defaults": {
+      "description": "OPTIONAL. Default fixture values used when TESTS.md doesn't specify them. Only valid when fixture_schema is present. Must satisfy fixture_schema. Provides fallback test values so invariants are testable even before fixture authoring.",
+      "type": "object"
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["blocker", "major", "minor"],
+      "description": "Severity tier. blocker = PR gate fail (must not land with violation). major = PR gate warn (strongly discouraged). minor = informational (logged, not blocking)."
+    },
+    "source_files": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "description": "Paths to source code files this invariant derives from or applies to, relative to repo root. Used for staleness detection (max mtime vs last_updated) and for invariant-to-plan matching during /z-init-docs --invariants discovery.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "last_updated": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 timestamp of last modification. Compared to source_files max mtime by /z-maintain-docs for staleness detection, and re-checked by /z-test at draft time."
+    },
+    "source": {
+      "type": "string",
+      "enum": ["spec", "plan", "user-concern", "code-review", "axiom-derived"],
+      "description": "Provenance of this invariant. spec = mined from SPEC.md invariant lines. plan = derived from PLAN.md design decisions. user-concern = explicitly stated by user. code-review = surfaced by reviewer. axiom-derived = extracted from an axiom record."
+    }
+  }
+}

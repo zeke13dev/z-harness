@@ -1,0 +1,156 @@
+{
+  "version": 1,
+  "generated_at": "2026-06-10T20:42:20Z",
+  "invariants": [
+    {
+      "id": "inv_001",
+      "description": "Every test produced by /z-test must exercise a behavioral invariant \u2014 not just verify function-call correctness. A test that calls a function and asserts a return value without verifying a system-level property is a unit test, not an invariant test.",
+      "tags": [
+        "correctness",
+        "data-quality"
+      ],
+      "failure_class": "Invariant test reduces to unit test \u2014 no behavioral property verified",
+      "severity": "blocker",
+      "source_files": [
+        "skills/z-test/SKILL.md"
+      ],
+      "source": "spec",
+      "last_updated": "2026-06-10T20:42:20Z",
+      "fixture_schema": {
+        "type": "object",
+        "required": [
+          "test_code",
+          "assertion_section"
+        ],
+        "properties": {
+          "test_code": {
+            "type": "string"
+          },
+          "assertion_section": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "id": "inv_002",
+      "description": "Adversarial test fixtures must be structurally valid against the invariant's fixture_schema. A fixture that doesn't match its schema is not a valid falsification attempt.",
+      "tags": [
+        "correctness",
+        "schema"
+      ],
+      "failure_class": "Adversarial fixture fails schema validation",
+      "severity": "blocker",
+      "source_files": [
+        "skills/z-test/SKILL.md"
+      ],
+      "source": "spec",
+      "last_updated": "2026-06-10T20:42:20Z",
+      "fixture_schema": {
+        "type": "object",
+        "required": [
+          "fixture_data",
+          "schema_ref"
+        ],
+        "properties": {
+          "fixture_data": {
+            "type": "object"
+          },
+          "schema_ref": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "id": "inv_003",
+      "description": "INVARIANTS.json write must be atomic \u2014 no partial file on disk at any time. Use write to tempfile \u2192 flush \u2192 fsync \u2192 os.replace().",
+      "tags": [
+        "correctness",
+        "data-quality"
+      ],
+      "failure_class": "Partial INVARIANTS.json left on disk after half-failed update",
+      "severity": "blocker",
+      "source_files": [
+        "skills/z-init-docs/SKILL.md"
+      ],
+      "source": "spec",
+      "last_updated": "2026-06-10T20:42:20Z"
+    },
+    {
+      "id": "inv_004",
+      "description": "Phase 4 (or any post-review invariant extraction) must NOT halt the /z-review-all pipeline on extraction failure. If extraction fails, log the error and continue \u2014 the review itself is the priority.",
+      "tags": [
+        "correctness"
+      ],
+      "failure_class": "Review pipeline halted by invariant extraction failure",
+      "severity": "major",
+      "source_files": [
+        "skills/z-review-all/SKILL.md"
+      ],
+      "source": "spec",
+      "last_updated": "2026-06-10T20:42:20Z"
+    },
+    {
+      "id": "inv_005",
+      "description": "Cross-LLM consultant subagents (consultant-primary, consultant-secondary) MUST be able to dispatch even when doc-staleness is high. The compaction breakpoint gate must not block consultant dispatch.",
+      "tags": [
+        "correctness",
+        "deprecation"
+      ],
+      "failure_class": "Docs-staleness gate blocked consultant dispatch",
+      "severity": "blocker",
+      "source_files": [
+        "skills/z-review-all/SKILL.md"
+      ],
+      "source": "spec",
+      "last_updated": "2026-06-10T20:42:20Z"
+    },
+    {
+      "id": "inv_006",
+      "description": "Every exported z-command (export-pi.py, export-codex-*) must expose the full set of behavioral rules from the base skill. An export that drops critical rules (e.g., structural test vs invariant test distinction, fixture_schema validation) produces broken behavior.",
+      "tags": [
+        "correctness",
+        "schema"
+      ],
+      "failure_class": "Export omits critical behavioral rules",
+      "severity": "blocker",
+      "source_files": [
+        "exports/export-pi.py",
+        "scripts/export-codex-skills.py"
+      ],
+      "source": "spec",
+      "last_updated": "2026-06-10T20:42:20Z"
+    },
+    {
+      "id": "inv_007",
+      "description": "All plan artifacts (SPEC.md, PLAN.md, TASKS.md) plus INVARIANTS.json and all TESTS.md files must be committed to the repo. An uncommitted artifact may represent incomplete work that could be lost on checkout.",
+      "tags": [
+        "correctness"
+      ],
+      "failure_class": "Uncommitted plan or test artifacts",
+      "severity": "major",
+      "source_files": [
+        "scripts/z-harness-check.sh"
+      ],
+      "source": "spec",
+      "last_updated": "2026-06-10T20:42:20Z"
+    },
+    {
+      "id": "inv_008",
+      "description": "Feed connectivity checks at tier boundaries (model output \u2192 strategy signal \u2192 order submission) must be non-interactive and reliable. A failed feed check must produce clear log output, not a silent deg or crash.",
+      "tags": [
+        "correctness",
+        "data-quality",
+        "observability"
+      ],
+      "failure_class": "Feed connectivity check fails silently",
+      "severity": "blocker",
+      "source_files": [
+        "src/feed/processor.rs"
+      ],
+      "source": "spec",
+      "last_updated": "2026-06-10T20:42:20Z"
+    }
+  ]
+}

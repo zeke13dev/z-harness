@@ -51,6 +51,10 @@ workflows:
     source: commands/z-brainstorm.md
     output: .agent/workflows/z-brainstorm.md
     description: "Cheap parallel pre-plan ideation — dispatch 3 vendor-diverse ideators (Claude + Codex + Gemini), perform a mandatory anti-bias check, and produce BRAINSTORM.md to seed /z-plan."
+  - id: z-context-budget
+    source: commands/z-context-budget.md
+    output: .agent/workflows/z-context-budget.md
+    description: "Analyze context utilization from z-harness telemetry and surface actionable savings recommendations."
   - id: z-debug
     source: commands/z-debug.md
     output: .agent/workflows/z-debug.md
@@ -59,6 +63,14 @@ workflows:
     source: commands/z-do.md
     output: .agent/workflows/z-do.md
     description: "Plan-less z-harness execution for small tasks. Brings the harness discipline — premise check, doc-fetcher grounding, codex review safety gate, structured logging — without SPEC/PLAN/TASKS/FIX.md ceremony. Logs to z-harness/adhoc/ so /z-improve can..."
+  - id: z-doc-rationale
+    source: commands/z-doc-rationale.md
+    output: .agent/workflows/z-doc-rationale.md
+    description: "Tier 2 narrative doc command. Reads tier2-context.json and produces ADRs, design rationale, tradeoff explanations, and migration guides from warm pipeline context."
+  - id: z-evaluate
+    source: commands/z-evaluate.md
+    output: .agent/workflows/z-evaluate.md
+    description: "Evaluate a completed z-harness session for patterns worth preserving as memories or skills."
   - id: z-explain
     source: commands/z-explain.md
     output: .agent/workflows/z-explain.md
@@ -103,6 +115,10 @@ workflows:
     source: commands/z-grill.md
     output: .agent/workflows/z-grill.md
     description: "Live depth-first interrogation that sharpens a vague idea into a buildable problem statement. Asks ONE question at a time, always states a recommended answer, self-serves codebase-answerable questions via Explore, and terminates adaptively. Writes..."
+  - id: z-handoff
+    source: commands/z-handoff.md
+    output: .agent/workflows/z-handoff.md
+    description: "Write a handoff.json artifact for session continuity. Captures the current working context (plan slug, active files, next step) into a machine-readable JSON contract that any orchestrator (Hermes) can consume to resume work in a fresh agent sessio..."
   - id: z-implement-all
     source: commands/z-implement-all.md
     output: .agent/workflows/z-implement-all.md
@@ -159,6 +175,10 @@ workflows:
     source: commands/z-providers-discover.md
     output: .agent/workflows/z-providers-discover.md
     description: Discover LLM CLI providers in PATH and generate providers.json.
+  - id: z-reality
+    source: commands/z-reality.md
+    output: .agent/workflows/z-reality.md
+    description: "Interactive premise refinement — conversational on-ramp. Probes, clarifies,"
   - id: z-research
     source: commands/z-research.md
     output: .agent/workflows/z-research.md
@@ -190,7 +210,7 @@ workflows:
   - id: z-test
     source: commands/z-test.md
     output: .agent/workflows/z-test.md
-    description: "Semantic test-case planner. Reads SPEC.md + PLAN.md + TASKS.md for an existing plan, risk-ranks the tasks, drafts non-trivial test cases that catch real semantic bugs (sign errors, schema/feature mismatches, time-window off-by-one, unit confusion,..."
+    description: "System-level invariant test planner. Reads INVARIANTS.json + SPEC.md + PLAN.md + TASKS.md, matches invariants to tasks via tag-based mapping, drafts behavioral tests keyed to durable system invariants, cross-LLM consult with invariant coverage ana..."
   - id: z-update
     source: commands/z-update.md
     output: .agent/workflows/z-update.md
@@ -282,6 +302,11 @@ rules:
     output: .agent/rules/z-harness-planning-router.md
     trigger: model_decision
     description: "Cheap Haiku ambiguity resolver for z-harness plan-family route decisions. Reads a compact signal payload and recommends the best command or contextual exit; advisory only."
+  - id: pre-reviewer
+    source: agents/pre-reviewer.md
+    output: .agent/rules/z-harness-pre-reviewer.md
+    trigger: model_decision
+    description: "Cheap DeepSeek V4 Flash pre-reviewer that runs a fast first-pass scan on a cumulative diff, plan artifacts, or per-task diff. Produces preliminary findings (blockers/majors) that feed into the real reviewers (consultant-primary, consultant-seconda..."
   - id: remote-runner
     source: agents/remote-runner.md
     output: .agent/rules/z-harness-remote-runner.md
@@ -337,6 +362,11 @@ rules:
     output: .agent/rules/z-harness-spec-precheck.md
     trigger: model_decision
     description: "Pre-flight sanity check that runs BEFORE the implementer for each task in /z-implement-all. Verifies SPEC.md references (symbols, table names, column names, config keys, file paths) actually exist in the codebase as described — so spec drift is ca..."
+  - id: tier1-doc-updater
+    source: agents/tier1-doc-updater.md
+    output: .agent/rules/z-harness-tier1-doc-updater.md
+    trigger: model_decision
+    description: "Flash subagent for Tier 1 per-task mechanical doc sync. Reads task diff, reverse-lookups changed files to concepts via INDEX.json, applies surgical updates to AUTO-START/AUTO-END delimited machine-truth fields."
 
 # Skills → .agent/skills/<id>/SKILL.md
 # Native workspace skills in Antigravity
@@ -377,6 +407,10 @@ skills:
     source: skills/z-brainstorm/SKILL.md
     output: .agent/skills/z-brainstorm/SKILL.md
     description: "Cheap parallel pre-plan ideation — dispatch 3 vendor-diverse ideators (Claude + Codex + Gemini), perform a mandatory anti-bias check, and produce BRAINSTORM.md to seed /z-plan."
+  - id: z-context-budget
+    source: skills/z-context-budget/SKILL.md
+    output: .agent/skills/z-context-budget/SKILL.md
+    description: "Analyze context utilization from z-harness telemetry and surface actionable savings recommendations. Single-phase, read-only — no subagent dispatch, no code edits."
   - id: z-debug
     source: skills/z-debug/SKILL.md
     output: .agent/skills/z-debug/SKILL.md
@@ -385,6 +419,18 @@ skills:
     source: skills/z-do/SKILL.md
     output: .agent/skills/z-do/SKILL.md
     description: "Plan-less z-harness execution for small tasks. Brings the harness discipline — premise check, doc-fetcher grounding, codex review safety gate, structured logging — without SPEC/PLAN/TASKS/FIX.md ceremony. Logs to z-harness/adhoc/ so /z-improve can..."
+  - id: z-doc-rationale
+    source: skills/z-doc-rationale/SKILL.md
+    output: .agent/skills/z-doc-rationale/SKILL.md
+    description: "Tier 2 narrative doc skill. Reads tier2-context.json and produces ADRs, design rationale, tradeoff explanations, and migration guides from warm pipeline context."
+  - id: z-evaluate
+    source: skills/z-evaluate/SKILL.md
+    output: .agent/skills/z-evaluate/SKILL.md
+    description: "Evaluate a completed z-harness session for patterns worth preserving as memories or skills. Single-phase, read-only — no subagent dispatch, no code edits."
+  - id: z-handoff
+    source: skills/z-handoff/SKILL.md
+    output: .agent/skills/z-handoff/SKILL.md
+    description: "Write a handoff.json artifact for session continuity. Dynamically gathers current context (plan state, tasks, events, git diff) and produces a machine-readable JSON contract that any orchestrator can consume to resume work in a fresh agent session..."
   - id: z-implement-all
     source: skills/z-implement-all/SKILL.md
     output: .agent/skills/z-implement-all/SKILL.md
@@ -425,6 +471,10 @@ skills:
     source: skills/z-plan-split/SKILL.md
     output: .agent/skills/z-plan-split/SKILL.md
     description: "Pre-emptive scope splitter — fan a big topic out into N narrow cluster-planner subagents in parallel, then reconcile file-path overlaps into SHARED-CONCERNS.md + MANIFEST.md."
+  - id: z-reality
+    source: skills/z-reality/SKILL.md
+    output: .agent/skills/z-reality/SKILL.md
+    description: "Interactive premise refinement — conversational on-ramp. Probes, clarifies,"
   - id: z-research
     source: skills/z-research/SKILL.md
     output: .agent/skills/z-research/SKILL.md

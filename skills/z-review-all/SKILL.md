@@ -1,9 +1,9 @@
 ---
 name: z-review-all
-description: Final-gate cross-LLM review of a completed z-harness plan. Runs Gemini + Codex on the cumulative diff against SPEC.md to surface (a) implementation drift across tasks and (b) spec gaps that only surface in aggregate. Use after /z-implement-all completes.
+description: Final-gate cross-LLM review of a completed z-harness plan. Runs Gemini + Codex on the cumulative diff against SPEC.md to surface (a) implementation drift across tasks and (b) spec gaps that only surface in aggregate. After findings are aggregated, extracts invariant candidates from review findings (Phase 5.5) and prompts user to promote them to INVARIANTS.json. Use after /z-implement-all completes.
 argument-hint: "[--slug <slug>] [--base <git-ref>]"
 origin: z-harness-core
-tags: [review, final-gate]
+tags: [review, final-gate, invariants]
 ---
 You are running the **z-harness `/z-review-all`** final-gate review. This is a holistic cross-task cross-LLM review, intentionally distinct from the per-task review that `/z-implement-all` already performs. Per-task review catches per-task issues; this catches issues that only show up when looking at all tasks together.
 
@@ -141,12 +141,20 @@ If `cumulative.diff` exceeds ~500k lines, warn the user — the LLMs will be una
 
 If `$BASE/TESTS.md` was produced by `/z-test` and `$BASE/test-runner.json` was populated by `/z-implement-all`, run the full test suite for modules touched by `cumulative.diff` before spawning the consultants. Reasoning: per-task acceptance checks only ran each test in isolation; running the suite together catches inter-test ordering bugs and shared-state regressions that the per-task gate misses.
 
+### Check TESTS.md version
+
+```bash
+VERSION="$(grep -m1 '^\*\*Version:\*\*' "$BASE/TESTS.md" 2>/dev/null | sed 's/.*Version:\*\* *//' | tr -d '[:space:]' || echo '1')"
+```
+
+### Run per-task tests
+
+Always run the per-task tests first (same test suite the per-task acceptance checks ran, but together):
+
 ```bash
 TEMPLATE="$(jq -r .cmd_template "$BASE/test-runner.json")"
 FRAMEWORK="$(jq -r .framework "$BASE/test-runner.json")"
 AFFECTED_DIRS="$(git diff --name-only "$BASE_REF"..HEAD | xargs -I{} dirname {} | sort -u)"
-# Framework-specific: cargo → "cargo test -p <crate>"; pytest → "pytest <dir>"; etc.
-# The template's {TARGET_FILE} placeholder is repurposed as the affected directory glob.
 SUITE_LOG="$BASE/archive/$RRUN/suite.log"
 : > "$SUITE_LOG"
 SUITE_FAILED=0
@@ -157,9 +165,60 @@ for DIR in $AFFECTED_DIRS; do
 done
 ```
 
-**Any failure here is a blocker.** Surface the failing log slice to the user before proceeding to Phase 4. Treat the same way as a Prong-A finding of severity `blocker` — `/z-review-all` cannot accept a plan whose own tests are broken.
+### Run full-chain tests (v2 only)
 
-Skip this phase if either TESTS.md or test-runner.json is absent (no harm — older plans without /z-test predate this step).
+If `$VERSION` is `2`, also check for full-chain test entries. For each TEST-NNN with `**Layer:** full-chain`, check whether the `**Target file:**` exists (it should have been written by T017 after all per-task implementation is complete):
+
+```bash
+if [ "$VERSION" = "2" ]; then
+  FULL_CHAIN_LOG="$BASE/archive/$RRUN/full-chain-suite.log"
+  : > "$FULL_CHAIN_LOG"
+  FULL_CHAIN_FAILED=0
+  FULL_CHAIN_TOTAL=0
+
+  # Extract full-chain test targets from TESTS.md
+  FULL_CHAIN_ENTRIES="$(awk '/^## TEST-/ { cur=$2 }
+    /^\*\*Layer:\*\*/ && /full-chain/ { print cur }' "$BASE/TESTS.md")"
+
+  for TID in $FULL_CHAIN_ENTRIES; do
+    FULL_CHAIN_TOTAL=$((FULL_CHAIN_TOTAL+1))
+    TARGET="$(awk -v id="$TID" '/^## /{cur=$0; found=0} cur ~ id {found=1} found && /^\*\*Target file:\*\*/{print $3; exit}' "$BASE/TESTS.md")"
+
+    if [ -z "$TARGET" ] || [ ! -f "$TARGET" ]; then
+      echo "[SKIP] $TID — target file $TARGET does not exist (full-chain test not yet written)" >> "$FULL_CHAIN_LOG"
+      continue
+    fi
+
+    CMD="$(echo "$TEMPLATE" | sed "s|{TARGET_FILE}|$TARGET|g; s|{TEST_NAME}|$TID|g")"
+    echo "===== $CMD =====" >> "$FULL_CHAIN_LOG"
+    if eval "$CMD" >> "$FULL_CHAIN_LOG" 2>&1; then
+      echo "[PASS] $TID" >> "$FULL_CHAIN_LOG"
+    else
+      echo "[FAIL] $TID — invariant violation detected" >> "$FULL_CHAIN_LOG"
+      FULL_CHAIN_FAILED=$((FULL_CHAIN_FAILED+1))
+    fi
+  done
+
+  if [ "$FULL_CHAIN_TOTAL" -eq 0 ]; then
+    echo "No full-chain tests defined in TESTS.md" >> "$FULL_CHAIN_LOG"
+  fi
+
+  # Categorize full-chain failures as "invariant violations"
+  if [ "$FULL_CHAIN_FAILED" -gt 0 ]; then
+    echo "FULL-CHAIN INVARIANT VIOLATIONS: $FULL_CHAIN_FAILED test(s) failed." >> "$FULL_CHAIN_LOG"
+  fi
+fi
+```
+
+**Missing full-chain targets.** If full-chain test files don't exist yet, skip gracefully with an info-level log entry — this is not an error (they may not have been written yet by T017). Only existing full-chain test files are executed.
+
+**Full-chain failures.** When full-chain tests fail, categorize them as a distinct category: **"full-chain invariant violations"** in the review output. These indicate that a system-level behavioral invariant was violated by the composed end-to-end path.
+
+**Per-task failures.** Any per-task test failure is a blocker. Surface the failing log slice to the user before proceeding to Phase 4. Treat the same way as a Prong-A finding of severity `blocker` — `/z-review-all` cannot accept a plan whose own tests are broken.
+
+**Legacy v1.** If TESTS.md has no `**Version:** 2` header, run all tests as before (legacy behavior — no full-chain distinction).
+
+Skip this entire phase if either TESTS.md or test-runner.json is absent (no harm — older plans without /z-test predate this step).
 
 ## Phase 3.6 — Pre-review cycle (opt-in)
 
@@ -456,6 +515,59 @@ Diff stats: <X files, Y additions, Z deletions>
 ```
 
 Apply the **one-reason-it-might-be-wrong** rule from `/z-plan` to every finding before listing it. Push back on weak findings.
+
+## Phase 5.5 — Invariant extraction from review findings
+
+**Gate:** Only runs if `docs/INVARIANTS.json` exists AND `$BASE/archive/$RRUN/findings.md` contains findings with severity ≥ major.
+
+Goal: Extract invariant candidates from review findings and prompt the user to promote them to `INVARIANTS.json`. Turns real-world review discoveries into durable per-repo invariants.
+
+**Procedure:**
+
+1. **Read structured findings.** Parse `$BASE/archive/$RRUN/findings.md`. Collect all findings with severity ≥ major (blocker or major). Skip minor findings and observations.
+
+2. **Read existing invariants.** Read `docs/INVARIANTS.json`. Collect all current invariant `id` + `description` pairs.
+
+3. **Dispatch Haiku subagent for candidate extraction.** One-shot call. Prompt structure:
+
+   ```
+   MODE: extract-invariant-candidates
+
+   You have N review findings (severity ≥ major) from a /z-review-all run.
+   For each finding, draft an invariant candidate that WOULD HAVE caught it.
+
+   Review findings:
+   <list each finding with: severity, class, description, evidence>
+
+   Existing invariants (skip if one already covers the finding):
+   <list each existing invariant: id, description, tags>
+
+   For each finding WITHOUT a covering invariant, output a JSON object:
+   {
+     "finding_ref": "<short reference>",
+     "invariant_description": "<one-line description>",
+     "tags": ["tag1", "tag2"],
+     "failure_class": "<what violation looks like>",
+     "severity": "blocker" | "major"
+   }
+
+   Return a JSON array.
+   ```
+
+4. **Batch user approval.** Present the extracted candidates:
+
+   > "N invariant candidates extracted from review findings. Promote to INVARIANTS.json?"
+   > - (a) Accept all — write candidates and approve automatically
+   > - (b) Let me pick — show each candidate with accept/skip
+   > - (c) Skip all — discard candidates
+
+5. **On accept-all (a):** Write all candidates to INVARIANTS.json using atomic write discipline (tmpfile → write → flush → fsync → os.replace()). Validate with `scripts/validate-invariants.py`. Regenerate INVARIANTS.md. Log to archive.
+
+6. **On let-me-pick (b):** Show each candidate individually with accept/skip. After all decisions, write the accepted subset to INVARIANTS.json atomically.
+
+7. **On skip-all (c):** Log "Invariant extraction skipped by user" to archive log. Continue.
+
+8. **Hard rule:** Extraction failure MUST NOT halt the review pipeline. If phase errors (bad JSON from Haiku, file read failure), log the error to `$BASE/archive/$RRUN/invariant-extraction-error.log` and continue to Phase 6.
 
 ## Phase 6 — Promote findings to review tasks
 
@@ -822,12 +934,22 @@ This phase fires once per run, after Phase 6, before the session ends. It is a s
 | `review_skip_all` | User chose Skip-all-remaining |
 | `review_agent_suggest_failed` | `/z-suggest-memory` dispatch failed for an Accepted candidate |
 
+## Behavioral rules
+
+- **Review-mining backfill:** After every `/z-review-all` run, extract new invariant candidates from findings (severity >= major) and offer them for user approval via Phase 5.5 invariant extraction. If `docs/INVARIANTS.json` does not exist, skip extraction (log `invariant_store_missing`).
+- **Findings classification:** Each extracted invariant candidate must include `source: "review"` and the plan slug from which it was extracted. Candidates extracted from review findings carry stronger provenance than those inferred from spec alone.
+- **One-reason pushback:** If the reviewer pushes back on a candidate invariant (i.e., a finding was flagged as potentially incorrect or the extraction over-fits), document the one-line reason in the candidate's rejection log. This preserves institutional memory about why a candidate was refused.
+
 ## Hard rules
 
 - **Never** edit SPEC.md or TASKS.md automatically. Stage review findings in `REVIEW-TASKS.md` or an amendment proposal and let the user prune/apply them.
 - **Never** run this on an incomplete plan without explicit user override.
 - **Never** trust a single LLM's finding without pushback — list "one reason this might be wrong" before treating a finding as actionable.
 - **Always** archive the cumulative diff and both consultant transcripts under `$BASE/archive/$RRUN/`.
+- **Invariant extraction must never halt the pipeline.** If Phase 5.5 fails for any reason (bad JSON, file read error, subagent crash), log the error to `$BASE/archive/$RRUN/invariant-extraction-error.log` and continue to Phase 6. The review pipeline is the priority.
+- **Always validate INVARIANTS.json after writing.** After any Phase 5.5 write to INVARIANTS.json, run `scripts/validate-invariants.py --file $REPO/docs/INVARIANTS.json`. If validation fails, log the failure and roll back the edit (restore from backup), but do NOT block the pipeline — continue to Phase 6.
+- **INVARIANTS.json writes must be atomic.** Always write to tempfile → fsync → os.replace(). Never write directly to the target path.
+- **Phase 5.5 is gated on findings.md content.** If findings.md has no severity ≥ major entries, skip Phase 5.5 entirely — no Haiku dispatch, no AskUserQuestion.
 
 ## What this command is NOT for
 

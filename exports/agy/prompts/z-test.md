@@ -1,5 +1,5 @@
 ---
-description: "Semantic test-case planner. Reads SPEC.md + PLAN.md + TASKS.md for an existing plan, risk-ranks the tasks, drafts non-trivial test cases that catch real semantic bugs (sign errors, schema/feature mismatches, time-window off-by-one, unit confusion,..."
+description: "System-level invariant test planner. Reads INVARIANTS.json + SPEC.md + PLAN.md + TASKS.md, matches invariants to tasks via tag-based mapping, drafts behavioral tests keyed to durable system invariants, cross-LLM consult with invariant coverage ana..."
 role: workflow
 ---
 

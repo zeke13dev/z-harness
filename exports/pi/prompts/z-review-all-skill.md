@@ -136,12 +136,20 @@ If `cumulative.diff` exceeds ~500k lines, warn the user — the LLMs will be una
 
 If `$BASE/TESTS.md` was produced by `/z-test` and `$BASE/test-runner.json` was populated by `/z-implement-all`, run the full test suite for modules touched by `cumulative.diff` before spawning the consultants. Reasoning: per-task acceptance checks only ran each test in isolation; running the suite together catches inter-test ordering bugs and shared-state regressions that the per-task gate misses.
 
+### Check TESTS.md version
+
+```bash
+VERSION="$(grep -m1 '^\*\*Version:\*\*' "$BASE/TESTS.md" 2>/dev/null | sed 's/.*Version:\*\* *//' | tr -d '[:space:]' || echo '1')"
+```
+
+### Run per-task tests
+
+Always run the per-task tests first (same test suite the per-task acceptance checks ran, but together):
+
 ```bash
 TEMPLATE="$(jq -r .cmd_template "$BASE/test-runner.json")"
 FRAMEWORK="$(jq -r .framework "$BASE/test-runner.json")"
 AFFECTED_DIRS="$(git diff --name-only "$BASE_REF"..HEAD | xargs -I{} dirname {} | sort -u)"
-# Framework-specific: cargo → "cargo test -p <crate>"; pytest → "pytest <dir>"; etc.
-# The template's {TARGET_FILE} placeholder is repurposed as the affected directory glob.
 SUITE_LOG="$BASE/archive/$RRUN/suite.log"
 : > "$SUITE_LOG"
 SUITE_FAILED=0
@@ -152,9 +160,60 @@ for DIR in $AFFECTED_DIRS; do
 done
 ```
 
-**Any failure here is a blocker.** Surface the failing log slice to the user before proceeding to Phase 4. Treat the same way as a Prong-A finding of severity `blocker` — `/z-review-all` cannot accept a plan whose own tests are broken.
+### Run full-chain tests (v2 only)
 
-Skip this phase if either TESTS.md or test-runner.json is absent (no harm — older plans without /z-test predate this step).
+If `$VERSION` is `2`, also check for full-chain test entries. For each TEST-NNN with `**Layer:** full-chain`, check whether the `**Target file:**` exists (it should have been written by T017 after all per-task implementation is complete):
+
+```bash
+if [ "$VERSION" = "2" ]; then
+  FULL_CHAIN_LOG="$BASE/archive/$RRUN/full-chain-suite.log"
+  : > "$FULL_CHAIN_LOG"
+  FULL_CHAIN_FAILED=0
+  FULL_CHAIN_TOTAL=0
+
+  # Extract full-chain test targets from TESTS.md
+  FULL_CHAIN_ENTRIES="$(awk '/^## TEST-/ { cur=$2 }
+    /^\*\*Layer:\*\*/ && /full-chain/ { print cur }' "$BASE/TESTS.md")"
+
+  for TID in $FULL_CHAIN_ENTRIES; do
+    FULL_CHAIN_TOTAL=$((FULL_CHAIN_TOTAL+1))
+    TARGET="$(awk -v id="$TID" '/^## /{cur=$0; found=0} cur ~ id {found=1} found && /^\*\*Target file:\*\*/{print $3; exit}' "$BASE/TESTS.md")"
+
+    if [ -z "$TARGET" ] || [ ! -f "$TARGET" ]; then
+      echo "[SKIP] $TID — target file $TARGET does not exist (full-chain test not yet written)" >> "$FULL_CHAIN_LOG"
+      continue
+    fi
+
+    CMD="$(echo "$TEMPLATE" | sed "s|{TARGET_FILE}|$TARGET|g; s|{TEST_NAME}|$TID|g")"
+    echo "===== $CMD =====" >> "$FULL_CHAIN_LOG"
+    if eval "$CMD" >> "$FULL_CHAIN_LOG" 2>&1; then
+      echo "[PASS] $TID" >> "$FULL_CHAIN_LOG"
+    else
+      echo "[FAIL] $TID — invariant violation detected" >> "$FULL_CHAIN_LOG"
+      FULL_CHAIN_FAILED=$((FULL_CHAIN_FAILED+1))
+    fi
+  done
+
+  if [ "$FULL_CHAIN_TOTAL" -eq 0 ]; then
+    echo "No full-chain tests defined in TESTS.md" >> "$FULL_CHAIN_LOG"
+  fi
+
+  # Categorize full-chain failures as "invariant violations"
+  if [ "$FULL_CHAIN_FAILED" -gt 0 ]; then
+    echo "FULL-CHAIN INVARIANT VIOLATIONS: $FULL_CHAIN_FAILED test(s) failed." >> "$FULL_CHAIN_LOG"
+  fi
+fi
+```
+
+**Missing full-chain targets.** If full-chain test files don't exist yet, skip gracefully with an info-level log entry — this is not an error (they may not have been written yet by T017). Only existing full-chain test files are executed.
+
+**Full-chain failures.** When full-chain tests fail, categorize them as a distinct category: **"full-chain invariant violations"** in the review output. These indicate that a system-level behavioral invariant was violated by the composed end-to-end path.
+
+**Per-task failures.** Any per-task test failure is a blocker. Surface the failing log slice to the user before proceeding to Phase 4. Treat the same way as a Prong-A finding of severity `blocker` — `/z-review-all` cannot accept a plan whose own tests are broken.
+
+**Legacy v1.** If TESTS.md has no `**Version:** 2` header, run all tests as before (legacy behavior — no full-chain distinction).
+
+Skip this entire phase if either TESTS.md or test-runner.json is absent (no harm — older plans without /z-test predate this step).
 
 ## Phase 3.6 — Pre-review cycle (opt-in)
 

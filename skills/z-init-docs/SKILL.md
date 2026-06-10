@@ -269,6 +269,272 @@ Then initialize `docs/llm/MEMORIES-FLAT.md` with just the two-line header (no me
 python3 scripts/regenerate-memories-flat.py --repo-root "$(pwd)"
 ```
 
+## Phase — Invariant discovery (`--invariants`)
+
+**Gate:** This phase only runs when `--invariants` flag is passed. If not passed, skip to Phase 5.
+
+Goal: Bootstrap `docs/INVARIANTS.json` by scanning existing SPEC.md files across the repo for durable, cross-cutting behavioral invariants. This phase is idempotent — re-running on an existing INVARIANTS.json only scans for NEW durable invariants.
+
+### 0. Preflight
+
+Check prerequisites:
+- `docs/schemas/invariant.schema.json` must exist (created by T001). If absent, abort with "invariant schema not found — run /z-plan rewrite-z-test-invariants first".
+- `scripts/validate-invariants.py` must exist (created by T002). If absent, abort.
+
+### 1. Idempotency check
+
+If `docs/INVARIANTS.json` exists, load it and build the set of existing invariant IDs and descriptions:
+
+```bash
+EXISTING_IDS="$(python3 -c "
+import json, os
+try:
+    data = json.load(open('docs/INVARIANTS.json'))
+    ids = {inv['id'] for inv in data.get('invariants', [])}
+    descs = [inv.get('description', '').lower() for inv in data.get('invariants', [])]
+    print(json.dumps({'ids': list(ids), 'descs': descs}))
+except Exception:
+    print(json.dumps({'ids': [], 'descs': []}))
+")"
+```
+
+If INVARIANTS.json does NOT exist, proceed with an empty existing set (fresh init).
+
+### 2. Discovery — scan SPEC.md files
+
+Scan all discovery paths for SPEC.md files and extract invariant-like lines:
+
+```bash
+# Collect all SPEC.md paths from:
+#   - z-harness/<slug>/SPEC.md (active plans)
+#   - z-harness/<slug>/archive/<run>/SPEC.md (archived runs)
+#   - plans/<slug>/SPEC.md (repo plans)
+#   - $BASE/plans/<slug>/SPEC.md (state-dir plans)
+
+SPEC_FILES="$(find z-harness plans -name SPEC.md -type f 2>/dev/null | sort -u)"
+```
+
+For each SPEC.md file, extract lines matching these patterns:
+- `**INVARIANT:**` — explicit invariant declaration
+- `**MUST:**` — mandatory behavioral constraint
+- `**MUST NOT:**` — prohibited behavior
+- `**DANGER:**` — danger-zone constraint
+
+Each extracted line is a **candidate invariant**. Record for each candidate:
+- The verbatim line text
+- The source SPEC.md path
+- The plan slug (derived from the SPEC.md's parent directory name)
+
+The extract uses the same pattern as `/z-test` Phase 1 invariant extraction. Lines that are exact duplicates across different SPEC.md files count once (the earliest occurrence is kept).
+
+**Graceful fallback:** If no SPEC.md files exist anywhere in the repo, output "no candidates found — no SPEC.md files exist in this repo" and skip to Phase 5. Do NOT error.
+
+### 3. Durability heuristic filter
+
+For each candidate invariant, apply the durability heuristic (same as T004):
+
+A candidate is **durable** if:
+- **(a) Multi-plan signal:** The same invariant text (fuzzy match) appears in SPEC.md files from ≥2 different plan slugs, OR
+- **(b) Cross-module signal:** The invariant references files from ≥2 distinct top-level directories, OR uses cross-cutting language: "system", "cross-cutting", "cross-module", "across all", "every module", "pipeline-wide"
+
+Fuzzy matching for (a): two candidate texts match if their lowercase, punctuation-stripped versions have Jaccard similarity ≥0.6 on word sets.
+
+Non-durable candidates are logged to `docs/llm/.invariant-candidates-rejected.json` for human review but NOT proposed.
+
+### 4. Candidate proposal — auto-classify
+
+For each durable candidate:
+
+1. **Assign ID:** `inv_NNN` with zero-padded sequential numbering, starting after the highest existing ID (or `inv_001` for fresh init).
+2. **Auto-classify tags:** Keyword match against `docs/llm/TAGS.txt`:
+   - "fee", "notional", "money" → `correctness`
+   - "time", "window", "boundary", "rolling" → `time-window`
+   - "schema", "field", "column", "type" → `schema`
+   - "unit", "cents", "dollars", "bps" → `units`
+   - "api", "endpoint", "rpc", "http" → `api-boundary`
+   - "retry", "idempotent" → `retry-loop`
+   - "race", "concurrent", "atomic" → `race-condition`
+   - "perf", "slow", "latency" → `perf`
+   - "data", "quality", "valid" → `data-quality`
+   - "deprecated", "remove" → `deprecation`
+   - "log", "metric", "observe" → `observability`
+   - "default", "fallback", "silent" → `lossy-default`
+   - "ux", "user", "display", "show" → `ux`
+   - "compliance", "regulatory", "audit" → `compliance`
+   - "dependency", "depends", "requires" → `dependency`
+   At least one tag must be assigned. If no keywords match, default to `correctness`.
+3. **Set severity:** Parse the invariant text for severity signals:
+   - "must", "must not", "danger", "critical", "never" → `blocker`
+   - "should", "strongly", "important" → `major`
+   - otherwise → `minor`
+4. **Set source:** `"spec"` (invariants discovered from SPEC.md files).
+5. **Set source_files:** The set of file paths referenced in the invariant text OR the SPEC.md's own file list, deduped.
+6. **Set last_updated:** Current ISO-8601 timestamp.
+7. **Derive failure_class:** Extract the failure scenario from the invariant text — what real-world bug would occur if this invariant is violated. Default to the invariant text itself if no clear failure scenario.
+
+### 5. Present to user
+
+Present the proposed durable invariants via `AskUserQuestion`:
+
+```
+<N> durable invariants discovered from <M> SPEC.md files across <K> plans.
+
+<summary table: id, description (truncated to 60 chars), tags, severity, source plan>
+
+Options:
+  [Accept all] — write all proposed entries to INVARIANTS.json
+  [Pick] — let me choose which to include
+  [Skip] — don't write any; candidates logged to docs/llm/.invariant-candidates-rejected.json
+```
+
+### 6. Write INVARIANTS.json
+
+For user-accepted invariants, write to `docs/INVARIANTS.json` using atomic write (tmpfile → flush → fsync → os.replace()):
+
+```bash
+python3 -c "
+import json, os
+from datetime import datetime, timezone
+
+data = json.load(open('docs/INVARIANTS.json')) if os.path.exists('docs/INVARIANTS.json') else {'version': 1, 'invariants': []}
+data['invariants'].extend(<new_entries_json>)
+data['invariants'].sort(key=lambda x: x['id'])
+data['generated_at'] = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+tmp = 'docs/INVARIANTS.json.tmp'
+with open(tmp, 'w') as f:
+    json.dump(data, f, indent=2)
+    f.write('\\n')
+    f.flush()
+    os.fsync(f.fileno())
+os.replace(tmp, 'docs/INVARIANTS.json')
+"
+```
+
+Then validate:
+```bash
+python3 scripts/validate-invariants.py --file docs/INVARIANTS.json
+```
+
+If validation fails (exit code ≠ 0), surface the errors and halt — do NOT leave a partial INVARIANTS.json. The atomic write above ensures the previous valid version is preserved until the tmp file passes validation.
+
+### 6a. Regenerate INVARIANTS.md
+
+Generate `docs/INVARIANTS.md` — a human-readable Markdown rendering of INVARIANTS.json. One section per invariant. Same pattern as MEMORIES-FLAT.md regeneration.
+
+```bash
+python3 -c "
+import json, os
+from datetime import datetime, timezone
+
+data = json.load(open('docs/INVARIANTS.json'))
+invariants = data.get('invariants', [])
+
+lines = [
+    '# System-Level Behavioral Invariants',
+    '',
+    f\"_Generated: {data.get('generated_at', 'unknown')}_\",
+    f\"_Version: {data.get('version', 1)} | {len(invariants)} invariants_\",
+    '',
+    'Each invariant declares a durable, cross-cutting behavioral constraint. ',
+    'Consumed by `/z-test` for behavioral test generation. ',
+    'Machine-readable source: `docs/INVARIANTS.json`.',
+    '',
+    '---',
+    '',
+]
+
+for inv in invariants:
+    inv_id = inv.get('id', '?')
+    desc = inv.get('description', '')
+    tags = ', '.join(inv.get('tags', []))
+    severity = inv.get('severity', 'minor')
+    failure_class = inv.get('failure_class', '')
+    source_files = ', '.join(inv.get('source_files', [])[:5])
+    source = inv.get('source', 'spec')
+    last_updated = inv.get('last_updated', '')
+    fixture_schema_present = 'yes' if inv.get('fixture_schema') else 'no'
+
+    lines.append(f'## {inv_id} — {desc}')
+    lines.append('')
+    lines.append(f'**Tags:** {tags}')
+    lines.append(f'**Severity:** {severity}')
+    lines.append(f'**Failure class:** {failure_class}')
+    lines.append(f'**Source files:** {source_files}')
+    lines.append(f'**Source:** {source} (from SPEC.md)' if source == 'spec' else f'**Source:** {source}')
+    lines.append(f'**Last updated:** {last_updated}')
+    lines.append(f'**Fixture schema:** {fixture_schema_present}')
+    lines.append('')
+
+# Atomic write
+tmp = 'docs/INVARIANTS.md.tmp'
+with open(tmp, 'w') as f:
+    f.write('\\n'.join(lines) + '\\n')
+    f.flush()
+    os.fsync(f.fileno())
+os.replace(tmp, 'docs/INVARIANTS.md')
+print(f'wrote INVARIANTS.md with {len(invariants)} invariants')
+"
+```
+
+Regeneration is idempotent — same INVARIANTS.json always produces the same INVARIANTS.md.
+
+### 6b. Update INDEX.json
+
+Add (or update) the invariants entry in `docs/llm/INDEX.json`:
+
+```bash
+python3 -c "
+import json, os
+from datetime import datetime, timezone
+
+index_path = 'docs/llm/INDEX.json'
+if os.path.exists(index_path):
+    index = json.load(open(index_path))
+else:
+    index = {'version': '1', 'generated_at': '', 'z_harness_version': '', 'concepts': []}
+
+now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+inv_entry = {
+    'slug': 'invariants',
+    'source_files': ['docs/INVARIANTS.json'],
+    'last_updated': now,
+    'confidence': 'high',
+    'summary': 'System-level behavioral invariants — permanent per-repo truths consumed by /z-test for behavioral test generation.'
+}
+
+# Replace existing invariants entry or append
+concepts = index.get('concepts', [])
+found = False
+for i, c in enumerate(concepts):
+    if c.get('slug') == 'invariants':
+        concepts[i] = inv_entry
+        found = True
+        break
+if not found:
+    concepts.append(inv_entry)
+
+index['concepts'] = concepts
+index['generated_at'] = now
+
+tmp = index_path + '.tmp'
+with open(tmp, 'w') as f:
+    json.dump(index, f, indent=2)
+    f.write('\\n')
+    f.flush()
+    os.fsync(f.fileno())
+os.replace(tmp, index_path)
+print('updated INDEX.json with invariants entry')
+"
+```
+
+### 7. Report
+
+Output counts: total candidates found, durable filtered, user-accepted, written to INVARIANTS.json.
+Non-durable candidates are logged to `docs/llm/.invariant-candidates-rejected.json` (JSON array) with the reason "not durable".
+
+---
+
 ## Phase 5 — Copy default `.z-harness-rsync-exclude`
 
 If `<repo-root>/.z-harness-rsync-exclude` doesn't exist, copy the default from `${Z_HARNESS_PLUGIN_ROOT}/.z-harness-rsync-exclude` when that file exists. This file is used by the `remote-runner` subagent during `/z-implement-all` remote verification. If the default file is missing from the install, skip the copy and report it; do not fail docs initialization.

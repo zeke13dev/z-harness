@@ -125,6 +125,17 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 ## Phase 1 — Scaffolding
 
+### 1a-int. Interactive BRAINSTORM.md input (from /z-reality)
+
+Before building scaffolding, check for a prior `/z-reality` interactive BRAINSTORM.md:
+
+If `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md` exists, read its frontmatter. If `mode: interactive`:
+- **`status: complete`**: Extract the `### Converged premise` section (Problem, Why it matters, Approach, Key constraints, Risks, Open questions) as **topic scaffolding**. Use this converged premise to enrich the ideator prompts — append it to the topic text in scaffolding. Record the interactive BRAINSTORM.md in the output frontmatter `depends_on` field (e.g. `depends_on: [BRAINSTORM.md]`). Note that this is a single-source framing (human + AI co-produced), distinct from the 3-ideator fan-out that follows.
+- **`status: draft`**: Note it as a seed but don't change the standard topic flow — the premise needs stress-testing from vendor-diverse ideation. Do not add to `depends_on`.
+- **Other `mode` or no `mode` field**: Standard BRAINSTORM.md — skip this check. Behavior is unchanged.
+
+If no BRAINSTORM.md exists or it has a different mode, proceed with the standard topic from `$ARGUMENTS`.
+
 Build a shared scaffolding payload that **all three ideators receive identically** (no read-by-reference asymmetry). Components:
 
 ### 1a. Doc-fetcher (if INDEX.json exists)

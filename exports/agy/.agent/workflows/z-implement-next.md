@@ -274,12 +274,22 @@ bash "$RB_SH" finalize --run "$RUN"
 
 `finalize` classifies terminal status (via `run-status.sh` when unset), resolves artifact/fallback env, auto-downgrades to **lite** when no artifact exists on a full-profile brief (see halt-safe below), validates against `docs/llm/run-brief-contract.json`, and emits `run_brief_end`.
 
+#### 3.5. Cost summary render → stdout (non-fatal, before chat)
+
+```bash
+COST_SUMMARY_TEXT=""
+COST_RENDERER="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-cost-summary.py"
+if [ -f "$COST_RENDERER" ] && [ -f "$CURRENT_ARCHIVE_DIR/events.jsonl" ]; then
+  COST_SUMMARY_TEXT="$(python3 "$COST_RENDERER" "$CURRENT_ARCHIVE_DIR/events.jsonl" 2>/dev/null || true)"
+fi
+```
+
 #### 4. Chat render → user (replaces hand-authored "Brief summary")
 
 Print rendered chat text to the user — **do not** write independent summary prose:
 
 ```bash
-python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat ${COST_SUMMARY_TEXT:+--cost-summary-text "$COST_SUMMARY_TEXT"}
 ```
 
 #### 5. Push render (when notify policy allows)
@@ -292,6 +302,18 @@ fi
 ```
 
 Push format: `{intent[:80]} · {outcome[:60]} · Next: {next.label}` (from JSON).
+
+#### 5.5. Discord render (when notify policy + webhook URL allow)
+
+```bash
+if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end --channel discord)" = yes ]; then
+  DISCORD_TITLE="${RUN_BRIEF_INTENT:-z-harness run}"
+  DISCORD_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/notify-discord.sh" "$DISCORD_TITLE" "$DISCORD_BODY" || true
+fi
+```
+
+Discord uses enriched embed format — includes cost summary when available (not identical to PushNotification content). Non-fatal on failure.
 
 #### 6. Hard gate — `--require` before deregister
 
@@ -482,12 +504,22 @@ bash "$RB_SH" finalize --run "$RUN"
 
 `finalize` classifies terminal status (via `run-status.sh` when unset), resolves artifact/fallback env, auto-downgrades to **lite** when no artifact exists on a full-profile brief (see halt-safe below), validates against `docs/llm/run-brief-contract.json`, and emits `run_brief_end`.
 
+#### 3.5. Cost summary render → stdout (non-fatal, before chat)
+
+```bash
+COST_SUMMARY_TEXT=""
+COST_RENDERER="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-cost-summary.py"
+if [ -f "$COST_RENDERER" ] && [ -f "$CURRENT_ARCHIVE_DIR/events.jsonl" ]; then
+  COST_SUMMARY_TEXT="$(python3 "$COST_RENDERER" "$CURRENT_ARCHIVE_DIR/events.jsonl" 2>/dev/null || true)"
+fi
+```
+
 #### 4. Chat render → user (replaces hand-authored "Brief summary")
 
 Print rendered chat text to the user — **do not** write independent summary prose:
 
 ```bash
-python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat ${COST_SUMMARY_TEXT:+--cost-summary-text "$COST_SUMMARY_TEXT"}
 ```
 
 #### 5. Push render (when notify policy allows)
@@ -500,6 +532,18 @@ fi
 ```
 
 Push format: `{intent[:80]} · {outcome[:60]} · Next: {next.label}` (from JSON).
+
+#### 5.5. Discord render (when notify policy + webhook URL allow)
+
+```bash
+if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end --channel discord)" = yes ]; then
+  DISCORD_TITLE="${RUN_BRIEF_INTENT:-z-harness run}"
+  DISCORD_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/notify-discord.sh" "$DISCORD_TITLE" "$DISCORD_BODY" || true
+fi
+```
+
+Discord uses enriched embed format — includes cost summary when available (not identical to PushNotification content). Non-fatal on failure.
 
 #### 6. Hard gate — `--require` before deregister
 
@@ -744,12 +788,22 @@ bash "$RB_SH" finalize --run "$RUN"
 
 `finalize` classifies terminal status (via `run-status.sh` when unset), resolves artifact/fallback env, auto-downgrades to **lite** when no artifact exists on a full-profile brief (see halt-safe below), validates against `docs/llm/run-brief-contract.json`, and emits `run_brief_end`.
 
+#### 3.5. Cost summary render → stdout (non-fatal, before chat)
+
+```bash
+COST_SUMMARY_TEXT=""
+COST_RENDERER="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-cost-summary.py"
+if [ -f "$COST_RENDERER" ] && [ -f "$CURRENT_ARCHIVE_DIR/events.jsonl" ]; then
+  COST_SUMMARY_TEXT="$(python3 "$COST_RENDERER" "$CURRENT_ARCHIVE_DIR/events.jsonl" 2>/dev/null || true)"
+fi
+```
+
 #### 4. Chat render → user (replaces hand-authored "Brief summary")
 
 Print rendered chat text to the user — **do not** write independent summary prose:
 
 ```bash
-python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat ${COST_SUMMARY_TEXT:+--cost-summary-text "$COST_SUMMARY_TEXT"}
 ```
 
 #### 5. Push render (when notify policy allows)
@@ -762,6 +816,18 @@ fi
 ```
 
 Push format: `{intent[:80]} · {outcome[:60]} · Next: {next.label}` (from JSON).
+
+#### 5.5. Discord render (when notify policy + webhook URL allow)
+
+```bash
+if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end --channel discord)" = yes ]; then
+  DISCORD_TITLE="${RUN_BRIEF_INTENT:-z-harness run}"
+  DISCORD_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/notify-discord.sh" "$DISCORD_TITLE" "$DISCORD_BODY" || true
+fi
+```
+
+Discord uses enriched embed format — includes cost summary when available (not identical to PushNotification content). Non-fatal on failure.
 
 #### 6. Hard gate — `--require` before deregister
 
@@ -1057,12 +1123,22 @@ bash "$RB_SH" finalize --run "$RUN"
 
 `finalize` classifies terminal status (via `run-status.sh` when unset), resolves artifact/fallback env, auto-downgrades to **lite** when no artifact exists on a full-profile brief (see halt-safe below), validates against `docs/llm/run-brief-contract.json`, and emits `run_brief_end`.
 
+#### 3.5. Cost summary render → stdout (non-fatal, before chat)
+
+```bash
+COST_SUMMARY_TEXT=""
+COST_RENDERER="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-cost-summary.py"
+if [ -f "$COST_RENDERER" ] && [ -f "$CURRENT_ARCHIVE_DIR/events.jsonl" ]; then
+  COST_SUMMARY_TEXT="$(python3 "$COST_RENDERER" "$CURRENT_ARCHIVE_DIR/events.jsonl" 2>/dev/null || true)"
+fi
+```
+
 #### 4. Chat render → user (replaces hand-authored "Brief summary")
 
 Print rendered chat text to the user — **do not** write independent summary prose:
 
 ```bash
-python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat ${COST_SUMMARY_TEXT:+--cost-summary-text "$COST_SUMMARY_TEXT"}
 ```
 
 #### 5. Push render (when notify policy allows)
@@ -1075,6 +1151,18 @@ fi
 ```
 
 Push format: `{intent[:80]} · {outcome[:60]} · Next: {next.label}` (from JSON).
+
+#### 5.5. Discord render (when notify policy + webhook URL allow)
+
+```bash
+if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end --channel discord)" = yes ]; then
+  DISCORD_TITLE="${RUN_BRIEF_INTENT:-z-harness run}"
+  DISCORD_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/notify-discord.sh" "$DISCORD_TITLE" "$DISCORD_BODY" || true
+fi
+```
+
+Discord uses enriched embed format — includes cost summary when available (not identical to PushNotification content). Non-fatal on failure.
 
 #### 6. Hard gate — `--require` before deregister
 
@@ -1270,12 +1358,22 @@ bash "$RB_SH" finalize --run "$RUN"
 
 `finalize` classifies terminal status (via `run-status.sh` when unset), resolves artifact/fallback env, auto-downgrades to **lite** when no artifact exists on a full-profile brief (see halt-safe below), validates against `docs/llm/run-brief-contract.json`, and emits `run_brief_end`.
 
+#### 3.5. Cost summary render → stdout (non-fatal, before chat)
+
+```bash
+COST_SUMMARY_TEXT=""
+COST_RENDERER="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-cost-summary.py"
+if [ -f "$COST_RENDERER" ] && [ -f "$CURRENT_ARCHIVE_DIR/events.jsonl" ]; then
+  COST_SUMMARY_TEXT="$(python3 "$COST_RENDERER" "$CURRENT_ARCHIVE_DIR/events.jsonl" 2>/dev/null || true)"
+fi
+```
+
 #### 4. Chat render → user (replaces hand-authored "Brief summary")
 
 Print rendered chat text to the user — **do not** write independent summary prose:
 
 ```bash
-python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat ${COST_SUMMARY_TEXT:+--cost-summary-text "$COST_SUMMARY_TEXT"}
 ```
 
 #### 5. Push render (when notify policy allows)
@@ -1288,6 +1386,18 @@ fi
 ```
 
 Push format: `{intent[:80]} · {outcome[:60]} · Next: {next.label}` (from JSON).
+
+#### 5.5. Discord render (when notify policy + webhook URL allow)
+
+```bash
+if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end --channel discord)" = yes ]; then
+  DISCORD_TITLE="${RUN_BRIEF_INTENT:-z-harness run}"
+  DISCORD_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/notify-discord.sh" "$DISCORD_TITLE" "$DISCORD_BODY" || true
+fi
+```
+
+Discord uses enriched embed format — includes cost summary when available (not identical to PushNotification content). Non-fatal on failure.
 
 #### 6. Hard gate — `--require` before deregister
 
@@ -1488,12 +1598,22 @@ bash "$RB_SH" finalize --run "$RUN"
 
 `finalize` classifies terminal status (via `run-status.sh` when unset), resolves artifact/fallback env, auto-downgrades to **lite** when no artifact exists on a full-profile brief (see halt-safe below), validates against `docs/llm/run-brief-contract.json`, and emits `run_brief_end`.
 
+#### 3.5. Cost summary render → stdout (non-fatal, before chat)
+
+```bash
+COST_SUMMARY_TEXT=""
+COST_RENDERER="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-cost-summary.py"
+if [ -f "$COST_RENDERER" ] && [ -f "$CURRENT_ARCHIVE_DIR/events.jsonl" ]; then
+  COST_SUMMARY_TEXT="$(python3 "$COST_RENDERER" "$CURRENT_ARCHIVE_DIR/events.jsonl" 2>/dev/null || true)"
+fi
+```
+
 #### 4. Chat render → user (replaces hand-authored "Brief summary")
 
 Print rendered chat text to the user — **do not** write independent summary prose:
 
 ```bash
-python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat ${COST_SUMMARY_TEXT:+--cost-summary-text "$COST_SUMMARY_TEXT"}
 ```
 
 #### 5. Push render (when notify policy allows)
@@ -1506,6 +1626,18 @@ fi
 ```
 
 Push format: `{intent[:80]} · {outcome[:60]} · Next: {next.label}` (from JSON).
+
+#### 5.5. Discord render (when notify policy + webhook URL allow)
+
+```bash
+if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end --channel discord)" = yes ]; then
+  DISCORD_TITLE="${RUN_BRIEF_INTENT:-z-harness run}"
+  DISCORD_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/notify-discord.sh" "$DISCORD_TITLE" "$DISCORD_BODY" || true
+fi
+```
+
+Discord uses enriched embed format — includes cost summary when available (not identical to PushNotification content). Non-fatal on failure.
 
 #### 6. Hard gate — `--require` before deregister
 
@@ -1912,12 +2044,22 @@ bash "$RB_SH" finalize --run "$RUN"
 
 `finalize` classifies terminal status (via `run-status.sh` when unset), resolves artifact/fallback env, auto-downgrades to **lite** when no artifact exists on a full-profile brief (see halt-safe below), validates against `docs/llm/run-brief-contract.json`, and emits `run_brief_end`.
 
+#### 3.5. Cost summary render → stdout (non-fatal, before chat)
+
+```bash
+COST_SUMMARY_TEXT=""
+COST_RENDERER="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-cost-summary.py"
+if [ -f "$COST_RENDERER" ] && [ -f "$CURRENT_ARCHIVE_DIR/events.jsonl" ]; then
+  COST_SUMMARY_TEXT="$(python3 "$COST_RENDERER" "$CURRENT_ARCHIVE_DIR/events.jsonl" 2>/dev/null || true)"
+fi
+```
+
 #### 4. Chat render → user (replaces hand-authored "Brief summary")
 
 Print rendered chat text to the user — **do not** write independent summary prose:
 
 ```bash
-python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat ${COST_SUMMARY_TEXT:+--cost-summary-text "$COST_SUMMARY_TEXT"}
 ```
 
 #### 5. Push render (when notify policy allows)
@@ -1930,6 +2072,18 @@ fi
 ```
 
 Push format: `{intent[:80]} · {outcome[:60]} · Next: {next.label}` (from JSON).
+
+#### 5.5. Discord render (when notify policy + webhook URL allow)
+
+```bash
+if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end --channel discord)" = yes ]; then
+  DISCORD_TITLE="${RUN_BRIEF_INTENT:-z-harness run}"
+  DISCORD_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/notify-discord.sh" "$DISCORD_TITLE" "$DISCORD_BODY" || true
+fi
+```
+
+Discord uses enriched embed format — includes cost summary when available (not identical to PushNotification content). Non-fatal on failure.
 
 #### 6. Hard gate — `--require` before deregister
 
@@ -2395,12 +2549,22 @@ bash "$RB_SH" finalize --run "$RUN"
 
 `finalize` classifies terminal status (via `run-status.sh` when unset), resolves artifact/fallback env, auto-downgrades to **lite** when no artifact exists on a full-profile brief (see halt-safe below), validates against `docs/llm/run-brief-contract.json`, and emits `run_brief_end`.
 
+#### 3.5. Cost summary render → stdout (non-fatal, before chat)
+
+```bash
+COST_SUMMARY_TEXT=""
+COST_RENDERER="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-cost-summary.py"
+if [ -f "$COST_RENDERER" ] && [ -f "$CURRENT_ARCHIVE_DIR/events.jsonl" ]; then
+  COST_SUMMARY_TEXT="$(python3 "$COST_RENDERER" "$CURRENT_ARCHIVE_DIR/events.jsonl" 2>/dev/null || true)"
+fi
+```
+
 #### 4. Chat render → user (replaces hand-authored "Brief summary")
 
 Print rendered chat text to the user — **do not** write independent summary prose:
 
 ```bash
-python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat ${COST_SUMMARY_TEXT:+--cost-summary-text "$COST_SUMMARY_TEXT"}
 ```
 
 #### 5. Push render (when notify policy allows)
@@ -2413,6 +2577,18 @@ fi
 ```
 
 Push format: `{intent[:80]} · {outcome[:60]} · Next: {next.label}` (from JSON).
+
+#### 5.5. Discord render (when notify policy + webhook URL allow)
+
+```bash
+if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end --channel discord)" = yes ]; then
+  DISCORD_TITLE="${RUN_BRIEF_INTENT:-z-harness run}"
+  DISCORD_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/notify-discord.sh" "$DISCORD_TITLE" "$DISCORD_BODY" || true
+fi
+```
+
+Discord uses enriched embed format — includes cost summary when available (not identical to PushNotification content). Non-fatal on failure.
 
 #### 6. Hard gate — `--require` before deregister
 
@@ -2636,12 +2812,22 @@ bash "$RB_SH" finalize --run "$RUN"
 
 `finalize` classifies terminal status (via `run-status.sh` when unset), resolves artifact/fallback env, auto-downgrades to **lite** when no artifact exists on a full-profile brief (see halt-safe below), validates against `docs/llm/run-brief-contract.json`, and emits `run_brief_end`.
 
+#### 3.5. Cost summary render → stdout (non-fatal, before chat)
+
+```bash
+COST_SUMMARY_TEXT=""
+COST_RENDERER="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-cost-summary.py"
+if [ -f "$COST_RENDERER" ] && [ -f "$CURRENT_ARCHIVE_DIR/events.jsonl" ]; then
+  COST_SUMMARY_TEXT="$(python3 "$COST_RENDERER" "$CURRENT_ARCHIVE_DIR/events.jsonl" 2>/dev/null || true)"
+fi
+```
+
 #### 4. Chat render → user (replaces hand-authored "Brief summary")
 
 Print rendered chat text to the user — **do not** write independent summary prose:
 
 ```bash
-python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat ${COST_SUMMARY_TEXT:+--cost-summary-text "$COST_SUMMARY_TEXT"}
 ```
 
 #### 5. Push render (when notify policy allows)
@@ -2654,6 +2840,18 @@ fi
 ```
 
 Push format: `{intent[:80]} · {outcome[:60]} · Next: {next.label}` (from JSON).
+
+#### 5.5. Discord render (when notify policy + webhook URL allow)
+
+```bash
+if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end --channel discord)" = yes ]; then
+  DISCORD_TITLE="${RUN_BRIEF_INTENT:-z-harness run}"
+  DISCORD_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/notify-discord.sh" "$DISCORD_TITLE" "$DISCORD_BODY" || true
+fi
+```
+
+Discord uses enriched embed format — includes cost summary when available (not identical to PushNotification content). Non-fatal on failure.
 
 #### 6. Hard gate — `--require` before deregister
 

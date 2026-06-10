@@ -700,7 +700,7 @@ The precheck is cheap (≤30s) and saves 30-60 minutes per spec-drift incident �
 Agent(
   subagent_type="implementer",
   description="Implement <task-id>",
-  prompt="<task-id>\n\n<task block verbatim from $TASKS_FILE>\n\n$BASE: <abs path>  (read SPEC.md / PLAN.md yourself from here)\nRepo root: <abs path>\nrelevant_docs (paths — Read these for cross-file invariants and consumer contracts): <paths from step 4b>\ntests_md_path: <$BASE/TESTS.md if it exists, else empty>  (if the task block contains a **Tests:** line, Read TESTS.md and produce test code for each listed TEST-NNN at its Target file path, in the same diff as the production code)\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+  prompt="<task-id>\n\n<task block verbatim from $TASKS_FILE>\n\n$BASE: <abs path>  (read SPEC.md / PLAN.md yourself from here)\nRepo root: <abs path>\nrelevant_docs (paths — Read these for cross-file invariants and consumer contracts): <paths from step 4b>\ntests_md_path: <$BASE/TESTS.md if it exists, else empty>  (if the task block contains a **Tests:** line, Read TESTS.md. Parse the **Version:** header: if v2, for each listed TEST-NNN, read **Invariant ID:**, **Fixture:**, **Layer:**, **Target file:**, **Assertion:**. Skip entries with **Layer:** full-chain — those are implemented later. Use **Fixture:** values as test inputs. If v1 or no version header, use legacy parsing: read **Target file:**, **Setup:**, **Assertion:**. Produce test code at the **Target file:** path, in the same diff as the production code)\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 ```
 
@@ -895,9 +895,31 @@ If the task block declares `**Tests:** TEST-001, ...` and `$BASE/test-runner.jso
 mkdir -p "$BASE/archive/tasks/<task-id>"
 TEMPLATE="$(jq -r .cmd_template "$BASE/test-runner.json")"
 PASSED=0; FAILED=0
+SKIPPED=0
+
+# Check TESTS.md version
+VERSION="$(grep -m1 '^\*\*Version:\*\*' "$BASE/TESTS.md" 2>/dev/null | sed 's/.*Version:\*\* *//' | tr -d '[:space:]' || echo '1')"
+
 for TEST_ID in <list from **Tests:** line>; do
-  TARGET="$(awk -v id="$TEST_ID" '/^## /{cur=$0} cur ~ id && /^\*\*Target file:\*\*/{print $3; exit}' "$BASE/TESTS.md")"
-  TEST_NAME="$(awk -v id="$TEST_ID" '/^## /{cur=$0} cur ~ id && /^\*\*Setup:\*\*/{p=1; next} p && /^\*\*Failure class:\*\*/{p=0} 1' "$BASE/TESTS.md")"
+  if [ "$VERSION" = "2" ]; then
+    # v2 parsing: check layer, skip full-chain
+    LAYER="$(awk -v id="$TEST_ID" '/^## /{cur=$0; found=0} cur ~ id {found=1} found && /^\*\*Layer:\*\*/{print $2; exit}' "$BASE/TESTS.md")"
+    if [ "$LAYER" = "full-chain" ]; then
+      echo "[SKIP] $TEST_ID (layer: full-chain — deferred to post-implementation)" >> "$BASE/archive/tasks/<task-id>/test-result.txt"
+      SKIPPED=$((SKIPPED+1))
+      continue
+    fi
+    TARGET="$(awk -v id="$TEST_ID" '/^## /{cur=$0; found=0} cur ~ id {found=1} found && /^\*\*Target file:\*\*/{print $3; exit}' "$BASE/TESTS.md")"
+    TEST_NAME="$(awk -v id="$TEST_ID" '/^## /{cur=$0; found=0} cur ~ id {found=1} found && /^\*\*Invariant ID:\*\*/{print $3; exit}' "$BASE/TESTS.md")"
+    # Use Invariant ID as test name filter if present; fall back to parsing assertion
+    if [ -z "$TEST_NAME" ]; then
+      TEST_NAME="$(echo "$TEST_ID" | tr '[:upper:]' '[:lower:]' | tr '-' '_')"
+    fi
+  else
+    # v1 legacy parsing
+    TARGET="$(awk -v id="$TEST_ID" '/^## /{cur=$0} cur ~ id && /^\*\*Target file:\*\*/{print $3; exit}' "$BASE/TESTS.md")"
+    TEST_NAME="$(awk -v id="$TEST_ID" '/^## /{cur=$0} cur ~ id && /^\*\*Setup:\*\*/{p=1; next} p && /^\*\*Failure class:\*\*/{p=0} 1' "$BASE/TESTS.md")"
+  fi
   # The implementer's TESTS_IMPLEMENTED return is the authoritative source of (TEST_ID, target_file, test_name).
   # Prefer parsing it; fall back to TESTS.md grep above.
   CMD="$(echo "$TEMPLATE" | sed "s|{TARGET_FILE}|$TARGET|g; s|{TEST_NAME}|$TEST_NAME|g")"

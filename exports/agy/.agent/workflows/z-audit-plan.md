@@ -272,6 +272,100 @@ Checkpoint: Write results to `$BASE/archive/$RUN/phase2-design.md`.
 
 ---
 
+## Phase 2.5 — Pre-review cycle (opt-in)
+
+**Opt-in gate:** Only runs if `Z_HARNESS_PRE_REVIEW` is set to `1` (env var). Check at phase start:
+
+```bash
+if [ "${Z_HARNESS_PRE_REVIEW:-0}" != "1" ]; then
+  echo "Pre-review cycle skipped (Z_HARNESS_PRE_REVIEW != 1)"
+  # Jump to Phase 3
+  return 0
+fi
+```
+
+When enabled, spawn **3 pre-reviewers in parallel** to do a fast first-pass scan on plan artifacts before the expensive adversarial consultants.
+
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+
+```
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+  subagent_type="pre-reviewer",
+  description="Pre-review 1 — reality check (Flash) for <slug>",
+  prompt="MODE: plan-audit
+slug: <slug>
+run_id: <RUN>
+Kernel path: <KERNEL_PATH>
+
+SPEC.md: $BASE/SPEC.md
+PLAN.md: $BASE/PLAN.md
+TASKS.md: $BASE/TASKS.md
+phase1_reality: $BASE/archive/$RUN/phase1-reality.md
+phase2_design: $BASE/archive/$RUN/phase2-design.md
+
+Focus: REALITY CHECK — reference errors in SPEC.md/PLAN.md/TASKS.md. Files that don't exist, symbols that are wrong, config paths that are hallucinated, naming drift, dependency order violations. Compare plan claims against the actual codebase. Be fast and cheap — surface only clear blockers and majors."
+)
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+  subagent_type="pre-reviewer",
+  description="Pre-review 2 — design & style audit (Flash) for <slug>",
+  prompt="MODE: plan-audit
+slug: <slug>
+run_id: <RUN>
+Kernel path: <KERNEL_PATH>
+
+SPEC.md: $BASE/SPEC.md
+PLAN.md: $BASE/PLAN.md
+TASKS.md: $BASE/TASKS.md
+phase1_reality: $BASE/archive/$RUN/phase1-reality.md
+phase2_design: $BASE/archive/$RUN/phase2-design.md
+
+Focus: DESIGN & STYLE — DRY/KISS/SOLID violations, premature abstractions, over-engineering, STYLE.md drift, defensive bloat, security concerns in the plan artifacts. Do NOT check reality references (that's pre-review 1's job). Be fast and cheap — surface only clear blockers and majors."
+)
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+  subagent_type="pre-reviewer",
+  description="Pre-review 3 — logic & completeness (Flash) for <slug>",
+  prompt="MODE: plan-audit
+slug: <slug>
+run_id: <RUN>
+Kernel path: <KERNEL_PATH>
+
+SPEC.md: $BASE/SPEC.md
+PLAN.md: $BASE/PLAN.md
+TASKS.md: $BASE/TASKS.md
+phase1_reality: $BASE/archive/$RUN/phase1-reality.md
+phase2_design: $BASE/archive/$RUN/phase2-design.md
+
+Focus: LOGIC & COMPLETENESS — logic gaps in the plan, missing edge cases in acceptance criteria, task ordering issues, dependency problems, incomplete spec coverage, unstated assumptions that should be made explicit. Do NOT check reality references or design style (those are pre-review 1/2's jobs). Be fast and cheap — surface only clear blockers and majors."
+)
+```
+
+**Collecting pre-review findings:** After all three return, read their outputs. Write a consolidated pre-review summary to `$BASE/archive/$RUN/pre-review.md`:
+
+```markdown
+# Pre-review summary — <slug>
+Run: <RUN>
+
+## Pre-review 1 — reality check
+<verbatim findings from pre-reviewer 1, or "CLEAN">
+
+## Pre-review 2 — design & style
+<verbatim findings from pre-reviewer 2, or "CLEAN">
+
+## Pre-review 3 — logic & completeness
+<verbatim findings from pre-reviewer 3, or "CLEAN">
+```
+
+**Feeding into Phase 3:** The consolidated `$BASE/archive/$RUN/pre-review.md` path is added as a context item in the Phase 3 adversarial consultant prompts. Each consultant's prompt gains a section:
+
+```
+Pre-review findings (3 × DeepSeek V4 Flash fast scan):
+<contents of $BASE/archive/$RUN/pre-review.md>
+
+These are cheap pre-screener findings — validate them critically before accepting. The real adversarial review is your own analysis.
+```
+
+---
+
 ## Phase 3 — Adversarial Cross-LLM Review
 
 **Heartbeat at phase boundary (before phase work begins):**
@@ -613,12 +707,22 @@ bash "$RB_SH" finalize --run "$RUN"
 
 `finalize` classifies terminal status (via `run-status.sh` when unset), resolves artifact/fallback env, auto-downgrades to **lite** when no artifact exists on a full-profile brief (see halt-safe below), validates against `docs/llm/run-brief-contract.json`, and emits `run_brief_end`.
 
+#### 3.5. Cost summary render → stdout (non-fatal, before chat)
+
+```bash
+COST_SUMMARY_TEXT=""
+COST_RENDERER="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-cost-summary.py"
+if [ -f "$COST_RENDERER" ] && [ -f "$CURRENT_ARCHIVE_DIR/events.jsonl" ]; then
+  COST_SUMMARY_TEXT="$(python3 "$COST_RENDERER" "$CURRENT_ARCHIVE_DIR/events.jsonl" 2>/dev/null || true)"
+fi
+```
+
 #### 4. Chat render → user (replaces hand-authored "Brief summary")
 
 Print rendered chat text to the user — **do not** write independent summary prose:
 
 ```bash
-python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat ${COST_SUMMARY_TEXT:+--cost-summary-text "$COST_SUMMARY_TEXT"}
 ```
 
 #### 5. Push render (when notify policy allows)
@@ -631,6 +735,18 @@ fi
 ```
 
 Push format: `{intent[:80]} · {outcome[:60]} · Next: {next.label}` (from JSON).
+
+#### 5.5. Discord render (when notify policy + webhook URL allow)
+
+```bash
+if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end --channel discord)" = yes ]; then
+  DISCORD_TITLE="${RUN_BRIEF_INTENT:-z-harness run}"
+  DISCORD_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/notify-discord.sh" "$DISCORD_TITLE" "$DISCORD_BODY" || true
+fi
+```
+
+Discord uses enriched embed format — includes cost summary when available (not identical to PushNotification content). Non-fatal on failure.
 
 #### 6. Hard gate — `--require` before deregister
 
@@ -817,12 +933,22 @@ bash "$RB_SH" finalize --run "$RUN"
 
 `finalize` classifies terminal status (via `run-status.sh` when unset), resolves artifact/fallback env, auto-downgrades to **lite** when no artifact exists on a full-profile brief (see halt-safe below), validates against `docs/llm/run-brief-contract.json`, and emits `run_brief_end`.
 
+#### 3.5. Cost summary render → stdout (non-fatal, before chat)
+
+```bash
+COST_SUMMARY_TEXT=""
+COST_RENDERER="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-cost-summary.py"
+if [ -f "$COST_RENDERER" ] && [ -f "$CURRENT_ARCHIVE_DIR/events.jsonl" ]; then
+  COST_SUMMARY_TEXT="$(python3 "$COST_RENDERER" "$CURRENT_ARCHIVE_DIR/events.jsonl" 2>/dev/null || true)"
+fi
+```
+
 #### 4. Chat render → user (replaces hand-authored "Brief summary")
 
 Print rendered chat text to the user — **do not** write independent summary prose:
 
 ```bash
-python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat ${COST_SUMMARY_TEXT:+--cost-summary-text "$COST_SUMMARY_TEXT"}
 ```
 
 #### 5. Push render (when notify policy allows)
@@ -835,6 +961,18 @@ fi
 ```
 
 Push format: `{intent[:80]} · {outcome[:60]} · Next: {next.label}` (from JSON).
+
+#### 5.5. Discord render (when notify policy + webhook URL allow)
+
+```bash
+if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end --channel discord)" = yes ]; then
+  DISCORD_TITLE="${RUN_BRIEF_INTENT:-z-harness run}"
+  DISCORD_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/notify-discord.sh" "$DISCORD_TITLE" "$DISCORD_BODY" || true
+fi
+```
+
+Discord uses enriched embed format — includes cost summary when available (not identical to PushNotification content). Non-fatal on failure.
 
 #### 6. Hard gate — `--require` before deregister
 

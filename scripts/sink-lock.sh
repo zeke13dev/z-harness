@@ -841,7 +841,7 @@ def cmd_heartbeat(lock_path: Path) -> int:
         os.close(hb_fd)
 
 
-def cmd_release(lock_path: Path, expected_holder: str | None, expected_pid: int | None) -> int:
+def cmd_release(lock_path: Path, expected_holder: 'Optional[str]', expected_pid: 'Optional[int]') -> int:
     """Release the lock by killing the holder daemon and zeroing the content.
 
     If expected_holder and/or expected_pid are provided, the caller's identity

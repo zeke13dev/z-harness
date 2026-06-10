@@ -65,6 +65,7 @@ The caller will give you:
 - Absolute path to `diff.patch` for this task (preferred — scrutinize the change, not the whole file)
 - Absolute paths of changed files (fallback / supplemental)
 - Acceptance criteria for the task (verbatim from the task block)
+- **Implementer contract fields** (may be empty): `RATIONALE` (1-3 sentences on why the approach was chosen), `TRIED` (optional — list of failed attempts), `DEVIATIONS` (optional — list of differences from PLAN). Validate these against the diff.
 - **`$BASE` path** — read SPEC.md yourself with the Read tool. Read the sections relevant to the changed files.
 - **`relevant_docs`** (paths, may be empty) — `docs/llm/<concept>.json` files for concepts the diff touches. **Read these BEFORE composing the review prompt** — they state invariants and `consumed_by` relationships that may flag drift the diff alone can't show.
 - Optional: **related downstream files** (paths only) — up to 3 related-consumer file paths to grep for contract drift if the diff touches a contract surface.
@@ -113,7 +114,10 @@ Report:
 3. Missed edge cases / error handling gaps
 4. DRY / KISS / SOLID violations
 5. Security concerns
-6. Anything else worth flagging
+6. DEVIATIONS validation: for each claimed deviation in the implementer's DEVIATIONS field, verify against the diff — was the claimed change actually made? Flag if deviation is unverifiable or contradicts the diff.
+7. RATIONALE plausibility: does the code match the stated rationale? Flag if rationale claims one approach but code follows another.
+8. TRIED consistency (if TRIED entries exist): does the current code contradict any claimed failed approach? (e.g., "TRIED says used tokio::spawn but code still imports tokio"). Report as MINOR only — reviewer cannot validate dead-code claims.
+9. Anything else worth flagging
 
 For each finding: severity (blocker / major / minor / nit), location, and a suggested fix.
 

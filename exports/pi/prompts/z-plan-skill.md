@@ -595,6 +595,89 @@ Create `$Z_HARNESS_PLAN_DIR/PLAN.md` — approved plan: goals, decisions (with r
 
 Both obey **DRY / KISS / SOLID**. State explicitly how the plan respects each.
 
+### After write — invariant promotion nudge
+
+After SPEC.md is written, check whether any of its invariants should be promoted to the permanent `docs/INVARIANTS.json` store. This nudge only fires when ALL three gates pass:
+
+**Gate A — INVARIANTS.json exists.** If `docs/INVARIANTS.json` does not exist, skip the nudge silently (no per-plan invariant store to promote to; the user can bootstrap later with `/z-init-docs --invariants`).
+
+**Gate B — Non-matching invariants found.** Scan the just-written SPEC.md for lines matching:
+- `**INVARIANT:**`
+- `**MUST:**` (mandatory behavioral constraint)
+- `**MUST NOT:**` (prohibited behavior)
+
+For each extracted line, check against existing INVARIANTS.json entries:
+- Exact ID match (`inv_NNN` mentioned in the line) — skip (already in the store).
+- Description fuzzy match: lowercase, strip punctuation, compute Jaccard similarity on word sets. If similarity ≥0.7 to any existing invariant's description → skip (already covered).
+
+If zero non-matching invariants remain, skip the nudge.
+
+**Gate C — Durability signal.** For each non-matching invariant, check if it appears durable using the same heuristic as T004:
+- **(a)** The invariant line references files from ≥2 distinct top-level directories (e.g., `src/feed/` and `src/trader/`), OR
+- **(b)** The invariant text uses cross-cutting language: "system", "cross-cutting", "cross-module", "across all", "every module", "pipeline-wide", "end-to-end".
+
+If no non-matching invariants pass the durability signal, skip the nudge.
+
+**Nudge prompt.** If all three gates pass and N durable, non-matching invariants are found:
+
+```
+AskUserQuestion:
+  "N SPEC.md invariants look durable. Promote to INVARIANTS.json?"
+
+  [Summary table: candidate #, invariant text (truncated 80 chars), durability signal, source_files]
+
+  Options:
+    - Promote all N — write all durable candidates to INVARIANTS.json
+    - Let me pick — show per-invariant accept/skip
+    - Skip — don't promote any; invariants remain SPEC.md-scoped only
+```
+
+**On promote (accept all or pick):**
+
+1. For each promoted invariant, construct an INVARIANTS.json entry:
+   - `id`: auto-assign `inv_NNN` with zero-padded sequential numbering starting after the highest existing ID
+   - `description`: the invariant text, cleaned (strip markup)
+   - `tags`: auto-classify from `docs/llm/TAGS.txt` using keyword match (same algorithm as `/z-init-docs --invariants` Phase 4)
+   - `failure_class`: derive from the invariant text — what real-world bug occurs if violated
+   - `severity`: parse from text ("must"/"never"/"danger" → blocker; "should" → major; else minor)
+   - `source_files`: the set of file paths referenced in the invariant or the SPEC.md's per-file sections, deduped
+   - `last_updated`: current ISO-8601 timestamp
+   - `source`: `"spec"`
+
+2. Write the new entries to INVARIANTS.json using atomic write (tmpfile → flush → fsync → os.replace()):
+   ```bash
+   python3 -c "
+   import json
+   data = json.load(open('docs/INVARIANTS.json'))
+   data['invariants'].extend(<new_entries_json>)
+   # sort by id
+   data['invariants'].sort(key=lambda x: x['id'])
+   data['generated_at'] = '<current_iso>'
+   # atomic write
+   tmp = 'docs/INVARIANTS.json.tmp'
+   with open(tmp, 'w') as f:
+       json.dump(data, f, indent=2)
+       f.write('\n')
+       f.flush()
+       import os; os.fsync(f.fileno())
+   os.replace(tmp, 'docs/INVARIANTS.json')
+   "
+   ```
+
+3. Validate the updated INVARIANTS.json:
+   ```bash
+   python3 scripts/validate-invariants.py --file docs/INVARIANTS.json
+   ```
+   If validation fails (exit code ≠ 0), surface errors and halt — do NOT leave a partial INVARIANTS.json.
+
+4. Regenerate `docs/INVARIANTS.md` from the updated INVARIANTS.json.
+
+5. Log the promotion event:
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" invariant_promoted \
+     "$(printf '{"count":%d,"ids":%s}' "$N" "$IDS_JSON")"
+   ```
+
 ## Phase 7 — Bundled final review
 
 Reuse `PERSONA_ROTATION` and `CRITIQUE_PANEL` values from Phase 3. If `PERSONA_ROTATION == "true"`, use the same **fixed 5-member panel** for Phase 7. Draw a fresh, independent set of 5 distinct `consultant` personas — do NOT reuse the Phase 3 draw.

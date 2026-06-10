@@ -311,12 +311,22 @@ bash "$RB_SH" finalize --run "$RUN"
 
 `finalize` classifies terminal status (via `run-status.sh` when unset), resolves artifact/fallback env, auto-downgrades to **lite** when no artifact exists on a full-profile brief (see halt-safe below), validates against `docs/llm/run-brief-contract.json`, and emits `run_brief_end`.
 
+#### 3.5. Cost summary render → stdout (non-fatal, before chat)
+
+```bash
+COST_SUMMARY_TEXT=""
+COST_RENDERER="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-cost-summary.py"
+if [ -f "$COST_RENDERER" ] && [ -f "$CURRENT_ARCHIVE_DIR/events.jsonl" ]; then
+  COST_SUMMARY_TEXT="$(python3 "$COST_RENDERER" "$CURRENT_ARCHIVE_DIR/events.jsonl" 2>/dev/null || true)"
+fi
+```
+
 #### 4. Chat render → user (replaces hand-authored "Brief summary")
 
 Print rendered chat text to the user — **do not** write independent summary prose:
 
 ```bash
-python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat ${COST_SUMMARY_TEXT:+--cost-summary-text "$COST_SUMMARY_TEXT"}
 ```
 
 #### 5. Push render (when notify policy allows)
@@ -329,6 +339,18 @@ fi
 ```
 
 Push format: `{intent[:80]} · {outcome[:60]} · Next: {next.label}` (from JSON).
+
+#### 5.5. Discord render (when notify policy + webhook URL allow)
+
+```bash
+if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end --channel discord)" = yes ]; then
+  DISCORD_TITLE="${RUN_BRIEF_INTENT:-z-harness run}"
+  DISCORD_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/notify-discord.sh" "$DISCORD_TITLE" "$DISCORD_BODY" || true
+fi
+```
+
+Discord uses enriched embed format — includes cost summary when available (not identical to PushNotification content). Non-fatal on failure.
 
 #### 6. Hard gate — `--require` before deregister
 
@@ -519,12 +541,22 @@ bash "$RB_SH" finalize --run "$RUN"
 
 `finalize` classifies terminal status (via `run-status.sh` when unset), resolves artifact/fallback env, auto-downgrades to **lite** when no artifact exists on a full-profile brief (see halt-safe below), validates against `docs/llm/run-brief-contract.json`, and emits `run_brief_end`.
 
+#### 3.5. Cost summary render → stdout (non-fatal, before chat)
+
+```bash
+COST_SUMMARY_TEXT=""
+COST_RENDERER="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-cost-summary.py"
+if [ -f "$COST_RENDERER" ] && [ -f "$CURRENT_ARCHIVE_DIR/events.jsonl" ]; then
+  COST_SUMMARY_TEXT="$(python3 "$COST_RENDERER" "$CURRENT_ARCHIVE_DIR/events.jsonl" 2>/dev/null || true)"
+fi
+```
+
 #### 4. Chat render → user (replaces hand-authored "Brief summary")
 
 Print rendered chat text to the user — **do not** write independent summary prose:
 
 ```bash
-python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat ${COST_SUMMARY_TEXT:+--cost-summary-text "$COST_SUMMARY_TEXT"}
 ```
 
 #### 5. Push render (when notify policy allows)
@@ -537,6 +569,18 @@ fi
 ```
 
 Push format: `{intent[:80]} · {outcome[:60]} · Next: {next.label}` (from JSON).
+
+#### 5.5. Discord render (when notify policy + webhook URL allow)
+
+```bash
+if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end --channel discord)" = yes ]; then
+  DISCORD_TITLE="${RUN_BRIEF_INTENT:-z-harness run}"
+  DISCORD_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/notify-discord.sh" "$DISCORD_TITLE" "$DISCORD_BODY" || true
+fi
+```
+
+Discord uses enriched embed format — includes cost summary when available (not identical to PushNotification content). Non-fatal on failure.
 
 #### 6. Hard gate — `--require` before deregister
 
@@ -791,12 +835,22 @@ bash "$RB_SH" finalize --run "$RUN"
 
 `finalize` classifies terminal status (via `run-status.sh` when unset), resolves artifact/fallback env, auto-downgrades to **lite** when no artifact exists on a full-profile brief (see halt-safe below), validates against `docs/llm/run-brief-contract.json`, and emits `run_brief_end`.
 
+#### 3.5. Cost summary render → stdout (non-fatal, before chat)
+
+```bash
+COST_SUMMARY_TEXT=""
+COST_RENDERER="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-cost-summary.py"
+if [ -f "$COST_RENDERER" ] && [ -f "$CURRENT_ARCHIVE_DIR/events.jsonl" ]; then
+  COST_SUMMARY_TEXT="$(python3 "$COST_RENDERER" "$CURRENT_ARCHIVE_DIR/events.jsonl" 2>/dev/null || true)"
+fi
+```
+
 #### 4. Chat render → user (replaces hand-authored "Brief summary")
 
 Print rendered chat text to the user — **do not** write independent summary prose:
 
 ```bash
-python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat ${COST_SUMMARY_TEXT:+--cost-summary-text "$COST_SUMMARY_TEXT"}
 ```
 
 #### 5. Push render (when notify policy allows)
@@ -809,6 +863,18 @@ fi
 ```
 
 Push format: `{intent[:80]} · {outcome[:60]} · Next: {next.label}` (from JSON).
+
+#### 5.5. Discord render (when notify policy + webhook URL allow)
+
+```bash
+if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end --channel discord)" = yes ]; then
+  DISCORD_TITLE="${RUN_BRIEF_INTENT:-z-harness run}"
+  DISCORD_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/notify-discord.sh" "$DISCORD_TITLE" "$DISCORD_BODY" || true
+fi
+```
+
+Discord uses enriched embed format — includes cost summary when available (not identical to PushNotification content). Non-fatal on failure.
 
 #### 6. Hard gate — `--require` before deregister
 
@@ -1065,13 +1131,6 @@ If there are running follow-up consumer entries, **halt** — do not proceed wit
    ```
    <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
 
-   **Initialize compaction counters** (immediately after emitting `run_start`, before any task dispatch):
-   ```bash
-   tasks_since_pause=0
-   pause_clock_start="$(date +%s)"
-   ```
-   These are in-memory counters that live only for the duration of this invocation. Both reset to these initial values on every re-invocation (i.e. after a `compaction_pause` exit and `/clear`). There is no persistent state to read — TASKS.md's `[x]` count is the durable record; the counters are ephemeral rate-limiters for the current window only.
-
    Then log provider resolution (once per run, guarded against re-emission):
    ```bash
    IMPL_RUN="${IMPL_RUN:-$(date -u +%Y%m%dT%H%M%SZ)-implement}"   # already set in Phase 0.0; reuse the same run id
@@ -1239,12 +1298,22 @@ bash "$RB_SH" finalize --run "$RUN"
 
 `finalize` classifies terminal status (via `run-status.sh` when unset), resolves artifact/fallback env, auto-downgrades to **lite** when no artifact exists on a full-profile brief (see halt-safe below), validates against `docs/llm/run-brief-contract.json`, and emits `run_brief_end`.
 
+#### 3.5. Cost summary render → stdout (non-fatal, before chat)
+
+```bash
+COST_SUMMARY_TEXT=""
+COST_RENDERER="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-cost-summary.py"
+if [ -f "$COST_RENDERER" ] && [ -f "$CURRENT_ARCHIVE_DIR/events.jsonl" ]; then
+  COST_SUMMARY_TEXT="$(python3 "$COST_RENDERER" "$CURRENT_ARCHIVE_DIR/events.jsonl" 2>/dev/null || true)"
+fi
+```
+
 #### 4. Chat render → user (replaces hand-authored "Brief summary")
 
 Print rendered chat text to the user — **do not** write independent summary prose:
 
 ```bash
-python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat ${COST_SUMMARY_TEXT:+--cost-summary-text "$COST_SUMMARY_TEXT"}
 ```
 
 #### 5. Push render (when notify policy allows)
@@ -1257,6 +1326,18 @@ fi
 ```
 
 Push format: `{intent[:80]} · {outcome[:60]} · Next: {next.label}` (from JSON).
+
+#### 5.5. Discord render (when notify policy + webhook URL allow)
+
+```bash
+if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end --channel discord)" = yes ]; then
+  DISCORD_TITLE="${RUN_BRIEF_INTENT:-z-harness run}"
+  DISCORD_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/notify-discord.sh" "$DISCORD_TITLE" "$DISCORD_BODY" || true
+fi
+```
+
+Discord uses enriched embed format — includes cost summary when available (not identical to PushNotification content). Non-fatal on failure.
 
 #### 6. Hard gate — `--require` before deregister
 
@@ -1325,34 +1406,25 @@ High-context runs (many tasks, long wall time) accumulate orchestrator context p
 - `Z_SESSION_CURATOR_TIMEOUT_S` (default `120`) — per-attempt timeout for the context-curator dispatch. Set to `0` to disable curator dispatch entirely (falls back to today's plain pause notice without SESSION.md curation).
 - `Z_SESSION_MAX_CHARS` (default `28000`) — character ceiling for the SESSION.md body; passed to the curator as its overflow collapse threshold.
 
-**Counters (orchestrator-side, in-memory; reset on every pause and on re-invocation):**
-- `tasks_since_pause`: incremented when a task transitions to `[x]` (done). **Not** incremented on retries (a single task with 3 retries counts as 1 completion). **Not** incremented when a task is rolled back to `[ ]` after a halt or abandon. A task surfaced as a halt and explicitly deferred by the user (left `[ ]` with a `**Note:**`) also does not increment — only `[x]` transitions count.
-- `pause_clock_start`: epoch seconds, set at run start and reset on every pause.
-
-**Trigger check (batch-settle only):** At the end of each batch — after all in-flight task tracks reach terminal status, after the atomic TASKS.md write, after the `batch_done` event is emitted, and after all halt signals from the batch have been surfaced and resolved or deferred by the user — evaluate:
-
-```
-Z_IMPLEMENT_PAUSE_TASKS="${Z_IMPLEMENT_PAUSE_TASKS:-5}"
-Z_IMPLEMENT_PAUSE_MINUTES="${Z_IMPLEMENT_PAUSE_MINUTES:-30}"
-NOW="$(date +%s)"
-WALL_MINUTES=$(( (NOW - pause_clock_start) / 60 ))
-
-if [ "$Z_IMPLEMENT_PAUSE_TASKS" -gt 0 ] && [ "$tasks_since_pause" -ge "$Z_IMPLEMENT_PAUSE_TASKS" ]; then
-    TRIGGER="task_count"
-elif [ "$Z_IMPLEMENT_PAUSE_MINUTES" -gt 0 ] && [ "$WALL_MINUTES" -ge "$Z_IMPLEMENT_PAUSE_MINUTES" ]; then
-    TRIGGER="wall_time"
-else
-    TRIGGER=""
-fi
-```
-
-**On trigger:** count the remaining `[ ]` tasks in `$TASKS_FILE` as `PENDING_REMAINING`. Emit:
+**Trigger check (batch-settle only):** At the end of each batch — after all in-flight task tracks reach terminal status, after the atomic TASKS.md write, after the `batch_done` event is emitted, and after all halt signals from the batch have been surfaced and resolved or deferred by the user — run the deterministic check script:
 
 ```bash
-bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" compaction_pause \
-  "$(printf '{"trigger":"%s","tasks_since_pause":%d,"wall_minutes_since_pause":%d,"pending_remaining":%d}' \
-     "$TRIGGER" "$tasks_since_pause" "$WALL_MINUTES" "$PENDING_REMAINING")"
+Z_IMPLEMENT_PAUSE_TASKS="${Z_IMPLEMENT_PAUSE_TASKS:-5}"
+Z_IMPLEMENT_PAUSE_MINUTES="${Z_IMPLEMENT_PAUSE_MINUTES:-30}"
+export Z_HARNESS_PLAN_DIR="$BASE"
+export Z_HARNESS_AGENT="${Z_HARNESS_AGENT:-claude}"
+export Z_IMPLEMENT_PAUSE_TASKS
+export Z_IMPLEMENT_PAUSE_MINUTES
+
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/check-compaction.sh"
+COMPACTION_TRIGGERED=$?
 ```
+
+`check-compaction.sh` reads `[x]` count from `$BASE/TASKS.md`, reads/writes a `.last-compaction-check` state file in `$BASE`, and evaluates both thresholds. It emits the `compaction_pause` event on trigger (exit code 1) and exits 0 otherwise. No LLM-side counters exist — the script is the sole evaluator.
+
+If `COMPACTION_TRIGGERED` is 0: continue to the next outer loop iteration.
+
+If `COMPACTION_TRIGGERED` is 1: the script has already emitted `compaction_pause`. Proceed to curator dispatch below.
 
 **Context-curator dispatch (synchronous, before push-notify).** After emitting `compaction_pause`, and before the push-notify fires, dispatch the context-curator — unless `Z_SESSION_CURATOR_TIMEOUT_S=0` (curator disabled → skip to the plain push-notify below).
 
@@ -1467,8 +1539,11 @@ fi
 # but CURATOR_REASON="not_run" in that case.
 if [ "$CURATOR_SUCCESS" -eq 1 ]; then
   # SUCCESS PATH — curator ran successfully and hashes match.
+  # Write handoff.json for Hermes consumption (best-effort, non-fatal)
+  export Z_HARNESS_PLAN_DIR Z_HARNESS_SLUG Z_HARNESS_AGENT
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/write-handoff.sh" || true
   # Emit /clear & resume push-notify (hard pause).
-  push_notify "Compaction breakpoint: <N> tasks completed (or <M> min wall). <K> pending tasks remain. Run \`/clear\`, then re-invoke \`/z-implement-all\` to resume from TASKS.md. Use \`/compact\` instead if you need chat history for debugging."
+  push_notify "Compaction breakpoint: <N> tasks completed (or <M> min wall). <K> pending tasks remain. Run \`/clear\`, then re-invoke \`/z-implement-all\` to resume from TASKS.md. Or run \`/handoff\` to write a handoff artifact for a different agent. Use \`/compact\` instead if you need chat history for debugging."
 else
   # FAILURE/DISABLED PATH — curator disabled (TIMEOUT_S=0), or failed both attempts,
   # or hash mismatch between curator return and current TASKS.md done-set.
@@ -1481,14 +1556,14 @@ else
   # Emphatic push-notify — NEVER suggests /clear; always /compact-or-continue.
   # When curator was disabled (TIMEOUT_S=0), this is the plain pause notice per today's behavior.
   if [ "${Z_SESSION_CURATOR_TIMEOUT_S}" -gt 0 ]; then
-    push_notify "Context flush failed (\`${CURATOR_REASON}\`). SESSION.md not fully updated. Continue \`/z-implement-all\` as-is (history retained), or \`/compact\` to reduce context now — if the failure was reading events.jsonl, \`/compact\` may be affected too. Retrying next breakpoint."
+    push_notify "Context flush failed (\`${CURATOR_REASON}\`). SESSION.md not fully updated. Continue \`/z-implement-all\` as-is (history retained), or \`/compact\` to reduce context now. Or run \`/handoff\` to write a handoff artifact for a different agent. Retrying next breakpoint."
   else
-    push_notify "Compaction breakpoint: <N> tasks completed (or <M> min wall). <K> pending tasks remain. Run \`/clear\`, then re-invoke \`/z-implement-all\` to resume from TASKS.md. Use \`/compact\` instead if you need chat history for debugging."
+    push_notify "Compaction breakpoint: <N> tasks completed (or <M> min wall). <K> pending tasks remain. Run \`/clear\`, then re-invoke \`/z-implement-all\` to resume from TASKS.md. Or run \`/handoff\` to write a handoff artifact for a different agent. Use \`/compact\` instead if you need chat history for debugging."
   fi
 fi
 ```
 
-Finalize the loop cleanly: do **not** dispatch any new task. **Do not run Run Brief finalize** on this exit (`skip_brief_on: compaction_pause`). Exit with status 0. On the next `/z-implement-all` invocation, counters reset — if the user ran `/clear` (success path only), context is fresh and a new window is correct. If they did not `/clear`, they chose to forgo the breakpoint's benefit; the run proceeds with a new window.
+Finalize the loop cleanly: do **not** dispatch any new task. **Do not run Run Brief finalize** on this exit (`skip_brief_on: compaction_pause`). Exit with status 0. The script's `.last-compaction-check` state file has been updated, so the next invocation starts with a fresh window. If the user ran `/clear` (success path only), context is fresh. If they did not `/clear`, they chose to forgo the breakpoint's benefit; the run proceeds with residual context.
 
 **No trigger:** continue to the next outer loop iteration (step 1).
 
@@ -2451,8 +2526,7 @@ print(json.dumps({
    Initialize all three boolean flags to `0` at task-track start (step 3, alongside `task_start`), before any dispatch. Do NOT set them on pauses (`needs_clarification`, `decision_needed` before resolution) — only on events that actually reach the `[x]` gate.
 
 4. If notify.level is `all` (see [docs/human/config.md](docs/human/config.md)): push-notify per-task. (For `approval_only` default: only notify on halts.)
-5. Increment `tasks_since_pause` by 1 (this task reached `[x]`; retries and rollbacks do not count).
-6. **Batch-settle compaction check (once per batch, after all tracks finish).** When all parallel tracks in this outer iteration have completed (all have reached terminal status, the atomic TASKS.md write is done, `batch_done` is emitted, and all halt signals have been surfaced and resolved or deferred by the user), run the trigger check documented in the "Compaction breakpoint policy" section above. If a trigger fires: emit the `compaction_pause` event, push-notify, and exit cleanly with no new dispatch. If no trigger fires: continue to step 1.
+5. **Batch-settle compaction check (once per batch, after all tracks finish).** When all parallel tracks in this outer iteration have completed (all have reached terminal status, the atomic TASKS.md write is done, `batch_done` is emitted, and all halt signals have been surfaced and resolved or deferred by the user), run the trigger check documented in the "Compaction breakpoint policy" section above (the `check-compaction.sh` invocation). If exit code 1: follow the curator-dispatch and push-notify protocol in that section, then exit cleanly with no new dispatch. If exit code 0: continue to step 1.
 
    If pending tasks remain but the loop exits due to a compaction trigger, the Finalize section is **skipped** — the push notification text is sufficient, and Finalize's "no more eligible tasks" summary would be misleading (tasks are not blocked, just paused).
 
@@ -2594,12 +2668,22 @@ bash "$RB_SH" finalize --run "$RUN"
 
 `finalize` classifies terminal status (via `run-status.sh` when unset), resolves artifact/fallback env, auto-downgrades to **lite** when no artifact exists on a full-profile brief (see halt-safe below), validates against `docs/llm/run-brief-contract.json`, and emits `run_brief_end`.
 
+#### 3.5. Cost summary render → stdout (non-fatal, before chat)
+
+```bash
+COST_SUMMARY_TEXT=""
+COST_RENDERER="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-cost-summary.py"
+if [ -f "$COST_RENDERER" ] && [ -f "$CURRENT_ARCHIVE_DIR/events.jsonl" ]; then
+  COST_SUMMARY_TEXT="$(python3 "$COST_RENDERER" "$CURRENT_ARCHIVE_DIR/events.jsonl" 2>/dev/null || true)"
+fi
+```
+
 #### 4. Chat render → user (replaces hand-authored "Brief summary")
 
 Print rendered chat text to the user — **do not** write independent summary prose:
 
 ```bash
-python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat ${COST_SUMMARY_TEXT:+--cost-summary-text "$COST_SUMMARY_TEXT"}
 ```
 
 #### 5. Push render (when notify policy allows)
@@ -2612,6 +2696,18 @@ fi
 ```
 
 Push format: `{intent[:80]} · {outcome[:60]} · Next: {next.label}` (from JSON).
+
+#### 5.5. Discord render (when notify policy + webhook URL allow)
+
+```bash
+if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end --channel discord)" = yes ]; then
+  DISCORD_TITLE="${RUN_BRIEF_INTENT:-z-harness run}"
+  DISCORD_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/notify-discord.sh" "$DISCORD_TITLE" "$DISCORD_BODY" || true
+fi
+```
+
+Discord uses enriched embed format — includes cost summary when available (not identical to PushNotification content). Non-fatal on failure.
 
 #### 6. Hard gate — `--require` before deregister
 
@@ -2854,12 +2950,22 @@ bash "$RB_SH" finalize --run "$RUN"
 
 `finalize` classifies terminal status (via `run-status.sh` when unset), resolves artifact/fallback env, auto-downgrades to **lite** when no artifact exists on a full-profile brief (see halt-safe below), validates against `docs/llm/run-brief-contract.json`, and emits `run_brief_end`.
 
+#### 3.5. Cost summary render → stdout (non-fatal, before chat)
+
+```bash
+COST_SUMMARY_TEXT=""
+COST_RENDERER="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-cost-summary.py"
+if [ -f "$COST_RENDERER" ] && [ -f "$CURRENT_ARCHIVE_DIR/events.jsonl" ]; then
+  COST_SUMMARY_TEXT="$(python3 "$COST_RENDERER" "$CURRENT_ARCHIVE_DIR/events.jsonl" 2>/dev/null || true)"
+fi
+```
+
 #### 4. Chat render → user (replaces hand-authored "Brief summary")
 
 Print rendered chat text to the user — **do not** write independent summary prose:
 
 ```bash
-python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat ${COST_SUMMARY_TEXT:+--cost-summary-text "$COST_SUMMARY_TEXT"}
 ```
 
 #### 5. Push render (when notify policy allows)
@@ -2872,6 +2978,18 @@ fi
 ```
 
 Push format: `{intent[:80]} · {outcome[:60]} · Next: {next.label}` (from JSON).
+
+#### 5.5. Discord render (when notify policy + webhook URL allow)
+
+```bash
+if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end --channel discord)" = yes ]; then
+  DISCORD_TITLE="${RUN_BRIEF_INTENT:-z-harness run}"
+  DISCORD_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/notify-discord.sh" "$DISCORD_TITLE" "$DISCORD_BODY" || true
+fi
+```
+
+Discord uses enriched embed format — includes cost summary when available (not identical to PushNotification content). Non-fatal on failure.
 
 #### 6. Hard gate — `--require` before deregister
 
