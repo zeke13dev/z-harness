@@ -82,6 +82,23 @@
       "type": "string",
       "enum": ["spec", "plan", "user-concern", "code-review", "axiom-derived"],
       "description": "Provenance of this invariant. spec = mined from SPEC.md invariant lines. plan = derived from PLAN.md design decisions. user-concern = explicitly stated by user. code-review = surfaced by reviewer. axiom-derived = extracted from an axiom record."
+    },
+    "sighting_count": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "How many review runs have produced findings matching this invariant's failure_class. Incremented by z-review-all Phase 5.5 when a finding matches an existing invariant. Absent or 0 means never sighted (declared but not yet observed)."
+    },
+    "last_sighting": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "default": null,
+      "description": "ISO-8601 timestamp of most recent sighting by a review run. null if never sighted."
+    },
+    "anchor_module": {
+      "type": ["string", "null"],
+      "default": null,
+      "description": "Repo-relative path to the primary module where this invariant was violated. null if the invariant was declared (not yet observed in a review finding). Set by z-review-all Phase 5.5 on first match."
     }
   }
 }

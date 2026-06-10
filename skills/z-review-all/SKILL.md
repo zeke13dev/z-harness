@@ -516,58 +516,145 @@ Diff stats: <X files, Y additions, Z deletions>
 
 Apply the **one-reason-it-might-be-wrong** rule from `/z-plan` to every finding before listing it. Push back on weak findings.
 
-## Phase 5.5 — Invariant extraction from review findings
+## Phase 5.5 — Invariant + error-point extraction from review findings
 
-**Gate:** Only runs if `docs/INVARIANTS.json` exists AND `$BASE/archive/$RRUN/findings.md` contains findings with severity ≥ major.
+**Gate:** Runs if EITHER `docs/INVARIANTS.json` or `docs/ERROR_POINTS.json` exists, AND `$BASE/archive/$RRUN/findings.md` contains findings with severity ≥ major. If only ERROR_POINTS.json exists, skip invariant extraction but still run error-point extraction. If only INVARIANTS.json exists, run invariant extraction only.
 
-Goal: Extract invariant candidates from review findings and prompt the user to promote them to `INVARIANTS.json`. Turns real-world review discoveries into durable per-repo invariants.
+**Rate-limiting constants:**
+```bash
+Z_HARNESS_ERROR_POINT_MAX_NEW=10      # max new error points per review run
+Z_HARNESS_ERROR_POINT_PRUNE_DAYS=90   # idle days before eligible error point is pruned
+Z_HARNESS_ERROR_POINT_PRUNE_MAX_FREQ=3  # max frequency for pruning eligibility
+SIGHTINGS_RING_BUFFER_MAX=20          # max sightings entries per error point
+```
+
+Goal: (a) Match review findings against existing invariants to increment `sighting_count`/`last_sighting`/`anchor_module`, (b) match review findings against existing error points by deterministic `pattern_signature`, (c) extract NEW invariant candidates from unmatched findings, (d) create NEW error point candidates from unmatched findings. Turns real-world review discoveries into durable per-repo data for `/z-test`.
 
 **Procedure:**
 
 1. **Read structured findings.** Parse `$BASE/archive/$RRUN/findings.md`. Collect all findings with severity ≥ major (blocker or major). Skip minor findings and observations.
 
-2. **Read existing invariants.** Read `docs/INVARIANTS.json`. Collect all current invariant `id` + `description` pairs.
+2. **Read existing registries.**
+   - If `docs/INVARIANTS.json` exists: load all invariants (`id`, `description`, `tags`, `failure_class`, `sighting_count`, `last_sighting`, `anchor_module`, `severity`).
+   - If `docs/ERROR_POINTS.json` exists: load all error points — both active AND archived (`ep_id`, `pattern`, `pattern_signature`, `anchor_module`, `failure_class`, `severity`, `frequency`, `sightings`, `tests_targeting`, `archived`, `archived_at`).
 
-3. **Dispatch Haiku subagent for candidate extraction.** One-shot call. Prompt structure:
+3. **Pre-Haiku deterministic pattern_signature matching (orchestrator computes).** For each finding with severity ≥ major:
+
+   a. Extract `module_path` from the finding's evidence (first file path cited).
+   b. Truncate to first 3 path segments: `"/".join(module_path.split("/")[:3])` (e.g., `skills/z-test/SKILL.md` → `skills/z-test`).
+   c. Normalize `finding_class`: lowercase, strip all punctuation (keep alphanumerics and spaces).
+   d. Compute the deterministic `pattern_signature` using SHA-256 of the concatenation:
+      `sha256(module_path_prefix :: normalized_finding_class :: severity)[:16]`
+      where:
+      - `module_path_prefix` = first 3 path segments of the finding's evidence file
+      - `normalized_finding_class` = the finding's `failure_class` (or `finding_class`) text, lowercased and punctuation-stripped
+      - `severity` = the finding's severity as-is (`blocker`, `major`, or `minor`)
+      ```python
+      import hashlib
+      sig = hashlib.sha256(f"{module_prefix}::{finding_class_norm}::{severity}".encode()).hexdigest()[:16]
+      ```
+   e. Look up this `pattern_signature` in existing ERROR_POINTS.json entries (both active AND archived).
+
+   **Deterministic match on ACTIVE error point:**
+   - Increment `frequency` (capped: max +1 per error point per review run — if already incremented this run, skip).
+   - Append to `sightings[]` (ring-buffer: prepend, keep newest 20, drop oldest).
+   - Update `last_seen` to current timestamp.
+   - Update `anchor_module` if the new finding's module_path differs (track pattern migration).
+   - Mark finding as `matched` — exclude from Haiku prompt.
+
+   **Deterministic match on ARCHIVED error point (resurrection):**
+   - Set `archived: false`, `archived_at: null`.
+   - Reset `frequency` to 1.
+   - Reset `sightings` to a single entry for this finding.
+   - Update `last_seen`, `first_seen`, `anchor_module`.
+   - Mark finding as `matched` — exclude from Haiku prompt.
+
+   Findings WITHOUT deterministic matches proceed to the Haiku subagent.
+
+4. **Dispatch Haiku subagent for LLM matching + candidate extraction.** One-shot call. The Haiku only sees findings NOT already deterministically matched. Prompt structure:
 
    ```
-   MODE: extract-invariant-candidates
+   MODE: extract-invariants-and-error-points
 
-   You have N review findings (severity ≥ major) from a /z-review-all run.
-   For each finding, draft an invariant candidate that WOULD HAVE caught it.
+   You have N unmatched review findings (severity ≥ major) from a /z-review-all run.
+   For each finding, determine if it matches an existing invariant OR existing error point,
+   OR if neither, draft a new candidate.
 
-   Review findings:
-   <list each finding with: severity, class, description, evidence>
+   Review findings (unmatched):
+   <list each finding: severity, class, description, evidence, module_path>
 
-   Existing invariants (skip if one already covers the finding):
-   <list each existing invariant: id, description, tags>
+   Existing invariants (for matching by failure_class similarity):
+   <list: id, description, failure_class, sighting_count, last_sighting, severity>
 
-   For each finding WITHOUT a covering invariant, output a JSON object:
-   {
-     "finding_ref": "<short reference>",
-     "invariant_description": "<one-line description>",
-     "tags": ["tag1", "tag2"],
-     "failure_class": "<what violation looks like>",
-     "severity": "blocker" | "major"
-   }
+   Existing error points (for fuzzy matching — deterministic matches already handled):
+   <list: ep_id, pattern, pattern_signature, failure_class, frequency>
 
-   Return a JSON array.
+   Return a JSON object with three arrays:
+
+   1. invariant_matches: findings that match an EXISTING invariant.
+      [{"finding_ref": "<short ref>", "invariant_id": "inv_NNN", "match_type": "llm"}]
+
+   2. invariant_candidates: findings WITHOUT a covering invariant — draft new invariant.
+      [{"finding_ref": "<short ref>", "invariant_description": "<1-line>", "tags": ["t1","t2"],
+        "failure_class": "<violation description>", "severity": "blocker"|"major"}]
+
+   3. error_point_candidates: findings that don't match any invariant — draft new error point.
+      [{"finding_ref": "<short ref>", "pattern": "<1-line pattern>",
+        "failure_class": "<violation description>", "severity": "blocker"|"major"}]
    ```
 
-4. **Batch user approval.** Present the extracted candidates:
+5. **Write processing (orchestrator after Haiku returns).**
+
+   **5a. Apply invariant matches (from Haiku's `invariant_matches`):**
+   - For each match, increment `sighting_count` on the invariant (capped: max +1 per invariant per review run).
+   - Update `last_sighting` to current timestamp.
+   - Set `anchor_module` from the finding's module_path (first match wins per run).
+
+   **5b. Apply invariant candidates (from Haiku's `invariant_candidates`):**
+   - Unchanged from prior behavior. Assign `id` sequentially (`inv_NNN`).
+   - Present for user approval (step 6).
+
+   **5c. Apply error-point candidates (from Haiku's `error_point_candidates`):**
+   - For each candidate, compute `pattern_signature` deterministically (same formula as step 3).
+   - Check the signature against ALL existing error points (Haiku may propose a candidate that should have matched deterministically — deduplicate silently, increment existing entry instead).
+   - Cap new entries at `Z_HARNESS_ERROR_POINT_MAX_NEW` (default 10). Overflow candidates are logged to `$BASE/archive/$RRUN/error-point-overflow.log` and dropped for this run.
+   - For each new entry:
+     - Assign `ep_id` sequentially starting after highest existing ID.
+     - Set `frequency: 1`, `first_seen: <now>`, `last_seen: <now>`.
+     - Set `sightings: [{run_id, finding_id, module_path}]`.
+     - Compute `novelty_score = 1 / (1 + frequency)` = 0.5.
+     - Set `archived: false`, `last_test_pass: null`, `last_test_fail: null`, `tests_targeting: []`.
+
+   **5d. Atomic write + validate both registries:**
+   - Write INVARIANTS.json (tmpfile → flush → fsync → os.replace()).
+   - Validate: `python3 scripts/validate-invariants.py --file docs/INVARIANTS.json`.
+   - Write ERROR_POINTS.json (same atomic discipline).
+   - Validate: `python3 scripts/validate-error-points.py --file docs/ERROR_POINTS.json`.
+
+   **5e. Pruning (after all writes):**
+   - Scan ERROR_POINTS.json for entries where ALL of:
+     - `tests_targeting` has ≥ 1 entry (a test was written for this pattern)
+     - `last_seen` is older than `Z_HARNESS_ERROR_POINT_PRUNE_DAYS` days ago (default 90)
+     - `frequency ≤ Z_HARNESS_ERROR_POINT_PRUNE_MAX_FREQ` (default 3 — don't prune hot patterns)
+   - For eligible entries: set `archived: true`, `archived_at: <now>`.
+   - Log pruned count. Archived entries remain in the matching index for resurrection.
+
+6. **Batch user approval.** Present the extracted invariant candidates (unchanged from prior behavior):
 
    > "N invariant candidates extracted from review findings. Promote to INVARIANTS.json?"
    > - (a) Accept all — write candidates and approve automatically
    > - (b) Let me pick — show each candidate with accept/skip
    > - (c) Skip all — discard candidates
 
-5. **On accept-all (a):** Write all candidates to INVARIANTS.json using atomic write discipline (tmpfile → write → flush → fsync → os.replace()). Validate with `scripts/validate-invariants.py`. Regenerate INVARIANTS.md. Log to archive.
+   Note: error-point candidates are auto-written without user approval (they're empirical, not declared). The user gate applies only to invariant candidates (declared truths require human judgment).
 
-6. **On let-me-pick (b):** Show each candidate individually with accept/skip. After all decisions, write the accepted subset to INVARIANTS.json atomically.
+7. **On accept-all (a):** Write all invariant candidates to INVARIANTS.json using atomic write discipline. Validate with `scripts/validate-invariants.py`. Regenerate INVARIANTS.md. Log to archive.
 
-7. **On skip-all (c):** Log "Invariant extraction skipped by user" to archive log. Continue.
+8. **On let-me-pick (b):** Show each candidate individually with accept/skip. After all decisions, write the accepted subset to INVARIANTS.json atomically.
 
-8. **Hard rule:** Extraction failure MUST NOT halt the review pipeline. If phase errors (bad JSON from Haiku, file read failure), log the error to `$BASE/archive/$RRUN/invariant-extraction-error.log` and continue to Phase 6.
+9. **On skip-all (c):** Log "Invariant extraction skipped by user" to archive log. Continue.
+
+10. **Hard rule (preserved and extended):** Extraction failure MUST NOT halt the review pipeline. If any phase errors (bad JSON from Haiku, file read failure, validation failure), log the error to `$BASE/archive/$RRUN/invariant-extraction-error.log` and continue to Phase 6. Error-point extraction failures are also soft phases — log and continue. The review pipeline is ALWAYS the priority.
 
 ## Phase 6 — Promote findings to review tasks
 
@@ -936,9 +1023,11 @@ This phase fires once per run, after Phase 6, before the session ends. It is a s
 
 ## Behavioral rules
 
-- **Review-mining backfill:** After every `/z-review-all` run, extract new invariant candidates from findings (severity >= major) and offer them for user approval via Phase 5.5 invariant extraction. If `docs/INVARIANTS.json` does not exist, skip extraction (log `invariant_store_missing`).
-- **Findings classification:** Each extracted invariant candidate must include `source: "review"` and the plan slug from which it was extracted. Candidates extracted from review findings carry stronger provenance than those inferred from spec alone.
+- **Review-mining backfill:** After every `/z-review-all` run, extract new invariant candidates AND error-point candidates from findings (severity >= major) via Phase 5.5. If `docs/INVARIANTS.json` does not exist, skip invariant extraction (log `invariant_store_missing`). If `docs/ERROR_POINTS.json` does not exist, skip error-point extraction (log `error_point_store_missing`). At least one registry must exist for Phase 5.5 to run.
+- **Findings classification:** Each extracted invariant candidate must include `source: "review"` and the plan slug from which it was extracted. Candidates extracted from review findings carry stronger provenance than those inferred from spec alone. Error-point candidates are auto-accepted (empirical data doesn't require human review).
 - **One-reason pushback:** If the reviewer pushes back on a candidate invariant (i.e., a finding was flagged as potentially incorrect or the extraction over-fits), document the one-line reason in the candidate's rejection log. This preserves institutional memory about why a candidate was refused.
+- **Error-point rate-limiting:** A single error point's `frequency` increments at most once per review run, even if multiple findings match its `pattern_signature`. New error points created per run are capped at `Z_HARNESS_ERROR_POINT_MAX_NEW` (default 10).
+- **Deterministic matching first:** Pattern signature matching (sha256 of module_prefix::finding_class::severity) runs before any LLM dispatch. This is zero-token, zero-latency, perfectly reproducible. Only unmatched findings are sent to Haiku for fuzzy matching.
 
 ## Hard rules
 
@@ -946,9 +1035,10 @@ This phase fires once per run, after Phase 6, before the session ends. It is a s
 - **Never** run this on an incomplete plan without explicit user override.
 - **Never** trust a single LLM's finding without pushback — list "one reason this might be wrong" before treating a finding as actionable.
 - **Always** archive the cumulative diff and both consultant transcripts under `$BASE/archive/$RRUN/`.
-- **Invariant extraction must never halt the pipeline.** If Phase 5.5 fails for any reason (bad JSON, file read error, subagent crash), log the error to `$BASE/archive/$RRUN/invariant-extraction-error.log` and continue to Phase 6. The review pipeline is the priority.
-- **Always validate INVARIANTS.json after writing.** After any Phase 5.5 write to INVARIANTS.json, run `scripts/validate-invariants.py --file $REPO/docs/INVARIANTS.json`. If validation fails, log the failure and roll back the edit (restore from backup), but do NOT block the pipeline — continue to Phase 6.
-- **INVARIANTS.json writes must be atomic.** Always write to tempfile → fsync → os.replace(). Never write directly to the target path.
+- **Invariant and error-point extraction must never halt the pipeline.** If Phase 5.5 fails for any reason (bad JSON, file read error, subagent crash, validation failure), log the error to `$BASE/archive/$RRUN/invariant-extraction-error.log` and continue to Phase 6. The review pipeline is the priority.
+- **Always validate INVARIANTS.json after writing.** After any Phase 5.5 write to INVARIANTS.json, run `scripts/validate-invariants.py --file docs/INVARIANTS.json`. If validation fails, log the failure and roll back the edit (restore from backup), but do NOT block the pipeline — continue to Phase 6.
+- **Always validate ERROR_POINTS.json after writing.** After any Phase 5.5 write to ERROR_POINTS.json, run `scripts/validate-error-points.py --file docs/ERROR_POINTS.json`. If validation fails, log the failure and roll back the edit, but do NOT block the pipeline.
+- **Both registries must use atomic writes.** Always write to tempfile → fsync → os.replace(). Never write directly to the target path. This applies to both INVARIANTS.json and ERROR_POINTS.json.
 - **Phase 5.5 is gated on findings.md content.** If findings.md has no severity ≥ major entries, skip Phase 5.5 entirely — no Haiku dispatch, no AskUserQuestion.
 
 ## What this command is NOT for

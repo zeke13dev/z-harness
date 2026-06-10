@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "generated_at": "2026-06-10T22:00:00Z",
+  "error_points": [
+    {
+      "ep_id": "ep_001",
+      "pattern": "Bare except clause silently swallows errors in hermes-execute",
+      "pattern_signature": "99d936403f29fc6d",
+      "anchor_module": "scripts/hermes-execute.py",
+      "failure_class": "Silent error suppression \u2014 bare except: pass discards all exception types including KeyboardInterrupt and SystemExit",
+      "severity": "minor",
+      "frequency": 1,
+      "first_seen": "2026-06-10T22:00:00Z",
+      "last_seen": "2026-06-10T22:00:00Z",
+      "sightings": [
+        {
+          "run_id": "init_bootstrap",
+          "finding_id": "bootstrap_001",
+          "module_path": "scripts/hermes-execute.py"
+        }
+      ],
+      "novelty_score": 0.5,
+      "last_test_pass": null,
+      "last_test_fail": null,
+      "tests_targeting": [
+        "TEST-001"
+      ],
+      "archived": false
+    },
+    {
+      "ep_id": "ep_002",
+      "pattern": "TODO comments flag relay stall with no follow-up task or tracking issue",
+      "pattern_signature": "a2b1140a46072f6c",
+      "anchor_module": "scripts/hermes-execute.py",
+      "failure_class": "Unresolved TODO \u2014 task stall or merge conflict handling deferred without tracking mechanism",
+      "severity": "minor",
+      "frequency": 1,
+      "first_seen": "2026-06-10T22:00:00Z",
+      "last_seen": "2026-06-10T22:00:00Z",
+      "sightings": [
+        {
+          "run_id": "init_bootstrap",
+          "finding_id": "bootstrap_002",
+          "module_path": "scripts/hermes-execute.py"
+        }
+      ],
+      "novelty_score": 0.5,
+      "last_test_pass": null,
+      "last_test_fail": null,
+      "tests_targeting": [
+        "TEST-002"
+      ],
+      "archived": false
+    },
+    {
+      "ep_id": "ep_003",
+      "pattern": "Error output silently discarded via || true in test scripts",
+      "pattern_signature": "d273e518368a92ca",
+      "anchor_module": "scripts/test_external_base_smoke.sh",
+      "failure_class": "Silent test failure \u2014 || true suppresses non-zero exits from grep and other commands in test assertions",
+      "severity": "minor",
+      "frequency": 1,
+      "first_seen": "2026-06-10T22:00:00Z",
+      "last_seen": "2026-06-10T22:00:00Z",
+      "sightings": [
+        {
+          "run_id": "init_bootstrap",
+          "finding_id": "bootstrap_003",
+          "module_path": "scripts/test_external_base_smoke.sh"
+        }
+      ],
+      "novelty_score": 0.5,
+      "last_test_pass": null,
+      "last_test_fail": null,
+      "tests_targeting": [
+        "TEST-003"
+      ],
+      "archived": false
+    }
+  ]
+}

@@ -176,8 +176,11 @@ routing and answering directly, err toward routing.
 - **`/z-plan-split <topic>`** — Pre-emptive scope splitter. Fans a big topic
   into N narrow cluster-planner subagents in parallel. Use when a topic is too
   large for a single `/z-plan`.
-- **`/z-test`** — Semantic test-case planner. Reads SPEC/PLAN/TASKS, drafts
-  test cases for real semantic bugs, cross-LLM consult, writes TESTS.md.
+- **`/z-test`** — Dual-source semantic test-case planner. ERROR_POINTS.json
+  (empirical regression hardening from review findings) + INVARIANTS.json
+  (preventive coverage from declared design truths). Reads SPEC/PLAN/TASKS,
+  drafts non-trivial test cases, cross-LLM consult, writes TESTS.md.
+  Modes: --mode dual (default), invariant, error-points.
 
 ### Implementation
 

@@ -272,6 +272,20 @@ def validate_invariants_file(file_path):
                 if validation_err:
                     constraint_errors.append(f"{prefix}: fixture_defaults does not satisfy fixture_schema: {validation_err}")
 
+        # --- Optional fields added by z-test error-points redesign ---
+        sighting_count = inv.get('sighting_count')
+        if sighting_count is not None:
+            if not isinstance(sighting_count, int) or sighting_count < 0:
+                constraint_errors.append(f"{prefix}: sighting_count must be a non-negative integer (got {sighting_count})")
+
+        last_sighting = inv.get('last_sighting')
+        if last_sighting is not None and not isinstance(last_sighting, str):
+            constraint_errors.append(f"{prefix}: last_sighting must be an ISO-8601 string or null (got {type(last_sighting).__name__})")
+
+        anchor_module = inv.get('anchor_module')
+        if anchor_module is not None and not isinstance(anchor_module, str):
+            constraint_errors.append(f"{prefix}: anchor_module must be a string or null (got {type(anchor_module).__name__})")
+
     if constraint_errors:
         return 2, constraint_errors
 
