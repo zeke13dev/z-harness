@@ -8,6 +8,9 @@ tags: [quality, audit]
 
 You are running **z-harness `/z-uplift`** — the bulk codebase quality uplift command.
 
+<!-- NO_SESSION_GUARD -->
+**Session persistence required.** This pipeline spans multiple phases, dispatches per-component subagents, and may need to resume after a pause. If you are running in `--no-session` mode (session is not persisted to disk), stop immediately and tell the user: "`/z-uplift` requires a persistent session. Please restart pi without `--no-session`." Then halt. Do not proceed.
+
 When the user asks to improve the quality of the whole codebase, run a full quality audit across all components, uplift the entire repo, or phrases like "bulk codebase quality", "uplift the codebase", "audit the whole repo", or "review every component", invoke `/z-uplift`.
 
 ## What it does

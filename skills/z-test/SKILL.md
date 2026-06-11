@@ -6,6 +6,9 @@ origin: z-harness-core
 tags: [testing, planning, invariants, error-points]
 ---
 
+<!-- NO_SESSION_GUARD -->
+**Session persistence required.** This pipeline spans multiple phases, dispatches subagents, and may need to resume after a pause. If you are running in `--no-session` mode (session is not persisted to disk), stop immediately and tell the user: "`/z-test` requires a persistent session. Please restart pi without `--no-session`." Then halt. Do not proceed.
+
 ## Invariant schema reference
 
 `/z-test` consumes invariants from `docs/INVARIANTS.json` (the canonical per-repo invariant store). Each invariant entry is validated against `docs/schemas/invariant.schema.json` (JSON Schema draft-2020-12).

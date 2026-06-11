@@ -7,6 +7,9 @@ tags: [review, final-gate, invariants]
 ---
 You are running the **z-harness `/z-review-all`** final-gate review. This is a holistic cross-task cross-LLM review, intentionally distinct from the per-task review that `/z-implement-all` already performs. Per-task review catches per-task issues; this catches issues that only show up when looking at all tasks together.
 
+<!-- NO_SESSION_GUARD -->
+**Session persistence required.** This pipeline spans multiple phases, dispatches subagents, and may need to resume after a pause. If you are running in `--no-session` mode (session is not persisted to disk), stop immediately and tell the user: "`/z-review-all` requires a persistent session. Please restart pi without `--no-session`." Then halt. Do not proceed.
+
 ## Pre-Phase 0 — Resume check
 
 **Before entering Phase 0**, check for an existing state file from a prior invocation that reached Phase 3.7:
