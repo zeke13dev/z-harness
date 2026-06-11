@@ -99,6 +99,7 @@ class SessionStatus:
     tasks_total: int = 0
     current_task: Optional[str] = None
     updated_at: Optional[str] = None     # ISO 8601 UTC
+    slug: Optional[str] = None           # Plan identifier — lets a scan confirm which plan this file belongs to
 
 
 def parse_session_status(path: str) -> Optional[SessionStatus]:
@@ -114,6 +115,7 @@ def parse_session_status(path: str) -> Optional[SessionStatus]:
             tasks_total=data.get("tasks_total", 0),
             current_task=data.get("current_task"),
             updated_at=data.get("updated_at"),
+            slug=data.get("slug"),
         )
     except (FileNotFoundError, json.JSONDecodeError, KeyError):
         return None
