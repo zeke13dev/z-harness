@@ -1,20 +1,34 @@
 #!/usr/bin/env python3
 """
-estimate-tokens.py — LLM-free pre-run token-cost estimator for z-harness commands.
+estimate-tokens.py — LLM-free pre-run token-cost estimator + subagent cost model.
 
 CLI:
+  # Pre-run estimate (legacy positional form — backward-compatible):
   estimate-tokens.py <command> [--dispatch KEY=N ...] [--metrics PATH]
                      [--profiles PATH] [--tail-lines N] [--min-samples N]
 
-Stdout: a single JSON envelope (see SPEC "Output envelope").
-Stderr: all diagnostics/warnings.
-Exit 0 on any producible envelope; exit non-zero only if <command> arg is missing.
+  # Explicit estimate subcommand:
+  estimate-tokens.py estimate <command> [--dispatch KEY=N ...] [...]
 
-Tiers:
+  # Per-host, per-subagent_type cost breakdown from logged subagent_call events:
+  estimate-tokens.py subagent-costs [--metrics PATH] [--tail-lines N] [--json]
+
+Estimate subcommand stdout: a single JSON envelope (see SPEC "Output envelope").
+Subagent-costs stdout: human-readable table (default) or JSON (with --json).
+Stderr: all diagnostics/warnings.
+Exit 0 on any producible output; exit non-zero only if required arg is missing.
+
+Estimate tiers:
   1. Static  — reads profile range from token-cost-profiles.json.
   2. Dispatch — adds Σ multipliers[key]*N for each --dispatch KEY=N given.
   3. Empirical — parent-run rollup from metrics.jsonl (bounded, race-safe,
                  completion-filtered).
+
+Subagent-costs model (SOLID — pricing lives here, telemetry stays raw):
+  Reads subagent_call events from metrics.jsonl; weights prompt_chars vs
+  response_chars by per-model input/output rates; groups by host + subagent_type.
+  Honest limitation: native Claude subagents expose chars, not token counts.
+  provider_input_tokens/provider_output_tokens are used when present (external CLIs).
 """
 
 from __future__ import annotations
@@ -115,15 +129,38 @@ def _default_metrics_path() -> Path:
     """Resolve default metrics.jsonl path.
 
     Priority:
-      1. $Z_HARNESS_BASE_DIR/metrics.jsonl if env set and path exists.
-      2. <repo>/z-harness/metrics.jsonl otherwise.
+      1. $Z_HARNESS_BASE_DIR/metrics.jsonl if env set.
+      2. Canonical external base via `bash scripts/plan-path.sh base_dir` (subprocess
+         from repo root) — this is the repo-wide base that receives ALL events including
+         subagent_call events after the Phase-D external-base flip.
+      3. <repo>/z-harness/metrics.jsonl as legacy fallback if subprocess fails.
     """
     base_dir_env = os.environ.get("Z_HARNESS_BASE_DIR", "")
     if base_dir_env:
         candidate = Path(base_dir_env) / "metrics.jsonl"
         return candidate  # return even if absent — caller handles missing file
 
+    # Resolve the repo-wide base via the canonical plan-path.sh helper.
+    # This is the external base (e.g. ~/.local/state/z-harness/<repo-id>/) that
+    # holds the single repo-wide metrics.jsonl after the Phase-D external-base flip.
+    # There is NO per-plan metrics.jsonl; all events including subagent_call land here.
     repo = _repo_root()
+    try:
+        plan_path_script = repo / "scripts" / "plan-path.sh"
+        result = subprocess.run(
+            ["bash", str(plan_path_script), "base_dir"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=str(repo),
+        )
+        base_str = result.stdout.strip()
+        if result.returncode == 0 and base_str:
+            return Path(base_str) / "metrics.jsonl"
+    except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError, ValueError):
+        pass
+
+    # Legacy fallback: in-repo z-harness/ path (pre-external-base layout).
     return repo / "z-harness" / "metrics.jsonl"
 
 
@@ -240,6 +277,278 @@ def _percentile(sorted_values: list[int], pct: float) -> float:
         return float(sorted_values[-1])
     frac = idx - lo
     return sorted_values[lo] * (1 - frac) + sorted_values[hi] * frac
+
+
+# ---------------------------------------------------------------------------
+# Subagent cost model — per-model input/output rates
+#
+# SOLID: pricing knowledge lives ONLY here (read-side cost model).
+# Telemetry stays raw (prompt_chars / response_chars kept separate per D9).
+#
+# Rates are in USD per 1M tokens (industry standard).
+# The chars→tokens conversion uses chars/4 (rough approximation for native
+# Claude subagents where real token counts are unavailable).  This is labeled
+# as a char-based estimate wherever it surfaces in output.
+#
+# When provider_input_tokens / provider_output_tokens are present in the event
+# (external CLIs that print a usage line), those are used directly instead
+# of the chars/4 approximation.
+# ---------------------------------------------------------------------------
+
+# Default rates: USD per 1M tokens.
+# Format: {model_label: {"input": float, "output": float}}
+# Output is typically ~5× input price (D9 rationale).
+# Haiku/flash are cheap; Sonnet is mid; Opus is expensive.
+_DEFAULT_MODEL_RATES: dict[str, dict[str, float]] = {
+    # Claude family
+    "haiku":        {"input": 0.25,   "output": 1.25},
+    "sonnet":       {"input": 3.00,   "output": 15.00},
+    "opus":         {"input": 15.00,  "output": 75.00},
+    # Aliases / variant names
+    "claude-haiku":  {"input": 0.25,  "output": 1.25},
+    "claude-sonnet": {"input": 3.00,  "output": 15.00},
+    "claude-opus":   {"input": 15.00, "output": 75.00},
+    # OpenAI / Codex family
+    "gpt-4o":       {"input": 2.50,   "output": 10.00},
+    "gpt-4o-mini":  {"input": 0.15,   "output": 0.60},
+    "gpt-4":        {"input": 30.00,  "output": 60.00},
+    "gpt-3.5":      {"input": 0.50,   "output": 1.50},
+    # Google / Gemini family
+    "gemini":        {"input": 0.35,  "output": 1.05},
+    "gemini-flash":  {"input": 0.075, "output": 0.30},
+    "gemini-pro":    {"input": 1.25,  "output": 5.00},
+    # DeepSeek
+    "deepseek":      {"input": 0.14,  "output": 0.28},
+    "deepseek-flash":{"input": 0.07,  "output": 0.14},
+}
+
+# Fallback rate when model label is unknown.
+_FALLBACK_RATE: dict[str, float] = {"input": 3.00, "output": 15.00}
+
+_CHARS_PER_TOKEN: float = 4.0
+
+
+def _get_model_rates(model_label: str | None) -> dict[str, float]:
+    """Return {input, output} USD/1M-token rates for a model label.
+
+    Matching is case-insensitive; partial prefix match is attempted when exact
+    match fails.  Falls back to _FALLBACK_RATE for unknown models.
+    """
+    if not model_label:
+        return _FALLBACK_RATE
+
+    # Exact match (case-insensitive)
+    normalized = model_label.lower().strip()
+    if normalized in _DEFAULT_MODEL_RATES:
+        return _DEFAULT_MODEL_RATES[normalized]
+
+    # Prefix match: find the longest key that is a prefix of the label.
+    best_key = ""
+    for key in _DEFAULT_MODEL_RATES:
+        if normalized.startswith(key) and len(key) > len(best_key):
+            best_key = key
+    if best_key:
+        return _DEFAULT_MODEL_RATES[best_key]
+
+    return _FALLBACK_RATE
+
+
+def _compute_event_cost(event: dict) -> dict:
+    """Compute input/output token counts and estimated cost for a subagent_call event.
+
+    Returns a dict with:
+      input_tokens  — int (from provider_input_tokens if present, else prompt_chars/4)
+      output_tokens — int (from provider_output_tokens if present, else response_chars/4)
+      est_input_usd — float (input_tokens / 1e6 * input_rate)
+      est_output_usd — float (output_tokens / 1e6 * output_rate)
+      est_total_usd — float (est_input_usd + est_output_usd)
+      token_source  — "provider" | "chars"  (label per SPEC honest-limitation requirement)
+    """
+    def _safe_int(v: object) -> int | None:
+        if v is None:
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
+    model_label: str | None = event.get("subagent_model")
+    rates = _get_model_rates(model_label)
+
+    # Prefer real provider tokens when available (external CLIs that print usage).
+    provider_in = _safe_int(event.get("provider_input_tokens"))
+    provider_out = _safe_int(event.get("provider_output_tokens"))
+
+    if provider_in is not None and provider_out is not None:
+        input_tokens = provider_in
+        output_tokens = provider_out
+        token_source = "provider"
+    else:
+        # Fall back to chars/4 approximation (native Claude subagents).
+        pc = _safe_int(event.get("prompt_chars"))
+        rc = _safe_int(event.get("response_chars"))
+        input_tokens = int((pc or 0) / _CHARS_PER_TOKEN)
+        output_tokens = int((rc or 0) / _CHARS_PER_TOKEN)
+        token_source = "chars"
+
+    est_input_usd = (input_tokens / 1_000_000.0) * rates["input"]
+    est_output_usd = (output_tokens / 1_000_000.0) * rates["output"]
+    est_total_usd = est_input_usd + est_output_usd
+
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "est_input_usd": est_input_usd,
+        "est_output_usd": est_output_usd,
+        "est_total_usd": est_total_usd,
+        "token_source": token_source,
+    }
+
+
+def subagent_costs(
+    metrics_path: Path,
+    tail_lines: int = 5000,
+) -> dict:
+    """Compute per-host, per-subagent_type cost breakdown from metrics.jsonl.
+
+    Returns a dict with shape:
+      {
+        "by_host": {
+          "<host>": {
+            "<subagent_type>": {
+              "calls": int,
+              "input_tokens": int,
+              "output_tokens": int,
+              "est_input_usd": float,
+              "est_output_usd": float,
+              "est_total_usd": float,
+              "token_source_mix": {"provider": int, "chars": int},
+            }
+          }
+        },
+        "totals": {
+          "calls": int,
+          "input_tokens": int,
+          "output_tokens": int,
+          "est_input_usd": float,
+          "est_output_usd": float,
+          "est_total_usd": float,
+        },
+        "has_provider_tokens": bool,   # True if any event had real provider tokens
+        "events_read": int,
+        "subagent_call_events": int,
+      }
+
+    Returns an empty-result dict if metrics_path is absent or contains no
+    subagent_call events.
+    """
+    empty: dict = {
+        "by_host": {},
+        "totals": {
+            "calls": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "est_input_usd": 0.0,
+            "est_output_usd": 0.0,
+            "est_total_usd": 0.0,
+        },
+        "has_provider_tokens": False,
+        "events_read": 0,
+        "subagent_call_events": 0,
+    }
+
+    if not metrics_path.exists():
+        return empty
+
+    try:
+        with open(metrics_path, encoding="utf-8", errors="replace") as fh:
+            raw_lines = fh.readlines()
+    except OSError as exc:
+        print(
+            f"estimate-tokens: error reading metrics file {metrics_path}: {exc}",
+            file=sys.stderr,
+        )
+        return empty
+
+    lines = raw_lines[-tail_lines:] if len(raw_lines) > tail_lines else raw_lines
+
+    # Parse events
+    events_read = 0
+    by_host: dict[str, dict[str, dict]] = {}
+    totals: dict[str, float | int] = {
+        "calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "est_input_usd": 0.0,
+        "est_output_usd": 0.0,
+        "est_total_usd": 0.0,
+    }
+    has_provider_tokens = False
+    subagent_call_count = 0
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+
+        events_read += 1
+
+        if obj.get("kind") != "subagent_call":
+            continue
+
+        subagent_call_count += 1
+        host: str = obj.get("host", "unknown") or "unknown"
+        subagent_type: str = obj.get("subagent_type", "unknown") or "unknown"
+
+        cost = _compute_event_cost(obj)
+
+        if cost["token_source"] == "provider":
+            has_provider_tokens = True
+
+        # Accumulate into by_host[host][subagent_type]
+        if host not in by_host:
+            by_host[host] = {}
+        if subagent_type not in by_host[host]:
+            by_host[host][subagent_type] = {
+                "calls": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "est_input_usd": 0.0,
+                "est_output_usd": 0.0,
+                "est_total_usd": 0.0,
+                "token_source_mix": {"provider": 0, "chars": 0},
+            }
+
+        bucket = by_host[host][subagent_type]
+        bucket["calls"] += 1
+        bucket["input_tokens"] += cost["input_tokens"]
+        bucket["output_tokens"] += cost["output_tokens"]
+        bucket["est_input_usd"] += cost["est_input_usd"]
+        bucket["est_output_usd"] += cost["est_output_usd"]
+        bucket["est_total_usd"] += cost["est_total_usd"]
+        bucket["token_source_mix"][cost["token_source"]] += 1
+
+        # Accumulate totals
+        totals["calls"] = int(totals["calls"]) + 1  # type: ignore[assignment]
+        totals["input_tokens"] = int(totals["input_tokens"]) + cost["input_tokens"]  # type: ignore
+        totals["output_tokens"] = int(totals["output_tokens"]) + cost["output_tokens"]  # type: ignore
+        totals["est_input_usd"] = float(totals["est_input_usd"]) + cost["est_input_usd"]  # type: ignore
+        totals["est_output_usd"] = float(totals["est_output_usd"]) + cost["est_output_usd"]  # type: ignore
+        totals["est_total_usd"] = float(totals["est_total_usd"]) + cost["est_total_usd"]  # type: ignore
+
+    return {
+        "by_host": by_host,
+        "totals": totals,
+        "has_provider_tokens": has_provider_tokens,
+        "events_read": events_read,
+        "subagent_call_events": subagent_call_count,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -614,16 +923,18 @@ def _parse_dispatch(values: list[str]) -> list[tuple[str, int]]:
     return result
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="estimate-tokens.py",
-        description="LLM-free pre-run token-cost estimator for z-harness commands.",
+def _build_estimate_parser(subparsers: argparse.Action) -> None:  # type: ignore[type-arg]
+    """Add the 'estimate' subcommand (default mode — pre-run token estimate)."""
+    ep = subparsers.add_parser(
+        "estimate",
+        help="Pre-run token estimate for a command (default subcommand).",
+        description="LLM-free pre-run token-cost estimate for a z-harness command.",
     )
-    parser.add_argument(
+    ep.add_argument(
         "command",
         help="Command to estimate (e.g. z-research, /z-research, research).",
     )
-    parser.add_argument(
+    ep.add_argument(
         "--dispatch",
         metavar="KEY=N",
         nargs="+",
@@ -634,7 +945,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "Adds multipliers[KEY]*N tokens per entry."
         ),
     )
-    parser.add_argument(
+    ep.add_argument(
         "--metrics",
         metavar="PATH",
         default=None,
@@ -643,7 +954,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "Default: $Z_HARNESS_BASE_DIR/metrics.jsonl or <repo>/z-harness/metrics.jsonl."
         ),
     )
-    parser.add_argument(
+    ep.add_argument(
         "--profiles",
         metavar="PATH",
         default=None,
@@ -652,34 +963,230 @@ def _build_parser() -> argparse.ArgumentParser:
             "Default: scripts/token-cost-profiles.json relative to this script."
         ),
     )
-    parser.add_argument(
+    ep.add_argument(
         "--tail-lines",
         metavar="N",
         type=int,
         default=int(os.environ.get("Z_HARNESS_COST_TAIL_LINES", "2000")),
         help="Max lines to read from metrics.jsonl tail (default 2000).",
     )
-    parser.add_argument(
+    ep.add_argument(
         "--min-samples",
         metavar="N",
         type=int,
         default=int(os.environ.get("Z_HARNESS_COST_MIN_SAMPLES", "3")),
         help="Minimum historical samples for empirical tier to fire (default 3).",
     )
+
+
+def _build_subagent_costs_parser(subparsers: argparse.Action) -> None:  # type: ignore[type-arg]
+    """Add the 'subagent-costs' subcommand (per-host, per-type cost breakdown)."""
+    sp = subparsers.add_parser(
+        "subagent-costs",
+        help=(
+            "Per-host, per-subagent_type cost breakdown from logged subagent_call events. "
+            "Weights prompt_chars vs response_chars by per-model input/output rates."
+        ),
+        description=(
+            "Read subagent_call events from metrics.jsonl and compute per-host, "
+            "per-subagent_type cost estimates using separated input/output rate weighting.\n\n"
+            "HONEST LIMITATION: native Claude Agent() subagents do not expose real token "
+            "counts to the orchestrator — only dispatch-prompt size and returned-text size "
+            "are observable. prompt_chars/response_chars are exact character counts; "
+            "real provider_*_tokens appear only for external CLIs that print a usage line. "
+            "Estimates labeled 'chars' are char-based approximations (chars/4 → tokens)."
+        ),
+    )
+    sp.add_argument(
+        "--metrics",
+        metavar="PATH",
+        default=None,
+        help=(
+            "Path to metrics.jsonl. "
+            "Default: $Z_HARNESS_BASE_DIR/metrics.jsonl or <repo>/z-harness/metrics.jsonl."
+        ),
+    )
+    sp.add_argument(
+        "--tail-lines",
+        metavar="N",
+        type=int,
+        default=int(os.environ.get("Z_HARNESS_COST_TAIL_LINES", "5000")),
+        help="Max lines to read from metrics.jsonl tail (default 5000).",
+    )
+    sp.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        help="Output raw JSON instead of the human-readable table.",
+    )
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the top-level argument parser.
+
+    Supports two modes:
+      1. Legacy positional mode: estimate-tokens.py <command> [opts]
+         (positional arg that doesn't match a subcommand — treated as 'estimate <command>')
+      2. Subcommand mode: estimate-tokens.py estimate <command> [opts]
+                          estimate-tokens.py subagent-costs [opts]
+    """
+    parser = argparse.ArgumentParser(
+        prog="estimate-tokens.py",
+        description=(
+            "LLM-free pre-run token-cost estimator for z-harness commands. "
+            "Also provides per-host, per-subagent_type cost breakdown via 'subagent-costs'."
+        ),
+    )
+    subparsers = parser.add_subparsers(dest="subcommand")
+    _build_estimate_parser(subparsers)
+    _build_subagent_costs_parser(subparsers)
+    # Legacy positional (backwards-compat): first arg is command name, not a subcommand
+    parser.add_argument(
+        "--metrics",
+        metavar="PATH",
+        default=None,
+        help="Path to metrics.jsonl (used when no subcommand is given).",
+    )
+    parser.add_argument(
+        "--profiles",
+        metavar="PATH",
+        default=None,
+        help="Path to token-cost-profiles.json (used when no subcommand is given).",
+    )
+    parser.add_argument(
+        "--dispatch",
+        metavar="KEY=N",
+        nargs="+",
+        action="append",
+        default=[],
+        help="Dispatch multiplier (used when no subcommand is given).",
+    )
+    parser.add_argument(
+        "--tail-lines",
+        metavar="N",
+        type=int,
+        default=int(os.environ.get("Z_HARNESS_COST_TAIL_LINES", "2000")),
+        help="Max lines to read (used when no subcommand is given).",
+    )
+    parser.add_argument(
+        "--min-samples",
+        metavar="N",
+        type=int,
+        default=int(os.environ.get("Z_HARNESS_COST_MIN_SAMPLES", "3")),
+        help="Minimum historical samples (used when no subcommand is given).",
+    )
     return parser
+
+
+def _format_subagent_costs_table(result: dict) -> str:
+    """Format the subagent_costs result as a human-readable table for z-stats.
+
+    Returns a multi-line string with per-host, per-subagent_type cost breakdown,
+    with honest-limitation labeling where provider tokens are absent.
+    """
+    lines: list[str] = []
+
+    if result["subagent_call_events"] == 0:
+        lines.append("Subagent cost breakdown: (no subagent_call events in metrics)")
+        return "\n".join(lines)
+
+    has_provider = result["has_provider_tokens"]
+    token_note = (
+        "(real tokens)"
+        if has_provider
+        else "(char-based estimate: chars/4 → tokens; no native-Claude token counts available)"
+    )
+
+    lines.append(f"Subagent cost breakdown {token_note}")
+    lines.append(
+        f"  Events: {result['subagent_call_events']} subagent_call "
+        f"(of {result['events_read']} total read)"
+    )
+    lines.append("")
+
+    by_host = result["by_host"]
+    for host in sorted(by_host.keys()):
+        lines.append(f"  Host: {host}")
+        type_data = by_host[host]
+        for stype in sorted(type_data.keys()):
+            bucket = type_data[stype]
+            src_mix = bucket["token_source_mix"]
+            src_label = ""
+            if src_mix.get("provider", 0) > 0 and src_mix.get("chars", 0) > 0:
+                src_label = " [mixed: provider+chars]"
+            elif src_mix.get("provider", 0) > 0:
+                src_label = " [real tokens]"
+            else:
+                src_label = " [char-est]"
+
+            lines.append(
+                f"    {stype:<22} calls={bucket['calls']:<4} "
+                f"in={bucket['input_tokens']:>8} out={bucket['output_tokens']:>8} tok  "
+                f"est=${bucket['est_total_usd']:.4f}"
+                f"{src_label}"
+            )
+        lines.append("")
+
+    totals = result["totals"]
+    lines.append(
+        f"  TOTAL                     calls={totals['calls']:<4} "
+        f"in={totals['input_tokens']:>8} out={totals['output_tokens']:>8} tok  "
+        f"est=${totals['est_total_usd']:.4f}"
+    )
+    lines.append(
+        f"    (input: ${totals['est_input_usd']:.4f}  "
+        f"output: ${totals['est_output_usd']:.4f})"
+    )
+
+    return "\n".join(lines)
 
 
 def main() -> None:
     parser = _build_parser()
 
-    # Require the positional; if missing, print usage to stderr and exit 1.
-    if len(sys.argv) < 2 or sys.argv[1].startswith("--"):
+    # Legacy positional mode: first arg is not a recognized subcommand and
+    # does not start with '--'.  Treat it as 'estimate <command>'.
+    # This preserves backward-compatibility with callers that do:
+    #   estimate-tokens.py z-research [--dispatch ...]
+    if (
+        len(sys.argv) >= 2
+        and not sys.argv[1].startswith("--")
+        and sys.argv[1] not in ("estimate", "subagent-costs")
+    ):
+        # Inject 'estimate' subcommand for legacy callers.
+        sys.argv.insert(1, "estimate")
+
+    if len(sys.argv) < 2:
         parser.print_usage(sys.stderr)
         sys.exit(1)
 
     args = parser.parse_args()
 
-    # Resolve paths
+    if args.subcommand == "subagent-costs":
+        metrics_path = (
+            Path(args.metrics)
+            if args.metrics
+            else _default_metrics_path()
+        )
+        result = subagent_costs(metrics_path, tail_lines=args.tail_lines)
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            print(_format_subagent_costs_table(result))
+        return
+
+    # Default: 'estimate' subcommand (or legacy positional mode).
+    if args.subcommand not in ("estimate", None):
+        parser.print_usage(sys.stderr)
+        sys.exit(1)
+
+    # For the estimate subcommand, prefer the subcommand-specific args; fall
+    # back to top-level args for legacy positional callers.
+    command = getattr(args, "command", None)
+    if command is None:
+        parser.print_usage(sys.stderr)
+        sys.exit(1)
+
     profiles_path = (
         Path(args.profiles)
         if args.profiles
@@ -695,13 +1202,16 @@ def main() -> None:
     flat_dispatch: list[str] = [item for sublist in args.dispatch for item in sublist]
     dispatch_pairs = _parse_dispatch(flat_dispatch)
 
+    tail_lines = getattr(args, "tail_lines", 2000)
+    min_samples = getattr(args, "min_samples", 3)
+
     envelope = estimate(
-        raw_command=args.command,
+        raw_command=command,
         dispatch_pairs=dispatch_pairs,
         profiles_path=profiles_path,
         metrics_path=metrics_path,
-        tail_lines=args.tail_lines,
-        min_samples=args.min_samples,
+        tail_lines=tail_lines,
+        min_samples=min_samples,
     )
 
     # Stdout is pure JSON — one object, no trailing noise.

@@ -759,6 +759,70 @@
       "last_updated": "2026-06-10T20:40:34Z",
       "confidence": "high",
       "summary": "System-level behavioral invariants \u2014 permanent per-repo truths consumed by /z-test for behavioral test generation."
+    },
+    {
+      "slug": "reviewer-capture",
+      "source_files": [
+        "agents/reviewer.md",
+        "agents/consultant-primary.md",
+        "agents/consultant-secondary.md"
+      ],
+      "last_updated": "2026-06-10",
+      "confidence": "high",
+      "depends_on": [
+        "agents",
+        "providers-registry",
+        "subagent-telemetry"
+      ],
+      "consumed_by": [
+        "commands",
+        "subagent-telemetry"
+      ],
+      "summary": "File-based review capture via codex -o flag. Capability-probed per-PPID sentinel (greps `codex exec --help` for `output-last-message`); -o appended only for codex provider (providers.json unchanged). Full review written to archive/tasks/<id>/review-cycle<N>.md as source of truth; orchestrator receives only verdict+counts+artifact-path. Explicit fallback to stdout capture emits review_capture_fallback {id,cycle,reason} (consultants add role field). response_chars = captured-review size (honest), not discarded transcript. Non-codex path byte-identical to today."
+    },
+    {
+      "slug": "subagent-telemetry",
+      "source_files": [
+        "scripts/detect-host.sh",
+        "scripts/log-event.sh",
+        "scripts/log-subagent.sh",
+        "scripts/estimate-tokens.py",
+        "scripts/test_subagent_logging.sh",
+        "commands/z-stats.md"
+      ],
+      "last_updated": "2026-06-10",
+      "confidence": "high",
+      "depends_on": [
+        "scripts",
+        "cost-estimation"
+      ],
+      "consumed_by": [
+        "agents",
+        "commands",
+        "reviewer-capture",
+        "impl-pre-review"
+      ],
+      "summary": "Per-subagent cost telemetry. detect-host.sh prints claude|pi|codex|cursor|antigravity (default claude, positive-marker overrides only, never unknown/empty). host stamped on EVERY event by log-event.sh (lazy: Z_HARNESS_HOST env var else detect-host.sh once, cached to /tmp/zh-host-$PPID). log-subagent.sh emits subagent_call {host,role,subagent_type,subagent_model,prompt_chars,response_chars,provider_input_tokens?,provider_output_tokens?}; non-fatal (always exits 0). HONEST LIMITATION: for native Claude Agent() subagents prompt_chars/response_chars are exact character counts not token counts; real provider_*_tokens only from external CLIs printing a usage line. D9: prompt_chars and response_chars kept SEPARATE (no collapsed est_tokens). Drift-guard CI: test_subagent_logging.sh greps Agent( sites, fails if no paired log-subagent.sh call or # no-subagent-log opt-out. Read-side: estimate-tokens.py subagent-costs weights input vs output rates, groups by host+subagent_type, labels char-est vs real-tokens."
+    },
+    {
+      "slug": "impl-pre-review",
+      "source_files": [
+        "commands/z-implement-all.md",
+        "scripts/audit-preview-misses.sh",
+        "agents/pre-reviewer.md",
+        "agents/complexity-classifier.md"
+      ],
+      "last_updated": "2026-06-10",
+      "confidence": "high",
+      "depends_on": [
+        "agents",
+        "commands",
+        "subagent-telemetry"
+      ],
+      "consumed_by": [
+        "commands"
+      ],
+      "summary": "Opt-in pre-review gate-down at the per-task implement gate. Z_HARNESS_IMPL_PRE_REVIEW default 0 (SHIPS INERT; knob-off is byte-identical to today). When on: Step 6.P1 tier-drift re-check via complexity-classifier (must strip cached **Complexity:** line; drift-up emits tier_drift_detected and forces codex). Step 6.P2 gate-down (low-tier only): Flash pre-reviewer dispatch; CLEAN verdict skips codex + emits review_gated_down; flagged verdict escalates to codex with Flash findings prepended as FLASH_PREPEND. Medium/high always go to codex unchanged. Flash unavailable emits pre_review_skipped + falls through to codex (fail-safe toward more thorough review). COST-INVERSION CAVEAT: Flash-on-all + codex-on-subset can invert cost vs codex-on-all. EVIDENCE GATE: knob is undocumented-as-recommended until scripts/audit-preview-misses.sh shows acceptable Flash false-negative rate."
     }
   ]
 }

@@ -161,6 +161,7 @@ Prints all configuration knobs with their current effective value, source layer,
 | `Z_HARNESS_PLANS_DIR` | Override plans directory path |
 | `Z_HARNESS_EXPLAIN_RESOLUTION` | Set to `1` to print resolution trace on stderr (same as `--explain`) |
 | `Z_HARNESS_MAX_EXPLORE` | Maximum explore depth |
+| `Z_HARNESS_IMPL_PRE_REVIEW` | Set to `1` to enable the opt-in Flash pre-reviewer gate-down at the per-task implement gate in `/z-implement-all`. **Default `0` (off); ships inert.** When on: runs a DeepSeek Flash pre-reviewer on low-tier tasks before codex; CLEAN verdict skips codex (emits `review_gated_down`); flagged verdict escalates to codex with Flash findings prepended. Includes a tier-drift re-check via `complexity-classifier` (strips cached `**Complexity:**` stamp). **Cost-inversion caveat:** Flash-on-all + codex-on-subset can invert total cost vs codex-on-all. Enable only after reviewing `scripts/audit-preview-misses.sh` results. Undocumented-as-recommended until the evidence gate demonstrates acceptable Flash false-negative rate. See `docs/human/impl-pre-review.md`. |
 
 ---
 

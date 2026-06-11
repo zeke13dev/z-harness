@@ -18,18 +18,23 @@ You implement **exactly one task** from the task block the orchestrator passes y
 - **`tests_md_path`** (path, may be empty) — `$BASE/TESTS.md` if `/z-test` was run for this plan. If the task block contains a `**Tests:** TEST-001, TEST-004, ...` line, **read TESTS.md** and grep for each listed `## TEST-NNN` heading. Each TEST-NNN entry specifies an `Invariant:`, a `Failure class:`, a `Target file:`, a `Setup:`, and an `Assertion:`. You must produce actual test code at `Target file:` that implements the entry's `Assertion:` against the production code you're writing in this same task. The test must fail if a code change violates the named invariant / failure class — not just pass on the current implementation. If the target file does not yet exist in a recognized test directory, create it following the repo's existing test conventions (look at neighboring tests for fixture patterns).
 - Optional: **prior-attempt reviewer feedback** if this is a retry. On retry the orchestrator dispatches you with `Agent(model="opus")` directly — your in-prompt header will say `RETRY v<N>` and your effective model is already Opus; apply Opus-level care to the fix.
 - **`**Complexity:** <tier>`** line in the task block — the orchestrator stamps this at plan-time (via the `complexity-classifier` Haiku subagent) and uses it to pick your model on the `Agent(...)` call: `low|medium` → Sonnet, `high` → Opus. Users may also hand-author or hand-edit this line as an override. You do not need to act on the tier yourself — the orchestrator has already chosen your model — but if your in-prompt header indicates `high`, treat it as confirmation that the task warrants harder reasoning.
+- **`subagent_model: <label>`** — the orchestrator passes the resolved model label (`sonnet` or `opus`) as a named input. Include this value in the `implement_start` and `implement_end` event payloads (see step 0).
 
 ## Procedure
 
 0. **Emit an `implement_start` event** before doing anything else, and an `implement_end` event before returning. Use the helper:
 
 ```bash
+# SUBAGENT_MODEL is the value passed by the orchestrator as `subagent_model: <label>` in the prompt.
+# Read it from the caller input. Default to "sonnet" if absent (safe fallback).
+SUBAGENT_MODEL="<subagent_model from caller input, or 'sonnet' if absent>"
+
 TOKEN="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" start "tasks/<task-id>" implement \
-  "$(printf '{"id":"%s","retry":%d}' "<task-id>" "<0 on first try, N on retry>")")"
+  "$(printf '{"id":"%s","retry":%d,"subagent_model":"%s"}' "<task-id>" "<0 on first try, N on retry>" "$SUBAGENT_MODEL")")"
 # ... do the work below ...
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$TOKEN" \
-  "$(printf '{"id":"%s","retry":%d,"status":"%s","files_changed_count":%d}' \
-     "<task-id>" "<retry>" "<status>" "$N_CHANGED")"
+  "$(printf '{"id":"%s","retry":%d,"status":"%s","files_changed_count":%d,"subagent_model":"%s"}' \
+     "<task-id>" "<retry>" "<status>" "$N_CHANGED" "$SUBAGENT_MODEL")"
 ```
 
 This populates `implement_*` rows in `metrics.jsonl` so post-run analysis can compute implementer wall_ms, retry rate, and files-changed distribution.

@@ -11,6 +11,8 @@ Companion LLM-tier JSON lives at `../llm/<slug>.json`.
 | Concept | Confidence | Source files | Summary |
 |---|---|---|---|
 | [agents](./agents.md) | high | `agents/auditor.md`, `agents/cluster-planner.md`, `agents/consultant-primary.md` | Scrutinizes codebase targets across correctness/perf/cleanliness/design. |
+| [reviewer-capture](./reviewer-capture.md) | high | `agents/reviewer.md`, `agents/consultant-primary.md`, `agents/consultant-secondary.md` | File-based review capture via codex `-o` flag; capability-probed per-PPID; full review archived; honest `response_chars`; fallback emits `review_capture_fallback`. |
+| [impl-pre-review](./impl-pre-review.md) | high | `commands/z-implement-all.md`, `agents/pre-reviewer.md`, `agents/complexity-classifier.md` | Opt-in Flash pre-reviewer gate-down (`Z_HARNESS_IMPL_PRE_REVIEW`, default 0, ships inert). Cost-inversion caveat; evidence-gated before recommended. |
 
 ## commands
 
@@ -29,6 +31,7 @@ Companion LLM-tier JSON lives at `../llm/<slug>.json`.
 | Concept | Confidence | Source files | Summary |
 |---|---|---|---|
 | [scripts](./scripts.md) | high | `scripts/block-dangerous-git.sh`, `scripts/log-event.sh`, `scripts/log-phase.sh`, `scripts/regenerate-memories-flat.py` | Appends standard JSON events to run and global logs. New: `block-dangerous-git.sh` PreToolUse hook — classifies git commands, blocks rewrite verbs when upstream-reachable, blanket-blocks working-tree-destructive verbs, supports `Z_HARNESS_GIT_GUARDRAILS_OVERRIDE=1`. |
+| [subagent-telemetry](./subagent-telemetry.md) | high | `scripts/detect-host.sh`, `scripts/log-event.sh`, `scripts/log-subagent.sh`, `scripts/estimate-tokens.py` | Per-subagent cost telemetry. `detect-host.sh` (claude/pi/codex/cursor/antigravity); `host` on every event; `subagent_call` event with separate `prompt_chars`/`response_chars` (D9); chars-not-tokens limitation for native Claude; drift-guard CI. |
 
 ## skills
 

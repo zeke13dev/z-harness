@@ -1,0 +1,45 @@
+{
+  "concept": "impl-pre-review",
+  "last_updated": "2026-06-10",
+  "covers_spec": "reviewer-cost-telemetry/SPEC.md Change 3",
+  "source_file": [
+    "commands/z-implement-all.md",
+    "scripts/audit-preview-misses.sh",
+    "agents/pre-reviewer.md",
+    "agents/complexity-classifier.md"
+  ],
+  "confidence": "high",
+  "entry_points": [
+    {"file": "commands/z-implement-all.md", "line": 1280, "symbol": "Z_HARNESS_IMPL_PRE_REVIEW block", "kind": "module", "summary": "Knob description, cost-inversion caveat, NO-OP fallthrough guarantee; PRE_REVIEW_GATED_DOWN/FLASH_PREPEND initialized unconditionally before the block"},
+    {"file": "commands/z-implement-all.md", "line": 1303, "symbol": "Step 6.P1 tier-drift re-check", "kind": "module", "summary": "Strips cached **Complexity:** line; dispatches complexity-classifier to derive LIVE_TIER; drift-up emits tier_drift_detected and forces codex"},
+    {"file": "commands/z-implement-all.md", "line": 1348, "symbol": "Step 6.P2 gate-down", "kind": "module", "summary": "Low-tier only; probes Flash provider; CLEAN verdict skips codex (review_gated_down); MAJORS/BLOCKERS escalates to codex with FLASH_PREPEND; provider unavailable falls through to codex"},
+    {"file": "scripts/audit-preview-misses.sh", "line": 1, "symbol": "evidence gate", "kind": "module", "summary": "Samples low-tier tasks where Flash gated codex out; runs codex retroactively; records Flash false-negative rate — must show acceptable rate before knob is recommended"},
+    {"file": "agents/pre-reviewer.md", "line": 1, "symbol": "pre-reviewer", "kind": "module", "summary": "Flash pre-reviewer agent; emits **VERDICT:** CLEAN|MAJORS_FOUND|BLOCKERS_FOUND; focused on quick blockers/majors only"}
+  ],
+  "depends_on": [
+    "agents",
+    "commands",
+    "subagent-telemetry"
+  ],
+  "consumed_by": [
+    "commands"
+  ],
+  "invariants": [
+    "Z_HARNESS_IMPL_PRE_REVIEW=0 (default): entire block is NO-OP; byte-identical to today",
+    "gate-down only runs on cycle 1; retry cycles always use the full codex reviewer",
+    "Flash provider unavailable → fail-safe toward more thorough review (codex runs); never silently skip",
+    "tier-drift re-check strips cached **Complexity:** line before dispatching classifier",
+    "medium/high tier tasks are never gated down by Flash; Flash may prepend findings but is not authoritative",
+    "PRE_REVIEW_GATED_DOWN and FLASH_PREPEND always initialized before knob block",
+    "PRE_REVIEW_GATE_DOWN (eligibility, set in P1) and PRE_REVIEW_GATED_DOWN (skip decision, set in P2) are two DISTINCT variables — GATE_DOWN has no 'D', GATED_DOWN has 'D'; they must never be unified; downstream skip-guard reads only GATED_DOWN"
+  ],
+  "gotchas": [
+    "cost-inversion: Flash-on-all + codex-on-subset can exceed codex-on-all when most tasks are medium/high — run audit before enabling",
+    "complexity-classifier heuristic #1 returns cached tier if **Complexity:** present; stripping the line is mandatory",
+    "Flash verdict parsing uses grep -o 'VERDICT:[[:space:]]*[A-Z_]*'; format deviations yield empty verdict → falls through to codex (safe)",
+    "pre-reviewer is not constrained by finding threshold — codex may agree/disagree/expand when escalated with FLASH_PREPEND",
+    "Z_HARNESS_IMPL_PRE_REVIEW is env-only (not a TOML key); does not appear in config.py DEFAULTS or VALIDATORS",
+    "FOOTGUN: PRE_REVIEW_GATE_DOWN vs PRE_REVIEW_GATED_DOWN differ by one letter ('GATE' vs 'GATED') — P1 sets GATE_DOWN=1 when eligible (no drift-up); P2 sets GATED_DOWN=1 only when Flash returns CLEAN on a low-tier eligible task; searching/editing one while intending the other is a silent bug; do NOT unify into one variable"
+  ],
+  "memories": []
+}

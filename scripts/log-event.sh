@@ -130,6 +130,21 @@ resolve_run_dir
 mkdir -p "$RUN_DIR"
 mkdir -p "$ZH_BASE"
 
+# Resolve host lazily: use Z_HARNESS_HOST if set, else call detect-host.sh once
+# and cache the result to a per-process tmp sentinel keyed on $PPID (the parent
+# orchestrator/shell PID). Each `bash log-event.sh ...` is a new process ($$
+# differs), so caching on $PPID ensures the cache survives across multiple
+# log-event.sh invocations in a single orchestration process.
+_HOST_SENTINEL="/tmp/zh-host-$PPID"
+if [[ -n "${Z_HARNESS_HOST:-}" ]]; then
+  HOST_VALUE="$Z_HARNESS_HOST"
+elif [[ -s "$_HOST_SENTINEL" ]]; then
+  HOST_VALUE="$(cat "$_HOST_SENTINEL")"
+else
+  HOST_VALUE="$(bash "$(dirname "$0")/detect-host.sh")"
+  printf '%s' "$HOST_VALUE" > "$_HOST_SENTINEL"
+fi
+
 TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # Validate payload is JSON; if not, wrap it as a string.
@@ -139,13 +154,14 @@ fi
 
 EVENT="$(python3 -c '
 import json, sys
-ts, run, kind, slug, payload = sys.argv[1:6]
+ts, run, kind, slug, host, payload = sys.argv[1:7]
 obj = {"ts": ts, "run": run, "kind": kind}
 if slug:
     obj["slug"] = slug
 obj.update(json.loads(payload))
+obj["host"] = host  # set after payload merge so log-event.sh resolution is authoritative
 print(json.dumps(obj, separators=(",", ":")))
-' "$TS" "$RUN" "$KIND" "$SLUG" "$PAYLOAD")"
+' "$TS" "$RUN" "$KIND" "$SLUG" "$HOST_VALUE" "$PAYLOAD")"
 
 append() {
   local target="$1"

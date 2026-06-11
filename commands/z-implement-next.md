@@ -586,6 +586,21 @@ print(json.dumps({
 }
 ```
 
+**Derive `IMPL_MODEL` for telemetry.** Immediately before the `Agent()` call, resolve the effective
+model label so it can be logged via `log-subagent.sh`. Mirrors the `sonnet`/`opus` selection rules
+above: `COMPLEXITY_TIER` was already parsed from the task block earlier in this phase.
+
+```bash
+# Resolve effective implementer model label for telemetry.
+# Opus when: Complexity: high in task block; otherwise default to sonnet.
+IMPL_MODEL="sonnet"
+if [[ "${COMPLEXITY_TIER:-}" == "high" ]]; then
+  IMPL_MODEL="opus"
+fi
+# IMPL_PROMPT_CHARS = character count of the full prompt string passed to Agent()
+IMPL_PROMPT_CHARS="${#IMPL_PROMPT}"   # set IMPL_PROMPT to the full prompt string before passing it
+```
+
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The implementer subagent performs all code edits; drivers that skip it must warn the user that task implementation has been bypassed. -->
 ```
 Agent(
@@ -594,6 +609,18 @@ Agent(
   model="<sonnet|opus per the rules above>",
   prompt="<PERSONA_PREFIX (empty when persona_rotation is off)><task-id>\n\n<task block verbatim from TASKS.md>\n\n$BASE: <abs path to $Z_HARNESS_PLAN_DIR>\nRepo root: <abs path>\nrelevant_docs (paths — Read these for cross-file invariants): <paths>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
+```
+
+```bash
+# After Agent() returns (IMPL_RESPONSE = the implementer's full returned text):
+IMPL_RESPONSE_CHARS="${#IMPL_RESPONSE}"
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-subagent.sh" \
+  --run "tasks/<task-id>" \
+  --role "implementer" \
+  --subagent-type "implementer" \
+  --subagent-model "$IMPL_MODEL" \
+  --prompt-chars "$IMPL_PROMPT_CHARS" \
+  --response-chars "$IMPL_RESPONSE_CHARS" || true
 ```
 
 This replaces the prior `Z_HARNESS_RETRY_UPGRADE=opus` env-var pattern; `Agent(...)` supports per-call `model` override directly.
