@@ -301,8 +301,9 @@ If there are running follow-up consumer entries, **halt** — do not proceed wit
 2. **Discover plan slug.** Multiple plans may coexist under `$Z_HARNESS_PLAN_DIR/`. A `$Z_HARNESS_PLAN_DIR/` may be either a **legacy single-slug plan** (contains `TASKS.md` directly) or a **tree-rooted plan** produced by `/z-plan-split` (contains `MANIFEST.md` + per-cluster subdirectories, each with its own `TASKS.md`):
 
    **2a. Enumerate candidates.**
-   - For each subdir of `z-harness/plans/` (canonical) and `z-harness/` (legacy): classify as `tree-rooted` if `$Z_HARNESS_PLAN_DIR/MANIFEST.md` exists, else `legacy` if `$Z_HARNESS_PLAN_DIR/TASKS.md` exists, else skip.
-   - Also check for the legacy flat layout (`z-harness/TASKS.md` directly).
+   - First, probe the canonical state-directory path: `$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" base_dir)/plans/`. For each subdir there: classify as `tree-rooted` if `<path>/MANIFEST.md` exists, else `legacy` if `<path>/TASKS.md` exists, else skip.
+   - Then probe the repo-relative fallbacks: `z-harness/plans/` and `z-harness/`. For each subdir there: classify same as above. **Deduplicate** — if a slug was already discovered via the canonical state directory, skip its repo-relative duplicate.
+   - Also check for the legacy flat layout (`z-harness/TASKS.md` directly, AND `<state-dir>/TASKS.md` directly if the state dir has no `plans/` subdirectory).
    - Zero candidates → tell user to run `/z-plan` first; abort.
    - One candidate → use it.
    <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug-selection question via their native channel. Silent omission is forbidden. -->

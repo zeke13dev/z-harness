@@ -135,6 +135,16 @@ _SKILL_CALL_RE = re.compile(r"Skill\s*\(")
 _INLINE_TOOL_RE = re.compile(
     r"AskUserQuestion\s*\(|TaskCreate\s*\(|SubagentCreate\s*\(|EnterPlanMode\s*\(|ExitPlanMode\s*\("
 )
+# Catch backtick-wrapped AskUserQuestion prose references that the LLM might
+# self-answer (context-loop bug). Patterns:
+#   - `AskUserQuestion` — **proceed / abort**
+#   - use `AskUserQuestion` to ask the user "..."
+#   - present the `AskUserQuestion` normally
+# These lines contain embedded question/choice text that looks like something
+# the LLM should answer. The rewrite makes it explicit: pause, do not self-answer.
+_ASKUSER_PROSE_RE = re.compile(
+    r"`AskUserQuestion`"
+)
 
 
 def _rewrite_line(stripped: str, agent_names: set[str]) -> str | None:
@@ -172,6 +182,12 @@ def _rewrite_line(stripped: str, agent_names: set[str]) -> str | None:
         return "> [pi] Run the corresponding skill (see CAPABILITIES.md)."
     if _INLINE_TOOL_RE.search(stripped):
         return "> [pi] No native tool — handle inline by asking the user / tracking state yourself (see CAPABILITIES.md)."
+    # Catch backtick-wrapped AskUserQuestion prose that the LLM might self-answer.
+    # These are user-interaction gates where the prompt text itself contains an
+    # embedded question (e.g. "**proceed / abort**"). Rewrite to make the gate
+    # explicit so the LLM pauses instead of self-answering its own prompt text.
+    if _ASKUSER_PROSE_RE.search(stripped) and not stripped.lstrip().startswith('|') and 'no `AskUserQuestion`' not in stripped and 'without `AskUserQuestion`' not in stripped:
+        return "> [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing."
     return None
 
 
@@ -260,6 +276,13 @@ def _inject_prompt_defense(body: str) -> str:
 
 def _render_prompt(entry: dict, agent_names: set[str]) -> str:
     body = _rewrite_body(entry["body"], agent_names).lstrip("\n")
+    body = _inject_prompt_defense(body)
+    # If no sentinel was found, inject defense after the heading as a fallback
+    # to protect prompt-style commands/skills from context-loop self-answering.
+    if "<!-- PROMPT_DEFENSE_INJECTED -->" not in body:
+        heading_end = body.find("\n")
+        if heading_end != -1:
+            body = body[:heading_end + 1] + PROMPT_DEFENSE_BLOCK + "\n" + body[heading_end + 1:]
     return f"# /{entry['id']}\n\n{body}"
 
 

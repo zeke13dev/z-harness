@@ -181,5 +181,25 @@ def update_cmd(
         raise typer.Exit(code=1)
 
 
+@app.command("serve")
+def serve_cmd(
+    ctx: typer.Context,
+    transport: str = typer.Option(
+        "stdio",
+        "--transport",
+        "-t",
+        help="MCP transport protocol (stdio only in v1).",
+    ),
+) -> None:
+    """Start the z-harness MCP server (stdio)."""
+    try:
+        from z_harness_cli.commands import serve as _serve_mod  # type: ignore[import]
+    except ImportError:
+        typer.echo("'serve' command not yet implemented.", err=True)
+        raise typer.Exit(code=1)
+
+    _serve_mod.run(ctx, transport=transport)
+
+
 if __name__ == "__main__":
     app()

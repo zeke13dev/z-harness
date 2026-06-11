@@ -7,6 +7,9 @@ tags: [planning, audit, review]
 
 You are running **z-harness `/z-audit-plan`** — a structured, pre-implementation plan audit pipeline. The output is a comprehensive `PLAN_AUDIT_REPORT.md` (detailing all findings) under `$Z_HARNESS_PLAN_DIR/`.
 
+<!-- NO_SESSION_GUARD -->
+**Session persistence required.** This pipeline dispatches subagents for cross-LLM review. If you are running in `--no-session` mode (session is not persisted to disk), stop immediately and tell the user: "`/z-audit-plan` requires a persistent session. Please restart pi without `--no-session`." Then halt. Do not proceed.
+
 This command is **read-only**. Never edit active codebase files. Plan adjustments happen later via `/z-amend` or `/z-plan` based on the audit report's findings.
 
 <!-- PLAN_ROUTE_CHECK_START -->

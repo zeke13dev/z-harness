@@ -8,6 +8,9 @@ tags: [planning]
 
 You are running the **z-harness `/z-plan`** pipeline.
 
+<!-- NO_SESSION_GUARD -->
+**Session persistence required.** This pipeline spans multiple phases, dispatches subagents, and may need to resume after a pause. If you are running in `--no-session` mode (session is not persisted to disk), stop immediately and tell the user: "`/z-plan` requires a persistent session. Please restart pi without `--no-session`." Then halt. Do not proceed.
+
 Task (from `$ARGUMENTS`):
 
 $ARGUMENTS

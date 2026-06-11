@@ -10,6 +10,12 @@ unsupported_driver_behavior: explicit_gate
 
 You are running **z-harness `/z-audit-plan`** — a structured, pre-implementation plan audit pipeline. The output is a comprehensive `PLAN_AUDIT_REPORT.md` (detailing all findings) under `$Z_HARNESS_PLAN_DIR/`.
 
+Slug argument (from `$ARGUMENTS`):
+
+$ARGUMENTS
+
+If the user provided a slug (e.g. `/z-audit-plan mcp-server`), treat the first non-flag token from `$ARGUMENTS` as `--slug <slug>`. If they typed `--slug <slug>` explicitly, parse that form. Use it in Phase 0 step 1.
+
 This command is **read-only**. Never edit active codebase files. Plan adjustments happen later via `/z-amend` or `/z-plan` based on the audit report's findings.
 
 <!-- PLAN_ROUTE_CHECK_START -->
@@ -43,7 +49,8 @@ Loop prevention: carry forward the latest route chain; if it already has two ent
    NO_PLAN_ARCHIVE_DIR="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" base_dir)/archive/$NO_PLAN_RUN"
    ```
 1. **Discover plan slug:**
-   Enumerate subdirectories under the plans directory (`z-harness/plans/`) or legacy directory (`z-harness/`) that contain plan artifacts (`SPEC.md` / `PLAN.md` / `TASKS.md`).
+   **If `--slug <slug>` was provided by the user,** use it directly — skip enumeration. Export `Z_HARNESS_SLUG=<slug>`, resolve `Z_HARNESS_PLAN_DIR` via `resolve_plan_path`, and proceed to step 2. The user's explicit slug overrides all directory scanning.
+   **Otherwise** (no `--slug` argument), enumerate subdirectories under the canonical plans directory (`$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" base_dir)/plans/`) and the legacy directories (`z-harness/plans/`, `z-harness/`) that contain plan artifacts (`SPEC.md` / `PLAN.md` / `TASKS.md`). Deduplicate slugs across paths.
    - If single candidate -> use it.
    <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug
         selection question via their native channel. Silent omission is forbidden. -->

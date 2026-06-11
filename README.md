@@ -62,6 +62,50 @@ Typical chains:
 - **`/z-suggest-memory`** — Author a memory entry into a concept's `docs/llm/<slug>.json`.
 - **`/z-stats`** — Read-only progress + cost report from `metrics.jsonl`.
 
+## MCP Server (`z-harness serve`)
+
+`z-harness serve` starts a stdio MCP server that exposes every `/z-*` command as an MCP tool, enabling AI editors (Cursor, VS Code, Claude Desktop) and bridges (Hermes) to invoke the full z-harness toolbox from their native tool system.
+
+```bash
+# Start the server (stdio transport):
+z-harness serve
+
+# Or via Python:
+python3 -m z_harness_cli serve
+```
+
+### Editor MCP config
+
+**Cursor / VS Code (mcp.json):**
+```json
+{
+  "mcpServers": {
+    "z-harness": {
+      "command": "z-harness",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+**Claude Desktop (claude_desktop_config.json):**
+```json
+{
+  "mcpServers": {
+    "z-harness": {
+      "command": "z-harness",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+### MCP Tool Catalog
+
+The server exposes each `/z-*` command as a tool using snake_case naming (e.g. `/z-plan` → `z_plan`). Tools accept a `prompt` (natural language task description) and optional `slug` (plan identifier). Heavy commands (planning, implementation, debug) stream progress via MCP notifications; lightweight commands (status, where, stats) return immediately.
+
+Full roster: `z_plan`, `z_implement_all`, `z_implement_next`, `z_review_all`, `z_audit`, `z_audit_plan_style`, `z_debug`, `z_do`, `z_brainstorm`, `z_research`, `z_map`, `z_plan_light`, `z_plan_split`, `z_test`, `z_amend`, `z_init_docs`, `z_maintain_docs`, `z_uplift`, `z_improve`, `z_where`, `z_stats`, `z_suggest_memory`, `z_axiom_scan`, `z_axiom_list`, `z_axiom_approve`, `z_axiom_reject`, `z_axiom_edit`, `z_personas`, `z_handoff`, `z_update`, `z_reality`, `z_overnight`, `z_evaluate`, `z_context_budget`, `z_doc_rationale`, `z_test_invariant`. Utility tools: `z_subagent_dispatch`, `z_export`, `z_detect`.
+
 ## Where to look next
 
 - [docs/human/INDEX.md](docs/human/INDEX.md) — human reference (commands, skills, agents, scripts)

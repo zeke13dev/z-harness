@@ -132,54 +132,165 @@ For each finding: severity (blocker / major / minor / nit), location, and a sugg
 - If there are no blockers or majors, respond with exactly: `No blockers or majors found.` (plus an optional 1-line note if something needs the implementer's attention but is below the bar).
 ```
 
-5. Call the provider:
+5. Call the provider (with file-based capture for codex):
+
+**Codex capability probe (once per run, cached to a tmp sentinel):**
 
 ```bash
-if [ "$USE_STDIN" = "True" ]; then
-  if [ -n "$TIMEOUT_CMD" ]; then
-    RESPONSE="$(printf '%s' "$PROMPT" | "$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS)"
+# Use a per-session sentinel: key on the parent PID so it persists across
+# steps within one run but not across runs.
+PROBE_SENTINEL="/tmp/z-harness-codex-outfile-probe.${PPID:-$$}"
+if [ ! -f "$PROBE_SENTINEL" ]; then
+  # Probe for the long-form flag name; `-o` is the documented short alias of
+  # `--output-last-message` and is only used if this long-form probe succeeds.
+  if codex exec --help 2>&1 | grep -q 'output-last-message'; then
+    printf '1' > "$PROBE_SENTINEL"
   else
-    RESPONSE="$(printf '%s' "$PROMPT" | $COMMAND $ARGS)"
+    printf '0' > "$PROBE_SENTINEL"
+  fi
+fi
+CODEX_SUPPORTS_OUTFILE="$(cat "$PROBE_SENTINEL")"
+```
+
+**Dispatch (file-based path for codex, stdout path for all others):**
+
+```bash
+TASK_ID="<task-id from caller>"
+CYCLE="<cycle number>"
+PROVIDER="$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["provider"])')"
+ARCHIVE_DIR="${Z_HARNESS_PLAN_DIR}/archive/tasks/${TASK_ID}"
+mkdir -p "$ARCHIVE_DIR"
+OUTFILE="${ARCHIVE_DIR}/review-cycle${CYCLE}.md"
+CAPTURE_MODE="stdout"
+
+if [ "$PROVIDER" = "codex" ] && [ "$CODEX_SUPPORTS_OUTFILE" = "1" ]; then
+  # File-based capture: codex writes only the final message to $OUTFILE;
+  # stdout transcript is intentionally discarded.
+  CAPTURE_MODE="file"
+  if [ "$USE_STDIN" = "True" ]; then
+    if [ -n "$TIMEOUT_CMD" ]; then
+      printf '%s' "$PROMPT" | "$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS -o "$OUTFILE"
+      CODEX_EXIT=$?
+    else
+      printf '%s' "$PROMPT" | $COMMAND $ARGS -o "$OUTFILE"
+      CODEX_EXIT=$?
+    fi
+  else
+    if [ -n "$TIMEOUT_CMD" ]; then
+      "$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS -o "$OUTFILE" "$PROMPT"
+      CODEX_EXIT=$?
+    else
+      $COMMAND $ARGS -o "$OUTFILE" "$PROMPT"
+      CODEX_EXIT=$?
+    fi
+  fi
+
+  # Validate: non-zero exit or missing/empty file → fallback
+  if [ "$CODEX_EXIT" -ne 0 ] || [ ! -s "$OUTFILE" ]; then
+    FALLBACK_REASON="exit_${CODEX_EXIT}_or_empty_outfile"
+    # role is included so review_capture_fallback has ONE uniform schema across the reviewer
+    # and both consultant agents ({id, cycle, role, reason}); the SPEC's {id, cycle, reason} is
+    # the required floor, role is the cross-agent disambiguator a fallback-rate cut needs.
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tasks/${TASK_ID}" review_capture_fallback \
+      "$(printf '{"id":"%s","cycle":%d,"role":"reviewer","reason":"%s"}' "$TASK_ID" "${CYCLE:-0}" "$FALLBACK_REASON")"
+    CAPTURE_MODE="stdout"
+    # Re-run without -o to capture stdout
+    if [ "$USE_STDIN" = "True" ]; then
+      if [ -n "$TIMEOUT_CMD" ]; then
+        RESPONSE="$(printf '%s' "$PROMPT" | "$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS)"
+      else
+        RESPONSE="$(printf '%s' "$PROMPT" | $COMMAND $ARGS)"
+      fi
+    else
+      if [ -n "$TIMEOUT_CMD" ]; then
+        RESPONSE="$("$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS "$PROMPT")"
+      else
+        RESPONSE="$($COMMAND $ARGS "$PROMPT")"
+      fi
+    fi
+  else
+    RESPONSE="$(cat "$OUTFILE")"
   fi
 else
-  if [ -n "$TIMEOUT_CMD" ]; then
-    RESPONSE="$("$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS "$PROMPT")"
+  # Non-codex provider OR probe failed: byte-identical stdout path.
+  if [ "$USE_STDIN" = "True" ]; then
+    if [ -n "$TIMEOUT_CMD" ]; then
+      RESPONSE="$(printf '%s' "$PROMPT" | "$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS)"
+    else
+      RESPONSE="$(printf '%s' "$PROMPT" | $COMMAND $ARGS)"
+    fi
   else
-    RESPONSE="$($COMMAND $ARGS "$PROMPT")"
+    if [ -n "$TIMEOUT_CMD" ]; then
+      RESPONSE="$("$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS "$PROMPT")"
+    else
+      RESPONSE="$($COMMAND $ARGS "$PROMPT")"
+    fi
   fi
 fi
 ```
 
-6. Archive the transcript and log the event:
+6. Archive the full review and log the event:
 
 ```bash
-TASK_ID="<task-id from caller>"
-PROVIDER="$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["provider"])')"
-DIR="z-harness/archive/tasks/$TASK_ID"
-mkdir -p "$DIR"
-printf '%s\n' "$PROMPT"   > "$DIR/review.prompt.md"
-printf '%s\n' "$RESPONSE" > "$DIR/review.response.md"
+# For the file-based codex path, $OUTFILE already holds the canonical artifact.
+# For the stdout path, write the response to the archive file now.
+if [ "$CAPTURE_MODE" = "stdout" ]; then
+  printf '%s\n' "$RESPONSE" > "$OUTFILE"
+fi
+
+printf '%s\n' "$PROMPT" > "${ARCHIVE_DIR}/review-cycle${CYCLE}.prompt.md"
+# $OUTFILE = ${ARCHIVE_DIR}/review-cycle${CYCLE}.md  (the canonical artifact)
 
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tasks/$TASK_ID" review \
   "$(printf '{"provider":"%s","model_label":"%s","prompt_chars":%d,"response_chars":%d,"return_chars":%d,"wall_ms":%d}' \
      "$PROVIDER" "$MODEL_LABEL" "${#PROMPT}" "${#RESPONSE}" "${#RETURN}" "$WALL_MS")"
+
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-subagent.sh" \
+  --run "tasks/$TASK_ID" \
+  --role "reviewer" \
+  --subagent-type "reviewer" \
+  --subagent-model "$MODEL_LABEL" \
+  --prompt-chars "${#PROMPT}" \
+  --response-chars "${#RESPONSE}" || true
 ```
 
-7. **Extract a tight return payload — DO NOT return the raw response to the caller.** Build `$RETURN` by extracting **only** the findings section:
+`response_chars` = `${#RESPONSE}` = size of the captured final review (the file content or stdout capture), **not** the discarded codex transcript.
+
+7. **Build a tight return payload.** The canonical artifact is the file at `$OUTFILE`. Extract only: verdict (`PASS`/`FAIL`/`BLOCKED`), blocker/major counts, and the artifact path.
 
 ```bash
-RETURN="$(printf '%s\n' "$RESPONSE" \
-  | awk '/^\*\*Findings\*\*|^### Blockers|^### Major|^## [A-Za-z]+ review/{found=1} found' \
-  | head -c 8000)"
+VERDICT="$(printf '%s\n' "$RESPONSE" \
+  | grep -m1 -Eo '\b(PASS|FAIL|BLOCKED)\b' || printf 'UNKNOWN')"
+BLOCKER_COUNT="$(printf '%s\n' "$RESPONSE" \
+  | grep -c '^\- \*\*BLOCKER\*\*\|^### Blockers' || printf '0')"
+MAJOR_COUNT="$(printf '%s\n' "$RESPONSE" \
+  | grep -c '^\- \*\*MAJOR\*\*\|^### Major' || printf '0')"
+
+RETURN="$(printf 'verdict: %s\nblockers: %s\nmajors: %s\nartifact: %s\n' \
+  "$VERDICT" "$BLOCKER_COUNT" "$MAJOR_COUNT" "$OUTFILE")"
+
+# Also include the findings section for the orchestrator (from the artifact file).
+FINDINGS="$(printf '%s\n' "$RESPONSE" \
+  | awk '/^\*\*Findings\*\*|^### Blockers|^### Major|^## [A-Za-z]+ review/{found=1} found')"
+if [ -n "$FINDINGS" ]; then
+  RETURN="$(printf '%s\n\n%s' "$RETURN" "$FINDINGS")"
+fi
 ```
 
-If awk yields nothing (the provider returned the verbatim "No blockers or majors found." line), use the literal string. **Hard cap `$RETURN` at 8000 characters.**
+The file at `$OUTFILE` is the **source of truth** for the full review. The 8000-char cap no longer applies to the artifact; `$RETURN` carries only the structured summary + artifact path.
 
-8. Return `$RETURN` to the caller, grouped by severity. Do not soften, do not editorialize.
+8. Return `$RETURN` to the caller. Do not soften, do not editorialize.
 
-## Output format (the structured `$RETURN`, ≤8 KB)
+## Output format (the structured `$RETURN`)
+
+`$RETURN` carries: verdict line, blocker/major counts, artifact path, and the findings section (from the artifact file). The canonical full review lives in the artifact file. `$RETURN` has no hard character cap — the artifact file is the source of truth.
 
     ## Reviewer review: task <ID>
+
+    verdict: PASS|FAIL|BLOCKED
+    blockers: <N>
+    majors: <N>
+    artifact: <abs path to review-cycle<N>.md>
 
     ### Blockers
     <findings>

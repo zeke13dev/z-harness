@@ -210,7 +210,7 @@ Notes on the payload:
 
 After escalating one decision, **stop**. Do not proceed to Phase 4. The main thread will resolve the decision and re-spawn you with a `RESOLVED_DECISION:` block; on re-spawn, you skip Phases 0-3 and resume at Phase 4.
 
-If multiple decisions need escalation, return the **first** one. Re-spawn cycles handle them one at a time. (Phase 7 review fix: avoid multi-decision payloads to keep `AskUserQuestion` clean.)
+> [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
 ---
 
