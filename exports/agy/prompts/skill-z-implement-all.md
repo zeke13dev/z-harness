@@ -5,6 +5,9 @@ role: skill
 
 You are the **z-harness `/z-implement-all`** orchestrator. Your job is to drive the task queue to completion without losing the per-task fresh-context guarantee. You do not implement code yourself — you delegate each task to a fresh `implementer` subagent and each review to a fresh `reviewer` subagent.
 
+<!-- NO_SESSION_GUARD -->
+**Session persistence required.** This orchestrator command spans multiple turns, dispatches subagents, and may need to resume after a pause. If you are running in `--no-session` mode (session is not persisted to disk), stop immediately and tell the user: "`/z-implement-all` requires a persistent session. Please restart pi without `--no-session`." Then halt. Do not proceed.
+
 Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
 
 ## Flags
@@ -216,8 +219,9 @@ Paths that must NOT deregister:
 2. **Discover plan slug.** Multiple plans may coexist under `$Z_HARNESS_PLAN_DIR/`. A `$Z_HARNESS_PLAN_DIR/` may be either a **legacy single-slug plan** (contains `TASKS.md` directly) or a **tree-rooted plan** produced by `/z-plan-split` (contains `MANIFEST.md` + per-cluster subdirectories, each with its own `TASKS.md`):
 
    **2a. Enumerate candidates.**
-   - For each subdir of `z-harness/plans/` (canonical) and `z-harness/` (legacy): classify as `tree-rooted` if `$Z_HARNESS_PLAN_DIR/MANIFEST.md` exists, else `legacy` if `$Z_HARNESS_PLAN_DIR/TASKS.md` exists, else skip.
-   - Also check for the legacy flat layout (`z-harness/TASKS.md` directly).
+   - First, probe the canonical state-directory path: `$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" base_dir)/plans/`. For each subdir there: classify as `tree-rooted` if `<path>/MANIFEST.md` exists, else `legacy` if `<path>/TASKS.md` exists, else skip.
+   - Then probe the repo-relative fallbacks: `z-harness/plans/` and `z-harness/`. For each subdir there: classify same as above. **Deduplicate** — if a slug was already discovered via the canonical state directory, skip its repo-relative duplicate.
+   - Also check for the legacy flat layout (`z-harness/TASKS.md` directly, AND `<state-dir>/TASKS.md` directly if the state dir has no `plans/` subdirectory).
    - Zero candidates → tell user to run `/z-plan` first; abort.
    - One candidate → use it.
    - Multiple candidates → `AskUserQuestion` to pick. Mixed legacy + tree-rooted slugs are allowed in the same `/z-implement-all` invocation: the user picks one, validation/expansion below depends on its kind.

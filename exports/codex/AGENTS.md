@@ -929,17 +929,83 @@ source "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/check-timeout.sh
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" consult_start \
   "$(printf '{"role":"consultant_primary","mode":"%s","provider":"%s"}' "$MODE" "$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; print(json.load(sys.stdin)["provider"])')")"
 
-if [ "$USE_STDIN" = "True" ]; then
-  if [ -n "$TIMEOUT_CMD" ]; then
-    RESPONSE="$(printf '%s' "$PROMPT" | "$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS)"
+# Codex capability probe (once per session, cached to a tmp sentinel keyed on $PPID).
+PROBE_SENTINEL="/tmp/z-harness-codex-outfile-probe.${PPID:-$$}"
+if [ ! -f "$PROBE_SENTINEL" ]; then
+  if codex exec --help 2>&1 | grep -q 'output-last-message'; then
+    printf '1' > "$PROBE_SENTINEL"
   else
-    RESPONSE="$(printf '%s' "$PROMPT" | $COMMAND $ARGS)"
+    printf '0' > "$PROBE_SENTINEL"
+  fi
+fi
+CODEX_SUPPORTS_OUTFILE="$(cat "$PROBE_SENTINEL")"
+
+PROVIDER="$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["provider"])')"
+DIR="z-harness/archive/$RUN/transcripts"
+mkdir -p "$DIR"
+N=$(printf '%03d' $(( $(ls "$DIR" 2>/dev/null | wc -l) + 1 )))
+SLUG="consultant-primary-${PROVIDER}-$MODE"
+OUTFILE="$DIR/$N-$SLUG.response.md"
+CAPTURE_MODE="stdout"
+
+if [ "$PROVIDER" = "codex" ] && [ "$CODEX_SUPPORTS_OUTFILE" = "1" ]; then
+  # File-based capture: codex writes only the final message to $OUTFILE;
+  # stdout transcript is intentionally discarded.
+  CAPTURE_MODE="file"
+  if [ "$USE_STDIN" = "True" ]; then
+    if [ -n "$TIMEOUT_CMD" ]; then
+      printf '%s' "$PROMPT" | "$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS -o "$OUTFILE"
+      CODEX_EXIT=$?
+    else
+      printf '%s' "$PROMPT" | $COMMAND $ARGS -o "$OUTFILE"
+      CODEX_EXIT=$?
+    fi
+  else
+    if [ -n "$TIMEOUT_CMD" ]; then
+      "$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS -o "$OUTFILE" "$PROMPT"
+      CODEX_EXIT=$?
+    else
+      $COMMAND $ARGS -o "$OUTFILE" "$PROMPT"
+      CODEX_EXIT=$?
+    fi
+  fi
+
+  # Validate: non-zero exit or missing/empty file → fallback to stdout
+  if [ "$CODEX_EXIT" -ne 0 ] || [ ! -s "$OUTFILE" ]; then
+    FALLBACK_REASON="exit_${CODEX_EXIT}_or_empty_outfile"
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" review_capture_fallback \
+      "$(printf '{"id":"%s","cycle":%d,"role":"%s","reason":"%s"}' "$SLUG" 0 "consultant_primary" "$FALLBACK_REASON")"
+    CAPTURE_MODE="stdout"
+    if [ "$USE_STDIN" = "True" ]; then
+      if [ -n "$TIMEOUT_CMD" ]; then
+        RESPONSE="$(printf '%s' "$PROMPT" | "$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS)"
+      else
+        RESPONSE="$(printf '%s' "$PROMPT" | $COMMAND $ARGS)"
+      fi
+    else
+      if [ -n "$TIMEOUT_CMD" ]; then
+        RESPONSE="$("$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS "$PROMPT")"
+      else
+        RESPONSE="$($COMMAND $ARGS "$PROMPT")"
+      fi
+    fi
+  else
+    RESPONSE="$(cat "$OUTFILE")"
   fi
 else
-  if [ -n "$TIMEOUT_CMD" ]; then
-    RESPONSE="$("$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS "$PROMPT")"
+  # Non-codex provider OR probe failed: byte-identical stdout path.
+  if [ "$USE_STDIN" = "True" ]; then
+    if [ -n "$TIMEOUT_CMD" ]; then
+      RESPONSE="$(printf '%s' "$PROMPT" | "$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS)"
+    else
+      RESPONSE="$(printf '%s' "$PROMPT" | $COMMAND $ARGS)"
+    fi
   else
-    RESPONSE="$($COMMAND $ARGS "$PROMPT")"
+    if [ -n "$TIMEOUT_CMD" ]; then
+      RESPONSE="$("$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS "$PROMPT")"
+    else
+      RESPONSE="$($COMMAND $ARGS "$PROMPT")"
+    fi
   fi
 fi
 ```
@@ -1021,19 +1087,27 @@ Do not editorialize or "improve." If the CLI errors, report the exact error so t
 Before returning, write the full prompt + response to disk and log the event. The caller will tell you the run id; if not, derive it from the most recent `z-harness/archive/*/` directory.
 
 ```bash
-RUN="<run-id from caller>"
-PROVIDER="$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["provider"])')"
-DIR="z-harness/archive/$RUN/transcripts"
-mkdir -p "$DIR"
-TIMESTAMP="$(date +%s)"
-N=$(printf '%03d' $(( $(ls "$DIR" 2>/dev/null | wc -l) + 1 )))
-SLUG="consultant-primary-${PROVIDER}-$MODE"
-printf '%s\n' "$PROMPT"   > "$DIR/$N-$SLUG.prompt.md"
-printf '%s\n' "$RESPONSE" > "$DIR/$N-$SLUG.response.md"
+# $PROVIDER, $DIR, $N, $SLUG, $OUTFILE, and $CAPTURE_MODE are already set
+# in the dispatch block above. $RUN was set before that block.
+printf '%s\n' "$PROMPT" > "$DIR/$N-$SLUG.prompt.md"
+# For the file-based codex path, $OUTFILE already holds the response artifact;
+# for the stdout path, write $RESPONSE to the archive file now.
+if [ "$CAPTURE_MODE" = "stdout" ]; then
+  printf '%s\n' "$RESPONSE" > "$OUTFILE"
+fi
+# $OUTFILE = $DIR/$N-$SLUG.response.md  (canonical artifact)
 
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" consult \
   "$(printf '{"role":"consultant_primary","provider":"%s","model_label":"%s","mode":"%s","prompt_chars":%d,"response_chars":%d,"wall_ms":%d,"transcript":"%s"}' \
      "$PROVIDER" "$MODEL_LABEL" "$MODE" "${#PROMPT}" "${#RESPONSE}" "$WALL_MS" "$N-$SLUG")"
+
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-subagent.sh" \
+  --run "$RUN" \
+  --role "consultant_primary" \
+  --subagent-type "consultant" \
+  --subagent-model "$MODEL_LABEL" \
+  --prompt-chars "${#PROMPT}" \
+  --response-chars "${#RESPONSE}" || true
 ```
 
 ---
@@ -1086,17 +1160,83 @@ source "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/check-timeout.sh
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" consult_start \
   "$(printf '{"role":"consultant_secondary","mode":"%s","provider":"%s"}' "$MODE" "$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; print(json.load(sys.stdin)["provider"])')")"
 
-if [ "$USE_STDIN" = "True" ]; then
-  if [ -n "$TIMEOUT_CMD" ]; then
-    RESPONSE="$(printf '%s' "$PROMPT" | "$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS)"
+# Codex capability probe (once per session, cached to a tmp sentinel keyed on $PPID).
+PROBE_SENTINEL="/tmp/z-harness-codex-outfile-probe.${PPID:-$$}"
+if [ ! -f "$PROBE_SENTINEL" ]; then
+  if codex exec --help 2>&1 | grep -q 'output-last-message'; then
+    printf '1' > "$PROBE_SENTINEL"
   else
-    RESPONSE="$(printf '%s' "$PROMPT" | $COMMAND $ARGS)"
+    printf '0' > "$PROBE_SENTINEL"
+  fi
+fi
+CODEX_SUPPORTS_OUTFILE="$(cat "$PROBE_SENTINEL")"
+
+PROVIDER="$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["provider"])')"
+DIR="z-harness/archive/$RUN/transcripts"
+mkdir -p "$DIR"
+N=$(printf '%03d' $(( $(ls "$DIR" 2>/dev/null | wc -l) + 1 )))
+SLUG="consultant-secondary-${PROVIDER}-$MODE"
+OUTFILE="$DIR/$N-$SLUG.response.md"
+CAPTURE_MODE="stdout"
+
+if [ "$PROVIDER" = "codex" ] && [ "$CODEX_SUPPORTS_OUTFILE" = "1" ]; then
+  # File-based capture: codex writes only the final message to $OUTFILE;
+  # stdout transcript is intentionally discarded.
+  CAPTURE_MODE="file"
+  if [ "$USE_STDIN" = "True" ]; then
+    if [ -n "$TIMEOUT_CMD" ]; then
+      printf '%s' "$PROMPT" | "$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS -o "$OUTFILE"
+      CODEX_EXIT=$?
+    else
+      printf '%s' "$PROMPT" | $COMMAND $ARGS -o "$OUTFILE"
+      CODEX_EXIT=$?
+    fi
+  else
+    if [ -n "$TIMEOUT_CMD" ]; then
+      "$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS -o "$OUTFILE" "$PROMPT"
+      CODEX_EXIT=$?
+    else
+      $COMMAND $ARGS -o "$OUTFILE" "$PROMPT"
+      CODEX_EXIT=$?
+    fi
+  fi
+
+  # Validate: non-zero exit or missing/empty file → fallback to stdout
+  if [ "$CODEX_EXIT" -ne 0 ] || [ ! -s "$OUTFILE" ]; then
+    FALLBACK_REASON="exit_${CODEX_EXIT}_or_empty_outfile"
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" review_capture_fallback \
+      "$(printf '{"id":"%s","cycle":%d,"role":"%s","reason":"%s"}' "$SLUG" 0 "consultant_secondary" "$FALLBACK_REASON")"
+    CAPTURE_MODE="stdout"
+    if [ "$USE_STDIN" = "True" ]; then
+      if [ -n "$TIMEOUT_CMD" ]; then
+        RESPONSE="$(printf '%s' "$PROMPT" | "$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS)"
+      else
+        RESPONSE="$(printf '%s' "$PROMPT" | $COMMAND $ARGS)"
+      fi
+    else
+      if [ -n "$TIMEOUT_CMD" ]; then
+        RESPONSE="$("$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS "$PROMPT")"
+      else
+        RESPONSE="$($COMMAND $ARGS "$PROMPT")"
+      fi
+    fi
+  else
+    RESPONSE="$(cat "$OUTFILE")"
   fi
 else
-  if [ -n "$TIMEOUT_CMD" ]; then
-    RESPONSE="$("$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS "$PROMPT")"
+  # Non-codex provider OR probe failed: byte-identical stdout path.
+  if [ "$USE_STDIN" = "True" ]; then
+    if [ -n "$TIMEOUT_CMD" ]; then
+      RESPONSE="$(printf '%s' "$PROMPT" | "$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS)"
+    else
+      RESPONSE="$(printf '%s' "$PROMPT" | $COMMAND $ARGS)"
+    fi
   else
-    RESPONSE="$($COMMAND $ARGS "$PROMPT")"
+    if [ -n "$TIMEOUT_CMD" ]; then
+      RESPONSE="$("$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS "$PROMPT")"
+    else
+      RESPONSE="$($COMMAND $ARGS "$PROMPT")"
+    fi
   fi
 fi
 ```
@@ -1178,19 +1318,27 @@ Do not editorialize or "improve." If the CLI errors, report the exact error so t
 Before returning, write the full prompt + response to disk and log the event. The caller will tell you the run id; if not, derive it from the most recent `z-harness/archive/*/` directory.
 
 ```bash
-RUN="<run-id from caller>"
-PROVIDER="$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["provider"])')"
-DIR="z-harness/archive/$RUN/transcripts"
-mkdir -p "$DIR"
-TIMESTAMP="$(date +%s)"
-N=$(printf '%03d' $(( $(ls "$DIR" 2>/dev/null | wc -l) + 1 )))
-SLUG="consultant-secondary-${PROVIDER}-$MODE"
-printf '%s\n' "$PROMPT"   > "$DIR/$N-$SLUG.prompt.md"
-printf '%s\n' "$RESPONSE" > "$DIR/$N-$SLUG.response.md"
+# $PROVIDER, $DIR, $N, $SLUG, $OUTFILE, and $CAPTURE_MODE are already set
+# in the dispatch block above. $RUN was set before that block.
+printf '%s\n' "$PROMPT" > "$DIR/$N-$SLUG.prompt.md"
+# For the file-based codex path, $OUTFILE already holds the response artifact;
+# for the stdout path, write $RESPONSE to the archive file now.
+if [ "$CAPTURE_MODE" = "stdout" ]; then
+  printf '%s\n' "$RESPONSE" > "$OUTFILE"
+fi
+# $OUTFILE = $DIR/$N-$SLUG.response.md  (canonical artifact)
 
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" consult \
   "$(printf '{"role":"consultant_secondary","provider":"%s","model_label":"%s","mode":"%s","prompt_chars":%d,"response_chars":%d,"wall_ms":%d,"transcript":"%s"}' \
      "$PROVIDER" "$MODEL_LABEL" "$MODE" "${#PROMPT}" "${#RESPONSE}" "$WALL_MS" "$N-$SLUG")"
+
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-subagent.sh" \
+  --run "$RUN" \
+  --role "consultant_secondary" \
+  --subagent-type "consultant" \
+  --subagent-model "$MODEL_LABEL" \
+  --prompt-chars "${#PROMPT}" \
+  --response-chars "${#RESPONSE}" || true
 ```
 
 ---
@@ -1881,18 +2029,23 @@ You implement **exactly one task** from the task block the orchestrator passes y
 - **`tests_md_path`** (path, may be empty) — `$BASE/TESTS.md` if `/z-test` was run for this plan. If the task block contains a `**Tests:** TEST-001, TEST-004, ...` line, **read TESTS.md** and grep for each listed `## TEST-NNN` heading. Each TEST-NNN entry specifies an `Invariant:`, a `Failure class:`, a `Target file:`, a `Setup:`, and an `Assertion:`. You must produce actual test code at `Target file:` that implements the entry's `Assertion:` against the production code you're writing in this same task. The test must fail if a code change violates the named invariant / failure class — not just pass on the current implementation. If the target file does not yet exist in a recognized test directory, create it following the repo's existing test conventions (look at neighboring tests for fixture patterns).
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+- **`subagent_model: <label>`** — the orchestrator passes the resolved model label (`sonnet` or `opus`) as a named input. Include this value in the `implement_start` and `implement_end` event payloads (see step 0).
 
 ## Procedure
 
 0. **Emit an `implement_start` event** before doing anything else, and an `implement_end` event before returning. Use the helper:
 
 ```bash
+# SUBAGENT_MODEL is the value passed by the orchestrator as `subagent_model: <label>` in the prompt.
+# Read it from the caller input. Default to "sonnet" if absent (safe fallback).
+SUBAGENT_MODEL="<subagent_model from caller input, or 'sonnet' if absent>"
+
 TOKEN="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" start "tasks/<task-id>" implement \
-  "$(printf '{"id":"%s","retry":%d}' "<task-id>" "<0 on first try, N on retry>")")"
+  "$(printf '{"id":"%s","retry":%d,"subagent_model":"%s"}' "<task-id>" "<0 on first try, N on retry>" "$SUBAGENT_MODEL")")"
 # ... do the work below ...
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$TOKEN" \
-  "$(printf '{"id":"%s","retry":%d,"status":"%s","files_changed_count":%d}' \
-     "<task-id>" "<retry>" "<status>" "$N_CHANGED")"
+  "$(printf '{"id":"%s","retry":%d,"status":"%s","files_changed_count":%d,"subagent_model":"%s"}' \
+     "<task-id>" "<retry>" "<status>" "$N_CHANGED" "$SUBAGENT_MODEL")"
 ```
 
 This populates `implement_*` rows in `metrics.jsonl` so post-run analysis can compute implementer wall_ms, retry rate, and files-changed distribution.
@@ -3558,54 +3711,165 @@ For each finding: severity (blocker / major / minor / nit), location, and a sugg
 - If there are no blockers or majors, respond with exactly: `No blockers or majors found.` (plus an optional 1-line note if something needs the implementer's attention but is below the bar).
 ```
 
-5. Call the provider:
+5. Call the provider (with file-based capture for codex):
+
+**Codex capability probe (once per run, cached to a tmp sentinel):**
 
 ```bash
-if [ "$USE_STDIN" = "True" ]; then
-  if [ -n "$TIMEOUT_CMD" ]; then
-    RESPONSE="$(printf '%s' "$PROMPT" | "$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS)"
+# Use a per-session sentinel: key on the parent PID so it persists across
+# steps within one run but not across runs.
+PROBE_SENTINEL="/tmp/z-harness-codex-outfile-probe.${PPID:-$$}"
+if [ ! -f "$PROBE_SENTINEL" ]; then
+  # Probe for the long-form flag name; `-o` is the documented short alias of
+  # `--output-last-message` and is only used if this long-form probe succeeds.
+  if codex exec --help 2>&1 | grep -q 'output-last-message'; then
+    printf '1' > "$PROBE_SENTINEL"
   else
-    RESPONSE="$(printf '%s' "$PROMPT" | $COMMAND $ARGS)"
+    printf '0' > "$PROBE_SENTINEL"
+  fi
+fi
+CODEX_SUPPORTS_OUTFILE="$(cat "$PROBE_SENTINEL")"
+```
+
+**Dispatch (file-based path for codex, stdout path for all others):**
+
+```bash
+TASK_ID="<task-id from caller>"
+CYCLE="<cycle number>"
+PROVIDER="$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["provider"])')"
+ARCHIVE_DIR="${Z_HARNESS_PLAN_DIR}/archive/tasks/${TASK_ID}"
+mkdir -p "$ARCHIVE_DIR"
+OUTFILE="${ARCHIVE_DIR}/review-cycle${CYCLE}.md"
+CAPTURE_MODE="stdout"
+
+if [ "$PROVIDER" = "codex" ] && [ "$CODEX_SUPPORTS_OUTFILE" = "1" ]; then
+  # File-based capture: codex writes only the final message to $OUTFILE;
+  # stdout transcript is intentionally discarded.
+  CAPTURE_MODE="file"
+  if [ "$USE_STDIN" = "True" ]; then
+    if [ -n "$TIMEOUT_CMD" ]; then
+      printf '%s' "$PROMPT" | "$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS -o "$OUTFILE"
+      CODEX_EXIT=$?
+    else
+      printf '%s' "$PROMPT" | $COMMAND $ARGS -o "$OUTFILE"
+      CODEX_EXIT=$?
+    fi
+  else
+    if [ -n "$TIMEOUT_CMD" ]; then
+      "$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS -o "$OUTFILE" "$PROMPT"
+      CODEX_EXIT=$?
+    else
+      $COMMAND $ARGS -o "$OUTFILE" "$PROMPT"
+      CODEX_EXIT=$?
+    fi
+  fi
+
+  # Validate: non-zero exit or missing/empty file → fallback
+  if [ "$CODEX_EXIT" -ne 0 ] || [ ! -s "$OUTFILE" ]; then
+    FALLBACK_REASON="exit_${CODEX_EXIT}_or_empty_outfile"
+    # role is included so review_capture_fallback has ONE uniform schema across the reviewer
+    # and both consultant agents ({id, cycle, role, reason}); the SPEC's {id, cycle, reason} is
+    # the required floor, role is the cross-agent disambiguator a fallback-rate cut needs.
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tasks/${TASK_ID}" review_capture_fallback \
+      "$(printf '{"id":"%s","cycle":%d,"role":"reviewer","reason":"%s"}' "$TASK_ID" "${CYCLE:-0}" "$FALLBACK_REASON")"
+    CAPTURE_MODE="stdout"
+    # Re-run without -o to capture stdout
+    if [ "$USE_STDIN" = "True" ]; then
+      if [ -n "$TIMEOUT_CMD" ]; then
+        RESPONSE="$(printf '%s' "$PROMPT" | "$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS)"
+      else
+        RESPONSE="$(printf '%s' "$PROMPT" | $COMMAND $ARGS)"
+      fi
+    else
+      if [ -n "$TIMEOUT_CMD" ]; then
+        RESPONSE="$("$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS "$PROMPT")"
+      else
+        RESPONSE="$($COMMAND $ARGS "$PROMPT")"
+      fi
+    fi
+  else
+    RESPONSE="$(cat "$OUTFILE")"
   fi
 else
-  if [ -n "$TIMEOUT_CMD" ]; then
-    RESPONSE="$("$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS "$PROMPT")"
+  # Non-codex provider OR probe failed: byte-identical stdout path.
+  if [ "$USE_STDIN" = "True" ]; then
+    if [ -n "$TIMEOUT_CMD" ]; then
+      RESPONSE="$(printf '%s' "$PROMPT" | "$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS)"
+    else
+      RESPONSE="$(printf '%s' "$PROMPT" | $COMMAND $ARGS)"
+    fi
   else
-    RESPONSE="$($COMMAND $ARGS "$PROMPT")"
+    if [ -n "$TIMEOUT_CMD" ]; then
+      RESPONSE="$("$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS "$PROMPT")"
+    else
+      RESPONSE="$($COMMAND $ARGS "$PROMPT")"
+    fi
   fi
 fi
 ```
 
-6. Archive the transcript and log the event:
+6. Archive the full review and log the event:
 
 ```bash
-TASK_ID="<task-id from caller>"
-PROVIDER="$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["provider"])')"
-DIR="z-harness/archive/tasks/$TASK_ID"
-mkdir -p "$DIR"
-printf '%s\n' "$PROMPT"   > "$DIR/review.prompt.md"
-printf '%s\n' "$RESPONSE" > "$DIR/review.response.md"
+# For the file-based codex path, $OUTFILE already holds the canonical artifact.
+# For the stdout path, write the response to the archive file now.
+if [ "$CAPTURE_MODE" = "stdout" ]; then
+  printf '%s\n' "$RESPONSE" > "$OUTFILE"
+fi
+
+printf '%s\n' "$PROMPT" > "${ARCHIVE_DIR}/review-cycle${CYCLE}.prompt.md"
+# $OUTFILE = ${ARCHIVE_DIR}/review-cycle${CYCLE}.md  (the canonical artifact)
 
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tasks/$TASK_ID" review \
   "$(printf '{"provider":"%s","model_label":"%s","prompt_chars":%d,"response_chars":%d,"return_chars":%d,"wall_ms":%d}' \
      "$PROVIDER" "$MODEL_LABEL" "${#PROMPT}" "${#RESPONSE}" "${#RETURN}" "$WALL_MS")"
+
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-subagent.sh" \
+  --run "tasks/$TASK_ID" \
+  --role "reviewer" \
+  --subagent-type "reviewer" \
+  --subagent-model "$MODEL_LABEL" \
+  --prompt-chars "${#PROMPT}" \
+  --response-chars "${#RESPONSE}" || true
 ```
 
-7. **Extract a tight return payload — DO NOT return the raw response to the caller.** Build `$RETURN` by extracting **only** the findings section:
+`response_chars` = `${#RESPONSE}` = size of the captured final review (the file content or stdout capture), **not** the discarded codex transcript.
+
+7. **Build a tight return payload.** The canonical artifact is the file at `$OUTFILE`. Extract only: verdict (`PASS`/`FAIL`/`BLOCKED`), blocker/major counts, and the artifact path.
 
 ```bash
-RETURN="$(printf '%s\n' "$RESPONSE" \
-  | awk '/^\*\*Findings\*\*|^### Blockers|^### Major|^## [A-Za-z]+ review/{found=1} found' \
-  | head -c 8000)"
+VERDICT="$(printf '%s\n' "$RESPONSE" \
+  | grep -m1 -Eo '\b(PASS|FAIL|BLOCKED)\b' || printf 'UNKNOWN')"
+BLOCKER_COUNT="$(printf '%s\n' "$RESPONSE" \
+  | grep -c '^\- \*\*BLOCKER\*\*\|^### Blockers' || printf '0')"
+MAJOR_COUNT="$(printf '%s\n' "$RESPONSE" \
+  | grep -c '^\- \*\*MAJOR\*\*\|^### Major' || printf '0')"
+
+RETURN="$(printf 'verdict: %s\nblockers: %s\nmajors: %s\nartifact: %s\n' \
+  "$VERDICT" "$BLOCKER_COUNT" "$MAJOR_COUNT" "$OUTFILE")"
+
+# Also include the findings section for the orchestrator (from the artifact file).
+FINDINGS="$(printf '%s\n' "$RESPONSE" \
+  | awk '/^\*\*Findings\*\*|^### Blockers|^### Major|^## [A-Za-z]+ review/{found=1} found')"
+if [ -n "$FINDINGS" ]; then
+  RETURN="$(printf '%s\n\n%s' "$RETURN" "$FINDINGS")"
+fi
 ```
 
-If awk yields nothing (the provider returned the verbatim "No blockers or majors found." line), use the literal string. **Hard cap `$RETURN` at 8000 characters.**
+The file at `$OUTFILE` is the **source of truth** for the full review. The 8000-char cap no longer applies to the artifact; `$RETURN` carries only the structured summary + artifact path.
 
-8. Return `$RETURN` to the caller, grouped by severity. Do not soften, do not editorialize.
+8. Return `$RETURN` to the caller. Do not soften, do not editorialize.
 
-## Output format (the structured `$RETURN`, ≤8 KB)
+## Output format (the structured `$RETURN`)
+
+`$RETURN` carries: verdict line, blocker/major counts, artifact path, and the findings section (from the artifact file). The canonical full review lives in the artifact file. `$RETURN` has no hard character cap — the artifact file is the source of truth.
 
     ## Reviewer review: task <ID>
+
+    verdict: PASS|FAIL|BLOCKED
+    blockers: <N>
+    majors: <N>
+    artifact: <abs path to review-cycle<N>.md>
 
     ### Blockers
     <findings>

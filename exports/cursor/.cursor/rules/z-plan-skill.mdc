@@ -5,6 +5,9 @@ alwaysApply: false
 
 You are running the **z-harness `/z-plan`** pipeline.
 
+<!-- NO_SESSION_GUARD -->
+**Session persistence required.** This pipeline spans multiple phases, dispatches subagents, and may need to resume after a pause. If you are running in `--no-session` mode (session is not persisted to disk), stop immediately and tell the user: "`/z-plan` requires a persistent session. Please restart pi without `--no-session`." Then halt. Do not proceed.
+
 Task (from `$ARGUMENTS`):
 
 $ARGUMENTS
@@ -226,7 +229,12 @@ if peers:
     If **no** signal fired, skip the gate entirely — no AskUserQuestion, no route-decision.md write.
 
     - **Conflict check:** If both `BRAINSTORM.md` and `RESEARCH.md` exist (in component-file mode, i.e. one-way gate inactive), scan for obvious contradictions (e.g. Brainstorm assumes X is possible; Research/Map found constraint Y that prevents it). Surface contradictions to the user.
-    - **Unfinalized brainstorm:** If `BRAINSTORM.md` is present but `status: complete` is missing or `chosen_framing` is absent, recommend the user run `/z-brainstorm` again before proceeding.
+    - **Interactive BRAINSTORM.md variant:** If `BRAINSTORM.md` is present, read its frontmatter `mode` field. If `mode: interactive`:
+      - Skip the "unfinalized brainstorm" check — `chosen_framing: interactive` IS finalization. No re-run recommendation.
+      - Skip the anti-bias check — the interactive variant has a single framing (no vendor comparison needed).
+      - Record `brainstorm_mode: interactive` for Phase 0 injection.
+      - If `status: draft`, note that the premise is provisional and will need closer scrutiny in Phase 0.
+    - **Unfinalized brainstorm (standard variant only):** If `BRAINSTORM.md` is present (with no `mode` field or `mode` is NOT `interactive`) but `status: complete` is missing or `chosen_framing` is absent, recommend the user run `/z-brainstorm` again before proceeding.
 
 **All paths in subsequent phases live under `$Z_HARNESS_PLAN_DIR/`:**
 - `$Z_HARNESS_PLAN_DIR/SPEC.md`
@@ -331,6 +339,11 @@ This makes post-run analysis trivial: total run time = sum(`phase_end.wall_ms`);
 ## Phase 0 — Premise check
 
 **Do not take the prompt's premises for granted.** If `BRAINSTORM.md` or `RESEARCH.md` were detected in Setup step 10, **inject their content here** as input to the premise check (extracting core hypothesis + findings). Do not re-derive context already covered by these artifacts.
+
+**Interactive BRAINSTORM.md variant:** If Setup step 10 detected `mode: interactive`:
+- Extract the `### Converged premise` section (Problem, Why it matters, Approach, Key constraints, Risks, Open questions) as the core hypothesis — instead of looking for per-ideator sections.
+- The `chosen_framing: interactive` is the canonical framing — no user choice step needed.
+- If `status: draft`: note prominently that the premise is marked draft — the user considers it provisional. Scrutinize more closely. Surface any concerns that would normally have been caught by vendor-diverse ideation.
 
 Before any planning, ask:
 
@@ -515,6 +528,29 @@ When all consultants return (from either path):
 
 Save transcripts (the consultants do this themselves). Checkpoint: `phase3-decisions-final.md`.
 
+### Phase 3.5 — Tier 2 context initialization
+
+After writing `phase3-decisions-final.md`, initialize tier2-context.json:
+
+```bash
+# Set spec_summary and plan_summary
+python3 -c "
+import json, os
+dir = os.environ['Z_HARNESS_PLAN_DIR']
+ctx = {'plan': os.environ['Z_HARNESS_SLUG'], 'spec_summary': '<1-3 sentences from Phase 0>', 'plan_summary': '<workstream overview from decisions>'}
+path = os.path.join(dir, 'tier2-context.json')
+json.dump(ctx, open(path, 'w'), indent=2)
+"
+
+# Append decisions
+python3 scripts/append-tier2-context.py --phase plan --field decisions --json '<decisions JSON>'
+
+# Append consultant findings (if consultants returned non-degraded)
+python3 scripts/append-tier2-context.py --phase plan --field consultant_findings --json '<findings JSON>' || true
+```
+
+Non-fatal: failure logs `tier2_init_failed` event; tier2-context.json won't exist for this run.
+
 ## Phase 4 — Final clarifications
 
 If anything is still unclear about scope, constraints, or success criteria — ask the user. No silent assumptions.
@@ -530,6 +566,17 @@ Present a **concise** decisions summary: one bullet per decision (what, why, wha
 Use `AskUserQuestion` for explicit approval on:
 - Each major design decision
 - Each proposed shortcut (default to robust if not approved)
+
+**Human override capture:** After any AskUserQuestion where the user overrides a recommendation:
+```
+AskUserQuestion "Why [choice] over [recommended]? (press Enter to skip)"
+```
+If the user provides a reason:
+```bash
+python3 scripts/append-tier2-context.py --phase plan --field human_overrides \
+  --json '{"phase":"planning","decision_id":"<id>","override":"<user choice>","reason":"<user reason>"}'
+```
+If the user presses Enter (no reason), skip capture — the gap will be detected at Tier 2 finalization.
 
 Block until answered.
 
@@ -553,6 +600,89 @@ If neither artifact was present, write: `none — fresh /z-plan run.`
 Create `$Z_HARNESS_PLAN_DIR/PLAN.md` — approved plan: goals, decisions (with rationale), non-goals, approved shortcuts, ordered phases.
 
 Both obey **DRY / KISS / SOLID**. State explicitly how the plan respects each.
+
+### After write — invariant promotion nudge
+
+After SPEC.md is written, check whether any of its invariants should be promoted to the permanent `docs/INVARIANTS.json` store. This nudge only fires when ALL three gates pass:
+
+**Gate A — INVARIANTS.json exists.** If `docs/INVARIANTS.json` does not exist, skip the nudge silently (no per-plan invariant store to promote to; the user can bootstrap later with `/z-init-docs --invariants`).
+
+**Gate B — Non-matching invariants found.** Scan the just-written SPEC.md for lines matching:
+- `**INVARIANT:**`
+- `**MUST:**` (mandatory behavioral constraint)
+- `**MUST NOT:**` (prohibited behavior)
+
+For each extracted line, check against existing INVARIANTS.json entries:
+- Exact ID match (`inv_NNN` mentioned in the line) — skip (already in the store).
+- Description fuzzy match: lowercase, strip punctuation, compute Jaccard similarity on word sets. If similarity ≥0.7 to any existing invariant's description → skip (already covered).
+
+If zero non-matching invariants remain, skip the nudge.
+
+**Gate C — Durability signal.** For each non-matching invariant, check if it appears durable using the same heuristic as T004:
+- **(a)** The invariant line references files from ≥2 distinct top-level directories (e.g., `src/feed/` and `src/trader/`), OR
+- **(b)** The invariant text uses cross-cutting language: "system", "cross-cutting", "cross-module", "across all", "every module", "pipeline-wide", "end-to-end".
+
+If no non-matching invariants pass the durability signal, skip the nudge.
+
+**Nudge prompt.** If all three gates pass and N durable, non-matching invariants are found:
+
+```
+AskUserQuestion:
+  "N SPEC.md invariants look durable. Promote to INVARIANTS.json?"
+
+  [Summary table: candidate #, invariant text (truncated 80 chars), durability signal, source_files]
+
+  Options:
+    - Promote all N — write all durable candidates to INVARIANTS.json
+    - Let me pick — show per-invariant accept/skip
+    - Skip — don't promote any; invariants remain SPEC.md-scoped only
+```
+
+**On promote (accept all or pick):**
+
+1. For each promoted invariant, construct an INVARIANTS.json entry:
+   - `id`: auto-assign `inv_NNN` with zero-padded sequential numbering starting after the highest existing ID
+   - `description`: the invariant text, cleaned (strip markup)
+   - `tags`: auto-classify from `docs/llm/TAGS.txt` using keyword match (same algorithm as `/z-init-docs --invariants` Phase 4)
+   - `failure_class`: derive from the invariant text — what real-world bug occurs if violated
+   - `severity`: parse from text ("must"/"never"/"danger" → blocker; "should" → major; else minor)
+   - `source_files`: the set of file paths referenced in the invariant or the SPEC.md's per-file sections, deduped
+   - `last_updated`: current ISO-8601 timestamp
+   - `source`: `"spec"`
+
+2. Write the new entries to INVARIANTS.json using atomic write (tmpfile → flush → fsync → os.replace()):
+   ```bash
+   python3 -c "
+   import json
+   data = json.load(open('docs/INVARIANTS.json'))
+   data['invariants'].extend(<new_entries_json>)
+   # sort by id
+   data['invariants'].sort(key=lambda x: x['id'])
+   data['generated_at'] = '<current_iso>'
+   # atomic write
+   tmp = 'docs/INVARIANTS.json.tmp'
+   with open(tmp, 'w') as f:
+       json.dump(data, f, indent=2)
+       f.write('\n')
+       f.flush()
+       import os; os.fsync(f.fileno())
+   os.replace(tmp, 'docs/INVARIANTS.json')
+   "
+   ```
+
+3. Validate the updated INVARIANTS.json:
+   ```bash
+   python3 scripts/validate-invariants.py --file docs/INVARIANTS.json
+   ```
+   If validation fails (exit code ≠ 0), surface errors and halt — do NOT leave a partial INVARIANTS.json.
+
+4. Regenerate `docs/INVARIANTS.md` from the updated INVARIANTS.json.
+
+5. Log the promotion event:
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" invariant_promoted \
+     "$(printf '{"count":%d,"ids":%s}' "$N" "$IDS_JSON")"
+   ```
 
 ## Phase 7 — Bundled final review
 

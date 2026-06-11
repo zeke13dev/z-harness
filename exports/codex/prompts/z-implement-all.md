@@ -260,7 +260,21 @@ Event kinds aggregated: `user_choice`, `user_override`, `plan_route_decision`, `
 
 #### 2. Derive from artifact / fallbacks
 
-Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` if still empty:
+**Author the approach (required on full-profile success).** You hold the full run context, so before calling `finalize` you MUST set a crisp high-level **How** describing the *solution* — what you actually did, not a table of contents of the plan artifact. This renders as the Briefing "How" line (the renderer joins bullets with ` → `). Substitute your own summary into one of:
+
+```bash
+# One crisp sentence (most runs):
+bash "$RB_SH" set-section --run "$RUN" --section approach --value "<one-line summary of what you did>"
+
+# 2-4 distinct steps — write a bullet file, pass --file (each "- " line becomes a
+# bullet; lines containing file paths or "file.ext:" tokens are dropped):
+#   printf '%s\n' '- <step one>' '- <step two>' '- <step three>' > /tmp/approach.md
+#   bash "$RB_SH" set-section --run "$RUN" --section approach --file /tmp/approach.md
+```
+
+Skip authoring only on halt/abort paths (where there is no meaningful approach) — the lite downgrade handles those. The `extract_approach_bullets` scrape below is the **empty-only fallback** for when authoring was skipped: it runs only when `approach` is still unset (the `APPROACH_COUNT -eq 0` guard), so an authored approach always wins. The scrape regex-greps bullet/numbered lines out of the artifact and tends to produce a plan table-of-contents, which is exactly what authoring avoids.
+
+Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` from it only if still empty:
 
 ```bash
 APPROACH_FILE=""
@@ -490,7 +504,21 @@ Event kinds aggregated: `user_choice`, `user_override`, `plan_route_decision`, `
 
 #### 2. Derive from artifact / fallbacks
 
-Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` if still empty:
+**Author the approach (required on full-profile success).** You hold the full run context, so before calling `finalize` you MUST set a crisp high-level **How** describing the *solution* — what you actually did, not a table of contents of the plan artifact. This renders as the Briefing "How" line (the renderer joins bullets with ` → `). Substitute your own summary into one of:
+
+```bash
+# One crisp sentence (most runs):
+bash "$RB_SH" set-section --run "$RUN" --section approach --value "<one-line summary of what you did>"
+
+# 2-4 distinct steps — write a bullet file, pass --file (each "- " line becomes a
+# bullet; lines containing file paths or "file.ext:" tokens are dropped):
+#   printf '%s\n' '- <step one>' '- <step two>' '- <step three>' > /tmp/approach.md
+#   bash "$RB_SH" set-section --run "$RUN" --section approach --file /tmp/approach.md
+```
+
+Skip authoring only on halt/abort paths (where there is no meaningful approach) — the lite downgrade handles those. The `extract_approach_bullets` scrape below is the **empty-only fallback** for when authoring was skipped: it runs only when `approach` is still unset (the `APPROACH_COUNT -eq 0` guard), so an authored approach always wins. The scrape regex-greps bullet/numbered lines out of the artifact and tends to produce a plan table-of-contents, which is exactly what authoring avoids.
+
+Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` from it only if still empty:
 
 ```bash
 APPROACH_FILE=""
@@ -784,7 +812,21 @@ Event kinds aggregated: `user_choice`, `user_override`, `plan_route_decision`, `
 
 #### 2. Derive from artifact / fallbacks
 
-Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` if still empty:
+**Author the approach (required on full-profile success).** You hold the full run context, so before calling `finalize` you MUST set a crisp high-level **How** describing the *solution* — what you actually did, not a table of contents of the plan artifact. This renders as the Briefing "How" line (the renderer joins bullets with ` → `). Substitute your own summary into one of:
+
+```bash
+# One crisp sentence (most runs):
+bash "$RB_SH" set-section --run "$RUN" --section approach --value "<one-line summary of what you did>"
+
+# 2-4 distinct steps — write a bullet file, pass --file (each "- " line becomes a
+# bullet; lines containing file paths or "file.ext:" tokens are dropped):
+#   printf '%s\n' '- <step one>' '- <step two>' '- <step three>' > /tmp/approach.md
+#   bash "$RB_SH" set-section --run "$RUN" --section approach --file /tmp/approach.md
+```
+
+Skip authoring only on halt/abort paths (where there is no meaningful approach) — the lite downgrade handles those. The `extract_approach_bullets` scrape below is the **empty-only fallback** for when authoring was skipped: it runs only when `approach` is still unset (the `APPROACH_COUNT -eq 0` guard), so an authored approach always wins. The scrape regex-greps bullet/numbered lines out of the artifact and tends to produce a plan table-of-contents, which is exactly what authoring avoids.
+
+Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` from it only if still empty:
 
 ```bash
 APPROACH_FILE=""
@@ -945,8 +987,9 @@ If there are running follow-up consumer entries, **halt** — do not proceed wit
 2. **Discover plan slug.** Multiple plans may coexist under `$Z_HARNESS_PLAN_DIR/`. A `$Z_HARNESS_PLAN_DIR/` may be either a **legacy single-slug plan** (contains `TASKS.md` directly) or a **tree-rooted plan** produced by `/z-plan-split` (contains `MANIFEST.md` + per-cluster subdirectories, each with its own `TASKS.md`):
 
    **2a. Enumerate candidates.**
-   - For each subdir of `z-harness/plans/` (canonical) and `z-harness/` (legacy): classify as `tree-rooted` if `$Z_HARNESS_PLAN_DIR/MANIFEST.md` exists, else `legacy` if `$Z_HARNESS_PLAN_DIR/TASKS.md` exists, else skip.
-   - Also check for the legacy flat layout (`z-harness/TASKS.md` directly).
+   - First, probe the canonical state-directory path: `$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" base_dir)/plans/`. For each subdir there: classify as `tree-rooted` if `<path>/MANIFEST.md` exists, else `legacy` if `<path>/TASKS.md` exists, else skip.
+   - Then probe the repo-relative fallbacks: `z-harness/plans/` and `z-harness/`. For each subdir there: classify same as above. **Deduplicate** — if a slug was already discovered via the canonical state directory, skip its repo-relative duplicate.
+   - Also check for the legacy flat layout (`z-harness/TASKS.md` directly, AND `<state-dir>/TASKS.md` directly if the state dir has no `plans/` subdirectory).
    - Zero candidates → tell user to run `/z-plan` first; abort.
    - One candidate → use it.
    <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug-selection question via their native channel. Silent omission is forbidden. -->
@@ -1247,7 +1290,21 @@ Event kinds aggregated: `user_choice`, `user_override`, `plan_route_decision`, `
 
 #### 2. Derive from artifact / fallbacks
 
-Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` if still empty:
+**Author the approach (required on full-profile success).** You hold the full run context, so before calling `finalize` you MUST set a crisp high-level **How** describing the *solution* — what you actually did, not a table of contents of the plan artifact. This renders as the Briefing "How" line (the renderer joins bullets with ` → `). Substitute your own summary into one of:
+
+```bash
+# One crisp sentence (most runs):
+bash "$RB_SH" set-section --run "$RUN" --section approach --value "<one-line summary of what you did>"
+
+# 2-4 distinct steps — write a bullet file, pass --file (each "- " line becomes a
+# bullet; lines containing file paths or "file.ext:" tokens are dropped):
+#   printf '%s\n' '- <step one>' '- <step two>' '- <step three>' > /tmp/approach.md
+#   bash "$RB_SH" set-section --run "$RUN" --section approach --file /tmp/approach.md
+```
+
+Skip authoring only on halt/abort paths (where there is no meaningful approach) — the lite downgrade handles those. The `extract_approach_bullets` scrape below is the **empty-only fallback** for when authoring was skipped: it runs only when `approach` is still unset (the `APPROACH_COUNT -eq 0` guard), so an authored approach always wins. The scrape regex-greps bullet/numbered lines out of the artifact and tends to produce a plan table-of-contents, which is exactly what authoring avoids.
+
+Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` from it only if still empty:
 
 ```bash
 APPROACH_FILE=""
@@ -1966,13 +2023,41 @@ The persona is a **prompt-prefix only**: the implementer still runs as the nativ
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
   subagent_type="implementer",
   description="Implement <task-id>",
-  prompt="<PERSONA_PREFIX (empty when persona_rotation is off)><task-id>\n\n<task block verbatim from $TASKS_FILE>\n\n$BASE: <abs path>  (read SPEC.md / PLAN.md yourself from here)\nRepo root: <abs path>\nrelevant_docs (paths — Read these for cross-file invariants and consumer contracts): <paths from step 4b>\ntests_md_path: <$BASE/TESTS.md if it exists, else empty>  (if the task block contains a **Tests:** line, Read TESTS.md and produce test code for each listed TEST-NNN at its Target file path, in the same diff as the production code)\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+  prompt="<PERSONA_PREFIX (empty when persona_rotation is off)><task-id>\n\n<task block verbatim from $TASKS_FILE>\n\n$BASE: <abs path>  (read SPEC.md / PLAN.md yourself from here)\nRepo root: <abs path>\nrelevant_docs (paths — Read these for cross-file invariants and consumer contracts): <paths from step 4b>\ntests_md_path: <$BASE/TESTS.md if it exists, else empty>  (if the task block contains a **Tests:** line, Read TESTS.md and produce test code for each listed TEST-NNN at its Target file path, in the same diff as the production code)\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]\nsubagent_model: <IMPL_MODEL>  ← include this in implement_start/implement_end event payloads"
 )
 ```
 
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 
 **`**Complexity:** high` opt-in.** If the user wrote `**Complexity:** high` in the task block, also set the upgrade signal even on first attempt.
+
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+
+```bash
+# Resolve effective implementer model label for telemetry.
+# Opus when: cycle >= 2 (retry-upgrade) OR Complexity: high in task block.
+IMPL_MODEL="sonnet"
+if [[ "${Z_HARNESS_RETRY_UPGRADE:-}" == "opus" ]] || \
+   grep -q '^\*\*Complexity:\*\* high' <(printf '%s\n' "$TASK_BLOCK") 2>/dev/null; then
+  IMPL_MODEL="opus"
+fi
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+IMPL_PROMPT_CHARS="${#IMPL_PROMPT}"   # set IMPL_PROMPT to the full prompt string before passing it
+```
+
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+
+```bash
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+IMPL_RESPONSE_CHARS="${#IMPL_RESPONSE}"
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-subagent.sh" \
+  --run "tasks/<task-id>" \
+  --role "implementer" \
+  --subagent-type "implementer" \
+  --subagent-model "$IMPL_MODEL" \
+  --prompt-chars "$IMPL_PROMPT_CHARS" \
+  --response-chars "$IMPL_RESPONSE_CHARS" || true
+```
 
 **REMOTE_VERIFY pre-dispatch.** If the task block contains a `**REMOTE_VERIFY:**` line, before parsing the implementer's return, dispatch the `remote-runner` (Haiku) subagent with the verify command. If the remote build fails, treat the implementer return as if it had `STATUS: unable_to_complete` and present the build log excerpt to the user.
 
@@ -2110,12 +2195,192 @@ If `NEW_HASH == OLD_HASH`, the implementer didn't actually change anything (it p
 <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the no_change_on_retry decision (override / patch manually / abandon) via their native channel. Silent omission is forbidden. -->
 ask the user via `AskUserQuestion` whether to override (accept the unchanged diff) / patch manually / abandon. Saves one full Codex review cycle on stuck tasks.
 
-If neither guard fired, check the consult mode and spawn the appropriate reviewer:
+**Pre-review gate-down (opt-in, default off — `Z_HARNESS_IMPL_PRE_REVIEW`).**
+
+> **Cost-inversion caveat:** running Flash on every task plus codex on a subset can invert total cost relative to running codex on every task. Enable only after reviewing `scripts/audit-preview-misses.sh` results. This knob is **undocumented-as-recommended** until the T009 evidence gate demonstrates acceptable Flash false-negative rate on low-tier tasks. See SPEC Change 3 evidence gate.
+
+This entire block is a NO-OP when `Z_HARNESS_IMPL_PRE_REVIEW` is unset or `0`. When unset/0, execution falls through immediately to the "Consult-off check" below — behavior is byte-identical to today.
+
+Initialize both downstream variables unconditionally BEFORE the knob block so the skip-guard and reviewer prompts below always read a defined value, even on the knob-off path:
+
+```bash
+# Unconditional init — must be OUTSIDE/BEFORE the knob block.
+# When the knob is off (or on but Flash is clean) these defaults ensure the skip-guard
+# (PRE_REVIEW_GATED_DOWN=0 → codex runs) and FLASH_PREPEND (empty → no-op in prompts)
+# are both defined on every path. This must NOT change knob-off behavior.
+PRE_REVIEW_GATED_DOWN=0
+FLASH_PREPEND=""
+```
+
+```bash
+if [ "${Z_HARNESS_IMPL_PRE_REVIEW:-0}" = "1" ] && [ "$CYCLE" -eq 1 ]; then
+```
+
+Inside this block (only runs when knob = 1 and this is cycle 1):
+
+**Step 6.P1 — Tier-drift re-check.** Re-run the complexity-classifier on the current task block to detect post-plan-time complexity changes:
+
+Before dispatching, strip the cached `**Complexity:** ...` line from the task block so the classifier re-derives the tier from scratch (per the z-amend.md strip precedent — if you pass the block verbatim the classifier's heuristic #1 sees the user-authored override and returns the cached tier unchanged, making drift detection impossible):
+
+```bash
+# Strip the cached **Complexity:** stamp before dispatching — so the classifier derives LIVE_TIER fresh.
+TASK_BLOCK_FOR_DRIFT="$(printf '%s' "$TASK_BLOCK" | grep -v '^\*\*Complexity:\*\*')"
+```
+
+```
+# Dispatch inside the if block — only when Z_HARNESS_IMPL_PRE_REVIEW=1
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+  subagent_type="complexity-classifier",
+  description="Tier-drift re-check for <task-id>",
+  prompt="task_block: <TASK_BLOCK_FOR_DRIFT — the task block with the **Complexity:** line stripped>\nspec_slice_path: $BASE/SPEC.md\nrepo_root: <repo root abs path>"
+)
+```
+
+Parse the classifier return: `LIVE_TIER` = the `TIER:` line value (`low`, `medium`, `high`).
+
+Compare against `COMPLEXITY_TIER` (the plan-time cached stamp parsed at step 5.0):
+
+```bash
+# Tier ordering: low < medium < high
+tier_rank() { case "$1" in low) echo 1;; medium) echo 2;; high) echo 3;; *) echo 2;; esac; }
+CACHED_RANK="$(tier_rank "$COMPLEXITY_TIER")"
+LIVE_RANK="$(tier_rank "$LIVE_TIER")"
+```
+
+If `LIVE_RANK > CACHED_RANK` (drift-up): emit `tier_drift_detected` and set `EFFECTIVE_TIER` to the live tier, then skip the gate-down shortcut (force full codex review):
+
+```bash
+if [ "$LIVE_RANK" -gt "$CACHED_RANK" ]; then
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
+    "tasks/<task-id>" tier_drift_detected \
+    "$(printf '{"id":"%s","cached_tier":"%s","live_tier":"%s","action":"force_codex"}' \
+       "<task-id>" "$COMPLEXITY_TIER" "$LIVE_TIER")"
+  EFFECTIVE_TIER="$LIVE_TIER"
+  PRE_REVIEW_GATE_DOWN=0  # drift-up → skip the Flash shortcut; fall through to codex
+else
+  EFFECTIVE_TIER="${COMPLEXITY_TIER:-medium}"
+  PRE_REVIEW_GATE_DOWN=1  # tentatively eligible; gate-down decides below
+fi
+```
+
+**Step 6.P2 — Gate-down (low-tier only).** Only runs when `PRE_REVIEW_GATE_DOWN=1` and `EFFECTIVE_TIER == "low"`:
+
+```bash
+if [ "$PRE_REVIEW_GATE_DOWN" -eq 1 ] && [ "$EFFECTIVE_TIER" = "low" ]; then
+```
+
+Probe whether the Flash (pre-reviewer) provider is available:
+
+```bash
+  FLASH_PROVIDER="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-provider.py" \
+    pre-reviewer 2>/dev/null || echo "")"
+  if [ -z "$FLASH_PROVIDER" ] || [ "$FLASH_PROVIDER" = "none" ]; then
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
+      "tasks/<task-id>" pre_review_skipped \
+      "$(printf '{"id":"%s","reason":"provider_unavailable","tier":"%s"}' \
+         "<task-id>" "$EFFECTIVE_TIER")"
+    # Fail-safe: fall through to the full codex review below.
+  else
+```
+
+When Flash is available, dispatch the pre-reviewer on the task diff:
+
+```
+    <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+      subagent_type="pre-reviewer",
+      description="Flash pre-review (gate-down) for <task-id>",
+      prompt="MODE: final-review-prong-a
+task_id: <task-id>
+tier: low
+diff_path: $BASE/archive/tasks/<task-id>/diff.patch
+SPEC.md: $BASE/SPEC.md
+PLAN.md: $BASE/PLAN.md
+task_block: <verbatim task block>
+acceptance_criteria: <criteria verbatim from task block>
+[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]
+
+Focus: fast first-pass on this single task diff. Flag only clear blockers and majors that would cause the base codex reviewer to return FAIL. If unsure, drop it. VERDICT must be CLEAN, MAJORS_FOUND, or BLOCKERS_FOUND."
+    )
+```
+
+Parse the pre-reviewer response for the `**VERDICT:**` line:
+
+```bash
+    FLASH_VERDICT="$(echo "$PRE_REVIEW_RESPONSE" | grep -o 'VERDICT:[[:space:]]*[A-Z_]*' | head -1 | awk -F'[: ]+' '{print $NF}')"
+```
+
+Branch on verdict:
+
+- **`CLEAN`** (no blockers, no majors): skip the codex reviewer. Emit `review_gated_down` and proceed directly to step 7 with `BLOCKER_COUNT=0` and `MAJORS_COUNT=0`:
+
+  ```bash
+      if [ "$FLASH_VERDICT" = "CLEAN" ]; then
+        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
+          "tasks/<task-id>" review_gated_down \
+          "$(printf '{"id":"%s","tier":"%s","provider":"flash","cycle":%d}' \
+             "<task-id>" "$EFFECTIVE_TIER" "$CYCLE")"
+        # Treat as a passing review — no codex dispatch.
+        BLOCKER_COUNT=0
+        MAJORS_COUNT=0
+        PRE_REVIEW_GATED_DOWN=1
+      fi
+  ```
+
+- **`MAJORS_FOUND` or `BLOCKERS_FOUND`** (Flash flagged something): escalate to the full codex reviewer. Prepend the Flash findings to the codex reviewer prompt by setting `FLASH_PREPEND`:
+
+  ```bash
+      if [ "$FLASH_VERDICT" != "CLEAN" ]; then
+        FLASH_PREPEND="$(printf '## Flash pre-review findings (prepended for context)\n%s\n\n' \
+          "$PRE_REVIEW_RESPONSE")"
+        PRE_REVIEW_GATED_DOWN=0
+        # Fall through to the codex reviewer below (FLASH_PREPEND is injected into the prompt).
+      fi
+  ```
+
+```bash
+  fi  # end Flash-available branch
+fi    # end low-tier gate-down block
+```
+
+**Step 6.P3 — Medium/high tier (knob on, no gate-down).** When `EFFECTIVE_TIER` is `medium` or `high` and Flash is available, optionally run Flash purely to prepend findings to the codex prompt (no gating — Flash is not authoritative at these tiers):
+
+```bash
+if [ "$PRE_REVIEW_GATE_DOWN" -eq 0 ] && [ "$EFFECTIVE_TIER" != "low" ]; then
+  # Flash runs advisory only — its findings are prepended to the codex prompt
+  # but its VERDICT never gates codex dispatch. PRE_REVIEW_GATED_DOWN stays 0.
+  FLASH_PREPEND=""   # optional: dispatch pre-reviewer here and set FLASH_PREPEND if useful
+fi
+```
+
+Close the outer knob gate:
+
+```bash
+fi  # end Z_HARNESS_IMPL_PRE_REVIEW=1 block
+```
+
+**Downstream wiring.** After the above block, two variables may be set:
+- `PRE_REVIEW_GATED_DOWN=1` — codex reviewer must be SKIPPED; jump directly to step 7 with `BLOCKER_COUNT=0 MAJORS_COUNT=0`.
+- `FLASH_PREPEND` — non-empty string to prepend to the codex reviewer prompt (both base and self-review paths below).
+
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+
+```
+prompt="${FLASH_PREPEND}task id: <id>\n..."
+```
+
+Skip codex dispatch when `PRE_REVIEW_GATED_DOWN=1`. ALL reviewer-dispatch sub-sections (consult-off check, self-review, base-codex, and advisory random-arm) are nested inside this guard — when Flash gated codex out, NONE of these sections run:
+
+```bash
+if [ "${PRE_REVIEW_GATED_DOWN:-0}" -ne 1 ]; then
+  # ── BEGIN reviewer-dispatch block (skipped entirely when PRE_REVIEW_GATED_DOWN=1) ──
+```
+
+Check the consult mode and spawn the appropriate reviewer:
 
 **Consult-off check:**
 
 ```bash
-REVIEWER_PROVIDER="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-provider.py" reviewer 2>/dev/null)"
+  REVIEWER_PROVIDER="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-provider.py" reviewer 2>/dev/null)"
 ```
 
 If `REVIEWER_PROVIDER == "none"` (i.e. `Z_HARNESS_CONSULT=off`): skip the external reviewer and run a same-model (Opus) self-review instead:
@@ -2131,7 +2396,7 @@ If `REVIEWER_PROVIDER == "none"` (i.e. `Z_HARNESS_CONSULT=off`): skip the extern
   <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
     subagent_type="self-reviewer",
     description="Self-review (consult=off) <task-id>",
-    prompt="task id: <id>\ntask description: <title>\nacceptance criteria: <criteria verbatim from task block>\ndiff.patch path: <abs path>\nchanged files: <abs paths>\nrelated downstream files (paths only; Read them yourself): <related_files paths from step 4a>\nrelevant_docs (paths — verify the diff did not break invariants stated in these): <paths from step 4b>\n$BASE: <abs path>  (read SPEC.md yourself for relevant sections)\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+    prompt="${FLASH_PREPEND}task id: <id>\ntask description: <title>\nacceptance criteria: <criteria verbatim from task block>\ndiff.patch path: <abs path>\nchanged files: <abs paths>\nrelated downstream files (paths only; Read them yourself): <related_files paths from step 4a>\nrelevant_docs (paths — verify the diff did not break invariants stated in these): <paths from step 4b>\n$BASE: <abs path>  (read SPEC.md yourself for relevant sections)\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
   )
   ```
 - Emit `self_review_completed` event after the self-review returns:
@@ -2150,72 +2415,76 @@ Otherwise (consult=on), spawn the external reviewer(s):
 
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 ```
-<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
-  subagent_type="reviewer",
-  description="Codex review <task-id>",
-  prompt="task id: <id>\nreviewer_participant: base_codex\ntask description: <title>\nacceptance criteria: <criteria verbatim from task block>\ndiff.patch path: <abs path>\nchanged files: <abs paths>\nrelated downstream files (paths only; reviewer Reads them itself): <related_files paths from step 4a>\nrelevant_docs (paths — verify the diff didn't break invariants stated in these): <paths from step 4b>\n$BASE: <abs path>  (read SPEC.md yourself for relevant sections)\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
-)
+  <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+    subagent_type="reviewer",
+    description="Codex review <task-id>",
+    prompt="${FLASH_PREPEND}task id: <id>\nreviewer_participant: base_codex\ntask description: <title>\nacceptance criteria: <criteria verbatim from task block>\ndiff.patch path: <abs path>\nchanged files: <abs paths>\nrelated downstream files (paths only; reviewer Reads them itself): <related_files paths from step 4a>\nrelevant_docs (paths — verify the diff didn't break invariants stated in these): <paths from step 4b>\n$BASE: <abs path>  (read SPEC.md yourself for relevant sections)\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+  )
 ```
 
 Log the base codex reviewer as `persona_bound` (tag `reviewer_participant=base_codex`). The base reviewer is not a random draw, so its `draw_id` is the deterministic synthetic id `<attempt_id>-base_codex`. Only emit when `experiment.persona_rotation` is on — knob-off must be a true no-op:
 ```bash
-if [ "$PERSONA_ROTATION" = "true" ]; then
-  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
-    "tasks/<task-id>" persona_bound \
-    "$(python3 -c 'import json,sys; print(json.dumps({"command":"z-implement-all","role":"reviewer","task_id":sys.argv[1],"attempt_id":sys.argv[2],"draw_id":sys.argv[2]+"-base_codex","reviewer_participant":"base_codex","cycle":int(sys.argv[3])}))' "<task-id>" "$ATTEMPT_ID" "$CYCLE")"
-fi
+  if [ "$PERSONA_ROTATION" = "true" ]; then
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
+      "tasks/<task-id>" persona_bound \
+      "$(python3 -c 'import json,sys; print(json.dumps({"command":"z-implement-all","role":"reviewer","task_id":sys.argv[1],"attempt_id":sys.argv[2],"draw_id":sys.argv[2]+"-base_codex","reviewer_participant":"base_codex","cycle":int(sys.argv[3])}))' "<task-id>" "$ATTEMPT_ID" "$CYCLE")"
+  fi
 ```
 
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 
 ```bash
-REVIEW_EVAL="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get personas.review_eval 2>/dev/null || echo true)"
-if [ "$PERSONA_ROTATION" = "true" ] && [ "$REVIEW_EVAL" = "true" ]; then
-  # Re-export join keys so the reviewer draw event carries task_id + attempt_id.
-  # These were exported in step 5.0 but are re-exported here to guarantee they
-  # are in scope even if the shell has been reset or this block runs in a
-  # sub-shell context.
-  export Z_HARNESS_TASK_ID="<task-id>"
-  export Z_HARNESS_ATTEMPT_ID="$ATTEMPT_ID"
-  export Z_HARNESS_RUN_ID="$RUN"
-  REVIEWER_DRAW_JSON="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-persona.py" \
-    random-for-role reviewer 2>/dev/null || echo '{}')"
-  REVIEWER_PERSONA_BODY_PATH="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("persona_body_path",""))' "$REVIEWER_DRAW_JSON" 2>/dev/null || echo "")"
-  REVIEWER_DRAW_ID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("draw_id",""))' "$REVIEWER_DRAW_JSON" 2>/dev/null || echo "")"
-  REVIEWER_PERSONA_ID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("persona",""))' "$REVIEWER_DRAW_JSON" 2>/dev/null || echo "")"
-  if [ -n "$REVIEWER_PERSONA_BODY_PATH" ] && [ -f "$REVIEWER_PERSONA_BODY_PATH" ]; then
-    REVIEWER_PERSONA_PREFIX="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/runtime/dispatch/persona_prompt.py" "$REVIEWER_PERSONA_BODY_PATH" "" 2>/dev/null | head -c 4096 || true)"
-    [ -n "$REVIEWER_PERSONA_PREFIX" ] && REVIEWER_PERSONA_PREFIX="${REVIEWER_PERSONA_PREFIX}
+  REVIEW_EVAL="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get personas.review_eval 2>/dev/null || echo true)"
+  if [ "$PERSONA_ROTATION" = "true" ] && [ "$REVIEW_EVAL" = "true" ]; then
+    # Re-export join keys so the reviewer draw event carries task_id + attempt_id.
+    # These were exported in step 5.0 but are re-exported here to guarantee they
+    # are in scope even if the shell has been reset or this block runs in a
+    # sub-shell context.
+    export Z_HARNESS_TASK_ID="<task-id>"
+    export Z_HARNESS_ATTEMPT_ID="$ATTEMPT_ID"
+    export Z_HARNESS_RUN_ID="$RUN"
+    REVIEWER_DRAW_JSON="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-persona.py" \
+      random-for-role reviewer 2>/dev/null || echo '{}')"
+    REVIEWER_PERSONA_BODY_PATH="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("persona_body_path",""))' "$REVIEWER_DRAW_JSON" 2>/dev/null || echo "")"
+    REVIEWER_DRAW_ID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("draw_id",""))' "$REVIEWER_DRAW_JSON" 2>/dev/null || echo "")"
+    REVIEWER_PERSONA_ID="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("persona",""))' "$REVIEWER_DRAW_JSON" 2>/dev/null || echo "")"
+    if [ -n "$REVIEWER_PERSONA_BODY_PATH" ] && [ -f "$REVIEWER_PERSONA_BODY_PATH" ]; then
+      REVIEWER_PERSONA_PREFIX="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/runtime/dispatch/persona_prompt.py" "$REVIEWER_PERSONA_BODY_PATH" "" 2>/dev/null | head -c 4096 || true)"
+      [ -n "$REVIEWER_PERSONA_PREFIX" ] && REVIEWER_PERSONA_PREFIX="${REVIEWER_PERSONA_PREFIX}
 
 "
-  else
-    REVIEWER_PERSONA_PREFIX=""
+    else
+      REVIEWER_PERSONA_PREFIX=""
+    fi
   fi
-fi
 ```
 
 <!-- RUNTIME-GATE: subagent; non-supporting drivers may skip the random-arm reviewer — it is advisory only. The base codex reviewer above is the required correctness gate. -->
 ```
-# Only dispatch when PERSONA_ROTATION == "true" AND REVIEW_EVAL == "true":
-<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
-  subagent_type="reviewer",
-  description="Advisory review (random arm) <task-id>",
-  prompt="<REVIEWER_PERSONA_PREFIX><ADVISORY: this review is for data-collection only — verdict is recorded but does not gate the task>\ntask id: <id>\nreviewer_participant: random_arm\ntask description: <title>\nacceptance criteria: <criteria verbatim from task block>\ndiff.patch path: <abs path>\nchanged files: <abs paths>\nrelated downstream files (paths only; reviewer Reads them itself): <related_files paths from step 4a>\nrelevant_docs (paths — verify the diff didn't break invariants stated in these): <paths from step 4b>\n$BASE: <abs path>  (read SPEC.md yourself for relevant sections)\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
-)
+  # Only dispatch when PERSONA_ROTATION == "true" AND REVIEW_EVAL == "true":
+  <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+    subagent_type="reviewer",
+    description="Advisory review (random arm) <task-id>",
+    prompt="<REVIEWER_PERSONA_PREFIX><ADVISORY: this review is for data-collection only — verdict is recorded but does not gate the task>\ntask id: <id>\nreviewer_participant: random_arm\ntask description: <title>\nacceptance criteria: <criteria verbatim from task block>\ndiff.patch path: <abs path>\nchanged files: <abs paths>\nrelated downstream files (paths only; reviewer Reads them itself): <related_files paths from step 4a>\nrelevant_docs (paths — verify the diff didn't break invariants stated in these): <paths from step 4b>\n$BASE: <abs path>  (read SPEC.md yourself for relevant sections)\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+  )
 ```
 
 Log the random-arm reviewer as `persona_bound` (tag `reviewer_participant=random_arm`, same `attempt_id`):
 ```bash
-if [ "$PERSONA_ROTATION" = "true" ] && [ "$REVIEW_EVAL" = "true" ]; then
-  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
-    "tasks/<task-id>" persona_bound \
-    "$(python3 -c 'import json,sys; print(json.dumps({"command":"z-implement-all","role":"reviewer","task_id":sys.argv[1],"attempt_id":sys.argv[2],"reviewer_participant":"random_arm","persona_id":sys.argv[3],"draw_id":sys.argv[4],"cycle":int(sys.argv[5])}))' "<task-id>" "$ATTEMPT_ID" "$REVIEWER_PERSONA_ID" "$REVIEWER_DRAW_ID" "$CYCLE")"
-fi
+  if [ "$PERSONA_ROTATION" = "true" ] && [ "$REVIEW_EVAL" = "true" ]; then
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
+      "tasks/<task-id>" persona_bound \
+      "$(python3 -c 'import json,sys; print(json.dumps({"command":"z-implement-all","role":"reviewer","task_id":sys.argv[1],"attempt_id":sys.argv[2],"reviewer_participant":"random_arm","persona_id":sys.argv[3],"draw_id":sys.argv[4],"cycle":int(sys.argv[5])}))' "<task-id>" "$ATTEMPT_ID" "$REVIEWER_PERSONA_ID" "$REVIEWER_DRAW_ID" "$CYCLE")"
+  fi
 ```
 
 **Advisory verdict handling.** Capture each reviewer's response into a SEPARATE variable — e.g. `BASE_CODEX_RESPONSE` for the base codex reviewer and `RANDOM_ARM_RESPONSE` for the advisory arm. The two responses must NEVER be merged into a single variable. Parse and act on ONLY `BASE_CODEX_RESPONSE` for step 7 branching (blockers/majors counts, retry decisions, halt logic). `RANDOM_ARM_RESPONSE` is stored for telemetry/logging only and must never be parsed into the gating decision; it is never surfaced as a blocking finding.
 
 Parse the base codex reviewer's response. Group findings by severity.
+
+```bash
+fi  # ── END reviewer-dispatch block (PRE_REVIEW_GATED_DOWN guard closes here) ──
+```
 
 ### 7. Handle review outcome
 
@@ -2617,7 +2886,21 @@ Event kinds aggregated: `user_choice`, `user_override`, `plan_route_decision`, `
 
 #### 2. Derive from artifact / fallbacks
 
-Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` if still empty:
+**Author the approach (required on full-profile success).** You hold the full run context, so before calling `finalize` you MUST set a crisp high-level **How** describing the *solution* — what you actually did, not a table of contents of the plan artifact. This renders as the Briefing "How" line (the renderer joins bullets with ` → `). Substitute your own summary into one of:
+
+```bash
+# One crisp sentence (most runs):
+bash "$RB_SH" set-section --run "$RUN" --section approach --value "<one-line summary of what you did>"
+
+# 2-4 distinct steps — write a bullet file, pass --file (each "- " line becomes a
+# bullet; lines containing file paths or "file.ext:" tokens are dropped):
+#   printf '%s\n' '- <step one>' '- <step two>' '- <step three>' > /tmp/approach.md
+#   bash "$RB_SH" set-section --run "$RUN" --section approach --file /tmp/approach.md
+```
+
+Skip authoring only on halt/abort paths (where there is no meaningful approach) — the lite downgrade handles those. The `extract_approach_bullets` scrape below is the **empty-only fallback** for when authoring was skipped: it runs only when `approach` is still unset (the `APPROACH_COUNT -eq 0` guard), so an authored approach always wins. The scrape regex-greps bullet/numbered lines out of the artifact and tends to produce a plan table-of-contents, which is exactly what authoring avoids.
+
+Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` from it only if still empty:
 
 ```bash
 APPROACH_FILE=""
@@ -2899,7 +3182,21 @@ Event kinds aggregated: `user_choice`, `user_override`, `plan_route_decision`, `
 
 #### 2. Derive from artifact / fallbacks
 
-Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` if still empty:
+**Author the approach (required on full-profile success).** You hold the full run context, so before calling `finalize` you MUST set a crisp high-level **How** describing the *solution* — what you actually did, not a table of contents of the plan artifact. This renders as the Briefing "How" line (the renderer joins bullets with ` → `). Substitute your own summary into one of:
+
+```bash
+# One crisp sentence (most runs):
+bash "$RB_SH" set-section --run "$RUN" --section approach --value "<one-line summary of what you did>"
+
+# 2-4 distinct steps — write a bullet file, pass --file (each "- " line becomes a
+# bullet; lines containing file paths or "file.ext:" tokens are dropped):
+#   printf '%s\n' '- <step one>' '- <step two>' '- <step three>' > /tmp/approach.md
+#   bash "$RB_SH" set-section --run "$RUN" --section approach --file /tmp/approach.md
+```
+
+Skip authoring only on halt/abort paths (where there is no meaningful approach) — the lite downgrade handles those. The `extract_approach_bullets` scrape below is the **empty-only fallback** for when authoring was skipped: it runs only when `approach` is still unset (the `APPROACH_COUNT -eq 0` guard), so an authored approach always wins. The scrape regex-greps bullet/numbered lines out of the artifact and tends to produce a plan table-of-contents, which is exactly what authoring avoids.
+
+Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` from it only if still empty:
 
 ```bash
 APPROACH_FILE=""
@@ -3067,8 +3364,8 @@ For each task track, the orchestrator emits these event kinds (in order):
 | `task_start` | Track begins | `id`, `attempt` (1 on first try, increments on user "Defer + resume") |
 | `precheck_start` | Just before spawning `spec-precheck` | `id` |
 | `precheck_end` | Precheck returned | `id`, `status` (`ok`/`spec_problem`), `references_checked`, `wall_ms` |
-| `implement_start` | Just before spawning `implementer` (each retry counts) | `id`, `retry` (0=first, 1=retry) |
-| `implement_end` | Implementer returned | `id`, `retry`, `status`, `files_changed_count`, `wall_ms` |
+| `implement_start` | Just before spawning `implementer` (each retry counts) | `id`, `retry` (0=first, 1=retry), `subagent_model` (`sonnet` or `opus`) |
+| `implement_end` | Implementer returned | `id`, `retry`, `status`, `files_changed_count`, `wall_ms`, `subagent_model` |
 | `diff_capture` | After `git diff` | `id`, `diff_bytes` |
 | `review_start` | Just before spawning `reviewer` (each cycle) | `id`, `cycle` (1, 2, ...) |
 | `review_end` | Reviewer returned | `id`, `cycle`, `wall_ms`, `response_chars`, `blockers`, `majors` |

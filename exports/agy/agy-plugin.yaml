@@ -219,6 +219,10 @@ workflows:
     source: commands/z-uplift.md
     output: .agent/workflows/z-uplift.md
     description: "Tiered bulk codebase quality uplift — decompose repo into components, run a repo-wide cross-cutting pass, dispatch per-component audits, produce per-component TASKS.md files, and drive sequential implementation via /z-implement-all."
+  - id: z-verify
+    source: commands/z-verify.md
+    output: .agent/workflows/z-verify.md
+    description: "Interactive understanding — reconstruct what a codebase feature actually does,"
   - id: z-where
     source: commands/z-where.md
     output: .agent/workflows/z-where.md
@@ -482,7 +486,7 @@ skills:
   - id: z-review-all
     source: skills/z-review-all/SKILL.md
     output: .agent/skills/z-review-all/SKILL.md
-    description: "Final-gate cross-LLM review of a completed z-harness plan. Runs Gemini + Codex on the cumulative diff against SPEC.md to surface (a) implementation drift across tasks and (b) spec gaps that only surface in aggregate. Use after /z-implement-all com..."
+    description: "Final-gate cross-LLM review of a completed z-harness plan. Runs Gemini + Codex on the cumulative diff against SPEC.md to surface (a) implementation drift across tasks and (b) spec gaps that only surface in aggregate. After findings are aggregated,..."
   - id: z-stats
     source: skills/z-stats/SKILL.md
     output: .agent/skills/z-stats/SKILL.md
@@ -494,7 +498,11 @@ skills:
   - id: z-test
     source: skills/z-test/SKILL.md
     output: .agent/skills/z-test/SKILL.md
-    description: "Semantic test-case planner. Reads SPEC.md + PLAN.md + TASKS.md for an existing plan, risk-ranks the tasks, drafts non-trivial test cases that catch real semantic bugs (sign errors, schema/feature mismatches, time-window off-by-one, unit confusion,..."
+    description: "Dual-source semantic test-case planner. ERROR_POINTS.json (empirical regression hardening from review findings) + INVARIANTS.json (preventive coverage from declared design truths). Reads SPEC.md + PLAN.md + TASKS.md for an existing plan, risk-rank..."
+  - id: z-test-invariant
+    source: skills/z-test-invariant/SKILL.md
+    output: .agent/skills/z-test-invariant/SKILL.md
+    description: "Archived invariant-only z-test. Invoke via /z-test --mode invariant. This is the legacy invariant-first test-case planner preserved for backward compatibility and reference."
   - id: z-update
     source: skills/z-update/SKILL.md
     output: .agent/skills/z-update/SKILL.md
@@ -503,6 +511,10 @@ skills:
     source: skills/z-uplift/SKILL.md
     output: .agent/skills/z-uplift/SKILL.md
     description: "Bulk codebase quality uplift. Triggers on \"uplift the codebase\", \"audit the whole repo\", \"review every component\", \"quality pass\". Decomposes repo into components, runs cross-cutting audit, dispatches per-component reviews, and outputs TASKS.md."
+  - id: z-verify
+    source: skills/z-verify/SKILL.md
+    output: .agent/skills/z-verify/SKILL.md
+    description: "Interactive understanding — reconstruct what a codebase feature actually does,"
   - id: z-where
     source: skills/z-where/SKILL.md
     output: .agent/skills/z-where/SKILL.md

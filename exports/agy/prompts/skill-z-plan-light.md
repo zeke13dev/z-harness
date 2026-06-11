@@ -5,6 +5,9 @@ role: skill
 
 You are running **z-harness `/z-plan-light`** — a fast path for one-file-or-few-files fixes. Target: ≤10 min wall time end-to-end.
 
+<!-- NO_SESSION_GUARD -->
+**Session persistence required.** This pipeline dispatches subagents for cross-LLM review. If you are running in `--no-session` mode (session is not persisted to disk), stop immediately and tell the user: "`/z-plan-light` requires a persistent session. Please restart pi without `--no-session`." Then halt. Do not proceed.
+
 Task (from `$ARGUMENTS`):
 
 $ARGUMENTS

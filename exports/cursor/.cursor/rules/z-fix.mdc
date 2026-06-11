@@ -432,7 +432,21 @@ Event kinds aggregated: `user_choice`, `user_override`, `plan_route_decision`, `
 
 #### 2. Derive from artifact / fallbacks
 
-Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` if still empty:
+**Author the approach (required on full-profile success).** You hold the full run context, so before calling `finalize` you MUST set a crisp high-level **How** describing the *solution* — what you actually did, not a table of contents of the plan artifact. This renders as the Briefing "How" line (the renderer joins bullets with ` → `). Substitute your own summary into one of:
+
+```bash
+# One crisp sentence (most runs):
+bash "$RB_SH" set-section --run "$RUN" --section approach --value "<one-line summary of what you did>"
+
+# 2-4 distinct steps — write a bullet file, pass --file (each "- " line becomes a
+# bullet; lines containing file paths or "file.ext:" tokens are dropped):
+#   printf '%s\n' '- <step one>' '- <step two>' '- <step three>' > /tmp/approach.md
+#   bash "$RB_SH" set-section --run "$RUN" --section approach --file /tmp/approach.md
+```
+
+Skip authoring only on halt/abort paths (where there is no meaningful approach) — the lite downgrade handles those. The `extract_approach_bullets` scrape below is the **empty-only fallback** for when authoring was skipped: it runs only when `approach` is still unset (the `APPROACH_COUNT -eq 0` guard), so an authored approach always wins. The scrape regex-greps bullet/numbered lines out of the artifact and tends to produce a plan table-of-contents, which is exactly what authoring avoids.
+
+Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` from it only if still empty:
 
 ```bash
 APPROACH_FILE=""
@@ -481,12 +495,22 @@ bash "$RB_SH" finalize --run "$RUN"
 
 `finalize` classifies terminal status (via `run-status.sh` when unset), resolves artifact/fallback env, auto-downgrades to **lite** when no artifact exists on a full-profile brief (see halt-safe below), validates against `docs/llm/run-brief-contract.json`, and emits `run_brief_end`.
 
+#### 3.5. Cost summary render → stdout (non-fatal, before chat)
+
+```bash
+COST_SUMMARY_TEXT=""
+COST_RENDERER="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-cost-summary.py"
+if [ -f "$COST_RENDERER" ] && [ -f "$CURRENT_ARCHIVE_DIR/events.jsonl" ]; then
+  COST_SUMMARY_TEXT="$(python3 "$COST_RENDERER" "$CURRENT_ARCHIVE_DIR/events.jsonl" 2>/dev/null || true)"
+fi
+```
+
 #### 4. Chat render → user (replaces hand-authored "Brief summary")
 
 Print rendered chat text to the user — **do not** write independent summary prose:
 
 ```bash
-python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat ${COST_SUMMARY_TEXT:+--cost-summary-text "$COST_SUMMARY_TEXT"}
 ```
 
 #### 5. Push render (when notify policy allows)
@@ -499,6 +523,18 @@ fi
 ```
 
 Push format: `{intent[:80]} · {outcome[:60]} · Next: {next.label}` (from JSON).
+
+#### 5.5. Discord render (when notify policy + webhook URL allow)
+
+```bash
+if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end --channel discord)" = yes ]; then
+  DISCORD_TITLE="${RUN_BRIEF_INTENT:-z-harness run}"
+  DISCORD_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/notify-discord.sh" "$DISCORD_TITLE" "$DISCORD_BODY" || true
+fi
+```
+
+Discord uses enriched embed format — includes cost summary when available (not identical to PushNotification content). Non-fatal on failure.
 
 #### 6. Hard gate — `--require` before deregister
 
@@ -638,7 +674,21 @@ Event kinds aggregated: `user_choice`, `user_override`, `plan_route_decision`, `
 
 #### 2. Derive from artifact / fallbacks
 
-Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` if still empty:
+**Author the approach (required on full-profile success).** You hold the full run context, so before calling `finalize` you MUST set a crisp high-level **How** describing the *solution* — what you actually did, not a table of contents of the plan artifact. This renders as the Briefing "How" line (the renderer joins bullets with ` → `). Substitute your own summary into one of:
+
+```bash
+# One crisp sentence (most runs):
+bash "$RB_SH" set-section --run "$RUN" --section approach --value "<one-line summary of what you did>"
+
+# 2-4 distinct steps — write a bullet file, pass --file (each "- " line becomes a
+# bullet; lines containing file paths or "file.ext:" tokens are dropped):
+#   printf '%s\n' '- <step one>' '- <step two>' '- <step three>' > /tmp/approach.md
+#   bash "$RB_SH" set-section --run "$RUN" --section approach --file /tmp/approach.md
+```
+
+Skip authoring only on halt/abort paths (where there is no meaningful approach) — the lite downgrade handles those. The `extract_approach_bullets` scrape below is the **empty-only fallback** for when authoring was skipped: it runs only when `approach` is still unset (the `APPROACH_COUNT -eq 0` guard), so an authored approach always wins. The scrape regex-greps bullet/numbered lines out of the artifact and tends to produce a plan table-of-contents, which is exactly what authoring avoids.
+
+Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` from it only if still empty:
 
 ```bash
 APPROACH_FILE=""
@@ -687,12 +737,22 @@ bash "$RB_SH" finalize --run "$RUN"
 
 `finalize` classifies terminal status (via `run-status.sh` when unset), resolves artifact/fallback env, auto-downgrades to **lite** when no artifact exists on a full-profile brief (see halt-safe below), validates against `docs/llm/run-brief-contract.json`, and emits `run_brief_end`.
 
+#### 3.5. Cost summary render → stdout (non-fatal, before chat)
+
+```bash
+COST_SUMMARY_TEXT=""
+COST_RENDERER="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-cost-summary.py"
+if [ -f "$COST_RENDERER" ] && [ -f "$CURRENT_ARCHIVE_DIR/events.jsonl" ]; then
+  COST_SUMMARY_TEXT="$(python3 "$COST_RENDERER" "$CURRENT_ARCHIVE_DIR/events.jsonl" 2>/dev/null || true)"
+fi
+```
+
 #### 4. Chat render → user (replaces hand-authored "Brief summary")
 
 Print rendered chat text to the user — **do not** write independent summary prose:
 
 ```bash
-python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat
+python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat ${COST_SUMMARY_TEXT:+--cost-summary-text "$COST_SUMMARY_TEXT"}
 ```
 
 #### 5. Push render (when notify policy allows)
@@ -705,6 +765,18 @@ fi
 ```
 
 Push format: `{intent[:80]} · {outcome[:60]} · Next: {next.label}` (from JSON).
+
+#### 5.5. Discord render (when notify policy + webhook URL allow)
+
+```bash
+if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end --channel discord)" = yes ]; then
+  DISCORD_TITLE="${RUN_BRIEF_INTENT:-z-harness run}"
+  DISCORD_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/notify-discord.sh" "$DISCORD_TITLE" "$DISCORD_BODY" || true
+fi
+```
+
+Discord uses enriched embed format — includes cost summary when available (not identical to PushNotification content). Non-fatal on failure.
 
 #### 6. Hard gate — `--require` before deregister
 

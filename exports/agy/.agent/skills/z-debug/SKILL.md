@@ -5,6 +5,9 @@ description: "Investigate a known-bad behavior with explicit repro / hypothesis 
 
 You are running **z-harness `/z-debug`** — heavy hypothesis-tournament pipeline for an existing bug whose root cause is unknown. This is the discipline path. If the user already has a working hypothesis they want to ship a fix for, Phase 0 will redirect them to `/z-fix`.
 
+<!-- NO_SESSION_GUARD -->
+**Session persistence required.** This pipeline spans multiple phases, dispatches subagents, and may need to resume after a pause. If you are running in `--no-session` mode (session is not persisted to disk), stop immediately and tell the user: "`/z-debug` requires a persistent session. Please restart pi without `--no-session`." Then halt. Do not proceed.
+
 Symptom (from `$ARGUMENTS`):
 
 $ARGUMENTS
