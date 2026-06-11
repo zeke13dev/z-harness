@@ -1,17 +1,44 @@
 # run-brief — Unified command completion receipt
 
-> Last updated: 2026-06-07  
-> Covers source: docs/llm/run-brief-contract.json, docs/llm/run-brief-registry.json
+> Last updated: 2026-06-11
+> Covers source: docs/llm/run-brief-contract.json, docs/llm/run-brief-registry.json, docs/human/run-brief.md, scripts/run-brief.sh, scripts/render-run-brief.py, scripts/lint-run-brief.sh, commands/_fragments/run-brief-finalize.md, commands/_fragments/run-brief-halt-finalize-implement-all.md, commands/_fragments/run-brief-halt-finalize-implement-next.md
 
 ## Overview
 
-Every major z-command in the v1 registry emits a **Run Brief** at finalize: a fixed-schema receipt that answers what you asked for, how the harness approached it, what was decided, what happened, and what to run next.
+Every major z-command in the v1 registry emits a **Run Brief** at finalize: a fixed-schema receipt that answers what you asked for, how the harness approached it, what was decided, what happened, and what to run next. The canonical source of truth is `archive/$RUN/run-brief.json`; all chat and push text are renders from that JSON — never independently authored at finalize.
 
-- **Human surface:** plain text in chat (fixed headers: `INTENT:` / `APPROACH:` / `DECISIONS:` / `OUTCOME:` / `NEXT:`)
-- **Machine source of truth:** `archive/$RUN/run-brief.json` under the plan or adhoc run directory
-- **Push digest:** same JSON rendered to a single three-part line via `render-run-brief.py --format push`: `{intent[:80]} · {outcome[:60]} · Next: {next.label}`
+The chat render is a warm "Briefing" format: a glyph-titled heading (`### <glyph> <command> — <slug>`) followed by `**What**`, `**How**` (full profile only), `**Key decisions**` (full profile, omitted when empty), `**Result**`, and `**Next**`. The push format is a compact single line for notifications. Both are emitted by `render-run-brief.py`.
 
-Chat and push are **renders only** — they are never authored independently at finalize.
+---
+
+## Chat render format (as of 2026-06-11)
+
+`render-run-brief.py --format chat` produces:
+
+```
+### <glyph> <command> — <slug>
+
+**What**  <intent>
+
+**How**  <approach bullet 1> → <approach bullet 2> → ...
+
+**Key decisions**
+- <chosen (humanized)> — *<why>*
+- <chosen (humanized)>
+
+**Result**  <outcome>
+**Next**  `<next.command or next.label>`
+```
+
+**Glyph mapping:** `complete` / `shipped` → `✓`; `halted` / `aborted` → `⛔`; `awaiting_approval` and default → `◐`.
+
+**Lite profile** omits `**How**` and `**Key decisions**`; renders `**What**` / `**Result**` / `**Next**` only.
+
+**Key decisions** section is omitted entirely when `decisions` is empty. Decision tokens are humanized (underscores replaced with spaces) for display; verbatim values remain in `events.jsonl`. The `why` field is surfaced as italic text after an em-dash. Up to 8 decisions are shown; overflow row count is noted.
+
+**Cost summary text** is appended when `--cost-summary-text` is provided (injected by the finalize fragment from `render-cost-summary.py`).
+
+Push format (unchanged): `{intent[:80]} · {outcome[:60]} · Next: {next.label}`
 
 ---
 
@@ -20,8 +47,8 @@ Chat and push are **renders only** — they are never authored independently at 
 | Section | Meaning |
 |---------|---------|
 | **Intent** | One-line statement of the user's goal (max 240 chars). Set early via `run-brief.sh init`. Must not be the command name alone. |
-| **Approach** | 1–4 human bullets summarizing the plan taken (full profile only). Derived from approach.md, FIX.md, PLAN.md, or similar artifacts — no file paths in bullets. |
-| **Decisions** | Table of user/orchestrator choices (`question_id`, `chosen`, optional `why`, `source`). May be empty. Aggregated from `events.jsonl` at finalize if still empty. |
+| **Approach** | 1–4 human bullets summarizing the actual solution taken (full profile only). **Orchestrator must author this** via `run-brief.sh set-section --section approach --value/--file` before finalize on full-profile success. `extract_approach_bullets` scraping is the empty-only fallback. No file paths in bullets. |
+| **Decisions** | User/orchestrator choices (`question_id`, `chosen`, optional `why`, `source`). May be empty. Aggregated from `events.jsonl` at finalize if still empty. `why` is surfaced in chat. |
 | **Outcome** | What actually happened (max 400 chars): shipped, halted reason, audit summary, etc. |
 | **Next** | Suggested follow-up: `{ "label": "...", "command": "/z-..." \| null }`. |
 
@@ -33,17 +60,15 @@ Optional `sources` object records which artifact or event fed each section (for 
 
 ### Full (`profile: "full"`)
 
-Used by workflow commands (plan, implement, audit, debug, fix, review, brainstorm). Requires **Intent, Approach, Decisions, Outcome, Next**. `decisions` may be `[]`.
+Used by workflow commands (plan, implement, audit, debug, fix, review, brainstorm). Requires **Intent, Approach, Decisions, Outcome, Next**. `decisions` may be `[]`. Chat renders all five sections (Key decisions omitted when empty).
 
 ### Lite (`profile: "lite"`)
 
-Used by `/z-do` only. Requires **Intent, Outcome, Next** only. The `approach` and `decisions` keys must be **omitted** (not empty arrays). On early halt with no artifact, the finalize fragment may emit this minimal shape even for full-profile commands.
+Used by `/z-do` only. Requires **Intent, Outcome, Next** only. The `approach` and `decisions` keys must be **omitted** (not empty arrays). On early halt with no artifact, the finalize fragment may emit this minimal shape even for full-profile commands. Chat renders What/Result/Next only.
 
 ---
 
 ## v1 registry commands (11)
-
-These commands emit a run brief on terminal completion (except noted skip paths):
 
 | Command | Profile |
 |---------|---------|
@@ -61,7 +86,7 @@ These commands emit a run brief on terminal completion (except noted skip paths)
 
 **Skip brief (non-terminal):** `/z-implement-all` **compaction_pause** exit only — the run is paused, not finished.
 
-Command → artifact mapping lives in `docs/llm/run-brief-registry.json` (see the unified-command-output plan SPEC).
+Command → artifact mapping lives in `docs/llm/run-brief-registry.json`.
 
 ---
 
@@ -79,12 +104,14 @@ Secondary commands may be added post-v1 by extending the registry JSON.
 
 | Path | Role |
 |------|------|
-| `docs/llm/run-brief-contract.json` | JSON Schema (draft 2020-12) for `run_brief` + embedded registry schema. Root `$ref` points at `#/$defs/run_brief` so validators can load the contract file directly; validate registry JSON with `#/$defs/run_brief_registry`. |
+| `docs/llm/run-brief-contract.json` | JSON Schema (draft 2020-12) for `run_brief` + embedded registry schema. Root `$ref` points at `#/$defs/run_brief` so validators load the contract file directly; validate registry JSON with `#/$defs/run_brief_registry`. |
 | `docs/llm/run-brief-registry.json` | Command → profile, hooks, artifact paths |
 | `scripts/run-brief.sh` | init / set-section / append-decision / finalize |
-| `scripts/render-run-brief.py` | chat / push / json render; `--require` validation gate |
+| `scripts/render-run-brief.py` | chat / push / json render; `--require` validation gate; `--self-test` golden fixture checks |
 | `scripts/lint-run-brief.sh` | Schema + registry + fixture self-test |
 | `commands/_fragments/run-brief-finalize.md` | Shared finalize block inlined into registry commands via `/z-export` |
+| `commands/_fragments/run-brief-halt-finalize-implement-all.md` | Halt-path preamble for `/z-implement-all`; sets outcome + next then includes finalize fragment |
+| `commands/_fragments/run-brief-halt-finalize-implement-next.md` | Halt-path preamble for `/z-implement-next`; same pattern |
 
 Golden fixtures: `tests/run-brief-fixtures/full-shipped/run-brief.json`, `tests/run-brief-fixtures/lite-halted/run-brief.json`.
 
@@ -98,15 +125,29 @@ Set by `run-brief.sh finalize` (often via `run-status.sh classify` when not pres
 
 ---
 
+## Finalize sequence (full-profile success path)
+
+1. **Aggregate decisions** — if `decisions` is still empty, parse `events.jsonl` via `aggregate_decisions()` and append via `run-brief.sh append-decision`.
+2. **Author the approach (required)** — before calling `run-brief.sh finalize`, the orchestrator MUST set a crisp high-level "How" describing the actual solution:
+   ```bash
+   bash "$RB_SH" set-section --run "$RUN" --section approach --value "<one-line summary>"
+   # or for 2-4 steps:
+   bash "$RB_SH" set-section --run "$RUN" --section approach --file /tmp/approach.md
+   ```
+   The `extract_approach_bullets` scrape (which greps bullet lines from the artifact) is the **empty-only fallback** and runs only when `approach` is still unset at finalize time. Authoring always wins.
+3. **Finalize** — `run-brief.sh finalize --run "$RUN"`: classifies status, validates JSON Schema, emits `run_brief_end`.
+4. **Cost summary** — optional; rendered by `render-cost-summary.py` from `events.jsonl`.
+5. **Chat render** — `python3 render-run-brief.py --run-dir "$CURRENT_ARCHIVE_DIR" --format chat`; printed to user.
+6. **Push/Discord** — when notify policy allows.
+7. **Hard gate** — `render-run-brief.py --require` before `deregister`; on failure set `FINALIZE_STATUS=aborted`.
+
+Skip authoring on halt/abort paths — the lite downgrade handles those cases.
+
+---
+
 ## Debug flag
 
 Set `Z_HARNESS_RUN_BRIEF_DEBUG=1` to additionally write a human-readable `run-brief.md` mirror beside `run-brief.json` for local debugging. Default off — JSON remains canonical.
-
-When debugging a live run, export the flag before the command starts (or in the same shell session). After finalize, inspect:
-
-- `archive/$RUN/run-brief.json` — canonical payload
-- `archive/$RUN/run-brief.md` — mirror (debug only)
-- Chat output — should match `python3 scripts/render-run-brief.py --run-dir archive/$RUN --format chat`
 
 ---
 
@@ -114,13 +155,10 @@ When debugging a live run, export the flag before the command starts (or in the 
 
 ### Automated (CI / pre-merge)
 
-Run from repo root:
-
 ```bash
 bash scripts/lint-run-brief.sh              # schema + registry + fixture self-test
-bash scripts/lint-run-brief.sh --registry-only # 11 commands include finalize fragment
+bash scripts/lint-run-brief.sh --registry-only  # 11 commands include finalize fragment
 python3 scripts/render-run-brief.py --self-test
-python3 scripts/export-common.py --self-test
 ```
 
 After changing command bodies, re-export and re-lint:
@@ -134,7 +172,7 @@ bash scripts/lint-run-brief.sh --registry-only
 
 ### Per-command smoke (manual)
 
-For each row: run the command to a **terminal** exit (complete, shipped, or halted — not mid-run pause). Confirm `archive/$RUN/run-brief.json` exists, passes `render-run-brief.py --require`, and chat shows the expected headers.
+For each row: run the command to a **terminal** exit. Confirm `archive/$RUN/run-brief.json` exists, passes `render-run-brief.py --require`, and chat shows the Briefing format (glyph title, **What**/**How**/**Key decisions**/**Result**/**Next**).
 
 | Command | One-line smoke |
 |---------|----------------|
@@ -148,18 +186,15 @@ For each row: run the command to a **terminal** exit (complete, shipped, or halt
 | `/z-fix` | Reach Phase 10 finalize; expect full brief with FIX.md approach. |
 | `/z-brainstorm` | Finish Phase 4; expect full brief with BRAINSTORM.md approach. |
 | `/z-review-all` | Finish review finalize; expect full brief with outcome from `review_all_end` event payload. |
-| `/z-do` | Complete adhoc run; expect **lite** brief (Intent / Outcome / Next only — no Approach or Decisions keys in JSON). |
-
-Optional debug mirror: set `Z_HARNESS_RUN_BRIEF_DEBUG=1` and confirm `run-brief.md` appears beside JSON.
-
-Full checkbox copy lives in the plan archive: `archive/20260607T174050Z-unified-command-output/verification-checklist.md`.
+| `/z-do` | Complete adhoc run; expect **lite** brief (What/Result/Next only — no How or Key decisions in chat; no approach or decisions keys in JSON). |
 
 ---
 
 ## Invariants
 
-1. Chat text is always rendered from JSON.
-2. `render-run-brief.py --require` runs before deregister on registry commands (complete/shipped); minimal brief on halt.
-3. Empty `decisions` is valid.
+1. Chat and push text are always rendered from `run-brief.json` — never independently authored at finalize.
+2. `render-run-brief.py --require` runs on every terminal exit that includes the finalize fragment, before deregister.
+3. Empty `decisions: []` is valid for full profile.
 4. `/z-stats` is not auto-invoked at command end.
 5. Export inlines the shared finalize fragment so all IDE surfaces stay in sync.
+6. Full-profile success paths require the orchestrator to author `approach` via `run-brief.sh set-section` before finalize; `extract_approach_bullets` is the empty-only fallback, not the primary path.

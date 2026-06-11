@@ -518,7 +518,7 @@
         "commands/_fragments/run-brief-halt-finalize-implement-all.md",
         "commands/_fragments/run-brief-halt-finalize-implement-next.md"
       ],
-      "last_updated": "2026-06-08",
+      "last_updated": "2026-06-11",
       "confidence": "high",
       "depends_on": [
         "scripts",
@@ -527,7 +527,7 @@
       "consumed_by": [
         "commands"
       ],
-      "summary": "Unified Run Brief receipt (Intent/Approach/Decisions/Outcome/Next) emitted at finalize for 11 v1 registry commands; JSON canonical in archive/$RUN/run-brief.json; chat and push rendered via render-run-brief.py."
+      "summary": "Unified Run Brief receipt emitted at finalize for 11 v1 registry commands. Chat renders a warm glyph-titled Briefing (What/How/Key decisions/Result/Next) via render-run-brief.py; decision why is surfaced; orchestrator authors approach via run-brief.sh set-section, scrape is empty-only fallback. JSON canonical in archive/$RUN/run-brief.json."
     },
     {
       "slug": "scripts",

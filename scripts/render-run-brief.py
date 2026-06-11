@@ -25,6 +25,20 @@ NUMBERED_LINE = re.compile(r"^\d+[.)]\s+")
 MAX_DECISION_ROWS = 8
 MAX_APPROACH_BULLETS = 4
 
+STATUS_GLYPH = {
+    "complete": "✓",
+    "shipped": "✓",
+    "halted": "⛔",
+    "aborted": "⛔",
+    "awaiting_approval": "◐",
+}
+
+
+def _humanize_token(value: str) -> str:
+    """Make a raw decision token readable: underscores → spaces. Display-only;
+    the verbatim value remains in events.jsonl for tracing."""
+    return value.replace("_", " ").strip()
+
 DECISION_EVENT_KINDS = frozenset(
     {"user_choice", "user_override", "plan_route_decision", "next_step_choice"}
 )
@@ -160,49 +174,64 @@ def validate_brief(brief: dict, contract_path: Path | None = None) -> list[str]:
 
 
 def render_chat(brief: dict) -> str:
+    """Render the run-brief as a warm "Briefing" — a glyph-titled receipt with
+    What / How / Key decisions / Result / Next. Lite profile omits How and
+    Key decisions (intent / outcome / next only)."""
+    profile = brief.get("profile", "full")
+    glyph = STATUS_GLYPH.get(brief.get("status", ""), "◐")
+    command = brief.get("command", "")
+    slug = brief.get("slug", "")
+
     lines: list[str] = []
 
-    lines.append("INTENT:")
-    lines.append(brief.get("intent", ""))
+    # Title — status glyph + command + slug, the whole outcome at a glance.
+    title = f"### {glyph} {command}".rstrip()
+    if slug:
+        title += f" — {slug}"
+    lines.append(title)
     lines.append("")
 
-    profile = brief.get("profile", "full")
+    # What — the intent, always present.
+    lines.append(f"**What**  {brief.get('intent', '')}")
+
+    # How — approach as a single flowing line (full profile only).
     approach = brief.get("approach") or []
     if profile == "full" and approach:
-        lines.append("APPROACH:")
-        for bullet in approach[:MAX_APPROACH_BULLETS]:
-            lines.append(f"- {bullet}")
+        how = " → ".join(approach[:MAX_APPROACH_BULLETS])
         lines.append("")
+        lines.append(f"**How**  {how}")
 
-    if profile == "full" and "decisions" in brief:
-        lines.append("DECISIONS:")
+    # Key decisions — chosen (humanized) + why (full profile only; omit when empty).
+    if profile == "full":
         decisions = list(brief.get("decisions") or [])
-        shown = decisions[:MAX_DECISION_ROWS]
-        for decision in shown:
-            qid = decision.get("question_id", "")
-            chosen = decision.get("chosen", "")
-            lines.append(f"  {qid} → {chosen}")
-        overflow = len(decisions) - len(shown)
-        if overflow > 0:
-            lines.append(f"  (+{overflow} more — see events.jsonl)")
-        elif not decisions:
-            lines.append("  (none)")
-        lines.append("")
+        if decisions:
+            lines.append("")
+            lines.append("**Key decisions**")
+            shown = decisions[:MAX_DECISION_ROWS]
+            for decision in shown:
+                chosen = _humanize_token(decision.get("chosen", ""))
+                why = (decision.get("why") or "").strip()
+                if why:
+                    lines.append(f"- {chosen} — *{why}*")
+                else:
+                    lines.append(f"- {chosen}")
+            overflow = len(decisions) - len(shown)
+            if overflow > 0:
+                lines.append(f"- (+{overflow} more — see events.jsonl)")
 
-    lines.append("OUTCOME:")
-    lines.append(brief.get("outcome", ""))
+    # Result + Next — tight pair at the foot.
     lines.append("")
-
-    lines.append("NEXT:")
+    lines.append(f"**Result**  {brief.get('outcome', '')}")
     nxt = brief.get("next") or {}
-    lines.append(nxt.get("label", ""))
-    lines.append("")
+    next_target = nxt.get("command") or nxt.get("label") or ""
+    if next_target:
+        lines.append(f"**Next**  `{next_target}`")
 
-    # Cost summary — injected from --cost-summary-text flag
+    # Cost summary — injected from --cost-summary-text flag.
     cost_text = brief.get("_cost_summary_text") or ""
     if cost_text.strip():
-        lines.append(cost_text.strip())
         lines.append("")
+        lines.append(cost_text.strip())
 
     while lines and lines[-1] == "":
         lines.pop()
