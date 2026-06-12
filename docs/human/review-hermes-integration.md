@@ -1,5 +1,11 @@
 # Review: Hermes Integration Protocol v1
 
+> **Note (2026-06-12):** The Hermes parallelism layer is now **ACTIVATED** (T001-T015 complete,
+> all reviewed). The "dormant/planned" language from the original v1.1 review no longer applies.
+> Within-plan DAG concurrency, cross-plan orchestration, and the merge mutex are all live.
+> See [docs/human/hermes-integration-v1.md](hermes-integration-v1.md) for the finalized
+> protocol v1.3 specification and operator runbook.
+
 > **Document reviewed:** `docs/human/hermes-integration-v1.md` (v1.1.0, status: DRAFT)
 > **Date:** 2026-06-08
 > **Reviewer:** z-harness `/z-review-all` audit

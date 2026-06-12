@@ -2,7 +2,7 @@
 schema.py — Hermes orchestrator schema definitions.
 
 Implements workstreams.json and session-status.json schemas
-per docs/human/hermes-integration-v1.md v1.2.0.
+per docs/human/hermes-integration-v1.md v1.3.0.
 
 Used by all clusters for type-safe schema access.
 """
@@ -26,7 +26,7 @@ class Workstream:
     path: str                            # Repo-relative path (no trailing /)
     tasks: list[str] = field(default_factory=list)  # Ordered task IDs
     depends_on: list[str] = field(default_factory=list)  # Workstream IDs
-    parallel_group: Optional[str] = None  # V1: always None
+    parallel_group: Optional[str] = None  # Derived label "level-{depth}" from ws DAG longest-path depth; None for legacy manifests
 
 
 @dataclass
@@ -45,6 +45,7 @@ class WorkstreamsManifest:
     source: str                          # "/z-plan-split" | "/z-plan" | "/z-plan-light"
     generated_at: str                    # ISO 8601 UTC
     partial_tree: bool                   # True if any workstream has status "failed"
+    scope_unknown: bool = False          # True when ≥1 task block had no parseable **Files:** line
     workstreams: list[Workstream] = field(default_factory=list)
     file_conflicts: list[FileConflict] = field(default_factory=list)
     merge_order: list[str] = field(default_factory=list)
@@ -61,6 +62,7 @@ def parse_workstreams_json(path: str) -> WorkstreamsManifest:
         source=data["source"],
         generated_at=data["generated_at"],
         partial_tree=data.get("partial_tree", False),
+        scope_unknown=data.get("scope_unknown", False),
         workstreams=[
             Workstream(
                 id=w["id"],
@@ -172,7 +174,13 @@ def validate_manifest(manifest: WorkstreamsManifest) -> list[str]:
     """
     errors = []
     ws_ids = {w.id for w in manifest.workstreams}
-    
+
+    # scope_unknown must be a boolean
+    if not isinstance(manifest.scope_unknown, bool):
+        errors.append(
+            f"scope_unknown must be a bool, got {type(manifest.scope_unknown).__name__}"
+        )
+
     # Rule 1: depends_on references must exist
     for w in manifest.workstreams:
         for dep in w.depends_on:

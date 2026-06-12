@@ -1,8 +1,8 @@
 # Hermes Integration Protocol v1
 
 > **Audience:** Orchestrator implementers (Hermes or alternative).
-> **Status:** REVISED — amended from review 2026-06-08.
-> **Version:** 1.2.0
+> **Status:** REVISED — amended from review 2026-06-12.
+> **Version:** 1.3.0
 >
 > This document defines the contract between z-harness (the planning layer)
 > and any orchestrator (the execution layer) that wants to execute z-harness
@@ -11,6 +11,7 @@
 > **v1.0** (in-flight): Hermes reads MANIFEST.md + SHARED-CONCERNS.md directly.
 > **v1.1** (this spec, original): z-harness writes `workstreams.json` as the machine-readable contract.
 > **v1.2** (amended 2026-06-08): 5-rule DAG derivation, per-workstream `status` field, V1 parallelism constraint, crash-resumption, sanitization, severity alignment with z-plan-split.
+> **v1.3** (amended 2026-06-12): `parallel_group` is now populated as a derived `level-{depth}` label; new `scope_unknown` manifest boolean; concurrency execution contract (depends_on-driven level scheduler, HIGH-severity file-conflict serialization, `max_parallel_workstreams` cap, semaphore-for-lifetime); cross-plan `--slugs` mode contract; non-file shared-state limitation documented.
 
 ---
 
@@ -61,6 +62,7 @@ mid-execution are not supported.
   "source": "<z-plan-split | z-plan | z-plan-light>",
   "generated_at": "<ISO 8601 UTC>",
   "partial_tree": false,
+  "scope_unknown": false,
   "workstreams": [ ... ],
   "file_conflicts": [ ... ],
   "merge_order": [ ... ]
@@ -74,8 +76,9 @@ mid-execution are not supported.
 | `source` | string | yes | Which z-harness command produced this plan: `"/z-plan-split"`, `"/z-plan"`, `"/z-plan-light"`. |
 | `generated_at` | string | yes | ISO 8601 UTC timestamp of generation. |
 | `partial_tree` | boolean | yes | True if one or more workstreams have `status: "failed"` (present in the `workstreams` array but not executable). Orchestrator SHOULD warn and MUST skip workstreams with `status: "failed"`. |
+| `scope_unknown` | boolean | no (default `false`) | True when one or more task blocks in a flat `/z-plan` had no parseable `**Files:**` line, so per-workstream file scope could not be established. When `true`, `file_conflicts` is always `[]` (fail-safe: the orchestrator cannot know what is safe to parallelize). Orchestrators MUST treat `scope_unknown: true` the same as `serialize_all` — serialize all workstreams within this plan. |
 | `workstreams` | array | yes | Ordered list of Workstream objects. First entries are setup (no deps); later entries are leaves. |
-| `file_conflicts` | array | yes | Cross-workstream file overlaps. Empty array if none. |
+| `file_conflicts` | array | yes | Cross-workstream file overlaps. Empty array if none. When `scope_unknown` is `true` this is always empty. |
 | `merge_order` | array | yes | Ordered list of workstream IDs for merge sequence. Authoritative. |
 
 ### Workstream object
@@ -100,7 +103,7 @@ mid-execution are not supported.
 | `path` | string | yes | Repo-relative path to the workstream's plan directory. This IS the BASE — `TASKS.md` lives at `<path>/TASKS.md`. |
 | `tasks` | array | yes | Ordered task IDs belonging to this workstream. Mirrors TASKS.md. Informational — the orchestrator passes the whole `TASKS.md` to `z-implement-all`, not individual tasks. |
 | `depends_on` | array | yes | Workstream IDs that must reach `"done"` before this workstream starts. Empty array means no dependencies. |
-| `parallel_group` | string or null | yes | Label (e.g., `"leaf-a"`) shared by workstreams that can run concurrently. `null` means this workstream runs alone at its dependency level. |
+| `parallel_group` | string or null | yes | Derived label `"level-{depth}"` where `depth` is the longest path from a root in the workstream `depends_on` graph. All workstreams sharing a label are at the same dependency depth and are mutually independent — by construction they can run concurrently (Rule 7 passes). `null` only in legacy manifests that predate v1.3. |
 
 ### File conflict object
 
@@ -132,12 +135,13 @@ empty `depends_on`; leaf clusters depend on setup). `file_conflicts[]`
 derived from SHARED-CONCERNS.md. `merge_order` from MANIFEST.md
 `## Run order`.
 
-> **V1 constraint:** z-plan-split currently produces a linear run order
-> ("Cross-cluster task parallelism is v2"). Consequently, V1
+> **v1.3 note:** z-plan-split currently produces a linear run order
+> (cross-cluster task parallelism is future work). Consequently,
 > `workstreams.json` from z-plan-split will have `depends_on: []` for all
-> workstreams and `parallel_group: null` for all workstreams. The
-> `depends_on` DAG and `parallel_group` fields are reserved for V2 when
-> z-plan-split grows dependency-aware cluster planning.
+> workstreams and `parallel_group: "level-0"` for all workstreams (all at
+> the same depth because there are no cross-workstream dependencies). The
+> `depends_on` DAG will be populated when z-plan-split grows
+> dependency-aware cluster planning.
 
 **z-plan (flat TASKS.md):** Generated by parsing `**Depends on:**`
 lines across all tasks into a DAG via a deterministic 5-rule algorithm:
@@ -197,16 +201,41 @@ The orchestrator reads `workstreams.json` and follows this lifecycle:
 
 ### 1. Resolve dependency order
 
-Build a DAG from `depends_on`. Identify execution levels:
+Build a DAG from `depends_on`. Identify execution levels using the
+longest-path depth of each workstream:
 
 ```
-Level 0 (no deps):  ws-1
-Level 1 (after ws-1): ws-2, ws-3
+Level 0 (no deps):    ws-1
+Level 1 (after ws-1): ws-2, ws-3   ← share parallel_group "level-1"
 ```
 
-Workstreams at the same level that share a `parallel_group` can run
-concurrently. The orchestrator MAY serialize workstreams at the same
-level based on `file_conflicts` (especially `"high"` severity).
+`depends_on` is the sole scheduling gate (INV-2). `parallel_group` is a
+derived label for orchestrator convenience — it is NOT a scheduling
+mechanism. A workstream is eligible to start iff every id in its
+`depends_on` has reached `"done"`.
+
+**Concurrency cap (v1.3):** The orchestrator applies a
+`max_parallel_workstreams` limit (default 1 ≡ sequential, matching
+pre-v1.3 behavior — INV-5). The limit is implemented as a semaphore
+**held for the full workstream lifetime** (from worktree creation through
+merge), NOT just at spawn time. This bounds the number of live sessions,
+not merely the spawn rate.
+
+**File-conflict serialization:** Before dispatching a dependency level,
+the orchestrator partitions its ready workstreams into sub-batches such
+that no two workstreams in the same sub-batch share a `file_conflicts`
+entry whose `severity == "high"`. High-severity pairs are always
+serialized (even within a level) unless `serialize_high_severity` is
+explicitly disabled in orchestrator config.
+
+**Fail-safe serialization (INV-4):** If `manifest.scope_unknown` is
+`true`, the orchestrator MUST treat the plan as fully serial (batch size
+1, equivalent to `serialize_all`). Silent blind parallelism is forbidden
+when conflict data is absent or low-confidence.
+
+The orchestrator MAY also serialize workstreams at the same level based
+on `"medium"` or `"low"` severity conflicts — this is left to orchestrator
+discretion.
 
 ### 2. Create worktrees for independent workstreams
 
@@ -218,8 +247,13 @@ git worktree add ../hermes-<slug>-<id> -b hermes/<slug>/<id>
 
 Branch namespace: `hermes/<slug>/<id>`. Hermes owns this namespace.
 
-Worktrees at the same level are created in parallel — they share the
-same base commit.
+Worktrees at the same level are created before spawning sessions. When
+`max_parallel_workstreams > 1`, multiple worktrees are created
+concurrently — they share the same base commit (INV-1: concurrent
+workstreams write to isolated worktrees; the working tree is never
+shared). Before spawning, the orchestrator sets `gc.auto=0` and
+`GIT_OPTIONAL_LOCKS=0` to prevent concurrent auto-gc against the shared
+object store.
 
 ### 3. Spawn pi sessions
 
@@ -239,6 +273,14 @@ mark done. It commits changes to its own branch.
 > gates at the plan level before spawning individual workstream
 > sessions. See `/z-implement-all` SKILL.md Setup step 1 (`--tasks`
 > fast path) for details.
+
+> **Non-file shared-state limitation:** Worktree isolation covers the
+> git working tree only. It does NOT cover ports, databases, remote
+> sandboxes, in-memory caches, or other process-level resources.
+> Workstreams that share any such resource MUST be serialized by the
+> orchestrator via `serialize_all: true` in orchestrator config. The
+> `file_conflicts` list does not model these dependencies; the operator
+> must identify them manually and set `serialize_all` accordingly.
 
 ### 4. Monitor all sessions
 
@@ -334,14 +376,121 @@ After all workstreams are merged:
 
 ---
 
+## Cross-plan orchestration (v1.3 contract — `--slugs` mode)
+
+> **Status:** Contract documented here. Implementation lives in
+> `scripts/hermes-execute.py --slugs` and `scripts/hermes/cross_plan.py`.
+> Refer to those modules for runtime behavior.
+
+When the orchestrator is invoked with multiple plan slugs
+(`--slugs=a,b,c` or `--plan-set FILE`), it runs all plans as a
+coordinated plan-set. The contract:
+
+### Scope conflict detection
+
+Before scheduling, the orchestrator builds a **plan conflict graph**:
+two plans conflict iff their file-scope path-sets intersect, OR either
+plan has `scope_unknown: true` (fail-safe — INV-4). Scope is read from
+the active-plan registry and/or each plan's `workstreams.json`
+`file_conflicts` / `scope_unknown`.
+
+### Lock ordering (INV-6: deadlock-free)
+
+Plan-level claim locks are always acquired in **sorted ascending slug
+order**. This applies even when two super-orchestrators run concurrently
+— the fixed ordering prevents AB/BA deadlocks.
+
+### Scheduling
+
+- Scope-disjoint plans run concurrently, bounded by `max_parallel_plans`.
+- Conflicting plans serialize against each other.
+- Each plan internally runs its own within-plan scheduler (section 1–7
+  above), so per-plan concurrency is independently governed by
+  `max_parallel_workstreams`.
+- A plan that fails does NOT abort scope-disjoint peers; its lock is
+  released, its dependents (if any) are blocked.
+
+### Global merge mutex
+
+A single in-process lock serializes the final merge-to-base step across
+all plans in the set. This prevents two plans from merging into the
+shared base concurrently (cross-plan merge race).
+
+---
+
+## Operator runbook
+
+### Within-plan parallel execution
+
+Enable concurrency by setting `HERMES_MAX_PARALLEL` to the desired number of
+concurrent workstreams:
+
+```bash
+HERMES_MAX_PARALLEL=3 python3 scripts/hermes-execute.py --slug <slug>
+```
+
+With the default `HERMES_MAX_PARALLEL=1`, execution is fully sequential and
+byte-identical to pre-v1.3 behavior (INV-5).
+
+**Config knobs (all env-only):**
+
+| Env var | Default | Effect |
+|---------|---------|--------|
+| `HERMES_MAX_PARALLEL` | `1` | Max concurrent workstreams within one plan |
+| `HERMES_SERIALIZE_ALL` | `0` | Force fully-sequential; overrides conflict analysis |
+| `HERMES_SERIALIZE_HIGH_SEVERITY` | `1` | Serialize HIGH-severity file-conflict pairs within a level |
+
+### Cross-plan execution
+
+Run multiple slugs as a coordinated plan-set:
+
+```bash
+# Comma-separated slugs
+HERMES_MAX_PARALLEL_PLANS=2 python3 scripts/hermes-execute.py --slugs slug-a,slug-b,slug-c
+
+# File listing slugs (one per line)
+HERMES_MAX_PARALLEL_PLANS=2 python3 scripts/hermes-execute.py --plan-set plans.txt
+```
+
+`--slugs` and `--plan-set` are mutually exclusive with `--slug`. Plans with
+overlapping file scope are automatically serialized; disjoint plans run
+concurrently up to `HERMES_MAX_PARALLEL_PLANS`.
+
+| Env var | Default | Effect |
+|---------|---------|--------|
+| `HERMES_MAX_PARALLEL_PLANS` | `1` | Max concurrent plans within one cross-plan run |
+
+### Non-file shared-state limitation and escape hatch
+
+**Important:** Worktree isolation covers the git working tree only. It does
+NOT protect databases, ports, remote sandboxes, in-memory caches, or other
+process-level resources. The `file_conflicts` list does not model these
+dependencies.
+
+If workstreams or plans share any such resource, **force fully-sequential
+execution** via:
+
+```bash
+HERMES_SERIALIZE_ALL=1 python3 scripts/hermes-execute.py --slug <slug>
+```
+
+The operator must identify non-file shared-state dependencies manually and set
+`HERMES_SERIALIZE_ALL=1` (or `HERMES_MAX_PARALLEL=1`) accordingly. There is no
+automatic detection for these cases.
+
+---
+
 ## Orchestrator discretion
 
 The following decisions belong to the orchestrator, NOT the manifest:
 
 | Concern | Manifest provides | Orchestrator decides |
 |---------|-------------------|---------------------|
-| Concurrency cap | `parallel_group` | How many sessions to run at once (resource limit) |
-| Serialize decision | `file_conflicts` | Whether to serialize workstreams with `"medium"` or `"low"` severity |
+| Concurrency cap | `parallel_group` (level labels) | `max_parallel_workstreams` (default 1 = sequential) |
+| Serialize all | `scope_unknown` | `serialize_all` flag (overrides conflict analysis; also triggered by `scope_unknown`) |
+| High-severity serialize | `file_conflicts[].severity` | `serialize_high_severity` flag (default `true` — HIGH pairs always serialized) |
+| Low/medium serialize | `file_conflicts` | Whether to serialize workstreams with `"medium"` or `"low"` severity |
+| Cross-plan concurrency cap | — | `max_parallel_plans` (default 1 per plan-set run) |
 | Retry policy | — | Max retries, backoff, re-spawn on crash |
 | Model selection | — | Which model per session (may respect task `**Complexity:**` stamps) |
 | Timeout | `tasks` count (hint) | Per-workstream wall-clock cap |
@@ -362,6 +511,7 @@ A valid `workstreams.json` MUST satisfy:
 5. Every path is repo-relative (no `../`, no absolute, no `//`, no trailing `/`)
 6. `workstreams[].path + "/TASKS.md"` resolves to an existing file
 7. No workstream in a `parallel_group` may appear in the transitive `depends_on` of any other workstream in the same group, and vice versa (parallel-grouped workstreams must be mutually independent)
+8. (v1.3) `scope_unknown` is a boolean (`true` or `false`); if `scope_unknown` is `true`, `file_conflicts` MUST be `[]`
 
 ---
 
@@ -372,8 +522,9 @@ A valid `workstreams.json` MUST satisfy:
   "protocol": "hermes-v1",
   "slug": "add-payment-system",
   "source": "/z-plan-split",
-  "generated_at": "2026-06-08T14:22:00Z",
+  "generated_at": "2026-06-12T10:00:00Z",
   "partial_tree": false,
+  "scope_unknown": false,
   "workstreams": [
     {
       "id": "ws-1",
@@ -382,7 +533,7 @@ A valid `workstreams.json` MUST satisfy:
       "path": "z-harness/add-payment-system/shared-types/",
       "tasks": ["T001", "T002", "T003"],
       "depends_on": [],
-      "parallel_group": null
+      "parallel_group": "level-0"
     },
     {
       "id": "ws-2",
@@ -390,8 +541,8 @@ A valid `workstreams.json` MUST satisfy:
       "name": "Stripe payment handler",
       "path": "z-harness/add-payment-system/stripe-handler/",
       "tasks": ["T004", "T005", "T006", "T007", "T008"],
-      "depends_on": [],
-      "parallel_group": null
+      "depends_on": ["ws-1"],
+      "parallel_group": "level-1"
     },
     {
       "id": "ws-3",
@@ -399,8 +550,8 @@ A valid `workstreams.json` MUST satisfy:
       "name": "PayPal payment handler",
       "path": "z-harness/add-payment-system/paypal-handler/",
       "tasks": ["T009", "T010", "T011", "T012", "T013", "T014"],
-      "depends_on": [],
-      "parallel_group": null
+      "depends_on": ["ws-1"],
+      "parallel_group": "level-1"
     }
   ],
   "file_conflicts": [
@@ -414,32 +565,57 @@ A valid `workstreams.json` MUST satisfy:
 }
 ```
 
-**What the orchestrator does (V1 — sequential execution):**
+**What the orchestrator does (v1.3 — concurrency-capable execution):**
 
 1. Read `workstreams.json`. All workstreams have `status: "ready"`,
-   `partial_tree: false`. Run order is ws-1 → ws-2 → ws-3.
-2. Spawn ws-1 in worktree. Wait for `"done"`.
-3. Spawn ws-2 in worktree (on the base commit that already includes
-   ws-1's merge). Wait for `"done"`.
-4. Spawn ws-3 in worktree. Wait for `"done"`.
-5. All three merge cleanly (sequential, per `merge_order`).
+   `partial_tree: false`, `scope_unknown: false`. Dependency levels:
+   - Level 0: ws-1 (no deps)
+   - Level 1: ws-2, ws-3 (both depend on ws-1; share `parallel_group: "level-1"`)
 
-> In V2, with `depends_on` and `parallel_group` populated, ws-2 and
-> ws-3 would spawn in parallel after ws-1 completes, and the orchestrator
-> would handle merge conflicts for shared files like `handler.rs`.
+2. Start Level 0: spawn ws-1 in a worktree. Wait for `"done"`.
+
+3. Start Level 1: ws-2 and ws-3 are both ready. Check file conflicts:
+   `handler.rs` has `severity: "medium"` — serialized or run in parallel
+   per orchestrator config (`serialize_high_severity` only serializes
+   `"high"` severity by default). With default `max_parallel_workstreams=1`,
+   ws-2 and ws-3 run sequentially (INV-5: cap=1 ≡ legacy sequential).
+   With `max_parallel_workstreams=2`, ws-2 and ws-3 spawn concurrently,
+   each in its own worktree.
+
+4. All three merge cleanly in `merge_order` sequence (merge is always
+   sequential — INV-3).
+
+> **Legacy manifests** (pre-v1.3) will have `parallel_group: null` for all
+> workstreams and may omit `scope_unknown`. Orchestrators MUST treat
+> `null` parallel_group as equivalent to `scope_unknown: true` —
+> serialize all workstreams (fail-safe, INV-4). Missing `scope_unknown`
+> defaults to `false` (additive field, forward-compatible — INV-7).
 
 ---
 
 ## Versioning
 
-The `protocol` field is the version pin. Orchestrators MUST reject
-manifests with unrecognized protocol versions.
+The `protocol` field is the version pin (`"hermes-v1"`). It remains
+unchanged across v1.x minor revisions. Orchestrators MUST reject
+manifests with unrecognized protocol versions (e.g., `"hermes-v2"`).
 
 Schema evolution rules:
 - New top-level fields may be added in minor versions; orchestrators MUST
-  ignore unknown fields (forward compatibility).
-- Removing or renaming existing fields is a major version bump.
+  ignore unknown fields (forward compatibility — INV-7).
+- Removing or renaming existing fields is a major version bump
+  (would require `"hermes-v2"`).
 - `protocol` is always a string and always present.
+- The `scope_unknown` and populated `parallel_group` fields (v1.3) are
+  additive. Pre-v1.3 manifests omitting `scope_unknown` default to
+  `false`; pre-v1.3 manifests with `parallel_group: null` are treated
+  as scope-unknown (fail-safe) by v1.3+ orchestrators.
+
+| Version | Key changes |
+|---------|-------------|
+| v1.0 | Hermes reads MANIFEST.md + SHARED-CONCERNS.md directly (pre-schema) |
+| v1.1 | `workstreams.json` schema introduced; `protocol: "hermes-v1"` pin |
+| v1.2 | 5-rule DAG derivation, `status` field, crash-resumption, sanitization |
+| v1.3 | `parallel_group` populated (`level-{depth}`); `scope_unknown`; concurrency execution contract; cross-plan `--slugs` mode; non-file shared-state limitation |
 
 ---
 

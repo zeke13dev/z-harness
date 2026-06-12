@@ -169,6 +169,14 @@ class CycleError(Exception):
     pass
 
 
+def _task_sort_key(task_id: str):
+    """Sort key for task IDs: T001 < T002 < T-REV-001, etc."""
+    m = re.match(r"T[-_]?(\d+)", task_id)
+    if m:
+        return (0, int(m.group(1)), task_id)
+    return (1, 0, task_id)  # Non-standard IDs sort after T-prefixed
+
+
 def parse_depends_on(tasks_text):
     """Parse **Depends on:** Txxx lines from TASKS.md.
     
@@ -346,13 +354,7 @@ def run_5rule_algorithm(task_ids, deps):
     for i, tasks in enumerate(final_workstreams):
         ws_id = f"ws-{i + 1}"
         sorted_tasks = sorted(tasks, key=_task_sort_key)
-def _task_sort_key(task_id: str):
-    """Sort key for task IDs: T001 < T002 < T-REV-001, etc."""
-    m = re.match(r"T[-_]?(\d+)", task_id)
-    if m:
-        return (0, int(m.group(1)), task_id)
-    return (1, 0, task_id)  # Non-standard IDs sort after T-prefixed
-        
+
         # Compute depends_on from task-level deps
         ws_deps = set()
         for task in sorted_tasks:
@@ -368,10 +370,57 @@ def _task_sort_key(task_id: str):
             "depends_on": sorted(ws_deps),
         })
 
+    # Assign parallel_group = f"level-{depth}" from workstream-level longest-path depth.
+    ws_depths = assign_ws_depths(ws_objects)
+    for ws in ws_objects:
+        ws["parallel_group"] = f"level-{ws_depths[ws['id']]}"
+
     # Topological sort for merge_order
     merge_order = topological_sort_ws(ws_objects)
-    
+
     return ws_objects, merge_order
+
+
+def assign_ws_depths(ws_objects):
+    """Compute longest-path depth for each workstream over the ws depends_on DAG.
+
+    A root (no depends_on) is depth 0.  All others are 1 + max(depth of deps).
+    The input is assumed to be a DAG (Rule 2 guarantees acyclic); a defensive
+    guard skips any workstream whose predecessors have not yet been resolved
+    (should not occur in valid output).
+
+    Returns:
+        dict[ws_id, int] — mapping from workstream ID to longest-path depth.
+    """
+    ws_map = {w["id"]: w for w in ws_objects}
+    depths = {}
+
+    # Kahn-style topological iteration to resolve depths in dependency order.
+    in_degree = {w["id"]: len(w["depends_on"]) for w in ws_objects}
+    queue = deque([wid for wid, deg in in_degree.items() if deg == 0])
+
+    while queue:
+        wid = queue.popleft()
+        ws = ws_map[wid]
+        # Depth = 1 + max depth of all direct predecessors (0 if no deps).
+        if ws["depends_on"]:
+            depths[wid] = 1 + max(depths.get(dep, 0) for dep in ws["depends_on"])
+        else:
+            depths[wid] = 0
+
+        # Unlock successors.
+        for w in ws_objects:
+            if wid in w["depends_on"]:
+                in_degree[w["id"]] -= 1
+                if in_degree[w["id"]] == 0:
+                    queue.append(w["id"])
+
+    # Defensive fallback: assign depth 0 to any ws not reached (should not happen).
+    for w in ws_objects:
+        if w["id"] not in depths:
+            depths[w["id"]] = 0
+
+    return depths
 
 
 def topological_sort_ws(workstreams):
@@ -392,6 +441,98 @@ def topological_sort_ws(workstreams):
                 if in_degree[w["id"]] == 0:
                     queue.append(w["id"])
 
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Per-task scope derivation from TASKS.md **Files:** lines
+# ---------------------------------------------------------------------------
+
+# Token-stripping regex: strips parenthesized annotation suffixes.
+# Mirrors the scope-extractor rubric: \s*\([^)]*\) covers (new), (NEW),
+# (MODIFY), (deleted), (renamed from ...), etc.
+_ANNOTATION_RE = re.compile(r"\s*\([^)]*\)")
+
+
+def _strip_token(raw: str) -> str:
+    """Strip backticks and annotation suffixes from a single path token.
+
+    Mirrors the scope-extractor rubric:
+      - Strip parenthesized suffixes: (new), (NEW), (MODIFY), (deleted), ...
+      - Strip all backtick characters (they may appear mid-token after suffix removal).
+      - Strip leading/trailing whitespace.
+    Returns the cleaned token (may be empty string if nothing remained).
+    """
+    token = raw.strip()
+    # Strip annotation suffixes like (new), (NEW), (MODIFY), (deleted from ...)
+    # Do this BEFORE stripping backticks so that "`path` (new)" → "`path`"
+    token = _ANNOTATION_RE.sub("", token)
+    # Strip all backtick characters (may appear at start/end after annotation removal)
+    token = token.replace("`", "")
+    return token.strip()
+
+
+def parse_task_files(tasks_md_text: str) -> dict:
+    """Parse TASKS.md text and return a mapping of task_id → list of path tokens.
+
+    For each task block (## Tnnn heading), extract the **Files:** line and
+    split it into comma-separated tokens, stripping backticks and annotation
+    suffixes per the scope-extractor rubric.
+
+    A task block with no parseable **Files:** line maps to an empty list.
+    Never raises.
+
+    Returns:
+        dict[str, list[str]] — task_id → list of cleaned repo-relative path
+        tokens (globs/brace-groups kept as-is per scope-extractor rules).
+    """
+    result = {}
+    current_task = None
+
+    for line in tasks_md_text.splitlines():
+        # Detect task block headers: ## Tnnn or ### Tnnn
+        m = re.match(r"^#{2,3}\s+(T\d+)", line.strip())
+        if m:
+            current_task = m.group(1)
+            if current_task not in result:
+                result[current_task] = []
+            continue
+
+        if current_task is None:
+            continue
+
+        # Detect **Files:** line
+        files_m = re.match(r"^\*\*Files:\*\*\s*(.*)", line.strip())
+        if files_m:
+            raw_list = files_m.group(1)
+            tokens = []
+            for raw_token in raw_list.split(","):
+                cleaned = _strip_token(raw_token)
+                if cleaned:
+                    tokens.append(cleaned)
+            result[current_task] = tokens
+
+    return result
+
+
+def workstream_scope(ws_objects: list, task_files: dict) -> dict:
+    """Derive per-workstream path sets from task→path mapping.
+
+    For each workstream in ws_objects, union the path lists of all its member
+    tasks (using task_files from parse_task_files). Tasks with no paths (empty
+    list) contribute nothing. Tasks not found in task_files are silently
+    skipped (contributes empty set).
+
+    Returns:
+        dict[str, set[str]] — ws_id → set of repo-relative path tokens.
+    """
+    result = {}
+    for ws in ws_objects:
+        ws_id = ws["id"]
+        paths: set = set()
+        for task_id in ws.get("tasks", []):
+            paths.update(task_files.get(task_id, []))
+        result[ws_id] = paths
     return result
 
 
@@ -531,7 +672,7 @@ def build_from_split(plan_dir):
             "path": cluster.get("path", ""),
             "tasks": [],  # To be filled from cluster TASKS.md
             "depends_on": [],   # V1: z-plan-split is sequential
-            "parallel_group": None,  # V1: cross-cluster parallelism is v2
+            "parallel_group": None,  # Populated below via assign_ws_depths
         })
     
     # Build file_conflicts from SHARED-CONCERNS.md
@@ -586,8 +727,13 @@ def build_from_split(plan_dir):
         merge_order = [w["id"] for w in workstreams]
     
     partial_tree = fm.get("status") == "partial"
-    
-    return workstreams, file_conflicts, merge_order, partial_tree
+
+    # Assign parallel_group = f"level-{depth}" from workstream-level DAG depth.
+    ws_depths = assign_ws_depths(workstreams)
+    for ws in workstreams:
+        ws["parallel_group"] = f"level-{ws_depths[ws['id']]}"
+
+    return workstreams, file_conflicts, merge_order, partial_tree, False
 
 
 # ---------------------------------------------------------------------------
@@ -621,32 +767,61 @@ def parse_tasks_md(tasks_path):
 def build_from_flat(plan_dir, slug):
     """Build workstreams.json from flat TASKS.md."""
     tasks_path = os.path.join(plan_dir, "TASKS.md")
-    
+
     if not os.path.exists(tasks_path):
         raise FileNotFoundError(f"TASKS.md not found at {tasks_path}")
-    
+
+    tasks_md_text = Path(tasks_path).read_text()
     task_ids, deps = parse_tasks_md(tasks_path)
-    
+
     try:
         ws_objects, merge_order = run_5rule_algorithm(task_ids, deps)
     except CycleError as e:
         # Emit minimal workstreams.json with partial_tree
         print(f"Cycle detected: {e}", file=sys.stderr)
-        return [], [], [], True
-    
-    # Add path, status, parallel_group to each workstream
+        return [], [], [], True, False
+
+    # Add path and status to each workstream.
+    # parallel_group is already set by run_5rule_algorithm via assign_ws_depths.
     workstreams = []
     for ws in ws_objects:
         ws["status"] = "ready"
         ws["path"] = f"z-harness/{slug}/{ws['id']}/"
-        ws["parallel_group"] = None  # V1: flat plans are sequential
         workstreams.append(ws)
-    
-    # V1: file_conflicts empty for flat z-plan (no per-workstream scope extraction)
-    file_conflicts = []
+
+    # Derive file_conflicts from per-task **Files:** lines in TASKS.md.
+    # INV-4 (fail-safe): if any task block has no parseable **Files:** line,
+    # overlap detection would be blind — emit empty file_conflicts and set
+    # scope_unknown=True rather than silently treating "no data" as "no conflicts".
+    task_files = parse_task_files(tasks_md_text)
+    scope_unknown = any(
+        len(task_files.get(tid, [])) == 0
+        for tid in task_ids
+    )
+
+    if scope_unknown:
+        file_conflicts = []
+    else:
+        ws_scope = workstream_scope(ws_objects, task_files)
+        # For each path touched by ≥2 workstreams, emit a conflict entry.
+        path_to_ws: dict = defaultdict(list)
+        for ws_id in sorted(ws_scope.keys()):
+            for path in ws_scope[ws_id]:
+                path_to_ws[path].append(ws_id)
+
+        file_conflicts = []
+        for path in sorted(path_to_ws.keys()):
+            ws_ids = path_to_ws[path]
+            if len(ws_ids) >= 2:
+                file_conflicts.append({
+                    "file": path,
+                    "workstreams": sorted(ws_ids),
+                    "severity": derive_severity(path, len(ws_ids)),
+                })
+
     partial_tree = False
-    
-    return workstreams, file_conflicts, merge_order, partial_tree
+
+    return workstreams, file_conflicts, merge_order, partial_tree, scope_unknown
 
 
 # ---------------------------------------------------------------------------
@@ -679,10 +854,10 @@ def build_from_light(plan_dir, slug):
         "path": f"z-harness/{slug}/",
         "tasks": task_ids,
         "depends_on": [],
-        "parallel_group": None,
+        "parallel_group": "level-0",  # Single workstream; no deps → depth 0.
     }]
-    
-    return workstreams, [], ["ws-1"], False
+
+    return workstreams, [], ["ws-1"], False, False
 
 
 # ---------------------------------------------------------------------------
@@ -691,43 +866,44 @@ def build_from_light(plan_dir, slug):
 
 def build_workstreams_json(slug, source, plan_dir):
     """Main entry point. Returns the full workstreams.json dict."""
-    
+
     if not SLUG_RE.match(slug):
         raise ValidationError(
             f"Invalid slug '{slug}': must match ^[a-z0-9]+(-[a-z0-9]+)*$"
         )
-    
+
     if source == "z-plan-split":
-        workstreams, file_conflicts, merge_order, partial_tree = build_from_split(
-            plan_dir
+        workstreams, file_conflicts, merge_order, partial_tree, scope_unknown = (
+            build_from_split(plan_dir)
         )
     elif source == "z-plan":
-        workstreams, file_conflicts, merge_order, partial_tree = build_from_flat(
-            plan_dir, slug
+        workstreams, file_conflicts, merge_order, partial_tree, scope_unknown = (
+            build_from_flat(plan_dir, slug)
         )
     elif source == "z-plan-light":
-        workstreams, file_conflicts, merge_order, partial_tree = build_from_light(
-            plan_dir, slug
+        workstreams, file_conflicts, merge_order, partial_tree, scope_unknown = (
+            build_from_light(plan_dir, slug)
         )
     else:
         raise ValueError(
             f"Unknown source '{source}'. Expected: z-plan-split, z-plan, or z-plan-light"
         )
-    
+
     result = {
         "protocol": PROTOCOL,
         "slug": slug,
         "source": f"/{source}",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "partial_tree": partial_tree,
+        "scope_unknown": scope_unknown,
         "workstreams": workstreams,
         "file_conflicts": file_conflicts,
         "merge_order": merge_order,
     }
-    
+
     # Validate before writing
     validate_workstreams(workstreams, file_conflicts, merge_order)
-    
+
     return result
 
 
