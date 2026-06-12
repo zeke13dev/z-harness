@@ -2223,3 +2223,284 @@ class TestResumeIntegration:
         assert dh == cur_hash, (
             "Sanity: hash should have matched (condition 3 held); only condition 4 failed"
         )
+
+
+# ===========================================================================
+# SECTION 4 — handoff.schema.json validation harness (T005)
+# ===========================================================================
+# Introduces the FIRST live jsonschema validator for handoff.json. T005 changes
+# the schema's protocol_version from `const: "1.0"` to `enum: ["1.0", "1.1"]`
+# and adds an OPTIONAL nested `attend_resume` object (its own
+# additionalProperties:false; not in `required`) so:
+#   (a) a 1.0 handoff with NO attend_resume key still validates, and
+#   (b) a populated 1.1 handoff validates.
+# The regression guard (c) reconstructs a `const`-"1.1"-only variant of the
+# schema and asserts it REJECTS the 1.0 fixture — proving it is the ENUM, not a
+# const, that admits both versions (a const can never admit two values).
+
+import copy as _copy
+
+jsonschema = pytest.importorskip("jsonschema")
+
+_SCHEMA_PATH = _REPO_ROOT / "docs" / "schemas" / "handoff.schema.json"
+
+
+def _load_handoff_schema() -> dict[str, Any]:
+    """Load the live docs/schemas/handoff.schema.json from disk."""
+    return json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
+
+
+def _make_1_0_handoff() -> dict[str, Any]:
+    """A minimal valid protocol 1.0 handoff with NO attend_resume key.
+
+    Mirrors exactly what write-handoff.sh emits on the non-attend (curator /
+    compaction) path: every `required` root field present, attend_resume absent.
+    """
+    return {
+        "protocol_version": "1.0",
+        "timestamp": "2026-06-11T12:00:00Z",
+        "agent": "pi",
+        "slug": "attended-chain",
+        "status": "clean_break",
+        "next_step": "Resume /z-implement-all for attended-chain. 2/5 tasks done.",
+        "context_files": [
+            {"path": "/tmp/plan/SPEC.md", "role": "spec"},
+            {"path": "/tmp/plan/TASKS.md", "role": "tasks"},
+        ],
+    }
+
+
+def _make_1_1_handoff() -> dict[str, Any]:
+    """A valid protocol 1.1 handoff with a fully populated attend_resume block."""
+    base = _make_1_0_handoff()
+    base["protocol_version"] = "1.1"
+    base["attend_resume"] = {
+        "expected_head_sha": "6b2e6a3f0000000000000000000000000000abcd",
+        "expected_phase": "implement-all",
+        "done_set_hash": _EMPTY_SHA256,
+        "dirty_state_fingerprint": "sha256:deadbeefcafe",
+        "session_id": "sess-20260611-120000",
+    }
+    return base
+
+
+class TestHandoffSchemaValidation:
+    """Live jsonschema validation of docs/schemas/handoff.schema.json (T005).
+
+    These are the regression guards for the const→enum change. They fail if a
+    future edit reverts protocol_version to a const (which would reject the 1.0
+    fixture), drops the 1.0 value from the enum, makes attend_resume required,
+    or relaxes its additionalProperties:false.
+    """
+
+    # -- (a) old 1.0 file (no attend_resume) still validates -----------------
+
+    def test_1_0_handoff_without_attend_resume_validates(self):
+        """A protocol 1.0 handoff with no attend_resume key validates.
+
+        Old handoffs (and the non-attend write-handoff.sh path) must keep
+        validating after the schema change — attend_resume is OPTIONAL.
+        """
+        schema = _load_handoff_schema()
+        handoff = _make_1_0_handoff()
+        assert "attend_resume" not in handoff, "Fixture sanity: 1.0 file has no attend_resume"
+        # Raises jsonschema.ValidationError on failure.
+        jsonschema.validate(instance=handoff, schema=schema)
+
+    # -- (b) populated 1.1 file validates ------------------------------------
+
+    def test_1_1_handoff_with_attend_resume_validates(self):
+        """A protocol 1.1 handoff with a populated attend_resume block validates."""
+        schema = _load_handoff_schema()
+        handoff = _make_1_1_handoff()
+        assert handoff["protocol_version"] == "1.1"
+        assert set(handoff["attend_resume"]) == {
+            "expected_head_sha",
+            "expected_phase",
+            "done_set_hash",
+            "dirty_state_fingerprint",
+            "session_id",
+        }
+        jsonschema.validate(instance=handoff, schema=schema)
+
+    # -- (c) regression guard: a const-"1.1"-only schema rejects the 1.0 file -
+
+    def test_const_1_1_only_schema_would_reject_1_0_fixture(self):
+        """Regression guard: prove it is the ENUM (not a const) that admits both.
+
+        We reconstruct a variant of the LIVE schema in which protocol_version is
+        a `const: "1.1"` (the degenerate single-value form). The 1.0 fixture
+        MUST fail against that variant — demonstrating that a const can only ever
+        admit one version, so the production schema HAS to use an enum to accept
+        both 1.0 and 1.1. If someone reverts the production schema to a const,
+        the (a) test above breaks; this test pins down WHY the enum is required.
+        """
+        schema = _load_handoff_schema()
+
+        # Sanity: the live schema uses an enum admitting BOTH versions.
+        pv_schema = schema["properties"]["protocol_version"]
+        assert "enum" in pv_schema, (
+            "protocol_version must use an enum, not a const, to admit two versions"
+        )
+        assert set(pv_schema["enum"]) == {"1.0", "1.1"}, (
+            f"protocol_version enum must be exactly ['1.0','1.1'], got {pv_schema['enum']!r}"
+        )
+        assert "const" not in pv_schema, (
+            "protocol_version must NOT be a const — a const admits exactly one value"
+        )
+
+        # Build the degenerate const-"1.1"-only variant.
+        const_schema = _copy.deepcopy(schema)
+        const_schema["properties"]["protocol_version"] = {
+            "type": "string",
+            "const": "1.1",
+        }
+
+        handoff_1_0 = _make_1_0_handoff()
+
+        # Under the const-1.1 schema, the 1.0 fixture must be rejected.
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(instance=handoff_1_0, schema=const_schema)
+
+        # And the 1.1 fixture must still pass under the const-1.1 variant
+        # (confirms the rejection above is specifically the version, not noise).
+        jsonschema.validate(instance=_make_1_1_handoff(), schema=const_schema)
+
+    # -- attend_resume is strict (additionalProperties:false) ----------------
+
+    def test_attend_resume_rejects_unknown_field(self):
+        """An unknown key inside attend_resume is rejected (additionalProperties:false)."""
+        schema = _load_handoff_schema()
+        handoff = _make_1_1_handoff()
+        handoff["attend_resume"]["bogus_field"] = "nope"
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(instance=handoff, schema=schema)
+
+    def test_attend_resume_requires_all_five_fields(self):
+        """Dropping a required attend_resume sub-field fails validation."""
+        schema = _load_handoff_schema()
+        handoff = _make_1_1_handoff()
+        del handoff["attend_resume"]["session_id"]
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(instance=handoff, schema=schema)
+
+
+# ===========================================================================
+# SECTION 5 — write-handoff.sh producer ↔ schema conformance (T005)
+# ===========================================================================
+# write-handoff.sh emits protocol_version "1.0" with NO attend_resume key on the
+# default (curator/compaction) path, and "1.1" with a populated attend_resume
+# block ONLY when Z_HARNESS_ATTEND_RESUME=1. These tests run the actual script
+# in both modes and validate its output against the LIVE schema, closing the
+# loop between producer and validator.
+
+_WRITE_HANDOFF_SH = str(_REPO_ROOT / "scripts" / "write-handoff.sh")
+
+
+def _run_write_handoff(plan_dir: Path, extra_env: dict[str, str] | None = None) -> dict[str, Any]:
+    """Run scripts/write-handoff.sh against *plan_dir* and return the parsed handoff.json."""
+    env = {**os.environ, "Z_HARNESS_PLAN_DIR": str(plan_dir), "Z_HARNESS_SLUG": "attended-chain"}
+    if extra_env:
+        env.update(extra_env)
+    result = subprocess.run(
+        ["bash", _WRITE_HANDOFF_SH],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"write-handoff.sh exited {result.returncode}; stderr: {result.stderr!r}"
+    )
+    handoff_path = plan_dir / "handoff.json"
+    assert handoff_path.is_file(), "write-handoff.sh did not write handoff.json"
+    return json.loads(handoff_path.read_text(encoding="utf-8"))
+
+
+def _seed_plan_dir(plan_dir: Path) -> None:
+    """Write the minimal plan artifacts write-handoff.sh reads."""
+    (plan_dir / "SPEC.md").write_text("# Spec\n", encoding="utf-8")
+    (plan_dir / "TASKS.md").write_text(
+        "## T001 — First `[x]`\n**Depends on:** —\n\n"
+        "## T002 — Second `[ ]`\n**Depends on:** T001\n",
+        encoding="utf-8",
+    )
+
+
+class TestWriteHandoffProducer:
+    """write-handoff.sh output conforms to handoff.schema.json in both modes (T005)."""
+
+    def test_default_path_emits_1_0_without_attend_resume(self, tmp_path: Path):
+        """No Z_HARNESS_ATTEND_RESUME → protocol_version 1.0, no attend_resume key, valid."""
+        _seed_plan_dir(tmp_path)
+        handoff = _run_write_handoff(tmp_path)
+
+        assert handoff["protocol_version"] == "1.0", (
+            f"Default path must emit 1.0, got {handoff['protocol_version']!r}"
+        )
+        assert "attend_resume" not in handoff, (
+            "Default (non-attend) path must NOT add an attend_resume key"
+        )
+        jsonschema.validate(instance=handoff, schema=_load_handoff_schema())
+
+    def test_attend_path_emits_1_1_with_populated_attend_resume(self, tmp_path: Path):
+        """Z_HARNESS_ATTEND_RESUME=1 → protocol_version 1.1 with a full attend_resume, valid."""
+        _seed_plan_dir(tmp_path)
+        attend_env = {
+            "Z_HARNESS_ATTEND_RESUME": "1",
+            "Z_HARNESS_ATTEND_HEAD_SHA": "6b2e6a3f0000000000000000000000000000abcd",
+            "Z_HARNESS_ATTEND_PHASE": "implement-all",
+            "Z_HARNESS_ATTEND_DONE_SET_HASH": _EMPTY_SHA256,
+            "Z_HARNESS_ATTEND_DIRTY_FP": "sha256:deadbeefcafe",
+            "Z_HARNESS_ATTEND_SESSION_ID": "sess-20260611-120000",
+        }
+        handoff = _run_write_handoff(tmp_path, extra_env=attend_env)
+
+        assert handoff["protocol_version"] == "1.1", (
+            f"Attend path must emit 1.1, got {handoff['protocol_version']!r}"
+        )
+        ar = handoff["attend_resume"]
+        assert ar["expected_head_sha"] == attend_env["Z_HARNESS_ATTEND_HEAD_SHA"]
+        assert ar["expected_phase"] == "implement-all"
+        assert ar["done_set_hash"] == _EMPTY_SHA256
+        assert ar["dirty_state_fingerprint"] == "sha256:deadbeefcafe"
+        assert ar["session_id"] == "sess-20260611-120000"
+        jsonschema.validate(instance=handoff, schema=_load_handoff_schema())
+
+    def test_attend_path_missing_env_var_fails(self, tmp_path: Path):
+        """Z_HARNESS_ATTEND_RESUME=1 with a required attend var unset → non-zero exit.
+
+        The attend_resume sub-fields are minLength:1 in the schema; an empty env
+        var would emit schema-invalid JSON. The producer must instead fail loudly,
+        naming the missing var, and must NOT write handoff.json. Here we omit
+        Z_HARNESS_ATTEND_SESSION_ID while supplying the other four.
+        """
+        _seed_plan_dir(tmp_path)
+        env = {
+            **os.environ,
+            "Z_HARNESS_PLAN_DIR": str(tmp_path),
+            "Z_HARNESS_SLUG": "attended-chain",
+            "Z_HARNESS_ATTEND_RESUME": "1",
+            "Z_HARNESS_ATTEND_HEAD_SHA": "6b2e6a3f0000000000000000000000000000abcd",
+            "Z_HARNESS_ATTEND_PHASE": "implement-all",
+            "Z_HARNESS_ATTEND_DONE_SET_HASH": _EMPTY_SHA256,
+            "Z_HARNESS_ATTEND_DIRTY_FP": "sha256:deadbeefcafe",
+        }
+        # Ensure the omitted var is truly absent (not inherited from the parent env).
+        env.pop("Z_HARNESS_ATTEND_SESSION_ID", None)
+
+        result = subprocess.run(
+            ["bash", _WRITE_HANDOFF_SH],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode != 0, (
+            "Producer must exit non-zero when a required attend var is unset; "
+            f"got rc={result.returncode}, stdout={result.stdout!r}"
+        )
+        assert "Z_HARNESS_ATTEND_SESSION_ID" in result.stderr, (
+            f"Diagnostic must name the missing var; stderr={result.stderr!r}"
+        )
+        assert not (tmp_path / "handoff.json").exists(), (
+            "Producer must not write handoff.json when validation fails"
+        )

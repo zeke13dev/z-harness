@@ -14,6 +14,7 @@ Subcommands:
                 [--range-high N]         Token estimate ceiling (cost-gate delegation path).
                 [--severity hard|soft]   Gate severity; soft→always auto_proceed.
   inspect-all [--json]                   Print all config knobs with source and persistence metadata.
+  resolve-halt-category <question_id>    Print the halt_category tag for a question ID, or "ask" for unknown.
 
 Layer order (lowest → highest priority):
   1. Built-in defaults (DEFAULTS)
@@ -152,6 +153,16 @@ def _validate_positive_int_or_none(value: object) -> bool:
     return _validate_positive_int(value)
 
 
+# halt_category is per-question-id metadata, NOT a user-settable TOML key. This
+# enum is a plain module-level constant referenced directly by the startup guard
+# (_run_startup_guards, Guard 2b) and by cmd_resolve_halt_category. It is
+# deliberately kept out of VALIDATORS so `config.py set workflow.halt_category ...`
+# is rejected as an unknown/non-settable key (load_config() would drop it anyway,
+# since it has no DEFAULTS entry).
+HALT_CATEGORY_ENUM: frozenset[str] = frozenset(
+    {"decision", "risk", "shortcut", "archiving", "mechanical_proceed"}
+)
+
 VALIDATORS: dict = {
     "notify.level": {"off", "approval_only", "all"},
     "docs.always_apply": {"always", "never"},
@@ -249,6 +260,7 @@ QUESTION_IDS: dict[str, dict] = {
         "config_key": "workflow.audit_to_amend",
         "choices": {"ask", "amend", "stop"},
         "skill_default": "amend",
+        "halt_category": "risk",
         "callsites": [
             "commands/z-audit-plan.md:183",
             "commands/z-audit-plan-style.md:384",
@@ -261,6 +273,7 @@ QUESTION_IDS: dict[str, dict] = {
         # `ask` means "always ask" (resolves to result: ask).
         "choices": {"ask", "auto_accept", "recommend_derived"},
         "skill_default": "yes_keep_derived",
+        "halt_category": "mechanical_proceed",
         "callsites": [
             "commands/z-plan.md:21",
             "commands/z-fix.md:18",
@@ -278,6 +291,7 @@ QUESTION_IDS: dict[str, dict] = {
         "config_key": "workflow.implement_all_proceed",
         "choices": {"ask", "auto_resume", "halt"},
         "skill_default": "ask",
+        "halt_category": "mechanical_proceed",
         "callsites": [
             "commands/z-implement-all.md (halt-resolution gate)",
         ],
@@ -286,6 +300,7 @@ QUESTION_IDS: dict[str, dict] = {
         "config_key": "workflow.review_all_proceed",
         "choices": {"ask", "proceed", "halt"},
         "skill_default": "proceed",
+        "halt_category": "mechanical_proceed",
         "callsites": [
             "commands/z-review-all.md (Phase 3.7 proceed gate)",
         ],
@@ -294,6 +309,7 @@ QUESTION_IDS: dict[str, dict] = {
         "config_key": "workflow.plan_decisions_approval",
         "choices": {"ask", "approve", "halt"},
         "skill_default": "approve",
+        "halt_category": "decision",
         "callsites": [
             "commands/z-plan.md (Phase 2.5 decisions-doc approval gate)",
         ],
@@ -306,6 +322,7 @@ QUESTION_IDS: dict[str, dict] = {
         "config_key": "workflow.spec_retro_discovery",
         "choices": {"ask", "defer_to_sink_p2"},
         "skill_default": "ask",
+        "halt_category": "decision",
         "callsites": [
             "commands/z-implement-next.md (Phase 4 spec-retro defer branch)",
         ],
@@ -314,6 +331,7 @@ QUESTION_IDS: dict[str, dict] = {
         "config_key": "workflow.pre_run_cost_gate",
         "choices": {"ask", "auto_proceed", "halt"},
         "skill_default": "ask",
+        "halt_category": "risk",
         "callsites": [
             "scripts/pre-run-cost-gate.sh",
             "commands/z-research.md",
@@ -376,6 +394,15 @@ def _run_startup_guards() -> None:
             raise SystemExit(
                 f"[config] startup guard failed: QUESTION_IDS[{qid!r}]['skill_default'] "
                 "is None — every question_id requires a presentation default"
+            )
+
+    # Guard 2b: every question_id must have a halt_category in HALT_CATEGORY_ENUM
+    for qid, meta in QUESTION_IDS.items():
+        cat = meta.get("halt_category")
+        if cat not in HALT_CATEGORY_ENUM:
+            raise SystemExit(
+                f"[config] startup guard failed: QUESTION_IDS[{qid!r}]['halt_category'] "
+                f"is {cat!r} — must be one of {sorted(HALT_CATEGORY_ENUM)}"
             )
 
     # Guard 3: every choice referenced in RESULT_MAP must be a valid choice in QUESTION_IDS
@@ -1018,6 +1045,35 @@ def cmd_explain(args: list[str]) -> None:
 def cmd_list_question_ids(args: list[str]) -> None:
     """Print a sorted JSON array of registered question IDs to stdout."""
     print(json.dumps(sorted(QUESTION_IDS.keys())))
+
+
+def cmd_resolve_halt_category(args: list[str]) -> None:
+    """
+    resolve-halt-category <question_id>
+
+    Print the halt_category tag for the given question_id to stdout, or the
+    literal "ask" (fail-safe default) when the qid is unknown or untagged.
+
+    Exit 0 with a given question_id (stdout is the bare tag string, no JSON
+    wrapper). Exit 2 with no arguments (usage error to stderr).
+    """
+    if not args:
+        print(
+            "usage: config.py resolve-halt-category <question_id>",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    qid = args[0]
+    meta = QUESTION_IDS.get(qid)
+    if meta is None:
+        print("ask")
+        return
+    cat = meta.get("halt_category")
+    if cat not in HALT_CATEGORY_ENUM:
+        # Defensive: guard should have caught this at module load, but fail safe.
+        print("ask")
+        return
+    print(cat)
 
 
 # ---------------------------------------------------------------------------
@@ -2962,7 +3018,7 @@ def main() -> None:
     if len(sys.argv) < 2:
         print(
             "usage: config.py <get|get-batch|export-env|ensure-defaults|explain|should-notify"
-            "|list-question-ids|resolve-question|check-no-ask|set|migrate|inspect-all> [args...]",
+            "|list-question-ids|resolve-halt-category|resolve-question|check-no-ask|set|migrate|inspect-all> [args...]",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -2984,6 +3040,8 @@ def main() -> None:
         cmd_should_notify(args)
     elif subcommand == "list-question-ids":
         cmd_list_question_ids(args)
+    elif subcommand == "resolve-halt-category":
+        cmd_resolve_halt_category(args)
     elif subcommand == "resolve-question":
         cmd_resolve_question(args)
     elif subcommand == "check-no-ask":
@@ -2998,7 +3056,7 @@ def main() -> None:
         print(
             f"[config] unknown subcommand {subcommand!r}; "
             "valid: get, get-batch, export-env, ensure-defaults, explain, should-notify, "
-            "list-question-ids, resolve-question, check-no-ask, set, migrate, inspect-all",
+            "list-question-ids, resolve-halt-category, resolve-question, check-no-ask, set, migrate, inspect-all",
             file=sys.stderr,
         )
         sys.exit(2)

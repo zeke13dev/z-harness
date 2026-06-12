@@ -12,6 +12,15 @@
 #   Z_HARNESS_CONTEXT_PCT — context usage percentage (optional)
 #   Z_HARNESS_AGENT      — agent name (optional; default "pi")
 #
+# Attend-yield env vars (read ONLY when Z_HARNESS_ATTEND_RESUME=1 — these populate
+# the optional attend_resume predicate and bump protocol_version to "1.1"):
+#   Z_HARNESS_ATTEND_RESUME          — set to "1" to emit a 1.1 handoff with attend_resume
+#   Z_HARNESS_ATTEND_HEAD_SHA        — git HEAD sha captured at yield
+#   Z_HARNESS_ATTEND_PHASE           — chain step to re-enter at
+#   Z_HARNESS_ATTEND_DONE_SET_HASH   — session-helpers.sh done_set_hash of TASKS.md
+#   Z_HARNESS_ATTEND_DIRTY_FP        — digest of git status --porcelain
+#   Z_HARNESS_ATTEND_SESSION_ID      — yield-time session id
+#
 # Output:
 #   Writes $Z_HARNESS_PLAN_DIR/handoff.json
 #   Prints "STATUS: written bytes=<n>" on success to stdout
@@ -146,29 +155,78 @@ else
   SLUG_JSON="\"$SLUG\""
 fi
 
+# ---------------------------------------------------------------------------
+# Attend-resume predicate (optional; protocol 1.1)
+# ---------------------------------------------------------------------------
+# When invoked from a /z-attend chain yield (Z_HARNESS_ATTEND_RESUME=1), emit
+# protocol_version "1.1" and a nested attend_resume object built from the
+# yield-time env vars. Otherwise emit protocol_version "1.0" with no
+# attend_resume key — byte-identical to the pre-attend handoff for non-attend
+# callers (the curator/compaction path).
+PROTOCOL_VERSION="1.0"
+ATTEND_RESUME_JSON="null"
+
+if [ "${Z_HARNESS_ATTEND_RESUME:-}" = "1" ]; then
+  PROTOCOL_VERSION="1.1"
+
+  # Every attend_resume sub-field is minLength:1 in the schema. An unset env var
+  # would emit an empty string -> schema-invalid 1.1 handoff. Fail loudly here,
+  # naming the missing var(s), rather than writing an invalid predicate.
+  MISSING_ATTEND_VARS=""
+  for _v in Z_HARNESS_ATTEND_HEAD_SHA Z_HARNESS_ATTEND_PHASE \
+            Z_HARNESS_ATTEND_DONE_SET_HASH Z_HARNESS_ATTEND_DIRTY_FP \
+            Z_HARNESS_ATTEND_SESSION_ID; do
+    eval "_val=\${$_v:-}"
+    if [ -z "$_val" ]; then
+      MISSING_ATTEND_VARS="$MISSING_ATTEND_VARS $_v"
+    fi
+  done
+  if [ -n "$MISSING_ATTEND_VARS" ]; then
+    echo "ERROR: Z_HARNESS_ATTEND_RESUME=1 but required attend var(s) unset/empty:$MISSING_ATTEND_VARS" >&2
+    exit 1
+  fi
+
+  ATTEND_RESUME_JSON="$(python3 -c '
+import json, sys
+print(json.dumps({
+  "expected_head_sha": sys.argv[1],
+  "expected_phase": sys.argv[2],
+  "done_set_hash": sys.argv[3],
+  "dirty_state_fingerprint": sys.argv[4],
+  "session_id": sys.argv[5],
+}))
+' "${Z_HARNESS_ATTEND_HEAD_SHA:-}" "${Z_HARNESS_ATTEND_PHASE:-}" \
+  "${Z_HARNESS_ATTEND_DONE_SET_HASH:-}" "${Z_HARNESS_ATTEND_DIRTY_FP:-}" \
+  "${Z_HARNESS_ATTEND_SESSION_ID:-}")"
+fi
+
 # Write via Python for proper JSON encoding of all fields
 HANDOFF_JSON="$(python3 -c '
 import json, sys
 
 data = {
-  "protocol_version": "1.0",
-  "timestamp": sys.argv[1],
-  "agent": sys.argv[2],
-  "slug": json.loads(sys.argv[3]),
+  "protocol_version": sys.argv[1],
+  "timestamp": sys.argv[2],
+  "agent": sys.argv[3],
+  "slug": json.loads(sys.argv[4]),
   "status": "clean_break",
-  "next_step": sys.argv[4],
-  "context_files": json.loads(sys.argv[5])
+  "next_step": sys.argv[5],
+  "context_files": json.loads(sys.argv[6])
 }
 
+attend_resume = json.loads(sys.argv[7])
+if attend_resume is not None:
+  data["attend_resume"] = attend_resume
+
 print(json.dumps(data, indent=2))
-' "$TIMESTAMP" "$AGENT" "$SLUG_JSON" "$NEXT_STEP" "$CTX_FILES")"
+' "$PROTOCOL_VERSION" "$TIMESTAMP" "$AGENT" "$SLUG_JSON" "$NEXT_STEP" "$CTX_FILES" "$ATTEND_RESUME_JSON")"
 
 # ---------------------------------------------------------------------------
 # Atomic write
 # ---------------------------------------------------------------------------
-HANDFOFF_TMP="$PLAN_DIR/handoff.json.tmp.$$"
-printf '%s\n' "$HANDOFF_JSON" > "$HANDFOFF_TMP"
-mv "$HANDFOFF_TMP" "$HANDOFF_FILE"
+HANDOFF_TMP="$PLAN_DIR/handoff.json.tmp.$$"
+printf '%s\n' "$HANDOFF_JSON" > "$HANDOFF_TMP"
+mv "$HANDOFF_TMP" "$HANDOFF_FILE"
 
 BYTES="$(wc -c < "$HANDOFF_FILE" | tr -d '[:space:]')"
 echo "STATUS: written bytes=$BYTES"
