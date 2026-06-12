@@ -81,7 +81,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orc
   "$(printf '{"op":"register","run_id":"%s","rc":%d}' "$RUN" "$REG_RC")"
 ```
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the register-failure proceed/abort question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the register-failure proceed/abort question via their native channel. Silent omission is forbidden. -->
 
 **1a. Run Brief init (register success only — `init_after: register` per `docs/llm/run-brief-registry.json`).** Skip when register failed and the orchestrator proceeds without a record.
 
@@ -175,7 +175,7 @@ Spell out every code:
     "$(printf '{"op":"overlaps","run_id":"%s","rc":%d}' "$RUN" "$OVL_RC")"
   ```
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the overlap proceed/wait/abort question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the overlap proceed/wait/abort question via their native channel. Silent omission is forbidden. -->
 
 ### FINALIZE_STATUS / deregister rule (single source of truth)
 
@@ -246,7 +246,7 @@ Multiple plans may coexist under `$Z_HARNESS_PLAN_DIR/`. Determine which one to 
    - Also check for legacy flat layout: a `TASKS.md` directly under `z-harness/` (no slug).
 2. Choose:
    - **One candidate** → use it. If slug-namespaced, `export Z_HARNESS_SLUG=<slug>`. If legacy flat, leave `Z_HARNESS_SLUG` unset.
-   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug-selection question via their native channel. Silent omission is forbidden. -->
+   <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the slug-selection question via their native channel. Silent omission is forbidden. -->
    - **Multiple candidates** → `AskUserQuestion` with each slug as an option. Set `Z_HARNESS_SLUG` to the chosen one.
    - **Zero candidates** → tell the user there's no plan; suggest `/z-plan`. Stop.
 3. From here on, **`BASE`** refers to `$Z_HARNESS_PLAN_DIR` (or `z-harness` if legacy). Paths below use `$BASE`.
@@ -335,7 +335,7 @@ WAIT_RC=$?
   path (claim persists only the won set per SPEC F-claim-wonset). Re-run `claim` with the
   conceded path(s) and add any newly-won paths to `CLAIM`. Then continue to implementer dispatch.
 - `WAIT_RC == 10` (wait timeout — LOUD, per SPEC F1):
-  <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface this timeout decision (proceed/abort) via their native channel. Silent omission is forbidden. -->
+  <!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface this timeout decision (proceed/abort) via their native channel. Silent omission is forbidden. -->
   - **Interactive (not `Z_HARNESS_NO_ASK`):** present `AskUserQuestion`: **proceed anyway** /
     **abort task**. If proceed → continue to dispatch (the contended path is not leased; the
     post-dispatch write-set validation in Phase 2.5 will catch any actual collision). If abort →
@@ -374,7 +374,7 @@ WAIT_RC=$?
 
 **If `Z_HARNESS_AUTO_WAIT=0` (interactive wait mode):**
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the conceded-path proceed/wait/abort question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the conceded-path proceed/wait/abort question via their native channel. Silent omission is forbidden. -->
 Present `AskUserQuestion`: **proceed anyway** / **wait** / **abort task**.
 - **proceed** → continue to implementer dispatch (the path is not leased; the F5 write-set
   validation below applies as a backstop).
@@ -835,7 +835,7 @@ Agent(
 
   Otherwise (`$NO_ASK_CHECK == "proceed"`): present the diff + reviewer findings to the user. **Do NOT emit the outcome before the user chooses** — a speculative emit here would mis-record the status and the idempotence guard would block the real terminal emit. After the user answers, emit `emit_persona_outcome` with the status that choice produces (no-op when the knob is off; idempotent so exactly one row lands per attempt):
 
-  <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the review-failure decision (proceed anyway / patch manually / abandon task / re-spec) via their native channel. Silent omission is forbidden. -->
+  <!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the review-failure decision (proceed anyway / patch manually / abandon task / re-spec) via their native channel. Silent omission is forbidden. -->
   Use `AskUserQuestion` with options: **proceed anyway / patch manually / abandon task / re-spec**.
 
   - **proceed anyway** → the attempt is accepted as-is. Call `emit_persona_outcome "done"` (TRUE terminal), then proceed to Phase 3.5 and Phase 5 (mark done).

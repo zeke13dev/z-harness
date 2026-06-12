@@ -14,7 +14,7 @@ This is a **one-time setup per repo** (safe to re-run for additional scope). Aft
 
 1. `cd` to repo root. Confirm a `z-harness/` dir exists (we want this command run in a repo where z-harness is or will be active; if not, ask user whether to proceed anyway).
 2. Check whether `docs/human/` and/or `docs/llm/` already exist:
-   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the docs-exist question (extend / overwrite / abort) via their native channel. Silent omission is forbidden. -->
+   <!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the docs-exist question (extend / overwrite / abort) via their native channel. Silent omission is forbidden. -->
    > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
    - **Neither present** → fresh init; create both dirs.
    - **One missing** → fill in the missing tier; report.
@@ -82,7 +82,7 @@ Each binary entry point gets its own concept (because they're often the orchestr
 
 ### 1c. User confirmation
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the concept-selection multi-select question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the concept-selection multi-select question via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
 If the user picks zero concepts → abort cleanly with "no scope; nothing to do."
@@ -93,7 +93,7 @@ Output of Phase 1: a list `CONCEPTS = [{slug, source_files[]}, ...]` for Phase 2
 
 ### 1d. Per-concept overwrite confirmation
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the per-concept overwrite confirmation question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=archiving; non-supporting drivers must surface the per-concept overwrite confirmation question via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
 ## Phase 2 — Per-concept doc generation (parallel)
@@ -252,7 +252,7 @@ Dispatch `Explore` (haiku; upgrade to sonnet only if haiku misses structural pat
 
 ### 5c. User confirmation
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the glossary term confirmation question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the glossary term confirmation question via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 - Confirm or edit each proposed definition.
 - Supply an `_Avoid:_` synonym list (zero or more) for any term that has known aliases or common misnomers.
@@ -329,7 +329,7 @@ If `<repo-root>/.z-harness-rsync-exclude` doesn't exist, copy the default from `
 - **Idempotent.** Re-running with the same scope replaces those concepts' docs; doesn't blow away unrelated ones.
 - **Never write outside `docs/human/`, `docs/llm/`, `docs/human/INDEX.md`, `docs/llm/INDEX.json`, `CONTEXT.md` (repo root), and `.z-harness-rsync-exclude`.**
 - **No emojis** in docs.
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the not_enough_info decision (drop concept / provide more context) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the not_enough_info decision (drop concept / provide more context) via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
 ---

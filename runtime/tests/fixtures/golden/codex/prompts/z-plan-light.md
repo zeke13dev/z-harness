@@ -6,14 +6,14 @@ Task (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question "What's the fix?" via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the question "What's the fix?" via their native channel. Silent omission is forbidden. -->
 **If the task above is empty** — use `AskUserQuestion` to ask "What's the fix?" before proceeding. Do not invent.
 
 This command is for **small, focused changes**. If at any phase you realize the task is genuinely bigger than the Plan Route Check thresholds below, STOP, save context in `route-decision.md`, and recommend the routed command instead.
 
 ## Setup
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug-confirmation question (when non-obvious or collides) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the slug-confirmation question (when non-obvious or collides) via their native channel. Silent omission is forbidden. -->
 1. **Derive slug** — short kebab-case like `fix-<short-description>` (e.g. "off-by-one in nba parser" → `fix-nba-parser-off-by-one`). Confirm via `AskUserQuestion` if non-obvious or might collide with an existing slug (`bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" all_plan_slugs` to check both new and legacy plan layouts first).
 2. Export `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")`.
 3. Pick run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`.
@@ -85,7 +85,7 @@ At any phase, if you discover:
 - **Cross-module / cross-crate impact** (the fix touches multiple crates, public APIs, wire formats, or schemas)
 - **The user explicitly says** "this might be bigger than I thought"
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the route-gate decision (switch / continue / abandon) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the route-gate decision (switch / continue / abandon) via their native channel. Silent omission is forbidden. -->
 → STOP behind a route gate. Write `$CURRENT_ARCHIVE_DIR/route-decision.md`, emit `plan_route_decision`, preserve `light_run_end` and any legacy escalation status as compatibility telemetry, and push-notify. Use `AskUserQuestion` with switch / continue if the hard threshold allows continuation / abandon. If the user chooses switch, stop after presenting the exact next command invocation; do not execute it.
 
 When the user chooses **switch** or **abandon** at the route gate (ending the run), per the FINALIZE_STATUS rule execute **Run Brief — halt finalize** (below) with reason `route gate — user chose switch or abandon`.
@@ -102,7 +102,7 @@ Loop prevention: carry forward the latest route chain from any supplied or disco
 - Will the proposed fix (if the user named one) actually solve the underlying problem?
 - Is there a materially better path the user hasn't considered?
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface premise-concern questions via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface premise-concern questions via their native channel. Silent omission is forbidden. -->
 If any concern surfaces → raise it with the user via `AskUserQuestion` before proceeding. Don't plan around a flawed premise.
 
 **Quick exploration.**
@@ -229,7 +229,7 @@ When both return:
 
 Send `PushNotification` (if policy != `off`): "Light-mode decision ready for review."
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the Phase 5 approval question (approve / modify / abandon) and any shortcut approval questions via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the Phase 5 approval question (approve / modify / abandon) and any shortcut approval questions via their native channel. Silent omission is forbidden. -->
 Present a brief synthesis (3-5 bullets) via `AskUserQuestion`:
 - "Approve fix as proposed"
 - "Modify — I want to change <X>" (free-text follow-up)
@@ -294,7 +294,7 @@ The orchestrator (you, in main thread) reads the files listed in FIX.md "Files t
 
 If you applied any fix from the checklist, note it in the user-facing summary later.
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the mid-implementation scope-growth decision (switch / continue / spawn implementer) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the mid-implementation scope-growth decision (switch / continue / spawn implementer) via their native channel. Silent omission is forbidden. -->
 **Escape hatch — mid-implementation scope growth.** If you discover mid-edit that the change needs more files than FIX.md anticipated, OR a new non-obvious decision surfaces, STOP and ask the user via `AskUserQuestion`:
 - "Switch to the recommended routed command"
 - "Continue in light mode — update FIX.md and proceed" (only if no hard threshold forbids continuation)
@@ -325,7 +325,7 @@ Parse the return (already capped at 8 KB, blockers + majors only).
 
 **On blockers or majors:**
 - **First failure**: re-edit inline based on findings. Re-run `git diff`; if byte-identical to prior diff (you pushed back instead of editing), halt with `no_change_on_retry`. Otherwise re-spawn `reviewer` once.
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the second-review-failure decision (proceed anyway / patch manually / abandon) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the second-review-failure decision (proceed anyway / patch manually / abandon) via their native channel. Silent omission is forbidden. -->
 - **Second failure**: halt; `AskUserQuestion` — proceed anyway / patch manually / abandon.
 
 **No blockers/majors** → accept.

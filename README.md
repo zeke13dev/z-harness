@@ -1,117 +1,66 @@
-# z-harness
+# z-harness → Antigravity (agy) Export
 
-A Claude Code plugin that wraps planning and implementation in a rigorous, cross-LLM-reviewed pipeline. Every command writes artifacts to a per-repo state directory — by default an external location outside your working tree (`$XDG_STATE_HOME/z-harness/<repo-id>/`, e.g. `~/.local/state/z-harness/...`) — with run-frozen archives and aggregated telemetry in `<base>/metrics.jsonl`. Set `Z_HARNESS_EXTERNAL_DEFAULT=0` for the legacy in-repo `z-harness/` layout, or `Z_HARNESS_BASE_DIR=<abs path>` to redirect it anywhere; run `/z-where` to see the resolved base. Designed for engineers who want AI-assisted code changes to go through a real review loop rather than land silently.
+This directory contains z-harness commands, agents, and skills exported as Antigravity
+(Google's agy IDE) workflow, rule, and skill files.
+
+## What's included
+
+| Path | Purpose |
+|------|---------|
+| `.agent/workflows/*.md` | Custom chat modes — one per z-harness command |
+| `.agent/rules/*.md` | Always-on or model-decision rules — one per z-harness agent |
+| `.agent/skills/*` | Workspace skills — one per z-harness skill |
+| `prompts/*.md` | Flat prompt files (description + role frontmatter) |
+| `agy-plugin.yaml` | Export manifest (z-harness convention; not read by agy) |
+| `CAPABILITIES.md` | What can and cannot be expressed in Antigravity |
 
 ## Install
 
-**Claude Code from a local clone (symlink mode):**
+### Per-project (recommended)
+
+Copy the `.agent/` directory into your project workspace root:
 
 ```bash
-git clone https://github.com/<org>/z-harness
-cd z-harness
-bash install.sh
-bash scripts/config.sh ensure-defaults  # creates ~/.config/z-harness/config.toml with defaults
+cp -r exports/agy/.agent /path/to/your/project/
 ```
 
-After installing, run `/z-providers-discover` in Claude Code to configure which LLM CLIs play which roles. For Codex, tarball mode, or full install details, see [docs/human/INSTALL.md](docs/human/INSTALL.md).
+Antigravity auto-discovers `.agent/workflows/**/*.md`, `.agent/rules/**/*.md`, and `.agent/skills/**/*`
+by watching the workspace directory tree.  No restart required — files become
+available immediately in the IDE.
 
-## Quickstart
+### Global (all workspaces)
 
-- `/z-do <small task>` — plan-less execution for small changes
-- `/z-plan <task>` — rigorous planning pipeline (SPEC/PLAN/TASKS)
-- `/z-implement-all` — orchestrate the queue from a /z-plan output
-
-## Command catalogue
-
-### Pre-planning
-
-- **`/z-map <question>`** — Maps terrain with citations + cross-LLM critique. No recommendations — terrain only. Produces `MAP.md`. Cost target: ≤2M tokens.
-- **`/z-brainstorm <topic>`** — Cheap parallel idea generation across three vendor-diverse ideators. Produces `BRAINSTORM.md`. Cost target: ≤200K tokens.
-- **`/z-research <topic>`** — Higher-order meta-orchestrator. Composes `/z-map` and `/z-brainstorm`, then runs adversarial synthesis panel producing `RESEARCH.md` with approach decision matrix. Cost 3–6M tokens; cost gate at invocation.
-
-Typical chains:
-- Murky problem with unknown terrain: `/z-map → /z-brainstorm → /z-plan`
-- Murky problem needing full synthesis: `/z-research → /z-plan`
-- Lighter case: `/z-brainstorm → /z-plan`
-- Standard: `/z-plan` alone
-
-### Planning
-
-- **`/z-plan <task>`** — Rigorous pipeline: premise check → exploration → enumerate decisions → bundled cross-LLM consult → SPEC.md / PLAN.md / TASKS.md.
-- **`/z-plan-light <fix>`** — Fast path for 1–5 file fixes; auto-bails to `/z-plan` if scope grows.
-- **`/z-plan-split <topic>`** — Pre-emptive scope splitter for sprawling topics.
-- **`/z-test`** — Semantic test-case planner; writes `TESTS.md`.
-
-### Implementation
-
-- **`/z-implement-all`** — Orchestrates the full TASKS.md queue with per-task reviewer safety gate and retry.
-- **`/z-implement-next`** — Same loop, one task at a time.
-
-### Audit, debug, review
-
-- **`/z-audit <target>`** — Read-only audit pipeline; emits REPORT.md + TASKS.md.
-- **`/z-fix <symptom>`** — Lightweight bug-fix command.
-- **`/z-debug <symptom>`** — Adversarial hypothesis tournament; writes `DEBUG.md`.
-- **`/z-review-all`** — Final-gate cross-LLM review of a completed plan's cumulative diff.
-- **`/z-uplift`** — Bulk codebase quality uplift across the whole repo.
-
-### Docs and memory
-
-- **`/z-init-docs`** — Bootstrap two-tier docs (`docs/human/` + `docs/llm/INDEX.json`).
-- **`/z-maintain-docs`** — Refresh stale concepts. Dry-run preview by default.
-- **`/z-suggest-memory`** — Author a memory entry into a concept's `docs/llm/<slug>.json`.
-- **`/z-stats`** — Read-only progress + cost report from `metrics.jsonl`.
-
-## MCP Server (`z-harness serve`)
-
-`z-harness serve` starts a stdio MCP server that exposes every `/z-*` command as an MCP tool, enabling AI editors (Cursor, VS Code, Claude Desktop) and bridges (Hermes) to invoke the full z-harness toolbox from their native tool system.
+To make workflows available across all projects, copy them to the global workflows path:
 
 ```bash
-# Start the server (stdio transport):
-z-harness serve
-
-# Or via Python:
-python3 -m z_harness_cli serve
+mkdir -p ~/.antigravity/antigravity/data/User/globalStorage/antigravity.antigravity/global_workflows/
+cp exports/agy/.agent/workflows/*.md \
+  ~/.antigravity/antigravity/data/User/globalStorage/antigravity.antigravity/global_workflows/
 ```
 
-### Editor MCP config
+## Usage
 
-**Cursor / VS Code (mcp.json):**
-```json
-{
-  "mcpServers": {
-    "z-harness": {
-      "command": "z-harness",
-      "args": ["serve"]
-    }
-  }
-}
+After installing, invoke a workflow from the command line:
+
+```bash
+agy chat --mode z-plan "Add user authentication feature"
+agy chat --mode z-implement-next
+agy chat --mode z-review-all
 ```
 
-**Claude Desktop (claude_desktop_config.json):**
-```json
-{
-  "mcpServers": {
-    "z-harness": {
-      "command": "z-harness",
-      "args": ["serve"]
-    }
-  }
-}
+Or select the mode from the Antigravity IDE mode picker in the chat panel.
+
+## Re-generating
+
+Run the exporter from the repo root:
+
+```bash
+python3 -m z_harness_cli export --host antigravity
+# or with a custom output directory:
+python3 -m z_harness_cli export --host antigravity --out /path/to/output
 ```
 
-### MCP Tool Catalog
+## Known limitations
 
-The server exposes each `/z-*` command as a tool using snake_case naming (e.g. `/z-plan` → `z_plan`). Tools accept a `prompt` (natural language task description) and optional `slug` (plan identifier). Heavy commands (planning, implementation, debug) stream progress via MCP notifications; lightweight commands (status, where, stats) return immediately.
-
-Full roster: `z_plan`, `z_implement_all`, `z_implement_next`, `z_review_all`, `z_audit`, `z_audit_plan_style`, `z_debug`, `z_do`, `z_brainstorm`, `z_research`, `z_map`, `z_plan_light`, `z_plan_split`, `z_test`, `z_amend`, `z_init_docs`, `z_maintain_docs`, `z_uplift`, `z_improve`, `z_where`, `z_stats`, `z_suggest_memory`, `z_axiom_scan`, `z_axiom_list`, `z_axiom_approve`, `z_axiom_reject`, `z_axiom_edit`, `z_personas`, `z_handoff`, `z_update`, `z_reality`, `z_overnight`, `z_evaluate`, `z_context_budget`, `z_doc_rationale`, `z_test_invariant`. Utility tools: `z_subagent_dispatch`, `z_export`, `z_detect`.
-
-## Where to look next
-
-- [docs/human/INDEX.md](docs/human/INDEX.md) — human reference (commands, skills, agents, scripts)
-- [docs/llm/INDEX.json](docs/llm/INDEX.json) — LLM-tier two-tier docs; agents read this via doc-fetcher
-- [docs/human/config.md](docs/human/config.md) — TOML config (notify level, doc-fetcher policy)
-
-## License
-
-MIT
+See `CAPABILITIES.md` for a full list of z-harness features that cannot be
+expressed in Antigravity (subagent dispatch, skills, multi-model review, etc.).

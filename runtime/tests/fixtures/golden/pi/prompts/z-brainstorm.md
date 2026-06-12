@@ -12,7 +12,7 @@ Topic (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the question
      "What topic should I brainstorm?" via their native channel and accept a
      text reply. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
@@ -21,14 +21,14 @@ $ARGUMENTS
 
 ## Setup
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the slug
      confirmation question via their native channel if non-obvious. Silent
      omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 2. **Export** `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")` for all subsequent shell calls and subagents.
 3. Pick a run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`.
 4. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`.
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the overwrite
+<!-- RUNTIME-GATE: ask_user; category=archiving; non-supporting drivers must surface the overwrite
      confirmation question (overwrite / abort) via their native channel when
      BRAINSTORM.md already exists. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
@@ -544,7 +544,7 @@ Each `<*_PERSONA_PREFIX>` is the persona body followed by a blank line (from 2a)
 Treat an ideator as failed if it returns an error, times out, or returns no parseable five-section block.
 
 - **1/3 fail** → proceed with the surviving two. Record the failed member as `"<id>:failed"` in the `ideators` frontmatter list using the canonical id (`claude:failed` | `codex:failed` | `gemini:failed`). The Phase 3 anti-bias check becomes a two-way comparison (still mandatory). Log `ideator_failed` with `{vendor, reason}`.
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the 2/3 ideator
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the 2/3 ideator
      failure gate (retry / proceed-with-1 / abandon) via their native channel.
      Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
@@ -630,7 +630,7 @@ Log every individual failure as `ideator_failed` regardless of the bucket above.
 
    Do **not** write a `## User choice` section in Phase 3 — Phase 4 writes it for the first time (no placeholder, no duplication).
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the framing
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the framing
      selection question (Claude / Codex / Gemini / Restart / Abandon) via their
      native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
@@ -661,7 +661,7 @@ Let `N_PAIRS = len(pairs)`.
 
 #### Step 4H-2 — Present the selection matrix to the user
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the chunk×framing
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the chunk×framing
      selection matrix via their native channel. Silent omission is forbidden. -->
 **Case A — N_PAIRS ≤ 12 (single AskUserQuestion):**
 
@@ -765,7 +765,7 @@ Branch on the user's Phase 3 choice:
 #### User picked Restart
 
 1. Archive the just-written BRAINSTORM.md to `$Z_HARNESS_PLAN_DIR/archive/$RUN/BRAINSTORM.md.previous-<N>` (next free integer). Before archiving, update the archived copy's frontmatter to `status: complete`, `chosen_framing: restart` so the historical record is spec-valid.
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the refined
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the refined
      topic question via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 3. Start a fresh RUN: regenerate `RUN`, re-mkdir, re-emit `brainstorm_run_start`, and loop back to Phase 1 with the refined topic.

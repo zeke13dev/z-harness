@@ -1,0 +1,53 @@
+# PLAN — z-harness true parallelism
+
+## Goal
+
+Turn the existing-but-dormant Hermes layer into a working parallel executor: within-plan DAG concurrency (`depends_on` + `parallel_group` + `asyncio.gather` spawn), cross-plan orchestration over multiple slugs, and merge-time-centric file-conflict safety — without inventing a new lock or scope subsystem.
+
+## Decisions (with rationale)
+
+| # | Decision | Rationale | Rejected |
+|---|----------|-----------|----------|
+| D1 | `asyncio.gather` + `asyncio.Semaphore(cap)` per ready level; each workstream monitor is its own coroutine; `poll_session` wrapped in `asyncio.to_thread`. | Matches the already-async, subprocess-based orchestrator; Semaphore bounds live sessions; to_thread stops one slow poll starving peers. | Unbounded gather (resource blowup); process pool (heavier, redundant). |
+| D2 | `depends_on` is the scheduling source of truth; `parallel_group` is a derived `level-{depth}` label computed during 5-rule derivation and validated before emit. | One source of truth avoids a second, divergent scheduling mechanism; depth = longest path guarantees same-level workstreams are mutually independent (Rule 7 passes by construction). | `parallel_group`-authoritative scheduling (double source of truth, validation foot-guns). |
+| D3 | Worktree isolation = write-safe; serialize only HIGH-severity `file_conflicts` within a level; disable concurrent git auto-gc; document non-file shared-state limits + `serialize_all` escape. | Worktrees make execution write-safe; conflicts are merge-time; gc is the one real shared-store hazard and is cheap to disable. | Hard per-file path locks / per-workstream bare clones (redundant given worktrees; contradicts user decision). |
+| D4 | Cross-plan: super-orchestrator builds a plan conflict graph from `active-plan-registry` scope; runs scope-disjoint plans concurrently; serializes overlapping via `plan-claim.sh` acquired in sorted slug order. | Reuses existing registry + claim locks; sorted order is deadlock-free; no global DAG solver to build/maintain. | Full global cross-plan DAG + unified scheduler (much more complexity, new manifest). |
+| D5 | `file_conflicts` derived from per-task `**Files:**` lines in TASKS.md (the same source `scope-extractor` parses); absent/unparseable ⇒ `scope_unknown: true` ⇒ conservative serialization. | Keeps task→path attribution at the source; no dependency on a `scope.json` that z-plan never persists (audit B1); reuses `scope-extractor`'s token rules. | Read `<plan-dir>/scope.json` (never persisted by z-plan; flat shape has no task attribution — audit B1). Parse a prose `Files touched:` line (unstructured). |
+
+## Non-goals
+
+- Full global cross-plan dependency DAG (registry-scope serialization only).
+- Hard execution-time file mutexes (worktree isolation covers write-safety).
+- Wiring Hermes concurrency into `/z-implement-all`'s in-process task loop — that orchestrator stays sequential; Hermes is the parallel surface over `workstreams.json`.
+- Discord relay / session transport changes (out of scope; existing behavior preserved).
+
+## Approved shortcuts
+
+None. The cross-LLM consult pushed toward *more* robustness (fail-safe serialization, sorted lock order, poll decoupling, structured scope); all were adopted. No robustness was traded for speed.
+
+## Ordered phases (de-risking order from both consultants)
+
+1. **Foundation & safety net** — fix the `generate-workstreams.py` compile bug; characterization tests for the 5-rule algorithm (it has none today). Nothing else can be trusted until the generator parses and is pinned.
+2. **Scope & conflict data** — per-task `**Files:**` parsing from TASKS.md; flat-plan `file_conflicts` derivation; `scope_unknown` flag. This is the *data* the safety layer needs; build it before the layer.
+3. **DAG labels** — populate `parallel_group` from workstream-DAG depth; schema + protocol doc bump.
+4. **Config** — concurrency caps (default cap=1 ≡ sequential).
+5. **Scheduler refactor (still sequential)** — extract `run_workstream`; level-aware, `depends_on`-driven loop. Prove parity with the legacy sequential path at cap=1.
+6. **Conflict-aware partition** — HIGH-severity serialization within a level; `scope_unknown`/`serialize_all` ⇒ fully serial.
+7. **Poll decoupling** — `asyncio.to_thread` monitors; independent per-workstream coroutines.
+8. **Concurrency flip** — `asyncio.gather` + `Semaphore`; git gc safety. The first point real parallelism turns on, now on top of proven safety.
+9. **Cross-plan super-orchestrator** — `--slugs` mode + conflict graph from registry scope.
+10. **Cross-plan locks & merge mutex** — sorted-order `plan-claim` acquisition; global merge serialization.
+11. **Docs & memory** — protocol v1.3, llm/human concept refresh, runbook.
+12. **End-to-end** — real small multi-workstream plan run at cap>1.
+
+## DRY / KISS / SOLID
+
+- **DRY:** every safety primitive (severity heuristic, manifest validation, scope extraction, registry, claim locks) is reused, not reimplemented.
+- **KISS:** one scheduling source of truth (`depends_on`); cap=1 is the legacy path; `parallel_group` is a label.
+- **SOLID:** `run_workstream` extraction enables the scheduler/partition/concurrency layers to compose; cross-plan logic is isolated in `cross_plan.py`, leaving the within-plan scheduler closed for modification.
+
+## Amendments
+
+- **2026-06-12 — B1 (scope-data chain):** T002/T003/D5 now derive per-workstream scope by parsing each task's `**Files:**` line in TASKS.md instead of reading `<plan-dir>/scope.json`. The audit found z-plan never persists that file and its flat `{path,confidence,reason}` shape has no task attribution — the original design would have left within-plan `file_conflicts` permanently empty.
+- **2026-06-12 — M1 (semaphore lifetime):** T010/SPEC now hold the `asyncio.Semaphore` for the full `run_workstream` lifetime (`async with sem:`), not around spawn, so the cap bounds live sessions. Added a cap=2-with-3-ready concurrency-bound test, since cap=1 (the parity test) cannot catch a spawn-only placement.
+- **2026-06-12 — M3 (config collision):** T006/SPEC now extend the existing dormant `ConcurrencyConfig` (`max_parallel_sessions=3`, env `HERMES_MAX_PARALLEL`) in place — default flipped to 1, naming reconciled — instead of adding a second `Concurrency` dataclass.

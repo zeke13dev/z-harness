@@ -16,8 +16,8 @@
   "properties": {
     "protocol_version": {
       "type": "string",
-      "description": "Semantic version of the handoff protocol. Current: 1.0.",
-      "const": "1.0"
+      "description": "Semantic version of the handoff protocol. 1.0 is the base handoff; 1.1 adds the optional attend_resume predicate. An enum (not a const) so a stored 1.0 file and a new 1.1 file both validate against this schema.",
+      "enum": ["1.0", "1.1"]
     },
     "timestamp": {
       "type": "string",
@@ -63,6 +63,45 @@
             "enum": ["spec", "plan", "tasks", "workstreams", "session_log", "diff", "other"],
             "description": "Semantic role of this file. spec: SPEC.md. plan: PLAN.md. tasks: TASKS.md. workstreams: workstreams.json. session_log: session transcript or events. diff: git diff or patch file. other: any other context file."
           }
+        }
+      }
+    },
+    "attend_resume": {
+      "type": "object",
+      "description": "OPTIONAL resume predicate populated only when the handoff is written from a /z-attend chain yield (protocol_version 1.1). Absent on plain 1.0 handoffs. Every field is consumed on resume: HEAD/phase mismatches HALT; done-set/dirty-tree/session drift WARN-and-ask. The predicate lives here (immutable token), never in human-edited SESSION.md.",
+      "additionalProperties": false,
+      "required": [
+        "expected_head_sha",
+        "expected_phase",
+        "done_set_hash",
+        "dirty_state_fingerprint",
+        "session_id"
+      ],
+      "properties": {
+        "expected_head_sha": {
+          "type": "string",
+          "minLength": 1,
+          "description": "git HEAD sha captured at yield. On resume, if it differs from current HEAD the orchestrator HALTS with remediation (re-plan vs accept-new-base)."
+        },
+        "expected_phase": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Chain step to re-enter at, captured at yield. Cross-checked against the chain state-file cursor on resume; a mismatch HALTS (state and token disagree)."
+        },
+        "done_set_hash": {
+          "type": "string",
+          "minLength": 1,
+          "description": "scripts/session-helpers.sh done_set_hash of TASKS.md at yield. Recomputed on resume; a difference WARNs (the done-set shifted — a parallel session likely advanced tasks) and asks {continue / abort}."
+        },
+        "dirty_state_fingerprint": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Digest of git status --porcelain at yield. Recomputed on resume; a difference WARNs (working tree changed since yield) and asks {continue / abort}."
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Yield-time session id. On resume, an unchanged id WARNs HARD (user likely did not /clear) and offers abort-to-clear-first."
         }
       }
     }

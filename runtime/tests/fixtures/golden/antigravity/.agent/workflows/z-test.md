@@ -13,7 +13,7 @@ Same logic as `/z-implement-all` Phase 0:
 1. Enumerate `$Z_HARNESS_PLAN_DIR/` subdirs containing a `TASKS.md`; also check legacy flat `z-harness/TASKS.md`.
 2. If `--slug <slug>` arg → use it.
 3. Single candidate → use it; export `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")`.
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug selection question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the slug selection question via their native channel. Silent omission is forbidden. -->
 4. Multiple → `AskUserQuestion` to pick.
 5. Zero → tell user "no plan found — run `/z-plan` first"; abort.
 
@@ -21,7 +21,7 @@ Set `$BASE = $Z_HARNESS_PLAN_DIR` (or `z-harness` for legacy).
 
 **Require SPEC.md + PLAN.md + TASKS.md.** Abort with "incomplete plan; run /z-plan to completion first" if any of the three is missing.
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the implementation-underway continue/abort question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the implementation-underway continue/abort question via their native channel. Silent omission is forbidden. -->
 **Implementation-underway warning.** If TASKS.md already has any `[x]` rows, `AskUserQuestion`:
 - "Continue — add tests that will retroactively constrain in-flight tasks"
 - "Abort — wait until implementation is complete, then run /z-test after /z-review-all"
@@ -61,7 +61,7 @@ Also extract from SPEC.md every line of these shapes and treat each as a candida
 - Numeric/quantitative assertions ("must be ≤ X", "exactly N", "monotone in Y")
 - Equality/identity claims about cross-module contracts ("strategy reads field X written by Y")
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the bug-class concerns question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the bug-class concerns question via their native channel. Silent omission is forbidden. -->
 **Brief user input.** Before drafting tests, `AskUserQuestion` (free-text):
 - "What specific bug classes worry you most for this plan?"
 
@@ -143,7 +143,7 @@ Save the synthesized list to `$BASE/archive/$RRUN/phase4-synthesis.md`.
 
 Send `PushNotification` (if policy != `off`): "Test plan ready for review."
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the test-plan approval question (accept-all / accept mandatory+recommended / edit subset / abandon) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the test-plan approval question (accept-all / accept mandatory+recommended / edit subset / abandon) via their native channel. Silent omission is forbidden. -->
 Present counts via `AskUserQuestion`:
 - "<M> mandatory + <R> recommended + <O> optional tests drafted. Cross-LLM dropped <D> trivial drafts; added <A> coverage gaps."
 
@@ -153,7 +153,7 @@ Options:
 - **Edit subset** — orchestrator iterates each contested test (cross-LLM disagreement, or user-concern items) via per-test `AskUserQuestion`: keep / drop / modify (free-text).
 - **Abandon** — log `test_plan_end` with `status: abandoned`; exit. No TESTS.md written.
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the fixture-scaffolding approval question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the fixture-scaffolding approval question via their native channel. Silent omission is forbidden. -->
 **Fixture-scaffolding gate.** For any accepted test whose `setup:` field requires non-trivial new test infrastructure (a new fixture file, a new mock framework, a new test-data generation step), get separate explicit approval via `AskUserQuestion`. Same discipline as `/z-plan` shortcuts: building new test infra without buy-in is a scope expansion.
 
 ## Phase 6 — Write TESTS.md

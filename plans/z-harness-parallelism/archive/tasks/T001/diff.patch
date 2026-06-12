@@ -1,0 +1,34 @@
+diff --git a/scripts/generate-workstreams.py b/scripts/generate-workstreams.py
+index b5bc711..6b64a2a 100644
+--- a/scripts/generate-workstreams.py
++++ b/scripts/generate-workstreams.py
+@@ -169,6 +169,14 @@ class CycleError(Exception):
+     pass
+ 
+ 
++def _task_sort_key(task_id: str):
++    """Sort key for task IDs: T001 < T002 < T-REV-001, etc."""
++    m = re.match(r"T[-_]?(\d+)", task_id)
++    if m:
++        return (0, int(m.group(1)), task_id)
++    return (1, 0, task_id)  # Non-standard IDs sort after T-prefixed
++
++
+ def parse_depends_on(tasks_text):
+     """Parse **Depends on:** Txxx lines from TASKS.md.
+     
+@@ -346,13 +354,7 @@ def run_5rule_algorithm(task_ids, deps):
+     for i, tasks in enumerate(final_workstreams):
+         ws_id = f"ws-{i + 1}"
+         sorted_tasks = sorted(tasks, key=_task_sort_key)
+-def _task_sort_key(task_id: str):
+-    """Sort key for task IDs: T001 < T002 < T-REV-001, etc."""
+-    m = re.match(r"T[-_]?(\d+)", task_id)
+-    if m:
+-        return (0, int(m.group(1)), task_id)
+-    return (1, 0, task_id)  # Non-standard IDs sort after T-prefixed
+-        
++
+         # Compute depends_on from task-level deps
+         ws_deps = set()
+         for task in sorted_tasks:

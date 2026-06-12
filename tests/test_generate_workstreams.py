@@ -885,3 +885,37 @@ class TestParallelGroupDeepFork:
                         f"ws '{a}' (group {group}) depends transitively on ws '{b}' "
                         f"in the same parallel_group — Rule 7 violation"
                     )
+
+
+class TestBuildWorkstreamsJsonEndToEnd:
+    """End-to-end CLI path: build_workstreams_json() runs validate_workstreams().
+
+    The other tests in this module call build_from_flat()/build_from_light()
+    directly, BELOW the validation layer — so they never caught that those
+    builders emitted a workstream `path` with a trailing '/', which
+    validate_workstreams() (and schema.py) reject. That made `--source z-plan`
+    and `--source z-plan-light` always exit 2 in the shipped CLI. These tests
+    exercise the full entry point so a trailing-slash regression fails loudly.
+    """
+
+    def test_z_plan_source_passes_validation(self, tmp_path) -> None:
+        (tmp_path / "TASKS.md").write_text(
+            "# Tasks\n\n"
+            "## T001 — first `[ ]`\n**Files:** `src/a.py`\n\n"
+            "## T002 — second `[ ]`\n**Files:** `src/b.py`\nDepends on: T001\n"
+        )
+        result = _mod.build_workstreams_json("test-plan", "z-plan", str(tmp_path))
+        assert result["workstreams"], "expected at least one workstream"
+        for w in result["workstreams"]:
+            assert not w["path"].endswith("/"), (
+                f"workstream path must not end with '/': {w['path']!r}"
+            )
+
+    def test_z_plan_light_source_passes_validation(self, tmp_path) -> None:
+        (tmp_path / "FIX.md").write_text("# Fix\n\n## T001 — only task\n")
+        result = _mod.build_workstreams_json("test-plan", "z-plan-light", str(tmp_path))
+        assert result["workstreams"], "expected at least one workstream"
+        for w in result["workstreams"]:
+            assert not w["path"].endswith("/"), (
+                f"workstream path must not end with '/': {w['path']!r}"
+            )

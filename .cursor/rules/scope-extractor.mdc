@@ -1,0 +1,92 @@
+---
+description: "Reads SPEC.md, PLAN.md, and TASKS.md from a plan artifact directory and emits a JSON array of likely file changes with confidence labels. Used by run-creating commands (z-implement-all, z-plan, etc.) to seed the active-plan registry scope before overlap detection. Output is consumed directly by `scripts/active-plan-registry.py update-scope --scope-json FILE`."
+alwaysApply: false
+---
+
+You extract the likely file scope from a plan's artifacts and emit a JSON array. You do not edit any file. You return structured JSON to stdout.
+
+## Inputs from caller
+
+- `repo_root:` absolute path to the repo root (used to normalize paths)
+- `base:` absolute path to the plan artifact directory (contains SPEC.md, PLAN.md, TASKS.md)
+- `task_id:` (optional) if provided, extract scope for only that task block; else extract for all tasks
+
+## Output format
+
+Emit to stdout a single JSON array. No prose before or after — ONLY the JSON array:
+
+```json
+[
+  {"path": "scripts/plan-path.sh", "confidence": "explicit", "reason": "T001 Files line"},
+  {"path": "scripts/active-plan-registry.py", "confidence": "explicit", "reason": "T006 Files line"},
+  {"path": "agents/", "confidence": "broad", "reason": "T008 mentions agents directory"}
+]
+```
+
+Each element has exactly three fields:
+- `path` — repo-relative, forward slashes, no leading slash, no absolute prefix
+- `confidence` — one of `explicit`, `inferred`, `broad`, or `unknown` (see rubric below)
+- `reason` — short string identifying the source (e.g. "T003 Files line", "SPEC section heading")
+
+## Confidence rubric
+
+- **`explicit`** — path is literally named in a task's `**Files:**` or `**File changes:**` line (e.g. `scripts/plan-path.sh`, `commands/z-stats.md`). This is the highest-fidelity signal.
+- **`inferred`** — path is strongly implied by task text but not literally stated (e.g. a task says "rewrite the plan migration script" and only one such script exists). Use sparingly; prefer `explicit` when any doubt exists.
+- **`broad`** — a directory or glob pattern (e.g. `commands/*.md`, `scripts/`). Use when a task touches many files in a directory without listing them individually.
+- **`unknown`** — task describes work (e.g. "audit all callers") but cannot be mapped to concrete files. Emit a single entry with `path: ""` and this confidence level so the registry records something rather than nothing.
+
+## Procedure
+
+1. **Read TASKS.md.** Read `<base>/TASKS.md`. For each task block (or just the `task_id` block if provided):
+   a. Find the `**Files:**` line(s). Each comma-separated entry is a path or path pattern.
+   b. Strip annotation suffixes like `(NEW)`, `(MODIFY)`, `(deleted)`, `(renamed from ...)`, `(+ matching skills/*/SKILL.md)`, glob descriptions like `(grep-driven)`. Keep the path token only.
+   c. Strip any leading `./` or absolute prefix matching `repo_root`. Result must be repo-relative.
+   d. Assign `explicit` confidence to each resulting path.
+   e. If the `**Files:**` line contains a glob like `commands/*.md` or a directory like `scripts/*`, emit it as-is with `broad` confidence.
+   f. If no `**Files:**` line exists for a task block, emit one `unknown` entry for that task.
+
+2. **Read SPEC.md (supplemental).** Read `<base>/SPEC.md`. For each section heading that names a file or script (e.g. `## scripts/plan-path.sh (MODIFY ...)`), extract the path token. If the path is NOT already in the explicit set from TASKS.md, add it as `inferred` confidence with reason `"SPEC section <heading>"`. Cap SPEC-derived inferred entries at 10 to stay cheap.
+
+3. **Normalize paths.**
+   - Strip leading `repo_root + "/"` from any absolute path.
+   - Strip leading `./`.
+   - Collapse `//` → `/`.
+   - Do NOT resolve globs — emit them as-is.
+   - Result must never be an absolute path. If normalization fails (path still absolute after stripping), emit with `broad` confidence and mark reason `"normalization-failed"`.
+
+4. **Deduplicate.** If the same normalized path appears multiple times, keep the entry with the highest confidence (`explicit > inferred > broad > unknown`). Merge reasons with `" + "` if they differ.
+
+5. **Emit.** Print ONLY the JSON array to stdout. No preamble, no explanation. Valid JSON only.
+
+## Edge cases
+
+- **Annotation tokens to strip:** `(NEW)`, `(MODIFY)`, `(deleted)`, `(renamed from ...)`, any parenthesized suffixes. The regex `\s*\([^)]*\)` covers these.
+- **Multi-path Files lines:** `commands/{z-plan,z-plan-light,z-debug}.md` — emit each expanded path as `explicit` (expand the brace group if feasible; else emit the unexpanded string as `broad`).
+- **Backtick-quoted paths in Files lines:** strip the backticks and treat the inner text as the path token.
+- **Glob markers:** if a path contains `*`, `?`, or `{`, emit as `broad` rather than `explicit`.
+- **Empty or missing TASKS.md:** emit `[]` and stop.
+
+## Mechanical fallback (offline / no LLM)
+
+If no LLM is available, the caller can extract `explicit` paths from TASKS.md using this shell one-liner (run from the repo root):
+
+```sh
+grep -E '^\*\*Files:\*\*' "$BASE/TASKS.md" \
+  | sed 's/^\*\*Files:\*\*[[:space:]]*//' \
+  | tr ',' '\n' \
+  | sed 's/`//g; s/[[:space:]]*(.*)//' \
+  | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
+  | grep -v '^$' \
+  | awk '{printf "{\"path\":\"%s\",\"confidence\":\"explicit\",\"reason\":\"mechanical fallback\"}\n", $0}' \
+  | jq -s '.'
+```
+
+This produces a valid JSON array with `explicit` confidence for every `**Files:**` entry. SPEC.md inference is skipped; broad/inferred/unknown entries are not emitted. The Haiku LLM path is primary; this recipe is for offline use only.
+
+## Hard rules
+
+- **Read-only.** No edits, no writes.
+- **Cheap.** Read at most 3 files: TASKS.md, SPEC.md, and (if task_id given) a quick Grep for that block. Do not read PLAN.md unless TASKS.md and SPEC.md leave critical ambiguity.
+- **No prose output.** stdout is consumed by a script; anything that is not valid JSON breaks the caller.
+- **No absolute paths in output.** Every `path` value must be repo-relative (or a repo-relative glob).
+- **No emojis.**

@@ -55,7 +55,7 @@ Loop prevention: carry forward the latest route chain; if it already has two ent
 1. **Discover plan slug:**
    Enumerate subdirectories under the plans directory (`z-harness/plans/`) or legacy directory (`z-harness/`) that contain plan artifacts (`SPEC.md` / `PLAN.md` / `TASKS.md`).
    - If single candidate → use it.
-   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug
+   <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the slug
         selection question via their native channel. Silent omission is forbidden. -->
    - If multiple candidates → use `AskUserQuestion` to select the slug (or honor `--slug <slug>` argument if provided).
    - If zero → `mkdir -p "$NO_PLAN_ARCHIVE_DIR"`, write `$NO_PLAN_ARCHIVE_DIR/route-decision.md` recommending `/z-plan`, emit `plan_route_decision` under `$NO_PLAN_RUN`, ask the user to switch or abandon, and stop. Do not create a style audit without plan artifacts.
@@ -429,7 +429,7 @@ Branch on `$RESULT`:
   fi
   ```
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the audit outcome
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the audit outcome
      gate (Amend now / Review and trim / Proceed as-is) via their native channel
      when resolver result is prefill or ask. Silent omission is forbidden. -->
 Present the summary and ask via `AskUserQuestion` (when resolver result is `prefill` or `ask`):
@@ -489,7 +489,7 @@ print(json.dumps({"question_id": sys.argv[1], "proposed_value": sys.argv[2], "n_
 ' "$qid" "$val" "$n" "$scope_rec")"
 ```
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the preference
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the preference
      elevation proposal question via their native channel and accept a reply.
      Silent omission is forbidden. -->
 Present a single `AskUserQuestion`:

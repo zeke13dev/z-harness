@@ -12,7 +12,7 @@ Task (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the question
      "What amendment should I make to the plan?" via their native channel and
      accept a text reply. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
@@ -30,7 +30,7 @@ Multiple plans may coexist under `$Z_HARNESS_PLAN_DIR/`. Determine which one to 
 1. Enumerate candidates: immediate subdirs of `z-harness/` that contain **any** of `SPEC.md`, `PLAN.md`, `TASKS.md`, or `FIX.md`. Also check for legacy flat layout.
 2. Choose:
    - **One candidate** → use it. `export Z_HARNESS_SLUG=<slug>` (or leave unset for legacy).
-   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug
+   <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the slug
         selection question via their native channel. Silent omission is forbidden. -->
    > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
    - **Zero candidates** → tell the user there's no plan to amend; suggest `/z-plan` or `/z-plan-light`. Stop.
@@ -115,7 +115,7 @@ Proceed directly to Phase 5. The caller (e.g. `/z-review-all` auto-amend) has al
 
 **Otherwise** (normal invocation):
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the amendment
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the amendment
      approval question (Approve / Revise / Abandon) via their native channel and
      await a response. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
@@ -124,7 +124,7 @@ Proceed directly to Phase 5. The caller (e.g. `/z-review-all` auto-amend) has al
 - **Revise** (free-text) → loop back to Phase 3 with their tweak
 - **Abandon** → log `amend_run_end` with `status: abandoned`; exit
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the completed-task
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the completed-task
      disposition question for each touched-but-completed task via their native channel.
      Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
@@ -194,7 +194,7 @@ Run a self-check. Read each amended file fresh and verify:
 - No duplicate task IDs.
 - For light mode: every file in FIX.md "Files to change" exists or has a clear creation directive.
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the consistency
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the consistency
      error choice (Fix automatically / revise / abort) via their native channel.
      Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
@@ -241,7 +241,7 @@ print(json.dumps({"question_id": sys.argv[1], "proposed_value": sys.argv[2], "n_
 ' "$qid" "$val" "$n" "$scope_rec")"
 ```
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the preference
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the preference
      elevation proposal question via their native channel and accept a reply.
      Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.

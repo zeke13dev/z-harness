@@ -786,7 +786,11 @@ def build_from_flat(plan_dir, slug):
     workstreams = []
     for ws in ws_objects:
         ws["status"] = "ready"
-        ws["path"] = f"z-harness/{slug}/{ws['id']}/"
+        # No trailing slash: schema (Workstream.path) and validate_workstreams() both
+        # reject a trailing '/'. Emitting one here made build_workstreams_json() self-reject,
+        # so --source z-plan always exited 2 (the unit tests call build_from_flat() directly,
+        # below the validation layer, and never caught it).
+        ws["path"] = f"z-harness/{slug}/{ws['id']}"
         workstreams.append(ws)
 
     # Derive file_conflicts from per-task **Files:** lines in TASKS.md.
@@ -851,7 +855,7 @@ def build_from_light(plan_dir, slug):
         "id": "ws-1",
         "status": "ready",
         "name": task_ids[0],
-        "path": f"z-harness/{slug}/",
+        "path": f"z-harness/{slug}",  # no trailing slash (see build_from_flat note + schema)
         "tasks": task_ids,
         "depends_on": [],
         "parallel_group": "level-0",  # Single workstream; no deps → depth 0.

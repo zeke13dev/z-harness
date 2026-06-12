@@ -12,7 +12,7 @@ Question (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the question
      "What question should I research?" to the user via their native channel and
      accept a text reply. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
@@ -106,7 +106,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 Research can be expensive. The default fan-out is up to 3 parallel `Explore` subagents (Haiku) plus a bundled cross-LLM critique pass. Target spend: **≤2M tokens / 5-10 min wall time.** If you exceed 2M tokens at any point, log a `cost_warning` event and surface it to the user.
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the cost-gate
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the cost-gate
      question (Proceed/Reduce/Abandon) via their native channel and accept a
      reply before any subagent dispatch. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
@@ -132,12 +132,12 @@ This phase runs **only if** the user picked `proceed` or `reduce` in Phase 0. Th
 
 1. **Slug-dir collision (deferred from Setup step 1).** If the chosen slug (auto-derived or `--slug=`) matches an existing `$Z_HARNESS_PLAN_DIR/` dir:
    - **Precontext-only slug dir** (only `BRAINSTORM.md` and/or `MAP.md` present, no `PLAN.md`/`SPEC.md`/`TASKS.md`): treat as continuation — no prompt, proceed with the existing slug.
-   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug-collision
+   <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the slug-collision
         confirmation question via their native channel. Silent omission is forbidden. -->
    > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
    > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the existing-MAP.md
+<!-- RUNTIME-GATE: ask_user; category=archiving; non-supporting drivers must surface the existing-MAP.md
      collision decision (archive-and-start-fresh/continue/abort) via their native
      channel and accept a reply. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
@@ -293,7 +293,7 @@ Save the raw transcripts under `archive/$RUN/transcripts/` (the consultant subag
 **Aggregate decision** (after both consultants resolve):
 
 - **At least one consultant succeeded** → proceed to Phase 5 with the available critique; the `status:` frontmatter field may be `complete`.
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the critique-failure
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the critique-failure
      decision (proceed-with-no-critique/retry-both/abandon) via their native channel
      and accept a reply. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.

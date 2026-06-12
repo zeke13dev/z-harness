@@ -99,7 +99,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orc
   "$(printf '{"op":"register","run_id":"%s","rc":%d}' "$RUN" "$REG_RC")"
 ```
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the register-failure proceed/abort question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the register-failure proceed/abort question via their native channel. Silent omission is forbidden. -->
 
 **1a. Run Brief init (register success only — `init_after: register` per `docs/llm/run-brief-registry.json`).** Skip when register failed and the orchestrator proceeds without a record.
 
@@ -667,7 +667,7 @@ Early halt / abort paths often have **no** primary artifact (`FIX.md`, `REPORT.m
     "$(printf '{"op":"overlaps","run_id":"%s","rc":%d}' "$RUN" "$OVL_RC")"
   ```
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the overlap proceed/wait/abort question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the overlap proceed/wait/abort question via their native channel. Silent omission is forbidden. -->
 
 ### FINALIZE_STATUS / deregister rule (single source of truth)
 
@@ -992,7 +992,7 @@ If there are running follow-up consumer entries, **halt** — do not proceed wit
    - Also check for the legacy flat layout (`z-harness/TASKS.md` directly, AND `<state-dir>/TASKS.md` directly if the state dir has no `plans/` subdirectory).
    - Zero candidates → tell user to run `/z-plan` first; abort.
    - One candidate → use it.
-   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug-selection question via their native channel. Silent omission is forbidden. -->
+   <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the slug-selection question via their native channel. Silent omission is forbidden. -->
    - Multiple candidates → `AskUserQuestion` to pick. Mixed legacy + tree-rooted slugs are allowed in the same `/z-implement-all` invocation: the user picks one, validation/expansion below depends on its kind.
    - Export `Z_HARNESS_SLUG=<slug>` (or leave unset for legacy flat) and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")`.
 
@@ -1152,7 +1152,47 @@ If there are running follow-up consumer entries, **halt** — do not proceed wit
    On `done_set_mismatch` only, surface a one-line note to the user (inline, no `AskUserQuestion` needed):
    > "SESSION.md present but TASKS.md done-set changed since last pause — resuming without re-seed."
 
-   Do **not** inline the SESSION.md body in any skip case. Continue to step 5.
+   Do **not** inline the SESSION.md body in any skip case. Continue to step 4b.
+
+4b. **Conflict-detection floor via `workstreams.json` (`scope_unknown`).** Before the first
+   dispatch, best-effort generate the plan's workstreams manifest on-demand from the plan's
+   canonical `TASKS.md` and read its `scope_unknown` flag. This is the one conflict signal the
+   per-task `**Files:**` dedup (Parallelism rule 2) cannot supply: when any task block has no
+   parseable `**Files:**` line, conflict detection is *blind* and same-tree parallel tracks could
+   silently clobber each other's edits. Generation is best-effort — any failure (non-zero exit,
+   absent file, or a custom `--tasks` path that is not `$BASE/TASKS.md`) falls back to today's
+   behavior unchanged, with no halt and no error surfaced.
+
+   ```bash
+   WS_SLUG="${Z_HARNESS_SLUG:-$(basename "$BASE")}"
+   WS_JSON="$BASE/workstreams.json"
+   SCOPE_UNKNOWN=false
+   # Only when operating on the plan's canonical TASKS.md — the generator reads $BASE/TASKS.md,
+   # so a custom --tasks path would otherwise generate from the wrong file. Skip = graceful.
+   if [ "$TASKS_FILE" = "$BASE/TASKS.md" ] \
+      && python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/generate-workstreams.py" \
+           --slug "$WS_SLUG" --source z-plan --plan-dir "$BASE" >/dev/null 2>&1 \
+      && [ -f "$WS_JSON" ]; then
+     SCOPE_UNKNOWN="$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1])).get("scope_unknown", False)).lower())' "$WS_JSON" 2>/dev/null || echo false)"
+   fi
+   if [ "$SCOPE_UNKNOWN" = "true" ]; then
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" parallel_serialized \
+       "$(printf '{"reason":"scope_unknown","ws_json":"%s"}' "$WS_JSON")"
+   fi
+   echo "SCOPE_UNKNOWN=$SCOPE_UNKNOWN"
+   ```
+
+   **The floor is enforced by you, the orchestrator — not by a shell variable.** Each Bash call is
+   a fresh shell, so a `Z_HARNESS_PARALLEL=1` assignment here would not survive to the dispatch
+   loop. Instead: read the `SCOPE_UNKNOWN=…` line this block prints. **If it is `true`, treat the
+   run's parallel factor as N=1 for every batch (rule 7), overriding any configured
+   `Z_HARNESS_PARALLEL` — blind conflict detection in a shared tree is unsafe at any parallel
+   factor.** This matches Hermes INV-4 (scope_unknown → sequential). The `parallel_serialized`
+   event is the durable on-disk record of that decision.
+
+   When `SCOPE_UNKNOWN` is false (or generation was skipped), the Parallelism section's N=3 default
+   still governs and the per-task `**Files:**` dedup (rule 2) remains the precise conflict gate —
+   behavior is byte-identical to before this step existed. Continue to step 5.
 
 5. **Version stamp + run_start event:** (`Z_HARNESS_SESSION_ID` was already exported in Phase 0.0; the `:-` default below leaves it alone if set.)
    ```bash
@@ -1189,7 +1229,7 @@ If there are running follow-up consumer entries, **halt** — do not proceed wit
      ```json
      {"framework": "<pytest|cargo|jest|...>", "cmd_template": "<template>", "set_at": "<ISO ts>"}
      ```
-   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the test-runner template question via their native channel. Silent omission is forbidden. -->
+   <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the test-runner template question via their native channel. Silent omission is forbidden. -->
    This is asked exactly once per slug; it's a per-plan cache so different plans can target different test frameworks.
 8. **Foundation-quiescence pre-flight** (fresh-start only; before the first implementer dispatch). A run that begins with an un-committed foundation and a dirty tree cannot attribute per-task diffs and risks parallel sessions clobbering each other — the failure mode that surfaced as a mid-run `run_halt {reason: repo_not_quiesced}`. Catch it up front instead of reactively:
    ```bash
@@ -1197,7 +1237,7 @@ If there are running follow-up consumer entries, **halt** — do not proceed wit
    DIRTY="$(git status --porcelain 2>/dev/null)"
    ```
    Only gate on a **fresh start** (`DONE_COUNT == 0`): a resume legitimately carries in-progress task commits, so skip the check when `DONE_COUNT > 0`. If `DONE_COUNT == 0` and `DIRTY` is non-empty:
-   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface this pre-flight question (commit foundation / proceed anyway / abort) via their native channel. Silent omission is forbidden. -->
+   <!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface this pre-flight question (commit foundation / proceed anyway / abort) via their native channel. Silent omission is forbidden. -->
    present an `AskUserQuestion`:
    - **Commit the foundation now** — the user commits (or authorizes you to commit) the foundation, then re-checks `git status --porcelain` is clean before dispatch. Never auto-stage or auto-commit without explicit selection of this arm.
    - **Proceed anyway** — record the acknowledgment and continue with the dirty tree.
@@ -1632,6 +1672,7 @@ The numbered steps below describe a **single task track** — one task's journey
 4. **Halt semantics.** If one track returns `spec_problem` / `decision_needed` / `needs_clarification` / `unable_to_complete`, that *track* halts and you collect the question. **In-flight tracks for other tasks continue.** Only after the batch completes do you present the collected halts to the user (one `AskUserQuestion` per halt, in order).
 5. **Atomic TASKS.md updates.** The orchestrator is single-writer. Read the file, modify multiple task statuses if a batch finishes together, write once. Never partial-write.
 6. **N=3 default.** If a single task is conflict-heavy or the user wants strict serial behavior, set N=1. Override via `Z_HARNESS_PARALLEL=N` env var if set.
+7. **`scope_unknown` floor.** Run-start step 4b generates `$BASE/workstreams.json` on-demand and prints `SCOPE_UNKNOWN=<bool>`. When it is `true` (some task block has no parseable `**Files:**` line, so rule 2's dedup is *blind*), you the orchestrator clamp the run to N=1 for every batch — this is enforced by your reading of step 4b's output, not by a shell variable (a per-block `Z_HARNESS_PARALLEL=1` would not survive to the dispatch loop). It is the one conflict signal rule 2 cannot supply, and it overrides a higher configured `Z_HARNESS_PARALLEL` because blind detection in a shared tree is unsafe at any parallel factor. Absent or ungenerated `workstreams.json` → rule 2 alone governs (today's behavior). All other parallelism rules are unchanged.
 
 ## Hard caps (token / wall-clock safety)
 
@@ -1681,7 +1722,7 @@ Scan the **entire task block** (title, Files, Depends, Acceptance — every line
 
 **Phase markers:** Phase F tasks (T050+) — explicitly wall-clock-bound, skip entirely (do not even ask, just report at finalize).
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the skip-flagged task decision (skip / run myself / defer / override) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the skip-flagged task decision (skip / run myself / defer / override) via their native channel. Silent omission is forbidden. -->
 When halting on a skip-flagged task, immediately push-notify (fires regardless of notification level; see [docs/human/config.md](docs/human/config.md)) and use `AskUserQuestion` with options:
 - **Skip entirely** — leave `[ ]`, exclude from this run's eligibility for the rest of the loop, continue with other eligible tasks.
 - **I'll run it myself** — leave `[ ]`, exclude for now; user will mark `[x]` manually when done, then re-invoke `/z-implement-all` to resume.
@@ -1746,7 +1787,7 @@ WAIT_RC=$?
   path (claim persists only the won set per SPEC F-claim-wonset). Re-run `claim` with the
   conceded path(s) and add any newly-won paths to `CLAIM`. Then continue to implementer dispatch.
 - `WAIT_RC == 10` (wait timeout — LOUD, per SPEC F1):
-  <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface this timeout decision (proceed/abort) via their native channel. Silent omission is forbidden. -->
+  <!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface this timeout decision (proceed/abort) via their native channel. Silent omission is forbidden. -->
   - **Interactive (not `Z_HARNESS_NO_ASK`):** present `AskUserQuestion`: **proceed anyway** /
     **abort task**. If proceed → continue to dispatch (the contended path is not leased; the
     post-dispatch write-set validation in step 6 will catch any actual collision). If abort →
@@ -1770,7 +1811,7 @@ WAIT_RC=$?
 
 **If `Z_HARNESS_AUTO_WAIT=0` (interactive wait mode):**
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the conceded-path proceed/wait/abort question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the conceded-path proceed/wait/abort question via their native channel. Silent omission is forbidden. -->
 Present `AskUserQuestion`: **proceed anyway** / **wait** / **abort task**.
 - **proceed** → continue to implementer dispatch (the path is not leased; F5 backstop applies).
 - **wait** → call `wait-for --run-id $RUN --on $HOLDER_RUN_ID --paths $CONCEDED_PATH` (same
@@ -2073,7 +2114,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-subagent.sh" \
 Parse the implementer's return per the `STATUS:` block. Branches:
 
 - `STATUS: ok` → run write-set validation (step 5.5 below), then go to step 6 (review)
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface implementer halt questions (needs_clarification / spec_problem / decision_needed) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface implementer halt questions (needs_clarification / spec_problem / decision_needed) via their native channel. Silent omission is forbidden. -->
 - `STATUS: needs_clarification` → halt queue, push-notify, present the question to the user via `AskUserQuestion`. After answer, update SPEC.md if appropriate, then re-spawn implementer with the resolved info.
 - `STATUS: spec_problem` → halt queue, push-notify, escalate to user. Likely needs SPEC patch before any further tasks proceed.
 - `STATUS: decision_needed` → halt queue, push-notify, present the decision + options via `AskUserQuestion`. This is the "major design decision must be approved by user" gate. Record the decision in `$BASE/archive/$RUN/decisions-late.md`. After answer, re-spawn implementer.
@@ -2192,7 +2233,7 @@ OLD_HASH="$(shasum -a 256 "$BASE/archive/tasks/<id>/diff-v$((CYCLE-1)).patch" | 
 ```
 
 If `NEW_HASH == OLD_HASH`, the implementer didn't actually change anything (it pushed back on the prior reviewer's findings rather than editing). **Do not spawn the reviewer.** Instead halt the track with reason `no_change_on_retry`, push-notify, and
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the no_change_on_retry decision (override / patch manually / abandon) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the no_change_on_retry decision (override / patch manually / abandon) via their native channel. Silent omission is forbidden. -->
 ask the user via `AskUserQuestion` whether to override (accept the unchanged diff) / patch manually / abandon. Saves one full Codex review cycle on stuck tasks.
 
 **Pre-review gate-down (opt-in, default off — `Z_HARNESS_IMPL_PRE_REVIEW`).**
@@ -2491,7 +2532,7 @@ fi  # ── END reviewer-dispatch block (PRE_REVIEW_GATED_DOWN guard closes her
 - **No blockers, no majors** → accept; go to step 8 (done).
 - **Has blockers or majors** →
   - **First failure**: re-spawn implementer once with the reviewer's findings as `prior-attempt reviewer feedback`. Then re-review (cycle 2). Note: if the implementer was re-spawned for a non-review reason (e.g. after resolving a `decision_needed` or `needs_clarification`), the cycle-2 reviewer is skipped entirely by the **Skip-rereview on clean cycle-1** guard above — meaning a cycle-2 re-review only fires when the cycle-1 review actually found something actionable.
-  <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the second-review-failure decision (proceed anyway / patch manually / abandon task / re-spec) via their native channel. Silent omission is forbidden. -->
+  <!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the second-review-failure decision (proceed anyway / patch manually / abandon task / re-spec) via their native channel. Silent omission is forbidden. -->
   - **Second failure**: halt queue. Push-notify. Before presenting to the user, run the `check-no-ask` resolver for `workflow.implement_all_proceed`:
 
     ```bash
@@ -2514,8 +2555,30 @@ fi  # ── END reviewer-dispatch block (PRE_REVIEW_GATED_DOWN guard closes her
       ```
     - `proceed`: fall through to the `AskUserQuestion` below.
 
-    Present diff + reviewer findings to user; await `AskUserQuestion` for "proceed anyway / patch manually / abandon task / re-spec". **Do NOT emit the outcome before the user chooses** — a speculative `halt` here would mis-record the status and the idempotence guard would then block the real terminal emit. Emit `emit_persona_outcome` AFTER the choice, with the status that choice produces (no-op when the knob is off; idempotent so exactly one row lands per attempt):
-      - **proceed anyway** → the attempt is accepted and ends successfully: `emit_persona_outcome "done"`, then continue to step 8.
+    Present diff + reviewer findings to user. Await `AskUserQuestion` for "proceed anyway / patch manually / abandon task / re-spec". **Do NOT emit the outcome before the user chooses** — a speculative `halt` here would mis-record the status and the idempotence guard would then block the real terminal emit. Emit `emit_persona_outcome` AFTER the choice, with the status that choice produces (no-op when the knob is off; idempotent so exactly one row lands per attempt):
+      - **proceed anyway** → this arm — and *only* this arm — is the proxy-over-robust shortcut: the user is accepting the current, reviewer-flagged implementation as-is **instead of** re-implementing it to satisfy the reviewer. The other three arms (patch manually / abandon / re-spec) are NOT shortcuts (they don't accept a weaker-but-working impl over the robust one), so the surface-shortcut call lives *inside* this branch only. Fire it here, then accept:
+
+        ```bash
+        # Callsite 4 — proxy-over-robust accept (proceed-anyway arm ONLY).
+        # chosen = accept the current reviewer-flagged implementation as-is;
+        # declined = re-implement to satisfy the reviewer (the robust path).
+        # RUN was set in Phase 0.0 (RUN="$IMPL_RUN"); surface-shortcut.sh reads the
+        # RUN env var to attribute the shortcut_proposed event, so export it here.
+        export RUN="${RUN:-$IMPL_RUN}"
+        SURFACE_RC=0
+        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/surface-shortcut.sh" \
+          --chosen "accept current implementation as-is" \
+          --declined "re-implement to satisfy the reviewer" \
+          --why "second review cycle failed; user accepting the flagged implementation rather than re-implementing the robust version" || SURFACE_RC=$?
+        ```
+
+        <!-- RUNTIME-GATE: ask_user; category=shortcut; non-supporting drivers must surface this proxy-accept shortcut question via their native channel before accepting the flagged implementation. Silent omission is forbidden. -->
+        Handle the three `SURFACE_RC` cases explicitly (per the T009 contract) before accepting:
+        - **`SURFACE_RC -eq 1`** — surface a confirming shortcut ask: use `AskUserQuestion` to ask "Shortcut: accepting the current reviewer-flagged implementation as-is. The robust alternative is to re-implement to satisfy the reviewer. Confirm accepting as-is?" with options `["Yes, accept current implementation as-is", "No, re-implement the robust version"]`. On "No": treat the choice as **re-spec / re-implement** rather than proceed-anyway (do NOT accept; route to the re-implement / re-spec handling instead of continuing to step 8).
+        - **`SURFACE_RC -eq 0`** — should not normally occur on this arm (`--declined` is non-empty); if it does, proceed with the acceptance without an extra ask.
+        - **`SURFACE_RC -eq 2`** — INFRA ERROR (RUN unset, wiring bug, or telemetry lost). Surface a diagnostic ("proxy-accept shortcut telemetry failed — confirming acceptance anyway"), then **fall back to surfacing the same confirming `AskUserQuestion` as the `-eq 1` case** (fail-safe: ASK before accepting a flagged implementation).
+
+        On confirmed acceptance: the attempt is accepted and ends successfully: `emit_persona_outcome "done"`, then continue to step 8.
       - **patch manually** → the user takes over; this is not an automated attempt close — do NOT emit here. The attempt closes when the user resumes and the track reaches a real terminal (step 8 `done` or a later halt).
       - **abandon task / re-spec** → the attempt is abandoned: `emit_persona_outcome "abandoned"` before halting the track.
 
@@ -2671,7 +2734,7 @@ done
 ```
 
 - **All tests pass** → continue to step 8.
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the test-failure decision (retry implementer / edit test / proceed anyway / abandon) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the test-failure decision (retry implementer / edit test / proceed anyway / abandon) via their native channel. Silent omission is forbidden. -->
 - **Any test fails** → halt the track with `STATUS: test_failed`. Push-notify. Present the failure log to the user via `AskUserQuestion`. **Do NOT emit the outcome before the user chooses** — a speculative `test_failed` here would mis-record the status (the user may proceed → `done`) and the idempotence guard would then block the real terminal emit. Emit `emit_persona_outcome` AFTER the choice, with the status that choice produces (no-op when the knob is off; idempotent so exactly one row lands per attempt):
   - **Retry implementer** — feed the test output back to the implementer as `prior-attempt reviewer feedback` (subject to MAX_ATTEMPTS). This re-runs the SAME attempt — do NOT emit here; the attempt closes at a later real terminal.
   - **Edit the test** — the test itself may be wrong; user revises TESTS.md and re-runs the test step. Not an attempt close — do NOT emit here.

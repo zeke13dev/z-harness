@@ -6,7 +6,7 @@ Task (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the question
      "What's the symptom and your hypothesis for the cause?" via their native
      channel. Silent omission is forbidden. -->
 **If the task above is empty** — use `AskUserQuestion` to ask "What's the symptom and your hypothesis for the cause?" before proceeding. Do not invent.
@@ -92,7 +92,7 @@ At any phase, if you discover:
 
 ## Phase 0 — Wrong-tool gate (NON-SKIPPABLE)
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the wrong-tool
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the wrong-tool
      gate question via their native channel. Silent omission is forbidden. -->
 Before any exploration, ask via `AskUserQuestion`:
 
@@ -177,7 +177,7 @@ When both return:
 
 Send `PushNotification` (if policy != `off`): "Fix-mode decision ready for review."
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the Phase 5 approval question (approve / modify / abandon) and any shortcut approval questions via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the Phase 5 approval question (approve / modify / abandon) and any shortcut approval questions via their native channel. Silent omission is forbidden. -->
 Present a brief synthesis (3-5 bullets) via `AskUserQuestion`:
 - "Approve fix as proposed"
 - "Modify — I want to change <X>" (free-text follow-up)
@@ -284,14 +284,14 @@ Parse the return (already capped at 8 KB, blockers + majors only).
 
 **On blockers or majors:**
 - **First failure**: re-edit inline based on findings. Re-run `git diff`; if byte-identical to prior diff (you pushed back instead of editing), halt with `no_change_on_retry`. Otherwise re-spawn `reviewer` once. Increment `REVIEW_CYCLES` by 1.
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the second-failure decision (proceed anyway / patch manually / abandon) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the second-failure decision (proceed anyway / patch manually / abandon) via their native channel. Silent omission is forbidden. -->
 - **Second failure**: halt; `AskUserQuestion` — proceed anyway / patch manually / abandon.
 
 **No blockers/majors** → accept.
 
 ## Phase 9 — Optional post-mortem
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the post-mortem decision (yes / skip) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the post-mortem decision (yes / skip) via their native channel. Silent omission is forbidden. -->
 Ask via `AskUserQuestion`:
 
 - **Default = NO** if `REVIEW_CYCLES <= 1`: "Write post-mortem? (optional — default: skip)"

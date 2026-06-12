@@ -44,7 +44,7 @@ Loop prevention: carry forward the latest route chain; if it already has two ent
    **If `--slug <slug>` was provided by the user,** use it directly — skip enumeration. Export `Z_HARNESS_SLUG=<slug>`, resolve `Z_HARNESS_PLAN_DIR` via `resolve_plan_path`, and proceed to step 2. The user's explicit slug overrides all directory scanning.
    **Otherwise** (no `--slug` argument), enumerate subdirectories under the canonical plans directory (`$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" base_dir)/plans/`) and the legacy directories (`z-harness/plans/`, `z-harness/`) that contain plan artifacts (`SPEC.md` / `PLAN.md` / `TASKS.md`). Deduplicate slugs across paths.
    - If single candidate -> use it.
-   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug
+   <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the slug
         selection question via their native channel. Silent omission is forbidden. -->
    <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
      ```bash
@@ -110,7 +110,7 @@ Loop prevention: carry forward the latest route chain; if it already has two ent
    ```
    Branch on `CLAIM_RC` (gated; surfaced — never silent). The audit's slug is FIXED to the plan being audited, so contention/takeover offers **proceed / abort only** — there is NO use-new-slug option (unlike `/z-plan`):
    - `0` → claimed (or self-reentry, or `Z_HARNESS_CLAIM_DISABLE=1` no-op) → proceed to register.
-   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the claim
+   <!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the claim
         contention/takeover gate (proceed / abort) via their native channel.
         Silent omission is forbidden. -->
    - `1` (live peer holds the claim) → show the printed holder JSON (session / command / heartbeat-age). **Interactive** → `AskUserQuestion`: **proceed anyway / abort**. **Unattended** (`Z_HARNESS_NO_ASK`) → abort (`exit 1`) UNLESS `Z_HARNESS_CLAIM_OVERRIDE=1` (then proceed). On abort here: exit WITHOUT register (nothing registered yet) and WITHOUT release (we never acquired the lock).
@@ -537,7 +537,7 @@ fi
      ```
      **Stop here when `$RESULT` is `halt`.** Jump to **Run Brief — halt finalize** below (substitute `<reason>`), then `exit 0` — do not fall through to the AskUserQuestion gate or step 2 below.
 
-   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the audit
+   <!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the audit
         gate (Amend Plan / Proceed as-is / Reject & Re-plan) via their native
         channel when resolver result is prefill or ask. Silent omission is forbidden. -->
    **Ask user via `AskUserQuestion`** when resolver result is `prefill` or `ask` only — skip when `$RESULT` is `halt` or `skip`. Store the chosen option label verbatim in `AUDIT_GATE_CHOICE`:
@@ -1121,7 +1121,7 @@ if [[ $HB_RC -eq 9 ]]; then
 fi
 ```
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the preference
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the preference
      elevation proposal question via their native channel and accept a reply.
      Silent omission is forbidden. -->
 Present a single `AskUserQuestion`:

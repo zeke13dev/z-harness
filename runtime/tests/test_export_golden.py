@@ -394,10 +394,10 @@ class TestGoldenSnapshotStructure:
     def test_snapshot_file_counts(self) -> None:
         """All four golden snapshot directories have the expected file counts."""
         expected_counts = {
-            "cursor": 118,    # 118 .mdc files
-            "codex": 91,      # 90 prompts + AGENTS.md
-            "antigravity": 239,  # workflows + rules + skills + prompts + manifest + CAPABILITIES + README
-            "pi": 125,        # agents + prompts + extensions + AGENTS.md + CAPABILITIES.md + README.md
+            "cursor": 119,    # 119 .mdc files
+            "codex": 92,      # 91 prompts + AGENTS.md
+            "antigravity": 241,  # workflows + rules + skills + prompts + manifest + CAPABILITIES + README
+            "pi": 126,        # agents + prompts + extensions + AGENTS.md + CAPABILITIES.md + README.md
         }
         for target, expected in expected_counts.items():
             golden_dir = _GOLDEN_DIR / target

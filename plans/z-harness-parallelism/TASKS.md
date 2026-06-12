@@ -1,0 +1,131 @@
+# TASKS — z-harness true parallelism
+
+15 tasks. IDs `Tnnn`; `**Depends on:**` lines drive the DAG (and let this plan exercise the generator it repairs). Status `[ ]` pending.
+
+---
+
+## T001 — Fix generate-workstreams.py compile bug + characterization tests `[x]`
+
+**Files:** `scripts/generate-workstreams.py`, `tests/test_generate_workstreams.py` (new)
+**Depends on:** —
+**Complexity:** medium
+Move `_task_sort_key` to module scope (out of `run_5rule_algorithm`'s loop). Add `python3 -m py_compile` smoke assertion. Write characterization tests for the four worked examples in `docs/human/hermes-integration-v1.md` (linear chain, fan-out, two independent chains, deep fork), asserting current `depends_on` + `merge_order` output. These tests are the safety net for all later changes.
+**Acceptance:** generator imports/compiles; all four DAG shapes produce the documented workstream decomposition; tests green.
+
+## T002 — Per-task scope from TASKS.md `**Files:**` lines `[x]`
+
+**Files:** `scripts/generate-workstreams.py`, `tests/test_generate_workstreams.py`
+**Depends on:** T001
+**Complexity:** medium
+Derive per-workstream scope directly from each task block's `**Files:**` line in the plan's TASKS.md — the SAME source `scope-extractor` parses — instead of an external `scope.json`. (Audit B1: `scope-extractor` output is written to a temp file consumed by `update-scope` and never persisted to `<plan-dir>/scope.json`, and its flat `{path,confidence,reason}` shape carries no task attribution. Parsing TASKS.md `**Files:**` lines keeps task→path attribution and drops a fragile cross-artifact handoff.) For each task block: extract comma-separated path tokens from `**Files:**`, stripping annotation suffixes (`(new)`, `(NEW)`, backticks, glob descriptions) per the `scope-extractor` rubric. Map task→workstream (from the 5-rule result) and union task paths per workstream. A task with no parseable `**Files:**` line contributes no paths (flag handled in T003); never raise.
+**Acceptance:** tasks with `**Files:**` lines yield correct per-workstream path sets; a task block missing/empty `**Files:**` ⇒ graceful empty for that task; no `scope.json` is read; tests cover both. Reuse the existing `scope-extractor` token-stripping rules (do not reimplement a second normalizer).
+
+## T003 — Flat-plan `file_conflicts` derivation + `scope_unknown` flag `[x]`
+
+**Files:** `scripts/generate-workstreams.py`, `scripts/hermes/schema.py`, `tests/test_generate_workstreams.py`
+**Depends on:** T002
+**Complexity:** medium
+Replace `file_conflicts = []` in `build_from_flat` with derivation: any path touched by ≥2 workstreams (from T002's TASKS.md-derived per-workstream path sets) ⇒ `{file, workstreams, severity}` via existing `derive_severity()`. Add top-level `scope_unknown: bool` (default false); set true when per-workstream scope could not be established — i.e. one or more task blocks had no parseable `**Files:**` line, so overlap detection would be blind. Parse/validate `scope_unknown` in schema.py.
+**Acceptance:** overlapping `**Files:**` paths ⇒ correct severity entries; a plan where any task lacks a parseable `**Files:**` line ⇒ `file_conflicts: []` + `scope_unknown: true` (fail-safe, INV-4); fully-attributed plan with no overlaps ⇒ `file_conflicts: []` + `scope_unknown: false`; manifest validation accepts the new field.
+**DOCS:** hermes-integration
+
+## T004 — Populate `parallel_group` from workstream-DAG depth `[x]`
+
+**Files:** `scripts/generate-workstreams.py`, `tests/test_generate_workstreams.py`
+**Depends on:** T001
+**Complexity:** medium
+In `run_5rule_algorithm` (and the split/light builders), compute each workstream's longest-path depth over the workstream `depends_on` graph; assign `parallel_group = f"level-{depth}"`. Keep `validate_workstreams` Rule 7 (mutual independence) — it must pass by construction. Update `Workstream.parallel_group` docstring (no longer "always None").
+**Acceptance:** deep-fork example labels ws by level; Rule 7 validation passes; linear chain ⇒ single `level-0` workstream; tests assert labels.
+
+## T005 — Schema + protocol doc bump (v1.3) `[x]`
+
+**Files:** `scripts/hermes/schema.py`, `docs/human/hermes-integration-v1.md`
+**Depends on:** T003, T004
+**Complexity:** low
+Document `scope_unknown`, populated `parallel_group`, and the v1.3 concurrency/cross-plan contract in the protocol doc. Ensure `WorkstreamsManifest` round-trips the new field. No breaking field changes.
+**Acceptance:** protocol doc describes v1.3 fields + execution contract; schema parse/serialize round-trips `scope_unknown`; existing schema tests green.
+**DOCS:** hermes-integration
+
+## T006 — Concurrency config knobs `[x]`
+
+**Files:** `scripts/hermes/config.py`, `scripts/hermes-execute.py`, `tests/test_hermes_config.py` (new or extend)
+**Depends on:** T001
+**Complexity:** low
+**Extend the EXISTING `ConcurrencyConfig`** in place — do NOT add a parallel `Concurrency` dataclass (audit M3: `config.py` already defines `ConcurrencyConfig(max_parallel_sessions=3)`, wired into `load_config` and env-overridable via `HERMES_MAX_PARALLEL`, but dormant — never read by the executor). Reconcile naming: treat `max_parallel_workstreams` as the canonical name for "live sessions" and either rename `max_parallel_sessions`→`max_parallel_workstreams` (updating the `HERMES_MAX_PARALLEL` env binding and the `load_config` block at config.py:90/120) or alias them with one authoritative field. Add `max_parallel_plans=1`, `serialize_all=False`, `serialize_high_severity=True` to the same dataclass. **Flip the default to 1** (was 3) so defaults reproduce today's sequential behavior (INV-5); document the default change. Wire all fields through the existing env/file precedence pattern.
+**Acceptance:** single `ConcurrencyConfig` (no duplicate dataclass); `max_parallel_workstreams` default is 1; `HERMES_MAX_PARALLEL` still overrides it; new fields present with documented defaults; env/file override works; existing config tests green.
+
+## T007 — Extract `run_workstream` + level-aware sequential scheduler `[x]`
+
+**Files:** `scripts/hermes-execute.py`, `tests/test_hermes_execute.py` (new)
+**Depends on:** T001
+**Complexity:** high
+Lift the per-workstream body (worktree → spawn → monitor → merge) into `async def run_workstream(...)` verbatim. Replace the `exec_order` loop with a `depends_on`-driven level loop (run a level, advance) — still strictly sequential within a level. Preserve crash/retry/halt/pause/merge and recovery semantics exactly.
+**Acceptance:** behavior-parity test vs captured sequential golden (mocked session/worktree/merge); failed workstream blocks its dependents; recovery skips done workstreams.
+
+## T008 — Conflict-aware level partition `[x]`
+
+**Files:** `scripts/hermes-execute.py`, `tests/test_hermes_execute.py`
+**Depends on:** T003, T004, T007
+**Complexity:** medium
+Within a ready level, partition into sub-batches so no two workstreams in a sub-batch share a HIGH-severity `file_conflicts` entry (gated by `serialize_high_severity`). `scope_unknown` or `serialize_all` ⇒ fully serial (batch size 1).
+**Acceptance:** HIGH-severity pair never co-batched; `scope_unknown`/`serialize_all` ⇒ serial; non-conflicting workstreams share a batch; tests cover each.
+
+**Note:** (from T007) `run_workstream(ws, state, config, args, repo_root, plan_dir, completed) -> str` returns a terminal status; the `completed` list is shared mutable state appended INSIDE run_workstream — guard it under the semaphore-held section when T010 adds gather/Semaphore.
+
+## T009 — Decouple monitoring (non-blocking poll) `[x]`
+
+**Files:** `scripts/hermes-execute.py`, `tests/test_hermes_execute.py`
+**Depends on:** T007
+**Complexity:** medium
+Wrap `poll_session` in `await asyncio.to_thread(...)`; make each workstream's monitor an independent coroutine so one stalled poll cannot delay siblings. Preserve timeout/stall/crash detection.
+**Acceptance:** test with one hanging poll shows a sibling still detects progress within its interval; existing monitor semantics intact.
+
+## T010 — Activate concurrency (gather + Semaphore + gc safety) `[x]`
+
+**Files:** `scripts/hermes-execute.py`, `tests/test_hermes_execute.py`
+**Depends on:** T006, T008, T009
+**Complexity:** high
+Run each sub-batch via `asyncio.gather(..., return_exceptions=True)`; exceptions ⇒ `status=failed`. **Bound concurrency by holding `asyncio.Semaphore(max_parallel_workstreams)` for the FULL `run_workstream` lifetime via `async with sem:` (spawn → monitor → merge), NOT just around session spawn** (audit M1: a semaphore released right after the sub-second spawn bounds spawn rate, not live sessions — all ready workstreams would go live at once; and cap=1, the only parity test, never exercises a contended semaphore, so a wrong placement passes every test while silently removing the bound at cap>1). Set `gc.auto=0` / `GIT_OPTIONAL_LOCKS=0` for the run; restore on exit. cap=1 must reproduce sequential order (INV-5).
+**Acceptance:** N=3 independent synthetic workstreams complete concurrently at cap=3; **with cap=2 and ≥3 simultaneously-ready workstreams, no more than 2 sessions are ever live at once (assert peak live-session count ≤ cap)**; cap=1 reproduces the T007 sequential golden; gc disabled during run, restored after.
+
+## T011 — Cross-plan super-orchestrator entry + conflict graph `[x]`
+
+**Files:** `scripts/hermes-execute.py`, `scripts/hermes/cross_plan.py` (new), `tests/test_hermes_cross_plan.py` (new)
+**Depends on:** T006
+**Complexity:** high
+Add `--slugs=a,b,c` (and `--plan-set FILE`), mutually exclusive with `--slug`. `cross_plan.build_plan_conflict_graph(slugs)` reads each plan's scope from `active-plan-registry.py list --json` (+ `workstreams.json` `file_conflicts`/`scope_unknown`); two plans conflict iff scope intersects OR either is `scope_unknown`/low-confidence (fail-safe).
+**Acceptance:** disjoint scopes ⇒ no edges; overlap ⇒ edge; missing/`scope_unknown` ⇒ edges to all; `--slug` path unchanged.
+**DOCS:** hermes-integration
+
+## T012 — Cross-plan locking (sorted order) + scheduling `[x]`
+
+**Files:** `scripts/hermes/cross_plan.py`, `scripts/hermes-execute.py`, `tests/test_hermes_cross_plan.py`
+**Depends on:** T011
+**Complexity:** high
+Acquire `plan-claim.sh` for each slug in sorted ascending order (deadlock-free); release all on any failure. Schedule scope-disjoint plans concurrently bounded by `max_parallel_plans`; serialize conflicting plans. Each plan runs the within-plan scheduler. A failed plan releases its lock and does not abort disjoint peers.
+**Acceptance:** lock acquisition order is always sorted (no AB/BA deadlock test); disjoint plans run concurrently (cap-bounded); overlapping serialized; failure isolation holds.
+
+## T013 — Global cross-plan merge mutex `[x]`
+
+**Files:** `scripts/hermes-execute.py`, `scripts/hermes/cross_plan.py`, `tests/test_hermes_cross_plan.py`
+**Depends on:** T012
+**Complexity:** medium
+A single in-process lock serializes each plan's final merge-to-base so two plans never `git merge` into the shared base concurrently. Per-plan internal `merge_order` unchanged.
+**Acceptance:** concurrent plan completions merge one-at-a-time; merge ordering deterministic; test simulates two plans finishing together.
+
+## T014 — Docs + memory refresh `[x]`
+
+**Files:** `docs/human/hermes-integration-v1.md`, `docs/llm/INDEX.json`, `docs/llm/<hermes-concept>.json`, `docs/human/review-hermes-*.md`
+**Depends on:** T010, T013
+**Complexity:** low
+Finalize protocol v1.3 narrative; refresh the two-tier docs concept for hermes orchestration so future `/z-plan` runs see activated parallelism; add a short runbook for running parallel within-plan and cross-plan executions, including the non-file shared-state limitation + `serialize_all` escape.
+**Acceptance:** docs describe activated behavior; `docs/llm` concept updated with correct source files + line refs; runbook present.
+**DOCS:** hermes-integration
+
+## T015 — End-to-end integration test `[x]`
+
+**Files:** `tests/test_hermes_e2e.py` (new)
+**Depends on:** T010, T013
+**Complexity:** high
+A real small multi-workstream flat plan (temp repo + worktrees) executed at cap>1: assert parallel spawn actually overlaps, HIGH-severity conflict serializes, merges are sequential and conflict-aware, and the final tree equals the sequential (cap=1) result. Add a 2-plan cross-plan case asserting disjoint-concurrent / overlapping-serial behavior.
+**Acceptance:** e2e green; cap>1 final tree == cap=1 final tree (determinism); cross-plan disjoint runs overlap, overlapping serialize.

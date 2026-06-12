@@ -17,7 +17,7 @@ Same logic as `/z-implement-all` Phase 0:
 1. Enumerate `$Z_HARNESS_PLAN_DIR/` subdirs containing a `TASKS.md`; also check legacy flat `z-harness/TASKS.md`.
 2. If `--slug <slug>` arg → use it.
 3. Single candidate → use it; export `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")`.
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug selection question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the slug selection question via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 5. Zero → tell user "no plan found — run `/z-plan` first"; abort.
 
@@ -25,7 +25,7 @@ Set `$BASE = $Z_HARNESS_PLAN_DIR` (or `z-harness` for legacy).
 
 **Require SPEC.md + PLAN.md + TASKS.md.** Abort with "incomplete plan; run /z-plan to completion first" if any of the three is missing.
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the implementation-underway continue/abort question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the implementation-underway continue/abort question via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 - "Continue — add tests that will retroactively constrain in-flight tasks"
 - "Abort — wait until implementation is complete, then run /z-test after /z-review-all"
@@ -65,7 +65,7 @@ Also extract from SPEC.md every line of these shapes and treat each as a candida
 - Numeric/quantitative assertions ("must be ≤ X", "exactly N", "monotone in Y")
 - Equality/identity claims about cross-module contracts ("strategy reads field X written by Y")
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the bug-class concerns question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the bug-class concerns question via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 - "What specific bug classes worry you most for this plan?"
 
@@ -147,7 +147,7 @@ Save the synthesized list to `$BASE/archive/$RRUN/phase4-synthesis.md`.
 
 Send `PushNotification` (if policy != `off`): "Test plan ready for review."
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the test-plan approval question (accept-all / accept mandatory+recommended / edit subset / abandon) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the test-plan approval question (accept-all / accept mandatory+recommended / edit subset / abandon) via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 - "<M> mandatory + <R> recommended + <O> optional tests drafted. Cross-LLM dropped <D> trivial drafts; added <A> coverage gaps."
 
@@ -157,7 +157,7 @@ Options:
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 - **Abandon** — log `test_plan_end` with `status: abandoned`; exit. No TESTS.md written.
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the fixture-scaffolding approval question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the fixture-scaffolding approval question via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
 ## Phase 6 — Write TESTS.md

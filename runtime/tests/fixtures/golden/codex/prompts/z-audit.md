@@ -6,7 +6,7 @@ Target (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the question
      "What should I audit?" via their native channel and accept a text reply.
      Silent omission is forbidden. -->
 **If the target above is empty** — use `AskUserQuestion` to ask "What should I audit?" before proceeding. Do not invent.
@@ -51,7 +51,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 ## Setup
 
 1. **Sanitize `$ARGUMENTS`** — strip the `--scope-from <chunk-spec>` token pair (if present) before using `$ARGUMENTS` for slug derivation, doc-fetcher dispatch, or target parsing. The sanitized value is used for all subsequent steps.
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the slug
      confirmation question via their native channel if non-obvious. Silent
      omission is forbidden. -->
 2. **Derive slug** — short kebab-case like `audit-<component>` (e.g. target `strategies/kxbtc15m_fade_extremes` → `audit-kxbtc15m`). Confirm via `AskUserQuestion` if non-obvious. Check `bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" all_plan_slugs` first for collisions.
@@ -444,7 +444,7 @@ If `SCOPE_HINT` is set (from `--scope-from`), use `SCOPE_HINT` as the resolved t
    - Auto-confirm the `dimensions_hint` list. Do NOT ask the user which dimensions to audit. Do NOT apply the "$ARGUMENTS named dimensions" shortcut below. Proceed as if the user selected those dimensions.
    - Inform the user: "Phase 0 scope probe suggested dimensions: <dimensions_hint list>. Proceeding with those."
 
-   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the dimensions
+   <!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the dimensions
         selection question via their native channel when no auto-resolved dimensions
         are available. Silent omission is forbidden. -->
    **Only if `SCOPE-audit.json` does not exist, `last_run_id` does not match, `mode` is not `LIGHT`, or `dimensions_hint` is absent/empty:** check whether `$ARGUMENTS` supplied a target + the user already named dimensions in prose. If dimensions are named in `$ARGUMENTS`, use those. Otherwise use `AskUserQuestion` to collect:
@@ -548,7 +548,7 @@ Each `<DIM_PERSONA_PREFIX>` is the persona body for that dimension followed by a
 
 Each auditor writes `$BASE/findings-<dim>.md` and returns a structured summary. Collect all returns.
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the auditor
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the auditor
      failure gate (retry / skip / abort) via their native channel.
      Silent omission is forbidden. -->
 **If any auditor returns `unable_to_complete`** — surface the reason via `AskUserQuestion`: retry that dimension / skip it / abort the audit. If the user chooses **abort the audit**, execute **Run Brief — halt finalize** with reason `auditor unable_to_complete`.
@@ -760,7 +760,7 @@ Spawn the reviewer against the audit-produced TASKS.md (the diff in this case is
 ```
 
 Parse the return (capped at 8 KB):
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the reviewer
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the reviewer
      second-failure gate via their native channel. Silent omission is forbidden. -->
 - **Blockers** → re-edit the affected TASKS.md entries; re-run review once. Second failure → halt with `AskUserQuestion`.
 - **Majors** → fix in place, then accept.
