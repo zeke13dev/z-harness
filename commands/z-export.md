@@ -8,7 +8,7 @@ unsupported_driver_behavior: explicit_gate
 
 You are running **z-harness `/z-export`**.
 
-This command runs one or more export adapter scripts that translate z-harness source files (`commands/`, `agents/`, `skills/`) into IDE-specific formats under `exports/`. It also exports persona files from `personas/` via the per-target `runtime/drivers/<target>/persona_export.py` modules.
+This command invokes the runtime export CLI (or, for `pi`, the standalone runtime driver) to translate z-harness source files (`commands/`, `agents/`, `skills/`) into IDE-specific formats under `exports/`. Persona files from `personas/` are also exported in the same pass for all adapter hosts (cursor, codex, agy).
 
 ## Fragment includes
 
@@ -18,17 +18,9 @@ Command, agent, and skill bodies may reference shared markdown under `commands/_
 <!-- include: commands/_fragments/run-brief-finalize.md -->
 ```
 
-During export, `scripts/export-common.py` inlines the fragment file at each marker (repo-relative path). Nested includes in fragment files are expanded too. Cursor/Codex/Agy copies therefore stay in sync without duplicating finalize prose.
-
-Verify expansion:
-
-```bash
-python3 scripts/export-common.py --self-test
-```
+During export, the runtime renderers inline the fragment file at each marker (repo-relative path). Nested includes in fragment files are expanded too. Cursor/Codex/Agy copies therefore stay in sync without duplicating finalize prose.
 
 ## Phase 1 — Parse arguments
-
-> **NOTE:** the legacy export scripts (`scripts/export-{cursor,codex,agy}.py`) are deprecated. They will be removed in the next minor release. Use /z-update to switch to the runtime-based workflow.
 
 Read `$ARGUMENTS`. Look for `--target=<value>` and `--include=<value>`.
 
@@ -55,28 +47,34 @@ Build the target list:
 - `pi` → `["pi"]`
 - `all` → `["cursor", "codex", "agy", "pi"]`
 
-> **pi note:** the `pi` target (`scripts/export-pi.py`) emits a richer tree than the others — executable subagent files under `exports/pi/agents/`, prompts with `Agent()`/`Skill()` call sites rewritten to subagent-tool hints, and the vendored subagent extension. pi-only assets live in `scripts/pi_assets/`. The `pi` target has **no persona export** — skip it in Phase 2b (there is no `runtime/drivers/pi/persona_export.py`).
+> **pi note:** the `pi` target emits a richer tree than the others — executable subagent files under `exports/pi/agents/`, prompts with `Agent()`/`Skill()` call sites rewritten to subagent-tool hints, and the vendored subagent extension. pi-only assets live in `scripts/pi_assets/`. The `pi` target has **no persona export** — it is handled entirely within `runtime.drivers.pi.export`.
 
-## Phase 2 — Run per-target export scripts
+## Phase 2 — Run per-target export
 
-For each target in the list, run the corresponding script via Bash:
+For each target in the list, run the export in sequence (not in parallel). For **cursor**, **codex**, and **agy**, invoke the runtime CLI. For **pi**, inline-import the standalone driver.
+
+### cursor / codex / agy targets
+
+Run via the runtime CLI:
 
 ```bash
-python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/export-<target>.py"
+python3 -m z_harness_cli export --host <target> --in-place
 ```
 
-(Replace `<target>` with the actual target name, e.g. `export-cursor.py`.)
+Replace `<target>` with `cursor`, `codex`, or `antigravity` (note: `agy` in the target list maps to `--host antigravity`).
+
+The CLI exports commands, agents, skills, **and personas** in a single pass — no separate persona step is needed or wanted for these three hosts.
 
 **Important:** run targets sequentially, not in parallel. Capture stdout and stderr for each separately.
 
 For each target:
 
 1. Note the exit code.
-2. On **exit 0**: parse stdout for a line matching the pattern `files written to <path>` or similar output from the export script. Extract the file count and output path. Then print:
+2. On **exit 0**: parse stdout for a line matching the pattern `files=<N>` or similar output from the CLI. Extract the file count and output path. Then print:
    ```
-   [<target>] OK — <count> files written to <relative path>
+   [<target>] OK — <count> files written to exports/<target>/
    ```
-   If the script does not emit a parseable count/path line, print:
+   If the CLI does not emit a parseable count/path line, print:
    ```
    [<target>] OK — exports/<target>/
    ```
@@ -89,58 +87,45 @@ For each target:
    ```
    Then **continue to the next target** — do not abort.
 
-## Phase 2b — Export personas per target
+### pi target
 
-After the legacy export script for each target completes (regardless of its exit code), export all persona files found under `personas/builtin/` and `personas/user/` (if present) using the per-target `persona_export.py` module.
-
-For each target **except `pi`** (which has no `persona_export.py` module — skip it here), run:
+Inline-import the standalone pi driver directly:
 
 ```bash
 python3 - <<'EOF'
 import sys, pathlib
 
 repo_root = pathlib.Path("${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}").parent
-target = "<target>"  # Replace with actual target name: antigravity, cursor, or codex
-export_root = repo_root / "exports" / target
-
-# Map z-export target names to driver directory names
-driver_map = {"agy": "antigravity", "cursor": "cursor", "codex": "codex", "claude": "claude"}
-driver = driver_map.get(target, target)
+export_root = repo_root / "exports" / "pi"
 
 sys.path.insert(0, str(repo_root))
-from runtime.drivers import _persona_utils  # noqa: F401 — ensures package importable
-import importlib
-mod = importlib.import_module(f"runtime.drivers.{driver}.persona_export")
+from runtime.drivers.pi import export as pi_export
 
-persona_dirs = [
-    repo_root / "personas" / "builtin",
-    repo_root / "personas" / "user",
-]
-written = []
-for persona_dir in persona_dirs:
-    if not persona_dir.exists():
-        continue
-    for persona_file in sorted(persona_dir.glob("*.md")):
-        try:
-            out_path = mod.export_persona(persona_file, export_root)
-            written.append(out_path)
-        except Exception as exc:
-            print(f"[persona-export/{driver}] WARNING: skipped {persona_file.name}: {exc}", file=sys.stderr)
+result = pi_export.export(repo_root, export_root)
 
-print(f"personas written to exports/{target}/: {len(written)} file(s)")
+if result.warnings:
+    for w in result.warnings:
+        print(f"[pi] WARNING: {w}", file=sys.stderr)
+    print(f"[pi] {len(result.warnings)} validation warning(s) — see stderr", file=sys.stderr)
+    sys.exit(1)
+
+print(f"[pi] files={len(result.files)}  dest={result.dest}")
 EOF
 ```
 
-Capture stdout and stderr. On success, print:
+Capture stdout and stderr. On exit 0, print:
 ```
-[<target>/personas] OK — <count> persona file(s) written to exports/<target>/
+[pi] OK — <count> files written to exports/pi/
 ```
 
-On failure (nonzero exit or unhandled exception in stderr), print:
+On nonzero exit (including when `result.warnings` is non-empty), capture the last 20 lines of stderr. Mark `pi` as FAILED. Print:
 ```
-[<target>/personas] FAILED — <last error line from stderr>
+[pi] FAILED (exit <code>)
+--- stderr (last 20 lines) ---
+<last 20 lines of stderr>
+---
 ```
-Mark this target's persona export as FAILED but continue to the next target.
+Then continue to the final summary.
 
 ## Phase 3 — Final summary
 
@@ -172,9 +157,10 @@ Exit nonzero (return a non-zero status to the user). You may signal this by endi
 
 - **Continue past failures.** A single target failure must not abort remaining targets.
 - **No silent failures.** Every target must produce an explicit OK or FAILED line.
-- **No LLM interpretation of export output.** Just capture the script's stdout/stderr verbatim; do not summarize or editorialize on what the export produced.
+- **No LLM interpretation of export output.** Just capture the CLI's stdout/stderr verbatim; do not summarize or editorialize on what the export produced.
 - **Relative paths in OK output.** Output paths should be relative to the repo root (strip the leading absolute path prefix).
-- **No writes by this command.** All file I/O is delegated to the export scripts.
+- **No writes by this command.** All file I/O is delegated to the runtime CLI and pi driver.
+- **No double persona export.** The runtime CLI (cursor/codex/agy) already writes personas in the same pass as commands/agents/skills. There is no separate persona step for these hosts.
 
 ---
 
@@ -191,13 +177,3 @@ Driver support requirements: see frontmatter `driver_features_required`.
 Non-supporting drivers **must surface and skip** any gated block — silent
 omission is forbidden. Each gated call site is annotated with a
 `<!-- RUNTIME-GATE: ... -->` comment immediately before the call.
-
-<!-- # FOLLOW-UP:
-  docs/llm/multi-ide-exports.json must be updated to reflect the deprecation of
-  the export scripts and the transition to the runtime-based workflow introduced
-  in T004. Run a separate `/z-maintain-docs` invocation once runtime drivers are
-  stable to refresh that concept. Specifically, update:
-    - the "status" field to indicate deprecated
-    - the "consumed_by" relationships to reference the new runtime driver path
-    - any invariants that assume export scripts are the canonical export mechanism
--->

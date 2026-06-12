@@ -202,7 +202,12 @@ class TestExportPayload(unittest.TestCase):
         self.adapter = CodexAdapter()
 
     def test_export_warns_when_personas_missing(self):
-        """export_payload() returns a warning when personas/ dir does not exist."""
+        """export_payload() returns a warning when personas/ dir does not exist.
+
+        With the T007 delegation, the runtime export (cmds/agents/skills) runs
+        first.  This test mocks both the runtime export driver AND patches
+        __file__ to a fake harness with no personas/ directory.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             dest = Path(tmp) / "out"
             dest.mkdir()
@@ -210,16 +215,29 @@ class TestExportPayload(unittest.TestCase):
             fake_harness.mkdir()
 
             import z_harness_cli.adapters.codex as _mod
+            from runtime.drivers._export_utils import ExportResult as RE
+
+            # Mock the runtime export driver to return an empty successful result
+            # so we can focus on the personas-missing warning path.
+            mock_export = MagicMock(
+                return_value=RE(dest=dest, files=[], fidelity="flattened", warnings=[])
+            )
+            mock_codex_export_mod = MagicMock()
+            mock_codex_export_mod.export = mock_export
 
             with patch.object(
                 _mod,
                 "__file__",
                 str(fake_harness / "z_harness_cli" / "adapters" / "codex.py"),
+            ), patch.dict(
+                "sys.modules",
+                {
+                    "runtime.drivers.codex.export": mock_codex_export_mod,
+                },
             ):
                 result = self.adapter.export_payload(dest)
 
             self.assertEqual(result.fidelity, "flattened")
-            self.assertEqual(result.files, [])
             self.assertTrue(
                 any("personas/" in w for w in result.warnings),
                 f"Expected warning about missing personas/, got: {result.warnings}",

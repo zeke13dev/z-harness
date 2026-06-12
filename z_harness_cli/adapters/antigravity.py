@@ -205,65 +205,132 @@ class AntigravityAdapter:
     # ------------------------------------------------------------------
 
     def export_payload(self, dest: Path) -> ExportResult:
-        """Export personas to the agy native layout under *dest*.
+        """Export commands, agents, skills, and personas to the agy native layout.
 
-        Delegates to ``runtime/drivers/antigravity/persona_export.py::export_persona()``
-        for each persona file found in the ``personas/`` directory at the
-        harness repo root.
+        Delegates to ``runtime/drivers/antigravity/export.py::export()`` for
+        commands, agents, and skills (producing ``.agent/workflows/``,
+        ``.agent/rules/``, ``.agent/skills/``, and ``prompts/`` files), then
+        runs the existing persona loop via
+        ``runtime/drivers/antigravity/persona_export.py::export_persona()``
+        for each persona file found in the ``personas/`` directory.
+
+        Both results are merged into a single ExportResult.  Fidelity is
+        always ``"high"`` for Antigravity.
+
+        Non-empty warnings from the runtime export (validation errors) are
+        preserved and re-raised as ``RuntimeError`` so callers that expect the
+        legacy hard-gate behaviour see a failure signal rather than a silent
+        downgrade.
+
+        Collision assert (MINOR-6): persona names must not overlap with
+        command/agent/skill ids in the agy layout.  A collision raises
+        ``RuntimeError`` with a descriptive message.
 
         The written layout is::
 
-            <dest>/.agent/personas/<name>.md
+            <dest>/.agent/workflows/<id>.md          — commands
+            <dest>/.agent/rules/z-harness-<id>.md   — agents
+            <dest>/.agent/skills/<id>/SKILL.md       — skills
+            <dest>/prompts/<id>.md                   — flat prompts
+            <dest>/.agent/personas/<name>.md         — personas
 
         Returns
         -------
         ExportResult
-            fidelity="high"; files lists relative paths under dest.
+            fidelity="high"; files lists all written files under dest;
+            warnings aggregated from both stages.
+
+        Raises
+        ------
+        RuntimeError
+            If the runtime export produces validation warnings (legacy hard-gate)
+            or if persona names collide with command/agent/skill ids.
         """
         dest = Path(dest)
 
-        # Locate the harness repo root (where personas/ lives).
+        # Locate the harness repo root.
         harness_root = Path(__file__).parent.parent.parent.resolve()
         personas_dir = harness_root / "personas"
 
-        written: list[Path] = []
-        warnings: list[str] = []
+        all_files: list[Path] = []
+        all_warnings: list[str] = []
 
-        if not personas_dir.is_dir():
-            return ExportResult(
-                dest=dest,
-                files=[],
-                fidelity="high",
-                warnings=["personas/ directory not found; nothing exported"],
-            )
-
-        # Lazy import so the adapter can be imported without the runtime
-        # package in sys.path in environments where only z_harness_cli is
-        # installed.
+        # ------------------------------------------------------------------
+        # Stage 1: runtime export — commands, agents, skills
+        # ------------------------------------------------------------------
         try:
-            from runtime.drivers.antigravity.persona_export import export_persona
+            from runtime.drivers.antigravity.export import export as agy_export
         except ImportError as exc:
-            return ExportResult(
-                dest=dest,
-                files=[],
-                fidelity="high",
-                warnings=[
-                    f"runtime.drivers.antigravity.persona_export not importable: {exc}"
-                ],
+            all_warnings.append(
+                f"runtime.drivers.antigravity.export not importable: {exc}"
             )
+            agy_export = None  # type: ignore[assignment]
 
-        for persona_file in sorted(personas_dir.glob("*.md")):
+        runtime_ids: set[str] = set()
+        if agy_export is not None:
+            rt_result = agy_export(harness_root, dest)
+            all_files.extend(rt_result.files)
+            if rt_result.warnings:
+                # Surface validation warnings as a hard failure — preserving
+                # the legacy export-agy.py validation gate behaviour.
+                raise RuntimeError(
+                    f"antigravity runtime export produced validation errors:\n"
+                    + "\n".join(f"  {w}" for w in rt_result.warnings)
+                )
+            # Collect ids from workflows/rules/skills to check for persona
+            # collisions.  Use file stems from .agent/workflows/ as
+            # the representative set of command/agent/skill ids.
+            for f in rt_result.files:
+                p = Path(f)
+                # Workflows: .agent/workflows/<id>.md
+                # Rules: .agent/rules/z-harness-<id>.md  → strip prefix
+                # Skills: .agent/skills/<id>/SKILL.md
+                if p.parent.name == "workflows":
+                    runtime_ids.add(p.stem)
+                elif p.parent.name == "rules" and p.stem.startswith("z-harness-"):
+                    runtime_ids.add(p.stem[len("z-harness-"):])
+                elif p.name == "SKILL.md":
+                    runtime_ids.add(p.parent.name)
+
+        # ------------------------------------------------------------------
+        # Stage 2: persona export loop
+        # ------------------------------------------------------------------
+        if not personas_dir.is_dir():
+            all_warnings.append("personas/ directory not found; persona export skipped")
+        else:
+            # Lazy import so the adapter can load without the full runtime
+            # package in environments where only z_harness_cli is installed.
             try:
-                out_path = export_persona(persona_file, dest)
-                written.append(out_path.relative_to(dest))
-            except (ValueError, OSError) as exc:
-                warnings.append(f"Skipped {persona_file.name}: {exc}")
+                from runtime.drivers.antigravity.persona_export import export_persona
+            except ImportError as exc:
+                all_warnings.append(
+                    f"runtime.drivers.antigravity.persona_export not importable: {exc}"
+                )
+                export_persona = None  # type: ignore[assignment]
+
+            if export_persona is not None:
+                for persona_file in sorted(personas_dir.glob("*.md")):
+                    persona_name = persona_file.stem
+                    # Collision check: persona names must not overlap with
+                    # command/agent/skill ids in the agy layout.
+                    if persona_name in runtime_ids:
+                        raise RuntimeError(
+                            f"antigravity export collision: persona name "
+                            f"{persona_name!r} conflicts with an existing "
+                            f"command/agent/skill id. Rename the persona or "
+                            f"the conflicting source file."
+                        )
+                    try:
+                        out_path = export_persona(persona_file, dest)
+                        all_files.append(out_path)
+                    except (ValueError, OSError) as exc:
+                        all_warnings.append(f"Skipped {persona_file.name}: {exc}")
 
         return ExportResult(
             dest=dest,
-            files=written,
+            files=all_files,
             fidelity="high",
-            warnings=warnings,
+            warnings=all_warnings,
         )
 
     # ------------------------------------------------------------------

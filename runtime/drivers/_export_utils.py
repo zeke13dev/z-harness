@@ -1,0 +1,559 @@
+"""
+runtime/drivers/_export_utils.py
+
+Shared helpers for the multi-IDE export pipeline.  Strict port of
+``scripts/export-common.py``; no behavior changes vs the legacy module.
+Any quirk preserved from the legacy script is noted with a
+``# preserved quirk:`` comment.
+
+Importable directly (no importlib-by-path hack needed) and has zero imports
+from ``z_harness_cli``.
+
+Public surface
+--------------
+enumerate_sources(repo_root) -> dict
+inline_includes(text, base_dir, repo_root) -> str
+    Fragment-include marker expansion.  ``base_dir`` is accepted for API
+    symmetry with SPEC callers but unused — path resolution is always relative
+    to ``repo_root``.  ``expand_includes`` is kept as an alias for the legacy
+    call signature used by the self-test cases.
+validate_capabilities(path) -> list[str]
+output_path_for(repo_root, target, kind, id) -> Path
+run_self_test(repo_root=None) -> int
+
+ExportResult
+    Canonical export result dataclass (BLOCKER-1).  Owned here so
+    ``runtime/drivers/<t>/export.py`` never imports up into ``z_harness_cli``.
+    ``z_harness_cli/adapters/base.py`` re-exports / wraps this type.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+
+# ---------------------------------------------------------------------------
+# ExportResult — canonical result type owned by runtime (BLOCKER-1)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ExportResult:
+    """Result of a single export operation.
+
+    Fields
+    ------
+    dest:
+        Absolute path to the export destination directory.
+    files:
+        Absolute paths of every file written during the export.
+    fidelity:
+        Qualitative fidelity label, e.g. ``"flattened"``, ``"high"``.
+    warnings:
+        Human-readable strings describing any non-fatal issues encountered.
+    """
+
+    dest: Path
+    files: list[Path] = field(default_factory=list)
+    fidelity: str = "flattened"
+    warnings: list[str] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Frontmatter parsing
+# ---------------------------------------------------------------------------
+
+def _unquote_scalar(value: str) -> str:
+    """Strip matching surrounding YAML quotes from a flat scalar value.
+
+    Source frontmatter quotes ``description``/``argument-hint`` values that
+    contain YAML-significant characters (``:``, ``[``).  Downstream emitters
+    want the bare string, so undo the quoting here.  Handles the common escape
+    forms: ``\\"`` / ``\\\\`` in double quotes, ``''`` in single quotes.
+    """
+    if len(value) >= 2 and value[0] == value[-1] == '"':
+        return value[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+    if len(value) >= 2 and value[0] == value[-1] == "'":
+        return value[1:-1].replace("''", "'")
+    return value
+
+
+def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
+    """Parse YAML-fenced frontmatter at the top of *text*.
+
+    Returns (frontmatter_dict, body_text).  Only simple ``key: value`` pairs
+    are handled — no nested structures, sequences, or multi-line values.  This
+    is intentional: the source files in this repo only use flat frontmatter.
+    """
+    frontmatter: dict[str, str] = {}
+    body = text
+
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].rstrip() != "---":
+        return frontmatter, body
+
+    end_fence = -1
+    for i, line in enumerate(lines[1:], start=1):
+        if line.rstrip() == "---":
+            end_fence = i
+            break
+
+    if end_fence == -1:
+        return frontmatter, body
+
+    for line in lines[1:end_fence]:
+        stripped = line.rstrip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        match = re.match(r'^([A-Za-z0-9_-]+)\s*:\s*(.*)', stripped)
+        if match:
+            frontmatter[match.group(1)] = _unquote_scalar(match.group(2).strip())
+
+    body = "".join(lines[end_fence + 1:])
+    return frontmatter, body
+
+
+# ---------------------------------------------------------------------------
+# Fragment include expansion
+# ---------------------------------------------------------------------------
+
+_INCLUDE_LINE_RE = re.compile(
+    r"^[ \t]*<!--\s*include:\s*([^\s]+)\s*-->[ \t]*(?:\n|$)",
+    re.MULTILINE,
+)
+# CommonMark fenced code blocks open/close with 3+ backticks OR 3+ tildes.
+# (The naive open/close toggle below does not enforce that a closing fence
+# matches the opening run's char/length — sufficient for our doc content, which
+# never interleaves backtick and tilde fences.)
+# preserved quirk: open/close toggle does not enforce char/length matching
+_FENCE_LINE_RE = re.compile(r"^(?:`{3,}|~{3,}).*$", re.MULTILINE)
+
+
+def _fence_regions(text: str) -> list[tuple[int, int]]:
+    """Return ``(start, end)`` spans for content inside fenced code blocks."""
+    regions: list[tuple[int, int]] = []
+    in_fence = False
+    fence_content_start = 0
+    for match in _FENCE_LINE_RE.finditer(text):
+        if not in_fence:
+            in_fence = True
+            fence_content_start = match.end()
+        else:
+            regions.append((fence_content_start, match.start()))
+            in_fence = False
+    if in_fence:
+        regions.append((fence_content_start, len(text)))
+    return regions
+
+
+def _position_in_fence(pos: int, regions: list[tuple[int, int]]) -> bool:
+    return any(start <= pos < end for start, end in regions)
+
+
+def _next_include_match(text: str) -> re.Match[str] | None:
+    """Return the first include marker not inside a fenced code block."""
+    regions = _fence_regions(text)
+    for match in _INCLUDE_LINE_RE.finditer(text):
+        if not _position_in_fence(match.start(), regions):
+            return match
+    return None
+
+
+def expand_includes(
+    body: str,
+    repo_root: Path,
+    *,
+    _visited: frozenset[Path] | None = None,
+) -> str:
+    """Inline ``<!-- include: <repo-relative-path> -->`` markers with file bodies.
+
+    Only markers that occupy a whole line are expanded (so documentation lines
+    that mention the marker inside backticks are left alone).  Markers inside
+    fenced code blocks (`` ``` ``) are also skipped.  Paths are resolved
+    relative to *repo_root*.  Nested includes in fragment files are expanded
+    recursively.  Raises ``FileNotFoundError`` when a referenced fragment is
+    missing, ``ValueError`` when a path escapes *repo_root* or when a circular
+    include is detected.
+
+    This is the internal workhorse; ``inline_includes`` is the public alias
+    with the extended signature required by SPEC callers.
+    """
+    repo_root = Path(repo_root).resolve()
+    visited = _visited or frozenset()
+    expanded = body
+
+    while True:
+        match = _next_include_match(expanded)
+        if not match:
+            break
+
+        rel_path = match.group(1)
+        fragment_path = (repo_root / rel_path).resolve()
+
+        try:
+            fragment_path.relative_to(repo_root)
+        except ValueError as exc:
+            raise ValueError(
+                f"Include path {rel_path!r} escapes repo root {repo_root}"
+            ) from exc
+
+        if fragment_path in visited:
+            chain = " -> ".join(
+                str(path.relative_to(repo_root)) for path in visited
+            )
+            raise ValueError(
+                f"Circular include detected: {chain} -> {rel_path}"
+            )
+
+        if not fragment_path.is_file():
+            raise FileNotFoundError(
+                f"Include fragment not found: {rel_path} "
+                f"(resolved to {fragment_path})"
+            )
+
+        fragment_body = fragment_path.read_text(encoding="utf-8")
+        nested_body = expand_includes(
+            fragment_body,
+            repo_root,
+            _visited=visited | frozenset({fragment_path}),
+        )
+        expanded = expanded[: match.start()] + nested_body + expanded[match.end() :]
+
+    return expanded
+
+
+def inline_includes(
+    text: str,
+    base_dir: Path | None,
+    repo_root: Path,
+    *,
+    _visited: frozenset[Path] | None = None,
+) -> str:
+    """Public alias for ``expand_includes`` with an extended SPEC-compatible signature.
+
+    The *base_dir* argument is accepted for API symmetry with SPEC call sites
+    (T003–T006 use ``inline_includes(body, base_dir, repo_root)``) but is not
+    used for path resolution — all includes are resolved relative to *repo_root*,
+    exactly as the legacy ``expand_includes`` does.
+
+    # preserved quirk: base_dir accepted but unused; resolution is always
+    # relative to repo_root (matching legacy export-common.py behaviour)
+    """
+    return expand_includes(text, repo_root, _visited=_visited)
+
+
+# ---------------------------------------------------------------------------
+# Source enumeration
+# ---------------------------------------------------------------------------
+
+def _collect_entries(directory: Path, repo_root: Path) -> list[dict[str, Any]]:
+    """Return one entry dict per markdown file in *directory* (non-recursive)."""
+    if not directory.is_dir():
+        return []
+
+    entries: list[dict[str, Any]] = []
+    for path in sorted(directory.glob("*.md")):
+        text = path.read_text(encoding="utf-8")
+        frontmatter, body = _parse_frontmatter(text)
+        body = expand_includes(body, repo_root)
+        entries.append(
+            {
+                "id": path.stem,
+                "source_path": path,
+                "frontmatter": frontmatter,
+                "body": body,
+            }
+        )
+    return entries
+
+
+def _collect_skills(skills_dir: Path, repo_root: Path) -> list[dict[str, Any]]:
+    """Return one entry per skill (each skill lives in its own sub-directory
+    as ``skills/<name>/SKILL.md``)."""
+    if not skills_dir.is_dir():
+        return []
+
+    entries: list[dict[str, Any]] = []
+    for skill_dir in sorted(skills_dir.iterdir()):
+        skill_file = skill_dir / "SKILL.md"
+        if not skill_dir.is_dir() or not skill_file.exists():
+            continue
+        text = skill_file.read_text(encoding="utf-8")
+        frontmatter, body = _parse_frontmatter(text)
+        body = expand_includes(body, repo_root)
+        entries.append(
+            {
+                "id": skill_dir.name,
+                "source_path": skill_file,
+                "frontmatter": frontmatter,
+                "body": body,
+            }
+        )
+    return entries
+
+
+def enumerate_sources(repo_root: Path) -> dict[str, list[dict[str, Any]]]:
+    """Return a dict with keys ``commands``, ``agents``, ``skills``.
+
+    Each value is a list of entry dicts::
+
+        {
+            "id": str,                      # stem of the source file / skill dir name
+            "source_path": pathlib.Path,    # absolute path to the source file
+            "frontmatter": dict[str, str],  # parsed key/value pairs (flat)
+            "body": str,                    # markdown body after the frontmatter fence
+        }
+    """
+    repo_root = Path(repo_root).resolve()
+    return {
+        "commands": _collect_entries(repo_root / "commands", repo_root),
+        "agents": _collect_entries(repo_root / "agents", repo_root),
+        "skills": _collect_skills(repo_root / "skills", repo_root),
+    }
+
+
+# ---------------------------------------------------------------------------
+# CAPABILITIES.md schema validation
+# ---------------------------------------------------------------------------
+
+_REQUIRED_SECTIONS = ("## Supported", "## Unsupported", "## Notes")
+
+
+def validate_capabilities(path: Path) -> list[str]:
+    """Validate that *path* is a CAPABILITIES.md file conforming to the
+    minimal schema.
+
+    Required sections: ``## Supported``, ``## Unsupported``, ``## Notes``.
+
+    Returns a list of validation error strings.  An empty list means the file
+    is valid.
+    """
+    errors: list[str] = []
+    path = Path(path)
+
+    if not path.exists():
+        errors.append(f"File not found: {path}")
+        return errors
+
+    text = path.read_text(encoding="utf-8")
+    for section in _REQUIRED_SECTIONS:
+        if section not in text:
+            errors.append(f"Missing required section: {section!r}")
+
+    return errors
+
+
+# ---------------------------------------------------------------------------
+# Per-target output path computation
+# ---------------------------------------------------------------------------
+
+_TARGET_CONVENTIONS: dict[str, dict[str, str]] = {
+    "cursor": {
+        "commands": ".cursor/rules/{id}.mdc",
+        "agents": ".cursor/rules/{id}.mdc",
+        "skills": ".cursor/rules/{id}.mdc",
+    },
+    "codex": {
+        "commands": "prompts/{id}.md",
+        "agents": "prompts/{id}.md",
+        "skills": "prompts/{id}.md",
+    },
+    # NOTE: "agy" is intentionally absent. The antigravity exporter
+    # does NOT use output_path_for — it owns its own dual layout
+    # (native .agent/{workflows,rules,skills}/ AND flat prompts/),
+    # which a single output_path_for return value cannot express. Adding an
+    # "agy" entry here would be dead and misleading. Only codex/cursor route
+    # through output_path_for.
+    # preserved quirk: agy absent from _TARGET_CONVENTIONS; matches legacy export-common.py
+}
+
+
+def output_path_for(repo_root: Path, target: str, kind: str, id: str) -> Path:
+    """Return the conventional output path for a given export target.
+
+    Args:
+        repo_root: Absolute path to the repository root.
+        target: Export target name — one of ``cursor``, ``codex``. The ``agy``
+            target is NOT handled here; export-agy.py owns its own dual layout.
+        kind: Source kind — one of ``commands``, ``agents``, ``skills``.
+        id: Source identifier (file stem / skill dir name).
+
+    Returns:
+        An absolute Path inside ``exports/<target>/`` following the per-target
+        convention:
+
+        - cursor → ``exports/cursor/.cursor/rules/<id>.mdc``
+        - codex  → ``exports/codex/prompts/<id>.md``
+
+    Raises:
+        ValueError: if *target* or *kind* is not recognised.
+    """
+    repo_root = Path(repo_root).resolve()
+
+    if target not in _TARGET_CONVENTIONS:
+        raise ValueError(
+            f"Unknown target {target!r}. Valid targets: {sorted(_TARGET_CONVENTIONS)}"
+        )
+    kind_map = _TARGET_CONVENTIONS[target]
+    if kind not in kind_map:
+        raise ValueError(
+            f"Unknown kind {kind!r}. Valid kinds: {sorted(kind_map)}"
+        )
+
+    relative = kind_map[kind].format(id=id)
+    return repo_root / "exports" / target / relative
+
+
+# ---------------------------------------------------------------------------
+# Self-test (ported verbatim from scripts/export-common.py cmd_self_test)
+# ---------------------------------------------------------------------------
+
+_RUN_BRIEF_FRAGMENT = "commands/_fragments/run-brief-finalize.md"
+_RUN_BRIEF_MARKER = f"<!-- include: {_RUN_BRIEF_FRAGMENT} -->"
+_RUN_BRIEF_SENTINEL = "## Run Brief finalize (shared fragment)"
+
+
+def _self_test_pass(label: str, detail: str = "") -> None:
+    suffix = f": {detail}" if detail else ""
+    print(f"PASS [{label}]{suffix}")
+
+
+def _self_test_fail(label: str, message: str) -> None:
+    import sys
+
+    print(f"FAIL [{label}]: {message}", file=sys.stderr)
+
+
+def run_self_test(repo_root: Path | None = None) -> int:
+    """Verify fragment include expansion against the run-brief finalize marker.
+
+    Ported verbatim from ``scripts/export-common.py::cmd_self_test``.
+    The legacy entry point is aliased as ``cmd_self_test`` for compatibility
+    with any callers that used the old name.
+    """
+    import shutil
+    import sys
+    import tempfile
+
+    # preserved quirk: when repo_root is None, fall back to __file__'s parent.parent
+    # (in scripts/ the file was two levels down; in runtime/drivers/ __file__
+    # would point to the wrong location if used the same way, so callers should
+    # pass repo_root explicitly)
+    repo_root = (repo_root or Path(__file__).resolve().parent.parent.parent).resolve()
+    overall_pass = True
+
+    def record_pass(label: str, detail: str = "") -> None:
+        _self_test_pass(label, detail)
+
+    def record_fail(label: str, message: str) -> None:
+        nonlocal overall_pass
+        overall_pass = False
+        _self_test_fail(label, message)
+
+    def expect_raises(label: str, exc_type: type[BaseException], fn) -> None:
+        try:
+            fn()
+        except exc_type as exc:
+            record_pass(label, str(exc))
+        except Exception as exc:
+            record_fail(
+                label,
+                f"expected {exc_type.__name__}, got {type(exc).__name__}: {exc}",
+            )
+        else:
+            record_fail(label, f"expected {exc_type.__name__}, no exception raised")
+
+    sample = f"Before marker\n{_RUN_BRIEF_MARKER}\nAfter marker\n"
+    try:
+        expanded = expand_includes(sample, repo_root)
+    except (FileNotFoundError, ValueError) as exc:
+        record_fail("run-brief-include", f"expand_includes raised {exc}")
+        return 1
+
+    if _next_include_match(expanded):
+        record_fail(
+            "run-brief-include",
+            "standalone include marker still present after expansion",
+        )
+    elif _RUN_BRIEF_SENTINEL not in expanded:
+        record_fail(
+            "run-brief-include",
+            f"expected sentinel {_RUN_BRIEF_SENTINEL!r} missing from expanded body",
+        )
+    else:
+        record_pass(
+            "run-brief-include",
+            f"{_RUN_BRIEF_FRAGMENT} inlined at marker",
+        )
+
+    fenced_sample = f"```markdown\n{_RUN_BRIEF_MARKER}\n```\n"
+    try:
+        fenced_expanded = expand_includes(fenced_sample, repo_root)
+    except (FileNotFoundError, ValueError) as exc:
+        record_fail("fence-skipped", f"expand_includes raised {exc}")
+    else:
+        if _RUN_BRIEF_MARKER not in fenced_expanded:
+            record_fail(
+                "fence-skipped",
+                "marker inside fenced code block was removed instead of preserved",
+            )
+        elif _RUN_BRIEF_SENTINEL in fenced_expanded:
+            record_fail(
+                "fence-skipped",
+                "fragment body was inlined from a fenced marker",
+            )
+        else:
+            record_pass("fence-skipped", "marker inside ``` preserved unchanged")
+
+    expect_raises(
+        "missing-fragment",
+        FileNotFoundError,
+        lambda: expand_includes(
+            "<!-- include: commands/_fragments/does-not-exist.md -->\n",
+            repo_root,
+        ),
+    )
+
+    expect_raises(
+        "path-escape",
+        ValueError,
+        lambda: expand_includes(
+            "<!-- include: ../../../etc/passwd -->\n",
+            repo_root,
+        ),
+    )
+
+    # The cycle fixtures must live UNDER repo_root (the include guard rejects
+    # paths that escape it), so a system tempdir won't do. mkdtemp gives a
+    # unique name under commands/_fragments/, avoiding a fixed-name collision
+    # between concurrent self-test runs.
+    fragments_dir = repo_root / "commands" / "_fragments"
+    cycle_dir = Path(tempfile.mkdtemp(prefix=".self-test-cycle-", dir=fragments_dir))
+    cycle_a = cycle_dir / "a.md"
+    cycle_b = cycle_dir / "b.md"
+    cycle_rel_a = f"{cycle_dir.relative_to(repo_root).as_posix()}/a.md"
+    cycle_rel_b = f"{cycle_dir.relative_to(repo_root).as_posix()}/b.md"
+    try:
+        cycle_a.write_text(f"<!-- include: {cycle_rel_b} -->\n", encoding="utf-8")
+        cycle_b.write_text(f"<!-- include: {cycle_rel_a} -->\n", encoding="utf-8")
+        expect_raises(
+            "circular-include",
+            ValueError,
+            lambda: expand_includes(
+                f"<!-- include: {cycle_rel_a} -->\n",
+                repo_root,
+            ),
+        )
+    finally:
+        shutil.rmtree(cycle_dir, ignore_errors=True)
+
+    if overall_pass:
+        print("PASS: all export-common self-tests passed")
+        return 0
+    return 1
+
+
+# Legacy alias so callers of the old scripts/export-common.py name still work.
+cmd_self_test = run_self_test

@@ -26,6 +26,7 @@ dev = [
     "referencing>=0.36",
 ]
 
+
 [tool.hatch.version]
 source = "vcs"
 # Fallback when building outside a git repo (e.g., from a source archive)

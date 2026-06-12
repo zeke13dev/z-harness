@@ -1,7 +1,7 @@
 # pi Export
 
-> Last updated: 2026-06-09
-> Covers source: scripts/export-pi.py, scripts/pi-mcp-server.py, scripts/lint-frontmatter.sh, Makefile, scripts/pi_assets/AGENTS.preamble.md, scripts/pi_assets/CAPABILITIES.md, scripts/pi_assets/README.md, scripts/pi_assets/agents/explore.md, scripts/pi_assets/extensions/subagent/index.ts, scripts/pi_assets/extensions/subagent/agents.ts, scripts/pi_assets/extensions/subagent/VENDOR.md
+> Last updated: 2026-06-11
+> Covers source: runtime/drivers/pi/export.py, scripts/pi-mcp-server.py, scripts/lint-frontmatter.sh, Makefile, scripts/pi_assets/AGENTS.preamble.md, scripts/pi_assets/CAPABILITIES.md, scripts/pi_assets/README.md, scripts/pi_assets/agents/explore.md, scripts/pi_assets/extensions/subagent/index.ts, scripts/pi_assets/extensions/subagent/agents.ts, scripts/pi_assets/extensions/subagent/VENDOR.md
 
 ## Overview
 
@@ -50,17 +50,17 @@ The server handles timeouts (SIGTERM via process group kill), missing binaries, 
 ## Key entry points
 
 <!-- AUTO-START: entry-points -->
-- `scripts/export-pi.py:1` — `export-pi.py` — Main exporter script. Builds the full `exports/pi/` tree. Copies pi-only assets from `scripts/pi_assets/`, renders z-harness agents/prompts with pi-normalized frontmatter, rewrites `Agent()`/`Skill()` call sites to subagent hints, and generates the `AGENTS.md` index.
-- `scripts/export-pi.py:80` — `_TOOL_MAP` — Maps Claude Code/z-harness tool names to pi tool names (`Glob` → `find`).
-- `scripts/export-pi.py:88` — `_TOOL_UNSUPPORTED` — Tools dropped from agent allowlists on export (agent, task, webfetch, websearch, notebookedit, enterplanmode, exitplanmode, todowrite, multiedit).
-- `scripts/export-pi.py:120` — `_rewrite_line` — Rewrites `Agent(subagent_type="X")` lines to `subagent { "agent": "X" }` hints, `Skill("z-foo")` to skill-run hints, and unsupported `AskUserQuestion()`/`TaskCreate()` to inline-handling hints.
-- `scripts/export-pi.py:189` — `_yaml_quote` — Quotes YAML frontmatter values that contain colons, brackets, hashes, or quotes to prevent parsing failures in pi's YAML frontmatter parser. The preventive layer applied at export time for all generated agent descriptions.
-- `scripts/export-pi.py:196` — `_render_agent` — Renders a z-harness agent as a pi agent `.md` file with pipelined `_yaml_quote` on descriptions, semantic model tier mapping (haiku→flash, sonnet/opus→pro), and `_TOOL_MAP` normalization on tools. Agents without a model tier inherit pi's default.
+- `runtime/drivers/pi/export.py` — `export` — Main exporter. Builds the full `exports/pi/` tree. Copies pi-only assets from `scripts/pi_assets/`, renders z-harness agents/prompts with pi-normalized frontmatter, rewrites `Agent()`/`Skill()` call sites to subagent hints, and generates the `AGENTS.md` index.
+- `runtime/drivers/pi/export.py` — `_TOOL_MAP` — Maps Claude Code/z-harness tool names to pi tool names (`Glob` → `find`).
+- `runtime/drivers/pi/export.py` — `_TOOL_UNSUPPORTED` — Tools dropped from agent allowlists on export (agent, task, webfetch, websearch, notebookedit, enterplanmode, exitplanmode, todowrite, multiedit).
+- `runtime/drivers/pi/export.py` — `_rewrite_line` — Rewrites `Agent(subagent_type="X")` lines to `subagent { "agent": "X" }` hints, `Skill("z-foo")` to skill-run hints, and unsupported `AskUserQuestion()`/`TaskCreate()` to inline-handling hints.
+- `runtime/drivers/pi/export.py` — `_yaml_quote` — Quotes YAML frontmatter values that contain colons, brackets, hashes, or quotes to prevent parsing failures in pi's YAML frontmatter parser. The preventive layer applied at export time for all generated agent descriptions.
+- `runtime/drivers/pi/export.py` — `_render_agent` — Renders a z-harness agent as a pi agent `.md` file with pipelined `_yaml_quote` on descriptions, semantic model tier mapping (haiku→flash, sonnet/opus→pro), and `_TOOL_MAP` normalization on tools. Agents without a model tier inherit pi's default.
 - `scripts/pi-mcp-server.py:1` — `pi-mcp-server.py` — MCP server wrapping pi-cli for Hermes Agent orchestration. Exposes `pi_instruct` (one-shot pi invocation with timeout/error handling) and `pi_inspect_model` (lists available models). Parses pi NDJSON output.
-- `scripts/export-pi.py:246` — `_validate_frontmatter_yaml` — Post-export YAML validation pass. Re-validates every generated and copied agent file with `yaml.safe_load()` (strict YAML 1.2 parser) after the custom regex frontmatter parser passes. Silently skips if PyYAML is not available (import error fallback). Called from `_validate_agent` (line 263) for every emitted agent file.
-- `scripts/export-pi.py:285` — `main` — Entry point: parses `--out`, enumerates sources, renders agents/prompts, copies pi-only assets, writes `AGENTS.md`, validates all outputs (including `_validate_frontmatter_yaml` on every agent file).
+- `runtime/drivers/pi/export.py` — `_validate_frontmatter_yaml` — Post-export YAML validation pass. Re-validates every generated and copied agent file with `yaml.safe_load()` (strict YAML 1.2 parser) after the custom regex frontmatter parser passes. Silently skips if PyYAML is not available (import error fallback). Called from `_validate_agent` for every emitted agent file.
+- `runtime/drivers/pi/export.py` — `export` — Entry point: accepts `repo_root` and `out` paths, enumerates sources, renders agents/prompts, copies pi-only assets, writes `AGENTS.md`, validates all outputs (including `_validate_frontmatter_yaml` on every agent file).
 - `scripts/lint-frontmatter.sh:1` — `lint-frontmatter.sh` — Standalone lint script. Scans `agents/`, `skills/`, `commands/`, `personas/`, `scripts/pi_assets/` for `.md` files with YAML frontmatter and validates each with a strict YAML 1.2 parser. Exits 0 if all pass, 1 on any failure. Requires PyYAML; skips gracefully if unavailable.
-- `Makefile:79` — `lint-frontmatter` target — `make lint-frontmatter` invokes `scripts/lint-frontmatter.sh`. Available for local and CI use, but not yet wired into the GitHub Actions CI workflow (`.github/workflows/tests.yml`).
+- `Makefile:79` — `lint-frontmatter` target — `make lint-frontmatter` invokes `scripts/lint-frontmatter.sh`. Wired into the GitHub Actions CI workflow at `.github/workflows/tests.yml:49`.
 - `scripts/pi_assets/AGENTS.preamble.md:1` — `AGENTS.preamble.md` — The fan-out rule preamble appended to `AGENTS.md`; encodes "doc-fetcher first, explore for gaps" discipline.
 - `scripts/pi_assets/agents/explore.md:1` — `explore.md` — pi-only fan-out recon agent definition. YAML frontmatter with quoted `description` field.
 - `scripts/pi_assets/extensions/subagent/index.ts:1` — `index.ts` — pi subagent extension entry point; registers the `subagent` tool and handles agent discovery from `~/.pi/agent/agents/*.md`.
@@ -72,8 +72,8 @@ The server handles timeouts (SIGTERM via process group kill), missing binaries, 
 - `commands` — export-pi.py enumerates command markdown files; `/z-export --target=pi` is the export command.
 - `agents` — export-pi.py enumerates all z-harness agent definitions and renders them as pi agent files with normalized frontmatter. The `explore` agent is pi-only (no z-harness source) and lives in `scripts/pi_assets/`.
 - `skills` — export-pi.py enumerates `skills/*/SKILL.md` and renders them as pi prompt files. `Skill()` call sites are rewritten to `/z-foo` skill hints. z-harness is also installed as a pi package so its skills auto-surface natively.
-- `multi-ide-exports` — pi is a separate export target from Cursor/Codex/agy. It has its own exporter (`scripts/export-pi.py`), its own assets (`scripts/pi_assets/`), and its own capabilities doc (`exports/pi/CAPABILITIES.md`). The pi exporter is not deprecated and does not use the runtime/drivers/ replacement path.
-- `scripts` — export-pi.py is a standalone Python script. It imports `export-common.py` via importlib for `enumerate_sources` and `validate_capabilities`. `scripts/lint-frontmatter.sh` is the standalone lint companion. Both are wired into `make lint-frontmatter`.
+- `multi-ide-exports` — pi is a separate export target from Cursor/Codex/agy. It has its own exporter (`runtime/drivers/pi/export.py`), its own assets (`scripts/pi_assets/`), and its own capabilities doc (`exports/pi/CAPABILITIES.md`). **pi is export-only**: it has no adapter, is not a launch/inject host, and does not support `python3 -m z_harness_cli export --host pi`. Its export runs via direct import of `runtime.drivers.pi.export`.
+- `scripts` — `runtime/drivers/pi/export.py` is the exporter module. `scripts/lint-frontmatter.sh` is the standalone lint companion wired into `make lint-frontmatter`.
 
 ## YAML frontmatter defense layers (four layers)
 
@@ -86,9 +86,9 @@ pi's YAML frontmatter parser (`dist/utils/frontmatter.js`) historically could fa
 
 Additionally, `scripts/lint-frontmatter.sh` provides a standalone, source-tree-level lint that validates frontmatter across all relevant directories before export.
 
-## CI wiring recommendation
+## CI wiring
 
-`make lint-frontmatter` exists but is **not wired into CI** (`.github/workflows/tests.yml`). Recommend adding it as a step alongside the existing `make lint` call so every PR is gated on valid YAML frontmatter. Without this, frontmatter regressions (unquoted colons introduced in new agent/skill/command descriptions) are only caught at export time, not at commit time.
+`make lint-frontmatter` is wired into CI at `.github/workflows/tests.yml:49`. Every PR is gated on valid YAML frontmatter alongside the existing `make lint` step. Frontmatter regressions (unquoted colons in new agent/skill/command descriptions) are caught at commit time, not only at export time.
 
 ## Edge cases / gotchas
 
@@ -100,12 +100,12 @@ Additionally, `scripts/lint-frontmatter.sh` provides a standalone, source-tree-l
 - The subagent extension must be refreshed after pi upgrades; see `extensions/subagent/VENDOR.md`.
 - `_validate_frontmatter_yaml` silently skips if PyYAML is not available (import error fallback). The export succeeds but the strict YAML gate is bypassed. Install PyYAML (`pip install pyyaml`) for full defense.
 - `scripts/lint-frontmatter.sh` similarly requires PyYAML; exits with a descriptive "SKIP" message if unavailable.
-- **CI gap.** `make lint-frontmatter` is not wired into CI — frontmatter regressions can land on `main` without being caught until the next export. Wire it into `.github/workflows/tests.yml`.
+- **CI wired.** `make lint-frontmatter` is wired into CI at `.github/workflows/tests.yml:49` — frontmatter regressions are caught at PR time.
 
 ## Examples
 
-- `python3 scripts/export-pi.py` — regenerates the full `exports/pi/` tree with all four YAML defense layers.
-- `python3 scripts/export-pi.py --out /tmp/pi-test` — exports to a non-default output directory.
-- `/z-export --target=pi` — invokes the pi export via the z-harness command wrapper.
+- `python3 -c "from runtime.drivers.pi.export import export; from pathlib import Path; export(Path('.'), Path('exports/pi'))"` — regenerates the full `exports/pi/` tree with all four YAML defense layers.
+- `python3 -c "from runtime.drivers.pi.export import export; from pathlib import Path; export(Path('.'), Path('/tmp/pi-test'))"` — exports to a non-default output directory.
+- `/z-export --target=pi` — invokes the pi export via the z-harness command wrapper (pi is export-only; no adapter host).
 - `make lint-frontmatter` — validates YAML frontmatter across all source `.md` files (agents, skills, commands, personas, pi_assets).
 - `bash scripts/lint-frontmatter.sh` — runs the standalone lint directly.

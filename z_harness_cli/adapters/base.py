@@ -31,6 +31,19 @@ FidelityTier = Literal["native", "high", "flattened", "partial", "unsupported"]
 CommandTier = Literal["native", "degraded", "blocked"]
 
 # ---------------------------------------------------------------------------
+# ExportResult — re-exported from runtime (BLOCKER-1)
+#
+# The canonical ExportResult is owned by runtime/drivers/_export_utils.py so
+# that runtime drivers never import up into z_harness_cli (one-way layering).
+# z_harness_cli code and tests must import ExportResult from here, not from
+# runtime.drivers._export_utils directly.
+# ---------------------------------------------------------------------------
+
+from runtime.drivers._export_utils import ExportResult  # noqa: E402  # re-export
+
+__all__ = ["ExportResult"]  # expose as part of this module's public surface
+
+# ---------------------------------------------------------------------------
 # Dataclasses
 # ---------------------------------------------------------------------------
 
@@ -80,23 +93,6 @@ class DetectResult:
     version: str | None = None
     binary: str | None = None
     notes: str | None = None
-
-
-@dataclass
-class ExportResult:
-    """Return value of HostAdapter.export_payload().
-
-    Attributes:
-        dest:         Directory where exported artifacts were written.
-        files:        List of paths written (relative to dest).
-        fidelity:     Fidelity tier the export targets.
-        warnings:     Non-fatal issues encountered during export.
-    """
-
-    dest: Path
-    files: list[Path] = field(default_factory=list)
-    fidelity: FidelityTier = "native"
-    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -195,8 +191,14 @@ class HostAdapter(Protocol):
 
         Must write host-native config/prompt files to *dest* and return
         an ExportResult describing what was written.  Must never duplicate
-        the upstream exporter logic — delegate to
-        ``runtime/drivers/<host>/persona_export.py`` + ``scripts/export-*.py``.
+        the upstream exporter logic — delegates to:
+          1. ``runtime/drivers/<host>/export.py::export()`` for commands,
+             agents, and skills.
+          2. ``runtime/drivers/<host>/persona_export.py::export_persona()``
+             for each persona in ``personas/``.
+        Both results are merged into a single ExportResult.  Non-empty
+        warnings from the runtime export must be surfaced as RuntimeError
+        (legacy validation hard-gate).
         """
         ...
 

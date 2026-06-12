@@ -27,8 +27,6 @@
 #   - runtime/contract/         — schema files use names in description strings
 #   - runtime/tests/            — compat tests need old names as test input
 #   - scripts/discover-providers.py — legacy v1 discovery script; generates v1 format
-#   - scripts/export-codex.py   — deprecated export tool for Codex CLI target
-#   - scripts/export-common.py  — shared utils for deprecated export scripts
 #   - scripts/config.py         — contains _PROVIDER_RENAME migration dict
 #   - scripts/test_config.py    — migration tests; old names appear as test input
 #   - scripts/audit-tarball.sh  — only exports/codex/ path references
@@ -82,10 +80,6 @@ EXEMPT_PATHS=(
     "runtime/tests"
     # Legacy discovery script: generates v1 providers.json format
     "scripts/discover-providers.py"
-    # Deprecated export tool for Codex CLI target
-    "scripts/export-codex.py"
-    # Shared utils for deprecated export scripts
-    "scripts/export-common.py"
     # Migration code: contains _PROVIDER_RENAME dict with old names
     "scripts/config.py"
     # Migration tests: old names appear as input strings being tested

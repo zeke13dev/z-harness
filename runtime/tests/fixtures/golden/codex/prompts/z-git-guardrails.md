@@ -1,0 +1,306 @@
+# /z-git-guardrails
+
+You are running **z-harness `/z-git-guardrails`** — the installer for the git-safety PreToolUse hook. The hook (`scripts/block-dangerous-git.sh`) blocks dangerous git operations (force-pushes onto upstream-reachable commits, working-tree-destructive commands) at the Claude Code tool-call level before they execute.
+
+Subcommand (from `$ARGUMENTS`): `install`, `remove`, or `status`.
+
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question "Which subcommand? (install / remove / status)" via their native channel. Silent omission is forbidden. -->
+**If empty or unrecognized**, use `AskUserQuestion`: "Which subcommand do you want? (install / remove / status)" Block until answered.
+
+## Setup
+
+1. Locate the hook script. The canonical path is:
+   ```bash
+   HOOK_SCRIPT="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" plugin_root 2>/dev/null)/scripts/block-dangerous-git.sh"
+   # Fallback if plan-path.sh does not expose plugin_root:
+   if [[ ! -f "$HOOK_SCRIPT" ]]; then
+     HOOK_SCRIPT="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/block-dangerous-git.sh"
+   fi
+   ```
+   If the script does not exist at that path, halt with a clear error: "Cannot locate block-dangerous-git.sh. Is the z-harness plugin installed?"
+
+2. Define both settings.json paths:
+   ```bash
+   GLOBAL_SETTINGS="$HOME/.claude/settings.json"
+   PROJECT_SETTINGS=".claude/settings.json"   # relative to repo root; resolve to absolute before use
+   ```
+
+3. The hook entry to install (the exact object that must appear in `hooks.PreToolUse`):
+   ```json
+   {
+     "matcher": "Bash",
+     "hooks": [
+       {
+         "type": "command",
+         "command": "<abs path to block-dangerous-git.sh>"
+       }
+     ]
+   }
+   ```
+
+---
+
+## Subcommand: `install`
+
+### Step 1 — Choose scope
+
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the scope question via their native channel. Silent omission is forbidden. -->
+Use `AskUserQuestion`:
+
+> Where should the git-guardrails hook be installed?
+>
+> - **global** — `~/.claude/settings.json` (applies to every Claude Code project on this machine)
+> - **project** — `.claude/settings.json` in the current repo (applies only to this project)
+
+Wait for the answer. Accepted responses (case-insensitive): `global`, `g` → global; `project`, `p`, `local` → project. Anything else → re-ask once, then halt.
+
+Resolve `TARGET_SETTINGS`:
+- global → `$HOME/.claude/settings.json`
+- project → `$(pwd)/.claude/settings.json`
+
+### Step 2 — Idempotent merge
+
+Read the existing `TARGET_SETTINGS` (empty object `{}` if the file does not exist). Then check whether an entry matching this hook is already present. **Never clobber other hooks or the `permissions` block.**
+
+Use the following python3 merge logic (safe, atomic, idempotent):
+
+```bash
+python3 << 'PYEOF'
+import json, os, sys, tempfile
+
+target = os.environ["TARGET_SETTINGS"]
+hook_script = os.environ["HOOK_SCRIPT"]
+
+# --- read existing settings ---
+if os.path.exists(target):
+    with open(target) as f:
+        try:
+            settings = json.load(f)
+        except (ValueError, TypeError):
+            print(f"ERROR: {target} contains invalid JSON — aborting to avoid clobbering it.", file=sys.stderr)
+            sys.exit(1)
+else:
+    settings = {}
+
+# --- locate or create hooks.PreToolUse list ---
+hooks = settings.setdefault("hooks", {})
+pre_tool_use = hooks.setdefault("PreToolUse", [])
+
+# --- idempotency check: is our entry already present? ---
+MATCHER = "Bash"
+def is_our_entry(entry):
+    if entry.get("matcher") != MATCHER:
+        return False
+    for h in entry.get("hooks", []):
+        if h.get("type") == "command" and h.get("command") == hook_script:
+            return True
+    return False
+
+if any(is_our_entry(e) for e in pre_tool_use):
+    print("ALREADY_INSTALLED")
+    sys.exit(0)
+
+# --- append our entry ---
+pre_tool_use.append({
+    "matcher": MATCHER,
+    "hooks": [{"type": "command", "command": hook_script}]
+})
+
+# --- atomic write: write to a temp file beside the target, then rename ---
+dir_ = os.path.dirname(os.path.abspath(target))
+os.makedirs(dir_, exist_ok=True)
+fd, tmp = tempfile.mkstemp(dir=dir_, suffix=".tmp")
+try:
+    with os.fdopen(fd, "w") as f:
+        json.dump(settings, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, target)
+except OSError:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
+
+print("INSTALLED")
+PYEOF
+```
+
+Export `TARGET_SETTINGS` and `HOOK_SCRIPT` before running the block:
+```bash
+export TARGET_SETTINGS="<resolved abs path>"
+export HOOK_SCRIPT="<resolved abs path>"
+```
+
+Interpret the output:
+- `ALREADY_INSTALLED` → inform the user: "Hook is already installed in `<TARGET_SETTINGS>` — no changes made."
+- `INSTALLED` → proceed to Step 3.
+- Any stderr / non-zero exit → halt with the error text; do not attempt the verify step.
+
+### Step 3 — Verify
+
+Dry-run the installed hook against a sample blocked payload to confirm it exits 2:
+
+```bash
+VERIFY_PAYLOAD='{"tool_name":"Bash","tool_input":{"command":"git clean -fdx"}}'
+VERIFY_EXIT=0
+VERIFY_OUT="$(printf '%s' "$VERIFY_PAYLOAD" | bash "$HOOK_SCRIPT" 2>&1)" || VERIFY_EXIT=$?
+```
+
+- `VERIFY_EXIT == 2` → success. Tell the user: "Hook installed and verified. The hook blocks `git clean -fdx` (exit 2) as expected."
+- `VERIFY_EXIT == 0` → the hook did not block when it should have. Tell the user: "WARNING: hook installed but dry-run did not block the test command (exit 0). Inspect `$HOOK_SCRIPT`."
+- Any other exit code → tell the user: "WARNING: hook installed but dry-run returned unexpected exit code `$VERIFY_EXIT`. Output: `$VERIFY_OUT`."
+
+---
+
+## Subcommand: `remove`
+
+Determine which scope(s) contain the hook. Check both `$HOME/.claude/settings.json` and `$(pwd)/.claude/settings.json`. For each file that exists and contains the hook entry, strip it:
+
+```bash
+python3 << 'PYEOF'
+import json, os, sys, tempfile
+
+target = os.environ["TARGET_SETTINGS"]
+hook_script = os.environ["HOOK_SCRIPT"]
+
+if not os.path.exists(target):
+    print("NOT_FOUND")
+    sys.exit(0)
+
+with open(target) as f:
+    try:
+        settings = json.load(f)
+    except (ValueError, TypeError):
+        print(f"ERROR: {target} contains invalid JSON — aborting.", file=sys.stderr)
+        sys.exit(1)
+
+pre_tool_use = settings.get("hooks", {}).get("PreToolUse", [])
+
+def is_our_entry(entry):
+    if entry.get("matcher") != "Bash":
+        return False
+    for h in entry.get("hooks", []):
+        if h.get("type") == "command" and h.get("command") == hook_script:
+            return True
+    return False
+
+original_len = len(pre_tool_use)
+filtered = [e for e in pre_tool_use if not is_our_entry(e)]
+
+if len(filtered) == original_len:
+    print("NOT_FOUND")
+    sys.exit(0)
+
+settings["hooks"]["PreToolUse"] = filtered
+
+# Clean up empty structures to leave the file tidy (optional but courteous)
+if not settings["hooks"]["PreToolUse"]:
+    del settings["hooks"]["PreToolUse"]
+if not settings["hooks"]:
+    del settings["hooks"]
+
+dir_ = os.path.dirname(os.path.abspath(target))
+fd, tmp = tempfile.mkstemp(dir=dir_, suffix=".tmp")
+try:
+    with os.fdopen(fd, "w") as f:
+        json.dump(settings, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, target)
+except OSError:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
+
+print("REMOVED")
+PYEOF
+```
+
+- Check both settings files. If found and removed in one or both, tell the user which file(s) were updated.
+- If not found in either file, tell the user: "Hook entry not found in global or project settings — nothing to remove."
+- On JSON parse error or unexpected exit, halt with the error; do not modify the file.
+
+**Note:** `remove` only strips the guardrails `PreToolUse` entry added by this command. It does not touch any other hooks, the `permissions` block, or any other key in `settings.json`.
+
+---
+
+## Subcommand: `status`
+
+Check both scopes and report:
+
+```bash
+python3 << 'PYEOF'
+import json, os
+
+hook_script = os.environ["HOOK_SCRIPT"]
+results = {}
+
+for label, path in [
+    ("global",  os.path.expanduser("~/.claude/settings.json")),
+    ("project", os.path.join(os.getcwd(), ".claude/settings.json")),
+]:
+    if not os.path.exists(path):
+        results[label] = ("absent", path)
+        continue
+    try:
+        with open(path) as f:
+            settings = json.load(f)
+    except (ValueError, TypeError):
+        results[label] = ("invalid_json", path)
+        continue
+    pre_tool_use = settings.get("hooks", {}).get("PreToolUse", [])
+    found = any(
+        h.get("type") == "command" and h.get("command") == hook_script
+        for e in pre_tool_use if e.get("matcher") == "Bash"
+        for h in e.get("hooks", [])
+    )
+    results[label] = ("installed" if found else "not_installed", path)
+
+for label, (state, path) in results.items():
+    print(f"{label}: {state} ({path})")
+PYEOF
+```
+
+Report the output clearly. Example:
+
+```
+git-guardrails hook status:
+  global:  installed  (~/.claude/settings.json)
+  project: not_installed  (/repo/.claude/settings.json)
+```
+
+---
+
+## Anti-patterns (push back)
+
+- **"Just edit settings.json manually"** — the merge logic exists precisely to prevent clobbering other hooks or the `permissions` block. Manual edits skip the idempotency check and the verify step.
+- **"Skip the verify step after install"** — the verify step catches installation errors (wrong path, permission issue) before the first real git command. It takes less than a second. Do not skip it.
+- **"Install globally AND in the project to be safe"** — double-installation is harmless but unnecessary. The global setting already covers all projects. Only install in both if the user explicitly asks, and inform them that the hook will run twice per Bash call.
+- **"Remove all hooks from settings.json"** — the remove subcommand strips only the guardrails entry. Any other PreToolUse hooks present in the file are intentional and must not be touched.
+- **"Override the hook with Z_HARNESS_GIT_GUARDRAILS_OVERRIDE=1 as a permanent setting"** — the override is a one-shot escape hatch for a single command. Setting it permanently defeats the purpose of the guardrail. Push back; offer `/z-git-guardrails remove` if the user wants to fully disable the hook.
+
+---
+
+## Out of scope
+
+- Editing the logic of `block-dangerous-git.sh` itself → that file is managed as source code; use normal edit tools.
+- Installing hooks for tools other than Bash → the hook is designed for the Bash tool; installing it under a different matcher would never fire.
+- Managing other Claude Code settings (model, `permissions`, other hooks) → this command is scoped to the one PreToolUse entry for the git guardrail.
+- Restarting or reloading Claude Code → after editing `settings.json`, Claude Code picks up the change on the next session; this command cannot trigger a reload.
+- Auditing past override events → see `<z-harness-base>/git-guardrails-audit.log` directly.
+
+---
+
+## Runtime contract conformance
+
+| Feature | Used | Gates |
+|---------|------|-------|
+| `subagent` | no | — |
+| `ask_user` | yes | Empty/unrecognized subcommand; `install` scope selection |
+| `skill_invoke` | no | — |
+
+Driver support requirements: see frontmatter `driver_features_required`.
+
+Non-supporting drivers **must surface and skip** any gated block — silent omission is forbidden. Each gated call site is annotated with a `<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

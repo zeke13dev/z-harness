@@ -212,65 +212,118 @@ class CursorAdapter:
     # ------------------------------------------------------------------
 
     def export_payload(self, dest: Path) -> ExportResult:
-        """Export personas to the Cursor .mdc layout under *dest*.
+        """Export commands, agents, skills, and personas to the Cursor .mdc layout.
 
-        Delegates to ``runtime/drivers/cursor/persona_export.py::export_persona()``
-        for each persona file found in the ``personas/`` directory at the
-        harness repo root.
+        Delegates to ``runtime/drivers/cursor/export.py::export()`` for
+        commands, agents, and skills (producing ``.mdc`` rule files under
+        ``<dest>/.cursor/rules/``), then runs the existing persona loop via
+        ``runtime/drivers/cursor/persona_export.py::export_persona()`` for
+        each persona file found in the ``personas/`` directory.
+
+        Both results are merged into a single ExportResult.  Fidelity is
+        always ``"flattened"`` for Cursor.
+
+        Non-empty warnings from the runtime export (validation errors) are
+        preserved and re-raised as ``RuntimeError`` so callers that expect the
+        legacy hard-gate behaviour see a failure signal rather than a silent
+        downgrade.
+
+        Collision assert (MINOR-6): persona names must not overlap with
+        command/agent/skill ids in the flat ``.cursor/rules/`` namespace.
+        A collision raises ``RuntimeError`` with a descriptive message.
 
         The written layout is::
 
-            <dest>/.cursor/personas/<name>.mdc
+            <dest>/.cursor/rules/<id>.mdc       — commands, agents, skills
+            <dest>/.cursor/personas/<name>.mdc  — personas
 
         Returns
         -------
         ExportResult
-            fidelity="flattened"; files lists relative paths under dest.
+            fidelity="flattened"; files lists all written files under dest;
+            warnings aggregated from both stages.
+
+        Raises
+        ------
+        RuntimeError
+            If the runtime export produces validation warnings (legacy hard-gate)
+            or if persona names collide with command/agent/skill ids.
         """
         dest = Path(dest)
 
-        # Locate the harness repo root (where personas/ lives).
+        # Locate the harness repo root.
         harness_root = Path(__file__).parent.parent.parent.resolve()
         personas_dir = harness_root / "personas"
 
-        written: list[Path] = []
-        warnings: list[str] = []
+        all_files: list[Path] = []
+        all_warnings: list[str] = []
 
-        if not personas_dir.is_dir():
-            return ExportResult(
-                dest=dest,
-                files=[],
-                fidelity="flattened",
-                warnings=["personas/ directory not found; nothing exported"],
-            )
-
-        # Lazy import so the adapter can be imported without the runtime
-        # package in sys.path in environments where only z_harness_cli is
-        # installed.
+        # ------------------------------------------------------------------
+        # Stage 1: runtime export — commands, agents, skills
+        # ------------------------------------------------------------------
         try:
-            from runtime.drivers.cursor.persona_export import export_persona
+            from runtime.drivers.cursor.export import export as cursor_export
         except ImportError as exc:
-            return ExportResult(
-                dest=dest,
-                files=[],
-                fidelity="flattened",
-                warnings=[
-                    f"runtime.drivers.cursor.persona_export not importable: {exc}"
-                ],
+            all_warnings.append(
+                f"runtime.drivers.cursor.export not importable: {exc}"
             )
+            cursor_export = None  # type: ignore[assignment]
 
-        for persona_file in sorted(personas_dir.glob("*.md")):
+        runtime_ids: set[str] = set()
+        if cursor_export is not None:
+            rt_result = cursor_export(harness_root, dest)
+            all_files.extend(rt_result.files)
+            if rt_result.warnings:
+                # Surface validation warnings as a hard failure — preserving
+                # the legacy export-cursor.py validation gate behaviour.
+                raise RuntimeError(
+                    f"cursor runtime export produced validation errors:\n"
+                    + "\n".join(f"  {w}" for w in rt_result.warnings)
+                )
+            # Collect exported ids to check for persona-name collisions.
+            # Files land under .cursor/rules/<id>.mdc; extract the stem.
+            for f in rt_result.files:
+                stem = Path(f).stem
+                runtime_ids.add(stem)
+
+        # ------------------------------------------------------------------
+        # Stage 2: persona export loop
+        # ------------------------------------------------------------------
+        if not personas_dir.is_dir():
+            all_warnings.append("personas/ directory not found; persona export skipped")
+        else:
+            # Lazy import so the adapter can load without the full runtime
+            # package in environments where only z_harness_cli is installed.
             try:
-                out_path = export_persona(persona_file, dest)
-                written.append(out_path.relative_to(dest))
-            except (ValueError, OSError) as exc:
-                warnings.append(f"Skipped {persona_file.name}: {exc}")
+                from runtime.drivers.cursor.persona_export import export_persona
+            except ImportError as exc:
+                all_warnings.append(
+                    f"runtime.drivers.cursor.persona_export not importable: {exc}"
+                )
+                export_persona = None  # type: ignore[assignment]
+
+            if export_persona is not None:
+                for persona_file in sorted(personas_dir.glob("*.md")):
+                    persona_name = persona_file.stem
+                    # Collision check: persona names must not overlap with
+                    # command/agent/skill ids in the flat .cursor/rules/ namespace.
+                    if persona_name in runtime_ids:
+                        raise RuntimeError(
+                            f"cursor export collision: persona name {persona_name!r} "
+                            f"conflicts with an existing command/agent/skill id. "
+                            f"Rename the persona or the conflicting source file."
+                        )
+                    try:
+                        out_path = export_persona(persona_file, dest)
+                        all_files.append(out_path)
+                    except (ValueError, OSError) as exc:
+                        all_warnings.append(f"Skipped {persona_file.name}: {exc}")
 
         return ExportResult(
             dest=dest,
-            files=written,
+            files=all_files,
             fidelity="flattened",
-            warnings=warnings,
+            warnings=all_warnings,
         )
 
     # ------------------------------------------------------------------

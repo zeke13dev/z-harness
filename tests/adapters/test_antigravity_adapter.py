@@ -234,7 +234,12 @@ class TestExportPayload(unittest.TestCase):
         self.assertEqual(result.fidelity, "high")
 
     def test_export_warns_when_personas_missing(self):
-        """export_payload() returns a warning when personas/ dir does not exist."""
+        """export_payload() returns a warning when personas/ dir does not exist.
+
+        With the T007 delegation, the runtime export (cmds/agents/skills) runs
+        first.  This test mocks both the runtime export driver AND patches
+        __file__ to a fake harness with no personas/ directory.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             dest = Path(tmp) / "out"
             dest.mkdir()
@@ -242,23 +247,41 @@ class TestExportPayload(unittest.TestCase):
             fake_harness.mkdir()
 
             import z_harness_cli.adapters.antigravity as _mod
+            from runtime.drivers._export_utils import ExportResult as RE
+
+            # Mock the runtime export driver to return an empty successful result
+            # so we can focus on the personas-missing warning path.
+            mock_export = MagicMock(
+                return_value=RE(dest=dest, files=[], fidelity="high", warnings=[])
+            )
+            mock_agy_export_mod = MagicMock()
+            mock_agy_export_mod.export = mock_export
 
             with patch.object(
                 _mod,
                 "__file__",
                 str(fake_harness / "z_harness_cli" / "adapters" / "antigravity.py"),
+            ), patch.dict(
+                "sys.modules",
+                {
+                    "runtime.drivers.antigravity.export": mock_agy_export_mod,
+                },
             ):
                 result = self.adapter.export_payload(dest)
 
             self.assertEqual(result.fidelity, "high")
-            self.assertEqual(result.files, [])
             self.assertTrue(
                 any("personas/" in w for w in result.warnings),
                 f"Expected warning about missing personas/, got: {result.warnings}",
             )
 
     def test_export_native_skill_layout(self):
-        """Round-trip: persona exported to temp dir lands under .agent/personas/."""
+        """Round-trip: persona exported to temp dir lands under .agent/personas/.
+
+        With the T007 delegation, both the runtime export driver (mocked to
+        return an empty result) and the persona exporter are called.  Files
+        from both stages are combined in the returned ExportResult.
+        """
         with tempfile.TemporaryDirectory() as tmp_root:
             # Resolve to avoid macOS /private/tmp vs /tmp symlink issues.
             tmp_path = Path(tmp_root).resolve()
@@ -278,6 +301,14 @@ class TestExportPayload(unittest.TestCase):
             persona_file.write_text("---\nname: default\n---\nHello.\n", encoding="utf-8")
 
             import z_harness_cli.adapters.antigravity as _mod
+            from runtime.drivers._export_utils import ExportResult as RE
+
+            # Mock runtime export driver (cmds/agents/skills) to return empty result.
+            mock_export = MagicMock(
+                return_value=RE(dest=dest, files=[], fidelity="high", warnings=[])
+            )
+            mock_agy_export_mod = MagicMock()
+            mock_agy_export_mod.export = mock_export
 
             mock_pe = MagicMock()
             mock_pe.export_persona = _fake_export_persona
@@ -289,6 +320,7 @@ class TestExportPayload(unittest.TestCase):
             ), patch.dict(
                 "sys.modules",
                 {
+                    "runtime.drivers.antigravity.export": mock_agy_export_mod,
                     "runtime.drivers.antigravity.persona_export": mock_pe,
                 },
             ):
@@ -297,10 +329,14 @@ class TestExportPayload(unittest.TestCase):
 
             self.assertEqual(result.fidelity, "high")
             self.assertEqual(result.dest, dest)
-            # The exported file must land under .agent/personas/
-            self.assertEqual(len(result.files), 1)
-            self.assertIn(".agent", str(result.files[0]))
-            self.assertIn("personas", str(result.files[0]))
+            # The exported persona file must land under .agent/personas/
+            persona_files = [
+                f for f in result.files
+                if ".agent" in str(f) and "personas" in str(f)
+            ]
+            self.assertEqual(len(persona_files), 1, f"Expected 1 persona file, got: {result.files}")
+            self.assertIn(".agent", str(persona_files[0]))
+            self.assertIn("personas", str(persona_files[0]))
 
 
 # ---------------------------------------------------------------------------
