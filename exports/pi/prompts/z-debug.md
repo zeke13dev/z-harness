@@ -12,13 +12,13 @@ Symptom (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the question
      "What's the symptom?" via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
 ## Setup
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the slug
      confirmation question via their native channel if non-obvious. Silent
      omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
@@ -113,7 +113,7 @@ The old `>5 files touched` trigger is **dropped** — `/z-debug` is the heavy pa
 
 ## Phase 0 — Wrong-tool gate (non-skippable)
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the wrong-tool
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the wrong-tool
      gate question via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
@@ -126,7 +126,7 @@ This gate is mandatory. If the user picks "yes," exit cleanly even if `$ARGUMENT
 
 ## Phase 1 — Problem statement
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the problem
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the problem
      clarification questions via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
@@ -214,7 +214,7 @@ Append `## Evidence Inventory` to `DEBUG.md`:
 
 **Each evidence entry gets a stable `EVID-NNN` ID at capture time** (zero-padded, 3 digits). These IDs are referenced by Phase 7's Evidence coverage table — never renumber, never reuse.
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the cannot-
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the cannot-
      reproduce gate (gather more evidence / proceed on inference / abandon) via
      their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
@@ -632,7 +632,7 @@ For the current cycle (start at cycle 1):
 - **Fix-gate check:** if any active hypothesis has `posterior == very_high` AND there is a written causal mechanism (Phase 7's Root Cause draft) explaining every `EVID-NNN` in the Evidence Inventory → fix-gate open, proceed to Phase 7.
 - **Otherwise:** increment cycle counter, return to Phase 6 step 1 with the remaining `active` rows in updated test order.
 - **Soft warning at cycle 3** — push-notify: "z-debug cycle 3 reached without convergence. Two cycles remaining before hard halt."
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the hard cycle
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the hard cycle
      cap gate (continue / bail to /z-plan / abandon) via their native channel.
      Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
@@ -726,7 +726,7 @@ If either fails: halt. Either upgrade the root cause statement (so it actually e
          prompt="MODE: light-fix\n\n<same sections>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]")
    ```
 3. **Synthesize + push back.** One reason it might be wrong per recommendation. Flag shortcuts.
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the fix approval
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the fix approval
      question via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 5. **Write `## Fix Plan`** section to DEBUG.md (schema mirrors `/z-plan-light` Phase 6 FIX.md):
@@ -828,7 +828,7 @@ Pick at least one. Be honest:
 - **Similar bugs likely elsewhere?** <list any places worth auditing; or "none — this is localized">
 ```
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the MR-review
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the MR-review
      gate question and the action-item conversion question via their native
      channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
@@ -884,7 +884,7 @@ If user accepts:
 
 3. Append the collected finding lines (or the "no findings" note) to the Post-mortem section's "Action items (preventative)" list.
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the post-mortem
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the post-mortem
      action-item disposition question via their native channel. Silent omission
      is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.

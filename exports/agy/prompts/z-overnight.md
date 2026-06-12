@@ -45,11 +45,26 @@ Parse `$ARGUMENTS` to determine the invocation form:
    PRESET_NAME = second token (the part after "preset:")
    TASK_DESCRIPTION = remainder of $ARGUMENTS after the preset token
    ```
-   Expand preset to chain string:
+   Expand the preset to its ordered chain via the shared chain-runner (single
+   source of truth for preset → step ordering — SPEC Invariant 3 parity):
+   ```bash
+   # chain-runner.sh steps <preset> emits "<name>:<yield_after>" per line.
+   # Overnight ignores the yield_after flag (that is an attend-only concept);
+   # it takes only the step names, in order.
+   PRESET_STEPS_RAW="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/chain-runner.sh" steps "$PRESET_NAME")"
+   PRESET_EXIT=$?
+   if [[ "$PRESET_EXIT" -ne 0 ]]; then
+     # Unknown preset (chain-runner exits 2) → emit error, exit cleanly without
+     # acquiring any lock.
+     :  # emit usage error and exit
+   fi
+   CHAIN_CSV="$(printf '%s\n' "$PRESET_STEPS_RAW" | sed 's/:.*$//' | paste -sd, -)"
+   ```
+   The known presets resolve to:
    - `full-build` → `plan,test,implement-all,review-all`
    - `research-build` → `research,plan,test,implement-all,review-all`
    - `quick-build` → `plan,implement-all`
-   - Unknown preset → emit error, exit cleanly without acquiring any lock.
+   - Unknown preset → `chain-runner.sh steps` exits 2 → emit error, exit cleanly without acquiring any lock.
 
 4. **Chain form:** first token is the chain string (comma/arrow-separated steps); everything after the first whitespace-delimited group is `TASK_DESCRIPTION`.
 
@@ -103,7 +118,7 @@ Parse `$ARGUMENTS` to determine the invocation form:
        ```
        Hard-halt with message: "Delete `$BASE/.overnight.lock` manually after verifying no /z-overnight is in progress, then re-run." Exit nonzero.
      - Extract `last_heartbeat` from JSON. If `(NOW_TS - last_heartbeat) < STALE_S` → lock is live. Surface contention to user:
-       <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the lock-contention question. -->
+       <!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the lock-contention question. -->
        Use `AskUserQuestion` to ask: "Another /z-overnight run appears to be in progress for `$Z_HARNESS_SLUG` (lock heartbeat age: `<age>` seconds, stale threshold: `$STALE_S`s). What would you like to do?" with options: `wait and retry` / `force-takeover` / `abort`. If user chooses `abort` → exit cleanly. If `force-takeover` → proceed to write lock below. If `wait and retry` → advise user to re-run /z-overnight after the active run ends; exit cleanly.
      - If lock is stale (`age >= STALE_S`) → allow takeover; log a warning.
    - Write lock file atomically using `flock` to serialize the check-and-write sequence (prevents two orchestrators from simultaneously observing no/stale lock and both taking ownership):
@@ -154,12 +169,33 @@ print(json.dumps(merged))
    HEAD_SHA_AT_START="$(git rev-parse HEAD 2>/dev/null || echo "unknown")"
    ```
 
-9. **Initialize `overnight-state.json` (SPEC C5 / C9).** Write atomically to `$BASE/archive/$RUN_ID/overnight-state.json`:
+9. **Initialize `overnight-state.json` (SPEC C5 / C9).** Build and write the
+   initial run-state atomically via the shared chain-runner. The state-file path
+   is overnight's own `overnight-state.json` (Invariant 3 parity — overnight keeps
+   writing there), and `CHAIN_RUNNER_LOCK_FILE` is set to overnight's `$LOCK_FILE`
+   so the runner flock-guards the write on the SAME single lock overnight uses for
+   concurrency (the lock file is both the concurrency lock AND the state-write
+   flock target — single-lock semantics, SPEC C4):
    ```bash
    VERSION_BLOB="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/version.sh" 2>/dev/null || echo '{}')"
    Z_HARNESS_VERSION="$(printf '%s' "$VERSION_BLOB" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); print(d.get("commit","unknown"))' 2>/dev/null || echo "unknown")"
+
+   STATE_FILE="$BASE/archive/$RUN_ID/overnight-state.json"
+   STATE_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+   # chain-runner builds the documented state shape (status=running, all step_runs
+   # queued, position=index) and writes it flock-guarded via tmp+rename.
+   # <preset> of "null"/"" → preset_used: null.
+   CHAIN_RUNNER_LOCK_FILE="$LOCK_FILE" \
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/chain-runner.sh" state-init \
+       "$STATE_FILE" \
+       "$CHAIN_CSV" \
+       "${PRESET_NAME:-null}" \
+       "$STATE_STARTED_AT" \
+       "$HEAD_SHA_AT_START" \
+       "$Z_HARNESS_VERSION"
    ```
-   Build initial state:
+   The resulting `overnight-state.json` has exactly the documented shape (unchanged
+   from the prior inline build — pinned by `test_chain_runner_characterization.py`):
    ```json
    {
      "chain": ["<step1>", "<step2>", ...],
@@ -190,13 +226,6 @@ print(json.dumps(merged))
      ]
    }
    ```
-   Write via flock-guarded tmp+rename using `$LOCK_FILE` as the flock target:
-   ```bash
-   STATE_FILE="$BASE/archive/$RUN_ID/overnight-state.json"
-   STATE_TMP="${STATE_FILE}.tmp.$$"
-   # Write STATE_TMP with the JSON above, then:
-   (flock -x 200; mv "$STATE_TMP" "$STATE_FILE") 200>"$LOCK_FILE"
-   ```
 
 10. **Log `overnight_start`:**
     ```bash
@@ -225,7 +254,10 @@ print(json.dumps({
    ```
    If `$STATE_FILE` does not exist → emit error message and exit nonzero.
 
-2. **Parse state file.** If JSON parse fails → emit `state_corrupt` event:
+2. **Parse state file.** Read the JSON via `chain-runner.sh state-read "$STATE_FILE"`
+   (exit 3 if missing/unreadable — surface the same "state file does not exist"
+   error as step 1). If JSON parse of the returned content fails → emit
+   `state_corrupt` event:
    ```bash
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RESUME_RUN_ID" state_corrupt \
      "$(printf '{"path":"%s","error":"JSON parse failed"}' "$STATE_FILE")"
@@ -233,10 +265,17 @@ print(json.dumps({
    Exit nonzero with remediation: "Delete `$STATE_FILE` and restart with a new /z-overnight run."
 
 3. **Check if already complete (M4 edge case).** If top-level `status == "complete"`:
-   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface this question. -->
+   <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface this question. -->
    Use `AskUserQuestion` to inform the user: "This overnight run (`$RESUME_RUN_ID`) is already complete. No-op — nothing to resume." with option `ok`. Exit cleanly after user acknowledges.
 
-4. **Compute resume cursor.** `CURSOR = index of first step_run where status != "complete"`. Extract `CHAIN_STEPS` and `PRESET_NAME` from the state file.
+4. **Compute resume cursor.** Delegate to the shared chain-runner, which prints
+   the index of the first `step_run` whose status != `"complete"` (and
+   `len(step_runs)` when the chain is fully done — same semantics as before):
+   ```bash
+   CURSOR="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/chain-runner.sh" cursor "$STATE_FILE")"
+   ```
+   Extract `CHAIN_STEPS` and `PRESET_NAME` from the state file (read the JSON via
+   `chain-runner.sh state-read "$STATE_FILE"`).
 
 5. **HEAD SHA validation (SPEC C8).** Find the last completed step (highest index with `status == "complete"`). If one exists and has `head_sha_after`:
    ```bash
@@ -262,7 +301,19 @@ print(json.dumps({
 
 7. **Acquire lock** — same algorithm as Phase 1 step 5.
 
-8. **Update state: top-level `status = "running"`, refresh `started_at` if previously null.** Write atomically via flock.
+8. **Update state: top-level `status = "running"`, refresh `started_at` if previously null.**
+   Read the current state via `chain-runner.sh state-read "$STATE_FILE"`, mutate the
+   two top-level fields in-memory, then write the full updated JSON back atomically
+   via the runner — passing overnight's `$LOCK_FILE` as the flock target so the
+   write serializes on the single overnight lock:
+   ```bash
+   # Pipe the JSON via stdin (the `-` form) — overnight states can grow large
+   # enough to exceed the OS argv/env ceiling, so they must NOT go through argv.
+   printf '%s' "$UPDATED_STATE_JSON" \
+     | CHAIN_RUNNER_LOCK_FILE="$LOCK_FILE" \
+       bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/chain-runner.sh" state-write \
+         "$STATE_FILE" -
+   ```
 
 ## Phase 3 — Per-step loop
 
@@ -274,7 +325,9 @@ STEP_NAME = CHAIN_STEPS[CURSOR]
 
 ### Step 3.1 — Skip if already complete
 
-Read `overnight-state.json`; if `step_runs[CURSOR].status == "complete"` → skip to next CURSOR. (This is the resume idempotency path.)
+Read `overnight-state.json` via `chain-runner.sh state-read "$STATE_FILE"`; if
+`step_runs[CURSOR].status == "complete"` → skip to next CURSOR. (This is the resume
+idempotency path.)
 
 ### Step 3.2 — Update step status to `running`
 
@@ -283,7 +336,17 @@ HEAD_SHA_BEFORE="$(git rev-parse HEAD 2>/dev/null || echo "unknown")"
 STEP_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 STEP_STARTED_MS="$(date -u +%s%3N 2>/dev/null || python3 -c 'import time; print(int(time.time()*1000))')"
 ```
-Write state: `step_runs[CURSOR].status = "running"`, `.head_sha_before = HEAD_SHA_BEFORE`, `.started_at = STEP_STARTED_AT`. Flock-guarded tmp+rename.
+Write state: read the current JSON via `chain-runner.sh state-read "$STATE_FILE"`,
+set `step_runs[CURSOR].status = "running"`, `.head_sha_before = HEAD_SHA_BEFORE`,
+`.started_at = STEP_STARTED_AT`, then write the full updated JSON back via the
+runner (flock-guarded tmp+rename on overnight's `$LOCK_FILE`):
+```bash
+# Pipe via stdin (`-` form) so large states never traverse the argv/env ceiling.
+printf '%s' "$UPDATED_STATE_JSON" \
+  | CHAIN_RUNNER_LOCK_FILE="$LOCK_FILE" \
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/chain-runner.sh" state-write \
+      "$STATE_FILE" -
+```
 
 ### Step 3.3 — Log `overnight_step_start`
 
@@ -313,12 +376,16 @@ os.rename(tmp, sys.argv[1])
 
 ### Step 3.5 — Snapshot existing archive dirs (SPEC C14)
 
+Snapshot the existing archive dir basenames into a temp "before-set" file. The
+runner's `new-run-id` subcommand re-snapshots the "after" set itself and applies
+the `*-overnight-*` exclusion to BOTH sides (C14), so here we only capture the
+raw before-set the runner will diff against:
 ```bash
 ARCHIVE_DIR="$BASE/archive"
-# Snapshot before Skill call — list only directories, exclude dirs whose basename matches *-overnight-*
-ARCHIVE_DIRS_BEFORE="$(find "$ARCHIVE_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
-  | while IFS= read -r d; do b="$(basename "$d")"; case "$b" in *-overnight-*) ;; *) printf '%s\n' "$b" ;; esac; done \
-  | sort || true)"
+BEFORE_SET_FILE="$BASE/archive/$RUN_ID/.before-set.$CURSOR"
+find "$ARCHIVE_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
+  | while IFS= read -r d; do printf '%s\n' "$(basename "$d")"; done \
+  | sort > "$BEFORE_SET_FILE" || true
 ```
 
 ### Step 3.6 — Invoke sub-skill via Skill tool (NO_ASK carve-out, SPEC C4)
@@ -361,15 +428,16 @@ If the Skill call above raised:
 
 ### Step 3.8 — Identify the sub-RUN archive dir (SPEC C14)
 
-After a successful Skill call returns:
-
+After a successful Skill call returns, delegate the C14 set-difference to the
+shared chain-runner. It re-snapshots the archive dir NOW (the "after" set),
+excludes `*-overnight-*` basenames from BOTH the before-set and the after-set, and
+prints the sorted NEW basenames (one per line; 0 lines = no-new, >1 = ambiguous —
+the same signal the inline `comm -13` produced). The first positional is the
+signature-compatible (unused) run arg:
 ```bash
-ARCHIVE_DIRS_AFTER="$(find "$ARCHIVE_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
-  | while IFS= read -r d; do b="$(basename "$d")"; case "$b" in *-overnight-*) ;; *) printf '%s\n' "$b" ;; esac; done \
-  | sort || true)"
-# Compute set difference
-NEW_DIRS="$(comm -13 <(printf '%s\n' "$ARCHIVE_DIRS_BEFORE" | sort) \
-                      <(printf '%s\n' "$ARCHIVE_DIRS_AFTER" | sort))"
+NEW_DIRS="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/chain-runner.sh" new-run-id \
+  "$RUN_ID" "$BEFORE_SET_FILE" "$ARCHIVE_DIR")"
+rm -f "$BEFORE_SET_FILE"
 NEW_COUNT="$(printf '%s\n' "$NEW_DIRS" | grep -c '[^[:space:]]' || echo 0)"
 ```
 
@@ -435,42 +503,49 @@ Derive `ARTIFACT_PATHS` based on step name:
 - `review-all` → list any `review-cycle*.md` files created in `$BASE/archive/tasks/*/`
 - Other → `[]`
 
-Update `step_runs[CURSOR]` in `overnight-state.json`. Also update top-level `git_diff_stat_at_end` at EVERY terminal transition (complete, halt, error). Write flock-guarded tmp+rename:
+Update `step_runs[CURSOR]` in `overnight-state.json`. Also update top-level
+`git_diff_stat_at_end` at EVERY terminal transition (complete, halt, error). The
+in-memory mutation is unchanged; only the read+atomic-write is delegated to the
+shared chain-runner (so the flock+tmp+rename mechanics live in one place). The
+runner flock-guards on overnight's `$LOCK_FILE` via `CHAIN_RUNNER_LOCK_FILE`,
+preserving single-lock semantics:
 
 ```python
-# python3 snippet (inline or subprocess):
-import json, os, fcntl
+# Build the updated state JSON in-memory (read via chain-runner state-read).
+import json, os, subprocess
 
 state_file = os.environ['STATE_FILE']
-lock_file = os.environ['LOCK_FILE']
+plugin_root = os.environ.get('ANTIGRAVITY_PLUGIN_ROOT') or os.environ['CLAUDE_PLUGIN_ROOT']
+runner = plugin_root + '/scripts/chain-runner.sh'
 
-with open(lock_file, 'r+') as lf:
-    fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
-    with open(state_file) as sf:
-        state = json.load(sf)
+state = json.loads(subprocess.run(
+    ['bash', runner, 'state-read', state_file],
+    capture_output=True, text=True, check=True).stdout)
 
-    cursor = int(os.environ['CURSOR'])
-    step_run = state['step_runs'][cursor]
-    step_run['status'] = os.environ['STEP_STATUS']
-    step_run['head_sha_after'] = os.environ['HEAD_SHA_AFTER']
-    step_run['ended_at'] = os.environ['STEP_ENDED_AT']
-    step_run['wall_ms'] = int(os.environ['WALL_MS'])
-    step_run['terminal_event_kind'] = os.environ.get('TERMINAL_EVENT_KIND', 'unknown')
-    step_run['run_id'] = os.environ.get('SUB_RUN_ID', '')
-    if os.environ.get('LAST_EVENT_JSON', 'null') != 'null':
-        step_run['exit_event'] = json.loads(os.environ['LAST_EVENT_JSON'])
-    if os.environ.get('ERROR_EVENT'):
-        step_run['error_event'] = json.loads(os.environ['ERROR_EVENT'])
-    artifact_paths_str = os.environ.get('ARTIFACT_PATHS_JSON', '[]')
-    step_run['artifact_paths'] = json.loads(artifact_paths_str)
+cursor = int(os.environ['CURSOR'])
+step_run = state['step_runs'][cursor]
+step_run['status'] = os.environ['STEP_STATUS']
+step_run['head_sha_after'] = os.environ['HEAD_SHA_AFTER']
+step_run['ended_at'] = os.environ['STEP_ENDED_AT']
+step_run['wall_ms'] = int(os.environ['WALL_MS'])
+step_run['terminal_event_kind'] = os.environ.get('TERMINAL_EVENT_KIND', 'unknown')
+step_run['run_id'] = os.environ.get('SUB_RUN_ID', '')
+if os.environ.get('LAST_EVENT_JSON', 'null') != 'null':
+    step_run['exit_event'] = json.loads(os.environ['LAST_EVENT_JSON'])
+if os.environ.get('ERROR_EVENT'):
+    step_run['error_event'] = json.loads(os.environ['ERROR_EVENT'])
+artifact_paths_str = os.environ.get('ARTIFACT_PATHS_JSON', '[]')
+step_run['artifact_paths'] = json.loads(artifact_paths_str)
 
-    state['git_diff_stat_at_end'] = os.environ.get('GIT_DIFF_STAT', '')
+state['git_diff_stat_at_end'] = os.environ.get('GIT_DIFF_STAT', '')
 
-    tmp = state_file + '.tmp.' + str(os.getpid())
-    with open(tmp, 'w') as tf:
-        json.dump(state, tf, indent=2)
-    os.rename(tmp, state_file)
-    fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+# Atomic, flock-guarded write on overnight's single lock ($LOCK_FILE).
+# Feed the JSON via stdin (the `-` form) instead of argv: this step's state can
+# be the largest of the run (full exit_event / error_event / artifact_paths),
+# easily exceeding the OS argv/env ceiling. stdin has no such ceiling.
+env = {**os.environ, 'CHAIN_RUNNER_LOCK_FILE': os.environ['LOCK_FILE']}
+subprocess.run(['bash', runner, 'state-write', state_file, '-'],
+               input=json.dumps(state), text=True, env=env, check=True)
 ```
 
 ### Step 3.11 — Log the step terminal event
@@ -513,7 +588,10 @@ Executed unconditionally after the loop exits (whether complete, halt, or error)
 
 ### Step 4.1 — Determine overall run status
 
+Read the current state via `chain-runner.sh state-read "$STATE_FILE"`, then scan
+`step_runs` for the first non-complete step:
 ```bash
+# state = JSON from: chain-runner.sh state-read "$STATE_FILE"
 # If all steps are "complete" → OVERALL_STATUS = "complete"
 # Otherwise find the step that stopped the chain
 OVERALL_STATUS="complete"
@@ -532,9 +610,22 @@ done
 Write the final top-level status **before** generating MORNING_REPORT.md so that the report reads current (not in-progress) values for `status` and `ended_at`.
 
 ```python
-# flock-guarded: update state.status, state.ended_at, state.git_diff_stat_at_end
+# Update state.status, state.ended_at, state.git_diff_stat_at_end, then write the
+# full JSON back via the shared chain-runner (flock-guarded tmp+rename on
+# overnight's single $LOCK_FILE via CHAIN_RUNNER_LOCK_FILE).
+import json, os, subprocess
+from datetime import datetime
+
+state_file = os.environ['STATE_FILE']
+plugin_root = os.environ.get('ANTIGRAVITY_PLUGIN_ROOT') or os.environ['CLAUDE_PLUGIN_ROOT']
+runner = plugin_root + '/scripts/chain-runner.sh'
+
+state = json.loads(subprocess.run(
+    ['bash', runner, 'state-read', state_file],
+    capture_output=True, text=True, check=True).stdout)
+
 ended_at = datetime.utcnow().isoformat() + 'Z'
-state['status'] = OVERALL_STATUS
+state['status'] = OVERALL_STATUS  # computed in Step 4.1
 state['ended_at'] = ended_at
 if not state.get('git_diff_stat_at_end'):
     result = subprocess.run(
@@ -543,8 +634,13 @@ if not state.get('git_diff_stat_at_end'):
     )
     lines = result.stdout.strip().splitlines()
     state['git_diff_stat_at_end'] = lines[-1] if lines else ''
+
+# Feed the JSON via stdin (`-` form) — the final state carries every step_run's
+# accumulated metadata and must not be capped by the OS argv/env ceiling.
+env = {**os.environ, 'CHAIN_RUNNER_LOCK_FILE': os.environ['LOCK_FILE']}
+subprocess.run(['bash', runner, 'state-write', state_file, '-'],
+               input=json.dumps(state), text=True, env=env, check=True)
 ```
-Write flock-guarded tmp+rename.
 
 ### Step 4.3 — Write MORNING_REPORT.md
 
@@ -572,7 +668,7 @@ fi
 ### Step 4.4 — Log `overnight_end`
 
 ```bash
-COMPLETED_STEPS="$(python3 -c "import json; s=json.load(open('$STATE_FILE')); print(sum(1 for r in s['step_runs'] if r['status']=='complete'))")"
+COMPLETED_STEPS="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/chain-runner.sh" state-read "$STATE_FILE" | python3 -c "import json,sys; s=json.load(sys.stdin); print(sum(1 for r in s['step_runs'] if r['status']=='complete'))")"
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN_ID" overnight_end \
   "$(printf '{"status":"%s","total_steps":%d,"completed_steps":%d}' \
      "$OVERALL_STATUS" "${#CHAIN_STEPS[@]}" "$COMPLETED_STEPS")"

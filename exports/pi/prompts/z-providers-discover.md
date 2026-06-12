@@ -33,7 +33,7 @@ Tell the user which target will be written.
 
 ### Step 3 — Bind roles interactively
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the per-CLI role-binding multi-select question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the per-CLI role-binding multi-select question via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
 - `consultant_primary`
@@ -52,7 +52,7 @@ After collecting all role bindings, check: if `roles.consultant_primary` and `ro
 
 When a collision is detected:
 1. Tell the user: "consultant_primary and consultant_secondary must be different providers. Currently both are bound to `<name>`."
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the consultant_secondary collision-resolution question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the consultant_secondary collision-resolution question via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 3. Repeat the collision check until the constraint is satisfied or the user picks `(none)` for one of the roles.
 

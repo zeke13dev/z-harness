@@ -12,7 +12,7 @@ Target (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question "Which skill misled, and how?" via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the question "Which skill misled, and how?" via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
 Bias toward over-triggering: a skill that misled once will mislead again. The cost of a small edit is negligible compared to the cost of repeating the failure across future conversations.
@@ -44,7 +44,7 @@ If the failure originates from a z-harness command/agent and you're NOT inside t
 ## Setup
 
 1. Resolve the target file from `$ARGUMENTS` (skill name, path, or freeform description).
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the file-disambiguation question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the file-disambiguation question via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 3. Pick run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-skill-fix`.
 
@@ -124,7 +124,7 @@ Spawn the reviewer:
 ```
 
 Parse the return:
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the second-failure decision (proceed anyway / patch manually / abandon) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the second-failure decision (proceed anyway / patch manually / abandon) via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 - **No blockers/majors** → accept.
 

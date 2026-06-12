@@ -52,12 +52,12 @@ Or select the mode from the Antigravity IDE mode picker in the chat panel.
 
 ## Re-generating
 
-Run the export script from the repo root:
+Run the exporter from the repo root:
 
 ```bash
-python3 scripts/export-agy.py
+python3 -m z_harness_cli export --host antigravity
 # or with a custom output directory:
-python3 scripts/export-agy.py --out /path/to/output
+python3 -m z_harness_cli export --host antigravity --out /path/to/output
 ```
 
 ## Known limitations

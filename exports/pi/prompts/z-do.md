@@ -12,7 +12,7 @@ Task (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the question
      "What's the task?" via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
@@ -200,7 +200,7 @@ Parse the return (capped at 8 KB, blockers + majors only).
 
 **On blockers/majors:**
 - First failure: re-edit inline. Re-run diff; if byte-identical → halt `no_change_on_retry`. Else re-spawn reviewer once.
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the reviewer
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the reviewer
      second-failure gate via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 

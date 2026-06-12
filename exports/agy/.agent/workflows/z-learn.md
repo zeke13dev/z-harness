@@ -34,7 +34,7 @@ Default starting lens: **orientation** unless args or fuzzy NL say otherwise.
 2. Pick run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-learn`.
 3. **Resume check.** If `$Z_HARNESS_LEARN_STAGING` exists, read it. Summarize where the prior session left off (target, current lens, last focus). **Continue the tutor loop from the last turn — do not restart from scratch.** If the new invocation's target **differs** from the staging header `target:`:
 
-<!-- RUNTIME-GATE: ask_user -->
+<!-- RUNTIME-GATE: ask_user ; category=decision; -->
    warn and ask whether to continue the old session or start fresh.
 4. If no staging file, create one using the **shared staging schema**:
    ```markdown
@@ -86,7 +86,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 ## Phase 1 — Cold open (empty-args only)
 
-<!-- RUNTIME-GATE: ask_user -->
+<!-- RUNTIME-GATE: ask_user ; category=mechanical_proceed; -->
 If arguments are empty and staging has no target, ask: "What code should we learn — file, module, pipeline, or topic?" One question only. Proceed to Phase 2 when target is known.
 
 If arguments provide a target, skip cold open.
@@ -132,7 +132,7 @@ Increment `T`.
 
 After every teaching chunk, present navigation via `AskUserQuestion` (compact menu):
 
-<!-- RUNTIME-GATE: ask_user -->
+<!-- RUNTIME-GATE: ask_user ; category=mechanical_proceed; -->
 - **deeper** — same focus, more line-level detail (switch to or stay in `deep`)
 - **next** (Recommended when walkthrough lens) — next slice of the flow
 - **pivot: \<topic\>** — free-text: jump to a named component/symbol/concept
@@ -159,7 +159,7 @@ Only when user chose **finalize**.
 
 2. **Collision check (unconditional, same rules as `/z-grill`).** Run `bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" all_plan_slugs`. If the provisional slug matches an existing slug dir:
    - **Precontext-only slug dir** (only `MAP.md`, `BRAINSTORM.md`, `RESEARCH.md`, `GRILL.md`, and/or `LEARN.md` present, no `PLAN.md`/`SPEC.md`/`TASKS.md`): treat as continuation — reuse the slug (a fresh `LEARN.md` write overwrites a prior one; note this in your summary).
-   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug-collision
+   <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the slug-collision
         confirmation question (overwrite / pick a variant) via their native channel.
         Silent omission is forbidden. -->
    - **Finished-plan slug dir** (`PLAN.md` or `TASKS.md` exists): **collision.** Prompt via `AskUserQuestion` to overwrite (write LEARN.md into the existing dir) or pick a variant slug.

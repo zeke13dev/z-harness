@@ -68,7 +68,7 @@ Derive a slug from the repository name or the first 2–4 words of the user's de
 
 **First, run the slug collision check unconditionally** — check for an existing slug dir in the canonical plans directory (`z-harness/plans/`). This collision check is a hard prerequisite that is never bypassed by the resolver below.
 - If a MANIFEST.md is found there, this is a **resume** — skip decomposition phases and jump to the next non-terminal MANIFEST state.
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug collision confirmation question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the slug collision confirmation question via their native channel. Silent omission is forbidden. -->
 - If only a slug collision without MANIFEST, prompt the user to confirm or choose a different slug via `AskUserQuestion`.
 
 After the collision check passes (no collision found, or the user confirmed a new slug), apply the soft non-obvious-slug confirmation gate. If the auto-derived slug is non-obvious, consult the resolver:
@@ -92,7 +92,7 @@ fi
 
 Branch on `$RESULT`:
 - `skip`: accept the derived slug silently — no AskUserQuestion. Emit `askuser_skipped` event with `{question_id: "workflow.slug_confirm", source: "$SOURCE"}`.
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug confirmation question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the slug confirmation question via their native channel. Silent omission is forbidden. -->
 - `prefill`: present the AskUserQuestion normally, pre-select the derived slug as the recommended option (label suffix: ` (Recommended — your preference)`). Wrap with `user_wait_start` / `user_wait_end` logging:
 
   ```bash
@@ -167,7 +167,7 @@ Compute `stale_pct = stale_concepts / total_concepts`. Threshold: `$Z_HARNESS_DO
 
 If `stale_pct >= threshold`:
 - Write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md` (artifact for audit trail). Set `ARTIFACT_PATH="$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md"`.
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the doc-staleness route question (switch to /z-maintain-docs / continue with stale docs / abandon) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the doc-staleness route question (switch to /z-maintain-docs / continue with stale docs / abandon) via their native channel. Silent omission is forbidden. -->
 - Log `user_wait_start`, push-notify, and present `AskUserQuestion`: switch to `/z-maintain-docs` / continue here with stale docs / abandon.
 
   ```bash
@@ -484,7 +484,7 @@ if [ "$NO_STYLE" != "true" ]; then
 fi
 ```
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the missing STYLE.md gate question (run /z-style-init / continue without STYLE / abort) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the missing STYLE.md gate question (run /z-style-init / continue without STYLE / abort) via their native channel. Silent omission is forbidden. -->
 If STYLE.md is missing and `NO_STYLE` is not set, log `user_wait_start`, push-notify, and present `AskUserQuestion`:
 
 ```bash
@@ -566,7 +566,7 @@ Record `T0=$(date +%s%3N)` and `USER_WAIT_MS_THIS_PHASE=0` at phase start.
 
 If any concern surfaces:
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the premise concern question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the premise concern question via their native channel. Silent omission is forbidden. -->
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start \
   '{"phase":0,"reason":"premise_concern"}'
@@ -898,7 +898,7 @@ PYEOF
 )"
 ```
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface each slug collision disambiguation question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface each slug collision disambiguation question via their native channel. Silent omission is forbidden. -->
 For each `COLLISION:` block printed above, log `user_wait_start`, call `AskUserQuestion` with the offered options, log `user_wait_end`, then apply the choice:
 
 ```bash
@@ -1042,7 +1042,7 @@ PYEOF
 
 Push-notify the user that decomposition is ready.
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the decomposition confirm question (proceed / abort) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the decomposition confirm question (proceed / abort) via their native channel. Silent omission is forbidden. -->
 Log `user_wait_start`, present `AskUserQuestion`, then log `user_wait_end`:
 
 ```bash
@@ -1155,7 +1155,7 @@ Branch on `$GATE_DISPOSITION`:
 - **`unhandled_gate`**: treat as `halt` (log + exit).
 - **`ask`**: present AskUser gate below.
 
-<!-- RUNTIME-GATE: ask_user; workflow.pre_run_cost_gate; non-supporting drivers must surface the cost gate (proceed / abandon) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=risk; workflow.pre_run_cost_gate; non-supporting drivers must surface the cost gate (proceed / abandon) via their native channel. Silent omission is forbidden. -->
 When `GATE_DISPOSITION == "ask"`, bracket the wait with `user_wait_start` / `user_wait_end` and present `AskUserQuestion`:
 
 ```bash
@@ -1976,7 +1976,7 @@ Key dispatch rules:
 - `rubric_path` is the **absolute path** to STYLE.md (or empty string). Never inline STYLE.md content.
 - `rubric_path` is non-empty **only** when `dim ∈ {cleanliness, design}` AND `STYLE_MD_PATH` is non-empty.
 - All auditors for this component are dispatched simultaneously in one message — never serialized.
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the auditor-failed recovery question (retry / skip dimension / skip component / abort Phase 3) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the auditor-failed recovery question (retry / skip dimension / skip component / abort Phase 3) via their native channel. Silent omission is forbidden. -->
 - If any auditor returns `unable_to_complete`:
 
   ```bash
@@ -2338,7 +2338,7 @@ Flag: tasks that would regress invariants, tasks with vague acceptance, severity
 
 Parse the return:
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the reviewer second-failure decision (continue / skip component / abort Phase 3) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the reviewer second-failure decision (continue / skip component / abort Phase 3) via their native channel. Silent omission is forbidden. -->
 - **Blockers** → re-edit the affected TASKS.md entries in-place; re-run the reviewer once. If the second review still has Blockers:
 
   ```bash
@@ -2667,7 +2667,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 If `RESUME_PENDING_COUNT > 0`:
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the interrupted-resume question (resume / mark as done / skip / abort) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the interrupted-resume question (resume / mark as done / skip / abort) via their native channel. Silent omission is forbidden. -->
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start \
   "$(printf '{"phase":5,"reason":"interrupted_resume","component":"%s"}' "$COMP_SLUG")"
@@ -2739,7 +2739,7 @@ PYEOF
 )"
 ```
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the per-component implement gate question (proceed / skip / abort) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the per-component implement gate question (proceed / skip / abort) via their native channel. Silent omission is forbidden. -->
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start \
   "$(printf '{"phase":5,"reason":"implement_gate","component":"%s"}' "$COMP_SLUG")"

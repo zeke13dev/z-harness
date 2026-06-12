@@ -12,7 +12,7 @@ Topic + flags (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question "What topic should I split?" via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the question "What topic should I split?" via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
 `/z-plan-split` is a **pre-emptive scope splitter** for topics that would otherwise produce a sprawling ≥40-task `/z-plan` run. Instead of one mega-plan, it dispatches N parallel `cluster-planner` subagents (each producing a focused 5-15-task plan), then writes `SHARED-CONCERNS.md` (file-overlap observation, ack-gated) and `MANIFEST.md` (cluster listing + run order). It does NOT produce production code. One-level recursion only — nested MANIFESTs are explicitly out of scope.
@@ -22,7 +22,7 @@ $ARGUMENTS
 1. **Derive root slug.**
    - If `$ARGUMENTS` contains `--slug=<value>`, use that verbatim.
    - Else if `$ARGUMENTS` contains `--clusters="a,b,c"`, the slug is auto-derived from the topic (kebab-case, 2-4 words). The `--clusters` flag overrides Phase 1's automatic proposal.
-   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug-confirmation question (when non-obvious) via their native channel. Silent omission is forbidden. -->
+   <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the slug-confirmation question (when non-obvious) via their native channel. Silent omission is forbidden. -->
    > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 2. **Validate the slug (mandatory — security gate).** The slug is interpolated into filesystem paths and must be a single safe segment. Reject (refuse with a clear error and exit cleanly) if the slug:
    - is empty or whitespace-only;
@@ -36,7 +36,7 @@ $ARGUMENTS
 4. Pick a run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-<slug>`.
 5. `mkdir -p $Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts`.
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
-   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the existing-slug decision (overwrite / abort) via their native channel. Silent omission is forbidden. -->
+   <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the existing-slug decision (overwrite / abort) via their native channel. Silent omission is forbidden. -->
    - **overwrite** — move the **entire prior tree** (every file and subdirectory under `$Z_HARNESS_PLAN_DIR/` *except* the just-created `archive/<RUN>/` directory itself) into `$Z_HARNESS_PLAN_DIR/archive/<RUN>/prior-tree/`. This includes the old `MANIFEST.md`, `SHARED-CONCERNS.md`, all prior `<cluster-slug>/` subdirectories, and any other stale artifacts — so no stale cluster trees survive into the new run. Implementation sketch: `mkdir -p $Z_HARNESS_PLAN_DIR/archive/<RUN>/prior-tree && find $Z_HARNESS_PLAN_DIR/ -mindepth 1 -maxdepth 1 ! -name archive -exec mv {} $Z_HARNESS_PLAN_DIR/archive/<RUN>/prior-tree/ \;` (move any existing `archive/previous-*` subdirs separately if needed). Then start fresh.
    - **abort** — exit cleanly with no changes. Per the Early-exit telemetry contract, emit `plan_split_run_end` with `status: "aborted_existing_tree"` before returning (no `phase_end` — no phase is active yet at Setup time).
    No "append" option (D10 — append flow was under-specified; drop it).
@@ -217,7 +217,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 ### 1d. User confirmation
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the cluster-confirmation question (approve / edit / abandon) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the cluster-confirmation question (approve / edit / abandon) via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
 - **Approve as proposed** — proceed to Phase 2 with the listed clusters.
@@ -277,7 +277,7 @@ Branch on `$GATE_DISPOSITION`:
 - **`unhandled_gate`**: treat as `halt` (log + exit).
 - **`ask`**: present AskUser gate below.
 
-<!-- RUNTIME-GATE: ask_user; workflow.pre_run_cost_gate; non-supporting drivers must surface the cost gate (proceed / abandon) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=risk; workflow.pre_run_cost_gate; non-supporting drivers must surface the cost gate (proceed / abandon) via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
 ```bash
@@ -376,7 +376,7 @@ For each cluster-planner return, branch on `STATUS:`:
 
 - **`STATUS: ok`** → mark cluster `ready` in the in-memory MANIFEST state with `attempts: 1`. Record `final_status_at: <UTC ISO>`. Stash the returned `FILES_TOUCHED` JSON array for Phase 4 reconciliation.
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface cluster decision-needed questions (options + abandon) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface cluster decision-needed questions (options + abandon) via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
   - **One option per entry in `OPTIONS`**, using each entry's `label` and `description` verbatim. List `RECOMMENDED_OPTION` first (if not `none`).
   - Plus a meta-option **Abandon this cluster** — marks it `failed` with `failure_reason: user_abandoned_decision`.

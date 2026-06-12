@@ -110,7 +110,7 @@ fi
 Same logic as `/z-implement-all` / `/z-implement-next`:
 
 1. Enumerate subdirs of `z-harness/` containing a `TASKS.md`. Also check legacy flat `z-harness/TASKS.md`.
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug-selection question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the slug-selection question via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 3. Export `Z_HARNESS_SLUG=<slug>` and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")` (or leave unset for legacy flat).
 4. `BASE = $Z_HARNESS_PLAN_DIR` (or `z-harness` for legacy).
@@ -160,7 +160,7 @@ fi
 Read `$BASE/TASKS.md`. Count `[ ]`, `[~]`, `[x]`, and skip-flagged tasks.
 
 - If any `[~]` (in-progress) exist → abort with "Stop — task X is still in progress."
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the incomplete-plan warning (review anyway / cancel) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the incomplete-plan warning (review anyway / cancel) via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
   - **Review anyway** (incomplete plan)
   - **Cancel** (finish implementation first)
@@ -174,7 +174,7 @@ The cumulative diff is `git diff <base-ref>..HEAD` across all the changes this p
 2. Otherwise:
    - Find the first `task_start` event in `$BASE/metrics.jsonl` (or `events.jsonl` for the slug-namespaced events). That's the plan's start timestamp `T_start`.
    - `BASE_REF=$(git rev-list -n1 --before="$T_start" HEAD)`
-   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the base-ref question via their native channel. Silent omission is forbidden. -->
+   <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the base-ref question via their native channel. Silent omission is forbidden. -->
    > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
 Confirm the chosen base ref with the user before diffing, showing the short commit message: `git show --no-patch --format='%h %s' $BASE_REF`.
@@ -403,7 +403,7 @@ with open(path, 'w') as f:
   > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
   > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the compaction-breakpoint decision (pause for /clear / proceed now) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the compaction-breakpoint decision (pause for /clear / proceed now) via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
 > **Compaction breakpoint — pre-consultant spawn**
@@ -1411,7 +1411,7 @@ Early halt / abort paths often have **no** primary artifact (`FIX.md`, `REPORT.m
           '{"subagent_model":$model,"subagent_input_tokens":$in_tok,"subagent_output_tokens":$out_tok,"candidates_emitted":$n}')"
      ```
    - **Push-notify** (`memory_candidates_ready`): "`<N>` memory candidate(s) ready for review."
-   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface per-candidate memory review questions (accept / edit / skip / skip-all) via their native channel. Silent omission is forbidden. -->
+   <!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface per-candidate memory review questions (accept / edit / skip / skip-all) via their native channel. Silent omission is forbidden. -->
    - **Sequential AskUserQuestion per candidate** (iterate the candidates array, one prompt per candidate; stop early if user picks Skip-all-remaining):
      - Show: `candidate_kind`, `type`, `text`, `tags`, `suggested_concept_slug`, `rationale`.
      - Options:

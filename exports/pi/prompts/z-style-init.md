@@ -150,7 +150,7 @@ If the agent returns fewer than 5 paths (e.g. `CANDIDATES` had fewer than 5 entr
 
 ### Step 1c — User confirmation of Capture set
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the Capture file confirmation question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the Capture file confirmation question via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
 ```
@@ -190,7 +190,7 @@ Read the contents of the `FINAL_5` files into context (using the Read tool for e
 
 Read the file at `INGEST_PATH` into context as `EXISTING_GUIDE`. Skip the interview questions below. Set `SOURCE = ingest`. Proceed to Phase 3.
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the style interview questions via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the style interview questions via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
@@ -312,7 +312,7 @@ Record the revised content as `REVISED_STYLE_MD`.
 
 ## Phase 5 — User approval and write
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the STYLE.md draft approval question (accept / edit-and-resave / re-critique / abandon) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the STYLE.md draft approval question (accept / edit-and-resave / re-critique / abandon) via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
 ```
@@ -584,7 +584,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
   '{"phase":"MB-4","reason":"rule-review"}'
 ```
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface each per-cluster rule review question (add-as-drafted / reject) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface each per-cluster rule review question (add-as-drafted / reject) via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
 ```
