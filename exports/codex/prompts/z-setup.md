@@ -102,7 +102,7 @@ The dry-run output shows the diff of what would be written. Print it to the user
 
 ### Step 2 — Confirmation gate
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface this confirmation. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface this confirmation. -->
 
 Use `AskUserQuestion` to ask:
 

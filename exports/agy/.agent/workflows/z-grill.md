@@ -52,7 +52,7 @@ A branch is "high-impact" if leaving it unresolved would materially change the e
 
 **If the topic above is empty or whitespace**, you have nothing to grill yet. Open with a single broad question to seize a thread, then immediately switch to depth-first tree-walking.
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface this cold-open
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface this cold-open
      question via their native channel and accept a text reply. Silent omission
      is forbidden. -->
 Use `AskUserQuestion`: "What's bugging you lately — what's the thing you keep wishing existed or worked differently?" Recommended framing to offer the user: "Give me the most recent specific moment it annoyed you, not the abstract version." Treat the reply as the seed topic and proceed to Phase 2.
@@ -88,7 +88,7 @@ Then continue to the next branch. **Do not ask the user a question the codebase 
 
 **Step B — Ask the user (one question only).** If the branch is genuinely a judgment/preference/intent call that only the user can answer, increment `N` and ask exactly ONE question. Always state YOUR recommended answer — you are grilling, not surveying.
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface this interview
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface this interview
      question via their native channel and accept a text reply. Silent omission
      is forbidden. -->
 Use `AskUserQuestion` with:
@@ -116,7 +116,7 @@ There is **no silent question cap.** Grill as long as it is productive.
 
 **Standing stop offer.** Every few turns (roughly every 3-4 asked questions), surface a standing offer so the user always has the exit:
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface this standing
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface this standing
      stop offer via their native channel. Silent omission is forbidden. -->
 Use `AskUserQuestion`: "We have enough to write a useful GRILL.md now — keep grilling, or finalize?"
 - `keep grilling` (Recommended if high-impact branches remain) — continue the loop.
@@ -130,7 +130,7 @@ When the loop breaks, proceed to Phase 3.
 
 2. **Collision check (unconditional, reuse the `/z-plan` logic).** Run `bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" all_plan_slugs` to list existing slugs across new and legacy layouts. If the provisional slug matches an existing slug dir:
    - **Precontext-only slug dir** (only `MAP.md`, `BRAINSTORM.md`, `RESEARCH.md`, and/or `GRILL.md` present, no `PLAN.md`/`SPEC.md`/`TASKS.md`): treat as continuation — no prompt, reuse the slug (a fresh `GRILL.md` write will overwrite a prior one, which is the intended resume/refresh behavior; note this in your summary).
-   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug-collision
+   <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the slug-collision
         confirmation question (overwrite / pick a variant) via their native channel.
         Silent omission is forbidden. -->
    - **Finished-plan slug dir** (`PLAN.md` or `TASKS.md` exists): **collision.** Prompt the user via `AskUserQuestion` to either overwrite (write GRILL.md into the existing dir) or pick a variant slug. This collision check runs UNCONDITIONALLY. Record whether a collision occurred for telemetry.

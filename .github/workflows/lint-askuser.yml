@@ -47,6 +47,20 @@ jobs:
             exit $_EC
           fi
 
+  lint-halt-categories:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run halt-category lint (--strict)
+        # Validates that every ask_user RUNTIME-GATE in commands/*.md has a
+        # category= token from the halt_category enum.
+        # Exit 0 = all gates tagged (pass).
+        # Exit 1 = missing or invalid category tokens (hard failure).
+        # Exit 2+ = usage/hard error (hard failure).
+        run: make lint-halt
+
   ci-grep-gates:
     runs-on: ubuntu-latest
     steps:

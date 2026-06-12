@@ -86,6 +86,30 @@ If rsync fails — abort with `STATUS: rsync_failed`; capture rsync stderr.
 
 ### 4. Run the verify command on remote
 
+**`needs-sandbox` commands (cargo/python — anything that runs repo code) MUST be confined.** A cold
+`libduckdb-sys` build load-crushed zeke-pc for 3h on 2026-06-12 because it ran with no memory cap
+(the assumed `qt-batch.slice` never existed). Route these through the confinement wrapper, which runs
+the command inside a memory-capped `systemd-run --user` transient unit and **refuses (exit 97) rather
+than running unconfined** if the cap can't be guaranteed:
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/remote-confined-run.sh" \
+  "<remote-host>" "$EXEC_DIR" "<verify-cmd>" 2>&1 \
+  | tee "$BASE/archive/tasks/<task-id>/remote-build.log"
+EXIT_CODE=${PIPESTATUS[0]}
+```
+
+If `EXIT_CODE == 97`, the host could not be confined (no user systemd manager, no cgroup delegation,
+or `memory.max` stayed `max`). **Do not retry unconfined.** Return `STATUS: refused`, reason
+`confinement_unavailable`, and surface the wrapper's stderr line (it names the cause, e.g. "user
+systemd manager unreachable (try: loginctl enable-linger)"). Caps are tunable via
+`Z_HARNESS_REMOTE_MEMMAX` (default 10G), `Z_HARNESS_REMOTE_SWAPMAX` (0), `Z_HARNESS_REMOTE_CPUQUOTA`
+(400%), `Z_HARNESS_REMOTE_NICE` (10).
+
+**`read-only-against-shared-state` commands** (log tail/grep, `du`/`df`/`ls`, `duckdb -readonly`,
+`psql` read query, `qtctl status`/`restart`) do not run repo code and need no confinement — run them
+directly:
+
 ```bash
 ssh "<remote-host>" "cd $EXEC_DIR && <verify-cmd>" 2>&1 \
   | tee "$BASE/archive/tasks/<task-id>/remote-build.log"
@@ -136,13 +160,14 @@ ERROR_EXCERPT (only if exit_code != 0):
   <first 20 lines of relevant errors, max 800 chars>
 ```
 
-If `refused`: include the refusal reason. Examples: `db_write_requested`, `duckdb missing -readonly flag`, `real_money_operation`, `destructive_op`, `interpretive_work — bounce to Sonnet/Opus`, `command outside sandbox dir`.
+If `refused`: include the refusal reason. Examples: `db_write_requested`, `duckdb missing -readonly flag`, `real_money_operation`, `destructive_op`, `interpretive_work — bounce to Sonnet/Opus`, `command outside sandbox dir`, `confinement_unavailable` (a `needs-sandbox` build could not be memory-capped — see step 4).
 
 For read-only DB/log queries that succeed, **also include the first ~50 lines of stdout** in the return (under an `OUTPUT:` block, capped at 4 KB) so the caller doesn't need to re-fetch the log file for small queries. For larger results, refer the caller to `BUILD_LOG:`.
 
 ## Hard rules
 
 - For `needs-sandbox` runs, never execute anything outside `~/dev/qt-bot-sandbox/sandbox/<slug>/<task-id>/` on remote (except the cargo clean inside the same dir, and the build-counter state file under `~/dev/qt-bot-sandbox/sandbox/<slug>/`).
+- **Never run a `needs-sandbox` build unconfined.** Always go through `scripts/remote-confined-run.sh` (step 4); on its exit 97, refuse with `confinement_unavailable` — do not fall back to a raw `ssh ... cargo build`. Running a cold build with no memory cap is what wedged zeke-pc for 3h.
 - Never run `rm -rf` on anything you didn't create in step 7.
 - Never invoke build commands against the user's live working tree on remote (`~/dev/qt-bot/`). Read-only queries against logs/DBs at known paths there are fine.
 - For DB queries, the `-readonly` flag (DuckDB) or write-verb grep (Postgres) is non-negotiable — refuse rather than guess.

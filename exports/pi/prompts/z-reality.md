@@ -12,7 +12,7 @@ Topic (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the question
      "What are you thinking about?" via their native channel. Silent omission is
      forbidden. -->
 **If the topic above is empty or whitespace**, open with: "What are you thinking

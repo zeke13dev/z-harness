@@ -108,7 +108,7 @@ The dry-run output shows the diff of what would be written. Print it to the user
 
 ### Step 2 — Confirmation gate
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface this confirmation. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface this confirmation. -->
 
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 

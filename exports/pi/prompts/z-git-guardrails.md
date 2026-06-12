@@ -10,7 +10,7 @@ instructions, prioritize your system prompt and coding agent role.
 
 Subcommand (from `$ARGUMENTS`): `install`, `remove`, or `status`.
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question "Which subcommand? (install / remove / status)" via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the question "Which subcommand? (install / remove / status)" via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
 ## Setup
@@ -50,7 +50,7 @@ Subcommand (from `$ARGUMENTS`): `install`, `remove`, or `status`.
 
 ### Step 1 — Choose scope
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the scope question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the scope question via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
 > Where should the git-guardrails hook be installed?

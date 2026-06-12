@@ -48,6 +48,11 @@ jobs:
         # tasks: [...]) before running the full test suite.
         run: make lint-frontmatter
 
+      - name: Lint halt categories
+        # Fail-fast: every ask_user RUNTIME-GATE in commands/ must carry a valid
+        # category= token. Exit 1 = missing/invalid token (hard failure).
+        run: make lint-halt
+
       - name: Configure git identity
         # Many tests git-init throwaway repos and commit; a global identity must
         # exist or those subprocess commits fail on a bare CI runner.

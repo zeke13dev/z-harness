@@ -44,7 +44,7 @@ TOPIC="$(echo "$TOPIC" | xargs)"  # trim leading/trailing whitespace
 
 ### Step 1 — Topic gate
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question "What research topic should I synthesize?" via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the question "What research topic should I synthesize?" via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
 ### Step 2 — Derive slug
@@ -241,7 +241,7 @@ fi
 
 ### Step 3 — AskUser dispatch gate
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the dispatch decision (confirm / override / abandon) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the dispatch decision (confirm / override / abandon) via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
 ```bash
@@ -376,7 +376,7 @@ fi
 if [ "$GATE_DISPOSITION" = "ask" ]; then
 ```
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the cost gate (proceed / change dispatch / abandon) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the cost gate (proceed / change dispatch / abandon) via their native channel. Silent omission is forbidden. -->
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start \
   '{"phase":"0.5","reason":"cost_gate"}'
@@ -930,7 +930,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 **1/3 fail:** proceed with the surviving two perspectives. Record the failed perspective (its panel file will be absent). The judge handles `N=2` by emitting the matrix with 2-perspective citations and setting `panel_degraded: true` in its return notes.
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the 2/3 panel failure decision (retry / proceed-with-1 / abandon) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the 2/3 panel failure decision (retry / proceed-with-1 / abandon) via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
 ```bash
