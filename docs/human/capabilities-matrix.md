@@ -1,45 +1,79 @@
 # Host Capabilities Matrix
 
-> Last updated: 2026-06-04
-> Source: z_harness_cli/adapters/{claude,antigravity,cursor,codex}.py
+> Last updated: 2026-06-11
+> Covers source: z_harness_cli/adapters/base.py, z_harness_cli/adapters/registry.py, z_harness_cli/adapters/claude.py, z_harness_cli/adapters/antigravity.py, z_harness_cli/adapters/cursor.py, z_harness_cli/adapters/codex.py
+
+## Overview
+
+The capabilities matrix describes how completely z-harness features work on each supported host (Claude Code, Antigravity/agy, Cursor, and Codex CLI). Each host is assigned a **fidelity tier** — a static property on its adapter class — and a per-command tier that tells callers whether a given `/z-*` command runs natively, in degraded single-agent mode, or is blocked entirely. The `COMMAND_CAPABILITY_MATRIX` dict in `base.py` is populated at import time by each adapter's `register_command_tiers()` call; `command_tier(host, cmd)` provides fail-safe O(1) lookup (unknown = blocked).
+
+The adapters also declare static `Capabilities` flags covering MCP support, trust-prompt behavior, cwd-override support, and cleanup strategy. These flags drive injection and launch decisions in the CLI commands (`launch.py`, `export.py`, `doctor.py`). The canonical type for export results, `ExportResult`, is owned by `runtime/drivers/_export_utils.py` and re-exported from `z_harness_cli/adapters/base.py` to preserve one-way layering — callers must import it from `base`, never from the runtime package directly.
+
+## Key entry points
+
+- `z_harness_cli/adapters/base.py:276` — `COMMAND_CAPABILITY_MATRIX` — nested dict populated at adapter import time; shape `{host_name: {command_id: CommandTier}}`
+- `z_harness_cli/adapters/base.py:302` — `register_command_tiers` — called by each adapter module at import; raises `ValueError` if any `KNOWN_COMMANDS` entry is missing
+- `z_harness_cli/adapters/base.py:320` — `command_tier` — O(1) lookup; returns `"blocked"` for unknown host or command (fail-safe)
+- `z_harness_cli/adapters/base.py:52` — `Capabilities` — frozen dataclass; static per-host flags
+- `z_harness_cli/adapters/base.py:42` — `ExportResult` re-export — canonical import location; sourced from `runtime.drivers._export_utils`
+- `z_harness_cli/adapters/registry.py:84` — `detect_all` — probes all four adapters; returns `(adapter, DetectResult)` pairs in canonical order
+- `z_harness_cli/adapters/registry.py:110` — `select` — host resolution with optional Rich interactive picker; raises `UnknownHostError` / `NoHostInstalledError`
+- `z_harness_cli/adapters/claude.py:107` — `ClaudeAdapter` — native-fidelity adapter; `export_payload` is persona-only (native plugin handles commands/skills)
+- `z_harness_cli/adapters/antigravity.py:154` — `AntigravityAdapter` — high-fidelity adapter; `export_payload` runs two-stage pipeline (runtime + personas)
+- `z_harness_cli/adapters/cursor.py:161` — `CursorAdapter` — flattened adapter; `export_payload` runs two-stage pipeline producing `.mdc` rule files
+- `z_harness_cli/adapters/codex.py:182` — `CodexAdapter` — flattened adapter; `export_payload` runs two-stage pipeline producing `prompts/` flat files
+
+## How it interacts with others
+
+- `multi-ide-exports` — the runtime drivers (`runtime/drivers/<host>/export.py`) that Stage 1 of `export_payload` delegates to live in this concept; adapters call into them but never import upward from them
+- `z_harness_cli/commands/launch.py` — calls `select()` then `adapter.inject()` / `adapter.launch()` / `adapter.cleanup()`
+- `z_harness_cli/commands/export.py` — calls `select()` or looks up by `--host`, then `adapter.export_payload(dest)`
+- `z_harness_cli/commands/doctor.py` — uses `detect_all()` and `command_tier()` to report per-host status
+- `z_harness_cli/mcp/server.py` — imports `ClaudeAdapter` for native-host MCP registration path
+
+## Export pipeline (per adapter)
+
+### ClaudeAdapter — persona-only
+`export_payload` delegates only to `runtime/drivers/claude/persona_export.py::export_persona()` for each file in `personas/`. Commands, agents, and skills are handled natively by the installed Claude Code plugin, not exported to files. Result: `ExportResult(fidelity="native")`.
+
+### AntigravityAdapter, CursorAdapter, CodexAdapter — two-stage pipeline
+All three follow the same two-stage structure:
+
+**Stage 1 — runtime export (commands, agents, skills)**
+Calls `runtime/drivers/<host>/export.py::export(harness_root, dest)`. If the result has non-empty `warnings`, a `RuntimeError` is raised immediately (legacy hard-gate — the caller sees a failure signal rather than a silent downgrade). Written ids are collected to enable collision detection.
+
+**Stage 2 — persona export loop**
+For each `personas/*.md` file, checks that the persona stem does not collide with a Stage-1 exported id (raises `RuntimeError` on collision — MINOR-6). Calls `runtime/drivers/<host>/persona_export.py::export_persona(persona_file, dest)`.
+
+Both stages' file lists are merged into a single `ExportResult`. The fidelity field matches the host's declared tier (`"high"` for antigravity, `"flattened"` for cursor/codex).
+
+### Export layouts
+
+| Host | Commands/skills | Personas |
+|------|----------------|---------|
+| claude | (native plugin) | `<dest>/personas/<name>.md` |
+| antigravity | `.agent/workflows/<id>.md`, `.agent/rules/z-harness-<id>.md`, `.agent/skills/<id>/SKILL.md`, `prompts/<id>.md` | `<dest>/.agent/personas/<name>.md` |
+| cursor | `.cursor/rules/<id>.mdc` | `<dest>/.cursor/personas/<name>.mdc` |
+| codex | `prompts/<id>.md`, `AGENTS.md` | `<dest>/prompts/personas/<name>.md` |
 
 ## Fidelity tiers
 
-The `z-harness` CLI assigns each supported host a **fidelity tier** that
-expresses how completely z-harness features are available on that host.
-
 | Tier | Meaning |
 |------|---------|
-| `native` | Full orchestration + native personas. All `/z-*` commands run identically to the Claude Code reference implementation. Multi-agent dispatch (subagents, panels, consults, gates) works. |
-| `high` | Native skills/personas, single-agent only. The host reads persona and skill files via its own native mechanism; single-agent commands run with high fidelity. Multi-agent commands (`/z-implement-all`, `/z-panel`, `/z-consult`, `/z-gate`) are degraded to single-agent transliteration — present but without subagent dispatch. |
-| `flattened` | Transliterated rules, single-agent only. z-harness rules are injected as a host-native config file (AGENTS.md, .cursor/rules/*.mdc). Single-agent commands run in degraded mode. Multi-agent commands are **blocked** (not available). |
+| `native` | Full orchestration. All `/z-*` commands run identically to the Claude Code reference. Multi-agent dispatch (subagents, panels, consults, gates) works. |
+| `high` | Native skill/persona loading, single-agent only. Multi-agent commands (`/z-implement-all`, `/z-panel`, `/z-consult`, `/z-gate`) degrade to single-agent transliteration (present, not blocked). All other `/z-*` commands run at native fidelity. |
+| `flattened` | Transliterated rules, single-agent only. All single-agent `/z-*` commands run in degraded mode. Multi-agent commands are **blocked**. |
 
-## Per-host fidelity
+## Per-host fidelity and capabilities
 
-| Host | Binary | Fidelity tier | Config injection |
-|------|--------|---------------|-----------------|
-| Claude Code | `claude` | `native` | `CLAUDE.md` (ephemeral) or installed plugin |
-| Antigravity | `agy` | `high` | `.agent/z-harness-session.md` |
-| Cursor | `cursor-agent` | `flattened` | `.cursor/rules/z-harness-session.mdc` |
-| Codex CLI | `codex` | `flattened` | `AGENTS.md` |
-
-## Per-host capabilities
-
-| Capability | claude | antigravity | cursor | codex |
-|------------|--------|-------------|--------|-------|
-| `supports_project_mcp` | true | false | true | true |
-| `supports_user_mcp` | true | false | true | false |
-| `needs_trust_prompt` | false | false | true | false |
-| `supports_cwd_override` | true | false | false | false |
-| `cleanup_strategy` | ephemeral | ephemeral | ephemeral | ephemeral |
+| Host | Binary | Fidelity | `project_mcp` | `user_mcp` | `trust_prompt` | `cwd_override` | cleanup |
+|------|--------|----------|---------------|------------|----------------|----------------|---------|
+| Claude Code | `claude` | `native` | true | true | false | true | ephemeral |
+| Antigravity | `agy` | `high` | false | false | false | false | ephemeral |
+| Cursor | `cursor-agent` | `flattened` | true | true | true | false | ephemeral |
+| Codex CLI | `codex` | `flattened` | true | false | false | false | ephemeral |
 
 ## Command-tier grid
-
-The table below summarises what happens when each `/z-*` command is run on each host.
-
-- **native** — runs identically to the Claude Code reference.
-- **degraded** — runs in single-agent transliteration mode; reduced fidelity.
-- **blocked** — not available on this host.
 
 | Command | claude | antigravity | cursor | codex |
 |---------|--------|-------------|--------|-------|
@@ -49,15 +83,11 @@ The table below summarises what happens when each `/z-*` command is run on each 
 | `/z-gate` | native | degraded | blocked | blocked |
 | All other `/z-*` | native | native | degraded | degraded |
 
-Multi-agent commands require subagent dispatch capability; only `native`-tier
-Claude Code provides it.  The `high`-tier Antigravity host supports the
-underlying skills natively but lacks subagent dispatch, so those commands fall
-back to single-agent transliteration (degraded, not blocked).
+Multi-agent commands require subagent dispatch; only the `native`-tier Claude Code host provides it. The `high`-tier Antigravity host supports the underlying skills natively but lacks subagent dispatch, so those commands fall back to single-agent transliteration (degraded, not blocked).
 
 ## Environment injection
 
-On `ephemeral` injection, each adapter sets the appropriate plugin-root env var
-so the spawned host process can locate the z-harness runtime:
+On `ephemeral` injection, each adapter sets the host-appropriate plugin-root env var:
 
 | Host | Env var injected |
 |------|-----------------|
@@ -68,18 +98,23 @@ so the spawned host process can locate the z-harness runtime:
 
 ## MCP registration (codex and cursor)
 
-Both Codex and Cursor support project-scoped MCP.  The Codex adapter registers
-the z-harness MCP server in `~/.codex/config.toml` via `codex mcp add`; this
-write is **global and persistent** — it is not reversed on ephemeral cleanup.
-Explicit removal is available via `z-harness doctor --clear-mcp`.
+Both Codex and Cursor declare `supports_project_mcp=True`. The Codex adapter registers the z-harness MCP server in `~/.codex/config.toml` via `runtime.drivers.codex.mcp.ensure_mcp_registered()`. This write is **global and persistent** — not reversed on ephemeral cleanup. Explicit removal only via `z-harness doctor --clear-mcp`. The Cursor adapter writes `.cursor/mcp.json` (project-scoped) and optionally `~/.cursor/mcp.json` (user-scoped).
 
-The Cursor adapter writes `.cursor/mcp.json` (project-scoped) and optionally
-`~/.cursor/mcp.json` (user-scoped).
+## Edge cases / gotchas
 
-## Sources
+- `ClaudeAdapter.export_payload` is persona-only; it does NOT run Stage 1 runtime export. Commands/skills are handled by the installed plugin — exporting them to files is not done and not needed on the native host.
+- Non-empty `warnings` from Stage 1 (runtime export) raise `RuntimeError` immediately — this is the legacy hard-gate. Adapters do not silently downgrade or skip validation errors.
+- Persona-name collision with a Stage-1 exported id also raises `RuntimeError` (MINOR-6 invariant). The collision domain differs by host: antigravity checks `workflows/rules/skills` stems, cursor checks `.cursor/rules/` stems, codex checks `prompts/` stems.
+- `ExportResult` must be imported from `z_harness_cli.adapters.base`, not from `runtime.drivers._export_utils` directly. `base.py` re-exports it as the canonical public surface; importing from runtime breaks the one-way layering rule.
+- `cursor` and `codex` both have `fidelity=flattened` but differ in MCP surface: cursor has `supports_user_mcp=True`, codex does not.
+- `antigravity` injects `ANTIGRAVITY_PLUGIN_ROOT`; all three other adapters inject `CLAUDE_PLUGIN_ROOT`.
+- Codex MCP registration is global (`~/.codex/config.toml`) and survives session cleanup; explicit removal only via `z-harness doctor --clear-mcp`.
+- `cursor` has `needs_trust_prompt=True` — `inject()` must not assume non-interactive startup; the PTY must surface the approval prompt to the user.
+- Canonical adapter order in registry: `claude` (native) > `antigravity` (high) > `cursor` (flattened) > `codex` (flattened). This order governs the Rich picker display and `select()` tie-breaking.
+- `register_command_tiers()` raises `ValueError` at import time if any `KNOWN_COMMANDS` entry is missing from the declared tiers — misconfigured adapters fail fast.
 
-- `z_harness_cli/adapters/claude.py` — `fidelity_tier = "native"`
-- `z_harness_cli/adapters/antigravity.py` — `fidelity_tier = "high"`
-- `z_harness_cli/adapters/cursor.py` — `fidelity_tier = "flattened"`
-- `z_harness_cli/adapters/codex.py` — `fidelity_tier = "flattened"`
-- `z_harness_cli/adapters/base.py` — `KNOWN_COMMANDS`, `register_command_tiers`
+## Memories
+
+<!-- DO NOT EDIT this section by hand — regenerated from docs/llm/capabilities-matrix.json by doc-updater. Use /z-suggest-memory to add or edit memories. -->
+
+_Note: no memories recorded for this concept yet._

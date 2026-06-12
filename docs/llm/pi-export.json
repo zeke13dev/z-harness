@@ -1,67 +1,70 @@
 {
   "concept": "pi-export",
-  "last_updated": "2026-06-09",
+  "last_updated": "2026-06-11",
   "covers_spec": "none",
   "source_file": [
-    "scripts/pi-mcp-server.py",
-    "scripts/export-pi.py",
-    "scripts/lint-frontmatter.sh",
+    "runtime/drivers/pi/__init__.py",
+    "runtime/drivers/pi/export.py",
     "scripts/pi_assets/AGENTS.preamble.md",
     "scripts/pi_assets/CAPABILITIES.md",
     "scripts/pi_assets/README.md",
     "scripts/pi_assets/agents/explore.md",
     "scripts/pi_assets/extensions/subagent/index.ts",
     "scripts/pi_assets/extensions/subagent/agents.ts",
-    "scripts/pi_assets/extensions/subagent/VENDOR.md"
+    "scripts/pi_assets/extensions/subagent/VENDOR.md",
+    "scripts/lint-frontmatter.sh",
+    "Makefile"
   ],
   "confidence": "high",
+  "entry_points": [
+    {"file": "runtime/drivers/pi/export.py", "line": 395, "symbol": "export", "kind": "fn", "summary": "Public entry: export(repo_root, export_root, *, options=None) -> ExportResult; builds full exports/pi/ tree"},
+    {"file": "runtime/drivers/pi/__init__.py", "line": 1, "symbol": "__init__", "kind": "module", "summary": "Package init: re-exports export(); documents export-only asymmetry (no adapter, no HostDriver)"},
+    {"file": "runtime/drivers/pi/export.py", "line": 85, "symbol": "_TOOL_MAP", "kind": "const", "summary": "Maps Claude Code/z-harness tool names to pi tool names (Glob -> find)"},
+    {"file": "runtime/drivers/pi/export.py", "line": 96, "symbol": "_TOOL_UNSUPPORTED", "kind": "const", "summary": "Tools dropped from agent allowlists on export (agent, task, webfetch, websearch, etc.)"},
+    {"file": "runtime/drivers/pi/export.py", "line": 146, "symbol": "_rewrite_line", "kind": "fn", "summary": "Rewrites Agent()/Skill()/AskUserQuestion() lines to pi subagent/skill/inline hints; handles prose AskUserQuestion refs"},
+    {"file": "runtime/drivers/pi/export.py", "line": 201, "symbol": "_yaml_quote", "kind": "fn", "summary": "Quotes YAML scalar values containing colons/brackets/hashes/quotes; preventive layer against pi YAML parse failures"},
+    {"file": "runtime/drivers/pi/export.py", "line": 231, "symbol": "_render_agent", "kind": "fn", "summary": "Renders z-harness agent as pi agent .md with _yaml_quote, semantic model tier mapping (haiku->flash, sonnet/opus->pro), _TOOL_MAP"},
+    {"file": "runtime/drivers/pi/export.py", "line": 265, "symbol": "_render_prompt", "kind": "fn", "summary": "Renders command/skill as pi prompt .md; injects prompt defense after heading if no sentinel marker found"},
+    {"file": "runtime/drivers/pi/export.py", "line": 305, "symbol": "_validate_frontmatter_yaml", "kind": "fn", "summary": "Post-export strict YAML 1.2 validation via yaml.safe_load(); silently skips if PyYAML unavailable"},
+    {"file": "scripts/lint-frontmatter.sh", "line": 1, "symbol": "lint-frontmatter.sh", "kind": "module", "summary": "Standalone source-tree frontmatter lint; wired into make lint-frontmatter and CI at tests.yml:49"},
+    {"file": "Makefile", "line": 74, "symbol": "lint-frontmatter", "kind": "target", "summary": "make lint-frontmatter invokes scripts/lint-frontmatter.sh; wired into CI (.github/workflows/tests.yml:49)"},
+    {"file": "scripts/pi_assets/AGENTS.preamble.md", "line": 1, "symbol": "AGENTS.preamble.md", "kind": "module", "summary": "Fan-out rule preamble for AGENTS.md; encodes doc-fetcher first, explore for gaps discipline"},
+    {"file": "scripts/pi_assets/agents/explore.md", "line": 1, "symbol": "explore.md", "kind": "module", "summary": "pi-only read-only fan-out recon agent; parallel dispatch via subagent tasks:[...] syntax"},
+    {"file": "scripts/pi_assets/extensions/subagent/index.ts", "line": 1, "symbol": "index.ts", "kind": "module", "summary": "pi subagent extension entry point; registers subagent tool, discovers agents from ~/.pi/agent/agents/*.md"},
+    {"file": "scripts/pi_assets/extensions/subagent/agents.ts", "line": 1, "symbol": "agents.ts", "kind": "module", "summary": "Agent loader: parses YAML frontmatter from agent .md files, normalizes fields, resolves tool allowlists"},
+    {"file": "scripts/pi_assets/extensions/subagent/VENDOR.md", "line": 1, "symbol": "VENDOR.md", "kind": "module", "summary": "Instructions for refreshing the vendored subagent extension after a pi upgrade"}
+  ],
   "depends_on": [
     "multi-ide-exports",
     "agents",
     "commands",
     "skills",
-    "scripts"
+    "export-utils"
   ],
-  "consumed_by": [],
-  "summary": "pi export target: builds pi (https://pi.dev) resources from z-harness source files. Unlike Cursor/Codex/agy, pi has no native subagent dispatch — fan-out runs through a vendored subagent extension. Semantic model tier mapping (haiku→deepseek-v4-flash, sonnet/opus→deepseek-v4-pro) with cheap subagents pinned to flash for token efficiency. Agent .md files are rendered with pipelined _yaml_quote on descriptions to prevent YAML parsing failures. The explore agent (pi-only) is a read-only fan-out recon agent for parallel dispatch. pi-mcp-server.py is an MCP server wrapping pi-cli for Hermes Agent orchestration (pi_instruct + pi_inspect_model tools). Four-layer defense against YAML dispatch bug: (1) pi runtime quoteUnquotedColonValues() patch, (2) source quoting in pi_assets, (3) export-pi.py _yaml_quote for all generated agents, (4) post-export _validate_frontmatter_yaml() pass with strict YAML 1.2 parser. Standalone lint-frontmatter.sh + make lint-frontmatter for source-level validation. CI wiring recommended but not yet implemented.",
-  "entry_points": [
-    {"file": "scripts/export-pi.py", "line": 1, "symbol": "export-pi.py", "kind": "module", "summary": "Main exporter: builds full exports/pi/ tree from z-harness source + pi_assets"},
-    {"file": "scripts/export-pi.py", "line": 80, "symbol": "_TOOL_MAP", "kind": "const", "summary": "Maps Claude Code/z-harness tool names to pi tool names (Glob -> find)"},
-    {"file": "scripts/export-pi.py", "line": 88, "symbol": "_TOOL_UNSUPPORTED", "kind": "const", "summary": "Tools dropped from agent allowlists on export (agent, task, webfetch, websearch, etc.)"},
-    {"file": "scripts/export-pi.py", "line": 120, "symbol": "_rewrite_line", "kind": "fn", "summary": "Rewrites Agent()/Skill()/AskUserQuestion() lines to pi subagent/skill/inline hints"},
-    {"file": "scripts/export-pi.py", "line": 189, "symbol": "_yaml_quote", "kind": "fn", "summary": "Quotes YAML scalar values containing colons/brackets/hashes/quotes; preventive layer against pi YAML parse failures"},
-    {"file": "scripts/pi-mcp-server.py", "line": 1, "symbol": "pi-mcp-server.py", "kind": "module", "summary": "MCP server wrapping pi-cli for Hermes Agent orchestration; exposes pi_instruct and pi_inspect_model tools via FastMCP over stdio"},
-    {"file": "scripts/export-pi.py", "line": 196, "symbol": "_render_agent", "kind": "fn", "summary": "Renders z-harness agent as pi agent .md with pipelined _yaml_quote + semantic model tier mapping (haiku→flash, sonnet/opus→pro) + _TOOL_MAP; omit model line when absent"},
-    {"file": "scripts/export-pi.py", "line": 246, "symbol": "_validate_frontmatter_yaml", "kind": "fn", "summary": "Post-export strict YAML 1.2 validation pass via yaml.safe_load() on every generated/copied agent file; import error fallback silently skips if PyYAML unavailable"},
-    {"file": "scripts/export-pi.py", "line": 285, "symbol": "main", "kind": "fn", "summary": "Entry: parses --out, enumerates sources, renders agents/prompts, copies pi-only assets, writes AGENTS.md, validates all including _validate_frontmatter_yaml on every agent"},
-    {"file": "scripts/lint-frontmatter.sh", "line": 1, "symbol": "lint-frontmatter.sh", "kind": "module", "summary": "Standalone YAML frontmatter lint script; scans agents/skills/commands/personas/scripts/pi_assets for .md files and validates with strict YAML 1.2 parser; SKIP if PyYAML missing"},
-    {"file": "Makefile", "line": 79, "symbol": "lint-frontmatter", "kind": "target", "summary": "make lint-frontmatter invokes scripts/lint-frontmatter.sh; exists but NOT wired into CI (.github/workflows/tests.yml)"},
-    {"file": "scripts/pi_assets/AGENTS.preamble.md", "line": 1, "symbol": "AGENTS.preamble.md", "kind": "module", "summary": "Fan-out rule preamble: doc-fetcher first, explore for gaps discipline; appended to AGENTS.md index"},
-    {"file": "scripts/pi_assets/agents/explore.md", "line": 1, "symbol": "explore.md", "kind": "module", "summary": "pi-only fan-out recon agent: read-only, path:line conclusions, parallel dispatch via subagent tasks: [...] syntax"},
-    {"file": "scripts/pi_assets/extensions/subagent/index.ts", "line": 1, "symbol": "index.ts", "kind": "module", "summary": "pi subagent extension entry point: registers subagent tool, discovers agents from ~/.pi/agent/agents/*.md"},
-    {"file": "scripts/pi_assets/extensions/subagent/agents.ts", "line": 1, "symbol": "agents.ts", "kind": "module", "summary": "Agent loader: parses YAML frontmatter from agent .md files, normalizes fields, resolves tool allowlists"},
-    {"file": "scripts/pi_assets/extensions/subagent/VENDOR.md", "line": 1, "symbol": "VENDOR.md", "kind": "module", "summary": "Instructions for refreshing the vendored subagent extension after a pi upgrade"}
+  "consumed_by": [
+    "test-export-golden"
   ],
   "invariants": [
+    "pi is EXPORT-ONLY: no adapter, no HostDriver, no --host pi, no launch/inject host; all interaction is through the exported resource files",
     "Source of truth for agents/prompts/AGENTS.md is z-harness agents/, commands/, skills/ — never the exports/pi/ tree",
     "pi-only assets (explore.md, subagent extension, AGENTS preamble, CAPABILITIES.md, README.md) live in scripts/pi_assets/ and are copied verbatim",
+    "Asset path resolution is __file__-relative (MINOR-7): module walks up 3 levels from runtime/drivers/pi/export.py to repo root then descends into scripts/pi_assets/; standalone-importable without z_harness_cli",
     "Agent descriptions pass through _yaml_quote to prevent YAML parse failures on colons/brackets/quotes in pi's frontmatter parser",
-    "Post-export validation (_validate_frontmatter_yaml) re-validates every agent file with a strict YAML 1.2 parser; silently skips if PyYAML is unavailable",
-    "Model tiers are mapped on export — semantic tiers (haiku/sonnet/opus) resolve to DeepSeek-specific models (deepseek-v4-flash/deepseek-v4-pro); agents without a tier inherit pi's default",
+    "Post-export validation (_validate_frontmatter_yaml) re-validates every agent file with a strict YAML 1.2 parser; silently skips if PyYAML unavailable",
+    "Model tiers are mapped on export: haiku->deepseek-v4-flash, sonnet/opus->deepseek-v4-pro; agents without a tier inherit pi's default",
     "Unsupported constructs (Agent, Skill, AskUserQuestion, TaskCreate, SubagentCreate) are rewritten line-by-line to pi hints, never silently dropped",
-    "Multi-line call rewrites are line-based: only the line containing Agent(/Skill( is rewritten; following argument lines are left in place",
-    "Agents are discovered from ~/.pi/agent/agents/*.md via symlinks, NOT from the pi package — this is separate from pi's native package resource types",
-    "The subagent extension must be refreshed after pi upgrades (see VENDOR.md)"
+    "Skills that share an id with a command get an -skill suffix in the export id to avoid collisions in prompts/",
+    "make lint-frontmatter is wired into CI at .github/workflows/tests.yml:49; frontmatter regressions are caught at PR time"
   ],
   "gotchas": [
     "pi has no native subagent dispatch — fan-out runs through the vendored extensions/subagent/ extension which spawns isolated pi child processes",
-    "YAML frontmatter parser bug (resolved 2026-06-08): pi's frontmatter.js could fail on unquoted colons in description values. Four-layer defense: (1) pi runtime quoteUnquotedColonValues() patch + catch-and-retry; (2) source quoting in pi_assets/agents/explore.md; (3) export-pi.py _yaml_quote for all generated agent descriptions; (4) _validate_frontmatter_yaml() post-export strict YAML 1.2 re-validation of every agent file",
-    "scripts/lint-frontmatter.sh provides standalone source-tree frontmatter linting; make lint-frontmatter exists but is NOT wired into CI — frontmatter regressions can land on main without being caught until export time",
-    "_validate_frontmatter_yaml silently skips if PyYAML is not installed (import error fallback) — the export succeeds but the strict YAML gate is bypassed. scripts/lint-frontmatter.sh similarly exits with SKIP if PyYAML is missing",
-    "Semantic model tiers are mapped to DeepSeek models on export — cheap subagents run on deepseek-v4-flash, heavy agents on deepseek-v4-pro",
+    "Asset resolution uses __file__-relative logic; moving export.py without moving scripts/pi_assets/ will break standalone-import fallback path",
+    "YAML frontmatter parser bug (resolved 2026-06-08): four-layer defense: (1) pi runtime quoteUnquotedColonValues() + catch-and-retry; (2) source quoting in pi_assets/agents/explore.md; (3) _yaml_quote for all generated agent descriptions; (4) _validate_frontmatter_yaml post-export strict YAML 1.2 re-validation",
+    "_validate_frontmatter_yaml silently skips if PyYAML is not installed — export succeeds but strict YAML gate is bypassed",
     "Multi-line Agent()/Skill() call rewrites are line-based; argument lines on subsequent lines are not rewritten",
     "Many internal agents assume a driving orchestrator and may not be useful as standalone one-shot pi subagents; doc-fetcher and explore are the headline fan-out agents",
-    "The subagent extension at exports/pi/extensions/subagent/ is a vendored copy that must be refreshed after pi upgrades"
+    "Agents are discovered from ~/.pi/agent/agents/*.md — NOT a pi package resource type; must be symlinked separately even when z-harness is installed as a pi package",
+    "The subagent extension at exports/pi/extensions/subagent/ is a vendored copy that must be refreshed after pi upgrades (see VENDOR.md)"
   ],
   "memories": [
     {
