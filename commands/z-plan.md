@@ -965,6 +965,13 @@ python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-reg
   --run-id "$RUN" --phase phase8 || true   # CLI self-logs registry_error on failure
 ```
 
+**Workstreams manifest (generated from TASKS.md).** After TASKS.md is finalized and all task blocks have their Complexity stamps, generate the plan's `workstreams.json` manifest. This file is the conflict DAG for parallelism — `/z-implement-all` reads it to decide what's safe to run concurrently. Best-effort, non-fatal — any failure is silent; `/z-implement-all` falls back to inline `**Files:**` dedup when the file is absent.
+
+```bash
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/generate-workstreams.py" \
+  --slug "$Z_HARNESS_SLUG" --source z-plan --plan-dir "$Z_HARNESS_PLAN_DIR" || true
+```
+
 ## Phase 9 — Finalize archive
 
 Copy `$Z_HARNESS_PLAN_DIR/{SPEC,PLAN,TASKS}.md` into `$Z_HARNESS_PLAN_DIR/archive/$RUN/`. Update `manifest.json` with end timestamp, status `complete`, totals (decision count, consultation count, total tokens if available).

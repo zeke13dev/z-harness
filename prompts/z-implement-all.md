@@ -1627,14 +1627,17 @@ Finalize the loop cleanly: do **not** dispatch any new task. **Do not run Run Br
 
 ## Parallelism (read first)
 
-The numbered steps below describe a **single task track** — one task's journey from pick → precheck → implement → review → done. The orchestrator dispatches up to **N=3 task tracks in parallel** per outer iteration, subject to these rules:
+The numbered steps below describe a **single task track** — one task's journey from pick → precheck → implement → review → done. The orchestrator dispatches batch-eligible tasks concurrently, subject to these rules:
 
 1. **Eligibility.** Pick ALL tasks whose deps are all `[x]` and that aren't skip-flagged (see step 2).
 2. **File-overlap dedup.** Two tasks whose "Files:" blocks share a path cannot run concurrently. When two eligible tasks conflict, run the lower-numbered one this batch and defer the other.
-<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+3. **Parallel dispatch (per phase):** within a batch, run the spec-precheck for all batch tasks in a single message with multiple `Agent()` calls. Same for the implementer phase. Same for the reviewer phase.
 4. **Halt semantics.** If one track returns `spec_problem` / `decision_needed` / `needs_clarification` / `unable_to_complete`, that *track* halts and you collect the question. **In-flight tracks for other tasks continue.** Only after the batch completes do you present the collected halts to the user (one `AskUserQuestion` per halt, in order).
 5. **Atomic TASKS.md updates.** The orchestrator is single-writer. Read the file, modify multiple task statuses if a batch finishes together, write once. Never partial-write.
-6. **N=3 default.** If a single task is conflict-heavy or the user wants strict serial behavior, set N=1. Override via `Z_HARNESS_PARALLEL=N` env var if set.
+6. **`workstreams.json` is your concurrency DAG.** Read `$BASE/workstreams.json` (generated at plan creation time, or on first `/z-implement-all` if absent). Use it alongside rule 2's inline `**Files:**` dedup:
+   - `deps` and `file_conflicts` arrays give the complete dependency graph. Tasks with disjoint file sets and no dependency chain can run in parallel — no hard cap, the DAG decides.
+   - `scope_unknown: true` means some task block has no parseable `**Files:**` line — rule 2 is blind for that task. The orchestrator knows this and decides whether to parallelize anyway or serialize, weighing the risk of clobbered edits.
+   - When `workstreams.json` is absent (pre-existing plan), fall back to rule 2 alone — behavior is byte-identical to before this feature existed.
 
 ## Hard caps (token / wall-clock safety)
 
