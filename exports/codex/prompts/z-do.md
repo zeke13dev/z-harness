@@ -312,7 +312,21 @@ Event kinds aggregated: `user_choice`, `user_override`, `plan_route_decision`, `
 
 #### 2. Derive from artifact / fallbacks
 
-Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` if still empty:
+**Author the approach (required on full-profile success).** You hold the full run context, so before calling `finalize` you MUST set a crisp high-level **How** describing the *solution* — what you actually did, not a table of contents of the plan artifact. This renders as the Briefing "How" line (the renderer joins bullets with ` → `). Substitute your own summary into one of:
+
+```bash
+# One crisp sentence (most runs):
+bash "$RB_SH" set-section --run "$RUN" --section approach --value "<one-line summary of what you did>"
+
+# 2-4 distinct steps — write a bullet file, pass --file (each "- " line becomes a
+# bullet; lines containing file paths or "file.ext:" tokens are dropped):
+#   printf '%s\n' '- <step one>' '- <step two>' '- <step three>' > /tmp/approach.md
+#   bash "$RB_SH" set-section --run "$RUN" --section approach --file /tmp/approach.md
+```
+
+Skip authoring only on halt/abort paths (where there is no meaningful approach) — the lite downgrade handles those. The `extract_approach_bullets` scrape below is the **empty-only fallback** for when authoring was skipped: it runs only when `approach` is still unset (the `APPROACH_COUNT -eq 0` guard), so an authored approach always wins. The scrape regex-greps bullet/numbered lines out of the artifact and tends to produce a plan table-of-contents, which is exactly what authoring avoids.
+
+Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` from it only if still empty:
 
 ```bash
 APPROACH_FILE=""
@@ -548,7 +562,21 @@ Event kinds aggregated: `user_choice`, `user_override`, `plan_route_decision`, `
 
 #### 2. Derive from artifact / fallbacks
 
-Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` if still empty:
+**Author the approach (required on full-profile success).** You hold the full run context, so before calling `finalize` you MUST set a crisp high-level **How** describing the *solution* — what you actually did, not a table of contents of the plan artifact. This renders as the Briefing "How" line (the renderer joins bullets with ` → `). Substitute your own summary into one of:
+
+```bash
+# One crisp sentence (most runs):
+bash "$RB_SH" set-section --run "$RUN" --section approach --value "<one-line summary of what you did>"
+
+# 2-4 distinct steps — write a bullet file, pass --file (each "- " line becomes a
+# bullet; lines containing file paths or "file.ext:" tokens are dropped):
+#   printf '%s\n' '- <step one>' '- <step two>' '- <step three>' > /tmp/approach.md
+#   bash "$RB_SH" set-section --run "$RUN" --section approach --file /tmp/approach.md
+```
+
+Skip authoring only on halt/abort paths (where there is no meaningful approach) — the lite downgrade handles those. The `extract_approach_bullets` scrape below is the **empty-only fallback** for when authoring was skipped: it runs only when `approach` is still unset (the `APPROACH_COUNT -eq 0` guard), so an authored approach always wins. The scrape regex-greps bullet/numbered lines out of the artifact and tends to produce a plan table-of-contents, which is exactly what authoring avoids.
+
+Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` from it only if still empty:
 
 ```bash
 APPROACH_FILE=""

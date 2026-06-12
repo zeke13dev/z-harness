@@ -1,6 +1,6 @@
 {
   "concept": "run-brief",
-  "last_updated": "2026-06-08",
+  "last_updated": "2026-06-11",
   "covers_spec": "unified-command-output",
   "source_file": [
     "docs/llm/run-brief-contract.json",
@@ -20,7 +20,7 @@
       "line": 1,
       "symbol": "run_brief",
       "kind": "module",
-      "summary": "JSON Schema draft 2020-12 for archive/$RUN/run-brief.json; full vs lite profiles; embedded run_brief_registry $def for docs/llm/run-brief-registry.json."
+      "summary": "JSON Schema draft 2020-12 for archive/$RUN/run-brief.json; full vs lite profiles; embedded run_brief_registry $def."
     },
     {
       "file": "docs/llm/run-brief-contract.json",
@@ -34,21 +34,49 @@
       "line": 1,
       "symbol": "run-brief.sh",
       "kind": "module",
-      "summary": "Subcommands init, set-section, append-decision, finalize; creates and validates run-brief.json under archive/$RUN/."
+      "summary": "Subcommands: init, set-section (approach|outcome|next|status), append-decision, finalize; creates and validates run-brief.json."
     },
     {
       "file": "scripts/render-run-brief.py",
-      "line": 1,
-      "symbol": "render-run-brief.py",
-      "kind": "module",
-      "summary": "Renders run-brief.json to chat, push, or json; --require hard-gates before deregister; aggregate_decisions() reads events.jsonl."
+      "line": 176,
+      "symbol": "render_chat",
+      "kind": "fn",
+      "summary": "Renders run-brief.json as warm Briefing markdown: glyph title, **What**/**How**/**Key decisions**/**Result**/**Next**; lite omits How+decisions."
+    },
+    {
+      "file": "scripts/render-run-brief.py",
+      "line": 241,
+      "symbol": "render_push",
+      "kind": "fn",
+      "summary": "Single-line push digest: intent[:80] · outcome[:60] · Next: label. Unchanged from prior format."
+    },
+    {
+      "file": "scripts/render-run-brief.py",
+      "line": 141,
+      "symbol": "aggregate_decisions",
+      "kind": "fn",
+      "summary": "Collects decision rows from events.jsonl (kinds: user_choice, user_override, plan_route_decision, next_step_choice); last wins per question_id."
+    },
+    {
+      "file": "scripts/render-run-brief.py",
+      "line": 76,
+      "symbol": "extract_approach_bullets",
+      "kind": "fn",
+      "summary": "Empty-only fallback: extracts up to 4 bullet/numbered lines from artifact; rejects lines with file.ext: tokens or slash segments."
     },
     {
       "file": "commands/_fragments/run-brief-finalize.md",
       "line": 1,
       "symbol": "run-brief-finalize",
       "kind": "module",
-      "summary": "Shared finalize block inlined by /z-export: aggregate decisions, derive sections, finalize, render chat/push, --require gate."
+      "summary": "Shared finalize fragment inlined by /z-export into registry commands; step 2 requires orchestrator to author approach before finalize on success."
+    },
+    {
+      "file": "scripts/lint-run-brief.sh",
+      "line": 1,
+      "symbol": "lint-run-brief.sh",
+      "kind": "module",
+      "summary": "Schema + registry + renderer self-test; --registry-only greps all 11 commands for finalize fragment include."
     }
   ],
   "depends_on": [
@@ -60,19 +88,26 @@
   ],
   "invariants": [
     "Chat and push text are always rendered from run-brief.json — never independently authored at finalize.",
-    "Hard gate (render-run-brief.py --require) runs before deregister on registry commands for complete/shipped paths; halted paths require minimal brief (intent + outcome).",
+    "render-run-brief.py --require runs before deregister on every terminal exit that includes the finalize fragment.",
     "Empty decisions array is valid for full profile.",
     "/z-stats is NOT auto-invoked at command end.",
-    "Lite profile omits approach and decisions keys entirely; only intent, outcome, and next are required.",
+    "Lite profile omits approach and decisions keys entirely; chat renders What/Result/Next only.",
+    "Full-profile success: orchestrator MUST author approach via run-brief.sh set-section before finalize; extract_approach_bullets is the empty-only fallback.",
     "intent max 240 chars, must not equal the command name alone; outcome max 400 chars.",
-    "Full profile approach: 1-4 bullets with no file paths (no ext: tokens or slash path segments)."
+    "Full profile approach: 1-4 bullets; no file paths (no ext: tokens or slash path segments).",
+    "Key decisions section is omitted from chat entirely when decisions is empty.",
+    "Decision tokens are humanized (underscores to spaces) in chat render; verbatim values remain in events.jsonl.",
+    "why field on decisions is surfaced in chat as italic text after an em-dash."
   ],
   "gotchas": [
     "Lite profile forbids approach and decisions properties — do not emit empty arrays.",
-    "Artifact missing on early halt triggers lite brief via registry fallback chain.",
+    "Artifact missing on early halt triggers lite downgrade via finalize (not at init time).",
     "/z-implement-all compaction_pause exit skips the brief (non-terminal).",
     "Export must inline commands/_fragments/run-brief-finalize.md so Cursor/Codex/agy copies stay in sync.",
-    "Z_HARNESS_RUN_BRIEF_DEBUG=1 optionally writes a human-readable RUN_BRIEF.md mirror for local debugging (not default)."
+    "Z_HARNESS_RUN_BRIEF_DEBUG=1 optionally writes a human-readable run-brief.md mirror for local debugging (not default).",
+    "extract_approach_bullets only runs when approach is empty at finalize; an authored approach always wins.",
+    "Old ALL-CAPS labeled block format (INTENT:/APPROACH:/DECISIONS:/OUTCOME:/NEXT:) is obsolete — render_chat now emits glyph-titled Briefing markdown.",
+    "render_push format is UNCHANGED — single line: intent[:80] · outcome[:60] · Next: label."
   ],
   "memories": []
 }

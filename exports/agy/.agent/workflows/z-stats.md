@@ -87,6 +87,56 @@ jq -r 'select(.subagent_model != null) | [.subagent_model, (.subagent_input_toke
 
 Tells you the haiku/sonnet/opus split. Verifies that the v2 default-to-Sonnet change is actually taking effect.
 
+## Phase 3b — Per-host, per-subagent cost breakdown (input/output weighted)
+
+Run the read-side cost model against `subagent_call` events. This uses separated
+input/output token weighting (output priced ~5× input per D9) and groups by
+`host` and `subagent_type` — giving you the qt-bot-vs-z-harness and claude-vs-pi
+cuts as a one-liner.
+
+```bash
+# subagent_call events land in the REPO-WIDE metrics.jsonl at the external base root,
+# not in the per-plan dir ($METRICS). Resolve the base explicitly for this call so the
+# breakdown is never empty due to the Phase-D external-base flip.
+ZH_REPO_BASE="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" base_dir 2>/dev/null)"
+ZH_GLOBAL_METRICS="${ZH_REPO_BASE:+$ZH_REPO_BASE/metrics.jsonl}"
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/estimate-tokens.py" \
+  subagent-costs ${ZH_GLOBAL_METRICS:+--metrics "$ZH_GLOBAL_METRICS"}
+```
+
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+counts to the orchestrator — only dispatch-prompt size and returned-text size are
+observable. `prompt_chars`/`response_chars` are exact character counts, not token
+counts; real `provider_*_tokens` appear only for external CLIs that print a usage
+line. Estimates are labeled `[char-est]` where provider tokens are absent, and
+`[real tokens]` or `[mixed: provider+chars]` when at least one event carries
+real provider counts.
+
+Example output (with subagent_call events present):
+
+```
+Subagent cost breakdown (char-based estimate: chars/4 → tokens; no native-Claude token counts available)
+  Events: 47 subagent_call (of 4042 total read)
+
+  Host: claude
+    consultant             calls=12   in=   48000 out=   16000 tok  est=$0.4560 [char-est]
+    implementer            calls=23   in=   92000 out=   30000 tok  est=$1.7250 [char-est]
+    reviewer               calls=12   in=   48000 out=   12000 tok  est=$0.1980 [char-est]
+
+  Host: pi
+    reviewer               calls=4    in=   16000 out=    4000 tok  est=$0.0660 [mixed: provider+chars]
+
+  TOTAL                     calls=51   in=  204000 out=   62000 tok  est=$2.4450
+    (input: $0.8160  output: $1.6290)
+```
+
+If `$METRICS` is absent or contains no `subagent_call` events (e.g. T006 not yet
+deployed), print:
+
+```
+Subagent cost breakdown: (no subagent_call events in metrics)
+```
+
 ## Phase 4 — Coordination event tallies
 
 Tally wait/lease/coordination events for the run. Filter by `run_id` if one is resolved (slug → run_id lookup via `active-plan-registry.py list --json`); otherwise tally across all events in `$METRICS`.

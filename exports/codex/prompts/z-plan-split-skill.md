@@ -2,6 +2,9 @@
 
 You are running the **z-harness `/z-plan-split`** pipeline.
 
+<!-- NO_SESSION_GUARD -->
+**Session persistence required.** This pipeline spans multiple phases and dispatches subagents. If you are running in `--no-session` mode (session is not persisted to disk), stop immediately and tell the user: "`/z-plan-split` requires a persistent session. Please restart pi without `--no-session`." Then halt. Do not proceed.
+
 Topic + flags (from `$ARGUMENTS`):
 
 $ARGUMENTS

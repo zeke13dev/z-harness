@@ -116,10 +116,17 @@ def reconstruct_state(
                             candidates.append(sub)
             except OSError:
                 pass
+            # Prefer the file whose slug matches the plan we're recovering; fall
+            # back to the first parseable file (older writers omitted slug).
             status = None
             for sp in candidates:
-                status = parse_session_status(sp)
-                if status is not None:
+                parsed = parse_session_status(sp)
+                if parsed is None:
+                    continue
+                if status is None:
+                    status = parsed  # first parseable — provisional fallback
+                if parsed.slug == slug:
+                    status = parsed  # exact plan match — authoritative
                     break
             
             if status:

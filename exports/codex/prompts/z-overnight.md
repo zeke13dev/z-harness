@@ -429,7 +429,7 @@ Derive `ARTIFACT_PATHS` based on step name:
 - `research` → `["$BASE/RESEARCH.md"]` (if exists)
 - `test` → `["$BASE/TESTS.md"]` (if exists)
 - `implement-all` → list all files changed in git diff since `HEAD_SHA_BEFORE`
-- `review-all` → list any `review.response.md` files created in `$BASE/archive/tasks/*/`
+- `review-all` → list any `review-cycle*.md` files created in `$BASE/archive/tasks/*/`
 - Other → `[]`
 
 Update `step_runs[CURSOR]` in `overnight-state.json`. Also update top-level `git_diff_stat_at_end` at EVERY terminal transition (complete, halt, error). Write flock-guarded tmp+rename:

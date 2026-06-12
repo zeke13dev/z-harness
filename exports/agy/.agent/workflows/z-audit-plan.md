@@ -4,6 +4,12 @@ description: "Audit a plan's artifacts (SPEC.md, PLAN.md, TASKS.md) before execu
 
 You are running **z-harness `/z-audit-plan`** — a structured, pre-implementation plan audit pipeline. The output is a comprehensive `PLAN_AUDIT_REPORT.md` (detailing all findings) under `$Z_HARNESS_PLAN_DIR/`.
 
+Slug argument (from `$ARGUMENTS`):
+
+$ARGUMENTS
+
+If the user provided a slug (e.g. `/z-audit-plan mcp-server`), treat the first non-flag token from `$ARGUMENTS` as `--slug <slug>`. If they typed `--slug <slug>` explicitly, parse that form. Use it in Phase 0 step 1.
+
 This command is **read-only**. Never edit active codebase files. Plan adjustments happen later via `/z-amend` or `/z-plan` based on the audit report's findings.
 
 <!-- PLAN_ROUTE_CHECK_START -->
@@ -37,7 +43,8 @@ Loop prevention: carry forward the latest route chain; if it already has two ent
    NO_PLAN_ARCHIVE_DIR="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" base_dir)/archive/$NO_PLAN_RUN"
    ```
 1. **Discover plan slug:**
-   Enumerate subdirectories under the plans directory (`z-harness/plans/`) or legacy directory (`z-harness/`) that contain plan artifacts (`SPEC.md` / `PLAN.md` / `TASKS.md`).
+   **If `--slug <slug>` was provided by the user,** use it directly — skip enumeration. Export `Z_HARNESS_SLUG=<slug>`, resolve `Z_HARNESS_PLAN_DIR` via `resolve_plan_path`, and proceed to step 2. The user's explicit slug overrides all directory scanning.
+   **Otherwise** (no `--slug` argument), enumerate subdirectories under the canonical plans directory (`$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" base_dir)/plans/`) and the legacy directories (`z-harness/plans/`, `z-harness/`) that contain plan artifacts (`SPEC.md` / `PLAN.md` / `TASKS.md`). Deduplicate slugs across paths.
    - If single candidate -> use it.
    <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug
         selection question via their native channel. Silent omission is forbidden. -->
@@ -658,7 +665,21 @@ Event kinds aggregated: `user_choice`, `user_override`, `plan_route_decision`, `
 
 #### 2. Derive from artifact / fallbacks
 
-Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` if still empty:
+**Author the approach (required on full-profile success).** You hold the full run context, so before calling `finalize` you MUST set a crisp high-level **How** describing the *solution* — what you actually did, not a table of contents of the plan artifact. This renders as the Briefing "How" line (the renderer joins bullets with ` → `). Substitute your own summary into one of:
+
+```bash
+# One crisp sentence (most runs):
+bash "$RB_SH" set-section --run "$RUN" --section approach --value "<one-line summary of what you did>"
+
+# 2-4 distinct steps — write a bullet file, pass --file (each "- " line becomes a
+# bullet; lines containing file paths or "file.ext:" tokens are dropped):
+#   printf '%s\n' '- <step one>' '- <step two>' '- <step three>' > /tmp/approach.md
+#   bash "$RB_SH" set-section --run "$RUN" --section approach --file /tmp/approach.md
+```
+
+Skip authoring only on halt/abort paths (where there is no meaningful approach) — the lite downgrade handles those. The `extract_approach_bullets` scrape below is the **empty-only fallback** for when authoring was skipped: it runs only when `approach` is still unset (the `APPROACH_COUNT -eq 0` guard), so an authored approach always wins. The scrape regex-greps bullet/numbered lines out of the artifact and tends to produce a plan table-of-contents, which is exactly what authoring avoids.
+
+Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` from it only if still empty:
 
 ```bash
 APPROACH_FILE=""
@@ -884,7 +905,21 @@ Event kinds aggregated: `user_choice`, `user_override`, `plan_route_decision`, `
 
 #### 2. Derive from artifact / fallbacks
 
-Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` if still empty:
+**Author the approach (required on full-profile success).** You hold the full run context, so before calling `finalize` you MUST set a crisp high-level **How** describing the *solution* — what you actually did, not a table of contents of the plan artifact. This renders as the Briefing "How" line (the renderer joins bullets with ` → `). Substitute your own summary into one of:
+
+```bash
+# One crisp sentence (most runs):
+bash "$RB_SH" set-section --run "$RUN" --section approach --value "<one-line summary of what you did>"
+
+# 2-4 distinct steps — write a bullet file, pass --file (each "- " line becomes a
+# bullet; lines containing file paths or "file.ext:" tokens are dropped):
+#   printf '%s\n' '- <step one>' '- <step two>' '- <step three>' > /tmp/approach.md
+#   bash "$RB_SH" set-section --run "$RUN" --section approach --file /tmp/approach.md
+```
+
+Skip authoring only on halt/abort paths (where there is no meaningful approach) — the lite downgrade handles those. The `extract_approach_bullets` scrape below is the **empty-only fallback** for when authoring was skipped: it runs only when `approach` is still unset (the `APPROACH_COUNT -eq 0` guard), so an authored approach always wins. The scrape regex-greps bullet/numbered lines out of the artifact and tends to produce a plan table-of-contents, which is exactly what authoring avoids.
+
+Resolve the first existing file in `$RUN_BRIEF_ARTIFACT` → `$RUN_BRIEF_ARTIFACT_FALLBACKS` (finalize re-resolves the same chain internally). When a file exists and profile is `full`, seed `approach` from it only if still empty:
 
 ```bash
 APPROACH_FILE=""

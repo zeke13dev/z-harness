@@ -5,6 +5,9 @@ alwaysApply: false
 
 You are the **z-harness `/z-implement-all`** orchestrator. Your job is to drive the task queue to completion without losing the per-task fresh-context guarantee. You do not implement code yourself — you delegate each task to a fresh `implementer` subagent and each review to a fresh `reviewer` subagent.
 
+<!-- NO_SESSION_GUARD -->
+**Session persistence required.** This orchestrator command spans multiple turns, dispatches subagents, and may need to resume after a pause. If you are running in `--no-session` mode (session is not persisted to disk), stop immediately and tell the user: "`/z-implement-all` requires a persistent session. Please restart pi without `--no-session`." Then halt. Do not proceed.
+
 Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
 
 ## Flags
@@ -216,8 +219,9 @@ Paths that must NOT deregister:
 2. **Discover plan slug.** Multiple plans may coexist under `$Z_HARNESS_PLAN_DIR/`. A `$Z_HARNESS_PLAN_DIR/` may be either a **legacy single-slug plan** (contains `TASKS.md` directly) or a **tree-rooted plan** produced by `/z-plan-split` (contains `MANIFEST.md` + per-cluster subdirectories, each with its own `TASKS.md`):
 
    **2a. Enumerate candidates.**
-   - For each subdir of `z-harness/plans/` (canonical) and `z-harness/` (legacy): classify as `tree-rooted` if `$Z_HARNESS_PLAN_DIR/MANIFEST.md` exists, else `legacy` if `$Z_HARNESS_PLAN_DIR/TASKS.md` exists, else skip.
-   - Also check for the legacy flat layout (`z-harness/TASKS.md` directly).
+   - First, probe the canonical state-directory path: `$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" base_dir)/plans/`. For each subdir there: classify as `tree-rooted` if `<path>/MANIFEST.md` exists, else `legacy` if `<path>/TASKS.md` exists, else skip.
+   - Then probe the repo-relative fallbacks: `z-harness/plans/` and `z-harness/`. For each subdir there: classify same as above. **Deduplicate** — if a slug was already discovered via the canonical state directory, skip its repo-relative duplicate.
+   - Also check for the legacy flat layout (`z-harness/TASKS.md` directly, AND `<state-dir>/TASKS.md` directly if the state dir has no `plans/` subdirectory).
    - Zero candidates → tell user to run `/z-plan` first; abort.
    - One candidate → use it.
    - Multiple candidates → `AskUserQuestion` to pick. Mixed legacy + tree-rooted slugs are allowed in the same `/z-implement-all` invocation: the user picks one, validation/expansion below depends on its kind.
@@ -331,13 +335,6 @@ Paths that must NOT deregister:
    ```
    <!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
 
-   **Initialize compaction counters** (immediately after emitting `run_start`, before any task dispatch):
-   ```bash
-   tasks_since_pause=0
-   pause_clock_start="$(date +%s)"
-   ```
-   These are in-memory counters that live only for the duration of this invocation. Both reset to these initial values on every re-invocation (i.e. after a `compaction_pause` exit and `/clear`). There is no persistent state to read — TASKS.md's `[x]` count is the durable record; the counters are ephemeral rate-limiters for the current window only.
-
 6. **One-time local cargo clean** (only when remote-runner is in play): if any task in the queue has a `**REMOTE_VERIFY:**` line and the repo has a `Cargo.toml`, set env `Z_HARNESS_LOCAL_CARGO_CLEAN=1` (the remote-runner uses this to trigger a one-time `cargo clean` on the local checkout). Local cargo builds should be rare in this harness.
 7. Send initial `PushNotification` (if policy != `off`): "Orchestration started on plan `<slug>`. <N> pending tasks. Plugin version: <z_harness_version>."
 7.5. **Test-runner cache (only if `$BASE/TESTS.md` exists).** Tests written by the implementer per TESTS.md must be executable in the per-task acceptance check (step 8.5). The exact run command depends on the repo: `cargo test --test <name>` / `cargo nextest run -E 'test(<name>)'` / `pytest <path> -k <name>` / `pnpm test <name>` / etc. Look for an existing cache at `$BASE/test-runner.json`:
@@ -357,40 +354,62 @@ High-context runs (many tasks, long wall time) accumulate orchestrator context p
 - `Z_IMPLEMENT_PAUSE_MINUTES` (default `30`) — wall minutes since last pause (or run start) that triggers a breakpoint.
 - Either env var set to `0` disables that trigger; both `0` disables compaction breakpoints entirely for this command.
 
-**Counters (orchestrator-side, in-memory; reset on every pause and on re-invocation):**
-- `tasks_since_pause`: incremented when a task transitions to `[x]` (done). **Not** incremented on retries (a single task with 3 retries counts as 1 completion). **Not** incremented when a task is rolled back to `[ ]` after a halt or abandon. A task surfaced as a halt and explicitly deferred by the user (left `[ ]` with a `**Note:**`) also does not increment — only `[x]` transitions count.
-- `pause_clock_start`: epoch seconds, set at run start and reset on every pause.
-
-**Trigger check (batch-settle only):** At the end of each batch — after all in-flight task tracks reach terminal status, after the atomic TASKS.md write, after the `batch_done` event is emitted, and after all halt signals from the batch have been surfaced and resolved or deferred by the user — evaluate:
-
-```
-Z_IMPLEMENT_PAUSE_TASKS="${Z_IMPLEMENT_PAUSE_TASKS:-5}"
-Z_IMPLEMENT_PAUSE_MINUTES="${Z_IMPLEMENT_PAUSE_MINUTES:-30}"
-NOW="$(date +%s)"
-WALL_MINUTES=$(( (NOW - pause_clock_start) / 60 ))
-
-if [ "$Z_IMPLEMENT_PAUSE_TASKS" -gt 0 ] && [ "$tasks_since_pause" -ge "$Z_IMPLEMENT_PAUSE_TASKS" ]; then
-    TRIGGER="task_count"
-elif [ "$Z_IMPLEMENT_PAUSE_MINUTES" -gt 0 ] && [ "$WALL_MINUTES" -ge "$Z_IMPLEMENT_PAUSE_MINUTES" ]; then
-    TRIGGER="wall_time"
-else
-    TRIGGER=""
-fi
-```
-
-**On trigger:** count the remaining `[ ]` tasks in `$TASKS_FILE` as `PENDING_REMAINING`. Emit:
+**Trigger check (batch-settle only):** At the end of each batch — after all in-flight task tracks reach terminal status, after the atomic TASKS.md write, after the `batch_done` event is emitted, and after all halt signals from the batch have been surfaced and resolved or deferred by the user — run the deterministic check script:
 
 ```bash
-bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" compaction_pause \
-  "$(printf '{"trigger":"%s","tasks_since_pause":%d,"wall_minutes_since_pause":%d,"pending_remaining":%d}' \
-     "$TRIGGER" "$tasks_since_pause" "$WALL_MINUTES" "$PENDING_REMAINING")"
+Z_IMPLEMENT_PAUSE_TASKS="${Z_IMPLEMENT_PAUSE_TASKS:-5}"
+Z_IMPLEMENT_PAUSE_MINUTES="${Z_IMPLEMENT_PAUSE_MINUTES:-30}"
+export Z_HARNESS_PLAN_DIR="$BASE"
+export Z_HARNESS_AGENT="${Z_HARNESS_AGENT:-pi}"
+export Z_IMPLEMENT_PAUSE_TASKS
+export Z_IMPLEMENT_PAUSE_MINUTES
+
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/check-compaction.sh"
+COMPACTION_TRIGGERED=$?
 ```
 
-Then push-notify (this is a hard pause — fires regardless of notification level; see [docs/human/config.md](docs/human/config.md)):
+`check-compaction.sh` reads `[x]` count from `$BASE/TASKS.md`, reads/writes a `.last-compaction-check` state file in `$BASE`, and evaluates both thresholds. It emits the `compaction_pause` event on trigger (exit code 1) and exits 0 otherwise. No LLM-side counters exist — the script is the sole evaluator.
 
-> "Compaction breakpoint: `<N>` tasks completed (or `<M>` min wall). `<K>` pending tasks remain. Run `/clear`, then re-invoke `/z-implement-all` to resume from TASKS.md. Use `/compact` instead if you need chat history for debugging."
+If `COMPACTION_TRIGGERED` is 0: continue to the next outer loop iteration.
 
-Finalize the loop cleanly: do **not** dispatch any new task. Exit with status 0. On the next `/z-implement-all` invocation, counters reset — if the user ran `/clear`, context is fresh and a new window is correct. If they did not `/clear`, they chose to forgo the breakpoint's benefit; the run proceeds with a new window.
+**On trigger (exit code 1):** push-notify (this is a hard pause — fires regardless of notification level) with the compaction breakpoint message, and ask:
+
+```
+AskUserQuestion "Compaction breakpoint: <N> tasks completed (<M> min wall). <K> pending tasks remain. Recommended: pause and /clear. Choose [Continue / Pause (recommended)]?"
+```
+
+If the user chooses **Continue** (overriding the recommended pause):
+```
+AskUserQuestion "Why continue over pausing? (press Enter to skip)"
+```
+If the user provides a reason:
+```bash
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/append-tier2-context.py" --phase implement --field human_overrides \
+  --json '{"phase":"implement","decision_id":"compaction-continue-<n>","override":"continue","reason":"<user reason>"}'
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" human_override_captured \
+  "$(printf '{"decision_id":"%s","gate":"compaction_breakpoint"}' "compaction-continue-<n>")"
+```
+If the user presses Enter (no reason), log:
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" human_override_skipped \
+  "$(printf '{"decision_id":"%s","gate":"compaction_breakpoint"}' "compaction-continue-<n>")"
+```
+The script has already updated `.last-compaction-check`, so the window restarts automatically. Continue the outer loop. Do **not** dispatch any new task until the next iteration.
+
+If the user chooses **Pause (recommended)** (following the recommendation, no override):
+
+Before exiting, write `session-status.json` with status `"paused"` and
+`halt_description: "compaction breakpoint"`. Use the atomic write pattern from
+the "Session status file" section above.
+
+Write the handoff artifact for Hermes consumption (best-effort, non-fatal):
+
+```bash
+export Z_HARNESS_PLAN_DIR Z_HARNESS_SLUG Z_HARNESS_AGENT
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/write-handoff.sh" || true
+```
+
+Finalize the loop cleanly: do **not** dispatch any new task. Exit with status 0. The script's `.last-compaction-check` state file has been updated, so the next invocation starts with a fresh window. If the user ran `/clear`, context is fresh. If they did not `/clear`, they chose to forgo the breakpoint's benefit; the run proceeds with residual context.
 
 **No trigger:** continue to the next outer loop iteration (step 1).
 
@@ -414,6 +433,45 @@ These exist because the T006 saga (4 attempts spanning ~20 wall-clock hours, eac
 - **`MAX_DISTINCT_HALTS=3` per task ID.** If a task has been halted with 3 different `reason` values across all attempts (e.g. `spec_problem`, `unable_to_complete`, `environmental`), auto-flag it as skip for the rest of the run and present to the user with a one-line summary of the three failure modes. Prevents the T006 pattern.
 - **`MAX_BATCH_STALL_MS=1800000` (30 min) per batch.** If a batch goes 30 min with no `task_done` or `task_halt` event from *any* in-flight track, the orchestrator considers it stalled. Push-notify the user with a list of in-flight task IDs and ask: continue waiting / cancel batch / kill specific tracks.
 - **Halt taxonomy that doesn't burn an attempt.** A task halted with `reason: "needs_clarification"` or `reason: "decision_needed"` where the user resolves it and asks to resume *does not* count toward `MAX_ATTEMPTS`. Resolved spec/decision halts reset the attempt counter for that task. (Otherwise a 3-decision-gate task could exhaust its attempts before implementer ever wrote code.)
+
+## Session status file (session-status.json)
+
+Write `$BASE/session-status.json` at each state transition so the Hermes
+orchestrator can monitor this session. Use atomic writes (temp + rename).
+
+The file is a best-effort log — if the write fails, log a warning and continue.
+The orchestrator falls back to TASKS.md inspection when the file is absent.
+
+**Write helper (use at each state transition below):**
+
+```bash
+# Atomic write of session-status.json to $BASE
+python3 -c "
+import json, os, datetime
+status = {
+    'status': '<running|halted|done|paused>',
+    'halt_reason': '<decision_needed|spec_problem|needs_clarification|null>',
+    'halt_description': '<free-text or null>',
+    'tasks_done': <count of [x] tasks>,
+    'tasks_total': <total task count>,
+    'current_task': '<task-id or null>',
+    'updated_at': datetime.datetime.utcnow().isoformat() + 'Z'
+}
+path = os.path.join(os.environ.get('BASE', '.'), 'session-status.json')
+tmp = path + '.tmp'
+with open(tmp, 'w') as f:
+    json.dump(status, f, indent=2)
+os.rename(tmp, path)
+" 2>/dev/null || echo "WARNING: session-status.json write failed" >&2
+```
+
+**Write sites:**
+- **Task start** (Step 3, after marking `[~]`): status `"running"`, current_task `<id>`
+- **Task halted** (any halt — wait timeout, spec_problem, decision_needed, needs_clarification, unable_to_complete): status `"halted"`, halt_reason + halt_description from the halt
+- **Task done** (Step 8, after marking `[x]`): status `"running"` with updated tasks_done; if all tasks done → status `"done"`
+- **Compaction pause** (compaction_pause): status `"paused"`
+- **Finalize — all done**: status `"done"`, tasks_done == tasks_total
+- **Finalize — hard halt**: status `"halted"`, halt_reason from the final halt
 
 ## Main loop
 
@@ -459,6 +517,23 @@ When halting on a skip-flagged task, immediately push-notify (fires regardless o
 - **Defer** — leave `[ ]`, eligible again on the next outer loop iteration (use when waiting on a transient condition).
 - **Override and run anyway** — only if user explicitly accepts; proceed to step 3.
 
+**Human override capture:** If the user picks **Override and run anyway** (overriding the recommended skip/defer):
+```
+AskUserQuestion "Why run anyway over skip/defer? (press Enter to skip)"
+```
+If the user provides a reason:
+```bash
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/append-tier2-context.py" --phase implement --field human_overrides \
+  --json '{"phase":"implement","decision_id":"<task-id>-skip-override","override":"run anyway","reason":"<user reason>"}'
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" human_override_captured \
+  "$(printf '{"decision_id":"%s","gate":"blocked_task"}' "<task-id>-skip-override")"
+```
+If the user presses Enter (no reason), log the skip:
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" human_override_skipped \
+  "$(printf '{"decision_id":"%s","gate":"blocked_task"}' "<task-id>-skip-override")"
+```
+
 Critical: **never retry a skip-flagged task in the same run** unless the user picked "Override and run anyway". The 20+ hour T006 episode (run `20260517T223141Z-expand-sports-ml`) happened because retries kept firing despite the SPEC marking it remote-only.
 
 ### 3. Mark in-progress
@@ -475,6 +550,10 @@ python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-reg
 ```
 For a parallel batch, emit one heartbeat per task as it flips to `[~]` (last write wins on
 `current_task`; this is opportunistic liveness, not exact tracking).
+
+Write `session-status.json` — status `"running"`, `current_task` set to `<task-id>`,
+`tasks_done` from current `[x]` count. Use the atomic write pattern from the
+"Session status file" section above.
 
 ### 3.5. Per-task lease lifecycle
 
@@ -550,7 +629,9 @@ Present `AskUserQuestion`: **proceed anyway** / **wait** / **abort task**.
 
 **Dispatch implementer** (step 4 → step 5) with the claimed paths in scope.
 
-**On clean task success (step 8):** release the lease before marking `[x]`:
+**On clean task success (step 8):** release the lease before marking `[x]`.
+After marking `[x]`, write `session-status.json` with updated `tasks_done`.
+If all tasks are now done, set status `"done"`.
 ```bash
 python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" release \
   --run-id "$RUN" --paths "$CLAIM"   # CLI self-logs registry_error on failure; exits 0 always
@@ -562,6 +643,11 @@ with any newly-touched paths before re-dispatch. Do NOT release until clean succ
 **On halt mid-task** (unable_to_complete, wall-clock-cap, MAX_ATTEMPTS exhaustion): do NOT
 release. Rely on `deregister` (Finalize) or `reap` (stale-timeout) to clean up `held_paths`.
 A partially-applied edit must not release the lease before the task resolves.
+
+When a task halts for ANY reason (wait timeout, spec_problem, decision_needed,
+needs_clarification, unable_to_complete), write `session-status.json` with
+status `"halted"`, the halt reason, and the halt description before surfacing
+the question to the user.
 
 ### 4. Identify related-file context + relevant docs (paths only — no slice extraction)
 
@@ -617,7 +703,7 @@ The precheck is cheap (≤30s) and saves 30-60 minutes per spec-drift incident �
 <!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
   subagent_type="implementer",
   description="Implement <task-id>",
-  prompt="<task-id>\n\n<task block verbatim from $TASKS_FILE>\n\n$BASE: <abs path>  (read SPEC.md / PLAN.md yourself from here)\nRepo root: <abs path>\nrelevant_docs (paths — Read these for cross-file invariants and consumer contracts): <paths from step 4b>\ntests_md_path: <$BASE/TESTS.md if it exists, else empty>  (if the task block contains a **Tests:** line, Read TESTS.md and produce test code for each listed TEST-NNN at its Target file path, in the same diff as the production code)\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+  prompt="<task-id>\n\n<task block verbatim from $TASKS_FILE>\n\n$BASE: <abs path>  (read SPEC.md / PLAN.md yourself from here)\nRepo root: <abs path>\nrelevant_docs (paths — Read these for cross-file invariants and consumer contracts): <paths from step 4b>\ntests_md_path: <$BASE/TESTS.md if it exists, else empty>  (if the task block contains a **Tests:** line, Read TESTS.md. Parse the **Version:** header: if v2, for each listed TEST-NNN, read **Invariant ID:**, **Fixture:**, **Layer:**, **Target file:**, **Assertion:**. Skip entries with **Layer:** full-chain — those are implemented later. Use **Fixture:** values as test inputs. If v1 or no version header, use legacy parsing: read **Target file:**, **Setup:**, **Assertion:**. Produce test code at the **Target file:** path, in the same diff as the production code)\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
 )
 ```
 
@@ -635,12 +721,30 @@ The precheck is cheap (≤30s) and saves 30-60 minutes per spec-drift incident �
 )
 ```
 
-Parse the implementer's return per the `STATUS:` block. Branches:
+Parse the implementer's return per the `STATUS:` block. **Also parse RATIONALE, TRIED, DEVIATIONS fields** from the return for Tier 2 context accumulation (see step 5.6 below). Branches:
 
 - `STATUS: ok` → go to step 6 (review)
 - `STATUS: needs_clarification` → halt queue, push-notify, present the question to the user via `AskUserQuestion`. After answer, update SPEC.md if appropriate, then re-spawn implementer with the resolved info.
 - `STATUS: spec_problem` → halt queue, push-notify, escalate to user. Likely needs SPEC patch before any further tasks proceed.
 - `STATUS: decision_needed` → halt queue, push-notify, present the decision + options via `AskUserQuestion`. This is the "major design decision must be approved by user" gate. Record the decision in `$BASE/archive/$RUN/decisions-late.md`. After answer, re-spawn implementer.
+
+  **Human override capture:** After the user resolves the decision (the implementer recommended an approach; if the user chose a different path, that's an override):
+  ```
+  AskUserQuestion "Why [chosen approach] over [recommended approach]? (press Enter to skip)"
+  ```
+  If the user provides a reason:
+  ```bash
+  python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/append-tier2-context.py" --phase implement --field human_overrides \
+    --json '{"phase":"implement","decision_id":"<task-id>-decision-<n>","override":"<user choice>","reason":"<user reason>"}'
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" human_override_captured \
+    "$(printf '{"decision_id":"%s","gate":"decision_needed"}' "<task-id>-decision-<n>")"
+  ```
+  If the user followed the recommendation (no override), skip capture. If the user overrode but pressed Enter on the follow-up (no reason), log:
+  ```bash
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" human_override_skipped \
+    "$(printf '{"decision_id":"%s","gate":"decision_needed"}' "<task-id>-decision-<n>")"
+  ```
+
 - `STATUS: unable_to_complete` → flip `[~]` back to `[ ]`, halt queue, push-notify with the reason.
   This is a run-ending halt (Main-loop condition 2). Per the FINALIZE_STATUS rule in Phase 0.0:
   **set `FINALIZE_STATUS=aborted`** before jumping to Finalize so the record is deregistered as
@@ -679,10 +783,66 @@ Parse the reviewer's response. Group findings by severity.
 
 ### 7. Handle review outcome
 
-- **No blockers, no majors** → accept; go to step 8 (done).
+- **No blockers, no majors** → accept; go to step 7a.5 (Tier 1 doc sync), then step 8 (done).
 - **Has blockers or majors** →
   - **First failure**: re-spawn implementer once with the reviewer's findings as `prior-attempt reviewer feedback`. Then re-review.
   - **Second failure**: halt queue. Push-notify. Present diff + reviewer findings to user; await `AskUserQuestion` for "proceed anyway / patch manually / abandon task / re-spec".
+
+#### 7a.5 Tier 1 doc sync (after reviewer passes, before step 8)
+
+After the reviewer returns with no blockers and no majors, run Tier 1 mechanical doc sync:
+
+1. **Capture per-task diff:** Use the same diff captured in step 6 (`$BASE/archive/tasks/<task-id>/diff.patch`). Do NOT use `git diff HEAD~1` — the per-task diff is authoritative.
+
+2. **Spawn tier1-doc-updater (Flash) subagent:**
+```
+<!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
+  subagent_type="tier1-doc-updater",
+  description="Tier 1 doc sync <task-id>",
+  prompt="Task diff: $BASE/archive/tasks/<task-id>/diff.patch\nINDEX.json path: docs/llm/INDEX.json\nPlan dir: $BASE\nRepo root: <abs path>"
+)
+```
+
+3. **Parse return:** STATUS, CONCEPTS_TOUCHED, DRIFT_WARNINGS
+4. **DRIFT_WARNINGS:** Log `doc_drift` event per affected slug:
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" doc_drift \
+     '{"concept":"<slug>","claim":"<what doc said>","reality":"<what code says>","file":"<path>"}'
+   ```
+5. **Failure:** Non-fatal. Log `tier1_failed` event, continue to step 8.
+6. **Success:** Log `tier1_complete` event with concepts_touched count.
+
+Concurrency: Tier 1 runs in the same track as the reviewer (sequential within task, parallel across tracks).
+
+#### 5.6 Tier 2 context accumulation (after implementer returns, before reviewer dispatch)
+
+After the implementer returns with STATUS: ok and RATIONALE/TRIED/DEVIATIONS are parsed, accumulate into tier2-context.json:
+
+1. **Append tried_and_failed** (if TRIED non-empty):
+   ```bash
+   python3 scripts/append-tier2-context.py --phase implement --field tried_and_failed \
+     --json '<parsed TRIED entries as JSON>' --upsert
+   ```
+
+2. **Append deviations** (if DEVIATIONS non-empty):
+   ```bash
+   python3 scripts/append-tier2-context.py --phase implement --field deviations \
+     --json '<parsed DEVIATIONS entries as JSON>' --upsert
+   ```
+
+3. **Detect and append breaking_changes:** Scan the implementer's FILES_CHANGED and diff for changed public API signatures (function signature delta in public modules). If found:
+   ```bash
+   python3 scripts/append-tier2-context.py --phase implement --field breaking_changes \
+     --json '<detected breaking changes as JSON>' --upsert
+   ```
+
+4. After reviewer validates DEVIATIONS (step 7), update the tier2-context.json entry:
+   ```bash
+   python3 scripts/append-tier2-context.py --phase implement --field deviations \
+     --json '{"task":"<id>","reviewer_validated":true}' --upsert
+   ```
+
+Non-fatal: append failures log `tier2_append_failed` event, continue.
 
 #### 7a. Delta-on-retry (mandatory for cycle ≥ 2)
 
@@ -738,9 +898,31 @@ If the task block declares `**Tests:** TEST-001, ...` and `$BASE/test-runner.jso
 mkdir -p "$BASE/archive/tasks/<task-id>"
 TEMPLATE="$(jq -r .cmd_template "$BASE/test-runner.json")"
 PASSED=0; FAILED=0
+SKIPPED=0
+
+# Check TESTS.md version
+VERSION="$(grep -m1 '^\*\*Version:\*\*' "$BASE/TESTS.md" 2>/dev/null | sed 's/.*Version:\*\* *//' | tr -d '[:space:]' || echo '1')"
+
 for TEST_ID in <list from **Tests:** line>; do
-  TARGET="$(awk -v id="$TEST_ID" '/^## /{cur=$0} cur ~ id && /^\*\*Target file:\*\*/{print $3; exit}' "$BASE/TESTS.md")"
-  TEST_NAME="$(awk -v id="$TEST_ID" '/^## /{cur=$0} cur ~ id && /^\*\*Setup:\*\*/{p=1; next} p && /^\*\*Failure class:\*\*/{p=0} 1' "$BASE/TESTS.md")"
+  if [ "$VERSION" = "2" ]; then
+    # v2 parsing: check layer, skip full-chain
+    LAYER="$(awk -v id="$TEST_ID" '/^## /{cur=$0; found=0} cur ~ id {found=1} found && /^\*\*Layer:\*\*/{print $2; exit}' "$BASE/TESTS.md")"
+    if [ "$LAYER" = "full-chain" ]; then
+      echo "[SKIP] $TEST_ID (layer: full-chain — deferred to post-implementation)" >> "$BASE/archive/tasks/<task-id>/test-result.txt"
+      SKIPPED=$((SKIPPED+1))
+      continue
+    fi
+    TARGET="$(awk -v id="$TEST_ID" '/^## /{cur=$0; found=0} cur ~ id {found=1} found && /^\*\*Target file:\*\*/{print $3; exit}' "$BASE/TESTS.md")"
+    TEST_NAME="$(awk -v id="$TEST_ID" '/^## /{cur=$0; found=0} cur ~ id {found=1} found && /^\*\*Invariant ID:\*\*/{print $3; exit}' "$BASE/TESTS.md")"
+    # Use Invariant ID as test name filter if present; fall back to parsing assertion
+    if [ -z "$TEST_NAME" ]; then
+      TEST_NAME="$(echo "$TEST_ID" | tr '[:upper:]' '[:lower:]' | tr '-' '_')"
+    fi
+  else
+    # v1 legacy parsing
+    TARGET="$(awk -v id="$TEST_ID" '/^## /{cur=$0} cur ~ id && /^\*\*Target file:\*\*/{print $3; exit}' "$BASE/TESTS.md")"
+    TEST_NAME="$(awk -v id="$TEST_ID" '/^## /{cur=$0} cur ~ id && /^\*\*Setup:\*\*/{p=1; next} p && /^\*\*Failure class:\*\*/{p=0} 1' "$BASE/TESTS.md")"
+  fi
   # The implementer's TESTS_IMPLEMENTED return is the authoritative source of (TEST_ID, target_file, test_name).
   # Prefer parsing it; fall back to TESTS.md grep above.
   CMD="$(echo "$TEMPLATE" | sed "s|{TARGET_FILE}|$TARGET|g; s|{TEST_NAME}|$TEST_NAME|g")"
@@ -782,8 +964,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tas
 ```
 (`tests_passed`/`tests_failed` are 0 if the task had no `**Tests:**` line.)
 4. If notify.level is `all` (see [docs/human/config.md](docs/human/config.md)): push-notify per-task. (For `approval_only` default: only notify on halts.)
-5. Increment `tasks_since_pause` by 1 (this task reached `[x]`; retries and rollbacks do not count).
-6. **Batch-settle compaction check (once per batch, after all tracks finish).** When all parallel tracks in this outer iteration have completed (all have reached terminal status, the atomic TASKS.md write is done, `batch_done` is emitted, and all halt signals have been surfaced and resolved or deferred by the user), run the trigger check documented in the "Compaction breakpoint policy" section above. If a trigger fires: emit the `compaction_pause` event, push-notify, and exit cleanly with no new dispatch. If no trigger fires: continue to step 1.
+5. **Batch-settle compaction check (once per batch, after all tracks finish).** When all parallel tracks in this outer iteration have completed (all have reached terminal status, the atomic TASKS.md write is done, `batch_done` is emitted, and all halt signals have been surfaced and resolved or deferred by the user), run the trigger check documented in the "Compaction breakpoint policy" section above (the `check-compaction.sh` invocation). If exit code 1: follow the pause protocol in that section, then exit cleanly with no new dispatch. If exit code 0: continue to step 1.
 
    If pending tasks remain but the loop exits due to a compaction trigger, the Finalize section is **skipped** — the push notification text is sufficient, and Finalize's "no more eligible tasks" summary would be misleading (tasks are not blocked, just paused).
 
@@ -791,7 +972,19 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tas
 
 When the loop exits (no more eligible tasks, or you halted):
 
-0. **Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the single
+0. **Tier 1 reconciliation (apply staged doc updates).** If `$BASE/tier1-staged/` has content:
+   ```bash
+   DRY_RUN_FLAG=""
+   [ "${Z_HARNESS_TIER1_DRY_RUN:-}" = "1" ] && DRY_RUN_FLAG="--dry-run"
+   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/reconcile-tier1-staged.py" $DRY_RUN_FLAG
+   RC=$?
+   ```
+   - `RC == 0`: log `tier1_reconciled` event with concept count. Continue.
+   - `RC == 1` (merge conflict): halt reconciliation; log `tier1_reconcile_failed` event; surface conflict to user.
+   - `RC == 2` (write error): log event, continue (non-fatal).
+   - Reconciliation runs even if some Tier 1 tasks failed (partial reconciliation of successful tasks).
+
+1. **Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the single
    FINALIZE_STATUS rule (Phase 0.0): `${FINALIZE_STATUS:-complete}` resolves to `complete` on a
    normal exit (condition 1, no eligible task remaining) and to `aborted` when a hard-halt path
    set `FINALIZE_STATUS=aborted` before reaching here (condition 2 — a `spec_problem`,
@@ -808,6 +1001,12 @@ When the loop exits (no more eligible tasks, or you halted):
    paused, not finished; the next `/z-implement-all` invocation re-registers (idempotent) and
    resumes. Deregistering on a pause would erase the live record and hide a still-active run from
    concurrent sessions.
+
+   After deregistering, write `session-status.json` with the final state:
+   - If normal exit (no eligible tasks) → status `"done"`, `tasks_done == tasks_total`
+   - If hard halt (`FINALIZE_STATUS=aborted`) → status `"halted"`, halt_reason from the
+     final halt that triggered the exit
+   Use the atomic write pattern from the "Session status file" section above.
 1. Re-read `$TASKS_FILE` for final counts: `done`, `pending`, `in_progress`, `skipped`.
 2. Write a summary message to the user:
    - Counts
@@ -820,7 +1019,8 @@ Orchestration complete: X done, Y skipped, Z blocked.
 
 Recommended next:
   /z-review-all      — final-gate cross-LLM review of the cumulative diff
-  /z-maintain-docs   — refresh docs for any concepts the implementation touched
+  /z-doc-rationale   — (after /z-review-all) produce ADRs, design rationale, migration guides from accumulated Tier 2 context
+  /z-maintain-docs   — (quarterly) deep-clean fallback for prose drift, stale memories, tag collisions
 ```
    Both are safe to run in sequence; they cover different concerns (correctness vs documentation freshness).
 

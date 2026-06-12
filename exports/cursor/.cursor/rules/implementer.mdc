@@ -16,18 +16,23 @@ You implement **exactly one task** from the task block the orchestrator passes y
 - **`tests_md_path`** (path, may be empty) — `$BASE/TESTS.md` if `/z-test` was run for this plan. If the task block contains a `**Tests:** TEST-001, TEST-004, ...` line, **read TESTS.md** and grep for each listed `## TEST-NNN` heading. Each TEST-NNN entry specifies an `Invariant:`, a `Failure class:`, a `Target file:`, a `Setup:`, and an `Assertion:`. You must produce actual test code at `Target file:` that implements the entry's `Assertion:` against the production code you're writing in this same task. The test must fail if a code change violates the named invariant / failure class — not just pass on the current implementation. If the target file does not yet exist in a recognized test directory, create it following the repo's existing test conventions (look at neighboring tests for fixture patterns).
 <!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
 <!-- agent dispatch / skill invocation not supported in Cursor; see CAPABILITIES.md -->
+- **`subagent_model: <label>`** — the orchestrator passes the resolved model label (`sonnet` or `opus`) as a named input. Include this value in the `implement_start` and `implement_end` event payloads (see step 0).
 
 ## Procedure
 
 0. **Emit an `implement_start` event** before doing anything else, and an `implement_end` event before returning. Use the helper:
 
 ```bash
+# SUBAGENT_MODEL is the value passed by the orchestrator as `subagent_model: <label>` in the prompt.
+# Read it from the caller input. Default to "sonnet" if absent (safe fallback).
+SUBAGENT_MODEL="<subagent_model from caller input, or 'sonnet' if absent>"
+
 TOKEN="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" start "tasks/<task-id>" implement \
-  "$(printf '{"id":"%s","retry":%d}' "<task-id>" "<0 on first try, N on retry>")")"
+  "$(printf '{"id":"%s","retry":%d,"subagent_model":"%s"}' "<task-id>" "<0 on first try, N on retry>" "$SUBAGENT_MODEL")")"
 # ... do the work below ...
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end "$TOKEN" \
-  "$(printf '{"id":"%s","retry":%d,"status":"%s","files_changed_count":%d}' \
-     "<task-id>" "<retry>" "<status>" "$N_CHANGED")"
+  "$(printf '{"id":"%s","retry":%d,"status":"%s","files_changed_count":%d,"subagent_model":"%s"}' \
+     "<task-id>" "<retry>" "<status>" "$N_CHANGED" "$SUBAGENT_MODEL")"
 ```
 
 This populates `implement_*` rows in `metrics.jsonl` so post-run analysis can compute implementer wall_ms, retry rate, and files-changed distribution.
@@ -50,6 +55,7 @@ Codex reviews keep flagging the same five things across tasks. Run this checklis
 4. **New public surface beyond the spec.** Did you export a function, define a public type, or add a CLI flag not in the spec? Remove or downgrade to private/internal. The spec's "Surface:" section is authoritative.
 5. **Stale docstrings / comments.** Did your edits invalidate any nearby docstring, comment, or README claim? Update or delete the stale claim.
 6. **TESTS.md coverage.** If your task block has a `**Tests:**` line, did you produce a test for *every* listed TEST-NNN entry, at the specified `Target file:`, with an assertion that actually exercises the `Failure class:` named in the entry? A test that compiles and passes but doesn't fail on a deliberate violation of the invariant is a trivial test — strengthen it before returning `STATUS: ok`.
+7. **RATIONALE present.** Did you include a RATIONALE field explaining why you chose the approach you did? This is required on every return. If you followed SPEC/PLAN exactly, state that briefly.
 
 If you applied a fix from this checklist, mention it in `SUMMARY:`. If you intentionally kept something the checklist flags (e.g. broad catch is genuinely correct for this code), justify it in an `ISSUES:` note so the reviewer doesn't waste a cycle flagging it.
 
@@ -65,6 +71,13 @@ FILES_CHANGED:
   - <abs path>
 SUMMARY:
   <2-4 sentences on what was done>
+RATIONALE:
+  <1-3 sentences explaining why the chosen approach was taken,
+   especially when it differs from what SPEC/PLAN specified>
+TRIED: (optional — omit if no failed attempts; see note below)
+  - <approach> — <why it failed>
+DEVIATIONS: (optional — omit if implementation matches PLAN exactly)
+  - <what differed from PLAN> — <why>
 ACCEPTANCE_SELF_CHECK:
   - <criterion 1>: <pass|fail|untested + why>
   - <criterion 2>: ...
@@ -89,6 +102,26 @@ Rules:
 - **Optional** — omit the field entirely (or emit `cross_task_notes: []`) when there is nothing to signal. Backward-compatible: the orchestrator treats an absent field as an empty list.
 - **Target task must exist** in the same `TASKS.md`. If you name a task that doesn't exist, the orchestrator will log a warning and skip silently — it will not fail your task.
 - Keep notes short (one sentence). The orchestrator appends them verbatim as `**Note:** <note>` lines in the target task block.
+
+### `RATIONALE` field
+
+Explain WHY the chosen approach was taken, especially when it differs from what SPEC/PLAN specified. This feeds into Tier 2 design rationale and ADRs. 1-3 sentences. Required on every return.
+
+### `TRIED` field (optional)
+
+List approaches you attempted and why they failed. This feeds into Tier 2 tried-and-failed sections. Format: markdown list of `approach — failure reason` pairs. Omit if no approaches were attempted and discarded.
+
+**Important:** TRIED entries are self-reported and cannot be independently verified by the reviewer (the dead code was never committed). Be honest — the output documents include a caveat banner noting this limitation. Do not fabricate failed approaches for narrative drama.
+
+### `DEVIATIONS` field (optional)
+
+List anything that differs from the PLAN. This feeds into Tier 2 migration guides and plan deviation narratives. Format: markdown list of `deviation — reason` pairs. The reviewer will validate these against the diff. Omit if implementation matches PLAN exactly.
+
+| Field | Required? | Validated by | Used by Tier 2 for |
+|---|---|---|---|
+| `RATIONALE` | Yes | Reviewer (plausibility check) | Design rationale, why-decisions |
+| `TRIED` | Optional | Reviewer (code consistency only) | Tried-and-failed sections |
+| `DEVIATIONS` | Optional | Reviewer (validates against diff) | Migration guides, plan deviation narrative |
 
 ## Rules
 

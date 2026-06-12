@@ -5,6 +5,9 @@ role: skill
 
 You are running the **z-harness `/z-research`** meta-orchestrator pipeline.
 
+<!-- NO_SESSION_GUARD -->
+**Session persistence required.** This pipeline spans multiple phases, dispatches subagents, and may need to resume after a pause. If you are running in `--no-session` mode (session is not persisted to disk), stop immediately and tell the user: "`/z-research` requires a persistent session. Please restart pi without `--no-session`." Then halt. Do not proceed.
+
 Arguments (from `$ARGUMENTS`):
 
 $ARGUMENTS
