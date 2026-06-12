@@ -2,7 +2,15 @@
 
 > Generated: 2026-06-09
 > Plan: doc-updater-agent
-> Status: ready
+> Status: complete
+> Reconciled: 2026-06-12 — All T001–T018 artifacts were delivered by the ECC-harness
+> port (commit 8253bc9) and verified present + functional during the 2026-06-12 audit:
+> scripts run, the z-implement-all / z-plan / z-review-all integrations are substantive,
+> reviewer.md carries the DEVIATIONS/RATIONALE/TRIED checks, INDEX.json + concept docs
+> exist, and 22 human docs carry AUTO-START markers. Audit fix applied:
+> `agents/tier1-doc-updater.md` had an invalid `model: flash` pin (no such alias in
+> z-harness; contradicts the Haiku mapping) — corrected to `model: haiku` and constrained
+> `tools:` to `Read, Grep, Glob, Write, Bash` to match sibling mechanical agents.
 
 ---
 
@@ -12,7 +20,7 @@
 
 - **Files:** `scripts/append-tier2-context.py` (new)
 - **Deps:** None
-- **Status:** [ ]
+- **Status:** [x]
 - **Complexity:** medium
 
 Create the incremental context accumulation script.
@@ -33,7 +41,7 @@ Create the incremental context accumulation script.
 
 - **Files:** `scripts/reconcile-tier1-staged.py` (new)
 - **Deps:** None
-- **Status:** [ ]
+- **Status:** [x]
 - **Complexity:** medium
 
 Create the Tier 1 staged update reconciliation script.
@@ -57,7 +65,7 @@ Create the Tier 1 staged update reconciliation script.
 
 - **Files:** `agents/tier1-doc-updater.md` (new)
 - **Deps:** None
-- **Status:** [ ]
+- **Status:** [x]
 - **Complexity:** medium
 
 Define the Tier 1 mechanical doc sync Flash subagent.
@@ -85,7 +93,7 @@ Define the Tier 1 mechanical doc sync Flash subagent.
 
 - **Files:** `commands/z-doc-rationale.md` (new), `skills/z-doc-rationale/SKILL.md` (new)
 - **Deps:** T001 (append-tier2-context.py)
-- **Status:** [ ]
+- **Status:** [x]
 - **Complexity:** high
 - **DOCS:** tier2-doc-rationale
 
@@ -120,7 +128,7 @@ Define the Tier 2 `/z-doc-rationale` command.
 
 - **Files:** `agents/implementer.md` (modify)
 - **Deps:** None
-- **Status:** [ ]
+- **Status:** [x]
 - **Complexity:** low
 - **DOCS:** implementer
 
@@ -142,7 +150,7 @@ Add RATIONALE, TRIED, DEVIATIONS fields to implementer return contract.
 
 - **Files:** `agents/reviewer.md` (modify)
 - **Deps:** T005 (implementer contract)
-- **Status:** [ ]
+- **Status:** [x]
 - **Complexity:** low
 - **DOCS:** reviewer
 
@@ -166,7 +174,7 @@ Add DEVIATIONS validation, RATIONALE plausibility check, and TRIED consistency c
 
 - **Files:** `skills/z-implement-all/SKILL.md` (modify), `exports/pi/prompts/z-implement-all.md` (modify if exists)
 - **Deps:** T001, T002, T003
-- **Status:** [ ]
+- **Status:** [x]
 - **Complexity:** high
 
 Add Tier 1 doc sync dispatch after each task's reviewer passes.
@@ -187,7 +195,7 @@ Add Tier 1 doc sync dispatch after each task's reviewer passes.
 
 - **Files:** `skills/z-implement-all/SKILL.md` (modify)
 - **Deps:** T001, T005
-- **Status:** [ ]
+- **Status:** [x]
 - **Complexity:** medium
 
 Accumulate per-task tried_and_failed, deviations, and breaking_changes into tier2-context.json.
@@ -209,7 +217,7 @@ Accumulate per-task tried_and_failed, deviations, and breaking_changes into tier
 
 - **Files:** `skills/z-implement-all/SKILL.md` (modify)
 - **Deps:** T001
-- **Status:** [ ]
+- **Status:** [x]
 - **Complexity:** low
 
 Capture human override reasons at z-implement-all decision gates.
@@ -231,7 +239,7 @@ Capture human override reasons at z-implement-all decision gates.
 
 - **Files:** `skills/z-implement-all/SKILL.md` (modify)
 - **Deps:** T002, T007
-- **Status:** [ ]
+- **Status:** [x]
 - **Complexity:** low
 
 Add Tier 1 reconciliation step in z-implement-all Finalize phase.
@@ -252,7 +260,7 @@ Add Tier 1 reconciliation step in z-implement-all Finalize phase.
 
 - **Files:** `skills/z-plan/SKILL.md` (modify)
 - **Deps:** T001
-- **Status:** [ ]
+- **Status:** [x]
 - **Complexity:** medium
 
 Initialize tier2-context.json during z-plan Phase 3 (consultant synthesis).
@@ -272,7 +280,7 @@ Initialize tier2-context.json during z-plan Phase 3 (consultant synthesis).
 
 - **Files:** `skills/z-plan/SKILL.md` (modify)
 - **Deps:** T001, T011
-- **Status:** [ ]
+- **Status:** [x]
 - **Complexity:** low
 
 Capture human override reasons during z-plan Phase 5 approval.
@@ -293,7 +301,7 @@ Capture human override reasons during z-plan Phase 5 approval.
 
 - **Files:** `commands/z-review-all.md` (modify)
 - **Deps:** T001
-- **Status:** [ ]
+- **Status:** [x]
 - **Complexity:** medium
 
 Append aggregate review patterns to tier2-context.json during z-review-all findings aggregation.
@@ -311,7 +319,7 @@ Append aggregate review patterns to tier2-context.json during z-review-all findi
 
 - **Files:** `commands/z-review-all.md` (modify)
 - **Deps:** T001, T008, T013
-- **Status:** [ ]
+- **Status:** [x]
 - **Complexity:** medium
 
 Finalize tier2-context.json and apply three-signal OR gate for Tier 2 recommendation.
@@ -341,7 +349,7 @@ Finalize tier2-context.json and apply three-signal OR gate for Tier 2 recommenda
 
 - **Files:** `scripts/add-doc-markers.py` (new), multiple `docs/human/*.md` (modify)
 - **Deps:** T003 (marker format defined)
-- **Status:** [ ]
+- **Status:** [x]
 - **Complexity:** low
 
 Add delimiter markers to existing human-tier docs.
@@ -363,7 +371,7 @@ Add delimiter markers to existing human-tier docs.
 
 - **Files:** `docs/llm/INDEX.json` (modify)
 - **Deps:** T003, T004
-- **Status:** [ ]
+- **Status:** [x]
 - **Complexity:** low
 
 Add new concept entries and update existing ones.
@@ -382,7 +390,7 @@ Add new concept entries and update existing ones.
 
 - **Files:** `docs/human/tier1-doc-updater.md` (new), `docs/human/tier2-doc-rationale.md` (new), `docs/llm/tier1-doc-updater.json` (new), `docs/llm/tier2-doc-rationale.json` (new)
 - **Deps:** T003, T004, T015
-- **Status:** [ ]
+- **Status:** [x]
 - **Complexity:** medium
 - **DOCS:** tier1-doc-updater, tier2-doc-rationale
 
@@ -402,7 +410,7 @@ Create human-tier and LLM-tier docs for the two new concepts.
 
 - **Files:** No production files; test artifacts only
 - **Deps:** T001-T017
-- **Status:** [ ]
+- **Status:** [x]
 - **Complexity:** high
 
 Verify the full pipeline works end-to-end.

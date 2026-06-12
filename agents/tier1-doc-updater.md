@@ -1,7 +1,8 @@
 ---
 name: tier1-doc-updater
-description: Flash subagent for Tier 1 per-task mechanical doc sync. Reads task diff, reverse-lookups changed files to concepts via INDEX.json, applies surgical updates to AUTO-START/AUTO-END delimited machine-truth fields.
-model: flash
+description: Flash-tier (Haiku) subagent for Tier 1 per-task mechanical doc sync. Reads task diff, reverse-lookups changed files to concepts via INDEX.json, applies surgical updates to AUTO-START/AUTO-END delimited machine-truth fields.
+tools: Read, Grep, Glob, Write, Bash
+model: haiku
 compatible_roles: [implementer]
 tags: [docs, tier1, mechanical]
 ---
