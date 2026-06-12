@@ -823,6 +823,31 @@
         "commands"
       ],
       "summary": "Opt-in pre-review gate-down at the per-task implement gate. Z_HARNESS_IMPL_PRE_REVIEW default 0 (SHIPS INERT; knob-off is byte-identical to today). When on: Step 6.P1 tier-drift re-check via complexity-classifier (must strip cached **Complexity:** line; drift-up emits tier_drift_detected and forces codex). Step 6.P2 gate-down (low-tier only): Flash pre-reviewer dispatch; CLEAN verdict skips codex + emits review_gated_down; flagged verdict escalates to codex with Flash findings prepended as FLASH_PREPEND. Medium/high always go to codex unchanged. Flash unavailable emits pre_review_skipped + falls through to codex (fail-safe toward more thorough review). COST-INVERSION CAVEAT: Flash-on-all + codex-on-subset can invert cost vs codex-on-all. EVIDENCE GATE: knob is undocumented-as-recommended until scripts/audit-preview-misses.sh shows acceptable Flash false-negative rate."
+    },
+    {
+      "slug": "hermes-orchestration",
+      "source_files": [
+        "scripts/hermes-execute.py",
+        "scripts/hermes/config.py",
+        "scripts/hermes/cross_plan.py",
+        "scripts/generate-workstreams.py",
+        "scripts/hermes/merge.py",
+        "scripts/hermes/schema.py",
+        "scripts/hermes/worktree.py",
+        "scripts/hermes/session.py",
+        "docs/human/hermes-integration-v1.md"
+      ],
+      "last_updated": "2026-06-12",
+      "confidence": "high",
+      "depends_on": [
+        "active-plan-registry",
+        "plan-claim",
+        "scripts"
+      ],
+      "consumed_by": [
+        "commands"
+      ],
+      "summary": "Hermes parallelism layer — ACTIVATED (v1.3, T001-T015 complete, 2026-06-12). Within-plan DAG concurrency: generate-workstreams.py assigns parallel_group=level-{depth} via assign_ws_depths; hermes-execute.py runs level-aware loop: compute_ready_level → partition_level (greedy graph-coloring, HIGH-severity serialization) → asyncio.gather bounded by asyncio.Semaphore(max_parallel_workstreams) held for full run_workstream lifetime. Cross-plan: run_cross_plan builds conflict graph via build_plan_conflict_graph (scope intersection or scope_unknown → conflict), acquires sorted-slug plan-claim locks (INV-6 deadlock-free), schedules disjoint plans concurrently bounded by max_parallel_plans. Single in-process asyncio.Lock serializes all merge_workstream calls across workstreams and plans. Default caps=1 (opt-in via HERMES_MAX_PARALLEL / HERMES_MAX_PARALLEL_PLANS; INV-5: cap=1 ≡ legacy sequential). Non-file shared state not protected — use HERMES_SERIALIZE_ALL=1 escape hatch. 7 invariants: INV-1 worktree write-safety, INV-2 depends_on authoritative, INV-3 merge_order authoritative, INV-4 fail-safe serialize on unknown scope, INV-5 cap=1 ≡ legacy, INV-6 deadlock-free sorted locks, INV-7 forward-compatible additive schema fields."
     }
   ]
 }

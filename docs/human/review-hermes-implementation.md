@@ -1,5 +1,11 @@
 # Review: Hermes Orchestrator Implementation
 
+> **Note (2026-06-12):** The Hermes parallelism layer is now **ACTIVATED** (T001-T015 complete,
+> all reviewed). Within-plan DAG concurrency, cross-plan orchestration, and the merge mutex
+> are all live. Default caps = 1 (opt-in via `HERMES_MAX_PARALLEL` / `HERMES_MAX_PARALLEL_PLANS`).
+> See [docs/human/hermes-integration-v1.md](hermes-integration-v1.md) for the current protocol
+> v1.3 narrative and operator runbook.
+
 > **Reviewed:** 10 Python files, 2,042 lines + generate-workstreams.py (794 lines)
 > **Date:** 2026-06-09
 > **Reviewer:** /z-review-all (5-dimension audit)
