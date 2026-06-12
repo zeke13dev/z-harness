@@ -1,9 +1,26 @@
 # Golden Snapshot Fixtures
 
-This directory holds reference output snapshots captured from the former legacy
-export scripts (`scripts/export-{cursor,codex,agy,pi}.py`). Those scripts have
-since been deleted (T009); the snapshots remain as the reference baseline for
-the runtime driver ports.
+This directory holds reference output snapshots for the runtime export drivers
+(`runtime/drivers/<target>/export.py`).
+
+**Last re-baseline:** 2026-06-11 — post-merge re-baseline after merging
+`f/claude/z/export-runtime-drivers` into `main`. The merged tree included:
+(a) the `run-brief-finalize.md` shared fragment change affecting ~13 commands,
+(b) new commands/agents/skills (z-context-budget, z-doc-rationale, z-evaluate,
+z-handoff, z-reality, z-verify, pre-reviewer, tier1-doc-updater, z-test-invariant),
+and (c) migration-era updates (runtime driver self-references in CAPABILITIES.md,
+README.md, agy-plugin.yaml; updated z-export description; slug field in
+z-implement-all/next session-status). Fixtures now reflect the merged source tree.
+
+Validation performed before re-baselining: runtime output was compared against
+the last legacy export (commit 815d001). All differences were traced to source
+changes after 815d001 (bef4ae1 adding slug field; 33c727f updating z-export.md
+description) or migration-era driver self-reference updates — no unexpected
+runtime-vs-source divergences found. Runtime == legacy on all files where the
+source was unchanged since 815d001.
+
+The former legacy scripts (`scripts/export-{cursor,codex,agy,pi}.py`) have been
+deleted (T009); the runtime drivers are the sole export path.
 
 The golden comparator in `runtime/tests/test_export_golden.py` normalizes both
 sides before equality checking. See "Normalization rules" below.
@@ -72,12 +89,12 @@ fixtures/golden/
 
 ## Wiring to runtime ports
 
-The golden test `test_export_golden.py` skips each target's runtime assertion when
-`runtime/drivers/<target>/export.py` does not yet exist. As T003–T006 land:
+All four runtime driver ports are now complete (T003–T006 landed). The golden
+test `test_export_golden.py` runs all four target assertions without skipping.
 
-| Task | File created | Test assertion flips |
-|------|-------------|---------------------|
-| T003 | `runtime/drivers/cursor/export.py` | cursor golden assert goes green |
-| T004 | `runtime/drivers/codex/export.py` | codex golden assert goes green |
-| T005 | `runtime/drivers/antigravity/export.py` | antigravity golden assert goes green |
-| T006 | `runtime/drivers/pi/export.py` | pi golden assert goes green |
+| Target | Driver | Status |
+|--------|--------|--------|
+| cursor | `runtime/drivers/cursor/export.py` | live — green |
+| codex | `runtime/drivers/codex/export.py` | live — green |
+| antigravity | `runtime/drivers/antigravity/export.py` | live — green |
+| pi | `runtime/drivers/pi/export.py` | live — green |
