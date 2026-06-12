@@ -147,7 +147,7 @@ If the agent returns fewer than 5 paths (e.g. `CANDIDATES` had fewer than 5 entr
 
 ### Step 1c — User confirmation of Capture set
 
-<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the Capture file confirmation question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the Capture file confirmation question via their native channel. Silent omission is forbidden. -->
 Present the ranked 5 to the user via `AskUserQuestion`:
 
 ```
@@ -187,7 +187,7 @@ Read the contents of the `FINAL_5` files into context (using the Read tool for e
 
 Read the file at `INGEST_PATH` into context as `EXISTING_GUIDE`. Skip the interview questions below. Set `SOURCE = ingest`. Proceed to Phase 3.
 
-<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the style interview questions via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the style interview questions via their native channel. Silent omission is forbidden. -->
 **Otherwise (no `--ingest`), ask up to 4 questions via `AskUserQuestion`:**
 
 Ask all 4 in a single `AskUserQuestion` call (multi-part prompt), then wait for a single reply. If the user skips a question or gives a blank answer for it, treat that section as "no preference stated."
@@ -309,7 +309,7 @@ Record the revised content as `REVISED_STYLE_MD`.
 
 ## Phase 5 — User approval and write
 
-<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the STYLE.md draft approval question (accept / edit-and-resave / re-critique / abandon) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the STYLE.md draft approval question (accept / edit-and-resave / re-critique / abandon) via their native channel. Silent omission is forbidden. -->
 Present the draft to the user via `AskUserQuestion`:
 
 ```
@@ -581,7 +581,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
   '{"phase":"MB-4","reason":"rule-review"}'
 ```
 
-<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface each per-cluster rule review question (add-as-drafted / reject) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface each per-cluster rule review question (add-as-drafted / reject) via their native channel. Silent omission is forbidden. -->
 For each cluster / proposed rule, send a **separate `AskUserQuestion` call** — one cluster per call, sequentially. Do not batch multiple clusters into a single `AskUserQuestion`.
 
 ```

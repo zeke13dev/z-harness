@@ -1160,45 +1160,24 @@ If there are running follow-up consumer entries, **halt** — do not proceed wit
 
    Do **not** inline the SESSION.md body in any skip case. Continue to step 4b.
 
-4b. **Conflict-detection floor via `workstreams.json` (`scope_unknown`).** Before the first
-   dispatch, best-effort generate the plan's workstreams manifest on-demand from the plan's
-   canonical `TASKS.md` and read its `scope_unknown` flag. This is the one conflict signal the
-   per-task `**Files:**` dedup (Parallelism rule 2) cannot supply: when any task block has no
-   parseable `**Files:**` line, conflict detection is *blind* and same-tree parallel tracks could
-   silently clobber each other's edits. Generation is best-effort — any failure (non-zero exit,
-   absent file, or a custom `--tasks` path that is not `$BASE/TASKS.md`) falls back to today's
-   behavior unchanged, with no halt and no error surfaced.
+4b. **Workstreams manifest (`workstreams.json`).** If `$BASE/workstreams.json` does not exist
+   yet (pre-plan plan, or first `/z-implement-all` on a plan from before this feature was added),
+   generate it once. Best-effort — any failure is silent; when the file is absent (or was never
+   generated), the Parallelism section falls back to inline `**Files:**` dedup alone.
 
    ```bash
-   WS_SLUG="${Z_HARNESS_SLUG:-$(basename "$BASE")}"
-   WS_JSON="$BASE/workstreams.json"
-   SCOPE_UNKNOWN=false
-   # Only when operating on the plan's canonical TASKS.md — the generator reads $BASE/TASKS.md,
-   # so a custom --tasks path would otherwise generate from the wrong file. Skip = graceful.
-   if [ "$TASKS_FILE" = "$BASE/TASKS.md" ] \
-      && python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/generate-workstreams.py" \
-           --slug "$WS_SLUG" --source z-plan --plan-dir "$BASE" >/dev/null 2>&1 \
-      && [ -f "$WS_JSON" ]; then
-     SCOPE_UNKNOWN="$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1])).get("scope_unknown", False)).lower())' "$WS_JSON" 2>/dev/null || echo false)"
+   if [ ! -f "$BASE/workstreams.json" ] && [ "$TASKS_FILE" = "$BASE/TASKS.md" ]; then
+     python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/generate-workstreams.py" \
+       --slug "${Z_HARNESS_SLUG:-$(basename "$BASE")}" --source z-plan --plan-dir "$BASE" || true
    fi
-   if [ "$SCOPE_UNKNOWN" = "true" ]; then
-     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" parallel_serialized \
-       "$(printf '{"reason":"scope_unknown","ws_json":"%s"}' "$WS_JSON")"
-   fi
-   echo "SCOPE_UNKNOWN=$SCOPE_UNKNOWN"
    ```
 
-   **The floor is enforced by you, the orchestrator — not by a shell variable.** Each Bash call is
-   a fresh shell, so a `Z_HARNESS_PARALLEL=1` assignment here would not survive to the dispatch
-   loop. Instead: read the `SCOPE_UNKNOWN=…` line this block prints. **If it is `true`, treat the
-   run's parallel factor as N=1 for every batch (rule 7), overriding any configured
-   `Z_HARNESS_PARALLEL` — blind conflict detection in a shared tree is unsafe at any parallel
-   factor.** This matches Hermes INV-4 (scope_unknown → sequential). The `parallel_serialized`
-   event is the durable on-disk record of that decision.
-
-   When `SCOPE_UNKNOWN` is false (or generation was skipped), the Parallelism section's N=3 default
-   still governs and the per-task `**Files:**` dedup (rule 2) remains the precise conflict gate —
-   behavior is byte-identical to before this step existed. Continue to step 5.
+   Read `$BASE/workstreams.json` (when present) to understand the plan's conflict DAG:
+   `deps` (which tasks depend on which), `file_conflicts` (tasks whose known file sets overlap),
+   and `scope_unknown` (whether any task block has no parseable `**Files:` line, making
+   rule 2's dedup blind for that task). The orchestrator uses this data — alongside rule 2's
+   inline check — to decide the safe concurrency for each batch. No caps, no floors: the
+   orchestrator decides. Continue to step 5.
 
 5. **Version stamp + run_start event:** (`Z_HARNESS_SESSION_ID` was already exported in Phase 0.0; the `:-` default below leaves it alone if set.)
    ```bash
@@ -1670,15 +1649,17 @@ Finalize the loop cleanly: do **not** dispatch any new task. **Do not run Run Br
 
 ## Parallelism (read first)
 
-The numbered steps below describe a **single task track** — one task's journey from pick → precheck → implement → review → done. The orchestrator dispatches up to **N=3 task tracks in parallel** per outer iteration, subject to these rules:
+The numbered steps below describe a **single task track** — one task's journey from pick → precheck → implement → review → done. The orchestrator dispatches batch-eligible tasks concurrently, subject to these rules:
 
 1. **Eligibility.** Pick ALL tasks whose deps are all `[x]` and that aren't skip-flagged (see step 2).
 2. **File-overlap dedup.** Two tasks whose "Files:" blocks share a path cannot run concurrently. When two eligible tasks conflict, run the lower-numbered one this batch and defer the other.
 > [pi] Dispatch a subagent here via the subagent tool (see CAPABILITIES.md).
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 5. **Atomic TASKS.md updates.** The orchestrator is single-writer. Read the file, modify multiple task statuses if a batch finishes together, write once. Never partial-write.
-6. **N=3 default.** If a single task is conflict-heavy or the user wants strict serial behavior, set N=1. Override via `Z_HARNESS_PARALLEL=N` env var if set.
-7. **`scope_unknown` floor.** Run-start step 4b generates `$BASE/workstreams.json` on-demand and prints `SCOPE_UNKNOWN=<bool>`. When it is `true` (some task block has no parseable `**Files:**` line, so rule 2's dedup is *blind*), you the orchestrator clamp the run to N=1 for every batch — this is enforced by your reading of step 4b's output, not by a shell variable (a per-block `Z_HARNESS_PARALLEL=1` would not survive to the dispatch loop). It is the one conflict signal rule 2 cannot supply, and it overrides a higher configured `Z_HARNESS_PARALLEL` because blind detection in a shared tree is unsafe at any parallel factor. Absent or ungenerated `workstreams.json` → rule 2 alone governs (today's behavior). All other parallelism rules are unchanged.
+6. **`workstreams.json` is your concurrency DAG.** Read `$BASE/workstreams.json` (generated at plan creation time, or on first `/z-implement-all` if absent). Use it alongside rule 2's inline `**Files:**` dedup:
+   - `deps` and `file_conflicts` arrays give the complete dependency graph. Tasks with disjoint file sets and no dependency chain can run in parallel — no hard cap, the DAG decides.
+   - `scope_unknown: true` means some task block has no parseable `**Files:**` line — rule 2 is blind for that task. The orchestrator knows this and decides whether to parallelize anyway or serialize, weighing the risk of clobbered edits.
+   - When `workstreams.json` is absent (pre-existing plan), fall back to rule 2 alone — behavior is byte-identical to before this feature existed.
 
 ## Hard caps (token / wall-clock safety)
 

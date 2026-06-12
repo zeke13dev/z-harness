@@ -71,7 +71,7 @@ If routing, write `$CURRENT_ARCHIVE_DIR/route-decision.md` with the reason, log 
 
 If args are empty, ask one question: "What should I explain — file, module, pipeline, or topic?" Do not proceed without a target.
 
-<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the empty-args
+<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the empty-args
      target prompt via their native channel. Silent omission is forbidden. -->
 
 ## Phase 2 — Grounding
