@@ -394,10 +394,10 @@ class TestGoldenSnapshotStructure:
     def test_snapshot_file_counts(self) -> None:
         """All four golden snapshot directories have the expected file counts."""
         expected_counts = {
-            "cursor": 274,    # rules + agents + extensions + prompts + personas + AGENTS + CAPABILITIES + README
-            "codex": 156,     # agents + extensions + prompts + personas + AGENTS + CAPABILITIES + README
-            "antigravity": 126,  # agents + extensions + prompts + AGENTS + CAPABILITIES + README (z-test skill excluded)
-            "pi": 126,        # agents + prompts + extensions + AGENTS.md + CAPABILITIES.md + README.md (z-test skill excluded)
+            "cursor": 121,    # .cursor/rules/*.mdc (commands + agents + skills)
+            "codex": 92,      # prompts/*.md + AGENTS.md (commands + agents + skills; no personas)
+            "antigravity": 245,  # .agent/workflows + .agent/rules + .agent/skills + prompts + CAPABILITIES + README + agy-plugin.yaml (z-test skill excluded)
+            "pi": 128,        # agents/*.md + prompts/*.md + AGENTS.md + CAPABILITIES.md + README.md (z-test skill excluded; +intent-classifier +task-tree-generator)
         }
         for target, expected in expected_counts.items():
             golden_dir = _GOLDEN_DIR / target

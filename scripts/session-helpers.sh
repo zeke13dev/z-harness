@@ -411,22 +411,60 @@ PYEOF
 }
 
 # ---------------------------------------------------------------------------
+# validate_intent <intent_file> [lint]
+# ---------------------------------------------------------------------------
+# Thin wrapper around scripts/intent-schema.py.
+#
+# Usage:
+#   validate_intent <INTENT.md>          — validate frontmatter + required sections
+#   validate_intent <INTENT.md> lint     — also lint acceptance checklist items
+#
+# Exit codes mirror intent-schema.py: 0 = valid, 1 = errors found, 2 = usage error.
+validate_intent() {
+  local intent_file="$1"
+  local mode="${2:-}"
+  local _repo_root
+  _repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  local schema_py="$_repo_root/scripts/intent-schema.py"
+
+  if [[ ! -f "$schema_py" ]]; then
+    printf 'ERROR: intent-schema.py not found at %s\n' "$schema_py" >&2
+    return 2
+  fi
+
+  # Always validate frontmatter + sections
+  python3 "$schema_py" validate-intent "$intent_file"
+  local rc=$?
+  if [[ $rc -ne 0 ]]; then
+    return $rc
+  fi
+
+  # Optionally lint criteria
+  if [[ "$mode" == "lint" ]]; then
+    python3 "$schema_py" lint-criteria "$intent_file"
+    return $?
+  fi
+
+  return 0
+}
+
+# ---------------------------------------------------------------------------
 # CLI wrapper — callable as: bash scripts/session-helpers.sh <fn> <args...>
 # ---------------------------------------------------------------------------
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   if [[ $# -lt 1 ]]; then
-    printf 'Usage: %s {done_set_hash|last_done_task|next_pending_task|last_curated_marker|session_frontmatter_field} [args...]\n' "$0" >&2
+    printf 'Usage: %s {done_set_hash|last_done_task|next_pending_task|last_curated_marker|session_frontmatter_field|validate_intent} [args...]\n' "$0" >&2
     exit 1
   fi
   cmd="$1"
   shift
   case "$cmd" in
-    done_set_hash|last_done_task|next_pending_task|last_curated_marker|session_frontmatter_field)
+    done_set_hash|last_done_task|next_pending_task|last_curated_marker|session_frontmatter_field|validate_intent)
       "$cmd" "$@"
       ;;
     *)
       printf 'Unknown function: %s\n' "$cmd" >&2
-      printf 'Usage: %s {done_set_hash|last_done_task|next_pending_task|last_curated_marker|session_frontmatter_field} [args...]\n' "$0" >&2
+      printf 'Usage: %s {done_set_hash|last_done_task|next_pending_task|last_curated_marker|session_frontmatter_field|validate_intent} [args...]\n' "$0" >&2
       exit 1
       ;;
   esac

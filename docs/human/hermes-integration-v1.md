@@ -1,8 +1,12 @@
 # Hermes Integration Protocol v1
 
 > **Audience:** Orchestrator implementers (Hermes or alternative).
-> **Status:** REVISED — amended from review 2026-06-12.
-> **Version:** 1.3.0
+> **Status:** DORMANT — gated OFF by default as of 2026-06-16. Hermes parallelism is still present
+> in `scripts/hermes/` but all entry points are behind the `workflow.hermes_enabled` config knob
+> (default `false`). To revive, set `workflow.hermes_enabled = true` in `.z-harness/config.toml`.
+> Deletion of `scripts/hermes/` is a **deferred cleanup** — files are kept to prevent bit-rot until
+> a deliberate removal task is planned.
+> **Version:** 1.4.0
 >
 > This document defines the contract between z-harness (the planning layer)
 > and any orchestrator (the execution layer) that wants to execute z-harness
@@ -12,6 +16,7 @@
 > **v1.1** (this spec, original): z-harness writes `workstreams.json` as the machine-readable contract.
 > **v1.2** (amended 2026-06-08): 5-rule DAG derivation, per-workstream `status` field, V1 parallelism constraint, crash-resumption, sanitization, severity alignment with z-plan-split.
 > **v1.3** (amended 2026-06-12): `parallel_group` is now populated as a derived `level-{depth}` label; new `scope_unknown` manifest boolean; concurrency execution contract (depends_on-driven level scheduler, HIGH-severity file-conflict serialization, `max_parallel_workstreams` cap, semaphore-for-lifetime); cross-plan `--slugs` mode contract; non-file shared-state limitation documented.
+> **v1.4** (amended 2026-06-16): Hermes gated OFF by default (`workflow.hermes_enabled=false`). All concurrency/retry/timeout knobs moved from `HERMES_*` env vars to `workflow.*` file config. File deletion deferred.
 
 ---
 
@@ -420,45 +425,66 @@ shared base concurrently (cross-plan merge race).
 
 ## Operator runbook
 
-### Within-plan parallel execution
+> **Dormancy notice:** Hermes is gated OFF by default. The steps below only apply after you have
+> opted in by adding `workflow.hermes_enabled = true` to `.z-harness/config.toml`.
 
-Enable concurrency by setting `HERMES_MAX_PARALLEL` to the desired number of
-concurrent workstreams:
+### Reviving Hermes
 
-```bash
-HERMES_MAX_PARALLEL=3 python3 scripts/hermes-execute.py --slug <slug>
+Add the following to `.z-harness/config.toml` (create the file if it does not exist):
+
+```toml
+[workflow]
+hermes_enabled = true
 ```
 
-With the default `HERMES_MAX_PARALLEL=1`, execution is fully sequential and
+With `hermes_enabled = false` (the default), all workstream-generation and cross-plan dispatch
+calls inside `/z-plan`, `/z-implement-all`, and `/z-plan-split` are no-ops. The existing inline
+`**Files:**`-dedup fallback handles deduplication in the single-session path.
+
+### Within-plan parallel execution
+
+Enable concurrency by setting `max_parallel_workstreams` in the config file:
+
+```toml
+[workflow]
+hermes_enabled = true
+max_parallel_workstreams = 3
+```
+
+With the default `max_parallel_workstreams = 1`, execution is fully sequential and
 byte-identical to pre-v1.3 behavior (INV-5).
 
-**Config knobs (all env-only):**
+**Config knobs (all file-based via `.z-harness/config.toml`):**
 
-| Env var | Default | Effect |
-|---------|---------|--------|
-| `HERMES_MAX_PARALLEL` | `1` | Max concurrent workstreams within one plan |
-| `HERMES_SERIALIZE_ALL` | `0` | Force fully-sequential; overrides conflict analysis |
-| `HERMES_SERIALIZE_HIGH_SEVERITY` | `1` | Serialize HIGH-severity file-conflict pairs within a level |
+| Key | Default | Effect |
+|-----|---------|--------|
+| `workflow.hermes_enabled` | `false` | Master gate — must be `true` for any parallelism |
+| `workflow.max_parallel_workstreams` | `1` | Max concurrent workstreams within one plan |
+| `workflow.serialize_all` | `false` | Force fully-sequential; overrides conflict analysis |
+| `workflow.serialize_high_severity` | `true` | Serialize HIGH-severity file-conflict pairs within a level |
+| `workflow.max_parallel_plans` | `1` | Max concurrent plans within one cross-plan run |
+| `workflow.workstream_timeout_minutes` | `60` | Per-workstream wall-clock cap |
+| `workflow.max_retries` | `1` | Max re-spawns on workstream crash |
+
+> **Note:** The old `HERMES_MAX_PARALLEL`, `HERMES_MAX_PARALLEL_PLANS`, `HERMES_SERIALIZE_ALL`,
+> `HERMES_SERIALIZE_HIGH_SEVERITY`, `HERMES_WORKSTREAM_TIMEOUT_MINUTES`, and `HERMES_MAX_RETRIES`
+> environment variables have been **removed** (as of v1.4). Setting them has no effect. Use the
+> `workflow.*` file knobs above.
 
 ### Cross-plan execution
 
 Run multiple slugs as a coordinated plan-set:
 
 ```bash
-# Comma-separated slugs
-HERMES_MAX_PARALLEL_PLANS=2 python3 scripts/hermes-execute.py --slugs slug-a,slug-b,slug-c
+python3 scripts/hermes-execute.py --slugs slug-a,slug-b,slug-c
 
 # File listing slugs (one per line)
-HERMES_MAX_PARALLEL_PLANS=2 python3 scripts/hermes-execute.py --plan-set plans.txt
+python3 scripts/hermes-execute.py --plan-set plans.txt
 ```
 
 `--slugs` and `--plan-set` are mutually exclusive with `--slug`. Plans with
 overlapping file scope are automatically serialized; disjoint plans run
-concurrently up to `HERMES_MAX_PARALLEL_PLANS`.
-
-| Env var | Default | Effect |
-|---------|---------|--------|
-| `HERMES_MAX_PARALLEL_PLANS` | `1` | Max concurrent plans within one cross-plan run |
+concurrently up to `workflow.max_parallel_plans` (set in config file).
 
 ### Non-file shared-state limitation and escape hatch
 
@@ -467,16 +493,24 @@ NOT protect databases, ports, remote sandboxes, in-memory caches, or other
 process-level resources. The `file_conflicts` list does not model these
 dependencies.
 
-If workstreams or plans share any such resource, **force fully-sequential
-execution** via:
+If workstreams or plans share any such resource, force fully-sequential
+execution via the config file:
 
-```bash
-HERMES_SERIALIZE_ALL=1 python3 scripts/hermes-execute.py --slug <slug>
+```toml
+[workflow]
+hermes_enabled = true
+serialize_all = true
 ```
 
 The operator must identify non-file shared-state dependencies manually and set
-`HERMES_SERIALIZE_ALL=1` (or `HERMES_MAX_PARALLEL=1`) accordingly. There is no
-automatic detection for these cases.
+`workflow.serialize_all = true` (or `workflow.max_parallel_workstreams = 1`)
+accordingly. There is no automatic detection for these cases.
+
+### Deferred cleanup
+
+The `scripts/hermes/` directory and `scripts/hermes-execute.py` are intentionally **not deleted**
+in this release. They are kept dormant (behind the `hermes_enabled` gate) to prevent bit-rot.
+A future cleanup task will remove these files once the gating strategy is confirmed stable.
 
 ---
 
@@ -616,6 +650,7 @@ Schema evolution rules:
 | v1.1 | `workstreams.json` schema introduced; `protocol: "hermes-v1"` pin |
 | v1.2 | 5-rule DAG derivation, `status` field, crash-resumption, sanitization |
 | v1.3 | `parallel_group` populated (`level-{depth}`); `scope_unknown`; concurrency execution contract; cross-plan `--slugs` mode; non-file shared-state limitation |
+| v1.4 | Hermes gated OFF by default (`workflow.hermes_enabled=false`); `HERMES_*` env vars removed; all knobs via `workflow.*` file config; file deletion deferred |
 
 ---
 

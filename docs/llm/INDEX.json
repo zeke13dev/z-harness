@@ -4,6 +4,23 @@
   "z_harness_version": "7c8d09a",
   "concepts": [
     {
+      "slug": "intent-schema",
+      "source_files": [
+        "scripts/intent-schema.py",
+        "scripts/session-helpers.sh"
+      ],
+      "last_updated": "2026-06-16",
+      "confidence": "high",
+      "depends_on": [
+        "scripts"
+      ],
+      "consumed_by": [
+        "commands",
+        "agents"
+      ],
+      "summary": "INTENT.md + LEDGER.md schema validation and acceptance-criterion lint helper. validate_intent checks frontmatter required fields (artifact/slug/level/generated_at/frozen_at/planning_mode) and required sections per level: acceptance checklist always required; not-doing + consider-for-this required at L2+ (standard|deep). lint-criteria flags bare 'runs'/'works' criteria with no observable object following. CLI: python3 scripts/intent-schema.py validate-intent|lint-criteria|validate-ledger <file>. Shell wrapper: bash scripts/session-helpers.sh validate_intent <INTENT.md> [lint]. Exit 0=valid, 1=errors found, 2=usage error."
+    },
+    {
       "slug": "active-plan-registry",
       "source_files": [
         "scripts/active-plan-registry.py",
@@ -848,6 +865,36 @@
         "commands"
       ],
       "summary": "Hermes parallelism layer — ACTIVATED (v1.3, T001-T015 complete, 2026-06-12). Within-plan DAG concurrency: generate-workstreams.py assigns parallel_group=level-{depth} via assign_ws_depths; hermes-execute.py runs level-aware loop: compute_ready_level → partition_level (greedy graph-coloring, HIGH-severity serialization) → asyncio.gather bounded by asyncio.Semaphore(max_parallel_workstreams) held for full run_workstream lifetime. Cross-plan: run_cross_plan builds conflict graph via build_plan_conflict_graph (scope intersection or scope_unknown → conflict), acquires sorted-slug plan-claim locks (INV-6 deadlock-free), schedules disjoint plans concurrently bounded by max_parallel_plans. Single in-process asyncio.Lock serializes all merge_workstream calls across workstreams and plans. Default caps=1 (opt-in via HERMES_MAX_PARALLEL / HERMES_MAX_PARALLEL_PLANS; INV-5: cap=1 ≡ legacy sequential). Non-file shared state not protected — use HERMES_SERIALIZE_ALL=1 escape hatch. 7 invariants: INV-1 worktree write-safety, INV-2 depends_on authoritative, INV-3 merge_order authoritative, INV-4 fail-safe serialize on unknown scope, INV-5 cap=1 ≡ legacy, INV-6 deadlock-free sorted locks, INV-7 forward-compatible additive schema fields."
+    },
+    {
+      "slug": "adaptive-intent",
+      "source_files": [
+        "scripts/intent-schema.py",
+        "scripts/config.py",
+        "agents/intent-classifier.md",
+        "agents/task-tree-generator.md",
+        "commands/z-plan.md",
+        "commands/z-implement-all.md",
+        "commands/z-amend.md",
+        "commands/z-review-all.md",
+        "agents/implementer.md",
+        "agents/reviewer.md",
+        "docs/human/adaptive-intent.md"
+      ],
+      "last_updated": "2026-06-16",
+      "confidence": "high",
+      "depends_on": [
+        "config",
+        "scripts",
+        "agents",
+        "commands",
+        "session-handoff"
+      ],
+      "consumed_by": [
+        "commands",
+        "agents"
+      ],
+      "summary": "Default z-harness paradigm (workflow.planning_mode=intent). Replaces thick SPEC/PLAN/TASKS with: thin frozen INTENT.md contract (frozen at /z-implement-all start, immutable thereafter — INV-1); emergent BFS task-tree generated one level at a time by task-tree-generator (Sonnet); append-only LEDGER.md as realized-plan audit trail. Level depth (L1 quick / L2 standard / L3 deep) chosen by intent-classifier (Haiku, advisory) or config-forced. /z-implement-all mode detection: SPEC.md present → legacy unchanged (INV-4); INTENT.md present → INTENT engine (freeze→bootstrap-ledger→BFS loop→evaluate-acceptance per level). Four new workflow.* knobs in config.py (lines 78–81): planning_mode, intent_level, intent_parallel_levels (default false), hermes_enabled (default false, INV-6). /z-amend re-opens via reopen-intent (scripts/intent-schema.py:377). /z-do → /z-plan --quick shim; /z-plan-light → /z-plan --standard shim."
     }
   ]
 }

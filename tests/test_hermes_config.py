@@ -1,8 +1,9 @@
 """
 test_hermes_config.py — Tests for hermes/config.py ConcurrencyConfig knobs.
 
-Tests: defaults, file override, HERMES_MAX_PARALLEL env override, new fields,
-and bool env parsing for "0"/"false" (the Python bool("0")==True trap).
+Tests: defaults, file override (hermes-config.yaml), and bool parsing.
+Concurrency/retry/timeout knobs are file-only; HERMES_* env vars no longer
+override them. Discord env vars (HERMES_DISCORD_TOKEN/USER_ID) are unchanged.
 """
 
 import os
@@ -96,16 +97,7 @@ class TestConcurrencyConfigDefaults:
 # ---------------------------------------------------------------------------
 
 class TestLoadConfigDefaults:
-    def test_defaults_no_file_no_env(self, tmp_path, monkeypatch):
-        # Remove any hermes env vars that might leak in
-        for var in (
-            "HERMES_MAX_PARALLEL",
-            "HERMES_MAX_PARALLEL_PLANS",
-            "HERMES_SERIALIZE_ALL",
-            "HERMES_SERIALIZE_HIGH_SEVERITY",
-        ):
-            monkeypatch.delenv(var, raising=False)
-
+    def test_defaults_no_file(self, tmp_path):
         cfg = load_config(repo_root=str(tmp_path))
         assert cfg.concurrency.max_parallel_workstreams == 1
         assert cfg.concurrency.max_parallel_plans == 1
@@ -123,8 +115,7 @@ class TestLoadConfigFileOverride:
         cfg_file.write_text(textwrap.dedent(content))
         return tmp_path
 
-    def test_file_overrides_max_parallel_workstreams(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("HERMES_MAX_PARALLEL", raising=False)
+    def test_file_overrides_max_parallel_workstreams(self, tmp_path):
         self._write_yaml(tmp_path, """\
             concurrency:
               max_parallel_workstreams: 4
@@ -132,8 +123,7 @@ class TestLoadConfigFileOverride:
         cfg = load_config(repo_root=str(tmp_path))
         assert cfg.concurrency.max_parallel_workstreams == 4
 
-    def test_file_overrides_max_parallel_plans(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("HERMES_MAX_PARALLEL_PLANS", raising=False)
+    def test_file_overrides_max_parallel_plans(self, tmp_path):
         self._write_yaml(tmp_path, """\
             concurrency:
               max_parallel_plans: 3
@@ -141,8 +131,7 @@ class TestLoadConfigFileOverride:
         cfg = load_config(repo_root=str(tmp_path))
         assert cfg.concurrency.max_parallel_plans == 3
 
-    def test_file_overrides_serialize_all_true(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("HERMES_SERIALIZE_ALL", raising=False)
+    def test_file_overrides_serialize_all_true(self, tmp_path):
         self._write_yaml(tmp_path, """\
             concurrency:
               serialize_all: true
@@ -150,8 +139,7 @@ class TestLoadConfigFileOverride:
         cfg = load_config(repo_root=str(tmp_path))
         assert cfg.concurrency.serialize_all is True
 
-    def test_file_overrides_serialize_high_severity_false(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("HERMES_SERIALIZE_HIGH_SEVERITY", raising=False)
+    def test_file_overrides_serialize_high_severity_false(self, tmp_path):
         self._write_yaml(tmp_path, """\
             concurrency:
               serialize_high_severity: false
@@ -159,15 +147,24 @@ class TestLoadConfigFileOverride:
         cfg = load_config(repo_root=str(tmp_path))
         assert cfg.concurrency.serialize_high_severity is False
 
-    def test_malformed_yaml_degrades_to_defaults(self, tmp_path, monkeypatch):
+    def test_file_overrides_max_retries(self, tmp_path):
+        self._write_yaml(tmp_path, """\
+            retry:
+              max_retries: 5
+        """)
+        cfg = load_config(repo_root=str(tmp_path))
+        assert cfg.retry.max_retries == 5
+
+    def test_file_overrides_workstream_timeout(self, tmp_path):
+        self._write_yaml(tmp_path, """\
+            timeouts:
+              per_workstream_minutes: 120
+        """)
+        cfg = load_config(repo_root=str(tmp_path))
+        assert cfg.timeouts.per_workstream_minutes == 120
+
+    def test_malformed_yaml_degrades_to_defaults(self, tmp_path):
         """A config file with invalid YAML must NOT raise; must return defaults."""
-        for var in (
-            "HERMES_MAX_PARALLEL",
-            "HERMES_MAX_PARALLEL_PLANS",
-            "HERMES_SERIALIZE_ALL",
-            "HERMES_SERIALIZE_HIGH_SEVERITY",
-        ):
-            monkeypatch.delenv(var, raising=False)
         # Write syntactically invalid YAML to the config path load_config reads.
         cfg_file = tmp_path / "hermes-config.yaml"
         cfg_file.write_text("concurrency:\n  max_parallel_workstreams: [unclosed bracket\n")
@@ -180,50 +177,59 @@ class TestLoadConfigFileOverride:
 
 
 # ---------------------------------------------------------------------------
-# load_config: env var overrides
+# load_config: confirm HERMES_* env vars are NOT respected for concurrency/
+# retry/timeout knobs (file-only since T017)
 # ---------------------------------------------------------------------------
 
-class TestLoadConfigEnvOverride:
-    def test_hermes_max_parallel_overrides_workstreams(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("HERMES_MAX_PARALLEL", "5")
-        cfg = load_config(repo_root=str(tmp_path))
-        assert cfg.concurrency.max_parallel_workstreams == 5
+class TestLoadConfigEnvIgnored:
+    """HERMES_MAX_PARALLEL, _PLANS, SERIALIZE_*, MAX_RETRIES, WORKSTREAM_TIMEOUT_MINUTES
+    are no longer read from the environment. These tests assert the env vars
+    are silently ignored and the file value (or default) is authoritative.
+    """
 
-    def test_hermes_max_parallel_plans_overrides(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("HERMES_MAX_PARALLEL_PLANS", "2")
+    def test_hermes_max_parallel_env_ignored(self, tmp_path, monkeypatch):
+        """HERMES_MAX_PARALLEL env var must NOT override max_parallel_workstreams."""
+        monkeypatch.setenv("HERMES_MAX_PARALLEL", "99")
         cfg = load_config(repo_root=str(tmp_path))
-        assert cfg.concurrency.max_parallel_plans == 2
+        # Default is 1; env var must be silently ignored.
+        assert cfg.concurrency.max_parallel_workstreams == 1
 
-    def test_hermes_serialize_all_env_true(self, tmp_path, monkeypatch):
+    def test_hermes_max_parallel_plans_env_ignored(self, tmp_path, monkeypatch):
+        """HERMES_MAX_PARALLEL_PLANS env var must NOT override max_parallel_plans."""
+        monkeypatch.setenv("HERMES_MAX_PARALLEL_PLANS", "99")
+        cfg = load_config(repo_root=str(tmp_path))
+        assert cfg.concurrency.max_parallel_plans == 1
+
+    def test_hermes_serialize_all_env_ignored(self, tmp_path, monkeypatch):
+        """HERMES_SERIALIZE_ALL env var must NOT override serialize_all."""
         monkeypatch.setenv("HERMES_SERIALIZE_ALL", "1")
         cfg = load_config(repo_root=str(tmp_path))
-        assert cfg.concurrency.serialize_all is True
-
-    def test_hermes_serialize_all_env_false_string(self, tmp_path, monkeypatch):
-        """Critical: "0" must yield False, not True (Python bool("0") trap)."""
-        monkeypatch.setenv("HERMES_SERIALIZE_ALL", "0")
-        cfg = load_config(repo_root=str(tmp_path))
         assert cfg.concurrency.serialize_all is False
 
-    def test_hermes_serialize_all_env_false_word(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("HERMES_SERIALIZE_ALL", "false")
-        cfg = load_config(repo_root=str(tmp_path))
-        assert cfg.concurrency.serialize_all is False
-
-    def test_hermes_serialize_high_severity_env_false(self, tmp_path, monkeypatch):
+    def test_hermes_serialize_high_severity_env_ignored(self, tmp_path, monkeypatch):
+        """HERMES_SERIALIZE_HIGH_SEVERITY env var must NOT override serialize_high_severity."""
         monkeypatch.setenv("HERMES_SERIALIZE_HIGH_SEVERITY", "0")
         cfg = load_config(repo_root=str(tmp_path))
-        assert cfg.concurrency.serialize_high_severity is False
-
-    def test_hermes_serialize_high_severity_env_true(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("HERMES_SERIALIZE_HIGH_SEVERITY", "true")
-        cfg = load_config(repo_root=str(tmp_path))
+        # Default is True; env must be silently ignored.
         assert cfg.concurrency.serialize_high_severity is True
 
-    def test_env_overrides_file_value(self, tmp_path, monkeypatch):
-        """Env must win over file value (env/file precedence)."""
+    def test_hermes_max_retries_env_ignored(self, tmp_path, monkeypatch):
+        """HERMES_MAX_RETRIES env var must NOT override retry.max_retries."""
+        monkeypatch.setenv("HERMES_MAX_RETRIES", "99")
+        cfg = load_config(repo_root=str(tmp_path))
+        assert cfg.retry.max_retries == 1  # default
+
+    def test_hermes_workstream_timeout_env_ignored(self, tmp_path, monkeypatch):
+        """HERMES_WORKSTREAM_TIMEOUT_MINUTES env var must NOT override timeouts."""
+        monkeypatch.setenv("HERMES_WORKSTREAM_TIMEOUT_MINUTES", "999")
+        cfg = load_config(repo_root=str(tmp_path))
+        assert cfg.timeouts.per_workstream_minutes == 90  # default
+
+    def test_file_value_wins_env_ignored(self, tmp_path, monkeypatch):
+        """File value is authoritative; a conflicting env var is silently ignored."""
         cfg_file = tmp_path / "hermes-config.yaml"
         cfg_file.write_text("concurrency:\n  max_parallel_workstreams: 4\n")
         monkeypatch.setenv("HERMES_MAX_PARALLEL", "7")
         cfg = load_config(repo_root=str(tmp_path))
-        assert cfg.concurrency.max_parallel_workstreams == 7
+        # File says 4; env says 7; file must win.
+        assert cfg.concurrency.max_parallel_workstreams == 4

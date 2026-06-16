@@ -151,6 +151,99 @@
       ],
       "source": "spec",
       "last_updated": "2026-06-10T20:42:20Z"
+    },
+    {
+      "id": "inv_009",
+      "description": "INTENT.md is immutable after frozen_at is stamped. Edits to INTENT.md after the frozen_at timestamp require an explicit re-freeze operation; the BFS engine must never mutate INTENT.md during execution. Enforced by T009, T010.",
+      "tags": [
+        "correctness",
+        "data-quality"
+      ],
+      "failure_class": "INTENT.md mutated after frozen_at without explicit re-freeze",
+      "severity": "blocker",
+      "source_files": [
+        "commands/z-implement-all.md",
+        "scripts/intent-schema.py"
+      ],
+      "source": "spec",
+      "last_updated": "2026-06-16T00:00:00Z"
+    },
+    {
+      "id": "inv_010",
+      "description": "A level's TASKS.md is immutable while that level is executing (resume safety). The BFS engine writes the done_set_hash only at level boundaries via .bfs_level_state; no mid-level mutations to TASKS.md are permitted. Enforced by T010.",
+      "tags": [
+        "correctness",
+        "data-quality"
+      ],
+      "failure_class": "Per-level TASKS.md mutated during active level execution",
+      "severity": "blocker",
+      "source_files": [
+        "commands/z-implement-all.md"
+      ],
+      "source": "spec",
+      "last_updated": "2026-06-16T00:00:00Z"
+    },
+    {
+      "id": "inv_011",
+      "description": "LEDGER.md is append-only and must never be rewritten or truncated. New entries are always appended; existing entries are immutable. Enforced by T009, T011.",
+      "tags": [
+        "correctness",
+        "data-quality"
+      ],
+      "failure_class": "LEDGER.md rewritten or truncated rather than appended",
+      "severity": "blocker",
+      "source_files": [
+        "commands/z-implement-all.md",
+        "scripts/intent-schema.py"
+      ],
+      "source": "spec",
+      "last_updated": "2026-06-16T00:00:00Z"
+    },
+    {
+      "id": "inv_012",
+      "description": "Legacy SPEC/PLAN/TASKS plans are detected and run on the unchanged legacy path with zero regression. The SPEC-detection branch routes legacy plans without modifying any legacy code path. Enforced by T007, T008.",
+      "tags": [
+        "correctness",
+        "deprecation"
+      ],
+      "failure_class": "Legacy plan routed through new INTENT path instead of legacy path",
+      "severity": "blocker",
+      "source_files": [
+        "commands/z-plan.md",
+        "commands/z-implement-all.md"
+      ],
+      "source": "spec",
+      "last_updated": "2026-06-16T00:00:00Z"
+    },
+    {
+      "id": "inv_013",
+      "description": "No behavior is driven by a new environment variable. All new configuration knobs introduced in the beyond-sdd model must be file-resolvable via config.py; env-var-only knobs are forbidden. Enforced by T001.",
+      "tags": [
+        "correctness",
+        "schema"
+      ],
+      "failure_class": "New behavior activated by env var rather than file-based config knob",
+      "severity": "major",
+      "source_files": [
+        "scripts/config.py"
+      ],
+      "source": "spec",
+      "last_updated": "2026-06-16T00:00:00Z"
+    },
+    {
+      "id": "inv_014",
+      "description": "Old Hermes machinery never executes unless workflow.hermes_enabled=true is set in the workflow config file. The Hermes scripts remain on disk but are fully dormant when the flag is absent or false. Enforced by T016.",
+      "tags": [
+        "correctness"
+      ],
+      "failure_class": "Hermes machinery executed without workflow.hermes_enabled=true",
+      "severity": "blocker",
+      "source_files": [
+        "scripts/hermes/config.py",
+        "commands/z-implement-all.md"
+      ],
+      "source": "spec",
+      "last_updated": "2026-06-16T00:00:00Z"
     }
   ]
 }

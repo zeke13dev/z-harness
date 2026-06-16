@@ -75,6 +75,10 @@ DEFAULTS: dict = {
         "plan_decisions_approval": "ask", # ask | approve | halt
         "spec_retro_discovery": "ask",    # ask | defer_to_sink_p2
         "pre_run_cost_gate": "ask",       # ask | auto_proceed | halt
+        "planning_mode": "intent",        # intent | full
+        "intent_level": "auto",           # auto | quick | standard | deep
+        "intent_parallel_levels": False,  # bool: execute same-level tasks in parallel
+        "hermes_enabled": False,          # bool: gate all old Hermes machinery
     },
     "followup": {
         "default_sink":                      "project",    # project | global
@@ -173,6 +177,10 @@ VALIDATORS: dict = {
     "workflow.plan_decisions_approval":  {"ask", "approve", "halt"},
     "workflow.spec_retro_discovery":     {"ask", "defer_to_sink_p2"},
     "workflow.pre_run_cost_gate":        {"ask", "auto_proceed", "halt"},
+    "workflow.planning_mode":            {"intent", "full"},
+    "workflow.intent_level":             {"auto", "quick", "standard", "deep"},
+    "workflow.intent_parallel_levels":   _validate_bool,
+    "workflow.hermes_enabled":           _validate_bool,
     "cost.token_budget":                 _validate_positive_int_or_none,
     "followup.default_sink":                   {"project", "global"},
     "followup.notion_enabled":                 {True, False},
@@ -232,6 +240,12 @@ _COERCERS: dict[str, object] = {
         None if (v is None or v == "") else (
             v if isinstance(v, int) and not isinstance(v, bool) else int(v)
         )
+    ),
+    "workflow.intent_parallel_levels": lambda v: (
+        v if isinstance(v, bool) else v.lower() == "true"
+    ),
+    "workflow.hermes_enabled": lambda v: (
+        v if isinstance(v, bool) else v.lower() == "true"
     ),
 }
 

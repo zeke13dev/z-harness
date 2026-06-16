@@ -117,7 +117,7 @@ pier_pkg = "$PIER_PKG_DIR"
 sys.path.insert(0, pier_pkg)
 
 try:
-    from zharness_pier.policy import load_policy, PolicyError
+    from zharness_pier.policy import load_policy, PolicyError, _get_registered_question_ids
 except ImportError as e:
     print(f"  ERROR: cannot import zharness_pier.policy: {e}", file=sys.stderr)
     sys.exit(1)
@@ -145,15 +145,25 @@ hot_path_files = [
 ]
 
 pattern = re.compile(r'workflow\.[a-z_]+')
-hot_path_gates = set()
+referenced_tokens = set()
 for fp in hot_path_files:
     if not os.path.exists(fp):
         continue
     with open(fp) as fh:
         content = fh.read()
     for m in pattern.findall(content):
-        hot_path_gates.add(m)
+        referenced_tokens.add(m)
 
+# Only registered question_ids are decision GATES that need an autonomy policy.
+# `workflow.*` config KNOBS (e.g. workflow.planning_mode, workflow.intent_level)
+# are behavior settings that get READ in command files, not ask-gates — filter
+# them out so a config-knob reference is never mistaken for a hot-path gate.
+registered_ids = set(_get_registered_question_ids())
+hot_path_gates = referenced_tokens & registered_ids
+
+non_gate_knobs = sorted(referenced_tokens - registered_ids)
+if non_gate_knobs:
+    print(f"  Note: ignoring non-gate workflow.* config knobs referenced on the hot path: {non_gate_knobs}")
 print(f"  Hot-path gates (from command files): {sorted(hot_path_gates)}")
 
 # Every hot-path gate must be in the policy

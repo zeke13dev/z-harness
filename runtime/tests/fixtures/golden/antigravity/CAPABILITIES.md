@@ -1,25 +1,86 @@
-# pi export capabilities
+# Antigravity (agy) Export — CAPABILITIES.md
 
-How z-harness constructs map onto [pi](https://pi.dev), and where the mapping is lossy. This file is emitted into `exports/pi/CAPABILITIES.md` by `scripts/export-pi.py`.
+This document describes what the z-harness feature set can and cannot express
+when exported to Antigravity IDE (Google's agy / Cascade agent platform).
+
+---
 
 ## Supported
 
-- **Subagent fan-out.** pi's subagent extension (vendored under `extensions/subagent/`) spawns isolated `pi` child processes. `Agent(subagent_type="X", ...)` call sites in command/skill/agent bodies are rewritten to `> [pi] Use the subagent tool: { "agent": "X", "task": "..." }`. Parallel and chain modes are available (`tasks: [...]`, `chain: [...]`).
-- **Agents as executable files.** Every z-harness agent is emitted to `agents/<id>.md` with frontmatter normalized to pi tool names, discoverable by the subagent extension from `~/.pi/agent/agents/`.
-- **Commands & skills as prompts.** Each command and skill becomes `prompts/<id>.md`, loadable via pi's `prompts` setting and invokable as `/<id>`.
-- **Skills natively.** z-harness is also installed as a pi *package*, so its `skills/` auto-surface. `Skill("z-foo")` call sites are rewritten to `> [pi] Run the /z-foo skill.`
-- **Tools.** `read, grep, find, ls, bash, write, edit` map directly. `Glob` maps to `find`.
+The following z-harness constructs have direct or near-direct equivalents in Antigravity:
+
+| z-harness construct | Antigravity equivalent |
+|---------------------|----------------------|
+| `commands/*.md` (slash commands) | `.agent/workflows/<name>.md` — custom chat modes (`agy chat --mode <id>`) |
+| `agents/*.md` (agent definitions) | `.agent/rules/<name>.md` — always_on or model_decision rules |
+| `skills/*/SKILL.md` (skills) | `.agent/skills/<name>/SKILL.md` — workspace skills |
+| `Bash`, `Read`, `Edit`, `Write` tools | Cascade native tools (exact names may differ; semantics are equivalent) |
+| `AskUserQuestion` tool (clarification) | Cascade conversational turn (native; no special syntax needed) |
+| `WebFetch`, `WebSearch` tools | Cascade native (if enabled in the workspace) |
+| Markdown body / instruction content | Passed as system-level instructions to Cascade (Gemini-based) |
+| `metrics.jsonl` shell writes | Shell commands in workflow bodies work; writes to workspace-relative paths |
+
+---
 
 ## Unsupported
 
-- **No `model` pinning by default.** Source agents pin Claude models (`haiku`, `sonnet`); these are dropped on export so agents inherit pi's configured default. In a deepseek-only setup there is no cheap Haiku tier — the fan-out win is **context isolation**, not cost. Re-pin per agent in `scripts/pi_assets/` if you add a provider.
-- **`AskUserQuestion()` / `TaskCreate()` / `SubagentCreate()` / plan-mode tools** have no native pi tool. Those call lines are rewritten to a `> [pi]` inline-handling hint; the orchestrator must ask the user or track state itself.
-- **Dropped tools.** `WebFetch`, `WebSearch`, `Agent`-as-tool, `NotebookEdit`, and other Claude-only tools are removed from agent allowlists (run `export-pi.py` to see the per-agent drop list).
-- **Multi-line call rewrites are line-based.** Only the line containing `Agent(` / `Skill(` is rewritten; argument lines on following lines (e.g. a `prompt="""..."""` block) are left in place. Treat the `> [pi]` hint as the authoritative instruction and ignore residual argument text.
-- **Many internal agents assume an orchestrator.** Agents like `implementer`, `reviewer`, `cluster-planner` are written for a driving orchestrator and may not be useful as standalone one-shot subagents. `doc-fetcher` and `explore` are the headline fan-out agents.
+The following z-harness features have no native Antigravity equivalent:
+
+1. **Subagent dispatch (`Agent(subagent_type=...)`)** — Cascade exposes no `Agent()` builtin
+   and no `.agent/subagents/` directory.  Workaround: call `agy chat --mode <workflow-id>`
+   from a shell command in the workflow body. This does not nest within a running Cascade
+   session; it launches a new top-level session.
+
+2. **Programmatic Skill Invocation (`Skill(name=...)`)** — Although Antigravity natively
+   supports workspace skills under `.agent/skills/<name>/SKILL.md`, it does not support
+   programmatic `Skill()` runtime API calls or dynamic inclusion. Downstream actions that rely
+   on programmatic skill loading must be handled as instructions directing Cascade to load the
+   appropriate workspace skill.
+
+3. **Provider registry (`providers.json`, `resolve-provider.sh`)** — Cascade is bound to
+   Gemini; there is no multi-provider routing mechanism.  All provider-routing logic in
+   `scripts/resolve-provider.sh` is inapplicable.
+
+4. **Multi-model review loop** — `/z-review-all` dispatches Codex + Gemini reviewers in
+   parallel.  Single-provider Cascade cannot replicate this pattern; only one reviewer
+   (the Cascade agent itself) is available.
+
+5. **`Z_HARNESS_PLANS_DIR` + `plan-path.sh` env injection** — Cascade workflows cannot
+   receive injected environment variables at load time.  Any path that z-harness resolves
+   via `$Z_HARNESS_PLANS_DIR` must be hardcoded or assumed to be the workspace root in the
+   exported workflow body.
+
+6. **`metrics.jsonl` event stream (structured)** — `log-event.sh` and `log-phase.sh` write
+   JSONL files.  These shell commands work inside workflow bodies but require the workspace
+   to be writable at the expected paths.  The `TOKEN=` handshake pattern (start → end)
+   may not survive across Cascade turns if the agent context is reset.
+
+7. **`AskUserQuestion` structured return** — Claude Code's `AskUserQuestion` tool pauses
+   execution and returns a typed answer object.  Cascade's equivalent is a conversational
+   turn with no structured return value; downstream logic that branches on the answer type
+   must be restructured as plain Markdown instructions.
+
+8. **Workflow bodies > 12,000 characters** — Several z-harness commands (e.g., `z-plan`)
+   exceed the Antigravity content limit for workflow files.  Mitigation: split into
+   sub-workflows, or link to an external file if `@file` syntax is supported (unconfirmed
+   as of agy 1.107.0).
+
+---
 
 ## Notes
 
-- **Source of truth.** Generated files (`agents/`, `prompts/`, `AGENTS.md`) come from z-harness `commands/`, `agents/`, `skills/`. pi-only files (`explore` agent, the subagent extension, the AGENTS preamble, this file, `README.md`) live in `scripts/pi_assets/` and are copied verbatim. Never edit `exports/pi/` by hand — re-run `python3 scripts/export-pi.py`.
-- **Refreshing the vendored extension** after a pi upgrade: see `extensions/subagent/VENDOR.md`.
-- **Install** is by symlink from `exports/pi/` into `~/.pi/agent/` — see `README.md`.
+- **Gemini prompt norms:** Cascade is Gemini-based.  Anthropic-specific XML tags (e.g.,
+  `<parameter name="thinking">`, `<result>`) are stripped during export and should not appear in
+  workflow bodies.  Use clear imperative Markdown headings instead.
+
+- **Workflow file placement:** Antigravity auto-discovers `.agent/workflows/**/*.md` by
+  watching the workspace directory tree.  No install step is required after copying files.
+  For global scope (available across all workspaces), place workflow files at:
+  `~/.antigravity/antigravity/data/User/globalStorage/antigravity.antigravity/global_workflows/<name>.md`
+
+- **Rule trigger values:** `always_on` (every session), `model_decision` (model chooses
+  based on `description`), `glob` (applied when matching files are in context).
+
+- **`agy-plugin.yaml`** is a z-harness convention manifest, not a native Antigravity
+  format.  Antigravity does not read this file; it is generated by `runtime/drivers/antigravity/export.py`
+  to document the mapping between source files and generated output.

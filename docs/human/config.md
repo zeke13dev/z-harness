@@ -68,6 +68,10 @@ Env-var overrides follow a deterministic rule: lowercase TOML dotted-key → pre
 | `axioms.auto_extract_post_run` | `Z_HARNESS_AXIOMS_AUTO_EXTRACT_POST_RUN` |
 | `cost.token_budget` | `Z_HARNESS_COST_TOKEN_BUDGET` |
 | `runtime.consult` | `Z_HARNESS_CONSULT` (alias — **not** the mechanical `Z_HARNESS_RUNTIME_CONSULT`) |
+| `workflow.planning_mode` | `Z_HARNESS_WORKFLOW_PLANNING_MODE` |
+| `workflow.intent_level` | `Z_HARNESS_WORKFLOW_INTENT_LEVEL` |
+| `workflow.intent_parallel_levels` | `Z_HARNESS_WORKFLOW_INTENT_PARALLEL_LEVELS` |
+| `workflow.hermes_enabled` | `Z_HARNESS_WORKFLOW_HERMES_ENABLED` |
 
 For workflow, followup, and experiment keys, the rule applies identically.
 
@@ -263,6 +267,10 @@ The slice-2 layer: the `[workflow]` config section, the question-registry, the r
 | `workflow.plan_decisions_approval` | string | `ask` | `ask` \| `approve` \| `halt` | Controls the Phase 2.5 decisions-doc approval gate in `/z-plan`. `ask` prompts. `approve` skips the prompt. `halt` stops unconditionally. |
 | `workflow.spec_retro_discovery` | string | `ask` | `ask` \| `defer_to_sink_p2` | Controls how Phase 4 of `/z-implement-next` handles out-of-current-SPEC discoveries reported by the implementer. `ask` prompts interactively (default). `defer_to_sink_p2` parks the discovery as a P2 follow-up in the project sink without prompting — resolver returns `defer-to-sink`; orchestrator calls `scripts/sink-add.sh` with the question context. |
 | `workflow.pre_run_cost_gate` | string | `ask` | `ask` \| `auto_proceed` \| `halt` | Controls the pre-run cost gate for high-cost commands (z-research, z-uplift, z-plan-split). `ask` prompts. `auto_proceed` skips the gate check. `halt` stops unconditionally. Also consumed by `check-no-ask --question-id workflow.pre_run_cost_gate --range-high N --severity hard|soft`. |
+| `workflow.planning_mode` | string | `intent` | `intent` \| `full` | Default planner paradigm for `/z-plan`. `intent` = Adaptive INTENT mode: thin frozen INTENT.md contract + emergent BFS task-tree. `full` = legacy SDD mode: SPEC/PLAN/TASKS up-front. Env: `Z_HARNESS_WORKFLOW_PLANNING_MODE`. |
+| `workflow.intent_level` | string | `auto` | `auto` \| `quick` \| `standard` \| `deep` | Forced INTENT level. `auto` = the scope-classifier picks the level. `quick` / `standard` / `deep` force that level unconditionally. Env: `Z_HARNESS_WORKFLOW_INTENT_LEVEL`. |
+| `workflow.intent_parallel_levels` | bool | `false` | `true` \| `false` | Execute independent same-level tasks in parallel when running in INTENT mode. Default sequential. Env: `Z_HARNESS_WORKFLOW_INTENT_PARALLEL_LEVELS`. |
+| `workflow.hermes_enabled` | bool | `false` | `true` \| `false` | Gates ALL old Hermes parallelism machinery (generate-workstreams.py, cross-cluster dispatch, handoff). Default OFF. Env: `Z_HARNESS_WORKFLOW_HERMES_ENABLED`. |
 
 ## CLI reference (Workflow Resolver)
 
@@ -516,6 +524,10 @@ review_all_proceed = "proceed"
 plan_decisions_approval = "approve"
 spec_retro_discovery = "defer_to_sink_p2"
 pre_run_cost_gate = "auto_proceed"
+planning_mode = "intent"        # intent (default) | full (legacy SDD)
+intent_level = "auto"           # auto | quick | standard | deep
+intent_parallel_levels = false  # true to parallelize same-level tasks
+hermes_enabled = false          # true to re-enable old Hermes machinery
 ```
 
 **Overnight mode with custom allowlist:**

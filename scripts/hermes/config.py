@@ -1,7 +1,9 @@
 """
 config.py — Hermes orchestrator configuration.
 
-Loads hermes-config.yaml from repo root, with env var overrides.
+Loads hermes-config.yaml from repo root. Concurrency, retry, and timeout
+knobs are file-only (no HERMES_* env overrides). Discord credentials may
+still be overridden via HERMES_DISCORD_TOKEN / HERMES_DISCORD_USER_ID.
 """
 
 import os
@@ -137,31 +139,12 @@ def load_config(repo_root: str = ".") -> HermesConfig:
             except (ValueError, TypeError, OSError, *_YAML_ERRORS):
                 pass
 
-    # Env var overrides
+    # Discord credentials only — concurrency/retry/timeout knobs are file-only.
     config.discord.bot_token = _env_override(
         config.discord.bot_token, "HERMES_DISCORD_TOKEN", str
     )
     config.discord.user_id = _env_override(
         config.discord.user_id, "HERMES_DISCORD_USER_ID", str
-    )
-    # HERMES_MAX_PARALLEL maps to max_parallel_workstreams (renamed from max_parallel_sessions)
-    config.concurrency.max_parallel_workstreams = _env_override(
-        config.concurrency.max_parallel_workstreams, "HERMES_MAX_PARALLEL", int
-    )
-    config.concurrency.max_parallel_plans = _env_override(
-        config.concurrency.max_parallel_plans, "HERMES_MAX_PARALLEL_PLANS", int
-    )
-    config.concurrency.serialize_all = _env_override(
-        config.concurrency.serialize_all, "HERMES_SERIALIZE_ALL", _bool_coerce
-    )
-    config.concurrency.serialize_high_severity = _env_override(
-        config.concurrency.serialize_high_severity, "HERMES_SERIALIZE_HIGH_SEVERITY", _bool_coerce
-    )
-    config.retry.max_retries = _env_override(
-        config.retry.max_retries, "HERMES_MAX_RETRIES", int
-    )
-    config.timeouts.per_workstream_minutes = _env_override(
-        config.timeouts.per_workstream_minutes, "HERMES_WORKSTREAM_TIMEOUT_MINUTES", int
     )
 
     return config
