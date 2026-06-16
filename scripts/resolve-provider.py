@@ -499,6 +499,25 @@ _CONSULT_OFF_ROLES: frozenset[str] = frozenset(
     {"consultant_primary", "consultant_secondary", "reviewer"}
 )
 
+_SCRIPT_DIR = Path(__file__).resolve().parent
+
+
+def _config_get(key: str, default: str) -> str:
+    """Read a config key via config.py get; return default on any failure."""
+    config_py = _SCRIPT_DIR / "config.py"
+    try:
+        result = subprocess.run(
+            [sys.executable, str(config_py), "get", key],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except OSError:
+        pass
+    return default
+
 
 def main() -> None:
     if len(sys.argv) != 2:
@@ -507,11 +526,11 @@ def main() -> None:
 
     role = sys.argv[1]
 
-    # Z_HARNESS_CONSULT=off: return sentinel "none" for consultant/reviewer roles
+    # runtime.consult = "off": return sentinel "none" for consultant/reviewer roles
     # and skip the distinctness check.  Consumers that see "none" must skip the
     # external-model dispatch entirely (see z-plan.md Phase 3/7 and
     # z-implement-all.md reviewer gate).
-    consult_val = os.environ.get("Z_HARNESS_CONSULT", "on").strip().lower()
+    consult_val = _config_get("runtime.consult", "on").strip().lower()
     if consult_val == "off" and role in _CONSULT_OFF_ROLES:
         print("none")
         sys.exit(0)

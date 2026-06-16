@@ -144,7 +144,7 @@ Save to `$CURRENT_ARCHIVE_DIR/premise.md`.
 
 ## Phase 2 — Ground (doc-fetcher first)
 
-Per the global rule, if `docs/llm/INDEX.json` exists AND `$Z_HARNESS_DOCS_ALWAYS_APPLY` is `always` (the default), dispatch `doc-fetcher` (Haiku) BEFORE any other reading:
+Per the global rule, if `docs/llm/INDEX.json` exists AND `docs.always_apply` is `always` (the default; read via `config.py get docs.always_apply`), dispatch `doc-fetcher` (Haiku) BEFORE any other reading:
 
 ```
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
@@ -154,7 +154,7 @@ Agent(subagent_type="doc-fetcher",
       prompt="query: <one-sentence task>\nrepo_root: <abs path>\ndepth: standard")
 ```
 
-If `$Z_HARNESS_DOCS_ALWAYS_APPLY` is `never`, skip doc-fetcher entirely and proceed directly to Read/Grep/Glob.
+If `docs.always_apply` is `never`, skip doc-fetcher entirely and proceed directly to Read/Grep/Glob.
 
 Use doc-fetcher's return to constrain what files you read next. If `STATUS: no_docs` / `no_match` / `partial`, fall back to direct Read/Grep/Glob — do NOT spawn Explore in `/z-do` (too expensive for this command).
 

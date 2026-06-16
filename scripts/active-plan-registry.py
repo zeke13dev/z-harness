@@ -202,6 +202,24 @@ def _min_confidence(conf_a: str, conf_b: str) -> str:
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
+
+def _config_get(key: str, default: str) -> str:
+    """Read a config key via config.py get; return default on any failure."""
+    config_py = SCRIPT_DIR / "config.py"
+    try:
+        result = subprocess.run(
+            [sys.executable, str(config_py), "get", key],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except OSError:
+        pass
+    return default
+
+
 # ── safe basename ──────────────────────────────────────────────────────────────
 
 _SAFE_BASENAME_RE = re.compile(r'^[A-Za-z0-9._-]+$')
@@ -1136,11 +1154,13 @@ def cmd_wait_for(args: argparse.Namespace) -> int:
         watch_paths = [p.strip() for p in args.paths.split(",") if p.strip()]
 
     # Determine auto vs. explicit mode and budget.
-    is_auto = os.environ.get("Z_HARNESS_AUTO_WAIT", str(_DEFAULT_AUTO_WAIT)).strip() == "1"
+    # Read from config.py (runtime.auto_wait); "true" = auto mode, "false" = explicit-timeout mode.
+    _auto_wait_val = _config_get("runtime.auto_wait", str(_DEFAULT_AUTO_WAIT))
+    is_auto = _auto_wait_val.strip().lower() in ("1", "true")
     try:
-        budget_secs = int(os.environ.get(
-            "Z_HARNESS_AUTO_WAIT_BUDGET_SECS",
-            _DEFAULT_AUTO_WAIT_BUDGET_SECS,
+        budget_secs = int(_config_get(
+            "runtime.auto_wait_budget_secs",
+            str(_DEFAULT_AUTO_WAIT_BUDGET_SECS),
         ))
     except ValueError:
         budget_secs = _DEFAULT_AUTO_WAIT_BUDGET_SECS

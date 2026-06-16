@@ -18,13 +18,16 @@
 # ts is the ISO-8601 timestamp generated at runtime; it makes event_id unique
 # per emission (callers cite run+event_id together).
 #
-# Gating: if Z_HARNESS_AXIOM_EXTRACT is set to "0", this script is a silent
-# no-op (exit 0, writes nothing).  Any other value (or unset) = emit.
+# Gating: if axioms.auto_extract_post_run is "false", this script is a silent
+# no-op (exit 0, writes nothing).  "true" (or unset/missing config) = emit.
 
 set -euo pipefail
 
 # Gating check first — cheap early exit.
-if [[ "${Z_HARNESS_AXIOM_EXTRACT:-}" == "0" ]]; then
+# Read axioms.auto_extract_post_run via config.py; fall back to "true" (emit) if config unavailable.
+_LOG_DECISION_SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+_AXIOM_EXTRACT="$(python3 "$_LOG_DECISION_SCRIPT_DIR/config.py" get axioms.auto_extract_post_run 2>/dev/null || echo "true")"
+if [[ "$_AXIOM_EXTRACT" == "false" ]]; then
   exit 0
 fi
 

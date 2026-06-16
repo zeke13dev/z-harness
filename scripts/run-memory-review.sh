@@ -170,9 +170,10 @@ if [[ "$PARENT_COMMAND" == "debug" ]]; then
   echo "$BASE/DEBUG.md"
 fi
 
-# --- Emit AXIOM_READY when Z_HARNESS_AXIOM_EXTRACT is enabled (default on) ---
-# Gating: only "0" suppresses; unset or any other value (including "false") = emit.
-if [[ "${Z_HARNESS_AXIOM_EXTRACT:-}" != "0" ]]; then
+# --- Emit AXIOM_READY when axioms.auto_extract_post_run is enabled (default on) ---
+# Gating: "false" suppresses; "true" (or config unavailable) = emit.
+_AXIOM_EXTRACT="$(python3 "$PLUGIN_ROOT/scripts/config.py" get axioms.auto_extract_post_run 2>/dev/null || echo "true")"
+if [[ "$_AXIOM_EXTRACT" != "false" ]]; then
   echo "AXIOM_READY $DIFF_FILE"
 fi
 
