@@ -286,5 +286,76 @@ class TestT003aAlreadyAliasedKeys(unittest.TestCase):
         self.assertEqual(r.stdout.strip(), "all")
 
 
+# ---------------------------------------------------------------------------
+# T003a-FALLOUT: runtime.auto_wait must accept legacy 0/1 from Z_HARNESS_AUTO_WAIT
+# ---------------------------------------------------------------------------
+
+class TestAutoWaitLegacyZeroOne(unittest.TestCase):
+    """
+    runtime.auto_wait uses _validate_bool_or_zero_one so that legacy
+    Z_HARNESS_AUTO_WAIT=0 / =1 are accepted and coerced (0→false, 1→true).
+
+    The legacy convention predates the 'true'/'false' migration — the old env-based
+    code did `os.environ.get("Z_HARNESS_AUTO_WAIT") == "1"` to detect enabled state.
+    A user who sets Z_HARNESS_AUTO_WAIT=0 to DISABLE auto-wait must not silently get
+    the default (true) instead.
+    """
+
+    def test_auto_wait_zero_coerces_to_false(self):
+        """Z_HARNESS_AUTO_WAIT=0 must resolve runtime.auto_wait to false (no error)."""
+        r = _run(["get", "runtime.auto_wait"], extra_env={"Z_HARNESS_AUTO_WAIT": "0"})
+        self.assertEqual(r.returncode, 0,
+                         msg=f"Z_HARNESS_AUTO_WAIT=0 should be accepted; stderr={r.stderr}")
+        self.assertEqual(r.stdout.strip(), "false",
+                         msg="Z_HARNESS_AUTO_WAIT=0 should coerce to false")
+
+    def test_auto_wait_one_coerces_to_true(self):
+        """Z_HARNESS_AUTO_WAIT=1 must resolve runtime.auto_wait to true (no error)."""
+        r = _run(["get", "runtime.auto_wait"], extra_env={"Z_HARNESS_AUTO_WAIT": "1"})
+        self.assertEqual(r.returncode, 0,
+                         msg=f"Z_HARNESS_AUTO_WAIT=1 should be accepted; stderr={r.stderr}")
+        self.assertEqual(r.stdout.strip(), "true",
+                         msg="Z_HARNESS_AUTO_WAIT=1 should coerce to true")
+
+    def test_auto_wait_false_string_still_works(self):
+        """Z_HARNESS_AUTO_WAIT=false must still resolve to false."""
+        r = _run(["get", "runtime.auto_wait"], extra_env={"Z_HARNESS_AUTO_WAIT": "false"})
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        self.assertEqual(r.stdout.strip(), "false")
+
+    def test_auto_wait_true_string_still_works(self):
+        """Z_HARNESS_AUTO_WAIT=true must still resolve to true."""
+        r = _run(["get", "runtime.auto_wait"], extra_env={"Z_HARNESS_AUTO_WAIT": "true"})
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        self.assertEqual(r.stdout.strip(), "true")
+
+    def test_auto_wait_invalid_value_rejected(self):
+        """Z_HARNESS_AUTO_WAIT=banana must be rejected (exit 2, error to stderr)."""
+        r = _run(["get", "runtime.auto_wait"], extra_env={"Z_HARNESS_AUTO_WAIT": "banana"})
+        self.assertEqual(r.returncode, 2,
+                         msg="invalid value for runtime.auto_wait should exit 2")
+        self.assertIn("invalid value", r.stderr,
+                      msg="error message should mention 'invalid value'")
+
+    def test_auto_wait_zero_does_not_silently_fallback_to_default(self):
+        """
+        Regression guard: with the old _validate_bool validator, Z_HARNESS_AUTO_WAIT=0
+        was rejected and the default (true) was silently used instead. This test
+        explicitly asserts that the RESOLVED value is 'false', not 'true' (the default).
+
+        If the validator is accidentally switched back to _validate_bool, this test
+        will fail because the resolved value will be 'true' (the default).
+        """
+        r = _run(["get", "runtime.auto_wait"], extra_env={"Z_HARNESS_AUTO_WAIT": "0"})
+        self.assertEqual(r.returncode, 0,
+                         msg=f"Z_HARNESS_AUTO_WAIT=0 must be accepted, not fall back to default; "
+                             f"stderr={r.stderr}")
+        self.assertNotEqual(r.stdout.strip(), "true",
+                            msg="runtime.auto_wait must NOT fall back to default 'true' "
+                                "when Z_HARNESS_AUTO_WAIT=0 is set — validator regression")
+        self.assertEqual(r.stdout.strip(), "false",
+                         msg="runtime.auto_wait must be 'false' when Z_HARNESS_AUTO_WAIT=0")
+
+
 if __name__ == "__main__":
     unittest.main()

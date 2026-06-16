@@ -239,7 +239,7 @@ VALIDATORS: dict = {
     "runtime.consult":              {"on", "off"},
     "runtime.pre_review":           _validate_bool,
     "runtime.impl_pre_review":      _validate_bool,
-    "runtime.auto_wait":            _validate_bool,
+    "runtime.auto_wait":            _validate_bool_or_zero_one,
     "runtime.auto_wait_budget_secs": _validate_positive_int,
     "runtime.pause_at_pct":         _validate_positive_int,
     "runtime.explain_resolution":   _validate_bool,
@@ -306,7 +306,10 @@ _COERCERS: dict[str, object] = {
         v if isinstance(v, bool) else v.lower() == "true"
     ),
     "runtime.auto_wait": lambda v: (
-        v if isinstance(v, bool) else v.lower() == "true"
+        # Accept legacy "0"/"1" from Z_HARNESS_AUTO_WAIT in addition to "true"/"false"
+        v if isinstance(v, bool) else (
+            False if v == "0" else (True if v == "1" else v.lower() == "true")
+        )
     ),
     "runtime.auto_wait_budget_secs": lambda v: (
         v if isinstance(v, int) and not isinstance(v, bool) else int(v)
