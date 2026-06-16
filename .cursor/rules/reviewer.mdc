@@ -1,5 +1,5 @@
 ---
-description: "Routes to the reviewer LLM (resolved via providers registry) to scrutinize a just-completed implementation task. Finds bugs, spec violations, missed edge cases, and DRY/KISS/SOLID violations."
+description: "Routes to the reviewer LLM (resolved via providers registry) to scrutinize a just-completed implementation task. Finds bugs, spec/intent violations, missed edge cases, and DRY/KISS/SOLID violations. In INTENT mode reads the full frozen INTENT narrative + durable tier and cites failures as 'fails acceptance criterion #N'. Legacy SPEC mode unchanged."
 alwaysApply: false
 ---
 
@@ -67,7 +67,15 @@ The caller will give you:
 - Absolute paths of changed files (fallback / supplemental)
 - Acceptance criteria for the task (verbatim from the task block)
 - **Implementer contract fields** (may be empty): `RATIONALE` (1-3 sentences on why the approach was chosen), `TRIED` (optional — list of failed attempts), `DEVIATIONS` (optional — list of differences from PLAN). Validate these against the diff.
-- **`$BASE` path** — read SPEC.md yourself with the Read tool. Read the sections relevant to the changed files.
+- **Mode signals** — exactly one of the following two sets is present:
+  - **Legacy mode** (SPEC present): `$BASE` path — read SPEC.md yourself with the Read tool. Read the sections relevant to the changed files.
+  - **INTENT mode** (SPEC absent): requires **both** of the following inputs — if only one is present, that is a misconfiguration (see mode detection below):
+    - `intent_snapshot: <abs path>` — path to the frozen INTENT.md snapshot (`archive/$RUN/INTENT.frozen.md`). Read ALL sections: `## Intent`, `## Not doing`, `## Consider for this`, `## Acceptance checklist`.
+    - `ledger_path: <abs path>` — path to LEDGER.md. Read it to understand decisions already recorded before composing the review prompt.
+  - **Durable tier** (INTENT mode — three separate paths, all optional but each checked if present):
+    - `kernel_path:` — KERNEL doc (axioms). Read and follow before acting.
+    - `invariants_path:` — `docs/INVARIANTS.json`. Read invariants relevant to the changed files; flag any violation.
+    - `style_path:` — STYLE doc. Check that new code/prose conforms.
 - **`relevant_docs`** (paths, may be empty) — `docs/llm/<concept>.json` files for concepts the diff touches. **Read these BEFORE composing the review prompt** — they state invariants and `consumed_by` relationships that may flag drift the diff alone can't show.
 - Optional: **related downstream files** (paths only) — up to 3 related-consumer file paths to grep for contract drift if the diff touches a contract surface.
 
@@ -86,8 +94,13 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end 
 
 1. Read `diff.patch` (Read tool). This is the primary review artifact.
 2. Read each changed file in full only as needed for surrounding context the diff doesn't show.
-3. Read the relevant SPEC.md section.
-4. Build a review prompt:
+3. **Detect mode and read the contract:**
+   - **Misconfiguration guard:** If exactly one of `intent_snapshot:` or `ledger_path:` is present (but not both), stop immediately and return a BLOCKED verdict with the message: `"MISCONFIGURED: INTENT mode requires both intent_snapshot: and ledger_path: to be present. Exactly one was supplied — cannot determine review mode."` Do not attempt to infer the missing path or fall back to legacy mode.
+   - **Legacy mode** (`$BASE` given, neither `intent_snapshot:` nor `ledger_path:` present): Read the relevant SPEC.md section from `$BASE/SPEC.md`.
+   - **INTENT mode** (both `intent_snapshot:` AND `ledger_path:` present): Read the full frozen INTENT.md snapshot at the given path. Read ALL sections: `## Intent`, `## Not doing`, `## Consider for this`, and `## Acceptance checklist` (numbered `[ ]` criteria). Also read LEDGER.md at `ledger_path:` to understand decisions already recorded. Then read the durable tier if provided: `kernel_path:` (KERNEL axioms), `invariants_path:` (INVARIANTS.json — flag any violation the diff introduces), and `style_path:` (STYLE doc — flag any new code that violates style rules). Do NOT read SPEC.md in INTENT mode.
+4. Build a review prompt. Use the appropriate template for the detected mode:
+
+**Legacy mode prompt:**
 
 ```
 You are reviewing code that Claude just wrote for task <ID>: <title>.
@@ -127,6 +140,80 @@ For each finding: severity (blocker / major / minor / nit), location, and a sugg
 - Report **blockers and majors only**. Skip minors and nits unless a "minor" hides a correctness bug — in which case promote it to major.
 - One finding per bullet. Two sentences max per finding (one for the problem, one for the fix).
 - No re-stating of code already in the diff. No summaries of what the code does. No restating the spec.
+- If there are no blockers or majors, respond with exactly: `No blockers or majors found.` (plus an optional 1-line note if something needs the implementer's attention but is below the bar).
+```
+
+**INTENT mode prompt:**
+
+```
+You are reviewing code that Claude just wrote for task <ID>: <title>.
+
+This plan uses Adaptive INTENT. The frozen INTENT contract (not a SPEC) is the authority.
+
+INTENT narrative (full — authority for this review):
+## Intent
+<## Intent section verbatim from frozen INTENT snapshot>
+
+## Not doing
+<## Not doing section verbatim, or "(not present — L1 plan)" if absent>
+
+## Consider for this
+<## Consider for this section verbatim, or "(not present — L1 plan)" if absent>
+
+## Acceptance checklist
+<numbered list verbatim from frozen INTENT snapshot — preserve numbering, e.g. 1. [ ] ...>
+
+LEDGER (decisions already recorded — do not re-flag decisions the LEDGER already captures):
+<LEDGER.md contents, or "(empty — first level)" if empty>
+
+<If kernel_path: was given:>
+Durable tier — KERNEL (axioms that override everything):
+<kernel_path content verbatim>
+
+<If invariants_path: was given:>
+Durable tier — INVARIANTS (from invariants_path: — violations must be flagged as blockers):
+<invariants_path content verbatim>
+
+<If style_path: was given:>
+Durable tier — STYLE (from style_path: — style violations in new code must be flagged):
+<style_path content verbatim>
+
+Acceptance criteria for this task (task-level, from TASKS.md):
+<criteria verbatim from task block>
+
+Task advances criterion: <**Advances:** line from task block, if present>
+
+Diff (primary artifact — focus your scrutiny on what changed):
+
+<diff.patch contents>
+
+Surrounding file context (only if relevant to evaluating the diff):
+
+=== <path> ===
+<excerpt>
+
+Scrutinize this code rigorously against the INTENT contract above. Claude is prone to: over-engineering, premature abstraction, plausible-looking-but-wrong logic, missed edge cases, and silently expanding scope beyond the intent.
+
+When citing failures, use the exact form: "fails acceptance criterion #N" where N is the 1-based index in the ## Acceptance checklist above.
+
+Report:
+1. Bugs or correctness issues
+2. INTENT violations or missed acceptance criteria — cite as "fails acceptance criterion #N"
+3. Missed edge cases / error handling gaps
+4. DRY / KISS / SOLID violations
+5. Security concerns
+6. DEVIATIONS validation: for each claimed deviation in the implementer's DEVIATIONS field, verify against the diff — was the claimed change actually made? Flag if deviation is unverifiable or contradicts the diff.
+7. RATIONALE plausibility: does the code match the stated rationale? Flag if rationale claims one approach but code follows another.
+8. TRIED consistency (if TRIED entries exist): does the current code contradict any claimed failed approach? Report as MINOR only — reviewer cannot validate dead-code claims.
+9. Anything else worth flagging
+
+For each finding: severity (blocker / major / minor / nit), location, and a suggested fix.
+
+**OUTPUT BUDGET — respect strictly:**
+- Total response under **8000 characters**.
+- Report **blockers and majors only**. Skip minors and nits unless a "minor" hides a correctness bug — in which case promote it to major.
+- One finding per bullet. Two sentences max per finding (one for the problem, one for the fix).
+- No re-stating of code already in the diff. No summaries of what the code does. No restating the INTENT contract.
 - If there are no blockers or majors, respond with exactly: `No blockers or majors found.` (plus an optional 1-line note if something needs the implementer's attention but is below the bar).
 ```
 

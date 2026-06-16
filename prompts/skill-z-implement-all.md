@@ -426,7 +426,6 @@ The numbered steps below describe a **single task track** — one task's journey
    - `deps` and `file_conflicts` arrays give the complete dependency graph. Tasks with disjoint file sets and no dependency chain can run in parallel — no hard cap, the DAG decides.
    - `scope_unknown: true` means some task block has no parseable `**Files:**` line — rule 2 is blind for that task. The orchestrator knows this and decides whether to parallelize anyway or serialize, weighing the risk of clobbered edits.
    - When `workstreams.json` is absent (pre-existing plan), fall back to rule 2 alone — behavior is byte-identical to before this feature existed.
-
 ## Hard caps (token / wall-clock safety)
 
 These exist because the T006 saga (4 attempts spanning ~20 wall-clock hours, each a *different* failure mode — OOM, degenerate model, load avg 156, load avg 211) was not caught by the skip-marker list. Skip-markers match static text in the task block; they cannot catch novel runtime failures. The caps below are unconditional.

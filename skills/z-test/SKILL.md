@@ -1,6 +1,6 @@
 ---
 name: z-test
-description: Dual-source semantic test-case planner. ERROR_POINTS.json (empirical regression hardening from review findings) + INVARIANTS.json (preventive coverage from declared design truths). Reads SPEC.md + PLAN.md + TASKS.md for an existing plan, risk-ranks tasks, drafts non-trivial test cases, generates adversarial counterexamples, runs bundled cross-LLM consult, validates fixtures, writes TESTS.md, and cross-links TEST-NNN entries back into TASKS.md. Modes: --mode dual (default), invariant, error-points.
+description: "Dual-source semantic test-case planner. ERROR_POINTS.json (empirical regression hardening from review findings) + INVARIANTS.json (preventive coverage from declared design truths). Reads SPEC.md + PLAN.md + TASKS.md for an existing plan, risk-ranks tasks, drafts non-trivial test cases, generates adversarial counterexamples, runs bundled cross-LLM consult, validates fixtures, writes TESTS.md, and cross-links TEST-NNN entries back into TASKS.md. Modes: --mode dual (default), invariant, error-points."
 argument-hint: "[--slug <plan-slug>] [--mode dual|invariant|error-points] [--ratio <N:M>] [--ci]"
 origin: z-harness-core
 tags: [testing, planning, invariants, error-points]
