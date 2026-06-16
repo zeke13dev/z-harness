@@ -381,9 +381,9 @@ class TestTomlSchemaErrors(unittest.TestCase):
         self.assertEqual(r.stdout.strip(), "approval_only")
         self.assertIn("WARNING", r.stderr)
 
-    def test_schema_version_2_repo_exits_2_with_file_name(self):
-        """schema_version=2 in REPO config exits 2 with the file path in stderr."""
-        repo_cfg = write_repo_config(self.repo, 'schema_version = 2\n[notify]\nlevel = "off"\n')
+    def test_schema_version_future_repo_exits_2_with_file_name(self):
+        """schema_version > current (3) in REPO config exits 2 with the file path in stderr."""
+        repo_cfg = write_repo_config(self.repo, 'schema_version = 3\n[notify]\nlevel = "off"\n')
         r = run(["get", "notify.level"], env={
             "XDG_CONFIG_HOME": self.xdg,
             "Z_HARNESS_REPO_CONFIG": repo_cfg,
@@ -391,10 +391,10 @@ class TestTomlSchemaErrors(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
         self.assertIn(".z-harness", r.stderr)
 
-    def test_schema_version_2_global_exits_2_with_file_path(self):
-        """schema_version=2 in GLOBAL config exits 2 with the global file path in stderr."""
+    def test_schema_version_future_global_exits_2_with_file_path(self):
+        """schema_version > current (3) in GLOBAL config exits 2 with the global file path in stderr."""
         global_cfg_path = write_global_config(
-            self.xdg, 'schema_version = 2\n[notify]\nlevel = "off"\n'
+            self.xdg, 'schema_version = 3\n[notify]\nlevel = "off"\n'
         )
         r = run(["get", "notify.level"], env={"XDG_CONFIG_HOME": self.xdg},
                 cwd=self.cwd)

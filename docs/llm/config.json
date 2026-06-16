@@ -203,7 +203,7 @@
   "depends_on": ["scripts"],
   "consumed_by": ["commands", "skills", "followup-sink", "cost-estimation"],
   "invariants": [
-    "[Loader API] schema_version must equal 1 (else exit 2)",
+    "[Loader API] schema_version current value is 2; loading a config with schema_version < 2 emits a non-fatal stderr warning pointing at `config.py ensure-defaults`; schema_version > 2 exits 2 (hard fail)",
     "[Loader API] ensure-defaults never writes repo-local; only writes the global user path",
     "[Loader API] should-notify always exits 0 on valid event kind (yes|no on stdout); exits 2 on unknown event",
     "[Loader API] config_resolved event emitted at most once per $Z_HARNESS_RUN via O_EXCL temp-file de-dup",

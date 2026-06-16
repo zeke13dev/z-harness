@@ -59,7 +59,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 DEFAULTS: dict = {
-    "schema_version": 1,
+    "schema_version": 2,
     "notify": {
         "level": "approval_only",   # off | approval_only | all
         "discord_webhook_url": "",  # string: Discord webhook URL (empty = disabled)
@@ -122,6 +122,18 @@ DEFAULTS: dict = {
         # the "none" sentinel so cross-LLM consult and review are skipped. Exported
         # as Z_HARNESS_CONSULT (see _ENV_VAR_ALIASES), which resolve-provider reads.
         "consult": "on",
+        # Pre-review gates (opt-in, default off). Exported as Z_HARNESS_PRE_REVIEW /
+        # Z_HARNESS_IMPL_PRE_REVIEW (see _ENV_VAR_ALIASES for legacy names).
+        "pre_review": False,        # bool: enable pre-review cycle in /z-review-all and /z-audit-plan
+        "impl_pre_review": False,   # bool: enable pre-review gate in /z-implement-all
+        # Auto-wait / wait-for knobs. Exported as Z_HARNESS_AUTO_WAIT /
+        # Z_HARNESS_AUTO_WAIT_BUDGET_SECS (see _ENV_VAR_ALIASES for legacy names).
+        "auto_wait": True,              # bool: 1=auto-budget mode, 0=explicit-timeout mode
+        "auto_wait_budget_secs": 300,   # int>0: auto-wait budget in seconds (auto mode)
+        # Context-window pause threshold. Exported as Z_HARNESS_PAUSE_AT_PCT.
+        "pause_at_pct": 85,         # int>0: context fill % at which to pause; 85 = pause at 85%
+        # Resolver verbosity. Exported as Z_HARNESS_EXPLAIN_RESOLUTION.
+        "explain_resolution": False,  # bool: print resolver decision tree to stderr
     },
     "cost": {
         "token_budget": None,             # int > 0 or None (unset)
@@ -198,6 +210,12 @@ VALIDATORS: dict = {
     "experiment.persona_rotation":  _validate_bool,
     "experiment.control_every_n":   _validate_positive_int,
     "runtime.consult":              {"on", "off"},
+    "runtime.pre_review":           _validate_bool,
+    "runtime.impl_pre_review":      _validate_bool,
+    "runtime.auto_wait":            _validate_bool,
+    "runtime.auto_wait_budget_secs": _validate_positive_int,
+    "runtime.pause_at_pct":         _validate_positive_int,
+    "runtime.explain_resolution":   _validate_bool,
 }
 
 # Coercers: applied after validation to normalize values (esp. env-var strings).
@@ -245,6 +263,24 @@ _COERCERS: dict[str, object] = {
         v if isinstance(v, bool) else v.lower() == "true"
     ),
     "workflow.hermes_enabled": lambda v: (
+        v if isinstance(v, bool) else v.lower() == "true"
+    ),
+    "runtime.pre_review": lambda v: (
+        v if isinstance(v, bool) else v.lower() == "true"
+    ),
+    "runtime.impl_pre_review": lambda v: (
+        v if isinstance(v, bool) else v.lower() == "true"
+    ),
+    "runtime.auto_wait": lambda v: (
+        v if isinstance(v, bool) else v.lower() == "true"
+    ),
+    "runtime.auto_wait_budget_secs": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    "runtime.pause_at_pct": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    "runtime.explain_resolution": lambda v: (
         v if isinstance(v, bool) else v.lower() == "true"
     ),
 }
@@ -476,8 +512,42 @@ def _dotted_to_env(key: str) -> str:
 # Dotted keys whose exported env var name differs from the mechanical
 # _dotted_to_env() mapping. runtime.consult exports as Z_HARNESS_CONSULT — the
 # legacy name resolve-provider.py reads — not Z_HARNESS_RUNTIME_CONSULT.
+#
+# Rule: when the raw env name a user historically set is NOT the mechanical
+# transliteration (Z_HARNESS_<SECTION>_<KEY>), add a mapping here.  This has
+# two effects:
+#   (a) Egress: export-env emits the legacy name so downstream shell code that
+#       reads $Z_HARNESS_PRE_REVIEW (etc.) continues to work.
+#   (b) Ingress: load_config layer 4 checks the legacy name when the
+#       transliteration is absent (see the _INGRESS_LEGACY_ALIASES map below).
 _ENV_VAR_ALIASES: dict[str, str] = {
+    # Pre-existing alias (egress-only before T003a)
     "runtime.consult": "Z_HARNESS_CONSULT",
+    # T003a — workflow/runtime/notify group migrations.
+    # These keys export under the legacy raw name (not the mechanical
+    # transliteration Z_HARNESS_RUNTIME_*) so that shell code reading the
+    # well-known name (e.g. $Z_HARNESS_PRE_REVIEW) continues to work after
+    # eval "$(config.py export-env)".
+    "runtime.pre_review":         "Z_HARNESS_PRE_REVIEW",
+    "runtime.impl_pre_review":    "Z_HARNESS_IMPL_PRE_REVIEW",
+    "runtime.auto_wait":          "Z_HARNESS_AUTO_WAIT",
+    "runtime.auto_wait_budget_secs": "Z_HARNESS_AUTO_WAIT_BUDGET_SECS",
+    "runtime.pause_at_pct":       "Z_HARNESS_PAUSE_AT_PCT",
+    "runtime.explain_resolution": "Z_HARNESS_EXPLAIN_RESOLUTION",
+}
+
+# Ingress fallback: dotted_key → legacy raw env var name.  Used by load_config
+# layer 4 when the transliteration var is absent: check the legacy raw name too.
+#
+# This covers:
+#   runtime.pre_review  → Z_HARNESS_PRE_REVIEW  (transliteration: Z_HARNESS_RUNTIME_PRE_REVIEW)
+#   runtime.auto_wait   → Z_HARNESS_AUTO_WAIT   (transliteration: Z_HARNESS_RUNTIME_AUTO_WAIT)
+#   … etc. for all keys in _ENV_VAR_ALIASES
+#   notify.level        → Z_HARNESS_NOTIFY       (transliteration: Z_HARNESS_NOTIFY_LEVEL;
+#                           export still uses the transliteration — this is ingress-only)
+_INGRESS_LEGACY_ALIASES: dict[str, str] = {
+    **_ENV_VAR_ALIASES,                     # dotted_key → legacy export name (also valid for ingress)
+    "notify.level": "Z_HARNESS_NOTIFY",     # notify.level → Z_HARNESS_NOTIFY (ingress-only legacy lookup)
 }
 
 
@@ -578,9 +648,19 @@ def _check_schema_version(data: dict, path: str) -> None:
     if not data:
         return
     v = data.get("schema_version")
-    if v is not None and v != 1:
+    if v is None:
+        return
+    if v < 2:
         print(
-            f"[config] {path}: schema_version must be 1 (got {v!r})",
+            f"[config] WARNING: {path}: schema_version {v!r} is outdated (current: 2);"
+            " run `config.py ensure-defaults` to update your config.",
+            file=sys.stderr,
+        )
+        # Non-fatal: continue loading with the legacy config.
+    elif v > 2:
+        print(
+            f"[config] {path}: schema_version {v!r} is newer than supported (2);"
+            " upgrade z-harness or downgrade your config.",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -805,9 +885,24 @@ def load_config() -> tuple[dict[str, object], dict[str, str]]:
                     sources[dotted] = str(repo_path)
 
     # Layer 4: Env vars
+    # For each config key, check (a) transliteration var and (b) legacy alias var
+    # (when the raw name differs from transliteration). The transliteration takes
+    # precedence when both are set.
     for dotted_key in list(flat_defaults.keys()):
-        env_var = _dotted_to_env(dotted_key)
-        env_val = os.environ.get(env_var, "")
+        transliteration = _dotted_to_env(dotted_key)
+        env_val = os.environ.get(transliteration, "")
+        env_var = transliteration
+
+        if env_val == "":
+            # Fall back to legacy alias name (e.g. Z_HARNESS_PRE_REVIEW for
+            # runtime.pre_review, whose transliteration is Z_HARNESS_RUNTIME_PRE_REVIEW).
+            alias_var = _INGRESS_LEGACY_ALIASES.get(dotted_key)
+            if alias_var:
+                legacy_val = os.environ.get(alias_var, "")
+                if legacy_val != "":
+                    env_val = legacy_val
+                    env_var = alias_var
+
         if env_val == "":
             continue
         env_val = _validate_enum(dotted_key, env_val, f"env {env_var}", is_global=False)
@@ -987,7 +1082,7 @@ def cmd_ensure_defaults(args: list[str]) -> None:
         '# z-harness config — generated by "scripts/config.py ensure-defaults"\n'
         "# Edit freely. Run 'scripts/config.py explain <key>' to see effective values.\n"
         "\n"
-        "schema_version = 1\n"
+        "schema_version = 2\n"
         "\n"
         "[notify]\n"
         "# Notification verbosity. Values: off | approval_only | all\n"
@@ -2702,17 +2797,24 @@ def cmd_set(args: list[str]) -> None:
 # ---------------------------------------------------------------------------
 
 # Env-only knobs: these are read from env only, never written to TOML.
+# NOTE: The following T003a-migrated vars are NO LONGER in this list because they
+# now have DEFAULTS+VALIDATORS entries (they appear in the TOML-Persistent section
+# of inspect-all output instead):
+#   Z_HARNESS_NOTIFY (→ notify.level, legacy alias)
+#   Z_HARNESS_AUTO_WAIT (→ runtime.auto_wait, legacy alias)
+#   Z_HARNESS_AUTO_WAIT_BUDGET_SECS (→ runtime.auto_wait_budget_secs, legacy alias)
+#   Z_HARNESS_PAUSE_AT_PCT (→ runtime.pause_at_pct, legacy alias)
+#   Z_HARNESS_EXPLAIN_RESOLUTION (→ runtime.explain_resolution, legacy alias)
+#   Z_HARNESS_PRE_REVIEW (→ runtime.pre_review, legacy alias)
+#   Z_HARNESS_IMPL_PRE_REVIEW (→ runtime.impl_pre_review, legacy alias)
 ENV_ONLY_KNOBS: list[str] = [
     "Z_HARNESS_NO_ASK",
     "Z_HARNESS_OVERNIGHT_AUTODECIDE",
     "Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE",
-    "Z_HARNESS_PAUSE_AT_PCT",
     "Z_HARNESS_PARALLEL",
     "Z_HARNESS_ASK_ALL",
-    "Z_HARNESS_NOTIFY",
     "Z_HARNESS_REPO_PROVIDERS",
     "Z_HARNESS_PLANS_DIR",
-    "Z_HARNESS_EXPLAIN_RESOLUTION",
     "Z_HARNESS_MAX_EXPLORE",
     # ── Active-plan registry knobs (env-only, read inline in active-plan-registry.py) ──
     # 5 pre-existing registry knobs:
@@ -2721,9 +2823,7 @@ ENV_ONLY_KNOBS: list[str] = [
     "Z_HARNESS_REGISTRY_ENABLED",
     "Z_HARNESS_REGISTRY_STALE_SECS",
     "Z_HARNESS_STRICT_OVERLAP",
-    # 5 wait-for knobs (added with the lease/wait-for feature):
-    "Z_HARNESS_AUTO_WAIT",
-    "Z_HARNESS_AUTO_WAIT_BUDGET_SECS",
+    # 3 wait-for knobs that stay env-only (unattended-entry / plumbing):
     "Z_HARNESS_WAIT_POLL_SECS",
     "Z_HARNESS_WAIT_TIMEOUT_SECS",
     "Z_HARNESS_WAIT_REQUIRE_MERGE",
