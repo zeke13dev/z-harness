@@ -66,6 +66,7 @@ DEFAULTS: dict = {
     },
     "docs": {
         "always_apply": "always",   # always | never
+        "staleness_threshold": 20,  # int>0: percent of stale concepts that triggers a warning gate
     },
     "workflow": {
         "audit_to_amend": "ask",          # ask | amend | stop
@@ -79,6 +80,9 @@ DEFAULTS: dict = {
         "intent_level": "auto",           # auto | quick | standard | deep
         "intent_parallel_levels": False,  # bool: execute same-level tasks in parallel
         "hermes_enabled": False,          # bool: gate all old Hermes machinery
+        "max_explore": 3,                 # int>0: max Explore subagent dispatches per /z-plan run
+        "parallel": 3,                    # int>0: parallel batch size for z-maintain-docs and similar batch ops
+        "memory_stale_days": 547,         # int>0: days after which memory entries are considered stale (z-maintain-docs)
     },
     "followup": {
         "default_sink":                      "project",    # project | global
@@ -134,6 +138,12 @@ DEFAULTS: dict = {
         "pause_at_pct": 85,         # int>0: context fill % at which to pause; 85 = pause at 85%
         # Resolver verbosity. Exported as Z_HARNESS_EXPLAIN_RESOLUTION.
         "explain_resolution": False,  # bool: print resolver decision tree to stderr
+        # Parallelism knobs. Exported as HERMES_MAX_PARALLEL / Z_HARNESS_MAX_PARALLEL_PLANS.
+        "max_parallel": 1,            # int>0: max concurrent workstream sessions (within-plan)
+        "max_parallel_plans": 1,      # int>0: max concurrent plan runs (cross-plan)
+        # Per-task attempt / wall-clock caps. Exported as Z_HARNESS_MAX_ATTEMPTS / Z_HARNESS_MAX_TASK_WALL_MS.
+        "max_attempts": 2,            # int>0: max implementer attempts per task in /z-implement-all
+        "max_task_wall_ms": 2700000,  # int>0: per-task wall-clock cap in ms (default 45 min)
     },
     "cost": {
         "token_budget": None,             # int > 0 or None (unset)
@@ -146,6 +156,19 @@ def _validate_bool(value: object) -> bool:
     if isinstance(value, bool):
         return True
     if isinstance(value, str) and value.lower() in {"true", "false"}:
+        return True
+    return False
+
+
+def _validate_bool_or_zero_one(value: object) -> bool:
+    """Accept Python bools, 'true'/'false' (case-insensitive), or legacy '0'/'1' strings.
+
+    Used for axioms.auto_extract_post_run whose legacy env var (Z_HARNESS_AXIOM_EXTRACT)
+    used '0' to disable rather than the standard 'false' string.
+    """
+    if _validate_bool(value):
+        return True
+    if isinstance(value, str) and value in {"0", "1"}:
         return True
     return False
 
@@ -182,6 +205,7 @@ HALT_CATEGORY_ENUM: frozenset[str] = frozenset(
 VALIDATORS: dict = {
     "notify.level": {"off", "approval_only", "all"},
     "docs.always_apply": {"always", "never"},
+    "docs.staleness_threshold": _validate_positive_int,
     "workflow.audit_to_amend": {"ask", "amend", "stop"},
     "workflow.slug_confirm":   {"ask", "auto_accept", "recommend_derived"},
     "workflow.implement_all_proceed":    {"ask", "auto_resume", "halt"},
@@ -193,6 +217,9 @@ VALIDATORS: dict = {
     "workflow.intent_level":             {"auto", "quick", "standard", "deep"},
     "workflow.intent_parallel_levels":   _validate_bool,
     "workflow.hermes_enabled":           _validate_bool,
+    "workflow.max_explore":              _validate_positive_int,
+    "workflow.parallel":                 _validate_positive_int,
+    "workflow.memory_stale_days":        _validate_positive_int,
     "cost.token_budget":                 _validate_positive_int_or_none,
     "followup.default_sink":                   {"project", "global"},
     "followup.notion_enabled":                 {True, False},
@@ -200,7 +227,7 @@ VALIDATORS: dict = {
     "axioms.enabled":               _validate_bool,
     "axioms.kernel_budget_chars":   _validate_positive_int,
     "axioms.extract_min_recurrence": _validate_positive_int,
-    "axioms.auto_extract_post_run": _validate_bool,
+    "axioms.auto_extract_post_run": _validate_bool_or_zero_one,
     "brainstorm.personas":          _validate_bool,
     "personas.critique_panel":      _validate_bool,
     "personas.audit":               _validate_bool,
@@ -216,6 +243,10 @@ VALIDATORS: dict = {
     "runtime.auto_wait_budget_secs": _validate_positive_int,
     "runtime.pause_at_pct":         _validate_positive_int,
     "runtime.explain_resolution":   _validate_bool,
+    "runtime.max_parallel":         _validate_positive_int,
+    "runtime.max_parallel_plans":   _validate_positive_int,
+    "runtime.max_attempts":         _validate_positive_int,
+    "runtime.max_task_wall_ms":     _validate_positive_int,
 }
 
 # Coercers: applied after validation to normalize values (esp. env-var strings).
@@ -231,7 +262,10 @@ _COERCERS: dict[str, object] = {
         v if isinstance(v, int) and not isinstance(v, bool) else int(v)
     ),
     "axioms.auto_extract_post_run": lambda v: (
-        v if isinstance(v, bool) else v.lower() == "true"
+        # Accept legacy "0"/"1" from Z_HARNESS_AXIOM_EXTRACT in addition to "true"/"false"
+        v if isinstance(v, bool) else (
+            False if v == "0" else (True if v == "1" else v.lower() == "true")
+        )
     ),
     "brainstorm.personas": lambda v: (
         v if isinstance(v, bool) else v.lower() == "true"
@@ -282,6 +316,31 @@ _COERCERS: dict[str, object] = {
     ),
     "runtime.explain_resolution": lambda v: (
         v if isinstance(v, bool) else v.lower() == "true"
+    ),
+    # T003b — parallelism/review/docs/limits group
+    "docs.staleness_threshold": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    "workflow.max_explore": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    "workflow.parallel": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    "workflow.memory_stale_days": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    "runtime.max_parallel": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    "runtime.max_parallel_plans": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    "runtime.max_attempts": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    "runtime.max_task_wall_ms": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
     ),
 }
 
@@ -534,14 +593,27 @@ _ENV_VAR_ALIASES: dict[str, str] = {
     "runtime.auto_wait_budget_secs": "Z_HARNESS_AUTO_WAIT_BUDGET_SECS",
     "runtime.pause_at_pct":       "Z_HARNESS_PAUSE_AT_PCT",
     "runtime.explain_resolution": "Z_HARNESS_EXPLAIN_RESOLUTION",
+    # T003b — parallelism/review/docs/limits group migrations.
+    # Raw name differs from mechanical transliteration in every case below.
+    "docs.staleness_threshold":   "Z_HARNESS_DOC_STALENESS_THRESHOLD",   # raw uses DOC (no S) vs DOCS
+    "workflow.max_explore":       "Z_HARNESS_MAX_EXPLORE",                # raw has no WORKFLOW_ prefix
+    "workflow.parallel":          "Z_HARNESS_PARALLEL",                   # raw has no WORKFLOW_ prefix
+    "workflow.memory_stale_days": "Z_HARNESS_MEMORY_STALE_DAYS",          # raw has no WORKFLOW_ prefix
+    "runtime.max_parallel":       "HERMES_MAX_PARALLEL",                  # raw uses HERMES_ not Z_HARNESS_RUNTIME_
+    "runtime.max_parallel_plans": "Z_HARNESS_MAX_PARALLEL_PLANS",         # raw has no RUNTIME_ infix
+    "runtime.max_attempts":       "Z_HARNESS_MAX_ATTEMPTS",               # raw has no RUNTIME_ infix
+    "runtime.max_task_wall_ms":   "Z_HARNESS_MAX_TASK_WALL_MS",           # raw has no RUNTIME_ infix
+    "axioms.auto_extract_post_run": "Z_HARNESS_AXIOM_EXTRACT",            # completely different legacy name
 }
 
 # Ingress fallback: dotted_key → legacy raw env var name.  Used by load_config
 # layer 4 when the transliteration var is absent: check the legacy raw name too.
 #
-# This covers:
+# This covers all keys in _ENV_VAR_ALIASES (T003a + T003b) plus ingress-only legacies:
 #   runtime.pre_review  → Z_HARNESS_PRE_REVIEW  (transliteration: Z_HARNESS_RUNTIME_PRE_REVIEW)
 #   runtime.auto_wait   → Z_HARNESS_AUTO_WAIT   (transliteration: Z_HARNESS_RUNTIME_AUTO_WAIT)
+#   runtime.max_parallel → HERMES_MAX_PARALLEL   (transliteration: Z_HARNESS_RUNTIME_MAX_PARALLEL)
+#   axioms.auto_extract_post_run → Z_HARNESS_AXIOM_EXTRACT
 #   … etc. for all keys in _ENV_VAR_ALIASES
 #   notify.level        → Z_HARNESS_NOTIFY       (transliteration: Z_HARNESS_NOTIFY_LEVEL;
 #                           export still uses the transliteration — this is ingress-only)
@@ -2797,36 +2869,54 @@ def cmd_set(args: list[str]) -> None:
 # ---------------------------------------------------------------------------
 
 # Env-only knobs: these are read from env only, never written to TOML.
-# NOTE: The following T003a-migrated vars are NO LONGER in this list because they
+# NOTE: The following migrated vars are NO LONGER in this list because they
 # now have DEFAULTS+VALIDATORS entries (they appear in the TOML-Persistent section
 # of inspect-all output instead):
-#   Z_HARNESS_NOTIFY (→ notify.level, legacy alias)
-#   Z_HARNESS_AUTO_WAIT (→ runtime.auto_wait, legacy alias)
-#   Z_HARNESS_AUTO_WAIT_BUDGET_SECS (→ runtime.auto_wait_budget_secs, legacy alias)
-#   Z_HARNESS_PAUSE_AT_PCT (→ runtime.pause_at_pct, legacy alias)
-#   Z_HARNESS_EXPLAIN_RESOLUTION (→ runtime.explain_resolution, legacy alias)
-#   Z_HARNESS_PRE_REVIEW (→ runtime.pre_review, legacy alias)
-#   Z_HARNESS_IMPL_PRE_REVIEW (→ runtime.impl_pre_review, legacy alias)
+#
+#   T003a-migrated:
+#     Z_HARNESS_NOTIFY (→ notify.level, legacy alias)
+#     Z_HARNESS_AUTO_WAIT (→ runtime.auto_wait, legacy alias)
+#     Z_HARNESS_AUTO_WAIT_BUDGET_SECS (→ runtime.auto_wait_budget_secs, legacy alias)
+#     Z_HARNESS_PAUSE_AT_PCT (→ runtime.pause_at_pct, legacy alias)
+#     Z_HARNESS_EXPLAIN_RESOLUTION (→ runtime.explain_resolution, legacy alias)
+#     Z_HARNESS_PRE_REVIEW (→ runtime.pre_review, legacy alias)
+#     Z_HARNESS_IMPL_PRE_REVIEW (→ runtime.impl_pre_review, legacy alias)
+#
+#   T003b-migrated:
+#     Z_HARNESS_MAX_EXPLORE (→ workflow.max_explore, legacy alias)
+#     Z_HARNESS_PARALLEL (→ workflow.parallel, legacy alias)
+#     HERMES_MAX_PARALLEL (→ runtime.max_parallel, legacy alias)
+#     Z_HARNESS_MAX_PARALLEL_PLANS (→ runtime.max_parallel_plans, legacy alias)
+#     Z_HARNESS_DOC_STALENESS_THRESHOLD (→ docs.staleness_threshold, legacy alias)
+#     Z_HARNESS_MEMORY_STALE_DAYS (→ workflow.memory_stale_days, legacy alias)
+#     Z_HARNESS_MAX_ATTEMPTS (→ runtime.max_attempts, legacy alias)
+#     Z_HARNESS_MAX_TASK_WALL_MS (→ runtime.max_task_wall_ms, legacy alias)
+#     Z_HARNESS_AXIOM_EXTRACT (→ axioms.auto_extract_post_run, legacy alias)
 ENV_ONLY_KNOBS: list[str] = [
+    # ── Unattended-entry knobs (never settable via TOML; only meaningful per-run) ──
     "Z_HARNESS_NO_ASK",
     "Z_HARNESS_OVERNIGHT_AUTODECIDE",
     "Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE",
-    "Z_HARNESS_PARALLEL",
     "Z_HARNESS_ASK_ALL",
+    # ── Plumbing: provider/plan discovery (computed per-run, not user preferences) ──
     "Z_HARNESS_REPO_PROVIDERS",
     "Z_HARNESS_PLANS_DIR",
-    "Z_HARNESS_MAX_EXPLORE",
     # ── Active-plan registry knobs (env-only, read inline in active-plan-registry.py) ──
-    # 5 pre-existing registry knobs:
     "Z_HARNESS_BASE_DIR",
     "Z_HARNESS_EXTERNAL_DEFAULT",
     "Z_HARNESS_REGISTRY_ENABLED",
     "Z_HARNESS_REGISTRY_STALE_SECS",
     "Z_HARNESS_STRICT_OVERLAP",
-    # 3 wait-for knobs that stay env-only (unattended-entry / plumbing):
+    # ── Wait-for knobs (unattended-entry / plumbing; intentionally left env-only) ──
     "Z_HARNESS_WAIT_POLL_SECS",
     "Z_HARNESS_WAIT_TIMEOUT_SECS",
     "Z_HARNESS_WAIT_REQUIRE_MERGE",
+    # ── Per-run signals (set BY orchestrator to signal agents, not user preferences) ──
+    "Z_HARNESS_LOCAL_CARGO_CLEAN",
+    # ── Error-point subsystem (z-test-error-points plan; read in commands, not config.py) ──
+    "Z_HARNESS_ERROR_POINT_MAX_NEW",
+    "Z_HARNESS_ERROR_POINT_PRUNE_DAYS",
+    "Z_HARNESS_ERROR_POINT_PRUNE_MAX_FREQ",
 ]
 
 # Map source label string → persistence_class string
