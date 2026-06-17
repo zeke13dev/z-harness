@@ -1011,7 +1011,7 @@ CLAIM_OUT="$?"   # claim exits 0 always; parse stdout JSON for conceded list
 When `conceded` is non-empty, pick the eldest senior (`holder_run_id` from the entry — this
 is the lowest run_id among all seniors on that path as returned by `claim`):
 
-**If `Z_HARNESS_AUTO_WAIT=1` (default):**
+**If `runtime.auto_wait = true` (default):**
 
 ```bash
 python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" wait-for \
@@ -1523,7 +1523,7 @@ Early halt / abort paths often have **no** primary artifact (`FIX.md`, `REPORT.m
 - `WAIT_RC == 130` (SIGINT during park) → abort the task (same as unattended exit 10: apply the
   FINALIZE_STATUS rule, deregister with `aborted`, propagate the SIGINT to the outer shell).
 
-**If `Z_HARNESS_AUTO_WAIT=0` (interactive wait mode):**
+**If `runtime.auto_wait = false` (interactive wait mode):**
 
 <!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the conceded-path proceed/wait/abort question via their native channel. Silent omission is forbidden. -->
 Present `AskUserQuestion`: **proceed anyway** / **wait** / **abort task**.
@@ -3086,7 +3086,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-decision.sh" \
 - `--options` — full list of offered option labels as a JSON array.
 - `--tentative` — the orchestrator's recommended option label; omit when the orchestrator had no recommendation.
 
-Emission is gated by `Z_HARNESS_AXIOM_EXTRACT` (default on); when set to `"0"`, the script exits silently — no guard is needed here. Do **not** modify existing structured gate events (`cost_gate_decision`, `critique_failure_decision`, `map_collision_decision`, `shared_concerns_ack_override`); those are normalized separately by the extractor. This emission **records signal only** — it never approves, overrides, or influences any decision (proposes-only invariant).
+Emission is gated by `axioms.auto_extract_post_run` (default `true`); when `false`, the script exits silently — no guard is needed here. Do **not** modify existing structured gate events (`cost_gate_decision`, `critique_failure_decision`, `map_collision_decision`, `shared_concerns_ack_override`); those are normalized separately by the extractor. This emission **records signal only** — it never approves, overrides, or influences any decision (proposes-only invariant).
 
 ---
 

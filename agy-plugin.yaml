@@ -59,6 +59,10 @@ workflows:
     source: commands/z-context-budget.md
     output: .agent/workflows/z-context-budget.md
     description: "Analyze context utilization from z-harness telemetry and surface actionable savings recommendations."
+  - id: z-debt
+    source: commands/z-debt.md
+    output: .agent/workflows/z-debt.md
+    description: "Read-only lazy-code debt ledger. Scans for z-colon debt markers and renders a grouped ledger to stdout. Flags no-trigger entries. Persist to Z-DEBT.md only with --save."
   - id: z-debug
     source: commands/z-debug.md
     output: .agent/workflows/z-debug.md
@@ -82,7 +86,7 @@ workflows:
   - id: z-export
     source: commands/z-export.md
     output: .agent/workflows/z-export.md
-    description: "Export z-harness commands/agents/skills/personas to Cursor / Codex / Antigravity (agy) / pi."
+    description: "Export z-harness commands/agents/skills/personas to Cursor / Codex / Antigravity (agy) / pi / Windsurf / Kiro / Cline / Copilot."
   - id: z-fix
     source: commands/z-fix.md
     output: .agent/workflows/z-fix.md
@@ -429,6 +433,10 @@ skills:
     source: skills/z-context-budget/SKILL.md
     output: .agent/skills/z-context-budget/SKILL.md
     description: "Analyze context utilization from z-harness telemetry and surface actionable savings recommendations. Single-phase, read-only — no subagent dispatch, no code edits."
+  - id: z-debt
+    source: skills/z-debt/SKILL.md
+    output: .agent/skills/z-debt/SKILL.md
+    description: "Read-only lazy-code debt ledger. Scans for z-colon debt markers and renders a grouped ledger to stdout. Flags no-trigger entries. Optional one-shot persist to Z-DEBT.md when the user asks."
   - id: z-debug
     source: skills/z-debug/SKILL.md
     output: .agent/skills/z-debug/SKILL.md

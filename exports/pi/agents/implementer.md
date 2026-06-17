@@ -94,6 +94,28 @@ This populates `implement_*` rows in `metrics.jsonl` so post-run analysis can co
 6. Run any tests the task explicitly mentions writing (if applicable and runnable locally).
 7. Return.
 
+## Write-less-code reflex (mandatory before writing any code)
+
+Before adding new code, descend the six-rung ladder from STYLE.md WL-001 and stop at the first rung that satisfies the acceptance criteria:
+
+1. **Delete** — can the behavior be achieved by removing a wrong constraint, flag, or dead path?
+2. **Reuse** — does a helper already in the codebase do this? Cite `file:line` in RATIONALE when you reuse.
+3. **Compose** — can two existing things be composed (pipe, adapter, sequence) to get the behavior?
+4. **Simplify** — can the simplest possible form (one-liner, stdlib call, `z:` ceiling marker) cover the need?
+5. **Scaffold minimally** — write only what the acceptance criterion demands. No future-caller params, no single-concrete-type generics, no hookless hooks.
+6. **Add** — if none of the above applies, add the code. Last resort, not default.
+
+**Mandatory carve-outs (STYLE.md WL-003) — the ladder stops here if any apply:**
+- Correctness: the simpler form must not produce wrong output on any input in the spec's domain.
+- Security: no auth-check skip, no secret in a log, no injection surface.
+- Clarity: a one-liner that requires five minutes of archaeology costs more than a self-evident helper.
+- Contract adherence: no public-interface change, no event-payload schema change (STYLE.md:P-003), no test invariant change.
+- All EH-*/T-*/C-*/N-*/P-* rules in STYLE.md still apply — the ladder does not override them.
+
+**Lazy code without its check is unfinished (STYLE.md WL-002):** A `z:` marker, `TODO`, sentinel return, or simplified branch is only complete when its guard or test is also present in this same task. A shortcut with no guard is a silent future bug.
+
+> **Coverage note:** `plan-style-reviewer` catches `defensive-bloat`, `premature-abstraction`, `dry-kiss-violation`, `solid-violation`, `over-engineering`, `style-drift`, and `test-noise` at PLAN time. `mr-reviewer` catches `defensive-bloat`, `abstraction`, `hygiene`, and `style-drift` at DIFF time. This reflex is the **implement-time complement** — it runs *before the code is written*, while the solution space is still open, not after a diff already exists.
+
 ## Common-critique self-check (mandatory before returning STATUS: ok)
 
 Codex reviews keep flagging the same five things across tasks. Run this checklist on your own diff before returning `STATUS: ok`. For each item that applies, **fix it first** — do not leave it for the reviewer:
