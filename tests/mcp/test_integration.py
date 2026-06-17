@@ -102,18 +102,14 @@ class TestNeedsInputFlow:
     def test_needs_input_flow(self) -> None:
         """Integration test for needs_input detection and resume round-trip.
 
-        RESUME GAP (as of T008): MCPDispatcher.dispatch() and _dispatch_command()
-        have NO 'resume' parameter. The resume path is detection-only: the server
-        surfaces 'needs_input' to the caller but has no logic to thread a
-        (question_id, answer) pair back into a subsequent dispatch. A second call
-        with resume kwargs simply passes them as unknown args that are silently
-        dropped by MCPDispatcher (which only reads 'prompt', 'slug', 'model' from
-        args). The test below exercises what IS implemented (needs_input surface)
-        and documents the gap (resume completion) by showing the second call returns
-        a fresh 'needs_input' — not 'complete' — because the answer is not threaded.
+        Round 1: a dispatch that surfaces needs_input (AskUserQuestion signal).
+        Round 2: a resume call with {question_id, answer} — the answer is injected
+        into the prompt as a continuation block, the re-dispatch returns a clean
+        narrative (no AskUserQuestion), and the server yields status="complete".
 
-        When a future task wires the resume re-entry, this test should be updated
-        to assert result2.status == "complete" in the resume branch.
+        Mechanism: re-dispatch-with-answer (not live session resume — the
+        dispatcher.run session_id is telemetry-only and drivers do not support
+        true subprocess continuation).
         """
         from z_harness_cli.mcp.server import MCPDispatcher, ToolResult
         from runtime.dispatch.result import DispatchResult
@@ -165,19 +161,30 @@ class TestNeedsInputFlow:
             f"Expected question_id='ask_user_needs_input', got {question_id!r}"
         )
 
-        # --- Resume call: re-invoke with the question_id + answer threaded as args ---
-        # NOTE: as of T008 there is NO resume wiring. MCPDispatcher ignores any
-        # 'resume' key in args; the underlying dispatch re-runs from scratch and will
-        # again surface needs_input if the mocked narrative still contains
-        # AskUserQuestion. This demonstrates the gap: the resume answer is silently
-        # dropped and the flow does NOT complete.
-        #
-        # A future implementation should detect resume in args and short-circuit to
-        # ToolResult.success() (or a different flow) without re-running the full
-        # dispatch. When that is wired, assert result2.status == "complete" here.
+        # --- Resume call: re-invoke with the question_id + answer ---
+        # The server injects the answer into the prompt continuation block and
+        # re-dispatches.  The mocked round-2 result carries no AskUserQuestion
+        # signal, so the server returns status="complete".
+        fake_result_round2 = DispatchResult(
+            exit_code=0,
+            is_error=False,
+            stdout_events=[
+                {"type": "text", "content": "Plan created for slug my-feature-slug."},
+            ],
+            stderr="",
+            wall_ms=12.0,
+        )
 
         fake_inner_dispatcher2 = MagicMock()
-        fake_inner_dispatcher2.run.return_value = fake_result_round1  # same mock: still asks
+        fake_inner_dispatcher2.run.return_value = fake_result_round2
+
+        captured_caller_args: list[list[str]] = []
+
+        def _capture_run(**kwargs: object) -> object:
+            captured_caller_args.append(list(kwargs.get("caller_args", [])))  # type: ignore[arg-type]
+            return fake_result_round2
+
+        fake_inner_dispatcher2.run.side_effect = _capture_run
 
         with patch("subprocess.run", return_value=fake_proc), \
              patch("runtime.drivers.select_driver") as mock_select2, \
@@ -189,7 +196,6 @@ class TestNeedsInputFlow:
             dispatcher2 = MCPDispatcher(
                 repo_root=Path("/fake/root"),
                 tool_name="z_plan",
-                # resume args passed — currently silently dropped by MCPDispatcher
                 args={
                     "prompt": "build a plan",
                     "resume": {"question_id": question_id, "answer": "my-feature-slug"},
@@ -198,14 +204,19 @@ class TestNeedsInputFlow:
             )
             result2 = dispatcher2.dispatch()
 
-        # RESUME GAP: because resume is not wired, the server re-runs and asks again.
-        # This assertion documents the current (broken) contract; it must be updated
-        # when the resume path is implemented.
-        assert result2.status == "needs_input", (
-            "RESUME NOT WIRED: expected 'needs_input' (demonstrating the gap). "
-            f"If this assertion fails with status=='complete', the resume path has "
-            f"been wired — update this test to assert result2.status == 'complete'. "
-            f"Actual: {result2.status!r}"
+        # Resume path: answer is threaded into caller_args as a continuation block.
+        assert captured_caller_args, "dispatcher.run was never called on resume"
+        resume_prompt = captured_caller_args[0][0] if captured_caller_args[0] else ""
+        assert "my-feature-slug" in resume_prompt, (
+            f"Answer not found in continuation prompt: {resume_prompt!r}"
+        )
+        assert question_id in resume_prompt, (
+            f"question_id not found in continuation prompt: {resume_prompt!r}"
+        )
+
+        # No AskUserQuestion in round-2 narrative → server returns complete.
+        assert result2.status == "complete", (
+            f"Expected 'complete' on resume call, got '{result2.status}': {result2.content!r}"
         )
 
 
