@@ -41,7 +41,7 @@ class ToolResult:
     """Result envelope for all MCP tool calls."""
 
     ok: bool
-    status: str  # "complete" | "error" | "blocked" | "needs_input"
+    status: str  # "complete" | "error" | "blocked" | "needs_input" | "skipped"
     content: str
     artifacts: dict[str, str] = field(default_factory=dict)
     meta: dict[str, object] = field(default_factory=dict)
@@ -67,6 +67,10 @@ class ToolResult:
     def needs_input(content: str, question_id: str) -> ToolResult:
         return ToolResult(ok=False, status="needs_input", content=content,
                           meta={"question_id": question_id})
+
+    @staticmethod
+    def skipped(content: str) -> ToolResult:
+        return ToolResult(ok=False, status="skipped", content=content)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -249,9 +253,28 @@ class MCPDispatcher:
                     cwd=str(self._repo_root),
                 )
                 if proc.returncode == 0:
+                    # Detect the consult-off sentinel: resolve-provider.py prints
+                    # the bare string "none" (not JSON) when Z_HARNESS_CONSULT=off
+                    # and the role is a consult/reviewer role.
+                    stdout_stripped = proc.stdout.strip()
+                    if stdout_stripped == "none":
+                        return ToolResult.skipped(
+                            f"Consulting disabled (Z_HARNESS_CONSULT=off) — "
+                            f"{self._tool_name} bound to a consult role was skipped."
+                        )
                     provider_config = json.loads(proc.stdout)
+                    # Also handle the case where the JSON itself carries provider="none".
+                    if isinstance(provider_config, dict) and provider_config.get("provider") == "none":
+                        return ToolResult.skipped(
+                            f"Consulting disabled (Z_HARNESS_CONSULT=off) — "
+                            f"{self._tool_name} bound to a consult role was skipped."
+                        )
                     break
-            except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception):
+            except subprocess.TimeoutExpired:
+                continue
+            except json.JSONDecodeError:
+                continue
+            except Exception:
                 continue
 
         if provider_config is None:
@@ -284,32 +307,54 @@ class MCPDispatcher:
         prompt = self._args.get("prompt", "")
         slug_val = self._args.get("slug")
         caller_args: list[str] = [prompt] if prompt else []
-        if slug_val:
-            os.environ["Z_HARNESS_SLUG"] = slug_val
 
-        # --- Dispatch ---
-        self._advance_phase(f"Resolving provider and driver for {cmd_id}")
+        # --- Dispatch (with scoped Z_HARNESS_SLUG mutation) ---
+        # Save and restore Z_HARNESS_SLUG around the dispatch so a per-call
+        # slug cannot leak into subsequent MCP tool calls (stateless invariant).
+        _SLUG_KEY = "Z_HARNESS_SLUG"
+        _prior_slug = os.environ.get(_SLUG_KEY)
         try:
-            from runtime.dispatch.dispatcher import Dispatcher
-            run_id = f"mcp-{uuid.uuid4().hex[:12]}"
-            dispatcher = Dispatcher(repo_root=str(self._repo_root), run_id=run_id)
+            if slug_val:
+                os.environ[_SLUG_KEY] = slug_val
+            elif _prior_slug is not None:
+                # Caller didn't supply a slug; clear any inherited value so this
+                # call doesn't accidentally inherit a stale slug from a prior call.
+                os.environ.pop(_SLUG_KEY, None)
 
-            self._advance_phase(f"Dispatching {cmd_id}")
-            result = dispatcher.run(
-                driver=driver, command_id=cmd_id, caller_args=caller_args,
-                provider_config=provider_config, model=self._args.get("model"),
-            )
-        except Exception as exc:
-            return ToolResult.error(f"Dispatch error: {exc}")
+            self._advance_phase(f"Resolving provider and driver for {cmd_id}")
+            try:
+                from runtime.dispatch.dispatcher import Dispatcher
+                run_id = f"mcp-{uuid.uuid4().hex[:12]}"
+                dispatcher = Dispatcher(repo_root=str(self._repo_root), run_id=run_id)
+
+                self._advance_phase(f"Dispatching {cmd_id}")
+                result = dispatcher.run(
+                    driver=driver, command_id=cmd_id, caller_args=caller_args,
+                    provider_config=provider_config, model=self._args.get("model"),
+                )
+            except Exception as exc:
+                return ToolResult.error(f"Dispatch error: {exc}")
+        finally:
+            # Always restore the prior slug value (including "was unset").
+            if _prior_slug is None:
+                os.environ.pop(_SLUG_KEY, None)
+            else:
+                os.environ[_SLUG_KEY] = _prior_slug
 
         # --- Detect needs_input from output ---
-        input_signal = _detect_needs_input(result.stderr)
+        # The narrative lives in stdout_events (type=="text" frames); result.stderr
+        # is the raw OS stderr pipe which carries only CLI diagnostic messages.
+        narrative = _extract_narrative(result.stdout_events) or result.stderr
+        input_signal = _detect_needs_input(narrative)
         if input_signal:
             return ToolResult.needs_input(input_signal["content"], input_signal["question_id"])
 
         # --- Bridge result ---
         if result.success:
-            content = result.stderr or "Command completed successfully."
+            # Drivers emit human-readable output as type=="text" events on stdout,
+            # NOT on stderr.  result.stderr is the raw OS stderr pipe (CLI warnings);
+            # it is only a last-resort fallback when no text events were emitted.
+            content = narrative or "Command completed successfully."
             artifacts: dict[str, str] = {}
             for event in result.stdout_events:
                 if isinstance(event, dict) and event.get("type") == "artifact":
@@ -321,6 +366,36 @@ class MCPDispatcher:
                                       meta={"exit_code": result.exit_code, "wall_ms": result.wall_ms})
         else:
             return ToolResult.error(result.stderr or f"Command '{cmd_id}' failed (exit {result.exit_code})")
+
+
+# ==========================================================================
+# Narrative extraction from stdout_events (T-REV-002)
+# ==========================================================================
+
+
+def _extract_narrative(stdout_events: list[dict]) -> str:
+    """Concatenate human-readable text from type=='text' stdout events.
+
+    Drivers emit the command's natural-language narrative as ``type="text"``
+    events on stdout (NDJSON stream-json format).  The ``content`` field of
+    each such event is the text fragment.  This function joins all fragments
+    in order, separated by a newline.
+
+    ``result.stderr`` is the raw OS stderr pipe and carries only CLI
+    diagnostic/warning messages — it is NOT the narrative source.
+
+    Returns an empty string when no text events are present (e.g. the
+    driver emitted only artifact or metadata events).
+    """
+    parts = [
+        event["content"]
+        for event in stdout_events
+        if isinstance(event, dict)
+        and event.get("type") == "text"
+        and isinstance(event.get("content"), str)
+        and event["content"]
+    ]
+    return "\n".join(parts)
 
 
 # ==========================================================================
@@ -645,7 +720,7 @@ def _handle_z_export(args: dict[str, Any]) -> ToolResult:
     try:
         from z_harness_cli.commands.export import run as export_run
         export_run(
-            ctx=None,  # type: ignore[arg-type]
+            ctx=None,  # export.run() accepts ctx but never reads it
             host=args.get("host"), all_hosts=args.get("all_hosts", False),
             in_place=args.get("in_place", False), out=args.get("out"),
             force=args.get("force", False),

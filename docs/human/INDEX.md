@@ -48,6 +48,12 @@ Artifacts managed by z-harness at the repository root (not under `docs/`).
 | `CONTEXT.md` | `/z-init-docs` (default), `/z-maintain-docs --glossary` | Domain glossary: term / definition / avoid + Relationships + Flagged ambiguities sections. Bootstrapped via Explore + AskUser; idempotent (extends, never clobbers user terms). Pass `--no-glossary` to skip on init. |
 | `GRILL.md` | `/z-grill` | Finalized requirements-interview transcript, staged under `$Z_HARNESS_PLAN_DIR/<slug>/GRILL.md`. Detected as precontext by `/z-plan` (step 9) and `/z-brainstorm` (Phase 1 §1c). |
 
+## mcp-server
+
+| Concept | Confidence | Source files | Summary |
+|---|---|---|---|
+| [mcp-server](./mcp-server.md) | high | `z_harness_cli/mcp/server.py`, `z_harness_cli/commands/serve.py` | `z-harness serve` exposes all /z-* commands as MCP tools over stdio (FastMCP). 39 tools: heavy commands dispatch through runtime/dispatch; fast read-only commands use direct in-process handlers. Includes editor config snippets for Cursor, VS Code, Claude Desktop, and Hermes. |
+
 ## reference
 
 | Concept | Source file | Summary |
