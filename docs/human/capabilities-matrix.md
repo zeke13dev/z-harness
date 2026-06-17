@@ -1,11 +1,17 @@
 # Host Capabilities Matrix
 
-> Last updated: 2026-06-11
-> Covers source: z_harness_cli/adapters/base.py, z_harness_cli/adapters/registry.py, z_harness_cli/adapters/claude.py, z_harness_cli/adapters/antigravity.py, z_harness_cli/adapters/cursor.py, z_harness_cli/adapters/codex.py
+> Last updated: 2026-06-16
+> Covers source: z_harness_cli/adapters/base.py, z_harness_cli/adapters/registry.py, z_harness_cli/adapters/claude.py, z_harness_cli/adapters/antigravity.py, z_harness_cli/adapters/cursor.py, z_harness_cli/adapters/codex.py, runtime/drivers/windsurf/export.py, runtime/drivers/kiro/export.py, runtime/drivers/cline/export.py, runtime/drivers/copilot/export.py
 
 ## Overview
 
-The capabilities matrix describes how completely z-harness features work on each supported host (Claude Code, Antigravity/agy, Cursor, and Codex CLI). Each host is assigned a **fidelity tier** — a static property on its adapter class — and a per-command tier that tells callers whether a given `/z-*` command runs natively, in degraded single-agent mode, or is blocked entirely. The `COMMAND_CAPABILITY_MATRIX` dict in `base.py` is populated at import time by each adapter's `register_command_tiers()` call; `command_tier(host, cmd)` provides fail-safe O(1) lookup (unknown = blocked).
+The capabilities matrix describes how completely z-harness features work on each supported host. There are two categories of hosts:
+
+**Adapter hosts** (Claude Code, Antigravity/agy, Cursor, Codex CLI) — these have a `HostAdapter` class in `z_harness_cli/adapters/`, can be launched/injected, and are registered in the adapter registry. Each is assigned a **fidelity tier** and per-command tiers that tell callers whether a given `/z-*` command runs natively, in degraded mode, or is blocked entirely.
+
+**Export-only hosts** (Windsurf, Kiro, Cline, Copilot) — these have a runtime export driver in `runtime/drivers/<host>/export.py` but **no HostAdapter, no adapter-registry entry, and no launch/inject support**. They can only be used via `/z-export` or the runtime CLI. They are not in the `COMMAND_CAPABILITY_MATRIX` and will never be.
+
+The `COMMAND_CAPABILITY_MATRIX` dict in `base.py` is populated at import time by each adapter's `register_command_tiers()` call; `command_tier(host, cmd)` provides fail-safe O(1) lookup (unknown = blocked).
 
 The adapters also declare static `Capabilities` flags covering MCP support, trust-prompt behavior, cwd-override support, and cleanup strategy. These flags drive injection and launch decisions in the CLI commands (`launch.py`, `export.py`, `doctor.py`). The canonical type for export results, `ExportResult`, is owned by `runtime/drivers/_export_utils.py` and re-exported from `z_harness_cli/adapters/base.py` to preserve one-way layering — callers must import it from `base`, never from the runtime package directly.
 
@@ -63,8 +69,10 @@ Both stages' file lists are merged into a single `ExportResult`. The fidelity fi
 | `native` | Full orchestration. All `/z-*` commands run identically to the Claude Code reference. Multi-agent dispatch (subagents, panels, consults, gates) works. |
 | `high` | Native skill/persona loading, single-agent only. Multi-agent commands (`/z-implement-all`, `/z-panel`, `/z-consult`, `/z-gate`) degrade to single-agent transliteration (present, not blocked). All other `/z-*` commands run at native fidelity. |
 | `flattened` | Transliterated rules, single-agent only. All single-agent `/z-*` commands run in degraded mode. Multi-agent commands are **blocked**. |
+| `curated` | **Export-only.** Curated rule/steering files emitted per-command with host-specific frontmatter. No adapter, no launch/inject. `/z-export` only. |
+| `pointer` | **Export-only.** Single pointer/instructions file. No adapter, no launch/inject. `/z-export` only. |
 
-## Per-host fidelity and capabilities
+## Adapter hosts — fidelity and capabilities
 
 | Host | Binary | Fidelity | `project_mcp` | `user_mcp` | `trust_prompt` | `cwd_override` | cleanup |
 |------|--------|----------|---------------|------------|----------------|----------------|---------|
@@ -72,6 +80,17 @@ Both stages' file lists are merged into a single `ExportResult`. The fidelity fi
 | Antigravity | `agy` | `high` | false | false | false | false | ephemeral |
 | Cursor | `cursor-agent` | `flattened` | true | true | true | false | ephemeral |
 | Codex CLI | `codex` | `flattened` | true | false | false | false | ephemeral |
+
+## Export-only hosts
+
+These hosts have no HostAdapter and are **not registered in the adapter registry**. `registry.select(<host>)` raises `UnknownHostError` for them. They cannot be launched or injected — only exported via `/z-export` or `python -m runtime.drivers.<host>.export`.
+
+| Host | Fidelity | Export layout | Structural rule |
+|------|----------|---------------|-----------------|
+| Windsurf | `curated` | `.windsurf/rules/<id>.md` | YAML frontmatter with `trigger` key required |
+| Kiro | `curated` | `.kiro/steering/<id>.md` | YAML frontmatter with `inclusion` key required |
+| Cline | `pointer` | `.clinerules/z-harness.md` (1 file) | Plain markdown, non-empty body |
+| Copilot | `pointer` | `.github/copilot-instructions.md` (1 file) | Plain markdown, non-empty body |
 
 ## Command-tier grid
 

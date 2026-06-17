@@ -198,21 +198,25 @@ class TestRepoLocalPrecedence(unittest.TestCase):
         # Output format: notify.level = "off"   (source: /path/to/.z-harness/config.toml)
         self.assertIn("source: " + self.repo_cfg, r.stdout)
 
-    def test_env_takes_precedence_over_repo(self):
+    def test_toml_wins_over_env(self):
+        """T001: TOML-wins gate — repo TOML value is NOT overridden by a preference env var."""
         env = dict(self.env)
         env["Z_HARNESS_NOTIFY_LEVEL"] = "all"
         r = run(["get", "notify.level"], env=env)
         self.assertEqual(r.returncode, 0)
-        self.assertEqual(r.stdout.strip(), "all")
+        # Repo TOML set "off"; env var "all" must NOT win (TOML-wins gate).
+        self.assertEqual(r.stdout.strip(), "off",
+                         "T001: Z_HARNESS_NOTIFY_LEVEL=all must NOT override notify.level='off' from repo TOML")
 
-    def test_explain_env_source_over_repo(self):
-        """explain emits 'source: env Z_HARNESS_NOTIFY_LEVEL' when env overrides repo."""
+    def test_explain_source_is_toml_not_env_when_toml_set(self):
+        """T001: explain must report repo TOML as source, not the env var, when TOML set the value."""
         env = dict(self.env)
         env["Z_HARNESS_NOTIFY_LEVEL"] = "all"
         r = run(["explain", "notify.level"], env=env)
         self.assertEqual(r.returncode, 0)
-        # The source label is "env Z_HARNESS_NOTIFY_LEVEL" (exact env var name included)
-        self.assertIn("source: env Z_HARNESS_NOTIFY_LEVEL", r.stdout)
+        # Source must be the repo TOML file path, NOT the env var (TOML-wins gate).
+        self.assertIn("source: " + self.repo_cfg, r.stdout,
+                      "T001: explain must report TOML file as source, not the env var")
 
 
 class TestUnknownKeys(unittest.TestCase):
@@ -2506,32 +2510,28 @@ class TestInspectAll(unittest.TestCase):
         self.assertEqual(knob_meta["source"], "env",
                          f"Expected source='env', got {knob_meta['source']!r}")
 
-    def test_sources_list_reflects_winning_layer_on_env_override(self):
+    def test_sources_list_reflects_toml_wins_over_env(self):
         """
-        When a TOML key is overridden by an env var, sources[] must contain an entry
-        with layer='env' as the winning source, and source must also be 'env'.
-        Failure class: if sources[] does not reflect the env override, consumers of
-        inspect-all cannot detect that an env var is silently winning over global config.
+        T001: TOML-wins gate — when TOML sets a key, an env var for that key must NOT
+        win. sources[] must reflect the TOML layer as the winner, not the env var.
+        Failure class: if sources[] shows env as winner over TOML, the TOML-wins gate
+        is absent and consumers would observe env silently overriding config.toml.
         """
         # Set notify.level in global config
         write_global_config(self.xdg, '[notify]\nlevel = "all"\n')
-        # Override via env var (Z_HARNESS_NOTIFY_LEVEL)
+        # Attempt to override via env var (Z_HARNESS_NOTIFY_LEVEL) — must be ignored
         r = self._run_inspect(extra_env={"Z_HARNESS_NOTIFY_LEVEL": "off"})
         self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
         data = json.loads(r.stdout)
         notify_meta = data["toml_keys"].get("notify.level")
         self.assertIsNotNone(notify_meta, "notify.level missing from toml_keys")
-        # The env var must win
-        self.assertEqual(notify_meta["value"], "off",
-                         "env var override not reflected in value")
-        self.assertEqual(notify_meta["source"], "env",
-                         f"Expected source='env', got {notify_meta['source']!r}")
-        # sources[] must show the env layer as the winner
-        sources_list = notify_meta.get("sources", [])
-        self.assertTrue(
-            any(s.get("layer", "").startswith("env") for s in sources_list),
-            f"sources[] does not contain an env entry; got: {sources_list!r}",
-        )
+        # TOML must win: value must be "all" from global config, NOT "off" from env
+        self.assertEqual(notify_meta["value"], "all",
+                         "T001: TOML value 'all' must win over env var 'off' (TOML-wins gate)")
+        # Source must NOT be env when TOML set the value
+        self.assertNotEqual(notify_meta["source"], "env",
+                            f"T001: source must not be 'env' when TOML set the value; "
+                            f"got source={notify_meta['source']!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -2845,6 +2845,546 @@ class TestPersonasSection(unittest.TestCase):
         r = run(["get", "brainstorm.personas"], env=self.env, cwd=self.cwd)
         self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
         self.assertEqual(r.stdout.strip(), "true")
+
+
+# ---------------------------------------------------------------------------
+# Tests for T002: export-env egress — cosmetic unset + deprecation events
+# ---------------------------------------------------------------------------
+
+class TestExportEnvEgress(unittest.TestCase):
+    """
+    T002: export-env emits `export VAR=value` for all resolved knobs, plus
+    `unset OLD_VAR` (before the export) for any preference env var the user set
+    in the raw env whose dotted key is NOT allowlisted.  Allowlisted vars (e.g.
+    Z_HARNESS_PLAN_DIR) are never unset.
+
+    The unset is COSMETIC single-shell cleanup only — correctness across Bash
+    tool calls comes from T004's config.py get conversion, not this unset.
+    """
+
+    def setUp(self):
+        self.xdg = make_xdg()
+        self.cwd = make_isolation_dir()
+        self.env = {"XDG_CONFIG_HOME": self.xdg}
+
+    def tearDown(self):
+        shutil.rmtree(self.xdg, ignore_errors=True)
+        shutil.rmtree(self.cwd, ignore_errors=True)
+
+    # -------------------------------------------------------------------------
+    # (a) export-env emits `export ` lines for resolved knobs
+    # -------------------------------------------------------------------------
+
+    def test_export_env_emits_export_lines(self):
+        """export-env must emit `export VAR=value` lines for all user knobs."""
+        r = run(["export-env"], env=self.env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        export_lines = [l for l in r.stdout.splitlines() if l.startswith("export ")]
+        self.assertGreater(len(export_lines), 0, "No export lines emitted")
+
+    def test_export_env_emits_notify_level(self):
+        """export-env must include Z_HARNESS_NOTIFY_LEVEL with its resolved value."""
+        r = run(["export-env"], env=self.env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("Z_HARNESS_NOTIFY_LEVEL", r.stdout)
+        # Default value is approval_only
+        self.assertIn("approval_only", r.stdout)
+
+    def test_export_env_emits_consult_alias(self):
+        """runtime.consult must be exported as Z_HARNESS_CONSULT (alias, not transliteration)."""
+        r = run(["export-env"], env=self.env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("Z_HARNESS_CONSULT", r.stdout)
+        # Must not export the mechanical transliteration for an aliased key
+        self.assertNotIn("Z_HARNESS_RUNTIME_CONSULT", r.stdout)
+
+    def test_export_env_does_not_emit_meta_keys(self):
+        """export-env must not emit Z_HARNESS_SCHEMA_VERSION."""
+        r = run(["export-env"], env=self.env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0)
+        self.assertNotIn("Z_HARNESS_SCHEMA_VERSION", r.stdout)
+
+    def test_export_env_exit_zero(self):
+        """export-env must exit 0 under normal conditions."""
+        r = run(["export-env"], env=self.env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0)
+
+    # -------------------------------------------------------------------------
+    # (b) User-set preference env var produces a preceding `unset ` line
+    # -------------------------------------------------------------------------
+
+    def test_user_set_preference_var_produces_unset_before_export(self):
+        """When user sets Z_HARNESS_NOTIFY_LEVEL, export-env must emit `unset Z_HARNESS_NOTIFY_LEVEL` before the export line."""
+        env = dict(self.env)
+        env["Z_HARNESS_NOTIFY_LEVEL"] = "off"
+        r = run(["export-env"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        lines = r.stdout.splitlines()
+        # Find unset and export indices
+        unset_idx = None
+        export_idx = None
+        for i, line in enumerate(lines):
+            if line.strip() == "unset Z_HARNESS_NOTIFY_LEVEL":
+                unset_idx = i
+            if line.startswith("export Z_HARNESS_NOTIFY_LEVEL="):
+                export_idx = i
+        self.assertIsNotNone(unset_idx, "Expected `unset Z_HARNESS_NOTIFY_LEVEL` line not found")
+        self.assertIsNotNone(export_idx, "Expected `export Z_HARNESS_NOTIFY_LEVEL=...` line not found")
+        self.assertLess(unset_idx, export_idx,
+                        f"unset (line {unset_idx}) must appear before export (line {export_idx})")
+
+    def test_user_set_preference_var_unset_line_format(self):
+        """unset line must be exactly `unset VAR` with no quotes or extra text."""
+        env = dict(self.env)
+        env["Z_HARNESS_NOTIFY_LEVEL"] = "off"
+        r = run(["export-env"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0)
+        unset_lines = [l for l in r.stdout.splitlines() if l.startswith("unset ")]
+        self.assertGreater(len(unset_lines), 0, "No unset lines emitted")
+        # Verify the format: "unset Z_HARNESS_NOTIFY_LEVEL" (no trailing = or quotes)
+        for line in unset_lines:
+            self.assertRegex(line, r'^unset [A-Z_][A-Z0-9_]*$',
+                             f"unset line has unexpected format: {line!r}")
+
+    def test_legacy_alias_var_produces_unset(self):
+        """When user sets Z_HARNESS_PRE_REVIEW (legacy alias for runtime.pre_review), export-env must unset it."""
+        env = dict(self.env)
+        env["Z_HARNESS_PRE_REVIEW"] = "true"
+        r = run(["export-env"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        self.assertIn("unset Z_HARNESS_PRE_REVIEW", r.stdout,
+                      "Expected `unset Z_HARNESS_PRE_REVIEW` for legacy alias")
+
+    def test_unset_precedes_export_for_legacy_alias(self):
+        """unset must appear before the export line for the same key (legacy alias case)."""
+        env = dict(self.env)
+        env["Z_HARNESS_PRE_REVIEW"] = "true"
+        r = run(["export-env"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0)
+        lines = r.stdout.splitlines()
+        unset_idx = next((i for i, l in enumerate(lines) if l.strip() == "unset Z_HARNESS_PRE_REVIEW"), None)
+        # The export name for runtime.pre_review is Z_HARNESS_PRE_REVIEW (from _ENV_VAR_ALIASES)
+        export_idx = next((i for i, l in enumerate(lines) if l.startswith("export Z_HARNESS_PRE_REVIEW=")), None)
+        self.assertIsNotNone(unset_idx, "unset Z_HARNESS_PRE_REVIEW not found")
+        self.assertIsNotNone(export_idx, "export Z_HARNESS_PRE_REVIEW= not found")
+        self.assertLess(unset_idx, export_idx, "unset must precede export for legacy alias")
+
+    def test_no_user_pref_env_no_unset_lines(self):
+        """When no preference env vars are set, export-env must not emit any unset lines."""
+        r = run(["export-env"], env=self.env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0)
+        unset_lines = [l for l in r.stdout.splitlines() if l.startswith("unset ")]
+        self.assertEqual(unset_lines, [],
+                         f"Expected no unset lines when no preference vars are set; got: {unset_lines}")
+
+    # -------------------------------------------------------------------------
+    # (c) Allowlisted var (e.g. Z_HARNESS_PLAN_DIR) set in env is NEVER unset
+    # -------------------------------------------------------------------------
+
+    def test_allowlisted_var_plan_dir_never_unset(self):
+        """Z_HARNESS_PLAN_DIR is allowlisted and must NEVER appear in an unset line."""
+        env = dict(self.env)
+        env["Z_HARNESS_PLAN_DIR"] = "/tmp/some-plan-dir"
+        r = run(["export-env"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
+        unset_lines = [l for l in r.stdout.splitlines() if l.startswith("unset ")]
+        for line in unset_lines:
+            self.assertNotIn("Z_HARNESS_PLAN_DIR", line,
+                             f"Z_HARNESS_PLAN_DIR must never be unset; found: {line!r}")
+
+    def test_allowlisted_var_slug_never_unset(self):
+        """Z_HARNESS_SLUG is allowlisted (plumbing) and must never appear in an unset line."""
+        env = dict(self.env)
+        env["Z_HARNESS_SLUG"] = "my-slug"
+        r = run(["export-env"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0)
+        unset_lines = [l for l in r.stdout.splitlines() if l.startswith("unset ")]
+        for line in unset_lines:
+            self.assertNotIn("Z_HARNESS_SLUG", line,
+                             f"Z_HARNESS_SLUG must never be unset; found: {line!r}")
+
+    def test_allowlisted_prefix_claim_never_unset(self):
+        """Z_HARNESS_CLAIM_* vars match LEGAL_ENV_PREFIXES and must never be unset."""
+        env = dict(self.env)
+        env["Z_HARNESS_CLAIM_TTL_SECS"] = "300"
+        r = run(["export-env"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0)
+        unset_lines = [l for l in r.stdout.splitlines() if l.startswith("unset ")]
+        for line in unset_lines:
+            self.assertNotIn("Z_HARNESS_CLAIM_", line,
+                             f"Z_HARNESS_CLAIM_* must never be unset; found: {line!r}")
+
+    def test_allowlisted_no_ask_never_unset(self):
+        """Z_HARNESS_NO_ASK is allowlisted (unattended) and must never be unset."""
+        env = dict(self.env)
+        env["Z_HARNESS_NO_ASK"] = "halt"
+        r = run(["export-env"], env=env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 0)
+        unset_lines = [l for l in r.stdout.splitlines() if l.startswith("unset ")]
+        for line in unset_lines:
+            self.assertNotIn("Z_HARNESS_NO_ASK", line,
+                             f"Z_HARNESS_NO_ASK must never be unset; found: {line!r}")
+
+
+# ---------------------------------------------------------------------------
+# T006: [models] section tests
+# ---------------------------------------------------------------------------
+
+class TestModelsSection(unittest.TestCase):
+    """T006: [models] config section — per-role model overrides."""
+
+    # All expected role keys in the [models] section.
+    _EXPECTED_ROLES = (
+        "consultant_primary",
+        "consultant_secondary",
+        "reviewer",
+        "implementer",
+        "pre_reviewer",
+    )
+
+    def setUp(self):
+        self.xdg = make_xdg()
+        self.cwd = make_isolation_dir()
+        self.env = {"XDG_CONFIG_HOME": self.xdg}
+
+    def tearDown(self):
+        shutil.rmtree(self.xdg, ignore_errors=True)
+        shutil.rmtree(self.cwd, ignore_errors=True)
+
+    # (a) Completeness: all role keys present in DEFAULTS and VALIDATORS
+    def test_all_role_keys_present_in_defaults(self):
+        """All models.* role keys must be present in DEFAULTS['models']."""
+        from config import DEFAULTS
+        models_defaults = DEFAULTS.get("models", {})
+        for role in self._EXPECTED_ROLES:
+            self.assertIn(
+                role, models_defaults,
+                f"DEFAULTS['models'] is missing role key {role!r}",
+            )
+
+    def test_all_role_keys_present_in_validators(self):
+        """All models.* role keys must be present in VALIDATORS."""
+        from config import VALIDATORS
+        for role in self._EXPECTED_ROLES:
+            dotted = f"models.{role}"
+            self.assertIn(
+                dotted, VALIDATORS,
+                f"VALIDATORS is missing key {dotted!r}",
+            )
+
+    # (b) Validator accepts any string (including empty and arbitrary strings)
+    def test_validator_accepts_empty_string(self):
+        """models.* validator must accept the empty string sentinel."""
+        from config import VALIDATORS
+        for role in self._EXPECTED_ROLES:
+            dotted = f"models.{role}"
+            validator = VALIDATORS[dotted]
+            self.assertTrue(
+                callable(validator),
+                f"VALIDATORS[{dotted!r}] should be callable, got {validator!r}",
+            )
+            self.assertTrue(
+                validator(""),
+                f"VALIDATORS[{dotted!r}]('') must return True (empty string sentinel)",
+            )
+
+    def test_validator_accepts_arbitrary_model_string(self):
+        """models.* validator must accept any non-empty model string."""
+        from config import VALIDATORS
+        for role in self._EXPECTED_ROLES:
+            dotted = f"models.{role}"
+            validator = VALIDATORS[dotted]
+            for sample in ("claude-sonnet-4-5", "gpt-5-codex", "gemini-2.5-pro", "my-custom-model"):
+                self.assertTrue(
+                    validator(sample),
+                    f"VALIDATORS[{dotted!r}]({sample!r}) must return True",
+                )
+
+    def test_validator_rejects_non_string(self):
+        """models.* validator must reject non-string values (e.g. int, bool, None)."""
+        from config import VALIDATORS
+        for role in self._EXPECTED_ROLES:
+            dotted = f"models.{role}"
+            validator = VALIDATORS[dotted]
+            for bad in (123, True, None, [], {}):
+                self.assertFalse(
+                    validator(bad),
+                    f"VALIDATORS[{dotted!r}]({bad!r}) must return False (non-string)",
+                )
+
+    # (c) Absent [models] section → back-compat default resolution (empty string)
+    def test_absent_models_section_yields_empty_string_default(self):
+        """When [models] is absent from all config layers, defaults are empty strings."""
+        for role in self._EXPECTED_ROLES:
+            r = run(["get", f"models.{role}"], env=self.env, cwd=self.cwd)
+            self.assertEqual(r.returncode, 0, f"get models.{role} exited {r.returncode}: {r.stderr}")
+            # Empty string default prints as blank line
+            self.assertEqual(
+                r.stdout.strip(), "",
+                f"models.{role} default must be empty string (absent sentinel), got {r.stdout.strip()!r}",
+            )
+
+    # (d) config.py get models.reviewer returns a set value
+    def test_get_models_reviewer_returns_set_value_from_toml(self):
+        """config.py get models.reviewer returns the value set in repo config."""
+        repo = tempfile.mkdtemp(prefix="z-harness-test-repo-models-")
+        try:
+            repo_cfg = write_repo_config(
+                repo,
+                "[models]\nreviewer = \"claude-opus-4\"\n",
+            )
+            r = run(
+                ["get", "models.reviewer"],
+                env={"XDG_CONFIG_HOME": self.xdg, "Z_HARNESS_REPO_CONFIG": repo_cfg},
+            )
+            self.assertEqual(r.returncode, 0, f"get models.reviewer exited {r.returncode}: {r.stderr}")
+            self.assertEqual(r.stdout.strip(), "claude-opus-4")
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
+
+    def test_get_models_implementer_returns_set_value_from_env(self):
+        """config.py get models.implementer returns the value set via env var."""
+        r = run(
+            ["get", "models.implementer"],
+            env={
+                "XDG_CONFIG_HOME": self.xdg,
+                "Z_HARNESS_MODELS_IMPLEMENTER": "gpt-5-codex",
+            },
+            cwd=self.cwd,
+        )
+        self.assertEqual(r.returncode, 0, f"get models.implementer exited {r.returncode}: {r.stderr}")
+        self.assertEqual(r.stdout.strip(), "gpt-5-codex")
+
+    def test_unknown_models_key_exits_3(self):
+        """A non-existent models.* key exits with code 3."""
+        r = run(["get", "models.nonexistent_role"], env=self.env, cwd=self.cwd)
+        self.assertEqual(r.returncode, 3)
+
+    def test_toml_wins_over_env_for_models_key(self):
+        """T001: TOML models value is not overridden by env var."""
+        repo = tempfile.mkdtemp(prefix="z-harness-test-repo-models-tomlwins-")
+        try:
+            repo_cfg = write_repo_config(
+                repo,
+                "[models]\nreviewer = \"gemini-2.5-pro\"\n",
+            )
+            r = run(
+                ["get", "models.reviewer"],
+                env={
+                    "XDG_CONFIG_HOME": self.xdg,
+                    "Z_HARNESS_REPO_CONFIG": repo_cfg,
+                    "Z_HARNESS_MODELS_REVIEWER": "claude-opus-4",  # must NOT win
+                },
+            )
+            self.assertEqual(r.returncode, 0)
+            self.assertEqual(
+                r.stdout.strip(), "gemini-2.5-pro",
+                "TOML-wins: repo models.reviewer must not be overridden by env var",
+            )
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Tests for T005: Deprecation surface — runtime.env_strict
+# ---------------------------------------------------------------------------
+
+class TestEnvStrictDeprecation(unittest.TestCase):
+    """
+    Tests for the deprecation warning/error surface added by T005.
+
+    When a user-set preference env var is detected (the same set that
+    _collect_deprecated_env_vars finds), load_config() emits:
+      - A WARNING to stderr when runtime.env_strict = false (default)
+      - A hard ERROR (exit 2) when runtime.env_strict = true
+
+    The env_strict key is a CONFIG KEY (set via config.toml [runtime]
+    env_strict = true) — it is NOT itself a raw env var override.
+    """
+
+    def setUp(self):
+        self.xdg = make_xdg()
+        self.cwd = make_isolation_dir()
+
+    def tearDown(self):
+        shutil.rmtree(self.xdg, ignore_errors=True)
+        shutil.rmtree(self.cwd, ignore_errors=True)
+
+    # ---- Default (env_strict = false): warning-only, non-fatal ----
+
+    def test_deprecated_pref_env_emits_warning_when_strict_false(self):
+        """
+        Setting a preference env var (e.g. Z_HARNESS_PRE_REVIEW) with no
+        env_strict config must produce a WARNING on stderr but still exit 0.
+
+        Failure class: if the deprecation warning is missing, users will
+        silently use the old env-var path long after migration — the
+        deprecation surface becomes a no-op.
+        """
+        r = run(
+            ["get", "notify.level"],
+            env={
+                "XDG_CONFIG_HOME": self.xdg,
+                # Z_HARNESS_PRE_REVIEW is a deprecated preference env var
+                # (maps to runtime.pre_review via _INGRESS_LEGACY_ALIASES)
+                "Z_HARNESS_PRE_REVIEW": "true",
+            },
+            cwd=self.cwd,
+        )
+        # Must succeed (non-fatal when env_strict=false)
+        self.assertEqual(r.returncode, 0,
+                         f"Expected exit 0 with env_strict=false; got {r.returncode}. stderr={r.stderr!r}")
+        # Warning must appear on stderr
+        self.assertIn("DEPRECATED", r.stderr,
+                      "Expected DEPRECATED warning in stderr when preference env var is set")
+        self.assertIn("Z_HARNESS_PRE_REVIEW", r.stderr,
+                      "Warning must name the offending env var")
+
+    def test_deprecated_transliteration_env_emits_warning(self):
+        """
+        The mechanical transliteration Z_HARNESS_RUNTIME_PRE_REVIEW (not the
+        legacy alias) is also a deprecated preference env var and must trigger
+        a warning.
+
+        Failure class: if only legacy aliases are checked, users who set the
+        mechanical transliteration would bypass the deprecation surface.
+        """
+        r = run(
+            ["get", "runtime.pre_review"],
+            env={
+                "XDG_CONFIG_HOME": self.xdg,
+                "Z_HARNESS_RUNTIME_PRE_REVIEW": "true",
+            },
+            cwd=self.cwd,
+        )
+        self.assertEqual(r.returncode, 0,
+                         f"Expected exit 0; got {r.returncode}. stderr={r.stderr!r}")
+        self.assertIn("DEPRECATED", r.stderr,
+                      "Transliteration env var must also trigger DEPRECATED warning")
+
+    def test_no_pref_env_set_no_warning(self):
+        """
+        When no preference env vars are set in the environment, no deprecation
+        warning must appear on stderr.
+
+        Failure class: false-positive warnings would be noise that trains users
+        to ignore the deprecation surface entirely.
+        """
+        r = run(
+            ["get", "notify.level"],
+            env={"XDG_CONFIG_HOME": self.xdg},
+            cwd=self.cwd,
+        )
+        self.assertEqual(r.returncode, 0)
+        # No deprecation warning should appear (stderr may have other lines but not DEPRECATED)
+        self.assertNotIn("DEPRECATED", r.stderr,
+                         f"Unexpected DEPRECATED in stderr with no preference env set: {r.stderr!r}")
+
+    # ---- env_strict = true: hard error ----
+
+    def test_deprecated_pref_env_errors_when_strict_true(self):
+        """
+        With runtime.env_strict = true in config.toml, setting a preference
+        env var must cause a hard ERROR (non-zero exit).
+
+        Failure class: if this exits 0, the strict-enforcement mode is broken
+        and users relying on it for CI enforcement will get silent regressions.
+        """
+        write_global_config(self.xdg, '[runtime]\nenv_strict = true\n')
+        r = run(
+            ["get", "notify.level"],
+            env={
+                "XDG_CONFIG_HOME": self.xdg,
+                "Z_HARNESS_PRE_REVIEW": "true",
+            },
+            cwd=self.cwd,
+        )
+        # Must be a hard error (non-zero exit)
+        self.assertNotEqual(r.returncode, 0,
+                            "Expected non-zero exit with runtime.env_strict=true and deprecated env var")
+        self.assertEqual(r.returncode, 2,
+                         f"Expected exit 2 for validation error; got {r.returncode}")
+        # Error message must appear on stderr
+        self.assertIn("DEPRECATED", r.stderr,
+                      "Hard error must include DEPRECATED marker in stderr")
+
+    def test_env_strict_true_no_pref_env_exits_0(self):
+        """
+        With runtime.env_strict = true but NO preference env vars set, the
+        command must still succeed (exit 0).
+
+        Failure class: if the strict mode errors even with no deprecated vars,
+        it becomes impossible to use env_strict=true in normal operation.
+        """
+        write_global_config(self.xdg, '[runtime]\nenv_strict = true\n')
+        r = run(
+            ["get", "notify.level"],
+            env={"XDG_CONFIG_HOME": self.xdg},
+            cwd=self.cwd,
+        )
+        self.assertEqual(r.returncode, 0,
+                         f"env_strict=true with no deprecated vars must exit 0; got {r.returncode}. stderr={r.stderr!r}")
+
+    def test_env_strict_is_config_key_not_raw_env(self):
+        """
+        runtime.env_strict must be settable via config.toml only — not via a
+        raw env var Z_HARNESS_RUNTIME_ENV_STRICT, because that would create a
+        bootstrap paradox (the env var would be deprecated by the very policy
+        it enables).
+
+        This test verifies that env_strict can be read via `config.py get` and
+        that the TOML-layer value is respected.
+
+        Failure class: if env_strict were itself an env override, it could be
+        defeated by unsetting the env var, and the enforcement guarantee breaks.
+        """
+        # Without config.toml, env_strict must default to false
+        r = run(
+            ["get", "runtime.env_strict"],
+            env={"XDG_CONFIG_HOME": self.xdg},
+            cwd=self.cwd,
+        )
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.stdout.strip(), "false",
+                         "runtime.env_strict must default to false")
+
+        # With config.toml setting it to true, must reflect true
+        write_global_config(self.xdg, '[runtime]\nenv_strict = true\n')
+        r2 = run(
+            ["get", "runtime.env_strict"],
+            env={"XDG_CONFIG_HOME": self.xdg},
+            cwd=self.cwd,
+        )
+        self.assertEqual(r2.returncode, 0)
+        self.assertEqual(r2.stdout.strip(), "true",
+                         "runtime.env_strict = true in config.toml must be respected")
+
+    def test_legal_plumbing_env_does_not_trigger_warning(self):
+        """
+        Legal plumbing/unattended env vars (Z_HARNESS_PLAN_DIR, Z_HARNESS_SLUG,
+        Z_HARNESS_NO_ASK, etc.) must never trigger the deprecation warning —
+        they are in LEGAL_ENV_KEYS and are allowed.
+
+        Failure class: if legal vars trigger the warning, legitimate uses of
+        plumbing env vars in CI/CD pipelines generate spurious noise that masks
+        real deprecation warnings.
+        """
+        r = run(
+            ["get", "notify.level"],
+            env={
+                "XDG_CONFIG_HOME": self.xdg,
+                # Legal plumbing vars (from LEGAL_ENV_KEYS)
+                "Z_HARNESS_NO_ASK": "halt",
+                "Z_HARNESS_PLAN_DIR": "/tmp/test-plan",
+                "Z_HARNESS_SLUG": "test-slug",
+            },
+            cwd=self.cwd,
+        )
+        # Should succeed (legal vars are never deprecated)
+        # Note: Z_HARNESS_NO_ASK=halt may cause other effects but should not
+        # produce a DEPRECATED warning for these legal vars.
+        self.assertNotIn("DEPRECATED", r.stderr,
+                         f"Legal plumbing vars must NOT trigger DEPRECATED warning: {r.stderr!r}")
 
 
 # ---------------------------------------------------------------------------

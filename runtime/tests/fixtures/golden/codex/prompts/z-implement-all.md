@@ -2272,8 +2272,8 @@ The numbered steps below describe a **single task track** — one task's journey
 
 These exist because the T006 saga (4 attempts spanning ~20 wall-clock hours, each a *different* failure mode — OOM, degenerate model, load avg 156, load avg 211) was not caught by the skip-marker list. Skip-markers match static text in the task block; they cannot catch novel runtime failures. The caps below are unconditional.
 
-- **`MAX_ATTEMPTS=2` per task ID for the entire `/z-implement-all` run.** "Attempt" = a fresh dispatch through step 5 (implementer). Retries inside step 7 (review-failure re-spawn) count as part of the same attempt. After 2 attempts that don't reach `task_done`, halt the task, push-notify, and present to the user with options: skip / override / re-spec / abandon. Override via `Z_HARNESS_MAX_ATTEMPTS=N`. If the user chooses **abandon** (ending the run), this is a run-ending halt — **set `FINALIZE_STATUS=aborted`** before reaching Finalize (per the FINALIZE_STATUS rule in Phase 0.0).
-- **`MAX_TASK_WALL_MS=2700000` (45 min) per task track.** Wall time start = `task_start` event; end = `task_done` or halt. If a track exceeds this, the orchestrator halts the track regardless of subagent state, logs `task_halt` with `reason: "wall_clock_cap"`, and surfaces to the user. If this ends the run (user chooses to abandon), **set `FINALIZE_STATUS=aborted`** before reaching Finalize. Override via `Z_HARNESS_MAX_TASK_WALL_MS=ms`.
+- **`MAX_ATTEMPTS=2` per task ID for the entire `/z-implement-all` run.** "Attempt" = a fresh dispatch through step 5 (implementer). Retries inside step 7 (review-failure re-spawn) count as part of the same attempt. After 2 attempts that don't reach `task_done`, halt the task, push-notify, and present to the user with options: skip / override / re-spec / abandon. Override via `runtime.max_attempts` in config. If the user chooses **abandon** (ending the run), this is a run-ending halt — **set `FINALIZE_STATUS=aborted`** before reaching Finalize (per the FINALIZE_STATUS rule in Phase 0.0).
+- **`MAX_TASK_WALL_MS=2700000` (45 min) per task track.** Wall time start = `task_start` event; end = `task_done` or halt. If a track exceeds this, the orchestrator halts the track regardless of subagent state, logs `task_halt` with `reason: "wall_clock_cap"`, and surfaces to the user. If this ends the run (user chooses to abandon), **set `FINALIZE_STATUS=aborted`** before reaching Finalize. Override via `runtime.max_task_wall_ms` in config.
 - **`MAX_DISTINCT_HALTS=3` per task ID.** If a task has been halted with 3 different `reason` values across all attempts (e.g. `spec_problem`, `unable_to_complete`, `environmental`), auto-flag it as skip for the rest of the run and present to the user with a one-line summary of the three failure modes. Prevents the T006 pattern.
 - **`MAX_BATCH_STALL_MS=1800000` (30 min) per batch.** If a batch goes 30 min with no `task_done` or `task_halt` event from *any* in-flight track, the orchestrator considers it stalled. Push-notify the user with a list of in-flight task IDs and ask: continue waiting / cancel batch / kill specific tracks.
 - **Halt taxonomy that doesn't burn an attempt.** A task halted with `reason: "needs_clarification"` or `reason: "decision_needed"` where the user resolves it and asks to resume *does not* count toward `MAX_ATTEMPTS`. Resolved spec/decision halts reset the attempt counter for that task. (Otherwise a 3-decision-gate task could exhaust its attempts before implementer ever wrote code.)
@@ -2403,7 +2403,7 @@ CLAIM_OUT="$?"   # claim exits 0 always; parse stdout JSON for conceded list
 When `conceded` is non-empty, pick the eldest senior (`holder_run_id` from the entry — this
 is the lowest run_id among all seniors on that path as returned by `claim`):
 
-**If `Z_HARNESS_AUTO_WAIT=1` (default):**
+**If `runtime.auto_wait = true` (default):**
 
 ```bash
 python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" wait-for \
@@ -2438,7 +2438,7 @@ WAIT_RC=$?
 - `WAIT_RC == 130` (SIGINT during park) → abort the task (same as unattended exit 10, except
   propagate the SIGINT to the outer shell as appropriate).
 
-**If `Z_HARNESS_AUTO_WAIT=0` (interactive wait mode):**
+**If `runtime.auto_wait = false` (interactive wait mode):**
 
 <!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the conceded-path proceed/wait/abort question via their native channel. Silent omission is forbidden. -->
 Present `AskUserQuestion`: **proceed anyway** / **wait** / **abort task**.
@@ -2865,11 +2865,11 @@ If `NEW_HASH == OLD_HASH`, the implementer didn't actually change anything (it p
 <!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the no_change_on_retry decision (override / patch manually / abandon) via their native channel. Silent omission is forbidden. -->
 ask the user via `AskUserQuestion` whether to override (accept the unchanged diff) / patch manually / abandon. Saves one full Codex review cycle on stuck tasks.
 
-**Pre-review gate-down (opt-in, default off — `Z_HARNESS_IMPL_PRE_REVIEW`).**
+**Pre-review gate-down (opt-in, default off — `runtime.impl_pre_review` in config).**
 
 > **Cost-inversion caveat:** running Flash on every task plus codex on a subset can invert total cost relative to running codex on every task. Enable only after reviewing `scripts/audit-preview-misses.sh` results. This knob is **undocumented-as-recommended** until the T009 evidence gate demonstrates acceptable Flash false-negative rate on low-tier tasks. See SPEC Change 3 evidence gate.
 
-This entire block is a NO-OP when `Z_HARNESS_IMPL_PRE_REVIEW` is unset or `0`. When unset/0, execution falls through immediately to the "Consult-off check" below — behavior is byte-identical to today.
+This entire block is a NO-OP when `runtime.impl_pre_review` is `false` (the default). When false, execution falls through immediately to the "Consult-off check" below — behavior is byte-identical to today.
 
 Initialize both downstream variables unconditionally BEFORE the knob block so the skip-guard and reviewer prompts below always read a defined value, even on the knob-off path:
 
@@ -2883,10 +2883,10 @@ FLASH_PREPEND=""
 ```
 
 ```bash
-if [ "${Z_HARNESS_IMPL_PRE_REVIEW:-0}" = "1" ] && [ "$CYCLE" -eq 1 ]; then
+if [ "$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get runtime.impl_pre_review 2>/dev/null)" = "true" ] && [ "$CYCLE" -eq 1 ]; then
 ```
 
-Inside this block (only runs when knob = 1 and this is cycle 1):
+Inside this block (only runs when `runtime.impl_pre_review = true` and this is cycle 1):
 
 **Step 6.P1 — Tier-drift re-check.** Re-run the complexity-classifier on the current task block to detect post-plan-time complexity changes:
 
@@ -2898,7 +2898,7 @@ TASK_BLOCK_FOR_DRIFT="$(printf '%s' "$TASK_BLOCK" | grep -v '^\*\*Complexity:\*\
 ```
 
 ```
-# Dispatch inside the if block — only when Z_HARNESS_IMPL_PRE_REVIEW=1
+# Dispatch inside the if block — only when runtime.impl_pre_review=true
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
   subagent_type="complexity-classifier",
   description="Tier-drift re-check for <task-id>",
@@ -3025,7 +3025,7 @@ fi
 Close the outer knob gate:
 
 ```bash
-fi  # end Z_HARNESS_IMPL_PRE_REVIEW=1 block
+fi  # end runtime.impl_pre_review=true block
 ```
 
 **Downstream wiring.** After the above block, two variables may be set:
@@ -3053,7 +3053,7 @@ Check the consult mode and spawn the appropriate reviewer:
   REVIEWER_PROVIDER="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-provider.py" reviewer 2>/dev/null)"
 ```
 
-If `REVIEWER_PROVIDER == "none"` (i.e. `Z_HARNESS_CONSULT=off`): skip the external reviewer and run a same-model (Opus) self-review instead:
+If `REVIEWER_PROVIDER == "none"` (i.e. `runtime.consult = "off"` in config): skip the external reviewer and run a same-model (Opus) self-review instead:
 
 - Emit `no_consult_dispatch` event:
   ```bash
@@ -3255,7 +3255,7 @@ Check the consult mode before spawning the cycle ≥ 2 reviewer (same consult-aw
 REVIEWER_PROVIDER_RETRY="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-provider.py" reviewer 2>/dev/null)"
 ```
 
-If `REVIEWER_PROVIDER_RETRY == "none"` (i.e. `Z_HARNESS_CONSULT=off`): skip the external reviewer and run a same-model self-review instead (same pattern as Step 6):
+If `REVIEWER_PROVIDER_RETRY == "none"` (i.e. `runtime.consult = "off"` in config): skip the external reviewer and run a same-model self-review instead (same pattern as Step 6):
 
 - Emit `no_consult_dispatch` event (with `"cycle": <CYCLE>` in the payload).
 - Spawn the dedicated self-review subagent (read-only — no Edit/Write tools, no resolve-provider call):
@@ -4362,7 +4362,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-decision.sh" \
 - `--options` — full list of offered option labels as a JSON array.
 - `--tentative` — the orchestrator's recommended option label; omit when the orchestrator had no recommendation.
 
-Emission is gated by `Z_HARNESS_AXIOM_EXTRACT` (default on); when set to `"0"`, the script exits silently — no guard is needed here. Do **not** modify existing structured gate events (`cost_gate_decision`, `critique_failure_decision`, `map_collision_decision`, `shared_concerns_ack_override`); those are normalized separately by the extractor. This emission **records signal only** — it never approves, overrides, or influences any decision (proposes-only invariant).
+Emission is gated by `axioms.auto_extract_post_run` (default `true`); when `false`, the script exits silently — no guard is needed here. Do **not** modify existing structured gate events (`cost_gate_decision`, `critique_failure_decision`, `map_collision_decision`, `shared_concerns_ack_override`); those are normalized separately by the extractor. This emission **records signal only** — it never approves, overrides, or influences any decision (proposes-only invariant).
 
 ## Hard rules
 

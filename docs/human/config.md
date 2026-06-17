@@ -33,6 +33,106 @@ Per-key shadowing — repo overrides global; env overrides both.  Missing files 
 
 Set `$Z_HARNESS_REPO_CONFIG` to override the git-root discovery path (exits 2 if the path does not exist).  Run `scripts/config.sh ensure-defaults` once after install to create the user-global file with defaults and inline comments.
 
+## Preference env vars — use config.toml instead
+
+**Do not set preferences via raw `Z_HARNESS_*` env vars.** The env layer (layer 4) is deprecated for preference-class vars. Set preferences in `config.toml` instead. The three legal roles for env vars are:
+
+1. **Plumbing** — per-run session/path identifiers set by the orchestrator (e.g. `Z_HARNESS_PLAN_DIR`, `Z_HARNESS_SLUG`, `Z_HARNESS_SESSION_ID`, `Z_HARNESS_RUN`). These are per-invocation and cannot be static config — they stay env-only.
+2. **Unattended/CI** — autonomy gate flags for overnight or CI runs (e.g. `Z_HARNESS_NO_ASK`, `Z_HARNESS_ASK_ALL`, `Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE`, `Z_HARNESS_CLAIM_*`). These control policy, not user preferences — they stay env-only.
+3. **Internal-transport** — env vars emitted by `config.py export-env` within a single shell session to transport resolved TOML values to downstream shell code. These are set by `export-env`, not by the user directly.
+
+All other `Z_HARNESS_*` env vars that used to be user-settable preferences are now config keys in `config.toml`.
+
+### Migration note (overnight / CI)
+
+Instead of setting `Z_HARNESS_PRE_REVIEW=true` in your CI environment, set it in the repo-local config:
+
+```toml
+# .z-harness/config.toml
+[runtime]
+pre_review = true
+```
+
+For unattended runs that previously relied on env vars:
+
+```bash
+# Old (deprecated): set preferences via env
+export Z_HARNESS_MAX_PARALLEL=4
+export Z_HARNESS_MAX_ATTEMPTS=3
+
+# New: set preferences in config.toml (committed to repo)
+# [runtime]
+# max_parallel = 4
+# max_attempts = 3
+```
+
+Run `scripts/config.sh ensure-defaults` once to create your user-global config file with defaults and inline comments. Then migrate each preference from env to TOML.
+
+### Deprecation enforcement: `runtime.env_strict`
+
+When `runtime.env_strict = true` is set in `config.toml`, detecting any preference-class env var in the raw environment becomes a **hard error** (exit 2) rather than a warning. This lets CI pipelines enforce the migration:
+
+```toml
+# .z-harness/config.toml (repo-local — committed to repo)
+[runtime]
+env_strict = true  # enforce: no Z_HARNESS_* preference vars in CI
+```
+
+Default is `false` (warnings only — grace period). This key is a **config key** — it cannot be set via a raw env var (doing so would create a bootstrap paradox).
+
+### Full raw → dotted mapping table
+
+All preference env vars and their config.toml equivalents:
+
+| Raw env var (deprecated) | TOML dotted key | Section | Type | Default |
+|--------------------------|-----------------|---------|------|---------|
+| `Z_HARNESS_NOTIFY` (legacy ingress-only) | `notify.level` | `[notify]` | string | `approval_only` |
+| `Z_HARNESS_NOTIFY_LEVEL` | `notify.level` | `[notify]` | string | `approval_only` |
+| `Z_HARNESS_CONSULT` | `runtime.consult` | `[runtime]` | string | `on` |
+| `Z_HARNESS_PRE_REVIEW` | `runtime.pre_review` | `[runtime]` | bool | `false` |
+| `Z_HARNESS_RUNTIME_PRE_REVIEW` | `runtime.pre_review` | `[runtime]` | bool | `false` |
+| `Z_HARNESS_IMPL_PRE_REVIEW` | `runtime.impl_pre_review` | `[runtime]` | bool | `false` |
+| `Z_HARNESS_RUNTIME_IMPL_PRE_REVIEW` | `runtime.impl_pre_review` | `[runtime]` | bool | `false` |
+| `Z_HARNESS_AUTO_WAIT` | `runtime.auto_wait` | `[runtime]` | bool | `true` |
+| `Z_HARNESS_RUNTIME_AUTO_WAIT` | `runtime.auto_wait` | `[runtime]` | bool | `true` |
+| `Z_HARNESS_AUTO_WAIT_BUDGET_SECS` | `runtime.auto_wait_budget_secs` | `[runtime]` | int | `300` |
+| `Z_HARNESS_RUNTIME_AUTO_WAIT_BUDGET_SECS` | `runtime.auto_wait_budget_secs` | `[runtime]` | int | `300` |
+| `Z_HARNESS_PAUSE_AT_PCT` | `runtime.pause_at_pct` | `[runtime]` | int | `85` |
+| `Z_HARNESS_RUNTIME_PAUSE_AT_PCT` | `runtime.pause_at_pct` | `[runtime]` | int | `85` |
+| `Z_HARNESS_EXPLAIN_RESOLUTION` | `runtime.explain_resolution` | `[runtime]` | bool | `false` |
+| `Z_HARNESS_RUNTIME_EXPLAIN_RESOLUTION` | `runtime.explain_resolution` | `[runtime]` | bool | `false` |
+| `HERMES_MAX_PARALLEL` | `runtime.max_parallel` | `[runtime]` | int | `1` |
+| `Z_HARNESS_RUNTIME_MAX_PARALLEL` | `runtime.max_parallel` | `[runtime]` | int | `1` |
+| `Z_HARNESS_MAX_PARALLEL_PLANS` | `runtime.max_parallel_plans` | `[runtime]` | int | `1` |
+| `Z_HARNESS_RUNTIME_MAX_PARALLEL_PLANS` | `runtime.max_parallel_plans` | `[runtime]` | int | `1` |
+| `Z_HARNESS_MAX_ATTEMPTS` | `runtime.max_attempts` | `[runtime]` | int | `2` |
+| `Z_HARNESS_RUNTIME_MAX_ATTEMPTS` | `runtime.max_attempts` | `[runtime]` | int | `2` |
+| `Z_HARNESS_MAX_TASK_WALL_MS` | `runtime.max_task_wall_ms` | `[runtime]` | int | `2700000` |
+| `Z_HARNESS_RUNTIME_MAX_TASK_WALL_MS` | `runtime.max_task_wall_ms` | `[runtime]` | int | `2700000` |
+| `Z_HARNESS_MAX_EXPLORE` | `workflow.max_explore` | `[workflow]` | int | `3` |
+| `Z_HARNESS_WORKFLOW_MAX_EXPLORE` | `workflow.max_explore` | `[workflow]` | int | `3` |
+| `Z_HARNESS_PARALLEL` | `workflow.parallel` | `[workflow]` | int | `3` |
+| `Z_HARNESS_WORKFLOW_PARALLEL` | `workflow.parallel` | `[workflow]` | int | `3` |
+| `Z_HARNESS_MEMORY_STALE_DAYS` | `workflow.memory_stale_days` | `[workflow]` | int | `547` |
+| `Z_HARNESS_WORKFLOW_MEMORY_STALE_DAYS` | `workflow.memory_stale_days` | `[workflow]` | int | `547` |
+| `Z_HARNESS_DOC_STALENESS_THRESHOLD` | `docs.staleness_threshold` | `[docs]` | int | `20` |
+| `Z_HARNESS_DOCS_STALENESS_THRESHOLD` | `docs.staleness_threshold` | `[docs]` | int | `20` |
+| `Z_HARNESS_AXIOM_EXTRACT` | `axioms.auto_extract_post_run` | `[axioms]` | bool | `true` |
+| `Z_HARNESS_AXIOMS_AUTO_EXTRACT_POST_RUN` | `axioms.auto_extract_post_run` | `[axioms]` | bool | `true` |
+| `Z_HARNESS_BRAINSTORM_PERSONAS` | `brainstorm.personas` | `[brainstorm]` | bool | `true` |
+| `Z_HARNESS_PERSONAS_CRITIQUE_PANEL` | `personas.critique_panel` | `[personas]` | bool | `true` |
+| `Z_HARNESS_PERSONAS_AUDIT` | `personas.audit` | `[personas]` | bool | `true` |
+| `Z_HARNESS_PERSONAS_REVIEW_EVAL` | `personas.review_eval` | `[personas]` | bool | `true` |
+| `Z_HARNESS_PERSONAS_CONSULT_EVAL` | `personas.consult_eval` | `[personas]` | bool | `false` |
+| `Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY` | `personas.implementer_retry` | `[personas]` | string | `same` |
+| `Z_HARNESS_EXPERIMENT_PERSONA_ROTATION` | `experiment.persona_rotation` | `[experiment]` | bool | `true` |
+| `Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N` | `experiment.control_every_n` | `[experiment]` | int | `5` |
+| `Z_HARNESS_COST_TOKEN_BUDGET` | `cost.token_budget` | `[cost]` | int\|null | `null` |
+
+> Tip: `config.py inspect-all` shows every knob with its current source (`defaults`, `global`, `repo`, or `env:<VAR>`). Check it to verify your migration.
+
+---
+
 ## The knobs (Loader API)
 
 | Key | Type | Default | Values | Description |
@@ -42,6 +142,7 @@ Set `$Z_HARNESS_REPO_CONFIG` to override the git-root discovery path (exits 2 if
 | `docs.always_apply` | string | `always` | `always` \| `never` | Whether light flows auto-dispatch doc-fetcher when `docs/llm/INDEX.json` exists. `always` matches current /z-do default behavior. `never` skips doc-fetcher. **Applies only to light flows (slice 1: /z-do). Heavy flows always dispatch doc-fetcher regardless of this knob.** |
 | `runtime.consult` | string | `on` | `on` \| `off` | Single-model mode. When `off`, the `consultant_primary`, `consultant_secondary`, and `reviewer` roles resolve to the `none` sentinel, so cross-LLM consultation and review are skipped (no Gemini/Codex dispatch). Exported as `Z_HARNESS_CONSULT` (not `Z_HARNESS_RUNTIME_CONSULT` — see the transliteration note), which `resolve-provider.py` reads. |
 | `cost.token_budget` | int or null | `null` | positive int or null | Token budget ceiling for cost-gate delegation. When set, `check-no-ask` with `--range-high` compares the estimate against this value. `null` (unset) means no budget is configured; any cost gate under policy will halt with `cost_budget_missing`. |
+| `runtime.env_strict` | bool | `false` | `true` \| `false` | When `true`, detecting any preference-class `Z_HARNESS_*` env var in the raw environment becomes a **hard error** (exit 2) instead of a warning. Set this in `config.toml` (NOT as a raw env var) to enforce the migration in CI. Default `false` (grace period — warning only). |
 
 For `[brainstorm]`, `[personas]`, `[workflow]`, `[followup]`, `[axioms]`, and `[experiment]` knobs, see the sections below.
 
@@ -68,12 +169,28 @@ Env-var overrides follow a deterministic rule: lowercase TOML dotted-key → pre
 | `axioms.auto_extract_post_run` | `Z_HARNESS_AXIOMS_AUTO_EXTRACT_POST_RUN` |
 | `cost.token_budget` | `Z_HARNESS_COST_TOKEN_BUDGET` |
 | `runtime.consult` | `Z_HARNESS_CONSULT` (alias — **not** the mechanical `Z_HARNESS_RUNTIME_CONSULT`) |
+| `runtime.pre_review` | `Z_HARNESS_PRE_REVIEW` (alias — legacy name; mechanical: `Z_HARNESS_RUNTIME_PRE_REVIEW`) |
+| `runtime.impl_pre_review` | `Z_HARNESS_IMPL_PRE_REVIEW` (alias — legacy name; mechanical: `Z_HARNESS_RUNTIME_IMPL_PRE_REVIEW`) |
+| `runtime.auto_wait` | `Z_HARNESS_AUTO_WAIT` (alias — legacy name; mechanical: `Z_HARNESS_RUNTIME_AUTO_WAIT`) |
+| `runtime.auto_wait_budget_secs` | `Z_HARNESS_AUTO_WAIT_BUDGET_SECS` (alias — legacy name) |
+| `runtime.pause_at_pct` | `Z_HARNESS_PAUSE_AT_PCT` (alias — legacy name; mechanical: `Z_HARNESS_RUNTIME_PAUSE_AT_PCT`) |
+| `runtime.explain_resolution` | `Z_HARNESS_EXPLAIN_RESOLUTION` (alias — legacy name) |
+| `runtime.max_parallel` | `HERMES_MAX_PARALLEL` (alias — uses `HERMES_` prefix, not `Z_HARNESS_RUNTIME_`) |
+| `runtime.max_parallel_plans` | `Z_HARNESS_MAX_PARALLEL_PLANS` (alias — no `RUNTIME_` infix) |
+| `runtime.max_attempts` | `Z_HARNESS_MAX_ATTEMPTS` (alias — no `RUNTIME_` infix) |
+| `runtime.max_task_wall_ms` | `Z_HARNESS_MAX_TASK_WALL_MS` (alias — no `RUNTIME_` infix) |
+| `runtime.env_strict` | `Z_HARNESS_RUNTIME_ENV_STRICT` (mechanical — **not user-settable via env**; use config.toml only) |
 | `workflow.planning_mode` | `Z_HARNESS_WORKFLOW_PLANNING_MODE` |
 | `workflow.intent_level` | `Z_HARNESS_WORKFLOW_INTENT_LEVEL` |
 | `workflow.intent_parallel_levels` | `Z_HARNESS_WORKFLOW_INTENT_PARALLEL_LEVELS` |
 | `workflow.hermes_enabled` | `Z_HARNESS_WORKFLOW_HERMES_ENABLED` |
+| `workflow.max_explore` | `Z_HARNESS_MAX_EXPLORE` (alias — no `WORKFLOW_` prefix) |
+| `workflow.parallel` | `Z_HARNESS_PARALLEL` (alias — no `WORKFLOW_` prefix) |
+| `workflow.memory_stale_days` | `Z_HARNESS_MEMORY_STALE_DAYS` (alias — no `WORKFLOW_` prefix) |
+| `docs.staleness_threshold` | `Z_HARNESS_DOC_STALENESS_THRESHOLD` (alias — uses `DOC` not `DOCS`) |
+| `axioms.auto_extract_post_run` | `Z_HARNESS_AXIOM_EXTRACT` (alias — completely different legacy name) |
 
-For workflow, followup, and experiment keys, the rule applies identically.
+For followup and experiment keys, the rule applies identically (no alias exceptions).
 
 Keys must match `^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`.  Hyphens in keys exit 2.
 Nested keys >2 levels exit 2.  Empty env vars are treated as missing.

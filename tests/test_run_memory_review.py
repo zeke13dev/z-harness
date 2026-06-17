@@ -142,16 +142,48 @@ class TestRunMemoryReviewAxiomReady(unittest.TestCase):
     # axiom_ready_not_emitted_when_0
     # ------------------------------------------------------------------
 
-    def test_axiom_ready_not_emitted_when_0(self):
-        """AXIOM_READY is NOT emitted when Z_HARNESS_AXIOM_EXTRACT=0."""
+    def test_axiom_ready_not_emitted_when_toml_disabled(self):
+        """AXIOM_READY is NOT emitted when axioms.auto_extract_post_run = false in config.toml.
+
+        T001 made the raw env var Z_HARNESS_AXIOM_EXTRACT no longer shadow TOML.
+        The correct disable path is config.toml, not a raw env var.  This test
+        verifies that the config.toml disable path works end-to-end through
+        run-memory-review.sh → config.py get → the AXIOM_READY gate.
+
+        The TOML-wins ingress gate means: when TOML sets auto_extract_post_run=false,
+        even a raw env var Z_HARNESS_AXIOM_EXTRACT=1 is ignored.  This test asserts
+        both the disable path (TOML=false) and the TOML-wins invariant (env ignored).
+        """
+        # Write a repo-local config.toml with auto_extract_post_run = false.
+        zh_dir = self._tmp_path / ".z-harness"
+        zh_dir.mkdir(parents=True, exist_ok=True)
+        config_toml = zh_dir / "config.toml"
+        config_toml.write_text(
+            "[axioms]\nauto_extract_post_run = false\n", encoding="utf-8"
+        )
         result = _run_script(
             self._tmp_path, self._plan_dir,
-            env_extra={"Z_HARNESS_AXIOM_EXTRACT": "0"},
+            env_extra={
+                # Point config.py at the temp config so it reads auto_extract_post_run=false from TOML.
+                "Z_HARNESS_REPO_CONFIG": str(config_toml),
+                # Use the real repo as PLUGIN_ROOT so config.py is reachable.
+                "CLAUDE_PLUGIN_ROOT": str(_REPO_ROOT),
+                "ANTIGRAVITY_PLUGIN_ROOT": str(_REPO_ROOT),
+                # Also set the legacy raw env var to 1 (=enable); TOML=false must win (T001 ingress gate).
+                "Z_HARNESS_AXIOM_EXTRACT": "1",
+            },
         )
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         self.assertIn("STATUS: ready", result.stdout.splitlines()[0])
         axiom_lines = self._get_axiom_ready_lines(result.stdout)
-        self.assertEqual(len(axiom_lines), 0, msg=f"Expected no AXIOM_READY line, stdout={result.stdout!r}")
+        self.assertEqual(
+            len(axiom_lines), 0,
+            msg=(
+                "Expected no AXIOM_READY: config.toml sets auto_extract_post_run=false and "
+                "TOML must win over Z_HARNESS_AXIOM_EXTRACT=1 (T001 ingress-gate); "
+                f"stdout={result.stdout!r}"
+            ),
+        )
 
     # ------------------------------------------------------------------
     # axiom_ready_emitted_when_false

@@ -126,8 +126,8 @@ class TestAxiomsTomlOverride(unittest.TestCase):
             self.assertEqual(result_budget.returncode, 0, msg=result_budget.stderr)
             self.assertEqual(result_budget.stdout.strip(), "1234")
 
-    def test_env_beats_toml(self):
-        """Env layer (layer 4) overrides repo toml (layer 3)."""
+    def test_toml_beats_env(self):
+        """TOML wins over env (T001 ingress-gate): preference env is ignored when TOML sets the key."""
         with tempfile.TemporaryDirectory() as tmpdir:
             config_file = self._write_toml(
                 Path(tmpdir),
@@ -142,8 +142,9 @@ class TestAxiomsTomlOverride(unittest.TestCase):
             }
             result = _run_get("axioms.enabled", env_extra=env)
             self.assertEqual(result.returncode, 0, msg=result.stderr)
-            # Env wins over toml
-            self.assertEqual(result.stdout.strip(), "true")
+            # TOML wins: env var Z_HARNESS_AXIOMS_ENABLED=true is ignored because TOML explicitly set enabled=false.
+            # This is the T001 ingress-gate behaviour: preference-class env does NOT shadow TOML.
+            self.assertEqual(result.stdout.strip(), "false")
 
 
 class TestAxiomsValidationRejectsBadType(unittest.TestCase):

@@ -4,8 +4,8 @@ runtime/tests/test_export_golden.py
 Golden-capture comparator for the multi-IDE export pipeline.
 
 Each test checks that the runtime driver for a given target (`cursor`, `codex`,
-`antigravity`, `pi`) produces output that is equivalent to the legacy script
-snapshot stored in `fixtures/golden/<target>/`.
+`antigravity`, `pi`, `windsurf`, `kiro`, `cline`, `copilot`) produces output
+that is equivalent to the golden snapshot stored in `fixtures/golden/<target>/`.
 
 Determinism was verified at capture time by running each legacy exporter twice
 and comparing the outputs; results are documented in ``fixtures/golden/README.md``.
@@ -67,9 +67,10 @@ def _collect_files(directory: Path) -> dict[str, str]:
     """Return a mapping ``{relative_path_str: file_content}`` for all files
     under *directory*, recursively.
 
-    Hidden files (those whose path components start with ``"."`` *other than*
-    `.cursor` and `.agent`) are included because the cursor golden snapshot
-    lives under ``.cursor/`` and the antigravity snapshot under ``.agent/``.
+    All files under hidden directories (e.g. ``.cursor/``, ``.agent/``,
+    ``.windsurf/``, ``.kiro/``, ``.clinerules/``, ``.github/``) are included —
+    the golden snapshots for various hosts live under such directories.
+    ``Path.rglob("*")`` matches hidden directories without any special handling.
     """
     result: dict[str, str] = {}
     for path in sorted(directory.rglob("*")):
@@ -167,6 +168,22 @@ _TARGET_STRUCTURAL_RULES: dict[str, dict[str, list[str]]] = {
         # pi prompt files have no YAML frontmatter — just a "# /<id>" header.
         # Structural check = non-empty body only.
     },
+    "windsurf": {
+        # Windsurf rule files require frontmatter with "trigger" key
+        ".windsurf/rules/*.md": ["trigger"],
+    },
+    "kiro": {
+        # Kiro steering files require frontmatter with "inclusion" key
+        ".kiro/steering/*.md": ["inclusion"],
+    },
+    "cline": {
+        # Cline uses a single pointer file — plain markdown, no frontmatter requirement.
+        # Structural check = non-empty body only (enforced globally for all files).
+    },
+    "copilot": {
+        # Copilot uses a single instructions file — plain markdown, no frontmatter.
+        # Structural check = non-empty body only (enforced globally for all files).
+    },
 }
 
 
@@ -210,6 +227,10 @@ _TARGET_RUNTIME_MODULES = {
     "codex": "runtime.drivers.codex.export",
     "antigravity": "runtime.drivers.antigravity.export",
     "pi": "runtime.drivers.pi.export",
+    "windsurf": "runtime.drivers.windsurf.export",
+    "kiro": "runtime.drivers.kiro.export",
+    "cline": "runtime.drivers.cline.export",
+    "copilot": "runtime.drivers.copilot.export",
 }
 
 
@@ -229,8 +250,7 @@ def _skip_if_runtime_missing(target: str) -> None:
     """Skip the calling test if the runtime export module for *target* is absent."""
     if not _runtime_module_exists(target):
         pytest.skip(
-            f"runtime/drivers/{target}/export.py not yet implemented "
-            f"(will be created by T003–T006)"
+            f"runtime/drivers/{target}/export.py not yet implemented"
         )
 
 
@@ -391,13 +411,51 @@ class TestGoldenSnapshotStructure:
         normalized = _normalize_snapshot(files, _REPO_ROOT)
         _run_structural_backstop("pi", normalized)
 
+    def test_windsurf_snapshot_structure(self) -> None:
+        """Snapshot windsurf: all .windsurf/rules/*.md files have 'trigger' frontmatter."""
+        golden_dir = _GOLDEN_DIR / "windsurf"
+        files = _collect_files(golden_dir)
+        assert files, f"Windsurf golden snapshot is empty: {golden_dir}"
+        normalized = _normalize_snapshot(files, _REPO_ROOT)
+        _run_structural_backstop("windsurf", normalized)
+
+    def test_kiro_snapshot_structure(self) -> None:
+        """Snapshot kiro: all .kiro/steering/*.md files have 'inclusion' frontmatter."""
+        golden_dir = _GOLDEN_DIR / "kiro"
+        files = _collect_files(golden_dir)
+        assert files, f"Kiro golden snapshot is empty: {golden_dir}"
+        normalized = _normalize_snapshot(files, _REPO_ROOT)
+        _run_structural_backstop("kiro", normalized)
+
+    def test_cline_snapshot_structure(self) -> None:
+        """Snapshot cline: single pointer file has non-empty body (no frontmatter required)."""
+        golden_dir = _GOLDEN_DIR / "cline"
+        files = _collect_files(golden_dir)
+        assert files, f"Cline golden snapshot is empty: {golden_dir}"
+        normalized = _normalize_snapshot(files, _REPO_ROOT)
+        _run_structural_backstop("cline", normalized)
+
+    def test_copilot_snapshot_structure(self) -> None:
+        """Snapshot copilot: single instructions file has non-empty body (no frontmatter required)."""
+        golden_dir = _GOLDEN_DIR / "copilot"
+        files = _collect_files(golden_dir)
+        assert files, f"Copilot golden snapshot is empty: {golden_dir}"
+        normalized = _normalize_snapshot(files, _REPO_ROOT)
+        _run_structural_backstop("copilot", normalized)
+
     def test_snapshot_file_counts(self) -> None:
-        """All four golden snapshot directories have the expected file counts."""
+        """All eight golden snapshot directories have the expected file counts."""
         expected_counts = {
-            "cursor": 121,    # .cursor/rules/*.mdc (commands + agents + skills)
-            "codex": 92,      # prompts/*.md + AGENTS.md (commands + agents + skills; no personas)
-            "antigravity": 245,  # .agent/workflows + .agent/rules + .agent/skills + prompts + CAPABILITIES + README + agy-plugin.yaml (z-test skill excluded)
-            "pi": 128,        # agents/*.md + prompts/*.md + AGENTS.md + CAPABILITIES.md + README.md (z-test skill excluded; +intent-classifier +task-tree-generator)
+            # Re-baselined after T016 z-debt command+skill addition (+2 files each)
+            "cursor": 123,    # .cursor/rules/*.mdc (commands + agents + skills + z-debt)
+            "codex": 94,      # prompts/*.md + AGENTS.md (commands + agents + skills + z-debt; no personas)
+            "antigravity": 249,  # .agent/workflows + .agent/rules + .agent/skills + prompts + CAPABILITIES + README + agy-plugin.yaml + z-debt (+4)
+            "pi": 130,        # agents/*.md + prompts/*.md + AGENTS.md + CAPABILITIES.md + README.md + z-debt (+2)
+            # New export-only drivers (T011–T014)
+            "windsurf": 98,   # .windsurf/rules/*.md (commands + agents + skills)
+            "kiro": 98,       # .kiro/steering/*.md (commands + agents + skills)
+            "cline": 1,       # .clinerules/z-harness.md (pointer default — single file)
+            "copilot": 1,     # .github/copilot-instructions.md (single pointer file)
         }
         for target, expected in expected_counts.items():
             golden_dir = _GOLDEN_DIR / target
@@ -459,4 +517,150 @@ class TestGoldenPi:
             target="pi",
             repo_root=_REPO_ROOT,
             golden_dir=_GOLDEN_DIR / "pi",
+        )
+
+
+class TestGoldenWindsurf:
+    """windsurf runtime export matches golden snapshot (export-only driver, T011)."""
+
+    def test_windsurf_golden(self) -> None:
+        """Runtime windsurf/export.py output is byte-identical to snapshot (post-norm)."""
+        _assert_golden(
+            target="windsurf",
+            repo_root=_REPO_ROOT,
+            golden_dir=_GOLDEN_DIR / "windsurf",
+        )
+
+
+class TestGoldenKiro:
+    """kiro runtime export matches golden snapshot (export-only driver, T013)."""
+
+    def test_kiro_golden(self) -> None:
+        """Runtime kiro/export.py output is byte-identical to snapshot (post-norm)."""
+        _assert_golden(
+            target="kiro",
+            repo_root=_REPO_ROOT,
+            golden_dir=_GOLDEN_DIR / "kiro",
+        )
+
+
+class TestGoldenCline:
+    """cline runtime export matches golden snapshot (export-only driver, T012)."""
+
+    def test_cline_golden(self) -> None:
+        """Runtime cline/export.py output is byte-identical to snapshot (post-norm)."""
+        _assert_golden(
+            target="cline",
+            repo_root=_REPO_ROOT,
+            golden_dir=_GOLDEN_DIR / "cline",
+        )
+
+
+class TestGoldenCopilot:
+    """copilot runtime export matches golden snapshot (export-only driver, T014)."""
+
+    def test_copilot_golden(self) -> None:
+        """Runtime copilot/export.py output is byte-identical to snapshot (post-norm)."""
+        _assert_golden(
+            target="copilot",
+            repo_root=_REPO_ROOT,
+            golden_dir=_GOLDEN_DIR / "copilot",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Adapter-absence validation (audit M5)
+# ---------------------------------------------------------------------------
+
+# The four new export-only drivers (windsurf, kiro, cline, copilot) must NOT
+# be registered in the z_harness_cli adapter registry.  They are runtime-only
+# export drivers with no HostAdapter, no launch/inject capability, and no
+# command-tier registration.  This test asserts that invariant so it cannot
+# be silently broken by future work.
+_EXPORT_ONLY_HOSTS = ["windsurf", "kiro", "cline", "copilot"]
+
+
+class TestAdapterAbsence:
+    """M5 audit: export-only drivers must NOT appear in the adapter registry."""
+
+    def test_no_adapter_registry_entries(self) -> None:
+        """windsurf/kiro/cline/copilot are absent from the z_harness_cli adapter registry.
+
+        Specifically: calling registry.select(<name>) must raise an exception
+        (UnknownHostError or similar) for each of these four hosts — they are not
+        registered adapters and must never be.
+        """
+        from z_harness_cli.adapters import registry
+
+        for host in _EXPORT_ONLY_HOSTS:
+            try:
+                # select() with no installed binary — should raise UnknownHostError.
+                # We pass skip_detect=True if available to bypass binary detection,
+                # but even without it the host should not be found.
+                result = registry.select(host)
+                # If it did NOT raise, the host was found — that is a failure.
+                pytest.fail(
+                    f"registry.select({host!r}) returned {result!r} instead of raising; "
+                    f"{host} must not be registered as an adapter"
+                )
+            except Exception as exc:
+                # Raising is the correct outcome — the host is not a registered adapter.
+                # We assert that the exception is the expected not-found kind so that
+                # a spurious unrelated error (e.g. AttributeError, ImportError) does
+                # NOT silently count as success.
+                from z_harness_cli.adapters.registry import UnknownHostError, NoHostInstalledError
+                assert isinstance(exc, (UnknownHostError, NoHostInstalledError)), (
+                    f"registry.select({host!r}) raised an unexpected exception type "
+                    f"{type(exc).__name__!r} (expected UnknownHostError or "
+                    f"NoHostInstalledError): {exc!r}"
+                )
+
+    def test_no_adapter_modules_exist(self) -> None:
+        """No adapter module exists at z_harness_cli/adapters/<host>.py for export-only hosts."""
+        import importlib.util
+
+        for host in _EXPORT_ONLY_HOSTS:
+            module_name = f"z_harness_cli.adapters.{host}"
+            spec = importlib.util.find_spec(module_name)
+            assert spec is None, (
+                f"Adapter module {module_name!r} exists but must not — "
+                f"{host} is an export-only driver with no HostAdapter"
+            )
+
+    def test_z_harness_cli_does_not_hardcode_export_only_hosts(self) -> None:
+        """z_harness_cli package source does not hardcode windsurf/kiro/cline/copilot.
+
+        These names must not appear in any z_harness_cli source file (adapters, commands,
+        or CLI entry points) because they are export-only and have no adapter.
+        """
+        import ast
+        from pathlib import Path
+
+        cli_root = _REPO_ROOT / "z_harness_cli"
+        assert cli_root.is_dir(), f"z_harness_cli package not found at {cli_root}"
+
+        violations: list[str] = []
+        for py_file in sorted(cli_root.rglob("*.py")):
+            try:
+                source = py_file.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            for host in _EXPORT_ONLY_HOSTS:
+                # Check for string literals containing the host name using AST.
+                try:
+                    tree = ast.parse(source, filename=str(py_file))
+                except SyntaxError:
+                    continue
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                        if node.value == host:
+                            rel = py_file.relative_to(_REPO_ROOT)
+                            violations.append(
+                                f"  {rel}:{node.lineno}: literal {host!r} found"
+                            )
+
+        assert not violations, (
+            "z_harness_cli hardcodes export-only host name(s):\n"
+            + "\n".join(violations)
+            + "\nThese hosts are export-only; remove them from z_harness_cli."
         )

@@ -132,6 +132,45 @@ Rationale: Python's import system cannot handle hyphens in module names; consist
 
 ---
 
+## Write-less-code ladder
+
+### WL-001: Prefer deletion over addition — six-rung ladder (implement-time reflex)
+
+Before adding new code, descend this ladder and stop at the first rung that satisfies the acceptance criteria:
+
+1. **Delete** — can the existing behavior be achieved by removing a wrong constraint, flag, or dead path? Deletion is the highest-value move: it shrinks the attack surface and the maintenance burden simultaneously.
+2. **Reuse** — does a helper, util, or script already in the codebase do this? Reach for the existing thing before writing a new one. Cite the file:line in your RATIONALE when you reuse.
+3. **Compose** — can two existing things be composed (piped, called in sequence, wrapped with a single adapter) to produce the behavior? A thin composition is cheaper than a new abstraction.
+4. **Simplify** — if new code is unavoidable, can the simplest possible form (a one-liner, a stdlib call, a `z:` marker deferring the hard case) cover the immediate need?
+5. **Scaffold minimally** — write only the scaffolding the acceptance criterion demands. Do not add parameters "for future callers", generics for a single concrete type, or hooks that have no current consumer.
+6. **Add** — if none of the above applies, add the new code. This is the last resort, not the default.
+
+Rationale: Every line added is a line to read, test, review, and migrate. The ladder biases toward net-negative diffs (deleting more than adding), which are the highest-signal code changes.
+
+### WL-002: Lazy code without its check is unfinished
+
+A shortcut (a `z:` marker deferring logic, a sentinel return, a `TODO`, a simplified branch) is only complete when its guard or test is also present. If the shortcut can produce a wrong result under any reachable input, the acceptance criterion is not met. Specifically:
+
+- A `z:` ceiling marker must be accompanied by a test or assertion that would catch the deferred case if triggered before the upgrade.
+- A simplified branch (e.g. "only handles ASCII for now") must be accompanied by a guard that raises or logs on non-ASCII input, or by a test that documents the known limitation.
+- A sentinel return (`None`, `""`, `{}`) from a best-effort helper must be documented in the docstring (see STYLE.md:EH-001) and the callsite must handle it — not silently propagate it.
+
+Rationale: Unguarded shortcuts compound: a future implementer sees "returns None sometimes" with no test and no docstring and adds a second shortcut on top, producing a silent failure mode neither author intended.
+
+### WL-003: When NOT to be lazy — mandatory carve-outs
+
+The write-less-code ladder (WL-001) must not be applied when doing so would compromise any of the following. These carve-outs are hard stops, not style preferences:
+
+- **Correctness** — if the simpler form produces wrong output on any input within the spec's stated domain, it is not a valid simplification. Prefer the correct form even if it is longer.
+- **Security** — if the simpler form skips an authentication check, leaks a secret into a log (see STYLE.md:P-003), or introduces an injection surface, do not apply it.
+- **Clarity** — if the simpler form requires a reader to hold significant context to understand what it does, the cost in future reading time exceeds the cost of a slightly longer but self-evident form. A helper with a good name can be cheaper than a one-liner that requires five minutes of archaeology.
+- **Contract adherence** — if the simplification would change a public interface, an event payload schema (see STYLE.md:P-003), or a test invariant, it is out of scope regardless of elegance.
+- **Established STYLE.md rules** — the ladder does not override any EH-*, T-*, C-*, N-*, or P-* rule in this file. Lazy code must still comply with error-handling, naming, and comment conventions.
+
+Rationale: "Lazy" in this context means "minimum necessary", not "minimum effort". The ladder targets gratuitous growth, not necessary rigor.
+
+---
+
 ## Project-specific
 
 ### P-001: Every Python module starts with `from __future__ import annotations`; signatures use modern syntax

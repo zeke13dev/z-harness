@@ -519,6 +519,118 @@ def _config_get(key: str, default: str) -> str:
     return default
 
 
+def _check_compose_argv_precondition(provider_name: str, entry: dict) -> bool:
+    """Return True if the provider entry satisfies the compose_argv precondition.
+
+    compose_argv raises ValueError when model_arg_template is non-null but both
+    effective_model and default_model are empty/null.  When the caller does not
+    supply an effective_model (the common case for [models] override lookups), the
+    only safe precondition is: if model_arg_template is set, default_model must
+    also be set.
+    """
+    model_arg_template = entry.get("model_arg_template")
+    if model_arg_template is None:
+        # v1-style provider: compose_argv returns early, no precondition needed.
+        return True
+    default_model = entry.get("default_model")
+    return bool(default_model)
+
+
+def _peek_consultant_provider(role: str, merged: dict) -> str | None:
+    """Return the provider name a consultant role would resolve to, without exiting.
+
+    Checks the [models] config override first, then falls back to the legacy
+    roles map.  Returns None if neither source has an entry.  Used by
+    _resolve_models_override() to enforce the consultant distinctness invariant
+    across all combinations of override / legacy resolution.
+    """
+    role_key = role.replace("-", "_")
+    override_val = _config_get(f"models.{role_key}", "").strip()
+    if override_val:
+        return override_val
+    roles = merged.get("roles", {})
+    return roles.get(role)
+
+
+def _resolve_models_override(role: str, merged: dict) -> dict | None:
+    """Check [models.<role>] config for a user-supplied vendor/provider selector.
+
+    Maps the incoming role name to the underscore config key (e.g. "pre-reviewer"
+    → "pre_reviewer") and reads the value via config.py get.  Returns:
+      - A provider descriptor dict (same shape as resolve()) when the override is
+        set AND the named provider exists in providers.json AND the compose_argv
+        precondition is met.
+      - None when the config key is empty (sentinel for "use default resolution").
+    Calls sys.exit(1) with the standardised fail-loud message on MISS, DRIFT, or
+    when a consultant role collides with the other consultant role's provider.
+    """
+    role_key = role.replace("-", "_")
+    selection = _config_get(f"models.{role_key}", "").strip()
+    if not selection:
+        return None  # Silent path: fall back to default resolution.
+
+    providers = merged.get("providers", {})
+    entry = providers.get(selection)
+
+    if entry is None:
+        print(
+            f"config.toml [models.{role}] references {selection} not found in "
+            f"providers.json — run /z-providers-discover",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # Schema signature check: compose_argv precondition must be satisfiable.
+    if not _check_compose_argv_precondition(selection, entry):
+        print(
+            f"config.toml [models.{role}] references {selection} not found in "
+            f"providers.json — run /z-providers-discover",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    command = entry.get("command", "")
+    if not shutil.which(command):
+        print(
+            f"[providers] role={role}, provider={selection}, command={command} not on PATH",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # Consultant distinctness: when resolving a consultant role via [models]
+    # override, verify it does not collide with the other consultant role's
+    # resolved provider (which may itself come from a [models] override OR
+    # the legacy roles map).  This mirrors check_consultant_distinctness() but
+    # covers the override path that bypasses it in main().
+    _CONSULTANT_PEER = {
+        "consultant_primary": "consultant_secondary",
+        "consultant_secondary": "consultant_primary",
+    }
+    peer_role = _CONSULTANT_PEER.get(role)
+    if peer_role is not None:
+        peer_provider = _peek_consultant_provider(peer_role, merged)
+        if peer_provider and peer_provider == selection:
+            print(
+                f"[providers] consultant_primary and consultant_secondary must resolve to "
+                f"DISTINCT providers (both are {selection!r})",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    return {
+        "role": role,
+        "provider": selection,
+        "command": command,
+        "args_template": entry.get("args_template", []),
+        "stdin": entry.get("stdin", False),
+        "timeout_s": entry.get("timeout_s", 300),
+        "model_label": entry.get("model_label", ""),
+        "model_arg_template": entry.get("model_arg_template", None),
+        "model_env_var": entry.get("model_env_var", None),
+        "default_model": entry.get("default_model", None),
+    }
+
+
 def main() -> None:
     if len(sys.argv) != 2:
         print("usage: resolve-provider.py <role>", file=sys.stderr)
@@ -547,6 +659,13 @@ def main() -> None:
     for _pname, _entry in _merged_providers.items():
         _config_src = repo_path if _pname in _repo_providers else global_path
         _validate_provider_entry(_pname, _entry, _config_src)
+
+    # [models] override: if the user has set models.<role> in config.toml, resolve
+    # directly to that provider entry and skip the legacy roles-map lookup.
+    override = _resolve_models_override(role, merged)
+    if override is not None:
+        print(json.dumps(override))
+        return
 
     check_consultant_distinctness(role, merged)
 

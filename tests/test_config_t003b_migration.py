@@ -76,16 +76,30 @@ def _run(
 # ---------------------------------------------------------------------------
 
 # (raw_env_name, dotted_key, expected_default_str, test_value_to_set)
+# These aliases appear in BOTH egress (export-env emits them) and ingress (accepted as overrides).
+# All egress names must be Z_HARNESS_-prefixed per the canonical egress contract.
 _T003B_EGRESS_ALIASES = [
     # raw env name                         dotted key                       default        test value
     ("Z_HARNESS_MAX_EXPLORE",              "workflow.max_explore",          "3",           "5"),
     ("Z_HARNESS_PARALLEL",                 "workflow.parallel",             "3",           "5"),
     ("Z_HARNESS_MEMORY_STALE_DAYS",        "workflow.memory_stale_days",    "547",         "365"),
     ("Z_HARNESS_DOC_STALENESS_THRESHOLD",  "docs.staleness_threshold",      "20",          "30"),
-    ("HERMES_MAX_PARALLEL",                "runtime.max_parallel",          "1",           "3"),
+    # runtime.max_parallel: HERMES_MAX_PARALLEL is ingress-only (back-compat); egress emits
+    # Z_HARNESS_RUNTIME_MAX_PARALLEL (the canonical Z_HARNESS_-prefixed transliteration) so that
+    # the export-env output satisfies the Z_HARNESS_-only egress contract.
+    # See _T003B_INGRESS_ONLY_ALIASES for the HERMES_ ingress alias.
+    ("Z_HARNESS_RUNTIME_MAX_PARALLEL",     "runtime.max_parallel",          "1",           "3"),
     ("Z_HARNESS_MAX_PARALLEL_PLANS",       "runtime.max_parallel_plans",    "1",           "2"),
     ("Z_HARNESS_MAX_ATTEMPTS",             "runtime.max_attempts",          "2",           "3"),
     ("Z_HARNESS_MAX_TASK_WALL_MS",         "runtime.max_task_wall_ms",      "2700000",     "1800000"),
+]
+
+# Ingress-only legacy aliases: accepted on ingress (env consulted when TOML is silent),
+# but NOT emitted by export-env because they violate the Z_HARNESS_-only egress contract.
+_T003B_INGRESS_ONLY_ALIASES = [
+    # HERMES_MAX_PARALLEL is the historical legacy name for runtime.max_parallel.
+    # No live shell consumer reads this directly; keeping ingress back-compat only.
+    ("HERMES_MAX_PARALLEL", "runtime.max_parallel", "1", "3"),
 ]
 
 # axioms.auto_extract_post_run: Z_HARNESS_AXIOM_EXTRACT is ingress+egress alias;
@@ -252,8 +266,9 @@ class TestT003bLegacyEnvIngress(unittest.TestCase):
     """Legacy raw env var names are accepted as ingress overrides."""
 
     def test_egress_alias_env_vars_read_on_ingress(self):
-        """Setting the legacy raw env var overrides the config key value."""
-        for raw_env, dotted, _default, test_val in _T003B_EGRESS_ALIASES:
+        """Setting the legacy raw env var overrides the config key value (for egress aliases)."""
+        all_ingress = list(_T003B_EGRESS_ALIASES) + list(_T003B_INGRESS_ONLY_ALIASES)
+        for raw_env, dotted, _default, test_val in all_ingress:
             with self.subTest(raw_env=raw_env, dotted=dotted):
                 r = _run(["get", dotted], extra_env={raw_env: test_val})
                 self.assertEqual(r.returncode, 0,
@@ -329,15 +344,23 @@ class TestT003bExportEnvLegacyNames(unittest.TestCase):
                       msg="export-env must emit Z_HARNESS_AXIOM_EXTRACT for axioms.auto_extract_post_run")
 
     def test_export_does_not_emit_mechanical_names_for_aliased_keys(self):
-        """Keys with legacy aliases must NOT also emit the mechanical transliteration name."""
+        """Keys with egress aliases must NOT also emit the mechanical transliteration name.
+
+        Note: runtime.max_parallel is a special case — its legacy raw name HERMES_MAX_PARALLEL
+        violates the Z_HARNESS_-only egress contract, so it is NOT in _ENV_VAR_ALIASES (egress).
+        The egress name for runtime.max_parallel is the canonical Z_HARNESS_RUNTIME_MAX_PARALLEL
+        transliteration, so that name IS allowed in output (and is NOT in this list).
+        """
         output = self._export_env_output()
-        # These mechanical names should NOT appear since the alias takes precedence:
+        # These mechanical transliteration names should NOT appear because an egress alias
+        # (from _ENV_VAR_ALIASES) takes precedence and is emitted instead:
         mechanical_names_that_must_not_appear = [
             "Z_HARNESS_WORKFLOW_MAX_EXPLORE=",
             "Z_HARNESS_WORKFLOW_PARALLEL=",
             "Z_HARNESS_WORKFLOW_MEMORY_STALE_DAYS=",
             "Z_HARNESS_DOCS_STALENESS_THRESHOLD=",
-            "Z_HARNESS_RUNTIME_MAX_PARALLEL=",
+            # Z_HARNESS_RUNTIME_MAX_PARALLEL= intentionally NOT listed here: it IS the canonical
+            # egress name for runtime.max_parallel (HERMES_MAX_PARALLEL is ingress-only).
             "Z_HARNESS_RUNTIME_MAX_PARALLEL_PLANS=",
             "Z_HARNESS_RUNTIME_MAX_ATTEMPTS=",
             "Z_HARNESS_RUNTIME_MAX_TASK_WALL_MS=",
@@ -347,6 +370,27 @@ class TestT003bExportEnvLegacyNames(unittest.TestCase):
             self.assertNotIn(mech, output,
                              msg=f"export-env emits mechanical name {mech!r} but should emit "
                                  "the legacy alias instead")
+
+    def test_hermes_max_parallel_not_in_egress(self):
+        """HERMES_MAX_PARALLEL must NOT appear in export-env output (violates Z_HARNESS_-only contract).
+
+        HERMES_MAX_PARALLEL is an ingress-only alias (kept for back-compat reading).
+        Egress emits Z_HARNESS_RUNTIME_MAX_PARALLEL instead.
+        """
+        output = self._export_env_output()
+        self.assertNotIn(
+            "HERMES_MAX_PARALLEL",
+            output,
+            msg=(
+                "export-env must not emit HERMES_MAX_PARALLEL (violates Z_HARNESS_-only egress "
+                "contract). It should emit Z_HARNESS_RUNTIME_MAX_PARALLEL instead."
+            ),
+        )
+        self.assertIn(
+            "Z_HARNESS_RUNTIME_MAX_PARALLEL",
+            output,
+            msg="export-env must emit Z_HARNESS_RUNTIME_MAX_PARALLEL for runtime.max_parallel",
+        )
 
 
 # ---------------------------------------------------------------------------

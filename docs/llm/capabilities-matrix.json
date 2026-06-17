@@ -44,6 +44,14 @@
     "flattened": {
       "hosts": ["cursor", "codex"],
       "description": "Transliterated rules, single-agent only. z-harness rules injected via host-native config file. Single-agent /z-* commands run in degraded mode. Multi-agent commands are blocked."
+    },
+    "curated": {
+      "hosts": ["windsurf", "kiro"],
+      "description": "Export-only. Curated rule/steering files with host-specific frontmatter (trigger for Windsurf, inclusion for Kiro). No adapter, no launch/inject. Export via runtime.drivers.<host>.export only."
+    },
+    "pointer": {
+      "hosts": ["cline", "copilot"],
+      "description": "Export-only. Single pointer/instructions file pointing to z-harness capabilities. No adapter, no launch/inject. Export via runtime.drivers.<host>.export only."
     }
   },
   "export_pipeline": {
@@ -86,6 +94,46 @@
         "<dest>/prompts/personas/<name>.md"
       ],
       "collision_domain": "prompts/ stems (excluding AGENTS.md)"
+    },
+    "windsurf": {
+      "stage1": "runtime/drivers/windsurf/export.py::export(harness_root, dest)",
+      "stage2": "none — export-only, no persona export",
+      "fidelity": "curated",
+      "export_only": true,
+      "layout": [
+        "<dest>/.windsurf/rules/<id>.md"
+      ],
+      "structural_rule": "all rule files require YAML frontmatter with 'trigger' key"
+    },
+    "kiro": {
+      "stage1": "runtime/drivers/kiro/export.py::export(harness_root, dest)",
+      "stage2": "none — export-only, no persona export",
+      "fidelity": "curated",
+      "export_only": true,
+      "layout": [
+        "<dest>/.kiro/steering/<id>.md"
+      ],
+      "structural_rule": "all steering files require YAML frontmatter with 'inclusion' key"
+    },
+    "cline": {
+      "stage1": "runtime/drivers/cline/export.py::export(harness_root, dest)",
+      "stage2": "none — export-only, no persona export",
+      "fidelity": "pointer",
+      "export_only": true,
+      "layout": [
+        "<dest>/.clinerules/z-harness.md"
+      ],
+      "structural_rule": "single pointer file, plain markdown, non-empty body required"
+    },
+    "copilot": {
+      "stage1": "runtime/drivers/copilot/export.py::export(harness_root, dest)",
+      "stage2": "none — export-only, no persona export",
+      "fidelity": "pointer",
+      "export_only": true,
+      "layout": [
+        "<dest>/.github/copilot-instructions.md"
+      ],
+      "structural_rule": "single instructions file, plain markdown, non-empty body required"
     }
   },
   "per_host": {
@@ -141,15 +189,53 @@
       "plugin_root_env": "CLAUDE_PLUGIN_ROOT",
       "config_injection": "AGENTS.md",
       "mcp_note": "Global/persistent write to ~/.codex/config.toml via runtime.drivers.codex.mcp.ensure_mcp_registered(); not reversed by ephemeral cleanup (F4)"
+    },
+    "windsurf": {
+      "binary": null,
+      "fidelity_tier": "curated",
+      "export_only": true,
+      "note": "No HostAdapter, no adapter-registry entry, no launch/inject support. Export via runtime.drivers.windsurf.export only.",
+      "export_layout": ".windsurf/rules/<id>.md",
+      "structural_rule": "trigger frontmatter key required on all rule files",
+      "runtime_module": "runtime.drivers.windsurf.export"
+    },
+    "kiro": {
+      "binary": null,
+      "fidelity_tier": "curated",
+      "export_only": true,
+      "note": "No HostAdapter, no adapter-registry entry, no launch/inject support. Export via runtime.drivers.kiro.export only.",
+      "export_layout": ".kiro/steering/<id>.md",
+      "structural_rule": "inclusion frontmatter key required on all steering files",
+      "runtime_module": "runtime.drivers.kiro.export"
+    },
+    "cline": {
+      "binary": null,
+      "fidelity_tier": "pointer",
+      "export_only": true,
+      "note": "No HostAdapter, no adapter-registry entry, no launch/inject support. Export via runtime.drivers.cline.export only.",
+      "export_layout": ".clinerules/z-harness.md",
+      "structural_rule": "single pointer file, plain markdown, non-empty body",
+      "runtime_module": "runtime.drivers.cline.export"
+    },
+    "copilot": {
+      "binary": null,
+      "fidelity_tier": "pointer",
+      "export_only": true,
+      "note": "No HostAdapter, no adapter-registry entry, no launch/inject support. Export via runtime.drivers.copilot.export only.",
+      "export_layout": ".github/copilot-instructions.md",
+      "structural_rule": "single instructions file, plain markdown, non-empty body",
+      "runtime_module": "runtime.drivers.copilot.export"
     }
   },
   "command_tiers": {
-    "note": "Multi-agent commands are 'degraded' on high-fidelity hosts and 'blocked' on flattened hosts. All other /z-* commands are 'native' on claude, 'native' on antigravity, and 'degraded' on cursor/codex.",
+    "note": "Multi-agent commands are 'degraded' on high-fidelity hosts and 'blocked' on flattened hosts. All other /z-* commands are 'native' on claude, 'native' on antigravity, and 'degraded' on cursor/codex. Export-only hosts (windsurf/kiro/cline/copilot) have no command-tier registration — they are not in the adapter registry.",
     "multi_agent_commands": ["z-implement-all", "z-panel", "z-consult", "z-gate"],
     "per_tier": {
       "native": {"multi_agent": "native", "single_agent": "native"},
       "high": {"multi_agent": "degraded", "single_agent": "native"},
-      "flattened": {"multi_agent": "blocked", "single_agent": "degraded"}
+      "flattened": {"multi_agent": "blocked", "single_agent": "degraded"},
+      "curated": "export-only — no command tiers; not in adapter registry",
+      "pointer": "export-only — no command tiers; not in adapter registry"
     }
   },
   "invariants": [
@@ -162,7 +248,8 @@
     "ExportResult must be imported from z_harness_cli.adapters.base, not from runtime.drivers._export_utils directly (one-way layering)",
     "ClaudeAdapter.export_payload is persona-only; Stage 1 runtime export is not run (native plugin handles commands/skills)",
     "non-empty Stage-1 warnings raise RuntimeError immediately (legacy hard-gate; no silent downgrade)",
-    "persona-name collision with Stage-1 exported ids raises RuntimeError (MINOR-6)"
+    "persona-name collision with Stage-1 exported ids raises RuntimeError (MINOR-6)",
+    "windsurf/kiro/cline/copilot are export-only: no adapter module at z_harness_cli/adapters/<host>.py, no registry entry, no command tiers (M5 invariant — validated by TestAdapterAbsence in test_export_golden.py)"
   ],
   "gotchas": [
     "cursor and codex both declare fidelity=flattened but differ in MCP surface: cursor has supports_user_mcp=True, codex does not",
@@ -171,7 +258,8 @@
     "cursor needs_trust_prompt=True means inject() must not assume non-interactive; surface the prompt via PTY",
     "canonical adapter order in registry: claude (native) > antigravity (high) > cursor (flattened) > codex (flattened)",
     "register_command_tiers() raises ValueError at import time if KNOWN_COMMANDS entry is missing — misconfigured adapters fail fast",
-    "antigravity collision domain is workflows/rules/skills stems (with z-harness- prefix stripped from rules); cursor uses .cursor/rules/ stems; codex uses prompts/ stems only (AGENTS.md excluded)"
+    "antigravity collision domain is workflows/rules/skills stems (with z-harness- prefix stripped from rules); cursor uses .cursor/rules/ stems; codex uses prompts/ stems only (AGENTS.md excluded)",
+    "windsurf/kiro/cline/copilot are NOT adapters: registry.select(<host>) raises UnknownHostError for them; z_harness_cli/adapters/ has no module for them"
   ],
   "memories": []
 }

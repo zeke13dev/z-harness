@@ -260,11 +260,11 @@ Skip this phase if either TESTS.md or test-runner.json is absent (no harm — ol
 
 ## Phase 3.6 — Pre-review cycle (opt-in)
 
-**Opt-in gate:** Only runs if `Z_HARNESS_PRE_REVIEW` is set to `1` (env var). Check at phase start:
+**Opt-in gate:** Only runs if `runtime.pre_review` is `true` in config. Check at phase start:
 
 ```bash
-if [ "${Z_HARNESS_PRE_REVIEW:-0}" != "1" ]; then
-  echo "Pre-review cycle skipped (Z_HARNESS_PRE_REVIEW != 1)"
+if [ "$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get runtime.pre_review 2>/dev/null)" != "true" ]; then
+  echo "Pre-review cycle skipped (runtime.pre_review != true)"
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" pre_review_skipped \
     '{"reason":"opt_in_disabled"}'
   # Jump to Phase 3.7
@@ -1639,7 +1639,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-decision.sh" \
 - `--options` — full list of offered option labels as a JSON array.
 - `--tentative` — the orchestrator's recommended option label; omit when the orchestrator had no recommendation.
 
-Emission is gated by `Z_HARNESS_AXIOM_EXTRACT` (default on); when set to `"0"`, the script exits silently — no guard is needed here. Do **not** modify existing structured gate events (`cost_gate_decision`, `critique_failure_decision`, `map_collision_decision`, `shared_concerns_ack_override`); those are normalized separately by the extractor. This emission **records signal only** — it never approves, overrides, or influences any decision (proposes-only invariant).
+Emission is gated by `axioms.auto_extract_post_run` (default `true`); when `false`, the script exits silently — no guard is needed here. Do **not** modify existing structured gate events (`cost_gate_decision`, `critique_failure_decision`, `map_collision_decision`, `shared_concerns_ack_override`); those are normalized separately by the extractor. This emission **records signal only** — it never approves, overrides, or influences any decision (proposes-only invariant).
 
 ## Hard rules
 

@@ -25,11 +25,30 @@ ExportResult
     Canonical export result dataclass (BLOCKER-1).  Owned here so
     ``runtime/drivers/<t>/export.py`` never imports up into ``z_harness_cli``.
     ``z_harness_cli/adapters/base.py`` re-exports / wraps this type.
+
+Strategy helpers (T010)
+-----------------------
+_ALWAYS_ON_AGENTS
+    Frozenset of agent IDs that receive ``trigger: always_on`` in Antigravity.
+    Single source of truth — ``runtime/drivers/antigravity/export.py`` imports
+    this constant back from here.
+
+select_sources(strategy, sources, *, pointer_doc=None) -> dict
+    Pure helper: given a strategy + enumerated sources dict, returns the subset
+    dict to emit.  ``pointer`` → one-entry dict with a pointer doc;
+    ``curated`` → agents filtered to ``_ALWAYS_ON_AGENTS``; ``full`` → all.
+
+resolve_strategy(default_strategy, repo_root=None) -> str
+    Read ``export.strategy`` from ``config.py get`` (subprocess), falling back
+    to *default_strategy* when the config read fails or returns nothing.
+    Pure/injectable for testing via the *repo_root* argument.
 """
 
 from __future__ import annotations
 
 import re
+import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -404,6 +423,161 @@ def output_path_for(repo_root: Path, target: str, kind: str, id: str) -> Path:
 
     relative = kind_map[kind].format(id=id)
     return repo_root / "exports" / target / relative
+
+
+# ---------------------------------------------------------------------------
+# Strategy helpers (T010)
+# ---------------------------------------------------------------------------
+
+#: Agent IDs that receive ``trigger: always_on`` in Antigravity.
+#:
+#: This set is the single source of truth.  ``runtime/drivers/antigravity/export.py``
+#: imports it from here so both files stay in sync automatically.
+#: Preserved exactly from the legacy ``scripts/export-agy.py``.
+_ALWAYS_ON_AGENTS: frozenset[str] = frozenset(
+    {
+        "implementer",
+        "reviewer",
+        "auditor",
+        "mr-reviewer",
+        "remote-runner",
+    }
+)
+
+#: Valid strategy names (mirrors ``export.strategy`` allowed set in config.py).
+_VALID_STRATEGIES: frozenset[str] = frozenset({"pointer", "curated", "full"})
+
+#: Sentinel entry used by the ``pointer`` strategy.  It represents a single
+#: capabilities-pointer doc emitted in place of all real sources.
+_POINTER_ENTRY: dict[str, Any] = {
+    "id": "z-harness-pointer",
+    "source_path": None,
+    "frontmatter": {
+        "description": "z-harness capabilities pointer — see CAPABILITIES.md for the full feature set",
+    },
+    "body": (
+        "# z-harness — Capabilities Pointer\n\n"
+        "This IDE has been configured with the z-harness *pointer* export strategy.\n"
+        "Only this single rule file is emitted.\n\n"
+        "See `CAPABILITIES.md` for the full list of commands, agents, and skills\n"
+        "available when a host supports on-demand inclusion.\n"
+    ),
+}
+
+
+def select_sources(
+    strategy: str,
+    sources: dict[str, list[dict[str, Any]]],
+    *,
+    pointer_doc: dict[str, Any] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Return the subset of *sources* to emit based on *strategy*.
+
+    Parameters
+    ----------
+    strategy:
+        One of ``"pointer"``, ``"curated"``, or ``"full"``.
+    sources:
+        The full enumerated source dict (keys: ``commands``, ``agents``,
+        ``skills``) as returned by :func:`enumerate_sources`.
+    pointer_doc:
+        Optional override for the pointer entry emitted by the ``pointer``
+        strategy.  Defaults to :data:`_POINTER_ENTRY`.
+
+    Returns
+    -------
+    dict
+        A new dict with the same key structure as *sources* but containing
+        only the entries that the chosen strategy selects:
+
+        - ``pointer`` — one entry in ``agents`` (the pointer doc); ``commands``
+          and ``skills`` are empty.
+        - ``curated``  — ``agents`` filtered to :data:`_ALWAYS_ON_AGENTS`;
+          ``commands`` and ``skills`` passed through as-is.
+        - ``full``     — *sources* returned unchanged.
+
+    Raises
+    ------
+    ValueError
+        When *strategy* is not one of the three recognised values.
+    """
+    if strategy not in _VALID_STRATEGIES:
+        raise ValueError(
+            f"Unknown strategy {strategy!r}. Valid strategies: {sorted(_VALID_STRATEGIES)}"
+        )
+
+    if strategy == "full":
+        return {
+            "commands": list(sources.get("commands", [])),
+            "agents":   list(sources.get("agents", [])),
+            "skills":   list(sources.get("skills", [])),
+        }
+
+    if strategy == "curated":
+        curated_agents = [
+            entry for entry in sources.get("agents", [])
+            if entry["id"] in _ALWAYS_ON_AGENTS
+        ]
+        return {
+            "commands": list(sources.get("commands", [])),
+            "agents":   curated_agents,
+            "skills":   list(sources.get("skills", [])),
+        }
+
+    # strategy == "pointer"
+    doc = pointer_doc if pointer_doc is not None else _POINTER_ENTRY
+    return {
+        "commands": [],
+        "agents":   [doc],
+        "skills":   [],
+    }
+
+
+def resolve_strategy(
+    default_strategy: str,
+    repo_root: Path | str | None = None,
+) -> str:
+    """Return the effective export strategy.
+
+    Calls ``python3 scripts/config.py get export.strategy`` (subprocess) and
+    returns the result.  Falls back to *default_strategy* when:
+
+    - *repo_root* is ``None`` or ``scripts/config.py`` does not exist there,
+    - the subprocess exits non-zero (config key absent / not set),
+    - the returned value is empty or not a recognised strategy.
+
+    Parameters
+    ----------
+    default_strategy:
+        Per-driver fallback.  Used when the config read produces no value.
+        Must be one of ``"pointer"``, ``"curated"``, or ``"full"``.
+    repo_root:
+        Absolute path to the repo root that owns ``scripts/config.py``.
+        Inject a different path in unit tests to avoid touching the real repo.
+
+    Returns
+    -------
+    str
+        The effective strategy: a member of ``{"pointer", "curated", "full"}``.
+    """
+    if repo_root is not None:
+        config_script = Path(repo_root) / "scripts" / "config.py"
+        if config_script.is_file():
+            try:
+                result = subprocess.run(
+                    [sys.executable, str(config_script), "get", "export.strategy"],
+                    capture_output=True,
+                    text=True,
+                    cwd=str(repo_root),
+                )
+                if result.returncode == 0:
+                    value = result.stdout.strip()
+                    if value in _VALID_STRATEGIES:
+                        return value
+            except OSError:
+                pass
+
+    return default_strategy
 
 
 # ---------------------------------------------------------------------------

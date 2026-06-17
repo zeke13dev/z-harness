@@ -132,15 +132,19 @@
         "z_harness_cli/adapters/cursor.py",
         "z_harness_cli/adapters/codex.py",
         "z_harness_cli/adapters/base.py",
-        "z_harness_cli/adapters/registry.py"
+        "z_harness_cli/adapters/registry.py",
+        "runtime/drivers/windsurf/export.py",
+        "runtime/drivers/kiro/export.py",
+        "runtime/drivers/cline/export.py",
+        "runtime/drivers/copilot/export.py"
       ],
-      "last_updated": "2026-06-11",
+      "last_updated": "2026-06-16",
       "confidence": "high",
       "depends_on": [
         "multi-ide-exports"
       ],
       "consumed_by": [],
-      "summary": "Per-host fidelity tiers and command-capability grid for the z-harness CLI adapters. native (claude) = full orchestration + native personas; high (antigravity) = native skills/personas, single-agent, multi-agent commands degraded; flattened (cursor, codex) = transliterated rules, single-agent, multi-agent commands blocked."
+      "summary": "Per-host fidelity tiers and command-capability grid for all z-harness export targets. Adapter hosts: native (claude) = full orchestration; high (antigravity) = native skills, multi-agent degraded; flattened (cursor, codex) = transliterated rules, multi-agent blocked. Export-only hosts (windsurf=curated rules with trigger frontmatter; kiro=curated steering with inclusion frontmatter; cline=single pointer file; copilot=single instructions file) have NO adapter-registry entry — registry.select() raises UnknownHostError for them (M5 invariant)."
     },
     {
       "slug": "commands",

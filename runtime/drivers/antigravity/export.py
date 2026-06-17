@@ -60,20 +60,21 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from runtime.drivers._export_utils import ExportResult, enumerate_sources, validate_capabilities
+from runtime.drivers._export_utils import (
+    ExportResult,
+    _ALWAYS_ON_AGENTS,
+    enumerate_sources,
+    validate_capabilities,
+)
 
 
 # ---------------------------------------------------------------------------
-# Always-on agent set (preserved exactly from legacy export-agy.py)
+# Always-on agent set (imported from _export_utils — single source of truth)
 # ---------------------------------------------------------------------------
 
-_ALWAYS_ON_AGENTS = {
-    "implementer",
-    "reviewer",
-    "auditor",
-    "mr-reviewer",
-    "remote-runner",
-}
+# _ALWAYS_ON_AGENTS is defined in runtime/drivers/_export_utils.py (T010).
+# It is imported above so antigravity/export.py and any helper that calls
+# select_sources(..., strategy="curated") always use the same set.
 
 
 # ---------------------------------------------------------------------------

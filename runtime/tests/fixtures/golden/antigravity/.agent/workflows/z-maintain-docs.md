@@ -123,7 +123,7 @@ For each stale concept, spawn a `doc-updater` subagent. **Always pass `mode: dry
 )
 ```
 
-Up to 3 in parallel per batch (`Z_HARNESS_PARALLEL=N` env override).
+Up to 3 in parallel per batch (`workflow.parallel` config key).
 
 When each doc-updater returns, check its `MEMORIES_PRESERVED: <N>` value against the stored baseline:
 
@@ -250,7 +250,7 @@ Default selection: `Skip this concept` for `audit rejected`; `Apply anyway` for 
 
 After presenting the doc diffs, scan every `docs/llm/<slug>.json` for memories where either:
 - `expires` is present and `expires < today`, OR
-- `date < today - $Z_HARNESS_MEMORY_STALE_DAYS` (default 547 days)
+- `date < today - <workflow.memory_stale_days>` (default 547 days; read via `config.py get workflow.memory_stale_days`)
 
 For each stale memory, display it as:
 

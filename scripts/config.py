@@ -138,15 +138,46 @@ DEFAULTS: dict = {
         "pause_at_pct": 85,         # int>0: context fill % at which to pause; 85 = pause at 85%
         # Resolver verbosity. Exported as Z_HARNESS_EXPLAIN_RESOLUTION.
         "explain_resolution": False,  # bool: print resolver decision tree to stderr
-        # Parallelism knobs. Exported as HERMES_MAX_PARALLEL / Z_HARNESS_MAX_PARALLEL_PLANS.
+        # Parallelism knobs. Exported as Z_HARNESS_RUNTIME_MAX_PARALLEL / Z_HARNESS_MAX_PARALLEL_PLANS.
+        # (Ingress also accepts legacy HERMES_MAX_PARALLEL via _INGRESS_LEGACY_ALIASES.)
         "max_parallel": 1,            # int>0: max concurrent workstream sessions (within-plan)
         "max_parallel_plans": 1,      # int>0: max concurrent plan runs (cross-plan)
         # Per-task attempt / wall-clock caps. Exported as Z_HARNESS_MAX_ATTEMPTS / Z_HARNESS_MAX_TASK_WALL_MS.
         "max_attempts": 2,            # int>0: max implementer attempts per task in /z-implement-all
         "max_task_wall_ms": 2700000,  # int>0: per-task wall-clock cap in ms (default 45 min)
+        # Deprecation enforcement. When true, detecting a preference-class env var
+        # (any var in _collect_deprecated_env_vars()) is a hard ERROR (non-zero exit)
+        # instead of a non-fatal warning.  Default false (grace period).
+        # Set via config.toml [runtime] env_strict = true — NOT a raw env var.
+        "env_strict": False,          # bool: upgrade deprecation warnings to errors
     },
     "cost": {
         "token_budget": None,             # int > 0 or None (unset)
+    },
+    "models": {
+        # Per-role model overrides.  Empty string = absent (use provider default).
+        # Validity of the model/vendor string is cross-checked against providers.json
+        # at RESOLVE time (T007), NOT at config-load time.
+        "consultant_primary":   "",   # model for the primary consultant role
+        "consultant_secondary": "",   # model for the secondary consultant role
+        "reviewer":             "",   # model for the reviewer role
+        "implementer":          "",   # model for the implementer role
+        "pre_reviewer":         "",   # model for the pre-reviewer role
+    },
+    "export": {
+        # Which export hosts to target.  Absent → all four current defaults.
+        # Closed set: adapter names {claude, antigravity, cursor, codex} ∪
+        # export-only driver names {pi, windsurf, cline, kiro, copilot}.
+        # Env transport: Z_HARNESS_EXPORT_HOSTS as JSON-encoded array string.
+        "hosts": ["cursor", "codex", "agy", "pi"],  # default = current "all" set
+        # Export strategy enum.  Each driver interprets it for its host.
+        # pointer  — single capabilities-pointer rule file
+        # curated  — always-on agent subset (mirrors agy _ALWAYS_ON_AGENTS)
+        # full     — one file per source (only for hosts with on-demand inclusion)
+        # ""       — sentinel: defer to per-driver default (no global override).
+        #            Absent [export] section → each driver uses its own default_strategy
+        #            (e.g. cline → pointer, windsurf/kiro → curated).
+        "strategy": "",  # empty sentinel = defer to per-driver default
     },
 }
 
@@ -190,6 +221,46 @@ def _validate_positive_int_or_none(value: object) -> bool:
     if value is None:
         return True
     return _validate_positive_int(value)
+
+
+def _validate_any_string(value: object) -> bool:
+    """Accept any string value (including empty string).
+
+    Used for models.* keys where validity is cross-checked at resolve time
+    against providers.json, not at config-load time.  Empty string is the
+    sentinel meaning "absent — use provider default resolution".
+    """
+    return isinstance(value, str)
+
+
+# Closed set of valid export host names:
+#   adapter names (handled by z_harness_cli adapters)
+#   export-only driver names (handled by runtime/drivers/<name>/export.py)
+_EXPORT_VALID_HOSTS: frozenset[str] = frozenset({
+    "claude", "antigravity", "cursor", "codex",          # adapter names
+    "pi", "windsurf", "cline", "kiro", "copilot",        # export-only driver names
+    "agy",                                                # alias for antigravity used in z-export.md
+})
+
+
+def _validate_export_hosts(value: object) -> bool:
+    """Accept a list of valid export host names, or a JSON-encoded list string (env layer).
+
+    Valid host names are the union of adapter names {claude, antigravity, agy,
+    cursor, codex} and export-only driver names {pi, windsurf, cline, kiro,
+    copilot}.  Unknown names are rejected.  The list must be non-empty.
+    """
+    if isinstance(value, str):
+        # Env-layer transport: JSON-encoded list, e.g. '["cursor","codex"]'
+        try:
+            value = json.loads(value)
+        except (json.JSONDecodeError, ValueError):
+            return False
+    if not isinstance(value, list):
+        return False
+    if not value:
+        return False  # empty list is not meaningful
+    return all(isinstance(h, str) and h in _EXPORT_VALID_HOSTS for h in value)
 
 
 # halt_category is per-question-id metadata, NOT a user-settable TOML key. This
@@ -247,6 +318,19 @@ VALIDATORS: dict = {
     "runtime.max_parallel_plans":   _validate_positive_int,
     "runtime.max_attempts":         _validate_positive_int,
     "runtime.max_task_wall_ms":     _validate_positive_int,
+    "runtime.env_strict":           _validate_bool,
+    # models.* — any string (including empty) is valid; cross-checked at resolve time (T007)
+    "models.consultant_primary":   _validate_any_string,
+    "models.consultant_secondary": _validate_any_string,
+    "models.reviewer":             _validate_any_string,
+    "models.implementer":          _validate_any_string,
+    "models.pre_reviewer":         _validate_any_string,
+    # export.* — closed-set validation at load time (T008)
+    "export.hosts":    _validate_export_hosts,
+    # "" is the sentinel meaning "defer to per-driver default".
+    # Users may also explicitly set pointer|curated|full to override globally.
+    # Any other value is rejected.
+    "export.strategy": {"", "pointer", "curated", "full"},
 }
 
 # Coercers: applied after validation to normalize values (esp. env-var strings).
@@ -344,6 +428,13 @@ _COERCERS: dict[str, object] = {
     ),
     "runtime.max_task_wall_ms": lambda v: (
         v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    "runtime.env_strict": lambda v: (
+        v if isinstance(v, bool) else v.lower() == "true"
+    ),
+    # T008 — export.hosts: env transport is JSON-encoded array string; coerce to list
+    "export.hosts": lambda v: (
+        v if isinstance(v, list) else json.loads(v)
     ),
 }
 
@@ -602,7 +693,12 @@ _ENV_VAR_ALIASES: dict[str, str] = {
     "workflow.max_explore":       "Z_HARNESS_MAX_EXPLORE",                # raw has no WORKFLOW_ prefix
     "workflow.parallel":          "Z_HARNESS_PARALLEL",                   # raw has no WORKFLOW_ prefix
     "workflow.memory_stale_days": "Z_HARNESS_MEMORY_STALE_DAYS",          # raw has no WORKFLOW_ prefix
-    "runtime.max_parallel":       "HERMES_MAX_PARALLEL",                  # raw uses HERMES_ not Z_HARNESS_RUNTIME_
+    # runtime.max_parallel intentionally NOT aliased here: its legacy raw name is
+    # HERMES_MAX_PARALLEL (HERMES_ prefix), which is not a Z_HARNESS_-prefixed key.
+    # Emitting a HERMES_-prefixed key on egress violates the canonical Z_HARNESS_-only
+    # contract for export-env output.  The ingress alias (kept in _INGRESS_LEGACY_ALIASES
+    # below) still reads HERMES_MAX_PARALLEL for backward-compat; egress emits the
+    # canonical Z_HARNESS_RUNTIME_MAX_PARALLEL transliteration.
     "runtime.max_parallel_plans": "Z_HARNESS_MAX_PARALLEL_PLANS",         # raw has no RUNTIME_ infix
     "runtime.max_attempts":       "Z_HARNESS_MAX_ATTEMPTS",               # raw has no RUNTIME_ infix
     "runtime.max_task_wall_ms":   "Z_HARNESS_MAX_TASK_WALL_MS",           # raw has no RUNTIME_ infix
@@ -623,7 +719,74 @@ _ENV_VAR_ALIASES: dict[str, str] = {
 _INGRESS_LEGACY_ALIASES: dict[str, str] = {
     **_ENV_VAR_ALIASES,                     # dotted_key → legacy export name (also valid for ingress)
     "notify.level": "Z_HARNESS_NOTIFY",     # notify.level → Z_HARNESS_NOTIFY (ingress-only legacy lookup)
+    # runtime.max_parallel was removed from _ENV_VAR_ALIASES (egress) because its legacy name
+    # HERMES_MAX_PARALLEL violates the Z_HARNESS_-only egress contract.  The ingress alias is
+    # kept here so that HERMES_MAX_PARALLEL env values are still accepted on ingress (back-compat).
+    "runtime.max_parallel": "HERMES_MAX_PARALLEL",
 }
+
+
+# ---------------------------------------------------------------------------
+# Legal-env allowlist (T001)
+#
+# LEGAL_ENV_KEYS   — exact full env var names that are always authoritative.
+# LEGAL_ENV_PREFIXES — prefix strings; any env var whose name starts with one
+#                      of these is in the allowlist.
+#
+# The allowlist has two categories:
+#   (1) Plumbing  — per-run values set BY the orchestrator, cannot be static
+#       config (e.g. PLAN_DIR, SLUG, RUN, SESSION_ID).
+#   (2) Unattended-entry — per-invocation flags controlling overnight/CI
+#       autonomy gates (NO_ASK, ASK_ALL, OVERNIGHT_AUTODECIDE*, CLAIM_*,
+#       REGISTRY_*).
+#
+# Every Z_HARNESS_<SECTION>_<KEY> transliteration (and its legacy alias) for
+# a key in DEFAULTS is a *preference* env var; it is NOT in this allowlist.
+# load_config() uses this allowlist to skip env override when TOML has already
+# provided a value for a preference key (TOML wins).
+# ---------------------------------------------------------------------------
+
+LEGAL_ENV_KEYS: frozenset[str] = frozenset({
+    # ── Plumbing — per-run session/path identifiers ──
+    "Z_HARNESS_PLAN_DIR",
+    "Z_HARNESS_SLUG",
+    "Z_HARNESS_RUN",
+    "Z_HARNESS_RUN_ID",
+    "Z_HARNESS_SESSION_ID",
+    "Z_HARNESS_PLUGIN_ROOT",
+    "ANTIGRAVITY_PLUGIN_ROOT",          # alternate plugin-root name used in some contexts
+    "Z_HARNESS_BASE_DIR",
+    "Z_HARNESS_PLANS_DIR",
+    "Z_HARNESS_ROOT",
+    "Z_HARNESS_TASK_ID",
+    "Z_HARNESS_ATTEMPT_ID",
+    "Z_HARNESS_PARENT_RUN_ID",
+    "Z_HARNESS_PARENT_COMMAND",
+    "Z_HARNESS_REPO_CONFIG",
+    "Z_HARNESS_REPO_PROVIDERS",
+    # ── Unattended-entry — autonomy/overnight/CI gate flags ──
+    "Z_HARNESS_NO_ASK",
+    "Z_HARNESS_ASK_ALL",
+    "Z_HARNESS_OVERNIGHT_AUTODECIDE",
+    "Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE",
+    "Z_HARNESS_STRICT_OVERLAP",
+    # ── Active-plan registry (env-only, read inline) ──
+    "Z_HARNESS_EXTERNAL_DEFAULT",
+    "Z_HARNESS_REGISTRY_ENABLED",
+    "Z_HARNESS_REGISTRY_STALE_SECS",
+})
+
+LEGAL_ENV_PREFIXES: tuple[str, ...] = (
+    "Z_HARNESS_CLAIM_",     # Z_HARNESS_CLAIM_TTL_SECS, Z_HARNESS_CLAIM_OVERRIDE, Z_HARNESS_CLAIM_DISABLE
+    "Z_HARNESS_REGISTRY_",  # Z_HARNESS_REGISTRY_ENABLED, Z_HARNESS_REGISTRY_STALE_SECS
+)
+
+
+def _is_legal_env(var_name: str) -> bool:
+    """Return True if the env var is a plumbing/unattended var (not a preference var)."""
+    if var_name in LEGAL_ENV_KEYS:
+        return True
+    return any(var_name.startswith(pfx) for pfx in LEGAL_ENV_PREFIXES)
 
 
 # ---------------------------------------------------------------------------
@@ -959,11 +1122,22 @@ def load_config() -> tuple[dict[str, object], dict[str, str]]:
                     values[dotted] = v
                     sources[dotted] = str(repo_path)
 
-    # Layer 4: Env vars
+    # Layer 4: Env vars — TOML wins (T001 ingress-ignore gate)
+    #
+    # Preference-class env vars (Z_HARNESS_<SECTION>_<KEY> transliterations and
+    # their legacy aliases) do NOT override a value that was already set by a TOML
+    # layer (global or repo).  The env is still consulted when the key's source is
+    # "defaults" (i.e. TOML was silent), so existing tests and migration aliases
+    # continue to work for keys not yet written to config.toml.
+    #
     # For each config key, check (a) transliteration var and (b) legacy alias var
     # (when the raw name differs from transliteration). The transliteration takes
     # precedence when both are set.
     for dotted_key in list(flat_defaults.keys()):
+        # TOML-wins gate: skip env lookup if a TOML layer already provided this key.
+        if sources.get(dotted_key, "defaults") != "defaults":
+            continue
+
         transliteration = _dotted_to_env(dotted_key)
         env_val = os.environ.get(transliteration, "")
         env_var = transliteration
@@ -986,7 +1160,60 @@ def load_config() -> tuple[dict[str, object], dict[str, str]]:
         values[dotted_key] = env_val
         sources[dotted_key] = f"env {env_var}"
 
+    # Deprecation surface (T005): warn (or error) when preference-class env vars
+    # are detected in the raw environment.  This runs after all layers are built
+    # so we can read runtime.env_strict from the resolved config.
+    _check_deprecated_env_vars(values)
+
     return values, sources
+
+
+def _check_deprecated_env_vars(values: dict) -> None:
+    """
+    Emit deprecation warnings (or a hard error) for preference-class env vars
+    that the user has set in the raw process environment.
+
+    When ``runtime.env_strict`` is ``True`` (set via config.toml [runtime]
+    env_strict = true, NOT a raw env var), finding any such var is a hard ERROR:
+    prints all offenders to stderr and exits non-zero (exit code 2).
+
+    When ``runtime.env_strict`` is ``False`` (the default), emits a non-fatal
+    WARNING to stderr for each offender and continues.
+
+    Reuses ``_collect_deprecated_env_vars()`` — the same set that
+    ``cmd_export_env`` uses for ``unset`` lines — so there is no drift between
+    the two surfaces.
+    """
+    deprecated = _collect_deprecated_env_vars()
+    if not deprecated:
+        return
+
+    env_strict = values.get("runtime.env_strict", False)
+    if isinstance(env_strict, str):
+        env_strict = env_strict.lower() == "true"
+
+    lines = []
+    for dotted_key, vars_list in sorted(deprecated.items()):
+        for var in vars_list:
+            lines.append(
+                f"[config] DEPRECATED: preference env var {var!r} is set "
+                f"(maps to config key {dotted_key!r}). "
+                "Set it in config.toml instead: "
+                f"run `config.py ensure-defaults` then edit [runtime] / relevant section."
+            )
+
+    if env_strict:
+        for line in lines:
+            print(line, file=sys.stderr)
+        print(
+            "[config] ERROR: runtime.env_strict = true — deprecated preference env vars "
+            "are not allowed. Unset the vars above or migrate them to config.toml.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    else:
+        for line in lines:
+            print(f"WARNING: {line}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -1062,10 +1289,13 @@ def cmd_get(args: list[str]) -> None:
             file=sys.stderr,
         )
         sys.exit(3)
-    # Print raw scalar (no quotes, no shlex)
+    # Print raw scalar (no quotes, no shlex).
+    # Lists are printed as JSON arrays for shell-safe consumption.
     val = values[key]
     if isinstance(val, bool):
         print("true" if val else "false")
+    elif isinstance(val, list):
+        print(json.dumps(val))
     else:
         print(val)
 
@@ -1099,8 +1329,89 @@ def cmd_get_batch(args: list[str]) -> None:
     print(json.dumps(result))
 
 
+def _collect_deprecated_env_vars() -> dict[str, list[str]]:
+    """
+    Return a mapping of dotted_key → [env_var_names] for all preference env
+    vars that the user has set in the raw process environment (os.environ) and
+    that are NOT allowlisted (plumbing / unattended).
+
+    Used by cmd_export_env to emit ``unset`` lines before the corresponding
+    ``export`` line.  The unset is COSMETIC single-shell cleanup only — it
+    removes stale preference vars from the caller's shell so they don't
+    inadvertently shadow a later eval.  Correctness across Bash tool calls
+    (where the env is reset between calls) comes from T004's ``config.py get``
+    conversion, not this unset.
+
+    Both the mechanical transliteration (Z_HARNESS_<SECTION>_<KEY>) and the
+    legacy alias (from _INGRESS_LEGACY_ALIASES) are checked; all that are
+    actually set in os.environ and not allowlisted are collected.  Allowlisted
+    vars (LEGAL_ENV_KEYS / LEGAL_ENV_PREFIXES) are never included.
+    """
+    result: dict[str, list[str]] = {}
+    flat_defaults = _flatten_defaults()
+    for dotted_key in flat_defaults:
+        transliteration = _dotted_to_env(dotted_key)
+        alias = _INGRESS_LEGACY_ALIASES.get(dotted_key)
+        candidates = [transliteration]
+        if alias and alias != transliteration:
+            candidates.append(alias)
+        deprecated = []
+        for var in candidates:
+            if _is_legal_env(var):
+                continue  # allowlisted — never unset
+            if os.environ.get(var, "") != "":
+                deprecated.append(var)
+        if deprecated:
+            result[dotted_key] = deprecated
+    return result
+
+
+def _emit_config_env_deprecated(env_var: str, dotted_key: str) -> None:
+    """
+    Emit a config_env_deprecated event via log-event.sh for one deprecated
+    preference env var.  Non-fatal: silently skips if $Z_HARNESS_RUN is unset
+    or log-event.sh is unavailable.
+    """
+    run_id = os.environ.get("Z_HARNESS_RUN", "")
+    if not run_id:
+        return
+
+    script_dir = Path(__file__).parent
+    log_event = script_dir / "log-event.sh"
+    if not log_event.exists() or not shutil.which("bash"):
+        return
+
+    payload = json.dumps({"env_var": env_var, "dotted_key": dotted_key})
+    try:
+        subprocess.run(
+            ["bash", str(log_event), run_id, "config_env_deprecated", payload],
+            check=False,
+            capture_output=True,
+        )
+    except OSError:
+        pass  # non-fatal — observability is best-effort
+
+
 def cmd_export_env(args: list[str]) -> None:
+    """
+    Print shell statements to stdout suitable for eval in a single shell session:
+
+      - ``export VAR=value`` for every resolved user knob (excluding meta and roles keys).
+      - ``unset OLD_VAR`` immediately before the corresponding ``export`` line for any
+        preference env var the user has set in the raw process environment whose dotted
+        key is NOT allowlisted.  This is a COSMETIC single-shell cleanup only — it
+        prevents stale preference env vars from shadowing the freshly-exported resolved
+        value inside the same shell session.  Correctness across Bash tool calls (where
+        the process env is reset between calls) comes from T004's ``config.py get``
+        conversion, not this unset.  Allowlisted (plumbing / unattended) vars are
+        never unset.
+
+    After emitting all lines, emits a ``config_env_deprecated`` event per deprecated var
+    and (once per Z_HARNESS_RUN) a ``config_resolved`` event.
+    """
     values, sources = load_config()
+    deprecated = _collect_deprecated_env_vars()
+
     for dotted_key in sorted(values.keys()):
         # Skip roles.* keys — they are not exported as env vars
         first_segment = dotted_key.split(".", 1)[0]
@@ -1108,12 +1419,27 @@ def cmd_export_env(args: list[str]) -> None:
             continue
         env_var = _ENV_VAR_ALIASES.get(dotted_key) or _dotted_to_env(dotted_key)
         val = values[dotted_key]
-        # Coerce to shell string
+        # Coerce to shell string.
+        # Lists are JSON-encoded for shell transport (consumer can decode with jq or python -m json.tool).
         if isinstance(val, bool):
             shell_val = "true" if val else "false"
+        elif isinstance(val, list):
+            shell_val = json.dumps(val)
         else:
             shell_val = str(val)
+        # Emit unset lines for any deprecated preference vars bound to this key,
+        # BEFORE the export line.  Both the transliteration and legacy alias are
+        # unset when set; the export line always uses the canonical alias name.
+        if dotted_key in deprecated:
+            for old_var in deprecated[dotted_key]:
+                print(f"unset {old_var}")
         print(f"export {env_var}={shlex.quote(shell_val)}")
+
+    # Emit one config_env_deprecated event per deprecated var (best-effort).
+    for dotted_key, vars_list in deprecated.items():
+        for old_var in vars_list:
+            _emit_config_env_deprecated(old_var, dotted_key)
+
     _emit_config_resolved(values, sources)
 
 

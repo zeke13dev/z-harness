@@ -1,6 +1,6 @@
 {
   "concept": "config",
-  "last_updated": "2026-06-08",
+  "last_updated": "2026-06-16",
   "covers_spec": "z-harness/askuser-prefs-hook/SPEC.md",
   "source_file": [
     "scripts/config.py",
@@ -204,6 +204,10 @@
   "consumed_by": ["commands", "skills", "followup-sink", "cost-estimation"],
   "invariants": [
     "[Loader API] schema_version current value is 2; loading a config with schema_version < 2 emits a non-fatal stderr warning pointing at `config.py ensure-defaults`; schema_version > 2 exits 2 (hard fail)",
+    "[Deprecation] load_config() emits a DEPRECATED stderr warning for every preference-class Z_HARNESS_* env var found in the raw environment (uses _collect_deprecated_env_vars — same set as export-env unset lines)",
+    "[Deprecation] runtime.env_strict = true (config.toml key, NOT a raw env var) upgrades the deprecation warning to a hard ERROR (exit 2); default false (grace period, warning only)",
+    "[Deprecation] Legal plumbing/unattended env vars (LEGAL_ENV_KEYS/LEGAL_ENV_PREFIXES) never trigger the deprecation warning — only preference-class vars do",
+    "[Deprecation] runtime.env_strict is itself a TOML config key (bool, default false); it cannot be set via a raw env var (bootstrap paradox: the env var would be deprecated by the policy it enables)",
     "[Loader API] ensure-defaults never writes repo-local; only writes the global user path",
     "[Loader API] should-notify always exits 0 on valid event kind (yes|no on stdout); exits 2 on unknown event",
     "[Loader API] config_resolved event emitted at most once per $Z_HARNESS_RUN via O_EXCL temp-file de-dup",
@@ -275,6 +279,7 @@
     "[experiment] Global layer experiment.* violations are soft; repo/env layer violations exit 2 (hard fail)",
     "[cost] cost.token_budget=null (default) causes check-no-ask to halt with cost_budget_missing under NO_ASK=halt policy; must be explicitly set for overnight cost-gate to auto-proceed",
     "[Loader API] Global config validation is soft (warn + default fallback); repo/env config validation is hard (exit 2)",
+    "[Deprecation] runtime.env_strict cannot be set via env — the env transliteration Z_HARNESS_RUNTIME_ENV_STRICT is blocked by the very deprecation policy it controls; only set it via config.toml",
     "[Loader API] docs.always_apply=never only suppresses doc-fetcher in light flows (/z-do); heavy flows always dispatch doc-fetcher regardless",
     "[Loader API] cmd_set exits 0 silently on success — no stdout output; do not parse stdout from cmd_set",
     "[Loader API] Valid event kinds for should-notify: approval, phase_end, error only. Passing run_complete exits 2; guard with || true if needed",
