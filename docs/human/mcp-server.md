@@ -110,9 +110,31 @@ Every tool returns a JSON object:
 }
 ```
 
-`status` is one of `"complete"`, `"error"`, `"blocked"`, or `"needs_input"`. When `status`
+`status` is one of `"complete"`, `"error"`, `"blocked"`, `"needs_input"`, or `"skipped"`. When `status`
 is `"needs_input"`, `meta.question_id` carries a correlation ID and `content` is the
 question for the user.
+
+**Resume after `needs_input`.** A client answers a `needs_input` result by re-calling the
+same tool with a `resume` argument of shape `{"question_id": "...", "answer": "..."}`.
+`MCPDispatcher` appends the answer as a delimited continuation block to the dispatch prompt
+and re-runs the command so it proceeds past the question. This is a re-dispatch-with-answer,
+**not** a live session resume — the dispatcher's `session_id` is telemetry-only and no driver
+implements true subprocess continuation.
+
+**`skipped` status (consulting disabled).** When `Z_HARNESS_CONSULT=off`,
+`scripts/resolve-provider.py <role>` returns the bare sentinel `none` for consult/reviewer-bound
+roles. `MCPDispatcher` detects this sentinel (bare `none` on stdout, or a JSON payload whose
+`provider == "none"`) and returns `status="skipped"` — distinct from a genuine provider-resolution
+failure, which returns `status="error"`. (Addresses the consult-off bypass from the MCP-server
+plan's AUDIT Finding 10.)
+
+**Content & artifact sourcing.** `content` (the human-readable narrative) is reconstructed from
+the dispatcher's `type == "text"` stream events — **not** from the subprocess `stderr` (which
+carries only raw CLI diagnostics). `artifacts` is populated from each `type == "artifact"` stream
+event as `{ name → content }`; a command that writes files without emitting an `artifact` event
+will not surface those files, so drivers are responsible for emitting one `artifact` event per
+durable write. The event stream is the wire mechanism; it is expected to mirror what the command
+wrote under `$Z_HARNESS_PLAN_DIR/<slug>/`.
 
 ## Editor MCP config snippets
 
