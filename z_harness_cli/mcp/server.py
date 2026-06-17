@@ -234,7 +234,15 @@ class MCPDispatcher:
         )
 
     def dispatch(self) -> ToolResult:
-        """Resolve provider, select driver, run dispatcher, bridge result."""
+        """Resolve provider, select driver, run dispatcher, bridge result.
+
+        When ``self._args`` contains a ``resume`` key of shape
+        ``{"question_id": str, "answer": str}``, the answer is appended to the
+        dispatch prompt as a clearly-delimited continuation block so the command
+        can proceed past the pending question.  This is a re-dispatch-with-answer
+        (not a live session resume — the underlying dispatcher.run session_id is
+        telemetry-only and drivers do not support true subprocess continuation).
+        """
         # --- Resolve command metadata ---
         meta = COMMAND_TOOLS.get(self._tool_name)
         if meta is None:
@@ -306,6 +314,20 @@ class MCPDispatcher:
         # --- Build args ---
         prompt = self._args.get("prompt", "")
         slug_val = self._args.get("slug")
+
+        # Thread resume answer into the prompt when the caller supplies a
+        # resume block.  This re-dispatches with the answer appended so the
+        # command can proceed past the pending question.
+        resume = self._args.get("resume")
+        if isinstance(resume, dict):
+            q_id = resume.get("question_id", "")
+            answer = resume.get("answer", "")
+            if q_id and answer:
+                continuation = (
+                    f"\n\n---\nUser answer to pending question ({q_id}): {answer}\n---"
+                )
+                prompt = prompt + continuation if prompt else continuation.strip()
+
         caller_args: list[str] = [prompt] if prompt else []
 
         # --- Dispatch (with scoped Z_HARNESS_SLUG mutation) ---
