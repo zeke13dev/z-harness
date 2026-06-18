@@ -22,6 +22,18 @@ SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 RESOLVE_PY="$SCRIPTS_DIR/resolve-provider.py"
 CONFIG_PY="$SCRIPTS_DIR/config.py"
 
+# Hermetic isolation of the user-global config layer. resolve-provider.py and
+# config.py read $XDG_CONFIG_HOME/z-harness/{providers,config}.* as the global
+# layer (falling back to ~/.config). The tests below set Z_HARNESS_REPO_PROVIDERS
+# to an empty repo-layer file to assert "unbound role" / sentinel behavior — but
+# that only isolates the *repo* layer. Without isolating the global layer too,
+# the developer's real ~/.config/z-harness/providers.json (which binds
+# consultant_primary→codex etc.) leaks in and resolution succeeds, breaking
+# TEST-005/006/009. Point XDG_CONFIG_HOME at an empty dir for the whole run.
+_XDG_ISOLATED="$(mktemp -d "${TMPDIR:-/tmp}/test_consult_xdg_XXXXXX")"
+export XDG_CONFIG_HOME="$_XDG_ISOLATED"
+trap 'rm -rf "$_XDG_ISOLATED"' EXIT
+
 PASS=0
 FAIL=0
 

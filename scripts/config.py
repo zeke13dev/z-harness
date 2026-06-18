@@ -293,8 +293,8 @@ VALIDATORS: dict = {
     "workflow.memory_stale_days":        _validate_positive_int,
     "cost.token_budget":                 _validate_positive_int_or_none,
     "followup.default_sink":                   {"project", "global"},
-    "followup.notion_enabled":                 {True, False},
-    "followup.auto_close_low_risk_enabled":    {True, False},
+    "followup.notion_enabled":                 _validate_bool,
+    "followup.auto_close_low_risk_enabled":    _validate_bool,
     "axioms.enabled":               _validate_bool,
     "axioms.kernel_budget_chars":   _validate_positive_int,
     "axioms.extract_min_recurrence": _validate_positive_int,
@@ -1421,7 +1421,14 @@ def cmd_export_env(args: list[str]) -> None:
         val = values[dotted_key]
         # Coerce to shell string.
         # Lists are JSON-encoded for shell transport (consumer can decode with jq or python -m json.tool).
-        if isinstance(val, bool):
+        if val is None:
+            # Nullable keys (e.g. cost.token_budget) must round-trip: emit empty
+            # string, NOT the literal "None". The ingress path treats "" as unset
+            # (v is None or v == ""), whereas "None" fails enum/coercion validation
+            # and makes a subsequent `config.py get` exit non-zero — which silently
+            # poisons every config read in a shell that sourced `export-env`.
+            shell_val = ""
+        elif isinstance(val, bool):
             shell_val = "true" if val else "false"
         elif isinstance(val, list):
             shell_val = json.dumps(val)
