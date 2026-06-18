@@ -1,7 +1,7 @@
 # /z-uplift
 
 > Last updated: 2026-06-05
-> Covers source: commands/z-uplift.md, skills/z-uplift/SKILL.md
+> Covers source: commands/z-uplift.md, commands/z-uplift.md
 
 ## Overview
 
@@ -115,7 +115,7 @@ Push-notification behavior throughout `/z-uplift` is governed by the `notify.lev
 - **Doc-staleness gate.** Setup Step 5 checks `docs/llm/INDEX.json` staleness across all concepts before Phase 0. If more than 20% are stale (configurable via `$Z_HARNESS_DOC_STALENESS_THRESHOLD`), the user is prompted to switch to `/z-maintain-docs`, continue with stale docs, or abandon. The gate does NOT auto-invoke `/z-maintain-docs`.
 - **Notification config var.** The correct environment variable for notification control is `Z_HARNESS_NOTIFY_LEVEL` (maps to `notify.level` in TOML). There is no standalone `Z_HARNESS_NOTIFY` variable. Setting `Z_HARNESS_NOTIFY` has no effect.
 - **Slug preference resolver.** `scripts/config.py resolve-question workflow.slug_confirm` is queried after the hard collision check but before the user-visible slug gate. On resolver failure (any non-zero exit), falls back to the normal ask path — never silently skips.
-- **SKILL.md frontmatter quoting.** The `argument-hint` value in `skills/z-uplift/SKILL.md` must be quoted with double quotes (strict YAML requirement for codex's plugin loader). Unquoted values with bracket characters cause codex to print "failed to load skill" on startup.
+- **SKILL.md frontmatter quoting.** The `argument-hint` value in `commands/z-uplift.md` must be quoted with double quotes (strict YAML requirement for codex's plugin loader). Unquoted values with bracket characters cause codex to print "failed to load skill" on startup.
 - **Phase line anchors.** Line numbers shift whenever the command file is edited; always verify against grep before citing a specific line number.
 
 ## Examples

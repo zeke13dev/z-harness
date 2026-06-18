@@ -3,8 +3,7 @@
   "last_updated": "2026-06-08",
   "covers_spec": "interactive-brainstorm",
   "source_file": [
-    "commands/z-reality.md",
-    "skills/z-reality/SKILL.md"
+    "commands/z-reality.md"
   ],
   "confidence": "high",
   "entry_points": [
@@ -16,21 +15,21 @@
       "summary": "Interactive premise refinement — conversational on-ramp that probes, clarifies, reframes, and converges a raw idea into a BRAINSTORM.md variant before routing to /z-brainstorm or /z-plan"
     },
     {
-      "file": "skills/z-reality/SKILL.md",
+      "file": "commands/z-reality.md",
       "line": 1,
       "symbol": "z-reality skill",
       "kind": "module",
       "summary": "Full interactive protocol: Stage 1 (Framing), Stage 2 (Probe/Clarify/Reframe loop with posture spec), Stage 3 (Convergence gate), Stage 4 (Artifact production + route handoff)"
     },
     {
-      "file": "skills/z-reality/SKILL.md",
+      "file": "commands/z-reality.md",
       "line": 130,
       "symbol": "Escape hatches",
       "kind": "module",
       "summary": "Three escape paths: user-initiated abandon, AI-sensed frustration (8+ rounds), disconnect/timeout"
     },
     {
-      "file": "skills/z-reality/SKILL.md",
+      "file": "commands/z-reality.md",
       "line": 160,
       "symbol": "Artifact format",
       "kind": "module",
@@ -39,12 +38,9 @@
   ],
   "depends_on": [
     "commands",
-    "skills",
     "scripts"
   ],
   "consumed_by": [
-    "skills/z-brainstorm",
-    "skills/z-plan",
     "agents/planning-router"
   ],
   "invariants": [

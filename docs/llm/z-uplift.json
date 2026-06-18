@@ -3,8 +3,7 @@
   "last_updated": "2026-06-05",
   "covers_spec": "z-harness/plans/tiered-quality-uplift/SPEC.md",
   "source_file": [
-    "commands/z-uplift.md",
-    "skills/z-uplift/SKILL.md"
+    "commands/z-uplift.md"
   ],
   "confidence": "high",
   "entry_points": [
@@ -129,7 +128,7 @@
     "Phase 5 Step 2a auto-transitions [i] implementing -> [x] done when RESUME_PENDING_COUNT==0 (all TASKS.md rows are [x]); no AskUser is shown in this path.",
     "Phase 5 Step 2a 'Mark as done' option verifies zero [ ] rows in TASKS.md before accepting transition; refuses and re-presents the AskUser if pending tasks remain.",
     "Phase 5 Step 2c logs run_end with status: pending_implement before exiting (not status: complete); Phase 6 is not reached on this exit path.",
-    "skills/z-uplift/SKILL.md argument-hint value must be quoted with double quotes in frontmatter; unquoted bracket-containing values fail codex's strict YAML parser."
+    "commands/z-uplift.md argument-hint value must be quoted with double quotes in frontmatter; unquoted bracket-containing values fail codex's strict YAML parser."
   ],
   "gotchas": [
     "Phase 4 does NOT present an AskUserQuestion — it is a passive informational summary. The per-component AskUser gates are in Phase 5. Earlier doc versions incorrectly described Phase 4 as an interactive gate.",
@@ -146,13 +145,13 @@
     "consultant/reviewer provider routing is delegated to scripts/resolve-provider.sh — provider names (Gemini/Codex) are never hardcoded in dispatch prompts.",
     "Phase line anchors shift whenever the command file is edited; always verify against grep before citing a line number.",
     "cross_cutting_findings_dropped telemetry fires when consultant output contains bullets that don't match G-NNN/C-NNN/R-NNN; if finding counts seem low check run logs for this event.",
-    "docs/human/z-uplift.md is NOT a source file for this concept — it is generated output. The true sources are commands/z-uplift.md and skills/z-uplift/SKILL.md.",
+    "docs/human/z-uplift.md is NOT a source file for this concept — it is generated output. The true sources are commands/z-uplift.md and commands/z-uplift.md.",
     "Setting Z_HARNESS_NOTIFY has no effect — the correct env var is Z_HARNESS_NOTIFY_LEVEL (maps to notify.level in TOML config). See docs/human/config.md for all notification knobs.",
     "workflow.slug_confirm resolver failure (exit code 2/3/4) is non-fatal — falls back to ask mode; never silently skips the confirmation.",
     "halt branch (workflow.slug_confirm result=halt) emits uplift_halt and exits 0 — it does NOT call AskUserQuestion. Distinct from skip (which continues) and ask (which prompts). Triggered when rule_id=no_ask_halt is active in config.",
     "Phase 5 run_end on the two-step handoff path uses status: pending_implement, not status: complete. Phase 6 is NOT executed on this path — Phase 6 only runs after all components have been resolved in a single invocation.",
     "Phase 5 auto-transition ([i]->[x] done when RESUME_PENDING_COUNT==0) requires no user input; if you are expecting an AskUser gate at resume time for a fully-done component, it will not appear.",
-    "skills/z-uplift/SKILL.md argument-hint must be quoted; unquoted value with brackets breaks codex strict YAML and makes codex print 'failed to load skill' on startup — not a reviewer outage."
+    "commands/z-uplift.md argument-hint must be quoted; unquoted value with brackets breaks codex strict YAML and makes codex print 'failed to load skill' on startup — not a reviewer outage."
   ],
   "memories": []
 }

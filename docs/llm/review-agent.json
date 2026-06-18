@@ -4,23 +4,80 @@
   "covers_spec": "z-harness/plans/memory-self-improve-loop/SPEC.md",
   "source_file": [
     "agents/review-agent.md",
-    "scripts/run-memory-review.sh",
-    "skills/z-implement-all/SKILL.md",
-    "skills/z-review-all/SKILL.md",
-    "skills/z-debug/SKILL.md"
+    "scripts/run-memory-review.sh"
   ],
   "confidence": "high",
   "entry_points": [
-    {"file": "agents/review-agent.md", "line": 1, "symbol": "review-agent", "kind": "module", "summary": "Haiku subagent definition: role, procedure, output contract, hard rules, slug anti-patterns"},
-    {"file": "agents/review-agent.md", "line": 12, "symbol": "Inputs from caller", "kind": "module", "summary": "Full input field list: parent_command, debug_md_path, artifact primacy rules by parent_command"},
-    {"file": "agents/review-agent.md", "line": 27, "symbol": "Procedure", "kind": "module", "summary": "Six-step candidate generation: read artifacts, scan signals, prefer existing slugs, cap at 3, check tags, debug filter"},
-    {"file": "agents/review-agent.md", "line": 46, "symbol": "Output contract", "kind": "module", "summary": "Fenced JSON schema for candidate objects; any other output treated as malformed"},
-    {"file": "scripts/run-memory-review.sh", "line": 1, "symbol": "run-memory-review", "kind": "module", "summary": "Skip-condition guard and artifact-prep helper; called before every review-agent dispatch"},
-    {"file": "scripts/run-memory-review.sh", "line": 135, "symbol": "debug_md_missing", "kind": "module", "summary": "Skip condition: fires when parent_command=debug and DEBUG.md is absent or unreadable"},
-    {"file": "scripts/run-memory-review.sh", "line": 173, "symbol": "AXIOM_READY", "kind": "module", "summary": "Appends AXIOM_READY <diff_path> to stdout when Z_HARNESS_AXIOM_EXTRACT != '0'; gated default-on"},
-    {"file": "skills/z-implement-all/SKILL.md", "line": 818, "symbol": "Phase 9", "kind": "module", "summary": "Orchestrator Phase 9: helper call, skip handling, agent dispatch, parse, accept/skip loop"},
-    {"file": "skills/z-review-all/SKILL.md", "line": 447, "symbol": "Phase 7", "kind": "module", "summary": "Orchestrator Phase 7: same as Phase 9 but without all_tasks_skipped skip condition"},
-    {"file": "skills/z-debug/SKILL.md", "line": 795, "symbol": "Phase 10 memory review", "kind": "module", "summary": "Orchestrator Phase 10 (shipped branch only): debug_md_path primary; optional parallel axiom-extractor on AXIOM_READY"}
+    {
+      "file": "agents/review-agent.md",
+      "line": 1,
+      "symbol": "review-agent",
+      "kind": "module",
+      "summary": "Haiku subagent definition: role, procedure, output contract, hard rules, slug anti-patterns"
+    },
+    {
+      "file": "agents/review-agent.md",
+      "line": 12,
+      "symbol": "Inputs from caller",
+      "kind": "module",
+      "summary": "Full input field list: parent_command, debug_md_path, artifact primacy rules by parent_command"
+    },
+    {
+      "file": "agents/review-agent.md",
+      "line": 27,
+      "symbol": "Procedure",
+      "kind": "module",
+      "summary": "Six-step candidate generation: read artifacts, scan signals, prefer existing slugs, cap at 3, check tags, debug filter"
+    },
+    {
+      "file": "agents/review-agent.md",
+      "line": 46,
+      "symbol": "Output contract",
+      "kind": "module",
+      "summary": "Fenced JSON schema for candidate objects; any other output treated as malformed"
+    },
+    {
+      "file": "scripts/run-memory-review.sh",
+      "line": 1,
+      "symbol": "run-memory-review",
+      "kind": "module",
+      "summary": "Skip-condition guard and artifact-prep helper; called before every review-agent dispatch"
+    },
+    {
+      "file": "scripts/run-memory-review.sh",
+      "line": 135,
+      "symbol": "debug_md_missing",
+      "kind": "module",
+      "summary": "Skip condition: fires when parent_command=debug and DEBUG.md is absent or unreadable"
+    },
+    {
+      "file": "scripts/run-memory-review.sh",
+      "line": 173,
+      "symbol": "AXIOM_READY",
+      "kind": "module",
+      "summary": "Appends AXIOM_READY <diff_path> to stdout when Z_HARNESS_AXIOM_EXTRACT != '0'; gated default-on"
+    },
+    {
+      "file": "commands/z-implement-all.md",
+      "line": 818,
+      "symbol": "Phase 9",
+      "kind": "module",
+      "summary": "Orchestrator Phase 9: helper call, skip handling, agent dispatch, parse, accept/skip loop"
+    },
+    {
+      "file": "commands/z-review-all.md",
+      "line": 447,
+      "symbol": "Phase 7",
+      "kind": "module",
+      "summary": "Orchestrator Phase 7: same as Phase 9 but without all_tasks_skipped skip condition"
+    },
+    {
+      "file": "commands/z-debug.md",
+      "line": 795,
+      "symbol": "Phase 10 memory review",
+      "kind": "module",
+      "summary": "Orchestrator Phase 10 (shipped branch only): debug_md_path primary; optional parallel axiom-extractor on AXIOM_READY"
+    }
   ],
   "depends_on": [
     "z-suggest-memory",
@@ -57,7 +114,7 @@
     "subagent timeout has no per-call wall-clock guard in v1; user ctrl-c is the escape",
     "candidate tags must come from docs/llm/TAGS.txt unless free-form is explicitly justified",
     "review_agent_suggest_failed is logged and skipped (iteration continues) — not a phase abort",
-    "skills/z-implement-all/SKILL.md, skills/z-review-all/SKILL.md, skills/z-debug/SKILL.md are canonical; commands/ may be stale",
+    "commands/z-implement-all.md, commands/z-review-all.md, commands/z-debug.md are canonical; commands/ may be stale",
     "Z_HARNESS_AXIOM_EXTRACT=0 suppresses AXIOM_READY; any other value including unset or 'false' enables it"
   ],
   "memories": []

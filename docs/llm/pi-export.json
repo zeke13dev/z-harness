@@ -1,6 +1,6 @@
 {
   "concept": "pi-export",
-  "last_updated": "2026-06-11",
+  "last_updated": "2026-06-18",
   "covers_spec": "none",
   "source_file": [
     "runtime/drivers/pi/__init__.py",
@@ -24,7 +24,7 @@
     {"file": "runtime/drivers/pi/export.py", "line": 146, "symbol": "_rewrite_line", "kind": "fn", "summary": "Rewrites Agent()/Skill()/AskUserQuestion() lines to pi subagent/skill/inline hints; handles prose AskUserQuestion refs"},
     {"file": "runtime/drivers/pi/export.py", "line": 201, "symbol": "_yaml_quote", "kind": "fn", "summary": "Quotes YAML scalar values containing colons/brackets/hashes/quotes; preventive layer against pi YAML parse failures"},
     {"file": "runtime/drivers/pi/export.py", "line": 231, "symbol": "_render_agent", "kind": "fn", "summary": "Renders z-harness agent as pi agent .md with _yaml_quote, semantic model tier mapping (haiku->flash, sonnet/opus->pro), _TOOL_MAP"},
-    {"file": "runtime/drivers/pi/export.py", "line": 265, "symbol": "_render_prompt", "kind": "fn", "summary": "Renders command/skill as pi prompt .md; injects prompt defense after heading if no sentinel marker found"},
+    {"file": "runtime/drivers/pi/export.py", "line": 265, "symbol": "_render_prompt", "kind": "fn", "summary": "Renders command as pi prompt .md; injects prompt defense after heading if no sentinel marker found"},
     {"file": "runtime/drivers/pi/export.py", "line": 305, "symbol": "_validate_frontmatter_yaml", "kind": "fn", "summary": "Post-export strict YAML 1.2 validation via yaml.safe_load(); silently skips if PyYAML unavailable"},
     {"file": "scripts/lint-frontmatter.sh", "line": 1, "symbol": "lint-frontmatter.sh", "kind": "module", "summary": "Standalone source-tree frontmatter lint; wired into make lint-frontmatter and CI at tests.yml:49"},
     {"file": "Makefile", "line": 74, "symbol": "lint-frontmatter", "kind": "target", "summary": "make lint-frontmatter invokes scripts/lint-frontmatter.sh; wired into CI (.github/workflows/tests.yml:49)"},
@@ -38,7 +38,6 @@
     "multi-ide-exports",
     "agents",
     "commands",
-    "skills",
     "export-utils"
   ],
   "consumed_by": [
@@ -46,18 +45,18 @@
   ],
   "invariants": [
     "pi is EXPORT-ONLY: no adapter, no HostDriver, no --host pi, no launch/inject host; all interaction is through the exported resource files",
-    "Source of truth for agents/prompts/AGENTS.md is z-harness agents/, commands/, skills/ — never the exports/pi/ tree",
+    "commands/ is the single source for prompts; skills/ top-level directory has been removed and enumerate_sources returns skills: [] when it is absent",
     "pi-only assets (explore.md, subagent extension, AGENTS preamble, CAPABILITIES.md, README.md) live in scripts/pi_assets/ and are copied verbatim",
     "Asset path resolution is __file__-relative (MINOR-7): module walks up 3 levels from runtime/drivers/pi/export.py to repo root then descends into scripts/pi_assets/; standalone-importable without z_harness_cli",
     "Agent descriptions pass through _yaml_quote to prevent YAML parse failures on colons/brackets/quotes in pi's frontmatter parser",
     "Post-export validation (_validate_frontmatter_yaml) re-validates every agent file with a strict YAML 1.2 parser; silently skips if PyYAML unavailable",
     "Model tiers are mapped on export: haiku->deepseek-v4-flash, sonnet/opus->deepseek-v4-pro; agents without a tier inherit pi's default",
     "Unsupported constructs (Agent, Skill, AskUserQuestion, TaskCreate, SubagentCreate) are rewritten line-by-line to pi hints, never silently dropped",
-    "Skills that share an id with a command get an -skill suffix in the export id to avoid collisions in prompts/",
     "make lint-frontmatter is wired into CI at .github/workflows/tests.yml:49; frontmatter regressions are caught at PR time"
   ],
   "gotchas": [
     "pi has no native subagent dispatch — fan-out runs through the vendored extensions/subagent/ extension which spawns isolated pi child processes",
+    "skills/ top-level directory has been removed; commands/ is the single source; the skills loop in export() is a no-op (enumerate_sources returns skills: [])",
     "Asset resolution uses __file__-relative logic; moving export.py without moving scripts/pi_assets/ will break standalone-import fallback path",
     "YAML frontmatter parser bug (resolved 2026-06-08): four-layer defense: (1) pi runtime quoteUnquotedColonValues() + catch-and-retry; (2) source quoting in pi_assets/agents/explore.md; (3) _yaml_quote for all generated agent descriptions; (4) _validate_frontmatter_yaml post-export strict YAML 1.2 re-validation",
     "_validate_frontmatter_yaml silently skips if PyYAML is not installed — export succeeds but strict YAML gate is bypassed",

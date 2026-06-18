@@ -317,7 +317,7 @@ The `_build_recommended_next` function in `morning-report.py` branches on `termi
 > **v1 known limit (fail-OPEN for unregistered callsites):** Sub-commands that call `AskUserQuestion` outside the registered gate set will block the conversation until you respond, even with `Z_HARNESS_NO_ASK=halt`. `scripts/lint-askuser.sh` is documentation and audit tooling — it is NOT runtime enforcement and cannot convert a non-instrumented AskUser into a halt. Run `make bench-autonomy-check` before launching a policy-mode benchmark run; for standard overnight runs, run `scripts/lint-askuser.sh --strict` before launching a long chain and instrument any callsites flagged as unregistered if they are on your chain's hot path. v2 will pursue runtime enforcement (e.g., centralized AskUser wrapper at the driver layer).
 
 The instrumented callsites are:
-- **workflow.slug_confirm** (7): `commands/z-plan.md`, `commands/z-fix.md`, `commands/z-uplift.md`, `skills/z-debug/SKILL.md`, `skills/z-brainstorm/SKILL.md`, `skills/z-map/SKILL.md`, `skills/z-plan-light/SKILL.md`
+- **workflow.slug_confirm** (7): `commands/z-plan.md`, `commands/z-fix.md`, `commands/z-uplift.md`, `commands/z-debug.md`, `commands/z-brainstorm.md`, `commands/z-map.md`, `commands/z-plan-light.md`
 - **workflow.audit_to_amend** (2): `commands/z-audit-plan.md`, `commands/z-audit-plan-style.md`
 - **workflow.implement_all_proceed** (1): `/z-implement-all` halt-resolution gate
 - **workflow.review_all_proceed** (1): `/z-review-all` Phase 3.7 proceed gate

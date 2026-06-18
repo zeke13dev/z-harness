@@ -12,7 +12,7 @@
       "failure_class": "Invariant test reduces to unit test \u2014 no behavioral property verified",
       "severity": "blocker",
       "source_files": [
-        "skills/z-test/SKILL.md"
+        "commands/z-test.md"
       ],
       "source": "spec",
       "last_updated": "2026-06-10T20:42:20Z",
@@ -42,7 +42,7 @@
       "failure_class": "Adversarial fixture fails schema validation",
       "severity": "blocker",
       "source_files": [
-        "skills/z-test/SKILL.md"
+        "commands/z-test.md"
       ],
       "source": "spec",
       "last_updated": "2026-06-10T20:42:20Z",
@@ -72,7 +72,7 @@
       "failure_class": "Partial INVARIANTS.json left on disk after half-failed update",
       "severity": "blocker",
       "source_files": [
-        "skills/z-init-docs/SKILL.md"
+        "commands/z-init-docs.md"
       ],
       "source": "spec",
       "last_updated": "2026-06-10T20:42:20Z"
@@ -86,7 +86,7 @@
       "failure_class": "Review pipeline halted by invariant extraction failure",
       "severity": "major",
       "source_files": [
-        "skills/z-review-all/SKILL.md"
+        "commands/z-review-all.md"
       ],
       "source": "spec",
       "last_updated": "2026-06-10T20:42:20Z"
@@ -101,7 +101,7 @@
       "failure_class": "Docs-staleness gate blocked consultant dispatch",
       "severity": "blocker",
       "source_files": [
-        "skills/z-review-all/SKILL.md"
+        "commands/z-review-all.md"
       ],
       "source": "spec",
       "last_updated": "2026-06-10T20:42:20Z"

@@ -200,8 +200,14 @@
       "summary": "[Workflow Resolver] Walk metrics.jsonl for repeated command-pair patterns; emit JSON proposal if threshold met; never writes — caller owns write"
     }
   ],
-  "depends_on": ["scripts"],
-  "consumed_by": ["commands", "skills", "followup-sink", "cost-estimation"],
+  "depends_on": [
+    "scripts"
+  ],
+  "consumed_by": [
+    "commands",
+    "followup-sink",
+    "cost-estimation"
+  ],
   "invariants": [
     "[Loader API] schema_version current value is 2; loading a config with schema_version < 2 emits a non-fatal stderr warning pointing at `config.py ensure-defaults`; schema_version > 2 exits 2 (hard fail)",
     "[Deprecation] load_config() emits a DEPRECATED stderr warning for every preference-class Z_HARNESS_* env var found in the raw environment (uses _collect_deprecated_env_vars — same set as export-env unset lines)",
@@ -301,53 +307,96 @@
       "workflow.audit_to_amend": {
         "type": "string",
         "default": "ask",
-        "valid_values": ["ask", "amend", "stop"],
+        "valid_values": [
+          "ask",
+          "amend",
+          "stop"
+        ],
         "env": "Z_HARNESS_WORKFLOW_AUDIT_TO_AMEND",
-        "callsites": ["commands/z-audit-plan.md:183", "commands/z-audit-plan-style.md:398"],
+        "callsites": [
+          "commands/z-audit-plan.md:183",
+          "commands/z-audit-plan-style.md:398"
+        ],
         "description": "Controls Phase 5 AskUserQuestion in /z-audit-plan and /z-audit-plan-style. ask=always prompt; amend=auto-proceed as amend; stop=auto-stop"
       },
       "workflow.slug_confirm": {
         "type": "string",
         "default": "ask",
-        "valid_values": ["ask", "auto_accept", "recommend_derived"],
+        "valid_values": [
+          "ask",
+          "auto_accept",
+          "recommend_derived"
+        ],
         "env": "Z_HARNESS_WORKFLOW_SLUG_CONFIRM",
-        "callsites": ["commands/z-plan.md:36", "commands/z-fix.md:32", "commands/z-uplift.md:85", "skills/z-debug/SKILL.md:23", "skills/z-brainstorm/SKILL.md:25", "skills/z-map/SKILL.md:133", "skills/z-plan-light/SKILL.md:19"],
+        "callsites": [
+          "commands/z-plan.md:36",
+          "commands/z-fix.md:32",
+          "commands/z-uplift.md:85",
+          "commands/z-debug.md",
+          "commands/z-brainstorm.md",
+          "commands/z-map.md",
+          "commands/z-plan-light.md"
+        ],
         "description": "Controls soft non-obvious-slug confirmation at 7 callsites. ask=always prompt; auto_accept=silently accept (resolver returns skip); recommend_derived=pre-select (resolver returns prefill). Collision check always runs unconditionally."
       },
       "workflow.implement_all_proceed": {
         "type": "string",
         "default": "ask",
-        "valid_values": ["ask", "auto_resume", "halt"],
+        "valid_values": [
+          "ask",
+          "auto_resume",
+          "halt"
+        ],
         "env": "Z_HARNESS_WORKFLOW_IMPLEMENT_ALL_PROCEED",
         "description": "Controls halt-resolution gate in /z-implement-all. ask=always prompt; auto_resume=skip prompt; halt=stop unconditionally"
       },
       "workflow.review_all_proceed": {
         "type": "string",
         "default": "ask",
-        "valid_values": ["ask", "proceed", "halt"],
+        "valid_values": [
+          "ask",
+          "proceed",
+          "halt"
+        ],
         "env": "Z_HARNESS_WORKFLOW_REVIEW_ALL_PROCEED",
         "description": "Controls Phase 3.7 proceed gate in /z-review-all"
       },
       "workflow.plan_decisions_approval": {
         "type": "string",
         "default": "ask",
-        "valid_values": ["ask", "approve", "halt"],
+        "valid_values": [
+          "ask",
+          "approve",
+          "halt"
+        ],
         "env": "Z_HARNESS_WORKFLOW_PLAN_DECISIONS_APPROVAL",
         "description": "Controls Phase 2.5 decisions-doc approval gate in /z-plan"
       },
       "workflow.spec_retro_discovery": {
         "type": "string",
         "default": "ask",
-        "valid_values": ["ask", "defer_to_sink_p2"],
+        "valid_values": [
+          "ask",
+          "defer_to_sink_p2"
+        ],
         "env": "Z_HARNESS_WORKFLOW_SPEC_RETRO_DISCOVERY",
         "description": "Controls how Phase 4 of /z-implement-next handles out-of-current-SPEC discoveries. ask=interactive prompt; defer_to_sink_p2=park as P2 follow-up in project sink"
       },
       "workflow.pre_run_cost_gate": {
         "type": "string",
         "default": "ask",
-        "valid_values": ["ask", "auto_proceed", "halt"],
+        "valid_values": [
+          "ask",
+          "auto_proceed",
+          "halt"
+        ],
         "env": "Z_HARNESS_WORKFLOW_PRE_RUN_COST_GATE",
-        "callsites": ["scripts/pre-run-cost-gate.sh", "commands/z-research.md", "commands/z-uplift.md", "commands/z-plan-split.md"],
+        "callsites": [
+          "scripts/pre-run-cost-gate.sh",
+          "commands/z-research.md",
+          "commands/z-uplift.md",
+          "commands/z-plan-split.md"
+        ],
         "description": "Controls pre-run cost gate for z-research/z-uplift/z-plan-split. ask=prompt; auto_proceed=skip gate; halt=stop unconditionally. Also consumed by check-no-ask --range-high/--severity delegation path."
       }
     }
@@ -359,10 +408,16 @@
       "brainstorm.personas": {
         "type": "bool",
         "default": true,
-        "valid_values": [true, false],
+        "valid_values": [
+          true,
+          false
+        ],
         "env": "Z_HARNESS_BRAINSTORM_PERSONAS",
         "description": "Enable persona injection for up to 3 distinct ideator roles in /z-brainstorm. When OFF the dispatch is byte-identical to the pre-feature vendor-only brainstorm.",
-        "callsites": ["commands/z-brainstorm.md:408", "commands/z-brainstorm.md:412"]
+        "callsites": [
+          "commands/z-brainstorm.md:408",
+          "commands/z-brainstorm.md:412"
+        ]
       }
     }
   },
@@ -373,42 +428,78 @@
       "personas.critique_panel": {
         "type": "bool",
         "default": true,
-        "valid_values": [true, false],
+        "valid_values": [
+          true,
+          false
+        ],
         "env": "Z_HARNESS_PERSONAS_CRITIQUE_PANEL",
         "description": "Enable persona injection at the z-plan Phase 3 + Phase 7 fixed 5-panel critique arms (DIVERGENT). When ON, 5 distinct consultant personas are drawn and positionally prepended.",
-        "callsites": ["commands/z-plan.md:462", "commands/z-debug.md:279"]
+        "callsites": [
+          "commands/z-plan.md:462",
+          "commands/z-debug.md:279"
+        ]
       },
       "personas.audit": {
         "type": "bool",
         "default": true,
-        "valid_values": [true, false],
+        "valid_values": [
+          true,
+          false
+        ],
         "env": "Z_HARNESS_PERSONAS_AUDIT",
         "description": "Enable persona injection at z-audit dimension auditors (DIVERGENT). When ON, one distinct audit_persona is drawn per dimension (correctness/perf/cleanliness/design).",
-        "callsites": ["commands/z-audit.md:461", "commands/z-audit.md:467"]
+        "callsites": [
+          "commands/z-audit.md:461",
+          "commands/z-audit.md:467"
+        ]
       },
       "personas.review_eval": {
         "type": "bool",
         "default": true,
-        "valid_values": [true, false],
+        "valid_values": [
+          true,
+          false
+        ],
         "env": "Z_HARNESS_PERSONAS_REVIEW_EVAL",
         "description": "Enable the advisory persona reviewer at code-review gates — z-implement-all, z-implement-next, z-plan-light, z-fix, z-do (CONVERGENT). Advisory only — never changes pass/fail outcome.",
-        "callsites": ["commands/z-implement-all.md:879", "commands/z-implement-all.md:904", "commands/z-fix.md:278", "commands/z-plan-light.md:343", "commands/z-do.md:202"]
+        "callsites": [
+          "commands/z-implement-all.md:879",
+          "commands/z-implement-all.md:904",
+          "commands/z-fix.md:278",
+          "commands/z-plan-light.md:343",
+          "commands/z-do.md:202"
+        ]
       },
       "personas.consult_eval": {
         "type": "bool",
         "default": false,
-        "valid_values": [true, false],
+        "valid_values": [
+          true,
+          false
+        ],
         "env": "Z_HARNESS_PERSONAS_CONSULT_EVAL",
         "description": "Enable the advisory persona consult arm at convergent evaluation sites — z-plan-light bundled consult and z-audit bundled consult (CONVERGENT). DEFAULT OFF — most expensive and lowest-signal advisory arm. Advisory only.",
-        "callsites": ["commands/z-audit.md:591", "commands/z-audit.md:595", "commands/z-plan-light.md:155", "commands/z-plan-light.md:159"]
+        "callsites": [
+          "commands/z-audit.md:591",
+          "commands/z-audit.md:595",
+          "commands/z-plan-light.md:155",
+          "commands/z-plan-light.md:159"
+        ]
       },
       "personas.implementer_retry": {
         "type": "string",
         "default": "same",
-        "valid_values": ["same", "new"],
+        "valid_values": [
+          "same",
+          "new"
+        ],
         "env": "Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY",
         "description": "Controls implementer persona strategy on retry. same=reuse cycle-1 persona for all retries (lifecycle traceability). new=fresh draw excluding prior persona on each retry. No effect when experiment.persona_rotation=false.",
-        "callsites": ["commands/z-implement-all.md:659", "commands/z-implement-all.md:671", "commands/z-implement-next.md:283"]
+        "callsites": [
+          "commands/z-implement-all.md:659",
+          "commands/z-implement-all.md:671",
+          "commands/z-implement-next.md:283"
+        ]
       }
     }
   },
@@ -416,18 +507,52 @@
     "section": "[axioms]",
     "description": "Configuration for the axiom extraction pipeline and axiom resolver layer. Axioms are the lowest-precedence signal in resolve-question.",
     "keys": {
-      "axioms.enabled": {"type": "bool", "default": true, "env": "Z_HARNESS_AXIOMS_ENABLED", "description": "Master kill-switch. When false, _load_axiom_matches returns [] immediately and auto_extract_post_run is suppressed."},
-      "axioms.kernel_budget_chars": {"type": "int", "default": 6000, "env": "Z_HARNESS_AXIOMS_KERNEL_BUDGET_CHARS", "description": "Max chars of axiom text in context kernel. Must be positive integer (>=1)."},
-      "axioms.extract_min_recurrence": {"type": "int", "default": 3, "env": "Z_HARNESS_AXIOMS_EXTRACT_MIN_RECURRENCE", "description": "Min recurrence count before auto-extracting an axiom candidate. Must be positive integer (>=1)."},
-      "axioms.auto_extract_post_run": {"type": "bool", "default": true, "env": "Z_HARNESS_AXIOMS_AUTO_EXTRACT_POST_RUN", "description": "When true, runs axiom extraction pipeline automatically at end of each /z-* run."}
+      "axioms.enabled": {
+        "type": "bool",
+        "default": true,
+        "env": "Z_HARNESS_AXIOMS_ENABLED",
+        "description": "Master kill-switch. When false, _load_axiom_matches returns [] immediately and auto_extract_post_run is suppressed."
+      },
+      "axioms.kernel_budget_chars": {
+        "type": "int",
+        "default": 6000,
+        "env": "Z_HARNESS_AXIOMS_KERNEL_BUDGET_CHARS",
+        "description": "Max chars of axiom text in context kernel. Must be positive integer (>=1)."
+      },
+      "axioms.extract_min_recurrence": {
+        "type": "int",
+        "default": 3,
+        "env": "Z_HARNESS_AXIOMS_EXTRACT_MIN_RECURRENCE",
+        "description": "Min recurrence count before auto-extracting an axiom candidate. Must be positive integer (>=1)."
+      },
+      "axioms.auto_extract_post_run": {
+        "type": "bool",
+        "default": true,
+        "env": "Z_HARNESS_AXIOMS_AUTO_EXTRACT_POST_RUN",
+        "description": "When true, runs axiom extraction pipeline automatically at end of each /z-* run."
+      }
     }
   },
   "experiment_section": {
     "section": "[experiment]",
     "description": "Feature-flag knobs for the persona-rotation data-collection experiment. All keys are on by default.",
     "keys": {
-      "experiment.persona_rotation": {"type": "bool", "default": true, "valid_values": [true, false], "env": "Z_HARNESS_EXPERIMENT_PERSONA_ROTATION", "description": "Master on/off switch for persona rotation in z-implement-all, z-implement-next, z-plan, z-debug. false = complete no-op."},
-      "experiment.control_every_n": {"type": "int", "default": 5, "env": "Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N", "description": "Forced-control cadence: every Nth implementer attempt (repo-wide counter in .z-harness/.persona-control-counter) uses boring-anchor."}
+      "experiment.persona_rotation": {
+        "type": "bool",
+        "default": true,
+        "valid_values": [
+          true,
+          false
+        ],
+        "env": "Z_HARNESS_EXPERIMENT_PERSONA_ROTATION",
+        "description": "Master on/off switch for persona rotation in z-implement-all, z-implement-next, z-plan, z-debug. false = complete no-op."
+      },
+      "experiment.control_every_n": {
+        "type": "int",
+        "default": 5,
+        "env": "Z_HARNESS_EXPERIMENT_CONTROL_EVERY_N",
+        "description": "Forced-control cadence: every Nth implementer attempt (repo-wide counter in .z-harness/.persona-control-counter) uses boring-anchor."
+      }
     }
   },
   "cost_section": {
@@ -446,16 +571,63 @@
     "section": "[followup]",
     "description": "Configuration for the follow-up registry. All keys live under the [followup] TOML section.",
     "keys": {
-      "followup.default_sink": {"type": "string", "default": "project", "valid_values": ["project", "global"], "description": "Which sink new entries go to when no explicit --sink= flag is passed to sink-add.sh"},
-      "followup.notion_enabled": {"type": "bool", "default": false, "valid_values": [true, false], "description": "Enable one-way Notion push mirror."},
-      "followup.auto_close_low_risk_enabled": {"type": "bool", "default": true, "valid_values": [true, false], "description": "Master kill-switch for auto-close-low-risk path. DEFAULT IS TRUE (on)."},
-      "followup.staleness_commit_window": {"type": "int", "default": 50, "description": "Commit distance above which staleness prompt fires at claim time."},
-      "followup.staleness_warn_days": {"type": "int", "default": 30, "description": "Age in days after which a soft staleness warning is shown at claim time."},
-      "followup.staleness_hard_dismiss_days": {"type": "int", "default": 0, "description": "Age in days after which entries are auto-dismissed. 0 = disabled (default)."},
-      "followup.audit_evidence_required_artifacts": {"type": "array<string>", "default": ["z_review_all_verdict", "test_exit", "cumulative_diff"], "description": "Named artifact kinds that must be present in an audit_evidence.json blob."}
+      "followup.default_sink": {
+        "type": "string",
+        "default": "project",
+        "valid_values": [
+          "project",
+          "global"
+        ],
+        "description": "Which sink new entries go to when no explicit --sink= flag is passed to sink-add.sh"
+      },
+      "followup.notion_enabled": {
+        "type": "bool",
+        "default": false,
+        "valid_values": [
+          true,
+          false
+        ],
+        "description": "Enable one-way Notion push mirror."
+      },
+      "followup.auto_close_low_risk_enabled": {
+        "type": "bool",
+        "default": true,
+        "valid_values": [
+          true,
+          false
+        ],
+        "description": "Master kill-switch for auto-close-low-risk path. DEFAULT IS TRUE (on)."
+      },
+      "followup.staleness_commit_window": {
+        "type": "int",
+        "default": 50,
+        "description": "Commit distance above which staleness prompt fires at claim time."
+      },
+      "followup.staleness_warn_days": {
+        "type": "int",
+        "default": 30,
+        "description": "Age in days after which a soft staleness warning is shown at claim time."
+      },
+      "followup.staleness_hard_dismiss_days": {
+        "type": "int",
+        "default": 0,
+        "description": "Age in days after which entries are auto-dismissed. 0 = disabled (default)."
+      },
+      "followup.audit_evidence_required_artifacts": {
+        "type": "array<string>",
+        "default": [
+          "z_review_all_verdict",
+          "test_exit",
+          "cumulative_diff"
+        ],
+        "description": "Named artifact kinds that must be present in an audit_evidence.json blob."
+      }
     },
     "env_only_secrets": {
-      "Z_HARNESS_NOTION_TOKEN": {"consumed_by": "scripts/notion-push.py _resolve_token()", "description": "Notion API token override. When non-empty, bypasses followup.notion_token_path lookup. Not a TOML key. Never log it."}
+      "Z_HARNESS_NOTION_TOKEN": {
+        "consumed_by": "scripts/notion-push.py _resolve_token()",
+        "description": "Notion API token override. When non-empty, bypasses followup.notion_token_path lookup. Not a TOML key. Never log it."
+      }
     }
   },
   "overnight_gate": {
@@ -468,16 +640,37 @@
       "workflow.slug_confirm": "recommend_derived",
       "workflow.audit_to_amend": "amend"
     },
-    "telemetry_events": ["overnight_decision", "askuser_halted", "unknown_ask_blocked", "unhandled_gate", "config_conflict"]
+    "telemetry_events": [
+      "overnight_decision",
+      "askuser_halted",
+      "unknown_ask_blocked",
+      "unhandled_gate",
+      "config_conflict"
+    ]
   },
   "active_plan_env_knobs": {
     "description": "Env-only knobs for the external artifact base and active-plan registry. NOT in config.py DEFAULTS/VALIDATORS/ENV_ONLY_KNOBS. Consumed by scripts/plan-path.sh and scripts/active-plan-registry.py. inspect-all does NOT surface these.",
     "knobs": {
-      "Z_HARNESS_EXTERNAL_DEFAULT": {"default": "1", "description": "Controls base fallback chain tiers 2-4. 0=opt-out to old in-repo behavior."},
-      "Z_HARNESS_BASE_DIR": {"default": "(unset)", "description": "TRUE ESCAPE HATCH: explicit absolute base dir override; bypasses .z-harness-base anchor."},
-      "Z_HARNESS_REGISTRY_ENABLED": {"default": "1", "description": "Set to 0 to disable active-plan registry subcommands (except list and session-id)."},
-      "Z_HARNESS_REGISTRY_STALE_SECS": {"default": "1800", "description": "Seconds after which last_heartbeat is considered stale."},
-      "Z_HARNESS_STRICT_OVERLAP": {"default": "(unset/off)", "description": "Set to 1 for blocking-overlap mode (exit 20 on explicit*explicit path match)."}
+      "Z_HARNESS_EXTERNAL_DEFAULT": {
+        "default": "1",
+        "description": "Controls base fallback chain tiers 2-4. 0=opt-out to old in-repo behavior."
+      },
+      "Z_HARNESS_BASE_DIR": {
+        "default": "(unset)",
+        "description": "TRUE ESCAPE HATCH: explicit absolute base dir override; bypasses .z-harness-base anchor."
+      },
+      "Z_HARNESS_REGISTRY_ENABLED": {
+        "default": "1",
+        "description": "Set to 0 to disable active-plan registry subcommands (except list and session-id)."
+      },
+      "Z_HARNESS_REGISTRY_STALE_SECS": {
+        "default": "1800",
+        "description": "Seconds after which last_heartbeat is considered stale."
+      },
+      "Z_HARNESS_STRICT_OVERLAP": {
+        "default": "(unset/off)",
+        "description": "Set to 1 for blocking-overlap mode (exit 20 on explicit*explicit path match)."
+      }
     }
   },
   "claim_lock_env_knobs": {

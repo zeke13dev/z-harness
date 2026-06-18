@@ -23,7 +23,7 @@ appear only on subagent-bracket events, not on lifecycle or gate events.
 | `research_run_end` | `/z-research` Phase 6 |
 | `ideator_failed` | `/z-brainstorm` Phase 2 (fields: `vendor`, `reason`) |
 | `total_ideator_failure` | `/z-brainstorm` Phase 2 when all three ideators fail |
-| `research_temptation` | `/z-map` (`commands/z-map.md`) when orchestrator drafts a recommendation it must not make (note: `skills/z-map/SKILL.md` emits `map_temptation` for the same invariant) |
+| `research_temptation` | `/z-map` (`commands/z-map.md`) when orchestrator drafts a recommendation it must not make (note: `commands/z-map.md` emits `map_temptation` for the same invariant) |
 | `precontext_source_deleted` | `/z-plan` Setup step 10 freshness check (higher severity than stale-mtime) |
 | `precontext_freshness_check_failed` | `/z-plan` Setup step 10 freshness check parse failure |
 | `cost_gate_decision` | `/z-research` Phase 0 cost-confirmation gate |

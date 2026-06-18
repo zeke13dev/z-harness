@@ -5,7 +5,7 @@
 
 ## Overview
 
-`review-agent` is a Haiku-tier subagent defined in `agents/review-agent.md`. It fires automatically at the end of `/z-implement-all` (Phase 9), `/z-review-all` (Phase 7), and `/z-debug` (Phase 10, shipped branch only). It reads the completed run's `events.jsonl`, cumulative diff, and `SPEC.md` (or `DEBUG.md` for debug runs), and proposes 0-3 candidate memories worth persisting to the docs knowledge base. The Phase 9 wiring lives in `skills/z-implement-all/SKILL.md`; Phase 7 in `skills/z-review-all/SKILL.md`; Phase 10 in `skills/z-debug/SKILL.md`.
+`review-agent` is a Haiku-tier subagent defined in `agents/review-agent.md`. It fires automatically at the end of `/z-implement-all` (Phase 9), `/z-review-all` (Phase 7), and `/z-debug` (Phase 10, shipped branch only). It reads the completed run's `events.jsonl`, cumulative diff, and `SPEC.md` (or `DEBUG.md` for debug runs), and proposes 0-3 candidate memories worth persisting to the docs knowledge base. The Phase 9 wiring lives in `commands/z-implement-all.md`; Phase 7 in `commands/z-review-all.md`; Phase 10 in `commands/z-debug.md`.
 
 The agent reasons but does not write. It returns a single fenced JSON block containing candidate objects. The orchestrator owns all writes: it parses the candidates, surfaces them via `AskUserQuestion` prompts, and routes accepted candidates through `/z-suggest-memory`. Before the agent is dispatched, `scripts/run-memory-review.sh` performs skip-condition checks and assembles artifact paths — the script is always called first, and on a non-skip result the orchestrator constructs the agent prompt from its output. When `Z_HARNESS_AXIOM_EXTRACT` is not `"0"` (the default), the script also emits an `AXIOM_READY <diff_path>` line so `z-debug` Phase 10 can dispatch the axiom-extractor in parallel with the review-agent.
 
@@ -19,9 +19,9 @@ The agent reasons but does not write. It returns a single fenced JSON block cont
 - `scripts/run-memory-review.sh:1` — `run-memory-review` — skip-condition guard and artifact-prep helper; called by all three parent commands before any agent dispatch
 - `scripts/run-memory-review.sh:135` — `debug_md_missing` skip condition — fires when `parent_command: debug` and `DEBUG.md` is absent or unreadable
 - `scripts/run-memory-review.sh:173` — `AXIOM_READY` emission — appends `AXIOM_READY <diff_path>` to stdout when `Z_HARNESS_AXIOM_EXTRACT != "0"`
-- `skills/z-implement-all/SKILL.md:818` — `Phase 9` — orchestrator Phase 9: helper call, skip handling, agent dispatch, parse, accept/skip loop
-- `skills/z-review-all/SKILL.md:447` — `Phase 7` — orchestrator Phase 7: same as Phase 9 but without `all_tasks_skipped` skip condition
-- `skills/z-debug/SKILL.md:795` — `Phase 10 memory review` — orchestrator Phase 10 (shipped branch only): `debug_md_path` as primary artifact; abandoned sessions excluded; optional parallel axiom-extractor dispatch on `AXIOM_READY`
+- `commands/z-implement-all.md` — `Phase 9` — orchestrator Phase 9: helper call, skip handling, agent dispatch, parse, accept/skip loop
+- `commands/z-review-all.md` — `Phase 7` — orchestrator Phase 7: same as Phase 9 but without `all_tasks_skipped` skip condition
+- `commands/z-debug.md` — `Phase 10 memory review` — orchestrator Phase 10 (shipped branch only): `debug_md_path` as primary artifact; abandoned sessions excluded; optional parallel axiom-extractor dispatch on `AXIOM_READY`
 <!-- AUTO-END: entry-points -->
 ## How it interacts with others
 
@@ -134,7 +134,7 @@ One JSON object per line. This file is ephemeral — it lives with the run archi
 - No per-call wall-clock timeout on the Agent dispatch in v1; user ctrl-c is the only escape if the Haiku call hangs. The primary-deliverable push-notify has already fired at that point.
 - Candidate tags must come from `docs/llm/TAGS.txt` unless a free-form tag is explicitly justified; the agent is instructed to prefer controlled tags.
 - The agent receives `index_path` (path to `docs/llm/INDEX.json`) and is expected to prefer extending an existing slug over coining a new one.
-- `skills/z-implement-all/SKILL.md`, `skills/z-review-all/SKILL.md`, and `skills/z-debug/SKILL.md` are the canonical orchestrator definitions; `commands/` equivalents may be stale.
+- `commands/z-implement-all.md`, `commands/z-review-all.md`, and `commands/z-debug.md` are the canonical orchestrator definitions; `commands/` equivalents may be stale.
 - `review_agent_failed` and `review_agent_malformed` do NOT emit `memory_review_terminal` — they are orthogonal failure classes, not terminal states of the review pass.
 - `AXIOM_READY` is suppressed by setting `Z_HARNESS_AXIOM_EXTRACT=0`; any other value (including unset or `"false"`) enables it.
 
@@ -196,9 +196,9 @@ _No memories recorded yet._
 
 ## See also
 
-- `skills/z-suggest-memory/SKILL.md` — sole authoring path for accepted candidates.
-- `skills/z-implement-all/SKILL.md` — Phase 9 wiring details.
-- `skills/z-review-all/SKILL.md` — Phase 7 wiring details.
-- `skills/z-debug/SKILL.md` — Phase 10 wiring details (debug parent) including AXIOM_READY handling.
-- `skills/z-stats/SKILL.md` — Phase 4 and Phase 4b telemetry surface.
+- `commands/z-suggest-memory.md` — sole authoring path for accepted candidates.
+- `commands/z-implement-all.md` — Phase 9 wiring details.
+- `commands/z-review-all.md` — Phase 7 wiring details.
+- `commands/z-debug.md` — Phase 10 wiring details (debug parent) including AXIOM_READY handling.
+- `commands/z-stats.md` — Phase 4 and Phase 4b telemetry surface.
 - `agents/axiom-extractor.md` — parallel dispatch target in z-debug Phase 10 when AXIOM_READY fires.

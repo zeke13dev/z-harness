@@ -180,7 +180,7 @@
       "line": 455,
       "symbol": "cmd_heartbeat",
       "kind": "fn",
-      "summary": "Updates last_heartbeat/phase/current_task/status; NON-FATAL (always 0); absent record emits registry_error(reason:missing_record) \u2014 does NOT fabricate zombie records."
+      "summary": "Updates last_heartbeat/phase/current_task/status; NON-FATAL (always 0); absent record emits registry_error(reason:missing_record) — does NOT fabricate zombie records."
     },
     {
       "file": "scripts/active-plan-registry.py",
@@ -201,14 +201,14 @@
       "line": 700,
       "symbol": "cmd_overlaps",
       "kind": "fn",
-      "summary": "Computes path intersection vs all live peer records; exit 0=no overlap, 10=advisory, 20=blocking (strict+explicit\u00d7explicit exact path match); same run-id or session-id skipped; stale peers included but non-blocking; emits scope_overlap_detected or active_plan_scan_complete."
+      "summary": "Computes path intersection vs all live peer records; exit 0=no overlap, 10=advisory, 20=blocking (strict+explicit×explicit exact path match); same run-id or session-id skipped; stale peers included but non-blocking; emits scope_overlap_detected or active_plan_scan_complete."
     },
     {
       "file": "scripts/active-plan-registry.py",
       "line": 889,
       "symbol": "cmd_reap",
       "kind": "fn",
-      "summary": "Conservative reaper: (a) delete on dead-local-pid, (b) delete on age>2\u00d7stale_threshold, (c) mark status:stale on age>1\u00d7stale_threshold for remote/unknown hosts; FileNotFoundError on unlink is benign; NON-FATAL overall; emits plan_reaped / plan_marked_stale."
+      "summary": "Conservative reaper: (a) delete on dead-local-pid, (b) delete on age>2×stale_threshold, (c) mark status:stale on age>1×stale_threshold for remote/unknown hosts; FileNotFoundError on unlink is benign; NON-FATAL overall; emits plan_reaped / plan_marked_stale."
     },
     {
       "file": "scripts/active-plan-registry.py",
@@ -222,35 +222,35 @@
       "line": 1,
       "symbol": "persona-stats.py",
       "kind": "module",
-      "summary": "[rotation] Read-only analysis for persona-rotation experiment. Reads metrics.jsonl; joins persona_random_selected (draw) to persona_attempt_outcome (terminal) by attempt_id; groups by persona_id\u00d7role\u00d7complexity_tier; baseline resolution: no-persona first, boring-anchor second, None; reviewer rows from persona_bound; quarantines fallback_empty_pool; supports --json, --min-diff-size, --since, --include-unknown-run. Always read-only."
+      "summary": "[rotation] Read-only analysis for persona-rotation experiment. Reads metrics.jsonl; joins persona_random_selected (draw) to persona_attempt_outcome (terminal) by attempt_id; groups by persona_id×role×complexity_tier; baseline resolution: no-persona first, boring-anchor second, None; reviewer rows from persona_bound; quarantines fallback_empty_pool; supports --json, --min-diff-size, --since, --include-unknown-run. Always read-only."
     },
     {
       "file": "scripts/persona-stats.py",
       "line": 69,
       "symbol": "NO_PERSONA",
       "kind": "const",
-      "summary": "[rotation] String constant 'no-persona' \u2014 primary null baseline for delta computation within each (role, complexity_tier) stratum."
+      "summary": "[rotation] String constant 'no-persona' — primary null baseline for delta computation within each (role, complexity_tier) stratum."
     },
     {
       "file": "scripts/persona-stats.py",
       "line": 70,
       "symbol": "CONTROL_PERSONA",
       "kind": "const",
-      "summary": "[rotation] String constant 'boring-anchor' \u2014 secondary bland control baseline (used when no-persona samples absent in the stratum)."
+      "summary": "[rotation] String constant 'boring-anchor' — secondary bland control baseline (used when no-persona samples absent in the stratum)."
     },
     {
       "file": "scripts/persona-stats.py",
       "line": 75,
       "symbol": "NUMERIC_METRICS",
       "kind": "const",
-      "summary": "[rotation] Tuple ('review_cycles','retries','blocker_count','wall_ms','diff_size') \u2014 metrics aggregated (mean) per group and delta'd vs baseline."
+      "summary": "[rotation] Tuple ('review_cycles','retries','blocker_count','wall_ms','diff_size') — metrics aggregated (mean) per group and delta'd vs baseline."
     },
     {
       "file": "scripts/persona-stats.py",
       "line": 78,
       "symbol": "OUTCOME_KIND",
       "kind": "const",
-      "summary": "[rotation] Event kind string 'persona_attempt_outcome' \u2014 the terminal event joined against draw events."
+      "summary": "[rotation] Event kind string 'persona_attempt_outcome' — the terminal event joined against draw events."
     },
     {
       "file": "scripts/run-status.sh",
@@ -369,7 +369,7 @@
       "line": 479,
       "symbol": "main",
       "kind": "fn",
-      "summary": "Full writer pipeline: depth check \u2192 validate \u2192 compute hashes \u2192 pre-lock dedup \u2192 build entry \u2192 acquire global lock \u2192 TOCTOU dedup recheck \u2192 write prompt-page \u2192 append entry_created \u2192 rebuild view \u2192 optional Notion push \u2192 emit followup_created."
+      "summary": "Full writer pipeline: depth check → validate → compute hashes → pre-lock dedup → build entry → acquire global lock → TOCTOU dedup recheck → write prompt-page → append entry_created → rebuild view → optional Notion push → emit followup_created."
     },
     {
       "file": "scripts/sink-add-helpers.py",
@@ -383,14 +383,14 @@
       "line": 1,
       "symbol": "sink-claim.sh",
       "kind": "module",
-      "summary": "Atomic open\u2192running claim; flags: --entry, --run, --sink-root, --allow-stale; prints claim ticket JSON on exit 0. Exit 0=success,2=validation,3=not-claimable,4=staleness-drift,5=lock-timeout,7=depth-1-refusal."
+      "summary": "Atomic open→running claim; flags: --entry, --run, --sink-root, --allow-stale; prints claim ticket JSON on exit 0. Exit 0=success,2=validation,3=not-claimable,4=staleness-drift,5=lock-timeout,7=depth-1-refusal."
     },
     {
       "file": "scripts/sink-claim-helpers.py",
       "line": 255,
       "symbol": "do_claim",
       "kind": "fn",
-      "summary": "Full claim sequence: per-entry lock first (mandatory) \u2192 stale-takeover recovery \u2192 depth-1 refusal \u2192 status==open check \u2192 staleness check \u2192 global lock second \u2192 append status_changed open\u2192running \u2192 rebuild view \u2192 release global lock. Per-entry lock stays held by caller."
+      "summary": "Full claim sequence: per-entry lock first (mandatory) → stale-takeover recovery → depth-1 refusal → status==open check → staleness check → global lock second → append status_changed open→running → rebuild view → release global lock. Per-entry lock stays held by caller."
     },
     {
       "file": "scripts/sink-status-set.sh",
@@ -488,7 +488,6 @@
   "consumed_by": [
     "agents",
     "commands",
-    "skills",
     "review-agent",
     "remote-runner",
     "config",
@@ -518,7 +517,7 @@
     "config.py set performs atomic read-modify-write via temp-file rename; validates key format and value against VALIDATORS before writing; exit 2 on validation, 4 on I/O.",
     "config.py export-env emits config_resolved event at most once per Z_HARNESS_RUN via O_EXCL stamp file in TMPDIR.",
     "block-dangerous-git.sh exit contract: exit 0 = allow, exit 2 = block (with human-readable reason on stderr); never exits 1.",
-    "block-dangerous-git.sh never crashes on empty stdin, malformed JSON, or non-Bash tool calls \u2014 all fail safe (exit 0).",
+    "block-dangerous-git.sh never crashes on empty stdin, malformed JSON, or non-Bash tool calls — all fail safe (exit 0).",
     "block-dangerous-git.sh classifies commands against canonical forms (global options stripped, chained segments split) so evasion via -C/-c/--git-dir/env-var-prefix is not possible.",
     "block-dangerous-git.sh working-tree-destructive verbs (clean -f*, checkout ., restore ., branch -D) are blanket-blocked without any subprocess.",
     "block-dangerous-git.sh rewrite verbs (reset --hard, commit --amend, push --force/--force-with-lease/-f, +-refspec push) are blocked iff git branch -r --contains HEAD returns non-empty output.",
@@ -529,8 +528,8 @@
     "active-plan-registry.py register exits 3 on failure (LOUD); all other subcommands exit 0 even on internal error (NON-FATAL), self-logging via registry_error events.",
     "active-plan-registry.py heartbeat does NOT fabricate a record when target <run-id>.json is absent; emits registry_error(reason:missing_record) and returns 0.",
     "active-plan-registry.py all writes use tmpfile+os.replace (atomic); no global lock is taken.",
-    "active-plan-registry.py overlaps blocking exit 20 requires both --strict (or Z_HARNESS_STRICT_OVERLAP=1) AND explicit\u00d7explicit exact path match with a non-stale peer.",
-    "active-plan-registry.py reap case (a): dead-local-pid \u2192 delete; case (b): age > 2\u00d7stale_threshold \u2192 delete; case (c): age > 1\u00d7stale_threshold AND remote/unknown host \u2192 mark status:stale (no delete).",
+    "active-plan-registry.py overlaps blocking exit 20 requires both --strict (or Z_HARNESS_STRICT_OVERLAP=1) AND explicit×explicit exact path match with a non-stale peer.",
+    "active-plan-registry.py reap case (a): dead-local-pid → delete; case (b): age > 2×stale_threshold → delete; case (c): age > 1×stale_threshold AND remote/unknown host → mark status:stale (no delete).",
     "active-plan-registry.py Z_HARNESS_REGISTRY_ENABLED=0: all mutating subcommands (register, heartbeat, update-scope, overlaps, reap, deregister) become silent no-ops; list and session-id are always permitted.",
     "active-plan-registry.py run-id must match ^[A-Za-z0-9._-]+$, not start with '-', and contain no '..' or '/'.",
     "active-plan-registry.py session-id: on macOS uses pure-Python <ppid>-<epoch> (no subprocess) to avoid CoreFoundation fork-safety crash.",
@@ -567,10 +566,10 @@
     "followup-reconcile-notion-impl.py always exits 0 (best-effort sweep; not a transaction).",
     "parse-followups-block.py always exits 0 on empty result (even after parse failure); only exits 1 on fatal I/O error.",
     "validate-followup-schemas.sh exits 2 (before assertions) if Python jsonschema library or schema/fixture files are missing.",
-    "[rotation] persona-stats.py is always read-only \u2014 never modifies metrics.jsonl or any state file.",
+    "[rotation] persona-stats.py is always read-only — never modifies metrics.jsonl or any state file.",
     "[rotation] persona-stats.py baseline resolution order within each (role,complexity_tier) stratum: no-persona first, boring-anchor second, None (no delta) if neither exists.",
     "[rotation] persona-stats.py quarantines fallback_empty_pool: reports in separate section, never folds into any persona's stats or either baseline.",
-    "[rotation] persona-stats.py filters incomplete attempts (draw event without matching persona_attempt_outcome) \u2014 excluded from all statistics.",
+    "[rotation] persona-stats.py filters incomplete attempts (draw event without matching persona_attempt_outcome) — excluded from all statistics.",
     "[rotation] persona-stats.py --since filter excludes events with missing or unparseable ts field (conservative).",
     "[rotation] persona-stats.py excludes run=='unknown-run' events by default; --include-unknown-run re-includes them."
   ],
@@ -591,12 +590,12 @@
     "config.py check-no-ask: unregistered question_id always halts (fail-closed) and emits unknown_ask_blocked event when Z_HARNESS_NO_ASK=halt.",
     "active-plan-registry.py sets OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES at import time to prevent CoreFoundation fork-safety crashes (macOS only: bash-invoked Python with existing CF-initialized parent).",
     "active-plan-registry.py session-id: Linux uses /proc/<ppid>/stat + /proc/stat for stable <ppid>-<start_epoch>; macOS uses pure-Python <ppid>-<int(time.time())> (no subprocess). Callers should export Z_HARNESS_SESSION_ID once at run start.",
-    "active-plan-registry.py heartbeat: absent record emits registry_error(reason:missing_record) and returns 0 (no-op). Does NOT fabricate zombie records \u2014 empty slug/session pollutes overlap detection.",
+    "active-plan-registry.py heartbeat: absent record emits registry_error(reason:missing_record) and returns 0 (no-op). Does NOT fabricate zombie records — empty slug/session pollutes overlap detection.",
     "active-plan-registry.py overlaps: exit 4 when active_plans_dir cannot be resolved (not a clean 0/10/20 exit). Stale peers (status:stale OR heartbeat > stale_threshold) are non-blocking even in strict mode.",
     "active-plan-registry.py reap: FileNotFoundError on unlink is always benign (two reapers racing on the same record). All OSErrors during reap are suppressed (non-fatal).",
-    "active-plan-registry.py: callers MUST check exit code 3 from register \u2014 it is the only LOUD failure. All other subcommands are non-fatal by design.",
-    "[rotation] persona-stats.py baseline: no-persona is the primary null baseline (true null prefix); boring-anchor is the secondary control. BOTH appear as their own rows in every section \u2014 neither is quarantined or hidden from reporting.",
-    "[rotation] persona-stats.py --since filter: events with missing or unparseable ts excluded (conservative) \u2014 not included with or without the flag.",
+    "active-plan-registry.py: callers MUST check exit code 3 from register — it is the only LOUD failure. All other subcommands are non-fatal by design.",
+    "[rotation] persona-stats.py baseline: no-persona is the primary null baseline (true null prefix); boring-anchor is the secondary control. BOTH appear as their own rows in every section — neither is quarantined or hidden from reporting.",
+    "[rotation] persona-stats.py --since filter: events with missing or unparseable ts excluded (conservative) — not included with or without the flag.",
     "[rotation] persona-stats.py run=='unknown-run' exclusion: these are ad-hoc test/dev draws with no real run/task/attempt context; excluded by default.",
     "run-memory-review.sh 4-state terminal taxonomy: skipped_broken_context (missing_args, no_plan_dir, tags_missing), not_applicable (empty_diff, all_tasks_skipped, debug_md_missing); ready and dispatched are orchestrator-owned.",
     "run-memory-review.sh disables pipefail around git diff | head -n 5000 to tolerate SIGPIPE.",
@@ -608,7 +607,7 @@
     "run-status.sh last-event reads the last 20 lines of events.jsonl, iterating in reverse to find the latest valid JSON line.",
     "morning-report.py emits CRITICAL HEAD SHA mismatch banner when head_sha_mismatch_at_resume event found in events.jsonl.",
     "lint-askuser.sh --strict makes the script advisory-fail for CI; the default (no --strict) always exits 0 regardless of findings.",
-    "sink-lock.sh acquire: when LOCK_EX|LOCK_NB fails (BlockingIOError), exit 1 immediately \u2014 no stale-takeover possible without the OS lock.",
+    "sink-lock.sh acquire: when LOCK_EX|LOCK_NB fails (BlockingIOError), exit 1 immediately — no stale-takeover possible without the OS lock.",
     "sink-add-helpers.py recommended-command validation uses two checks: shlex.split for parseability + _unquoted_metachar for unquoted shell metacharacters.",
     "sink-claim-helpers.py staleness check: commit-distance window defaults to 50 (read from config followup.staleness_commit_window); --allow-stale bypasses but logs drift.",
     "sink-status-set-impl.py: 'done' terminal state can still transition to 'dismissed'; 'dismissed' has no outgoing edges and exits 3 on any attempted transition.",

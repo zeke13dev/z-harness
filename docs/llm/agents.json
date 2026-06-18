@@ -238,7 +238,6 @@
   ],
   "consumed_by": [
     "commands",
-    "skills",
     "active-plan-registry",
     "axioms",
     "session-handoff"

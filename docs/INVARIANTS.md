@@ -12,7 +12,7 @@
 
 **Failure class:** Invariant test reduces to unit test — no behavioral property verified
 
-**Source files:** `skills/z-test/SKILL.md`
+**Source files:** `commands/z-test.md`
 
 **Fixture schema:** `{"type": "object", "required": ["test_code", "assertion_section"], "properties": {"test_code": {"type": "string"}, "assertion_section": {"type": "string"}}}`
 ---
@@ -25,7 +25,7 @@
 
 **Failure class:** Adversarial fixture fails schema validation
 
-**Source files:** `skills/z-test/SKILL.md`
+**Source files:** `commands/z-test.md`
 
 **Fixture schema:** `{"type": "object", "required": ["fixture_data", "schema_ref"], "properties": {"fixture_data": {"type": "object"}, "schema_ref": {"type": "string"}}}`
 ---
@@ -38,7 +38,7 @@
 
 **Failure class:** Partial INVARIANTS.json left on disk after half-failed update
 
-**Source files:** `skills/z-init-docs/SKILL.md`
+**Source files:** `commands/z-init-docs.md`
 ---
 
 ## inv_004 — Phase 5.5 (or any post-review invariant extraction) must NOT halt the /z-review-all pipeline on extraction failure. If extraction fails, log the error and continue — the review itself is the priority.
@@ -49,7 +49,7 @@
 
 **Failure class:** Review pipeline halted by invariant extraction failure
 
-**Source files:** `skills/z-review-all/SKILL.md`
+**Source files:** `commands/z-review-all.md`
 ---
 
 ## inv_005 — Cross-LLM consultant subagents (consultant-primary, consultant-secondary) MUST be able to dispatch even when doc-staleness is high. The compaction breakpoint gate must not block consultant dispatch.
@@ -60,7 +60,7 @@
 
 **Failure class:** Docs-staleness gate blocked consultant dispatch
 
-**Source files:** `skills/z-review-all/SKILL.md`
+**Source files:** `commands/z-review-all.md`
 ---
 
 ## inv_006 — Every exported z-command (export-pi.py, export-codex-*) must expose the full set of behavioral rules from the base skill. An export that drops critical rules (e.g., structural test vs invariant test distinction, fixture_schema validation) produces broken behavior.

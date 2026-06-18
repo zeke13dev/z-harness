@@ -100,8 +100,7 @@
     "config"
   ],
   "consumed_by": [
-    "commands",
-    "skills"
+    "commands"
   ],
   "invariants": [
     "estimate-tokens.py exits 0 on any producible envelope; exit 1 only when <command> positional arg is missing",
@@ -148,9 +147,24 @@
     "confidence": "high | medium | low",
     "basis": "<human-readable string describing data sources>",
     "breakdown": [
-      {"tier": "static", "low": "<int>", "high": "<int>"},
-      {"tier": "dispatch", "add": "<int>", "keys": ["<key>"]},
-      {"tier": "empirical", "p50": "<float>", "p90": "<float>", "samples": "<int>"}
+      {
+        "tier": "static",
+        "low": "<int>",
+        "high": "<int>"
+      },
+      {
+        "tier": "dispatch",
+        "add": "<int>",
+        "keys": [
+          "<key>"
+        ]
+      },
+      {
+        "tier": "empirical",
+        "p50": "<float>",
+        "p90": "<float>",
+        "samples": "<int>"
+      }
     ],
     "gate": "hard | soft | null"
   },
@@ -172,7 +186,11 @@
     "workflow.pre_run_cost_gate": {
       "type": "string",
       "default": "ask",
-      "valid_values": ["ask", "auto_proceed", "halt"],
+      "valid_values": [
+        "ask",
+        "auto_proceed",
+        "halt"
+      ],
       "env": "Z_HARNESS_WORKFLOW_PRE_RUN_COST_GATE",
       "is_question_id": true,
       "description": "Controls hard-gate AskUser behavior. ask=prompt; auto_proceed=skip prompt; halt=unconditional halt"
@@ -186,12 +204,71 @@
     }
   },
   "profiled_commands": {
-    "z-research":   {"gate": "hard", "range": [3000000, 6000000], "dispatch_keys": ["map", "brainstorm"], "fires_on": "always (Phase 0.5)"},
-    "z-uplift":     {"gate": "hard", "range": [2000000, 8000000], "dispatch_keys": ["per_component"], "fires_on": "always (Phase 1.5)"},
-    "z-plan-split": {"gate": "hard", "range": [1500000, 5000000], "dispatch_keys": ["per_cluster"], "fires_on": "always (Phase 1.5)"},
-    "z-brainstorm": {"gate": "soft", "range": [80000, 220000],    "dispatch_keys": ["per_heavy_chunk"], "fires_on": "HEAVY path only"},
-    "z-audit":      {"gate": "soft", "range": [200000, 1200000],  "dispatch_keys": ["per_dimension"],   "fires_on": "HEAVY path only"},
-    "z-debug":      {"gate": "soft", "range": [300000, 1500000],  "dispatch_keys": [],                  "fires_on": "always (Phase 0)"}
+    "z-research": {
+      "gate": "hard",
+      "range": [
+        3000000,
+        6000000
+      ],
+      "dispatch_keys": [
+        "map",
+        "brainstorm"
+      ],
+      "fires_on": "always (Phase 0.5)"
+    },
+    "z-uplift": {
+      "gate": "hard",
+      "range": [
+        2000000,
+        8000000
+      ],
+      "dispatch_keys": [
+        "per_component"
+      ],
+      "fires_on": "always (Phase 1.5)"
+    },
+    "z-plan-split": {
+      "gate": "hard",
+      "range": [
+        1500000,
+        5000000
+      ],
+      "dispatch_keys": [
+        "per_cluster"
+      ],
+      "fires_on": "always (Phase 1.5)"
+    },
+    "z-brainstorm": {
+      "gate": "soft",
+      "range": [
+        80000,
+        220000
+      ],
+      "dispatch_keys": [
+        "per_heavy_chunk"
+      ],
+      "fires_on": "HEAVY path only"
+    },
+    "z-audit": {
+      "gate": "soft",
+      "range": [
+        200000,
+        1200000
+      ],
+      "dispatch_keys": [
+        "per_dimension"
+      ],
+      "fires_on": "HEAVY path only"
+    },
+    "z-debug": {
+      "gate": "soft",
+      "range": [
+        300000,
+        1500000
+      ],
+      "dispatch_keys": [],
+      "fires_on": "always (Phase 0)"
+    }
   },
   "memories": []
 }

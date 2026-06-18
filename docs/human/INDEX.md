@@ -37,7 +37,7 @@ Companion LLM-tier JSON lives at `../llm/<slug>.json`.
 
 | Concept | Confidence | Source files | Summary |
 |---|---|---|---|
-| [skills](./skills.md) | high | `skills/z-amend/SKILL.md`, `skills/z-brainstorm/SKILL.md`, `skills/z-debug/SKILL.md` | Checklists for amending spec, plan, and task checklists consistently. |
+| [skills](./skills.md) | high | `commands/z-amend.md`, `commands/z-brainstorm.md`, `commands/z-debug.md` | Checklists for amending spec, plan, and task checklists consistently. |
 
 ## repo-root artifacts
 

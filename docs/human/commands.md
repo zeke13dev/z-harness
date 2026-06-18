@@ -186,7 +186,7 @@ Typical chains:
 - Route chains prevent ping-pong. Once a chain has two entries, or a recommendation would return to the immediate prior command, the user must choose explicitly.
 - `/z-implement-all --tasks=<path>` derives `BASE` from the tasks file directory and bypasses normal slug/tree discovery; this is how review promotion artifacts are consumed.
 - `z-review-all` and `z-maintain-docs --audit` have pre-consult compaction breakpoints with state files so expensive consultant phases can resume safely.
-- `/z-suggest-memory` is intentionally thin: it delegates to `skills/z-suggest-memory/SKILL.md`, which owns memory mutation and `MEMORIES-FLAT.md` regeneration.
+- `/z-suggest-memory` is intentionally thin: it delegates to `commands/z-suggest-memory.md`, which owns memory mutation and `MEMORIES-FLAT.md` regeneration.
 - Phase 9 (`z-implement-all`) and Phase 7 (`z-review-all`) are soft phases: all failure paths (malformed agent output, skipped helper, empty candidate array) exit silently without halting the run. Phase 9 persists candidates to JSONL and emits `memory_review_complete`; there is no sequential AskUser loop in Phase 9. Phase 10 (`z-debug`) is also a soft phase but DOES have a sequential AskUser loop (capped at 3 candidates) and emits `memory_review_terminal`.
 - `--from-candidate-json` on `z-suggest-memory` accepts either a file path or `-` (stdin). It is used exclusively by the automated review-agent flow; manual callers should use the interactive path instead.
 - `/z-stats` Phase 4b reads `review_agent_call` events from `metrics.jsonl`; these are emitted by `/z-implement-all` Phase 9, `/z-review-all` Phase 7, and `/z-debug` Phase 10. If none of these phases have run yet, this section outputs nothing.

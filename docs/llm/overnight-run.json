@@ -153,8 +153,7 @@
     "config"
   ],
   "consumed_by": [
-    "commands",
-    "skills"
+    "commands"
   ],
   "invariants": [
     "Z_HARNESS_NO_ASK=halt is set ONLY around Skill-tool calls (Phase 3.6) and unset immediately after; parent orchestrator AskUserQuestion calls (lock contention, resume confirmation) run with NO_ASK unset",
@@ -243,10 +242,10 @@
       "commands/z-plan.md:21",
       "commands/z-fix.md:18",
       "commands/z-uplift.md:71",
-      "skills/z-debug/SKILL.md:17",
-      "skills/z-brainstorm/SKILL.md:19",
-      "skills/z-map/SKILL.md:133",
-      "skills/z-plan-light/SKILL.md:19"
+      "commands/z-debug.md",
+      "commands/z-brainstorm.md",
+      "commands/z-map.md",
+      "commands/z-plan-light.md"
     ],
     "workflow.audit_to_amend": [
       "commands/z-audit-plan.md:183",

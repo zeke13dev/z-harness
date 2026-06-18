@@ -215,7 +215,7 @@ Event emission is non-fatal — claim correctness never depends on telemetry. Fa
 ## How it interacts with others
 
 - **`commands/z-plan.md`, `commands/z-audit-plan.md`** — call `acquire` at setup (claim-first, before register), `heartbeat` at every phase boundary and before every AskUserQuestion, `release` at every halt path and at Phase 9.
-- **`skills/z-plan/SKILL.md`, `skills/z-audit-plan/SKILL.md`** — mirror the above (Invariant 5 — content parity).
+- **`commands/z-plan.md`, `commands/z-audit-plan.md`** — mirror the above (Invariant 5 — content parity).
 - **`scripts/sink-lock.sh`** — provides the underlying flock + daemon + TTL mechanics. `plan-claim.sh` is a thin policy wrapper.
 - **`scripts/plan-path.sh`** — provides `claims_dir()` (the lock directory path resolver).
 - **`scripts/active-plan-registry.py`** — **orthogonal**. The registry stays lockless and advisory. The claim lock and the registry write to different files under the same external base. Neither reads nor modifies the other.
