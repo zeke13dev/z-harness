@@ -280,10 +280,11 @@ def _build_manifest(sources: dict[str, list[dict[str, Any]]], repo_name: str = "
         lines.append(f"    description: {_yaml_str(description)}")
     lines.append("")
 
-    # Skills → .agent/skills/<id>/SKILL.md
-    lines.append("# Skills → .agent/skills/<id>/SKILL.md")
-    lines.append("# Native workspace skills in Antigravity")
+    # Skills → .agent/skills/<id>/SKILL.md (only when skill sources exist;
+    # the skills/ source dir was removed in favor of commands/-only exports).
     if sources["skills"]:
+        lines.append("# Skills → .agent/skills/<id>/SKILL.md")
+        lines.append("# Native workspace skills in Antigravity")
         lines.append("skills:")
         for entry in sources["skills"]:
             eid = entry["id"]
@@ -333,7 +334,6 @@ The following z-harness constructs have direct or near-direct equivalents in Ant
 |---------------------|----------------------|
 | `commands/*.md` (slash commands) | `.agent/workflows/<name>.md` — custom chat modes (`agy chat --mode <id>`) |
 | `agents/*.md` (agent definitions) | `.agent/rules/<name>.md` — always_on or model_decision rules |
-| `skills/*/SKILL.md` (skills) | `.agent/skills/<name>/SKILL.md` — workspace skills |
 | `Bash`, `Read`, `Edit`, `Write` tools | Cascade native tools (exact names may differ; semantics are equivalent) |
 | `AskUserQuestion` tool (clarification) | Cascade conversational turn (native; no special syntax needed) |
 | `WebFetch`, `WebSearch` tools | Cascade native (if enabled in the workspace) |
@@ -423,7 +423,6 @@ This directory contains z-harness commands, agents, and skills exported as Antig
 |------|---------|
 | `.agent/workflows/*.md` | Custom chat modes — one per z-harness command |
 | `.agent/rules/*.md` | Always-on or model-decision rules — one per z-harness agent |
-| `.agent/skills/*` | Workspace skills — one per z-harness skill |
 | `prompts/*.md` | Flat prompt files (description + role frontmatter) |
 | `agy-plugin.yaml` | Export manifest (z-harness convention; not read by agy) |
 | `CAPABILITIES.md` | What can and cannot be expressed in Antigravity |
@@ -438,7 +437,7 @@ Copy the `.agent/` directory into your project workspace root:
 cp -r exports/agy/.agent /path/to/your/project/
 ```
 
-Antigravity auto-discovers `.agent/workflows/**/*.md`, `.agent/rules/**/*.md`, and `.agent/skills/**/*`
+Antigravity auto-discovers `.agent/workflows/**/*.md` and `.agent/rules/**/*.md`
 by watching the workspace directory tree.  No restart required — files become
 available immediately in the IDE.
 

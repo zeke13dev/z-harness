@@ -39,14 +39,14 @@ if [[ ! -d "$COMMANDS_DIR" ]]; then
   echo "ERROR: commands/ directory not found at $COMMANDS_DIR" >&2
   exit 3
 fi
-if [[ ! -d "$SKILLS_DIR" ]]; then
-  echo "ERROR: skills/ directory not found at $SKILLS_DIR" >&2
-  exit 3
-fi
+# skills/ is optional: it was removed in favor of exporting per-host skills from
+# commands/. Lint it only if it still exists (e.g. in an older checkout).
+SCAN_DIRS=("$COMMANDS_DIR")
+[[ -d "$SKILLS_DIR" ]] && SCAN_DIRS+=("$SKILLS_DIR")
 
 # Collect all files containing AskUserQuestion
 FILES=()
-askuser_files_raw="$(grep -rln "AskUserQuestion" "$COMMANDS_DIR" "$SKILLS_DIR" 2>&1)"
+askuser_files_raw="$(grep -rln "AskUserQuestion" "${SCAN_DIRS[@]}" 2>&1)"
 grep_ec=$?
 if [ "$grep_ec" -gt 1 ]; then
   echo "lint-askuser: hard error from grep (exit $grep_ec): $askuser_files_raw" >&2

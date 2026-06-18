@@ -23,7 +23,7 @@
 #   Installs: commands/, agents/, runtime/ (includes runtime/drivers/)
 #
 # Codex symlink mode (repo clone detected):
-#   Requires: cwd contains .git AND .codex-plugin/plugin.json AND skills/
+#   Requires: cwd contains .git AND .codex-plugin/plugin.json AND commands/
 #   Creates: ~/plugins/z-harness -> <cwd>
 #   Creates/updates: ~/.agents/plugins/marketplace.json
 #   Runs: codex plugin add z-harness@personal when codex is on PATH
@@ -96,7 +96,7 @@ is_repo_clone() {
 }
 
 is_codex_plugin_source() {
-  [[ -d ".git" && -f ".codex-plugin/plugin.json" && -d "skills" ]]
+  [[ -d ".git" && -f ".codex-plugin/plugin.json" && -d "commands" ]]
 }
 
 ensure_can_replace() {
@@ -318,7 +318,7 @@ install_target_from_repo() {
       ;;
     codex)
       if ! is_codex_plugin_source; then
-        printf 'install.sh: ERROR: not a Codex plugin source (need .git + .codex-plugin/plugin.json + skills/).\n' >&2
+        printf 'install.sh: ERROR: not a Codex plugin source (need .git + .codex-plugin/plugin.json + commands/).\n' >&2
         exit 1
       fi
       install_codex_symlink
@@ -359,7 +359,7 @@ elif [[ -n "${Z_HARNESS_RELEASE_URL:-}" ]]; then
 else
   printf 'install.sh: ERROR: not a compatible repo clone for --target=%s.\n' "$TARGET" >&2
   printf '  Claude needs .git + commands/ + agents/ + runtime/.\n' >&2
-  printf '  Codex needs .git + .codex-plugin/plugin.json + skills/.\n' >&2
+  printf '  Codex needs .git + .codex-plugin/plugin.json + commands/.\n' >&2
   printf '  To install from tarball: bash install.sh --target=%s --tarball=<url>\n' "$TARGET" >&2
   printf '  Or set Z_HARNESS_RELEASE_URL and re-run.\n' >&2
   exit 1

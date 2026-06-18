@@ -446,14 +446,15 @@ class TestGoldenSnapshotStructure:
     def test_snapshot_file_counts(self) -> None:
         """All eight golden snapshot directories have the expected file counts."""
         expected_counts = {
-            # Re-baselined after T016 z-debt command+skill addition (+2 files each)
-            "cursor": 123,    # .cursor/rules/*.mdc (commands + agents + skills + z-debt)
-            "codex": 94,      # prompts/*.md + AGENTS.md (commands + agents + skills + z-debt; no personas)
-            "antigravity": 249,  # .agent/workflows + .agent/rules + .agent/skills + prompts + CAPABILITIES + README + agy-plugin.yaml + z-debt (+4)
-            "pi": 130,        # agents/*.md + prompts/*.md + AGENTS.md + CAPABILITIES.md + README.md + z-debt (+2)
+            # Re-baselined after the skills/ source dir was removed: commands/ is
+            # now the single source, so the per-skill *-skill.* outputs are gone.
+            "cursor": 86,     # .cursor/rules/*.mdc (commands + agents + z-debt)
+            "codex": 57,      # prompts/*.md + AGENTS.md (commands + agents + z-debt; no personas)
+            "antigravity": 175,  # .agent/workflows + .agent/rules + prompts + CAPABILITIES + README + agy-plugin.yaml + z-debt
+            "pi": 93,         # agents/*.md + prompts/*.md + AGENTS.md + CAPABILITIES.md + README.md + z-debt + vendored pi_assets
             # New export-only drivers (T011–T014)
-            "windsurf": 98,   # .windsurf/rules/*.md (commands + agents + skills)
-            "kiro": 98,       # .kiro/steering/*.md (commands + agents + skills)
+            "windsurf": 61,   # .windsurf/rules/*.md (commands + agents)
+            "kiro": 61,       # .kiro/steering/*.md (commands + agents)
             "cline": 1,       # .clinerules/z-harness.md (pointer default — single file)
             "copilot": 1,     # .github/copilot-instructions.md (single pointer file)
         }

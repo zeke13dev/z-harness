@@ -456,47 +456,46 @@ def _detect_needs_input(output: str) -> dict[str, str] | None:
 
 COMMAND_TOOLS: dict[str, dict[str, Any]] = {
     # ── Heavy ──
-    "z_plan":            {"command_id": "/z-plan",            "description": "Run the rigorous z-harness planning pipeline",                       "is_heavy": True,  "skills_path": "skills/z-plan/SKILL.md"},
-    "z_implement_all":   {"command_id": "/z-implement-all",   "description": "Implement ALL pending tasks from TASKS.md with per-task review",      "is_heavy": True,  "skills_path": "skills/z-implement-all/SKILL.md"},
-    "z_implement_next":  {"command_id": "/z-implement-next",  "description": "Implement the next pending task and review",                         "is_heavy": True,  "skills_path": "skills/z-implement-next/SKILL.md"},
-    "z_review_all":      {"command_id": "/z-review-all",      "description": "Final-gate cross-LLM review of cumulative diff against SPEC.md",       "is_heavy": True,  "skills_path": "skills/z-review-all/SKILL.md"},
-    "z_audit":           {"command_id": "/z-audit",           "description": "Read-only audit pipeline with cross-LLM review",                      "is_heavy": True,  "skills_path": "skills/z-audit/SKILL.md"},
-    "z_audit_plan_style":{"command_id": "/z-audit-plan-style","description": "Audit plan artifacts for code-quality issues before code is written",  "is_heavy": True,  "skills_path": "skills/z-audit-plan-style/SKILL.md"},
-    "z_debug":           {"command_id": "/z-debug",           "description": "Investigate a bug with repro/hypothesis/evidence/isolation phases",    "is_heavy": True,  "skills_path": "skills/z-debug/SKILL.md"},
-    "z_do":              {"command_id": "/z-do",              "description": "Plan-less execution for trivial changes with harness discipline",      "is_heavy": True,  "skills_path": "skills/z-do/SKILL.md"},
-    "z_brainstorm":      {"command_id": "/z-brainstorm",      "description": "3-vendor parallel pre-plan ideation with anti-bias check",            "is_heavy": True,  "skills_path": "skills/z-brainstorm/SKILL.md"},
-    "z_research":        {"command_id": "/z-research",        "description": "Deep research: map + brainstorm + adversarial synthesis panel",      "is_heavy": True,  "skills_path": "skills/z-research/SKILL.md"},
-    "z_map":             {"command_id": "/z-map",             "description": "Map terrain with citations and cross-LLM critique",                   "is_heavy": True,  "skills_path": "skills/z-map/SKILL.md"},
-    "z_plan_light":      {"command_id": "/z-plan-light",      "description": "Lightweight planner for 1-5 file fixes with bundled cross-consult",   "is_heavy": True,  "skills_path": "skills/z-plan-light/SKILL.md"},
-    "z_plan_split":      {"command_id": "/z-plan-split",      "description": "Pre-emptive scope splitter — fan-out into N narrow cluster-planners", "is_heavy": True,  "skills_path": "skills/z-plan-split/SKILL.md"},
-    "z_test":            {"command_id": "/z-test",            "description": "Dual-source semantic test-case planner (ERROR_POINTS + INVARIANTS)",   "is_heavy": True,  "skills_path": "skills/z-test/SKILL.md"},
-    "z_amend":           {"command_id": "/z-amend",           "description": "Amend an existing plan (SPEC/PLAN/TASKS) preserving completed state", "is_heavy": True,  "skills_path": "skills/z-amend/SKILL.md"},
-    "z_init_docs":       {"command_id": "/z-init-docs",       "description": "Bootstrap a two-tier docs system (human Markdown + LLM JSON)",        "is_heavy": True,  "skills_path": "skills/z-init-docs/SKILL.md"},
-    "z_maintain_docs":   {"command_id": "/z-maintain-docs",   "description": "Refresh stale docs after source changes via per-concept updaters",    "is_heavy": True,  "skills_path": "skills/z-maintain-docs/SKILL.md"},
-    "z_uplift":          {"command_id": "/z-uplift",          "description": "Bulk codebase quality uplift — decompose + per-component audit",     "is_heavy": True,  "skills_path": "skills/z-uplift/SKILL.md"},
-    "z_improve":         {"command_id": "/z-improve",         "description": "Post-run retrospective — analyze events.jsonl for friction signals", "is_heavy": True,  "skills_path": "skills/z-improve/SKILL.md"},
+    "z_plan":            {"command_id": "/z-plan",            "description": "Run the rigorous z-harness planning pipeline",                       "is_heavy": True},
+    "z_implement_all":   {"command_id": "/z-implement-all",   "description": "Implement ALL pending tasks from TASKS.md with per-task review",      "is_heavy": True},
+    "z_implement_next":  {"command_id": "/z-implement-next",  "description": "Implement the next pending task and review",                         "is_heavy": True},
+    "z_review_all":      {"command_id": "/z-review-all",      "description": "Final-gate cross-LLM review of cumulative diff against SPEC.md",       "is_heavy": True},
+    "z_audit":           {"command_id": "/z-audit",           "description": "Read-only audit pipeline with cross-LLM review",                      "is_heavy": True},
+    "z_audit_plan_style":{"command_id": "/z-audit-plan-style","description": "Audit plan artifacts for code-quality issues before code is written",  "is_heavy": True},
+    "z_debug":           {"command_id": "/z-debug",           "description": "Investigate a bug with repro/hypothesis/evidence/isolation phases",    "is_heavy": True},
+    "z_do":              {"command_id": "/z-do",              "description": "Plan-less execution for trivial changes with harness discipline",      "is_heavy": True},
+    "z_brainstorm":      {"command_id": "/z-brainstorm",      "description": "3-vendor parallel pre-plan ideation with anti-bias check",            "is_heavy": True},
+    "z_research":        {"command_id": "/z-research",        "description": "Deep research: map + brainstorm + adversarial synthesis panel",      "is_heavy": True},
+    "z_map":             {"command_id": "/z-map",             "description": "Map terrain with citations and cross-LLM critique",                   "is_heavy": True},
+    "z_plan_light":      {"command_id": "/z-plan-light",      "description": "Lightweight planner for 1-5 file fixes with bundled cross-consult",   "is_heavy": True},
+    "z_plan_split":      {"command_id": "/z-plan-split",      "description": "Pre-emptive scope splitter — fan-out into N narrow cluster-planners", "is_heavy": True},
+    "z_test":            {"command_id": "/z-test",            "description": "Dual-source semantic test-case planner (ERROR_POINTS + INVARIANTS)",   "is_heavy": True},
+    "z_amend":           {"command_id": "/z-amend",           "description": "Amend an existing plan (SPEC/PLAN/TASKS) preserving completed state", "is_heavy": True},
+    "z_init_docs":       {"command_id": "/z-init-docs",       "description": "Bootstrap a two-tier docs system (human Markdown + LLM JSON)",        "is_heavy": True},
+    "z_maintain_docs":   {"command_id": "/z-maintain-docs",   "description": "Refresh stale docs after source changes via per-concept updaters",    "is_heavy": True},
+    "z_uplift":          {"command_id": "/z-uplift",          "description": "Bulk codebase quality uplift — decompose + per-component audit",     "is_heavy": True},
+    "z_improve":         {"command_id": "/z-improve",         "description": "Post-run retrospective — analyze events.jsonl for friction signals", "is_heavy": True},
     # ── Fast / read-only ──
-    "z_where":           {"command_id": "/z-where",           "description": "List active plans, current phase, branch, age, status",               "is_heavy": False, "skills_path": "skills/z-where/SKILL.md"},
-    "z_stats":           {"command_id": "/z-stats",           "description": "Progress + cost report for the current plan",                         "is_heavy": False, "skills_path": "skills/z-stats/SKILL.md"},
-    "z_suggest_memory":  {"command_id": "/z-suggest-memory",  "description": "Author a memory entry for docs/llm/ from debug post-mortems",        "is_heavy": False, "skills_path": "skills/z-suggest-memory/SKILL.md"},
-    "z_axiom_scan":      {"command_id": "/z-axiom-scan",      "description": "Mine candidate axioms from interaction history",                     "is_heavy": False, "skills_path": "skills/z-axiom-scan/SKILL.md"},
-    "z_axiom_list":      {"command_id": "/z-axiom-list",      "description": "List axiom records from the store with filtering",                   "is_heavy": False, "skills_path": "skills/z-axiom-list/SKILL.md"},
-    "z_axiom_approve":   {"command_id": "/z-axiom-approve",   "description": "Approve a candidate axiom (requires explicit confirmation)",         "is_heavy": False, "skills_path": "skills/z-axiom-approve/SKILL.md"},
-    "z_axiom_reject":    {"command_id": "/z-axiom-reject",    "description": "Reject a candidate or approved axiom",                               "is_heavy": False, "skills_path": "skills/z-axiom-reject/SKILL.md"},
-    "z_axiom_edit":      {"command_id": "/z-axiom-edit",      "description": "Edit a field on a candidate or approved axiom record",               "is_heavy": False, "skills_path": "skills/z-axiom-edit/SKILL.md"},
-    "z_personas":        {"command_id": "/z-personas",        "description": "Inspect the persona registry, role bindings, and persona files",     "is_heavy": False, "skills_path": "skills/z-personas/SKILL.md"},
-    "z_handoff":         {"command_id": "/z-handoff",         "description": "Write a handoff.json artifact for session continuity",               "is_heavy": False, "skills_path": "skills/z-handoff/SKILL.md"},
-    "z_update":          {"command_id": "/z-update",          "description": "Update the local z-harness install",                                  "is_heavy": False, "skills_path": "skills/z-update/SKILL.md"},
-    "z_reality":         {"command_id": "/z-reality",         "description": "Interactive premise refinement — conversational on-ramp",            "is_heavy": False, "skills_path": "skills/z-reality/SKILL.md"},
-    "z_overnight":       {"command_id": "/z-overnight",       "description": "Overnight batch run of multiple /z-* commands",                      "is_heavy": False, "skills_path": "skills/z-overnight/SKILL.md"},
-    "z_evaluate":        {"command_id": "/z-evaluate",        "description": "Evaluate a completed z-harness session for patterns worth preserving","is_heavy": False, "skills_path": "skills/z-evaluate/SKILL.md"},
-    "z_context_budget":  {"command_id": "/z-context-budget",  "description": "Analyze context utilization and surface savings recommendations",    "is_heavy": False, "skills_path": "skills/z-context-budget/SKILL.md"},
-    "z_doc_rationale":   {"command_id": "/z-doc-rationale",   "description": "Produce ADRs, design rationale, and tradeoff explanations",          "is_heavy": False, "skills_path": "skills/z-doc-rationale/SKILL.md"},
-    "z_test_invariant":  {"command_id": "/z-test-invariant",  "description": "Legacy invariant-only test-case planner",                            "is_heavy": False, "skills_path": "skills/z-test-invariant/SKILL.md"},
+    "z_where":           {"command_id": "/z-where",           "description": "List active plans, current phase, branch, age, status",               "is_heavy": False},
+    "z_stats":           {"command_id": "/z-stats",           "description": "Progress + cost report for the current plan",                         "is_heavy": False},
+    "z_suggest_memory":  {"command_id": "/z-suggest-memory",  "description": "Author a memory entry for docs/llm/ from debug post-mortems",        "is_heavy": False},
+    "z_axiom_scan":      {"command_id": "/z-axiom-scan",      "description": "Mine candidate axioms from interaction history",                     "is_heavy": False},
+    "z_axiom_list":      {"command_id": "/z-axiom-list",      "description": "List axiom records from the store with filtering",                   "is_heavy": False},
+    "z_axiom_approve":   {"command_id": "/z-axiom-approve",   "description": "Approve a candidate axiom (requires explicit confirmation)",         "is_heavy": False},
+    "z_axiom_reject":    {"command_id": "/z-axiom-reject",    "description": "Reject a candidate or approved axiom",                               "is_heavy": False},
+    "z_axiom_edit":      {"command_id": "/z-axiom-edit",      "description": "Edit a field on a candidate or approved axiom record",               "is_heavy": False},
+    "z_personas":        {"command_id": "/z-personas",        "description": "Inspect the persona registry, role bindings, and persona files",     "is_heavy": False},
+    "z_handoff":         {"command_id": "/z-handoff",         "description": "Write a handoff.json artifact for session continuity",               "is_heavy": False},
+    "z_update":          {"command_id": "/z-update",          "description": "Update the local z-harness install",                                  "is_heavy": False},
+    "z_reality":         {"command_id": "/z-reality",         "description": "Interactive premise refinement — conversational on-ramp",            "is_heavy": False},
+    "z_overnight":       {"command_id": "/z-overnight",       "description": "Overnight batch run of multiple /z-* commands",                      "is_heavy": False},
+    "z_evaluate":        {"command_id": "/z-evaluate",        "description": "Evaluate a completed z-harness session for patterns worth preserving","is_heavy": False},
+    "z_context_budget":  {"command_id": "/z-context-budget",  "description": "Analyze context utilization and surface savings recommendations",    "is_heavy": False},
+    "z_doc_rationale":   {"command_id": "/z-doc-rationale",   "description": "Produce ADRs, design rationale, and tradeoff explanations",          "is_heavy": False},
     # ── Utility ──
-    "z_export":          {"command_id": "/z-export",          "description": "Export z-harness commands/agents/skills to a host",                   "is_heavy": False, "skills_path": ""},
-    "z_detect":          {"command_id": "/z-detect",          "description": "Detect installed hosts and versions",                                 "is_heavy": False, "skills_path": ""},
-    "z_subagent_dispatch":{"command_id": "/z-subagent-dispatch", "description": "Dispatch a subagent via LLM CLI",                                  "is_heavy": True,  "skills_path": ""},
+    "z_export":          {"command_id": "/z-export",          "description": "Export z-harness commands/agents/skills to a host",                   "is_heavy": False},
+    "z_detect":          {"command_id": "/z-detect",          "description": "Detect installed hosts and versions",                                 "is_heavy": False},
+    "z_subagent_dispatch":{"command_id": "/z-subagent-dispatch", "description": "Dispatch a subagent via LLM CLI",                                  "is_heavy": True},
 }
 
 
@@ -552,8 +551,11 @@ def _dispatch_command(
     if not meta.get("is_heavy", True) and tool_name in _FAST_HANDLERS:
         return _FAST_HANDLERS[tool_name](args)
 
-    # Skill-only path (T019): commands with a skills_path but no commands/z-*.md
-    if meta.get("skills_path") and not meta.get("is_heavy", True):
+    # Lightweight path: non-heavy commands that aren't fast-handled are dispatched
+    # by loading their commands/<id>.md and sending it as a subagent task. (These
+    # were formerly sourced from skills/<id>/SKILL.md; commands/ is now the single
+    # source — see _handle_skill_dispatch.)
+    if not meta.get("is_heavy", True):
         return _handle_skill_dispatch(tool_name, meta, args, progress_callback)
 
     # Subagent dispatch (T010)
@@ -580,23 +582,24 @@ def _handle_skill_dispatch(
     args: dict[str, Any],
     progress_callback: Any,
 ) -> ToolResult:
-    """Dispatch a skill-only command by loading and executing its SKILL.md.
-
-    Skill-only commands have a skills_path in COMMAND_TOOLS but no corresponding
-    commands/z-*.md file.  They are dispatched by reading the SKILL.md and
+    """Dispatch a lightweight command by loading its commands/<id>.md and
     sending it as a subagent task via the standard dispatcher.
+
+    commands/ is the single source of command content. (This path formerly read
+    skills/<id>/SKILL.md; the skills/ mirror was removed in favor of exporting
+    per-host skills from commands/.)
     """
-    skills_path = meta.get("skills_path", "")
-    if not skills_path:
-        return ToolResult.error(f"No skills_path for '{tool_name}' — cannot dispatch")
+    command_id = meta.get("command_id", "").lstrip("/")
+    if not command_id:
+        return ToolResult.error(f"No command_id for '{tool_name}' — cannot dispatch")
 
     try:
         repo_root = _get_repo_root()
-        skill_file = repo_root / skills_path
-        if not skill_file.exists():
-            return ToolResult.error(f"Skill file not found: {skills_path}")
+        cmd_file = repo_root / "commands" / f"{command_id}.md"
+        if not cmd_file.exists():
+            return ToolResult.error(f"Command file not found: commands/{command_id}.md")
 
-        skill_content = skill_file.read_text()
+        skill_content = cmd_file.read_text()
         prompt = args.get("prompt", "")
         full_prompt = f"{skill_content}\n\n---\n\nTask: {prompt}" if prompt else skill_content
 

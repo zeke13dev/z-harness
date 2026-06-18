@@ -13,7 +13,6 @@ The following z-harness constructs have direct or near-direct equivalents in Ant
 |---------------------|----------------------|
 | `commands/*.md` (slash commands) | `.agent/workflows/<name>.md` — custom chat modes (`agy chat --mode <id>`) |
 | `agents/*.md` (agent definitions) | `.agent/rules/<name>.md` — always_on or model_decision rules |
-| `skills/*/SKILL.md` (skills) | `.agent/skills/<name>/SKILL.md` — workspace skills |
 | `Bash`, `Read`, `Edit`, `Write` tools | Cascade native tools (exact names may differ; semantics are equivalent) |
 | `AskUserQuestion` tool (clarification) | Cascade conversational turn (native; no special syntax needed) |
 | `WebFetch`, `WebSearch` tools | Cascade native (if enabled in the workspace) |
