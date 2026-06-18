@@ -378,7 +378,7 @@ Print a soft warning to the conversation: "Note: this entry is older than the st
 
 If `STALENESS_DRIFT == true`:
 
-<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the staleness prompt via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the staleness prompt via their native channel. Silent omission is forbidden. -->
 
 Use `AskUserQuestion` to prompt:
 

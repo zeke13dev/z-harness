@@ -87,7 +87,7 @@ Output of Phase 1: a list `CONCEPTS = [{slug, source_files[]}, ...]` for Phase 2
 
 ### 1d. Per-concept overwrite confirmation
 
-<!-- RUNTIME-GATE: ask_user; category=archiving; non-supporting drivers must surface the per-concept overwrite confirmation question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the per-concept overwrite confirmation question via their native channel. Silent omission is forbidden. -->
 For any concept where `docs/llm/<slug>.json` OR `docs/human/<slug>.md` already exists, ask the user via a SINGLE batched `AskUserQuestion`: "These N concepts already have docs. Overwrite / preserve / overwrite only LLM tier?" Default: preserve (do not overwrite without explicit consent).
 
 ## Phase 2 — Per-concept doc generation (parallel)

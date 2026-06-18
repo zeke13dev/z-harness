@@ -93,7 +93,7 @@ Output of Phase 1: a list `CONCEPTS = [{slug, source_files[]}, ...]` for Phase 2
 
 ### 1d. Per-concept overwrite confirmation
 
-<!-- RUNTIME-GATE: ask_user; category=archiving; non-supporting drivers must surface the per-concept overwrite confirmation question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the per-concept overwrite confirmation question via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
 ## Phase 2 — Per-concept doc generation (parallel)

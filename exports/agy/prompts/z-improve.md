@@ -17,7 +17,7 @@ $ARGUMENTS
 - `<slug>` → use the most recent run under `$Z_HARNESS_PLAN_DIR/archive/`
 - `$Z_HARNESS_PLAN_DIR/<run-id>` → exact run
 - `adhoc/<run-id>` → a `/z-do` run
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the run-selection question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the run-selection question via their native channel. Silent omission is forbidden. -->
 - (empty) → list the 10 most recent runs across all slugs (covering both new layout `<base>/plans/*/archive/*` and legacy flat `<base>/*/archive/*` including adhoc):
   ```bash
   BASE="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" base_dir)"
@@ -135,7 +135,7 @@ Skip this phase if all proposals are obvious one-line tweaks.
 
 ## Phase 5 — Discussion with the user
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface per-proposal approval questions (accept / refine / defer / reject) via their native channel, one at a time. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface per-proposal approval questions (accept / refine / defer / reject) via their native channel, one at a time. Silent omission is forbidden. -->
 Present the proposals via `AskUserQuestion`. For EACH proposal separately (one question per proposal — do not batch multi-select for these, the user needs to evaluate them one at a time):
 
 - "Accept — apply this edit"

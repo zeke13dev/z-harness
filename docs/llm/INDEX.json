@@ -846,6 +846,33 @@
       "summary": "Opt-in pre-review gate-down at the per-task implement gate. Z_HARNESS_IMPL_PRE_REVIEW default 0 (SHIPS INERT; knob-off is byte-identical to today). When on: Step 6.P1 tier-drift re-check via complexity-classifier (must strip cached **Complexity:** line; drift-up emits tier_drift_detected and forces codex). Step 6.P2 gate-down (low-tier only): Flash pre-reviewer dispatch; CLEAN verdict skips codex + emits review_gated_down; flagged verdict escalates to codex with Flash findings prepended as FLASH_PREPEND. Medium/high always go to codex unchanged. Flash unavailable emits pre_review_skipped + falls through to codex (fail-safe toward more thorough review). COST-INVERSION CAVEAT: Flash-on-all + codex-on-subset can invert cost vs codex-on-all. EVIDENCE GATE: knob is undocumented-as-recommended until scripts/audit-preview-misses.sh shows acceptable Flash false-negative rate."
     },
     {
+      "slug": "attend",
+      "source_files": [
+        "commands/z-attend.md",
+        "scripts/chain-runner.sh",
+        "scripts/config.py",
+        "scripts/lint-halt-categories.sh",
+        "scripts/surface-shortcut.sh",
+        "scripts/write-handoff.sh",
+        "docs/schemas/handoff.schema.json",
+        "docs/human/attend.md",
+        "docs/llm/attend.json"
+      ],
+      "last_updated": "2026-06-12",
+      "confidence": "high",
+      "depends_on": [
+        "commands",
+        "scripts",
+        "config",
+        "session-handoff"
+      ],
+      "consumed_by": [
+        "commands",
+        "scripts"
+      ],
+      "summary": "Middle-gear attended chain orchestrator. Auto-advances through a command chain (default preset attend-full = plan,audit,test,implement-all,review-all), halts and asks inline only on the four halt categories (decision/risk/shortcut/archiving), auto-proceeds mechanical_proceed gates with skill_default, and yields for a real user /clear at declared yield_after boundaries (plan, implement-all). Resume validates a hardened handoff.json protocol-1.1 predicate: HEAD SHA mismatch=HARD HALT, phase/cursor disagree=HARD HALT, session_id unchanged=WARN, done-set/dirty drift=WARN. Gate policy lives in z-attend.md; sequencing/state mechanics live in chain-runner.sh (policy separation Invariant 2). Untagged gates always resolve to 'ask' (Invariant 1 fail-safe). Z_HARNESS_NO_ASK=halt is never set."
+    },
+    {
       "slug": "hermes-orchestration",
       "source_files": [
         "scripts/hermes-execute.py",

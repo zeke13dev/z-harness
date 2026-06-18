@@ -1106,6 +1106,34 @@ For each shortcut record, handle the three `SURFACE_RC` cases explicitly (per th
 
 Default to the robust alternative if the user does not approve. Block until all design decisions and all shortcut records are answered.
 
+```bash
+# Callsite 2 — Phase-5 shortcut approval: one surface-shortcut.sh call per record.
+# RUN is already set/exported in Setup step 3; surface-shortcut.sh reads the RUN
+# env var to attribute the shortcut_proposed event, so export it here.
+export RUN="$RUN"
+# Drive this loop from the Shortcuts section the orchestrator just presented:
+# for each record, SHORTCUT_CHOSEN = the looser path this shortcut takes,
+# SHORTCUT_DECLINED = the robust alternative it bypasses, SHORTCUT_WHY = its cost note.
+# (The orchestrator extracts these three fields per record from the Shortcuts list;
+#  iterate over every record — do not assume a single shortcut.)
+for_each_shortcut_record() {  # conceptual loop body — run once per Shortcuts record
+  SURFACE_RC=0
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/surface-shortcut.sh" \
+    --chosen "$SHORTCUT_CHOSEN" \
+    --declined "$SHORTCUT_DECLINED" \
+    --why "$SHORTCUT_WHY" || SURFACE_RC=$?
+  # ... handle SURFACE_RC per the three cases below ...
+}
+```
+
+<!-- RUNTIME-GATE: ask_user; category=shortcut; non-supporting drivers must surface this shortcut approval question via their native channel and await a response before proceeding. Silent omission is forbidden. -->
+For each shortcut record, handle the three `SURFACE_RC` cases explicitly (per the T009 contract):
+> [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
+- **`SURFACE_RC -eq 0`** — no-op (`--declined` was empty, so this record names no robust alternative and is not a shortcut): proceed without an ask for this record.
+> [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
+
+Default to the robust alternative if the user does not approve. Block until all design decisions and all shortcut records are answered.
+
 ## Phase 6 — Write SPEC.md and PLAN.md (legacy) / INTENT.md (intent-mode)
 
 ```bash

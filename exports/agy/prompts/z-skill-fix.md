@@ -9,7 +9,7 @@ Target (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question "Which skill misled, and how?" via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the question "Which skill misled, and how?" via their native channel. Silent omission is forbidden. -->
 **If empty** — use `AskUserQuestion` to ask "Which skill misled, and how?" before proceeding.
 
 Bias toward over-triggering: a skill that misled once will mislead again. The cost of a small edit is negligible compared to the cost of repeating the failure across future conversations.
@@ -41,7 +41,7 @@ If the failure originates from a z-harness command/agent and you're NOT inside t
 ## Setup
 
 1. Resolve the target file from `$ARGUMENTS` (skill name, path, or freeform description).
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the file-disambiguation question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the file-disambiguation question via their native channel. Silent omission is forbidden. -->
 2. If multiple files plausibly match, use `AskUserQuestion` to disambiguate.
 3. Pick run id: `RUN=$(date -u +%Y%m%dT%H%M%SZ)-skill-fix`.
 
@@ -121,7 +121,7 @@ Spawn the reviewer:
 ```
 
 Parse the return:
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the second-failure decision (proceed anyway / patch manually / abandon) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the second-failure decision (proceed anyway / patch manually / abandon) via their native channel. Silent omission is forbidden. -->
 - **Blockers/majors** → re-edit. Re-run the reviewer once more. Second failure → halt with `AskUserQuestion` (proceed anyway / patch manually / abandon).
 - **No blockers/majors** → accept.
 

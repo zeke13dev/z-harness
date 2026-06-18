@@ -1,5 +1,5 @@
 SHELL := /usr/bin/env bash
-.PHONY: test test-sh conformance conformance-live conformance-record conformance-strict lint lint-strict preflight bench-autonomy-check test-ecc-lessons
+.PHONY: test test-sh conformance conformance-live conformance-record conformance-strict lint lint-strict lint-halt preflight bench-autonomy-check test-ecc-lessons
 
 # Full Python test suite: the unit/integration tests under tests/, the
 # script-level tests under scripts/, and the runtime dispatch + driver tests
@@ -73,6 +73,14 @@ lint-strict:
 # custom regex frontmatter parser silently accepts. Requires PyYAML.
 lint-frontmatter:
 	bash scripts/lint-frontmatter.sh
+
+# Halt-category lint — validates that every ask_user RUNTIME-GATE in commands/*.md
+# carries a valid category= token from the halt_category enum
+# {decision, risk, shortcut, archiving, mechanical_proceed}.
+# Exit 0 = all gates tagged; exit 1 = missing or invalid category tokens.
+# Wired into CI (lint-askuser.yml lint-halt-categories job).
+lint-halt:
+	bash scripts/lint-halt-categories.sh --strict --commands-dir commands
 
 preflight:
 	bash scripts/preflight.sh

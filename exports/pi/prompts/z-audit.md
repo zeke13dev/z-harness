@@ -450,7 +450,7 @@ If `SCOPE_HINT` is set (from `--scope-from`), use `SCOPE_HINT` as the resolved t
    - Auto-confirm the `dimensions_hint` list. Do NOT ask the user which dimensions to audit. Do NOT apply the "$ARGUMENTS named dimensions" shortcut below. Proceed as if the user selected those dimensions.
    - Inform the user: "Phase 0 scope probe suggested dimensions: <dimensions_hint list>. Proceeding with those."
 
-   <!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the dimensions
+   <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the dimensions
         selection question via their native channel when no auto-resolved dimensions
         are available. Silent omission is forbidden. -->
    > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.

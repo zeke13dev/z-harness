@@ -171,7 +171,7 @@ Compute `stale_pct = stale_concepts / total_concepts`. Threshold: the value from
 
 If `stale_pct >= threshold`:
 - Write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md` (artifact for audit trail). Set `ARTIFACT_PATH="$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md"`.
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the doc-staleness route question (switch to /z-maintain-docs / continue with stale docs / abandon) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the doc-staleness route question (switch to /z-maintain-docs / continue with stale docs / abandon) via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
   ```bash
@@ -488,7 +488,7 @@ if [ "$NO_STYLE" != "true" ]; then
 fi
 ```
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the missing STYLE.md gate question (run /z-style-init / continue without STYLE / abort) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the missing STYLE.md gate question (run /z-style-init / continue without STYLE / abort) via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
 ```bash
@@ -570,7 +570,7 @@ Record `T0=$(date +%s%3N)` and `USER_WAIT_MS_THIS_PHASE=0` at phase start.
 
 If any concern surfaces:
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the premise concern question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the premise concern question via their native channel. Silent omission is forbidden. -->
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start \
   '{"phase":0,"reason":"premise_concern"}'
@@ -902,7 +902,7 @@ PYEOF
 )"
 ```
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface each slug collision disambiguation question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface each slug collision disambiguation question via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
 ```bash
@@ -1046,7 +1046,7 @@ PYEOF
 
 Push-notify the user that decomposition is ready.
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the decomposition confirm question (proceed / abort) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the decomposition confirm question (proceed / abort) via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
 ```bash
@@ -1159,7 +1159,7 @@ Branch on `$GATE_DISPOSITION`:
 - **`unhandled_gate`**: treat as `halt` (log + exit).
 - **`ask`**: present AskUser gate below.
 
-<!-- RUNTIME-GATE: ask_user; workflow.pre_run_cost_gate; non-supporting drivers must surface the cost gate (proceed / abandon) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=risk; workflow.pre_run_cost_gate; non-supporting drivers must surface the cost gate (proceed / abandon) via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
 ```bash
@@ -1980,7 +1980,7 @@ Key dispatch rules:
 - `rubric_path` is the **absolute path** to STYLE.md (or empty string). Never inline STYLE.md content.
 - `rubric_path` is non-empty **only** when `dim ∈ {cleanliness, design}` AND `STYLE_MD_PATH` is non-empty.
 - All auditors for this component are dispatched simultaneously in one message — never serialized.
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the auditor-failed recovery question (retry / skip dimension / skip component / abort Phase 3) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the auditor-failed recovery question (retry / skip dimension / skip component / abort Phase 3) via their native channel. Silent omission is forbidden. -->
 - If any auditor returns `unable_to_complete`:
 
   ```bash
@@ -2342,7 +2342,7 @@ Flag: tasks that would regress invariants, tasks with vague acceptance, severity
 
 Parse the return:
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the reviewer second-failure decision (continue / skip component / abort Phase 3) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the reviewer second-failure decision (continue / skip component / abort Phase 3) via their native channel. Silent omission is forbidden. -->
 - **Blockers** → re-edit the affected TASKS.md entries in-place; re-run the reviewer once. If the second review still has Blockers:
 
   ```bash
@@ -2671,7 +2671,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 If `RESUME_PENDING_COUNT > 0`:
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the interrupted-resume question (resume / mark as done / skip / abort) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the interrupted-resume question (resume / mark as done / skip / abort) via their native channel. Silent omission is forbidden. -->
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start \
   "$(printf '{"phase":5,"reason":"interrupted_resume","component":"%s"}' "$COMP_SLUG")"
@@ -2743,7 +2743,7 @@ PYEOF
 )"
 ```
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the per-component implement gate question (proceed / skip / abort) via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the per-component implement gate question (proceed / skip / abort) via their native channel. Silent omission is forbidden. -->
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start \
   "$(printf '{"phase":5,"reason":"implement_gate","component":"%s"}' "$COMP_SLUG")"

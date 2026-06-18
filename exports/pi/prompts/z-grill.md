@@ -56,7 +56,7 @@ A branch is "high-impact" if leaving it unresolved would materially change the e
 
 **If the topic above is empty or whitespace**, you have nothing to grill yet. Open with a single broad question to seize a thread, then immediately switch to depth-first tree-walking.
 
-<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface this cold-open
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface this cold-open
      question via their native channel and accept a text reply. Silent omission
      is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
@@ -120,7 +120,7 @@ There is **no silent question cap.** Grill as long as it is productive.
 
 **Standing stop offer.** Every few turns (roughly every 3-4 asked questions), surface a standing offer so the user always has the exit:
 
-<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface this standing
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface this standing
      stop offer via their native channel. Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 - `keep grilling` (Recommended if high-impact branches remain) — continue the loop.

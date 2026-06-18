@@ -487,7 +487,7 @@ print(json.dumps({"question_id": sys.argv[1], "proposed_value": sys.argv[2], "n_
 ' "$qid" "$val" "$n" "$scope_rec")"
 ```
 
-<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the preference
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the preference
      elevation proposal question via their native channel and accept a reply.
      Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.

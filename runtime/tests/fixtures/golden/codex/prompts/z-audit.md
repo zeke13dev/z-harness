@@ -444,7 +444,7 @@ If `SCOPE_HINT` is set (from `--scope-from`), use `SCOPE_HINT` as the resolved t
    - Auto-confirm the `dimensions_hint` list. Do NOT ask the user which dimensions to audit. Do NOT apply the "$ARGUMENTS named dimensions" shortcut below. Proceed as if the user selected those dimensions.
    - Inform the user: "Phase 0 scope probe suggested dimensions: <dimensions_hint list>. Proceeding with those."
 
-   <!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the dimensions
+   <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the dimensions
         selection question via their native channel when no auto-resolved dimensions
         are available. Silent omission is forbidden. -->
    **Only if `SCOPE-audit.json` does not exist, `last_run_id` does not match, `mode` is not `LIGHT`, or `dimensions_hint` is absent/empty:** check whether `$ARGUMENTS` supplied a target + the user already named dimensions in prose. If dimensions are named in `$ARGUMENTS`, use those. Otherwise use `AskUserQuestion` to collect:

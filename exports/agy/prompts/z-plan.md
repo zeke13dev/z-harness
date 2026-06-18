@@ -9,7 +9,7 @@ Task (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the question
      "What task should I plan?" to the user via their native channel and accept
      a text reply. Silent omission is forbidden. -->
 **If the task above is empty or whitespace**, do this first: use `AskUserQuestion` (or a direct question if a free-text answer is needed) to ask the user "What task should I plan?". Wait for their reply. Treat their reply as the task and continue. Do not proceed past this point without a concrete task description.
@@ -20,7 +20,7 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
 
 1. **Derive a plan slug** from the task: short kebab-case, 2-4 words (e.g. "expand sports ML" → `expand-sports-ml`; "add rate limit middleware" → `add-rate-limit`). Run `bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" all_plan_slugs` to check for existing slug names across both new and legacy plan layouts. If a matching slug dir is found:
    - **Precontext-only slug dir** (only `MAP.md`, `BRAINSTORM.md`, `RESEARCH.md`, and/or `GRILL.md` present, no `PLAN.md`/`SPEC.md`/`TASKS.md`): treat as continuation — no prompt, proceed with the existing slug.
-   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the slug-collision
+   <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the slug-collision
         confirmation question via their native channel. Silent omission is forbidden. -->
    - **Finished-plan slug dir** (`PLAN.md` or `TASKS.md` exists): **collision — prompt the user via `AskUserQuestion` to confirm or choose a different slug. This collision check runs UNCONDITIONALLY and is never bypassed by the resolver below.**
 
@@ -45,7 +45,7 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
 
    Branch on `$RESULT`:
    - `skip`: accept the derived slug silently — no AskUserQuestion. Emit `askuser_skipped` event with `{question_id: "workflow.slug_confirm", source: "$SOURCE"}`.
-   <!-- RUNTIME-GATE: ask_user; non-supporting drivers must present the slug
+   <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must present the slug
         recommendation via their native channel when result is "prefill" or "ask". -->
    - `prefill`: present the AskUserQuestion normally, pre-select the derived slug as the recommended option (label suffix: ` (Recommended — your preference)`).
    - `ask`: if the auto-derived slug is non-obvious, confirm with the user via `AskUserQuestion` normally. If `$SOURCE == "conflict"`, add to the question header: `(Note: config says <X>, memory says <Y> — your answer below will be offered as a conflict-resolution write target.)` After the user picks an answer that differs from both stored values, surface a one-shot follow-up: "Record your answer as the new preference? (config / memory:very_strong / memory:strong / no)".
@@ -108,7 +108,7 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
    - **`CLAIM_RC == 0`** (acquired, self-reentry, or `Z_HARNESS_CLAIM_DISABLE=1`) → proceed normally.
 
    - **`CLAIM_RC == 1`** (live peer holds the slug) → show the holder details from `$CLAIM_OUTPUT` (session / run / command / heartbeat age).
-     <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface this contention question
+     <!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface this contention question
           via their native channel and await a response. Silent omission is forbidden. -->
      - **Interactive** (not `Z_HARNESS_NO_ASK`): `AskUserQuestion` — **proceed anyway / abort / use a new slug**.
        - `proceed anyway` → continue (uncoordinated; log a `plan_claim_override` event).
@@ -117,7 +117,7 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
      - **Unattended** (`Z_HARNESS_NO_ASK`): abort (`exit 1`) unless `Z_HARNESS_CLAIM_OVERRIDE=1` → proceed anyway (log override). (No release — we never held the lock.)
 
    - **`CLAIM_RC == 2`** (stale-takeover — **we now hold the lock**) → show prior holder + idle age from `$CLAIM_OUTPUT`.
-     <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface this stale-takeover
+     <!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface this stale-takeover
           question via their native channel and await a response. Default is abort.
           Silent omission is forbidden. -->
      - **Interactive**: `AskUserQuestion` — **proceed / abort** (default: **ABORT** — a partial SPEC/PLAN may exist from the prior holder).
@@ -132,7 +132,7 @@ Strict, multi-phase. Do not skip phases. Do not write production code — `/z-pl
      ```
 
    - **`CLAIM_RC == 3`** (corrupt / invalid args — **we do NOT hold the lock**) → emit a loud error; show manual-cleanup hint (`rm <claims_dir>/<slug>.lock*` then retry).
-     <!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface this corrupt-lock
+     <!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface this corrupt-lock
           question via their native channel and await a response. Default is abort.
           Silent omission is forbidden. -->
      - **Interactive**: `AskUserQuestion` — **abort (default)** / **proceed UNCOORDINATED** (clearly labeled: you and a peer may clobber each other's artifacts).
@@ -256,7 +256,7 @@ if peers:
 
     **GRILL.md detection** (independent of one-way gate): If `$Z_HARNESS_PLAN_DIR/GRILL.md` exists and its frontmatter `status` is `complete`, note it as a GRILL.md precontext artifact. Read its `## Sharpened problem`, `## Killed scope`, and `## Open branches` sections for injection in Phase 0 and Phase 2. GRILL.md is a problem-statement artifact, not a code-citation artifact — **no mandatory freshness gate applies.** Exception: if GRILL.md contains file citations (matched by the same regex `/[A-Za-z0-9_./-]+\.(rs|py|md|ts|tsx|js|jsx|json|toml|yaml|yml|sh|sql)(:\d+(-\d+)?)?/`), apply the same freshness scan as MAP.md (mtime vs GRILL.md frontmatter `generated_at`) and fold any stale signal into `map_stale` for the 10c gate. If `status` is not `complete`, skip GRILL.md silently (treat as absent).
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the consolidated
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the consolidated
      freshness gate covering docs / research / map staleness — all three signals
      merged into one AskUser call — when stale_pct >= threshold or any precontext
      citation is stale or deleted. Silent omission is forbidden. -->
@@ -319,7 +319,38 @@ Deterministic routes:
 
 Call `planning-router` only when deterministic signals conflict and no hard threshold already decides the route. It receives the compact signal payload plus the current route chain and is advisory; malformed or unavailable classifier output falls back to deterministic routing or an AskUser choice.
 
-If routing, write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md`, emit `plan_route_decision` with `from_command`, `to_command`, `route_class`, `reason_codes`, `signals`, `confidence`, `classifier_used`, `artifact_path`, `route_chain`, and `user_choice`, then present the AskUser handoff gate: switch, continue when not forbidden by a hard threshold, or abandon. Do not execute the next command automatically.
+If routing, write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md`, emit `plan_route_decision` with `from_command`, `to_command`, `route_class`, `reason_codes`, `signals`, `confidence`, `classifier_used`, `artifact_path`, `route_chain`, and `user_choice`.
+
+**Route-down shortcut surface (route-DOWN routes only).** A route is a *shortcut* only when it routes **DOWN** to a lighter command — i.e. `to_command` is `/z-do`, `/z-plan-light`, or one of `/z-plan-light`'s contextual variants `/z-fix` / `/z-debug`. Lateral or upward routes (`/z-plan-split`, `/z-research`, `/z-brainstorm`, `/z-audit-plan`, `/z-amend`, `/z-maintain-docs`) are **not** shortcuts — they do not decline a more-robust alternative for speed — so they must NOT fire the surface. Scope this block to the route-down branch ONLY:
+
+```bash
+# Callsite 1 — route-down shortcut surface (route-DOWN routes only).
+# RUN is already set/exported in Setup step 3 (RUN=<ts>-<slug>; export Z_HARNESS_RUN="$RUN").
+# surface-shortcut.sh reads the RUN env var to attribute the event, so export it here.
+export RUN="$RUN"
+SURFACE_RC=0
+case "$to_command" in
+  /z-do|/z-plan-light|/z-fix|/z-debug)
+    # Route-DOWN: declining full /z-plan for a lighter command — a genuine shortcut.
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/surface-shortcut.sh" \
+      --chosen "$to_command" \
+      --declined "full /z-plan" \
+      --why "route signals indicate a lighter command is sufficient" || SURFACE_RC=$?
+    ;;
+  *)
+    # Lateral/upward route — not a shortcut. Leave SURFACE_RC=0 (no-op).
+    SURFACE_RC=0
+    ;;
+esac
+```
+
+<!-- RUNTIME-GATE: ask_user; category=shortcut; non-supporting drivers must surface this route-down shortcut question via their native channel before taking the lighter route. Silent omission is forbidden. -->
+Handle the three `SURFACE_RC` cases explicitly (per the T009 contract):
+- **`SURFACE_RC -eq 1`** — surface the shortcut ask: use `AskUserQuestion` to ask "Shortcut: routing down to `<to_command>` instead of running full /z-plan. The robust alternative is to continue /z-plan in full. Proceed with the lighter route?" with options `["Yes, take the lighter route", "No, continue full /z-plan"]`. On "No": stay in /z-plan (skip the route-down).
+- **`SURFACE_RC -eq 0`** — no-op (the route was lateral/upward, or not a shortcut): proceed without the shortcut ask.
+- **`SURFACE_RC -eq 2`** — INFRA ERROR (shortcut telemetry failed: RUN unset, wiring bug, or the event was lost). Surface a diagnostic to the user ("shortcut telemetry failed — surfacing the route-down confirmation anyway"), then **fall back to surfacing the same `AskUserQuestion` as the `-eq 1` case** (fail-safe: when in doubt, ASK — never silently take the lighter route).
+
+Present the AskUser handoff gate: switch, continue when not forbidden by a hard threshold, or abandon. Do not execute the next command automatically.
 
 When the user chooses **switch** or **abandon** at the route gate (ending the run), per the FINALIZE_STATUS rule execute **Run Brief — halt finalize** (below) with reason `route gate — user chose switch or abandon`.
 
@@ -409,7 +440,7 @@ Before any planning, ask:
 - Will the proposed approach actually work? (e.g. for a quant strategy: is the edge real, will it survive transaction costs, is the backtest leaking? for an architecture: will it scale to the stated load?)
 - Is there a materially better path the user hasn't considered?
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface any premise
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface any premise
      concern to the user via their native channel and await a response before
      proceeding. Silent omission is forbidden. -->
 If any of these surface a real concern, **stop and raise it with the user before moving on.** Do not plan around a flawed premise. Use `AskUserQuestion` if there's a structured choice.
@@ -568,7 +599,7 @@ Branch on `$RESULT_DECISIONS`:
   fi
   ```
 - `skip`: accept the decisions doc silently — no AskUserQuestion. Emit `askuser_skipped` event with `{question_id: "workflow.plan_decisions_approval", source: "$SOURCE_DECISIONS"}` and proceed to Phase 3.
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the decisions doc
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the decisions doc
      approval question via their native channel when result is "prefill" or "ask".
      Silent omission is forbidden. -->
 - `prefill` or `ask`: proceed normally — block here until the user has approved the decisions doc.
@@ -717,14 +748,40 @@ If anything is still unclear about scope, constraints, or success criteria — a
 
 Present a **concise** decisions summary: one bullet per decision (what, why, what was rejected). Separate **Shortcuts** section: what's being skipped, robust alternative, cost of the shortcut.
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface each approval
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface each approval
      question (design decisions, shortcuts) via their native channel and await
      a response before proceeding. Silent omission is forbidden. -->
-Use `AskUserQuestion` for explicit approval on:
-- Each major design decision
-- Each proposed shortcut (default to robust if not approved)
+Use `AskUserQuestion` for explicit approval on each major design decision.
 
-Block until answered.
+**Surface each proposed shortcut individually.** The **Shortcuts** section presented above is a list, one record per shortcut, each with three fields: the path being taken (what's being skipped), the robust alternative, and the cost. The orchestrator iterates that list and calls `surface-shortcut.sh` **once per shortcut record**, binding `chosen` = the path the shortcut takes (the thing being skipped/the looser route) and `declined` = the named robust alternative that shortcut bypasses. Loop over the actual records — there is no fixed count:
+
+```bash
+# Callsite 2 — Phase-5 shortcut approval: one surface-shortcut.sh call per record.
+# RUN is already set/exported in Setup step 3; surface-shortcut.sh reads the RUN
+# env var to attribute the shortcut_proposed event, so export it here.
+export RUN="$RUN"
+# Drive this loop from the Shortcuts section the orchestrator just presented:
+# for each record, SHORTCUT_CHOSEN = the looser path this shortcut takes,
+# SHORTCUT_DECLINED = the robust alternative it bypasses, SHORTCUT_WHY = its cost note.
+# (The orchestrator extracts these three fields per record from the Shortcuts list;
+#  iterate over every record — do not assume a single shortcut.)
+for_each_shortcut_record() {  # conceptual loop body — run once per Shortcuts record
+  SURFACE_RC=0
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/surface-shortcut.sh" \
+    --chosen "$SHORTCUT_CHOSEN" \
+    --declined "$SHORTCUT_DECLINED" \
+    --why "$SHORTCUT_WHY" || SURFACE_RC=$?
+  # ... handle SURFACE_RC per the three cases below ...
+}
+```
+
+<!-- RUNTIME-GATE: ask_user; category=shortcut; non-supporting drivers must surface this shortcut approval question via their native channel and await a response before proceeding. Silent omission is forbidden. -->
+For each shortcut record, handle the three `SURFACE_RC` cases explicitly (per the T009 contract):
+- **`SURFACE_RC -eq 1`** — surface the approval ask: use `AskUserQuestion` to ask "Shortcut proposed: `<SHORTCUT_CHOSEN>`. The robust alternative is: `<SHORTCUT_DECLINED>`. Approve this shortcut?" with options `["Approve shortcut", "Reject — use robust alternative instead"]`. On reject: remove the shortcut from PLAN.md and use the robust path.
+- **`SURFACE_RC -eq 0`** — no-op (`--declined` was empty, so this record names no robust alternative and is not a shortcut): proceed without an ask for this record.
+- **`SURFACE_RC -eq 2`** — INFRA ERROR (RUN unset, `--chosen` empty, or telemetry lost). Surface a diagnostic ("shortcut telemetry failed for this record — asking for approval anyway"), then **fall back to surfacing the same approval `AskUserQuestion` as the `-eq 1` case** (fail-safe: ASK rather than silently approve the shortcut).
+
+Default to the robust alternative if the user does not approve. Block until all design decisions and all shortcut records are answered.
 
 ## Phase 6 — Write SPEC.md and PLAN.md
 
@@ -851,7 +908,7 @@ Apply findings that hold up under "one reason this might be wrong" scrutiny. Pus
 
 Create `$Z_HARNESS_PLAN_DIR/TASKS.md`. Break PLAN.md into small, independently-implementable tasks. Each: `T001`-style ID, title, files touched, dependencies, acceptance criteria, status `[ ]`. Size so each fits a fresh context window.
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the task-count
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the task-count
      overflow question ("Combine", "Ship as-is", "Restructure") via their native
      channel when >25 tasks are produced. Silent omission is forbidden. -->
 **Task-count discipline.** Target **10–20 tasks**. If you produced **>25** tasks, stop and ask the user via `AskUserQuestion`:
@@ -907,7 +964,7 @@ python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-reg
 
 Copy `$Z_HARNESS_PLAN_DIR/{SPEC,PLAN,TASKS}.md` into `$Z_HARNESS_PLAN_DIR/archive/$RUN/`. Update `manifest.json` with end timestamp, status `complete`, totals (decision count, consultation count, total tokens if available).
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the next-step
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the next-step
      recommendation choice (/z-audit-plan / /z-test / /z-implement-all / skip)
      via their native channel. Silent omission is forbidden. -->
 Surface the next-step choice interactively via `AskUserQuestion`. Phrase the question as "Plan complete. What's next?" with these four options (the `AskUserQuestion` four-option cap is why the two plan audits share one option — mention `/z-audit-plan-style` in the `/z-audit-plan` option description): `/z-audit-plan` (label: `Audit the plan (recommended)` — recommended cheap pre-implementation reality check against the codebase; the description also points the user at `/z-audit-plan-style` for the companion MR-style quality pass on the plan artifacts), `/z-test` (label: `Draft semantic test cases` — recommended only for risky/financial code), `/z-implement-all` (label: `Start implementation now` — only when user has high confidence in the plan), `Skip — I'll decide later`. Default selection is `/z-audit-plan`. The user's choice is advisory — log it as a `next_step_choice` event but do not auto-dispatch the chosen command; the user invokes it themselves so they retain control of context boundaries (e.g. running `/compact` between phases).

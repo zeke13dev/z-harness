@@ -16,7 +16,7 @@ Both are installed/removed/reported together as one bundle. `install` adds which
 
 Subcommand (from `$ARGUMENTS`): `install`, `remove`, or `status`.
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the question "Which subcommand? (install / remove / status)" via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the question "Which subcommand? (install / remove / status)" via their native channel. Silent omission is forbidden. -->
 **If empty or unrecognized**, use `AskUserQuestion`: "Which subcommand do you want? (install / remove / status)" Block until answered.
 
 ## Setup
@@ -52,7 +52,7 @@ Subcommand (from `$ARGUMENTS`): `install`, `remove`, or `status`.
 
 ### Step 1 — Choose scope
 
-<!-- RUNTIME-GATE: ask_user; non-supporting drivers must surface the scope question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the scope question via their native channel. Silent omission is forbidden. -->
 Use `AskUserQuestion`:
 
 > Where should the guardrail hooks be installed?

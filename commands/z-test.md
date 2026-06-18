@@ -28,7 +28,7 @@ Set `$BASE = $Z_HARNESS_PLAN_DIR` (or `z-harness` for legacy).
 
 **Require SPEC.md + PLAN.md + TASKS.md.** Abort with "incomplete plan; run /z-plan to completion first" if any of the three is missing.
 
-<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the implementation-underway continue/abort question via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the implementation-underway continue/abort question via their native channel. Silent omission is forbidden. -->
 **Implementation-underway warning.** If TASKS.md already has any `[x]` rows, `AskUserQuestion`:
 - "Continue — add tests that will retroactively constrain in-flight tasks"
 - "Abort — wait until implementation is complete, then run /z-test after /z-review-all"

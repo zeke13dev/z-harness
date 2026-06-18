@@ -272,6 +272,7 @@ status = {
     'tasks_done': <count>,
     'tasks_total': 1,
     'current_task': '<task-id or null>',
+    'slug': os.environ.get('Z_HARNESS_SLUG') or None,
     'updated_at': datetime.datetime.utcnow().isoformat() + 'Z'
 }
 path = os.path.join(os.environ.get('BASE', '.'), 'session-status.json')

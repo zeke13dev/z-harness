@@ -697,7 +697,7 @@ if [[ $HB_RC -eq 9 ]]; then
 fi
 ```
 
-<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the preference
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the preference
      elevation proposal question via their native channel and accept a reply.
      Silent omission is forbidden. -->
 Present a single `AskUserQuestion`:

@@ -381,7 +381,7 @@ Print a soft warning to the conversation: "Note: this entry is older than the st
 
 If `STALENESS_DRIFT == true`:
 
-<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the staleness prompt via their native channel. Silent omission is forbidden. -->
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the staleness prompt via their native channel. Silent omission is forbidden. -->
 
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
 
