@@ -3,6 +3,24 @@ description: "Plan-less z-harness execution for small tasks. Brings the harness 
 role: workflow
 ---
 
+## STOP — DEPRECATED ALIAS
+
+**Print to the user:** "Note: /z-do is deprecated and now routes to /z-plan --quick (L1)."
+
+STOP. This command is a deprecated alias. You MUST immediately invoke `/z-plan --quick $ARGUMENTS` and do NOT continue past this section for any new invocation. Hand off to `/z-plan --quick` right now — pass `$ARGUMENTS` verbatim and terminate this command's execution. Do not read, execute, or act on any section below this one.
+
+```
+/z-plan --quick $ARGUMENTS
+```
+
+---
+
+**BACKWARD-COMPATIBILITY ONLY — DO NOT EXECUTE FOR NEW INVOCATIONS**
+
+The legacy phases below exist solely so that tooling that reads already-created `approach.md` / `premise.md` artifacts (e.g. `/z-improve`, run-brief rendering) continues to function without changes. A new invocation must never reach this line.
+
+---
+
 You are running **z-harness `/z-do`** — the lightest harness on-ramp. No slug, no plan artifacts, no upfront cross-LLM consult. Just: premise check, doc-fetcher grounding, inline implementation, codex review.
 
 Task (from `$ARGUMENTS`):
@@ -121,7 +139,7 @@ Save to `$CURRENT_ARCHIVE_DIR/premise.md`.
 
 ## Phase 2 — Ground (doc-fetcher first)
 
-Per the global rule, if `docs/llm/INDEX.json` exists AND `$Z_HARNESS_DOCS_ALWAYS_APPLY` is `always` (the default), dispatch `doc-fetcher` (Haiku) BEFORE any other reading:
+Per the global rule, if `docs/llm/INDEX.json` exists AND `docs.always_apply` is `always` (the default; read via `config.py get docs.always_apply`), dispatch `doc-fetcher` (Haiku) BEFORE any other reading:
 
 ```
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
@@ -131,7 +149,7 @@ Per the global rule, if `docs/llm/INDEX.json` exists AND `$Z_HARNESS_DOCS_ALWAYS
       prompt="query: <one-sentence task>\nrepo_root: <abs path>\ndepth: standard")
 ```
 
-If `$Z_HARNESS_DOCS_ALWAYS_APPLY` is `never`, skip doc-fetcher entirely and proceed directly to Read/Grep/Glob.
+If `docs.always_apply` is `never`, skip doc-fetcher entirely and proceed directly to Read/Grep/Glob.
 
 Use doc-fetcher's return to constrain what files you read next. If `STATUS: no_docs` / `no_match` / `partial`, fall back to direct Read/Grep/Glob — do NOT spawn Explore in `/z-do` (too expensive for this command).
 

@@ -239,7 +239,7 @@ if peers:
    ```
 7. Notification policy is resolved from config via the `export-env` step above. See `docs/human/config.md` for knob details (`notify.level`).
 8. **Check for LLM-tier docs.** If `docs/llm/INDEX.json` exists in the repo root, **do NOT read it from main thread.** Note its existence; Phase 1 will dispatch `doc-fetcher` (Haiku) to read it. The orchestrator never reads `docs/llm/*.json` directly — that's what burns main-thread context unnecessarily. If INDEX.json does not exist, note that fact and continue (Phase 1 will Explore without doc grounding).
-9. **Docs-freshness scan (inline, no gate yet).** Initialize signals before scanning: `docs_stale=false`, `research_stale=false`, `map_stale=false`; `stale_concepts_list=[]`; `stale_research_citations=[]`; `stale_map_citations=[]`. If `docs/llm/INDEX.json` exists, compute staleness across all its entries. This step is the ONE exception where main thread reads INDEX.json — but only the lightweight metadata fields (`slug`, `last_updated`, `source_file`), never the per-concept `<slug>.json` bodies. For each concept entry, compare `entry.last_updated` against the max `mtime` of its `source_files`. A concept is **stale** if any source file's mtime exceeds `last_updated`. Compute `stale_pct = stale_concepts / total_concepts`. The threshold is `$Z_HARNESS_DOC_STALENESS_THRESHOLD` (default `20` — meaning 20 percent). Record signal: `docs_stale = (stale_pct >= threshold)`. Also record `stale_concepts_list` (list of stale concept slugs) for display. **Do not present any AskUserQuestion here** — the gate fires below in step 10c after all three signals are collected.
+9. **Docs-freshness scan (inline, no gate yet).** Initialize signals before scanning: `docs_stale=false`, `research_stale=false`, `map_stale=false`; `stale_concepts_list=[]`; `stale_research_citations=[]`; `stale_map_citations=[]`. If `docs/llm/INDEX.json` exists, compute staleness across all its entries. This step is the ONE exception where main thread reads INDEX.json — but only the lightweight metadata fields (`slug`, `last_updated`, `source_file`), never the per-concept `<slug>.json` bodies. For each concept entry, compare `entry.last_updated` against the max `mtime` of its `source_files`. A concept is **stale** if any source file's mtime exceeds `last_updated`. Compute `stale_pct = stale_concepts / total_concepts`. The threshold is the value from `config.py get docs.staleness_threshold` (default `20` — meaning 20 percent). Record signal: `docs_stale = (stale_pct >= threshold)`. Also record `stale_concepts_list` (list of stale concept slugs) for display. **Do not present any AskUserQuestion here** — the gate fires below in step 10c after all three signals are collected.
 10. **Pre-plan artifact detection.** Check `$Z_HARNESS_PLAN_DIR/` for `MAP.md`, `BRAINSTORM.md`, `RESEARCH.md`, and `GRILL.md`.
 
     **RESEARCH.md artifact_kind dispatch:** If `RESEARCH.md` exists, read its frontmatter `artifact_kind` and `status` fields first to determine the precontext mode:
@@ -355,6 +355,246 @@ When the user chooses **switch** or **abandon** at the route gate (ending the ru
 
 Loop prevention: carry forward the latest route chain; if it already has two entries, ask the user to choose explicitly. If the recommended target equals the immediate prior `from_command`, block ping-pong, show both route artifacts, and ask the user to choose. If the user continues here, log the override and do not route again for the same `reason_codes` in this run.
 <!-- PLAN_ROUTE_CHECK_END -->
+
+## Mode detection
+
+Read `workflow.planning_mode` and `workflow.intent_level` from config (already exported by Setup step 4a). These two knobs govern the entire planning paradigm for this run.
+
+```bash
+PLANNING_MODE="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get workflow.planning_mode 2>/dev/null || echo "intent")"
+INTENT_LEVEL_CONFIG="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get workflow.intent_level 2>/dev/null || echo "auto")"
+# Export immediately so downstream phases (3, 6, 8, 9) running in fresh shells can read it.
+export PLANNING_MODE
+```
+
+**Flag overrides (parsed from `$ARGUMENTS` before the branch below).** CLI flags take precedence over config:
+
+```bash
+# Parse flag overrides from $ARGUMENTS.
+# Flags are stripped before the task description is used as the slug.
+_ARGS_REMAINING="$ARGUMENTS"
+for _flag in "$@"; do
+  case "$_flag" in
+    --full)
+      PLANNING_MODE="full"
+      _ARGS_REMAINING="${_ARGS_REMAINING/--full/}"
+      ;;
+    --quick)
+      PLANNING_MODE="intent"
+      INTENT_LEVEL="quick"
+      INTENT_LEVEL_SOURCE="flag"
+      INTENT_LEVEL_REASON="--quick flag: forced L1"
+      _ARGS_REMAINING="${_ARGS_REMAINING/--quick/}"
+      ;;
+    --standard)
+      PLANNING_MODE="intent"
+      INTENT_LEVEL="standard"
+      INTENT_LEVEL_SOURCE="flag"
+      INTENT_LEVEL_REASON="--standard flag: forced L2"
+      _ARGS_REMAINING="${_ARGS_REMAINING/--standard/}"
+      ;;
+    --deep)
+      PLANNING_MODE="intent"
+      INTENT_LEVEL="deep"
+      INTENT_LEVEL_SOURCE="flag"
+      INTENT_LEVEL_REASON="--deep flag: forced L3"
+      _ARGS_REMAINING="${_ARGS_REMAINING/--deep/}"
+      ;;
+  esac
+done
+# Trim leading/trailing whitespace from the remaining task description.
+_ARGS_REMAINING="${_ARGS_REMAINING#"${_ARGS_REMAINING%%[![:space:]]*}"}"
+_ARGS_REMAINING="${_ARGS_REMAINING%"${_ARGS_REMAINING##*[![:space:]]}"}"
+# Export so slug derivation and subsequent phases see the stripped task text.
+export PLANNING_MODE
+```
+
+When `INTENT_LEVEL_SOURCE="flag"`, the intent-level announce + override gate (Step 2) still fires — pre-selecting the flag-forced level as the recommended option — so the user can still override interactively. Emit `intent_level_chosen` with `source: "flag"` instead of `"classifier"` or `"config-forced"`.
+
+When any of `--quick`, `--standard`, or `--deep` was parsed, also set `INTENT_LEVEL_CONFIG="$INTENT_LEVEL"` (overwriting the config-read value) so the Step 1 `if [[ "$INTENT_LEVEL_CONFIG" != "auto" ]]` branch fires and the classifier is bypassed:
+
+```bash
+# After flag parse: if a level flag was set, sync INTENT_LEVEL_CONFIG so Step 1 skips the classifier.
+if [[ "$INTENT_LEVEL_SOURCE" == "flag" ]]; then
+  INTENT_LEVEL_CONFIG="$INTENT_LEVEL"
+fi
+```
+
+**Backward-compat SPEC detection (Invariant 4).** Check whether the slug dir already contains a legacy `SPEC.md` — if so, treat the plan as legacy regardless of `PLANNING_MODE` config. This guard runs BEFORE the branch below, after flag parsing:
+
+```bash
+# Invariant 4: never overwrite an existing legacy plan with INTENT.md.
+if [[ -f "$Z_HARNESS_PLAN_DIR/SPEC.md" ]]; then
+  if [[ "$PLANNING_MODE" != "full" ]]; then
+    echo "[z-plan] SPEC.md detected in '$Z_HARNESS_PLAN_DIR' — routing to legacy path (Invariant 4)." >&2
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" legacy_spec_detected \
+      "$(printf '{"slug":"%s","spec_path":"%s","original_planning_mode":"%s"}' \
+         "$Z_HARNESS_SLUG" "$Z_HARNESS_PLAN_DIR/SPEC.md" "$PLANNING_MODE")"
+    PLANNING_MODE="full"
+    export PLANNING_MODE
+  fi
+  # Additionally, if TASKS.md is present, this is a finished plan — route to amend/implement,
+  # not a fresh planning run. Surface this to the user.
+  if [[ -f "$Z_HARNESS_PLAN_DIR/TASKS.md" ]]; then
+    # <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must
+    #      surface this finished-legacy-plan advisory via their native channel.
+    #      Silent omission is forbidden. -->
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" legacy_plan_exists \
+      "$(printf '{"slug":"%s","has_spec":true,"has_tasks":true}' "$Z_HARNESS_SLUG")"
+    AskUserQuestion "This slug already has a finished legacy plan (SPEC.md + TASKS.md). \
+What would you like to do?" \
+      ["Amend the existing plan (/z-amend)", \
+       "Implement the existing plan (/z-implement-all)", \
+       "Continue here — start a fresh legacy plan run (overwrites SPEC/PLAN/TASKS)", \
+       "Abort"]
+    # On /z-amend or /z-implement-all: log next_step_choice, execute Run Brief — halt finalize,
+    # deregister, then exit 0. Do NOT auto-dispatch the chosen command.
+    # On "Continue here": proceed with PLANNING_MODE=full; the user accepts overwrite risk.
+    # On Abort: execute Run Brief — halt finalize, deregister, then exit 1.
+  fi
+fi
+```
+
+### Branch: `planning_mode=full` (legacy SDD path)
+
+If `PLANNING_MODE == "full"`, set `INTENT_LEVEL=""` and proceed directly to Phase 0. All subsequent phases run exactly as documented below — no classifier dispatch, no INTENT.md write. The legacy SPEC/PLAN/TASKS path is unchanged.
+
+```bash
+# Legacy path guard (formalized by T007).
+if [[ "$PLANNING_MODE" == "full" ]]; then
+  INTENT_LEVEL=""
+  INTENT_LEVEL_SOURCE=""
+  # Emit a legacy_mode_active event so telemetry can distinguish full vs intent runs.
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" legacy_mode_active \
+    "$(printf '{"slug":"%s","reason":"planning_mode=full"}' "$Z_HARNESS_SLUG")"
+  # Fall through to Phase 0; all phases produce SPEC/PLAN/TASKS exactly as documented.
+fi
+```
+
+### Branch: `planning_mode=intent` (adaptive INTENT path — default)
+
+If `PLANNING_MODE == "intent"` (the default), run the intent-classifier to choose a planning depth level, then announce the chosen level and offer an inline override.
+
+**Step 1 — Resolve the level.**
+
+If `INTENT_LEVEL_CONFIG` is not `auto` (i.e. the user forced a level via config), skip the classifier and use the forced value directly:
+
+```bash
+if [[ "$PLANNING_MODE" == "intent" ]]; then
+  if [[ "$INTENT_LEVEL_CONFIG" != "auto" ]]; then
+    # Config-forced level: skip classifier entirely. NEVER fall through to parse below.
+    INTENT_LEVEL="$INTENT_LEVEL_CONFIG"
+    INTENT_LEVEL_SOURCE="config-forced"
+    INTENT_LEVEL_REASON="config-forced: workflow.intent_level=$INTENT_LEVEL_CONFIG"
+  else
+    # Auto mode: dispatch the intent-classifier (Haiku). Pass forced_level="" so the
+    # classifier knows it is in auto mode.
+    INTENT_CLASSIFIER_RC=0
+    INTENT_CLASSIFIER_OUT=""
+```
+
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must skip the intent-classifier
+     <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+If `INTENT_LEVEL_CONFIG == "auto"` and `PLANNING_MODE == "intent"`, dispatch the classifier and capture its return into `INTENT_CLASSIFIER_OUT`. A non-zero exit or empty return triggers the fallback path:
+
+```
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+  subagent_type="intent-classifier",
+  description="Classify planning depth for <slug>",
+  prompt="task_prompt: <verbatim contents of $ARGUMENTS — the raw user task text>\nrepo_root: <abs path to repo root>\nforced_level: "
+))"
+INTENT_CLASSIFIER_RC=$?
+```
+
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+
+```bash
+    # Parse classifier output (INTENT_CLASSIFIER_OUT holds the agent's return).
+    # This parse block is inside the `else` (auto-mode) branch — it NEVER runs
+    # when INTENT_LEVEL_CONFIG != "auto" (i.e. config-forced case above).
+    if [[ "$INTENT_CLASSIFIER_RC" -ne 0 || -z "$INTENT_CLASSIFIER_OUT" ]]; then
+      INTENT_LEVEL="standard"
+      INTENT_LEVEL_SOURCE="fallback"
+      INTENT_LEVEL_REASON="classifier returned non-zero or empty; defaulting standard"
+    else
+      INTENT_LEVEL="$(echo "$INTENT_CLASSIFIER_OUT" | grep '^LEVEL:' | awk '{print $2}' | tr -d '[:space:]')"
+      INTENT_LEVEL_REASON="$(echo "$INTENT_CLASSIFIER_OUT" | grep '^REASON:' | sed 's/^REASON: *//')"
+      INTENT_LEVEL_SOURCE="classifier"
+
+      # Fallback: if parse fails or level is unrecognized, default to standard.
+      if [[ ! "$INTENT_LEVEL" =~ ^(quick|standard|deep)$ ]]; then
+        INTENT_LEVEL="standard"
+        INTENT_LEVEL_SOURCE="fallback"
+        INTENT_LEVEL_REASON="classifier parse failed or returned unrecognized level; defaulting standard"
+      fi
+    fi
+  fi  # end of auto-mode else branch (closes the if [[ "$INTENT_LEVEL_CONFIG" != "auto" ]] block)
+fi
+```
+
+**Step 2 — Announce the level + offer override.**
+
+Map the level to its human-readable name:
+- `quick` → **L1 (Quick)** — thin intent, 2 sections, no consult
+- `standard` → **L2 (Standard)** — full intent, 4 sections, optional consult
+- `deep` → **L3 (Deep)** — full intent, 4 sections + full Phase-3 cross-LLM consult
+
+Emit an `intent_level_chosen` event:
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" intent_level_chosen \
+  "$(printf '{"level":"%s","source":"%s","reason":%s}' \
+     "$INTENT_LEVEL" "$INTENT_LEVEL_SOURCE" \
+     "$(printf '%s' "$INTENT_LEVEL_REASON" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')")"
+```
+
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the
+     level announcement and offer the override choice via their native channel.
+     Silent omission is forbidden — the user must always see the chosen level. -->
+Present an `AskUserQuestion` announcing the chosen level and offering an inline override. Pre-select the classifier's choice as the recommended option:
+
+```
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+  header: "Planning depth: <INTENT_LEVEL_LABEL> (<INTENT_LEVEL>) — <INTENT_LEVEL_REASON>.
+           Proceed with this level, or override?",
+  options: [
+    "<INTENT_LEVEL_LABEL> — proceed (recommended)",
+    "L1 Quick — thin intent, skip consult",
+    "L2 Standard — full intent, optional consult",
+    "L3 Deep — full intent, full cross-LLM consult"
+  ]
+)
+```
+
+On user selection:
+- **Proceed (recommended)**: keep `INTENT_LEVEL` as-is.
+- **L1 Quick / L2 Standard / L3 Deep**: set `INTENT_LEVEL` to `quick` / `standard` / `deep` and set `INTENT_LEVEL_SOURCE="user-override"`. Emit `intent_level_override` event:
+  ```bash
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" intent_level_override \
+    "$(printf '{"level":"%s","prior_level":"%s","source":"user-override"}' \
+       "$INTENT_LEVEL" "$PRIOR_INTENT_LEVEL")"
+  ```
+
+**Step 3 — Set consult policy from level.**
+
+```bash
+# Level→consult policy:
+#   L1 (quick)    → skip Phase-3 consult entirely
+#   L2 (standard) → Phase-3 consult optional (user may skip)
+#   L3 (deep)     → full Phase-3 cross-LLM consult required
+case "$INTENT_LEVEL" in
+  quick)    INTENT_CONSULT_POLICY="skip"     ;;
+  standard) INTENT_CONSULT_POLICY="optional" ;;
+  deep)     INTENT_CONSULT_POLICY="full"     ;;
+  *)        INTENT_CONSULT_POLICY="optional" ;;  # safe default
+esac
+export INTENT_LEVEL INTENT_LEVEL_SOURCE INTENT_CONSULT_POLICY
+```
+
+**After mode detection, all downstream phases read `PLANNING_MODE` and `INTENT_LEVEL`:**
+- `PLANNING_MODE=intent` with a set `INTENT_LEVEL` → intent path; Phase 6 writes INTENT.md (T006-SEAM), Phase 8 is skipped (T006/T007-SEAM).
+- `PLANNING_MODE=full` or `INTENT_LEVEL=""` → legacy path; all phases run as documented.
+- SPEC.md detected in slug dir → `PLANNING_MODE` forced to `full` by the backward-compat guard above (Invariant 4); legacy path runs as if `--full` was passed.
 
 ## Phase telemetry (mandatory)
 
@@ -519,7 +759,7 @@ Now identify what doc-fetcher did NOT cover (or what's absent entirely if no doc
 
 **When to upgrade Explore to Sonnet:** if the question requires *interpretation* (e.g. "explain the control flow of X" rather than "where is X defined"), upgrade by setting `model: "sonnet"`. Locating > Sonnet. Interpreting > Sonnet. Default > Haiku.
 
-**Cap `Explore` subagent dispatches at 3 total per `/z-plan` run.** Each Explore (even Haiku) is a repo-mapping pass that consumes meaningful cache-read context. In the data-overhaul run, 5 Opus Explores ate 13.9 M tokens — ~93% of the entire planning budget. Haiku materially cuts that, but the cap stays: if 3 is not enough, prefer direct Read/Grep/Glob from the orchestrator over a 4th Explore. Override via `Z_HARNESS_MAX_EXPLORE=N` only with explicit user request.
+**Cap `Explore` subagent dispatches at 3 total per `/z-plan` run.** Each Explore (even Haiku) is a repo-mapping pass that consumes meaningful cache-read context. In the data-overhaul run, 5 Opus Explores ate 13.9 M tokens — ~93% of the entire planning budget. Haiku materially cuts that, but the cap stays: if 3 is not enough, prefer direct Read/Grep/Glob from the orchestrator over a 4th Explore. Override via `workflow.max_explore` in config (default 3) only with explicit user request.
 
 Output a one-paragraph context summary. Checkpoint: `phase1-context.md`.
 
@@ -615,13 +855,89 @@ Block here until the user has approved the decisions doc.
      cannot complete without subagent support; document the gap in
      phase3-decisions-final.md and proceed to Phase 4 without cross-LLM input. -->
 
+**Intent-level consult policy guard (intent-mode only).** Before any other guard, check `INTENT_CONSULT_POLICY` (set in Mode detection). This guard only fires when `PLANNING_MODE=intent`; in legacy mode (`PLANNING_MODE=full` or `INTENT_LEVEL=""`), it is a no-op.
+
+```bash
+# _PHASE3_CONSULT_SKIP is the structural skip flag for Phase 3.
+# Set to 1 when L1 forces a skip or L2 user declines; 0 otherwise (default: run consult).
+_PHASE3_CONSULT_SKIP=0
+
+if [[ "$PLANNING_MODE" == "intent" ]]; then
+  case "${INTENT_CONSULT_POLICY:-optional}" in
+    skip)
+      # L1 (quick): skip Phase-3 cross-LLM consult entirely.
+      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
+        "$RUN" consult_skipped \
+        "$(printf '{"phase":3,"reason":"intent_level_L1_quick","intent_level":"%s"}' "$INTENT_LEVEL")"
+      # Copy decisions.md to phase3-decisions-final.md with a note that consult was skipped at L1.
+      cp "$Z_HARNESS_PLAN_DIR/archive/$RUN/decisions.md" \
+         "$Z_HARNESS_PLAN_DIR/archive/$RUN/phase3-decisions-final.md" 2>/dev/null || true
+      printf '\n---\n_Consult skipped: L1 Quick — no cross-LLM review at this level._\n' \
+        >> "$Z_HARNESS_PLAN_DIR/archive/$RUN/phase3-decisions-final.md" 2>/dev/null || true
+      # Structural skip: set flag so the entire consult body below is bypassed.
+      _PHASE3_CONSULT_SKIP=1
+      ;;
+    optional)
+      # L2 (standard): offer the user a one-shot chance to skip consult.
+      # Unattended (Z_HARNESS_NO_ASK set): default to skip.
+      if [[ -n "${Z_HARNESS_NO_ASK:-}" ]]; then
+        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
+          "$RUN" consult_skipped \
+          "$(printf '{"phase":3,"reason":"intent_level_L2_user_skipped","intent_level":"%s","source":"unattended_default"}' "$INTENT_LEVEL")"
+        cp "$Z_HARNESS_PLAN_DIR/archive/$RUN/decisions.md" \
+           "$Z_HARNESS_PLAN_DIR/archive/$RUN/phase3-decisions-final.md" 2>/dev/null || true
+        _PHASE3_CONSULT_SKIP=1
+      else
+        # Interactive: load-bearing heartbeat before user wait, then ask.
+        if [[ "${CLAIM_HELD:-0}" -eq 1 ]]; then
+          bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" heartbeat \
+            --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+            --command /z-plan || true
+        fi
+        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start \
+          '{"phase":3,"reason":"L2_optional_consult_gate"}'
+        # <!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must skip this
+        #      optional consult gate and treat it as "skip consult". Silent omission is forbidden —
+        #      default to skip in unattended mode. -->
+        AskUserQuestion "Planning depth is L2 (Standard). Run the cross-LLM consult?
+It adds depth for multi-file decisions but costs extra tokens." \
+          ["Yes, run consult (recommended for non-trivial changes)", "No, skip consult"]
+        # _L2_CONSULT_CHOICE = the user's selection ("Yes..." or "No...")
+        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end \
+          '{"phase":3,"reason":"L2_optional_consult_gate"}'
+        if [[ "$_L2_CONSULT_CHOICE" == No* ]]; then
+          bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
+            "$RUN" consult_skipped \
+            "$(printf '{"phase":3,"reason":"intent_level_L2_user_skipped","intent_level":"%s"}' "$INTENT_LEVEL")"
+          cp "$Z_HARNESS_PLAN_DIR/archive/$RUN/decisions.md" \
+             "$Z_HARNESS_PLAN_DIR/archive/$RUN/phase3-decisions-final.md" 2>/dev/null || true
+          _PHASE3_CONSULT_SKIP=1
+        fi
+        # On "Yes": _PHASE3_CONSULT_SKIP stays 0 — fall through to consult body below.
+      fi
+      ;;
+    full)
+      # L3 (deep): full consult — fall through to the consult-off guard and panel below.
+      # _PHASE3_CONSULT_SKIP remains 0.
+      ;;
+  esac
+fi
+```
+
+The entire Phase 3 consult body (consult-off guard + panel dispatch) is wrapped in a single structural guard that skips it entirely when `_PHASE3_CONSULT_SKIP=1` (L1 forced skip or L2 user declined):
+
+```bash
+if [[ "${_PHASE3_CONSULT_SKIP:-0}" -eq 0 ]]; then
+  # --- Phase 3 consult body begins here ---
+```
+
 **Consult-off guard.** Before spawning any consultant, check the runtime signal:
 
 ```bash
 CONSULT_PROVIDER="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-provider.py" consultant_primary 2>/dev/null)"
 ```
 
-If `CONSULT_PROVIDER == "none"` (i.e. `Z_HARNESS_CONSULT=off`):
+If `CONSULT_PROVIDER == "none"` (i.e. `runtime.consult = "off"` in config):
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
 - Record tentative decisions as final in `phase3-decisions-final.md`.
 - Emit a `consult_skipped` event:
@@ -735,6 +1051,10 @@ Save transcripts (the consultants do this themselves). Checkpoint: `phase3-decis
 
 **Degraded-consult disclosure.** If any consultant did not return a normal response — rate-limited, fell back, errored, or was skipped (e.g. `consult_done` carries a `*_status` other than `ok`, such as `rate_limited_fallback`) — prepend a line to the decisions summary you present in Phase 5: "Consult degraded — `<provider>` unavailable (`<reason>`); treated as effectively single-LLM, weigh the cross-check lower." Record the degraded status in the `consult_done` event payload so `/z-stats` and `/z-improve` can see it. Do not silently present a single-LLM consult as if both arms agreed.
 
+```bash
+fi  # end of _PHASE3_CONSULT_SKIP guard — L1/L2-declined paths rejoin here after Phase 4.
+```
+
 ## Phase 4 — Final clarifications
 
 If anything is still unclear about scope, constraints, or success criteria — ask the user. No silent assumptions.
@@ -782,7 +1102,167 @@ For each shortcut record, handle the three `SURFACE_RC` cases explicitly (per th
 
 Default to the robust alternative if the user does not approve. Block until all design decisions and all shortcut records are answered.
 
-## Phase 6 — Write SPEC.md and PLAN.md
+```bash
+# Callsite 2 — Phase-5 shortcut approval: one surface-shortcut.sh call per record.
+# RUN is already set/exported in Setup step 3; surface-shortcut.sh reads the RUN
+# env var to attribute the shortcut_proposed event, so export it here.
+export RUN="$RUN"
+# Drive this loop from the Shortcuts section the orchestrator just presented:
+# for each record, SHORTCUT_CHOSEN = the looser path this shortcut takes,
+# SHORTCUT_DECLINED = the robust alternative it bypasses, SHORTCUT_WHY = its cost note.
+# (The orchestrator extracts these three fields per record from the Shortcuts list;
+#  iterate over every record — do not assume a single shortcut.)
+for_each_shortcut_record() {  # conceptual loop body — run once per Shortcuts record
+  SURFACE_RC=0
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/surface-shortcut.sh" \
+    --chosen "$SHORTCUT_CHOSEN" \
+    --declined "$SHORTCUT_DECLINED" \
+    --why "$SHORTCUT_WHY" || SURFACE_RC=$?
+  # ... handle SURFACE_RC per the three cases below ...
+}
+```
+
+<!-- RUNTIME-GATE: ask_user; category=shortcut; non-supporting drivers must surface this shortcut approval question via their native channel and await a response before proceeding. Silent omission is forbidden. -->
+For each shortcut record, handle the three `SURFACE_RC` cases explicitly (per the T009 contract):
+- **`SURFACE_RC -eq 1`** — surface the approval ask: use `AskUserQuestion` to ask "Shortcut proposed: `<SHORTCUT_CHOSEN>`. The robust alternative is: `<SHORTCUT_DECLINED>`. Approve this shortcut?" with options `["Approve shortcut", "Reject — use robust alternative instead"]`. On reject: remove the shortcut from PLAN.md and use the robust path.
+- **`SURFACE_RC -eq 0`** — no-op (`--declined` was empty, so this record names no robust alternative and is not a shortcut): proceed without an ask for this record.
+- **`SURFACE_RC -eq 2`** — INFRA ERROR (RUN unset, `--chosen` empty, or telemetry lost). Surface a diagnostic ("shortcut telemetry failed for this record — asking for approval anyway"), then **fall back to surfacing the same approval `AskUserQuestion` as the `-eq 1` case** (fail-safe: ASK rather than silently approve the shortcut).
+
+Default to the robust alternative if the user does not approve. Block until all design decisions and all shortcut records are answered.
+
+## Phase 6 — Write SPEC.md and PLAN.md (legacy) / INTENT.md (intent-mode)
+
+```bash
+if [[ "$PLANNING_MODE" == "intent" ]]; then
+  # ---------------------------------------------------------------------------
+  # INTENT.md writer (T006).
+  # Sections required by level:
+  #   quick    (L1): ## Intent  +  ## Acceptance checklist
+  #   standard (L2): ## Intent  +  ## Not doing  +  ## Consider for this  +  ## Acceptance checklist
+  #   deep     (L3): all four sections (same as L2)
+  # ---------------------------------------------------------------------------
+```
+
+**INTENT.md writer (intent-mode only).**
+
+Author an `INTENT.md` document at `$Z_HARNESS_PLAN_DIR/INTENT.md`. Populate it from the planning work done in Phases 0–5 (premise check, exploration, decisions, consult findings).
+
+**Frontmatter** — all six fields are required:
+
+```markdown
+---
+artifact: intent
+slug: <$Z_HARNESS_SLUG>
+level: <$INTENT_LEVEL — quick|standard|deep>
+generated_at: <ISO UTC timestamp, e.g. 2026-06-16T12:00:00Z>
+frozen_at: pending
+planning_mode: intent
+---
+```
+
+**Sections** — required sections depend on level:
+
+| Level | `## Intent` | `## Not doing` | `## Consider for this` | `## Acceptance checklist` |
+|-------|-------------|----------------|------------------------|---------------------------|
+| quick (L1) | required | optional | optional | **always required** |
+| standard (L2) | required | **required** | **required** | **always required** |
+| deep (L3) | required | **required** | **required** | **always required** |
+
+Section content guidance:
+- **`## Intent`** — 2–4 sentence narrative: what this effort accomplishes and why. No implementation detail.
+- **`## Not doing`** — explicit scope boundaries (one sentence each). Required at L2+; omit entirely at L1 unless needed for clarity.
+- **`## Consider for this`** — situational constraints: budget, tier, domain gotchas, risks worth tracking. Required at L2+; omit entirely at L1 unless needed.
+- **`## Acceptance checklist`** — observable, verifiable `[ ]` criteria; one per line. Each criterion must be checkable (not vague "runs" or "works" with no observable object). At least one criterion is required.
+
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface any criterion
+     lint failures to the user via their native channel and halt before writing INTENT.md.
+     Silent omission is forbidden. -->
+**Validation gate (D8) — compose to temp file, validate, then atomically promote.**
+
+After composing the INTENT.md content, write it to a **temp file** (not the final path) so that a failing validation never leaves a bad INTENT.md on disk:
+
+```bash
+INTENT_TEMP="$(mktemp /tmp/intent-draft-XXXXXX.md)"
+# Write the composed content to the temp file.
+# (Orchestrators write their composed string here; shell-mode: cat > "$INTENT_TEMP".)
+```
+
+Run both validators on the temp file — `validate-intent` checks frontmatter fields and required per-level sections; `lint-criteria` checks that acceptance criteria are observable:
+
+```bash
+INTENT_SCHEMA_OUT="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/intent-schema.py" \
+  validate-intent "$INTENT_TEMP" "$INTENT_LEVEL" 2>&1)"
+INTENT_SCHEMA_RC=$?
+
+INTENT_LINT_OUT="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/intent-schema.py" \
+  lint-criteria "$INTENT_TEMP" 2>&1)"
+INTENT_LINT_RC=$?
+```
+
+Combine failures (non-zero from either validator means the gate fires):
+
+```bash
+INTENT_GATE_RC=$(( INTENT_SCHEMA_RC != 0 || INTENT_LINT_RC != 0 ))
+INTENT_GATE_OUT="${INTENT_SCHEMA_OUT}${INTENT_LINT_OUT}"
+```
+
+If `INTENT_GATE_RC != 0` (one or both validators failed):
+
+1. Show the user the combined output from `$INTENT_GATE_OUT`. Schema failures report missing frontmatter fields or missing required sections; lint failures are formatted as `LINE <n>: <criterion text>`.
+2. Explain the rules:
+   - **Schema**: all six frontmatter fields required; `## Not doing` and `## Consider for this` required at standard/deep.
+   - **Criteria**: must be observable — e.g. "exits 0", "outputs N lines", "raises HTTP 400" are observable; bare "runs" or "works" with no object are not.
+3. Ask the user to revise via `AskUserQuestion`:
+
+```
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
+  header: "INTENT.md validation failed — issues found:
+           <INTENT_GATE_OUT formatted as bullet list>
+           Describe fixes and I will recompose and re-validate, or abandon.",
+  options: [
+    "I've described fixes — recompose and re-validate",
+    "Abandon — I'll fix INTENT.md manually"
+  ]
+)
+```
+
+  - **"I've described fixes — recompose and re-validate"**: apply the user's described edits to the draft, overwrite `$INTENT_TEMP`, then re-run both validators. Repeat until both pass or user abandons. On each retry cycle, emit an `intent_lint_retry` event:
+    ```bash
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" intent_lint_retry \
+      "$(printf '{"attempt":%d,"failures":%d}' "$_LINT_ATTEMPT" "$_LINT_FAILURE_COUNT")"
+    ```
+    Discard the temp file on abandon:
+  - **"Abandon"**: `rm -f "$INTENT_TEMP"`. Emit `intent_lint_abandoned` event and halt. Per the FINALIZE_STATUS rule, execute **Run Brief — halt finalize** (below) with reason `INTENT.md validation abandoned by user`:
+    ```bash
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" intent_lint_abandoned \
+      "$(printf '{"failures":%d}' "$_LINT_FAILURE_COUNT")"
+    ```
+
+If `INTENT_GATE_RC == 0` (both validators pass): emit `intent_lint_passed`, then **atomically promote** the temp file to the final path and clean up:
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" intent_lint_passed \
+  "$(printf '{"level":"%s","slug":"%s"}' "$INTENT_LEVEL" "$Z_HARNESS_SLUG")"
+
+mv "$INTENT_TEMP" "$Z_HARNESS_PLAN_DIR/INTENT.md"
+```
+
+After the atomic move, emit `intent_written`:
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" intent_written \
+  "$(printf '{"level":"%s","slug":"%s","path":"%s"}' \
+     "$INTENT_LEVEL" "$Z_HARNESS_SLUG" "$Z_HARNESS_PLAN_DIR/INTENT.md")"
+```
+
+```bash
+else
+  # Legacy path (planning_mode=full, or SPEC.md detected — Invariant 4).
+  # T007: backward-compat SPEC detection is handled in Mode detection before this branch.
+  # This else-branch runs when PLANNING_MODE=full (set by --full flag, config, or SPEC.md guard).
+```
+
+**Legacy path (planning_mode=full):**
 
 Create `$Z_HARNESS_PLAN_DIR/SPEC.md` — per-file detailed spec: paths, exported surface, signatures, behavior, invariants, edge cases, error handling.
 
@@ -805,6 +1285,10 @@ Create `$Z_HARNESS_PLAN_DIR/PLAN.md` — approved plan: goals, decisions (with r
 
 Both obey **DRY / KISS / SOLID**. State explicitly how the plan respects each.
 
+```bash
+fi  # end of Phase 6 if/else: intent-mode (INTENT.md writer) vs legacy (SPEC/PLAN writer)
+```
+
 ## Phase 7 — Bundled final review
 
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
@@ -818,7 +1302,7 @@ Both obey **DRY / KISS / SOLID**. State explicitly how the plan respects each.
 CONSULT_PROVIDER_P7="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/resolve-provider.py" consultant_primary 2>/dev/null)"
 ```
 
-If `CONSULT_PROVIDER_P7 == "none"` (i.e. `Z_HARNESS_CONSULT=off`):
+If `CONSULT_PROVIDER_P7 == "none"` (i.e. `runtime.consult = "off"` in config):
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
 - Document the gap in the archive.
 - Emit a `consult_skipped` event:
@@ -903,7 +1387,30 @@ Each `<P7_*_PREFIX>` is the persona body followed by a blank line, or **empty** 
 
 Apply findings that hold up under "one reason this might be wrong" scrutiny. Push back on the rest with documented reasoning.
 
-## Phase 8 — TASKS.md
+## Phase 8 — TASKS.md (legacy) / task-tree-generator dispatch (intent-mode)
+
+<!-- T006/T007-SEAM: intent-mode task generation. When T006 lands, TASKS.md in intent-mode is
+     produced by the task-tree-generator agent (not hand-authored here). Phase 8 in intent-mode
+     becomes a pass-through to T006's BFS level-0 generation. The legacy branch below is closed
+     for modification by T006/T007. -->
+```bash
+if [[ "$PLANNING_MODE" == "intent" && -f "$Z_HARNESS_PLAN_DIR/INTENT.md" ]]; then
+  # T006-SEAM: task-tree-generator dispatch for BFS level 0. T006 implements this body.
+  # Placeholder: the INTENT.md writer (T006) will also trigger the task-tree-generator
+  # here to produce the level-0 TASKS.md batch. Skip the rest of Phase 8 (legacy TASKS.md
+  # hand-authoring) when INTENT.md is present and PLANNING_MODE=intent.
+  echo "[z-plan intent-mode] task-tree-generator dispatch not yet implemented (T006 pending)." >&2
+  # T007: backward-compat SPEC detection is resolved upstream in Mode detection (Invariant 4).
+  # When SPEC.md is present, PLANNING_MODE is forced to "full" before Phase 6 runs, so
+  # INTENT.md is never written and this `if` branch is never entered for legacy slug dirs.
+  # --- STRUCTURAL SKIP: the entire legacy SPEC/PLAN/TASKS authoring section below is inside the
+  # `else` branch of this conditional. Do NOT add code between here and the matching `else` ---
+else
+  # The `else` closes when the legacy path (TASKS.md hand-authoring) finishes — see the
+  # closing `fi` at the end of the scope-seed + workstreams manifest block below.
+```
+
+**Legacy path (planning_mode=full, or INTENT.md not yet written):**
 
 Create `$Z_HARNESS_PLAN_DIR/TASKS.md`. Break PLAN.md into small, independently-implementable tasks. Each: `T001`-style ID, title, files touched, dependencies, acceptance criteria, status `[ ]`. Size so each fits a fresh context window.
 
@@ -959,7 +1466,31 @@ python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-reg
   --run-id "$RUN" --phase phase8 || true   # CLI self-logs registry_error on failure
 ```
 
+**Workstreams manifest (generated from TASKS.md).** After TASKS.md is finalized and all task blocks have their Complexity stamps, generate the plan's `workstreams.json` manifest. This file is the conflict DAG for parallelism — `/z-implement-all` reads it to decide what's safe to run concurrently. Best-effort, non-fatal — any failure is silent; `/z-implement-all` falls back to inline `**Files:**` dedup when the file is absent.
+
+```bash
+HERMES_ENABLED="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get workflow.hermes_enabled 2>/dev/null || echo false)"
+if [ "$HERMES_ENABLED" = "true" ]; then
+  python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/generate-workstreams.py" \
+    --slug "$Z_HARNESS_SLUG" --source z-plan --plan-dir "$Z_HARNESS_PLAN_DIR" || true
+fi  # hermes_enabled gate (Invariant 6: Hermes machinery never executes unless hermes_enabled=true)
+fi  # end of Phase 8 else-branch: legacy SPEC/PLAN/TASKS authoring — skipped when PLANNING_MODE=intent and INTENT.md present
+```
+
 ## Phase 9 — Finalize archive
+
+**Intent-mode artifact copy (when `PLANNING_MODE=intent`):** copy `INTENT.md` in addition to (or instead of) `SPEC.md`/`PLAN.md` when INTENT.md is present. If `INTENT.md` is absent (T006 not yet landed), fall back to the legacy artifact set.
+
+```bash
+if [[ "$PLANNING_MODE" == "intent" && -f "$Z_HARNESS_PLAN_DIR/INTENT.md" ]]; then
+  cp "$Z_HARNESS_PLAN_DIR/INTENT.md" "$Z_HARNESS_PLAN_DIR/archive/$RUN/INTENT.md" || true
+  # T006-SEAM: also copy LEDGER.md when it exists (created by BFS level execution).
+  [[ -f "$Z_HARNESS_PLAN_DIR/LEDGER.md" ]] && \
+    cp "$Z_HARNESS_PLAN_DIR/LEDGER.md" "$Z_HARNESS_PLAN_DIR/archive/$RUN/LEDGER.md" || true
+fi
+```
+
+**Legacy artifact copy (planning_mode=full or INTENT.md absent):**
 
 Copy `$Z_HARNESS_PLAN_DIR/{SPEC,PLAN,TASKS}.md` into `$Z_HARNESS_PLAN_DIR/archive/$RUN/`. Update `manifest.json` with end timestamp, status `complete`, totals (decision count, consultation count, total tokens if available).
 
@@ -1507,6 +2038,12 @@ Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema
 | `telemetry_anomaly` | `log-phase.sh` detected impossible `wall_ms` | `phase`, `reason` (`wall_ms_overflow` / `wall_ms_negative`), `t_start`, `t_end`, `computed_wall_ms` |
 | `next_step_choice` | User picked a next step at Phase 9 | `choice` |
 | `plan_claim_lost_during_gate` | Heartbeat detected ownership change (exit 9) at a phase boundary or before a user gate; URGENT abort/continue-uncoordinated gate fires | `slug`, `run_id`, `phase` |
+| `intent_level_chosen` | Mode detection resolved the planning depth level (via classifier, config-forced, flag, or fallback) | `level`, `source` (`classifier` / `config-forced` / `flag` / `user-override` / `fallback`), `reason` |
+| `intent_level_override` | User overrode the classifier's chosen level via the inline announce gate | `level` (new), `prior_level`, `source` (`user-override`) |
+| `consult_skipped` | Phase-3 or Phase-7 consult skipped; `reason` distinguishes `Z_HARNESS_CONSULT=off` / `intent_level_L1_quick` / `intent_level_L2_user_skipped` | `phase`, `reason`, optionally `intent_level` |
+| `legacy_spec_detected` | Backward-compat guard: SPEC.md found in slug dir; `PLANNING_MODE` forced to `full` (Invariant 4) | `slug`, `spec_path`, `original_planning_mode` |
+| `legacy_mode_active` | `PLANNING_MODE=full` branch entered (from --full flag, config, or SPEC detection) | `slug`, `reason` |
+| `legacy_plan_exists` | Finished legacy plan (SPEC.md + TASKS.md) detected; user prompted to amend/implement/overwrite/abort | `slug`, `has_spec`, `has_tasks` |
 
 ---
 
@@ -1526,7 +2063,7 @@ Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema
 | Feature | Used | Gates |
 |---------|------|-------|
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
-| `ask_user` | yes | Setup step 0 (empty arguments); Setup step 1 (slug collision + resolver prefill/ask branches); Setup step 5 claim acquire — CLAIM_RC 1 (live peer: proceed/abort/use-new-slug), CLAIM_RC 2 (stale-takeover: proceed/abort, default abort), CLAIM_RC 3 (corrupt: abort/proceed-uncoordinated, default abort); Setup step 10c (consolidated freshness gate — one AskUserQuestion covering docs / research / map / GRILL.md-citation staleness); Phase 0 (premise concern); Phase 2.5 (decisions doc approval — guarded by `workflow.plan_decisions_approval` resolver); Phase 5 (design decision + shortcut approval); Phase 8 (task-count overflow); Phase 9 (next-step recommendation choice); heartbeat exit 9 at any phase boundary or pre-gate (`plan_claim_lost_during_gate` — abort/continue-uncoordinated, default abort) |
+| `ask_user` | yes | Setup step 0 (empty arguments); Setup step 1 (slug collision + resolver prefill/ask branches); Setup step 5 claim acquire — CLAIM_RC 1 (live peer: proceed/abort/use-new-slug), CLAIM_RC 2 (stale-takeover: proceed/abort, default abort), CLAIM_RC 3 (corrupt: abort/proceed-uncoordinated, default abort); Setup step 10c (consolidated freshness gate — one AskUserQuestion covering docs / research / map / GRILL.md-citation staleness); **Mode detection: backward-compat SPEC detection — finished legacy plan gate** (amend / implement / continue / abort when SPEC.md+TASKS.md present); **Mode detection: intent level announce + override gate** (when `planning_mode=intent`; offers L1/L2/L3 override); **Mode detection: L2 optional consult gate** (when `INTENT_CONSULT_POLICY=optional` and not `Z_HARNESS_NO_ASK`); Phase 0 (premise concern); Phase 2.5 (decisions doc approval — guarded by `workflow.plan_decisions_approval` resolver); Phase 5 (design decision + shortcut approval); **Phase 6 (intent-mode only): acceptance-criterion lint failure gate — surfaces offending lines and offers rewrite or abandon** (when `planning_mode=intent` and lint finds non-observable criteria); Phase 8 (task-count overflow); Phase 9 (next-step recommendation choice); heartbeat exit 9 at any phase boundary or pre-gate (`plan_claim_lost_during_gate` — abort/continue-uncoordinated, default abort) |
 | `skill_invoke` | no | — |
 
 Driver support requirements: see frontmatter `driver_features_required`.

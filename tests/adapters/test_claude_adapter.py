@@ -200,8 +200,8 @@ class TestExportPayload(unittest.TestCase):
             dest = Path(dest_dir)
             # Create a mock personas directory and a fake persona file.
             with tempfile.TemporaryDirectory() as fake_harness:
-                personas_dir = Path(fake_harness) / "personas"
-                personas_dir.mkdir()
+                personas_dir = Path(fake_harness) / "personas" / "builtin"
+                personas_dir.mkdir(parents=True)
                 persona_file = personas_dir / "implementer.md"
                 persona_file.write_text(
                     "---\nname: implementer\nrole: Implementer\n---\n\n# Implementer\n",
@@ -256,8 +256,8 @@ class TestExportPayload(unittest.TestCase):
                 ):
                     # Patch the harness root's personas dir to exist with one file.
                     with tempfile.TemporaryDirectory() as fake_root2:
-                        personas_dir2 = Path(fake_root2) / "personas"
-                        personas_dir2.mkdir()
+                        personas_dir2 = Path(fake_root2) / "personas" / "builtin"
+                        personas_dir2.mkdir(parents=True)
                         (personas_dir2 / "test.md").write_text("content", encoding="utf-8")
 
                         adapter2 = ClaudeAdapter()

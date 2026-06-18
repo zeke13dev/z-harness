@@ -69,15 +69,17 @@ For each target in the list, run the export in sequence (not in parallel). For *
 
 ### cursor / codex / agy targets
 
-Run via the runtime CLI:
+Run via the runtime CLI, writing to the committed `exports/<target>/` mirror with `--out`:
 
 ```bash
-python3 -m z_harness_cli export --host <target> --in-place
+python3 -m z_harness_cli export --host <host> --out exports/<target> --force
 ```
 
-Replace `<target>` with `cursor`, `codex`, or `antigravity` (note: `agy` in the target list maps to `--host antigravity`).
+Replace `<host>` with `cursor`, `codex`, or `antigravity`, and `<target>` with the matching `exports/` dir name: `cursor` → `exports/cursor`, `codex` → `exports/codex`, and **`agy` in the target list maps to `--host antigravity --out exports/agy`**.
 
-The CLI exports commands, agents, skills, **and personas** in a single pass — no separate persona step is needed or wanted for these three hosts.
+Use `--out exports/<target>` (NOT `--in-place`): `--in-place` writes the host layout into the current project root (cwd) for live use in a workspace — it does **not** populate the committed `exports/` mirror. `--force` is required because `exports/<target>/` is a non-empty existing directory.
+
+The CLI exports commands, agents, skills, **and personas** in a single pass — no separate persona step is needed or wanted for these three hosts. (Persona sources are read from `personas/builtin/`.)
 
 **Important:** run targets sequentially, not in parallel. Capture stdout and stderr for each separately.
 

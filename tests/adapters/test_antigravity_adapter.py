@@ -295,7 +295,7 @@ class TestExportPayload(unittest.TestCase):
                 return out.resolve()
 
             fake_harness = tmp_path / "harness"
-            personas_dir = fake_harness / "personas"
+            personas_dir = fake_harness / "personas" / "builtin"
             personas_dir.mkdir(parents=True)
             persona_file = personas_dir / "default.md"
             persona_file.write_text("---\nname: default\n---\nHello.\n", encoding="utf-8")

@@ -6,7 +6,7 @@
 ---
 name: spec-literalist
 description: Compares implementation to spec line by line; flags every deviation without interpreting intent.
-compatible_roles: [reviewer]
+compatible_roles: [reviewer, audit_persona]
 contract: review-verdict
 ---
 

@@ -18,7 +18,7 @@ Set `$BASE = $Z_HARNESS_PLAN_DIR` (or `z-harness` for legacy). Set `$METRICS = $
 
 ## Phase 0b — Resolved base header
 
-Print a small header at the very top of the output (unconditionally — NOT gated behind `Z_HARNESS_EXPLAIN_RESOLUTION`):
+Print a small header at the very top of the output (unconditionally — NOT gated behind `runtime.explain_resolution`):
 
 ```bash
 _zh_base="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" base_dir 2>/dev/null)"

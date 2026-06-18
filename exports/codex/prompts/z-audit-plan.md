@@ -279,11 +279,11 @@ Checkpoint: Write results to `$BASE/archive/$RUN/phase2-design.md`.
 
 ## Phase 2.5 — Pre-review cycle (opt-in)
 
-**Opt-in gate:** Only runs if `Z_HARNESS_PRE_REVIEW` is set to `1` (env var). Check at phase start:
+**Opt-in gate:** Only runs if `runtime.pre_review` is `true` in config. Check at phase start:
 
 ```bash
-if [ "${Z_HARNESS_PRE_REVIEW:-0}" != "1" ]; then
-  echo "Pre-review cycle skipped (Z_HARNESS_PRE_REVIEW != 1)"
+if [ "$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get runtime.pre_review 2>/dev/null)" != "true" ]; then
+  echo "Pre-review cycle skipped (runtime.pre_review != true)"
   # Jump to Phase 3
   return 0
 fi

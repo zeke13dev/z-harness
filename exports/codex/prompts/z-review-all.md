@@ -149,6 +149,51 @@ if [ ! -f "$BASE/archive/$RRUN/.providers-logged" ]; then
 fi
 ```
 
+**Mode detection (INTENT vs legacy):**
+
+Detect which review contract to use. Mirror the detection convention from `/z-implement-all` (T008):
+
+```bash
+# INTENT mode: INTENT.md present and SPEC.md absent
+INTENT_MODE=false
+INTENT_FILE=""
+LEDGER_FILE=""
+INVARIANTS_PATH=""
+STYLE_PATH=""
+
+if [ -f "$BASE/INTENT.md" ] && [ ! -f "$BASE/SPEC.md" ]; then
+  INTENT_MODE=true
+
+  # Prefer the frozen snapshot from the most recent archive run; fall back to live INTENT.md
+  LATEST_FROZEN="$(ls -t "$BASE/archive/"*/INTENT.frozen.md 2>/dev/null | head -1 || true)"
+  if [ -n "$LATEST_FROZEN" ]; then
+    INTENT_FILE="$LATEST_FROZEN"
+  else
+    INTENT_FILE="$BASE/INTENT.md"
+  fi
+
+  LEDGER_FILE="$BASE/LEDGER.md"
+
+  # Durable tier
+  INVARIANTS_PATH="docs/INVARIANTS.json"  # repo-root-relative; durable tier lives in the repo, not the plan dir $BASE
+  if [ -f "STYLE.md" ]; then
+    STYLE_PATH="STYLE.md"
+  elif [ -f "docs/STYLE.md" ]; then
+    STYLE_PATH="docs/STYLE.md"
+  else
+    STYLE_PATH=""
+  fi
+
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_mode_detected \
+    "$(printf '{"mode":"intent","intent_file":"%s","ledger_file":"%s"}' "$INTENT_FILE" "$LEDGER_FILE")"
+else
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_mode_detected \
+    '{"mode":"legacy"}'
+fi
+```
+
+In INTENT mode the realized-plan contract is: **frozen INTENT** (`$INTENT_FILE`) + **LEDGER** (`$LEDGER_FILE`) + **durable tier** (`$INVARIANTS_PATH`; `$STYLE_PATH` if present). SPEC.md and PLAN.md are not used. In legacy mode all existing behavior is preserved; the variables above remain unset and the command proceeds identically to today.
+
 ## Phase 1 — Sanity check task status
 
 Read `$BASE/TASKS.md`. Count `[ ]`, `[~]`, `[x]`, and skip-flagged tasks.
@@ -213,11 +258,11 @@ Skip this phase if either TESTS.md or test-runner.json is absent (no harm — ol
 
 ## Phase 3.6 — Pre-review cycle (opt-in)
 
-**Opt-in gate:** Only runs if `Z_HARNESS_PRE_REVIEW` is set to `1` (env var). Check at phase start:
+**Opt-in gate:** Only runs if `runtime.pre_review` is `true` in config. Check at phase start:
 
 ```bash
-if [ "${Z_HARNESS_PRE_REVIEW:-0}" != "1" ]; then
-  echo "Pre-review cycle skipped (Z_HARNESS_PRE_REVIEW != 1)"
+if [ "$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get runtime.pre_review 2>/dev/null)" != "true" ]; then
+  echo "Pre-review cycle skipped (runtime.pre_review != true)"
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" pre_review_skipped \
     '{"reason":"opt_in_disabled"}'
   # Jump to Phase 3.7
@@ -227,14 +272,15 @@ fi
 
 When enabled, spawn **3 pre-reviewers in parallel** to do a fast first-pass scan. Each pre-reviewer runs on the cheapest available model (haiku). Their findings are collected and fed as additional context into the Phase 4 consultant prompts.
 
-Each pre-reviewer gets the same inputs:
-- `$BASE/SPEC.md`
-- `$BASE/PLAN.md`
-- `$BASE/TASKS.md`
-- `$BASE/archive/$RRUN/cumulative.diff`
-- `$BASE/archive/$RRUN/cumulative.stat`
+Each pre-reviewer gets the same inputs. The exact paths depend on the detected mode:
+
+**Legacy mode:** `$BASE/SPEC.md`, `$BASE/PLAN.md`, `$BASE/TASKS.md`, cumulative diff + stat.
+
+**INTENT mode:** `$INTENT_FILE` (frozen INTENT), `$LEDGER_FILE` (realized plan), `$BASE/TASKS.md`, cumulative diff + stat, durable tier (`$INVARIANTS_PATH`; `$STYLE_PATH` if present). SPEC.md and PLAN.md are not passed.
 
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+
+**In legacy mode**, use these prompts:
 
 ```
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
@@ -280,6 +326,68 @@ Kernel path: <KERNEL_PATH>
 SPEC.md: $BASE/SPEC.md
 PLAN.md: $BASE/PLAN.md
 TASKS.md: $BASE/TASKS.md
+cumulative_diff_path: $BASE/archive/$RRUN/cumulative.diff
+cumulative_stat_path: $BASE/archive/$RRUN/cumulative.stat
+
+Focus: CODE QUALITY — defensive bloat, premature abstraction, DRY/KISS/SOLID violations, test noise, stale comments, over-engineering. Not correctness — assume the code works. Focus on maintainability and quality. Be fast and cheap — surface only clear blockers and majors."
+)
+```
+
+**In INTENT mode**, substitute SPEC/PLAN with INTENT/LEDGER and add durable tier. Adjust focus lines to cite the acceptance checklist and durable invariants rather than SPEC.md sections:
+
+```
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+  subagent_type="pre-reviewer",
+  description="Pre-review 1 — correctness & intent drift (Flash) for <slug>",
+  prompt="MODE: final-review-prong-a
+slug: <slug>
+run_id: <RRUN>
+review_contract: intent
+Kernel path: <KERNEL_PATH>
+
+INTENT.frozen.md: <$INTENT_FILE>
+LEDGER.md: <$LEDGER_FILE>
+TASKS.md: $BASE/TASKS.md
+INVARIANTS: <$INVARIANTS_PATH>
+[style_path: <$STYLE_PATH>  ← omit this line when STYLE_PATH is empty]
+cumulative_diff_path: $BASE/archive/$RRUN/cumulative.diff
+cumulative_stat_path: $BASE/archive/$RRUN/cumulative.stat
+
+Focus: PRONG A — Implementation drift. Is the cumulative diff faithful to the acceptance checklist in INTENT.frozen.md and the decisions/deviations recorded in LEDGER.md? Look for acceptance criteria that are not met, cross-task drift, stale references, violations of INVARIANTS. Cite findings as 'fails acceptance criterion #N' where N is the 1-based index in the frozen INTENT ## Acceptance checklist. Be fast and cheap — surface only clear blockers and majors."
+)
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+  subagent_type="pre-reviewer",
+  description="Pre-review 2 — intent gaps & acceptance coverage (Flash) for <slug>",
+  prompt="MODE: final-review-prong-b
+slug: <slug>
+run_id: <RRUN>
+review_contract: intent
+Kernel path: <KERNEL_PATH>
+
+INTENT.frozen.md: <$INTENT_FILE>
+LEDGER.md: <$LEDGER_FILE>
+TASKS.md: $BASE/TASKS.md
+INVARIANTS: <$INVARIANTS_PATH>
+[style_path: <$STYLE_PATH>  ← omit this line when STYLE_PATH is empty]
+cumulative_diff_path: $BASE/archive/$RRUN/cumulative.diff
+cumulative_stat_path: $BASE/archive/$RRUN/cumulative.stat
+
+Focus: PRONG B — Acceptance-checklist gaps. Now that the implementation is done, are there acceptance criteria in INTENT.frozen.md that the cumulative diff fails to satisfy? Deviations recorded in LEDGER.md that changed scope without updating the checklist? Edge cases the checklist missed? Be fast and cheap — surface only clear blockers and majors."
+)
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+  subagent_type="pre-reviewer",
+  description="Pre-review 3 — code quality & structural issues (Flash) for <slug>",
+  prompt="MODE: final-review-quality
+slug: <slug>
+run_id: <RRUN>
+review_contract: intent
+Kernel path: <KERNEL_PATH>
+
+INTENT.frozen.md: <$INTENT_FILE>
+LEDGER.md: <$LEDGER_FILE>
+TASKS.md: $BASE/TASKS.md
+INVARIANTS: <$INVARIANTS_PATH>
+[style_path: <$STYLE_PATH>  ← omit this line when STYLE_PATH is empty]
 cumulative_diff_path: $BASE/archive/$RRUN/cumulative.diff
 cumulative_stat_path: $BASE/archive/$RRUN/cumulative.stat
 
@@ -479,6 +587,10 @@ Per-entry errors are logged + skipped. This step never blocks the review pipelin
 
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
 
+### Legacy mode inputs
+
+Each consultant gets:
+
 - `$BASE/SPEC.md` (the spec)
 - `$BASE/PLAN.md` (the plan with decisions)
 - `$BASE/TASKS.md` (what was supposed to happen, with completion notes)
@@ -486,7 +598,22 @@ Per-entry errors are logged + skipped. This step never blocks the review pipelin
 - `$BASE/archive/$RRUN/cumulative.stat` (file-touch overview)
 - **`docs/llm/INDEX.json` (if exists)** + the concept JSONs for any `source_file` that appears in `cumulative.stat`. The LLM-tier docs state invariants that span tasks; a "drift" finding from the consultant carries more weight if it cites a specific invariant from a docs/llm/ entry.
 
-Each is asked the **two-pronged** review:
+### INTENT mode inputs
+
+In INTENT mode, SPEC.md and PLAN.md are replaced by the frozen INTENT + realized LEDGER + durable tier. Each consultant gets:
+
+- `$INTENT_FILE` (frozen INTENT.md snapshot — the contract)
+- `$LEDGER_FILE` (LEDGER.md — the realized-plan audit trail of decisions + deviations)
+- `$BASE/TASKS.md` (the task batches that were executed)
+- `$BASE/archive/$RRUN/cumulative.diff` (what actually happened)
+- `$BASE/archive/$RRUN/cumulative.stat` (file-touch overview)
+- `$INVARIANTS_PATH` (durable tier — docs/INVARIANTS.json)
+- `$STYLE_PATH` if non-empty (durable style guide)
+- **`docs/llm/INDEX.json` (if exists)** + concept JSONs for files in `cumulative.stat`.
+
+### Prong framing
+
+**Legacy mode:**
 
 **Prong A — Implementation faithfulness.** Does the cumulative diff implement SPEC.md as written? List drift:
 - Files that should have changed per SPEC but didn't.
@@ -502,9 +629,26 @@ Each is asked the **two-pronged** review:
 - Public surfaces the spec defined that should have been broader/narrower.
 - Whole categories of behavior the spec failed to anticipate.
 
+**INTENT mode:**
+
+**Prong A — Acceptance-checklist faithfulness.** Does the cumulative diff satisfy every `[ ]` acceptance criterion in the frozen INTENT? Cite findings as "fails acceptance criterion #N". Also check:
+- Decisions and deviations in LEDGER.md that changed scope without a corresponding criterion update.
+- Cross-task drift visible in the diff versus the LEDGER record.
+- Violations of durable invariants in `$INVARIANTS_PATH`.
+- Missing tests / assertions the criterion wording requires.
+
+**Prong B — INTENT completeness.** Now that the implementation is done, are there gaps in the frozen INTENT itself?
+- Acceptance criteria that are ambiguous, unobservable, or that the implementation can satisfy trivially.
+- Deviations recorded in LEDGER.md that the original checklist didn't anticipate.
+- Edge cases the frozen INTENT missed that the code either handles silently or breaks on.
+- Scope the "## Not doing" section should have excluded but didn't.
+
 ### Calling pattern
 
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+
+**Legacy mode:**
+
 ```
 <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
   subagent_type="consultant-primary",
@@ -515,6 +659,35 @@ Each is asked the **two-pronged** review:
   subagent_type="consultant-secondary",
   description="Final-review (Codex) for plan <slug>",
   prompt="MODE: final-review-2pronged\n\n<same>\n[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]"
+)
+```
+
+**INTENT mode:**
+
+```
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+  subagent_type="consultant-primary",
+  description="Final-review (Gemini) for plan <slug> [INTENT mode]",
+  prompt="MODE: final-review-2pronged
+review_contract: intent
+slug: <slug>
+run_id: <RRUN>
+[kernel_path: <KERNEL_PATH>  ← omit this line when KERNEL_PATH is empty]
+
+INTENT.frozen.md: <$INTENT_FILE>
+LEDGER.md: <$LEDGER_FILE>
+TASKS.md: $BASE/TASKS.md
+INVARIANTS: <$INVARIANTS_PATH>
+[style_path: <$STYLE_PATH>  ← omit this line when STYLE_PATH is empty]
+cumulative_diff_path: $BASE/archive/$RRUN/cumulative.diff
+cumulative_stat_path: $BASE/archive/$RRUN/cumulative.stat
+
+<full two-pronged prompt using INTENT-mode framing above>"
+)
+<!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+  subagent_type="consultant-secondary",
+  description="Final-review (Codex) for plan <slug> [INTENT mode]",
+  prompt="<same as consultant-primary above>"
 )
 ```
 
@@ -1354,15 +1527,26 @@ Early halt / abort paths often have **no** primary artifact (`FIX.md`, `REPORT.m
    ```
 3. If the first line is `STATUS: ready`, parse the three paths printed on subsequent lines:
    - Line 2: `<RUN_DIR>/cumulative.diff` (cumulative diff path)
-   - Line 3: `<BASE>/SPEC.md` (spec path)
+   - Line 3: `<BASE>/SPEC.md` (spec path; in INTENT mode use `$INTENT_FILE` instead)
    - Line 4: `docs/llm/TAGS.txt` (tags path)
 4. Dispatch:
    <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+
+   **Legacy mode:**
    ```
    <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
      subagent_type="review-agent",
      description="Memory review for <slug>",
      prompt="run_dir: <RUN_DIR>\ncumulative_diff_path: <cumulative.diff path>\nspec_path: $BASE/SPEC.md\ntags_path: docs/llm/TAGS.txt\nindex_path: docs/llm/INDEX.json\nrun_id: <RRUN>\nparent_command: review-all"
+   )
+   ```
+
+   **INTENT mode** (substitute `$INTENT_FILE` as the contract path):
+   ```
+   <!-- agent dispatch / skill invocation not supported in Codex CLI; see CAPABILITIES.md -->
+     subagent_type="review-agent",
+     description="Memory review for <slug> [INTENT mode]",
+     prompt="run_dir: <RUN_DIR>\ncumulative_diff_path: <cumulative.diff path>\nspec_path: <$INTENT_FILE>\ntags_path: docs/llm/TAGS.txt\nindex_path: docs/llm/INDEX.json\nrun_id: <RRUN>\nparent_command: review-all\nreview_contract: intent\nledger_path: <$LEDGER_FILE>"
    )
    ```
 4a. **Optionally dispatch the axiom-extractor (if `AXIOM_READY` was emitted):**
@@ -1453,7 +1637,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-decision.sh" \
 - `--options` — full list of offered option labels as a JSON array.
 - `--tentative` — the orchestrator's recommended option label; omit when the orchestrator had no recommendation.
 
-Emission is gated by `Z_HARNESS_AXIOM_EXTRACT` (default on); when set to `"0"`, the script exits silently — no guard is needed here. Do **not** modify existing structured gate events (`cost_gate_decision`, `critique_failure_decision`, `map_collision_decision`, `shared_concerns_ack_override`); those are normalized separately by the extractor. This emission **records signal only** — it never approves, overrides, or influences any decision (proposes-only invariant).
+Emission is gated by `axioms.auto_extract_post_run` (default `true`); when `false`, the script exits silently — no guard is needed here. Do **not** modify existing structured gate events (`cost_gate_decision`, `critique_failure_decision`, `map_collision_decision`, `shared_concerns_ack_override`); those are normalized separately by the extractor. This emission **records signal only** — it never approves, overrides, or influences any decision (proposes-only invariant).
 
 ## Hard rules
 

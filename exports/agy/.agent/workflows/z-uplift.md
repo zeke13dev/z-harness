@@ -163,7 +163,7 @@ See [docs/human/config.md](docs/human/config.md) (notify.level key).
 
 If `docs/llm/INDEX.json` exists in the repo root, compute staleness across all entries before Phase 0 starts. Read only the lightweight metadata fields (`slug`, `last_updated`, `source_file`). For each concept entry, compare `entry.last_updated` against the max `mtime` of its `source_files`. A concept is **stale** if any source file's mtime exceeds `last_updated`.
 
-Compute `stale_pct = stale_concepts / total_concepts`. Threshold: `$Z_HARNESS_DOC_STALENESS_THRESHOLD` (default `20` — 20 percent).
+Compute `stale_pct = stale_concepts / total_concepts`. Threshold: the value from `config.py get docs.staleness_threshold` (default `20` — 20 percent).
 
 If `stale_pct >= threshold`:
 - Write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md` (artifact for audit trail). Set `ARTIFACT_PATH="$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md"`.

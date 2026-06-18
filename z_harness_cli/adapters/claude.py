@@ -177,7 +177,10 @@ class ClaudeAdapter:
 
         # Locate the harness repo root (where personas/ lives).
         harness_root = Path(__file__).parent.parent.parent.resolve()
-        personas_dir = harness_root / "personas"
+        # Shipped personas live in personas/builtin/ (the canonical builtin layer
+        # per resolve-persona.py); personas/ itself holds only README.md. Globbing
+        # personas/ directly matches zero persona files and exports no personas.
+        personas_dir = harness_root / "personas" / "builtin"
 
         written: list[Path] = []
         warnings: list[str] = []
@@ -187,7 +190,7 @@ class ClaudeAdapter:
                 dest=dest,
                 files=[],
                 fidelity="native",
-                warnings=["personas/ directory not found; nothing exported"],
+                warnings=["personas/builtin/ directory not found; nothing exported"],
             )
 
         # Lazy import so the adapter can be imported without the runtime

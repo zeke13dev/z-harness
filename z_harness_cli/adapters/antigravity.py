@@ -250,7 +250,10 @@ class AntigravityAdapter:
 
         # Locate the harness repo root.
         harness_root = Path(__file__).parent.parent.parent.resolve()
-        personas_dir = harness_root / "personas"
+        # Shipped personas live in personas/builtin/ (the canonical builtin layer
+        # per resolve-persona.py); personas/ itself holds only README.md. Globbing
+        # personas/ directly matches zero persona files and exports no personas.
+        personas_dir = harness_root / "personas" / "builtin"
 
         all_files: list[Path] = []
         all_warnings: list[str] = []
@@ -296,7 +299,7 @@ class AntigravityAdapter:
         # Stage 2: persona export loop
         # ------------------------------------------------------------------
         if not personas_dir.is_dir():
-            all_warnings.append("personas/ directory not found; persona export skipped")
+            all_warnings.append("personas/builtin/ directory not found; persona export skipped")
         else:
             # Lazy import so the adapter can load without the full runtime
             # package in environments where only z_harness_cli is installed.
