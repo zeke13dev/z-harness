@@ -82,7 +82,7 @@ Classification is performed by `scripts/reconcile.py classify_worktree` using pr
 | `dirty` | Working tree has uncommitted changes. | Never. Surface-only. |
 | `detached` | HEAD is detached; no branch reference exists. | Never. Surface-only. |
 | `merged-uncertain` | Branch appears merged via squash or other ambiguous evidence (e.g. commit subject contains `(#…)` pattern). | Never. Surface-only. |
-| `unknown-remote` | Remote was unreachable; unpushed-commit check was skipped. | Never. Surface-only. |
+| `unknown-remote` | Remote was unreachable or the unpushed-check was skipped for any reason. The reachability probe uses `timeout 5 git ls-remote`; a timeout (exit 124) or any failure sets `remote_reachable=false`. | Never. Surface-only. |
 | `active` | Does not meet the criteria for any other class; keeping in place is the safe choice. | Never. |
 
 Only `dead` is ever offered for auto-prune. All others are `[surface-only]` regardless of what flags are passed.
@@ -154,6 +154,15 @@ The report's `=== Cross-reference flags ===` section shows four booleans compute
 | `complete_plan_no_merge_evidence` | At least one plan has all tasks `[x]` but no merge/commit evidence. |
 | `orphan_claim_lock` | At least one claim lock has no matching live registry record. |
 | `uncommitted_work_for_plan` | At least one plan slug has uncommitted file changes attributed to it (file paths overlap the plan's directory). |
+
+## Edge cases / gotchas
+
+- The remote-reachability probe runs as `timeout 5 git -C <path> ls-remote --exit-code origin HEAD`; a 5-second timeout (exit 124) or any failure sets `remote_reachable=false`. This cap is mandatory — the audit iterates every worktree, and a slow or unreachable remote must not hang the read-only report.
+- `unknown-remote` fires when `has_unpushed` is `None` for ANY reason, not just an unreachable remote — safety-conservative: if the unpushed-check could not run, the worktree stays surface-only.
+- `merged_worktree_on_disk` does NOT trigger for `dead` worktrees — those are already on the `--prune-worktrees` path. The flag surfaces merged worktrees blocked by other conditions (e.g. `dirty` + merged).
+- Staleness uses `latest_activity_ts` (max of events.jsonl mtime and artifact mtimes), NOT directory creation or modification date.
+- `tasks-complete-unmerged` is advisory only even when `--archive-plans` is passed — never offered for archiving.
+- The Follow-ups section is always rendered even without `--open-followups`; the flag only controls whether entries are actually created via `sink-add.sh`.
 
 ## Related commands
 

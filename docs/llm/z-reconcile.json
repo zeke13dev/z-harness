@@ -66,12 +66,12 @@
     {
       "class": "merged-uncertain",
       "auto_prune_eligible": false,
-      "description": "Branch appears merged via squash or ambiguous evidence (e.g. commit subject contains '(#…)'). Always surface-only."
+      "description": "Branch appears merged via squash or ambiguous evidence (e.g. commit subject contains '(#\u2026)'). Always surface-only."
     },
     {
       "class": "unknown-remote",
       "auto_prune_eligible": false,
-      "description": "Remote unreachable; unpushed-commit check skipped. Always surface-only."
+      "description": "Remote unreachable or unpushed-check skipped for any reason. Reachability probe is 'timeout 5 git ls-remote'; timeout (exit 124) or any failure sets remote_reachable=false. Always surface-only."
     },
     {
       "class": "active",
@@ -124,7 +124,7 @@
     }
   ],
   "safety_model": {
-    "default_run": "zero mutations — no file written, no lock removed, no worktree pruned, no plan moved, no registry record deleted, no follow-up created",
+    "default_run": "zero mutations \u2014 no file written, no lock removed, no worktree pruned, no plan moved, no registry record deleted, no follow-up created",
     "per_item_confirm": "every mutation fires AskUserQuestion individually; batch confirmation not permitted",
     "dead_only_prune": "only 'dead'-classified worktrees offered for prune; dirty/detached/merged-uncertain/unknown-remote/active are surface-only unconditionally",
     "lock_removal_policy": "all three conditions must hold: reap-stale reports free|stale|corrupt AND no live registry record AND daemon PID not alive; rm never called without reap-stale",
@@ -132,7 +132,8 @@
     "abandoned_excluded": "plans under <base>/plans/.abandoned/ excluded from slug scans; RECONCILE-ARCHIVED.md sentinel marks recognized archived plans",
     "never_rm_live_lock": "a lock whose daemon PID is alive is never removed regardless of reap-stale output",
     "registry_unavailable": "if registry errors or is absent, prints '(registry unavailable)' and continues; robust to missing infrastructure",
-    "tasks_complete_never_archived": "tasks-complete-unmerged plans are never offered for --archive-plans; advisory only"
+    "tasks_complete_never_archived": "tasks-complete-unmerged plans are never offered for --archive-plans; advisory only",
+    "remote_probe_timeout": "remote-reachability probe is 'timeout 5 git ls-remote'; mandatory 5-second cap prevents per-worktree hang during the audit loop; timeout exit 124 treated identically to any other failure (remote_reachable=false)"
   },
   "save_convention": {
     "flag": "--save",
@@ -143,13 +144,22 @@
   },
   "staleness_threshold": {
     "default_days": 14,
-    "staleness_signal": "max(latest events.jsonl timestamp for slug, artifact mtime) — not raw directory age"
+    "staleness_signal": "max(latest events.jsonl timestamp for slug, artifact mtime) \u2014 not raw directory age"
   },
-  "depends_on": ["scripts", "active-plan-registry", "intent-schema", "plan-claim"],
+  "depends_on": [
+    "scripts",
+    "active-plan-registry",
+    "intent-schema",
+    "plan-claim"
+  ],
   "consumed_by": [],
-  "related_commands": ["z-where", "z-debt", "z-followup-list"],
+  "related_commands": [
+    "z-where",
+    "z-debt",
+    "z-followup-list"
+  ],
   "invariants": [
-    "Default run is zero mutations — no flag means read-only report only.",
+    "Default run is zero mutations \u2014 no flag means read-only report only.",
     "Only 'dead' worktrees are auto-prune-eligible; all other classes are surface-only unconditionally.",
     "Lock removal requires all three conditions: reap-stale free|stale|corrupt + no live registry record + daemon PID not alive.",
     "tasks-complete-unmerged plans are never auto-archived; they are advisory only.",
@@ -158,16 +168,18 @@
     "Default branch resolved dynamically via git symbolic-ref refs/remotes/origin/HEAD; never hardcoded.",
     "Plans under <base>/plans/.abandoned/ are excluded from slug scans.",
     "No subagent dispatch; no LLM calls; shell + Python only.",
-    "Classification logic lives in scripts/reconcile.py; command body is a thin orchestrator."
+    "Classification logic lives in scripts/reconcile.py; command body is a thin orchestrator.",
+    "Remote-reachability probe uses 'timeout 5 git ls-remote'; timeout or failure sets remote_reachable=false without blocking the audit loop."
   ],
   "gotchas": [
-    "merged_worktree_on_disk flag does NOT trigger for 'dead' worktrees — those are already on the --prune-worktrees path; the flag surfaces merged worktrees blocked by other conditions (dirty+merged, etc.).",
-    "unknown-remote classification fires when has_unpushed is None for ANY reason, not just remote failure — safety-conservative: if the check was skipped, treat as surface-only.",
+    "merged_worktree_on_disk flag does NOT trigger for 'dead' worktrees \u2014 those are already on the --prune-worktrees path; the flag surfaces merged worktrees blocked by other conditions (dirty+merged, etc.).",
+    "unknown-remote classification fires when has_unpushed is None for ANY reason, not just remote failure \u2014 safety-conservative: if the check was skipped, treat as surface-only.",
     "staleness uses latest_activity_ts (max of events.jsonl mtime and artifact mtimes), NOT directory creation or modification date.",
-    "tasks-complete-unmerged is advisory only even when --archive-plans is passed — it is never offered for archiving.",
+    "tasks-complete-unmerged is advisory only even when --archive-plans is passed \u2014 it is never offered for archiving.",
     "plan-claim.sh reap-stale exit codes: 0=held, 1=free, 2=stale, 3=corrupt; only 1/2/3 can lead toward lock removal (all three conditions still required).",
     "RECONCILE-ARCHIVED.md sentinel written by --archive-plans is how subsequent /z-reconcile runs recognize archived plans and skip them.",
-    "The report's Follow-ups section is always rendered even without --open-followups; it shows advisory findings. The flag only controls whether entries are actually created."
+    "The report's Follow-ups section is always rendered even without --open-followups; it shows advisory findings. The flag only controls whether entries are actually created.",
+    "Remote-reachability probe is wrapped in 'timeout 5 git -C <path> ls-remote --exit-code origin HEAD'; a 5-second timeout (exit 124) or any non-zero exit sets remote_reachable=false. Mandatory to prevent the audit loop from hanging on a slow or unreachable remote."
   ],
   "memories": []
 }

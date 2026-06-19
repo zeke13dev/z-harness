@@ -25,6 +25,7 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
 - _(auto)_ Add scripts/reconcile.py classification helper + tests (T002) _(reconcile)_
 - _(auto)_ Add read-only reap-stale subcommand + tests (T003) _(plan-claim)_
 - _(auto)_ Add commands/z-reconcile.md command definition (T001) _(z-reconcile)_
+- _(auto)_ Enforce timeout on worktree remote-reachability check _(z-reconcile)_
 
 ## 2026-06-18
 
