@@ -25,10 +25,11 @@
 #   and passing it via --session to every call.
 #
 # Usage:
-#   plan-claim.sh acquire   --slug S --run-id R --session SID --command C [--ttl N]
-#   plan-claim.sh heartbeat --slug S --run-id R --session SID --command C [--ttl N]
-#   plan-claim.sh release   --slug S --run-id R --session SID --command C [--ttl N]
-#   plan-claim.sh status    --slug S [--ttl N]
+#   plan-claim.sh acquire    --slug S --run-id R --session SID --command C [--ttl N]
+#   plan-claim.sh heartbeat  --slug S --run-id R --session SID --command C [--ttl N]
+#   plan-claim.sh release    --slug S --run-id R --session SID --command C [--ttl N]
+#   plan-claim.sh status     --slug S [--ttl N]
+#   plan-claim.sh reap-stale --slug S [--ttl N]
 #
 # Exit codes — acquire:
 #   0 — acquired / self-reentry / disabled
@@ -44,6 +45,11 @@
 # Exit codes — status:
 #   0 — printed holder JSON or {"state":"free"}
 #   3 — corrupt lock content
+# Exit codes — reap-stale (read-only; delegates to sink-lock check-stale):
+#   0 — held  (lock is live and held by a live process)
+#   1 — free  (no lock file or empty)
+#   2 — stale (lock held by a dead PID or expired heartbeat)
+#   3 — corrupt (non-empty but unparseable JSON)
 # Exit codes — usage / invalid args (any subcommand): 2
 
 set -euo pipefail
@@ -61,10 +67,11 @@ DEFAULT_TTL_SECONDS=2700
 _usage() {
   cat >&2 <<'EOF'
 Usage:
-  plan-claim.sh acquire   --slug S --run-id R --session SID --command C [--ttl N]
-  plan-claim.sh heartbeat --slug S --run-id R --session SID --command C [--ttl N]
-  plan-claim.sh release   --slug S --run-id R --session SID --command C [--ttl N]
-  plan-claim.sh status    --slug S [--ttl N]
+  plan-claim.sh acquire    --slug S --run-id R --session SID --command C [--ttl N]
+  plan-claim.sh heartbeat  --slug S --run-id R --session SID --command C [--ttl N]
+  plan-claim.sh release    --slug S --run-id R --session SID --command C [--ttl N]
+  plan-claim.sh status     --slug S [--ttl N]
+  plan-claim.sh reap-stale --slug S [--ttl N]
 EOF
   exit 2
 }
@@ -403,6 +410,31 @@ cmd_status() {
 }
 
 # ---------------------------------------------------------------------------
+# cmd_reap_stale — read-only stale check. Delegates to sink-lock check-stale.
+# Prints exactly one lowercase word to stdout and exits with the matching code:
+#   held    (exit 0) — lock is live and held by a live process
+#   free    (exit 1) — no lock file or empty
+#   stale   (exit 2) — dead PID or expired heartbeat
+#   corrupt (exit 3) — non-empty but unparseable JSON
+# NEVER acquires, releases, or kills anything. --slug is the only required arg.
+# ---------------------------------------------------------------------------
+cmd_reap_stale() {
+  validate_slug_path
+  local ttl lp rc
+  ttl="$(resolve_ttl)"
+  lp="$(lockpath)"
+  rc=0
+  bash "$SINK_LOCK_SH" check-stale "$lp" "--ttl-seconds=$ttl" || rc=$?
+  case "$rc" in
+    0) printf 'held\n'    ;;
+    1) printf 'free\n'    ;;
+    2) printf 'stale\n'   ;;
+    *) printf 'corrupt\n' ;;
+  esac
+  exit "$rc"
+}
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 [[ $# -lt 1 ]] && _usage
@@ -432,6 +464,9 @@ case "$SUBCOMMAND" in
     ;;
   status)
     cmd_status
+    ;;
+  reap-stale)
+    cmd_reap_stale
     ;;
   *)
     printf 'plan-claim.sh: unknown subcommand: %s\n' "$SUBCOMMAND" >&2

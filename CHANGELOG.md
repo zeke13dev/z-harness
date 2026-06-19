@@ -20,6 +20,10 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
 
 ---
 
+## 2026-06-19
+
+- _(auto)_ Add scripts/reconcile.py classification helper + tests (T002) _(reconcile)_
+
 ## 2026-06-18
 
 - **Audit & review now default to amending.** After `/z-audit` or `/z-review-all`,
