@@ -106,7 +106,7 @@ class TestRefreshCommandUsesSharedHelper(unittest.TestCase):
     acquisition to the shared helper, not reimplement flock/holder/.hb.lock
     logic inline (T015 CARRY-2 + Codex blocker)."""
 
-    COMMAND = REPO_ROOT / "commands" / "z-followup-refresh.md"
+    COMMAND = REPO_ROOT / "skills" / "z-followup-refresh" / "SKILL.md"
 
     def _source(self) -> str:
         return self.COMMAND.read_text(encoding="utf-8")

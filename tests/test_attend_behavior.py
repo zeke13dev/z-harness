@@ -40,7 +40,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _SCRIPT_CONFIG = str(_REPO_ROOT / "scripts" / "config.py")
 _SCRIPT_LINT = str(_REPO_ROOT / "scripts" / "lint-halt-categories.sh")
 _SCRIPT_SHORTCUT = str(_REPO_ROOT / "scripts" / "surface-shortcut.sh")
-_ATTEND_MD = _REPO_ROOT / "commands" / "z-attend.md"
+_ATTEND_MD = _REPO_ROOT / "skills" / "z-attend" / "SKILL.md"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -54,12 +54,20 @@ def _run_config(*args: str) -> subprocess.CompletedProcess:
     )
 
 
-def _run_lint(args: list[str], commands_dir: str | None = None) -> subprocess.CompletedProcess:
+def _run_lint(args: list[str], skills_dir: str | None = None) -> subprocess.CompletedProcess:
     cmd = ["bash", _SCRIPT_LINT]
-    if commands_dir is not None:
-        cmd += ["--commands-dir", commands_dir]
+    if skills_dir is not None:
+        cmd += ["--skills-dir", skills_dir]
     cmd += args
     return subprocess.run(cmd, capture_output=True, text=True)
+
+
+def _make_skills_dir(gates: list[str], tmp_path: Path) -> Path:
+    """Create a skills/test-skill/SKILL.md fixture dir; return the skills/ path."""
+    skill_dir = tmp_path / "skills" / "test-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("\n".join(gates) + "\n")
+    return tmp_path / "skills"
 
 
 def _run_shortcut(
@@ -276,12 +284,11 @@ class TestLintHaltCategoriesEnumValidation:
     ])
     def test_all_five_enum_members_accepted_by_lint(self, category: str, tmp_path: Path):
         """Each of the 5 enum members passes lint without error."""
-        cmds = tmp_path / "commands"
-        cmds.mkdir()
-        (cmds / "test.md").write_text(
-            f"<!-- RUNTIME-GATE: ask_user; category={category} -->\n"
+        skills = _make_skills_dir(
+            [f"<!-- RUNTIME-GATE: ask_user; category={category} -->"],
+            tmp_path,
         )
-        result = _run_lint([], commands_dir=str(cmds))
+        result = _run_lint([], skills_dir=str(skills))
         assert result.returncode == 0, (
             f"Lint rejected valid category={category!r}. returncode={result.returncode}. "
             f"stderr: {result.stderr!r}"
@@ -289,12 +296,11 @@ class TestLintHaltCategoriesEnumValidation:
 
     def test_out_of_enum_category_rejected(self, tmp_path: Path):
         """A non-enum category= token causes lint to exit non-zero."""
-        cmds = tmp_path / "commands"
-        cmds.mkdir()
-        (cmds / "test.md").write_text(
-            "<!-- RUNTIME-GATE: ask_user; category=totally_invalid_category -->\n"
+        skills = _make_skills_dir(
+            ["<!-- RUNTIME-GATE: ask_user; category=totally_invalid_category -->"],
+            tmp_path,
         )
-        result = _run_lint([], commands_dir=str(cmds))
+        result = _run_lint([], skills_dir=str(skills))
         assert result.returncode != 0, (
             "Lint accepted an out-of-enum category — enum validation is broken."
         )
@@ -303,12 +309,11 @@ class TestLintHaltCategoriesEnumValidation:
 
     def test_missing_category_warns_not_errors_by_default(self, tmp_path: Path):
         """An ask_user gate with no category= token produces a WARN (not error) in default mode."""
-        cmds = tmp_path / "commands"
-        cmds.mkdir()
-        (cmds / "test.md").write_text(
-            "<!-- RUNTIME-GATE: ask_user; no category token -->\n"
+        skills = _make_skills_dir(
+            ["<!-- RUNTIME-GATE: ask_user; no category token -->"],
+            tmp_path,
         )
-        result = _run_lint([], commands_dir=str(cmds))
+        result = _run_lint([], skills_dir=str(skills))
         assert result.returncode == 0, (
             f"Missing category produced a hard failure in default mode (should be WARN). "
             f"returncode={result.returncode}"
