@@ -864,62 +864,64 @@ Collect a flat list of pairs in the form `(chunk_id, framing)`, e.g.:
 
 Let `N_PAIRS = len(pairs)`.
 
-#### Step 4H-2 — Present the selection matrix to the user
+#### Step 4H-2 — Present ranked pair briefing and end the turn
 
-<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the chunk×framing
-     selection matrix via their native channel. Silent omission is forbidden. -->
-**Case A — N_PAIRS ≤ 12 (single AskUserQuestion):**
+Do NOT use `AskUserQuestion` here. Do NOT call any further tool. Produce a ranked prose briefing of the (chunk, framing) pairs inline and stop — the orchestrator must wait for the user's natural-language reply.
 
-Present a single `AskUserQuestion` listing all pairs as labeled options plus two standard exits:
+**HEAVY mode ranks (chunk, framing) pairs.** Group by cluster of thematic similarity first (i.e. pairs from different chunks that share a framing approach), then rank within clusters by concreteness + lowest risk exposure. If the pairs naturally form no clusters, rank them flat.
 
-```
-Which (chunk, framing) should seed the downstream /z-plan?
+**Ranked briefing format** (write this directly in your response):
 
-Options:
-  C1: claude   — <one-line summary of C1's Claude framing from BRAINSTORM.md>
-  C1: codex    — <one-line summary of C1's Codex framing>
-  C1: gemini   — <one-line summary of C1's Gemini framing>
-  C2: claude   — <one-line summary of C2's Claude framing>
-  ...           (up to 12 options)
-  Restart       — discard this run and re-run with a refined topic
-  Abandon       — exit cleanly without finalizing
-```
+> **Brainstorm complete — `<slug>` (HEAVY mode, <N_PAIRS> chunk×framing pairs)**
+>
+> Here are the **(chunk, framing) directions**, ranked by strength:
+>
+> **1. Chunk `<id>` / `<framing>` — <short label>**
+> - **Pros:** <2-3 bullets>
+> - **Cons:** <2-3 bullets>
+>
+> **2. Chunk `<id>` / `<framing>` — <short label>**
+> - **Pros:** <2-3 bullets>
+> - **Cons:** <2-3 bullets>
+>
+> *(repeat for each pair in ranked order)*
+>
+> **Consensus:** <one sentence on where the chunks/framings agree — call it a signal, not waste>
+>
+> **Divergence:** <one sentence on the genuine decision point across the pairs>
+>
+> **My recommendation:** Chunk `<id>` / `<framing>` — <one-sentence rationale>
+>
+> Which direction do you want to go? Name a chunk and framing to lock in, ask me to defend a choice, or restart/abandon.
 
-The one-line summary is the first sentence of that ideator's "Framing" section in the unified BRAINSTORM.md. If that section is missing, use `<no summary available>`.
+The one-line summary for each pair is the first sentence of that chunk's ideator framing section in the unified BRAINSTORM.md. If the section is missing, use `<no summary available>`.
 
-**Case B — N_PAIRS > 12 (two-step AskUserQuestion):**
+Send a `PushNotification` if notify.level is `approval_only` or `all` (see [docs/human/config.md](docs/human/config.md)).
 
-First, present a question to pick the chunk:
+**HARD INVARIANT — Convergence guardrail:** The orchestrator MUST halt after producing this briefing and report to the user. It MUST NOT auto-decide, MUST NOT pick a pair on the user's behalf, and MUST NOT call any further tool. The next action comes only from the user's natural-language reply, interpreted in Step 4H-3.
 
-```
-This run produced <N_PAIRS> (chunk × framing) pairs (>{12}). Pick a chunk first.
+#### Step 4H-3 — Interpret the user's natural-language reply
 
-Options:
-  C1  — <one-line description of C1's sub-scope from unified BRAINSTORM.md>
-  C2  — <one-line description>
-  ...
-  Restart
-  Abandon
-```
+This step is a **discussion loop** — there is no menu. Interpret the user's free-text reply from Step 4H-2 to determine intent. Present responses and end your turn — do NOT call any further tool until the user sends another reply.
 
-After the user picks a chunk (or Restart/Abandon), if they picked a chunk then present a second question to pick the framing within that chunk:
+**HARD INVARIANT — Ambiguity guardrail:** Write `chosen_pair` ONLY on an unambiguous lock-in signal. If the user's intent is ambiguous (could mean two pairs, or unclear which chunk), confirm conversationally before writing — never guess.
 
-```
-Chunk <id> selected. Which framing seeds the plan?
+**Supported intents (natural language — no menu):**
 
-Options:
-  claude   — <one-line summary of this chunk's Claude framing>
-  codex    — <one-line summary of this chunk's Codex framing>
-  gemini   — <one-line summary of this chunk's Gemini framing>
-  Back     — go back to chunk selection
-  Abandon  — exit cleanly without finalizing
-```
+**Ask a question** — the user wants to understand or compare a pair.
+- Answer directly. Re-present the relevant pair(s) with your answer inline.
+- Do NOT lock in unless the user explicitly requests it.
+- End your turn.
 
-If the user picks **Back**, loop to the chunk-selection question. Allow at most 3 Back-loops; on the fourth Back, treat it as Abandon.
+**Challenge / narrow** — the user expresses doubt about a direction.
+- Discuss the challenge; update the briefing view as appropriate.
+- End your turn.
 
-#### Step 4H-3 — Handle user's pick
+**Lock in** — the user clearly names a chunk and framing (e.g. "go with C2 / codex", "the gemini one for chunk 3", "use C1:claude").
 
-**User picked a (chunk, framing) pair:**
+**HARD INVARIANT:** Before writing, verify the signal is UNAMBIGUOUS — both the chunk and the framing must be identifiable. If either is ambiguous, ask for clarification conversationally; do NOT write.
+
+On a clear lock-in:
 
 1. Update the BRAINSTORM.md frontmatter atomically (tmp-file-then-rename). Build the full new frontmatter in memory, then write to a temp file in the same directory, then `os.replace()` over the original — never leave the file in an intermediate state where both `chosen_framing` and `chosen_pair` are present or where neither is present:
    - Remove the `chosen_framing:` field entirely.
@@ -941,11 +943,11 @@ If the user picks **Back**, loop to the chunk-selection question. Allow at most 
      "$(printf '{"chunk_id":"%s","framing":"%s"}' "<id>" "<framing>")"
    ```
 
-**User picked Restart:**
+**Restart** — the user wants to discard this run and re-brainstorm on a refined topic.
 
-Follow the standard Restart path (see LIGHT/MEDIUM branch below) — archive BRAINSTORM.md with `chosen_framing: restart`, ask for a refined topic, start a fresh RUN.
+Follow the standard Restart path (see LIGHT/MEDIUM branch below) — archive BRAINSTORM.md with `chosen_framing: restart`, respond conversationally to ask for a refined topic, start a fresh RUN.
 
-**User picked Abandon:**
+**Abandon** — the user wants to exit without finalizing.
 
 Follow the standard Abandon path below. For HEAVY abandons, the frontmatter MUST match LIGHT/MEDIUM abandon shape exactly: set `status: abandoned` and `chosen_framing: abandoned`. Do NOT emit a `chosen_pair` key (it is only present on successful HEAVY completion). This keeps abandon detection uniform across modes.
 
