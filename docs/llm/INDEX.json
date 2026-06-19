@@ -977,6 +977,24 @@
         "commands"
       ],
       "summary": "Final-gate cross-LLM review after /z-implement-all. Two consultant subagents (Gemini+Codex) on cumulative diff vs plan contract (SPEC in legacy; frozen INTENT+LEDGER in INTENT mode). Class enum at line 716 is canonical: implementation_drift|spec_gap|completed_task_contradiction|premise_failure|observation. Phase 6.5: unconditionally auto-amends every amendment_proposal (spec_gap) via /z-amend --skip-user-gate; no per-finding popup; skips [x] tasks; writes auto-amend-log.md; emits auto_amend_applied per amendment. Phase 6.6: renders unified amendment brief via scripts/amendment-brief.py (corrections=Phase-6.5 spec_gaps, approach_concerns=premise_failure escalations); writes amendment-brief.md to archive; Finalize APPROACH_FILE prefers amendment-brief.md over older seed. Phase 6.6 skipped when both lists empty. ## Escalations in REVIEW-TASKS.md preserved as archive record; amendment-brief.md is the active presentation layer."
+    },
+    {
+      "slug": "z-reconcile",
+      "source_files": [
+        "commands/z-reconcile.md",
+        "scripts/reconcile.py",
+        "scripts/plan-claim.sh"
+      ],
+      "last_updated": "2026-06-19",
+      "confidence": "high",
+      "depends_on": [
+        "scripts",
+        "active-plan-registry",
+        "intent-schema",
+        "plan-claim"
+      ],
+      "consumed_by": [],
+      "summary": "Read-mostly workspace audit command that cross-references git worktrees, plan slugs, the active-plan registry, claim locks, uncommitted work, and follow-up entries into a single consistency report. Default run is zero mutations; six cleanup flags (--prune-worktrees, --archive-plans, --clean-locks, --reap-registry, --open-followups, --save) each require per-item AskUserQuestion confirmation. Classification delegates to scripts/reconcile.py: six worktree classes (dead/dirty/detached/merged-uncertain/unknown-remote/active) and four plan classes (precontext-only-aged/tasks-complete-unmerged/in-progress/stale-in-progress). Four cross-reference boolean flags surface joined findings across surfaces."
     }
   ]
 }

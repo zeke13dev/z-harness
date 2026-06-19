@@ -1,0 +1,173 @@
+{
+  "concept": "z-reconcile",
+  "last_updated": "2026-06-19",
+  "covers_spec": "none",
+  "source_files": [
+    "commands/z-reconcile.md",
+    "scripts/reconcile.py",
+    "scripts/plan-claim.sh"
+  ],
+  "confidence": "high",
+  "summary": "Read-mostly workspace audit command that surveys git worktrees, plan slugs, active-plan registry, claim locks, uncommitted work, and follow-up entries; cross-references them into a single consistency report with six sections and four cross-reference boolean flags. Default run is zero mutations; every cleanup action (prune-worktrees / archive-plans / clean-locks / reap-registry / open-followups) is opt-in per-flag with AskUserQuestion per-item confirmation. Classification logic lives in scripts/reconcile.py (testable, no I/O); command body is a thin orchestrator.",
+  "flags": [
+    {
+      "flag": "--prune-worktrees",
+      "phase": 2,
+      "per_item_confirm": true,
+      "description": "Removes worktrees classified 'dead' only; per-item AskUserQuestion before each git worktree remove."
+    },
+    {
+      "flag": "--archive-plans",
+      "phase": 3,
+      "per_item_confirm": true,
+      "description": "Moves plans classified 'precontext-only-aged' or 'stale-in-progress' to <base>/plans/.abandoned/<slug>/; writes RECONCILE-ARCHIVED.md sentinel; never touches 'tasks-complete-unmerged' plans."
+    },
+    {
+      "flag": "--clean-locks",
+      "phase": 4,
+      "per_item_confirm": true,
+      "description": "Removes claim locks when all three conditions hold: plan-claim.sh reap-stale reports free/stale/corrupt AND no live registry record AND daemon PID not alive. Never calls rm without reap-stale check."
+    },
+    {
+      "flag": "--reap-registry",
+      "phase": 5,
+      "per_item_confirm": true,
+      "description": "Deregisters stale registry records individually via active-plan-registry.py deregister --run-id. Never calls the global reap subcommand."
+    },
+    {
+      "flag": "--open-followups",
+      "phase": 6,
+      "per_item_confirm": true,
+      "description": "Creates follow-up entries via sink-add.sh for 'tasks-complete-unmerged' plans; idempotent via content_hash dedup."
+    },
+    {
+      "flag": "--save",
+      "phase": 7,
+      "per_item_confirm": false,
+      "description": "Writes the Phase 1 report to RECONCILE.md at repo root, or to the optional positional <save-path> argument. Without --save, only stdout output."
+    }
+  ],
+  "worktree_classes": [
+    {
+      "class": "dead",
+      "auto_prune_eligible": true,
+      "description": "Clean working tree, no unpushed commits, HEAD is commit-ancestry ancestor of default branch. The only class offered for auto-prune."
+    },
+    {
+      "class": "dirty",
+      "auto_prune_eligible": false,
+      "description": "Uncommitted changes present. Always surface-only."
+    },
+    {
+      "class": "detached",
+      "auto_prune_eligible": false,
+      "description": "HEAD is detached; no branch reference. Manual review required. Always surface-only."
+    },
+    {
+      "class": "merged-uncertain",
+      "auto_prune_eligible": false,
+      "description": "Branch appears merged via squash or ambiguous evidence (e.g. commit subject contains '(#…)'). Always surface-only."
+    },
+    {
+      "class": "unknown-remote",
+      "auto_prune_eligible": false,
+      "description": "Remote unreachable; unpushed-commit check skipped. Always surface-only."
+    },
+    {
+      "class": "active",
+      "auto_prune_eligible": false,
+      "description": "No evidence worktree is safe to prune; default for anything not matching the above."
+    }
+  ],
+  "plan_classes": [
+    {
+      "class": "precontext-only-aged",
+      "archivable": true,
+      "description": "Only INTENT/precontext artifacts present (no TASKS.md/LEDGER.md/events.jsonl) and past the 14-day staleness threshold."
+    },
+    {
+      "class": "tasks-complete-unmerged",
+      "archivable": false,
+      "description": "All TASKS.md lines are [x] but no merge/commit evidence found. Advisory only; never auto-archived; offered as follow-up via --open-followups."
+    },
+    {
+      "class": "in-progress",
+      "archivable": false,
+      "description": "Plan has recent activity and tasks; no other class applies. No action recommended."
+    },
+    {
+      "class": "stale-in-progress",
+      "archivable": true,
+      "description": "In-progress plan that has been inactive for >14 days (staleness threshold). Archivable with --archive-plans."
+    }
+  ],
+  "cross_reference_flags": [
+    {
+      "id": "a",
+      "flag": "merged_worktree_on_disk",
+      "description": "At least one worktree's branch is merged into the default branch but is still on disk and not classified 'dead'."
+    },
+    {
+      "id": "b",
+      "flag": "complete_plan_no_merge_evidence",
+      "description": "At least one plan has all tasks [x] but no merge/commit evidence."
+    },
+    {
+      "id": "c",
+      "flag": "orphan_claim_lock",
+      "description": "At least one claim lock has no matching live registry record."
+    },
+    {
+      "id": "d",
+      "flag": "uncommitted_work_for_plan",
+      "description": "At least one plan slug has uncommitted file changes attributed to it via plan path overlap."
+    }
+  ],
+  "safety_model": {
+    "default_run": "zero mutations — no file written, no lock removed, no worktree pruned, no plan moved, no registry record deleted, no follow-up created",
+    "per_item_confirm": "every mutation fires AskUserQuestion individually; batch confirmation not permitted",
+    "dead_only_prune": "only 'dead'-classified worktrees offered for prune; dirty/detached/merged-uncertain/unknown-remote/active are surface-only unconditionally",
+    "lock_removal_policy": "all three conditions must hold: reap-stale reports free|stale|corrupt AND no live registry record AND daemon PID not alive; rm never called without reap-stale",
+    "never_deletes_plan_artifacts": "archiving moves directory contents; INTENT.md/SPEC.md/TASKS.md/LEDGER.md always preserved",
+    "abandoned_excluded": "plans under <base>/plans/.abandoned/ excluded from slug scans; RECONCILE-ARCHIVED.md sentinel marks recognized archived plans",
+    "never_rm_live_lock": "a lock whose daemon PID is alive is never removed regardless of reap-stale output",
+    "registry_unavailable": "if registry errors or is absent, prints '(registry unavailable)' and continues; robust to missing infrastructure",
+    "tasks_complete_never_archived": "tasks-complete-unmerged plans are never offered for --archive-plans; advisory only"
+  },
+  "save_convention": {
+    "flag": "--save",
+    "default_path": "RECONCILE.md at repo root",
+    "positional_override": "passing a non-flag positional argument implies --save and overrides the path",
+    "no_save_means": "stdout only; no file written",
+    "matches_pattern": "/z-debt --save convention"
+  },
+  "staleness_threshold": {
+    "default_days": 14,
+    "staleness_signal": "max(latest events.jsonl timestamp for slug, artifact mtime) — not raw directory age"
+  },
+  "depends_on": ["scripts", "active-plan-registry", "intent-schema", "plan-claim"],
+  "consumed_by": [],
+  "related_commands": ["z-where", "z-debt", "z-followup-list"],
+  "invariants": [
+    "Default run is zero mutations — no flag means read-only report only.",
+    "Only 'dead' worktrees are auto-prune-eligible; all other classes are surface-only unconditionally.",
+    "Lock removal requires all three conditions: reap-stale free|stale|corrupt + no live registry record + daemon PID not alive.",
+    "tasks-complete-unmerged plans are never auto-archived; they are advisory only.",
+    "archiving moves plan directory (never deletes); INTENT.md/SPEC.md/TASKS.md/LEDGER.md always preserved in destination.",
+    "Global active-plan-registry.py reap is never called; per-item deregistration only via deregister --run-id.",
+    "Default branch resolved dynamically via git symbolic-ref refs/remotes/origin/HEAD; never hardcoded.",
+    "Plans under <base>/plans/.abandoned/ are excluded from slug scans.",
+    "No subagent dispatch; no LLM calls; shell + Python only.",
+    "Classification logic lives in scripts/reconcile.py; command body is a thin orchestrator."
+  ],
+  "gotchas": [
+    "merged_worktree_on_disk flag does NOT trigger for 'dead' worktrees — those are already on the --prune-worktrees path; the flag surfaces merged worktrees blocked by other conditions (dirty+merged, etc.).",
+    "unknown-remote classification fires when has_unpushed is None for ANY reason, not just remote failure — safety-conservative: if the check was skipped, treat as surface-only.",
+    "staleness uses latest_activity_ts (max of events.jsonl mtime and artifact mtimes), NOT directory creation or modification date.",
+    "tasks-complete-unmerged is advisory only even when --archive-plans is passed — it is never offered for archiving.",
+    "plan-claim.sh reap-stale exit codes: 0=held, 1=free, 2=stale, 3=corrupt; only 1/2/3 can lead toward lock removal (all three conditions still required).",
+    "RECONCILE-ARCHIVED.md sentinel written by --archive-plans is how subsequent /z-reconcile runs recognize archived plans and skip them.",
+    "The report's Follow-ups section is always rendered even without --open-followups; it shows advisory findings. The flag only controls whether entries are actually created."
+  ],
+  "memories": []
+}
