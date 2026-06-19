@@ -774,7 +774,7 @@ Log every individual failure as `ideator_failed` regardless of the bucket above.
 
    `ideator_personas` records the distinct persona drawn for each ideator (the `*_PERSONA_NAME` values from Phase 2a). A value of `<none>` means that ideator ran vanilla — either the `brainstorm.personas` knob was OFF, or the ideator pool underflowed and this slot got no persona. When an ideator also failed, its persona binding is still recorded here even though the member appears as `<id>:failed` in `ideators`.
 
-   `chosen_framing` is written as `pending` here and updated in Phase 4 to one of `claude | codex | gemini | restart | abandoned` per SPEC.
+   `chosen_framing` is written as `pending` here and updated in Phase 4 to one of `claude | codex | gemini | synthesized | restart | abandoned` per SPEC. `synthesized` is the default/expected outcome for a discussion-born hybrid framing co-authored with the user.
 
    Body sections, one block per ideator (in fixed order Claude → Codex → Gemini):
 
@@ -809,15 +809,41 @@ Log every individual failure as `ideator_failed` regardless of the bucket above.
 
    Do **not** write a `## User choice` section in Phase 3 — Phase 4 writes it for the first time (no placeholder, no duplication).
 
-<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the framing
-     selection question (Claude / Codex / Gemini / Restart / Abandon) via their
-     native channel. Silent omission is forbidden. -->
-5. **Present** the three framings + anti-bias check + recommendation to the user via `AskUserQuestion`. Options:
-   - One option per available framing (e.g. **Claude framing**, **Codex framing**, **Gemini framing** — only for ideators that succeeded)
-   - **Restart** — discard this run and re-run with a refined topic
-   - **Abandon** — exit cleanly without finalizing
+5. **Produce a ranked prose briefing and end the turn.** Do NOT use `AskUserQuestion` here. Do NOT call any further tool. Present the ranked briefing in-line and stop — the orchestrator must wait for the user's natural-language reply.
 
-Block until the user answers. Send a `PushNotification` if notify.level is `approval_only` or `all` (see [docs/human/config.md](docs/human/config.md)).
+   **Ranked briefing format** (write this directly in your response):
+
+   > **Brainstorm complete — `<slug>`**
+   >
+   > Here are the **<N> directions**, ranked by strength:
+   >
+   > **1. <direction label> (e.g. Claude framing)**
+   > - **Pros:** <2-3 bullets>
+   > - **Cons:** <2-3 bullets>
+   >
+   > **2. <direction label>**
+   > - **Pros:** <2-3 bullets>
+   > - **Cons:** <2-3 bullets>
+   >
+   > *(repeat for each available framing in ranked order)*
+   >
+   > **Consensus:** <one sentence on where all ideators agree — call it a signal, not a waste>
+   >
+   > **Divergence:** <one sentence on the genuine decision point — what the framings disagree on>
+   >
+   > **My recommendation:** <framing label> — <one-sentence rationale>
+   >
+   > What direction do you want to go? You can pick one as-is, ask me to defend a choice, combine ideas, request a re-spin (see [re-spin machinery]), or restart/abandon.
+
+   Ranking criteria: favor the framing with the most concrete plan implications and lowest risk exposure, adjusted by the anti-bias check results.
+
+   **Narrow mode (≤3 ideators):** rank the raw ideator framings directly (no clustering needed).
+
+   **Wide mode (>3 ideators):** rank the K cluster directions returned by `ideator-clusterer` (see Wide / mega mode section). Each cluster label represents one ranked direction; mention the underlying ideators that collapsed into it.
+
+   Send a `PushNotification` if notify.level is `approval_only` or `all` (see [docs/human/config.md](docs/human/config.md)).
+
+   **HARD INVARIANT — Convergence guardrail:** The orchestrator MUST halt after producing this briefing and report to the user. It MUST NOT auto-decide, MUST NOT pick a framing on the user's behalf, and MUST NOT call any further tool. The next action comes only from the user's natural-language reply, interpreted in Phase 4.
 
 ---
 
@@ -933,26 +959,92 @@ For the `brainstorm_run_end` event, serialize `chosen_framing` as `"<chunk_id>:<
 
 ### LIGHT/MEDIUM branch (fires when mode is NOT HEAVY, or SCOPE-brainstorm.json is absent)
 
-Branch on the user's Phase 3 choice:
+This branch is a **discussion loop**. There is no menu; interpret the user's free-text reply from Phase 3 to determine intent. Present responses and end your turn — do NOT call any further tool until the user sends another reply.
 
-#### User picked a framing
+**HARD INVARIANT — Ambiguity guardrail (m5):** Write `chosen_framing` and the `## User choice` block ONLY on an unambiguous lock-in signal. If the user's intent is ambiguous, confirm conversationally before writing — never guess. A silent auto-write loses user intent and is the riskiest new behavior in this command.
 
-1. Update the `chosen_framing:` field in the BRAINSTORM.md frontmatter from `pending` to the picked ideator id (`claude` | `codex` | `gemini`).
-2. Append (for the first time) a `## User choice` body section with the picked framing's text reproduced verbatim (so `/z-plan` can find it without re-parsing the ideator blocks) plus any free-text refinement the user provided.
+#### Supported intents (natural language — no menu)
+
+**Ask a question** — the user wants to understand or compare the framings.
+- Answer the question directly. Re-present the relevant framing(s) with your answer inline.
+- Do NOT re-spin or lock in unless the user explicitly requests it.
+- End your turn.
+
+**Challenge / narrow** — the user expresses doubt about a direction or wants to cut scope.
+- Discuss the challenge; update the briefing view as appropriate.
+- If the challenge is strong enough to suggest the current framings don't cover the right space, offer a re-spin (see re-spin machinery). Only initiate if the user agrees.
+- End your turn.
+
+**Combine X+Y** — the user wants a hybrid of two directions.
+- Draft a synthesized framing inline (the five-section schema: Framing / Core hypothesis / Risks / Plan implications / What would change my mind). Label it clearly ("Synthesized: <X> + <Y>").
+- Show it and ask the user to confirm before treating it as the chosen framing.
+- End your turn. Do NOT write `chosen_framing` yet.
+
+**Re-spin** — the user wants divergent options (see re-spin machinery, T007).
+- Acknowledge the re-spin request and note "re-spin 1/3, ~X tokens" before dispatching.
+- After the re-spin returns, produce an updated ranked briefing incorporating the new framings and end your turn.
+
+**Lock in** — the user clearly selects a framing (e.g. "go with Codex", "I like option 2", "use the synthesized one", "let's do X").
+
+**HARD INVARIANT:** Before writing, verify the signal is UNAMBIGUOUS. If it could mean two things, ask for clarification. Only on a clear lock-in:
+
+1. Update `chosen_framing:` in the BRAINSTORM.md frontmatter from `pending` to the locked-in value:
+   - Single ideator pick → `claude` | `codex` | `gemini`
+   - Synthesized / hybrid → `synthesized`
+2. Append (for the first time) a `## User choice` body section:
+   ```markdown
+   ## User choice
+
+   **Chosen framing:** <framing label>
+
+   <For a single ideator pick: reproduce the ideator's framing block verbatim so /z-plan can find it without re-parsing>
+   <For synthesized: include the full co-authored hybrid text — this is what seeds /z-plan>
+
+   <Any free-text refinement the user added during the discussion>
+   ```
 3. Confirm `status: complete` in the frontmatter.
+4. Log the pick:
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" framing_locked \
+     "$(python3 -c 'import json,sys; print(json.dumps({"chosen_framing":sys.argv[1]}))' "<framing>")"
+   ```
 
-#### User picked Restart
+**Restart** — the user wants to discard this run and re-brainstorm on a refined topic.
 
 1. Archive the just-written BRAINSTORM.md to `$Z_HARNESS_PLAN_DIR/archive/$RUN/BRAINSTORM.md.previous-<N>` (next free integer). Before archiving, update the archived copy's frontmatter to `status: complete`, `chosen_framing: restart` so the historical record is spec-valid.
-<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the refined
-     topic question via their native channel. Silent omission is forbidden. -->
-2. Ask the user (free-text or `AskUserQuestion`) for the refined topic.
-3. Start a fresh RUN: regenerate `RUN`, re-mkdir, re-emit `brainstorm_run_start`, and loop back to Phase 1 with the refined topic.
+2. Ask the user for the refined topic conversationally (e.g. "What topic should I brainstorm instead?") — do NOT use `AskUserQuestion` here; respond in prose and end your turn to wait for their reply.
+3. After the user replies with the refined topic: start a fresh RUN — regenerate `RUN`, re-mkdir, re-emit `brainstorm_run_start`, and loop back to Phase 1 with the refined topic.
 
-#### User picked Abandon
+**Abandon** — the user wants to exit without finalizing.
 
 1. Set the frontmatter `status: abandoned` and `chosen_framing: abandoned`. Leave the file in place (so a future re-run knows there was a prior attempt).
 2. Skip the push-notify "next step" recommendation; emit a simpler "abandoned" notification.
+
+**Ambiguous reply** — the user's reply doesn't map cleanly to any of the above intents.
+- Ask a targeted clarifying question (one sentence). End your turn. Do NOT write anything to BRAINSTORM.md.
+
+---
+
+### Re-spin machinery
+
+<!-- T007: implement re-spin / divergence-wave dispatch here. This section is a seam
+     placeholder. The discussion loop (LIGHT/MEDIUM branch) and the wide-mode overflow
+     path both reference "re-spin machinery" and expect this section to exist.
+
+     Contract expected by the discussion loop (T006):
+     - Input: `narrowed_direction` string, current BRAINSTORM.md wave count.
+     - Action: re-dispatch a subset of ideators, each seeded with
+       `narrowed_direction + "Here are the existing framings: <…>. Produce something
+       that diverges from them — attack a different axis."`.
+     - Cap: 3 waves total. Each re-spin emits a one-line cost note to the user
+       ("re-spin N/3, ~X tokens").
+     - Output: new framings appended to BRAINSTORM.md under their wave header so the
+       discussion can re-read them; the file is the resumable state.
+     - After each re-spin: the caller (discussion loop) re-presents an updated ranked
+       briefing and ends the turn.
+-->
+
+Re-spin and divergence-wave dispatch is implemented in T007. When the user requests a re-spin in the Phase 4 discussion loop, follow the machinery defined in T007's implementation here.
 
 ---
 
@@ -1066,6 +1158,7 @@ JSON
 | `scope_fanout_dispatched` | HEAVY mode: N sub-flows launched | `host_command`, `axis`, `chunks_count` |
 | `scope_fanout_reconciled` | HEAVY mode: reconciler finished | `host_command`, `axis`, `chunks_total`, `chunks_succeeded`, `reconciler_ok` |
 | `heavy_pair_selected` | HEAVY mode: user chose a (chunk, framing) pair | `chunk_id`, `framing` |
+| `framing_locked` | LIGHT/MEDIUM branch: user unambiguously locked in a framing (conversational) | `chosen_framing` |
 | `doc_drift` | doc-fetcher returned a DRIFT WARNING for a concept | `concept`, `claim`, `reality`, `file` |
 | `sharpen_gate` | Phase 0 sharpen-vs-skip decision | `decision` (`sharpen`\|`skip`), `reason`, `grill_md_existed` |
 | `count_parsed` | Phase 0 ideator count extracted from NL invocation | `wide_n`, `default_used` |
@@ -1082,6 +1175,7 @@ JSON
 - **Restart is cheap.** Archive and loop, don't try to patch.
 - **Never read `docs/llm/*.json` from main thread.** Always dispatch `doc-fetcher`.
 - **Log everything** via `scripts/log-event.sh`.
+- **Brainstorm tail never auto-decides (m5 — load-bearing).** The orchestrator MUST halt after the Phase 3 ranked briefing and wait for the user's natural-language reply. It MUST NOT auto-pick a framing. It writes `chosen_framing` and the `## User choice` block ONLY on an unambiguous lock-in signal from the user. An ambiguous reply triggers a clarifying question, never a write. A silent auto-write would lose the user's intent — this is the riskiest behavior in this command.
 
 ---
 
@@ -1090,7 +1184,7 @@ JSON
 | Feature | Used | Gates |
 |---------|------|-------|
 | `subagent` | yes | Phase 0 sharpen-gate optional Haiku Agent() (ambiguous topics only); Phase 0 scope-probe Agent(); HEAVY sub-flow and reconciler Agent() calls; Phase 1a doc-fetcher Agent(); Phase 1b optional Explore Agent(); Phase 2 three ideator Agent() calls |
-| `ask_user` | yes | Empty topic gate; Setup slug confirmation; Setup existing BRAINSTORM.md overwrite; Phase 2 2/3 ideator failure gate; Phase 3 framing selection; Phase 4 HEAVY chunk×framing matrix; Phase 4 LIGHT/MEDIUM restart refined-topic question |
+| `ask_user` | yes | Empty topic gate (finite); Setup slug confirmation (finite); Setup existing BRAINSTORM.md overwrite (finite); Phase 2 2/3 ideator failure gate (finite); Phase 4 HEAVY "no framings" halt (finite). **Conversational (no ask_user):** Phase 3 framing-selection briefing; Phase 4 HEAVY chunk×framing matrix (T009); Phase 4 LIGHT/MEDIUM discussion loop including restart refined-topic |
 | `skill_invoke` | no | — |
 
 Driver support requirements: see frontmatter `driver_features_required`.
