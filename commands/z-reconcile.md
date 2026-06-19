@@ -71,7 +71,7 @@ For each entry in `git worktree list --porcelain` (excluding the main worktree i
 - `head_sha` — HEAD SHA (from `HEAD` line)
 - `is_detached` — true when the `branch` line is absent or reads `detached`
 - `has_uncommitted` — from `git -C <path> status --porcelain` (non-empty output = true)
-- `remote_reachable` — attempt `git -C <path> ls-remote --exit-code origin HEAD 2>/dev/null`; if this times out or fails, set `remote_reachable=false`
+- `remote_reachable` — attempt `timeout 5 git -C <path> ls-remote --exit-code origin HEAD 2>/dev/null` (the `timeout 5` is mandatory: a hung or unreachable remote must not block this read-only audit, which iterates every worktree); if this times out (exit 124) or fails for any other reason, set `remote_reachable=false`
 - `has_unpushed` — if `remote_reachable` is true: count commits via `git -C <path> log @{u}..HEAD 2>/dev/null | wc -l`; > 0 means unpushed; set to `null` if remote unreachable or no upstream set
 - `is_head_ancestor_of_default` — `git -C <path> merge-base --is-ancestor HEAD origin/$_ZR_DEFAULT_BRANCH 2>/dev/null`; true on exit 0, false on exit 1, `null` if the check cannot run
 - `default_branch` — `$_ZR_DEFAULT_BRANCH`
