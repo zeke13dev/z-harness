@@ -452,7 +452,24 @@ fi
    For every finding, write a brief statement detailing "one reason this finding might be wrong, irrelevant, or pedantic". If the pushback is valid:
    - Drop the finding from the final report.
    - Or demote its severity.
-3. **Write final report:**
+3. **Class tagging (every surviving finding):**
+   After the gate, assign a canonical `Class` to every surviving finding using the enum from
+   `z-review-all.md` (line 716): `implementation_drift | spec_gap | completed_task_contradiction |
+   premise_failure | observation`. For audit-plan findings, only two values apply:
+
+   - **`spec_gap`** — factual or mechanical corrections: wrong symbol, wrong path, wrong table or
+     config value, malformed criterion, missing test, naming drift. The plan states something
+     incorrect about the world.
+   - **`premise_failure`** — viability or design approach concerns: won't scale or work as written,
+     materially better path exists, wrong library chosen, foundational premise is flawed. The plan
+     may be factually consistent but its approach is questionable.
+
+   **The discriminator is Class/disposition, NOT severity.** A BLOCKER finding can be either
+   `spec_gap` (a hard factual error) or `premise_failure` (a fatal design concern). A MINOR finding
+   can likewise be either. Never use `correction` or `approach` as Class values — those are human
+   glosses only, not enum members. Never invent new Class values.
+
+4. **Write final report:**
    Write the unified plan-audit report to `$BASE/PLAN_AUDIT_REPORT.md` (and save a copy in `$BASE/archive/$RUN/PLAN_AUDIT_REPORT.md`):
    ```markdown
    # Plan Audit Report — <slug>
@@ -480,12 +497,25 @@ fi
    ## Actionable Recommendations
    <Categorized recommendations with recommended actions>
    ```
+   
+   Each individual finding entry in the report must include a `**Class:**` field immediately after
+   `**Severity:**`. Example per-finding format:
+   ```markdown
+   - **Severity:** MAJOR
+   - **Class:** spec_gap
+   - **Location:** <file or section>
+   - **Finding:** <description>
+   - **Recommendation:** <action>
+   ```
+   The `**Class:**` value must be `spec_gap` or `premise_failure` (the two values that apply to
+   audit-plan findings). The field is required on every surviving finding — no finding may appear in
+   the report without it.
 
 ---
 
-## Phase 5 — User Gate & Action
+## Phase 5 — Gate & Action
 
-**Heartbeat before Phase 5 audit gate (load-bearing — extends TTL before the AskUserQuestion wait):**
+**Heartbeat before Phase 5 audit gate (load-bearing — extends TTL before any interactive wait):**
 ```bash
 HB_RC=0
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" heartbeat \
@@ -507,7 +537,7 @@ if [[ $HB_RC -eq 9 ]]; then
 fi
 ```
 
-1. **Resolver pre-check — run before invoking `AskUserQuestion`:**
+1. **Gate decision — run before any user interaction:**
 
    ```bash
    # Capture exit code separately — do NOT silence stderr
@@ -516,43 +546,203 @@ fi
 
    if [[ $RESOLVE_EXIT -ne 0 ]]; then
      # Exit codes: 2=bad invocation, 3=unknown question_id, 4=I/O error.
-     # In all error cases, fall through to ask the user normally — never silently skip.
-     echo "resolve-question failed (exit $RESOLVE_EXIT); falling back to ask" >&2
-     RESULT="ask"; DEFAULT=""; SOURCE="error"
+     # In all error cases, fall through to force_ask — never silently skip.
+     echo "resolve-question failed (exit $RESOLVE_EXIT); falling back to force_ask" >&2
+     GATE_DECISION="force_ask"
+     RESOLVED='{"result":"ask","source":"error","default":""}'
    else
-     RESULT="$(echo "$RESOLVED" | jq -r .result)"
-     DEFAULT="$(echo "$RESOLVED" | jq -r .default)"
-     SOURCE="$(echo "$RESOLVED" | jq -r .source)"
+     GATE_DECISION="$(python3 scripts/amend-gate-decision.py "$RESOLVED")"
+   fi
+
+   # Retain individual fields for force_ask popup and Phase 9 elevation
+   RESULT="$(echo "$RESOLVED" | jq -r .result)"
+   DEFAULT="$(echo "$RESOLVED" | jq -r .default)"
+   SOURCE="$(echo "$RESOLVED" | jq -r .source)"
+   ```
+
+   Branch on `$GATE_DECISION`:
+
+   **`halt` — stop immediately, no amend, no popup:**
+   ```bash
+   if [[ "$GATE_DECISION" == "halt" ]]; then
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" audit_halt \
+       "$(printf '{"reason":"no_ask_blocked","question_id":"workflow.audit_to_amend","rule_id":"no_ask_halt"}')"
+     echo "halt: no_ask_blocked on workflow.audit_to_amend" >&2
+   fi
+   ```
+   **Stop here when `$GATE_DECISION` is `halt`.** Jump to **Run Brief — halt finalize** below (substitute `<reason>`), then `exit 0` — do not fall through to the auto_split or force_ask branches, step 2, or Phase 9.
+
+   **`auto_split` — auto-amend `spec_gap` findings; render `premise_failure` findings as prose brief:**
+
+   2a. **Extract findings by Class from `$BASE/PLAN_AUDIT_REPORT.md`.**
+
+   ```bash
+   # Guard: PLAN_AUDIT_REPORT.md must exist and be parseable before extraction.
+   if [[ ! -f "$BASE/PLAN_AUDIT_REPORT.md" ]]; then
+     echo "z-audit-plan Phase 5: PLAN_AUDIT_REPORT.md not found at $BASE/PLAN_AUDIT_REPORT.md — cannot extract findings." >&2
+     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" audit_artifact_missing \
+       "$(printf '{"artifact":"PLAN_AUDIT_REPORT.md","base":"%s"}' "$BASE")" || true
+     exit 1
    fi
    ```
 
-   Branch on `$RESULT`:
+   Parse each finding block (delimited by `- **Severity:**` entries). For every block that
+   has `**Class:** spec_gap`, collect the finding title/description into the corrections list.
+   For every block that has `**Class:** premise_failure`, collect it into the approach_concerns
+   list. Skip any spec_gap finding whose associated task (identified by a `**Task:**` or
+   `**Location:**` field referencing a task ID like `T001`) appears as a completed `[x]`
+   entry in `$BASE/TASKS.md` — completed-task guard for symmetry with review-all.
 
-   - **`skip`:** Skip the `AskUserQuestion` and proceed as if the user picked `$DEFAULT`. Set `AUDIT_GATE_CHOICE="$DEFAULT"`. Emit `askuser_skipped` event:
-     ```bash
-     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" askuser_skipped \
-       "$(printf '{"question_id":"workflow.audit_to_amend","source":"%s"}' "$SOURCE")"
-     ```
-   - **`prefill`:** Present the `AskUserQuestion` normally, pre-select `$DEFAULT` as the recommended option (append label suffix: ` (Recommended — your preference)`).
-   - **`ask`:** Present the `AskUserQuestion` normally. If `$SOURCE == "conflict"`, add to the question header text: `(Note: config says <X>, memory says <Y> — your answer below will be offered as a conflict-resolution write target.)` After the user picks an answer, if that answer differs from both config and memory values, surface a one-shot follow-up `AskUserQuestion`: "Record your answer as the new preference? (config / memory:very_strong / memory:strong / no — keep both stored, ask again next time)". Caller writes to config or dispatches `/z-suggest-memory` accordingly.
-   - **`halt`:** Emit `audit_halt` event, then execute **Run Brief — halt finalize** (below) with reason `no_ask_blocked on workflow.audit_to_amend` — do NOT invoke `AskUserQuestion`, step 2 success finalize, or Phase 9:
-     ```bash
-     if [[ "$RESULT" == "halt" ]]; then
-       bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" audit_halt \
-         "$(printf '{"reason":"no_ask_blocked","question_id":"workflow.audit_to_amend","rule_id":"no_ask_halt"}')"
-       echo "halt: no_ask_blocked on workflow.audit_to_amend" >&2
-     fi
-     ```
-     **Stop here when `$RESULT` is `halt`.** Jump to **Run Brief — halt finalize** below (substitute `<reason>`), then `exit 0` — do not fall through to the AskUserQuestion gate or step 2 below.
+   2b. **Detect target plan mode:**
+   ```bash
+   if [[ -f "$BASE/INTENT.md" ]] && [[ ! -f "$BASE/SPEC.md" ]]; then
+     TARGET_MODE="intent"
+   else
+     TARGET_MODE="legacy"
+   fi
+   ```
+
+   2c. **Auto-amend `spec_gap` findings via `/z-amend --skip-user-gate`:**
+
+   For an **INTENT-mode target** — batch ALL spec_gap corrections into a single amendment
+   description and invoke `/z-amend --skip-user-gate` ONCE (one contract re-freeze). Build the
+   combined amendment text as a bullet list of all corrections and call:
+   ```
+   /z-amend --skip-user-gate "<combined amendment text listing all spec_gap corrections>"
+   ```
+
+   For a **legacy-mode target** — invoke `/z-amend --skip-user-gate` once per spec_gap finding:
+   ```
+   /z-amend --skip-user-gate "<correction title: description>"
+   ```
+
+   In both modes: skip any spec_gap finding whose task is already `[x]` complete in TASKS.md
+   (guard from step 2a). Track the count of amendments actually invoked as `N_AUTO_AMENDED`.
+
+   2d. **Render `premise_failure` findings as prose brief.** Build the JSON input for
+   `amendment-brief.py` from the two lists. The corrections list uses each spec_gap finding's
+   title/description/location as `{"title": ..., "why": ..., "target": ...}`. The approach_concerns
+   list uses each premise_failure finding as `{"concern": ..., "affected"?: ..., "suggestion"?: ...}`
+   (omit `affected` when no task/file target is identified). Track count as `N_APPROACH_SURFACED`.
+
+   ```bash
+   # Build JSON for amendment-brief.py — concrete extraction from PLAN_AUDIT_REPORT.md
+   _EXTRACT_PY="$(mktemp /tmp/audit_extract_XXXXXX.py)"
+   cat > "$_EXTRACT_PY" <<'PY'
+import json, re, sys
+from pathlib import Path
+
+report_path = sys.argv[1]
+tasks_path = sys.argv[2]
+
+corrections = []
+approach_concerns = []
+
+report_text = Path(report_path).read_text(encoding="utf-8")
+
+# Read completed task IDs from TASKS.md (lines with [x] and a task ID like T001)
+completed_tasks = set()
+if Path(tasks_path).exists():
+    tasks_text = Path(tasks_path).read_text(encoding="utf-8")
+    for m in re.finditer(r'\[x\].*?\b(T\d+)\b', tasks_text, re.IGNORECASE):
+        completed_tasks.add(m.group(1).upper())
+
+# Split the report into finding blocks. Each block starts with a "- **Severity:**" line.
+block_re = re.compile(r'(?=^- \*\*Severity:\*\*)', re.MULTILINE)
+blocks = block_re.split(report_text)
+
+for block in blocks:
+    if not block.strip():
+        continue
+
+    class_match = re.search(r'\*\*Class:\*\*\s*(\S+)', block)
+    if not class_match:
+        continue
+    finding_class = class_match.group(1).strip().rstrip('.')
+
+    # Extract task/location reference to check completed-task guard
+    task_ref_match = re.search(r'\*\*(?:Task|Location):\*\*\s*.*?\b(T\d+)\b', block, re.IGNORECASE)
+    task_ref = task_ref_match.group(1).upper() if task_ref_match else None
+
+    if finding_class == "spec_gap":
+        # Skip if the referenced task is already completed
+        if task_ref and task_ref in completed_tasks:
+            continue
+
+        finding_match = re.search(r'\*\*Finding:\*\*\s*(.+?)(?=\n- \*\*|\Z)', block, re.DOTALL)
+        title = finding_match.group(1).strip().replace('\n', ' ') if finding_match else block.strip().splitlines()[0][:120]
+
+        recommendation_match = re.search(r'\*\*Recommendation:\*\*\s*(.+?)(?=\n- \*\*|\Z)', block, re.DOTALL)
+        why = recommendation_match.group(1).strip().replace('\n', ' ') if recommendation_match else ""
+
+        location_match = re.search(r'\*\*Location:\*\*\s*(.+?)(?=\n)', block)
+        target = location_match.group(1).strip() if location_match else (task_ref or "")
+
+        corrections.append({"title": title, "why": why, "target": target})
+
+    elif finding_class == "premise_failure":
+        finding_match = re.search(r'\*\*Finding:\*\*\s*(.+?)(?=\n- \*\*|\Z)', block, re.DOTALL)
+        concern = finding_match.group(1).strip().replace('\n', ' ') if finding_match else block.strip().splitlines()[0][:200]
+
+        location_match = re.search(r'\*\*Location:\*\*\s*(.+?)(?=\n)', block)
+        affected = location_match.group(1).strip() if location_match else (task_ref or None)
+
+        recommendation_match = re.search(r'\*\*Recommendation:\*\*\s*(.+?)(?=\n- \*\*|\Z)', block, re.DOTALL)
+        suggestion = recommendation_match.group(1).strip().replace('\n', ' ') if recommendation_match else None
+
+        entry = {"concern": concern}
+        if affected:
+            entry["affected"] = affected
+        if suggestion:
+            entry["suggestion"] = suggestion
+        approach_concerns.append(entry)
+
+print(json.dumps({"corrections": corrections, "approach_concerns": approach_concerns}))
+PY
+   BRIEF_JSON="$(python3 "$_EXTRACT_PY" "$BASE/PLAN_AUDIT_REPORT.md" "$BASE/TASKS.md")"
+   rm -f "$_EXTRACT_PY"
+   BRIEF_OUTPUT="$(printf '%s' "$BRIEF_JSON" | python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/amendment-brief.py")"
+   ```
+
+   Present `$BRIEF_OUTPUT` as a conversational reply — **no `AskUserQuestion` popup**. If
+   `approach_concerns` is empty, the brief has no "Worth your eyes" section; present the
+   "Patched automatically" list and a forward recommendation to proceed to `/z-implement-all`.
+   If `approach_concerns` is non-empty, invite the user to reply conversationally (rework / proceed
+   / re-plan).
+
+   2e. **Telemetry:**
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" audit_auto_split \
+     "$(printf '{"corrections_auto_amended":%d,"approach_concerns_surfaced":%d,"target_mode":"%s"}' \
+        "$N_AUTO_AMENDED" "$N_APPROACH_SURFACED" "$TARGET_MODE")"
+   ```
+
+   Set `AUDIT_GATE_CHOICE="auto_split"` for the run-brief outcome line.
+
+   **`force_ask` — present the existing 3-way popup (unchanged):**
 
    <!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the audit
         gate (Amend Plan / Proceed as-is / Reject & Re-plan) via their native
-        channel when resolver result is prefill or ask. Silent omission is forbidden. -->
-   **Ask user via `AskUserQuestion`** when resolver result is `prefill` or `ask` only — skip when `$RESULT` is `halt` or `skip`. Store the chosen option label verbatim in `AUDIT_GATE_CHOICE`:
+        channel when gate decision is force_ask. Silent omission is forbidden.
+        This gate fires ONLY when force_ask is returned by amend-gate-decision.py
+        (i.e. an explicit user preference requests interactive input). -->
+   Present `AskUserQuestion` when `$GATE_DECISION` is `force_ask` only. If `$SOURCE == "conflict"`,
+   add to the question header: `(Note: config says <X>, memory says <Y> — your answer below will be
+   offered as a conflict-resolution write target.)` Pre-select `$DEFAULT` as the recommended option
+   when `$RESULT` is `prefill` (append label suffix: ` (Recommended — your preference)`). Store the
+   chosen option label verbatim in `AUDIT_GATE_CHOICE`:
    - **Amend Plan (Run z-amend):** Trigger interactive plan amendment to address findings.
    - **Proceed as-is:** Acknowledge findings as acceptable tradeoffs and start implementation.
    - **Reject & Re-plan:** Discard current plan artifacts and rerun `/z-plan`.
-2. **Run Brief finalize (before `plan_audit_end`).** Set outcome/next from audit counts and the resolved user gate choice (`$AUDIT_GATE_CHOICE`). Chat render replaces ad-hoc notify/present prose.
+
+   After the user picks an answer: if `$SOURCE == "conflict"` and the chosen answer differs from
+   both config and memory values, surface a one-shot follow-up `AskUserQuestion`: "Record your
+   answer as the new preference? (config / memory:very_strong / memory:strong / no — keep both
+   stored, ask again next time)". Caller writes to config or dispatches `/z-suggest-memory`
+   accordingly.
+
+2. **Run Brief finalize (before `plan_audit_end`).** Set outcome/next from audit counts and the
+   resolved gate choice. Chat render replaces ad-hoc notify/present prose.
 
    ```bash
    CURRENT_ARCHIVE_DIR="$BASE/archive/$RUN"
@@ -562,7 +752,9 @@ fi
    RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
    RB_PY="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-run-brief.py"
 
-   case "${AUDIT_GATE_CHOICE:-Proceed as-is}" in
+   case "${AUDIT_GATE_CHOICE:-auto_split}" in
+     auto_split)
+       _RB_NEXT_CMD="/z-implement-all"; _RB_NEXT_LABEL="Proceed to /z-implement-all" ;;
      "Amend Plan (Run z-amend)"|*amend*)
        _RB_NEXT_CMD="/z-amend"; _RB_NEXT_LABEL="Amend plan via /z-amend" ;;
      "Reject & Re-plan"|*re-plan*|*replan*)
@@ -572,7 +764,7 @@ fi
    esac
 
    bash "$RB_SH" set-section --run "$RUN" --section outcome \
-     --value "Plan audit: ${N_FINDINGS} findings (${N_BLOCKERS} blockers, ${N_MAJORS} majors); gate: ${AUDIT_GATE_CHOICE:-Proceed as-is}"
+     --value "Plan audit: ${N_FINDINGS} findings (${N_BLOCKERS} blockers, ${N_MAJORS} majors); gate: ${AUDIT_GATE_CHOICE:-auto_split}"
    bash "$RB_SH" set-section --run "$RUN" --section next --json /dev/stdin <<JSON
    {"label": "${_RB_NEXT_LABEL}", "command": "${_RB_NEXT_CMD}"}
    JSON
@@ -796,7 +988,7 @@ fi
 | Feature | Used | Gates |
 |---------|------|-------|
 | `subagent` | yes | Phase 0 doc-fetcher Agent(); Phase 3 consultant-primary and consultant-secondary Agent() calls |
-| `ask_user` | yes | Phase 0 multiple-candidates slug selection; Phase 0 claim contention/takeover gate (proceed / abort) and register-failure gate (proceed without coordination / abort); Phases 1–5 lost-claim gate (abort default / continue-uncoordinated) on heartbeat exit 9; Phase 5 audit gate (Amend Plan / Proceed as-is / Reject & Re-plan); Phase 9 preference elevation proposal |
+| `ask_user` | yes | Phase 0 multiple-candidates slug selection; Phase 0 claim contention/takeover gate (proceed / abort) and register-failure gate (proceed without coordination / abort); Phases 1–5 lost-claim gate (abort default / continue-uncoordinated) on heartbeat exit 9; Phase 5 audit gate (Amend Plan / Proceed as-is / Reject & Re-plan) — fires only when `amend-gate-decision.py` returns `force_ask`; Phase 9 preference elevation proposal |
 | `skill_invoke` | no | — |
 
 Driver support requirements: see frontmatter `driver_features_required`.

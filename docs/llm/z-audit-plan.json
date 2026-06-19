@@ -1,0 +1,99 @@
+{
+  "concept": "z-audit-plan",
+  "last_updated": "2026-06-19",
+  "source_file": [
+    "commands/z-audit-plan.md",
+    "docs/human/z-audit-plan.md"
+  ],
+  "confidence": "high",
+  "entry_points": [
+    {
+      "file": "commands/z-audit-plan.md",
+      "line": 1,
+      "symbol": "z-audit-plan",
+      "kind": "module",
+      "summary": "Command definition: pre-implementation plan audit pipeline; read-only; emits PLAN_AUDIT_REPORT.md"
+    },
+    {
+      "file": "commands/z-audit-plan.md",
+      "line": 427,
+      "symbol": "Phase 4",
+      "kind": "module",
+      "summary": "Merge/synthesize findings + Class tagging: every surviving finding tagged spec_gap or premise_failure using z-review-all.md:716 enum; PLAN_AUDIT_REPORT.md written with **Class:** field after **Severity:**"
+    },
+    {
+      "file": "commands/z-audit-plan.md",
+      "line": 516,
+      "symbol": "Phase 5",
+      "kind": "module",
+      "summary": "Gate & Action: config.py resolve-question workflow.audit_to_amend + amend-gate-decision.py -> auto_split (default) / force_ask / halt"
+    },
+    {
+      "file": "commands/z-audit-plan.md",
+      "line": 554,
+      "symbol": "Phase 5 gate resolution",
+      "kind": "module",
+      "summary": "Resolver envelope piped to amend-gate-decision.py; gate token dispatches auto_split/force_ask/halt branches"
+    },
+    {
+      "file": "commands/z-audit-plan.md",
+      "line": 575,
+      "symbol": "Phase 5 auto_split branch",
+      "kind": "module",
+      "summary": "auto_split: INTENT-mode batches all spec_gap into ONE /z-amend call; legacy-mode per-finding; premise_failure rendered via amendment-brief.py as conversational prose; no popup"
+    },
+    {
+      "file": "commands/z-audit-plan.md",
+      "line": 638,
+      "symbol": "audit_auto_split telemetry",
+      "kind": "module",
+      "summary": "Telemetry event: corrections_auto_amended, approach_concerns_surfaced, target_mode"
+    },
+    {
+      "file": "commands/z-audit-plan.md",
+      "line": 645,
+      "symbol": "Phase 5 force_ask branch",
+      "kind": "module",
+      "summary": "force_ask: fires ONLY when amend-gate-decision.py returns force_ask (explicit user preference); 3-way popup: Amend Plan / Proceed as-is / Reject & Re-plan"
+    },
+    {
+      "file": "commands/z-audit-plan.md",
+      "line": 765,
+      "symbol": "Phase 9",
+      "kind": "module",
+      "summary": "Elevation proposer: workflow preference elevation check after gate resolves"
+    }
+  ],
+  "depends_on": [
+    "amendment-brief",
+    "config",
+    "commands",
+    "plan-claim",
+    "active-plan-registry"
+  ],
+  "consumed_by": [
+    "commands"
+  ],
+  "invariants": [
+    "command is read-only: never edits active codebase files; all changes go through /z-amend or /z-plan",
+    "every surviving finding in PLAN_AUDIT_REPORT.md must have a **Class:** field immediately after **Severity:**",
+    "Class values are restricted to spec_gap or premise_failure for audit-plan findings; correction/approach are glosses only",
+    "discriminator is Class not severity: a BLOCKER can be spec_gap or premise_failure",
+    "Phase 5 default (source==none) is auto_split — no popup; fresh users never see the 3-way popup",
+    "force_ask fires ONLY when amend-gate-decision.py returns force_ask (explicit config/memory preference with ask|prefill)",
+    "INTENT-mode auto_split batches ALL spec_gap corrections into ONE /z-amend call (one contract re-freeze)",
+    "legacy-mode auto_split invokes one /z-amend --skip-user-gate per spec_gap finding",
+    "completed ([x]) tasks are skipped in the auto_split amend loop",
+    "halt gate token causes immediate abort via Run Brief halt-finalize path",
+    "audit_auto_split telemetry event emitted on every auto_split path execution"
+  ],
+  "gotchas": [
+    "workflow.audit_to_amend semantics are SOURCE-KEYED: source==none -> auto_split regardless of result value; stored ask/prefill from config|memory -> force_ask",
+    "INTENT-mode one-batch constraint is not optional: N separate /z-amend calls on an INTENT target would re-freeze the contract N times and invalidate TASKS.md each time",
+    "the 3-way popup (Amend Plan / Proceed as-is / Reject & Re-plan) is preserved but fires only on force_ask — most runs never see it",
+    "PLAN_AUDIT_REPORT.md is written to both $BASE/ and $BASE/archive/$RUN/; the archive copy is for the run-brief pipeline",
+    "Phase 5 run-brief populates outcome/next; the approach section prefers extractable bullets from PLAN_AUDIT_REPORT.md, falls back to a seed file",
+    "Class enum source is z-review-all.md:716 — audit-plan does NOT define its own enum; keep in sync"
+  ],
+  "memories": []
+}

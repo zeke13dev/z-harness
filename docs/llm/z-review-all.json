@@ -1,0 +1,90 @@
+{
+  "concept": "z-review-all",
+  "last_updated": "2026-06-19",
+  "source_file": [
+    "commands/z-review-all.md",
+    "docs/human/z-review-all.md"
+  ],
+  "confidence": "high",
+  "entry_points": [
+    {
+      "file": "commands/z-review-all.md",
+      "line": 1,
+      "symbol": "z-review-all",
+      "kind": "module",
+      "summary": "Final-gate cross-LLM review: two consultant subagents on cumulative diff vs plan contract; surfaces implementation_drift (Prong A) and spec/intent gaps (Prong B); use after /z-implement-all completes"
+    },
+    {
+      "file": "commands/z-review-all.md",
+      "line": 716,
+      "symbol": "Class enum",
+      "kind": "const",
+      "summary": "Canonical finding class enum: implementation_drift | spec_gap | completed_task_contradiction | premise_failure | observation; shared with /z-audit-plan Phase 4"
+    },
+    {
+      "file": "commands/z-review-all.md",
+      "line": 787,
+      "symbol": "Phase 6",
+      "kind": "module",
+      "summary": "Promote findings to REVIEW-TASKS.md: implementation_drift->candidate_task, spec_gap->amendment_proposal, completed_task_contradiction->superseding_task, premise_failure->escalation, observation->evidence only"
+    },
+    {
+      "file": "commands/z-review-all.md",
+      "line": 853,
+      "symbol": "Phase 6.5",
+      "kind": "module",
+      "summary": "Auto-amend: unconditionally applies every amendment_proposal (spec_gap) via /z-amend --skip-user-gate; logs to auto-amend-log.md; emits auto_amend_applied per amendment; skips [x] tasks"
+    },
+    {
+      "file": "commands/z-review-all.md",
+      "line": 924,
+      "symbol": "Phase 6.6",
+      "kind": "module",
+      "summary": "Amendment brief: builds corrections (from Phase 6.5 spec_gaps) + approach_concerns (from premise_failure escalations) JSON; calls scripts/amendment-brief.py; writes amendment-brief.md to archive"
+    },
+    {
+      "file": "commands/z-review-all.md",
+      "line": 995,
+      "symbol": "Phase 6.6 skip gate",
+      "kind": "module",
+      "summary": "Skip gate: if both corrections and approach_concerns are empty, skip Phase 6.6 entirely — no brief file, no pipeline entry"
+    },
+    {
+      "file": "commands/z-review-all.md",
+      "line": 1132,
+      "symbol": "Finalize APPROACH_FILE",
+      "kind": "module",
+      "summary": "Finalize prefers amendment-brief.md over older approach seed when the file is present in the archive"
+    }
+  ],
+  "depends_on": [
+    "amendment-brief",
+    "commands",
+    "run-brief-contract",
+    "active-plan-registry"
+  ],
+  "consumed_by": [
+    "commands"
+  ],
+  "invariants": [
+    "Class enum at line 716 is the single source of truth; /z-audit-plan Phase 4 reuses it",
+    "Phase 6.5 auto-amend is unconditional for amendment_proposal tasks; no per-finding popup",
+    "Phase 6.5 never touches [x] completed tasks and never auto-implements code changes",
+    "Phase 6.6 skipped when both corrections and approach_concerns are empty",
+    "Phase 6.6 calls scripts/amendment-brief.py — the same shared renderer as /z-audit-plan",
+    "amendment-brief.md in archive triggers APPROACH_FILE preference in Finalize over the older seed",
+    "## Escalations heading in REVIEW-TASKS.md is preserved as archive record; amendment-brief.md is the active presentation layer",
+    "auto_amend_applied telemetry event emitted per successful amendment in Phase 6.5",
+    "z_review_all_verdict telemetry event emitted at Finalize with full counts"
+  ],
+  "gotchas": [
+    "Phase 6.5 auto-amend is unconditional — no workflow.audit_to_amend gate here; that gate lives in /z-audit-plan Phase 5 only",
+    "correction/approach are human glosses; the canonical field values are spec_gap and premise_failure",
+    "REVIEW-TASKS.md contains candidate_task, amendment_proposal, superseding_task, escalation, report_only dispositions; only amendment_proposal tasks are auto-amended",
+    "Phase 6.6 skip gate checks BOTH lists empty — if only approach_concerns is empty, the corrections list still triggers a brief (with no Worth-your-eyes section)",
+    "amendment-brief.md is written to archive/$RRUN/ not $BASE/; Finalize reads it from there",
+    "the approach bullets in run-brief.json come from amendment-brief.md (Phase 6.6), not from findings.md",
+    "Phase 6.5 and Phase 6.6 require REVIEW-TASKS.md to exist; if the review was clean (shipped.md only), both phases are skipped"
+  ],
+  "memories": []
+}

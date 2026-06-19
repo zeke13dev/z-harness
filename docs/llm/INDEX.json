@@ -881,6 +881,63 @@
         "agents"
       ],
       "summary": "Default z-harness paradigm (workflow.planning_mode=intent). Replaces thick SPEC/PLAN/TASKS with: thin frozen INTENT.md contract (frozen at /z-implement-all start, immutable thereafter — INV-1); emergent BFS task-tree generated one level at a time by task-tree-generator (Sonnet); append-only LEDGER.md as realized-plan audit trail. Level depth (L1 quick / L2 standard / L3 deep) chosen by intent-classifier (Haiku, advisory) or config-forced. /z-implement-all mode detection: SPEC.md present → legacy unchanged (INV-4); INTENT.md present → INTENT engine (freeze→bootstrap-ledger→BFS loop→evaluate-acceptance per level). Four new workflow.* knobs in config.py (lines 78–81): planning_mode, intent_level, intent_parallel_levels (default false), hermes_enabled (default false, INV-6). /z-amend re-opens via reopen-intent (scripts/intent-schema.py:377). /z-do → /z-plan --quick shim; /z-plan-light → /z-plan --standard shim."
+    },
+    {
+      "slug": "amendment-brief",
+      "source_files": [
+        "scripts/amendment-brief.py",
+        "scripts/amend-gate-decision.py",
+        "docs/human/amendment-brief.md"
+      ],
+      "last_updated": "2026-06-19",
+      "confidence": "high",
+      "depends_on": [
+        "config",
+        "commands"
+      ],
+      "consumed_by": [
+        "commands"
+      ],
+      "summary": "Shared amendment-brief renderer and gate-decision helper for the default-amend continuation path in /z-audit-plan and /z-review-all. scripts/amendment-brief.py: file/stdin JSON {corrections:[{title,why,target}], approach_concerns:[{concern,affected?,suggestion?}]} -> two-section markdown brief: 'Patched automatically (N corrections)' (always) + 'Worth your eyes (M)' (only when approach_concerns non-empty; absent affected -> 'rework this, or proceed?'). scripts/amend-gate-decision.py: maps workflow.audit_to_amend resolver (result,source) -> auto_split|force_ask|halt using 5-rule precedence (halt wins; skip->auto_split; source==none->auto_split; explicit-config/memory+ask|prefill->force_ask; fallback->auto_split). Both commands call the same renderer. Discriminator is Class not severity: spec_gap=correction (auto-amended), premise_failure=approach (rendered as prose)."
+    },
+    {
+      "slug": "z-audit-plan",
+      "source_files": [
+        "commands/z-audit-plan.md",
+        "docs/human/z-audit-plan.md"
+      ],
+      "last_updated": "2026-06-19",
+      "confidence": "high",
+      "depends_on": [
+        "amendment-brief",
+        "config",
+        "plan-claim",
+        "active-plan-registry",
+        "commands"
+      ],
+      "consumed_by": [
+        "commands"
+      ],
+      "summary": "Pre-implementation plan audit pipeline: reality-check (Phase 1), best-practices/design (Phase 2), adversarial cross-LLM review (Phase 3), Class-tagged synthesis (Phase 4), default-amend gate (Phase 5). Phase 4 tags every surviving finding spec_gap or premise_failure (from z-review-all.md:716 enum; correction/approach are glosses only). Phase 5 default (source==none) is auto_split — no popup: INTENT-mode batches all spec_gap into ONE /z-amend call (single contract re-freeze); legacy-mode per-finding; premise_failure rendered via amendment-brief.py as conversational prose. force_ask fires only when amend-gate-decision.py returns force_ask (explicit config|memory ask|prefill preference). halt unchanged. audit_auto_split telemetry emitted on auto_split path. workflow.audit_to_amend is SOURCE-KEYED: stored value alone does not determine behavior; resolver source is the discriminator."
+    },
+    {
+      "slug": "z-review-all",
+      "source_files": [
+        "commands/z-review-all.md",
+        "docs/human/z-review-all.md"
+      ],
+      "last_updated": "2026-06-19",
+      "confidence": "high",
+      "depends_on": [
+        "amendment-brief",
+        "commands",
+        "run-brief-contract",
+        "active-plan-registry"
+      ],
+      "consumed_by": [
+        "commands"
+      ],
+      "summary": "Final-gate cross-LLM review after /z-implement-all. Two consultant subagents (Gemini+Codex) on cumulative diff vs plan contract (SPEC in legacy; frozen INTENT+LEDGER in INTENT mode). Class enum at line 716 is canonical: implementation_drift|spec_gap|completed_task_contradiction|premise_failure|observation. Phase 6.5: unconditionally auto-amends every amendment_proposal (spec_gap) via /z-amend --skip-user-gate; no per-finding popup; skips [x] tasks; writes auto-amend-log.md; emits auto_amend_applied per amendment. Phase 6.6: renders unified amendment brief via scripts/amendment-brief.py (corrections=Phase-6.5 spec_gaps, approach_concerns=premise_failure escalations); writes amendment-brief.md to archive; Finalize APPROACH_FILE prefers amendment-brief.md over older seed. Phase 6.6 skipped when both lists empty. ## Escalations in REVIEW-TASKS.md preserved as archive record; amendment-brief.md is the active presentation layer."
     }
   ]
 }

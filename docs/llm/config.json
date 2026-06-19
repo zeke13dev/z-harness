@@ -246,7 +246,7 @@
     "[experiment] experiment.persona_rotation = false is a complete no-op: no draw events, no state files, no PERSONA_PREFIX, no persona_attempt_outcome",
     "[cost] cost.token_budget valid values: positive int or null; default null; env Z_HARNESS_COST_TOKEN_BUDGET",
     "[cost] cost.token_budget=null means no budget; check-no-ask with --severity hard under NO_ASK=halt halts with rule_id: cost_budget_missing",
-    "[Workflow Resolver] workflow.audit_to_amend valid values: ask | amend | stop; default ask",
+    "[Workflow Resolver] workflow.audit_to_amend valid values: ask | amend | stop; default ask; effective behavior is SOURCE-KEYED: source==none -> auto_split (new default for fresh users); source in {config,memory} + ask|prefill -> force_ask; halt|stop -> halt; amend|skip -> auto_split; decision logic in scripts/amend-gate-decision.py",
     "[Workflow Resolver] workflow.slug_confirm valid values: ask | auto_accept | recommend_derived; default ask",
     "[Workflow Resolver] workflow.implement_all_proceed valid values: ask | auto_resume | halt; default ask",
     "[Workflow Resolver] workflow.review_all_proceed valid values: ask | proceed | halt; default ask",
@@ -314,10 +314,10 @@
         ],
         "env": "Z_HARNESS_WORKFLOW_AUDIT_TO_AMEND",
         "callsites": [
-          "commands/z-audit-plan.md:183",
+          "commands/z-audit-plan.md:554",
           "commands/z-audit-plan-style.md:398"
         ],
-        "description": "Controls Phase 5 AskUserQuestion in /z-audit-plan and /z-audit-plan-style. ask=always prompt; amend=auto-proceed as amend; stop=auto-stop"
+        "description": "Source-keyed force-ask override for /z-audit-plan Phase 5. The resolver source determines effective behavior: source==none (fresh user, no preference stored) -> auto_split (new default, no popup); source in {config,memory} with ask|prefill result -> force_ask (3-way popup); halt|stop from any source -> halt; amend|skip from any source -> auto_split. Setting ask in config opts back into the 3-way popup. Decision logic in scripts/amend-gate-decision.py."
       },
       "workflow.slug_confirm": {
         "type": "string",
