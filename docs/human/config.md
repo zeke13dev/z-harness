@@ -120,6 +120,7 @@ All preference env vars and their config.toml equivalents:
 | `Z_HARNESS_AXIOM_EXTRACT` | `axioms.auto_extract_post_run` | `[axioms]` | bool | `true` |
 | `Z_HARNESS_AXIOMS_AUTO_EXTRACT_POST_RUN` | `axioms.auto_extract_post_run` | `[axioms]` | bool | `true` |
 | `Z_HARNESS_BRAINSTORM_PERSONAS` | `brainstorm.personas` | `[brainstorm]` | bool | `true` |
+| `Z_HARNESS_BRAINSTORM_WIDE_OVERFLOW_MODEL` | `brainstorm.wide_overflow_model` | `[brainstorm]` | string | `haiku` |
 | `Z_HARNESS_PERSONAS_CRITIQUE_PANEL` | `personas.critique_panel` | `[personas]` | bool | `true` |
 | `Z_HARNESS_PERSONAS_AUDIT` | `personas.audit` | `[personas]` | bool | `true` |
 | `Z_HARNESS_PERSONAS_REVIEW_EVAL` | `personas.review_eval` | `[personas]` | bool | `true` |
@@ -156,6 +157,7 @@ Env-var overrides follow a deterministic rule: lowercase TOML dotted-key → pre
 | `notify.discord_webhook_url` | `Z_HARNESS_NOTIFY_DISCORD_WEBHOOK_URL` |
 | `docs.always_apply` | `Z_HARNESS_DOCS_ALWAYS_APPLY` |
 | `brainstorm.personas` | `Z_HARNESS_BRAINSTORM_PERSONAS` |
+| `brainstorm.wide_overflow_model` | `Z_HARNESS_BRAINSTORM_WIDE_OVERFLOW_MODEL` |
 | `personas.critique_panel` | `Z_HARNESS_PERSONAS_CRITIQUE_PANEL` |
 | `personas.audit` | `Z_HARNESS_PERSONAS_AUDIT` |
 | `personas.review_eval` | `Z_HARNESS_PERSONAS_REVIEW_EVAL` |
@@ -469,11 +471,12 @@ Cross-cutting material that applies to both surfaces.
 
 ## The knobs ([brainstorm] section)
 
-The `[brainstorm]` section currently contains one knob. It remains in `[brainstorm]` rather than `[personas]` to avoid churn in existing configs — do NOT move it.
+The `[brainstorm]` section contains knobs specific to `/z-brainstorm` behavior. It remains in `[brainstorm]` rather than `[personas]` to avoid churn in existing configs — do NOT move it.
 
 | Key | Type | Default | Env var | Description |
 |-----|------|---------|---------|-------------|
 | `brainstorm.personas` | bool | `true` | `Z_HARNESS_BRAINSTORM_PERSONAS` | Enable persona injection for ideators in `/z-brainstorm`. When ON, up to 3 distinct `ideator` personas are drawn and positionally prepended. When OFF the dispatch is byte-identical to the pre-feature vendor-only brainstorm. |
+| `brainstorm.wide_overflow_model` | string | `"haiku"` | `Z_HARNESS_BRAINSTORM_WIDE_OVERFLOW_MODEL` | Model used for overflow ideators (waves 2+) in wide-mode `/z-brainstorm` runs (N > 3). Accepted values: `"haiku"` (default — uses Haiku for all overflow ideators), `"cheap-mixed"` (reserved — accepted by the validator but acts as a no-op until the per-vendor cheap-model mechanism is verified; see SPEC D1/M2), or any explicit non-empty model string (e.g. `"claude-haiku-4-5"`) to pin a specific model. A prompt-level override always wins over this config value. |
 
 ## The knobs ([personas] section)
 
@@ -494,6 +497,7 @@ The `[personas]` section controls per-surface persona dispatch across all z-harn
 ```toml
 [brainstorm]
 personas = true
+wide_overflow_model = "haiku"  # "haiku" | "cheap-mixed" | explicit model string
 
 [personas]
 critique_panel = true

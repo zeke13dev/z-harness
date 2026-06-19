@@ -487,7 +487,7 @@ COMMAND_TOOLS: dict[str, dict[str, Any]] = {
     "z_personas":        {"command_id": "/z-personas",        "description": "Inspect the persona registry, role bindings, and persona files",     "is_heavy": False},
     "z_handoff":         {"command_id": "/z-handoff",         "description": "Write a handoff.json artifact for session continuity",               "is_heavy": False},
     "z_update":          {"command_id": "/z-update",          "description": "Update the local z-harness install",                                  "is_heavy": False},
-    "z_reality":         {"command_id": "/z-reality",         "description": "Interactive premise refinement — conversational on-ramp",            "is_heavy": False},
+    "z_sharpen":         {"command_id": "/z-sharpen",         "description": "Conversational bounded idea-sharpener — probes, reframes, and converges a vague idea into a buildable problem statement; writes GRILL.md", "is_heavy": False},
     "z_overnight":       {"command_id": "/z-overnight",       "description": "Overnight batch run of multiple /z-* commands",                      "is_heavy": False},
     "z_evaluate":        {"command_id": "/z-evaluate",        "description": "Evaluate a completed z-harness session for patterns worth preserving","is_heavy": False},
     "z_context_budget":  {"command_id": "/z-context-budget",  "description": "Analyze context utilization and surface savings recommendations",    "is_heavy": False},

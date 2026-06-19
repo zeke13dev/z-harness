@@ -109,6 +109,7 @@ DEFAULTS: dict = {
     },
     "brainstorm": {
         "personas":              True,   # bool: inject persona diversity in /z-brainstorm
+        "wide_overflow_model":   "haiku", # str: model for overflow ideators in wide mode; "haiku" | "cheap-mixed" | explicit model string
     },
     "changelog": {
         # Post-commit hook that drafts a human-readable CHANGELOG.md bullet.
@@ -242,6 +243,16 @@ def _validate_any_string(value: object) -> bool:
     return isinstance(value, str)
 
 
+def _validate_nonempty_string(value: object) -> bool:
+    """Accept any non-empty string value.
+
+    Used for brainstorm.wide_overflow_model where the accepted values are
+    "haiku", "cheap-mixed", or any explicit model string — but an empty
+    string is not meaningful and is rejected.
+    """
+    return isinstance(value, str) and len(value) > 0
+
+
 # Closed set of valid export host names:
 #   adapter names (handled by z_harness_cli adapters)
 #   export-only driver names (handled by runtime/drivers/<name>/export.py)
@@ -309,6 +320,7 @@ VALIDATORS: dict = {
     "axioms.extract_min_recurrence": _validate_positive_int,
     "axioms.auto_extract_post_run": _validate_bool_or_zero_one,
     "brainstorm.personas":          _validate_bool,
+    "brainstorm.wide_overflow_model": _validate_nonempty_string,
     "changelog.auto":               _validate_bool,
     "personas.critique_panel":      _validate_bool,
     "personas.audit":               _validate_bool,
@@ -363,6 +375,12 @@ _COERCERS: dict[str, object] = {
     ),
     "brainstorm.personas": lambda v: (
         v if isinstance(v, bool) else v.lower() == "true"
+    ),
+    "brainstorm.wide_overflow_model": lambda v: (
+        # String passthrough — no type coercion needed; the value is always a string.
+        # Included here so the knob appears in BOTH maps (per m3 invariant) and to
+        # make the coercer table exhaustive for introspection tooling.
+        v
     ),
     "changelog.auto": lambda v: (
         v if isinstance(v, bool) else v.lower() == "true"

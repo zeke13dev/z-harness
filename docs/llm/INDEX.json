@@ -59,6 +59,7 @@
         "agents/doc-fetcher.md",
         "agents/doc-updater.md",
         "agents/external-lookup.md",
+        "agents/ideator-clusterer.md",
         "agents/implementer.md",
         "agents/mr-reviewer.md",
         "agents/plan-style-reviewer.md",
@@ -77,7 +78,7 @@
         "agents/spec-precheck.md",
         "agents/tier1-doc-updater.md"
       ],
-      "last_updated": "2026-06-09",
+      "last_updated": "2026-06-18",
       "confidence": "high",
       "depends_on": [
         "scripts",
@@ -89,7 +90,7 @@
         "axioms",
         "session-handoff"
       ],
-      "summary": "Specialized subagents, including auditors/reviewers, implementers, doc-updaters (Tier 1 mechanical + Tier 2 structural), consultants, scope classifiers, reconciliation judges, and the advisory planning-router for ambiguous plan-family route decisions.",
+      "summary": "Specialized subagents, including auditors/reviewers, implementers, doc-updaters (Tier 1 mechanical + Tier 2 structural), consultants, scope classifiers, reconciliation judges, the advisory planning-router for ambiguous plan-family route decisions, and ideator-clusterer (Haiku agent that collapses N wide-mode brainstorm framings into K distinct directions).",
       "source_files": []
     },
     {
@@ -182,7 +183,7 @@
         "commands/z-plan-split.md",
         "commands/z-plan.md",
         "commands/z-providers-discover.md",
-        "commands/z-reality.md",
+        "commands/z-sharpen.md",
         "commands/z-research.md",
         "commands/z-review-all.md",
         "commands/z-skill-fix.md",
@@ -634,21 +635,59 @@
       "source_files": []
     },
     {
-      "slug": "z-reality",
+      "slug": "z-sharpen",
       "source_file": [
-        "commands/z-reality.md"
+        "commands/z-sharpen.md"
       ],
-      "last_updated": "2026-06-08",
+      "last_updated": "2026-06-18",
       "confidence": "high",
       "depends_on": [
         "commands",
         "scripts"
       ],
       "consumed_by": [
-        "agents/planning-router"
+        "agents/planning-router",
+        "commands/z-brainstorm"
       ],
-      "summary": "Interactive premise refinement — conversational on-ramp. Probes, clarifies, reframes, and converges a raw idea into a BRAINSTORM.md variant (mode: interactive, ideators: [interactive]) before routing to /z-brainstorm or /z-plan. Runs inline (no subagents, no cross-LLM consult). Three logging events: reality_run_start, reality_convergence, reality_run_end.",
+      "summary": "Conversational bounded idea-sharpener. Probes, reframes, and converges a vague idea into a buildable problem statement; escalates to pin fuzzy dimensions only as needed (bounded — never full /z-grill exhaustiveness). Writes GRILL.md (not BRAINSTORM.md) as precontext for /z-plan or /z-brainstorm; also auto-invoked as /z-brainstorm Phase 0. Three logging events: sharpen_run_start, sharpen_convergence, sharpen_run_end.",
       "source_files": []
+    },
+    {
+      "slug": "z-brainstorm",
+      "source_files": [
+        "commands/z-brainstorm.md",
+        "agents/ideator-clusterer.md"
+      ],
+      "last_updated": "2026-06-18",
+      "confidence": "high",
+      "depends_on": [
+        "commands",
+        "agents",
+        "scripts",
+        "config",
+        "active-plan-registry",
+        "z-sharpen"
+      ],
+      "consumed_by": [
+        "commands/z-research"
+      ],
+      "summary": "Cheap parallel pre-plan ideation with conversational discussion/selection tail. Phase 0: sharpen-vs-skip gate (auto-invokes /z-sharpen inline when topic is vague); NL count parse (WIDE_N from prose, default 3); scope probe (LIGHT/MEDIUM/HEAVY); wide×HEAVY suppression (D2). Phase 2b: 3 vendor-diverse ideators; Phase 2c (WIDE_N>3): phased overflow waves + ideator-clusterer to collapse N framings→K directions. Phase 3: ranked prose briefing (pros/cons/consensus/divergence/recommendation) + end-turn guardrail — MUST NOT auto-decide. Phase 4 LIGHT/MEDIUM: discussion loop (ask/challenge/combine/re-spin/lock-in/abandon); synthesized is the default chosen_framing for discussion-born hybrids. Phase 4 HEAVY: ranked-pair briefing + end-turn (replaces AskUserQuestion matrix). Config knob: brainstorm.wide_overflow_model (default haiku; cheap-mixed gated/no-op)."
+    },
+    {
+      "slug": "ideator-clusterer",
+      "source_files": [
+        "agents/ideator-clusterer.md"
+      ],
+      "last_updated": "2026-06-18",
+      "confidence": "high",
+      "depends_on": [
+        "agents",
+        "z-brainstorm"
+      ],
+      "consumed_by": [
+        "commands/z-brainstorm"
+      ],
+      "summary": "Haiku subagent for wide /z-brainstorm runs (WIDE_N > 3). Reads N peer ideator framing blocks from BRAINSTORM.md, clusters them into K distinct directions by core hypothesis / approach axis. Returns: K cluster labels + members + representative framing (verbatim), effective-diversity report (N→K, which collapsed), cross-cluster consensus. Read-only. Distinct from scope-reconciler-brainstorm (which operates on the chunk axis in HEAVY mode); this agent operates on the divergence axis (N peers, same topic)."
     },
     {
       "slug": "z-update",

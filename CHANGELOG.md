@@ -35,6 +35,14 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
   `AskUserQuestion` popup. Popups are kept only for finite control-flow forks (slug
   collision, claim lost, cost gate). Shipped as a global axiom so it guides every
   command at runtime.
+- **`/z-brainstorm` is now a conversation.** A vague idea is first sharpened into a
+  buildable problem by `/z-sharpen` (the old `/z-reality` premise-refiner, reworked to
+  write the shared `GRILL.md` and bounded so it stays lighter than `/z-grill`). The
+  ideators' framings then arrive as a ranked brief with pros/cons — discuss, combine,
+  or re-spin in plain reply and converge on a synthesized direction, instead of a
+  one-shot pick. New wide/mega mode (`brainstorm this N ways`) spins N ideators in
+  phased divergence waves with a configurable cheap-model overflow knob, then clusters
+  them to report how much real diversity you got.
 
 ## 2026-06-17
 
