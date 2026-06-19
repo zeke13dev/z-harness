@@ -203,9 +203,13 @@ sys.exit(0 if found else 1)
 
 # Script paths — overridable via env for testing.
 # WATCHDOG_REGISTRY_SCRIPT: override for active-plan-registry.py (tests).
-# WATCHDOG_CONFIG_SCRIPT: override for config.py (tests).
+# WATCHDOG_CONFIG_SCRIPT:   override for config.py (tests).
+# WATCHDOG_NOTIFY_SCRIPT:   override for notify-watchdog.sh (tests).
+# WATCHDOG_LIVENESS_SCRIPT: override for liveness.sh (tests).
 _WD_REGISTRY_SCRIPT="${WATCHDOG_REGISTRY_SCRIPT:-$_WD_SCRIPTS_DIR/active-plan-registry.py}"
 _WD_CONFIG_SCRIPT="${WATCHDOG_CONFIG_SCRIPT:-$_WD_SCRIPTS_DIR/config.py}"
+_WD_NOTIFY_SCRIPT="${WATCHDOG_NOTIFY_SCRIPT:-$_WD_SCRIPTS_DIR/notify-watchdog.sh}"
+_WD_LIVENESS_SCRIPT="${WATCHDOG_LIVENESS_SCRIPT:-$_WD_SCRIPTS_DIR/liveness.sh}"
 
 # Read a config value via config.py get.
 # Returns the value on stdout, or empty string on failure.
@@ -263,15 +267,191 @@ _one_sweep() {
     return 1
   fi
 
-  # === Detection + action ladder (T007 seam) ===
-  # [T007] Insert detection calls here:
-  #   - Scan events.jsonl for dispatch_start with no dispatch_end past deadline_ts
-  #   - Call liveness.sh --run "$RUN" --stale-seconds <stale_secs>
-  #   - On confirmed stall: emit watchdog_stall, optionally call notify-watchdog.sh
-  #   - Overnight halt: if Z_HARNESS_NO_ASK=halt, write "$_WD_PLAN_DIR/HALT"
-  # Leave this seam intentionally empty in T006.
+  # === Detection + action ladder (T007) ===
+
+  # Read per-sweep config values.
+  local intervention_level stale_secs
+  intervention_level="$(_config_get "watchdog.intervention_level" 2>/dev/null || echo "notify")"
+  stale_secs="$(_config_get "watchdog.stale_secs" 2>/dev/null || echo "300")"
+  [[ "$stale_secs" =~ ^[0-9]+$ ]] && [[ "$stale_secs" -gt 0 ]] || stale_secs=300
+
+  # Resolve events.jsonl path for this run.
+  local run_dir events_file
+  run_dir="$(_guarded_read bash "$_WD_SCRIPTS_DIR/log-event.sh" resolve-run-dir "$RUN" 2>/dev/null)" || true
+  events_file="${run_dir:+$run_dir/events.jsonl}"
+
+  # --- Detection 1: dispatch_start with no matching dispatch_end past deadline_ts ---
+  if [[ -n "$events_file" && -f "$events_file" ]]; then
+    local stall_dispatch_ids
+    stall_dispatch_ids="$(python3 - "$events_file" "$now_ts" <<'PYEOF'
+import json, sys
+
+events_file = sys.argv[1]
+now_ts = int(sys.argv[2])
+
+starts = {}   # dispatch_id -> event object
+ends = set()  # dispatch_id set
+
+with open(events_file) as fh:
+    for line in fh:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        kind = ev.get("kind", "")
+        did = ev.get("dispatch_id", "")
+        if not did:
+            continue
+        if kind == "dispatch_start":
+            starts[did] = ev
+        elif kind == "dispatch_end":
+            ends.add(did)
+
+stalls = []
+for did, ev in starts.items():
+    if did in ends:
+        continue
+    deadline_ts = ev.get("deadline_ts", 0)
+    if isinstance(deadline_ts, (int, float)) and now_ts > deadline_ts:
+        # age_s: use ISO ts field if present, else estimate from deadline - timeout
+        ts_str = ev.get("ts", "")
+        if ts_str:
+            try:
+                from datetime import datetime, timezone
+                dt = datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                age_s = now_ts - int(dt.timestamp())
+            except Exception:
+                age_s = now_ts - (int(deadline_ts) - int(ev.get("timeout_s", 0)))
+        else:
+            age_s = now_ts - (int(deadline_ts) - int(ev.get("timeout_s", 0)))
+        stalls.append((did, ev.get("type", ""), ev.get("pid", 0), max(0, age_s)))
+
+for did, dtype, pid, age_s in stalls:
+    print(f"{did}\t{dtype}\t{pid}\t{age_s}")
+PYEOF
+    )" || true
+
+    if [[ -n "$stall_dispatch_ids" ]]; then
+      while IFS=$'\t' read -r did dtype dpid dage_s; do
+        [[ -z "$did" ]] && continue
+        _wd_handle_stall "$did" \
+          "{\"run\":\"$RUN\",\"dispatch_id\":\"$did\",\"phase\":\"dispatch\",\"reason\":\"$did\",\"pid\":${dpid:-null},\"age_s\":${dage_s:-0},\"type\":\"$dtype\"}" \
+          "$did" \
+          "$intervention_level" \
+          "Dispatch stall: ${did} (type=${dtype}, age=${dage_s}s)"
+      done <<< "$stall_dispatch_ids"
+    fi
+  fi
+
+  # --- Detection 2: liveness.sh unmatched subagent *_start past stale threshold ---
+  local liveness_rc=0 liveness_out
+  liveness_out="$(_guarded_read \
+    bash "$_WD_LIVENESS_SCRIPT" --run "$RUN" --stale-seconds "$stale_secs" \
+    2>/dev/null)" || liveness_rc=$?
+
+  if [[ $liveness_rc -eq 124 ]]; then
+    # liveness.sh read timed out — emit inconclusive and continue.
+    _emit "watchdog_scan_inconclusive" \
+      '{"run":"'"$RUN"'","reason":"liveness_read_timeout"}'
+  elif [[ $liveness_rc -eq 1 && -n "$liveness_out" ]]; then
+    # exit 1 = stall(s) found; parse each line.
+    # liveness output format: "    - <base>_start[<tid>]: <elapsed>s ago  (ts=...)"
+    while IFS= read -r lv_line; do
+      # Match lines like "    - implement_start [T001] (role): 450s ago"
+      if [[ "$lv_line" =~ ^[[:space:]]*-[[:space:]]+([a-z_]+)_start([^:]*):([[:space:]]+([0-9]+)s) ]]; then
+        local lv_base lv_tag lv_elapsed_s lv_tid lv_reason
+        lv_base="${BASH_REMATCH[1]}"
+        lv_tag="${BASH_REMATCH[2]}"   # e.g. " [T001]" or " [T001] (role)" or ""
+        lv_elapsed_s="${BASH_REMATCH[4]}"
+
+        # Extract tid from tag: content inside first [...]
+        lv_tid=""
+        if [[ "$lv_tag" =~ \[([^]]+)\] ]]; then
+          lv_tid="${BASH_REMATCH[1]}"
+        fi
+
+        # Skip dispatch/* events — already covered by the dispatch detection block above.
+        # liveness.sh flags dispatch_start events (base=dispatch) since "dispatch" is
+        # not in its LIFECYCLE_BASES exclusion list; we deduplicate here to avoid
+        # emitting duplicate watchdog_stall events and double-notifying.
+        if [[ "$lv_base" == "dispatch" ]]; then
+          continue
+        fi
+
+        # reason key: <base>-<tid> per Addendum H
+        if [[ -n "$lv_tid" ]]; then
+          lv_reason="${lv_base}-${lv_tid}"
+        else
+          lv_reason="${lv_base}"
+        fi
+
+        _wd_handle_stall "$lv_reason" \
+          "{\"run\":\"$RUN\",\"dispatch_id\":null,\"phase\":\"unmatched_subagent_start\",\"reason\":\"$lv_reason\",\"pid\":null,\"age_s\":${lv_elapsed_s:-0}}" \
+          "$lv_reason" \
+          "$intervention_level" \
+          "Subagent stall: ${lv_base}_start (${lv_reason}, age=${lv_elapsed_s}s)"
+      fi
+    done <<< "$liveness_out"
+  fi
 
   return 0
+}
+
+# ---------------------------------------------------------------------------
+# _wd_handle_stall: emit watchdog_stall + optionally notify (notify-once).
+#
+# Args:
+#   $1 stall_key    — unique key for notify-once dedup (dispatch_id or <base>-<tid>)
+#   $2 stall_json   — JSON payload for watchdog_stall event
+#   $3 reason       — human-readable reason (same as stall_key for dispatch stalls)
+#   $4 level        — intervention_level: observe | notify
+#   $5 message      — short message for notify-watchdog.sh
+# ---------------------------------------------------------------------------
+_wd_handle_stall() {
+  local stall_key="$1" stall_json="$2" _reason="$3" level="$4" message="$5"
+
+  # Always emit the watchdog_stall event.
+  _emit "watchdog_stall" "$stall_json"
+
+  # Overnight halt: Z_HARNESS_NO_ASK=halt → write HALT sentinel + notify + self-exit.
+  if [[ "${Z_HARNESS_NO_ASK:-}" == "halt" ]]; then
+    # Write HALT sentinel (idempotent via || true).
+    printf '%s\n' "$RUN" > "$_WD_PLAN_DIR/HALT" 2>/dev/null || true
+    # Notify (non-blocking, best-effort).
+    bash "$_WD_NOTIFY_SCRIPT" \
+      --run "$RUN" \
+      --event "watchdog_stall" \
+      --message "$message" \
+      >/dev/null 2>&1 &
+    # Signal the outer loop to exit.
+    _WD_STOP=1
+    return 0
+  fi
+
+  # observe: emit only, never notify.
+  if [[ "$level" == "observe" ]]; then
+    return 0
+  fi
+
+  # notify: emit + notify-once per reason.
+  local marker="$_WD_ACTIVE_DIR/${RUN}.notified.${stall_key}"
+  if [[ -f "$marker" ]]; then
+    # Already notified for this stall — skip.
+    return 0
+  fi
+
+  # Write notify-once marker first (before backgrounding notify).
+  touch "$marker" 2>/dev/null || true
+
+  # Background notify call — non-blocking so a slow webhook never stalls the loop.
+  bash "$_WD_NOTIFY_SCRIPT" \
+    --run "$RUN" \
+    --event "watchdog_stall" \
+    --message "$message" \
+    >/dev/null 2>&1 &
 }
 
 # Read sweep interval (default 60s).

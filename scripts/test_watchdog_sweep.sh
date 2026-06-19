@@ -55,6 +55,46 @@ assert_dir_exists() {
 }
 
 # ---------------------------------------------------------------------------
+# _kill_watchdog <pid>
+# Guaranteed teardown: kill the watchdog process group and wait for it.
+# Called after every test that backgrounds a watchdog, before cleanup.
+# This prevents stale background watchdogs from a prior test from contending
+# for CPU/IO during the next test (the root cause of load-induced failures).
+# ---------------------------------------------------------------------------
+_kill_watchdog() {
+  local pid="$1"
+  [[ -z "$pid" || "$pid" -eq 0 ]] && return 0
+  # Kill the entire process group so child reaper-sleeps die too.
+  kill -TERM "-${pid}" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+  # Wait up to 3 seconds for clean exit; SIGKILL if still alive.
+  local i=0
+  while kill -0 "$pid" 2>/dev/null && [[ $i -lt 30 ]]; do
+    sleep 0.1
+    i=$(( i + 1 ))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -KILL "-${pid}" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+  fi
+  wait "$pid" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
+# _poll_until <deadline_epoch> <check_fn>
+# Poll check_fn every 0.5s until it returns true or the deadline is reached.
+# Returns 0 if the condition became true, 1 if it timed out.
+# ---------------------------------------------------------------------------
+_poll_until() {
+  local deadline="$1" check_fn="$2"
+  while [[ $(date +%s) -lt $deadline ]]; do
+    if "$check_fn" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
+
+# ---------------------------------------------------------------------------
 # Hermetic environment helpers.
 #
 # We use WATCHDOG_REGISTRY_SCRIPT and WATCHDOG_CONFIG_SCRIPT env overrides
@@ -136,11 +176,12 @@ CFG_SCRIPT_001="$(_write_fake_config "$TD_001")"
 RC_001=0
 FAKE_RUN_PRESENT=0 \
 WD_INTERVAL=1 \
+WATCHDOG_GUARD_TIMEOUT=1 \
 WATCHDOG_REGISTRY_SCRIPT="$REG_SCRIPT_001" \
 WATCHDOG_CONFIG_SCRIPT="$CFG_SCRIPT_001" \
 Z_HARNESS_PLAN_DIR="$PLAN_DIR_001" \
 Z_HARNESS_REGISTRY_ENABLED=1 \
-  timeout 10 bash "$WATCHDOG" --run "test-run-001" \
+  timeout 30 bash "$WATCHDOG" --run "test-run-001" \
   || RC_001=$?  # exit 0 (run-record-gone) is expected
 
 assert_dir_exists \
@@ -172,11 +213,12 @@ CFG_SCRIPT_002="$(_write_fake_config "$TD_002")"
 RC_002=0
 FAKE_RUN_PRESENT=0 \
 WD_INTERVAL=1 \
+WATCHDOG_GUARD_TIMEOUT=1 \
 WATCHDOG_REGISTRY_SCRIPT="$REG_SCRIPT_002" \
 WATCHDOG_CONFIG_SCRIPT="$CFG_SCRIPT_002" \
 Z_HARNESS_PLAN_DIR="$PLAN_DIR_002" \
 Z_HARNESS_REGISTRY_ENABLED=1 \
-  timeout 10 bash "$WATCHDOG" --run "test-run-002" \
+  timeout 30 bash "$WATCHDOG" --run "test-run-002" \
   || RC_002=$?
 
 assert_eq \
@@ -211,11 +253,12 @@ RC_003=0
 FAKE_RUN_PRESENT=1 \
 WD_ENABLED=false \
 WD_INTERVAL=1 \
+WATCHDOG_GUARD_TIMEOUT=1 \
 WATCHDOG_REGISTRY_SCRIPT="$REG_SCRIPT_003" \
 WATCHDOG_CONFIG_SCRIPT="$CFG_SCRIPT_003" \
 Z_HARNESS_PLAN_DIR="$PLAN_DIR_003" \
 Z_HARNESS_REGISTRY_ENABLED=1 \
-  timeout 10 bash "$WATCHDOG" --run "test-run-003" \
+  timeout 30 bash "$WATCHDOG" --run "test-run-003" \
   || RC_003=$?
 
 assert_eq \
@@ -231,6 +274,11 @@ rm -rf "$TD_003"
 # the watchdog exits BETWEEN iterations, never mid-log-event.sh emit.
 # Failure class: partial JSON line in events.jsonl corrupts downstream readers
 # that expect one valid JSON object per line.
+#
+# Robustness design: instead of a fixed sleep 2 to wait for the watchdog to
+# enter its sleep phase, we poll the process's existence + the active/ dir
+# (created at startup before the first sweep) for up to 30s.  Only then do we
+# send SIGTERM, guaranteeing the watchdog is truly running, not just starting.
 # ---------------------------------------------------------------------------
 
 echo ""
@@ -246,9 +294,11 @@ REG_SCRIPT_004="$(_write_fake_registry "$TD_004" "test-run-004")"
 CFG_SCRIPT_004="$(_write_fake_config "$TD_004")"
 
 # WD_INTERVAL=3 so the watchdog is sleeping when SIGTERM arrives mid-loop.
+WD_PID_004=0
 FAKE_RUN_PRESENT=1 \
 WD_ENABLED=true \
 WD_INTERVAL=3 \
+WATCHDOG_GUARD_TIMEOUT=1 \
 WATCHDOG_REGISTRY_SCRIPT="$REG_SCRIPT_004" \
 WATCHDOG_CONFIG_SCRIPT="$CFG_SCRIPT_004" \
 Z_HARNESS_PLAN_DIR="$PLAN_DIR_004" \
@@ -256,15 +306,21 @@ Z_HARNESS_REGISTRY_ENABLED=1 \
   bash "$WATCHDOG" --run "test-run-004" &
 WD_PID_004=$!
 
-# Give watchdog time to start and enter the sleep phase after first sweep.
-sleep 2
+# Poll until watchdog has started (active/ dir created) — up to 30s.
+# This replaces the fixed sleep 2 which races under scheduler load.
+_STARTUP_DEADLINE_004=$(( $(date +%s) + 30 ))
+while [[ $(date +%s) -lt $_STARTUP_DEADLINE_004 ]]; do
+  [[ -d "$PLAN_DIR_004/active" ]] && kill -0 "$WD_PID_004" 2>/dev/null && break
+  sleep 0.5
+done
 
 # Send SIGTERM mid-sleep (between iterations).
 kill -TERM "$WD_PID_004" 2>/dev/null || true
 
-# Wait for watchdog to exit cleanly (up to 5 seconds).
+# Wait for watchdog to exit cleanly.
 WD_EXIT_004=0
 wait "$WD_PID_004" 2>/dev/null || WD_EXIT_004=$?
+WD_PID_004=0  # mark as reaped
 
 assert_eq \
   "watchdog exits 0 after SIGTERM" \
@@ -303,12 +359,12 @@ rm -rf "$TD_004"
 # a false self-exit instead of an inconclusive signal.
 #
 # Timing-robustness design: instead of a fixed outer timeout window, the watchdog
-# runs in background and we POLL events.jsonl for up to 15s (check every 0.5s).
+# runs in background and we POLL events.jsonl for up to 30s (check every 0.5s).
 # As soon as the event appears we assert (a) the watchdog was still alive (no
 # false-self-exit) and (b) the event genuinely emitted.  This removes the race
 # between first-emit timing and a hard wall-clock cap.
-# WATCHDOG_GUARD_TIMEOUT=1 (was 2) ensures the first inconclusive event fires
-# within ~1s, well inside the 15s polling budget even under heavy system load.
+# WATCHDOG_GUARD_TIMEOUT=1 ensures the first inconclusive event fires within ~1s,
+# well inside the 30s polling budget even under heavy system load.
 # ---------------------------------------------------------------------------
 
 echo ""
@@ -368,9 +424,9 @@ Z_HARNESS_REGISTRY_ENABLED=1 \
   bash "$WATCHDOG" --run "test-run-005" &
 WD_PID_005=$!
 
-# Poll for the target event for up to 15 seconds (check every 0.5s).
+# Poll for the target event for up to 30 seconds (check every 0.5s).
 # This avoids any race between first-emit timing and a fixed outer cap.
-_POLL_DEADLINE_005=$(( $(date +%s) + 15 ))
+_POLL_DEADLINE_005=$(( $(date +%s) + 30 ))
 INCONCLUSIVE_COUNT_005=0
 WD_STILL_ALIVE_005=0
 
@@ -387,9 +443,9 @@ while [[ $(date +%s) -lt $_POLL_DEADLINE_005 ]]; do
   sleep 0.5
 done
 
-# Clean up: SIGTERM the watchdog and wait for it.
-kill -TERM "$WD_PID_005" 2>/dev/null || true
-wait "$WD_PID_005" 2>/dev/null || true
+# Clean up: guaranteed teardown before next test.
+_kill_watchdog "$WD_PID_005"
+WD_PID_005=0
 
 # Assertion (a): watchdog was still alive when the event appeared (no false-self-exit).
 assert_eq \
@@ -401,11 +457,728 @@ if [[ "$INCONCLUSIVE_COUNT_005" -gt 0 ]]; then
   echo "  PASS: watchdog_scan_inconclusive(registry_read_timeout) emitted ($INCONCLUSIVE_COUNT_005 times)"
   PASS=$(( PASS + 1 ))
 else
-  echo "  FAIL: watchdog_scan_inconclusive(registry_read_timeout) not found in events at $EVENTS_005 after 15s"
+  echo "  FAIL: watchdog_scan_inconclusive(registry_read_timeout) not found in events at $EVENTS_005 after 30s"
   FAIL=$(( FAIL + 1 ))
 fi
 
 rm -rf "$TD_005"
+
+# ---------------------------------------------------------------------------
+# Helper: write an events.jsonl with dispatch events for T007 tests.
+# Writes minimal-valid JSON lines directly (no log-event.sh invocation).
+#
+# $1 = path to events.jsonl
+# $2 = dispatch_id for the start event
+# $3 = "include_end" | "omit_end" — whether to write a matching dispatch_end
+# $4 = deadline_ts (epoch int, 0 = already past, use $(( $(date +%s) - 5 )) for "5s ago")
+# ---------------------------------------------------------------------------
+_write_dispatch_events() {
+  local events_file="$1" dispatch_id="$2" end_mode="$3" deadline_ts="$4"
+  local now_ts
+  now_ts="$(date +%s)"
+  local start_ts_iso
+  start_ts_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  # dispatch_start (past deadline)
+  printf '%s\n' \
+    "{\"ts\":\"$start_ts_iso\",\"run\":\"__RUN__\",\"kind\":\"dispatch_start\",\"dispatch_id\":\"$dispatch_id\",\"type\":\"test_type\",\"pid\":0,\"timeout_s\":5,\"deadline_ts\":$deadline_ts,\"host\":\"test\"}" \
+    >> "$events_file"
+
+  # Optionally write a matching dispatch_end
+  if [[ "$end_mode" == "include_end" ]]; then
+    printf '%s\n' \
+      "{\"ts\":\"$start_ts_iso\",\"run\":\"__RUN__\",\"kind\":\"dispatch_end\",\"dispatch_id\":\"$dispatch_id\",\"exit_code\":0,\"wall_ms\":100,\"host\":\"test\"}" \
+      >> "$events_file"
+  fi
+}
+
+# Helper: count watchdog_stall events in an events.jsonl file.
+_count_stall_events() {
+  local events_file="$1" match_key="${2:-}" count=0
+  [[ -f "$events_file" ]] || { echo 0; return; }
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" ]] && continue
+    if python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+    key = sys.argv[2]
+    if d.get('kind') != 'watchdog_stall':
+        sys.exit(1)
+    if key and d.get('dispatch_id') != key and d.get('reason') != key:
+        sys.exit(1)
+    sys.exit(0)
+except Exception:
+    sys.exit(1)
+" "$line" "$match_key" 2>/dev/null; then
+      count=$(( count + 1 ))
+    fi
+  done < "$events_file"
+  echo "$count"
+}
+
+# ---------------------------------------------------------------------------
+# TEST-006: dispatch_start past deadline with no dispatch_end → watchdog_stall
+# ---------------------------------------------------------------------------
+# Invariant: a dispatch_start event whose deadline_ts is in the past and which
+# has no matching dispatch_end (same dispatch_id) triggers exactly one
+# watchdog_stall emission per sweep detection.
+# Failure class: hung supervisor subprocess goes undetected → silent ~20-min stall.
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "TEST-006: unmatched dispatch_start past deadline → watchdog_stall"
+
+TD_006="$(_tmpdir)"
+PLAN_DIR_006="$TD_006/plan"
+BASE_DIR_006="$TD_006/base"
+EVENTS_006="$BASE_DIR_006/archive/test-run-006/events.jsonl"
+mkdir -p "$PLAN_DIR_006" "$BASE_DIR_006/archive/test-run-006"
+touch "$EVENTS_006"
+
+REG_SCRIPT_006="$(_write_fake_registry "$TD_006" "test-run-006")"
+CFG_SCRIPT_006="$(_write_fake_config "$TD_006")"
+
+# Write a stale dispatch_start (deadline in the past, no matching end).
+PAST_DEADLINE_006=$(( $(date +%s) - 10 ))
+_write_dispatch_events "$EVENTS_006" "dispatch-006-stall" "omit_end" "$PAST_DEADLINE_006"
+
+# Helper: count stall events in events.jsonl
+_count_stall_006() {
+  _count_stall_events "$EVENTS_006" "dispatch-006-stall"
+}
+
+# Run watchdog with WD_INTERVAL=1, observe mode (emit only, no notify).
+WD_PID_006=0
+FAKE_RUN_PRESENT=1 \
+WD_ENABLED=true \
+WD_INTERVAL=1 \
+WD_STALE_SECS=1 \
+WATCHDOG_REGISTRY_SCRIPT="$REG_SCRIPT_006" \
+WATCHDOG_CONFIG_SCRIPT="$CFG_SCRIPT_006" \
+WATCHDOG_GUARD_TIMEOUT=1 \
+Z_HARNESS_PLAN_DIR="$PLAN_DIR_006" \
+Z_HARNESS_BASE_DIR="$BASE_DIR_006" \
+Z_HARNESS_REGISTRY_ENABLED=1 \
+  bash "$WATCHDOG" --run "test-run-006" &
+WD_PID_006=$!
+
+# Poll for a watchdog_stall event for up to 30 seconds.
+_POLL_DEADLINE_006=$(( $(date +%s) + 30 ))
+STALL_COUNT_006=0
+while [[ $(date +%s) -lt $_POLL_DEADLINE_006 ]]; do
+  STALL_COUNT_006="$(_count_stall_006)"
+  [[ "$STALL_COUNT_006" -gt 0 ]] && break
+  sleep 0.5
+done
+
+# Guaranteed teardown before next test.
+_kill_watchdog "$WD_PID_006"
+WD_PID_006=0
+
+if [[ "$STALL_COUNT_006" -gt 0 ]]; then
+  echo "  PASS: watchdog_stall emitted for unmatched dispatch_start (count=$STALL_COUNT_006)"
+  PASS=$(( PASS + 1 ))
+else
+  echo "  FAIL: watchdog_stall not emitted within 30s for unmatched dispatch_start past deadline"
+  FAIL=$(( FAIL + 1 ))
+fi
+
+rm -rf "$TD_006"
+
+# ---------------------------------------------------------------------------
+# TEST-007: dispatch_start WITH matching dispatch_end → no stall alert
+# ---------------------------------------------------------------------------
+# Invariant: a dispatch_start that has a matching dispatch_end (same dispatch_id)
+# is NOT flagged as a stall — the pair resolved cleanly.
+# Failure class: false-positive alert on completed dispatches.
+#
+# Robustness design: instead of a fixed sleep 3, we poll for evidence that the
+# watchdog completed at least one sweep (stall count stays 0 throughout) and then
+# force-kill it.  We give 10s for the first sweep to complete and verify no stall.
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "TEST-007: matched dispatch_start+end → no watchdog_stall"
+
+TD_007="$(_tmpdir)"
+PLAN_DIR_007="$TD_007/plan"
+BASE_DIR_007="$TD_007/base"
+EVENTS_007="$BASE_DIR_007/archive/test-run-007/events.jsonl"
+mkdir -p "$PLAN_DIR_007" "$BASE_DIR_007/archive/test-run-007"
+touch "$EVENTS_007"
+
+REG_SCRIPT_007="$(_write_fake_registry "$TD_007" "test-run-007")"
+CFG_SCRIPT_007="$(_write_fake_config "$TD_007")"
+
+# Write a dispatch_start with a matching dispatch_end (deadline past, but end present).
+PAST_DEADLINE_007=$(( $(date +%s) - 10 ))
+_write_dispatch_events "$EVENTS_007" "dispatch-007-ok" "include_end" "$PAST_DEADLINE_007"
+
+_count_stall_007() {
+  _count_stall_events "$EVENTS_007" "dispatch-007-ok"
+}
+
+# Run watchdog with WD_INTERVAL=1 for at least 3 sweep cycles.
+WD_PID_007=0
+FAKE_RUN_PRESENT=1 \
+WD_ENABLED=true \
+WD_INTERVAL=1 \
+WD_STALE_SECS=1 \
+WATCHDOG_REGISTRY_SCRIPT="$REG_SCRIPT_007" \
+WATCHDOG_CONFIG_SCRIPT="$CFG_SCRIPT_007" \
+WATCHDOG_GUARD_TIMEOUT=1 \
+Z_HARNESS_PLAN_DIR="$PLAN_DIR_007" \
+Z_HARNESS_BASE_DIR="$BASE_DIR_007" \
+Z_HARNESS_REGISTRY_ENABLED=1 \
+  bash "$WATCHDOG" --run "test-run-007" &
+WD_PID_007=$!
+
+# Poll until at least one sweep completes (active/ dir created) then wait for 3s
+# of additional sweep time to confirm no false positives appear.
+# Give startup up to 30s, then allow 3 more seconds of run time.
+_STARTUP_DEADLINE_007=$(( $(date +%s) + 30 ))
+while [[ $(date +%s) -lt $_STARTUP_DEADLINE_007 ]]; do
+  [[ -d "$PLAN_DIR_007/active" ]] && kill -0 "$WD_PID_007" 2>/dev/null && break
+  sleep 0.5
+done
+# Let 3 additional sweep cycles pass (3 × 1s interval = minimum 3s).
+sleep 3
+
+# Guaranteed teardown before next test.
+_kill_watchdog "$WD_PID_007"
+WD_PID_007=0
+
+STALL_COUNT_007="$(_count_stall_007)"
+
+assert_eq \
+  "no watchdog_stall for matched dispatch pair" \
+  "0" "$STALL_COUNT_007"
+
+rm -rf "$TD_007"
+
+# ---------------------------------------------------------------------------
+# TEST-008: two concurrent dispatches (distinct dispatch_ids) — each matched correctly
+# ---------------------------------------------------------------------------
+# Invariant: two concurrent same-type dispatches with distinct dispatch_ids are
+# matched independently: each dispatch_start↔dispatch_end pair is matched strictly
+# by dispatch_id, never by type or position. A dispatch_end for id-A does not
+# close id-B's start.
+# Failure class: cross-match false positive/negative — one stall goes undetected
+# while a clean dispatch is flagged.
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "TEST-008: two concurrent dispatches — each end attributed to its own start"
+
+TD_008="$(_tmpdir)"
+PLAN_DIR_008="$TD_008/plan"
+BASE_DIR_008="$TD_008/base"
+EVENTS_008="$BASE_DIR_008/archive/test-run-008/events.jsonl"
+mkdir -p "$PLAN_DIR_008" "$BASE_DIR_008/archive/test-run-008"
+touch "$EVENTS_008"
+
+REG_SCRIPT_008="$(_write_fake_registry "$TD_008" "test-run-008")"
+CFG_SCRIPT_008="$(_write_fake_config "$TD_008")"
+
+# Write two concurrent dispatches (same type, distinct ids):
+#   - dispatch-008-A: has start + end (clean)
+#   - dispatch-008-B: has start only, no end (stall)
+PAST_DEADLINE_008=$(( $(date +%s) - 10 ))
+_write_dispatch_events "$EVENTS_008" "dispatch-008-A" "include_end" "$PAST_DEADLINE_008"
+_write_dispatch_events "$EVENTS_008" "dispatch-008-B" "omit_end"    "$PAST_DEADLINE_008"
+
+_count_stall_008_A() {
+  _count_stall_events "$EVENTS_008" "dispatch-008-A"
+}
+_count_stall_008_B() {
+  _count_stall_events "$EVENTS_008" "dispatch-008-B"
+}
+
+WD_PID_008=0
+FAKE_RUN_PRESENT=1 \
+WD_ENABLED=true \
+WD_INTERVAL=1 \
+WD_STALE_SECS=1 \
+WATCHDOG_REGISTRY_SCRIPT="$REG_SCRIPT_008" \
+WATCHDOG_CONFIG_SCRIPT="$CFG_SCRIPT_008" \
+WATCHDOG_GUARD_TIMEOUT=1 \
+Z_HARNESS_PLAN_DIR="$PLAN_DIR_008" \
+Z_HARNESS_BASE_DIR="$BASE_DIR_008" \
+Z_HARNESS_REGISTRY_ENABLED=1 \
+  bash "$WATCHDOG" --run "test-run-008" &
+WD_PID_008=$!
+
+# Poll until dispatch-008-B stall is detected (up to 30s).
+_POLL_DEADLINE_008=$(( $(date +%s) + 30 ))
+STALL_B_008=0
+while [[ $(date +%s) -lt $_POLL_DEADLINE_008 ]]; do
+  STALL_B_008="$(_count_stall_008_B)"
+  [[ "$STALL_B_008" -gt 0 ]] && break
+  sleep 0.5
+done
+
+# Guaranteed teardown before next test.
+_kill_watchdog "$WD_PID_008"
+WD_PID_008=0
+
+STALL_A_008="$(_count_stall_008_A)"
+
+# Clean dispatch (A) must NOT be flagged.
+assert_eq \
+  "clean dispatch-008-A not flagged as stall (no cross-match false positive)" \
+  "0" "$STALL_A_008"
+
+# Stalled dispatch (B) must BE flagged.
+if [[ "$STALL_B_008" -gt 0 ]]; then
+  echo "  PASS: stalled dispatch-008-B detected (count=$STALL_B_008)"
+  PASS=$(( PASS + 1 ))
+else
+  echo "  FAIL: stalled dispatch-008-B not detected within 30s"
+  FAIL=$(( FAIL + 1 ))
+fi
+
+rm -rf "$TD_008"
+
+# ---------------------------------------------------------------------------
+# TEST-009: observe level → watchdog_stall emitted but notify-watchdog.sh NOT called
+# ---------------------------------------------------------------------------
+# Invariant: at intervention_level=observe the sweep emits watchdog_stall but never
+# invokes notify-watchdog.sh.  notify-watchdog.sh is replaced by a sentinel script
+# that writes a flag file if called — absence of the flag proves non-invocation.
+# Failure class: observe mode accidentally pages the user (alert fatigue).
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "TEST-009: observe level → stall emitted, notify NOT called"
+
+TD_009="$(_tmpdir)"
+PLAN_DIR_009="$TD_009/plan"
+BASE_DIR_009="$TD_009/base"
+EVENTS_009="$BASE_DIR_009/archive/test-run-009/events.jsonl"
+mkdir -p "$PLAN_DIR_009" "$BASE_DIR_009/archive/test-run-009"
+touch "$EVENTS_009"
+
+REG_SCRIPT_009="$(_write_fake_registry "$TD_009" "test-run-009")"
+
+# Fake config that returns intervention_level=observe
+CFG_SCRIPT_009="$TD_009/cfg-observe.py"
+printf '#!/usr/bin/env python3\nimport sys, os\nargs=sys.argv[1:]\nif args and args[0]=="get":\n    key=args[1] if len(args)>1 else ""\n    if key=="watchdog.enabled": print("true")\n    elif key=="watchdog.sweep_interval_secs": print(os.environ.get("WD_INTERVAL","1"))\n    elif key=="watchdog.max_lifetime_secs": print("86400")\n    elif key=="watchdog.stale_secs": print("1")\n    elif key=="watchdog.intervention_level": print("observe")\n    else: sys.exit(1)\nelse: sys.exit(1)\n' > "$CFG_SCRIPT_009"
+chmod +x "$CFG_SCRIPT_009"
+
+# Sentinel notify script: creates a flag file if called.
+NOTIFY_FLAG_009="$TD_009/notify-called.flag"
+FAKE_NOTIFY_009="$TD_009/fake-notify.sh"
+printf '#!/usr/bin/env bash\ntouch "%s"\n' "$NOTIFY_FLAG_009" > "$FAKE_NOTIFY_009"
+chmod +x "$FAKE_NOTIFY_009"
+
+PAST_DEADLINE_009=$(( $(date +%s) - 10 ))
+_write_dispatch_events "$EVENTS_009" "dispatch-009-stall" "omit_end" "$PAST_DEADLINE_009"
+
+_count_stall_009() {
+  _count_stall_events "$EVENTS_009" "dispatch-009-stall"
+}
+
+WD_PID_009=0
+FAKE_RUN_PRESENT=1 \
+WD_ENABLED=true \
+WD_INTERVAL=1 \
+WD_STALE_SECS=1 \
+WATCHDOG_REGISTRY_SCRIPT="$REG_SCRIPT_009" \
+WATCHDOG_CONFIG_SCRIPT="$CFG_SCRIPT_009" \
+WATCHDOG_NOTIFY_SCRIPT="$FAKE_NOTIFY_009" \
+WATCHDOG_GUARD_TIMEOUT=1 \
+Z_HARNESS_PLAN_DIR="$PLAN_DIR_009" \
+Z_HARNESS_BASE_DIR="$BASE_DIR_009" \
+Z_HARNESS_REGISTRY_ENABLED=1 \
+  bash "$WATCHDOG" --run "test-run-009" &
+WD_PID_009=$!
+
+# Poll for stall event (proves detection ran) — up to 30s.
+_POLL_DEADLINE_009=$(( $(date +%s) + 30 ))
+STALL_COUNT_009=0
+while [[ $(date +%s) -lt $_POLL_DEADLINE_009 ]]; do
+  STALL_COUNT_009="$(_count_stall_009)"
+  [[ "$STALL_COUNT_009" -gt 0 ]] && break
+  sleep 0.5
+done
+
+# Guaranteed teardown before next test.
+_kill_watchdog "$WD_PID_009"
+WD_PID_009=0
+
+# Brief wait for any background notify to potentially create the flag.
+sleep 1
+
+# Stall event must have been emitted.
+if [[ "$STALL_COUNT_009" -gt 0 ]]; then
+  echo "  PASS: watchdog_stall emitted in observe mode (count=$STALL_COUNT_009)"
+  PASS=$(( PASS + 1 ))
+else
+  echo "  FAIL: watchdog_stall not emitted in observe mode"
+  FAIL=$(( FAIL + 1 ))
+fi
+
+# Notify must NOT have been called.
+if [[ ! -f "$NOTIFY_FLAG_009" ]]; then
+  echo "  PASS: notify-watchdog.sh not invoked in observe mode"
+  PASS=$(( PASS + 1 ))
+else
+  echo "  FAIL: notify-watchdog.sh was invoked in observe mode (should be suppressed)"
+  FAIL=$(( FAIL + 1 ))
+fi
+
+rm -rf "$TD_009"
+
+# ---------------------------------------------------------------------------
+# TEST-010: notify-once dedup — same stall re-detected → only ONE notification
+# ---------------------------------------------------------------------------
+# Invariant: repeated re-detection of the SAME stall (same dispatch_id) within
+# one run must not trigger more than one notify-watchdog.sh invocation.
+# The notify-once marker file prevents re-notification.
+# Failure class: repeated re-detections re-spam the user (alert fatigue).
+#
+# Robustness design: instead of a fixed sleep 4 to let 4 sweep cycles pass,
+# we poll until the first notification is confirmed (stall detected once), then
+# wait for additional sweeps by polling for a stable notification count.  We
+# assert that the count never exceeds 1 after 5s of additional run time.
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "TEST-010: same stall re-detected → only one notification (notify-once)"
+
+TD_010="$(_tmpdir)"
+PLAN_DIR_010="$TD_010/plan"
+BASE_DIR_010="$TD_010/base"
+EVENTS_010="$BASE_DIR_010/archive/test-run-010/events.jsonl"
+mkdir -p "$PLAN_DIR_010" "$BASE_DIR_010/archive/test-run-010"
+touch "$EVENTS_010"
+
+REG_SCRIPT_010="$(_write_fake_registry "$TD_010" "test-run-010")"
+CFG_SCRIPT_010="$(_write_fake_config "$TD_010")"
+
+# Sentinel notify: appends a line to a counter file each time it's called.
+NOTIFY_COUNTER_010="$TD_010/notify-count.txt"
+FAKE_NOTIFY_010="$TD_010/fake-notify.sh"
+printf '#!/usr/bin/env bash\nprintf "notified\\n" >> "%s"\n' "$NOTIFY_COUNTER_010" > "$FAKE_NOTIFY_010"
+chmod +x "$FAKE_NOTIFY_010"
+
+# Stale dispatch: no end, deadline in the past.
+PAST_DEADLINE_010=$(( $(date +%s) - 10 ))
+_write_dispatch_events "$EVENTS_010" "dispatch-010-stall" "omit_end" "$PAST_DEADLINE_010"
+
+WD_PID_010=0
+FAKE_RUN_PRESENT=1 \
+WD_ENABLED=true \
+WD_INTERVAL=1 \
+WD_STALE_SECS=1 \
+WATCHDOG_REGISTRY_SCRIPT="$REG_SCRIPT_010" \
+WATCHDOG_CONFIG_SCRIPT="$CFG_SCRIPT_010" \
+WATCHDOG_NOTIFY_SCRIPT="$FAKE_NOTIFY_010" \
+WATCHDOG_GUARD_TIMEOUT=1 \
+Z_HARNESS_PLAN_DIR="$PLAN_DIR_010" \
+Z_HARNESS_BASE_DIR="$BASE_DIR_010" \
+Z_HARNESS_REGISTRY_ENABLED=1 \
+  bash "$WATCHDOG" --run "test-run-010" &
+WD_PID_010=$!
+
+# Poll until the notify counter file is created (first notification fired) — up to 30s.
+_POLL_DEADLINE_010=$(( $(date +%s) + 30 ))
+while [[ $(date +%s) -lt $_POLL_DEADLINE_010 ]]; do
+  [[ -f "$NOTIFY_COUNTER_010" ]] && break
+  sleep 0.5
+done
+
+# Allow 4 more sweep cycles (4 × 1s) to confirm no re-notification fires.
+sleep 4
+
+# Guaranteed teardown before next test.
+_kill_watchdog "$WD_PID_010"
+WD_PID_010=0
+
+# Wait for any in-flight background notify to finish.
+sleep 1
+
+NOTIFY_CALL_COUNT_010=0
+[[ -f "$NOTIFY_COUNTER_010" ]] && NOTIFY_CALL_COUNT_010="$(wc -l < "$NOTIFY_COUNTER_010" | tr -d ' ')"
+
+assert_eq \
+  "same stall re-detected → exactly one notify invocation" \
+  "1" "$NOTIFY_CALL_COUNT_010"
+
+rm -rf "$TD_010"
+
+# ---------------------------------------------------------------------------
+# TEST-011: two DISTINCT stalls → two notifications
+# ---------------------------------------------------------------------------
+# Invariant: two distinct stalls (different dispatch_ids) each trigger their own
+# notify-watchdog.sh invocation — the notify-once dedup is per-stall, not global.
+# Failure class: second distinct stall goes silently unnotified.
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "TEST-011: two distinct stalls → two notifications"
+
+TD_011="$(_tmpdir)"
+PLAN_DIR_011="$TD_011/plan"
+BASE_DIR_011="$TD_011/base"
+EVENTS_011="$BASE_DIR_011/archive/test-run-011/events.jsonl"
+mkdir -p "$PLAN_DIR_011" "$BASE_DIR_011/archive/test-run-011"
+touch "$EVENTS_011"
+
+REG_SCRIPT_011="$(_write_fake_registry "$TD_011" "test-run-011")"
+CFG_SCRIPT_011="$(_write_fake_config "$TD_011")"
+
+# Sentinel notify: appends a line each time called.
+NOTIFY_COUNTER_011="$TD_011/notify-count.txt"
+FAKE_NOTIFY_011="$TD_011/fake-notify.sh"
+printf '#!/usr/bin/env bash\nprintf "notified\\n" >> "%s"\n' "$NOTIFY_COUNTER_011" > "$FAKE_NOTIFY_011"
+chmod +x "$FAKE_NOTIFY_011"
+
+# Two distinct stale dispatches (both past deadline, neither has a matching end).
+PAST_DEADLINE_011=$(( $(date +%s) - 10 ))
+_write_dispatch_events "$EVENTS_011" "dispatch-011-stall-X" "omit_end" "$PAST_DEADLINE_011"
+_write_dispatch_events "$EVENTS_011" "dispatch-011-stall-Y" "omit_end" "$PAST_DEADLINE_011"
+
+_count_stall_011_X() {
+  _count_stall_events "$EVENTS_011" "dispatch-011-stall-X"
+}
+_count_stall_011_Y() {
+  _count_stall_events "$EVENTS_011" "dispatch-011-stall-Y"
+}
+
+WD_PID_011=0
+FAKE_RUN_PRESENT=1 \
+WD_ENABLED=true \
+WD_INTERVAL=1 \
+WD_STALE_SECS=1 \
+WATCHDOG_REGISTRY_SCRIPT="$REG_SCRIPT_011" \
+WATCHDOG_CONFIG_SCRIPT="$CFG_SCRIPT_011" \
+WATCHDOG_NOTIFY_SCRIPT="$FAKE_NOTIFY_011" \
+WATCHDOG_GUARD_TIMEOUT=1 \
+Z_HARNESS_PLAN_DIR="$PLAN_DIR_011" \
+Z_HARNESS_BASE_DIR="$BASE_DIR_011" \
+Z_HARNESS_REGISTRY_ENABLED=1 \
+  bash "$WATCHDOG" --run "test-run-011" &
+WD_PID_011=$!
+
+# Poll until both stalls are detected (up to 30s).
+_POLL_DEADLINE_011=$(( $(date +%s) + 30 ))
+STALL_X_011=0 STALL_Y_011=0
+while [[ $(date +%s) -lt $_POLL_DEADLINE_011 ]]; do
+  STALL_X_011="$(_count_stall_011_X)"
+  STALL_Y_011="$(_count_stall_011_Y)"
+  [[ "$STALL_X_011" -gt 0 && "$STALL_Y_011" -gt 0 ]] && break
+  sleep 0.5
+done
+
+# Guaranteed teardown before next test.
+_kill_watchdog "$WD_PID_011"
+WD_PID_011=0
+
+# Wait for background notify to finish.
+sleep 1
+
+NOTIFY_CALL_COUNT_011=0
+[[ -f "$NOTIFY_COUNTER_011" ]] && NOTIFY_CALL_COUNT_011="$(wc -l < "$NOTIFY_COUNTER_011" | tr -d ' ')"
+
+if [[ "$STALL_X_011" -gt 0 && "$STALL_Y_011" -gt 0 ]]; then
+  echo "  PASS: both distinct stalls detected (X=$STALL_X_011, Y=$STALL_Y_011)"
+  PASS=$(( PASS + 1 ))
+else
+  echo "  FAIL: not both stalls detected within 30s (X=$STALL_X_011, Y=$STALL_Y_011)"
+  FAIL=$(( FAIL + 1 ))
+fi
+
+assert_eq \
+  "two distinct stalls → exactly two notify invocations" \
+  "2" "$NOTIFY_CALL_COUNT_011"
+
+rm -rf "$TD_011"
+
+# ---------------------------------------------------------------------------
+# TEST-012: overnight Z_HARNESS_NO_ASK=halt → HALT sentinel written + self-exit
+# ---------------------------------------------------------------------------
+# Invariant: when Z_HARNESS_NO_ASK=halt and a confirmed stall is detected,
+# the sweep writes $Z_HARNESS_PLAN_DIR/HALT and then self-exits (stop-flag set).
+# Failure class: overnight run dead-waits indefinitely on a stall with no
+# human present to intervene.
+#
+# Robustness design: replaced the fixed "timeout 15" wrapper (which races under
+# load) with a background watchdog + poll loop that waits for EITHER the HALT
+# sentinel file appearing OR the watchdog process self-exiting — whichever comes
+# first — within a generous 30s budget.  This tolerates large scheduling jitter
+# while still failing fast on a genuine miss.
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "TEST-012: overnight NO_ASK=halt → HALT written + watchdog exits"
+
+TD_012="$(_tmpdir)"
+PLAN_DIR_012="$TD_012/plan"
+BASE_DIR_012="$TD_012/base"
+EVENTS_012="$BASE_DIR_012/archive/test-run-012/events.jsonl"
+mkdir -p "$PLAN_DIR_012" "$BASE_DIR_012/archive/test-run-012"
+touch "$EVENTS_012"
+
+REG_SCRIPT_012="$(_write_fake_registry "$TD_012" "test-run-012")"
+CFG_SCRIPT_012="$(_write_fake_config "$TD_012")"
+
+PAST_DEADLINE_012=$(( $(date +%s) - 10 ))
+_write_dispatch_events "$EVENTS_012" "dispatch-012-stall" "omit_end" "$PAST_DEADLINE_012"
+
+# Run watchdog in background (not via timeout) with NO_ASK=halt.
+# The watchdog should self-exit after writing HALT.
+WD_PID_012=0
+FAKE_RUN_PRESENT=1 \
+WD_ENABLED=true \
+WD_INTERVAL=1 \
+WD_STALE_SECS=1 \
+Z_HARNESS_NO_ASK=halt \
+WATCHDOG_REGISTRY_SCRIPT="$REG_SCRIPT_012" \
+WATCHDOG_CONFIG_SCRIPT="$CFG_SCRIPT_012" \
+WATCHDOG_GUARD_TIMEOUT=1 \
+Z_HARNESS_PLAN_DIR="$PLAN_DIR_012" \
+Z_HARNESS_BASE_DIR="$BASE_DIR_012" \
+Z_HARNESS_REGISTRY_ENABLED=1 \
+  bash "$WATCHDOG" --run "test-run-012" &
+WD_PID_012=$!
+
+# Poll for EITHER the HALT sentinel appearing OR the watchdog process exiting
+# (self-exit after writing HALT) — up to 30s.
+# This replaces the old fixed "timeout 15" wrapper which raced under load.
+_POLL_DEADLINE_012=$(( $(date +%s) + 30 ))
+HALT_FOUND_012=0
+WD_EXITED_012=0
+while [[ $(date +%s) -lt $_POLL_DEADLINE_012 ]]; do
+  if [[ -f "$PLAN_DIR_012/HALT" ]]; then
+    HALT_FOUND_012=1
+  fi
+  if ! kill -0 "$WD_PID_012" 2>/dev/null; then
+    WD_EXITED_012=1
+  fi
+  [[ "$HALT_FOUND_012" -eq 1 && "$WD_EXITED_012" -eq 1 ]] && break
+  sleep 0.5
+done
+
+# Capture exit code.
+RC_012=0
+wait "$WD_PID_012" 2>/dev/null || RC_012=$?
+WD_PID_012=0
+
+# Watchdog should exit 0 (clean self-exit after writing HALT).
+assert_eq \
+  "watchdog exits 0 after writing HALT" \
+  "0" "$RC_012"
+
+# HALT sentinel must exist.
+if [[ "$HALT_FOUND_012" -eq 1 ]]; then
+  echo "  PASS: HALT sentinel written"
+  PASS=$(( PASS + 1 ))
+else
+  echo "  FAIL: HALT sentinel not found at $PLAN_DIR_012/HALT after 30s"
+  FAIL=$(( FAIL + 1 ))
+fi
+
+rm -rf "$TD_012"
+
+# ---------------------------------------------------------------------------
+# TEST-013: liveness-detected subagent stall → watchdog_stall with phase=unmatched_subagent_start
+# ---------------------------------------------------------------------------
+# Invariant: when liveness.sh (exit 1) reports an unmatched subagent *_start,
+# the sweep emits a watchdog_stall event with phase="unmatched_subagent_start"
+# and a non-null reason derived from the liveness output.
+# Failure class: native Agent() stalls (undetectable via dispatch lease) never
+# surface as watchdog_stall → the human is never alerted.
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "TEST-013: liveness-detected subagent stall → watchdog_stall with phase=unmatched_subagent_start"
+
+TD_013="$(_tmpdir)"
+PLAN_DIR_013="$TD_013/plan"
+BASE_DIR_013="$TD_013/base"
+EVENTS_013="$BASE_DIR_013/archive/test-run-013/events.jsonl"
+mkdir -p "$PLAN_DIR_013" "$BASE_DIR_013/archive/test-run-013"
+touch "$EVENTS_013"
+
+REG_SCRIPT_013="$(_write_fake_registry "$TD_013" "test-run-013")"
+CFG_SCRIPT_013="$(_write_fake_config "$TD_013")"
+
+# Fake liveness.sh that exits 1 and prints a stale subagent line.
+FAKE_LIVENESS_013="$TD_013/fake-liveness.sh"
+cat > "$FAKE_LIVENESS_013" <<'LIVENESS_EOF'
+#!/usr/bin/env bash
+# Fake liveness.sh: always reports one stale subagent implement_start [T001].
+echo ""
+echo "Run: test-run-013"
+echo "  events.jsonl: /fake/path"
+echo "  possibly stuck (elapsed >= 1s):"
+echo "    - implement_start [T001]: 600s ago  (ts=2024-01-01T00:00:00Z)"
+exit 1
+LIVENESS_EOF
+chmod +x "$FAKE_LIVENESS_013"
+
+# Helper: count watchdog_stall events with phase=unmatched_subagent_start
+_count_liveness_stall_013() {
+  local count=0
+  [[ -f "$EVENTS_013" ]] || { echo 0; return; }
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" ]] && continue
+    if python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+    ok = (d.get('kind') == 'watchdog_stall'
+          and d.get('phase') == 'unmatched_subagent_start'
+          and d.get('reason', '') != '')
+    sys.exit(0 if ok else 1)
+except Exception:
+    sys.exit(1)
+" "$line" 2>/dev/null; then
+      count=$(( count + 1 ))
+    fi
+  done < "$EVENTS_013"
+  echo "$count"
+}
+
+WD_PID_013=0
+FAKE_RUN_PRESENT=1 \
+WD_ENABLED=true \
+WD_INTERVAL=1 \
+WD_STALE_SECS=1 \
+WATCHDOG_REGISTRY_SCRIPT="$REG_SCRIPT_013" \
+WATCHDOG_CONFIG_SCRIPT="$CFG_SCRIPT_013" \
+WATCHDOG_LIVENESS_SCRIPT="$FAKE_LIVENESS_013" \
+WATCHDOG_GUARD_TIMEOUT=1 \
+Z_HARNESS_PLAN_DIR="$PLAN_DIR_013" \
+Z_HARNESS_BASE_DIR="$BASE_DIR_013" \
+Z_HARNESS_REGISTRY_ENABLED=1 \
+  bash "$WATCHDOG" --run "test-run-013" &
+WD_PID_013=$!
+
+# Poll for the liveness-sourced watchdog_stall event — up to 30s.
+_POLL_DEADLINE_013=$(( $(date +%s) + 30 ))
+LIVENESS_STALL_COUNT_013=0
+while [[ $(date +%s) -lt $_POLL_DEADLINE_013 ]]; do
+  LIVENESS_STALL_COUNT_013="$(_count_liveness_stall_013)"
+  [[ "$LIVENESS_STALL_COUNT_013" -gt 0 ]] && break
+  sleep 0.5
+done
+
+# Guaranteed teardown before summary.
+_kill_watchdog "$WD_PID_013"
+WD_PID_013=0
+
+if [[ "$LIVENESS_STALL_COUNT_013" -gt 0 ]]; then
+  echo "  PASS: liveness-detected stall emitted watchdog_stall(phase=unmatched_subagent_start) ($LIVENESS_STALL_COUNT_013)"
+  PASS=$(( PASS + 1 ))
+else
+  echo "  FAIL: liveness-detected stall did not produce watchdog_stall within 30s"
+  FAIL=$(( FAIL + 1 ))
+fi
+
+rm -rf "$TD_013"
 
 # ---------------------------------------------------------------------------
 # Summary
