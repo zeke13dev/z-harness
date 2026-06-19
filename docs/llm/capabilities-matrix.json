@@ -1,7 +1,7 @@
 {
   "concept": "capabilities-matrix",
-  "last_updated": "2026-06-11",
-  "covers_spec": "SPEC.md §HostAdapter contract (D13); §Phase 7 review — Command-capability matrix (NEW); Stage-1 runtime export delegation (spec_change 2026-06-11)",
+  "last_updated": "2026-06-19",
+  "covers_spec": "INTENT: z-harness-portability (frozen 2026-06-19T19:05:12Z); §HostAdapter contract (D13); §Phase 7 review — Command-capability matrix (NEW); Stage-1 runtime export delegation",
   "source_file": [
     "z_harness_cli/adapters/claude.py",
     "z_harness_cli/adapters/antigravity.py",
@@ -19,9 +19,9 @@
     {"file": "z_harness_cli/adapters/base.py", "line": 42, "symbol": "ExportResult", "kind": "module", "summary": "re-export from runtime.drivers._export_utils; canonical import location for z_harness_cli callers"},
     {"file": "z_harness_cli/adapters/registry.py", "line": 84, "symbol": "detect_all", "kind": "fn", "summary": "probes all four adapters; returns (adapter, DetectResult) pairs in canonical order"},
     {"file": "z_harness_cli/adapters/registry.py", "line": 110, "symbol": "select", "kind": "fn", "summary": "resolves host with optional Rich picker; raises UnknownHostError / NoHostInstalledError"},
-    {"file": "z_harness_cli/adapters/claude.py", "line": 107, "symbol": "ClaudeAdapter", "kind": "struct", "summary": "native-fidelity adapter; export_payload is persona-only (plugin handles commands/skills)"},
+    {"file": "z_harness_cli/adapters/claude.py", "line": 107, "symbol": "ClaudeAdapter", "kind": "struct", "summary": "native-fidelity adapter; export_payload is persona-only (plugin reads skills/<id>/SKILL.md natively)"},
     {"file": "z_harness_cli/adapters/antigravity.py", "line": 154, "symbol": "AntigravityAdapter", "kind": "struct", "summary": "high-fidelity adapter; export_payload runs two-stage pipeline (runtime + persona loop)"},
-    {"file": "z_harness_cli/adapters/cursor.py", "line": 161, "symbol": "CursorAdapter", "kind": "struct", "summary": "flattened adapter; export_payload runs two-stage pipeline producing .mdc rule files"},
+    {"file": "z_harness_cli/adapters/cursor.py", "line": 161, "symbol": "CursorAdapter", "kind": "struct", "summary": "flattened adapter; export_payload runs two-stage pipeline producing native .cursor/skills/<id>/SKILL.md files plus one generated always-apply .cursor/rules/z-harness-skills.mdc index and AGENT .mdc rules"},
     {"file": "z_harness_cli/adapters/codex.py", "line": 182, "symbol": "CodexAdapter", "kind": "struct", "summary": "flattened adapter; export_payload runs two-stage pipeline producing prompts/ flat files"}
   ],
   "depends_on": [
@@ -56,10 +56,11 @@
   },
   "export_pipeline": {
     "claude": {
-      "stage1": "none — native plugin handles commands/skills",
+      "stage1": "none — native plugin reads skills/<id>/SKILL.md directly",
       "stage2": "runtime/drivers/claude/persona_export.py::export_persona() for each personas/*.md",
       "fidelity": "native",
-      "layout": ["<dest>/personas/<name>.md"]
+      "layout": ["<dest>/personas/<name>.md"],
+      "note": "skills/ is the committed source; no export to files is needed or done on the native host"
     },
     "antigravity": {
       "stage1": "runtime/drivers/antigravity/export.py::export(harness_root, dest)",
@@ -79,21 +80,23 @@
       "stage2": "runtime/drivers/cursor/persona_export.py::export_persona() for each personas/*.md",
       "fidelity": "flattened",
       "layout": [
+        "<dest>/.cursor/skills/<id>/SKILL.md",
+        "<dest>/.cursor/rules/z-harness-skills.mdc",
         "<dest>/.cursor/rules/<id>.mdc",
         "<dest>/.cursor/personas/<name>.mdc"
       ],
-      "collision_domain": ".cursor/rules/ stems"
+      "note": "skills are written verbatim (no transliteration); z-harness-skills.mdc is the only generated always-apply .mdc index; AGENT rules use .cursor/rules/<id>.mdc; export artifacts are never committed"
     },
     "codex": {
       "stage1": "runtime/drivers/codex/export.py::export(harness_root, dest)",
       "stage2": "runtime/drivers/codex/persona_export.py::export_persona() for each personas/*.md",
       "fidelity": "flattened",
       "layout": [
-        "<dest>/prompts/<id>.md",
+        "<dest>/skills/<id>/SKILL.md",
         "<dest>/AGENTS.md",
         "<dest>/prompts/personas/<name>.md"
       ],
-      "collision_domain": "prompts/ stems (excluding AGENTS.md)"
+      "note": "skills written as native SKILL.md under export root; discovered by .codex-plugin/plugin.json 'skills' key; export artifacts are never committed"
     },
     "windsurf": {
       "stage1": "runtime/drivers/windsurf/export.py::export(harness_root, dest)",
@@ -246,7 +249,7 @@
     "native = full orchestration including multi-agent subagent dispatch",
     "cleanup_strategy=ephemeral for all four adapters in v1; MCP writes are global/persistent and NOT reversed by cleanup (F4)",
     "ExportResult must be imported from z_harness_cli.adapters.base, not from runtime.drivers._export_utils directly (one-way layering)",
-    "ClaudeAdapter.export_payload is persona-only; Stage 1 runtime export is not run (native plugin handles commands/skills)",
+    "ClaudeAdapter.export_payload is persona-only; Stage 1 runtime export is not run (native plugin reads skills/<id>/SKILL.md directly)",
     "non-empty Stage-1 warnings raise RuntimeError immediately (legacy hard-gate; no silent downgrade)",
     "persona-name collision with Stage-1 exported ids raises RuntimeError (MINOR-6)",
     "windsurf/kiro/cline/copilot are export-only: no adapter module at z_harness_cli/adapters/<host>.py, no registry entry, no command tiers (M5 invariant — validated by TestAdapterAbsence in test_export_golden.py)"
