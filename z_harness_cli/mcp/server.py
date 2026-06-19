@@ -552,9 +552,7 @@ def _dispatch_command(
         return _FAST_HANDLERS[tool_name](args)
 
     # Lightweight path: non-heavy commands that aren't fast-handled are dispatched
-    # by loading their commands/<id>.md and sending it as a subagent task. (These
-    # were formerly sourced from skills/<id>/SKILL.md; commands/ is now the single
-    # source — see _handle_skill_dispatch.)
+    # by loading their skills/<id>/SKILL.md and sending it as a subagent task.
     if not meta.get("is_heavy", True):
         return _handle_skill_dispatch(tool_name, meta, args, progress_callback)
 
@@ -582,12 +580,11 @@ def _handle_skill_dispatch(
     args: dict[str, Any],
     progress_callback: Any,
 ) -> ToolResult:
-    """Dispatch a lightweight command by loading its commands/<id>.md and
+    """Dispatch a lightweight command by loading its skills/<id>/SKILL.md and
     sending it as a subagent task via the standard dispatcher.
 
-    commands/ is the single source of command content. (This path formerly read
-    skills/<id>/SKILL.md; the skills/ mirror was removed in favor of exporting
-    per-host skills from commands/.)
+    skills/ is the single source of command content (each skill lives at
+    skills/<command-id>/SKILL.md).
     """
     command_id = meta.get("command_id", "").lstrip("/")
     if not command_id:
@@ -595,9 +592,9 @@ def _handle_skill_dispatch(
 
     try:
         repo_root = _get_repo_root()
-        cmd_file = repo_root / "commands" / f"{command_id}.md"
+        cmd_file = repo_root / "skills" / command_id / "SKILL.md"
         if not cmd_file.exists():
-            return ToolResult.error(f"Command file not found: commands/{command_id}.md")
+            return ToolResult.error(f"Command file not found: skills/{command_id}/SKILL.md")
 
         skill_content = cmd_file.read_text()
         prompt = args.get("prompt", "")
