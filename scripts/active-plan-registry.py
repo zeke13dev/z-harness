@@ -252,6 +252,90 @@ def _iso_now() -> str:
 
 # ── active_plans_dir via plan-path.sh ─────────────────────────────────────────
 
+def _resolve_plan_dir(slug: str) -> Path | None:
+    """Resolve a plan directory from a slug via plan-path.sh resolve_plan_path.
+
+    Returns the path if it exists, or None on failure (best-effort; never raises).
+    Used by cmd_deregister to locate the .watchdog.pid file.
+    """
+    plan_path_sh = SCRIPT_DIR / "plan-path.sh"
+    if not plan_path_sh.exists():
+        return None
+    try:
+        result = subprocess.run(
+            ["bash", str(plan_path_sh), "resolve_plan_path", slug],
+            capture_output=True,
+            text=True,
+            cwd=str(SCRIPT_DIR.parent),
+            check=False,
+        )
+        if result.returncode == 0:
+            resolved = result.stdout.strip()
+            if resolved:
+                return Path(resolved)
+    except OSError:
+        pass
+    return None
+
+
+def _sigterm_watchdog(run_id: str, plan_dir: Path) -> None:
+    """Read .watchdog.pid from plan_dir/active/<run_id>.watchdog.pid and SIGTERM it.
+
+    Per SPEC addendum F/G:
+    - The pid FILE is authoritative (not the registry field).
+    - kill -0 guard: no-op if pid is absent or already dead.
+    - SIGTERM + bounded wait (watchdog.kill_grace_secs, default 10) then SIGKILL.
+    - Never raises: all errors are swallowed (deregister is NON-FATAL).
+    """
+    pid_file = plan_dir / "active" / f"{run_id}.watchdog.pid"
+    if not pid_file.exists():
+        return  # no watchdog was spawned for this run
+
+    try:
+        raw = pid_file.read_text(encoding="utf-8").strip()
+        if not raw:
+            return
+        watchdog_pid = int(raw)
+    except (OSError, ValueError):
+        return  # file unreadable or non-integer content — no-op
+
+    # kill -0 guard: check the pid is alive before signalling.
+    try:
+        os.kill(watchdog_pid, 0)
+    except ProcessLookupError:
+        return  # already dead — no-op
+    except PermissionError:
+        pass  # alive but not owned by us — proceed to SIGTERM
+
+    # Read grace period from config (best-effort; default 10).
+    try:
+        grace_secs = int(_config_get("watchdog.kill_grace_secs", "10"))
+    except ValueError:
+        grace_secs = 10
+
+    try:
+        os.kill(watchdog_pid, signal.SIGTERM)
+    except OSError:
+        return  # already dead between kill -0 and SIGTERM — no-op
+
+    # Wait up to grace_secs for the process to exit, then SIGKILL.
+    deadline = time.monotonic() + grace_secs
+    while time.monotonic() < deadline:
+        try:
+            os.kill(watchdog_pid, 0)
+        except ProcessLookupError:
+            return  # exited cleanly within grace period
+        except PermissionError:
+            pass  # still alive but not owned by us
+        time.sleep(0.1)
+
+    # Grace period exhausted — SIGKILL.
+    try:
+        os.kill(watchdog_pid, signal.SIGKILL)
+    except OSError:
+        pass  # process exited just before SIGKILL — acceptable
+
+
 def _active_plans_dir() -> Path:
     """Resolve active_plans_dir() by shelling out to plan-path.sh.
 
@@ -455,8 +539,14 @@ def _build_record(
     command: str,
     phase: str,
     session_id: str = "",
+    watchdog_pid: int | None = None,
 ) -> dict:
-    """Build a fresh schema-v2 record populated with current host/git state."""
+    """Build a fresh schema-v2 record populated with current host/git state.
+
+    watchdog_pid: advisory field stamped when the caller also spawns a watchdog
+    sweep process.  The authoritative PID source is the .watchdog.pid file on
+    disk (see addendum F); this field is for observability only.
+    """
     now = _iso_now()
     repo_root = _git_field(["rev-parse", "--show-toplevel"])
     git_common_dir = _git_field(["rev-parse", "--git-common-dir"])
@@ -505,6 +595,7 @@ def _build_record(
         "scope": [],
         "held_paths": [],
         "waiting_on": [],
+        "watchdog_pid": watchdog_pid,
     }
 
 
@@ -610,6 +701,7 @@ def cmd_register(args: argparse.Namespace) -> int:
             command=args.command,
             phase=args.phase,
             session_id=getattr(args, "session", "") or "",
+            watchdog_pid=getattr(args, "watchdog_pid", None),
         )
         _atomic_write(record_path, record)
     except OSError as exc:
@@ -675,6 +767,9 @@ def cmd_heartbeat(args: argparse.Namespace) -> int:
             record["current_task"] = args.current_task
         if getattr(args, "status", None):
             record["status"] = args.status
+        watchdog_pid_arg = getattr(args, "watchdog_pid", None)
+        if watchdog_pid_arg is not None:
+            record["watchdog_pid"] = watchdog_pid_arg
         _atomic_write(record_path, record)
     except OSError as exc:
         _emit_event(run_id, "registry_error", {
@@ -807,7 +902,8 @@ def cmd_deregister(args: argparse.Namespace) -> int:
     final_status = getattr(args, "status", "complete") or "complete"
 
     try:
-        # Read record before deletion so we can include slug in the event.
+        # Read record before deletion so we can include slug in the event and
+        # resolve the plan dir for the watchdog pid file (addendum F).
         record = _atomic_read(record_path)
         record_path.unlink()
     except FileNotFoundError:
@@ -818,9 +914,22 @@ def cmd_deregister(args: argparse.Namespace) -> int:
             "op": "deregister", "run_id": run_id, "reason": "unlink_failed", "error": str(exc),
         })
 
+    # SIGTERM the watchdog sweep (if one was spawned for this run).
+    # The authoritative PID source is the .watchdog.pid file on disk (addendum F);
+    # the registry watchdog_pid field is advisory only.
+    # Wrapped in try/except so a kill failure never breaks deregister (NON-FATAL).
+    slug = (record or {}).get("slug", "")
+    if slug:
+        try:
+            plan_dir = _resolve_plan_dir(slug)
+            if plan_dir is not None:
+                _sigterm_watchdog(run_id, plan_dir)
+        except Exception:  # noqa: BLE001 — deregister is NON-FATAL; never propagate
+            pass
+
     _emit_event(run_id, "plan_deregistered", {
         "run_id": run_id,
-        "slug": (record or {}).get("slug", ""),
+        "slug": slug,
         "status": final_status,
     })
     return 0
@@ -1917,6 +2026,17 @@ def _build_parser() -> argparse.ArgumentParser:
     p_reg.add_argument("--command", required=True, help="Command name (e.g. /z-implement-all).")
     p_reg.add_argument("--phase", required=True, help="Current phase (e.g. implement).")
     p_reg.add_argument("--session", default="", help="Session ID (optional).")
+    p_reg.add_argument(
+        "--watchdog-pid",
+        type=int,
+        default=None,
+        dest="watchdog_pid",
+        help=(
+            "Advisory PID of the watchdog sweep process spawned for this run. "
+            "Stored in the record for observability only; the authoritative source "
+            "is the .watchdog.pid file on disk (SPEC addendum F)."
+        ),
+    )
 
     # heartbeat
     p_hb = sub.add_parser("heartbeat", help="Update heartbeat for a live run.")
@@ -1924,6 +2044,16 @@ def _build_parser() -> argparse.ArgumentParser:
     p_hb.add_argument("--phase", default=None)
     p_hb.add_argument("--current-task", default=None, dest="current_task")
     p_hb.add_argument("--status", choices=["running", "paused"], default=None)
+    p_hb.add_argument(
+        "--watchdog-pid",
+        type=int,
+        default=None,
+        dest="watchdog_pid",
+        help=(
+            "Update the advisory watchdog_pid field in the record. "
+            "Used when the watchdog is spawned after initial registration."
+        ),
+    )
 
     # update-scope
     p_scope = sub.add_parser("update-scope", help="Merge scope array into record.")
