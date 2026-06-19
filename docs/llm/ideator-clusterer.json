@@ -1,0 +1,50 @@
+{
+  "concept": "ideator-clusterer",
+  "last_updated": "2026-06-18",
+  "covers_spec": "brainstorm-conversational",
+  "source_files": [
+    "agents/ideator-clusterer.md"
+  ],
+  "confidence": "high",
+  "entry_points": [
+    {
+      "file": "agents/ideator-clusterer.md",
+      "line": 1,
+      "symbol": "ideator-clusterer",
+      "kind": "module",
+      "summary": "Haiku clustering agent for wide /z-brainstorm runs (WIDE_N > 3). Reads N peer ideator framing blocks from BRAINSTORM.md, clusters them into K distinct directions by core hypothesis / approach axis, and returns: K cluster labels, each cluster's member ideators + representative framing, effective-diversity report (N→K, which framings collapsed), cross-cluster consensus. Read-only — does NOT write files."
+    },
+    {
+      "file": "agents/ideator-clusterer.md",
+      "line": 27,
+      "symbol": "clustering procedure",
+      "kind": "module",
+      "summary": "Step 1: read N ideator framing blocks from brainstorm_path. Step 2: distill one approach axis per ideator (≤12 words from Core hypothesis + Framing). Step 3: cluster by approach axis into K clusters (each ideator assigned to exactly one cluster; label + members + representative framing per cluster). Step 4: compile effective-diversity report (collapse names, cross-cluster consensus). Step 5: return structured report text."
+    }
+  ],
+  "depends_on": [
+    "agents",
+    "z-brainstorm"
+  ],
+  "consumed_by": [
+    "commands/z-brainstorm"
+  ],
+  "invariants": [
+    "Read-only: no file writes, no shell commands",
+    "Every ideator ID from ideator_ids must appear as cluster representative or in Collapsed framings — silent omission is a spec violation",
+    "Representative framing is reproduced verbatim (no lossy summarization)",
+    "K=1 is valid (all framings share one axis = strong consensus signal); do not artificially inflate K",
+    "Cross-cluster consensus section is mandatory even when empty ('None detected.')",
+    "Clusterer never picks or recommends a framing — that is the orchestrator's ranked-briefing responsibility",
+    "Distinct from scope-reconciler-brainstorm: clusterer operates on the divergence axis (N peer framings, same topic); reconciler operates on chunk axis (HEAVY mode, sub-topics). Do not reuse one for the other role."
+  ],
+  "gotchas": [
+    "Caller integration: on clusterer failure or K=0, /z-brainstorm falls back to presenting N raw framings in the Phase 3 ranked briefing — never halts",
+    "Two framings that share the same core tradeoff but use different vocabulary are one cluster (do not over-split)",
+    "Two framings that make genuinely conflicting architectural bets stay separate (do not over-merge)",
+    "OVERFLOW_MODEL applies only to general-purpose (Claude) overflow ideator slots; the clusterer itself always runs at Haiku regardless of overflow model setting",
+    "Caller passes brainstorm_path (abs path to BRAINSTORM.md), ideator_ids (JSON array in wave order), and n (total ideator count)",
+    "Wide mode: Phase 3 briefing uses CLUSTER_BLOCKS (K cluster directions) not N raw framings when CLUSTER_K > 0"
+  ],
+  "memories": []
+}

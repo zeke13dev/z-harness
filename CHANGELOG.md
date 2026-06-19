@@ -35,6 +35,7 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
 - _(auto)_ Re-spin divergence-wave machinery (T007) _(brainstorm)_
 - _(auto)_ Chosen_framing synthesized as default discussion outcome (T008) _(brainstorm)_
 - _(auto)_ HEAVY chunk-framing matrix conversational (T009) _(brainstorm)_
+- _(auto)_ Wide/mega mode — phased divergence + overflow model + clustering (T011) _(brainstorm)_
 
 ## 2026-06-17
 
