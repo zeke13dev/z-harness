@@ -26,6 +26,17 @@ interoperating with z-harness.
 These apply to all z-harness commands and skills:
 
 - Push back by default — on Gemini, Codex, and the user.
-- Always ask when unclear. No silent assumptions.
+- Always surface what's unclear. No silent assumptions.
+- **Default to conversational prose, not popups, for judgment calls.** When a decision
+  involves weighing a tradeoff — a design choice, a premise concern, approve/modify/abandon
+  a synthesis, accepting a shortcut — present the options with their pros/cons as a normal
+  conversational reply and end with a recommendation, so the user can ask follow-ups or
+  decide immediately. A popup collapses a nuanced tradeoff into a snap click; prose lets the
+  user think. The canonical shape is the "decision brief" (`scripts/amendment-brief.py` →
+  present the brief as a conversational reply, no `AskUserQuestion`).
+- **Reserve `AskUserQuestion` for finite, mutually-exclusive control-flow forks** where
+  straying is unreasonable: slug collision (proceed / abort / new-slug), claim lost
+  (proceed / abort), cost gate (proceed / reduce / abandon), "what next?" (commit / merge /
+  leave), "check out a worktree?". Not for open-ended design or approval decisions.
 - No shortcuts without explicit user approval.
 - DRY / KISS / SOLID are non-negotiable in the final plan.
