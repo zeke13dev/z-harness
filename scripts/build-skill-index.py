@@ -8,11 +8,11 @@ Output format (one line per entry):
 Entries are sorted alphabetically by command name (casefold, then original for
 total-order stability — no case-tie ordering regressions).
 
-Deduplication: both commands/ and skills/ may reference the same invokable
-name (e.g. a command file z-plan.md and a skill directory z-plan/SKILL.md).
-After normalizing each name to have a leading `/`, duplicates are collapsed to
-a single row: if both sources have a description, the command's description
-wins; if only one has a description, that is used.
+Deduplication: skills/ is the sole source tier. After normalizing each name
+to have a leading `/`, duplicates (two skill directories whose frontmatter name
+resolves to the same normalized string) are collapsed to a single row: the
+first entry encountered (alphabetical by directory name) wins; if its
+description is empty, the next non-empty description is used as a fallback.
 
 Multi-line YAML descriptions (folded `>` or literal `|` blocks): the parser
 detects these indicators and fails fast with a clear error naming the file,
@@ -106,25 +106,6 @@ def _normalize_name(name: str) -> str:
 # Crawl helpers
 # ---------------------------------------------------------------------------
 
-def _crawl_commands(commands_dir: Path) -> list[dict[str, str]]:
-    """Return one entry dict per *.md file in *commands_dir* (non-recursive)."""
-    if not commands_dir.is_dir():
-        return []
-
-    entries: list[dict[str, str]] = []
-    for path in sorted(commands_dir.glob("*.md")):
-        text = path.read_text(encoding="utf-8")
-        fm = _parse_frontmatter(text, source_path=path)
-        raw_name = fm.get("name") or path.stem
-        name = _normalize_name(raw_name)
-        entries.append({
-            "name": name,
-            "description": fm.get("description", ""),
-            "source": "command",
-        })
-    return entries
-
-
 def _crawl_skills(skills_dir: Path) -> list[dict[str, str]]:
     """Return one entry per skill directory containing a SKILL.md file."""
     if not skills_dir.is_dir():
@@ -152,10 +133,12 @@ def _crawl_skills(skills_dir: Path) -> list[dict[str, str]]:
 # ---------------------------------------------------------------------------
 
 def _dedup(entries: list[dict[str, str]]) -> list[dict[str, str]]:
-    """Collapse duplicate normalized command names to a single entry.
+    """Collapse duplicate normalized skill names to a single entry.
 
-    Merge rule: command description wins over skill description when both are
-    non-empty.  If only one has a description, use that.
+    Merge rule (skills-only): first-seen entry wins; if its description is
+    empty, the next non-empty description from a later entry is used as a
+    fallback.  Entries arrive in alphabetical directory order from
+    _crawl_skills, so "first-seen" means "alphabetically first skill dir".
     """
     seen: dict[str, dict[str, str]] = {}  # normalized name → merged entry
     for entry in entries:
@@ -164,10 +147,8 @@ def _dedup(entries: list[dict[str, str]]) -> list[dict[str, str]]:
             seen[name] = dict(entry)
         else:
             existing = seen[name]
-            # Prefer command description; fall back to whichever is non-empty
-            if entry["source"] == "command" and entry["description"]:
-                existing["description"] = entry["description"]
-            elif not existing["description"] and entry["description"]:
+            # Fall back to this entry's description if the earlier one is empty
+            if not existing["description"] and entry["description"]:
                 existing["description"] = entry["description"]
     return list(seen.values())
 

@@ -8,13 +8,13 @@ Cases covered:
   ordering_is_alphabetical    — lines are sorted alpha (casefold) by name
   case_only_tie_total_order   — uppercase variant before lowercase when casefolded the same
   unsorted_filenames          — alpha ordering holds regardless of filesystem crawl order
-  duplicate_collapse          — command + same-named skill mirror collapses to one row
-  command_description_wins    — when both command and skill have descriptions, command's wins
+  duplicate_collapse          — same-named skills collapse to one row
+  command_description_wins    — when two skills share a name, the first alphabetically wins
   skills_included             — skills/*/SKILL.md entries appear in output
   skill_missing_file_skipped  — skill dir without SKILL.md is silently skipped
   empty_dirs                  — missing commands/ and skills/ dirs produce empty output (no crash)
   custom_repo_root            — --repo-root flag is respected
-  real_repo_smoke             — a known command appears with correct format in real repo
+  real_repo_smoke             — a known skill appears with correct format in real repo
   multiline_yaml_fails_fast   — folded/literal block description raises ValueError (not garbage)
 """
 
@@ -95,11 +95,13 @@ class TestExactLineFormat(unittest.TestCase):
     """Each output line must be exactly: `backtick-wrapped name` — description."""
 
     def test_exact_format_two_entries(self):
-        """Synthetic repo with two commands produces exact expected output."""
+        """Synthetic repo with two skills produces exact expected output."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            _write_command(root / "commands", "z-alpha", "/z-alpha", "Alpha does alpha things")
-            _write_command(root / "commands", "z-beta", "/z-beta", "Beta does beta things")
+            _write_skill(root / "skills", "z-alpha", "Alpha does alpha things",
+                         frontmatter_name="/z-alpha")
+            _write_skill(root / "skills", "z-beta", "Beta does beta things",
+                         frontmatter_name="/z-beta")
 
             result = _mod.build_skill_index(root)
             expected = "`/z-alpha` — Alpha does alpha things\n`/z-beta` — Beta does beta things\n"
@@ -110,7 +112,7 @@ class TestExactLineFormat(unittest.TestCase):
         """Output must not contain markdown table headers or separator rows."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            _write_command(root / "commands", "z-cmd", "/z-cmd", "A command")
+            _write_skill(root / "skills", "z-cmd", "A command", frontmatter_name="/z-cmd")
             result = _mod.build_skill_index(root)
             self.assertNotIn("|", result, msg="Output must not contain pipe characters (no table)")
             self.assertNotIn("---", result, msg="Output must not contain table separator rows")
@@ -121,7 +123,8 @@ class TestExactLineFormat(unittest.TestCase):
         """Each line must start with a backtick-wrapped command name."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            _write_command(root / "commands", "z-thing", "/z-thing", "Does a thing")
+            _write_skill(root / "skills", "z-thing", "Does a thing",
+                         frontmatter_name="/z-thing")
             result = _mod.build_skill_index(root)
             lines = _parse_lines(result)
             self.assertEqual(len(lines), 1)
@@ -134,10 +137,13 @@ class TestExactLineFormat(unittest.TestCase):
         """Names without a leading / in frontmatter are normalized to have one."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            # Write command with no frontmatter name (stem is used, no slash)
-            commands_dir = root / "commands"
-            commands_dir.mkdir(parents=True)
-            (commands_dir / "z-noslash.md").write_text(
+            # Write a skill whose dir name has no leading slash — _crawl_skills
+            # uses skill_dir.name as the raw_name, which _normalize_name prefixes with /
+            skills_dir = root / "skills"
+            skills_dir.mkdir(parents=True)
+            skill_dir = skills_dir / "z-noslash"
+            skill_dir.mkdir()
+            (skill_dir / "SKILL.md").write_text(
                 "---\ndescription: No slash in name\n---\nBody\n", encoding="utf-8"
             )
             result = _mod.build_skill_index(root)
@@ -171,13 +177,16 @@ class TestAlphaOrdering(unittest.TestCase):
     """Entries must be in ascending alphabetical (casefold) order by name."""
 
     def test_unsorted_filenames_still_sorted_output(self):
-        """Files written in reverse order must produce alpha-sorted output."""
+        """Skill dirs created in reverse order must produce alpha-sorted output."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            # Write in reverse alphabetical order on disk
-            _write_command(root / "commands", "z-zebra", "/z-zebra", "Zebra command")
-            _write_command(root / "commands", "z-middle", "/z-middle", "Middle command")
-            _write_command(root / "commands", "a-alpha", "/a-alpha", "Alpha command")
+            # Write in reverse alphabetical order on disk (skill dirs)
+            _write_skill(root / "skills", "z-zebra", "Zebra command",
+                         frontmatter_name="/z-zebra")
+            _write_skill(root / "skills", "z-middle", "Middle command",
+                         frontmatter_name="/z-middle")
+            _write_skill(root / "skills", "a-alpha", "Alpha command",
+                         frontmatter_name="/a-alpha")
 
             result = _mod.build_skill_index(root)
             lines = _parse_lines(result)
@@ -201,7 +210,7 @@ class TestCaseOnlyTieTotalOrder(unittest.TestCase):
     """When two names differ only by case, total order must be stable and deterministic."""
 
     def test_case_only_tie_order(self):
-        """Skills/commands whose casefolded names are equal must have a stable secondary order."""
+        """Skills whose casefolded names are equal must have a stable secondary order."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             # Two skills whose names differ only by case — casefold ties
@@ -232,14 +241,15 @@ class TestCaseOnlyTieTotalOrder(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestDuplicateCollapse(unittest.TestCase):
-    """A command and a same-named skill mirror must collapse to one row."""
+    """Two skill dirs sharing the same frontmatter name collapse to one row."""
 
     def test_command_and_skill_same_name_one_row(self):
-        """Writing both commands/z-plan.md and skills/z-plan/SKILL.md produces one row."""
+        """Two skill dirs with the same frontmatter name produce one row."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            _write_command(root / "commands", "z-plan", "/z-plan", "Command description wins")
-            _write_skill(root / "skills", "z-plan", "Skill description loses",
+            _write_skill(root / "skills", "z-plan-a", "First description wins",
+                         frontmatter_name="/z-plan")
+            _write_skill(root / "skills", "z-plan-b", "Second description loses",
                          frontmatter_name="/z-plan")
 
             result = _mod.build_skill_index(root)
@@ -248,35 +258,37 @@ class TestDuplicateCollapse(unittest.TestCase):
                              msg=f"Duplicate /z-plan must collapse to one row; got {lines}")
 
     def test_command_description_wins_over_skill(self):
-        """When both command and skill have descriptions, command's description wins."""
+        """When two skill dirs share a name, the first encountered (alphabetically) wins."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            _write_command(root / "commands", "z-dup", "/z-dup", "Command description")
-            _write_skill(root / "skills", "z-dup", "Skill description",
+            # z-dup-a sorts before z-dup-b so its description is first-seen
+            _write_skill(root / "skills", "z-dup-a", "First description",
+                         frontmatter_name="/z-dup")
+            _write_skill(root / "skills", "z-dup-b", "Second description",
                          frontmatter_name="/z-dup")
 
             result = _mod.build_skill_index(root)
-            self.assertIn("Command description", result,
-                          msg="Command's description must win")
-            self.assertNotIn("Skill description", result,
-                             msg="Skill's description must be suppressed when command has one")
+            self.assertIn("First description", result,
+                          msg="First-encountered (alphabetically) description must win")
+            self.assertNotIn("Second description", result,
+                             msg="Duplicate description must be suppressed")
 
     def test_skill_description_used_when_command_empty(self):
-        """When command has no description, skill's description fills in."""
+        """When the first-seen skill has no description, the second's description fills in."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            # Command with empty description
-            commands_dir = root / "commands"
-            commands_dir.mkdir(parents=True)
-            (commands_dir / "z-nodesc.md").write_text(
+            # z-nodesc-a sorts first; its SKILL.md has an empty description
+            skill_dir_a = root / "skills" / "z-nodesc-a"
+            skill_dir_a.mkdir(parents=True)
+            (skill_dir_a / "SKILL.md").write_text(
                 "---\nname: /z-nodesc\ndescription: \n---\nBody\n", encoding="utf-8"
             )
-            _write_skill(root / "skills", "z-nodesc", "Skill fills in",
+            _write_skill(root / "skills", "z-nodesc-b", "Skill fills in",
                          frontmatter_name="/z-nodesc")
 
             result = _mod.build_skill_index(root)
             self.assertIn("Skill fills in", result,
-                          msg="Skill description must be used when command description is empty")
+                          msg="Fallback description must be used when first-seen description is empty")
 
     def test_no_duplicates_in_real_repo(self):
         """Real repo output must contain no duplicate command names."""
@@ -325,7 +337,7 @@ class TestEmptyDirectories(unittest.TestCase):
     """Missing commands/ and skills/ dirs must not crash — emit empty output."""
 
     def test_missing_dirs_emits_empty(self):
-        """No commands/ or skills/ → empty string output (no header, no crash)."""
+        """No commands/ or skills/ yields empty string output (no header, no crash)."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             result = _mod.build_skill_index(root)
@@ -340,15 +352,15 @@ class TestCustomRepoRoot(unittest.TestCase):
         """Script invoked with --repo-root <tmp> crawls that root, not CWD."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            _write_command(root / "commands", "z-custom-cmd", "/z-custom-cmd",
-                           "Custom command description")
+            _write_skill(root / "skills", "z-custom-cmd", "Custom command description",
+                         frontmatter_name="/z-custom-cmd")
             r = subprocess.run(
                 [sys.executable, _SCRIPT, "--repo-root", str(root)],
                 capture_output=True, text=True,
             )
             self.assertEqual(r.returncode, 0, msg=r.stderr)
             self.assertIn("`/z-custom-cmd`", r.stdout,
-                          msg="Custom command must appear when --repo-root is set to tmp")
+                          msg="Custom skill must appear when --repo-root is set to tmp")
             self.assertIn("Custom command description", r.stdout)
 
 
@@ -356,35 +368,35 @@ class TestMultiLineYamlFailsFast(unittest.TestCase):
     """Folded or literal YAML block descriptions must raise ValueError, not silently emit garbage."""
 
     def test_folded_block_raises_valueerror(self):
-        """A frontmatter description: > triggers a ValueError naming the file."""
+        """A frontmatter description: > in a SKILL.md triggers a ValueError naming the file."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            commands_dir = root / "commands"
-            commands_dir.mkdir(parents=True)
-            bad_file = commands_dir / "z-bad.md"
+            skill_dir = root / "skills" / "z-bad"
+            skill_dir.mkdir(parents=True)
+            bad_file = skill_dir / "SKILL.md"
             bad_file.write_text(
                 "---\nname: /z-bad\ndescription: >\n  This is a folded block.\n---\nBody\n",
                 encoding="utf-8"
             )
             with self.assertRaises(ValueError) as ctx:
                 _mod.build_skill_index(root)
-            self.assertIn("z-bad.md", str(ctx.exception),
+            self.assertIn("SKILL.md", str(ctx.exception),
                           msg="ValueError must name the offending file")
 
     def test_literal_block_raises_valueerror(self):
-        """A frontmatter description: | triggers a ValueError naming the file."""
+        """A frontmatter description: | in a SKILL.md triggers a ValueError naming the file."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            commands_dir = root / "commands"
-            commands_dir.mkdir(parents=True)
-            bad_file = commands_dir / "z-literal.md"
+            skill_dir = root / "skills" / "z-literal"
+            skill_dir.mkdir(parents=True)
+            bad_file = skill_dir / "SKILL.md"
             bad_file.write_text(
                 "---\nname: /z-literal\ndescription: |\n  This is a literal block.\n---\nBody\n",
                 encoding="utf-8"
             )
             with self.assertRaises(ValueError) as ctx:
                 _mod.build_skill_index(root)
-            self.assertIn("z-literal.md", str(ctx.exception),
+            self.assertIn("SKILL.md", str(ctx.exception),
                           msg="ValueError must name the offending file")
 
 
@@ -393,7 +405,7 @@ class TestMultiLineYamlFailsFast(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestRealRepoSmoke(unittest.TestCase):
-    """Real repo smoke test: known command appears correctly formatted."""
+    """Real repo smoke test: known skill appears correctly formatted."""
 
     def test_z_export_correct_format(self):
         """z-export appears as `/z-export` — <description> with correct format."""
