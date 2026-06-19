@@ -736,6 +736,293 @@ Log every individual failure as `ideator_failed` regardless of the bucket above.
 
 ---
 
+### 2c. Wide mode dispatch (WIDE_N > 3)
+
+This section fires **only when `WIDE_N > 3`** (set in Phase 0 step 0-count). When `WIDE_N ≤ 3`, skip this entire section — the Phase 2b dispatch above is the complete ideator path.
+
+#### 2c-0. Overflow model resolution
+
+Resolve the model to use for overflow waves (waves 2+). Resolution order: **prompt override > config knob > default (`haiku`)**.
+
+```bash
+PLUGIN="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+
+# Step 1: check for prompt-level override (set by the user in $ARGUMENTS, e.g. "--overflow-model=sonnet")
+OVERFLOW_MODEL_OVERRIDE=""
+if echo "${ARGUMENTS:-}" | grep -qE '\-\-overflow-model=\S+'; then
+  OVERFLOW_MODEL_OVERRIDE="$(echo "${ARGUMENTS:-}" | grep -oE '\-\-overflow-model=\S+' | head -1 | sed 's/--overflow-model=//')"
+fi
+
+# Step 2: read config knob brainstorm.wide_overflow_model (T004)
+OVERFLOW_MODEL_CONFIG="$(python3 "$PLUGIN/scripts/config.py" get brainstorm.wide_overflow_model 2>/dev/null || echo "")"
+[ -z "$OVERFLOW_MODEL_CONFIG" ] && OVERFLOW_MODEL_CONFIG="haiku"
+
+# Step 3: resolve (prompt override wins)
+if [ -n "$OVERFLOW_MODEL_OVERRIDE" ]; then
+  OVERFLOW_MODEL="$OVERFLOW_MODEL_OVERRIDE"
+else
+  OVERFLOW_MODEL="$OVERFLOW_MODEL_CONFIG"
+fi
+
+# cheap-mixed gating (M2): no --model mechanism exists in resolve-provider.py / providers.json
+# for codex-cli or agy today. If the config resolves to "cheap-mixed", warn and fall back to haiku.
+if [ "$OVERFLOW_MODEL" = "cheap-mixed" ]; then
+  bash "$PLUGIN/scripts/log-event.sh" "$RUN" wide_overflow_model_warn \
+    '{"reason":"cheap-mixed requested but no --model path verified for codex-cli/agy; falling back to haiku","config_value":"cheap-mixed"}'
+  # Warn the user inline:
+  echo "⚠ wide_overflow_model=cheap-mixed is not yet implemented (no --model path verified for codex-cli/agy). Overflow ideators will use haiku instead. Set brainstorm.wide_overflow_model=haiku or an explicit Claude model string to suppress this warning." >&2
+  OVERFLOW_MODEL="haiku"
+fi
+# An explicit Claude model string (e.g. "sonnet") IS honored for general-purpose overflow ideators.
+```
+
+#### 2c-1. Conversational cost gate
+
+Before dispatching a wide run, present a cost estimate inline and **end the turn** — this is a conversational gate, NOT an `AskUserQuestion`. Wait for the user's natural-language go-ahead before proceeding.
+
+Compute an estimate:
+- Wave 1: 3 ideators × ~3,000 tokens each = ~9,000 tokens
+- Each overflow wave: 2 ideators × ~3,000 tokens = ~6,000 tokens per wave
+- Overflow waves needed: `OVERFLOW_N = WIDE_N - 3` ideators → `ceil(OVERFLOW_N / 2)` waves (each wave has 2 ideators)
+- Clusterer: ~2,000 tokens
+
+```bash
+OVERFLOW_N=$(( WIDE_N - 3 ))
+OVERFLOW_WAVES=$(( (OVERFLOW_N + 1) / 2 ))   # ceil(OVERFLOW_N / 2)
+EST_TOKENS=$(( 9000 + OVERFLOW_WAVES * 6000 + 2000 ))
+```
+
+Present inline in your response and **stop — end the turn here**:
+
+> **Wide brainstorm: `<slug>`**
+>
+> You requested **`<WIDE_N>` ideators**. Here's what this will dispatch:
+> - Wave 1: 3 vendor-diverse ideators (Claude / Codex / Gemini) at normal models
+> - `<OVERFLOW_WAVES>` overflow wave(s): `<OVERFLOW_N>` additional ideator(s) at `<OVERFLOW_MODEL>` using anti-seeded divergent axes
+> - After all waves: `ideator-clusterer` (Haiku) to collapse N framings → K distinct directions
+>
+> Estimated tokens: ~`<EST_TOKENS>` (rough; actual varies by payload size).
+>
+> Proceed? (Reply "yes" / "go" / "proceed" to start, or name a smaller N to reduce cost.)
+
+**HARD INVARIANT:** Do NOT dispatch any ideators until the user confirms. The orchestrator must stop here and await the user's reply. If the user replies with a smaller N or any modification, update `WIDE_N` accordingly and recompute before proceeding.
+
+On user go-ahead, continue to 2c-2.
+
+#### 2c-2. Emit `wide_dispatch` event
+
+```bash
+bash "$PLUGIN/scripts/log-event.sh" "$RUN" wide_dispatch \
+  "$(python3 -c 'import json,sys; print(json.dumps({"wide_n":int(sys.argv[1]),"waves":int(sys.argv[2])+1,"overflow_model":sys.argv[3]}))' \
+     "$WIDE_N" "$OVERFLOW_WAVES" "$OVERFLOW_MODEL")"
+```
+
+The `waves` field counts all waves including wave 1 (= `OVERFLOW_WAVES + 1`).
+
+#### 2c-3. Wave 1 — 3 vendors at normal models
+
+Wave 1 is the existing 3-vendor Phase 2b dispatch (Claude/Codex/Gemini at their normal models). The Phase 2a persona resolution and 2b dispatch already ran above — the results are wave 1 framings. Treat them as such.
+
+Track all ideator IDs for clustering:
+
+```bash
+# After Phase 2b dispatch completes, record wave-1 ideator IDs
+WIDE_IDEATOR_IDS='["claude-wave1","codex-wave1","gemini-wave1"]'
+WIDE_WAVES_COMPLETED=1
+
+# Append wave-1 framing blocks to BRAINSTORM.md under a wave header.
+# BRAINSTORM.md is written in Phase 3 normally; for wide mode, the Phase 3 write
+# must label each wave-1 framing block with its wave provenance for the clusterer.
+# Specifically: prepend a "## Wave 1" header before the ## Framing: <ideator> blocks
+# in BRAINSTORM.md when WIDE_N > 3. The clusterer reads the full file.
+WIDE_WAVE1_HEADER="## Wave 1"
+```
+
+Write the `## Wave 1` header before the per-ideator framing blocks in BRAINSTORM.md (in Phase 3's write step). The clusterer uses this to locate all wave framings in the file.
+
+#### 2c-4. Overflow waves (waves 2+)
+
+For each overflow ideator batch, invoke the **Re-spin machinery** (see `### Re-spin machinery` section) with:
+
+- `RESPIN_DIRECTION` = "Wide-mode overflow: produce a framing that diverges from all prior framings on a different axis (different core hypothesis, different problem decomposition, different target user, or different solution lever)."
+- `RESPIN_WAVE` = current wave number (starting at 1 for first overflow wave, capped at 3 — re-spin machinery cap applies to the discussion loop; for wide-mode overflow waves we use separate tracking below)
+- `RESPIN_PRIOR_FRAMINGS` = all framing blocks returned so far (initially the wave-1 blocks)
+
+**Wide-mode overflow wave tracking** (separate from the discussion-loop re-spin cap):
+
+```bash
+# Overflow wave tracking (wide mode only — separate from discussion-loop re-spin cap)
+OVERFLOW_REMAINING=$OVERFLOW_N    # number of overflow ideators still to dispatch
+OVERFLOW_WAVE_NUM=1               # wave number within overflow (1-indexed; maps to RESPIN_WAVE 1, 2, 3)
+```
+
+For each overflow wave:
+
+1. Determine vendor subset from re-spin machinery (wave number determines subset deterministically):
+   - Overflow wave 1 → Claude + Codex
+   - Overflow wave 2 → Claude + Gemini
+   - Overflow wave 3 → Codex + Gemini (cap at 3 overflow waves; N>9 rare but cap enforced)
+
+2. Resolve overflow model for these ideators. If `OVERFLOW_MODEL` is `haiku` or an explicit Claude model string, use it for the `general-purpose` slot. The consultant arms (codex/gemini) use their native defaults (no `--model` override) — this is the M2 constraint.
+
+   ```
+   <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+        requirement to the user and skip the overflow ideator Agent() calls.
+        Wide-mode overflow cannot complete without subagent support. -->
+   ```
+
+   **Overflow wave dispatch** (example for overflow wave 1 — Claude + Codex):
+
+   Resolve a **distinct persona** for each overflow ideator slot (draw from the ideator pool, excluding personas already used in prior waves):
+
+   ```bash
+   # Draw N_TOTAL = WIDE_N distinct personas total (all waves), using --count=WIDE_N.
+   # Wave 1 used slots [0..2]; overflow wave k uses the next available slots.
+   # If the pool underflows, remaining overflow slots run vanilla (no persona).
+   OVERFLOW_PERSONAS_JSON=$(python3 "$PLUGIN/scripts/resolve-persona.py" \
+     random-distinct-for-role ideator --count="$WIDE_N" \
+     2>>"$Z_HARNESS_PLAN_DIR/archive/$RUN/persona-draw.log")
+   # Slot index for overflow ideator i (0-indexed across overflow waves):
+   #   slot_index = 3 + i   (wave-1 used slots 0,1,2)
+   ```
+
+   Build the anti-seed payload (per re-spin machinery template — divergence instruction verbatim):
+
+   ```
+   <OVERFLOW_PERSONA_PREFIX>
+   MODE: brainstorm
+
+   Topic: <topic>
+
+   Narrowed direction from the user: Wide-mode overflow: produce a framing that diverges from all prior framings on a different axis (different core hypothesis, different problem decomposition, different target user, or different solution lever).
+
+   Here are the existing framings from this brainstorm run:
+
+   <RESPIN_PRIOR_FRAMINGS>
+
+   Produce something that diverges from all of them — attack a different axis (different core hypothesis, different problem decomposition, different target user, or different solution lever). Do NOT restate, synthesize, or incrementally improve an existing framing. The goal is genuine divergence.
+
+   <IDEATOR_SCHEMA>
+   ```
+
+   **For overflow wave 1 (Claude + Codex):**
+   ```
+   Agent(
+     subagent_type="general-purpose",
+     model="<OVERFLOW_MODEL>",
+     description="Claude overflow ideator wave <OVERFLOW_WAVE_NUM> for <slug>",
+     prompt="<overflow anti-seed prompt for Claude, per template above>"
+   )
+   Agent(
+     subagent_type="consultant-secondary",
+     description="Codex overflow ideator wave <OVERFLOW_WAVE_NUM> for <slug>",
+     prompt="<overflow anti-seed prompt for Codex, per template above>"
+   )
+   ```
+
+   **For overflow wave 2 (Claude + Gemini):**
+   ```
+   Agent(
+     subagent_type="general-purpose",
+     model="<OVERFLOW_MODEL>",
+     description="Claude overflow ideator wave <OVERFLOW_WAVE_NUM> for <slug>",
+     prompt="<overflow anti-seed prompt for Claude>"
+   )
+   Agent(
+     subagent_type="consultant-primary",
+     description="Gemini overflow ideator wave <OVERFLOW_WAVE_NUM> for <slug>",
+     prompt="<overflow anti-seed prompt for Gemini>"
+   )
+   ```
+
+   **For overflow wave 3 (Codex + Gemini, no Claude):**
+   ```
+   Agent(
+     subagent_type="consultant-secondary",
+     description="Codex overflow ideator wave 3 for <slug>",
+     prompt="<overflow anti-seed prompt for Codex>"
+   )
+   Agent(
+     subagent_type="consultant-primary",
+     description="Gemini overflow ideator wave 3 for <slug>",
+     prompt="<overflow anti-seed prompt for Gemini>"
+   )
+   ```
+
+   Note: `OVERFLOW_MODEL` applies **only to the `general-purpose` (Claude) slot**. Consultant arms (codex/gemini) run at their native defaults — M2 constraint: no `--model` path exists for codex-cli or agy.
+
+3. After each overflow wave returns, append framing blocks to BRAINSTORM.md under a `## Wave <N>` header:
+
+   ```markdown
+
+   ## Wave <WAVE_NUM>
+
+   <!-- overflow ideators: <list>; persona: <ids or none>; failed: <list or "none"> -->
+
+   ### Framing — <ideator-id> (wave <WAVE_NUM>)
+
+   <five-section block from ideator, verbatim>
+
+   ### Framing — <ideator-id> (wave <WAVE_NUM>)
+
+   <five-section block from second ideator, if surviving>
+   ```
+
+4. Update tracking:
+
+   ```bash
+   # Record ideator IDs for clustering
+   WIDE_IDEATOR_IDS="$(python3 -c "import json,sys; ids=json.loads(sys.argv[1]); ids+=['<vendor1>-wave<N>','<vendor2>-wave<N>']; print(json.dumps(ids))" "$WIDE_IDEATOR_IDS")"
+   OVERFLOW_REMAINING=$(( OVERFLOW_REMAINING - 2 ))   # or -1 if 1 ideator dispatched in final partial wave
+   OVERFLOW_WAVE_NUM=$(( OVERFLOW_WAVE_NUM + 1 ))
+   WIDE_WAVES_COMPLETED=$(( WIDE_WAVES_COMPLETED + 1 ))
+   ```
+
+5. Update `RESPIN_PRIOR_FRAMINGS` to include the new wave's blocks before dispatching the next overflow wave.
+
+6. Stop dispatching overflow waves when `OVERFLOW_REMAINING ≤ 0` or `OVERFLOW_WAVE_NUM > 3` (cap: max 3 overflow waves regardless of N; for N > 9, the extra ideators are silently capped and the user is informed).
+
+**Cap notification:** If `WIDE_N > 9` (more than 3 overflow waves would be needed), inform the user inline before dispatching: "Wide cap: dispatching up to 9 ideators across 4 waves (1 base + 3 overflow). Your requested N=`<WIDE_N>` exceeds the overflow cap — proceeding with N=9."
+
+Apply the same failure policy as the re-spin machinery: 1/2 fail → proceed with survivor; 2/2 fail → log and continue (does not decrement cap). Log each failure as `ideator_failed` with `{vendor, reason, wave: <wave_num>}`.
+
+#### 2c-5. Dispatch ideator-clusterer
+
+After all waves (wave 1 + all overflow waves) return:
+
+1. Ensure BRAINSTORM.md is written with all wave framing blocks (Phase 3 writes wave-1 blocks; overflow blocks appended in 2c-4). The file is the clusterer's source of truth.
+
+2. Collect the ordered list of all ideator IDs across all waves into `WIDE_IDEATOR_IDS` (already tracked above).
+
+3. Dispatch the clusterer:
+
+   ```
+   <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+        requirement and skip the clusterer Agent() call. Fall back to presenting
+        raw N framings in the Phase 3 briefing. -->
+   Agent(
+     subagent_type="ideator-clusterer",
+     description="Cluster <WIDE_N> wide-mode framings for <slug>",
+     prompt="brainstorm_path: <abs path to $Z_HARNESS_PLAN_DIR/BRAINSTORM.md>
+   ideator_ids: <WIDE_IDEATOR_IDS as JSON array>
+   n: <WIDE_N>"
+   )
+   ```
+
+4. Parse the clusterer's returned text. Extract:
+   - `K` — number of distinct clusters (from the `K: <n>` line in `## Effective-diversity report`)
+   - The `## Clusters` section — K cluster labels, members, representative framings
+   - The `## Cross-cluster consensus` section (may be "None detected.")
+   - The `## Clusterer note` paragraph
+
+   Store these as `CLUSTER_REPORT`, `CLUSTER_K`, and `CLUSTER_BLOCKS` for use in the Phase 3 ranked briefing.
+
+5. **Clusterer failure handling:** If the clusterer fails or returns K=0, fall back to presenting the N raw framings directly in the Phase 3 briefing (set `CLUSTER_REPORT=""` and `CLUSTER_K=0` as the fallback signal).
+
+After 2c-5, proceed to Phase 3. Phase 3's ranked briefing uses `CLUSTER_BLOCKS` when `WIDE_N > 3` and `CLUSTER_K > 0` (wide mode), or falls back to raw framings (narrow mode or clusterer failure).
+
+---
+
 ## Phase 3 — Synthesis + mandatory anti-bias check
 
 1. **Parse** the three (or two, or one) returns. For each ideator, extract the five sections. If a section is missing or malformed, record it as `<missing>` rather than omitting it.
@@ -745,6 +1032,8 @@ Log every individual failure as `ideator_failed` regardless of the bucket above.
 3. **Orchestrator recommendation.** Pick one framing as your tentative recommendation with a one-line rationale. The user is free to override.
 
 4. **Write `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md`** with YAML frontmatter:
+
+   **Narrow mode (`WIDE_N ≤ 3`) frontmatter:**
 
    ```yaml
    ---
@@ -772,11 +1061,47 @@ Log every individual failure as `ideator_failed` regardless of the bucket above.
    ---
    ```
 
+   **Wide mode (`WIDE_N > 3`) frontmatter:** add `wide_n` and `overflow_model` fields; `ideators` lists all wave members with their wave suffix; `ideator_models` records `overflow: <OVERFLOW_MODEL>` for the overflow slots.
+
+   ```yaml
+   ---
+   artifact: brainstorm
+   slug: <slug>
+   generated_at: <UTC ISO 8601>
+   command: /z-brainstorm <args>
+   input_hash: <16 hex from Phase 1d>
+   depends_on: [<resolved filename if terrain>]
+   wide_n: <WIDE_N>
+   overflow_model: <OVERFLOW_MODEL>
+   ideators:
+     - claude-wave1
+     - codex-wave1
+     - gemini-wave1
+     - claude-wave2    # overflow ideators follow
+     - codex-wave2
+     # failed members: "<id>:failed"
+   ideator_models:
+     wave1_claude: sonnet
+     wave1_codex: default
+     wave1_gemini: default
+     overflow: <OVERFLOW_MODEL>   # all overflow Claude slots use this
+   ideator_personas:
+     claude-wave1: <persona-id or "<none>">
+     codex-wave1: <persona-id or "<none>">
+     gemini-wave1: <persona-id or "<none>">
+     # overflow slots: <ideator-id>: <persona-id or "<none>">
+   status: complete
+   chosen_framing: pending
+   ---
+   ```
+
    `ideator_personas` records the distinct persona drawn for each ideator (the `*_PERSONA_NAME` values from Phase 2a). A value of `<none>` means that ideator ran vanilla — either the `brainstorm.personas` knob was OFF, or the ideator pool underflowed and this slot got no persona. When an ideator also failed, its persona binding is still recorded here even though the member appears as `<id>:failed` in `ideators`.
 
    `chosen_framing` is written as `pending` here and updated in Phase 4 to one of `claude | codex | gemini | synthesized | restart | abandoned` per SPEC. `synthesized` is the default/expected outcome for a discussion-born hybrid framing co-authored with the user.
 
    Body sections, one block per ideator (in fixed order Claude → Codex → Gemini):
+
+   **Narrow mode (`WIDE_N ≤ 3`):** write framing blocks directly at the top level.
 
    ```markdown
    ## Framing: <ideator-name>
@@ -797,7 +1122,25 @@ Log every individual failure as `ideator_failed` regardless of the bucket above.
    <bulleted list or `<missing>`>
    ```
 
-   Followed by:
+   **Wide mode (`WIDE_N > 3`):** prefix the wave-1 framing blocks with a `## Wave 1` header so the clusterer can locate all waves consistently. Overflow wave blocks are already appended under `## Wave <N>` headers in Phase 2c-4.
+
+   ```markdown
+   ## Wave 1
+
+   ## Framing: claude-wave1
+
+   ### Framing
+   <one paragraph or `<missing>`>
+   ...
+
+   ## Framing: codex-wave1
+   ...
+
+   ## Framing: gemini-wave1
+   ...
+   ```
+
+   Followed by (both narrow and wide modes):
 
    ```markdown
    ## Anti-bias check
@@ -839,7 +1182,7 @@ Log every individual failure as `ideator_failed` regardless of the bucket above.
 
    **Narrow mode (≤3 ideators):** rank the raw ideator framings directly (no clustering needed).
 
-   **Wide mode (>3 ideators):** rank the K cluster directions returned by `ideator-clusterer` (see Wide / mega mode section). Each cluster label represents one ranked direction; mention the underlying ideators that collapsed into it.
+   **Wide mode (>3 ideators):** rank the K cluster directions returned by `ideator-clusterer` (dispatched in Phase 2c-5; `CLUSTER_BLOCKS` holds the parsed result). Each cluster label represents one ranked direction; mention the underlying ideators that collapsed into it. If `CLUSTER_K = 0` (clusterer failure), fall back to presenting the N raw framings. Surface the cross-cluster consensus finding (if any) as a separate callout ("All directions agree that…").
 
    Send a `PushNotification` if notify.level is `approval_only` or `all` (see [docs/human/config.md](docs/human/config.md)).
 
@@ -1313,6 +1656,8 @@ JSON
 | `sharpen_gate` | Phase 0 sharpen-vs-skip decision | `decision` (`sharpen`\|`skip`), `reason`, `grill_md_existed` |
 | `count_parsed` | Phase 0 ideator count extracted from NL invocation | `wide_n`, `default_used` |
 | `wide_suppressed_heavy` | N>3 wide request suppressed HEAVY chunking (D2) | `requested_n`, `scope_mode` |
+| `wide_dispatch` | Wide mode confirmed by user; all waves + clusterer dispatched | `wide_n`, `waves`, `overflow_model` |
+| `wide_overflow_model_warn` | `cheap-mixed` resolved but no `--model` path verified; fell back to haiku | `reason`, `config_value` |
 
 ---
 
@@ -1333,7 +1678,7 @@ JSON
 
 | Feature | Used | Gates |
 |---------|------|-------|
-| `subagent` | yes | Phase 0 sharpen-gate optional Haiku Agent() (ambiguous topics only); Phase 0 scope-probe Agent(); HEAVY sub-flow and reconciler Agent() calls; Phase 1a doc-fetcher Agent(); Phase 1b optional Explore Agent(); Phase 2 three ideator Agent() calls |
+| `subagent` | yes | Phase 0 sharpen-gate optional Haiku Agent() (ambiguous topics only); Phase 0 scope-probe Agent(); HEAVY sub-flow and reconciler Agent() calls; Phase 1a doc-fetcher Agent(); Phase 1b optional Explore Agent(); Phase 2 three ideator Agent() calls; Phase 2c overflow ideator Agent() calls (wide mode only, WIDE_N > 3); Phase 2c-5 ideator-clusterer Agent() (wide mode only) |
 | `ask_user` | yes | Empty topic gate (finite); Setup slug confirmation (finite); Setup existing BRAINSTORM.md overwrite (finite); Phase 2 2/3 ideator failure gate (finite); Phase 4 HEAVY "no framings" halt (finite). **Conversational (no ask_user):** Phase 3 framing-selection briefing; Phase 4 HEAVY chunk×framing matrix (T009); Phase 4 LIGHT/MEDIUM discussion loop including restart refined-topic |
 | `skill_invoke` | no | — |
 
