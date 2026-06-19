@@ -1,5 +1,5 @@
 ---
-description: "System-level invariant test planner. Reads INVARIANTS.json + SPEC.md + PLAN.md + TASKS.md, matches invariants to tasks via tag-based mapping, drafts behavioral tests keyed to durable system invariants, cross-LLM consult with invariant coverage ana..."
+description: "System-level invariant test planner. Supports both legacy mode (SPEC.md + PLAN.md + TASKS.md) and intent mode (INTENT.md + TASKS.md + LEDGER.md). Reads INVARIANTS.json when present (user-authored, optional — no generator; absent is normal). Drafts..."
 ---
 
 You are running **z-harness `/z-test`** — the semantic test-case planner. This is an **optional planning-time step** between `/z-plan` and `/z-implement-all`. It does NOT write or run any test code. It produces a structured `TESTS.md` artifact that the implementer subagent reads alongside TASKS.md, so tests get implemented in the same diff as the code they exercise.
@@ -19,7 +19,22 @@ Same logic as `/z-implement-all` Phase 0:
 
 Set `$BASE = $Z_HARNESS_PLAN_DIR` (or `z-harness` for legacy).
 
-**Require SPEC.md + PLAN.md + TASKS.md.** Abort with "incomplete plan; run /z-plan to completion first" if any of the three is missing.
+**Mode detection (SPEC vs INTENT).** After `$BASE` is bound, detect which plan format is present — mirroring `/z-implement-all` step 3.5:
+
+```bash
+if [ -f "$BASE/SPEC.md" ]; then
+  TEST_MODE="legacy"
+elif [ -f "$BASE/INTENT.md" ]; then
+  TEST_MODE="intent"
+else
+  echo "ERROR: Neither SPEC.md nor INTENT.md found at $BASE." >&2
+  echo "Run /z-plan (or /z-plan --full for legacy mode) to create a plan before running /z-test." >&2
+  exit 1
+fi
+```
+
+- **`TEST_MODE=legacy` (SPEC.md present):** Plan inputs are `SPEC.md`, `PLAN.md`, and `TASKS.md`. Abort with "incomplete plan; run /z-plan to completion first" if any of the three is missing.
+- **`TEST_MODE=intent` (INTENT.md present, SPEC.md absent):** Plan inputs are `INTENT.md`, `TASKS.md`, and `LEDGER.md`. Proceed without SPEC.md or PLAN.md — they are absent by design. The `## Acceptance checklist` items in INTENT.md are the invariants.
 
 <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the implementation-underway continue/abort question via their native channel. Silent omission is forbidden. -->
 **Implementation-underway warning.** If TASKS.md already has any `[x]` rows, `AskUserQuestion`:
@@ -43,12 +58,14 @@ Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.le
 
 ## Phase 1 — Risk-rank the plan
 
-Read `$BASE/SPEC.md`, `$BASE/PLAN.md`, `$BASE/TASKS.md`.
+**Legacy mode:** Read `$BASE/SPEC.md`, `$BASE/PLAN.md`, `$BASE/TASKS.md`.
+
+**Intent mode:** Read `$BASE/INTENT.md`, `$BASE/TASKS.md`, `$BASE/LEDGER.md` (if present).
 
 For each task in TASKS.md, score risk on three axes:
 
-- **Domain criticality.** Does this task touch money, ordering, position sizing, signal generation, fills, P&L attribution, or anything called out as load-bearing in SPEC.md? Trading-system specifics: notional, contract counts, fill direction, slippage application, time-zone-aware bar boundaries, feature alignment between strategy and pipeline.
-- **Surface area.** Count files in the task's `Files:` block; count acceptance criteria; flag presence of `**DANGER:**` / `**INVARIANT:**` / `**MUST:**` tags in SPEC.md for any file the task touches.
+- **Domain criticality.** Does this task touch money, ordering, position sizing, signal generation, fills, P&L attribution, or anything called out as load-bearing in the plan contract (SPEC.md in legacy mode, INTENT.md in intent mode)? Trading-system specifics: notional, contract counts, fill direction, slippage application, time-zone-aware bar boundaries, feature alignment between strategy and pipeline.
+- **Surface area.** Count files in the task's `Files:` block; count acceptance criteria; flag presence of `**DANGER:**` / `**INVARIANT:**` / `**MUST:**` tags in the plan contract for any file the task touches.
 - **Test-gap signal.** Acceptance criteria worded as "behavior X" without a numeric / type-shape / observable check are the worst case — the implementer can pass them without writing anything that proves correctness.
 
 Output a ranked list (high → low):
@@ -56,10 +73,14 @@ Output a ranked list (high → low):
 - **Medium risk** → recommended.
 - **Low risk** → optional.
 
-Also extract from SPEC.md every line of these shapes and treat each as a candidate test seed:
+**INVARIANTS.json (v2 path, optional).** If `$BASE/INVARIANTS.json` exists, read it and use its invariant entries as additional test seeds, tagged `seed: invariants-json`. INVARIANTS.json is **user-authored and optional** — there is intentionally no generator for it anywhere in z-harness. Absence is normal and expected, not a bug. When absent, the command falls back to extracting seeds from the plan contract directly (v1 path, described below). Readers should not treat the v2 path as dead; it simply requires the user to hand-author the file.
+
+**Candidate test seeds — legacy mode:** Extract from SPEC.md every line of these shapes:
 - `**INVARIANT:**`, `**MUST:**`, `**MUST NOT:**`, `**DANGER:**`
 - Numeric/quantitative assertions ("must be ≤ X", "exactly N", "monotone in Y")
 - Equality/identity claims about cross-module contracts ("strategy reads field X written by Y")
+
+**Candidate test seeds — intent mode:** Extract each `[ ]` item from the `## Acceptance checklist` section of INTENT.md. Each checklist item IS the invariant for INTENT-mode plans — treat them as the direct analogue of `**INVARIANT:**` lines in SPEC.md. Also extract any `**MUST:**` / `**MUST NOT:**` / numeric assertions found in task `Acceptance:` blocks in TASKS.md.
 
 <!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the bug-class concerns question via their native channel. Silent omission is forbidden. -->
 **Brief user input.** Before drafting tests, `AskUserQuestion` (free-text):
@@ -71,12 +92,12 @@ Save the ranked list + invariants + user concerns to `$BASE/archive/$RRUN/phase1
 
 ## Phase 2 — Draft initial test cases (orchestrator main thread)
 
-For each high-risk task and each spec invariant and each user concern, draft a candidate test entry:
+For each high-risk task and each plan-contract invariant (or acceptance-checklist item in intent mode) and each user concern, draft a candidate test entry:
 
 ```
 - id: TEST-001
   task: T007                # link to TASKS.md entry (null if cross-task)
-  invariant: <verbatim quote from SPEC.md or "derived from PLAN.md decision <name>">
+  invariant: <verbatim quote from the plan contract (SPEC.md in legacy mode; INTENT.md acceptance-checklist item in intent mode) or "derived from PLAN.md decision <name>" in legacy mode>
   test_name: <short_snake_case>
   target_file: <abs path where the test should live, in repo-native location>
   failure_class: <one-line: what real bug would this catch?>
@@ -112,7 +133,7 @@ Spawn **both** consultants in parallel in a single message:
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="consultant-primary",
   description="Test-cases consult (Gemini) for <slug>",
-  prompt="MODE: test-cases\n\nSPEC.md (verbatim):\n<contents>\n\nPLAN.md (verbatim):\n<contents>\n\nTASKS.md (verbatim):\n<contents>\n\nMy draft test cases (Phase 2):\n<contents of phase2-drafts.md>\n\nUser-stated concerns:\n<from Phase 1 AskUserQuestion>\n\nSource files referenced by the drafts (read these for real types/signatures):\n<list of abs paths>\n\nAsk:\n1. For each draft test: is the assertion strong enough to catch a real bug, or a tautology? If weak, propose a stronger assertion (be concrete).\n2. Which SPEC invariants do not yet have a corresponding test? Propose entries.\n3. What dangerous bug classes specific to this codebase domain (trading: notional sign, fill-quantity sign, time-zone-aware bar boundaries, feature schema alignment between strategy and pipeline) are not covered by my drafts?\n4. Flag any draft that is mechanically trivial (asserts what the implementation already obviously does) and recommend dropping it.\n5. Identify any draft whose target_file is in the wrong place (test framework convention mismatch).\n\nReturn structured: per-draft critique (keep | strengthen | drop), then a list of NEW test entries Claude missed."
+  prompt="MODE: test-cases\n\nPlan contract (verbatim) — SPEC.md in legacy mode, INTENT.md in intent mode:\n<contents>\n\nPLAN.md (verbatim, legacy mode only — omit in intent mode):\n<contents>\n\nTASKS.md (verbatim):\n<contents>\n\nMy draft test cases (Phase 2):\n<contents of phase2-drafts.md>\n\nUser-stated concerns:\n<from Phase 1 AskUserQuestion>\n\nSource files referenced by the drafts (read these for real types/signatures):\n<list of abs paths>\n\nAsk:\n1. For each draft test: is the assertion strong enough to catch a real bug, or a tautology? If weak, propose a stronger assertion (be concrete).\n2. Which plan contract invariants (SPEC.md lines in legacy mode; INTENT.md acceptance-checklist items in intent mode) do not yet have a corresponding test? Propose entries.\n3. What dangerous bug classes specific to this codebase domain (trading: notional sign, fill-quantity sign, time-zone-aware bar boundaries, feature schema alignment between strategy and pipeline) are not covered by my drafts?\n4. Flag any draft that is mechanically trivial (asserts what the implementation already obviously does) and recommend dropping it.\n5. Identify any draft whose target_file is in the wrong place (test framework convention mismatch).\n\nReturn structured: per-draft critique (keep | strengthen | drop), then a list of NEW test entries Claude missed."
 )
 <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="consultant-secondary",
@@ -171,7 +192,7 @@ Write `$BASE/TESTS.md`:
 **Cross-LLM delta:** dropped <D> trivial, added <A> coverage gaps, strengthened <S>
 
 ## TEST-001  (covers T007)
-**Invariant:** <quote from SPEC.md or derivation>
+**Invariant:** <verbatim quote from the plan contract (SPEC.md in legacy mode; INTENT.md acceptance-checklist item in intent mode), or derivation>
 **Failure class:** <one-line: what real bug this catches>
 **Target file:** <abs path>
 **Setup:** <fixtures, data — reference existing utilities by path>
@@ -185,7 +206,7 @@ Write `$BASE/TESTS.md`:
 
 Each TEST-NNN block must be parseable by the implementer subagent (it greps the file for `## TEST-NNN` to find its entry). Use stable IDs even if the user dropped some during Phase 5 — gaps in numbering are fine; renumbering would invalidate any cross-references.
 
-No SPEC.md / PLAN.md changes. TESTS.md is its own artifact.
+No plan-contract edits (SPEC.md / PLAN.md / INTENT.md / LEDGER.md). TESTS.md is its own artifact.
 
 ## Phase 7 — Cross-link into TASKS.md
 
@@ -225,10 +246,10 @@ If a task already has a `**Tests:**` line from a prior `/z-test` invocation, **m
 ## Hard rules
 
 - **Non-trivial tests only.** Every TESTS.md entry must name a domain-specific **failure class**. Assertions like "function returns" or "no exception raised" without further constraint are rejected. The cross-LLM consult exists precisely to catch and drop these.
-- **Tests tied to invariants.** Every mandatory test must trace to (a) a quoted SPEC.md invariant, (b) a high-risk task in TASKS.md, or (c) a user-stated concern from Phase 1. No orphan tests.
+- **Tests tied to invariants.** Every mandatory test must trace to (a) a quoted plan-contract invariant (SPEC.md line in legacy mode; INTENT.md acceptance-checklist item in intent mode), (b) a high-risk task in TASKS.md, or (c) a user-stated concern from Phase 1. No orphan tests.
 - **Cross-LLM consult is non-skippable.** This is the entire point of `/z-test` — Claude alone reliably generates trivial tests; the cross-LLM step catches the bug classes it would otherwise miss.
 - **No test execution.** `/z-test` is planning, not execution. The implementer writes the test code (in the same task as its production code); `/z-implement-all`'s per-task acceptance check runs it; `/z-review-all`'s final gate runs the suite.
-- **No SPEC.md / PLAN.md edits.** Only writes TESTS.md and appends `**Tests:**` lines to TASKS.md.
+- **No plan-contract edits.** Only writes TESTS.md and appends `**Tests:**` lines to TASKS.md. Does not modify SPEC.md, PLAN.md, INTENT.md, or LEDGER.md.
 - **No new agents dispatched.** Reuses `consultant-primary` and `consultant-secondary` only.
 - **No emojis** anywhere in TESTS.md.
 
@@ -236,7 +257,7 @@ If a task already has a `**Tests:**` line from a prior `/z-test` invocation, **m
 
 - Does not run any tests (deferred to /z-implement-all + /z-review-all).
 - Does not write actual test code (the implementer subagent does, in the task's diff).
-- Does not modify SPEC.md or PLAN.md (only appends `**Tests:**` to TASKS.md and creates TESTS.md).
+- Does not modify the plan contract (SPEC.md / PLAN.md in legacy mode; INTENT.md / LEDGER.md in intent mode) — only appends `**Tests:**` to TASKS.md and creates TESTS.md.
 - No implementer-subagent dispatch (all ideation in orchestrator main thread + cross-LLM consult, same model as /z-plan-light).
 - No `--apply` flag — Phase 5 `AskUserQuestion` is the only write gate. The user can re-run `/z-test` later to add more tests; merge semantics in Phase 7 handle this.
 

@@ -184,6 +184,7 @@
         "commands/z-plan.md",
         "commands/z-providers-discover.md",
         "commands/z-sharpen.md",
+        "commands/z-report.md",
         "commands/z-research.md",
         "commands/z-review-all.md",
         "commands/z-skill-fix.md",
@@ -197,7 +198,7 @@
         "commands/z-handoff.md",
         "commands/z-doc-rationale.md"
       ],
-      "last_updated": "2026-06-09",
+      "last_updated": "2026-06-18",
       "confidence": "high",
       "depends_on": [
         "agents",

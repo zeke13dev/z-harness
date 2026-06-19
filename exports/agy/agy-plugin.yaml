@@ -183,6 +183,11 @@ workflows:
     source: commands/z-providers-discover.md
     output: .agent/workflows/z-providers-discover.md
     description: Discover LLM CLI providers in PATH and generate providers.json.
+    description: "Interactive premise refinement — conversational on-ramp. Probes, clarifies,"
+  - id: z-report
+    source: commands/z-report.md
+    output: .agent/workflows/z-report.md
+    description: "Depth-tiered narrative of exactly what happened + what follow-ups exist, for a z-harness run or past work (run-id / plan-slug / PR / commit-range). User-invoked, read-only, composes existing reporting primitives. Does not auto-fire."
   - id: z-research
     source: commands/z-research.md
     output: .agent/workflows/z-research.md
@@ -215,10 +220,14 @@ workflows:
     source: commands/z-suggest-memory.md
     output: .agent/workflows/z-suggest-memory.md
     description: "Authoring skill for the docs/llm/ memory layer. Called mandatorily from /z-debug post-mortem and /z-improve retro. Validates input against the memory schema, writes to docs/llm/<slug>.json, regenerates docs/llm/MEMORIES-FLAT.md, optionally extract..."
+  - id: z-test-prune
+    source: commands/z-test-prune.md
+    output: .agent/workflows/z-test-prune.md
+    description: "Read-only test-suite pruning planner complementing /z-test. Scans an existing test suite, classifies prunable tests under a four-category rubric with hard keep-guards, runs a mandatory cross-LLM adversarial defend-pass, and emits TEST-PRUNE.md (a ..."
   - id: z-test
     source: commands/z-test.md
     output: .agent/workflows/z-test.md
-    description: "System-level invariant test planner. Reads INVARIANTS.json + SPEC.md + PLAN.md + TASKS.md, matches invariants to tasks via tag-based mapping, drafts behavioral tests keyed to durable system invariants, cross-LLM consult with invariant coverage ana..."
+    description: "System-level invariant test planner. Supports both legacy mode (SPEC.md + PLAN.md + TASKS.md) and intent mode (INTENT.md + TASKS.md + LEDGER.md). Reads INVARIANTS.json when present (user-authored, optional — no generator; absent is normal). Drafts..."
   - id: z-update
     source: commands/z-update.md
     output: .agent/workflows/z-update.md
@@ -334,6 +343,11 @@ rules:
     output: .agent/rules/z-harness-remote-runner.md
     trigger: always_on
     description: "Haiku subagent that handles MECHANICAL remote work — rsync local repo to a per-(slug, task-id) sandbox on the remote host, run cargo build/check/clean, restart paper qtctl manifests, tail logs, run READ-ONLY DB/disk/log queries against shared stat..."
+  - id: report-synth
+    source: agents/report-synth.md
+    output: .agent/rules/z-harness-report-synth.md
+    trigger: model_decision
+    description: "Fresh-context Sonnet synthesis subagent for /z-report. Reads context.json (assembled by scripts/report-context.py) plus any artifact/diff paths it cites, then returns ONE narrative markdown at the requested tier (summary|standard|deep). Read-only ..."
   - id: research-judge
     source: agents/research-judge.md
     output: .agent/rules/z-harness-research-judge.md

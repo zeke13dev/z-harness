@@ -125,7 +125,7 @@ This gate is mandatory. If the user picks "yes," exit cleanly even if `$ARGUMENT
 
 <!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the problem
      clarification questions via their native channel. Silent omission is forbidden. -->
-Ask clarifying questions via `AskUserQuestion`:
+Ask these clarifying questions conversationally — a plain reply, **not** an `AskUserQuestion` popup (they need free-text answers anyway):
 
 - "What was the expected behavior?"
 - "What actually happens?"
@@ -725,7 +725,7 @@ If either fails: halt. Either upgrade the root cause statement (so it actually e
 3. **Synthesize + push back.** One reason it might be wrong per recommendation. Flag shortcuts.
 <!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the fix approval
      question via their native channel. Silent omission is forbidden. -->
-4. **Present + approve.** `AskUserQuestion` with the synthesized fix.
+4. **Present + approve.** Present the synthesized fix as a conversational brief — the approach, the one reason each recommendation might be wrong (from step 3), and any flagged shortcuts with their tradeoff — then give your recommendation and invite the user to reply (approve as proposed / modify <X> / abandon). Do **not** use an `AskUserQuestion` popup; this is a design decision the user should be able to interrogate.
 5. **Write `## Fix Plan`** section to DEBUG.md (schema mirrors `/z-plan-light` Phase 6 FIX.md):
 
    ```markdown

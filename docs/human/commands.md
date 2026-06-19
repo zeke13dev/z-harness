@@ -1,7 +1,7 @@
 # Commands
 
-> Last updated: 2026-06-08
-> Covers source: commands/z-amend.md, commands/z-audit.md, commands/z-audit-plan.md, commands/z-audit-plan-style.md, commands/z-brainstorm.md, commands/z-debug.md, commands/z-do.md, commands/z-export.md, commands/z-explain.md, commands/z-fix.md, commands/z-followup-confirm.md, commands/z-followup-dismiss.md, commands/z-followup-list.md, commands/z-followup-next.md, commands/z-followup-refresh.md, commands/z-followup-status.md, commands/z-git-guardrails.md, commands/z-grill.md, commands/z-implement-all.md, commands/z-implement-next.md, commands/z-improve.md, commands/z-init-docs.md, commands/z-learn.md, commands/z-maintain-docs.md, commands/z-map.md, commands/z-mr-review.md, commands/z-overnight.md, commands/z-plan-light.md, commands/z-plan-split.md, commands/z-plan.md, commands/z-providers-discover.md, commands/z-sharpen.md, commands/z-research.md, commands/z-review-all.md, commands/z-skill-fix.md, commands/z-stats.md, commands/z-style-init.md, commands/z-suggest-memory.md, commands/z-test.md, commands/z-update.md, commands/z-uplift.md, commands/z-where.md
+> Last updated: 2026-06-18
+> Covers source: commands/z-amend.md, commands/z-audit.md, commands/z-audit-plan.md, commands/z-audit-plan-style.md, commands/z-brainstorm.md, commands/z-debug.md, commands/z-do.md, commands/z-export.md, commands/z-explain.md, commands/z-fix.md, commands/z-followup-confirm.md, commands/z-followup-dismiss.md, commands/z-followup-list.md, commands/z-followup-next.md, commands/z-followup-refresh.md, commands/z-followup-status.md, commands/z-git-guardrails.md, commands/z-grill.md, commands/z-implement-all.md, commands/z-implement-next.md, commands/z-improve.md, commands/z-init-docs.md, commands/z-learn.md, commands/z-maintain-docs.md, commands/z-map.md, commands/z-mr-review.md, commands/z-overnight.md, commands/z-plan-light.md, commands/z-plan-split.md, commands/z-plan.md, commands/z-providers-discover.md, commands/z-sharpen.md, commands/z-report.md, commands/z-research.md, commands/z-review-all.md, commands/z-skill-fix.md, commands/z-stats.md, commands/z-style-init.md, commands/z-suggest-memory.md, commands/z-test.md, commands/z-update.md, commands/z-uplift.md, commands/z-where.md
 
 ## Overview
 
@@ -58,6 +58,7 @@ The command surface is organized around explicit routing, durable artifacts, and
 - `commands/z-providers-discover.md:1` — `z-providers-discover` — Probes PATH for LLM CLIs and writes providers.json with role bindings.
 - `commands/z-map.md:1` — `z-map` — Maps terrain with citations and cross-LLM critique. No recommendations — terrain only. Produces MAP.md. See /z-research for synthesis.
 - `commands/z-sharpen.md:1` — `z-sharpen` — Conversational bounded idea-sharpener. Probes, reframes, and converges a vague idea into a buildable problem statement, escalating to pin individual fuzzy dimensions (with a recommended answer) only as needed. Never full `/z-grill` exhaustiveness. Writes `GRILL.md` as precontext for `/z-plan` or `/z-brainstorm`; also auto-invoked as `/z-brainstorm` Phase 0. Three logging events: `sharpen_run_start`, `sharpen_convergence`, `sharpen_run_end`.
+- `commands/z-report.md:1` — `z-report` — Depth-tiered narrative of exactly what happened + what follow-ups exist, for a z-harness run or past work. User-invoked; read-only; composes `scripts/report-context.py` (context bundle) + `report-synth` subagent (Sonnet narrative). Arg grammar: `[target] [summary|standard|deep] | --run <id> --slug <s> --pr <N|url> --range <A..B> --base <ref> --save <path>`. Depth tiers: `summary` (1-para TL;DR + outcome + top-3 follow-ups), `standard` (adds phase wall-time table, decision audit trail, friction headline), `deep` (adds diff/step walkthrough, selected event payloads, cost breakdown). Fast path: `mode=run` + `summary` + `run-brief.json` present => `render-run-brief.py`, skip subagent. Size gate at `standard|deep` when diff>100KB or events>512K chars: presents AskUser (proceed / downgrade / summary-only). Inline deterministic fallback when subagent unavailable: status line, decision table, follow-up list, cost line, phase wall-time table — never silent-fail. Writes `REPORT.md` atomically to run-dir (run/slug modes); `--save <path>` writes to any mode. Advisory handoffs in prose only (never auto-dispatch): `/z-improve` for friction, `/z-followup-next` for open follow-ups, `/z-explain` for code questions. RUNTIME-GATEs: `subagent` (Phase 2 report-synth), `ask_user` (Phase 0 ambiguous target; Phase 2 large-context size gate). Telemetry: `report_run_start` / `report_run_end`.
 - `commands/z-research.md:1` — `z-research` — Higher-order meta-orchestrator: composes /z-map and /z-brainstorm, runs adversarial synthesis panel (3 perspectives + research-judge), produces RESEARCH.md with 10-section schema including approach decision matrix. Cost 3–6M tokens. Phase 1 dispatches both sub-commands in parallel when both need to run; disambiguates sub-run archives by reading the first event's `kind` field (`map_run_start` vs `brainstorm_run_start`).
 - `commands/z-review-all.md:1` — `z-review-all` — Final-gate cross-LLM review of a completed plan's cumulative diff against SPEC.md, then auto-runs memory review (Phase 7). Phase 0 consumer check halts if any project-sink entry has status=running (emits `review_halted_followup_running`). Phase 3.7.5 routes non-halting findings to the project sink via `scripts/sink-add.sh` (emits `followups_routed_to_sink`). Phase 6.5 auto-amends amendment proposals (spec_gap) by severity via `/z-amend --skip-user-gate` — blocker/major/minor all auto-amend without asking; implementation_drift stays as candidate fixup tasks. `check-no-ask` halt branch at `workflow.review_all_proceed` emits `review_halt` and writes partial `.review_state.json`; re-invocation detects `halt_reason: "no_ask_blocked"` and resumes at Phase 3.7.
 - `commands/z-skill-fix.md:1` — `z-skill-fix` — Diagnoses and patches misleading skill or command files.
@@ -178,7 +179,20 @@ Typical chains:
 
 - **`/z-stats`** — Read-only progress + cost report from `metrics.jsonl` and TASKS.md. Phase 0b prints a header with resolved base, repo-id, and active-plan count (from the active-plan registry) before any slug-specific output.
 - **`/z-where`** — Read-only concurrent-run diagnostic. No LLM calls, no subagent dispatch. Prints resolved base + repo-id (Phase 0), then a table of all active plans from the registry (slug, command, phase, branch, current_task, age, status) (Phase 1). Optionally shows path-overlap with a specific run via `--run-id <id>` or `Z_HARNESS_RUN_ID` (Phase 2). Robust to registry unavailability — always exits cleanly.
+- **`/z-report [target] [depth]`** — Depth-tiered narrative of exactly what happened and what follow-ups exist, for a z-harness run or past work. User-invoked; read-only; composes `scripts/report-context.py` + `report-synth` subagent. Resolves targets by run-id shape, plan slug, PR number/URL, or git range. See [boundary table below](#z-report-boundary-table).
 - Export pipeline — `/z-export` is a thin orchestration shell around `scripts/export-<target>.py` adapter scripts; it does no file I/O itself.
+
+### z-report boundary table
+
+Use this table to pick the right command when you want a "what happened" or "what should I do next" answer:
+
+| Command | Purpose | Output |
+|---|---|---|
+| `/z-report` | Per-run descriptive narrative — what happened, decisions made, follow-ups, phase timings | `REPORT.md` or chat narrative |
+| `/z-stats` | Metrics and cost numbers for a run — token counts, wall times, active plans | Chat table from `metrics.jsonl` |
+| `/z-improve` | Prescriptive harness retro — what to change in z-harness itself next time | Improvement proposals |
+| `/z-overnight` → `MORNING_REPORT.md` | Overnight aggregate — summary of an unattended chain of sub-commands | `MORNING_REPORT.md` |
+| `/z-explain` | Code explainer — line-level walkthrough of a file or symbol | Structured code explanation |
 
 ## Edge cases / gotchas
 
@@ -280,6 +294,13 @@ Typical chains:
 - Refresh docs and glossary together: `/z-maintain-docs --glossary`
 - Bootstrap docs without creating CONTEXT.md: `/z-init-docs --no-glossary`
 - Check memory-review history for a run: `/z-stats` (see Phase 4b output)
+- Narrative of what happened in the latest run (standard tier): `/z-report`
+- Quick TL;DR of the latest run: `/z-report summary`
+- Narrative for a specific run-id: `/z-report --run 20260601T120000Z-implement`
+- Narrative for a plan slug: `/z-report --slug my-feature`
+- Deep narrative for a PR: `/z-report --pr 42 deep`
+- Narrative for a git range: `/z-report --range main..HEAD`
+- Save the report to a specific file: `/z-report --save /tmp/my-report.md`
 - See all concurrent active plans and resolved base: `/z-where`
 - Check path-overlap with a specific running implementation: `/z-where --run-id 20260601T120000Z-implement`
 - Run bulk quality uplift across the whole repo: `/z-uplift`
