@@ -996,9 +996,11 @@ This branch is a **discussion loop**. There is no menu; interpret the user's fre
    ## User choice
 
    **Chosen framing:** <framing label>
+   <!-- For a single ideator pick: framing label is the ideator id (e.g. "claude", "codex", "gemini") -->
+   <!-- For synthesized: framing label is "synthesized" or a descriptive label (e.g. "Synthesized: Codex framing + Claude risk model") -->
 
-   <For a single ideator pick: reproduce the ideator's framing block verbatim so /z-plan can find it without re-parsing>
-   <For synthesized: include the full co-authored hybrid text — this is what seeds /z-plan>
+   <For a single ideator pick: reproduce the ideator's framing block verbatim (all five sections) so /z-plan can find it without re-parsing>
+   <For synthesized: write the FULL co-authored hybrid text — the merged framing born from the discussion (e.g. "Codex's framing + Claude's risk model"). This is the text the orchestrator and user co-authored conversationally, NOT a verbatim copy of any single vendor's framing block. Include all five sections (Framing / Core hypothesis / Risks / Plan implications / What would change my mind) so /z-plan has a complete seed>
 
    <Any free-text refinement the user added during the discussion>
    ```

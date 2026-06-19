@@ -32,6 +32,7 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
 - _(auto)_ Foundation — z-sharpen rework, ideator-clusterer agent, wide_overflow_model knob (T001/T003/T004) _(brainstorm)_
 - _(auto)_ Rename refs to z-sharpen + Phase 0 sharpen gate/count parse/wide-heavy suppression (T002/T005) _(brainstorm)_
 - _(auto)_ Conversational tail — ranked briefing + discussion loop + guardrail (T006) _(brainstorm)_
+- _(auto)_ Re-spin divergence-wave machinery (T007) _(brainstorm)_
 
 ## 2026-06-17
 
