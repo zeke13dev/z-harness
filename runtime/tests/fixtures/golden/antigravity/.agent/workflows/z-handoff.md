@@ -141,10 +141,10 @@ Validate mechanically before writing:
 
 ## Phase 3 — Write handoff.json
 
-Write `handoff.json` to the **workspace root** (the directory where the agent was invoked, typically the repo root or `$PWD`):
+Write `handoff.json` to the **plan directory** — `$Z_HARNESS_PLAN_DIR/handoff.json`. This is the canonical home: it sits next to `SESSION.md`/`TASKS.md`/`LEDGER.md` (the artifacts `context_files` points at), it survives a `/clear` and a change of working directory, and it matches where `scripts/write-handoff.sh` (the automated `/z-implement-all` producer) and `/z-attend` (the resume consumer) read and write the token. Only fall back to the workspace root when there is genuinely no active plan (`slug` is null):
 
 ```bash
-HANDOFF_PATH="${WORKSPACE_ROOT:-$PWD}/handoff.json"
+HANDOFF_PATH="${Z_HARNESS_PLAN_DIR:-${WORKSPACE_ROOT:-$PWD}}/handoff.json"
 ```
 
 Write atomically: write to a temp file, then rename:
@@ -156,7 +156,7 @@ HANDOFF_EOF
 mv "${HANDOFF_PATH}.tmp.$$" "$HANDOFF_PATH"
 ```
 
-The orchestrator (Hermes) looks for `handoff.json` in the workspace root. Do NOT write it inside `$Z_HARNESS_PLAN_DIR` or any subdirectory.
+When in a plan, the resume consumers (`/z-attend`, the `/z-implement-all` compaction flow) look for `handoff.json` inside `$Z_HARNESS_PLAN_DIR`. Write it there. The workspace-root path is only the plan-less fallback.
 
 ### Alternate output: SESSION.md
 
@@ -252,7 +252,7 @@ After writing `handoff.json`:
 
 ## Hard rules
 
-- **Write to workspace root, not plan dir.** `handoff.json` goes in `$PWD` (or `$WORKSPACE_ROOT`). The orchestrator looks for it there.
+- **Write to the plan dir when in a plan.** `handoff.json` goes in `$Z_HARNESS_PLAN_DIR` (the canonical home, co-located with SESSION.md/TASKS.md). Fall back to `$PWD`/`$WORKSPACE_ROOT` only when there is no active plan.
 - **Never duplicate plan state.** `context_files` points to SPEC/PLAN/TASKS — do not inline their contents in `next_step`.
 - **next_step must be specific.** A fresh agent session must be able to begin work from `next_step` alone.
 - **No agent-specific branching.** The command works identically for pi, Claude Code, and any future agent. The `agent` field is provenance only.
@@ -260,4 +260,4 @@ After writing `handoff.json`:
 - **Atomic write.** Use temp-file in same directory + rename so the orchestrator never sees a partially-written `handoff.json`.
 - **At least 1 context file.** An empty `context_files` array is invalid. If no files are found, include a fallback file from the workspace root.
 - **next_step max 2000 chars.** If the auto-detected prompt is too long, summarize. Empty string is valid when status is `"complete"`.
-- **Pre-existing handoff.json is overwritten.** If `handoff.json` already exists in the workspace root, overwrite it. The orchestrator is responsible for consuming it before a new one is written.
+- **Pre-existing handoff.json is overwritten.** If `handoff.json` already exists at the target path, overwrite it. The consumer is responsible for reading it before a new one is written.

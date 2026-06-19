@@ -29,7 +29,12 @@ runtime/drivers/codex/probe_results.json
 
 # z-harness runtime — plan artifacts, archives, telemetry, ambient plan dirs.
 # Everything under z-harness/ is local workflow output; not version-controlled.
+# The canonical artifact base is external (~/.local/state/z-harness/<repo-id>/);
+# these in-repo dirs are legacy/ambient fallbacks and must never be tracked.
 z-harness/
+/plans/
+/state/
+.z-harness/plans/
 
 # Stale tmpfiles from aborted diff captures / atomic-write fallouts
 *.tmp

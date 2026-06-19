@@ -37,18 +37,59 @@ FAIL=0
 # Cleanup
 # ---------------------------------------------------------------------------
 
-CLEANUP_DIRS=()
+# Cleanup registry is a FILE, not a bash array: `_tmpdir` is invoked via
+# command substitution (`d="$(_tmpdir)"`), which runs it in a subshell — an
+# array append there is lost to the parent, so the EXIT trap would see an empty
+# list and clean up nothing (the long-standing cause of leaked tmp dirs and
+# orphaned lock daemons accumulating across runs). A file survives the subshell
+# through the filesystem, so the parent's trap sees every registered path.
+CLEANUP_REGISTRY="$(mktemp "${TMPDIR:-/tmp}/test_plan_claim_registry_XXXXXX")"
+# Snapshot lock-holder daemons alive BEFORE this run so the final reap sweep can
+# exclude them — a concurrent unrelated process (or a parallel test run) must
+# never have its daemons killed by us.
+DAEMONS_AT_START="$(ps axww -o pid=,command= 2>/dev/null | grep 'signal.pause()' | awk '{print $1}' | sort -u)"
 _cleanup_all() {
-  for d in "${CLEANUP_DIRS[@]:-}"; do
+  [[ -f "$CLEANUP_REGISTRY" ]] || return 0
+  while IFS= read -r d; do
+    [[ -n "$d" ]] || continue
+    # Reap lock-holder daemons spawned under this dir. Negative-path cases
+    # (contention, non-matching release, stale takeover) deliberately leave a
+    # `sink-lock.sh acquire` daemon blocked in signal.pause(); without this the
+    # daemon outlives the test, orphaned on a deleted tmp path, and accumulates
+    # across runs. Each daemon records its own PID in the `.lock` holder JSON
+    # (the same field cmd_release reads), so reap by that — robust against
+    # `ps` command-line truncation, and scoped to this dir's unique mktemp tree
+    # so we only ever kill daemons this test process created.
+    while IFS= read -r lockf; do
+      [[ -s "$lockf" ]] || continue
+      pid="$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$lockf" 2>/dev/null | head -1)"
+      [[ -n "$pid" ]] && kill -TERM "$pid" 2>/dev/null || true
+    done < <(find "$d" -type f -name '*.lock' ! -name '*.flock' ! -name '*.hb.lock' 2>/dev/null)
     [[ -d "$d" ]] && rm -rf "$d" 2>/dev/null || true
-  done
+  done < "$CLEANUP_REGISTRY"
+  rm -f "$CLEANUP_REGISTRY" 2>/dev/null || true
+
+  # Final backstop sweep. The graceful per-dir pass above misses daemons whose
+  # holder record was overwritten (TC06 corrupts then nulls its lock file, so no
+  # PID remains to read) or whose SIGTERM handler wedges on a corrupt `.hb.lock`.
+  # Reap them by SIGKILL (uncatchable — a wedged handler can't block it), keyed
+  # on this test's unique `test_plan_claim_` tmp prefix, and skipping any daemon
+  # that predates this run so a concurrent process is never touched. This runs
+  # once after all dirs, sidestepping a per-dir `ps` timing race.
+  while read -r pid _; do
+    [[ -n "$pid" ]] || continue
+    printf '%s\n' "$DAEMONS_AT_START" | grep -qx "$pid" && continue
+    kill -KILL "$pid" 2>/dev/null || true
+  done < <(ps axww -o pid=,command= 2>/dev/null \
+            | grep 'signal.pause()' | grep -F 'test_plan_claim_' | awk '{print $1, $0}')
 }
 trap _cleanup_all EXIT
 
 _tmpdir() {
   local d
   d="$(mktemp -d "${TMPDIR:-/tmp}/test_plan_claim_XXXXXX")"
-  CLEANUP_DIRS+=("$d")
+  # Register via the file so the path survives this command-substitution subshell.
+  printf '%s\n' "$d" >> "$CLEANUP_REGISTRY"
   printf '%s' "$d"
 }
 
