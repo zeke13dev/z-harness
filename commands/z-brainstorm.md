@@ -1027,24 +1027,170 @@ This branch is a **discussion loop**. There is no menu; interpret the user's fre
 
 ### Re-spin machinery
 
-<!-- T007: implement re-spin / divergence-wave dispatch here. This section is a seam
-     placeholder. The discussion loop (LIGHT/MEDIUM branch) and the wide-mode overflow
-     path both reference "re-spin machinery" and expect this section to exist.
+This section is a **shared helper** used by the Phase 4 discussion loop (LIGHT/MEDIUM branch) and by T011's wide-mode overflow. Both callers reference "re-spin machinery" — implement once here, invoke by name from both sites.
 
-     Contract expected by the discussion loop (T006):
-     - Input: `narrowed_direction` string, current BRAINSTORM.md wave count.
-     - Action: re-dispatch a subset of ideators, each seeded with
-       `narrowed_direction + "Here are the existing framings: <…>. Produce something
-       that diverges from them — attack a different axis."`.
-     - Cap: 3 waves total. Each re-spin emits a one-line cost note to the user
-       ("re-spin N/3, ~X tokens").
-     - Output: new framings appended to BRAINSTORM.md under their wave header so the
-       discussion can re-read them; the file is the resumable state.
-     - After each re-spin: the caller (discussion loop) re-presents an updated ranked
-       briefing and ends the turn.
--->
+#### Inputs
 
-Re-spin and divergence-wave dispatch is implemented in T007. When the user requests a re-spin in the Phase 4 discussion loop, follow the machinery defined in T007's implementation here.
+Before executing a re-spin wave, the caller must have determined:
+
+- `RESPIN_DIRECTION` — the narrowed direction string from the user (e.g. "focus on the security axis" or the user's challenge text). If the caller is the discussion loop, derive this from the user's challenge or re-spin request. If the caller is wide-mode overflow, this is the divergence axis not yet covered by prior waves.
+- `RESPIN_WAVE` — the wave number being dispatched (1, 2, or 3). Track this in the run context. Wave 1 is the first re-spin (not the original Phase 2 dispatch).
+- `RESPIN_PRIOR_FRAMINGS` — the concatenated framing blocks (five-section schema) from all ideators dispatched so far (Phase 2 wave + any prior re-spin waves). Extract these from the BRAINSTORM.md body — every `## Framing` subsection under every wave header.
+
+#### Cap enforcement
+
+**Hard cap: 3 re-spin waves maximum.** Before dispatching:
+
+```bash
+if [[ "${RESPIN_WAVE:-1}" -gt 3 ]]; then
+  # Inform the user that the re-spin cap has been reached.
+  # Do NOT dispatch any ideators. Return to the discussion loop.
+  echo "Re-spin cap reached (3/3). No further re-spin waves are available for this brainstorm run." >&2
+  exit 0
+fi
+```
+
+If the cap is reached, tell the user conversationally: "We've reached the re-spin limit (3 waves). If the current options still don't fit, consider a Restart to brainstorm a refined topic from scratch." Do not dispatch any ideators. End your turn.
+
+#### Subset selection
+
+A re-spin dispatches **2 of the 3** vendor arms (not all 3), chosen to maximise diversity relative to what already returned divergent framings. Default subset: `general-purpose` (Claude) + one consultant arm chosen round-robin:
+
+- Wave 1 → Claude + Codex (`general-purpose` + `consultant-secondary`)
+- Wave 2 → Claude + Gemini (`general-purpose` + `consultant-primary`)
+- Wave 3 → Codex + Gemini (`consultant-secondary` + `consultant-primary`)
+
+Rationale: keeping Claude in waves 1 and 2 anchors the synthesis comparison; wave 3 drops Claude to force a fully non-Claude axis. The caller (discussion loop or wide mode) does NOT need to pick the subset — the wave number determines it deterministically.
+
+#### Anti-seed prompt construction
+
+Build the anti-seed payload once before dispatching both ideators. It must contain:
+
+1. The `narrowed_direction` from `RESPIN_DIRECTION`.
+2. The full text of `RESPIN_PRIOR_FRAMINGS` (all existing framing blocks), labelled clearly.
+3. The divergence instruction (verbatim, do not paraphrase):
+
+   > "Here are the existing framings from this brainstorm run. Produce something that **diverges from all of them** — attack a **different axis** (different core hypothesis, different problem decomposition, different target user, or different solution lever). Do NOT restate, synthesize, or incrementally improve an existing framing. The goal is genuine divergence."
+
+Full anti-seed prompt template for each re-spin ideator:
+
+```
+<PERSONA_PREFIX (same resolution as Phase 2 — draw a fresh random persona for this ideator slot for this wave)>
+MODE: brainstorm
+
+Topic: <topic>
+
+Narrowed direction from the user: <RESPIN_DIRECTION>
+
+Here are the existing framings from this brainstorm run:
+
+<RESPIN_PRIOR_FRAMINGS>
+
+Produce something that diverges from all of them — attack a different axis (different core hypothesis, different problem decomposition, different target user, or different solution lever). Do NOT restate, synthesize, or incrementally improve an existing framing. The goal is genuine divergence.
+
+<IDEATOR_SCHEMA (same five-section schema as Phase 2)>
+```
+
+#### Cost estimate and user notification
+
+Before dispatching the ideators, emit a one-line cost note to the user (inline in your response, not a log event):
+
+> "Re-spin `<RESPIN_WAVE>`/3, ~`<N_IDEATORS × estimated_tokens>` tokens — dispatching `<N_IDEATORS>` ideators on a divergent axis."
+
+Use `N_IDEATORS = 2`. Token estimate: ~1,500 tokens per ideator call (input + output combined) is a reasonable heuristic for brainstorm-scale prompts; use `~3,000 tokens total` for the two-ideator subset. If the actual payload is materially larger (e.g. RESPIN_PRIOR_FRAMINGS is very long), adjust the estimate up — the goal is a directionally correct number, not precision.
+
+#### Dispatch
+
+```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     requirement to the user and skip the re-spin ideator Agent() calls.
+     Re-spin cannot complete without subagent support. -->
+```
+
+Dispatch the subset pair in **parallel** (same as Phase 2 parallel dispatch):
+
+**Wave 1 and Wave 2 (Claude + one consultant):**
+
+```
+Agent(
+  subagent_type="general-purpose",
+  model="sonnet",
+  description="Claude re-spin ideator wave <RESPIN_WAVE> for <slug>",
+  prompt="<anti-seed prompt for Claude, per template above>"
+)
+Agent(
+  subagent_type="<consultant-secondary|consultant-primary per wave>",
+  description="<Codex|Gemini> re-spin ideator wave <RESPIN_WAVE> for <slug>",
+  prompt="<anti-seed prompt for that consultant, per template above>"
+)
+```
+
+**Wave 3 (Codex + Gemini, no Claude):**
+
+```
+Agent(
+  subagent_type="consultant-secondary",
+  description="Codex re-spin ideator wave 3 for <slug>",
+  prompt="<anti-seed prompt for Codex>"
+)
+Agent(
+  subagent_type="consultant-primary",
+  description="Gemini re-spin ideator wave 3 for <slug>",
+  prompt="<anti-seed prompt for Gemini>"
+)
+```
+
+Apply the same persona resolution as Phase 2 (draw a fresh random persona per ideator slot per wave, if `brainstorm.personas` is ON; skip if OFF or underflow). The anti-seed instruction is in addition to — not instead of — the persona prefix.
+
+#### Failure policy
+
+Apply the same failure policy as Phase 2 ideators:
+
+- **1/2 fail** → proceed with the surviving one. Record the failed member as `<id>:failed` in the wave header comment (see BRAINSTORM.md append below).
+- **2/2 fail** → inform the user conversationally ("Both re-spin ideators failed — re-spin wave `<N>` produced no new framings"). Do NOT decrement `RESPIN_WAVE` (the wave still consumed a slot toward the cap). Return to the discussion loop without appending to BRAINSTORM.md for this wave.
+
+Log every individual failure as `ideator_failed` with `{vendor, reason, wave: RESPIN_WAVE}`.
+
+#### Telemetry
+
+Emit a `respin_wave` event immediately after the ideators return (regardless of failure):
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" respin_wave \
+  "$(python3 -c 'import json,sys; print(json.dumps({"wave":int(sys.argv[1]),"n_ideators":int(sys.argv[2]),"failed":int(sys.argv[3])}))' \
+     "$RESPIN_WAVE" "2" "<0 or number of failed ideators>")"
+```
+
+#### BRAINSTORM.md append
+
+On success (at least 1 surviving ideator), append to `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md` under a new wave header. Do NOT rewrite the file — append only:
+
+```markdown
+
+## Re-spin wave <RESPIN_WAVE>
+
+<!-- re-spin direction: <RESPIN_DIRECTION> -->
+<!-- ideators: <list of dispatched ideators, e.g. claude, codex>; failed: <list or "none"> -->
+
+### Framing — <ideator-id> (re-spin wave <RESPIN_WAVE>)
+
+<five-section block from ideator, verbatim>
+
+### Framing — <ideator-id> (re-spin wave <RESPIN_WAVE>)
+
+<five-section block from second ideator, if surviving>
+```
+
+The wave header (`## Re-spin wave N`) makes the file self-describing and allows the discussion loop to locate all prior framings by scanning from the top. The `<!-- re-spin direction -->` comment preserves the narrowing context for any future resumption.
+
+#### Post-dispatch: return to the caller
+
+After appending to BRAINSTORM.md and emitting the `respin_wave` event:
+
+- **If called from the Phase 4 discussion loop:** produce an updated ranked briefing that incorporates the new wave's framings alongside the original Phase 2 framings, then end your turn. The ranked briefing follows the same format as the Phase 3 briefing (pros/cons, consensus vs divergence, recommendation). Do NOT auto-lock-in a framing — wait for the user's next reply.
+- **If called from wide-mode overflow (T011):** return the new framings to the caller for clustering by `ideator-clusterer`; do not produce a ranked briefing here (the wide-mode path handles presentation).
+
+The RESPIN_WAVE counter must be incremented by the caller after a successful dispatch (including partial-success single-survivor waves). A fully-failed wave (2/2 fail) does NOT increment the counter toward the cap (the slot is not consumed).
 
 ---
 
