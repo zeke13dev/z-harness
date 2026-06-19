@@ -17,6 +17,7 @@ Cases covered:
   test_circular_include               — A -> B -> A raises ValueError
 
   test_enumerate_sources_keys         — enumerate_sources returns required keys
+  test_enumerate_sources_skills_non_empty_commands_backcompat_empty  — skills non-empty, commands==[] by design
   test_validate_capabilities_valid    — valid CAPABILITIES.md returns no errors
   test_validate_capabilities_missing  — missing required section is reported
   test_export_result_dataclass        — ExportResult has correct fields
@@ -114,7 +115,7 @@ class TestFenceSkip:
 
     def test_fence_skip_four_backtick(self):
         """Ensure 4+ backtick fences are also detected (regression from test_export_common)."""
-        marker = "<!-- include: commands/_fragments/run-brief-finalize.md -->"
+        marker = "<!-- include: _fragments/run-brief-finalize.md -->"
         fenced = f"````\n{marker}\n````\n"
         expanded = expand_includes(fenced, _REPO_ROOT)
         assert marker in expanded
@@ -148,7 +149,8 @@ class TestCircularInclude:
 
     def test_circular_include(self, tmp_path):
         # Cycle fragments must live under repo_root (path-escape guard).
-        fragments_dir = _REPO_ROOT / "commands" / "_fragments"
+        # _fragments/ is at the repo root (commands/_fragments/ was removed).
+        fragments_dir = _REPO_ROOT / "_fragments"
         cycle_dir = Path(
             tempfile.mkdtemp(prefix=".test-cycle-", dir=fragments_dir)
         )
@@ -178,10 +180,13 @@ class TestEnumerateSources:
         sources = enumerate_sources(_REPO_ROOT)
         assert set(sources.keys()) == {"commands", "agents", "skills"}
 
-    def test_enumerate_sources_commands_non_empty(self):
-        """commands list must be non-empty in this repo."""
+    def test_enumerate_sources_skills_non_empty_commands_backcompat_empty(self):
+        """skills list must be non-empty; commands is [] (back-compat empty key) by design."""
         sources = enumerate_sources(_REPO_ROOT)
-        assert len(sources["commands"]) > 0, "Expected at least one command source"
+        assert sources["commands"] == [], (
+            "commands key must be empty list — skills/ is now the primary source tier"
+        )
+        assert len(sources["skills"]) > 0, "Expected at least one skill source"
 
     def test_enumerate_sources_entry_shape(self):
         """Each entry must have id, source_path, frontmatter, body."""

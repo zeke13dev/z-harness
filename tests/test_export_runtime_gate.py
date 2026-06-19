@@ -39,21 +39,19 @@ from runtime.drivers._export_utils import enumerate_sources, _parse_frontmatter 
 # ---------------------------------------------------------------------------
 
 def _make_fixture_repo(tmp: Path) -> Path:
-    """Create a minimal fixture repo with one command carrying a RUNTIME-GATE comment."""
+    """Create a minimal fixture repo with one skill carrying a RUNTIME-GATE comment."""
     repo = tmp / "fixture_repo"
-    commands_dir = repo / "commands"
-    commands_dir.mkdir(parents=True)
     agents_dir = repo / "agents"
-    agents_dir.mkdir()
-    skills_dir = repo / "skills"
-    skills_dir.mkdir()
+    agents_dir.mkdir(parents=True)
 
-    # Fixture command: includes a RUNTIME-GATE comment with category=risk
-    fixture_cmd = commands_dir / "z-fixture-gate.md"
-    fixture_cmd.write_text(
+    # Fixture skill: skills/<id>/SKILL.md layout (post-migration)
+    skill_dir = repo / "skills" / "z-fixture-gate"
+    skill_dir.mkdir(parents=True)
+    fixture_skill = skill_dir / "SKILL.md"
+    fixture_skill.write_text(
         textwrap.dedent("""\
         ---
-        description: Fixture command for RUNTIME-GATE token-survival test
+        description: Fixture skill for RUNTIME-GATE token-survival test
         ---
 
         ## Phase 0 — parse args
@@ -64,7 +62,7 @@ def _make_fixture_repo(tmp: Path) -> Path:
 
         ## Phase 1 — main body
 
-        The rest of the command body here.
+        The rest of the skill body here.
         """),
         encoding="utf-8",
     )
@@ -77,8 +75,8 @@ def _render_cursor(fixture_repo: Path) -> str:
     from runtime.drivers.cursor.export import _render_mdc
     from runtime.drivers._export_utils import _parse_frontmatter, expand_includes
 
-    cmd_path = fixture_repo / "commands" / "z-fixture-gate.md"
-    text = cmd_path.read_text(encoding="utf-8")
+    skill_path = fixture_repo / "skills" / "z-fixture-gate" / "SKILL.md"
+    text = skill_path.read_text(encoding="utf-8")
     fm, body = _parse_frontmatter(text)
     body = expand_includes(body, fixture_repo)
     entry = {"id": "z-fixture-gate", "frontmatter": fm, "body": body}
@@ -86,12 +84,12 @@ def _render_cursor(fixture_repo: Path) -> str:
 
 
 def _render_codex(fixture_repo: Path) -> str:
-    """Run the codex exporter renderer on the fixture command."""
+    """Run the codex exporter renderer on the fixture skill."""
     from runtime.drivers.codex.export import _render_prompt
     from runtime.drivers._export_utils import _parse_frontmatter, expand_includes
 
-    cmd_path = fixture_repo / "commands" / "z-fixture-gate.md"
-    text = cmd_path.read_text(encoding="utf-8")
+    skill_path = fixture_repo / "skills" / "z-fixture-gate" / "SKILL.md"
+    text = skill_path.read_text(encoding="utf-8")
     fm, body = _parse_frontmatter(text)
     body = expand_includes(body, fixture_repo)
     entry = {"id": "z-fixture-gate", "frontmatter": fm, "body": body}
@@ -99,12 +97,12 @@ def _render_codex(fixture_repo: Path) -> str:
 
 
 def _render_agy_workflow(fixture_repo: Path) -> str:
-    """Run the antigravity workflow renderer on the fixture command."""
+    """Run the antigravity workflow renderer on the fixture skill."""
     from runtime.drivers.antigravity.export import _render_workflow
     from runtime.drivers._export_utils import _parse_frontmatter, expand_includes
 
-    cmd_path = fixture_repo / "commands" / "z-fixture-gate.md"
-    text = cmd_path.read_text(encoding="utf-8")
+    skill_path = fixture_repo / "skills" / "z-fixture-gate" / "SKILL.md"
+    text = skill_path.read_text(encoding="utf-8")
     fm, body = _parse_frontmatter(text)
     body = expand_includes(body, fixture_repo)
     entry = {"id": "z-fixture-gate", "frontmatter": fm, "body": body}
@@ -112,12 +110,12 @@ def _render_agy_workflow(fixture_repo: Path) -> str:
 
 
 def _render_pi_prompt(fixture_repo: Path) -> str:
-    """Run the pi prompt renderer on the fixture command."""
+    """Run the pi prompt renderer on the fixture skill."""
     from runtime.drivers.pi.export import _render_prompt
     from runtime.drivers._export_utils import _parse_frontmatter, expand_includes
 
-    cmd_path = fixture_repo / "commands" / "z-fixture-gate.md"
-    text = cmd_path.read_text(encoding="utf-8")
+    skill_path = fixture_repo / "skills" / "z-fixture-gate" / "SKILL.md"
+    text = skill_path.read_text(encoding="utf-8")
     fm, body = _parse_frontmatter(text)
     body = expand_includes(body, fixture_repo)
     entry = {"id": "z-fixture-gate", "frontmatter": fm, "body": body}
@@ -206,22 +204,22 @@ class TestRuntimeGateTokenSurvival(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestCodexFrontmatterLoad(unittest.TestCase):
-    """z-attend.md must be parsed (not silently dropped) by enumerate_sources.
+    """z-attend SKILL.md must be parsed (not silently dropped) by enumerate_sources.
 
-    Invariant: _parse_frontmatter on z-attend.md must return a non-empty
-    description. enumerate_sources must include a 'z-attend' entry in its
-    'commands' list. The codex exporter must emit prompts/z-attend.md whose
-    first line is '# /z-attend'.
+    Invariant: _parse_frontmatter on skills/z-attend/SKILL.md must return a
+    non-empty description. enumerate_sources must include a 'z-attend' entry in
+    its 'skills' list (z-attend is now a SKILL, not a command). The codex
+    exporter must emit prompts/z-attend.md whose first line is '# /z-attend'.
 
-    Failure class: if z-attend.md has malformed frontmatter that causes
+    Failure class: if SKILL.md has malformed frontmatter that causes
     _parse_frontmatter to silently skip it, or if enumerate_sources drops it,
     the description would be empty and the codex prompt would be missing.
     """
 
     def test_z_attend_frontmatter_parsed_not_empty(self) -> None:
-        """_parse_frontmatter on z-attend.md returns a non-empty description."""
-        z_attend_path = REPO_ROOT / "commands" / "z-attend.md"
-        self.assertTrue(z_attend_path.exists(), f"z-attend.md not found at {z_attend_path}")
+        """_parse_frontmatter on skills/z-attend/SKILL.md returns a non-empty description."""
+        z_attend_path = REPO_ROOT / "skills" / "z-attend" / "SKILL.md"
+        self.assertTrue(z_attend_path.exists(), f"z-attend SKILL.md not found at {z_attend_path}")
 
         text = z_attend_path.read_text(encoding="utf-8")
         fm, body = _parse_frontmatter(text)
@@ -229,35 +227,35 @@ class TestCodexFrontmatterLoad(unittest.TestCase):
         self.assertIn(
             "description",
             fm,
-            "z-attend.md frontmatter has no 'description' key — frontmatter may not be parsed",
+            "z-attend SKILL.md frontmatter has no 'description' key — frontmatter may not be parsed",
         )
         self.assertTrue(
             fm["description"],
-            "z-attend.md frontmatter 'description' is empty — file may be silently dropped",
+            "z-attend SKILL.md frontmatter 'description' is empty — file may be silently dropped",
         )
         self.assertTrue(
             body.strip(),
-            "z-attend.md body is empty after frontmatter — malformed file structure",
+            "z-attend SKILL.md body is empty after frontmatter — malformed file structure",
         )
 
     def test_enumerate_sources_includes_z_attend(self) -> None:
-        """enumerate_sources must return z-attend in the commands list."""
+        """enumerate_sources must return z-attend in the skills list."""
         sources = enumerate_sources(REPO_ROOT)
-        command_ids = {entry["id"] for entry in sources["commands"]}
+        skill_ids = {entry["id"] for entry in sources["skills"]}
         self.assertIn(
             "z-attend",
-            command_ids,
-            f"enumerate_sources did not include 'z-attend' in commands. "
-            f"Found: {sorted(command_ids)[:10]}... (first 10)",
+            skill_ids,
+            f"enumerate_sources did not include 'z-attend' in skills. "
+            f"Found: {sorted(skill_ids)[:10]}... (first 10)",
         )
 
     def test_z_attend_entry_has_nonempty_description(self) -> None:
         """The z-attend entry returned by enumerate_sources must have a description."""
         sources = enumerate_sources(REPO_ROOT)
-        attend_entries = [e for e in sources["commands"] if e["id"] == "z-attend"]
+        attend_entries = [e for e in sources["skills"] if e["id"] == "z-attend"]
         self.assertTrue(
             attend_entries,
-            "No z-attend entry found in enumerate_sources commands",
+            "No z-attend entry found in enumerate_sources skills",
         )
         entry = attend_entries[0]
         description = entry["frontmatter"].get("description", "")
@@ -269,14 +267,15 @@ class TestCodexFrontmatterLoad(unittest.TestCase):
     def test_codex_emits_z_attend_prompt_with_correct_header(self) -> None:
         """Codex export must emit prompts/z-attend.md with '# /z-attend' as first line.
 
-        This verifies the full pipeline: enumerate_sources picks up z-attend,
-        _render_prompt runs on it, and the output starts with the correct header.
+        This verifies the full pipeline: enumerate_sources picks up z-attend in
+        the skills tier, _render_prompt runs on it, and the output starts with
+        the correct header.
         """
         from runtime.drivers.codex.export import _render_prompt
 
         sources = enumerate_sources(REPO_ROOT)
-        attend_entries = [e for e in sources["commands"] if e["id"] == "z-attend"]
-        self.assertTrue(attend_entries, "z-attend not in enumerate_sources commands")
+        attend_entries = [e for e in sources["skills"] if e["id"] == "z-attend"]
+        self.assertTrue(attend_entries, "z-attend not in enumerate_sources skills")
 
         entry = attend_entries[0]
         rendered = _render_prompt(entry)
@@ -298,8 +297,8 @@ class TestCodexFrontmatterLoad(unittest.TestCase):
         from runtime.drivers.codex.export import _render_prompt
 
         sources = enumerate_sources(REPO_ROOT)
-        attend_entries = [e for e in sources["commands"] if e["id"] == "z-attend"]
-        self.assertTrue(attend_entries, "z-attend not found in enumerate_sources commands")
+        attend_entries = [e for e in sources["skills"] if e["id"] == "z-attend"]
+        self.assertTrue(attend_entries, "z-attend not found in enumerate_sources skills")
 
         entry = attend_entries[0]
         rendered = _render_prompt(entry)
@@ -366,10 +365,10 @@ class TestLiveExportZAttend(unittest.TestCase):
             )
 
     def test_cursor_export_has_z_attend_with_category_token(self) -> None:
-        """Cursor export must produce z-attend.mdc with category=risk."""
+        """Cursor export must produce .cursor/skills/z-attend/SKILL.md with category=risk."""
         self._run_and_verify(
             "runtime.drivers.cursor.export",
-            (".cursor", "rules", "z-attend.mdc"),
+            (".cursor", "skills", "z-attend", "SKILL.md"),
             "cursor",
         )
 
@@ -382,10 +381,10 @@ class TestLiveExportZAttend(unittest.TestCase):
         )
 
     def test_agy_export_has_z_attend_with_category_token(self) -> None:
-        """Antigravity export must produce .agent/workflows/z-attend.md with category=risk."""
+        """Antigravity export must produce .agent/skills/z-attend/SKILL.md with category=risk."""
         self._run_and_verify(
             "runtime.drivers.antigravity.export",
-            (".agent", "workflows", "z-attend.md"),
+            (".agent", "skills", "z-attend", "SKILL.md"),
             "agy",
         )
 
