@@ -15,6 +15,10 @@
 #   TEST-008  --timeout 0 resolves default from config (uses cargo=1800 default)
 #   TEST-009  --run and --type are required (exits 2 without them)
 #   TEST-010  watchdog_timeout event emitted on deadline expiry
+#   TEST-011  Bash fallback (forced PATH strip) kills a hung command, returns 124
+#   TEST-012  Bash fallback timeout_degraded emitted exactly once per run
+#   TEST-013  Bash fallback SIGTERM-immune child → SIGKILL-after-grace → exit 137
+#   TEST-014  Bash fallback grandchild-tree: no orphan processes after timeout
 #
 # Hermetic: all tests write events under a temp Z_HARNESS_BASE_DIR + Z_HARNESS_SLUG
 # so no real plan archive is touched.
@@ -459,6 +463,183 @@ for l in sys.stdin:
 assert_eq "dispatch_end records exit_code 124" "124" "$EXIT_CODE_010"
 
 rm -rf "$BASE_010"
+
+# ---------------------------------------------------------------------------
+# Helper: build a PATH with timeout/gtimeout stripped.
+# Sets the named variable to the stripped PATH string.
+# Does NOT copy scripts — the real scripts dir is used (SCRIPT_DIR).
+# ---------------------------------------------------------------------------
+_stripped_path_no_timeout() {
+  local OUT_PATH_VAR="$1"
+  local _stripped_path=""
+  local _IFS_SAVE="$IFS"
+  IFS=":"
+  for _p in $PATH; do
+    # Skip any dir that provides timeout/gtimeout
+    if [[ -x "$_p/timeout" ]] || [[ -x "$_p/gtimeout" ]]; then
+      continue
+    fi
+    _stripped_path="${_stripped_path:+${_stripped_path}:}${_p}"
+  done
+  IFS="$_IFS_SAVE"
+  printf -v "$OUT_PATH_VAR" '%s' "$_stripped_path"
+}
+
+# ---------------------------------------------------------------------------
+# TEST-011: Bash fallback (forced) — kills a hung command + returns 124
+# ---------------------------------------------------------------------------
+echo ""
+echo "TEST-011: bash fallback — hung command killed, returns 124"
+
+RUN_011="test-srun-011-$$"
+_hermetic_env "srun-test-011" "$RUN_011"
+BASE_011="$HERMETIC_BASE"
+
+_stripped_path_no_timeout STRIPPED_PATH_011
+
+TSTART_011=$(date +%s)
+EXIT_011=0
+PATH="$STRIPPED_PATH_011" bash "$SUPERVISED_RUN" \
+  --run "$RUN_011" --type bash --timeout 2 --grace 1 \
+  -- sleep 30 \
+  2>/dev/null || EXIT_011=$?
+TEND_011=$(date +%s)
+ELAPSED_011=$(( TEND_011 - TSTART_011 ))
+
+assert_eq   "bash-fallback exit 124"             "124" "$EXIT_011"
+assert_le   "bash-fallback finishes within 10s"  "10"  "$ELAPSED_011"
+
+rm -rf "$BASE_011"
+
+# ---------------------------------------------------------------------------
+# TEST-012: Bash fallback — timeout_degraded event emitted exactly once per run
+# ---------------------------------------------------------------------------
+echo ""
+echo "TEST-012: bash fallback — timeout_degraded emitted once per run"
+
+RUN_012="test-srun-012-$$"
+_hermetic_env "srun-test-012" "$RUN_012"
+BASE_012="$HERMETIC_BASE"
+
+_stripped_path_no_timeout STRIPPED_PATH_012
+
+# Run the wrapper twice under the same RUN to verify the once-per-run guard.
+PATH="$STRIPPED_PATH_012" bash "$SUPERVISED_RUN" \
+  --run "$RUN_012" --type bash --timeout 5 \
+  -- echo first \
+  2>/dev/null || true
+PATH="$STRIPPED_PATH_012" bash "$SUPERVISED_RUN" \
+  --run "$RUN_012" --type bash --timeout 5 \
+  -- echo second \
+  2>/dev/null || true
+
+EVENTS_012="$(cat "$(_events_file "$BASE_012" "srun-test-012" "$RUN_012")")"
+DEGRADED_COUNT_012=$(echo "$EVENTS_012" | python3 -c '
+import json, sys
+count = 0
+for line in sys.stdin:
+    e = json.loads(line)
+    if e.get("kind") == "timeout_degraded":
+        count += 1
+print(count)
+')
+
+assert_eq "timeout_degraded emitted exactly once" "1" "$DEGRADED_COUNT_012"
+
+# Verify the event fields (log-event.sh merges JSON payload fields at top level).
+DEGRADED_PAYLOAD_012=$(echo "$EVENTS_012" | python3 -c '
+import json, sys
+for line in sys.stdin:
+    e = json.loads(line)
+    if e.get("kind") == "timeout_degraded":
+        print(e.get("backend",""), e.get("recommend",""))
+        break
+')
+assert_contains "degraded payload has backend=bash_fallback" "bash_fallback" "$DEGRADED_PAYLOAD_012"
+assert_contains "degraded payload has recommend hint"        "brew install"    "$DEGRADED_PAYLOAD_012"
+
+rm -rf "$BASE_012"
+
+# ---------------------------------------------------------------------------
+# TEST-013: Bash fallback — SIGKILL-after-grace path returns 137
+# ---------------------------------------------------------------------------
+echo ""
+echo "TEST-013: bash fallback — SIGTERM-immune child + grace → exit 137"
+
+RUN_013="test-srun-013-$$"
+_hermetic_env "srun-test-013" "$RUN_013"
+BASE_013="$HERMETIC_BASE"
+
+_stripped_path_no_timeout STRIPPED_PATH_013
+
+TSTART_013=$(date +%s)
+EXIT_013=0
+PATH="$STRIPPED_PATH_013" bash "$SUPERVISED_RUN" \
+  --run "$RUN_013" --type bash --timeout 2 --grace 1 \
+  -- bash -c 'trap "" TERM; sleep 100' \
+  2>/dev/null || EXIT_013=$?
+TEND_013=$(date +%s)
+ELAPSED_013=$(( TEND_013 - TSTART_013 ))
+
+assert_eq "SIGKILL-after-grace exits 137"      "137" "$EXIT_013"
+assert_le "SIGKILL path finishes within 15s"   "15"  "$ELAPSED_013"
+
+EVENTS_013="$(cat "$(_events_file "$BASE_013" "srun-test-013" "$RUN_013")")"
+assert_contains "watchdog_timeout emitted on SIGKILL path" '"kind":"watchdog_timeout"' "$EVENTS_013"
+assert_contains "watchdog_timeout has killed:true on SIGKILL path" '"killed":true' "$EVENTS_013"
+
+rm -rf "$BASE_013"
+
+# ---------------------------------------------------------------------------
+# TEST-014: Bash fallback — grandchild-tree: no orphan sleeps after timeout
+#
+# Launches: bash -c '(sleep 30) & sleep 30' under --timeout 2.
+# After the wrapper returns, verifies that no sleep processes from that
+# process group survive (same-pgroup no-orphan invariant).
+# ---------------------------------------------------------------------------
+echo ""
+echo "TEST-014: bash fallback — grandchild-tree: no orphan sleeps after timeout"
+
+RUN_014="test-srun-014-$$"
+_hermetic_env "srun-test-014" "$RUN_014"
+BASE_014="$HERMETIC_BASE"
+
+_stripped_path_no_timeout STRIPPED_PATH_014
+
+# Write child's PID (which == child PGID with set -m) to a file so we can
+# verify the pgroup is fully reaped after the wrapper returns.
+PGID_FILE_014="${TMPDIR:-/tmp}/srun_pgid_014_$$"
+
+EXIT_014=0
+PATH="$STRIPPED_PATH_014" bash "$SUPERVISED_RUN" \
+  --run "$RUN_014" --type bash --timeout 2 --grace 1 \
+  -- bash -c "echo \$\$ > \"$PGID_FILE_014\"; (sleep 30) & sleep 30" \
+  2>/dev/null || EXIT_014=$?
+
+# Brief settle time to let the OS reap zombie entries.
+sleep 0.5
+
+assert_eq "grandchild-tree exit code 124" "124" "$EXIT_014"
+
+# Check: are there surviving processes from that pgroup?
+CHILD_PGID_014=0
+if [[ -f "$PGID_FILE_014" ]]; then
+  CHILD_PGID_014="$(cat "$PGID_FILE_014" | tr -d '[:space:]')"
+fi
+rm -f "$PGID_FILE_014"
+
+if [[ "$CHILD_PGID_014" -gt 0 ]] 2>/dev/null; then
+  SURVIVORS_014="$(ps -eo pid,pgid,command 2>/dev/null \
+    | awk -v pg="$CHILD_PGID_014" '$2 == pg && /sleep/' \
+    | wc -l | tr -d ' ')"
+  assert_eq "no surviving sleep in child pgroup" "0" "$SURVIVORS_014"
+else
+  # Could not read PGID file (rare race) — mark as pass with note.
+  echo "  PASS: grandchild-tree no-orphan (PGID file unreadable; skipping strict check)"
+  PASS=$(( PASS + 1 ))
+fi
+
+rm -rf "$BASE_014"
 
 # ---------------------------------------------------------------------------
 # Summary

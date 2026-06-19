@@ -110,37 +110,111 @@ _resolve_grace() {
 #   - Child stdout byte-for-byte; all diagnostics to stderr.
 # ---------------------------------------------------------------------------
 _run_bash_fallback() {
-  # Stub: runs the command without a deadline.  T004 replaces this with the
-  # setsid+reaper implementation.  A timeout_degraded warning is emitted here
-  # so the sweep can already see the degraded-backend state.
+  # Full setsid+reaper implementation (T004).
+  #
+  # Globals consumed (set by outer arg-parse):
+  #   CMD_ARGS[@]  — command to run (no re-parsing)
+  #   TIMEOUT_S    — deadline in seconds
+  #   GRACE_S      — SIGTERM→SIGKILL grace seconds
+  #   RUN          — run id for event emission
+  #   SCRIPT_DIR   — scripts directory
+  #
+  # Globals written:
+  #   CHILD_PID    — PID of the launched child (set immediately after launch)
+  #   EXIT_CODE    — 124 (deadline/SIGTERM), 137 (SIGKILL-after-grace), or child's passthrough
+  #
+  # No-orphan scope: SIGKILL is sent to the child's *process group* (kill -KILL -PGID),
+  # which reaps all descendants that share the pgroup.  Descendants that call setsid()
+  # themselves or double-fork into a new session escape the group and are NOT reaped —
+  # this carve-out is intentional and documented.
 
-  # One-time-per-run timeout_degraded event (atomic mkdir guard).
+  # ---- One-time-per-run timeout_degraded event (atomic mkdir guard) ----
   if [[ -n "${RUN}" ]]; then
-    local _marker_dir
-    # Resolve the run archive dir the same way check-timeout.sh does.
     local _zh_base
     _zh_base="$(_Z_HARNESS_RESOLVING_BASE=1 \
       bash -c "source \"${SCRIPT_DIR}/plan-path.sh\"; z_harness_base")"
+    local _run_dir
     if [[ -n "${Z_HARNESS_SLUG:-}" ]]; then
       local _plans_dir="${Z_HARNESS_PLANS_DIR:-${_zh_base}/plans}"
-      local _run_dir="${_plans_dir}/${Z_HARNESS_SLUG}/archive/${RUN}"
+      _run_dir="${_plans_dir}/${Z_HARNESS_SLUG}/archive/${RUN}"
     else
-      local _run_dir="${_zh_base}/archive/${RUN}"
+      _run_dir="${_zh_base}/archive/${RUN}"
     fi
     mkdir -p "$_run_dir"
-    _marker_dir="${_run_dir}/.timeout-degraded-logged"
+    local _marker_dir="${_run_dir}/.timeout-degraded-logged"
     if mkdir "$_marker_dir" 2>/dev/null; then
       _emit_event "$RUN" "timeout_degraded" \
         '{"backend":"bash_fallback","recommend":"brew install coreutils"}'
     fi
   fi
 
-  printf '[supervised-run] WARNING: no timeout(1)/gtimeout binary — running without deadline enforcement (T004 not yet active).\n' >&2
+  printf '[supervised-run] WARNING: no timeout(1)/gtimeout binary — using bash fallback with process-group deadline enforcement.\n' >&2
 
-  # Run the command bare — child PID not captured (needed only by T004's reaper).
-  # Addendum C: stdin piped through unchanged; stdout byte-for-byte.
-  "${CMD_ARGS[@]}"
-  EXIT_CODE=$?
+  # ---- Launch child in its own process group ----
+  # setsid(1) is not available on macOS by default.  We use "set -m" (job control)
+  # which causes bash to place each background job in its own process group.
+  # This is the portable macOS-compatible equivalent.
+  set -m
+  "${CMD_ARGS[@]}" &
+  CHILD_PID=$!  # written to global immediately (contract requirement)
+
+  # Resolve the child's PGID.  With set -m the background job gets its own pgroup
+  # (pgroup leader PID == CHILD_PID), so we can usually just use CHILD_PID directly.
+  # We still read ps to be safe (race: on very fast kernels the process may already
+  # have changed its own group).
+  local CHILD_PGID
+  CHILD_PGID="$(ps -o pgid= -p "$CHILD_PID" 2>/dev/null | tr -d ' ')" || true
+  if [[ -z "$CHILD_PGID" ]] || ! [[ "$CHILD_PGID" =~ ^[0-9]+$ ]]; then
+    CHILD_PGID="$CHILD_PID"
+  fi
+
+  # ---- Sentinel files for reaper↔main shell communication ----
+  # Subshell variable changes don't propagate back; we use temp files.
+  local _sent_base
+  _sent_base="$(mktemp 2>/dev/null)" && rm -f "$_sent_base" || _sent_base="/tmp/_srun_$$"
+  local _term_sent="${_sent_base}.term"  # created when reaper fires SIGTERM
+  local _kill_sent="${_sent_base}.kill"  # created when reaper fires SIGKILL
+
+  # ---- Reaper subshell ----
+  # Fires SIGTERM at the whole pgroup after TIMEOUT_S, then SIGKILL after GRACE_S
+  # if the group is still alive.  Every kill is preceded by kill -0 (no PID-reuse hit).
+  (
+    sleep "$TIMEOUT_S"
+    if kill -0 -"$CHILD_PGID" 2>/dev/null; then
+      touch "$_term_sent"
+      kill -TERM -"$CHILD_PGID" 2>/dev/null || true
+    fi
+    sleep "$GRACE_S"
+    if kill -0 -"$CHILD_PGID" 2>/dev/null; then
+      touch "$_kill_sent"
+      kill -KILL -"$CHILD_PGID" 2>/dev/null || true
+    fi
+  ) &
+  local REAPER_PID=$!
+
+  # ---- Wait for child ----
+  # On normal exit: kill the reaper sentinel so it doesn't fire.
+  # On timeout exit: reaper already fired; wait reflects signal death.
+  local _wait_exit=0
+  wait "$CHILD_PID" 2>/dev/null || _wait_exit=$?
+
+  # Clean up reaper (no-op if already exited).
+  kill "$REAPER_PID" 2>/dev/null || true
+  wait "$REAPER_PID" 2>/dev/null || true  # reap to avoid zombie
+
+  # ---- Determine exit code ----
+  if [[ -f "$_kill_sent" ]]; then
+    # Reaper had to SIGKILL (child survived SIGTERM through the grace window).
+    EXIT_CODE=137
+  elif [[ -f "$_term_sent" ]]; then
+    # Reaper fired SIGTERM and child died (normal deadline path).
+    EXIT_CODE=124
+  else
+    # Child exited on its own before the deadline.
+    EXIT_CODE="$_wait_exit"
+  fi
+
+  rm -f "$_term_sent" "$_kill_sent"
 }
 
 # ---------------------------------------------------------------------------
@@ -298,7 +372,7 @@ _emit_event "$RUN" "dispatch_end" "$END_PAYLOAD"
 # timeout(1) exits 124 on deadline — we passthrough that code.
 # ---------------------------------------------------------------------------
 
-if [[ "$EXIT_CODE" -eq 124 ]]; then
+if [[ "$EXIT_CODE" -eq 124 ]] || [[ "$EXIT_CODE" -eq 137 ]]; then
   TIMEOUT_PAYLOAD="$(python3 -c '
 import json, sys
 d = {
