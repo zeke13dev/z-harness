@@ -215,10 +215,14 @@ workflows:
     source: commands/z-suggest-memory.md
     output: .agent/workflows/z-suggest-memory.md
     description: "Authoring skill for the docs/llm/ memory layer. Called mandatorily from /z-debug post-mortem and /z-improve retro. Validates input against the memory schema, writes to docs/llm/<slug>.json, regenerates docs/llm/MEMORIES-FLAT.md, optionally extract..."
+  - id: z-test-prune
+    source: commands/z-test-prune.md
+    output: .agent/workflows/z-test-prune.md
+    description: "Read-only test-suite pruning planner complementing /z-test. Scans an existing test suite, classifies prunable tests under a four-category rubric with hard keep-guards, runs a mandatory cross-LLM adversarial defend-pass, and emits TEST-PRUNE.md (a ..."
   - id: z-test
     source: commands/z-test.md
     output: .agent/workflows/z-test.md
-    description: "System-level invariant test planner. Reads INVARIANTS.json + SPEC.md + PLAN.md + TASKS.md, matches invariants to tasks via tag-based mapping, drafts behavioral tests keyed to durable system invariants, cross-LLM consult with invariant coverage ana..."
+    description: "System-level invariant test planner. Supports both legacy mode (SPEC.md + PLAN.md + TASKS.md) and intent mode (INTENT.md + TASKS.md + LEDGER.md). Reads INVARIANTS.json when present (user-authored, optional — no generator; absent is normal). Drafts..."
   - id: z-update
     source: commands/z-update.md
     output: .agent/workflows/z-update.md

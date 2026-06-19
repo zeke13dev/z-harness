@@ -203,6 +203,45 @@ if command -v codex >/dev/null 2>&1 && [ -f "${HOME}/.agents/plugins/marketplace
 fi
 ```
 
+For Claude Code marketplace installs, refresh the plugin cache after a successful
+symlink update. Claude Code copies a directory-source plugin into a per-version
+cache (`~/.claude/plugins/cache/<marketplace>/z-harness/<version>/`) and loads
+commands from there, **not** from the live repo — so a `git pull` alone leaves
+every `/z-*` command frozen at the cached commit. Resolve the marketplace name
+from the install registry (do not hardcode it) and re-extract via the headless
+`claude plugin` CLI:
+
+```bash
+CLAUDE_REG="${HOME}/.claude/plugins/installed_plugins.json"
+if command -v claude >/dev/null 2>&1 && [ -f "$CLAUDE_REG" ]; then
+  # Find the installed key "z-harness@<marketplace>" (portable; no hardcoded name).
+  CLAUDE_PLUGIN_KEY="$(python3 -c '
+import json, sys
+try:
+    reg = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+for k in reg.get("plugins", {}):
+    if k.split("@", 1)[0] == "z-harness":
+        print(k); break
+' "$CLAUDE_REG" 2>/dev/null)"
+  if [ -n "$CLAUDE_PLUGIN_KEY" ]; then
+    CLAUDE_MKT="${CLAUDE_PLUGIN_KEY#*@}"
+    claude plugin marketplace update "$CLAUDE_MKT" 2>/dev/null || true
+    claude plugin update "$CLAUDE_PLUGIN_KEY" 2>/dev/null || true
+    echo "[z-update] Claude Code plugin cache refreshed for ${CLAUDE_PLUGIN_KEY} — restart Claude Code to load the new commands."
+  fi
+fi
+```
+
+> **Why this is required:** Claude Code only re-extracts the cache when the
+> plugin's version *string* changes. If `.claude-plugin/plugin.json` pins an
+> explicit `version`, bump it every release — or omit `version` entirely so the
+> commit SHA becomes the version and every commit auto-invalidates the cache
+> (the z-harness default). `claude plugin update` extracts to a new versioned
+> path and leaves the old one intact, so it is safe to run while other sessions
+> are mid-run from the previous cache.
+
 ---
 
 ## Environment variables
@@ -215,7 +254,7 @@ fi
 
 ## Notes
 
-- In symlink mode, the plugin dir is the live repo — no extraction needed.
+- In symlink mode, the plugin *source* dir is the live repo, so `git pull` updates it directly — but host harnesses that copy plugins into a per-version cache (Claude Code, Codex) still need an explicit cache refresh afterward (see the marketplace blocks above), or their loaded commands stay frozen at the cached commit.
 - In tarball mode, `--ff-only` is not applicable; the atomic swap is the equivalent safety guarantee.
 - In runtime mode, the tarball includes the `runtime/` tree (which contains `runtime/drivers/`). The full-dir atomic swap automatically updates all runtime content.
 - If you want to switch from tarball or runtime mode to symlink mode, clone the repo and re-run `install.sh` from inside it.

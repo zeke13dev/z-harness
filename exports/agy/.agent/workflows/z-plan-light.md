@@ -123,7 +123,7 @@ Loop prevention: carry forward the latest route chain from any supplied or disco
 - Is there a materially better path the user hasn't considered?
 
 <!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface premise-concern questions via their native channel. Silent omission is forbidden. -->
-If any concern surfaces → raise it with the user via `AskUserQuestion` before proceeding. Don't plan around a flawed premise.
+If any concern surfaces → raise it with the user conversationally — explain the concern and the better path in prose, **not** an `AskUserQuestion` popup — before proceeding. Don't plan around a flawed premise.
 
 **Quick exploration.**
 1. **If `docs/llm/INDEX.json` exists, dispatch `doc-fetcher` (Haiku) FIRST** — it's the cheapest grounding available. One call, returns ≤2 KB synthesis:
@@ -250,12 +250,12 @@ When both return:
 Send `PushNotification` (if policy != `off`): "Light-mode decision ready for review."
 
 <!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the Phase 5 approval question (approve / modify / abandon) and any shortcut approval questions via their native channel. Silent omission is forbidden. -->
-Present a brief synthesis (3-5 bullets) via `AskUserQuestion`:
-- "Approve fix as proposed"
-- "Modify — I want to change <X>" (free-text follow-up)
-- "Abandon — this isn't the right approach"
+Present the brief synthesis (3-5 bullets) as a conversational reply — **not** an `AskUserQuestion` popup — and end with your recommendation. Invite the user to reply:
+- **Approve fix as proposed**
+- **Modify** — describe the change to <X>
+- **Abandon** — this isn't the right approach
 
-For any flagged shortcut: separate explicit approval via `AskUserQuestion` (default to robust if not approved).
+For any flagged shortcut: surface it in the same reply — the shortcut, its tradeoff vs the robust path, and your recommendation — and ask for explicit approval conversationally (default to the robust path if not approved).
 
 If user picks **Abandon** → write nothing more; log `light_run_end` with `status: abandoned`. Per the FINALIZE_STATUS rule, execute **Run Brief — halt finalize** (below) with reason `user abandoned at Phase 5`.
 
