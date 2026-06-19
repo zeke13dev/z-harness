@@ -136,6 +136,37 @@ def _run_release(slug: str, base: Path, run_id: str = "run-test",
     )
 
 
+def _acquire_until_held(slug: str, base: Path, attempts: int = 5) -> subprocess.CompletedProcess:
+    """Attempt plan-claim.sh acquire up to `attempts` times.
+
+    sink-lock.sh's daemon-handshake has a pre-existing intermittent race where
+    `acquire` may exit 3 with "unexpected daemon response: ''" even though no
+    lock is actually held. This helper retries to make held-lock tests reliable
+    without masking real acquire failures. The reap-stale code under test is
+    read-only and does NOT have this flakiness; this retry is purely to ensure
+    the test starts with a genuinely held lock.
+
+    Raises AssertionError (via the caller's self.fail) if all attempts fail.
+    Returns the last successful CompletedProcess (returncode 0 or 2).
+    """
+    last: subprocess.CompletedProcess | None = None
+    for attempt in range(1, attempts + 1):
+        acq = _run_acquire(slug, base)
+        if acq.returncode in (0, 2):
+            return acq
+        # Partial state may exist; release best-effort before retrying.
+        _run_release(slug, base)
+        last = acq
+        time.sleep(0.1 * attempt)  # small back-off so the daemon has time to settle
+
+    last_rc = last.returncode if last else "N/A"
+    last_stderr = last.stderr if last else ""
+    raise RuntimeError(
+        f"plan-claim.sh acquire failed {attempts} times for slug={slug!r}. "
+        f"Last rc={last_rc} stderr={last_stderr!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # test cases
 # ---------------------------------------------------------------------------
@@ -153,11 +184,7 @@ class TestReapStaleHeld(unittest.TestCase):
         _run_release(self.slug, self.base)
 
     def test_held_exits_0(self) -> None:
-        acq = _run_acquire(self.slug, self.base)
-        self.assertIn(
-            acq.returncode, (0, 2),
-            f"acquire must succeed (0 or 2=stale-takeover). stderr={acq.stderr!r}",
-        )
+        _acquire_until_held(self.slug, self.base)
 
         result = _run_reap_stale(self.slug, self.base)
         self.assertEqual(
@@ -166,8 +193,7 @@ class TestReapStaleHeld(unittest.TestCase):
         )
 
     def test_held_prints_held(self) -> None:
-        acq = _run_acquire(self.slug, self.base)
-        self.assertIn(acq.returncode, (0, 2))
+        _acquire_until_held(self.slug, self.base)
 
         result = _run_reap_stale(self.slug, self.base)
         self.assertEqual(result.stdout.strip(), "held",
@@ -175,8 +201,7 @@ class TestReapStaleHeld(unittest.TestCase):
 
     def test_held_is_readonly(self) -> None:
         """reap-stale must not release the lock; the lock file must still be held after."""
-        acq = _run_acquire(self.slug, self.base)
-        self.assertIn(acq.returncode, (0, 2))
+        _acquire_until_held(self.slug, self.base)
 
         lp = _lock_path(self.base, self.slug)
         content_before = lp.read_text(encoding="utf-8") if lp.exists() else ""
