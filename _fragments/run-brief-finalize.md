@@ -1,4 +1,4 @@
-<!-- RUN-BRIEF-FINALIZE: shared finalize block — included via `<!-- include: commands/_fragments/run-brief-finalize.md -->` in registry commands; `/z-export` inlines this body (T007). -->
+<!-- RUN-BRIEF-FINALIZE: shared finalize block — included via `<!-- include: _fragments/run-brief-finalize.md -->` in registry commands; `/z-export` inlines this body (T007). -->
 
 ## Run Brief finalize (shared fragment)
 

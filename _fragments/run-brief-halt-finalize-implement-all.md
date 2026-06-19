@@ -13,4 +13,4 @@ python3 -c 'import json; print(json.dumps({"label":"Resolve halt and re-run /z-i
 bash "$RB_SH" set-section --run "$RUN" --section next --json "$NEXT_JSON"
 rm -f "$NEXT_JSON"
 ```
-<!-- include: commands/_fragments/run-brief-finalize.md -->
+<!-- include: _fragments/run-brief-finalize.md -->
