@@ -115,7 +115,7 @@ This gate is non-skippable even if the user passed an argument. A symptom descri
 - Will fixing the proposed cause actually resolve the symptom?
 - Is there a materially simpler fix path the user hasn't considered?
 
-If any concern surfaces → raise it with the user via `AskUserQuestion` before proceeding. Don't plan around a flawed premise.
+If any concern surfaces → raise it with the user conversationally — explain the concern and the better path in prose, **not** an `AskUserQuestion` popup — before proceeding. Don't plan around a flawed premise.
 
 **Capture problem + evidence inline:**
 
@@ -181,12 +181,12 @@ When both return:
 Send `PushNotification` (if policy != `off`): "Fix-mode decision ready for review."
 
 <!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the Phase 5 approval question (approve / modify / abandon) and any shortcut approval questions via their native channel. Silent omission is forbidden. -->
-Present a brief synthesis (3-5 bullets) via `AskUserQuestion`:
-- "Approve fix as proposed"
-- "Modify — I want to change <X>" (free-text follow-up)
-- "Abandon — this isn't the right approach"
+Present the brief synthesis (3-5 bullets) as a conversational reply — **not** an `AskUserQuestion` popup — and end with your recommendation. Invite the user to reply:
+- **Approve fix as proposed**
+- **Modify** — describe the change to <X>
+- **Abandon** — this isn't the right approach
 
-For any flagged shortcut: separate explicit approval via `AskUserQuestion` (default to robust if not approved).
+For any flagged shortcut: surface it in the same reply — the shortcut, its tradeoff vs the robust path, and your recommendation — and ask for explicit approval conversationally (default to the robust path if not approved).
 
 If user picks **Abandon** → write nothing more; run **Run Brief — halt finalize** with reason `user abandoned fix`, log `fix_run_end` with `{status: "abandoned"}`, and exit.
 

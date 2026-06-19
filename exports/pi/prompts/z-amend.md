@@ -140,11 +140,11 @@ Proceed directly to Phase 5. The caller (e.g. `/z-review-all` auto-amend) has al
      disposition question for each touched-but-completed task via their native channel.
      Silent omission is forbidden. -->
 > [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
-- "Add superseding task (recommended)"
-- "Re-open T0NN (flip `[x]` → `[ ]`) — work needs to be redone"
-- "Leave T0NN alone — amendment doesn't actually contradict it"
+- **Add superseding task** (usually recommended)
+- **Re-open T0NN** (flip `[x]` → `[ ]`) — work needs to be redone
+- **Leave T0NN alone** — amendment doesn't actually contradict it
 
-Block until answered. Send a `PushNotification` if policy ≠ `off`.
+Wait for the user's reply before proceeding. Send a `PushNotification` if policy ≠ `off`.
 
 ## Phase 5 — Optional cross-LLM consult (only if non-obvious)
 
@@ -327,7 +327,7 @@ Run a self-check. Read each amended file fresh and verify:
 <!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the consistency
      error choice (Fix automatically / revise / abort) via their native channel.
      Silent omission is forbidden. -->
-> [pi] ⚠️ USER-INTERACTION GATE — the preceding text is an instruction for YOU to pause and ask the user, NOT a question for you to answer. Do NOT self-answer. Surface the choice to the user, then wait for their response before continuing.
+If any check fails, do **not** silently fix — surface it to the user conversationally ("inconsistency found: <X>") with your recommendation, and ask how to proceed (fix automatically / revise / abort).
 
 ## Phase 8 — Finalize
 

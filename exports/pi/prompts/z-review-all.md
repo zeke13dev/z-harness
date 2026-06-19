@@ -919,6 +919,119 @@ rm -f "$Z_HARNESS_PLAN_DIR/.review_state.json"
 ```
 This ensures a subsequent `/z-review-all` starts a full fresh run rather than fast-forwarding into a stale Phase 4.
 
+### Phase 6.6 — Render amendment brief
+
+After Phase 6.5 completes, build the renderer input from BOTH finding streams and write a unified brief into the run-brief artifact pipeline. This replaces the passive "## Escalations" bullet as the active presentation surface for premise_failure findings.
+
+**Source mapping:**
+- **`corrections`** — every `spec_gap` amendment proposal that Phase 6.5 successfully auto-amended. For each, supply `title` (the task title from REVIEW-TASKS.md), `why` (the source finding reference), and `target` (the amended artifact path, e.g. SPEC.md).
+- **`approach_concerns`** — every `premise_failure` escalation from the `## Escalations` section of REVIEW-TASKS.md. For each, supply `concern` (the finding text) and, when identifiable, `affected` (the affected scope or file). The `suggestion` field is optional. When `affected` is absent the brief falls back to "rework this, or proceed?".
+
+**Procedure:**
+
+1. Build the brief JSON. Capture it in `BRIEF_JSON`:
+
+```bash
+BRIEF_JSON="$(python3 - "$BASE/REVIEW-TASKS.md" "$BASE/archive/$RRUN/auto-amend-log.md" <<'PY'
+import json, re, sys
+from pathlib import Path
+
+review_tasks_path = sys.argv[1]
+amend_log_path = sys.argv[2]
+
+corrections = []
+approach_concerns = []
+
+# --- corrections: spec_gap tasks successfully auto-amended ---
+# Read the auto-amend log to get the title, source, and artifact for each applied amendment.
+if Path(amend_log_path).exists():
+    log_text = Path(amend_log_path).read_text(encoding="utf-8")
+    # Match each "### T-REV-NNN — [severity] <title>" block in the Amendments applied section.
+    block_re = re.compile(
+        r'###\s+(T-REV-\S+)\s+—\s+\[.*?\]\s+(.+?)\n'
+        r'.*?- \*\*Source:\*\*\s+(.+?)\n'
+        r'.*?- \*\*Result:\*\*\s+applied\b'
+        r'.*?- \*\*Artifacts changed:\*\*\s+(.+?)\n',
+        re.DOTALL,
+    )
+    matches = list(block_re.finditer(log_text))
+    # Warn only when the log exists AND records that amendments were applied but the regex
+    # matched zero blocks — this indicates a format drift / parse failure, not a clean run.
+    # A clean run either has no log file or has a log with zero "Result: applied" entries.
+    applied_count_re = re.search(r'Amendments applied:\s*(\d+)', log_text)
+    expected_applied = int(applied_count_re.group(1)) if applied_count_re else None
+    if not matches and expected_applied:
+        print(
+            f"z-review-all Phase 6.6 WARNING: auto-amend-log.md records {expected_applied} applied"
+            " amendment(s) but the block regex matched 0 — format may have drifted."
+            " corrections list will be empty; verify auto-amend-log.md format.",
+            file=sys.stderr,
+        )
+    for m in matches:
+        corrections.append({
+            "title": m.group(2).strip(),
+            "why": m.group(3).strip(),
+            "target": m.group(4).strip(),
+        })
+
+# --- approach_concerns: premise_failure escalations ---
+if Path(review_tasks_path).exists():
+    rt_text = Path(review_tasks_path).read_text(encoding="utf-8")
+    # Locate the ## Escalations section and extract Premise failure bullets.
+    esc_match = re.search(r'^## Escalations\s*\n(.*?)(?=^##|\Z)', rt_text, re.MULTILINE | re.DOTALL)
+    if esc_match:
+        esc_block = esc_match.group(1)
+        for line in esc_block.splitlines():
+            line = line.strip()
+            if line.startswith('- **Premise failure:**'):
+                # Strip the "- **Premise failure:** " prefix.
+                text = re.sub(r'^-\s+\*\*Premise failure:\*\*\s*', '', line)
+                # Try to extract an "affected" scope from "Recommended next: /z-plan <scope>"
+                affected = None
+                plan_match = re.search(r'/z-plan\s+(\S+)', text)
+                if plan_match:
+                    affected = plan_match.group(1)
+                # Strip the recommended-next trailer for the concern text.
+                concern = re.sub(r'\s*Recommended next:.*$', '', text).strip()
+                entry = {"concern": concern}
+                if affected:
+                    entry["affected"] = affected
+                approach_concerns.append(entry)
+
+print(json.dumps({"corrections": corrections, "approach_concerns": approach_concerns}))
+PY
+)"
+```
+
+2. **Skip gate**: parse `BRIEF_JSON` and skip Phase 6.6 (no brief file, no pipeline registration) if BOTH `corrections` and `approach_concerns` are empty:
+
+```bash
+_BRIEF_SKIP="$(python3 -c '
+import json, sys
+d = json.loads(sys.argv[1])
+print("1" if not d.get("corrections") and not d.get("approach_concerns") else "0")
+' "$BRIEF_JSON")"
+if [[ "$_BRIEF_SKIP" == "1" ]]; then
+  : # nothing to brief — skip to Phase 6.7
+else
+```
+
+3. Render the brief and write it to the archive (inside the `else` block from step 2):
+
+```bash
+  AMENDMENT_BRIEF_FILE="$BASE/archive/$RRUN/amendment-brief.md"
+  # BRIEF_JSON was captured in step 1 — pipe it directly to the shared renderer.
+  printf '%s' "$BRIEF_JSON" \
+    | python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/amendment-brief.py" \
+    > "$AMENDMENT_BRIEF_FILE"
+  # Phase 6.6 only WRITES amendment-brief.md to the archive. Registration with run-brief.json
+  # is handled by Finalize's APPROACH_FILE resolution, which prefers amendment-brief.md over
+  # findings.md when the file exists (see the Finalize set-section calls in the section below).
+fi
+```
+
+**Note:** The `## Escalations` heading in REVIEW-TASKS.md remains as the structured archive record of premise_failure entries for artifact traceability. The run-brief pipeline (amendment-brief.md → approach bullets in run-brief.json → Finalize render) is the *active* presentation layer.
+
 ### Phase 6.7 — Tier 2 context finalization + significance gate
 
 After Phase 6.5 cleanup, finalize tier2-context.json and evaluate the three-signal OR gate:
@@ -1027,7 +1140,10 @@ bash "$RB_SH" set-section --run "$RRUN" --section next --json /dev/stdin <<JSON
 JSON
 
 APPROACH_FILE=""
-if [[ -f "$BASE/archive/$RRUN/findings.md" ]]; then
+if [[ -f "$BASE/archive/$RRUN/amendment-brief.md" ]]; then
+  # Phase 6.6 wrote amendment-brief.md — prefer it so Finalize's approach bullets reflect the brief.
+  APPROACH_FILE="$BASE/archive/$RRUN/amendment-brief.md"
+elif [[ -f "$BASE/archive/$RRUN/findings.md" ]]; then
   APPROACH_FILE="$BASE/archive/$RRUN/findings.md"
 elif [[ -f "$BASE/REVIEW-TASKS.md" ]]; then
   APPROACH_FILE="$BASE/REVIEW-TASKS.md"
