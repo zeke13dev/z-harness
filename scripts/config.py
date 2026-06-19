@@ -110,6 +110,15 @@ DEFAULTS: dict = {
     "brainstorm": {
         "personas":              True,   # bool: inject persona diversity in /z-brainstorm
     },
+    "changelog": {
+        # Post-commit hook that drafts a human-readable CHANGELOG.md bullet.
+        # Installed per-repo via scripts/install-changelog-hook.sh; these knobs
+        # gate it at run-time so it can be disabled without uninstalling.
+        "auto":  True,                  # bool: master switch for the post-commit changelog hook
+        "types": ["feat", "fix"],       # list: conventional-commit types that earn a bullet
+        "file":  "CHANGELOG.md",        # str: changelog path, relative to repo root
+        "repos": ["*"],                 # list: repo-id allowlist; "*" = every repo
+    },
     "personas": {
         "critique_panel":      True,    # bool: inject persona diversity in /z-plan critique panels
         "audit":               True,    # bool: inject persona diversity in /z-audit dimension auditors
@@ -300,6 +309,7 @@ VALIDATORS: dict = {
     "axioms.extract_min_recurrence": _validate_positive_int,
     "axioms.auto_extract_post_run": _validate_bool_or_zero_one,
     "brainstorm.personas":          _validate_bool,
+    "changelog.auto":               _validate_bool,
     "personas.critique_panel":      _validate_bool,
     "personas.audit":               _validate_bool,
     "personas.review_eval":         _validate_bool,
@@ -352,6 +362,9 @@ _COERCERS: dict[str, object] = {
         )
     ),
     "brainstorm.personas": lambda v: (
+        v if isinstance(v, bool) else v.lower() == "true"
+    ),
+    "changelog.auto": lambda v: (
         v if isinstance(v, bool) else v.lower() == "true"
     ),
     "personas.critique_panel": lambda v: (
