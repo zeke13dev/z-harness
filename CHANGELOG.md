@@ -29,6 +29,12 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
   globbing the wrong directory (`personas/*.md` instead of `personas/builtin/`).
 - **Fixed:** artifact paths — `handoff.json` now lives in a single home, legacy
   plan directories get pruned, and a leaky claim-lock test was repaired.
+- **Conversational decisions over popups.** Judgment calls in `/z-debug`, `/z-fix`,
+  `/z-plan-light`, and `/z-amend` now come as a short brief — options, pros/cons, a
+  recommendation — that you can question or answer in plain reply, instead of an
+  `AskUserQuestion` popup. Popups are kept only for finite control-flow forks (slug
+  collision, claim lost, cost gate). Shipped as a global axiom so it guides every
+  command at runtime.
 
 ## 2026-06-17
 
