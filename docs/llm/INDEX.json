@@ -977,6 +977,34 @@
         "commands"
       ],
       "summary": "Final-gate cross-LLM review after /z-implement-all. Two consultant subagents (Gemini+Codex) on cumulative diff vs plan contract (SPEC in legacy; frozen INTENT+LEDGER in INTENT mode). Class enum at line 716 is canonical: implementation_drift|spec_gap|completed_task_contradiction|premise_failure|observation. Phase 6.5: unconditionally auto-amends every amendment_proposal (spec_gap) via /z-amend --skip-user-gate; no per-finding popup; skips [x] tasks; writes auto-amend-log.md; emits auto_amend_applied per amendment. Phase 6.6: renders unified amendment brief via scripts/amendment-brief.py (corrections=Phase-6.5 spec_gaps, approach_concerns=premise_failure escalations); writes amendment-brief.md to archive; Finalize APPROACH_FILE prefers amendment-brief.md over older seed. Phase 6.6 skipped when both lists empty. ## Escalations in REVIEW-TASKS.md preserved as archive record; amendment-brief.md is the active presentation layer."
+    },
+    {
+      "slug": "watchdog",
+      "source_files": [
+        "scripts/supervised-run.sh",
+        "scripts/watchdog-sweep.sh",
+        "scripts/notify-watchdog.sh",
+        "scripts/watchdog-spawn.sh",
+        "scripts/check-timeout.sh",
+        "scripts/config.py",
+        "scripts/active-plan-registry.py",
+        "agents/reviewer.md",
+        "agents/remote-runner.md",
+        "commands/z-implement-all.md",
+        "commands/z-overnight.md"
+      ],
+      "last_updated": "2026-06-19",
+      "confidence": "high",
+      "depends_on": [
+        "config",
+        "scripts",
+        "active-plan-registry"
+      ],
+      "consumed_by": [
+        "agents",
+        "commands"
+      ],
+      "summary": "Two-layer liveness mechanism for long z-harness runs. Layer 1 (enforcement): scripts/supervised-run.sh wraps killable dispatches (ssh, rsync, cargo, reviewer, bash) in a hard deadline — prefers timeout/gtimeout, falls back to a guarded bash deadline; on deadline kills the process group and returns exit 124, feeding the orchestrator's retry/halt path for real recovery. Layer 2 (detection+alert): scripts/watchdog-sweep.sh is a daemonized poller that reads events.jsonl for unmatched dispatch_start leases and calls liveness.sh for unmatched subagent *_start — covers native Agent() stalls that no shell signal can kill. On stall: emits watchdog_stall and alerts out-of-band via notify-watchdog.sh (Discord webhook + macOS osascript). CAPABILITY BOUNDARY: killable dispatches are genuinely recovered; Agent() stalls are detect+alert only. events.jsonl is the lease store (append-only, flock-safe, zero extra files). Config: watchdog.enabled/sweep_interval_secs/intervention_level{observe,notify}/kill_grace_secs/max_lifetime_secs/stale_secs/timeout_secs.<type>. macOS users should run brew install coreutils for gtimeout."
     }
   ]
 }

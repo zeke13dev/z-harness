@@ -20,6 +20,10 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
 
 ---
 
+## 2026-06-19
+
+- **Silent-failure watchdog landed.** Long runs no longer dead-wait on a hung subprocess. A two-layer mechanism covers all dispatch types: `scripts/supervised-run.sh` wraps every killable external call (ssh, rsync, cargo, reviewer CLI, Bash) in a hard deadline — killing the process group and returning a standard exit code for real recovery via the orchestrator's existing retry/halt path. A daemonized `watchdog-sweep.sh` poller runs out-of-band and detects stalls that can't be killed (including native `Agent()` calls that block the Claude runtime), then alerts via Discord webhook and/or macOS desktop notification. Detection latency is bounded and configurable: a killable dispatch stall is caught within roughly its per-type timeout plus one sweep interval (e.g. ~6 min for a reviewer at the 300 s default); an un-killable `Agent()` stall is caught within `sweep_interval_secs + stale_secs` (≈6 min at defaults). This replaces the previous open-ended silent dead-wait with a bounded, configurable alert. Config lives in `[watchdog]` in `config.toml`; macOS users should `brew install coreutils` for the `gtimeout` binary (bash fallback works but is less robust). All reviewer and remote-runner dispatches are now wrapped for both enforcement and telemetry.
+
 ## 2026-06-18
 
 - **Audit & review now default to amending.** After `/z-audit` or `/z-review-all`,
