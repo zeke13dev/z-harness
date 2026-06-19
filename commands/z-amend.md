@@ -132,7 +132,7 @@ Proceed directly to Phase 5. The caller (e.g. `/z-review-all` auto-amend) has al
 <!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the amendment
      approval question (Approve / Revise / Abandon) via their native channel and
      await a response. Silent omission is forbidden. -->
-Show `amendment.md` to the user via `AskUserQuestion`:
+Present `amendment.md` to the user as a conversational reply — **not** an `AskUserQuestion` popup — and recommend a path. Invite the user to reply:
 
 - **Approve as drafted** → proceed to Phase 5
 - **Revise** (free-text) → loop back to Phase 3 with their tweak
@@ -141,12 +141,12 @@ Show `amendment.md` to the user via `AskUserQuestion`:
 <!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the completed-task
      disposition question for each touched-but-completed task via their native channel.
      Silent omission is forbidden. -->
-If `Touched-but-completed tasks` is non-empty, ask a **separate explicit** `AskUserQuestion` for each:
-- "Add superseding task (recommended)"
-- "Re-open T0NN (flip `[x]` → `[ ]`) — work needs to be redone"
-- "Leave T0NN alone — amendment doesn't actually contradict it"
+If `Touched-but-completed tasks` is non-empty, present them conversationally — one short block per task with your recommended disposition and why — and ask the user to confirm or override each in their reply (not a separate `AskUserQuestion` popup per task). The dispositions per task are:
+- **Add superseding task** (usually recommended)
+- **Re-open T0NN** (flip `[x]` → `[ ]`) — work needs to be redone
+- **Leave T0NN alone** — amendment doesn't actually contradict it
 
-Block until answered. Send a `PushNotification` if policy ≠ `off`.
+Wait for the user's reply before proceeding. Send a `PushNotification` if policy ≠ `off`.
 
 ## Phase 5 — Optional cross-LLM consult (only if non-obvious)
 
@@ -329,7 +329,7 @@ Run a self-check. Read each amended file fresh and verify:
 <!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the consistency
      error choice (Fix automatically / revise / abort) via their native channel.
      Silent omission is forbidden. -->
-If any check fails, do **not** silently fix — surface to user via `AskUserQuestion` ("inconsistency found: <X>. Fix automatically / revise / abort").
+If any check fails, do **not** silently fix — surface it to the user conversationally ("inconsistency found: <X>") with your recommendation, and ask how to proceed (fix automatically / revise / abort).
 
 ## Phase 8 — Finalize
 
