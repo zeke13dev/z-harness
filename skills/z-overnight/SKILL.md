@@ -1,4 +1,6 @@
 ---
+name: z-overnight
+disable-model-invocation: true
 description: Run a chain of z-harness workflows unattended overnight with halt-only user interaction. Chains existing sub-commands end-to-end, writes MORNING_REPORT.md, and push-notifies on halt or completion.
 argument-hint: "<chain> [task-description] | preset:<name> [task-description] | resume <RUN_ID>"
 runtime: c1

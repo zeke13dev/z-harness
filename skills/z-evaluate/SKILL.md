@@ -1,4 +1,6 @@
 ---
+name: z-evaluate
+disable-model-invocation: true
 description: Evaluate a completed z-harness session for patterns worth preserving as memories or skills.
 argument-hint: "[archive directory path — defaults to latest]"
 runtime: c1

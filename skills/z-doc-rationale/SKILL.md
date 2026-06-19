@@ -1,5 +1,6 @@
 ---
 name: z-doc-rationale
+disable-model-invocation: true
 description: Tier 2 narrative doc command. Reads tier2-context.json and produces ADRs, design rationale, tradeoff explanations, and migration guides from warm pipeline context.
 origin: doc-updater-agent
 tags: [docs, tier2, narrative]

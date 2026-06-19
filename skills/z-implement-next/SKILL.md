@@ -1,4 +1,6 @@
 ---
+name: z-implement-next
+disable-model-invocation: true
 description: Implement the next pending task from z-harness/TASKS.md, then have Codex scrutinize the diff.
 runtime: c1
 driver_features_required:

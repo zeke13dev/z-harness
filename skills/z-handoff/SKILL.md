@@ -1,4 +1,6 @@
 ---
+name: z-handoff
+disable-model-invocation: true
 description: Write a handoff.json artifact for session continuity. Captures the current working context (plan slug, active files, next step) into a machine-readable JSON contract that any orchestrator (Hermes) can consume to resume work in a fresh agent session. Universal — works for pi, Claude Code, and any future z-harness agent.
 argument-hint: "[continuation prompt — optional override for next_step]"
 runtime: c1

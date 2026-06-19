@@ -1,4 +1,6 @@
 ---
+name: z-attend
+disable-model-invocation: true
 description: "Run a z-harness command chain in attended middle-gear mode: auto-advance the plan/audit/test/implement/review chain, halt and ask inline only on the four-category gate taxonomy, and yield for a user /clear at context boundaries."
 argument-hint: "[chain-preset] [task-description] | resume <RUN> | status <RUN>"
 runtime: c1

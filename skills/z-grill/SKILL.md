@@ -1,4 +1,6 @@
 ---
+name: z-grill
+disable-model-invocation: true
 description: Live depth-first interrogation that sharpens a vague idea into a buildable problem statement. Asks ONE question at a time, always states a recommended answer, self-serves codebase-answerable questions via Explore, and terminates adaptively. Writes GRILL.md as a precontext artifact for /z-plan and /z-brainstorm. No upfront cross-LLM consult, no SPEC/PLAN/TASKS ceremony.
 argument-hint: "[topic or blank]"
 runtime: c1

@@ -1,4 +1,6 @@
 ---
+name: z-export
+disable-model-invocation: true
 description: "Export z-harness commands/agents/skills/personas to Cursor / Codex / Antigravity (agy) / pi / Windsurf / Kiro / Cline / Copilot."
 argument-hint: "[--target=<cursor|codex|agy|pi|windsurf|kiro|cline|copilot|all>] [--include=personas]"
 runtime: c1

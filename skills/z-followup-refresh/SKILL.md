@@ -1,4 +1,6 @@
 ---
+name: z-followup-refresh
+disable-model-invocation: true
 description: Refresh a blocked (staleness) follow-up entry — re-stamps capture_head and file_blob_hashes, then transitions back to open.
 argument-hint: "<entry-id>"
 runtime: c1

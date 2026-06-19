@@ -1,4 +1,6 @@
 ---
+name: z-learn
+disable-model-invocation: true
 description: Interactive progressive-disclosure tutor for understanding code. Replaces repetitive "explain more / tell me about X" sessions. Four depth lenses, resumable staging, optional LEARN.md artifact. Read-only, no cross-LLM consult.
 argument-hint: "<target> [orientation|walkthrough|deep|audit-brief] or free-text"
 runtime: c1

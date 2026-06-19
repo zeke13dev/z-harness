@@ -1,4 +1,6 @@
 ---
+name: z-plan
+disable-model-invocation: true
 description: Run the rigorous z-harness planning pipeline — challenge premises, batch decisions, cross-consult Gemini + Codex once, and produce SPEC.md / PLAN.md / TASKS.md.
 argument-hint: <feature or task description>
 runtime: c1

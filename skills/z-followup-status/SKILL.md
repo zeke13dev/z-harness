@@ -1,4 +1,6 @@
 ---
+name: z-followup-status
+disable-model-invocation: true
 description: Read-only diagnostic summary of the follow-up sink — counts per status, lock state, oldest open entry, and last sync failure.
 argument-hint: "[--sink=<project|global|both>]"
 runtime: c1

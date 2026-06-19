@@ -1,4 +1,6 @@
 ---
+name: z-improve
+disable-model-invocation: true
 description: Post-run retrospective. Analyzes ONE z-harness run's events.jsonl + artifacts, identifies friction signals (slow phases, retries, doc drift, blocked askings, reviewer cycles), and opens a discussion with the user about concrete edits to the z-harness repo itself (commands, agents, scripts). Optional cross-LLM consult on proposed changes. Discussion logged to z-harness/improvements/. Opt-in; never auto-fired.
 argument-hint: <slug> | $Z_HARNESS_PLAN_DIR/<run-id> | adhoc/<run-id>
 runtime: c1

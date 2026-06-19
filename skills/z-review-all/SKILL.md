@@ -1,4 +1,6 @@
 ---
+name: z-review-all
+disable-model-invocation: true
 description: "Final-gate cross-LLM review of a completed z-harness plan. Runs Gemini + Codex on the cumulative diff against the plan contract (SPEC.md in legacy mode; frozen INTENT.md + LEDGER.md in INTENT mode) to surface (a) implementation drift across tasks and (b) spec/intent gaps that only surface in aggregate. Use after /z-implement-all completes."
 argument-hint: "[--slug <slug>] [--base <git-ref>]"
 runtime: c1

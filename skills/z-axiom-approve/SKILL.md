@@ -1,4 +1,6 @@
 ---
+name: z-axiom-approve
+disable-model-invocation: true
 description: Approve a candidate axiom. Shows the candidate, its evidence, and falsifiability state. Requires explicit user confirmation before approving. Reuses /z-suggest-memory --from-candidate-json for the MEMORY-overlap advisory. Regenerates the kernel synchronously on approval.
 argument-hint: <id> [--scope <global|project>] [--repo-root <path>]
 runtime: c1

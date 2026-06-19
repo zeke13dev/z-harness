@@ -1,4 +1,6 @@
 ---
+name: z-debt
+disable-model-invocation: true
 description: "Read-only lazy-code debt ledger. Scans for z-colon debt markers and renders a grouped ledger to stdout. Flags no-trigger entries. Persist to Z-DEBT.md only with --save."
 argument-hint: "[--save] [<path>]"
 runtime: c1

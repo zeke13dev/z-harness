@@ -1,4 +1,6 @@
 ---
+name: z-git-guardrails
+disable-model-invocation: true
 description: Install, remove, or report status of the z-harness PreToolUse guardrail hooks (git-safety + worktree-isolation) in global or project Claude Code settings.
 argument-hint: "[install|remove|status]"
 runtime: c1

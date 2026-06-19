@@ -1,4 +1,6 @@
 ---
+name: z-audit
+disable-model-invocation: true
 description: Audit a target component across one or more dimensions (correctness / perf / cleanliness / design). Pre-flight scopes (target, dimensions, optional rubric file), spawns one auditor subagent per dimension in parallel, runs bundled Gemini+Codex consult on findings, emits REPORT.md + TASKS.md under $Z_HARNESS_PLAN_DIR-audit/ in the exact shape /z-implement-all consumes. Read-only — never edits the target.
 argument-hint: <target path or component name> [--scope-from <chunk-spec>]
 runtime: c1

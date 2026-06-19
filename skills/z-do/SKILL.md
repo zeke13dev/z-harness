@@ -1,4 +1,6 @@
 ---
+name: z-do
+disable-model-invocation: true
 description: Plan-less z-harness execution for small tasks. Brings the harness discipline — premise check, doc-fetcher grounding, codex review safety gate, structured logging — without SPEC/PLAN/TASKS/FIX.md ceremony. Logs to z-harness/adhoc/ so /z-improve can retro it. Routes to the right planning/debug workflow when scope or bug signals exceed direct execution.
 argument-hint: <small task description>
 runtime: c1

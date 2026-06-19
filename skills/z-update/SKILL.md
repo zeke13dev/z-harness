@@ -1,4 +1,6 @@
 ---
+name: z-update
+disable-model-invocation: true
 description: Update the z-harness plugin to the latest version. Detects symlink vs tarball install mode and runs the appropriate update path.
 runtime: c1
 driver_features_required: []

@@ -1,4 +1,6 @@
 ---
+name: z-report
+disable-model-invocation: true
 description: "Depth-tiered narrative of exactly what happened + what follow-ups exist, for a z-harness run or past work (run-id / plan-slug / PR / commit-range). User-invoked, read-only, composes existing reporting primitives. Does not auto-fire."
 argument-hint: "[target] [summary|standard|deep] | --run <id> --slug <s> --pr <N|url> --range <A..B> --base <ref> --save <path>"
 runtime: c1

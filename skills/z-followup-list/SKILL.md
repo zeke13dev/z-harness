@@ -1,4 +1,6 @@
 ---
+name: z-followup-list
+disable-model-invocation: true
 description: Read-only listing of follow-up entries from project and global sinks, priority-sorted and filterable.
 argument-hint: "[--status=<open|running|verify|done|failed|blocked|dismissed>] [--sink=<project|global>] [--priority=<P0|P1|P2|P3>] [--json]"
 runtime: c1

@@ -1,4 +1,6 @@
 ---
+name: z-audit-plan
+disable-model-invocation: true
 description: Audit a plan's artifacts (SPEC.md, PLAN.md, TASKS.md) before execution. Reality-checks references against the codebase, verifies best practices/design, and runs a cross-LLM adversarial review. Emits PLAN_AUDIT_REPORT.md.
 argument-hint: "[--slug <slug>]"
 runtime: c1

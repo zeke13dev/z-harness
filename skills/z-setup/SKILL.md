@@ -1,4 +1,6 @@
 ---
+name: z-setup
+disable-model-invocation: true
 description: "Configuration cockpit for z-harness: inspect resolved state, run guided setup wizard, or apply a posture preset."
 argument-hint: "[wizard|apply --posture <name>|explain <key>|status] [--scope <name>]"
 runtime: c1

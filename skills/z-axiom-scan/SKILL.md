@@ -1,4 +1,6 @@
 ---
+name: z-axiom-scan
+disable-model-invocation: true
 description: Mine candidate axioms from z-harness interaction history by dispatching the axiom-extractor agent, then writing returned candidates to the axiom store. Use --historical for a full metrics.jsonl scan (expensive). Proposes only — never auto-approves.
 argument-hint: "[--historical] [--scope <global|project>] [--run <run-id>] [--repo-root <path>]"
 runtime: c1

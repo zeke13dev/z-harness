@@ -1,4 +1,6 @@
 ---
+name: z-sharpen
+disable-model-invocation: true
 description: Conversational idea-sharpening on-ramp — probes, reframes, and converges a vague
   idea into a buildable problem statement, escalating to pin individual fuzzy dimensions (with a
   recommended answer) only as needed. Bounded — never full /z-grill exhaustiveness. Writes GRILL.md

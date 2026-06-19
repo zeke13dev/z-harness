@@ -1,4 +1,6 @@
 ---
+name: z-debug
+disable-model-invocation: true
 description: Heavy hypothesis-tournament debugging pipeline for the case where root cause is unknown. Two rounds of adversarial multi-LLM hypothesis generation (Claude + Codex + Gemini), discriminating-test matrix with consensus-first ranking + forced outlier carve-out, ordinal Bayesian scoring with orchestrator-assigned likelihoods, 3-5 isolation rounds, fix-gate requires highest posterior AND causal mechanism explaining all evidence. Single unified DEBUG.md artifact. Early gate recommends /z-fix if user already has a diagnosis.
 argument-hint: <symptom description>
 runtime: c1

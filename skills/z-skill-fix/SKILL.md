@@ -1,4 +1,6 @@
 ---
+name: z-skill-fix
+disable-model-invocation: true
 description: Diagnose and patch a misleading skill file — any SKILL.md under .claude/skills/ in the current repo, or any z-harness commands/*.md / agents/*.md when invoked inside the z-harness repo itself. Inline diagnosis note, surgical edit, reviewer safety gate. Repo-agnostic meta-skill — no qt-bot coupling.
 argument-hint: <skill name or path; or describe the failure>
 runtime: c1

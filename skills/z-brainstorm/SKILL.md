@@ -1,4 +1,6 @@
 ---
+name: z-brainstorm
+disable-model-invocation: true
 description: Cheap parallel pre-plan ideation — dispatch 3 vendor-diverse ideators (Claude + Codex + Gemini), perform a mandatory anti-bias check, and produce BRAINSTORM.md to seed /z-plan.
 argument-hint: <topic to brainstorm> [--slug=<kebab>]
 runtime: c1

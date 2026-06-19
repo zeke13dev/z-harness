@@ -1,4 +1,6 @@
 ---
+name: z-providers-discover
+disable-model-invocation: true
 description: Discover LLM CLI providers in PATH and generate providers.json.
 runtime: c1
 driver_features_required:

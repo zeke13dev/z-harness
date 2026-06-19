@@ -1,4 +1,6 @@
 ---
+name: z-test-prune
+disable-model-invocation: true
 description: Read-only test-suite pruning planner complementing /z-test. Scans an existing test suite, classifies prunable tests under a four-category rubric with hard keep-guards, runs a mandatory cross-LLM adversarial defend-pass, and emits TEST-PRUNE.md (a TASKS.md-shaped promotion artifact). Never deletes tests; user curates and applies via /z-implement-all --tasks=...TEST-PRUNE.md.
 argument-hint: "[--path <glob>] [--base <ref>] [--coverage <report>] [--test-results <report>] [--slug <slug>]"
 runtime: c1

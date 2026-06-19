@@ -1,4 +1,6 @@
 ---
+name: z-personas
+disable-model-invocation: true
 description: "Inspect persona registry, role bindings, and persona files. Subcommands: list, roles, validate, read <name>, where <name>. Default (no args) = roles."
 argument-hint: "[list | roles | validate | read <name> | where <name>]"
 runtime: c1

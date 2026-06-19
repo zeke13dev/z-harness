@@ -1,4 +1,6 @@
 ---
+name: z-amend
+disable-model-invocation: true
 description: Amend an existing z-harness plan (INTENT.md, SPEC/PLAN/TASKS, or FIX.md) so a change is propagated consistently across all artifacts. In intent mode, re-opens the frozen contract and invalidates the current level's TASKS.md for regeneration. Preserves completed task state; adds/modifies/removes tasks as needed; optionally cross-consults if the amendment is non-obvious.
 argument-hint: <what to change about the plan> [--skip-user-gate]
 runtime: c1
