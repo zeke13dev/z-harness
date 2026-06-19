@@ -3,15 +3,26 @@ runtime/drivers/cursor/export.py
 
 Port of ``scripts/export-cursor.py`` as a runtime driver.
 
-Renders z-harness agents and skills to Cursor ``.mdc`` rule files
-under ``<export_root>/.cursor/rules/``.
+Renders z-harness agents as Cursor ``.mdc`` rule files under
+``<export_root>/.cursor/rules/`` and skills as native ``SKILL.md`` files
+under ``<export_root>/.cursor/skills/<id>/SKILL.md``.
 
 Public surface
 --------------
 export(repo_root, export_root, *, options=None) -> ExportResult
 
-Limitations
------------
+Skill layout
+------------
+Each skill is copied verbatim (frontmatter preserved) to
+``.cursor/skills/<id>/SKILL.md``.  No transliteration is performed —
+Cursor 2.4+ supports native SKILL.md invocation.
+
+Exactly one generated always-apply index ``.mdc`` is written at
+``.cursor/rules/z-harness-skills.mdc`` pointing users to the skills
+directory.
+
+Limitations (agents only)
+--------------------------
 - Agent dispatch / Skill invocation are not supported in Cursor rules. Lines
   containing ``Agent(...)``, ``Skill(...)``, ``AskUserQuestion(...)``,
   ``TaskCreate(...)``, or ``SubagentCreate(...)`` are replaced with a
@@ -109,6 +120,27 @@ def _render_mdc(entry: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Skills index MDC — single always-apply pointer to .cursor/skills/
+# ---------------------------------------------------------------------------
+
+_SKILLS_INDEX_NAME = "z-harness-skills.mdc"
+
+_SKILLS_INDEX_TEMPLATE = (
+    "---\n"
+    'description: "z-harness skills index — invoke skills from .cursor/skills/"\n'
+    "alwaysApply: true\n"
+    "---\n"
+    "\n"
+    "# z-harness Skills\n"
+    "\n"
+    "z-harness skills live under `.cursor/skills/<name>/SKILL.md`.\n"
+    "Open any `SKILL.md` in that directory and invoke it directly in Cursor.\n"
+    "\n"
+    "Available skills are listed in `.cursor/skills/` — one subdirectory per skill.\n"
+)
+
+
+# ---------------------------------------------------------------------------
 # MDC validation — preserved verbatim from export-cursor.py
 # ---------------------------------------------------------------------------
 
@@ -151,7 +183,13 @@ def export(
     *,
     options: dict[str, Any] | None = None,
 ) -> ExportResult:
-    """Export z-harness agents and skills to Cursor ``.mdc`` rules.
+    """Export z-harness agents and skills to Cursor.
+
+    Agents are rendered as ``.mdc`` rule files under
+    ``<export_root>/.cursor/rules/``.  Skills are written verbatim as
+    ``<export_root>/.cursor/skills/<id>/SKILL.md`` (frontmatter preserved,
+    no rewriting).  Exactly one generated always-apply index ``.mdc`` is
+    written at ``<export_root>/.cursor/rules/z-harness-skills.mdc``.
 
     Parameters
     ----------
@@ -159,8 +197,7 @@ def export(
         Absolute path to the z-harness repository root.  Source directories
         ``agents/`` and ``skills/`` are resolved relative to this path.
     export_root:
-        Absolute path to the export output root directory.  Files are written
-        under ``<export_root>/.cursor/rules/``.
+        Absolute path to the export output root directory.
     options:
         Reserved for future use.  Currently unused; any keys are silently
         ignored.
@@ -169,9 +206,10 @@ def export(
     -------
     ExportResult
         ``dest`` is set to ``<export_root>/.cursor/rules/``.
-        ``files`` lists every ``.mdc`` file written.
-        ``fidelity`` is ``"flattened"`` (Agent/Skill calls are replaced with
-        limitation comments).
+        ``files`` lists every file written (agents as ``.mdc``, skills as
+        ``SKILL.md``, plus the index ``.mdc``).
+        ``fidelity`` is ``"flattened"`` (Agent/Skill calls in agent rules are
+        replaced with limitation comments).
         ``warnings`` contains any MDC validation errors encountered.
     """
     repo_root = Path(repo_root).resolve()
@@ -186,25 +224,41 @@ def export(
     # when out_root differs from the default exports/cursor/).
     default_base = repo_root / "exports" / "cursor"
 
-    for kind in ("agents", "skills"):
-        for entry in sources[kind]:
-            eid = entry["id"]
-            out_path = output_path_for(repo_root, "cursor", kind, eid)
-            # output_path_for always writes under repo_root/exports/cursor;
-            # honour out_root by replacing that prefix.
-            if out_root != default_base:
-                relative = out_path.relative_to(default_base)
-                out_path = out_root / relative
+    def _resolve_out(kind: str, eid: str) -> Path:
+        """Resolve output path, honouring out_root override."""
+        out_path = output_path_for(repo_root, "cursor", kind, eid)
+        if out_root != default_base:
+            relative = out_path.relative_to(default_base)
+            return out_root / relative
+        return out_path
 
-            out_path.parent.mkdir(parents=True, exist_ok=True)
+    # --- Agents: render as .mdc rule files (with body rewriting). ---
+    for entry in sources["agents"]:
+        out_path = _resolve_out("agents", entry["id"])
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(_render_mdc(entry), encoding="utf-8")
+        emitted.append(out_path)
 
-            mdc_content = _render_mdc(entry)
-            out_path.write_text(mdc_content, encoding="utf-8")
-            emitted.append(out_path)
+    # --- Skills: copy verbatim as native SKILL.md files. ---
+    for entry in sources["skills"]:
+        out_path = _resolve_out("skills", entry["id"])
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        # Preserve the source SKILL.md verbatim (frontmatter intact, no rewriting).
+        source_text = entry["source_path"].read_text(encoding="utf-8")
+        out_path.write_text(source_text, encoding="utf-8")
+        emitted.append(out_path)
 
-    # Validate all emitted files.
+    # --- Skills index: exactly one generated always-apply .mdc pointer. ---
+    rules_dir = out_root / ".cursor" / "rules"
+    rules_dir.mkdir(parents=True, exist_ok=True)
+    index_path = rules_dir / _SKILLS_INDEX_NAME
+    index_path.write_text(_SKILLS_INDEX_TEMPLATE, encoding="utf-8")
+    emitted.append(index_path)
+
+    # Validate all emitted .mdc files (agents + index; SKILL.md are not .mdc).
     for path in emitted:
-        validation_errors.extend(_validate_mdc(path))
+        if path.suffix == ".mdc":
+            validation_errors.extend(_validate_mdc(path))
 
     # Validate CAPABILITIES.md if it exists.
     caps_path = out_root / "CAPABILITIES.md"

@@ -372,7 +372,7 @@ _TARGET_CONVENTIONS: dict[str, dict[str, str]] = {
     "cursor": {
         "commands": ".cursor/rules/{id}.mdc",
         "agents": ".cursor/rules/{id}.mdc",
-        "skills": ".cursor/rules/{id}.mdc",
+        "skills": ".cursor/skills/{id}/SKILL.md",
     },
     "codex": {
         "commands": "prompts/{id}.md",
@@ -403,7 +403,8 @@ def output_path_for(repo_root: Path, target: str, kind: str, id: str) -> Path:
         An absolute Path inside ``exports/<target>/`` following the per-target
         convention:
 
-        - cursor → ``exports/cursor/.cursor/rules/<id>.mdc``
+        - cursor agents/commands → ``exports/cursor/.cursor/rules/<id>.mdc``
+        - cursor skills → ``exports/cursor/.cursor/skills/<id>/SKILL.md``
         - codex  → ``exports/codex/prompts/<id>.md``
 
     Raises:
