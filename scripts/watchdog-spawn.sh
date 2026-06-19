@@ -138,7 +138,7 @@ def pid_alive(pid):
     except ProcessLookupError:
         return False
     except PermissionError:
-        # PID exists but we lack permission to signal it — it's alive.
+        # PID exists but we lack permission to signal it — it is alive.
         return True
 
 # Open the pid file (create if needed) and take an exclusive lock.
@@ -167,12 +167,12 @@ try:
     # Fork an intermediate child.  The child calls os.setsid() (new session,
     # detaches from any controlling terminal), redirects stdio to /dev/null,
     # then execs the sweep.  The parent (this Python) reaps the intermediate
-    # child immediately via waitpid; the exec'd grandchild (the actual sweep)
+    # child immediately via waitpid; the exec-d grandchild (the actual sweep)
     # is adopted by init/launchd because its parent (the intermediate child)
     # execs away and the grandchild already has no controlling terminal.
     #
     # We capture the grandchild PID via a pipe written by the intermediate child
-    # before exec'ing the sweep.
+    # before exec-ing the sweep.
 
     pid_r, pid_w = os.pipe()
 
@@ -184,7 +184,7 @@ try:
         # Detach from session.
         os.setsid()
         # Redirect stdin/stdout/stderr to /dev/null so the sweep never
-        # inherits the calling tool's stdout fd.
+        # inherits the calling tool stdout fd.
         devnull = os.open("/dev/null", os.O_RDWR)
         os.dup2(devnull, 0)  # stdin
         os.dup2(devnull, 1)  # stdout
@@ -196,7 +196,7 @@ try:
         grandchild = os.fork()
         if grandchild == 0:
             # --- Grandchild (sweep) ---
-            # Close the pipe fd — we don't need it.
+            # Close the pipe fd — we do not need it.
             os.close(pid_w)
             # Build env for the sweep: pass plan_dir and registry_enabled.
             env = os.environ.copy()
@@ -262,8 +262,9 @@ if [[ "$_WS_RESULT" == skip:* ]]; then
 elif [[ "$_WS_RESULT" == spawned:* ]]; then
   _WS_NEW_PID="${_WS_RESULT#spawned:}"
   # Best-effort telemetry (non-fatal).
-  bash "$_WS_SCRIPTS_DIR/log-event.sh" "$RUN" "watchdog_spawned" \
-    '{"run":"'"$RUN"'","pid":'"${_WS_NEW_PID:-0}"'}' \
+  _WS_PAYLOAD="$(python3 -c 'import json,sys; print(json.dumps({"run": sys.argv[1], "pid": int(sys.argv[2])}))' \
+    "$RUN" "${_WS_NEW_PID:-0}")"
+  bash "$_WS_SCRIPTS_DIR/log-event.sh" "$RUN" "watchdog_spawned" "$_WS_PAYLOAD" \
     >/dev/null 2>&1 || true
 fi
 

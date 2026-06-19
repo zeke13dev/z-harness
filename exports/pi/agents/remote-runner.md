@@ -65,7 +65,10 @@ Classify the command (see "Command classification" above). Before running anythi
 **If classified `needs-sandbox`** — rsync first:
 
 ```bash
-bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/remote-sandbox-sync.sh" "<remote-host>" "<slug>" "<task-id>"
+PLUGIN_ROOT="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+bash "${PLUGIN_ROOT}/scripts/supervised-run.sh" \
+  --run "$RUN" --type rsync --timeout 0 -- \
+  bash "${PLUGIN_ROOT}/scripts/remote-sandbox-sync.sh" "<remote-host>" "<slug>" "<task-id>"
 ```
 
 **Worktree cwd-safety.** The rsync source is the git work tree of the current cwd. When the
@@ -93,10 +96,26 @@ the command inside a memory-capped `systemd-run --user` transient unit and **ref
 than running unconfined** if the cap can't be guaranteed:
 
 ```bash
-bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/remote-confined-run.sh" \
-  "<remote-host>" "$EXEC_DIR" "<verify-cmd>" 2>&1 \
-  | tee "$BASE/archive/tasks/<task-id>/remote-build.log"
+PLUGIN_ROOT="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+LOG_PATH="$BASE/archive/tasks/<task-id>/remote-build.log"
+
+# Capture stderr separately so we can extract the [confined-run] UNIT= line.
+# remote-confined-run.sh emits "echo [confined-run] UNIT=$UNIT >&2" immediately
+# after computing the unit name — this is the only channel that survives a local
+# ssh kill (the remote unit keeps running after the local ssh dies on timeout).
+CONFINED_STDERR="$(mktemp)"
+bash "${PLUGIN_ROOT}/scripts/supervised-run.sh" \
+  --run "$RUN" --type cargo --timeout 0 -- \
+  bash "${PLUGIN_ROOT}/scripts/remote-confined-run.sh" \
+    "<remote-host>" "$EXEC_DIR" "<verify-cmd>" \
+  2>"$CONFINED_STDERR" \
+  | tee "$LOG_PATH"
 EXIT_CODE=${PIPESTATUS[0]}
+# Route captured stderr to the log and back to the caller's stderr.
+cat "$CONFINED_STDERR" | tee -a "$LOG_PATH" >&2
+# Extract the remote unit name for cleanup hints (best-effort).
+REMOTE_UNIT="$(grep '\[confined-run\] UNIT=' "$CONFINED_STDERR" | sed 's/.*UNIT=//' | head -1)"
+rm -f "$CONFINED_STDERR"
 ```
 
 If `EXIT_CODE == 97`, the host could not be confined (no user systemd manager, no cgroup delegation,
@@ -106,13 +125,38 @@ systemd manager unreachable (try: loginctl enable-linger)"). Caps are tunable vi
 `Z_HARNESS_REMOTE_MEMMAX` (default 10G), `Z_HARNESS_REMOTE_SWAPMAX` (0), `Z_HARNESS_REMOTE_CPUQUOTA`
 (400%), `Z_HARNESS_REMOTE_NICE` (10).
 
-**`read-only-against-shared-state` commands** (log tail/grep, `du`/`df`/`ls`, `duckdb -readonly`,
-`psql` read query, `qtctl status`/`restart`) do not run repo code and need no confinement — run them
-directly:
+If `EXIT_CODE == 124` (supervised-run deadline), the local ssh was killed but the remote `systemd-run`
+unit may still be running. Emit an additional orphan-possible event and alert with the cleanup hint:
 
 ```bash
-ssh "<remote-host>" "cd $EXEC_DIR && <verify-cmd>" 2>&1 \
+if [[ "$EXIT_CODE" -eq 124 ]]; then
+  # Emit remote_orphan_possible event (best-effort telemetry).
+  bash "${PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" "watchdog_timeout" \
+    "$(python3 -c "import json; print(json.dumps({'type':'cargo','remote_orphan_possible':True,'remote_unit':'${REMOTE_UNIT}' if '${REMOTE_UNIT}' else None}))")" 2>/dev/null || true
+
+  # Build the cleanup hint using the captured unit name (or generic fallback).
+  if [[ -n "$REMOTE_UNIT" ]]; then
+    CLEANUP_HINT="ssh <remote-host> systemctl --user stop $REMOTE_UNIT"
+  else
+    CLEANUP_HINT="ssh <remote-host> systemctl --user list-units 'run-*'"
+  fi
+  bash "${PLUGIN_ROOT}/scripts/notify-watchdog.sh" \
+    --run "$RUN" --event "watchdog_timeout" \
+    --message "Remote cargo timed out; remote unit may still be running. Cleanup: $CLEANUP_HINT" || true
+fi
+```
+
+**`read-only-against-shared-state` commands** (log tail/grep, `du`/`df`/`ls`, `duckdb -readonly`,
+`psql` read query, `qtctl status`/`restart`) do not run repo code and need no confinement — run them
+through the supervised wrapper at `--type ssh`:
+
+```bash
+PLUGIN_ROOT="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+bash "${PLUGIN_ROOT}/scripts/supervised-run.sh" \
+  --run "$RUN" --type ssh --timeout 0 -- \
+  ssh "<remote-host>" "cd $EXEC_DIR && <verify-cmd>" 2>&1 \
   | tee "$BASE/archive/tasks/<task-id>/remote-build.log"
+EXIT_CODE=${PIPESTATUS[0]}
 ```
 
 Capture the exit code. If exit non-zero, also capture the first 80 lines of any error/warning text (`grep -iE 'error|warning|failed' | head -80`).
@@ -136,7 +180,10 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end 
 If the run was `needs-sandbox` and `exit_code == 0`, remove only the per-task directory:
 
 ```bash
-ssh "<remote-host>" "rm -rf ~/dev/qt-bot-sandbox/sandbox/<slug>/<task-id>/"
+PLUGIN_ROOT="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+bash "${PLUGIN_ROOT}/scripts/supervised-run.sh" \
+  --run "$RUN" --type ssh --timeout 0 -- \
+  ssh "<remote-host>" "rm -rf ~/dev/qt-bot-sandbox/sandbox/<slug>/<task-id>/"
 ```
 
 **NEVER delete `~/dev/qt-bot-sandbox/sandbox/<slug>/base/`.** The warm base is shared across all tasks in the slug and is intentionally long-lived. It is reclaimed by the next `/z-implement-all` invocation's first-invocation seed step, not per-task cleanup. Deleting it would force a full cold rsync on the next task.

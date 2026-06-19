@@ -158,8 +158,27 @@ Z_HARNESS_PLAN_DIR="$PLAN_DIR_001" \
 SP2_PID=$!
 
 # Wait for both spawn calls to complete (they should return promptly).
-wait "$SP1_PID" || RC_SP1=$?
-wait "$SP2_PID" || RC_SP2=$?
+# Bounded: poll up to 10s each, then force-kill and record failure.
+_bounded_wait_spawn() {
+  local pid="$1" rc_var="$2"
+  local _w=0
+  while kill -0 "$pid" 2>/dev/null && [[ $_w -lt 100 ]]; do
+    sleep 0.1
+    _w=$(( _w + 1 ))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    # Did NOT return within 10s — force-kill and signal failure.
+    kill -KILL "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    printf -v "$rc_var" '%s' "1"
+  else
+    local _exit=0
+    wait "$pid" 2>/dev/null || _exit=$?
+    printf -v "$rc_var" '%s' "$_exit"
+  fi
+}
+_bounded_wait_spawn "$SP1_PID" RC_SP1
+_bounded_wait_spawn "$SP2_PID" RC_SP2
 
 assert_eq "both spawn calls exit 0" "0" "$(( RC_SP1 + RC_SP2 ))"
 

@@ -2415,14 +2415,20 @@ class TestInspectAll(unittest.TestCase):
         self.assertEqual(r.returncode, 0, f"stderr={r.stderr!r}")
         data = json.loads(r.stdout)
         toml_keys = data["toml_keys"]
-        # Build expected key set from DEFAULTS (mirroring _flatten_defaults)
+        # Build expected key set from DEFAULTS (mirroring _flatten_defaults).
+        # Handles up to 3-level nesting (e.g. watchdog.timeout_secs.bash).
         expected_keys = set()
         for section, sv in DEFAULTS.items():
             if section in META_KEYS:
                 continue
             if isinstance(sv, dict):
-                for k in sv:
-                    expected_keys.add(f"{section}.{k}")
+                for k, v in sv.items():
+                    if isinstance(v, dict):
+                        # 3-level nesting: section.k.subk
+                        for subk in v:
+                            expected_keys.add(f"{section}.{k}.{subk}")
+                    else:
+                        expected_keys.add(f"{section}.{k}")
         for key in expected_keys:
             self.assertIn(key, toml_keys, f"DEFAULTS key {key!r} missing from inspect-all toml_keys")
 

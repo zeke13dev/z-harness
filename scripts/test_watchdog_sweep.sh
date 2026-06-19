@@ -317,9 +317,22 @@ done
 # Send SIGTERM mid-sleep (between iterations).
 kill -TERM "$WD_PID_004" 2>/dev/null || true
 
-# Wait for watchdog to exit cleanly.
+# Bounded wait: poll for exit up to ~30s, then force-kill.
+# A stuck watchdog produces a test FAILURE within the window — never an unbounded hang.
 WD_EXIT_004=0
-wait "$WD_PID_004" 2>/dev/null || WD_EXIT_004=$?
+_WAITED_004=0
+while kill -0 "$WD_PID_004" 2>/dev/null && [[ $_WAITED_004 -lt 300 ]]; do
+  sleep 0.1
+  _WAITED_004=$(( _WAITED_004 + 1 ))
+done
+if kill -0 "$WD_PID_004" 2>/dev/null; then
+  # Did NOT exit within 30s — this is the failure the test should catch, not a hang.
+  WD_EXIT_004=1   # non-zero sentinel: "still alive" = did not exit cleanly
+  _kill_watchdog "$WD_PID_004"
+else
+  # Process exited; reap the zombie and capture its exit code.
+  wait "$WD_PID_004" 2>/dev/null || WD_EXIT_004=$?
+fi
 WD_PID_004=0  # mark as reaped
 
 assert_eq \
@@ -1061,9 +1074,18 @@ while [[ $(date +%s) -lt $_POLL_DEADLINE_012 ]]; do
   sleep 0.5
 done
 
-# Capture exit code.
+# Capture exit code — bounded: if the process is still alive after the poll loop
+# deadline (WD_EXITED_012=0), it did NOT self-exit within 30s.  Force-kill and
+# record a non-zero sentinel so the assertion below catches the failure.
 RC_012=0
-wait "$WD_PID_012" 2>/dev/null || RC_012=$?
+if [[ "$WD_EXITED_012" -eq 1 ]]; then
+  # Process already exited; reap the zombie and capture its exit code.
+  wait "$WD_PID_012" 2>/dev/null || RC_012=$?
+else
+  # Did NOT exit within the 30s window — this is the failure the test should catch.
+  RC_012=1   # non-zero sentinel: "still alive" = did not self-exit after HALT
+  _kill_watchdog "$WD_PID_012"
+fi
 WD_PID_012=0
 
 # Watchdog should exit 0 (clean self-exit after writing HALT).
