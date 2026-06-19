@@ -15,7 +15,11 @@ __pycache__/
 # Stray top-level archive (agent debris; canonical location is z-harness/archive/)
 /archive/
 
-# Locally installed plugin caches (canonical sources live under exports/)
+# Generated per-host exports — regenerated on demand, never committed.
+# skills/ is the only hand-authored committed source tier; export drivers emit
+# host-native trees (.cursor/skills, .agent/skills, codex skills, …) to a temp
+# dir or install location. Locally installed plugin caches live here too.
+/exports/
 /.agent/
 /.codex-plugin/
 /.claude/scheduled_tasks.lock
