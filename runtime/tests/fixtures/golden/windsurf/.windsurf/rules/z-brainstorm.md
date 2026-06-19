@@ -74,6 +74,165 @@ $ARGUMENTS
 
 Run Phase 0 **immediately after Setup** — BEFORE Plan Route Check, BEFORE Phase 1 scaffolding begins. scope-probe internally dispatches doc-fetcher (per its step 4); Phase 0 does not depend on Phase 1's doc-fetcher run.
 
+### 0-sharpen. Sharpen-vs-skip gate (D5)
+
+This is a **separate cheap check** that runs BEFORE scope-probe. It is NOT folded into scope-probe's LIGHT/MEDIUM/HEAVY classifier — the two checks are orthogonal (idea vagueness ≠ codebase fanout size).
+
+**Check 1 — GRILL.md already exists?**
+
+```bash
+SHARPEN_GATE_DECISION=""
+SHARPEN_GATE_REASON=""
+GRILL_EXISTED=0
+if [ -f "$Z_HARNESS_PLAN_DIR/GRILL.md" ]; then
+  SHARPEN_GATE_DECISION="skip"
+  SHARPEN_GATE_REASON="GRILL.md already exists for this slug"
+  GRILL_EXISTED=1
+fi
+```
+
+If a `GRILL.md` already exists for the slug, skip straight to the scope-probe (continue with step 0-count below). Phase 1c-ii already ingests `GRILL.md` as seed framing.
+
+**Check 2 — Heuristic specificity check (if GRILL.md absent):**
+
+Evaluate the topic for concreteness. A topic is **crisp** if it satisfies ALL of:
+- Length > 20 characters (not a one-word stub)
+- Contains at least one **concrete constraint or scope qualifier** (e.g. a file name, technology name, numbered target, time/size bound, or explicit "in X" / "for Y" clause)
+- Is NOT purely abstract (e.g. "improve performance", "make it better", "ideas for the app")
+
+If the heuristic result is unambiguous (clearly crisp OR clearly vague), set the decision directly. If the topic falls in a grey zone (e.g. 2-3 word phrase with no modifiers, medium length but no concrete scope), dispatch one Haiku call to resolve.
+
+```bash
+if [ -z "$SHARPEN_GATE_DECISION" ]; then
+  TOPIC_LEN=${#TOPIC}   # TOPIC = the cleaned topic string from Setup
+  # Heuristic: fast-path crisp if the topic looks sufficiently specific
+  # (≥40 chars with at least one colon/slash/number/quoted term or file-ext pattern)
+  if echo "$TOPIC" | grep -qE '(\.|/|:|[0-9]|"[^"]|`[^`])' && [ "$TOPIC_LEN" -ge 40 ]; then
+    SHARPEN_GATE_DECISION="skip"
+    SHARPEN_GATE_REASON="heuristic: topic has concrete markers and sufficient length"
+  elif [ "$TOPIC_LEN" -lt 15 ]; then
+    SHARPEN_GATE_DECISION="sharpen"
+    SHARPEN_GATE_REASON="heuristic: topic is very short / likely a stub"
+  fi
+fi
+```
+
+If the heuristic left `SHARPEN_GATE_DECISION` empty (ambiguous topic), dispatch one Haiku call:
+
+<!-- agent dispatch / skill invocation not supported in Windsurf; see CAPABILITIES.md -->
+     treat the result as SHARPEN_GATE_DECISION="skip" (conservative: don't
+     force sharpening when the driver cannot run subagents). -->
+```
+<!-- agent dispatch / skill invocation not supported in Windsurf; see CAPABILITIES.md -->
+  subagent_type="general-purpose",
+  model="haiku",
+  description="Sharpen gate: evaluate topic specificity",
+  prompt="Evaluate whether this brainstorm topic is CRISP (already names a concrete problem + constraints + scope) or VAGUE (abstract, stub, or missing key constraints).
+
+Topic: <topic verbatim>
+
+Respond with exactly two lines:
+  DECISION: skip
+  REASON: <one sentence>
+or
+  DECISION: sharpen
+  REASON: <one sentence>
+
+CRISP = names a concrete problem AND has at least one explicit constraint (technology, file/module, size limit, audience, or timeframe). VAGUE = missing the problem, missing constraints, or is a 1-3 word stub."
+)
+```
+
+Parse the response and complete the gate:
+
+```bash
+if [ -z "$SHARPEN_GATE_DECISION" ]; then
+  # Extract DECISION and REASON from the Haiku response stored in HAIKU_RESPONSE
+  SHARPEN_GATE_DECISION="$(echo "$HAIKU_RESPONSE" | grep '^DECISION:' | head -1 | sed 's/^DECISION: *//' | tr -d '[:space:]')"
+  SHARPEN_GATE_REASON="$(echo "$HAIKU_RESPONSE" | grep '^REASON:' | head -1 | sed 's/^REASON: *//')"
+  # Fallback on parse failure: treat as skip (conservative — never force sharpening on bad parse)
+  [ -z "$SHARPEN_GATE_DECISION" ] && SHARPEN_GATE_DECISION="skip" && SHARPEN_GATE_REASON="haiku parse failed — defaulting to skip"
+fi
+```
+
+**Act on the decision:**
+
+- **`skip`** — log the event and proceed to 0-count (count parse) → 0a (axis taxonomy) → 0b (fast-path check) → scope-probe as normal. Phase 1c-ii will still ingest any pre-existing GRILL.md.
+- **`sharpen`** — auto-invoke z-sharpen inline before scope-probe:
+
+  ```bash
+  # Inline z-sharpen: run the sharpen conversation to produce GRILL.md
+  # Z_HARNESS_PLAN_DIR and Z_HARNESS_SLUG are already exported from Setup.
+  # z-sharpen writes $Z_HARNESS_PLAN_DIR/GRILL.md on convergence and exits.
+  # "Inline" here means: reproduce the z-sharpen protocol in this same conversation
+  # turn (no sub-agent dispatch, since z-sharpen is a c1 conversational command just
+  # like z-brainstorm). Run the sharpen interview per commands/z-sharpen.md:
+  #   Stage 1 — restate framing; Stage 2 — probe/reframe; Stage 3 — converge;
+  #   Stage 4 — write GRILL.md.
+  # The sharpen run emits its own sharpen_run_start / sharpen_convergence /
+  # sharpen_run_end events (from z-sharpen's event schema).
+  # After convergence, GRILL.md is present and Phase 1c-ii will ingest it as
+  # seed framing. If the user abandons the sharpen interview, log the abandon
+  # and continue without GRILL.md (treat as if SHARPEN_GATE_DECISION were "skip").
+  SHARPEN_ABANDONED=0
+  <run z-sharpen inline per commands/z-sharpen.md protocol>
+  # On sharpen abandon: set SHARPEN_ABANDONED=1
+  ```
+
+  After inline z-sharpen completes (or the user abandons), proceed to 0-count → 0a → scope-probe.
+
+**Emit `sharpen_gate` event regardless of decision:**
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" sharpen_gate \
+  "$(python3 -c 'import json,sys; print(json.dumps({"decision":sys.argv[1],"reason":sys.argv[2],"grill_md_existed":sys.argv[3]=="1"}))' \
+     "$SHARPEN_GATE_DECISION" "$SHARPEN_GATE_REASON" "${GRILL_EXISTED:-0}")"
+```
+
+---
+
+### 0-count. Count parse (wide N)
+
+Parse the desired ideator count `N` from the natural-language topic string. **No `--wide N` flag** — N is inferred from prose.
+
+```bash
+# Default N=3 (standard 3-vendor brainstorm)
+WIDE_N=3
+
+# Pattern-match the topic string for explicit count signals
+TOPIC_LOWER="$(echo "$TOPIC" | tr '[:upper:]' '[:lower:]')"
+
+# Explicit number: "8 ways", "10 options", "give me 5", "brainstorm 7", "×6", "x 6"
+_EXPLICIT=$(echo "$TOPIC_LOWER" | grep -oE '[0-9]+\s*(ways?|options?|ideas?|framings?|ideators?|variants?)' | grep -oE '^[0-9]+' | head -1)
+if [ -z "$_EXPLICIT" ]; then
+  _EXPLICIT=$(echo "$TOPIC_LOWER" | grep -oE '(brainstorm|give me|~|about|roughly)\s*([0-9]+)' | grep -oE '[0-9]+' | head -1)
+fi
+if [ -z "$_EXPLICIT" ]; then
+  _EXPLICIT=$(echo "$TOPIC_LOWER" | grep -oE '[0-9]+\s*x\b|\bx\s*[0-9]+' | grep -oE '[0-9]+' | head -1)
+fi
+
+if [ -n "$_EXPLICIT" ] && [ "$_EXPLICIT" -gt 1 ] 2>/dev/null; then
+  WIDE_N="$_EXPLICIT"
+else
+  # Prose signals for "many": "lots of", "many", "wide", "mega", "as many as possible"
+  if echo "$TOPIC_LOWER" | grep -qE '(lots of|a lot of|many options|many ways|wide mode|mega|as many as possible|maximum)'; then
+    WIDE_N=6  # sensible default for "many"
+  fi
+fi
+
+# Cap at a reasonable ceiling to prevent runaway token spend
+if [ "$WIDE_N" -gt 20 ] 2>/dev/null; then
+  WIDE_N=20
+fi
+
+# Telemetry record
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" count_parsed \
+  "$(python3 -c 'import json,sys; print(json.dumps({"wide_n":int(sys.argv[1]),"default_used":sys.argv[1]=="3"}))' "$WIDE_N")"
+```
+
+Record `WIDE_N` for telemetry and for the D2 wide×HEAVY suppression check (step 0g). After count parse, continue to 0a (axis taxonomy) → 0b (fast-path check) → scope-probe.
+
+---
+
 ### 0a. Define axis taxonomy
 
 ```
@@ -223,6 +382,24 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 #### HEAVY — parallel sub-flow fan-out
 
 When `MODE: HEAVY`:
+
+**D2 — Wide-N × HEAVY suppression (check first, before any fan-out):**
+
+If an explicit wide-N request was parsed in 0-count (i.e. `WIDE_N > 3`), suppress HEAVY chunk fanout and treat this run as MEDIUM instead. One fan-out axis at a time — wide and HEAVY never multiply.
+
+```bash
+if [ "${WIDE_N:-3}" -gt 3 ] 2>/dev/null; then
+  # Wide request detected — HEAVY fanout suppressed (D2 invariant)
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" wide_suppressed_heavy \
+    "$(python3 -c 'import json,sys; print(json.dumps({"requested_n":int(sys.argv[1]),"scope_mode":"HEAVY"}))' "$WIDE_N")"
+  MODE=MEDIUM
+  # Proceed to LIGHT/MEDIUM pass-through below — skip the HEAVY fan-out entirely
+fi
+```
+
+If `WIDE_N > 3` triggered the suppression above, skip all remaining HEAVY steps and proceed to Plan Route Check and Phase 1 as if `MODE: MEDIUM`. The `wide_suppressed_heavy` event records the requested N and original scope classification for telemetry.
+
+If `WIDE_N ≤ 3` (standard run, no explicit wide request), continue with HEAVY fan-out as normal:
 
 1. **Log fan-out start:**
    ```bash
@@ -554,6 +731,293 @@ Log every individual failure as `ideator_failed` regardless of the bucket above.
 
 ---
 
+### 2c. Wide mode dispatch (WIDE_N > 3)
+
+This section fires **only when `WIDE_N > 3`** (set in Phase 0 step 0-count). When `WIDE_N ≤ 3`, skip this entire section — the Phase 2b dispatch above is the complete ideator path.
+
+#### 2c-0. Overflow model resolution
+
+Resolve the model to use for overflow waves (waves 2+). Resolution order: **prompt override > config knob > default (`haiku`)**.
+
+```bash
+PLUGIN="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}"
+
+# Step 1: check for prompt-level override (set by the user in $ARGUMENTS, e.g. "--overflow-model=sonnet")
+OVERFLOW_MODEL_OVERRIDE=""
+if echo "${ARGUMENTS:-}" | grep -qE '\-\-overflow-model=\S+'; then
+  OVERFLOW_MODEL_OVERRIDE="$(echo "${ARGUMENTS:-}" | grep -oE '\-\-overflow-model=\S+' | head -1 | sed 's/--overflow-model=//')"
+fi
+
+# Step 2: read config knob brainstorm.wide_overflow_model (T004)
+OVERFLOW_MODEL_CONFIG="$(python3 "$PLUGIN/scripts/config.py" get brainstorm.wide_overflow_model 2>/dev/null || echo "")"
+[ -z "$OVERFLOW_MODEL_CONFIG" ] && OVERFLOW_MODEL_CONFIG="haiku"
+
+# Step 3: resolve (prompt override wins)
+if [ -n "$OVERFLOW_MODEL_OVERRIDE" ]; then
+  OVERFLOW_MODEL="$OVERFLOW_MODEL_OVERRIDE"
+else
+  OVERFLOW_MODEL="$OVERFLOW_MODEL_CONFIG"
+fi
+
+# cheap-mixed gating (M2): no --model mechanism exists in resolve-provider.py / providers.json
+# for codex-cli or agy today. If the config resolves to "cheap-mixed", warn and fall back to haiku.
+if [ "$OVERFLOW_MODEL" = "cheap-mixed" ]; then
+  bash "$PLUGIN/scripts/log-event.sh" "$RUN" wide_overflow_model_warn \
+    '{"reason":"cheap-mixed requested but no --model path verified for codex-cli/agy; falling back to haiku","config_value":"cheap-mixed"}'
+  # Warn the user inline:
+  echo "⚠ wide_overflow_model=cheap-mixed is not yet implemented (no --model path verified for codex-cli/agy). Overflow ideators will use haiku instead. Set brainstorm.wide_overflow_model=haiku or an explicit Claude model string to suppress this warning." >&2
+  OVERFLOW_MODEL="haiku"
+fi
+# An explicit Claude model string (e.g. "sonnet") IS honored for general-purpose overflow ideators.
+```
+
+#### 2c-1. Conversational cost gate
+
+Before dispatching a wide run, present a cost estimate inline and **end the turn** — this is a conversational gate, NOT an `AskUserQuestion`. Wait for the user's natural-language go-ahead before proceeding.
+
+Compute an estimate:
+- Wave 1: 3 ideators × ~3,000 tokens each = ~9,000 tokens
+- Each overflow wave: 2 ideators × ~3,000 tokens = ~6,000 tokens per wave
+- Overflow waves needed: `OVERFLOW_N = WIDE_N - 3` ideators → `ceil(OVERFLOW_N / 2)` waves (each wave has 2 ideators)
+- Clusterer: ~2,000 tokens
+
+```bash
+OVERFLOW_N=$(( WIDE_N - 3 ))
+OVERFLOW_WAVES=$(( (OVERFLOW_N + 1) / 2 ))   # ceil(OVERFLOW_N / 2)
+EST_TOKENS=$(( 9000 + OVERFLOW_WAVES * 6000 + 2000 ))
+```
+
+Present inline in your response and **stop — end the turn here**:
+
+> **Wide brainstorm: `<slug>`**
+>
+> You requested **`<WIDE_N>` ideators**. Here's what this will dispatch:
+> - Wave 1: 3 vendor-diverse ideators (Claude / Codex / Gemini) at normal models
+> - `<OVERFLOW_WAVES>` overflow wave(s): `<OVERFLOW_N>` additional ideator(s) at `<OVERFLOW_MODEL>` using anti-seeded divergent axes
+> - After all waves: `ideator-clusterer` (Haiku) to collapse N framings → K distinct directions
+>
+> Estimated tokens: ~`<EST_TOKENS>` (rough; actual varies by payload size).
+>
+> Proceed? (Reply "yes" / "go" / "proceed" to start, or name a smaller N to reduce cost.)
+
+**HARD INVARIANT:** Do NOT dispatch any ideators until the user confirms. The orchestrator must stop here and await the user's reply. If the user replies with a smaller N or any modification, update `WIDE_N` accordingly and recompute before proceeding.
+
+On user go-ahead, continue to 2c-2.
+
+#### 2c-2. Emit `wide_dispatch` event
+
+```bash
+bash "$PLUGIN/scripts/log-event.sh" "$RUN" wide_dispatch \
+  "$(python3 -c 'import json,sys; print(json.dumps({"wide_n":int(sys.argv[1]),"waves":int(sys.argv[2])+1,"overflow_model":sys.argv[3]}))' \
+     "$WIDE_N" "$OVERFLOW_WAVES" "$OVERFLOW_MODEL")"
+```
+
+The `waves` field counts all waves including wave 1 (= `OVERFLOW_WAVES + 1`).
+
+#### 2c-3. Wave 1 — 3 vendors at normal models
+
+Wave 1 is the existing 3-vendor Phase 2b dispatch (Claude/Codex/Gemini at their normal models). The Phase 2a persona resolution and 2b dispatch already ran above — the results are wave 1 framings. Treat them as such.
+
+Track all ideator IDs for clustering:
+
+```bash
+# After Phase 2b dispatch completes, record wave-1 ideator IDs
+WIDE_IDEATOR_IDS='["claude-wave1","codex-wave1","gemini-wave1"]'
+WIDE_WAVES_COMPLETED=1
+
+# Append wave-1 framing blocks to BRAINSTORM.md under a wave header.
+# BRAINSTORM.md is written in Phase 3 normally; for wide mode, the Phase 3 write
+# must label each wave-1 framing block with its wave provenance for the clusterer.
+# Specifically: prepend a "## Wave 1" header before the ## Framing: <ideator> blocks
+# in BRAINSTORM.md when WIDE_N > 3. The clusterer reads the full file.
+WIDE_WAVE1_HEADER="## Wave 1"
+```
+
+Write the `## Wave 1` header before the per-ideator framing blocks in BRAINSTORM.md (in Phase 3's write step). The clusterer uses this to locate all wave framings in the file.
+
+#### 2c-4. Overflow waves (waves 2+)
+
+For each overflow ideator batch, invoke the **Re-spin machinery** (see `### Re-spin machinery` section) with:
+
+- `RESPIN_DIRECTION` = "Wide-mode overflow: produce a framing that diverges from all prior framings on a different axis (different core hypothesis, different problem decomposition, different target user, or different solution lever)."
+- `RESPIN_WAVE` = current wave number (starting at 1 for first overflow wave, capped at 3 — re-spin machinery cap applies to the discussion loop; for wide-mode overflow waves we use separate tracking below)
+- `RESPIN_PRIOR_FRAMINGS` = all framing blocks returned so far (initially the wave-1 blocks)
+
+**Wide-mode overflow wave tracking** (separate from the discussion-loop re-spin cap):
+
+```bash
+# Overflow wave tracking (wide mode only — separate from discussion-loop re-spin cap)
+OVERFLOW_REMAINING=$OVERFLOW_N    # number of overflow ideators still to dispatch
+OVERFLOW_WAVE_NUM=1               # wave number within overflow (1-indexed; maps to RESPIN_WAVE 1, 2, 3)
+```
+
+For each overflow wave:
+
+1. Determine vendor subset from re-spin machinery (wave number determines subset deterministically):
+   - Overflow wave 1 → Claude + Codex
+   - Overflow wave 2 → Claude + Gemini
+   - Overflow wave 3 → Codex + Gemini (cap at 3 overflow waves; N>9 rare but cap enforced)
+
+2. Resolve overflow model for these ideators. If `OVERFLOW_MODEL` is `haiku` or an explicit Claude model string, use it for the `general-purpose` slot. The consultant arms (codex/gemini) use their native defaults (no `--model` override) — this is the M2 constraint.
+
+   ```
+   <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+        <!-- agent dispatch / skill invocation not supported in Windsurf; see CAPABILITIES.md -->
+        Wide-mode overflow cannot complete without subagent support. -->
+   ```
+
+   **Overflow wave dispatch** (example for overflow wave 1 — Claude + Codex):
+
+   Resolve a **distinct persona** for each overflow ideator slot (draw from the ideator pool, excluding personas already used in prior waves):
+
+   ```bash
+   # Draw N_TOTAL = WIDE_N distinct personas total (all waves), using --count=WIDE_N.
+   # Wave 1 used slots [0..2]; overflow wave k uses the next available slots.
+   # If the pool underflows, remaining overflow slots run vanilla (no persona).
+   OVERFLOW_PERSONAS_JSON=$(python3 "$PLUGIN/scripts/resolve-persona.py" \
+     random-distinct-for-role ideator --count="$WIDE_N" \
+     2>>"$Z_HARNESS_PLAN_DIR/archive/$RUN/persona-draw.log")
+   # Slot index for overflow ideator i (0-indexed across overflow waves):
+   #   slot_index = 3 + i   (wave-1 used slots 0,1,2)
+   ```
+
+   Build the anti-seed payload (per re-spin machinery template — divergence instruction verbatim):
+
+   ```
+   <OVERFLOW_PERSONA_PREFIX>
+   MODE: brainstorm
+
+   Topic: <topic>
+
+   Narrowed direction from the user: Wide-mode overflow: produce a framing that diverges from all prior framings on a different axis (different core hypothesis, different problem decomposition, different target user, or different solution lever).
+
+   Here are the existing framings from this brainstorm run:
+
+   <RESPIN_PRIOR_FRAMINGS>
+
+   Produce something that diverges from all of them — attack a different axis (different core hypothesis, different problem decomposition, different target user, or different solution lever). Do NOT restate, synthesize, or incrementally improve an existing framing. The goal is genuine divergence.
+
+   <IDEATOR_SCHEMA>
+   ```
+
+   **For overflow wave 1 (Claude + Codex):**
+   ```
+   <!-- agent dispatch / skill invocation not supported in Windsurf; see CAPABILITIES.md -->
+     subagent_type="general-purpose",
+     model="<OVERFLOW_MODEL>",
+     description="Claude overflow ideator wave <OVERFLOW_WAVE_NUM> for <slug>",
+     prompt="<overflow anti-seed prompt for Claude, per template above>"
+   )
+   <!-- agent dispatch / skill invocation not supported in Windsurf; see CAPABILITIES.md -->
+     subagent_type="consultant-secondary",
+     description="Codex overflow ideator wave <OVERFLOW_WAVE_NUM> for <slug>",
+     prompt="<overflow anti-seed prompt for Codex, per template above>"
+   )
+   ```
+
+   **For overflow wave 2 (Claude + Gemini):**
+   ```
+   <!-- agent dispatch / skill invocation not supported in Windsurf; see CAPABILITIES.md -->
+     subagent_type="general-purpose",
+     model="<OVERFLOW_MODEL>",
+     description="Claude overflow ideator wave <OVERFLOW_WAVE_NUM> for <slug>",
+     prompt="<overflow anti-seed prompt for Claude>"
+   )
+   <!-- agent dispatch / skill invocation not supported in Windsurf; see CAPABILITIES.md -->
+     subagent_type="consultant-primary",
+     description="Gemini overflow ideator wave <OVERFLOW_WAVE_NUM> for <slug>",
+     prompt="<overflow anti-seed prompt for Gemini>"
+   )
+   ```
+
+   **For overflow wave 3 (Codex + Gemini, no Claude):**
+   ```
+   <!-- agent dispatch / skill invocation not supported in Windsurf; see CAPABILITIES.md -->
+     subagent_type="consultant-secondary",
+     description="Codex overflow ideator wave 3 for <slug>",
+     prompt="<overflow anti-seed prompt for Codex>"
+   )
+   <!-- agent dispatch / skill invocation not supported in Windsurf; see CAPABILITIES.md -->
+     subagent_type="consultant-primary",
+     description="Gemini overflow ideator wave 3 for <slug>",
+     prompt="<overflow anti-seed prompt for Gemini>"
+   )
+   ```
+
+   Note: `OVERFLOW_MODEL` applies **only to the `general-purpose` (Claude) slot**. Consultant arms (codex/gemini) run at their native defaults — M2 constraint: no `--model` path exists for codex-cli or agy.
+
+3. After each overflow wave returns, append framing blocks to BRAINSTORM.md under a `## Wave <N>` header:
+
+   ```markdown
+
+   ## Wave <WAVE_NUM>
+
+   <!-- overflow ideators: <list>; persona: <ids or none>; failed: <list or "none"> -->
+
+   ### Framing — <ideator-id> (wave <WAVE_NUM>)
+
+   <five-section block from ideator, verbatim>
+
+   ### Framing — <ideator-id> (wave <WAVE_NUM>)
+
+   <five-section block from second ideator, if surviving>
+   ```
+
+4. Update tracking:
+
+   ```bash
+   # Record ideator IDs for clustering
+   WIDE_IDEATOR_IDS="$(python3 -c "import json,sys; ids=json.loads(sys.argv[1]); ids+=['<vendor1>-wave<N>','<vendor2>-wave<N>']; print(json.dumps(ids))" "$WIDE_IDEATOR_IDS")"
+   OVERFLOW_REMAINING=$(( OVERFLOW_REMAINING - 2 ))   # or -1 if 1 ideator dispatched in final partial wave
+   OVERFLOW_WAVE_NUM=$(( OVERFLOW_WAVE_NUM + 1 ))
+   WIDE_WAVES_COMPLETED=$(( WIDE_WAVES_COMPLETED + 1 ))
+   ```
+
+5. Update `RESPIN_PRIOR_FRAMINGS` to include the new wave's blocks before dispatching the next overflow wave.
+
+6. Stop dispatching overflow waves when `OVERFLOW_REMAINING ≤ 0` or `OVERFLOW_WAVE_NUM > 3` (cap: max 3 overflow waves regardless of N; for N > 9, the extra ideators are silently capped and the user is informed).
+
+**Cap notification:** If `WIDE_N > 9` (more than 3 overflow waves would be needed), inform the user inline before dispatching: "Wide cap: dispatching up to 9 ideators across 4 waves (1 base + 3 overflow). Your requested N=`<WIDE_N>` exceeds the overflow cap — proceeding with N=9."
+
+Apply the same failure policy as the re-spin machinery: 1/2 fail → proceed with survivor; 2/2 fail → log and continue (does not decrement cap). Log each failure as `ideator_failed` with `{vendor, reason, wave: <wave_num>}`.
+
+#### 2c-5. Dispatch ideator-clusterer
+
+After all waves (wave 1 + all overflow waves) return:
+
+1. Ensure BRAINSTORM.md is written with all wave framing blocks (Phase 3 writes wave-1 blocks; overflow blocks appended in 2c-4). The file is the clusterer's source of truth.
+
+2. Collect the ordered list of all ideator IDs across all waves into `WIDE_IDEATOR_IDS` (already tracked above).
+
+3. Dispatch the clusterer:
+
+   ```
+   <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+        <!-- agent dispatch / skill invocation not supported in Windsurf; see CAPABILITIES.md -->
+        raw N framings in the Phase 3 briefing. -->
+   <!-- agent dispatch / skill invocation not supported in Windsurf; see CAPABILITIES.md -->
+     subagent_type="ideator-clusterer",
+     description="Cluster <WIDE_N> wide-mode framings for <slug>",
+     prompt="brainstorm_path: <abs path to $Z_HARNESS_PLAN_DIR/BRAINSTORM.md>
+   ideator_ids: <WIDE_IDEATOR_IDS as JSON array>
+   n: <WIDE_N>"
+   )
+   ```
+
+4. Parse the clusterer's returned text. Extract:
+   - `K` — number of distinct clusters (from the `K: <n>` line in `## Effective-diversity report`)
+   - The `## Clusters` section — K cluster labels, members, representative framings
+   - The `## Cross-cluster consensus` section (may be "None detected.")
+   - The `## Clusterer note` paragraph
+
+   Store these as `CLUSTER_REPORT`, `CLUSTER_K`, and `CLUSTER_BLOCKS` for use in the Phase 3 ranked briefing.
+
+5. **Clusterer failure handling:** If the clusterer fails or returns K=0, fall back to presenting the N raw framings directly in the Phase 3 briefing (set `CLUSTER_REPORT=""` and `CLUSTER_K=0` as the fallback signal).
+
+After 2c-5, proceed to Phase 3. Phase 3's ranked briefing uses `CLUSTER_BLOCKS` when `WIDE_N > 3` and `CLUSTER_K > 0` (wide mode), or falls back to raw framings (narrow mode or clusterer failure).
+
+---
+
 ## Phase 3 — Synthesis + mandatory anti-bias check
 
 1. **Parse** the three (or two, or one) returns. For each ideator, extract the five sections. If a section is missing or malformed, record it as `<missing>` rather than omitting it.
@@ -563,6 +1027,8 @@ Log every individual failure as `ideator_failed` regardless of the bucket above.
 3. **Orchestrator recommendation.** Pick one framing as your tentative recommendation with a one-line rationale. The user is free to override.
 
 4. **Write `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md`** with YAML frontmatter:
+
+   **Narrow mode (`WIDE_N ≤ 3`) frontmatter:**
 
    ```yaml
    ---
@@ -590,11 +1056,47 @@ Log every individual failure as `ideator_failed` regardless of the bucket above.
    ---
    ```
 
+   **Wide mode (`WIDE_N > 3`) frontmatter:** add `wide_n` and `overflow_model` fields; `ideators` lists all wave members with their wave suffix; `ideator_models` records `overflow: <OVERFLOW_MODEL>` for the overflow slots.
+
+   ```yaml
+   ---
+   artifact: brainstorm
+   slug: <slug>
+   generated_at: <UTC ISO 8601>
+   command: /z-brainstorm <args>
+   input_hash: <16 hex from Phase 1d>
+   depends_on: [<resolved filename if terrain>]
+   wide_n: <WIDE_N>
+   overflow_model: <OVERFLOW_MODEL>
+   ideators:
+     - claude-wave1
+     - codex-wave1
+     - gemini-wave1
+     - claude-wave2    # overflow ideators follow
+     - codex-wave2
+     # failed members: "<id>:failed"
+   ideator_models:
+     wave1_claude: sonnet
+     wave1_codex: default
+     wave1_gemini: default
+     overflow: <OVERFLOW_MODEL>   # all overflow Claude slots use this
+   ideator_personas:
+     claude-wave1: <persona-id or "<none>">
+     codex-wave1: <persona-id or "<none>">
+     gemini-wave1: <persona-id or "<none>">
+     # overflow slots: <ideator-id>: <persona-id or "<none>">
+   status: complete
+   chosen_framing: pending
+   ---
+   ```
+
    `ideator_personas` records the distinct persona drawn for each ideator (the `*_PERSONA_NAME` values from Phase 2a). A value of `<none>` means that ideator ran vanilla — either the `brainstorm.personas` knob was OFF, or the ideator pool underflowed and this slot got no persona. When an ideator also failed, its persona binding is still recorded here even though the member appears as `<id>:failed` in `ideators`.
 
-   `chosen_framing` is written as `pending` here and updated in Phase 4 to one of `claude | codex | gemini | restart | abandoned` per SPEC.
+   `chosen_framing` is written as `pending` here and updated in Phase 4 to one of `claude | codex | gemini | synthesized | restart | abandoned` per SPEC. `synthesized` is the default/expected outcome for a discussion-born hybrid framing co-authored with the user.
 
    Body sections, one block per ideator (in fixed order Claude → Codex → Gemini):
+
+   **Narrow mode (`WIDE_N ≤ 3`):** write framing blocks directly at the top level.
 
    ```markdown
    ## Framing: <ideator-name>
@@ -615,7 +1117,25 @@ Log every individual failure as `ideator_failed` regardless of the bucket above.
    <bulleted list or `<missing>`>
    ```
 
-   Followed by:
+   **Wide mode (`WIDE_N > 3`):** prefix the wave-1 framing blocks with a `## Wave 1` header so the clusterer can locate all waves consistently. Overflow wave blocks are already appended under `## Wave <N>` headers in Phase 2c-4.
+
+   ```markdown
+   ## Wave 1
+
+   ## Framing: claude-wave1
+
+   ### Framing
+   <one paragraph or `<missing>`>
+   ...
+
+   ## Framing: codex-wave1
+   ...
+
+   ## Framing: gemini-wave1
+   ...
+   ```
+
+   Followed by (both narrow and wide modes):
 
    ```markdown
    ## Anti-bias check
@@ -627,15 +1147,41 @@ Log every individual failure as `ideator_failed` regardless of the bucket above.
 
    Do **not** write a `## User choice` section in Phase 3 — Phase 4 writes it for the first time (no placeholder, no duplication).
 
-<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the framing
-     selection question (Claude / Codex / Gemini / Restart / Abandon) via their
-     native channel. Silent omission is forbidden. -->
-5. **Present** the three framings + anti-bias check + recommendation to the user via `AskUserQuestion`. Options:
-   - One option per available framing (e.g. **Claude framing**, **Codex framing**, **Gemini framing** — only for ideators that succeeded)
-   - **Restart** — discard this run and re-run with a refined topic
-   - **Abandon** — exit cleanly without finalizing
+5. **Produce a ranked prose briefing and end the turn.** Do NOT use `AskUserQuestion` here. Do NOT call any further tool. Present the ranked briefing in-line and stop — the orchestrator must wait for the user's natural-language reply.
 
-Block until the user answers. Send a `PushNotification` if notify.level is `approval_only` or `all` (see [docs/human/config.md](docs/human/config.md)).
+   **Ranked briefing format** (write this directly in your response):
+
+   > **Brainstorm complete — `<slug>`**
+   >
+   > Here are the **<N> directions**, ranked by strength:
+   >
+   > **1. <direction label> (e.g. Claude framing)**
+   > - **Pros:** <2-3 bullets>
+   > - **Cons:** <2-3 bullets>
+   >
+   > **2. <direction label>**
+   > - **Pros:** <2-3 bullets>
+   > - **Cons:** <2-3 bullets>
+   >
+   > *(repeat for each available framing in ranked order)*
+   >
+   > **Consensus:** <one sentence on where all ideators agree — call it a signal, not a waste>
+   >
+   > **Divergence:** <one sentence on the genuine decision point — what the framings disagree on>
+   >
+   > **My recommendation:** <framing label> — <one-sentence rationale>
+   >
+   > What direction do you want to go? You can pick one as-is, ask me to defend a choice, combine ideas, request a re-spin (see [re-spin machinery]), or restart/abandon.
+
+   Ranking criteria: favor the framing with the most concrete plan implications and lowest risk exposure, adjusted by the anti-bias check results.
+
+   **Narrow mode (≤3 ideators):** rank the raw ideator framings directly (no clustering needed).
+
+   **Wide mode (>3 ideators):** rank the K cluster directions returned by `ideator-clusterer` (dispatched in Phase 2c-5; `CLUSTER_BLOCKS` holds the parsed result). Each cluster label represents one ranked direction; mention the underlying ideators that collapsed into it. If `CLUSTER_K = 0` (clusterer failure), fall back to presenting the N raw framings. Surface the cross-cluster consensus finding (if any) as a separate callout ("All directions agree that…").
+
+   Send a `PushNotification` if notify.level is `approval_only` or `all` (see [docs/human/config.md](docs/human/config.md)).
+
+   **HARD INVARIANT — Convergence guardrail:** The orchestrator MUST halt after producing this briefing and report to the user. It MUST NOT auto-decide, MUST NOT pick a framing on the user's behalf, and MUST NOT call any further tool. The next action comes only from the user's natural-language reply, interpreted in Phase 4.
 
 ---
 
@@ -656,62 +1202,64 @@ Collect a flat list of pairs in the form `(chunk_id, framing)`, e.g.:
 
 Let `N_PAIRS = len(pairs)`.
 
-#### Step 4H-2 — Present the selection matrix to the user
+#### Step 4H-2 — Present ranked pair briefing and end the turn
 
-<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the chunk×framing
-     selection matrix via their native channel. Silent omission is forbidden. -->
-**Case A — N_PAIRS ≤ 12 (single AskUserQuestion):**
+Do NOT use `AskUserQuestion` here. Do NOT call any further tool. Produce a ranked prose briefing of the (chunk, framing) pairs inline and stop — the orchestrator must wait for the user's natural-language reply.
 
-Present a single `AskUserQuestion` listing all pairs as labeled options plus two standard exits:
+**HEAVY mode ranks (chunk, framing) pairs.** Group by cluster of thematic similarity first (i.e. pairs from different chunks that share a framing approach), then rank within clusters by concreteness + lowest risk exposure. If the pairs naturally form no clusters, rank them flat.
 
-```
-Which (chunk, framing) should seed the downstream /z-plan?
+**Ranked briefing format** (write this directly in your response):
 
-Options:
-  C1: claude   — <one-line summary of C1's Claude framing from BRAINSTORM.md>
-  C1: codex    — <one-line summary of C1's Codex framing>
-  C1: gemini   — <one-line summary of C1's Gemini framing>
-  C2: claude   — <one-line summary of C2's Claude framing>
-  ...           (up to 12 options)
-  Restart       — discard this run and re-run with a refined topic
-  Abandon       — exit cleanly without finalizing
-```
+> **Brainstorm complete — `<slug>` (HEAVY mode, <N_PAIRS> chunk×framing pairs)**
+>
+> Here are the **(chunk, framing) directions**, ranked by strength:
+>
+> **1. Chunk `<id>` / `<framing>` — <short label>**
+> - **Pros:** <2-3 bullets>
+> - **Cons:** <2-3 bullets>
+>
+> **2. Chunk `<id>` / `<framing>` — <short label>**
+> - **Pros:** <2-3 bullets>
+> - **Cons:** <2-3 bullets>
+>
+> *(repeat for each pair in ranked order)*
+>
+> **Consensus:** <one sentence on where the chunks/framings agree — call it a signal, not waste>
+>
+> **Divergence:** <one sentence on the genuine decision point across the pairs>
+>
+> **My recommendation:** Chunk `<id>` / `<framing>` — <one-sentence rationale>
+>
+> Which direction do you want to go? Name a chunk and framing to lock in, ask me to defend a choice, or restart/abandon.
 
-The one-line summary is the first sentence of that ideator's "Framing" section in the unified BRAINSTORM.md. If that section is missing, use `<no summary available>`.
+The one-line summary for each pair is the first sentence of that chunk's ideator framing section in the unified BRAINSTORM.md. If the section is missing, use `<no summary available>`.
 
-**Case B — N_PAIRS > 12 (two-step AskUserQuestion):**
+Send a `PushNotification` if notify.level is `approval_only` or `all` (see [docs/human/config.md](docs/human/config.md)).
 
-First, present a question to pick the chunk:
+**HARD INVARIANT — Convergence guardrail:** The orchestrator MUST halt after producing this briefing and report to the user. It MUST NOT auto-decide, MUST NOT pick a pair on the user's behalf, and MUST NOT call any further tool. The next action comes only from the user's natural-language reply, interpreted in Step 4H-3.
 
-```
-This run produced <N_PAIRS> (chunk × framing) pairs (>{12}). Pick a chunk first.
+#### Step 4H-3 — Interpret the user's natural-language reply
 
-Options:
-  C1  — <one-line description of C1's sub-scope from unified BRAINSTORM.md>
-  C2  — <one-line description>
-  ...
-  Restart
-  Abandon
-```
+This step is a **discussion loop** — there is no menu. Interpret the user's free-text reply from Step 4H-2 to determine intent. Present responses and end your turn — do NOT call any further tool until the user sends another reply.
 
-After the user picks a chunk (or Restart/Abandon), if they picked a chunk then present a second question to pick the framing within that chunk:
+**HARD INVARIANT — Ambiguity guardrail:** Write `chosen_pair` ONLY on an unambiguous lock-in signal. If the user's intent is ambiguous (could mean two pairs, or unclear which chunk), confirm conversationally before writing — never guess.
 
-```
-Chunk <id> selected. Which framing seeds the plan?
+**Supported intents (natural language — no menu):**
 
-Options:
-  claude   — <one-line summary of this chunk's Claude framing>
-  codex    — <one-line summary of this chunk's Codex framing>
-  gemini   — <one-line summary of this chunk's Gemini framing>
-  Back     — go back to chunk selection
-  Abandon  — exit cleanly without finalizing
-```
+**Ask a question** — the user wants to understand or compare a pair.
+- Answer directly. Re-present the relevant pair(s) with your answer inline.
+- Do NOT lock in unless the user explicitly requests it.
+- End your turn.
 
-If the user picks **Back**, loop to the chunk-selection question. Allow at most 3 Back-loops; on the fourth Back, treat it as Abandon.
+**Challenge / narrow** — the user expresses doubt about a direction.
+- Discuss the challenge; update the briefing view as appropriate.
+- End your turn.
 
-#### Step 4H-3 — Handle user's pick
+**Lock in** — the user clearly names a chunk and framing (e.g. "go with C2 / codex", "the gemini one for chunk 3", "use C1:claude").
 
-**User picked a (chunk, framing) pair:**
+**HARD INVARIANT:** Before writing, verify the signal is UNAMBIGUOUS — both the chunk and the framing must be identifiable. If either is ambiguous, ask for clarification conversationally; do NOT write.
+
+On a clear lock-in:
 
 1. Update the BRAINSTORM.md frontmatter atomically (tmp-file-then-rename). Build the full new frontmatter in memory, then write to a temp file in the same directory, then `os.replace()` over the original — never leave the file in an intermediate state where both `chosen_framing` and `chosen_pair` are present or where neither is present:
    - Remove the `chosen_framing:` field entirely.
@@ -733,11 +1281,11 @@ If the user picks **Back**, loop to the chunk-selection question. Allow at most 
      "$(printf '{"chunk_id":"%s","framing":"%s"}' "<id>" "<framing>")"
    ```
 
-**User picked Restart:**
+**Restart** — the user wants to discard this run and re-brainstorm on a refined topic.
 
-Follow the standard Restart path (see LIGHT/MEDIUM branch below) — archive BRAINSTORM.md with `chosen_framing: restart`, ask for a refined topic, start a fresh RUN.
+Follow the standard Restart path (see LIGHT/MEDIUM branch below) — archive BRAINSTORM.md with `chosen_framing: restart`, respond conversationally to ask for a refined topic, start a fresh RUN.
 
-**User picked Abandon:**
+**Abandon** — the user wants to exit without finalizing.
 
 Follow the standard Abandon path below. For HEAVY abandons, the frontmatter MUST match LIGHT/MEDIUM abandon shape exactly: set `status: abandoned` and `chosen_framing: abandoned`. Do NOT emit a `chosen_pair` key (it is only present on successful HEAVY completion). This keeps abandon detection uniform across modes.
 
@@ -751,26 +1299,240 @@ For the `brainstorm_run_end` event, serialize `chosen_framing` as `"<chunk_id>:<
 
 ### LIGHT/MEDIUM branch (fires when mode is NOT HEAVY, or SCOPE-brainstorm.json is absent)
 
-Branch on the user's Phase 3 choice:
+This branch is a **discussion loop**. There is no menu; interpret the user's free-text reply from Phase 3 to determine intent. Present responses and end your turn — do NOT call any further tool until the user sends another reply.
 
-#### User picked a framing
+**HARD INVARIANT — Ambiguity guardrail (m5):** Write `chosen_framing` and the `## User choice` block ONLY on an unambiguous lock-in signal. If the user's intent is ambiguous, confirm conversationally before writing — never guess. A silent auto-write loses user intent and is the riskiest new behavior in this command.
 
-1. Update the `chosen_framing:` field in the BRAINSTORM.md frontmatter from `pending` to the picked ideator id (`claude` | `codex` | `gemini`).
-2. Append (for the first time) a `## User choice` body section with the picked framing's text reproduced verbatim (so `/z-plan` can find it without re-parsing the ideator blocks) plus any free-text refinement the user provided.
+#### Supported intents (natural language — no menu)
+
+**Ask a question** — the user wants to understand or compare the framings.
+- Answer the question directly. Re-present the relevant framing(s) with your answer inline.
+- Do NOT re-spin or lock in unless the user explicitly requests it.
+- End your turn.
+
+**Challenge / narrow** — the user expresses doubt about a direction or wants to cut scope.
+- Discuss the challenge; update the briefing view as appropriate.
+- If the challenge is strong enough to suggest the current framings don't cover the right space, offer a re-spin (see re-spin machinery). Only initiate if the user agrees.
+- End your turn.
+
+**Combine X+Y** — the user wants a hybrid of two directions.
+- Draft a synthesized framing inline (the five-section schema: Framing / Core hypothesis / Risks / Plan implications / What would change my mind). Label it clearly ("Synthesized: <X> + <Y>").
+- Show it and ask the user to confirm before treating it as the chosen framing.
+- End your turn. Do NOT write `chosen_framing` yet.
+
+**Re-spin** — the user wants divergent options (see re-spin machinery, T007).
+- Acknowledge the re-spin request and note "re-spin 1/3, ~X tokens" before dispatching.
+- After the re-spin returns, produce an updated ranked briefing incorporating the new framings and end your turn.
+
+**Lock in** — the user clearly selects a framing (e.g. "go with Codex", "I like option 2", "use the synthesized one", "let's do X").
+
+**HARD INVARIANT:** Before writing, verify the signal is UNAMBIGUOUS. If it could mean two things, ask for clarification. Only on a clear lock-in:
+
+1. Update `chosen_framing:` in the BRAINSTORM.md frontmatter from `pending` to the locked-in value:
+   - Single ideator pick → `claude` | `codex` | `gemini`
+   - Synthesized / hybrid → `synthesized`
+2. Append (for the first time) a `## User choice` body section:
+   ```markdown
+   ## User choice
+
+   **Chosen framing:** <framing label>
+   <!-- For a single ideator pick: framing label is the ideator id (e.g. "claude", "codex", "gemini") -->
+   <!-- For synthesized: framing label is "synthesized" or a descriptive label (e.g. "Synthesized: Codex framing + Claude risk model") -->
+
+   <For a single ideator pick: reproduce the ideator's framing block verbatim (all five sections) so /z-plan can find it without re-parsing>
+   <For synthesized: write the FULL co-authored hybrid text — the merged framing born from the discussion (e.g. "Codex's framing + Claude's risk model"). This is the text the orchestrator and user co-authored conversationally, NOT a verbatim copy of any single vendor's framing block. Include all five sections (Framing / Core hypothesis / Risks / Plan implications / What would change my mind) so /z-plan has a complete seed>
+
+   <Any free-text refinement the user added during the discussion>
+   ```
 3. Confirm `status: complete` in the frontmatter.
+4. Log the pick:
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" framing_locked \
+     "$(python3 -c 'import json,sys; print(json.dumps({"chosen_framing":sys.argv[1]}))' "<framing>")"
+   ```
 
-#### User picked Restart
+**Restart** — the user wants to discard this run and re-brainstorm on a refined topic.
 
 1. Archive the just-written BRAINSTORM.md to `$Z_HARNESS_PLAN_DIR/archive/$RUN/BRAINSTORM.md.previous-<N>` (next free integer). Before archiving, update the archived copy's frontmatter to `status: complete`, `chosen_framing: restart` so the historical record is spec-valid.
-<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the refined
-     topic question via their native channel. Silent omission is forbidden. -->
-2. Ask the user (free-text or `AskUserQuestion`) for the refined topic.
-3. Start a fresh RUN: regenerate `RUN`, re-mkdir, re-emit `brainstorm_run_start`, and loop back to Phase 1 with the refined topic.
+2. Ask the user for the refined topic conversationally (e.g. "What topic should I brainstorm instead?") — do NOT use `AskUserQuestion` here; respond in prose and end your turn to wait for their reply.
+3. After the user replies with the refined topic: start a fresh RUN — regenerate `RUN`, re-mkdir, re-emit `brainstorm_run_start`, and loop back to Phase 1 with the refined topic.
 
-#### User picked Abandon
+**Abandon** — the user wants to exit without finalizing.
 
 1. Set the frontmatter `status: abandoned` and `chosen_framing: abandoned`. Leave the file in place (so a future re-run knows there was a prior attempt).
 2. Skip the push-notify "next step" recommendation; emit a simpler "abandoned" notification.
+
+**Ambiguous reply** — the user's reply doesn't map cleanly to any of the above intents.
+- Ask a targeted clarifying question (one sentence). End your turn. Do NOT write anything to BRAINSTORM.md.
+
+---
+
+### Re-spin machinery
+
+This section is a **shared helper** used by the Phase 4 discussion loop (LIGHT/MEDIUM branch) and by T011's wide-mode overflow. Both callers reference "re-spin machinery" — implement once here, invoke by name from both sites.
+
+#### Inputs
+
+Before executing a re-spin wave, the caller must have determined:
+
+- `RESPIN_DIRECTION` — the narrowed direction string from the user (e.g. "focus on the security axis" or the user's challenge text). If the caller is the discussion loop, derive this from the user's challenge or re-spin request. If the caller is wide-mode overflow, this is the divergence axis not yet covered by prior waves.
+- `RESPIN_WAVE` — the wave number being dispatched (1, 2, or 3). Track this in the run context. Wave 1 is the first re-spin (not the original Phase 2 dispatch).
+- `RESPIN_PRIOR_FRAMINGS` — the concatenated framing blocks (five-section schema) from all ideators dispatched so far (Phase 2 wave + any prior re-spin waves). Extract these from the BRAINSTORM.md body — every `## Framing` subsection under every wave header.
+
+#### Cap enforcement
+
+**Hard cap: 3 re-spin waves maximum.** Before dispatching:
+
+```bash
+if [[ "${RESPIN_WAVE:-1}" -gt 3 ]]; then
+  # Inform the user that the re-spin cap has been reached.
+  # Do NOT dispatch any ideators. Return to the discussion loop.
+  echo "Re-spin cap reached (3/3). No further re-spin waves are available for this brainstorm run." >&2
+  exit 0
+fi
+```
+
+If the cap is reached, tell the user conversationally: "We've reached the re-spin limit (3 waves). If the current options still don't fit, consider a Restart to brainstorm a refined topic from scratch." Do not dispatch any ideators. End your turn.
+
+#### Subset selection
+
+A re-spin dispatches **2 of the 3** vendor arms (not all 3), chosen to maximise diversity relative to what already returned divergent framings. Default subset: `general-purpose` (Claude) + one consultant arm chosen round-robin:
+
+- Wave 1 → Claude + Codex (`general-purpose` + `consultant-secondary`)
+- Wave 2 → Claude + Gemini (`general-purpose` + `consultant-primary`)
+- Wave 3 → Codex + Gemini (`consultant-secondary` + `consultant-primary`)
+
+Rationale: keeping Claude in waves 1 and 2 anchors the synthesis comparison; wave 3 drops Claude to force a fully non-Claude axis. The caller (discussion loop or wide mode) does NOT need to pick the subset — the wave number determines it deterministically.
+
+#### Anti-seed prompt construction
+
+Build the anti-seed payload once before dispatching both ideators. It must contain:
+
+1. The `narrowed_direction` from `RESPIN_DIRECTION`.
+2. The full text of `RESPIN_PRIOR_FRAMINGS` (all existing framing blocks), labelled clearly.
+3. The divergence instruction (verbatim, do not paraphrase):
+
+   > "Here are the existing framings from this brainstorm run. Produce something that **diverges from all of them** — attack a **different axis** (different core hypothesis, different problem decomposition, different target user, or different solution lever). Do NOT restate, synthesize, or incrementally improve an existing framing. The goal is genuine divergence."
+
+Full anti-seed prompt template for each re-spin ideator:
+
+```
+<PERSONA_PREFIX (same resolution as Phase 2 — draw a fresh random persona for this ideator slot for this wave)>
+MODE: brainstorm
+
+Topic: <topic>
+
+Narrowed direction from the user: <RESPIN_DIRECTION>
+
+Here are the existing framings from this brainstorm run:
+
+<RESPIN_PRIOR_FRAMINGS>
+
+Produce something that diverges from all of them — attack a different axis (different core hypothesis, different problem decomposition, different target user, or different solution lever). Do NOT restate, synthesize, or incrementally improve an existing framing. The goal is genuine divergence.
+
+<IDEATOR_SCHEMA (same five-section schema as Phase 2)>
+```
+
+#### Cost estimate and user notification
+
+Before dispatching the ideators, emit a one-line cost note to the user (inline in your response, not a log event):
+
+> "Re-spin `<RESPIN_WAVE>`/3, ~`<N_IDEATORS × estimated_tokens>` tokens — dispatching `<N_IDEATORS>` ideators on a divergent axis."
+
+Use `N_IDEATORS = 2`. Token estimate: ~1,500 tokens per ideator call (input + output combined) is a reasonable heuristic for brainstorm-scale prompts; use `~3,000 tokens total` for the two-ideator subset. If the actual payload is materially larger (e.g. RESPIN_PRIOR_FRAMINGS is very long), adjust the estimate up — the goal is a directionally correct number, not precision.
+
+#### Dispatch
+
+```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+     <!-- agent dispatch / skill invocation not supported in Windsurf; see CAPABILITIES.md -->
+     Re-spin cannot complete without subagent support. -->
+```
+
+Dispatch the subset pair in **parallel** (same as Phase 2 parallel dispatch):
+
+**Wave 1 and Wave 2 (Claude + one consultant):**
+
+```
+<!-- agent dispatch / skill invocation not supported in Windsurf; see CAPABILITIES.md -->
+  subagent_type="general-purpose",
+  model="sonnet",
+  description="Claude re-spin ideator wave <RESPIN_WAVE> for <slug>",
+  prompt="<anti-seed prompt for Claude, per template above>"
+)
+<!-- agent dispatch / skill invocation not supported in Windsurf; see CAPABILITIES.md -->
+  subagent_type="<consultant-secondary|consultant-primary per wave>",
+  description="<Codex|Gemini> re-spin ideator wave <RESPIN_WAVE> for <slug>",
+  prompt="<anti-seed prompt for that consultant, per template above>"
+)
+```
+
+**Wave 3 (Codex + Gemini, no Claude):**
+
+```
+<!-- agent dispatch / skill invocation not supported in Windsurf; see CAPABILITIES.md -->
+  subagent_type="consultant-secondary",
+  description="Codex re-spin ideator wave 3 for <slug>",
+  prompt="<anti-seed prompt for Codex>"
+)
+<!-- agent dispatch / skill invocation not supported in Windsurf; see CAPABILITIES.md -->
+  subagent_type="consultant-primary",
+  description="Gemini re-spin ideator wave 3 for <slug>",
+  prompt="<anti-seed prompt for Gemini>"
+)
+```
+
+Apply the same persona resolution as Phase 2 (draw a fresh random persona per ideator slot per wave, if `brainstorm.personas` is ON; skip if OFF or underflow). The anti-seed instruction is in addition to — not instead of — the persona prefix.
+
+#### Failure policy
+
+Apply the same failure policy as Phase 2 ideators:
+
+- **1/2 fail** → proceed with the surviving one. Record the failed member as `<id>:failed` in the wave header comment (see BRAINSTORM.md append below).
+- **2/2 fail** → inform the user conversationally ("Both re-spin ideators failed — re-spin wave `<N>` produced no new framings"). Do NOT decrement `RESPIN_WAVE` (the wave still consumed a slot toward the cap). Return to the discussion loop without appending to BRAINSTORM.md for this wave.
+
+Log every individual failure as `ideator_failed` with `{vendor, reason, wave: RESPIN_WAVE}`.
+
+#### Telemetry
+
+Emit a `respin_wave` event immediately after the ideators return (regardless of failure):
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" respin_wave \
+  "$(python3 -c 'import json,sys; print(json.dumps({"wave":int(sys.argv[1]),"n_ideators":int(sys.argv[2]),"failed":int(sys.argv[3])}))' \
+     "$RESPIN_WAVE" "2" "<0 or number of failed ideators>")"
+```
+
+#### BRAINSTORM.md append
+
+On success (at least 1 surviving ideator), append to `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md` under a new wave header. Do NOT rewrite the file — append only:
+
+```markdown
+
+## Re-spin wave <RESPIN_WAVE>
+
+<!-- re-spin direction: <RESPIN_DIRECTION> -->
+<!-- ideators: <list of dispatched ideators, e.g. claude, codex>; failed: <list or "none"> -->
+
+### Framing — <ideator-id> (re-spin wave <RESPIN_WAVE>)
+
+<five-section block from ideator, verbatim>
+
+### Framing — <ideator-id> (re-spin wave <RESPIN_WAVE>)
+
+<five-section block from second ideator, if surviving>
+```
+
+The wave header (`## Re-spin wave N`) makes the file self-describing and allows the discussion loop to locate all prior framings by scanning from the top. The `<!-- re-spin direction -->` comment preserves the narrowing context for any future resumption.
+
+#### Post-dispatch: return to the caller
+
+After appending to BRAINSTORM.md and emitting the `respin_wave` event:
+
+- **If called from the Phase 4 discussion loop:** produce an updated ranked briefing that incorporates the new wave's framings alongside the original Phase 2 framings, then end your turn. The ranked briefing follows the same format as the Phase 3 briefing (pros/cons, consensus vs divergence, recommendation). Do NOT auto-lock-in a framing — wait for the user's next reply.
+- **If called from wide-mode overflow (T011):** return the new framings to the caller for clustering by `ideator-clusterer`; do not produce a ranked briefing here (the wide-mode path handles presentation).
+
+The RESPIN_WAVE counter must be incremented by the caller after a successful dispatch (including partial-success single-survivor waves). A fully-failed wave (2/2 fail) does NOT increment the counter toward the cap (the slot is not consumed).
 
 ---
 
@@ -1316,7 +2078,13 @@ Early halt / abort paths often have **no** primary artifact (`FIX.md`, `REPORT.m
 | `scope_fanout_dispatched` | HEAVY mode: N sub-flows launched | `host_command`, `axis`, `chunks_count` |
 | `scope_fanout_reconciled` | HEAVY mode: reconciler finished | `host_command`, `axis`, `chunks_total`, `chunks_succeeded`, `reconciler_ok` |
 | `heavy_pair_selected` | HEAVY mode: user chose a (chunk, framing) pair | `chunk_id`, `framing` |
+| `framing_locked` | LIGHT/MEDIUM branch: user unambiguously locked in a framing (conversational) | `chosen_framing` |
 | `doc_drift` | doc-fetcher returned a DRIFT WARNING for a concept | `concept`, `claim`, `reality`, `file` |
+| `sharpen_gate` | Phase 0 sharpen-vs-skip decision | `decision` (`sharpen`\|`skip`), `reason`, `grill_md_existed` |
+| `count_parsed` | Phase 0 ideator count extracted from NL invocation | `wide_n`, `default_used` |
+| `wide_suppressed_heavy` | N>3 wide request suppressed HEAVY chunking (D2) | `requested_n`, `scope_mode` |
+| `wide_dispatch` | Wide mode confirmed by user; all waves + clusterer dispatched | `wide_n`, `waves`, `overflow_model` |
+| `wide_overflow_model_warn` | `cheap-mixed` resolved but no `--model` path verified; fell back to haiku | `reason`, `config_value` |
 
 ---
 
@@ -1329,6 +2097,7 @@ Early halt / abort paths often have **no** primary artifact (`FIX.md`, `REPORT.m
 - **Restart is cheap.** Archive and loop, don't try to patch.
 - **Never read `docs/llm/*.json` from main thread.** Always dispatch `doc-fetcher`.
 - **Log everything** via `scripts/log-event.sh`.
+- **Brainstorm tail never auto-decides (m5 — load-bearing).** The orchestrator MUST halt after the Phase 3 ranked briefing and wait for the user's natural-language reply. It MUST NOT auto-pick a framing. It writes `chosen_framing` and the `## User choice` block ONLY on an unambiguous lock-in signal from the user. An ambiguous reply triggers a clarifying question, never a write. A silent auto-write would lose the user's intent — this is the riskiest behavior in this command.
 
 ---
 
@@ -1337,7 +2106,7 @@ Early halt / abort paths often have **no** primary artifact (`FIX.md`, `REPORT.m
 | Feature | Used | Gates |
 |---------|------|-------|
 <!-- agent dispatch / skill invocation not supported in Windsurf; see CAPABILITIES.md -->
-| `ask_user` | yes | Empty topic gate; Setup slug confirmation; Setup existing BRAINSTORM.md overwrite; Phase 2 2/3 ideator failure gate; Phase 3 framing selection; Phase 4 HEAVY chunk×framing matrix; Phase 4 LIGHT/MEDIUM restart refined-topic question |
+| `ask_user` | yes | Empty topic gate (finite); Setup slug confirmation (finite); Setup existing BRAINSTORM.md overwrite (finite); Phase 2 2/3 ideator failure gate (finite); Phase 4 HEAVY "no framings" halt (finite). **Conversational (no ask_user):** Phase 3 framing-selection briefing; Phase 4 HEAVY chunk×framing matrix (T009); Phase 4 LIGHT/MEDIUM discussion loop including restart refined-topic |
 | `skill_invoke` | no | — |
 
 Driver support requirements: see frontmatter `driver_features_required`.

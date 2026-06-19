@@ -57,7 +57,7 @@ Primary route targets:
 - `/z-brainstorm`
 - `/z-map`
 - `/z-research`
-- `/z-reality` (special non-plan route — interactive premise refinement, handled by `premise_underspecified` signal)
+- `/z-sharpen` (special non-plan route — conversational bounded idea-sharpener, handled by `premise_underspecified` signal)
 
 Contextual exits:
 
@@ -143,7 +143,7 @@ Apply these rules in order:
    - `has_unknown_bug_symptom` -> `/z-debug`
    - `docs_stale_or_drifted` -> `/z-maintain-docs`
    With `has_existing_plan` true but neither intent flag set, fall through to the remaining rules — do not infer intent from prose.
-5. If `premise_underspecified` is true AND `current_command` is NOT `/z-reality` (prevent loop), recommend `/z-reality` with `premise_underspecified`.
+5. If `premise_underspecified` is true AND `current_command` is NOT `/z-sharpen` (prevent loop), recommend `/z-sharpen` with `premise_underspecified`.
 6. If `terrain_uncertain` is true, recommend `/z-map` with `needs_terrain_map`.
 7. If `has_map_and_brainstorm` is true AND `approach_uncertain` is true, recommend `/z-research` with `needs_approach_synthesis`.
 8. If `approach_uncertain` is true and terrain is known enough to compare approaches (and `has_map_and_brainstorm` is not true), recommend `/z-brainstorm`.

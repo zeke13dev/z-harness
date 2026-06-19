@@ -448,10 +448,10 @@ class TestGoldenSnapshotStructure:
         expected_counts = {
             # Re-baselined after the skills/ source dir was removed: commands/ is
             # now the single source, so the per-skill *-skill.* outputs are gone.
-            "cursor": 86,     # .cursor/rules/*.mdc (commands + agents + z-debt)
-            "codex": 57,      # prompts/*.md + AGENTS.md (commands + agents + z-debt; no personas)
-            "antigravity": 175,  # .agent/workflows + .agent/rules + prompts + CAPABILITIES + README + agy-plugin.yaml + z-debt
-            "pi": 93,         # agents/*.md + prompts/*.md + AGENTS.md + CAPABILITIES.md + README.md + z-debt + vendored pi_assets
+            "cursor": 87,     # .cursor/rules/*.mdc (commands + agents + z-debt); +1 ideator-clusterer
+            "codex": 57,      # prompts/*.md + AGENTS.md (commands + agents + z-debt; no personas); z-reality→z-sharpen rename, ideator-clusterer in AGENTS.md aggregate (net 0)
+            "antigravity": 177,  # .agent/workflows + .agent/rules + prompts + CAPABILITIES + README + agy-plugin.yaml + z-debt; +2 (ideator-clusterer rule + prompt)
+            "pi": 94,         # agents/*.md + prompts/*.md + AGENTS.md + CAPABILITIES.md + README.md + z-debt + vendored pi_assets; +1 ideator-clusterer
             # New export-only drivers (T011–T014)
             "windsurf": 61,   # .windsurf/rules/*.md (commands + agents)
             "kiro": 61,       # .kiro/steering/*.md (commands + agents)

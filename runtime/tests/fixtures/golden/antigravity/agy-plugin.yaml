@@ -183,10 +183,6 @@ workflows:
     source: commands/z-providers-discover.md
     output: .agent/workflows/z-providers-discover.md
     description: Discover LLM CLI providers in PATH and generate providers.json.
-  - id: z-reality
-    source: commands/z-reality.md
-    output: .agent/workflows/z-reality.md
-    description: "Interactive premise refinement — conversational on-ramp. Probes, clarifies,"
   - id: z-research
     source: commands/z-research.md
     output: .agent/workflows/z-research.md
@@ -199,6 +195,10 @@ workflows:
     source: commands/z-setup.md
     output: .agent/workflows/z-setup.md
     description: "Configuration cockpit for z-harness: inspect resolved state, run guided setup wizard, or apply a posture preset."
+  - id: z-sharpen
+    source: commands/z-sharpen.md
+    output: .agent/workflows/z-sharpen.md
+    description: "Conversational idea-sharpening on-ramp — probes, reframes, and converges a vague"
   - id: z-skill-fix
     source: commands/z-skill-fix.md
     output: .agent/workflows/z-skill-fix.md
@@ -294,6 +294,11 @@ rules:
     output: .agent/rules/z-harness-external-lookup.md
     trigger: model_decision
     description: "Fetch external information (web docs, public APIs, paginated JSON, library docs outside training cutoff) and return a tight STATUS-headed Markdown synthesis per docs/llm/lookup-contract.json. Read-only. Refuses mutating shell commands via verb-blo..."
+  - id: ideator-clusterer
+    source: agents/ideator-clusterer.md
+    output: .agent/rules/z-harness-ideator-clusterer.md
+    trigger: model_decision
+    description: "Reads N peer ideator framing blocks (five-section outputs) from a wide /z-brainstorm run, clusters them into K distinct directions by core hypothesis / approach axis, and returns: K cluster labels, each cluster's member ideators + a representative..."
   - id: implementer
     source: agents/implementer.md
     output: .agent/rules/z-harness-implementer.md

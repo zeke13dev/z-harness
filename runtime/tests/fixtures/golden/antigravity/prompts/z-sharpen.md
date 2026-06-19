@@ -1,15 +1,6 @@
 ---
-description: Conversational idea-sharpening on-ramp — probes, reframes, and converges a vague
-  idea into a buildable problem statement, escalating to pin individual fuzzy dimensions (with a
-  recommended answer) only as needed. Bounded — never full /z-grill exhaustiveness. Writes GRILL.md
-  as precontext for /z-plan or /z-brainstorm; also auto-invoked as /z-brainstorm Phase 0.
-argument-hint: "[raw idea — or blank to start the conversation]"
-runtime: c1
-driver_features_required:
-  - subagent      # Explore self-serve for codebase-answerable questions
-  - ask_user      # empty-topic bootstrap + recommended-answer confirmations (front-end command; the
-                  # no-prompt rule is scoped to /z-brainstorm only)
-unsupported_driver_behavior: explicit_gate
+description: "Conversational idea-sharpening on-ramp — probes, reframes, and converges a vague"
+role: workflow
 ---
 
 You are running the **z-harness `/z-sharpen`** conversational idea-sharpening command.
@@ -71,10 +62,10 @@ thread with the highest signal, not a fixed order.
 codebase rather than the user? If yes, self-serve it:
 
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
-     requirement and skip the Explore Agent() call. If skipped, ask the user the
+     <!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
      question directly instead of self-answering. Silent omission is forbidden. -->
 ```
-Agent(
+<!-- agent dispatch / skill invocation not supported in Antigravity; see CAPABILITIES.md -->
   subagent_type="general-purpose",
   model="haiku",
   description="Self-serve: <one-line question>",
