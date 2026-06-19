@@ -182,7 +182,7 @@
         "commands/z-plan-split.md",
         "commands/z-plan.md",
         "commands/z-providers-discover.md",
-        "commands/z-reality.md",
+        "commands/z-sharpen.md",
         "commands/z-research.md",
         "commands/z-review-all.md",
         "commands/z-skill-fix.md",
@@ -634,20 +634,21 @@
       "source_files": []
     },
     {
-      "slug": "z-reality",
+      "slug": "z-sharpen",
       "source_file": [
-        "commands/z-reality.md"
+        "commands/z-sharpen.md"
       ],
-      "last_updated": "2026-06-08",
+      "last_updated": "2026-06-18",
       "confidence": "high",
       "depends_on": [
         "commands",
         "scripts"
       ],
       "consumed_by": [
-        "agents/planning-router"
+        "agents/planning-router",
+        "commands/z-brainstorm"
       ],
-      "summary": "Interactive premise refinement — conversational on-ramp. Probes, clarifies, reframes, and converges a raw idea into a BRAINSTORM.md variant (mode: interactive, ideators: [interactive]) before routing to /z-brainstorm or /z-plan. Runs inline (no subagents, no cross-LLM consult). Three logging events: reality_run_start, reality_convergence, reality_run_end.",
+      "summary": "Conversational bounded idea-sharpener. Probes, reframes, and converges a vague idea into a buildable problem statement; escalates to pin fuzzy dimensions only as needed (bounded — never full /z-grill exhaustiveness). Writes GRILL.md (not BRAINSTORM.md) as precontext for /z-plan or /z-brainstorm; also auto-invoked as /z-brainstorm Phase 0. Three logging events: sharpen_run_start, sharpen_convergence, sharpen_run_end.",
       "source_files": []
     },
     {

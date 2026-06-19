@@ -29,6 +29,7 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
   globbing the wrong directory (`personas/*.md` instead of `personas/builtin/`).
 - **Fixed:** artifact paths — `handoff.json` now lives in a single home, legacy
   plan directories get pruned, and a leaky claim-lock test was repaired.
+- _(auto)_ Foundation — z-sharpen rework, ideator-clusterer agent, wide_overflow_model knob (T001/T003/T004) _(brainstorm)_
 
 ## 2026-06-17
 

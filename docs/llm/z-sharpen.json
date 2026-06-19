@@ -1,0 +1,60 @@
+{
+  "concept": "z-sharpen",
+  "last_updated": "2026-06-18",
+  "covers_spec": "brainstorm-conversational",
+  "source_file": [
+    "commands/z-sharpen.md"
+  ],
+  "confidence": "high",
+  "entry_points": [
+    {
+      "file": "commands/z-sharpen.md",
+      "line": 1,
+      "symbol": "/z-sharpen",
+      "kind": "module",
+      "summary": "Conversational idea-sharpening on-ramp — probes, reframes, and converges a vague idea into a buildable problem statement. Bounded (never full /z-grill exhaustiveness). Writes GRILL.md as precontext for /z-plan or /z-brainstorm; also auto-invoked as /z-brainstorm Phase 0."
+    },
+    {
+      "file": "commands/z-sharpen.md",
+      "line": 1,
+      "symbol": "z-sharpen bounded protocol",
+      "kind": "module",
+      "summary": "Stage 1 (framing restate) → Stage 2 (probe/clarify/reframe with bounded adaptive escalation) → Stage 3 (convergence gate) → Stage 4 (GRILL.md artifact + route handoff). Stop once buildable — do NOT exhaustively interrogate every dimension."
+    },
+    {
+      "file": "commands/z-sharpen.md",
+      "line": 1,
+      "symbol": "GRILL.md output",
+      "kind": "module",
+      "summary": "Writes $Z_HARNESS_PLAN_DIR/GRILL.md using the exact schema /z-grill produces: frontmatter generated_at/status:complete/slug; body sections Sharpened problem, Pain evidence, Who else has this, Dumbest version, Killed scope, Open branches, Recommended next command."
+    }
+  ],
+  "depends_on": [
+    "commands",
+    "scripts"
+  ],
+  "consumed_by": [
+    "agents/planning-router",
+    "commands/z-brainstorm"
+  ],
+  "invariants": [
+    "The user always owns convergence — AI never writes GRILL.md before user signals convergence",
+    "Bounded adaptive escalation: start conversational; escalate to pin a fuzzy dimension only as needed; stop once the idea is buildable",
+    "Never exhaustively interrogate every dimension — that is /z-grill's job",
+    "Abandon is clean — no GRILL.md artifact written on abandon",
+    "No subagents for the interview itself — Explore (Haiku) is the only subagent, used to self-serve codebase-answerable questions",
+    "Writes GRILL.md (NOT BRAINSTORM.md) — schema identical to /z-grill output",
+    "Three logging events: sharpen_run_start, sharpen_convergence, sharpen_run_end",
+    "Slug collision on existing precontext-only GRILL.md = continuation/overwrite; finished-plan = ask",
+    "Empty $ARGUMENTS opens with 'What are you thinking about?'",
+    "Never auto-dispatches to /z-plan or /z-brainstorm — advisory handoff only"
+  ],
+  "gotchas": [
+    "z-sharpen = adaptive + bounded; /z-grill = exhaustive + deliberate — keep the two distinguishable so z-grill is not vestigial",
+    "Writes GRILL.md not BRAINSTORM.md — downstream commands that expect BRAINSTORM.md will not find z-sharpen output there",
+    "planning-router rule 5: premise_underspecified routes to /z-sharpen only if current_command is NOT /z-sharpen (loop prevention)",
+    "GRILL.md schema is shared with /z-grill — last-writer-wins if both run on one slug",
+    "No active-plan registration — /z-sharpen is not a plan-family command"
+  ],
+  "memories": []
+}

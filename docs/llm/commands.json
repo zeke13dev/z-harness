@@ -34,7 +34,7 @@
     "commands/z-plan-split.md",
     "commands/z-plan.md",
     "commands/z-providers-discover.md",
-    "commands/z-reality.md",
+    "commands/z-sharpen.md",
     "commands/z-research.md",
     "commands/z-review-all.md",
     "commands/z-skill-fix.md",
@@ -266,11 +266,11 @@
       "summary": "Probes PATH for LLM CLIs and writes providers.json with interactively-confirmed role bindings."
     },
     {
-      "file": "commands/z-reality.md",
+      "file": "commands/z-sharpen.md",
       "line": 1,
-      "symbol": "/z-reality",
+      "symbol": "/z-sharpen",
       "kind": "module",
-      "summary": "Interactive premise refinement — conversational on-ramp that probes, clarifies, reframes, and converges a raw idea into a BRAINSTORM.md variant (mode: interactive) before routing to /z-brainstorm or /z-plan. Runs inline — no subagents, no cross-LLM consult."
+      "summary": "Conversational bounded idea-sharpener that probes, reframes, and converges a vague idea into a buildable problem statement. Bounded (never full /z-grill exhaustiveness). Writes GRILL.md as precontext for /z-plan or /z-brainstorm; also auto-invoked as /z-brainstorm Phase 0. Runs inline — Explore (Haiku) is the only subagent (for codebase-answerable questions)."
     },
     {
       "file": "commands/z-research.md",

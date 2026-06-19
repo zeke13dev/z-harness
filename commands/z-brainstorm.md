@@ -79,6 +79,165 @@ $ARGUMENTS
 
 Run Phase 0 **immediately after Setup** — BEFORE Plan Route Check, BEFORE Phase 1 scaffolding begins. scope-probe internally dispatches doc-fetcher (per its step 4); Phase 0 does not depend on Phase 1's doc-fetcher run.
 
+### 0-sharpen. Sharpen-vs-skip gate (D5)
+
+This is a **separate cheap check** that runs BEFORE scope-probe. It is NOT folded into scope-probe's LIGHT/MEDIUM/HEAVY classifier — the two checks are orthogonal (idea vagueness ≠ codebase fanout size).
+
+**Check 1 — GRILL.md already exists?**
+
+```bash
+SHARPEN_GATE_DECISION=""
+SHARPEN_GATE_REASON=""
+GRILL_EXISTED=0
+if [ -f "$Z_HARNESS_PLAN_DIR/GRILL.md" ]; then
+  SHARPEN_GATE_DECISION="skip"
+  SHARPEN_GATE_REASON="GRILL.md already exists for this slug"
+  GRILL_EXISTED=1
+fi
+```
+
+If a `GRILL.md` already exists for the slug, skip straight to the scope-probe (continue with step 0-count below). Phase 1c-ii already ingests `GRILL.md` as seed framing.
+
+**Check 2 — Heuristic specificity check (if GRILL.md absent):**
+
+Evaluate the topic for concreteness. A topic is **crisp** if it satisfies ALL of:
+- Length > 20 characters (not a one-word stub)
+- Contains at least one **concrete constraint or scope qualifier** (e.g. a file name, technology name, numbered target, time/size bound, or explicit "in X" / "for Y" clause)
+- Is NOT purely abstract (e.g. "improve performance", "make it better", "ideas for the app")
+
+If the heuristic result is unambiguous (clearly crisp OR clearly vague), set the decision directly. If the topic falls in a grey zone (e.g. 2-3 word phrase with no modifiers, medium length but no concrete scope), dispatch one Haiku call to resolve.
+
+```bash
+if [ -z "$SHARPEN_GATE_DECISION" ]; then
+  TOPIC_LEN=${#TOPIC}   # TOPIC = the cleaned topic string from Setup
+  # Heuristic: fast-path crisp if the topic looks sufficiently specific
+  # (≥40 chars with at least one colon/slash/number/quoted term or file-ext pattern)
+  if echo "$TOPIC" | grep -qE '(\.|/|:|[0-9]|"[^"]|`[^`])' && [ "$TOPIC_LEN" -ge 40 ]; then
+    SHARPEN_GATE_DECISION="skip"
+    SHARPEN_GATE_REASON="heuristic: topic has concrete markers and sufficient length"
+  elif [ "$TOPIC_LEN" -lt 15 ]; then
+    SHARPEN_GATE_DECISION="sharpen"
+    SHARPEN_GATE_REASON="heuristic: topic is very short / likely a stub"
+  fi
+fi
+```
+
+If the heuristic left `SHARPEN_GATE_DECISION` empty (ambiguous topic), dispatch one Haiku call:
+
+<!-- RUNTIME-GATE: subagent; non-supporting drivers skip this Agent() call and
+     treat the result as SHARPEN_GATE_DECISION="skip" (conservative: don't
+     force sharpening when the driver cannot run subagents). -->
+```
+Agent(
+  subagent_type="general-purpose",
+  model="haiku",
+  description="Sharpen gate: evaluate topic specificity",
+  prompt="Evaluate whether this brainstorm topic is CRISP (already names a concrete problem + constraints + scope) or VAGUE (abstract, stub, or missing key constraints).
+
+Topic: <topic verbatim>
+
+Respond with exactly two lines:
+  DECISION: skip
+  REASON: <one sentence>
+or
+  DECISION: sharpen
+  REASON: <one sentence>
+
+CRISP = names a concrete problem AND has at least one explicit constraint (technology, file/module, size limit, audience, or timeframe). VAGUE = missing the problem, missing constraints, or is a 1-3 word stub."
+)
+```
+
+Parse the response and complete the gate:
+
+```bash
+if [ -z "$SHARPEN_GATE_DECISION" ]; then
+  # Extract DECISION and REASON from the Haiku response stored in HAIKU_RESPONSE
+  SHARPEN_GATE_DECISION="$(echo "$HAIKU_RESPONSE" | grep '^DECISION:' | head -1 | sed 's/^DECISION: *//' | tr -d '[:space:]')"
+  SHARPEN_GATE_REASON="$(echo "$HAIKU_RESPONSE" | grep '^REASON:' | head -1 | sed 's/^REASON: *//')"
+  # Fallback on parse failure: treat as skip (conservative — never force sharpening on bad parse)
+  [ -z "$SHARPEN_GATE_DECISION" ] && SHARPEN_GATE_DECISION="skip" && SHARPEN_GATE_REASON="haiku parse failed — defaulting to skip"
+fi
+```
+
+**Act on the decision:**
+
+- **`skip`** — log the event and proceed to 0-count (count parse) → 0a (axis taxonomy) → 0b (fast-path check) → scope-probe as normal. Phase 1c-ii will still ingest any pre-existing GRILL.md.
+- **`sharpen`** — auto-invoke z-sharpen inline before scope-probe:
+
+  ```bash
+  # Inline z-sharpen: run the sharpen conversation to produce GRILL.md
+  # Z_HARNESS_PLAN_DIR and Z_HARNESS_SLUG are already exported from Setup.
+  # z-sharpen writes $Z_HARNESS_PLAN_DIR/GRILL.md on convergence and exits.
+  # "Inline" here means: reproduce the z-sharpen protocol in this same conversation
+  # turn (no sub-agent dispatch, since z-sharpen is a c1 conversational command just
+  # like z-brainstorm). Run the sharpen interview per commands/z-sharpen.md:
+  #   Stage 1 — restate framing; Stage 2 — probe/reframe; Stage 3 — converge;
+  #   Stage 4 — write GRILL.md.
+  # The sharpen run emits its own sharpen_run_start / sharpen_convergence /
+  # sharpen_run_end events (from z-sharpen's event schema).
+  # After convergence, GRILL.md is present and Phase 1c-ii will ingest it as
+  # seed framing. If the user abandons the sharpen interview, log the abandon
+  # and continue without GRILL.md (treat as if SHARPEN_GATE_DECISION were "skip").
+  SHARPEN_ABANDONED=0
+  <run z-sharpen inline per commands/z-sharpen.md protocol>
+  # On sharpen abandon: set SHARPEN_ABANDONED=1
+  ```
+
+  After inline z-sharpen completes (or the user abandons), proceed to 0-count → 0a → scope-probe.
+
+**Emit `sharpen_gate` event regardless of decision:**
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" sharpen_gate \
+  "$(python3 -c 'import json,sys; print(json.dumps({"decision":sys.argv[1],"reason":sys.argv[2],"grill_md_existed":sys.argv[3]=="1"}))' \
+     "$SHARPEN_GATE_DECISION" "$SHARPEN_GATE_REASON" "${GRILL_EXISTED:-0}")"
+```
+
+---
+
+### 0-count. Count parse (wide N)
+
+Parse the desired ideator count `N` from the natural-language topic string. **No `--wide N` flag** — N is inferred from prose.
+
+```bash
+# Default N=3 (standard 3-vendor brainstorm)
+WIDE_N=3
+
+# Pattern-match the topic string for explicit count signals
+TOPIC_LOWER="$(echo "$TOPIC" | tr '[:upper:]' '[:lower:]')"
+
+# Explicit number: "8 ways", "10 options", "give me 5", "brainstorm 7", "×6", "x 6"
+_EXPLICIT=$(echo "$TOPIC_LOWER" | grep -oE '[0-9]+\s*(ways?|options?|ideas?|framings?|ideators?|variants?)' | grep -oE '^[0-9]+' | head -1)
+if [ -z "$_EXPLICIT" ]; then
+  _EXPLICIT=$(echo "$TOPIC_LOWER" | grep -oE '(brainstorm|give me|~|about|roughly)\s*([0-9]+)' | grep -oE '[0-9]+' | head -1)
+fi
+if [ -z "$_EXPLICIT" ]; then
+  _EXPLICIT=$(echo "$TOPIC_LOWER" | grep -oE '[0-9]+\s*x\b|\bx\s*[0-9]+' | grep -oE '[0-9]+' | head -1)
+fi
+
+if [ -n "$_EXPLICIT" ] && [ "$_EXPLICIT" -gt 1 ] 2>/dev/null; then
+  WIDE_N="$_EXPLICIT"
+else
+  # Prose signals for "many": "lots of", "many", "wide", "mega", "as many as possible"
+  if echo "$TOPIC_LOWER" | grep -qE '(lots of|a lot of|many options|many ways|wide mode|mega|as many as possible|maximum)'; then
+    WIDE_N=6  # sensible default for "many"
+  fi
+fi
+
+# Cap at a reasonable ceiling to prevent runaway token spend
+if [ "$WIDE_N" -gt 20 ] 2>/dev/null; then
+  WIDE_N=20
+fi
+
+# Telemetry record
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" count_parsed \
+  "$(python3 -c 'import json,sys; print(json.dumps({"wide_n":int(sys.argv[1]),"default_used":sys.argv[1]=="3"}))' "$WIDE_N")"
+```
+
+Record `WIDE_N` for telemetry and for the D2 wide×HEAVY suppression check (step 0g). After count parse, continue to 0a (axis taxonomy) → 0b (fast-path check) → scope-probe.
+
+---
+
 ### 0a. Define axis taxonomy
 
 ```
@@ -228,6 +387,24 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 #### HEAVY — parallel sub-flow fan-out
 
 When `MODE: HEAVY`:
+
+**D2 — Wide-N × HEAVY suppression (check first, before any fan-out):**
+
+If an explicit wide-N request was parsed in 0-count (i.e. `WIDE_N > 3`), suppress HEAVY chunk fanout and treat this run as MEDIUM instead. One fan-out axis at a time — wide and HEAVY never multiply.
+
+```bash
+if [ "${WIDE_N:-3}" -gt 3 ] 2>/dev/null; then
+  # Wide request detected — HEAVY fanout suppressed (D2 invariant)
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" wide_suppressed_heavy \
+    "$(python3 -c 'import json,sys; print(json.dumps({"requested_n":int(sys.argv[1]),"scope_mode":"HEAVY"}))' "$WIDE_N")"
+  MODE=MEDIUM
+  # Proceed to LIGHT/MEDIUM pass-through below — skip the HEAVY fan-out entirely
+fi
+```
+
+If `WIDE_N > 3` triggered the suppression above, skip all remaining HEAVY steps and proceed to Plan Route Check and Phase 1 as if `MODE: MEDIUM`. The `wide_suppressed_heavy` event records the requested N and original scope classification for telemetry.
+
+If `WIDE_N ≤ 3` (standard run, no explicit wide request), continue with HEAVY fan-out as normal:
 
 1. **Log fan-out start:**
    ```bash
@@ -890,6 +1067,9 @@ JSON
 | `scope_fanout_reconciled` | HEAVY mode: reconciler finished | `host_command`, `axis`, `chunks_total`, `chunks_succeeded`, `reconciler_ok` |
 | `heavy_pair_selected` | HEAVY mode: user chose a (chunk, framing) pair | `chunk_id`, `framing` |
 | `doc_drift` | doc-fetcher returned a DRIFT WARNING for a concept | `concept`, `claim`, `reality`, `file` |
+| `sharpen_gate` | Phase 0 sharpen-vs-skip decision | `decision` (`sharpen`\|`skip`), `reason`, `grill_md_existed` |
+| `count_parsed` | Phase 0 ideator count extracted from NL invocation | `wide_n`, `default_used` |
+| `wide_suppressed_heavy` | N>3 wide request suppressed HEAVY chunking (D2) | `requested_n`, `scope_mode` |
 
 ---
 
@@ -909,7 +1089,7 @@ JSON
 
 | Feature | Used | Gates |
 |---------|------|-------|
-| `subagent` | yes | Phase 0 scope-probe Agent(); HEAVY sub-flow and reconciler Agent() calls; Phase 1a doc-fetcher Agent(); Phase 1b optional Explore Agent(); Phase 2 three ideator Agent() calls |
+| `subagent` | yes | Phase 0 sharpen-gate optional Haiku Agent() (ambiguous topics only); Phase 0 scope-probe Agent(); HEAVY sub-flow and reconciler Agent() calls; Phase 1a doc-fetcher Agent(); Phase 1b optional Explore Agent(); Phase 2 three ideator Agent() calls |
 | `ask_user` | yes | Empty topic gate; Setup slug confirmation; Setup existing BRAINSTORM.md overwrite; Phase 2 2/3 ideator failure gate; Phase 3 framing selection; Phase 4 HEAVY chunk×framing matrix; Phase 4 LIGHT/MEDIUM restart refined-topic question |
 | `skill_invoke` | no | — |
 
