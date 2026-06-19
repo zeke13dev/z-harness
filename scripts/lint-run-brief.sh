@@ -11,7 +11,7 @@
 #
 # With --registry-only:
 #   - Greps every command in run-brief-registry.json for a run-brief-finalize
-#     fragment/include reference in commands/z-<name>.md (strip /z- prefix from key)
+#     fragment/include reference in skills/z-<name>/SKILL.md (strip /z- prefix from key)
 #   - Verifies implement-family commands include halt-finalize sub-fragments
 #
 # Exit codes:
@@ -36,7 +36,7 @@ done
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONTRACT="$REPO_ROOT/docs/llm/run-brief-contract.json"
 REGISTRY="$REPO_ROOT/docs/llm/run-brief-registry.json"
-COMMANDS_DIR="$REPO_ROOT/commands"
+SKILLS_DIR="$REPO_ROOT/skills"
 RENDER_PY="$REPO_ROOT/scripts/render-run-brief.py"
 
 FAIL=0
@@ -161,25 +161,25 @@ _check_registry_command_includes() {
     _fail "missing registry file: $REGISTRY"
     return
   fi
-  if [[ ! -d "$COMMANDS_DIR" ]]; then
-    _fail "missing commands directory: $COMMANDS_DIR"
+  if [[ ! -d "$SKILLS_DIR" ]]; then
+    _fail "missing skills directory: $SKILLS_DIR"
     return
   fi
 
   while IFS= read -r cmd; do
     [[ -z "$cmd" ]] && continue
     name="${cmd#/z-}"
-    cmd_file="$COMMANDS_DIR/z-${name}.md"
+    cmd_file="$SKILLS_DIR/z-${name}/SKILL.md"
     if [[ ! -f "$cmd_file" ]]; then
-      _fail "$cmd — missing command file $cmd_file"
+      _fail "$cmd — missing skill file $cmd_file"
       continue
     fi
     grep_ec=0
     grep -q 'run-brief-finalize' "$cmd_file" || grep_ec=$?
     case "$grep_ec" in
-      0) _pass "$cmd includes run-brief-finalize in commands/z-${name}.md" ;;
-      1) _fail "$cmd — no run-brief-finalize reference in commands/z-${name}.md" ;;
-      *) _fail "$cmd — grep error reading commands/z-${name}.md (exit $grep_ec)" ;;
+      0) _pass "$cmd includes run-brief-finalize in skills/z-${name}/SKILL.md" ;;
+      1) _fail "$cmd — no run-brief-finalize reference in skills/z-${name}/SKILL.md" ;;
+      *) _fail "$cmd — grep error reading skills/z-${name}/SKILL.md (exit $grep_ec)" ;;
     esac
   done < <(python3 - "$REGISTRY" <<'PY'
 import json
@@ -200,18 +200,18 @@ _check_implement_halt_includes() {
     "z-implement-all:run-brief-halt-finalize-implement-all.md" \
     "z-implement-next:run-brief-halt-finalize-implement-next.md"
   do
-    cmd_file="$COMMANDS_DIR/${spec%%:*}.md"
+    cmd_file="$SKILLS_DIR/${spec%%:*}/SKILL.md"
     frag="${spec#*:}"
     if [[ ! -f "$cmd_file" ]]; then
-      _fail "${spec%%:*} — missing command file $cmd_file"
+      _fail "${spec%%:*} — missing skill file $cmd_file"
       continue
     fi
     grep_ec=0
     grep -q "$frag" "$cmd_file" || grep_ec=$?
     case "$grep_ec" in
-      0) _pass "${spec%%:*} includes $frag in commands/${spec%%:*}.md" ;;
-      1) _fail "${spec%%:*} — no $frag reference in commands/${spec%%:*}.md" ;;
-      *) _fail "${spec%%:*} — grep error reading commands/${spec%%:*}.md (exit $grep_ec)" ;;
+      0) _pass "${spec%%:*} includes $frag in skills/${spec%%:*}/SKILL.md" ;;
+      1) _fail "${spec%%:*} — no $frag reference in skills/${spec%%:*}/SKILL.md" ;;
+      *) _fail "${spec%%:*} — grep error reading skills/${spec%%:*}/SKILL.md (exit $grep_ec)" ;;
     esac
   done
 }

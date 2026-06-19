@@ -1,5 +1,5 @@
 """
-build-skill-index.py — Crawl commands/*.md and skills/*/SKILL.md frontmatter
+build-skill-index.py — Crawl skills/*/SKILL.md frontmatter
 and emit a compact one-line-per-skill dispatch table (markdown) to stdout.
 
 Output format (one line per entry):
@@ -22,7 +22,7 @@ CLI usage:
   python3 scripts/build-skill-index.py [--repo-root <path>]
 
 Defaults:
-  --repo-root  directory containing commands/ and skills/  (default: script's
+  --repo-root  directory containing skills/  (default: script's
                two-levels-up parent, i.e. the repo root when invoked from any
                working directory)
 
@@ -196,21 +196,18 @@ def _render_dispatch_table(entries: list[dict[str, str]]) -> str:
 # ---------------------------------------------------------------------------
 
 def build_skill_index(repo_root: Path) -> str:
-    """Crawl commands/ and skills/ under *repo_root* and return a compact
+    """Crawl skills/ under *repo_root* and return a compact
     one-line-per-entry markdown dispatch table.
 
     Each line: ``/command` — <one-clause description>``
 
-    Entries are deduplicated by normalized command name and sorted
-    alphabetically (casefold + original for stable total order).
+    Entries are sorted alphabetically (casefold + original for stable total order).
 
     This function is the canonical entry point reused by build-kernel.py.
     """
     repo_root = Path(repo_root).resolve()
-    commands_entries = _crawl_commands(repo_root / "commands")
     skills_entries = _crawl_skills(repo_root / "skills")
-    all_entries = commands_entries + skills_entries
-    return _render_dispatch_table(all_entries)
+    return _render_dispatch_table(skills_entries)
 
 
 # ---------------------------------------------------------------------------

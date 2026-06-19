@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# lint-askuser.sh — audit AskUserQuestion callsites in commands/ and skills/
+# lint-askuser.sh — audit AskUserQuestion callsites in skills/
 #
 # Usage:
 #   scripts/lint-askuser.sh [--strict]
 #
-# Emits a table of every AskUserQuestion invocation found in commands/ and skills/,
+# Emits a table of every AskUserQuestion invocation found in skills/,
 # tagged REGISTERED if the same file also contains a resolve-question or check-no-ask
 # call (indicating the callsite participates in halt-from-ask), or UNREGISTERED
 # otherwise.
@@ -31,18 +31,14 @@ done
 
 # Resolve repo root from script location
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-COMMANDS_DIR="$REPO_ROOT/commands"
 SKILLS_DIR="$REPO_ROOT/skills"
 
 # Verify directories exist
-if [[ ! -d "$COMMANDS_DIR" ]]; then
-  echo "ERROR: commands/ directory not found at $COMMANDS_DIR" >&2
+if [[ ! -d "$SKILLS_DIR" ]]; then
+  echo "ERROR: skills/ directory not found at $SKILLS_DIR" >&2
   exit 3
 fi
-# skills/ is optional: it was removed in favor of exporting per-host skills from
-# commands/. Lint it only if it still exists (e.g. in an older checkout).
-SCAN_DIRS=("$COMMANDS_DIR")
-[[ -d "$SKILLS_DIR" ]] && SCAN_DIRS+=("$SKILLS_DIR")
+SCAN_DIRS=("$SKILLS_DIR")
 
 # Collect all files containing AskUserQuestion
 FILES=()
@@ -60,7 +56,7 @@ while IFS= read -r f; do
 done <<< "$sorted_files"
 
 if [[ ${#FILES[@]} -eq 0 ]]; then
-  echo "No AskUserQuestion callsites found in commands/ or skills/."
+  echo "No AskUserQuestion callsites found in skills/."
   exit 0
 fi
 

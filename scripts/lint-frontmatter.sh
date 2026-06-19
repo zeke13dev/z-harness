@@ -33,7 +33,7 @@ errors=0
 total=0
 
 # Directories to scan (relative to REPO_ROOT)
-scan_dirs=("agents" "skills" "commands" "personas" "scripts/pi_assets")
+scan_dirs=("agents" "skills" "personas" "scripts/pi_assets")
 
 # Build a Python one-liner that validates frontmatter
 # We try yaml (YAML 1.2) first, fall back to PyYAML, skip if neither available.
