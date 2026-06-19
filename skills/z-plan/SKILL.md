@@ -1541,7 +1541,7 @@ bash "$RB_SH" set-section --run "$RUN" --section next --json "$NEXT_JSON_FILE"
 rm -f "$NEXT_JSON_FILE"
 ```
 
-<!-- include: commands/_fragments/run-brief-finalize.md -->
+<!-- include: _fragments/run-brief-finalize.md -->
 
 **Release the claim and deregister this run** (best-effort, non-fatal). Release BEFORE deregister so the lock frees first (minimizes the window where the registry shows the run gone but the lock is still held). Per the FINALIZE_STATUS rule (Setup step 5): normal completion deregisters with `complete`; if the fragment's `--require` step set `FINALIZE_STATUS=aborted`, deregister with `aborted` instead. Both calls return 0 by design and self-log on internal failure, so call both with `|| true`. If register failed earlier (no record was ever written), the deregister is a harmless no-op.
 ```bash
@@ -1576,7 +1576,7 @@ bash "$RB_SH" set-section --run "$RUN" --section next --json /dev/stdin <<'JSON'
 JSON
 ```
 
-<!-- include: commands/_fragments/run-brief-finalize.md -->
+<!-- include: _fragments/run-brief-finalize.md -->
 
 ```bash
 FINALIZE_STATUS=aborted

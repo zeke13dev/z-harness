@@ -184,7 +184,7 @@ Spell out every code:
   ```bash
   RB_HALT_REASON="scope overlap abort"
   ```
-  <!-- include: commands/_fragments/run-brief-halt-finalize-implement-all.md -->
+  <!-- include: _fragments/run-brief-halt-finalize-implement-all.md -->
   ```bash
   FINALIZE_STATUS=aborted
   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
@@ -197,7 +197,7 @@ Spell out every code:
   ```bash
   RB_HALT_REASON="blocking scope overlap"
   ```
-  <!-- include: commands/_fragments/run-brief-halt-finalize-implement-all.md -->
+  <!-- include: _fragments/run-brief-halt-finalize-implement-all.md -->
   ```bash
   FINALIZE_STATUS=aborted
   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
@@ -274,7 +274,7 @@ except (json.JSONDecodeError, OSError, KeyError, AttributeError):
       "$(printf '{"running_count":%d,"sink_path":"%s"}' "$RUNNING_COUNT" "$PROJECT_SINK")" 2>/dev/null || true
     RB_HALT_REASON="follow-up consumer active"
 ```
-<!-- include: commands/_fragments/run-brief-halt-finalize-implement-all.md -->
+<!-- include: _fragments/run-brief-halt-finalize-implement-all.md -->
 ```bash
     FINALIZE_STATUS=aborted
     python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
@@ -425,7 +425,7 @@ else
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" implement_halted_no_plan_artifact \
     "$(printf '{"base":"%s","checked":["SPEC.md","INTENT.md"]}' "$BASE")" 2>/dev/null || true
   RB_HALT_REASON="no plan artifact"
-  # include: commands/_fragments/run-brief-halt-finalize-implement-all.md
+  # include: _fragments/run-brief-halt-finalize-implement-all.md
   FINALIZE_STATUS=aborted
   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
     --run-id "$RUN" --status aborted 2>/dev/null || true
@@ -459,7 +459,7 @@ if [ "$IMPLEMENT_MODE" = "intent" ]; then
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" intent_freeze_failed \
       "$(printf '{"base":"%s","intent_file":"%s"}' "$BASE" "$INTENT_FILE")" 2>/dev/null || true
     RB_HALT_REASON="INTENT freeze failed"
-    # include: commands/_fragments/run-brief-halt-finalize-implement-all.md
+    # include: _fragments/run-brief-halt-finalize-implement-all.md
     FINALIZE_STATUS=aborted
     python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
       --run-id "$RUN" --status aborted 2>/dev/null || true
@@ -579,7 +579,7 @@ if [ "$IMPLEMENT_MODE" = "intent" ]; then
         "$(printf '{"base":"%s","level":%d,"level_cap":%d,"intent_frozen_at":"%s"}' \
            "$BASE" "$CURRENT_LEVEL" "$INTENT_BFS_LEVEL_CAP" "$INTENT_FROZEN_AT")" 2>/dev/null || true
       RB_HALT_REASON="INTENT BFS level cap reached (level ${CURRENT_LEVEL}, cap ${INTENT_BFS_LEVEL_CAP})"
-      # include: commands/_fragments/run-brief-halt-finalize-implement-all.md
+      # include: _fragments/run-brief-halt-finalize-implement-all.md
       FINALIZE_STATUS=aborted
       python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
         --run-id "$RUN" --status aborted 2>/dev/null || true
@@ -598,7 +598,7 @@ if [ "$IMPLEMENT_MODE" = "intent" ]; then
         "$(printf '{"base":"%s","level":%d,"token_budget":%s,"intent_frozen_at":"%s"}' \
            "$BASE" "$CURRENT_LEVEL" "$INTENT_TOKEN_BUDGET" "$INTENT_FROZEN_AT")" 2>/dev/null || true
       RB_HALT_REASON="INTENT BFS budget exhausted (token_budget=${INTENT_TOKEN_BUDGET})"
-      # include: commands/_fragments/run-brief-halt-finalize-implement-all.md
+      # include: _fragments/run-brief-halt-finalize-implement-all.md
       FINALIZE_STATUS=aborted
       python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
         --run-id "$RUN" --status aborted 2>/dev/null || true
@@ -686,7 +686,7 @@ task_id_start: ${TASK_ID_START}"
     if [ "${GENERATOR_STATUS}" = "unable_to_complete" ]; then
       echo "ERROR: task-tree-generator returned unable_to_complete at level ${CURRENT_LEVEL}." >&2
       RB_HALT_REASON="task-tree-generator unable_to_complete at level ${CURRENT_LEVEL}"
-      # include: commands/_fragments/run-brief-halt-finalize-implement-all.md
+      # include: _fragments/run-brief-halt-finalize-implement-all.md
       FINALIZE_STATUS=aborted
       python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
         --run-id "$RUN" --status aborted 2>/dev/null || true
@@ -706,7 +706,7 @@ task_id_start: ${TASK_ID_START}"
         "$(printf '{"base":"%s","level":%d,"termination_condition":"%s","intent_frozen_at":"%s"}' \
            "$BASE" "$CURRENT_LEVEL" "${GENERATOR_TERMINATION:-level_cap}" "$INTENT_FROZEN_AT")" 2>/dev/null || true
       RB_HALT_REASON="INTENT BFS terminated by generator (${GENERATOR_TERMINATION:-level_cap}) at level ${CURRENT_LEVEL}"
-      # include: commands/_fragments/run-brief-halt-finalize-implement-all.md
+      # include: _fragments/run-brief-halt-finalize-implement-all.md
       FINALIZE_STATUS=aborted
       python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
         --run-id "$RUN" --status aborted 2>/dev/null || true
@@ -895,7 +895,7 @@ style_path: ${STYLE_PATH}"
     if [ "${LEVEL_EXECUTE_RC:-0}" -ne 0 ]; then
       echo "INTENT BFS: per-level execute halted at level ${CURRENT_LEVEL}: ${LEVEL_EXECUTE_HALT_REASON}" >&2
       RB_HALT_REASON="${LEVEL_EXECUTE_HALT_REASON:-per-level execute halt at level ${CURRENT_LEVEL}}"
-      # include: commands/_fragments/run-brief-halt-finalize-implement-all.md
+      # include: _fragments/run-brief-halt-finalize-implement-all.md
       FINALIZE_STATUS=aborted
       python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
         --run-id "$RUN" --status aborted 2>/dev/null || true
@@ -1150,7 +1150,7 @@ fi
      ```bash
      RB_HALT_REASON="quiescence preflight abort"
      ```
-     <!-- include: commands/_fragments/run-brief-halt-finalize-implement-all.md -->
+     <!-- include: _fragments/run-brief-halt-finalize-implement-all.md -->
      ```bash
      FINALIZE_STATUS=aborted
      python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
@@ -2637,7 +2637,7 @@ fi
 
 Before `deregister --status aborted` on any run-ending halt after `run-brief.sh init` (unless register failed — no deregister). Set `RB_HALT_REASON` to a short reason string, then include the halt-finalize fragment. When no artifact exists, the shared fragment auto-downgrades to **lite** (Intent + Outcome + Next) but still runs `--require`.
 
-<!-- include: commands/_fragments/run-brief-halt-finalize-implement-all.md -->
+<!-- include: _fragments/run-brief-halt-finalize-implement-all.md -->
 
 Then set `FINALIZE_STATUS=aborted` and deregister (unless `--require` failure already set it):
 
@@ -2717,7 +2717,7 @@ invocation re-registers (idempotent) and resumes.
 
 3. **Run Brief finalize** — chat and push are renders only; `--require` runs before deregister:
 
-<!-- include: commands/_fragments/run-brief-finalize.md -->
+<!-- include: _fragments/run-brief-finalize.md -->
 
 4. **Deregister this run** only when `--require` passed (`RB_REQUIRE_RC == 0`). Per the single
    FINALIZE_STATUS rule (Phase 0.0): `${FINALIZE_STATUS:-complete}` on normal exit; `aborted`

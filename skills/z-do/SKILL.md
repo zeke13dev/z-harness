@@ -270,7 +270,7 @@ Apply the "one reason it might be wrong" check to each finding. If it raises a r
 JSON
    ```
 
-   <!-- include: commands/_fragments/run-brief-finalize.md -->
+   <!-- include: _fragments/run-brief-finalize.md -->
 
 2. Log run end:
    ```bash
@@ -304,7 +304,7 @@ bash "$RB_SH" set-section --run "$RUN" --section next --json /dev/stdin <<'JSON'
 JSON
 ```
 
-<!-- include: commands/_fragments/run-brief-finalize.md -->
+<!-- include: _fragments/run-brief-finalize.md -->
 
 ```bash
 FINALIZE_STATUS=aborted

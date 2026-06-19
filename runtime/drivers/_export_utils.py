@@ -584,7 +584,7 @@ def resolve_strategy(
 # Self-test (ported verbatim from scripts/export-common.py cmd_self_test)
 # ---------------------------------------------------------------------------
 
-_RUN_BRIEF_FRAGMENT = "commands/_fragments/run-brief-finalize.md"
+_RUN_BRIEF_FRAGMENT = "_fragments/run-brief-finalize.md"
 _RUN_BRIEF_MARKER = f"<!-- include: {_RUN_BRIEF_FRAGMENT} -->"
 _RUN_BRIEF_SENTINEL = "## Run Brief finalize (shared fragment)"
 
@@ -685,7 +685,7 @@ def run_self_test(repo_root: Path | None = None) -> int:
         "missing-fragment",
         FileNotFoundError,
         lambda: expand_includes(
-            "<!-- include: commands/_fragments/does-not-exist.md -->\n",
+            "<!-- include: _fragments/does-not-exist.md -->\n",
             repo_root,
         ),
     )
@@ -701,9 +701,9 @@ def run_self_test(repo_root: Path | None = None) -> int:
 
     # The cycle fixtures must live UNDER repo_root (the include guard rejects
     # paths that escape it), so a system tempdir won't do. mkdtemp gives a
-    # unique name under commands/_fragments/, avoiding a fixed-name collision
+    # unique name under _fragments/, avoiding a fixed-name collision
     # between concurrent self-test runs.
-    fragments_dir = repo_root / "commands" / "_fragments"
+    fragments_dir = repo_root / "_fragments"
     cycle_dir = Path(tempfile.mkdtemp(prefix=".self-test-cycle-", dir=fragments_dir))
     cycle_a = cycle_dir / "a.md"
     cycle_b = cycle_dir / "b.md"

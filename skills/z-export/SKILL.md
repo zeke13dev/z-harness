@@ -16,10 +16,10 @@ This command invokes the runtime export CLI (or, for `pi` and the export-only dr
 
 ## Fragment includes
 
-Command, agent, and skill bodies may reference shared markdown under `commands/_fragments/` with an HTML comment marker on its own line (whole line — references inside backticks or fenced code blocks are not expanded):
+Command, agent, and skill bodies may reference shared markdown under `_fragments/` with an HTML comment marker on its own line (whole line — references inside backticks or fenced code blocks are not expanded):
 
 ```markdown
-<!-- include: commands/_fragments/run-brief-finalize.md -->
+<!-- include: _fragments/run-brief-finalize.md -->
 ```
 
 During export, the runtime renderers inline the fragment file at each marker (repo-relative path). Nested includes in fragment files are expanded too. Cursor/Codex/Agy copies therefore stay in sync without duplicating finalize prose.

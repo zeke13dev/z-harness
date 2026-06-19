@@ -147,7 +147,7 @@ Spell out every code:
   ```bash
   RB_HALT_REASON="scope overlap abort"
   ```
-  <!-- include: commands/_fragments/run-brief-halt-finalize-implement-next.md -->
+  <!-- include: _fragments/run-brief-halt-finalize-implement-next.md -->
   ```bash
   FINALIZE_STATUS=aborted
   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
@@ -160,7 +160,7 @@ Spell out every code:
   ```bash
   RB_HALT_REASON="blocking scope overlap"
   ```
-  <!-- include: commands/_fragments/run-brief-halt-finalize-implement-next.md -->
+  <!-- include: _fragments/run-brief-halt-finalize-implement-next.md -->
   ```bash
   FINALIZE_STATUS=aborted
   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
@@ -227,7 +227,7 @@ except (json.JSONDecodeError, OSError, KeyError, AttributeError):
       "$(printf '{"running_count":%d,"sink_path":"%s"}' "$RUNNING_COUNT" "$PROJECT_SINK")" 2>/dev/null || true
     RB_HALT_REASON="follow-up consumer active"
 ```
-<!-- include: commands/_fragments/run-brief-halt-finalize-implement-next.md -->
+<!-- include: _fragments/run-brief-halt-finalize-implement-next.md -->
 ```bash
     FINALIZE_STATUS=aborted
     python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
@@ -345,7 +345,7 @@ WAIT_RC=$?
     ```bash
     RB_HALT_REASON="lease wait timeout (interactive abort)"
     ```
-    <!-- include: commands/_fragments/run-brief-halt-finalize-implement-next.md -->
+    <!-- include: _fragments/run-brief-halt-finalize-implement-next.md -->
     ```bash
     FINALIZE_STATUS=aborted
     python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
@@ -363,7 +363,7 @@ WAIT_RC=$?
          "<task-id>" "$HOLDER_RUN_ID" "$CONCEDED_PATH")"
     RB_HALT_REASON="lease wait timeout (unattended)"
     ```
-    <!-- include: commands/_fragments/run-brief-halt-finalize-implement-next.md -->
+    <!-- include: _fragments/run-brief-halt-finalize-implement-next.md -->
     ```bash
     FINALIZE_STATUS=aborted
     python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
@@ -386,7 +386,7 @@ Present `AskUserQuestion`: **proceed anyway** / **wait** / **abort task**.
   ```bash
   RB_HALT_REASON="user aborted lease wait"
   ```
-  <!-- include: commands/_fragments/run-brief-halt-finalize-implement-next.md -->
+  <!-- include: _fragments/run-brief-halt-finalize-implement-next.md -->
   ```bash
   FINALIZE_STATUS=aborted
   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
@@ -642,7 +642,7 @@ Obey DRY/KISS/SOLID. No shortcuts unless PLAN.md explicitly approved one for thi
   ```bash
   RB_HALT_REASON="${IMPLEMENTER_HALT_REASON:-unable to complete task}"
   ```
-  <!-- include: commands/_fragments/run-brief-halt-finalize-implement-next.md -->
+  <!-- include: _fragments/run-brief-halt-finalize-implement-next.md -->
   ```bash
   FINALIZE_STATUS=aborted
   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
@@ -930,7 +930,7 @@ RESULT="$(printf '%s' "$RESOLVED" | python3 -c 'import json,sys; print(json.load
 
 Before `deregister --status aborted` on any run-ending halt after `run-brief.sh init` (unless register failed — no deregister). Set `RB_HALT_REASON`, then include the halt-finalize fragment.
 
-<!-- include: commands/_fragments/run-brief-halt-finalize-implement-next.md -->
+<!-- include: _fragments/run-brief-halt-finalize-implement-next.md -->
 
 Then set `FINALIZE_STATUS=aborted` and deregister:
 
@@ -991,7 +991,7 @@ python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-reg
 
 6. **Run Brief finalize** — chat and push are renders only; `--require` runs before deregister:
 
-<!-- include: commands/_fragments/run-brief-finalize.md -->
+<!-- include: _fragments/run-brief-finalize.md -->
 
 7. **Deregister this run** only when `--require` passed (`RB_REQUIRE_RC == 0`). Per the single
    FINALIZE_STATUS rule (Phase 0.0): normal completion deregisters with `complete`. On

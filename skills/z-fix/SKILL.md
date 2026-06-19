@@ -369,7 +369,7 @@ If user picks **no** → skip; nothing written.
    rm -f "$NEXT_JSON_FILE"
    ```
 
-   <!-- include: commands/_fragments/run-brief-finalize.md -->
+   <!-- include: _fragments/run-brief-finalize.md -->
 
 3. Mark the run done (after brief `--require` gate):
    ```bash
@@ -395,7 +395,7 @@ bash "$RB_SH" set-section --run "$RUN" --section next --json /dev/stdin <<'JSON'
 JSON
 ```
 
-<!-- include: commands/_fragments/run-brief-finalize.md -->
+<!-- include: _fragments/run-brief-finalize.md -->
 
 ## Hard rules
 

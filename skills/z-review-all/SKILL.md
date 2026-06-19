@@ -1174,7 +1174,7 @@ print(len(mod.extract_approach_bullets(sys.argv[2])))
 fi
 ```
 
-<!-- include: commands/_fragments/run-brief-finalize.md -->
+<!-- include: _fragments/run-brief-finalize.md -->
 
 3. **Suggest `/z-improve` when this review had friction.** After finalize, run the nudge helper — it prints a one-line `/z-improve` suggestion only if friction signals fired (escalations, degraded consult, …) and stays silent otherwise:
 ```bash
@@ -1206,7 +1206,7 @@ bash "$RB_SH" set-section --run "$RRUN" --section next --json /dev/stdin <<'JSON
 JSON
 ```
 
-<!-- include: commands/_fragments/run-brief-finalize.md -->
+<!-- include: _fragments/run-brief-finalize.md -->
 
 ---
 

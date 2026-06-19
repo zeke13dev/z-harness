@@ -795,7 +795,7 @@ PY
    bash "$RB_SH" set-section --run "$RUN" --section status --value "complete"
    ```
 
-   <!-- include: commands/_fragments/run-brief-finalize.md -->
+   <!-- include: _fragments/run-brief-finalize.md -->
 
    3. **Log run end:**
    ```bash
@@ -819,7 +819,7 @@ bash "$RB_SH" set-section --run "$RUN" --section next --json /dev/stdin <<'JSON'
 JSON
 ```
 
-<!-- include: commands/_fragments/run-brief-finalize.md -->
+<!-- include: _fragments/run-brief-finalize.md -->
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_audit_end \

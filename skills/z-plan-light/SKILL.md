@@ -400,7 +400,7 @@ Do not copy the advisory arm's bash here. Follow the canonical snippet verbatim.
    rm -f "$NEXT_JSON_FILE"
    ```
 
-   <!-- include: commands/_fragments/run-brief-finalize.md -->
+   <!-- include: _fragments/run-brief-finalize.md -->
 
 3. Mark the run done:
    ```bash
@@ -428,7 +428,7 @@ bash "$RB_SH" set-section --run "$RUN" --section next --json /dev/stdin <<'JSON'
 JSON
 ```
 
-<!-- include: commands/_fragments/run-brief-finalize.md -->
+<!-- include: _fragments/run-brief-finalize.md -->
 
 ```bash
 FINALIZE_STATUS=aborted

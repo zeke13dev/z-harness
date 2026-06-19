@@ -1601,7 +1601,7 @@ fi
 bash "$RB_SH" set-section --run "$RUN" --section status --value "complete"
 ```
 
-<!-- include: commands/_fragments/run-brief-finalize.md -->
+<!-- include: _fragments/run-brief-finalize.md -->
 
 Log `brainstorm_run_end`:
 
@@ -1630,7 +1630,7 @@ bash "$RB_SH" set-section --run "$RUN" --section next --json /dev/stdin <<'JSON'
 JSON
 ```
 
-<!-- include: commands/_fragments/run-brief-finalize.md -->
+<!-- include: _fragments/run-brief-finalize.md -->
 
 ---
 
