@@ -1,6 +1,6 @@
 {
   "concept": "commands",
-  "last_updated": "2026-06-09",
+  "last_updated": "2026-06-18",
   "covers_spec": "none",
   "source_file": [
     "commands/z-amend.md",
@@ -35,6 +35,7 @@
     "commands/z-plan.md",
     "commands/z-providers-discover.md",
     "commands/z-reality.md",
+    "commands/z-report.md",
     "commands/z-research.md",
     "commands/z-review-all.md",
     "commands/z-skill-fix.md",
@@ -271,6 +272,13 @@
       "symbol": "/z-reality",
       "kind": "module",
       "summary": "Interactive premise refinement — conversational on-ramp that probes, clarifies, reframes, and converges a raw idea into a BRAINSTORM.md variant (mode: interactive) before routing to /z-brainstorm or /z-plan. Runs inline — no subagents, no cross-LLM consult."
+    },
+    {
+      "file": "commands/z-report.md",
+      "line": 1,
+      "symbol": "z-report",
+      "kind": "module",
+      "summary": "Depth-tiered narrative of exactly what happened + what follow-ups exist, for a z-harness run or past work (run-id / plan-slug / PR / commit-range). User-invoked; read-only; composes report-context.py + report-synth subagent. Arg grammar: [target] [summary|standard|deep] | --run <id> --slug <s> --pr <N|url> --range <A..B> --base <ref> --save <path>. Three tiers: summary (1-para TL;DR + top-3 follow-ups), standard (adds phase wall-time + decision audit + friction headline), deep (adds diff/step walkthrough + cost breakdown). Fast path: run+summary+run-brief.json present => render-run-brief.py, skip subagent. Size gate: diff>100KB or events>512K chars + standard|deep => AskUser before synthesis. Inline fallback when subagent unavailable: deterministic digest (status/decisions/follow-ups/cost/phases) from context.json. Writes REPORT.md to run-dir (run/slug modes) and/or --save path. RUNTIME-GATEs: subagent (Phase 2 report-synth dispatch), ask_user (Phase 0 ambiguous target; Phase 2 large-context size gate). Boundary: z-report=per-run descriptive narrative; z-stats=metrics/cost numbers; z-improve=prescriptive harness retro; morning-report=overnight aggregate; z-explain=code explainer. Hard rules: read-only on target repo (only writes REPORT.md/--save); no sibling-command invocation; every factual claim sourced from context.json; no emojis; one narrative one tier per invocation."
     },
     {
       "file": "commands/z-research.md",
