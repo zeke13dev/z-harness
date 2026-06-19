@@ -11,11 +11,10 @@ export(repo_root, export_root, *, options=None) -> ExportResult
     files under ``export_root``.
 
     Codex output format:
-    - ``prompts/<id>.md``   — one file per command/skill, starting with
+    - ``prompts/<id>.md``   — one file per skill, starting with
                               ``# /<id>``, body rewritten to replace
                               Anthropic-specific constructs with HTML comments.
     - ``AGENTS.md``         — consolidated agent reference document.
-    - Skills whose ID collides with a command ID get a ``-skill`` suffix.
     - No YAML frontmatter is emitted in any output file.
 
 ExportResult is imported from runtime.drivers._export_utils (BLOCKER-1).
@@ -188,13 +187,13 @@ def export(
     *,
     options: dict[str, Any] | None = None,
 ) -> ExportResult:
-    """Export z-harness commands, agents, and skills as Codex CLI prompt files.
+    """Export z-harness skills and agents as Codex CLI prompt files.
 
     Parameters
     ----------
     repo_root:
         Absolute path to the z-harness repository root.  Used to discover
-        source files (``commands/``, ``agents/``, ``skills/``).
+        source files (``agents/``, ``skills/``).
     export_root:
         Destination directory for exported files.  Prompt files are written
         to ``<export_root>/prompts/<id>.md``; the consolidated agent reference
@@ -224,22 +223,11 @@ def export(
     # paths when export_root differs from the default).
     default_base = repo_root / "exports" / "codex"
 
-    # Build a set of command IDs to detect skill/command name collisions.
-    command_ids = {entry["id"] for entry in sources["commands"]}
-
-    # --- Emit prompt files for commands and skills ---
-    for kind in ("commands", "skills"):
+    # --- Emit prompt files for skills only (commands/ no longer exists) ---
+    for kind in ("skills",):
         for entry in sources[kind]:
             eid = entry["id"]
-            # Skills that share a name with a command get a "-skill" suffix
-            # to avoid overwriting the command export.
-            # preserved quirk: -skill suffix only applied when there is a collision
-            export_id = (
-                f"{eid}-skill"
-                if kind == "skills" and eid in command_ids
-                else eid
-            )
-            out_path = output_path_for(repo_root, "codex", kind, export_id)
+            out_path = output_path_for(repo_root, "codex", kind, eid)
             if export_root != default_base:
                 relative = out_path.relative_to(default_base)
                 out_path = export_root / relative

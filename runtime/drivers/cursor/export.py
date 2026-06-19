@@ -3,7 +3,7 @@ runtime/drivers/cursor/export.py
 
 Port of ``scripts/export-cursor.py`` as a runtime driver.
 
-Renders z-harness commands, agents, and skills to Cursor ``.mdc`` rule files
+Renders z-harness agents and skills to Cursor ``.mdc`` rule files
 under ``<export_root>/.cursor/rules/``.
 
 Public surface
@@ -151,14 +151,13 @@ def export(
     *,
     options: dict[str, Any] | None = None,
 ) -> ExportResult:
-    """Export z-harness commands, agents, and skills to Cursor ``.mdc`` rules.
+    """Export z-harness agents and skills to Cursor ``.mdc`` rules.
 
     Parameters
     ----------
     repo_root:
         Absolute path to the z-harness repository root.  Source directories
-        ``commands/``, ``agents/``, and ``skills/`` are resolved relative to
-        this path.
+        ``agents/`` and ``skills/`` are resolved relative to this path.
     export_root:
         Absolute path to the export output root directory.  Files are written
         under ``<export_root>/.cursor/rules/``.
@@ -183,22 +182,14 @@ def export(
     emitted: list[Path] = []
     validation_errors: list[str] = []
 
-    # Build a set of command IDs to detect skill/command name collisions.
-    command_ids = {entry["id"] for entry in sources["commands"]}
-
     # Canonical output base for the cursor target (used for path rewriting
     # when out_root differs from the default exports/cursor/).
     default_base = repo_root / "exports" / "cursor"
 
-    for kind in ("commands", "agents", "skills"):
+    for kind in ("agents", "skills"):
         for entry in sources[kind]:
             eid = entry["id"]
-            # Skills that share a name with a command get a "-skill" suffix
-            # to avoid overwriting the command export.
-            export_id = (
-                f"{eid}-skill" if kind == "skills" and eid in command_ids else eid
-            )
-            out_path = output_path_for(repo_root, "cursor", kind, export_id)
+            out_path = output_path_for(repo_root, "cursor", kind, eid)
             # output_path_for always writes under repo_root/exports/cursor;
             # honour out_root by replacing that prefix.
             if out_root != default_base:
