@@ -248,12 +248,15 @@ def export(
         out_path.write_text(source_text, encoding="utf-8")
         emitted.append(out_path)
 
-    # --- Skills index: exactly one generated always-apply .mdc pointer. ---
-    rules_dir = out_root / ".cursor" / "rules"
-    rules_dir.mkdir(parents=True, exist_ok=True)
-    index_path = rules_dir / _SKILLS_INDEX_NAME
-    index_path.write_text(_SKILLS_INDEX_TEMPLATE, encoding="utf-8")
-    emitted.append(index_path)
+    # --- Skills index: one generated always-apply .mdc pointer (only when skills present). ---
+    # Gated: emitting a skills index when there are zero skills is misleading and
+    # breaks tests that assert result.files == [] for persona-only or empty exports.
+    if sources["skills"]:
+        rules_dir = out_root / ".cursor" / "rules"
+        rules_dir.mkdir(parents=True, exist_ok=True)
+        index_path = rules_dir / _SKILLS_INDEX_NAME
+        index_path.write_text(_SKILLS_INDEX_TEMPLATE, encoding="utf-8")
+        emitted.append(index_path)
 
     # Validate all emitted .mdc files (agents + index; SKILL.md are not .mdc).
     for path in emitted:

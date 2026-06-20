@@ -225,8 +225,8 @@ class TestSubagentDispatchIntegration:
 
     def test_agent_loading_returns_agentdef(self) -> None:
         """Loading a valid agent returns AgentDef with metadata."""
-        agent = _load_agent("explore")
-        assert agent.name == "explore"
+        agent = _load_agent("auditor")
+        assert agent.name == "auditor"
         assert len(agent.tools) >= 3
         assert len(agent.prompt_template) > 50
 
@@ -237,7 +237,7 @@ class TestSubagentDispatchIntegration:
 
     def test_subagent_dispatch_missing_prompt(self) -> None:
         """Missing prompt → error result."""
-        r = _handle_subagent_dispatch({"agent": "explore"}, None)
+        r = _handle_subagent_dispatch({"agent": "auditor"}, None)
         assert r.status == "error"
 
 

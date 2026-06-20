@@ -49,7 +49,7 @@ set -uo pipefail
 
 SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPTS_DIR/.." && pwd)"
-COMMANDS_DIR="$REPO_ROOT/commands"
+SKILLS_DIR="$REPO_ROOT/skills"
 AGENTS_DIR="$REPO_ROOT/agents"
 
 PASS=0
@@ -105,8 +105,8 @@ echo ""
 echo "Part 1: Canonical logging sites (T006-wired) must still have log-subagent.sh"
 
 _CANONICAL_FILES=(
-  "commands/z-implement-all.md"
-  "commands/z-implement-next.md"
+  "skills/z-implement-all/SKILL.md"
+  "skills/z-implement-next/SKILL.md"
   "agents/reviewer.md"
   "agents/consultant-primary.md"
   "agents/consultant-secondary.md"
@@ -163,7 +163,7 @@ while IFS= read -r -d '' file; do
       "New unlogged implementer dispatch detected in $basename" \
       "Add log-subagent.sh call after Agent() or '# no-subagent-log: <reason>' opt-out"
   fi
-done < <(find "$COMMANDS_DIR" "$AGENTS_DIR" -name "*.md" -print0 2>/dev/null)
+done < <(find "$SKILLS_DIR" "$AGENTS_DIR" -name "*.md" -print0 2>/dev/null)
 
 # ---------------------------------------------------------------------------
 # Self-test: prove the broad scan catches an unlogged implementer dispatch

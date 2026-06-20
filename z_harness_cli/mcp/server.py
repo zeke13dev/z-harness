@@ -102,22 +102,8 @@ class AgentDef:
 def _load_agent(name: str) -> AgentDef:
     """Load and parse an agent definition from agents/<name>.md."""
     repo_root = _get_repo_root()
-    search_dirs = [repo_root / "exports", repo_root / "agents"]
-    agent_path: Path | None = None
-    for base in search_dirs:
-        if base.exists():
-            for host_dir in base.iterdir():
-                candidate = host_dir / "agents" / f"{name}.md"
-                if candidate.exists():
-                    agent_path = candidate
-                    break
-        if agent_path:
-            break
-        direct = base / f"{name}.md"
-        if direct.exists():
-            agent_path = direct
-            break
-    if agent_path is None:
+    agent_path = repo_root / "agents" / f"{name}.md"
+    if not agent_path.exists():
         raise AgentNotFoundError(f"Agent '{name}' not found in agents/")
 
     raw = agent_path.read_text()

@@ -275,7 +275,7 @@ class TestOutputPathFor:
 
     def test_codex_skill(self):
         p = output_path_for(Path("/repo"), "codex", "skills", "z-debug")
-        assert p == Path("/repo/exports/codex/prompts/z-debug.md")
+        assert p == Path("/repo/exports/codex/skills/z-debug/SKILL.md")
 
     def test_unknown_target_raises(self):
         with pytest.raises(ValueError, match="Unknown target"):
