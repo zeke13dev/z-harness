@@ -1,181 +1,73 @@
 # session-handoff — SESSION.md context handoff for /z-implement-all
 
-> Last updated: 2026-06-09
+> Last updated: 2026-06-19
 > Covers source: scripts/session-helpers.sh, agents/context-curator.md, commands/z-implement-all.md, scripts/write-handoff.sh
 
 ## Overview
 
 The session-handoff system adds a durable `SESSION.md` artifact to each `/z-implement-all` plan so the orchestrator can `/clear` aggressively at its existing batch breakpoint and re-seed its context from a small, bounded file on resume — eliminating the O(N²) `cache_read` growth where every task re-reads the entire growing orchestrator window.
 
-The write path is **hybrid**:
-- The orchestrator drops **notable-only breadcrumbs** into the event stream after each task completes (E2 — high-signal, low-noise).
-- A Haiku **context-curator** subagent folds the events delta + git diff + TASKS.md + prior SESSION.md into a compact SESSION.md synchronously at the compaction breakpoint, before the "/clear & resume" notice fires (E3).
+The write path is hybrid: the orchestrator drops notable-only breadcrumbs into the event stream after each task completes (E2 — high-signal, low-noise), and a Haiku `context-curator` subagent folds the events delta + git diff + TASKS.md + prior SESSION.md into a compact SESSION.md synchronously at the compaction breakpoint, before the "/clear & resume" notice fires (E3). On next invocation, the orchestrator reads SESSION.md's frontmatter, compares the stored `done_ids_hash` with the current TASKS.md done-set, and re-inlines the body only when the hashes match (E1). The `handoff.json` artifact produced by `write-handoff.sh` provides a machine-readable continuation token for Hermes and `/z-attend` resume.
 
-On next invocation, the orchestrator reads SESSION.md's frontmatter, compares the stored `done_ids_hash` with the current TASKS.md done-set, and re-inlines the body only when the hashes match (E1).
+## Key entry points
 
----
+- `scripts/session-helpers.sh:66` — `done_set_hash` — sha256 of sorted, newline-joined `[x]` task-ids from TASKS.md; the shared hash function used by both the curator (writer) and E1 (reader); never re-implement inline
+- `scripts/session-helpers.sh:146` — `last_done_task` — id of the last `[x]` heading; human hint, not load-bearing
+- `scripts/session-helpers.sh:197` — `next_pending_task` — first `[ ]` task id whose deps are all `[x]`; dep-gated; used by E1 pending detection
+- `scripts/session-helpers.sh:321` — `last_curated_marker` — ts of most recent `context_curated` event; used by E3 to compute `since_marker`
+- `scripts/session-helpers.sh:369` — `session_frontmatter_field` — reads a scalar YAML frontmatter field from SESSION.md cheaply without loading the body
+- `scripts/session-helpers.sh:423` — `validate_intent` — thin shell wrapper over `scripts/intent-schema.py validate-intent`; exit 0=valid, 1=errors, 2=usage; also supports `lint` mode
+- `agents/context-curator.md:1` — `context-curator` — Haiku subagent; dispatched synchronously at the compaction breakpoint; 8-step ordered behavior producing SESSION.md
+- `commands/z-implement-all.md:1015` — E1 resume injection — reads SESSION.md frontmatter via helpers; inlines body when schema_version/done_ids_hash/pending all pass
+- `commands/z-implement-all.md:1196` — E3 curator dispatch — after `compaction_pause`, before push-notify; one retry at 2× timeout; hash-verified before `/clear & resume` notice
+- `commands/z-implement-all.md:2531` — E2 notable-only breadcrumb — emit `context_breadcrumb` only when a concrete trigger held (decision, halt, spec-deviation, reviewer-retry)
+- `scripts/write-handoff.sh:1` — `write-handoff.sh` — produces `handoff.json` at compaction breakpoints (Hermes, gated by `hermes_enabled`) and at `/z-attend` yield points (protocol 1.1)
 
-## The SESSION.md artifact
+## How it interacts with others
 
-`SESSION.md` lives alongside SPEC.md / PLAN.md / TASKS.md in `$Z_HARNESS_PLAN_DIR/`. It is written atomically via a temp-file + rename (never torn on crash/interrupt).
+- `active-plan-registry` — serializes concurrent orchestrators per plan; the session-handoff compaction pause interacts with the registry's deregister rule (pause does NOT deregister)
+- `attend` — `/z-attend` calls `write-handoff.sh` at yield points with `Z_HARNESS_ATTEND_RESUME=1` to produce a protocol-1.1 handoff with an `attend_resume` predicate; also calls `session-helpers.sh done_set_hash` for its resume validation
+- `handoff-protocol` — `write-handoff.sh` is the producer side of the `handoff.json` schema; protocol 1.0 for Hermes compaction, protocol 1.1 for attend-yield
+- `adaptive-intent` — the INTENT BFS level checkpoint (`.bfs_level_state`) uses `done_set_hash` from `session-helpers.sh` to detect TASKS.md drift between pauses and resume from the correct BFS level
+- `intent-schema` — `session-helpers.sh validate_intent` wraps `scripts/intent-schema.py` for shell-layer INTENT.md validation
+- `scripts` — `log-event.sh` is called for all session-handoff telemetry events; `plan-path.sh` resolves the metrics.jsonl path
 
-### Frontmatter schema
+## Edge cases / gotchas
 
-```yaml
----
-artifact: session
-slug: <slug>
-schema_version: 1
-last_gate: <ISO-8601>         # timestamp of the last curation
-done_count: <int>             # number of [x] tasks at curation
-done_ids_hash: <sha256>       # THE resume key — sha256 of sorted [x] task-id list
-last_gate_task_id: <e.g. T012>  # human-readable hint, not load-bearing
-next_pending: <e.g. T013 | none>  # human-readable hint, not load-bearing
-generated_by: context-curator
-context_hash: <sha256 of body>  # observability only — NOT part of resume predicate
-diff_unavailable: false       # true if git diff failed at curation time
-overflow: false
-truncated_sections: []
----
+- Re-implementing `done_set_hash` inline in the curator or any caller breaks the DRY contract: writer and reader will produce different hashes and resume will silently never fire.
+- The `event_source` for the curator must be `$ZH_BASE/metrics.jsonl`, not the per-plan `events.jsonl` or orchestration-only `events.jsonl`. Only `metrics.jsonl` aggregates both task-tier events (`task_halt`, `spec_precheck`) and orchestration-tier events (`review_agent_failed`, `compaction_pause`). Reading either alone makes the landmine backstop inert.
+- The "/clear & resume" notice fires only after curation succeeds AND the curator's returned `done_ids_hash` matches the current TASKS.md done-set. Emitting it before that check is a security-of-resume contract violation.
+- E1 pending detection uses `next_pending_task` (Python-based), not a bespoke line-start grep. A `^\s*[-*]?\s*\[ \]` grep does NOT match the inline-heading status format `## T002 — title `[ ]`` and returns 0 tasks, making the resume predicate fall to `no_pending` for every production plan (feature inert).
+- `write-handoff.sh` at the compaction breakpoint is gated by `workflow.hermes_enabled`. When `hermes_enabled=false` (default), `write-handoff.sh` is NOT called at the compaction breakpoint; only the `/z-attend` yield path calls it unconditionally.
+- Protocol-1.1 handoff requires all five attend env vars to be non-empty: `Z_HARNESS_ATTEND_HEAD_SHA`, `Z_HARNESS_ATTEND_PHASE`, `Z_HARNESS_ATTEND_DONE_SET_HASH`, `Z_HARNESS_ATTEND_DIRTY_FP`, `Z_HARNESS_ATTEND_SESSION_ID`. Missing any causes `write-handoff.sh` to exit non-zero.
+- `Z_SESSION_CURATOR_TIMEOUT_S=0` disables the entire subsystem; no SESSION.md is written and no "/clear & resume" notice fires.
+- Overflow order matters: apply entry caps first, then collapse resolved-decision bodies, then drop oldest entries if still over ceiling. Applying in a different order changes which entries survive.
+- `context_curated` must be emitted AFTER the atomic rename succeeds; a crash between write and event leaves `metrics.jsonl` with a stale `since_marker`.
+- The failure-stub SESSION.md has `overflow: true` and empty sections; E1 will still resume (the `done_ids_hash` is valid), but the body inlining provides no useful context.
+- The INTENT BFS `.bfs_level_state` checkpoint also uses `done_set_hash`; a hash mismatch there causes BFS to restart from level 0 (safe but potentially redundant work).
+
+## Memories
+
+<!-- DO NOT EDIT this section by hand — regenerated from docs/llm/session-handoff.json by doc-updater. Use /z-suggest-memory to add or edit memories. -->
+
+_Note: this section is omitted entirely when `memories: []`._
+
+## Examples
+
+Resume predicate check in `/z-implement-all` step 4a:
+
+```bash
+CUR_HASH="$(bash scripts/session-helpers.sh done_set_hash "$TASKS_FILE")"
+SV="$(bash scripts/session-helpers.sh session_frontmatter_field "$SESSION_FILE" schema_version)"
+DH="$(bash scripts/session-helpers.sh session_frontmatter_field "$SESSION_FILE" done_ids_hash)"
+NEXT_PENDING_NOW="$(bash scripts/session-helpers.sh next_pending_task "$TASKS_FILE")"
+# Resume fires iff SV="1" AND DH==CUR_HASH AND NEXT_PENDING_NOW is non-empty
 ```
 
-### Body sections
+Curator dispatch at compaction breakpoint (E3):
 
-| Section | Entry cap | Format |
-|---|---|---|
-| `## Decisions` | ≤10 | ≤3 lines each; resolved decisions collapse to heading-only line |
-| `## Landmines` | ≤10 | `**<task-id>**: <one sentence>` |
-| `## Invariants` | ≤15 | 1 line each |
-| `## Open threads` | ≤10 | 1 line each |
-
-The total body is bounded by `Z_SESSION_MAX_CHARS` (default 28 000 characters ≈ ~7 K tokens). When that ceiling is exceeded, entries are dropped oldest-first within over-cap sections, `overflow: true` is set, and `truncated_sections` lists the affected section names.
-
----
-
-## The context-curator agent
-
-`agents/context-curator.md` defines a Haiku subagent (`model: haiku`) dispatched synchronously at the compaction breakpoint.
-
-### Input contract
-
-The orchestrator passes these fields in the prompt:
-- `plan_dir` — absolute path to `$Z_HARNESS_PLAN_DIR`
-- `run_id` — current `$RUN`
-- `repo_root` — absolute repo root
-- `last_gate_task_id` — id of the last `[x]` task (the gate this curation represents)
-- `tasks_file` — absolute path to TASKS.md
-- `event_source` — absolute path to `$ZH_BASE/metrics.jsonl` (the repo-wide sink)
-- `slug` — `$Z_HARNESS_SLUG` (used to filter events to this plan)
-- `since_marker` — ts of the last `context_curated` event, or `none`
-
-### Ordered behavior
-
-1. Read prior SESSION.md (parse frontmatter + 4 section bodies); start from empty on first run.
-2. Read the events delta from `event_source` (`metrics.jsonl`) — **not** the per-plan `events.jsonl` or the orchestration-only `events.jsonl`. Only `metrics.jsonl` aggregates both task-tier events (`task_halt`, `spec_precheck`) and orchestration-tier events (`review_agent_failed`, `compaction_pause`). Read backward from EOF, stopping at the first line where `ts <= since_marker`. Filter to `slug == <slug>`. Extract `context_breadcrumb.intent` entries and structural landmines (`task_halt`, `spec_precheck` with `status == spec_problem`, `decision_needed`, `review_agent_failed`, per-task review-fail events).
-3. Read TASKS.md for completion state and run `git diff --stat` for file churn. If `git diff` exits non-zero, continue without diff and set `diff_unavailable: true` — never a hard fail.
-4. Fold all content into the 4 capped sections with the overflow rule: apply entry caps → collapse resolved-decision bodies → if still over ceiling, drop oldest entries → set `overflow: true` and emit `context_curation_truncated`.
-5. Compute `done_ids_hash` by calling `bash scripts/session-helpers.sh done_set_hash "$tasks_file"`. **Never re-implement this inline** — the writer (curator) and reader (E1) must produce byte-identical hashes from the same helper, or resume silently never fires.
-6. Write atomically: write to `SESSION.md.tmp.<PID>`, then `mv` over `SESSION.md`.
-7. Emit `context_curated {last_gate, done_count, done_ids_hash, context_hash, bytes}` via `log-event.sh` with label `"orchestration"` so the next curation's `since_marker` lookup finds it in `metrics.jsonl`.
-8. Return `STATUS: curated done_ids_hash=<hash> bytes=<n>` (success) or `STATUS: failed reason=<...>` (non-zero exit).
-
-### Failure-stub path
-
-When curation cannot complete after one inline retry, the curator writes a **frontmatter-only stub** SESSION.md: `done_ids_hash` is computed directly from TASKS.md via the helper (event-independent, so the stub's resume key is always valid), `overflow: true`, empty sections. Returns `STATUS: failed`.
-
----
-
-## Breadcrumb / curate cadence
-
-The two mechanisms operate at different granularities:
-
-**E2 — Notable-only breadcrumb (per-task done path, `z-implement-all.md:1427`):**
-After a task transitions to `[x]`, emit `context_breadcrumb {task, intent}` **only** when at least one concrete trigger held:
-- (a) A design decision or default-override was made
-- (b) A `task_halt` occurred
-- (c) A shortcut or spec-deviation was taken
-- (d) A reviewer retry happened
-
-Clean completions emit nothing. The curator's event-mining (step 2 above) independently catches `task_halt`, `spec_precheck`, `decision_needed`, and `review_agent_failed` from the structural event stream — this is the backstop when no breadcrumb was emitted.
-
-**E3 — Full curation at the compaction breakpoint (`z-implement-all.md:529`):**
-After emitting `compaction_pause` (when the batch trigger fires), dispatch context-curator synchronously before the push-notify. One inline retry at 2× timeout. The full dispatch+notify is time-bounded (worst case ≈ 360 s = 120 s + one 240 s retry).
-
-On success: emit the existing "/clear & resume" push-notify. Also call `scripts/write-handoff.sh` (best-effort, `|| true`) to produce a `handoff.json` artifact for Hermes consumption.
-On persistent failure: write a frontmatter-only stub, emit `context_curation_failed`, push-notify with `/compact`-or-continue notice (never suggest `/clear`). The `/compact`-or-continue path also calls `write-handoff.sh` for the Hermes compaction-pause branch.
-
-The "/clear & resume" notice fires **only** when curation succeeded and the curator's `done_ids_hash` matches the current TASKS.md done-set.
-
----
-
-## Done-set hash resume predicate (E1)
-
-**Location:** `z-implement-all.md:373` — immediately after TASKS.md is in memory, before any task is dispatched.
-
-**Predicate:** use SESSION.md iff:
-1. `SESSION.md` exists at `$BASE/SESSION.md`
-2. `schema_version` is supported (currently `1`)
-3. `frontmatter.done_ids_hash == CUR_HASH` where `CUR_HASH = done_set_hash(TASKS.md)`
-4. At least one pending `[ ]` task remains
-
-**On match:** Read and inline the SESSION.md body into the orchestrator context (explicit Read call — not `@`-include, for driver portability). Export `SESSION_MD_PATH`. Emit `session_resumed`.
-
-**On skip:** Emit `session_resume_skipped {reason}` with one of: `no_file`, `done_set_mismatch`, `no_pending`, `schema_version`. On `done_set_mismatch`, surface a one-line user note: "SESSION.md present but TASKS.md done-set changed since last pause — resuming without re-seed."
-
-The hash is **set-based and position-independent**: same `[x]` task-ids in any line order produce the same hash. Any addition, removal, or change to the `[x]` set changes the hash → safe skip rather than a wrong re-seed. This handles tasks completed offline between pause and resume.
-
----
-
-## Session-helpers.sh
-
-`scripts/session-helpers.sh` provides pure shell helpers (sourceable or callable). All functions are stdout-only, no side effects, exit 0 always (empty output = not found). All `[x]` detection uses the orchestrator's canonical pattern `^\s*[-*]?\s*\[x\]`.
-
-| Function | Purpose |
-|---|---|
-| `done_set_hash <tasks_file>` | sha256 of sorted, newline-joined `[x]` task-ids; empty set → hash of `""` |
-| `last_done_task <tasks_file>` | id of the last `[x]` heading (human hint) |
-| `next_pending_task <tasks_file>` | first `[ ]` task id whose deps are all `[x]` |
-| `last_curated_marker <events_file>` | ts of the most recent `context_curated` event (`none` if absent) |
-| `session_frontmatter_field <session_file> <field>` | scalar value from YAML frontmatter |
-
----
-
-## New event kinds
-
-| Kind | When | Fields |
-|---|---|---|
-| `context_breadcrumb` | Notable trigger on a `[x]` task (E2) | `task`, `intent` |
-| `context_curated` | Curator wrote SESSION.md successfully | `last_gate`, `done_count`, `done_ids_hash`, `context_hash`, `bytes` |
-| `context_curation_truncated` | Overflow forced entry drops (step 4) | `sections`, `dropped` |
-| `context_curation_failed` | Curator failed/timed out after one retry | `reason` |
-| `session_resumed` | Orchestrator inlined SESSION.md at startup (E1 match) | `done_ids_hash`, `last_gate_task_id`, `next_pending` |
-| `session_resume_skipped` | SESSION.md present but not used, or absent | `reason` |
-
-All events are logged via `log-event.sh` with label `"orchestration"` so they appear in both the per-run `archive/<run>/events.jsonl` and the repo-wide `metrics.jsonl`.
-
----
-
-## Env knobs
-
-| Variable | Default | Effect |
-|---|---|---|
-| `Z_SESSION_CURATOR_TIMEOUT_S` | `120` | Per-attempt timeout for curator dispatch. `0` disables curator entirely — falls back to today's plain pause notice without SESSION.md curation. |
-| `Z_SESSION_MAX_CHARS` | `28000` | Character ceiling for the SESSION.md body. Curator collapses entries until under this threshold. Passed to the curator at dispatch time. |
-
----
-
-## Edge cases
-
-- **Concurrent orchestrators on the same plan:** the active-plan registry serializes orchestrators per plan. Even without that, an atomic tmp+rename prevents torn writes; a non-matching `done_ids_hash` on resume is safe-skipped (no corruption).
-- **TASKS.md edited offline:** the set-based hash detects any change to the `[x]` set → `done_set_mismatch` skip.
-- **Unknown `schema_version`:** emit `session_resume_skipped {reason: schema_version}`.
-- **Empty plan (no `[x]` yet):** curator writes a minimal SESSION.md; resume predicate fires only once the `[x]` set is non-empty.
-- **`Z_SESSION_CURATOR_TIMEOUT_S=0`:** curator disabled; behavior identical to today (no SESSION.md written).
-- **`git diff` failure at curation time:** `diff_unavailable: true` in frontmatter; curation continues from events + TASKS only.
-
----
-
-## Out of scope (v1)
-
-- Non-plan `/goal` and other commands without TASKS.md/breakpoint.
-- Any change to `/compact` itself.
+```bash
+SINCE_MARKER="$(bash scripts/session-helpers.sh last_curated_marker "$ZH_BASE/metrics.jsonl")"
+# Agent(subagent_type="context-curator", ...) with plan_dir, run_id, event_source, since_marker
+# On STATUS: curated — verify done_ids_hash, then emit /clear & resume notice
+```

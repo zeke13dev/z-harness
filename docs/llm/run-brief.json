@@ -1,6 +1,6 @@
 {
   "concept": "run-brief",
-  "last_updated": "2026-06-11",
+  "last_updated": "2026-06-19",
   "covers_spec": "unified-command-output",
   "source_file": [
     "docs/llm/run-brief-contract.json",
@@ -41,14 +41,14 @@
       "line": 176,
       "symbol": "render_chat",
       "kind": "fn",
-      "summary": "Renders run-brief.json as warm Briefing markdown: glyph title, **What**/**How**/**Key decisions**/**Result**/**Next**; lite omits How+decisions."
+      "summary": "Renders run-brief.json as warm Briefing markdown: glyph title, **What**/**How**/**Key decisions**/**Result**/**Next**; lite omits How+decisions. Accepts optional _cost_summary_text for appended cost block."
     },
     {
       "file": "scripts/render-run-brief.py",
       "line": 241,
       "symbol": "render_push",
       "kind": "fn",
-      "summary": "Single-line push digest: intent[:80] · outcome[:60] · Next: label. Unchanged from prior format."
+      "summary": "Single-line push digest: intent[:80] · outcome[:60] · Next: label. Also used as Discord body via notify-discord.sh."
     },
     {
       "file": "scripts/render-run-brief.py",
@@ -69,14 +69,14 @@
       "line": 1,
       "symbol": "run-brief-finalize",
       "kind": "module",
-      "summary": "Shared finalize fragment inlined by /z-export into registry commands; step 2 requires orchestrator to author approach before finalize on success."
+      "summary": "Shared finalize fragment inlined by /z-export into registry commands; 6-step sequence (1 aggregate, 2 artifact/approach, 3 finalize, 3.5 cost, 4 chat, 5 push, 5.5 discord, 6 hard-gate); step 2 requires orchestrator to author approach before finalize on success."
     },
     {
       "file": "scripts/lint-run-brief.sh",
       "line": 1,
       "symbol": "lint-run-brief.sh",
       "kind": "module",
-      "summary": "Schema + registry + renderer self-test; --registry-only greps all 11 commands for finalize fragment include."
+      "summary": "Schema + registry + renderer self-test + _test_finalize_preserves_decisions integration test (default mode). --registry-only greps all 11 commands for finalize fragment include and implement-family halt fragment includes."
     }
   ],
   "depends_on": [
@@ -97,17 +97,21 @@
     "Full profile approach: 1-4 bullets; no file paths (no ext: tokens or slash path segments).",
     "Key decisions section is omitted from chat entirely when decisions is empty.",
     "Decision tokens are humanized (underscores to spaces) in chat render; verbatim values remain in events.jsonl.",
-    "why field on decisions is surfaced in chat as italic text after an em-dash."
+    "why field on decisions is surfaced in chat as italic text after an em-dash.",
+    "Cost summary (step 3.5) and Discord render (step 5.5) are non-fatal — failures do not block the hard gate or abort the run.",
+    "Full-profile complete path: even if artifact has no bullet lines, finalize preserves existing decisions and uses ensure_approach_for_full (not lite downgrade)."
   ],
   "gotchas": [
     "Lite profile forbids approach and decisions properties — do not emit empty arrays.",
-    "Artifact missing on early halt triggers lite downgrade via finalize (not at init time).",
+    "Artifact missing on early halt triggers lite downgrade via finalize (not at init time) — but only on non-success paths; success with no artifact uses ensure_approach_for_full, not lite downgrade.",
     "/z-implement-all compaction_pause exit skips the brief (non-terminal).",
-    "Export must inline commands/_fragments/run-brief-finalize.md so Cursor/Codex/agy copies stay in sync.",
+    "Export must inline commands/_fragments/run-brief-finalize.md so Cursor/Codex/agy copies stay in sync. Old scripts/export-*.py are deleted; use runtime/drivers/<target>/export.py or /z-export.",
     "Z_HARNESS_RUN_BRIEF_DEBUG=1 optionally writes a human-readable run-brief.md mirror for local debugging (not default).",
     "extract_approach_bullets only runs when approach is empty at finalize; an authored approach always wins.",
     "Old ALL-CAPS labeled block format (INTENT:/APPROACH:/DECISIONS:/OUTCOME:/NEXT:) is obsolete — render_chat now emits glyph-titled Briefing markdown.",
-    "render_push format is UNCHANGED — single line: intent[:80] · outcome[:60] · Next: label."
+    "render_push format is UNCHANGED — single line: intent[:80] · outcome[:60] · Next: label. Discord step 5.5 uses the same push-format body via notify-discord.sh.",
+    "Decision source enum is event|artifact — no other values are schema-valid.",
+    "_test_finalize_preserves_decisions in lint-run-brief.sh proves that finalize keeps decisions[] intact when the artifact has no bullet lines on a complete path — guards against regression in the prose-only artifact code path."
   ],
   "memories": []
 }

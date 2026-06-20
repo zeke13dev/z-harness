@@ -1,310 +1,89 @@
 # Adaptive INTENT — Lighter-than-SDD Operating Model
 
-> **Status:** Active default as of 2026-06-16.
-> **Config gate:** `workflow.planning_mode` (default `intent`). Set to `full` for legacy SDD.
+> Last updated: 2026-06-19
+> Covers source: scripts/intent-schema.py, scripts/config.py, agents/intent-classifier.md, agents/task-tree-generator.md, commands/z-plan.md, commands/z-implement-all.md, commands/z-amend.md, commands/z-review-all.md, agents/implementer.md, agents/reviewer.md, docs/human/adaptive-intent.md
 
-Adaptive INTENT replaces strict spec-driven development (SPEC.md → PLAN.md → TASKS.md, frozen
-up-front) as the default z-harness planning paradigm. Instead of a thick frozen spec, it uses:
+## Overview
 
-- A **thin frozen contract** (`INTENT.md`) authored at planning time and immutable after the
-  execution boundary is crossed.
-- An **emergent BFS task-tree** generated and frozen one level at a time, each level informed
-  by the prior level's actual outcomes.
-- An append-only **`LEDGER.md`** that accumulates decisions and deviations as the audit trail
-  read by final review.
+Adaptive INTENT is the default z-harness planning paradigm, activated when `workflow.planning_mode=intent` (the compiled-in default). It replaces the thick up-front SDD chain (SPEC.md -> PLAN.md -> TASKS.md, all frozen before any code runs) with three lighter artifacts: a thin frozen INTENT.md contract authored at `/z-plan` time; an emergent BFS task-tree generated one level at a time by the `task-tree-generator` Sonnet subagent; and an append-only LEDGER.md that accumulates decisions and deviations as the realized-plan audit trail consumed by `/z-review-all`.
 
----
+The core insight is that the win is a *thin* artifact, not a *mutable* one. INTENT.md is authored loosely at planning time, then frozen at the execution boundary (`/z-implement-all` Step 1). Emergence lives in the task-tree between BFS levels, not in the contract. Legacy SPEC/PLAN/TASKS plans are detected by the presence of SPEC.md and run completely unchanged on the legacy path — zero regression is a hard invariant.
 
-## Core insight
+## Key entry points
 
-The win is a *thin* artifact, not a *mutable* one. INTENT is authored loosely, then frozen at the
-execution boundary. Emergence lives in the task-tree *between* BFS levels, not in the contract.
+- `scripts/intent-schema.py:216` — `validate_intent` — validates INTENT.md frontmatter (6 required fields) and required sections per level; returns `ValidationResult(valid, errors)`
+- `scripts/intent-schema.py:297` — `lint_criteria` — flags acceptance checklist items with bare non-observable predicates (`runs`/`works` with no concrete object); returns list of `LintFailure(line_number, text)`
+- `scripts/intent-schema.py:439` — `freeze_intent` — stamps `frozen_at` with current UTC ISO in INTENT.md frontmatter; idempotent (prints `ALREADY_FROZEN:<iso>` if already frozen)
+- `scripts/intent-schema.py:377` — `reopen_intent` — sets `frozen_at` back to `pending`; idempotent; called by `/z-amend` Phase 6 to re-open a frozen contract
+- `scripts/intent-schema.py:494` — `bootstrap_ledger` — creates LEDGER.md with required frontmatter if absent; idempotent (no overwrite)
+- `scripts/intent-schema.py:635` — `evaluate_acceptance` — per-criterion met/unmet/unknown evaluation from INTENT checklist + LEDGER citations + cumulative diff; returns `AcceptanceResult(criteria, verdict)`
+- `commands/z-implement-all.md:413` — `mode_detection` — authoritative SPEC-vs-INTENT branch: `SPEC.md` present → `IMPLEMENT_MODE=legacy`; `INTENT.md` present → `IMPLEMENT_MODE=intent`; neither → error
+- `commands/z-implement-all.md:439` — `step1_freeze_ledger` — INTENT engine Step 1: freeze INTENT.md (idempotent), snapshot to `archive/$RUN/INTENT.frozen.md` on first freeze, bootstrap LEDGER.md if absent
+- `commands/z-implement-all.md:567` — `bfs_level_loop` — BFS while-loop: level-cap check → budget check → dispatch task-tree-generator → execute level (reusing per-task loop) → LEDGER flush (T011 hook) → done_set_hash checkpoint → evaluate-acceptance → increment level or set BFS_DONE=1
+- `commands/z-plan.md:365` — `planning_mode_branch` — reads `workflow.planning_mode` and `workflow.intent_level`; `full` → legacy SDD path; `intent` → dispatch intent-classifier (or use forced/flag level), announce level with user override gate, write INTENT.md
+- `commands/z-plan.md:429` — `spec_detection_invariant4` — if slug dir already has SPEC.md, force `PLANNING_MODE=full` regardless of config (Invariant 4 guard)
+- `agents/intent-classifier.md:1` — `intent-classifier` — Haiku subagent; input: task prompt + repo signals + optional `forced_level`; output: `LEVEL: quick|standard|deep` + `REASON:` + `SIGNALS:`; advisory — orchestrator announces and lets user override
+- `agents/task-tree-generator.md:1` — `task-tree-generator` — Sonnet subagent; generates one BFS level's independent sibling TASKS.md batch; each task carries `**Advances:** criterion #N`; cross-level deps deferred to next level; emits termination batch when level cap or budget floor reached
 
----
+## How it interacts with others
 
-## INTENT.md — the frozen contract
+- `config` — provides `workflow.planning_mode`, `workflow.intent_level`, `workflow.intent_parallel_levels`, `workflow.hermes_enabled`, and the runtime-read `workflow.intent_bfs_level_cap` (unregistered in DEFAULTS; falls back to 6)
+- `scripts` — `scripts/intent-schema.py` is the schema engine; `scripts/session-helpers.sh` `done_set_hash` provides resume-safety at level boundaries
+- `agents` — `intent-classifier` (Haiku) and `task-tree-generator` (Sonnet) are dispatched by `/z-plan` and `/z-implement-all` respectively; `implementer` and `reviewer` agents are patched with INTENT-mode context (`intent_snapshot:` + `ledger_path:` signals)
+- `commands` — `/z-amend` re-opens frozen contracts; `/z-review-all` detects INTENT mode (INTENT.md present + SPEC.md absent) and uses INTENT.frozen.md + LEDGER.md as the realized-plan contract; `/z-audit-plan` also passes INTENT context to consultant subagents in INTENT mode
+- `session-handoff` — level state file (`$ARCHIVE_DIR/.bfs_level_state`) stores `<level> <done_set_hash>` for resume; hash mismatch forces restart from level 0
+- `invariants` — `docs/INVARIANTS.json` is passed as `invariants_path:` to every implementer in INTENT mode via `$INTENT_MODE_CTX`
 
-**Written by** `/z-plan` in intent mode (default).
-**Frozen by** `/z-implement-all` at first execution (idempotent re-freeze on resume).
-**Immutable after** `frozen_at` is stamped — Invariant 1.
+## Edge cases / gotchas
 
-### Frontmatter fields
+- **MODE DETECTION IS BINARY.** SPEC.md presence = legacy, forever. Adding INTENT.md to a slug that already has SPEC.md does NOT switch it to INTENT mode. The legacy path wins unconditionally.
+- **`frozen_at: pending` is not an error.** `/z-implement-all` treats `pending` as "not yet frozen" and stamps the ISO on first execution. Never delete the field — its presence is load-bearing.
+- **`stale_reason: amended-intent` in TASKS.md frontmatter** signals the task-tree-generator to regenerate rather than resume on the next `/z-implement-all`. Set by `/z-amend` Phase 6; consumed by the BFS loop's resume-detection block.
+- **`evaluate-acceptance` fires at EVERY level checkpoint,** not just the last. The loop may exit at Level 0 if the first batch satisfies all criteria.
+- **`intent_parallel_levels=true` requires `hermes_enabled=true`** to have any effect. The two knobs are coupled.
+- **Level state file is `.bfs_level_state`** (under `$ARCHIVE_DIR`), not `.intent_level_state`. Hash mismatch on resume (TASKS.md changed since checkpoint) forces restart from level 0 — a safety fallback, not an error.
+- **LEDGER content is accumulated per-level** in `$ARCHIVE_DIR/ledger-level-N.pending` and flushed atomically to LEDGER.md at level end by the T011-LEDGER-HOOK. A crash inside a level leaves the pending file in place; resume reads it on re-entry.
+- **`workflow.intent_bfs_level_cap`** is read via `config.py get` but is NOT in `DEFAULTS` — it silently resolves to `None` (empty) and the orchestrator falls back to the hardcoded default of 6.
+- **`evaluate-acceptance` scores `unknown` as unmet** (conservative bias). A LEDGER citation without a non-empty cumulative diff returns `unknown`, not `met`. The diff is cumulative from `INTENT_FROZEN_AT_COMMIT` to `HEAD`.
+- **`/z-do` and `/z-plan-light` are deprecated shims.** Both print a notice and immediately route to `/z-plan --quick` or `/z-plan --standard`. Their old bodies are gone.
+- **`/z-plan` accepts level flags directly:** `--quick`, `--standard`, `--deep` (sets `PLANNING_MODE=intent` + forced level), `--full` (forces legacy SDD). These override config but still fire the announce/override gate.
 
-```yaml
----
-artifact: intent
-slug: <slug>
-level: quick | standard | deep
-generated_at: <iso>
-frozen_at: <iso or "pending">   # "pending" until /z-implement-all stamps it
-planning_mode: intent
----
-```
+## Memories
 
-Validated by `scripts/intent-schema.py validate-intent` (lines 216–290).
+<!-- DO NOT EDIT this section by hand — regenerated from docs/llm/adaptive-intent.json by doc-updater. Use /z-suggest-memory to add or edit memories. -->
 
-### Required sections per level
+_Note: this section is omitted entirely when `memories: []`._
 
-| Section | L1 (quick) | L2 (standard) | L3 (deep) |
-|---------|-----------|---------------|----------|
-| `## Intent` | required | required | required |
-| `## Acceptance checklist` | required | required | required |
-| `## Not doing` | optional | required | required |
-| `## Consider for this` | optional | required | required |
+## Examples
 
-Level definitions are in `agents/intent-classifier.md` (lines 15–17).
-Section-presence check is in `scripts/intent-schema.py` (lines 72–73, 267–282).
-
-### Acceptance checklist lint
-
-`scripts/intent-schema.py lint-criteria` (lines 297–337) flags criteria with non-observable
-predicates (`runs`, `works`, etc.) that have no concrete object following them. Lint runs
-before INTENT.md is written by `/z-plan` (Decision D8).
-
-### Re-opening a frozen INTENT
-
-To amend a frozen contract: `/z-amend` calls `reopen-intent "$BASE/INTENT.md"` via
-`scripts/intent-schema.py reopen-intent` (lines 377–427), which sets `frozen_at: pending`.
-The next `/z-implement-all` re-freezes before executing. This is Invariant 1's escape hatch —
-always go through the explicit re-open path; never edit `frozen_at` directly.
-
----
-
-## BFS task-tree
-
-Tasks are generated in **levels** — Level 0 is the first independent batch derived from INTENT;
-Level N+1 is generated from Level N outcomes + still-unmet acceptance criteria.
-
-### Level freeze (Invariant 2)
-
-While a level executes, its `TASKS.md` is immutable. This keeps `session-helpers.sh`
-`done_set_hash` / resume valid. Mutation only happens at level boundaries.
-
-### Level generation
-
-The `agents/task-tree-generator.md` (Sonnet) is dispatched once per level by `/z-implement-all`.
-Inputs: frozen INTENT snapshot, LEDGER so far, level number, unmet criteria, prior-level outcomes.
-Output: a canonical `TASKS.md` batch for this level only — all tasks independent of each other
-(cross-level dependencies are deferred to the next level). Each task carries `**Advances:** criterion #N`
-linking it back to the frozen INTENT acceptance checklist.
-
-Dispatch seam in `commands/z-implement-all.md` (lines 654–678):
+**Checking whether a plan is in INTENT mode:**
 ```bash
-GENERATOR_OUT="$(Agent(
-  subagent_type="task-tree-generator",
-  ...
-  level: ${CURRENT_LEVEL}
-  unmet_criteria: ${UNMET_JSON}
-  ...))"
+# At $BASE (the plan directory):
+ls $BASE/SPEC.md 2>/dev/null && echo "legacy" || (ls $BASE/INTENT.md 2>/dev/null && echo "intent")
 ```
 
-### Level cap + budget guard
+**Manually re-opening a frozen contract:**
+```bash
+python3 scripts/intent-schema.py reopen-intent z-harness/plans/<slug>/INTENT.md
+# → REOPENED: pending
+# Then run /z-amend to patch the body, /z-implement-all will re-freeze before executing.
+```
 
-The BFS loop in `/z-implement-all` (lines 574–598) enforces:
-- **Level cap:** `workflow.intent_bfs_level_cap` (default 6). When `CURRENT_LEVEL >= cap`, the
-  loop halts with `intent_bfs_level_cap_reached`.
-- **Token budget guard:** `workflow.cost.token_budget`. When remaining budget drops below 30 000
-  tokens the loop halts with `intent_bfs_budget_exhausted`.
+**Forcing a specific level at plan time:**
+```bash
+/z-plan --deep "migrate auth system to OAuth2"
+# or via config:
+# [workflow]
+# intent_level = "deep"
+```
 
-### Acceptance-criteria evaluation (checkpoint)
-
-After each level completes, `/z-implement-all` calls:
+**Checking acceptance status after a level:**
 ```bash
 python3 scripts/intent-schema.py evaluate-acceptance \
-  "$INTENT_FILE" "$LEDGER_FILE" "$CUMULATIVE_DIFF_FILE"
+  z-harness/plans/<slug>/INTENT.md \
+  z-harness/plans/<slug>/LEDGER.md \
+  /tmp/cumulative.diff
+# → CRITERION 1: met  — <text>
+# → CRITERION 2: unmet — <text>
+# → VERDICT: continue
 ```
-(`scripts/intent-schema.py` lines 635–700.) If the verdict is `DONE`, `BFS_DONE=1` and the loop
-exits. Otherwise `CURRENT_LEVEL` increments and the next level is generated.
-
-### Resume safety
-
-The level state file (`$ARCHIVE_DIR/.intent_level_state`) persists `<level_number> <done_set_hash>`
-after each completed level. On resume, `/z-implement-all` (lines 539–565) re-reads the state file,
-validates the hash, and re-enters the loop at `CURRENT_LEVEL = STORED_LEVEL + 1`.
-
----
-
-## LEDGER.md — append-only realized-plan
-
-**Created** by `scripts/intent-schema.py bootstrap-ledger` (lines 494–572) on first execution
-(idempotent — no overwrite).
-**Appended** after each level: implementer returns `LEDGER_DECISIONS:` + `LEDGER_DEVIATIONS:`
-fields (`agents/implementer.md` lines 135–149); the orchestrator writes them under the current
-level heading.
-**Read by** reviewer + `/z-review-all` as the realized-plan audit trail.
-
-### Schema
-
-```yaml
----
-artifact: ledger
-slug: <slug>
-intent_frozen_at: <iso>
----
-## Level 0
-### Decisions
-- <decision> (advances criterion #N)
-### Deviations
-- <deviation from tentative tasks> — <why>
-## Level 1
-...
-```
-
-Validated by `scripts/intent-schema.py validate-ledger` (lines 339–375). Append-only is Invariant 3.
-
----
-
-## Levels (L1 / L2 / L3)
-
-| Level | Name | INTENT sections | Cross-LLM consult |
-|-------|------|----------------|-------------------|
-| L1 | quick | Intent + Checklist | skipped |
-| L2 | standard | + Not doing + Consider for this | optional |
-| L3 | deep | all four sections | always |
-
-### intent-classifier — level selection
-
-`agents/intent-classifier.md` (Haiku, lines 1–7) reads the raw task prompt + repo signals and
-returns `LEVEL: quick|standard|deep` + `REASON:` + `SIGNALS:`. Advisory — the orchestrator
-announces the pick and the user can override inline.
-
-Dispatch seam in `commands/z-plan.md` (lines 507–514):
-```bash
-INTENT_CLASSIFIER_OUT="$(Agent(
-  subagent_type="intent-classifier",
-  task_prompt: "...",
-  repo_root: "...",
-  forced_level: "${INTENT_LEVEL_CONFIG}"
-))"
-```
-
-Fallback: if the classifier returns non-zero or empty, `/z-plan` defaults to `standard`
-(`commands/z-plan.md` lines 521–524).
-
-### Config override
-
-Set `workflow.intent_level` in `.z-harness/config.toml` to `quick`, `standard`, or `deep` to
-bypass the classifier entirely (`commands/z-plan.md` lines 490–494).
-
----
-
-## Legacy fallback — SPEC-detection (Invariant 4)
-
-Mode detection at `/z-implement-all` step 3.5 (`commands/z-implement-all.md` lines 413–423):
-
-```bash
-if [ -f "$BASE/SPEC.md" ]; then
-  IMPLEMENT_MODE="legacy"
-elif [ -f "$BASE/INTENT.md" ]; then
-  IMPLEMENT_MODE="intent"
-fi
-```
-
-`SPEC.md` presence → full legacy SDD path (SPEC/PLAN/TASKS), completely unchanged.
-Legacy plans are never auto-migrated. This invariant is tested explicitly (never route a
-SPEC.md plan through the INTENT engine).
-
-Same detection in `/z-review-all` (`commands/z-review-all.md` lines 172–183) and `/z-amend`
-(`commands/z-amend.md` lines 41–43).
-
----
-
-## Four workflow.* config knobs
-
-All in `scripts/config.py` `DEFAULTS["workflow"]` (lines 78–81); file-resolvable via
-`config.py get workflow.<key>` from `.z-harness/config.toml`. No new env vars (Invariant 5).
-
-| Key | Default | Values | Meaning |
-|-----|---------|--------|---------|
-| `workflow.planning_mode` | `intent` | `intent` \| `full` | Default planner paradigm. `full` = legacy SDD. |
-| `workflow.intent_level` | `auto` | `auto` \| `quick` \| `standard` \| `deep` | Forced level, or `auto` = classifier picks. |
-| `workflow.intent_parallel_levels` | `false` | bool | Execute independent same-level tasks in parallel (gated-off by default). |
-| `workflow.hermes_enabled` | `false` | bool | Gates ALL old Hermes parallelism machinery. Default OFF (Invariant 6). |
-
-Validators at `scripts/config.py` lines 180–183. Bool coercers at lines 244–247.
-
----
-
-## Hermes gating (Invariant 6)
-
-All old Hermes machinery (workstream generation, N=2 cross-cluster dispatch, `write-handoff.sh`
-call, `scope-extractor` dispatch) is wrapped in `if workflow.hermes_enabled` guards. Default
-`false` → none fire. The `scripts/hermes/` files are kept (not deleted) to prevent bit-rot;
-deletion is a separate future task.
-
-Gate seam in `commands/z-implement-all.md` (lines 388–404) and `commands/z-plan.md`.
-
-To revive Hermes:
-```toml
-[workflow]
-hermes_enabled = true
-```
-
----
-
-## Reviewer + final review changes
-
-**Per-task reviewer** (`agents/reviewer.md` line 2): in INTENT mode reads the full frozen INTENT
-narrative (all four sections) + LEDGER + durable tier (KERNEL, INVARIANTS.json, STYLE). Cites
-failures as "fails acceptance criterion #N" (1-based index in `## Acceptance checklist`).
-
-**`/z-review-all`** (`commands/z-review-all.md` lines 160–203): detects INTENT mode by
-`INTENT.md present AND SPEC.md absent`; prefers the frozen snapshot from `archive/*/INTENT.frozen.md`.
-Passes `INTENT.frozen.md` + `LEDGER.md` + durable tier to both Flash pre-review prongs instead of
-SPEC.md.
-
----
-
-## /z-amend in INTENT mode
-
-1. Detects `intent` mode by `INTENT.md` present, `SPEC.md` absent (`commands/z-amend.md` line 41).
-2. Notes whether `frozen_at` holds a real ISO timestamp.
-3. In Phase 6: calls `reopen-intent` to set `frozen_at: pending`; edits INTENT.md body; marks
-   TASKS.md stale (`stale_reason: amended-intent`) so the task-tree-generator regenerates rather
-   than resumes.
-
-`stale_reason` handling in `commands/z-amend.md` (lines 239–271).
-`reopen-intent` in `scripts/intent-schema.py` (lines 377–427).
-
----
-
-## /z-do and /z-plan-light (deprecated shims)
-
-Both commands now print a deprecation notice and immediately route to `/z-plan`:
-- `/z-do` → `/z-plan --quick $ARGUMENTS` (`commands/z-do.md` lines 13–18)
-- `/z-plan-light` → `/z-plan --standard $ARGUMENTS` (`commands/z-plan-light.md` lines 13–18)
-
-Command names are preserved for muscle-memory; the bodies are unchanged shims.
-
----
-
-## Invariants
-
-1. **INTENT.md is immutable after `frozen_at` is stamped.** Edits require explicit `reopen-intent`
-   (`scripts/intent-schema.py:377`).
-2. **A level's TASKS.md is immutable while that level executes.** Resume safety via
-   `done_set_hash` checkpoint (`commands/z-implement-all.md:903`).
-3. **LEDGER.md is append-only; never rewritten** (`scripts/intent-schema.py:494`).
-4. **Legacy SPEC/PLAN/TASKS plans are detected and run on the unchanged legacy path — zero
-   regression** (`commands/z-implement-all.md:416`).
-5. **No new env vars.** All new knobs are file-resolvable via `config.py`
-   (`scripts/config.py:78`).
-6. **Old Hermes machinery never executes unless `workflow.hermes_enabled=true`**
-   (`commands/z-implement-all.md:388`).
-
----
-
-## Key source files
-
-| File | Role |
-|------|------|
-| `scripts/intent-schema.py` | validate-intent, lint-criteria, validate-ledger, freeze-intent, reopen-intent, bootstrap-ledger, evaluate-acceptance |
-| `scripts/config.py` | Four `workflow.*` knobs (lines 78–81, 180–183) |
-| `agents/intent-classifier.md` | Haiku level classifier |
-| `agents/task-tree-generator.md` | Sonnet BFS level generator |
-| `commands/z-plan.md` | Adaptive planner: level announce/override, INTENT.md write, `--full` legacy route, SPEC-detection backward-compat |
-| `commands/z-implement-all.md` | BFS engine: freeze, LEDGER bootstrap, generate-execute-checkpoint loop, mode detection |
-| `commands/z-amend.md` | re-open frozen contract, invalidate TASKS.md on amendment |
-| `commands/z-review-all.md` | Final gate: INTENT + LEDGER as realized-plan contract |
-| `agents/implementer.md` | Returns LEDGER_DECISIONS + LEDGER_DEVIATIONS in INTENT mode |
-| `agents/reviewer.md` | Reads full INTENT narrative + LEDGER in INTENT mode; cites criterion #N |

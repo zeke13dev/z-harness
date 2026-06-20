@@ -1,103 +1,44 @@
 # reviewer-capture
 
-> Last updated: 2026-06-10
+> Last updated: 2026-06-19
 > Covers source: agents/reviewer.md, agents/consultant-primary.md, agents/consultant-secondary.md
 
 ## Overview
 
-`reviewer-capture` is the file-based review capture mechanism introduced in the `reviewer-cost-telemetry` plan (Change 1). Before this change, `agents/reviewer.md` and both consultant agents captured the codex provider's full stdout transcript — including reasoning, chatter, and the final message — and truncated it to 8 000 characters for return. Observed `response_chars` of 76 k/122 k/211 k resulted in 95–100 % discard, and some reviews landed `return=0`, clobbering the verdict entirely. The file-based path exploits codex's native `-o/--output-last-message FILE` flag to capture only the final message, discarding the transcript.
+`reviewer-capture` is the file-based review capture mechanism shared by the `reviewer`, `consultant-primary`, and `consultant-secondary` agents. Rather than capturing codex's full stdout transcript (which includes reasoning chatter and can exceed 200 KB), all three agents exploit codex's native `-o/--output-last-message FILE` flag to write only the final message to an archive file. The file becomes the source of truth; the orchestrator receives only a tight structured summary (verdict + blocker/major counts + artifact path). Non-codex providers (gemini, flash, manual) use a byte-identical stdout-capture path — the `-o` flag is never appended for non-codex providers.
 
-The non-codex provider path (gemini/flash/manual) is byte-identical to the pre-feature behavior — the `-o` flag is never appended for non-codex providers.
+The mechanism also covers how both consultant agents emit a `consult_start` event before their CLI call (enabling liveness detection), and how all three agents validate provider capability once per session via a `$PPID`-keyed sentinel file. Since the 2026-06-10 initial release the reviewer has gained full INTENT mode support (durable tier: KERNEL/INVARIANTS/STYLE + frozen INTENT snapshot + LEDGER), a `FOLLOWUPS` output section that routes minors/nits to the follow-up sink, `relevant_docs` input for concept JSON cross-reference, and a `contract` validation field (`expected_contract: review-verdict`). Both consultant agents added `consult_start` telemetry and many new modes.
 
 ## Key entry points
 
-<!-- AUTO-START: entry-points -->
-- `agents/reviewer.md:135` — `# Call the provider (with file-based capture for codex)` — codex capability probe + file-based dispatch block; fallback-on-empty-file logic
-- `agents/reviewer.md:143` — `PROBE_SENTINEL` — per-session sentinel keyed on `$PPID`; caches `CODEX_SUPPORTS_OUTFILE` so the probe runs once per run, not once per task
-- `agents/reviewer.md:160` — `ARCHIVE_DIR / OUTFILE` — canonical artifact path: `$Z_HARNESS_PLAN_DIR/archive/tasks/<id>/review-cycle<N>.md`
-- `agents/reviewer.md:166` — `CAPTURE_MODE="file"` branch — codex path: appends `-o "$OUTFILE"`; ignores stdout transcript; reads final review from `$OUTFILE`
-- `agents/consultant-primary.md:61` — same probe + dispatch block (CAPTURE_MODE); log-subagent.sh call at line 224
-- `agents/consultant-secondary.md:61` — identical shape; same invariants as consultant-primary
-<!-- AUTO-END: entry-points -->
+- `agents/reviewer.md:229` — `PROBE_SENTINEL` — per-PPID sentinel caches `CODEX_SUPPORTS_OUTFILE`; greps `codex exec --help` for `output-last-message`; runs once per orchestrating process
+- `agents/reviewer.md:248` — `ARCHIVE_DIR / OUTFILE` — canonical artifact path: `$Z_HARNESS_PLAN_DIR/archive/tasks/<id>/review-cycle<N>.md`
+- `agents/reviewer.md:253` — `CAPTURE_MODE=file` branch — codex path: appends `-o "$OUTFILE"`; stdout transcript discarded; fallback on empty/missing file emits `review_capture_fallback`
+- `agents/reviewer.md:281` — `review_capture_fallback` event — uniform schema `{id, cycle, role, reason}` across all three agents
+- `agents/consultant-primary.md:49` — `consult_start` event — emitted before CLI call; liveness.sh uses it as an in-flight marker
+- `agents/consultant-primary.md:53` — same probe block — identical `CODEX_SUPPORTS_OUTFILE` probe; archive path under `z-harness/archive/$RUN/transcripts/`
+- `agents/consultant-secondary.md:49` — same `consult_start` + probe block as consultant-primary
 
-## Codex capability probe
+## How it interacts with others
 
-The probe runs once per orchestrating process, keyed on `$PPID` (parent shell PID) so it persists across multiple task reviews within one `/z-implement-all` run but is not shared across runs:
-
-```bash
-PROBE_SENTINEL="/tmp/z-harness-codex-outfile-probe.${PPID:-$$}"
-if [ ! -f "$PROBE_SENTINEL" ]; then
-  if codex exec --help 2>&1 | grep -q 'output-last-message'; then
-    printf '1' > "$PROBE_SENTINEL"
-  else
-    printf '0' > "$PROBE_SENTINEL"
-  fi
-fi
-CODEX_SUPPORTS_OUTFILE="$(cat "$PROBE_SENTINEL")"
-```
-
-The probe greps for the long-form `--output-last-message` flag. If found, `-o` (the short alias) is used in the actual dispatch. If not found (older codex version), the stdout-capture fallback is used.
-
-## Canonical artifact path
-
-The full review is written to:
-
-```
-$Z_HARNESS_PLAN_DIR/archive/tasks/<task-id>/review-cycle<N>.md
-```
-
-This file is the **source of truth** for the review content. The orchestrator receives only the verdict (`PASS`/`FAIL`/`BLOCKED`), blocker/major counts, and the artifact path. The 8 000-character `$RETURN` cap is no longer the source of truth — the file is.
-
-The archive directory is created with `mkdir -p` before dispatch. `CYCLE` is the current review cycle number (1 on first review, N on subsequent retries).
-
-## Dispatch logic
-
-```bash
-if [ "$PROVIDER" = "codex" ] && [ "$CODEX_SUPPORTS_OUTFILE" = "1" ]; then
-  CAPTURE_MODE="file"
-  # appends: -o "$OUTFILE" to the codex exec invocation
-  # stdout transcript is intentionally discarded
-  ...
-fi
-```
-
-The provider value comes from `resolve-provider.sh` output (`d["provider"]`). Non-codex providers (`gemini`, `flash`, `manual`) enter the `stdout` capture path, which is byte-identical to the pre-feature behavior.
-
-## Fallback path
-
-If `$OUTFILE` is missing or empty after a codex dispatch, or if codex exits non-zero:
-
-1. Revert to current stdout capture + truncation.
-2. Emit `review_capture_fallback {id, cycle, role, reason}` — one uniform schema across the reviewer (`role=reviewer`) and both consultants (`role=consultant-primary`/`consultant-secondary`). The SPEC's `{id, cycle, reason}` is the required floor; `role` is the cross-agent disambiguator a fallback-rate cut needs.
-3. Never silently lose a verdict.
-
-The fallback ensures no behavior regression when codex's `-o` support is absent or the file write fails.
-
-## response_chars semantics
-
-After this change, `response_chars` logged in the `phase_end` and `subagent_call` events is the **size of the captured final review** (the file or stdout content used as the verdict), not the size of the discarded transcript. This makes `response_chars` an honest cost signal for the first time.
-
-## Invariants
-
-- Non-codex provider path is byte-identical to today — `-o` is only appended when provider == `codex`.
-- The capability probe runs at most once per parent-PID process; the sentinel file is never deleted mid-run.
-- `OUTFILE` is always in `$Z_HARNESS_PLAN_DIR/archive/tasks/<id>/` — callers never need to discover the path separately.
-- Fallback emits `review_capture_fallback` before reverting; verdict is never silently dropped.
-- `response_chars` = size of the review text actually used (honest); transcript discard is not reflected in any event field.
-- Both consultant agents share the same probe/dispatch/fallback/log shape as the reviewer — the three files are co-maintained.
+- `subagent-telemetry` — `log-subagent.sh` is called by all three agents after capture; `response_chars` equals the size of the captured final review (honest), not the discarded transcript
+- `providers-registry` — `resolve-provider.sh` returns `{"provider": "codex"|"gemini"|...}` which gates the file-based path; only `provider == "codex"` triggers `-o`
+- `commands` (z-implement-all, z-review-all, z-plan, z-debug) — orchestrators dispatch these agents and consume the `verdict / blockers / majors / artifact` structured return
+- `followup-sink` — reviewer output includes a `**FOLLOWUPS:**` fenced JSON block; orchestrator routes entries via `scripts/parse-followups-block.py` and `scripts/sink-add.sh`
 
 ## Edge cases / gotchas
 
-- The sentinel is keyed on `$PPID`, not `$$`. Each `bash reviewer.md` invocation is a new process (`$$` differs); `$PPID` is the orchestrating shell that spawns it, which persists across all task reviews in one run.
-- If `$Z_HARNESS_PLAN_DIR` is unset, `ARCHIVE_DIR` construction fails — the agent will error before dispatch. The orchestrator is responsible for exporting this variable.
-- codex exit non-zero (e.g. timeout) triggers the fallback even if `$OUTFILE` was partially written — the file is considered valid only when codex exits 0.
-- The `-o` flag is the documented short alias of `--output-last-message`; the probe greps for the long form, so a future codex version that renames it will correctly probe-fail and fall through to stdout capture without regression.
-- `review-cycle<N>.md` is overwritten if a task is retried and the cycle number resets (not expected in v1, but callers should not assume file uniqueness across retries).
+- Sentinel is keyed on `$PPID` (parent PID) not `$$`. Each `bash reviewer.md` invocation is a new process; `$PPID` is the orchestrating shell and persists across all tasks in one run.
+- `$Z_HARNESS_PLAN_DIR` must be exported by the orchestrator; if unset, `ARCHIVE_DIR` construction fails before dispatch.
+- Codex non-zero exit triggers fallback even if `$OUTFILE` was partially written — the file is considered valid only on exit 0.
+- Probe greps for long-form `--output-last-message`; dispatches with short alias `-o`. A future codex rename will probe-fail and fall through to stdout capture without regression.
+- Reviewer INTENT mode requires **both** `intent_snapshot:` AND `ledger_path:` to be present; if exactly one is present the agent returns a BLOCKED verdict with a `MISCONFIGURED` message rather than inferring the other.
+- Consultant archive paths differ from reviewer: `z-harness/archive/$RUN/transcripts/<N>-<slug>.response.md` (consultant) vs `$Z_HARNESS_PLAN_DIR/archive/tasks/<id>/review-cycle<N>.md` (reviewer).
+- `review_capture_fallback` uses a uniform schema `{id, cycle, role, reason}` across all three agents; `role` is the cross-agent disambiguator needed for fallback-rate analysis.
+- Minors and nits from the reviewer are dropped from the `### Blockers` / `### Major` return sections and MUST appear in `**FOLLOWUPS:**` (P3 or P2) instead — they are never silently dropped.
 
-## See also
+## Examples
 
-- `agents/reviewer.md` — source file; file-based capture wiring at line ~135.
-- `agents/consultant-primary.md` — same wiring; role = `consultant-primary`.
-- `agents/consultant-secondary.md` — same wiring; role = `consultant-secondary`.
-- `docs/human/subagent-telemetry.md` — `response_chars` is consumed by `log-subagent.sh` after capture.
-- `docs/human/reviewer-cost-telemetry` SPEC Change 1 — full design rationale.
+- Full review artifact: `$Z_HARNESS_PLAN_DIR/archive/tasks/T001/review-cycle1.md`
+- Consultant transcript: `z-harness/archive/<run-id>/transcripts/001-consultant-primary-codex-plan-review.response.md`
+- Fallback event payload: `{"id":"T001","cycle":1,"role":"reviewer","reason":"exit_1_or_empty_outfile"}`

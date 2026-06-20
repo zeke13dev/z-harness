@@ -1,6 +1,6 @@
 # run-brief — Unified command completion receipt
 
-> Last updated: 2026-06-11
+> Last updated: 2026-06-19
 > Covers source: docs/llm/run-brief-contract.json, docs/llm/run-brief-registry.json, docs/human/run-brief.md, scripts/run-brief.sh, scripts/render-run-brief.py, scripts/lint-run-brief.sh, commands/_fragments/run-brief-finalize.md, commands/_fragments/run-brief-halt-finalize-implement-all.md, commands/_fragments/run-brief-halt-finalize-implement-next.md
 
 ## Overview
@@ -11,7 +11,7 @@ The chat render is a warm "Briefing" format: a glyph-titled heading (`### <glyph
 
 ---
 
-## Chat render format (as of 2026-06-11)
+## Chat render format
 
 `render-run-brief.py --format chat` produces:
 
@@ -48,9 +48,9 @@ Push format (unchanged): `{intent[:80]} · {outcome[:60]} · Next: {next.label}`
 |---------|---------|
 | **Intent** | One-line statement of the user's goal (max 240 chars). Set early via `run-brief.sh init`. Must not be the command name alone. |
 | **Approach** | 1–4 human bullets summarizing the actual solution taken (full profile only). **Orchestrator must author this** via `run-brief.sh set-section --section approach --value/--file` before finalize on full-profile success. `extract_approach_bullets` scraping is the empty-only fallback. No file paths in bullets. |
-| **Decisions** | User/orchestrator choices (`question_id`, `chosen`, optional `why`, `source`). May be empty. Aggregated from `events.jsonl` at finalize if still empty. `why` is surfaced in chat. |
+| **Decisions** | User/orchestrator choices (`question_id`, `chosen`, optional `why`, `source`). May be empty. Aggregated from `events.jsonl` at finalize if still empty. `why` is surfaced in chat. `source` enum: `event` or `artifact`. |
 | **Outcome** | What actually happened (max 400 chars): shipped, halted reason, audit summary, etc. |
-| **Next** | Suggested follow-up: `{ "label": "...", "command": "/z-..." \| null }`. |
+| **Next** | Suggested follow-up: `{ "label": "...", "command": "/z-..." | null }`. |
 
 Optional `sources` object records which artifact or event fed each section (for debugging and tooling).
 
@@ -108,7 +108,9 @@ Secondary commands may be added post-v1 by extending the registry JSON.
 | `docs/llm/run-brief-registry.json` | Command → profile, hooks, artifact paths |
 | `scripts/run-brief.sh` | init / set-section / append-decision / finalize |
 | `scripts/render-run-brief.py` | chat / push / json render; `--require` validation gate; `--self-test` golden fixture checks |
-| `scripts/lint-run-brief.sh` | Schema + registry + fixture self-test |
+| `scripts/render-cost-summary.py` | Reads `events.jsonl`, produces cost summary Markdown text passed via `--cost-summary-text` to `render-run-brief.py`. Non-fatal if absent. |
+| `scripts/notify-discord.sh` | Posts Discord webhook embed (title + push-format body). Reads webhook URL from `notify.discord_webhook_url` config. 3-second timeout; non-fatal on failure. |
+| `scripts/lint-run-brief.sh` | Schema + registry + renderer self-test + `_test_finalize_preserves_decisions` integration test (default mode). `--registry-only` greps command files for finalize fragment include. |
 | `commands/_fragments/run-brief-finalize.md` | Shared finalize block inlined into registry commands via `/z-export` |
 | `commands/_fragments/run-brief-halt-finalize-implement-all.md` | Halt-path preamble for `/z-implement-all`; sets outcome + next then includes finalize fragment |
 | `commands/_fragments/run-brief-halt-finalize-implement-next.md` | Halt-path preamble for `/z-implement-next`; same pattern |
@@ -127,6 +129,8 @@ Set by `run-brief.sh finalize` (often via `run-status.sh classify` when not pres
 
 ## Finalize sequence (full-profile success path)
 
+Steps follow the canonical ordering in `commands/_fragments/run-brief-finalize.md`.
+
 1. **Aggregate decisions** — if `decisions` is still empty, parse `events.jsonl` via `aggregate_decisions()` and append via `run-brief.sh append-decision`.
 2. **Author the approach (required)** — before calling `run-brief.sh finalize`, the orchestrator MUST set a crisp high-level "How" describing the actual solution:
    ```bash
@@ -136,10 +140,11 @@ Set by `run-brief.sh finalize` (often via `run-status.sh classify` when not pres
    ```
    The `extract_approach_bullets` scrape (which greps bullet lines from the artifact) is the **empty-only fallback** and runs only when `approach` is still unset at finalize time. Authoring always wins.
 3. **Finalize** — `run-brief.sh finalize --run "$RUN"`: classifies status, validates JSON Schema, emits `run_brief_end`.
-4. **Cost summary** — optional; rendered by `render-cost-summary.py` from `events.jsonl`.
-5. **Chat render** — `python3 render-run-brief.py --run-dir "$CURRENT_ARCHIVE_DIR" --format chat`; printed to user.
-6. **Push/Discord** — when notify policy allows.
-7. **Hard gate** — `render-run-brief.py --require` before `deregister`; on failure set `FINALIZE_STATUS=aborted`.
+3.5. **Cost summary** — non-fatal; `render-cost-summary.py` reads `events.jsonl`; result passed as `--cost-summary-text` to the chat render in step 4.
+4. **Chat render** — `python3 render-run-brief.py --run-dir "$CURRENT_ARCHIVE_DIR" --format chat [--cost-summary-text ...]`; printed to user.
+5. **Push render** — when notify policy (`should-notify --event phase_end`) allows; single-line format.
+5.5. **Discord render** — when notify policy (`should-notify --event phase_end --channel discord`) and `notify.discord_webhook_url` config allow; uses `notify-discord.sh`; non-fatal.
+6. **Hard gate** — `render-run-brief.py --require` before `deregister`; on failure set `FINALIZE_STATUS=aborted`.
 
 Skip authoring on halt/abort paths — the lite downgrade handles those cases.
 
@@ -156,17 +161,17 @@ Set `Z_HARNESS_RUN_BRIEF_DEBUG=1` to additionally write a human-readable `run-br
 ### Automated (CI / pre-merge)
 
 ```bash
-bash scripts/lint-run-brief.sh              # schema + registry + fixture self-test
+bash scripts/lint-run-brief.sh              # schema + registry + renderer self-test + finalize integration test
 bash scripts/lint-run-brief.sh --registry-only  # 11 commands include finalize fragment
 python3 scripts/render-run-brief.py --self-test
 ```
 
-After changing command bodies, re-export and re-lint:
+After changing command bodies, re-export via `/z-export` (or driver modules directly) and re-lint:
 
 ```bash
-python3 scripts/export-cursor.py
-python3 scripts/export-codex.py
-python3 scripts/export-agy.py
+python3 -m runtime.drivers.cursor.export
+python3 -m runtime.drivers.codex.export
+python3 -m runtime.drivers.antigravity.export
 bash scripts/lint-run-brief.sh --registry-only
 ```
 
@@ -198,3 +203,4 @@ For each row: run the command to a **terminal** exit. Confirm `archive/$RUN/run-
 4. `/z-stats` is not auto-invoked at command end.
 5. Export inlines the shared finalize fragment so all IDE surfaces stay in sync.
 6. Full-profile success paths require the orchestrator to author `approach` via `run-brief.sh set-section` before finalize; `extract_approach_bullets` is the empty-only fallback, not the primary path.
+7. Cost summary (step 3.5) and Discord render (step 5.5) are both non-fatal — failures do not abort the run or block the hard gate.

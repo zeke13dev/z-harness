@@ -1,13 +1,13 @@
 # review-agent
 
-> Last updated: 2026-06-03
+> Last updated: 2026-06-19
 > Covers source: agents/review-agent.md, scripts/run-memory-review.sh
 
 ## Overview
 
 `review-agent` is a Haiku-tier subagent defined in `agents/review-agent.md`. It fires automatically at the end of `/z-implement-all` (Phase 9), `/z-review-all` (Phase 7), and `/z-debug` (Phase 10, shipped branch only). It reads the completed run's `events.jsonl`, cumulative diff, and `SPEC.md` (or `DEBUG.md` for debug runs), and proposes 0-3 candidate memories worth persisting to the docs knowledge base. The Phase 9 wiring lives in `commands/z-implement-all.md`; Phase 7 in `commands/z-review-all.md`; Phase 10 in `commands/z-debug.md`.
 
-The agent reasons but does not write. It returns a single fenced JSON block containing candidate objects. The orchestrator owns all writes: it parses the candidates, surfaces them via `AskUserQuestion` prompts, and routes accepted candidates through `/z-suggest-memory`. Before the agent is dispatched, `scripts/run-memory-review.sh` performs skip-condition checks and assembles artifact paths — the script is always called first, and on a non-skip result the orchestrator constructs the agent prompt from its output. When `Z_HARNESS_AXIOM_EXTRACT` is not `"0"` (the default), the script also emits an `AXIOM_READY <diff_path>` line so `z-debug` Phase 10 can dispatch the axiom-extractor in parallel with the review-agent.
+The agent reasons but does not write. It returns a single fenced JSON block containing candidate objects. The orchestrator owns all writes: it parses the candidates, surfaces them via `AskUserQuestion` prompts, and routes accepted candidates through `/z-suggest-memory`. Before the agent is dispatched, `scripts/run-memory-review.sh` performs skip-condition checks and assembles artifact paths — the script is always called first, and on a non-skip result the orchestrator constructs the agent prompt from its output. When `axioms.auto_extract_post_run` is not `"false"` (default on), the script also emits an `AXIOM_READY <diff_path>` line so `z-debug` Phase 10 can dispatch the axiom-extractor in parallel with the review-agent.
 
 ## Key entry points
 
@@ -18,11 +18,12 @@ The agent reasons but does not write. It returns a single fenced JSON block cont
 - `agents/review-agent.md:46` — `## Output contract` — fenced JSON schema for candidate objects; any other output is malformed
 - `scripts/run-memory-review.sh:1` — `run-memory-review` — skip-condition guard and artifact-prep helper; called by all three parent commands before any agent dispatch
 - `scripts/run-memory-review.sh:135` — `debug_md_missing` skip condition — fires when `parent_command: debug` and `DEBUG.md` is absent or unreadable
-- `scripts/run-memory-review.sh:173` — `AXIOM_READY` emission — appends `AXIOM_READY <diff_path>` to stdout when `Z_HARNESS_AXIOM_EXTRACT != "0"`
+- `scripts/run-memory-review.sh:173` — `AXIOM_READY` emission — appends `AXIOM_READY <diff_path>` to stdout when `axioms.auto_extract_post_run != "false"` (reads via `config.py get`)
 - `commands/z-implement-all.md` — `Phase 9` — orchestrator Phase 9: helper call, skip handling, agent dispatch, parse, accept/skip loop
 - `commands/z-review-all.md` — `Phase 7` — orchestrator Phase 7: same as Phase 9 but without `all_tasks_skipped` skip condition
 - `commands/z-debug.md` — `Phase 10 memory review` — orchestrator Phase 10 (shipped branch only): `debug_md_path` as primary artifact; abandoned sessions excluded; optional parallel axiom-extractor dispatch on `AXIOM_READY`
 <!-- AUTO-END: entry-points -->
+
 ## How it interacts with others
 
 - `z-implement-all` — Phase 9 calls `run-memory-review.sh`, then dispatches `review-agent`, then runs the accept/skip loop
@@ -51,13 +52,15 @@ Before dispatching the agent, `scripts/run-memory-review.sh` performs a skip-con
 
 ## AXIOM_READY signal
 
-When `Z_HARNESS_AXIOM_EXTRACT` is unset or any value other than `"0"` (meaning it is on by default), `run-memory-review.sh` appends a line of the form:
+When the config key `axioms.auto_extract_post_run` is not `"false"` (default on), `run-memory-review.sh` reads the value via `python3 scripts/config.py get axioms.auto_extract_post_run` and appends a line of the form:
 
 ```
 AXIOM_READY <abs_path_to_cumulative.diff>
 ```
 
 Only `z-debug` Phase 10 (d2 sub-step) currently acts on this line. When present, it dispatches the `axiom-extractor` subagent in parallel with `review-agent`, passing the diff path. The axiom-extractor proposes up to 5 candidate axioms as a fenced JSON array — nothing is written automatically, and the candidates surface for later `/z-axiom-approve` review. `z-implement-all` and `z-review-all` do not currently handle `AXIOM_READY`.
+
+To suppress `AXIOM_READY`, set `axioms.auto_extract_post_run = "false"` in your z-harness config (via `/z-setup` or `config.toml`). The old env-var knob `Z_HARNESS_AXIOM_EXTRACT=0` is no longer operative.
 
 ## Artifact primacy by parent_command
 
@@ -134,9 +137,9 @@ One JSON object per line. This file is ephemeral — it lives with the run archi
 - No per-call wall-clock timeout on the Agent dispatch in v1; user ctrl-c is the only escape if the Haiku call hangs. The primary-deliverable push-notify has already fired at that point.
 - Candidate tags must come from `docs/llm/TAGS.txt` unless a free-form tag is explicitly justified; the agent is instructed to prefer controlled tags.
 - The agent receives `index_path` (path to `docs/llm/INDEX.json`) and is expected to prefer extending an existing slug over coining a new one.
-- `commands/z-implement-all.md`, `commands/z-review-all.md`, and `commands/z-debug.md` are the canonical orchestrator definitions; `commands/` equivalents may be stale.
+- `commands/z-implement-all.md`, `commands/z-review-all.md`, and `commands/z-debug.md` are the canonical orchestrator definitions.
 - `review_agent_failed` and `review_agent_malformed` do NOT emit `memory_review_terminal` — they are orthogonal failure classes, not terminal states of the review pass.
-- `AXIOM_READY` is suppressed by setting `Z_HARNESS_AXIOM_EXTRACT=0`; any other value (including unset or `"false"`) enables it.
+- `AXIOM_READY` is controlled by `axioms.auto_extract_post_run` config key (read via `config.py get`); value `"false"` suppresses it. The legacy `Z_HARNESS_AXIOM_EXTRACT` env var is no longer used.
 
 ## Slug naming anti-patterns
 

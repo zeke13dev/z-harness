@@ -1,6 +1,6 @@
 {
   "concept": "ideator-clusterer",
-  "last_updated": "2026-06-18",
+  "last_updated": "2026-06-19",
   "covers_spec": "brainstorm-conversational",
   "source_files": [
     "agents/ideator-clusterer.md"
@@ -12,7 +12,7 @@
       "line": 1,
       "symbol": "ideator-clusterer",
       "kind": "module",
-      "summary": "Haiku clustering agent for wide /z-brainstorm runs (WIDE_N > 3). Reads N peer ideator framing blocks from BRAINSTORM.md, clusters them into K distinct directions by core hypothesis / approach axis, and returns: K cluster labels, each cluster's member ideators + representative framing, effective-diversity report (N→K, which framings collapsed), cross-cluster consensus. Read-only — does NOT write files."
+      "summary": "Haiku clustering agent for wide /z-brainstorm runs (WIDE_N > 3). Reads N peer ideator framing blocks from BRAINSTORM.md, clusters them into K distinct directions by core hypothesis / approach axis, returns: K cluster labels + members + representative framing (verbatim), effective-diversity report (N→K, which collapsed), cross-cluster consensus. Read-only; returns text — does NOT write files."
     },
     {
       "file": "agents/ideator-clusterer.md",
@@ -36,7 +36,9 @@
     "K=1 is valid (all framings share one axis = strong consensus signal); do not artificially inflate K",
     "Cross-cluster consensus section is mandatory even when empty ('None detected.')",
     "Clusterer never picks or recommends a framing — that is the orchestrator's ranked-briefing responsibility",
-    "Distinct from scope-reconciler-brainstorm: clusterer operates on the divergence axis (N peer framings, same topic); reconciler operates on chunk axis (HEAVY mode, sub-topics). Do not reuse one for the other role."
+    "Distinct from scope-reconciler-brainstorm: clusterer operates on the divergence axis (N peer framings, same topic); reconciler operates on chunk axis (HEAVY mode, sub-topics). Do not reuse one for the other role.",
+    "Always runs at Haiku regardless of brainstorm.wide_overflow_model config knob",
+    "Total wide-mode ideator cap: 9 (1 base wave of 3 + max 3 overflow waves of 2 each); WIDE_N > 9 silently capped"
   ],
   "gotchas": [
     "Caller integration: on clusterer failure or K=0, /z-brainstorm falls back to presenting N raw framings in the Phase 3 ranked briefing — never halts",
@@ -44,7 +46,9 @@
     "Two framings that make genuinely conflicting architectural bets stay separate (do not over-merge)",
     "OVERFLOW_MODEL applies only to general-purpose (Claude) overflow ideator slots; the clusterer itself always runs at Haiku regardless of overflow model setting",
     "Caller passes brainstorm_path (abs path to BRAINSTORM.md), ideator_ids (JSON array in wave order), and n (total ideator count)",
-    "Wide mode: Phase 3 briefing uses CLUSTER_BLOCKS (K cluster directions) not N raw framings when CLUSTER_K > 0"
+    "Wide mode: Phase 3 briefing uses CLUSTER_BLOCKS (K cluster directions) not N raw framings when CLUSTER_K > 0",
+    "Non-supporting drivers (cursor, codex flat) skip clusterer Agent() call entirely per RUNTIME-GATE comment in z-brainstorm.md; fall back to N raw framings",
+    "Phase 2c-5 dispatches clusterer only after all overflow waves complete and BRAINSTORM.md contains all wave framing blocks"
   ],
   "memories": []
 }

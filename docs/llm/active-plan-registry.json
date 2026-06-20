@@ -1,6 +1,6 @@
 {
   "concept": "active-plan-registry",
-  "last_updated": "2026-06-05",
+  "last_updated": "2026-06-19",
   "covers_spec": "cross-session-plan-coord",
   "source_file": [
     "scripts/active-plan-registry.py",
@@ -17,126 +17,133 @@
   "entry_points": [
     {
       "file": "scripts/active-plan-registry.py",
-      "line": 547,
+      "line": 565,
       "symbol": "cmd_session_id",
       "kind": "fn",
       "summary": "session-id subcommand: prints stable session id. Returns $Z_HARNESS_SESSION_ID if set; else derives <ppid>-<start_epoch> (Linux /proc; macOS pure-Python fallback). Always exits 0."
     },
     {
       "file": "scripts/active-plan-registry.py",
-      "line": 566,
+      "line": 584,
       "symbol": "cmd_register",
       "kind": "fn",
       "summary": "register subcommand: creates/overwrites <active>/<run-id>.json atomically via tmpfile+os.replace. Validates run_id safe basename. Idempotent. Emits plan_registered. Returns 0 on success, 3 on failure (LOUD)."
     },
     {
       "file": "scripts/active-plan-registry.py",
-      "line": 613,
+      "line": 631,
       "symbol": "cmd_heartbeat",
       "kind": "fn",
       "summary": "heartbeat subcommand: updates last_heartbeat/phase/current_task/status in own record. If record absent (reaped or never registered), emits registry_error(reason:missing_record) and returns 0 — does NOT fabricate zombie record. NON-FATAL always returns 0. There is no --waiting-on CLI flag; the paused-beat combined atomic write of status=paused + waiting_on is performed internally by _set_waiting_on() inside wait-for's poll loop."
     },
     {
       "file": "scripts/active-plan-registry.py",
-      "line": 669,
+      "line": 687,
       "symbol": "cmd_update_scope",
       "kind": "fn",
       "summary": "update-scope subcommand: merges scope array [{path, confidence, reason}] into own record. Paths stored as-is (caller normalizes). NON-FATAL — always returns 0, self-logs registry_error on failure."
     },
     {
       "file": "scripts/active-plan-registry.py",
-      "line": 813,
-      "symbol": "cmd_claim",
-      "kind": "fn",
-      "summary": "claim subcommand: stage-then-check-after-claim per-file lease acquisition. Stages paths in memory, re-reads all peer records (F2), applies lexicographic run_id tiebreak (lower run_id = senior wins any contended path). Persists only the WON set into held_paths — loser record MUST NOT contain the conceded path. Stdout: JSON {claimed:[...], conceded:[{path, holder_run_id}]}. Emits lease_claimed. Exit 0 always (advisory). Z_HARNESS_REGISTRY_ENABLED=0 → silent no-op."
-    },
-    {
-      "file": "scripts/active-plan-registry.py",
-      "line": 992,
-      "symbol": "cmd_release",
-      "kind": "fn",
-      "summary": "release subcommand: remove named paths (--paths p1,p2) or all paths (--all) from own held_paths. Best-effort, always exits 0. Emits lease_released {run_id, paths}. Z_HARNESS_REGISTRY_ENABLED=0 → silent no-op."
-    },
-    {
-      "file": "scripts/active-plan-registry.py",
-      "line": 1101,
-      "symbol": "cmd_wait_for",
-      "kind": "fn",
-      "summary": "wait-for subcommand: park current run behind senior peer(s) until their records clear or budget expires. Drops non-senior or absent targets immediately. Poll loop (Z_HARNESS_WAIT_POLL_SECS): single atomic write status=paused+waiting_on (via _set_waiting_on, preserving held_paths), runs reap, rechecks targets. Emits wait_started, wait_cleared (exit 0), wait_timeout (exit 10), wait_interrupted (exit 130). waiting_on cleared on EVERY exit path via finally — no paused zombies."
-    },
-    {
-      "file": "scripts/active-plan-registry.py",
-      "line": 1513,
-      "symbol": "cmd_overlaps",
-      "kind": "fn",
-      "summary": "overlaps subcommand: path intersection of own scope vs all other live records. JSON payload includes a 'peers' array (per-peer scope overlaps) and a top-level 'held_conflict' flat array ({path, peer_run_id, holder_seniority}) for held-path intersections across all live lease-capable peers. held_conflict is absent when no held-path conflicts exist — it is NOT nested inside peer entries. Exit codes: 0 none; 10 advisory; 20 blocking (strict mode AND explicit×explicit exact path match with live peer). Same session_id → skipped."
-    },
-    {
-      "file": "scripts/active-plan-registry.py",
-      "line": 720,
+      "line": 738,
       "symbol": "cmd_list",
       "kind": "fn",
       "summary": "list subcommand: returns all records (live and stale). --json flag for machine-readable output."
     },
     {
       "file": "scripts/active-plan-registry.py",
-      "line": 764,
+      "line": 782,
       "symbol": "cmd_deregister",
       "kind": "fn",
       "summary": "deregister subcommand: atomic unlink of <active>/<run-id>.json. FileNotFoundError is benign (no registry_error). Genuine OSError self-logs registry_error. Emits plan_deregistered. NON-FATAL always returns 0."
     },
     {
       "file": "scripts/active-plan-registry.py",
-      "line": 1754,
-      "symbol": "cmd_reap",
+      "line": 831,
+      "symbol": "cmd_claim",
       "kind": "fn",
-      "summary": "reap subcommand: (a) host=localhost AND pid dead → delete immediately; live-local-pid carve-out: host=localhost AND pid confirmed alive AND past 2× stale → mark status:stale, do NOT delete (deferred until pid dies); (b) past 2× stale AND no live-local-pid → delete (remote/unknown-host, missing/non-int pid); (c) remote/unknown host past 1× → mark status:stale only. Requires integer pid + os.kill(pid,0) check. NON-FATAL overall. Emits plan_reaped / plan_marked_stale."
+      "summary": "claim subcommand: stage-then-check-after-claim per-file lease acquisition. Stages paths in memory, re-reads all peer records (F2), applies lexicographic run_id tiebreak (lower run_id = senior wins any contended path). Persists only the WON set into held_paths — loser record MUST NOT contain the conceded path. Stdout: JSON {claimed:[...], conceded:[{path, holder_run_id}]}. Emits lease_claimed. Exit 0 always (advisory). Z_HARNESS_REGISTRY_ENABLED=0 → silent no-op."
     },
     {
       "file": "scripts/active-plan-registry.py",
-      "line": 337,
+      "line": 1010,
+      "symbol": "cmd_release",
+      "kind": "fn",
+      "summary": "release subcommand: remove named paths (--paths p1,p2) or all paths (--all) from own held_paths. Best-effort, always exits 0. Emits lease_released {run_id, paths}. Z_HARNESS_REGISTRY_ENABLED=0 → silent no-op."
+    },
+    {
+      "file": "scripts/active-plan-registry.py",
+      "line": 1119,
+      "symbol": "cmd_wait_for",
+      "kind": "fn",
+      "summary": "wait-for subcommand: park current run behind senior peer(s) until their records clear or budget expires. Drops non-senior or absent targets immediately. Poll loop (Z_HARNESS_WAIT_POLL_SECS): single atomic write status=paused+waiting_on (via _set_waiting_on, preserving held_paths), runs reap inline via _reap_inline(), rechecks targets. Emits wait_started, wait_cleared (exit 0), wait_timeout (exit 10), wait_interrupted (exit 130). waiting_on cleared on EVERY exit path via finally — no paused zombies."
+    },
+    {
+      "file": "scripts/active-plan-registry.py",
+      "line": 1533,
+      "symbol": "cmd_overlaps",
+      "kind": "fn",
+      "summary": "overlaps subcommand: path intersection of own scope vs all other live records. JSON payload includes a 'peers' array (per-peer scope overlaps) and a top-level 'held_conflict' flat array ({path, peer_run_id, holder_seniority}) for held-path intersections across all live lease-capable peers. held_conflict is absent when no held-path conflicts exist — it is NOT nested inside peer entries. Exit codes: 0 none; 10 advisory; 20 blocking (strict mode AND explicit×explicit exact path match with live peer). Same session_id → skipped."
+    },
+    {
+      "file": "scripts/active-plan-registry.py",
+      "line": 1774,
+      "symbol": "cmd_reap",
+      "kind": "fn",
+      "summary": "reap subcommand: (a) host=localhost AND pid dead → delete immediately; live-local-pid carve-out: host=localhost AND pid confirmed alive AND past 2× stale → mark status:stale, do NOT delete (deferred until pid dies); (b) past 2× stale margin AND no live-local-pid → delete (remote/unknown-host, missing/non-int pid); (c) remote/unknown host past 1× → mark status:stale only. NON-FATAL overall. Emits plan_reaped / plan_marked_stale. _reap_inline() (line 1423) duplicates the logic for use inside wait-for's poll loop without re-resolving active_plans_dir."
+    },
+    {
+      "file": "scripts/active-plan-registry.py",
+      "line": 355,
       "symbol": "_is_lease_capable",
       "kind": "fn",
       "summary": "Helper: returns True iff record has schema_version >= 2 AND held_paths field present. Non-numeric schema_version → False (lease-incapable). Missing held_paths NEVER interpreted as 'holds nothing'. v1 records contribute to soft scope overlap only, never to held-path waiting."
     },
     {
       "file": "scripts/active-plan-registry.py",
-      "line": 358,
+      "line": 376,
       "symbol": "_is_senior",
       "kind": "fn",
       "summary": "Helper: returns True iff peer_run_id < my_run_id (lexicographic). Canonical seniority predicate — started_at is display-only and MUST NOT be used for ordering. Non-str argument → False."
     },
     {
       "file": "scripts/active-plan-registry.py",
-      "line": 381,
+      "line": 399,
       "symbol": "_set_waiting_on",
       "kind": "fn",
-      "summary": "Helper: atomically write status + waiting_on (and optionally status field) in a single tmpfile+os.replace, preserving held_paths and refreshing last_heartbeat. Called inside wait-for poll loop to guarantee no window where status=paused but waiting_on is stale (MINOR-1). Empty list clears waiting_on."
+      "summary": "Helper: atomically write status + waiting_on in a single tmpfile+os.replace, preserving held_paths and refreshing last_heartbeat. Called inside wait-for poll loop to guarantee no window where status=paused but waiting_on is stale (MINOR-1). Empty list clears waiting_on."
     },
     {
       "file": "scripts/active-plan-registry.py",
-      "line": 433,
+      "line": 451,
       "symbol": "_build_record",
       "kind": "fn",
       "summary": "Helper: builds a fresh schema-v2 record dict. schema_version=2, includes held_paths:[] and waiting_on:[] fields. v1 records (pre-lease) lack these fields and are treated as lease-incapable by _is_lease_capable."
+    },
+    {
+      "file": "scripts/active-plan-registry.py",
+      "line": 1423,
+      "symbol": "_reap_inline",
+      "kind": "fn",
+      "summary": "Helper: same reap logic as cmd_reap but called inside wait-for's poll loop. Takes an already-resolved active_dir and stale_threshold to avoid a redundant plan-path.sh call on every poll iteration."
     },
     {
       "file": "scripts/plan-path.sh",
       "line": 178,
       "symbol": "z_harness_base",
       "kind": "fn",
-      "summary": "Five-tier base resolution with anchor enforcement. Tier 1: Z_HARNESS_BASE_DIR (bypass anchor). Tiers 2-4 active only when Z_HARNESS_EXTERNAL_DEFAULT=1 (default). Tier 5: pwd/z-harness. Writes/validates <git-common-dir>/.z-harness-base anchor JSON. Emits base_resolved once per process."
+      "summary": "Five-tier base resolution with anchor enforcement. Tier 1: Z_HARNESS_BASE_DIR (bypass anchor, TRUE ESCAPE HATCH). Tiers 2-4 active only when Z_HARNESS_EXTERNAL_DEFAULT=1 (default post Phase-D flip). Tier 5: pwd/z-harness. Writes/validates <git-common-dir>/.z-harness-base anchor JSON. Emits base_resolved once per process via sentinel-guarded _z_harness_emit_base_resolved()."
     },
     {
       "file": "scripts/plan-path.sh",
       "line": 9,
       "symbol": "z_harness_repo_id",
       "kind": "fn",
-      "summary": "Stable per-repo safe basename: <repo-basename>-<8hex> where 8hex=sha256(realpath(git-common-dir))[0:8]. All worktrees of one repo produce the same id."
+      "summary": "Stable per-repo safe basename: <repo-basename>-<8hex> where 8hex=sha256(realpath(git-common-dir))[0:8]. All worktrees of one repo produce the same id. Falls back to sha256(realpath(pwd)) when not in a git repo."
     },
     {
       "file": "scripts/plan-path.sh",
-      "line": 336,
+      "line": 337,
       "symbol": "active_plans_dir",
       "kind": "fn",
       "summary": "Returns <base>/active-plans — the registry home. Never inline z-harness/active-plans."
@@ -144,6 +151,13 @@
     {
       "file": "scripts/plan-path.sh",
       "line": 346,
+      "symbol": "claims_dir",
+      "kind": "fn",
+      "summary": "Returns <base>/active-plans/claims — directory for per-slug claim lock files (plan-claim hard mutex, orthogonal to this lockless registry)."
+    },
+    {
+      "file": "scripts/plan-path.sh",
+      "line": 355,
       "symbol": "followups_dir",
       "kind": "fn",
       "summary": "Returns <base>/followups — the followup-sink root. Resolves dynamically so in-flight flock fds remain stable if migration runs later."
@@ -162,7 +176,8 @@
   ],
   "consumed_by": [
     "commands",
-    "agents"
+    "agents",
+    "hermes-orchestration"
   ],
   "invariants": [
     "Lockless registry is safe ONLY because overlap is advisory — no code may make overlap a hard gate without replacing lockless delete with compare-and-delete or a registry lock.",
@@ -192,13 +207,14 @@
     "held_conflict in overlaps output is a TOP-LEVEL flat array, NOT nested inside each peer entry. It is absent (not present as empty array) when no held-path conflicts exist.",
     "Two distinct wait budgets exist — Z_HARNESS_AUTO_WAIT_BUDGET_SECS (300s, auto-park for unattended runs) and Z_HARNESS_WAIT_TIMEOUT_SECS (1800s, explicit interactive wait). They are NOT the same knob. On exit 10 (timeout): waiting_on is cleared, status=running restored, LOUD wait_timeout emitted. Never silently proceed on exit 10.",
     "Z_HARNESS_WAIT_REQUIRE_MERGE=1 is reserved/deferred — the branch-ancestor cleared logic is NOT wired. Leave at 0. The operative cleared signal is deregister-only.",
-    "run_id ordering is LEXICOGRAPHIC string comparison, NOT chronological by started_at. started_at is display-only. The _is_senior helper is the single authoritative predicate — never use started_at for ordering comparisons."
+    "run_id ordering is LEXICOGRAPHIC string comparison, NOT chronological by started_at. started_at is display-only. The _is_senior helper is the single authoritative predicate — never use started_at for ordering comparisons.",
+    "_reap_inline() is the wait-for-internal reaper. It is NOT the same callsite as cmd_reap (the subcommand). Both share the same deletion/carve-out policy but _reap_inline takes a pre-resolved active_dir to avoid repeated plan-path.sh subprocess calls in tight poll loops."
   ],
   "events": [
     {"name": "plan_registered", "emitted_by": "cmd_register", "description": "Run registered successfully."},
     {"name": "plan_deregistered", "emitted_by": "cmd_deregister", "description": "Run record removed."},
-    {"name": "plan_reaped", "emitted_by": "cmd_reap", "description": "Dead-local-pid record deleted by reaper."},
-    {"name": "plan_marked_stale", "emitted_by": "cmd_reap / cmd_wait_for", "description": "Record marked status:stale (remote/unknown-host at 1x threshold, or live-local-pid at 2x threshold)."},
+    {"name": "plan_reaped", "emitted_by": "cmd_reap / _reap_inline", "description": "Dead-local-pid record deleted by reaper."},
+    {"name": "plan_marked_stale", "emitted_by": "cmd_reap / _reap_inline", "description": "Record marked status:stale (remote/unknown-host at 1x threshold, or live-local-pid at 2x threshold)."},
     {"name": "lease_claimed", "emitted_by": "cmd_claim", "description": "Lease acquired; payload includes claimed paths and any conceded paths with holder_run_id."},
     {"name": "lease_released", "emitted_by": "cmd_release", "description": "Paths removed from held_paths; payload {run_id, paths}."},
     {"name": "wait_started", "emitted_by": "cmd_wait_for", "description": "Entering poll loop behind one or more senior peers."},
@@ -208,9 +224,10 @@
     {"name": "scope_overlap_detected", "emitted_by": "cmd_overlaps", "description": "Path intersection found between own scope and a peer scope."},
     {"name": "active_plan_scan_complete", "emitted_by": "cmd_overlaps", "description": "Overlap scan completed; no advisory or blocking overlap found."},
     {"name": "registry_error", "emitted_by": "multiple", "description": "Non-fatal internal registry error (e.g. missing_record on heartbeat). Always returns 0."},
-    {"name": "base_resolved", "emitted_by": "plan-path.sh z_harness_base", "description": "Base tier resolved and anchor written/validated."},
+    {"name": "base_resolved", "emitted_by": "plan-path.sh z_harness_base", "description": "Base tier resolved and anchor written/validated. Emitted at most once per process via pid-keyed stamp file."},
     {"name": "base_mismatch_detected", "emitted_by": "plan-path.sh z_harness_base", "description": "Anchor path differs from freshly-resolved path — hard fail before any artifact write."},
-    {"name": "coordination_warning", "emitted_by": "commands/z-implement-all.md §5.5 / commands/z-implement-next.md F5 step", "description": "Write-set validation (F5) — an implementer touched an undeclared path that a LIVE peer holds in its held_paths; consumed from overlaps --json held_conflict payload. Review-blocking but advisory; exactly one per colliding (path × peer); zero when uncontended. NOT emitted by active-plan-registry.py itself."}
+    {"name": "coordination_warning", "emitted_by": "commands/z-implement-all.md phase 5.5 / commands/z-implement-next.md F5 step", "description": "Write-set validation (F5) — an implementer touched an undeclared path that a LIVE peer holds in its held_paths; consumed from overlaps --json held_conflict payload. Review-blocking but advisory; exactly one per colliding (path x peer); zero when uncontended. NOT emitted by active-plan-registry.py itself."},
+    {"name": "plan_migrated", "emitted_by": "migrate-plan-layout.sh safe_move / merge_metrics", "description": "Artifact moved (or metrics merged) from in-repo source to external base. Payload: {item, from, to[, mode:append]}."}
   ],
   "config_keys": {
     "note": "All registry and wait/lease knobs are ENV-ONLY — read directly from os.environ at use-site in active-plan-registry.py or plan-path.sh. They are NOT TOML config keys and are NOT emitted by config.py export-env. config.py inspect-all surfaces them under the 'env-only' category for discoverability.",
@@ -224,7 +241,7 @@
     "wait_and_lease": [
       {"key": "Z_HARNESS_AUTO_WAIT", "default": "1", "description": "1 = auto-park behind a senior held-path conflict using wait-for with the auto budget. 0 = restore interactive proceed/wait/abort menu for held conflicts."},
       {"key": "Z_HARNESS_AUTO_WAIT_BUDGET_SECS", "default": "300", "description": "Wall-clock ceiling (seconds) for auto-park mode. On expiry: wait-for exits 10 (LOUD timeout), orchestrator aborts task or prompts user. Distinct from WAIT_TIMEOUT_SECS."},
-      {"key": "Z_HARNESS_WAIT_POLL_SECS", "default": "30", "description": "Seconds between poll iterations inside wait-for. Each iteration beats heartbeat, runs reap, and rechecks targets."},
+      {"key": "Z_HARNESS_WAIT_POLL_SECS", "default": "30", "description": "Seconds between poll iterations inside wait-for. Each iteration beats heartbeat, runs reap inline, and rechecks targets."},
       {"key": "Z_HARNESS_WAIT_TIMEOUT_SECS", "default": "1800", "description": "Hard ceiling (seconds) for an explicit interactive wait (user selected wait in the overlap menu). Distinct from AUTO_WAIT_BUDGET_SECS."},
       {"key": "Z_HARNESS_WAIT_REQUIRE_MERGE", "default": "0", "description": "Reserved/deferred. When 1, a target would be cleared only when its branch is an ancestor of HEAD. Not yet wired. Leave at 0."}
     ]

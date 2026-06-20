@@ -1,6 +1,6 @@
 # Follow-up Sink
 
-> Last updated: 2026-06-02
+> Last updated: 2026-06-19
 > Covers source: scripts/followup_common.py, scripts/sink-add-helpers.py, scripts/followup-reconcile-notion-impl.py, scripts/sink-claim.sh, scripts/sink-lock.sh, scripts/sink-view-reducer.py, scripts/sink-status-set-impl.py, scripts/sink-add.sh, scripts/sink-status-set.sh, scripts/sink-view-rebuild.sh, scripts/sink-compact.sh, scripts/sink-migrate.sh, scripts/followup-reconcile-notion.sh, scripts/validate-followup-schemas.sh, scripts/followup-view-lookup.py, scripts/sink-claim-helpers.py, scripts/sink-compact-impl.py, scripts/sink-auto-close-check.py, scripts/sink-audit-validate.py, scripts/notion-push.py, scripts/parse-followups-block.py, commands/z-followup-list.md, commands/z-followup-status.md, commands/z-followup-confirm.md, commands/z-followup-dismiss.md, commands/z-followup-refresh.md, commands/z-followup-next.md, docs/schemas/followup-entry.schema.json, docs/schemas/audit-evidence.schema.json
 
 ## Overview
@@ -101,6 +101,10 @@ Path: `pages/<id>.lock` under the sink root.
 
 `sink-lock.sh` uses a background daemon model: `acquire` forks a daemon that holds `fcntl.LOCK_EX` for the lifetime of the lock, writes the holder JSON under `.hb.lock`, and signals the parent. The daemon's PID in the JSON is the liveness indicator for stale-takeover checks.
 
+**Daemon identity verification:** before sending SIGTERM during `release` or stale-takeover, `sink-lock.sh` verifies the PID belongs to a genuine lock daemon by checking for the marker string `zero_lock_under_hblock` in the process command line (via `/proc/<pid>/cmdline` on Linux, `ps -o command=` on macOS). This prevents accidentally killing an unrelated process that happened to reuse the PID.
+
+The `read-holder` subcommand provides a programmatic interface to read the current holder JSON without acquiring or releasing the lock — useful for diagnostics and for consumers that need to verify lock identity without touching lock state.
+
 Heartbeat interval: 30 seconds. Stale threshold: 7200 seconds (2 hours). Stale-takeover logs `followup_lock_takeover` and appends a `running → open` recovery event.
 
 **Lock ordering invariant (MANDATORY):** any code path that needs both locks MUST acquire per-entry FIRST, then global. Inverting the order is a deadlock risk. This ordering is UNCHANGED.
@@ -155,6 +159,16 @@ Compaction evicts terminal (done/dismissed) entries from the live journal:
 7. Log `followup_log_compacted` event.
 
 The script MUST be invoked while the global cross-tool lock is held. It does NOT acquire the lock itself (double-acquire would deadlock).
+
+## View lookup helper: followup-view-lookup.py
+
+`scripts/followup-view-lookup.py` is a CLI helper that abstracts view loading for consumers that need to locate entries across both sinks.
+
+Two modes:
+- `--mode=find --id=<entry-id>` — searches project and global views; prints `{"found": bool, "entry": {...}, "sink": "project"|"global"}`. Returns `{"found": false}` on miss or missing view.
+- `--mode=load --sink=project|global` — dumps all entries from the specified view. Stamps `entry["sink"] = sink_label` on any entry that is missing the field. Returns `[]` on missing or invalid view (never errors).
+
+Both modes fail gracefully — they never raise on a missing or malformed view.
 
 ## Notion sync state (T018)
 
@@ -230,22 +244,21 @@ If neither condition passes, the entry stays at `verify` for HITL review.
 
 ## How to invoke /z-followup-next
 
-`/z-followup-next` is the interactive consumer that works through the queue one entry at a time.
+`/z-followup-next` is the interactive consumer that works through the queue one entry at a time. It runs in 10 phases:
 
-1. Nest guard: refuses if `Z_HARNESS_FOLLOWUP_CALLER_DEPTH >= 1`.
-2. Phase 0.1: heuristic global lock probe (5 s timeout) — fast-fail if `/z-implement-*` is actively holding the lock. This is NOT a mutual-exclusion guarantee; it is only a user-friendly early exit.
-3. Phase 0.2: checks project sink for any `status=running` entry. If found, refuses to start (even if the global lock is free).
-4. Scans both sinks, merges into a priority-sorted view (P0 first, then by creation time). Excludes `depth=1` entries.
-5. Presents the top entries for you to select (or exit); `--non-interactive` claims entry [1] automatically.
-6. Checks that the working tree is clean (use `--force-dirty` to override; pre-run diff is captured).
-7. Checks staleness against `file_blob_hashes`/`dir_blob_hashes` and commit distance; prompts if stale.
-8. Claims the entry under lock (`sink-claim.sh` — per-entry first, then global).
-9. Spawns a heartbeat subprocess (every 30 s) with a trap to kill it and release the lock on abnormal exit.
-10. Sets `Z_HARNESS_FOLLOWUP_CALLER_DEPTH=1` and invokes the `recommended_command` via Skill tool.
-11. Unsets `Z_HARNESS_FOLLOWUP_CALLER_DEPTH`. Captures cumulative diff.
-12. Writes status back (`verify` on exit 0, `failed` on non-zero), using the claim ticket for identity verification.
-13. Attempts auto-close if eligible.
-14. Kills heartbeat subprocess, releases per-entry lock.
+1. **Phase 0 — Nest guard:** refuses if `Z_HARNESS_FOLLOWUP_CALLER_DEPTH >= 1`.
+2. **Phase 0.1 — Heuristic lock probe (5 s timeout):** fast-fail if `/z-implement-*` is actively holding the lock. This is a heuristic for user friendliness and is **NOT a mutual-exclusion guarantee** — acquire+release in sequence proves nothing about concurrent access.
+3. **Phase 0.2 — Running-entry check:** refuses if any project sink entry has `status=running`, even if the global lock is currently free.
+4. **Phase 1 — Enumerate:** scans both sinks, merges into priority-sorted view (P0 first, then by creation time); excludes `depth=1` entries.
+5. **Phase 2 — Select:** presents top entries (configurable via `Z_HARNESS_FOLLOWUP_TOP_N`, default 10); `--non-interactive` claims entry [1] automatically.
+6. **Phase 3 — Worktree check:** verifies clean working tree (use `--force-dirty` to override; pre-run diff is captured).
+7. **Phase 4 — Staleness check:** compares `file_blob_hashes`/`dir_blob_hashes` and commit distance; prompts if stale.
+8. **Phase 5 — Claim:** acquires per-entry lock first, then global (`sink-claim.sh`). Spawns heartbeat subprocess after successful claim with trap for cleanup on abnormal exit.
+9. **Phase 6 — Execute:** sets `Z_HARNESS_FOLLOWUP_CALLER_DEPTH=1`, invokes `recommended_command` via Skill tool, then unsets the variable immediately after the Skill call returns.
+10. **Phase 7 — Status writeback:** writes `verify` on exit 0, `failed` on non-zero; uses claim ticket for identity verification.
+11. **Phase 8 — Auto-close attempt:** attempts auto-close if eligible.
+12. **Phase 9 — Cleanup:** kills heartbeat subprocess BEFORE releasing per-entry lock (kill-before-release ordering is required), then disables the EXIT trap.
+13. **Phase 10 — Push-notify:** triggers Notion sync push if configured.
 
 Typical session:
 
@@ -275,6 +288,9 @@ Typical session:
 - **`sink-view-rebuild.sh` exits 4 when the lock is not held.** It verifies lock-held state at startup (JSON content check OR OS flock check). Calling it without the lock causes an exit 4 error.
 - **Project sink root is resolved at call time.** `project_followups_dir()` calls `plan-path.sh followups_dir` on every invocation so the path follows any live base reconfiguration. It is not frozen at process start or module import.
 - **`OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES` is set at module import.** `followup_common.py` sets this env var via `os.environ.setdefault` before any subprocess call. Without it, Python processes forked from a bash parent that initialised CoreFoundation can abort on macOS.
+- **Daemon identity verification is mandatory before SIGTERM.** `sink-lock.sh` checks for the `zero_lock_under_hblock` marker in the process command line before killing a daemon PID. Skipping this check risks killing an unrelated process that reused the PID.
+- **Phase 9 kill-before-release ordering.** `/z-followup-next` kills the heartbeat subprocess BEFORE releasing the per-entry lock. Releasing the lock first could allow another consumer to acquire it while the heartbeat daemon is still alive and writing to `.hb.lock`.
+- **`followup-view-lookup.py` returns `[]` on missing or malformed view files.** It never errors on a bad view; callers must not interpret an empty return as "no entries exist" without also checking that the view file exists.
 
 ## Persistence layout
 
@@ -324,7 +340,7 @@ For v1→v1 (current): no-op. The script verifies lock-held state and exits 0.
 |---|---|
 | `/z-followup-list` | Read-only view of all entries; supports `--status=`, `--sink=`, `--priority=`, `--json`; shows Notion sync column |
 | `/z-followup-status` | Diagnostic counts per status, lock state (flock-probed), oldest open entry, Notion sync pending count, last sync error |
-| `/z-followup-next` | Interactive consumer; select and execute one entry |
+| `/z-followup-next` | Interactive consumer; select and execute one entry (10 phases) |
 | `/z-followup-confirm <id> --via=human` | Approve a `verify`-state entry as done |
 | `/z-followup-confirm <id> --via=audit --evidence=<path>` | Audit-validated completion |
 | `/z-followup-dismiss <id> --reason='...'` | Dismiss an entry from any state |

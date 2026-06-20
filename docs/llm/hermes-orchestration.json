@@ -1,6 +1,6 @@
 {
   "concept": "hermes-orchestration",
-  "last_updated": "2026-06-16",
+  "last_updated": "2026-06-19",
   "covers_spec": "hermes-integration-v1",
   "source_files": [
     "scripts/hermes-execute.py",
@@ -14,6 +14,113 @@
     "docs/human/hermes-integration-v1.md"
   ],
   "confidence": "high",
+  "entry_points": [
+    {
+      "file": "scripts/hermes-execute.py",
+      "line": 180,
+      "symbol": "run_workstream",
+      "kind": "fn",
+      "summary": "Async coroutine: creates worktree, spawns pi session, polls status, handles crash retries and halt relay, acquires merge_lock around merge_workstream. Semaphore held for full spawn→merge lifetime."
+    },
+    {
+      "file": "scripts/hermes-execute.py",
+      "line": 414,
+      "symbol": "partition_level",
+      "kind": "fn",
+      "summary": "Greedy graph-coloring: splits a dependency-level's workstreams into conflict-safe sub-batches. scope_unknown or serialize_all triggers singleton sub-batches (fully serial)."
+    },
+    {
+      "file": "scripts/hermes-execute.py",
+      "line": 484,
+      "symbol": "compute_ready_level",
+      "kind": "fn",
+      "summary": "Returns workstreams whose entire depends_on set has reached terminal 'done'. Sole scheduling gate (INV-2)."
+    },
+    {
+      "file": "scripts/hermes-execute.py",
+      "line": 505,
+      "symbol": "run_single_plan",
+      "kind": "fn",
+      "summary": "Async: reads workstreams.json, applies crash recovery, runs compute_ready_level→partition_level→asyncio.gather loop. Accepts merge_lock from run_cross_plan for cross-plan serialization."
+    },
+    {
+      "file": "scripts/hermes-execute.py",
+      "line": 711,
+      "symbol": "run_cross_plan",
+      "kind": "fn",
+      "summary": "Multi-slug entry point. Calls build_plan_conflict_graph, acquire_plan_locks (sorted ascending), schedule_batches, asyncio.gather bounded by plan_sem. Creates shared asyncio.Lock threaded into all run_single_plan calls."
+    },
+    {
+      "file": "scripts/hermes/cross_plan.py",
+      "line": 157,
+      "symbol": "build_plan_conflict_graph",
+      "kind": "fn",
+      "summary": "Builds plan-level conflict adjacency map: scope intersection or either plan scope_unknown/low-confidence/missing → conflict. Fail-safe: unknown scope always conflicts."
+    },
+    {
+      "file": "scripts/hermes/cross_plan.py",
+      "line": 240,
+      "symbol": "acquire_plan_locks",
+      "kind": "fn",
+      "summary": "Acquires plan-claim.sh locks in sorted ascending slug order (INV-6: deadlock-free). Releases all on any failure. Returns (ok, held_slugs)."
+    },
+    {
+      "file": "scripts/hermes/cross_plan.py",
+      "line": 314,
+      "symbol": "schedule_batches",
+      "kind": "fn",
+      "summary": "Greedy batch coloring over plan conflict graph: conflict-free plans grouped in same batch, conflicting plans serialized across batches."
+    },
+    {
+      "file": "scripts/generate-workstreams.py",
+      "line": 384,
+      "symbol": "assign_ws_depths",
+      "kind": "fn",
+      "summary": "Computes longest-path depth for each workstream over depends_on DAG. Sets parallel_group='level-{depth}'. Same-depth workstreams are mutually independent (Rule 7 enforced by validate_workstreams)."
+    },
+    {
+      "file": "scripts/generate-workstreams.py",
+      "line": 475,
+      "symbol": "parse_task_files",
+      "kind": "fn",
+      "summary": "Parses **Files:** lines per task block in TASKS.md. If any task block lacks parseable **Files:** line, scope_unknown=True → forces full serialization (INV-4)."
+    },
+    {
+      "file": "scripts/hermes/merge.py",
+      "line": 28,
+      "symbol": "merge_workstream",
+      "kind": "fn",
+      "summary": "Synchronous git merge --no-ff of hermes/<slug>/<ws_id> into base. Called under in-process asyncio.Lock — never concurrent across workstreams or plans."
+    },
+    {
+      "file": "scripts/hermes/config.py",
+      "line": 90,
+      "symbol": "load_config",
+      "kind": "fn",
+      "summary": "Reads hermes-config.yaml (repo root then ~/.config/hermes/config.yaml) into HermesConfig. Concurrency/retry/timeout are file-only; HERMES_DISCORD_TOKEN/HERMES_DISCORD_USER_ID are the only env overrides."
+    },
+    {
+      "file": "scripts/hermes/schema.py",
+      "line": 54,
+      "symbol": "parse_workstreams_json",
+      "kind": "fn",
+      "summary": "Parses workstreams.json into typed WorkstreamsManifest dataclass. Consumed by hermes-execute.py at plan start."
+    },
+    {
+      "file": "scripts/hermes/worktree.py",
+      "line": 58,
+      "symbol": "create_worktree",
+      "kind": "fn",
+      "summary": "Creates git worktree at ../hermes-<slug>-<ws_id> on branch hermes/<slug>/<ws_id>. Handles crash-recovery path (branch exists, worktree missing)."
+    },
+    {
+      "file": "scripts/hermes/session.py",
+      "line": 26,
+      "symbol": "spawn_session",
+      "kind": "fn",
+      "summary": "Runs pi z-implement-all --tasks=<path> as detached subprocess (start_new_session=True). Returns PID."
+    }
+  ],
   "depends_on": [
     "active-plan-registry",
     "plan-claim",
@@ -22,127 +129,26 @@
   "consumed_by": [
     "commands"
   ],
-  "summary": "Hermes parallelism layer — DORMANT (gated OFF by default as of v1.4, 2026-06-16). All entry points inside /z-plan, /z-implement-all, /z-plan-split are wrapped in 'if workflow.hermes_enabled'; default=false so none fire. To revive: set workflow.hermes_enabled=true in .z-harness/config.toml. scripts/hermes/ files are intentionally kept (not deleted) to prevent bit-rot — deferred cleanup. Concurrency/retry/timeout knobs moved from removed HERMES_* env vars to workflow.* file config (T017). When enabled: within-plan DAG concurrency via generate-workstreams.py (assign_ws_depths → parallel_group=level-{depth}); hermes-execute.py runs compute_ready_level → partition_level (greedy graph-coloring) → asyncio.gather bounded by asyncio.Semaphore(max_parallel_workstreams). Cross-plan: run_cross_plan(--slugs/--plan-set) calls build_plan_conflict_graph, acquire_plan_locks (sorted ascending slug, deadlock-free INV-6), schedule_batches. Single asyncio.Lock serializes merges. Default cap=1 (INV-5). Non-file shared state (DBs, ports) NOT protected — use serialize_all escape hatch.",
-  "entry_points": [
-    {
-      "file": "scripts/hermes-execute.py",
-      "line": 180,
-      "symbol": "run_workstream",
-      "kind": "fn",
-      "summary": "Async coroutine: creates worktree, spawns pi session, polls status, merges. Acquires merge_lock (asyncio.Lock) around merge_workstream call. Semaphore held for full lifetime."
-    },
-    {
-      "file": "scripts/hermes-execute.py",
-      "line": 505,
-      "symbol": "run_single_plan",
-      "kind": "fn",
-      "summary": "Async: reads workstreams.json for one slug, runs compute_ready_level → partition_level → asyncio.gather loop. Accepts merge_lock from run_cross_plan for cross-plan merge serialization."
-    },
-    {
-      "file": "scripts/hermes-execute.py",
-      "line": 711,
-      "symbol": "run_cross_plan",
-      "kind": "fn",
-      "summary": "Async: multi-slug entry point. Calls build_plan_conflict_graph, acquire_plan_locks, schedule_batches. Creates single in-process asyncio.Lock threaded to all run_single_plan calls. Bounded by asyncio.Semaphore(max_parallel_plans)."
-    },
-    {
-      "file": "scripts/hermes-execute.py",
-      "line": 414,
-      "symbol": "partition_level",
-      "kind": "fn",
-      "summary": "Greedy graph-coloring: partitions a ready level into sub-batches where no two workstreams in the same sub-batch share a HIGH-severity file_conflicts edge (when serialize_high_severity=True). scope_unknown or serialize_all → singleton sub-batches."
-    },
-    {
-      "file": "scripts/hermes-execute.py",
-      "line": 484,
-      "symbol": "compute_ready_level",
-      "kind": "fn",
-      "summary": "Returns workstreams whose depends_on are all in terminal_status (done). depends_on is the sole scheduling gate (INV-2)."
-    },
-    {
-      "file": "scripts/hermes/cross_plan.py",
-      "line": 157,
-      "symbol": "build_plan_conflict_graph",
-      "kind": "fn",
-      "summary": "Builds plan-level conflict graph: two plans conflict iff file-scope path-sets intersect OR either is scope_unknown/low-confidence/missing. Fail-safe: unknown scope always conflicts."
-    },
-    {
-      "file": "scripts/hermes/cross_plan.py",
-      "line": 240,
-      "symbol": "acquire_plan_locks",
-      "kind": "fn",
-      "summary": "Acquires plan-claim locks in SORTED ascending slug order (INV-6: deadlock-free). Releases all on any failure. Returns held locks."
-    },
-    {
-      "file": "scripts/hermes/cross_plan.py",
-      "line": 314,
-      "symbol": "schedule_batches",
-      "kind": "fn",
-      "summary": "Greedy batch coloring over the plan conflict graph: disjoint plans grouped in same batch, conflicting plans serialized. Returns ordered list of batches."
-    },
-    {
-      "file": "scripts/generate-workstreams.py",
-      "line": 384,
-      "symbol": "assign_ws_depths",
-      "kind": "fn",
-      "summary": "Computes longest-path depth for each workstream over the depends_on DAG. Sets parallel_group='level-{depth}'. Same-depth workstreams are mutually independent by construction."
-    },
-    {
-      "file": "scripts/generate-workstreams.py",
-      "line": 475,
-      "symbol": "parse_task_files",
-      "kind": "fn",
-      "summary": "Parses **Files:** lines from each task block in TASKS.md to derive per-workstream file scope. If any task lacks a parseable **Files:** line, scope_unknown=True → conservative full serialization (INV-4)."
-    },
-    {
-      "file": "scripts/hermes/merge.py",
-      "line": 28,
-      "symbol": "merge_workstream",
-      "kind": "fn",
-      "summary": "Synchronous git merge of hermes/<slug>/<ws_id> into base. Called under the in-process asyncio.Lock — never runs concurrently across workstreams or plans."
-    }
-  ],
   "invariants": [
     "INV-1: Concurrent workstreams write to isolated git worktrees; the working tree is never shared.",
-    "INV-2: depends_on is the sole scheduling gate — a workstream starts only when all its depends_on IDs reach 'done'. parallel_group is a derived label, NOT a scheduling mechanism.",
-    "INV-3: merge_order is authoritative for merge sequence — merges always proceed in declared order, never in completion order.",
+    "INV-2: depends_on is the sole scheduling gate — a workstream starts only when all depends_on IDs reach 'done'. parallel_group is a derived label, NOT a scheduling mechanism.",
+    "INV-3: merge_order is authoritative for merge sequence — merges always proceed in declared order, never completion order.",
     "INV-4: scope_unknown=True or serialize_all=True forces fully-sequential execution (singleton sub-batches). Silent blind parallelism is forbidden when conflict data is absent or low-confidence.",
     "INV-5: max_parallel_workstreams=1 (default) reproduces pre-v1.3 sequential behavior exactly. cap=1 ≡ legacy sequential.",
-    "INV-6: Plan-claim locks are always acquired in sorted ascending slug order — prevents AB/BA deadlocks across concurrent super-orchestrators.",
+    "INV-6: Plan-claim locks are always acquired in sorted ascending slug order — prevents AB/BA deadlocks across concurrent orchestrators.",
     "INV-7: parallel_group and scope_unknown are additive fields (forward-compatible). Pre-v1.3 manifests omitting scope_unknown default to false; null parallel_group treated as scope_unknown (fail-safe)."
   ],
   "gotchas": [
-    "DORMANT BY DEFAULT (v1.4): workflow.hermes_enabled defaults to false. All workstream-generation, handoff, and cross-plan dispatch inside commands are no-ops unless hermes_enabled=true is set in .z-harness/config.toml.",
-    "HERMES_* env vars are GONE (T017): HERMES_MAX_PARALLEL, HERMES_MAX_PARALLEL_PLANS, HERMES_SERIALIZE_ALL, HERMES_SERIALIZE_HIGH_SEVERITY, HERMES_WORKSTREAM_TIMEOUT_MINUTES, HERMES_MAX_RETRIES are all removed. Setting them has no effect. Use workflow.* file knobs.",
-    "Semaphore is held for the FULL run_workstream lifetime (spawn → monitor → merge), not just at spawn time. This bounds live sessions, not spawn rate (audit M1).",
-    "poll_session runs via asyncio.to_thread so one stalled poll cannot starve sibling coroutines.",
-    "GIT_OPTIONAL_LOCKS=0 is set for the run and restored after — prevents concurrent git gc contention against the shared object store.",
-    "Non-file shared state (databases, ports, remote sandboxes, in-memory caches) is NOT protected by the file-conflict layer. Use workflow.serialize_all=true in .z-harness/config.toml to force fully-sequential execution when workstreams share such resources.",
-    "scope_unknown is derived from parse_task_files: if ANY task block in TASKS.md lacks a parseable **Files:** line, the entire plan is treated as scope_unknown=True.",
-    "The merge_lock is a single in-process asyncio.Lock — it serializes merges across all workstreams AND all plans within one run_cross_plan call. Two plans never merge concurrently.",
-    "cap=1 is the safe default — parallelism is opt-in via workflow.max_parallel_workstreams / workflow.max_parallel_plans. Do not raise caps in production without first verifying workstreams have no non-file shared-state dependencies.",
-    "scripts/hermes/ files are kept (not deleted) to prevent bit-rot while dormant. A future cleanup task will remove them once the gating strategy is confirmed stable."
+    "DORMANT BY DEFAULT (v1.4): workflow.hermes_enabled defaults to false in .z-harness/config.toml. All workstream-generation, handoff writes, and cross-plan dispatch calls inside commands are no-ops unless hermes_enabled=true.",
+    "TWO SEPARATE CONFIG SYSTEMS: scripts/config.py reads workflow.hermes_enabled from .z-harness/config.toml (the command-layer gate). scripts/hermes/config.py reads hermes-config.yaml for Hermes runtime behavior (concurrency caps, retries, timeouts). These are independent; setting workflow.* in config.toml does NOT directly configure the Hermes runtime.",
+    "HERMES_* env vars REMOVED: HERMES_MAX_PARALLEL, HERMES_MAX_PARALLEL_PLANS, HERMES_SERIALIZE_ALL, HERMES_SERIALIZE_HIGH_SEVERITY, HERMES_WORKSTREAM_TIMEOUT_MINUTES, HERMES_MAX_RETRIES have no effect. Only HERMES_DISCORD_TOKEN and HERMES_DISCORD_USER_ID remain as env overrides.",
+    "Semaphore held for FULL run_workstream lifetime (spawn through merge). Bounds live sessions, not spawn rate.",
+    "poll_session runs via asyncio.to_thread — blocking I/O cannot stall sibling workstream monitors.",
+    "GIT_OPTIONAL_LOCKS=0 set for full run and restored after — prevents concurrent git gc contention against the shared object store.",
+    "scope_unknown is derived from parse_task_files: if ANY task block in TASKS.md lacks a parseable **Files:** line, the entire plan is scope_unknown=True.",
+    "Merge lock is a single in-process asyncio.Lock shared across all workstreams and all plans within one run_cross_plan. No two merges ever run concurrently.",
+    "Non-file shared state (databases, ports, remote sandboxes, in-memory caches) is NOT protected by the file-conflict layer. Use serialize_all=true in hermes-config.yaml.",
+    "scripts/hermes/ files are kept (not deleted) to prevent bit-rot while dormant. Deletion is a separate future task."
   ],
-  "config_keys": {
-    "note": "HERMES_* env vars are REMOVED (v1.4, T017). All Hermes knobs are now file-based, read by scripts/hermes/config.py ConcurrencyConfig from .z-harness/config.toml under the [workflow] section.",
-    "removed_env_vars": ["HERMES_MAX_PARALLEL", "HERMES_MAX_PARALLEL_PLANS", "HERMES_SERIALIZE_ALL", "HERMES_SERIALIZE_HIGH_SEVERITY", "HERMES_WORKSTREAM_TIMEOUT_MINUTES", "HERMES_MAX_RETRIES"],
-    "concurrency": [
-      {"key": "workflow.hermes_enabled", "field": "hermes_enabled", "default": "false", "description": "Master gate. Must be true for any Hermes machinery to fire. Default false = dormant (all workstream/handoff/cross-plan calls are no-ops)."},
-      {"key": "workflow.max_parallel_workstreams", "field": "max_parallel_workstreams", "default": "1", "description": "Max workstreams running concurrently within a single plan. Default 1 = legacy sequential (INV-5). Semaphore held for full workstream lifetime."},
-      {"key": "workflow.max_parallel_plans", "field": "max_parallel_plans", "default": "1", "description": "Max plans running concurrently in a cross-plan run. Default 1."},
-      {"key": "workflow.serialize_all", "field": "serialize_all", "default": "false", "description": "Force fully-sequential execution regardless of conflict analysis. Use when workstreams share non-file state (DBs, ports). Equivalent to scope_unknown=True for scheduling."},
-      {"key": "workflow.serialize_high_severity", "field": "serialize_high_severity", "default": "true", "description": "When true, HIGH-severity file_conflicts edges force serialization within a level even when max_parallel_workstreams > 1."},
-      {"key": "workflow.workstream_timeout_minutes", "field": "workstream_timeout_minutes", "default": "60", "description": "Per-workstream wall-clock cap in minutes."},
-      {"key": "workflow.max_retries", "field": "max_retries", "default": "1", "description": "Max re-spawns on workstream crash before marking halted."}
-    ]
-  },
-  "runbook": {
-    "revive_hermes": "Set workflow.hermes_enabled = true in .z-harness/config.toml. Without this, all Hermes machinery is dormant.",
-    "within_plan_parallel": "Set workflow.max_parallel_workstreams = N in .z-harness/config.toml, then: python3 scripts/hermes-execute.py --slug <slug>",
-    "cross_plan_slugs": "Set workflow.max_parallel_plans = N in .z-harness/config.toml, then: python3 scripts/hermes-execute.py --slugs a,b,c",
-    "cross_plan_file": "Set workflow.max_parallel_plans = N in .z-harness/config.toml, then: python3 scripts/hermes-execute.py --plan-set plans.txt",
-    "serialize_all": "Set workflow.serialize_all = true in .z-harness/config.toml, then: python3 scripts/hermes-execute.py --slug <slug>",
-    "non_file_shared_state_note": "If workstreams share databases, ports, remote sandboxes, or other process-level resources, set workflow.serialize_all = true in .z-harness/config.toml. The file_conflicts layer does not model these dependencies.",
-    "deferred_cleanup_note": "scripts/hermes/ and scripts/hermes-execute.py are kept dormant (not deleted). Deletion is a separate future task."
-  }
+  "memories": []
 }

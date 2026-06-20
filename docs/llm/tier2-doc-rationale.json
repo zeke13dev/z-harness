@@ -1,6 +1,6 @@
 {
   "concept": "tier2-doc-rationale",
-  "last_updated": "2026-06-09T19:45:00Z",
+  "last_updated": "2026-06-19",
   "covers_spec": "doc-updater-agent/20260609T194026Z-doc-updater-agent",
   "source_files": [
     "commands/z-doc-rationale.md",
@@ -13,29 +13,53 @@
       "line": 1,
       "symbol": "z-doc-rationale",
       "kind": "command",
-      "summary": "Tier 2 narrative doc command producing ADRs, rationale, migration guides"
+      "summary": "Four-phase command: slug discovery, finalized validation, memoize, Sonnet draft, gap-fill, write finals"
     },
     {
       "file": "scripts/append-tier2-context.py",
-      "line": 1,
-      "symbol": "append-tier2-context",
-      "kind": "script",
-      "summary": "Incremental context accumulation across pipeline phases"
+      "line": 112,
+      "symbol": "main",
+      "kind": "fn",
+      "summary": "CLI: --phase plan|implement|review --field --json --upsert --mark-amended; atomic write"
+    },
+    {
+      "file": "scripts/append-tier2-context.py",
+      "line": 70,
+      "symbol": "validate_payload",
+      "kind": "fn",
+      "summary": "Per-field schema validator; returns error string or None before any write"
+    },
+    {
+      "file": "scripts/append-tier2-context.py",
+      "line": 92,
+      "symbol": "save_context",
+      "kind": "fn",
+      "summary": "Atomic write: tmp file + os.replace"
+    },
+    {
+      "file": "scripts/append-tier2-context.py",
+      "line": 101,
+      "symbol": "upsert_entry",
+      "kind": "fn",
+      "summary": "Dedup by key fields (task or id); replaces existing or appends"
     }
   ],
-  "depends_on": ["tier1-doc-updater", "z-plan", "z-implement-all", "z-review-all"],
-  "consumed_by": [],
+  "depends_on": ["tier1-doc-updater", "z-review-all"],
+  "consumed_by": ["commands"],
   "invariants": [
-    "Never fabricates gap content — ships with honest gaps",
+    "Never fabricates gap content — ships with honest gaps flagged",
     "Preserves human_overrides with captured-at-decision-time reasons",
-    "Memoizes: skips regeneration if tier2-context.json unchanged",
-    "Requires tier2-context.json finalized: true"
+    "Memoizes: skips regeneration if tier2-context.json hash matches .memo",
+    "Requires tier2-context.json finalized: true before /z-doc-rationale runs",
+    "Atomic writes only: tmp + os.replace, never partial state"
   ],
   "gotchas": [
-    "Significance-gated: three-signal OR (cross-LLM consult, breaking changes, plan deviations)",
-    "Tried-and-failed caveat: auto-generated from implementer self-reports",
-    "ADR numbering: reads docs/adr/ for max N, allocates N+1",
-    "Gap-fill presents only gaps, not full document review"
+    "Only z-review-all currently writes to tier2-context.json; z-plan and z-implement-all do NOT call append-tier2-context.py despite script supporting --phase plan|implement",
+    "Significance gate is three-signal OR: consultant_findings, breaking_changes, deviations; all empty = Tier 2 skipped",
+    "Tried-and-failed caveat banner required: auto-generated from implementer self-reports, reviewer validation partial",
+    "ADR numbering: reads docs/adr/ for max N, allocates N+1; starts at ADR-001 if dir absent",
+    "Upsert key fields: task for tried_and_failed/deviations/breaking_changes; id for decisions; no key = always append",
+    "--mark-amended writes to amend_events[] (ad-hoc field, not in SCHEMA_SKELETON)"
   ],
   "memories": []
 }

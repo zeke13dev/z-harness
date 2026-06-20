@@ -1,6 +1,6 @@
 # active-plan-registry — Cross-session awareness registry
 
-> Last updated: 2026-06-05
+> Last updated: 2026-06-19
 > Covers source: scripts/active-plan-registry.py, scripts/plan-path.sh, scripts/migrate-plan-layout.sh, agents/scope-extractor.md, commands/z-implement-all.md, commands/z-implement-next.md, commands/z-plan.md
 
 ## Overview
@@ -43,27 +43,30 @@ When `Z_HARNESS_EXTERNAL_DEFAULT` is unset or `1` (the default after Phase-D fli
 
 All processes for a given repo must agree on the same base. The first `z_harness_base()` call writes a small anchor file at `<git-common-dir>/.z-harness-base` (JSON: `{tier, path, repo_id}`, atomic tmpfile+rename). Every subsequent call reads the anchor: if the freshly-resolved path differs, it emits `base_mismatch_detected` and hard-fails before any artifact write. The anchor lives in `git-common-dir` (shared by all worktrees of one repo, and survives `git clean`).
 
+**Tier 1 escape hatch.** When `Z_HARNESS_BASE_DIR` is explicitly set, `z_harness_base()` returns it immediately with no anchor interaction whatsoever — no read, no validate, no write. This is intentional: CI/benchmark environments that relocate artifacts to hermetic temp dirs must not hard-fail against a dev machine's pre-existing anchor.
+
 ### Repo-id
 
 `z_harness_repo_id()` produces a stable, short safe-basename for the per-repo directory:
 - Format: `<repo-basename>-<8hex>` (e.g. `z-harness-1a2b3c4d`)
 - The 8-hex suffix is derived from `sha256(realpath(git-common-dir))[0:8]`
 - Keying on `git-common-dir` means all worktrees of one repo produce the same id
+- Falls back to `sha256(realpath(pwd))` when not in a git repo
 
 ### Registry layout
 
 The registry lives under the external base, not under the git checkout:
 
 ```
-<base>/                          ← z_harness_base()
-├── active-plans/                ← active_plans_dir()
-│   ├── <run-id>.json            ← one file per live run
-│   └── ...
+<base>/                          <- z_harness_base()
+├── active-plans/                <- active_plans_dir()
+│   ├── <run-id>.json            <- one file per live run
+│   └── claims/                  <- claims_dir() — per-slug hard claim locks (plan-claim)
 ├── plans/
 │   └── <slug>/
 │       ├── SPEC.md, PLAN.md, TASKS.md, ...
 │       └── archive/<run-id>/
-├── followups/                   ← followups_dir()
+├── followups/                   <- followups_dir()
 └── metrics.jsonl
 ```
 
@@ -179,8 +182,8 @@ Stdout: `{"claimed": [...], "conceded": [{"path": "...", "holder_run_id": "..."}
 1. Drops any non-senior (run_id >= mine) or absent targets immediately; if none remain, exits 0 (`nothing_to_wait_on`).
 2. Every `Z_HARNESS_WAIT_POLL_SECS` (default 30 s) beats:
    a. Single atomic write: `status=paused` + `waiting_on=[remaining targets]` while preserving `held_paths` — one write, no window where status=paused but waiting_on is stale (MINOR-1).
-   b. Runs `reap` (frees dead peer's records and their leases).
-   c. Re-reads targets: a target is **cleared** when its record is gone, or `status` is `complete`/`aborted`/`stale`.
+   b. Runs `_reap_inline()` (inline reap with pre-resolved `active_dir` to avoid redundant plan-path.sh subprocesses on each poll iteration).
+   c. Re-reads targets: a target is **cleared** when its record is gone, or `status` is `complete`/`aborted`/`stale`, or the record is age-stale.
    d. TOCTOU re-scan: adds any NEW senior holders of `--paths` that appeared since the last poll. Junior claimers are ignored — the deterministic tiebreak already gave them nothing.
 3. All targets cleared and no new senior holder → clear `waiting_on=[]`, set `status=running`, exit 0 (`cleared`).
 4. On any exit: `waiting_on` is cleared (via `finally`). No paused zombie is ever left behind.
@@ -210,12 +213,14 @@ Under `Z_HARNESS_NO_ASK=halt`, a `wait-for exit 10` causes the orchestrator to *
 
 ### Reaper carve-out (live-local-pid)
 
-The `reap` subcommand has a specific carve-out for slow-but-alive local processes:
+The `reap` subcommand (and its inline counterpart `_reap_inline()`) has a specific carve-out for slow-but-alive local processes:
 
 - **Case (a): dead local pid.** `host == this host` AND `pid` is an integer AND `os.kill(pid, 0)` raises `ESRCH` → delete the record immediately, regardless of heartbeat age.
 - **Live-local-pid carve-out.** `host == this host` AND `pid` is an integer AND `os.kill(pid, 0)` succeeds (pid is confirmed alive) AND past the 2× margin → mark `status:"stale"` but **do NOT delete**. A 2-hour local test run must not have its leases reaped out from under it. Deletion is deferred until the pid dies and case (a) fires on a subsequent reap cycle. **The carve-out requires a confirmed-alive pid.** A local record whose `pid` field is missing or non-integer does NOT qualify; it falls through to case (b) and is deleted.
 - **Case (b): past 2× stale margin AND not a live local pid.** Covers remote/unknown-host records, local records with no `pid` field, and local records whose pid is dead. → delete.
 - **Remote/unknown host at 1× threshold.** Mark `status:"stale"` (no delete). Remote hosts can never be confirmed dead.
+
+**Note:** `_reap_inline()` is the inline version called inside `wait-for`'s poll loop. It shares identical deletion/carve-out policy with `cmd_reap` but accepts a pre-resolved `active_dir` to avoid repeated `plan-path.sh` subprocess calls in tight poll loops.
 
 ### Wedged-but-alive senior: no auto-preemption (known limitation)
 
@@ -237,9 +242,9 @@ This empties the senior's `held_paths`. All juniors waiting on that senior will 
 
 ## Scope-extractor (Haiku subagent)
 
-`agents/scope-extractor.md` (frontmatter `model: haiku`). Input: `repo_root`, `$BASE` (plan artifact dir), optional `task_id`. Reads SPEC.md + PLAN.md + TASKS.md (and the task block if `task_id` given), emits JSON `[{path, confidence, reason}]` to stdout.
+`agents/scope-extractor.md` (frontmatter `model: haiku`). Input: `repo_root`, `base` (plan artifact dir), optional `task_id`. Reads SPEC.md + PLAN.md + TASKS.md (and the task block if `task_id` given), emits JSON `[{path, confidence, reason}]` to stdout.
 
-A mechanical fallback is documented for offline use (parse `**Files:**` lines directly from TASKS.md), but the Haiku subagent is the primary path.
+A mechanical fallback is documented for offline use (parse `**Files:**` lines directly from TASKS.md), but the Haiku subagent is the primary path. The fallback produces only `explicit` confidence entries.
 
 ---
 
@@ -261,17 +266,17 @@ A mechanical fallback is documented for offline use (parse `**Files:**` lines di
 for each task T:
   1. heartbeat --current-task T --status running
   2. Invoke scope-extractor(task=T); take only explicit-confidence paths as CLAIM
-  3. claim --run-id $RUN --paths $CLAIM  →  {claimed, conceded}
+  3. claim --run-id $RUN --paths $CLAIM  ->  {claimed, conceded}
   4. For each conceded {path, holder_run_id} (eldest senior holds it):
        if Z_HARNESS_AUTO_WAIT=1:
          wait-for --on $holder_run_id --paths $path
-           exit 0 → re-claim the freed path (genuine acquisition), continue
-           exit 10 → (interactive) AskUser proceed/abort
-                     (Z_HARNESS_NO_ASK) abort task + loud log — never silently proceed
-       else: AskUser proceed / wait / abort  (wait → same wait-for call)
+           exit 0 -> re-claim the freed path (genuine acquisition), continue
+           exit 10 -> (interactive) AskUser proceed/abort
+                     (Z_HARNESS_NO_ASK) abort task + loud log -- never silently proceed
+       else: AskUser proceed / wait / abort  (wait -> same wait-for call)
   5. Dispatch implementer for T (constrained to claimed paths)
   6. Write-set validation: git diff --name-only; for any undeclared path also held
-     by a live peer → emit coordination_warning (review-blocking, advisory)
+     by a live peer -> emit coordination_warning (review-blocking, advisory)
   7. On clean task success: release --run-id $RUN --paths $CLAIM
      On review-fail retry: KEEP lease, expand with newly-touched paths
      On halt mid-task: rely on deregister/reap (do not release a partial edit)
@@ -280,6 +285,10 @@ for each task T:
 ### `/z-plan`, `/z-plan-light`, `/z-debug`, `/z-do`, `/z-audit`, `/z-plan-split`
 
 All run-creating commands get the same register/heartbeat/deregister 3-line block. In `/z-plan`, `scope-extractor` runs after TASKS.md is written (Phase 8) to seed scope for overlap detection.
+
+### Hermes orchestration
+
+`scripts/hermes-execute.py` also calls `active-plan-registry.py session-id` (line 822) to retrieve the session id before each workstream execution. Cross-plan Hermes paths acquire sorted-slug plan-claim locks before touching the registry — the claim lock (`plan-claim`) is the hard mutex; this registry remains advisory.
 
 ---
 
@@ -294,6 +303,8 @@ All run-creating commands get the same register/heartbeat/deregister 3-line bloc
    - `z-harness/archive/<run>/` → `<base>/archive/<run>`
    - `z-harness/metrics.jsonl` → `<base>/metrics.jsonl` (append/merge if target exists)
    - `z-harness/followups/` → `<base>/followups/` (only with `--with-followups`; default skip)
+
+**metrics.jsonl merging** is crash-safe and idempotent: lines already present in the target are detected and skipped (dedup against existing-target-lines set). This prevents duplicates on re-run after a partial failure.
 
 See `docs/human/PLAN-LAYOUT.md` for the full migration guide.
 
@@ -328,13 +339,13 @@ All registry env knobs are **env-only**: they are read directly from `os.environ
 | `Z_HARNESS_REGISTRY_STALE_SECS` | `1800` | Seconds after which `last_heartbeat` is considered stale. Reaper deletes at 2× margin for dead/remote; marks live local pid as stale only (carve-out). |
 | `Z_HARNESS_STRICT_OVERLAP` | _(unset)_ | Set to `1` to make `explicit`×`explicit` exact scope-path overlaps a hard halt (exit 20). Does NOT affect held-path conflict behavior. |
 
-### Wait / lease knobs (new — cross-session-plan-coord plan)
+### Wait / lease knobs
 
 | Env var | Default | Description |
 |---------|---------|-------------|
 | `Z_HARNESS_AUTO_WAIT` | `1` | `1` = auto-park behind a senior held-path conflict using `wait-for` with the auto budget. `0` = restore interactive proceed/wait/abort menu for held conflicts. |
 | `Z_HARNESS_AUTO_WAIT_BUDGET_SECS` | `300` | Wall-clock ceiling (seconds) for auto-park mode. On expiry: `wait-for` exits 10 (LOUD timeout), orchestrator aborts task or prompts user. Distinct from `WAIT_TIMEOUT_SECS`. |
-| `Z_HARNESS_WAIT_POLL_SECS` | `30` | Seconds between poll iterations inside `wait-for`. Each iteration beats heartbeat, runs reap, and rechecks targets. |
+| `Z_HARNESS_WAIT_POLL_SECS` | `30` | Seconds between poll iterations inside `wait-for`. Each iteration beats heartbeat, runs reap inline, and rechecks targets. |
 | `Z_HARNESS_WAIT_TIMEOUT_SECS` | `1800` | Hard ceiling (seconds) for an explicit interactive wait (user selected "wait" in the overlap menu). Distinct from `AUTO_WAIT_BUDGET_SECS`. |
 | `Z_HARNESS_WAIT_REQUIRE_MERGE` | `0` | **Reserved/deferred.** When `1`, a target would be cleared only when its branch is an ancestor of HEAD. Not yet wired. Leave at `0`. |
 
@@ -353,6 +364,52 @@ Run `/z-where` at any time to see:
 - Wait-edges rendered as `A ──waits──▶ B` for at-a-glance contention topology
 
 This answers "where are my plans?", "what else is running?", and "why is my run paused?" without writing anything. If you see a senior plan with stale heartbeat and non-empty `held_paths`, that is the wedged-but-alive-senior pattern — see the "Wedged-but-alive senior" section above for resolution steps.
+
+---
+
+## Key entry points
+
+- `scripts/active-plan-registry.py:565` — `cmd_session_id` — stable session-id derivation
+- `scripts/active-plan-registry.py:584` — `cmd_register` — create run record (exits 3 on failure)
+- `scripts/active-plan-registry.py:831` — `cmd_claim` — check-after-claim per-file lease
+- `scripts/active-plan-registry.py:1119` — `cmd_wait_for` — senior-peer poll loop
+- `scripts/active-plan-registry.py:1533` — `cmd_overlaps` — scope+held-path intersection check
+- `scripts/active-plan-registry.py:1774` — `cmd_reap` — conservative dead-record cleanup
+- `scripts/active-plan-registry.py:1423` — `_reap_inline` — wait-for's internal reap (pre-resolved active_dir)
+- `scripts/active-plan-registry.py:355` — `_is_lease_capable` — schema-v2 + held_paths guard
+- `scripts/active-plan-registry.py:376` — `_is_senior` — canonical lexicographic run_id ordering predicate
+- `scripts/plan-path.sh:178` — `z_harness_base` — five-tier base resolution with anchor
+- `scripts/plan-path.sh:337` — `active_plans_dir` — registry home path helper
+- `agents/scope-extractor.md:1` — `scope-extractor` — Haiku scope array emitter
+
+## How it interacts with others
+
+- `plan-claim` — orthogonal hard slug-level mutex; uses `claims_dir()` from plan-path.sh. The lockless registry is advisory; plan-claim is the hard gate. Hermes cross-plan paths acquire plan-claim locks before operating.
+- `hermes-orchestration` — calls `session-id` at workstream start; depends on registry for concurrent plan awareness.
+- `commands` (z-implement-all, z-implement-next, z-plan, z-where, etc.) — primary consumers of register/overlaps/claim/release/wait-for/deregister.
+- `followup-sink` — shares `<base>` via `followups_dir()`; must not participate in per-entry→global lock ordering of `followup_common.py`.
+- `plan-layout-migration` — `migrate-plan-layout.sh` gates on `list --json` to refuse when any run is live.
+
+## Edge cases / gotchas
+
+- `Z_HARNESS_BASE_DIR` bypasses the anchor entirely — two sessions with different values silently partition their registries.
+- `Z_HARNESS_REGISTRY_ENABLED=0` silences all coordination writes; `list` and `session-id` still work. Do not use in multi-session interactive environments.
+- Reaper live-local-pid carve-out: a slow-but-alive local process past 2× stale keeps leases alive. Manual resolution: `python3 scripts/active-plan-registry.py release --run-id <id> --all`.
+- v1 records (`schema_version < 2` or missing `held_paths`) are lease-incapable — never waited on.
+- `held_conflict` in overlaps JSON is a TOP-LEVEL flat array, NOT nested inside peer entries. Absent (not empty array) when no conflicts exist.
+- Two distinct wait budgets: `Z_HARNESS_AUTO_WAIT_BUDGET_SECS` (300s, auto-park) and `Z_HARNESS_WAIT_TIMEOUT_SECS` (1800s, user-explicit wait). Never silently proceed on exit 10.
+- `run_id` ordering is LEXICOGRAPHIC, NOT chronological. `started_at` is display-only. `_is_senior()` is the sole authoritative predicate.
+- `_reap_inline()` is the poll-loop reaper; `cmd_reap` is the CLI subcommand. Same policy, different call site — `_reap_inline` takes pre-resolved `active_dir`.
+- `session-id` on macOS uses `<ppid>-<current_epoch>` fallback; export `Z_HARNESS_SESSION_ID` once at run start to stabilize across repeated calls.
+- `Z_HARNESS_WAIT_REQUIRE_MERGE=1` is reserved/deferred — branch-ancestor cleared logic is NOT wired.
+
+## Examples
+
+- List all active plans: `python3 scripts/active-plan-registry.py list --json`
+- Manual lease release for a wedged run: `python3 scripts/active-plan-registry.py release --run-id <run-id> --all`
+- Dry-run migration preview: `scripts/migrate-plan-layout.sh --dry-run --all`
+- Check overlap for current run: `python3 scripts/active-plan-registry.py overlaps --run-id $Z_HARNESS_RUN_ID --json`
+- Resolve base tier in use: `bash scripts/plan-path.sh z_harness_base`
 
 ---
 

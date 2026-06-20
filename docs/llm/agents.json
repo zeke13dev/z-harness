@@ -1,6 +1,6 @@
 {
   "concept": "agents",
-  "last_updated": "2026-06-09",
+  "last_updated": "2026-06-19",
   "covers_spec": "none",
   "source_file": [
     "agents/auditor.md",
@@ -14,7 +14,9 @@
     "agents/doc-fetcher.md",
     "agents/doc-updater.md",
     "agents/external-lookup.md",
+    "agents/ideator-clusterer.md",
     "agents/implementer.md",
+    "agents/intent-classifier.md",
     "agents/mr-reviewer.md",
     "agents/plan-style-reviewer.md",
     "agents/planning-router.md",
@@ -30,6 +32,7 @@
     "agents/scope-reconciler-brainstorm.md",
     "agents/self-reviewer.md",
     "agents/spec-precheck.md",
+    "agents/task-tree-generator.md",
     "agents/tier1-doc-updater.md"
   ],
   "confidence": "high",
@@ -112,11 +115,25 @@
       "summary": "Haiku web/API retrieval worker; emits lookup-contract envelope; verb-blocklist enforced."
     },
     {
+      "file": "agents/ideator-clusterer.md",
+      "line": 1,
+      "symbol": "ideator-clusterer",
+      "kind": "module",
+      "summary": "Haiku wide-mode brainstorm clustering agent; collapses N peer ideator framings into K distinct directions by approach axis; read-only; returns effective-diversity report for Phase 3 ranked briefing."
+    },
+    {
       "file": "agents/implementer.md",
       "line": 1,
       "symbol": "implementer",
       "kind": "module",
       "summary": "Implements one task block; supports --tasks path override, cross_task_notes, tests_md_path; produces RATIONALE/TRIED/DEVIATIONS contract fields for Tier 2 design rationale; mandatory self-check with 7 items including TESTS.md coverage."
+    },
+    {
+      "file": "agents/intent-classifier.md",
+      "line": 1,
+      "symbol": "intent-classifier",
+      "kind": "module",
+      "summary": "Cheap Haiku planning-depth classifier; returns quick|standard|deep level for INTENT.md richness; advisory only; dispatched by /z-plan when planning_mode=intent and intent_level=auto."
     },
     {
       "file": "agents/mr-reviewer.md",
@@ -224,6 +241,13 @@
       "summary": "Haiku preflight verifier for SPEC references; uses relevant_docs LLM JSONs as second source of truth."
     },
     {
+      "file": "agents/task-tree-generator.md",
+      "line": 1,
+      "symbol": "task-tree-generator",
+      "kind": "module",
+      "summary": "Sonnet BFS-level task generator for Adaptive INTENT engine; reads frozen INTENT.md + LEDGER.md; emits one independent sibling-task batch per level; writes canonical TASKS.md format parsed by session-helpers.sh; default level cap 6; emits termination sentinel on cap/budget guard."
+    },
+    {
       "file": "agents/tier1-doc-updater.md",
       "line": 1,
       "symbol": "tier1-doc-updater",
@@ -234,7 +258,8 @@
   "depends_on": [
     "scripts",
     "lookup-contract",
-    "personas-and-roles"
+    "personas-and-roles",
+    "adaptive-intent"
   ],
   "consumed_by": [
     "commands",
@@ -304,7 +329,20 @@
     "tier1-doc-updater NEVER writes to docs/human/ or docs/llm/ directly; all output goes to $Z_HARNESS_PLAN_DIR/tier1-staged/.",
     "tier1-doc-updater only modifies content within AUTO-START/AUTO-END delimited sections in human docs.",
     "pre-reviewer is opt-in only, gated by Z_HARNESS_PRE_REVIEW=1; produces preliminary findings; never blocks.",
-    "context-curator is mechanical only; folds telemetry into SESSION.md; never edits production code."
+    "context-curator is mechanical only; folds telemetry into SESSION.md; never edits production code.",
+    "ideator-clusterer is read-only; it returns structured text for the orchestrator to incorporate into the Phase 3 briefing; it never writes files.",
+    "ideator-clusterer must name every ideator ID from the input list either as a cluster representative or in the Collapsed framings section; silent omission is a spec violation.",
+    "ideator-clusterer K=1 (all framings converged) is a valid outcome; the agent must not artificially inflate K.",
+    "ideator-clusterer cross-cluster consensus section is mandatory even when empty (report 'None detected.').",
+    "intent-classifier is advisory only; the orchestrator announces the pick and lets the user override inline.",
+    "intent-classifier returns LEVEL: standard when the task prompt is empty or malformed so the orchestrator can proceed.",
+    "intent-classifier makes at most 3 file reads before defaulting to standard when signals are unclear.",
+    "task-tree-generator emits only tasks that advance criteria listed in unmet_criteria; it does not invent acceptance criteria.",
+    "task-tree-generator: all tasks in one level batch MUST be independent (no intra-level dependencies); **Depends on:** is always a literal dash.",
+    "task-tree-generator: canonical heading format ## T<NNN> - <title> `[ ]` is machine-parsed by session-helpers.sh; any deviation silently breaks task-status detection.",
+    "task-tree-generator: when level >= level_cap or budget_tokens_remaining < 30000, it emits a single termination sentinel task and returns STATUS: termination_guard.",
+    "task-tree-generator NEVER writes INTENT.md or LEDGER.md; it writes only to tasks_output_path.",
+    "task-tree-generator: default level cap is 6 (levels 0-5 may produce normal batches; level 6 triggers termination)."
   ],
   "gotchas": [
     "reviewer and self-reviewer emit **FOLLOWUPS:** fenced JSON array block after ### Major; minors/nits MUST go here. Orchestrator parses via scripts/parse-followups-block.py and calls scripts/sink-add.sh per entry. Parse failure logs followup_block_parse_failed and continues. Required per-entry fields: priority, name, recommended_command, cited_paths. Optional: recommended_command_safe_to_retry (default false), auto_close_eligible (default false; reviewer on producer-class allowlist may set true).",
@@ -363,7 +401,17 @@
     "tier1-doc-updater: concept doc missing AUTO-START markers -> logged in NOTES, concept skipped.",
     "pre-reviewer never blocks; real reviewers get final say. Pre-reviewer findings are advisory only.",
     "pre-reviewer runs up to 3 in parallel; gated by Z_HARNESS_PRE_REVIEW=1 env var.",
-    "context-curator: outputs bounded SESSION.md; mechanical only; dispatched at /z-implement-all batch breakpoint."
+    "context-curator: outputs bounded SESSION.md; mechanical only; dispatched at /z-implement-all batch breakpoint.",
+    "ideator-clusterer is only dispatched when WIDE_N > 3 (wide mode). For WIDE_N <= 3, the orchestrator presents raw framings directly. If ideator-clusterer fails or returns K=0, the orchestrator falls back to presenting N raw framings.",
+    "ideator-clusterer operates on the divergence axis (N peer framings, same topic); it is distinct from scope-reconciler-brainstorm which operates on the chunk axis (sub-topics in scope).",
+    "ideator-clusterer must reproduce representative member framing blocks verbatim; paraphrasing introduces bias.",
+    "intent-classifier is dispatched only when planning_mode=intent and intent_level=auto; if intent_level is a non-auto value, the orchestrator uses it directly without calling this agent.",
+    "intent-classifier makes at most 3 file reads (stops after 3 if still unclear and defaults to standard). Checking for public surface exports (index.ts, lib.rs, __init__.py, etc.) is a soft signal toward deep.",
+    "task-tree-generator canonical heading format: backtick-enclosed [ ] status marker must be present and exactly [ ] (pending). Wrong bracket content or missing backtick will cause session-helpers.sh to silently fail task-status detection.",
+    "task-tree-generator writes only to tasks_output_path; it must not create or modify INTENT.md, LEDGER.md, or any other file.",
+    "task-tree-generator: if budget_tokens_remaining is < 50000, prefer a batch of <=3 high-confidence tasks. If < 30000, emit a termination sentinel regardless of level count.",
+    "task-tree-generator termination batch contains exactly one sentinel task; no normal task blocks are emitted alongside it.",
+    "task-tree-generator task_id_start lets the orchestrator number tasks continuously across levels (e.g. if levels 0+1 used T001-T008, pass task_id_start=9 for level 2)."
   ],
   "memories": []
 }

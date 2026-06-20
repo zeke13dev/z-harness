@@ -1,6 +1,6 @@
 {
   "concept": "attend",
-  "last_updated": "2026-06-12",
+  "last_updated": "2026-06-19",
   "covers_spec": "commands/z-attend.md",
   "source_files": [
     "commands/z-attend.md",
@@ -18,14 +18,14 @@
       "line": 11,
       "symbol": "middle-gear model",
       "kind": "doc",
-      "summary": "Positioned between /z-overnight (fully unattended) and manual per-command operation. Auto-advances through a command chain, halts and asks inline only on the four gate categories, and yields for a real user /clear at declared context boundaries."
+      "summary": "Positioned between /z-overnight (fully unattended) and manual operation. Auto-advances through a command chain, halts and asks inline only on the four gate categories, and yields for a real user /clear at declared context boundaries."
     },
     {
       "file": "commands/z-attend.md",
       "line": 44,
       "symbol": "category posture",
       "kind": "doc",
-      "summary": "Gate-category table: mechanical_proceed→auto-answer with skill_default; decision/risk/shortcut/archiving→surface inline AskUserQuestion; untagged/unknown→ask (Invariant 1 fail-safe). Resolved via config.py resolve-halt-category."
+      "summary": "Gate-category table: mechanical_proceed->auto-answer with skill_default; decision/risk/shortcut/archiving->surface inline AskUserQuestion; untagged/unknown->ask (Invariant 1 fail-safe). Resolved via config.py resolve-halt-category."
     },
     {
       "file": "commands/z-attend.md",
@@ -88,21 +88,35 @@
       "line": 1,
       "symbol": "chain-runner.sh",
       "kind": "module",
-      "summary": "Mechanics-only sequencing/state primitive shared by /z-overnight and /z-attend. Subcommands: steps <preset> (emit name:yield_after per line, exit 2 on unknown), state-init, state-read, state-write (flock-guarded atomic via Python fcntl.flock + tmp+rename), cursor (index of first non-complete step), new-run-id (C14 set-difference). State-file path is always a parameter — no hardcoded constant."
+      "summary": "Mechanics-only sequencing/state primitive shared by /z-overnight and /z-attend. Subcommands: steps <preset> (emit name:yield_after per line, exit 2 on unknown), state-init, state-read, state-write (flock-guarded atomic via Python fcntl.flock + tmp+rename; stdin '-' form for large states), cursor (index of first non-complete step), new-run-id (C14 set-difference). State-file path is always a parameter — no hardcoded constant."
+    },
+    {
+      "file": "scripts/chain-runner.sh",
+      "line": 76,
+      "symbol": "_expand_preset",
+      "kind": "fn",
+      "summary": "Defines four presets: full-build (plan,test,implement-all,review-all), research-build (research,plan,test,implement-all,review-all), quick-build (plan,implement-all), attend-full (plan,audit,test,implement-all,review-all). Exit 1 on unknown preset."
+    },
+    {
+      "file": "scripts/chain-runner.sh",
+      "line": 86,
+      "symbol": "_yield_after",
+      "kind": "fn",
+      "summary": "Returns 'true' only for 'plan' and 'implement-all' steps; 'false' for all others. This is the m1 yield_after declaration."
     },
     {
       "file": "scripts/config.py",
-      "line": 162,
+      "line": 292,
       "symbol": "HALT_CATEGORY_ENUM",
       "kind": "const",
       "summary": "frozenset {decision, risk, shortcut, archiving, mechanical_proceed}. Startup guard (Guard 2b) validates every QUESTION_IDS entry has a member of this enum. 'ask' is the runtime fallback for unknown qids, not an enum member."
     },
     {
       "file": "scripts/config.py",
-      "line": 1050,
+      "line": 1598,
       "symbol": "cmd_resolve_halt_category",
       "kind": "fn",
-      "summary": "resolve-halt-category <question_id>: prints the halt_category for a registered question_id, or 'ask' for any unknown id. This is the fail-safe: unknown→ask, never mechanical_proceed."
+      "summary": "resolve-halt-category <question_id>: prints the halt_category for a registered question_id, or 'ask' for any unknown id. This is the fail-safe: unknown->ask, never mechanical_proceed."
     },
     {
       "file": "scripts/lint-halt-categories.sh",
@@ -123,7 +137,7 @@
       "line": 1,
       "symbol": "write-handoff.sh",
       "kind": "module",
-      "summary": "Writes $Z_HARNESS_PLAN_DIR/handoff.json. Z_HARNESS_ATTEND_RESUME=1 bumps protocol_version to '1.1' and adds attend_resume object from 5 env vars: ATTEND_HEAD_SHA, ATTEND_PHASE, ATTEND_DONE_SET_HASH, ATTEND_DIRTY_FP, ATTEND_SESSION_ID. All five must be non-empty or script exits 1 naming the missing var."
+      "summary": "Writes $Z_HARNESS_PLAN_DIR/handoff.json. Z_HARNESS_ATTEND_RESUME=1 bumps protocol_version to '1.1' and adds attend_resume object from 5 env vars: Z_HARNESS_ATTEND_HEAD_SHA, Z_HARNESS_ATTEND_PHASE, Z_HARNESS_ATTEND_DONE_SET_HASH, Z_HARNESS_ATTEND_DIRTY_FP, Z_HARNESS_ATTEND_SESSION_ID. All five must be non-empty or script exits 1 naming the missing var(s). Status field is always 'clean_break' for attend yields."
     },
     {
       "file": "docs/schemas/handoff.schema.json",
@@ -151,10 +165,11 @@
     "State file is always attend-scoped (attend-state.json under archive/$RUN_ID/), never overnight-state.json; the path is always a parameter to chain-runner.sh",
     "The yield protocol (Phase 0R) validates handoff.json's attend_resume predicate, NOT SESSION.md; SESSION.md is human-editable and cannot serve as the immutable token",
     "HEAD SHA mismatch on resume is a HARD HALT (not warn-and-continue as in overnight); the chain must not re-enter on a different base without explicit user acceptance",
-    "All 5 attend env vars (ATTEND_HEAD_SHA, ATTEND_PHASE, ATTEND_DONE_SET_HASH, ATTEND_DIRTY_FP, ATTEND_SESSION_ID) must be non-empty before write-handoff.sh is called; the command guards explicitly",
-    "Boundary yield fires only on declared boundaries (yield_after=true steps) or explicit context_pressure from a sub-run handoff; the yield trigger is declared, not detected by heuristic",
+    "All 5 attend env vars (Z_HARNESS_ATTEND_HEAD_SHA, Z_HARNESS_ATTEND_PHASE, Z_HARNESS_ATTEND_DONE_SET_HASH, Z_HARNESS_ATTEND_DIRTY_FP, Z_HARNESS_ATTEND_SESSION_ID) must be non-empty before write-handoff.sh is called; both the command and write-handoff.sh guard this explicitly",
+    "Boundary yield fires only on declared boundaries (yield_after=true steps: plan and implement-all) or explicit context_pressure from a sub-run handoff; the yield trigger is declared, not detected by heuristic",
     "No retry on Skill-tool failure; the chain stops and the user resumes via /z-attend resume <RUN> after fixing",
-    "Preflight lint (lint-halt-categories.sh --check-chain) is advisory only — uncategorized gates produce a warning but the chain still proceeds (they ask inline per Invariant 1)"
+    "Preflight lint (lint-halt-categories.sh --check-chain) is advisory only — uncategorized gates produce a warning but the chain still proceeds (they ask inline per Invariant 1)",
+    "chain-runner.sh state-write supports both argv form (literal JSON string) and stdin '-' form for unbounded payloads; both use identical flock+tmp+rename semantics"
   ],
   "gotchas": [
     "The default preset 'attend-full' includes an 'audit' step not present in overnight's 'full-build'; a different preset (e.g. quick-build) omits audit and triggers the audit-skip shortcut ask",
@@ -164,8 +179,11 @@
     "R4 done-set/dirty-tree drift is a soft WARN-and-ask, not a hard halt; parallel sessions or working-tree changes since the yield are expected in some workflows",
     "lint-halt-categories.sh --check-chain uses chain-runner.sh if present; degrades gracefully to an inline preset map if chain-runner.sh is absent",
     "The audit-skip shortcut (Step 2.0) fires once per chain run (pre-loop), not once per step; it checks whether 'audit' is in the resolved CHAIN_STEPS array",
-    "chain-runner.sh new-run-id excludes both *-attend-* and *-overnight-* basenames from the archive-dir set-difference to prevent attend runs from being classified as sub-runs of themselves",
-    "write-handoff.sh status field is always 'clean_break' for attend yields regardless of the step that triggered the yield"
+    "chain-runner.sh new-run-id filters *-overnight-* from BOTH before and after sets; z-attend.md's before-set snapshot separately excludes *-attend-* and *-overnight-* at the callsite — the attend-dir exclusion is the caller's responsibility, not chain-runner.sh's",
+    "write-handoff.sh status field is always 'clean_break' for attend yields regardless of the step that triggered the yield",
+    "HALT_CATEGORY_ENUM line number moved: enum is now at config.py:292 (was previously documented as 162); always use grep to verify the exact line",
+    "cmd_resolve_halt_category is at config.py:1598 (verify with grep — line numbers shift as the file grows)",
+    "chain-runner.sh state-write accepts '-' as the json argument to read from stdin — important for large overnight states that would exceed the OS argv/env ceiling"
   ],
   "memories": [],
   "presets": {

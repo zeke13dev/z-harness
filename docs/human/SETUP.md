@@ -1,306 +1,85 @@
-# SETUP — z-harness configuration runbook
+# setup
 
-> Last updated: 2026-06-03
+> Last updated: 2026-06-19
 > Covers source: scripts/setup.py, scripts/setup.sh, commands/z-setup.md, docs/human/SETUP.md
-
----
 
 ## Overview
 
-z-harness has eight configuration surfaces. Each surface has a distinct persistence class and precedence level.
+The `setup` concept is the single-entry-point configuration cockpit for z-harness. It provides four modes of operation: `inspect` (read-only view of all resolved configuration surfaces), `wizard` (interactive concern-grouped flow that walks the user through each section), `apply` (one-shot posture preset bootstrap), `explain` (per-key resolution detail), and `status` (compact one-line summary). All writes are delegated to `scripts/config.py set`; `setup.py` itself never writes TOML directly except via that subprocess.
 
-| Surface | File / mechanism | Persistence class | Writable via |
-|---------|-----------------|-------------------|--------------|
-| TOML global | `~/.config/z-harness/config.toml` | `global` | `config.py set --scope global` |
-| TOML repo | `.z-harness/config.toml` | `repo` | `config.py set --scope project` |
-| Env-only knobs | Shell environment | `env` (not persistent) | Shell profile or `export` |
-| providers.json | `~/.config/z-harness/providers.json` or `.z-harness/providers.json` | `provider_file` | `/z-providers-discover` |
-| Personas | `~/.config/z-harness/personas/` or `.z-harness/personas/` | `persona_file` | Direct file edit |
-| docs INDEX.json | `docs/llm/INDEX.json` | `generated_docs` | `/z-init-docs` |
-| Routing-preference memories | `docs/llm/*.json` (field: `memories[]`) | `memory` | `/z-suggest-memory` |
-| Posture presets | Built into `scripts/setup.py` | — | `/z-setup apply --posture <name>` |
+The concept spans eight configuration surfaces: global TOML (`~/.config/z-harness/config.toml`), repo TOML (`.z-harness/config.toml`), env-only knobs, `providers.json`, personas directories, `docs/llm/INDEX.json`, routing-preference memories in `docs/llm/*.json`, and posture presets hardcoded in `POSTURE_PRESETS`. Config precedence (highest wins): env > repo TOML > global TOML > defaults. The `/z-setup` skill in `commands/z-setup.md` is the slash-command surface; it shells out to `scripts/setup.py` and uses `AskUserQuestion` for the apply confirmation gate.
 
-Config precedence (highest wins): env > repo TOML > global TOML > defaults.
+## Key entry points
 
----
+- `scripts/setup.py:1913` — `main` — Top-level CLI entry; dispatches to `cmd_inspect`, `cmd_wizard`, `cmd_apply`, `cmd_explain`, or `cmd_status` based on parsed subcommand
+- `scripts/setup.py:439` — `cmd_inspect` — Inspect subcommand; delegates to `--json`, `--flat`, or concern-grouped view; always read-only
+- `scripts/setup.py:455` — `_cmd_inspect_json` — Machine-parseable JSON output of all resolved config keys with `source`, `strength`, and `persistence_class`
+- `scripts/setup.py:572` — `_cmd_inspect_flat` — Flat `key=value` with source column (git-config style); `--flat` flag
+- `scripts/setup.py:634` — `_cmd_inspect_grouped` — Default concern-grouped inspect view; 8 sections: notifications, workflow, overnight, providers, personas, docs, memories, axioms
+- `scripts/setup.py:1525` — `cmd_wizard` — Guided concern-grouped flow; `--scope` limits to one section; emits `wizard_section_start`/`wizard_section_end` events
+- `scripts/setup.py:1597` — `cmd_apply` — One-shot posture-preset bootstrap; computes diff, confirms, writes keys via `config.py set`; emits `setup_apply_done`
+- `scripts/setup.py:1700` — `cmd_explain` — Pure pass-through to `scripts/config.py explain <key>`
+- `scripts/setup.py:1719` — `_detect_posture` — Heuristically identifies which posture the current config matches; returns preset name, `"none"`, or `"custom"`
+- `scripts/setup.py:1766` — `cmd_status` — Compact one-line summary: `posture=<name>, providers=<bound|none>, docs=<initialized|missing>, prefs=<N> standing`
+- `scripts/setup.py:42` — `_inspect_all_json` — Core read helper: calls `config.py inspect-all --json` and parses JSON; used by inspect, wizard, apply, and status
+- `scripts/setup.py:268` — `POSTURE_PRESETS` — Hardcoded dict of posture name -> `{toml: {key: value}, env: {VAR: value}}`; three presets: `interactive`, `overnight`, `ci-batch`
+- `scripts/setup.py:308` — `_compute_posture_diff` — Computes diff between posture target and current effective config; returns `will_change`, `unchanged`, `env_to_emit`
+- `scripts/setup.py:1303` — `_wizard_axioms` — Axioms wizard section: configure `axioms.*` TOML keys, install kernel-pointer in `~/.claude/CLAUDE.md`, offer `.gitignore` entries
+- `scripts/setup.py:1122` — `_install_kernel_pointer` — Idempotently install the canonical `<!-- z-harness-kernel-pointer BEGIN/END -->` block into CLAUDE.md; shows diff on mismatch; collapses duplicate blocks
+- `scripts/setup.py:1219` — `_ensure_gitignore_entry` — Idempotently add a single entry to `.gitignore`; returns `added|already_present|error:<msg>`
+- `scripts/setup.sh:1` — `setup.sh` — Thin bash wrapper: `exec python3 setup.py "$@"`
+- `commands/z-setup.md:1` — `/z-setup` — Slash-command surface; parses invocation form, shells out to `setup.py`, uses `AskUserQuestion` for apply confirmation
 
-## First-time setup
+## How it interacts with others
 
-Recommended sequence for a fresh install:
+- `config` — `setup.py` reads all config state via `config.py inspect-all --json` (subprocess); writes via `config.py set --scope global|project`; never duplicates config logic
+- `providers-registry` — `setup.py inspect` and `wizard providers` read `providers.json` via `_find_providers_json`; if roles are missing, the user is directed to run `/z-providers-discover`
+- `axioms` — `_wizard_axioms` section configures `axioms.enabled`, `axioms.auto_extract_post_run`, `axioms.kernel_budget_chars`; installs the kernel-pointer block in `~/.claude/CLAUDE.md`; adds `.z-harness/axioms/` and `.z-harness/KERNEL.md` to `.gitignore`
 
-```
-/z-setup inspect
-```
+## Edge cases / gotchas
 
-Shows the current resolved state across all surfaces. Look for `(not set)` or `(absent)` entries to identify gaps.
+- `_inspect_all_json` delegates to `config.py inspect-all` via subprocess; if `config.py` is unavailable or the subcommand is unregistered, it returns `None` and all subcommands fail gracefully with a warning
+- Wizard sections for providers and docs are suggest-only: they detect gaps and print a tip to run `/z-providers-discover` or `/z-init-docs` but do NOT invoke those commands themselves
+- The memories wizard section is read-only display only; all memory writes go through `/z-suggest-memory`
+- `POSTURE_PRESETS` env vars are emitted as a shell snippet to stdout (or `--env-file`); they are never written to any config file
+- `cmd_apply --yes` skips the confirmation prompt; use only in automation where user consent is established upstream
+- The overnight posture snippet sets `Z_HARNESS_NO_ASK=halt`; this activates overnight mode globally for the shell session and is mutually exclusive with `Z_HARNESS_ASK_ALL=1`
+- `cmd_explain` is a pure pass-through to `config.py explain`; it adds no logic of its own
+- `_detect_posture` is heuristic: a config that partially matches a preset returns `"custom"`, not the preset name; it is not authoritative
+- `_wizard_axioms` kernel-pointer install targets `~/.claude/CLAUDE.md` (global user file); it does NOT update per-repo CLAUDE.md files
+- The axioms wizard scope surfaces four env-only knobs (`Z_HARNESS_AXIOMS_ENABLED`, `Z_HARNESS_AXIOMS_KERNEL_BUDGET_CHARS`, `Z_HARNESS_AXIOMS_EXTRACT_MIN_RECURRENCE`, `Z_HARNESS_AXIOMS_AUTO_EXTRACT_POST_RUN`) that are NOT in the core `ENV_ONLY_KNOBS` list in `config.py`; they appear only in `_SCOPE_ENV_KNOBS['axioms']`
+- Wizard `--scope` values are matched lowercase; passing a capitalized scope name fails with exit code 2
+- `setup.py apply --dry-run` exits 0 after printing the diff with no writes; `apply --yes` skips user confirmation
+- `_install_kernel_pointer` collapses multiple duplicate marker blocks (from e.g. an interrupted prior run) into one canonical block after user confirmation
 
-```
-/z-setup wizard
-```
-
-Guided concern-grouped flow: notifications → workflow → overnight → providers → personas → docs → memories → axioms → Final review. Asks about each gap and writes confirmed changes. Safe to re-run: diffs are shown and confirmed before any write.
-
-Alternatively, for a one-shot bootstrap:
-
-```
-/z-setup apply --posture interactive
-```
-
-Sets all TOML keys to the interactive preset defaults. For overnight or CI environments:
-
-```
-/z-setup apply --posture overnight
-/z-setup apply --posture ci-batch
-```
-
-If the inspect view shows providers or docs as missing, also run:
-
-```
-/z-providers-discover
-/z-init-docs
-```
-
-The wizard detects these gaps and tells you when to run them. `/z-setup` itself does not invoke these commands.
-
----
-
-## Posture presets
-
-Posture presets are defined verbatim in `scripts/setup.py` as `POSTURE_PRESETS`.
-
-### interactive
-
-Default for fresh installs. All workflow gates are interactive (`ask`). No env vars required.
-
-| Key | Value |
-|-----|-------|
-| `notify.level` | `approval_only` |
-| `docs.always_apply` | `always` |
-| `workflow.audit_to_amend` | `ask` |
-| `workflow.slug_confirm` | `ask` |
-| `workflow.implement_all_proceed` | `ask` |
-| `workflow.review_all_proceed` | `ask` |
-| `workflow.plan_decisions_approval` | `ask` |
-
-Env vars: none.
-
-### overnight
-
-Suitable for `/z-overnight` runs where workflow gates should halt instead of blocking. Requires env vars to be exported in your shell for the session.
-
-| Key | Value |
-|-----|-------|
-| `notify.level` | `approval_only` |
-| `workflow.implement_all_proceed` | `halt` |
-| `workflow.review_all_proceed` | `halt` |
-| `workflow.plan_decisions_approval` | `halt` |
-
-Env vars emitted by `apply`:
+## Examples
 
 ```bash
-export Z_HARNESS_NO_ASK='halt'
-export Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE='{"workflow.slug_confirm":"recommend_derived","workflow.audit_to_amend":"amend"}'
-```
-
-These are NOT written to any file. Add them to your shell profile manually if you want them persistent.
-
-### ci-batch
-
-For non-interactive CI pipelines. All gates auto-proceed or halt immediately.
-
-| Key | Value |
-|-----|-------|
-| `notify.level` | `off` |
-| `workflow.audit_to_amend` | `amend` |
-| `workflow.slug_confirm` | `recommend_derived` |
-| `workflow.implement_all_proceed` | `auto_resume` |
-
-Env vars emitted by `apply`:
-
-```bash
-export Z_HARNESS_NO_ASK='halt'
-export Z_HARNESS_PAUSE_AT_PCT='85'
-```
-
----
-
-## Axioms wizard section
-
-The `axioms` wizard section (added after the memories section) handles two things:
-
-1. **Axioms TOML keys** — prompts to set `axioms.enabled`, `axioms.auto_extract_post_run`, and `axioms.kernel_budget_chars`.
-2. **Kernel-pointer install** — idempotently installs a `<!-- z-harness-kernel-pointer BEGIN/END -->` block into `~/.claude/CLAUDE.md`. If the block exists but differs from the canonical text, a diff is shown and the user is asked to confirm an overwrite. If multiple marker blocks are found (e.g. from a prior interrupted run), they are collapsed into one.
-3. **Gitignore entries** — offers to add `.z-harness/axioms/` and `.z-harness/KERNEL.md` to the project's `.gitignore`.
-
-Run only the axioms section:
-
-```bash
-/z-setup wizard --scope axioms
-```
-
----
-
-## Manual fallbacks
-
-Use these when `/z-setup` is unavailable or you want direct control.
-
-**Set a TOML config key:**
-```bash
-python3 scripts/config.py set notify.level approval_only
-python3 scripts/config.py set notify.level approval_only --scope global   # global file (default)
-python3 scripts/config.py set notify.level approval_only --scope project  # repo file
-```
-
-**Inspect all keys (machine-readable):**
-```bash
+# Inspect all surfaces (human-readable grouped view)
 python3 scripts/setup.py inspect
-python3 scripts/setup.py inspect --flat
-python3 scripts/setup.py inspect --json
-```
 
-**Compact status line:**
-```bash
+# Flat git-config-style view
+python3 scripts/setup.py inspect --flat
+
+# Machine-parseable JSON
+python3 scripts/setup.py inspect --json
+
+# Run the full wizard
+python3 scripts/setup.py wizard
+
+# Run only the axioms section
+python3 scripts/setup.py wizard --scope axioms
+
+# Show what the overnight posture would change (no writes)
+python3 scripts/setup.py apply --posture overnight --dry-run
+
+# Apply interactive preset with confirmation
+python3 scripts/setup.py apply --posture interactive
+
+# Compact status line
 python3 scripts/setup.py status
 # z-harness: posture=interactive, providers=bound, docs=initialized, prefs=2 standing
-```
 
-**Run provider discovery:**
-```bash
-/z-providers-discover            # global providers.json
-/z-providers-discover --repo     # repo .z-harness/providers.json
-```
-
-**Bootstrap docs INDEX:**
-```bash
-/z-init-docs
-```
-
-**Add a routing-preference memory:**
-```bash
-/z-suggest-memory --kind routing-preference --question-id workflow.slug_confirm --value recommend_derived --strength strong
-```
-
----
-
-## Troubleshooting
-
-### Explain a key's resolution and precedence
-
-```bash
+# Explain a key
 python3 scripts/setup.py explain notify.level
-python3 scripts/config.py explain notify.level
-```
-
-Prints the resolved value, source layer, override strength, and any conflict candidates.
-
-### Conflict resolution
-
-If two config layers set the same key, the higher-precedence layer wins (env > repo > global > default). To resolve a conflict:
-
-1. Run `python3 scripts/setup.py inspect` to see which layer is overriding.
-2. Unset the unwanted layer with `python3 scripts/config.py set <key> <default-value> --scope <layer>`, or remove the key from the relevant TOML file directly.
-
-### Env vars are not persistent
-
-All `Z_HARNESS_*` env vars are session-only. Setting them with `export` in a terminal does not survive shell restart. To persist:
-
-- Add `export Z_HARNESS_NO_ASK=halt` to `~/.zshrc` (or `~/.bashrc`).
-- Or write the snippet emitted by `apply --posture overnight` to a file and source it in your profile.
-
-`Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE` is an internal variable set by the `/z-overnight` orchestrator before invoking sub-skills. Do not set it manually — set `Z_HARNESS_OVERNIGHT_AUTODECIDE` instead.
-
-### tomlkit not installed
-
-Comment-preserving TOML writes require `tomlkit`. Without it, `config.py set` falls back to a basic writer that strips comments. Install with:
-
-```bash
-pip install tomlkit
-```
-
-### Memory edits go through /z-suggest-memory
-
-Routing-preference memories stored in `docs/llm/*.json` are read-only from the `/z-setup` wizard. To add or modify:
-
-```bash
-/z-suggest-memory --kind routing-preference --question-id <id> --value <v> --strength weak|strong|very_strong
-```
-
-Do not hand-edit the `memories[]` arrays in `docs/llm/*.json` — the schema is managed by the docs system and manual edits may be overwritten on the next `/z-init-docs` or `/z-maintain-docs` run.
-
----
-
-## Reference
-
-### POSTURE_PRESETS (verbatim from scripts/setup.py)
-
-```python
-POSTURE_PRESETS = {
-    "interactive": {
-        "toml": {
-            "notify.level": "approval_only",
-            "docs.always_apply": "always",
-            "workflow.audit_to_amend": "ask",
-            "workflow.slug_confirm": "ask",
-            "workflow.implement_all_proceed": "ask",
-            "workflow.review_all_proceed": "ask",
-            "workflow.plan_decisions_approval": "ask",
-        },
-        "env": {},
-    },
-    "overnight": {
-        "toml": {
-            "notify.level": "approval_only",
-            "workflow.implement_all_proceed": "halt",
-            "workflow.review_all_proceed": "halt",
-            "workflow.plan_decisions_approval": "halt",
-        },
-        "env": {
-            "Z_HARNESS_NO_ASK": "halt",
-            "Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE": '{"workflow.slug_confirm":"recommend_derived","workflow.audit_to_amend":"amend"}',
-        },
-    },
-    "ci-batch": {
-        "toml": {
-            "notify.level": "off",
-            "workflow.audit_to_amend": "amend",
-            "workflow.slug_confirm": "recommend_derived",
-            "workflow.implement_all_proceed": "auto_resume",
-        },
-        "env": {
-            "Z_HARNESS_NO_ASK": "halt",
-            "Z_HARNESS_PAUSE_AT_PCT": "85",
-        },
-    },
-}
-```
-
-### ENV_ONLY_KNOBS (verbatim from scripts/config.py)
-
-```python
-ENV_ONLY_KNOBS = [
-    "Z_HARNESS_NO_ASK",
-    "Z_HARNESS_OVERNIGHT_AUTODECIDE",
-    "Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE",
-    "Z_HARNESS_PAUSE_AT_PCT",
-    "Z_HARNESS_PARALLEL",
-    "Z_HARNESS_ASK_ALL",
-    "Z_HARNESS_NOTIFY",
-    "Z_HARNESS_REPO_PROVIDERS",
-    "Z_HARNESS_PLANS_DIR",
-    "Z_HARNESS_EXPLAIN_RESOLUTION",
-    "Z_HARNESS_MAX_EXPLORE",
-]
-```
-
-These knobs are never written to TOML. They are read from the process environment only. See `docs/human/environment-knobs.md` for per-knob descriptions.
-
-### Axioms env knobs (setup scope only)
-
-These are surfaced read-only in the axioms wizard section but are not in the core `ENV_ONLY_KNOBS` list:
-
-```
-Z_HARNESS_AXIOMS_ENABLED
-Z_HARNESS_AXIOMS_KERNEL_BUDGET_CHARS
-Z_HARNESS_AXIOMS_EXTRACT_MIN_RECURRENCE
-Z_HARNESS_AXIOMS_AUTO_EXTRACT_POST_RUN
 ```

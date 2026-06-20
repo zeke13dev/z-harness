@@ -1,13 +1,13 @@
 # config
 
-> Last updated: 2026-06-05
+> Last updated: 2026-06-19
 > Covers source: scripts/config.py, scripts/config.sh, scripts/propose-prefs.py, docs/human/config.md
 
 ## Overview
 
 `config` is the unified z-harness configuration system. It has two semantic surfaces:
 
-- **Loader API** — the 4-layer TOML config loader (built-in defaults → `~/.config/z-harness/config.toml` → repo `.z-harness/config.toml` → `Z_HARNESS_<SECTION>_<KEY>` env vars). Subcommands: `get`, `get-batch`, `export-env`, `ensure-defaults`, `explain`, `should-notify`, `inspect-all`. This is the slice-1 foundation.
+- **Loader API** — the 4-layer TOML config loader (built-in defaults → `~/.config/z-harness/config.toml` → repo `.z-harness/config.toml` → `Z_HARNESS_<SECTION>_<KEY>` env vars). Subcommands: `get`, `get-batch`, `export-env`, `ensure-defaults`, `explain`, `should-notify`, `inspect-all`, `resolve-halt-category`. This is the slice-1 foundation.
 - **Workflow Resolver** — the `[workflow]` config section plus the question-registry, resolver, writer, elevation proposer, and overnight gate system that sit on top of the loader. Subcommands: `resolve-question`, `check-no-ask`, `set`, `list-question-ids`. This is the slice-2 layer.
 
 The core runtime loop for workflow preferences is: skill prose calls `config.py resolve-question <question_id>` before firing an `AskUserQuestion`; the resolver consults the TOML config, `routing-preference` memory entries in `docs/llm/*.json`, and (at the lowest tier) graph-validated axioms from `axiom-store.py`, then returns a typed JSON envelope instructing the skill to `skip`, `prefill`, `ask`, `halt`, or `defer-to-sink`. When running unattended (`Z_HARNESS_NO_ASK=halt`), the overnight gate either auto-decides questions on the allowlist or halts instead of asking. When the user wants to make a preference permanent they run `/z-suggest-memory` (memory path) or `config.py set` (TOML path). The proposer (`propose-prefs.py`) surfaces an invitation to do so when it detects a repeated command-pair pattern in `metrics.jsonl`.
@@ -145,7 +145,7 @@ All preference env vars and their config.toml equivalents:
 | `cost.token_budget` | int or null | `null` | positive int or null | Token budget ceiling for cost-gate delegation. When set, `check-no-ask` with `--range-high` compares the estimate against this value. `null` (unset) means no budget is configured; any cost gate under policy will halt with `cost_budget_missing`. |
 | `runtime.env_strict` | bool | `false` | `true` \| `false` | When `true`, detecting any preference-class `Z_HARNESS_*` env var in the raw environment becomes a **hard error** (exit 2) instead of a warning. Set this in `config.toml` (NOT as a raw env var) to enforce the migration in CI. Default `false` (grace period — warning only). |
 
-For `[brainstorm]`, `[personas]`, `[workflow]`, `[followup]`, `[axioms]`, and `[experiment]` knobs, see the sections below.
+For `[brainstorm]`, `[personas]`, `[workflow]`, `[followup]`, `[axioms]`, `[experiment]`, `[changelog]`, `[models]`, and `[export]` knobs, see the sections below.
 
 ## The transliteration rule
 
@@ -191,6 +191,8 @@ Env-var overrides follow a deterministic rule: lowercase TOML dotted-key → pre
 | `workflow.memory_stale_days` | `Z_HARNESS_MEMORY_STALE_DAYS` (alias — no `WORKFLOW_` prefix) |
 | `docs.staleness_threshold` | `Z_HARNESS_DOC_STALENESS_THRESHOLD` (alias — uses `DOC` not `DOCS`) |
 | `axioms.auto_extract_post_run` | `Z_HARNESS_AXIOM_EXTRACT` (alias — completely different legacy name) |
+| `export.hosts` | `Z_HARNESS_EXPORT_HOSTS` (JSON-encoded array string) |
+| `export.strategy` | `Z_HARNESS_EXPORT_STRATEGY` |
 
 For followup and experiment keys, the rule applies identically (no alias exceptions).
 
@@ -261,11 +263,15 @@ personas.consult_eval = "true"   (source: env Z_HARNESS_PERSONAS_CONSULT_EVAL)
 Prints `yes` or `no`; always exits 0 (safe for `set -e`).  Unknown event → exit 2.
 Valid event kinds: `approval`, `phase_end`, `error`.
 
+### `resolve-halt-category <question_id>`
+
+Prints the `halt_category` tag for a registered question ID (`decision`, `risk`, `shortcut`, `archiving`, `mechanical_proceed`), or `ask` (fail-safe) for unknown IDs. Exit 0 always. Used by `scripts/lint-halt-categories.sh` and `chain-runner.sh` to drive the attend gate policy.
+
 ### `inspect-all [--json]`
 
 Prints all configuration knobs with their current effective value, source layer, and persistence class. Covers three categories:
 
-1. **TOML-persistent keys** — every key in `DEFAULTS` (all `notify.*`, `docs.*`, `brainstorm.*`, `personas.*`, `workflow.*`, `followup.*`, `axioms.*`, `experiment.*`, `runtime.*`, `cost.*`)
+1. **TOML-persistent keys** — every key in `DEFAULTS` (all `notify.*`, `docs.*`, `brainstorm.*`, `personas.*`, `workflow.*`, `followup.*`, `axioms.*`, `experiment.*`, `runtime.*`, `cost.*`, `models.*`, `export.*`, `changelog.*`)
 2. **Registered question_ids** — every entry in `QUESTION_IDS`, showing the resolver envelope result
 3. **Env-only knobs** — environment variables that affect behavior but are never written to TOML
 
@@ -379,7 +385,7 @@ The slice-2 layer: the `[workflow]` config section, the question-registry, the r
 
 | Key | Type | Default | Values | Description |
 |-----|------|---------|--------|-------------|
-| `workflow.audit_to_amend` | string | `ask` | `ask` \| `amend` \| `stop` | **Source-keyed force-ask override** for `/z-audit-plan` Phase 5. The effective behavior depends on the resolver `source`, not just the value: `source=="none"` (no preference stored) → `auto_split` (new default, no popup); `source in {config,memory}` with `ask`/`prefill` result → `force_ask` (3-way popup); `halt`/`stop` from any source → `halt`; `amend`/`skip` from any source → `auto_split`. Setting `ask` in config explicitly opts back into the 3-way popup. See `scripts/amend-gate-decision.py` for the full precedence logic. |
+| `workflow.audit_to_amend` | string | `ask` | `ask` \| `amend` \| `stop` | **Source-keyed force-ask override** for `/z-audit-plan` Phase 5 and `/z-review-all` Phase 6.5. The effective behavior depends on the resolver `source`, not just the value: `source=="none"` (no preference stored) → `auto_split` (default: no popup, INTENT-mode batches all spec_gaps into ONE /z-amend call); `source in {config,memory}` with `ask`/`prefill` result → `force_ask` (3-way popup); `halt`/`stop` from any source → `halt`; `amend`/`skip` from any source → `auto_split`. Setting `ask` in config explicitly opts back into the 3-way popup. Decision logic in `scripts/amend-gate-decision.py`. |
 | `workflow.slug_confirm` | string | `ask` | `ask` \| `auto_accept` \| `recommend_derived` | Controls the soft non-obvious-slug confirmation at 7 callsites. `ask` always prompts. `auto_accept` silently accepts the derived slug. `recommend_derived` pre-selects the derived slug in the AskUser prompt. **The hard slug-collision check always runs unconditionally, regardless of this setting.** |
 | `workflow.implement_all_proceed` | string | `ask` | `ask` \| `auto_resume` \| `halt` | Controls the halt-resolution gate in `/z-implement-all`. `ask` prompts. `auto_resume` skips the prompt. `halt` stops unconditionally. |
 | `workflow.review_all_proceed` | string | `ask` | `ask` \| `proceed` \| `halt` | Controls the Phase 3.7 proceed gate in `/z-review-all`. `ask` prompts. `proceed` skips the prompt. `halt` stops unconditionally. |
@@ -541,33 +547,84 @@ export Z_HARNESS_EXPERIMENT_PERSONA_ROTATION=false
 scripts/config.sh set experiment.persona_rotation false --scope=project
 ```
 
+## The knobs ([changelog] section)
+
+The `[changelog]` section controls the post-commit hook that drafts CHANGELOG.md bullets. Installed per-repo via `scripts/install-changelog-hook.sh`; these knobs gate it at run-time so it can be disabled without uninstalling.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `changelog.auto` | bool | `true` | Master switch for the post-commit changelog hook. Set to `false` to stop writing CHANGELOG.md bullets without uninstalling the hook. |
+| `changelog.types` | array\<string\> | `["feat", "fix"]` | Conventional-commit types that earn a bullet. Commits not matching these types are silently skipped by the hook. |
+| `changelog.file` | string | `"CHANGELOG.md"` | Changelog path, relative to repo root. |
+| `changelog.repos` | array\<string\> | `["*"]` | Repo-ID allowlist; `"*"` means every repo. |
+
+## The knobs ([models] section)
+
+The `[models]` section provides per-role model overrides. An empty string (the default for all keys) means "use the provider's `default_model`". Validity of the model/vendor string is cross-checked against `providers.json` at RESOLVE time (not at config-load time), so invalid models are caught only when the role is dispatched.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `models.consultant_primary` | string | `""` | Model override for the primary consultant role. Empty = use provider default. |
+| `models.consultant_secondary` | string | `""` | Model override for the secondary consultant role. Empty = use provider default. |
+| `models.reviewer` | string | `""` | Model override for the reviewer role. Empty = use provider default. |
+| `models.implementer` | string | `""` | Model override for the implementer role. Empty = use provider default. |
+| `models.pre_reviewer` | string | `""` | Model override for the pre-reviewer role. Empty = use provider default. |
+
+## The knobs ([export] section)
+
+The `[export]` section controls which hosts `/z-export` targets and what strategy to use. The `hosts` list is validated against a closed set at config-load time; unknown host names exit 2 on the repo/env layer and soft-warn on the global layer.
+
+| Key | Type | Default | Env var | Description |
+|-----|------|---------|---------|-------------|
+| `export.hosts` | array\<string\> | `["cursor", "codex", "agy", "pi"]` | `Z_HARNESS_EXPORT_HOSTS` (JSON-encoded array) | Export target hosts. Closed set: adapter names (`claude`, `antigravity`, `agy`, `cursor`, `codex`) and export-only driver names (`pi`, `windsurf`, `cline`, `kiro`, `copilot`). Must be non-empty. |
+| `export.strategy` | string | `""` | `Z_HARNESS_EXPORT_STRATEGY` | Export strategy. `""` (default, empty sentinel) defers to each driver's own `default_strategy` (e.g. `cline` → `pointer`, `windsurf`/`kiro` → `curated`). Explicit values: `pointer`, `curated`, `full`. |
+
 ---
 
 ## Key entry points
 
 <!-- AUTO-START: entry-points -->
-- `scripts/config.py:53` — `DEFAULTS` — built-in default values for all config keys including `[brainstorm]`, `[personas]`, `[workflow]`, `[followup]`, `[axioms]`, `[experiment]`, `[cost]` sections (layer 1)
-- `scripts/config.py:147` — `VALIDATORS` — allowed enum sets per dotted-key; hard-fail on repo/env, soft-warn on global; includes all `personas.*`, workflow, axioms, experiment, cost keys
-- `scripts/config.py:178` — `_COERCERS` — post-validation normalizers; converts env-var strings to typed Python values for bool/int knobs (including all `personas.*` bool knobs)
-- `scripts/config.py:239` — `QUESTION_IDS` — single source of truth for AskUserQuestion routing-class preference keys
-- `scripts/config.py:320` — `OVERNIGHT_AUTODECIDE_QIDS_DEFAULT` — default overnight allowlist
-- `scripts/config.py:326` — `RESULT_MAP` — maps `(question_id, option-domain-value)` to resolver result-domain
-- `scripts/config.py:355` — `_run_startup_guards` — module-load consistency check
-- `scripts/config.py:664` — `load_config` — build resolved config from all 4 layers; returns `(values, sources)` dicts
-- `scripts/config.py:880` — `cmd_export_env` — print export lines for all user knobs; emit `config_resolved` once per run
-- `scripts/config.py:2007` — `cmd_resolve_question` — consults 4-layer config + memory + axioms + overnight overrides; returns JSON envelope
-- `scripts/config.py:2264` — `cmd_check_no_ask` — lightweight overnight-gate checker with cost-gate delegation path
-- `scripts/config.py:2533` — `cmd_set` — atomically write a TOML key to global or project config via tmp+rename
-- `scripts/propose-prefs.py:1` — `propose-prefs` (module) — walks `metrics.jsonl` for repeated command-pair patterns; emits JSON proposal if threshold met; never writes
+- `scripts/config.py:61` — `DEFAULTS` — built-in defaults for all config sections including `[brainstorm]`, `[personas]`, `[workflow]`, `[followup]`, `[axioms]`, `[experiment]`, `[runtime]`, `[cost]`, `[models]`, `[export]`, `[changelog]` (layer 1)
+- `scripts/config.py:296` — `VALIDATORS` — allowed enum sets per dotted-key; hard-fail on repo/env, soft-warn on global; includes all `personas.*`, workflow, axioms, experiment, cost, models, export keys
+- `scripts/config.py:360` — `_COERCERS` — post-validation normalizers; converts env-var strings to typed Python values for bool/int knobs (including all `personas.*` bool knobs)
+- `scripts/config.py:492` — `QUESTION_IDS` — single source of truth for AskUserQuestion routing-class preference keys (6 workflow.* + pre_run_cost_gate); validated against VALIDATORS at module load by `_run_startup_guards`
+- `scripts/config.py:580` — `OVERNIGHT_AUTODECIDE_QIDS_DEFAULT` — default overnight allowlist: `{workflow.slug_confirm: recommend_derived, workflow.audit_to_amend: amend}`
+- `scripts/config.py:586` — `RESULT_MAP` — maps `(question_id, option-domain-value)` to resolver result-domain (`skip|prefill|ask|halt|defer-to-sink`)
+- `scripts/config.py:615` — `_run_startup_guards` — module-load consistency check: asserts `QUESTION_IDS <= VALIDATORS`, every qid has skill_default and halt_category, RESULT_MAP references only valid choices; raises `SystemExit(2)` on violation
+- `scripts/config.py:707` — `_ENV_VAR_ALIASES` — dotted keys whose exported env var name differs from the mechanical `_dotted_to_env()` mapping (e.g. `runtime.consult` → `Z_HARNESS_CONSULT`)
+- `scripts/config.py:750` — `_INGRESS_LEGACY_ALIASES` — ingress fallback map including all `_ENV_VAR_ALIASES` plus ingress-only legacies (e.g. `notify.level` → `Z_HARNESS_NOTIFY`, `runtime.max_parallel` → `HERMES_MAX_PARALLEL`)
+- `scripts/config.py:780` — `LEGAL_ENV_KEYS` / `LEGAL_ENV_PREFIXES` — allowlist of plumbing and unattended-entry env vars that never trigger the deprecation warning
+- `scripts/config.py:1065` — `load_config` — build resolved config from all 4 layers; returns `(values, sources)` dicts; TOML wins over env for preference-class vars
+- `scripts/config.py:1303` — `cmd_get` — resolve and print single dotted-key value; exits 3 on unknown or meta key
+- `scripts/config.py:1334` — `cmd_get_batch` — resolve multiple keys in one process; output JSON object; unknown/meta keys → null + stderr; always exits 0
+- `scripts/config.py:1426` — `cmd_export_env` — print export+unset lines for all user knobs; emit `config_resolved` once per run; emit `config_env_deprecated` per deprecated var
+- `scripts/config.py:1484` — `cmd_ensure_defaults` — write global config with defaults + inline comments if absent; never overwrites existing file
+- `scripts/config.py:1561` — `cmd_explain` — print effective value and source layer for one key
+- `scripts/config.py:1593` — `cmd_list_question_ids` — print sorted JSON array of registered question IDs
+- `scripts/config.py:1598` — `cmd_resolve_halt_category` — print `halt_category` tag for a question ID (`decision|risk|shortcut|archiving|mechanical_proceed`) or `ask` for unknown IDs; always exits 0
+- `scripts/config.py:2071` — `_load_axiom_store_module` — dynamically load `scripts/axiom-store.py` via importlib (hyphen in filename); cached per process; returns None when absent or fails
+- `scripts/config.py:2109` — `_load_axiom_matches` — load graph-valid approved axioms for a question_id; gated on `axioms.enabled`; returns `[]` when disabled or store absent
+- `scripts/config.py:2208` — `_resolve_memory_matches` — merge memory match list; highest strength wins on agreement; returns `(None, 'conflict', sources)` when entries disagree
+- `scripts/config.py:2244` — `_resolve_config_memory_envelope` — pre-axiom resolution: config + routing-pref memory; returns 7-tuple including `resolved_value` and `memory_silent` signals for axiom layer
+- `scripts/config.py:2475` — `_build_resolve_envelope` — full resolver: apply axiom layer on top of config+memory envelope; agree/gap-fill/direct-conflict axiom outcomes; returns 5-tuple
+- `scripts/config.py:2622` — `cmd_resolve_question` — consult 4-layer config + memory + axioms + overnight overrides; return JSON `{result, default, source, rule_id, strength, reason, sources[]}`; stdout reserved for JSON
+- `scripts/config.py:2879` — `cmd_check_no_ask` — overnight-gate checker with cost-gate delegation path (`--range-high`/`--severity`); returns `{result: halt|proceed|auto_proceed|unhandled_gate, question_id, rule_id}`; always exits 0
+- `scripts/config.py:3148` — `cmd_set` — atomically write a TOML key to global or project config via tmp+rename; validates against VALIDATORS before writing; exit 2 on invalid value; exit 0 silently on success
+- `scripts/config.py:3262` — `ENV_ONLY_KNOBS` — list of env-only knob names surfaced by `inspect-all`; not settable via TOML
+- `scripts/config.py:3311` — `cmd_inspect_all` — print all config knobs with value/source/persistence_class; covers DEFAULTS keys + QUESTION_IDS + ENV_ONLY_KNOBS; `--json` for machine-parseable output
+- `scripts/config.py:3456` — `cmd_should_notify` — print `yes|no` for a given event kind; always exits 0; exits 2 on unknown event; valid kinds: `approval`, `phase_end`, `error`
+- `scripts/config.py:3547` — `cmd_migrate` — rewrite old provider names in `roles.*.runtime` to `-cli` suffixed form; applied to global + project layers; idempotent; exits 4 on I/O error
+- `scripts/propose-prefs.py:1` — `propose-prefs` (module) — walk `metrics.jsonl` for repeated command-pair patterns; emit JSON proposal if threshold met; never writes — caller owns write
 <!-- AUTO-END: entry-points -->
 ## How it interacts with others
 
-- `commands` (z-audit-plan, z-audit-plan-style, z-plan, z-fix, z-uplift, z-amend, z-do, z-research, z-implement-all, z-review-all, z-overnight, z-implement-next, z-debug, z-audit, z-brainstorm, z-plan-light) — call `export-env` + `should-notify` during Setup; call `resolve-question` before workflow AskUserQuestions; call `check-no-ask` for overnight gate checks; call `set` after proposal acceptance; call `propose-prefs.py` at command end; read `brainstorm.personas`, `personas.*`, `experiment.*` at each persona-dispatch site
+- `commands` (z-audit-plan, z-audit-plan-style, z-plan, z-fix, z-uplift, z-amend, z-do, z-research, z-implement-all, z-review-all, z-overnight, z-implement-next, z-debug, z-audit, z-brainstorm, z-plan-light, z-attend) — call `export-env` + `should-notify` during Setup; call `resolve-question` before workflow AskUserQuestions; call `check-no-ask` for overnight gate checks; call `set` after proposal acceptance; call `propose-prefs.py` at command end; read `brainstorm.personas`, `personas.*`, `experiment.*` at each persona-dispatch site; call `resolve-halt-category` for halt-category tagging in chain-runner.sh
 - `skills` (z-suggest-memory, z-map, z-plan-light, z-debug, z-brainstorm, z-do, z-plan, z-research) — call `list-question-ids` to validate routing-preference question IDs; call `resolve-question` for slug-confirm gate; call `export-env` + `should-notify` during Setup
 - `scripts` — provides the `log-event.sh` + `log-phase.sh` telemetry pipeline that `config.py` writes events through; `scripts/axiom-store.py` loaded dynamically by `_load_axiom_store_module` for axiom resolution
 - `followup-sink` — `sink-add.sh` called by orchestrators when `resolve-question` returns `defer-to-sink`; `notion-push.py` reads `Z_HARNESS_NOTION_TOKEN` env override
 - `active-plan-registry` — `Z_HARNESS_REGISTRY_ENABLED`, `Z_HARNESS_REGISTRY_STALE_SECS`, `Z_HARNESS_STRICT_OVERLAP`, `Z_HARNESS_EXTERNAL_DEFAULT`, `Z_HARNESS_BASE_DIR`, `Z_HARNESS_AUTO_WAIT`, `Z_HARNESS_AUTO_WAIT_BUDGET_SECS`, `Z_HARNESS_WAIT_POLL_SECS`, `Z_HARNESS_WAIT_TIMEOUT_SECS`, and `Z_HARNESS_WAIT_REQUIRE_MERGE` are env-only knobs (not in config.py's DEFAULTS) consumed by `plan-path.sh` and `active-plan-registry.py`
 - `cost-estimation` — `cost.token_budget` is read by `check-no-ask --range-high N --severity hard` as the budget ceiling; `workflow.pre_run_cost_gate` gates the cost-gate question for z-research/z-uplift/z-plan-split
+- `amendment-brief` — `scripts/amend-gate-decision.py` reads `workflow.audit_to_amend` resolver output (result+source) to determine whether to auto-split, force-ask, or halt; `scripts/amendment-brief.py` renders the prose brief for approach concerns; both `/z-audit-plan` Phase 5 and `/z-review-all` Phase 6.6 use this path
 
 ## Edge cases / gotchas
 
@@ -590,6 +647,10 @@ scripts/config.sh set experiment.persona_rotation false --scope=project
 - `cost.token_budget = null` (the default) means no budget is configured; `check-no-ask` with `--severity hard` under `NO_ASK=halt` will return `halt` with `rule_id: cost_budget_missing` when unset
 - `workflow.pre_run_cost_gate` governs the z-research/z-uplift/z-plan-split pre-run gate; it is a registered question_id and participates in the overnight allowlist system
 - `check-no-ask --severity soft` always returns `auto_proceed` regardless of policy — soft-severity gates are never blocking
+- `models.*` keys accept any string including empty (empty = use provider default); cross-checked against `providers.json` at resolve time NOT at config-load time — invalid model strings are caught only when the role is dispatched
+- `export.hosts` validated against a closed set at config-load time; unknown names exit 2 on repo/env layer and soft-warn on global layer; list must be non-empty; env transport is a JSON-encoded array string
+- `export.strategy = ""` (empty string, the default) is the sentinel meaning "defer to per-driver default"; do not confuse it with missing/unset
+- `workflow.audit_to_amend` behavior is SOURCE-KEYED: the effective action depends on the resolver's `source` field, not just the stored value; a fresh user with no preference (source=none) gets `auto_split` (no popup), not `ask`; the value `ask` in config.toml explicitly opts BACK into the popup
 
 ## Examples
 
@@ -663,6 +724,21 @@ export Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE='{"workflow.slug_confirm":"recom
 ```toml
 [cost]
 token_budget = 50000
+```
+
+**Export target override** (restrict to cursor + codex only):
+
+```toml
+[export]
+hosts = ["cursor", "codex"]
+strategy = ""   # empty = each driver uses its own default
+```
+
+**Per-role model override:**
+
+```toml
+[models]
+consultant_primary = "claude-opus-4"   # override only the primary consultant
 ```
 
 ## v2 deferrals

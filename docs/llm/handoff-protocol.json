@@ -1,0 +1,70 @@
+{
+  "concept": "handoff-protocol",
+  "last_updated": "2026-06-19",
+  "covers_spec": "none",
+  "source_file": [
+    "docs/human/handoff-v1.md",
+    "docs/schemas/handoff.schema.json",
+    "commands/z-handoff.md",
+    "scripts/write-handoff.sh"
+  ],
+  "confidence": "high",
+  "entry_points": [
+    {
+      "file": "docs/schemas/handoff.schema.json",
+      "line": 1,
+      "symbol": "handoff schema",
+      "kind": "module",
+      "summary": "JSON Schema draft 2020-12 for handoff.json. protocol_version enum ['1.0','1.1']; required: protocol_version, timestamp, agent, status, next_step, context_files; optional: slug (string|null), attend_resume (1.1 only). context_files minItems:1, items {path, role enum [spec|plan|tasks|workstreams|session_log|diff|other]}. attend_resume sub-object required fields: expected_head_sha, expected_phase, done_set_hash, dirty_state_fingerprint, session_id — all minLength:1."
+    },
+    {
+      "file": "commands/z-handoff.md",
+      "line": 1,
+      "symbol": "/z-handoff",
+      "kind": "module",
+      "summary": "Agent-facing slash command. 5 phases: (0) resolve run context from Z_HARNESS_PLAN_DIR/RUN; (1) detect context — 1a slug/plan, 1b context_files priority order (plan artifacts > workstreams > session log > active diff > explicit > fallback), 1c next_step (ARGUMENTS override > TASKS.md first-pending > FIX.md approach > ad-hoc), 1d status (context_pressure|clean_break|complete|blocked — default clean_break), 1e agent id; (2) assemble/validate — context_files non-empty, next_step non-empty unless complete; (3) atomic write to $Z_HARNESS_PLAN_DIR/handoff.json (fallback to $PWD when slug null); (4) handoff_written telemetry; (5) exit with summary."
+    },
+    {
+      "file": "scripts/write-handoff.sh",
+      "line": 1,
+      "symbol": "write-handoff.sh",
+      "kind": "module",
+      "summary": "Automated producer. Required env: Z_HARNESS_PLAN_DIR. Optional: Z_HARNESS_SLUG, Z_HARNESS_AGENT (default 'pi'), Z_HARNESS_MODEL, Z_HARNESS_CONTEXT_PCT. Status always 'clean_break'. Reads TASKS.md for task counts; reads SESSION.md YAML frontmatter (done_count, next_pending) and body sections (Decisions, Landmines, Open threads) to compose next_step. context_files: SPEC.md, PLAN.md, TASKS.md, SESSION.md (whichever exist). Protocol branch: Z_HARNESS_ATTEND_RESUME=0/absent → 1.0 (no attend_resume); Z_HARNESS_ATTEND_RESUME=1 → 1.1 with 5 required attend env vars (ATTEND_HEAD_SHA, ATTEND_PHASE, ATTEND_DONE_SET_HASH, ATTEND_DIRTY_FP, ATTEND_SESSION_ID); any missing var → exit 1 naming them. Atomic tmp+rename write. Stdout: 'STATUS: written bytes=<n>'."
+    },
+    {
+      "file": "docs/human/handoff-v1.md",
+      "line": 1,
+      "symbol": "handoff-v1 narrative",
+      "kind": "doc",
+      "summary": "Protocol narrative: status enum definitions (context_pressure, clean_break, complete, blocked), context_files role enum, consumer contract (detect→validate→load-in-order→pass-next_step→delete), slug-present optimization (set Z_HARNESS_SLUG + Z_HARNESS_PLAN_DIR), pre-existing handoff.json overwrite rule, examples for 4 status values."
+    }
+  ],
+  "depends_on": [
+    "commands",
+    "scripts"
+  ],
+  "consumed_by": [
+    "attend",
+    "session-handoff",
+    "hermes-orchestration"
+  ],
+  "invariants": [
+    "handoff.json is always written to $Z_HARNESS_PLAN_DIR when in a plan; workspace root is the plan-less fallback only (slug null).",
+    "protocol_version '1.0' never includes attend_resume; protocol_version '1.1' always includes attend_resume with all 5 sub-fields non-empty.",
+    "All 5 attend env vars (ATTEND_HEAD_SHA, ATTEND_PHASE, ATTEND_DONE_SET_HASH, ATTEND_DIRTY_FP, ATTEND_SESSION_ID) must be non-empty before write-handoff.sh emits a 1.1 handoff; any missing var causes an immediate exit 1.",
+    "The agent field is provenance only — consumers MUST NOT branch behavior on it.",
+    "context_files must have at least 1 entry; minItems:1 enforced by schema.",
+    "next_step must be non-empty unless status is 'complete'; capped at 2000 chars.",
+    "Atomic write always: write to .tmp.<PID> in the same directory then rename; consumer never sees a partial handoff.json.",
+    "write-handoff.sh at the /z-implement-all compaction breakpoint is gated by workflow.hermes_enabled=true; /z-attend calls it unconditionally at yield boundaries.",
+    "A pre-existing handoff.json is overwritten by the producer; the consumer (Hermes or /z-attend) must read and delete before a new one is written."
+  ],
+  "gotchas": [
+    "write-handoff.sh exits non-zero if Z_HARNESS_ATTEND_RESUME=1 but any of the 5 attend vars is empty; /z-attend must set all 5 before calling the script or the yield will fail loudly.",
+    "handoff.json path is $Z_HARNESS_PLAN_DIR — NOT repo root or cwd. Orchestrators reading from the wrong path silently miss the file.",
+    "hermes_enabled=false (default) suppresses write-handoff.sh at the /z-implement-all compaction breakpoint. No handoff.json is written for Hermes consumption unless the knob is on.",
+    "An unconsumed handoff.json is silently overwritten by the next producer invocation; the prior session's resume data is lost without any warning.",
+    "status is always 'clean_break' in write-handoff.sh regardless of actual context state — the context_pressure status is only set by the /z-handoff slash command."
+  ],
+  "memories": []
+}

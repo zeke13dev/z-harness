@@ -1,6 +1,6 @@
 {
   "concept": "reviewer-capture",
-  "last_updated": "2026-06-10",
+  "last_updated": "2026-06-19",
   "covers_spec": "reviewer-cost-telemetry/SPEC.md Change 1",
   "source_file": [
     "agents/reviewer.md",
@@ -9,11 +9,14 @@
   ],
   "confidence": "high",
   "entry_points": [
-    {"file": "agents/reviewer.md", "line": 135, "symbol": "codex capability probe", "kind": "module", "summary": "Per-PPID sentinel caches CODEX_SUPPORTS_OUTFILE; greps `codex exec --help` for `output-last-message`; runs once per orchestrating process"},
-    {"file": "agents/reviewer.md", "line": 160, "symbol": "ARCHIVE_DIR / OUTFILE", "kind": "module", "summary": "Canonical artifact path: $Z_HARNESS_PLAN_DIR/archive/tasks/<id>/review-cycle<N>.md"},
-    {"file": "agents/reviewer.md", "line": 166, "symbol": "CAPTURE_MODE=file branch", "kind": "module", "summary": "Codex dispatch appends -o OUTFILE; stdout transcript discarded; fallback on empty/missing file emits review_capture_fallback"},
-    {"file": "agents/consultant-primary.md", "line": 61, "symbol": "same probe+dispatch block", "kind": "module", "summary": "Identical probe/dispatch/fallback; role=consultant-primary; uniform {id, cycle, role, reason} fallback event"},
-    {"file": "agents/consultant-secondary.md", "line": 61, "symbol": "same probe+dispatch block", "kind": "module", "summary": "Identical probe/dispatch/fallback; role=consultant-secondary"}
+    {"file": "agents/reviewer.md", "line": 229, "symbol": "PROBE_SENTINEL", "kind": "module", "summary": "Per-PPID sentinel caches CODEX_SUPPORTS_OUTFILE; greps `codex exec --help` for `output-last-message`; runs once per orchestrating process"},
+    {"file": "agents/reviewer.md", "line": 248, "symbol": "ARCHIVE_DIR / OUTFILE", "kind": "module", "summary": "Canonical artifact path: $Z_HARNESS_PLAN_DIR/archive/tasks/<id>/review-cycle<N>.md"},
+    {"file": "agents/reviewer.md", "line": 253, "symbol": "CAPTURE_MODE=file branch", "kind": "module", "summary": "Codex dispatch appends -o OUTFILE; stdout transcript discarded; fallback on empty/missing file emits review_capture_fallback"},
+    {"file": "agents/reviewer.md", "line": 281, "symbol": "review_capture_fallback event", "kind": "module", "summary": "Uniform schema {id, cycle, role, reason} across all three agents; role disambiguates for fallback-rate cut"},
+    {"file": "agents/consultant-primary.md", "line": 49, "symbol": "consult_start event", "kind": "module", "summary": "Emitted before CLI call; liveness.sh uses as in-flight marker; matching end is consult event in Archiving section"},
+    {"file": "agents/consultant-primary.md", "line": 53, "symbol": "probe + dispatch block", "kind": "module", "summary": "Identical CODEX_SUPPORTS_OUTFILE probe; archive path z-harness/archive/$RUN/transcripts/<N>-<slug>.response.md"},
+    {"file": "agents/consultant-secondary.md", "line": 49, "symbol": "consult_start event", "kind": "module", "summary": "Same shape as consultant-primary; role=consultant_secondary"},
+    {"file": "agents/consultant-secondary.md", "line": 53, "symbol": "probe + dispatch block", "kind": "module", "summary": "Identical probe/dispatch/fallback; role=consultant-secondary"}
   ],
   "depends_on": [
     "agents",
@@ -25,20 +28,26 @@
     "subagent-telemetry"
   ],
   "invariants": [
-    "non-codex provider path is byte-identical to today; -o is only appended when provider==codex",
+    "non-codex provider path is byte-identical to pre-feature; -o is only appended when provider==codex",
     "capability probe runs at most once per PPID process; sentinel keyed on PPID not $$",
-    "OUTFILE always in $Z_HARNESS_PLAN_DIR/archive/tasks/<id>/; path never needs external discovery",
+    "reviewer OUTFILE always in $Z_HARNESS_PLAN_DIR/archive/tasks/<id>/; path never needs external discovery",
     "fallback always emits review_capture_fallback before reverting to stdout; verdict is never silently dropped",
     "response_chars = size of the captured final review (honest), not the discarded transcript",
-    "all three agents (reviewer + both consultants) share the same probe/dispatch/fallback/log shape"
+    "all three agents share the same probe/dispatch/fallback/log shape; co-maintained",
+    "reviewer expected_contract=review-verdict; both consultants expected_contract=freeform; persona binding validated by resolve-persona.py",
+    "reviewer INTENT mode requires both intent_snapshot: AND ledger_path:; exactly one present => BLOCKED verdict with MISCONFIGURED message",
+    "minors/nits dropped from reviewer return sections; MUST appear in FOLLOWUPS fenced JSON block (P3/P2) routed via parse-followups-block.py",
+    "consult_start emitted BEFORE the CLI call (not after); consult event is the matching end-marker for liveness.sh"
   ],
   "gotchas": [
     "sentinel keyed on $PPID (parent PID) not $$; each bash invocation is a new process so $$ always differs",
     "if $Z_HARNESS_PLAN_DIR is unset, ARCHIVE_DIR construction fails before dispatch — orchestrator must export it",
     "codex non-zero exit triggers fallback even if $OUTFILE was partially written; file considered valid only on exit 0",
-    "probe greps for long-form --output-last-message but dispatches with short alias -o",
+    "probe greps for long-form --output-last-message but dispatches with short alias -o; future rename will probe-fail and fall through safely",
     "review-cycle<N>.md is overwritten on cycle number reuse; callers should not assume uniqueness across retries",
-    "review_capture_fallback uses ONE uniform schema across all three agents: {id, cycle, role, reason} (role=reviewer | consultant-primary | consultant-secondary); SPEC floor is {id, cycle, reason}, role added for the cross-agent fallback-rate cut"
+    "review_capture_fallback uniform schema: {id, cycle, role, reason}; role is cross-agent disambiguator (not just reviewer)",
+    "consultant archive paths differ from reviewer: z-harness/archive/$RUN/transcripts/ vs $Z_HARNESS_PLAN_DIR/archive/tasks/<id>/",
+    "reviewer reads relevant_docs (docs/llm/<concept>.json paths) BEFORE composing review prompt — omitting them can cause missed contract drift findings"
   ],
   "memories": []
 }

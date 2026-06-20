@@ -1,6 +1,6 @@
 {
   "concept": "lookup-contract",
-  "last_updated": "2026-05-25",
+  "last_updated": "2026-06-19",
   "covers_spec": "none",
   "source_file": [
     "agents/external-lookup.md"
@@ -12,66 +12,91 @@
       "line": 1,
       "symbol": "external-lookup",
       "kind": "module",
-      "summary": "Agent metadata declares lookup role, model, and tool allowlist."
+      "summary": "Agent metadata declares Haiku model, tool allowlist, and lookup role."
     },
     {
       "file": "agents/external-lookup.md",
       "line": 12,
       "symbol": "Output contract",
       "kind": "module",
-      "summary": "Fixed STATUS-headed Markdown envelope and required sections."
+      "summary": "Fixed STATUS-headed Markdown envelope and required section order."
     },
     {
       "file": "agents/external-lookup.md",
       "line": 51,
       "symbol": "Verb-blocklist",
       "kind": "const",
-      "summary": "Regex patterns that force STATUS: refused before Bash runs."
+      "summary": "Python regex patterns forcing STATUS: refused before any Bash execution."
     },
     {
       "file": "agents/external-lookup.md",
       "line": 91,
       "symbol": "Budget",
       "kind": "const",
-      "summary": "Total response cap and raw-artifact cache behavior."
+      "summary": "3 KB total response cap; overflow to lookup-cache/<sha256>.raw."
     },
     {
       "file": "agents/external-lookup.md",
       "line": 99,
       "symbol": "Freshness discipline",
       "kind": "const",
-      "summary": "freshness_ts is retrieval time; stale cache lowers confidence."
+      "summary": "freshness_ts is retrieval time UTC; cache >24h lowers confidence to low."
+    },
+    {
+      "file": "agents/external-lookup.md",
+      "line": 105,
+      "symbol": "Refusal modes",
+      "kind": "const",
+      "summary": "Three mutually exclusive STATUS values; refusal categories: mutation_blocked, out_of_scope, auth_missing."
+    },
+    {
+      "file": "agents/external-lookup.md",
+      "line": 127,
+      "symbol": "Confidence scale",
+      "kind": "const",
+      "summary": "Three-value enum {high, medium, low} tied to source authority and corroboration."
     },
     {
       "file": "agents/external-lookup.md",
       "line": 137,
       "symbol": "Edge cases",
       "kind": "module",
-      "summary": "Fallback, pagination, no-result, and auth-missing behavior."
+      "summary": "Fallback, pagination depth/count limits, no-result, and auth-missing behavior."
+    },
+    {
+      "file": "agents/external-lookup.md",
+      "line": 144,
+      "symbol": "Invariants",
+      "kind": "const",
+      "summary": "Machine-checkable hard rules: STATUS first, fixed section order, 3 KB cap, no raw dumps, verbatim provenance."
     }
   ],
   "depends_on": [
     "agents"
   ],
   "consumed_by": [
+    "agents",
     "external-lookup-agent"
   ],
   "invariants": [
     "First output line is exactly STATUS: ok|partial|refused.",
-    "Sections are ordered Answer, Provenance, Unresolved, optional Raw artifact pointer.",
-    "Total response, including STATUS and sections, is <=3 KB.",
+    "Sections are ordered: Answer, Provenance, Unresolved, optional Raw artifact pointer.",
+    "Total response including STATUS and all sections is <=3 KB.",
     "Answer summarizes and cites; raw HTML/JSON/YAML goes to raw artifact pointer.",
     "Bash commands are checked against verb-blocklist before execution.",
-    "Executed Bash commands are recorded verbatim in provenance.commands.",
-    "freshness_ts is retrieval time in UTC, not source last-modified time."
+    "Executed Bash commands are recorded verbatim in provenance.commands; never truncated in provenance.",
+    "freshness_ts is retrieval time in UTC, not source last-modified time.",
+    "No tool dispatch other than the whitelist: WebFetch, WebSearch, Bash, Read, Grep, Glob."
   ],
   "gotchas": [
-    "docs/llm/lookup-contract.json wins over inline agent prose on conflicts.",
-    "Refused Answer first line must be Refused: <category> - <detail>.",
-    "Fetch 4xx/5xx, no results, stale cache, and pagination gaps are partial.",
+    "docs/llm/lookup-contract.json wins over inline agent prose on any conflict.",
+    "Refused Answer first line must be: Refused: <category> — <detail>.",
+    "Fetch 4xx/5xx, no results, stale cache, and pagination gaps are partial, not refused.",
     "Auth-required endpoints without secrets are refused as auth_missing.",
     "Do not sniff env vars for credentials when auth is missing.",
-    "Cache key query is lowercase, whitespace-collapsed, and trimmed."
+    "Cache key query is lowercase, whitespace-collapsed, and trimmed.",
+    "Pagination limits: WebSearch <=10 results; WebFetch link-follow depth <=2.",
+    "Display-side truncation in Answer with '...' is allowed; provenance commands are never truncated."
   ],
   "memories": []
 }

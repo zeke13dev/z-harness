@@ -1,18 +1,34 @@
 {
   "concept": "plan-claim",
-  "last_updated": "2026-06-08",
+  "last_updated": "2026-06-19",
   "covers_spec": "cross-session-claim-locks",
+  "source_file": [
+    "scripts/plan-claim.sh",
+    "scripts/sink-lock.sh",
+    "scripts/plan-path.sh",
+    "commands/z-plan.md",
+    "commands/z-audit-plan.md",
+    "docs/human/plan-claim.md"
+  ],
   "confidence": "high",
+  "entry_points": [
+    {"file": "scripts/plan-claim.sh", "line": 215, "symbol": "cmd_acquire", "kind": "fn", "summary": "Acquire slug claim lock; exit 0=acquired/self-reentry/disabled, 1=live-peer, 2=stale-takeover, 3=corrupt"},
+    {"file": "scripts/plan-claim.sh", "line": 300, "symbol": "cmd_heartbeat", "kind": "fn", "summary": "Refresh TTL and detect lost claim; exit 0=ok/transient-error, 9=confirmed-lost"},
+    {"file": "scripts/plan-claim.sh", "line": 368, "symbol": "cmd_release", "kind": "fn", "summary": "Release lock best-effort using --expected-holder guard; always exit 0"},
+    {"file": "scripts/plan-claim.sh", "line": 395, "symbol": "cmd_status", "kind": "fn", "summary": "Read-only holder JSON read; exit 0=printed, 3=corrupt"},
+    {"file": "scripts/plan-path.sh", "line": 346, "symbol": "claims_dir", "kind": "fn", "summary": "Returns <z_harness_base>/active-plans/claims — lock directory path resolver"},
+    {"file": "scripts/sink-lock.sh", "line": 1, "symbol": "sink-lock.sh", "kind": "module", "summary": "Low-level flock+daemon+TTL primitive; plan-claim.sh delegates all flock mechanics to it"}
+  ],
   "depends_on": ["scripts", "active-plan-registry", "config"],
-  "consumed_by": ["commands"],
-  "summary": "Hard slug-level claim lock added to /z-plan and /z-audit-plan setup to prevent silent double-work by concurrent sessions. scripts/plan-claim.sh is a non-interactive wrapper over sink-lock.sh; lock path is <base>/active-plans/claims/<slug>.lock via plan-path.sh:claims_dir(). Orthogonal to the lockless awareness registry (Invariant 1): registry stays advisory-only, claim lock is a hard mutex. Holder string: <session_id>::<run_id>::<command>; parsed by splitting on first+second '::' only. Claim-first ordering (Invariant 2): acquire before run-brief init, before register, before any artifact write. Session-id persist+restore (Invariant 7): persisted to archive/$RUN/session-id, restored on resume before acquire, so self-reentry guard works cross-resume on macOS. Exit-code contract: acquire 0=acquired/self-reentry/disabled, 1=live-peer (holder JSON stdout, TOCTOU/display-only), 2=stale-takeover (we hold), 3=corrupt; heartbeat 9=confirmed-lost-claim (ownership-change only; transient read error is NOT 9 — emits heartbeat_error + exit 0); release always 0 (best-effort). Post-crash daemon leak: the setsid-detached daemon survives SIGKILL and leaks until next same-slug acquire's TTL-takeover (or reboot); exit-2 is the normal crash-recovery path; unattended exit-2 default-aborts unless Z_HARNESS_CLAIM_OVERRIDE=1. Env knobs (all env-only, not TOML keys): Z_HARNESS_CLAIM_TTL_SECS (2700), Z_HARNESS_CLAIM_OVERRIDE (unattended proceed override), Z_HARNESS_CLAIM_DISABLE=1 (escape hatch, all subcommands exit-0 no-op; release is safe no-op without event-presence gate). Manual unlock: rm <claims_dir>/<slug>.lock <claims_dir>/<slug>.lock.hb.lock.",
+  "consumed_by": ["commands", "hermes-orchestration"],
   "invariants": [
     "The lockless awareness registry (active-plan-registry.py) stays ADVISORY. The claim lock is a SEPARATE hard lock. Claim acquire/heartbeat/release MUST NEVER write a peer's registry record. The registry's overlap output is NEVER a hard gate. (Invariant 1)",
     "Claim acquire is the FIRST action after slug+run-id resolution — before run-brief init, before register, before any artifact write. (Invariant 2)",
     "No reliance on a cross-call EXIT trap. Hard-kill recovery is guaranteed only by release on every halt-finalize path + sink-lock TTL stale-takeover. (Invariant 3)",
     "Unattended contention/takeover ABORTS by default; Z_HARNESS_CLAIM_OVERRIDE=1 is explicit opt-in. Z_HARNESS_CLAIM_DISABLE=1 skips claiming entirely. (Invariant 4)",
     "Holder string is the only carrier of identity: <session>::<run>::<command>. Colon in any field is rejected (exit 2) to preserve '::' delimiter unambiguity. (Invariant 6)",
-    "Session id is export-once AND persisted to archive/$RUN/session-id; restored on resume before every acquire call. plan-claim.sh never calls session-id itself. (Invariant 7)"
+    "Session id is export-once AND persisted to archive/$RUN/session-id; restored on resume before every acquire call. plan-claim.sh never calls session-id itself. (Invariant 7)",
+    "Cross-plan (Hermes) acquires plan-claim locks in sorted ascending slug order to guarantee deadlock-freedom. (INV-6 in hermes-orchestration)"
   ],
   "exit_codes": {
     "acquire": {
@@ -59,14 +75,10 @@
     "At exit-2 abort (stale-takeover, we hold the lock), release MUST be called before aborting. At exit-0/1/3 abort, do NOT call release (we never held the lock).",
     "session-id persist+restore (Invariant 7) is required for the self-reentry guard to work on macOS. Without it, a resumed run sees its own prior claim as a foreign contender.",
     "Z_HARNESS_CLAIM_TTL_SECS, Z_HARNESS_CLAIM_OVERRIDE, and Z_HARNESS_CLAIM_DISABLE are env-only. They are NOT in config.py DEFAULTS or VALIDATORS and are NOT emitted by export-env.",
-    "plan-claim.sh must pass --ttl-seconds to sink-lock read-holder so the stale flag is consistent with the TTL acquire uses. Omitting it causes read-holder to use sink-lock's default (7200), which can report stale:false for a slug that acquire would actually take over (2700 basis)."
+    "plan-claim.sh must pass --ttl-seconds to sink-lock read-holder so the stale flag is consistent with the TTL acquire uses. Omitting it causes read-holder to use sink-lock's default (7200), which can report stale:false for a slug that acquire would actually take over (2700 basis).",
+    "CLAIM_HELD flag must be set to exactly 1 or 0 by the caller immediately after the acquire branch resolves. All downstream heartbeat and release guards evaluate ${CLAIM_HELD:-0}; a missing assignment causes heartbeats to silently skip and the lock to leak.",
+    "z-audit-plan fires an early heartbeat before the slug-select AskUserQuestion even before the claim gate fully resolves — only if CLAIM_RC==0 at that point. This is distinct from the main phase-boundary heartbeat cadence.",
+    "Hermes cross-plan acquires claim locks in sorted ascending slug order (deadlock-free). Any new cross-plan callers must follow the same ordering invariant."
   ],
-  "source_file": [
-    "scripts/plan-claim.sh",
-    "scripts/sink-lock.sh",
-    "scripts/plan-path.sh",
-    "commands/z-plan.md",
-    "commands/z-audit-plan.md",
-    "docs/human/plan-claim.md"
-  ]
+  "memories": []
 }

@@ -1,21 +1,23 @@
 # subagent-telemetry
 
-> Last updated: 2026-06-10
+> Last updated: 2026-06-19
 > Covers source: scripts/detect-host.sh, scripts/log-event.sh, scripts/log-subagent.sh, scripts/estimate-tokens.py, scripts/test_subagent_logging.sh, commands/z-stats.md
 
 ## Overview
 
-`subagent-telemetry` is the per-subagent cost telemetry system introduced in the `reviewer-cost-telemetry` plan (Change 2). Before this change, only ~24 % of subagent dispatches were logged with token-bearing events; host detection ran only in the Python subprocess-runtime path, never in native Claude orchestration; and the largest Claude cost bucket (implementer dispatches in `/z-implement-all`) was completely invisible. This concept covers three interlocking pieces: `scripts/detect-host.sh` for host identification, `host` stamping in every event via `scripts/log-event.sh`, and `scripts/log-subagent.sh` for per-subagent `subagent_call` events.
+`subagent-telemetry` is the per-subagent cost telemetry system introduced in the `reviewer-cost-telemetry` plan (Change 2). Before this change, only a fraction of subagent dispatches were logged with token-bearing events; host detection ran only in the Python subprocess-runtime path, never in native Claude orchestration; and the largest Claude cost bucket (implementer dispatches in `/z-implement-all`) was completely invisible. This concept covers three interlocking pieces: `scripts/detect-host.sh` for host identification, `host` stamping on every event via `scripts/log-event.sh`, and `scripts/log-subagent.sh` for per-subagent `subagent_call` events.
+
+The read-side of this system lives in `scripts/estimate-tokens.py subagent-costs`, which reads `subagent_call` events from `metrics.jsonl` and computes a per-host, per-subagent-type cost breakdown using separated input/output rate weighting. The `/z-stats` command surfaces this output to users. A drift-guard CI script (`scripts/test_subagent_logging.sh`) enforces that new `implementer` dispatch sites are always logged or explicitly opted out.
 
 ## Key entry points
 
 <!-- AUTO-START: entry-points -->
-- `scripts/detect-host.sh:1` — `detect_host()` — prints one of `claude|pi|codex|cursor|antigravity`; defaults to `claude`; positive-marker overrides only; never empty or `unknown`
-- `scripts/log-event.sh:133` — host lazy resolution — reads `Z_HARNESS_HOST` env var if set; else calls `detect-host.sh` once and caches to `/tmp/zh-host-$PPID`
+- `scripts/detect-host.sh:21` — `detect_host()` — prints one of `claude|pi|codex|cursor|antigravity`; defaults to `claude`; positive-marker overrides only; never empty or `unknown`
+- `scripts/log-event.sh:133` — host lazy resolution — reads `Z_HARNESS_HOST` env var if set; else calls `detect-host.sh` once and caches to `/tmp/zh-host-$PPID`; also supports `resolve-run-dir <run-id>` read-only subcommand
 - `scripts/log-subagent.sh:1` — `log-subagent.sh` — emits `subagent_call` event; non-fatal (always exits 0); delegates host stamping to `log-event.sh`
 - `scripts/estimate-tokens.py:408` — `subagent_costs()` — per-host, per-subagent_type cost breakdown from `subagent_call` events in `metrics.jsonl`; weights `prompt_chars` vs `response_chars` by per-model input/output rates
-- `scripts/test_subagent_logging.sh:1` — drift-guard CI check — greps every command/agent for `Agent(` dispatch sites; fails if any site lacks a paired `log-subagent.sh` call or an explicit `# no-subagent-log: <reason>` opt-out
-- `commands/z-stats.md` — `subagent-costs` surface — renders `subagent_costs()` output as a per-host, per-type cost table with char-est vs real-tokens labeling
+- `scripts/test_subagent_logging.sh:1` — drift-guard CI — scans commands/ and agents/ for `subagent_type="implementer"` dispatch sites; fails if any site lacks a paired `log-subagent.sh` call or an explicit `# no-subagent-log: <reason>` opt-out
+- `commands/z-stats.md` — `subagent-costs` surface — renders `subagent_costs()` output as a per-host, per-type cost table with `char-est` vs `real-tokens` labeling
 <!-- AUTO-END: entry-points -->
 
 ## detect-host.sh
@@ -46,7 +48,7 @@ The script can be sourced (exposes `detect_host()` function) or executed directl
 1. If `Z_HARNESS_HOST` is set in the environment, use that value directly (allows CI/test override).
 2. Else call `detect-host.sh` once and cache the result to `/tmp/zh-host-$PPID` (keyed on the parent shell PID so the cache persists across all `log-event.sh` invocations in one orchestrating process).
 
-This design means callers never need to export a host variable — the single resolution point in `log-event.sh` absorbs the "caller forgot to export" gap that existed when host detection lived only in the Python runtime path. The `host` field appears in `events.jsonl` and `metrics.jsonl` on every event kind.
+`log-event.sh` also supports a `resolve-run-dir <run-id>` read-only subcommand that prints the run's archive directory (using the same slug-aware, 5-tier logic the write path uses) without creating or writing anything. This lets other tools locate a run's `events.jsonl` without duplicating the resolution logic.
 
 ## log-subagent.sh and the subagent_call event
 
@@ -80,8 +82,14 @@ Fields:
 
 ### Wiring
 
-- `agents/reviewer.md` + `agents/consultant-primary.md` + `agents/consultant-secondary.md` call `log-subagent.sh` on return (folded into the Change-1 file-capture edits).
-- `commands/z-implement-all.md` `implement_start`/`implement_end` events gain `subagent_model` and a `log-subagent.sh` call so the Sonnet/Opus implementer selection is no longer invisible.
+Five canonical logging sites are pinned by the drift-guard:
+- `agents/reviewer.md` — self-logs on return
+- `agents/consultant-primary.md` — self-logs on return
+- `agents/consultant-secondary.md` — self-logs on return
+- `commands/z-implement-all.md` — orchestrator logs implementer dispatch (wired by T006)
+- `commands/z-implement-next.md` — orchestrator logs implementer dispatch (wired by T007)
+
+Consultant dispatches from orchestrators (e.g. `z-review-all.md`, `z-audit-plan.md`) do NOT require an additional `log-subagent.sh` call — the agents self-log. Double-logging from orchestrators would inflate cost metrics.
 
 ### CLI usage
 
@@ -101,51 +109,69 @@ bash scripts/log-subagent.sh \
 
 For native Claude `Agent()` subagents, the orchestrator does not have access to real provider token usage. `prompt_chars` and `response_chars` are therefore **exact character counts, not token counts**. This limitation is labeled in the event and in `/z-stats` output.
 
-Real `provider_input_tokens` / `provider_output_tokens` appear only for external CLI providers (e.g. codex) that print a usage line the agent can parse. This is a ceiling imposed by the harness infrastructure, not a design choice — it is documented in SPEC.md as the approved shortcut for v1.
+Real `provider_input_tokens` / `provider_output_tokens` appear only for external CLI providers (e.g. codex) that print a usage line the agent can parse.
 
-In `/z-stats` output, cost estimates using char-based data are labeled `char-est` to distinguish them from `real-tokens` entries backed by CLI usage lines.
+In `/z-stats` output, cost estimates using char-based data are labeled `[char-est]` to distinguish them from `[real tokens]` entries backed by CLI usage lines, or `[mixed: provider+chars]` when a bucket has both.
 
 ## Drift-guard CI: test_subagent_logging.sh
 
-`scripts/test_subagent_logging.sh` is the mechanical replacement for the absent native dispatch chokepoint. It greps every command and agent file for `Agent(` dispatch sites and fails if any site lacks either:
+`scripts/test_subagent_logging.sh` enforces that `implementer` dispatch sites stay logged. It runs two checks:
 
-- A paired `log-subagent.sh` call.
-- An explicit `# no-subagent-log: <reason>` opt-out comment.
+**Part 1 — Pinned canonical sites:** verifies the 5 files wired by T006/T007 still contain `log-subagent.sh`. Failure here is a regression.
 
-This directly targets the 76 % logging gap observed in qt-bot and z-harness telemetry before this feature shipped.
+**Part 2 — Broad drift scan:** scans all `commands/*.md` and `agents/*.md` for `subagent_type="implementer"`. Any such file lacking either `log-subagent.sh` or `# no-subagent-log: <reason>` is a violation. Opt-out comment must be exactly `# no-subagent-log: <reason>`.
+
+The test includes a self-test (fixtures A/B/C) that proves the detection logic itself works.
+
+Note: this check only targets `implementer` dispatch sites, not all `Agent()` calls. Consultant dispatches from orchestrators are exempt because the agents self-log.
 
 ## Read-side: estimate-tokens.py subagent-costs
 
-`estimate-tokens.py subagent-costs` reads `subagent_call` events from `metrics.jsonl` and computes a per-host, per-subagent-type cost breakdown. It weights `prompt_chars` and `response_chars` using per-model input/output rates (from config), because output is priced approximately 5× input and a flat `chars/4` proxy actively under-costs output-heavy calls.
+`estimate-tokens.py subagent-costs` reads `subagent_call` events from `metrics.jsonl` and computes a per-host, per-subagent-type cost breakdown. It weights `prompt_chars` and `response_chars` using per-model input/output rates, because output is priced approximately 5x input and a flat `chars/4` proxy actively under-costs output-heavy calls.
 
-The output is grouped by `host` (so the `claude` vs `pi` vs `codex` cut is a one-liner) and labeled with `char-est` or `real-tokens` depending on whether provider token counts were available. This is surfaced in `/z-stats`.
+The output is grouped by `host` (so the `claude` vs `pi` vs `codex` cut is a one-liner) and labeled with `[char-est]` or `[real tokens]` depending on whether provider token counts were available. This is surfaced in `/z-stats` Phase 3b.
 
-**Decision D9 (recorded in PLAN.md):** prompt and response chars are kept separate in the event. Collapsing them into a single `est_tokens = chars/4` was rejected as actively misleading for cost attribution — output-heavy calls are ~5× more expensive per token than input, and cache reads dominate some workflows. Price weighting belongs downstream in the cost model, not in telemetry.
+Model rate table lives in `_DEFAULT_MODEL_RATES` in `estimate-tokens.py` — covers Claude family (haiku/sonnet/opus), GPT family, Gemini family, and DeepSeek. Unknown models fall back to sonnet rates.
 
-## Invariants
+Environment knobs for the estimate subcommand:
+- `Z_HARNESS_COST_TAIL_LINES` — max lines read from `metrics.jsonl` tail (default: `2000` for estimate, `5000` for subagent-costs)
+- `Z_HARNESS_COST_MIN_SAMPLES` — minimum historical samples for empirical tier (default: `3`)
 
-- `detect-host.sh` never prints `unknown` or empty; `claude` is the unconditional default.
-- `host` is stamped on every event by `log-event.sh`; callers never stamp it themselves.
-- Host is resolved lazily once per `$PPID` process; subsequent `log-event.sh` calls in the same orchestration process read the cached sentinel.
-- `log-subagent.sh` always exits 0; subagent telemetry never blocks a dispatch.
-- `prompt_chars` and `response_chars` are always separate fields; a single collapsed `est_tokens` is never emitted.
-- `provider_input_tokens`/`provider_output_tokens` are optional; absent for native Claude subagents.
-- `test_subagent_logging.sh` fails CI on any `Agent(` site without a paired log call or explicit opt-out.
+**Decision D9:** prompt and response chars are kept separate in the event. Collapsing them into a single `est_tokens = chars/4` was rejected as actively misleading for cost attribution — output-heavy calls are ~5x more expensive per token than input. Price weighting belongs downstream in the cost model, not in telemetry.
+
+## How it interacts with others
+
+- `cost-estimation` — `estimate-tokens.py` hosts both the pre-run estimate and the subagent-costs read-side in the same file; the subagent-costs model uses the same `_default_metrics_path()` resolution logic
+- `scripts` — `log-event.sh` and `detect-host.sh` are the foundation; `log-subagent.sh` delegates to `log-event.sh`
+- `reviewer-capture` — reviewer and consultant agents call `log-subagent.sh` as part of their capture flow; `response_chars` is sourced from the captured review file size
+- `impl-pre-review` — the pre-reviewer subagent is also logged via `log-subagent.sh`
 
 ## Edge cases / gotchas
 
-- `Z_HARNESS_HOST` env var overrides detection entirely; useful in CI where the env markers aren't set but the true host is known.
+- `Z_HARNESS_HOST` env var overrides detection entirely; useful in CI where the env markers are absent but the true host is known.
 - The host sentinel is keyed on `$PPID`, not `$$` — each `bash log-event.sh` call is a new process; `$PPID` is the stable parent orchestrator PID.
-- `log-subagent.sh` `--provider-input-tokens` and `--provider-output-tokens` are optional flags; passing empty string is equivalent to omitting them (the payload builder skips them when falsy).
-- `/z-stats` `subagent-costs` output labels char-based estimates clearly — do not compare `char-est` rows with `real-tokens` rows without accounting for the ~4-char-per-token heuristic.
+- `log-subagent.sh` `--provider-input-tokens` and `--provider-output-tokens` are optional flags; passing empty string is equivalent to omitting them (the payload builder skips falsy values).
+- `/z-stats` `subagent-costs` output labels char-based estimates clearly — do not compare `[char-est]` rows with `[real tokens]` rows without accounting for the ~4-char-per-token heuristic.
 - Drift-guard opt-out comment must be exactly `# no-subagent-log: <reason>` — any deviation will cause `test_subagent_logging.sh` to flag the site.
+- The drift guard only catches `subagent_type="implementer"` sites, not all `Agent()` calls; consultant dispatches from orchestrators are exempt because the agents self-log from within `consultant-primary.md` / `consultant-secondary.md`.
+- `subagent_call` events land in the repo-wide `metrics.jsonl` at the external base root, not in the per-plan directory; `/z-stats` Phase 3b explicitly resolves `base_dir` for this reason.
 
-## See also
+## Examples
 
-- `docs/human/reviewer-capture.md` — `response_chars` source for the reviewer and consultant agents.
-- `docs/human/impl-pre-review.md` — pre-reviewer subagent is also logged via `log-subagent.sh`.
-- `scripts/detect-host.sh` — host detection script.
-- `scripts/log-event.sh` — event writer; stamps `host` field.
-- `scripts/log-subagent.sh` — `subagent_call` event emitter.
-- `scripts/estimate-tokens.py` — `subagent-costs` subcommand.
-- `scripts/test_subagent_logging.sh` — CI drift guard.
+Example `/z-stats` Phase 3b output:
+
+```
+Subagent cost breakdown (char-based estimate: chars/4 -> tokens; no native-Claude token counts available)
+  Events: 47 subagent_call (of 4042 total read)
+
+  Host: claude
+    consultant             calls=12   in=   48000 out=   16000 tok  est=$0.4560 [char-est]
+    implementer            calls=23   in=   92000 out=   30000 tok  est=$1.7250 [char-est]
+    reviewer               calls=12   in=   48000 out=   12000 tok  est=$0.1980 [char-est]
+
+  Host: pi
+    reviewer               calls=4    in=   16000 out=    4000 tok  est=$0.0660 [mixed: provider+chars]
+
+  TOTAL                     calls=51   in=  204000 out=   62000 tok  est=$2.4450
+    (input: $0.8160  output: $1.6290)
+```

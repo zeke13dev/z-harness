@@ -1,6 +1,6 @@
 {
   "concept": "tier1-doc-updater",
-  "last_updated": "2026-06-09T19:45:00Z",
+  "last_updated": "2026-06-19",
   "covers_spec": "doc-updater-agent/20260609T194026Z-doc-updater-agent",
   "source_files": [
     "agents/tier1-doc-updater.md",
@@ -10,39 +10,72 @@
   "confidence": "high",
   "entry_points": [
     {
-      "file": "scripts/reconcile-tier1-staged.py",
-      "line": 1,
-      "symbol": "reconcile-tier1-staged",
-      "kind": "script",
-      "summary": "Reconciles staged Tier 1 doc updates into live docs/"
-    },
-    {
-      "file": "scripts/add-doc-markers.py",
-      "line": 1,
-      "symbol": "add-doc-markers",
-      "kind": "script",
-      "summary": "Adds AUTO-START/AUTO-END markers to human-tier docs"
-    },
-    {
       "file": "agents/tier1-doc-updater.md",
       "line": 1,
       "symbol": "tier1-doc-updater",
       "kind": "agent",
-      "summary": "Flash subagent for per-task mechanical doc sync"
+      "summary": "Haiku subagent for per-task mechanical doc sync; tools: Read,Grep,Glob,Write,Bash; model: haiku"
+    },
+    {
+      "file": "scripts/reconcile-tier1-staged.py",
+      "line": 128,
+      "symbol": "main",
+      "kind": "fn",
+      "summary": "CLI entry: merges staged AUTO-START sections into live docs, updates INDEX.json, regenerates MEMORIES-FLAT.md"
+    },
+    {
+      "file": "scripts/reconcile-tier1-staged.py",
+      "line": 36,
+      "symbol": "merge_human_doc",
+      "kind": "fn",
+      "summary": "Merges staged human doc AUTO-START/AUTO-END sections into live human doc (section-level replace)"
+    },
+    {
+      "file": "scripts/reconcile-tier1-staged.py",
+      "line": 77,
+      "symbol": "merge_llm_json",
+      "kind": "fn",
+      "summary": "Merges entry_points/source_files/last_updated from staged LLM JSON; preserves depends_on/consumed_by/summary/confidence/memories/invariants/gotchas"
+    },
+    {
+      "file": "scripts/reconcile-tier1-staged.py",
+      "line": 106,
+      "symbol": "update_index",
+      "kind": "fn",
+      "summary": "Updates INDEX.json last_updated for all touched concept slugs"
+    },
+    {
+      "file": "scripts/add-doc-markers.py",
+      "line": 36,
+      "symbol": "add_markers_to_doc",
+      "kind": "fn",
+      "summary": "Idempotent: wraps Key entry points/Public API/Exports/Configuration sections in AUTO-START/AUTO-END markers"
+    },
+    {
+      "file": "scripts/add-doc-markers.py",
+      "line": 82,
+      "symbol": "main",
+      "kind": "fn",
+      "summary": "CLI entry: scans docs/human/*.md and applies AUTO markers; --dry-run supported"
     }
   ],
   "depends_on": ["doc-updater", "doc-fetcher"],
-  "consumed_by": ["z-implement-all"],
+  "consumed_by": ["z-implement-all", "tier2-doc-rationale"],
   "invariants": [
-    "NEVER writes to docs/ directly — staging only",
+    "NEVER writes to docs/ directly — staging only ($Z_HARNESS_PLAN_DIR/tier1-staged/)",
     "Never touches memories[]",
-    "Writes only between AUTO-START/AUTO-END markers",
-    "Idempotent on same diff"
+    "Writes only between AUTO-START/AUTO-END markers in human docs",
+    "Idempotent on same diff",
+    "Tools constrained to Read, Grep, Glob, Write, Bash — no Agent() access",
+    "merge_llm_json preserves: depends_on, consumed_by, summary, confidence, memories, invariants, gotchas"
   ],
   "gotchas": [
-    "Skips concepts without AUTO-START/AUTO-END markers (logs markers_missing)",
-    "Visibility-only changes (pub→pub(crate)) out of scope",
-    "Latest-wins merge for overlapping staged updates"
+    "model: haiku (not flash — 'flash' was an invalid Claude Code identifier fixed in 562518a)",
+    "Explicit tools: line required — previously inherited ALL tools including Agent()",
+    "Skips concepts without AUTO-START/AUTO-END markers (logs in NOTES; use add-doc-markers.py first)",
+    "merge_human_doc silently drops staged updates if live doc has no AUTO-START sections",
+    "Latest-wins merge for overlapping staged updates to same concept",
+    "Visibility-only changes (pub→pub(crate)) out of scope"
   ],
   "memories": []
 }

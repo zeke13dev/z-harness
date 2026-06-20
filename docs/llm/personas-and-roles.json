@@ -1,6 +1,6 @@
 {
   "concept": "personas-and-roles",
-  "last_updated": "2026-06-18",
+  "last_updated": "2026-06-19",
   "covers_spec": "none",
   "source_file": [
     "scripts/resolve-persona.py",
@@ -26,6 +26,7 @@
     {"file": "scripts/resolve-persona.py", "line": 554, "symbol": "cmd_list_personas", "kind": "fn", "summary": "Print JSON array of {name, source_layer, path} -- winner per name only; emits persona_shadowed on collisions."},
     {"file": "scripts/resolve-persona.py", "line": 594, "symbol": "cmd_where", "kind": "fn", "summary": "Print all layer paths defining a named persona in load order; exits 1 if not found."},
     {"file": "scripts/resolve-persona.py", "line": 931, "symbol": "cmd_resolve", "kind": "fn", "summary": "Resolve persona/model/runtime triple for (command, role) from merged TOML config; emits chimera event when axes come from >=2 layers."},
+    {"file": "scripts/resolve-persona.py", "line": 993, "symbol": "cmd_list_bindings", "kind": "fn", "summary": "Walk all configured commands and roles and print a JSON tree; accepts --command filter."},
     {"file": "scripts/resolve-persona.py", "line": 1040, "symbol": "cmd_validate", "kind": "fn", "summary": "Validate all bound personas exist, compatible_roles are known, contract matches role expected_contract. Exits 1 on any violation."},
     {"file": "scripts/resolve-persona.py", "line": 1137, "symbol": "cmd_read", "kind": "fn", "summary": "Print frontmatter + body of the winning persona file for a given name."},
     {"file": "scripts/resolve-persona.py", "line": 1208, "symbol": "_enumerate_role_compatible_personas", "kind": "fn", "summary": "Return winning-layer personas compatible with role, excluding explicit exclude_ids. boring-anchor bypasses compatible_roles/contract checks. Filters out any no-persona.md disk file."},

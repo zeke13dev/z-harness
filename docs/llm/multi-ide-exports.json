@@ -1,6 +1,6 @@
 {
   "concept": "multi-ide-exports",
-  "last_updated": "2026-06-18",
+  "last_updated": "2026-06-19",
   "covers_spec": "none",
   "source_file": [
     "runtime/drivers/_export_utils.py",
@@ -17,7 +17,7 @@
   "confidence": "high",
   "entry_points": [
     {"file": "runtime/drivers/_export_utils.py", "line": 62, "symbol": "ExportResult", "kind": "struct", "summary": "Canonical export result dataclass (dest, files, fidelity, warnings); owned by runtime, re-exported from z_harness_cli/adapters/base.py"},
-    {"file": "runtime/drivers/_export_utils.py", "line": 316, "symbol": "enumerate_sources", "kind": "fn", "summary": "Collect commands and agents from repo root into kind-keyed dict; skills/ dir is gone so skills bucket is always empty"},
+    {"file": "runtime/drivers/_export_utils.py", "line": 316, "symbol": "enumerate_sources", "kind": "fn", "summary": "Collect commands and agents from repo root into kind-keyed dict; skills/ dir removed so skills bucket always empty"},
     {"file": "runtime/drivers/_export_utils.py", "line": 246, "symbol": "inline_includes", "kind": "fn", "summary": "Public alias for expand_includes; base_dir accepted but unused (always resolves relative to repo_root)"},
     {"file": "runtime/drivers/_export_utils.py", "line": 183, "symbol": "expand_includes", "kind": "fn", "summary": "Inline <!-- include: path --> markers recursively; skips fenced code blocks; raises on missing fragment or cycle"},
     {"file": "runtime/drivers/_export_utils.py", "line": 392, "symbol": "output_path_for", "kind": "fn", "summary": "Compute conventional output path for cursor or codex targets; agy absent (owns its own dual layout)"},
@@ -42,39 +42,43 @@
     {"file": "runtime/drivers/pi/export.py", "line": 103, "symbol": "normalize_tools", "kind": "fn", "summary": "Map comma-separated frontmatter tools string to pi tool names; returns (pi_tools, dropped)"},
     {"file": "runtime/drivers/pi/export.py", "line": 146, "symbol": "_rewrite_line", "kind": "fn", "summary": "Return pi-flavored subagent-tool hint for Agent/Skill/tool call sites, or None to keep line"},
     {"file": "runtime/drivers/pi/export.py", "line": 209, "symbol": "_inject_prompt_defense", "kind": "fn", "summary": "Inject PROMPT_DEFENSE_BLOCK after <!-- PROMPT_DEFENSE_MARKER -->; falls back to after heading; idempotent"},
+    {"file": "runtime/drivers/windsurf/export.py", "line": 196, "symbol": "export", "kind": "fn", "summary": "Emit windsurf .windsurf/rules/*.md with trigger frontmatter; uses select_sources/resolve_strategy; export-only"},
+    {"file": "runtime/drivers/kiro/export.py", "line": 192, "symbol": "export", "kind": "fn", "summary": "Emit kiro .kiro/steering/*.md with inclusion frontmatter; always-on agents get inclusion: always; export-only"},
+    {"file": "runtime/drivers/cline/export.py", "line": 231, "symbol": "export", "kind": "fn", "summary": "Emit cline .clinerules/ files; default strategy pointer (single capabilities doc to avoid context bloat); export-only"},
+    {"file": "runtime/drivers/copilot/export.py", "line": 183, "symbol": "export", "kind": "fn", "summary": "Emit single .github/copilot-instructions.md with consolidated command/agent catalog; pointer strategy always; export-only"},
     {"file": "z_harness_cli/adapters/base.py", "line": 42, "symbol": "ExportResult", "kind": "struct", "summary": "Re-export of runtime ExportResult; CLI-layer code imports from here, never from runtime directly"},
     {"file": "z_harness_cli/adapters/base.py", "line": 189, "symbol": "HostAdapter.export_payload", "kind": "fn", "summary": "Protocol: delegate to runtime export(), run persona loop from personas/builtin/, merge results; raise RuntimeError on non-empty warnings"},
     {"file": "z_harness_cli/adapters/cursor.py", "line": 214, "symbol": "CursorAdapter.export_payload", "kind": "fn", "summary": "Two-stage: cursor runtime export then persona loop from personas/builtin/; RuntimeError on validation errors; fidelity=flattened"},
     {"file": "z_harness_cli/adapters/codex.py", "line": 243, "symbol": "CodexAdapter.export_payload", "kind": "fn", "summary": "Two-stage: codex runtime export then persona loop from personas/builtin/; RuntimeError on validation errors; fidelity=flattened"},
     {"file": "z_harness_cli/adapters/antigravity.py", "line": 207, "symbol": "AntigravityAdapter.export_payload", "kind": "fn", "summary": "Two-stage: agy runtime export then persona loop from personas/builtin/; RuntimeError on validation errors; fidelity=high"},
-    {"file": "commands/z-export.md", "line": 10, "symbol": "/z-export", "kind": "module", "summary": "User-facing entry point: python3 -m z_harness_cli export --host <host> --out exports/<target> --force for cursor/codex/agy; pi and export-only drivers via direct import"}
+    {"file": "commands/z-export.md", "line": 10, "symbol": "/z-export", "kind": "module", "summary": "User-facing entry point: python3 -m z_harness_cli export for cursor/codex/agy; pi and export-only drivers (windsurf/kiro/cline/copilot) via direct import"}
   ],
   "depends_on": [
     "commands",
     "agents",
     "personas-and-roles",
-    "central-config",
-    "runtime-drivers",
+    "config",
     "scripts"
   ],
   "consumed_by": [
-    "z_harness_cli.commands.export"
+    "capabilities-matrix",
+    "pi-export"
   ],
   "invariants": [
-    "Source of truth is commands/, agents/, and personas/builtin/ — skills/ source dir has been removed; per-host skill artifacts are generated by export drivers from commands/ content",
+    "Source of truth is commands/, agents/, and personas/builtin/ — skills/ source dir removed; per-host skill artifacts generated by export drivers from commands/ content",
     "ExportResult is owned by runtime/drivers/_export_utils.py; z_harness_cli code imports it only via z_harness_cli/adapters/base.py (one-way layering)",
-    "All four core runtime export() functions share signature: export(repo_root, export_root, *, options=None) -> ExportResult",
-    "Non-empty ExportResult.warnings from the runtime export() are raised as RuntimeError by every adapter's export_payload() (legacy hard-gate preserved)",
+    "All runtime export() functions share signature: export(repo_root, export_root, *, options=None) -> ExportResult",
+    "Non-empty ExportResult.warnings from runtime export() are raised as RuntimeError by every adapter's export_payload() (legacy hard-gate preserved)",
     "Unsupported constructs (Agent, Skill, AskUserQuestion, TaskCreate, SubagentCreate) are replaced line-by-line with target-specific HTML comments, never silently dropped",
     "Each adapter validates all emitted files before reporting success; CAPABILITIES.md must contain ## Supported, ## Unsupported, ## Notes sections",
     "When a skill ID collides with a command ID, Cursor and Codex append -skill suffix; agy flat prompts use skill- prefix",
     "output_path_for handles only cursor and codex; agy is intentionally absent (owns its dual layout)",
-    "pi is export-only: no adapter, no HostDriver, no --host pi CLI flag; export runs via direct import of runtime.drivers.pi.export",
+    "pi, windsurf, kiro, cline, copilot are export-only: no adapter, no HostDriver, no --host CLI flag; export runs via direct import of runtime.drivers.<target>.export",
     "pi has no persona export; persona export (from personas/builtin/) runs only for cursor, codex, and agy",
     "To regenerate committed exports/<host>/ mirror: python3 -m z_harness_cli export --host <host> --out exports/<target> --force (--in-place writes to cwd for live workspace use only)",
     "/z-export performs no direct file I/O; all writes are delegated to runtime export() and persona_export.py modules",
     "_ALWAYS_ON_AGENTS is defined once in _export_utils.py and imported by every driver that needs it (agy, windsurf, kiro); never redefined per-driver",
-    "audit-tarball.sh is the safety gate for packaged artifacts, independent of the export drivers"
+    "cline default strategy is pointer (single capabilities doc); copilot is always effectively pointer (single .github/copilot-instructions.md)"
   ],
   "gotchas": [
     "skills/ top-level source directory has been removed — enumerate_sources still calls _collect_skills internally but returns empty list; do not reference skills/<name>/SKILL.md as a source input",
@@ -91,7 +95,9 @@
     "pi injects PROMPT_DEFENSE_BLOCK after <!-- PROMPT_DEFENSE_MARKER -->; falls back to after the heading line if no sentinel found",
     "Cursor personas are alwaysApply: true .mdc rules under .cursor/personas/ (no native Cursor persona mechanism)",
     "z_harness_cli/adapters/base.py re-exports ExportResult as __all__ = ['ExportResult'] so tests that import from base get the runtime type",
-    "select_sources and resolve_strategy are used by export-only drivers (windsurf, kiro, cline, copilot) but not by the core four (cursor, codex, agy, pi) which enumerate all sources unconditionally"
+    "select_sources and resolve_strategy are used by export-only drivers (windsurf, kiro, cline, copilot) but not by the core four (cursor, codex, agy, pi) which enumerate all sources unconditionally",
+    "windsurf and kiro use trigger/inclusion frontmatter to control rule activation; windsurf uses trigger: always_on|model_decision|glob, kiro uses inclusion: always|manual|fileMatch",
+    "cline loads every .clinerules/ file into context — pointer strategy (default) emits only one file to avoid context bloat; curated/full emit more files"
   ],
   "memories": []
 }

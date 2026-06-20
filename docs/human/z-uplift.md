@@ -1,7 +1,7 @@
 # /z-uplift
 
-> Last updated: 2026-06-05
-> Covers source: commands/z-uplift.md, commands/z-uplift.md
+> Last updated: 2026-06-19
+> Covers source: commands/z-uplift.md
 
 ## Overview
 
@@ -26,6 +26,7 @@ The command is resumable: it writes a `MANIFEST.md` at `z-harness/plans/<slug>/M
 | Phase 5 | `commands/z-uplift.md:2579` | Sequential implement — two-step handoff; prints command, marks `[i]`, exits; auto-transitions `[i] implementing` → `[x] done` when TASKS.md is fully done; `manifest_replace_row` helper enforces exactly-one-row invariant on all state transitions |
 | Phase 6 | `commands/z-uplift.md:2961` | Finalize — log run_end, push-notify, recommend /z-maintain-docs |
 <!-- AUTO-END: entry-points -->
+
 ## How it interacts with others
 
 - `/z-audit` — z-uplift uses the same auditor primitives as /z-audit but applies them across every component; /z-audit is for single-component targeted passes
@@ -112,7 +113,7 @@ Push-notification behavior throughout `/z-uplift` is governed by the `notify.lev
 - **Cross-cutting parser drops.** The Phase 2 merge parser emits a `cross_cutting_findings_dropped` telemetry event for any bullets in consultant output that do not match the strict `G-NNN` / `C-NNN` / `R-NNN` prefix pattern. Watch for this in run logs if finding counts seem low.
 - **Atomic MANIFEST writes.** All MANIFEST mutations use `os.replace(tmp, path)` (write to `.tmp` then rename) to prevent partial-write corruption on interrupt. `manifest_replace_row` additionally asserts exactly one row matches before writing.
 - **Phase telemetry.** Every phase records `T0` at entry and emits `phase_end` with `wall_ms` and `user_wait_ms` at exit. User wait time is tracked via `user_wait_start` / `user_wait_end` event pairs bracketing each `AskUserQuestion` call. Phase 1.5 also emits `cost_gate_decision`.
-- **Doc-staleness gate.** Setup Step 5 checks `docs/llm/INDEX.json` staleness across all concepts before Phase 0. If more than 20% are stale (configurable via `$Z_HARNESS_DOC_STALENESS_THRESHOLD`), the user is prompted to switch to `/z-maintain-docs`, continue with stale docs, or abandon. The gate does NOT auto-invoke `/z-maintain-docs`.
+- **Doc-staleness gate.** Setup Step 5 checks `docs/llm/INDEX.json` staleness across all concepts before Phase 0. If more than 20% are stale (configurable via `docs.staleness_threshold` in config), the user is prompted to switch to `/z-maintain-docs`, continue with stale docs, or abandon. The gate does NOT auto-invoke `/z-maintain-docs`.
 - **Notification config var.** The correct environment variable for notification control is `Z_HARNESS_NOTIFY_LEVEL` (maps to `notify.level` in TOML). There is no standalone `Z_HARNESS_NOTIFY` variable. Setting `Z_HARNESS_NOTIFY` has no effect.
 - **Slug preference resolver.** `scripts/config.py resolve-question workflow.slug_confirm` is queried after the hard collision check but before the user-visible slug gate. On resolver failure (any non-zero exit), falls back to the normal ask path — never silently skips.
 - **SKILL.md frontmatter quoting.** The `argument-hint` value in `commands/z-uplift.md` must be quoted with double quotes (strict YAML requirement for codex's plugin loader). Unquoted values with bracket characters cause codex to print "failed to load skill" on startup.

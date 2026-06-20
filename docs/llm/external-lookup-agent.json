@@ -1,6 +1,6 @@
 {
   "concept": "external-lookup-agent",
-  "last_updated": "2026-05-25",
+  "last_updated": "2026-06-19",
   "covers_spec": "none",
   "source_file": [
     "agents/external-lookup.md"
@@ -12,42 +12,70 @@
       "line": 1,
       "symbol": "external-lookup",
       "kind": "module",
-      "summary": "Haiku lookup worker with fixed contract and read-only tools"
+      "summary": "Haiku lookup worker frontmatter: model, description, tool allowlist (WebFetch, WebSearch, Bash, Read, Grep, Glob)"
     },
     {
       "file": "agents/external-lookup.md",
       "line": 12,
       "symbol": "Output contract",
       "kind": "const",
-      "summary": "STATUS-headed Markdown envelope and section order"
+      "summary": "STATUS-headed Markdown envelope: Answer, Provenance, Unresolved, optional Raw artifact pointer"
     },
     {
       "file": "agents/external-lookup.md",
       "line": 51,
       "symbol": "Verb-blocklist",
       "kind": "const",
-      "summary": "Regex guard refusing mutating Bash before execution"
+      "summary": "Regex guard compiled once; tested before every Bash call; match forces STATUS: refused mutation_blocked"
     },
     {
       "file": "agents/external-lookup.md",
       "line": 91,
       "symbol": "Budget",
       "kind": "const",
-      "summary": "3 KB response cap plus raw artifact cache rules"
+      "summary": "3 KB total response cap; overflow to lookup-cache/<sha256>.raw; normalized query rule"
     },
     {
       "file": "agents/external-lookup.md",
       "line": 99,
       "symbol": "Freshness discipline",
       "kind": "const",
-      "summary": "UTC retrieval timestamp and stale cache confidence rule"
+      "summary": "freshness_ts is UTC retrieval time; stale cache >24h mtime forces confidence: low"
     },
     {
       "file": "agents/external-lookup.md",
       "line": 105,
       "symbol": "Refusal modes",
       "kind": "const",
-      "summary": "ok, partial, refused meanings and refusal categories"
+      "summary": "ok/partial/refused semantics; three refusal categories: mutation_blocked, out_of_scope, auth_missing"
+    },
+    {
+      "file": "agents/external-lookup.md",
+      "line": 113,
+      "symbol": "Provenance section format",
+      "kind": "const",
+      "summary": "Six provenance fields; commands always verbatim, never truncated in provenance section"
+    },
+    {
+      "file": "agents/external-lookup.md",
+      "line": 127,
+      "symbol": "Confidence scale",
+      "kind": "const",
+      "summary": "high=authoritative+no-interpolation; medium=inference or contradiction; low=stale or single-source"
+    },
+    {
+      "file": "agents/external-lookup.md",
+      "line": 137,
+      "symbol": "Edge cases",
+      "kind": "const",
+      "summary": "4xx/5xx->partial+one-fallback; no-results->partial; pagination depth <=2 hops; auth-missing->refused"
+    },
+    {
+      "file": "agents/external-lookup.md",
+      "line": 144,
+      "symbol": "Invariants",
+      "kind": "const",
+      "summary": "Formal checklist: STATUS first, section order fixed, <=3 KB, no raw dumps, verb-blocklist before Bash"
     }
   ],
   "depends_on": [
@@ -58,18 +86,22 @@
     "multi-ide-exports"
   ],
   "invariants": [
-    "First line is exactly STATUS: ok|partial|refused.",
-    "Sections appear in order: Answer, Provenance, Unresolved, optional Raw artifact pointer.",
+    "First output line is exactly STATUS: ok|partial|refused.",
+    "Sections appear in fixed order: Answer, Provenance, Unresolved, optional Raw artifact pointer.",
     "Total response including STATUS and all sections is <=3 KB.",
     "Answer never dumps raw HTML, JSON, or YAML.",
-    "Bash commands are checked against verb-blocklist before execution.",
-    "Provenance records Bash commands verbatim, never truncated."
+    "Bash commands are checked against verb-blocklist before execution; never sanitized and run.",
+    "Provenance records Bash commands verbatim, never truncated.",
+    "No tool dispatch other than the whitelist: WebFetch, WebSearch, Bash, Read, Grep, Glob."
   ],
   "gotchas": [
-    "4xx/5xx fetches become partial and get one fallback attempt.",
-    "Matched mutation patterns refuse with mutation_blocked; do not sanitize and run.",
-    "Authenticated endpoints without secrets refuse as auth_missing.",
-    "Raw artifact pointer is used for overflow under z-harness/lookup-cache/<sha256>.raw."
+    "4xx/5xx fetches become STATUS: partial and get one fallback attempt before giving up.",
+    "Matched mutation patterns refuse with mutation_blocked; do not sanitize and execute.",
+    "Authenticated endpoints without secrets refuse as auth_missing; no env-var sniffing.",
+    "Raw artifact pointer used for overflow at z-harness/lookup-cache/<sha256>.raw (gitignored, mkdir -p if absent).",
+    "Grep and Glob are in the tool allowlist for repo-local lookups; older exports may not reflect this.",
+    "WebFetch link-follow depth is <=2 (original + at most one hop per source); deeper pagination noted in Unresolved.",
+    "Verbatim commands in provenance can push response over 3 KB; full response then goes to raw artifact file."
   ],
   "memories": []
 }

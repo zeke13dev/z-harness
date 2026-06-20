@@ -1,7 +1,7 @@
 {
   "concept": "z-uplift",
-  "last_updated": "2026-06-05",
-  "covers_spec": "z-harness/plans/tiered-quality-uplift/SPEC.md",
+  "last_updated": "2026-06-19",
+  "covers_spec": "none",
   "source_file": [
     "commands/z-uplift.md"
   ],
@@ -116,7 +116,7 @@
     "No automatic retry of bailed components — --retry-bailed is explicit user opt-in.",
     "Cross-cutting pass is skippable via --cross-cutting=skip; default ON.",
     "Every phase emits phase_end with wall_ms and user_wait_ms; AskUserQuestion waits are bracketed by user_wait_start / user_wait_end events.",
-    "Doc-staleness gate (Setup Step 5) computes stale_pct across all INDEX concepts before Phase 0; if >= Z_HARNESS_DOC_STALENESS_THRESHOLD (default 20%), user is prompted to switch to /z-maintain-docs, continue, or abandon. Never auto-invokes /z-maintain-docs.",
+    "Doc-staleness gate (Setup Step 5) computes stale_pct across all INDEX concepts before Phase 0; if >= docs.staleness_threshold (default 20%), user is prompted to switch to /z-maintain-docs, continue, or abandon. Never auto-invokes /z-maintain-docs.",
     "Notification behavior is controlled by the notify.level TOML key (env: Z_HARNESS_NOTIFY_LEVEL), resolved via the config system in Setup Step 4. There is no standalone Z_HARNESS_NOTIFY variable.",
     "Slug collision hard-check (existing slug dir in z-harness/plans/) always runs unconditionally before the workflow.slug_confirm preference resolver soft gate.",
     "workflow.slug_confirm resolver (scripts/config.py resolve-question) returns skip/prefill/ask/halt; on any non-zero exit code, falls back to the normal ask path without silently skipping.",
@@ -145,7 +145,6 @@
     "consultant/reviewer provider routing is delegated to scripts/resolve-provider.sh — provider names (Gemini/Codex) are never hardcoded in dispatch prompts.",
     "Phase line anchors shift whenever the command file is edited; always verify against grep before citing a line number.",
     "cross_cutting_findings_dropped telemetry fires when consultant output contains bullets that don't match G-NNN/C-NNN/R-NNN; if finding counts seem low check run logs for this event.",
-    "docs/human/z-uplift.md is NOT a source file for this concept — it is generated output. The true sources are commands/z-uplift.md and commands/z-uplift.md.",
     "Setting Z_HARNESS_NOTIFY has no effect — the correct env var is Z_HARNESS_NOTIFY_LEVEL (maps to notify.level in TOML config). See docs/human/config.md for all notification knobs.",
     "workflow.slug_confirm resolver failure (exit code 2/3/4) is non-fatal — falls back to ask mode; never silently skips the confirmation.",
     "halt branch (workflow.slug_confirm result=halt) emits uplift_halt and exits 0 — it does NOT call AskUserQuestion. Distinct from skip (which continues) and ask (which prompts). Triggered when rule_id=no_ask_halt is active in config.",

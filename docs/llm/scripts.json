@@ -1,6 +1,6 @@
 {
   "concept": "scripts",
-  "last_updated": "2026-06-03",
+  "last_updated": "2026-06-19",
   "covers_spec": "none",
   "source_file": [
     "scripts/block-dangerous-git.sh",
@@ -40,14 +40,14 @@
       "line": 1,
       "symbol": "log-event.sh",
       "kind": "module",
-      "summary": "Appends structured JSON event to run events.jsonl and repo-wide metrics.jsonl; resolves base via z_harness_base() 5-tier fallback from plan-path.sh; flock-safe; Z_HARNESS_BASE_DIR external-base redirect; mid-flight legacy run detection (skipped when Z_HARNESS_BASE_DIR set)."
+      "summary": "Appends structured JSON event to run events.jsonl and repo-wide metrics.jsonl; resolves base via z_harness_base() 5-tier fallback from plan-path.sh; flock-safe; Z_HARNESS_BASE_DIR external-base redirect; mid-flight legacy run detection (skipped when Z_HARNESS_BASE_DIR set); resolve-run-dir subcommand for read-only path lookup."
     },
     {
       "file": "scripts/log-phase.sh",
       "line": 1,
       "symbol": "log-phase.sh",
       "kind": "module",
-      "summary": "Sugar over log-event.sh; start/end/wrap modes emit <phase>_start/_end with wall_ms; python3 ms-timestamp fallback for macOS; anomaly detection via check_wall_ms."
+      "summary": "Sugar over log-event.sh; five modes: start/end (token-based, in-process), begin/finish (file-persisted to $TMPDIR, survives cross-Bash-tool-call boundaries), wrap (end-to-end command timing); python3 ms-timestamp fallback for macOS; anomaly detection via check_wall_ms."
     },
     {
       "file": "scripts/log-phase.sh",
@@ -75,7 +75,7 @@
       "line": 1,
       "symbol": "run-memory-review.sh",
       "kind": "module",
-      "summary": "Gate script for memory-review agent; <RUN> <parent_command>; 4-state terminal taxonomy; 5-line stdout contract on ready."
+      "summary": "Gate script for memory-review agent; <RUN> <parent_command>; 4-state terminal taxonomy; stdout contract on ready: STATUS: ready, diff path, SPEC path (or empty), TAGS path, optional DEBUG.md path; final line AXIOM_READY <diff-path> when axioms.auto_extract_post_run != 'false'."
     },
     {
       "file": "scripts/extract-dismissals.py",
@@ -96,11 +96,11 @@
       "line": 1,
       "symbol": "remote-sandbox-sync.sh",
       "kind": "module",
-      "summary": "Rsync local tree to two-level remote layout: <slug>/base/ (seeded once, atomic mkdir lock) + <slug>/<task-id>/ overlay via --link-dest; REMOTE_HOME resolved via SSH printf; SLUG/TASK_ID validated."
+      "summary": "Rsync local tree to two-level remote layout under sandbox/: <slug>/base/ (seeded once, atomic mkdir lock) + <slug>/<task-id>/ overlay via --link-dest; REMOTE_HOME resolved via SSH printf; SLUG/TASK_ID validated; sandbox/ sub-dir prevents stray rsync from polluting container root."
     },
     {
       "file": "scripts/remote-sandbox-sync.sh",
-      "line": 105,
+      "line": 130,
       "symbol": "seed_base",
       "kind": "fn",
       "summary": "Acquires remote lock via mkdir, seeds shared base via rsync, writes .base-ready marker with HEAD SHA, releases lock; losers poll up to 600s."
@@ -110,7 +110,7 @@
       "line": 1,
       "symbol": "config.py",
       "kind": "module",
-      "summary": "Layered TOML config loader; subcommands: get, export-env, ensure-defaults, explain, should-notify, list-question-ids, resolve-question, check-no-ask, set, migrate, inspect-all; QUESTION_IDS registry + RESULT_MAP + [followup] section; startup guards at module load."
+      "summary": "Layered TOML config loader; subcommands: get, get-batch, export-env, ensure-defaults, explain, should-notify, list-question-ids, resolve-question, resolve-halt-category, check-no-ask, set, migrate, inspect-all; QUESTION_IDS registry + RESULT_MAP + [followup] section; startup guards at module load."
     },
     {
       "file": "scripts/config.py",
@@ -125,6 +125,20 @@
       "symbol": "cmd_list_question_ids",
       "kind": "fn",
       "summary": "Prints sorted JSON array of registered question IDs from QUESTION_IDS registry."
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 1334,
+      "symbol": "cmd_get_batch",
+      "kind": "fn",
+      "summary": "Resolves multiple config keys in a single process; prints JSON object {key:val,...}; unknown keys null+warn to stderr; meta keys excluded; always exits 0 (best-effort)."
+    },
+    {
+      "file": "scripts/config.py",
+      "line": 1598,
+      "symbol": "cmd_resolve_halt_category",
+      "kind": "fn",
+      "summary": "Prints halt_category tag for given question_id; fail-safe default 'ask' for unknown/untagged qids; bare string output (not JSON); exits 2 with no arguments."
     },
     {
       "file": "scripts/config.py",
@@ -492,7 +506,8 @@
     "remote-runner",
     "config",
     "overnight-run",
-    "active-plan-registry"
+    "active-plan-registry",
+    "axioms"
   ],
   "invariants": [
     "All scripts require python3 for JSON handling, timing fallbacks, and document generation.",
@@ -501,10 +516,11 @@
     "log-event.sh and log-phase.sh honor Z_HARNESS_SLUG for slug-namespaced vs. legacy flat plan layout.",
     "log-event.sh mid-flight legacy detection is skipped entirely when Z_HARNESS_BASE_DIR is set to preserve the model.patch invariant.",
     "log-phase.sh check_wall_ms emits telemetry_anomaly and suppresses *_end event when wall_ms > 604_800_000ms (overflow) or wall_ms < 0 (clock skew); exits 0 in both anomaly cases.",
+    "log-phase.sh begin mode writes T0 to $TMPDIR/z-harness-phase/<key>.start so wall_ms survives across separate Bash tool-call boundaries; finish is fail-open (no stamp = emit nothing, not wall_ms:0).",
     "regenerate-memories-flat.py writes MEMORIES-FLAT.md atomically via os.replace on a PID+random-suffixed temp file.",
     "run-memory-review.sh always exits 0; skip conditions are communicated via STATUS: line on stdout.",
     "run-memory-review.sh accepts exactly two positional args: <RUN> <parent_command>.",
-    "run-memory-review.sh stdout line 1 is always STATUS: ready | STATUS: skipped <reason>; lines 2-4 are diff, SPEC (or empty), TAGS paths when ready; line 5 is DEBUG.md path when parent_command is debug.",
+    "run-memory-review.sh stdout line 1 is always STATUS: ready | STATUS: skipped <reason>; lines 2-4 are diff, SPEC (or empty), TAGS paths when ready; line 5 is DEBUG.md path when parent_command is debug; final line is AXIOM_READY <diff-path> when axioms.auto_extract_post_run != 'false'.",
     "run-memory-review.sh emits exactly one memory_review_terminal event on all skip paths using a 4-state taxonomy: skipped_broken_context, not_applicable, ready (orchestrator-owned), dispatched (orchestrator-owned).",
     "extract-dismissals.py outputs JSON {signatures, n_runs_scanned} to stdout; exit 0 even when no dismissals found.",
     "extract-dismissals.py --global applies the pairwise algorithm within each slug independently, not across slugs.",
@@ -516,6 +532,8 @@
     "config.py check-no-ask is fail-closed: unregistered question_ids return halt when Z_HARNESS_NO_ASK=halt.",
     "config.py set performs atomic read-modify-write via temp-file rename; validates key format and value against VALIDATORS before writing; exit 2 on validation, 4 on I/O.",
     "config.py export-env emits config_resolved event at most once per Z_HARNESS_RUN via O_EXCL stamp file in TMPDIR.",
+    "config.py get-batch always exits 0 (best-effort); unknown keys return null with stderr warning; meta keys are excluded.",
+    "config.py resolve-halt-category outputs a bare tag string (not JSON); fail-safe default 'ask' for unknown or untagged qids; exits 2 with no arguments.",
     "block-dangerous-git.sh exit contract: exit 0 = allow, exit 2 = block (with human-readable reason on stderr); never exits 1.",
     "block-dangerous-git.sh never crashes on empty stdin, malformed JSON, or non-Bash tool calls — all fail safe (exit 0).",
     "block-dangerous-git.sh classifies commands against canonical forms (global options stripped, chained segments split) so evasion via -C/-c/--git-dir/env-var-prefix is not possible.",
@@ -533,7 +551,7 @@
     "active-plan-registry.py Z_HARNESS_REGISTRY_ENABLED=0: all mutating subcommands (register, heartbeat, update-scope, overlaps, reap, deregister) become silent no-ops; list and session-id are always permitted.",
     "active-plan-registry.py run-id must match ^[A-Za-z0-9._-]+$, not start with '-', and contain no '..' or '/'.",
     "active-plan-registry.py session-id: on macOS uses pure-Python <ppid>-<epoch> (no subprocess) to avoid CoreFoundation fork-safety crash.",
-    "remote-sandbox-sync.sh two-level layout: base/ seeded once per slug with atomic remote mkdir lock; per-task overlay uses --link-dest for hard-linked unchanged files.",
+    "remote-sandbox-sync.sh two-level layout: base/ seeded once per slug with atomic remote mkdir lock; per-task overlay uses --link-dest for hard-linked unchanged files; all slug trees nested under sandbox/ sub-dir.",
     "remote-sandbox-sync.sh resolves REMOTE_HOME via ssh printf (tilde expansion unreliable in --link-dest).",
     "remote-sandbox-sync.sh TASK_ID rejects the literal value 'base' and all path-traversal patterns.",
     "run-status.sh always exits 0; terminal state is communicated as a printed string on stdout.",
@@ -583,17 +601,21 @@
     "log-phase.sh check_wall_ms threshold 604_800_000ms catches seconds-vs-ms overflow (1500x headroom); wall_ms_negative covers NTP jumps / clock skew.",
     "macOS BSD date lacks %3N support; log-phase.sh falls back to python3 time.time()*1000.",
     "log-event.sh silently wraps non-JSON payloads as {\"raw\": ...} instead of failing.",
+    "log-phase.sh begin/finish: shell variables die across Bash tool-call boundaries causing wall_ms:0; begin/finish use $TMPDIR files to persist T0. finish is fail-open: missing stamp = silent no-op, not a bogus wall_ms:0 event.",
     "config.py startup guards check: every QUESTION_IDS key exists in VALIDATORS; every entry has non-null skill_default; every RESULT_MAP (question_id, choice) references known question_id and valid choice.",
     "config.py resolve-question: Z_HARNESS_ASK_ALL=1 short-circuits to result=ask regardless of config/memory; Z_HARNESS_EXPLAIN_RESOLUTION=1 enables verbose stderr explain output.",
     "config.py resolve-question: Z_HARNESS_ASK_ALL=1 and Z_HARNESS_NO_ASK=halt set simultaneously exits 5.",
     "config.py resolve-question: workflow.spec_retro_discovery can return defer-to-sink when set to defer_to_sink_p2; callers must handle this result by invoking sink-add.sh instead of prompting.",
     "config.py check-no-ask: unregistered question_id always halts (fail-closed) and emits unknown_ask_blocked event when Z_HARNESS_NO_ASK=halt.",
+    "config.py get-batch: always exits 0 (best-effort); callers should fall back to per-key defaults for null values. Meta keys (e.g. roles.*) are excluded silently.",
+    "config.py resolve-halt-category: outputs bare string not JSON; fail-safe 'ask' for unknown qids; chain-runner uses this to classify gate categories without needing the full resolver envelope.",
     "active-plan-registry.py sets OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES at import time to prevent CoreFoundation fork-safety crashes (macOS only: bash-invoked Python with existing CF-initialized parent).",
     "active-plan-registry.py session-id: Linux uses /proc/<ppid>/stat + /proc/stat for stable <ppid>-<start_epoch>; macOS uses pure-Python <ppid>-<int(time.time())> (no subprocess). Callers should export Z_HARNESS_SESSION_ID once at run start.",
     "active-plan-registry.py heartbeat: absent record emits registry_error(reason:missing_record) and returns 0 (no-op). Does NOT fabricate zombie records — empty slug/session pollutes overlap detection.",
     "active-plan-registry.py overlaps: exit 4 when active_plans_dir cannot be resolved (not a clean 0/10/20 exit). Stale peers (status:stale OR heartbeat > stale_threshold) are non-blocking even in strict mode.",
     "active-plan-registry.py reap: FileNotFoundError on unlink is always benign (two reapers racing on the same record). All OSErrors during reap are suppressed (non-fatal).",
     "active-plan-registry.py: callers MUST check exit code 3 from register — it is the only LOUD failure. All other subcommands are non-fatal by design.",
+    "run-memory-review.sh AXIOM_READY: only emitted on the STATUS: ready path, not on skip paths. Axiom extraction checks axioms.auto_extract_post_run via config.py get; unavailable config defaults to 'true' (enabled).",
     "[rotation] persona-stats.py baseline: no-persona is the primary null baseline (true null prefix); boring-anchor is the secondary control. BOTH appear as their own rows in every section — neither is quarantined or hidden from reporting.",
     "[rotation] persona-stats.py --since filter: events with missing or unparseable ts excluded (conservative) — not included with or without the flag.",
     "[rotation] persona-stats.py run=='unknown-run' exclusion: these are ad-hoc test/dev draws with no real run/task/attempt context; excluded by default.",
@@ -603,6 +625,7 @@
     "extract-dismissals.py drops findings lacking a title field; does NOT fall back to T-MR-NNN ids (renumbered each run).",
     "remote-sandbox-sync.sh warns but does not fail when no .z-harness-rsync-exclude is found.",
     "remote-sandbox-sync.sh seed_base: failed rsync cleans up partial base dir before releasing lock.",
+    "remote-sandbox-sync.sh all slug trees now nested under sandbox/ sub-dir of the container root; a misdirected rsync can no longer pollute alongside real slug dirs.",
     "run-status.sh classify --command implement-all: a TASKS.md with zero checkboxes is treated as incomplete.",
     "run-status.sh last-event reads the last 20 lines of events.jsonl, iterating in reverse to find the latest valid JSON line.",
     "morning-report.py emits CRITICAL HEAD SHA mismatch banner when head_sha_mismatch_at_resume event found in events.jsonl.",

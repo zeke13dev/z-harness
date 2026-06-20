@@ -1,6 +1,6 @@
 {
   "concept": "followup-sink",
-  "last_updated": "2026-06-02",
+  "last_updated": "2026-06-19",
   "covers_spec": "z-harness/notion-followup-sink/SPEC.md",
   "source_file": [
     "scripts/sink-add.sh",
@@ -54,14 +54,14 @@
       "line": 1,
       "symbol": "sink-claim",
       "kind": "module",
-      "summary": "Atomic open→running claim; per-entry lock FIRST then global; re-checks status from view; staleness check; appends status_changed; emits claim ticket JSON with holder+pid for identity verification"
+      "summary": "Atomic open->running claim; per-entry lock FIRST then global; re-checks status from view; staleness check; appends status_changed; emits claim ticket JSON with holder+pid for identity verification"
     },
     {
       "file": "scripts/sink-status-set.sh",
       "line": 1,
       "symbol": "sink-status-set",
       "kind": "module",
-      "summary": "Generic status transition primitive; verifies per-entry lock via claim ticket or re-acquires; validates state machine; enforces completion_mode mutex for verify→done; appends status_changed; rebuilds view; triggers Notion sync bg"
+      "summary": "Generic status transition primitive; verifies per-entry lock via claim ticket or re-acquires; validates state machine; enforces completion_mode mutex for verify->done; appends status_changed; rebuilds view; triggers Notion sync bg"
     },
     {
       "file": "scripts/sink-view-rebuild.sh",
@@ -82,7 +82,14 @@
       "line": 1,
       "symbol": "sink-lock",
       "kind": "module",
-      "summary": "Per-entry flock + heartbeat via background daemon; subcommands: acquire (forks daemon holding LOCK_EX for lock lifetime), heartbeat (updates last_heartbeat under .hb.lock), release (SIGTERMs daemon), check-stale; stale threshold 7200s"
+      "summary": "Per-entry flock + heartbeat via background daemon; subcommands: acquire, heartbeat, release, check-stale, read-holder; daemon identity verified via zero_lock_under_hblock marker before SIGTERM; stale threshold 7200s"
+    },
+    {
+      "file": "scripts/followup-view-lookup.py",
+      "line": 1,
+      "symbol": "followup-view-lookup",
+      "kind": "module",
+      "summary": "CLI view-lookup helper; --mode=find searches project+global by entry-id (returns {found, entry, sink}); --mode=load dumps all entries from one sink (stamps entry[sink] on entries missing field); never errors on missing/invalid view"
     },
     {
       "file": "scripts/sink-compact-impl.py",
@@ -117,7 +124,7 @@
       "line": 1,
       "symbol": "followup-reconcile-notion-impl",
       "kind": "module",
-      "summary": "Sweeps notion_sync_pending entries in both sinks; project sink root resolved via project_followups_dir (plan-path.sh at call time); fetches config once with get_config_batch; uses --check-existing to dedup before create; appends notion_synced+notion_sync_cleared on success; returns JSON summary"
+      "summary": "Sweeps notion_sync_pending entries in both sinks; project sink root resolved via project_followups_dir at call time; fetches config once with get_config_batch; uses --check-existing to dedup before create; appends notion_synced+notion_sync_cleared on success"
     },
     {
       "file": "scripts/parse-followups-block.py",
@@ -131,7 +138,7 @@
       "line": 1,
       "symbol": "z-followup-next",
       "kind": "module",
-      "summary": "Interactive consumer (9 phases + cleanup): nest guard, heuristic lock probe (NOT mutual-exclusion), running-entry check, enumerate+sort claimable (depth<1 only), AskUserQuestion select, worktree check, staleness prompt, claim+heartbeat, Skill execute with depth=1, status writeback via claim ticket, auto-close attempt, lock release"
+      "summary": "Interactive consumer (10 phases + cleanup): nest guard, heuristic lock probe (NOT mutual-exclusion), running-entry check, enumerate+sort claimable (depth<1 only), AskUserQuestion select, worktree check, staleness prompt, claim+heartbeat, Skill execute with depth=1, status writeback via claim ticket, auto-close attempt, kill-heartbeat-BEFORE-lock-release, push-notify"
     },
     {
       "file": "commands/z-followup-list.md",
@@ -152,14 +159,14 @@
       "line": 1,
       "symbol": "z-followup-confirm",
       "kind": "module",
-      "summary": "verify→done transition; --via=human prompts AskUserQuestion; --via=audit runs 11-point evidence validator; completion_mode mutex enforced"
+      "summary": "verify->done transition; --via=human prompts AskUserQuestion; --via=audit runs 11-point evidence validator; completion_mode mutex enforced"
     },
     {
       "file": "commands/z-followup-dismiss.md",
       "line": 1,
       "symbol": "z-followup-dismiss",
       "kind": "module",
-      "summary": "Any-state → dismissed transition; requires --reason; terminal; done→dismissed stamps dismissed_after_done=true"
+      "summary": "Any-state -> dismissed transition; requires --reason; terminal; done->dismissed stamps dismissed_after_done=true"
     },
     {
       "file": "commands/z-followup-refresh.md",
@@ -224,7 +231,7 @@
     "honours": "Z_HARNESS_BASE_DIR and full 5-tier fallback chain",
     "call_time_semantics": "resolved on every call, not frozen at import or process start",
     "fallback": "proj_root/z-harness/followups when plan-path.sh absent or fails",
-    "global_sink_is_fixed": "~/.z-harness/followups — intentionally outside this chain"
+    "global_sink_is_fixed": "~/.z-harness/followups -- intentionally outside this chain"
   },
   "macos_fork_safety": {
     "guard": "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES",
@@ -238,10 +245,14 @@
     "files": {
       "<lock>": "holder JSON {holder, pid, started_at, last_heartbeat}",
       "<lock>.flock": "OS LOCK_EX sentinel (authoritative for mutual exclusion)",
-      "<lock>.hb.lock": "serializer sentinel — ALL JSON reads/writes under this flock"
+      "<lock>.hb.lock": "serializer sentinel -- ALL JSON reads/writes under this flock"
     },
     "acquire_timeout_s": 30,
-    "held_briefly_during": ["open→running claim (per-entry already held)", "index.view.json rebuild", "audit evidence validation (per-entry already held)"],
+    "held_briefly_during": [
+      "open->running claim (per-entry already held)",
+      "index.view.json rebuild",
+      "audit evidence validation (per-entry already held)"
+    ],
     "never_held_during": "command execution",
     "os_flock_authoritative": true,
     "holder_json_advisory": true
@@ -252,12 +263,35 @@
     "holder_json": "{holder, pid, started_at, last_heartbeat}",
     "stale_threshold_s": 7200,
     "stale_takeover_event": "followup_lock_takeover",
-    "held_during": "status transitions, evidence writes, command execution"
+    "held_during": "status transitions, evidence writes, command execution",
+    "subcommands": [
+      "acquire",
+      "heartbeat",
+      "release",
+      "check-stale",
+      "read-holder"
+    ],
+    "daemon_identity_marker": "zero_lock_under_hblock -- checked in process cmdline before SIGTERM",
+    "wrong_schema_sentinel": "_WRONG_SCHEMA -- parseable JSON but not valid holder; treated as stale (not free)",
+    "corrupt_sentinel": "_CORRUPT -- non-empty unparseable JSON; requires manual cleanup (exit 3)"
   },
   "lock_ordering": "MANDATORY AND UNCHANGED: per-entry FIRST then global. Any code path needing both locks must follow this order. Inversion causes deadlock.",
+  "view_lookup_helper": {
+    "file": "scripts/followup-view-lookup.py",
+    "modes": {
+      "find": "--mode=find --id=<entry-id> -- searches project then global; returns {found, entry, sink}",
+      "load": "--mode=load --sink=project|global -- dumps all entries; stamps entry[sink] on missing field"
+    },
+    "error_handling": "returns [] or {found: false} on missing/invalid view; never raises"
+  },
   "incremental_checkpoint": {
     "field": "_checkpoint",
-    "keys": ["event_count", "journal_byte_length", "tail_sha256", "tail_len"],
+    "keys": [
+      "event_count",
+      "journal_byte_length",
+      "tail_sha256",
+      "tail_len"
+    ],
     "strategy": "seek to journal_byte_length, verify tail_sha256 fingerprint, fold only suffix bytes",
     "fallback": "full cold replay on journal truncation, tail mismatch, or absent checkpoint",
     "invalidated_by": "any in-place journal rewrite (compaction must delete index.view.json before rebuilding)",
@@ -268,7 +302,7 @@
     "driver": "scripts/sink-compact-impl.py",
     "wrapper": "scripts/sink-compact.sh",
     "evicts": "terminal entries (done, dismissed) from index.jsonl to index.archive.jsonl",
-    "archive": "index.archive.jsonl — append-only, never overwritten",
+    "archive": "index.archive.jsonl -- append-only, never overwritten",
     "checkpoint_invalidation": "deletes index.view.json before full rebuild (mandatory)",
     "lock_requirement": "caller must hold global cross-tool lock; script does NOT acquire lock itself",
     "event": "followup_log_compacted"
@@ -287,71 +321,143 @@
       "notion_sync_cleared": "sets False"
     },
     "semantics": "last-writer-wins; reconciler _find_pending_entry_ids replays journal for same result",
-    "shown_in": ["/z-followup-list (Notion column)", "/z-followup-status (pending count)"]
+    "shown_in": [
+      "/z-followup-list (Notion column)",
+      "/z-followup-status (pending count)"
+    ]
   },
   "notion_token": {
     "env_override": "Z_HARNESS_NOTION_TOKEN",
     "fallback": "~/.z-harness/secrets.toml [notion].token (mode 0600)",
-    "warning": "do not use set -x when Z_HARNESS_NOTION_TOKEN is set — token leaks to logs"
+    "warning": "do not use set -x when Z_HARNESS_NOTION_TOKEN is set -- token leaks to logs"
   },
   "schema_locations": {
     "entry_schema": "docs/schemas/followup-entry.schema.json",
     "audit_evidence_schema": "docs/schemas/audit-evidence.schema.json",
     "fixtures": "docs/schemas/fixtures/",
     "validator": "scripts/validate-followup-schemas.sh",
-    "old_paths_broken": ["schemas/followup-entry.json", "schemas/audit-evidence.json"]
+    "old_paths_broken": [
+      "schemas/followup-entry.json",
+      "schemas/audit-evidence.json"
+    ]
   },
   "entry_schema": {
     "schema_version": 1,
     "fields": {
-      "id": "string — <ISO-timestamp>-<slugified-name>; immutable after create",
-      "schema_version": "int — must be 1",
-      "priority": "enum — P0 | P1 | P2 | P3",
-      "name": "string — short human title",
-      "status": "enum — open | running | verify | done | failed | blocked | dismissed",
-      "sink": "enum — project | global  (Notion is a mirror, never a sink enum value)",
+      "id": "string -- <ISO-timestamp>-<slugified-name>; immutable after create",
+      "schema_version": "int -- must be 1",
+      "priority": "enum -- P0 | P1 | P2 | P3",
+      "name": "string -- short human title",
+      "status": "enum -- open | running | verify | done | failed | blocked | dismissed",
+      "sink": "enum -- project | global  (Notion is a mirror, never a sink enum value)",
       "created_at": "ISO 8601 UTC string",
-      "created_by_run": "string — RUN id of creating command",
-      "capture_head": "string — git SHA at create time",
-      "source_artifact": "string — path to creating artifact",
-      "prompt_page_link": "string — relative path to pages/<id>.md",
-      "recommended_command": "string — must match /z-[a-z][a-z-]*[a-z](\\s.*)? pattern; max 2048 chars",
-      "recommended_command_safe_to_retry": "bool — producer declares retry safety",
-      "cited_paths": "array<string> — cap 16; else dir_blob_hashes used",
-      "file_blob_hashes": "map<path, sha256:hex> — mutex with dir_blob_hashes; sha256 of file bytes",
-      "dir_blob_hashes": "map<ancestor-dir, sha256:hex> — sha256 of git ls-tree -r output; mutex with file_blob_hashes",
-      "depth": "int — 0 | 1; from Z_HARNESS_FOLLOWUP_CALLER_DEPTH at create time",
-      "auto_close_eligible": "bool — producer declares; consumer ceiling still applies",
+      "created_by_run": "string -- RUN id of creating command",
+      "capture_head": "string -- git SHA at create time",
+      "source_artifact": "string -- path to creating artifact",
+      "prompt_page_link": "string -- relative path to pages/<id>.md",
+      "recommended_command": "string -- must match /z-[a-z][a-z-]*[a-z](\\s.*)? pattern; max 2048 chars",
+      "recommended_command_safe_to_retry": "bool -- producer declares retry safety",
+      "cited_paths": "array<string> -- cap 16; else dir_blob_hashes used",
+      "file_blob_hashes": "map<path, sha256:hex> -- mutex with dir_blob_hashes; sha256 of file bytes",
+      "dir_blob_hashes": "map<ancestor-dir, sha256:hex> -- sha256 of git ls-tree -r output; mutex with file_blob_hashes",
+      "depth": "int -- 0 | 1; from Z_HARNESS_FOLLOWUP_CALLER_DEPTH at create time",
+      "auto_close_eligible": "bool -- producer declares; consumer ceiling still applies",
       "completion_mode": "null | human_confirmed | audit_confirmed | auto_closed_low_risk",
       "audit_evidence_path": "null | string",
       "closed_at": "null | ISO string",
       "closed_by_run": "null | string",
       "failure_reason": "null | string",
-      "attempt_count": "int — incremented on each failed attempt",
+      "attempt_count": "int -- incremented on each failed attempt",
       "status_history": "array of {ts, from, to, by} objects",
-      "notion_remote_id": "null | string — Notion page ID",
-      "notion_sync_pending": "bool | absent — materialized by reducer from journal events",
-      "content_hash": "string — sha256(name + NUL + recommended_command); dedup key",
-      "dismissed_after_done": "bool | absent — set by reducer on done→dismissed transition"
+      "notion_remote_id": "null | string -- Notion page ID",
+      "notion_sync_pending": "bool | absent -- materialized by reducer from journal events",
+      "content_hash": "string -- sha256(name + NUL + recommended_command); dedup key",
+      "dismissed_after_done": "bool | absent -- set by reducer on done->dismissed transition"
     },
-    "blob_hash_format": "sha256:<64-hex-chars> — raw file bytes hashed, NOT git hash-object",
+    "blob_hash_format": "sha256:<64-hex-chars> -- raw file bytes hashed, NOT git hash-object",
     "dir_blob_hashes_rule": "sha256 of git ls-tree -r <capture_head> <ancestor>/ output; ancestor must be depth >= 2 from repo root"
   },
   "state_machine": {
-    "states": ["open", "running", "verify", "done", "failed", "blocked", "dismissed"],
-    "terminal_states": ["done", "dismissed"],
+    "states": [
+      "open",
+      "running",
+      "verify",
+      "done",
+      "failed",
+      "blocked",
+      "dismissed"
+    ],
+    "terminal_states": [
+      "done",
+      "dismissed"
+    ],
     "transitions": [
-      {"from": "open", "to": "running", "actor": "sink-claim.sh", "preconditions": "per-entry lock acquired; depth<1; not stale (or --allow-stale)"},
-      {"from": "running", "to": "verify", "actor": "consumer", "preconditions": "recommended_command exit==0"},
-      {"from": "running", "to": "failed", "actor": "consumer", "preconditions": "exit!=0; attempt_count incremented"},
-      {"from": "running", "to": "blocked", "actor": "consumer", "preconditions": "staleness drift or external dep missing"},
-      {"from": "running", "to": "open", "actor": "auto_recovery (sink-claim)", "preconditions": "dead PID OR heartbeat stale >2h; logs followup_lock_takeover"},
-      {"from": "failed", "to": "open", "actor": "consumer", "preconditions": "safe_to_retry==true AND attempt_count<3"},
-      {"from": "verify", "to": "done", "actor": "/z-followup-confirm --via=human", "preconditions": "AskUserQuestion approval; completion_mode=human_confirmed"},
-      {"from": "verify", "to": "done", "actor": "/z-followup-confirm --via=audit", "preconditions": "11-point audit evidence passes; completion_mode=audit_confirmed"},
-      {"from": "verify", "to": "done", "actor": "consumer auto-close", "preconditions": "auto_close_eligible AND ceiling passes AND completion_mode==null; completion_mode=auto_closed_low_risk"},
-      {"from": "any", "to": "dismissed", "actor": "/z-followup-dismiss", "preconditions": "--reason required"},
-      {"from": "blocked", "to": "open", "actor": "/z-followup-refresh", "preconditions": "re-stamps capture_head + file_blob_hashes"}
+      {
+        "from": "open",
+        "to": "running",
+        "actor": "sink-claim.sh",
+        "preconditions": "per-entry lock acquired; depth<1; not stale (or --allow-stale)"
+      },
+      {
+        "from": "running",
+        "to": "verify",
+        "actor": "consumer",
+        "preconditions": "recommended_command exit==0"
+      },
+      {
+        "from": "running",
+        "to": "failed",
+        "actor": "consumer",
+        "preconditions": "exit!=0; attempt_count incremented"
+      },
+      {
+        "from": "running",
+        "to": "blocked",
+        "actor": "consumer",
+        "preconditions": "staleness drift or external dep missing"
+      },
+      {
+        "from": "running",
+        "to": "open",
+        "actor": "auto_recovery (sink-claim)",
+        "preconditions": "dead PID OR heartbeat stale >2h; logs followup_lock_takeover"
+      },
+      {
+        "from": "failed",
+        "to": "open",
+        "actor": "consumer",
+        "preconditions": "safe_to_retry==true AND attempt_count<3"
+      },
+      {
+        "from": "verify",
+        "to": "done",
+        "actor": "/z-followup-confirm --via=human",
+        "preconditions": "AskUserQuestion approval; completion_mode=human_confirmed"
+      },
+      {
+        "from": "verify",
+        "to": "done",
+        "actor": "/z-followup-confirm --via=audit",
+        "preconditions": "11-point audit evidence passes; completion_mode=audit_confirmed"
+      },
+      {
+        "from": "verify",
+        "to": "done",
+        "actor": "consumer auto-close",
+        "preconditions": "auto_close_eligible AND ceiling passes AND completion_mode==null; completion_mode=auto_closed_low_risk"
+      },
+      {
+        "from": "any",
+        "to": "dismissed",
+        "actor": "/z-followup-dismiss",
+        "preconditions": "--reason required"
+      },
+      {
+        "from": "blocked",
+        "to": "open",
+        "actor": "/z-followup-refresh",
+        "preconditions": "re-stamps capture_head + file_blob_hashes"
+      }
     ],
     "verify_done_mutex": "completion_mode is one-way and mutually exclusive; at most one of {human_confirmed, audit_confirmed, auto_closed_low_risk} per entry"
   },
@@ -367,7 +473,7 @@
       "5. review_verdict == 'PASS' (literal string)",
       "6. test_exit_code == 0 (literal int)",
       "7. git merge-base --is-ancestor <capture_head> <verify_head> returns 0",
-      "8. verified_by_run is a valid run id in some plan's archive (no path separators or ..) — both legacy and canonical layouts",
+      "8. verified_by_run is a valid run id in some plan's archive (no path separators or ..) -- both legacy and canonical layouts",
       "9. diff_artifact_path touches at least one cited_path",
       "10. review_verdict_path content references entry_id OR recommended_command",
       "11. audit_evidence.json must live under trusted run-archive path (both layouts)"
@@ -376,14 +482,23 @@
     "on_any_fail": "logs followup_audit_evidence_rejected with rejected_check: <number>; stays at verify"
   },
   "auto_close_ceiling": {
-    "kill_switch": "followup.auto_close_low_risk_enabled — fails CLOSED when config.py present but unreadable",
+    "kill_switch": "followup.auto_close_low_risk_enabled -- fails CLOSED when config.py present but unreadable",
     "eligibility": "auto_close_eligible==true AND completion_mode is null AND command exited 0",
     "pass_condition_A": "diff_stat == 0 AND touched_paths is empty (true no-op; binary/rename/mode-only has touched_paths and must pass B)",
     "pass_condition_B": "ALL touched paths match allowlist AND NONE match denylist (denylist takes precedence)",
     "diff_formats": "numstat and unified diff both accepted",
-    "default_allowlist": ["docs/**/*.md", "**/CHANGELOG", "**/CHANGELOG.md"],
-    "default_denylist": ["commands/**/*.md", "agents/**/*.md", ".claude/**/*.md", "/*.md"],
-    "on_pass": "verify→done with completion_mode=auto_closed_low_risk",
+    "default_allowlist": [
+      "docs/**/*.md",
+      "**/CHANGELOG",
+      "**/CHANGELOG.md"
+    ],
+    "default_denylist": [
+      "commands/**/*.md",
+      "agents/**/*.md",
+      ".claude/**/*.md",
+      "/*.md"
+    ],
+    "on_pass": "verify->done with completion_mode=auto_closed_low_risk",
     "on_fail": "stay at verify for HITL"
   },
   "command_allowlist": {
@@ -404,7 +519,27 @@
     "commit_distance": "git rev-list --count <capture_head>..HEAD > followup.staleness_commit_window",
     "soft_warning": "now > created_at + followup.staleness_warn_days (default 30)",
     "hard_auto_dismiss": "staleness_hard_dismiss_days > 0 AND now > created_at + N days; default 0 (disabled)",
-    "prompt_options": ["proceed", "refresh (re-stamp; transitions to blocked, then user runs /z-followup-refresh)", "dismiss"]
+    "prompt_options": [
+      "proceed",
+      "refresh (re-stamp; transitions to blocked, then user runs /z-followup-refresh)",
+      "dismiss"
+    ]
+  },
+  "z_followup_next_phases": {
+    "total": 10,
+    "phase_0": "Nest guard: refuse if Z_HARNESS_FOLLOWUP_CALLER_DEPTH >= 1",
+    "phase_0_1": "Heuristic global lock probe (5s timeout) -- NOT mutual-exclusion guarantee",
+    "phase_0_2": "Running-entry check: refuse if any project sink entry has status=running",
+    "phase_1": "Enumerate both sinks, merge into priority-sorted view, exclude depth=1",
+    "phase_2": "AskUserQuestion select (TOP_N default 10, configurable via Z_HARNESS_FOLLOWUP_TOP_N); --non-interactive claims [1]",
+    "phase_3": "Worktree check; --force-dirty to override; pre-run diff captured",
+    "phase_4": "Staleness check vs file_blob_hashes/dir_blob_hashes + commit distance",
+    "phase_5": "Claim: sink-claim.sh (per-entry FIRST then global); spawn heartbeat background subprocess with EXIT trap",
+    "phase_6": "Execute: set Z_HARNESS_FOLLOWUP_CALLER_DEPTH=1, Skill invoke, unset immediately after",
+    "phase_7": "Status writeback: verify on exit 0, failed on non-zero; claim ticket for identity verification",
+    "phase_8": "Auto-close attempt if eligible",
+    "phase_9": "Kill heartbeat BEFORE releasing per-entry lock; disable EXIT trap",
+    "phase_10": "Push-notify: Notion sync push if configured"
   },
   "persistence_layout": {
     "project_sink": "resolved via plan-path.sh followups_dir at call time (fallback: <proj_root>/z-harness/followups)",
@@ -423,7 +558,7 @@
   },
   "producer_integration": {
     "sink_add_sh": {
-      "role": "Generic writer; dedup hash = sha256(name + NUL + recommended_command) — source_artifact intentionally excluded",
+      "role": "Generic writer; dedup hash = sha256(name + NUL + recommended_command) -- source_artifact intentionally excluded",
       "defaults": "auto_close_eligible=false, safe_to_retry=false"
     },
     "reviewer_agent": {
@@ -436,7 +571,11 @@
   },
   "notion_adapter": {
     "direction": "one-way push only (filesystem -> Notion)",
-    "triggers": ["entry create (backgrounded)", "status transition (backgrounded)", "evidence attach"],
+    "triggers": [
+      "entry create (backgrounded)",
+      "status transition (backgrounded)",
+      "evidence attach"
+    ],
     "auth": "Z_HARNESS_NOTION_TOKEN env first; then ~/.z-harness/secrets.toml:[notion].token (mode 0600)",
     "database_id_config": "followup.notion_database_id",
     "retry": "3 attempts, exponential backoff 1s/4s/16s; honors Retry-After header on 429",
@@ -447,17 +586,58 @@
   "config_namespace": {
     "section": "[followup]",
     "keys": {
-      "followup.default_sink": {"default": "project", "valid_values": ["project", "global"]},
-      "followup.notion_enabled": {"default": false},
-      "followup.notion_database_id": {"default": ""},
-      "followup.notion_token_path": {"default": "~/.z-harness/secrets.toml"},
-      "followup.auto_close_low_risk_enabled": {"default": false, "note": "kill-switch; fails closed when config.py present but unreadable"},
-      "followup.auto_close_low_risk_path_allowlist": {"default": ["docs/**/*.md", "**/CHANGELOG", "**/CHANGELOG.md"]},
-      "followup.auto_close_low_risk_path_denylist": {"default": ["commands/**/*.md", "agents/**/*.md", ".claude/**/*.md", "/*.md"]},
-      "followup.staleness_commit_window": {"default": 50},
-      "followup.staleness_warn_days": {"default": 30},
-      "followup.staleness_hard_dismiss_days": {"default": 0, "note": "0 = disabled"},
-      "followup.audit_evidence_required_artifacts": {"default": ["z_review_all_verdict", "test_exit", "cumulative_diff"]}
+      "followup.default_sink": {
+        "default": "project",
+        "valid_values": [
+          "project",
+          "global"
+        ]
+      },
+      "followup.notion_enabled": {
+        "default": false
+      },
+      "followup.notion_database_id": {
+        "default": ""
+      },
+      "followup.notion_token_path": {
+        "default": "~/.z-harness/secrets.toml"
+      },
+      "followup.auto_close_low_risk_enabled": {
+        "default": false,
+        "note": "kill-switch; fails closed when config.py present but unreadable"
+      },
+      "followup.auto_close_low_risk_path_allowlist": {
+        "default": [
+          "docs/**/*.md",
+          "**/CHANGELOG",
+          "**/CHANGELOG.md"
+        ]
+      },
+      "followup.auto_close_low_risk_path_denylist": {
+        "default": [
+          "commands/**/*.md",
+          "agents/**/*.md",
+          ".claude/**/*.md",
+          "/*.md"
+        ]
+      },
+      "followup.staleness_commit_window": {
+        "default": 50
+      },
+      "followup.staleness_warn_days": {
+        "default": 30
+      },
+      "followup.staleness_hard_dismiss_days": {
+        "default": 0,
+        "note": "0 = disabled"
+      },
+      "followup.audit_evidence_required_artifacts": {
+        "default": [
+          "z_review_all_verdict",
+          "test_exit",
+          "cumulative_diff"
+        ]
+      }
     }
   },
   "event_kinds": [
@@ -491,15 +671,21 @@
   "schema_migration": {
     "driver": "scripts/sink-migrate.sh",
     "current_version": 1,
-    "contract": "rebuild view → append corrective events at new schema_version → append schema_migrated sentinel; NEVER edit existing JSONL lines",
-    "schema_migrated_event": {"ts": "ISO-UTC", "kind": "schema_migrated", "from_version": "int", "to_version": "int", "migrated_by": "scripts/sink-migrate.sh"},
+    "contract": "rebuild view -> append corrective events at new schema_version -> append schema_migrated sentinel; NEVER edit existing JSONL lines",
+    "schema_migrated_event": {
+      "ts": "ISO-UTC",
+      "kind": "schema_migrated",
+      "from_version": "int",
+      "to_version": "int",
+      "migrated_by": "scripts/sink-migrate.sh"
+    },
     "v1_to_v1": "no-op; exits 0; no event appended",
     "lock_requirement": "must be called under global cross-tool lock"
   },
   "invariants": [
-    "Consumer cannot self-promote verify→done without explicit completion_mode value",
-    "verify→done is mutually exclusive: at most one of {human_confirmed, audit_confirmed, auto_closed_low_risk}",
-    "recommended_command matches ^/z-[a-z][a-z-]*[a-z](\\s.*)? — no raw shell; /z-do is the shell escape",
+    "Consumer cannot self-promote verify->done without explicit completion_mode value",
+    "verify->done is mutually exclusive: at most one of {human_confirmed, audit_confirmed, auto_closed_low_risk}",
+    "recommended_command matches ^/z-[a-z][a-z-]*[a-z](\\s.*)? -- no raw shell; /z-do is the shell escape",
     "depth <= 1 enforced at create time via Z_HARNESS_FOLLOWUP_CALLER_DEPTH env",
     "audit_confirmed requires git merge-base --is-ancestor capture_head verify_head to pass",
     "auto_close condition A requires diff_stat==0 AND no touched paths (binary/rename/mode-only does NOT qualify as noop)",
@@ -508,28 +694,30 @@
     "Global cross-tool lock held briefly (claim + view rebuild + evidence validate only); NEVER during command execution",
     "Per-entry lock held for duration of command execution; heartbeat at 30s via daemon; stale takeover after 2h",
     "cited_paths cap at 16; if exceeded use dir_blob_hashes for common ancestor (reject if ancestor is repo root or depth < 2)",
-    "Lock ordering: per-entry FIRST then global; no path may invert this order — UNCHANGED",
+    "Lock ordering: per-entry FIRST then global; no path may invert this order -- UNCHANGED",
     "sink field enum is {project, global} only; Notion is a mirror tracked via notion_remote_id + notion_sync_pending",
     "index.jsonl is append-only; all readers tolerate unknown event kinds and fields (forward-compat)",
-    "All lock callers use GlobalLockContext or acquire/release_global_lock from followup_common.py — no reimplementation",
+    "All lock callers use GlobalLockContext or acquire/release_global_lock from followup_common.py -- no reimplementation",
     "Compaction MUST delete index.view.json before running sink-view-rebuild.sh --full to prevent stale checkpoint",
     "File blob hashes are sha256 of raw file bytes; NOT git hash-object",
     "sink-view-rebuild.sh exits 4 (not 1) when global lock is not held; wrappers must hold the lock before calling it",
-    "done→dismissed transition stamps dismissed_after_done=True; metrics consumers must filter this to count clean done states",
+    "done->dismissed transition stamps dismissed_after_done=True; metrics consumers must filter this to count clean done states",
     "Dedup hash excludes source_artifact; same logical task from different artifacts is one entry",
-    "Project sink root resolved at call time via plan-path.sh followups_dir — not frozen at import or process start",
-    "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES set at followup_common.py import time via os.environ.setdefault — prevents macOS fork abort"
+    "Project sink root resolved at call time via plan-path.sh followups_dir -- not frozen at import or process start",
+    "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES set at followup_common.py import time via os.environ.setdefault -- prevents macOS fork abort",
+    "Daemon identity verification via zero_lock_under_hblock marker is mandatory before SIGTERM; skipping risks killing unrelated PIDs",
+    "Phase 9 in z-followup-next kills heartbeat BEFORE releasing per-entry lock to prevent concurrent .hb.lock writes"
   ],
   "gotchas": [
     "sink enum is {project, global} only; attempting sink=notion is a schema validation error",
-    "depth=1 entries are inert — consumer will not claim them; user must dismiss or review manually",
+    "depth=1 entries are inert -- consumer will not claim them; user must dismiss or review manually",
     "audit_evidence.json must live under a trusted run-archive path; evidence placed elsewhere is rejected by check 11",
     "auto_close_eligible on the entry is necessary but not sufficient; both the kill-switch and the consumer ceiling must pass",
     "denylist takes precedence over allowlist in auto-close ceiling; a path matching both is denied",
     "auto-close kill-switch (followup.auto_close_low_risk_enabled) fails CLOSED when config.py exists but returns a non-bool or errors",
-    "diff_stat==0 alone is not condition A — touched_paths must also be empty; binary/rename/mode-only changes produce non-empty touched_paths",
+    "diff_stat==0 alone is not condition A -- touched_paths must also be empty; binary/rename/mode-only changes produce non-empty touched_paths",
     "Global lock is never held during command execution; holding it longer (wrapping the Skill invocation) is a deadlock risk with /z-implement-*",
-    "Lock ordering violation (global before per-entry) is a deadlock risk; sink-claim.sh is the canonical reference implementation — ordering is UNCHANGED",
+    "Lock ordering violation (global before per-entry) is a deadlock risk; sink-claim.sh is the canonical reference implementation -- ordering is UNCHANGED",
     "notion_remote_id mismatch silently blocks future syncs; reconciler --check-existing resolves this",
     "followup_block_parse_failed in reviewer return never crashes the reviewer; follow-ups are opportunistic",
     "Z_HARNESS_FOLLOWUP_CALLER_DEPTH=1 must be set (not just passed as arg) before invoking the entry's recommended_command",
@@ -537,13 +725,16 @@
     "Dedup hash uses sha256(name + NUL + recommended_command); source_artifact is intentionally excluded",
     "View rebuild atomicity requires tmpfile+rename UNDER global lock; optimizing away the lock is an invariant violation",
     "Compaction that does NOT delete index.view.json will produce corrupt incremental rebuilds (stale checkpoint)",
-    "Z_HARNESS_NOTION_TOKEN must not be present under bash set -x — token value leaks to stderr/logs",
+    "Z_HARNESS_NOTION_TOKEN must not be present under bash set -x -- token value leaks to stderr/logs",
     "Schema files have moved: old paths schemas/followup-entry.json and schemas/audit-evidence.json no longer exist",
-    "Phase 0.1 lock probe in /z-followup-next is a HEURISTIC ONLY — it is NOT a mutual-exclusion guarantee; acquire+release proves nothing about concurrent access",
+    "Phase 0.1 lock probe in /z-followup-next is a HEURISTIC ONLY -- it is NOT a mutual-exclusion guarantee; acquire+release proves nothing about concurrent access",
     "sink-view-rebuild.sh exits 4 (not an error in the consumer sense) when global lock is not held; callers must not treat 4 as success",
     "git_head() in followup_common.py raises RuntimeError on failure; callers treat this as a hard rejection and NEVER fall back to a sentinel value",
-    "project_followups_dir() calls plan-path.sh followups_dir at invocation time; the path is NOT frozen at import — a live base change is reflected immediately",
-    "OBJC_DISABLE_INITIALIZE_FORK_SAFETY guard is set in followup_common.py at module import; without it, Python forked from bash can CoreFoundation-abort on macOS"
+    "project_followups_dir() calls plan-path.sh followups_dir at invocation time; the path is NOT frozen at import -- a live base change is reflected immediately",
+    "OBJC_DISABLE_INITIALIZE_FORK_SAFETY guard is set in followup_common.py at module import; without it, Python forked from bash can CoreFoundation-abort on macOS",
+    "sink-lock.sh read-holder subcommand reads current holder JSON without acquiring or releasing the lock -- safe for diagnostics",
+    "Daemon identity marker zero_lock_under_hblock must appear in process cmdline before SIGTERM is sent; Linux reads /proc/<pid>/cmdline, macOS reads ps -o command=",
+    "followup-view-lookup.py returns [] or {found: false} on missing/malformed view; an empty return does not mean the sink is empty"
   ],
   "memories": []
 }
