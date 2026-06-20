@@ -1,6 +1,6 @@
 ---
 name: z-explain
-disable-model-invocation: true
+disable-model-invocation: false
 description: One-shot structured explanation of code at a chosen depth lens. Replaces ad-hoc "explain at high level / more detail" prompts. Citations required. Handoff to /z-learn when interactive exploration is warranted. Read-only, no cross-LLM consult.
 argument-hint: "<target> [orientation|walkthrough|deep|audit-brief] or free-text"
 runtime: c1

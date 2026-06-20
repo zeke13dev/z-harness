@@ -1,6 +1,6 @@
 ---
 name: z-plan-light
-disable-model-invocation: true
+disable-model-invocation: false
 description: Lightweight planner for small targeted changes / bug fixes. Bundled cross-LLM consult, single FIX.md artifact, inline implementation in the orchestrator (no implementer subagent), codex review still runs as the safety gate. Routes down, up, sideways, or to contextual bug workflows when light mode is not the best fit.
 argument-hint: <fix description>
 runtime: c1

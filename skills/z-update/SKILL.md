@@ -234,9 +234,44 @@ for k in reg.get("plugins", {}):
 ' "$CLAUDE_REG" 2>/dev/null)"
   if [ -n "$CLAUDE_PLUGIN_KEY" ]; then
     CLAUDE_MKT="${CLAUDE_PLUGIN_KEY#*@}"
-    claude plugin marketplace update "$CLAUDE_MKT" 2>/dev/null || true
-    claude plugin update "$CLAUDE_PLUGIN_KEY" 2>/dev/null || true
-    echo "[z-update] Claude Code plugin cache refreshed for ${CLAUDE_PLUGIN_KEY} — restart Claude Code to load the new commands."
+    # Refresh the marketplace's git ref first, then re-extract the plugin. For a
+    # directory/symlink-source marketplace this re-reads the freshly pulled repo
+    # (step 4 already advanced HEAD), so the new commit SHA becomes the cache
+    # version. Surface failures instead of swallowing them — a silent failure
+    # here leaves every /z-* command frozen at the old cached commit.
+    if ! claude plugin marketplace update "$CLAUDE_MKT"; then
+      echo "[z-update] WARNING: 'claude plugin marketplace update ${CLAUDE_MKT}' failed; cache may be stale." >&2
+    fi
+    if ! claude plugin update "$CLAUDE_PLUGIN_KEY"; then
+      echo "[z-update] WARNING: 'claude plugin update ${CLAUDE_PLUGIN_KEY}' failed; cache may be stale." >&2
+    fi
+
+    # Verify the refresh actually landed. Symlink installs in particular can
+    # silently no-op (the marketplace ref didn't advance, or the cache version
+    # string didn't change), so confirm the cache the registry now points at
+    # matches the repo HEAD before claiming success.
+    HEAD_SHA="$(git -C "$PLUGIN_DIR" rev-parse HEAD 2>/dev/null)"
+    CACHED_SHA="$(python3 -c '
+import json, sys
+try:
+    reg = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+entries = reg.get("plugins", {}).get(sys.argv[2], [])
+if entries:
+    print(entries[-1].get("gitCommitSha", ""))
+' "$CLAUDE_REG" "$CLAUDE_PLUGIN_KEY" 2>/dev/null)"
+    # Prefix-tolerant compare (handles short vs full SHA).
+    if [ -n "$HEAD_SHA" ] && [ -n "$CACHED_SHA" ] && \
+       [ "${HEAD_SHA#$CACHED_SHA}" = "$HEAD_SHA" ] && \
+       [ "${CACHED_SHA#$HEAD_SHA}" = "$CACHED_SHA" ]; then
+      echo "[z-update] WARNING: Claude Code cache still at ${CACHED_SHA} but repo HEAD is ${HEAD_SHA} — the cache did NOT refresh." >&2
+      echo "[z-update] Resolve manually, then fully restart Claude Code:" >&2
+      echo "    claude plugin marketplace update ${CLAUDE_MKT}" >&2
+      echo "    claude plugin update ${CLAUDE_PLUGIN_KEY}" >&2
+    else
+      echo "[z-update] Claude Code plugin cache refreshed for ${CLAUDE_PLUGIN_KEY} — restart Claude Code to load the new commands."
+    fi
   fi
 fi
 ```

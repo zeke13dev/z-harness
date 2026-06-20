@@ -1,6 +1,6 @@
 ---
 name: z-axiom-reject
-disable-model-invocation: true
+disable-model-invocation: false
 description: Reject a candidate or approved axiom, moving it to the rejected/ tombstone store. Optionally records a rejection reason.
 argument-hint: <id> [--reason <text>] [--scope <global|project>] [--repo-root <path>]
 runtime: c1

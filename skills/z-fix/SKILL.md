@@ -1,6 +1,6 @@
 ---
 name: z-fix
-disable-model-invocation: true
+disable-model-invocation: false
 description: Lightweight bug-fix command for the case where the user already has a diagnosis. Captures problem + repro, single light-fix sanity consult ("does the proposed cause explain all symptoms?"), inline implementation, non-negotiable Codex review. Optional post-mortem (auto-suggested if review needed >1 retry). Early gate recommends /z-debug if user signals unknown root cause.
 argument-hint: <symptom or proposed fix description>
 runtime: c1

@@ -1,6 +1,6 @@
 ---
 name: z-context-budget
-disable-model-invocation: true
+disable-model-invocation: false
 description: Analyze context utilization from z-harness telemetry and surface actionable savings recommendations.
 argument-hint: "[directory path — defaults to latest archive]"
 runtime: c1

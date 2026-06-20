@@ -1,6 +1,6 @@
 ---
 name: z-reconcile
-disable-model-invocation: true
+disable-model-invocation: false
 description: "Read-mostly workspace audit: surveys git worktrees, plan slugs, the active-plan registry, claim locks, uncommitted work, and follow-up entries; cross-references them into a single consistency report. Default run is pure read (zero mutations); cleanup is opt-in per-flag with per-item confirmation."
 argument-hint: "[--prune-worktrees] [--reap-registry] [--clean-locks] [--archive-plans] [--open-followups] [--save] [<save-path>]"
 runtime: c1

@@ -1,6 +1,6 @@
 ---
 name: z-axiom-edit
-disable-model-invocation: true
+disable-model-invocation: false
 description: Edit a field on a candidate or approved axiom record. On approved records, re-validates the graph and regenerates the kernel.
 argument-hint: <id> --set <field>=<value> [--set <field>=<value> ...] [--scope <global|project>] [--repo-root <path>]
 runtime: c1

@@ -1,6 +1,6 @@
 ---
 name: z-plan-split
-disable-model-invocation: true
+disable-model-invocation: false
 description: Pre-emptive scope splitter — fan a big topic out into N narrow cluster-planner subagents in parallel, then reconcile file-path overlaps into SHARED-CONCERNS.md + MANIFEST.md.
 argument-hint: <topic> [--slug=<root-slug>] [--clusters="a,b,c"]
 runtime: c1

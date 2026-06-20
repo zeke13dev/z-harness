@@ -1,6 +1,6 @@
 ---
 name: z-maintain-docs
-disable-model-invocation: true
+disable-model-invocation: false
 description: Refresh stale docs in docs/human/ and docs/llm/. Reads docs/llm/INDEX.json to find concepts whose source files changed since each doc's last_updated. Spawns doc-updater subagents (Sonnet) per stale concept. Applies refreshed docs by default; pass --dry-run to preview without writing. Pass --glossary to also refresh the CONTEXT.md domain-language glossary. Stops for review only on genuine-risk signals (memories_lost, audit reject/needs-review).
 argument-hint: "[--scope <concept-slug>] [--glossary] [--dry-run] [--audit]"
 runtime: c1

@@ -1,6 +1,6 @@
 ---
 name: z-test
-disable-model-invocation: true
+disable-model-invocation: false
 description: System-level invariant test planner. Supports both legacy mode (SPEC.md + PLAN.md + TASKS.md) and intent mode (INTENT.md + TASKS.md + LEDGER.md). Reads INVARIANTS.json when present (user-authored, optional — no generator; absent is normal). Drafts behavioral tests keyed to plan invariants or acceptance-checklist criteria, cross-LLM consult with coverage analysis, writes versioned TESTS.md. Backward-compatible v1 fallback when INVARIANTS.json is absent. Supports --ci flag for read-only CI validation. Tests are then implemented by /z-implement-all in the same task as their production code.
 argument-hint: "[--slug <slug>] [--ci]"
 version: 2

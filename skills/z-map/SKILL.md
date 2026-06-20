@@ -1,6 +1,6 @@
 ---
 name: z-map
-disable-model-invocation: true
+disable-model-invocation: false
 description: Maps terrain with citations + cross-LLM critique. No recommendations — terrain only. See `/z-research` for synthesis across map + brainstorm.
 argument-hint: <question or technical area to map>
 runtime: c1
