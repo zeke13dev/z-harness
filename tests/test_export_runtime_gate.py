@@ -9,15 +9,16 @@ Tests:
    accidentally stripped — this test runs the actual export parser on a controlled
    fixture and asserts the token is in the rendered result.
 
-2. Codex frontmatter load: z-attend.md's frontmatter must be parsed by the
+2. Codex frontmatter load: z-attend SKILL.md's frontmatter must be parsed by the
    enumerate_sources / _parse_frontmatter pipeline and the resulting entry's
    description must be non-empty (proves the file was not silently dropped).
-   The codex exporter then includes z-attend in its prompt files — verified by
-   checking the emitted file's header line starts with ``# /z-attend``.
+   The codex exporter emits skills/z-attend/SKILL.md verbatim — verified by
+   checking the file contains ``category=risk``.
 
 3. Live export z-attend presence: run the actual codex export against the real
-   repo root; the emitted prompts/z-attend.md must exist AND contain
+   repo root; the emitted skills/z-attend/SKILL.md must exist AND contain
    ``category=risk`` (proving the live pipeline, not just the fixture).
+   Also verifies the .codex-plugin/plugin.json manifest is generated.
 """
 
 from __future__ import annotations
@@ -209,11 +210,11 @@ class TestCodexFrontmatterLoad(unittest.TestCase):
     Invariant: _parse_frontmatter on skills/z-attend/SKILL.md must return a
     non-empty description. enumerate_sources must include a 'z-attend' entry in
     its 'skills' list (z-attend is now a SKILL, not a command). The codex
-    exporter must emit prompts/z-attend.md whose first line is '# /z-attend'.
+    exporter now emits skills/z-attend/SKILL.md verbatim (not prompts/).
 
     Failure class: if SKILL.md has malformed frontmatter that causes
     _parse_frontmatter to silently skip it, or if enumerate_sources drops it,
-    the description would be empty and the codex prompt would be missing.
+    the description would be empty and the codex output would be missing.
     """
 
     def test_z_attend_frontmatter_parsed_not_empty(self) -> None:
@@ -264,51 +265,60 @@ class TestCodexFrontmatterLoad(unittest.TestCase):
             "z-attend entry has empty description — frontmatter not loaded or silently dropped",
         )
 
-    def test_codex_emits_z_attend_prompt_with_correct_header(self) -> None:
-        """Codex export must emit prompts/z-attend.md with '# /z-attend' as first line.
+    def test_codex_emits_z_attend_skill_md_verbatim(self) -> None:
+        """Codex export must emit skills/z-attend/SKILL.md verbatim (frontmatter preserved).
 
         This verifies the full pipeline: enumerate_sources picks up z-attend in
-        the skills tier, _render_prompt runs on it, and the output starts with
-        the correct header.
+        the skills tier, and the codex driver writes the source SKILL.md verbatim
+        (no transliteration). The emitted file must start with the YAML frontmatter
+        fence (---) from the source.
         """
-        from runtime.drivers.codex.export import _render_prompt
+        import tempfile
 
-        sources = enumerate_sources(REPO_ROOT)
-        attend_entries = [e for e in sources["skills"] if e["id"] == "z-attend"]
-        self.assertTrue(attend_entries, "z-attend not in enumerate_sources skills")
+        from runtime.drivers.codex import export as codex_export
 
-        entry = attend_entries[0]
-        rendered = _render_prompt(entry)
-        first_line = rendered.splitlines()[0] if rendered.strip() else ""
+        with tempfile.TemporaryDirectory() as tmp:
+            out_root = Path(tmp) / "codex_out"
+            result = codex_export.export(REPO_ROOT, out_root)
 
-        self.assertEqual(
-            first_line,
-            "# /z-attend",
-            f"codex prompt for z-attend has wrong header line. Got: {first_line!r}",
-        )
+            skill_path = out_root / "skills" / "z-attend" / "SKILL.md"
+            self.assertTrue(
+                skill_path.exists(),
+                f"Codex export did not emit skills/z-attend/SKILL.md at {skill_path}",
+            )
+            content = skill_path.read_text(encoding="utf-8")
+            first_line = content.splitlines()[0] if content.strip() else ""
+            self.assertEqual(
+                first_line,
+                "---",
+                f"skills/z-attend/SKILL.md first line must be '---' (YAML frontmatter). Got: {first_line!r}",
+            )
 
-    def test_codex_z_attend_prompt_contains_category_risk(self) -> None:
-        """Codex-rendered z-attend prompt must contain 'category=risk' token.
+    def test_codex_z_attend_skill_md_contains_category_risk(self) -> None:
+        """Codex-emitted skills/z-attend/SKILL.md must contain 'category=risk' token.
 
         This is the full-pipeline BEYOND-GREP assertion: z-attend carries
-        RUNTIME-GATE comments with category=risk; the codex renderer must not
-        strip them.
+        RUNTIME-GATE comments with category=risk; the codex verbatim copy must
+        preserve them (no stripping or rewriting of the source SKILL.md).
         """
-        from runtime.drivers.codex.export import _render_prompt
+        import tempfile
 
-        sources = enumerate_sources(REPO_ROOT)
-        attend_entries = [e for e in sources["skills"] if e["id"] == "z-attend"]
-        self.assertTrue(attend_entries, "z-attend not found in enumerate_sources skills")
+        from runtime.drivers.codex import export as codex_export
 
-        entry = attend_entries[0]
-        rendered = _render_prompt(entry)
+        with tempfile.TemporaryDirectory() as tmp:
+            out_root = Path(tmp) / "codex_out"
+            codex_export.export(REPO_ROOT, out_root)
 
-        self.assertIn(
-            "category=risk",
-            rendered,
-            "codex _render_prompt stripped 'category=risk' token from z-attend — "
-            "RUNTIME-GATE comments are being incorrectly rewritten",
-        )
+            skill_path = out_root / "skills" / "z-attend" / "SKILL.md"
+            self.assertTrue(skill_path.exists(), "skills/z-attend/SKILL.md not emitted")
+            content = skill_path.read_text(encoding="utf-8")
+
+            self.assertIn(
+                "category=risk",
+                content,
+                "codex skills/z-attend/SKILL.md missing 'category=risk' token — "
+                "RUNTIME-GATE comments may have been stripped from the verbatim copy",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -373,10 +383,10 @@ class TestLiveExportZAttend(unittest.TestCase):
         )
 
     def test_codex_export_has_z_attend_with_category_token(self) -> None:
-        """Codex export must produce prompts/z-attend.md with category=risk."""
+        """Codex export must produce skills/z-attend/SKILL.md with category=risk."""
         self._run_and_verify(
             "runtime.drivers.codex.export",
-            ("prompts", "z-attend.md"),
+            ("skills", "z-attend", "SKILL.md"),
             "codex",
         )
 
@@ -395,6 +405,50 @@ class TestLiveExportZAttend(unittest.TestCase):
             ("prompts", "z-attend.md"),
             "pi",
         )
+
+    def test_codex_export_generates_plugin_manifest(self) -> None:
+        """Codex export must generate .codex-plugin/plugin.json declaring skills path.
+
+        Invariant: the manifest must parse as JSON and contain a 'skills' key
+        (relative path to the skills directory). Without this manifest Codex CLI
+        cannot discover the emitted SKILL.md files.
+        """
+        import importlib
+        import json
+        import tempfile
+
+        mod = importlib.import_module("runtime.drivers.codex.export")
+        with tempfile.TemporaryDirectory() as tmp:
+            out_root = Path(tmp) / "export_out"
+            result = mod.export(REPO_ROOT, out_root)
+
+            manifest_path = out_root / ".codex-plugin" / "plugin.json"
+            self.assertTrue(
+                manifest_path.exists(),
+                f"[codex] .codex-plugin/plugin.json not generated at {manifest_path}",
+            )
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertIn(
+                "skills",
+                data,
+                "[codex] .codex-plugin/plugin.json missing 'skills' key — "
+                "Codex CLI will not discover the skills directory",
+            )
+            # Manifest must be in the emitted files list.
+            manifest_in_files = any(
+                ".codex-plugin" in str(f) and "plugin.json" in str(f)
+                for f in result.files
+            )
+            self.assertTrue(
+                manifest_in_files,
+                "[codex] plugin.json not listed in ExportResult.files",
+            )
+            # No prompts/ directory should exist (old flat layout removed).
+            prompts_dir = out_root / "prompts"
+            self.assertFalse(
+                prompts_dir.exists(),
+                "[codex] prompts/ directory still present — old flat-transliteration layout not removed",
+            )
 
 
 if __name__ == "__main__":

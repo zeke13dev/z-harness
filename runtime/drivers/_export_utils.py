@@ -377,7 +377,7 @@ _TARGET_CONVENTIONS: dict[str, dict[str, str]] = {
     "codex": {
         "commands": "prompts/{id}.md",
         "agents": "prompts/{id}.md",
-        "skills": "prompts/{id}.md",
+        "skills": "skills/{id}/SKILL.md",
     },
     # NOTE: "agy" is intentionally absent. The antigravity exporter
     # does NOT use output_path_for — it owns its own dual layout
@@ -405,7 +405,8 @@ def output_path_for(repo_root: Path, target: str, kind: str, id: str) -> Path:
 
         - cursor agents/commands → ``exports/cursor/.cursor/rules/<id>.mdc``
         - cursor skills → ``exports/cursor/.cursor/skills/<id>/SKILL.md``
-        - codex  → ``exports/codex/prompts/<id>.md``
+        - codex agents/commands → ``exports/codex/prompts/<id>.md``
+        - codex skills → ``exports/codex/skills/<id>/SKILL.md``
 
     Raises:
         ValueError: if *target* or *kind* is not recognised.
