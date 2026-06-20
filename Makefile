@@ -1,5 +1,5 @@
 SHELL := /usr/bin/env bash
-.PHONY: test test-sh conformance conformance-live conformance-record conformance-strict lint lint-strict lint-halt preflight bench-autonomy-check test-ecc-lessons
+.PHONY: test test-sh conformance conformance-live conformance-record conformance-strict lint lint-strict lint-frontmatter lint-halt preflight bench-autonomy-check test-ecc-lessons export
 
 # Full Python test suite: the unit/integration tests under tests/, the
 # script-level tests under scripts/, and the runtime dispatch + driver tests
@@ -96,3 +96,11 @@ bench-autonomy-check:
 # Runs pytest on: test_cost_summary.py, test_context_budget.py, test_evaluate_session.py
 test-ecc-lessons:
 	python3 -m pytest scripts/test_cost_summary.py scripts/test_context_budget.py scripts/test_evaluate_session.py -v
+
+# On-demand export generation — regenerates cursor, codex, and antigravity exports
+# to temp/exports/ via runtime drivers (NOT the deprecated scripts/export-*.py).
+# Runs fully offline; exits 0 only when all three hosts emit zero validation warnings.
+# Wired into CI (tests.yml generate-exports job).  The temp/exports/ directory is
+# .gitignored; exports are never committed.
+export:
+	python3 scripts/generate-exports.py

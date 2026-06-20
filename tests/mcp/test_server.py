@@ -73,13 +73,13 @@ class TestAgentLoading:
     """Tests for _load_agent — parsing agents/*.md with YAML frontmatter."""
 
     def test_agent_loading_explore(self) -> None:
-        """Parse explore.md — should return AgentDef with name, model, tools."""
+        """Parse auditor.md — should return AgentDef with name, model, tools."""
         from z_harness_cli.mcp.server import _load_agent
 
-        agent = _load_agent("explore")
-        assert agent.name == "explore"
-        assert agent.model == "deepseek-v4-flash"
-        assert "read" in agent.tools
+        agent = _load_agent("auditor")
+        assert agent.name == "auditor"
+        assert agent.model == "sonnet"
+        assert "Read" in agent.tools
         assert len(agent.prompt_template) > 100
 
     def test_agent_not_found(self) -> None:
@@ -200,7 +200,7 @@ class TestSubagentDispatch:
         """subagent dispatch without prompt → error."""
         from z_harness_cli.mcp.server import _handle_subagent_dispatch
 
-        r = _handle_subagent_dispatch({"agent": "explore"}, None)
+        r = _handle_subagent_dispatch({"agent": "auditor"}, None)
         assert r.status == "error"
         assert "prompt" in r.content.lower()
 

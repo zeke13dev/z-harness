@@ -1,37 +1,28 @@
 {
   "concept": "capabilities-matrix",
   "last_updated": "2026-06-19",
-  "covers_spec": "SPEC.md §HostAdapter contract (D13); §Phase 7 review — Command-capability matrix; Stage-1 runtime export delegation; export-only drivers (windsurf/kiro/cline/copilot)",
+  "covers_spec": "INTENT: z-harness-portability (frozen 2026-06-19T19:05:12Z); §HostAdapter contract (D13); §Phase 7 review — Command-capability matrix (NEW); Stage-1 runtime export delegation",
   "source_file": [
     "z_harness_cli/adapters/claude.py",
     "z_harness_cli/adapters/antigravity.py",
     "z_harness_cli/adapters/cursor.py",
     "z_harness_cli/adapters/codex.py",
     "z_harness_cli/adapters/base.py",
-    "z_harness_cli/adapters/registry.py",
-    "runtime/drivers/windsurf/export.py",
-    "runtime/drivers/kiro/export.py",
-    "runtime/drivers/cline/export.py",
-    "runtime/drivers/copilot/export.py"
+    "z_harness_cli/adapters/registry.py"
   ],
   "confidence": "high",
   "entry_points": [
     {"file": "z_harness_cli/adapters/base.py", "line": 276, "symbol": "COMMAND_CAPABILITY_MATRIX", "kind": "const", "summary": "nested dict {host_name: {command_id: CommandTier}}; populated at adapter import time"},
-    {"file": "z_harness_cli/adapters/base.py", "line": 283, "symbol": "KNOWN_COMMANDS", "kind": "const", "summary": "canonical tuple of 15 /z-* command families; adapters must declare a tier for every entry or raise"},
     {"file": "z_harness_cli/adapters/base.py", "line": 302, "symbol": "register_command_tiers", "kind": "fn", "summary": "registers per-host command tiers; raises ValueError if any KNOWN_COMMANDS entry is missing"},
     {"file": "z_harness_cli/adapters/base.py", "line": 320, "symbol": "command_tier", "kind": "fn", "summary": "O(1) lookup (host, command) -> CommandTier; returns 'blocked' for unknowns (fail-safe)"},
     {"file": "z_harness_cli/adapters/base.py", "line": 52, "symbol": "Capabilities", "kind": "struct", "summary": "frozen dataclass of static per-host capability flags"},
     {"file": "z_harness_cli/adapters/base.py", "line": 42, "symbol": "ExportResult", "kind": "module", "summary": "re-export from runtime.drivers._export_utils; canonical import location for z_harness_cli callers"},
     {"file": "z_harness_cli/adapters/registry.py", "line": 84, "symbol": "detect_all", "kind": "fn", "summary": "probes all four adapters; returns (adapter, DetectResult) pairs in canonical order"},
     {"file": "z_harness_cli/adapters/registry.py", "line": 110, "symbol": "select", "kind": "fn", "summary": "resolves host with optional Rich picker; raises UnknownHostError / NoHostInstalledError"},
-    {"file": "z_harness_cli/adapters/claude.py", "line": 107, "symbol": "ClaudeAdapter", "kind": "struct", "summary": "native-fidelity adapter; export_payload is persona-only from personas/builtin/ (plugin handles commands/skills)"},
-    {"file": "z_harness_cli/adapters/antigravity.py", "line": 154, "symbol": "AntigravityAdapter", "kind": "struct", "summary": "high-fidelity adapter; export_payload runs two-stage pipeline (runtime + persona loop from personas/builtin/)"},
-    {"file": "z_harness_cli/adapters/cursor.py", "line": 161, "symbol": "CursorAdapter", "kind": "struct", "summary": "flattened adapter; export_payload runs two-stage pipeline producing .mdc rule files"},
-    {"file": "z_harness_cli/adapters/codex.py", "line": 182, "symbol": "CodexAdapter", "kind": "struct", "summary": "flattened adapter; export_payload runs two-stage pipeline producing prompts/ flat files; MCP global/persistent (F4)"},
-    {"file": "runtime/drivers/windsurf/export.py", "line": 196, "symbol": "export", "kind": "fn", "summary": "export-only: writes .windsurf/rules/<id>.md with trigger frontmatter; Agent/Skill lines replaced with hint comments"},
-    {"file": "runtime/drivers/kiro/export.py", "line": 192, "symbol": "export", "kind": "fn", "summary": "export-only: writes .kiro/steering/<id>.md with inclusion frontmatter (always/manual/fileMatch)"},
-    {"file": "runtime/drivers/cline/export.py", "line": 231, "symbol": "export", "kind": "fn", "summary": "export-only: default pointer strategy — single .clinerules/z-harness.md; curated/full available via config"},
-    {"file": "runtime/drivers/copilot/export.py", "line": 183, "symbol": "export", "kind": "fn", "summary": "export-only: always single .github/copilot-instructions.md consolidated catalog regardless of strategy"}
+    {"file": "z_harness_cli/adapters/claude.py", "line": 107, "symbol": "ClaudeAdapter", "kind": "struct", "summary": "native-fidelity adapter; export_payload is persona-only (plugin reads skills/<id>/SKILL.md natively)"},
+    {"file": "z_harness_cli/adapters/antigravity.py", "line": 154, "symbol": "AntigravityAdapter", "kind": "struct", "summary": "high-fidelity adapter; export_payload runs two-stage pipeline (runtime + persona loop)"},
+    {"file": "z_harness_cli/adapters/cursor.py", "line": 161, "symbol": "CursorAdapter", "kind": "struct", "summary": "flattened adapter; export_payload runs two-stage pipeline producing native .cursor/skills/<id>/SKILL.md files plus one generated always-apply .cursor/rules/z-harness-skills.mdc index and AGENT .mdc rules"},
+    {"file": "z_harness_cli/adapters/codex.py", "line": 182, "symbol": "CodexAdapter", "kind": "struct", "summary": "flattened adapter; export_payload runs two-stage pipeline producing prompts/ flat files"}
   ],
   "depends_on": [
     "multi-ide-exports"
@@ -56,25 +47,24 @@
     },
     "curated": {
       "hosts": ["windsurf", "kiro"],
-      "concept_only": true,
-      "description": "Export-only concept tier. Curated rule/steering files with host-specific frontmatter (trigger for Windsurf, inclusion for Kiro). No adapter, no launch/inject. ExportResult.fidelity reports 'flattened' (Agent/Skill calls replaced with hint comments)."
+      "description": "Export-only. Curated rule/steering files with host-specific frontmatter (trigger for Windsurf, inclusion for Kiro). No adapter, no launch/inject. Export via runtime.drivers.<host>.export only."
     },
     "pointer": {
       "hosts": ["cline", "copilot"],
-      "concept_only": true,
-      "description": "Export-only concept tier. Single pointer/instructions file. No adapter, no launch/inject. ExportResult.fidelity reports 'pointer'."
+      "description": "Export-only. Single pointer/instructions file pointing to z-harness capabilities. No adapter, no launch/inject. Export via runtime.drivers.<host>.export only."
     }
   },
   "export_pipeline": {
     "claude": {
-      "stage1": "none — native plugin handles commands/skills",
-      "stage2": "runtime/drivers/claude/persona_export.py::export_persona() for each personas/builtin/*.md",
+      "stage1": "none — native plugin reads skills/<id>/SKILL.md directly",
+      "stage2": "runtime/drivers/claude/persona_export.py::export_persona() for each personas/*.md",
       "fidelity": "native",
-      "layout": ["<dest>/personas/<name>.md"]
+      "layout": ["<dest>/personas/<name>.md"],
+      "note": "skills/ is the committed source; no export to files is needed or done on the native host"
     },
     "antigravity": {
       "stage1": "runtime/drivers/antigravity/export.py::export(harness_root, dest)",
-      "stage2": "runtime/drivers/antigravity/persona_export.py::export_persona() for each personas/builtin/*.md",
+      "stage2": "runtime/drivers/antigravity/persona_export.py::export_persona() for each personas/*.md",
       "fidelity": "high",
       "layout": [
         "<dest>/.agent/workflows/<id>.md",
@@ -83,70 +73,70 @@
         "<dest>/prompts/<id>.md",
         "<dest>/.agent/personas/<name>.md"
       ],
-      "collision_domain": "workflows/ + rules/ (z-harness- prefix stripped) + skills/ stems"
+      "collision_domain": "workflows/ + rules/ + skills/ stems"
     },
     "cursor": {
       "stage1": "runtime/drivers/cursor/export.py::export(harness_root, dest)",
-      "stage2": "runtime/drivers/cursor/persona_export.py::export_persona() for each personas/builtin/*.md",
+      "stage2": "runtime/drivers/cursor/persona_export.py::export_persona() for each personas/*.md",
       "fidelity": "flattened",
       "layout": [
+        "<dest>/.cursor/skills/<id>/SKILL.md",
+        "<dest>/.cursor/rules/z-harness-skills.mdc",
         "<dest>/.cursor/rules/<id>.mdc",
         "<dest>/.cursor/personas/<name>.mdc"
       ],
-      "collision_domain": ".cursor/rules/ stems"
+      "note": "skills are written verbatim (no transliteration); z-harness-skills.mdc is the only generated always-apply .mdc index; AGENT rules use .cursor/rules/<id>.mdc; export artifacts are never committed"
     },
     "codex": {
       "stage1": "runtime/drivers/codex/export.py::export(harness_root, dest)",
-      "stage2": "runtime/drivers/codex/persona_export.py::export_persona() for each personas/builtin/*.md",
+      "stage2": "runtime/drivers/codex/persona_export.py::export_persona() for each personas/*.md",
       "fidelity": "flattened",
       "layout": [
-        "<dest>/prompts/<id>.md",
+        "<dest>/skills/<id>/SKILL.md",
         "<dest>/AGENTS.md",
         "<dest>/prompts/personas/<name>.md"
       ],
-      "collision_domain": "prompts/ stems only (AGENTS.md excluded)"
+      "note": "skills written as native SKILL.md under export root; discovered by .codex-plugin/plugin.json 'skills' key; export artifacts are never committed"
     },
     "windsurf": {
       "stage1": "runtime/drivers/windsurf/export.py::export(harness_root, dest)",
       "stage2": "none — export-only, no persona export",
-      "fidelity_concept": "curated",
-      "exportresult_fidelity": "flattened",
+      "fidelity": "curated",
       "export_only": true,
-      "layout": ["<dest>/.windsurf/rules/<id>.md"],
-      "structural_rule": "YAML frontmatter with 'trigger' key: always_on (for _ALWAYS_ON_AGENTS), glob (when source has 'globs' field), model_decision (default)",
-      "body_rewrite": "Agent/Skill/AskUserQuestion/TaskCreate/SubagentCreate lines replaced with HTML comment"
+      "layout": [
+        "<dest>/.windsurf/rules/<id>.md"
+      ],
+      "structural_rule": "all rule files require YAML frontmatter with 'trigger' key"
     },
     "kiro": {
       "stage1": "runtime/drivers/kiro/export.py::export(harness_root, dest)",
       "stage2": "none — export-only, no persona export",
-      "fidelity_concept": "curated",
-      "exportresult_fidelity": "flattened",
+      "fidelity": "curated",
       "export_only": true,
-      "layout": ["<dest>/.kiro/steering/<id>.md"],
-      "structural_rule": "YAML frontmatter with 'inclusion' key: always (_ALWAYS_ON_AGENTS), manual (others); fileMatch with fileMatchPattern when applicable",
-      "body_rewrite": "Agent/Skill/AskUserQuestion/TaskCreate/SubagentCreate lines replaced with HTML comment"
+      "layout": [
+        "<dest>/.kiro/steering/<id>.md"
+      ],
+      "structural_rule": "all steering files require YAML frontmatter with 'inclusion' key"
     },
     "cline": {
       "stage1": "runtime/drivers/cline/export.py::export(harness_root, dest)",
       "stage2": "none — export-only, no persona export",
-      "fidelity_concept": "pointer",
-      "exportresult_fidelity": "pointer (default) or flattened (curated/full strategy)",
+      "fidelity": "pointer",
       "export_only": true,
-      "default_strategy": "pointer",
-      "layout_pointer": ["<dest>/.clinerules/z-harness.md"],
-      "layout_curated_full": ["<dest>/.clinerules/<id>.md"],
-      "structural_rule": "plain markdown, non-empty body; no frontmatter required",
-      "note": "default pointer avoids bloating Cline (loads all .clinerules/ on every prompt)"
+      "layout": [
+        "<dest>/.clinerules/z-harness.md"
+      ],
+      "structural_rule": "single pointer file, plain markdown, non-empty body required"
     },
     "copilot": {
       "stage1": "runtime/drivers/copilot/export.py::export(harness_root, dest)",
       "stage2": "none — export-only, no persona export",
-      "fidelity_concept": "pointer",
-      "exportresult_fidelity": "pointer",
+      "fidelity": "pointer",
       "export_only": true,
-      "layout": ["<dest>/.github/copilot-instructions.md"],
-      "structural_rule": "always single file regardless of configured strategy; consolidates command/agent/skill catalog from frontmatter descriptions only (no source body rewriting)",
-      "note": "strategy config is read but collapsed by single-file constraint"
+      "layout": [
+        "<dest>/.github/copilot-instructions.md"
+      ],
+      "structural_rule": "single instructions file, plain markdown, non-empty body required"
     }
   },
   "per_host": {
@@ -209,7 +199,7 @@
       "export_only": true,
       "note": "No HostAdapter, no adapter-registry entry, no launch/inject support. Export via runtime.drivers.windsurf.export only.",
       "export_layout": ".windsurf/rules/<id>.md",
-      "structural_rule": "trigger frontmatter key required (always_on|glob|model_decision)",
+      "structural_rule": "trigger frontmatter key required on all rule files",
       "runtime_module": "runtime.drivers.windsurf.export"
     },
     "kiro": {
@@ -218,7 +208,7 @@
       "export_only": true,
       "note": "No HostAdapter, no adapter-registry entry, no launch/inject support. Export via runtime.drivers.kiro.export only.",
       "export_layout": ".kiro/steering/<id>.md",
-      "structural_rule": "inclusion frontmatter key required (always|manual|fileMatch)",
+      "structural_rule": "inclusion frontmatter key required on all steering files",
       "runtime_module": "runtime.drivers.kiro.export"
     },
     "cline": {
@@ -226,8 +216,8 @@
       "fidelity_tier": "pointer",
       "export_only": true,
       "note": "No HostAdapter, no adapter-registry entry, no launch/inject support. Export via runtime.drivers.cline.export only.",
-      "export_layout": ".clinerules/z-harness.md (pointer default) or .clinerules/<id>.md (curated/full)",
-      "structural_rule": "plain markdown, non-empty body, no frontmatter required",
+      "export_layout": ".clinerules/z-harness.md",
+      "structural_rule": "single pointer file, plain markdown, non-empty body",
       "runtime_module": "runtime.drivers.cline.export"
     },
     "copilot": {
@@ -236,7 +226,7 @@
       "export_only": true,
       "note": "No HostAdapter, no adapter-registry entry, no launch/inject support. Export via runtime.drivers.copilot.export only.",
       "export_layout": ".github/copilot-instructions.md",
-      "structural_rule": "always single file; catalog of descriptions only (no body rewriting performed)",
+      "structural_rule": "single instructions file, plain markdown, non-empty body",
       "runtime_module": "runtime.drivers.copilot.export"
     }
   },
@@ -259,13 +249,10 @@
     "native = full orchestration including multi-agent subagent dispatch",
     "cleanup_strategy=ephemeral for all four adapters in v1; MCP writes are global/persistent and NOT reversed by cleanup (F4)",
     "ExportResult must be imported from z_harness_cli.adapters.base, not from runtime.drivers._export_utils directly (one-way layering)",
-    "ClaudeAdapter.export_payload is persona-only; Stage 1 runtime export is not run (native plugin handles commands/skills)",
-    "all persona exports source from personas/builtin/ not personas/ root (which holds only README.md)",
+    "ClaudeAdapter.export_payload is persona-only; Stage 1 runtime export is not run (native plugin reads skills/<id>/SKILL.md directly)",
     "non-empty Stage-1 warnings raise RuntimeError immediately (legacy hard-gate; no silent downgrade)",
     "persona-name collision with Stage-1 exported ids raises RuntimeError (MINOR-6)",
-    "windsurf/kiro/cline/copilot are export-only: no adapter module at z_harness_cli/adapters/<host>.py, no registry entry, no command tiers (M5 invariant — validated by TestAdapterAbsence in test_export_golden.py)",
-    "windsurf and kiro ExportResult.fidelity is 'flattened' (not 'curated') because Agent/Skill lines are replaced with hint comments",
-    "copilot export is always single-file regardless of configured strategy; strategy config is read but collapsed"
+    "windsurf/kiro/cline/copilot are export-only: no adapter module at z_harness_cli/adapters/<host>.py, no registry entry, no command tiers (M5 invariant — validated by TestAdapterAbsence in test_export_golden.py)"
   ],
   "gotchas": [
     "cursor and codex both declare fidelity=flattened but differ in MCP surface: cursor has supports_user_mcp=True, codex does not",
@@ -274,11 +261,8 @@
     "cursor needs_trust_prompt=True means inject() must not assume non-interactive; surface the prompt via PTY",
     "canonical adapter order in registry: claude (native) > antigravity (high) > cursor (flattened) > codex (flattened)",
     "register_command_tiers() raises ValueError at import time if KNOWN_COMMANDS entry is missing — misconfigured adapters fail fast",
-    "antigravity collision domain is workflows/rules/skills stems (z-harness- prefix stripped from rules); cursor uses .cursor/rules/ stems; codex uses prompts/ stems only (AGENTS.md excluded)",
-    "windsurf/kiro/cline/copilot are NOT adapters: registry.select(<host>) raises UnknownHostError for them; z_harness_cli/adapters/ has no module for them",
-    "windsurf and kiro ExportResult.fidelity is 'flattened' not 'curated' — the curated/pointer tier concepts are architectural labels; ExportResult.fidelity reflects the rewrite strategy applied",
-    "cline default strategy is pointer (single file) because Cline loads all .clinerules/ files on every prompt; curated/full forces more files and should be set explicitly in config.toml",
-    "copilot body rewriting never occurs — output is catalog of frontmatter descriptions only, so no Agent/Skill call sites exist in the output"
+    "antigravity collision domain is workflows/rules/skills stems (with z-harness- prefix stripped from rules); cursor uses .cursor/rules/ stems; codex uses prompts/ stems only (AGENTS.md excluded)",
+    "windsurf/kiro/cline/copilot are NOT adapters: registry.select(<host>) raises UnknownHostError for them; z_harness_cli/adapters/ has no module for them"
   ],
   "memories": []
 }

@@ -347,7 +347,7 @@ rm -f "$TOML_CONFIG_009" "$EMPTY_PROVIDERS_009"
 echo ""
 echo "TEST-010: z-implement-all.md consult=off branches use subagent_type=\"self-reviewer\""
 
-Z_IMPLEMENT_ALL="$(dirname "$SCRIPTS_DIR")/commands/z-implement-all.md"
+Z_IMPLEMENT_ALL="$(dirname "$SCRIPTS_DIR")/skills/z-implement-all/SKILL.md"
 
 if [ ! -f "$Z_IMPLEMENT_ALL" ]; then
   echo "  FAIL: TEST-010: cannot find $Z_IMPLEMENT_ALL"

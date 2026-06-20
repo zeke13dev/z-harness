@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # scripts/lint-halt-categories.sh
 #
-# Scan commands/*.md for <!-- RUNTIME-GATE: ask_user ... --> comments.
+# Scan skills/*/SKILL.md for <!-- RUNTIME-GATE: ask_user ... --> comments.
 # Exit non-zero if any present category=<x> token is outside the enum.
 # Warn (exit 0 by default, exit 1 under --strict) on ask_user gates
 # with no category= token at all.
 #
 # --strict                  : turn missing-category warnings into hard failures
 # --check-chain <preset>    : list uncategorized gates reachable on that chain
-# --commands-dir <dir>      : override the default commands/ directory (for tests)
+# --skills-dir <dir>        : override the default skills/ directory (for tests)
+# --commands-dir <dir>      : deprecated alias for --skills-dir (backward compat)
 #
 # Source of truth for the enum: scripts/config.py HALT_CATEGORY_ENUM
 # {decision, risk, shortcut, archiving, mechanical_proceed}
@@ -22,7 +23,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # ---------------------------------------------------------------------------
 STRICT=0
 CHECK_CHAIN=""
-COMMANDS_DIR="$REPO_ROOT/commands"
+SKILLS_DIR="$REPO_ROOT/skills"
 
 # ---------------------------------------------------------------------------
 # Parse args
@@ -41,24 +42,34 @@ while [[ $# -gt 0 ]]; do
       CHECK_CHAIN="$2"
       shift 2
       ;;
+    --skills-dir)
+      if [[ $# -lt 2 ]]; then
+        echo "lint-halt-categories.sh: --skills-dir requires a directory" >&2
+        exit 2
+      fi
+      SKILLS_DIR="$2"
+      shift 2
+      ;;
     --commands-dir)
+      # Deprecated alias for --skills-dir (backward compat for tests)
       if [[ $# -lt 2 ]]; then
         echo "lint-halt-categories.sh: --commands-dir requires a directory" >&2
         exit 2
       fi
-      COMMANDS_DIR="$2"
+      SKILLS_DIR="$2"
       shift 2
       ;;
     -h|--help)
       cat <<'EOF'
-Usage: lint-halt-categories.sh [--strict] [--check-chain <preset>] [--commands-dir <dir>]
+Usage: lint-halt-categories.sh [--strict] [--check-chain <preset>] [--skills-dir <dir>]
 
-Scan commands/*.md for RUNTIME-GATE ask_user comments and validate halt categories.
+Scan skills/*/SKILL.md for RUNTIME-GATE ask_user comments and validate halt categories.
 
 Options:
   --strict              Treat missing category= tokens as hard failures (exit 1)
   --check-chain <name>  List uncategorized gates reachable on a given chain preset
-  --commands-dir <dir>  Use a different commands directory (useful in tests)
+  --skills-dir <dir>    Use a different skills directory (useful in tests)
+  --commands-dir <dir>  Deprecated alias for --skills-dir
 EOF
       exit 0
       ;;
@@ -204,42 +215,42 @@ _check_chain() {
     fi
   fi
 
-  # Map step names to command file names.
-  # Step names like "implement-all" map to commands/z-implement-all.md.
-  _step_to_command() {
+  # Map step names to skill file paths.
+  # Step names like "implement-all" map to skills/z-implement-all/SKILL.md.
+  _step_to_skill() {
     local step="$1"
-    echo "z-${step}.md"
+    echo "z-${step}/SKILL.md"
   }
 
   local found_any=0
   echo "Uncategorized ask_user gates reachable on chain '$preset':"
 
   if [[ "${steps_array[0]:-}" == "__ALL__" ]]; then
-    # Fallback: scan all commands
-    for f in "$COMMANDS_DIR"/*.md; do
+    # Fallback: scan all skills
+    for f in "$SKILLS_DIR"/*/SKILL.md; do
       [[ -f "$f" ]] || continue
       while IFS= read -r entry; do
         [[ "$entry" =~ :missing_category: ]] || continue
         local file lineno
         file="$(echo "$entry" | cut -d: -f1)"
         lineno="$(echo "$entry" | cut -d: -f2)"
-        echo "  $(basename "$file"):$lineno  (no category= token)"
+        echo "  $(basename "$(dirname "$file")")/SKILL.md:$lineno  (no category= token)"
         found_any=1
       done < <(_scan_file "$f")
     done
   else
     for step in "${steps_array[@]}"; do
       local cmd_file
-      cmd_file="$COMMANDS_DIR/$(_step_to_command "$step")"
+      cmd_file="$SKILLS_DIR/$(_step_to_skill "$step")"
       if [[ ! -f "$cmd_file" ]]; then
-        echo "  [step '$step': command file not found at $cmd_file]"
+        echo "  [step '$step': skill file not found at $cmd_file]"
         continue
       fi
       while IFS= read -r entry; do
         [[ "$entry" =~ :missing_category: ]] || continue
         local lineno
         lineno="$(echo "$entry" | cut -d: -f2)"
-        echo "  $(_step_to_command "$step"):$lineno  (no category= token)"
+        echo "  $(_step_to_skill "$step"):$lineno  (no category= token)"
         found_any=1
       done < <(_scan_file "$cmd_file")
     done
@@ -259,12 +270,12 @@ if [[ -n "$CHECK_CHAIN" ]]; then
   exit 0
 fi
 
-# Full scan of all commands/*.md
+# Full scan of all skills/*/SKILL.md
 EXIT_CODE=0
 BAD_COUNT=0
 WARN_COUNT=0
 
-for f in "$COMMANDS_DIR"/*.md; do
+for f in "$SKILLS_DIR"/*/SKILL.md; do
   [[ -f "$f" ]] || continue
   while IFS= read -r entry; do
     file="$(echo "$entry" | cut -d: -f1)"

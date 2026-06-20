@@ -95,7 +95,7 @@ DEFAULTS: dict = {
         # depth; root-anchoring with a leading slash (/*.md) restricts it to
         # top-level files only, matching the intended "block root-level .md"
         # behaviour without accidentally blocking docs/**/*.md entries.
-        "auto_close_low_risk_path_denylist":  ["commands/**/*.md", "agents/**/*.md", ".claude/**/*.md", "/*.md"],
+        "auto_close_low_risk_path_denylist":  ["skills/**/*.md", "agents/**/*.md", ".claude/**/*.md", "/*.md"],
         "staleness_commit_window":           50,
         "staleness_warn_days":               30,
         "staleness_hard_dismiss_days":       0,
@@ -567,8 +567,8 @@ QUESTION_IDS: dict[str, dict] = {
         "skill_default": "amend",
         "halt_category": "risk",
         "callsites": [
-            "commands/z-audit-plan.md:183",
-            "commands/z-audit-plan-style.md:384",
+            "skills/z-audit-plan/SKILL.md:183",
+            "skills/z-audit-plan-style/SKILL.md:384",
         ],
     },
     "workflow.slug_confirm": {
@@ -580,13 +580,13 @@ QUESTION_IDS: dict[str, dict] = {
         "skill_default": "yes_keep_derived",
         "halt_category": "mechanical_proceed",
         "callsites": [
-            "commands/z-plan.md:21",
-            "commands/z-fix.md:18",
+            "skills/z-plan/SKILL.md:21",
+            "skills/z-fix/SKILL.md:18",
             "skills/z-debug/SKILL.md:17",
             "skills/z-brainstorm/SKILL.md:19",
             "skills/z-map/SKILL.md:133",
             "skills/z-plan-light/SKILL.md:19",
-            "commands/z-uplift.md:71",
+            "skills/z-uplift/SKILL.md:71",
         ],
         # Hard prerequisite: even when resolver returns skip, the slug-COLLISION check runs
         # unconditionally. The resolver only governs the soft non-obvious-slug confirmation.
@@ -598,7 +598,7 @@ QUESTION_IDS: dict[str, dict] = {
         "skill_default": "ask",
         "halt_category": "mechanical_proceed",
         "callsites": [
-            "commands/z-implement-all.md (halt-resolution gate)",
+            "skills/z-implement-all/SKILL.md (halt-resolution gate)",
         ],
     },
     "workflow.review_all_proceed": {
@@ -607,7 +607,7 @@ QUESTION_IDS: dict[str, dict] = {
         "skill_default": "proceed",
         "halt_category": "mechanical_proceed",
         "callsites": [
-            "commands/z-review-all.md (Phase 3.7 proceed gate)",
+            "skills/z-review-all/SKILL.md (Phase 3.7 proceed gate)",
         ],
     },
     "workflow.plan_decisions_approval": {
@@ -616,7 +616,7 @@ QUESTION_IDS: dict[str, dict] = {
         "skill_default": "approve",
         "halt_category": "decision",
         "callsites": [
-            "commands/z-plan.md (Phase 2.5 decisions-doc approval gate)",
+            "skills/z-plan/SKILL.md (Phase 2.5 decisions-doc approval gate)",
         ],
     },
     "workflow.spec_retro_discovery": {
@@ -629,7 +629,7 @@ QUESTION_IDS: dict[str, dict] = {
         "skill_default": "ask",
         "halt_category": "decision",
         "callsites": [
-            "commands/z-implement-next.md (Phase 4 spec-retro defer branch)",
+            "skills/z-implement-next/SKILL.md (Phase 4 spec-retro defer branch)",
         ],
     },
     "workflow.pre_run_cost_gate": {
@@ -639,9 +639,9 @@ QUESTION_IDS: dict[str, dict] = {
         "halt_category": "risk",
         "callsites": [
             "scripts/pre-run-cost-gate.sh",
-            "commands/z-research.md",
-            "commands/z-uplift.md",
-            "commands/z-plan-split.md",
+            "skills/z-research/SKILL.md",
+            "skills/z-uplift/SKILL.md",
+            "skills/z-plan-split/SKILL.md",
         ],
     },
 }

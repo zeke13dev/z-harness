@@ -7,25 +7,23 @@ in the runtime-owned ``export()`` signature.
 Public surface
 --------------
 export(repo_root, export_root, *, options=None) -> ExportResult
-    Render all z-harness commands, skills, and agents as Codex CLI prompt
-    files under ``export_root``.
+    Render all z-harness skills and agents as Codex CLI files under
+    ``export_root``.
 
     Codex output format:
-    - ``prompts/<id>.md``   — one file per command/skill, starting with
-                              ``# /<id>``, body rewritten to replace
-                              Anthropic-specific constructs with HTML comments.
-    - ``AGENTS.md``         — consolidated agent reference document.
-    - Skills whose ID collides with a command ID get a ``-skill`` suffix.
-    - No YAML frontmatter is emitted in any output file.
+    - ``skills/<id>/SKILL.md``    — one file per skill, copied VERBATIM from
+                                    the source SKILL.md (frontmatter + body
+                                    preserved; no transliteration).
+    - ``AGENTS.md``               — consolidated agent reference document.
+    - ``.codex-plugin/plugin.json``— generated manifest declaring skills path
+                                    so Codex CLI discovers the skills directory.
 
 ExportResult is imported from runtime.drivers._export_utils (BLOCKER-1).
-
-No behaviour changes relative to the legacy script; quirks are preserved and
-annotated.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -39,7 +37,7 @@ from runtime.drivers._export_utils import (
 
 
 # ---------------------------------------------------------------------------
-# Body rewriting
+# Body rewriting (for agents/commands only)
 # ---------------------------------------------------------------------------
 
 # Patterns that indicate Anthropic-specific / Claude Code constructs.
@@ -80,7 +78,7 @@ def _rewrite_body(body: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Prompt file rendering (commands + skills)
+# Prompt file rendering (commands only — retained for any future use)
 # ---------------------------------------------------------------------------
 
 
@@ -90,6 +88,11 @@ def _render_prompt(entry: dict[str, Any]) -> str:
     Format:
         # /<id>
         <rewritten body>
+
+    Note: This renderer is no longer used for skills (which are now written
+    verbatim as ``skills/<id>/SKILL.md``). It is retained for commands if
+    ever emitted, and for backward-compatibility with tests that exercise
+    the rendering logic directly on arbitrary entries.
     """
     entry_id = entry["id"]
     body = entry["body"]
@@ -148,33 +151,19 @@ def _render_agents_md(agents: list[dict[str, Any]]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Prompt validation
+# .codex-plugin/plugin.json manifest generation
 # ---------------------------------------------------------------------------
 
+_CODEX_PLUGIN_MANIFEST: dict[str, Any] = {
+    "name": "z-harness",
+    "description": "z-harness planning and implementation workflow for Codex CLI",
+    "skills": "./skills/",
+}
 
-def _validate_prompt(path: Path) -> list[str]:
-    """Validate a prompt .md file: header line present, body non-empty.
 
-    Returns a list of error strings; empty list means valid.
-    """
-    errors: list[str] = []
-    text = path.read_text(encoding="utf-8")
-
-    lines = text.splitlines()
-    if not lines:
-        errors.append(f"{path}: file is empty")
-        return errors
-
-    if not lines[0].startswith("# /"):
-        errors.append(
-            f"{path}: first line must be '# /<id>', got: {lines[0]!r}"
-        )
-
-    body_lines = [ln for ln in lines[1:] if ln.strip()]
-    if not body_lines:
-        errors.append(f"{path}: body is empty (no non-blank lines after header)")
-
-    return errors
+def _render_plugin_manifest() -> str:
+    """Return the JSON content for .codex-plugin/plugin.json."""
+    return json.dumps(_CODEX_PLUGIN_MANIFEST, indent=2) + "\n"
 
 
 # ---------------------------------------------------------------------------
@@ -188,17 +177,19 @@ def export(
     *,
     options: dict[str, Any] | None = None,
 ) -> ExportResult:
-    """Export z-harness commands, agents, and skills as Codex CLI prompt files.
+    """Export z-harness skills and agents as Codex CLI files.
 
     Parameters
     ----------
     repo_root:
         Absolute path to the z-harness repository root.  Used to discover
-        source files (``commands/``, ``agents/``, ``skills/``).
+        source files (``agents/``, ``skills/``).
     export_root:
-        Destination directory for exported files.  Prompt files are written
-        to ``<export_root>/prompts/<id>.md``; the consolidated agent reference
-        is written to ``<export_root>/AGENTS.md``.
+        Destination directory for exported files.  Skills are written verbatim
+        to ``<export_root>/skills/<id>/SKILL.md`` (frontmatter preserved, no
+        transliteration).  The consolidated agent reference is written to
+        ``<export_root>/AGENTS.md``.  A Codex CLI discovery manifest is written
+        to ``<export_root>/.codex-plugin/plugin.json``.
     options:
         Reserved for future use.  Currently unused; pass ``None`` or omit.
 
@@ -207,8 +198,8 @@ def export(
     ExportResult
         ``dest`` is *export_root* (resolved).
         ``files`` lists every file written.
-        ``fidelity`` is ``"flattened"`` (Codex has no native subagent dispatch;
-        Anthropic-specific constructs are replaced with HTML comments).
+        ``fidelity`` is ``"native"`` (skills are copied verbatim; Codex
+        discovers them via the .codex-plugin manifest).
         ``warnings`` carries any non-fatal validation errors discovered during
         export.
     """
@@ -224,30 +215,19 @@ def export(
     # paths when export_root differs from the default).
     default_base = repo_root / "exports" / "codex"
 
-    # Build a set of command IDs to detect skill/command name collisions.
-    command_ids = {entry["id"] for entry in sources["commands"]}
+    # --- Emit native SKILL.md files for skills (verbatim copy) ---
+    for entry in sources["skills"]:
+        eid = entry["id"]
+        out_path = output_path_for(repo_root, "codex", "skills", eid)
+        if export_root != default_base:
+            relative = out_path.relative_to(default_base)
+            out_path = export_root / relative
 
-    # --- Emit prompt files for commands and skills ---
-    for kind in ("commands", "skills"):
-        for entry in sources[kind]:
-            eid = entry["id"]
-            # Skills that share a name with a command get a "-skill" suffix
-            # to avoid overwriting the command export.
-            # preserved quirk: -skill suffix only applied when there is a collision
-            export_id = (
-                f"{eid}-skill"
-                if kind == "skills" and eid in command_ids
-                else eid
-            )
-            out_path = output_path_for(repo_root, "codex", kind, export_id)
-            if export_root != default_base:
-                relative = out_path.relative_to(default_base)
-                out_path = export_root / relative
-
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            content = _render_prompt(entry)
-            out_path.write_text(content, encoding="utf-8")
-            emitted.append(out_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        # Preserve the source SKILL.md verbatim (frontmatter intact, no rewriting).
+        source_text = entry["source_path"].read_text(encoding="utf-8")
+        out_path.write_text(source_text, encoding="utf-8")
+        emitted.append(out_path)
 
     # --- Emit consolidated AGENTS.md ---
     agents_path = export_root / "AGENTS.md"
@@ -255,9 +235,11 @@ def export(
     agents_md = _render_agents_md(sources["agents"])
     agents_path.write_text(agents_md, encoding="utf-8")
 
-    # --- Validate prompt files ---
-    for path in emitted:
-        validation_errors.extend(_validate_prompt(path))
+    # --- Emit .codex-plugin/plugin.json manifest ---
+    plugin_dir = export_root / ".codex-plugin"
+    plugin_dir.mkdir(parents=True, exist_ok=True)
+    plugin_manifest_path = plugin_dir / "plugin.json"
+    plugin_manifest_path.write_text(_render_plugin_manifest(), encoding="utf-8")
 
     # --- Validate CAPABILITIES.md if it exists ---
     caps_path = export_root / "CAPABILITIES.md"
@@ -273,7 +255,7 @@ def export(
 
     return ExportResult(
         dest=export_root,
-        files=emitted + [agents_path],
-        fidelity="flattened",
+        files=emitted + [agents_path, plugin_manifest_path],
+        fidelity="native",
         warnings=warnings,
     )
