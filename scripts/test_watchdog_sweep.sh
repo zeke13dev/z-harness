@@ -1203,6 +1203,187 @@ fi
 rm -rf "$TD_013"
 
 # ---------------------------------------------------------------------------
+# TEST-014: dispatch stall with real pid → notify-watchdog.sh called with --pid,
+#           alert message contains "To kill: kill <pid>"
+# ---------------------------------------------------------------------------
+# Invariant: when a dispatch_start event carries a real (non-zero, non-null) pid,
+# _wd_handle_stall forwards --pid <pid> to notify-watchdog.sh so the alert message
+# includes "To kill: kill <pid>".
+# Failure class: dispatch stall alerts omit the kill-pid line even when the pid
+# is known, leaving the operator no actionable way to unblock the run.
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "TEST-014: dispatch stall with real pid → notify called with --pid + kill line"
+
+TD_014="$(_tmpdir)"
+PLAN_DIR_014="$TD_014/plan"
+BASE_DIR_014="$TD_014/base"
+EVENTS_014="$BASE_DIR_014/archive/test-run-014/events.jsonl"
+mkdir -p "$PLAN_DIR_014" "$BASE_DIR_014/archive/test-run-014"
+touch "$EVENTS_014"
+
+REG_SCRIPT_014="$(_write_fake_registry "$TD_014" "test-run-014")"
+CFG_SCRIPT_014="$(_write_fake_config "$TD_014")"
+
+# Sentinel notify: records all arguments it receives so we can inspect them.
+NOTIFY_ARGS_014="$TD_014/notify-args.txt"
+FAKE_NOTIFY_014="$TD_014/fake-notify.sh"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$NOTIFY_ARGS_014" > "$FAKE_NOTIFY_014"
+chmod +x "$FAKE_NOTIFY_014"
+
+# Write a dispatch_start with a REAL pid (non-zero, non-null).
+REAL_PID_014=12345
+PAST_DEADLINE_014=$(( $(date +%s) - 10 ))
+local_ts_014="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+printf '%s\n' \
+  "{\"ts\":\"$local_ts_014\",\"run\":\"test-run-014\",\"kind\":\"dispatch_start\",\"dispatch_id\":\"dispatch-014-stall\",\"type\":\"test_type\",\"pid\":$REAL_PID_014,\"timeout_s\":5,\"deadline_ts\":$PAST_DEADLINE_014,\"host\":\"test\"}" \
+  >> "$EVENTS_014"
+
+WD_PID_014=0
+FAKE_RUN_PRESENT=1 \
+WD_ENABLED=true \
+WD_INTERVAL=1 \
+WD_STALE_SECS=1 \
+WATCHDOG_REGISTRY_SCRIPT="$REG_SCRIPT_014" \
+WATCHDOG_CONFIG_SCRIPT="$CFG_SCRIPT_014" \
+WATCHDOG_NOTIFY_SCRIPT="$FAKE_NOTIFY_014" \
+WATCHDOG_GUARD_TIMEOUT=1 \
+Z_HARNESS_PLAN_DIR="$PLAN_DIR_014" \
+Z_HARNESS_BASE_DIR="$BASE_DIR_014" \
+Z_HARNESS_REGISTRY_ENABLED=1 \
+  bash "$WATCHDOG" --run "test-run-014" &
+WD_PID_014=$!
+
+# Poll until notify is called (up to 30s).
+_POLL_DEADLINE_014=$(( $(date +%s) + 30 ))
+while [[ $(date +%s) -lt $_POLL_DEADLINE_014 ]]; do
+  [[ -f "$NOTIFY_ARGS_014" ]] && break
+  sleep 0.5
+done
+
+# Guaranteed teardown.
+_kill_watchdog "$WD_PID_014"
+WD_PID_014=0
+
+# Brief wait for background notify to finish writing args.
+sleep 0.5
+
+if [[ -f "$NOTIFY_ARGS_014" ]]; then
+  NOTIFY_ARGS_STR_014="$(cat "$NOTIFY_ARGS_014")"
+
+  # Assert --pid 12345 was passed to notify-watchdog.sh.
+  if echo "$NOTIFY_ARGS_STR_014" | grep -qF -- "--pid $REAL_PID_014"; then
+    echo "  PASS: notify-watchdog.sh invoked with --pid $REAL_PID_014"
+    PASS=$(( PASS + 1 ))
+  else
+    echo "  FAIL: notify-watchdog.sh not invoked with --pid $REAL_PID_014"
+    echo "        actual args: $NOTIFY_ARGS_STR_014"
+    FAIL=$(( FAIL + 1 ))
+  fi
+else
+  echo "  FAIL: notify-watchdog.sh was never called within 30s"
+  FAIL=$(( FAIL + 1 ))
+fi
+
+rm -rf "$TD_014"
+
+# ---------------------------------------------------------------------------
+# TEST-015: liveness (pid-less) stall → notify called WITHOUT --pid
+# ---------------------------------------------------------------------------
+# Invariant: for liveness-detected stalls (native Agent() stalls), no pid is
+# known.  _wd_handle_stall must omit --pid entirely so notify-watchdog.sh does
+# not emit a bogus "To kill: kill 0" or "To kill: kill null" line.
+# Failure class: pid-less stall alert contains a bogus/misleading kill-pid line.
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "TEST-015: liveness stall (no pid) → notify called WITHOUT --pid"
+
+TD_015="$(_tmpdir)"
+PLAN_DIR_015="$TD_015/plan"
+BASE_DIR_015="$TD_015/base"
+EVENTS_015="$BASE_DIR_015/archive/test-run-015/events.jsonl"
+mkdir -p "$PLAN_DIR_015" "$BASE_DIR_015/archive/test-run-015"
+touch "$EVENTS_015"
+
+REG_SCRIPT_015="$(_write_fake_registry "$TD_015" "test-run-015")"
+CFG_SCRIPT_015="$(_write_fake_config "$TD_015")"
+
+# Sentinel notify: records all arguments it receives.
+NOTIFY_ARGS_015="$TD_015/notify-args.txt"
+FAKE_NOTIFY_015="$TD_015/fake-notify.sh"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$NOTIFY_ARGS_015" > "$FAKE_NOTIFY_015"
+chmod +x "$FAKE_NOTIFY_015"
+
+# Fake liveness.sh: reports a stale subagent start (pid-less liveness stall).
+FAKE_LIVENESS_015="$TD_015/fake-liveness.sh"
+cat > "$FAKE_LIVENESS_015" <<'LIVENESS_EOF'
+#!/usr/bin/env bash
+echo ""
+echo "Run: test-run-015"
+echo "  events.jsonl: /fake/path"
+echo "  possibly stuck (elapsed >= 1s):"
+echo "    - implement_start [T002]: 700s ago  (ts=2024-01-01T00:00:00Z)"
+exit 1
+LIVENESS_EOF
+chmod +x "$FAKE_LIVENESS_015"
+
+WD_PID_015=0
+FAKE_RUN_PRESENT=1 \
+WD_ENABLED=true \
+WD_INTERVAL=1 \
+WD_STALE_SECS=1 \
+WATCHDOG_REGISTRY_SCRIPT="$REG_SCRIPT_015" \
+WATCHDOG_CONFIG_SCRIPT="$CFG_SCRIPT_015" \
+WATCHDOG_NOTIFY_SCRIPT="$FAKE_NOTIFY_015" \
+WATCHDOG_LIVENESS_SCRIPT="$FAKE_LIVENESS_015" \
+WATCHDOG_GUARD_TIMEOUT=1 \
+Z_HARNESS_PLAN_DIR="$PLAN_DIR_015" \
+Z_HARNESS_BASE_DIR="$BASE_DIR_015" \
+Z_HARNESS_REGISTRY_ENABLED=1 \
+  bash "$WATCHDOG" --run "test-run-015" &
+WD_PID_015=$!
+
+# Poll until notify is called (up to 30s).
+_POLL_DEADLINE_015=$(( $(date +%s) + 30 ))
+while [[ $(date +%s) -lt $_POLL_DEADLINE_015 ]]; do
+  [[ -f "$NOTIFY_ARGS_015" ]] && break
+  sleep 0.5
+done
+
+# Guaranteed teardown.
+_kill_watchdog "$WD_PID_015"
+WD_PID_015=0
+
+sleep 0.5
+
+if [[ -f "$NOTIFY_ARGS_015" ]]; then
+  NOTIFY_ARGS_STR_015="$(cat "$NOTIFY_ARGS_015")"
+
+  # Assert notify was called (proves detection ran and notified).
+  echo "  PASS: notify-watchdog.sh was called for liveness stall"
+  PASS=$(( PASS + 1 ))
+
+  # Assert --pid was NOT passed (liveness stalls have no killable pid).
+  if echo "$NOTIFY_ARGS_STR_015" | grep -qF -- "--pid"; then
+    echo "  FAIL: notify-watchdog.sh incorrectly received --pid for pid-less liveness stall"
+    echo "        actual args: $NOTIFY_ARGS_STR_015"
+    FAIL=$(( FAIL + 1 ))
+  else
+    echo "  PASS: notify-watchdog.sh NOT called with --pid for liveness stall"
+    PASS=$(( PASS + 1 ))
+  fi
+else
+  echo "  FAIL: notify-watchdog.sh was never called for liveness stall within 30s"
+  FAIL=$(( FAIL + 1 ))
+  # Skip the --pid check since notify never fired.
+  FAIL=$(( FAIL + 1 ))
+fi
+
+rm -rf "$TD_015"
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 

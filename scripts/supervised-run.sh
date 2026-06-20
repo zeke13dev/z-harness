@@ -158,6 +158,30 @@ _run_bash_fallback() {
   "${CMD_ARGS[@]}" &
   CHILD_PID=$!  # written to global immediately (contract requirement)
 
+  # ---- Emit dispatch_start IMMEDIATELY after child launch ----
+  # SPEC addendum A: dispatch_start must be in events.jsonl BEFORE the deadline
+  # window elapses so the backgrounded sweep can detect in-progress stalls.
+  # We emit here (with the real pid) rather than after the blocking wait below.
+  # Telemetry fail-open (addendum E): emission failure must not prevent deadline
+  # enforcement — _emit_event already warns and continues on failure.
+  local _fb_start_payload
+  _fb_start_payload="$(python3 -c '
+import json, sys
+d = {
+  "dispatch_id": sys.argv[1],
+  "type":        sys.argv[2],
+  "pid":         int(sys.argv[3]),
+  "timeout_s":   int(sys.argv[4]),
+  "deadline_ts": int(sys.argv[5]),
+}
+print(json.dumps(d))
+' "$DISPATCH_ID" "$TYPE" "$CHILD_PID" "$TIMEOUT_S" "$DEADLINE_TS")" || true
+  if [[ -n "$_fb_start_payload" ]]; then
+    _emit_event "$RUN" "dispatch_start" "$_fb_start_payload"
+  else
+    printf '[supervised-run] WARNING: failed to build dispatch_start payload for bash fallback; continuing.\n' >&2
+  fi
+
   # Resolve the child's PGID.  With set -m the background job gets its own pgroup
   # (pgroup leader PID == CHILD_PID), so we can usually just use CHILD_PID directly.
   # We still read ps to be safe (race: on very fast kernels the process may already
@@ -294,16 +318,26 @@ if [[ -z "$DISPATCH_ID" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Emit dispatch_start
+# Emit dispatch_start (pid field depends on backend)
 # ---------------------------------------------------------------------------
 
 T_START_MS="$(_now_ms)"
 DEADLINE_TS=$(( T_START_MS / 1000 + TIMEOUT_S ))
 
-# pid is unknown before child launch; emit 0 (advisory — this wrapper always
-# wraps killable subprocesses; native Agent() is never routed through it).
-# T004's bash-fallback path captures the real PID for dispatch_start.
-START_PAYLOAD="$(python3 -c '
+# ---------------------------------------------------------------------------
+# Run the command
+# ---------------------------------------------------------------------------
+
+EXIT_CODE=0
+CHILD_PID=0
+BACKEND="$(timeout_backend)"
+
+case "$BACKEND" in
+  timeout|gtimeout)
+    # The timeout(1)/gtimeout(1) binary owns the child; we cannot know the
+    # real child pid before or after launch without OS-specific introspection.
+    # Emit dispatch_start now with pid=0 (documented limitation for this path).
+    START_PAYLOAD="$(python3 -c '
 import json, sys
 d = {
   "dispatch_id":  sys.argv[1],
@@ -314,18 +348,8 @@ d = {
 }
 print(json.dumps(d))
 ' "$DISPATCH_ID" "$TYPE" "$TIMEOUT_S" "$DEADLINE_TS")"
+    _emit_event "$RUN" "dispatch_start" "$START_PAYLOAD"
 
-_emit_event "$RUN" "dispatch_start" "$START_PAYLOAD"
-
-# ---------------------------------------------------------------------------
-# Run the command
-# ---------------------------------------------------------------------------
-
-EXIT_CODE=0
-BACKEND="$(timeout_backend)"
-
-case "$BACKEND" in
-  timeout|gtimeout)
     # Use the system timeout binary.
     # --kill-after=<grace>: SIGTERM first, then SIGKILL after grace seconds.
     # Child stdout is byte-for-byte (no tee, no process substitution).
@@ -336,7 +360,10 @@ case "$BACKEND" in
     ;;
 
   bash_fallback)
-    # T004's domain.  Call the stub (defined above) which will be replaced.
+    # _run_bash_fallback() emits dispatch_start IMMEDIATELY after launch with
+    # the real CHILD_PID (SPEC addendum A: must be in events.jsonl before the
+    # deadline window elapses so the backgrounded sweep can detect stalls).
+    # After this returns, CHILD_PID and EXIT_CODE are set by the function.
     EXIT_CODE=0
     _run_bash_fallback || EXIT_CODE=$?
     ;;

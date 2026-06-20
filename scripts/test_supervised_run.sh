@@ -642,6 +642,212 @@ fi
 rm -rf "$BASE_014"
 
 # ---------------------------------------------------------------------------
+# TEST-015: Bash fallback — dispatch_start carries the real CHILD_PID (pid != 0)
+# ---------------------------------------------------------------------------
+# Invariant: when supervised-run.sh uses the bash_fallback backend, it emits
+# dispatch_start AFTER the child is launched so the pid field is the real child
+# PID — not 0 or null.
+# Failure class: watchdog sweep reads pid=0 from dispatch_start on the
+# bash-fallback path and cannot surface a "To kill: kill <pid>" line in stall
+# alerts, defeating the fix introduced in T-REV-001.
+# ---------------------------------------------------------------------------
+echo ""
+echo "TEST-015: bash fallback — dispatch_start carries real CHILD_PID (pid != 0)"
+
+RUN_015="test-srun-015-$$"
+_hermetic_env "srun-test-015" "$RUN_015"
+BASE_015="$HERMETIC_BASE"
+
+_stripped_path_no_timeout STRIPPED_PATH_015
+
+# Run a short-lived command so CHILD_PID is set and dispatch_start is emitted.
+EXIT_015=0
+PATH="$STRIPPED_PATH_015" bash "$SUPERVISED_RUN" \
+  --run "$RUN_015" --type bash --timeout 5 \
+  -- echo hello \
+  2>/dev/null || EXIT_015=$?
+
+EVENTS_015="$(cat "$(_events_file "$BASE_015" "srun-test-015" "$RUN_015")")"
+
+# Extract pid from dispatch_start on the bash_fallback path.
+PID_015="$(echo "$EVENTS_015" | python3 -c '
+import json, sys
+for line in sys.stdin:
+    e = json.loads(line)
+    if e.get("kind") == "dispatch_start":
+        print(e.get("pid", "MISSING"))
+        break
+')"
+
+# pid must be a positive integer (not 0 and not null).
+if [[ "$PID_015" =~ ^[1-9][0-9]*$ ]]; then
+  echo "  PASS: bash-fallback dispatch_start pid=$PID_015 (real, non-zero)"
+  PASS=$(( PASS + 1 ))
+else
+  echo "  FAIL: bash-fallback dispatch_start pid=$PID_015 (expected real non-zero integer)"
+  FAIL=$(( FAIL + 1 ))
+fi
+
+rm -rf "$BASE_015"
+
+# ---------------------------------------------------------------------------
+# TEST-016: timeout/gtimeout path — dispatch_start pid stays 0
+# ---------------------------------------------------------------------------
+# Invariant: when the system timeout(1)/gtimeout(1) binary is used, the child
+# pid is NOT knowable (the binary owns the child process), so dispatch_start
+# must emit pid=0.  This is the documented limitation for the timeout path
+# (distinct from the bash-fallback path which CAN capture the real pid).
+# Failure class: code incorrectly tries to capture a pid on the timeout path,
+# producing a wrong or stale pid value in the event.
+# ---------------------------------------------------------------------------
+echo ""
+echo "TEST-016: timeout path — dispatch_start pid stays 0 (pid not knowable)"
+
+# Only run this test when a real timeout binary is available; skip otherwise.
+TIMEOUT_AVAILABLE_016=0
+if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then
+  TIMEOUT_AVAILABLE_016=1
+fi
+
+if [[ "$TIMEOUT_AVAILABLE_016" -eq 1 ]]; then
+  RUN_016="test-srun-016-$$"
+  _hermetic_env "srun-test-016" "$RUN_016"
+  BASE_016="$HERMETIC_BASE"
+
+  EXIT_016=0
+  bash "$SUPERVISED_RUN" \
+    --run "$RUN_016" --type bash --timeout 5 \
+    -- echo hello \
+    2>/dev/null || EXIT_016=$?
+
+  EVENTS_016="$(cat "$(_events_file "$BASE_016" "srun-test-016" "$RUN_016")")"
+
+  PID_016="$(echo "$EVENTS_016" | python3 -c '
+import json, sys
+for line in sys.stdin:
+    e = json.loads(line)
+    if e.get("kind") == "dispatch_start":
+        print(e.get("pid", "MISSING"))
+        break
+')"
+
+  if [[ "$PID_016" == "0" ]]; then
+    echo "  PASS: timeout-path dispatch_start pid=0 (expected — pid not knowable)"
+    PASS=$(( PASS + 1 ))
+  else
+    echo "  FAIL: timeout-path dispatch_start pid=$PID_016 (expected 0)"
+    FAIL=$(( FAIL + 1 ))
+  fi
+
+  rm -rf "$BASE_016"
+else
+  echo "  PASS: TEST-016 skipped (no timeout/gtimeout binary available on this system)"
+  PASS=$(( PASS + 1 ))
+fi
+
+# ---------------------------------------------------------------------------
+# TEST-017: Bash fallback — dispatch_start emitted PROMPTLY during a hang
+#           (well before the timeout fires, proving the sweep can detect it)
+# ---------------------------------------------------------------------------
+# Invariant (SPEC addendum A): on the bash_fallback path, dispatch_start must
+# appear in events.jsonl BEFORE the dispatch's deadline window elapses.  This
+# means it must be emitted immediately after the child is launched — not after
+# the blocking wait() returns at the end of the hang (the regression introduced
+# in the first T-REV-001 attempt).
+#
+# Failure class: dispatch_start is NOT visible in events.jsonl during a hang;
+# the backgrounded sweep therefore has NO evidence of an in-progress dispatch,
+# so a hung bash-fallback command (the DEFAULT on macOS without coreutils) goes
+# undetected for the full timeout window — defeating the watchdog contract.
+#
+# Mechanism: launch a hung command (sleep 60) with --timeout 10 (well over the
+# check window).  Within 5 seconds (well before the 10s deadline), poll
+# events.jsonl for a dispatch_start event with pid != 0.  The wrapper must still
+# be running (the hang hasn't timed out yet).  Pass only if:
+#   (a) dispatch_start is in events.jsonl, AND
+#   (b) its pid field is a positive integer (real child pid), AND
+#   (c) the wrapper process is still alive (confirms we're mid-hang, not post-hang).
+# Then kill the wrapper to avoid waiting for the full timeout.
+# ---------------------------------------------------------------------------
+echo ""
+echo "TEST-017: bash fallback — dispatch_start emitted PROMPTLY mid-hang (before timeout)"
+
+RUN_017="test-srun-017-$$"
+_hermetic_env "srun-test-017" "$RUN_017"
+BASE_017="$HERMETIC_BASE"
+
+_stripped_path_no_timeout STRIPPED_PATH_017
+EVENTS_017_FILE="$(_events_file "$BASE_017" "srun-test-017" "$RUN_017")"
+
+# Launch a hanging command in the background.  --timeout 10 leaves a wide window:
+# we only poll for 5s (half the timeout), so if dispatch_start appears within 5s
+# the test passes.  We then kill the wrapper before the 10s deadline fires.
+WRAPPER_PID_017=0
+PATH="$STRIPPED_PATH_017" bash "$SUPERVISED_RUN" \
+  --run "$RUN_017" --type bash --timeout 10 --grace 1 \
+  -- sleep 60 \
+  2>/dev/null &
+WRAPPER_PID_017=$!
+
+# Poll events.jsonl for dispatch_start — must appear within 5 seconds.
+POLL_DEADLINE_017=$(( $(date +%s) + 5 ))
+DS_PID_017="MISSING"
+DS_FOUND_017=0
+while [[ $(date +%s) -lt $POLL_DEADLINE_017 ]]; do
+  if [[ -f "$EVENTS_017_FILE" ]]; then
+    DS_PID_017="$(python3 -c '
+import json, sys
+for line in open(sys.argv[1]):
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        e = json.loads(line)
+        if e.get("kind") == "dispatch_start":
+            print(e.get("pid", "MISSING"))
+            sys.exit(0)
+    except Exception:
+        pass
+print("MISSING")
+' "$EVENTS_017_FILE" 2>/dev/null)" || DS_PID_017="MISSING"
+    if [[ "$DS_PID_017" =~ ^[1-9][0-9]*$ ]]; then
+      # dispatch_start present with real pid — check wrapper is still alive (mid-hang).
+      if kill -0 "$WRAPPER_PID_017" 2>/dev/null; then
+        DS_FOUND_017=1
+      fi
+      break
+    fi
+  fi
+  sleep 0.2
+done
+
+# Kill the wrapper (avoids waiting for the full 10s timeout).
+kill "$WRAPPER_PID_017" 2>/dev/null || true
+wait "$WRAPPER_PID_017" 2>/dev/null || true
+
+# Assertion (a) + (b): dispatch_start present with real non-zero pid.
+if [[ "$DS_PID_017" =~ ^[1-9][0-9]*$ ]]; then
+  echo "  PASS: dispatch_start emitted mid-hang with real pid=$DS_PID_017 (not deferred)"
+  PASS=$(( PASS + 1 ))
+else
+  echo "  FAIL: dispatch_start NOT found within 5s of bash-fallback launch (pid='$DS_PID_017')"
+  echo "        This indicates dispatch_start was deferred to after blocking wait() — the regression."
+  FAIL=$(( FAIL + 1 ))
+fi
+
+# Assertion (c): wrapper was still running when the event was seen (proves we are mid-hang,
+# not reading a post-hang artifact after the timeout already fired).
+if [[ "$DS_FOUND_017" -eq 1 ]]; then
+  echo "  PASS: wrapper was still alive when dispatch_start appeared (confirms mid-hang detection)"
+  PASS=$(( PASS + 1 ))
+else
+  echo "  FAIL: wrapper had already exited when dispatch_start appeared (race or deferred emit)"
+  FAIL=$(( FAIL + 1 ))
+fi
+
+rm -rf "$BASE_017"
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""

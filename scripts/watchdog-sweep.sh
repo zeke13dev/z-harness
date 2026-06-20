@@ -341,7 +341,8 @@ PYEOF
           "{\"run\":\"$RUN\",\"dispatch_id\":\"$did\",\"phase\":\"dispatch\",\"reason\":\"$did\",\"pid\":${dpid:-null},\"age_s\":${dage_s:-0},\"type\":\"$dtype\"}" \
           "$did" \
           "$intervention_level" \
-          "Dispatch stall: ${did} (type=${dtype}, age=${dage_s}s)"
+          "Dispatch stall: ${did} (type=${dtype}, age=${dage_s}s)" \
+          "${dpid:-}"
       done <<< "$stall_dispatch_ids"
     fi
   fi
@@ -392,7 +393,8 @@ PYEOF
           "{\"run\":\"$RUN\",\"dispatch_id\":null,\"phase\":\"unmatched_subagent_start\",\"reason\":\"$lv_reason\",\"pid\":null,\"age_s\":${lv_elapsed_s:-0}}" \
           "$lv_reason" \
           "$intervention_level" \
-          "Subagent stall: ${lv_base}_start (${lv_reason}, age=${lv_elapsed_s}s)"
+          "Subagent stall: ${lv_base}_start (${lv_reason}, age=${lv_elapsed_s}s)" \
+          ""
       fi
     done <<< "$liveness_out"
   fi
@@ -409,12 +411,23 @@ PYEOF
 #   $3 reason       — human-readable reason (same as stall_key for dispatch stalls)
 #   $4 level        — intervention_level: observe | notify
 #   $5 message      — short message for notify-watchdog.sh
+#   $6 pid          — (optional) real child pid; empty/0/"null" → omit --pid from notify
+#                     DISPATCH stalls: read from the matching dispatch_start event.
+#                     LIVENESS stalls: always empty (native Agent() has no killable pid).
 # ---------------------------------------------------------------------------
 _wd_handle_stall() {
   local stall_key="$1" stall_json="$2" _reason="$3" level="$4" message="$5"
+  local pid="${6:-}"
 
   # Always emit the watchdog_stall event.
   _emit "watchdog_stall" "$stall_json"
+
+  # Determine whether we have a real, killable pid to forward to notify-watchdog.sh.
+  # A pid is "real" only when it is a non-empty, non-zero, non-"null" value.
+  local _notify_pid_args=()
+  if [[ -n "$pid" && "$pid" != "0" && "$pid" != "null" ]]; then
+    _notify_pid_args=(--pid "$pid")
+  fi
 
   # Overnight halt: Z_HARNESS_NO_ASK=halt → write HALT sentinel + notify + self-exit.
   if [[ "${Z_HARNESS_NO_ASK:-}" == "halt" ]]; then
@@ -425,6 +438,7 @@ _wd_handle_stall() {
       --run "$RUN" \
       --event "watchdog_stall" \
       --message "$message" \
+      "${_notify_pid_args[@]}" \
       >/dev/null 2>&1 &
     # Signal the outer loop to exit.
     _WD_STOP=1
@@ -451,6 +465,7 @@ _wd_handle_stall() {
     --run "$RUN" \
     --event "watchdog_stall" \
     --message "$message" \
+    "${_notify_pid_args[@]}" \
     >/dev/null 2>&1 &
 }
 
