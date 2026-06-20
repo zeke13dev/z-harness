@@ -626,6 +626,45 @@ class TestBundleRunSlug:
         bundle = _bundle_for_run_dir(run_dir)
         assert bundle["run_brief_present"] is True
 
+    def test_bundle_run_brief_narrative_surfaced(self, tmp_path):
+        """T001: intent/outcome/key_decisions from run-brief.json surface as bundle['run_brief']."""
+        run_dir = _make_run_dir(tmp_path, "20260618T100000Z-test-plan")
+        (run_dir / "run-brief.json").write_text(
+            json.dumps({
+                "intent": "Do the thing",
+                "outcome": "Thing done",
+                "approach": ["chose A over B", "kept C"],
+            }),
+            encoding="utf-8",
+        )
+        bundle = _bundle_for_run_dir(run_dir)
+        rb = bundle["run_brief"]
+        assert rb["intent"] == "Do the thing"
+        assert rb["outcome"] == "Thing done"
+        assert rb["key_decisions"] == ["chose A over B", "kept C"]
+
+    def test_bundle_run_brief_absent_when_no_file(self, tmp_path):
+        """T001: no run-brief.json → no run_brief key (not an empty dict)."""
+        run_dir = _make_run_dir(tmp_path, "20260618T100000Z-test-plan")
+        bundle = _bundle_for_run_dir(run_dir)
+        assert "run_brief" not in bundle
+
+    def test_bundle_run_brief_malformed_does_not_raise(self, tmp_path):
+        """T001: garbage run-brief.json must not raise; key absent, warning appended."""
+        run_dir = _make_run_dir(tmp_path, "20260618T100000Z-test-plan")
+        (run_dir / "run-brief.json").write_text("{not json", encoding="utf-8")
+        bundle = _bundle_for_run_dir(run_dir)
+        assert "run_brief" not in bundle
+        assert any("run-brief parse failed" in w for w in bundle["warnings"])
+
+    def test_bundle_transcripts_dir_surfaced(self, tmp_path):
+        """T001: transcripts_dir surfaces only when the directory exists."""
+        run_dir = _make_run_dir(tmp_path, "20260618T100000Z-test-plan")
+        assert "transcripts_dir" not in _bundle_for_run_dir(run_dir)
+        (run_dir / "transcripts").mkdir()
+        bundle = _bundle_for_run_dir(run_dir)
+        assert bundle["transcripts_dir"] == str(run_dir / "transcripts")
+
     def test_bundle_halts_empty_when_no_halt(self, tmp_path):
         run_dir = _make_run_dir(tmp_path, "20260618T100000Z-test-plan")
         bundle = _bundle_for_run_dir(run_dir)
