@@ -474,6 +474,36 @@ def _collect_artifacts(run_dir: Path, plan_dir: Path | None) -> list[str]:
     return found
 
 
+def _extract_run_brief(run_dir: Path, warnings: list[str]) -> dict | None:
+    """Surface the run-brief narrative (intent / outcome / key-decision bullets) for the
+    summary/standard tiers, so they get the story without re-reading run-brief.json.
+
+    Returns a bounded sub-object, or None when no run-brief.json is present. A malformed
+    run-brief never raises — it appends a warning and returns None.
+    """
+    rb_path = run_dir / "run-brief.json"
+    if not rb_path.is_file():
+        return None
+    try:
+        rb = json.loads(rb_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        warnings.append(f"run-brief parse failed: {exc}")
+        return None
+    narrative: dict = {}
+    intent = rb.get("intent")
+    outcome = rb.get("outcome")
+    # `approach` is already a bulletized list in run-brief.json — use it directly as the
+    # key-decision bullets (bounded) rather than re-parsing markdown.
+    approach = rb.get("approach")
+    if intent:
+        narrative["intent"] = intent
+    if outcome:
+        narrative["outcome"] = outcome
+    if isinstance(approach, list) and approach:
+        narrative["key_decisions"] = approach[:5]
+    return narrative or None
+
+
 def _resolve_run_dir(descriptor: dict, warnings: list[str]) -> Path | None:
     """Resolve the run directory from a run/slug descriptor."""
     mode = descriptor.get("mode")
@@ -588,6 +618,12 @@ def _assemble_run_slug_bundle(
             "events_chars": 0,
             "warnings": warnings,
         }
+        run_brief = _extract_run_brief(run_dir, warnings)
+        if run_brief is not None:
+            bundle["run_brief"] = run_brief
+        transcripts_dir = run_dir / "transcripts"
+        if transcripts_dir.is_dir():
+            bundle["transcripts_dir"] = str(transcripts_dir)
         if slug:
             bundle["slug"] = slug
         return bundle
@@ -646,6 +682,13 @@ def _assemble_run_slug_bundle(
         "events_chars": events_chars,
         "warnings": warnings,
     }
+
+    run_brief = _extract_run_brief(run_dir, warnings)
+    if run_brief is not None:
+        bundle["run_brief"] = run_brief
+    transcripts_dir = run_dir / "transcripts"
+    if transcripts_dir.is_dir():
+        bundle["transcripts_dir"] = str(transcripts_dir)
 
     if slug:
         bundle["slug"] = slug

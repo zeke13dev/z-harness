@@ -37,13 +37,17 @@ Then stop. Do not attempt synthesis.
 
 If the bundle is valid but `"degraded": "no_events"` is set alongside other populated fields (e.g. `status`, `artifacts`), continue synthesis but append a degradation note in the output at a specific location depending on tier:
 - **summary tier:** append as a final line of the summary paragraph: "Note: events log unavailable — timing/decision data incomplete."
-- **standard and deep tiers:** append as a trailing line in the Phase Wall-Time section (section 2): "Note: events log unavailable — timing/decision data incomplete."
+- **standard and deep tiers:** append as a trailing line in the Metrics appendix (the `## Metrics` / `## Appendix: Metrics` block), under Phase wall-time: "Note: events log unavailable — timing/decision data incomplete."
 
-### Step 2 — Read cited artifacts (only if needed)
+### Step 2 — Read run material (bounded by tier)
 
-If the tier is `deep` AND `context.json` contains `"artifacts"` paths (SPEC.md, PLAN.md, TASKS.md, etc.) or a `"diff"` field referencing external paths, Read those files. Read only what is needed to satisfy the `deep` tier's per-step walkthrough. Do not read files not cited in `context.json`.
+The reads you are allowed widen with the tier. Never read files not reachable from `context.json` (`run_dir`, `transcripts_dir`, `artifacts`, the `diff` field).
 
-For `summary` and `standard` tiers, work only from `context.json` fields. Do not speculatively read additional files.
+- **`summary`** — work from `context.json` fields, including the pre-surfaced `run_brief` sub-object (`intent` / `outcome` / `key_decisions`). If `run_brief` is absent but `context.json` names a `run-brief.json` under `artifacts`, you may Read that one file. **Do NOT scan `transcripts_dir`** at summary tier — it would blow up the cost of a tier that is meant to be cheap.
+- **`standard`** — everything `summary` may read, PLUS, when reconstructing a decision's rationale (Step 3), the decision-relevant run material: the `events.jsonl` lines around the decision and the specific file(s) under `transcripts_dir` that pertain to it. Read only the slice you need — do not ingest whole transcripts wholesale.
+- **`deep`** — everything `standard` may read, PLUS the `artifacts` paths (SPEC.md, PLAN.md, TASKS.md, etc.) and the `diff` field needed for the Walkthrough section.
+
+For `pr` / `range` modes there is no `run_dir`/`transcripts_dir`; reconstruct any rationale from commit messages and the diff instead.
 
 ### Step 3 — Compose the narrative
 
@@ -67,10 +71,11 @@ If rows come from different source fields, cite each row individually in a trail
 Before finalizing, scan the composed narrative for:
 - Design recommendations or "we should" / "I recommend" / "the best approach" language — strip these; advisory handoff mentions are the only allowed forward-looking pointers.
 - Fabricated numbers or fields not present in `context.json` — replace with "not available".
+- **Uncited reconstructed rationale** — any rationale you reconstructed (rather than read from a structured `why`) MUST carry both the explicit "reconstructed from `<source>`" marker and a citation to the run material it came from. Reconstructed rationale without a citation is a fabrication — strip it or replace with "rationale not available".
 - Emojis — remove all.
-- Tier boundary violations (summary content in a summary-tier response that drifts into standard-tier tables) — trim to the contracted sections.
+- Tier boundary violations — trim to the contracted sections. The metrics tables belong only in the appendix block of `standard`/`deep`; they must never appear in `summary`, and never above the prose body.
 
-**Tier-boundary self-check:** confirm that the section set in your composed output EXACTLY matches the requested tier's contract — no extra sections, no missing sections. `summary` = 1 section (summary paragraph only). `standard` = sections 1-6. `deep` = all 9 sections. If there is a mismatch, correct it before returning.
+**Tier-boundary self-check:** confirm that the section set in your composed output EXACTLY matches the requested tier's contract — no extra sections, no missing sections. `summary` = one prose brief (no headings, no tables). `standard` = Narrative + Decisions & rationale + Follow-ups + one Metrics appendix. `deep` = the `standard` set + Walkthrough + Appendix: Metrics. If there is a mismatch, correct it before returning.
 
 Return the narrative markdown as your final message with no preamble.
 
@@ -78,149 +83,117 @@ Return the narrative markdown as your final message with no preamble.
 
 ## Tier output contract
 
-The tier determines which sections appear. Sections are listed below in their required order. Do not add sections not listed for the requested tier; do not omit sections listed for the requested tier.
+Every tier is **prose-first**: the narrative of what happened and the decisions behind it is the body; numeric tables live only in a clearly separated appendix at the bottom (and never at `summary`). Do not add sections not listed for the requested tier; do not omit required sections.
+
+### On-read rationale reconstruction (applies to `standard` and `deep`)
+
+Decision rationale is mostly not captured upstream: most `context.json.decisions` entries carry only `question_id` + `chosen`, with no `why`. Rather than leave the "why" blank, **reconstruct it on read** from the run's own material:
+
+- If an entry has a structured `why`, present it as-is (it is a logged fact — no marker needed).
+- Otherwise, reconstruct the reasoning from cited run material — the `events.jsonl` lines around the decision, the relevant file(s) under `transcripts_dir`, the artifacts, or the diff — and present it with the **explicit marker `reconstructed from <source>`** plus a citation to that source (e.g. "reconstructed from `transcripts/consultant-primary.md`"). A reconstruction without a citation is a fabrication and must be dropped.
+- If no rationale is recoverable from any run material, write "rationale not available." Never invent one.
+
+Transcript-scan reconstruction is for `run`/`slug` modes (which have a `transcripts_dir`). For `pr`/`range` modes, reconstruct from commit messages + diff only.
 
 ### Tier: `summary`
 
-One paragraph maximum. Must contain:
-1. **TL;DR sentence** — what the target was (run ID, slug, PR number, or range) and its terminal status (from `context.json.status`).
-2. **Outcome sentence** — what was accomplished or what the diff represents.
-3. **Top-3 follow-ups** — the first three entries from `context.json.followups`, each as a one-line bullet. If fewer than three follow-ups exist, list all of them. If `context.json.followups` is empty or absent, write "No open follow-ups recorded."
+A tight prose brief — **1–2 short paragraphs, no headings, no tables.** Contains, woven into prose:
+1. **TL;DR + status** — what the target was (run ID, slug, PR number, or range) and its terminal status (`context.json.status`).
+2. **What changed** — 2–4 sentences of actual substance, drawn from `context.json.run_brief` (`intent` / `outcome` / `key_decisions`) and, for diff-bearing targets, the diff. Not "the diff represents X" — say what the work did.
+3. **Key decisions** — the 1–3 most significant decisions with their why inline. At summary tier the "why" comes from `run_brief.key_decisions` and any structured `why` on `context.json.decisions`; **do not scan transcripts at this tier.** If no decisions are recorded, omit this rather than padding.
+4. **Top follow-ups** — the first three entries from `context.json.followups` as short bullets (the one place a few bullets are allowed). If absent or empty, write "No open follow-ups recorded."
 
-Format:
-```
-<TL;DR sentence.> <Outcome sentence.>
-
-Follow-ups:
-- <follow-up 1>
-- <follow-up 2>
-- <follow-up 3>
-```
-
-No headings. No tables. No citations unless a specific file claim is made.
+No metrics tables. Citations only when you make a specific file claim.
 
 ---
 
 ### Tier: `standard` (default)
 
-Extends `summary`. Sections in order:
+Prose spine first, one metrics appendix last. Sections in order:
 
-#### 1. Summary paragraph
+#### 1. Narrative
 
-Same content as the `summary` tier (one paragraph, TL;DR + outcome + top-3 follow-ups).
+Header: `## Narrative`
 
-#### 2. Phase wall-time table
+A multi-paragraph account of the run: what the work was, what changed, how it went, and where it snagged. Draw substance from `context.json.run_brief`, the decisions, halts, and (when present) the diff. This is the body of the report — write it as a story a reader can follow, not a list. Cite specific claims (`context.json:run_brief`, `context.json:halts[N]`, etc.).
 
-Header: `## Phase Wall-Time`
+#### 2. Decisions & rationale
 
-Render `context.json.phases` as a markdown table:
+Header: `## Decisions & rationale`
 
-| Phase | Wall time | User wait |
-|-------|-----------|-----------|
-| `<name>` | `<wall_ms>ms` | `<user_wait_ms>ms` |
-
-If `context.json.phases` is absent or empty, write: "No phase timing data available."
-
-Note: `user_wait_ms` is the portion of wall time spent waiting on AskUserQuestion gates. If the field is absent per phase, omit the column.
-
-#### 3. Decision audit trail
-
-Header: `## Decision Audit Trail`
-
-List each entry from `context.json.decisions` as a bullet using the fields that are present:
+For each entry in `context.json.decisions`, a prose bullet: what was chosen, the **why**, and the source. Apply the **On-read rationale reconstruction** rules above — structured `why` as-is, otherwise reconstructed-and-cited, otherwise "rationale not available."
 ```
-- <question_id>: <chosen>  (source: <source>) (context.json:decisions[N])
+- <question_id> → <chosen>: <why or reconstructed-from-<source> rationale> (source: <source>, context.json:decisions[N])
 ```
-If a `why` field is present on the entry, append it after the source parenthetical: ` — <why>`.
-Render only the fields that are present in the entry; never fabricate missing fields. If a field is absent, omit it from the rendered line without substituting a placeholder.
+Render only fields that are present; never fabricate. If `context.json.decisions` is empty or absent, write "No decisions recorded."
 
-If `context.json.decisions` is empty or absent, write: "No decisions recorded."
-
-#### 4. Halts
-
-Header: `## Halts`
-
-List each entry from `context.json.halts`:
-```
-- <halt_kind> at <task_id>: <message> (context.json:halts[N])
-```
-
-If `context.json.halts` is empty or absent, write: "No halts recorded."
-
-#### 5. Full follow-up list
+#### 3. Follow-ups
 
 Header: `## Follow-Ups`
 
-List all entries from `context.json.followups` as bullets. If absent or empty, write: "No open follow-ups recorded."
+All entries from `context.json.followups` as bullets. If `context.json.followups_note` is present, append it as a blockquote. If absent or empty, write "No open follow-ups recorded."
 
-If `context.json.followups_note` is present, append it as a blockquote after the list.
+#### 4. Metrics (appendix)
 
-#### 6. Friction headline
+Header: `## Metrics`
 
-Header: `## Friction Headline`
+The numeric reference block — demoted to the bottom so it never crowds the prose. Contains, in order:
 
-One sentence summarizing the top friction signal from the run: the single most expensive halt, the phase with the longest wall time, or the decision with the most significant impact. If no friction signals are present (no halts, no unusually long phases, no decisions), write: "No friction signals detected."
-
-Derive this mechanically from the data in `context.json` — do not editorialize. Do not recommend fixes.
+- **Phase wall-time** — render `context.json.phases` as a table `(source: context.json:phases)`:
+  | Phase | Wall time | User wait |
+  |-------|-----------|-----------|
+  | `<name>` | `<wall_ms>ms` | `<user_wait_ms>ms` |
+  Omit the `User wait` column if no phase has `user_wait_ms`. If `phases` is absent/empty: "No phase timing data available."
+- **Halts** — list each `context.json.halts` entry: `- <halt_kind> at <task_id>: <message> (context.json:halts[N])`. If empty/absent: "No halts recorded."
+- **Friction headline** — one mechanical sentence naming the top friction signal (costliest halt, longest phase, or most-impactful decision). If none: "No friction signals detected." Do not editorialize or recommend fixes.
 
 ---
 
 ### Tier: `deep`
 
-Extends `standard`. Adds three additional sections after the Friction Headline:
+Extends `standard` (sections 1–3 prose spine + the Metrics appendix), and inserts a prose **Walkthrough** before the appendix, with the heavier numeric blocks folded into the appendix.
 
-#### 7. Diff / per-step walkthrough
+Section order: Narrative → Decisions & rationale → Follow-ups → Walkthrough → Appendix: Metrics.
 
-Header: `## Diff Walkthrough`
+#### 4. Walkthrough
+
+Header: `## Walkthrough`
+
+A prose walk through what happened, with the relevant numbers inline as evidence (not as standalone tables):
 
 For `mode: pr | range | worktree`:
-- Render `context.json.commits` as a numbered list (commit SHA + message).
-- If `context.json.diff` is present (inline string), summarize it: per-file change counts (files changed, insertions, deletions) derived from the diff header lines. Do not reproduce the full diff text.
-- Cite `context.json:diff` for any claim about what changed.
+- Walk the commits (`context.json.commits`: SHA + message) as a narrative of the change.
+- Where `context.json.diff` is present, weave in per-file change counts (files changed, insertions, deletions from the diff headers) inline. Do not reproduce the full diff. Cite `context.json:diff`.
 
 For `mode: run | slug`:
-- Walk through `context.json.phases` in order: for each phase, summarize what happened (task IDs completed, any halt, wall time). Cite `context.json:phases[N]`.
-- If `context.json.artifacts` lists TASKS.md or PLAN.md paths, read them and note which tasks were marked complete (`[x]`) vs. incomplete (`[ ]`).
+- Walk `context.json.phases` in order as prose: for each phase, what happened (task IDs completed, any halt, wall time), citing `context.json:phases[N]`.
+- If `context.json.artifacts` lists TASKS.md or PLAN.md, read them and note which tasks were marked `[x]` vs `[ ]`.
 
-If neither diff nor phase data is available, write: "No walkthrough data available."
+If neither diff nor phase data is available, write "No walkthrough data available."
 
-#### 8. Friction signals
+#### 5. Appendix: Metrics
 
-Header: `## Friction Signals`
+Header: `## Appendix: Metrics`
 
-List the friction-bearing events from `context.json.halts` and, if present, `context.json.events_chars` (for size context). For each halt, include:
-- Kind (e.g. `askuser_halted`, `task_halt`, `doc_drift`).
-- Task or phase context.
-- The raw `message` field if present in the halt entry.
-- Citation: `context.json:halts[N]`.
+The full numeric reference, clearly separated from the prose above. Contains, in order:
 
-If `context.json.events_chars` exceeds 512000, note: "Events log is large (<N> chars) — context bundle may be truncated."
-
-If no friction-bearing events, write: "No friction signals detected."
-
-#### 9. Cost breakdown
-
-Header: `## Cost Breakdown`
-
-Render `context.json.cost` as a table if present:
-
-| Subagent | Input tokens | Output tokens | Est. cost |
-|----------|-------------|---------------|-----------|
-| `<name>` | `<n>` | `<n>` | `<$n>` |
-
-If any row is marked `[char-est]`, append a note: "Rows marked [char-est] are character-count estimates, not exact token counts."
-
-If `context.json.cost` is absent or empty, write: "No cost data available."
+- **Phase wall-time** + **Halts** + **Friction headline** — as in the `standard` Metrics appendix.
+- **Friction signals** — list the friction-bearing events from `context.json.halts`: kind (`askuser_halted` / `task_halt` / `doc_drift`), task/phase context, the raw `message` if present, citing `context.json:halts[N]`. If `context.json.events_chars` exceeds 512000, note "Events log is large (<N> chars) — context bundle may be truncated." If none: "No friction signals detected."
+- **Cost breakdown** — render `context.json.cost` as a table:
+  | Subagent | Input tokens | Output tokens | Est. cost |
+  |----------|-------------|---------------|-----------|
+  | `<name>` | `<n>` | `<n>` | `<$n>` |
+  If any row is marked `[char-est]`, note "Rows marked [char-est] are character-count estimates, not exact token counts." If `context.json.cost` is absent/empty: "No cost data available."
 
 ---
 
 ## Hard rules
 
 1. **Read-only.** Never write any file. Return all content in your final message.
-2. **No fabricated numbers.** All figures come from `context.json` or a file you explicitly Read in Step 2. Missing data = "not available", never estimated.
+2. **No fabricated numbers, no invented rationale.** All figures come from `context.json` or a file you explicitly Read in Step 2. Missing data = "not available", never estimated. Reconstructed decision rationale must carry the `reconstructed from <source>` marker plus a citation, or it is a fabrication — drop it.
 3. **No design recommendations.** Advisory handoffs listed in the `standard`/`deep` narrative (e.g. "consider `/z-improve`") are the only forward-looking language permitted, and only when `context.json.followups` or friction signals warrant them.
 4. **No emojis** anywhere in the output.
 5. **Insufficient context marker** on empty/garbage `context.json` fires before any synthesis attempt. The exact format is required so the command's inline fallback triggers correctly.
 6. **Citations required** for every code or file claim. Format: `file:line` or `context.json:<field path>`.
-7. **Tier boundary is strict.** A `summary` call returns only the summary paragraph. A `standard` call returns sections 1-6 only. A `deep` call returns all 9 sections.
-8. **Mode is informational.** The tier (not the mode) determines output structure. Mode affects only the content of the Diff Walkthrough section (section 7, deep only).
+7. **Tier boundary is strict.** A `summary` call returns one prose brief (no headings, no tables). A `standard` call returns Narrative + Decisions & rationale + Follow-ups + one Metrics appendix. A `deep` call adds the Walkthrough and Appendix: Metrics. Metrics tables never appear at `summary`, and never above the prose body.
+8. **Mode is informational.** The tier (not the mode) determines output structure. Mode affects only the content of the Walkthrough section (deep only) and whether transcript-based rationale reconstruction is available (run/slug) vs commit/diff-based (pr/range).
