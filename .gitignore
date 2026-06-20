@@ -20,6 +20,8 @@ __pycache__/
 # host-native trees (.cursor/skills, .agent/skills, codex skills, …) to a temp
 # dir or install location. Locally installed plugin caches live here too.
 /exports/
+# On-demand generate target output (make export / generate-exports.py default dest).
+/temp/exports/
 /.agent/
 /.codex-plugin/
 /.claude/scheduled_tasks.lock

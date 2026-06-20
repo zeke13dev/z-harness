@@ -9,13 +9,14 @@
 # method, not by this script. [RC5]
 #
 # Usage:
-#   bash install.sh                    # Claude Code install, auto-detect mode
-#   bash install.sh --target=codex     # Codex plugin install
-#   bash install.sh --target=all       # Claude Code + Codex install
-#   bash install.sh --tarball=<url>    # force tarball download from URL
-#   bash install.sh --force            # overwrite a non-symlink plugin dir
-#   bash install.sh --legacy           # also install frozen scripts/export-*.py exporters (deprecated)
-#   bash install.sh --help             # show this help
+#   bash install.sh                         # Claude Code install, auto-detect mode
+#   bash install.sh --target=codex          # Codex plugin install
+#   bash install.sh --target=all            # Claude Code + Codex install
+#   bash install.sh --tarball=<url>         # force tarball download from URL
+#   bash install.sh --force                 # overwrite a non-symlink plugin dir
+#   bash install.sh --generate-exports      # also regenerate host exports to temp/exports/
+#   bash install.sh --legacy                # also install frozen scripts/export-*.py exporters (deprecated)
+#   bash install.sh --help                  # show this help
 #
 # Claude symlink mode (repo clone detected):
 #   Requires: cwd contains .git AND skills/ AND agents/ AND runtime/
@@ -55,6 +56,7 @@ TARBALL_URL=""
 FORCE=false
 TARGET="claude"
 LEGACY=false
+GENERATE_EXPORTS=false
 
 # Parse args
 for arg in "$@"; do
@@ -73,6 +75,9 @@ for arg in "$@"; do
       ;;
     --target=all|--host=all)
       TARGET="all"
+      ;;
+    --generate-exports)
+      GENERATE_EXPORTS=true
       ;;
     --legacy)
       LEGACY=true
@@ -136,6 +141,9 @@ install_claude_symlink() {
     # but we still print the deprecation notice so callers are aware.
     printf '\nNOTE: --legacy mode is available for one minor release only and will be removed in the next release.\n'
     printf 'install.sh: legacy exporters are available via the repo symlink (no copy needed in symlink mode)\n'
+  fi
+  if [[ "$GENERATE_EXPORTS" == "true" ]]; then
+    generate_exports_on_demand "$repo_path"
   fi
   printf '\nz-harness installed for Claude Code (symlink mode). Edits in the repo go live immediately.\n'
 }
@@ -207,6 +215,9 @@ install_codex_symlink() {
     printf '\nNOTE: --legacy mode is available for one minor release only and will be removed in the next release.\n'
     printf 'install.sh: legacy exporters are available via the repo symlink (no copy needed in symlink mode)\n'
   fi
+  if [[ "$GENERATE_EXPORTS" == "true" ]]; then
+    generate_exports_on_demand "$repo_path"
+  fi
   printf '\nz-harness installed for Codex (symlink mode). Start a new Codex thread to load new skills.\n'
 }
 
@@ -234,6 +245,20 @@ install_legacy_exporters() {
   else
     printf 'install.sh: WARNING: --legacy specified but no scripts/export-*.py files found in %s\n' "$src_dir" >&2
   fi
+}
+
+generate_exports_on_demand() {
+  local repo_path="$1"
+  local gen_script="${repo_path}/scripts/generate-exports.py"
+  if [[ ! -f "$gen_script" ]]; then
+    printf 'install.sh: WARNING: --generate-exports: %s not found; skipping.\n' "$gen_script" >&2
+    return
+  fi
+  printf '\nGenerating host exports to temp/exports/ via runtime drivers...\n'
+  python3 "$gen_script" || {
+    printf 'install.sh: ERROR: export generation failed (see above).\n' >&2
+    exit 1
+  }
 }
 
 extract_tarball_to() {
@@ -284,6 +309,9 @@ install_claude_tarball() {
   if [[ "$LEGACY" == "true" ]]; then
     install_legacy_exporters "$CLAUDE_PLUGIN_LINK_PATH"
   fi
+  if [[ "$GENERATE_EXPORTS" == "true" ]]; then
+    generate_exports_on_demand "$CLAUDE_PLUGIN_LINK_PATH"
+  fi
   printf '\nz-harness installed for Claude Code (tarball mode).\n'
   printf 'Run /z-update inside Claude Code to update in the future.\n'
 }
@@ -303,6 +331,9 @@ install_codex_tarball() {
   # runtime/ (including runtime/drivers/) is expected to be present in the tarball.
   if [[ "$LEGACY" == "true" ]]; then
     install_legacy_exporters "$CODEX_PLUGIN_LINK_PATH"
+  fi
+  if [[ "$GENERATE_EXPORTS" == "true" ]]; then
+    generate_exports_on_demand "$CODEX_PLUGIN_LINK_PATH"
   fi
   printf '\nz-harness installed for Codex (tarball mode). Start a new Codex thread to load new skills.\n'
 }

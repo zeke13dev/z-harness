@@ -15,6 +15,8 @@ on:
       - "scripts/**"
       - "tests/**"
       - "runtime/**"
+      - "skills/**"
+      - "agents/**"
       - "Makefile"
       - ".github/workflows/tests.yml"
   push:
@@ -97,3 +99,58 @@ jobs:
 
       - name: Run shell test suite
         run: make test-sh
+
+  generate-exports:
+    # Smoke-test the on-demand export generation for all three in-scope hosts
+    # (cursor, codex, antigravity).  Runs the runtime drivers directly (offline,
+    # no network required).  Asserts exit 0 + zero validation warnings + expected
+    # .cursor/skills, .agent/skills, and codex skills/ structures are emitted.
+    # This is a generate-to-temp smoke, NOT a committed-baseline diff.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Generate exports (make export)
+        run: make export && echo OK
+
+      - name: Assert cursor skills structure
+        run: |
+          skill=$(ls temp/exports/cursor/.cursor/skills/ | head -1)
+          [[ -n "$skill" ]] || { echo "ERROR: no cursor skills emitted"; exit 1; }
+          [[ -f "temp/exports/cursor/.cursor/skills/${skill}/SKILL.md" ]] || { echo "ERROR: cursor SKILL.md missing for ${skill}"; exit 1; }
+          echo "cursor: .cursor/skills/${skill}/SKILL.md OK"
+
+      - name: Assert antigravity skills structure
+        run: |
+          skill=$(ls temp/exports/antigravity/.agent/skills/ | head -1)
+          [[ -n "$skill" ]] || { echo "ERROR: no antigravity skills emitted"; exit 1; }
+          [[ -f "temp/exports/antigravity/.agent/skills/${skill}/SKILL.md" ]] || { echo "ERROR: agy SKILL.md missing for ${skill}"; exit 1; }
+          echo "antigravity: .agent/skills/${skill}/SKILL.md OK"
+
+      - name: Assert codex native skills structure + manifest
+        run: |
+          skill=$(ls temp/exports/codex/skills/ | head -1)
+          [[ -n "$skill" ]] || { echo "ERROR: no codex skills emitted"; exit 1; }
+          [[ -f "temp/exports/codex/skills/${skill}/SKILL.md" ]] || { echo "ERROR: codex SKILL.md missing for ${skill}"; exit 1; }
+          [[ -f "temp/exports/codex/.codex-plugin/plugin.json" ]] || { echo "ERROR: codex .codex-plugin/plugin.json manifest missing"; exit 1; }
+          python3 -c "import json; m=json.load(open('temp/exports/codex/.codex-plugin/plugin.json')); assert m.get('skills'), 'manifest missing skills key'"
+          echo "codex: skills/${skill}/SKILL.md + .codex-plugin/plugin.json OK"
+
+      - name: Assert no exports/ artifacts tracked by git
+        run: |
+          if git ls-files --error-unmatch exports/ 2>/dev/null; then
+            echo "ERROR: exports/ artifacts are tracked by git — they must be .gitignored"
+            exit 1
+          fi
+          echo "exports/ correctly gitignored"
