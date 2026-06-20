@@ -183,7 +183,10 @@ workflows:
     source: commands/z-providers-discover.md
     output: .agent/workflows/z-providers-discover.md
     description: Discover LLM CLI providers in PATH and generate providers.json.
-    description: "Interactive premise refinement — conversational on-ramp. Probes, clarifies,"
+  - id: z-reconcile
+    source: commands/z-reconcile.md
+    output: .agent/workflows/z-reconcile.md
+    description: "Read-mostly workspace audit: surveys git worktrees, plan slugs, the active-plan registry, claim locks, uncommitted work, and follow-up entries; cross-references them into a single consistency report. Default run is pure read (zero mutations); clea..."
   - id: z-report
     source: commands/z-report.md
     output: .agent/workflows/z-report.md
