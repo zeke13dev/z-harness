@@ -275,12 +275,10 @@ class TestCompleteness(unittest.TestCase):
         """Import DEFAULTS, VALIDATORS, META_KEYS from config.py via subprocess."""
         code = (
             "import sys, json; sys.path.insert(0, 'scripts');"
-            "from config import DEFAULTS, VALIDATORS, META_KEYS;"
-            # Flatten DEFAULTS into dotted keys (exclude meta)
-            "flat = {};"
-            "[(flat.update({f'{sec}.{k}': v for k, v in val.items()}))"
-            "    if isinstance(val, dict) else None"
-            "    for sec, val in DEFAULTS.items() if sec not in META_KEYS];"
+            "from config import VALIDATORS, META_KEYS, _flatten_defaults;"
+            # Use _flatten_defaults() to get the canonical set of dotted leaf keys,
+            # including 3-level nested keys like watchdog.timeout_secs.bash.
+            "flat = _flatten_defaults();"
             "print(json.dumps({'flat_defaults': list(flat.keys()), "
             "'validators': list(VALIDATORS.keys()), "
             "'meta_keys': list(META_KEYS)}))"

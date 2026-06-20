@@ -41,6 +41,11 @@ NICE="${Z_HARNESS_REMOTE_NICE:-10}"
 SSH_BIN="${Z_HARNESS_REMOTE_SSH:-ssh}"
 
 UNIT="z-harness-build-$$"
+# Surface the unit name to stderr so callers can extract it for cleanup hints.
+# If the local ssh dies (e.g. on supervisor timeout), this line is the only way
+# the caller can learn the remote unit name and issue:
+#   ssh <host> systemctl --user stop <unit>
+echo "[confined-run] UNIT=$UNIT" >&2
 
 b64() { printf '%s' "$1" | base64 | tr -d '\n'; }
 

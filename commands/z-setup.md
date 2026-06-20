@@ -179,6 +179,16 @@ Where `INVOCATION_FORM` is one of `inspect | wizard | apply | explain | status |
   PushNotification("/z-setup $INVOCATION_FORM complete")
 ```
 
+## macOS: recommended system dependencies
+
+On macOS the system does not ship a `timeout(1)` binary. The watchdog enforcement layer (`scripts/supervised-run.sh`) falls back to a pure-bash deadline in that case and emits a `timeout_degraded` event, but robust hard-deadline enforcement prefers the GNU `timeout`/`gtimeout` binary:
+
+```sh
+brew install coreutils
+```
+
+After install, `scripts/check-timeout.sh` auto-detects `gtimeout` with no configuration needed. Without it, long-running dispatches (ssh, rsync, cargo, reviewer) use the bash fallback, which is functionally correct but less battle-tested for edge cases like deeply-nested process groups.
+
 ## Invariants
 
 - The skill NEVER writes configuration directly — all writes are delegated to `scripts/setup.py`.

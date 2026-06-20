@@ -42,17 +42,9 @@ RUN="<run-id or tasks/<task-id> from caller>"
 source "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/check-timeout.sh" "$RUN"
 
 if [ "$USE_STDIN" = "True" ]; then
-  if [ -n "$TIMEOUT_CMD" ]; then
-    RESPONSE="$(printf '%s' "$PROMPT" | "$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS)"
-  else
-    RESPONSE="$(printf '%s' "$PROMPT" | $COMMAND $ARGS)"
-  fi
+  RESPONSE="$(printf '%s' "$PROMPT" | bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/supervised-run.sh" --run "$RUN" --type reviewer --timeout "$TIMEOUT" -- $COMMAND $ARGS)"
 else
-  if [ -n "$TIMEOUT_CMD" ]; then
-    RESPONSE="$("$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS "$PROMPT")"
-  else
-    RESPONSE="$($COMMAND $ARGS "$PROMPT")"
-  fi
+  RESPONSE="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/supervised-run.sh" --run "$RUN" --type reviewer --timeout "$TIMEOUT" -- $COMMAND $ARGS "$PROMPT")"
 fi
 ```
 
@@ -252,21 +244,11 @@ if [ "$PROVIDER" = "codex" ] && [ "$CODEX_SUPPORTS_OUTFILE" = "1" ]; then
   # stdout transcript is intentionally discarded.
   CAPTURE_MODE="file"
   if [ "$USE_STDIN" = "True" ]; then
-    if [ -n "$TIMEOUT_CMD" ]; then
-      printf '%s' "$PROMPT" | "$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS -o "$OUTFILE"
-      CODEX_EXIT=$?
-    else
-      printf '%s' "$PROMPT" | $COMMAND $ARGS -o "$OUTFILE"
-      CODEX_EXIT=$?
-    fi
+    printf '%s' "$PROMPT" | bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/supervised-run.sh" --run "$RUN" --type reviewer --timeout "$TIMEOUT" -- $COMMAND $ARGS -o "$OUTFILE"
+    CODEX_EXIT=$?
   else
-    if [ -n "$TIMEOUT_CMD" ]; then
-      "$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS -o "$OUTFILE" "$PROMPT"
-      CODEX_EXIT=$?
-    else
-      $COMMAND $ARGS -o "$OUTFILE" "$PROMPT"
-      CODEX_EXIT=$?
-    fi
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/supervised-run.sh" --run "$RUN" --type reviewer --timeout "$TIMEOUT" -- $COMMAND $ARGS -o "$OUTFILE" "$PROMPT"
+    CODEX_EXIT=$?
   fi
 
   # Validate: non-zero exit or missing/empty file → fallback
@@ -280,17 +262,9 @@ if [ "$PROVIDER" = "codex" ] && [ "$CODEX_SUPPORTS_OUTFILE" = "1" ]; then
     CAPTURE_MODE="stdout"
     # Re-run without -o to capture stdout
     if [ "$USE_STDIN" = "True" ]; then
-      if [ -n "$TIMEOUT_CMD" ]; then
-        RESPONSE="$(printf '%s' "$PROMPT" | "$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS)"
-      else
-        RESPONSE="$(printf '%s' "$PROMPT" | $COMMAND $ARGS)"
-      fi
+      RESPONSE="$(printf '%s' "$PROMPT" | bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/supervised-run.sh" --run "$RUN" --type reviewer --timeout "$TIMEOUT" -- $COMMAND $ARGS)"
     else
-      if [ -n "$TIMEOUT_CMD" ]; then
-        RESPONSE="$("$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS "$PROMPT")"
-      else
-        RESPONSE="$($COMMAND $ARGS "$PROMPT")"
-      fi
+      RESPONSE="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/supervised-run.sh" --run "$RUN" --type reviewer --timeout "$TIMEOUT" -- $COMMAND $ARGS "$PROMPT")"
     fi
   else
     RESPONSE="$(cat "$OUTFILE")"
@@ -298,17 +272,9 @@ if [ "$PROVIDER" = "codex" ] && [ "$CODEX_SUPPORTS_OUTFILE" = "1" ]; then
 else
   # Non-codex provider OR probe failed: byte-identical stdout path.
   if [ "$USE_STDIN" = "True" ]; then
-    if [ -n "$TIMEOUT_CMD" ]; then
-      RESPONSE="$(printf '%s' "$PROMPT" | "$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS)"
-    else
-      RESPONSE="$(printf '%s' "$PROMPT" | $COMMAND $ARGS)"
-    fi
+    RESPONSE="$(printf '%s' "$PROMPT" | bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/supervised-run.sh" --run "$RUN" --type reviewer --timeout "$TIMEOUT" -- $COMMAND $ARGS)"
   else
-    if [ -n "$TIMEOUT_CMD" ]; then
-      RESPONSE="$("$TIMEOUT_CMD" "$TIMEOUT" $COMMAND $ARGS "$PROMPT")"
-    else
-      RESPONSE="$($COMMAND $ARGS "$PROMPT")"
-    fi
+    RESPONSE="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/supervised-run.sh" --run "$RUN" --type reviewer --timeout "$TIMEOUT" -- $COMMAND $ARGS "$PROMPT")"
   fi
 fi
 ```

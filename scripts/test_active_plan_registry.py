@@ -27,6 +27,17 @@ Cases covered (T009 — session-id stamping):
   register_session_in_list  — register --session X → list shows session_id == X
   register_no_session       — register without --session stores session_id as empty string
 
+Cases covered (T009 — watchdog_pid field + deregister kill):
+  register_with_watchdog_pid_stamps_field — register --watchdog-pid N stores N in record
+  register_without_watchdog_pid_stores_none — register without --watchdog-pid → None
+  heartbeat_with_watchdog_pid_updates_field — heartbeat --watchdog-pid updates record
+  heartbeat_without_watchdog_pid_preserves — heartbeat without flag keeps existing value
+  watchdog_pid_via_list_json — list --json returns watchdog_pid field
+  deregister_sigterms_live_watchdog — deregister SIGTERMs a live watchdog process
+  deregister_noop_on_dead_watchdog_pid — no-op on dead pid
+  deregister_noop_on_absent_pid_file — no-op when .watchdog.pid absent
+  deregister_still_succeeds_when_kill_raises — NON-FATAL even on PermissionError
+
 Cases covered (T013 — claim/release/wait-for + TOCTOU/seniority/backcompat):
   (a) F2/BLOCKER-1: double-claim TOCTOU → single winner by run_id, loser held_paths excludes conceded
   (b) F1/F3: wait-for clears within one poll after senior deregisters
@@ -1453,6 +1464,361 @@ class TestNonFatalSelfLogsRegistryError(unittest.TestCase):
             self.assertEqual(
                 ops, [],
                 f"clean round-trip must not self-emit any registry_error; got ops={ops}",
+            )
+
+
+# ── T009 (watchdog_pid): stamp + readback + deregister kill ───────────────────
+
+
+class TestWatchdogPidStamp(unittest.TestCase):
+    """watchdog_pid field: stamp via register/heartbeat, read back correctly.
+
+    Invariant: watchdog_pid is an advisory observability field in the registry
+    record. The authoritative source is the .watchdog.pid file on disk (addendum F).
+    """
+
+    def test_register_with_watchdog_pid_stamps_field(self):
+        """register --watchdog-pid N stores watchdog_pid=N in the record."""
+        with tempfile.TemporaryDirectory() as base:
+            run_id = "test-wpid-reg-001"
+            fake_pid = 99999  # will not exist; we're only testing field storage
+
+            r = _run_registry(
+                "register",
+                "--run-id", run_id,
+                "--slug", "s",
+                "--command", "/z-test",
+                "--phase", "test",
+                "--watchdog-pid", str(fake_pid),
+                base_dir=base,
+            )
+            self.assertEqual(r.returncode, 0, f"register failed: {r.stderr}")
+
+            active_dir = Path(base) / "active-plans"
+            rec = json.loads((active_dir / f"{run_id}.json").read_text())
+            self.assertEqual(
+                rec.get("watchdog_pid"), fake_pid,
+                f"watchdog_pid must equal --watchdog-pid arg; got {rec.get('watchdog_pid')!r}"
+            )
+
+    def test_register_without_watchdog_pid_stores_none(self):
+        """register without --watchdog-pid stores watchdog_pid=None."""
+        with tempfile.TemporaryDirectory() as base:
+            run_id = "test-wpid-none-001"
+            r = _run_registry(
+                "register",
+                "--run-id", run_id,
+                "--slug", "s",
+                "--command", "/z-test",
+                "--phase", "test",
+                base_dir=base,
+            )
+            self.assertEqual(r.returncode, 0, f"register failed: {r.stderr}")
+
+            active_dir = Path(base) / "active-plans"
+            rec = json.loads((active_dir / f"{run_id}.json").read_text())
+            self.assertIsNone(
+                rec.get("watchdog_pid"),
+                f"watchdog_pid must be None when --watchdog-pid not provided; "
+                f"got {rec.get('watchdog_pid')!r}"
+            )
+
+    def test_heartbeat_with_watchdog_pid_updates_field(self):
+        """heartbeat --watchdog-pid N updates watchdog_pid in the existing record."""
+        with tempfile.TemporaryDirectory() as base:
+            run_id = "test-wpid-hb-001"
+            _run_registry(
+                "register",
+                "--run-id", run_id,
+                "--slug", "s",
+                "--command", "/z-test",
+                "--phase", "test",
+                base_dir=base,
+            )
+
+            fake_pid = 88888
+            r = _run_registry(
+                "heartbeat",
+                "--run-id", run_id,
+                "--watchdog-pid", str(fake_pid),
+                base_dir=base,
+            )
+            self.assertEqual(r.returncode, 0, f"heartbeat failed: {r.stderr}")
+
+            active_dir = Path(base) / "active-plans"
+            rec = json.loads((active_dir / f"{run_id}.json").read_text())
+            self.assertEqual(
+                rec.get("watchdog_pid"), fake_pid,
+                f"watchdog_pid must be updated by heartbeat --watchdog-pid; "
+                f"got {rec.get('watchdog_pid')!r}"
+            )
+
+    def test_heartbeat_without_watchdog_pid_does_not_clear_existing(self):
+        """heartbeat without --watchdog-pid preserves an existing watchdog_pid value."""
+        with tempfile.TemporaryDirectory() as base:
+            run_id = "test-wpid-preserve-001"
+            initial_pid = 77777
+            _run_registry(
+                "register",
+                "--run-id", run_id,
+                "--slug", "s",
+                "--command", "/z-test",
+                "--phase", "test",
+                "--watchdog-pid", str(initial_pid),
+                base_dir=base,
+            )
+
+            # heartbeat without --watchdog-pid
+            r = _run_registry(
+                "heartbeat",
+                "--run-id", run_id,
+                "--phase", "implement",
+                base_dir=base,
+            )
+            self.assertEqual(r.returncode, 0, f"heartbeat failed: {r.stderr}")
+
+            active_dir = Path(base) / "active-plans"
+            rec = json.loads((active_dir / f"{run_id}.json").read_text())
+            self.assertEqual(
+                rec.get("watchdog_pid"), initial_pid,
+                f"watchdog_pid must be preserved when heartbeat omits --watchdog-pid; "
+                f"got {rec.get('watchdog_pid')!r}"
+            )
+
+    def test_watchdog_pid_via_list_json(self):
+        """list --json returns watchdog_pid in the record."""
+        with tempfile.TemporaryDirectory() as base:
+            run_id = "test-wpid-list-001"
+            fake_pid = 55555
+            _run_registry(
+                "register",
+                "--run-id", run_id,
+                "--slug", "s",
+                "--command", "/z-test",
+                "--phase", "test",
+                "--watchdog-pid", str(fake_pid),
+                base_dir=base,
+            )
+
+            r = _run_registry("list", "--json", base_dir=base)
+            self.assertEqual(r.returncode, 0)
+            records = json.loads(r.stdout)
+            matching = [x for x in records if x.get("run_id") == run_id]
+            self.assertEqual(len(matching), 1)
+            self.assertEqual(
+                matching[0].get("watchdog_pid"), fake_pid,
+                f"list --json must include watchdog_pid; got {matching[0].get('watchdog_pid')!r}"
+            )
+
+
+class TestDeregisterSigtermWatchdog(unittest.TestCase):
+    """deregister reads the .watchdog.pid file and SIGTERMs a live sweep; no-op on dead/absent.
+
+    Invariant (addendum F): the pid FILE is authoritative, not the registry field.
+    Deregister is NON-FATAL: kill failures must never break it.
+    """
+
+    def _make_plan_dir_with_pid_file(self, base: str, run_id: str, pid: int) -> Path:
+        """Write a .watchdog.pid file in the plan dir structure under base.
+
+        Because plan-path.sh resolve_plan_path is called under a hermetic base
+        dir, we construct the expected plan dir path and write the pid file there.
+        The pid file format is: plain text integer + newline (per T008 SPEC).
+        """
+        # plan-path.sh resolve_plan_path produces:
+        #   <base>/plans/<slug>  (new-layout)
+        # We need to find the slug from the registered record to replicate the path.
+        # For tests we use the run_id as slug to keep things simple.
+        slug = run_id  # matches --slug arg below
+        plan_dir = Path(base) / "plans" / slug
+        active_subdir = plan_dir / "active"
+        active_subdir.mkdir(parents=True, exist_ok=True)
+        pid_file = active_subdir / f"{run_id}.watchdog.pid"
+        pid_file.write_text(f"{pid}\n", encoding="utf-8")
+        return plan_dir
+
+    def test_deregister_sigterms_live_watchdog(self):
+        """deregister SIGTERMs a live watchdog sweep process (blocking poll via .watchdog.pid).
+
+        Spawns a real long-sleep subprocess as the fake watchdog. After deregister
+        returns, the subprocess must be dead (either exited on SIGTERM or SIGKILL
+        after grace). Uses poll-based wait to avoid race.
+        """
+        with tempfile.TemporaryDirectory() as base:
+            run_id = "test-wpid-dereg-sigterm-001"
+
+            # Spawn a long-sleep process as the fake watchdog sweep.
+            fake_watchdog = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            watchdog_pid = fake_watchdog.pid
+
+            try:
+                # Register the run (slug = run_id for simple plan-dir resolution).
+                r = _run_registry(
+                    "register",
+                    "--run-id", run_id,
+                    "--slug", run_id,
+                    "--command", "/z-test",
+                    "--phase", "test",
+                    base_dir=base,
+                )
+                self.assertEqual(r.returncode, 0, f"register failed: {r.stderr}")
+
+                # Write the .watchdog.pid file in the expected location.
+                self._make_plan_dir_with_pid_file(base, run_id, watchdog_pid)
+
+                # Confirm the watchdog is alive before deregister.
+                try:
+                    os.kill(watchdog_pid, 0)
+                except ProcessLookupError:
+                    self.skipTest(f"Watchdog pid {watchdog_pid} died before deregister ran")
+
+                # Deregister — must SIGTERM the watchdog.
+                r = _run_registry(
+                    "deregister",
+                    "--run-id", run_id,
+                    "--status", "complete",
+                    base_dir=base,
+                )
+                self.assertEqual(r.returncode, 0, f"deregister must be NON-FATAL; stderr={r.stderr}")
+
+                # Poll until the watchdog exits (up to 5 seconds).
+                # Use fake_watchdog.poll() rather than os.kill(pid, 0) because
+                # the latter returns True for zombie processes (child of this
+                # test process that exited but hasn't been reaped yet).
+                deadline = time.monotonic() + 5.0
+                while time.monotonic() < deadline:
+                    if fake_watchdog.poll() is not None:
+                        break  # dead — success
+                    time.sleep(0.1)
+                else:
+                    # Still alive — fail the test.
+                    fake_watchdog.kill()  # cleanup
+                    self.fail(
+                        f"Watchdog pid {watchdog_pid} is still alive {5}s after deregister; "
+                        f"deregister must have SIGTERMed it"
+                    )
+            finally:
+                # Ensure the fake watchdog is cleaned up even if the test fails.
+                try:
+                    fake_watchdog.kill()
+                    fake_watchdog.wait(timeout=2)
+                except (ProcessLookupError, subprocess.TimeoutExpired, OSError):
+                    pass
+
+    def test_deregister_noop_on_dead_watchdog_pid(self):
+        """deregister is a no-op (no error) when the .watchdog.pid holds a dead pid."""
+        with tempfile.TemporaryDirectory() as base:
+            run_id = "test-wpid-dereg-dead-001"
+
+            # Spawn a subprocess, wait for it to die, then use its (dead) pid.
+            dead_proc = subprocess.Popen(
+                [sys.executable, "-c", "import sys; sys.exit(0)"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            dead_proc.wait()
+            dead_pid = dead_proc.pid
+
+            # Confirm the pid is dead.
+            try:
+                os.kill(dead_pid, 0)
+                self.skipTest(f"pid {dead_pid} was recycled; skipping")
+            except ProcessLookupError:
+                pass  # confirmed dead
+            except PermissionError:
+                self.skipTest(f"pid {dead_pid} appears alive; skipping")
+
+            # Register and write the dead pid to the watchdog pid file.
+            r = _run_registry(
+                "register",
+                "--run-id", run_id,
+                "--slug", run_id,
+                "--command", "/z-test",
+                "--phase", "test",
+                base_dir=base,
+            )
+            self.assertEqual(r.returncode, 0, f"register failed: {r.stderr}")
+            self._make_plan_dir_with_pid_file(base, run_id, dead_pid)
+
+            # Deregister must succeed and be a no-op on the dead pid.
+            r = _run_registry(
+                "deregister",
+                "--run-id", run_id,
+                "--status", "complete",
+                base_dir=base,
+            )
+            self.assertEqual(
+                r.returncode, 0,
+                f"deregister must return 0 (NON-FATAL) on dead watchdog pid; "
+                f"got {r.returncode}; stderr={r.stderr}"
+            )
+
+    def test_deregister_noop_on_absent_pid_file(self):
+        """deregister is a no-op when the .watchdog.pid file does not exist."""
+        with tempfile.TemporaryDirectory() as base:
+            run_id = "test-wpid-dereg-absent-001"
+
+            r = _run_registry(
+                "register",
+                "--run-id", run_id,
+                "--slug", run_id,
+                "--command", "/z-test",
+                "--phase", "test",
+                base_dir=base,
+            )
+            self.assertEqual(r.returncode, 0, f"register failed: {r.stderr}")
+            # Do NOT write a .watchdog.pid file.
+
+            # Deregister must succeed without error.
+            r = _run_registry(
+                "deregister",
+                "--run-id", run_id,
+                "--status", "complete",
+                base_dir=base,
+            )
+            self.assertEqual(
+                r.returncode, 0,
+                f"deregister must return 0 (NON-FATAL) when .watchdog.pid is absent; "
+                f"got {r.returncode}; stderr={r.stderr}"
+            )
+
+    def test_deregister_still_succeeds_when_kill_raises(self):
+        """deregister returns 0 even if SIGTERM raises (e.g. permission denied).
+
+        Uses pid=1 (init/launchd) which is always alive but may raise PermissionError.
+        This exercises the NON-FATAL contract: kill failures must not propagate.
+        """
+        with tempfile.TemporaryDirectory() as base:
+            run_id = "test-wpid-dereg-perm-001"
+
+            r = _run_registry(
+                "register",
+                "--run-id", run_id,
+                "--slug", run_id,
+                "--command", "/z-test",
+                "--phase", "test",
+                base_dir=base,
+            )
+            self.assertEqual(r.returncode, 0, f"register failed: {r.stderr}")
+
+            # Use pid 1 (always alive, but we can't SIGTERM it → PermissionError).
+            self._make_plan_dir_with_pid_file(base, run_id, 1)
+
+            r = _run_registry(
+                "deregister",
+                "--run-id", run_id,
+                "--status", "complete",
+                base_dir=base,
+            )
+            # Must always return 0 regardless of kill outcome.
+            self.assertEqual(
+                r.returncode, 0,
+                f"deregister must be NON-FATAL even when SIGTERM raises PermissionError; "
+                f"got {r.returncode}; stderr={r.stderr}"
             )
 
 

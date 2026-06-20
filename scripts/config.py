@@ -189,6 +189,32 @@ DEFAULTS: dict = {
         #            (e.g. cline → pointer, windsurf/kiro → curated).
         "strategy": "",  # empty sentinel = defer to per-driver default
     },
+    "watchdog": {
+        # Master switch for the background sweep layer (watchdog-sweep.sh).
+        "enabled": True,                 # bool
+        # How often the sweep polls events.jsonl / liveness.sh (seconds).
+        "sweep_interval_secs": 60,       # int>0
+        # What to do when a stall is detected.
+        # observe: emit watchdog_stall event only.
+        # notify: emit event + call notify-watchdog.sh (default).
+        "intervention_level": "notify",  # observe | notify
+        # SIGTERM→SIGKILL grace period used by supervised-run.sh bash fallback (seconds).
+        "kill_grace_secs": 10,           # int>0
+        # Safety backstop: sweep self-exits after this many seconds to prevent orphan leak.
+        "max_lifetime_secs": 86400,      # int>0
+        # Age threshold for liveness.sh subagent stale detection (seconds).
+        "stale_secs": 300,               # int>0
+        # Per-dispatch-type hard deadline defaults for supervised-run.sh.
+        # READ VIA config.py get watchdog.timeout_secs.<type> ONLY — NOT env-exported.
+        # A typo'd Z_HARNESS_WATCHDOG_TIMEOUT_SECS env var is silently ignored.
+        "timeout_secs": {               # nested table: config-file-only, not env-exported
+            "bash": 600,
+            "ssh": 600,
+            "rsync": 660,
+            "cargo": 1800,
+            "reviewer": 300,
+        },
+    },
 }
 
 
@@ -353,6 +379,19 @@ VALIDATORS: dict = {
     # Users may also explicitly set pointer|curated|full to override globally.
     # Any other value is rejected.
     "export.strategy": {"", "pointer", "curated", "full"},
+    # watchdog.* — flat keys round-trip via env; nested timeout_secs is config-file-only.
+    "watchdog.enabled":              _validate_bool,
+    "watchdog.sweep_interval_secs":  _validate_positive_int,
+    "watchdog.intervention_level":   {"observe", "notify"},
+    "watchdog.kill_grace_secs":      _validate_positive_int,
+    "watchdog.max_lifetime_secs":    _validate_positive_int,
+    "watchdog.stale_secs":           _validate_positive_int,
+    # watchdog.timeout_secs.* : per-leaf positive ints; read via config.py get only.
+    "watchdog.timeout_secs.bash":     _validate_positive_int,
+    "watchdog.timeout_secs.ssh":      _validate_positive_int,
+    "watchdog.timeout_secs.rsync":    _validate_positive_int,
+    "watchdog.timeout_secs.cargo":    _validate_positive_int,
+    "watchdog.timeout_secs.reviewer": _validate_positive_int,
 }
 
 # Coercers: applied after validation to normalize values (esp. env-var strings).
@@ -466,6 +505,38 @@ _COERCERS: dict[str, object] = {
     # T008 — export.hosts: env transport is JSON-encoded array string; coerce to list
     "export.hosts": lambda v: (
         v if isinstance(v, list) else json.loads(v)
+    ),
+    # watchdog.* — flat bool/int coercers (round-trip via env)
+    "watchdog.enabled": lambda v: (
+        v if isinstance(v, bool) else v.lower() == "true"
+    ),
+    "watchdog.sweep_interval_secs": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    "watchdog.kill_grace_secs": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    "watchdog.max_lifetime_secs": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    "watchdog.stale_secs": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    # watchdog.timeout_secs.* — config-file-only; coerce TOML int (already int, passthrough)
+    "watchdog.timeout_secs.bash": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    "watchdog.timeout_secs.ssh": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    "watchdog.timeout_secs.rsync": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    "watchdog.timeout_secs.cargo": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    "watchdog.timeout_secs.reviewer": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
     ),
 }
 
@@ -656,8 +727,12 @@ def _run_startup_guards() -> None:
 
 _run_startup_guards()
 
-# Valid event kinds for should-notify
-_NOTIFY_EVENTS: set = {"approval", "phase_end", "error"}
+# Valid event kinds for should-notify.
+# watchdog_stall / watchdog_timeout are included in the approval_only fire-set so
+# that watchdog alerts fire under the DEFAULT notify.level without requiring users to
+# switch to "all".  Without this, notify-watchdog.sh exits silently and the entire
+# alert layer is inert out of the box.
+_NOTIFY_EVENTS: set = {"approval", "phase_end", "error", "watchdog_stall", "watchdog_timeout"}
 
 # Key-format regex: 2 to 4 segments, all lowercase with underscores/digits.
 # Valid: notify.level, roles.z_plan.consultant_primary, roles.z_plan.consultant_primary.persona
@@ -1050,14 +1125,26 @@ def _validate_roles_value(dotted_key: str, value: object, source_label: str, is_
 # ---------------------------------------------------------------------------
 
 def _flatten_defaults() -> dict[str, object]:
-    """Return flat {dotted_key: value} from DEFAULTS (excluding meta keys)."""
+    """Return flat {dotted_key: value} from DEFAULTS (excluding meta keys).
+
+    Handles up to 3-level nesting: section.key.subkey (e.g. watchdog.timeout_secs.bash).
+    3-level nested keys whose section+key combination maps to a dict value are expanded
+    into individual dotted entries and included so that cmd_get can resolve them.
+    They are NOT env-exported (cmd_export_env skips them via the depth-3 guard).
+    """
     result = {}
     for section, value in DEFAULTS.items():
         if section in META_KEYS:
             continue
         if isinstance(value, dict):
             for k, v in value.items():
-                result[f"{section}.{k}"] = v
+                if isinstance(v, dict):
+                    # 3-level nesting (e.g. watchdog.timeout_secs.{bash,...})
+                    # Expand into dotted leaves; skip the intermediate dict itself.
+                    for subk, subv in v.items():
+                        result[f"{section}.{k}.{subk}"] = subv
+                else:
+                    result[f"{section}.{k}"] = v
         # top-level scalars (none in current schema beyond meta keys)
     return result
 
@@ -1092,19 +1179,35 @@ def load_config() -> tuple[dict[str, object], dict[str, str]]:
                 continue
             for k, v in sv.items():
                 if isinstance(v, dict):
-                    # 3-level table nesting: e.g. [roles.z_plan.consultant_primary]
-                    # sv[k] == {"consultant_primary": {"persona": "X", ...}}
-                    # k = "z_plan", v = {"consultant_primary": {"persona": "X", ...}}
-                    for role_name, role_fields in v.items():
-                        if not isinstance(role_fields, dict):
-                            # Unexpected: skip non-dict at this level
-                            continue
-                        for leaf_k, leaf_v in role_fields.items():
-                            dotted = f"{section}.{k}.{role_name}.{leaf_k}"
-                            v_validated = _validate_roles_value(dotted, leaf_v, str(global_path), is_global=True)
-                            if v_validated is not None:
-                                values[dotted] = v_validated
-                                sources[dotted] = str(global_path)
+                    # 3-level table nesting: two sub-cases:
+                    # (a) watchdog.timeout_secs — dict of scalar leaves (section.k.subk)
+                    # (b) roles.z_plan — dict of dicts (section.k.role_name.leaf_k)
+                    is_scalar_dict = all(not isinstance(subv, dict) for subv in v.values())
+                    if is_scalar_dict:
+                        # Case (a): expand each leaf as a 3-level dotted key.
+                        for subk, subv in v.items():
+                            dotted = f"{section}.{k}.{subk}"
+                            if dotted not in flat_defaults:
+                                continue
+                            subv = _validate_enum(dotted, subv, str(global_path), is_global=True)
+                            if dotted in _COERCERS:
+                                subv = _COERCERS[dotted](subv)
+                            values[dotted] = subv
+                            sources[dotted] = str(global_path)
+                    else:
+                        # Case (b): roles-style 4-level nesting
+                        # sv[k] == {"consultant_primary": {"persona": "X", ...}}
+                        # k = "z_plan", v = {"consultant_primary": {"persona": "X", ...}}
+                        for role_name, role_fields in v.items():
+                            if not isinstance(role_fields, dict):
+                                # Unexpected: skip non-dict at this level
+                                continue
+                            for leaf_k, leaf_v in role_fields.items():
+                                dotted = f"{section}.{k}.{role_name}.{leaf_k}"
+                                v_validated = _validate_roles_value(dotted, leaf_v, str(global_path), is_global=True)
+                                if v_validated is not None:
+                                    values[dotted] = v_validated
+                                    sources[dotted] = str(global_path)
                 else:
                     dotted = f"{section}.{k}"
                     # Silently ignore unknown 2-level keys for forward compatibility.
@@ -1129,19 +1232,35 @@ def load_config() -> tuple[dict[str, object], dict[str, str]]:
                 continue
             for k, v in sv.items():
                 if isinstance(v, dict):
-                    # 3-level table nesting: e.g. [roles.z_plan.consultant_primary]
-                    # sv[k] == {"consultant_primary": {"persona": "X", ...}}
-                    # k = "z_plan", v = {"consultant_primary": {"persona": "X", ...}}
-                    for role_name, role_fields in v.items():
-                        if not isinstance(role_fields, dict):
-                            # Unexpected: skip non-dict at this level
-                            continue
-                        for leaf_k, leaf_v in role_fields.items():
-                            dotted = f"{section}.{k}.{role_name}.{leaf_k}"
-                            v_validated = _validate_roles_value(dotted, leaf_v, str(repo_path), is_global=False)
-                            if v_validated is not None:
-                                values[dotted] = v_validated
-                                sources[dotted] = str(repo_path)
+                    # 3-level table nesting: two sub-cases:
+                    # (a) watchdog.timeout_secs — dict of scalar leaves (section.k.subk)
+                    # (b) roles.z_plan — dict of dicts (section.k.role_name.leaf_k)
+                    is_scalar_dict = all(not isinstance(subv, dict) for subv in v.values())
+                    if is_scalar_dict:
+                        # Case (a): expand each leaf as a 3-level dotted key.
+                        for subk, subv in v.items():
+                            dotted = f"{section}.{k}.{subk}"
+                            if dotted not in flat_defaults:
+                                continue
+                            subv = _validate_enum(dotted, subv, str(repo_path), is_global=False)
+                            if dotted in _COERCERS:
+                                subv = _COERCERS[dotted](subv)
+                            values[dotted] = subv
+                            sources[dotted] = str(repo_path)
+                    else:
+                        # Case (b): roles-style 4-level nesting
+                        # sv[k] == {"consultant_primary": {"persona": "X", ...}}
+                        # k = "z_plan", v = {"consultant_primary": {"persona": "X", ...}}
+                        for role_name, role_fields in v.items():
+                            if not isinstance(role_fields, dict):
+                                # Unexpected: skip non-dict at this level
+                                continue
+                            for leaf_k, leaf_v in role_fields.items():
+                                dotted = f"{section}.{k}.{role_name}.{leaf_k}"
+                                v_validated = _validate_roles_value(dotted, leaf_v, str(repo_path), is_global=False)
+                                if v_validated is not None:
+                                    values[dotted] = v_validated
+                                    sources[dotted] = str(repo_path)
                 else:
                     dotted = f"{section}.{k}"
                     # Silently ignore unknown 2-level keys for forward compatibility.
@@ -1167,6 +1286,11 @@ def load_config() -> tuple[dict[str, object], dict[str, str]]:
     for dotted_key in list(flat_defaults.keys()):
         # TOML-wins gate: skip env lookup if a TOML layer already provided this key.
         if sources.get(dotted_key, "defaults") != "defaults":
+            continue
+
+        # Skip 3-level nested keys (e.g. watchdog.timeout_secs.bash) — config-file-only.
+        # _dotted_to_env() only accepts exactly 2 segments; 3-level keys would sys.exit(2).
+        if dotted_key.count(".") >= 2:
             continue
 
         transliteration = _dotted_to_env(dotted_key)
@@ -1289,15 +1413,12 @@ def _emit_config_resolved(values: dict, sources: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def _valid_user_keys() -> list[str]:
-    """Return all dotted keys that are NOT meta keys."""
-    keys = []
-    for section, value in DEFAULTS.items():
-        if section in META_KEYS:
-            continue
-        if isinstance(value, dict):
-            for k in value:
-                keys.append(f"{section}.{k}")
-    return sorted(keys)
+    """Return all dotted leaf keys that are NOT meta keys.
+
+    Includes 3-level nested keys (e.g. watchdog.timeout_secs.bash) by delegating
+    to _flatten_defaults(), which already expands nested dicts into dotted leaves.
+    """
+    return sorted(_flatten_defaults().keys())
 
 
 def cmd_get(args: list[str]) -> None:
@@ -1381,6 +1502,9 @@ def _collect_deprecated_env_vars() -> dict[str, list[str]]:
     result: dict[str, list[str]] = {}
     flat_defaults = _flatten_defaults()
     for dotted_key in flat_defaults:
+        # Skip 3-level config-file-only keys — they have no env var transliteration.
+        if dotted_key.count(".") >= 2:
+            continue
         transliteration = _dotted_to_env(dotted_key)
         alias = _INGRESS_LEGACY_ALIASES.get(dotted_key)
         candidates = [transliteration]
@@ -1447,6 +1571,11 @@ def cmd_export_env(args: list[str]) -> None:
         # Skip roles.* keys — they are not exported as env vars
         first_segment = dotted_key.split(".", 1)[0]
         if first_segment == "roles":
+            continue
+        # Skip 3-level nested config-file-only keys (watchdog.timeout_secs.*).
+        # Exporting nested int tables as env vars risks the None→'' poisoning
+        # gotcha; read them via `config.py get watchdog.timeout_secs.<type>` only.
+        if dotted_key.count(".") >= 2:
             continue
         env_var = _ENV_VAR_ALIASES.get(dotted_key) or _dotted_to_env(dotted_key)
         val = values[dotted_key]
@@ -3498,7 +3627,9 @@ def cmd_should_notify(args: list[str]) -> None:
             return
 
     if level == "approval_only":
-        if event in {"approval", "error"}:
+        # watchdog_stall and watchdog_timeout are included here so that the default
+        # notify.level fires for watchdog alerts without requiring "all".
+        if event in {"approval", "error", "watchdog_stall", "watchdog_timeout"}:
             print("yes")
         else:
             print("no")

@@ -246,6 +246,32 @@ print(json.dumps({
 " "$CHAIN_CSV" "${PRESET_NAME:-null}" "$Z_HARNESS_SLUG" "$HEAD_SHA_AT_START")"
     ```
 
+11. **Watchdog sweep spawn (gated — watchdog enabled + registry enabled).** Spawn exactly one watchdog sweep for this overnight run. The sweep monitors for hung subprocesses across all child sub-commands in the chain.
+
+    The spawn is delegated entirely to `watchdog-spawn.sh`, which encapsulates both the `flock`'d single-spawn guard (SPEC addendum F: exactly one sweep per run_id) and the daemonization (double-fork + `setsid` + `/dev/null` stdio so the sweep survives the spawning shell and never blocks the orchestrator). Returns 0 on both "spawned" and "already live (idempotent skip)".
+
+    After spawning, read the authoritative pid file and stamp it onto the registry record for observability (advisory, best-effort). The sweep tears down when the overnight run's registry record is deregistered or when the sweep's own self-exit checks fire (run-record-gone, `watchdog.enabled=false`, or max-lifetime exceeded).
+
+    Note: `/z-overnight` does not call `active-plan-registry.py deregister` itself (there is no overnight registry record in the current design — `/z-implement-all`, the sub-command, manages its own record). The sweep self-exits via its run-record-gone check when the `implement-all` sub-run's record disappears. The watchdog pid file is cleaned up by the sweep itself on clean exit.
+
+    ```bash
+    WATCHDOG_ENABLED="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" \
+      get watchdog.enabled 2>/dev/null || echo false)"
+    if [ "$WATCHDOG_ENABLED" = "true" ] && [ "${Z_HARNESS_REGISTRY_ENABLED:-1}" != "0" ]; then
+      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/watchdog-spawn.sh" \
+        --run "$RUN_ID" --plan-dir "$BASE" || true
+      # Stamp watchdog pid onto registry record for observability (advisory — best-effort).
+      _WD_PID_FILE="${BASE}/active/${RUN_ID}.watchdog.pid"
+      if [ -f "$_WD_PID_FILE" ]; then
+        _WD_PID="$(cat "$_WD_PID_FILE" 2>/dev/null | tr -d '[:space:]')"
+        if [ -n "$_WD_PID" ] && [ "$_WD_PID" -gt 0 ] 2>/dev/null; then
+          python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" \
+            heartbeat --run-id "$RUN_ID" --watchdog-pid "$_WD_PID" || true
+        fi
+      fi
+    fi
+    ```
+
 ## Phase 2 — Resume setup
 
 > Only entered when invocation form is `resume <RUN_ID>`.

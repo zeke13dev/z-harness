@@ -996,6 +996,34 @@
       ],
       "consumed_by": [],
       "summary": "Read-mostly workspace audit command that cross-references git worktrees, plan slugs, the active-plan registry, claim locks, uncommitted work, and follow-up entries into a single consistency report. Default run is zero mutations; six cleanup flags (--prune-worktrees, --archive-plans, --clean-locks, --reap-registry, --open-followups, --save) each require per-item AskUserQuestion confirmation. Classification delegates to scripts/reconcile.py: six worktree classes (dead/dirty/detached/merged-uncertain/unknown-remote/active) and four plan classes (precontext-only-aged/tasks-complete-unmerged/in-progress/stale-in-progress). Four cross-reference boolean flags surface joined findings across surfaces."
+    },
+    {
+      "slug": "watchdog",
+      "source_files": [
+        "scripts/supervised-run.sh",
+        "scripts/watchdog-sweep.sh",
+        "scripts/notify-watchdog.sh",
+        "scripts/watchdog-spawn.sh",
+        "scripts/check-timeout.sh",
+        "scripts/config.py",
+        "scripts/active-plan-registry.py",
+        "agents/reviewer.md",
+        "agents/remote-runner.md",
+        "commands/z-implement-all.md",
+        "commands/z-overnight.md"
+      ],
+      "last_updated": "2026-06-19",
+      "confidence": "high",
+      "depends_on": [
+        "config",
+        "scripts",
+        "active-plan-registry"
+      ],
+      "consumed_by": [
+        "agents",
+        "commands"
+      ],
+      "summary": "Two-layer liveness mechanism for long z-harness runs. Layer 1 (enforcement): scripts/supervised-run.sh wraps killable dispatches (ssh, rsync, cargo, reviewer, bash) in a hard deadline — prefers timeout/gtimeout, falls back to a guarded bash deadline; on deadline kills the process group and returns exit 124, feeding the orchestrator's retry/halt path for real recovery. Layer 2 (detection+alert): scripts/watchdog-sweep.sh is a daemonized poller that reads events.jsonl for unmatched dispatch_start leases and calls liveness.sh for unmatched subagent *_start — covers native Agent() stalls that no shell signal can kill. On stall: emits watchdog_stall and alerts out-of-band via notify-watchdog.sh (Discord webhook + macOS osascript). CAPABILITY BOUNDARY: killable dispatches are genuinely recovered; Agent() stalls are detect+alert only. events.jsonl is the lease store (append-only, flock-safe, zero extra files). Config: watchdog.enabled/sweep_interval_secs/intervention_level{observe,notify}/kill_grace_secs/max_lifetime_secs/stale_secs/timeout_secs.<type>. macOS users should run brew install coreutils for gtimeout."
     }
   ]
 }

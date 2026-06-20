@@ -13,6 +13,15 @@
 # marker file under the run dir, mirroring the `.providers-logged` pattern
 # in commands/z-plan.md. Subsequent sources within the same run are no-ops
 # beyond exporting TIMEOUT_CMD.
+#
+# Re-sourcing is idempotent per run: the `timeout_availability` emission is
+# marker-guarded via atomic mkdir under the run dir; the stderr availability
+# warning is env-var-guarded (Z_HARNESS_TIMEOUT_WARNED) so it fires once per
+# shell session. Callers such as supervised-run.sh and watchdog-sweep.sh may
+# source this file repeatedly without side-effect spam.
+#
+# Sourceable helper:
+#   timeout_backend   — echoes exactly one of: timeout | gtimeout | bash_fallback
 
 # Resolve plugin root the same way log-phase.sh does.
 _CT_PLUGIN_ROOT="${ANTIGRAVITY_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}"
@@ -23,6 +32,20 @@ _CT_RUN="${1:-}"
 
 TIMEOUT_CMD="$(command -v timeout || command -v gtimeout || true)"
 export TIMEOUT_CMD
+
+# timeout_backend — echoes the resolved backend name (no side effects).
+# Returns: "timeout" | "gtimeout" | "bash_fallback"
+# Callers (supervised-run.sh, watchdog-sweep.sh) use this instead of
+# inspecting TIMEOUT_CMD directly so the resolution logic lives in one place.
+timeout_backend() {
+  if command -v timeout >/dev/null 2>&1; then
+    echo "timeout"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    echo "gtimeout"
+  else
+    echo "bash_fallback"
+  fi
+}
 
 # Stderr warning runs before any marker check so parallel shell sessions
 # (where the env-var guard doesn't carry across processes) still see it once
