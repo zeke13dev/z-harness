@@ -81,118 +81,63 @@ $ARGUMENTS
 
 Run Phase 0 **immediately after Setup** — BEFORE Plan Route Check, BEFORE Phase 1 scaffolding begins. scope-probe internally dispatches doc-fetcher (per its step 4); Phase 0 does not depend on Phase 1's doc-fetcher run.
 
-### 0-sharpen. Sharpen-vs-skip gate (D5)
+### 0-sharpen. Lightweight inline sharpen
 
-This is a **separate cheap check** that runs BEFORE scope-probe. It is NOT folded into scope-probe's LIGHT/MEDIUM/HEAVY classifier — the two checks are orthogonal (idea vagueness ≠ codebase fanout size).
+This is a **separate step** that runs BEFORE scope-probe. It is NOT folded into scope-probe's LIGHT/MEDIUM/HEAVY classifier — the two checks are orthogonal (idea vagueness ≠ codebase fanout size).
 
-**Check 1 — GRILL.md already exists?**
+**Check — GRILL.md already exists?**
 
 ```bash
 SHARPEN_GATE_DECISION=""
-SHARPEN_GATE_REASON=""
 GRILL_EXISTED=0
 if [ -f "$Z_HARNESS_PLAN_DIR/GRILL.md" ]; then
-  SHARPEN_GATE_DECISION="skip"
-  SHARPEN_GATE_REASON="GRILL.md already exists for this slug"
+  SHARPEN_GATE_DECISION="grill_existed"
   GRILL_EXISTED=1
 fi
 ```
 
-If a `GRILL.md` already exists for the slug, skip straight to the scope-probe (continue with step 0-count below). Phase 1c-ii already ingests `GRILL.md` as seed framing.
+If a `GRILL.md` already exists for the slug, emit the event and proceed directly to 0-count (continue with step 0-count below). Phase 1c-ii already ingests `GRILL.md` as seed framing. No questions are emitted to the user.
 
-**Check 2 — Heuristic specificity check (if GRILL.md absent):**
+**Lightweight sharpen (if GRILL.md absent):**
 
-Evaluate the topic for concreteness. A topic is **crisp** if it satisfies ALL of:
-- Length > 20 characters (not a one-word stub)
-- Contains at least one **concrete constraint or scope qualifier** (e.g. a file name, technology name, numbered target, time/size bound, or explicit "in X" / "for Y" clause)
-- Is NOT purely abstract (e.g. "improve performance", "make it better", "ideas for the app")
+Always run this step when GRILL.md does not already exist. Do NOT evaluate topic specificity — pose 1–2 brief clarifying questions in prose to sharpen the topic. This is a conversational exchange (NOT an AskUserQuestion call).
 
-If the heuristic result is unambiguous (clearly crisp OR clearly vague), set the decision directly. If the topic falls in a grey zone (e.g. 2-3 word phrase with no modifiers, medium length but no concrete scope), dispatch one Haiku call to resolve.
+Write the questions directly in your response, then **end the turn** and wait for the user's free-text reply. A one-word reply of "skip" or "go" proceeds with the raw topic unchanged (treat the same as an immediate proceed with no extra context).
+
+Questions to pose (adapt to the specific topic — choose 1–2 of the most useful):
+- What constraint or success criterion matters most here? (e.g. speed, cost, simplicity, compatibility)
+- Who is the primary audience or consumer of the output?
+- Are there existing approaches or constraints to work within or avoid?
+- What does "done" look like — what would a good answer let you do?
+
+After the user replies (or sends "skip"/"go"), write `$Z_HARNESS_PLAN_DIR/GRILL.md` with the following two sections:
+
+```markdown
+## Sharpened problem
+
+<synthesize the original topic + any clarifications the user gave into 2–4 sentences
+ that name the problem, the key constraint(s), and the intended outcome.
+ If the user replied "skip" or "go", restate the raw topic verbatim here.>
+
+## Open branches
+
+<!-- populated by Phase 1 ideators -->
+```
+
+The `## Sharpened problem` text from GRILL.md flows through §1c-ii as seed framing alongside any pre-existing GRILL content, and is folded into the `input_hash` at §1d so a changed sharpen invalidates stale cache.
 
 ```bash
-if [ -z "$SHARPEN_GATE_DECISION" ]; then
-  TOPIC_LEN=${#TOPIC}   # TOPIC = the cleaned topic string from Setup
-  # Heuristic: fast-path crisp if the topic looks sufficiently specific
-  # (≥40 chars with at least one colon/slash/number/quoted term or file-ext pattern)
-  if echo "$TOPIC" | grep -qE '(\.|/|:|[0-9]|"[^"]|`[^`])' && [ "$TOPIC_LEN" -ge 40 ]; then
-    SHARPEN_GATE_DECISION="skip"
-    SHARPEN_GATE_REASON="heuristic: topic has concrete markers and sufficient length"
-  elif [ "$TOPIC_LEN" -lt 15 ]; then
-    SHARPEN_GATE_DECISION="sharpen"
-    SHARPEN_GATE_REASON="heuristic: topic is very short / likely a stub"
-  fi
-fi
+SHARPEN_GATE_DECISION="sharpened"
 ```
 
-If the heuristic left `SHARPEN_GATE_DECISION` empty (ambiguous topic), dispatch one Haiku call:
+Proceed to 0-count → 0a → scope-probe.
 
-<!-- RUNTIME-GATE: subagent; non-supporting drivers skip this Agent() call and
-     treat the result as SHARPEN_GATE_DECISION="skip" (conservative: don't
-     force sharpening when the driver cannot run subagents). -->
-```
-Agent(
-  subagent_type="general-purpose",
-  model="haiku",
-  description="Sharpen gate: evaluate topic specificity",
-  prompt="Evaluate whether this brainstorm topic is CRISP (already names a concrete problem + constraints + scope) or VAGUE (abstract, stub, or missing key constraints).
-
-Topic: <topic verbatim>
-
-Respond with exactly two lines:
-  DECISION: skip
-  REASON: <one sentence>
-or
-  DECISION: sharpen
-  REASON: <one sentence>
-
-CRISP = names a concrete problem AND has at least one explicit constraint (technology, file/module, size limit, audience, or timeframe). VAGUE = missing the problem, missing constraints, or is a 1-3 word stub."
-)
-```
-
-Parse the response and complete the gate:
-
-```bash
-if [ -z "$SHARPEN_GATE_DECISION" ]; then
-  # Extract DECISION and REASON from the Haiku response stored in HAIKU_RESPONSE
-  SHARPEN_GATE_DECISION="$(echo "$HAIKU_RESPONSE" | grep '^DECISION:' | head -1 | sed 's/^DECISION: *//' | tr -d '[:space:]')"
-  SHARPEN_GATE_REASON="$(echo "$HAIKU_RESPONSE" | grep '^REASON:' | head -1 | sed 's/^REASON: *//')"
-  # Fallback on parse failure: treat as skip (conservative — never force sharpening on bad parse)
-  [ -z "$SHARPEN_GATE_DECISION" ] && SHARPEN_GATE_DECISION="skip" && SHARPEN_GATE_REASON="haiku parse failed — defaulting to skip"
-fi
-```
-
-**Act on the decision:**
-
-- **`skip`** — log the event and proceed to 0-count (count parse) → 0a (axis taxonomy) → 0b (fast-path check) → scope-probe as normal. Phase 1c-ii will still ingest any pre-existing GRILL.md.
-- **`sharpen`** — auto-invoke z-sharpen inline before scope-probe:
-
-  ```bash
-  # Inline z-sharpen: run the sharpen conversation to produce GRILL.md
-  # Z_HARNESS_PLAN_DIR and Z_HARNESS_SLUG are already exported from Setup.
-  # z-sharpen writes $Z_HARNESS_PLAN_DIR/GRILL.md on convergence and exits.
-  # "Inline" here means: reproduce the z-sharpen protocol in this same conversation
-  # turn (no sub-agent dispatch, since z-sharpen is a c1 conversational command just
-  # like z-brainstorm). Run the sharpen interview per commands/z-sharpen.md:
-  #   Stage 1 — restate framing; Stage 2 — probe/reframe; Stage 3 — converge;
-  #   Stage 4 — write GRILL.md.
-  # The sharpen run emits its own sharpen_run_start / sharpen_convergence /
-  # sharpen_run_end events (from z-sharpen's event schema).
-  # After convergence, GRILL.md is present and Phase 1c-ii will ingest it as
-  # seed framing. If the user abandons the sharpen interview, log the abandon
-  # and continue without GRILL.md (treat as if SHARPEN_GATE_DECISION were "skip").
-  SHARPEN_ABANDONED=0
-  <run z-sharpen inline per commands/z-sharpen.md protocol>
-  # On sharpen abandon: set SHARPEN_ABANDONED=1
-  ```
-
-  After inline z-sharpen completes (or the user abandons), proceed to 0-count → 0a → scope-probe.
-
-**Emit `sharpen_gate` event regardless of decision:**
+**Emit `sharpen_gate` event regardless of path:**
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" sharpen_gate \
-  "$(python3 -c 'import json,sys; print(json.dumps({"decision":sys.argv[1],"reason":sys.argv[2],"grill_md_existed":sys.argv[3]=="1"}))' \
-     "$SHARPEN_GATE_DECISION" "$SHARPEN_GATE_REASON" "${GRILL_EXISTED:-0}")"
+  "$(python3 -c 'import json,sys; print(json.dumps({"decision":sys.argv[1],"grill_md_existed":sys.argv[2]=="1"}))' \
+     "$SHARPEN_GATE_DECISION" "${GRILL_EXISTED:-0}")"
 ```
 
 ---
@@ -590,10 +535,17 @@ Record `depends_on: [MAP.md]` in the eventual BRAINSTORM.md frontmatter if a ter
 
 ### 1c-ii. GRILL.md seed framing (if present)
 
+**GRILL.md sources:** `GRILL.md` is written by two distinct paths — both produce the same file format so this section reads them identically:
+
+1. **Lightweight inline sharpen (Phase 0, always-on):** When GRILL.md did not already exist, the §0-sharpen step posed 1–2 clarifying questions in prose, collected the user's reply, and wrote `GRILL.md` with a `## Sharpened problem` block (synthesizing the topic + clarifications) and an empty `## Open branches` block. This is the normal path for a new brainstorm.
+2. **Full GRILL interview (opt-in, /z-grill):** A pre-existing GRILL.md from a prior full interview is read verbatim. When this path fires, Phase 0 emitted `grill_existed` and skipped the lightweight sharpen entirely.
+
+In both cases GRILL.md exists by the time Phase 1 runs. **An implementer must not make the Phase 0 lightweight sharpen file-less** — if §0-sharpen does not write `## Sharpened problem` to GRILL.md, this seed path is broken and the `input_hash` invariant in §1d is violated.
+
 If `$Z_HARNESS_PLAN_DIR/GRILL.md` exists, read it and extract two sections:
 
-- `## Sharpened problem` — the refined problem statement from the grill interview
-- `## Open branches` — unresolved decisions that remain after grilling
+- `## Sharpened problem` — either the refined problem from the lightweight sharpen or from the full grill interview
+- `## Open branches` — unresolved decisions (populated by Phase 1 ideators; may be empty when written by the lightweight sharpen)
 
 Inline both sections as **seed framing** in the scaffolding payload, placed after any terrain content. Prefix the block with a brief label so ideators understand its provenance:
 
@@ -623,7 +575,7 @@ input_hash = sha256(canonicalize(
 )).hexdigest()[:16]
 ```
 
-`grill_seed_content_or_empty` is the value of `GRILL_SEED_CONTENT` from §1c-ii, or an empty string if GRILL.md was absent. Including GRILL.md in the hash ensures that a changed GRILL.md invalidates any stale cache hit and forces brainstorm to regenerate.
+`grill_seed_content_or_empty` is the value of `GRILL_SEED_CONTENT` from §1c-ii, or an empty string if GRILL.md was absent. In the normal path (new brainstorm), GRILL.md is written by the Phase 0 lightweight inline sharpen, so `GRILL_SEED_CONTENT` contains the `## Sharpened problem` text synthesized from the user's clarifications — this means a changed lightweight-sharpen answer invalidates any stale cache hit just as a changed full GRILL interview would. In the pre-existing GRILL.md path (`grill_existed`), the same formula applies unchanged. Including GRILL.md in the hash ensures that any change to the sharpened-problem content — from either source — forces brainstorm to regenerate.
 
 `canonicalize`: strip leading/trailing whitespace; collapse all internal runs of whitespace to a single space.
 
@@ -849,6 +801,8 @@ For each overflow ideator batch, invoke the **Re-spin machinery** (see `### Re-s
 - `RESPIN_DIRECTION` = "Wide-mode overflow: produce a framing that diverges from all prior framings on a different axis (different core hypothesis, different problem decomposition, different target user, or different solution lever)."
 - `RESPIN_WAVE` = current wave number (starting at 1 for first overflow wave, capped at 3 — re-spin machinery cap applies to the discussion loop; for wide-mode overflow waves we use separate tracking below)
 - `RESPIN_PRIOR_FRAMINGS` = all framing blocks returned so far (initially the wave-1 blocks)
+- `RESPIN_CAP=3` — wide-mode overflow caps at 3 overflow waves
+- `RESPIN_MODE=diverge` — overflow waves always use the anti-seed divergence template
 
 **Wide-mode overflow wave tracking** (separate from the discussion-loop re-spin cap):
 
@@ -1328,8 +1282,12 @@ This branch is a **discussion loop**. There is no menu; interpret the user's fre
 - End your turn. Do NOT write `chosen_framing` yet.
 
 **Re-spin** — the user wants divergent options (see re-spin machinery, T007).
-- Acknowledge the re-spin request and note "re-spin 1/3, ~X tokens" before dispatching.
+- Invoke the re-spin machinery with `RESPIN_MODE=diverge` and `RESPIN_CAP=` (empty — no cap on discussion-loop re-spins). Acknowledge the re-spin request and note "re-spin 1/3, ~X tokens" before dispatching.
 - After the re-spin returns, produce an updated ranked briefing incorporating the new framings and end your turn.
+
+**Refine** — the user likes one or more framings and wants to go deeper rather than diverge.
+- Invoke the re-spin machinery with `RESPIN_MODE=refine` and `RESPIN_CAP=` (empty — no cap on refine waves). Set the three machinery inputs separately: `RESPIN_DIRECTION` = the user's stated deepening direction (the axis or angle they want to explore further, extracted from their message); `RESPIN_LIKED_FRAMINGS` = the text of the liked framing block(s) extracted from BRAINSTORM.md; `RESPIN_USER_REACTION` = the user's reaction text summarizing what they found promising (one to three sentences from their message). Keep `RESPIN_MODE=refine` and `RESPIN_CAP=` (empty, uncapped).
+- After the wave returns, present an updated deepened briefing and end your turn.
 
 **Lock in** — the user clearly selects a framing (e.g. "go with Codex", "I like option 2", "use the synthesized one", "let's do X").
 
@@ -1385,21 +1343,23 @@ Before executing a re-spin wave, the caller must have determined:
 - `RESPIN_DIRECTION` — the narrowed direction string from the user (e.g. "focus on the security axis" or the user's challenge text). If the caller is the discussion loop, derive this from the user's challenge or re-spin request. If the caller is wide-mode overflow, this is the divergence axis not yet covered by prior waves.
 - `RESPIN_WAVE` — the wave number being dispatched (1, 2, or 3). Track this in the run context. Wave 1 is the first re-spin (not the original Phase 2 dispatch).
 - `RESPIN_PRIOR_FRAMINGS` — the concatenated framing blocks (five-section schema) from all ideators dispatched so far (Phase 2 wave + any prior re-spin waves). Extract these from the BRAINSTORM.md body — every `## Framing` subsection under every wave header.
+- `RESPIN_CAP` — integer or empty. When set to an integer, no more than that many re-spin waves may be dispatched. When empty (no value), the cap check is skipped entirely and waves are unlimited. **Wide-mode overflow passes `RESPIN_CAP=3`; the discussion-loop passes `RESPIN_CAP=` (empty, no cap).**
+- `RESPIN_MODE` — `diverge` or `refine`. Controls which prompt template is used. `diverge` = existing anti-seed behavior (generate framings that diverge from all prior framings). `refine` = new deepening behavior (build on the user's liked framing(s) as a positive seed; deepen and extend the chosen axis; forbid axis-switching). **Wide-mode overflow always passes `RESPIN_MODE=diverge`; the discussion-loop passes `RESPIN_MODE` derived from the user's intent (re-spin → `diverge`, refine/deepen → `refine`).**
 
 #### Cap enforcement
 
-**Hard cap: 3 re-spin waves maximum.** Before dispatching:
+**Conditional cap enforcement.** When `RESPIN_CAP` is set to an integer, enforce it before dispatching. When `RESPIN_CAP` is empty, skip the check entirely (no cap). Before dispatching:
 
 ```bash
-if [[ "${RESPIN_WAVE:-1}" -gt 3 ]]; then
+if [[ -n "${RESPIN_CAP}" && "${RESPIN_WAVE:-1}" -gt "${RESPIN_CAP}" ]]; then
   # Inform the user that the re-spin cap has been reached.
   # Do NOT dispatch any ideators. Return to the discussion loop.
-  echo "Re-spin cap reached (3/3). No further re-spin waves are available for this brainstorm run." >&2
+  echo "Re-spin cap reached (${RESPIN_CAP}/${RESPIN_CAP}). No further re-spin waves are available for this brainstorm run." >&2
   exit 0
 fi
 ```
 
-If the cap is reached, tell the user conversationally: "We've reached the re-spin limit (3 waves). If the current options still don't fit, consider a Restart to brainstorm a refined topic from scratch." Do not dispatch any ideators. End your turn.
+If the cap is reached, tell the user conversationally: "We've reached the re-spin limit (`<RESPIN_CAP>` waves). If the current options still don't fit, consider a Restart to brainstorm a refined topic from scratch." Do not dispatch any ideators. End your turn.
 
 #### Subset selection
 
@@ -1439,6 +1399,38 @@ Produce something that diverges from all of them — attack a different axis (di
 
 <IDEATOR_SCHEMA (same five-section schema as Phase 2)>
 ```
+
+#### Refine-mode prompt construction
+
+When `RESPIN_MODE=refine`, use this template instead of the anti-seed template. The refine prompt injects the user's liked framing(s) and reaction as a **positive deepening seed** and instructs ideators to deepen and extend along the chosen axis. Axis-switching is explicitly forbidden.
+
+Before building the refine prompt, the caller must also have:
+
+- `RESPIN_LIKED_FRAMINGS` — the text of the framing(s) the user selected or expressed positive interest in (extract from BRAINSTORM.md or from the user's reply). At minimum one framing block (five-section schema). May include user reaction summary.
+- `RESPIN_USER_REACTION` — a brief summary of what the user said they liked or found promising (one to three sentences, extracted from the user's message).
+
+Full refine-mode prompt template for each re-spin ideator:
+
+```
+<PERSONA_PREFIX (same resolution as Phase 2 — draw a fresh random persona for this ideator slot for this wave)>
+MODE: brainstorm-refine
+
+Topic: <topic>
+
+Deepening direction from the user: <RESPIN_DIRECTION>
+
+The user found the following framing(s) promising and wants to go deeper on this axis:
+
+<RESPIN_LIKED_FRAMINGS>
+
+What the user said about why they liked it: <RESPIN_USER_REACTION>
+
+Your task: DEEPEN and EXTEND along the same axis as the liked framing(s) above. Explore further implications, edge cases, alternative mechanisms, or underexplored sub-angles within the same core hypothesis and direction. Do NOT switch to a different axis, different core hypothesis, or different problem decomposition. Do NOT simply restate the liked framing — produce a genuinely new perspective that builds on it.
+
+<IDEATOR_SCHEMA (same five-section schema as Phase 2)>
+```
+
+**Key behavioral differences from diverge mode:** The refine prompt provides a positive seed (what to build on) rather than a negative seed (what to avoid). Axis-switching is explicitly forbidden. The goal is depth within the chosen direction, not breadth across new directions.
 
 #### Cost estimate and user notification
 
@@ -1514,11 +1506,14 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 On success (at least 1 surviving ideator), append to `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md` under a new wave header. Do NOT rewrite the file — append only:
 
+**For `RESPIN_MODE=diverge` waves:**
+
 ```markdown
 
 ## Re-spin wave <RESPIN_WAVE>
 
 <!-- re-spin direction: <RESPIN_DIRECTION> -->
+<!-- mode: diverge; direction: <RESPIN_DIRECTION> -->
 <!-- ideators: <list of dispatched ideators, e.g. claude, codex>; failed: <list or "none"> -->
 
 ### Framing — <ideator-id> (re-spin wave <RESPIN_WAVE>)
@@ -1530,7 +1525,26 @@ On success (at least 1 surviving ideator), append to `$Z_HARNESS_PLAN_DIR/BRAINS
 <five-section block from second ideator, if surviving>
 ```
 
-The wave header (`## Re-spin wave N`) makes the file self-describing and allows the discussion loop to locate all prior framings by scanning from the top. The `<!-- re-spin direction -->` comment preserves the narrowing context for any future resumption.
+**For `RESPIN_MODE=refine` waves:**
+
+```markdown
+
+## Re-spin wave <RESPIN_WAVE>
+
+<!-- re-spin direction: <RESPIN_DIRECTION> -->
+<!-- mode: refine; direction: <RESPIN_DIRECTION> -->
+<!-- ideators: <list of dispatched ideators, e.g. claude, codex>; failed: <list or "none"> -->
+
+### Framing — <ideator-id> (re-spin wave <RESPIN_WAVE>)
+
+<five-section block from ideator, verbatim>
+
+### Framing — <ideator-id> (re-spin wave <RESPIN_WAVE>)
+
+<five-section block from second ideator, if surviving>
+```
+
+The wave header (`## Re-spin wave N`) makes the file self-describing and allows the discussion loop to locate all prior framings by scanning from the top. The `<!-- re-spin direction -->` comment preserves the narrowing context for any future resumption. The `<!-- mode: ... -->` comment allows downstream tools and any future resumption logic to distinguish diverge waves from refine waves without re-parsing the prompt template used.
 
 #### Post-dispatch: return to the caller
 
@@ -1655,7 +1669,7 @@ JSON
 | `heavy_pair_selected` | HEAVY mode: user chose a (chunk, framing) pair | `chunk_id`, `framing` |
 | `framing_locked` | LIGHT/MEDIUM branch: user unambiguously locked in a framing (conversational) | `chosen_framing` |
 | `doc_drift` | doc-fetcher returned a DRIFT WARNING for a concept | `concept`, `claim`, `reality`, `file` |
-| `sharpen_gate` | Phase 0 sharpen-vs-skip decision | `decision` (`sharpen`\|`skip`), `reason`, `grill_md_existed` |
+| `sharpen_gate` | Phase 0 sharpen gate decision | `decision` (`grill_existed`\|`sharpened`), `grill_md_existed` |
 | `count_parsed` | Phase 0 ideator count extracted from NL invocation | `wide_n`, `default_used` |
 | `wide_suppressed_heavy` | N>3 wide request suppressed HEAVY chunking (D2) | `requested_n`, `scope_mode` |
 | `wide_dispatch` | Wide mode confirmed by user; all waves + clusterer dispatched | `wide_n`, `waves`, `overflow_model` |
