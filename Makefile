@@ -1,12 +1,12 @@
 SHELL := /usr/bin/env bash
-.PHONY: test test-sh conformance conformance-live conformance-record conformance-strict lint lint-strict lint-frontmatter lint-halt preflight bench-autonomy-check test-ecc-lessons export
+.PHONY: test test-sh conformance conformance-live conformance-record conformance-strict lint lint-strict lint-frontmatter lint-halt preflight bench-autonomy-check test-ecc-lessons export version-sync version-check
 
 # Full Python test suite: the unit/integration tests under tests/, the
 # script-level tests under scripts/, and the runtime dispatch + driver tests
 # under runtime/ (runtime/tests/ + runtime/drivers/*/tests/). This is the primary
 # regression gate and is what CI (.github/workflows/tests.yml) runs.
 # Requires Python 3.11+ (tomllib).
-test:
+test: version-check
 	python3 -m pytest tests/ scripts/ runtime/
 
 # Standalone shell test scripts (bash assertion harnesses, not pytest).
@@ -84,6 +84,16 @@ lint-halt:
 
 preflight:
 	bash scripts/preflight.sh
+
+# Version propagation. PATCH is auto-derived from the git commit count; the
+# human-controlled MAJOR.MINOR lives in ./VERSION. `version-sync` rewrites the
+# plugin manifests; `version-check` fails loudly on drift (wired into `test` so
+# CI catches a commit whose manifests weren't stamped by the pre-commit hook).
+version-sync:
+	bash scripts/sync-version.sh sync
+
+version-check:
+	bash scripts/sync-version.sh --check
 
 # Benchmark autonomy pre-run gate.
 # Asserts (a) quick-build hot-path AskUserQuestion callsites are REGISTERED

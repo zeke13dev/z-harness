@@ -161,9 +161,30 @@ _CODEX_PLUGIN_MANIFEST: dict[str, Any] = {
 }
 
 
-def _render_plugin_manifest() -> str:
+def _resolve_version(repo_root: Path) -> str | None:
+    """Read the stamped version from the committed Claude plugin manifest.
+
+    Single source of truth: scripts/sync-version.sh stamps the version
+    (MAJOR.MINOR.<commit-count>) into .claude-plugin/plugin.json at commit time.
+    The codex manifest mirrors that value so Codex busts its cache on every
+    commit too. Returns None if the manifest or field is absent (older trees).
+    """
+    manifest = repo_root / ".claude-plugin" / "plugin.json"
+    try:
+        return json.loads(manifest.read_text(encoding="utf-8")).get("version")
+    except (OSError, ValueError):
+        return None
+
+
+def _render_plugin_manifest(repo_root: Path) -> str:
     """Return the JSON content for .codex-plugin/plugin.json."""
-    return json.dumps(_CODEX_PLUGIN_MANIFEST, indent=2) + "\n"
+    manifest = dict(_CODEX_PLUGIN_MANIFEST)
+    version = _resolve_version(repo_root)
+    if version:
+        # Insert version right after name for readability.
+        manifest = {"name": manifest["name"], "version": version,
+                    **{k: v for k, v in manifest.items() if k != "name"}}
+    return json.dumps(manifest, indent=2) + "\n"
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +260,7 @@ def export(
     plugin_dir = export_root / ".codex-plugin"
     plugin_dir.mkdir(parents=True, exist_ok=True)
     plugin_manifest_path = plugin_dir / "plugin.json"
-    plugin_manifest_path.write_text(_render_plugin_manifest(), encoding="utf-8")
+    plugin_manifest_path.write_text(_render_plugin_manifest(repo_root), encoding="utf-8")
 
     # --- Validate CAPABILITIES.md if it exists ---
     caps_path = export_root / "CAPABILITIES.md"

@@ -15,10 +15,24 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
 > polish the wording, dropping the `_(auto)_` tag) when you're ready. Install /
 > remove with `scripts/install-changelog-hook.sh {install|remove|status}`;
 > tune behaviour via the `[changelog]` keys in `config.toml`
-> (`auto`, `types`, `repos`, `file`). Dates are `YYYY-MM-DD`; no version tags
-> yet — the project ships continuously.
+> (`auto`, `types`, `repos`, `file`). Dates are `YYYY-MM-DD`.
+>
+> **Versioning:** the version is `MAJOR.MINOR.<commit-count>` — the human part
+> (`MAJOR.MINOR`) lives in `./VERSION`; the `PATCH` is auto-derived from the git
+> commit count and stamped into every plugin manifest by a `pre-commit` hook, so
+> the version changes on every commit and the plugin cache can never go stale.
+> With marketplace auto-update on, new sessions across all hosts re-fetch the
+> latest automatically. Bump `MAJOR.MINOR` by hand to mark a meaningful release.
+> Install / remove the stamping hook with
+> `scripts/install-version-hook.sh {install|remove|status}`; `make version-check`
+> fails loudly on drift.
 
 ---
+
+## 2026-06-20
+
+- _(auto)_ Prose-first tier contracts + on-read rationale reconstruction _(z-report)_
+- _(auto)_ Close Bash-write hole in worktree-isolation hook + harden implementer/eval _(guardrail)_
 
 ## 2026-06-19
 
