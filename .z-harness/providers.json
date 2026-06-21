@@ -1,8 +1,8 @@
 {
   "version": 2,
   "roles": {
-    "consultant_primary": "gemini-cli",
-    "consultant_secondary": "codex-cli",
+    "consultant_primary": "omp-gemini",
+    "consultant_secondary": "omp-codex",
     "reviewer": "codex-cli"
   },
   "providers": {
@@ -112,6 +112,28 @@
       "stdin": true,
       "timeout_s": 300,
       "model_label": "gemini-3.5-flash",
+      "model_arg_template": null,
+      "model_env_var": null,
+      "default_model": null
+    },
+    "omp-codex": {
+      "kind": "cli",
+      "command": "omp-consult.sh",
+      "args_template": ["openai-codex/gpt-5.5", "--fallback", "codex", "exec", "-"],
+      "stdin": true,
+      "timeout_s": 300,
+      "model_label": "gpt-5.5 (omp/openai-codex OAuth)",
+      "model_arg_template": null,
+      "model_env_var": null,
+      "default_model": null
+    },
+    "omp-gemini": {
+      "kind": "cli",
+      "command": "omp-consult.sh",
+      "args_template": ["google-antigravity/gemini-3.1-pro", "--fallback", "gemini", "-p", "-", "--approval-mode", "plan", "--output-format", "text"],
+      "stdin": true,
+      "timeout_s": 300,
+      "model_label": "gemini-3.1-pro (omp/google-antigravity OAuth)",
       "model_arg_template": null,
       "model_env_var": null,
       "default_model": null
