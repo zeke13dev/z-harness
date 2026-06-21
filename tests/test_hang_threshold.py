@@ -59,6 +59,20 @@ class TestHangThreshold(unittest.TestCase):
         finally:
             os.unlink(mp)
 
+    def test_dispatch_end_keyed_by_kind_or_model(self):
+        # dispatch_end lacks role/tier; keys by kind, or <kind>:<model> if present.
+        evs = [{"kind": "dispatch_end", "wall_ms": 4000} for _ in range(6)]
+        evs += [{"kind": "dispatch_end", "subagent_model": "haiku", "wall_ms": 1000}
+                for _ in range(6)]
+        mp = _metrics(evs)
+        try:
+            out = _run(["dump", "--metrics", mp], env={"HANG_MIN_SAMPLE": "5"})
+            table = json.loads(out.stdout)
+            self.assertIn("dispatch_end", table)
+            self.assertIn("dispatch_end:haiku", table)
+        finally:
+            os.unlink(mp)
+
     def test_min_sample_excludes_sparse_class(self):
         evs = [{"kind": "review_end", "wall_ms": 1000} for _ in range(3)]
         mp = _metrics(evs)

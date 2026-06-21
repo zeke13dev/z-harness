@@ -156,6 +156,12 @@ def _inflight_subagent(transcript_path, now):
 
     # Any tool_use whose result is in this window resolves; results never precede
     # their tool_use, so an in-window tool_use with no in-window result is in-flight.
+    # The _TAIL_MAX_LINES window is sufficient for the case we care about: a
+    # foreground subagent that is *currently running* blocks the turn, so its
+    # tool_use is the last event in the transcript (nothing follows until the
+    # result) — always inside the window. A subagent invoked far earlier has
+    # necessarily already returned (its result is in the transcript), so it is not
+    # in-flight regardless of the window.
     open_starts = [(blk, ts) for tid, (blk, ts) in starts.items() if tid not in done]
     if not open_starts:
         return None
