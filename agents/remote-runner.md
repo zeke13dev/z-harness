@@ -89,6 +89,41 @@ If rsync fails — abort with `STATUS: rsync_failed`; capture rsync stderr.
 
 ### 4. Run the verify command on remote
 
+**Pre-flight: gate on box MEMORY PRESSURE before any `needs-sandbox` build/test.**
+Confinement caps the build at ~10G but does NOT stop it from OOM-killing the live
+trading stack: `systemd-oomd` kills by **user-slice memory PRESSURE (PSI)**, not
+per-unit caps. On 2026-06-20 a confined build helped push `user@1000` PSI past
+oomd's 50% threshold and oomd killed `qt-trading.service` **at load 3.2** — LOW
+load, so a load-only gate misses it. Gate on **memory headroom + PSI**, and POLL
+rather than pile on:
+
+```bash
+# Probe the box BEFORE rsync+build. avail_mb = MemAvailable; psi_some = cumulative
+# memory-pressure microseconds (rising fast = the box is thrashing on reclaim).
+PROBE='a=$(awk "/MemAvailable/{print int(\$2/1024)}" /proc/meminfo); l=$(cut -d" " -f1 /proc/loadavg); p=$(awk -F"total=" "/some/{print \$2}" /proc/pressure/memory 2>/dev/null); echo "$a $l ${p:-0}"'
+DEFER=1
+for attempt in $(seq 1 15); do          # up to ~15 min of backoff
+  read -r AVAIL LOAD1 PSI1 < <(ssh "<remote-host>" "$PROBE")
+  sleep 10
+  read -r AVAIL LOAD1 PSI2 < <(ssh "<remote-host>" "$PROBE")
+  PSI_RATE=$(( (PSI2 - PSI1) ))          # microseconds of stall in the last 10s
+  # Proceed only when memory is comfortable AND not actively thrashing.
+  if [ "$AVAIL" -ge 6000 ] && [ "$LOAD1" -lt 14 ] && [ "$PSI_RATE" -lt 200000 ]; then
+    DEFER=0; break
+  fi
+  echo "[remote-runner] box under pressure (avail=${AVAIL}MB load=${LOAD1} psi_rate=${PSI_RATE}us/10s) — deferring build, retry in 60s (attempt ${attempt}/15)" >&2
+  sleep 60
+done
+```
+
+If the box never clears (`DEFER == 1` after the loop), **do NOT run the build** —
+return `STATUS: deferred`, reason `box_pressure`, and report the last
+`avail/load/psi` so the caller can retry later or route to burst compute. Piling a
+confined build onto an already-pressured box is exactly what OOM-killed live
+trading. Thresholds are tunable (`Z_HARNESS_REMOTE_MIN_AVAIL_MB` default 6000,
+`Z_HARNESS_REMOTE_MAX_LOAD` default 14). Read-only queries / log tails skip this
+gate (they are not memory-heavy).
+
 **`needs-sandbox` commands (cargo/python — anything that runs repo code) MUST be confined.** A cold
 `libduckdb-sys` build load-crushed zeke-pc for 3h on 2026-06-12 because it ran with no memory cap
 (the assumed `qt-batch.slice` never existed). Route these through the confinement wrapper, which runs
