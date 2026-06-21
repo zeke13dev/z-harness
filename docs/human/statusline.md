@@ -71,3 +71,32 @@ scheduled hang-detector that fires when a subagent runs past its expected time �
 is the second half of this effort (`statusline-hud` plan, Workstream B) and
 replaces the daemon/poller layer of the old watchdog. The hard-deadline kill layer
 (`supervised-run.sh`) is unaffected.
+
+## Active hang-detector — enabling alerts (required)
+
+The hang-detector (`scripts/hang-check.sh`, scheduled at a per-class horizon by
+`scripts/hang-threshold.py`) is **inert until you turn notifications on** — the
+exact failure mode the old daemon had (it never alerted because `notify.level` was
+`off`). Enabling alerts is a required setup step, not optional polish:
+
+```bash
+# Pick a channel and turn notify on:
+python3 scripts/config.py set notify.level notify
+python3 scripts/config.py set notify.discord_webhook_url "https://discord.com/api/webhooks/..."
+# macOS desktop notifications work with no webhook (osascript), but a headless/remote
+# host has NO desktop — there a Discord webhook is the only channel that reaches you.
+
+# Verify it would actually deliver:
+python3 scripts/config.py should-notify --event watchdog_stall   # must print: yes
+```
+
+If `should-notify` prints `no`, the hang-detector will detect stalls but you will
+never hear about them. The `hang-check.sh` notify path reuses `notify-watchdog.sh`,
+so it honors the same `notify.level` / channel config.
+
+The duration thresholds are computed per class from history; inspect them with:
+
+```bash
+scripts/hang-threshold.py dump        # full per-class table
+scripts/hang-threshold.py for --kind review_end          # one class -> threshold secs
+```
