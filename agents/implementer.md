@@ -212,6 +212,15 @@ List anything that differs from the PLAN. This feeds into Tier 2 migration guide
 - Do not push-notify — the orchestrator handles user comms.
 - If the task is marked `REMOTE-ONLY` (touches zeke-pc) and you don't have remote access — return `status: "unable_to_complete"` with reason; orchestrator will halt and notify the user.
 
+### Guardrail-block policy (strict)
+
+If a `PreToolUse` hook **blocks** an `Edit`/`Write`/`MultiEdit` (most commonly the shared-tree worktree-isolation guard, `block-shared-tree-edit.sh`, which fires when another live session owns the working tree), treat the block as a **stop signal — never an obstacle to route around**. Specifically:
+
+- **Do NOT** re-attempt the same write through a Bash file-write (`python3 -c "open(path,'w')"`, a `python3 … <<'PY'` heredoc, `tee`, `sed -i`, `> path`, `cp`/`mv` into the path, etc.). The hook now also guards Bash writes, but heuristic Bash parsing cannot catch every form — and defeating a safety guard is wrong regardless of whether the hook happens to catch it.
+- **Do** return `status: "unable_to_complete"` with reason `guardrail_blocked`, quoting the hook's stderr message, so the orchestrator can resolve the contention (e.g. move the run into an isolated worktree, or wait for the peer's claim to expire).
+
+A guardrail block means a *human-or-orchestrator* decision is required, not a workaround.
+
 ### Deletion / destructive-action policy (strict)
 
 You will be tempted to delete files when SPEC.md mentions "rename X → Y" or "replace X with Y". **Do not delete anything that isn't explicitly listed in the task's "Files:" block as `(deleted)` or `(renamed from …)`**, including:

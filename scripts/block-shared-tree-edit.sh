@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # block-shared-tree-edit.sh — PreToolUse hook for Edit | Write | MultiEdit |
-# NotebookEdit. Concurrency-aware worktree-isolation guard.
+# NotebookEdit | Bash. Concurrency-aware worktree-isolation guard.
+#
+# Bash coverage (added 2026-06-20): an implementer that hit the Edit block once
+# routed around it with `python3 -c "open(path,'w')"` — a Bash file-write the
+# hook never saw. We now also scan Bash commands for writer patterns
+# (> / >> / tee / sed -i / cp / mv / python open(...,'w'|'a'|'x')) whose target
+# resolves into a guarded tree, and apply the SAME ownership check. Fail-open:
+# any command we cannot confidently parse as a write into a contended tree is
+# allowed, so normal Bash usage is never wedged.
 #
 # Purpose: stop two Claude sessions from editing the SAME git working tree at
 # once. On 2026-06-12 two sessions ran in the primary z-harness checkout on
@@ -37,11 +45,11 @@ TTL="${Z_HARNESS_EDIT_CLAIM_TTL:-1200}"   # idle-claim expiry, default 20 min
 PAYLOAD="$(cat 2>/dev/null || true)"
 [ -n "$PAYLOAD" ] || exit 0                # empty stdin -> allow
 
-# --- parse session_id, edited path, cwd (jq preferred, python3 fallback) ---
+# --- parse session_id, tool_name, edited path, bash command, cwd ---
 parse() {
   if command -v jq >/dev/null 2>&1; then
     printf '%s' "$PAYLOAD" | jq -r \
-      '[(.session_id // ""), (.tool_input.file_path // .tool_input.notebook_path // ""), (.cwd // "")] | @tsv' \
+      '[(.session_id // ""), (.tool_name // ""), (.tool_input.file_path // .tool_input.notebook_path // ""), (.tool_input.command // ""), (.cwd // "")] | @tsv' \
       2>/dev/null && return 0
   fi
   printf '%s' "$PAYLOAD" | python3 -c '
@@ -52,72 +60,153 @@ except Exception:
     sys.exit(0)
 ti = o.get("tool_input") or {}
 p = ti.get("file_path") or ti.get("notebook_path") or ""
-print("\t".join([o.get("session_id") or "", p, o.get("cwd") or ""]))
+cmd = ti.get("command") or ""
+# tabs/newlines in the command would corrupt the TSV; strip to single-line.
+cmd = cmd.replace("\t", " ").replace("\n", " ")
+print("\t".join([o.get("session_id") or "", o.get("tool_name") or "", p, cmd, o.get("cwd") or ""]))
 ' 2>/dev/null
 }
 FIELDS="$(parse)" || exit 0
 SESSION="$(printf '%s' "$FIELDS" | cut -f1)"
-FILEPATH="$(printf '%s' "$FIELDS" | cut -f2)"
-CWD="$(printf '%s' "$FIELDS" | cut -f3)"
+TOOL="$(printf '%s' "$FIELDS" | cut -f2)"
+FILEPATH="$(printf '%s' "$FIELDS" | cut -f3)"
+COMMAND="$(printf '%s' "$FIELDS" | cut -f4)"
+CWD="$(printf '%s' "$FIELDS" | cut -f5)"
 
-[ -n "$FILEPATH" ] || exit 0               # no target -> nothing to guard
 [ -n "$SESSION" ] || exit 0                # no session id -> can't attribute
 [ "${Z_HARNESS_ALLOW_SHARED_TREE:-0}" = "1" ] && exit 0
 
-# --- resolve the worktree's per-tree git dir from the edited file's location ---
-DIR="$(dirname -- "$FILEPATH" 2>/dev/null || echo "")"
-[ -d "$DIR" ] || DIR="$CWD"
-[ -d "$DIR" ] || exit 0
-GITDIR="$(git -C "$DIR" rev-parse --absolute-git-dir 2>/dev/null)" || exit 0   # not a repo -> allow
-[ -n "$GITDIR" ] || exit 0
-
-MARKDIR="$GITDIR/z-harness-active-editors"
-mkdir -p "$MARKDIR" 2>/dev/null || exit 0
-NOW="$(date +%s 2>/dev/null)" || exit 0
-
-mtime_of() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
-
-# --- stamp/refresh OUR marker: claim epoch in content (once), mtime = heartbeat ---
-MINE="$MARKDIR/$SESSION"
-if [ ! -e "$MINE" ]; then
-  printf '%s\n' "$NOW" > "$MINE" 2>/dev/null || exit 0
-else
-  touch "$MINE" 2>/dev/null || true        # heartbeat; preserve claim epoch
+# --- build the list of write-target paths to guard ---------------------------
+# Edit family: exactly the one file_path. Bash: heuristically-extracted write
+# targets from the command (fail-open — emit nothing we cannot parse).
+CANDIDATES=""
+if [ -n "$FILEPATH" ]; then
+  CANDIDATES="$FILEPATH"
+elif [ "$TOOL" = "Bash" ] && [ -n "$COMMAND" ]; then
+  CANDIDATES="$(printf '%s' "$COMMAND" | python3 -c '
+import os, re, sys
+cmd = sys.stdin.read()
+out = []
+def add(p):
+    p = p.strip().strip("\x27\x22")
+    # ignore obvious non-file targets and process substitutions / fds
+    if not p or p.startswith("&") or p.startswith("/dev/") or p == "-":
+        return
+    out.append(p)
+def pathlike(p):
+    # A real write target looks like a filename, not a bare identifier from a
+    # comparison (1>2, a>b) or a quoted ">". Require a path separator, a dotted
+    # basename, a ~/ home ref, or an already-existing path.
+    p = p.strip().strip("\x27\x22")
+    if not p:
+        return False
+    base = os.path.basename(p)
+    return ("/" in p) or p.startswith("~") or ("." in base) or os.path.exists(p)
+# redirects:  > file   >> file   (not >&2 etc — those start with & after >).
+# Bare `>` is highly ambiguous (comparison operators, quoted text, awk/python),
+# so only treat the target as a write when it actually looks like a file path.
+for m in re.finditer(r">>?\s*([^\s|;&>()]+)", cmd):
+    if pathlike(m.group(1)):
+        add(m.group(1))
+# tee [-a] file ...
+for m in re.finditer(r"\btee\b(?:\s+-\S+)*\s+([^\s|;&>()]+)", cmd):
+    add(m.group(1))
+# sed -i ... file  (last whitespace-delimited token is the file in common usage)
+for m in re.finditer(r"\bsed\b[^|;&]*\s-\S*i\S*[^|;&]*?\s([^\s|;&>()]+)\s*(?:$|[|;&])", cmd):
+    add(m.group(1))
+# cp/mv SRC DST -> DST is the write target (last token before a delimiter)
+for m in re.finditer(r"\b(?:cp|mv)\b[^|;&]*\s([^\s|;&>()]+)\s*(?:$|[|;&])", cmd):
+    add(m.group(1))
+# python open(PATH, MODE) where MODE contains a write flag (w/a/x/+)
+for m in re.finditer(r"open\(\s*[\x27\x22]([^\x27\x22]+)[\x27\x22]\s*,\s*[\x27\x22]([^\x27\x22]+)[\x27\x22]", cmd):
+    if re.search(r"[wax+]", m.group(2)):
+        add(m.group(1))
+# de-dup, preserve order
+seen = set(); uniq = []
+for p in out:
+    if p not in seen:
+        seen.add(p); uniq.append(p)
+print("\n".join(uniq))
+' 2>/dev/null)"
 fi
 
-# --- find the owner: earliest live claim epoch, tie-break by session id ---
-OWNER=""; OWNER_CLAIM=""; OWNER_AGE=0
-for m in "$MARKDIR"/*; do
-  [ -e "$m" ] || continue
-  age=$(( NOW - $(mtime_of "$m") ))
-  if [ "$age" -gt "$TTL" ]; then
-    rm -f -- "$m" 2>/dev/null               # idle -> release claim
-    continue
-  fi
-  claim="$(head -n1 "$m" 2>/dev/null)"
-  case "$claim" in (*[!0-9]*|'') claim="$(mtime_of "$m")";; esac   # fallback if content unusable
-  base="$(basename -- "$m")"
-  if [ -z "$OWNER" ] || [ "$claim" -lt "$OWNER_CLAIM" ] \
-     || { [ "$claim" -eq "$OWNER_CLAIM" ] && [ "$base" \< "$OWNER" ]; }; then
-    OWNER="$base"; OWNER_CLAIM="$claim"; OWNER_AGE="$age"
-  fi
-done
+[ -n "$CANDIDATES" ] || exit 0             # nothing to guard -> allow
 
-# --- owner edits freely; anyone else is blocked until they isolate ---
-[ "$OWNER" = "$SESSION" ] && exit 0
-[ -z "$OWNER" ] && exit 0                    # race: nothing live -> allow
+NOW="$(date +%s 2>/dev/null)" || exit 0
+mtime_of() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
 
-WT="$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || echo "$DIR")"
-{
-  echo "BLOCKED: another Claude session is already editing this working tree."
-  echo "  worktree : $WT"
-  echo "  owned by : session $OWNER (heartbeat ${OWNER_AGE}s ago)"
-  echo "  you      : session $SESSION"
-  echo
-  echo "Two sessions sharing one working tree is what diverged main on 2026-06-12."
-  echo "Isolate into your own worktree, then relaunch this session there:"
-  echo "    git worktree add ../$(basename "$WT")-<topic> -b <branch> origin/main"
-  echo
-  echo "Deliberate solo override: export Z_HARNESS_ALLOW_SHARED_TREE=1"
-} >&2
-exit 2
+# --- guard one path: stamp our marker in its tree, block if a peer owns it ----
+# Echoes "BLOCK <worktree> <owner> <owner_age>" to stdout and returns 2 when a
+# different live session owns the tree; returns 0 (allow) otherwise. Fail-open.
+guard_path() {
+  gp_path="$1"
+  gp_dir="$(dirname -- "$gp_path" 2>/dev/null || echo "")"
+  # resolve the path relative to the tool's CWD when it is not absolute
+  case "$gp_path" in
+    /*) : ;;
+    *)  [ -d "$gp_dir" ] || gp_dir="$CWD/$gp_dir" ;;
+  esac
+  [ -d "$gp_dir" ] || gp_dir="$CWD"
+  [ -d "$gp_dir" ] || return 0
+  gp_gitdir="$(git -C "$gp_dir" rev-parse --absolute-git-dir 2>/dev/null)" || return 0
+  [ -n "$gp_gitdir" ] || return 0
+
+  gp_markdir="$gp_gitdir/z-harness-active-editors"
+  mkdir -p "$gp_markdir" 2>/dev/null || return 0
+
+  gp_mine="$gp_markdir/$SESSION"
+  if [ ! -e "$gp_mine" ]; then
+    printf '%s\n' "$NOW" > "$gp_mine" 2>/dev/null || return 0
+  else
+    touch "$gp_mine" 2>/dev/null || true
+  fi
+
+  gp_owner=""; gp_claim=""; gp_age=0
+  for m in "$gp_markdir"/*; do
+    [ -e "$m" ] || continue
+    age=$(( NOW - $(mtime_of "$m") ))
+    if [ "$age" -gt "$TTL" ]; then rm -f -- "$m" 2>/dev/null; continue; fi
+    claim="$(head -n1 "$m" 2>/dev/null)"
+    case "$claim" in (*[!0-9]*|'') claim="$(mtime_of "$m")";; esac
+    base="$(basename -- "$m")"
+    if [ -z "$gp_owner" ] || [ "$claim" -lt "$gp_claim" ] \
+       || { [ "$claim" -eq "$gp_claim" ] && [ "$base" \< "$gp_owner" ]; }; then
+      gp_owner="$base"; gp_claim="$claim"; gp_age="$age"
+    fi
+  done
+
+  [ "$gp_owner" = "$SESSION" ] && return 0
+  [ -z "$gp_owner" ] && return 0
+  gp_wt="$(git -C "$gp_dir" rev-parse --show-toplevel 2>/dev/null || echo "$gp_dir")"
+  printf 'BLOCK\t%s\t%s\t%s\n' "$gp_wt" "$gp_owner" "$gp_age"
+  return 2
+}
+
+# --- check every candidate; block on the first one a live peer owns ----------
+while IFS= read -r cand; do
+  [ -n "$cand" ] || continue
+  RESULT="$(guard_path "$cand")"; RC=$?
+  if [ "$RC" -eq 2 ]; then
+    WT="$(printf '%s' "$RESULT" | cut -f2)"
+    OWNER="$(printf '%s' "$RESULT" | cut -f3)"
+    OWNER_AGE="$(printf '%s' "$RESULT" | cut -f4)"
+    {
+      echo "BLOCKED: another Claude session is already editing this working tree."
+      echo "  worktree : $WT"
+      echo "  target   : $cand"
+      echo "  owned by : session $OWNER (heartbeat ${OWNER_AGE}s ago)"
+      echo "  you      : session $SESSION"
+      echo
+      echo "Two sessions sharing one working tree is what diverged main on 2026-06-12."
+      [ "$TOOL" = "Bash" ] && echo "(This was a Bash file-write — do NOT route around the guard; isolate instead.)"
+      echo "Isolate into your own worktree, then relaunch this session there:"
+      echo "    git worktree add ../$(basename "$WT")-<topic> -b <branch> origin/main"
+      echo
+      echo "Deliberate solo override: export Z_HARNESS_ALLOW_SHARED_TREE=1"
+    } >&2
+    exit 2
+  fi
+done <<EOF
+$CANDIDATES
+EOF
+exit 0

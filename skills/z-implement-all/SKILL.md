@@ -1039,6 +1039,17 @@ fi
 - When `BFS_DONE=1`, exit the BFS loop and proceed to Finalize.
 - `unknown` status is treated as `unmet` by the evaluator; T010 MUST NOT override this
   conservative rule.
+- **Prose/doc-plan false-negative caveat.** `evaluate-acceptance` is a keyword/diff matcher,
+  not a reader. For INTENT plans whose acceptance criteria are satisfied by *prose* changes
+  (markdown command specs, docs, config narratives) it systematically under-credits and can
+  return `VERDICT: continue` with criteria that are in fact met — spinning a wasted BFS level
+  (extra task-tree-generator dispatch + spurious tasks). When this is plausible (the diff is
+  predominantly `.md`/doc edits and the flagged criteria read as prose assertions), the
+  orchestrator MUST spot-verify each flagged criterion against the actual diff/file (grep the
+  exact strings the criterion asserts). It MAY then terminate the BFS with **documented
+  per-criterion line-level evidence** recorded in an `intent_bfs_complete` note — a bounded,
+  evidence-backed exception to "unknown == unmet". This is NOT a blanket override: a criterion
+  with no concrete file evidence stays `unmet` and the loop continues.
 
 4. Read `$TASKS_FILE` into memory — always set by step 1's fast path or step 3's default above. You'll re-read between batches to pick up status flips. **Do NOT pre-extract SPEC/PLAN slices in main thread** — subagents will Read them directly from `$BASE/SPEC.md` and `$BASE/PLAN.md` themselves. This keeps the orchestrator main-thread context light across many tasks.
 
