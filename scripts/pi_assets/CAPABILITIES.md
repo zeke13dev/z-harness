@@ -9,10 +9,13 @@ How z-harness constructs map onto [pi](https://pi.dev), and where the mapping is
 - **Commands & skills as prompts.** Each command and skill becomes `prompts/<id>.md`, loadable via pi's `prompts` setting and invokable as `/<id>`.
 - **Skills natively.** z-harness is also installed as a pi *package*, so its `skills/` auto-surface. `Skill("z-foo")` call sites are rewritten to `> [pi] Run the /z-foo skill.`
 - **Tools.** `read, grep, find, ls, bash, write, edit` map directly. `Glob` maps to `find`.
+- **Model pinning (omp v16).** The `omp` binary (v16.1.11) supports `--model provider/id` fuzzy pinning, so per-agent models are no longer dropped — an exported agent can name e.g. `openai-codex/gpt-5.5` or `google-antigravity/gemini-3.1-pro`. The previous "no pinning / deepseek-only" limitation is gone.
+- **OAuth provider auth.** omp authenticates subscriptions via `/login` (ChatGPT/Codex, Claude Pro/Max, GitHub Copilot, google-antigravity, xAI Grok); creds live in omp's auth-broker vault. This is the same path z-harness's omp consult arms use (`scripts/omp-consult.sh`); see `docs/human/pi-setup.md`.
+- **Native skills + profiles (omp v16).** omp discovers `skills/` natively and supports isolated `--profile` auth/session sandboxes.
 
 ## Unsupported
 
-- **No `model` pinning by default.** Source agents pin Claude models (`haiku`, `sonnet`); these are dropped on export so agents inherit pi's configured default. In a deepseek-only setup there is no cheap Haiku tier — the fan-out win is **context isolation**, not cost. Re-pin per agent in `scripts/pi_assets/` if you add a provider.
+- **Claude model-id mapping is not 1:1.** Source agents pin Claude tiers (`haiku`, `sonnet`); there is no automatic translation to an omp `provider/id`, so on export those pins are dropped and the agent inherits omp's configured default unless an explicit `--model` is set in `scripts/pi_assets/`. Pinning itself works (above) — only the automatic Claude→omp tier mapping is absent.
 - **`AskUserQuestion()` / `TaskCreate()` / `SubagentCreate()` / plan-mode tools** have no native pi tool. Those call lines are rewritten to a `> [pi]` inline-handling hint; the orchestrator must ask the user or track state itself.
 - **Dropped tools.** `WebFetch`, `WebSearch`, `Agent`-as-tool, `NotebookEdit`, and other Claude-only tools are removed from agent allowlists (run `export-pi.py` to see the per-agent drop list).
 - **Multi-line call rewrites are line-based.** Only the line containing `Agent(` / `Skill(` is rewritten; argument lines on following lines (e.g. a `prompt="""..."""` block) are left in place. Treat the `> [pi]` hint as the authoritative instruction and ignore residual argument text.
