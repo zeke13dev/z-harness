@@ -3,8 +3,9 @@
 #
 # Checks:
 #   1. lint-askuser --strict: asserts that all AskUserQuestion callsites in the
-#      quick-build hot-path files (commands/z-plan.md, commands/z-implement-all.md)
-#      are REGISTERED (paired with a resolve-question or check-no-ask call).
+#      quick-build hot-path files (skills/z-plan/SKILL.md,
+#      skills/z-implement-all/SKILL.md) are REGISTERED (paired with a
+#      resolve-question or check-no-ask call).
 #   2. Policy coverage: every quick-build hot-path gate (question_id referenced in
 #      those files) is present in z-harness/bench/pier/benchmark-autonomy.yaml
 #      and the policy loads without validation errors.
@@ -54,11 +55,11 @@ FAIL=0
 # ---------------------------------------------------------------------------
 
 echo "==> bench-autonomy-check step 1: lint-askuser --strict (hot-path callsite audit)"
-echo "    Scoping to: commands/z-plan.md, commands/z-implement-all.md"
+echo "    Scoping to: skills/z-plan/SKILL.md, skills/z-implement-all/SKILL.md"
 
 HOT_PATH_FILES=(
-  "$REPO_ROOT/commands/z-plan.md"
-  "$REPO_ROOT/commands/z-implement-all.md"
+  "$REPO_ROOT/skills/z-plan/SKILL.md"
+  "$REPO_ROOT/skills/z-implement-all/SKILL.md"
 )
 
 UNREGISTERED_HOT=0
@@ -139,9 +140,9 @@ print(f"  Gates in policy: {sorted(gates_in_policy)}")
 import re
 repo_root = "$REPO_ROOT"
 hot_path_files = [
-    os.path.join(repo_root, "commands", "z-plan.md"),
-    os.path.join(repo_root, "commands", "z-implement-all.md"),
-    os.path.join(repo_root, "commands", "z-implement-next.md"),
+    os.path.join(repo_root, "skills", "z-plan", "SKILL.md"),
+    os.path.join(repo_root, "skills", "z-implement-all", "SKILL.md"),
+    os.path.join(repo_root, "skills", "z-implement-next", "SKILL.md"),
 ]
 
 pattern = re.compile(r'workflow\.[a-z_]+')
