@@ -1,6 +1,6 @@
 ---
 name: z-followup-next
-disable-model-invocation: true
+disable-model-invocation: false
 description: Claim and execute the next pending follow-up entry from the project or global sink, with staleness check, lock management, and status writeback.
 argument-hint: "[--sink=<project|global|both>] [--force-dirty] [--non-interactive]"
 runtime: c1

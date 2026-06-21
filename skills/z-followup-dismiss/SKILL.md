@@ -1,6 +1,6 @@
 ---
 name: z-followup-dismiss
-disable-model-invocation: true
+disable-model-invocation: false
 description: Dismiss a follow-up entry from any state (terminal transition). Requires a reason.
 argument-hint: "<entry-id> --reason='<text>'"
 runtime: c1

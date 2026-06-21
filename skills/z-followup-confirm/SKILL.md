@@ -1,6 +1,6 @@
 ---
 name: z-followup-confirm
-disable-model-invocation: true
+disable-model-invocation: false
 description: Transition a follow-up entry from verify → done via human confirmation or audit evidence validation.
 argument-hint: "<entry-id> --via=<human|audit> [--evidence=<path>]"
 runtime: c1

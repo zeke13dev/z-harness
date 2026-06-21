@@ -1,6 +1,6 @@
 ---
 name: z-style-init
-disable-model-invocation: true
+disable-model-invocation: false
 description: Author the project STYLE.md interactively, grounded in the repo's most idiomatic existing files (Capture). Required before /z-mr-review will run.
 argument-hint: "[--amend] [--ingest <path-to-existing-guide>]"
 runtime: c1
