@@ -1,6 +1,6 @@
 {
   "name": "z-harness",
-  "version": "1.0.277",
+  "version": "1.0.285",
   "description": "Rigorous planning + implementation pipeline: cross-LLM consultation (Gemini + Codex), push-back-by-default, archived SPEC/PLAN/TASKS, and per-task code review.",
   "author": {
     "name": "zeke"
