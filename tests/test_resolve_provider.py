@@ -32,21 +32,31 @@ SCRIPT = str(Path(__file__).parent.parent / "scripts" / "resolve-provider.py")
 # temp PATH for the duration of the module. This replicates a dev box where the
 # CLIs are present, exercising the resolution logic without the real binaries.
 _STUB_BIN = None
+# A consult=on config.toml so these tests are insulated from the live repo's
+# runtime.consult setting. Without this, a repo `.z-harness/config.toml` with
+# consult=off makes resolve-provider short-circuit to "none" for consultant/
+# reviewer roles, breaking the resolution assertions below.
+_CONSULT_ON_CONFIG = None
 
 
 def setUpModule() -> None:
-    global _STUB_BIN
+    global _STUB_BIN, _CONSULT_ON_CONFIG
     _STUB_BIN = tempfile.mkdtemp(prefix="zh-stub-bin-")
     for name in ("gemini", "codex", "claude", "agy", "cursor"):
         p = os.path.join(_STUB_BIN, name)
         with open(p, "w") as fh:
             fh.write("#!/bin/sh\nexit 0\n")
         os.chmod(p, 0o755)
+    fd, _CONSULT_ON_CONFIG = tempfile.mkstemp(prefix="zh-consult-on-", suffix=".toml")
+    with os.fdopen(fd, "w") as fh:
+        fh.write('schema_version = 2\n\n[runtime]\nconsult = "on"\n')
 
 
 def tearDownModule() -> None:
     if _STUB_BIN:
         shutil.rmtree(_STUB_BIN, ignore_errors=True)
+    if _CONSULT_ON_CONFIG and os.path.exists(_CONSULT_ON_CONFIG):
+        os.remove(_CONSULT_ON_CONFIG)
 
 # A minimal valid provider entry shape.
 def _make_provider(command: str, model_label: str) -> dict:
@@ -68,6 +78,8 @@ def _write_config(path: str, providers: dict, roles: dict) -> None:
 
 def _run(role: str, config_path: str) -> subprocess.CompletedProcess:
     env = {**os.environ, "Z_HARNESS_REPO_PROVIDERS": config_path}
+    if _CONSULT_ON_CONFIG:
+        env["Z_HARNESS_REPO_CONFIG"] = _CONSULT_ON_CONFIG
     if _STUB_BIN:
         env["PATH"] = _STUB_BIN + os.pathsep + env.get("PATH", "")
     return subprocess.run(
