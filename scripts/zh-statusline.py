@@ -31,10 +31,34 @@ RESET = "\033[0m"
 YELLOW = "\033[33m"
 CYAN = "\033[36m"
 
-# Tail window: large enough that a single long assistant line (the in-flight
-# tool_use) is never truncated, small enough to stay fast on multi-MB transcripts.
-_TAIL_BYTES = 65536
+# Tail tuning. We read the last N complete lines by scanning backward in blocks,
+# so a single huge assistant line (the in-flight tool_use carries the full subagent
+# prompt — can be hundreds of KB) is never truncated, while we still never parse a
+# whole multi-MB transcript. _TAIL_MAX_BYTES caps the backward scan for safety.
+_TAIL_BLOCK = 65536
+_TAIL_MAX_LINES = 40
+_TAIL_MAX_BYTES = 4 * 1024 * 1024
 _SUBAGENT_TOOLS = ("Agent", "Task")
+
+
+def _tail_lines(path):
+    """Return up to the last _TAIL_MAX_LINES complete lines of a file.
+
+    Scans backward in blocks until it has enough newlines, the byte cap is hit, or
+    the start is reached — so an arbitrarily long final line is captured whole
+    (the in-flight tool_use line), unlike a fixed seek-from-end which can split it.
+    """
+    with open(path, "rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        pos = fh.tell()
+        buf = b""
+        while pos > 0 and buf.count(b"\n") <= _TAIL_MAX_LINES and len(buf) < _TAIL_MAX_BYTES:
+            step = min(_TAIL_BLOCK, pos)
+            pos -= step
+            fh.seek(pos)
+            buf = fh.read(step) + buf
+    lines = buf.decode("utf-8", "replace").splitlines()
+    return lines[-_TAIL_MAX_LINES:]
 
 
 def _read_stdin_json():
@@ -100,18 +124,13 @@ def _inflight_subagent(transcript_path, now):
     if not transcript_path or not os.path.exists(transcript_path):
         return None
     try:
-        size = os.path.getsize(transcript_path)
-        with open(transcript_path, "rb") as fh:
-            if size > _TAIL_BYTES:
-                fh.seek(-_TAIL_BYTES, os.SEEK_END)
-                fh.readline()  # drop the partial first line
-            tail = fh.read().decode("utf-8", "replace")
+        tail = _tail_lines(transcript_path)
     except Exception:
         return None
 
     starts = {}   # tool_use_id -> (block, ts)
     done = set()  # tool_use_ids that have a result
-    for line in tail.splitlines():
+    for line in tail:
         line = line.strip()
         if not line:
             continue
@@ -154,10 +173,15 @@ def _zharness_tier(data, now):
     if not os.path.exists(registry):
         return None
     try:
-        out = subprocess.run(
+        # Short timeout: this runs every ~2s, so a slow registry must not stall
+        # the HUD. On non-zero exit or timeout, degrade to base tier.
+        proc = subprocess.run(
             [sys.executable, registry, "list", "--json"],
-            cwd=cwd, capture_output=True, text=True, timeout=4,
-        ).stdout
+            cwd=cwd, capture_output=True, text=True, timeout=1.5,
+        )
+        if proc.returncode != 0:
+            return None
+        out = proc.stdout
         records = json.loads(out) if out.strip() else []
     except Exception:
         return None

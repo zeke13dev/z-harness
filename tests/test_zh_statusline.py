@@ -135,6 +135,27 @@ class TestInflightDetection(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("Opus", out)
 
+    def test_huge_inflight_line_not_truncated(self):
+        # The in-flight Agent line carries the full subagent prompt and can far
+        # exceed the tail block size; it must still be detected (regression for
+        # the seek-from-end mid-line truncation blocker).
+        from datetime import datetime, timezone, timedelta
+        ts = (datetime.now(timezone.utc) - timedelta(seconds=12)).strftime(
+            "%Y-%m-%dT%H:%M:%S.000Z")
+        big = {"type": "assistant", "timestamp": ts,
+               "message": {"role": "assistant", "content": [
+                   {"type": "tool_use", "id": "toolu_big", "name": "Agent",
+                    "input": {"subagent_type": "consultant-primary",
+                              "description": "d", "prompt": "X" * 300000}}]}}
+        tx = _transcript(big)
+        try:
+            rc, out = _run(dict(BASE_STDIN, transcript_path=tx))
+            self.assertEqual(rc, 0)
+            self.assertIn("consultant-primary", out)
+            self.assertIn(">", out)
+        finally:
+            os.unlink(tx)
+
     def test_second_of_two_agents_inflight(self):
         # first agent completed, second in-flight -> show only the second
         ts1 = "2026-06-21T18:00:00.000Z"
