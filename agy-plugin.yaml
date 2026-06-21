@@ -11,230 +11,6 @@ metadata:
 # Commands → .agent/workflows/*.md
 # Each command becomes a custom chat mode (agy chat --mode <id>)
 workflows:
-  - id: z-amend
-    source: commands/z-amend.md
-    output: .agent/workflows/z-amend.md
-    description: "Amend an existing z-harness plan (INTENT.md, SPEC/PLAN/TASKS, or FIX.md) so a change is propagated consistently across all artifacts. In intent mode, re-opens the frozen contract and invalidates the current level's TASKS.md for regeneration. Prese..."
-  - id: z-attend
-    source: commands/z-attend.md
-    output: .agent/workflows/z-attend.md
-    description: "Run a z-harness command chain in attended middle-gear mode: auto-advance the plan/audit/test/implement/review chain, halt and ask inline only on the four-category gate taxonomy, and yield for a user /clear at context boundaries."
-  - id: z-audit-plan-style
-    source: commands/z-audit-plan-style.md
-    output: .agent/workflows/z-audit-plan-style.md
-    description: "Audit a plan's artifacts (SPEC.md, PLAN.md, TASKS.md) for the same kind of code-quality issues /z-mr-review finds on a diff — defensive bloat, premature abstraction, DRY/KISS/SOLID violations, over-engineering, STYLE.md drift — BEFORE any code is ..."
-  - id: z-audit-plan
-    source: commands/z-audit-plan.md
-    output: .agent/workflows/z-audit-plan.md
-    description: "Audit a plan's artifacts (SPEC.md, PLAN.md, TASKS.md) before execution. Reality-checks references against the codebase, verifies best practices/design, and runs a cross-LLM adversarial review. Emits PLAN_AUDIT_REPORT.md."
-  - id: z-audit
-    source: commands/z-audit.md
-    output: .agent/workflows/z-audit.md
-    description: "Audit a target component across one or more dimensions (correctness / perf / cleanliness / design). Pre-flight scopes (target, dimensions, optional rubric file), spawns one auditor subagent per dimension in parallel, runs bundled Gemini+Codex cons..."
-  - id: z-axiom-approve
-    source: commands/z-axiom-approve.md
-    output: .agent/workflows/z-axiom-approve.md
-    description: "Approve a candidate axiom. Shows the candidate, its evidence, and falsifiability state. Requires explicit user confirmation before approving. Reuses /z-suggest-memory --from-candidate-json for the MEMORY-overlap advisory. Regenerates the kernel sy..."
-  - id: z-axiom-edit
-    source: commands/z-axiom-edit.md
-    output: .agent/workflows/z-axiom-edit.md
-    description: "Edit a field on a candidate or approved axiom record. On approved records, re-validates the graph and regenerates the kernel."
-  - id: z-axiom-list
-    source: commands/z-axiom-list.md
-    output: .agent/workflows/z-axiom-list.md
-    description: "List axiom records from the store, rendered as a readable table. Supports filtering by status, scope, and discipline."
-  - id: z-axiom-reject
-    source: commands/z-axiom-reject.md
-    output: .agent/workflows/z-axiom-reject.md
-    description: "Reject a candidate or approved axiom, moving it to the rejected/ tombstone store. Optionally records a rejection reason."
-  - id: z-axiom-scan
-    source: commands/z-axiom-scan.md
-    output: .agent/workflows/z-axiom-scan.md
-    description: "Mine candidate axioms from z-harness interaction history by dispatching the axiom-extractor agent, then writing returned candidates to the axiom store. Use --historical for a full metrics.jsonl scan (expensive). Proposes only — never auto-approves."
-  - id: z-brainstorm
-    source: commands/z-brainstorm.md
-    output: .agent/workflows/z-brainstorm.md
-    description: "Cheap parallel pre-plan ideation — dispatch 3 vendor-diverse ideators (Claude + Codex + Gemini), perform a mandatory anti-bias check, and produce BRAINSTORM.md to seed /z-plan."
-  - id: z-context-budget
-    source: commands/z-context-budget.md
-    output: .agent/workflows/z-context-budget.md
-    description: "Analyze context utilization from z-harness telemetry and surface actionable savings recommendations."
-  - id: z-debt
-    source: commands/z-debt.md
-    output: .agent/workflows/z-debt.md
-    description: "Read-only lazy-code debt ledger. Scans for z-colon debt markers and renders a grouped ledger to stdout. Flags no-trigger entries. Persist to Z-DEBT.md only with --save."
-  - id: z-debug
-    source: commands/z-debug.md
-    output: .agent/workflows/z-debug.md
-    description: "Heavy hypothesis-tournament debugging pipeline for the case where root cause is unknown. Two rounds of adversarial multi-LLM hypothesis generation (Claude + Codex + Gemini), discriminating-test matrix with consensus-first ranking + forced outlier ..."
-  - id: z-do
-    source: commands/z-do.md
-    output: .agent/workflows/z-do.md
-    description: "Plan-less z-harness execution for small tasks. Brings the harness discipline — premise check, doc-fetcher grounding, codex review safety gate, structured logging — without SPEC/PLAN/TASKS/FIX.md ceremony. Logs to z-harness/adhoc/ so /z-improve can..."
-  - id: z-doc-rationale
-    source: commands/z-doc-rationale.md
-    output: .agent/workflows/z-doc-rationale.md
-    description: "Tier 2 narrative doc command. Reads tier2-context.json and produces ADRs, design rationale, tradeoff explanations, and migration guides from warm pipeline context."
-  - id: z-evaluate
-    source: commands/z-evaluate.md
-    output: .agent/workflows/z-evaluate.md
-    description: "Evaluate a completed z-harness session for patterns worth preserving as memories or skills."
-  - id: z-explain
-    source: commands/z-explain.md
-    output: .agent/workflows/z-explain.md
-    description: "One-shot structured explanation of code at a chosen depth lens. Replaces ad-hoc \"explain at high level / more detail\" prompts. Citations required. Handoff to /z-learn when interactive exploration is warranted. Read-only, no cross-LLM consult."
-  - id: z-export
-    source: commands/z-export.md
-    output: .agent/workflows/z-export.md
-    description: "Export z-harness commands/agents/skills/personas to Cursor / Codex / Antigravity (agy) / pi / Windsurf / Kiro / Cline / Copilot."
-  - id: z-fix
-    source: commands/z-fix.md
-    output: .agent/workflows/z-fix.md
-    description: "Lightweight bug-fix command for the case where the user already has a diagnosis. Captures problem + repro, single light-fix sanity consult (\"does the proposed cause explain all symptoms?\"), inline implementation, non-negotiable Codex review. Optio..."
-  - id: z-followup-confirm
-    source: commands/z-followup-confirm.md
-    output: .agent/workflows/z-followup-confirm.md
-    description: "Transition a follow-up entry from verify → done via human confirmation or audit evidence validation."
-  - id: z-followup-dismiss
-    source: commands/z-followup-dismiss.md
-    output: .agent/workflows/z-followup-dismiss.md
-    description: "Dismiss a follow-up entry from any state (terminal transition). Requires a reason."
-  - id: z-followup-list
-    source: commands/z-followup-list.md
-    output: .agent/workflows/z-followup-list.md
-    description: "Read-only listing of follow-up entries from project and global sinks, priority-sorted and filterable."
-  - id: z-followup-next
-    source: commands/z-followup-next.md
-    output: .agent/workflows/z-followup-next.md
-    description: "Claim and execute the next pending follow-up entry from the project or global sink, with staleness check, lock management, and status writeback."
-  - id: z-followup-refresh
-    source: commands/z-followup-refresh.md
-    output: .agent/workflows/z-followup-refresh.md
-    description: "Refresh a blocked (staleness) follow-up entry — re-stamps capture_head and file_blob_hashes, then transitions back to open."
-  - id: z-followup-status
-    source: commands/z-followup-status.md
-    output: .agent/workflows/z-followup-status.md
-    description: "Read-only diagnostic summary of the follow-up sink — counts per status, lock state, oldest open entry, and last sync failure."
-  - id: z-git-guardrails
-    source: commands/z-git-guardrails.md
-    output: .agent/workflows/z-git-guardrails.md
-    description: "Install, remove, or report status of the z-harness PreToolUse guardrail hooks (git-safety + worktree-isolation) in global or project Claude Code settings."
-  - id: z-grill
-    source: commands/z-grill.md
-    output: .agent/workflows/z-grill.md
-    description: "Live depth-first interrogation that sharpens a vague idea into a buildable problem statement. Asks ONE question at a time, always states a recommended answer, self-serves codebase-answerable questions via Explore, and terminates adaptively. Writes..."
-  - id: z-handoff
-    source: commands/z-handoff.md
-    output: .agent/workflows/z-handoff.md
-    description: "Write a handoff.json artifact for session continuity. Captures the current working context (plan slug, active files, next step) into a machine-readable JSON contract that any orchestrator (Hermes) can consume to resume work in a fresh agent sessio..."
-  - id: z-implement-all
-    source: commands/z-implement-all.md
-    output: .agent/workflows/z-implement-all.md
-    description: "Orchestrate implementation of ALL pending tasks in z-harness/TASKS.md, spawning a fresh implementer subagent per task and a reviewer per task. Halts on blockers, retries once on review failure, push-notifies user on every gate."
-  - id: z-implement-next
-    source: commands/z-implement-next.md
-    output: .agent/workflows/z-implement-next.md
-    description: "Implement the next pending task from z-harness/TASKS.md, then have Codex scrutinize the diff."
-  - id: z-improve
-    source: commands/z-improve.md
-    output: .agent/workflows/z-improve.md
-    description: "Post-run retrospective. Analyzes ONE z-harness run's events.jsonl + artifacts, identifies friction signals (slow phases, retries, doc drift, blocked askings, reviewer cycles), and opens a discussion with the user about concrete edits to the z-harn..."
-  - id: z-init-docs
-    source: commands/z-init-docs.md
-    output: .agent/workflows/z-init-docs.md
-    description: "Bootstrap a two-tier docs system in the current repo — docs/human/ (Markdown for humans) and docs/llm/ (token-compacted JSON for fast-lookup by future /z-plan runs). Idempotent; re-runnable to extend coverage."
-  - id: z-learn
-    source: commands/z-learn.md
-    output: .agent/workflows/z-learn.md
-    description: "Interactive progressive-disclosure tutor for understanding code. Replaces repetitive \"explain more / tell me about X\" sessions. Four depth lenses, resumable staging, optional LEARN.md artifact. Read-only, no cross-LLM consult."
-  - id: z-maintain-docs
-    source: commands/z-maintain-docs.md
-    output: .agent/workflows/z-maintain-docs.md
-    description: "Refresh stale docs in docs/human/ and docs/llm/. Reads docs/llm/INDEX.json to find concepts whose source files changed since each doc's last_updated. Spawns doc-updater subagents (Sonnet) per stale concept. Applies refreshed docs by default; pass ..."
-  - id: z-map
-    source: commands/z-map.md
-    output: .agent/workflows/z-map.md
-    description: "Maps terrain with citations + cross-LLM critique. No recommendations — terrain only. See `/z-research` for synthesis across map + brainstorm."
-  - id: z-mr-review
-    source: commands/z-mr-review.md
-    output: .agent/workflows/z-mr-review.md
-    description: "Multi-LLM code-quality review of the current branch diff against STYLE.md. Never blocks; ranks P0-P4; output is a TASKS.md-shape file you edit and feed to /z-implement-all."
-  - id: z-overnight
-    source: commands/z-overnight.md
-    output: .agent/workflows/z-overnight.md
-    description: "Run a chain of z-harness workflows unattended overnight with halt-only user interaction. Chains existing sub-commands end-to-end, writes MORNING_REPORT.md, and push-notifies on halt or completion."
-  - id: z-personas
-    source: commands/z-personas.md
-    output: .agent/workflows/z-personas.md
-    description: "Inspect persona registry, role bindings, and persona files. Subcommands: list, roles, validate, read <name>, where <name>. Default (no args) = roles."
-  - id: z-plan-light
-    source: commands/z-plan-light.md
-    output: .agent/workflows/z-plan-light.md
-    description: "Lightweight planner for small targeted changes / bug fixes. Bundled cross-LLM consult, single FIX.md artifact, inline implementation in the orchestrator (no implementer subagent), codex review still runs as the safety gate. Routes down, up, sidewa..."
-  - id: z-plan-split
-    source: commands/z-plan-split.md
-    output: .agent/workflows/z-plan-split.md
-    description: "Pre-emptive scope splitter — fan a big topic out into N narrow cluster-planner subagents in parallel, then reconcile file-path overlaps into SHARED-CONCERNS.md + MANIFEST.md."
-  - id: z-plan
-    source: commands/z-plan.md
-    output: .agent/workflows/z-plan.md
-    description: "Run the rigorous z-harness planning pipeline — challenge premises, batch decisions, cross-consult Gemini + Codex once, and produce SPEC.md / PLAN.md / TASKS.md."
-  - id: z-providers-discover
-    source: commands/z-providers-discover.md
-    output: .agent/workflows/z-providers-discover.md
-    description: Discover LLM CLI providers in PATH and generate providers.json.
-  - id: z-reality
-    source: commands/z-reality.md
-    output: .agent/workflows/z-reality.md
-    description: "Interactive premise refinement — conversational on-ramp. Probes, clarifies,"
-  - id: z-research
-    source: commands/z-research.md
-    output: .agent/workflows/z-research.md
-    description: "Higher-order meta-orchestrator. Composes /z-map (terrain) and /z-brainstorm (framings), then runs adversarial synthesis panel (3 perspectives + judge) producing RESEARCH.md with 10-section schema including approach decision matrix. Cost 3–6M token..."
-  - id: z-review-all
-    source: commands/z-review-all.md
-    output: .agent/workflows/z-review-all.md
-    description: "Final-gate cross-LLM review of a completed z-harness plan. Runs Gemini + Codex on the cumulative diff against the plan contract (SPEC.md in legacy mode; frozen INTENT.md + LEDGER.md in INTENT mode) to surface (a) implementation drift across tasks ..."
-  - id: z-setup
-    source: commands/z-setup.md
-    output: .agent/workflows/z-setup.md
-    description: "Configuration cockpit for z-harness: inspect resolved state, run guided setup wizard, or apply a posture preset."
-  - id: z-skill-fix
-    source: commands/z-skill-fix.md
-    output: .agent/workflows/z-skill-fix.md
-    description: "Diagnose and patch a misleading skill file — any SKILL.md under .claude/skills/ in the current repo, or any z-harness commands/*.md / agents/*.md when invoked inside the z-harness repo itself. Inline diagnosis note, surgical edit, reviewer safety ..."
-  - id: z-stats
-    source: commands/z-stats.md
-    output: .agent/workflows/z-stats.md
-    description: "Read-only progress + cost report for a z-harness plan. Reads metrics.jsonl + TASKS.md to summarize progress, wall time per phase, estimated token spend per subagent type, recent halts, and suggested next command. No writes, no LLM calls."
-  - id: z-style-init
-    source: commands/z-style-init.md
-    output: .agent/workflows/z-style-init.md
-    description: "Author the project STYLE.md interactively, grounded in the repo's most idiomatic existing files (Capture). Required before /z-mr-review will run."
-  - id: z-suggest-memory
-    source: commands/z-suggest-memory.md
-    output: .agent/workflows/z-suggest-memory.md
-    description: "Authoring skill for the docs/llm/ memory layer. Called mandatorily from /z-debug post-mortem and /z-improve retro. Validates input against the memory schema, writes to docs/llm/<slug>.json, regenerates docs/llm/MEMORIES-FLAT.md, optionally extract..."
-  - id: z-test
-    source: commands/z-test.md
-    output: .agent/workflows/z-test.md
-    description: "System-level invariant test planner. Reads INVARIANTS.json + SPEC.md + PLAN.md + TASKS.md, matches invariants to tasks via tag-based mapping, drafts behavioral tests keyed to durable system invariants, cross-LLM consult with invariant coverage ana..."
-  - id: z-update
-    source: commands/z-update.md
-    output: .agent/workflows/z-update.md
-    description: "Update the z-harness plugin to the latest version. Detects symlink vs tarball install mode and runs the appropriate update path."
-  - id: z-uplift
-    source: commands/z-uplift.md
-    output: .agent/workflows/z-uplift.md
-    description: "Tiered bulk codebase quality uplift — decompose repo into components, run a repo-wide cross-cutting pass, dispatch per-component audits, produce per-component TASKS.md files, and drive sequential implementation via /z-implement-all."
-  - id: z-verify
-    source: commands/z-verify.md
-    output: .agent/workflows/z-verify.md
-    description: "Interactive understanding — reconstruct what a codebase feature actually does,"
-  - id: z-where
-    source: commands/z-where.md
-    output: .agent/workflows/z-where.md
-    description: "Read-only \"what's active / why am I blocked\" query. Prints resolved base + repo-id, lists all active plans (slug, command, phase, branch, current_task, age, status), and optionally shows path-overlap with the current run. No writes, no LLM calls."
 
 # Agents → .agent/rules/*.md
 # No subagent dispatch in agy; agents become role-specific rule files
@@ -294,6 +70,11 @@ rules:
     output: .agent/rules/z-harness-external-lookup.md
     trigger: model_decision
     description: "Fetch external information (web docs, public APIs, paginated JSON, library docs outside training cutoff) and return a tight STATUS-headed Markdown synthesis per docs/llm/lookup-contract.json. Read-only. Refuses mutating shell commands via verb-blo..."
+  - id: ideator-clusterer
+    source: agents/ideator-clusterer.md
+    output: .agent/rules/z-harness-ideator-clusterer.md
+    trigger: model_decision
+    description: "Reads N peer ideator framing blocks (five-section outputs) from a wide /z-brainstorm run, clusters them into K distinct directions by core hypothesis / approach axis, and returns: K cluster labels, each cluster's member ideators + a representative..."
   - id: implementer
     source: agents/implementer.md
     output: .agent/rules/z-harness-implementer.md
@@ -329,6 +110,11 @@ rules:
     output: .agent/rules/z-harness-remote-runner.md
     trigger: always_on
     description: "Haiku subagent that handles MECHANICAL remote work — rsync local repo to a per-(slug, task-id) sandbox on the remote host, run cargo build/check/clean, restart paper qtctl manifests, tail logs, run READ-ONLY DB/disk/log queries against shared stat..."
+  - id: report-synth
+    source: agents/report-synth.md
+    output: .agent/rules/z-harness-report-synth.md
+    trigger: model_decision
+    description: "Fresh-context Sonnet synthesis subagent for /z-report. Reads context.json (assembled by scripts/report-context.py) plus any artifact/diff paths it cites, then returns ONE narrative markdown at the requested tier (summary|standard|deep). Read-only ..."
   - id: research-judge
     source: agents/research-judge.md
     output: .agent/rules/z-harness-research-judge.md
@@ -390,7 +176,245 @@ rules:
     trigger: model_decision
     description: "Flash-tier (Haiku) subagent for Tier 1 per-task mechanical doc sync. Reads task diff, reverse-lookups changed files to concepts via INDEX.json, applies surgical updates to AUTO-START/AUTO-END delimited machine-truth fields."
 
-skills: []
+# Skills → .agent/skills/<id>/SKILL.md
+# Native workspace skills in Antigravity
+skills:
+  - id: z-amend
+    source: skills/z-amend/SKILL.md
+    output: .agent/skills/z-amend/SKILL.md
+    description: "Amend an existing z-harness plan (INTENT.md, SPEC/PLAN/TASKS, or FIX.md) so a change is propagated consistently across all artifacts. In intent mode, re-opens the frozen contract and invalidates the current level's TASKS.md for regeneration. Prese..."
+  - id: z-attend
+    source: skills/z-attend/SKILL.md
+    output: .agent/skills/z-attend/SKILL.md
+    description: "Run a z-harness command chain in attended middle-gear mode: auto-advance the plan/audit/test/implement/review chain, halt and ask inline only on the four-category gate taxonomy, and yield for a user /clear at context boundaries."
+  - id: z-audit
+    source: skills/z-audit/SKILL.md
+    output: .agent/skills/z-audit/SKILL.md
+    description: "Audit a target component across one or more dimensions (correctness / perf / cleanliness / design). Pre-flight scopes (target, dimensions, optional rubric file), spawns one auditor subagent per dimension in parallel, runs bundled Gemini+Codex cons..."
+  - id: z-audit-plan
+    source: skills/z-audit-plan/SKILL.md
+    output: .agent/skills/z-audit-plan/SKILL.md
+    description: "Audit a plan's artifacts (SPEC.md, PLAN.md, TASKS.md) before execution. Reality-checks references against the codebase, verifies best practices/design, and runs a cross-LLM adversarial review. Emits PLAN_AUDIT_REPORT.md."
+  - id: z-audit-plan-style
+    source: skills/z-audit-plan-style/SKILL.md
+    output: .agent/skills/z-audit-plan-style/SKILL.md
+    description: "Audit a plan's artifacts (SPEC.md, PLAN.md, TASKS.md) for the same kind of code-quality issues /z-mr-review finds on a diff — defensive bloat, premature abstraction, DRY/KISS/SOLID violations, over-engineering, STYLE.md drift — BEFORE any code is ..."
+  - id: z-axiom-approve
+    source: skills/z-axiom-approve/SKILL.md
+    output: .agent/skills/z-axiom-approve/SKILL.md
+    description: "Approve a candidate axiom. Shows the candidate, its evidence, and falsifiability state. Requires explicit user confirmation before approving. Reuses /z-suggest-memory --from-candidate-json for the MEMORY-overlap advisory. Regenerates the kernel sy..."
+  - id: z-axiom-edit
+    source: skills/z-axiom-edit/SKILL.md
+    output: .agent/skills/z-axiom-edit/SKILL.md
+    description: "Edit a field on a candidate or approved axiom record. On approved records, re-validates the graph and regenerates the kernel."
+  - id: z-axiom-list
+    source: skills/z-axiom-list/SKILL.md
+    output: .agent/skills/z-axiom-list/SKILL.md
+    description: "List axiom records from the store, rendered as a readable table. Supports filtering by status, scope, and discipline."
+  - id: z-axiom-reject
+    source: skills/z-axiom-reject/SKILL.md
+    output: .agent/skills/z-axiom-reject/SKILL.md
+    description: "Reject a candidate or approved axiom, moving it to the rejected/ tombstone store. Optionally records a rejection reason."
+  - id: z-axiom-scan
+    source: skills/z-axiom-scan/SKILL.md
+    output: .agent/skills/z-axiom-scan/SKILL.md
+    description: "Mine candidate axioms from z-harness interaction history by dispatching the axiom-extractor agent, then writing returned candidates to the axiom store. Use --historical for a full metrics.jsonl scan (expensive). Proposes only — never auto-approves."
+  - id: z-brainstorm
+    source: skills/z-brainstorm/SKILL.md
+    output: .agent/skills/z-brainstorm/SKILL.md
+    description: "Cheap parallel pre-plan ideation — dispatch 3 vendor-diverse ideators (Claude + Codex + Gemini), perform a mandatory anti-bias check, and produce BRAINSTORM.md to seed /z-plan."
+  - id: z-context-budget
+    source: skills/z-context-budget/SKILL.md
+    output: .agent/skills/z-context-budget/SKILL.md
+    description: "Analyze context utilization from z-harness telemetry and surface actionable savings recommendations."
+  - id: z-debt
+    source: skills/z-debt/SKILL.md
+    output: .agent/skills/z-debt/SKILL.md
+    description: "Read-only lazy-code debt ledger. Scans for z-colon debt markers and renders a grouped ledger to stdout. Flags no-trigger entries. Persist to Z-DEBT.md only with --save."
+  - id: z-debug
+    source: skills/z-debug/SKILL.md
+    output: .agent/skills/z-debug/SKILL.md
+    description: "Heavy hypothesis-tournament debugging pipeline for the case where root cause is unknown. Two rounds of adversarial multi-LLM hypothesis generation (Claude + Codex + Gemini), discriminating-test matrix with consensus-first ranking + forced outlier ..."
+  - id: z-do
+    source: skills/z-do/SKILL.md
+    output: .agent/skills/z-do/SKILL.md
+    description: "Plan-less z-harness execution for small tasks. Brings the harness discipline — premise check, doc-fetcher grounding, codex review safety gate, structured logging — without SPEC/PLAN/TASKS/FIX.md ceremony. Logs to z-harness/adhoc/ so /z-improve can..."
+  - id: z-doc-rationale
+    source: skills/z-doc-rationale/SKILL.md
+    output: .agent/skills/z-doc-rationale/SKILL.md
+    description: "Tier 2 narrative doc command. Reads tier2-context.json and produces ADRs, design rationale, tradeoff explanations, and migration guides from warm pipeline context."
+  - id: z-evaluate
+    source: skills/z-evaluate/SKILL.md
+    output: .agent/skills/z-evaluate/SKILL.md
+    description: "Evaluate a completed z-harness session for patterns worth preserving as memories or skills."
+  - id: z-explain
+    source: skills/z-explain/SKILL.md
+    output: .agent/skills/z-explain/SKILL.md
+    description: "One-shot structured explanation of code at a chosen depth lens. Replaces ad-hoc \"explain at high level / more detail\" prompts. Citations required. Handoff to /z-learn when interactive exploration is warranted. Read-only, no cross-LLM consult."
+  - id: z-export
+    source: skills/z-export/SKILL.md
+    output: .agent/skills/z-export/SKILL.md
+    description: "Export z-harness commands/agents/skills/personas to Cursor / Codex / Antigravity (agy) / pi / Windsurf / Kiro / Cline / Copilot."
+  - id: z-fix
+    source: skills/z-fix/SKILL.md
+    output: .agent/skills/z-fix/SKILL.md
+    description: "Lightweight bug-fix command for the case where the user already has a diagnosis. Captures problem + repro, single light-fix sanity consult (\"does the proposed cause explain all symptoms?\"), inline implementation, non-negotiable Codex review. Optio..."
+  - id: z-followup-confirm
+    source: skills/z-followup-confirm/SKILL.md
+    output: .agent/skills/z-followup-confirm/SKILL.md
+    description: "Transition a follow-up entry from verify → done via human confirmation or audit evidence validation."
+  - id: z-followup-dismiss
+    source: skills/z-followup-dismiss/SKILL.md
+    output: .agent/skills/z-followup-dismiss/SKILL.md
+    description: "Dismiss a follow-up entry from any state (terminal transition). Requires a reason."
+  - id: z-followup-list
+    source: skills/z-followup-list/SKILL.md
+    output: .agent/skills/z-followup-list/SKILL.md
+    description: "Read-only listing of follow-up entries from project and global sinks, priority-sorted and filterable."
+  - id: z-followup-next
+    source: skills/z-followup-next/SKILL.md
+    output: .agent/skills/z-followup-next/SKILL.md
+    description: "Claim and execute the next pending follow-up entry from the project or global sink, with staleness check, lock management, and status writeback."
+  - id: z-followup-refresh
+    source: skills/z-followup-refresh/SKILL.md
+    output: .agent/skills/z-followup-refresh/SKILL.md
+    description: "Refresh a blocked (staleness) follow-up entry — re-stamps capture_head and file_blob_hashes, then transitions back to open."
+  - id: z-followup-status
+    source: skills/z-followup-status/SKILL.md
+    output: .agent/skills/z-followup-status/SKILL.md
+    description: "Read-only diagnostic summary of the follow-up sink — counts per status, lock state, oldest open entry, and last sync failure."
+  - id: z-git-guardrails
+    source: skills/z-git-guardrails/SKILL.md
+    output: .agent/skills/z-git-guardrails/SKILL.md
+    description: "Install, remove, or report status of the z-harness PreToolUse guardrail hooks (git-safety + worktree-isolation) in global or project Claude Code settings."
+  - id: z-grill
+    source: skills/z-grill/SKILL.md
+    output: .agent/skills/z-grill/SKILL.md
+    description: "Live depth-first interrogation that sharpens a vague idea into a buildable problem statement. Asks ONE question at a time, always states a recommended answer, self-serves codebase-answerable questions via Explore, and terminates adaptively. Writes..."
+  - id: z-handoff
+    source: skills/z-handoff/SKILL.md
+    output: .agent/skills/z-handoff/SKILL.md
+    description: "Write a handoff.json artifact for session continuity. Captures the current working context (plan slug, active files, next step) into a machine-readable JSON contract that any orchestrator (Hermes) can consume to resume work in a fresh agent sessio..."
+  - id: z-implement-all
+    source: skills/z-implement-all/SKILL.md
+    output: .agent/skills/z-implement-all/SKILL.md
+    description: "Orchestrate implementation of ALL pending tasks in z-harness/TASKS.md, spawning a fresh implementer subagent per task and a reviewer per task. Halts on blockers, retries once on review failure, push-notifies user on every gate."
+  - id: z-implement-next
+    source: skills/z-implement-next/SKILL.md
+    output: .agent/skills/z-implement-next/SKILL.md
+    description: "Implement the next pending task from z-harness/TASKS.md, then have Codex scrutinize the diff."
+  - id: z-improve
+    source: skills/z-improve/SKILL.md
+    output: .agent/skills/z-improve/SKILL.md
+    description: "Post-run retrospective. Analyzes ONE z-harness run's events.jsonl + artifacts, identifies friction signals (slow phases, retries, doc drift, blocked askings, reviewer cycles), and opens a discussion with the user about concrete edits to the z-harn..."
+  - id: z-init-docs
+    source: skills/z-init-docs/SKILL.md
+    output: .agent/skills/z-init-docs/SKILL.md
+    description: "Bootstrap a two-tier docs system in the current repo — docs/human/ (Markdown for humans) and docs/llm/ (token-compacted JSON for fast-lookup by future /z-plan runs). Idempotent; re-runnable to extend coverage."
+  - id: z-learn
+    source: skills/z-learn/SKILL.md
+    output: .agent/skills/z-learn/SKILL.md
+    description: "Interactive progressive-disclosure tutor for understanding code. Replaces repetitive \"explain more / tell me about X\" sessions. Four depth lenses, resumable staging, optional LEARN.md artifact. Read-only, no cross-LLM consult."
+  - id: z-maintain-docs
+    source: skills/z-maintain-docs/SKILL.md
+    output: .agent/skills/z-maintain-docs/SKILL.md
+    description: "Refresh stale docs in docs/human/ and docs/llm/. Reads docs/llm/INDEX.json to find concepts whose source files changed since each doc's last_updated. Spawns doc-updater subagents (Sonnet) per stale concept. Applies refreshed docs by default; pass ..."
+  - id: z-map
+    source: skills/z-map/SKILL.md
+    output: .agent/skills/z-map/SKILL.md
+    description: "Maps terrain with citations + cross-LLM critique. No recommendations — terrain only. See `/z-research` for synthesis across map + brainstorm."
+  - id: z-mr-review
+    source: skills/z-mr-review/SKILL.md
+    output: .agent/skills/z-mr-review/SKILL.md
+    description: "Multi-LLM code-quality review of the current branch diff against STYLE.md. Never blocks; ranks P0-P4; output is a TASKS.md-shape file you edit and feed to /z-implement-all."
+  - id: z-overnight
+    source: skills/z-overnight/SKILL.md
+    output: .agent/skills/z-overnight/SKILL.md
+    description: "Run a chain of z-harness workflows unattended overnight with halt-only user interaction. Chains existing sub-commands end-to-end, writes MORNING_REPORT.md, and push-notifies on halt or completion."
+  - id: z-personas
+    source: skills/z-personas/SKILL.md
+    output: .agent/skills/z-personas/SKILL.md
+    description: "Inspect persona registry, role bindings, and persona files. Subcommands: list, roles, validate, read <name>, where <name>. Default (no args) = roles."
+  - id: z-plan
+    source: skills/z-plan/SKILL.md
+    output: .agent/skills/z-plan/SKILL.md
+    description: "Run the rigorous z-harness planning pipeline — challenge premises, batch decisions, cross-consult Gemini + Codex once, and produce SPEC.md / PLAN.md / TASKS.md."
+  - id: z-plan-light
+    source: skills/z-plan-light/SKILL.md
+    output: .agent/skills/z-plan-light/SKILL.md
+    description: "Lightweight planner for small targeted changes / bug fixes. Bundled cross-LLM consult, single FIX.md artifact, inline implementation in the orchestrator (no implementer subagent), codex review still runs as the safety gate. Routes down, up, sidewa..."
+  - id: z-plan-split
+    source: skills/z-plan-split/SKILL.md
+    output: .agent/skills/z-plan-split/SKILL.md
+    description: "Pre-emptive scope splitter — fan a big topic out into N narrow cluster-planner subagents in parallel, then reconcile file-path overlaps into SHARED-CONCERNS.md + MANIFEST.md."
+  - id: z-providers-discover
+    source: skills/z-providers-discover/SKILL.md
+    output: .agent/skills/z-providers-discover/SKILL.md
+    description: Discover LLM CLI providers in PATH and generate providers.json.
+  - id: z-reconcile
+    source: skills/z-reconcile/SKILL.md
+    output: .agent/skills/z-reconcile/SKILL.md
+    description: "Read-mostly workspace audit: surveys git worktrees, plan slugs, the active-plan registry, claim locks, uncommitted work, and follow-up entries; cross-references them into a single consistency report. Default run is pure read (zero mutations); clea..."
+  - id: z-report
+    source: skills/z-report/SKILL.md
+    output: .agent/skills/z-report/SKILL.md
+    description: "Depth-tiered narrative of exactly what happened + what follow-ups exist, for a z-harness run or past work (run-id / plan-slug / PR / commit-range). User-invoked, read-only, composes existing reporting primitives. Does not auto-fire."
+  - id: z-research
+    source: skills/z-research/SKILL.md
+    output: .agent/skills/z-research/SKILL.md
+    description: "Higher-order meta-orchestrator. Composes /z-map (terrain) and /z-brainstorm (framings), then runs adversarial synthesis panel (3 perspectives + judge) producing RESEARCH.md with 10-section schema including approach decision matrix. Cost 3–6M token..."
+  - id: z-review-all
+    source: skills/z-review-all/SKILL.md
+    output: .agent/skills/z-review-all/SKILL.md
+    description: "Final-gate cross-LLM review of a completed z-harness plan. Runs Gemini + Codex on the cumulative diff against the plan contract (SPEC.md in legacy mode; frozen INTENT.md + LEDGER.md in INTENT mode) to surface (a) implementation drift across tasks ..."
+  - id: z-setup
+    source: skills/z-setup/SKILL.md
+    output: .agent/skills/z-setup/SKILL.md
+    description: "Configuration cockpit for z-harness: inspect resolved state, run guided setup wizard, or apply a posture preset."
+  - id: z-sharpen
+    source: skills/z-sharpen/SKILL.md
+    output: .agent/skills/z-sharpen/SKILL.md
+    description: "Conversational idea-sharpening on-ramp — probes, reframes, and converges a vague"
+  - id: z-skill-fix
+    source: skills/z-skill-fix/SKILL.md
+    output: .agent/skills/z-skill-fix/SKILL.md
+    description: "Diagnose and patch a misleading skill file — any SKILL.md under .claude/skills/ in the current repo, or any z-harness commands/*.md / agents/*.md when invoked inside the z-harness repo itself. Inline diagnosis note, surgical edit, reviewer safety ..."
+  - id: z-stats
+    source: skills/z-stats/SKILL.md
+    output: .agent/skills/z-stats/SKILL.md
+    description: "Read-only progress + cost report for a z-harness plan. Reads metrics.jsonl + TASKS.md to summarize progress, wall time per phase, estimated token spend per subagent type, recent halts, and suggested next command. No writes, no LLM calls."
+  - id: z-style-init
+    source: skills/z-style-init/SKILL.md
+    output: .agent/skills/z-style-init/SKILL.md
+    description: "Author the project STYLE.md interactively, grounded in the repo's most idiomatic existing files (Capture). Required before /z-mr-review will run."
+  - id: z-suggest-memory
+    source: skills/z-suggest-memory/SKILL.md
+    output: .agent/skills/z-suggest-memory/SKILL.md
+    description: "Authoring skill for the docs/llm/ memory layer. Called mandatorily from /z-debug post-mortem and /z-improve retro. Validates input against the memory schema, writes to docs/llm/<slug>.json, regenerates docs/llm/MEMORIES-FLAT.md, optionally extract..."
+  - id: z-test
+    source: skills/z-test/SKILL.md
+    output: .agent/skills/z-test/SKILL.md
+    description: "System-level invariant test planner. Supports both legacy mode (SPEC.md + PLAN.md + TASKS.md) and intent mode (INTENT.md + TASKS.md + LEDGER.md). Reads INVARIANTS.json when present (user-authored, optional — no generator; absent is normal). Drafts..."
+  - id: z-test-prune
+    source: skills/z-test-prune/SKILL.md
+    output: .agent/skills/z-test-prune/SKILL.md
+    description: "Read-only test-suite pruning planner complementing /z-test. Scans an existing test suite, classifies prunable tests under a four-category rubric with hard keep-guards, runs a mandatory cross-LLM adversarial defend-pass, and emits TEST-PRUNE.md (a ..."
+  - id: z-update
+    source: skills/z-update/SKILL.md
+    output: .agent/skills/z-update/SKILL.md
+    description: "Update the z-harness plugin to the latest version. Detects symlink vs tarball install mode and runs the appropriate update path."
+  - id: z-uplift
+    source: skills/z-uplift/SKILL.md
+    output: .agent/skills/z-uplift/SKILL.md
+    description: "Tiered bulk codebase quality uplift — decompose repo into components, run a repo-wide cross-cutting pass, dispatch per-component audits, produce per-component TASKS.md files, and drive sequential implementation via /z-implement-all."
+  - id: z-verify
+    source: skills/z-verify/SKILL.md
+    output: .agent/skills/z-verify/SKILL.md
+    description: "Interactive understanding — reconstruct what a codebase feature actually does,"
+  - id: z-where
+    source: skills/z-where/SKILL.md
+    output: .agent/skills/z-where/SKILL.md
+    description: "Read-only \"what's active / why am I blocked\" query. Prints resolved base + repo-id, lists all active plans (slug, command, phase, branch, current_task, age, status), and optionally shows path-overlap with the current run. No writes, no LLM calls."
 
 # MCP tools — optional; registered separately by the user
 # Listed here for documentation only; the runtime driver does not write mcp_config.json
