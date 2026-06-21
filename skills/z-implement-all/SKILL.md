@@ -127,30 +127,20 @@ if [ "$REG_RC" -eq 0 ]; then
 fi
 ```
 
-**1b. Watchdog sweep spawn (gated — register success + watchdog enabled + registry enabled).** Skip when register failed (no record) or when the watchdog is disabled or the registry is off. Only fires when `REG_RC == 0`.
+**1b. Schedule hang-check (gated — register success + watchdog enabled + registry enabled).** Skip when register failed (no record) or when the watchdog is disabled or the registry is off. Only fires when `REG_RC == 0`.
 
-The spawn is delegated entirely to `watchdog-spawn.sh`, which encapsulates both the `flock`'d single-spawn guard (SPEC addendum F: exactly one sweep per run_id) and the daemonization (double-fork + `setsid` + `/dev/null` stdio so the sweep survives the spawning shell and never blocks the orchestrator). Returns 0 on both "spawned" and "already live (idempotent skip)".
-
-After spawning, read the authoritative pid file and stamp it onto the registry record for observability. This is advisory (`|| true`): a heartbeat failure must not block the run.
-
-Deregistration is handled by the **existing `deregister` call** in Phase 0.0 and Finalize (added by T009): `active-plan-registry.py deregister` reads `$Z_HARNESS_PLAN_DIR/active/<run>.watchdog.pid`, `kill -0`-guards, SIGTERMs, and waits up to `watchdog.kill_grace_secs` before SIGKILLing. No explicit kill logic is needed here.
+This replaces the retired daemon poller (`watchdog-spawn.sh`/`watchdog-sweep.sh`). Instead of a long-lived background sweep, `schedule-hang-check.sh` schedules a **one-shot** `hang-check.sh` (via launchd on macOS; detached fallback elsewhere) at a run-level horizon — the per-class threshold from `hang-threshold.py` (p90×margin), falling back to `watchdog.stale_secs`. At the horizon, if work is still outstanding past threshold it notifies via the retained `notify-watchdog.sh` (config-gated, notify-once). The hard-deadline kill layer (`supervised-run.sh`) is unaffected.
 
 ```bash
 if [ "$REG_RC" -eq 0 ]; then
   WATCHDOG_ENABLED="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" \
     get watchdog.enabled 2>/dev/null || echo false)"
   if [ "$WATCHDOG_ENABLED" = "true" ] && [ "${Z_HARNESS_REGISTRY_ENABLED:-1}" != "0" ]; then
-    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/watchdog-spawn.sh" \
-      --run "$RUN" --plan-dir "$Z_HARNESS_PLAN_DIR" || true
-    # Stamp watchdog pid onto registry record (advisory — best-effort).
-    _WD_PID_FILE="${Z_HARNESS_PLAN_DIR}/active/${RUN}.watchdog.pid"
-    if [ -f "$_WD_PID_FILE" ]; then
-      _WD_PID="$(cat "$_WD_PID_FILE" 2>/dev/null | tr -d '[:space:]')"
-      if [ -n "$_WD_PID" ] && [ "$_WD_PID" -gt 0 ] 2>/dev/null; then
-        python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" \
-          heartbeat --run-id "$RUN" --watchdog-pid "$_WD_PID" || true
-      fi
-    fi
+    _HANG_THRESH="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/hang-threshold.py" \
+      for --kind implement_end 2>/dev/null || echo 300)"
+    Z_HARNESS_PLAN_DIR="$Z_HARNESS_PLAN_DIR" \
+      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/schedule-hang-check.sh" \
+      --run "$RUN" --threshold-secs "$_HANG_THRESH" --delay-secs "$_HANG_THRESH" || true
   fi
 fi
 ```
