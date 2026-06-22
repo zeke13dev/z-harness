@@ -4,7 +4,7 @@
 # Output (single line):
 #   {"z_harness_version":"<git short-sha>","z_harness_dirty":<true|false>,"z_harness_branch":"<branch>"}
 #
-# Used by /z-plan, /z-implement-all, /z-implement-next, /z-review-all at
+# Used by /z-plan, /z-execute, /z-review-all at
 # their `run_start` events so post-run analysis can correlate behavior
 # with the exact plugin commit.
 #

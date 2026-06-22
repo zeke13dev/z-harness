@@ -1,7 +1,7 @@
 ---
 name: z-test
 disable-model-invocation: false
-description: System-level invariant test planner. Supports both legacy mode (SPEC.md + PLAN.md + TASKS.md) and intent mode (INTENT.md + TASKS.md + LEDGER.md). Reads INVARIANTS.json when present (user-authored, optional — no generator; absent is normal). Drafts behavioral tests keyed to plan invariants or acceptance-checklist criteria, cross-LLM consult with coverage analysis, writes versioned TESTS.md. Backward-compatible v1 fallback when INVARIANTS.json is absent. Supports --ci flag for read-only CI validation. Tests are then implemented by /z-implement-all in the same task as their production code.
+description: System-level invariant test planner. Supports both legacy mode (SPEC.md + PLAN.md + TASKS.md) and intent mode (INTENT.md + TASKS.md + LEDGER.md). Reads INVARIANTS.json when present (user-authored, optional — no generator; absent is normal). Drafts behavioral tests keyed to plan invariants or acceptance-checklist criteria, cross-LLM consult with coverage analysis, writes versioned TESTS.md. Backward-compatible v1 fallback when INVARIANTS.json is absent. Supports --ci flag for read-only CI validation. Tests are then implemented by /z-execute in the same task as their production code.
 argument-hint: "[--slug <slug>] [--ci]"
 version: 2
 runtime: c1
@@ -11,13 +11,13 @@ driver_features_required:
 unsupported_driver_behavior: explicit_gate
 ---
 
-You are running **z-harness `/z-test`** — the semantic test-case planner. This is an **optional planning-time step** between `/z-plan` and `/z-implement-all`. It does NOT write or run any test code. It produces a structured `TESTS.md` artifact that the implementer subagent reads alongside TASKS.md, so tests get implemented in the same diff as the code they exercise.
+You are running **z-harness `/z-test`** — the semantic test-case planner. This is an **optional planning-time step** between `/z-plan` and `/z-execute`. It does NOT write or run any test code. It produces a structured `TESTS.md` artifact that the implementer subagent reads alongside TASKS.md, so tests get implemented in the same diff as the code they exercise.
 
 ## Setup
 
 ### Phase 0 — Slug discovery + plan sanity check
 
-Same logic as `/z-implement-all` Phase 0:
+Same logic as `/z-execute` Phase 0:
 
 1. Enumerate `$Z_HARNESS_PLAN_DIR/` subdirs containing a `TASKS.md`; also check legacy flat `z-harness/TASKS.md`.
 2. If `--slug <slug>` arg → use it.
@@ -28,7 +28,7 @@ Same logic as `/z-implement-all` Phase 0:
 
 Set `$BASE = $Z_HARNESS_PLAN_DIR` (or `z-harness` for legacy).
 
-**Mode detection (SPEC vs INTENT).** After `$BASE` is bound, detect which plan format is present — mirroring `/z-implement-all` step 3.5:
+**Mode detection (SPEC vs INTENT).** After `$BASE` is bound, detect which plan format is present — mirroring `/z-execute` step 3.5:
 
 ```bash
 if [ -f "$BASE/SPEC.md" ]; then
@@ -194,7 +194,7 @@ Write `$BASE/TESTS.md`:
 # Tests for <slug>
 
 **Run:** <RRUN>
-**Status:** drafted (awaiting /z-implement-all)
+**Status:** drafted (awaiting /z-execute)
 **Plugin version:** <z_harness_version from setup>
 **Cross-LLM consensus:** <agree | gemini-only-<N> | codex-only-<N> | user-overrode-<N>>
 **Counts:** <M> mandatory, <R> recommended, <O> optional
@@ -248,7 +248,7 @@ If a task already has a `**Tests:**` line from a prior `/z-test` invocation, **m
    Cross-LLM dropped <D> trivial drafts; added <A> coverage gaps.
 
    Recommended next:
-     /z-implement-all   — implements tasks AND their linked TESTS.md entries together
+     /z-execute   — implements tasks AND their linked TESTS.md entries together
    ```
 4. Brief user summary (3-5 sentences): what was drafted, what cross-LLM caught, how many cross-task tests are deferred to /z-review-all.
 
@@ -257,17 +257,17 @@ If a task already has a `**Tests:**` line from a prior `/z-test` invocation, **m
 - **Non-trivial tests only.** Every TESTS.md entry must name a domain-specific **failure class**. Assertions like "function returns" or "no exception raised" without further constraint are rejected. The cross-LLM consult exists precisely to catch and drop these.
 - **Tests tied to invariants.** Every mandatory test must trace to (a) a quoted plan-contract invariant (SPEC.md line in legacy mode; INTENT.md acceptance-checklist item in intent mode), (b) a high-risk task in TASKS.md, or (c) a user-stated concern from Phase 1. No orphan tests.
 - **Cross-LLM consult is non-skippable.** This is the entire point of `/z-test` — Claude alone reliably generates trivial tests; the cross-LLM step catches the bug classes it would otherwise miss.
-- **No test execution.** `/z-test` is planning, not execution. The implementer writes the test code (in the same task as its production code); `/z-implement-all`'s per-task acceptance check runs it; `/z-review-all`'s final gate runs the suite.
+- **No test execution.** `/z-test` is planning, not execution. The implementer writes the test code (in the same task as its production code); `/z-execute`'s per-task acceptance check runs it; `/z-review-all`'s final gate runs the suite.
 - **No plan-contract edits.** Only writes TESTS.md and appends `**Tests:**` lines to TASKS.md. Does not modify SPEC.md, PLAN.md, INTENT.md, or LEDGER.md.
 - **No new agents dispatched.** Reuses `consultant-primary` and `consultant-secondary` only.
 - **No emojis** anywhere in TESTS.md.
 
 ## What /z-test deliberately skips
 
-- Does not run any tests (deferred to /z-implement-all + /z-review-all).
+- Does not run any tests (deferred to /z-execute + /z-review-all).
 - Does not write actual test code (the implementer subagent does, in the task's diff).
 - Does not modify the plan contract (SPEC.md / PLAN.md in legacy mode; INTENT.md / LEDGER.md in intent mode) — only appends `**Tests:**` to TASKS.md and creates TESTS.md.
-- No implementer-subagent dispatch (all ideation in orchestrator main thread + cross-LLM consult, same model as /z-plan-light).
+- No implementer-subagent dispatch (all ideation in orchestrator main thread + cross-LLM consult).
 - No `--apply` flag — Phase 5 `AskUserQuestion` is the only write gate. The user can re-run `/z-test` later to add more tests; merge semantics in Phase 7 handle this.
 
 ---

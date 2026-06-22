@@ -1,11 +1,11 @@
-# session-handoff — SESSION.md context handoff for /z-implement-all
+# session-handoff — SESSION.md context handoff for /z-execute
 
 > Last updated: 2026-06-19
-> Covers source: scripts/session-helpers.sh, agents/context-curator.md, commands/z-implement-all.md, scripts/write-handoff.sh
+> Covers source: scripts/session-helpers.sh, agents/context-curator.md, skills/z-execute/SKILL.md, scripts/write-handoff.sh
 
 ## Overview
 
-The session-handoff system adds a durable `SESSION.md` artifact to each `/z-implement-all` plan so the orchestrator can `/clear` aggressively at its existing batch breakpoint and re-seed its context from a small, bounded file on resume — eliminating the O(N²) `cache_read` growth where every task re-reads the entire growing orchestrator window.
+The session-handoff system adds a durable `SESSION.md` artifact to each `/z-execute` plan so the orchestrator can `/clear` aggressively at its existing batch breakpoint and re-seed its context from a small, bounded file on resume — eliminating the O(N²) `cache_read` growth where every task re-reads the entire growing orchestrator window.
 
 The write path is hybrid: the orchestrator drops notable-only breadcrumbs into the event stream after each task completes (E2 — high-signal, low-noise), and a Haiku `context-curator` subagent folds the events delta + git diff + TASKS.md + prior SESSION.md into a compact SESSION.md synchronously at the compaction breakpoint, before the "/clear & resume" notice fires (E3). On next invocation, the orchestrator reads SESSION.md's frontmatter, compares the stored `done_ids_hash` with the current TASKS.md done-set, and re-inlines the body only when the hashes match (E1). The `handoff.json` artifact produced by `write-handoff.sh` provides a machine-readable continuation token for Hermes and `/z-attend` resume.
 
@@ -18,9 +18,9 @@ The write path is hybrid: the orchestrator drops notable-only breadcrumbs into t
 - `scripts/session-helpers.sh:369` — `session_frontmatter_field` — reads a scalar YAML frontmatter field from SESSION.md cheaply without loading the body
 - `scripts/session-helpers.sh:423` — `validate_intent` — thin shell wrapper over `scripts/intent-schema.py validate-intent`; exit 0=valid, 1=errors, 2=usage; also supports `lint` mode
 - `agents/context-curator.md:1` — `context-curator` — Haiku subagent; dispatched synchronously at the compaction breakpoint; 8-step ordered behavior producing SESSION.md
-- `commands/z-implement-all.md:1015` — E1 resume injection — reads SESSION.md frontmatter via helpers; inlines body when schema_version/done_ids_hash/pending all pass
-- `commands/z-implement-all.md:1196` — E3 curator dispatch — after `compaction_pause`, before push-notify; one retry at 2× timeout; hash-verified before `/clear & resume` notice
-- `commands/z-implement-all.md:2531` — E2 notable-only breadcrumb — emit `context_breadcrumb` only when a concrete trigger held (decision, halt, spec-deviation, reviewer-retry)
+- `skills/z-execute/SKILL.md:1015` — E1 resume injection — reads SESSION.md frontmatter via helpers; inlines body when schema_version/done_ids_hash/pending all pass
+- `skills/z-execute/SKILL.md:1196` — E3 curator dispatch — after `compaction_pause`, before push-notify; one retry at 2× timeout; hash-verified before `/clear & resume` notice
+- `skills/z-execute/SKILL.md:2531` — E2 notable-only breadcrumb — emit `context_breadcrumb` only when a concrete trigger held (decision, halt, spec-deviation, reviewer-retry)
 - `scripts/write-handoff.sh:1` — `write-handoff.sh` — produces `handoff.json` at compaction breakpoints (Hermes, gated by `hermes_enabled`) and at `/z-attend` yield points (protocol 1.1)
 
 ## How it interacts with others
@@ -54,7 +54,7 @@ _Note: this section is omitted entirely when `memories: []`._
 
 ## Examples
 
-Resume predicate check in `/z-implement-all` step 4a:
+Resume predicate check in `/z-execute` step 4a:
 
 ```bash
 CUR_HASH="$(bash scripts/session-helpers.sh done_set_hash "$TASKS_FILE")"

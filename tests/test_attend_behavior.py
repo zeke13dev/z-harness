@@ -226,7 +226,6 @@ class TestFourSubstantiveCategoriesSurface:
 
     @pytest.mark.parametrize("expected_cat,qid", [
         ("decision", "workflow.plan_decisions_approval"),
-        ("decision", "workflow.spec_retro_discovery"),
         ("risk",     "workflow.audit_to_amend"),
         ("risk",     "workflow.pre_run_cost_gate"),
     ])

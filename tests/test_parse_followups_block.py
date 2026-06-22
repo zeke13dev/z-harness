@@ -54,7 +54,7 @@ VALID_ENTRY_1 = {
 VALID_ENTRY_2 = {
     "priority": "P2",
     "name": "Update CI config",
-    "recommended_command": "/z-implement-next",
+    "recommended_command": "/z-execute",
     "cited_paths": [".github/workflows/ci.yml", "Makefile"],
     "recommended_command_safe_to_retry": False,
     "auto_close_eligible": True,
@@ -130,7 +130,7 @@ class TestValidEntry(unittest.TestCase):
         entry = {
             "priority": "P2",
             "name": "Minimal entry",
-            "recommended_command": "/z-implement-next",
+            "recommended_command": "/z-execute",
             "cited_paths": [],
         }
         result = _validate_entry(entry, 0)

@@ -1,5 +1,5 @@
 ---
-name: z-implement-all
+name: z-execute
 disable-model-invocation: false
 description: Orchestrate implementation of ALL pending tasks in z-harness/TASKS.md, spawning a fresh implementer subagent per task and a reviewer per task. Halts on blockers, retries once on review failure, push-notifies user on every gate.
 runtime: c1
@@ -9,7 +9,7 @@ driver_features_required:
 unsupported_driver_behavior: explicit_gate
 ---
 
-You are the **z-harness `/z-implement-all`** orchestrator. Your job is to drive the task queue to completion without losing the per-task fresh-context guarantee. You do not implement code yourself — you delegate each task to a fresh `implementer` subagent and each review to a fresh `reviewer` subagent.
+You are the **z-harness `/z-execute`** orchestrator. Your job is to drive the task queue to completion without losing the per-task fresh-context guarantee. You do not implement code yourself — you delegate each task to a fresh `implementer` subagent and each review to a fresh `reviewer` subagent.
 
 Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
 
@@ -47,7 +47,7 @@ step 3 binds `$BASE`** — i.e. AFTER all of:
 Those early Setup gates abort the run **before** this phase runs, so when any of them fires
 there is NO registry record yet → nothing to deregister, no zombie. Only once the plan is
 structurally valid and `$Z_HARNESS_SLUG` + `$BASE` are bound do we register.
-For tree-rooted plans, register ONE record for the whole `/z-implement-all` invocation using the
+For tree-rooted plans, register ONE record for the whole `/z-execute` invocation using the
 chosen top-level slug bound in step 2; per-cluster `$BASE` rebinding (Setup 2c) does not create
 additional records.
 
@@ -78,7 +78,7 @@ defeats the whole mechanism, so NEVER silent-continue. Spell out every exit code
 
 ```bash
 python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" register \
-  --run-id "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-implement-all --phase implement \
+  --run-id "$RUN" --slug "$Z_HARNESS_SLUG" --command /z-execute --phase implement \
   --session "$Z_HARNESS_SESSION_ID"
 REG_RC=$?
 ```
@@ -118,7 +118,7 @@ if [ "$REG_RC" -eq 0 ]; then
   mkdir -p "$CURRENT_ARCHIVE_DIR"
   RUN_BRIEF_INTENT="Implement all pending tasks in plan ${Z_HARNESS_SLUG:-$(basename "$BASE")}"
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh" init \
-    --run "$RUN" --command /z-implement-all \
+    --run "$RUN" --command /z-execute \
     --slug "${Z_HARNESS_SLUG:-$(basename "$BASE")}" \
     --profile full --intent "$RUN_BRIEF_INTENT"
   export RUN_BRIEF_PROFILE=full
@@ -156,7 +156,7 @@ subcommand returns 0 by design).
 ```
 Agent(
   subagent_type="scope-extractor",
-  description="Scope for /z-implement-all overlap scan",
+  description="Scope for /z-execute overlap scan",
   prompt="repo_root: <repo root abs path>\nbase: $BASE"
 )
 ```
@@ -202,7 +202,7 @@ Spell out every code:
   ```bash
   RB_HALT_REASON="scope overlap abort"
   ```
-  <!-- include: _fragments/run-brief-halt-finalize-implement-all.md -->
+  <!-- include: _fragments/run-brief-halt-finalize-execute.md -->
   ```bash
   FINALIZE_STATUS=aborted
   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
@@ -215,7 +215,7 @@ Spell out every code:
   ```bash
   RB_HALT_REASON="blocking scope overlap"
   ```
-  <!-- include: _fragments/run-brief-halt-finalize-implement-all.md -->
+  <!-- include: _fragments/run-brief-halt-finalize-execute.md -->
   ```bash
   FINALIZE_STATUS=aborted
   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
@@ -292,7 +292,7 @@ except (json.JSONDecodeError, OSError, KeyError, AttributeError):
       "$(printf '{"running_count":%d,"sink_path":"%s"}' "$RUNNING_COUNT" "$PROJECT_SINK")" 2>/dev/null || true
     RB_HALT_REASON="follow-up consumer active"
 ```
-<!-- include: _fragments/run-brief-halt-finalize-implement-all.md -->
+<!-- include: _fragments/run-brief-halt-finalize-execute.md -->
 ```bash
     FINALIZE_STATUS=aborted
     python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
@@ -316,9 +316,9 @@ If there are running follow-up consumer entries, **halt** — do not proceed wit
    ```
    Skip steps 2 (slug discovery) and 2a–2d (MANIFEST/SHARED-CONCERNS validation) entirely. Jump directly to step 3, binding `BASE` and the tasks file as derived above. `--ack` and `--force-partial` are no-ops in this mode.
 
-   **Example:** `/z-implement-all --tasks=z-harness/mr-style-reviewer/MR-REVIEW.md` reads task blocks from `MR-REVIEW.md` (e.g. `T-MR-001`, `T-MR-002`, …) and resolves SPEC.md at `z-harness/mr-style-reviewer/SPEC.md`.
+   **Example:** `/z-execute --tasks=z-harness/mr-style-reviewer/MR-REVIEW.md` reads task blocks from `MR-REVIEW.md` (e.g. `T-MR-001`, `T-MR-002`, …) and resolves SPEC.md at `z-harness/mr-style-reviewer/SPEC.md`.
 
-2. **Discover plan slug.** Multiple plans may coexist under `$Z_HARNESS_PLAN_DIR/`. A `$Z_HARNESS_PLAN_DIR/` may be either a **legacy single-slug plan** (contains `TASKS.md` directly) or a **tree-rooted plan** produced by `/z-plan-split` (contains `MANIFEST.md` + per-cluster subdirectories, each with its own `TASKS.md`):
+2. **Discover plan slug.** Multiple plans may coexist under `$Z_HARNESS_PLAN_DIR/`. A `$Z_HARNESS_PLAN_DIR/` may be either a **legacy single-slug plan** (contains `TASKS.md` directly) or a **tree-rooted plan** produced by `/z-plan-split` (contains `MANIFEST.md` + per-cluster subdirectories, each with its own `INTENT.md` + `MANIFEST.json` — or `SPEC.md`/`TASKS.md` for legacy clusters):
 
    **2a. Enumerate candidates.**
    - First, probe the canonical state-directory path: `$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" base_dir)/plans/`. For each subdir there: classify as `tree-rooted` if `<path>/MANIFEST.md` exists, else `legacy` if `<path>/TASKS.md` exists, else skip.
@@ -327,7 +327,7 @@ If there are running follow-up consumer entries, **halt** — do not proceed wit
    - Zero candidates → tell user to run `/z-plan` first; abort.
    - One candidate → use it.
    <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the slug-selection question via their native channel. Silent omission is forbidden. -->
-   - Multiple candidates → `AskUserQuestion` to pick. Mixed legacy + tree-rooted slugs are allowed in the same `/z-implement-all` invocation: the user picks one, validation/expansion below depends on its kind.
+   - Multiple candidates → `AskUserQuestion` to pick. Mixed legacy + tree-rooted slugs are allowed in the same `/z-execute` invocation: the user picks one, validation/expansion below depends on its kind.
    - Export `Z_HARNESS_SLUG=<slug>` (or leave unset for legacy flat) and `Z_HARNESS_PLAN_DIR=$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")`.
 
    **2b. If chosen slug is tree-rooted (has `$Z_HARNESS_PLAN_DIR/MANIFEST.md`), validate in order:**
@@ -380,7 +380,7 @@ If there are running follow-up consumer entries, **halt** — do not proceed wit
       Continue, but exclude failed clusters from the run set. Define `clusters_to_run` = run-order list with `failed`-status IDs filtered out.
 
       If `partial_tree: false` (or absent), `clusters_to_run` = full run-order list.
-   6. **Cluster-readiness gate (over `clusters_to_run` only).** For each cluster in `clusters_to_run`, look up its row in the Clusters table. The `Status` column must be `ready`; equivalently, the file at the cluster's `Path` column joined with `TASKS.md` must exist, parse cleanly, and contain ≥1 task block. Any cluster in `clusters_to_run` with `status: planning` (or `failed` — which can only happen if `--force-partial` was NOT in play, since 2b.5 already filtered failed) → halt with `cluster_not_ready` event:
+   6. **Cluster-readiness gate (over `clusters_to_run` only).** For each cluster in `clusters_to_run`, look up its row in the Clusters table. The `Status` column must be `ready`; equivalently, the cluster's `Path` column must point at a directory that holds either an **INTENT-mode artifact** (`INTENT.md` present, no `SPEC.md` — the default for `/z-plan-split` clusters, which now emit `INTENT.md` + `MANIFEST.json` instead of `TASKS.md`) or a **legacy artifact** (`SPEC.md`/`TASKS.md` present, where the joined `TASKS.md` parses cleanly and contains ≥1 task block). A cluster directory with neither is not ready. Any cluster in `clusters_to_run` with `status: planning` (or `failed` — which can only happen if `--force-partial` was NOT in play, since 2b.5 already filtered failed) → halt with `cluster_not_ready` event:
       ```bash
       bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" cluster_not_ready \
         "$(printf '{"slug":"%s","cluster_id":"%s","cluster_status":"%s"}' "$Z_HARNESS_SLUG" "<id>" "<status>")"
@@ -403,7 +403,7 @@ If there are running follow-up consumer entries, **halt** — do not proceed wit
         ```
         Continue.
 
-   **2c. Expand tree-rooted slug into cluster sequence.** On all validations passing, iterate `clusters_to_run` sequentially by default, with the optimization below. For each cluster ID in the list, look up its row in the parsed Clusters table and read the `Path` column verbatim — this is the canonical BASE for the cluster (`BASE = <Path value>`). Do **not** synthesize `BASE = $Z_HARNESS_PLAN_DIR/<cluster-id>/` from the ID; the MANIFEST's `Path` column is the source of truth (it may differ from the naive form). Validate that the lookup resolves to exactly one row per ID (already guaranteed by 2b.4's bijection check). Run the full main loop (steps 1–8) on that cluster's `BASE/TASKS.md`, then advance to the next cluster. Within each cluster, the existing N=3 parallel-batching applies as today (intra-cluster parallelism honored).
+   **2c. Expand tree-rooted slug into cluster sequence.** On all validations passing, iterate `clusters_to_run` sequentially by default, with the optimization below. For each cluster ID in the list, look up its row in the parsed Clusters table and read the `Path` column verbatim — this is the canonical BASE for the cluster (`BASE = <Path value>`). Do **not** synthesize `BASE = $Z_HARNESS_PLAN_DIR/<cluster-id>/` from the ID; the MANIFEST's `Path` column is the source of truth (it may differ from the naive form). Validate that the lookup resolves to exactly one row per ID (already guaranteed by 2b.4's bijection check). With the cluster's BASE bound, run the cluster through the **same mode-detection seam used for legacy single-slug plans** (Setup step 3.5): point step 3.5 at the cluster's BASE so it sets `IMPLEMENT_MODE` per that cluster's artifacts. A `/z-plan-split` cluster now emits `INTENT.md` + `MANIFEST.json` (no `SPEC.md`, no pre-baked `TASKS.md`), so step 3.5 will set `IMPLEMENT_MODE=intent` and the cluster runs the existing INTENT engine (freeze cluster `INTENT.md` → bootstrap cluster `LEDGER.md` → BFS `task-tree-generator` → per-task loop) rooted at the cluster's BASE — there is no pre-baked `TASKS.md` to read; the BFS generates the cluster's task tree at execution time. A legacy cluster (`SPEC.md`/`TASKS.md` present) sets `IMPLEMENT_MODE=legacy` and runs the existing task-dispatch main loop over `BASE/TASKS.md` unchanged. In either mode, advance to the next cluster when the cluster's loop completes. Within each cluster, the existing N=3 parallel-batching applies as today (intra-cluster parallelism honored). Do **not** add a separate cluster-only mode-detection branch — reuse the one `IMPLEMENT_MODE` seam.
 
    **Parallel-pair optimization (N=2 cross-cluster dispatch) — gated by `workflow.hermes_enabled`.** This optimization is Hermes machinery and only fires when `workflow.hermes_enabled=true`. When `hermes_enabled=false` (default), always dispatch clusters serially (the "any other case" fallback in point 3 below):
    ```bash
@@ -443,7 +443,7 @@ else
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" implement_halted_no_plan_artifact \
     "$(printf '{"base":"%s","checked":["SPEC.md","INTENT.md"]}' "$BASE")" 2>/dev/null || true
   RB_HALT_REASON="no plan artifact"
-  # include: _fragments/run-brief-halt-finalize-implement-all.md
+  # include: _fragments/run-brief-halt-finalize-execute.md
   FINALIZE_STATUS=aborted
   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
     --run-id "$RUN" --status aborted 2>/dev/null || true
@@ -477,7 +477,7 @@ if [ "$IMPLEMENT_MODE" = "intent" ]; then
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" intent_freeze_failed \
       "$(printf '{"base":"%s","intent_file":"%s"}' "$BASE" "$INTENT_FILE")" 2>/dev/null || true
     RB_HALT_REASON="INTENT freeze failed"
-    # include: _fragments/run-brief-halt-finalize-implement-all.md
+    # include: _fragments/run-brief-halt-finalize-execute.md
     FINALIZE_STATUS=aborted
     python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
       --run-id "$RUN" --status aborted 2>/dev/null || true
@@ -597,7 +597,7 @@ if [ "$IMPLEMENT_MODE" = "intent" ]; then
         "$(printf '{"base":"%s","level":%d,"level_cap":%d,"intent_frozen_at":"%s"}' \
            "$BASE" "$CURRENT_LEVEL" "$INTENT_BFS_LEVEL_CAP" "$INTENT_FROZEN_AT")" 2>/dev/null || true
       RB_HALT_REASON="INTENT BFS level cap reached (level ${CURRENT_LEVEL}, cap ${INTENT_BFS_LEVEL_CAP})"
-      # include: _fragments/run-brief-halt-finalize-implement-all.md
+      # include: _fragments/run-brief-halt-finalize-execute.md
       FINALIZE_STATUS=aborted
       python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
         --run-id "$RUN" --status aborted 2>/dev/null || true
@@ -616,7 +616,7 @@ if [ "$IMPLEMENT_MODE" = "intent" ]; then
         "$(printf '{"base":"%s","level":%d,"token_budget":%s,"intent_frozen_at":"%s"}' \
            "$BASE" "$CURRENT_LEVEL" "$INTENT_TOKEN_BUDGET" "$INTENT_FROZEN_AT")" 2>/dev/null || true
       RB_HALT_REASON="INTENT BFS budget exhausted (token_budget=${INTENT_TOKEN_BUDGET})"
-      # include: _fragments/run-brief-halt-finalize-implement-all.md
+      # include: _fragments/run-brief-halt-finalize-execute.md
       FINALIZE_STATUS=aborted
       python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
         --run-id "$RUN" --status aborted 2>/dev/null || true
@@ -704,7 +704,7 @@ task_id_start: ${TASK_ID_START}"
     if [ "${GENERATOR_STATUS}" = "unable_to_complete" ]; then
       echo "ERROR: task-tree-generator returned unable_to_complete at level ${CURRENT_LEVEL}." >&2
       RB_HALT_REASON="task-tree-generator unable_to_complete at level ${CURRENT_LEVEL}"
-      # include: _fragments/run-brief-halt-finalize-implement-all.md
+      # include: _fragments/run-brief-halt-finalize-execute.md
       FINALIZE_STATUS=aborted
       python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
         --run-id "$RUN" --status aborted 2>/dev/null || true
@@ -724,7 +724,7 @@ task_id_start: ${TASK_ID_START}"
         "$(printf '{"base":"%s","level":%d,"termination_condition":"%s","intent_frozen_at":"%s"}' \
            "$BASE" "$CURRENT_LEVEL" "${GENERATOR_TERMINATION:-level_cap}" "$INTENT_FROZEN_AT")" 2>/dev/null || true
       RB_HALT_REASON="INTENT BFS terminated by generator (${GENERATOR_TERMINATION:-level_cap}) at level ${CURRENT_LEVEL}"
-      # include: _fragments/run-brief-halt-finalize-implement-all.md
+      # include: _fragments/run-brief-halt-finalize-execute.md
       FINALIZE_STATUS=aborted
       python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
         --run-id "$RUN" --status aborted 2>/dev/null || true
@@ -913,7 +913,7 @@ style_path: ${STYLE_PATH}"
     if [ "${LEVEL_EXECUTE_RC:-0}" -ne 0 ]; then
       echo "INTENT BFS: per-level execute halted at level ${CURRENT_LEVEL}: ${LEVEL_EXECUTE_HALT_REASON}" >&2
       RB_HALT_REASON="${LEVEL_EXECUTE_HALT_REASON:-per-level execute halt at level ${CURRENT_LEVEL}}"
-      # include: _fragments/run-brief-halt-finalize-implement-all.md
+      # include: _fragments/run-brief-halt-finalize-execute.md
       FINALIZE_STATUS=aborted
       python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
         --run-id "$RUN" --status aborted 2>/dev/null || true
@@ -961,6 +961,51 @@ style_path: ${STYLE_PATH}"
       # At least one criterion unmet or unknown — continue to next level.
       echo "Acceptance evaluator: VERDICT: continue (level ${CURRENT_LEVEL})" >&2
       BFS_DONE=0
+
+      # ── Divergence halt check ────────────────────────────────────────
+      # After VERDICT: continue, scan the level's LEDGER entries for a
+      # divergence_signal flag set by any task in this level.  A divergence
+      # signal indicates that a BFS layer outcome has invalidated the frozen
+      # INTENT (e.g. grounding proved false, a key assumption collapsed) and
+      # the intent must be re-sharpened before the next level can be safely
+      # generated.
+      #
+      # The flag is written by implementers or reviewers as a LEDGER_DECISIONS
+      # entry of the form:
+      #   divergence_signal: <summary of the invalidating outcome>
+      # The orchestrator scans the current level's section in LEDGER.md for
+      # this key.
+      DIVERGENCE_SUMMARY="$(python3 -c "
+import re, sys
+content = open(sys.argv[1]).read()
+level = int(sys.argv[2])
+# Extract the current level's section.
+m = re.search(r'## Level ' + str(level) + r'\b(.*?)(?=\n## Level |\Z)', content, re.S)
+section = m.group(1) if m else ''
+# Look for a divergence_signal: line in the section.
+ds = re.search(r'divergence_signal:\s*(.+)', section)
+print(ds.group(1).strip() if ds else '')
+" "$LEDGER_FILE" "$CURRENT_LEVEL" 2>/dev/null || echo "")"
+
+      if [ -n "$DIVERGENCE_SUMMARY" ]; then
+        echo "INTENT BFS: divergence signal detected at level ${CURRENT_LEVEL}: ${DIVERGENCE_SUMMARY}" >&2
+        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" intent_bfs_divergence \
+          "$(printf '{"base":"%s","level":%d,"divergence_summary":"%s","intent_frozen_at":"%s"}' \
+             "$BASE" "$CURRENT_LEVEL" \
+             "$(printf '%s' "$DIVERGENCE_SUMMARY" | sed 's/"/\\"/g')" \
+             "$INTENT_FROZEN_AT")" 2>/dev/null || true
+        RB_HALT_REASON="INTENT BFS divergence at level ${CURRENT_LEVEL}: ${DIVERGENCE_SUMMARY}"
+        echo "" >&2
+        echo "The frozen INTENT has been invalidated by level ${CURRENT_LEVEL} outcomes." >&2
+        echo "Run: /z-amend --reopen-intent ${Z_HARNESS_SLUG:-$(basename "$BASE")} to re-sharpen the intent before resuming." >&2
+        echo "" >&2
+        # include: _fragments/run-brief-halt-finalize-execute.md
+        FINALIZE_STATUS=aborted
+        python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+          --run-id "$RUN" --status aborted 2>/dev/null || true
+        exit 1
+      fi
+
       CURRENT_LEVEL=$(( CURRENT_LEVEL + 1 ))
     fi
 
@@ -1041,6 +1086,44 @@ fi
   evidence-backed exception to "unknown == unmet". This is NOT a blanket override: a criterion
   with no concrete file evidence stays `unmet` and the loop continues.
 
+### Divergence halt
+
+After the acceptance evaluator returns `VERDICT: continue`, the orchestrator checks the current level's LEDGER entries for a `divergence_signal` flag before advancing to the next level. This check is part of the BFS outer loop (wired into the inline code block above) and fires on every `VERDICT: continue` path — never on `VERDICT: done` (no divergence check is needed when the plan is already complete).
+
+**What triggers a divergence signal.** An implementer or reviewer sets a `divergence_signal` in their `LEDGER_DECISIONS:` return when a BFS layer outcome reveals that the frozen INTENT contract has been invalidated: for example, a key grounding assumption proved false during implementation, a discovered file structure is incompatible with the INTENT's approach, or a completed task shows that the acceptance criteria themselves are internally contradictory. The signal is NOT set for ordinary incomplete work — only for outcomes that make the current INTENT unexecutable or self-contradictory.
+
+**LEDGER flag format.** The flag is written as a line in the task's `LEDGER_DECISIONS:` entry:
+
+```
+divergence_signal: <one-sentence summary of what was invalidated and why>
+```
+
+The orchestrator scans the current level's `## Level N` section in `LEDGER.md` for any `divergence_signal:` line after the level's tasks complete and the LEDGER is flushed.
+
+**Halt behavior.** When a `divergence_signal` is found:
+
+1. Emit `intent_bfs_divergence` event:
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" intent_bfs_divergence \
+     "$(printf '{"base":"%s","level":%d,"divergence_summary":"%s","intent_frozen_at":"%s"}' \
+        "$BASE" "$CURRENT_LEVEL" "<summary>" "$INTENT_FROZEN_AT")"
+   ```
+2. Set `RB_HALT_REASON` to the divergence summary.
+3. Print a prose instruction to the user (no `AskUserQuestion` — per the attended-pacing preference):
+   > The frozen INTENT has been invalidated by level N outcomes. Run: `/z-amend --reopen-intent <slug>` to re-sharpen the intent before resuming.
+4. Run the halt-finalize path (same as a level-cap halt):
+   ```bash
+   FINALIZE_STATUS=aborted
+   # include: _fragments/run-brief-halt-finalize-execute.md
+   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+     --run-id "$RUN" --status aborted 2>/dev/null || true
+   exit 1
+   ```
+
+This is the same finalize path as a level-cap halt: `FINALIZE_STATUS=aborted`, deregister with `aborted`, and exit non-zero. The user's next move is `/z-amend --reopen-intent <slug>`, which re-sharpens the INTENT and un-freezes it so a fresh `/z-execute` run can re-freeze from the new contract.
+
+**No divergence check on `VERDICT: done`.** The divergence scan only runs on the `VERDICT: continue` branch. When all acceptance criteria are met (`VERDICT: done`), the BFS loop terminates normally regardless of LEDGER content — a divergence signal in the final level's LEDGER is irrelevant because the plan succeeded.
+
 4. Read `$TASKS_FILE` into memory — always set by step 1's fast path or step 3's default above. You'll re-read between batches to pick up status flips. **Do NOT pre-extract SPEC/PLAN slices in main thread** — subagents will Read them directly from `$BASE/SPEC.md` and `$BASE/PLAN.md` themselves. This keeps the orchestrator main-thread context light across many tasks.
 
 4a. **Resume from SESSION.md if present and current.** Immediately after TASKS.md is in memory, before any task is dispatched:
@@ -1105,7 +1188,7 @@ fi
    Do **not** inline the SESSION.md body in any skip case. Continue to step 4b.
 
 4b. **Workstreams manifest (`workstreams.json`).** If `$BASE/workstreams.json` does not exist
-   yet (pre-plan plan, or first `/z-implement-all` on a plan from before this feature was added),
+   yet (pre-plan plan, or first `/z-execute` on a plan from before this feature was added),
    generate it once — but only when `workflow.hermes_enabled=true`. Best-effort — any failure is
    silent; when the file is absent (or was never generated), the Parallelism section falls back to
    inline `**Files:**` dedup alone.
@@ -1179,7 +1262,7 @@ fi
      ```bash
      RB_HALT_REASON="quiescence preflight abort"
      ```
-     <!-- include: _fragments/run-brief-halt-finalize-implement-all.md -->
+     <!-- include: _fragments/run-brief-halt-finalize-execute.md -->
      ```bash
      FINALIZE_STATUS=aborted
      python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
@@ -1196,6 +1279,24 @@ fi
 ## Compaction breakpoint policy
 
 High-context runs (many tasks, long wall time) accumulate orchestrator context pressure. These breakpoints fire at natural settle points — never mid-batch — so the user can `/clear` and resume with a fresh context window. The harness's durable state lives in TASKS.md, making `/clear` safe at any batch boundary.
+
+### INTENT mode: per-BFS-layer compaction
+
+In INTENT mode (`IMPLEMENT_MODE=intent`) compaction fires at **BFS level boundaries**, not per-task and not per-batch within a level. The natural settle point in INTENT mode is after all tasks in a BFS level complete and the LEDGER has been flushed — at that point the orchestrator context contains the full level outcome and is ready for a clean handoff.
+
+**`LEVEL_EXECUTE_SUPPRESS_COMPACTION=1`** is exported before the Main loop is invoked for each BFS level. This flag defers in-level `check-compaction.sh` triggers: when the Main loop sees `LEVEL_EXECUTE_SUPPRESS_COMPACTION=1` and the compaction threshold would otherwise fire, it sets `MAIN_LOOP_RESULT=compaction_deferred` and returns to the BFS caller instead of exiting. The BFS outer loop then decides whether to compact after LEDGER flush.
+
+**Thin-layer batching:** Consecutive BFS levels with fewer than 3 tasks each are batched together before a compaction fires. The orchestrator accumulates thin levels and defers compaction until either (a) a level with 3 or more tasks completes, or (b) the cumulative task count across thin levels reaches `Z_IMPLEMENT_PAUSE_TASKS`. This prevents spurious context breaks on lightweight BFS levels (e.g. a single-task bookkeeping level followed by another single-task doc update).
+
+**Context target for INTENT-mode compaction:** The compaction trigger aims to fire before the orchestrator context exceeds ~200-300k tokens. `check-compaction.sh` uses `Z_IMPLEMENT_PAUSE_TASKS` (default 5) and `Z_IMPLEMENT_PAUSE_MINUTES` (default 30) as its proxies for this target — these env vars remain the sole numeric inputs and can be tuned to match context consumption rate on large BFS plans.
+
+**Timing:** The compaction check runs AFTER the T011 LEDGER-flush hook completes (so the LEDGER is durably written) and AFTER the level-boundary done_set_hash checkpoint is persisted. This ensures the next invocation resumes from a fully checkpointed state.
+
+**No deregister on compaction-pause.** The BFS outer loop, like the legacy loop, treats a compaction-pause as a non-terminal exit (see Main-loop condition 3): do NOT deregister the registry record on a compaction-pause exit — the run is paused, not finished. The next `/z-execute` invocation re-registers and resumes from the checkpointed BFS level.
+
+### Legacy mode: per-batch compaction
+
+In legacy mode (`IMPLEMENT_MODE=legacy`) the existing batch-settle semantics apply unchanged, as documented below.
 
 **Env vars:**
 - `Z_IMPLEMENT_PAUSE_TASKS` (default `5`) — number of completed (`[x]`) tasks since last pause that triggers a breakpoint.
@@ -1344,7 +1445,7 @@ if [ "$CURATOR_SUCCESS" -eq 1 ]; then
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/write-handoff.sh" || true
   fi  # hermes_enabled gate (Invariant 6: write-handoff.sh never runs unless hermes_enabled=true)
   # Emit /clear & resume push-notify (hard pause).
-  push_notify "Compaction breakpoint: <N> tasks completed (or <M> min wall). <K> pending tasks remain. Run \`/clear\`, then re-invoke \`/z-implement-all\` to resume from TASKS.md. Or run \`/handoff\` to write a handoff artifact for a different agent. Use \`/compact\` instead if you need chat history for debugging."
+  push_notify "Compaction breakpoint: <N> tasks completed (or <M> min wall). <K> pending tasks remain. Run \`/clear\`, then re-invoke \`/z-execute\` to resume from TASKS.md. Or run \`/handoff\` to write a handoff artifact for a different agent. Use \`/compact\` instead if you need chat history for debugging."
 else
   # FAILURE/DISABLED PATH — curator disabled (TIMEOUT_S=0), or failed both attempts,
   # or hash mismatch between curator return and current TASKS.md done-set.
@@ -1357,9 +1458,9 @@ else
   # Emphatic push-notify — NEVER suggests /clear; always /compact-or-continue.
   # When curator was disabled (TIMEOUT_S=0), this is the plain pause notice per today's behavior.
   if [ "${Z_SESSION_CURATOR_TIMEOUT_S}" -gt 0 ]; then
-    push_notify "Context flush failed (\`${CURATOR_REASON}\`). SESSION.md not fully updated. Continue \`/z-implement-all\` as-is (history retained), or \`/compact\` to reduce context now. Or run \`/handoff\` to write a handoff artifact for a different agent. Retrying next breakpoint."
+    push_notify "Context flush failed (\`${CURATOR_REASON}\`). SESSION.md not fully updated. Continue \`/z-execute\` as-is (history retained), or \`/compact\` to reduce context now. Or run \`/handoff\` to write a handoff artifact for a different agent. Retrying next breakpoint."
   else
-    push_notify "Compaction breakpoint: <N> tasks completed (or <M> min wall). <K> pending tasks remain. Run \`/clear\`, then re-invoke \`/z-implement-all\` to resume from TASKS.md. Or run \`/handoff\` to write a handoff artifact for a different agent. Use \`/compact\` instead if you need chat history for debugging."
+    push_notify "Compaction breakpoint: <N> tasks completed (or <M> min wall). <K> pending tasks remain. Run \`/clear\`, then re-invoke \`/z-execute\` to resume from TASKS.md. Or run \`/handoff\` to write a handoff artifact for a different agent. Use \`/compact\` instead if you need chat history for debugging."
   fi
 fi
 ```
@@ -1377,7 +1478,7 @@ The numbered steps below describe a **single task track** — one task's journey
 3. **Parallel dispatch (per phase):** within a batch, run the spec-precheck for all batch tasks in a single message with multiple `Agent()` calls. Same for the implementer phase. Same for the reviewer phase.
 4. **Halt semantics.** If one track returns `spec_problem` / `decision_needed` / `needs_clarification` / `unable_to_complete`, that *track* halts and you collect the question. **In-flight tracks for other tasks continue.** Only after the batch completes do you present the collected halts to the user (one `AskUserQuestion` per halt, in order).
 5. **Atomic TASKS.md updates.** The orchestrator is single-writer. Read the file, modify multiple task statuses if a batch finishes together, write once. Never partial-write.
-6. **`workstreams.json` is your concurrency DAG.** Read `$BASE/workstreams.json` (generated at plan creation time, or on first `/z-implement-all` if absent). Use it alongside rule 2's inline `**Files:**` dedup:
+6. **`workstreams.json` is your concurrency DAG.** Read `$BASE/workstreams.json` (generated at plan creation time, or on first `/z-execute` if absent). Use it alongside rule 2's inline `**Files:**` dedup:
    - `deps` and `file_conflicts` arrays give the complete dependency graph. Tasks with disjoint file sets and no dependency chain can run in parallel — no hard cap, the DAG decides.
    - `scope_unknown: true` means some task block has no parseable `**Files:**` line — rule 2 is blind for that task. The orchestrator knows this and decides whether to parallelize anyway or serialize, weighing the risk of clobbered edits.
    - When `workstreams.json` is absent (pre-existing plan), fall back to rule 2 alone — behavior is byte-identical to before this feature existed.
@@ -1386,7 +1487,7 @@ The numbered steps below describe a **single task track** — one task's journey
 
 These exist because the T006 saga (4 attempts spanning ~20 wall-clock hours, each a *different* failure mode — OOM, degenerate model, load avg 156, load avg 211) was not caught by the skip-marker list. Skip-markers match static text in the task block; they cannot catch novel runtime failures. The caps below are unconditional.
 
-- **`MAX_ATTEMPTS=2` per task ID for the entire `/z-implement-all` run.** "Attempt" = a fresh dispatch through step 5 (implementer). Retries inside step 7 (review-failure re-spawn) count as part of the same attempt. After 2 attempts that don't reach `task_done`, halt the task, push-notify, and present to the user with options: skip / override / re-spec / abandon. Override via `runtime.max_attempts` in config. If the user chooses **abandon** (ending the run), this is a run-ending halt — **set `FINALIZE_STATUS=aborted`** before reaching Finalize (per the FINALIZE_STATUS rule in Phase 0.0).
+- **`MAX_ATTEMPTS=2` per task ID for the entire `/z-execute` run.** "Attempt" = a fresh dispatch through step 5 (implementer). Retries inside step 7 (review-failure re-spawn) count as part of the same attempt. After 2 attempts that don't reach `task_done`, halt the task, push-notify, and present to the user with options: skip / override / re-spec / abandon. Override via `runtime.max_attempts` in config. If the user chooses **abandon** (ending the run), this is a run-ending halt — **set `FINALIZE_STATUS=aborted`** before reaching Finalize (per the FINALIZE_STATUS rule in Phase 0.0).
 - **`MAX_TASK_WALL_MS=2700000` (45 min) per task track.** Wall time start = `task_start` event; end = `task_done` or halt. If a track exceeds this, the orchestrator halts the track regardless of subagent state, logs `task_halt` with `reason: "wall_clock_cap"`, and surfaces to the user. If this ends the run (user chooses to abandon), **set `FINALIZE_STATUS=aborted`** before reaching Finalize. Override via `runtime.max_task_wall_ms` in config.
 - **`MAX_DISTINCT_HALTS=3` per task ID.** If a task has been halted with 3 different `reason` values across all attempts (e.g. `spec_problem`, `unable_to_complete`, `environmental`), auto-flag it as skip for the rest of the run and present to the user with a one-line summary of the three failure modes. Prevents the T006 pattern.
 - **`MAX_BATCH_STALL_MS=1800000` (30 min) per batch.** If a batch goes 30 min with no `task_done` or `task_halt` event from *any* in-flight track, the orchestrator considers it stalled. Push-notify the user with a list of in-flight task IDs and ask: continue waiting / cancel batch / kill specific tracks.
@@ -1468,7 +1569,7 @@ Scan the **entire task block** (title, Files, Depends, Acceptance — every line
 <!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the skip-flagged task decision (skip / run myself / defer / override) via their native channel. Silent omission is forbidden. -->
 When halting on a skip-flagged task, immediately push-notify (fires regardless of notification level; see [docs/human/config.md](docs/human/config.md)) and use `AskUserQuestion` with options:
 - **Skip entirely** — leave `[ ]`, exclude from this run's eligibility for the rest of the loop, continue with other eligible tasks.
-- **I'll run it myself** — leave `[ ]`, exclude for now; user will mark `[x]` manually when done, then re-invoke `/z-implement-all` to resume.
+- **I'll run it myself** — leave `[ ]`, exclude for now; user will mark `[x]` manually when done, then re-invoke `/z-execute` to resume.
 - **Defer** — leave `[ ]`, eligible again on the next outer loop iteration (use when waiting on a transient condition).
 - **Override and run anyway** — only if user explicitly accepts; proceed to step 3.
 
@@ -2211,7 +2312,7 @@ Log the base codex reviewer as `persona_bound` (tag `reviewer_participant=base_c
   if [ "$PERSONA_ROTATION" = "true" ]; then
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
       "tasks/<task-id>" persona_bound \
-      "$(python3 -c 'import json,sys; print(json.dumps({"command":"z-implement-all","role":"reviewer","task_id":sys.argv[1],"attempt_id":sys.argv[2],"draw_id":sys.argv[2]+"-base_codex","reviewer_participant":"base_codex","cycle":int(sys.argv[3])}))' "<task-id>" "$ATTEMPT_ID" "$CYCLE")"
+      "$(python3 -c 'import json,sys; print(json.dumps({"command":"z-execute","role":"reviewer","task_id":sys.argv[1],"attempt_id":sys.argv[2],"draw_id":sys.argv[2]+"-base_codex","reviewer_participant":"base_codex","cycle":int(sys.argv[3])}))' "<task-id>" "$ATTEMPT_ID" "$CYCLE")"
   fi
 ```
 
@@ -2258,7 +2359,7 @@ Log the random-arm reviewer as `persona_bound` (tag `reviewer_participant=random
   if [ "$PERSONA_ROTATION" = "true" ] && [ "$REVIEW_EVAL" = "true" ]; then
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
       "tasks/<task-id>" persona_bound \
-      "$(python3 -c 'import json,sys; print(json.dumps({"command":"z-implement-all","role":"reviewer","task_id":sys.argv[1],"attempt_id":sys.argv[2],"reviewer_participant":"random_arm","persona_id":sys.argv[3],"draw_id":sys.argv[4],"cycle":int(sys.argv[5])}))' "<task-id>" "$ATTEMPT_ID" "$REVIEWER_PERSONA_ID" "$REVIEWER_DRAW_ID" "$CYCLE")"
+      "$(python3 -c 'import json,sys; print(json.dumps({"command":"z-execute","role":"reviewer","task_id":sys.argv[1],"attempt_id":sys.argv[2],"reviewer_participant":"random_arm","persona_id":sys.argv[3],"draw_id":sys.argv[4],"cycle":int(sys.argv[5])}))' "<task-id>" "$ATTEMPT_ID" "$REVIEWER_PERSONA_ID" "$REVIEWER_DRAW_ID" "$CYCLE")"
   fi
 ```
 
@@ -2400,7 +2501,7 @@ Log the base codex reviewer as `persona_bound` (tag `reviewer_participant=base_c
 if [ "$PERSONA_ROTATION" = "true" ]; then
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
     "tasks/<task-id>" persona_bound \
-    "$(python3 -c 'import json,sys; print(json.dumps({"command":"z-implement-all","role":"reviewer","task_id":sys.argv[1],"attempt_id":sys.argv[2],"draw_id":sys.argv[2]+"-base_codex","reviewer_participant":"base_codex","cycle":int(sys.argv[3])}))' "<task-id>" "$ATTEMPT_ID" "$CYCLE")"
+    "$(python3 -c 'import json,sys; print(json.dumps({"command":"z-execute","role":"reviewer","task_id":sys.argv[1],"attempt_id":sys.argv[2],"draw_id":sys.argv[2]+"-base_codex","reviewer_participant":"base_codex","cycle":int(sys.argv[3])}))' "<task-id>" "$ATTEMPT_ID" "$CYCLE")"
 fi
 ```
 
@@ -2444,7 +2545,7 @@ Log the random-arm reviewer as `persona_bound` (tag `reviewer_participant=random
 if [ "$PERSONA_ROTATION" = "true" ] && [ "$REVIEW_EVAL" = "true" ]; then
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
     "tasks/<task-id>" persona_bound \
-    "$(python3 -c 'import json,sys; print(json.dumps({"command":"z-implement-all","role":"reviewer","task_id":sys.argv[1],"attempt_id":sys.argv[2],"reviewer_participant":"random_arm","persona_id":sys.argv[3],"draw_id":sys.argv[4],"cycle":int(sys.argv[5])}))' "<task-id>" "$ATTEMPT_ID" "$REVIEWER_PERSONA_ID" "$REVIEWER_DRAW_ID" "$CYCLE")"
+    "$(python3 -c 'import json,sys; print(json.dumps({"command":"z-execute","role":"reviewer","task_id":sys.argv[1],"attempt_id":sys.argv[2],"reviewer_participant":"random_arm","persona_id":sys.argv[3],"draw_id":sys.argv[4],"cycle":int(sys.argv[5])}))' "<task-id>" "$ATTEMPT_ID" "$REVIEWER_PERSONA_ID" "$REVIEWER_DRAW_ID" "$CYCLE")"
 fi
 ```
 
@@ -2509,7 +2610,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tas
 3a. **Emit `persona_attempt_outcome` (attempt close — only when `experiment.persona_rotation == "true"`).** This is the per-attempt terminal-outcome event introduced in T007; it shares `attempt_id` + `draw_id` with the attempt's draw event so analysis can join them. Emit exactly ONE per attempt at its close. **When the knob is `false`, skip this entirely — no new event** (knob-OFF is a clean no-op). Use the `persona_id` / `draw_id` / `selection_source` retained from step 5.0 (or step 7a on retry) and the stratification fields the orchestrator already has in hand:
 
    - `complexity_tier`: parsed from the task block's `**Complexity:**` stamp (empty string if the task has no stamp).
-   - `command`: `z-implement-all`.
+   - `command`: `z-execute`.
    - `diff_size`: `wc -l` of the attempt diff (`$BASE/archive/tasks/<task-id>/diff.patch`).
    - `review_cycles` / `retries`: derived from `$CYCLE` (`review_cycles = $CYCLE`; `retries = $CYCLE - 1`).
    - `blocker_count`: blocker count from the final reviewer return (0 when the reviewer was skipped).
@@ -2536,7 +2637,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "tas
      payload="$(python3 -c '
 import json, sys
 print(json.dumps({
-  "run_id": sys.argv[1], "command": "z-implement-all", "role": "implementer",
+  "run_id": sys.argv[1], "command": "z-execute", "role": "implementer",
   "task_id": sys.argv[2], "attempt_id": sys.argv[3], "persona_id": sys.argv[4],
   "draw_id": sys.argv[5], "complexity_tier": sys.argv[6], "diff_size": int(sys.argv[7]),
   "review_cycles": int(sys.argv[8]), "retries": int(sys.argv[9]),
@@ -2666,7 +2767,7 @@ fi
 
 Before `deregister --status aborted` on any run-ending halt after `run-brief.sh init` (unless register failed — no deregister). Set `RB_HALT_REASON` to a short reason string, then include the halt-finalize fragment. When no artifact exists, the shared fragment auto-downgrades to **lite** (Intent + Outcome + Next) but still runs `--require`.
 
-<!-- include: _fragments/run-brief-halt-finalize-implement-all.md -->
+<!-- include: _fragments/run-brief-halt-finalize-execute.md -->
 
 Then set `FINALIZE_STATUS=aborted` and deregister (unless `--require` failure already set it):
 
@@ -2682,7 +2783,7 @@ When the loop exits (no more eligible tasks, or you halted):
 
 **Compaction-pause exits (Main-loop condition 3) deliberately skip this entire section** — do NOT
 deregister there, and do NOT run Run Brief finalize (`skip_brief_on: compaction_pause` per
-`docs/llm/run-brief-registry.json`). The run is paused, not finished; the next `/z-implement-all`
+`docs/llm/run-brief-registry.json`). The run is paused, not finished; the next `/z-execute`
 invocation re-registers (idempotent) and resumes.
 
 1. Re-read `$TASKS_FILE` for final counts: `done`, `pending`, `in_progress`, `skipped`, `blocked`
@@ -2727,8 +2828,8 @@ invocation re-registers (idempotent) and resumes.
    bash "$RB_SH" set-section --run "$RUN" --section outcome --value "$OUTCOME"
 
    if [ "${PENDING_COUNT:-0}" -gt 0 ] || [ "${BLOCKED_COUNT:-0}" -gt 0 ]; then
-     NEXT_LABEL="Resume /z-implement-all or run /z-implement-next for one task"
-     NEXT_CMD="/z-implement-next"
+     NEXT_LABEL="Resume /z-execute to continue the remaining tasks"
+     NEXT_CMD="/z-execute"
    else
      NEXT_LABEL="Run /z-review-all for final-gate cross-LLM review"
      NEXT_CMD="/z-review-all"
@@ -3041,12 +3142,12 @@ Emission is gated by `axioms.auto_extract_post_run` (default `true`); when `fals
 
 ---
 
-<!-- ADVISORY-EVAL-REVIEWER: canonical shared snippet — referenced by z-plan-light.md, z-fix.md, z-do.md; do NOT copy-paste this block into those files, point here instead. -->
+<!-- ADVISORY-EVAL-REVIEWER: canonical shared snippet — referenced by z-fix.md, z-do.md; do NOT copy-paste this block into those files, point here instead. -->
 ## Advisory eval-reviewer (shared snippet) {#ADVISORY-EVAL-REVIEWER}
 
 **Purpose.** This block is the single canonical definition of the advisory eval-reviewer pattern.
-Commands that need the same behaviour (z-plan-light Phase 8, z-fix, z-do) MUST reference this
-section — "see the Advisory eval-reviewer shared snippet in commands/z-implement-all.md" — and
+Commands that need the same behaviour (z-fix, z-do) MUST reference this
+section — "see the Advisory eval-reviewer shared snippet in skills/z-execute/SKILL.md" — and
 must NOT duplicate the mechanism.  The inline dual-reviewer logic already in steps 6 and 7a
 implements this pattern; this section codifies it as a referenceable unit.
 
@@ -3140,7 +3241,7 @@ if [ "$PERSONA_ROTATION" = "true" ] && [ "$REVIEW_EVAL" = "true" ]; then
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
     "tasks/<task-id>" persona_bound \
     "$(python3 -c 'import json,sys; print(json.dumps({
-      "command":"z-implement-all","role":"reviewer",
+      "command":"z-execute","role":"reviewer",
       "task_id":sys.argv[1],"attempt_id":sys.argv[2],
       "reviewer_participant":"random_arm",
       "persona_id":sys.argv[3],"draw_id":sys.argv[4],

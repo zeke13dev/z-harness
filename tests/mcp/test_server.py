@@ -177,7 +177,7 @@ class TestProgressPhases:
 
         assert "z_plan" in _PROGRESS_PHASES
         assert _PROGRESS_PHASES["z_plan"] == ["premise_check", "explore", "decisions", "consult", "writing", "complete"]
-        assert "z_implement_all" in _PROGRESS_PHASES
+        assert "z_execute" in _PROGRESS_PHASES
         assert "z_debug" in _PROGRESS_PHASES
         assert _PROGRESS_PHASES["z_debug"] == ["repro", "hypothesis", "evidence", "isolate", "fix", "post_mortem"]
 

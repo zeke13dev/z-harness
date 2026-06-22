@@ -5,10 +5,9 @@ from z-harness plan artifacts.
 
 Hermes Integration Protocol v1.2.0 (docs/human/hermes-integration-v1.md).
 
-Three modes:
+Two modes:
   --source=z-plan-split  → reads MANIFEST.md + SHARED-CONCERNS.md
   --source=z-plan        → reads TASKS.md, runs 5-rule DAG algorithm
-  --source=z-plan-light  → reads FIX.md, single workstream
 
 Atomic output to <plan-dir>/workstreams.json via temp file + rename.
 Idempotent: unchanged inputs → byte-identical output.
@@ -829,42 +828,6 @@ def build_from_flat(plan_dir, slug):
 
 
 # ---------------------------------------------------------------------------
-# Mode: z-plan-light (FIX.md)
-# ---------------------------------------------------------------------------
-
-def build_from_light(plan_dir, slug):
-    """Build workstreams.json from FIX.md (single workstream)."""
-    fix_path = os.path.join(plan_dir, "FIX.md")
-    
-    if not os.path.exists(fix_path):
-        raise FileNotFoundError(f"FIX.md not found at {fix_path}")
-    
-    # Parse task IDs from FIX.md (look for task references in the text)
-    text = Path(fix_path).read_text()
-    task_ids = []
-    for line in text.splitlines():
-        m = re.match(r"^#{2,3}\s+(T\d+)", line.strip())
-        if m:
-            task_ids.append(m.group(1))
-    
-    if not task_ids:
-        # No structured tasks — single implicit workstream
-        task_ids = ["T001"]
-    
-    workstreams = [{
-        "id": "ws-1",
-        "status": "ready",
-        "name": task_ids[0],
-        "path": f"z-harness/{slug}",  # no trailing slash (see build_from_flat note + schema)
-        "tasks": task_ids,
-        "depends_on": [],
-        "parallel_group": "level-0",  # Single workstream; no deps → depth 0.
-    }]
-
-    return workstreams, [], ["ws-1"], False, False
-
-
-# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -884,13 +847,9 @@ def build_workstreams_json(slug, source, plan_dir):
         workstreams, file_conflicts, merge_order, partial_tree, scope_unknown = (
             build_from_flat(plan_dir, slug)
         )
-    elif source == "z-plan-light":
-        workstreams, file_conflicts, merge_order, partial_tree, scope_unknown = (
-            build_from_light(plan_dir, slug)
-        )
     else:
         raise ValueError(
-            f"Unknown source '{source}'. Expected: z-plan-split, z-plan, or z-plan-light"
+            f"Unknown source '{source}'. Expected: z-plan-split or z-plan"
         )
 
     result = {
@@ -921,7 +880,7 @@ def main():
     )
     parser.add_argument(
         "--source", required=True,
-        choices=["z-plan-split", "z-plan", "z-plan-light"],
+        choices=["z-plan-split", "z-plan"],
         help="Plan type that produced the artifacts"
     )
     parser.add_argument(

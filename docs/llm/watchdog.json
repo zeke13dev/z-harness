@@ -12,7 +12,7 @@
     "scripts/active-plan-registry.py",
     "agents/reviewer.md",
     "agents/remote-runner.md",
-    "commands/z-implement-all.md",
+    "skills/z-execute/SKILL.md",
     "commands/z-overnight.md"
   ],
   "confidence": "high",
@@ -43,7 +43,7 @@
       "line": 1,
       "symbol": "watchdog-spawn.sh",
       "kind": "module",
-      "summary": "Atomic single-spawn guard for the sweep. Uses flock on $Z_HARNESS_PLAN_DIR/active/<run>.watchdog.pid: if file holds a live pid, skip spawn; else spawn, write pid, release. Called by z-implement-all and z-overnight at run start."
+      "summary": "Atomic single-spawn guard for the sweep. Uses flock on $Z_HARNESS_PLAN_DIR/active/<run>.watchdog.pid: if file holds a live pid, skip spawn; else spawn, write pid, release. Called by z-execute and z-overnight at run start."
     },
     {
       "file": "scripts/check-timeout.sh",

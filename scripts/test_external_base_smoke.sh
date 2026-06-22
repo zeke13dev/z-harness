@@ -222,7 +222,7 @@ EXIT_C=0
     python3 "$REGISTRY" register \
       --run-id "$RUN_ID" \
       --slug "$SLUG_NEW" \
-      --command "/z-implement-all" \
+      --command "/z-execute" \
       --phase "implement" \
       2>/dev/null
 ) || EXIT_C=$?
@@ -255,7 +255,7 @@ rec = json.load(open(sys.argv[1]))
 print(rec.get('command', ''))
 " "$EXPECTED_RECORD" 2>/dev/null || true)"
 
-assert_eq "SMOKE-C: record command is '/z-implement-all'" "/z-implement-all" "$RECORD_COMMAND"
+assert_eq "SMOKE-C: record command is '/z-execute'" "/z-execute" "$RECORD_COMMAND"
 
 # ---------------------------------------------------------------------------
 # SMOKE-D: scope extraction via mechanical fallback → update-scope → record contains scope

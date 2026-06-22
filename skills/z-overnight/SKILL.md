@@ -418,7 +418,7 @@ find "$ARCHIVE_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
 Map `STEP_NAME` to the skill ID **before** exporting `Z_HARNESS_NO_ASK`. Unknown step names must be handled here so that the error path never runs with NO_ASK set:
 - `plan` → `SKILL_ID="z-harness:z-plan"`, `SKILL_ARGS=TASK_DESCRIPTION`
 - `test` → `SKILL_ID="z-harness:z-test"`, `SKILL_ARGS=TASK_DESCRIPTION`
-- `implement-all` → `SKILL_ID="z-harness:z-implement-all"`, `SKILL_ARGS=""`
+- `implement-all` → `SKILL_ID="z-harness:z-execute"`, `SKILL_ARGS=""`
 - `review-all` → `SKILL_ID="z-harness:z-review-all"`, `SKILL_ARGS=""`
 - `research` → `SKILL_ID="z-harness:z-research"`, `SKILL_ARGS=TASK_DESCRIPTION`
 - Unknown step name → (Z_HARNESS_NO_ASK is still unset here) set step status to `error`, `error_event = {kind: "skill_tool_failure", message: "Unknown step name: <STEP_NAME>"}`, jump to terminal handling (Step 3.10).

@@ -161,7 +161,7 @@ class TestSinkAddHappyPath(unittest.TestCase):
             "--sink=project",
             "--priority=P1",
             "--name=Write tests",
-            "--recommended-command=/z-implement-next",
+            "--recommended-command=/z-execute",
             f"--source-artifact={self.source}",
             f"--cited-paths={self.cited}",
             "--prompt-body=Write more tests",
@@ -248,7 +248,7 @@ class TestSinkAddDedupSkip(unittest.TestCase):
     def test_dedup_across_different_source_artifacts(self) -> None:
         """Same name + command from a DIFFERENT source_artifact → still exits 3 (dedup).
 
-        This covers the double-routing bug (M9): z-implement-next Phase 3.5 passes
+        This covers the double-routing bug (M9): z-execute Phase 3.5 passes
         a per-task diff.patch as source_artifact while z-review-all Phase 3.7.5
         passes findings.md.  The same logical follow-up must not be written twice.
         """

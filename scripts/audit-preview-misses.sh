@@ -404,7 +404,7 @@ if [[ $TOTAL_GATED -eq 0 ]]; then
   _emit ""
   _emit "To populate this audit:"
   _emit "  1. Enable the pre-review gate:  export Z_HARNESS_IMPL_PRE_REVIEW=1"
-  _emit "  2. Run some low-tier tasks:     /z-implement-all (tasks marked Complexity: low)"
+  _emit "  2. Run some low-tier tasks:     /z-execute (tasks marked Complexity: low)"
   _emit "  3. Re-run this script to see Flash false-negative rate."
   _emit ""
   _emit "Use --demo to exercise the full audit flow with synthetic data."

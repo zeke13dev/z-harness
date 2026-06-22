@@ -8,14 +8,13 @@
 #
 # ROLE-BEARING dispatch types and their canonical logging location:
 #
-#   implementer       — z-implement-all.md logs it (orchestrator-side, after Agent() returns)
+#   implementer       — z-execute.md logs it (orchestrator-side, after Agent() returns)
 #   reviewer          — agents/reviewer.md self-logs (the agent logs its own invocation)
 #   consultant-primary  — agents/consultant-primary.md self-logs
 #   consultant-secondary — agents/consultant-secondary.md self-logs
 #
-# CANONICAL FILES (the 5 sites that must contain log-subagent.sh — 4 wired by T006, 1 by T007):
-#   commands/z-implement-all.md          must contain log-subagent.sh
-#   commands/z-implement-next.md         must contain log-subagent.sh (wired by T007)
+# CANONICAL FILES (the 4 sites that must contain log-subagent.sh — wired by T006):
+#   skills/z-execute/SKILL.md          must contain log-subagent.sh
 #   agents/reviewer.md                   must contain log-subagent.sh
 #   agents/consultant-primary.md         must contain log-subagent.sh
 #   agents/consultant-secondary.md       must contain log-subagent.sh
@@ -105,8 +104,7 @@ echo ""
 echo "Part 1: Canonical logging sites (T006-wired) must still have log-subagent.sh"
 
 _CANONICAL_FILES=(
-  "skills/z-implement-all/SKILL.md"
-  "skills/z-implement-next/SKILL.md"
+  "skills/z-execute/SKILL.md"
   "agents/reviewer.md"
   "agents/consultant-primary.md"
   "agents/consultant-secondary.md"

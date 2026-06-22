@@ -92,7 +92,7 @@ z-harness commands are invoked as slash commands in the Cline chat interface.
 Type `/z-<command>` to trigger a command, e.g.:
 
 - `/z-plan`              — plan a feature or refactor
-- `/z-implement-all`     — implement all tasks in a TASKS.md plan
+- `/z-execute`           — execute all tasks in a TASKS.md plan
 - `/z-audit-plan`        — audit an existing TASKS.md plan
 - `/z-review`            — run a post-implementation review pass
 - `/z-export`            — export z-harness to IDE rule files

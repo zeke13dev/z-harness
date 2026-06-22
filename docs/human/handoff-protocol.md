@@ -9,7 +9,7 @@ The handoff protocol is a lightweight machine-readable session-continuity mechan
 
 The handoff is intentionally thin. It does not duplicate plan state (SPEC.md, PLAN.md, TASKS.md, LEDGER.md). It points at those files via `context_files` and carries a one-sentence `next_step` continuation prompt. The orchestrator owns all spawn, model-selection, and session-setup decisions; `handoff.json` is pure data.
 
-There are two producers. The `/z-handoff` slash command is the agent-facing explicit producer: it auto-detects context, assembles the JSON, and writes it. The `scripts/write-handoff.sh` script is the automated producer called at compaction breakpoints in `/z-implement-all` (gated by `hermes_enabled=true`) and at yield boundaries in `/z-attend` (unconditional). The two consumers are Hermes (protocol 1.0, compaction path) and `/z-attend resume` (protocol 1.1, validated resume path).
+There are two producers. The `/z-handoff` slash command is the agent-facing explicit producer: it auto-detects context, assembles the JSON, and writes it. The `scripts/write-handoff.sh` script is the automated producer called at compaction breakpoints in `/z-execute` (gated by `hermes_enabled=true`) and at yield boundaries in `/z-attend` (unconditional). The two consumers are Hermes (protocol 1.0, compaction path) and `/z-attend resume` (protocol 1.1, validated resume path).
 
 ## Key entry points
 
@@ -21,7 +21,7 @@ There are two producers. The `/z-handoff` slash command is the agent-facing expl
 ## How it interacts with others
 
 - `attend` — `/z-attend` is the primary 1.1 consumer; Phase 0R reads `handoff.json`'s `attend_resume` predicate before re-entering the chain; Phase 2 Step 2.9 calls `write-handoff.sh` with `Z_HARNESS_ATTEND_RESUME=1` at yield boundaries (plan and implement-all steps)
-- `session-handoff` — shares `write-handoff.sh` as the automated writer; the compaction breakpoint in `/z-implement-all` calls `write-handoff.sh` (protocol 1.0) only when `hermes_enabled=true`; session-handoff owns the SESSION.md/curator side; handoff-protocol owns the `handoff.json` artifact side
+- `session-handoff` — shares `write-handoff.sh` as the automated writer; the compaction breakpoint in `/z-execute` calls `write-handoff.sh` (protocol 1.0) only when `hermes_enabled=true`; session-handoff owns the SESSION.md/curator side; handoff-protocol owns the `handoff.json` artifact side
 - `hermes-orchestration` — Hermes is the protocol 1.0 consumer for the compaction path; it spawns a new agent session from `handoff.json` after Hermes-managed task completion
 - `commands` — `/z-handoff` is a slash command; `/z-attend` embeds the yield and resume logic
 
@@ -29,7 +29,7 @@ There are two producers. The `/z-handoff` slash command is the agent-facing expl
 
 - Protocol 1.0 vs 1.1 is determined at write time by the presence of `Z_HARNESS_ATTEND_RESUME=1`. An attend yield that omits any of the 5 attend env vars causes `write-handoff.sh` to exit non-zero and the yield to fail loudly — the schema requires `minLength:1` for every `attend_resume` sub-field.
 - `handoff.json` is written to `$Z_HARNESS_PLAN_DIR`, not the workspace/repo root. When there is no active plan (`slug` is null), `/z-handoff` falls back to `$WORKSPACE_ROOT`/`$PWD`. Orchestrators reading from the wrong path will silently miss the file.
-- At the `/z-implement-all` compaction breakpoint, `write-handoff.sh` is called only when `workflow.hermes_enabled=true`. When that knob is false (the default), no `handoff.json` is written at compaction time. `/z-attend` always writes it, regardless of `hermes_enabled`.
+- At the `/z-execute` compaction breakpoint, `write-handoff.sh` is called only when `workflow.hermes_enabled=true`. When that knob is false (the default), no `handoff.json` is written at compaction time. `/z-attend` always writes it, regardless of `hermes_enabled`.
 - Pre-existing `handoff.json` is overwritten on every write. The consumer (orchestrator) is responsible for consuming (and deleting) the file after reading. An unconsumed token overwritten by a later yield loses the prior session's state.
 - The `agent` field is provenance only. Consumers MUST NOT branch behavior on it. The protocol is agent-agnostic — pi, Claude Code, Codex CLI, and Gemini all produce the same schema.
 - `next_step` is capped at 2000 characters by the schema. `write-handoff.sh` truncates with `...` if the composed prompt exceeds this limit.
@@ -46,7 +46,7 @@ Protocol 1.0 — context pressure mid-plan (written by `/z-handoff` or Hermes pa
   "agent": "claude",
   "slug": "add-auth-middleware",
   "status": "context_pressure",
-  "next_step": "Resume /z-implement-all for add-auth-middleware. 4/12 tasks done. Start at T005. Read TASKS.md for acceptance criteria and SESSION.md for context.",
+  "next_step": "Resume /z-execute for add-auth-middleware. 4/12 tasks done. Start at T005. Read TASKS.md for acceptance criteria and SESSION.md for context.",
   "context_files": [
     {"path": "/.../.local/state/z-harness/.../plans/add-auth-middleware/SPEC.md", "role": "spec"},
     {"path": "/.../.local/state/z-harness/.../plans/add-auth-middleware/TASKS.md", "role": "tasks"},
@@ -64,7 +64,7 @@ Protocol 1.1 — attend yield with resume predicate (written by `write-handoff.s
   "agent": "claude",
   "slug": "add-auth-middleware",
   "status": "clean_break",
-  "next_step": "Resume /z-implement-all for add-auth-middleware. 8/12 tasks done. Start at T009. Read TASKS.md and SESSION.md.",
+  "next_step": "Resume /z-execute for add-auth-middleware. 8/12 tasks done. Start at T009. Read TASKS.md and SESSION.md.",
   "context_files": [...],
   "attend_resume": {
     "expected_head_sha": "a1b2c3d4",

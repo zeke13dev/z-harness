@@ -102,7 +102,7 @@ class TestStaticIdentity(unittest.TestCase):
 class TestCommandCapabilityMatrix(unittest.TestCase):
     """Verify the command-tier matrix is populated correctly for antigravity."""
 
-    _MULTI_AGENT = {"z-implement-all", "z-panel", "z-consult", "z-gate"}
+    _MULTI_AGENT = {"z-execute", "z-panel", "z-consult", "z-gate"}
 
     def test_multi_agent_commands_degraded(self):
         """Multi-agent commands must be degraded (not blocked) on high-fidelity host."""

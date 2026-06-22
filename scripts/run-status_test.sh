@@ -14,8 +14,8 @@
 #   - canonical layout (z-harness/plans/<slug>/archive/<run>/)
 #   - legacy layout (z-harness/<slug>/archive/<run>/)
 #   - malformed trailing JSON (truncated last line)
-#   - /z-implement-all combined-state check with all-done TASKS.md
-#   - /z-implement-all combined-state check with one-pending TASKS.md
+#   - /z-execute combined-state check with all-done TASKS.md
+#   - /z-execute combined-state check with one-pending TASKS.md
 
 set -euo pipefail
 
@@ -366,7 +366,7 @@ assert_eq "classify returns unknown when no valid events" "unknown" "$RESULT10"
 rm -rf "$TD10"
 
 # ---------------------------------------------------------------------------
-# TEST-011: /z-implement-all — all tasks done (TASKS.md all [x] or [~])
+# TEST-011: /z-execute — all tasks done (TASKS.md all [x] or [~])
 #           last event is implement_end → clean
 # ---------------------------------------------------------------------------
 echo ""
@@ -392,7 +392,7 @@ assert_eq "implement-all all-done → clean" "clean" "$RESULT11"
 rm -rf "$TD11"
 
 # ---------------------------------------------------------------------------
-# TEST-012: /z-implement-all — one pending task → unknown
+# TEST-012: /z-execute — one pending task → unknown
 #           last event is implement_end but TASKS.md has pending task
 # ---------------------------------------------------------------------------
 echo ""
@@ -417,7 +417,7 @@ assert_eq "implement-all one-pending → unknown" "unknown" "$RESULT12"
 rm -rf "$TD12"
 
 # ---------------------------------------------------------------------------
-# TEST-013: /z-implement-all — last event is task_halt → halted
+# TEST-013: /z-execute — last event is task_halt → halted
 # ---------------------------------------------------------------------------
 echo ""
 echo "TEST-013: implement-all, task_halt → halted"
@@ -441,7 +441,7 @@ assert_eq "implement-all task_halt → halted" "halted" "$RESULT13"
 rm -rf "$TD13"
 
 # ---------------------------------------------------------------------------
-# TEST-014: /z-implement-all — compaction_pause + all tasks done → clean
+# TEST-014: /z-execute — compaction_pause + all tasks done → clean
 # ---------------------------------------------------------------------------
 echo ""
 echo "TEST-014: implement-all, compaction_pause + all done → clean"
@@ -465,7 +465,7 @@ assert_eq "implement-all compaction_pause + all done → clean" "clean" "$RESULT
 rm -rf "$TD14"
 
 # ---------------------------------------------------------------------------
-# TEST-014b: /z-implement-all — TASKS.md exists but has ZERO task checkboxes → unknown
+# TEST-014b: /z-execute — TASKS.md exists but has ZERO task checkboxes → unknown
 #   Guards against malformed TASKS.md being silently treated as "all done".
 # ---------------------------------------------------------------------------
 echo ""

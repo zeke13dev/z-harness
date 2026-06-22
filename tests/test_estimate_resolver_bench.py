@@ -497,10 +497,6 @@ class TestBenchAutonomyAssertion(unittest.TestCase):
                 "  workflow.implement_all_proceed:\n"
                 "    value: auto_resume\n"
                 "    rationale: test\n"
-                "\n"
-                "  workflow.spec_retro_discovery:\n"
-                "    value: defer_to_sink_p2\n"
-                "    rationale: test\n"
                 # workflow.pre_run_cost_gate intentionally ABSENT
             )
             temp_yaml = Path(tmpdir) / "benchmark-autonomy-stripped.yaml"

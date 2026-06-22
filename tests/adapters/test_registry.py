@@ -338,7 +338,7 @@ class TestRegistryCompleteness(unittest.TestCase):
         queries it.
         """
         # cursor module is imported via registry; multi-agent commands are blocked.
-        multi_agent = {"z-implement-all", "z-panel", "z-consult", "z-gate"}
+        multi_agent = {"z-execute", "z-panel", "z-consult", "z-gate"}
         for cmd in multi_agent:
             tier = command_tier("cursor", cmd)
             self.assertEqual(

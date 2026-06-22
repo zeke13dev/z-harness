@@ -128,7 +128,7 @@ When `slug` is present and non-null, the orchestrator may also set `Z_HARNESS_SL
   "agent": "claude",
   "slug": "add-auth-middleware",
   "status": "clean_break",
-  "next_step": "Resume /z-implement-all for add-auth-middleware. T001–T008 are done. Start at T009 (add rate-limiting to auth middleware). Acceptance criteria in TASKS.md.",
+  "next_step": "Resume /z-execute for add-auth-middleware. T001–T008 are done. Start at T009 (add rate-limiting to auth middleware). Acceptance criteria in TASKS.md.",
   "context_files": [
     {"path": "/Users/zeke/.local/state/z-harness/example-repo-d6f8a2b1/plans/add-auth-middleware/SPEC.md", "role": "spec"},
     {"path": "/Users/zeke/.local/state/z-harness/example-repo-d6f8a2b1/plans/add-auth-middleware/PLAN.md", "role": "plan"},

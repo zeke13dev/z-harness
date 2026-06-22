@@ -76,7 +76,7 @@ Deterministic routes:
 - Stay in `/z-map` when terrain is uncertain, citations/source facts are missing, or the user asks to map code constraints before choosing an approach.
 - Route clearly framed planning work with enough terrain to `/z-plan`.
 - Route multiple plausible framings with enough terrain to `/z-brainstorm`.
-- Route a small concrete fix (`candidate_files <= 5`, `non_obvious_decisions <= 2`, no public API/schema impact) to `/z-plan-light`.
+- Route a small concrete fix (`candidate_files <= 5`, `non_obvious_decisions <= 2`, no public API/schema impact) to `/z-plan`.
 
 Call `planning-router` only when deterministic signals conflict and no hard threshold already decides the route. It receives the compact signal payload plus the current route chain and is advisory; malformed or unavailable classifier output falls back to deterministic routing or an AskUser choice.
 

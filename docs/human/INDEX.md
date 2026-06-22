@@ -12,7 +12,7 @@ Companion LLM-tier JSON lives at `../llm/<slug>.json`.
 |---|---|---|---|
 | [agents](./agents.md) | high | `agents/auditor.md`, `agents/cluster-planner.md`, `agents/consultant-primary.md` | Scrutinizes codebase targets across correctness/perf/cleanliness/design. |
 | [reviewer-capture](./reviewer-capture.md) | high | `agents/reviewer.md`, `agents/consultant-primary.md`, `agents/consultant-secondary.md` | File-based review capture via codex `-o` flag; capability-probed per-PPID; full review archived; honest `response_chars`; fallback emits `review_capture_fallback`. |
-| [impl-pre-review](./impl-pre-review.md) | high | `commands/z-implement-all.md`, `agents/pre-reviewer.md`, `agents/complexity-classifier.md` | Opt-in Flash pre-reviewer gate-down (`Z_HARNESS_IMPL_PRE_REVIEW`, default 0, ships inert). Cost-inversion caveat; evidence-gated before recommended. |
+| [impl-pre-review](./impl-pre-review.md) | high | `skills/z-execute/SKILL.md`, `agents/pre-reviewer.md`, `agents/complexity-classifier.md` | Opt-in Flash pre-reviewer gate-down (`Z_HARNESS_IMPL_PRE_REVIEW`, default 0, ships inert). Cost-inversion caveat; evidence-gated before recommended. |
 
 ## commands
 

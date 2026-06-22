@@ -69,7 +69,7 @@ All export artifacts are generated on demand and never committed. `skills/` is t
 | Tier | Meaning |
 |------|---------|
 | `native` | Full orchestration. All `/z-*` commands run identically to the Claude Code reference. Multi-agent dispatch (subagents, panels, consults, gates) works. |
-| `high` | Native skill/persona loading, single-agent only. Multi-agent commands (`/z-implement-all`, `/z-panel`, `/z-consult`, `/z-gate`) degrade to single-agent transliteration (present, not blocked). All other `/z-*` commands run at native fidelity. |
+| `high` | Native skill/persona loading, single-agent only. Multi-agent commands (`/z-execute`, `/z-panel`, `/z-consult`, `/z-gate`) degrade to single-agent transliteration (present, not blocked). All other `/z-*` commands run at native fidelity. |
 | `flattened` | Transliterated rules, single-agent only. All single-agent `/z-*` commands run in degraded mode. Multi-agent commands are **blocked**. |
 | `curated` | **Export-only.** Curated rule/steering files emitted per-command with host-specific frontmatter. No adapter, no launch/inject. `/z-export` only. |
 | `pointer` | **Export-only.** Single pointer/instructions file. No adapter, no launch/inject. `/z-export` only. |
@@ -98,7 +98,7 @@ These hosts have no HostAdapter and are **not registered in the adapter registry
 
 | Command | claude | antigravity | cursor | codex |
 |---------|--------|-------------|--------|-------|
-| `/z-implement-all` | native | degraded | blocked | blocked |
+| `/z-execute` | native | degraded | blocked | blocked |
 | `/z-panel` | native | degraded | blocked | blocked |
 | `/z-consult` | native | degraded | blocked | blocked |
 | `/z-gate` | native | degraded | blocked | blocked |

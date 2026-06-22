@@ -48,10 +48,6 @@ tasks. Each plan type derives workstreams differently:
   `**Depends on:**` lines. Workstreams derived via the 5-rule algorithm
   below. Generated as a post-plan step by z-harness or a Hermes bridge
   command.
-- `/z-plan-light` — single workstream containing all tasks. Generated as
-  a post-plan step. Optional: the orchestrator MAY treat the absence of
-  `workstreams.json` as a single-workstream plan, using the slug
-  directory as the sole workstream path.
 
 **Lifecycle:** Generated once per plan run. The orchestrator SHOULD read
 `workstreams.json` once at start. Not updated during execution — progress
@@ -64,7 +60,7 @@ mid-execution are not supported.
 {
   "protocol": "hermes-v1",
   "slug": "<plan-slug>",
-  "source": "<z-plan-split | z-plan | z-plan-light>",
+  "source": "<z-plan-split | z-plan>",
   "generated_at": "<ISO 8601 UTC>",
   "partial_tree": false,
   "scope_unknown": false,
@@ -78,7 +74,7 @@ mid-execution are not supported.
 |-------|------|----------|---------|
 | `protocol` | string | yes | Always `"hermes-v1"`. Version pin for orchestrator parsing. |
 | `slug` | string | yes | Plan identifier. Used for git branch naming (`hermes/<slug>/<id>`). MUST match `^[a-z0-9]+(-[a-z0-9]+)*$` (z-harness planning commands enforce this at generation; orchestrators SHOULD validate on read). |
-| `source` | string | yes | Which z-harness command produced this plan: `"/z-plan-split"`, `"/z-plan"`, `"/z-plan-light"`. |
+| `source` | string | yes | Which z-harness command produced this plan: `"/z-plan-split"`, `"/z-plan"`. |
 | `generated_at` | string | yes | ISO 8601 UTC timestamp of generation. |
 | `partial_tree` | boolean | yes | True if one or more workstreams have `status: "failed"` (present in the `workstreams` array but not executable). Orchestrator SHOULD warn and MUST skip workstreams with `status: "failed"`. |
 | `scope_unknown` | boolean | no (default `false`) | True when one or more task blocks in a flat `/z-plan` had no parseable `**Files:**` line, so per-workstream file scope could not be established. When `true`, `file_conflicts` is always `[]` (fail-safe: the orchestrator cannot know what is safe to parallelize). Orchestrators MUST treat `scope_unknown: true` the same as `serialize_all` — serialize all workstreams within this plan. |
@@ -106,7 +102,7 @@ mid-execution are not supported.
 | `status` | string | yes | `"ready"` (plan complete, executable) or `"failed"` (planning failed, must not execute). Set during generation. See `partial_tree`. |
 | `name` | string | yes | Human-readable one-line description. For dashboards and user-facing messages. Untrusted — orchestrator MUST sanitize before UI rendering. |
 | `path` | string | yes | Repo-relative path to the workstream's plan directory. This IS the BASE — `TASKS.md` lives at `<path>/TASKS.md`. |
-| `tasks` | array | yes | Ordered task IDs belonging to this workstream. Mirrors TASKS.md. Informational — the orchestrator passes the whole `TASKS.md` to `z-implement-all`, not individual tasks. |
+| `tasks` | array | yes | Ordered task IDs belonging to this workstream. Mirrors TASKS.md. Informational — the orchestrator passes the whole `TASKS.md` to `z-execute`, not individual tasks. |
 | `depends_on` | array | yes | Workstream IDs that must reach `"done"` before this workstream starts. Empty array means no dependencies. |
 | `parallel_group` | string or null | yes | Derived label `"level-{depth}"` where `depth` is the longest path from a root in the workstream `depends_on` graph. All workstreams sharing a label are at the same dependency depth and are mutually independent — by construction they can run concurrently (Rule 7 passes). `null` only in legacy manifests that predate v1.3. |
 
@@ -192,11 +188,6 @@ lines across all tasks into a DAG via a deterministic 5-rule algorithm:
   ws-3 `{T003,T005}`, ws-4 `{T006}` with
   `depends_on: ["ws-3"]`.
 
-**z-plan-light (FIX.md):** Single workstream containing all tasks.
-Identical to a flat z-plan with one task chain. `workstreams.json`
-is optional for this source type; the orchestrator MAY treat its
-absence as a single-workstream plan using the slug directory as the
-sole workstream path.
 
 ---
 
@@ -265,18 +256,18 @@ object store.
 Each session runs in its own worktree:
 
 ```bash
-pi z-implement-all --tasks=<workstream.path>/TASKS.md
+pi z-execute --tasks=<workstream.path>/TASKS.md
 ```
 
 The `--tasks` flag targets exactly one workstream's task list. The
 session runs the full z-harness loop: precheck → implement → review →
 mark done. It commits changes to its own branch.
 
-> **Note:** The `--tasks` fast path in `/z-implement-all` skips
+> **Note:** The `--tasks` fast path in `/z-execute` skips
 > tree-validation gates (shared-concerns acknowledgement, partial-tree
 > opt-in). The orchestrator is responsible for pre-validating these
 > gates at the plan level before spawning individual workstream
-> sessions. See `/z-implement-all` SKILL.md Setup step 1 (`--tasks`
+> sessions. See `/z-execute` SKILL.md Setup step 1 (`--tasks`
 > fast path) for details.
 
 > **Non-file shared-state limitation:** Worktree isolation covers the
@@ -300,7 +291,7 @@ The orchestrator polls these files to track progress.
 > `"done"`, `"running"`, `"halted"`, or `"paused"`. Workstreams
 > without a corresponding branch are not started. Workstreams with
 > `"running"` or `"paused"` status are re-spawned (re-running
-> `/z-implement-all --tasks=<path>/TASKS.md` in the existing worktree).
+> `/z-execute --tasks=<path>/TASKS.md` in the existing worktree).
 > Merged branches (no longer present on disk) are treated as done.
 
 ```json
@@ -438,7 +429,7 @@ hermes_enabled = true
 ```
 
 With `hermes_enabled = false` (the default), all workstream-generation and cross-plan dispatch
-calls inside `/z-plan`, `/z-implement-all`, and `/z-plan-split` are no-ops. The existing inline
+calls inside `/z-plan`, `/z-execute`, and `/z-plan-split` are no-ops. The existing inline
 `**Files:**`-dedup fallback handles deduplication in the single-session path.
 
 ### Within-plan parallel execution
@@ -661,7 +652,7 @@ Schema evolution rules:
 | `MANIFEST.md` | Human | Readable plan overview, clusters table, decisions log |
 | `SHARED-CONCERNS.md` | Human | File-overlap narrative with ack-gate |
 | `workstreams.json` | Machine | Decomposition for orchestrator consumption |
-| `TASKS.md` (per workstream) | Both | Durable task list; consumed by `z-implement-all` |
+| `TASKS.md` (per workstream) | Both | Durable task list; consumed by `z-execute` |
 | `session-status.json` | Machine | Per-session liveness signal for orchestrator monitoring |
 | `hermes-resolve.json` | Machine | Answer channel for halted sessions |
 | `SPEC.md` / `PLAN.md` | Both | Design documents; read by implementer subagents, not by orchestrator |

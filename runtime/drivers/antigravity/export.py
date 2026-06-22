@@ -457,7 +457,7 @@ After installing, invoke a workflow from the command line:
 
 ```bash
 agy chat --mode z-plan "Add user authentication feature"
-agy chat --mode z-implement-next
+agy chat --mode z-execute
 agy chat --mode z-review-all
 ```
 

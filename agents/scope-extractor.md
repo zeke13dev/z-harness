@@ -1,6 +1,6 @@
 ---
 name: scope-extractor
-description: "Reads SPEC.md, PLAN.md, and TASKS.md from a plan artifact directory and emits a JSON array of likely file changes with confidence labels. Used by run-creating commands (z-implement-all, z-plan, etc.) to seed the active-plan registry scope before overlap detection. Output is consumed directly by `scripts/active-plan-registry.py update-scope --scope-json FILE`."
+description: "Reads SPEC.md, PLAN.md, and TASKS.md from a plan artifact directory and emits a JSON array of likely file changes with confidence labels. Used by run-creating commands (z-execute, z-plan, etc.) to seed the active-plan registry scope before overlap detection. Output is consumed directly by `scripts/active-plan-registry.py update-scope --scope-json FILE`."
 tools: Read, Grep, Glob, Bash
 model: haiku
 ---
@@ -63,7 +63,7 @@ Each element has exactly three fields:
 ## Edge cases
 
 - **Annotation tokens to strip:** `(NEW)`, `(MODIFY)`, `(deleted)`, `(renamed from ...)`, any parenthesized suffixes. The regex `\s*\([^)]*\)` covers these.
-- **Multi-path Files lines:** `commands/{z-plan,z-plan-light,z-debug}.md` — emit each expanded path as `explicit` (expand the brace group if feasible; else emit the unexpanded string as `broad`).
+- **Multi-path Files lines:** `commands/{z-plan,z-fix,z-debug}.md` — emit each expanded path as `explicit` (expand the brace group if feasible; else emit the unexpanded string as `broad`).
 - **Backtick-quoted paths in Files lines:** strip the backticks and treat the inner text as the path token.
 - **Glob markers:** if a path contains `*`, `?`, or `{`, emit as `broad` rather than `explicit`.
 - **Empty or missing TASKS.md:** emit `[]` and stop.

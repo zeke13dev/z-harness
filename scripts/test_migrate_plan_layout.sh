@@ -147,7 +147,7 @@ seed_plan "$REPO" "alpha"
 # Plant a status:running registry record at <base>/active-plans/<run>.json.
 mkdir -p "$BASE/active-plans"
 cat > "$BASE/active-plans/live-run.json" <<'JSON'
-{"schema_version":1,"run_id":"live-run","slug":"alpha","command":"/z-implement-all","phase":"implement","status":"running","last_heartbeat":"2026-06-01T00:00:00Z"}
+{"schema_version":1,"run_id":"live-run","slug":"alpha","command":"/z-execute","phase":"implement","status":"running","last_heartbeat":"2026-06-01T00:00:00Z"}
 JSON
 run_migrate "$REPO" "$BASE" -- --all
 assert_exit_nonzero "TEST-2: barrier causes non-zero exit" "$RC"

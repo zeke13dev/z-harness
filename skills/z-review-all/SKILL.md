@@ -1,7 +1,7 @@
 ---
 name: z-review-all
 disable-model-invocation: false
-description: "Final-gate cross-LLM review of a completed z-harness plan. Runs Gemini + Codex on the cumulative diff against the plan contract (SPEC.md in legacy mode; frozen INTENT.md + LEDGER.md in INTENT mode) to surface (a) implementation drift across tasks and (b) spec/intent gaps that only surface in aggregate. Use after /z-implement-all completes."
+description: "Final-gate cross-LLM review of a completed z-harness plan. Runs Gemini + Codex on the cumulative diff against the plan contract (SPEC.md in legacy mode; frozen INTENT.md + LEDGER.md in INTENT mode) to surface (a) implementation drift across tasks and (b) spec/intent gaps that only surface in aggregate. Use after /z-execute completes."
 argument-hint: "[--slug <slug>] [--base <git-ref>]"
 runtime: c1
 driver_features_required:
@@ -10,7 +10,7 @@ driver_features_required:
 unsupported_driver_behavior: explicit_gate
 ---
 
-You are running the **z-harness `/z-review-all`** final-gate review. This is a holistic cross-task cross-LLM review, intentionally distinct from the per-task review that `/z-implement-all` already performs. Per-task review catches per-task issues; this catches issues that only show up when looking at all tasks together.
+You are running the **z-harness `/z-review-all`** final-gate review. This is a holistic cross-task cross-LLM review, intentionally distinct from the per-task review that `/z-execute` already performs. Per-task review catches per-task issues; this catches issues that only show up when looking at all tasks together.
 
 ## Pre-Phase 0 — Resume check
 
@@ -111,7 +111,7 @@ fi
 
 ## Phase 0 — Discover plan slug
 
-Same logic as `/z-implement-all` / `/z-implement-next`:
+Same logic as `/z-execute`:
 
 1. Enumerate subdirs of `z-harness/` containing a `TASKS.md`. Also check legacy flat `z-harness/TASKS.md`.
 <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the slug-selection question via their native channel. Silent omission is forbidden. -->
@@ -161,7 +161,7 @@ fi
 
 **Mode detection (INTENT vs legacy):**
 
-Detect which review contract to use. Mirror the detection convention from `/z-implement-all` (T008):
+Detect which review contract to use. Mirror the detection convention from `/z-execute` (T008):
 
 ```bash
 # INTENT mode: INTENT.md present and SPEC.md absent
@@ -244,7 +244,7 @@ If `cumulative.diff` exceeds ~500k lines, warn the user — the LLMs will be una
 
 ## Phase 3.5 — Run full test suite for affected modules (only if `$BASE/TESTS.md` exists)
 
-If `$BASE/TESTS.md` was produced by `/z-test` and `$BASE/test-runner.json` was populated by `/z-implement-all`, run the full test suite for modules touched by `cumulative.diff` before spawning the consultants. Reasoning: per-task acceptance checks only ran each test in isolation; running the suite together catches inter-test ordering bugs and shared-state regressions that the per-task gate misses.
+If `$BASE/TESTS.md` was produced by `/z-test` and `$BASE/test-runner.json` was populated by `/z-execute`, run the full test suite for modules touched by `cumulative.diff` before spawning the consultants. Reasoning: per-task acceptance checks only ran each test in isolation; running the suite together catches inter-test ordering bugs and shared-state regressions that the per-task gate misses.
 
 ```bash
 TEMPLATE="$(jq -r .cmd_template "$BASE/test-runner.json")"
@@ -710,7 +710,7 @@ Transcripts are archived by each consultant under `$BASE/archive/$RRUN/transcrip
 Review-family commands produce two artifact classes:
 
 - **Evidence artifacts** preserve every reviewed finding and the pushback that was applied before trusting it.
-- **Promotion artifacts** contain only actionable candidate work in a `/z-implement-all`-compatible task shape. Users prune or approve these artifacts once, then run `/z-implement-all --tasks <path>` to apply survivors.
+- **Promotion artifacts** contain only actionable candidate work in a `/z-execute`-compatible task shape. Users prune or approve these artifacts once, then run `/z-execute --tasks <path>` to apply survivors.
 
 Every promoted finding must carry:
 
@@ -807,7 +807,7 @@ escalations: <k>
 
 Findings promoted from `/z-review-all`. Delete any candidate you do not want fixed, then run:
 
-`/z-implement-all --tasks $BASE/REVIEW-TASKS.md`
+`/z-execute --tasks $BASE/REVIEW-TASKS.md`
 
 ## Candidate fixup tasks
 
@@ -854,7 +854,7 @@ If there are no actionable findings and no escalations, write `$BASE/archive/$RR
 
 ## Phase 6.5 — Auto-amend review findings (severity-based)
 
-After `REVIEW-TASKS.md` is built, auto-apply amendment proposals based on severity. The cross-LLM review already validated these findings — asking "do you want to amend?" per finding wastes tokens. Plan-artifact amendments (spec_gap) are applied automatically via `/z-amend --skip-user-gate`. Implementation changes (implementation_drift) stay as candidate fixup tasks for the user to review and prune before `/z-implement-all`.
+After `REVIEW-TASKS.md` is built, auto-apply amendment proposals based on severity. The cross-LLM review already validated these findings — asking "do you want to amend?" per finding wastes tokens. Plan-artifact amendments (spec_gap) are applied automatically via `/z-amend --skip-user-gate`. Implementation changes (implementation_drift) stay as candidate fixup tasks for the user to review and prune before `/z-execute`.
 
 **Hard rules for this phase:**
 - Do NOT ask "do you want to amend?" for blocker/major/minor amendment proposals. Just do it.
@@ -912,7 +912,7 @@ After `REVIEW-TASKS.md` is built, auto-apply amendment proposals based on severi
 7. **If no amendment proposals are amendable** (all findings are fixup tasks, superseding tasks, or the review was clean), skip this entire phase — no log file, no events. Continue to Cleanup.
 
 **What stays in REVIEW-TASKS.md after this phase:**
-- **Candidate fixup tasks** (implementation_drift) — NEVER auto-implemented. User reviews and prunes before `/z-implement-all --tasks $BASE/REVIEW-TASKS.md`.
+- **Candidate fixup tasks** (implementation_drift) — NEVER auto-implemented. User reviews and prunes before `/z-execute --tasks $BASE/REVIEW-TASKS.md`.
 - **Superseding tasks** (completed_task_contradiction touching `[x]` tasks) — user must decide disposition.
 - **Premise failure escalations** — user decides next step.
 - **Any amendment that failed to apply** — logged with reason in auto-amend-log.md, left in REVIEW-TASKS.md for manual resolution.
@@ -1136,8 +1136,8 @@ if [[ "${_RB_USER_ACTION}" == "shipped_clean" || "${_RB_REVIEW_TASKS:-0}" -eq 0 
   _RB_NEXT_LABEL="Refresh affected docs via /z-maintain-docs"
   _RB_NEXT_CMD="/z-maintain-docs"
 else
-  _RB_NEXT_LABEL="Apply review tasks via /z-implement-all --tasks REVIEW-TASKS.md"
-  _RB_NEXT_CMD="/z-implement-all"
+  _RB_NEXT_LABEL="Apply review tasks via /z-execute --tasks REVIEW-TASKS.md"
+  _RB_NEXT_CMD="/z-execute"
 fi
 bash "$RB_SH" set-section --run "$RRUN" --section next --json /dev/stdin <<JSON
 {"label": "${_RB_NEXT_LABEL}", "command": "${_RB_NEXT_CMD}"}

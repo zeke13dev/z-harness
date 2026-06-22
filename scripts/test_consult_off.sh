@@ -334,7 +334,7 @@ assert_exit_zero "TEST-009: exit code is 0" "$EXIT_009"
 rm -f "$TOML_CONFIG_009" "$EMPTY_PROVIDERS_009"
 
 # ---------------------------------------------------------------------------
-# TEST-010: consult=off review path in z-implement-all.md references
+# TEST-010: consult=off review path in z-execute.md references
 #           subagent_type="self-reviewer" (not "reviewer")
 #
 # Invariant: when Z_HARNESS_CONSULT=off, the orchestrator must dispatch a
@@ -345,9 +345,9 @@ rm -f "$TOML_CONFIG_009" "$EMPTY_PROVIDERS_009"
 # This is a doc-level assertion (the orchestration instructions are .md).
 # ---------------------------------------------------------------------------
 echo ""
-echo "TEST-010: z-implement-all.md consult=off branches use subagent_type=\"self-reviewer\""
+echo "TEST-010: z-execute.md consult=off branches use subagent_type=\"self-reviewer\""
 
-Z_IMPLEMENT_ALL="$(dirname "$SCRIPTS_DIR")/skills/z-implement-all/SKILL.md"
+Z_IMPLEMENT_ALL="$(dirname "$SCRIPTS_DIR")/skills/z-execute/SKILL.md"
 
 if [ ! -f "$Z_IMPLEMENT_ALL" ]; then
   echo "  FAIL: TEST-010: cannot find $Z_IMPLEMENT_ALL"
@@ -360,7 +360,7 @@ else
     echo "  PASS: TEST-010: found $SELF_REVIEWER_COUNT occurrences of subagent_type=\"self-reviewer\" (≥2 required)"
     PASS=$((PASS + 1))
   else
-    echo "  FAIL: TEST-010: expected ≥2 occurrences of subagent_type=\"self-reviewer\" in z-implement-all.md, found $SELF_REVIEWER_COUNT"
+    echo "  FAIL: TEST-010: expected ≥2 occurrences of subagent_type=\"self-reviewer\" in z-execute.md, found $SELF_REVIEWER_COUNT"
     FAIL=$((FAIL + 1))
   fi
 

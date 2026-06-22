@@ -1018,7 +1018,7 @@ The caller signals a mode via a `MODE: <name>` prefix in the prompt. Handle each
 
 - **`bundled-decisions`** (Phase 3 of `/z-plan`): caller hands you the full `decisions.md` plus context. Ask the provider to weigh in on every consult-flagged decision *and* flag interactions between decisions.
 - **`plan-review`** (Phase 7 of `/z-plan`): caller hands you SPEC.md + PLAN.md. Ask the provider to critique the plan for what's wrong, missing, or fragile.
-- **`light-fix`** (Phase 3 of `/z-plan-light`; reused by `/z-debug` Phase 6 for the fix-stage consult): caller hands you a single problem statement + context + one key decision + candidate options. Ask the provider for a concise recommendation with tradeoffs. Be brief — this is a small fix, not a feature.
+- **`light-fix`** (used by `/z-fix` and `/z-debug` Phase 6 for the fix-stage consult): caller hands you a single problem statement + context + one key decision + candidate options. Ask the provider for a concise recommendation with tradeoffs. Be brief — this is a small fix, not a feature.
 - **`debug-hypotheses`** (Phase 4 of `/z-debug`): caller hands you a problem statement + evidence + ranked hypotheses + relevant code. Ask the provider: which hypothesis is most plausible and why? Any missed? For the top one, what's the cheapest experiment to confirm/refute? Be concrete.
 - **`research-review`** (Phase 4 of `/z-research`): caller hands you a research-note draft + original question + scaffolding. Ask the provider to critique the draft under three headings: **Gaps** (things the draft missed), **Errors** (claims that appear wrong), **Missing constraints** (constraints the reviewer noticed that should be added). **Return RAW — no standard wrapper.** Do NOT ask the provider to recommend an approach; the consultant prompt must explicitly forbid it. Research is terrain-mapping, not direction-picking.
 - **`brainstorm`** (Phase 2 of `/z-brainstorm`): caller hands you a topic + scaffolding (doc-fetcher synthesis, optional Explore findings, optional RESEARCH.md content or extractive summary). Ask the provider to produce an ideator block. **Return RAW — no standard wrapper.** The block must contain exactly five sections (mark `<missing>` only if the model truly cannot produce a section):
@@ -1249,7 +1249,7 @@ The caller signals a mode via a `MODE: <name>` prefix in the prompt. Handle each
 
 - **`bundled-decisions`** (Phase 3 of `/z-plan`): caller hands you the full `decisions.md` plus context. Ask the provider to weigh in on every consult-flagged decision *and* flag interactions between decisions.
 - **`plan-review`** (Phase 7 of `/z-plan`): caller hands you SPEC.md + PLAN.md. Ask the provider to critique the plan for what's wrong, missing, or fragile.
-- **`light-fix`** (Phase 3 of `/z-plan-light`; reused by `/z-debug` Phase 6 for the fix-stage consult): caller hands you a single problem statement + context + one key decision + candidate options. Ask the provider for a concise recommendation with tradeoffs. Be brief — this is a small fix, not a feature.
+- **`light-fix`** (used by `/z-fix` and `/z-debug` Phase 6 for the fix-stage consult): caller hands you a single problem statement + context + one key decision + candidate options. Ask the provider for a concise recommendation with tradeoffs. Be brief — this is a small fix, not a feature.
 - **`debug-hypotheses`** (Phase 4 of `/z-debug`): caller hands you a problem statement + evidence + ranked hypotheses + relevant code. Ask the provider: which hypothesis is most plausible and why? Any missed? For the top one, what's the cheapest experiment to confirm/refute? Be concrete.
 - **`research-review`** (Phase 4 of `/z-research`): caller hands you a research-note draft + original question + scaffolding. Ask the provider to critique the draft under three headings: **Gaps** (things the draft missed), **Errors** (claims that appear wrong), **Missing constraints** (constraints the reviewer noticed that should be added). **Return RAW — no standard wrapper.** Do NOT ask the provider to recommend an approach; the consultant prompt must explicitly forbid it. Research is terrain-mapping, not direction-picking.
 - **`brainstorm`** (Phase 2 of `/z-brainstorm`): caller hands you a topic + scaffolding (doc-fetcher synthesis, optional Explore findings, optional RESEARCH.md content or extractive summary). Ask the provider to produce an ideator block. **Return RAW — no standard wrapper.** The block must contain exactly five sections (mark `<missing>` only if the model truly cannot produce a section):
@@ -1345,7 +1345,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-subagent.sh" \
 
 ## context-curator
 
-**Role:** Haiku subagent that folds the events.jsonl delta + git diff + TASKS.md + prior SESSION.md into a bounded SESSION.md handoff artifact at the /z-implement-all batch breakpoint. Mechanical curation only — never edits production code.
+**Role:** Haiku subagent that folds the events.jsonl delta + git diff + TASKS.md + prior SESSION.md into a bounded SESSION.md handoff artifact at the /z-execute batch breakpoint. Mechanical curation only — never edits production code.
 
 ## Role
 
@@ -1420,7 +1420,7 @@ Compute the following fields for the SESSION.md frontmatter:
 
 - `last_gate`: current UTC timestamp — run `date -u +"%Y-%m-%dT%H:%M:%SZ"` via Bash.
 - `done_count`: count of `[x]` tasks in TASKS.md.
-- `done_ids_hash`: **call `bash scripts/session-helpers.sh done_set_hash "$tasks_file"`** from `<repo_root>`. Do NOT re-implement this hash inline. The writer and reader (E1 in z-implement-all) must use byte-identical hash output from the same helper or resume will silently never fire.
+- `done_ids_hash`: **call `bash scripts/session-helpers.sh done_set_hash "$tasks_file"`** from `<repo_root>`. Do NOT re-implement this hash inline. The writer and reader (E1 in z-execute) must use byte-identical hash output from the same helper or resume will silently never fire.
 - `last_gate_task_id`: the `last_gate_task_id` passed in by the caller.
 - `next_pending`: run `bash scripts/session-helpers.sh next_pending_task "$tasks_file"` from `<repo_root>` to get the first eligible pending task id. This is a human hint only — not load-bearing for resume.
 - `context_hash`: sha256 of the body text (the 4 sections concatenated). Run `printf '%s' "<body>" | sha256sum | cut -c1-64` or equivalent. Observability only — NOT used by the resume predicate.
@@ -1527,10 +1527,10 @@ truncated_sections: []
 
 - Never touches files other than `SESSION.md` (and its `.tmp.<PID>` staging file). Never edits TASKS.md, SPEC.md, PLAN.md, or any production code.
 - Incremental: folds only the `since_marker` delta into prior SESSION.md; never re-reads the full log from the beginning (O(delta), not O(N)).
-- `done_ids_hash` is always computed via `bash scripts/session-helpers.sh done_set_hash "$tasks_file"` — never inline. This is the DRY contract that guarantees the writer (context-curator) and reader (E1 in z-implement-all) produce byte-identical hashes.
+- `done_ids_hash` is always computed via `bash scripts/session-helpers.sh done_set_hash "$tasks_file"` — never inline. This is the DRY contract that guarantees the writer (context-curator) and reader (E1 in z-execute) produce byte-identical hashes.
 - Idempotent under retry: atomic tmp+rename means a partial prior write is overwritten cleanly on re-run.
 - `diff_unavailable: true` on git error — never a hard failure.
-- The "/clear & resume" suggestion in z-implement-all fires **only** after this agent returns `STATUS: curated` with a matching done-set hash. This agent does not control that decision — it only writes the artifact and emits the event.
+- The "/clear & resume" suggestion in z-execute fires **only** after this agent returns `STATUS: curated` with a matching done-set hash. This agent does not control that decision — it only writes the artifact and emits the event.
 
 ## Hard rules
 
@@ -2144,11 +2144,11 @@ The caller (host `/z-brainstorm` command) should:
 
 ## implementer
 
-**Role:** Implements a single task from $Z_HARNESS_PLAN_DIR/TASKS.md in a fresh context. Invoked by /z-implement-all once per task to keep main orchestrator context lean. In legacy mode reads SPEC.md/PLAN.md; in INTENT mode reads the frozen INTENT snapshot + LEDGER + durable tier (KERNEL/INVARIANTS/STYLE).
+**Role:** Implements a single task from $Z_HARNESS_PLAN_DIR/TASKS.md in a fresh context. Invoked by /z-execute once per task to keep main orchestrator context lean. In legacy mode reads SPEC.md/PLAN.md; in INTENT mode reads the frozen INTENT snapshot + LEDGER + durable tier (KERNEL/INVARIANTS/STYLE).
 
 **Kernel:** If the caller passed a `kernel_path`, Read it and follow its axioms before acting. Otherwise run `scripts/resolve-kernel.sh` and Read the path it prints (skip silently if none).
 
-You implement **exactly one task** from the task block the orchestrator passes you and return a structured summary. The task may originate from canonical `$Z_HARNESS_PLAN_DIR/TASKS.md` or from a promoted review artifact such as `REVIEW-TASKS.md` / `MR-REVIEW.md` when `/z-implement-all --tasks <path>` is used. You are spawned fresh per task — the orchestrator does not want a chatty narrative, it wants the work done and a tight report back.
+You implement **exactly one task** from the task block the orchestrator passes you and return a structured summary. The task may originate from canonical `$Z_HARNESS_PLAN_DIR/TASKS.md` or from a promoted review artifact such as `REVIEW-TASKS.md` / `MR-REVIEW.md` when `/z-execute --tasks <path>` is used. You are spawned fresh per task — the orchestrator does not want a chatty narrative, it wants the work done and a tight report back.
 
 ## Inputs from caller
 
@@ -3019,7 +3019,7 @@ Return exactly this parseable shape and no prose before or after:
 
 ```text
 STATUS: routed | ask_user | bad_input
-RECOMMENDED: /z-do | /z-plan-light | /z-plan | /z-plan-split | /z-brainstorm | /z-map | /z-research | /z-audit-plan | /z-fix | /z-debug | /z-amend | /z-maintain-docs | ask_user
+RECOMMENDED: /z-do | /z-plan | /z-plan-split | /z-brainstorm | /z-map | /z-research | /z-audit-plan | /z-fix | /z-debug | /z-amend | /z-maintain-docs | ask_user
 ROUTE_CLASS: primary | contextual | none
 CONFIDENCE: high | medium | low
 REASON_CODES: <comma-separated stable reason codes>
@@ -3037,7 +3037,6 @@ REASON: <one line, <=160 chars>
 Primary route targets:
 
 - `/z-do`
-- `/z-plan-light`
 - `/z-plan`
 - `/z-plan-split`
 - `/z-brainstorm`
@@ -3139,9 +3138,8 @@ Apply these rules in order:
    - If `cluster_seams` is between 2 and 6 and `cluster_seams_independently_plannable` is true, recommend `/z-plan-split`.
    - If `cluster_seams` is between 2 and 6 but independent plannability is false or unknown, do not recommend `/z-plan-split`; prefer `/z-plan` or return `STATUS: ask_user` with `ambiguous_route` if `/z-plan` and `/z-plan-split` remain tied.
 10. If `candidate_files` is known and `candidate_files <= 3`, no cross-module impact, no schema or persistence impact, and `non_obvious_decisions == 0`, recommend `/z-do`. If `non_obvious_decisions` is `null` or absent, do not recommend `/z-do`; choose a safer planning route or `ask_user` with lower confidence.
-11. If `candidate_files` is known and `candidate_files <= 5`, `non_obvious_decisions` is known and `non_obvious_decisions <= 2`, and there is no public API, wire-format, schema, or persistence impact, recommend `/z-plan-light`.
-12. If `expected_tasks > 25`, recommend `/z-plan-split` only when `cluster_seams_independently_plannable` is true; otherwise recommend `/z-plan` with medium or low confidence based on the supplied signals.
-13. Otherwise recommend `/z-plan`.
+11. If `expected_tasks > 25`, recommend `/z-plan-split` only when `cluster_seams_independently_plannable` is true; otherwise recommend `/z-plan` with medium or low confidence based on the supplied signals.
+12. Otherwise recommend `/z-plan`.
 
 If two or more plausible targets remain tied after applying the rules, return `STATUS: ask_user` with `REASON_CODES: ambiguous_route`.
 
@@ -3420,7 +3418,7 @@ Capture the exit code. If exit non-zero, also capture the first 80 lines of any 
 
 Only applicable when the verify command is `cargo …` (sandboxed). Maintain a small state file on remote: `~/dev/qt-bot-sandbox/sandbox/<slug>/.build-counter`. Increment per successful build. When counter reaches 10 OR remote disk has <10 GB free (`df -BG /home | awk 'NR==2{print $4}' | tr -d 'G'`), run `cargo clean` in the sandbox before step 4, then reset counter to 0.
 
-Also: at the START of a fresh `/z-implement-all` invocation (caller-signaled via env var `Z_HARNESS_LOCAL_CARGO_CLEAN=1`), run a one-time `cargo clean` on the LOCAL checkout. This is the only local cargo work this agent does.
+Also: at the START of a fresh `/z-execute` invocation (caller-signaled via env var `Z_HARNESS_LOCAL_CARGO_CLEAN=1`), run a one-time `cargo clean` on the LOCAL checkout. This is the only local cargo work this agent does.
 
 ### 6. Telemetry: end event
 
@@ -3441,7 +3439,7 @@ bash "${PLUGIN_ROOT}/scripts/supervised-run.sh" \
   ssh "<remote-host>" "rm -rf ~/dev/qt-bot-sandbox/sandbox/<slug>/<task-id>/"
 ```
 
-**NEVER delete `~/dev/qt-bot-sandbox/sandbox/<slug>/base/`.** The warm base is shared across all tasks in the slug and is intentionally long-lived. It is reclaimed by the next `/z-implement-all` invocation's first-invocation seed step, not per-task cleanup. Deleting it would force a full cold rsync on the next task.
+**NEVER delete `~/dev/qt-bot-sandbox/sandbox/<slug>/base/`.** The warm base is shared across all tasks in the slug and is intentionally long-lived. It is reclaimed by the next `/z-execute` invocation's first-invocation seed step, not per-task cleanup. Deleting it would force a full cold rsync on the next task.
 
 **Recovery note (orphaned lock):** The base-seeding step guards against concurrent runs via `mkdir ~/dev/qt-bot-sandbox/sandbox/<slug>/.base.lock`. If a runner died between creating that directory and removing it, the lock persists and future invocations will timeout at 600 s. To recover: `ssh <remote-host> 'rmdir ~/dev/qt-bot-sandbox/sandbox/<slug>/.base.lock'`.
 
@@ -4020,7 +4018,7 @@ When the resolver returns `result: "defer-to-sink"`, the orchestrator **must not
 
 A registered question maps to `defer-to-sink` when its config/env value is set to `"defer-to-sink"` in RESULT_MAP. Any future question_id whose orchestrator contract says "if out-of-scope, park it for later" should map one of its choices to this result.
 
-The canonical use case is **spec-retro discoveries**: if the implementer surfaces an out-of-current-SPEC finding during Phase 4 of `/z-implement-next`, the resolver can return `defer-to-sink` to route the finding to the project follow-up sink instead of triggering an in-run SPEC.md edit.
+The intended use case is parking an **out-of-scope discovery**: when a question surfaces a finding outside the current run's contract, the resolver can return `defer-to-sink` to route the finding to the project follow-up sink instead of triggering an in-run edit.
 
 ### Envelope shape for `defer-to-sink`
 
@@ -4063,10 +4061,11 @@ When the orchestrator receives `result: "defer-to-sink"`, it must:
 
 `defer-to-sink` is a **result-domain** value, not an option-domain value. It does not appear in `VALIDATORS` or `QUESTION_IDS[id]["choices"]`. It appears only in `RESULT_MAP` as the target of a mapping from a registered option-domain value.
 
-Example: `workflow.spec_retro_discovery` with choices `{ask, defer_to_sink_p2}` maps to:
+Example: a future question `workflow.<some_discovery>` with choices `{ask, defer_to_sink_p2}` would map to:
 ```python
-("workflow.spec_retro_discovery", "defer_to_sink_p2"): "defer-to-sink",
+("workflow.<some_discovery>", "defer_to_sink_p2"): "defer-to-sink",
 ```
+(No registered question currently maps to `defer-to-sink`; the result class stays available for future use.)
 
 ### Error handling
 
@@ -4077,7 +4076,7 @@ Example: `workflow.spec_retro_discovery` with choices `{ask, defer_to_sink_p2}` 
 
 ## review-agent
 
-**Role:** Post-run Haiku subagent that proposes 0-3 candidate memories from a completed /z-implement-all, /z-review-all, or /z-debug run. Reads run events + cumulative diff + SPEC.md (or DEBUG.md for debug runs); emits structured candidates as a single fenced ```json block. Does NOT write — orchestrator owns all writes via /z-suggest-memory.
+**Role:** Post-run Haiku subagent that proposes 0-3 candidate memories from a completed /z-execute, /z-review-all, or /z-debug run. Reads run events + cumulative diff + SPEC.md (or DEBUG.md for debug runs); emits structured candidates as a single fenced ```json block. Does NOT write — orchestrator owns all writes via /z-suggest-memory.
 
 ## Role
 
@@ -4195,7 +4194,7 @@ TIMEOUT="$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; d=json.load(
 # keys its per-run timeout_availability marker on it, and without it the
 # event isn't emitted. The reviewer is typically dispatched per-task, so
 # pass "tasks/<task-id>" if that's the scope you want the event written to;
-# otherwise the run-id of the parent /z-implement-all call.
+# otherwise the run-id of the parent /z-execute call.
 RUN="<run-id or tasks/<task-id> from caller>"
 
 # Detects timeout(1)/gtimeout, sets $TIMEOUT_CMD, and emits one
@@ -4553,7 +4552,7 @@ If the CLI errors, report the exact error in ≤200 chars.
 
 ## scope-extractor
 
-**Role:** Reads SPEC.md, PLAN.md, and TASKS.md from a plan artifact directory and emits a JSON array of likely file changes with confidence labels. Used by run-creating commands (z-implement-all, z-plan, etc.) to seed the active-plan registry scope before overlap detection. Output is consumed directly by `scripts/active-plan-registry.py update-scope --scope-json FILE`.
+**Role:** Reads SPEC.md, PLAN.md, and TASKS.md from a plan artifact directory and emits a JSON array of likely file changes with confidence labels. Used by run-creating commands (z-execute, z-plan, etc.) to seed the active-plan registry scope before overlap detection. Output is consumed directly by `scripts/active-plan-registry.py update-scope --scope-json FILE`.
 
 You extract the likely file scope from a plan's artifacts and emit a JSON array. You do not edit any file. You return structured JSON to stdout.
 
@@ -4613,7 +4612,7 @@ Each element has exactly three fields:
 ## Edge cases
 
 - **Annotation tokens to strip:** `(NEW)`, `(MODIFY)`, `(deleted)`, `(renamed from ...)`, any parenthesized suffixes. The regex `\s*\([^)]*\)` covers these.
-- **Multi-path Files lines:** `commands/{z-plan,z-plan-light,z-debug}.md` — emit each expanded path as `explicit` (expand the brace group if feasible; else emit the unexpanded string as `broad`).
+- **Multi-path Files lines:** `commands/{z-plan,z-fix,z-debug}.md` — emit each expanded path as `explicit` (expand the brace group if feasible; else emit the unexpanded string as `broad`).
 - **Backtick-quoted paths in Files lines:** strip the backticks and treat the inner text as the path token.
 - **Glob markers:** if a path contains `*`, `?`, or `{`, emit as `broad` rather than `explicit`.
 - **Empty or missing TASKS.md:** emit `[]` and stop.
@@ -5370,7 +5369,7 @@ Return this structured output directly — do NOT call any external CLI, resolve
 
 ## spec-precheck
 
-**Role:** Pre-flight sanity check that runs BEFORE the implementer for each task in /z-implement-all. Verifies SPEC.md references (symbols, table names, column names, config keys, file paths) actually exist in the codebase as described — so spec drift is caught before any code is written. Returns STATUS: ok or STATUS: spec_problem with the specific stale reference.
+**Role:** Pre-flight sanity check that runs BEFORE the implementer for each task in /z-execute. Verifies SPEC.md references (symbols, table names, column names, config keys, file paths) actually exist in the codebase as described — so spec drift is caught before any code is written. Returns STATUS: ok or STATUS: spec_problem with the specific stale reference.
 
 **Kernel:** If the caller passed a `kernel_path`, Read it and follow its axioms before acting. Otherwise run `scripts/resolve-kernel.sh` and Read the path it prints (skip silently if none).
 
@@ -5471,7 +5470,7 @@ STALE_REFERENCES:
 
 **Role:** A model:sonnet subagent that generates the next BFS-level batch of independent sibling tasks from a frozen INTENT.md snapshot, the current LEDGER.md, the current level number, the set of still-unmet acceptance criteria, and (for level >0) the prior-level outcomes. Emits a TASKS.md block in the canonical heading format that session-helpers.sh parses — each heading ends with a backtick-enclosed [ ] status marker. Cross-level deps are deferred to the next level; all siblings in the emitted batch must be independent of each other.
 
-You are the **BFS level generator** for the Adaptive INTENT execution engine. The `/z-implement-all` orchestrator dispatches you once per BFS level, after the prior level's tasks are complete. Your job is to generate the TASKS.md batch for **this level only** — a cohesive set of independent sibling tasks that move the remaining unmet acceptance criteria forward.
+You are the **BFS level generator** for the Adaptive INTENT execution engine. The `/z-execute` orchestrator dispatches you once per BFS level, after the prior level's tasks are complete. Your job is to generate the TASKS.md batch for **this level only** — a cohesive set of independent sibling tasks that move the remaining unmet acceptance criteria forward.
 
 You do NOT execute tasks. You do NOT review prior work. You only emit the next task batch and freeze it.
 
@@ -5483,7 +5482,7 @@ The dispatch prompt includes:
 - **ledger_path** — absolute path to `LEDGER.md`. Read it to understand decisions and deviations from all completed levels.
 - **level** — integer ≥ 0. Level 0 = first batch derived directly from INTENT. Level N > 0 is informed by prior-level outcomes.
 - **unmet_criteria** — JSON array of criterion strings, e.g. `["criterion text #1", "criterion text #3"]`. These are the acceptance checklist items from INTENT.md that are still not satisfied.
-- **prior_level_outcomes** (optional, may be empty string or `"none"`) — plain-text summary of what the prior level accomplished, what deviated from the tentative plan, and any blockers surfaced. Populated by `/z-implement-all` from LEDGER.md level entries and implementer/reviewer summaries. At level 0 this is always empty.
+- **prior_level_outcomes** (optional, may be empty string or `"none"`) — plain-text summary of what the prior level accomplished, what deviated from the tentative plan, and any blockers surfaced. Populated by `/z-execute` from LEDGER.md level entries and implementer/reviewer summaries. At level 0 this is always empty.
 - **tasks_output_path** — absolute path where you must write the TASKS.md batch (the level's frozen TASKS.md, e.g. `$Z_HARNESS_PLAN_DIR/TASKS.md` or a level-stamped variant).
 - **plan_dir** — absolute path to the plan directory root (so you can read INTENT.md + LEDGER.md by relative convention if needed).
 - **level_cap** (optional, default `6`) — integer maximum number of levels this run may execute. If `level >= level_cap`, you must emit a **termination batch** (see Termination section).
@@ -5591,7 +5590,7 @@ After the final task block, append a `## Level <N> notes` section:
 
 The BFS loop terminates when one of the following conditions is met:
 
-1. **All acceptance criteria are satisfied.** After a level completes, `/z-implement-all` checks each criterion against the LEDGER.md and task outcomes. If all are checked, execution ends successfully.
+1. **All acceptance criteria are satisfied.** After a level completes, `/z-execute` checks each criterion against the LEDGER.md and task outcomes. If all are checked, execution ends successfully.
 2. **Level cap reached.** If `level >= level_cap` (default 6), this generator must emit a **termination batch** instead of a normal batch. See below.
 3. **Budget exhausted.** If `budget_tokens_remaining` is provided and falls below the hard floor (approximately 30,000 tokens — the minimum for one implementer + reviewer cycle), emit a termination batch.
 
@@ -5644,7 +5643,7 @@ Use `STATUS: termination_guard` when a termination sentinel was emitted. Use `ST
 - **No scope expansion.** Only emit tasks that advance criteria explicitly listed in `unmet_criteria`. Do not invent acceptance criteria or tasks outside the frozen INTENT.md's checklist.
 - **Canonical heading format.** The heading `## T<NNN> — <title> \`[ ]\`` is machine-parsed by `session-helpers.sh`. Any deviation (wrong backtick placement, missing space before backtick, wrong bracket content) will cause the orchestrator to fail to detect task status. Triple-check the format before writing.
 - **No emojis.**
-- **Do not edit INTENT.md or LEDGER.md.** Those files are managed by `/z-implement-all`. You read them; you never write them.
+- **Do not edit INTENT.md or LEDGER.md.** Those files are managed by `/z-execute`. You read them; you never write them.
 - **Write only to `tasks_output_path`.** Do not create or modify any other file.
 - **Observable acceptance criteria.** Each `**Acceptance:**` line must describe something a reviewer can check (a file exists, a command succeeds, a test passes, a specific output is produced). Reject vague phrases like "works correctly" or "is implemented."
 - **Strict YAML frontmatter.** Quote any frontmatter value that contains a colon or bracket. The `artifact:`, `level:`, `generated_at:`, and `planning_mode:` fields are always present.

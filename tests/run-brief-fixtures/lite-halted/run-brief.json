@@ -8,10 +8,10 @@
   "status": "halted",
   "generated_at": "2026-06-07T13:05:00Z",
   "intent": "Fix typo in README heading",
-  "outcome": "Halted: scope exceeded light-mode threshold; routed to /z-plan-light",
+  "outcome": "Halted: scope exceeded threshold; routed to /z-plan",
   "next": {
-    "label": "Run /z-plan-light",
-    "command": "/z-plan-light"
+    "label": "Run /z-plan",
+    "command": "/z-plan"
   },
   "sources": {
     "intent": "do_run_start",

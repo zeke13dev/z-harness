@@ -37,7 +37,7 @@ TIMEOUT="$(printf '%s' "$DESCRIPTOR" | python3 -c 'import json,sys; d=json.load(
 # keys its per-run timeout_availability marker on it, and without it the
 # event isn't emitted. The reviewer is typically dispatched per-task, so
 # pass "tasks/<task-id>" if that's the scope you want the event written to;
-# otherwise the run-id of the parent /z-implement-all call.
+# otherwise the run-id of the parent /z-execute call.
 RUN="<run-id or tasks/<task-id> from caller>"
 
 # Detects timeout(1)/gtimeout, sets $TIMEOUT_CMD, and emits one

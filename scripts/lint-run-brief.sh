@@ -197,8 +197,7 @@ PY
 _check_implement_halt_includes() {
   local spec frag cmd_file grep_ec
   for spec in \
-    "z-implement-all:run-brief-halt-finalize-implement-all.md" \
-    "z-implement-next:run-brief-halt-finalize-implement-next.md"
+    "z-execute:run-brief-halt-finalize-execute.md"
   do
     cmd_file="$SKILLS_DIR/${spec%%:*}/SKILL.md"
     frag="${spec#*:}"

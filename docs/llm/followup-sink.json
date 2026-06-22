@@ -566,7 +566,6 @@
       "format": "fenced json array under **FOLLOWUPS:** header",
       "parse_failure": "logs followup_block_parse_failed; never crashes reviewer return path"
     },
-    "spec_retro": "Phase 4 of /z-implement-next; defer-to-sink branch for out-of-scope discoveries",
     "deferred_askuser": "resolver returns defer-to-sink result; orchestrator calls sink-add.sh with question context"
   },
   "notion_adapter": {

@@ -70,7 +70,7 @@ Before editing anything, write a short root-cause analysis directly in chat. Thi
 **Fix:** <what to change — added clause, removed instruction, corrected path, new pushback line, clearer trigger>.
 ```
 
-Keep it tight. If the root cause is **not** in the skill file (it's actually a bug in code, or a missing repo-level convention), state that and **stop**: this command only patches skill files. Tell the user the right next step (file an issue, `/z-plan-light` the code, update CLAUDE.md, add a memory) and let them drive it.
+Keep it tight. If the root cause is **not** in the skill file (it's actually a bug in code, or a missing repo-level convention), state that and **stop**: this command only patches skill files. Tell the user the right next step (file an issue, `/z-plan` the code fix, update CLAUDE.md, add a memory) and let them drive it.
 
 ### 2. Patch the file
 
@@ -142,7 +142,7 @@ If the repo's `CLAUDE.md` has an explicit commit-on-every-step rule, mention it;
 
 ## When NOT to use this command
 
-- **Bug in repo code, not in a skill instruction** → use `/z-plan-light` for the fix, write a regression test.
+- **Bug in repo code, not in a skill instruction** → use `/z-plan` for the fix, write a regression test.
 - **Missing project convention that doesn't belong in any one skill** → propose a `CLAUDE.md` addition or a memory entry, then stop.
 - **Skill is correct but user disagrees with the policy** (e.g. wants to skip a gate the skill enforces) → that's a policy debate, not a fix. Do not weaken gates because they were inconvenient once.
 - **Skill produced the right output but the user wanted something else** → clarify the request; the skill isn't broken.
@@ -155,7 +155,7 @@ If the repo's `CLAUDE.md` has an explicit commit-on-every-step rule, mention it;
 
 ## Out of scope
 
-- Repo code changes → `/z-plan-light` or normal edit cycle.
+- Repo code changes → `/z-plan` or normal edit cycle.
 - `CLAUDE.md` edits → user-driven; this command stays in skill/command/agent files.
 - Memory edits → handled by the auto-memory system; this command does not write memory.
 - Adding a new skill from scratch → just create the file with the Write tool; this command patches existing ones.

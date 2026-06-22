@@ -33,7 +33,7 @@ Return exactly this parseable shape and no prose before or after:
 
 ```text
 STATUS: routed | ask_user | bad_input
-RECOMMENDED: /z-do | /z-plan-light | /z-plan | /z-plan-split | /z-brainstorm | /z-map | /z-research | /z-audit-plan | /z-fix | /z-debug | /z-amend | /z-maintain-docs | ask_user
+RECOMMENDED: /z-do | /z-plan | /z-plan-split | /z-brainstorm | /z-map | /z-research | /z-audit-plan | /z-fix | /z-debug | /z-amend | /z-maintain-docs | ask_user
 ROUTE_CLASS: primary | contextual | none
 CONFIDENCE: high | medium | low
 REASON_CODES: <comma-separated stable reason codes>
@@ -51,7 +51,6 @@ REASON: <one line, <=160 chars>
 Primary route targets:
 
 - `/z-do`
-- `/z-plan-light`
 - `/z-plan`
 - `/z-plan-split`
 - `/z-brainstorm`
@@ -153,9 +152,8 @@ Apply these rules in order:
    - If `cluster_seams` is between 2 and 6 and `cluster_seams_independently_plannable` is true, recommend `/z-plan-split`.
    - If `cluster_seams` is between 2 and 6 but independent plannability is false or unknown, do not recommend `/z-plan-split`; prefer `/z-plan` or return `STATUS: ask_user` with `ambiguous_route` if `/z-plan` and `/z-plan-split` remain tied.
 10. If `candidate_files` is known and `candidate_files <= 3`, no cross-module impact, no schema or persistence impact, and `non_obvious_decisions == 0`, recommend `/z-do`. If `non_obvious_decisions` is `null` or absent, do not recommend `/z-do`; choose a safer planning route or `ask_user` with lower confidence.
-11. If `candidate_files` is known and `candidate_files <= 5`, `non_obvious_decisions` is known and `non_obvious_decisions <= 2`, and there is no public API, wire-format, schema, or persistence impact, recommend `/z-plan-light`.
-12. If `expected_tasks > 25`, recommend `/z-plan-split` only when `cluster_seams_independently_plannable` is true; otherwise recommend `/z-plan` with medium or low confidence based on the supplied signals.
-13. Otherwise recommend `/z-plan`.
+11. If `expected_tasks > 25`, recommend `/z-plan-split` only when `cluster_seams_independently_plannable` is true; otherwise recommend `/z-plan` with medium or low confidence based on the supplied signals.
+12. Otherwise recommend `/z-plan`.
 
 If two or more plausible targets remain tied after applying the rules, return `STATUS: ask_user` with `REASON_CODES: ambiguous_route`.
 

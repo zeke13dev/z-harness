@@ -1,7 +1,7 @@
 ---
 name: z-uplift
 disable-model-invocation: false
-description: Tiered bulk codebase quality uplift — decompose repo into components, run a repo-wide cross-cutting pass, dispatch per-component audits, produce per-component TASKS.md files, and drive sequential implementation via /z-implement-all.
+description: Tiered bulk codebase quality uplift — decompose repo into components, run a repo-wide cross-cutting pass, dispatch per-component audits, produce per-component TASKS.md files, and drive sequential implementation via /z-execute.
 argument-hint: "[--components=<file>] [--component <path>] [--retry-bailed] [--refresh-component <name>] [--dimensions=<csv>] [--cross-cutting=skip] [--no-style]"
 model: opus
 runtime: c1
@@ -17,7 +17,7 @@ Arguments (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
-Strict, multi-phase. Do not skip phases. Do not edit production code directly — `/z-uplift` orchestrates audits and delegates implementation to `/z-implement-all`.
+Strict, multi-phase. Do not skip phases. Do not edit production code directly — `/z-uplift` orchestrates audits and delegates implementation to `/z-execute`.
 
 ---
 
@@ -2307,7 +2307,7 @@ INNEREOF
 
 Only reached when bail condition is NOT met.
 
-Write `$COMP_PLAN_DIR/TASKS.md` in the exact format `/z-implement-all` consumes (mirror `/z-audit` Phase 5 shape):
+Write `$COMP_PLAN_DIR/TASKS.md` in the exact format `/z-execute` consumes (mirror `/z-audit` Phase 5 shape):
 
 ```markdown
 # Audit TASKS — <component path>
@@ -2581,8 +2581,8 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 ## Phase 5 — Sequential implement
 
 **Two-step handoff model (read this first):**
-Phase 5 cannot autonomously invoke `/z-implement-all` — slash commands cannot invoke other slash commands. Instead, Phase 5 operates as follows:
-- **Step 2c (first invocation):** After the user confirms a component, Phase 5 prints the explicit `/z-implement-all` command for the user to run, marks MANIFEST `[i] implementing`, and EXITS cleanly with a RESUME INSTRUCTION. The user then runs `/z-implement-all` independently.
+Phase 5 cannot autonomously invoke `/z-execute` — slash commands cannot invoke other slash commands. Instead, Phase 5 operates as follows:
+- **Step 2c (first invocation):** After the user confirms a component, Phase 5 prints the explicit `/z-execute` command for the user to run, marks MANIFEST `[i] implementing`, and EXITS cleanly with a RESUME INSTRUCTION. The user then runs `/z-execute` independently.
 - **Resume path (next invocation):** When `/z-uplift` is re-invoked, it detects the `[i] implementing` row in Step 2a. It re-reads the per-component TASKS.md and if all rows are `[x]` (zero `[ ]` remaining), automatically transitions MANIFEST to `[x] done` and emits `component_implement_done`. If pending rows remain, it presents an AskUserQuestion (resume / mark done / skip / abort). The "Mark done" option in Step 2a ALWAYS verifies zero `[ ]` rows before accepting the transition.
 
 Record `T0=$(date +%s%3N)` at phase start.
@@ -2651,7 +2651,7 @@ Iterate over each row in `IMPL_QUEUE`. For each component, execute Steps 2a thro
 
 If the row state is `[i] implementing` (set on a prior invocation that was interrupted before completion):
 
-First, verify the per-component TASKS.md to check whether `/z-implement-all` already completed:
+First, verify the per-component TASKS.md to check whether `/z-execute` already completed:
 
 ```bash
 RESUME_PENDING_COUNT="$(python3 - "$COMP_TASKS_MD" <<'PYEOF'
@@ -2688,7 +2688,7 @@ Present `AskUserQuestion`:
 > Component `<component>` is in state `[i] implementing` — it was being implemented when the last invocation was interrupted. `<RESUME_PENDING_COUNT>` pending task(s) remain in `<COMP_TASKS_MD>`.
 >
 > How would you like to proceed?
-> 1. Resume — run `/z-implement-all --tasks=<tasks_md>` now to continue implementation
+> 1. Resume — run `/z-execute --tasks=<tasks_md>` now to continue implementation
 > 2. Mark as done — the implementation was completed manually; update MANIFEST to `[x] done`
 > 3. Skip — mark as `[s] skipped: user` and move on
 > 4. Abort — leave all remaining components unchanged and exit
@@ -2720,7 +2720,7 @@ Handle the response:
   ```
 
   If `PENDING_COUNT > 0`: refuse the transition — print:
-  > Cannot mark done — `<PENDING_COUNT>` pending task(s) remain in `<COMP_TASKS_MD>`. Re-run `/z-implement-all --tasks=<COMP_TASKS_MD>` to finish them first.
+  > Cannot mark done — `<PENDING_COUNT>` pending task(s) remain in `<COMP_TASKS_MD>`. Re-run `/z-execute --tasks=<COMP_TASKS_MD>` to finish them first.
 
   Then re-present the AskUserQuestion for this component (loop back to Step 2a).
 
@@ -2762,7 +2762,7 @@ Present `AskUserQuestion`:
 > Tasks file: `<COMP_TASKS_MD>`
 >
 > Options:
-> 1. Proceed — dispatch `/z-implement-all --tasks=<COMP_TASKS_MD>`
+> 1. Proceed — dispatch `/z-execute --tasks=<COMP_TASKS_MD>`
 > 2. Skip this component — mark as skipped and move on
 > 3. Abort uplift — leave remaining components unchanged and exit
 
@@ -2846,17 +2846,17 @@ print(f"marked {comp_slug} as {new_state}")
 PYEOF
 ```
 
-Present the `/z-implement-all` invocation command to the user and instruct them to run it:
+Present the `/z-execute` invocation command to the user and instruct them to run it:
 
 > **RESUME INSTRUCTION — run this command now:**
 >
 > ```
-> /z-implement-all --tasks=<COMP_TASKS_MD>
+> /z-execute --tasks=<COMP_TASKS_MD>
 > ```
 >
-> After `/z-implement-all` completes, re-invoke `/z-uplift` to advance the queue. The next `/z-uplift` invocation will detect the `[i] implementing` row for `<component>`, verify the per-component TASKS.md is fully done (all `[x]`), and transition MANIFEST to `[x] done` automatically.
+> After `/z-execute` completes, re-invoke `/z-uplift` to advance the queue. The next `/z-uplift` invocation will detect the `[i] implementing` row for `<component>`, verify the per-component TASKS.md is fully done (all `[x]`), and transition MANIFEST to `[x] done` automatically.
 
-Then **exit** the current `/z-uplift` invocation cleanly (do not attempt to wait for `/z-implement-all` inline — it is a separate slash command that runs independently). Log `run_end` with `status: pending_implement` before exiting:
+Then **exit** the current `/z-uplift` invocation cleanly (do not attempt to wait for `/z-execute` inline — it is a separate slash command that runs independently). Log `run_end` with `status: pending_implement` before exiting:
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \

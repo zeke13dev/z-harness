@@ -54,7 +54,7 @@
   "gotchas": [
     "Z_HARNESS_CONSULT=off bypasses config loading and the distinctness check entirely — setting it is sufficient; no providers.json change needed.",
     "log-providers.sh checks for 'none' at line 34 BEFORE calling any python JSON parse. Previously, receiving 'none' caused json.load to crash. The guard ensures a clean provider_resolution_skipped event is emitted instead.",
-    "Consumer contract for 'none': /z-plan skips Phase 3 and Phase 7 external consults; /z-implement-all routes its reviewer gate to a self-reviewer subagent (agents/self-reviewer.md) that never calls resolve-provider or any external CLI.",
+    "Consumer contract for 'none': /z-plan skips Phase 3 and Phase 7 external consults; /z-execute routes its reviewer gate to a self-reviewer subagent (agents/self-reviewer.md) that never calls resolve-provider or any external CLI.",
     "Schema at runtime/contract/provider.schema.json permits kind='sdk' and optional auth_env/session_resumable/allow_cross_vendor_env, but resolve-provider.py validates only kind='cli' — SDK entries pass schema but cause exit 2 if resolved.",
     "Z_HARNESS_REPO_PROVIDERS env var overrides repo config path entirely, bypassing git-based discovery.",
     "Shadow de-dup stamp file is keyed on PPID, not PID — warning fires once per parent process tree, not once per subshell.",

@@ -73,18 +73,16 @@ Used by `/z-do` only. Requires **Intent, Outcome, Next** only. The `approach` an
 | Command | Profile |
 |---------|---------|
 | `/z-plan` | full |
-| `/z-implement-all` | full |
-| `/z-implement-next` | full |
+| `/z-execute` | full |
 | `/z-audit` | full |
 | `/z-audit-plan` | full |
 | `/z-debug` | full |
 | `/z-fix` | full |
-| `/z-plan-light` | full |
 | `/z-review-all` | full |
 | `/z-brainstorm` | full |
 | `/z-do` | lite |
 
-**Skip brief (non-terminal):** `/z-implement-all` **compaction_pause** exit only — the run is paused, not finished.
+**Skip brief (non-terminal):** `/z-execute` **compaction_pause** exit only — the run is paused, not finished.
 
 Command → artifact mapping lives in `docs/llm/run-brief-registry.json`.
 
@@ -111,9 +109,8 @@ Secondary commands may be added post-v1 by extending the registry JSON.
 | `scripts/render-cost-summary.py` | Reads `events.jsonl`, produces cost summary Markdown text passed via `--cost-summary-text` to `render-run-brief.py`. Non-fatal if absent. |
 | `scripts/notify-discord.sh` | Posts Discord webhook embed (title + push-format body). Reads webhook URL from `notify.discord_webhook_url` config. 3-second timeout; non-fatal on failure. |
 | `scripts/lint-run-brief.sh` | Schema + registry + renderer self-test + `_test_finalize_preserves_decisions` integration test (default mode). `--registry-only` greps command files for finalize fragment include. |
-| `commands/_fragments/run-brief-finalize.md` | Shared finalize block inlined into registry commands via `/z-export` |
-| `commands/_fragments/run-brief-halt-finalize-implement-all.md` | Halt-path preamble for `/z-implement-all`; sets outcome + next then includes finalize fragment |
-| `commands/_fragments/run-brief-halt-finalize-implement-next.md` | Halt-path preamble for `/z-implement-next`; same pattern |
+| `_fragments/run-brief-finalize.md` | Shared finalize block inlined into registry commands via `/z-export` |
+| `_fragments/run-brief-halt-finalize-execute.md` | Halt-path preamble for `/z-execute`; sets outcome + next then includes finalize fragment |
 
 Golden fixtures: `tests/run-brief-fixtures/full-shipped/run-brief.json`, `tests/run-brief-fixtures/lite-halted/run-brief.json`.
 
@@ -182,9 +179,7 @@ For each row: run the command to a **terminal** exit. Confirm `archive/$RUN/run-
 | Command | One-line smoke |
 |---------|----------------|
 | `/z-plan` | Complete a plan run; expect full brief with approach from PLAN.md and decisions from `decisions.md`. |
-| `/z-plan-light` | Ship or halt a light plan; expect full brief with approach from FIX.md. |
-| `/z-implement-all` | Finish all tasks or halt on blocker; expect full brief — **no brief** on `compaction_pause` exit only. |
-| `/z-implement-next` | Complete one task cycle; expect full brief with outcome referencing the task id. |
+| `/z-execute` | Finish all tasks or halt on blocker; expect full brief — **no brief** on `compaction_pause` exit only. |
 | `/z-audit` | Finish audit Phase 7; expect full brief with outcome summarizing REPORT.md. |
 | `/z-audit-plan` | Finish plan audit; expect full brief referencing PLAN_AUDIT_REPORT.md. |
 | `/z-debug` | Reach Phase 10 finalize (shipped or halted); expect full brief with DEBUG.md approach. |

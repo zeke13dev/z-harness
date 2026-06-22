@@ -60,7 +60,7 @@
     }
   ],
   "depends_on": ["doc-updater", "doc-fetcher"],
-  "consumed_by": ["z-implement-all", "tier2-doc-rationale"],
+  "consumed_by": ["z-execute", "tier2-doc-rationale"],
   "invariants": [
     "NEVER writes to docs/ directly — staging only ($Z_HARNESS_PLAN_DIR/tier1-staged/)",
     "Never touches memories[]",

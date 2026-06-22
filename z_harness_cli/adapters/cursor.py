@@ -1,7 +1,7 @@
 """Cursor host adapter — fidelity: flattened.
 
 Cursor agent (``cursor-agent``) runs z-harness commands as a single-agent
-transliteration.  Multi-agent orchestration (/z-implement-all, /z-panel,
+transliteration.  Multi-agent orchestration (/z-execute, /z-panel,
 /z-consult, /z-gate) is absent at this fidelity tier.
 
 Injection modes
@@ -120,7 +120,7 @@ z-harness plugin root: `{plugin_root}`
 #: Commands that require multi-agent orchestration — blocked on flattened hosts.
 _MULTI_AGENT_COMMANDS = frozenset(
     {
-        "z-implement-all",
+        "z-execute",
         "z-panel",
         "z-consult",
         "z-gate",

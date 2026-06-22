@@ -1,13 +1,13 @@
 # impl-pre-review
 
 > Last updated: 2026-06-19
-> Covers source: commands/z-implement-all.md, scripts/audit-preview-misses.sh, agents/pre-reviewer.md, agents/complexity-classifier.md
+> Covers source: skills/z-execute/SKILL.md, scripts/audit-preview-misses.sh, agents/pre-reviewer.md, agents/complexity-classifier.md
 
 ## Overview
 
-`impl-pre-review` is the opt-in pre-review gate-down for the per-task implement gate in `/z-implement-all`. It adds a cheap Haiku-tier `pre-reviewer` agent as a first-pass scan before the full external codex reviewer, with the aim of skipping the codex reviewer on clean low-tier tasks. A second, related knob (`runtime.pre_review`) gates a parallel 3-prong pre-review cycle that runs inside `/z-review-all` Phase 3.6; that cycle uses the same `pre-reviewer` agent but is a separate feature with separate config.
+`impl-pre-review` is the opt-in pre-review gate-down for the per-task implement gate in `/z-execute`. It adds a cheap Haiku-tier `pre-reviewer` agent as a first-pass scan before the full external codex reviewer, with the aim of skipping the codex reviewer on clean low-tier tasks. A second, related knob (`runtime.pre_review`) gates a parallel 3-prong pre-review cycle that runs inside `/z-review-all` Phase 3.6; that cycle uses the same `pre-reviewer` agent but is a separate feature with separate config.
 
-**Both features ship inert by default.** `runtime.impl_pre_review` (default `false`) controls the per-task gate-down in `/z-implement-all`. `runtime.pre_review` (default `false`) controls the Phase 3.6 pre-review cycle in `/z-review-all`. Neither is enabled unless the user sets the corresponding TOML key. The legacy env aliases `Z_HARNESS_IMPL_PRE_REVIEW` and `Z_HARNESS_PRE_REVIEW` are still accepted (transliterated by `config.py export-env`), but the TOML keys are the canonical form.
+**Both features ship inert by default.** `runtime.impl_pre_review` (default `false`) controls the per-task gate-down in `/z-execute`. `runtime.pre_review` (default `false`) controls the Phase 3.6 pre-review cycle in `/z-review-all`. Neither is enabled unless the user sets the corresponding TOML key. The legacy env aliases `Z_HARNESS_IMPL_PRE_REVIEW` and `Z_HARNESS_PRE_REVIEW` are still accepted (transliterated by `config.py export-env`), but the TOML keys are the canonical form.
 
 ## Cost-inversion caveat
 
@@ -18,11 +18,11 @@ Haiku has a non-trivial per-call cost. On a plan where most tasks are medium or 
 ## Key entry points
 
 <!-- AUTO-START: entry-points -->
-- `commands/z-implement-all.md:1951` — `runtime.impl_pre_review` block header — knob description, cost-inversion caveat, NO-OP fallthrough guarantee
-- `commands/z-implement-all.md:1969` — `if config.py get runtime.impl_pre_review == "true" && CYCLE==1` — outer knob gate; also checks `CYCLE -eq 1`
-- `commands/z-implement-all.md:1974` — Step 6.P1 — Tier-drift re-check — strips cached `**Complexity:**` stamp; dispatches `complexity-classifier` for `LIVE_TIER`
-- `commands/z-implement-all.md:2019` — Step 6.P2 — Gate-down (low-tier only) — probes Flash provider; dispatches `pre-reviewer` in `final-review-prong-a` mode; branches on `FLASH_VERDICT`
-- `commands/z-implement-all.md:2098` — Step 6.P3 — Medium/high advisory — Flash runs advisory-only (no gate authority); `FLASH_PREPEND` set if useful
+- `skills/z-execute/SKILL.md:1951` — `runtime.impl_pre_review` block header — knob description, cost-inversion caveat, NO-OP fallthrough guarantee
+- `skills/z-execute/SKILL.md:1969` — `if config.py get runtime.impl_pre_review == "true" && CYCLE==1` — outer knob gate; also checks `CYCLE -eq 1`
+- `skills/z-execute/SKILL.md:1974` — Step 6.P1 — Tier-drift re-check — strips cached `**Complexity:**` stamp; dispatches `complexity-classifier` for `LIVE_TIER`
+- `skills/z-execute/SKILL.md:2019` — Step 6.P2 — Gate-down (low-tier only) — probes Flash provider; dispatches `pre-reviewer` in `final-review-prong-a` mode; branches on `FLASH_VERDICT`
+- `skills/z-execute/SKILL.md:2098` — Step 6.P3 — Medium/high advisory — Flash runs advisory-only (no gate authority); `FLASH_PREPEND` set if useful
 - `commands/z-review-all.md:267` — Phase 3.6 — Pre-review cycle (opt-in via `runtime.pre_review`) — 3 parallel `pre-reviewer` dispatches before Phase 4 consultants
 - `scripts/audit-preview-misses.sh:1` — evidence gate — samples `review_gated_down` events; re-runs codex; reports Flash false-negative rate
 - `agents/pre-reviewer.md:1` — `pre-reviewer` agent — 4 modes: `final-review-prong-a`, `final-review-prong-b`, `final-review-quality`, `plan-audit`; emits `**VERDICT:**` line
@@ -70,7 +70,7 @@ The `pre-reviewer` agent is not a single-purpose tool. It operates in four named
 | `final-review-quality` | Code quality — defensive bloat, premature abstraction, DRY/KISS/SOLID violations |
 | `plan-audit` | Plan review — reference errors, design issues, logic flaws in plan artifacts |
 
-In the `/z-implement-all` gate-down path (Step 6.P2), mode is `final-review-prong-a`. In `/z-review-all` Phase 3.6, three parallel dispatches use `final-review-prong-a`, `final-review-prong-b`, and `final-review-quality` respectively.
+In the `/z-execute` gate-down path (Step 6.P2), mode is `final-review-prong-a`. In `/z-review-all` Phase 3.6, three parallel dispatches use `final-review-prong-a`, `final-review-prong-b`, and `final-review-quality` respectively.
 
 ## Behavior when impl_pre_review = true
 
@@ -171,7 +171,7 @@ downstream guard: if [ "${PRE_REVIEW_GATED_DOWN:-0}" -ne 1 ]; then <run codex> f
 
 ## See also
 
-- `commands/z-implement-all.md:1951` — full knob block.
+- `skills/z-execute/SKILL.md:1951` — full knob block.
 - `commands/z-review-all.md:267` — Phase 3.6 pre-review cycle (separate knob: `runtime.pre_review`).
 - `scripts/audit-preview-misses.sh` — evidence gate script.
 - `agents/pre-reviewer.md` — pre-reviewer agent definition (4 modes).

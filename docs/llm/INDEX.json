@@ -27,9 +27,8 @@
         "scripts/plan-path.sh",
         "scripts/migrate-plan-layout.sh",
         "agents/scope-extractor.md",
-        "commands/z-implement-all.md",
-        "commands/z-implement-next.md",
-        "commands/z-plan.md",
+        "skills/z-execute/SKILL.md",
+        "skills/z-plan/SKILL.md",
         "docs/human/active-plan-registry.md",
         "docs/handoff-parallel-session-safety.md"
       ],
@@ -102,11 +101,11 @@
         "scripts/resolve-kernel.sh",
         "scripts/build-skill-index.py",
         "agents/axiom-extractor.md",
-        "commands/z-axiom-scan.md",
-        "commands/z-axiom-list.md",
-        "commands/z-axiom-approve.md",
-        "commands/z-axiom-reject.md",
-        "commands/z-axiom-edit.md",
+        "skills/z-axiom-scan/SKILL.md",
+        "skills/z-axiom-list/SKILL.md",
+        "skills/z-axiom-approve/SKILL.md",
+        "skills/z-axiom-reject/SKILL.md",
+        "skills/z-axiom-edit/SKILL.md",
         "docs/schemas/axiom.schema.json",
         "scripts/config.py",
         "scripts/setup.py"
@@ -152,51 +151,49 @@
     {
       "slug": "commands",
       "source_file": [
-        "commands/z-amend.md",
-        "commands/z-audit-plan-style.md",
-        "commands/z-audit-plan.md",
-        "commands/z-audit.md",
-        "commands/z-brainstorm.md",
-        "commands/z-debug.md",
-        "commands/z-do.md",
-        "commands/z-explain.md",
-        "commands/z-export.md",
-        "commands/z-fix.md",
-        "commands/z-followup-confirm.md",
-        "commands/z-followup-dismiss.md",
-        "commands/z-followup-list.md",
-        "commands/z-followup-next.md",
-        "commands/z-followup-refresh.md",
-        "commands/z-followup-status.md",
-        "commands/z-git-guardrails.md",
-        "commands/z-grill.md",
-        "commands/z-implement-all.md",
-        "commands/z-implement-next.md",
-        "commands/z-improve.md",
-        "commands/z-init-docs.md",
-        "commands/z-learn.md",
-        "commands/z-maintain-docs.md",
-        "commands/z-map.md",
-        "commands/z-mr-review.md",
-        "commands/z-overnight.md",
-        "commands/z-plan-light.md",
-        "commands/z-plan-split.md",
-        "commands/z-plan.md",
-        "commands/z-providers-discover.md",
-        "commands/z-sharpen.md",
-        "commands/z-report.md",
-        "commands/z-research.md",
-        "commands/z-review-all.md",
-        "commands/z-skill-fix.md",
-        "commands/z-stats.md",
-        "commands/z-style-init.md",
-        "commands/z-suggest-memory.md",
-        "commands/z-test.md",
-        "commands/z-update.md",
-        "commands/z-uplift.md",
-        "commands/z-where.md",
-        "commands/z-handoff.md",
-        "commands/z-doc-rationale.md"
+        "skills/z-amend/SKILL.md",
+        "skills/z-audit-plan-style/SKILL.md",
+        "skills/z-audit-plan/SKILL.md",
+        "skills/z-audit/SKILL.md",
+        "skills/z-brainstorm/SKILL.md",
+        "skills/z-debug/SKILL.md",
+        "skills/z-do/SKILL.md",
+        "skills/z-explain/SKILL.md",
+        "skills/z-export/SKILL.md",
+        "skills/z-fix/SKILL.md",
+        "skills/z-followup-confirm/SKILL.md",
+        "skills/z-followup-dismiss/SKILL.md",
+        "skills/z-followup-list/SKILL.md",
+        "skills/z-followup-next/SKILL.md",
+        "skills/z-followup-refresh/SKILL.md",
+        "skills/z-followup-status/SKILL.md",
+        "skills/z-git-guardrails/SKILL.md",
+        "skills/z-grill/SKILL.md",
+        "skills/z-execute/SKILL.md",
+        "skills/z-improve/SKILL.md",
+        "skills/z-init-docs/SKILL.md",
+        "skills/z-learn/SKILL.md",
+        "skills/z-maintain-docs/SKILL.md",
+        "skills/z-map/SKILL.md",
+        "skills/z-mr-review/SKILL.md",
+        "skills/z-overnight/SKILL.md",
+        "skills/z-plan-split/SKILL.md",
+        "skills/z-plan/SKILL.md",
+        "skills/z-providers-discover/SKILL.md",
+        "skills/z-sharpen/SKILL.md",
+        "skills/z-report/SKILL.md",
+        "skills/z-research/SKILL.md",
+        "skills/z-review-all/SKILL.md",
+        "skills/z-skill-fix/SKILL.md",
+        "skills/z-stats/SKILL.md",
+        "skills/z-style-init/SKILL.md",
+        "skills/z-suggest-memory/SKILL.md",
+        "skills/z-test/SKILL.md",
+        "skills/z-update/SKILL.md",
+        "skills/z-uplift/SKILL.md",
+        "skills/z-where/SKILL.md",
+        "skills/z-handoff/SKILL.md",
+        "skills/z-doc-rationale/SKILL.md"
       ],
       "last_updated": "2026-06-18",
       "confidence": "high",
@@ -208,7 +205,7 @@
         "active-plan-registry"
       ],
       "consumed_by": [],
-      "summary": "Slash command surfaces: planning-family route checks, contextual exits, plan_route_decision telemetry, review-family finding promotion, config.py export-env/should-notify wrappers, check-no-ask halt branches (7 commands), /z-overnight unattended pipeline orchestrator, /z-grill requirements-interview, /z-explain one-shot code explanation and /z-learn interactive tutor (four shared depth lenses), /z-git-guardrails PreToolUse hook installer, follow-up sink consumer commands (6 /z-followup-* commands), /z-where concurrent-run diagnostic, and persona-rotation (experiment.persona_rotation knob): random implementer draw + dual reviewer dispatch in z-implement-all/z-implement-next, fixed 5-panel consult in z-plan/z-debug, ideator/audit_persona/advisory-consult-arm draws.",
+      "summary": "Slash command surfaces: planning-family route checks, contextual exits, plan_route_decision telemetry, review-family finding promotion, config.py export-env/should-notify wrappers, check-no-ask halt branches (7 commands), /z-overnight unattended pipeline orchestrator, /z-grill requirements-interview, /z-explain one-shot code explanation and /z-learn interactive tutor (four shared depth lenses), /z-git-guardrails PreToolUse hook installer, follow-up sink consumer commands (6 /z-followup-* commands), /z-where concurrent-run diagnostic, and persona-rotation (experiment.persona_rotation knob): random implementer draw + dual reviewer dispatch in z-execute, fixed 5-panel consult in z-plan/z-debug, ideator/audit_persona/advisory-consult-arm draws.",
       "source_files": []
     },
     {
@@ -237,12 +234,12 @@
         "scripts/pre-run-cost-gate.sh",
         "scripts/token-cost-profiles.json",
         "scripts/config.py",
-        "commands/z-research.md",
-        "commands/z-uplift.md",
-        "commands/z-plan-split.md",
-        "commands/z-brainstorm.md",
-        "commands/z-audit.md",
-        "commands/z-debug.md"
+        "skills/z-research/SKILL.md",
+        "skills/z-uplift/SKILL.md",
+        "skills/z-plan-split/SKILL.md",
+        "skills/z-brainstorm/SKILL.md",
+        "skills/z-audit/SKILL.md",
+        "skills/z-debug/SKILL.md"
       ],
       "last_updated": "2026-06-02",
       "confidence": "high",
@@ -295,12 +292,12 @@
         "scripts/notion-push.py",
         "scripts/followup-reconcile-notion-impl.py",
         "scripts/parse-followups-block.py",
-        "commands/z-followup-list.md",
-        "commands/z-followup-status.md",
-        "commands/z-followup-confirm.md",
-        "commands/z-followup-dismiss.md",
-        "commands/z-followup-refresh.md",
-        "commands/z-followup-next.md",
+        "skills/z-followup-list/SKILL.md",
+        "skills/z-followup-status/SKILL.md",
+        "skills/z-followup-confirm/SKILL.md",
+        "skills/z-followup-dismiss/SKILL.md",
+        "skills/z-followup-refresh/SKILL.md",
+        "skills/z-followup-next/SKILL.md",
         "docs/schemas/followup-entry.schema.json",
         "docs/schemas/audit-evidence.schema.json"
       ],
@@ -345,7 +342,7 @@
         "z_harness_cli/adapters/cursor.py",
         "z_harness_cli/adapters/codex.py",
         "z_harness_cli/adapters/antigravity.py",
-        "commands/z-export.md"
+        "skills/z-export/SKILL.md"
       ],
       "last_updated": "2026-06-18",
       "confidence": "high",
@@ -360,7 +357,7 @@
     {
       "slug": "overnight-run",
       "source_files": [
-        "commands/z-overnight.md",
+        "skills/z-overnight/SKILL.md",
         "scripts/run-status.sh",
         "scripts/normalize-task-state.sh",
         "scripts/overnight-preflight.sh",
@@ -389,7 +386,7 @@
         "personas/README.md",
         "personas/builtin/codex-default-consultant.md",
         "personas/builtin/gemini-default-consultant.md",
-        "commands/z-personas.md",
+        "skills/z-personas/SKILL.md",
         "runtime/drivers/_persona_utils.py",
         "runtime/drivers/antigravity/persona_export.py",
         "runtime/drivers/cursor/persona_export.py",
@@ -445,8 +442,8 @@
         "scripts/plan-claim.sh",
         "scripts/sink-lock.sh",
         "scripts/plan-path.sh",
-        "commands/z-plan.md",
-        "commands/z-audit-plan.md",
+        "skills/z-plan/SKILL.md",
+        "skills/z-audit-plan/SKILL.md",
         "docs/human/plan-claim.md"
       ],
       "last_updated": "2026-06-08",
@@ -487,7 +484,7 @@
         "scripts/resolve-provider.py",
         "scripts/resolve-provider.sh",
         "scripts/discover-providers.py",
-        "commands/z-providers-discover.md",
+        "skills/z-providers-discover/SKILL.md",
         "docs/human/PROVIDERS.md",
         "runtime/compat.py",
         "runtime/contract/provider.schema.json",
@@ -519,11 +516,11 @@
         "z-stats"
       ],
       "consumed_by": [
-        "z-implement-all",
+        "z-execute",
         "z-review-all",
         "z-debug"
       ],
-      "summary": "Post-run Haiku subagent that proposes 0-3 candidate memories from a completed /z-implement-all (Phase 9), /z-review-all (Phase 7), or /z-debug (Phase 10, shipped branch only) run. Reads run events, cumulative diff, SPEC.md or DEBUG.md; emits structured candidates as a fenced JSON block. Does not write — orchestrator owns all writes via /z-suggest-memory. Dispatched after skip-conditions check by scripts/run-memory-review.sh.",
+      "summary": "Post-run Haiku subagent that proposes 0-3 candidate memories from a completed /z-execute (Phase 9), /z-review-all (Phase 7), or /z-debug (Phase 10, shipped branch only) run. Reads run events, cumulative diff, SPEC.md or DEBUG.md; emits structured candidates as a fenced JSON block. Does not write — orchestrator owns all writes via /z-suggest-memory. Dispatched after skip-conditions check by scripts/run-memory-review.sh.",
       "source_files": []
     },
     {
@@ -585,7 +582,7 @@
       "source_file": [
         "scripts/session-helpers.sh",
         "agents/context-curator.md",
-        "commands/z-implement-all.md",
+        "skills/z-execute/SKILL.md",
         "scripts/write-handoff.sh"
       ],
       "last_updated": "2026-06-09",
@@ -598,7 +595,7 @@
       "consumed_by": [
         "commands"
       ],
-      "summary": "SESSION.md handoff artifact + context-curator Haiku subagent that eliminate O(N^2) cache_read growth in /z-implement-all. Notable-only breadcrumbs (E2) feed the curator; curator folds events delta + git diff + TASKS.md into a bounded SESSION.md at the compaction breakpoint (E3); done-set hash predicate re-seeds orchestrator context on resume (E1). Key env knobs: Z_SESSION_CURATOR_TIMEOUT_S (default 120, 0 disables) and Z_SESSION_MAX_CHARS (default 28000).",
+      "summary": "SESSION.md handoff artifact + context-curator Haiku subagent that eliminate O(N^2) cache_read growth in /z-execute. Notable-only breadcrumbs (E2) feed the curator; curator folds events delta + git diff + TASKS.md into a bounded SESSION.md at the compaction breakpoint (E3); done-set hash predicate re-seeds orchestrator context on resume (E1). Key env knobs: Z_SESSION_CURATOR_TIMEOUT_S (default 120, 0 disables) and Z_SESSION_MAX_CHARS (default 28000).",
       "source_files": []
     },
     {
@@ -607,7 +604,7 @@
       "source_files": [
         "scripts/setup.py",
         "scripts/setup.sh",
-        "commands/z-setup.md",
+        "skills/z-setup/SKILL.md",
         "docs/human/SETUP.md"
       ],
       "depends_on": [
@@ -621,7 +618,7 @@
     {
       "slug": "z-fix",
       "source_file": [
-        "commands/z-fix.md"
+        "skills/z-fix/SKILL.md"
       ],
       "last_updated": "2026-06-02",
       "confidence": "high",
@@ -638,7 +635,7 @@
     {
       "slug": "z-sharpen",
       "source_file": [
-        "commands/z-sharpen.md"
+        "skills/z-sharpen/SKILL.md"
       ],
       "last_updated": "2026-06-18",
       "confidence": "high",
@@ -656,7 +653,7 @@
     {
       "slug": "z-brainstorm",
       "source_files": [
-        "commands/z-brainstorm.md",
+        "skills/z-brainstorm/SKILL.md",
         "agents/ideator-clusterer.md"
       ],
       "last_updated": "2026-06-18",
@@ -696,7 +693,7 @@
         "install.sh",
         "scripts/bundle-plugin.sh",
         "scripts/version.sh",
-        "commands/z-update.md",
+        "skills/z-update/SKILL.md",
         "docs/human/INSTALL.md"
       ],
       "last_updated": "2026-06-02",
@@ -719,9 +716,9 @@
         "cost-estimation"
       ],
       "consumed_by": [],
-      "summary": "Tiered bulk codebase quality uplift: decompose into components, repo-wide cross-cutting pass, per-component audits, sequential implement via /z-implement-all.",
+      "summary": "Tiered bulk codebase quality uplift: decompose into components, repo-wide cross-cutting pass, per-component audits, sequential implement via /z-execute.",
       "source_file": [
-        "commands/z-uplift.md"
+        "skills/z-uplift/SKILL.md"
       ],
       "source_files": []
     },
@@ -741,7 +738,7 @@
       "source_file": [
         "docs/human/handoff-v1.md",
         "docs/schemas/handoff.schema.json",
-        "commands/z-handoff.md",
+        "skills/z-handoff/SKILL.md",
         "scripts/write-handoff.sh"
       ],
       "source_files": []
@@ -760,12 +757,12 @@
     {
       "slug": "tier2-doc-rationale",
       "source_files": [
-        "commands/z-doc-rationale.md",
+        "skills/z-doc-rationale/SKILL.md",
         "scripts/append-tier2-context.py"
       ],
       "last_updated": "2026-06-09T19:45:00Z",
       "confidence": "high",
-      "summary": "Tier 2 narrative doc system. Accumulates tier2-context.json incrementally across pipeline phases (z-plan, z-implement-all, z-review-all). /z-doc-rationale command spawns Pro subagent to produce ADRs, design rationale, and migration guides. Significance-gated by three-signal OR."
+      "summary": "Tier 2 narrative doc system. Accumulates tier2-context.json incrementally across pipeline phases (z-plan, z-execute, z-review-all). /z-doc-rationale command spawns Pro subagent to produce ADRs, design rationale, and migration guides. Significance-gated by three-signal OR."
     },
     {
       "slug": "invariants",
@@ -804,7 +801,7 @@
         "scripts/log-subagent.sh",
         "scripts/estimate-tokens.py",
         "scripts/test_subagent_logging.sh",
-        "commands/z-stats.md"
+        "skills/z-stats/SKILL.md"
       ],
       "last_updated": "2026-06-10",
       "confidence": "high",
@@ -823,7 +820,7 @@
     {
       "slug": "impl-pre-review",
       "source_files": [
-        "commands/z-implement-all.md",
+        "skills/z-execute/SKILL.md",
         "scripts/audit-preview-misses.sh",
         "agents/pre-reviewer.md",
         "agents/complexity-classifier.md"
@@ -843,7 +840,7 @@
     {
       "slug": "attend",
       "source_files": [
-        "commands/z-attend.md",
+        "skills/z-attend/SKILL.md",
         "scripts/chain-runner.sh",
         "scripts/config.py",
         "scripts/lint-halt-categories.sh",
@@ -899,10 +896,10 @@
         "scripts/config.py",
         "agents/intent-classifier.md",
         "agents/task-tree-generator.md",
-        "commands/z-plan.md",
-        "commands/z-implement-all.md",
-        "commands/z-amend.md",
-        "commands/z-review-all.md",
+        "skills/z-plan/SKILL.md",
+        "skills/z-execute/SKILL.md",
+        "skills/z-amend/SKILL.md",
+        "skills/z-review-all/SKILL.md",
         "agents/implementer.md",
         "agents/reviewer.md",
         "docs/human/adaptive-intent.md"
@@ -920,7 +917,7 @@
         "commands",
         "agents"
       ],
-      "summary": "Default z-harness paradigm (workflow.planning_mode=intent). Replaces thick SPEC/PLAN/TASKS with: thin frozen INTENT.md contract (frozen at /z-implement-all start, immutable thereafter — INV-1); emergent BFS task-tree generated one level at a time by task-tree-generator (Sonnet); append-only LEDGER.md as realized-plan audit trail. Level depth (L1 quick / L2 standard / L3 deep) chosen by intent-classifier (Haiku, advisory) or config-forced. /z-implement-all mode detection: SPEC.md present → legacy unchanged (INV-4); INTENT.md present → INTENT engine (freeze→bootstrap-ledger→BFS loop→evaluate-acceptance per level). Four new workflow.* knobs in config.py (lines 78–81): planning_mode, intent_level, intent_parallel_levels (default false), hermes_enabled (default false, INV-6). /z-amend re-opens via reopen-intent (scripts/intent-schema.py:377). /z-do → /z-plan --quick shim; /z-plan-light → /z-plan --standard shim."
+      "summary": "Default z-harness paradigm (workflow.planning_mode=intent). Replaces thick SPEC/PLAN/TASKS with: thin frozen INTENT.md contract (frozen at /z-execute start, immutable thereafter — INV-1); emergent BFS task-tree generated one level at a time by task-tree-generator (Sonnet); append-only LEDGER.md as realized-plan audit trail. Level depth (L1 quick / L2 standard / L3 deep) chosen by intent-classifier (Haiku, advisory) or config-forced. /z-execute mode detection: SPEC.md present → legacy unchanged (INV-4); INTENT.md present → INTENT engine (freeze→bootstrap-ledger→BFS loop→evaluate-acceptance per level). Four new workflow.* knobs in config.py (lines 78–81): planning_mode, intent_level, intent_parallel_levels (default false), hermes_enabled (default false, INV-6). /z-amend re-opens via reopen-intent (scripts/intent-schema.py:377). /z-do → /z-plan --quick shim."
     },
     {
       "slug": "amendment-brief",
@@ -943,7 +940,7 @@
     {
       "slug": "z-audit-plan",
       "source_files": [
-        "commands/z-audit-plan.md",
+        "skills/z-audit-plan/SKILL.md",
         "docs/human/z-audit-plan.md"
       ],
       "last_updated": "2026-06-19",
@@ -963,7 +960,7 @@
     {
       "slug": "z-review-all",
       "source_files": [
-        "commands/z-review-all.md",
+        "skills/z-review-all/SKILL.md",
         "docs/human/z-review-all.md"
       ],
       "last_updated": "2026-06-19",
@@ -977,12 +974,12 @@
       "consumed_by": [
         "commands"
       ],
-      "summary": "Final-gate cross-LLM review after /z-implement-all. Two consultant subagents (Gemini+Codex) on cumulative diff vs plan contract (SPEC in legacy; frozen INTENT+LEDGER in INTENT mode). Class enum at line 716 is canonical: implementation_drift|spec_gap|completed_task_contradiction|premise_failure|observation. Phase 6.5: unconditionally auto-amends every amendment_proposal (spec_gap) via /z-amend --skip-user-gate; no per-finding popup; skips [x] tasks; writes auto-amend-log.md; emits auto_amend_applied per amendment. Phase 6.6: renders unified amendment brief via scripts/amendment-brief.py (corrections=Phase-6.5 spec_gaps, approach_concerns=premise_failure escalations); writes amendment-brief.md to archive; Finalize APPROACH_FILE prefers amendment-brief.md over older seed. Phase 6.6 skipped when both lists empty. ## Escalations in REVIEW-TASKS.md preserved as archive record; amendment-brief.md is the active presentation layer."
+      "summary": "Final-gate cross-LLM review after /z-execute. Two consultant subagents (Gemini+Codex) on cumulative diff vs plan contract (SPEC in legacy; frozen INTENT+LEDGER in INTENT mode). Class enum at line 716 is canonical: implementation_drift|spec_gap|completed_task_contradiction|premise_failure|observation. Phase 6.5: unconditionally auto-amends every amendment_proposal (spec_gap) via /z-amend --skip-user-gate; no per-finding popup; skips [x] tasks; writes auto-amend-log.md; emits auto_amend_applied per amendment. Phase 6.6: renders unified amendment brief via scripts/amendment-brief.py (corrections=Phase-6.5 spec_gaps, approach_concerns=premise_failure escalations); writes amendment-brief.md to archive; Finalize APPROACH_FILE prefers amendment-brief.md over older seed. Phase 6.6 skipped when both lists empty. ## Escalations in REVIEW-TASKS.md preserved as archive record; amendment-brief.md is the active presentation layer."
     },
     {
       "slug": "z-reconcile",
       "source_files": [
-        "commands/z-reconcile.md",
+        "skills/z-reconcile/SKILL.md",
         "scripts/reconcile.py",
         "scripts/plan-claim.sh"
       ],
@@ -1009,8 +1006,8 @@
         "scripts/active-plan-registry.py",
         "agents/reviewer.md",
         "agents/remote-runner.md",
-        "commands/z-implement-all.md",
-        "commands/z-overnight.md"
+        "skills/z-execute/SKILL.md",
+        "skills/z-overnight/SKILL.md"
       ],
       "last_updated": "2026-06-19",
       "confidence": "high",

@@ -1,8 +1,8 @@
 """
 tests/test_implement_all_phase0_guard.py — Tests for Phase 0 lock-check Python snippet
-used in /z-implement-next and /z-implement-all.
+used in /z-execute.
 
-The snippet is duplicated in both command markdown files and cannot be imported
+The snippet lives in the z-execute command markdown file and cannot be imported
 directly (it lives in markdown, not a .py module). This test file copies the
 logic into a helper function `_count_running` and exercises it directly.
 
@@ -27,8 +27,8 @@ from pathlib import Path
 
 def _count_running(view_dict: dict) -> int:
     """
-    Mirror of the Phase 0 Python snippet in z-implement-next.md and
-    z-implement-all.md.  Returns the number of entries whose status == 'running'.
+    Mirror of the Phase 0 Python snippet in z-execute.md.  Returns the number
+    of entries whose status == 'running'.
 
     Raises nothing — matches the try/except guard in the bash snippet.
     """

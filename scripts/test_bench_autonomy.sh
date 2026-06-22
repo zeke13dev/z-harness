@@ -94,7 +94,7 @@ echo "--- TEST 1: policy mode, uncovered registered gate → unhandled_gate ---"
 # Note: OVERNIGHT_AUTODECIDE_QIDS_DEFAULT merges in workflow.slug_confirm and
 # workflow.audit_to_amend automatically; we must use a gate absent from both the
 # defaults AND the EFFECTIVE payload to trigger the unhandled_gate path.
-AUTODECIDE='{"workflow.slug_confirm":"auto_accept","workflow.plan_decisions_approval":"approve","workflow.implement_all_proceed":"auto_resume","workflow.spec_retro_discovery":"defer_to_sink_p2"}'
+AUTODECIDE='{"workflow.slug_confirm":"auto_accept","workflow.plan_decisions_approval":"approve","workflow.implement_all_proceed":"auto_resume"}'
 
 OUT="$(clean_env \
   Z_HARNESS_NO_ASK=halt \

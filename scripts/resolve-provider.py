@@ -641,7 +641,7 @@ def main() -> None:
     # runtime.consult = "off": return sentinel "none" for consultant/reviewer roles
     # and skip the distinctness check.  Consumers that see "none" must skip the
     # external-model dispatch entirely (see z-plan.md Phase 3/7 and
-    # z-implement-all.md reviewer gate).
+    # z-execute.md reviewer gate).
     consult_val = _config_get("runtime.consult", "on").strip().lower()
     if consult_val == "off" and role in _CONSULT_OFF_ROLES:
         print("none")

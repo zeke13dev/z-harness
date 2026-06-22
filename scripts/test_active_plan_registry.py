@@ -115,7 +115,7 @@ class TestRoundTrip(unittest.TestCase):
                 "register",
                 "--run-id", run_id,
                 "--slug", "my-slug",
-                "--command", "/z-implement-all",
+                "--command", "/z-execute",
                 "--phase", "implement",
                 base_dir=base,
             )
@@ -132,7 +132,7 @@ class TestRoundTrip(unittest.TestCase):
             self.assertEqual(rec["schema_version"], 2)
             self.assertEqual(rec["run_id"], run_id)
             self.assertEqual(rec["slug"], "my-slug")
-            self.assertEqual(rec["command"], "/z-implement-all")
+            self.assertEqual(rec["command"], "/z-execute")
             self.assertEqual(rec["phase"], "implement")
             self.assertEqual(rec["status"], "running")
             self.assertIn("started_at", rec)
@@ -196,7 +196,7 @@ class TestRoundTrip(unittest.TestCase):
             run_id = "test-hb-001"
             _run_registry(
                 "register", "--run-id", run_id,
-                "--slug", "s", "--command", "/z-implement-all", "--phase", "plan",
+                "--slug", "s", "--command", "/z-execute", "--phase", "plan",
                 base_dir=base,
             )
             active_dir = Path(base) / "active-plans"
@@ -1451,7 +1451,7 @@ class TestNonFatalSelfLogsRegistryError(unittest.TestCase):
             run_id = "selflog-clean-001"
             r_reg = _run_registry(
                 "register", "--run-id", run_id,
-                "--slug", "s", "--command", "/z-implement-all", "--phase", "implement",
+                "--slug", "s", "--command", "/z-execute", "--phase", "implement",
                 base_dir=base,
             )
             self.assertEqual(r_reg.returncode, 0, f"register: {r_reg.stderr[:400]}")
@@ -2564,7 +2564,7 @@ class TestF5CoordinationWarning(unittest.TestCase):
     uncontested undeclared paths → zero held_conflict (noise gate).
 
     The 'coordination_warning' is surfaced at the ORCHESTRATOR layer (F5 step in
-    /z-implement-all). This test validates the registry layer the orchestrator consumes:
+    /z-execute). This test validates the registry layer the orchestrator consumes:
     overlaps --json must expose a 'held_conflict' entry when the path is held by a peer,
     and must NOT include it when the path is uncontested.
 

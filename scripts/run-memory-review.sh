@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Helper called by /z-implement-all, /z-review-all, and /z-debug.
+# Helper called by /z-execute, /z-review-all, and /z-debug.
 # Encapsulates the review-agent lifecycle skip-conditions and artifact prep.
 #
 # Usage: bash scripts/run-memory-review.sh <RUN> <parent_command>

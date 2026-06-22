@@ -8,7 +8,7 @@
     "agents/intent-classifier.md",
     "agents/task-tree-generator.md",
     "commands/z-plan.md",
-    "commands/z-implement-all.md",
+    "skills/z-execute/SKILL.md",
     "commands/z-amend.md",
     "commands/z-review-all.md",
     "agents/implementer.md",
@@ -36,7 +36,7 @@
       "line": 439,
       "symbol": "freeze_intent",
       "kind": "fn",
-      "summary": "Stamps frozen_at with current UTC ISO in INTENT.md frontmatter. Idempotent: prints ALREADY_FROZEN:<iso> if already frozen. Called by /z-implement-all Step 1."
+      "summary": "Stamps frozen_at with current UTC ISO in INTENT.md frontmatter. Idempotent: prints ALREADY_FROZEN:<iso> if already frozen. Called by /z-execute Step 1."
     },
     {
       "file": "scripts/intent-schema.py",
@@ -50,7 +50,7 @@
       "line": 494,
       "symbol": "bootstrap_ledger",
       "kind": "fn",
-      "summary": "Creates LEDGER.md with frontmatter (artifact, slug, intent_frozen_at) if absent. Idempotent: prints EXISTS: if file already present. Called by /z-implement-all Step 1."
+      "summary": "Creates LEDGER.md with frontmatter (artifact, slug, intent_frozen_at) if absent. Idempotent: prints EXISTS: if file already present. Called by /z-execute Step 1."
     },
     {
       "file": "scripts/intent-schema.py",
@@ -60,21 +60,21 @@
       "summary": "Per-criterion acceptance evaluation from INTENT checklist + LEDGER citations + optional cumulative diff. Returns AcceptanceResult(criteria, verdict='done'|'continue'). Called at every BFS level checkpoint. Conservative: unknown==unmet."
     },
     {
-      "file": "commands/z-implement-all.md",
+      "file": "skills/z-execute/SKILL.md",
       "line": 413,
       "symbol": "mode_detection",
       "kind": "seam",
       "summary": "Authoritative SPEC-vs-INTENT branch: SPEC.md present → IMPLEMENT_MODE=legacy (untouched); INTENT.md present → IMPLEMENT_MODE=intent. Neither → error. This is the ONLY detection seam (Invariant 4)."
     },
     {
-      "file": "commands/z-implement-all.md",
+      "file": "skills/z-execute/SKILL.md",
       "line": 439,
       "symbol": "step1_freeze_ledger",
       "kind": "seam",
       "summary": "INTENT engine Step 1: freeze INTENT.md (idempotent), snapshot to archive/$RUN/INTENT.frozen.md on first freeze only, bootstrap LEDGER.md if absent. Inside if [[ IMPLEMENT_MODE == intent ]] block."
     },
     {
-      "file": "commands/z-implement-all.md",
+      "file": "skills/z-execute/SKILL.md",
       "line": 567,
       "symbol": "bfs_level_loop",
       "kind": "seam",
@@ -123,33 +123,63 @@
   ],
   "invariants": [
     "INV-1: INTENT.md is immutable after frozen_at is stamped. Edits require explicit reopen-intent (scripts/intent-schema.py:377).",
-    "INV-2: A level's TASKS.md is immutable while that level executes. done_set_hash checkpoint persisted to $ARCHIVE_DIR/.bfs_level_state at every level boundary (commands/z-implement-all.md:903).",
+    "INV-2: A level's TASKS.md is immutable while that level executes. done_set_hash checkpoint persisted to $ARCHIVE_DIR/.bfs_level_state at every level boundary (skills/z-execute/SKILL.md:903).",
     "INV-3: LEDGER.md is append-only; never rewritten. bootstrap-ledger (line 494) is idempotent create-only; per-level content accumulates in ledger-level-N.pending and is flushed via T011-LEDGER-HOOK.",
-    "INV-4: Legacy SPEC/PLAN/TASKS plans detected by SPEC.md presence run on the unchanged legacy path — zero regression. Detection seam at commands/z-implement-all.md:413 is the ONLY branch; do not add a second detection elsewhere.",
+    "INV-4: Legacy SPEC/PLAN/TASKS plans detected by SPEC.md presence run on the unchanged legacy path — zero regression. Detection seam at skills/z-execute/SKILL.md:413 is the ONLY branch; do not add a second detection elsewhere.",
     "INV-5: No new env vars. All new knobs (planning_mode, intent_level, intent_parallel_levels, hermes_enabled) are file-resolvable via config.py get workflow.<key> from .z-harness/config.toml.",
     "INV-6: Old Hermes machinery (workstream gen, N=2 cross-cluster dispatch, write-handoff, scope-extractor) never executes unless workflow.hermes_enabled=true (default false)."
   ],
   "gotchas": [
     "MODE DETECTION IS BINARY: SPEC.md presence = legacy (forever). Adding INTENT.md to a slug that already has SPEC.md does NOT switch it to INTENT mode. The legacy path wins.",
-    "frozen_at: 'pending' is a signal, not an error. /z-implement-all reads 'pending' as 'not yet frozen' and stamps the ISO on first execution. Do not delete the field.",
-    "stale_reason: amended-intent in TASKS.md frontmatter signals the task-tree-generator to regenerate rather than resume on the next /z-implement-all. Set by /z-amend Phase 6; consumed by the BFS loop generator dispatch.",
+    "frozen_at: 'pending' is a signal, not an error. /z-execute reads 'pending' as 'not yet frozen' and stamps the ISO on first execution. Do not delete the field.",
+    "stale_reason: amended-intent in TASKS.md frontmatter signals the task-tree-generator to regenerate rather than resume on the next /z-execute. Set by /z-amend Phase 6; consumed by the BFS loop generator dispatch.",
     "evaluate-acceptance is called at EVERY level checkpoint, not just the last. It may return 'done' at Level 0 if the first level's tasks fully satisfy all criteria — the loop exits early.",
     "intent_parallel_levels=false (default): independent same-level siblings run sequentially. Enabling it (true) requires workflow.hermes_enabled=true to have any effect — the two knobs are coupled.",
     "Level state file is $ARCHIVE_DIR/.bfs_level_state (NOT .intent_level_state). Stores '<level> <done_set_hash>'. Hash mismatch on resume forces restart from level 0 — a safety fallback, not an error.",
     "LEDGER content accumulates in $ARCHIVE_DIR/ledger-level-N.pending during per-level execute and is flushed atomically to LEDGER.md by the T011-LEDGER-HOOK at level end. Pending file is deleted after flush to prevent double-append on crash+resume.",
     "workflow.intent_bfs_level_cap is read via config.py get but is NOT in DEFAULTS — resolves to None/empty. Orchestrator falls back to hardcoded 6. Set it explicitly in config.toml to override.",
     "evaluate-acceptance scores 'unknown' as unmet (conservative bias). LEDGER citation without a non-empty cumulative diff (from INTENT_FROZEN_AT_COMMIT to HEAD) returns unknown, not met.",
-    "/z-do and /z-plan-light are deprecated shims — both print a notice and immediately hand off to /z-plan --quick or --standard. Their old bodies are removed.",
+    "/z-do is a deprecated shim — it prints a notice and immediately hands off to /z-plan --quick. Its old body is removed.",
     "/z-plan accepts --quick, --standard, --deep, --full CLI flags. Level flags set PLANNING_MODE=intent + forced level; --full sets PLANNING_MODE=full. All still fire the level announce+override gate."
   ],
   "config_keys": {
     "source": "scripts/config.py DEFAULTS['workflow'] lines 78-86; intent_bfs_level_cap is NOT in DEFAULTS (runtime fallback to 6)",
     "knobs": [
-      {"key": "workflow.planning_mode", "default": "intent", "values": ["intent", "full"], "description": "Default planner paradigm. 'full' = legacy SDD (SPEC/PLAN/TASKS). 'intent' = Adaptive INTENT (default)."},
-      {"key": "workflow.intent_level", "default": "auto", "values": ["auto", "quick", "standard", "deep"], "description": "Forced planning depth level, or 'auto' to let the intent-classifier choose."},
-      {"key": "workflow.intent_parallel_levels", "default": false, "description": "Execute independent same-level tasks in parallel. Gated-off by default. Requires hermes_enabled=true to have effect."},
-      {"key": "workflow.hermes_enabled", "default": false, "description": "Master gate for all old Hermes parallelism machinery. Default false = all workstream/handoff/cross-plan calls are no-ops."},
-      {"key": "workflow.intent_bfs_level_cap", "default": "6 (hardcoded fallback)", "description": "Max BFS levels before halting. NOT in DEFAULTS — read via config.py get; absent resolves to 6. 0 = no cap (use with caution)."}
+      {
+        "key": "workflow.planning_mode",
+        "default": "intent",
+        "values": [
+          "intent",
+          "full"
+        ],
+        "description": "Default planner paradigm. 'full' = legacy SDD (SPEC/PLAN/TASKS). 'intent' = Adaptive INTENT (default)."
+      },
+      {
+        "key": "workflow.intent_level",
+        "default": "auto",
+        "values": [
+          "auto",
+          "quick",
+          "standard",
+          "deep"
+        ],
+        "description": "Forced planning depth level, or 'auto' to let the intent-classifier choose."
+      },
+      {
+        "key": "workflow.intent_parallel_levels",
+        "default": false,
+        "description": "Execute independent same-level tasks in parallel. Gated-off by default. Requires hermes_enabled=true to have effect."
+      },
+      {
+        "key": "workflow.hermes_enabled",
+        "default": false,
+        "description": "Master gate for all old Hermes parallelism machinery. Default false = all workstream/handoff/cross-plan calls are no-ops."
+      },
+      {
+        "key": "workflow.intent_bfs_level_cap",
+        "default": "6 (hardcoded fallback)",
+        "description": "Max BFS levels before halting. NOT in DEFAULTS — read via config.py get; absent resolves to 6. 0 = no cap (use with caution)."
+      }
     ]
   },
   "memories": []

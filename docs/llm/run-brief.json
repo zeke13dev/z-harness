@@ -104,7 +104,7 @@
   "gotchas": [
     "Lite profile forbids approach and decisions properties — do not emit empty arrays.",
     "Artifact missing on early halt triggers lite downgrade via finalize (not at init time) — but only on non-success paths; success with no artifact uses ensure_approach_for_full, not lite downgrade.",
-    "/z-implement-all compaction_pause exit skips the brief (non-terminal).",
+    "/z-execute compaction_pause exit skips the brief (non-terminal).",
     "Export must inline commands/_fragments/run-brief-finalize.md so Cursor/Codex/agy copies stay in sync. Old scripts/export-*.py are deleted; use runtime/drivers/<target>/export.py or /z-export.",
     "Z_HARNESS_RUN_BRIEF_DEBUG=1 optionally writes a human-readable run-brief.md mirror for local debugging (not default).",
     "extract_approach_bullets only runs when approach is empty at finalize; an authored approach always wins.",

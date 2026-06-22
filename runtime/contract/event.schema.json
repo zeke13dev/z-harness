@@ -117,7 +117,7 @@
       "kind": "persona_attempt_outcome",
       "schema_version": 1,
       "run_id": "20260601T120000Z-persona-rotation",
-      "command": "z-implement-all",
+      "command": "z-execute",
       "role": "implementer",
       "task_id": "T007",
       "attempt_id": "T007-v1",

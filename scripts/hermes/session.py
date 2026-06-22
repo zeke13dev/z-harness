@@ -23,12 +23,12 @@ from hermes.config import HermesConfig
 # ---------------------------------------------------------------------------
 
 def spawn_session(worktree_path: str, tasks_path: str) -> int:
-    """Spawn pi z-implement-all in the worktree. Returns PID.
+    """Spawn pi z-execute in the worktree. Returns PID.
     
     The session runs in the worktree directory, targeting the
     workstream's TASKS.md via --tasks flag.
     """
-    cmd = ["pi", "z-implement-all", f"--tasks={tasks_path}"]
+    cmd = ["pi", "z-execute", f"--tasks={tasks_path}"]
     
     proc = subprocess.Popen(
         cmd,

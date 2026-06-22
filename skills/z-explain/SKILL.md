@@ -65,7 +65,7 @@ Run this when intent clearly mismatches a one-shot explanation:
 |--------|----------|
 | Terrain unknown; "where does X live?", "map the codebase" | `/z-map <question>` |
 | Find bugs / correctness issues | `/z-audit <target>` |
-| Change or fix code | `/z-do <task>` or `/z-plan-light <task>` |
+| Change or fix code | `/z-do <task>` or `/z-plan <task>` |
 | Multi-turn tutoring already needed ("walk me through everything", "keep going") | `/z-learn <target>` |
 
 If routing, write `$CURRENT_ARCHIVE_DIR/route-decision.md` with the reason, log `explain_route_handoff`, recommend the command, and **stop**. Do not auto-dispatch.

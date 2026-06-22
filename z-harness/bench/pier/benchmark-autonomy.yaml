@@ -1,7 +1,7 @@
 policy_version: "1.0.0"
 
 # Frozen per-gate autonomy policy for the z-harness quick-build hot path
-# (z-plan → z-implement-all).
+# (z-plan → z-execute).
 #
 # Each gate specifies the option-domain value the benchmark driver selects
 # autonomously, plus a rationale explaining why that choice is deliberate.
@@ -36,20 +36,11 @@ gates:
   workflow.implement_all_proceed:
     value: auto_resume
     rationale: >
-      When z-implement-all hits a halt-resolution gate (e.g. after a second
+      When z-execute hits a halt-resolution gate (e.g. after a second
       reviewer failure), auto_resume skips the interactive prompt and continues
       implementing. This is the expected autonomous behavior: a benchmark run
       must not block on human input. Review failures are still recorded in the
       run archive and count against the task in the primary statistic.
-
-  workflow.spec_retro_discovery:
-    value: defer_to_sink_p2
-    rationale: >
-      Out-of-SPEC discoveries reported by an implementer during a benchmark run
-      are not actionable interactively — there is no human to consult. Parking
-      them as P2 follow-ups preserves the finding for post-run analysis without
-      blocking the hot path. The discovery is logged with full context in the
-      sink so it can be reviewed after the benchmark completes.
 
   # workflow.pre_run_cost_gate: controls how the pre-run token-cost gate behaves
   # in a headless benchmark run. Set to "ask" (the safe default) so that any

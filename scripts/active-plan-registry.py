@@ -2023,7 +2023,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_reg = sub.add_parser("register", help="Register a new run.")
     p_reg.add_argument("--run-id", required=True, help="Unique run identifier (safe basename).")
     p_reg.add_argument("--slug", required=True, help="Plan slug.")
-    p_reg.add_argument("--command", required=True, help="Command name (e.g. /z-implement-all).")
+    p_reg.add_argument("--command", required=True, help="Command name (e.g. /z-execute).")
     p_reg.add_argument("--phase", required=True, help="Current phase (e.g. implement).")
     p_reg.add_argument("--session", default="", help="Session ID (optional).")
     p_reg.add_argument(

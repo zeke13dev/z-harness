@@ -89,7 +89,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 |--------|----------|
 | Terrain unknown | `/z-map <question>` |
 | Find bugs | `/z-audit <target>` |
-| Change code | `/z-do <task>` or `/z-plan-light <task>` |
+| Change code | `/z-do <task>` or `/z-plan <task>` |
 | Quick one-shot answer | `/z-explain <target>` |
 
 ## Phase 1 — Cold open (empty-args only)

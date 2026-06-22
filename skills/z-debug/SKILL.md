@@ -653,7 +653,7 @@ Counts as one of the 5 cycle slots. Dispatch the orchestrator + both consultants
 - MODE: `generate-hypotheses-round1` (re-use Round 1 schema — these are fresh hypotheses given the falsified-set context).
 - Merge into Hypothesis Pool with new `H<NNN>` IDs; rebuild Test Matrix entries; continue Phase 6 loop.
 
-## Phase 7 — Root cause + fix-gate + fix (reuses `/z-plan-light` mechanics)
+## Phase 7 — Root cause + fix-gate + fix
 
 Promote the winning hypothesis (the one with `posterior == very_high`) to a `## Root Cause` section in DEBUG.md:
 
@@ -733,7 +733,7 @@ If either fails: halt. Either upgrade the root cause statement (so it actually e
 <!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the fix approval
      question via their native channel. Silent omission is forbidden. -->
 4. **Present + approve.** Present the synthesized fix as a conversational brief — the approach, the one reason each recommendation might be wrong (from step 3), and any flagged shortcuts with their tradeoff — then give your recommendation and invite the user to reply (approve as proposed / modify <X> / abandon). Do **not** use an `AskUserQuestion` popup; this is a design decision the user should be able to interrogate.
-5. **Write `## Fix Plan`** section to DEBUG.md (schema mirrors `/z-plan-light` Phase 6 FIX.md):
+5. **Write `## Fix Plan`** section to DEBUG.md:
 
    ```markdown
    ## Fix Plan
@@ -757,13 +757,13 @@ If either fails: halt. Either upgrade the root cause statement (so it actually e
    ...
    ```
 
-6. **Inline implementation** (same as `/z-plan-light` Phase 7). Implementer self-check: no broad exception handlers, no scope expansion, no unsolicited validation, no new public surface, no stale comments.
+6. **Inline implementation.** Implementer self-check: no broad exception handlers, no scope expansion, no unsolicited validation, no new public surface, no stale comments.
 
    #### Git history-rewrite safety
 
    Before recommending any `git reset --hard HEAD~N`, `git commit --amend`, or interactive-rebase squash on a branch tracking an upstream: for each commit being rewritten, run `git branch -r --contains <sha>`. If the upstream ref appears, STOP — recommend rebase or new-commit instead, never silent rewrite. Force-push to main requires explicit per-incident user authorization with (i) list of overwritten commits and (ii) content-equivalence/superset demonstration.
 
-7. **Codex review** (same as `/z-plan-light` Phase 8 — non-negotiable). Retry-once policy. Track `REVIEW_CYCLES`.
+7. **Codex review** (non-negotiable). Retry-once policy. Track `REVIEW_CYCLES`.
 
 Auto-bail still active: if the fix turns out to require architectural change / new public surface / cross-module impact, halt and recommend `/z-plan`.
 
@@ -892,7 +892,7 @@ If user accepts:
      action-item disposition question via their native channel. Silent omission
      is forbidden. -->
 After writing, ask the user via `AskUserQuestion`:
-- "Convert action items into follow-up tasks?" → If yes, the orchestrator appends them to a designated `TASKS.md` (user picks which slug, or creates a fresh `audit-<topic>` slug) and the user can later `/z-implement-all` them.
+- "Convert action items into follow-up tasks?" → If yes, the orchestrator appends them to a designated `TASKS.md` (user picks which slug, or creates a fresh `audit-<topic>` slug) and the user can later `/z-execute` them.
 - "Convert regression-test action items into a /z-test follow-up" → For each action item shaped like `Add regression test ...`, record the invariant + failure-class + target-file hint into `$Z_HARNESS_PLAN_DIR/test-followups.md` (a flat list of seed entries shaped like Phase 2 drafts in `/z-test`). On the next `/z-plan` + `/z-test` cycle (or if the user re-runs `/z-test` on this same slug after seeding follow-up production tasks), these become mandatory TESTS.md entries. Closes the post-mortem loop automatically — the next plan run cannot ship without the regression test the post-mortem flagged.
 - "Just record and move on" → leave the Post-mortem section as a standalone record.
 

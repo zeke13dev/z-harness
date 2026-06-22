@@ -39,7 +39,7 @@
     },
     "high": {
       "hosts": ["antigravity"],
-      "description": "Native skills/personas, single-agent only. Multi-agent commands (/z-implement-all, /z-panel, /z-consult, /z-gate) are degraded (single-agent transliteration, not blocked). All other /z-* commands run at native fidelity."
+      "description": "Native skills/personas, single-agent only. Multi-agent commands (/z-execute, /z-panel, /z-consult, /z-gate) are degraded (single-agent transliteration, not blocked). All other /z-* commands run at native fidelity."
     },
     "flattened": {
       "hosts": ["cursor", "codex"],
@@ -232,7 +232,7 @@
   },
   "command_tiers": {
     "note": "Multi-agent commands are 'degraded' on high-fidelity hosts and 'blocked' on flattened hosts. All other /z-* commands are 'native' on claude, 'native' on antigravity, and 'degraded' on cursor/codex. Export-only hosts (windsurf/kiro/cline/copilot) have no command-tier registration — they are not in the adapter registry.",
-    "multi_agent_commands": ["z-implement-all", "z-panel", "z-consult", "z-gate"],
+    "multi_agent_commands": ["z-execute", "z-panel", "z-consult", "z-gate"],
     "per_tier": {
       "native": {"multi_agent": "native", "single_agent": "native"},
       "high": {"multi_agent": "degraded", "single_agent": "native"},
@@ -243,7 +243,7 @@
   },
   "invariants": [
     "fidelity_tier is a static property on each adapter class; never computed at runtime",
-    "multi-agent commands (z-implement-all, z-panel, z-consult, z-gate) are degraded on high-tier hosts and blocked on flattened hosts",
+    "multi-agent commands (z-execute, z-panel, z-consult, z-gate) are degraded on high-tier hosts and blocked on flattened hosts",
     "flattened = single-agent transliteration only; no subagent dispatch",
     "high = native skill/persona loading via host-native mechanism; single-agent only; subagent dispatch absent",
     "native = full orchestration including multi-agent subagent dispatch",

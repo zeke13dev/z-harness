@@ -1061,14 +1061,14 @@ class TestApplyOvernightOverrides(unittest.TestCase):
 
 class TestQuestionIds(unittest.TestCase):
     """
-    Verify that QUESTION_IDS contains the 7 expected registered question IDs:
+    Verify that QUESTION_IDS contains the 6 expected registered question IDs:
     2 original (workflow.audit_to_amend, workflow.slug_confirm),
     3 from T007 (workflow.implement_all_proceed, workflow.review_all_proceed,
-    workflow.plan_decisions_approval), workflow.spec_retro_discovery, and
+    workflow.plan_decisions_approval), and
     workflow.pre_run_cost_gate (pre-run token-cost gate).
 
     The list-question-ids subcommand must return a sorted JSON array of exactly
-    these 7 IDs. If a new ID is added without updating this test, the length
+    these 6 IDs. If a new ID is added without updating this test, the length
     assertion will catch it; if an expected ID is missing or renamed, the
     content assertion will catch it.
     """
@@ -1080,7 +1080,6 @@ class TestQuestionIds(unittest.TestCase):
         "workflow.pre_run_cost_gate",
         "workflow.review_all_proceed",
         "workflow.slug_confirm",
-        "workflow.spec_retro_discovery",
     ]
 
     def setUp(self):
@@ -1091,15 +1090,15 @@ class TestQuestionIds(unittest.TestCase):
         shutil.rmtree(self.xdg, ignore_errors=True)
         shutil.rmtree(self.cwd, ignore_errors=True)
 
-    def test_list_question_ids_returns_seven_ids(self):
-        """list-question-ids must return exactly 7 IDs (2 original + 3 from T007 + spec_retro_discovery + pre_run_cost_gate)."""
+    def test_list_question_ids_returns_six_ids(self):
+        """list-question-ids must return exactly 6 IDs (2 original + 3 from T007 + pre_run_cost_gate)."""
         r = run(["list-question-ids"], env={"XDG_CONFIG_HOME": self.xdg}, cwd=self.cwd)
         self.assertEqual(r.returncode, 0, f"list-question-ids exited {r.returncode}; stderr={r.stderr!r}")
         ids = json.loads(r.stdout)
-        self.assertEqual(len(ids), 7, f"Expected 7 question IDs, got {len(ids)}: {ids}")
+        self.assertEqual(len(ids), 6, f"Expected 6 question IDs, got {len(ids)}: {ids}")
 
     def test_list_question_ids_contains_all_expected_ids(self):
-        """list-question-ids must contain all 7 expected question IDs."""
+        """list-question-ids must contain all 6 expected question IDs."""
         r = run(["list-question-ids"], env={"XDG_CONFIG_HOME": self.xdg}, cwd=self.cwd)
         self.assertEqual(r.returncode, 0)
         ids = json.loads(r.stdout)

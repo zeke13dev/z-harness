@@ -18,7 +18,7 @@ You are running **z-harness `/z-doc-rationale`** — the Tier 2 narrative docume
      fi
    done
    ```
-   If multiple candidates, ask user to pick. If none, abort: "No tier2-context.json found. Run a full pipeline (z-plan → z-implement-all → z-review-all) first."
+   If multiple candidates, ask user to pick. If none, abort: "No tier2-context.json found. Run a full pipeline (z-plan → z-execute → z-review-all) first."
 
 2. **Export variables:**
    ```bash
@@ -158,7 +158,7 @@ Report:
 Recommended next:
 ```
 /z-review-all    — (if not yet run) final-gate cross-LLM review
-/z-implement-all — (if review findings need implementation)
+/z-execute — (if review findings need implementation)
 ```
 
 ## Confidence caveat

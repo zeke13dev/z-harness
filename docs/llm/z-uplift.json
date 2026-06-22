@@ -75,7 +75,7 @@
       "line": 2579,
       "symbol": "Phase 5",
       "kind": "phase",
-      "summary": "Sequential implement — two-step handoff; Step 2c prints /z-implement-all command, marks [i] implementing, exits with run_end status:pending_implement; Step 2a auto-transitions [i]->>[x] done when RESUME_PENDING_COUNT==0; manifest_replace_row enforces exactly-one-row invariant."
+      "summary": "Sequential implement — two-step handoff; Step 2c prints /z-execute command, marks [i] implementing, exits with run_end status:pending_implement; Step 2a auto-transitions [i]->>[x] done when RESUME_PENDING_COUNT==0; manifest_replace_row enforces exactly-one-row invariant."
     },
     {
       "file": "commands/z-uplift.md",
@@ -96,7 +96,7 @@
     "STYLE.md gate runs after Setup (skipped on resume SKIP_TO_PHASE paths); without --no-style, missing STYLE.md halts and recommends /z-style-init. With --no-style, audits proceed but cleanliness+design fall back to the generic rubric.",
     "STYLE.md content is injected as authoritative rubric into cleanliness and design auditor prompts; auditors cite STYLE rule IDs in findings.",
     "commands/z-uplift.md MUST mirror /z-audit Phases 2-6 inline (intentional duplication); divergence is a bug.",
-    "Per-component output dir is z-harness/plans/<uplift-slug>-<component-slug>/; SPEC/PLAN/TASKS live there; /z-implement-all --tasks= reads SPEC/PLAN from that dir.",
+    "Per-component output dir is z-harness/plans/<uplift-slug>-<component-slug>/; SPEC/PLAN/TASKS live there; /z-execute --tasks= reads SPEC/PLAN from that dir.",
     "MANIFEST.md is the resume authority; no parallel state file.",
     "Components processed sequentially in MANIFEST order; synthetic -cross-cutting first if it exists.",
     "Synthetic <slug>-cross-cutting row is inserted as [a] audited (not [ ] pending) so Phase 5 queue filter picks it up immediately without a Phase 3 audit pass.",
@@ -112,7 +112,7 @@
     "Phase 4 prints a callout when the synthetic <slug>-cross-cutting row is in MANIFEST, reminding operator it will be implemented first.",
     "auditor agent is the only audit primitive; no shell-out to /z-audit.",
     "Idempotent: re-invoking /z-uplift with no flags resumes at the next non-terminal MANIFEST state.",
-    "Read-only during Phases 1-4; only Phase 5 (/z-implement-all dispatches) writes code.",
+    "Read-only during Phases 1-4; only Phase 5 (/z-execute dispatches) writes code.",
     "No automatic retry of bailed components — --retry-bailed is explicit user opt-in.",
     "Cross-cutting pass is skippable via --cross-cutting=skip; default ON.",
     "Every phase emits phase_end with wall_ms and user_wait_ms; AskUserQuestion waits are bracketed by user_wait_start / user_wait_end events.",

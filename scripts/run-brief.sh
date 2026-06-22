@@ -341,7 +341,7 @@ PY
 classify_command_arg() {
   local command="$1"
   case "$command" in
-    /z-implement-all) printf '%s' "implement-all" ;;
+    /z-execute) printf '%s' "implement-all" ;;
     *) printf '%s' "" ;;
   esac
 }

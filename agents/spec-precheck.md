@@ -1,6 +1,6 @@
 ---
 name: spec-precheck
-description: "Pre-flight sanity check that runs BEFORE the implementer for each task in /z-implement-all. Verifies SPEC.md references (symbols, table names, column names, config keys, file paths) actually exist in the codebase as described — so spec drift is caught before any code is written. Returns STATUS: ok or STATUS: spec_problem with the specific stale reference."
+description: "Pre-flight sanity check that runs BEFORE the implementer for each task in /z-execute. Verifies SPEC.md references (symbols, table names, column names, config keys, file paths) actually exist in the codebase as described — so spec drift is caught before any code is written. Returns STATUS: ok or STATUS: spec_problem with the specific stale reference."
 tools: Read, Grep, Glob, Bash
 model: haiku
 ---

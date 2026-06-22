@@ -101,7 +101,7 @@ class TestStaticIdentity(unittest.TestCase):
 class TestCommandCapabilityMatrix(unittest.TestCase):
     """Verify the command-tier matrix is populated correctly for codex."""
 
-    _MULTI_AGENT = {"z-implement-all", "z-panel", "z-consult", "z-gate"}
+    _MULTI_AGENT = {"z-execute", "z-panel", "z-consult", "z-gate"}
 
     def test_multi_agent_commands_blocked(self):
         """Multi-agent orchestration commands must be blocked on flattened fidelity."""

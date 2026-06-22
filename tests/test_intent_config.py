@@ -340,7 +340,7 @@ class TestBoolCoercion(unittest.TestCase):
 class TestModeDetection(unittest.TestCase):
     """SPEC vs INTENT mode detection.
 
-    The z-plan/z-implement-all commands branch on presence of INTENT.md vs
+    The z-plan/z-execute commands branch on presence of INTENT.md vs
     SPEC.md. We cannot unit-test the bash command logic directly, but we CAN:
       1. Assert that config.py get workflow.planning_mode returns the
          expected value from a file (intent or full).

@@ -118,7 +118,7 @@
       "line": 26,
       "symbol": "spawn_session",
       "kind": "fn",
-      "summary": "Runs pi z-implement-all --tasks=<path> as detached subprocess (start_new_session=True). Returns PID."
+      "summary": "Runs pi z-execute --tasks=<path> as detached subprocess (start_new_session=True). Returns PID."
     }
   ],
   "depends_on": [

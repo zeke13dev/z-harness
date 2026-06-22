@@ -32,7 +32,7 @@ cargo, codex reviewer CLI, generic Bash) in a hard deadline:
 
 ### Layer 2 — Detection + alert (scheduled one-shot hang-check)
 
-Instead of a long-lived poller, the orchestrator (`/z-implement-all`,
+Instead of a long-lived poller, the orchestrator (`/z-execute`,
 `/z-overnight`) schedules a **one-shot** check at run start, timed to a
 prediction of when work *should* be done:
 

@@ -162,7 +162,7 @@
       "failure_class": "INTENT.md mutated after frozen_at without explicit re-freeze",
       "severity": "blocker",
       "source_files": [
-        "commands/z-implement-all.md",
+        "skills/z-execute/SKILL.md",
         "scripts/intent-schema.py"
       ],
       "source": "spec",
@@ -178,7 +178,7 @@
       "failure_class": "Per-level TASKS.md mutated during active level execution",
       "severity": "blocker",
       "source_files": [
-        "commands/z-implement-all.md"
+        "skills/z-execute/SKILL.md"
       ],
       "source": "spec",
       "last_updated": "2026-06-16T00:00:00Z"
@@ -193,7 +193,7 @@
       "failure_class": "LEDGER.md rewritten or truncated rather than appended",
       "severity": "blocker",
       "source_files": [
-        "commands/z-implement-all.md",
+        "skills/z-execute/SKILL.md",
         "scripts/intent-schema.py"
       ],
       "source": "spec",
@@ -210,7 +210,7 @@
       "severity": "blocker",
       "source_files": [
         "commands/z-plan.md",
-        "commands/z-implement-all.md"
+        "skills/z-execute/SKILL.md"
       ],
       "source": "spec",
       "last_updated": "2026-06-16T00:00:00Z"
@@ -240,7 +240,7 @@
       "severity": "blocker",
       "source_files": [
         "scripts/hermes/config.py",
-        "commands/z-implement-all.md"
+        "skills/z-execute/SKILL.md"
       ],
       "source": "spec",
       "last_updated": "2026-06-16T00:00:00Z"

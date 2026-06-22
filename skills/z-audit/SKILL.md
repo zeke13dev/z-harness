@@ -1,7 +1,7 @@
 ---
 name: z-audit
 disable-model-invocation: false
-description: Audit a target component across one or more dimensions (correctness / perf / cleanliness / design). Pre-flight scopes (target, dimensions, optional rubric file), spawns one auditor subagent per dimension in parallel, runs bundled Gemini+Codex consult on findings, emits REPORT.md + TASKS.md under $Z_HARNESS_PLAN_DIR-audit/ in the exact shape /z-implement-all consumes. Read-only — never edits the target.
+description: Audit a target component across one or more dimensions (correctness / perf / cleanliness / design). Pre-flight scopes (target, dimensions, optional rubric file), spawns one auditor subagent per dimension in parallel, runs bundled Gemini+Codex consult on findings, emits REPORT.md + TASKS.md under $Z_HARNESS_PLAN_DIR-audit/ in the exact shape /z-execute consumes. Read-only — never edits the target.
 argument-hint: <target path or component name> [--scope-from <chunk-spec>]
 runtime: c1
 driver_features_required:
@@ -10,7 +10,7 @@ driver_features_required:
 unsupported_driver_behavior: explicit_gate
 ---
 
-You are running **z-harness `/z-audit`** — a structured, read-only audit pipeline. The output is `REPORT.md` (everything found) plus a curated `TASKS.md` (actionable subset, in `/z-implement-all`-compatible format) under `$Z_HARNESS_PLAN_DIR-audit/`.
+You are running **z-harness `/z-audit`** — a structured, read-only audit pipeline. The output is `REPORT.md` (everything found) plus a curated `TASKS.md` (actionable subset, in `/z-execute`-compatible format) under `$Z_HARNESS_PLAN_DIR-audit/`.
 
 Target (from `$ARGUMENTS`):
 
@@ -21,16 +21,16 @@ $ARGUMENTS
      Silent omission is forbidden. -->
 **If the target above is empty** — use `AskUserQuestion` to ask "What should I audit?" before proceeding. Do not invent.
 
-This command is **read-only**. Never edit the target. Fixes happen later via `/z-implement-all` consuming the emitted `TASKS.md`.
+This command is **read-only**. Never edit the target. Fixes happen later via `/z-execute` consuming the emitted `TASKS.md`.
 
 ## Finding promotion contract
 
 `/z-audit` is a producer of the shared review-family promotion contract:
 
 - `REPORT.md` is the evidence artifact. It preserves every accepted finding, consult addition/drop, and the "one reason this might be wrong" pushback.
-- `TASKS.md` is the promotion artifact. It contains only actionable findings that are safe to hand to `/z-implement-all`.
+- `TASKS.md` is the promotion artifact. It contains only actionable findings that are safe to hand to `/z-execute`.
 
-Each promoted audit task must preserve the finding's source dimension, severity, evidence, files, recommendation, and verifiable acceptance criteria. Observations with no clear fix stay in `REPORT.md`. Structural or premise-level findings that exceed the audit auto-bail thresholds become `escalation.md` instead of task blocks. This command may use its own severity labels and filenames, but the artifact must remain task-shaped and consumable by `/z-implement-all`.
+Each promoted audit task must preserve the finding's source dimension, severity, evidence, files, recommendation, and verifiable acceptance criteria. Observations with no clear fix stay in `REPORT.md`. Structural or premise-level findings that exceed the audit auto-bail thresholds become `escalation.md` instead of task blocks. This command may use its own severity labels and filenames, but the artifact must remain task-shaped and consumable by `/z-execute`.
 
 ## --scope-from flag handling (parsed BEFORE Setup)
 
@@ -709,7 +709,7 @@ Both transcripts archive themselves under `$BASE/archive/$RUN/transcripts/`.
 
 Only actionable findings go into TASKS.md. An observation that has no clear fix stays in REPORT.md.
 
-Write `$BASE/TASKS.md` in the **exact format `/z-implement-all` consumes** (mirror `agents/implementer.md` shape):
+Write `$BASE/TASKS.md` in the **exact format `/z-execute` consumes** (mirror `agents/implementer.md` shape):
 
 ```markdown
 # Audit TASKS — <slug>
@@ -729,7 +729,7 @@ Status legend: `[ ]` pending · `[~]` in_progress · `[x]` done.
 
 Severity prefix in subject: `[CRITICAL] | [HIGH] | [MED] | [LOW]`. Group by phase (Phase A / B / …) when tasks have ordering dependencies.
 
-**Note in `$BASE/SPEC.md`:** `/z-implement-all` will read `$BASE/SPEC.md`. Audits don't produce a SPEC, but the implementer reads it. Write a minimal `$BASE/SPEC.md`:
+**Note in `$BASE/SPEC.md`:** `/z-execute` will read `$BASE/SPEC.md`. Audits don't produce a SPEC, but the implementer reads it. Write a minimal `$BASE/SPEC.md`:
 
 ```markdown
 # Audit SPEC — <slug>
@@ -752,7 +752,7 @@ Goals: address all CRITICAL + HIGH severity findings.
 Non-goals: structural refactors (those need `/z-plan`).
 ```
 
-This three-file set (SPEC.md / PLAN.md / TASKS.md) is what `/z-implement-all` requires.
+This three-file set (SPEC.md / PLAN.md / TASKS.md) is what `/z-execute` requires.
 
 ## Phase 6 — Codex safety gate on TASKS.md
 
@@ -790,8 +790,8 @@ RB_PY="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-run-brief.
 
 # Outcome + next (success path)
 if [[ "$N_TASKS" -gt 0 ]]; then
-  _RB_NEXT_CMD="/z-implement-all"
-  _RB_NEXT_LABEL="Run /z-implement-all on audit tasks"
+  _RB_NEXT_CMD="/z-execute"
+  _RB_NEXT_LABEL="Run /z-execute on audit tasks"
 else
   _RB_NEXT_CMD="/z-plan"
   _RB_NEXT_LABEL="Escalate structural findings via /z-plan"
@@ -907,7 +907,7 @@ Emission is gated by `axioms.auto_extract_post_run` (default `true`); when `fals
 - **Never skip the codex safety gate** on the produced TASKS.md.
 - **Always emit cross-LLM consult** in Phase 4 — both Gemini and Codex, in parallel.
 - **One auditor per dimension, in parallel.** Never serialize.
-- **TASKS.md format must match what `/z-implement-all` consumes** — otherwise the audit is a dead-end artifact.
+- **TASKS.md format must match what `/z-execute` consumes** — otherwise the audit is a dead-end artifact.
 - **No emojis** anywhere in artifacts.
 
 ---

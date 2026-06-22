@@ -39,7 +39,7 @@ sound; it is documented here so it reads as a decision, not an accident.
 ### P0 — `handoff.json` had two contradictory homes — FIXED
 The one artifact whose entire job is cross-`/clear` continuity had two producers that
 disagreed:
-- `scripts/write-handoff.sh:45` (the automated `/z-implement-all` producer, also what the
+- `scripts/write-handoff.sh:45` (the automated `/z-execute` producer, also what the
   MCP `_handle_z_handoff` calls) → `$Z_HARNESS_PLAN_DIR/handoff.json`.
 - `commands/z-handoff.md` → `${WORKSPACE_ROOT:-$PWD}/handoff.json`, and explicitly said
   *"Do NOT write it inside `$Z_HARNESS_PLAN_DIR`"* citing Hermes.

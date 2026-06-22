@@ -59,7 +59,7 @@ One row per `(command, role)` pair. Sort rows by command then role.
 
 **Output translation:** convert internal underscore command keys back to slash-command form before printing. Examples:
 - `z_plan` → `/z-plan`
-- `z_implement_all` → `/z-implement-all`
+- `z_implement_all` → `/z-execute`
 - `z_review_all` → `/z-review-all`
 
 Rule: replace leading `z_` with `/z-` and replace all remaining `_` with `-`.

@@ -307,7 +307,7 @@ After writing, report the path and term count to the user.
 
 ## Phase 6 — Copy default `.z-harness-rsync-exclude`
 
-If `<repo-root>/.z-harness-rsync-exclude` doesn't exist, copy the default from `${Z_HARNESS_PLUGIN_ROOT}/.z-harness-rsync-exclude` when that file exists. This file is used by the `remote-runner` subagent during `/z-implement-all` remote verification. If the default file is missing from the install, skip the copy and report it; do not fail docs initialization.
+If `<repo-root>/.z-harness-rsync-exclude` doesn't exist, copy the default from `${Z_HARNESS_PLUGIN_ROOT}/.z-harness-rsync-exclude` when that file exists. This file is used by the `remote-runner` subagent during `/z-execute` remote verification. If the default file is missing from the install, skip the copy and report it; do not fail docs initialization.
 
 ## Phase 7 — Finalize
 

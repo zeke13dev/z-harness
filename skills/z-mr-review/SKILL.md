@@ -1,7 +1,7 @@
 ---
 name: z-mr-review
 disable-model-invocation: false
-description: Multi-LLM code-quality review of the current branch diff against STYLE.md. Never blocks; ranks P0-P4; output is a TASKS.md-shape file you edit and feed to /z-implement-all.
+description: Multi-LLM code-quality review of the current branch diff against STYLE.md. Never blocks; ranks P0-P4; output is a TASKS.md-shape file you edit and feed to /z-execute.
 argument-hint: "[--slug <slug>] [--base <git-ref>] [--include-untracked] [--deep] [--force-on-trunk]"
 runtime: c1
 driver_features_required:
@@ -23,7 +23,7 @@ $ARGUMENTS
 - `MR-REVIEW.md` is both the evidence summary and the promotion artifact: ranked findings are emitted as task-shaped blocks that the user can delete before applying survivors.
 - The command preserves its P0-P4 severity model because it is code-quality oriented, but every emitted task block must include source severity, category, file citation, finding detail, and acceptance criteria.
 
-`MR-REVIEW.md` is intentionally separate from canonical plan `TASKS.md`. Users apply survivors with `/z-implement-all --tasks=z-harness/<SLUG>/MR-REVIEW.md`; the implementation orchestrator must treat that path as the task queue while still resolving `$BASE` from the slug for SPEC/PLAN context when present.
+`MR-REVIEW.md` is intentionally separate from canonical plan `TASKS.md`. Users apply survivors with `/z-execute --tasks=z-harness/<SLUG>/MR-REVIEW.md`; the implementation orchestrator must treat that path as the task queue while still resolving `$BASE` from the slug for SPEC/PLAN context when present.
 
 ## Argument parsing
 
@@ -668,7 +668,7 @@ findings_index:
 
 # MR Review — <SLUG>
 
-Findings ranked P0-P4. **Delete any finding you don't want fixed.** Then `/z-implement-all --tasks=z-harness/<SLUG>/MR-REVIEW.md`.
+Findings ranked P0-P4. **Delete any finding you don't want fixed.** Then `/z-execute --tasks=z-harness/<SLUG>/MR-REVIEW.md`.
 
 ## P0 — would cause future bugs
 
@@ -797,7 +797,7 @@ Results: z-harness/<SLUG>/MR-REVIEW.md
   Voices: <VOICES_AVAILABLE>
   Run ID: <RUN>
 
-Delete what you don't want, then /z-implement-all --tasks=z-harness/<SLUG>/MR-REVIEW.md to apply the survivors.
+Delete what you don't want, then /z-execute --tasks=z-harness/<SLUG>/MR-REVIEW.md to apply the survivors.
 ```
 
 If `DISMISSAL_MATCHES >= 3`, append after the main message:

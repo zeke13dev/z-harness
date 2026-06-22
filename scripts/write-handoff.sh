@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # write-handoff.sh — Write handoff.json to the plan directory at a compaction breakpoint.
 #
-# Called by the /z-implement-all compaction flow after the context-curator writes
+# Called by the /z-execute compaction flow after the context-curator writes
 # SESSION.md. Reads plan state (TASKS.md, SESSION.md, env vars) and produces a
 # handoff.json conforming to docs/schemas/handoff.schema.json (handoff-v1).
 #
@@ -110,9 +110,9 @@ fi
 # Compose next_step (continuation prompt for the next agent session)
 # ---------------------------------------------------------------------------
 if [ -n "$NEXT_PENDING" ] && [ "$NEXT_PENDING" != "none" ]; then
-  NEXT_STEP="Resume /z-implement-all for ${SLUG:-this plan}. ${TASKS_COMPLETED}/${TASKS_TOTAL} tasks done. Start at ${NEXT_PENDING}. Read TASKS.md for acceptance criteria and SESSION.md for context."
+  NEXT_STEP="Resume /z-execute for ${SLUG:-this plan}. ${TASKS_COMPLETED}/${TASKS_TOTAL} tasks done. Start at ${NEXT_PENDING}. Read TASKS.md for acceptance criteria and SESSION.md for context."
 else
-  NEXT_STEP="Resume /z-implement-all for ${SLUG:-this plan}. ${TASKS_COMPLETED}/${TASKS_TOTAL} tasks done. Read TASKS.md for current state and SESSION.md for context from the prior session."
+  NEXT_STEP="Resume /z-execute for ${SLUG:-this plan}. ${TASKS_COMPLETED}/${TASKS_TOTAL} tasks done. Read TASKS.md for current state and SESSION.md for context from the prior session."
 fi
 
 # Truncate next_step to schema max (2000 chars)

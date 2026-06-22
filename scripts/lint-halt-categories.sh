@@ -216,7 +216,7 @@ _check_chain() {
   fi
 
   # Map step names to skill file paths.
-  # Step names like "implement-all" map to skills/z-implement-all/SKILL.md.
+  # Step names like "implement-all" map to skills/z-execute/SKILL.md.
   _step_to_skill() {
     local step="$1"
     echo "z-${step}/SKILL.md"

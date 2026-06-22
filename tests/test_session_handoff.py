@@ -7,7 +7,7 @@ Structure:
                               last_curated_marker, session_frontmatter_field)
   - TestCurator            : (T004) tests for agents/context-curator.md behaviour
   - TestResumeIntegration  : (T008) smoke tests for the resume predicate in
-                             commands/z-implement-all.md
+                             skills/z-execute/SKILL.md
 
 T004 and T008 will append tests to the Curator and ResumeIntegration classes
 respectively. This file intentionally keeps all three groups as top-level
@@ -937,7 +937,7 @@ class TestCurator:
             bash scripts/session-helpers.sh done_set_hash "$tasks_file"
 
         So the curator's hash IS the helper's hash by definition — the contract
-        is that the writer (curator) and reader (E1 in z-implement-all) use the
+        is that the writer (curator) and reader (E1 in z-execute) use the
         SAME helper and therefore produce byte-identical hashes.
 
         This test asserts the contract holds for a concrete fixture:
@@ -1749,11 +1749,11 @@ class TestCurator:
 # ===========================================================================
 
 class TestResumeIntegration:
-    """Smoke tests for the SESSION.md resume predicate in commands/z-implement-all.md.
+    """Smoke tests for the SESSION.md resume predicate in skills/z-execute/SKILL.md.
 
     Testing strategy
     ----------------
-    The E1 resume predicate lives in commands/z-implement-all.md (step 4a) and is
+    The E1 resume predicate lives in skills/z-execute/SKILL.md (step 4a) and is
     a Markdown prose spec — not an executable function.  We therefore cannot run it
     as a subprocess.  Instead we:
 
@@ -1769,7 +1769,7 @@ class TestResumeIntegration:
     3. Separately assert that SESSION.md size is within the ceiling so the inline
        in the pass-case is bounded (the spec's "bounded re-seed" guarantee).
 
-    Reference: commands/z-implement-all.md step 4a ("Resume from SESSION.md if
+    Reference: skills/z-execute/SKILL.md step 4a ("Resume from SESSION.md if
     present and current"), specifically the "Resume predicate — all four conditions
     must hold" block.
 
@@ -1778,9 +1778,9 @@ class TestResumeIntegration:
     After merging the SESSION.md handoff feature into a live plan, verify the O(N^2)
     cache_read reduction as follows:
 
-      1. Run /z-implement-all on a plan large enough to trigger at least one
+      1. Run /z-execute on a plan large enough to trigger at least one
          compaction_pause (≥ Z_IMPLEMENT_PAUSE_TASKS completed tasks, default 5).
-      2. After the pause, issue /clear and re-invoke /z-implement-all.
+      2. After the pause, issue /clear and re-invoke /z-execute.
       3. In the Claude web UI or SDK metrics, compare the cache_read token count at
          the start of the resumed run to the cache_read count of an equivalent run
          without /clear.  The resumed run should show significantly fewer cache_read
@@ -1803,14 +1803,14 @@ class TestResumeIntegration:
         tmp_base: Path,
         supported_schema_versions: tuple[str, ...] = ("1",),
     ) -> tuple[bool, str]:
-        """Mirror the E1 resume predicate from commands/z-implement-all.md step 4a.
+        """Mirror the E1 resume predicate from skills/z-execute/SKILL.md step 4a.
 
         This function is DETERMINISTIC.  The done-set hash comparison — the decisive
         bit — is real: it calls scripts/session-helpers.sh::done_set_hash via
         _run_helper() subprocess, exactly as the orchestrator does.  The four-condition
         boolean logic is a spec mirror (not an LLM call).
 
-        Reference: commands/z-implement-all.md step 4a, "Resume predicate — all four
+        Reference: skills/z-execute/SKILL.md step 4a, "Resume predicate — all four
         conditions must hold":
           1. SESSION.md exists (SV non-empty is the evidence).
           2. schema_version is in the supported set (currently {"1"}).
@@ -1851,7 +1851,7 @@ class TestResumeIntegration:
 
         # --- Condition 4: at least one pending task ---
         #
-        # Mirrors z-implement-all.md step 4a, which computes PENDING_COUNT via the
+        # Mirrors z-execute.md step 4a, which computes PENDING_COUNT via the
         # canonical helper:
         #   NEXT_PENDING_NOW="$(... session-helpers.sh next_pending_task "$TASKS_FILE")"
         #   PENDING_COUNT = 1 if non-empty else 0;  condition: $PENDING_COUNT >= 1
@@ -2262,7 +2262,7 @@ def _make_1_0_handoff() -> dict[str, Any]:
         "agent": "pi",
         "slug": "attended-chain",
         "status": "clean_break",
-        "next_step": "Resume /z-implement-all for attended-chain. 2/5 tasks done.",
+        "next_step": "Resume /z-execute for attended-chain. 2/5 tasks done.",
         "context_files": [
             {"path": "/tmp/plan/SPEC.md", "role": "spec"},
             {"path": "/tmp/plan/TASKS.md", "role": "tasks"},

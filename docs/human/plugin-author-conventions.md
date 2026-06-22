@@ -10,7 +10,7 @@ interoperating with z-harness.
 - End each skill file with `## Anti-patterns (push back)` and `## Out of scope`
   sections — they're the cheapest place to encode failure modes and handoff
   boundaries.
-- Skills that diagnose should NOT also apply patches. Hand off to `/z-plan-light`
+- Skills that diagnose should NOT also apply patches. Hand off to `/z-fix`
   (small fix) or `/z-plan` (structural) for any code change beyond initial
   scaffolding.
 - Skills that orchestrate should call cross-LLM consult (`consultant-primary`,

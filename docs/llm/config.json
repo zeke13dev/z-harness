@@ -289,7 +289,6 @@
     "[Workflow Resolver] workflow.implement_all_proceed valid values: ask | auto_resume | halt; default ask",
     "[Workflow Resolver] workflow.review_all_proceed valid values: ask | proceed | halt; default ask",
     "[Workflow Resolver] workflow.plan_decisions_approval valid values: ask | approve | halt; default ask",
-    "[Workflow Resolver] workflow.spec_retro_discovery valid values: ask | defer_to_sink_p2; default ask",
     "[Workflow Resolver] workflow.pre_run_cost_gate valid values: ask | auto_proceed | halt; default ask",
     "resolve-question stdout is reserved exclusively for JSON; all diagnostics route to stderr",
     "Z_HARNESS_ASK_ALL=1 short-circuits resolve-question to always return {result: ask, source: override}",
@@ -350,7 +349,11 @@
       "workflow.audit_to_amend": {
         "type": "string",
         "default": "ask",
-        "valid_values": ["ask", "amend", "stop"],
+        "valid_values": [
+          "ask",
+          "amend",
+          "stop"
+        ],
         "env": "Z_HARNESS_WORKFLOW_AUDIT_TO_AMEND",
         "callsites": [
           "commands/z-audit-plan.md",
@@ -362,42 +365,55 @@
       "workflow.slug_confirm": {
         "type": "string",
         "default": "ask",
-        "valid_values": ["ask", "auto_accept", "recommend_derived"],
+        "valid_values": [
+          "ask",
+          "auto_accept",
+          "recommend_derived"
+        ],
         "env": "Z_HARNESS_WORKFLOW_SLUG_CONFIRM",
         "description": "Controls soft non-obvious-slug confirmation at 7 callsites. ask=always prompt; auto_accept=silently accept (resolver returns skip); recommend_derived=pre-select (resolver returns prefill). Collision check always runs unconditionally."
       },
       "workflow.implement_all_proceed": {
         "type": "string",
         "default": "ask",
-        "valid_values": ["ask", "auto_resume", "halt"],
+        "valid_values": [
+          "ask",
+          "auto_resume",
+          "halt"
+        ],
         "env": "Z_HARNESS_WORKFLOW_IMPLEMENT_ALL_PROCEED",
-        "description": "Controls halt-resolution gate in /z-implement-all. ask=always prompt; auto_resume=skip prompt; halt=stop unconditionally"
+        "description": "Controls halt-resolution gate in /z-execute. ask=always prompt; auto_resume=skip prompt; halt=stop unconditionally"
       },
       "workflow.review_all_proceed": {
         "type": "string",
         "default": "ask",
-        "valid_values": ["ask", "proceed", "halt"],
+        "valid_values": [
+          "ask",
+          "proceed",
+          "halt"
+        ],
         "env": "Z_HARNESS_WORKFLOW_REVIEW_ALL_PROCEED",
         "description": "Controls Phase 3.7 proceed gate in /z-review-all"
       },
       "workflow.plan_decisions_approval": {
         "type": "string",
         "default": "ask",
-        "valid_values": ["ask", "approve", "halt"],
+        "valid_values": [
+          "ask",
+          "approve",
+          "halt"
+        ],
         "env": "Z_HARNESS_WORKFLOW_PLAN_DECISIONS_APPROVAL",
         "description": "Controls Phase 2.5 decisions-doc approval gate in /z-plan"
-      },
-      "workflow.spec_retro_discovery": {
-        "type": "string",
-        "default": "ask",
-        "valid_values": ["ask", "defer_to_sink_p2"],
-        "env": "Z_HARNESS_WORKFLOW_SPEC_RETRO_DISCOVERY",
-        "description": "Controls how Phase 4 of /z-implement-next handles out-of-current-SPEC discoveries. ask=interactive prompt; defer_to_sink_p2=park as P2 follow-up in project sink"
       },
       "workflow.pre_run_cost_gate": {
         "type": "string",
         "default": "ask",
-        "valid_values": ["ask", "auto_proceed", "halt"],
+        "valid_values": [
+          "ask",
+          "auto_proceed",
+          "halt"
+        ],
         "env": "Z_HARNESS_WORKFLOW_PRE_RUN_COST_GATE",
         "callsites": [
           "scripts/pre-run-cost-gate.sh",
@@ -447,18 +463,21 @@
         "type": "bool",
         "default": true,
         "env": "Z_HARNESS_PERSONAS_REVIEW_EVAL",
-        "description": "Enable the advisory persona reviewer at code-review gates — z-implement-all, z-implement-next, z-plan-light, z-fix, z-do (CONVERGENT). Advisory only — never changes pass/fail outcome."
+        "description": "Enable the advisory persona reviewer at code-review gates — z-execute, z-fix, z-do (CONVERGENT). Advisory only — never changes pass/fail outcome."
       },
       "personas.consult_eval": {
         "type": "bool",
         "default": false,
         "env": "Z_HARNESS_PERSONAS_CONSULT_EVAL",
-        "description": "Enable the advisory persona consult arm at convergent evaluation sites — z-plan-light bundled consult and z-audit bundled consult (CONVERGENT). DEFAULT OFF — most expensive and lowest-signal advisory arm."
+        "description": "Enable the advisory persona consult arm at convergent evaluation sites — z-audit bundled consult (CONVERGENT). DEFAULT OFF — most expensive and lowest-signal advisory arm."
       },
       "personas.implementer_retry": {
         "type": "string",
         "default": "same",
-        "valid_values": ["same", "new"],
+        "valid_values": [
+          "same",
+          "new"
+        ],
         "env": "Z_HARNESS_PERSONAS_IMPLEMENTER_RETRY",
         "description": "Controls implementer persona strategy on retry. same=reuse cycle-1 persona for all retries (lifecycle traceability). new=fresh draw excluding prior persona on each retry. No effect when experiment.persona_rotation=false."
       }
@@ -502,7 +521,7 @@
         "type": "bool",
         "default": true,
         "env": "Z_HARNESS_EXPERIMENT_PERSONA_ROTATION",
-        "description": "Master on/off switch for persona rotation in z-implement-all, z-implement-next, z-plan, z-debug. false = complete no-op."
+        "description": "Master on/off switch for persona rotation in z-execute, z-plan, z-debug. false = complete no-op."
       },
       "experiment.control_every_n": {
         "type": "int",
@@ -535,7 +554,10 @@
       },
       "changelog.types": {
         "type": "array<string>",
-        "default": ["feat", "fix"],
+        "default": [
+          "feat",
+          "fix"
+        ],
         "description": "Conventional-commit types that earn a bullet. Commits not matching are silently skipped."
       },
       "changelog.file": {
@@ -545,7 +567,9 @@
       },
       "changelog.repos": {
         "type": "array<string>",
-        "default": ["*"],
+        "default": [
+          "*"
+        ],
         "description": "Repo-ID allowlist; '*' means every repo."
       }
     }
@@ -554,11 +578,31 @@
     "section": "[models]",
     "description": "Per-role model overrides. Empty string (default for all) = use provider default_model. Validity cross-checked against providers.json at resolve time, not config-load time.",
     "keys": {
-      "models.consultant_primary": {"type": "string", "default": "", "description": "Model override for primary consultant. Empty=provider default."},
-      "models.consultant_secondary": {"type": "string", "default": "", "description": "Model override for secondary consultant. Empty=provider default."},
-      "models.reviewer": {"type": "string", "default": "", "description": "Model override for reviewer. Empty=provider default."},
-      "models.implementer": {"type": "string", "default": "", "description": "Model override for implementer. Empty=provider default."},
-      "models.pre_reviewer": {"type": "string", "default": "", "description": "Model override for pre-reviewer. Empty=provider default."}
+      "models.consultant_primary": {
+        "type": "string",
+        "default": "",
+        "description": "Model override for primary consultant. Empty=provider default."
+      },
+      "models.consultant_secondary": {
+        "type": "string",
+        "default": "",
+        "description": "Model override for secondary consultant. Empty=provider default."
+      },
+      "models.reviewer": {
+        "type": "string",
+        "default": "",
+        "description": "Model override for reviewer. Empty=provider default."
+      },
+      "models.implementer": {
+        "type": "string",
+        "default": "",
+        "description": "Model override for implementer. Empty=provider default."
+      },
+      "models.pre_reviewer": {
+        "type": "string",
+        "default": "",
+        "description": "Model override for pre-reviewer. Empty=provider default."
+      }
     }
   },
   "export_section": {
@@ -567,7 +611,12 @@
     "keys": {
       "export.hosts": {
         "type": "array<string>",
-        "default": ["cursor", "codex", "agy", "pi"],
+        "default": [
+          "cursor",
+          "codex",
+          "agy",
+          "pi"
+        ],
         "env": "Z_HARNESS_EXPORT_HOSTS",
         "description": "Export target hosts. Closed set: adapter names (claude, antigravity, agy, cursor, codex) + export-only driver names (pi, windsurf, cline, kiro, copilot). Non-empty required. Env transport: JSON-encoded array."
       },
@@ -586,7 +635,10 @@
       "followup.default_sink": {
         "type": "string",
         "default": "project",
-        "valid_values": ["project", "global"],
+        "valid_values": [
+          "project",
+          "global"
+        ],
         "description": "Which sink new entries go to when no explicit --sink= flag is passed to sink-add.sh"
       },
       "followup.notion_enabled": {
@@ -616,7 +668,11 @@
       },
       "followup.audit_evidence_required_artifacts": {
         "type": "array<string>",
-        "default": ["z_review_all_verdict", "test_exit", "cumulative_diff"],
+        "default": [
+          "z_review_all_verdict",
+          "test_exit",
+          "cumulative_diff"
+        ],
         "description": "Named artifact kinds that must be present in an audit_evidence.json blob."
       }
     },

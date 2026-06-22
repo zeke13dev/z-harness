@@ -29,6 +29,10 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
 
 ---
 
+## 2026-06-22
+
+- _(auto)_ Emergent sharpen-first pipeline — rename z-implement-all→z-execute, fold sharpen, delete redundant commands _(plan-family)_
+
 ## 2026-06-20
 
 - _(auto)_ Prose-first tier contracts + on-read rationale reconstruction _(z-report)_

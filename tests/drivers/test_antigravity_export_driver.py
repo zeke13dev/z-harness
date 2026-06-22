@@ -588,7 +588,7 @@ class TestRealTreeSmoke:
         from runtime.drivers._export_utils import expand_includes, _next_include_match
 
         # Directly exercise nested expansion: outer fragment → inner fragment.
-        halt_fragment = _WORKTREE_ROOT / "_fragments" / "run-brief-halt-finalize-implement-all.md"
+        halt_fragment = _WORKTREE_ROOT / "_fragments" / "run-brief-halt-finalize-execute.md"
         body = halt_fragment.read_text(encoding="utf-8")
 
         # This must not raise.  Before the fix it raised FileNotFoundError

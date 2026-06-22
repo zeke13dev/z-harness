@@ -21,7 +21,7 @@ $ARGUMENTS
      a text reply. Silent omission is forbidden. -->
 **If the task above is empty or whitespace**, do this first: use `AskUserQuestion` (or a direct question if a free-text answer is needed) to ask the user "What task should I plan?". Wait for their reply. Treat their reply as the task and continue. Do not proceed past this point without a concrete task description.
 
-Strict, multi-phase. Do not skip phases. Do not write production code — `/z-plan` produces planning artifacts only; implementation happens later via `/z-implement-next`.
+Strict, multi-phase. Do not skip phases. Do not write production code — `/z-plan` produces planning artifacts only; implementation happens later via `/z-execute`.
 
 ## Setup
 
@@ -318,7 +318,7 @@ Run this route check after Setup step 10's precontext/docs gates and before Phas
 
 Deterministic routes:
 - Route tiny implementation-only work (`candidate_files <= 3`, no non-obvious decisions, no cross-module/schema/public surface impact) to `/z-do`.
-- Route small targeted fixes (`candidate_files <= 5`, `non_obvious_decisions <= 2`, no public API/schema impact) to `/z-plan-light`; if the task is a diagnosed bug, use contextual `/z-fix`, and if it is an unknown bug symptom, use contextual `/z-debug`.
+- Route small targeted fixes (`candidate_files <= 5`, `non_obvious_decisions <= 2`, no public API/schema impact) to `/z-fix`; if the task is an unknown bug symptom, use contextual `/z-debug`.
 - Stay in `/z-plan` for coherent medium changes, especially `expected_tasks <= 25` with no clear independent cluster seams.
 - Route large or independently separable work to `/z-plan-split` when `expected_tasks > 25` or `cluster_seams` is in `2..6`.
 - Route unknown terrain or missing citations to `/z-research`; route multiple plausible framings with sufficient terrain to `/z-brainstorm`.
@@ -328,7 +328,7 @@ Call `planning-router` only when deterministic signals conflict and no hard thre
 
 If routing, write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md`, emit `plan_route_decision` with `from_command`, `to_command`, `route_class`, `reason_codes`, `signals`, `confidence`, `classifier_used`, `artifact_path`, `route_chain`, and `user_choice`.
 
-**Route-down shortcut surface (route-DOWN routes only).** A route is a *shortcut* only when it routes **DOWN** to a lighter command — i.e. `to_command` is `/z-do`, `/z-plan-light`, or one of `/z-plan-light`'s contextual variants `/z-fix` / `/z-debug`. Lateral or upward routes (`/z-plan-split`, `/z-research`, `/z-brainstorm`, `/z-audit-plan`, `/z-amend`, `/z-maintain-docs`) are **not** shortcuts — they do not decline a more-robust alternative for speed — so they must NOT fire the surface. Scope this block to the route-down branch ONLY:
+**Route-down shortcut surface (route-DOWN routes only).** A route is a *shortcut* only when it routes **DOWN** to a lighter command — i.e. `to_command` is `/z-do`, `/z-fix`, or `/z-debug`. Lateral or upward routes (`/z-plan-split`, `/z-research`, `/z-brainstorm`, `/z-audit-plan`, `/z-amend`, `/z-maintain-docs`) are **not** shortcuts — they do not decline a more-robust alternative for speed — so they must NOT fire the surface. Scope this block to the route-down branch ONLY:
 
 ```bash
 # Callsite 1 — route-down shortcut surface (route-DOWN routes only).
@@ -337,7 +337,7 @@ If routing, write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md`, emit `pl
 export RUN="$RUN"
 SURFACE_RC=0
 case "$to_command" in
-  /z-do|/z-plan-light|/z-fix|/z-debug)
+  /z-do|/z-fix|/z-debug)
     # Route-DOWN: declining full /z-plan for a lighter command — a genuine shortcut.
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/surface-shortcut.sh" \
       --chosen "$to_command" \
@@ -452,10 +452,10 @@ if [[ -f "$Z_HARNESS_PLAN_DIR/SPEC.md" ]]; then
     AskUserQuestion "This slug already has a finished legacy plan (SPEC.md + TASKS.md). \
 What would you like to do?" \
       ["Amend the existing plan (/z-amend)", \
-       "Implement the existing plan (/z-implement-all)", \
+       "Implement the existing plan (/z-execute)", \
        "Continue here — start a fresh legacy plan run (overwrites SPEC/PLAN/TASKS)", \
        "Abort"]
-    # On /z-amend or /z-implement-all: log next_step_choice, execute Run Brief — halt finalize,
+    # On /z-amend or /z-execute: log next_step_choice, execute Run Brief — halt finalize,
     # deregister, then exit 0. Do NOT auto-dispatch the chosen command.
     # On "Continue here": proceed with PLANNING_MODE=full; the user accepts overwrite risk.
     # On Abort: execute Run Brief — halt finalize, deregister, then exit 1.
@@ -673,6 +673,63 @@ This makes post-run analysis trivial: total run time = sum(`phase_end.wall_ms`);
 ---
 
 ## Phase 0 — Premise check
+
+### 0-sharpen. Auto-sharpen (handoff input)
+
+Run this step **before** the premise check below, immediately after Phase telemetry begins.
+
+**Purpose:** When `/z-plan` is invoked with a handoff-generated task description (e.g. from `/z-handoff`, a downstream prompt, or a machine-authored brief) the request may be under-specified or carry implicit assumptions. This step sharpens it into a confirmed problem statement written to `GRILL.md` — the same artifact that Phase 0 premise check and Phase 2 decisions seeding already consume.
+
+**Opt-out:** Skip this step entirely if any of the following is true:
+
+1. The `--no-sharpen` flag was parsed from `$ARGUMENTS`.
+2. `Z_HARNESS_SHARPEN=off` is set in the environment.
+3. `workflow.auto_sharpen` resolves to `false` via `python3 scripts/config.py get workflow.auto_sharpen`.
+4. `$Z_HARNESS_PLAN_DIR/GRILL.md` already exists with `status: complete` in its frontmatter — the problem has already been sharpened.
+
+When any opt-out condition is true, emit a `sharpen_skipped` event and proceed directly to the Premise check:
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" sharpen_skipped \
+  "$(printf '{"reason":"%s"}' "<opt_out_reason>")"
+```
+
+**Auto-sharpen procedure (when none of the opt-out conditions above apply):**
+
+Check whether the input looks handoff-generated. Signals: starts with a structured prefix (`[handoff]`, `Task:`, `From:`, `---`, or a YAML/JSON block), was piped via stdin with `$ARGUMENTS` empty, or contains no sentence-ending punctuation and is shorter than 40 characters. If the input does NOT look handoff-generated (i.e. it reads as natural-language prose from a human), skip the sharpen and emit `sharpen_skipped` with `reason: not_handoff_input`.
+
+When the input looks handoff-generated, pose 1–2 brief clarifying questions **in prose** (NOT an `AskUserQuestion` call). Write the questions directly in the response, end the turn, and wait for the user's free-text reply. A one-word reply of `"skip"` or `"go"` proceeds with the raw task unchanged.
+
+Adapt the questions to the specific task — choose 1–2 of the most useful:
+- What constraint or success criterion matters most here? (e.g. speed, simplicity, backward-compatibility)
+- Who is the primary consumer of the output?
+- Are there existing patterns or constraints to work within or avoid?
+- What does "done" look like — what would a passing plan let you implement first?
+
+After the user replies (or sends `"skip"/"go"`), write `$Z_HARNESS_PLAN_DIR/GRILL.md` with the following two sections (same format as `/z-brainstorm`'s `§0-sharpen` write path):
+
+```markdown
+## Sharpened problem
+
+<synthesize the original task + any clarifications the user gave into 2–4 sentences
+ that name the goal, the key constraint(s), and the intended outcome.
+ If the user replied "skip" or "go", restate the raw task verbatim here.>
+
+## Open branches
+
+<!-- populated by Phase 2 decisions enumeration -->
+```
+
+Emit a `sharpen_gate` event:
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" sharpen_gate \
+  "$(printf '{"decision":"sharpened","grill_md_existed":false}')"
+```
+
+The sharpened problem statement flows into the Premise check below and into Phase 2's GRILL.md decision seeding (Step 2 already reads `## Open branches` from GRILL.md when detected in Setup step 10).
+
+---
 
 **Do not take the prompt's premises for granted.** If precontext artifacts were detected in Setup step 10, **inject their content here** as input to the premise check:
 - **One-way gate active** (`artifact_kind: approach_synthesis`): inject RESEARCH.md content only (core hypothesis, approach decision matrix summary, mechanical rank-ordering). Do not inject MAP.md or BRAINSTORM.md.
@@ -1449,9 +1506,9 @@ The orchestrator dispatches a `remote-runner` (Haiku) to rsync+build in the sand
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" task_classified \
   "$(printf '{"task":"%s","tier":"%s","reason":%s}' "<task-id>" "<tier>" "$(printf '%s' "<reason>" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')")"
 ```
-If a task block already contains a user-authored `**Complexity:** <tier>` line (rare at plan-time, but possible if the user is editing TASKS.md in-flight), the classifier returns `REASON: user-authored override` and you leave the stamp alone. The orchestrator `/z-implement-all` reads this stamp at dispatch time to pick the implementer model (`low|medium` → Sonnet, `high` → Opus).
+If a task block already contains a user-authored `**Complexity:** <tier>` line (rare at plan-time, but possible if the user is editing TASKS.md in-flight), the classifier returns `REASON: user-authored override` and you leave the stamp alone. The orchestrator `/z-execute` reads this stamp at dispatch time to pick the implementer model (`low|medium` → Sonnet, `high` → Opus).
 
-**Scope seed (immediately after TASKS.md + complexity stamps are finalized).** Dispatch the `scope-extractor` (Haiku) subagent to seed the plan's file scope into the registry so a concurrent `/z-implement-all` can see what this plan intends. Best-effort, non-fatal — `update-scope` self-logs `registry_error` on failure:
+**Scope seed (immediately after TASKS.md + complexity stamps are finalized).** Dispatch the `scope-extractor` (Haiku) subagent to seed the plan's file scope into the registry so a concurrent `/z-execute` can see what this plan intends. Best-effort, non-fatal — `update-scope` self-logs `registry_error` on failure:
 
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. Scope seeding is advisory; the plan proceeds without it. -->
 ```
@@ -1474,7 +1531,7 @@ python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-reg
   --run-id "$RUN" --phase phase8 || true   # CLI self-logs registry_error on failure
 ```
 
-**Workstreams manifest (generated from TASKS.md).** After TASKS.md is finalized and all task blocks have their Complexity stamps, generate the plan's `workstreams.json` manifest. This file is the conflict DAG for parallelism — `/z-implement-all` reads it to decide what's safe to run concurrently. Best-effort, non-fatal — any failure is silent; `/z-implement-all` falls back to inline `**Files:**` dedup when the file is absent.
+**Workstreams manifest (generated from TASKS.md).** After TASKS.md is finalized and all task blocks have their Complexity stamps, generate the plan's `workstreams.json` manifest. This file is the conflict DAG for parallelism — `/z-execute` reads it to decide what's safe to run concurrently. Best-effort, non-fatal — any failure is silent; `/z-execute` falls back to inline `**Files:**` dedup when the file is absent.
 
 ```bash
 HERMES_ENABLED="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get workflow.hermes_enabled 2>/dev/null || echo false)"
@@ -1502,24 +1559,104 @@ fi
 
 Copy `$Z_HARNESS_PLAN_DIR/{SPEC,PLAN,TASKS}.md` into `$Z_HARNESS_PLAN_DIR/archive/$RUN/`. Update `manifest.json` with end timestamp, status `complete`, totals (decision count, consultation count, total tokens if available).
 
-<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the next-step
-     recommendation choice (/z-audit-plan / /z-test / /z-implement-all / skip)
-     via their native channel. Silent omission is forbidden. -->
-Surface the next-step choice interactively via `AskUserQuestion`. Phrase the question as "Plan complete. What's next?" with these four options (the `AskUserQuestion` four-option cap is why the two plan audits share one option — mention `/z-audit-plan-style` in the `/z-audit-plan` option description): `/z-audit-plan` (label: `Audit the plan (recommended)` — recommended cheap pre-implementation reality check against the codebase; the description also points the user at `/z-audit-plan-style` for the companion MR-style quality pass on the plan artifacts), `/z-test` (label: `Draft semantic test cases` — recommended only for risky/financial code), `/z-implement-all` (label: `Start implementation now` — only when user has high confidence in the plan), `Skip — I'll decide later`. Default selection is `/z-audit-plan`. The user's choice is advisory — log it as a `next_step_choice` event but do not auto-dispatch the chosen command; the user invokes it themselves so they retain control of context boundaries (e.g. running `/compact` between phases).
+**Handoff artifact.** Write a curated context slice to `$Z_HARNESS_PLAN_DIR/HANDOFF.md` so the next command (`/z-audit-plan`) can orient itself without re-reading the full planning transcript. This artifact must be written before printing the next-move instruction below.
+
+```bash
+# Determine the primary artifact path for the handoff slice.
+if [[ "$PLANNING_MODE" == "intent" && -f "$Z_HARNESS_PLAN_DIR/INTENT.md" ]]; then
+  _HANDOFF_PRIMARY_ARTIFACT="$Z_HARNESS_PLAN_DIR/INTENT.md"
+  _HANDOFF_ARTIFACT_KIND="INTENT.md"
+else
+  _HANDOFF_PRIMARY_ARTIFACT="$Z_HARNESS_PLAN_DIR/PLAN.md"
+  _HANDOFF_ARTIFACT_KIND="PLAN.md"
+fi
+```
+
+Write `$Z_HARNESS_PLAN_DIR/HANDOFF.md` with the following sections:
+
+```markdown
+---
+artifact: handoff
+slug: <$Z_HARNESS_SLUG>
+planning_run: <$RUN>
+generated_at: <ISO UTC timestamp>
+---
+
+## Slug
+
+<$Z_HARNESS_SLUG>
+
+## Primary planning artifact
+
+<$_HANDOFF_PRIMARY_ARTIFACT>
+
+## Intent / Goal
+
+<2–3 sentence summary of what this plan sets out to accomplish, drawn from INTENT.md §Intent
+ or PLAN.md goals section — do not invent; quote or lightly paraphrase the approved text.>
+
+## Key decisions
+
+<Bullet list of the top 3–5 approved decisions from decisions.md — one line each:
+ "Decision: [what was decided] — Rationale: [one-sentence reason]">
+
+## Accepted shortcuts (if any)
+
+<Bullet list of any shortcuts approved in Phase 5, or "none".>
+
+## Grounding notes
+
+<1–2 sentences summarizing what the codebase exploration (Phases 1–2) found —
+ key files, key constraints, or notable surprises. Omit if nothing noteworthy.>
+
+## Next move
+
+/clear
+/z-audit-plan <$Z_HARNESS_SLUG>
+```
+
+After writing `HANDOFF.md`, log a `handoff_written` event:
+
+```bash
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" handoff_written \
+  "$(printf '{"slug":"%s","path":"%s","artifact_kind":"%s"}' \
+     "$Z_HARNESS_SLUG" "$Z_HARNESS_PLAN_DIR/HANDOFF.md" "$_HANDOFF_ARTIFACT_KIND")"
+```
+
+**Post-intent prose checkpoint (no AskUserQuestion).** Print the following summary directly as chat output — do not use `AskUserQuestion`. This replaces the former four-option popup:
+
+```
+Plan complete for slug: <$Z_HARNESS_SLUG>
+
+Primary artifact: <$_HANDOFF_PRIMARY_ARTIFACT>
+
+<If PLANNING_MODE=intent: "INTENT.md is the contract for this run. It captures the
+ accepted goal, scope boundaries, and acceptance checklist. Read it before auditing.">
+<If PLANNING_MODE=full: "SPEC.md + PLAN.md + TASKS.md are the contract for this run.">
+
+Handoff context written to: $Z_HARNESS_PLAN_DIR/HANDOFF.md
+
+Next move — run these two commands in sequence:
+
+/clear
+/z-audit-plan <$Z_HARNESS_SLUG>
+
+The audit is the recommended next step (contract-level reality check + adversarial review).
+If you have high confidence in the plan and want to skip auditing, run /z-execute directly.
+```
+
+Log the next-step recommendation:
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" next_step_choice \
-  "$(printf '{"choice":"%s"}' "<user selection>")"
+  "$(printf '{"choice":"/z-audit-plan","source":"prose_recommendation"}')"
 ```
 
-Map the user's choice to `$NEXT_JSON` for the run brief (examples):
+Set `$NEXT_JSON` for the run brief:
 
-| Choice | `$NEXT_JSON` |
-|--------|----------------|
-| `/z-audit-plan` | `{"label":"Audit the plan","command":"/z-audit-plan"}` |
-| `/z-test` | `{"label":"Draft semantic test cases","command":"/z-test"}` |
-| `/z-implement-all` | `{"label":"Start implementation","command":"/z-implement-all"}` |
-| Skip | `{"label":"Decide later","command":null}` |
+```bash
+NEXT_JSON='{"label":"Audit the plan","command":"/z-audit-plan"}'
+```
 
 **Run Brief finalize (registry Phase 9).** Set registry artifact env, pre-seed outcome/status/next, then include the shared fragment. Chat and push text are rendered from `run-brief.json` only — do not author independent completion prose.
 
@@ -1557,8 +1694,6 @@ python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-reg
 
 The `/compact` recommendation is important: the planning phase (Explore agents, decisions doc, consultant returns, SPEC/PLAN drafting) is the heaviest context burner in the harness. Compacting at this boundary frees ~MB of main-thread context before implementation kicks off. Subagents during implementation are fresh-context already, so no per-batch compact is needed.
 
-The `/z-test` step is optional but high-value when the plan touches money, ordering, signal generation, or any other domain where mechanical correctness (which `/z-implement-all`'s reviewer catches) is not enough to catch semantic bugs (notional sign flips, feature schema mismatches, unit confusion). It produces a `TESTS.md` artifact that `/z-implement-all`'s implementer subagent reads alongside TASKS.md, so test code lands in the same diff as the production code it exercises.
-
 ## Run Brief — halt finalize
 
 Before `deregister --status aborted` on any halt after `run-brief.sh init` (unless register failed — no deregister). Substitute `<reason>` in the outcome line. When no planning artifact exists yet, the shared fragment auto-downgrades to **lite** (Intent + Outcome + Next).
@@ -1594,7 +1729,7 @@ python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-reg
 
 ## Telemetry reference
 
-Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema see `z-implement-all.md`.
+Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema see `z-execute.md`.
 
 | Event kind | When / meaning | Required fields |
 |---|---|---|
@@ -1612,7 +1747,10 @@ Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema
 | `task_classified` | complexity-classifier stamped a task block | `task`, `tier`, `reason` |
 | `persona_bound` | Emitted per panel arm at Phase 3 and Phase 7 (5-panel path only) | `run_id`, `command`, `role`, `arm`, `selection_source`, `phase`; additionally `persona_id` + `draw_id` when `personas.critique_panel` drew a persona for that arm (`selection_source=random_role_pool_distinct`); vanilla arms omit those fields and carry `selection_source=fixed_panel` |
 | `telemetry_anomaly` | `log-phase.sh` detected impossible `wall_ms` | `phase`, `reason` (`wall_ms_overflow` / `wall_ms_negative`), `t_start`, `t_end`, `computed_wall_ms` |
-| `next_step_choice` | User picked a next step at Phase 9 | `choice` |
+| `next_step_choice` | Phase 9 prose recommendation emitted (source: `prose_recommendation`) | `choice`, `source` |
+| `sharpen_gate` | Phase 0 auto-sharpen gate decision | `decision` (`sharpened`\|`skipped`), `grill_md_existed` |
+| `sharpen_skipped` | Phase 0 auto-sharpen step skipped (opt-out or not handoff input) | `reason` |
+| `handoff_written` | Phase 9 handoff artifact written to HANDOFF.md | `slug`, `path`, `artifact_kind` |
 | `plan_claim_lost_during_gate` | Heartbeat detected ownership change (exit 9) at a phase boundary or before a user gate; URGENT abort/continue-uncoordinated gate fires | `slug`, `run_id`, `phase` |
 | `intent_level_chosen` | Mode detection resolved the planning depth level (via classifier, config-forced, flag, or fallback) | `level`, `source` (`classifier` / `config-forced` / `flag` / `user-override` / `fallback`), `reason` |
 | `intent_level_override` | User overrode the classifier's chosen level via the inline announce gate | `level` (new), `prior_level`, `source` (`user-override`) |
@@ -1639,7 +1777,7 @@ Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema
 | Feature | Used | Gates |
 |---------|------|-------|
 | `subagent` | yes | Phase 1a doc-fetcher Agent(); Phase 1b Explore Agent(); **Mode detection: intent-classifier Agent()** (when `planning_mode=intent` and `intent_level=auto`); Phase 3 consultant-primary/secondary Agent() calls (2-consultant fallback when `experiment.persona_rotation=false`) or fixed 5-panel Agent() calls (agy, cursor@claude-4.6-sonnet, cursor@grok-4.3, cursor@composer-2.5, codex-cli — when `experiment.persona_rotation=true`); Phase 7 same panel structure as Phase 3; Phase 8 complexity-classifier Agent() calls. When `personas.critique_panel=true` (and `experiment.persona_rotation=true`), each Phase 3 and Phase 7 arm is additionally prefixed with a drawn consultant persona — no extra Agent() calls, the prefix is injected into each arm's existing prompt. |
-| `ask_user` | yes | Setup step 0 (empty arguments); Setup step 1 (slug collision + resolver prefill/ask branches); Setup step 5 claim acquire — CLAIM_RC 1 (live peer: proceed/abort/use-new-slug), CLAIM_RC 2 (stale-takeover: proceed/abort, default abort), CLAIM_RC 3 (corrupt: abort/proceed-uncoordinated, default abort); Setup step 10c (consolidated freshness gate — one AskUserQuestion covering docs / research / map / GRILL.md-citation staleness); **Mode detection: backward-compat SPEC detection — finished legacy plan gate** (amend / implement / continue / abort when SPEC.md+TASKS.md present); **Mode detection: intent level announce + override gate** (when `planning_mode=intent`; offers L1/L2/L3 override); **Mode detection: L2 optional consult gate** (when `INTENT_CONSULT_POLICY=optional` and not `Z_HARNESS_NO_ASK`); Phase 0 (premise concern); Phase 2.5 (decisions doc approval — guarded by `workflow.plan_decisions_approval` resolver); Phase 5 (design decision + shortcut approval); **Phase 6 (intent-mode only): acceptance-criterion lint failure gate — surfaces offending lines and offers rewrite or abandon** (when `planning_mode=intent` and lint finds non-observable criteria); Phase 8 (task-count overflow); Phase 9 (next-step recommendation choice); heartbeat exit 9 at any phase boundary or pre-gate (`plan_claim_lost_during_gate` — abort/continue-uncoordinated, default abort) |
+| `ask_user` | yes | Setup step 0 (empty arguments); Setup step 1 (slug collision + resolver prefill/ask branches); Setup step 5 claim acquire — CLAIM_RC 1 (live peer: proceed/abort/use-new-slug), CLAIM_RC 2 (stale-takeover: proceed/abort, default abort), CLAIM_RC 3 (corrupt: abort/proceed-uncoordinated, default abort); Setup step 10c (consolidated freshness gate — one AskUserQuestion covering docs / research / map / GRILL.md-citation staleness); **Mode detection: backward-compat SPEC detection — finished legacy plan gate** (amend / implement / continue / abort when SPEC.md+TASKS.md present); **Mode detection: intent level announce + override gate** (when `planning_mode=intent`; offers L1/L2/L3 override); **Mode detection: L2 optional consult gate** (when `INTENT_CONSULT_POLICY=optional` and not `Z_HARNESS_NO_ASK`); Phase 0 (premise concern); Phase 2.5 (decisions doc approval — guarded by `workflow.plan_decisions_approval` resolver); Phase 5 (design decision + shortcut approval); **Phase 6 (intent-mode only): acceptance-criterion lint failure gate — surfaces offending lines and offers rewrite or abandon** (when `planning_mode=intent` and lint finds non-observable criteria); Phase 8 (task-count overflow); heartbeat exit 9 at any phase boundary or pre-gate (`plan_claim_lost_during_gate` — abort/continue-uncoordinated, default abort). **Phase 9 no longer uses AskUserQuestion** — the next-step recommendation is emitted as prose only (handoff artifact + printed `/clear` + `/z-audit-plan <slug>` instruction). |
 | `skill_invoke` | no | — |
 
 Driver support requirements: see frontmatter `driver_features_required`.

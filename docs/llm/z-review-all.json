@@ -12,7 +12,7 @@
       "line": 1,
       "symbol": "z-review-all",
       "kind": "module",
-      "summary": "Final-gate cross-LLM review: two consultant subagents on cumulative diff vs plan contract; surfaces implementation_drift (Prong A) and spec/intent gaps (Prong B); use after /z-implement-all completes"
+      "summary": "Final-gate cross-LLM review: two consultant subagents on cumulative diff vs plan contract; surfaces implementation_drift (Prong A) and spec/intent gaps (Prong B); use after /z-execute completes"
     },
     {
       "file": "commands/z-review-all.md",

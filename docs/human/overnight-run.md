@@ -108,9 +108,9 @@ Hard-halt conditions (slug collision, lock corruption, state corruption) are nev
 
 `scripts/bench-autonomy-check.sh` (invoked via `make bench-autonomy-check`) is a mandatory pre-run gate for unattended policy-mode runs. It must exit 0 before launching a benchmark overnight run. It performs three checks:
 
-**Step 1 — Callsite registration audit (lint-askuser --strict):** scans the quick-build hot-path files (`commands/z-plan.md`, `commands/z-implement-all.md`) for `AskUserQuestion` callsites and asserts that each file using `AskUserQuestion` also contains a `resolve-question` or `check-no-ask` call. Unregistered callsites will fail-open (silently block) under `Z_HARNESS_NO_ASK=halt`, violating the policy-mode contract.
+**Step 1 — Callsite registration audit (lint-askuser --strict):** scans the quick-build hot-path files (`commands/z-plan.md`, `skills/z-execute/SKILL.md`) for `AskUserQuestion` callsites and asserts that each file using `AskUserQuestion` also contains a `resolve-question` or `check-no-ask` call. Unregistered callsites will fail-open (silently block) under `Z_HARNESS_NO_ASK=halt`, violating the policy-mode contract.
 
-**Step 2 — Policy coverage assertion:** loads `z-harness/bench/pier/benchmark-autonomy.yaml` via `zharness_pier.policy.load_policy` and checks that every `workflow.*` pattern found in the hot-path command files (`z-plan.md`, `z-implement-all.md`, `z-implement-next.md`) is present in the policy's `gates` map. If any gate is missing from the policy, the check fails with an actionable error.
+**Step 2 — Policy coverage assertion:** loads `z-harness/bench/pier/benchmark-autonomy.yaml` via `zharness_pier.policy.load_policy` and checks that every `workflow.*` pattern found in the hot-path command files (`z-plan.md`, `z-execute.md`) is present in the policy's `gates` map. If any gate is missing from the policy, the check fails with an actionable error.
 
 **Step 3 — Targeted gate-coverage assertion:** for each question_id in `REQUIRED_IN_POLICY` (currently `["workflow.pre_run_cost_gate"]`), verifies that the gate is registered in `config.py list-question-ids` AND is a key in the policy's `gates:` block. This step requires PyYAML. `workflow.pre_run_cost_gate` was added to `REQUIRED_IN_POLICY` by the token-estimates plan (T010) to ensure benchmark runs are never blocked by an unhandled cost-gate prompt.
 
@@ -147,7 +147,7 @@ All `Z_HARNESS_OVERNIGHT_*` env vars recognized by `/z-overnight` and supporting
 | `Z_HARNESS_OVERNIGHT_AUTODECIDE` | JSON string | `{}` | Override map merged on top of `OVERNIGHT_AUTODECIDE_QIDS_DEFAULT`; see Allowlist customization above |
 | `Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE` | JSON string | (computed) | Internal: merged allowlist exported by the orchestrator before invoking sub-skills; visible via `config.py inspect-all`; do not set manually |
 | `Z_HARNESS_OVERNIGHT_RUN_ID` | string | (computed) | Internal: identifies the current overnight run; exported for sub-skills and log-event.sh calls |
-| `Z_HARNESS_OVERNIGHT_LOCK_STALE_S` | integer | `7200` | Seconds after which a lock heartbeat is considered stale and takeover is allowed (default 2 h, accommodating long /z-implement-all runs) |
+| `Z_HARNESS_OVERNIGHT_LOCK_STALE_S` | integer | `7200` | Seconds after which a lock heartbeat is considered stale and takeover is allowed (default 2 h, accommodating long /z-execute runs) |
 | `Z_HARNESS_OVERNIGHT_AUTO_COMPACT` | `0` \| `1` | `0` | When `1`, emit a `compact_recommended` log event after each completed step as a hint to compact context |
 | `Z_HARNESS_NO_ASK` | `halt` \| unset | unset | Instructs instrumented callsites to convert `ask` results to halt events; set/unset exclusively around Skill-tool calls by the orchestrator |
 
@@ -223,12 +223,11 @@ Each per-command halt event has the same payload shape: `{reason, question_id, r
 | `plan_style_halt` | `/z-audit-plan-style` | `workflow.audit_to_amend` |
 | `uplift_halt` | `/z-uplift` | `workflow.slug_confirm` |
 | `debug_halt` | `skills/z-debug` | `workflow.slug_confirm` |
-| `light_halt` | `skills/z-plan-light` | `workflow.slug_confirm` |
 | `map_halt` | `skills/z-map` | `workflow.slug_confirm` |
 | `brainstorm_halt` | `skills/z-brainstorm` | `workflow.slug_confirm` |
 | `plan_halt` | `/z-plan` | `workflow.slug_confirm` (Phase 1) or `workflow.plan_decisions_approval` (Phase 2.5) |
 | `review_halt` | `/z-review-all` | `workflow.review_all_proceed` (Phase 3.7) |
-| `implement_all_halt` | `/z-implement-all` (reserved) | `workflow.implement_all_proceed` — reserved kind recognized by `run-status.sh`; v1 uses `task_halt` per-task instead of a single batch-level halt event. If a future batch-level halt is added, it will use this kind. |
+| `implement_all_halt` | `/z-execute` (reserved) | `workflow.implement_all_proceed` — reserved kind recognized by `run-status.sh`; v1 uses `task_halt` per-task instead of a single batch-level halt event. If a future batch-level halt is added, it will use this kind. |
 
 ### Hard halt events (pre-lock, non-bypassable)
 
@@ -319,9 +318,9 @@ The `_build_recommended_next` function in `morning-report.py` branches on `termi
 > **v1 known limit (fail-OPEN for unregistered callsites):** Sub-commands that call `AskUserQuestion` outside the registered gate set will block the conversation until you respond, even with `Z_HARNESS_NO_ASK=halt`. `scripts/lint-askuser.sh` is documentation and audit tooling — it is NOT runtime enforcement and cannot convert a non-instrumented AskUser into a halt. Run `make bench-autonomy-check` before launching a policy-mode benchmark run; for standard overnight runs, run `scripts/lint-askuser.sh --strict` before launching a long chain and instrument any callsites flagged as unregistered if they are on your chain's hot path. v2 will pursue runtime enforcement (e.g., centralized AskUser wrapper at the driver layer).
 
 The instrumented callsites are:
-- **workflow.slug_confirm** (7): `commands/z-plan.md`, `commands/z-fix.md`, `commands/z-uplift.md`, `commands/z-debug.md`, `commands/z-brainstorm.md`, `commands/z-map.md`, `commands/z-plan-light.md`
+- **workflow.slug_confirm** (6): `commands/z-plan.md`, `commands/z-fix.md`, `commands/z-uplift.md`, `commands/z-debug.md`, `commands/z-brainstorm.md`, `commands/z-map.md`
 - **workflow.audit_to_amend** (2): `commands/z-audit-plan.md`, `commands/z-audit-plan-style.md`
-- **workflow.implement_all_proceed** (1): `/z-implement-all` halt-resolution gate
+- **workflow.implement_all_proceed** (1): `/z-execute` halt-resolution gate
 - **workflow.review_all_proceed** (1): `/z-review-all` Phase 3.7 proceed gate
 - **workflow.plan_decisions_approval** (1): `/z-plan` Phase 2.5 decisions-doc approval gate
 

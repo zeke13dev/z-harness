@@ -13,7 +13,7 @@ two consultant subagents (Gemini + Codex) on the cumulative diff against the pla
 - **Spec/intent gaps** (Prong B): defects in the plan artifacts that only appear when looking at
   all tasks together.
 
-Use after `/z-implement-all` completes. Per-task review is done by `/z-implement-all`; this
+Use after `/z-execute` completes. Per-task review is done by `/z-execute`; this
 command catches issues that span tasks.
 
 ## Phase pipeline

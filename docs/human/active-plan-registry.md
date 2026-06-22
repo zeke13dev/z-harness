@@ -1,7 +1,7 @@
 # active-plan-registry — Cross-session awareness registry
 
 > Last updated: 2026-06-19
-> Covers source: scripts/active-plan-registry.py, scripts/plan-path.sh, scripts/migrate-plan-layout.sh, agents/scope-extractor.md, commands/z-implement-all.md, commands/z-implement-next.md, commands/z-plan.md
+> Covers source: scripts/active-plan-registry.py, scripts/plan-path.sh, scripts/migrate-plan-layout.sh, agents/scope-extractor.md, skills/z-execute/SKILL.md, commands/z-plan.md
 
 ## Overview
 
@@ -78,7 +78,7 @@ Each `<run-id>.json` record (schema_version 2) contains:
   "run_id": "...",
   "session_id": "...",
   "slug": "...",
-  "command": "/z-implement-all",
+  "command": "/z-execute",
   "command_version": "<z_harness_version>",
   "phase": "implement",
   "status": "running",
@@ -124,7 +124,7 @@ Each `<run-id>.json` record (schema_version 2) contains:
 
 ### Scope-extractor integration
 
-At Phase 0 of `/z-implement-all`, `/z-implement-next`, and Phase 8 of `/z-plan`, a Haiku subagent (`agents/scope-extractor.md`) reads SPEC.md + PLAN.md + TASKS.md (and optionally a specific task block) and emits a JSON scope array `[{path, confidence, reason}]`. The orchestrator writes the result via `update-scope`.
+At Phase 0 of `/z-execute` and Phase 8 of `/z-plan`, a Haiku subagent (`agents/scope-extractor.md`) reads SPEC.md + PLAN.md + TASKS.md (and optionally a specific task block) and emits a JSON scope array `[{path, confidence, reason}]`. The orchestrator writes the result via `update-scope`.
 
 Confidence levels: `explicit` (path literally named in a Files: line) > `inferred` (strongly implied) > `broad` (directory/glob) > `unknown` (work named but files not).
 
@@ -250,7 +250,7 @@ A mechanical fallback is documented for offline use (parse `**Files:**` lines di
 
 ## Command integration (Phase 0)
 
-### `/z-implement-all` and `/z-implement-next`
+### `/z-execute`
 
 **Phase 0.0** (runs before the existing follow-up-running check):
 
@@ -282,7 +282,7 @@ for each task T:
      On halt mid-task: rely on deregister/reap (do not release a partial edit)
 ```
 
-### `/z-plan`, `/z-plan-light`, `/z-debug`, `/z-do`, `/z-audit`, `/z-plan-split`
+### `/z-plan`, `/z-debug`, `/z-do`, `/z-audit`, `/z-plan-split`
 
 All run-creating commands get the same register/heartbeat/deregister 3-line block. In `/z-plan`, `scope-extractor` runs after TASKS.md is written (Phase 8) to seed scope for overlap detection.
 
@@ -296,7 +296,7 @@ All run-creating commands get the same register/heartbeat/deregister 3-line bloc
 
 `scripts/migrate-plan-layout.sh` gained two significant extensions:
 
-1. **Live-run barrier (invariant 8):** before any migration, the script calls `active-plan-registry.py list` and refuses if any record shows `status:running`. This prevents TOCTOU races where an active `/z-implement-next` appends to a source TASKS.md after copy-verify but before `rm`.
+1. **Live-run barrier (invariant 8):** before any migration, the script calls `active-plan-registry.py list` and refuses if any record shows `status:running`. This prevents TOCTOU races where an active `/z-execute` appends to a source TASKS.md after copy-verify but before `rm`.
 
 2. **Full artifact manifest (`--dry-run --all`):** prints the complete mapping of source → target for all artifact types:
    - `z-harness/plans/<slug>/` and legacy-flat `z-harness/<slug>/` → `<base>/plans/<slug>`
@@ -386,7 +386,7 @@ This answers "where are my plans?", "what else is running?", and "why is my run 
 
 - `plan-claim` — orthogonal hard slug-level mutex; uses `claims_dir()` from plan-path.sh. The lockless registry is advisory; plan-claim is the hard gate. Hermes cross-plan paths acquire plan-claim locks before operating.
 - `hermes-orchestration` — calls `session-id` at workstream start; depends on registry for concurrent plan awareness.
-- `commands` (z-implement-all, z-implement-next, z-plan, z-where, etc.) — primary consumers of register/overlaps/claim/release/wait-for/deregister.
+- `commands` (z-execute, z-plan, z-where, etc.) — primary consumers of register/overlaps/claim/release/wait-for/deregister.
 - `followup-sink` — shares `<base>` via `followups_dir()`; must not participate in per-entry→global lock ordering of `followup_common.py`.
 - `plan-layout-migration` — `migrate-plan-layout.sh` gates on `list --json` to refuse when any run is live.
 

@@ -13,7 +13,7 @@ plan-time test planner): `/z-test` adds tests; `/z-test-prune` proposes removing
 
 The command **never deletes anything itself**. It produces a `TASKS.md`-shaped promotion artifact
 (mirroring `/z-mr-review`'s `MR-REVIEW.md`) that the user curates, then applies via
-`/z-implement-all --tasks=<path>/TEST-PRUNE.md`. Deleting a test removes coverage, so the
+`/z-execute --tasks=<path>/TEST-PRUNE.md`. Deleting a test removes coverage, so the
 read-only contract plus the guards below are the load-bearing safety mechanism.
 
 ## Scope
@@ -67,10 +67,10 @@ confidence tier, evidence, the failure class preserved elsewhere, and acceptance
 own section. Apply survivors with:
 
 ```
-/z-implement-all --tasks=<plan-dir>/TEST-PRUNE.md
+/z-execute --tasks=<plan-dir>/TEST-PRUNE.md
 ```
 
-A full-suite re-baseline after applying is strongly recommended — `/z-implement-all`'s final gate
+A full-suite re-baseline after applying is strongly recommended — `/z-execute`'s final gate
 covers this.
 
 ## Relationship to other commands
@@ -78,4 +78,4 @@ covers this.
 - **`/z-test`** — forward test planner (drafts tests at plan time). `/z-test-prune` is its inverse.
 - **`/z-mr-review`** — targets defensive bloat / over-engineering on a *diff*; `/z-test-prune`
   targets the accumulated *test suite*.
-- **`/z-implement-all --tasks=`** — executes the curated deletion plan.
+- **`/z-execute --tasks=`** — executes the curated deletion plan.

@@ -29,7 +29,7 @@ appear only on subagent-bracket events, not on lifecycle or gate events.
 | `cost_gate_decision` | `/z-research` Phase 0 cost-confirmation gate |
 | `explore_failure` | any command that dispatches an Explore subagent that does not return |
 
-### `/z-plan-split` and tree-walking branch of `/z-implement-all`
+### `/z-plan-split` and tree-walking branch of `/z-execute`
 
 | Event | Emitted by |
 |---|---|
@@ -45,22 +45,22 @@ appear only on subagent-bracket events, not on lifecycle or gate events.
 | `total_cluster_failure` | `/z-plan-split` Phase 3 or Phase 4 when every cluster ends `failed` |
 | `overlap_detected` | `/z-plan-split` Phase 4 (per overlapping path) |
 | `overlap_index_rebuilt` | `/z-plan-split` Phase 4 after any post-Phase-3 cluster demotion |
-| `shared_concerns_missing` | `/z-implement-all` Setup 2b when SHARED-CONCERNS.md is absent on a tree-rooted slug |
-| `shared_concerns_unacknowledged` | `/z-implement-all` Setup 2b ack-gate (halt; no override) |
-| `shared_concerns_ack_override` | `/z-implement-all` Setup 2b ack-gate when `--ack` was supplied |
-| `manifest_frontmatter_inconsistent` | `/z-implement-all` Setup 2b when frontmatter counts disagree with the table |
-| `manifest_run_order_invalid` | `/z-implement-all` Setup 2b when run order doesn't bijectively match the table |
-| `tree_depth_exceeded` | `/z-implement-all` Setup 2b when a nested MANIFEST.md is found inside the tree |
-| `partial_tree_blocked` | `/z-implement-all` Setup 2b partial-tree gate (halt; no `--force-partial`) |
-| `partial_tree_force_override` | `/z-implement-all` Setup 2b partial-tree gate when `--force-partial` was supplied |
+| `shared_concerns_missing` | `/z-execute` Setup 2b when SHARED-CONCERNS.md is absent on a tree-rooted slug |
+| `shared_concerns_unacknowledged` | `/z-execute` Setup 2b ack-gate (halt; no override) |
+| `shared_concerns_ack_override` | `/z-execute` Setup 2b ack-gate when `--ack` was supplied |
+| `manifest_frontmatter_inconsistent` | `/z-execute` Setup 2b when frontmatter counts disagree with the table |
+| `manifest_run_order_invalid` | `/z-execute` Setup 2b when run order doesn't bijectively match the table |
+| `tree_depth_exceeded` | `/z-execute` Setup 2b when a nested MANIFEST.md is found inside the tree |
+| `partial_tree_blocked` | `/z-execute` Setup 2b partial-tree gate (halt; no `--force-partial`) |
+| `partial_tree_force_override` | `/z-execute` Setup 2b partial-tree gate when `--force-partial` was supplied |
 | `anti_nesting_violation` | `cluster-planner` Phase 0a when an ancestor MANIFEST.md is detected |
-| `cluster_not_ready` | `/z-implement-all` Setup 2b cluster-readiness gate |
+| `cluster_not_ready` | `/z-execute` Setup 2b cluster-readiness gate |
 
 ### Compaction breakpoints
 
 | Event | Payload schema | Emitted by |
 |---|---|---|
-| `compaction_pause` | `{trigger, detail}` — `trigger` is one of `"task_count"`, `"wall_time"`, or `"pre_consult"`; `detail` carries trigger-specific fields | `/z-implement-all` batch-settle; `/z-review-all` Phase 3.7; `/z-maintain-docs --audit` pre-consult breakpoint |
+| `compaction_pause` | `{trigger, detail}` — `trigger` is one of `"task_count"`, `"wall_time"`, or `"pre_consult"`; `detail` carries trigger-specific fields | `/z-execute` batch-settle; `/z-review-all` Phase 3.7; `/z-maintain-docs --audit` pre-consult breakpoint |
 
 ### Config
 
@@ -72,12 +72,12 @@ appear only on subagent-bracket events, not on lifecycle or gate events.
 
 ## Compaction policy
 
-Long `/z-implement-all` runs and cross-LLM consult phases in `/z-review-all`
+Long `/z-execute` runs and cross-LLM consult phases in `/z-review-all`
 and `/z-maintain-docs --audit` accumulate significant orchestrator context. The
 compaction policy inserts deterministic breakpoints at the highest-context-pressure
 boundaries.
 
-### `/z-implement-all` — task-count and wall-time triggers
+### `/z-execute` — task-count and wall-time triggers
 
 Two env vars control when a breakpoint fires (see [environment-knobs.md](environment-knobs.md)):
 
@@ -92,7 +92,7 @@ event → halt-flush resolved. Only `[x]` completions count toward
 `Z_IMPLEMENT_PAUSE_TASKS`; retries and rollbacks do not.
 
 On trigger: a `compaction_pause` event is emitted, a push notification fires,
-and the loop exits cleanly. Re-invoke `/z-implement-all` to resume from TASKS.md.
+and the loop exits cleanly. Re-invoke `/z-execute` to resume from TASKS.md.
 
 ### `/z-review-all` and `/z-maintain-docs --audit` — pre-consult breakpoints
 

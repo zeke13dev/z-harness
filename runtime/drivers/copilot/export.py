@@ -128,9 +128,7 @@ To use z-harness from GitHub Copilot:
 | Goal | Command |
 |---|---|
 | Plan a change | `/z-plan <description>` |
-| Light-weight plan | `/z-plan-light <description>` |
-| Implement all tasks | `/z-implement-all` |
-| Implement next task | `/z-implement-next` |
+| Execute all tasks | `/z-execute` |
 | Review a PR/branch | `/z-mr-review` |
 | Audit a component | `/z-audit <component>` |
 | Debug an issue | `/z-debug <issue>` |
@@ -167,7 +165,7 @@ def _render_doc(sources: dict[str, list[dict[str, Any]]]) -> str:
         "- GitHub Copilot cannot dispatch `Agent(...)` calls or invoke "
         "`Skill(...)` programmatically.\n"
         "- Cross-LLM consultation (Gemini, Codex CLI) is not available within Copilot.\n"
-        "- Subagent fan-out (used by `/z-implement-all`, `/z-review-all`, etc.) requires "
+        "- Subagent fan-out (used by `/z-execute`, `/z-review-all`, etc.) requires "
         "Claude Code to execute — Copilot can only suggest the command.\n"
         "- For full harness capability use Claude Code (claude.ai/code) with the "
         "z-harness plugin installed.\n"

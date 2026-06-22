@@ -447,7 +447,7 @@ Use only already-known signals from the topic, doc-fetcher synthesis, optional E
 Deterministic routes:
 - Route unknown terrain, missing citations, or insufficient source facts to `/z-research`.
 - Route a framing that is already clear and ready for task planning to `/z-plan`.
-- Route a small concrete fix (`candidate_files <= 5`, `non_obvious_decisions <= 2`, no public API/schema impact) to `/z-plan-light`.
+- Route a small concrete fix (`candidate_files <= 5`, `non_obvious_decisions <= 2`, no public API/schema impact) to `/z-plan`.
 - Stay in `/z-brainstorm` when the terrain is known enough but multiple plausible framings remain.
 
 Call `planning-router` only when deterministic signals conflict and no hard threshold already decides the route. It receives the compact signal payload plus the current route chain and is advisory; malformed or unavailable classifier output falls back to deterministic routing or an AskUser choice.

@@ -121,7 +121,7 @@ class TestSelectSourcesPointer:
     def _full_sources(self) -> dict:
         return _make_sources(
             agent_ids=["implementer", "reviewer", "auditor", "doc-fetcher"],
-            command_ids=["z-plan", "z-implement-all"],
+            command_ids=["z-plan", "z-execute"],
             skill_ids=["z-debug"],
         )
 
@@ -239,7 +239,7 @@ class TestSelectSourcesFull:
     def _rich_sources(self) -> dict:
         return _make_sources(
             agent_ids=["implementer", "reviewer", "doc-fetcher", "complexity-classifier"],
-            command_ids=["z-plan", "z-implement-all", "z-review-all"],
+            command_ids=["z-plan", "z-execute", "z-review-all"],
             skill_ids=["z-debug", "z-suggest-memory"],
         )
 

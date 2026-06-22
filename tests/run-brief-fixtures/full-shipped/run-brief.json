@@ -21,10 +21,10 @@
       "source": "event"
     }
   ],
-  "outcome": "SPEC, PLAN, and TASKS written; ready for /z-implement-all",
+  "outcome": "SPEC, PLAN, and TASKS written; ready for /z-execute",
   "next": {
-    "label": "Run /z-implement-all",
-    "command": "/z-implement-all"
+    "label": "Run /z-execute",
+    "command": "/z-execute"
   },
   "sources": {
     "intent": "run_start",

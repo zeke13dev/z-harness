@@ -37,7 +37,7 @@ Multiple plans may coexist under `$Z_HARNESS_PLAN_DIR/`. Determine which one to 
    <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the slug
         selection question via their native channel. Silent omission is forbidden. -->
    - **Multiple candidates** → `AskUserQuestion` with each slug as an option (annotate each with mode: `intent` if INTENT.md present and no SPEC.md, `full` if SPEC.md exists, `light` if only FIX.md). Set `Z_HARNESS_SLUG` to chosen.
-   - **Zero candidates** → tell the user there's no plan to amend; suggest `/z-plan` or `/z-plan-light`. Stop.
+   - **Zero candidates** → tell the user there's no plan to amend; suggest `/z-plan`. Stop.
 3. From here on, **`$BASE`** refers to `$Z_HARNESS_PLAN_DIR` (or `z-harness` if legacy).
 4. Detect **mode**:
    - `intent` if `$BASE/INTENT.md` exists and `$BASE/SPEC.md` does NOT exist.
@@ -93,7 +93,7 @@ Articulate, in plain prose, what the amendment changes. Write `$BASE/archive/$RU
 - **Current frozen_at:** <existing value or "pending">
 - **Sections changed:** <bullet per INTENT section that changes: Intent / Not doing / Consider for this / Acceptance checklist; "no change" if none>
 - **Criteria added/removed/modified:** <list; "none" if unchanged>
-- **TASKS.md impact:** <"invalidated — regenerated on next /z-implement-all" if any section changed; "none" if only non-structural edits>
+- **TASKS.md impact:** <"invalidated — regenerated on next /z-execute" if any section changed; "none" if only non-structural edits>
 - **LEDGER.md:** preserved append-only; no changes.
 
 ### SPEC.md   (full mode only)
@@ -202,7 +202,7 @@ Now apply the amendment to the actual artifacts. Use `Edit` (not `Write`) so dif
      exit 1
    fi
    ```
-   `reopen-intent` is idempotent: if `frozen_at` is already `pending`, it prints `ALREADY_PENDING: pending` and exits 0 with no file change. `frozen_at: pending` signals that the contract will be re-frozen on the next `/z-implement-all`.
+   `reopen-intent` is idempotent: if `frozen_at` is already `pending`, it prints `ALREADY_PENDING: pending` and exits 0 with no file change. `frozen_at: pending` signals that the contract will be re-frozen on the next `/z-execute`.
 
 2. **Apply surgical edits to INTENT sections.** Using `Edit` (not `Write`), modify only the sections listed in `amendment.md`. Preserve all unrelated content byte-for-byte. The editable sections are:
    - `## Intent` — narrative of what the effort accomplishes
@@ -285,7 +285,7 @@ Now apply the amendment to the actual artifacts. Use `Edit` (not `Write`) so dif
 3. **TASKS.md**:
    - Append new tasks with fresh IDs in the appropriate phase block.
    - Edit modified `[ ]` tasks in place.
-   - Strike-through removed `[ ]` tasks: change `- [ ] T0NN` → `- [~] T0NN ~~<title>~~ (removed in <RUN>)`. Keep them visible — `/z-implement-next` skips `[~]`.
+   - Strike-through removed `[ ]` tasks: change `- [ ] T0NN` → `- [~] T0NN ~~<title>~~ (removed in <RUN>)`. Keep them visible — `/z-execute` skips `[~]`.
    - For superseded `[x]` tasks: leave them `[x]` and add the new superseding `[ ]` task whose title begins `Supersedes T0NN: ...`.
    - Preserve every `[x]` line untouched unless the user explicitly chose "re-open" in Phase 4.
    - **Re-classify complexity** for new tasks and for `[ ]` tasks whose block changed in any line OTHER than the `**Complexity:**` line itself (title, Files, Depends, Acceptance, `**Tests:**`, `**REMOTE_VERIFY:**`, `**DOCS:**` — any of these can materially shift complexity). For each affected task, **strip the existing `**Complexity:**` line BEFORE dispatching** the `complexity-classifier` (Haiku) subagent — otherwise the classifier's heuristic #1 will return `REASON: user-authored override` and the auto-stamp will never refresh. Exception: if the user *explicitly named* a complexity tier in their amendment instruction (e.g. "and mark T007 as high"), preserve that as a user-authored stamp and skip the classifier. Dispatch in parallel for the affected tasks only; append the new `**Complexity:** <tier>` line per the classifier's return. **Do not re-classify** tasks whose blocks are otherwise unchanged in this amendment — preserve their existing stamp byte-for-byte (avoids stamp churn the user did not ask for). Log one `task_classified` event per re-classified task to `events.jsonl` with `{task, tier, reason, amend_run: "$RUN"}`.
@@ -346,9 +346,8 @@ If any check fails, do **not** silently fix — surface it to the user conversat
 2. Push-notify (if policy ≠ `off`): "Amendment applied to `<slug>`. <N> tasks added, <M> modified, <K> removed, <S> superseded."
 3. Brief summary to user (3-5 sentences): what changed, what's next.
 4. Recommend next step:
-   - **intent mode** → INTENT.md is now re-opened (`frozen_at: pending`). Run `/z-implement-all` to re-freeze and regenerate the next level's task batch from the amended INTENT.
-   - **full mode with new/modified `[ ]` tasks** → `/z-implement-next` or `/z-implement-all`
-   - **light mode** → `/z-plan-light` won't re-run; if the amendment is large enough to warrant re-implementation, suggest the user explicitly trigger that.
+   - **intent mode** → INTENT.md is now re-opened (`frozen_at: pending`). Run `/z-execute` to re-freeze and regenerate the next level's task batch from the amended INTENT.
+   - **full mode with new/modified `[ ]` tasks** → `/z-execute`
 
 ## Phase 9 — Elevation Proposer
 
@@ -456,7 +455,7 @@ If `$PROPOSE_OUT` is empty, skip this phase entirely — no question is asked.
 - **Never skip Phase 4 (user gate) when invoked standalone.** The `--skip-user-gate` flag may only be used by callers (e.g. `/z-review-all` auto-amend) that have already validated the amendment via cross-LLM review.
 - **Cross-LLM consult only when triggered** — amendments are surgical; full consult is overkill for "rename this field".
 - **If the amendment grows past ~30% of the plan** (e.g. >5 new tasks, or the core premise of SPEC.md changes), STOP and recommend `/z-plan` from scratch instead — at that point you're not amending, you're replanning.
-- **In intent mode: never touch LEDGER.md.** It is append-only (SPEC.md Invariant 3). Re-freeze happens on the next `/z-implement-all`, not here.
+- **In intent mode: never touch LEDGER.md.** It is append-only (SPEC.md Invariant 3). Re-freeze happens on the next `/z-execute`, not here.
 - **In intent mode: re-open always sets `frozen_at: pending`.** Do not delete the field or set it to an empty string; `pending` is the signal T009's freeze idempotency check reads.
 - **No emojis** anywhere in artifacts.
 

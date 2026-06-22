@@ -5,7 +5,7 @@
 
 ## Overview
 
-`subagent-telemetry` is the per-subagent cost telemetry system introduced in the `reviewer-cost-telemetry` plan (Change 2). Before this change, only a fraction of subagent dispatches were logged with token-bearing events; host detection ran only in the Python subprocess-runtime path, never in native Claude orchestration; and the largest Claude cost bucket (implementer dispatches in `/z-implement-all`) was completely invisible. This concept covers three interlocking pieces: `scripts/detect-host.sh` for host identification, `host` stamping on every event via `scripts/log-event.sh`, and `scripts/log-subagent.sh` for per-subagent `subagent_call` events.
+`subagent-telemetry` is the per-subagent cost telemetry system introduced in the `reviewer-cost-telemetry` plan (Change 2). Before this change, only a fraction of subagent dispatches were logged with token-bearing events; host detection ran only in the Python subprocess-runtime path, never in native Claude orchestration; and the largest Claude cost bucket (implementer dispatches in `/z-execute`) was completely invisible. This concept covers three interlocking pieces: `scripts/detect-host.sh` for host identification, `host` stamping on every event via `scripts/log-event.sh`, and `scripts/log-subagent.sh` for per-subagent `subagent_call` events.
 
 The read-side of this system lives in `scripts/estimate-tokens.py subagent-costs`, which reads `subagent_call` events from `metrics.jsonl` and computes a per-host, per-subagent-type cost breakdown using separated input/output rate weighting. The `/z-stats` command surfaces this output to users. A drift-guard CI script (`scripts/test_subagent_logging.sh`) enforces that new `implementer` dispatch sites are always logged or explicitly opted out.
 
@@ -86,8 +86,7 @@ Five canonical logging sites are pinned by the drift-guard:
 - `agents/reviewer.md` — self-logs on return
 - `agents/consultant-primary.md` — self-logs on return
 - `agents/consultant-secondary.md` — self-logs on return
-- `commands/z-implement-all.md` — orchestrator logs implementer dispatch (wired by T006)
-- `commands/z-implement-next.md` — orchestrator logs implementer dispatch (wired by T007)
+- `skills/z-execute/SKILL.md` — orchestrator logs implementer dispatch (wired by T006)
 
 Consultant dispatches from orchestrators (e.g. `z-review-all.md`, `z-audit-plan.md`) do NOT require an additional `log-subagent.sh` call — the agents self-log. Double-logging from orchestrators would inflate cost metrics.
 

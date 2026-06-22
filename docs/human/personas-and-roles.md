@@ -42,7 +42,7 @@ The feature also drives the persona-rotation experiment, which randomizes which 
 
 - `providers-registry` — TOML `[roles.*.*]` bindings in config.toml co-locate persona/model/runtime; legacy `providers.json` is fallback for runtime-only binding
 - `config` — `experiment.persona_rotation` knob (default `true`) gates the entire rotation system; `experiment.control_every_n` (default 5) sets the forced-control cadence
-- `commands` — persona-rotation is invoked from `/z-implement-all` (step 5.0), `/z-implement-next`, `/z-plan` (5-panel consult), `/z-debug`, `/z-brainstorm` (ideator arms via `random-distinct-for-role`), and `/z-audit` (per-dimension audit_persona draws)
+- `commands` — persona-rotation is invoked from `/z-execute` (step 5.0), `/z-plan` (5-panel consult), `/z-debug`, `/z-brainstorm` (ideator arms via `random-distinct-for-role`), and `/z-audit` (per-dimension audit_persona draws)
 - `multi-ide-exports` — all four CLI adapters glob `personas/builtin/*.md` and write per-target persona files via the per-target `persona_export.py` adapters during `/z-export`
 - `agents` — downstream subagents receive the persona body prepended to their system prompt; no resolution happens inside the dispatcher
 

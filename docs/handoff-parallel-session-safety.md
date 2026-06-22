@@ -89,7 +89,7 @@ still had them in its context; the other ~24 plans were not and are gone.
   conflicts.
 - Should be low-friction (no manual per-run steps) and backward-compatible with existing tooling that
   assumes `z-harness/<slug>/...` paths.
-- Resumability (`/z-implement-all` reading TASKS.md state) must keep working.
+- Resumability (`/z-execute` reading TASKS.md state) must keep working.
 
 ---
 
@@ -156,7 +156,7 @@ awareness registry + session-id stamp. C (worktrees) and D (snapshot) were defer
 4. Discoverability: users (and docs) expect `z-harness/<slug>/`. If artifacts move out of the repo,
    how do we surface "where are my plans?" (a `z-stats`/`z-where` pointer?).
    → **Answered:** `/z-where` command shows resolved base + tier + active-plan registry list.
-5. Should `/z-overnight` / `/z-implement-all` refuse to start (or loudly warn) if they detect another
+5. Should `/z-overnight` / `/z-execute` refuse to start (or loudly warn) if they detect another
    active session or an in-repo (clean-vulnerable) base dir?
    → **Answered:** Phase 0 registry check does this; Z_HARNESS_STRICT_OVERLAP=1 makes it a hard halt.
 

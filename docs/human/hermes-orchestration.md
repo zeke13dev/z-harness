@@ -5,13 +5,13 @@
 
 ## Overview
 
-Hermes is the z-harness parallelism layer — a Python-native asyncio orchestrator that executes plan workstreams concurrently across isolated git worktrees. It reads a machine-readable `workstreams.json` manifest (written by `generate-workstreams.py`) and drives per-workstream sessions via `pi z-implement-all`, monitoring `session-status.json` for progress, relaying halts, and merging completed branches back to the base. The contract between the planning layer and the orchestrator is defined in `docs/human/hermes-integration-v1.md` (currently at protocol version hermes-v1, spec v1.4).
+Hermes is the z-harness parallelism layer — a Python-native asyncio orchestrator that executes plan workstreams concurrently across isolated git worktrees. It reads a machine-readable `workstreams.json` manifest (written by `generate-workstreams.py`) and drives per-workstream sessions via `pi z-execute`, monitoring `session-status.json` for progress, relaying halts, and merging completed branches back to the base. The contract between the planning layer and the orchestrator is defined in `docs/human/hermes-integration-v1.md` (currently at protocol version hermes-v1, spec v1.4).
 
-**Status: DORMANT by default.** As of v1.4 (2026-06-16), all Hermes entry points in `/z-plan`, `/z-implement-all`, and `/z-plan-split` are guarded by the `workflow.hermes_enabled` config knob, which defaults to `false`. The `scripts/hermes/` directory and `scripts/hermes-execute.py` are intentionally kept (not deleted) to prevent bit-rot while dormant — a future cleanup task will remove them once the gating strategy is confirmed. To activate Hermes, set `workflow.hermes_enabled = true` in `.z-harness/config.toml`.
+**Status: DORMANT by default.** As of v1.4 (2026-06-16), all Hermes entry points in `/z-plan`, `/z-execute`, and `/z-plan-split` are guarded by the `workflow.hermes_enabled` config knob, which defaults to `false`. The `scripts/hermes/` directory and `scripts/hermes-execute.py` are intentionally kept (not deleted) to prevent bit-rot while dormant — a future cleanup task will remove them once the gating strategy is confirmed. To activate Hermes, set `workflow.hermes_enabled = true` in `.z-harness/config.toml`.
 
 ## Key entry points
 
-- `scripts/hermes-execute.py:180` — `run_workstream` — Async coroutine for one workstream: creates git worktree, spawns `pi z-implement-all`, polls `session-status.json` in a 5-second loop, handles crash retries and halt relay, acquires `merge_lock` around `merge_workstream`. The semaphore is held for the full lifetime (spawn through merge), not just at spawn time.
+- `scripts/hermes-execute.py:180` — `run_workstream` — Async coroutine for one workstream: creates git worktree, spawns `pi z-execute`, polls `session-status.json` in a 5-second loop, handles crash retries and halt relay, acquires `merge_lock` around `merge_workstream`. The semaphore is held for the full lifetime (spawn through merge), not just at spawn time.
 - `scripts/hermes-execute.py:414` — `partition_level` — Greedy graph-coloring: splits a dependency-level's ready workstreams into sub-batches where no two in the same batch share a HIGH-severity `file_conflicts` entry. Falls back to fully serial (singleton sub-batches) when `scope_unknown=True` or `serialize_all=True`.
 - `scripts/hermes-execute.py:484` — `compute_ready_level` — Returns the workstreams whose entire `depends_on` set has reached terminal status `"done"`. The sole scheduling gate (INV-2); `parallel_group` is a derived label, not a gate.
 - `scripts/hermes-execute.py:505` — `run_single_plan` — Async: resolves plan dir, reads `workstreams.json`, applies crash recovery, runs the compute-ready/partition/gather loop, cleans up worktrees. Accepts `merge_lock` from `run_cross_plan` for cross-plan merge serialization.
@@ -25,14 +25,14 @@ Hermes is the z-harness parallelism layer — a Python-native asyncio orchestrat
 - `scripts/hermes/config.py:90` — `load_config` — Reads `hermes-config.yaml` (repo root or `~/.config/hermes/config.yaml`) into `HermesConfig`. Concurrency/retry/timeout knobs are file-only; Discord credentials may be overridden via `HERMES_DISCORD_TOKEN` / `HERMES_DISCORD_USER_ID`.
 - `scripts/hermes/schema.py:54` — `parse_workstreams_json` — Parses `workstreams.json` into typed `WorkstreamsManifest` dataclass. Runs 7-rule schema validation.
 - `scripts/hermes/worktree.py:58` — `create_worktree` — Creates `git worktree add ../hermes-<slug>-<ws_id> -b hermes/<slug>/<ws_id>`. Validates slug/ws_id against safe-ref regex. Handles crash recovery (branch-exists-but-worktree-missing path).
-- `scripts/hermes/session.py:26` — `spawn_session` — Runs `pi z-implement-all --tasks=<path>` in the worktree as a detached subprocess (`start_new_session=True`). Returns PID.
+- `scripts/hermes/session.py:26` — `spawn_session` — Runs `pi z-execute --tasks=<path>` in the worktree as a detached subprocess (`start_new_session=True`). Returns PID.
 
 ## How it interacts with others
 
 - `active-plan-registry` — `cross_plan.py` queries `active-plan-registry.py list --json` for per-plan scope records; `_get_session_id()` queries `session-id` to mint the cross-plan lock holder string.
 - `plan-claim` — `acquire_plan_locks` and `release_plan_locks` call `scripts/plan-claim.sh acquire/release` in sorted slug order. This is the cross-plan deadlock-safety invariant (INV-6).
 - `scripts` — `hermes-execute.py` calls `scripts/plan-path.sh` to resolve plan directories.
-- `commands` (z-plan, z-implement-all) — Both guard Hermes calls behind `workflow.hermes_enabled`. When enabled, `/z-plan` generates `workstreams.json` via `generate-workstreams.py`; `/z-implement-all` writes `handoff.json` for Hermes consumption and generates `workstreams.json` post-plan.
+- `commands` (z-plan, z-execute) — Both guard Hermes calls behind `workflow.hermes_enabled`. When enabled, `/z-plan` generates `workstreams.json` via `generate-workstreams.py`; `/z-execute` writes `handoff.json` for Hermes consumption and generates `workstreams.json` post-plan.
 - `config` — `scripts/config.py` provides `workflow.hermes_enabled` (the TOML master gate read by commands). This is separate from `hermes/config.py` which reads `hermes-config.yaml` for Hermes runtime behavior.
 
 ## Edge cases / gotchas

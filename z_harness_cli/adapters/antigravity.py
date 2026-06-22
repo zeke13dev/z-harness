@@ -3,7 +3,7 @@
 agy is a single-agent host that supports native skill and persona loading via
 the ``.agent/`` directory convention.  All /z-* commands run in high-fidelity
 mode: single-agent orchestration works natively; multi-agent commands
-(/z-implement-all, /z-panel, /z-consult, /z-gate) are degraded (no subagent
+(/z-execute, /z-panel, /z-consult, /z-gate) are degraded (no subagent
 dispatch) rather than fully blocked.
 
 Injection modes
@@ -117,7 +117,7 @@ z-harness plugin root: `{plugin_root}`
 #: hosts (single-agent transliteration present, subagent dispatch absent).
 _MULTI_AGENT_COMMANDS = frozenset(
     {
-        "z-implement-all",
+        "z-execute",
         "z-panel",
         "z-consult",
         "z-gate",

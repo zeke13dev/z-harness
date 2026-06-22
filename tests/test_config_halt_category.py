@@ -2,7 +2,7 @@
 Tests for halt_category fields on QUESTION_IDS and the resolve-halt-category subcommand.
 
 Cases covered:
-  seven_entries_mapping       — each of the 7 QUESTION_IDS entries returns the expected tag
+  six_entries_mapping         — each of the 6 QUESTION_IDS entries returns the expected tag
   unknown_qid_failsafe        — unknown question_id returns "ask" (fail-safe default)
   untagged_is_failsafe        — a qid with no halt_category (simulated) returns "ask"
   startup_guard_fires         — _run_startup_guards raises SystemExit when a halt_category
@@ -32,32 +32,31 @@ def _run(args: list[str]) -> subprocess.CompletedProcess:
 
 
 class TestHaltCategoryMapping(unittest.TestCase):
-    """The 7 QUESTION_IDS entries map to their specified halt_category tags."""
+    """The 6 QUESTION_IDS entries map to their specified halt_category tags."""
 
     EXPECTED = {
         "workflow.implement_all_proceed": "mechanical_proceed",
         "workflow.review_all_proceed":    "mechanical_proceed",
         "workflow.slug_confirm":          "mechanical_proceed",
         "workflow.plan_decisions_approval": "decision",
-        "workflow.spec_retro_discovery":  "decision",
         "workflow.audit_to_amend":        "risk",
         "workflow.pre_run_cost_gate":     "risk",
     }
 
-    def test_all_seven_entries(self):
+    def test_all_six_entries(self):
         for qid, expected_cat in self.EXPECTED.items():
             with self.subTest(qid=qid):
                 result = _run(["resolve-halt-category", qid])
                 self.assertEqual(result.returncode, 0, msg=result.stderr)
                 self.assertEqual(result.stdout.strip(), expected_cat)
 
-    def test_coverage_is_exactly_seven(self):
-        """Exactly 7 QUESTION_IDS exist — if new ones are added without halt_category,
+    def test_coverage_is_exactly_six(self):
+        """Exactly 6 QUESTION_IDS exist — if new ones are added without halt_category,
         the startup guard (not this test) catches them."""
         # Import the module in-process to read QUESTION_IDS length.
         sys.path.insert(0, str(_REPO_ROOT / "scripts"))
         import config as cfg
-        self.assertEqual(len(cfg.QUESTION_IDS), 7)
+        self.assertEqual(len(cfg.QUESTION_IDS), 6)
 
 
 class TestFailsafeDefault(unittest.TestCase):

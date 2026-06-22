@@ -89,7 +89,7 @@
       "line": 1,
       "symbol": "normalize-task-state.sh",
       "kind": "module",
-      "summary": "Converts [~] markers in TASKS.md to [ ] atomically; called by /z-implement-all when halt-from-ask fires mid-batch so resume re-runs the interrupted task"
+      "summary": "Converts [~] markers in TASKS.md to [ ] atomically; called by /z-execute when halt-from-ask fires mid-batch so resume re-runs the interrupted task"
     },
     {
       "file": "scripts/overnight-preflight.sh",
@@ -198,8 +198,8 @@
     "Preflight now triggers on first step = plan OR research (not just plan); research-build preset will halt if PLAN.md already exists",
     "Z_HARNESS_OVERNIGHT_AUTODECIDE value must be a JSON object string, not comma-separated key=value pairs",
     "Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE is an internal export; visible via config.py inspect-all; do not set manually — the orchestrator overwrites it",
-    "Lock stale threshold defaults to 7200s (2h) because /z-implement-all may not yield control for extended periods; heartbeat fires only at step transitions, not inside Skill calls",
-    "run-status.sh classify for implement-all requires --command implement-all flag because /z-implement-all emits implement_end per task rather than a single chain-end event; classify then also checks TASKS.md checkbox state",
+    "Lock stale threshold defaults to 7200s (2h) because /z-execute may not yield control for extended periods; heartbeat fires only at step transitions, not inside Skill calls",
+    "run-status.sh classify for implement-all requires --command implement-all flag because /z-execute emits implement_end per task rather than a single chain-end event; classify then also checks TASKS.md checkbox state",
     "HEAD SHA mismatch on resume surfaces a CRITICAL warning but proceeds (warn-and-continue, not a hard halt)",
     "z_harness_version in overnight-state.json is stored for record only; it is NOT validated on resume",
     "would_have_asked field in halt envelope is restricted to {default, choices} to prevent leakage of context strings into events.jsonl",
@@ -256,15 +256,14 @@
       "commands/z-uplift.md",
       "commands/z-debug.md",
       "commands/z-brainstorm.md",
-      "commands/z-map.md",
-      "commands/z-plan-light.md"
+      "commands/z-map.md"
     ],
     "workflow.audit_to_amend": [
       "commands/z-audit-plan.md",
       "commands/z-audit-plan-style.md"
     ],
     "workflow.implement_all_proceed": [
-      "commands/z-implement-all.md (halt-resolution gate)"
+      "skills/z-execute/SKILL.md (halt-resolution gate)"
     ],
     "workflow.review_all_proceed": [
       "commands/z-review-all.md (Phase 3.7 proceed gate)"
@@ -276,8 +275,8 @@
   "bench_autonomy_check": {
     "make_target": "bench-autonomy-check",
     "script": "scripts/bench-autonomy-check.sh",
-    "step1": "lint-askuser --strict scoped to commands/z-plan.md and commands/z-implement-all.md; asserts AskUserQuestion callsites are paired with resolve-question or check-no-ask",
-    "step2": "policy coverage assertion: loads z-harness/bench/pier/benchmark-autonomy.yaml via zharness_pier.policy.load_policy; checks every workflow.* gate referenced in z-plan.md, z-implement-all.md, z-implement-next.md is present in policy gates map",
+    "step1": "lint-askuser --strict scoped to commands/z-plan.md and skills/z-execute/SKILL.md; asserts AskUserQuestion callsites are paired with resolve-question or check-no-ask",
+    "step2": "policy coverage assertion: loads z-harness/bench/pier/benchmark-autonomy.yaml via zharness_pier.policy.load_policy; checks every workflow.* gate referenced in z-plan.md, z-execute.md is present in policy gates map",
     "step3": "targeted gate-coverage assertion: for each qid in REQUIRED_IN_POLICY (currently [workflow.pre_run_cost_gate]), checks that the qid is registered in config.py list-question-ids AND is a key in the policy's gates: block; requires PyYAML",
     "policy_path_default": "z-harness/bench/pier/benchmark-autonomy.yaml",
     "policy_path_override_flag": "--policy <path>"

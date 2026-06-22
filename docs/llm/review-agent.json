@@ -58,7 +58,7 @@
       "summary": "Appends AXIOM_READY <diff_path> to stdout when axioms.auto_extract_post_run != 'false' (read via config.py get)"
     },
     {
-      "file": "commands/z-implement-all.md",
+      "file": "skills/z-execute/SKILL.md",
       "line": 818,
       "symbol": "Phase 9",
       "kind": "module",
@@ -86,7 +86,7 @@
     "config"
   ],
   "consumed_by": [
-    "z-implement-all",
+    "z-execute",
     "z-review-all",
     "z-debug"
   ],
@@ -115,7 +115,7 @@
     "subagent timeout has no per-call wall-clock guard in v1; user ctrl-c is the escape",
     "candidate tags must come from docs/llm/TAGS.txt unless free-form is explicitly justified",
     "review_agent_suggest_failed is logged and skipped (iteration continues) -- not a phase abort",
-    "commands/z-implement-all.md, commands/z-review-all.md, commands/z-debug.md are canonical",
+    "skills/z-execute/SKILL.md, commands/z-review-all.md, commands/z-debug.md are canonical",
     "AXIOM_READY controlled by axioms.auto_extract_post_run config key (not Z_HARNESS_AXIOM_EXTRACT env var); 'false' suppresses, any other value enables"
   ],
   "memories": []

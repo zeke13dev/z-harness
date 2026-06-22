@@ -240,8 +240,8 @@
           ],
           "outcome": "SPEC, PLAN, and TASKS written; ready for implementation",
           "next": {
-            "label": "Run /z-implement-all",
-            "command": "/z-implement-all"
+            "label": "Run /z-execute",
+            "command": "/z-execute"
           },
           "sources": {
             "intent": "run_start",
@@ -262,8 +262,8 @@
           "intent": "Fix typo in README heading",
           "outcome": "Halted: scope exceeded light-mode threshold",
           "next": {
-            "label": "Run /z-plan-light",
-            "command": "/z-plan-light"
+            "label": "Run /z-plan",
+            "command": "/z-plan"
           },
           "sources": {
             "intent": "do_run_start",

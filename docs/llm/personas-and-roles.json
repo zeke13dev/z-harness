@@ -22,32 +22,188 @@
   ],
   "confidence": "high",
   "entry_points": [
-    {"file": "scripts/resolve-persona.py", "line": 88, "symbol": "_ROLE_REGISTRY", "kind": "const", "summary": "Maps role names to expected contracts: consultant_primary/secondary->freeform, reviewer->review-verdict, implementer/ideator/consultant/audit_persona->None. 7 roles. Single source of truth for known roles."},
-    {"file": "scripts/resolve-persona.py", "line": 554, "symbol": "cmd_list_personas", "kind": "fn", "summary": "Print JSON array of {name, source_layer, path} -- winner per name only; emits persona_shadowed on collisions."},
-    {"file": "scripts/resolve-persona.py", "line": 594, "symbol": "cmd_where", "kind": "fn", "summary": "Print all layer paths defining a named persona in load order; exits 1 if not found."},
-    {"file": "scripts/resolve-persona.py", "line": 931, "symbol": "cmd_resolve", "kind": "fn", "summary": "Resolve persona/model/runtime triple for (command, role) from merged TOML config; emits chimera event when axes come from >=2 layers."},
-    {"file": "scripts/resolve-persona.py", "line": 993, "symbol": "cmd_list_bindings", "kind": "fn", "summary": "Walk all configured commands and roles and print a JSON tree; accepts --command filter."},
-    {"file": "scripts/resolve-persona.py", "line": 1040, "symbol": "cmd_validate", "kind": "fn", "summary": "Validate all bound personas exist, compatible_roles are known, contract matches role expected_contract. Exits 1 on any violation."},
-    {"file": "scripts/resolve-persona.py", "line": 1137, "symbol": "cmd_read", "kind": "fn", "summary": "Print frontmatter + body of the winning persona file for a given name."},
-    {"file": "scripts/resolve-persona.py", "line": 1208, "symbol": "_enumerate_role_compatible_personas", "kind": "fn", "summary": "Return winning-layer personas compatible with role, excluding explicit exclude_ids. boring-anchor bypasses compatible_roles/contract checks. Filters out any no-persona.md disk file."},
-    {"file": "scripts/resolve-persona.py", "line": 1185, "symbol": "_BORING_ANCHOR_NAME", "kind": "const", "summary": "String constant 'boring-anchor' -- the control persona. Member of random pool (T102); also drawn on forced-control cadence. fallback_empty_pool draws are quarantined."},
-    {"file": "scripts/resolve-persona.py", "line": 1367, "symbol": "_NO_PERSONA_NAME", "kind": "const", "summary": "String constant 'no-persona' -- reserved null baseline sentinel. No disk file; persona_body_path=null. Always prepended to random pool unless --excluded."},
-    {"file": "scripts/resolve-persona.py", "line": 1379, "symbol": "cmd_random_for_role", "kind": "fn", "summary": "random-for-role <role>: enumerate compatible personas (including boring-anchor), prepend no-persona sentinel, apply --exclude, draw uniformly, emit persona_random_selected. Empty pool -> boring-anchor tagged fallback_empty_pool."},
-    {"file": "scripts/resolve-persona.py", "line": 1491, "symbol": "cmd_random_distinct_for_role", "kind": "fn", "summary": "random-distinct-for-role <role> --count=<N>: draw up to N distinct personas without replacement, excluding boring-anchor and no-persona. Graceful underflow. selection_source=random_role_pool_distinct. Backs /z-brainstorm ideator diversity."},
-    {"file": "scripts/resolve-persona.py", "line": 1608, "symbol": "cmd_forced_control", "kind": "fn", "summary": "forced-control <role> [--arm=boring-anchor|no-persona]: return forced-control arm tagged selection_source=forced_control. Emits persona_random_selected. Used on the cadence-Nth attempt."},
-    {"file": "scripts/resolve-persona.py", "line": 1768, "symbol": "cmd_control_counter", "kind": "fn", "summary": "control-counter --increment: atomically read + increment + persist .z-harness/.persona-control-counter (flock-guarded). Returns new integer value."},
-    {"file": "scripts/resolve-persona.py", "line": 537, "symbol": "_detect_and_emit_shadows", "kind": "fn", "summary": "Emits persona_shadowed once per (process, name) for each name defined in more than one layer."},
-    {"file": "scripts/resolve-persona.py", "line": 775, "symbol": "_emit_persona_binding_chimera", "kind": "fn", "summary": "Emits persona_binding_chimera once per (process, command, role) when persona/model/runtime axes come from >=2 config layers."},
-    {"file": "runtime/drivers/_persona_utils.py", "line": 28, "symbol": "parse_persona_file", "kind": "fn", "summary": "Minimal stdlib-only frontmatter parser shared by all per-target persona_export.py modules. Returns (name, frontmatter_text, body); strips leading blank line from body."},
-    {"file": "runtime/drivers/_persona_utils.py", "line": 76, "symbol": "build_portability_header", "kind": "fn", "summary": "Returns a portability comment block (target, native, description) for exported persona files. Used by all four per-target export adapters."},
-    {"file": "runtime/drivers/antigravity/persona_export.py", "line": 36, "symbol": "export_persona", "kind": "fn", "summary": "Export persona to <root>/.agent/personas/<name>.md for Antigravity (agy) target. NATIVE -- agy reads persona files directly from .agent/personas/."},
-    {"file": "runtime/drivers/cursor/persona_export.py", "line": 48, "symbol": "export_persona", "kind": "fn", "summary": "Export persona as .cursor/personas/<name>.mdc context-injection rule for Cursor. NOT NATIVE -- glob attach:'**/*' prepends body as system-prompt prefix."},
-    {"file": "runtime/drivers/codex/persona_export.py", "line": 37, "symbol": "export_persona", "kind": "fn", "summary": "Export persona to prompts/personas/<name>.md for Codex CLI target. NOT NATIVE -- orchestrator concatenates this file as system-prompt prefix at dispatch time."},
-    {"file": "runtime/drivers/claude/persona_export.py", "line": 38, "symbol": "export_persona", "kind": "fn", "summary": "Export persona to personas/<name>.md for Claude subagent target. NOT NATIVE -- injected as system-prompt prefix by Claude subagent dispatcher."},
-    {"file": "z_harness_cli/adapters/antigravity.py", "line": 207, "symbol": "AntigravityAdapter.export_payload", "kind": "fn", "summary": "Globs personas/builtin/*.md (not personas/*.md) and calls export_persona per file; also exports commands/agents/skills. Raises RuntimeError on persona-name collision with workflow ids."},
-    {"file": "z_harness_cli/adapters/cursor.py", "line": 214, "symbol": "CursorAdapter.export_payload", "kind": "fn", "summary": "Globs personas/builtin/*.md and calls cursor export_persona per file; warns if personas/builtin/ missing. Raises RuntimeError on persona-name collision with rule ids."},
-    {"file": "z_harness_cli/adapters/codex.py", "line": 243, "symbol": "CodexAdapter.export_payload", "kind": "fn", "summary": "Globs personas/builtin/*.md and calls codex export_persona per file; raises RuntimeError on persona-name collision with prompts/ ids."},
-    {"file": "z_harness_cli/adapters/claude.py", "line": 160, "symbol": "ClaudeAdapter.export_payload", "kind": "fn", "summary": "Globs personas/builtin/*.md and calls claude export_persona per file; returns ExportResult with fidelity=native."}
+    {
+      "file": "scripts/resolve-persona.py",
+      "line": 88,
+      "symbol": "_ROLE_REGISTRY",
+      "kind": "const",
+      "summary": "Maps role names to expected contracts: consultant_primary/secondary->freeform, reviewer->review-verdict, implementer/ideator/consultant/audit_persona->None. 7 roles. Single source of truth for known roles."
+    },
+    {
+      "file": "scripts/resolve-persona.py",
+      "line": 554,
+      "symbol": "cmd_list_personas",
+      "kind": "fn",
+      "summary": "Print JSON array of {name, source_layer, path} -- winner per name only; emits persona_shadowed on collisions."
+    },
+    {
+      "file": "scripts/resolve-persona.py",
+      "line": 594,
+      "symbol": "cmd_where",
+      "kind": "fn",
+      "summary": "Print all layer paths defining a named persona in load order; exits 1 if not found."
+    },
+    {
+      "file": "scripts/resolve-persona.py",
+      "line": 931,
+      "symbol": "cmd_resolve",
+      "kind": "fn",
+      "summary": "Resolve persona/model/runtime triple for (command, role) from merged TOML config; emits chimera event when axes come from >=2 layers."
+    },
+    {
+      "file": "scripts/resolve-persona.py",
+      "line": 993,
+      "symbol": "cmd_list_bindings",
+      "kind": "fn",
+      "summary": "Walk all configured commands and roles and print a JSON tree; accepts --command filter."
+    },
+    {
+      "file": "scripts/resolve-persona.py",
+      "line": 1040,
+      "symbol": "cmd_validate",
+      "kind": "fn",
+      "summary": "Validate all bound personas exist, compatible_roles are known, contract matches role expected_contract. Exits 1 on any violation."
+    },
+    {
+      "file": "scripts/resolve-persona.py",
+      "line": 1137,
+      "symbol": "cmd_read",
+      "kind": "fn",
+      "summary": "Print frontmatter + body of the winning persona file for a given name."
+    },
+    {
+      "file": "scripts/resolve-persona.py",
+      "line": 1208,
+      "symbol": "_enumerate_role_compatible_personas",
+      "kind": "fn",
+      "summary": "Return winning-layer personas compatible with role, excluding explicit exclude_ids. boring-anchor bypasses compatible_roles/contract checks. Filters out any no-persona.md disk file."
+    },
+    {
+      "file": "scripts/resolve-persona.py",
+      "line": 1185,
+      "symbol": "_BORING_ANCHOR_NAME",
+      "kind": "const",
+      "summary": "String constant 'boring-anchor' -- the control persona. Member of random pool (T102); also drawn on forced-control cadence. fallback_empty_pool draws are quarantined."
+    },
+    {
+      "file": "scripts/resolve-persona.py",
+      "line": 1367,
+      "symbol": "_NO_PERSONA_NAME",
+      "kind": "const",
+      "summary": "String constant 'no-persona' -- reserved null baseline sentinel. No disk file; persona_body_path=null. Always prepended to random pool unless --excluded."
+    },
+    {
+      "file": "scripts/resolve-persona.py",
+      "line": 1379,
+      "symbol": "cmd_random_for_role",
+      "kind": "fn",
+      "summary": "random-for-role <role>: enumerate compatible personas (including boring-anchor), prepend no-persona sentinel, apply --exclude, draw uniformly, emit persona_random_selected. Empty pool -> boring-anchor tagged fallback_empty_pool."
+    },
+    {
+      "file": "scripts/resolve-persona.py",
+      "line": 1491,
+      "symbol": "cmd_random_distinct_for_role",
+      "kind": "fn",
+      "summary": "random-distinct-for-role <role> --count=<N>: draw up to N distinct personas without replacement, excluding boring-anchor and no-persona. Graceful underflow. selection_source=random_role_pool_distinct. Backs /z-brainstorm ideator diversity."
+    },
+    {
+      "file": "scripts/resolve-persona.py",
+      "line": 1608,
+      "symbol": "cmd_forced_control",
+      "kind": "fn",
+      "summary": "forced-control <role> [--arm=boring-anchor|no-persona]: return forced-control arm tagged selection_source=forced_control. Emits persona_random_selected. Used on the cadence-Nth attempt."
+    },
+    {
+      "file": "scripts/resolve-persona.py",
+      "line": 1768,
+      "symbol": "cmd_control_counter",
+      "kind": "fn",
+      "summary": "control-counter --increment: atomically read + increment + persist .z-harness/.persona-control-counter (flock-guarded). Returns new integer value."
+    },
+    {
+      "file": "scripts/resolve-persona.py",
+      "line": 537,
+      "symbol": "_detect_and_emit_shadows",
+      "kind": "fn",
+      "summary": "Emits persona_shadowed once per (process, name) for each name defined in more than one layer."
+    },
+    {
+      "file": "scripts/resolve-persona.py",
+      "line": 775,
+      "symbol": "_emit_persona_binding_chimera",
+      "kind": "fn",
+      "summary": "Emits persona_binding_chimera once per (process, command, role) when persona/model/runtime axes come from >=2 config layers."
+    },
+    {
+      "file": "runtime/drivers/_persona_utils.py",
+      "line": 28,
+      "symbol": "parse_persona_file",
+      "kind": "fn",
+      "summary": "Minimal stdlib-only frontmatter parser shared by all per-target persona_export.py modules. Returns (name, frontmatter_text, body); strips leading blank line from body."
+    },
+    {
+      "file": "runtime/drivers/_persona_utils.py",
+      "line": 76,
+      "symbol": "build_portability_header",
+      "kind": "fn",
+      "summary": "Returns a portability comment block (target, native, description) for exported persona files. Used by all four per-target export adapters."
+    },
+    {
+      "file": "runtime/drivers/antigravity/persona_export.py",
+      "line": 36,
+      "symbol": "export_persona",
+      "kind": "fn",
+      "summary": "Export persona to <root>/.agent/personas/<name>.md for Antigravity (agy) target. NATIVE -- agy reads persona files directly from .agent/personas/."
+    },
+    {
+      "file": "runtime/drivers/cursor/persona_export.py",
+      "line": 48,
+      "symbol": "export_persona",
+      "kind": "fn",
+      "summary": "Export persona as .cursor/personas/<name>.mdc context-injection rule for Cursor. NOT NATIVE -- glob attach:'**/*' prepends body as system-prompt prefix."
+    },
+    {
+      "file": "runtime/drivers/codex/persona_export.py",
+      "line": 37,
+      "symbol": "export_persona",
+      "kind": "fn",
+      "summary": "Export persona to prompts/personas/<name>.md for Codex CLI target. NOT NATIVE -- orchestrator concatenates this file as system-prompt prefix at dispatch time."
+    },
+    {
+      "file": "runtime/drivers/claude/persona_export.py",
+      "line": 38,
+      "symbol": "export_persona",
+      "kind": "fn",
+      "summary": "Export persona to personas/<name>.md for Claude subagent target. NOT NATIVE -- injected as system-prompt prefix by Claude subagent dispatcher."
+    },
+    {
+      "file": "z_harness_cli/adapters/antigravity.py",
+      "line": 207,
+      "symbol": "AntigravityAdapter.export_payload",
+      "kind": "fn",
+      "summary": "Globs personas/builtin/*.md (not personas/*.md) and calls export_persona per file; also exports commands/agents/skills. Raises RuntimeError on persona-name collision with workflow ids."
+    },
+    {
+      "file": "z_harness_cli/adapters/cursor.py",
+      "line": 214,
+      "symbol": "CursorAdapter.export_payload",
+      "kind": "fn",
+      "summary": "Globs personas/builtin/*.md and calls cursor export_persona per file; warns if personas/builtin/ missing. Raises RuntimeError on persona-name collision with rule ids."
+    },
+    {
+      "file": "z_harness_cli/adapters/codex.py",
+      "line": 243,
+      "symbol": "CodexAdapter.export_payload",
+      "kind": "fn",
+      "summary": "Globs personas/builtin/*.md and calls codex export_persona per file; raises RuntimeError on persona-name collision with prompts/ ids."
+    },
+    {
+      "file": "z_harness_cli/adapters/claude.py",
+      "line": 160,
+      "symbol": "ClaudeAdapter.export_payload",
+      "kind": "fn",
+      "summary": "Globs personas/builtin/*.md and calls claude export_persona per file; returns ExportResult with fidelity=native."
+    }
   ],
   "depends_on": [
     "providers-registry",
@@ -64,7 +220,7 @@
     "Builtin personas MUST live in personas/builtin/ -- the personas/ root holds only README.md. All four CLI adapters (antigravity/cursor/codex/claude) glob personas/builtin/*.md; globbing personas/*.md matches zero persona files and exports nothing.",
     "Layer load order is builtin (personas/builtin/) < user-global (~/.config/z-harness/personas/) < repo-local (<repo>/.z-harness/personas/); last definition wins per name. Shadowing emits persona_shadowed once per (process, name).",
     "_ROLE_REGISTRY contains 7 roles: consultant_primary (freeform), consultant_secondary (freeform), reviewer (review-verdict), implementer (None), ideator (None), consultant (None), audit_persona (None). This is the single source of truth for known roles.",
-    "consultant role (contract None): used for 5-panel critique arms in /z-plan and /z-debug AND the measured advisory consult arms in /z-plan-light and /z-audit. Freeform and review-shaped personas both qualify because contract=None means any.",
+    "consultant role (contract None): used for 5-panel critique arms in /z-plan and /z-debug AND the measured advisory consult arm in /z-audit. Freeform and review-shaped personas both qualify because contract=None means any.",
     "audit_persona role (contract None): one persona drawn per z-audit dimension (correctness/perf/cleanliness/design). Builtin pool of 30; must be >=4 (4 dimensions). Finding-oriented personas are appropriate here.",
     "ideator role (contract None): used by /z-brainstorm for distinct persona diversity across ideator arms.",
     "random-distinct-for-role is used for multi-arm distinct draws (panels, dimensions) with selection_source=random_role_pool_distinct. random-for-role is used for single-draw advisory arms with selection_source=random_role_pool.",

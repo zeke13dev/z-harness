@@ -5,7 +5,7 @@
   "source_file": [
     "scripts/session-helpers.sh",
     "agents/context-curator.md",
-    "commands/z-implement-all.md",
+    "skills/z-execute/SKILL.md",
     "scripts/write-handoff.sh"
   ],
   "confidence": "high",
@@ -74,21 +74,21 @@
       "summary": "On persistent failure: write frontmatter-only stub with done_ids_hash from done_set_hash helper (event-independent), overflow: true, empty sections. Stub resume key is valid even when event read failed."
     },
     {
-      "file": "commands/z-implement-all.md",
+      "file": "skills/z-execute/SKILL.md",
       "line": 1015,
       "symbol": "E1 — Resume injection (step 4a)",
       "kind": "module",
       "summary": "After TASKS.md read, before first dispatch: compute CUR_HASH via done_set_hash; read SESSION.md frontmatter via session_frontmatter_field; check pending via next_pending_task helper; use SESSION.md iff schema_version in supported set ('1') AND done_ids_hash==CUR_HASH AND pending non-empty. Inline body via explicit Read; emit session_resumed. Else emit session_resume_skipped {reason: no_session_file|schema_unsupported|done_set_mismatch|no_pending}."
     },
     {
-      "file": "commands/z-implement-all.md",
+      "file": "skills/z-execute/SKILL.md",
       "line": 1196,
       "symbol": "E3 — Curator dispatch at compaction breakpoint",
       "kind": "module",
       "summary": "After compaction_pause emit, before push-notify: dispatch context-curator synchronously with Z_SESSION_CURATOR_TIMEOUT_S (default 120). One inline retry at 2x timeout. Verify returned done_ids_hash against current TASKS.md done-set. On success + hash match: call write-handoff.sh (gated by hermes_enabled), emit /clear & resume. On failure/disabled: emit context_curation_failed, push /compact notice."
     },
     {
-      "file": "commands/z-implement-all.md",
+      "file": "skills/z-execute/SKILL.md",
       "line": 2531,
       "symbol": "E2 — Notable-only breadcrumb (step 8.3b)",
       "kind": "module",

@@ -200,7 +200,7 @@ Capture the exit code. If exit non-zero, also capture the first 80 lines of any 
 
 Only applicable when the verify command is `cargo …` (sandboxed). Maintain a small state file on remote: `~/dev/qt-bot-sandbox/sandbox/<slug>/.build-counter`. Increment per successful build. When counter reaches 10 OR remote disk has <10 GB free (`df -BG /home | awk 'NR==2{print $4}' | tr -d 'G'`), run `cargo clean` in the sandbox before step 4, then reset counter to 0.
 
-Also: at the START of a fresh `/z-implement-all` invocation (caller-signaled via env var `Z_HARNESS_LOCAL_CARGO_CLEAN=1`), run a one-time `cargo clean` on the LOCAL checkout. This is the only local cargo work this agent does.
+Also: at the START of a fresh `/z-execute` invocation (caller-signaled via env var `Z_HARNESS_LOCAL_CARGO_CLEAN=1`), run a one-time `cargo clean` on the LOCAL checkout. This is the only local cargo work this agent does.
 
 ### 6. Telemetry: end event
 
@@ -221,7 +221,7 @@ bash "${PLUGIN_ROOT}/scripts/supervised-run.sh" \
   ssh "<remote-host>" "rm -rf ~/dev/qt-bot-sandbox/sandbox/<slug>/<task-id>/"
 ```
 
-**NEVER delete `~/dev/qt-bot-sandbox/sandbox/<slug>/base/`.** The warm base is shared across all tasks in the slug and is intentionally long-lived. It is reclaimed by the next `/z-implement-all` invocation's first-invocation seed step, not per-task cleanup. Deleting it would force a full cold rsync on the next task.
+**NEVER delete `~/dev/qt-bot-sandbox/sandbox/<slug>/base/`.** The warm base is shared across all tasks in the slug and is intentionally long-lived. It is reclaimed by the next `/z-execute` invocation's first-invocation seed step, not per-task cleanup. Deleting it would force a full cold rsync on the next task.
 
 **Recovery note (orphaned lock):** The base-seeding step guards against concurrent runs via `mkdir ~/dev/qt-bot-sandbox/sandbox/<slug>/.base.lock`. If a runner died between creating that directory and removing it, the lock persists and future invocations will timeout at 600 s. To recover: `ssh <remote-host> 'rmdir ~/dev/qt-bot-sandbox/sandbox/<slug>/.base.lock'`.
 

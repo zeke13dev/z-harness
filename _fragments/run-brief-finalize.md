@@ -202,7 +202,7 @@ Early halt / abort paths often have **no** primary artifact (`FIX.md`, `REPORT.m
 
 **Host command responsibilities on halt:**
 
-1. Still include this fragment before deregister (unless the command is on the registry `skip_brief_on` list, e.g. `/z-implement-all` `compaction_pause` only).
+1. Still include this fragment before deregister (unless the command is on the registry `skip_brief_on` list, e.g. `/z-execute` `compaction_pause` only).
 2. Set a concrete `outcome` when possible: `bash "$RB_SH" set-section --run "$RUN" --section outcome --value "Halted: <reason>"`.
 3. Do not treat missing artifact as skip-brief — finalize produces lite JSON instead.
 

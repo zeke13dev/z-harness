@@ -55,7 +55,7 @@ The invariant: the collision check is a hard prerequisite. The resolver only gov
 
 When the `personas.review_eval` config knob is ON (default ON), an advisory persona reviewer runs in parallel alongside the base Codex reviewer at Phase 8. This arm uses `reviewer_participant=random_arm` and is logged for telemetry only. Its verdict never changes whether Phase 8 passes or fails, and never triggers a retry. Only the base Codex reviewer outcome determines whether the safety gate passes or retries.
 
-This mirrors the advisory eval-reviewer pattern used by `/z-implement-all` and `/z-do`, sharing the same DRY anchor in `commands/z-implement-all.md#ADVISORY-EVAL-REVIEWER`.
+This mirrors the advisory eval-reviewer pattern used by `/z-execute` and `/z-do`, sharing the same DRY anchor in `skills/z-execute/SKILL.md#ADVISORY-EVAL-REVIEWER`.
 
 ## Run Brief integration
 

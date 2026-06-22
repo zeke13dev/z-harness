@@ -1,7 +1,7 @@
 ---
 name: z-audit-plan
 disable-model-invocation: false
-description: Audit a plan's artifacts (SPEC.md, PLAN.md, TASKS.md) before execution. Reality-checks references against the codebase, verifies best practices/design, and runs a cross-LLM adversarial review. Emits PLAN_AUDIT_REPORT.md.
+description: Contract-level audit of a plan's INTENT, grounding assumptions, approach choices, and initial BFS task layer before execution. Reality-checks references against the codebase, verifies best practices/design, and runs a cross-LLM adversarial review. Emits PLAN_AUDIT_REPORT.md. Low-risk plans receive a skip_recommended verdict and route directly to /z-execute.
 argument-hint: "[--slug <slug>]"
 runtime: c1
 driver_features_required:
@@ -10,7 +10,9 @@ driver_features_required:
 unsupported_driver_behavior: explicit_gate
 ---
 
-You are running **z-harness `/z-audit-plan`** — a structured, pre-implementation plan audit pipeline. The output is a comprehensive `PLAN_AUDIT_REPORT.md` (detailing all findings) under `$Z_HARNESS_PLAN_DIR/`.
+You are running **z-harness `/z-audit-plan`** — a structured, pre-implementation plan audit pipeline. The audit scope is **contract-level**: INTENT.md (the frozen intent + not-doing + acceptance checklist), grounding assumptions, approach choices, and the initial BFS task layer. This is NOT a comprehensive SPEC.md/PLAN.md/TASKS.md enumeration — full task-by-task scrutiny is deferred to the per-task reviewer at implementation time. The output is a `PLAN_AUDIT_REPORT.md` (detailing contract-level findings) under `$Z_HARNESS_PLAN_DIR/`.
+
+Low-risk plans skip the multi-phase audit and receive a `skip_recommended` verdict that routes directly to `/z-execute`. See Phase 0 step 8 for the skip-by-recommendation fast-path.
 
 Slug argument (from `$ARGUMENTS`):
 
@@ -200,6 +202,61 @@ Loop prevention: carry forward the latest route chain; if it already has two ent
    ```
    Use the returned concept slugs to retrieve the appropriate `docs/llm/<concept>.json` files as plan-grounding validation guidelines.
 
+8. **Skip-by-recommendation — low-risk fast-path:**
+
+   After completing steps 0–7, evaluate whether the plan qualifies for a skip. A plan is **low-risk** when ALL of the following hold:
+
+   - No public API changes (no new exported functions, types, or CLI flags in the acceptance criteria)
+   - No schema/migration impact (no database table changes, no serialization-format changes)
+   - No cross-module entanglement (changes confined to a single skill dir or a clearly scoped subsystem)
+   - `candidate_files <= 5` (total distinct files referenced across acceptance criteria)
+   - `non_obvious_decisions <= 2` (count of design choices that require non-trivial tradeoff reasoning)
+
+   Evaluate each condition from the INTENT snapshot (frozen INTENT + acceptance checklist + task block). If ANY condition fails, the plan is not low-risk — fall through to Phase 1 normally.
+
+   If ALL conditions hold, emit a `skip_recommended` verdict block to `$BASE/PLAN_AUDIT_REPORT.md`:
+
+   ```markdown
+   # Plan Audit Report — <slug>
+
+   - **Date (UTC):** YYYY-MM-DDTHH:MMZ
+   - **Slug:** <slug>
+   - **Run ID:** <RUN>
+   - **Verdict:** skip_recommended
+
+   ## Skip Rationale
+
+   This plan is classified as low-risk: no public API changes, no schema/migration impact, no
+   cross-module entanglement, candidate_files ≤ 5, non_obvious_decisions ≤ 2. Full multi-phase
+   contract audit skipped. <One-sentence summary of why this specific plan qualifies.>
+
+   ## Recommended next step
+
+   `/z-execute <slug>`
+   ```
+
+   Then log the skip event:
+   ```bash
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" audit_skip_recommended \
+     "$(printf '{"slug":"%s","reason":"low_risk","candidate_files":%d,"non_obvious_decisions":%d}' \
+        "$Z_HARNESS_SLUG" "$CANDIDATE_FILES" "$NON_OBVIOUS_DECISIONS")"
+   ```
+
+   Present the skip summary as a prose chat reply (no popup):
+
+   ```
+   Plan audit for <slug>: skip recommended.
+
+   Full report: $BASE/PLAN_AUDIT_REPORT.md
+
+   This plan is low-risk (no API/schema changes, confined scope, ≤5 files, ≤2 non-obvious
+   decisions). The multi-phase contract audit was skipped.
+
+   Recommended next step: /z-execute <slug>
+   ```
+
+   Then jump to the **Normal-end teardown** in Phase 9 (release + deregister) and `exit 0`. Do NOT run Phases 1–5 for a skip_recommended plan.
+
 ---
 
 ## Phase 1 — Reality Check (Reference Verification)
@@ -228,7 +285,7 @@ if [[ $HB_RC -eq 9 ]]; then
 fi
 ```
 
-Parse `$BASE/SPEC.md` and `$BASE/TASKS.md` to identify factual claims made about the active codebase. Scrutinize these references:
+Parse the contract artifacts — `$BASE/INTENT.md` (or `$BASE/SPEC.md` for legacy plans), grounding assumptions (captured in the handoff or in `$BASE/archive/$RUN/` grounding notes), and the acceptance checklist + initial task layer — to identify factual claims made about the active codebase. Do NOT attempt to enumerate every task in TASKS.md; focus the reality-check on the contract-level claims in the acceptance checklist and the grounding assumptions. Scrutinize these references:
 
 1. **Entities to verify:**
    - **Files & Directories:** Ensure paths described as existing or as preconditions actually exist.
@@ -312,13 +369,12 @@ slug: <slug>
 run_id: <RUN>
 Kernel path: <KERNEL_PATH>
 
-SPEC.md: $BASE/SPEC.md
-PLAN.md: $BASE/PLAN.md
-TASKS.md: $BASE/TASKS.md
+INTENT.md: $BASE/INTENT.md (or $BASE/SPEC.md for legacy plans)
+TASKS.md (initial layer only): $BASE/TASKS.md
 phase1_reality: $BASE/archive/$RUN/phase1-reality.md
 phase2_design: $BASE/archive/$RUN/phase2-design.md
 
-Focus: REALITY CHECK — reference errors in SPEC.md/PLAN.md/TASKS.md. Files that don't exist, symbols that are wrong, config paths that are hallucinated, naming drift, dependency order violations. Compare plan claims against the actual codebase. Be fast and cheap — surface only clear blockers and majors."
+Focus: REALITY CHECK — reference errors in the contract artifacts (INTENT.md, grounding assumptions, acceptance checklist, initial task layer). Files that don't exist, symbols that are wrong, config paths that are hallucinated, naming drift, dependency order violations. Compare contract-level claims against the actual codebase. Do NOT enumerate every TASKS.md task — focus on the acceptance criteria and grounding premises. Be fast and cheap — surface only clear blockers and majors."
 )
 Agent(
   subagent_type="pre-reviewer",
@@ -328,13 +384,12 @@ slug: <slug>
 run_id: <RUN>
 Kernel path: <KERNEL_PATH>
 
-SPEC.md: $BASE/SPEC.md
-PLAN.md: $BASE/PLAN.md
-TASKS.md: $BASE/TASKS.md
+INTENT.md: $BASE/INTENT.md (or $BASE/SPEC.md for legacy plans)
+TASKS.md (initial layer only): $BASE/TASKS.md
 phase1_reality: $BASE/archive/$RUN/phase1-reality.md
 phase2_design: $BASE/archive/$RUN/phase2-design.md
 
-Focus: DESIGN & STYLE — DRY/KISS/SOLID violations, premature abstractions, over-engineering, STYLE.md drift, defensive bloat, security concerns in the plan artifacts. Do NOT check reality references (that's pre-review 1's job). Be fast and cheap — surface only clear blockers and majors."
+Focus: DESIGN & STYLE — DRY/KISS/SOLID violations, premature abstractions, over-engineering, STYLE.md drift, defensive bloat, security concerns in the contract artifacts (INTENT + grounding + approach + initial task layer). Do NOT check reality references (that's pre-review 1's job). Be fast and cheap — surface only clear blockers and majors."
 )
 Agent(
   subagent_type="pre-reviewer",
@@ -344,13 +399,12 @@ slug: <slug>
 run_id: <RUN>
 Kernel path: <KERNEL_PATH>
 
-SPEC.md: $BASE/SPEC.md
-PLAN.md: $BASE/PLAN.md
-TASKS.md: $BASE/TASKS.md
+INTENT.md: $BASE/INTENT.md (or $BASE/SPEC.md for legacy plans)
+TASKS.md (initial layer only): $BASE/TASKS.md
 phase1_reality: $BASE/archive/$RUN/phase1-reality.md
 phase2_design: $BASE/archive/$RUN/phase2-design.md
 
-Focus: LOGIC & COMPLETENESS — logic gaps in the plan, missing edge cases in acceptance criteria, task ordering issues, dependency problems, incomplete spec coverage, unstated assumptions that should be made explicit. Do NOT check reality references or design style (those are pre-review 1/2's jobs). Be fast and cheap — surface only clear blockers and majors."
+Focus: LOGIC & COMPLETENESS — logic gaps in the contract (INTENT + grounding + acceptance checklist + initial task layer), missing edge cases in acceptance criteria, dependency problems, unstated assumptions that should be made explicit. Do NOT attempt full enumeration of TASKS.md. Do NOT check reality references or design style (those are pre-review 1/2's jobs). Be fast and cheap — surface only clear blockers and majors."
 )
 ```
 
@@ -403,7 +457,7 @@ if [[ $HB_RC -eq 9 ]]; then
 fi
 ```
 
-Spawn two consultants in parallel to review the plan's artifacts (`SPEC.md`, `PLAN.md`, `TASKS.md`) and Phase 1/2 audit notes with a highly critical, adversarial mindset:
+Spawn two consultants in parallel to review the plan's contract artifacts (`INTENT.md`, grounding assumptions, acceptance checklist, and initial task layer) and Phase 1/2 audit notes with a highly critical, adversarial mindset. Scope is contract-level — do NOT attempt a full task-by-task enumeration of TASKS.md:
 
 ```
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
@@ -413,7 +467,7 @@ Spawn two consultants in parallel to review the plan's artifacts (`SPEC.md`, `PL
 Agent(
   subagent_type="consultant-primary",
   description="Adversarial plan audit review (Gemini) for <slug>",
-  prompt="MODE: plan-audit-review\n\nSPEC:\n<SPEC.md>\n\nPLAN:\n<PLAN.md>\n\nTASKS:\n<TASKS.md>\n\nReality Check Notes:\n<phase1-reality.md>\n\nDesign Audit Notes:\n<phase2-design.md>\n\nAct as a highly critical, adversarial 'Senior Nitpicker'. Find logic flaws, race conditions, edge cases, missing tests in acceptance criteria, security concerns, style drift, or over-engineering in the plan. Report findings with severity (BLOCKER / MAJOR / MINOR), location, and recommendations."
+  prompt="MODE: plan-audit-review\n\nINTENT:\n<INTENT.md frozen snapshot>\n\nAcceptance checklist:\n<acceptance criteria from INTENT>\n\nInitial task layer:\n<first BFS layer from TASKS.md if present>\n\nReality Check Notes:\n<phase1-reality.md>\n\nDesign Audit Notes:\n<phase2-design.md>\n\nAct as a highly critical, adversarial 'Senior Nitpicker'. Audit at contract level: INTENT + grounding assumptions + approach choices + initial task layer. Do NOT enumerate every task in TASKS.md. Find logic flaws, race conditions, edge cases, missing tests in acceptance criteria, security concerns, style drift, or over-engineering in the plan. Report findings with severity (BLOCKER / MAJOR / MINOR), location, and recommendations."
 )
 Agent(
   subagent_type="consultant-secondary",
@@ -708,7 +762,7 @@ PY
 
    Present `$BRIEF_OUTPUT` as a conversational reply — **no `AskUserQuestion` popup**. If
    `approach_concerns` is empty, the brief has no "Worth your eyes" section; present the
-   "Patched automatically" list and a forward recommendation to proceed to `/z-implement-all`.
+   "Patched automatically" list and a forward recommendation to proceed to `/z-execute`.
    If `approach_concerns` is non-empty, invite the user to reply conversationally (rework / proceed
    / re-plan).
 
@@ -721,27 +775,34 @@ PY
 
    Set `AUDIT_GATE_CHOICE="auto_split"` for the run-brief outcome line.
 
-   **`force_ask` — present the existing 3-way popup (unchanged):**
+   **`force_ask` — prose alignment summary (no popup):**
 
-   <!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the audit
-        gate (Amend Plan / Proceed as-is / Reject & Re-plan) via their native
-        channel when gate decision is force_ask. Silent omission is forbidden.
-        This gate fires ONLY when force_ask is returned by amend-gate-decision.py
-        (i.e. an explicit user preference requests interactive input). -->
-   Present `AskUserQuestion` when `$GATE_DECISION` is `force_ask` only. If `$SOURCE == "conflict"`,
-   add to the question header: `(Note: config says <X>, memory says <Y> — your answer below will be
-   offered as a conflict-resolution write target.)` Pre-select `$DEFAULT` as the recommended option
-   when `$RESULT` is `prefill` (append label suffix: ` (Recommended — your preference)`). Store the
-   chosen option label verbatim in `AUDIT_GATE_CHOICE`:
-   - **Amend Plan (Run z-amend):** Trigger interactive plan amendment to address findings.
-   - **Proceed as-is:** Acknowledge findings as acceptable tradeoffs and start implementation.
-   - **Reject & Re-plan:** Discard current plan artifacts and rerun `/z-plan`.
+   When `$GATE_DECISION` is `force_ask`, emit a prose alignment summary instead of an `AskUserQuestion` popup. This aligns with the user's askuser-modality preference: judgment-call checkpoints use prose, not popups.
 
-   After the user picks an answer: if `$SOURCE == "conflict"` and the chosen answer differs from
-   both config and memory values, surface a one-shot follow-up `AskUserQuestion`: "Record your
-   answer as the new preference? (config / memory:very_strong / memory:strong / no — keep both
-   stored, ask again next time)". Caller writes to config or dispatches `/z-suggest-memory`
-   accordingly.
+   Print the following alignment summary directly as chat output:
+
+   ```
+   Plan audit complete for slug: <$Z_HARNESS_SLUG>
+
+   Full report: $BASE/PLAN_AUDIT_REPORT.md
+
+   Summary:
+   - <$N_FINDINGS> total findings (<$N_BLOCKERS> blockers, <$N_MAJORS> majors)
+   - <$N_AUTO_AMENDED> spec_gap findings auto-amended via /z-amend
+   - <$N_APPROACH_SURFACED> premise_failure concerns surfaced above
+
+   <If N_BLOCKERS > 0: "BLOCKERS found — review the report before proceeding to implementation.
+    Consider running /z-amend to address them, then re-audit.">
+   <If N_BLOCKERS == 0 and N_MAJORS > 0: "No blockers. Review the MAJOR findings above
+    and decide whether to amend before proceeding.">
+   <If N_BLOCKERS == 0 and N_MAJORS == 0: "Clean audit — no blockers or majors.
+    Proceed to /z-execute when ready.">
+
+   Recommended next step: /z-execute <$Z_HARNESS_SLUG>
+   (or /z-amend <$Z_HARNESS_SLUG> to address any findings first)
+   ```
+
+   Set `AUDIT_GATE_CHOICE="force_ask_prose"` for the run-brief outcome line.
 
 2. **Run Brief finalize (before `plan_audit_end`).** Set outcome/next from audit counts and the
    resolved gate choice. Chat render replaces ad-hoc notify/present prose.
@@ -755,14 +816,14 @@ PY
    RB_PY="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-run-brief.py"
 
    case "${AUDIT_GATE_CHOICE:-auto_split}" in
-     auto_split)
-       _RB_NEXT_CMD="/z-implement-all"; _RB_NEXT_LABEL="Proceed to /z-implement-all" ;;
-     "Amend Plan (Run z-amend)"|*amend*)
+     auto_split|force_ask_prose)
+       _RB_NEXT_CMD="/z-execute"; _RB_NEXT_LABEL="Proceed to /z-execute" ;;
+     *amend*)
        _RB_NEXT_CMD="/z-amend"; _RB_NEXT_LABEL="Amend plan via /z-amend" ;;
-     "Reject & Re-plan"|*re-plan*|*replan*)
+     *re-plan*|*replan*)
        _RB_NEXT_CMD="/z-plan"; _RB_NEXT_LABEL="Re-plan via /z-plan" ;;
      *)
-       _RB_NEXT_CMD="/z-implement-all"; _RB_NEXT_LABEL="Proceed to /z-implement-all" ;;
+       _RB_NEXT_CMD="/z-execute"; _RB_NEXT_LABEL="Proceed to /z-execute" ;;
    esac
 
    bash "$RB_SH" set-section --run "$RUN" --section outcome \
@@ -990,7 +1051,7 @@ fi
 | Feature | Used | Gates |
 |---------|------|-------|
 | `subagent` | yes | Phase 0 doc-fetcher Agent(); Phase 3 consultant-primary and consultant-secondary Agent() calls |
-| `ask_user` | yes | Phase 0 multiple-candidates slug selection; Phase 0 claim contention/takeover gate (proceed / abort) and register-failure gate (proceed without coordination / abort); Phases 1–5 lost-claim gate (abort default / continue-uncoordinated) on heartbeat exit 9; Phase 5 audit gate (Amend Plan / Proceed as-is / Reject & Re-plan) — fires only when `amend-gate-decision.py` returns `force_ask`; Phase 9 preference elevation proposal |
+| `ask_user` | yes | Phase 0 multiple-candidates slug selection; Phase 0 claim contention/takeover gate (proceed / abort) and register-failure gate (proceed without coordination / abort); Phases 1–5 lost-claim gate (abort default / continue-uncoordinated) on heartbeat exit 9; **Phase 5 post-audit checkpoint no longer uses AskUserQuestion** — both `auto_split` and `force_ask` paths emit prose alignment summaries (PLAN_AUDIT_REPORT.md path + recommendation); Phase 9 preference elevation proposal |
 | `skill_invoke` | no | — |
 
 Driver support requirements: see frontmatter `driver_features_required`.

@@ -54,7 +54,7 @@
     "Atomic writes only: tmp + os.replace, never partial state"
   ],
   "gotchas": [
-    "Only z-review-all currently writes to tier2-context.json; z-plan and z-implement-all do NOT call append-tier2-context.py despite script supporting --phase plan|implement",
+    "Only z-review-all currently writes to tier2-context.json; z-plan and z-execute do NOT call append-tier2-context.py despite script supporting --phase plan|implement",
     "Significance gate is three-signal OR: consultant_findings, breaking_changes, deviations; all empty = Tier 2 skipped",
     "Tried-and-failed caveat banner required: auto-generated from implementer self-reports, reviewer validation partial",
     "ADR numbering: reads docs/adr/ for max N, allocates N+1; starts at ADR-001 if dir absent",

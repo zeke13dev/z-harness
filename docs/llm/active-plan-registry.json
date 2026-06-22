@@ -7,8 +7,7 @@
     "scripts/plan-path.sh",
     "scripts/migrate-plan-layout.sh",
     "agents/scope-extractor.md",
-    "commands/z-implement-all.md",
-    "commands/z-implement-next.md",
+    "skills/z-execute/SKILL.md",
     "commands/z-plan.md",
     "docs/human/active-plan-registry.md",
     "docs/handoff-parallel-session-safety.md"
@@ -211,39 +210,147 @@
     "_reap_inline() is the wait-for-internal reaper. It is NOT the same callsite as cmd_reap (the subcommand). Both share the same deletion/carve-out policy but _reap_inline takes a pre-resolved active_dir to avoid repeated plan-path.sh subprocess calls in tight poll loops."
   ],
   "events": [
-    {"name": "plan_registered", "emitted_by": "cmd_register", "description": "Run registered successfully."},
-    {"name": "plan_deregistered", "emitted_by": "cmd_deregister", "description": "Run record removed."},
-    {"name": "plan_reaped", "emitted_by": "cmd_reap / _reap_inline", "description": "Dead-local-pid record deleted by reaper."},
-    {"name": "plan_marked_stale", "emitted_by": "cmd_reap / _reap_inline", "description": "Record marked status:stale (remote/unknown-host at 1x threshold, or live-local-pid at 2x threshold)."},
-    {"name": "lease_claimed", "emitted_by": "cmd_claim", "description": "Lease acquired; payload includes claimed paths and any conceded paths with holder_run_id."},
-    {"name": "lease_released", "emitted_by": "cmd_release", "description": "Paths removed from held_paths; payload {run_id, paths}."},
-    {"name": "wait_started", "emitted_by": "cmd_wait_for", "description": "Entering poll loop behind one or more senior peers."},
-    {"name": "wait_cleared", "emitted_by": "cmd_wait_for", "description": "All targets cleared; run resumes (exit 0)."},
-    {"name": "wait_timeout", "emitted_by": "cmd_wait_for", "description": "Budget expired before targets cleared (exit 10). LOUD. Caller must not silently proceed."},
-    {"name": "wait_interrupted", "emitted_by": "cmd_wait_for", "description": "SIGINT/SIGTERM received during wait loop (exit 130). waiting_on always cleared via finally."},
-    {"name": "scope_overlap_detected", "emitted_by": "cmd_overlaps", "description": "Path intersection found between own scope and a peer scope."},
-    {"name": "active_plan_scan_complete", "emitted_by": "cmd_overlaps", "description": "Overlap scan completed; no advisory or blocking overlap found."},
-    {"name": "registry_error", "emitted_by": "multiple", "description": "Non-fatal internal registry error (e.g. missing_record on heartbeat). Always returns 0."},
-    {"name": "base_resolved", "emitted_by": "plan-path.sh z_harness_base", "description": "Base tier resolved and anchor written/validated. Emitted at most once per process via pid-keyed stamp file."},
-    {"name": "base_mismatch_detected", "emitted_by": "plan-path.sh z_harness_base", "description": "Anchor path differs from freshly-resolved path — hard fail before any artifact write."},
-    {"name": "coordination_warning", "emitted_by": "commands/z-implement-all.md phase 5.5 / commands/z-implement-next.md F5 step", "description": "Write-set validation (F5) — an implementer touched an undeclared path that a LIVE peer holds in its held_paths; consumed from overlaps --json held_conflict payload. Review-blocking but advisory; exactly one per colliding (path x peer); zero when uncontended. NOT emitted by active-plan-registry.py itself."},
-    {"name": "plan_migrated", "emitted_by": "migrate-plan-layout.sh safe_move / merge_metrics", "description": "Artifact moved (or metrics merged) from in-repo source to external base. Payload: {item, from, to[, mode:append]}."}
+    {
+      "name": "plan_registered",
+      "emitted_by": "cmd_register",
+      "description": "Run registered successfully."
+    },
+    {
+      "name": "plan_deregistered",
+      "emitted_by": "cmd_deregister",
+      "description": "Run record removed."
+    },
+    {
+      "name": "plan_reaped",
+      "emitted_by": "cmd_reap / _reap_inline",
+      "description": "Dead-local-pid record deleted by reaper."
+    },
+    {
+      "name": "plan_marked_stale",
+      "emitted_by": "cmd_reap / _reap_inline",
+      "description": "Record marked status:stale (remote/unknown-host at 1x threshold, or live-local-pid at 2x threshold)."
+    },
+    {
+      "name": "lease_claimed",
+      "emitted_by": "cmd_claim",
+      "description": "Lease acquired; payload includes claimed paths and any conceded paths with holder_run_id."
+    },
+    {
+      "name": "lease_released",
+      "emitted_by": "cmd_release",
+      "description": "Paths removed from held_paths; payload {run_id, paths}."
+    },
+    {
+      "name": "wait_started",
+      "emitted_by": "cmd_wait_for",
+      "description": "Entering poll loop behind one or more senior peers."
+    },
+    {
+      "name": "wait_cleared",
+      "emitted_by": "cmd_wait_for",
+      "description": "All targets cleared; run resumes (exit 0)."
+    },
+    {
+      "name": "wait_timeout",
+      "emitted_by": "cmd_wait_for",
+      "description": "Budget expired before targets cleared (exit 10). LOUD. Caller must not silently proceed."
+    },
+    {
+      "name": "wait_interrupted",
+      "emitted_by": "cmd_wait_for",
+      "description": "SIGINT/SIGTERM received during wait loop (exit 130). waiting_on always cleared via finally."
+    },
+    {
+      "name": "scope_overlap_detected",
+      "emitted_by": "cmd_overlaps",
+      "description": "Path intersection found between own scope and a peer scope."
+    },
+    {
+      "name": "active_plan_scan_complete",
+      "emitted_by": "cmd_overlaps",
+      "description": "Overlap scan completed; no advisory or blocking overlap found."
+    },
+    {
+      "name": "registry_error",
+      "emitted_by": "multiple",
+      "description": "Non-fatal internal registry error (e.g. missing_record on heartbeat). Always returns 0."
+    },
+    {
+      "name": "base_resolved",
+      "emitted_by": "plan-path.sh z_harness_base",
+      "description": "Base tier resolved and anchor written/validated. Emitted at most once per process via pid-keyed stamp file."
+    },
+    {
+      "name": "base_mismatch_detected",
+      "emitted_by": "plan-path.sh z_harness_base",
+      "description": "Anchor path differs from freshly-resolved path — hard fail before any artifact write."
+    },
+    {
+      "name": "coordination_warning",
+      "emitted_by": "skills/z-execute/SKILL.md phase 5.5",
+      "description": "Write-set validation (F5) — an implementer touched an undeclared path that a LIVE peer holds in its held_paths; consumed from overlaps --json held_conflict payload. Review-blocking but advisory; exactly one per colliding (path x peer); zero when uncontended. NOT emitted by active-plan-registry.py itself."
+    },
+    {
+      "name": "plan_migrated",
+      "emitted_by": "migrate-plan-layout.sh safe_move / merge_metrics",
+      "description": "Artifact moved (or metrics merged) from in-repo source to external base. Payload: {item, from, to[, mode:append]}."
+    }
   ],
   "config_keys": {
     "note": "All registry and wait/lease knobs are ENV-ONLY — read directly from os.environ at use-site in active-plan-registry.py or plan-path.sh. They are NOT TOML config keys and are NOT emitted by config.py export-env. config.py inspect-all surfaces them under the 'env-only' category for discoverability.",
     "base_and_registry": [
-      {"key": "Z_HARNESS_EXTERNAL_DEFAULT", "default": "1", "description": "Controls whether external tiers 2-4 are active. 0 opts out to in-repo behavior (tier 5 only)."},
-      {"key": "Z_HARNESS_BASE_DIR", "default": "(unset)", "description": "Explicit absolute override for artifact base. Bypasses anchor entirely. Must be absolute."},
-      {"key": "Z_HARNESS_REGISTRY_ENABLED", "default": "1", "description": "Set to 0 to make claim, release, wait-for, register, heartbeat, update-scope, overlaps, reap, deregister silent no-ops (for CI). list and session-id still work."},
-      {"key": "Z_HARNESS_REGISTRY_STALE_SECS", "default": "1800", "description": "Seconds after which last_heartbeat is considered stale. Reaper deletes at 2x margin for dead/remote; marks live local pid as stale only (carve-out)."},
-      {"key": "Z_HARNESS_STRICT_OVERLAP", "default": "(unset)", "description": "Set to 1 to make explicit×explicit exact scope-path overlaps a hard halt (exit 20). Does NOT affect held-path conflict behavior."}
+      {
+        "key": "Z_HARNESS_EXTERNAL_DEFAULT",
+        "default": "1",
+        "description": "Controls whether external tiers 2-4 are active. 0 opts out to in-repo behavior (tier 5 only)."
+      },
+      {
+        "key": "Z_HARNESS_BASE_DIR",
+        "default": "(unset)",
+        "description": "Explicit absolute override for artifact base. Bypasses anchor entirely. Must be absolute."
+      },
+      {
+        "key": "Z_HARNESS_REGISTRY_ENABLED",
+        "default": "1",
+        "description": "Set to 0 to make claim, release, wait-for, register, heartbeat, update-scope, overlaps, reap, deregister silent no-ops (for CI). list and session-id still work."
+      },
+      {
+        "key": "Z_HARNESS_REGISTRY_STALE_SECS",
+        "default": "1800",
+        "description": "Seconds after which last_heartbeat is considered stale. Reaper deletes at 2x margin for dead/remote; marks live local pid as stale only (carve-out)."
+      },
+      {
+        "key": "Z_HARNESS_STRICT_OVERLAP",
+        "default": "(unset)",
+        "description": "Set to 1 to make explicit×explicit exact scope-path overlaps a hard halt (exit 20). Does NOT affect held-path conflict behavior."
+      }
     ],
     "wait_and_lease": [
-      {"key": "Z_HARNESS_AUTO_WAIT", "default": "1", "description": "1 = auto-park behind a senior held-path conflict using wait-for with the auto budget. 0 = restore interactive proceed/wait/abort menu for held conflicts."},
-      {"key": "Z_HARNESS_AUTO_WAIT_BUDGET_SECS", "default": "300", "description": "Wall-clock ceiling (seconds) for auto-park mode. On expiry: wait-for exits 10 (LOUD timeout), orchestrator aborts task or prompts user. Distinct from WAIT_TIMEOUT_SECS."},
-      {"key": "Z_HARNESS_WAIT_POLL_SECS", "default": "30", "description": "Seconds between poll iterations inside wait-for. Each iteration beats heartbeat, runs reap inline, and rechecks targets."},
-      {"key": "Z_HARNESS_WAIT_TIMEOUT_SECS", "default": "1800", "description": "Hard ceiling (seconds) for an explicit interactive wait (user selected wait in the overlap menu). Distinct from AUTO_WAIT_BUDGET_SECS."},
-      {"key": "Z_HARNESS_WAIT_REQUIRE_MERGE", "default": "0", "description": "Reserved/deferred. When 1, a target would be cleared only when its branch is an ancestor of HEAD. Not yet wired. Leave at 0."}
+      {
+        "key": "Z_HARNESS_AUTO_WAIT",
+        "default": "1",
+        "description": "1 = auto-park behind a senior held-path conflict using wait-for with the auto budget. 0 = restore interactive proceed/wait/abort menu for held conflicts."
+      },
+      {
+        "key": "Z_HARNESS_AUTO_WAIT_BUDGET_SECS",
+        "default": "300",
+        "description": "Wall-clock ceiling (seconds) for auto-park mode. On expiry: wait-for exits 10 (LOUD timeout), orchestrator aborts task or prompts user. Distinct from WAIT_TIMEOUT_SECS."
+      },
+      {
+        "key": "Z_HARNESS_WAIT_POLL_SECS",
+        "default": "30",
+        "description": "Seconds between poll iterations inside wait-for. Each iteration beats heartbeat, runs reap inline, and rechecks targets."
+      },
+      {
+        "key": "Z_HARNESS_WAIT_TIMEOUT_SECS",
+        "default": "1800",
+        "description": "Hard ceiling (seconds) for an explicit interactive wait (user selected wait in the overlap menu). Distinct from AUTO_WAIT_BUDGET_SECS."
+      },
+      {
+        "key": "Z_HARNESS_WAIT_REQUIRE_MERGE",
+        "default": "0",
+        "description": "Reserved/deferred. When 1, a target would be cleared only when its branch is an ancestor of HEAD. Not yet wired. Leave at 0."
+      }
     ]
   },
   "memories": []

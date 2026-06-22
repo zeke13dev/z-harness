@@ -335,7 +335,6 @@ class TestCompleteness(unittest.TestCase):
             "workflow.implement_all_proceed",
             "workflow.review_all_proceed",
             "workflow.plan_decisions_approval",
-            "workflow.spec_retro_discovery",
             "workflow.pre_run_cost_gate",
             "runtime.consult",
             "runtime.pre_review",

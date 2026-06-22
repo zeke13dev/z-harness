@@ -85,14 +85,14 @@ $ARGUMENTS
 **All paths in subsequent phases live under `z-harness/<root-slug>/`:**
 - `z-harness/<root-slug>/MANIFEST.md`
 - `z-harness/<root-slug>/SHARED-CONCERNS.md`
-- `z-harness/<root-slug>/<cluster-slug>/{SPEC.md,PLAN.md,TASKS.md}` (one per cluster — directory uses the kebab-case `cluster_slug`)
+- `z-harness/<root-slug>/<cluster-slug>/{INTENT.md,MANIFEST.json}` (one per cluster — directory uses the kebab-case `cluster_slug`)
 - `z-harness/<root-slug>/archive/<RUN>/...`
 
 ## Cluster identity (terminology — used consistently below)
 
 Every cluster has **two distinct stable fields**:
 
-- **`cluster_id`** — a short, stable, opaque handle of the form `C1`, `C2`, …, `CN`, assigned in confirmation order. Used in **telemetry payloads** (every event's `cluster_id` field), MANIFEST table's first column, and cross-references in SHARED-CONCERNS.md (`Touched by: <cluster_id> (<task_id>)`). Never used as a path segment.
+- **`cluster_id`** — a short, stable, opaque handle of the form `C1`, `C2`, …, `CN`, assigned in confirmation order. Used in **telemetry payloads** (every event's `cluster_id` field), MANIFEST table's first column, and cross-references in SHARED-CONCERNS.md (`Touched by: <cluster_id> (from MANIFEST.json)`). Never used as a path segment.
 - **`cluster_slug`** — the kebab-case name the user (or the auto-proposer) chose, e.g. `auth-refactor`. Must independently match `^[a-z0-9]+(-[a-z0-9]+)*$` (same validator as the root slug, step 2). Used as the **on-disk directory name** under `z-harness/<root-slug>/<cluster_slug>/`. Never used in telemetry payloads.
 
 Where this doc previously wrote `<cluster-id>` in a filesystem path, read it as `<cluster_slug>`. Where this doc writes a `cluster_id` field in a JSON payload, it is the `C1`/`C2` form. MANIFEST.md rows include both: `ID` column = `cluster_id`, `Path` column = `<root-slug>/<cluster_slug>/`.
@@ -186,14 +186,14 @@ If `--clusters="a,b,c"` was passed in Setup step 10, the proposed name list is t
 <!-- PLAN_ROUTE_CHECK_START -->
 ## Plan Route Check
 
-Run this route check after Phase 1b proposes cluster seams and before user confirmation or writing `proposed-clusters.md`. Preserve the 2-6 cluster invariant: fewer than 2 seams must not continue as `/z-plan-split`, and more than 6 seams must not dispatch cluster-planners without topic narrowing or a coarser split. Use only already-known signals: `cluster_seams`, `expected_tasks`, `terrain_uncertain`, `approach_uncertain`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `candidate_files`, `has_existing_plan`, `plan_validation_intent`, `plan_amend_intent`, `docs_stale_or_drifted`, and the current route chain. Set `plan_validation_intent`/`plan_amend_intent` only when the user re-enters this command on a slug with `SPEC.md`+`PLAN.md`+`TASKS.md` all present (see `agents/planning-router.md` for the language-match heuristic).
+Run this route check after Phase 1b proposes cluster seams and before user confirmation or writing `proposed-clusters.md`. Preserve the 2-6 cluster invariant: fewer than 2 seams must not continue as `/z-plan-split`, and more than 6 seams must not dispatch cluster-planners without topic narrowing or a coarser split. Use only already-known signals: `cluster_seams`, `expected_tasks`, `terrain_uncertain`, `approach_uncertain`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `candidate_files`, `has_existing_plan`, `plan_validation_intent`, `plan_amend_intent`, `docs_stale_or_drifted`, and the current route chain. Set `plan_validation_intent`/`plan_amend_intent` only when the user re-enters this command on a slug with `INTENT.md`+`MANIFEST.json` all present (see `agents/planning-router.md` for the language-match heuristic).
 
 Deterministic routes:
 - If `cluster_seams < 2`, write a route decision to `/z-plan` with `reason_codes: ["too_few_clusters"]`, emit the existing `aborted_too_few_clusters` terminal telemetry, and stop. This hard-refusal branch may use `user_choice: "not_asked"` because continuation would violate the split invariant.
 - If `cluster_seams > 6`, stop before planner dispatch; recommend narrowing the topic or routing to `/z-map` when the excess seams come from unknown terrain (`reason_codes: ["too_many_clusters"]` or `["too_many_clusters","needs_terrain_map"]`).
 - If seams are unknown because terrain or ownership boundaries cannot be cited, route to `/z-map` with `reason_codes: ["needs_terrain_map"]`.
 - If `cluster_seams` is in `2..6` and each seam is independently plannable, stay in `/z-plan-split`.
-- If the request is actually a small concrete fix or medium coherent plan with no independent seams, route to `/z-plan-light` or `/z-plan` using the primary route matrix.
+- If the request is actually a small concrete fix or medium coherent plan with no independent seams, route to `/z-plan` using the primary route matrix.
 
 Call `planning-router` only when the seam count is plausible but conflicting signals make `/z-plan`, `/z-plan-split`, and `/z-map` comparably reasonable. It receives a compact signal payload plus the route chain and is advisory; malformed or unavailable classifier output falls back to deterministic routing or an explicit AskUser choice.
 
@@ -361,7 +361,7 @@ repo-root: <abs path to repo root>
 
 Dispatch (single message, N parallel calls):
 
-<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip all Agent() calls. The cluster-planner subagents produce the per-cluster SPEC/PLAN/TASKS; drivers that skip them must warn the user that cluster planning is unavailable. -->
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip all Agent() calls. The cluster-planner subagents produce the per-cluster INTENT.md + MANIFEST.json (cluster-level INTENT contract + lightweight file-scope manifest); drivers that skip them must warn the user that cluster planning is unavailable. -->
 ```
 Agent(
   subagent_type="cluster-planner",
@@ -415,36 +415,36 @@ If ≥1 cluster is `ready`, proceed to Phase 4 — partial trees are valid.
 
 ## Phase 4 — Reconciliation (file-overlap detection)
 
-**TASKS.md is canonical.** For each `ready` cluster, parse its `TASKS.md` and extract every `**Files:**` line. Build the canonical files-per-cluster set.
+**MANIFEST.json is canonical.** For each `ready` cluster, read its `MANIFEST.json` (the lightweight file-scope manifest written by cluster-planner Phase 5) and parse the flat JSON array of file paths. Build the canonical files-per-cluster set from those paths.
 
-**Validation.** Compare each cluster's TASKS.md-parsed set against the `FILES_TOUCHED` JSON array the cluster-planner returned (the fast-path summary). If they disagree (after path normalization, see below), mark the cluster `failed` and emit:
+**Validation.** Compare each cluster's `MANIFEST.json`-parsed set against the `FILES_TOUCHED` JSON array the cluster-planner returned in its Phase 6 payload (the fast-path summary). If they disagree (after path normalization, see below), mark the cluster `failed` and emit:
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" cluster_files_inconsistent \
-  "$(printf '{"cluster_id":"%s","files_touched_set":%s,"tasks_md_files_set":%s,"mismatch":%s}' \
-     "$CLUSTER_ID" "$FT_JSON" "$TM_JSON" "$DIFF_JSON")"
+  "$(printf '{"cluster_id":"%s","files_touched_set":%s,"manifest_json_files_set":%s,"mismatch":%s}' \
+     "$CLUSTER_ID" "$FT_JSON" "$MJ_JSON" "$DIFF_JSON")"
 ```
 
 Re-evaluate the total-failure gate after any newly-failed cluster. If after Phase 4 file-inconsistency checks **all** clusters are failed, halt exactly as Phase 3 would: emit `cluster_failed` events (already done), then `total_cluster_failure`, then `phase_end` for Phase 4, then `plan_split_run_end` with `status: "total_cluster_failure"`, then exit (no SHARED-CONCERNS.md; minimal MANIFEST with `status: failed`).
 
 **Re-validation cascade (mandatory after any Phase 4 demotion).** Demoting a previously-ready cluster to `failed` invalidates the overlap index that was built from the full ready set. Before writing any Phase 5 artifact, **rebuild the overlap index from scratch using only the clusters whose status is still `ready` after Phase 4 demotions**:
 
-1. Drop the entire in-memory `path → [(cluster_id, task_id, task_title), ...]` index.
-2. Re-iterate the (post-demotion) ready set, re-parse each cluster's `TASKS.md` `**Files:**` lines, re-normalize, and re-insert into a fresh index.
+1. Drop the entire in-memory `path → [(cluster_id, file_path), ...]` index.
+2. Re-iterate the (post-demotion) ready set, re-read each cluster's `MANIFEST.json`, re-normalize each path, and re-insert into a fresh index.
 3. Recompute `overlap_count` (count of paths with ≥2 distinct `cluster_id` entries).
 4. Recompute `partial_tree` (`true` iff any cluster has status != `ready`, which includes the freshly-demoted ones).
 5. Re-emit `overlap_detected` events from the rebuilt index (the prior events from the stale index are now superseded — log a single `overlap_index_rebuilt` event with payload `{"demoted_cluster_ids": [...], "new_overlap_count": <N>}` so the post-run analyzer can reconcile).
 
 Only after the rebuild may Phase 5 write `SHARED-CONCERNS.md`, populate `overlap_count` / `partial_tree`, and set MANIFEST `status`. Skipping the rebuild would write stale overlap data that references files contributed by a now-failed cluster.
 
-**Path normalization (mandatory, applied to BOTH FILES_TOUCHED entries and TASKS.md `**Files:**` entries):**
+**Path normalization (mandatory, applied to BOTH FILES_TOUCHED entries and MANIFEST.json entries):**
 
 1. Strip leading `/` or `./`.
 2. Collapse `.` and `..` segments (e.g. `a/./b` → `a/b`; `a/b/../c` → `a/c`).
 3. Normalize separator to `/`.
-4. **Reject** paths that escape the repo root (`..` walks past origin after collapsing) — log a `precontext_freshness_check_failed`-style event and exclude that path from overlap detection (do not fail the cluster on this alone — only on FILES_TOUCHED↔TASKS.md disagreement).
+4. **Reject** paths that escape the repo root (`..` walks past origin after collapsing) — log a `precontext_freshness_check_failed`-style event and exclude that path from overlap detection (do not fail the cluster on this alone — only on FILES_TOUCHED↔MANIFEST.json disagreement).
 
-After normalization, build the cross-cluster path index: `path → [(cluster_id, task_id, task_title), ...]`.
+After normalization, build the cross-cluster path index: `path → [cluster_id, ...]`.
 
 **Severity heuristics (cascading precedence — first match wins).** Files touched by exactly 1 cluster are severity `none` and **excluded** from SHARED-CONCERNS.md entirely.
 
@@ -483,7 +483,7 @@ partial_tree: <true|false>       # true iff any cluster has status != ready
 
 If `overlap_count: 0`, set `acknowledged: true` in the frontmatter at write time (ack-gate auto-passes). Otherwise leave `acknowledged: false`.
 
-If `partial_tree: true`, set `partial_tree: true` in the frontmatter. This is consumed by `/z-implement-all`'s partial-tree gate (refuses without `--force-partial`).
+If `partial_tree: true`, set `partial_tree: true` in the frontmatter. This is consumed by `/z-execute`'s partial-tree gate (refuses without `--force-partial`).
 
 Body: one block per detected overlap (ordered by descending severity, then by path):
 
@@ -493,8 +493,8 @@ Body: one block per detected overlap (ordered by descending severity, then by pa
 ## Overlap: `<normalized file path>`
 
 Touched by:
-- <cluster-id-1> (<task-ids>): <task title>
-- <cluster-id-2> (<task-ids>): <task title>
+- <cluster-id-1> (from MANIFEST.json)
+- <cluster-id-2> (from MANIFEST.json)
 
 Likely severity: <low | medium | high>
 
@@ -541,13 +541,13 @@ Body:
 
 ## Run order
 
-Clusters execute sequentially in this order under `/z-implement-all`. Cross-cluster task parallelism is v2.
+Clusters execute sequentially in this order under `/z-execute`. Cross-cluster task parallelism is v2.
 
 1. C1 → C2 → C3 → shared (if user runs `/z-plan --slug=<root>/shared/` manually)
 
 ## Shared concerns
 
-See SHARED-CONCERNS.md for detected file-overlap observations (count: <N>). Ack-gate enforced by `/z-implement-all`.
+See SHARED-CONCERNS.md for detected file-overlap observations (count: <N>). Ack-gate enforced by `/z-execute`.
 
 ## Resolved decisions
 
@@ -576,11 +576,11 @@ Split complete: <K>/<N> clusters ready. Overlap count: <M>.
 
 Recommended next:
   1. Read z-harness/<root-slug>/SHARED-CONCERNS.md and flip `acknowledged: true`
-     (or pass --ack to /z-implement-all).
-  2. /z-implement-all   — walks the tree in MANIFEST run-order.
+     (or pass --ack to /z-execute).
+  2. /z-execute   — walks the tree in MANIFEST run-order.
 ```
 
-For the partial-tree branch, the push notification also names the failed clusters and reminds the user that `/z-implement-all` will refuse without `--force-partial` until the failures are addressed (drop the cluster, re-plan it, or override the gate).
+For the partial-tree branch, the push notification also names the failed clusters and reminds the user that `/z-execute` will refuse without `--force-partial` until the failures are addressed (drop the cluster, re-plan it, or override the gate).
 
 **Deregister this run** from the active-plan registry (best-effort, non-fatal). Per the FINALIZE_STATUS rule (Setup step 7): normal completion deregisters with `complete`.
 ```bash
@@ -594,11 +594,11 @@ python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-reg
 
 - **One-level recursion only.** Cluster-planners refuse to write inside an existing MANIFEST.md tree (anti-self-nesting guard); the main thread refuses to write a nested MANIFEST.
 - **2-6 clusters or refuse.** Below 2 → recommend `/z-plan` directly. Above 6 → ask the user to narrow.
-- **TASKS.md is canonical for reconciliation.** `FILES_TOUCHED` is a fast-path summary; mismatch fails the cluster.
+- **MANIFEST.json is canonical for reconciliation.** `FILES_TOUCHED` is a fast-path summary derived from MANIFEST.json; mismatch fails the cluster.
 - **Partial trees are valid.** ≥1 cluster ready → proceed. All clusters failed → halt with `total_cluster_failure`.
 - **No per-leaf cross-LLM consult.** Cost discipline (v1).
 - **Decision-gate halts only the affected cluster.** Siblings continue; re-spawn handles the resolution.
-- **Ack-gate is mandatory.** `/z-implement-all` refuses to walk a tree with `acknowledged: false` (unless `overlap_count: 0` auto-acks).
+- **Ack-gate is mandatory.** `/z-execute` refuses to walk a tree with `acknowledged: false` (unless `overlap_count: 0` auto-acks).
 - **Path normalization applies everywhere.** Strip `./` / leading `/`, collapse `.`/`..`, reject escapes.
 - **Never read `docs/llm/*.json` from main thread.** Always dispatch `doc-fetcher`.
 - **Log everything** via `scripts/log-event.sh`.

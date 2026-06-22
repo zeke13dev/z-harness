@@ -13,7 +13,7 @@ You are running **z-harness `/z-stats`**. Read-only diagnostic. Cheap — uses o
 
 ## Phase 0 — Slug discovery
 
-Same as `/z-implement-all` Phase 0:
+Same as `/z-execute` Phase 0:
 1. Enumerate `$Z_HARNESS_PLAN_DIR/` subdirs with TASKS.md; check legacy flat layout.
 2. If `--slug <slug>` arg present → use it.
 3. If one candidate → use it.
@@ -177,7 +177,7 @@ Always show all seven event kinds in the output, even if their count is zero (ma
 - `wait_cleared` — `wait-for` unblocked successfully (peer released / deregistered)
 - `wait_timeout` — budget/timeout expired before target cleared (LOUD — warrants investigation)
 - `wait_interrupted` — SIGINT/SIGTERM received during a `wait-for` park loop
-- `coordination_warning` — a task wrote an undeclared path that a live peer had leased (F5 backstop; advisory; emitted by the write-set validation step in z-implement-all §5.5 / z-implement-next Phase 2.5)
+- `coordination_warning` — a task wrote an undeclared path that a live peer had leased (F5 backstop; advisory; emitted by the write-set validation step in z-execute §5.5)
 
 If `$METRICS` is absent, print `Coordination events: (no metrics file)`.
 
@@ -211,7 +211,7 @@ Shows every `cost_gate_decision` event: which command triggered the gate, the di
 
 ## Phase 5 — Stalls (post-run gap detection)
 
-Reuse the gap-detection awk from `/z-implement-all` Detecting Stalls section. Flag any gap > 30 min between consecutive same-run events.
+Reuse the gap-detection awk from `/z-execute` Detecting Stalls section. Flag any gap > 30 min between consecutive same-run events.
 
 ## Phase 6 — Plugin version history
 
@@ -220,7 +220,7 @@ jq -r 'select(.kind | test("^(run_start|light_run_start|debug_run_start|test_pla
   | tail -10
 ```
 
-Shows which plugin commit ran each of the recent plans (full `/z-plan`, `/z-plan-light`, `/z-debug`, and `/z-test` all included). If two plans show different `z_harness_version`, that's important context when comparing their stats.
+Shows which plugin commit ran each of the recent plans (`/z-plan`, `/z-debug`, and `/z-test` all included). If two plans show different `z_harness_version`, that's important context when comparing their stats.
 
 ## Phase 7 — Suggested next command
 
@@ -230,11 +230,11 @@ Based on the state, suggest one command:
 |---|---|
 | All tasks `[x]` and no `/z-review-all` ran yet | `/z-review-all` |
 | `/z-review-all` ran and accepted | `/z-maintain-docs` (or `/z-maintain-docs --audit` for cross-LLM verification) |
-| Some tasks `[ ]` and no in-flight halts | `/z-implement-all` |
+| Some tasks `[ ]` and no in-flight halts | `/z-execute` |
 | In-flight halts pending user | "Resolve halts before continuing" (show them) |
-| Plan is fresh (no `task_start` events yet) and `$BASE/TESTS.md` absent | `/z-test` (optional, recommended for risky / financial code) then `/z-implement-all` |
-| Plan is fresh and `$BASE/TESTS.md` present with `Status: drafted` | `/z-implement-all` (will pick up TESTS.md automatically) |
-| No plan / no TASKS.md | `/z-plan` (full feature) or `/z-plan-light` (small fix) or `/z-debug` (existing bug) |
+| Plan is fresh (no `task_start` events yet) and `$BASE/TESTS.md` absent | `/z-test` (optional, recommended for risky / financial code) then `/z-execute` |
+| Plan is fresh and `$BASE/TESTS.md` present with `Status: drafted` | `/z-execute` (will pick up TESTS.md automatically) |
+| No plan / no TASKS.md | `/z-plan` (feature or small fix) or `/z-debug` (existing bug) |
 | Light-mode plan with `FIX.md` and `Status: shipped` | `/z-maintain-docs` if FIX.md "Docs touched" is non-empty |
 | Debug plan with `DEBUG.md ## Post-mortem` action items not yet tasked | "Convert post-mortem action items via the AskUserQuestion path documented in /z-debug Phase 9 (option C seeds a /z-test follow-up)" |
 

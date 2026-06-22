@@ -56,13 +56,13 @@
     "context_files must have at least 1 entry; minItems:1 enforced by schema.",
     "next_step must be non-empty unless status is 'complete'; capped at 2000 chars.",
     "Atomic write always: write to .tmp.<PID> in the same directory then rename; consumer never sees a partial handoff.json.",
-    "write-handoff.sh at the /z-implement-all compaction breakpoint is gated by workflow.hermes_enabled=true; /z-attend calls it unconditionally at yield boundaries.",
+    "write-handoff.sh at the /z-execute compaction breakpoint is gated by workflow.hermes_enabled=true; /z-attend calls it unconditionally at yield boundaries.",
     "A pre-existing handoff.json is overwritten by the producer; the consumer (Hermes or /z-attend) must read and delete before a new one is written."
   ],
   "gotchas": [
     "write-handoff.sh exits non-zero if Z_HARNESS_ATTEND_RESUME=1 but any of the 5 attend vars is empty; /z-attend must set all 5 before calling the script or the yield will fail loudly.",
     "handoff.json path is $Z_HARNESS_PLAN_DIR — NOT repo root or cwd. Orchestrators reading from the wrong path silently miss the file.",
-    "hermes_enabled=false (default) suppresses write-handoff.sh at the /z-implement-all compaction breakpoint. No handoff.json is written for Hermes consumption unless the knob is on.",
+    "hermes_enabled=false (default) suppresses write-handoff.sh at the /z-execute compaction breakpoint. No handoff.json is written for Hermes consumption unless the knob is on.",
     "An unconsumed handoff.json is silently overwritten by the next producer invocation; the prior session's resume data is lost without any warning.",
     "status is always 'clean_break' in write-handoff.sh regardless of actual context state — the context_pressure status is only set by the /z-handoff slash command."
   ],

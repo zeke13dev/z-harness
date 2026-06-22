@@ -4,7 +4,7 @@
 # subagents with elapsed wall time.
 #
 # Designed to be safe to run repeatedly from a second terminal while a /z-plan
-# or /z-implement-all run is in flight. It is purely a reader — no events
+# or /z-execute run is in flight. It is purely a reader — no events
 # emitted, no orchestrator-flow changes, zero LLM token cost.
 #
 # Usage:
@@ -113,7 +113,7 @@ LIFECYCLE_BASES = {
 END_KIND_TO_BASE = {
     "consult": "consult",            # consultant agents post-call summary
     "review": "review",              # reviewer agent post-call summary
-    "task_done": "task",             # /z-implement-all task close
+    "task_done": "task",             # /z-execute task close
     "task_skip": "task",
     "task_halt": "task",
 }

@@ -97,13 +97,12 @@ $ARGUMENTS
 ## Plan Route Check
 
 <!-- PLAN_ROUTE_CHECK_START -->
-Run this check after premise/doc grounding and before writing `approach.md`; run it again before implementation if the file count or decision count grows. `/z-do` may route only to `/z-plan-light`, `/z-plan`, `/z-map`, `/z-brainstorm`, `/z-fix`, or `/z-debug` under the conditions below. It must not route to `/z-plan-split` directly.
+Run this check after premise/doc grounding and before writing `approach.md`; run it again before implementation if the file count or decision count grows. `/z-do` may route only to `/z-plan`, `/z-map`, `/z-brainstorm`, `/z-fix`, or `/z-debug` under the conditions below. It must not route to `/z-plan-split` directly.
 
 Collect only already-known deterministic signals: `candidate_files`, `non_obvious_decisions`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `terrain_uncertain`, `approach_uncertain`, `has_bug_diagnosis`, `has_unknown_bug_symptom`, and `docs_stale_or_drifted`.
 
 Deterministic routes:
-- Route to `/z-plan-light <task>` when this is still a small targeted implementation/fix but exceeds `/z-do` limits: `candidate_files > 3` or `non_obvious_decisions > 0`, while `candidate_files <= 5`, `non_obvious_decisions <= 2`, and there is no cross-module, schema, persistence, public API, or wire-format impact.
-- Route to `/z-plan <task>` when the task has cross-module impact, schema/persistence impact, public API or wire-format impact, more than 5 candidate files, or more than 2 non-obvious decisions.
+- Route to `/z-plan <task>` when this exceeds `/z-do` limits: `candidate_files > 3` or `non_obvious_decisions > 0`, or when the task has cross-module impact, schema/persistence impact, public API or wire-format impact, more than 5 candidate files, or more than 2 non-obvious decisions.
 - Route to `/z-map <topic>` when terrain is uncertain, source facts cannot yet be cited, or this is no-code terrain mapping.
 - Route to `/z-brainstorm <topic>` when terrain is sufficiently known but multiple plausible framings or approaches would materially change the plan.
 - Route to `/z-fix <diagnosis>` only when the user has a concrete bug hypothesis or diagnosis.
@@ -228,7 +227,7 @@ Parse the return (capped at 8 KB, blockers + majors only).
 
 **No blockers/majors** → accept.
 
-**Advisory eval-reviewer.** When `personas.review_eval` is ON (default), an advisory persona reviewer also runs in parallel with the base codex reviewer, per the shared snippet at [## Advisory eval-reviewer (shared snippet)](#ADVISORY-EVAL-REVIEWER) in `commands/z-implement-all.md`. The advisory arm draws a single `random-for-role reviewer` persona (`reviewer_participant=random_arm`), dispatches alongside the base reviewer, and logs its verdict for data-collection only. It is advisory and logged only — it NEVER changes the pass/fail outcome of this phase. Only the base codex reviewer's blockers/majors drive the retry/halt logic above.
+**Advisory eval-reviewer.** When `personas.review_eval` is ON (default), an advisory persona reviewer also runs in parallel with the base codex reviewer, per the shared snippet at [## Advisory eval-reviewer (shared snippet)](#ADVISORY-EVAL-REVIEWER) in `skills/z-execute/SKILL.md`. The advisory arm draws a single `random-for-role reviewer` persona (`reviewer_participant=random_arm`), dispatches alongside the base reviewer, and logs its verdict for data-collection only. It is advisory and logged only — it NEVER changes the pass/fail outcome of this phase. Only the base codex reviewer's blockers/majors drive the retry/halt logic above.
 
 ## Phase 6 — (Optional) end-of-run cross-LLM consult
 

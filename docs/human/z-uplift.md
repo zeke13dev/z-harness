@@ -5,9 +5,9 @@
 
 ## Overview
 
-`/z-uplift` is a bulk codebase quality uplift command for repos adopting z-harness or undergoing periodic cleanup. It decomposes the repository into components (Cargo workspace members, Python packages, JS workspaces, or top-level directories), runs a repo-wide cross-cutting pass to surface global issues (duplicated abstractions, style drift, dead code at module boundaries), dispatches per-component audits across `correctness`, `cleanliness`, and `design` dimensions, and produces per-component `TASKS.md` files that `/z-implement-all --tasks=` can directly consume.
+`/z-uplift` is a bulk codebase quality uplift command for repos adopting z-harness or undergoing periodic cleanup. It decomposes the repository into components (Cargo workspace members, Python packages, JS workspaces, or top-level directories), runs a repo-wide cross-cutting pass to surface global issues (duplicated abstractions, style drift, dead code at module boundaries), dispatches per-component audits across `correctness`, `cleanliness`, and `design` dimensions, and produces per-component `TASKS.md` files that `/z-execute --tasks=` can directly consume.
 
-The command is resumable: it writes a `MANIFEST.md` at `z-harness/plans/<slug>/MANIFEST.md` (see Setup at `commands/z-uplift.md:70`) that tracks each component's state (`pending`, `auditing`, `audited`, `implementing`, `done`, `bailed`, `skipped`). Re-invoking `/z-uplift` with no flags resumes at the next non-terminal state. Between Phases 1 and 2, a **Phase 1.5 pre-fanout cost gate** presents a token-cost estimate and requires user confirmation before fanning out across all components — this gate is skipped on resume paths. Phase 5 (`commands/z-uplift.md:2579`) drives sequential per-component implementation behind AskUser gates. It prints the `/z-implement-all --tasks=` command, marks each component `[i] implementing` in MANIFEST, then exits with a RESUME INSTRUCTION for the user to run the command. On the next invocation, if all TASKS.md rows are `[x]`, the component transitions automatically to `[x] done` without another AskUser.
+The command is resumable: it writes a `MANIFEST.md` at `z-harness/plans/<slug>/MANIFEST.md` (see Setup at `commands/z-uplift.md:70`) that tracks each component's state (`pending`, `auditing`, `audited`, `implementing`, `done`, `bailed`, `skipped`). Re-invoking `/z-uplift` with no flags resumes at the next non-terminal state. Between Phases 1 and 2, a **Phase 1.5 pre-fanout cost gate** presents a token-cost estimate and requires user confirmation before fanning out across all components — this gate is skipped on resume paths. Phase 5 (`commands/z-uplift.md:2579`) drives sequential per-component implementation behind AskUser gates. It prints the `/z-execute --tasks=` command, marks each component `[i] implementing` in MANIFEST, then exits with a RESUME INSTRUCTION for the user to run the command. On the next invocation, if all TASKS.md rows are `[x]`, the component transitions automatically to `[x] done` without another AskUser.
 
 ## Key entry points
 
@@ -30,7 +30,7 @@ The command is resumable: it writes a `MANIFEST.md` at `z-harness/plans/<slug>/M
 ## How it interacts with others
 
 - `/z-audit` — z-uplift uses the same auditor primitives as /z-audit but applies them across every component; /z-audit is for single-component targeted passes
-- `/z-implement-all` — consumed by Phase 5; z-uplift prints the `--tasks=` invocation but does not call it automatically
+- `/z-execute` — consumed by Phase 5; z-uplift prints the `--tasks=` invocation but does not call it automatically
 - `/z-mr-review` — complementary tool for branch-diff review; z-uplift is for full-repo decomposition, not diffs
 - `/z-style-init` — prerequisite gate; z-uplift halts and recommends /z-style-init when STYLE.md is absent
 - `/z-maintain-docs` — Phase 6 recommends /z-maintain-docs when any task carries a `**DOCS:**` line
@@ -55,7 +55,7 @@ MANIFEST states:
 - `[ ] pending` — not yet started
 - `[~] auditing` — audit dispatch in progress (detectable on interrupt)
 - `[a] audited` — REPORT.md + TASKS.md exist; also the state the synthetic `<slug>-cross-cutting` row is written with at Phase 2 Step 6
-- `[i] implementing` — Phase 5 has printed the `/z-implement-all` command and exited; waiting for user to run it; on next invocation, auto-transitions to `[x] done` if TASKS.md is fully done
+- `[i] implementing` — Phase 5 has printed the `/z-execute` command and exited; waiting for user to run it; on next invocation, auto-transitions to `[x] done` if TASKS.md is fully done
 - `[!] bailed: <reason>` — exceeded auto-bail threshold (>30 total findings OR >10 CRIT-HIGH); excluded from implement queue — use `--retry-bailed` to re-attempt, or run `/z-plan` on the component individually
 - `[x] done` — terminal; implementation complete
 - `[s] skipped` — terminal; user-skipped at AskUser gate
@@ -77,9 +77,9 @@ The slug collision hard-check (duplicate slug in `z-harness/plans/`) always runs
 
 ## Phase 5 two-step handoff and auto-completion
 
-Phase 5 cannot autonomously invoke `/z-implement-all`. Its behavior depends on the MANIFEST row state:
+Phase 5 cannot autonomously invoke `/z-execute`. Its behavior depends on the MANIFEST row state:
 
-- **`[a] audited` rows:** AskUser gate per component (proceed / skip / abort). On proceed, Phase 5 marks the row `[i] implementing`, prints the `/z-implement-all --tasks=<path>` command, logs `run_end status: pending_implement`, and **exits**. The user runs the command independently, then re-invokes `/z-uplift`.
+- **`[a] audited` rows:** AskUser gate per component (proceed / skip / abort). On proceed, Phase 5 marks the row `[i] implementing`, prints the `/z-execute --tasks=<path>` command, logs `run_end status: pending_implement`, and **exits**. The user runs the command independently, then re-invokes `/z-uplift`.
 - **`[i] implementing` rows (resume path):** Phase 5 first reads TASKS.md to count pending (`[ ]`) tasks. If `RESUME_PENDING_COUNT == 0`, it automatically transitions to `[x] done` and emits `component_implement_done` — **no AskUser is shown**. If pending tasks remain, it presents an AskUser with options: Resume / Mark as done / Skip / Abort. The "Mark as done" option also verifies zero pending rows before accepting.
 
 This model gives full operator control while being safe to resume after interrupts.

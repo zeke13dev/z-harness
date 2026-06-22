@@ -286,7 +286,7 @@ Agent(
 )
 ```
 
-When `personas.review_eval` is ON (default ON), an advisory persona reviewer also runs in parallel with the Codex reviewer above, per the [Advisory eval-reviewer shared snippet in commands/z-implement-all.md](commands/z-implement-all.md#ADVISORY-EVAL-REVIEWER). The advisory arm uses `reviewer_participant=random_arm` and is logged for telemetry only — its verdict never changes pass/fail and never triggers a retry. Only the base Codex reviewer outcome determines whether Phase 8 passes or retries.
+When `personas.review_eval` is ON (default ON), an advisory persona reviewer also runs in parallel with the Codex reviewer above, per the [Advisory eval-reviewer shared snippet in skills/z-execute/SKILL.md](skills/z-execute/SKILL.md#ADVISORY-EVAL-REVIEWER). The advisory arm uses `reviewer_participant=random_arm` and is logged for telemetry only — its verdict never changes pass/fail and never triggers a retry. Only the base Codex reviewer outcome determines whether Phase 8 passes or retries.
 
 Increment `REVIEW_CYCLES` by 1.
 

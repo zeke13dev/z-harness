@@ -38,8 +38,7 @@ is the standard MCP stdio pattern.
 | Tool name | z-harness command | Description |
 |---|---|---|
 | `z_plan` | `/z-plan` | Run the rigorous z-harness planning pipeline |
-| `z_implement_all` | `/z-implement-all` | Implement ALL pending tasks from TASKS.md with per-task review |
-| `z_implement_next` | `/z-implement-next` | Implement the next pending task and review |
+| `z_implement_all` | `/z-execute` | Implement ALL pending tasks from TASKS.md with per-task review |
 | `z_review_all` | `/z-review-all` | Final-gate cross-LLM review of cumulative diff against SPEC.md |
 | `z_audit` | `/z-audit` | Read-only audit pipeline with cross-LLM review |
 | `z_audit_plan_style` | `/z-audit-plan-style` | Audit plan artifacts for code-quality issues before code is written |
@@ -48,7 +47,6 @@ is the standard MCP stdio pattern.
 | `z_brainstorm` | `/z-brainstorm` | 3-vendor parallel pre-plan ideation with anti-bias check |
 | `z_research` | `/z-research` | Deep research: map + brainstorm + adversarial synthesis panel |
 | `z_map` | `/z-map` | Map terrain with citations and cross-LLM critique |
-| `z_plan_light` | `/z-plan-light` | Lightweight planner for 1-5 file fixes with bundled cross-consult |
 | `z_plan_split` | `/z-plan-split` | Pre-emptive scope splitter — fan-out into N narrow cluster-planners |
 | `z_test` | `/z-test` | Dual-source semantic test-case planner (ERROR_POINTS + INVARIANTS) |
 | `z_amend` | `/z-amend` | Amend an existing plan (SPEC/PLAN/TASKS) preserving completed state |

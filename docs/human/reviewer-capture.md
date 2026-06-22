@@ -23,7 +23,7 @@ The mechanism also covers how both consultant agents emit a `consult_start` even
 
 - `subagent-telemetry` — `log-subagent.sh` is called by all three agents after capture; `response_chars` equals the size of the captured final review (honest), not the discarded transcript
 - `providers-registry` — `resolve-provider.sh` returns `{"provider": "codex"|"gemini"|...}` which gates the file-based path; only `provider == "codex"` triggers `-o`
-- `commands` (z-implement-all, z-review-all, z-plan, z-debug) — orchestrators dispatch these agents and consume the `verdict / blockers / majors / artifact` structured return
+- `commands` (z-execute, z-review-all, z-plan, z-debug) — orchestrators dispatch these agents and consume the `verdict / blockers / majors / artifact` structured return
 - `followup-sink` — reviewer output includes a `**FOLLOWUPS:**` fenced JSON block; orchestrator routes entries via `scripts/parse-followups-block.py` and `scripts/sink-add.sh`
 
 ## Edge cases / gotchas

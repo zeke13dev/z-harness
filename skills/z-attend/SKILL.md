@@ -390,7 +390,7 @@ Step 2.6):
 - `plan` → `z-harness:z-plan`, args = `TASK_DESCRIPTION`
 - `audit` → `z-harness:z-audit-plan`, args = `""`
 - `test` → `z-harness:z-test`, args = `TASK_DESCRIPTION`
-- `implement-all` → `z-harness:z-implement-all`, args = `""`
+- `implement-all` → `z-harness:z-execute`, args = `""`
 - `review-all` → `z-harness:z-review-all`, args = `""`
 - `research` → `z-harness:z-research`, args = `TASK_DESCRIPTION`
 
@@ -552,7 +552,7 @@ for _v in Z_HARNESS_ATTEND_HEAD_SHA Z_HARNESS_ATTEND_PHASE Z_HARNESS_ATTEND_DONE
 done
 ```
 
-Then ensure SESSION.md is current (the existing curator path — same mechanism `/z-implement-all`
+Then ensure SESSION.md is current (the existing curator path — same mechanism `/z-execute`
 uses; if a curator dispatch is in scope, run it here so the human-readable context is fresh), and
 write the token + emit the event + print the resume line + exit:
 

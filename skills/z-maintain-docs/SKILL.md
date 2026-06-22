@@ -362,7 +362,7 @@ If the script exits non-zero, surface the error to the user and halt (do not pro
 
 ## Trigger patterns
 
-- After `/z-implement-all` finalizes, the orchestrator's recommended-next push-notification lists `/z-maintain-docs`.
+- After `/z-execute` finalizes, the orchestrator's recommended-next push-notification lists `/z-maintain-docs`.
 - After `/z-review-all` accepts a plan, same.
 - Standalone: user runs whenever they suspect drift.
 - Could be wired into CI as `claude /z-maintain-docs` (applies by default) if the user wants automated freshness.

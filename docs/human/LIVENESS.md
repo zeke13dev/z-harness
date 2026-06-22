@@ -7,7 +7,7 @@ event log for `*_start` events that have no matching `*_end` and reports them
 as "possibly stuck" with their elapsed wall time.
 
 It emits no events of its own, makes no LLM calls, and is safe to run any
-number of times from a second terminal while a `/z-plan` or `/z-implement-all`
+number of times from a second terminal while a `/z-plan` or `/z-execute`
 run is in flight.
 
 ## Why it exists

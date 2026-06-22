@@ -302,7 +302,7 @@ class TestLogDecision(unittest.TestCase):
                 "option_a",
                 "--options", '["option_a","option_b"]',
                 "--tentative", "option_b",
-                "--source", "z-implement-next",
+                "--source", "z-execute",
                 "--kind", "user_override",
             ],
             cwd=self._tmp_path,
@@ -330,7 +330,7 @@ class TestLogDecision(unittest.TestCase):
         self.assertEqual(ev["tentative"], "option_b")
 
         # source_command propagated
-        self.assertEqual(ev["source_command"], "z-implement-next")
+        self.assertEqual(ev["source_command"], "z-execute")
 
     def test_options_defaults_to_empty_array(self):
         """--options absent → options field is [] in the payload."""

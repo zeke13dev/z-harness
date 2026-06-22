@@ -12,12 +12,48 @@
   ],
   "confidence": "high",
   "entry_points": [
-    {"file": "scripts/detect-host.sh", "line": 21, "symbol": "detect_host()", "kind": "fn", "summary": "Prints claude|pi|codex|cursor|antigravity; first positive-marker wins; claude is unconditional default; never prints unknown or empty"},
-    {"file": "scripts/log-event.sh", "line": 133, "symbol": "host lazy resolution", "kind": "module", "summary": "Z_HARNESS_HOST overrides; else detect-host.sh called once and cached to /tmp/zh-host-$PPID; host stamped on every event; resolve-run-dir read-only subcommand at line 42"},
-    {"file": "scripts/log-subagent.sh", "line": 1, "symbol": "log-subagent.sh", "kind": "module", "summary": "Emits subagent_call event; non-fatal (always exits 0); fields: role, subagent_type, subagent_model, prompt_chars, response_chars, optional provider_*_tokens"},
-    {"file": "scripts/estimate-tokens.py", "line": 408, "symbol": "subagent_costs()", "kind": "fn", "summary": "Per-host, per-subagent_type cost breakdown; weights prompt_chars vs response_chars by per-model rates; labels char-est vs real-tokens; env knobs Z_HARNESS_COST_TAIL_LINES/Z_HARNESS_COST_MIN_SAMPLES"},
-    {"file": "scripts/test_subagent_logging.sh", "line": 1, "symbol": "drift-guard", "kind": "module", "summary": "CI: Part1 pins 5 canonical files (z-implement-all, z-implement-next, reviewer, consultant-primary, consultant-secondary); Part2 scans commands/agents for subagent_type=\"implementer\" — fail if no log-subagent.sh or # no-subagent-log: opt-out"},
-    {"file": "commands/z-stats.md", "line": 95, "symbol": "Phase 3b subagent-costs", "kind": "module", "summary": "Renders estimate-tokens.py subagent-costs output; resolves base_dir explicitly (Phase-D external-base); honest-limitation labeling for char-est vs real-tokens vs mixed"}
+    {
+      "file": "scripts/detect-host.sh",
+      "line": 21,
+      "symbol": "detect_host()",
+      "kind": "fn",
+      "summary": "Prints claude|pi|codex|cursor|antigravity; first positive-marker wins; claude is unconditional default; never prints unknown or empty"
+    },
+    {
+      "file": "scripts/log-event.sh",
+      "line": 133,
+      "symbol": "host lazy resolution",
+      "kind": "module",
+      "summary": "Z_HARNESS_HOST overrides; else detect-host.sh called once and cached to /tmp/zh-host-$PPID; host stamped on every event; resolve-run-dir read-only subcommand at line 42"
+    },
+    {
+      "file": "scripts/log-subagent.sh",
+      "line": 1,
+      "symbol": "log-subagent.sh",
+      "kind": "module",
+      "summary": "Emits subagent_call event; non-fatal (always exits 0); fields: role, subagent_type, subagent_model, prompt_chars, response_chars, optional provider_*_tokens"
+    },
+    {
+      "file": "scripts/estimate-tokens.py",
+      "line": 408,
+      "symbol": "subagent_costs()",
+      "kind": "fn",
+      "summary": "Per-host, per-subagent_type cost breakdown; weights prompt_chars vs response_chars by per-model rates; labels char-est vs real-tokens; env knobs Z_HARNESS_COST_TAIL_LINES/Z_HARNESS_COST_MIN_SAMPLES"
+    },
+    {
+      "file": "scripts/test_subagent_logging.sh",
+      "line": 1,
+      "symbol": "drift-guard",
+      "kind": "module",
+      "summary": "CI: Part1 pins 4 canonical files (z-execute, reviewer, consultant-primary, consultant-secondary); Part2 scans commands/agents for subagent_type=\"implementer\" — fail if no log-subagent.sh or # no-subagent-log: opt-out"
+    },
+    {
+      "file": "commands/z-stats.md",
+      "line": 95,
+      "symbol": "Phase 3b subagent-costs",
+      "kind": "module",
+      "summary": "Renders estimate-tokens.py subagent-costs output; resolves base_dir explicitly (Phase-D external-base); honest-limitation labeling for char-est vs real-tokens vs mixed"
+    }
   ],
   "depends_on": [
     "scripts",
@@ -37,7 +73,7 @@
     "prompt_chars and response_chars are always separate fields; single collapsed est_tokens is never emitted (D9)",
     "provider_input_tokens / provider_output_tokens are optional; absent for native Claude subagents",
     "test_subagent_logging.sh fails CI on any subagent_type=\"implementer\" site without paired log call or explicit opt-out",
-    "5 canonical logging sites pinned (z-implement-all, z-implement-next, reviewer, consultant-primary, consultant-secondary); Part1 regression on removal",
+    "4 canonical logging sites pinned (z-execute, reviewer, consultant-primary, consultant-secondary); Part1 regression on removal",
     "subagent_call events land in repo-wide metrics.jsonl at external base root; /z-stats Phase 3b must resolve base_dir explicitly"
   ],
   "gotchas": [

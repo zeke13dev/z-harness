@@ -26,7 +26,7 @@
 #     implement_all_halt, slug_collision_halt, overnight_lock_corrupt
 #   ERROR events (pattern): *_error or "fatal"
 #
-# /z-implement-all special case (--command implement-all):
+# /z-execute special case (--command implement-all):
 #   Clean only when BOTH:
 #     (a) last event kind ∈ {implement_end, compaction_pause}
 #     (b) every task in $BASE/TASKS.md is [x] or [~]
@@ -281,7 +281,7 @@ cmd_classify() {
   local kind
   kind="$(event_kind "$last_event")"
 
-  # /z-implement-all special case
+  # /z-execute special case
   if [[ "$command_name" == "implement-all" ]]; then
     # First check for halt events (takes priority)
     case "$kind" in

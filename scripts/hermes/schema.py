@@ -42,7 +42,7 @@ class WorkstreamsManifest:
     """Top-level workstreams.json schema."""
     protocol: str                        # "hermes-v1"
     slug: str                            # Plan identifier
-    source: str                          # "/z-plan-split" | "/z-plan" | "/z-plan-light"
+    source: str                          # "/z-plan-split" | "/z-plan"
     generated_at: str                    # ISO 8601 UTC
     partial_tree: bool                   # True if any workstream has status "failed"
     scope_unknown: bool = False          # True when ≥1 task block had no parseable **Files:** line

@@ -124,7 +124,7 @@ Their behavior by role:
 |------|----------|--------------------|
 | `consultant_primary` | `/z-plan` Phase 3 | Skips the external consult entirely; logs `{"phase":3,"reason":"Z_HARNESS_CONSULT=off"}` |
 | `consultant_secondary` | `/z-plan` Phase 7 | Skips the external consult entirely; logs `{"phase":7,"reason":"Z_HARNESS_CONSULT=off"}` |
-| `reviewer` | `/z-implement-all` review gate | Replaces external reviewer with a same-model self-review (`self-reviewer` agent subagent) |
+| `reviewer` | `/z-execute` review gate | Replaces external reviewer with a same-model self-review (`self-reviewer` agent subagent) |
 
 The `self-reviewer` agent (`agents/self-reviewer.md`) is a read-only
 inspection agent.  It produces the same response shape as the standard

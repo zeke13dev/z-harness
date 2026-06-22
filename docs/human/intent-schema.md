@@ -7,7 +7,7 @@
 
 `intent-schema.py` is the schema validation and mutation engine for the two INTENT-mode artifacts: `INTENT.md` (the frozen plan contract) and `LEDGER.md` (the append-only realization trail). It enforces frontmatter requirements, validates required Markdown sections per depth level, lints acceptance criteria for non-observable language, stamps the freeze timestamp, re-opens a frozen contract for amendment, bootstraps a fresh ledger, and performs the BFS termination check (per-criterion `met|unmet|unknown` + overall `done|continue` verdict).
 
-`session-helpers.sh` is a pure query helper layer for TASKS.md and SESSION.md artifacts. It computes the done-set hash used as the resume key in `/z-implement-all`, finds the next dependency-eligible pending task, reads SESSION.md frontmatter fields, and surfaces the last `context_curated` event timestamp from the metrics log. It also wraps `intent-schema.py validate-intent` as the callable `validate_intent` shell function used by commands and agents. All functions are stdout-only, exit 0, and have no side effects.
+`session-helpers.sh` is a pure query helper layer for TASKS.md and SESSION.md artifacts. It computes the done-set hash used as the resume key in `/z-execute`, finds the next dependency-eligible pending task, reads SESSION.md frontmatter fields, and surfaces the last `context_curated` event timestamp from the metrics log. It also wraps `intent-schema.py validate-intent` as the callable `validate_intent` shell function used by commands and agents. All functions are stdout-only, exit 0, and have no side effects.
 
 ## Key entry points
 
@@ -26,9 +26,9 @@
 
 ## How it interacts with others
 
-- `adaptive-intent` — the primary consumer; `freeze_intent`, `bootstrap_ledger`, `evaluate_acceptance`, and `reopen_intent` are all called from `/z-implement-all` and `/z-amend` during the INTENT-mode BFS loop
-- `commands` — `/z-plan`, `/z-implement-all`, and `/z-amend` shell-invoke `intent-schema.py` directly for freeze, lint, validate, and evaluate-acceptance; `/z-implement-all` also calls session-helpers for `done_set_hash`, `next_pending_task`, `session_frontmatter_field`, and `last_curated_marker`
-- `session-handoff` — `session-helpers.sh` is the shared hash contract between the context-curator agent (writer) and `/z-implement-all` (reader); both MUST use `done_set_hash` via the helper rather than re-implementing it inline
+- `adaptive-intent` — the primary consumer; `freeze_intent`, `bootstrap_ledger`, `evaluate_acceptance`, and `reopen_intent` are all called from `/z-execute` and `/z-amend` during the INTENT-mode BFS loop
+- `commands` — `/z-plan`, `/z-execute`, and `/z-amend` shell-invoke `intent-schema.py` directly for freeze, lint, validate, and evaluate-acceptance; `/z-execute` also calls session-helpers for `done_set_hash`, `next_pending_task`, `session_frontmatter_field`, and `last_curated_marker`
+- `session-handoff` — `session-helpers.sh` is the shared hash contract between the context-curator agent (writer) and `/z-execute` (reader); both MUST use `done_set_hash` via the helper rather than re-implementing it inline
 - `agents` — `task-tree-generator` documents that its TASKS.md output format must be parseable by `session-helpers.sh`; `context-curator` explicitly calls `done_set_hash` and `next_pending_task` via the helper
 
 ## Edge cases / gotchas

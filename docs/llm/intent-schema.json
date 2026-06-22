@@ -33,7 +33,7 @@
   ],
   "invariants": [
     "evaluate_acceptance conservative invariant: unknown treated as unmet; VERDICT:done only when every criterion is STATUS_MET",
-    "done_set_hash must be called via session-helpers.sh by both writer (context-curator) and reader (z-implement-all) — never re-implemented inline",
+    "done_set_hash must be called via session-helpers.sh by both writer (context-curator) and reader (z-execute) — never re-implemented inline",
     "freeze_intent is idempotent: already-frozen INTENT.md returns (False, existing_ts) without modification",
     "reopen_intent operates only on the frontmatter block; body text with matching 'frozen_at:' lines is never touched",
     "bootstrap_ledger is creation-only: existing LEDGER.md with any content is left untouched",

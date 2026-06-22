@@ -7,7 +7,7 @@
 
 Tier 1 is the per-task mechanical doc sync layer of the two-tier automatic doc maintenance system. A Haiku subagent (labeled "Flash-tier" in the plan, but pinned to `model: haiku` in Claude Code) reads the task diff and applies surgical updates to machine-truth fields in `<!-- AUTO-START -->` / `<!-- AUTO-END -->` delimited sections of human-tier and LLM-tier documentation. The core principle is: the diff IS the spec — no reasoning, no prose writing, only pattern-matching diff additions and removals against known machine-truth sections.
 
-Tier 1 is dispatched automatically from `/z-implement-all` after each task's reviewer passes. Updated docs are staged under `$Z_HARNESS_PLAN_DIR/tier1-staged/<concept>/` and reconciled into `docs/` after all tasks complete via `scripts/reconcile-tier1-staged.py`. The agent is constrained to `Read, Grep, Glob, Write, Bash` tools only — it does not have access to Agent() and cannot spawn sub-subagents.
+Tier 1 is dispatched automatically from `/z-execute` after each task's reviewer passes. Updated docs are staged under `$Z_HARNESS_PLAN_DIR/tier1-staged/<concept>/` and reconciled into `docs/` after all tasks complete via `scripts/reconcile-tier1-staged.py`. The agent is constrained to `Read, Grep, Glob, Write, Bash` tools only — it does not have access to Agent() and cannot spawn sub-subagents.
 
 ## Key entry points
 
@@ -23,7 +23,7 @@ Tier 1 is dispatched automatically from `/z-implement-all` after each task's rev
 
 ## How it interacts with others
 
-- **z-implement-all** — Dispatches `tier1-doc-updater` (Haiku) per task after the reviewer passes; runs `reconcile-tier1-staged.py` in Finalize phase.
+- **z-execute** — Dispatches `tier1-doc-updater` (Haiku) per task after the reviewer passes; runs `reconcile-tier1-staged.py` in Finalize phase.
 - **doc-updater** — Tier 1 handles per-task mechanical sync; `doc-updater` (Sonnet) is the deep-clean agent for `/z-maintain-docs` full concept refreshes.
 - **tier2-doc-rationale** — Sibling system; Tier 2 handles narrative docs (ADRs, design rationale, migration guides) accumulated from plan/implement/review context. `tier2-doc-rationale` depends on `tier1-doc-updater`.
 - **INDEX.json** — Used for file-to-concept reverse lookup during Tier 1 dispatch (`source_files` and `source_file` arrays).

@@ -91,7 +91,7 @@
       "line": 1,
       "symbol": "context-curator",
       "kind": "module",
-      "summary": "Haiku subagent that folds events.jsonl delta + git diff + TASKS.md + prior SESSION.md into bounded SESSION.md handoff at /z-implement-all batch breakpoint."
+      "summary": "Haiku subagent that folds events.jsonl delta + git diff + TASKS.md + prior SESSION.md into bounded SESSION.md handoff at /z-execute batch breakpoint."
     },
     {
       "file": "agents/doc-fetcher.md",
@@ -394,14 +394,14 @@
     "expected_contract mismatch: binding a persona with contract: review-verdict or contract: strict-json to consultant_primary or consultant_secondary roles fails resolve-persona.py validate.",
     "expected_contract mismatch: binding a persona with contract: freeform to reviewer or self-reviewer role fails resolve-persona.py validate.",
     "Personas that omit the contract field pass all role contract checks -- contract is optional in persona definitions.",
-    "scope-extractor: brace-expanded paths like commands/{z-plan,z-plan-light}.md are expanded to explicit entries; paths with * or ? are emitted as broad confidence.",
+    "scope-extractor: brace-expanded paths like skills/{z-plan,z-fix}/SKILL.md are expanded to explicit entries; paths with * or ? are emitted as broad confidence.",
     "axiom-extractor: --historical mode is CPU/token-heavy; only invoke when the caller explicitly passed mode: historical.",
     "tier1-doc-updater reads diff only; never reads full source files beyond what's needed to find target in doc.",
     "tier1-doc-updater stages to $Z_HARNESS_PLAN_DIR/tier1-staged/<concept>/; reconciliation script handles final merge.",
     "tier1-doc-updater: concept doc missing AUTO-START markers -> logged in NOTES, concept skipped.",
     "pre-reviewer never blocks; real reviewers get final say. Pre-reviewer findings are advisory only.",
     "pre-reviewer runs up to 3 in parallel; gated by Z_HARNESS_PRE_REVIEW=1 env var.",
-    "context-curator: outputs bounded SESSION.md; mechanical only; dispatched at /z-implement-all batch breakpoint.",
+    "context-curator: outputs bounded SESSION.md; mechanical only; dispatched at /z-execute batch breakpoint.",
     "ideator-clusterer is only dispatched when WIDE_N > 3 (wide mode). For WIDE_N <= 3, the orchestrator presents raw framings directly. If ideator-clusterer fails or returns K=0, the orchestrator falls back to presenting N raw framings.",
     "ideator-clusterer operates on the divergence axis (N peer framings, same topic); it is distinct from scope-reconciler-brainstorm which operates on the chunk axis (sub-topics in scope).",
     "ideator-clusterer must reproduce representative member framing blocks verbatim; paraphrasing introduces bias.",

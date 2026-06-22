@@ -2,7 +2,7 @@
 # Wrap a phase with start/end telemetry events.
 #
 # This is a thin sugar layer over log-event.sh so subagents can emit the
-# `*_start` and `*_end` event kinds the z-implement-all spec mandates,
+# `*_start` and `*_end` event kinds the z-execute spec mandates,
 # without each agent having to hand-roll `T0=$(date +%s%3N)` timing.
 #
 # Usage (two forms):

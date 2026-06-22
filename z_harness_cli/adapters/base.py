@@ -269,7 +269,7 @@ class HostAdapter(Protocol):
 # query API.  Adapters (T008–T011) fill their own tier declarations.
 #
 # Known /z-* command families (seed list; adapters extend as needed):
-#   z-plan, z-implement, z-implement-all, z-review, z-test, z-audit,
+#   z-plan, z-implement, z-execute, z-review, z-test, z-audit,
 #   z-export, z-update, z-doctor, z-status, z-brainstorm, z-consult,
 #   z-panel, z-gate, z-maintain-docs
 
@@ -283,7 +283,7 @@ COMMAND_CAPABILITY_MATRIX: dict[str, dict[str, CommandTier]] = {
 KNOWN_COMMANDS: tuple[str, ...] = (
     "z-plan",
     "z-implement",
-    "z-implement-all",
+    "z-execute",
     "z-review",
     "z-test",
     "z-audit",

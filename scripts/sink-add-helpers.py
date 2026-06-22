@@ -145,7 +145,7 @@ def content_hash(name: str, recommended_command: str, source_artifact: str = "")
 
     Only ``name`` and ``recommended_command`` participate in the hash so that the
     same logical follow-up is deduplicated regardless of which artifact surfaced it
-    (e.g. a per-task diff.patch from z-implement-next Phase 3.5 vs. the cumulative
+    (e.g. a per-task diff.patch from z-execute Phase 3.5 vs. the cumulative
     findings.md from z-review-all Phase 3.7.5).  ``source_artifact`` is accepted for
     call-site compatibility but is intentionally excluded from the hash computation.
 
@@ -266,7 +266,7 @@ def validate_recommended_command(cmd: str) -> str | None:
     if not cmd_pattern.match(cmd):
         return (
             f"--recommended-command must start with '/z-' followed by kebab-case word "
-            f"(e.g. /z-do, /z-implement-next), got: {cmd!r} (rule 1)"
+            f"(e.g. /z-do, /z-execute), got: {cmd!r} (rule 1)"
         )
 
     # Rule 6: shell parseability sanity check (shlex.split raises on malformed quoting)

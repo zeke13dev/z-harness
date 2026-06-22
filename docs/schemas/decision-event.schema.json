@@ -55,7 +55,7 @@
         {"type": "string"},
         {"type": "null"}
       ],
-      "description": "The slash command or script that emitted this event (e.g. z-plan, z-implement-next), or null when not provided."
+      "description": "The slash command or script that emitted this event (e.g. z-plan, z-execute), or null when not provided."
     },
     "event_id": {
       "type": "string",

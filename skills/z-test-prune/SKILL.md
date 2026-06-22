@@ -1,7 +1,7 @@
 ---
 name: z-test-prune
 disable-model-invocation: false
-description: Read-only test-suite pruning planner complementing /z-test. Scans an existing test suite, classifies prunable tests under a four-category rubric with hard keep-guards, runs a mandatory cross-LLM adversarial defend-pass, and emits TEST-PRUNE.md (a TASKS.md-shaped promotion artifact). Never deletes tests; user curates and applies via /z-implement-all --tasks=...TEST-PRUNE.md.
+description: Read-only test-suite pruning planner complementing /z-test. Scans an existing test suite, classifies prunable tests under a four-category rubric with hard keep-guards, runs a mandatory cross-LLM adversarial defend-pass, and emits TEST-PRUNE.md (a TASKS.md-shaped promotion artifact). Never deletes tests; user curates and applies via /z-execute --tasks=...TEST-PRUNE.md.
 argument-hint: "[--path <glob>] [--base <ref>] [--coverage <report>] [--test-results <report>] [--slug <slug>]"
 runtime: c1
 driver_features_required:
@@ -24,7 +24,7 @@ $ARGUMENTS
 - `TEST-PRUNE.md` is both the evidence summary and the promotion artifact: each surviving prune candidate is emitted as a task-shaped block that the user can delete before applying survivors.
 - This command uses a single confidence rank (High / Med / Low) per prune action — there is no P0-P4 severity axis (a deletion has no bug blast-radius to rank).
 
-`TEST-PRUNE.md` is intentionally separate from any canonical plan `TASKS.md`. Users apply survivors with `/z-implement-all --tasks=<plan-dir>/TEST-PRUNE.md`; the implementation orchestrator treats that path as the task queue and deletes the listed tests.
+`TEST-PRUNE.md` is intentionally separate from any canonical plan `TASKS.md`. Users apply survivors with `/z-execute --tasks=<plan-dir>/TEST-PRUNE.md`; the implementation orchestrator treats that path as the task queue and deletes the listed tests.
 
 ## Argument parsing
 
@@ -425,7 +425,7 @@ The orchestrator classifies each test from the merged cluster summaries. The fou
 **Confidence tier (the SINGLE rank per prune action — no separate severity axis):**
 
 - `High` — multiple independent signals converge; keep-guard check passed; redundancy confirmed by coverage tool (for category 3). Safe to action without further review.
-- `Med` — signals are suggestive but not conclusive; category-3 redundancy without coverage confirmation. Medium and Low confidence proposals are NEVER auto-acted upon; user must individually confirm before `/z-implement-all` applies them.
+- `Med` — signals are suggestive but not conclusive; category-3 redundancy without coverage confirmation. Medium and Low confidence proposals are NEVER auto-acted upon; user must individually confirm before `/z-execute` applies them.
 - `Low` — single weak signal; judgment call.
 
 ### Step 3b — Draft prune candidates
@@ -565,9 +565,9 @@ consult_available: <true|false>
 
 Pruning candidates ranked by confidence. **Delete any candidate you don't want removed.** Then:
 
-  /z-implement-all --tasks=<SLUG_DIR>/TEST-PRUNE.md
+  /z-execute --tasks=<SLUG_DIR>/TEST-PRUNE.md
 
-**IMPORTANT:** After applying, run the full test suite. If it goes red, the prune was wrong — revert the deletion. This leverages /z-implement-all + /z-review-all's existing final-suite gate; no new mechanism is needed.
+**IMPORTANT:** After applying, run the full test suite. If it goes red, the prune was wrong — revert the deletion. This leverages /z-execute + /z-review-all's existing final-suite gate; no new mechanism is needed.
 
 Med/Low-confidence candidates require individual review before applying. Do NOT bulk-apply Med or Low candidates.
 
@@ -686,7 +686,7 @@ Results: <SLUG_DIR>/TEST-PRUNE.md
   Run ID: <RUN>
 
 Delete candidates you don't want removed, then:
-  /z-implement-all --tasks=<SLUG_DIR>/TEST-PRUNE.md
+  /z-execute --tasks=<SLUG_DIR>/TEST-PRUNE.md
 
 After applying: run the full suite. Red means the prune was wrong — revert.
 ```

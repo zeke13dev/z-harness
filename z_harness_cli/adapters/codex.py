@@ -1,7 +1,7 @@
 """Codex host adapter — fidelity: flattened.
 
 Codex CLI (OpenAI ``codex``) runs z-harness commands as a single-agent
-transliteration.  Multi-agent orchestration (/z-implement-all, /z-panel,
+transliteration.  Multi-agent orchestration (/z-execute, /z-panel,
 /z-consult, /z-gate) is absent at this fidelity tier.
 
 Injection modes
@@ -141,7 +141,7 @@ Run `z-harness export --host codex` to populate the full prompt library.
 #: Commands that require multi-agent orchestration — blocked on flattened hosts.
 _MULTI_AGENT_COMMANDS = frozenset(
     {
-        "z-implement-all",
+        "z-execute",
         "z-panel",
         "z-consult",
         "z-gate",

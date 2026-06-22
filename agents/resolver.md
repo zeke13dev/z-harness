@@ -45,7 +45,7 @@ When the resolver returns `result: "defer-to-sink"`, the orchestrator **must not
 
 A registered question maps to `defer-to-sink` when its config/env value is set to `"defer-to-sink"` in RESULT_MAP. Any future question_id whose orchestrator contract says "if out-of-scope, park it for later" should map one of its choices to this result.
 
-The canonical use case is **spec-retro discoveries**: if the implementer surfaces an out-of-current-SPEC finding during Phase 4 of `/z-implement-next`, the resolver can return `defer-to-sink` to route the finding to the project follow-up sink instead of triggering an in-run SPEC.md edit.
+The intended use case is parking an **out-of-scope discovery**: when a question surfaces a finding outside the current run's contract, the resolver can return `defer-to-sink` to route the finding to the project follow-up sink instead of triggering an in-run edit.
 
 ### Envelope shape for `defer-to-sink`
 
@@ -88,10 +88,11 @@ When the orchestrator receives `result: "defer-to-sink"`, it must:
 
 `defer-to-sink` is a **result-domain** value, not an option-domain value. It does not appear in `VALIDATORS` or `QUESTION_IDS[id]["choices"]`. It appears only in `RESULT_MAP` as the target of a mapping from a registered option-domain value.
 
-Example: `workflow.spec_retro_discovery` with choices `{ask, defer_to_sink_p2}` maps to:
+Example: a future question `workflow.<some_discovery>` with choices `{ask, defer_to_sink_p2}` would map to:
 ```python
-("workflow.spec_retro_discovery", "defer_to_sink_p2"): "defer-to-sink",
+("workflow.<some_discovery>", "defer_to_sink_p2"): "defer-to-sink",
 ```
+(No registered question currently maps to `defer-to-sink`; the result class stays available for future use.)
 
 ### Error handling
 

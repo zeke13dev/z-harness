@@ -28,12 +28,9 @@ scripts/config.py. They are identified by grepping for jq .result / .default /
   commands/z-review-all.md              result,        SOURCE == "conflict"
                                         default,       (UI note only)
                                         source
-  commands/z-implement-all.md           result         (no SOURCE branch;
+  skills/z-execute/SKILL.md             result         (no SOURCE branch;
                                                         only check-no-ask path)
   skills/z-map/SKILL.md                 result,        SOURCE == "conflict"
-                                        default,       (UI note only)
-                                        source
-  skills/z-plan-light/SKILL.md          result,        SOURCE == "conflict"
                                         default,       (UI note only)
                                         source
   skills/z-brainstorm/SKILL.md          result,        SOURCE == "conflict"

@@ -1,6 +1,6 @@
 ---
 name: context-curator
-description: Haiku subagent that folds the events.jsonl delta + git diff + TASKS.md + prior SESSION.md into a bounded SESSION.md handoff artifact at the /z-implement-all batch breakpoint. Mechanical curation only — never edits production code.
+description: Haiku subagent that folds the events.jsonl delta + git diff + TASKS.md + prior SESSION.md into a bounded SESSION.md handoff artifact at the /z-execute batch breakpoint. Mechanical curation only — never edits production code.
 tools: Read, Grep, Glob, Bash
 model: haiku
 ---
@@ -78,7 +78,7 @@ Compute the following fields for the SESSION.md frontmatter:
 
 - `last_gate`: current UTC timestamp — run `date -u +"%Y-%m-%dT%H:%M:%SZ"` via Bash.
 - `done_count`: count of `[x]` tasks in TASKS.md.
-- `done_ids_hash`: **call `bash scripts/session-helpers.sh done_set_hash "$tasks_file"`** from `<repo_root>`. Do NOT re-implement this hash inline. The writer and reader (E1 in z-implement-all) must use byte-identical hash output from the same helper or resume will silently never fire.
+- `done_ids_hash`: **call `bash scripts/session-helpers.sh done_set_hash "$tasks_file"`** from `<repo_root>`. Do NOT re-implement this hash inline. The writer and reader (E1 in z-execute) must use byte-identical hash output from the same helper or resume will silently never fire.
 - `last_gate_task_id`: the `last_gate_task_id` passed in by the caller.
 - `next_pending`: run `bash scripts/session-helpers.sh next_pending_task "$tasks_file"` from `<repo_root>` to get the first eligible pending task id. This is a human hint only — not load-bearing for resume.
 - `context_hash`: sha256 of the body text (the 4 sections concatenated). Run `printf '%s' "<body>" | sha256sum | cut -c1-64` or equivalent. Observability only — NOT used by the resume predicate.
@@ -185,10 +185,10 @@ truncated_sections: []
 
 - Never touches files other than `SESSION.md` (and its `.tmp.<PID>` staging file). Never edits TASKS.md, SPEC.md, PLAN.md, or any production code.
 - Incremental: folds only the `since_marker` delta into prior SESSION.md; never re-reads the full log from the beginning (O(delta), not O(N)).
-- `done_ids_hash` is always computed via `bash scripts/session-helpers.sh done_set_hash "$tasks_file"` — never inline. This is the DRY contract that guarantees the writer (context-curator) and reader (E1 in z-implement-all) produce byte-identical hashes.
+- `done_ids_hash` is always computed via `bash scripts/session-helpers.sh done_set_hash "$tasks_file"` — never inline. This is the DRY contract that guarantees the writer (context-curator) and reader (E1 in z-execute) produce byte-identical hashes.
 - Idempotent under retry: atomic tmp+rename means a partial prior write is overwritten cleanly on re-run.
 - `diff_unavailable: true` on git error — never a hard failure.
-- The "/clear & resume" suggestion in z-implement-all fires **only** after this agent returns `STATUS: curated` with a matching done-set hash. This agent does not control that decision — it only writes the artifact and emits the event.
+- The "/clear & resume" suggestion in z-execute fires **only** after this agent returns `STATUS: curated` with a matching done-set hash. This agent does not control that decision — it only writes the artifact and emits the event.
 
 ## Hard rules
 

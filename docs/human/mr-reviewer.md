@@ -7,7 +7,7 @@
 
 `/z-mr-review` performs a code-quality review of the current branch diff against the project's `STYLE.md`. It is distinct from `/z-audit` and `/z-review-all`, which gate correctness; the MR reviewer assumes the code is correct and instead targets AI-shaped and human-shaped quality slop.
 
-The review fans out to all available LLM voices (Claude Sonnet inline, plus the configured `consultant-primary` and `consultant-secondary` providers). Findings are deduplicated, tagged by which voices raised them, ranked P0–P4, and written to `z-harness/<slug>/MR-REVIEW.md` in `TASKS.md`-compatible shape. The command **never blocks** — you triage by deleting unwanted findings from MR-REVIEW.md, then run `/z-implement-all --tasks=z-harness/<slug>/MR-REVIEW.md` on survivors.
+The review fans out to all available LLM voices (Claude Sonnet inline, plus the configured `consultant-primary` and `consultant-secondary` providers). Findings are deduplicated, tagged by which voices raised them, ranked P0–P4, and written to `z-harness/<slug>/MR-REVIEW.md` in `TASKS.md`-compatible shape. The command **never blocks** — you triage by deleting unwanted findings from MR-REVIEW.md, then run `/z-execute --tasks=z-harness/<slug>/MR-REVIEW.md` on survivors.
 
 ## When to use it
 

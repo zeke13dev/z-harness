@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # check-compaction.sh — Evaluate compaction breakpoint conditions at batch-settle.
 #
-# Run at each /z-implement-all batch boundary. Reads TASKS.md's [x] count and
+# Run at each /z-execute batch boundary. Reads TASKS.md's [x] count and
 # a state file (.last-compaction-check) from the plan directory, then signals
 # whether the orchestrator should pause for context compaction.
 #

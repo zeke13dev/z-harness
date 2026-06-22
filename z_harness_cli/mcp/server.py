@@ -148,8 +148,7 @@ def _load_agent(name: str) -> AgentDef:
 
 _PROGRESS_PHASES: dict[str, list[str]] = {
     "z_plan":           ["premise_check", "explore", "decisions", "consult", "writing", "complete"],
-    "z_implement_all":  ["task_start", "task_complete", "review", "complete"],
-    "z_implement_next": ["task_start", "task_complete", "review", "complete"],
+    "z_execute":        ["task_start", "task_complete", "review", "complete"],
     "z_debug":          ["repro", "hypothesis", "evidence", "isolate", "fix", "post_mortem"],
     "z_brainstorm":     ["dispatch", "anti_bias", "synthesize", "complete"],
     "z_research":       ["map", "brainstorm", "adversarial_panel", "synthesize", "complete"],
@@ -443,8 +442,7 @@ def _detect_needs_input(output: str) -> dict[str, str] | None:
 COMMAND_TOOLS: dict[str, dict[str, Any]] = {
     # ── Heavy ──
     "z_plan":            {"command_id": "/z-plan",            "description": "Run the rigorous z-harness planning pipeline",                       "is_heavy": True},
-    "z_implement_all":   {"command_id": "/z-implement-all",   "description": "Implement ALL pending tasks from TASKS.md with per-task review",      "is_heavy": True},
-    "z_implement_next":  {"command_id": "/z-implement-next",  "description": "Implement the next pending task and review",                         "is_heavy": True},
+    "z_execute":         {"command_id": "/z-execute",         "description": "Execute ALL pending tasks from TASKS.md with per-task review",         "is_heavy": True},
     "z_review_all":      {"command_id": "/z-review-all",      "description": "Final-gate cross-LLM review of cumulative diff against SPEC.md",       "is_heavy": True},
     "z_audit":           {"command_id": "/z-audit",           "description": "Read-only audit pipeline with cross-LLM review",                      "is_heavy": True},
     "z_audit_plan_style":{"command_id": "/z-audit-plan-style","description": "Audit plan artifacts for code-quality issues before code is written",  "is_heavy": True},
@@ -453,7 +451,6 @@ COMMAND_TOOLS: dict[str, dict[str, Any]] = {
     "z_brainstorm":      {"command_id": "/z-brainstorm",      "description": "3-vendor parallel pre-plan ideation with anti-bias check",            "is_heavy": True},
     "z_research":        {"command_id": "/z-research",        "description": "Deep research: map + brainstorm + adversarial synthesis panel",      "is_heavy": True},
     "z_map":             {"command_id": "/z-map",             "description": "Map terrain with citations and cross-LLM critique",                   "is_heavy": True},
-    "z_plan_light":      {"command_id": "/z-plan-light",      "description": "Lightweight planner for 1-5 file fixes with bundled cross-consult",   "is_heavy": True},
     "z_plan_split":      {"command_id": "/z-plan-split",      "description": "Pre-emptive scope splitter — fan-out into N narrow cluster-planners", "is_heavy": True},
     "z_test":            {"command_id": "/z-test",            "description": "Dual-source semantic test-case planner (ERROR_POINTS + INVARIANTS)",   "is_heavy": True},
     "z_amend":           {"command_id": "/z-amend",           "description": "Amend an existing plan (SPEC/PLAN/TASKS) preserving completed state", "is_heavy": True},
@@ -490,10 +487,10 @@ COMMAND_TOOLS: dict[str, dict[str, Any]] = {
 # ==========================================================================
 
 _COMMAND_ROLE_MAP: dict[str, str] = {
-    "z_plan": "implementer", "z_implement_all": "implementer", "z_implement_next": "implementer",
+    "z_plan": "implementer", "z_execute": "implementer",
     "z_review_all": "reviewer", "z_audit": "reviewer", "z_audit_plan_style": "reviewer",
     "z_debug": "implementer", "z_do": "implementer", "z_brainstorm": "implementer",
-    "z_research": "implementer", "z_map": "implementer", "z_plan_light": "implementer",
+    "z_research": "implementer", "z_map": "implementer",
     "z_plan_split": "implementer", "z_test": "implementer", "z_amend": "implementer",
     "z_init_docs": "implementer", "z_maintain_docs": "implementer",
     "z_uplift": "reviewer", "z_improve": "implementer",

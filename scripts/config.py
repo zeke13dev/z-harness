@@ -74,7 +74,6 @@ DEFAULTS: dict = {
         "implement_all_proceed": "ask",   # ask | auto_resume | halt
         "review_all_proceed":    "ask",   # ask | proceed | halt
         "plan_decisions_approval": "ask", # ask | approve | halt
-        "spec_retro_discovery": "ask",    # ask | defer_to_sink_p2
         "pre_run_cost_gate": "ask",       # ask | auto_proceed | halt
         "planning_mode": "intent",        # intent | full
         "intent_level": "auto",           # auto | quick | standard | deep
@@ -139,7 +138,7 @@ DEFAULTS: dict = {
         # Pre-review gates (opt-in, default off). Exported as Z_HARNESS_PRE_REVIEW /
         # Z_HARNESS_IMPL_PRE_REVIEW (see _ENV_VAR_ALIASES for legacy names).
         "pre_review": False,        # bool: enable pre-review cycle in /z-review-all and /z-audit-plan
-        "impl_pre_review": False,   # bool: enable pre-review gate in /z-implement-all
+        "impl_pre_review": False,   # bool: enable pre-review gate in /z-execute
         # Auto-wait / wait-for knobs. Exported as Z_HARNESS_AUTO_WAIT /
         # Z_HARNESS_AUTO_WAIT_BUDGET_SECS (see _ENV_VAR_ALIASES for legacy names).
         "auto_wait": True,              # bool: 1=auto-budget mode, 0=explicit-timeout mode
@@ -153,7 +152,7 @@ DEFAULTS: dict = {
         "max_parallel": 1,            # int>0: max concurrent workstream sessions (within-plan)
         "max_parallel_plans": 1,      # int>0: max concurrent plan runs (cross-plan)
         # Per-task attempt / wall-clock caps. Exported as Z_HARNESS_MAX_ATTEMPTS / Z_HARNESS_MAX_TASK_WALL_MS.
-        "max_attempts": 2,            # int>0: max implementer attempts per task in /z-implement-all
+        "max_attempts": 2,            # int>0: max implementer attempts per task in /z-execute
         "max_task_wall_ms": 2700000,  # int>0: per-task wall-clock cap in ms (default 45 min)
         # Deprecation enforcement. When true, detecting a preference-class env var
         # (any var in _collect_deprecated_env_vars()) is a hard ERROR (non-zero exit)
@@ -328,7 +327,6 @@ VALIDATORS: dict = {
     "workflow.implement_all_proceed":    {"ask", "auto_resume", "halt"},
     "workflow.review_all_proceed":       {"ask", "proceed", "halt"},
     "workflow.plan_decisions_approval":  {"ask", "approve", "halt"},
-    "workflow.spec_retro_discovery":     {"ask", "defer_to_sink_p2"},
     "workflow.pre_run_cost_gate":        {"ask", "auto_proceed", "halt"},
     "workflow.planning_mode":            {"intent", "full"},
     "workflow.intent_level":             {"auto", "quick", "standard", "deep"},
@@ -585,7 +583,6 @@ QUESTION_IDS: dict[str, dict] = {
             "skills/z-debug/SKILL.md:17",
             "skills/z-brainstorm/SKILL.md:19",
             "skills/z-map/SKILL.md:133",
-            "skills/z-plan-light/SKILL.md:19",
             "skills/z-uplift/SKILL.md:71",
         ],
         # Hard prerequisite: even when resolver returns skip, the slug-COLLISION check runs
@@ -598,7 +595,7 @@ QUESTION_IDS: dict[str, dict] = {
         "skill_default": "ask",
         "halt_category": "mechanical_proceed",
         "callsites": [
-            "skills/z-implement-all/SKILL.md (halt-resolution gate)",
+            "skills/z-execute/SKILL.md (halt-resolution gate)",
         ],
     },
     "workflow.review_all_proceed": {
@@ -617,19 +614,6 @@ QUESTION_IDS: dict[str, dict] = {
         "halt_category": "decision",
         "callsites": [
             "skills/z-plan/SKILL.md (Phase 2.5 decisions-doc approval gate)",
-        ],
-    },
-    "workflow.spec_retro_discovery": {
-        # Controls how Phase 4 of /z-implement-next handles out-of-current-SPEC discoveries
-        # reported by the implementer.
-        # ask             — interactively prompt the user about the discovery (default)
-        # defer_to_sink_p2 — park the discovery as a P2 follow-up in the project sink (no prompt)
-        "config_key": "workflow.spec_retro_discovery",
-        "choices": {"ask", "defer_to_sink_p2"},
-        "skill_default": "ask",
-        "halt_category": "decision",
-        "callsites": [
-            "skills/z-implement-next/SKILL.md (Phase 4 spec-retro defer branch)",
         ],
     },
     "workflow.pre_run_cost_gate": {
@@ -670,10 +654,6 @@ RESULT_MAP: dict[tuple[str, str], str] = {
     ("workflow.plan_decisions_approval", "ask"):     "ask",
     ("workflow.plan_decisions_approval", "approve"): "skip",
     ("workflow.plan_decisions_approval", "halt"):    "halt",
-    # defer-to-sink: park the question as a follow-up entry instead of asking interactively.
-    # Orchestrators receiving this result call scripts/sink-add.sh with the question context.
-    ("workflow.spec_retro_discovery", "ask"):              "ask",
-    ("workflow.spec_retro_discovery", "defer_to_sink_p2"): "defer-to-sink",
     ("workflow.pre_run_cost_gate", "ask"):                 "ask",
     ("workflow.pre_run_cost_gate", "auto_proceed"):        "skip",
     ("workflow.pre_run_cost_gate", "halt"):                "halt",

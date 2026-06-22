@@ -7,5 +7,5 @@
 **Key decisions**
 - full 11 commands — *User requested no pilot phase*
 
-**Result**  SPEC, PLAN, and TASKS written; ready for /z-implement-all
-**Next**  `/z-implement-all`
+**Result**  SPEC, PLAN, and TASKS written; ready for /z-execute
+**Next**  `/z-execute`

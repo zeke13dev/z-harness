@@ -6,21 +6,22 @@
       "init_after": "run_start",
       "finalize": "Phase 9",
       "primary_artifact": "archive/$RUN/decisions.md",
-      "fallbacks": ["PLAN.md", "SPEC.md"]
+      "fallbacks": [
+        "PLAN.md",
+        "SPEC.md"
+      ]
     },
-    "/z-implement-all": {
+    "/z-execute": {
       "profile": "full",
       "init_after": "register",
       "finalize": "Finalize",
       "primary_artifact": "PLAN.md",
-      "fallbacks": ["SPEC.md"],
-      "skip_brief_on": ["compaction_pause"]
-    },
-    "/z-implement-next": {
-      "profile": "full",
-      "init_after": "register",
-      "finalize": "Phase 5",
-      "primary_artifact": "TASKS.md"
+      "fallbacks": [
+        "SPEC.md"
+      ],
+      "skip_brief_on": [
+        "compaction_pause"
+      ]
     },
     "/z-audit": {
       "profile": "full",
@@ -46,12 +47,6 @@
       "finalize": "Phase 10",
       "primary_artifact": "FIX.md"
     },
-    "/z-plan-light": {
-      "profile": "full",
-      "init_after": "light_run_start",
-      "finalize": "Phase 9",
-      "primary_artifact": "FIX.md"
-    },
     "/z-review-all": {
       "profile": "full",
       "init_after": "review_all_start",
@@ -69,7 +64,9 @@
       "init_after": "do_run_start",
       "finalize": "Phase 7",
       "primary_artifact": "approach.md",
-      "fallbacks": ["premise.md"]
+      "fallbacks": [
+        "premise.md"
+      ]
     }
   }
 }

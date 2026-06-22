@@ -7,7 +7,7 @@
 
 Tier 2 is the end-of-pipeline narrative doc layer of the two-tier automatic doc maintenance system. It reads `tier2-context.json` — a structured JSON file accumulated incrementally across pipeline phases — and produces Architecture Decision Records (ADRs), design rationale, tradeoff explanations, and migration guides. The system is composed of two parts: `scripts/append-tier2-context.py`, which accumulates structured context during pipeline execution, and the `/z-doc-rationale` command, which spawns a Sonnet subagent to produce the final narrative outputs.
 
-Currently, only `z-review-all` calls `append-tier2-context.py`: Phase 5.5 accumulates aggregate review patterns, and Phase 6.7 finalizes the file and evaluates the three-signal OR significance gate (cross-LLM consultant findings, breaking changes, or plan deviations). The script is designed to accept `--phase plan|implement|review` and support accumulation from any pipeline stage, but z-plan and z-implement-all do not currently invoke it. The user runs `/z-doc-rationale` after the full pipeline completes if the significance gate fired.
+Currently, only `z-review-all` calls `append-tier2-context.py`: Phase 5.5 accumulates aggregate review patterns, and Phase 6.7 finalizes the file and evaluates the three-signal OR significance gate (cross-LLM consultant findings, breaking changes, or plan deviations). The script is designed to accept `--phase plan|implement|review` and support accumulation from any pipeline stage, but z-plan and z-execute do not currently invoke it. The user runs `/z-doc-rationale` after the full pipeline completes if the significance gate fired.
 
 ## Key entry points
 
@@ -26,7 +26,7 @@ Currently, only `z-review-all` calls `append-tier2-context.py`: Phase 5.5 accumu
 ## Edge cases / gotchas
 
 - `tier2-context.json` must be marked `finalized: true` before `/z-doc-rationale` can run; it aborts if not.
-- Only z-review-all currently writes to tier2-context.json. The script supports `--phase plan|implement|review` for future use, but z-plan and z-implement-all do not call it.
+- Only z-review-all currently writes to tier2-context.json. The script supports `--phase plan|implement|review` for future use, but z-plan and z-execute do not call it.
 - Significance gate is a three-signal OR: consultant_findings non-empty, breaking_changes non-empty, OR deviations non-empty. If none fire, the pipeline reports "No significant design decisions. Tier 2 skipped."
 - Memoization: if tier2-context.json has not changed since the last run (hash comparison via .memo file), regeneration is skipped entirely.
 - Documents ship with honest gaps — missing human override reasons are flagged with "> Warning: Reason not captured at decision time." Never fabricated.
@@ -43,7 +43,7 @@ _No memories recorded yet._
 
 ## Examples
 
-- Full pipeline flow: z-plan → z-implement-all → z-review-all (accumulates review_patterns, finalizes) → /z-doc-rationale (if significance gate fired)
+- Full pipeline flow: z-plan → z-execute → z-review-all (accumulates review_patterns, finalizes) → /z-doc-rationale (if significance gate fired)
 - Accumulate a review pattern: `python3 scripts/append-tier2-context.py --phase review --field review_patterns --json '{"pattern":"...", "source":"consultant-primary", "finding":"...", "recommendation":"..."}'`
 - Upsert a task deviation: `python3 scripts/append-tier2-context.py --phase review --field deviations --upsert --json '{"task":"T001", "deviation":"...", "reason":"..."}'`
 - Check significance: inspect `consultant_findings`, `breaking_changes`, and `deviations` arrays in tier2-context.json after z-review-all
