@@ -299,14 +299,13 @@ def _render_agents_index(agents: list[dict], explore_present: bool) -> str:
 # Validation
 # ---------------------------------------------------------------------------
 
-_REQUIRED_SKILL_FIELDS = ["origin", "tags"]
-
 
 def _validate_frontmatter_yaml(path: Path, text: str) -> list[str]:
     """Re-validate frontmatter with a strict YAML parser.
 
-    Silently skipped if PyYAML is not available.  Also checks required fields
-    (origin:, tags:) on SKILL.md files under skills/.
+    Silently skipped if PyYAML is not available. Source skills use the canonical
+    z-harness frontmatter shape (`name`, `description`, runtime flags); pi export
+    must not require legacy `origin`/`tags` fields.
     """
     errors: list[str] = []
     if not text.startswith("---\n"):
@@ -320,7 +319,6 @@ def _validate_frontmatter_yaml(path: Path, text: str) -> list[str]:
     try:
         import yaml
     except ImportError:
-        _check_required_skill_fields(path, yaml_string, errors)
         return errors
 
     try:
@@ -333,32 +331,7 @@ def _validate_frontmatter_yaml(path: Path, text: str) -> list[str]:
         errors.append(f"{path}: strict YAML parse returned non-dict ({type(parsed).__name__})")
         return errors
 
-    _check_required_skill_fields(path, yaml_string, errors)
     return errors
-
-
-def _check_required_skill_fields(path: Path, yaml_string: str, errors: list[str]) -> None:
-    """Check that SKILL.md files have origin: and tags: with non-empty values."""
-    if "skills" not in path.parts or path.name != "SKILL.md":
-        return
-    rel = str(path)
-    origin_m = re.search(r'^origin:\s*(.*)', yaml_string, re.MULTILINE)
-    if not origin_m:
-        errors.append(f"{rel}: missing required field 'origin'")
-    else:
-        val = origin_m.group(1).strip()
-        if val in ("", '""', "''", "null", "~"):
-            errors.append(f"{rel}: required field 'origin' is empty or null")
-    tags_m = re.search(r'^tags:\s*(.*)', yaml_string, re.MULTILINE)
-    if not tags_m:
-        errors.append(f"{rel}: missing required field 'tags'")
-    else:
-        val = tags_m.group(1).strip()
-        if val and val.startswith("["):
-            if val == "[]":
-                errors.append(f"{rel}: required field 'tags' is an empty list")
-        elif not re.search(r'^tags:\s*\n\s*-', yaml_string, re.MULTILINE):
-            errors.append(f"{rel}: required field 'tags' must be a YAML list (inline or block format)")
 
 
 def _validate_agent(path: Path) -> list[str]:
@@ -404,8 +377,9 @@ def export(
     ----------
     repo_root:
         Absolute (or relative) path to the z-harness repository root.
-        Source directories ``commands/``, ``agents/``, and ``skills/`` are
-        resolved relative to this path.
+        Source directories ``agents/`` and ``skills/`` are resolved relative to
+        this path; ``commands/`` is accepted as a back-compat source key when
+        present.
     export_root:
         Destination directory.  Created if absent.
     options:
@@ -440,14 +414,14 @@ def export(
     errors: list[str] = []
     dropped_tools: dict[str, list[str]] = {}
 
-    # --- validate source skill frontmatter for required fields ---
+    # --- validate source skill frontmatter parses as YAML ---
     for entry in sources.get("skills", []):
         src_path = entry.get("source_path")
         if src_path and Path(src_path).is_file():
             text = Path(src_path).read_text(encoding="utf-8")
             fm_errors = _validate_frontmatter_yaml(Path(src_path), text)
             for e in fm_errors:
-                print(f"export-pi: SKIPPING {entry['id']} — {e}", file=sys.stderr)
+                print(f"export-pi: FRONTMATTER WARNING {entry['id']} — {e}", file=sys.stderr)
             errors.extend(fm_errors)
 
     agents_dir = out_root / "agents"

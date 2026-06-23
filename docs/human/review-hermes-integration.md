@@ -4,7 +4,8 @@
 > all reviewed). The "dormant/planned" language from the original v1.1 review no longer applies.
 > Within-plan DAG concurrency, cross-plan orchestration, and the merge mutex are all live.
 > See [docs/human/hermes-integration-v1.md](hermes-integration-v1.md) for the finalized
-> protocol v1.3 specification and operator runbook.
+> protocol v1.3 specification and operator runbook. Historical mentions of `/z-plan --quick`
+> below now correspond to `/z-plan --quick` after the light-plan command was removed.
 
 > **Document reviewed:** `docs/human/hermes-integration-v1.md` (v1.1.0, status: DRAFT)
 > **Date:** 2026-06-08
@@ -47,7 +48,7 @@ The Hermes Integration Protocol v1 defines a clean separation of concerns — ha
 
 **SUGGESTION — `workstreams.json` inherently duplicates MANIFEST.md + SHARED-CONCERNS.md.** This is acknowledged in the spec's "Relationship to other artifacts" table and is a necessary tradeoff (humans read Markdown, machines read JSON). Not a flaw — just noting that any future schema changes to MANIFEST.md or SHARED-CONCERNS.md must propagate to `workstreams.json` generation. Consider adding a note: "The content of `workstreams.json` is derived from the same source data as MANIFEST.md and SHARED-CONCERNS.md. Implementers MUST update all three when changing reconciliation logic." ✓ (already implied by the architecture)
 
-**SUGGESTION — `workstreams.json` generation for z-plan-light may be unnecessary ceremony.** A `/z-plan-light` run produces a single FIX.md with 1-5 file changes. Generating a `workstreams.json` with one workstream containing all tasks is trivial overhead. The orchestrator could simply detect the absence of `workstreams.json` and run a single session. **Recommendation:** Make `workstreams.json` optional for `source: "/z-plan-light"` — if absent, the orchestrator runs the entire slug directory as a single workstream. This keeps z-plan-light's "no ceremony" spirit. *(Line reference: spec §"Workstream derivation per plan type" → "z-plan-light" paragraph.)*
+**SUGGESTION — `workstreams.json` generation for z-plan --quick may be unnecessary ceremony.** A `/z-plan --quick` run produces a thin INTENT.md plus an initial generated TASKS.md for a small change. Generating a `workstreams.json` with one workstream containing all tasks is trivial overhead. The orchestrator could simply detect the absence of `workstreams.json` and run a single session. **Recommendation:** Make `workstreams.json` optional for `source: "/z-plan --quick"` — if absent, the orchestrator runs the entire slug directory as a single workstream. This keeps z-plan --quick's "no ceremony" spirit. *(Line reference: spec §"Workstream derivation per plan type" → "z-plan --quick" paragraph.)*
 
 **SOLID — Separation of concerns is well-executed.** The harness owns WHAT (defined in `workstreams.json`), the orchestrator owns HOW (concurrency cap, retry policy, model selection, timeouts). The "Orchestrator discretion" table is clear and makes the boundary explicit. ✓
 
@@ -76,13 +77,13 @@ The two examples in the spec don't resolve this. The linear example (T001→…�
 > 5. Tasks at the same depth that depend on DIFFERENT depth-(N-1) parents that are in different workstreams become separate workstreams.
 > 6. Tasks that form a linear chain across depths (depth N → depth N+1 → depth N+2, with 1:1 dependency) are collapsed into a single workstream.
 
-Alternatively, acknowledge that flat z-plan DAG support is v1.1 and ship v1.0 with z-plan producing a single workstream (like z-plan-light does). Many real z-plan task lists are effectively linear. *(Line reference: spec §"Workstream derivation per plan type" → "z-plan" paragraph.)*
+Alternatively, acknowledge that flat z-plan DAG support is v1.1 and ship v1.0 with z-plan producing a single workstream (like quick INTENT plans do). Many real z-plan task lists are effectively linear. *(Line reference: spec §"Workstream derivation per plan type" → "z-plan" paragraph.)*
 
 **MAJOR — `parallel_group` assumes parallel execution, which z-plan-split explicitly defers to v2.** The spec's example shows ws-2 and ws-3 sharing `parallel_group: "leaf-a"`, meaning they can run concurrently. But z-plan-split's MANIFEST.md `## Run order` section says "Cross-cluster task parallelism is v2." The spec is designing a v1 contract that depends on v2 behavior. **Recommendation:** Either (a) include `parallel_group: null` for all z-plan-split-derived workstreams in v1, documenting that parallel-group support is reserved for v2; or (b) make `parallel_group` a v2-only field and exclude it from the v1 schema. *(Line reference: spec §"Workstream object" → `parallel_group` field; spec §"Example"; z-plan-split SKILL.md §"Phase 5b" → "Run order" section.)*
 
-**SCOPE OK — z-plan-light → single workstream.** Trivially correct. ✓
+**SCOPE OK — z-plan --quick → single workstream.** Trivially correct. ✓
 
-**SCOPE OK — `partial_tree` is generated in all three plan types.** z-plan-split already tracks this in MANIFEST.md and SHARED-CONCERNS.md. z-plan and z-plan-light don't currently have a `partial_tree` concept but the value would always be `false` (no sub-plans to fail). ✓
+**SCOPE OK — `partial_tree` is generated in all three plan types.** z-plan-split already tracks this in MANIFEST.md and SHARED-CONCERNS.md. z-plan and quick INTENT plans do not currently have a `partial_tree` concept but the value would always be `false` (no sub-plans to fail). ✓
 
 ### 6. Security
 
@@ -104,8 +105,8 @@ Alternatively, acknowledge that flat z-plan DAG support is v1.1 and ship v1.0 wi
 |----------|-------|-----|
 | **BLOCKER** | 1 | Flat z-plan DAG derivation algorithm underspecified |
 | **MAJOR** | 4 | `depends_on` DAG vs linear MANIFEST; `parallel_group` assumes v2; `partial_tree` boolean insufficient; validation rule 7 circular |
-| **MINOR** | 8 | Severity heuristics drift; crash-resumption missing; manifest modification undefined; `--tasks` gate bypass undocumented; slug validation not referenced; `halt_description` sanitization; trailing-slash edge case; z-plan-light scope |
-| **SUGGESTION** | 3 | DRY duplication inherent; optional for z-plan-light; DAG derivation possibly over-engineered |
+| **MINOR** | 8 | Severity heuristics drift; crash-resumption missing; manifest modification undefined; `--tasks` gate bypass undocumented; slug validation not referenced; `halt_description` sanitization; trailing-slash edge case; z-plan --quick scope |
+| **SUGGESTION** | 3 | DRY duplication inherent; optional for z-plan --quick; DAG derivation possibly over-engineered |
 
 ---
 
@@ -129,7 +130,7 @@ Alternatively, acknowledge that flat z-plan DAG support is v1.1 and ship v1.0 wi
 
 9. **Reject trailing slashes in path validation** (MINOR). Add to validation rule 5: "Paths must not end with `/`."
 
-10. **Consider optional `workstreams.json` for z-plan-light** (SUGGESTION). The orchestrator can treat absence of the file as a single-workstream plan.
+10. **Consider optional `workstreams.json` for z-plan --quick** (SUGGESTION). The orchestrator can treat absence of the file as a single-workstream plan.
 
 ---
 

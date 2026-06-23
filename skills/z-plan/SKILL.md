@@ -1,7 +1,7 @@
 ---
 name: z-plan
 disable-model-invocation: false
-description: Run the rigorous z-harness planning pipeline — challenge premises, batch decisions, cross-consult Gemini + Codex once, and produce SPEC.md / PLAN.md / TASKS.md.
+description: Run the rigorous z-harness planning pipeline — challenge premises, batch decisions, cross-consult Gemini + Codex once, and produce INTENT.md + initial TASKS.md (or SPEC.md / PLAN.md / TASKS.md in --full legacy mode).
 argument-hint: <feature or task description>
 runtime: c1
 driver_features_required:
@@ -600,7 +600,7 @@ export INTENT_LEVEL INTENT_LEVEL_SOURCE INTENT_CONSULT_POLICY
 ```
 
 **After mode detection, all downstream phases read `PLANNING_MODE` and `INTENT_LEVEL`:**
-- `PLANNING_MODE=intent` with a set `INTENT_LEVEL` → intent path; Phase 6 writes INTENT.md (T006-SEAM), Phase 8 is skipped (T006/T007-SEAM).
+- `PLANNING_MODE=intent` with a set `INTENT_LEVEL` → intent path; Phase 6 writes INTENT.md, Phase 8 dispatches `task-tree-generator` to produce the initial level-0 `TASKS.md`.
 - `PLANNING_MODE=full` or `INTENT_LEVEL=""` → legacy path; all phases run as documented.
 - SPEC.md detected in slug dir → `PLANNING_MODE` forced to `full` by the backward-compat guard above (Invariant 4); legacy path runs as if `--full` was passed.
 
@@ -1454,17 +1454,88 @@ Apply findings that hold up under "one reason this might be wrong" scrutiny. Pus
 
 ## Phase 8 — TASKS.md (legacy) / task-tree-generator dispatch (intent-mode)
 
-<!-- T006/T007-SEAM: intent-mode task generation. When T006 lands, TASKS.md in intent-mode is
-     produced by the task-tree-generator agent (not hand-authored here). Phase 8 in intent-mode
-     becomes a pass-through to T006's BFS level-0 generation. The legacy branch below is closed
-     for modification by T006/T007. -->
+In intent mode, `/z-plan` does not hand-author a thick legacy TASKS.md. It dispatches the
+`task-tree-generator` agent once to create the initial BFS level-0 `TASKS.md` from the freshly
+validated `INTENT.md`; later `/z-execute` runs may regenerate or advance subsequent levels after
+freezing INTENT.md and appending to LEDGER.md.
+
 ```bash
 if [[ "$PLANNING_MODE" == "intent" && -f "$Z_HARNESS_PLAN_DIR/INTENT.md" ]]; then
-  # T006-SEAM: task-tree-generator dispatch for BFS level 0. T006 implements this body.
-  # Placeholder: the INTENT.md writer (T006) will also trigger the task-tree-generator
-  # here to produce the level-0 TASKS.md batch. Skip the rest of Phase 8 (legacy TASKS.md
-  # hand-authoring) when INTENT.md is present and PLANNING_MODE=intent.
-  echo "[z-plan intent-mode] task-tree-generator dispatch not yet implemented (T006 pending)." >&2
+  # Generate the initial level-0 TASKS.md from INTENT.md so `/z-audit-plan` and humans can
+  # inspect the first implementation layer before `/z-execute` freezes and runs it.
+  LEVEL_TASKS_FILE="$Z_HARNESS_PLAN_DIR/TASKS.md"
+  LEDGER_FILE="$Z_HARNESS_PLAN_DIR/LEDGER.md"
+
+  UNMET_CRITERIA_JSON="$(python3 -c "
+import re, sys, json
+content = open(sys.argv[1]).read()
+m = re.search(r'## Acceptance checklist(.*?)(?=\n## |\Z)', content, re.S)
+section = m.group(1) if m else ''
+items = re.findall(r'- \[ \] (.+)', section)
+print(json.dumps(items))
+" "$Z_HARNESS_PLAN_DIR/INTENT.md" 2>/dev/null || echo '[]')"
+
+  INTENT_BFS_LEVEL_CAP="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py"     get workflow.intent_bfs_level_cap 2>/dev/null || echo "")"
+  if [ -z "$INTENT_BFS_LEVEL_CAP" ] || [ "$INTENT_BFS_LEVEL_CAP" = "None" ]; then
+    INTENT_BFS_LEVEL_CAP=6
+  fi
+
+  INTENT_TOKEN_BUDGET="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py"     get cost.token_budget 2>/dev/null || echo "")"
+  [ "$INTENT_TOKEN_BUDGET" = "None" ] && INTENT_TOKEN_BUDGET=""
+
+  # <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface that intent-mode `/z-plan`
+  #      requires `task-tree-generator` to create TASKS.md. Silent omission is forbidden; if the
+  #      driver cannot dispatch subagents, halt with `plan_halt` rather than continuing without tasks. -->
+  GENERATOR_RETURN="$(Agent(
+    subagent_type="task-tree-generator",
+    description="Generate initial BFS level 0 task batch",
+    prompt="intent_snapshot_path: ${Z_HARNESS_PLAN_DIR}/INTENT.md
+ledger_path: ${LEDGER_FILE}
+level: 0
+unmet_criteria: ${UNMET_CRITERIA_JSON}
+prior_level_outcomes: none
+tasks_output_path: ${LEVEL_TASKS_FILE}
+plan_dir: ${Z_HARNESS_PLAN_DIR}
+level_cap: ${INTENT_BFS_LEVEL_CAP}
+budget_tokens_remaining: ${INTENT_TOKEN_BUDGET:-}
+task_id_start: 1"
+  ))"
+
+  GENERATOR_STATUS="$(printf '%s' "$GENERATOR_RETURN" | grep '^STATUS:' | head -1 | awk '{print $2}')"
+  GENERATOR_TASKS_COUNT="$(printf '%s' "$GENERATOR_RETURN" | grep '^TASKS_WRITTEN:' | head -1 | awk '{print $2}')"
+  GENERATOR_TERMINATION="$(printf '%s' "$GENERATOR_RETURN" | grep '^TERMINATION_CONDITION:' | head -1 | awk '{print $2}')"
+
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" intent_initial_tasks_generated     "$(printf '{"slug":"%s","status":"%s","tasks_written":%s,"termination_condition":"%s","path":"%s"}'        "$Z_HARNESS_SLUG" "${GENERATOR_STATUS:-unknown}" "${GENERATOR_TASKS_COUNT:-0}"        "${GENERATOR_TERMINATION:-unknown}" "$LEVEL_TASKS_FILE")" 2>/dev/null || true
+
+  if [ "${GENERATOR_STATUS:-}" = "unable_to_complete" ] || [ "${GENERATOR_STATUS:-}" = "termination_guard" ] || [ ! -f "$LEVEL_TASKS_FILE" ]; then
+    echo "ERROR: task-tree-generator did not produce initial TASKS.md for intent-mode /z-plan." >&2
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_halt       "$(printf '{"reason":"intent_initial_tasks_failed","generator_status":"%s","termination_condition":"%s"}'          "${GENERATOR_STATUS:-unknown}" "${GENERATOR_TERMINATION:-unknown}")" 2>/dev/null || true
+    RB_HALT_REASON="intent initial task generation failed"
+    # include: _fragments/run-brief-halt-finalize-plan.md
+    FINALIZE_STATUS=aborted
+    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister       --run-id "$RUN" --status aborted 2>/dev/null || true
+    exit 1
+  fi
+
+  # Seed active-plan scope from the generated initial TASKS.md. Best-effort, same as legacy.
+  # <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to
+  #      the user and skip the Agent() call. Scope seeding is advisory; the plan proceeds without it. -->
+  SCOPE_JSON="$(mktemp)"
+  Agent(
+    subagent_type="scope-extractor",
+    description="Scope for /z-plan intent overlap seed",
+    prompt="repo_root: <abs path to repo root>
+base: $Z_HARNESS_PLAN_DIR"
+  ) > "$SCOPE_JSON" || true
+  python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" update-scope     --run-id "$RUN" --scope-json "$SCOPE_JSON" || true
+  rm -f "$SCOPE_JSON"
+
+  python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" heartbeat     --run-id "$RUN" --phase phase8 || true
+
+  HERMES_ENABLED="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get workflow.hermes_enabled 2>/dev/null || echo false)"
+  if [ "$HERMES_ENABLED" = "true" ]; then
+    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/generate-workstreams.py"       --slug "$Z_HARNESS_SLUG" --source z-plan --plan-dir "$Z_HARNESS_PLAN_DIR" || true
+  fi
   # T007: backward-compat SPEC detection is resolved upstream in Mode detection (Invariant 4).
   # When SPEC.md is present, PLANNING_MODE is forced to "full" before Phase 6 runs, so
   # INTENT.md is never written and this `if` branch is never entered for legacy slug dirs.
@@ -1544,12 +1615,12 @@ fi  # end of Phase 8 else-branch: legacy SPEC/PLAN/TASKS authoring — skipped w
 
 ## Phase 9 — Finalize archive
 
-**Intent-mode artifact copy (when `PLANNING_MODE=intent`):** copy `INTENT.md` in addition to (or instead of) `SPEC.md`/`PLAN.md` when INTENT.md is present. If `INTENT.md` is absent (T006 not yet landed), fall back to the legacy artifact set.
+**Intent-mode artifact copy (when `PLANNING_MODE=intent`):** copy `INTENT.md` in addition to (or instead of) `SPEC.md`/`PLAN.md` when INTENT.md is present. If `INTENT.md` is absent, fall back to the legacy artifact set.
 
 ```bash
 if [[ "$PLANNING_MODE" == "intent" && -f "$Z_HARNESS_PLAN_DIR/INTENT.md" ]]; then
   cp "$Z_HARNESS_PLAN_DIR/INTENT.md" "$Z_HARNESS_PLAN_DIR/archive/$RUN/INTENT.md" || true
-  # T006-SEAM: also copy LEDGER.md when it exists (created by BFS level execution).
+  # Also copy LEDGER.md when it exists (created by BFS level execution).
   [[ -f "$Z_HARNESS_PLAN_DIR/LEDGER.md" ]] && \
     cp "$Z_HARNESS_PLAN_DIR/LEDGER.md" "$Z_HARNESS_PLAN_DIR/archive/$RUN/LEDGER.md" || true
 fi

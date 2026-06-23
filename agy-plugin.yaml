@@ -34,7 +34,7 @@ rules:
     source: agents/cluster-planner.md
     output: .agent/rules/z-harness-cluster-planner.md
     trigger: model_decision
-    description: "A `model: sonnet` subagent that runs a stripped-down `/z-plan`-equivalent for ONE narrow scope (one cluster) within a `/z-plan-split` run. Produces SPEC.md + PLAN.md + TASKS.md for the cluster, resolves small decisions unilaterally, and escalates ..."
+    description: "A `model: sonnet` subagent that runs a stripped-down `/z-plan`-equivalent for ONE narrow scope (one cluster) within a `/z-plan-split` run. Produces INTENT.md + MANIFEST.json for the cluster, resolves small decisions unilaterally, and escalates ris..."
   - id: complexity-classifier
     source: agents/complexity-classifier.md
     output: .agent/rules/z-harness-complexity-classifier.md
@@ -79,7 +79,7 @@ rules:
     source: agents/implementer.md
     output: .agent/rules/z-harness-implementer.md
     trigger: always_on
-    description: "Implements a single task from $Z_HARNESS_PLAN_DIR/TASKS.md in a fresh context. Invoked by /z-execute once per task to keep main orchestrator context lean. In legacy mode reads SPEC.md/PLAN.md; in INTENT mode reads the frozen INTENT snapshot ..."
+    description: "Implements a single task from $Z_HARNESS_PLAN_DIR/TASKS.md in a fresh context. Invoked by /z-execute once per task to keep main orchestrator context lean. In legacy mode reads SPEC.md/PLAN.md; in INTENT mode reads the frozen INTENT snapshot + LEDG..."
   - id: intent-classifier
     source: agents/intent-classifier.md
     output: .agent/rules/z-harness-intent-classifier.md
@@ -129,7 +129,7 @@ rules:
     source: agents/review-agent.md
     output: .agent/rules/z-harness-review-agent.md
     trigger: model_decision
-    description: "Post-run Haiku subagent that proposes 0-3 candidate memories from a completed /z-execute, /z-review-all, or /z-debug run. Reads run events + cumulative diff + SPEC.md (or DEBUG.md for debug runs); emits structured candidates as a single fenc..."
+    description: "Post-run Haiku subagent that proposes 0-3 candidate memories from a completed /z-execute, /z-review-all, or /z-debug run. Reads run events + cumulative diff + SPEC.md (or DEBUG.md for debug runs); emits structured candidates as a single fenced ```..."
   - id: reviewer
     source: agents/reviewer.md
     output: .agent/rules/z-harness-reviewer.md
@@ -139,7 +139,7 @@ rules:
     source: agents/scope-extractor.md
     output: .agent/rules/z-harness-scope-extractor.md
     trigger: model_decision
-    description: "Reads SPEC.md, PLAN.md, and TASKS.md from a plan artifact directory and emits a JSON array of likely file changes with confidence labels. Used by run-creating commands (z-execute, z-plan, etc.) to seed the active-plan registry scope before o..."
+    description: "Reads SPEC.md, PLAN.md, and TASKS.md from a plan artifact directory and emits a JSON array of likely file changes with confidence labels. Used by run-creating commands (z-execute, z-plan, etc.) to seed the active-plan registry scope before overlap..."
   - id: scope-probe
     source: agents/scope-probe.md
     output: .agent/rules/z-harness-scope-probe.md
@@ -164,7 +164,7 @@ rules:
     source: agents/spec-precheck.md
     output: .agent/rules/z-harness-spec-precheck.md
     trigger: model_decision
-    description: "Pre-flight sanity check that runs BEFORE the implementer for each task in /z-execute. Verifies SPEC.md references (symbols, table names, column names, config keys, file paths) actually exist in the codebase as described — so spec drift is ca..."
+    description: "Pre-flight sanity check that runs BEFORE the implementer for each task in /z-execute. Verifies SPEC.md references (symbols, table names, column names, config keys, file paths) actually exist in the codebase as described — so spec drift is caught b..."
   - id: task-tree-generator
     source: agents/task-tree-generator.md
     output: .agent/rules/z-harness-task-tree-generator.md
@@ -194,7 +194,7 @@ skills:
   - id: z-audit-plan
     source: skills/z-audit-plan/SKILL.md
     output: .agent/skills/z-audit-plan/SKILL.md
-    description: "Audit a plan's artifacts (SPEC.md, PLAN.md, TASKS.md) before execution. Reality-checks references against the codebase, verifies best practices/design, and runs a cross-LLM adversarial review. Emits PLAN_AUDIT_REPORT.md."
+    description: "Contract-level audit of a plan's INTENT, grounding assumptions, approach choices, and initial BFS task layer before execution. Reality-checks references against the codebase, verifies best practices/design, and runs a cross-LLM adversarial review...."
   - id: z-audit-plan-style
     source: skills/z-audit-plan-style/SKILL.md
     output: .agent/skills/z-audit-plan-style/SKILL.md
@@ -247,6 +247,10 @@ skills:
     source: skills/z-evaluate/SKILL.md
     output: .agent/skills/z-evaluate/SKILL.md
     description: "Evaluate a completed z-harness session for patterns worth preserving as memories or skills."
+  - id: z-execute
+    source: skills/z-execute/SKILL.md
+    output: .agent/skills/z-execute/SKILL.md
+    description: "Orchestrate implementation of ALL pending tasks in z-harness/TASKS.md, spawning a fresh implementer subagent per task and a reviewer per task. Halts on blockers, retries once on review failure, push-notifies user on every gate."
   - id: z-explain
     source: skills/z-explain/SKILL.md
     output: .agent/skills/z-explain/SKILL.md
@@ -295,10 +299,6 @@ skills:
     source: skills/z-handoff/SKILL.md
     output: .agent/skills/z-handoff/SKILL.md
     description: "Write a handoff.json artifact for session continuity. Captures the current working context (plan slug, active files, next step) into a machine-readable JSON contract that any orchestrator (Hermes) can consume to resume work in a fresh agent sessio..."
-  - id: z-execute
-    source: skills/z-execute/SKILL.md
-    output: .agent/skills/z-execute/SKILL.md
-    description: "Orchestrate implementation of ALL pending tasks in z-harness/TASKS.md, spawning a fresh implementer subagent per task and a reviewer per task. Halts on blockers, retries once on review failure, push-notifies user on every gate."
   - id: z-improve
     source: skills/z-improve/SKILL.md
     output: .agent/skills/z-improve/SKILL.md
@@ -334,7 +334,7 @@ skills:
   - id: z-plan
     source: skills/z-plan/SKILL.md
     output: .agent/skills/z-plan/SKILL.md
-    description: "Run the rigorous z-harness planning pipeline — challenge premises, batch decisions, cross-consult Gemini + Codex once, and produce SPEC.md / PLAN.md / TASKS.md."
+    description: "Run the rigorous z-harness planning pipeline — challenge premises, batch decisions, cross-consult Gemini + Codex once, and produce INTENT.md + initial TASKS.md (or SPEC.md / PLAN.md / TASKS.md in --full legacy mode)."
   - id: z-plan-split
     source: skills/z-plan-split/SKILL.md
     output: .agent/skills/z-plan-split/SKILL.md
