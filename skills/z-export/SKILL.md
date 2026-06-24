@@ -121,9 +121,9 @@ repo_root = pathlib.Path("${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}").pare
 export_root = repo_root / "exports" / "pi"
 
 sys.path.insert(0, str(repo_root))
-from runtime.drivers.pi import export as pi_export
+from runtime.drivers.pi.export import export
 
-result = pi_export.export(repo_root, export_root)
+result = export(repo_root, export_root)
 
 if result.warnings:
     for w in result.warnings:
