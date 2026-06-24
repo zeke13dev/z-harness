@@ -222,7 +222,12 @@ class TestOmpLiveEntries(unittest.TestCase):
     def test_project_omp_config_disables_agents_md_autoload(self):
         cfg = Path(__file__).parent.parent / ".omp" / "config.yml"
         body = cfg.read_text()
+        self.assertIn("skills:", body)
+        self.assertIn("OMP_PLUGIN_ROOT", body)
         self.assertIn("enableAgentsProject: false", body)
+        self.assertNotIn("enableAgentsProject: true", body)
+        for secret_bearing_key in ("oauth", "model:", "profile:"):
+            self.assertNotIn(secret_bearing_key, body.lower())
 
     def test_root_agents_md_is_omp_safe_stub(self):
         agents = Path(__file__).parent.parent / "AGENTS.md"

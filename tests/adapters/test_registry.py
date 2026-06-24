@@ -3,8 +3,8 @@ Tests for z_harness_cli/adapters/registry.py (T012)
 
 Covers:
   * detect_all() — returns one entry per adapter; installed flag correct.
-  * detect_all() — skips no host; list always has all four adapters.
-  * select(host=...) — --host override resolves to the right adapter.
+  * detect_all() — skips no host; list always has all five adapters.
+  * select(host=...) — --host override resolves to the right adapter, including OMP.
   * select(host=...) — unknown host raises UnknownHostError.
   * select() (auto, interactive=False) — returns installed host when one present.
   * select() (auto, interactive=False) — first canonical when multiple installed.
@@ -17,6 +17,8 @@ Covers:
 from __future__ import annotations
 
 import sys
+import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -33,6 +35,7 @@ from z_harness_cli.adapters.registry import (  # noqa: E402
     detect_all,
     select,
 )
+from z_harness_cli.adapters.omp import OmpAdapter  # noqa: E402
 from z_harness_cli.adapters.base import DetectResult, command_tier  # noqa: E402
 
 
@@ -85,20 +88,21 @@ def _patch_all_detect(installed_names: set[str]):
 class TestDetectAll(unittest.TestCase):
     """detect_all() must probe every adapter and return all results."""
 
-    def test_returns_all_four_adapters(self):
+    def test_returns_all_five_adapters(self):
         """detect_all() always returns an entry for every registered adapter."""
-        with patch.object(
-            _ALL_ADAPTERS[0], "detect", return_value=_not_installed_result()
-        ), patch.object(
-            _ALL_ADAPTERS[1], "detect", return_value=_not_installed_result()
-        ), patch.object(
-            _ALL_ADAPTERS[2], "detect", return_value=_not_installed_result()
-        ), patch.object(
-            _ALL_ADAPTERS[3], "detect", return_value=_not_installed_result()
-        ):
+        patches = [
+            patch.object(adapter, "detect", return_value=_not_installed_result())
+            for adapter in _ALL_ADAPTERS
+        ]
+        for p in patches:
+            p.start()
+        try:
             results = detect_all()
+        finally:
+            for p in patches:
+                p.stop()
 
-        self.assertEqual(len(results), 4, "detect_all() must return one entry per adapter")
+        self.assertEqual(len(results), 5, "detect_all() must return one entry per adapter")
 
     def test_each_entry_is_adapter_detect_pair(self):
         """Each entry must be a (HostAdapter, DetectResult) pair."""
@@ -121,10 +125,17 @@ class TestDetectAll(unittest.TestCase):
         self.assertNotIn("cursor", installed_names)
         self.assertNotIn("codex", installed_names)
         self.assertNotIn("antigravity", installed_names)
+        self.assertNotIn("omp", installed_names)
+
+    def test_omp_appears_in_detect_all(self):
+        """OMP is part of the registered detect_all() roster."""
+        with _patch_all_detect(set()):
+            results = detect_all()
+        self.assertIn("omp", {adapter.name for adapter, _ in results})
 
     def test_all_installed_when_all_present(self):
         """detect_all() reports all installed when all probes return installed=True."""
-        with _patch_all_detect({"claude", "cursor", "codex", "antigravity"}):
+        with _patch_all_detect({"claude", "cursor", "codex", "antigravity", "omp"}):
             results = detect_all()
 
         for adapter, result in results:
@@ -183,6 +194,18 @@ class TestSelectHostOverride(unittest.TestCase):
         with _patch_all_detect({"antigravity"}):
             adapter, result = select(host="antigravity", interactive=False)
         self.assertEqual(adapter.name, "antigravity")
+
+    def test_host_omp_resolves_omp_adapter_with_fake_binary_on_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp) / "omp"
+            fake.write_text("#!/bin/sh\nprintf 'omp 0.1.0\\n'\n", encoding="utf-8")
+            fake.chmod(0o755)
+            with patch.dict(os.environ, {"PATH": tmp}, clear=False):
+                adapter, result = select(host="omp", interactive=False)
+        self.assertIsInstance(adapter, OmpAdapter)
+        self.assertEqual(adapter.name, "omp")
+        self.assertTrue(result.installed)
+        self.assertEqual(result.version, "omp 0.1.0")
 
     def test_host_override_calls_detect_on_named_adapter(self):
         """select(host=...) must call detect() to populate the DetectResult."""
@@ -288,9 +311,9 @@ class TestSelectAuto(unittest.TestCase):
 class TestRegistryCompleteness(unittest.TestCase):
     """Sanity checks on the registry contents."""
 
-    def test_all_four_hosts_registered(self):
-        """The registry must contain entries for all four supported hosts."""
-        for name in ("claude", "cursor", "codex", "antigravity"):
+    def test_all_five_hosts_registered(self):
+        """The registry must contain entries for all five supported adapter hosts."""
+        for name in ("claude", "cursor", "codex", "antigravity", "omp"):
             self.assertIn(name, _ADAPTER_BY_NAME, f"Host '{name}' missing from registry")
 
     def test_no_duplicate_names(self):
@@ -303,7 +326,7 @@ class TestRegistryCompleteness(unittest.TestCase):
         self.assertEqual(set(_ADAPTER_BY_NAME.keys()), {a.name for a in _ALL_ADAPTERS})
 
     def test_importing_registry_registers_command_tiers(self):
-        """Importing the registry must register command tiers for all four hosts.
+        """Importing the registry must register command tiers for all adapter hosts.
 
         This verifies the import-time side-effect: each adapter module calls
         register_command_tiers() at import time, which is required before
@@ -314,7 +337,7 @@ class TestRegistryCompleteness(unittest.TestCase):
         """
         from z_harness_cli.adapters.base import COMMAND_CAPABILITY_MATRIX, KNOWN_COMMANDS
 
-        for host in ("claude", "cursor", "codex", "antigravity"):
+        for host in ("claude", "cursor", "codex", "antigravity", "omp"):
             self.assertIn(
                 host,
                 COMMAND_CAPABILITY_MATRIX,

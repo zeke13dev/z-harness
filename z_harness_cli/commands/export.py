@@ -24,12 +24,16 @@ Output model:
 """
 
 from __future__ import annotations
+import importlib
 
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import typer
+
+_EXPORT_ONLY_HOSTS = frozenset({"pi", "windsurf", "kiro", "cline", "copilot"})
+_RUNTIME_DRIVER_HOSTS = _EXPORT_ONLY_HOSTS
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +103,9 @@ def _validate_out_path(out: str, repo_root: Path, force: bool) -> Path:
         )
         raise typer.Exit(code=1)
 
-    # Check non-empty-dir guard.
+    # Check non-empty-dir guard. With --force, allow the export to proceed
+    # without deleting the caller-chosen root. Exporters may overwrite their
+    # own files, but the CLI must not remove sibling exports or the repo root.
     if dest.is_dir() and any(dest.iterdir()) and not force:
         typer.echo(
             f"Error: destination directory {dest} already exists and is non-empty.\n"
@@ -107,7 +113,6 @@ def _validate_out_path(out: str, repo_root: Path, force: bool) -> Path:
             err=True,
         )
         raise typer.Exit(code=1)
-
     return dest
 
 
@@ -139,11 +144,38 @@ def _export_for_host(
     if result.warnings:
         for warn in result.warnings:
             typer.echo(f"  warning: {warn}", err=True)
+        raise typer.Exit(code=1)
 
     if result.files:
         for f in result.files:
             typer.echo(f"  wrote: {f}")
 
+
+
+def _export_runtime_driver(host_name: str, repo_root: Path, dest: Path) -> None:
+    """Export a runtime driver target that has no interactive host adapter."""
+    if host_name == "antigravity":
+        module_name = "runtime.drivers.antigravity.export"
+    else:
+        module_name = f"runtime.drivers.{host_name}.export"
+
+    try:
+        mod = importlib.import_module(module_name)
+    except ImportError as exc:
+        typer.echo(f"Error: cannot import exporter for host {host_name!r}: {exc}", err=True)
+        raise typer.Exit(code=1)
+
+    result = mod.export(repo_root, dest)
+    typer.echo(
+        f"[{host_name}] fidelity={result.fidelity}  "
+        f"files={len(result.files)}  dest={dest}"
+    )
+    if result.warnings:
+        for warn in result.warnings:
+            typer.echo(f"  warning: {warn}", err=True)
+        raise typer.Exit(code=1)
+    for f in result.files:
+        typer.echo(f"  wrote: {f}")
 
 # ---------------------------------------------------------------------------
 # Public entry point
@@ -161,8 +193,8 @@ def run(
 ) -> None:
     """Entry point called from __main__.export_cmd."""
     from z_harness_cli.adapters.registry import (
-        detect_all,
         select,
+        detect_all,
         UnknownHostError,
         NoHostInstalledError,
     )
@@ -200,19 +232,35 @@ def run(
     # Determine which adapters to export.
     # -----------------------------------------------------------------------
 
+    runtime_hosts: list[str] = []
     if all_hosts:
-        pairs = detect_all()
-        adapters = [adapter for adapter, _result in pairs]
+        adapters = [
+            adapter
+            for adapter, result in detect_all()
+            if result.installed
+        ]
+        runtime_hosts = []
+        if not adapters:
+            typer.echo("Error: no installed hosts found.", err=True)
+            raise typer.Exit(code=1)
         # Multiple hosts sharing one destination root — namespace per host to
         # prevent collisions.
         namespace_by_host = True
     elif host is not None:
-        try:
-            adapter, _result = select(host=host, interactive=False)
-        except UnknownHostError as exc:
-            typer.echo(f"Error: {exc}", err=True)
-            raise typer.Exit(code=1)
-        adapters = [adapter]
+        if host in _RUNTIME_DRIVER_HOSTS:
+            runtime_hosts = [host]
+            adapters = []
+        else:
+            try:
+                adapter, _result = select(host=host, interactive=False)
+            except UnknownHostError as exc:
+                typer.echo(
+                    f"Error: {exc} Runtime export targets also supported: {sorted(_RUNTIME_DRIVER_HOSTS)}.",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+            adapters = [adapter]
+            runtime_hosts = []
         # Single explicit host — write directly to dest, no sub-directory.
         namespace_by_host = False
     else:
@@ -233,3 +281,7 @@ def run(
 
     for adapter in adapters:
         _export_for_host(adapter, dest, namespace_by_host)
+    for host_name in runtime_hosts:
+        host_dest = dest / host_name if namespace_by_host else dest
+        host_dest.mkdir(parents=True, exist_ok=True)
+        _export_runtime_driver(host_name, repo_root, host_dest)

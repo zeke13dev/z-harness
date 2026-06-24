@@ -223,8 +223,9 @@ class HostAdapter(Protocol):
         servers set Injection._cleanup_fn accordingly.
 
         inject() MUST also set the host-appropriate plugin-root env var
-        (``CLAUDE_PLUGIN_ROOT`` / ``ANTIGRAVITY_PLUGIN_ROOT``) for
-        ephemeral launches so the child process can resolve the runtime.
+        (``CLAUDE_PLUGIN_ROOT`` / ``ANTIGRAVITY_PLUGIN_ROOT`` /
+        ``OMP_PLUGIN_ROOT``) for ephemeral launches so the child process can
+        resolve the runtime.
         """
         ...
 
@@ -265,8 +266,8 @@ class HostAdapter(Protocol):
 # Concrete adapters REGISTER their own entries by updating this dict after
 # their module is imported (see each adapter's module-level _register() call).
 #
-# The matrix intentionally ships as a skeleton; T002 owns the structure +
-# query API.  Adapters (T008–T011) fill their own tier declarations.
+# The matrix intentionally ships as a registration target; adapters fill their
+# own tier declarations at import time.
 #
 # Known /z-* command families (seed list; adapters extend as needed):
 #   z-plan, z-implement, z-execute, z-review, z-test, z-audit,

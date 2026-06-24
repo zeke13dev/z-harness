@@ -451,5 +451,65 @@ class TestLiveExportZAttend(unittest.TestCase):
             )
 
 
+
+class TestUnsupportedCallBlockRewrites(unittest.TestCase):
+    """Regression coverage for multi-line unsupported runtime call export rewrites."""
+
+    def _rendered(self, exporter_module: str, exported_path_parts: tuple[str, ...]) -> str:
+        import importlib
+
+        mod = importlib.import_module(exporter_module)
+        with tempfile.TemporaryDirectory() as tmp:
+            out_root = Path(tmp) / "export_out"
+            mod.export(REPO_ROOT, out_root)
+            rendered = out_root / Path(*exported_path_parts)
+            self.assertTrue(rendered.exists(), f"missing rendered file: {rendered}")
+            return rendered.read_text(encoding="utf-8")
+
+    def test_antigravity_preserves_gate_comments_without_orphaned_agent_args(self) -> None:
+        content = self._rendered(
+            "runtime.drivers.antigravity.export",
+            (".agent", "skills", "z-audit-plan-style", "SKILL.md"),
+        )
+        self.assertIn("RUNTIME-GATE: subagent", content)
+        self.assertNotIn("subagent_type=", content)
+        self.assertNotIn("model=", content)
+        self.assertNotIn("description=", content)
+
+    def test_pi_agent_rewrite_skips_empty_prose_but_rewrites_real_calls(self) -> None:
+        from runtime.drivers.pi.export import _rewrite_body
+
+        body = textwrap.dedent("""\
+        <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this
+             requirement to the user and skip the Agent() call. -->
+        | `subagent` | yes | Phase 3 reviewer Agent() calls |
+        - Agent(subagent_type="doc-fetcher", description="Doc context", prompt="...")
+        CURATOR_RETURN="$(Agent(
+          subagent_type="context-curator",
+          description="Context curation",
+          prompt="..."
+        ))"
+        """)
+
+        rewritten = _rewrite_body(body, {"doc-fetcher", "context-curator"})
+
+        self.assertIn("skip the Agent() call", rewritten)
+        self.assertIn("Phase 3 reviewer Agent() calls", rewritten)
+        self.assertIn('> [pi] Use the subagent tool: { "agent": "doc-fetcher"', rewritten)
+        self.assertIn("> [pi] Dispatch a subagent here via the subagent tool", rewritten)
+        self.assertNotIn('CURATOR_RETURN="$(Agent(', rewritten)
+
+    def test_pi_preserves_gate_comments_with_legacy_line_based_agent_args(self) -> None:
+        content = self._rendered(
+            "runtime.drivers.pi.export",
+            ("prompts", "z-audit-plan-style.md"),
+        )
+        self.assertIn("RUNTIME-GATE: subagent", content)
+        self.assertIn("requirement to the user and skip the Agent() call.", content)
+        self.assertIn("> [pi] Dispatch a subagent here via the subagent tool", content)
+        self.assertIn('subagent_type="plan-style-reviewer"', content)
+        self.assertIn('model="sonnet"', content)
+        self.assertIn('description="Plan-style review for <Z_HARNESS_SLUG>"', content)
+
 if __name__ == "__main__":
     unittest.main()

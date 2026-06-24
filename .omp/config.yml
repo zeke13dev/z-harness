@@ -1,5 +1,6 @@
 # Keep Oh My Pi sessions in this repo lean.
-# z-harness has a large Codex-oriented root AGENTS.md export; OMP's project
-# AGENTS auto-loader would ingest it as startup context (~90K tokens).
+# z-harness launch injects native OMP discovery through OMP_PLUGIN_ROOT at
+# process scope; this project config only suppresses the large root AGENTS.md
+# auto-loader so OMP does not ingest the Codex-oriented context (~90K tokens).
 skills:
   enableAgentsProject: false

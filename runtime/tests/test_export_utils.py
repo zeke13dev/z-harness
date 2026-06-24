@@ -30,6 +30,7 @@ Cases covered:
 
 from __future__ import annotations
 
+import importlib
 import shutil
 import tempfile
 from pathlib import Path
@@ -198,6 +199,157 @@ class TestEnumerateSources:
                 assert "frontmatter" in entry
                 assert "body" in entry
                 assert isinstance(entry["source_path"], Path)
+
+
+# ---------------------------------------------------------------------------
+# Legacy pi Agent() rewriting
+# ---------------------------------------------------------------------------
+
+class TestPiLegacyAgentRewrite:
+    def test_rewrite_body_catches_shell_captured_agent_call(self):
+        pi_export = importlib.import_module("runtime.drivers.pi.export")
+        source = (
+            'INTENT_CLASSIFIER_OUT="$(Agent(\n'
+            '  subagent_type="intent-classifier",\n'
+            '  description="Classify intent",\n'
+            '))"\n'
+        )
+
+        rewritten = pi_export._rewrite_body(source, {"intent-classifier"})
+
+        assert 'INTENT_CLASSIFIER_OUT="$(Agent(' not in rewritten
+        assert "Agent(" not in rewritten
+        assert "Dispatch a subagent here via the subagent tool" in rewritten
+
+    def test_rewrite_body_catches_single_line_shell_captured_agent_call(self):
+        pi_export = importlib.import_module("runtime.drivers.pi.export")
+        source = (
+            'INTENT_CLASSIFIER_OUT="$(Agent(subagent_type="intent-classifier", '
+            'description="Classify intent", prompt="task"))"\n'
+        )
+
+        rewritten = pi_export._rewrite_body(source, {"intent-classifier"})
+
+        assert "Agent(" not in rewritten
+        assert '"agent": "intent-classifier"' in rewritten
+
+
+    def test_rewrite_body_still_handles_bare_agent_call(self):
+        pi_export = importlib.import_module("runtime.drivers.pi.export")
+        source = 'Agent(subagent_type="explore", description="Scout", prompt="go")\n'
+
+        rewritten = pi_export._rewrite_body(source, {"explore"})
+
+        assert "Agent(" not in rewritten
+        assert '"agent": "explore"' in rewritten
+
+
+    def test_rewrite_body_catches_bulleted_inline_agent_example(self):
+        pi_export = importlib.import_module("runtime.drivers.pi.export")
+        source = (
+            '- `Agent(subagent_type="consultant-primary", '
+            'description="Phase 3 consult", prompt="...")`\n'
+        )
+
+        rewritten = pi_export._rewrite_body(source, {"consultant-primary"})
+
+        assert "Agent(" not in rewritten
+        assert '"agent": "consultant-primary"' in rewritten
+
+    def test_rewrite_body_keeps_existing_skill_and_tool_matching_rules(self):
+        pi_export = importlib.import_module("runtime.drivers.pi.export")
+        source = (
+            '- `Skill("z-plan")`\n'
+            'AskUserQuestion(prompt="choose")\n'
+            'Inline AskUserQuestion(prompt="not a call")\n'
+        )
+
+        rewritten = pi_export._rewrite_body(source, set())
+
+        assert '- `Skill("z-plan")`' in rewritten
+        assert 'AskUserQuestion(prompt="choose")' not in rewritten
+        assert 'Inline AskUserQuestion(prompt="not a call")' in rewritten
+
+
+    def test_exported_prompt_rewrites_shell_captured_agent_call(self, tmp_path):
+        pi_export = importlib.import_module("runtime.drivers.pi.export")
+        repo = tmp_path / "repo"
+        skill_dir = repo / "skills" / "legacy-capture"
+        skill_dir.mkdir(parents=True)
+        skill_dir.joinpath("SKILL.md").write_text(
+            """---
+name: legacy-capture
+description: Legacy captured Agent call fixture
+---
+# Legacy capture
+
+INTENT_CLASSIFIER_OUT="$(Agent(
+  subagent_type="intent-classifier",
+  description="Classify planning depth",
+  prompt="task_prompt: <args>"
+))"
+""",
+            encoding="utf-8",
+        )
+
+        result = pi_export.export(repo, tmp_path / "out")
+        prompt = tmp_path / "out" / "prompts" / "legacy-capture.md"
+        text = prompt.read_text(encoding="utf-8")
+
+        assert result.warnings == []
+        assert prompt.resolve() in result.files
+        assert 'INTENT_CLASSIFIER_OUT="$(Agent(' not in text
+        assert "Agent(" not in text
+        assert "Dispatch a subagent here via the subagent tool" in text
+
+
+# ---------------------------------------------------------------------------
+# Legacy pi asset documentation
+# ---------------------------------------------------------------------------
+
+_PI_DOC_FILES = (
+    _REPO_ROOT / "scripts" / "pi_assets" / "README.md",
+    _REPO_ROOT / "scripts" / "pi_assets" / "CAPABILITIES.md",
+    _REPO_ROOT / "exports" / "pi" / "README.md",
+    _REPO_ROOT / "exports" / "pi" / "CAPABILITIES.md",
+)
+
+_PI_STALE_NAME_DOC_FILES = (
+    _REPO_ROOT / "docs" / "llm" / "MEMORIES-FLAT.md",
+    _REPO_ROOT / "docs" / "human" / "MULTI-IDE.md",
+)
+
+
+class TestPiLegacyAssetDocs:
+    def test_pi_docs_use_runtime_export_entrypoint(self):
+        for path in _PI_DOC_FILES:
+            text = path.read_text(encoding="utf-8")
+            stale_basename = "export-" + "pi" + ".py"
+            stale_script = "scripts/" + stale_basename
+            assert stale_script not in text
+            assert stale_basename not in text
+            assert "/z-export --target=pi" in text
+            assert "runtime.drivers.pi.export" in text
+
+    def test_pi_human_and_memory_docs_use_runtime_export_entrypoint_names(self):
+        stale_basename = "export-" + "pi" + ".py"
+        for path in _PI_STALE_NAME_DOC_FILES:
+            text = path.read_text(encoding="utf-8")
+            assert stale_basename not in text
+            assert "runtime/drivers/pi/export.py" in text
+
+    def test_pi_docs_direct_native_omp_to_omp_export(self):
+        for path in _PI_DOC_FILES:
+            text = path.read_text(encoding="utf-8")
+            assert "/z-export --target=omp" in text
+            assert "scripts/omp-consult.sh" in text
+            assert "not the native OMP export path" in text
+
+    def test_exports_pi_docs_match_asset_sources(self):
+        for name in ("README.md", "CAPABILITIES.md"):
+            asset = _REPO_ROOT / "scripts" / "pi_assets" / name
+            exported = _REPO_ROOT / "exports" / "pi" / name
+            assert exported.read_text(encoding="utf-8") == asset.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

@@ -262,6 +262,13 @@ class TestResolvePluginRootEnv(unittest.TestCase):
         result = resolve_plugin_root_env("agy", "ephemeral")
         self.assertIn("ANTIGRAVITY_PLUGIN_ROOT", result)
 
+
+    def test_omp_ephemeral_sets_omp_plugin_root_only(self):
+        result = resolve_plugin_root_env("omp", "ephemeral")
+        self.assertIn("OMP_PLUGIN_ROOT", result)
+        self.assertNotIn("CLAUDE_PLUGIN_ROOT", result)
+        self.assertNotIn("ANTIGRAVITY_PLUGIN_ROOT", result)
+
     def test_ephemeral_plugin_root_is_absolute_path(self):
         result = resolve_plugin_root_env("claude", "ephemeral")
         path = result["CLAUDE_PLUGIN_ROOT"]
@@ -273,6 +280,10 @@ class TestResolvePluginRootEnv(unittest.TestCase):
     def test_custom_harness_root_override(self):
         result = resolve_plugin_root_env("claude", "ephemeral", harness_root="/custom/root")
         self.assertEqual(result["CLAUDE_PLUGIN_ROOT"], "/custom/root")
+
+    def test_omp_custom_harness_root_override(self):
+        result = resolve_plugin_root_env("omp", "ephemeral", harness_root="/custom/root")
+        self.assertEqual(result, {"OMP_PLUGIN_ROOT": "/custom/root"})
 
 
 class TestResolveProvidersEnv(unittest.TestCase):
@@ -415,6 +426,13 @@ class TestResolveEnvBundle(unittest.TestCase):
         self.assertIn("ANTIGRAVITY_PLUGIN_ROOT", bundle)
         self.assertNotIn("CLAUDE_PLUGIN_ROOT", bundle)
 
+    def test_omp_ephemeral_sets_omp_root_only(self):
+        self._skip_if_scripts_missing()
+        bundle = resolve_env_bundle(REPO_ROOT, "omp", "ephemeral")
+        self.assertIn("OMP_PLUGIN_ROOT", bundle)
+        self.assertEqual(bundle["OMP_PLUGIN_ROOT"], str(REPO_ROOT / ".omp" / "z-harness"))
+        self.assertNotIn("CLAUDE_PLUGIN_ROOT", bundle)
+        self.assertNotIn("ANTIGRAVITY_PLUGIN_ROOT", bundle)
 
 if __name__ == "__main__":
     unittest.main()

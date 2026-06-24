@@ -15,11 +15,10 @@ How the wiring works:
      ``adapter.inject(state_env, mode="ephemeral", project=...)``.
   3. Each adapter calls ``env.update(state_env)`` so every key in the
      bundle lands in ``Injection.env``.
-  4. The adapter adds the host-appropriate plugin-root on top (ephemeral only
-     for ClaudeAdapter; all modes for the others).
-
-This file tests step 2-3 across all four adapters (claude, antigravity,
-cursor, codex) for both ephemeral and in_place modes.
+  4. The adapter adds the host-appropriate plugin-root on top. For OMP
+     ephemeral injection, the bundle's repo-root OMP_PLUGIN_ROOT is replaced
+     with the session-scoped .omp/z-harness package root that the adapter
+     creates and later cleans up.
 
 Project-root correctness check
 -------------------------------
@@ -62,6 +61,7 @@ from z_harness_cli.adapters.claude import ClaudeAdapter
 from z_harness_cli.adapters.antigravity import AntigravityAdapter
 from z_harness_cli.adapters.cursor import CursorAdapter
 from z_harness_cli.adapters.codex import CodexAdapter
+from z_harness_cli.adapters.omp import OmpAdapter
 from z_harness_cli.env_bundle import (
     _parse_export_env_lines,
     resolve_env_bundle,
@@ -542,6 +542,82 @@ class TestCodexAdapterBundleWiring(_AdapterWiringMixin, _HermeticEnvCase):
         finally:
             self.adapter.cleanup(inj)
 
+# ---------------------------------------------------------------------------
+# OmpAdapter wiring — session-scoped OMP_PLUGIN_ROOT discovery
+# ---------------------------------------------------------------------------
+
+class TestOmpAdapterBundleWiring(_AdapterWiringMixin, _HermeticEnvCase):
+    """OmpAdapter wiring: OMP_PLUGIN_ROOT points at .omp/z-harness state."""
+
+    host_name = "omp"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self._tmp = tempfile.TemporaryDirectory(prefix="zh-bundle-wiring-omp-")
+        self.project = Path(self._tmp.name).resolve()
+        _git_init(self.project)
+        _plant_repo_config(self.project, notify_level=self.PLANTED_NOTIFY_LEVEL)
+        self.adapter = OmpAdapter()
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+        super().tearDown()
+
+    def test_omp_plugin_root_injected_without_other_host_roots(self) -> None:
+        """OMP receives OMP_PLUGIN_ROOT, not Claude/Agy plugin-root fallbacks."""
+        self._skip_if_scripts_missing()
+
+        saved_claude = os.environ.get("CLAUDE_PLUGIN_ROOT")
+        saved_agy = os.environ.get("ANTIGRAVITY_PLUGIN_ROOT")
+        os.environ["CLAUDE_PLUGIN_ROOT"] = "/tmp/wrong-claude-root"
+        os.environ["ANTIGRAVITY_PLUGIN_ROOT"] = "/tmp/wrong-agy-root"
+        try:
+            inj = self._inject_ephemeral()
+            try:
+                expected_plugin_root = self.project / ".omp" / "z-harness"
+                self.assertEqual(inj.env["OMP_PLUGIN_ROOT"], str(expected_plugin_root))
+                self.assertNotIn("CLAUDE_PLUGIN_ROOT", inj.env)
+                self.assertNotIn("ANTIGRAVITY_PLUGIN_ROOT", inj.env)
+            finally:
+                self.adapter.cleanup(inj)
+        finally:
+            if saved_claude is None:
+                os.environ.pop("CLAUDE_PLUGIN_ROOT", None)
+            else:
+                os.environ["CLAUDE_PLUGIN_ROOT"] = saved_claude
+            if saved_agy is None:
+                os.environ.pop("ANTIGRAVITY_PLUGIN_ROOT", None)
+            else:
+                os.environ["ANTIGRAVITY_PLUGIN_ROOT"] = saved_agy
+
+    def test_omp_injection_writes_only_session_scoped_state_and_cleanup_removes_it(self) -> None:
+        """OMP injection leaves .omp/config.yml untouched and cleans session state."""
+        self._skip_if_scripts_missing()
+
+        config = self.project / ".omp" / "config.yml"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config_body = "skills:\n  enableAgentsProject: false\n"
+        config.write_text(config_body, encoding="utf-8")
+
+        inj = self._inject_ephemeral()
+        session_file = self.project / ".omp" / "z-harness" / "session.yml"
+        session_dir = session_file.parent
+        try:
+            self.assertEqual(inj.injected_files, [session_file])
+            self.assertEqual(inj.env["OMP_PLUGIN_ROOT"], str(session_dir))
+            self.assertTrue(session_file.exists())
+            self.assertIn("z-harness:injected", session_file.read_text(encoding="utf-8"))
+            self.assertIn(
+                ".omp/z-harness/session.yml",
+                (self.project / ".gitignore").read_text(encoding="utf-8"),
+            )
+            self.assertEqual(config.read_text(encoding="utf-8"), config_body)
+        finally:
+            self.adapter.cleanup(inj)
+
+        self.assertFalse(session_file.exists())
+        self.assertFalse(session_dir.exists())
+        self.assertEqual(config.read_text(encoding="utf-8"), config_body)
 
 if __name__ == "__main__":
     unittest.main()

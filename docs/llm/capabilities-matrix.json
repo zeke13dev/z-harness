@@ -1,28 +1,127 @@
 {
   "concept": "capabilities-matrix",
-  "last_updated": "2026-06-19",
-  "covers_spec": "INTENT: z-harness-portability (frozen 2026-06-19T19:05:12Z); §HostAdapter contract (D13); §Phase 7 review — Command-capability matrix (NEW); Stage-1 runtime export delegation",
+  "last_updated": "2026-06-24",
+  "covers_spec": "INTENT: z-harness-portability (frozen 2026-06-19T19:05:12Z); §HostAdapter contract (D13); §Phase 7 review — Command-capability matrix (NEW); Stage-1 runtime export delegation; INTENT: omp-native-support (frozen 2026-06-24T05:19:41Z) T001–T010 native OMP contract — T009 parity gate resolved to native",
   "source_file": [
     "z_harness_cli/adapters/claude.py",
     "z_harness_cli/adapters/antigravity.py",
     "z_harness_cli/adapters/cursor.py",
     "z_harness_cli/adapters/codex.py",
     "z_harness_cli/adapters/base.py",
-    "z_harness_cli/adapters/registry.py"
+    "z_harness_cli/adapters/registry.py",
+    "z_harness_cli/adapters/omp.py",
+    "z_harness_cli/adapters/omp_parity_gate.py",
+    "runtime/drivers/omp/export.py",
+    "runtime/drivers/omp/subprocess_driver.py",
+    ".omp/config.yml"
   ],
   "confidence": "high",
   "entry_points": [
-    {"file": "z_harness_cli/adapters/base.py", "line": 276, "symbol": "COMMAND_CAPABILITY_MATRIX", "kind": "const", "summary": "nested dict {host_name: {command_id: CommandTier}}; populated at adapter import time"},
-    {"file": "z_harness_cli/adapters/base.py", "line": 302, "symbol": "register_command_tiers", "kind": "fn", "summary": "registers per-host command tiers; raises ValueError if any KNOWN_COMMANDS entry is missing"},
-    {"file": "z_harness_cli/adapters/base.py", "line": 320, "symbol": "command_tier", "kind": "fn", "summary": "O(1) lookup (host, command) -> CommandTier; returns 'blocked' for unknowns (fail-safe)"},
-    {"file": "z_harness_cli/adapters/base.py", "line": 52, "symbol": "Capabilities", "kind": "struct", "summary": "frozen dataclass of static per-host capability flags"},
-    {"file": "z_harness_cli/adapters/base.py", "line": 42, "symbol": "ExportResult", "kind": "module", "summary": "re-export from runtime.drivers._export_utils; canonical import location for z_harness_cli callers"},
-    {"file": "z_harness_cli/adapters/registry.py", "line": 84, "symbol": "detect_all", "kind": "fn", "summary": "probes all four adapters; returns (adapter, DetectResult) pairs in canonical order"},
-    {"file": "z_harness_cli/adapters/registry.py", "line": 110, "symbol": "select", "kind": "fn", "summary": "resolves host with optional Rich picker; raises UnknownHostError / NoHostInstalledError"},
-    {"file": "z_harness_cli/adapters/claude.py", "line": 107, "symbol": "ClaudeAdapter", "kind": "struct", "summary": "native-fidelity adapter; export_payload is persona-only (plugin reads skills/<id>/SKILL.md natively)"},
-    {"file": "z_harness_cli/adapters/antigravity.py", "line": 154, "symbol": "AntigravityAdapter", "kind": "struct", "summary": "high-fidelity adapter; export_payload runs two-stage pipeline (runtime + persona loop)"},
-    {"file": "z_harness_cli/adapters/cursor.py", "line": 161, "symbol": "CursorAdapter", "kind": "struct", "summary": "flattened adapter; export_payload runs two-stage pipeline producing native .cursor/skills/<id>/SKILL.md files plus one generated always-apply .cursor/rules/z-harness-skills.mdc index and AGENT .mdc rules"},
-    {"file": "z_harness_cli/adapters/codex.py", "line": 182, "symbol": "CodexAdapter", "kind": "struct", "summary": "flattened adapter; export_payload runs two-stage pipeline producing prompts/ flat files"}
+    {
+      "file": "z_harness_cli/adapters/base.py",
+      "line": 276,
+      "symbol": "COMMAND_CAPABILITY_MATRIX",
+      "kind": "const",
+      "summary": "nested dict {host_name: {command_id: CommandTier}}; populated at adapter import time"
+    },
+    {
+      "file": "z_harness_cli/adapters/base.py",
+      "line": 302,
+      "symbol": "register_command_tiers",
+      "kind": "fn",
+      "summary": "registers per-host command tiers; raises ValueError if any KNOWN_COMMANDS entry is missing"
+    },
+    {
+      "file": "z_harness_cli/adapters/base.py",
+      "line": 320,
+      "symbol": "command_tier",
+      "kind": "fn",
+      "summary": "O(1) lookup (host, command) -> CommandTier; returns 'blocked' for unknowns (fail-safe)"
+    },
+    {
+      "file": "z_harness_cli/adapters/base.py",
+      "line": 52,
+      "symbol": "Capabilities",
+      "kind": "struct",
+      "summary": "frozen dataclass of static per-host capability flags"
+    },
+    {
+      "file": "z_harness_cli/adapters/base.py",
+      "line": 42,
+      "symbol": "ExportResult",
+      "kind": "module",
+      "summary": "re-export from runtime.drivers._export_utils; canonical import location for z_harness_cli callers"
+    },
+    {
+      "file": "z_harness_cli/adapters/registry.py",
+      "line": 84,
+      "symbol": "detect_all",
+      "kind": "fn",
+      "summary": "probes all five adapters, including OMP partial; returns (adapter, DetectResult) pairs in canonical order"
+    },
+    {
+      "file": "z_harness_cli/adapters/registry.py",
+      "line": 110,
+      "symbol": "select",
+      "kind": "fn",
+      "summary": "resolves host with optional Rich picker; raises UnknownHostError / NoHostInstalledError"
+    },
+    {
+      "file": "z_harness_cli/adapters/claude.py",
+      "line": 107,
+      "symbol": "ClaudeAdapter",
+      "kind": "struct",
+      "summary": "native-fidelity adapter; export_payload is persona-only (plugin reads skills/<id>/SKILL.md natively)"
+    },
+    {
+      "file": "z_harness_cli/adapters/antigravity.py",
+      "line": 154,
+      "symbol": "AntigravityAdapter",
+      "kind": "struct",
+      "summary": "high-fidelity adapter; export_payload runs two-stage pipeline (runtime + persona loop)"
+    },
+    {
+      "file": "z_harness_cli/adapters/cursor.py",
+      "line": 161,
+      "symbol": "CursorAdapter",
+      "kind": "struct",
+      "summary": "flattened adapter; export_payload runs two-stage pipeline producing native .cursor/skills/<id>/SKILL.md files plus one generated always-apply .cursor/rules/z-harness-skills.mdc index and AGENT .mdc rules"
+    },
+    {
+      "file": "z_harness_cli/adapters/codex.py",
+      "line": 182,
+      "symbol": "CodexAdapter",
+      "kind": "struct",
+      "summary": "flattened adapter; export_payload runs two-stage pipeline producing prompts/ flat files"
+    },
+    {
+      "file": "z_harness_cli/adapters/omp_parity_gate.py",
+      "line": 1,
+      "symbol": "omp_parity_gate",
+      "kind": "module",
+      "summary": "Single source of truth for OMP fidelity and command tiers (T009). PARITY_EVIDENCE maps command families to T008 test classes; omp_adapter_fidelity() returns 'native' when all entries resolve. Removing a T008 class immediately downgrades the corresponding family."
+    },
+    {
+      "file": "z_harness_cli/adapters/omp.py",
+      "line": 1,
+      "symbol": "OmpAdapter",
+      "kind": "struct",
+      "summary": "OMP host adapter (T009 complete); fidelity_tier and command tiers read from omp_parity_gate. fidelity_tier='native'; z-execute/z-consult/z-gate/z-panel are native; all others are degraded."
+    },
+    {
+      "file": "runtime/drivers/omp/export.py",
+      "line": 1,
+      "symbol": "omp.export",
+      "kind": "fn",
+      "summary": "Emits .omp/config.yml plus OMP package/discovery layout under .omp/z-harness/; returns ExportResult(fidelity='native') after T009. Must not reuse pi export rewrites. .omp/config.yml is never modified."
+    },
+    {
+      "file": "runtime/drivers/omp/subprocess_driver.py",
+      "line": 1,
+      "symbol": "OmpHostDriver",
+      "kind": "struct",
+      "summary": "Native OMP dispatch driver (T007): frozen argv/prompt-transport/event/session/model contract. Separate from scripts/omp-consult.sh. Rejects empty prompts; normalizes events; redacts secrets from telemetry."
+    }
   ],
   "depends_on": [
     "multi-ide-exports"
@@ -34,23 +133,40 @@
   ],
   "fidelity_tiers": {
     "native": {
-      "hosts": ["claude"],
+      "hosts": [
+        "claude"
+      ],
       "description": "Full orchestration + native personas. All /z-* commands run identically to the Claude Code reference. Multi-agent dispatch (subagents, panels, consults, gates) works natively."
     },
+    "partial": {
+      "hosts": [],
+      "description": "Adapter/export support implemented but parity not yet proven. Retained as a tier for future candidate hosts. OMP advanced from partial to native via T009."
+    },
     "high": {
-      "hosts": ["antigravity"],
+      "hosts": [
+        "antigravity"
+      ],
       "description": "Native skills/personas, single-agent only. Multi-agent commands (/z-execute, /z-panel, /z-consult, /z-gate) are degraded (single-agent transliteration, not blocked). All other /z-* commands run at native fidelity."
     },
     "flattened": {
-      "hosts": ["cursor", "codex"],
+      "hosts": [
+        "cursor",
+        "codex"
+      ],
       "description": "Transliterated rules, single-agent only. z-harness rules injected via host-native config file. Single-agent /z-* commands run in degraded mode. Multi-agent commands are blocked."
     },
     "curated": {
-      "hosts": ["windsurf", "kiro"],
+      "hosts": [
+        "windsurf",
+        "kiro"
+      ],
       "description": "Export-only. Curated rule/steering files with host-specific frontmatter (trigger for Windsurf, inclusion for Kiro). No adapter, no launch/inject. Export via runtime.drivers.<host>.export only."
     },
     "pointer": {
-      "hosts": ["cline", "copilot"],
+      "hosts": [
+        "cline",
+        "copilot"
+      ],
       "description": "Export-only. Single pointer/instructions file pointing to z-harness capabilities. No adapter, no launch/inject. Export via runtime.drivers.<host>.export only."
     }
   },
@@ -59,7 +175,9 @@
       "stage1": "none — native plugin reads skills/<id>/SKILL.md directly",
       "stage2": "runtime/drivers/claude/persona_export.py::export_persona() for each personas/*.md",
       "fidelity": "native",
-      "layout": ["<dest>/personas/<name>.md"],
+      "layout": [
+        "<dest>/personas/<name>.md"
+      ],
       "note": "skills/ is the committed source; no export to files is needed or done on the native host"
     },
     "antigravity": {
@@ -137,6 +255,21 @@
         "<dest>/.github/copilot-instructions.md"
       ],
       "structural_rule": "single instructions file, plain markdown, non-empty body required"
+    },
+    "omp": {
+      "stage1": "runtime/drivers/omp/export.py::export(harness_root, dest)",
+      "stage2": "OMP profile/persona rendering into .omp/z-harness/profiles/<name>.yml",
+      "fidelity": "native (T009); synchronized with OmpAdapter.fidelity_tier and COMMAND_CAPABILITY_MATRIX[\"omp\"] via omp_parity_gate.py",
+      "layout": [
+        "<dest>/.omp/config.yml",
+        "<dest>/.omp/z-harness/manifest.yml",
+        "<dest>/.omp/z-harness/skills/<id>/SKILL.md",
+        "<dest>/.omp/z-harness/rules/<id>.md",
+        "<dest>/.omp/z-harness/prompts/<id>.md",
+        "<dest>/.omp/z-harness/agents/<id>.md",
+        "<dest>/.omp/z-harness/profiles/<name>.yml"
+      ],
+      "note": "OMP export is implemented partial-fidelity first-class host support, not pi export and not omp-consult provider compatibility."
     }
   },
   "per_host": {
@@ -228,17 +361,95 @@
       "export_layout": ".github/copilot-instructions.md",
       "structural_rule": "single instructions file, plain markdown, non-empty body",
       "runtime_module": "runtime.drivers.copilot.export"
+    },
+    "omp": {
+      "binary": "omp",
+      "fidelity_tier": "native",
+      "native_command_families": ["z-execute", "z-consult", "z-gate", "z-panel"],
+      "degraded_command_families": ["z-plan", "z-implement", "z-review", "z-test", "z-audit", "z-export", "z-update", "z-doctor", "z-status", "z-brainstorm", "z-maintain-docs"],
+      "capabilities": {
+        "supports_project_mcp": false,
+        "supports_user_mcp": false,
+        "needs_trust_prompt": false,
+        "supports_cwd_override": false,
+        "cleanup_strategy": "ephemeral"
+      },
+      "plugin_root_env": "OMP_PLUGIN_ROOT",
+      "config_injection": ".omp/config.yml is never modified; z-harness writes only .omp/z-harness/session.yml (gitignored); discovery comes from OMP_PLUGIN_ROOT pointing at .omp/z-harness/",
+      "dispatch_contract": "native dispatch via OmpHostDriver (T007); frozen argv/event/session/model contract; consult-provider compatibility stays in scripts/omp-consult.sh (separate path, --no-rules --no-session)",
+      "parity_gate": "z_harness_cli/adapters/omp_parity_gate.py; PARITY_EVIDENCE keyed to T008 test classes; T009 resolved to native"
+    },
+    "pi": {
+      "binary": null,
+      "fidelity_tier": "high export fidelity, export-only compatibility target",
+      "export_only": true,
+      "note": "No HostAdapter, no adapter-registry entry, no HostDriver, no launch/inject support. Export via direct import of runtime.drivers.pi.export.",
+      "export_layout": "agents/, prompts/, AGENTS.md, vendored extensions/subagent/",
+      "runtime_module": "runtime.drivers.pi.export"
     }
   },
   "command_tiers": {
-    "note": "Multi-agent commands are 'degraded' on high-fidelity hosts and 'blocked' on flattened hosts. All other /z-* commands are 'native' on claude, 'native' on antigravity, and 'degraded' on cursor/codex. Export-only hosts (windsurf/kiro/cline/copilot) have no command-tier registration — they are not in the adapter registry.",
-    "multi_agent_commands": ["z-execute", "z-panel", "z-consult", "z-gate"],
+    "note": "Multi-agent commands are degraded on high-fidelity adapter hosts and blocked on flattened adapter hosts. Export-only hosts (pi/windsurf/kiro/cline/copilot) have no command-tier registration — they are not in the adapter registry. OMP command tiers (T009): z-execute/z-consult/z-gate/z-panel are native; all others are degraded. Tiers are driven by PARITY_EVIDENCE in omp_parity_gate.py — removing a T008 class downgrades the family.",
+    "multi_agent_commands": [
+      "z-execute",
+      "z-panel",
+      "z-consult",
+      "z-gate"
+    ],
     "per_tier": {
-      "native": {"multi_agent": "native", "single_agent": "native"},
-      "high": {"multi_agent": "degraded", "single_agent": "native"},
-      "flattened": {"multi_agent": "blocked", "single_agent": "degraded"},
+      "native": {
+        "multi_agent": "native",
+        "single_agent": "native"
+      },
+      "partial": {
+        "multi_agent": "blocked",
+        "single_agent": "degraded"
+      },
+      "high": {
+        "multi_agent": "degraded",
+        "single_agent": "native"
+      },
+      "flattened": {
+        "multi_agent": "blocked",
+        "single_agent": "degraded"
+      },
       "curated": "export-only — no command tiers; not in adapter registry",
       "pointer": "export-only — no command tiers; not in adapter registry"
+    },
+    "omp_note": "OMP parity gate (T009) resolved: z-execute/z-consult/z-gate/z-panel are native (T008 evidence); all others are degraded. Adapter and export fidelity are both native. To promote a new family: add PARITY_EVIDENCE entry + T008 test class.",
+    "omp_evidence_matrix": {
+      "z-execute": [
+        "launch/inject cleanup",
+        "runtime driver",
+        "subagent fan-out",
+        "reviewer/self-reviewer routing",
+        "AskUser/gate mapping",
+        "telemetry events",
+        "non-zero handling"
+      ],
+      "planning_debug_audit_panels": [
+        "multi-agent panels",
+        "consultant dispatch",
+        "artifact/event sequencing",
+        "gate prompts",
+        "final result parsing"
+      ],
+      "consult_provider_roles": [
+        "native OMP command dispatch does not call scripts/omp-consult.sh",
+        "omp-gemini/omp-codex remain provider-registry compatibility"
+      ],
+      "export_doctor_detect": [
+        "select(host=\"omp\")",
+        "doctor fidelity/capability report",
+        "OMP export layout",
+        "ExportResult.fidelity synchronized with command tiers"
+      ],
+      "single_agent_commands": [
+        "argv/prompt transport",
+        "stdout/stderr/result parsing",
+        "cwd/session/profile/model behavior",
+        "telemetry parity"
+      ]
     }
   },
   "invariants": [
@@ -252,7 +463,12 @@
     "ClaudeAdapter.export_payload is persona-only; Stage 1 runtime export is not run (native plugin reads skills/<id>/SKILL.md directly)",
     "non-empty Stage-1 warnings raise RuntimeError immediately (legacy hard-gate; no silent downgrade)",
     "persona-name collision with Stage-1 exported ids raises RuntimeError (MINOR-6)",
-    "windsurf/kiro/cline/copilot are export-only: no adapter module at z_harness_cli/adapters/<host>.py, no registry entry, no command tiers (M5 invariant — validated by TestAdapterAbsence in test_export_golden.py)"
+    "windsurf/kiro/cline/copilot are export-only: no adapter module at z_harness_cli/adapters/<host>.py, no registry entry, no command tiers (M5 invariant — validated by TestAdapterAbsence in test_export_golden.py)",
+    "OMP parity gate (T009) resolved: OmpAdapter.fidelity_tier, OMP ExportResult.fidelity, and COMMAND_CAPABILITY_MATRIX[\"omp\"] all read from omp_parity_gate.py; z-execute/z-consult/z-gate/z-panel are native; all others degraded.",
+    "Claude Code is the ground-truth parity target for OMP native behavior.",
+    "Native OMP execution must not call runtime/drivers/pi/export.py, pi prompt rewrites, scripts/pi_assets, or scripts/omp-consult.sh.",
+    ".omp/config.yml intentionally preserves skills.enableAgentsProject=false; native OMP discovery is explicit through OMP_PLUGIN_ROOT and the .omp/z-harness package.",
+    "pi is export-only even though its export result fidelity is high; it is not in the adapter registry and is not a native OMP stepping stone."
   ],
   "gotchas": [
     "cursor and codex both declare fidelity=flattened but differ in MCP surface: cursor has supports_user_mcp=True, codex does not",
@@ -262,7 +478,88 @@
     "canonical adapter order in registry: claude (native) > antigravity (high) > cursor (flattened) > codex (flattened)",
     "register_command_tiers() raises ValueError at import time if KNOWN_COMMANDS entry is missing — misconfigured adapters fail fast",
     "antigravity collision domain is workflows/rules/skills stems (with z-harness- prefix stripped from rules); cursor uses .cursor/rules/ stems; codex uses prompts/ stems only (AGENTS.md excluded)",
-    "windsurf/kiro/cline/copilot are NOT adapters: registry.select(<host>) raises UnknownHostError for them; z_harness_cli/adapters/ has no module for them"
+    "windsurf/kiro/cline/copilot are NOT adapters: registry.select(<host>) raises UnknownHostError for them; z_harness_cli/adapters/ has no module for them",
+    "Do not treat omp-gemini/omp-codex provider entries as native OMP host support; they are consult-provider compatibility through scripts/omp-consult.sh.",
+    "OMP command tiers start blocked/degraded until command-family evidence covers the matrix; a host-wide native label is forbidden before the parity gate."
   ],
-  "memories": []
+  "memories": [],
+  "pending_native_hosts": {},
+  "omp_native_contract": {
+    "dispatch": {
+      "argv": "omp -p --model <provider/model> [--profile <profile>] [--session <session-id>] <prompt>",
+      "prompt_transport": "final positional argv argument; do not rely on stdin in print mode",
+      "empty_prompt": "reject before spawn with a driver error",
+      "output": "assistant text to stdout result; stderr preserved separately; non-zero or empty required output becomes error with exit code and bounded stderr summary",
+      "events": [
+        "dispatch_start",
+        "prompt_submitted",
+        "assistant_delta",
+        "tool_start",
+        "tool_end",
+        "subagent_start",
+        "subagent_end",
+        "ask_user",
+        "final_result",
+        "dispatch_end"
+      ],
+      "event_fields": [
+        "driver",
+        "command_id",
+        "session_id",
+        "sequence",
+        "kind",
+        "payload"
+      ],
+      "secret_rule": "payloads enumerate fields explicitly and never log full env/config dumps, OAuth tokens, or raw model credential material",
+      "session_rules_profile_model": "native mode keeps rules enabled through OMP_PLUGIN_ROOT, preserves requested sessions, passes profile/model explicitly, and redacts those values from telemetry; consult mode is the only --no-rules --no-session path"
+    },
+    "discovery_export_layout": {
+      "package_root": ".omp/z-harness/",
+      "env": "OMP_PLUGIN_ROOT",
+      "files": [
+        "manifest.yml",
+        "skills/<id>/SKILL.md",
+        "rules/<id>.md",
+        "agents/<id>.md",
+        "profiles/<name>.yml"
+      ],
+      "config_outcome": ".omp/config.yml keeps skills.enableAgentsProject: false to avoid auto-loading the large root AGENTS.md; native discovery is explicit via package root"
+    },
+    "boundaries": {
+      "legacy_pi_export": "do not call runtime/drivers/pi/export.py, pi prompt rewrites, scripts/pi_assets, or vendored pi subagent extension",
+      "omp_consult": "scripts/omp-consult.sh remains provider-registry compatibility only and intentionally uses --no-rules --no-session"
+    }
+  },
+  "export_only_hosts": {
+    "pi": {
+      "fidelity": "high export fidelity, but export-only",
+      "export_layout": [
+        "agents/",
+        "prompts/",
+        "AGENTS.md",
+        "extensions/subagent/"
+      ],
+      "runtime_module": "runtime.drivers.pi.export",
+      "note": "No HostAdapter, no HostDriver, no --host pi, no launch/inject; not evidence for OMP native parity."
+    }
+  },
+  "drift_verification": {
+    "date": "2026-06-24",
+    "command": "source review of z_harness_cli/adapters/registry.py, z_harness_cli/adapters/omp.py, and runtime/drivers/omp/export.py",
+    "observed_adapters": [
+      "claude",
+      "antigravity",
+      "cursor",
+      "codex",
+      "omp"
+    ],
+    "observed_matrix_hosts": [
+      "antigravity",
+      "claude",
+      "codex",
+      "cursor",
+      "omp"
+    ],
+    "conclusion": "OMP parity gate (T009) resolved: OmpAdapter.fidelity_tier='native', OMP ExportResult.fidelity='native'; z-execute/z-consult/z-gate/z-panel are native; all other families degraded. Three surfaces synchronized via omp_parity_gate.py."
+  }
 }

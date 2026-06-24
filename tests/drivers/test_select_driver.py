@@ -9,6 +9,7 @@ Covers:
   - host="cursor" + driver_override="cursor-sdk" → NotImplementedError raised
   - host="codex" → CodexDriver returned
   - host="antigravity" → AntigravityHostDriverShim returned
+  - host="omp" → OmpHostDriver returned
   - host="unknown" → DriverNotFoundError raised
   - driver_selected event emitted for each successful selection
 
@@ -30,6 +31,7 @@ from runtime.drivers.claude.self_host_driver import SelfHostDriver
 from runtime.drivers.claude.subprocess_driver import SubprocessClaudeDriver
 from runtime.drivers.codex.driver import CodexDriver
 from runtime.drivers.cursor.cli_driver import CursorCLIDriver
+from runtime.drivers.omp.subprocess_driver import OmpHostDriver
 
 
 # ---------------------------------------------------------------------------
@@ -40,6 +42,7 @@ _SUBPROCESS_DRIVER_PATH = "runtime.drivers.SubprocessClaudeDriver"
 _CURSOR_CLI_DRIVER_PATH = "runtime.drivers.CursorCLIDriver"
 _EMIT_PATH = "runtime.drivers._emit_driver_selected"
 
+_OMP_DRIVER_PATH = "runtime.drivers.OmpHostDriver"
 
 def _mock_subprocess_driver() -> MagicMock:
     """Return a MagicMock instance that passes isinstance checks as SubprocessClaudeDriver."""
@@ -51,6 +54,10 @@ def _mock_cursor_cli_driver() -> MagicMock:
     """Return a MagicMock instance that passes isinstance checks as CursorCLIDriver."""
     mock = MagicMock(spec=CursorCLIDriver)
     return mock
+
+def _mock_omp_driver() -> MagicMock:
+    """Return a MagicMock instance that passes isinstance checks as OmpHostDriver."""
+    return MagicMock(spec=OmpHostDriver)
 
 
 # ---------------------------------------------------------------------------
@@ -339,13 +346,61 @@ class TestAntigravityHost:
         assert issubclass(AntigravityHostDriverShim, HostDriver)
 
 
+
 # ---------------------------------------------------------------------------
-# DriverNotFoundError host list — updated to include codex + antigravity
+# host="omp" — native OMP runtime driver
+# ---------------------------------------------------------------------------
+
+
+class TestOmpHost:
+    """select_driver("omp") routes to OmpHostDriver."""
+
+    def test_omp_returns_native_omp_driver(self):
+        """select_driver('omp') must return an OmpHostDriver instance."""
+        mock_instance = _mock_omp_driver()
+        with (
+            patch(_OMP_DRIVER_PATH, return_value=mock_instance) as MockCls,
+            patch(_EMIT_PATH),
+        ):
+            result = select_driver("omp")
+        MockCls.assert_called_once_with()
+        assert result is mock_instance
+
+    def test_omp_emits_driver_selected(self):
+        """driver_selected telemetry fires for host='omp'."""
+        mock_instance = _mock_omp_driver()
+        with (
+            patch(_OMP_DRIVER_PATH, return_value=mock_instance),
+            patch(_EMIT_PATH) as mock_emit,
+        ):
+            select_driver("omp")
+        mock_emit.assert_called_once()
+
+    def test_omp_telemetry_host_field(self):
+        """host field in driver_selected telemetry must be 'omp'."""
+        mock_instance = _mock_omp_driver()
+        with (
+            patch(_OMP_DRIVER_PATH, return_value=mock_instance),
+            patch(_EMIT_PATH) as mock_emit,
+        ):
+            select_driver("omp")
+        _, kwargs = mock_emit.call_args
+        assert kwargs.get("host") == "omp"
+
+    def test_omp_driver_class_is_host_driver_subclass(self):
+        """OmpHostDriver must be importable and subclass HostDriver."""
+        from runtime.dispatch.driver import HostDriver
+
+        assert issubclass(OmpHostDriver, HostDriver)
+
+
+# ---------------------------------------------------------------------------
+# DriverNotFoundError host list — updated to include codex + antigravity + omp
 # ---------------------------------------------------------------------------
 
 
 class TestDriverNotFoundErrorHostList:
-    """DriverNotFoundError message must list all four supported hosts."""
+    """DriverNotFoundError message must list all five supported hosts."""
 
     def test_error_mentions_codex(self):
         """Error message for unknown host must mention 'codex'."""
@@ -358,3 +413,9 @@ class TestDriverNotFoundErrorHostList:
         with pytest.raises(DriverNotFoundError) as exc_info:
             select_driver("gemini")
         assert "antigravity" in str(exc_info.value)
+
+    def test_error_mentions_omp(self):
+        """Error message for unknown host must mention 'omp'."""
+        with pytest.raises(DriverNotFoundError) as exc_info:
+            select_driver("gemini")
+        assert "omp" in str(exc_info.value)

@@ -282,7 +282,7 @@ def _validate_nonempty_string(value: object) -> bool:
 #   adapter names (handled by z_harness_cli adapters)
 #   export-only driver names (handled by runtime/drivers/<name>/export.py)
 _EXPORT_VALID_HOSTS: frozenset[str] = frozenset({
-    "claude", "antigravity", "cursor", "codex",          # adapter names
+    "claude", "antigravity", "cursor", "codex", "omp",   # adapter names
     "pi", "windsurf", "cline", "kiro", "copilot",        # export-only driver names
     "agy",                                                # alias for antigravity used in z-export.md
 })
@@ -292,8 +292,8 @@ def _validate_export_hosts(value: object) -> bool:
     """Accept a list of valid export host names, or a JSON-encoded list string (env layer).
 
     Valid host names are the union of adapter names {claude, antigravity, agy,
-    cursor, codex} and export-only driver names {pi, windsurf, cline, kiro,
-    copilot}.  Unknown names are rejected.  The list must be non-empty.
+    cursor, codex, omp} and export-only driver names {pi, windsurf, cline,
+    kiro, copilot}.  Unknown names are rejected.  The list must be non-empty.
     """
     if isinstance(value, str):
         # Env-layer transport: JSON-encoded list, e.g. '["cursor","codex"]'

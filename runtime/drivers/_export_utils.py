@@ -602,6 +602,87 @@ def _self_test_fail(label: str, message: str) -> None:
     print(f"FAIL [{label}]: {message}", file=sys.stderr)
 
 
+
+# ---------------------------------------------------------------------------
+# Unsupported runtime-call rewriting for non-native exports
+# ---------------------------------------------------------------------------
+
+_UNSUPPORTED_CALL_START_RE = re.compile(
+    r"^(?P<indent>[ \t]*)(?P<name>Agent|Skill|AskUserQuestion|TaskCreate|SubagentCreate|EnterPlanMode|ExitPlanMode)\s*\("
+)
+
+
+def _paren_delta(line: str) -> int:
+    """Return a conservative parenthesis balance delta for a source-ish line.
+
+    Export prompt bodies are Markdown, not Python syntax trees. A lightweight
+    scanner is enough here: it avoids counting parentheses inside quoted strings
+    and lets renderers replace an entire multi-line ``Agent(...)`` block instead
+    of only the opening line. HTML ``RUNTIME-GATE`` comments are preserved because
+    this helper only triggers on lines whose first non-space token is the call.
+    """
+    delta = 0
+    quote = ""
+    escaped = False
+    for ch in line:
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if quote:
+            if ch == quote:
+                quote = ""
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            continue
+        if ch == "(":
+            delta += 1
+        elif ch == ")":
+            delta -= 1
+    return delta
+
+
+def rewrite_unsupported_call_blocks(
+    body: str,
+    replacement_for_block: Any,
+) -> str:
+    """Replace whole unsupported runtime call blocks in exported prompt bodies.
+
+    ``replacement_for_block`` receives the full matched block text and returns a
+    replacement line without a trailing newline. The helper preserves leading
+    indentation from the call line and consumes balanced multi-line call blocks,
+    preventing orphaned ``subagent_type=`` / ``prompt=`` arguments in exports.
+    Prose mentions and HTML ``RUNTIME-GATE`` comments are left untouched because
+    only lines starting with the call token are matched.
+    """
+    lines = body.splitlines(keepends=True)
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.rstrip("\n\r")
+        match = _UNSUPPORTED_CALL_START_RE.match(stripped)
+        if not match:
+            out.append(line)
+            i += 1
+            continue
+
+        block_lines = [line]
+        balance = _paren_delta(stripped)
+        i += 1
+        while balance > 0 and i < len(lines):
+            block_lines.append(lines[i])
+            balance += _paren_delta(lines[i].rstrip("\n\r"))
+            i += 1
+
+        replacement = replacement_for_block("".join(block_lines))
+        out.append(match.group("indent") + replacement + "\n")
+
+    return "".join(out)
+
 def run_self_test(repo_root: Path | None = None) -> int:
     """Verify fragment include expansion against the run-brief finalize marker.
 

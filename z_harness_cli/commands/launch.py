@@ -17,8 +17,9 @@ Behavior (in order):
      ``"ephemeral"`` mode (launch is ALWAYS the gitignored/ephemeral path —
      SPEC.md:115-116) paired with the adapter's ``"ephemeral"`` inject mode.  Per
      D14 (SPEC.md:151-155) this injects the host-appropriate plugin-root env var
-     (CLAUDE_PLUGIN_ROOT / ANTIGRAVITY_PLUGIN_ROOT) so the spawned host can
-     resolve the runtime; without it every /z-* command fails after handover.
+     (CLAUDE_PLUGIN_ROOT / ANTIGRAVITY_PLUGIN_ROOT / OMP_PLUGIN_ROOT) so the
+     spawned host can resolve the runtime; without it every /z-* command fails
+     after handover.
      The SAME ``"ephemeral"`` mode string is threaded into both
      ``resolve_env_bundle`` and ``inject``.
   5. Inject (clobber-guarded by ``inject_safety.preflight_targets`` inside the
@@ -234,8 +235,9 @@ def run(
     # path (Model B; SPEC.md:115-116) — there is no --in-place flag here (that
     # belongs to `export`, Model A).  Per D14 (SPEC.md:151-155) an ephemeral
     # launch MUST inject the host-appropriate plugin-root env var
-    # (CLAUDE_PLUGIN_ROOT / ANTIGRAVITY_PLUGIN_ROOT), or the spawned host cannot
-    # resolve the runtime and every /z-* command fails after the PTY hands over.
+    # (CLAUDE_PLUGIN_ROOT / ANTIGRAVITY_PLUGIN_ROOT / OMP_PLUGIN_ROOT), or the
+    # spawned host cannot resolve the runtime and every /z-* command fails after
+    # the PTY hands over.
     # The SAME "ephemeral" mode string is threaded into both resolve_env_bundle
     # (so the bundle carries the plugin-root) and adapter.inject (so the
     # gitignored config is actually written + the plugin-root lands in the child

@@ -9,6 +9,7 @@ Currently implemented:
 - codex:        CodexDriver — Codex CLI driver (runtime/drivers/codex/)
 - antigravity:  AntigravityHostDriverShim — HostDriver wrapper around AntigravityDriver
                 (runtime/drivers/antigravity/host_driver_shim.py)
+- omp:         OmpHostDriver — native OMP CLI driver (runtime/drivers/omp/)
 
 Note: SelfHostDriver (formerly an in-process driver for Claude Code) is tombstoned
 and not reachable via select_driver(). See docs/human/runtime-dispatch.md.
@@ -32,6 +33,7 @@ from runtime.drivers.antigravity.host_driver_shim import AntigravityHostDriverSh
 from runtime.drivers.claude.subprocess_driver import SubprocessClaudeDriver
 from runtime.drivers.codex.driver import CodexDriver
 from runtime.drivers.cursor.cli_driver import CursorCLIDriver
+from runtime.drivers.omp.subprocess_driver import OmpHostDriver
 
 try:
     from runtime.compat import log_event as _log_event
@@ -67,7 +69,7 @@ def select_driver(
     ----------
     host:
         The provider host identifier.  Supported values: ``"claude"``,
-        ``"cursor"``, ``"codex"``, ``"antigravity"``.  Any other value raises
+        ``"cursor"``, ``"codex"``, ``"antigravity"``, ``"omp"``.  Any other value raises
         :class:`DriverNotFoundError`.
     driver_override:
         Optional explicit driver selection.  When provided, bypasses
@@ -136,9 +138,18 @@ def select_driver(
         )
         return driver_instance
 
+    elif host == "omp":
+        driver_instance = OmpHostDriver()
+        _emit_driver_selected(
+            driver_class="OmpHostDriver",
+            host=host,
+            detection_method="default",
+        )
+        return driver_instance
+
     else:
         raise DriverNotFoundError(
-            f"Unknown host {host!r}. Supported hosts: 'claude', 'cursor', 'codex', 'antigravity'."
+            f"Unknown host {host!r}. Supported hosts: 'claude', 'cursor', 'codex', 'antigravity', 'omp'."
         )
 
 

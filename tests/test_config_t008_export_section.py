@@ -34,9 +34,9 @@ SCRIPT = str(_REPO_ROOT / "scripts" / "config.py")
 # The closed set of valid host names as specified by T008:
 # adapter names ∪ export-only driver names
 _VALID_HOSTS = {
-    "claude", "antigravity", "cursor", "codex",   # adapter names
-    "pi", "windsurf", "cline", "kiro", "copilot", # export-only driver names
-    "agy",                                         # alias for antigravity
+    "claude", "antigravity", "cursor", "codex", "omp",  # adapter names
+    "pi", "windsurf", "cline", "kiro", "copilot",       # export-only driver names
+    "agy",                                               # alias for antigravity
 }
 
 _VALID_STRATEGIES = {"pointer", "curated", "full"}

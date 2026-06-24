@@ -18,10 +18,14 @@ Covers:
 """
 
 from __future__ import annotations
+import importlib
 
 import sys
+import subprocess
+import shutil
 import tempfile
 import unittest
+from contextlib import contextmanager, ExitStack
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -34,6 +38,9 @@ from typer.testing import CliRunner
 
 from z_harness_cli.__main__ import app
 from z_harness_cli.adapters.base import ExportResult
+pi_export = importlib.import_module("runtime.drivers.pi.export")  # noqa: E402
+pi_pkg = importlib.import_module("runtime.drivers.pi")  # noqa: E402
+from z_harness_cli.adapters.omp import OmpAdapter  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +68,71 @@ def _make_adapter(name: str, fidelity: str = "native") -> MagicMock:
 
     adapter.export_payload.side_effect = _fake_export
     return adapter
+
+
+@contextmanager
+def _forbid_pi_or_consult_compatibility():
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("OMP export must not use pi exporter/helpers or omp-consult compatibility paths")
+
+    original_read_text = Path.read_text
+    original_read_bytes = Path.read_bytes
+    original_is_dir = Path.is_dir
+    original_exists = Path.exists
+    original_copytree = shutil.copytree
+
+    def assert_allowed_path(path: Path) -> None:
+        rendered = path.as_posix()
+        if "/scripts/pi_assets" in rendered or rendered.endswith("/scripts/omp-consult.sh"):
+            raise AssertionError(f"OMP export touched forbidden compatibility path: {rendered}")
+
+    def guarded_read_text(self: Path, *args, **kwargs):
+        assert_allowed_path(self)
+        return original_read_text(self, *args, **kwargs)
+
+    def guarded_read_bytes(self: Path, *args, **kwargs):
+        assert_allowed_path(self)
+        return original_read_bytes(self, *args, **kwargs)
+
+    def guarded_is_dir(self: Path):
+        assert_allowed_path(self)
+        return original_is_dir(self)
+
+    def guarded_exists(self: Path):
+        assert_allowed_path(self)
+        return original_exists(self)
+
+    def guarded_copytree(src, dst, *args, **kwargs):
+        rendered = str(src)
+        if "scripts/pi_assets" in rendered:
+            raise AssertionError(f"OMP export copied forbidden pi assets path: {rendered}")
+        return original_copytree(src, dst, *args, **kwargs)
+
+    def guarded_subprocess_run(*args, **kwargs):
+        cmd = args[0] if args else kwargs.get("args")
+        rendered = " ".join(str(part) for part in cmd) if isinstance(cmd, (list, tuple)) else str(cmd)
+        if "omp-consult.sh" in rendered:
+            raise AssertionError(f"OMP export invoked forbidden consult compatibility path: {rendered}")
+        raise AssertionError(f"OMP export unexpectedly spawned subprocess: {rendered}")
+
+    with ExitStack() as stack:
+        for name in (
+            "export",
+            "_replacement_for_line",
+            "_rewrite_body",
+            "_render_agent",
+            "_render_prompt",
+            "_render_agents_index",
+        ):
+            stack.enter_context(patch.object(pi_export, name, side_effect=forbidden))
+        stack.enter_context(patch.object(pi_pkg, "export", side_effect=forbidden))
+        stack.enter_context(patch.object(Path, "read_text", guarded_read_text))
+        stack.enter_context(patch.object(Path, "read_bytes", guarded_read_bytes))
+        stack.enter_context(patch.object(Path, "is_dir", guarded_is_dir))
+        stack.enter_context(patch.object(Path, "exists", guarded_exists))
+        stack.enter_context(patch.object(subprocess, "run", side_effect=guarded_subprocess_run))
+        stack.enter_context(patch.object(shutil, "copytree", side_effect=guarded_copytree))
+        yield
 
 
 class _ExportCmdBase(unittest.TestCase):
@@ -362,6 +434,62 @@ class TestOutNonEmptyDirGuard(_ExportCmdBase):
             )
         finally:
             self._cleanup_in_repo_dir(nonempty_dir)
+
+    def test_force_reconciles_omp_owned_subtree_and_preserves_sibling_export(self):
+        """Real OMP --force refresh removes stale OMP files without deleting exports/pi."""
+        export_root = self.tmp_root / "repo" / "exports"
+        sibling = export_root / "pi" / "keep.txt"
+        stale_owned = export_root / ".omp" / "z-harness" / "prompts" / "stale.md"
+        sibling.parent.mkdir(parents=True)
+        stale_owned.parent.mkdir(parents=True)
+        sibling.write_text("pi export\n", encoding="utf-8")
+        stale_owned.write_text("stale prompt\n", encoding="utf-8")
+        adapter = OmpAdapter()
+
+        with _forbid_pi_or_consult_compatibility(), patch(
+            "z_harness_cli.commands.export._repo_root",
+            return_value=export_root.parent.resolve(),
+        ), patch(
+            "z_harness_cli.adapters.registry.select",
+            return_value=(adapter, MagicMock(installed=True)),
+        ):
+            result = self.runner.invoke(
+                app, ["export", "--host", "omp", "--out", str(export_root), "--force"]
+            )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(sibling.read_text(encoding="utf-8"), "pi export\n")
+        self.assertFalse(stale_owned.exists())
+        self.assertTrue((export_root / ".omp" / "z-harness" / "manifest.yml").exists())
+        self.assertIn(
+            "enableAgentsProject: false",
+            (export_root / ".omp" / "config.yml").read_text(encoding="utf-8"),
+        )
+        from z_harness_cli.adapters.omp_parity_gate import omp_export_fidelity
+        self.assertIn(f"[omp] fidelity={omp_export_fidelity()}", result.output)
+
+    def test_force_out_repo_root_preserves_existing_files(self):
+        """--out <repo-root> --force must not delete the repo contents."""
+        repo_root = self.tmp_root / "repo-root"
+        repo_root.mkdir()
+        sentinel = repo_root / "pyproject.toml"
+        sentinel.write_text("[project]\nname = 'sentinel'\n", encoding="utf-8")
+        adapter = _make_adapter("claude", "native")
+
+        with patch(
+            "z_harness_cli.commands.export._repo_root",
+            return_value=repo_root.resolve(),
+        ), patch(
+            "z_harness_cli.adapters.registry.select",
+            return_value=(adapter, MagicMock(installed=True)),
+        ):
+            result = self.runner.invoke(
+                app, ["export", "--out", str(repo_root), "--force"]
+            )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "[project]\nname = 'sentinel'\n")
+        self.assertTrue((repo_root / "claude-export.txt").exists())
 
     def test_empty_existing_out_dir_is_always_accepted(self):
         """An empty --out dir is accepted even without --force."""

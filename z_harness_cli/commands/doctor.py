@@ -10,7 +10,7 @@ Behavior:
   - Update notice (reuses release.py + update.py version-compare logic; no auto-update).
   - ``--clear-mcp``: de-registers z-harness MCP entries from GLOBAL host config
     (e.g. ~/.codex/config.toml) with confirmation prompt (F4).
-  - Host-detection precedence: CLAUDECODE → cursor → codex → agy → error.
+  - Host-detection precedence: CLAUDECODE → agy → cursor → codex → omp → error.
   - Exit code: 0 healthy; 1 if any installed host is unreachable.
 
 Read-only except for --clear-mcp and the orphan-clean prompt.
@@ -48,8 +48,8 @@ from z_harness_cli.adapters.registry import detect_all  # noqa: E402
 #: The MCP server name z-harness registers with Codex.
 _ZH_MCP_SERVER_NAME = "z-harness"
 
-#: Host-detection precedence order (CLAUDECODE → cursor → codex → agy).
-_HOST_PRECEDENCE = ("claude", "cursor", "codex", "antigravity")
+#: Host-detection precedence order (CLAUDECODE → agy → cursor → codex → omp).
+_HOST_PRECEDENCE = ("claude", "antigravity", "cursor", "codex", "omp")
 
 # Fidelity tier display style (Rich markup color).
 _FIDELITY_STYLE = {
@@ -520,9 +520,11 @@ def run(ctx: "typer.Context", *, clear_mcp: bool = False) -> None:  # noqa: F821
 
     # --- Host-detection precedence note -------------------------------------
     console.print()
-    console.print(
-        "[dim]Host-detection precedence: CLAUDECODE → cursor → codex → agy → error[/dim]"
+    precedence = " → ".join(
+        "CLAUDECODE" if host == "claude" else ("agy" if host == "antigravity" else host)
+        for host in _HOST_PRECEDENCE
     )
+    console.print(f"[dim]Host-detection precedence: {precedence} → error[/dim]")
 
     # --- Orphan detection + clean -------------------------------------------
     _handle_orphans(cwd)

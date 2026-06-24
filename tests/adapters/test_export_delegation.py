@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -600,6 +601,128 @@ class TestAntigravityExportDelegation(unittest.TestCase):
         self.assertIn("z-plan", str(ctx.exception))
 
 
+
+# ---------------------------------------------------------------------------
+# OMP adapter — export delegation tests
+# ---------------------------------------------------------------------------
+
+
+class TestOmpExportDelegation(unittest.TestCase):
+    """OmpAdapter.export_payload() delegates to the runtime OMP exporter."""
+
+    def setUp(self) -> None:
+        from z_harness_cli.adapters.omp import OmpAdapter
+
+        self.adapter = OmpAdapter()
+
+    def test_delegates_to_runtime_export_and_uses_gate_fidelity(self):
+        """OMP export delegates to the runtime exporter; fidelity is gate-driven.
+
+        The adapter must use omp_export_fidelity() from the parity gate, NOT
+        the fidelity returned by the runtime exporter.  This prevents the
+        runtime exporter from claiming a higher fidelity than the gate allows.
+        """
+        import z_harness_cli.adapters.omp as _mod
+        from z_harness_cli.adapters.omp_parity_gate import omp_export_fidelity
+        expected_fidelity = omp_export_fidelity()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp).resolve()
+            dest = tmp_path / "dest"
+            dest.mkdir()
+            harness_root = tmp_path / "harness"
+            runtime_file = dest / ".omp" / "z-harness" / "manifest.yml"
+            rt_result = RuntimeExportResult(
+                dest=dest,
+                files=[runtime_file],
+                fidelity="native",
+                warnings=[],
+            )
+            mock_omp_export = MagicMock()
+            mock_omp_export.export = MagicMock(return_value=rt_result)
+            mock_omp_pkg = types.ModuleType("runtime.drivers.omp")
+            mock_omp_pkg.__path__ = []  # type: ignore[attr-defined]
+
+            with patch.object(
+                _mod,
+                "__file__",
+                str(harness_root / "z_harness_cli" / "adapters" / "omp.py"),
+            ), patch.dict(
+                "sys.modules",
+                {
+                    "runtime.drivers.omp": mock_omp_pkg,
+                    "runtime.drivers.omp.export": mock_omp_export,
+                },
+            ):
+                result = self.adapter.export_payload(dest)
+
+        mock_omp_export.export.assert_called_once_with(harness_root, dest)
+        self.assertEqual(result.files, [runtime_file])
+        # Fidelity must match the gate (not the runtime exporter's claimed value).
+        self.assertEqual(result.fidelity, expected_fidelity)
+        self.assertEqual(result.warnings, [])
+
+    def test_runtime_warnings_preserve_hard_failure_gate(self):
+        import z_harness_cli.adapters.omp as _mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp).resolve()
+            dest = tmp_path / "dest"
+            dest.mkdir()
+            harness_root = tmp_path / "harness"
+            rt_result = RuntimeExportResult(
+                dest=dest,
+                files=[],
+                fidelity="partial",
+                warnings=["collision: profile z-plan"],
+            )
+            mock_omp_export = MagicMock()
+            mock_omp_export.export = MagicMock(return_value=rt_result)
+            mock_omp_pkg = types.ModuleType("runtime.drivers.omp")
+            mock_omp_pkg.__path__ = []  # type: ignore[attr-defined]
+
+            with patch.object(
+                _mod,
+                "__file__",
+                str(harness_root / "z_harness_cli" / "adapters" / "omp.py"),
+            ), patch.dict(
+                "sys.modules",
+                {
+                    "runtime.drivers.omp": mock_omp_pkg,
+                    "runtime.drivers.omp.export": mock_omp_export,
+                },
+            ), self.assertRaises(RuntimeError) as ctx:
+                self.adapter.export_payload(dest)
+
+        self.assertIn("collision", str(ctx.exception).lower())
+
+    def test_real_runtime_collision_reaches_adapter_as_runtime_error(self):
+        import z_harness_cli.adapters.omp as _mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp).resolve()
+            dest = tmp_path / "dest"
+            dest.mkdir()
+            harness_root = tmp_path / "harness"
+
+            skill = harness_root / "skills" / "z-plan" / "SKILL.md"
+            skill.parent.mkdir(parents=True, exist_ok=True)
+            skill.write_text("---\nname: z-plan\n---\nSkill.\n", encoding="utf-8")
+
+            persona = harness_root / "personas" / "builtin" / "z-plan.md"
+            persona.parent.mkdir(parents=True, exist_ok=True)
+            persona.write_text("---\nname: z-plan\n---\nPersona.\n", encoding="utf-8")
+
+            with patch.object(
+                _mod,
+                "__file__",
+                str(harness_root / "z_harness_cli" / "adapters" / "omp.py"),
+            ), self.assertRaises(RuntimeError) as ctx:
+                self.adapter.export_payload(dest)
+
+        self.assertIn("collision", str(ctx.exception).lower())
+        self.assertIn("z-plan", str(ctx.exception))
+
 # ---------------------------------------------------------------------------
 # Integration: verify ExportResult.fidelity is preserved per host
 # ---------------------------------------------------------------------------
@@ -625,15 +748,20 @@ class TestFidelityPreserved(unittest.TestCase):
             )
             mock_export_mod = MagicMock()
             mock_export_mod.export = MagicMock(return_value=rt_result)
-
             host_key = "antigravity" if host == "antigravity" else host
+            modules = {f"runtime.drivers.{host_key}.export": mock_export_mod}
+            if host_key == "omp":
+                mock_omp_pkg = types.ModuleType("runtime.drivers.omp")
+                mock_omp_pkg.__path__ = []  # type: ignore[attr-defined]
+                modules["runtime.drivers.omp"] = mock_omp_pkg
+
             with patch.object(
                 mod,
                 "__file__",
                 str(harness_root / "z_harness_cli" / "adapters" / f"{host}.py"),
             ), patch.dict(
                 "sys.modules",
-                {f"runtime.drivers.{host_key}.export": mock_export_mod},
+                modules,
             ):
                 return adapter.export_payload(dest)
 
@@ -651,6 +779,19 @@ class TestFidelityPreserved(unittest.TestCase):
         from z_harness_cli.adapters.antigravity import AntigravityAdapter
         result = self._minimal_export(AntigravityAdapter(), "antigravity", "high")
         self.assertEqual(result.fidelity, "high")
+
+    def test_omp_fidelity_matches_parity_gate(self):
+        """OMP export fidelity matches the gate — not the runtime exporter's returned value.
+
+        The gate is the single source of truth. With all T008 evidence present the
+        gate returns 'native'. Removing evidence would return 'partial'. The adapter
+        must use the gate's value regardless of what the runtime exporter claims.
+        """
+        from z_harness_cli.adapters.omp import OmpAdapter
+        from z_harness_cli.adapters.omp_parity_gate import omp_export_fidelity
+        expected = omp_export_fidelity()
+        result = self._minimal_export(OmpAdapter(), "omp", "native")  # exporter claims native
+        self.assertEqual(result.fidelity, expected)  # adapter uses gate value
 
 
 class TestRealPersonaExportRegression(unittest.TestCase):

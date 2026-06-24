@@ -8,8 +8,10 @@ module is a REAL integration test against the live driver-selection layer.
 It fails loudly when:
 
   1. A host driver is missing — i.e. ``select_driver(host)`` does NOT return a
-     live :class:`HostDriver` for one of the four supported hosts (claude,
-     cursor, codex, antigravity).  Opt out per-host only via the
+     live :class:`HostDriver` for one of the five runtime-driver hosts (claude,
+     cursor, codex, antigravity, omp).  The OMP row here proves runtime driver
+     selection only; golden cross-driver parity remains gated until the native
+     parity task records fixtures.  Opt out per-host only via the
      ``--allow-missing`` strict-runner flag (see ``run_strict.py``); the
      default pytest run NEVER allows a missing host.
   2. Zero drivers actually ran — i.e. the conformance matrix passed only
@@ -33,7 +35,7 @@ distinct, live ``HostDriver`` subclass instance.
 NOTE on namespaces: the conformance *matrix* keys drivers by BINARY name
 (``claude-code``, ``codex``, ``agy``, ``cursor-agent`` — see
 ``conftest.DRIVERS``).  The driver-SELECTION layer (``select_driver``) keys by
-HOST name (``claude``, ``codex``, ``antigravity``, ``cursor``).  These are
+HOST name (``claude``, ``codex``, ``antigravity``, ``cursor``, ``omp``).  These are
 deliberately distinct namespaces; this module exercises the host-name layer.
 """
 
@@ -73,9 +75,12 @@ from tests.conformance import run_conformance as _run_conformance_mod
 # Constants
 # ---------------------------------------------------------------------------
 
-# The four host names F7 requires a live driver for. These are HOST names
-# (select_driver namespace), not binary names.
-SUPPORTED_HOSTS: list[str] = ["claude", "cursor", "codex", "antigravity"]
+# The five host names F7 requires a live runtime driver for. These are HOST
+# names (select_driver namespace), not binary names. OMP is included once its
+# native runtime driver exists, but it is intentionally not added to the golden
+# conformance binary roster until native parity is recorded.
+SUPPORTED_HOSTS: list[str] = ["claude", "cursor", "codex", "antigravity", "omp"]
+
 
 # Expected concrete driver class name per host. select_driver must return an
 # instance of HostDriver whose class matches — this catches a regression where
@@ -85,6 +90,7 @@ EXPECTED_DRIVER_CLASS: dict[str, str] = {
     "cursor": "CursorCLIDriver",
     "codex": "CodexDriver",
     "antigravity": "AntigravityHostDriverShim",
+    "omp": "OmpHostDriver",
 }
 
 # Exception types that constitute a *clear config error* from .init() when auth
@@ -194,8 +200,7 @@ def test_supported_host_returns_live_driver(host: str) -> None:
 
 
 def test_all_supported_hosts_route_to_distinct_drivers() -> None:
-    """Adapter round-trip: the four hosts map to four DISTINCT driver classes.
-
+    """Adapter round-trip: the five hosts map to five DISTINCT driver classes.
     Guards against a regression where two hosts collapse onto the same driver
     (e.g. an accidental fall-through making codex route to the claude driver).
     """
@@ -228,6 +233,8 @@ def test_unknown_host_raises_driver_not_found() -> None:
         assert host in msg, (
             f"DriverNotFoundError message omits supported host {host!r}: {msg!r}"
         )
+
+
 
 
 @pytest.mark.parametrize("bad_host", ["", "claude-code", "gpt", "gemini", "self"])

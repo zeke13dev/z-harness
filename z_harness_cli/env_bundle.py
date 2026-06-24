@@ -8,9 +8,9 @@ Resolves ONE deterministic env bundle by reusing existing z-harness scripts:
   - config                = output of ``python3 scripts/config.py export-env``
                             (layered: defaults < global < repo < env)
   - plugin-root           = host-appropriate CLAUDE_PLUGIN_ROOT /
-                            ANTIGRAVITY_PLUGIN_ROOT for ephemeral launches;
-                            for installed-plugin launches the host resolves it
-                            itself (mode="installed" → no injection)
+                            ANTIGRAVITY_PLUGIN_ROOT / OMP_PLUGIN_ROOT for
+                            ephemeral launches; for installed-plugin launches
+                            the host resolves it itself (mode="installed" → no injection)
   - providers             = Z_HARNESS_REPO_PROVIDERS pointing at the resolved
                             repo-local providers.json (global ~/.config/z-harness
                             vs repo .z-harness)
@@ -210,17 +210,19 @@ def resolve_plugin_root_env(
 
     For ``mode="ephemeral"`` the CLI must inject the plugin-root so that
     harness scripts executed inside the spawned host can locate commands/,
-    agents/, skills/, etc.  The harness repo root (where plugin.json lives)
-    is used as the plugin root.
+    agents/, skills/, etc.  Most hosts use the harness repo root.  OMP native
+    launch uses a session-scoped project package root supplied by
+    ``resolve_env_bundle()`` (``<repo>/.omp/z-harness``).
 
     Host-to-var mapping:
       claude, claude-code  → CLAUDE_PLUGIN_ROOT
       antigravity, agy     → ANTIGRAVITY_PLUGIN_ROOT
+      omp                  → OMP_PLUGIN_ROOT
       cursor, codex        → CLAUDE_PLUGIN_ROOT (fallback: these hosts read
                              the same var when the harness is injected)
 
     The ``harness_root`` argument allows overriding the auto-detected path
-    (useful in tests).
+    (for OMP, pass the session/package root; useful in tests).
     """
     if _normalize_mode(mode) == "installed":
         return {}
@@ -234,6 +236,8 @@ def resolve_plugin_root_env(
     host_lower = host.lower()
     if host_lower in ("antigravity", "agy"):
         return {"ANTIGRAVITY_PLUGIN_ROOT": plugin_root_path}
+    if host_lower == "omp":
+        return {"OMP_PLUGIN_ROOT": plugin_root_path}
     # claude, claude-code, cursor, codex all use CLAUDE_PLUGIN_ROOT
     return {"CLAUDE_PLUGIN_ROOT": plugin_root_path}
 
@@ -281,8 +285,8 @@ def resolve_env_bundle(
 
       1. config env vars  (Z_HARNESS_* from config.py export-env)
       2. Z_HARNESS_PLAN_DIR  (from plan-path.sh z_harness_base)
-      3. plugin-root vars  (CLAUDE_PLUGIN_ROOT / ANTIGRAVITY_PLUGIN_ROOT for
-                           ephemeral launches only)
+      3. plugin-root vars  (CLAUDE_PLUGIN_ROOT / ANTIGRAVITY_PLUGIN_ROOT /
+                           OMP_PLUGIN_ROOT for ephemeral launches only)
       4. Z_HARNESS_REPO_PROVIDERS  (if repo-local providers.json exists)
 
     Layer 2 overrides layer 1 if both set Z_HARNESS_PLAN_DIR (they won't, but
@@ -320,8 +324,12 @@ def resolve_env_bundle(
     plan_dir = resolve_plan_dir(repo_root)
     bundle["Z_HARNESS_PLAN_DIR"] = plan_dir
 
-    # Layer 3: plugin-root (ephemeral only)
-    bundle.update(resolve_plugin_root_env(host, mode))
+    # Layer 3: plugin-root (ephemeral only).  OMP's native discovery root is the
+    # session-scoped package inside the launched project, not the harness repo.
+    plugin_root_override = None
+    if host.lower() == "omp":
+        plugin_root_override = Path(repo_root).resolve() / ".omp" / "z-harness"
+    bundle.update(resolve_plugin_root_env(host, mode, harness_root=plugin_root_override))
 
     # Layer 4: providers.json hint
     bundle.update(resolve_providers_env(repo_root))

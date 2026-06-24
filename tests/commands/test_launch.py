@@ -21,6 +21,7 @@ launch.py wraps the module function for the single real spawn).
 
 from __future__ import annotations
 
+import io
 import subprocess
 import sys
 import tempfile
@@ -218,6 +219,7 @@ class GitRepoLaunchCase(unittest.TestCase):
         for host, expected_var in (
             ("claude", "CLAUDE_PLUGIN_ROOT"),
             ("antigravity", "ANTIGRAVITY_PLUGIN_ROOT"),
+            ("omp", "OMP_PLUGIN_ROOT"),
         ):
             with self.subTest(host=host):
                 adapter, _ = _fake_adapter(name=host)
@@ -231,6 +233,91 @@ class GitRepoLaunchCase(unittest.TestCase):
                     self.captured_env,
                     f"{expected_var} must be injected for an ephemeral {host} launch",
                 )
+
+    def test_real_omp_launch_gets_scoped_runtime_env_and_cleans_session_file(self):
+        from z_harness_cli.adapters.omp import OmpAdapter
+
+        adapter = OmpAdapter()
+        bundle = {"Z_HARNESS_PLAN_DIR": "/tmp/state", "OMP_PLUGIN_ROOT": "/bundle/root"}
+        expected_plugin_root = str(self.project / ".omp" / "z-harness")
+        with patch.object(
+            registry, "select", return_value=(adapter, DetectResult(installed=True))
+        ), patch(
+            "z_harness_cli.env_bundle.resolve_env_bundle",
+            return_value=bundle,
+        ) as mock_bundle, patch.dict(
+            "os.environ",
+            {
+                "PATH": "/usr/bin",
+                "CLAUDE_PLUGIN_ROOT": "/wrong/claude",
+                "ANTIGRAVITY_PLUGIN_ROOT": "/wrong/agy",
+            },
+            clear=True,
+        ), self._patch_pty() as mock_pty:
+            rc = launch_mod.run(
+                ctx=MagicMock(),
+                host="omp",
+                project=str(self.project),
+                quiet=True,
+            )
+
+        self.assertEqual(rc, 0)
+        mock_bundle.assert_called_once_with(self.project, "omp", "ephemeral")
+        self.assertIsNotNone(self.captured_env)
+        self.assertEqual(self.captured_env["OMP_PLUGIN_ROOT"], expected_plugin_root)
+        self.assertEqual(self.captured_env["Z_HARNESS_PLAN_DIR"], "/tmp/state")
+        self.assertNotIn("CLAUDE_PLUGIN_ROOT", self.captured_env)
+        self.assertNotIn("ANTIGRAVITY_PLUGIN_ROOT", self.captured_env)
+        self.assertFalse((self.project / ".omp" / "z-harness" / "session.yml").exists())
+        self.assertFalse((self.project / ".omp" / "z-harness").exists())
+        self.assertEqual(mock_pty.call_args.args[2], self.project)
+
+    def test_omp_launch_output_does_not_expose_runtime_env_or_secret_values(self):
+        from z_harness_cli.adapters.omp import OmpAdapter
+
+        adapter = OmpAdapter()
+        secret_bundle = {
+            "Z_HARNESS_PLAN_DIR": "/tmp/state",
+            "OMP_PLUGIN_ROOT": "/secret/plugin-root",
+            "Z_HARNESS_OAUTH_TOKEN": "oauth-secret-value",
+            "Z_HARNESS_MODEL": "model-secret-value",
+            "Z_HARNESS_PROFILE": "profile-secret-value",
+        }
+        stderr = io.StringIO()
+        stdout = io.StringIO()
+        with patch.object(
+            registry, "select", return_value=(adapter, DetectResult(installed=True))
+        ), patch(
+            "z_harness_cli.env_bundle.resolve_env_bundle",
+            return_value=secret_bundle,
+        ), patch.dict(
+            "os.environ",
+            {"PATH": "/usr/bin"},
+            clear=True,
+        ), self._patch_pty(), patch(
+            "sys.stderr", stderr
+        ), patch(
+            "sys.stdout", stdout
+        ):
+            rc = launch_mod.run(
+                ctx=MagicMock(),
+                host="omp",
+                project=str(self.project),
+                quiet=False,
+            )
+
+        self.assertEqual(rc, 0)
+        output = stdout.getvalue() + stderr.getvalue()
+        for forbidden in (
+            "/secret/plugin-root",
+            "oauth-secret-value",
+            "model-secret-value",
+            "profile-secret-value",
+            "Z_HARNESS_OAUTH_TOKEN",
+            "Z_HARNESS_MODEL",
+            "Z_HARNESS_PROFILE",
+        ):
+            self.assertNotIn(forbidden, output)
 
     # -- exit code passthrough ---------------------------------------------
 
@@ -384,6 +471,87 @@ class GitRepoLaunchCase(unittest.TestCase):
         self.assertIn("recover_cleanup", order)
         self.assertLess(order.index("recover_cleanup"), order.index("inject"))
 
+    def test_omp_orphan_recovery_removes_prior_session_file(self):
+        from z_harness_cli.adapters.omp import OmpAdapter
+
+        adapter = OmpAdapter()
+        with patch.dict("os.environ", {"PATH": "/usr/bin"}, clear=True):
+            injection = adapter.inject(
+                {"OMP_PLUGIN_ROOT": "/bundle/root"},
+                "ephemeral",
+                self.project,
+            )
+
+        target = self.project / ".omp" / "z-harness" / "session.yml"
+        self.assertEqual(injection.injected_files, [target])
+        self.assertTrue(target.exists())
+        self.assertEqual(inject_safety.detect_orphans(self.project), [target])
+
+        launch_mod._recover_orphans(self.project)
+
+        self.assertFalse(target.exists())
+        self.assertEqual(inject_safety.detect_orphans(self.project), [])
+
+    def test_omp_launch_argv_env_cwd_and_once_cleanup(self):
+        from z_harness_cli.adapters.omp import OmpAdapter
+
+        adapter = OmpAdapter()
+        session_file = self.project / ".omp" / "z-harness" / "session.yml"
+        seen = {}
+
+        def _fake_pty_launch(argv, env, cwd, cleanup=None):
+            seen["argv"] = argv
+            seen["env"] = dict(env)
+            seen["cwd"] = cwd
+            seen["cleanup_attached"] = cleanup is not None
+            seen["session_exists_before_cleanup"] = session_file.exists()
+            if cleanup is not None:
+                cleanup()
+                cleanup()
+            return 23
+
+        with patch.object(
+            registry,
+            "select",
+            return_value=(adapter, DetectResult(installed=True, binary="/fake/omp")),
+        ), patch(
+            "z_harness_cli.env_bundle.resolve_env_bundle",
+            return_value={
+                "OMP_PLUGIN_ROOT": "/bundle/root",
+                "Z_HARNESS_PLAN_DIR": "/tmp/state",
+            },
+        ), patch(
+            "shutil.which",
+            return_value="/fake/omp",
+        ), patch.object(
+            adapter,
+            "cleanup",
+            wraps=adapter.cleanup,
+        ) as mock_cleanup, patch(
+            "z_harness_cli.pty_launch.pty_launch",
+            side_effect=_fake_pty_launch,
+        ):
+            rc = launch_mod.run(
+                ctx=MagicMock(),
+                host="omp",
+                project=str(self.project),
+                quiet=True,
+            )
+
+        self.assertEqual(rc, 23)
+        self.assertEqual(seen["argv"], ["/fake/omp"])
+        self.assertEqual(seen["cwd"], self.project)
+        self.assertEqual(seen["env"]["OMP_PLUGIN_ROOT"], str(session_file.parent))
+        self.assertEqual(seen["env"]["Z_HARNESS_PLAN_DIR"], "/tmp/state")
+        self.assertNotIn("CLAUDE_PLUGIN_ROOT", seen["env"])
+        self.assertNotIn("ANTIGRAVITY_PLUGIN_ROOT", seen["env"])
+        self.assertTrue(seen["cleanup_attached"])
+        self.assertTrue(seen["session_exists_before_cleanup"])
+        self.assertFalse(session_file.exists())
+        self.assertFalse(session_file.parent.exists())
+        self.assertEqual(inject_safety.detect_orphans(self.project), [])
+        self.assertEqual(mock_cleanup.call_count, 1)
+
 
 # ---------------------------------------------------------------------------
 # env_bundle footgun reconciliation: "in_place" is an alias of "installed"
@@ -402,6 +570,8 @@ class EnvBundleModeAliasTest(unittest.TestCase):
         # ephemeral still injects.
         ephemeral = resolve_plugin_root_env("claude", "ephemeral", harness_root="/x")
         self.assertEqual(ephemeral, {"CLAUDE_PLUGIN_ROOT": "/x"})
+        omp_ephemeral = resolve_plugin_root_env("omp", "ephemeral", harness_root="/x")
+        self.assertEqual(omp_ephemeral, {"OMP_PLUGIN_ROOT": "/x"})
 
     def test_unknown_mode_raises(self):
         from z_harness_cli.env_bundle import resolve_plugin_root_env
@@ -493,12 +663,14 @@ class RealAdapterCleanupWiringTest(unittest.TestCase):
         from z_harness_cli.adapters.cursor import CursorAdapter
         from z_harness_cli.adapters.codex import CodexAdapter
         from z_harness_cli.adapters.antigravity import AntigravityAdapter
+        from z_harness_cli.adapters.omp import OmpAdapter
 
         for adapter, name in (
             (ClaudeAdapter(), "claude"),
             (CursorAdapter(), "cursor"),
             (CodexAdapter(), "codex"),
             (AntigravityAdapter(), "antigravity"),
+            (OmpAdapter(), "omp"),
         ):
             with self.subTest(host=name):
                 rc, seen, cleanup_count = self._run_real_adapter(adapter, name)

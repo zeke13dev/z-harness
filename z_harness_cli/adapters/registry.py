@@ -7,7 +7,7 @@ Public surface (D10, SPEC adapters/registry.py):
   NoHostInstalledError — raised by select() when nothing is found
 
 Importing each concrete adapter module triggers its import-time
-``register_command_tiers(...)`` call.  The registry imports all four modules
+``register_command_tiers(...)`` call.  The registry imports all adapter modules
 unconditionally so command_tier() always has complete data.
 
 The Rich interactive picker is used only when ``interactive=True`` and no
@@ -28,11 +28,13 @@ import sys
 from typing import TYPE_CHECKING
 
 # Import all adapters so their module-level register_command_tiers() calls run.
-# Order is canonical: claude (native), antigravity (high), cursor, codex (flattened).
+# Order is canonical: claude (native), antigravity (high), cursor/codex
+# (flattened), then OMP (partial until native parity gates land).
 from z_harness_cli.adapters.claude import ClaudeAdapter
 from z_harness_cli.adapters.antigravity import AntigravityAdapter
 from z_harness_cli.adapters.cursor import CursorAdapter
 from z_harness_cli.adapters.codex import CodexAdapter
+from z_harness_cli.adapters.omp import OmpAdapter
 from z_harness_cli.adapters.base import DetectResult, HostAdapter
 
 if TYPE_CHECKING:
@@ -64,12 +66,14 @@ class NoHostInstalledError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 #: The canonical ordered list of adapters.  Order determines display order in
-#: the Rich picker and in doctor output: native first, then high, then flattened.
+#: the Rich picker and in doctor output: native first, then high, then
+#: flattened, then partial.
 _ALL_ADAPTERS: list[HostAdapter] = [
     ClaudeAdapter(),
     AntigravityAdapter(),
     CursorAdapter(),
     CodexAdapter(),
+    OmpAdapter(),
 ]
 
 #: Map of host name -> adapter instance for O(1) lookup by name.

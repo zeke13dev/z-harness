@@ -1,13 +1,17 @@
 # Multi IDE Exports
 
-> Last updated: 2026-06-11
-> Covers source: runtime/drivers/cursor/export.py, runtime/drivers/codex/export.py, runtime/drivers/antigravity/export.py, runtime/drivers/pi/export.py, scripts/audit-tarball.sh, commands/z-export.md, exports/cursor/CAPABILITIES.md, exports/codex/CAPABILITIES.md, exports/agy/CAPABILITIES.md, exports/pi/CAPABILITIES.md
+> Last updated: 2026-06-24 (T009 complete — OMP parity gate resolved to native)
+> Covers source: runtime/drivers/cursor/export.py, runtime/drivers/codex/export.py, runtime/drivers/antigravity/export.py, runtime/drivers/pi/export.py, runtime/drivers/omp/export.py, runtime/drivers/omp/subprocess_driver.py, z_harness_cli/adapters/omp.py, z_harness_cli/adapters/omp_parity_gate.py, scripts/audit-tarball.sh, skills/z-export/SKILL.md, exports/cursor/CAPABILITIES.md, exports/codex/CAPABILITIES.md, exports/agy/CAPABILITIES.md, exports/pi/CAPABILITIES.md, .omp/config.yml
 
 ## Overview
 
-The multi-IDE export pipeline translates z-harness source files (`commands/`, `agents/`, `skills/`, `personas/`) into target-specific files under `exports/`. Cursor receives `.cursor/rules/*.mdc` and `.cursor/personas/*.mdc`. Codex CLI receives `prompts/*.md` plus a consolidated `AGENTS.md`. Antigravity receives `.agent/workflows`, `.agent/rules`, `.agent/skills`, `.agent/personas/`, flat prompts, `agy-plugin.yaml`, `CAPABILITIES.md`, and `README.md`. pi (https://pi.dev) receives agent `.md` files, prompts, a vendored subagent extension, and an `AGENTS.md` index — see `docs/human/pi-export.md` for the full pi target documentation. Persona export is performed per-target after the main adapter runs, using `runtime/drivers/<target>/persona_export.py`.
+The multi-IDE export pipeline translates z-harness source files (`skills/<id>/SKILL.md`, `agents/`, and `personas/builtin/`) into target-specific files under `exports/`. Cursor receives native `.cursor/skills/<id>/SKILL.md` files plus `.cursor/rules/*.mdc`. Codex CLI receives `skills/<id>/SKILL.md`, a consolidated `AGENTS.md`, and persona prompts. Antigravity receives `.agent/workflows`, `.agent/rules`, `.agent/skills`, `.agent/personas/`, flat prompts, `agy-plugin.yaml`, `CAPABILITIES.md`, and `README.md`. pi (https://pi.dev) receives agent `.md` files, prompts, a vendored subagent extension, and an `AGENTS.md` index — see `docs/human/pi-export.md` for the full pi target documentation.
 
-The legacy adapter scripts (`scripts/export-{cursor,codex,agy}.py`) have been **removed** as of v0.2.0. The runtime drivers under `runtime/drivers/<target>/export.py` are the current path. The `/z-export` command (`python3 -m z_harness_cli export --host <target>`) is the user-facing entry point. pi is an export-only target; it has no adapter, is not a launch/inject host, and runs through `runtime/drivers/pi/export.py` (imported directly, not via `--host`).
+OMP is a **first-class native host** as of T009. The parity gate (`z_harness_cli/adapters/omp_parity_gate.py`) has resolved: `OmpAdapter.fidelity_tier` and `ExportResult.fidelity` are both `"native"`, and four command families — `/z-execute`, `/z-consult`, `/z-gate`, `/z-panel` — are `native`. All other command families are `degraded` (not blocked). Claude Code is the behavioral ground truth; OMP native parity is bounded to the four families with T008 evidence.
+
+OMP export layout is a first-class OMP package under `.omp/z-harness/` with `manifest.yml`, `skills/<id>/SKILL.md`, `rules/<id>.md`, `agents/<id>.md`, and `profiles/<name>.yml`. This is not a pi export variant and must not call `runtime/drivers/pi/export.py` or pi line-rewrite helpers. The checked-in `.omp/config.yml` is never modified by z-harness — it keeps `skills.enableAgentsProject: false` to avoid auto-loading the large root `AGENTS.md`. OMP discovery uses `OMP_PLUGIN_ROOT` pointing at the session-scoped (gitignored) `.omp/z-harness/` package root.
+
+The legacy adapter scripts (`scripts/export-{cursor,codex,agy}.py`) have been **removed** as of v0.2.0. The runtime drivers under `runtime/drivers/<target>/export.py` are the current path. The `/z-export` skill (`python3 -m z_harness_cli export --host <target>`) is the user-facing entry point for adapter hosts. pi is an export-only target; it has no adapter, is not a launch/inject host, and runs through `runtime/drivers/pi/export.py` (imported directly, not via `--host`). OMP support must not call the pi exporter or `scripts/omp-consult.sh`; that script remains consultant-provider compatibility only.
 
 ## Key entry points
 
@@ -18,19 +22,21 @@ The legacy adapter scripts (`scripts/export-{cursor,codex,agy}.py`) have been **
 - `runtime/drivers/pi/export.py` — `export` — Emit pi agent files, prompts, vendored subagent extension, and AGENTS.md index (export-only; no adapter host).
 - `scripts/audit-tarball.sh:90` — `_audit_fail` — Exit 1 immediately when a forbidden tarball pattern is matched.
 - `scripts/audit-tarball.sh:98` — `_check_pattern` — Search tarball listing for one forbidden pattern (fixed-string or regex).
-- `commands/z-export.md:10` — `/z-export` — Entry point: `python3 -m z_harness_cli export --host <target>` for cursor/codex/antigravity; pi export runs via direct import of `runtime.drivers.pi.export`.
+- `skills/z-export/SKILL.md:11` — `/z-export` — Entry point: `python3 -m z_harness_cli export --host <target>` for cursor/codex/antigravity and OMP (native, T009); pi export runs via direct import of `runtime.drivers.pi.export`.
 - `runtime/drivers/cursor/persona_export.py` — `export_persona` — Write persona as `.cursor/personas/<name>.mdc` (context-injection rule; not native to Cursor).
 - `runtime/drivers/antigravity/persona_export.py` — `export_persona` — Write persona as `.agent/personas/<name>.md` (native agy persona format).
 - `runtime/drivers/codex/persona_export.py` — `export_persona` — Write persona for Codex CLI target.
+- `runtime/drivers/omp/export.py` — `export` — Write native OMP package files under `.omp/z-harness/`; returns `ExportResult(fidelity="native")` after T009; must preserve `.omp/config.yml` project-AGENTS suppression and must not reuse pi line rewrites.
+- `runtime/drivers/omp/subprocess_driver.py` — `OmpHostDriver` — Native OMP dispatch: `omp -p --model <provider/model> [--profile <profile>] [--session <session-id>] <prompt>`; rejects empty prompts before spawn; normalizes OMP stdout/stderr/events into z-harness result/events; keeps session/rules/profile/model handling separate from consult mode.
 <!-- AUTO-END: entry-points -->
 ## How it interacts with others
 
-- `commands` — export adapters enumerate command markdown files; `/z-export` and `/z-where` are both commands and are themselves exported. `/z-where` is a read-only active-plan registry query added in T005.
-- `agents` — adapters enumerate agent definitions; `scope-extractor` (added in T008) is a Haiku subagent that reads plan artifacts and emits JSON scope for the active-plan registry — it is exported like all other agents.
-- `skills` — adapters enumerate `skills/*/SKILL.md`; Cursor and Codex render them as rule/prompt files; agy also emits native `.agent/skills/<id>/SKILL.md` directories.
-- `personas-and-roles` — persona files under `personas/builtin/` and `personas/user/` are exported after the main adapter via `runtime/drivers/<target>/persona_export.py`. Antigravity is the only native target; Cursor uses a glob-matched context-injection rule.
+- `skills` — adapters enumerate `skills/*/SKILL.md`; Cursor and Codex render them as native skill files; agy emits native `.agent/skills/<id>/SKILL.md`; OMP (native, T009) emits `.omp/z-harness/skills/<id>/SKILL.md`.
+- `agents` — adapters enumerate agent definitions; pi exports them as compatibility agent files, while OMP export emits OMP package `agents/<id>.md` resources with no pi line rewrites; the 4 native OMP command families (z-execute/z-consult/z-gate/z-panel) cover multi-agent dispatch.
+- `personas-and-roles` — persona files under `personas/builtin/` are exported after the main adapter via `runtime/drivers/<target>/persona_export.py` or, for OMP, profile resources under `.omp/z-harness/profiles/`.
+- `capabilities-matrix` — controls adapter fidelity, export fidelity, and command tiers; OMP uses Claude Code as the parity target; T009 resolved to native for the adapter and 4 command families.
 - `scripts` — `audit-tarball.sh` remains the export safety gate for packaged artifacts. The legacy per-target `scripts/export-*.py` scripts have been removed.
-- `runtime-drivers` — `runtime/drivers/<target>/export.py` is the current export path for all four targets.
+- `runtime-drivers` — `runtime/drivers/<target>/export.py` is the current export path for all current targets; `runtime/drivers/omp/export.py` provides native OMP package export (T009), while `runtime/drivers/omp/subprocess_driver.py` provides native OMP dispatch (T007); both must remain separate from pi export and `scripts/omp-consult.sh` compatibility.
 
 ## Edge cases / gotchas
 
@@ -48,7 +54,9 @@ The legacy adapter scripts (`scripts/export-{cursor,codex,agy}.py`) have been **
 - Cursor has no native persona mechanism; personas are exported as `alwaysApply: true` glob-matched `.mdc` rules under `.cursor/personas/`.
 - `/z-export` itself performs no direct file I/O; all writes are delegated to the adapter scripts and the `persona_export.py` modules.
 - pi is a separate export target with its own exporter (`runtime/drivers/pi/export.py`), its own assets (`scripts/pi_assets/`), and its own capabilities doc (`exports/pi/CAPABILITIES.md`). Unlike Cursor/Codex/agy, pi uses a vendored subagent extension for fan-out dispatch. See `docs/human/pi-export.md`. pi is export-only: no adapter, no launch/inject host support.
-- Subagent YAML dispatch bug (resolved 2026-06-08): pi's frontmatter.js parser could fail on unquoted colons in YAML description values (triggered by "subagent `tasks: [...]`" in explore.md). Three-layer fix: pi runtime patch + source quoting in pi_assets + `_yaml_quote` in export-pi.py for all generated agents. Fully resolved.
+- OMP is a first-class native host (T009): `OmpAdapter.fidelity_tier` = `"native"`, `ExportResult.fidelity` = `"native"`, and four command families are native. OMP export is NOT pi export — it uses `.omp/z-harness/` discovery with no pi line rewrites. `.omp/config.yml` is never modified by z-harness.
+- OMP native dispatch (`OmpHostDriver`, T007) is not OMP consult-provider compatibility. `scripts/omp-consult.sh` deliberately uses `--no-rules --no-session` for advisory consultant providers; native command dispatch keeps rules/session semantics and uses explicit `OMP_PLUGIN_ROOT` discovery. The two paths must not be conflated.
+- Subagent YAML dispatch bug (resolved 2026-06-08): pi's frontmatter.js parser could fail on unquoted colons in YAML description values (triggered by "subagent `tasks: [...]`" in explore.md). Three-layer fix: pi runtime patch + source quoting in pi_assets + `_yaml_quote` in `runtime/drivers/pi/export.py` for all generated agents. Fully resolved.
 
 ## Examples
 
@@ -56,5 +64,7 @@ The legacy adapter scripts (`scripts/export-{cursor,codex,agy}.py`) have been **
 - `python3 -m z_harness_cli export --host codex` — regenerates `exports/codex/prompts/*.md` and `exports/codex/AGENTS.md`.
 - `python3 -m z_harness_cli export --host antigravity` — regenerates workflows, rules, skills, prompts, manifest, `CAPABILITIES.md`, and `README.md` under `exports/agy/`.
 - `python3 -c "from runtime.drivers.pi.export import export; from pathlib import Path; export(Path('.'), Path('exports/pi'))"` — regenerates the full `exports/pi/` tree (pi is export-only; no `--host pi` CLI flag).
-- `python3 -m z_harness_cli export --host all` — runs all three adapter-host targets sequentially.
+- `python3 -m z_harness_cli export --host omp --out exports/omp --force` — native OMP export (T009); regenerates `exports/omp/.omp/z-harness/` package files with `ExportResult(fidelity="native")`.
+- `python3 -m z_harness_cli export --host all` — runs installed adapter-host targets sequentially, including OMP when detected.
+- `python3 -m pytest tests/adapters/test_omp_adapter.py tests/drivers/test_omp_export_driver.py runtime/tests/test_omp_driver.py runtime/tests/test_omp_parity.py runtime/tests/test_omp_export.py tests/conformance/test_strict.py -q` — run the full OMP adapter/export/runtime/orchestration test suite (all must pass).
 - `bash scripts/audit-tarball.sh myexport.tar.gz` — verifies a tarball contains no forbidden paths before distribution.

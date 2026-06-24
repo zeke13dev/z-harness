@@ -1,8 +1,8 @@
 ---
 name: z-export
 disable-model-invocation: false
-description: "Export z-harness commands/agents/skills/personas to Cursor / Codex / Antigravity (agy) / pi / Windsurf / Kiro / Cline / Copilot."
-argument-hint: "[--target=<cursor|codex|agy|pi|windsurf|kiro|cline|copilot|all>] [--include=personas]"
+description: "Export z-harness commands/agents/skills/personas to Cursor / Codex / Antigravity (agy) / OMP / pi / Windsurf / Kiro / Cline / Copilot."
+argument-hint: "[--target=<cursor|codex|agy|omp|pi|windsurf|kiro|cline|copilot|all>] [--include=personas]"
 runtime: c1
 driver_features_required: []
 unsupported_driver_behavior: explicit_gate
@@ -10,7 +10,9 @@ unsupported_driver_behavior: explicit_gate
 
 You are running **z-harness `/z-export`**.
 
-This command invokes the runtime export CLI (or, for `pi` and the export-only drivers, the standalone runtime driver) to translate z-harness source files (`commands/`, `agents/`, `skills/`) into IDE-specific formats under `exports/`. Persona files from `personas/` are also exported in the same pass for all adapter hosts (cursor, codex, agy).
+This command invokes the runtime export CLI (or, for `pi` and the export-only drivers, the standalone runtime driver) to translate z-harness source files (`commands/`, `agents/`, `skills/`) into IDE-specific formats under `exports/`. Persona files from `personas/` are exported in the same pass for cursor/codex/agy; OMP writes OMP profiles from the runtime exporter.
+
+> **OMP target:** `omp` is a **first-class native host** (T009 complete). It exports `.omp/config.yml` plus `.omp/z-harness/{manifest.yml,skills,rules,prompts,agents,profiles}` and reports native fidelity. `OmpAdapter.fidelity_tier` and OMP `ExportResult.fidelity` are `"native"`. Four command families are native (z-execute, z-consult, z-gate, z-panel); all others are degraded. `.omp/config.yml` is never modified by the exporter.
 
 > **Export-only hosts:** `pi`, `windsurf`, `kiro`, `cline`, and `copilot` are **export-only** targets. They have runtime export drivers but no HostAdapter, no launch/inject capability, and no adapter-registry entry. They cannot be used with `/z-launch` or `/z-inject`. Only `/z-export` and the runtime CLI support them.
 
@@ -28,7 +30,7 @@ During export, the runtime renderers inline the fragment file at each marker (re
 
 Read `$ARGUMENTS`. Look for `--target=<value>` and `--include=<value>`.
 
-Valid `--target` values: `cursor`, `codex`, `agy`, `pi`, `windsurf`, `kiro`, `cline`, `copilot`, `all`.
+Valid `--target` values: `cursor`, `codex`, `agy`, `omp`, `pi`, `windsurf`, `kiro`, `cline`, `copilot`, `all`.
 
 Default (no `--target` flag): `all`.
 
@@ -39,7 +41,7 @@ Default (no `--include` flag): include personas automatically (personas are alwa
 If an unrecognized `--target` value is given, immediately print:
 
 ```
-[z-export] error: --target must be one of: cursor, codex, agy, pi, windsurf, kiro, cline, copilot, all
+[z-export] error: --target must be one of: cursor, codex, agy, omp, pi, windsurf, kiro, cline, copilot, all
 ```
 
 and exit nonzero. Do not proceed.
@@ -48,6 +50,7 @@ Build the target list:
 - `cursor` → `["cursor"]`
 - `codex` → `["codex"]`
 - `agy` → `["agy"]`
+- `omp` → `["omp"]`
 - `pi` → `["pi"]`
 - `windsurf` → `["windsurf"]`
 - `kiro` → `["kiro"]`
@@ -57,9 +60,9 @@ Build the target list:
   ```bash
   python3 scripts/config.py get export.hosts
   ```
-  This prints a JSON array string (e.g. `["cursor","codex","agy","pi"]`). JSON-parse the output to obtain the list of hosts. Use that list as the target set for `all`. New hosts appear automatically once their entry is registered in config and their driver exists — no hardcoded list is maintained here.
+  This prints a JSON array string (e.g. `["cursor","codex","agy","omp","pi"]`). JSON-parse the output to obtain the list of hosts. Use that list as the target set for `all`. New hosts appear automatically once their entry is registered in config and their driver exists — no hardcoded list is maintained here.
 
-> **pi note:** the `pi` target emits a richer tree than the others — executable subagent files under `exports/pi/agents/`, prompts with `Agent()`/`Skill()` call sites rewritten to subagent-tool hints, and the vendored subagent extension. pi-only assets live in `scripts/pi_assets/`. The `pi` target has **no persona export** — it is handled entirely within `runtime.drivers.pi.export`.
+> **pi note:** the `pi` target emits a richer tree than the export-only pointer/curated drivers — executable subagent files under `exports/pi/agents/`, prompts with `Agent()`/`Skill()` call sites rewritten to subagent-tool hints, and the vendored subagent extension. pi-only assets live in `scripts/pi_assets/`. The `pi` target has **no persona export** — it is handled entirely within `runtime.drivers.pi.export`.
 
 > **Export-only target notes:**
 > - `windsurf` → curated rule files under `.windsurf/rules/*.md` with `trigger` frontmatter.
@@ -71,9 +74,9 @@ Build the target list:
 
 ## Phase 2 — Run per-target export
 
-For each target in the list, run the export in sequence (not in parallel). For **cursor**, **codex**, and **agy**, invoke the runtime CLI. For **pi** and the export-only drivers (**windsurf**, **kiro**, **cline**, **copilot**), inline-import the standalone driver.
+For each target in the list, run the export in sequence (not in parallel). For **cursor**, **codex**, **agy**, and **omp**, invoke the runtime CLI. For **pi** and the export-only drivers (**windsurf**, **kiro**, **cline**, **copilot**), inline-import the standalone driver.
 
-### cursor / codex / agy targets
+### cursor / codex / agy / omp targets
 
 Run via the runtime CLI, writing to the committed `exports/<target>/` mirror with `--out`:
 
@@ -81,11 +84,11 @@ Run via the runtime CLI, writing to the committed `exports/<target>/` mirror wit
 python3 -m z_harness_cli export --host <host> --out exports/<target> --force
 ```
 
-Replace `<host>` with `cursor`, `codex`, or `antigravity`, and `<target>` with the matching `exports/` dir name: `cursor` → `exports/cursor`, `codex` → `exports/codex`, and **`agy` in the target list maps to `--host antigravity --out exports/agy`**.
+Replace `<host>` with `cursor`, `codex`, `antigravity`, or `omp`, and `<target>` with the matching `exports/` dir name: `cursor` → `exports/cursor`, `codex` → `exports/codex`, **`agy` in the target list maps to `--host antigravity --out exports/agy`**, and `omp` → `exports/omp`.
 
 Use `--out exports/<target>` (NOT `--in-place`): `--in-place` writes the host layout into the current project root (cwd) for live use in a workspace — it does **not** populate the committed `exports/` mirror. `--force` is required because `exports/<target>/` is a non-empty existing directory.
 
-The CLI exports commands, agents, skills, **and personas** in a single pass — no separate persona step is needed or wanted for these three hosts. (Persona sources are read from `personas/builtin/`.)
+The CLI exports commands, agents, skills, and host-specific persona/profile resources in a single pass. Cursor/codex/agy write personas via their adapter persona loop. OMP writes `.omp/z-harness/profiles/` from the runtime exporter and reports native fidelity (T009).
 
 **Important:** run targets sequentially, not in parallel. Capture stdout and stderr for each separately.
 
@@ -212,8 +215,8 @@ Exit nonzero (return a non-zero status to the user). You may signal this by endi
 - **No silent failures.** Every target must produce an explicit OK or FAILED line.
 - **No LLM interpretation of export output.** Just capture the CLI's stdout/stderr verbatim; do not summarize or editorialize on what the export produced.
 - **Relative paths in OK output.** Output paths should be relative to the repo root (strip the leading absolute path prefix).
-- **No writes by this command.** All file I/O is delegated to the runtime CLI and pi driver.
-- **No double persona export.** The runtime CLI (cursor/codex/agy) already writes personas in the same pass as commands/agents/skills. There is no separate persona step for these hosts.
+- **No writes by this command.** All file I/O is delegated to the runtime CLI, OMP runtime exporter, and standalone pi/export-only drivers.
+- **No double persona export.** The runtime CLI (cursor/codex/agy) already writes personas in the same pass as commands/agents/skills, and OMP writes profiles from its runtime exporter. There is no separate persona/profile step for these hosts.
 
 ---
 
