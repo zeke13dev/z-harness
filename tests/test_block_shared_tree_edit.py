@@ -75,6 +75,11 @@ def test_second_concurrent_session_blocked(repo):
     rc, err = run_hook("sessB", str(f), str(repo_path))        # B intrudes
     assert rc == 2
     assert "BLOCKED" in err
+    # Claude Code gets EnterWorktree; OMP/pi and other cwd-aware hosts should
+    # understand that moving the current session cwd into a linked worktree is
+    # also valid. Manual git worktree creation remains the generic fallback.
+    assert "EnterWorktree" in err
+    assert "this session's cwd" in err
     assert "git worktree add" in err
 
 

@@ -10,12 +10,15 @@
 # any command we cannot confidently parse as a write into a contended tree is
 # allowed, so normal Bash usage is never wedged.
 #
-# Purpose: stop two Claude sessions from editing the SAME git working tree at
+# Purpose: stop two agent sessions from editing the SAME git working tree at
 # once. On 2026-06-12 two sessions ran in the primary z-harness checkout on
 # `main` simultaneously; one committed under the other, `main` diverged, and a
 # merge nearly clobbered the other session's uncommitted work. This hook makes
 # that impossible: the first session to edit a tree owns it; a second concurrent
-# session is blocked until it moves to its own worktree.
+# session is blocked until it moves to its own worktree. The block message is
+# entrypoint-agnostic: use the host's in-place worktree switch when available
+# (Claude Code: EnterWorktree; OMP/pi: move the current session cwd), otherwise
+# relaunch/root a new session in a linked worktree.
 #
 # Decision:
 #   ALLOW : exit 0. Solo editing of ANY tree (including primary/main) is fine.
@@ -191,7 +194,7 @@ while IFS= read -r cand; do
     OWNER="$(printf '%s' "$RESULT" | cut -f3)"
     OWNER_AGE="$(printf '%s' "$RESULT" | cut -f4)"
     {
-      echo "BLOCKED: another Claude session is already editing this working tree."
+      echo "BLOCKED: another agent session is already editing this working tree."
       echo "  worktree : $WT"
       echo "  target   : $cand"
       echo "  owned by : session $OWNER (heartbeat ${OWNER_AGE}s ago)"
@@ -199,7 +202,14 @@ while IFS= read -r cand; do
       echo
       echo "Two sessions sharing one working tree is what diverged main on 2026-06-12."
       [ "$TOOL" = "Bash" ] && echo "(This was a Bash file-write — do NOT route around the guard; isolate instead.)"
-      echo "Isolate into your own worktree, then relaunch this session there:"
+      echo "Isolate into your own linked worktree. Prefer an in-place switch for THIS"
+      echo "session when your host supports it; no fresh session is needed in that case:"
+      echo "  - Claude Code: EnterWorktree(name: \"<topic>\") or EnterWorktree(path: \"<existing-worktree>\")"
+      echo "  - OMP/pi or any cwd-aware host: create/select a linked worktree, then move"
+      echo "    this session's cwd there before retrying the edit"
+      echo "  - Other hosts: start/relaunch the agent rooted in a linked worktree"
+      echo "A linked worktree has its own per-tree marker dir, so this guard won't fire there."
+      echo "If you need to create one manually:"
       echo "    git worktree add ../$(basename "$WT")-<topic> -b <branch> origin/main"
       echo
       echo "Deliberate solo override: export Z_HARNESS_ALLOW_SHARED_TREE=1"

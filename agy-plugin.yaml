@@ -290,7 +290,7 @@ skills:
   - id: z-git-guardrails
     source: skills/z-git-guardrails/SKILL.md
     output: .agent/skills/z-git-guardrails/SKILL.md
-    description: "Install, remove, or report status of the z-harness PreToolUse guardrail hooks (git-safety + worktree-isolation) in global or project Claude Code settings."
+    description: "Install, remove, or report status of the z-harness PreToolUse guardrail hooks (git-safety + worktree-isolation) in host hook settings (Claude Code settings today)."
   - id: z-grill
     source: skills/z-grill/SKILL.md
     output: .agent/skills/z-grill/SKILL.md

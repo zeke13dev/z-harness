@@ -1,7 +1,7 @@
 ---
 name: z-git-guardrails
 disable-model-invocation: false
-description: Install, remove, or report status of the z-harness PreToolUse guardrail hooks (git-safety + worktree-isolation) in global or project Claude Code settings.
+description: Install, remove, or report status of the z-harness PreToolUse guardrail hooks (git-safety + worktree-isolation) in host hook settings (Claude Code settings today).
 argument-hint: "[install|remove|status]"
 runtime: c1
 driver_features_required:
@@ -9,10 +9,10 @@ driver_features_required:
 unsupported_driver_behavior: explicit_gate
 ---
 
-You are running **z-harness `/z-git-guardrails`** — the installer for the z-harness PreToolUse guardrail hooks. It manages a **bundle of two** hooks that run at the Claude Code tool-call level before a tool executes:
+You are running **z-harness `/z-git-guardrails`** — the installer for the z-harness PreToolUse guardrail hooks. It manages a **bundle of two** hooks that run at the host tool-call level before a tool executes (implemented via Claude Code settings today; exported/other hosts must map the same guardrail semantics to their native hook surface if they have one):
 
 1. **git-safety** (`scripts/block-dangerous-git.sh`, matcher `Bash`) — blocks dangerous git operations (force-pushes onto upstream-reachable commits, working-tree-destructive commands).
-2. **worktree-isolation** (`scripts/block-shared-tree-edit.sh`, matcher `Edit|Write|MultiEdit|NotebookEdit`) — blocks a second concurrent Claude session from editing a working tree another session already owns, so two sessions can't collide on one tree (the failure that diverged `main` on 2026-06-12). Solo editing is never blocked.
+2. **worktree-isolation** (`scripts/block-shared-tree-edit.sh`, matcher `Edit|Write|MultiEdit|NotebookEdit`) — blocks a second concurrent agent session from editing a working tree another session already owns, so two sessions can't collide on one tree (the failure that diverged `main` on 2026-06-12). Solo editing is never blocked. When blocked, the preferred fix is an in-place move of the **current** session into a linked worktree: Claude Code can use `EnterWorktree`; OMP/pi or any cwd-aware entrypoint can create/select a linked worktree and move the current session cwd there. If the host cannot switch cwd/worktree in place, start a fresh session rooted in a linked worktree. A linked worktree has its own per-tree marker dir, so the guard won't fire there.
 
 Both are installed/removed/reported together as one bundle. `install` adds whichever are missing; `remove` strips both; `status` reports each.
 
@@ -170,7 +170,7 @@ TREE_OUT="$(printf '%s' '{"session_id":"verify","cwd":"'"$(pwd)"'","tool_name":"
 - `GIT_EXIT == 2` → git-safety verified (blocks `git clean -fdx`). Any other value → "WARNING: git-safety hook installed but dry-run returned exit `$GIT_EXIT`; inspect `$GIT_HOOK`."
 - `TREE_EXIT == 0` → worktree-isolation verified (runnable; allows solo edit). Any other value → "WARNING: worktree-isolation hook installed but solo dry-run returned exit `$TREE_EXIT` (expected 0 allow); inspect `$TREE_HOOK`."
 
-Tell the user the combined result, e.g. "Both guardrail hooks installed and verified in `<TARGET_SETTINGS>`. Takes effect for new Claude Code sessions."
+Tell the user the combined result, e.g. "Both guardrail hooks installed and verified in `<TARGET_SETTINGS>`. Takes effect for new sessions that load that hook settings file."
 
 ---
 
@@ -313,8 +313,8 @@ guardrail hook status:
 
 - Editing the logic of `block-dangerous-git.sh` or `block-shared-tree-edit.sh` themselves → those files are managed as source code; use normal edit tools.
 - Installing either hook under a different matcher → the matchers are fixed (`Bash` for git-safety; `Edit|Write|MultiEdit|NotebookEdit` for worktree-isolation); a different matcher would never fire correctly.
-- Managing other Claude Code settings (model, `permissions`, other hooks) → this command is scoped to the two PreToolUse guardrail entries.
-- Restarting or reloading Claude Code → after editing `settings.json`, Claude Code picks up the change on the next session; this command cannot trigger a reload.
+- Managing unrelated host settings (model, `permissions`, other hooks) → this command is scoped to the two PreToolUse guardrail entries.
+- Restarting or reloading the host IDE/agent → after editing `settings.json`, the host picks up the change on the next session/load cycle; this command cannot trigger a reload.
 - Auditing past override events → see `<z-harness-base>/git-guardrails-audit.log` directly.
 
 ---
