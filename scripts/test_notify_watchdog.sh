@@ -253,6 +253,219 @@ Z_HARNESS_REPO_CONFIG="/nonexistent/no-such-file.toml" \
 assert_eq "T005-E exits 0 even on bad config" "0" "$EXIT_STATUS_E"
 
 # ---------------------------------------------------------------------------
+# T015-A: hermes_webhook_url set + URL reachable (mock server) → signed POST sent
+# ---------------------------------------------------------------------------
+
+printf '\nT015-A: hermes_webhook_url set + endpoint up → signed POST with HMAC signature\n'
+
+TMPDIR_H1="$(_tmpdir)"
+
+cat > "${TMPDIR_H1}/z-harness.toml" <<'EOF'
+[notify]
+level = "all"
+hermes_webhook_url = "http://127.0.0.1:18644/ingest"
+hermes_webhook_secret = "test-secret-key-12345"
+EOF
+
+MOCK_BIN_H1="${TMPDIR_H1}/bin"
+mkdir -p "$MOCK_BIN_H1"
+CURL_LOG_H1="${TMPDIR_H1}/curl_log.txt"
+
+cat > "${MOCK_BIN_H1}/curl" <<MOCKEOF
+#!/usr/bin/env bash
+# Log all args and flag presence of HMAC signature header.
+printf 'CURL_ARGS: %s\n' "\$*" >> "${CURL_LOG_H1}"
+for arg in "\$@"; do
+    if printf '%s' "\$arg" | grep -q "X-Z-Harness-Signature"; then
+        printf 'HMAC_HEADER: %s\n' "\$arg" >> "${CURL_LOG_H1}"
+    fi
+    if printf '%s' "\$arg" | grep -q '"schema_version"'; then
+        printf 'PAYLOAD_FOUND: yes\n' >> "${CURL_LOG_H1}"
+    fi
+done
+prev_arg=""
+for arg in "\$@"; do
+    if [[ "\$prev_arg" == "-d" ]]; then
+        printf 'CURL_DATA: %s\n' "\$arg" >> "${CURL_LOG_H1}"
+    fi
+    prev_arg="\$arg"
+done
+exit 0
+MOCKEOF
+chmod +x "${MOCK_BIN_H1}/curl"
+
+EXIT_STATUS_H1=0
+Z_HARNESS_REPO_CONFIG="${TMPDIR_H1}/z-harness.toml" \
+    PATH="${MOCK_BIN_H1}:${PATH}" \
+    bash "$NOTIFY" \
+    --run test-hermes-001 \
+    --event watchdog_stall \
+    --message "agent hung" \
+    --slug my-plan \
+    2>/dev/null || EXIT_STATUS_H1=$?
+
+assert_eq "T015-A exits 0 with hermes_webhook_url set" "0" "$EXIT_STATUS_H1"
+
+CURL_LOG_CONTENT_H1=""
+[[ -f "$CURL_LOG_H1" ]] && CURL_LOG_CONTENT_H1="$(cat "$CURL_LOG_H1")"
+assert_contains "T015-A curl invoked for Hermes POST" "CURL_ARGS" "$CURL_LOG_CONTENT_H1"
+# Verify 3 s max-time flag is present
+assert_contains "T015-A curl uses --max-time 3" "max-time" "$CURL_LOG_CONTENT_H1"
+# Verify HMAC signature header is included (secret is set)
+assert_contains "T015-A HMAC signature header present" "X-Z-Harness-Signature" "$CURL_LOG_CONTENT_H1"
+# Verify payload contains platform-neutral fields
+assert_contains "T015-A payload contains schema_version" "schema_version" "$CURL_LOG_CONTENT_H1"
+
+rm -rf "$TMPDIR_H1"
+
+# ---------------------------------------------------------------------------
+# T015-B: hermes_webhook_url set + endpoint unreachable → run still succeeds
+# ---------------------------------------------------------------------------
+
+printf '\nT015-B: hermes_webhook_url set + endpoint unreachable → run succeeds (never blocked)\n'
+
+TMPDIR_H2="$(_tmpdir)"
+
+cat > "${TMPDIR_H2}/z-harness.toml" <<'EOF'
+[notify]
+level = "all"
+hermes_webhook_url = "http://127.0.0.1:19999/unreachable"
+EOF
+
+MOCK_BIN_H2="${TMPDIR_H2}/bin"
+mkdir -p "$MOCK_BIN_H2"
+
+# Simulate curl failure (connection refused / timeout)
+cat > "${MOCK_BIN_H2}/curl" <<MOCKEOF
+#!/usr/bin/env bash
+exit 7
+MOCKEOF
+chmod +x "${MOCK_BIN_H2}/curl"
+
+EXIT_STATUS_H2=0
+Z_HARNESS_REPO_CONFIG="${TMPDIR_H2}/z-harness.toml" \
+    PATH="${MOCK_BIN_H2}:${PATH}" \
+    bash "$NOTIFY" \
+    --run test-hermes-002 \
+    --event watchdog_stall \
+    --message "endpoint down" \
+    2>/dev/null || EXIT_STATUS_H2=$?
+
+assert_eq "T015-B exits 0 even when endpoint is unreachable" "0" "$EXIT_STATUS_H2"
+
+rm -rf "$TMPDIR_H2"
+
+# ---------------------------------------------------------------------------
+# T015-C: hermes_webhook_url unset → zero new network calls
+# ---------------------------------------------------------------------------
+
+printf '\nT015-C: hermes_webhook_url unset → no Hermes curl call made\n'
+
+TMPDIR_H3="$(_tmpdir)"
+
+cat > "${TMPDIR_H3}/z-harness.toml" <<'EOF'
+[notify]
+level = "all"
+discord_webhook_url = ""
+EOF
+
+MOCK_BIN_H3="${TMPDIR_H3}/bin"
+mkdir -p "$MOCK_BIN_H3"
+CURL_CALLED_H3="${TMPDIR_H3}/curl_called"
+
+# We place a real curl mock that would capture hermes calls, but we also
+# stub out discord so that only a hermes-going call would log "HERMES".
+cat > "${MOCK_BIN_H3}/curl" <<MOCKEOF
+#!/usr/bin/env bash
+for arg in "\$@"; do
+    if printf '%s' "\$arg" | grep -q "18644\|ingest\|hermes"; then
+        echo "HERMES_CALLED" >> "${CURL_CALLED_H3}"
+    fi
+done
+exit 0
+MOCKEOF
+chmod +x "${MOCK_BIN_H3}/curl"
+
+EXIT_STATUS_H3=0
+Z_HARNESS_REPO_CONFIG="${TMPDIR_H3}/z-harness.toml" \
+    PATH="${MOCK_BIN_H3}:${PATH}" \
+    bash "$NOTIFY" \
+    --run test-hermes-003 \
+    --event watchdog_stall \
+    --message "test no hermes url" \
+    2>/dev/null || EXIT_STATUS_H3=$?
+
+assert_eq "T015-C exits 0 when hermes_webhook_url unset" "0" "$EXIT_STATUS_H3"
+
+HERMES_CALLED_H3=""
+[[ -f "${CURL_CALLED_H3}" ]] && HERMES_CALLED_H3="$(cat "${CURL_CALLED_H3}")"
+assert_eq "T015-C no Hermes curl call when URL unset" "" "$HERMES_CALLED_H3"
+
+rm -rf "$TMPDIR_H3"
+
+# ---------------------------------------------------------------------------
+# T015-D: payload fields — verify platform-neutral schema fields present
+# ---------------------------------------------------------------------------
+
+printf '\nT015-D: Hermes payload contains all required platform-neutral fields\n'
+
+TMPDIR_H4="$(_tmpdir)"
+
+cat > "${TMPDIR_H4}/z-harness.toml" <<'EOF'
+[notify]
+level = "all"
+hermes_webhook_url = "http://127.0.0.1:18644/ingest"
+EOF
+
+MOCK_BIN_H4="${TMPDIR_H4}/bin"
+mkdir -p "$MOCK_BIN_H4"
+CURL_LOG_H4="${TMPDIR_H4}/curl_log.txt"
+
+cat > "${MOCK_BIN_H4}/curl" <<MOCKEOF
+#!/usr/bin/env bash
+prev_arg=""
+for arg in "\$@"; do
+    if [[ "\$prev_arg" == "-d" ]]; then
+        printf '%s\n' "\$arg" >> "${CURL_LOG_H4}"
+    fi
+    prev_arg="\$arg"
+done
+exit 0
+MOCKEOF
+chmod +x "${MOCK_BIN_H4}/curl"
+
+EXIT_STATUS_H4=0
+Z_HARNESS_REPO_CONFIG="${TMPDIR_H4}/z-harness.toml" \
+    PATH="${MOCK_BIN_H4}:${PATH}" \
+    bash "$NOTIFY" \
+    --run test-hermes-004 \
+    --event watchdog_timeout \
+    --message "dispatch timed out" \
+    --slug the-plan \
+    --severity error \
+    2>/dev/null || EXIT_STATUS_H4=$?
+
+assert_eq "T015-D exits 0 with full payload" "0" "$EXIT_STATUS_H4"
+
+CURL_LOG_CONTENT_H4=""
+[[ -f "$CURL_LOG_H4" ]] && CURL_LOG_CONTENT_H4="$(cat "$CURL_LOG_H4")"
+assert_contains "T015-D payload has schema_version"   '"schema_version"'  "$CURL_LOG_CONTENT_H4"
+assert_contains "T015-D payload has harness_version"  '"harness_version"' "$CURL_LOG_CONTENT_H4"
+assert_contains "T015-D payload has source=z-harness" '"source"'          "$CURL_LOG_CONTENT_H4"
+assert_contains "T015-D payload has event"            '"event"'           "$CURL_LOG_CONTENT_H4"
+assert_contains "T015-D payload has event_id"         '"event_id"'        "$CURL_LOG_CONTENT_H4"
+assert_contains "T015-D payload has run_id"           '"run_id"'          "$CURL_LOG_CONTENT_H4"
+assert_contains "T015-D payload has slug"             '"slug"'            "$CURL_LOG_CONTENT_H4"
+assert_contains "T015-D payload has repo"             '"repo"'            "$CURL_LOG_CONTENT_H4"
+assert_contains "T015-D payload has severity"         '"severity"'        "$CURL_LOG_CONTENT_H4"
+assert_contains "T015-D payload has reason"           '"reason"'          "$CURL_LOG_CONTENT_H4"
+assert_contains "T015-D payload has ts"               '"ts"'              "$CURL_LOG_CONTENT_H4"
+# Confirm no Discord-specific field
+assert_not_contains "T015-D payload has no Discord embeds" '"embeds"' "$CURL_LOG_CONTENT_H4"
+
+rm -rf "$TMPDIR_H4"
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 

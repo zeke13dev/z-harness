@@ -61,8 +61,10 @@ except ImportError:
 DEFAULTS: dict = {
     "schema_version": 2,
     "notify": {
-        "level": "approval_only",   # off | approval_only | all
-        "discord_webhook_url": "",  # string: Discord webhook URL (empty = disabled)
+        "level": "approval_only",       # off | approval_only | all
+        "discord_webhook_url": "",      # string: Discord webhook URL (empty = disabled)
+        "hermes_webhook_url": "",       # string: Hermes webhook URL (empty = disabled)
+        "hermes_webhook_secret": "",    # string: HMAC-SHA256 signing secret for Hermes webhook (empty = disabled)
     },
     "docs": {
         "always_apply": "always",   # always | never
@@ -320,6 +322,8 @@ HALT_CATEGORY_ENUM: frozenset[str] = frozenset(
 
 VALIDATORS: dict = {
     "notify.level": {"off", "approval_only", "all"},
+    "notify.hermes_webhook_url": _validate_any_string,
+    "notify.hermes_webhook_secret": _validate_any_string,
     "docs.always_apply": {"always", "never"},
     "docs.staleness_threshold": _validate_positive_int,
     "workflow.audit_to_amend": {"ask", "amend", "stop"},
@@ -626,6 +630,7 @@ QUESTION_IDS: dict[str, dict] = {
             "skills/z-research/SKILL.md",
             "skills/z-uplift/SKILL.md",
             "skills/z-plan-split/SKILL.md",
+            "skills/z-plan/SKILL.md",
         ],
     },
 }
