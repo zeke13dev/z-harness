@@ -115,6 +115,19 @@ _check_pattern ".z-harness/"            -F  ".z-harness/"
 _check_pattern "z-harness/plans/"       -F  "z-harness/plans/"
 _check_pattern "z-harness/archive/"     -F  "z-harness/archive/"
 _check_pattern "z-harness/improvements/" -F "z-harness/improvements/"
+_check_pattern "z-harness/"             -E  "^\./z-harness/|^z-harness/"
+_check_pattern "root archive/"          -E  "^\./archive/|^archive/"
+_check_pattern "root improvements/"     -E  "^\./improvements/|^improvements/"
+_check_pattern "research/"              -E  "^\./research/|^research/"
+_check_pattern "temp/"                  -E  "^\./temp/|^temp/"
+_check_pattern "prompts/"               -E  "^\./prompts/|^prompts/"
+_check_pattern ".agent/"                -E  "^\./\.agent/|^\.agent/"
+_check_pattern ".pi/"                   -E  "^\./\.pi/|^\.pi/"
+_check_pattern ".local/"                -E  "^\./\.local/|^\.local/"
+_check_pattern ".pytest_cache/"         -E  "^\./\.pytest_cache/|^\.pytest_cache/"
+_check_pattern ".claude/worktrees/"     -E  "^\./\.claude/worktrees/|^\.claude/worktrees/"
+_check_pattern ".antigravitycli/"       -E  "^\./\.antigravitycli/|^\.antigravitycli/"
+_check_pattern ".venv/"                  -E  "^\./\.venv/|^\.venv/"
 _check_pattern "~/"                     -F  "~/"
 
 # exports/ is forbidden except for the three legacy subdirs that are permitted
@@ -147,5 +160,18 @@ if [[ -n "$_legacy_hit" ]]; then
     _audit_fail "legacy plan content (z-harness/<slug>/(SPEC|PLAN|TASKS).md)" "$_legacy_hit"
 fi
 
+
+# Content scan for obvious absolute/local-state paths in text-like files. Keep
+# this intentionally narrow: binary payloads are skipped by extension/size.
+TMP_SCAN_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_SCAN_DIR"' EXIT
+if tar -xf "$TARBALL" -C "$TMP_SCAN_DIR" 2>/dev/null; then
+    _content_hit="$(find "$TMP_SCAN_DIR" -type f ! -path '*/scripts/audit-tarball.sh' -size -1M \( -name '*.md' -o -name '*.py' -o -name '*.sh' -o -name '*.json' -o -name '*.toml' -o -name '*.yaml' -o -name '*.yml' -o -name '*.txt' \) -print0 \
+        | xargs -0 grep -E -n '(/Users/zeke|/home/zeke|/Users/[^[:space:]]+/.local/state/z-harness|/home/[^[:space:]]+/.local/state/z-harness)' 2>/dev/null \
+        | head -n1 || true)"
+    if [[ -n "$_content_hit" ]]; then
+        _audit_fail "content leak" "$_content_hit"
+    fi
+fi
 printf '[audit-tarball] PASS: %s\n' "$TARBALL"
 exit 0

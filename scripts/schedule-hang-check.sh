@@ -48,13 +48,38 @@ print(t.tm_min, t.tm_hour, t.tm_mday, t.tm_mon)
 PY
 }
 
+_xml_escape() {
+  python3 - "$1" <<'PY'
+import html, sys
+print(html.escape(sys.argv[1], quote=True))
+PY
+}
+
+_shell_quote() {
+  python3 - "$1" <<'PY'
+import shlex, sys
+print(shlex.quote(sys.argv[1]))
+PY
+}
+
+_safe_component() {
+  [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]]
+}
+
+_string_arg_xml() {
+  printf '    <string>%s</string>\n' "$(_xml_escape "$1")"
+}
+
+
 _plist() {  # $1 label  $2 program-args-xml
+  local label_xml
+  label_xml="$(_xml_escape "$1")"
   cat <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>$1</string>
+  <key>Label</key><string>$label_xml</string>
   <key>ProgramArguments</key>
   <array>
 $2
@@ -111,13 +136,15 @@ fi
 [[ "$DELAY" =~ ^[0-9]+$ ]] || DELAY="$THRESHOLD"
 [[ -z "$REASON" ]] && REASON="$RUN"
 _safe_run="$(printf '%s' "$RUN" | tr -c 'A-Za-z0-9._-' '-')"
+[[ "$RUN" == "$_safe_run" && -n "$RUN" ]] || { echo "schedule-hang-check.sh: --run must contain only A-Za-z0-9._-" >&2; exit 2; }
+_safe_component "$REASON" || { echo "schedule-hang-check.sh: --reason must contain only A-Za-z0-9._-" >&2; exit 2; }
 [[ -z "$LABEL" ]] && LABEL="com.zharness.hangcheck.$_safe_run"
+_safe_component "$LABEL" || { echo "schedule-hang-check.sh: --label must contain only A-Za-z0-9._-" >&2; exit 2; }
 plist="$_agents_dir/$LABEL.plist"
 
 # Self-removing one-shot: run hang-check, then bootout + delete this plist.
-prog="    <string>/bin/sh</string>
-    <string>-c</string>
-    <string>bash '$HANG_CHECK' --run '$RUN' --threshold-secs $THRESHOLD --reason '$REASON'; launchctl bootout 'gui/$_uid/$LABEL' 2>/dev/null; rm -f '$plist'</string>"
+cmd="bash $(_shell_quote "$HANG_CHECK") --run $(_shell_quote "$RUN") --threshold-secs $THRESHOLD --reason $(_shell_quote "$REASON"); launchctl bootout $(_shell_quote "gui/$_uid/$LABEL") 2>/dev/null; rm -f $(_shell_quote "$plist")"
+prog="$(_string_arg_xml "/bin/sh")$(_string_arg_xml "-c")$(_string_arg_xml "$cmd")"
 read -r mn hr dy mo < <(_target_cal "$DELAY")
 body="$(_plist "$LABEL" "$prog" "$(_cal_xml "$mn" "$hr" "$dy" "$mo")")"
 
@@ -130,7 +157,7 @@ fi
 
 if ! command -v launchctl >/dev/null 2>&1; then
   # Non-macOS fallback: detached delayed one-shot.
-  nohup sh -c "sleep $DELAY; bash '$HANG_CHECK' --run '$RUN' --threshold-secs $THRESHOLD --reason '$REASON'" \
+  nohup sh -c "sleep $DELAY; bash $(_shell_quote "$HANG_CHECK") --run $(_shell_quote "$RUN") --threshold-secs $THRESHOLD --reason $(_shell_quote "$REASON")" \
     >/dev/null 2>&1 &
   echo "scheduled (detached fallback): hang-check for $RUN in ${DELAY}s"
   exit 0

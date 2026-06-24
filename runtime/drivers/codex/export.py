@@ -33,6 +33,7 @@ from runtime.drivers._export_utils import (
     enumerate_sources,
     output_path_for,
     validate_capabilities,
+    rewrite_unsupported_call_blocks,
 )
 
 
@@ -55,26 +56,11 @@ _REPLACEMENT_COMMENT = (
 
 
 def _rewrite_body(body: str) -> str:
-    """Rewrite *body* to remove Anthropic-specific constructs.
-
-    Lines containing Agent(...), Skill(...), AskUserQuestion(...) etc. are
-    replaced line-by-line with a single HTML comment, preserving leading
-    whitespace.
-    """
-    lines = body.splitlines(keepends=True)
-    result: list[str] = []
-    for line in lines:
-        stripped = line.rstrip("\n\r")
-        if (
-            _AGENT_CALL_RE.search(stripped)
-            or _SKILL_CALL_RE.search(stripped)
-            or _TOOL_SCHEMA_RE.search(stripped)
-        ):
-            leading = len(stripped) - len(stripped.lstrip())
-            result.append(" " * leading + _REPLACEMENT_COMMENT + "\n")
-        else:
-            result.append(line)
-    return "".join(result)
+    """Rewrite whole unsupported runtime call blocks with a Codex hint."""
+    return rewrite_unsupported_call_blocks(
+        body,
+        lambda _block: _REPLACEMENT_COMMENT,
+    )
 
 
 # ---------------------------------------------------------------------------

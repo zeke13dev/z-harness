@@ -8,9 +8,10 @@
 # Exclusions (never included in the tarball):
 #   .git/
 #   exports/
-#   z-harness/plans/
-#   z-harness/archive/
-#   z-harness/improvements/
+#   temp/
+#   z-harness/ runtime state
+#   archive/, improvements/, research/
+#   .agent/, .pi/, .local/, .pytest_cache/, .claude/worktrees/, .antigravitycli/
 #   dist/
 #   .z-harness/
 #   __pycache__/
@@ -48,9 +49,19 @@ printf 'bundle-plugin.sh: building %s\n' "$OUTPUT"
 EXCLUDES=(
   "--exclude=./.git"
   "--exclude=./exports"
-  "--exclude=./z-harness/plans"
-  "--exclude=./z-harness/archive"
-  "--exclude=./z-harness/improvements"
+  "--exclude=./prompts"
+  "--exclude=./temp"
+  "--exclude=./z-harness"
+  "--exclude=./archive"
+  "--exclude=./improvements"
+  "--exclude=./research"
+  "--exclude=./.agent"
+  "--exclude=./.pi"
+  "--exclude=./.local"
+  "--exclude=./.pytest_cache"
+  "--exclude=./.claude/worktrees"
+  "--exclude=./.antigravitycli"
+  "--exclude=./.venv"
   "--exclude=./dist"
   "--exclude=./.z-harness"
   "--exclude=./__pycache__"
@@ -64,19 +75,21 @@ EXCLUDES=(
 # Skip the canonical directories that are either already excluded above or
 # are intentionally included.
 _SKIP_SLUGS=("plans" "archive" "improvements")
-while IFS= read -r -d '' dir; do
-  slug="$(basename "$dir")"
-  # Skip already-excluded canonical dirs
-  skip=0
-  for s in "${_SKIP_SLUGS[@]}"; do
-    [[ "$slug" == "$s" ]] && skip=1 && break
-  done
-  [[ "$skip" -eq 1 ]] && continue
-  # Exclude if the dir contains any of the plan marker files
-  if [[ -f "$dir/PLAN.md" || -f "$dir/SPEC.md" || -f "$dir/TASKS.md" ]]; then
-    EXCLUDES+=("--exclude=./z-harness/${slug}")
-  fi
-done < <(find "$REPO_ROOT/z-harness" -maxdepth 1 -mindepth 1 -type d -print0)
+if [[ -d "$REPO_ROOT/z-harness" ]]; then
+  while IFS= read -r -d '' dir; do
+    slug="$(basename "$dir")"
+    # Skip already-excluded canonical dirs
+    skip=0
+    for s in "${_SKIP_SLUGS[@]}"; do
+      [[ "$slug" == "$s" ]] && skip=1 && break
+    done
+    [[ "$skip" -eq 1 ]] && continue
+    # Exclude if the dir contains any of the plan marker files
+    if [[ -f "$dir/PLAN.md" || -f "$dir/SPEC.md" || -f "$dir/TASKS.md" ]]; then
+      EXCLUDES+=("--exclude=./z-harness/${slug}")
+    fi
+  done < <(find "$REPO_ROOT/z-harness" -maxdepth 1 -mindepth 1 -type d -print0)
+fi
 
 tar -czf "$OUTPUT" "${EXCLUDES[@]}" -C "$REPO_ROOT" .
 

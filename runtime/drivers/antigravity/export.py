@@ -65,6 +65,7 @@ from runtime.drivers._export_utils import (
     _ALWAYS_ON_AGENTS,
     enumerate_sources,
     validate_capabilities,
+    rewrite_unsupported_call_blocks,
 )
 
 
@@ -107,21 +108,11 @@ _REPLACEMENT_COMMENT = (
 
 
 def _rewrite_body(body: str) -> str:
-    """Replace Anthropic-specific construct call-sites with an HTML comment."""
-    lines = body.splitlines(keepends=True)
-    result: list[str] = []
-    for line in lines:
-        stripped = line.rstrip("\n\r")
-        if (
-            _AGENT_CALL_RE.search(stripped)
-            or _SKILL_CALL_RE.search(stripped)
-            or _TOOL_SCHEMA_RE.search(stripped)
-        ):
-            leading = len(stripped) - len(stripped.lstrip())
-            result.append(" " * leading + _REPLACEMENT_COMMENT + "\n")
-        else:
-            result.append(line)
-    return "".join(result)
+    """Replace whole unsupported runtime call blocks with an HTML comment."""
+    return rewrite_unsupported_call_blocks(
+        body,
+        lambda _block: _REPLACEMENT_COMMENT,
+    )
 
 
 # ---------------------------------------------------------------------------

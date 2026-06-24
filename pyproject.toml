@@ -7,11 +7,30 @@ name = "z-harness"
 dynamic = ["version"]
 description = "Packaging CLI for z-harness — install, export, launch, doctor, and update."
 requires-python = ">=3.11"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "zeke" }]
+keywords = ["ai-tools", "developer-workflow", "cli", "automation"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Software Development",
+]
+
 dependencies = [
     "typer>=0.9",
     "rich>=13",
     "fastmcp>=3.4.2",
 ]
+
+[project.urls]
+Homepage = "https://github.com/zeke13dev/z-harness"
+Repository = "https://github.com/zeke13dev/z-harness"
+Issues = "https://github.com/zeke13dev/z-harness/issues"
 
 [project.scripts]
 z-harness = "z_harness_cli.__main__:app"
@@ -32,7 +51,8 @@ source = "vcs"
 fallback-version = "0.0.0.dev0"
 
 [tool.hatch.build.targets.wheel]
-packages = ["z_harness_cli"]
+packages = ["z_harness_cli", "runtime"]
+force-include = { "scripts" = "scripts", "skills" = "skills", "agents" = "agents", "personas" = "personas", "docs" = "docs", "_fragments" = "_fragments", "install.sh" = "install.sh", "plugin.json" = "plugin.json", ".claude-plugin" = ".claude-plugin", ".codex-plugin" = ".codex-plugin", "LICENSE" = "LICENSE", "README.md" = "README.md", "CAPABILITIES.md" = "CAPABILITIES.md", "VERSION" = "VERSION" }
 
 [dependency-groups]
 dev = [

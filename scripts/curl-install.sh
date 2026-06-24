@@ -3,13 +3,13 @@
 # curl-install.sh — bootstrap uv and install the z-harness CLI wheel
 #
 # Usage (curl | sh):
-#   curl -fsSL https://releases.zeketools.dev/z-harness/install.sh | sh
+#   curl -fsSL https://github.com/zeke13dev/z-harness/releases/latest/download/install.sh | sh
 #
 # Usage (local):
 #   sh scripts/curl-install.sh
 #
 # Environment:
-#   Z_HARNESS_RELEASE_URL   Override manifest URL (default: https://releases.zeketools.dev/z-harness/latest.json)
+#   Z_HARNESS_RELEASE_URL   Override manifest URL (default: https://github.com/zeke13dev/z-harness/releases/latest/download/latest.json)
 #
 # What this script does:
 #   1. Bootstraps uv if absent (via astral.sh)
@@ -26,7 +26,7 @@
 
 set -eu
 
-DEFAULT_RELEASE_URL="https://releases.zeketools.dev/z-harness/latest.json"
+DEFAULT_RELEASE_URL="https://github.com/zeke13dev/z-harness/releases/latest/download/latest.json"
 MANIFEST_URL="${Z_HARNESS_RELEASE_URL:-$DEFAULT_RELEASE_URL}"
 
 # The maximum manifest schema_version this installer understands.
@@ -166,7 +166,7 @@ main() {
         Darwin|Linux) ;;
         *)
             die "Unsupported OS: $(uname -s)" \
-                "z-harness supports macOS and Linux in v1.\n  For manual installation see: https://github.com/zeketools/z-harness"
+                "z-harness supports macOS and Linux in v1.\n  For manual installation see: https://github.com/zeke13dev/z-harness"
             ;;
     esac
 
@@ -193,12 +193,12 @@ main() {
 
     if ! download "$MANIFEST_URL" "$manifest_file"; then
         die "Failed to download release manifest from ${MANIFEST_URL}." \
-            "Check your network connection and try again.\n\nManual install:\n  uv tool install z-harness"
+            "Check your network connection and try again.\n\nManual install:\n  uv tool install <wheel-url-from-a-z-harness-GitHub-release>"
     fi
 
     if [ ! -s "$manifest_file" ]; then
         die "Empty response fetching release manifest from ${MANIFEST_URL}." \
-            "Manual install:\n  uv tool install z-harness"
+            "Manual install:\n  uv tool install <wheel-url-from-a-z-harness-GitHub-release>"
     fi
 
     # 6. Extract fields from manifest using python3 JSON parser
@@ -210,7 +210,7 @@ main() {
 
     if [ -z "$version" ] || [ -z "$wheel_url" ] || [ -z "$sha256" ]; then
         die "Manifest is missing required fields (version, wheel_url, sha256)." \
-            "This may indicate a corrupted release. Try again later or report to https://github.com/zeketools/z-harness\n\nManifest URL: ${MANIFEST_URL}"
+            "This may indicate a corrupted release. Try again later or report to https://github.com/zeke13dev/z-harness\n\nManifest URL: ${MANIFEST_URL}"
     fi
 
     # Validate schema_version is present and is a non-negative integer
@@ -257,7 +257,7 @@ main() {
     info "Verifying sha256..."
     if ! verify_sha256 "$wheel_file" "$sha256"; then
         die "sha256 mismatch — aborting install. The download may be corrupt or tampered with." \
-            "Do not install this wheel.\n\nTo retry:\n  curl -fsSL $(_manifest_base)/install.sh | sh\n\nIf the problem persists, report to https://github.com/zeketools/z-harness"
+            "Do not install this wheel.\n\nTo retry:\n  curl -fsSL $(_manifest_base)/install.sh | sh\n\nIf the problem persists, report to https://github.com/zeke13dev/z-harness"
     fi
     info "sha256 verified."
 

@@ -48,6 +48,7 @@ from runtime.drivers._export_utils import (
     enumerate_sources,
     resolve_strategy,
     select_sources,
+    rewrite_unsupported_call_blocks,
 )
 
 
@@ -67,27 +68,11 @@ _REPLACEMENT_COMMENT = (
 
 
 def _rewrite_body(body: str) -> str:
-    """Rewrite *body* to remove Anthropic-specific constructs.
-
-    Strategy: scan for Agent(...)/Skill(...)/AskUserQuestion(...) call sites.
-    When found on a line, replace that entire line with the replacement comment
-    (preserving leading whitespace for readability).
-    """
-    lines = body.splitlines(keepends=True)
-    result: list[str] = []
-    for line in lines:
-        stripped = line.rstrip("\n\r")
-        if (
-            _AGENT_CALL_RE.search(stripped)
-            or _SKILL_CALL_RE.search(stripped)
-            or _TOOL_SCHEMA_RE.search(stripped)
-        ):
-            # Preserve leading whitespace, replace the rest.
-            leading = len(stripped) - len(stripped.lstrip())
-            result.append(" " * leading + _REPLACEMENT_COMMENT + "\n")
-        else:
-            result.append(line)
-    return "".join(result)
+    """Rewrite whole unsupported runtime call blocks with a Windsurf hint."""
+    return rewrite_unsupported_call_blocks(
+        body,
+        lambda _block: _REPLACEMENT_COMMENT,
+    )
 
 
 # ---------------------------------------------------------------------------

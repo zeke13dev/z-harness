@@ -4,7 +4,7 @@
 # subagent before running cargo/qtctl on remote.
 #
 # Usage:
-#   remote-sandbox-sync.sh <remote-host> <slug> <task-id> [--no-delete]
+#   remote-sandbox-sync.sh <remote-host> <slug> <task-id> [--no-delete] [--allow-no-exclude]
 #
 # Examples:
 #   remote-sandbox-sync.sh zeke-pc expand-sports-ml T030
@@ -49,9 +49,11 @@ esac
 # -------------------------------------------------------------------------------
 
 DELETE_FLAG="--delete"
+ALLOW_NO_EXCLUDE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-delete) DELETE_FLAG="" ;;
+    --allow-no-exclude) ALLOW_NO_EXCLUDE=1 ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
   shift
@@ -82,7 +84,11 @@ if [[ -f "$LOCAL_ROOT/.z-harness-rsync-exclude" ]]; then
 elif [[ -f "$PLUGIN_ROOT/.z-harness-rsync-exclude" ]]; then
   EXCLUDE_FILE="$PLUGIN_ROOT/.z-harness-rsync-exclude"
 else
-  echo "warning: no .z-harness-rsync-exclude found; rsync will ship everything" >&2
+  if [[ "$ALLOW_NO_EXCLUDE" -ne 1 ]]; then
+    echo "remote-sandbox-sync.sh: no .z-harness-rsync-exclude found; refusing to rsync without explicit --allow-no-exclude" >&2
+    exit 2
+  fi
+  echo "warning: no .z-harness-rsync-exclude found; --allow-no-exclude set, rsync will ship everything" >&2
 fi
 
 # Resolve the remote home directory once to build absolute paths.

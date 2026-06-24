@@ -1,65 +1,79 @@
-# z-harness → Antigravity (agy) Export
+# z-harness
 
-This directory contains z-harness commands, agents, and skills exported as Antigravity
-(Google's agy IDE) workflow, rule, and skill files.
+z-harness is a workflow harness for AI-assisted software development. It provides commands, agents, skills, runtime dispatch, export drivers, and safety gates for planning, implementation, audit, review, documentation, and release workflows.
 
-## What's included
+## Beta status
 
-| Path | Purpose |
-|------|---------|
-| `.agent/workflows/*.md` | Custom chat modes — one per z-harness command |
-| `.agent/rules/*.md` | Always-on or model-decision rules — one per z-harness agent |
-| `prompts/*.md` | Flat prompt files (description + role frontmatter) |
-| `agy-plugin.yaml` | Export manifest (z-harness convention; not read by agy) |
-| `CAPABILITIES.md` | What can and cannot be expressed in Antigravity |
+This project is pre-1.0 beta software. It can orchestrate tools that read and write production code. Use it in a clean worktree, review generated plans before execution, and keep the review/test gates enabled. Expect host-specific fidelity differences while the export drivers stabilize.
+
+## Supported surfaces
+
+- **Claude Code plugin:** native/highest-fidelity command and agent workflow.
+- **Codex, Cursor, Antigravity:** exported or injected host-specific workflows with documented fidelity limits.
+- **Export-only targets:** pi, Windsurf, Kiro, Cline, and Copilot are generated artifacts; they do not all have runtime adapters.
+- **Python CLI (`z-harness` / `zh`):** installs, exports, launches, serves MCP, checks status, and updates the local install.
+
+See `CAPABILITIES.md` for the host matrix and known fidelity limits.
 
 ## Install
 
-### Per-project (recommended)
-
-Copy the `.agent/` directory into your project workspace root:
+### CLI bootstrap
 
 ```bash
-cp -r exports/agy/.agent /path/to/your/project/
+curl -fsSL https://github.com/zeke13dev/z-harness/releases/latest/download/install.sh | sh
+z-harness doctor
+z-harness install --target=claude
+z-harness launch
 ```
 
-Antigravity auto-discovers `.agent/workflows/**/*.md` and `.agent/rules/**/*.md`
-by watching the workspace directory tree.  No restart required — files become
-available immediately in the IDE.
+The CLI installer uses the release manifest, downloads the wheel over HTTPS, verifies SHA-256, and installs via `uv tool install`.
 
-### Global (all workspaces)
-
-To make workflows available across all projects, copy them to the global workflows path:
+### Source checkout / plugin development
 
 ```bash
-mkdir -p ~/.antigravity/antigravity/data/User/globalStorage/antigravity.antigravity/global_workflows/
-cp exports/agy/.agent/workflows/*.md \
-  ~/.antigravity/antigravity/data/User/globalStorage/antigravity.antigravity/global_workflows/
+git clone https://github.com/zeke13dev/z-harness
+cd z-harness
+bash install.sh --target=claude
+# or
+bash install.sh --target=codex
 ```
 
-## Usage
+Source installs symlink the checkout into the host plugin location. Edits take effect after the host reloads its plugin/cache.
 
-After installing, invoke a workflow from the command line:
+### Export artifacts
 
 ```bash
-agy chat --mode z-plan "Add user authentication feature"
-agy chat --mode z-execute
-agy chat --mode z-review-all
+make export
+# or
+z-harness export --host codex --out temp/exports/codex --force
 ```
 
-Or select the mode from the Antigravity IDE mode picker in the chat panel.
+Generated exports go under `temp/exports/` by default and are not committed release source. Release tarballs are audited before publication.
 
-## Re-generating
+## Configuration and state
 
-Run the exporter from the repo root:
+z-harness resolves runtime state outside the repository by default, under the platform state directory, e.g. `~/.local/state/z-harness/<repo-id>/`. Repo-local `.z-harness/` contains per-user provider/config overrides and is ignored by git.
+
+## Development checks
 
 ```bash
-python3 -m z_harness_cli export --host antigravity
-# or with a custom output directory:
-python3 -m z_harness_cli export --host antigravity --out /path/to/output
+make test
+make test-sh
+make export
+bash scripts/bundle-plugin.sh
 ```
 
-## Known limitations
+Release CI also builds the wheel, installs it in isolation, runs CLI/export smoke checks, and audits the plugin tarball.
 
-See `CAPABILITIES.md` for a full list of z-harness features that cannot be
-expressed in Antigravity (subagent dispatch, skills, multi-model review, etc.).
+## Documentation map
+
+- `docs/human/INSTALL.md` — detailed install/update flows.
+- `docs/human/capabilities-matrix.md` — host fidelity details.
+- `docs/human/SETUP.md` — configuration wizard and posture presets.
+- `skills/` — canonical command/skill source.
+- `agents/` — canonical agent definitions.
+- `runtime/drivers/` — host/export driver implementations.
+
+## License
+
+MIT. See `LICENSE`.

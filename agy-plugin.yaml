@@ -6,7 +6,7 @@ schema_version: 1
 metadata:
   name: z-harness
   description: z-harness planning and implementation workflow for Antigravity IDE
-  source_repo: https://github.com/zeke-tools/z-harness
+  source_repo: https://github.com/zeke13dev/z-harness
 
 # Commands → .agent/workflows/*.md
 # Each command becomes a custom chat mode (agy chat --mode <id>)

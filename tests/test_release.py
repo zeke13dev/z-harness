@@ -48,12 +48,14 @@ def _manifest_json(
     schema_version: int = SUPPORTED_SCHEMA_VERSION,
     version: str = "1.2.3",
     wheel_url: str = "https://example.com/z-harness-1.2.3-py3-none-any.whl",
-    sha256: str = "abc123",
+    sha256: str = "a" * 64,
     cli_schema_version: int = 1,
     telemetry_schema_version: int = 1,
     min_supported_version: str = "1.0.0",
+    plugin_tarball_url: str | None = None,
+    plugin_tarball_sha256: str | None = None,
 ) -> str:
-    return json.dumps({
+    data = {
         "schema_version": schema_version,
         "version": version,
         "wheel_url": wheel_url,
@@ -61,7 +63,12 @@ def _manifest_json(
         "cli_schema_version": cli_schema_version,
         "telemetry_schema_version": telemetry_schema_version,
         "min_supported_version": min_supported_version,
-    })
+    }
+    if plugin_tarball_url is not None:
+        data["plugin_tarball_url"] = plugin_tarball_url
+    if plugin_tarball_sha256 is not None:
+        data["plugin_tarball_sha256"] = plugin_tarball_sha256
+    return json.dumps(data)
 
 
 def _make_manifest(**kwargs) -> ReleaseManifest:
@@ -79,7 +86,7 @@ class TestParseManifest(unittest.TestCase):
         self.assertEqual(m.version, "1.2.3")
         self.assertEqual(m.schema_version, SUPPORTED_SCHEMA_VERSION)
         self.assertEqual(m.wheel_url, "https://example.com/z-harness-1.2.3-py3-none-any.whl")
-        self.assertEqual(m.sha256, "abc123")
+        self.assertEqual(m.sha256, "a" * 64)
 
     def test_supported_schema_version_accepted(self):
         m = _make_manifest(schema_version=SUPPORTED_SCHEMA_VERSION)
@@ -141,6 +148,40 @@ class TestParseManifest(unittest.TestCase):
         data["version"] = ""
         with self.assertRaises(ManifestParseError):
             parse_manifest(json.dumps(data))
+
+    def test_bad_sha256_raises(self):
+        raw = _manifest_json(sha256="abc123")
+        with self.assertRaises(ManifestParseError):
+            parse_manifest(raw)
+
+    def test_non_https_wheel_url_raises(self):
+        raw = _manifest_json(wheel_url="http://example.com/z-harness.whl")
+        with self.assertRaises(ManifestParseError):
+            parse_manifest(raw)
+
+    def test_plugin_tarball_fields_parse(self):
+        m = _make_manifest(
+            plugin_tarball_url="https://example.com/z-harness-1.2.3.tar.gz",
+            plugin_tarball_sha256="b" * 64,
+        )
+        self.assertEqual(m.plugin_tarball_url, "https://example.com/z-harness-1.2.3.tar.gz")
+        self.assertEqual(m.plugin_tarball_sha256, "b" * 64)
+
+    def test_plugin_tarball_requires_sha(self):
+        raw = _manifest_json(plugin_tarball_url="https://example.com/z-harness.tar.gz")
+        with self.assertRaises(ManifestParseError):
+            parse_manifest(raw)
+
+    def test_file_urls_require_explicit_allow(self):
+        raw = _manifest_json(
+            wheel_url="file:///tmp/z-harness.whl",
+            plugin_tarball_url="file:///tmp/z-harness.tar.gz",
+            plugin_tarball_sha256="b" * 64,
+        )
+        with self.assertRaises(ManifestParseError):
+            parse_manifest(raw)
+        m = parse_manifest(raw, allow_file_urls=True)
+        self.assertEqual(m.wheel_url, "file:///tmp/z-harness.whl")
 
 
 # ---------------------------------------------------------------------------

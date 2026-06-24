@@ -48,6 +48,42 @@ jobs:
           SHA256="$(sha256sum "${{ steps.wheel.outputs.path }}" | awk '{print $1}')"
           echo "value=$SHA256" >> "$GITHUB_OUTPUT"
 
+      - name: Smoke installed wheel
+        run: |
+          python3 -m venv /tmp/z-harness-wheel-smoke
+          /tmp/z-harness-wheel-smoke/bin/pip install "${{ steps.wheel.outputs.path }}"
+          /tmp/z-harness-wheel-smoke/bin/z-harness --help >/tmp/z-harness-help.txt
+          /tmp/z-harness-wheel-smoke/bin/z-harness --version
+          /tmp/z-harness-wheel-smoke/bin/z-harness install --help >/tmp/z-harness-install-help.txt
+          /tmp/z-harness-wheel-smoke/bin/z-harness doctor --help >/tmp/z-harness-doctor-help.txt
+          /tmp/z-harness-wheel-smoke/bin/z-harness serve --help >/tmp/z-harness-serve-help.txt
+          rm -rf temp/release-wheel-export
+          /tmp/z-harness-wheel-smoke/bin/z-harness export --host codex --out temp/release-wheel-export --force
+          test -f temp/release-wheel-export/.codex-plugin/plugin.json
+
+      - name: Build plugin tarball
+        run: bash scripts/bundle-plugin.sh
+
+      - name: Locate plugin tarball
+        id: tarball
+        run: |
+          TARBALL_COUNT="$(ls dist/z-harness-*.tar.gz 2>/dev/null | wc -l | tr -d ' ')"
+          if [ "$TARBALL_COUNT" -ne 1 ]; then
+            echo "ERROR: expected exactly 1 plugin tarball in dist/, found ${TARBALL_COUNT}." >&2
+            ls -1 dist/z-harness-*.tar.gz 2>/dev/null >&2 || true
+            exit 1
+          fi
+          TARBALL_PATH="$(ls dist/z-harness-*.tar.gz)"
+          echo "path=$TARBALL_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Compute plugin tarball sha256
+        id: tarball_sha256
+        run: |
+          TARBALL_SHA256="$(sha256sum "${{ steps.tarball.outputs.path }}" | awk '{print $1}')"
+          TARBALL_NAME="$(basename "${{ steps.tarball.outputs.path }}")"
+          echo "value=$TARBALL_SHA256" >> "$GITHUB_OUTPUT"
+          echo "name=$TARBALL_NAME" >> "$GITHUB_OUTPUT"
+
       - name: Derive version from tag
         id: version
         run: |
@@ -61,11 +97,14 @@ jobs:
           REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
           WHEEL_NAME: ${{ steps.wheel.outputs.name }}
+          TARBALL_NAME: ${{ steps.tarball_sha256.outputs.name }}
           VERSION: ${{ steps.version.outputs.value }}
           SHA256: ${{ steps.sha256.outputs.value }}
+          TARBALL_SHA256: ${{ steps.tarball_sha256.outputs.value }}
         run: |
           WHEEL_URL="https://github.com/${REPO}/releases/download/${TAG}/${WHEEL_NAME}"
-          export WHEEL_URL
+          TARBALL_URL="https://github.com/${REPO}/releases/download/${TAG}/${TARBALL_NAME}"
+          export WHEEL_URL TARBALL_URL
 
           python3 - <<'EOF'
           import json, os, sys
@@ -73,12 +112,16 @@ jobs:
           version = os.environ["VERSION"]
           wheel_url = os.environ["WHEEL_URL"]
           sha256 = os.environ["SHA256"]
+          tarball_url = os.environ["TARBALL_URL"]
+          tarball_sha256 = os.environ["TARBALL_SHA256"]
 
           manifest = {
               "schema_version": 1,
               "version": version,
               "wheel_url": wheel_url,
               "sha256": sha256,
+              "plugin_tarball_url": tarball_url,
+              "plugin_tarball_sha256": tarball_sha256,
               "cli_schema_version": 1,
               "telemetry_schema_version": 1,
               "min_supported_version": "0.1.0",
@@ -96,6 +139,8 @@ jobs:
           parsed = parse_manifest(raw)
           assert parsed.version == version, f"version mismatch: {parsed.version!r}"
           assert parsed.sha256 == sha256, "sha256 mismatch"
+          assert parsed.plugin_tarball_url == tarball_url, "plugin tarball url mismatch"
+          assert parsed.plugin_tarball_sha256 == tarball_sha256, "plugin tarball sha256 mismatch"
           print("latest.json validated successfully", file=sys.stderr)
           EOF
 
@@ -107,4 +152,6 @@ jobs:
           generate_release_notes: true
           files: |
             ${{ steps.wheel.outputs.path }}
+            ${{ steps.tarball.outputs.path }}
             latest.json
+            install.sh

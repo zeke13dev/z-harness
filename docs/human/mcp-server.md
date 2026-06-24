@@ -71,7 +71,7 @@ is the standard MCP stdio pattern.
 | `z_personas` | `/z-personas` | Inspect the persona registry, role bindings, and persona files |
 | `z_handoff` | `/z-handoff` | Write a handoff.json artifact for session continuity |
 | `z_clear_checkpoint` | `/z-clear-checkpoint` | Write a watcher-readable clear checkpoint |
-| `z_update` | `/z-update` | Update the local z-harness install |
+| `z_update` | `/z-update` | Read-only version check; run CLI/plugin update explicitly to mutate installs |
 | `z_sharpen` | `/z-sharpen` | Conversational bounded idea-sharpener — probes, reframes, and converges a vague idea into a buildable problem statement; writes GRILL.md |
 | `z_overnight` | `/z-overnight` | Overnight batch run of multiple /z-* commands |
 | `z_evaluate` | `/z-evaluate` | Evaluate a completed z-harness session for patterns worth preserving |

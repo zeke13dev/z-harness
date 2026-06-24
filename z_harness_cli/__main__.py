@@ -53,15 +53,38 @@ def main(
 @app.command("install")
 def install_cmd(
     ctx: typer.Context,
+    target: str = typer.Option(
+        "claude",
+        "--target",
+        "--host",
+        help="Plugin host to install: claude, codex, or all.",
+    ),
+    tarball: Optional[str] = typer.Option(
+        None,
+        "--tarball",
+        help="Install plugin payload from a tarball URL instead of the local bundle.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Overwrite an existing non-symlink plugin install.",
+    ),
+    generate_exports: bool = typer.Option(
+        False,
+        "--generate-exports",
+        help="Regenerate host exports after plugin install.",
+    ),
 ) -> None:
-    """Bootstrap / install z-harness (wraps install.sh)."""
-    try:
-        from z_harness_cli.commands import install as _install_mod  # type: ignore[import]
+    """Bootstrap / install z-harness plugins (wraps install.sh)."""
+    from z_harness_cli.commands import install as _install_mod
 
-        _install_mod.run(ctx)
-    except ImportError:
-        typer.echo("'install' command not yet implemented.", err=True)
-        raise typer.Exit(code=1)
+    _install_mod.run(
+        ctx,
+        target=target,
+        tarball=tarball,
+        force=force,
+        generate_exports=generate_exports,
+    )
 
 
 @app.command("export")

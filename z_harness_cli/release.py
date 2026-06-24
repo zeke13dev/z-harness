@@ -10,7 +10,9 @@ Manifest schema (latest.json):
         "sha256": "<hex>",
         "cli_schema_version": <int>,
         "telemetry_schema_version": <int>,
-        "min_supported_version": "<semver>"
+        "min_supported_version": "<semver>",
+        "plugin_tarball_url": "<url>",          # optional
+        "plugin_tarball_sha256": "<hex>"       # optional when plugin_tarball_url is present
     }
 
 Invariants:
@@ -38,7 +40,7 @@ from typing import Optional
 SUPPORTED_SCHEMA_VERSION: int = 1
 
 # Default manifest URL — overridden by Z_HARNESS_RELEASE_URL.
-DEFAULT_RELEASE_URL: str = "https://releases.zeketools.dev/z-harness/latest.json"
+DEFAULT_RELEASE_URL: str = "https://github.com/zeke13dev/z-harness/releases/latest/download/latest.json"
 
 _SEMVER_RE = re.compile(
     r"^v?(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)"
@@ -59,6 +61,8 @@ class ReleaseManifest:
     cli_schema_version: int
     telemetry_schema_version: int
     min_supported_version: str
+    plugin_tarball_url: Optional[str] = None
+    plugin_tarball_sha256: Optional[str] = None
 
 
 class ManifestSchemaError(Exception):
@@ -117,7 +121,7 @@ def is_dev_sha(version: str) -> bool:
     return bool(_SHA_RE.match(version.strip())) and "." not in version
 
 
-def fetch_manifest(url: Optional[str] = None) -> ReleaseManifest:
+def fetch_manifest(url: Optional[str] = None, *, allow_file_urls: bool = False) -> ReleaseManifest:
     """Fetch and parse the release manifest.
 
     Args:
@@ -141,10 +145,28 @@ def fetch_manifest(url: Optional[str] = None) -> ReleaseManifest:
     except OSError as exc:
         raise FetchError(f"I/O error fetching manifest from {effective_url}: {exc}") from exc
 
-    return parse_manifest(raw)
+    return parse_manifest(raw, allow_file_urls=allow_file_urls)
 
 
-def parse_manifest(raw: str) -> ReleaseManifest:
+
+def _validate_url(field: str, value: str, *, allow_file_urls: bool) -> None:
+    if value.startswith("https://"):
+        return
+    if allow_file_urls and value.startswith("file://"):
+        return
+    expected = "https:// or file://" if allow_file_urls else "https://"
+    raise ManifestParseError(
+        f"Manifest field {field!r} must use {expected} (got {value!r})"
+    )
+
+
+def _validate_sha256(field: str, value: str) -> None:
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", value):
+        raise ManifestParseError(
+            f"Manifest field {field!r} must be a 64-character hexadecimal SHA-256 digest"
+        )
+
+def parse_manifest(raw: str, *, allow_file_urls: bool = False) -> ReleaseManifest:
     """Parse and validate a manifest JSON string.
 
     Raises:
@@ -179,6 +201,30 @@ def parse_manifest(raw: str) -> ReleaseManifest:
                 f"Manifest missing or empty string field: {field!r} (got {val!r})"
             )
 
+    _validate_sha256("sha256", data["sha256"])
+
+    _validate_url("wheel_url", data["wheel_url"], allow_file_urls=allow_file_urls)
+
+    plugin_tarball_url = data.get("plugin_tarball_url")
+    plugin_tarball_sha256 = data.get("plugin_tarball_sha256")
+    if plugin_tarball_url is not None or plugin_tarball_sha256 is not None:
+        if not isinstance(plugin_tarball_url, str) or not plugin_tarball_url:
+            raise ManifestParseError(
+                "Manifest field 'plugin_tarball_url' must be a non-empty string "
+                "when plugin tarball metadata is present"
+            )
+        if not isinstance(plugin_tarball_sha256, str) or not plugin_tarball_sha256:
+            raise ManifestParseError(
+                "Manifest field 'plugin_tarball_sha256' must be a non-empty string "
+                "when plugin tarball metadata is present"
+            )
+        _validate_url(
+            "plugin_tarball_url",
+            plugin_tarball_url,
+            allow_file_urls=allow_file_urls,
+        )
+        _validate_sha256("plugin_tarball_sha256", plugin_tarball_sha256)
+
     required_int_fields = ("cli_schema_version", "telemetry_schema_version")
     for field in required_int_fields:
         val = data.get(field)
@@ -195,6 +241,8 @@ def parse_manifest(raw: str) -> ReleaseManifest:
         cli_schema_version=data["cli_schema_version"],
         telemetry_schema_version=data["telemetry_schema_version"],
         min_supported_version=data["min_supported_version"],
+        plugin_tarball_url=plugin_tarball_url,
+        plugin_tarball_sha256=plugin_tarball_sha256,
     )
 
 

@@ -1,191 +1,120 @@
 # INSTALL — z-harness Installation Guide
 
-> Last updated: 2026-05-24
+> Last updated: 2026-06-24
 
 ## Overview
 
-z-harness can be installed for Claude Code or Codex. Both hosts support
-**symlink** mode for active development and **tarball** mode for stable
-deploys.
+z-harness ships two beta install surfaces:
 
----
+1. **Python CLI bootstrap** (`z-harness` / `zh`) for doctor/export/launch/MCP/update.
+2. **Host plugin install** for Claude Code and Codex, either from a source checkout or an audited release tarball.
+
+The canonical command source is `skills/<id>/SKILL.md`; canonical agent source is `agents/`; runtime/export code is under `runtime/` and `z_harness_cli/`.
+
+## CLI bootstrap
+
+```bash
+curl -fsSL https://github.com/zeke13dev/z-harness/releases/latest/download/install.sh | sh
+z-harness doctor
+z-harness install --target=claude
+z-harness launch
+```
+
+The curl installer fetches `latest.json`, requires an HTTPS wheel URL and a 64-character SHA-256 digest, verifies the downloaded wheel, then installs it via `uv tool install`.
 
 ## Plugin install locations
 
 Claude Code installs to:
 
-```
+```text
 ~/.claude/plugins/z-harness@zeke-tools
 ```
 
 Codex installs through the personal marketplace at:
 
-```
+```text
 ~/.agents/plugins/marketplace.json
 ```
 
-The marketplace entry points at:
+The Codex marketplace entry points at:
 
-```
+```text
 ~/plugins/z-harness
 ```
 
-In symlink mode these locations point to your local clone. In tarball mode
-they contain an extracted directory.
+## Source checkout install
 
----
-
-## Symlink mode (from a local clone)
-
-Symlink mode is for contributors or users who want live edits to go live
-immediately without re-installing.
-
-**Prerequisites:** Git clone with `.git/`, `commands/`, and `agents/` present
-in the current working directory.
+Use source checkout mode for contributors or active local development:
 
 ```bash
-git clone https://github.com/<org>/z-harness
+git clone https://github.com/zeke13dev/z-harness
 cd z-harness
-bash install.sh
-```
-
-`install.sh` defaults to Claude Code. It detects the presence of
-`.git + commands/ + agents/` and creates:
-
-```
-~/.claude/plugins/z-harness@zeke-tools -> <absolute path to clone>
-```
-
-For Codex:
-
-```bash
+bash install.sh --target=claude
+# or
 bash install.sh --target=codex
-```
-
-This creates:
-
-```
-~/plugins/z-harness -> <absolute path to clone>
-```
-
-It also creates or updates `~/.agents/plugins/marketplace.json` and runs:
-
-```bash
-codex plugin add z-harness@personal
-```
-
-For both hosts:
-
-```bash
+# or both
 bash install.sh --target=all
 ```
 
-Any edit you make in the repo takes effect immediately in Claude Code — no
-re-install needed. Codex snapshots plugins into its cache, so after editing
-plugin skills or metadata, re-run `codex plugin add z-harness@personal` and
-start a new Codex thread.
+Source mode requires `.git/`, `skills/`, `agents/`, and `runtime/` in the checkout. It symlinks the checkout into the selected host plugin location.
 
----
+## CLI plugin wrapper
 
-## Tarball mode (from a release URL)
-
-Tarball mode is for users who want a stable, versioned install without keeping
-a local clone.
+After installing the wheel, the same plugin install can be launched through the CLI:
 
 ```bash
-bash install.sh --target=codex --tarball=<release-url>
+z-harness install --target=claude
+z-harness install --target=codex
+z-harness install --target=all --force
 ```
 
-Or set the env variable and run without a flag:
+This command wraps `install.sh` from the installed harness payload so CLI users do not hit a placeholder command.
+
+## Tarball mode
+
+Tarball mode installs an audited plugin payload without keeping a source clone:
 
 ```bash
-Z_HARNESS_RELEASE_URL=<release-url> bash install.sh --target=codex
+bash install.sh --target=claude --tarball=<release-tarball-url>
+bash install.sh --target=codex --tarball=<release-tarball-url>
 ```
 
-Use `--target=claude` or omit `--target` for Claude Code. Use `--target=all`
-to install the tarball for both hosts.
+Release tarballs are built by `scripts/bundle-plugin.sh`, audited by `scripts/audit-tarball.sh`, and uploaded by release CI. They must include `skills/`, `agents/`, `runtime/`, `scripts/`, plugin manifests, and docs needed by the shipped commands.
 
-`install.sh` downloads the tarball, extracts it under the selected host's
-plugin location, and prints the installed version.
+## Updating
 
-To update a tarball install later, use `/z-update` from inside Claude Code.
+z-harness has no silent background updater.
 
----
+- **CLI wheel install:** run `z-harness update` explicitly.
+- **Claude/Codex plugin source symlink:** run `/z-update` in the host or pull the checkout manually; dirty trees abort.
+- **Tarball plugin install:** run the host `/z-update` flow or reinstall from the audited tarball URL.
+- **MCP `z_update` tool:** read-only version check; it does not mutate installs.
 
-## Overwriting an existing install
+## Data and config locations
 
-If `~/.claude/plugins/z-harness@zeke-tools` already exists as a regular
-directory (not a symlink), `install.sh` will refuse to proceed:
+Runtime plan/archive/telemetry state resolves outside the repository by default, for example:
 
+```text
+~/.local/state/z-harness/<repo-id>/
 ```
-install.sh: ERROR: ~/.claude/plugins/z-harness@zeke-tools exists and is not a symlink.
-  Use --force to overwrite it.
-```
 
-Pass `--force` to remove it and reinstall:
+Repo-local `.z-harness/` contains per-user provider/config overrides and is ignored by git. Do not commit provider registries, plan archives, metrics, or generated export scratch trees.
+
+## Overwriting an existing plugin install
+
+If a plugin path already exists as a regular directory, install refuses to replace it unless `--force` is passed:
 
 ```bash
-bash install.sh --force
-bash install.sh --tarball=<url> --force
+bash install.sh --target=claude --force
+z-harness install --target=codex --force
 ```
 
----
+## Requirements
 
-## Per-repo auto-enable
-
-To have z-harness load automatically in a specific project, commit
-`.claude/settings.json` at the repo root:
-
-```json
-{
-  "extraKnownMarketplaces": {
-    "zeke-tools": { "source": { "source": "github", "repo": "<org>/z-harness" } }
-  },
-  "enabledPlugins": { "z-harness@zeke-tools": true }
-}
-```
-
----
-
-## /z-update — refreshing the install
-
-`/z-update` in Claude Code, or the `z-update` skill in Codex, keeps z-harness
-current. It detects install mode and takes the appropriate update path.
-
-**Symlink mode:** runs `git -C <plugin-path> pull --ff-only`. If the repo has
-uncommitted changes, it aborts and prints `git status`; resolve the changes,
-then re-run `/z-update` or `z-update`. In Codex, it then reruns
-`codex plugin add z-harness@personal` so the cache is refreshed.
-
-**Tarball mode:** HEAD-checks the release URL, compares version strings, and
-performs an atomic swap if a newer version is found. Rolls back automatically
-on any swap failure.
-
-After a successful update, both modes emit a `harness_updated` event to
-`<base>/metrics.jsonl` (the resolved artifact base) with `old_version` and `new_version`.
-
-```
-[z-update] Updated successfully.
-  old: abc1234
-  new: def5678
-```
-
-### Environment variable
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `Z_HARNESS_RELEASE_URL` | placeholder | Override the tarball release URL for `/z-update` in tarball mode |
-
----
-
-## Distribution model
-
-z-harness has **no autoupdate mechanism**. Updates are explicit — either a
-`git pull` in your clone, or `/z-update` inside Claude Code. This is
-intentional: autoupdate in a tool that rewrites production code would be a
-footgun.
-
----
+- Python 3.11+.
+- `uv` for the curl/CLI install path.
+- At least one supported host CLI/IDE for runtime use.
+- Optional provider CLIs (`codex`, `gemini`, `claude`, `ollama`, `agy`) depending on which workflows you run.
 
 ## Uninstall
 
@@ -193,39 +122,7 @@ footgun.
 rm ~/.claude/plugins/z-harness@zeke-tools
 codex plugin remove z-harness@personal
 rm ~/plugins/z-harness
+uv tool uninstall z-harness
 ```
 
-If you installed via tarball, this removes the extracted directory. If you
-installed via symlink, this removes only the symlink — the local clone is
-untouched.
-
----
-
-## Requirements
-
-- At least one CLI-addressable LLM (e.g. `codex`, `gemini`, `claude`, `ollama`,
-  `agy`) installed and reachable on your `PATH`. Run `/z-providers-discover` to
-  auto-configure roles after install. See [PROVIDERS.md](PROVIDERS.md).
-- Claude Code with `PushNotification` available (for mobile notifications).
-
-### Python dependencies
-
-z-harness scripts require Python 3.11+ (for `tomllib` stdlib).
-
-`scripts/config.py` optionally uses **tomlkit** (`>=0.12,<1.0`) for
-comment-preserving TOML writes. Without it the script falls back to comment-
-stripping writes (all other semantics are identical).
-
-Install tomlkit with:
-
-```bash
-pip install "tomlkit>=0.12,<1.0"
-```
-
-Or, if using a virtual environment (recommended):
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install "tomlkit>=0.12,<1.0"
-```
+Removing a symlink install removes only the symlink, not your source checkout.

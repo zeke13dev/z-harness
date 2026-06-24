@@ -470,7 +470,7 @@ COMMAND_TOOLS: dict[str, dict[str, Any]] = {
     "z_personas":        {"command_id": "/z-personas",        "description": "Inspect the persona registry, role bindings, and persona files",     "is_heavy": False},
     "z_handoff":         {"command_id": "/z-handoff",         "description": "Write a handoff.json artifact for session continuity",               "is_heavy": False},
     "z_clear_checkpoint": {"command_id": "/z-clear-checkpoint", "description": "Write a watcher-readable clear checkpoint",                         "is_heavy": False},
-    "z_update":          {"command_id": "/z-update",          "description": "Update the local z-harness install",                                  "is_heavy": False},
+    "z_update":          {"command_id": "/z-update",          "description": "Check local z-harness version; updates must be run explicitly via CLI/plugin", "is_heavy": False},
     "z_sharpen":         {"command_id": "/z-sharpen",         "description": "Conversational bounded idea-sharpener — probes, reframes, and converges a vague idea into a buildable problem statement; writes GRILL.md", "is_heavy": False},
     "z_overnight":       {"command_id": "/z-overnight",       "description": "Overnight batch run of multiple /z-* commands",                      "is_heavy": False},
     "z_evaluate":        {"command_id": "/z-evaluate",        "description": "Evaluate a completed z-harness session for patterns worth preserving","is_heavy": False},
@@ -730,7 +730,15 @@ def _handle_z_update(args: dict[str, Any]) -> ToolResult:
             cwd=str(_get_repo_root()), env=os.environ,
         )
         if result.returncode == 0:
-            return ToolResult.success(content=f"z-harness version info:\n{result.stdout.strip()}")
+            return ToolResult.success(
+                content=(
+                    "z_update is a read-only MCP version check. It does not mutate "
+                    "the install. Run `z-harness update` or the host /z-update skill "
+                    "explicitly to update.\n\n"
+                    f"z-harness version info:\n{result.stdout.strip()}"
+                ),
+                meta={"updates_applied": False, "mode": "version_check"},
+            )
         return ToolResult.error(result.stderr or "version check failed")
     except Exception as exc:
         return ToolResult.error(f"z_update failed: {exc}")

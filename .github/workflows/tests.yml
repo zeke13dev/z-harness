@@ -17,6 +17,10 @@ on:
       - "runtime/**"
       - "skills/**"
       - "agents/**"
+      - "z_harness_cli/**"
+      - "pyproject.toml"
+      - ".github/workflows/release.yml"
+      - ".github/workflows/conformance.yml"
       - "Makefile"
       - ".github/workflows/tests.yml"
   push:

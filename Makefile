@@ -1,5 +1,5 @@
 SHELL := /usr/bin/env bash
-.PHONY: test test-sh conformance conformance-live conformance-record conformance-strict lint lint-strict lint-frontmatter lint-halt preflight bench-autonomy-check test-ecc-lessons export version-sync version-check
+.PHONY: test test-sh conformance conformance-live conformance-record conformance-strict lint lint-strict lint-frontmatter lint-halt preflight bench-autonomy-check test-ecc-lessons export release-dry-run version-sync version-check
 
 # Full Python test suite: the unit/integration tests under tests/, the
 # script-level tests under scripts/, and the runtime dispatch + driver tests
@@ -114,3 +114,6 @@ test-ecc-lessons:
 # .gitignored; exports are never committed.
 export:
 	python3 scripts/generate-exports.py
+
+release-dry-run:
+	bash scripts/release-dry-run.sh
