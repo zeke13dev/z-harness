@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# check-compaction.sh — Evaluate compaction breakpoint conditions at batch-settle.
+# check-compaction.sh — Evaluate clear-checkpoint conditions at batch-settle.
 #
 # Run at each /z-execute batch boundary. Reads TASKS.md's [x] count and
-# a state file (.last-compaction-check) from the plan directory, then signals
-# whether the orchestrator should pause for context compaction.
+# a state file (.last-compaction-check; legacy name) from the plan directory,
+# then signals whether the orchestrator should pause for a clear checkpoint.
 #
 # Env vars (read):
 #   Z_HARNESS_PLAN_DIR         — plan directory (required; contains TASKS.md)
@@ -14,7 +14,7 @@
 #
 # Returns:
 #   0 — no trigger; continue
-#   1 — trigger fired; orchestrator should follow pause protocol
+#   1 — trigger fired; orchestrator should follow clear-checkpoint protocol
 #
 # State file: $Z_HARNESS_PLAN_DIR/.last-compaction-check
 #   Format: <epoch> <completed_count>

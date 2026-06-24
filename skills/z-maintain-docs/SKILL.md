@@ -144,9 +144,9 @@ if preserved != baseline:
 
 Surface any `memories_lost` warning prominently in Phase 3 before presenting diffs. A mismatch indicates doc-updater may have dropped memories, which is a hard-rule violation (doc-updater must copy memories verbatim).
 
-## Phase 2.3 — Pre-audit compaction breakpoint (only if `--audit` flag set)
+## Phase 2.3 — Pre-audit clear checkpoint (only if `--audit` flag set)
 
-Before spawning any audit consultant, check the state file and optionally pause for context compaction.
+Before spawning audit consultants, check the state file and write a clear checkpoint instead of asking whether to pause.
 
 **State file path:** `docs/llm/.maintain_docs_audit_state.json`
 
@@ -155,30 +155,33 @@ Before spawning any audit consultant, check the state file and optionally pause 
 1. Compute the current stale concept set (the slugs identified in Phase 1).
 2. If `docs/llm/.maintain_docs_audit_state.json` exists:
    - Read it and compare `stale_concepts_at_ack` (as a set) to the current stale concept set.
-   - If the sets are **equal**: fast-forward — skip the AskUserQuestion below, proceed directly to Phase 2.5. Log a `maintain_docs_audit_fast_forward` event.
-   - If the sets **differ**: delete the stale state file and continue to the AskUserQuestion prompt below (re-prompt).
-3. If the state file does not exist (or was just deleted): emit the `compaction_pause` event, push-notify, and prompt:
+   - If the sets **are equal**: fast-forward — proceed directly to Phase 2.5. Log a `maintain_docs_audit_fast_forward` event.
+   - If the sets **differ**: delete the stale state file and continue to step 3.
+3. If the state file does not exist (or was just deleted): emit the compatibility `compaction_pause` event, write the state file, write a clear checkpoint, push-notify, and exit:
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "docs" compaction_pause \
   '{"trigger":"pre_consult","phase":"maintain_docs_audit"}'
+
+python3 - docs/llm/.maintain_docs_audit_state.json "$STALE_CONCEPTS_JSON" <<'PY' || echo "warn: could not write docs audit state" >&2
+import datetime, json, sys
+path, concepts_json = sys.argv[1:3]
+state = {
+  "audit_acknowledged": True,
+  "stale_concepts_at_ack": sorted(json.loads(concepts_json)),
+  "acknowledged_at": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+}
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(state, f, indent=2)
+PY
+
+export Z_HARNESS_CHECKPOINT_STATUS=clean_break
+export Z_HARNESS_CHECKPOINT_NEXT_STEP="Resume /z-maintain-docs --audit; docs audit state is acknowledged, so continue to Phase 2.5 consultant audit."
+export Z_HARNESS_CHECKPOINT_RESUME_COMMAND="/z-maintain-docs --audit"
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/write-clear-checkpoint.sh" || true
+push_notify "Clear checkpoint written before docs audit consultants. Run \`/clear\`, then re-invoke \`/z-maintain-docs --audit\` to continue."
+exit 0
 ```
-
-Push-notify (this is a hard pause prompt — fires regardless of notification level; see [docs/human/config.md](docs/human/config.md)):
-> "About to audit <N> concept docs via consultants. Recommended: `/clear`, then re-invoke `/z-maintain-docs --audit` to continue. Dismiss to proceed now."
-
-<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the compaction-pause decision (pause for /clear / proceed now) via their native channel. Silent omission is forbidden. -->
-`AskUserQuestion` with two options:
-- **(a) Pause for /clear** — exit cleanly. Do **NOT** write the state file. On the next invocation, Phase 2.3 will fire again.
-- **(b) Proceed now** — write the state file and continue into Phase 2.5:
-  ```json
-  {
-    "audit_acknowledged": true,
-    "stale_concepts_at_ack": ["<slug1>", "<slug2>", "..."],
-    "acknowledged_at": "<iso timestamp>"
-  }
-  ```
-  If the state file write fails, log a warning to stderr and proceed (filesystem errors are non-blocking).
 
 ## Phase 2.5 — Cross-LLM audit (only if `--audit` flag set)
 

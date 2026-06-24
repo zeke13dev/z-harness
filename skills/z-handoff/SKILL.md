@@ -1,14 +1,14 @@
 ---
 name: z-handoff
 disable-model-invocation: true
-description: Write a handoff.json artifact for session continuity. Captures the current working context (plan slug, active files, next step) into a machine-readable JSON contract that any orchestrator (Hermes) can consume to resume work in a fresh agent session. Universal — works for pi, Claude Code, and any future z-harness agent.
+description: Write a handoff.json artifact for session continuity. Captures the current working context (plan slug, active files, next step) into a machine-readable JSON contract that any watcher (Oh My Pi, Hermes, MCP, or a future orchestrator) can consume to resume work in a fresh agent session. Universal — works for pi, Claude Code, Codex CLI, and any future z-harness agent.
 argument-hint: "[continuation prompt — optional override for next_step]"
 runtime: c1
 driver_features_required: []
 unsupported_driver_behavior: explicit_gate
 ---
 
-You are running **z-harness `/handoff`** — the session continuity protocol. Write `handoff.json` to the workspace so an orchestrator (Hermes) can resume work in a fresh agent session.
+You are running **z-harness `/handoff`** — the session continuity protocol. Write `handoff.json` to the workspace so a watcher (Oh My Pi, Hermes, MCP, or a future orchestrator) can resume work in a fresh agent session.
 
 Continuation prompt (from `$ARGUMENTS`, optional):
 
@@ -20,7 +20,7 @@ If `$ARGUMENTS` is non-empty, it overrides the auto-detected `next_step`. If emp
 
 - **Universal**: no agent-specific branching. This command works identically for pi, Claude Code, and any future agent.
 - **Lightweight**: `handoff.json` points to context files — it does NOT duplicate plan state (SPEC, PLAN, TASKS).
-- **Orchestrator-driven**: the handoff is pure data. The orchestrator (Hermes) decides how to spawn the next session and which model to use.
+- **Watcher-driven**: the handoff is pure data. The watcher decides how to spawn the next session and which model to use.
 
 ## Phase 0 — Resolve run context
 
@@ -217,7 +217,7 @@ After writing `handoff.json`:
      Next step: <first 80 chars of next_step>...
      Session log: <path to SESSION.md if written>
    ```
-2. Exit the agent session. The orchestrator detects `handoff.json` and spawns the next session.
+2. Exit the agent session. A watcher detects `handoff.json` and spawns the next session.
 
 ## Examples
 

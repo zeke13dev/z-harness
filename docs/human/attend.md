@@ -76,7 +76,7 @@ Two triggers:
 
 1. **`yield_after` boundary** — `chain-runner.sh` marks two steps as `yield_after=true`: `plan` and `implement-all`. After either of these completes successfully, the chain yields. These are the two points where context is largest and clearing is most beneficial.
 
-2. **`context_pressure`** — if the sub-run produced by a step writes its own `handoff.json` with `status == "context_pressure"` (its own mid-run compaction path), the attend chain yields even if that step was not a declared boundary.
+2. **`context_pressure`** — if the sub-run produced by a step writes its own `handoff.json` with `status == "context_pressure"` (its own mid-run clear-checkpoint path), the attend chain yields even if that step was not a declared boundary.
 
 ### What the token contains (handoff.json protocol 1.1)
 

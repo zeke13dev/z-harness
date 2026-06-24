@@ -189,6 +189,20 @@ class TestOmpAdapterFallback(unittest.TestCase):
         r = self._run(["bogus/model", "--fallback", "cat"], "   \n")
         self.assertEqual(r.returncode, 2)
 
+    def test_primary_invocation_disables_rule_loading(self):
+        # AGENTS.md auto-rules are huge in z-harness; the adapter must prevent
+        # omp from loading them when it is used as a lightweight consult shim.
+        omp = os.path.join(self._bin, "omp")
+        with open(omp, "w") as fh:
+            fh.write("#!/bin/sh\nprintf '%s\\n' \"$*\"\n")
+        os.chmod(omp, 0o755)
+
+        r = self._run(["bogus/model"], "PROMPT_BODY_42")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("--no-rules", r.stdout)
+        self.assertIn("--no-session", r.stdout)
+        self.assertIn("--model bogus/model", r.stdout)
+
 
 class TestOmpLiveEntries(unittest.TestCase):
     """Sanity-check the real .z-harness/providers.json omp entries."""
@@ -204,6 +218,18 @@ class TestOmpLiveEntries(unittest.TestCase):
             self.assertIn(native, argt, f"{name} fallback does not invoke {native}")
             # model id is the first positional arg (before --fallback)
             self.assertEqual(argt[0].split("/")[0] in ("openai-codex", "google-antigravity"), True)
+
+    def test_project_omp_config_disables_agents_md_autoload(self):
+        cfg = Path(__file__).parent.parent / ".omp" / "config.yml"
+        body = cfg.read_text()
+        self.assertIn("enableAgentsProject: false", body)
+
+    def test_root_agents_md_is_omp_safe_stub(self):
+        agents = Path(__file__).parent.parent / "AGENTS.md"
+        body = agents.read_text()
+        self.assertLess(len(body), 5000)
+        self.assertIn("intentionally small", body)
+        self.assertNotIn("## auditor", body)
 
 
 if __name__ == "__main__":

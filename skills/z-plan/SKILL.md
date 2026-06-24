@@ -1763,7 +1763,7 @@ python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-reg
   --run-id "$RUN" --status "${FINALIZE_STATUS:-complete}" || true   # CLI self-logs registry_error on failure
 ```
 
-The `/compact` recommendation is important: the planning phase (Explore agents, decisions doc, consultant returns, SPEC/PLAN drafting) is the heaviest context burner in the harness. Compacting at this boundary frees ~MB of main-thread context before implementation kicks off. Subagents during implementation are fresh-context already, so no per-batch compact is needed.
+After planning, prefer a clear checkpoint over `/compact`: planning (Explore agents, decisions doc, consultant returns, SPEC/PLAN drafting) is the heaviest context burner in the harness. A watcher-readable checkpoint lets Oh My Pi/Hermes/MCP or the user clear before implementation starts; implementation subagents are fresh-context already, so no per-batch compact is needed.
 
 ## Run Brief — halt finalize
 

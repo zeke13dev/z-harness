@@ -241,7 +241,7 @@ One rule governs the record's lifecycle for the entire run:
 > **On any abort/halt that ENDS the run AND occurs after a record exists (i.e. after a `REG_RC == 0`
 > register), run **Run Brief — halt finalize** (when `run-brief.sh init` ran), set `FINALIZE_STATUS=aborted`, and `deregister --status aborted` before exiting. On a
 > normal completion, leave `FINALIZE_STATUS` unset so Finalize deregisters with the default
-> `complete`. On a pause-for-resume (compaction breakpoint), do NOT deregister at all — the run is
+> `complete`. On a pause-for-resume (clear checkpoint), do NOT deregister at all — the run is
 > paused, not finished.**
 
 Concretely, the run-ending halt paths that MUST set `FINALIZE_STATUS=aborted` and deregister
@@ -259,7 +259,7 @@ Paths that must NOT deregister:
 
 - **Register-failure abort/halt (`REG_RC == 3` or other nonzero)** — no record was ever written,
   so there is nothing to deregister; just `exit 1`.
-- **Compaction-pause exit (Main-loop condition 3)** — a PAUSE, not an abort. Skip Finalize
+- **Clear-checkpoint exit (Main-loop condition 3; legacy event name: `compaction_pause`)** — a PAUSE, not an abort. Skip Finalize
   entirely; do NOT deregister (the next invocation re-registers idempotently and resumes).
 
 Keep this gate consistent with the Phase 0.1 follow-up-running halt below — same push-notify
@@ -1276,32 +1276,32 @@ This is the same finalize path as a level-cap halt: `FINALIZE_STATUS=aborted`, d
         "$DONE_COUNT" "$(printf '%s\n' "$DIRTY" | grep -c . || echo 0)" "<commit|proceed|abort>")"
    ```
 
-## Compaction breakpoint policy
+## Clear checkpoint policy
 
-High-context runs (many tasks, long wall time) accumulate orchestrator context pressure. These breakpoints fire at natural settle points — never mid-batch — so the user can `/clear` and resume with a fresh context window. The harness's durable state lives in TASKS.md, making `/clear` safe at any batch boundary.
+High-context runs (many tasks, long wall time) accumulate orchestrator context pressure. Clear checkpoints fire at natural settle points — never mid-batch — so the user or a watcher can `/clear` and resume with a fresh context window. The harness's durable state lives in TASKS.md plus SESSION.md/handoff.json, making `/clear` safe at checkpoint boundaries.
 
-### INTENT mode: per-BFS-layer compaction
+### INTENT mode: per-BFS-layer clear checkpoints
 
-In INTENT mode (`IMPLEMENT_MODE=intent`) compaction fires at **BFS level boundaries**, not per-task and not per-batch within a level. The natural settle point in INTENT mode is after all tasks in a BFS level complete and the LEDGER has been flushed — at that point the orchestrator context contains the full level outcome and is ready for a clean handoff.
+In INTENT mode (`IMPLEMENT_MODE=intent`) clear checkpoints fire at **BFS level boundaries**, not per-task and not per-batch within a level. The natural settle point in INTENT mode is after all tasks in a BFS level complete and the LEDGER has been flushed — at that point the orchestrator context contains the full level outcome and is ready for a clean handoff.
 
-**`LEVEL_EXECUTE_SUPPRESS_COMPACTION=1`** is exported before the Main loop is invoked for each BFS level. This flag defers in-level `check-compaction.sh` triggers: when the Main loop sees `LEVEL_EXECUTE_SUPPRESS_COMPACTION=1` and the compaction threshold would otherwise fire, it sets `MAIN_LOOP_RESULT=compaction_deferred` and returns to the BFS caller instead of exiting. The BFS outer loop then decides whether to compact after LEDGER flush.
+**`LEVEL_EXECUTE_SUPPRESS_COMPACTION=1`** is exported before the Main loop is invoked for each BFS level. This flag defers in-level `check-compaction.sh` triggers: when the Main loop sees `LEVEL_EXECUTE_SUPPRESS_COMPACTION=1` and the threshold would otherwise fire, it sets `MAIN_LOOP_RESULT=compaction_deferred` and returns to the BFS caller instead of exiting. The BFS outer loop then decides whether to checkpoint after LEDGER flush.
 
-**Thin-layer batching:** Consecutive BFS levels with fewer than 3 tasks each are batched together before a compaction fires. The orchestrator accumulates thin levels and defers compaction until either (a) a level with 3 or more tasks completes, or (b) the cumulative task count across thin levels reaches `Z_IMPLEMENT_PAUSE_TASKS`. This prevents spurious context breaks on lightweight BFS levels (e.g. a single-task bookkeeping level followed by another single-task doc update).
+**Thin-layer batching:** Consecutive BFS levels with fewer than 3 tasks each are batched together before a clear checkpoint fires. The orchestrator accumulates thin levels and defers checkpointing until either (a) a level with 3 or more tasks completes, or (b) the cumulative task count across thin levels reaches `Z_IMPLEMENT_PAUSE_TASKS`. This prevents spurious context breaks on lightweight BFS levels (e.g. a single-task bookkeeping level followed by another single-task doc update).
 
-**Context target for INTENT-mode compaction:** The compaction trigger aims to fire before the orchestrator context exceeds ~200-300k tokens. `check-compaction.sh` uses `Z_IMPLEMENT_PAUSE_TASKS` (default 5) and `Z_IMPLEMENT_PAUSE_MINUTES` (default 30) as its proxies for this target — these env vars remain the sole numeric inputs and can be tuned to match context consumption rate on large BFS plans.
+**Context target for INTENT-mode checkpoints:** The trigger aims to fire before the orchestrator context exceeds ~200-300k tokens. `check-compaction.sh` uses `Z_IMPLEMENT_PAUSE_TASKS` (default 5) and `Z_IMPLEMENT_PAUSE_MINUTES` (default 30) as its proxies for this target — these env vars remain the sole numeric inputs and can be tuned to match context consumption rate on large BFS plans.
 
-**Timing:** The compaction check runs AFTER the T011 LEDGER-flush hook completes (so the LEDGER is durably written) and AFTER the level-boundary done_set_hash checkpoint is persisted. This ensures the next invocation resumes from a fully checkpointed state.
+**Timing:** The checkpoint check runs AFTER the T011 LEDGER-flush hook completes (so the LEDGER is durably written) and AFTER the level-boundary done_set_hash checkpoint is persisted. This ensures the next invocation resumes from a fully checkpointed state.
 
-**No deregister on compaction-pause.** The BFS outer loop, like the legacy loop, treats a compaction-pause as a non-terminal exit (see Main-loop condition 3): do NOT deregister the registry record on a compaction-pause exit — the run is paused, not finished. The next `/z-execute` invocation re-registers and resumes from the checkpointed BFS level.
+**No deregister on checkpoint-pause.** The BFS outer loop, like the legacy loop, treats a checkpoint pause as a non-terminal exit (see Main-loop condition 3): do NOT deregister the registry record on a checkpoint-pause exit — the run is paused, not finished. The next `/z-execute` invocation re-registers and resumes from the checkpointed BFS level.
 
-### Legacy mode: per-batch compaction
+### Legacy mode: per-batch clear checkpoints
 
 In legacy mode (`IMPLEMENT_MODE=legacy`) the existing batch-settle semantics apply unchanged, as documented below.
 
 **Env vars:**
 - `Z_IMPLEMENT_PAUSE_TASKS` (default `5`) — number of completed (`[x]`) tasks since last pause that triggers a breakpoint.
 - `Z_IMPLEMENT_PAUSE_MINUTES` (default `30`) — wall minutes since last pause (or run start) that triggers a breakpoint.
-- Either env var set to `0` disables that trigger; both `0` disables compaction breakpoints entirely for this command.
+- Either env var set to `0` disables that trigger; both `0` disables clear checkpoints entirely for this command.
 - `Z_SESSION_CURATOR_TIMEOUT_S` (default `120`) — per-attempt timeout for the context-curator dispatch. Set to `0` to disable curator dispatch entirely (falls back to today's plain pause notice without SESSION.md curation).
 - `Z_SESSION_MAX_CHARS` (default `28000`) — character ceiling for the SESSION.md body; passed to the curator as its overflow collapse threshold.
 
@@ -1357,7 +1357,7 @@ if [ "${Z_SESSION_CURATOR_TIMEOUT_S}" -gt 0 ]; then
     # The Agent() call blocks until the curator returns its STATUS line.
     CURATOR_RETURN="$(Agent(
       subagent_type="context-curator",
-      description="Context curation at compaction breakpoint",
+      description="Context curation at clear checkpoint",
       prompt="plan_dir: $BASE
 run_id: $RUN
 repo_root: $REPO_ROOT
@@ -1415,7 +1415,7 @@ since_marker: $SINCE_MARKER"
 fi  # end: Z_SESSION_CURATOR_TIMEOUT_S > 0
 ```
 
-**Verify the done-set hash matches** (guards against a stale curator return being trusted when TASKS.md was written between dispatch and return; a mismatch means the curator wrote SESSION.md for a different done-set and is treated as a curation failure, degrading to the /compact notice):
+**Verify the done-set hash matches** (guards against a stale curator return being trusted when TASKS.md was written between dispatch and return; a mismatch means the curator wrote SESSION.md for a different done-set and is treated as a checkpoint failure):
 
 ```bash
 if [ "$CURATOR_SUCCESS" -eq 1 ] && [ -n "$CURATOR_HASH" ]; then
@@ -1438,14 +1438,14 @@ fi
 # but CURATOR_REASON="not_run" in that case.
 if [ "$CURATOR_SUCCESS" -eq 1 ]; then
   # SUCCESS PATH — curator ran successfully and hashes match.
-  # Write handoff.json for Hermes consumption (best-effort, non-fatal) — gated by hermes_enabled.
-  HERMES_ENABLED_HANDOFF="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get workflow.hermes_enabled 2>/dev/null || echo false)"
-  if [ "$HERMES_ENABLED_HANDOFF" = "true" ]; then
-    export Z_HARNESS_PLAN_DIR Z_HARNESS_SLUG Z_HARNESS_AGENT
-    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/write-handoff.sh" || true
-  fi  # hermes_enabled gate (Invariant 6: write-handoff.sh never runs unless hermes_enabled=true)
+  # Write a watcher-readable clear checkpoint unconditionally. This is not
+  # Hermes-specific: OMP, Hermes, MCP, or any future watcher may consume the
+  # emitted handoff.json + clear_checkpoint_written event.
+  export Z_HARNESS_PLAN_DIR="$BASE" Z_HARNESS_SLUG Z_HARNESS_AGENT
+  export Z_HARNESS_CHECKPOINT_STATUS="context_pressure"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/write-clear-checkpoint.sh" || true
   # Emit /clear & resume push-notify (hard pause).
-  push_notify "Compaction breakpoint: <N> tasks completed (or <M> min wall). <K> pending tasks remain. Run \`/clear\`, then re-invoke \`/z-execute\` to resume from TASKS.md. Or run \`/handoff\` to write a handoff artifact for a different agent. Use \`/compact\` instead if you need chat history for debugging."
+  push_notify "Clear checkpoint written: <N> tasks completed (or <M> min wall). <K> pending tasks remain. Run \`/clear\`, then re-invoke \`/z-execute\` to resume from TASKS.md. A watcher may also consume \`handoff.json\` and resume automatically."
 else
   # FAILURE/DISABLED PATH — curator disabled (TIMEOUT_S=0), or failed both attempts,
   # or hash mismatch between curator return and current TASKS.md done-set.
@@ -1455,12 +1455,11 @@ else
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" context_curation_failed \
       "$(printf '{"reason":"%s"}' "$CURATOR_REASON")"
   fi
-  # Emphatic push-notify — NEVER suggests /clear; always /compact-or-continue.
-  # When curator was disabled (TIMEOUT_S=0), this is the plain pause notice per today's behavior.
+  # Curator failed/disabled, so the clear checkpoint is not trustworthy.
   if [ "${Z_SESSION_CURATOR_TIMEOUT_S}" -gt 0 ]; then
-    push_notify "Context flush failed (\`${CURATOR_REASON}\`). SESSION.md not fully updated. Continue \`/z-execute\` as-is (history retained), or \`/compact\` to reduce context now. Or run \`/handoff\` to write a handoff artifact for a different agent. Retrying next breakpoint."
+    push_notify "Clear checkpoint failed (\`${CURATOR_REASON}\`). SESSION.md not fully updated. Continue \`/z-execute\` as-is (history retained), or retry at the next checkpoint."
   else
-    push_notify "Compaction breakpoint: <N> tasks completed (or <M> min wall). <K> pending tasks remain. Run \`/clear\`, then re-invoke \`/z-execute\` to resume from TASKS.md. Or run \`/handoff\` to write a handoff artifact for a different agent. Use \`/compact\` instead if you need chat history for debugging."
+    push_notify "Clear checkpoint unavailable: SESSION.md curation is disabled. <K> pending tasks remain. Continue \`/z-execute\` as-is, or enable curation for watcher-readable checkpoints."
   fi
 fi
 ```
@@ -1528,12 +1527,12 @@ execute_main_loop_steps_1_to_8() {
 Call-mode outputs:
 - Normal level completion: set `MAIN_LOOP_RESULT=complete`, `LEVEL_EXECUTE_RC=0`, then `return 0`.
 - Run-ending halt: set `FINALIZE_STATUS=aborted`, `LEVEL_EXECUTE_RC=1`, `LEVEL_EXECUTE_HALT_REASON=<reason>`, then `return 1` instead of finalizing.
-- Compaction trigger: if `LEVEL_EXECUTE_SUPPRESS_COMPACTION=1`, set `MAIN_LOOP_RESULT=compaction_deferred`, do not exit, and return to the caller after the current level completes; otherwise use the legacy compaction-pause exit.
+- Checkpoint trigger: if `LEVEL_EXECUTE_SUPPRESS_COMPACTION=1`, set `MAIN_LOOP_RESULT=compaction_deferred`, do not exit, and return to the caller after the current level completes; otherwise use the legacy `compaction_pause` event path.
 
 Repeat until one of the following three exit conditions is met:
 1. **No eligible task remaining** — all `[ ]` tasks are blocked, skip-flagged, or done; jump to Finalize (leave `FINALIZE_STATUS` unset → Finalize deregisters with `complete`).
 2. **Hard halt from collected user-blocking findings** — a `spec_problem`, `decision_needed`, `needs_clarification`, `unable_to_complete`, or repeated review failure that the user did not resolve, OR a `MAX_ATTEMPTS`/wall-clock-cap halt that ends the run; **set `FINALIZE_STATUS=aborted`** then jump to Finalize (per the FINALIZE_STATUS rule in Phase 0.0 — Finalize then deregisters with `aborted`).
-3. **Compaction trigger fired** (step 8 sub-step 6) — emit `compaction_pause`, push-notify, and exit without running Finalize. Resume on next invocation. (A pause, not an abort — do NOT deregister; do NOT set `FINALIZE_STATUS`; **do NOT run Run Brief finalize** — `compaction_pause` is on the registry `skip_brief_on` list; the run is non-terminal.)
+3. **Checkpoint trigger fired** (step 8 sub-step 6) — emit `compaction_pause` for compatibility, write clear-checkpoint artifacts, push-notify, and exit without running Finalize. Resume on next invocation. (A pause, not an abort — do NOT deregister; do NOT set `FINALIZE_STATUS`; **do NOT run Run Brief finalize** — `compaction_pause` is on the registry `skip_brief_on` list; the run is non-terminal.)
 
 Only conditions (1) and (2) lead to the Finalize block. Condition (3) exits immediately after the push notification — **skip the entire Finalize section including Run Brief**.
 
@@ -2759,9 +2758,9 @@ fi
 ```
 
 4. If notify.level is `all` (see [docs/human/config.md](docs/human/config.md)): push-notify per-task. (For `approval_only` default: only notify on halts.)
-5. **Batch-settle compaction check (once per batch, after all tracks finish).** When all parallel tracks in this outer iteration have completed (all have reached terminal status, the atomic TASKS.md write is done, `batch_done` is emitted, and all halt signals have been surfaced and resolved or deferred by the user), run the trigger check documented in the "Compaction breakpoint policy" section above (the `check-compaction.sh` invocation). If exit code 1: follow the curator-dispatch and push-notify protocol in that section, then exit cleanly with no new dispatch. If exit code 0: continue to step 1.
+5. **Batch-settle clear checkpoint check (once per batch, after all tracks finish).** When all parallel tracks in this outer iteration have completed (all have reached terminal status, the atomic TASKS.md write is done, `batch_done` is emitted, and all halt signals have been surfaced and resolved or deferred by the user), run the trigger check documented in the "Clear checkpoint policy" section above (the `check-compaction.sh` invocation). If exit code 1: follow the curator-dispatch and push-notify protocol in that section, then exit cleanly with no new dispatch. If exit code 0: continue to step 1.
 
-   If pending tasks remain but the loop exits due to a compaction trigger, the Finalize section is **skipped** — the push notification text is sufficient, and Finalize's "no more eligible tasks" summary would be misleading (tasks are not blocked, just paused).
+   If pending tasks remain but the loop exits due to a checkpoint trigger, the Finalize section is **skipped** — the push notification text is sufficient, and Finalize's "no more eligible tasks" summary would be misleading (tasks are not blocked, just paused).
 
 ## Run Brief — halt finalize
 
@@ -2781,7 +2780,7 @@ python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-reg
 
 When the loop exits (no more eligible tasks, or you halted):
 
-**Compaction-pause exits (Main-loop condition 3) deliberately skip this entire section** — do NOT
+**Clear-checkpoint exits (Main-loop condition 3; legacy event name: `compaction_pause`) deliberately skip this entire section** — do NOT
 deregister there, and do NOT run Run Brief finalize (`skip_brief_on: compaction_pause` per
 `docs/llm/run-brief-registry.json`). The run is paused, not finished; the next `/z-execute`
 invocation re-registers (idempotent) and resumes.

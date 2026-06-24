@@ -469,6 +469,7 @@ COMMAND_TOOLS: dict[str, dict[str, Any]] = {
     "z_axiom_edit":      {"command_id": "/z-axiom-edit",      "description": "Edit a field on a candidate or approved axiom record",               "is_heavy": False},
     "z_personas":        {"command_id": "/z-personas",        "description": "Inspect the persona registry, role bindings, and persona files",     "is_heavy": False},
     "z_handoff":         {"command_id": "/z-handoff",         "description": "Write a handoff.json artifact for session continuity",               "is_heavy": False},
+    "z_clear_checkpoint": {"command_id": "/z-clear-checkpoint", "description": "Write a watcher-readable clear checkpoint",                         "is_heavy": False},
     "z_update":          {"command_id": "/z-update",          "description": "Update the local z-harness install",                                  "is_heavy": False},
     "z_sharpen":         {"command_id": "/z-sharpen",         "description": "Conversational bounded idea-sharpener — probes, reframes, and converges a vague idea into a buildable problem statement; writes GRILL.md", "is_heavy": False},
     "z_overnight":       {"command_id": "/z-overnight",       "description": "Overnight batch run of multiple /z-* commands",                      "is_heavy": False},
@@ -692,6 +693,20 @@ def _handle_z_handoff(args: dict[str, Any]) -> ToolResult:
     except Exception as exc:
         return ToolResult.error(f"z_handoff failed: {exc}")
 
+def _handle_z_clear_checkpoint(args: dict[str, Any]) -> ToolResult:
+    try:
+        repo_root = _get_repo_root()
+        result = subprocess.run(
+            ["bash", str(repo_root / "scripts" / "write-clear-checkpoint.sh")],
+            capture_output=True, text=True, timeout=30,
+            cwd=str(repo_root), env=os.environ,
+        )
+        if result.returncode == 0:
+            return ToolResult.success(content=result.stdout or "clear checkpoint written.")
+        return ToolResult.error(result.stderr or "clear checkpoint failed")
+    except Exception as exc:
+        return ToolResult.error(f"z_clear_checkpoint failed: {exc}")
+
 
 def _handle_z_personas(args: dict[str, Any]) -> ToolResult:
     try:
@@ -754,7 +769,8 @@ def _handle_z_detect(args: dict[str, Any]) -> ToolResult:
 
 _FAST_HANDLERS: dict[str, Callable[[dict[str, Any]], ToolResult]] = {
     "z_where": _handle_z_where, "z_stats": _handle_z_stats,
-    "z_handoff": _handle_z_handoff, "z_personas": _handle_z_personas,
+    "z_handoff": _handle_z_handoff, "z_clear_checkpoint": _handle_z_clear_checkpoint,
+    "z_personas": _handle_z_personas,
     "z_update": _handle_z_update, "z_export": _handle_z_export,
     "z_detect": _handle_z_detect,
 }

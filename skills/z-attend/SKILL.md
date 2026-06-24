@@ -498,7 +498,7 @@ triggers fire the yield protocol:
    `true` (v1: `plan`, `implement-all`, from `chain-runner.sh steps`). Evaluate this only after a
    `complete` step (a `halt`/`error` step already stopped the loop in Step 2.8).
 2. **`context_pressure`:** a step's sub-run wrote a handoff with `status == "context_pressure"`
-   mid-execution (the dispatched Skill's own compaction path). Detect it from the sub-run's
+   mid-execution (the dispatched Skill's own clear-checkpoint path). Detect it from the sub-run's
    handoff or terminal event; if present, yield even if `YIELD_AFTER[CURSOR]` is `false`.
 
 If neither trigger holds, do not yield — advance `CURSOR` (Step 2.8) and continue the loop.

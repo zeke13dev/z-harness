@@ -70,6 +70,7 @@ is the standard MCP stdio pattern.
 | `z_axiom_edit` | `/z-axiom-edit` | Edit a field on a candidate or approved axiom record |
 | `z_personas` | `/z-personas` | Inspect the persona registry, role bindings, and persona files |
 | `z_handoff` | `/z-handoff` | Write a handoff.json artifact for session continuity |
+| `z_clear_checkpoint` | `/z-clear-checkpoint` | Write a watcher-readable clear checkpoint |
 | `z_update` | `/z-update` | Update the local z-harness install |
 | `z_sharpen` | `/z-sharpen` | Conversational bounded idea-sharpener — probes, reframes, and converges a vague idea into a buildable problem statement; writes GRILL.md |
 | `z_overnight` | `/z-overnight` | Overnight batch run of multiple /z-* commands |
@@ -216,9 +217,9 @@ Hermes calls `z_plan`, `z_implement_all`, `z_implement_next`, and the fast read 
 - `z_harness_cli/__main__.py:184` — `serve_cmd` — Typer CLI wrapper; help text: "Start the z-harness MCP server (stdio)"; delegates to `z_harness_cli/commands/serve.py`.
 - `z_harness_cli/commands/serve.py:11` — `run` — Thin command implementation; calls `z_harness_cli.mcp.server.serve(transport=transport)`.
 - `z_harness_cli/mcp/server.py:32` — `mcp` — `FastMCP("z-harness")` singleton; all tools are registered against it at import time via `_register_tools()`.
-- `z_harness_cli/mcp/server.py:360` — `COMMAND_TOOLS` — Registry mapping tool name → `{command_id, description, is_heavy, skills_path}`. 39 entries.
+- `z_harness_cli/mcp/server.py:360` — `COMMAND_TOOLS` — Registry mapping tool name → `{command_id, description, is_heavy, skills_path}`. 40 entries.
 - `z_harness_cli/mcp/server.py:208` — `MCPDispatcher` — Routes heavy commands through `runtime/dispatch/dispatcher.py`; bridges `DispatchResult` to `ToolResult`.
-- `z_harness_cli/mcp/server.py:675` — `_FAST_HANDLERS` — Dict of direct in-process handlers for read-only tools (`z_where`, `z_stats`, `z_handoff`, `z_personas`, `z_update`, `z_export`, `z_detect`).
+- `z_harness_cli/mcp/server.py:675` — `_FAST_HANDLERS` — Dict of direct in-process handlers for read-only tools (`z_where`, `z_stats`, `z_handoff`, `z_clear_checkpoint`, `z_personas`, `z_update`, `z_export`, `z_detect`).
 - `z_harness_cli/mcp/server.py:707` — `serve` — `mcp.run(transport=transport)` — public entry point called by the CLI.
 
 ## How it interacts with others

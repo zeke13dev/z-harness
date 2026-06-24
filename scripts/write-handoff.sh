@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# write-handoff.sh — Write handoff.json to the plan directory at a compaction breakpoint.
+# write-handoff.sh — Write handoff.json to the plan directory at a clear checkpoint.
 #
-# Called by the /z-execute compaction flow after the context-curator writes
+# Called by the legacy /z-execute checkpoint flow after the context-curator writes
 # SESSION.md. Reads plan state (TASKS.md, SESSION.md, env vars) and produces a
 # handoff.json conforming to docs/schemas/handoff.schema.json (handoff-v1).
 #
@@ -11,6 +11,8 @@
 #   Z_HARNESS_MODEL      — model name (optional; falls back to "unknown")
 #   Z_HARNESS_CONTEXT_PCT — context usage percentage (optional)
 #   Z_HARNESS_AGENT      — agent name (optional; default "pi")
+#   Z_HARNESS_HANDOFF_STATUS — status override (optional; default clean_break)
+#   Z_HARNESS_HANDOFF_NEXT_STEP — next_step override (optional)
 #
 # Attend-yield env vars (read ONLY when Z_HARNESS_ATTEND_RESUME=1 — these populate
 # the optional attend_resume predicate and bump protocol_version to "1.1"):
@@ -41,6 +43,17 @@ SLUG="${Z_HARNESS_SLUG:-}"
 AGENT="${Z_HARNESS_AGENT:-pi}"
 MODEL="${Z_HARNESS_MODEL:-unknown}"
 CONTEXT_PCT="${Z_HARNESS_CONTEXT_PCT:-}"
+HANDOFF_STATUS="${Z_HARNESS_HANDOFF_STATUS:-clean_break}"
+HANDOFF_NEXT_STEP_OVERRIDE="${Z_HARNESS_HANDOFF_NEXT_STEP:-}"
+
+case "$HANDOFF_STATUS" in
+  context_pressure|clean_break|complete|blocked) ;;
+  *)
+    echo "[write-handoff] invalid Z_HARNESS_HANDOFF_STATUS: $HANDOFF_STATUS" >&2
+    exit 1
+    ;;
+esac
+
 
 HANDOFF_FILE="$PLAN_DIR/handoff.json"
 TASKS_FILE="$PLAN_DIR/TASKS.md"
@@ -75,8 +88,8 @@ DONE_COUNT=""
 
 if [ -f "$SESSION_FILE" ]; then
   # Extract YAML frontmatter fields
-  DONE_COUNT="$(sed -n '/^---$/,/^---$/p' "$SESSION_FILE" | grep '^done_count:' | sed 's/^done_count:\s*//' | tr -d '[:space:]')"
-  NEXT_PENDING="$(sed -n '/^---$/,/^---$/p' "$SESSION_FILE" | grep '^next_pending:' | sed 's/^next_pending:\s*//' | tr -d '[:space:]')"
+  DONE_COUNT="$(sed -n '/^---$/,/^---$/p' "$SESSION_FILE" | grep '^done_count:' | sed 's/^done_count:\s*//' | tr -d '[:space:]' || true)"
+  NEXT_PENDING="$(sed -n '/^---$/,/^---$/p' "$SESSION_FILE" | grep '^next_pending:' | sed 's/^next_pending:\s*//' | tr -d '[:space:]' || true)"
   case "$DONE_COUNT" in ''|*[!0-9]*) DONE_COUNT="" ;; esac
 
   # Extract section bodies (text between ## SectionName and the next ## or end of file)
@@ -99,11 +112,11 @@ if [ -f "$SESSION_FILE" ]; then
 
   # Session keys: first 5 entries from Decisions or Landmines, one per line
   _ALL_KEYS="$(_extract_section "Decisions"; echo "---"; _extract_section "Landmines")"
-  SESSION_KEYS="$(printf '%s' "$_ALL_KEYS" | grep -v '^---$' | grep -v '^$' | head -5 | sed 's/^[-*] //' | sed 's/^**//;s/**$//')"
+  SESSION_KEYS="$(printf '%s' "$_ALL_KEYS" | grep -v '^---$' | grep -v '^$' | head -5 | sed 's/^[-*] //' | sed 's/^**//;s/**$//' || true)"
 
   # Next actions: Open threads section entries
   _OPEN="$(_extract_section "Open threads" | head -5)"
-  NEXT_ACTIONS="$(printf '%s' "$_OPEN" | grep -v '^$' | sed 's/^[-*] //')"
+  NEXT_ACTIONS="$(printf '%s' "$_OPEN" | grep -v '^$' | sed 's/^[-*] //' || true)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -113,6 +126,10 @@ if [ -n "$NEXT_PENDING" ] && [ "$NEXT_PENDING" != "none" ]; then
   NEXT_STEP="Resume /z-execute for ${SLUG:-this plan}. ${TASKS_COMPLETED}/${TASKS_TOTAL} tasks done. Start at ${NEXT_PENDING}. Read TASKS.md for acceptance criteria and SESSION.md for context."
 else
   NEXT_STEP="Resume /z-execute for ${SLUG:-this plan}. ${TASKS_COMPLETED}/${TASKS_TOTAL} tasks done. Read TASKS.md for current state and SESSION.md for context from the prior session."
+fi
+
+if [ -n "$HANDOFF_NEXT_STEP_OVERRIDE" ]; then
+  NEXT_STEP="$HANDOFF_NEXT_STEP_OVERRIDE"
 fi
 
 # Truncate next_step to schema max (2000 chars)
@@ -161,8 +178,7 @@ fi
 # When invoked from a /z-attend chain yield (Z_HARNESS_ATTEND_RESUME=1), emit
 # protocol_version "1.1" and a nested attend_resume object built from the
 # yield-time env vars. Otherwise emit protocol_version "1.0" with no
-# attend_resume key — byte-identical to the pre-attend handoff for non-attend
-# callers (the curator/compaction path).
+# attend_resume key for non-attend callers (manual handoff or clear checkpoint).
 PROTOCOL_VERSION="1.0"
 ATTEND_RESUME_JSON="null"
 
@@ -209,7 +225,7 @@ data = {
   "timestamp": sys.argv[2],
   "agent": sys.argv[3],
   "slug": json.loads(sys.argv[4]),
-  "status": "clean_break",
+  "status": sys.argv[8],
   "next_step": sys.argv[5],
   "context_files": json.loads(sys.argv[6])
 }
@@ -219,7 +235,7 @@ if attend_resume is not None:
   data["attend_resume"] = attend_resume
 
 print(json.dumps(data, indent=2))
-' "$PROTOCOL_VERSION" "$TIMESTAMP" "$AGENT" "$SLUG_JSON" "$NEXT_STEP" "$CTX_FILES" "$ATTEND_RESUME_JSON")"
+' "$PROTOCOL_VERSION" "$TIMESTAMP" "$AGENT" "$SLUG_JSON" "$NEXT_STEP" "$CTX_FILES" "$ATTEND_RESUME_JSON" "$HANDOFF_STATUS")"
 
 # ---------------------------------------------------------------------------
 # Atomic write

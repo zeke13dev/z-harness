@@ -430,7 +430,7 @@ Pre-review findings (3 × DeepSeek V4 Flash fast scan):
 These are cheap pre-screener findings — validate them critically before accepting. The real work is your own analysis.
 ```
 
-## Phase 3.7 — Pre-consult compaction breakpoint
+## Phase 3.7 — Pre-consult clear checkpoint
 
 **Always runs** between Phase 3.5 and Phase 4 (unless fast-forwarded via the Pre-Phase 0 resume check).
 
@@ -457,7 +457,7 @@ if [[ $NOASK_EXIT -eq 5 ]]; then
 fi
 ```
 
-- **If `$NOASK_RESULT == "halt"`:** Emit `review_halt` event, write a partial `.review_state.json`, and exit cleanly — do NOT proceed to `resolve-question` or `AskUserQuestion`:
+- **If `$NOASK_RESULT == "halt"`:** Emit `review_halt` event, write a partial `.review_state.json`, and exit cleanly — do NOT write the clear checkpoint or start Phase 4:
   ```bash
   if [[ "$NOASK_RESULT" == "halt" ]]; then
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_halt \
@@ -483,72 +483,38 @@ with open(path, 'w') as f:
   ```
   On this halt path (after `run-brief.sh init`), run **Run Brief — halt finalize** below (substitute `<reason>` = `no_ask_blocked on workflow.review_all_proceed`) before `exit 0`.
 
-- **If `$NOASK_RESULT == "proceed"`:** Overnight gate cleared — continue to the resolver for preference-based skip/prefill/ask:
+- **If `$NOASK_RESULT == "proceed"`:** write the Phase 3.7 resume state, then write a clear checkpoint and exit. Do **not** ask "pause or proceed"; the heavy Phase 4 consultant spawn is exactly the boundary where clearing is valuable.
   ```bash
-  # check-no-ask returned proceed: run the full resolver to honor user preferences.
-  RESOLVED="$(python3 scripts/config.py resolve-question workflow.review_all_proceed)"
-  RESOLVE_EXIT=$?
-
-  if [[ $RESOLVE_EXIT -ne 0 ]]; then
-    # Exit codes: 2=bad invocation, 3=unknown question_id, 4=I/O error.
-    # In all error cases, fall through to ask the user normally — never silently skip.
-    echo "resolve-question failed (exit $RESOLVE_EXIT); falling back to ask" >&2
-    RESULT="ask"; DEFAULT=""; SOURCE="error"
-  else
-    RESULT="$(echo "$RESOLVED" | jq -r .result)"
-    DEFAULT="$(echo "$RESOLVED" | jq -r .default)"
-    SOURCE="$(echo "$RESOLVED" | jq -r .source)"
-  fi
+  python3 - "$Z_HARNESS_PLAN_DIR/.review_state.json" "$RRUN" "$BASE_REF" "$BASE/archive/$RRUN/cumulative.diff" "$BASE/archive/$RRUN/cumulative.stat" <<'PY' || echo "warn: could not write .review_state.json" >&2
+import datetime, json, subprocess, sys
+path, run_id, base_ref, diff_path, stat_path = sys.argv[1:6]
+head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+state = {
+  "phase_3_7_acknowledged": True,
+  "run_id": run_id,
+  "base_ref": base_ref,
+  "head_sha": head,
+  "cumulative_diff_path": diff_path,
+  "cumulative_stat_path": stat_path,
+  "acknowledged_at": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+}
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(state, f, indent=2)
+PY
+  export Z_HARNESS_PLAN_DIR="$Z_HARNESS_PLAN_DIR" Z_HARNESS_SLUG="$Z_HARNESS_SLUG" Z_HARNESS_AGENT="${Z_HARNESS_AGENT:-pi}"
+  export Z_HARNESS_CHECKPOINT_STATUS=clean_break
+  export Z_HARNESS_CHECKPOINT_NEXT_STEP="Resume /z-review-all for ${Z_HARNESS_SLUG:-this plan}; Phase 3.7 has been acknowledged, so continue to Phase 4 consultant review."
+  export Z_HARNESS_CHECKPOINT_RESUME_COMMAND="/z-review-all ${Z_HARNESS_SLUG:-this plan}"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/write-clear-checkpoint.sh" || true
+  push_notify "Clear checkpoint written before review consultants. Run \`/clear\`, then re-invoke \`/z-review-all\` to resume at Phase 4."
+  exit 0
   ```
 
-  Branch on `$RESULT` from the resolver:
-
-  - **`skip`:** Skip the `AskUserQuestion` and proceed as if the user picked `$DEFAULT`. Emit `askuser_skipped` event:
-    ```bash
-    if [[ "$RESULT" == "skip" ]]; then
-      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" askuser_skipped \
-        "$(printf '{"question_id":"workflow.review_all_proceed","source":"%s"}' "$SOURCE")"
-      # Fall through to the Proceed path below (write state file and continue to Phase 4).
-    fi
-    ```
-
-  - **`prefill`:** Present the `AskUserQuestion` normally, pre-select `$DEFAULT` as the recommended option (append label suffix: ` (Recommended — your preference)`).
-  - **`ask`:** Present the `AskUserQuestion` normally.
-
-<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the compaction-breakpoint decision (pause for /clear / proceed now) via their native channel. Silent omission is forbidden. -->
-When resolver result is `prefill` or `ask`, present an `AskUserQuestion` with exactly two options:
-
-> **Compaction breakpoint — pre-consultant spawn**
->
-> You are about to dispatch the cross-LLM consultant subagents (Phase 4). These are context-heavy; starting them on a fresh context window improves quality.
->
-> **Options:**
-> - **(a) Pause for /clear** — exit now so you can run `/clear`, then re-invoke `/z-review-all` to resume. No state file is written; Phase 3.7 will prompt again on the next invocation (correct — you wanted to re-evaluate).
-> - **(b) Proceed now** — continue into Phase 4 immediately. A state file will be written so a subsequent re-invocation (e.g. after an interruption) can fast-forward past Phases 0–3.5.
-
-**If the user picks (a) — Pause for /clear:**
-- Exit cleanly. Do **not** write `.review_state.json`.
-- The next `/z-review-all` invocation will run Phase 0–3.7 again.
-
-**If the user picks (b) — Proceed now:**
-- Write `$Z_HARNESS_PLAN_DIR/.review_state.json` with this schema:
-  ```json
-  {
-    "phase_3_7_acknowledged": true,
-    "run_id": "<RRUN — the current review run id, e.g. 20260524T120000Z-review>",
-    "base_ref": "<BASE_REF captured in Phase 2>",
-    "head_sha": "<output of git rev-parse HEAD at this moment>",
-    "cumulative_diff_path": "<absolute path to $BASE/archive/$RRUN/cumulative.diff>",
-    "cumulative_stat_path": "<absolute path to $BASE/archive/$RRUN/cumulative.stat>",
-    "acknowledged_at": "<ISO-8601 timestamp>"
-  }
-  ```
-  If the write fails, log a warning to stderr and proceed (do not block on a filesystem hiccup).
-- Continue to Phase 4.
+The next `/z-review-all` invocation validates `.review_state.json` in the pre-Phase-0 resume gate. If HEAD and artifacts still match, it fast-forwards to Phase 4; if not, it deletes the stale state file and re-runs from Phase 0.
 
 ## Phase 3.7.5 — Route non-halting findings to follow-up sink
 
-After the user picks "Proceed now" in Phase 3.7 (or the resolver auto-proceeds), before spawning consultants, check if the reviewer return from any prior per-task reviews produced `**FOLLOWUPS:**` blocks that haven't been routed yet. Additionally, at the end of Phase 5 (after `findings.md` is built), route non-halting minor/major findings from the cumulative review into the sink.
+After the Phase 3.7 clear checkpoint has been acknowledged on resume, before spawning consultants, check if the reviewer return from any prior per-task reviews produced `**FOLLOWUPS:**` blocks that haven't been routed yet. Additionally, at the end of Phase 5 (after `findings.md` is built), route non-halting minor/major findings from the cumulative review into the sink.
 
 **After Phase 5 findings are aggregated**, for each finding in `findings.md` that is NOT in the `Blockers` sections (i.e. severity is `major` or `minor`), invoke `scripts/parse-followups-block.py` on the findings text to extract any `**FOLLOWUPS:**` block written by the consultants, then route via `scripts/sink-add.sh`:
 
@@ -1353,9 +1319,9 @@ Emission is gated by `axioms.auto_extract_post_run` (default `true`); when `fals
 | Feature | Used | Gates |
 |---------|------|-------|
 | `subagent` | yes | Phase 4 consultant-primary + consultant-secondary (parallel); Phase 7 review-agent (memory review) |
-| `ask_user` | yes | Phase 0 slug selection; Phase 1 incomplete-plan warning; Phase 2 base-ref fallback question; Phase 3.7 compaction-breakpoint decision (resolver `prefill`/`ask` only); Phase 7 per-candidate memory review |
-| `check-no-ask` | yes | Phase 3.7 fail-closed overnight gate — `halt` → emit `review_halt`, write partial state, exit; `proceed` → fall through to `resolve-question` |
-| `resolve-question` | yes | Phase 3.7 `workflow.review_all_proceed` (only reached when `check-no-ask` returns `proceed`) — may `skip` (emit `askuser_skipped`, fall through to proceed path) or `prefill`/`ask` (show AskUserQuestion) |
+| `ask_user` | yes | Phase 0 slug selection; Phase 1 incomplete-plan warning; Phase 2 base-ref fallback question; Phase 7 per-candidate memory review |
+| `check-no-ask` | yes | Phase 3.7 fail-closed overnight gate — `halt` → emit `review_halt`, write partial state, exit; `proceed` → write clear-checkpoint state, emit `clear_checkpoint_written`, and exit for `/clear` |
+| `resolve-question` | no | Phase 3.7 no longer asks pause/proceed; clear checkpoint is automatic before Phase 4 consultants |
 | `skill_invoke` | no | — |
 
 Driver support requirements: see frontmatter `driver_features_required`.

@@ -56,11 +56,12 @@ appear only on subagent-bracket events, not on lifecycle or gate events.
 | `anti_nesting_violation` | `cluster-planner` Phase 0a when an ancestor MANIFEST.md is detected |
 | `cluster_not_ready` | `/z-execute` Setup 2b cluster-readiness gate |
 
-### Compaction breakpoints
+### Clear checkpoints
 
 | Event | Payload schema | Emitted by |
 |---|---|---|
 | `compaction_pause` | `{trigger, detail}` — `trigger` is one of `"task_count"`, `"wall_time"`, or `"pre_consult"`; `detail` carries trigger-specific fields | `/z-execute` batch-settle; `/z-review-all` Phase 3.7; `/z-maintain-docs --audit` pre-consult breakpoint |
+| `clear_checkpoint_written` | `{handoff_path, session_path, status, resume_command, next_pending, producer, consumer}` | `scripts/write-clear-checkpoint.sh`; watcher signal for OMP/Hermes/MCP |
 
 ### Config
 
@@ -70,12 +71,12 @@ appear only on subagent-bracket events, not on lifecycle or gate events.
 
 ---
 
-## Compaction policy
+## Clear checkpoint policy
 
 Long `/z-execute` runs and cross-LLM consult phases in `/z-review-all`
 and `/z-maintain-docs --audit` accumulate significant orchestrator context. The
-compaction policy inserts deterministic breakpoints at the highest-context-pressure
-boundaries.
+clear checkpoint policy inserts deterministic breakpoints at the highest-context-pressure
+boundaries and writes watcher-readable resume artifacts.
 
 ### `/z-execute` — task-count and wall-time triggers
 
@@ -91,23 +92,20 @@ in-flight tasks reach terminal status → TASKS.md atomic write → `batch_done`
 event → halt-flush resolved. Only `[x]` completions count toward
 `Z_IMPLEMENT_PAUSE_TASKS`; retries and rollbacks do not.
 
-On trigger: a `compaction_pause` event is emitted, a push notification fires,
-and the loop exits cleanly. Re-invoke `/z-execute` to resume from TASKS.md.
+On trigger: a `compaction_pause` compatibility event is emitted, `write-clear-checkpoint.sh` writes `handoff.json`, `clear_checkpoint_written` is emitted for watchers, a push notification fires, and the loop exits cleanly. Re-invoke `/z-execute` or let a watcher resume from the handoff.
 
 ### `/z-review-all` and `/z-maintain-docs --audit` — pre-consult breakpoints
 
-Both commands insert an unconditional breakpoint before the cross-LLM consultant
-batch dispatches. You are shown an `AskUserQuestion` with two options:
-
-- **Pause for /clear** — exit cleanly; no state written. Re-invoke to continue.
-- **Proceed now** — write a slug-scoped state file and continue into the consult phase.
+Both commands insert an unconditional checkpoint before the cross-LLM consultant
+batch dispatches. The target shape is checkpoint-and-exit: write enough state for
+the next invocation or watcher to resume, then clear before the heavy consult.
+Older prompt text may still call this a compaction breakpoint; the durable event
+to watch is `clear_checkpoint_written`.
 
 ### Why `/clear` over `/compact`
 
-`/clear` is the recommended action at every compaction breakpoint. The harness's
-durable state lives entirely in TASKS.md (and slug-scoped state files) — there
-is no cross-task state in orchestrator memory. Clearing reclaims more context
-than `/compact` with no safety loss.
-
-Use `/compact` only when you need to preserve chat history for debugging a
-specific task failure.
+`/clear` is the recommended action at every checkpoint. The harness's
+durable state lives in TASKS.md, SESSION.md, handoff.json, and slug-scoped state
+files — there is no cross-task state that must stay only in orchestrator memory.
+Clearing reclaims more context than `/compact` with no safety loss when a
+checkpoint exists.

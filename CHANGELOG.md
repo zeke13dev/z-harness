@@ -32,6 +32,14 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
 ## 2026-06-22
 
 - _(auto)_ Emergent sharpen-first pipeline — rename z-implement-all→z-execute, fold sharpen, delete redundant commands _(plan-family)_
+- _(auto)_ Point shared-tree block at native EnterWorktree (no relaunch) _(guardrail)_
+
+## 2026-06-21
+
+- _(auto)_ Auto-patch version scheme + enable marketplace propagation _(versioning)_
+- _(auto)_ Repoint bench-autonomy-check.sh to skills/ after commands/ removal _(bench)_
+- _(auto)_ Gate remote builds on box memory pressure (PSI) _(remote-runner)_
+- _(auto)_ Omp-backed consult arms (GPT-5.5 + Gemini 3.1 Pro via OAuth) _(providers)_
 
 ## 2026-06-20
 

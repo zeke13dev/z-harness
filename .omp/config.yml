@@ -1,0 +1,5 @@
+# Keep Oh My Pi sessions in this repo lean.
+# z-harness has a large Codex-oriented root AGENTS.md export; OMP's project
+# AGENTS auto-loader would ingest it as startup context (~90K tokens).
+skills:
+  enableAgentsProject: false

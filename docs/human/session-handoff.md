@@ -7,7 +7,7 @@
 
 The session-handoff system adds a durable `SESSION.md` artifact to each `/z-execute` plan so the orchestrator can `/clear` aggressively at its existing batch breakpoint and re-seed its context from a small, bounded file on resume — eliminating the O(N²) `cache_read` growth where every task re-reads the entire growing orchestrator window.
 
-The write path is hybrid: the orchestrator drops notable-only breadcrumbs into the event stream after each task completes (E2 — high-signal, low-noise), and a Haiku `context-curator` subagent folds the events delta + git diff + TASKS.md + prior SESSION.md into a compact SESSION.md synchronously at the compaction breakpoint, before the "/clear & resume" notice fires (E3). On next invocation, the orchestrator reads SESSION.md's frontmatter, compares the stored `done_ids_hash` with the current TASKS.md done-set, and re-inlines the body only when the hashes match (E1). The `handoff.json` artifact produced by `write-handoff.sh` provides a machine-readable continuation token for Hermes and `/z-attend` resume.
+The write path is hybrid: the orchestrator drops notable-only breadcrumbs into the event stream after each task completes (E2 — high-signal, low-noise), and a Haiku `context-curator` subagent folds the events delta + git diff + TASKS.md + prior SESSION.md into a compact SESSION.md synchronously at the clear checkpoint, before the "/clear & resume" notice fires (E3). On next invocation, the orchestrator reads SESSION.md's frontmatter, compares the stored `done_ids_hash` with the current TASKS.md done-set, and re-inlines the body only when the hashes match (E1). The `handoff.json` artifact produced by `write-clear-checkpoint.sh` provides a machine-readable continuation token for Oh My Pi, Hermes, MCP, `/z-attend`, or any future watcher.
 
 ## Key entry points
 
@@ -17,17 +17,17 @@ The write path is hybrid: the orchestrator drops notable-only breadcrumbs into t
 - `scripts/session-helpers.sh:321` — `last_curated_marker` — ts of most recent `context_curated` event; used by E3 to compute `since_marker`
 - `scripts/session-helpers.sh:369` — `session_frontmatter_field` — reads a scalar YAML frontmatter field from SESSION.md cheaply without loading the body
 - `scripts/session-helpers.sh:423` — `validate_intent` — thin shell wrapper over `scripts/intent-schema.py validate-intent`; exit 0=valid, 1=errors, 2=usage; also supports `lint` mode
-- `agents/context-curator.md:1` — `context-curator` — Haiku subagent; dispatched synchronously at the compaction breakpoint; 8-step ordered behavior producing SESSION.md
-- `skills/z-execute/SKILL.md:1015` — E1 resume injection — reads SESSION.md frontmatter via helpers; inlines body when schema_version/done_ids_hash/pending all pass
-- `skills/z-execute/SKILL.md:1196` — E3 curator dispatch — after `compaction_pause`, before push-notify; one retry at 2× timeout; hash-verified before `/clear & resume` notice
+- `agents/context-curator.md:1` — `context-curator` — Haiku subagent; dispatched synchronously at the clear checkpoint; 8-step ordered behavior producing SESSION.md
+- `skills/z-execute/SKILL.md:1129` — E1 resume injection — reads SESSION.md frontmatter via helpers; inlines body when schema_version/done_ids_hash/pending all pass
+- `skills/z-execute/SKILL.md:1279` — clear checkpoint policy — after `compaction_pause`, before push-notify; one retry at 2× timeout; hash-verified before `/clear & resume` notice
 - `skills/z-execute/SKILL.md:2531` — E2 notable-only breadcrumb — emit `context_breadcrumb` only when a concrete trigger held (decision, halt, spec-deviation, reviewer-retry)
-- `scripts/write-handoff.sh:1` — `write-handoff.sh` — produces `handoff.json` at compaction breakpoints (Hermes, gated by `hermes_enabled`) and at `/z-attend` yield points (protocol 1.1)
+- `scripts/write-clear-checkpoint.sh:1` — `write-clear-checkpoint.sh` — generic watcher-readable checkpoint producer; writes `handoff.json` and emits `clear_checkpoint_written`
 
 ## How it interacts with others
 
-- `active-plan-registry` — serializes concurrent orchestrators per plan; the session-handoff compaction pause interacts with the registry's deregister rule (pause does NOT deregister)
+- `active-plan-registry` — serializes concurrent orchestrators per plan; the session-handoff checkpoint pause interacts with the registry's deregister rule (pause does NOT deregister)
 - `attend` — `/z-attend` calls `write-handoff.sh` at yield points with `Z_HARNESS_ATTEND_RESUME=1` to produce a protocol-1.1 handoff with an `attend_resume` predicate; also calls `session-helpers.sh done_set_hash` for its resume validation
-- `handoff-protocol` — `write-handoff.sh` is the producer side of the `handoff.json` schema; protocol 1.0 for Hermes compaction, protocol 1.1 for attend-yield
+- `handoff-protocol` — `write-clear-checkpoint.sh` is the generic watcher-facing producer for protocol 1.0 clear checkpoints; `write-handoff.sh` remains the low-level schema writer and protocol-1.1 attend-yield producer
 - `adaptive-intent` — the INTENT BFS level checkpoint (`.bfs_level_state`) uses `done_set_hash` from `session-helpers.sh` to detect TASKS.md drift between pauses and resume from the correct BFS level
 - `intent-schema` — `session-helpers.sh validate_intent` wraps `scripts/intent-schema.py` for shell-layer INTENT.md validation
 - `scripts` — `log-event.sh` is called for all session-handoff telemetry events; `plan-path.sh` resolves the metrics.jsonl path
@@ -38,7 +38,7 @@ The write path is hybrid: the orchestrator drops notable-only breadcrumbs into t
 - The `event_source` for the curator must be `$ZH_BASE/metrics.jsonl`, not the per-plan `events.jsonl` or orchestration-only `events.jsonl`. Only `metrics.jsonl` aggregates both task-tier events (`task_halt`, `spec_precheck`) and orchestration-tier events (`review_agent_failed`, `compaction_pause`). Reading either alone makes the landmine backstop inert.
 - The "/clear & resume" notice fires only after curation succeeds AND the curator's returned `done_ids_hash` matches the current TASKS.md done-set. Emitting it before that check is a security-of-resume contract violation.
 - E1 pending detection uses `next_pending_task` (Python-based), not a bespoke line-start grep. A `^\s*[-*]?\s*\[ \]` grep does NOT match the inline-heading status format `## T002 — title `[ ]`` and returns 0 tasks, making the resume predicate fall to `no_pending` for every production plan (feature inert).
-- `write-handoff.sh` at the compaction breakpoint is gated by `workflow.hermes_enabled`. When `hermes_enabled=false` (default), `write-handoff.sh` is NOT called at the compaction breakpoint; only the `/z-attend` yield path calls it unconditionally.
+- `write-clear-checkpoint.sh` is not Hermes-specific and is not gated by `workflow.hermes_enabled`; any watcher may consume the emitted `handoff.json` plus `clear_checkpoint_written` event.
 - Protocol-1.1 handoff requires all five attend env vars to be non-empty: `Z_HARNESS_ATTEND_HEAD_SHA`, `Z_HARNESS_ATTEND_PHASE`, `Z_HARNESS_ATTEND_DONE_SET_HASH`, `Z_HARNESS_ATTEND_DIRTY_FP`, `Z_HARNESS_ATTEND_SESSION_ID`. Missing any causes `write-handoff.sh` to exit non-zero.
 - `Z_SESSION_CURATOR_TIMEOUT_S=0` disables the entire subsystem; no SESSION.md is written and no "/clear & resume" notice fires.
 - Overflow order matters: apply entry caps first, then collapse resolved-decision bodies, then drop oldest entries if still over ceiling. Applying in a different order changes which entries survive.
@@ -64,7 +64,7 @@ NEXT_PENDING_NOW="$(bash scripts/session-helpers.sh next_pending_task "$TASKS_FI
 # Resume fires iff SV="1" AND DH==CUR_HASH AND NEXT_PENDING_NOW is non-empty
 ```
 
-Curator dispatch at compaction breakpoint (E3):
+Curator dispatch at clear checkpoint (E3):
 
 ```bash
 SINCE_MARKER="$(bash scripts/session-helpers.sh last_curated_marker "$ZH_BASE/metrics.jsonl")"

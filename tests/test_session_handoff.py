@@ -2395,6 +2395,8 @@ class TestHandoffSchemaValidation:
 # loop between producer and validator.
 
 _WRITE_HANDOFF_SH = str(_REPO_ROOT / "scripts" / "write-handoff.sh")
+_WRITE_CLEAR_CHECKPOINT_SH = str(_REPO_ROOT / "scripts" / "write-clear-checkpoint.sh")
+
 
 
 def _run_write_handoff(plan_dir: Path, extra_env: dict[str, str] | None = None) -> dict[str, Any]:
@@ -2504,3 +2506,109 @@ class TestWriteHandoffProducer:
         assert not (tmp_path / "handoff.json").exists(), (
             "Producer must not write handoff.json when validation fails"
         )
+
+
+class TestClearCheckpointProducer:
+    """write-clear-checkpoint.sh emits generic watcher-readable checkpoint artifacts."""
+
+    def test_write_handoff_accepts_status_and_next_step_override(self, tmp_path: Path):
+        _seed_plan_dir(tmp_path)
+        handoff = _run_write_handoff(
+            tmp_path,
+            extra_env={
+                "Z_HARNESS_HANDOFF_STATUS": "context_pressure",
+                "Z_HARNESS_HANDOFF_NEXT_STEP": "Resume from watcher checkpoint.",
+            },
+        )
+
+        assert handoff["status"] == "context_pressure"
+        assert handoff["next_step"] == "Resume from watcher checkpoint."
+        jsonschema.validate(instance=handoff, schema=_load_handoff_schema())
+
+    def test_clear_checkpoint_writes_handoff_and_event(self, tmp_path: Path):
+        _seed_plan_dir(tmp_path)
+        (tmp_path / "SESSION.md").write_text(
+            "---\n"
+            "artifact: session\n"
+            "schema_version: 1\n"
+            "done_ids_hash: abc\n"
+            "next_pending: T002\n"
+            "---\n\n"
+            "## Decisions\n\n- keep going\n",
+            encoding="utf-8",
+        )
+        state_base = tmp_path / "state"
+        env = {
+            **os.environ,
+            "Z_HARNESS_PLAN_DIR": str(tmp_path),
+            "Z_HARNESS_SLUG": "checkpoint-plan",
+            "Z_HARNESS_BASE_DIR": str(state_base),
+            "RUN": "test-clear-checkpoint",
+        }
+
+        result = subprocess.run(
+            ["bash", _WRITE_CLEAR_CHECKPOINT_SH],
+            env=env,
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.startswith("STATUS: clear_checkpoint "), result.stdout
+        handoff_path = tmp_path / "handoff.json"
+        assert handoff_path.is_file()
+        handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+        assert handoff["status"] == "context_pressure"
+        assert any(item["role"] == "session_log" for item in handoff["context_files"])
+        jsonschema.validate(instance=handoff, schema=_load_handoff_schema())
+
+        metrics_path = state_base / "metrics.jsonl"
+        assert metrics_path.is_file()
+        events = [
+            json.loads(line)
+            for line in metrics_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        checkpoint_events = [event for event in events if event.get("kind") == "clear_checkpoint_written"]
+        assert checkpoint_events, "clear_checkpoint_written event missing"
+        payload = checkpoint_events[-1]
+        assert payload["handoff_path"] == str(handoff_path)
+        assert payload["session_path"] == str(tmp_path / "SESSION.md")
+        assert payload["consumer"] == "watcher"
+        assert payload["resume_command"] == "/z-execute checkpoint-plan"
+
+    def test_clear_checkpoint_accepts_resume_command_override(self, tmp_path: Path):
+        _seed_plan_dir(tmp_path)
+        env = {
+            **os.environ,
+            "Z_HARNESS_PLAN_DIR": str(tmp_path),
+            "Z_HARNESS_CHECKPOINT_STATUS": "clean_break",
+            "Z_HARNESS_CHECKPOINT_NEXT_STEP": "Resume /z-review-all; continue at Phase 4.",
+            "Z_HARNESS_CHECKPOINT_RESUME_COMMAND": "/z-review-all checkpoint-plan",
+            "Z_HARNESS_BASE_DIR": str(tmp_path / "state"),
+            "RUN": "test-clear-checkpoint-override",
+        }
+
+        result = subprocess.run(
+            ["bash", _WRITE_CLEAR_CHECKPOINT_SH],
+            env=env,
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "resume=/z-review-all\\ checkpoint-plan" in result.stdout
+        handoff = json.loads((tmp_path / "handoff.json").read_text(encoding="utf-8"))
+        assert handoff["status"] == "clean_break"
+        assert handoff["next_step"] == "Resume /z-review-all; continue at Phase 4."
+
+        metrics_path = tmp_path / "state" / "metrics.jsonl"
+        events = [
+            json.loads(line)
+            for line in metrics_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        payload = [event for event in events if event.get("kind") == "clear_checkpoint_written"][-1]
+        assert payload["resume_command"] == "/z-review-all checkpoint-plan"

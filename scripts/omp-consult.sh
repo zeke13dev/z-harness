@@ -42,7 +42,10 @@ if [[ -z "${prompt//[[:space:]]/}" ]]; then
 fi
 
 # Primary: omp v16 print mode, ephemeral session, prompt as positional arg.
-out="$(omp -p --no-session --model "$model" "$prompt" 2>/dev/null)"
+# --no-rules is intentional: when invoked from the z-harness repo, omp otherwise
+# auto-loads the root AGENTS.md rule file, which is a large Codex export and
+# can add ~90K tokens of irrelevant system context to every consult.
+out="$(omp -p --no-session --no-rules --model "$model" "$prompt" 2>/dev/null)"
 rc=$?
 if [[ "$rc" -eq 0 && -n "${out//[[:space:]]/}" ]]; then
   printf '%s\n' "$out"
