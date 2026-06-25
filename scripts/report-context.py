@@ -227,6 +227,15 @@ def resolve_target(
     if ".." in tok:
         return _descriptor("range", range=tok, **({"base": flag_base} if flag_base else {}))
 
+    # 3c. Repo-state aliases
+    if tok in {"current", "changes"}:
+        return _descriptor("worktree")
+    if tok.startswith("since "):
+        _, _, ref = tok.partition(" ")
+        if ref.strip():
+            return _descriptor("range", base=ref.strip())
+
+
     # 3d. Exact slug match (check before bare-int / bare-hex so named slugs win)
     if _slug_exists(tok):
         return _descriptor("slug", slug=tok)
@@ -313,6 +322,260 @@ def _run_cmd_capture(cmd: list[str], *, cwd: str | None = None) -> tuple[int, st
         return result.returncode, result.stdout.strip(), result.stderr.strip()
     except OSError as exc:
         return 1, "", str(exc)
+
+
+# ── surface-map attachment helpers ─────────────────────────────────────────────
+
+SURFACE_POLICIES = {"auto", "off", "existing", "refresh"}
+TIERS = {"summary", "standard", "deep"}
+
+
+def _surface_policy_allows_refresh(policy: str, tier: str, mode: str) -> bool:
+    """Return True when report-context may run a fresh deterministic mapper."""
+    if policy == "off":
+        return False
+    if policy == "existing":
+        return False
+    if tier == "summary":
+        return False
+    if policy == "refresh":
+        return mode in {"pr", "range", "worktree", "run", "slug"}
+    if policy == "auto":
+        return mode in {"pr", "range", "worktree"}
+    return False
+
+
+def _surface_context_status(payload: dict, default_status: str) -> str:
+    """Map producer status onto the compact context.json status vocabulary."""
+    status = str(payload.get("status") or "")
+    if status in {"truncated", "too_broad"}:
+        return "truncated"
+    return default_status
+
+
+def _surface_summary(payload: dict) -> str:
+    """Build a compact neutral summary from a surface-map.json payload."""
+    mode = payload.get("mode", "unknown")
+    status = payload.get("status", "unknown")
+    primary = payload.get("primary", [])
+    clusters = payload.get("clusters", [])
+
+    paths: list[str] = []
+    for item in primary:
+        if isinstance(item, dict) and item.get("path"):
+            paths.append(str(item["path"]))
+        if len(paths) >= 5:
+            break
+
+    labels: list[str] = []
+    for item in clusters:
+        if isinstance(item, dict) and item.get("label"):
+            labels.append(str(item["label"]))
+        if len(labels) >= 3:
+            break
+
+    parts = [f"{mode} surface map status {status}"]
+    parts.append(f"{len(primary)} primary surface(s)")
+    if paths:
+        parts.append("primary paths: " + ", ".join(paths))
+    if labels:
+        parts.append("clusters: " + ", ".join(labels))
+    return "; ".join(parts) + "."
+
+
+def _load_surface_payload(path: Path, warnings: list[str]) -> dict | None:
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except Exception as exc:
+        warnings.append(f"surface-map load failed for {path}: {exc}")
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _attach_surface_payload(
+    bundle: dict,
+    *,
+    payload: dict,
+    path: Path,
+    source: str,
+    default_status: str,
+) -> None:
+    payload_warnings = payload.get("warnings", [])
+    if not isinstance(payload_warnings, list):
+        payload_warnings = [str(payload_warnings)]
+
+    bundle["surface_map_status"] = _surface_context_status(payload, default_status)
+    bundle["surface_map_path"] = str(path)
+    bundle["surface_map_summary"] = _surface_summary(payload)
+    try:
+        bundle["surface_map_bytes"] = path.stat().st_size
+    except OSError:
+        bundle["surface_map_bytes"] = 0
+    bundle["surface_map_generated_at"] = str(payload.get("generated_at") or "")
+    bundle["surface_map_source"] = source
+    bundle["surface_map_warnings"] = [str(w) for w in payload_warnings]
+
+
+def _attach_surface_failure(bundle: dict, warnings: list[str], message: str, path: Path | None = None) -> None:
+    warnings.append(message)
+    bundle["surface_map_status"] = "failed"
+    bundle["surface_map_path"] = str(path) if path is not None else ""
+    bundle["surface_map_summary"] = ""
+    bundle["surface_map_bytes"] = 0
+    bundle["surface_map_generated_at"] = ""
+    bundle["surface_map_source"] = ""
+    bundle["surface_map_warnings"] = [message]
+    bundle["warnings"] = warnings
+
+
+def _attach_surface_skipped(bundle: dict, reason: str) -> None:
+    bundle["surface_map_status"] = "skipped"
+    bundle["surface_map_path"] = ""
+    bundle["surface_map_summary"] = ""
+    bundle["surface_map_bytes"] = 0
+    bundle["surface_map_generated_at"] = ""
+    bundle["surface_map_source"] = ""
+    bundle["surface_map_warnings"] = [reason]
+
+
+def _surface_artifact_candidates(roots: list[Path], *, exclude: Path | None = None, recursive: bool = True) -> list[Path]:
+    """Return deterministic existing surface-map.json candidates under roots."""
+    seen: set[Path] = set()
+    candidates: list[Path] = []
+    excluded = exclude.resolve() if exclude is not None else None
+    for root in roots:
+        if root is None:
+            continue
+        root = root.resolve()
+        direct = root / "surface-map.json"
+        if direct.is_file():
+            candidates.append(direct)
+        if recursive and root.is_dir():
+            for found in sorted(root.rglob("surface-map.json")):
+                candidates.append(found)
+    deduped: list[Path] = []
+    for item in candidates:
+        resolved = item.resolve()
+        if excluded is not None and resolved == excluded:
+            continue
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        deduped.append(item)
+    return deduped
+
+
+def _run_surface_mapper(
+    *,
+    repo_root: Path,
+    target: str,
+    diff_path: Path,
+    out_path: Path,
+) -> tuple[int, str, str]:
+    cmd = [
+        sys.executable,
+        str(SCRIPT_DIR / "surface-map.py"),
+        "--repo-root",
+        str(repo_root),
+        "--target",
+        target,
+        "--mode",
+        "diff",
+        "--caller",
+        "z-report",
+        "--diff-path",
+        str(diff_path),
+        "--out",
+        str(out_path),
+    ]
+    return _run_cmd_capture(cmd, cwd=str(repo_root))
+
+
+def _attach_fresh_diff_surface(
+    bundle: dict,
+    warnings: list[str],
+    *,
+    out_dir: Path,
+    repo_root: Path,
+    diff_text: str,
+    target: str,
+    source: str,
+) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    diff_path = out_dir / "surface-map.diff"
+    surface_path = out_dir / "surface-map.json"
+    try:
+        diff_path.write_text(diff_text, encoding="utf-8")
+    except OSError as exc:
+        _attach_surface_failure(bundle, warnings, f"surface-map diff write failed: {exc}", surface_path)
+        return
+
+    rc, _stdout, stderr = _run_surface_mapper(
+        repo_root=repo_root,
+        target=target,
+        diff_path=diff_path,
+        out_path=surface_path,
+    )
+    if rc != 0 or not surface_path.is_file():
+        detail = stderr or "no stderr"
+        _attach_surface_failure(
+            bundle,
+            warnings,
+            f"surface-map.py failed (rc={rc}): {detail}",
+            surface_path,
+        )
+        return
+
+    payload = _load_surface_payload(surface_path, warnings)
+    if payload is None:
+        _attach_surface_failure(bundle, warnings, "surface-map.py wrote unreadable payload", surface_path)
+        return
+
+    _attach_surface_payload(
+        bundle,
+        payload=payload,
+        path=surface_path,
+        source=source,
+        default_status="fresh",
+    )
+
+
+def _attach_existing_surface(
+    bundle: dict,
+    warnings: list[str],
+    *,
+    roots: list[Path],
+    source: str,
+    exclude: Path | None = None,
+    recursive: bool = True,
+) -> bool:
+    for path in _surface_artifact_candidates(roots, exclude=exclude, recursive=recursive):
+        payload = _load_surface_payload(path, warnings)
+        if payload is None:
+            continue
+        _attach_surface_payload(
+            bundle,
+            payload=payload,
+            path=path,
+            source=source,
+            default_status="existing",
+        )
+        return True
+    return False
+
+
+def _current_worktree_diff(warnings: list[str], *, cwd: str | None = None) -> str:
+    repo_cwd = cwd or str(REPO_ROOT)
+    rc_us, out_us, err_us = _run_cmd_capture(["git", "diff"], cwd=repo_cwd)
+    if rc_us != 0:
+        warnings.append(f"git diff failed for surface refresh (rc={rc_us}): {err_us}")
+        out_us = ""
+    rc_st, out_st, err_st = _run_cmd_capture(["git", "diff", "--staged"], cwd=repo_cwd)
+    if rc_st != 0:
+        warnings.append(f"git diff --staged failed for surface refresh (rc={rc_st}): {err_st}")
+        out_st = ""
+    return out_us + out_st
 
 
 def _classify_status(run_dir: Path) -> str:
@@ -968,9 +1231,108 @@ def _assemble_worktree_bundle(warnings: list[str], *, cwd: str | None = None) ->
     return bundle
 
 
+
+def _surface_target_label(descriptor: dict, mode: str) -> str:
+    if mode == "pr":
+        return f"PR #{descriptor.get('pr', '')}".strip()
+    if mode == "range":
+        if descriptor.get("range"):
+            return str(descriptor["range"])
+        if descriptor.get("base"):
+            return f"{descriptor['base']}...HEAD"
+    if mode == "worktree":
+        return "current worktree"
+    if mode in {"run", "slug"}:
+        return str(descriptor.get("run_id") or descriptor.get("slug") or mode)
+    return mode
+
+
+def _attach_surface_map(
+    bundle: dict,
+    descriptor: dict,
+    warnings: list[str],
+    *,
+    out_path: Path,
+    surface_policy: str,
+    tier: str,
+    run_dir: Path | None = None,
+) -> None:
+    """Attach compact surface_map_* fields to a context bundle when policy allows."""
+    mode = descriptor.get("mode", "")
+    if surface_policy == "off":
+        return
+
+    out_dir = out_path.parent
+    surface_path = out_dir / "surface-map.json"
+
+    if _surface_policy_allows_refresh(surface_policy, tier, mode):
+        if mode in {"pr", "range", "worktree"}:
+            _attach_fresh_diff_surface(
+                bundle,
+                warnings,
+                out_dir=out_dir,
+                repo_root=REPO_ROOT,
+                diff_text=str(bundle.get("diff") or ""),
+                target=_surface_target_label(descriptor, mode),
+                source="diff_context",
+            )
+            return
+        if mode in {"run", "slug"}:
+            _attach_fresh_diff_surface(
+                bundle,
+                warnings,
+                out_dir=out_dir,
+                repo_root=REPO_ROOT,
+                diff_text=_current_worktree_diff(warnings),
+                target=f"report-time current repo state for {_surface_target_label(descriptor, mode)}",
+                source="report_time_current_repo",
+            )
+            return
+
+    if mode in {"run", "slug"} and run_dir is not None:
+        roots = [run_dir]
+        found = _attach_existing_surface(
+            bundle,
+            warnings,
+            roots=roots,
+            source="historical_run",
+            exclude=None,
+        )
+        if not found and run_dir.parent.name == "archive":
+            found = _attach_existing_surface(
+                bundle,
+                warnings,
+                roots=[run_dir.parent.parent],
+                source="historical_plan",
+                exclude=None,
+                recursive=False,
+            )
+        if not found:
+            _attach_surface_skipped(bundle, "no existing surface-map.json artifact found for historical report")
+        return
+
+    if mode in {"pr", "range", "worktree"}:
+        found = _attach_existing_surface(
+            bundle,
+            warnings,
+            roots=[out_dir],
+            source="diff_context",
+            exclude=None,
+        )
+        if not found:
+            _attach_surface_skipped(bundle, "surface policy does not allow fresh mapping and no existing diff surface-map.json was found")
+
+
 # ── bundle assembly ────────────────────────────────────────────────────────────
 
-def assemble_bundle(descriptor: dict, *, out_path: Path | None, base: str | None) -> int:
+def assemble_bundle(
+    descriptor: dict,
+    *,
+    out_path: Path | None,
+    base: str | None,
+    surface_policy: str = "off",
+    tier: str = "standard",
+) -> int:
     """Assemble the full context bundle and write it to out_path.
 
     T002: implements run/slug bundle assembly.
@@ -1004,6 +1366,15 @@ def assemble_bundle(descriptor: dict, *, out_path: Path | None, base: str | None
         if out_path is None:
             out_path = Path(run_dir / "context.json") if run_dir else Path("context.json")
 
+        _attach_surface_map(
+            bundle,
+            descriptor,
+            warnings,
+            out_path=out_path,
+            surface_policy=surface_policy,
+            tier=tier,
+            run_dir=run_dir,
+        )
         _write_bundle(bundle, out_path)
         print(str(out_path))
         return 0
@@ -1012,6 +1383,14 @@ def assemble_bundle(descriptor: dict, *, out_path: Path | None, base: str | None
         bundle = _assemble_pr_bundle(descriptor, warnings)
         if out_path is None:
             out_path = Path("context.json")
+        _attach_surface_map(
+            bundle,
+            descriptor,
+            warnings,
+            out_path=out_path,
+            surface_policy=surface_policy,
+            tier=tier,
+        )
         _write_bundle(bundle, out_path)
         print(str(out_path))
         # Return 1 if there's an error message (gh missing / unauth)
@@ -1021,6 +1400,14 @@ def assemble_bundle(descriptor: dict, *, out_path: Path | None, base: str | None
         bundle = _assemble_range_bundle(descriptor, warnings)
         if out_path is None:
             out_path = Path("context.json")
+        _attach_surface_map(
+            bundle,
+            descriptor,
+            warnings,
+            out_path=out_path,
+            surface_policy=surface_policy,
+            tier=tier,
+        )
         _write_bundle(bundle, out_path)
         print(str(out_path))
         return 0
@@ -1029,6 +1416,14 @@ def assemble_bundle(descriptor: dict, *, out_path: Path | None, base: str | None
         bundle = _assemble_worktree_bundle(warnings)
         if out_path is None:
             out_path = Path("context.json")
+        _attach_surface_map(
+            bundle,
+            descriptor,
+            warnings,
+            out_path=out_path,
+            surface_policy=surface_policy,
+            tier=tier,
+        )
         _write_bundle(bundle, out_path)
         print(str(out_path))
         return 0
@@ -1051,6 +1446,29 @@ def _write_bundle(bundle: dict, out_path: Path) -> None:
     tmp.rename(out_path)
 
 
+def _parse_report_positionals(tokens: list[str], flag_tier: str | None) -> tuple[str | None, str, str | None]:
+    """Extract optional target, tier, and since-ref from free-form positional tokens."""
+    tier = flag_tier or "standard"
+    target_parts: list[str] = []
+    base_from_since: str | None = None
+    idx = 0
+    while idx < len(tokens):
+        tok = tokens[idx]
+        if tok in TIERS:
+            tier = tok
+            idx += 1
+            continue
+        if tok == "since" and idx + 1 < len(tokens):
+            base_from_since = tokens[idx + 1]
+            idx += 2
+            continue
+        target_parts.append(tok)
+        idx += 1
+
+    target = " ".join(target_parts).strip() or None
+    return target, tier, base_from_since
+
+
 # ── CLI ────────────────────────────────────────────────────────────────────────
 
 def main(argv: list[str] | None = None) -> int:
@@ -1059,10 +1477,9 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "target",
-        nargs="?",
-        default=None,
-        help="Target: run-id, slug, PR (#N / URL), or range (A..B).",
+        "tokens",
+        nargs="*",
+        help="Target and optional tier: run-id, slug, PR, range, current, changes, or since <ref>.",
     )
     parser.add_argument(
         "--resolve-only",
@@ -1074,17 +1491,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pr", dest="flag_pr", default=None, metavar="N|URL", help="Pull request number or URL.")
     parser.add_argument("--range", dest="flag_range", default=None, metavar="A..B", help="Git commit range.")
     parser.add_argument("--base", dest="flag_base", default=None, metavar="REF", help="Base ref for feature-branch diff.")
-    parser.add_argument("--out", default=None, metavar="PATH", help="Output path for bundle JSON.")
+    parser.add_argument("--out", "--save", dest="out", default=None, metavar="PATH", help="Output path for bundle JSON.")
+    parser.add_argument("--tier", choices=sorted(TIERS), default=None, help="Report depth tier.")
+    parser.add_argument("--surface", choices=sorted(SURFACE_POLICIES), default="auto", help="Surface-map policy.")
 
     args = parser.parse_args(argv)
 
+    target, tier, base_from_since = _parse_report_positionals(args.tokens, args.tier)
+    flag_base = args.flag_base or base_from_since
+
     descriptor = resolve_target(
-        target=args.target,
+        target=target,
         flag_run=args.flag_run,
         flag_slug=args.flag_slug,
         flag_pr=args.flag_pr,
         flag_range=args.flag_range,
-        flag_base=args.flag_base,
+        flag_base=flag_base,
     )
 
     if args.resolve_only:
@@ -1104,9 +1526,15 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         return 0
 
-    # Full bundle assembly (T002/T003)
+    # Full bundle assembly (T002/T003/T006)
     out_path = Path(args.out) if args.out else None
-    return assemble_bundle(descriptor, out_path=out_path, base=args.flag_base)
+    return assemble_bundle(
+        descriptor,
+        out_path=out_path,
+        base=flag_base,
+        surface_policy=args.surface,
+        tier=tier,
+    )
 
 
 if __name__ == "__main__":

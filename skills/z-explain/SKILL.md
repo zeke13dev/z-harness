@@ -1,8 +1,8 @@
 ---
 name: z-explain
 disable-model-invocation: false
-description: One-shot structured explanation of code at a chosen depth lens. Replaces ad-hoc "explain at high level / more detail" prompts. Citations required. Handoff to /z-learn when interactive exploration is warranted. Read-only, no cross-LLM consult.
-argument-hint: "<target> [orientation|walkthrough|deep|audit-brief] or free-text"
+description: One-shot structured explanation of code or repo orientation at a chosen depth lens. Supports --repo orientation and --surface policy. Citations required. Handoff to /z-learn when interactive exploration is warranted. Read-only, no cross-LLM consult.
+argument-hint: "--repo [orientation|walkthrough|audit-brief] [--surface=auto|off|force] | <target> [orientation|walkthrough|deep|audit-brief] [--surface=auto|off|force] or free-text"
 runtime: c1
 driver_features_required:
   - subagent
@@ -10,7 +10,7 @@ driver_features_required:
 unsupported_driver_behavior: explicit_gate
 ---
 
-You are running **z-harness `/z-explain`** — a lightweight, one-shot code explainer. You deliver ONE structured answer at the requested depth, with file:line citations. When the topic warrants ongoing exploration, you recommend `/z-learn` and stop. You do not run an interactive loop.
+You are running **z-harness `/z-explain`** — a lightweight, one-shot code explainer. You deliver ONE structured answer at the requested depth, with file:line citations. `/z-explain --repo orientation` is the one-shot repo-orientation path; it still produces one answer at one lens. When the topic warrants ongoing exploration, you recommend `/z-learn` and stop. You do not run an interactive loop.
 
 Arguments (from `$ARGUMENTS`):
 
@@ -63,20 +63,25 @@ Run this when intent clearly mismatches a one-shot explanation:
 
 | Signal | Route to |
 |--------|----------|
-| Terrain unknown; "where does X live?", "map the codebase" | `/z-map <question>` |
+| Terrain unknown; "where does X live?", "map the codebase" | `/z-map <question>` unless the user explicitly asked `/z-explain --repo orientation` |
 | Find bugs / correctness issues | `/z-audit <target>` |
 | Change or fix code | `/z-do <task>` or `/z-plan <task>` |
 | Multi-turn tutoring already needed ("walk me through everything", "keep going") | `/z-learn <target>` |
 
 If routing, write `$CURRENT_ARCHIVE_DIR/route-decision.md` with the reason, log `explain_route_handoff`, recommend the command, and **stop**. Do not auto-dispatch.
 
-## Phase 1 — Parse target and lens
+## Phase 1 — Parse target, lens, and surface policy
 
-1. **Target** — one of: file path, module/crate name, symbol (`fn foo`, `class Bar`), plan slug, or free-text topic ("order ingestion pipeline").
-2. **Lens** — from explicit keyword in args, or infer from fuzzy NL (see table above). State the chosen lens in your response header: `Lens: orientation` (etc.).
-3. **Baseline calibration (optional, one line):** If the user gave no depth signal, assume they are new to the area unless context suggests otherwise.
+1. **Surface policy** — parse `--surface=auto|off|force`; default is `auto`. Unknown values are invalid usage: state the accepted values and stop without guessing.
+   - `auto` may use surface mapping when it improves broad-target grounding.
+   - `off` disables surface mapping entirely and preserves the current grounding path: doc-fetcher / plan precontext, then minimum direct reads or one focused Explore exactly as before. Do not run `scripts/surface-map.py`, do not dispatch the repo surface Explore batch, and do not write `surface-map.json`.
+   - `force` runs surface mapping for any non-empty target before direct reads, while still falling back to current grounding if mapping fails.
+2. **Repo flag** — if `--repo` is present, set `TARGET="<repo root>"` and `TARGET_KIND=repo`. `/z-explain --repo orientation` is the canonical repo-orientation invocation.
+3. **Target** — otherwise one of: file path, module/crate name, symbol (`fn foo`, `class Bar`), plan slug, or free-text topic ("order ingestion pipeline").
+4. **Lens** — from explicit keyword in args, or infer from fuzzy NL (see table above). State the chosen lens in your response header: `Lens: orientation` (etc.). `--repo` defaults to `orientation`; it accepts `orientation`, `walkthrough`, or `audit-brief`. `deep` is invalid with `--repo` unless the user also names a narrower file, symbol, directory, or subsystem focus.
+5. **Baseline calibration (optional, one line):** If the user gave no depth signal, assume they are new to the area unless context suggests otherwise.
 
-If args are empty, ask one question: "What should I explain — file, module, pipeline, or topic?" Do not proceed without a target.
+If args are empty, ask one question: "What should I explain — file, module, pipeline, topic, or `--repo orientation`?" Do not proceed without a target.
 
 <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the empty-args
      target prompt via their native channel. Silent omission is forbidden. -->
@@ -100,23 +105,43 @@ Agent(
    TARGET_PLAN_DIR="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$TARGET_SLUG")"
    ```
    Read `$TARGET_PLAN_DIR/MAP.md`, `$TARGET_PLAN_DIR/SPEC.md`, `$TARGET_PLAN_DIR/GRILL.md`, and `$TARGET_PLAN_DIR/LEARN.md` if present.
-3. Read the minimum source files needed for the chosen lens. Use Read/Grep/Glob directly for ≤3 files; use Explore (Haiku) for broader targets:
+
+<!-- include: _fragments/surface-mapping.md -->
+
+3. **Surface mapping branch** — run after doc-fetcher and plan precontext, before source reads:
+
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface the repo surface Explore dispatch requirement and skip the live surface batch if unavailable. Existing grounding, including `--surface=off`, must continue with a warning. -->
+   - **`--surface=off`** — skip this branch and continue with step 4. This is the compatibility path and must preserve current grounding behavior.
+   - **`--repo` with `auto` or `force`** — dispatch one parallel batch of three Explore facets, using the shared facet prompts above: top-level structure; entry points and runtime surfaces; key modules and seams. Each facet returns only cited findings (`file:line`), no recommendations.
+     - Merge the three facet returns into `$CURRENT_ARCHIVE_DIR/surface-map.json` using the shared schema: `mode=repo`, `caller=z-explain`, `target.raw="$ARGUMENTS"`, `target.inferred_kind=repo`.
+     - Put entrypoint/runtime facts in `primary` with relation `entrypoint` or `exports`; structural directories and docs/tests in `related`; subsystem boundaries in `clusters`; first-read pointers in `suggested_reads`.
+     - Set `status=ok` only when all three facets returned cited findings within caps; `partial` when at least one facet is useful but another is missing; `truncated` or `too_broad` when caps cut coverage; `error` when the batch failed. Keep warnings explicit.
+     - Ignore uncited Explore claims until direct reads verify them.
+   - **Non-`--repo` broad target with `auto` or any target with `force`** — call deterministic preflight when it helps target reads:
+     ```bash
+     python3 scripts/surface-map.py --repo-root "$PWD" --target "<target>" --mode symbol --caller z-explain --out "$CURRENT_ARCHIVE_DIR/surface-map.json"
+     ```
+     Use `ok` / `partial` maps as a reading guide only. If the status is `error`, `not_found`, `ambiguous`, `too_broad`, or `truncated`, surface the warning and fall back to step 4 unless the user explicitly asked for surface-only narrowing.
+   - **Exact file/range target with `auto`** — keep the current direct-read path unless `--surface=force`.
+4. Read the minimum source files needed for the chosen lens. Use Read/Grep/Glob directly for ≤3 files; use Explore (Haiku) for broader targets:
 ```
 Agent(
   subagent_type="Explore",
   model: "haiku",
   description="Explain read: <target>",
-  prompt="Target: <target>\nLens: <lens>\n\nReturn facts needed for ONE <lens> explanation. Every code claim needs file:line citations. Be terse."
+  prompt="Target: <target>\nLens: <lens>\nSurface map: <none|$CURRENT_ARCHIVE_DIR/surface-map.json>\n\nReturn facts needed for ONE <lens> explanation. Every code claim needs file:line citations. Be terse."
 )
 ```
 
-Save a one-paragraph grounding note to `$CURRENT_ARCHIVE_DIR/grounding.md`.
+Save a one-paragraph grounding note to `$CURRENT_ARCHIVE_DIR/grounding.md`, including `surface_map_status` and `surface_map_path` when a map exists.
 
 ## Phase 3 — Deliver one structured answer
 
 Write exactly ONE explanation chunk. Structure by lens:
 
 **orientation** — (1) purpose in one sentence, (2) key design decisions with rationale, (3) what it depends on / what depends on it, (4) 2-3 representative citations.
+
+**orientation with `--repo`** — one-shot repo orientation only, not an atlas: (1) project shape in one paragraph, (2) top-level structure, (3) entry points and runtime surfaces, (4) key modules/seams, (5) where to read next, (6) optional `/z-learn --repo` handoff. Every factual claim must cite source lines from the surface facets or direct reads.
 
 **walkthrough** — numbered steps in execution/data order; each step names the component and cites entry points; end with a one-line "where to read next" pointer.
 
@@ -126,11 +151,17 @@ Write exactly ONE explanation chunk. Structure by lens:
 
 **Citation contract:** Every factual code claim gets `file:line`. High-level summaries still anchor to representative lines.
 
+**Surface failure/truncation behavior:** If `surface-map.json` is `too_broad`, `truncated`, `ambiguous`, or has multiple unrelated clusters, give a bounded orientation only for cited facts that remain honest. Otherwise ask the user to narrow. For repo orientation, recommend `/z-learn --repo` for progressive exploration or `/z-map <question>` for terrain research; do not invoke either command. If status is `error`, show a short warning and use the current non-surface grounding path.
+
 ## Phase 4 — Handoff and finalize
 
 1. **Continue gate.** If the topic is multi-component, the user asked an open-ended question, or the answer ends with natural "deeper" branches, recommend:
 
    > Continue interactively: `/z-learn <same-target>`
+
+   For repo orientation, prefer:
+
+   > Continue interactively: `/z-learn --repo`
 
    Optionally seed `$PLANS_BASE/.learn-pending.md` so `/z-learn` does not repeat work. Use the **shared staging schema** (below). Only write if the file does not exist, or if it exists for the **same** `target:` — do not overwrite an active learn session on a different target without warning.
 
@@ -141,6 +172,7 @@ Write exactly ONE explanation chunk. Structure by lens:
    started: <iso8601 UTC>
    current_lens: <lens used in this explain>
    last_focus: <one-line focus from this answer>
+   surface_map_path: <archive path or none>
 
    ## Prior explain
    lens: <orientation|walkthrough|deep|audit-brief>
@@ -151,7 +183,7 @@ Write exactly ONE explanation chunk. Structure by lens:
 
    ## Turn log
    ```
-   When seeding from `/z-explain`, write the header + `## Prior explain` + an empty `## Turn log` section. Do not append turn entries — `/z-learn` owns the turn log.
+   When seeding from `/z-explain`, write the header + `surface_map_path` when present + `## Prior explain` + an empty `## Turn log` section. Do not append turn entries — `/z-learn` owns the turn log.
 
 2. **Log completion:**
    ```bash
@@ -170,7 +202,7 @@ Write exactly ONE explanation chunk. Structure by lens:
 
 ## Hard rules
 
-- **One answer, one lens.** Do not dump all four lenses in one response.
+- **One answer, one lens.** Do not dump all four lenses in one response; `--repo` changes grounding breadth, not the one-answer contract.
 - **Citations on every code claim.**
 - **Handoff is advisory** — never auto-dispatch `/z-learn`.
 - **No emojis** anywhere.

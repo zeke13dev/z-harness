@@ -51,6 +51,10 @@ from runtime.drivers._export_utils import (
     _RUN_BRIEF_SENTINEL,
 )
 
+_SURFACE_FRAGMENT = "_fragments/surface-mapping.md"
+_SURFACE_MARKER = f"<!-- include: {_SURFACE_FRAGMENT} -->"
+_SURFACE_SCHEMA_SENTINEL = '"schema_version": 1'
+
 # The worktree root — used for tests that rely on real repo fixtures
 # (run-brief-finalize.md, commands/_fragments/).
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -90,6 +94,43 @@ class TestIncludeInline:
         via_inline = inline_includes(sample, None, _REPO_ROOT)
         assert via_expand == via_inline
 
+    def test_surface_mapping_fragment_inline_contract(self):
+        """surface-mapping fragment must inline with schema, facets, and gate comments."""
+        expanded = expand_includes(f"Before\n{_SURFACE_MARKER}\nAfter\n", _REPO_ROOT)
+
+        assert _next_include_match(expanded) is None, (
+            "surface-mapping include marker still present after expansion"
+        )
+        assert _SURFACE_SCHEMA_SENTINEL in expanded
+        assert "Top-level structure" in expanded
+        assert "Entry points and runtime surfaces" in expanded
+        assert "Key modules and seams" in expanded
+        assert "ok|partial|not_found|ambiguous|too_broad|truncated|error" in expanded
+        assert '"max_primary_files": 10' in expanded
+        assert "RUNTIME-GATE: subagent" in expanded
+        forbidden_command = "/z-" + "grasp"
+        assert forbidden_command not in expanded
+        assert forbidden_command.removeprefix("/") not in expanded
+
+
+    def test_z_explain_repo_surface_policy_expands_in_enumerated_skill(self):
+        """z-explain must expose repo orientation and surface policy after include expansion."""
+        sources = enumerate_sources(_REPO_ROOT)
+        explain = next(entry for entry in sources["skills"] if entry["id"] == "z-explain")
+        body = explain["body"]
+
+        assert _SURFACE_MARKER not in body
+        assert _SURFACE_SCHEMA_SENTINEL in body
+        assert "/z-explain --repo orientation" in body
+        assert "--surface=auto|off|force" in body
+        assert "--surface=off" in body
+        assert "preserve current grounding behavior" in body
+        assert "surface-map.json" in body
+        assert "Top-level structure" in body
+        assert "Entry points and runtime surfaces" in body
+        assert "Key modules and seams" in body
+        assert "exactly ONE explanation chunk" in body
+        assert "One answer, one lens" in body
 
 class TestFenceSkip:
     """fence-skip: markers inside fenced code blocks are preserved verbatim."""

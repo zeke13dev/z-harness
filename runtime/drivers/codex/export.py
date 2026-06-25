@@ -30,6 +30,7 @@ from typing import Any
 
 from runtime.drivers._export_utils import (
     ExportResult,
+    _parse_frontmatter,
     enumerate_sources,
     output_path_for,
     validate_capabilities,
@@ -61,6 +62,13 @@ def _rewrite_body(body: str) -> str:
         body,
         lambda _block: _REPLACEMENT_COMMENT,
     )
+
+
+def _render_native_skill(entry: dict[str, Any]) -> str:
+    """Render a native SKILL.md with expanded includes and original frontmatter."""
+    source_text = entry["source_path"].read_text(encoding="utf-8")
+    _, source_body = _parse_frontmatter(source_text)
+    return source_text[: len(source_text) - len(source_body)] + entry["body"]
 
 
 # ---------------------------------------------------------------------------
@@ -231,9 +239,9 @@ def export(
             out_path = export_root / relative
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        # Preserve the source SKILL.md verbatim (frontmatter intact, no rewriting).
-        source_text = entry["source_path"].read_text(encoding="utf-8")
-        out_path.write_text(source_text, encoding="utf-8")
+        # Preserve source frontmatter, but write the enumerated body so includes expand.
+        skill_text = _render_native_skill(entry)
+        out_path.write_text(skill_text, encoding="utf-8")
         emitted.append(out_path)
 
     # --- Emit consolidated AGENTS.md ---

@@ -2,7 +2,7 @@
 name: z-report
 disable-model-invocation: false
 description: "Depth-tiered narrative of exactly what happened + what follow-ups exist, for a z-harness run or past work (run-id / plan-slug / PR / commit-range). User-invoked, read-only, composes existing reporting primitives. Does not auto-fire."
-argument-hint: "[target] [summary|standard|deep] | --run <id> --slug <s> --pr <N|url> --range <A..B> --base <ref> --save <path>"
+argument-hint: "[target|current|changes|since <ref>] [summary|standard|deep] [--surface=auto|off|existing|refresh] | --run <id> --slug <s> --pr <N|url> --range <A..B> --base <ref> --save <path>"
 runtime: c1
 driver_features_required:
   - subagent
@@ -37,7 +37,7 @@ $ARGUMENTS
    ```
 5. Notification policy: `/z-report` is low-noise — no push on completion unless policy demands it. See [docs/human/config.md](docs/human/config.md) (`notify.level` key).
 
-## Phase 0 — Parse target and depth
+## Phase 0 — Parse target, depth, and surface policy
 
 **Depth** is one of `summary | standard | deep`. Resolve from `$ARGUMENTS` as follows:
 - If an explicit keyword (`summary`, `standard`, `deep`) appears, use it.
@@ -46,11 +46,65 @@ $ARGUMENTS
 
 Record the chosen tier as `TIER`.
 
-**Target resolution** — delegate to `scripts/report-context.py --resolve-only`:
+**Surface policy** is one of `auto | off | existing | refresh`. Resolve from `$ARGUMENTS` as follows and record the chosen value as `SURFACE_POLICY`:
+- Default: `auto`.
+- `off` disables surface-map attachment entirely. `context.json` may still contain ordinary report fields, but no fresh or existing `surface_map_*` fields are required.
+- `existing` consumes only already-assembled surface artifacts that `scripts/report-context.py` can attach to `context.json`; it never runs a fresh mapper.
+- `refresh` allows `scripts/report-context.py` to produce fresh deterministic `diff` surface data where the tier policy permits. For run/slug historical reports, any refreshed surface must be labeled as report-time current repo state, not historical truth.
+- `auto` applies the tier policy below.
+
+**Surface tier policy:**
+- `summary` consumes existing surface data only. It must not trigger live surface refresh, even with diff-backed targets.
+- `standard` and `deep` diff-backed reports (`pr`, `range`, `base`, `worktree`, `current`, `changes`, `since <ref>`) may attach fresh deterministic `diff` surface data unless `--surface=off` or `--surface=existing`.
+- `run` and `slug` reports consume existing surface artifacts unless `--surface=refresh` is explicit and the selected tier is `standard` or `deep`.
+- Missing, failed, truncated, or skipped surface data is non-fatal; render any warning from `context.json` and continue with the normal report.
+
+**Repo-state aliases (T006 resolver contract):**
+- `/z-report current [summary|standard|deep] [--surface=auto|off|existing|refresh]` resolves to the existing worktree report mode.
+- `/z-report changes [summary|standard|deep] [--surface=auto|off|existing|refresh]` is an alias for `current` / worktree mode.
+- `/z-report since <ref> [summary|standard|deep] [--surface=auto|off|existing|refresh]` resolves to the existing `--base <ref>` / range diff mode; the wrapper below normalizes this alias before invoking `report-context.py`.
+- `/z-report --base <ref> --surface=auto [standard|deep]` is the canonical explicit diff-backed invocation for fresh deterministic surface attachment.
+- Unknown `--surface` values are invalid usage: state the accepted values and stop without guessing.
+
+T006 provides native parser/context support for these aliases, `--tier`, and `--surface`.
+
+**Target resolution** — delegate to `scripts/report-context.py --resolve-only` with the same target, tier, and surface policy that Phase 1 will use. Build target arguments by removing `/z-report` control flags (`--save`, `--tier`, `--surface`) and positional depth tokens, then append the normalized `--tier "$TIER"` and `--surface "$SURFACE_POLICY"` flags explicitly.
+
+Normalize `since <ref>` to the supported `--base <ref>` form; keep already-supported explicit target flags unchanged.
 
 ```bash
+REPORT_CONTEXT_TARGET_ARGS="$(python3 - "$ARGUMENTS" <<'PY'
+import shlex, sys
+
+tokens = shlex.split(sys.argv[1])
+out = []
+skip_next = False
+depths = {"summary", "standard", "deep"}
+
+for idx, tok in enumerate(tokens):
+    if skip_next:
+        skip_next = False
+        continue
+    if tok in depths:
+        continue
+    if tok in {"--surface", "--tier", "--save"}:
+        skip_next = True
+        continue
+    if tok.startswith("--surface=") or tok.startswith("--tier=") or tok.startswith("--save="):
+        continue
+    if tok == "since" and idx + 1 < len(tokens):
+        out.extend(["--base", tokens[idx + 1]])
+        skip_next = True
+        continue
+    out.append(tok)
+
+print(shlex.join(out))
+PY
+)"
 DESCRIPTOR="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/report-context.py" \
-  --resolve-only $ARGUMENTS 2>&1)"
+  --resolve-only $REPORT_CONTEXT_TARGET_ARGS \
+  --tier "$TIER" \
+  --surface "$SURFACE_POLICY" 2>&1)"
 RESOLVE_EXIT=$?
 ```
 
@@ -70,6 +124,9 @@ Parse the JSON descriptor from `$DESCRIPTOR`. Extract the `mode` field:
   > - `--pr <N|URL>` — PR number or `github.com/.../pull/N` URL
   > - `--range <A..B>` — git range, e.g. `main..HEAD`
   > - `--base <ref>` — feature-branch diff against ref
+  > - `current` or `changes` — current worktree diff
+  > - `since <ref>` — diff since the named base ref
+  > - `--surface=auto|off|existing|refresh` — surface-map policy
 
   After the user responds, re-run Phase 0 with the clarified input. Do not proceed with an ambiguous descriptor.
 
@@ -90,12 +147,14 @@ Parse the JSON descriptor from `$DESCRIPTOR`. Extract the `mode` field:
 
 ## Phase 1 — Assemble context bundle
 
-Call `scripts/report-context.py` (full run, no `--resolve-only`) to compose the deterministic context bundle. Pass the resolved descriptor flags plus `--out`:
+Call `scripts/report-context.py` (full run, no `--resolve-only`) to compose the deterministic context bundle. Pass the normalized target arguments plus `--tier "$TIER"`, `--surface "$SURFACE_POLICY"`, and `--out`. `scripts/report-context.py` is the only place that may attach surface data; render branches consume only the fields present in the resulting `context.json`.
 
 ```bash
 CONTEXT_PATH="$CURRENT_ARCHIVE_DIR/context.json"
 python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/report-context.py" \
-  $ARGUMENTS \
+  $REPORT_CONTEXT_TARGET_ARGS \
+  --tier "$TIER" \
+  --surface "$SURFACE_POLICY" \
   --out "$CONTEXT_PATH" 2>&1
 CONTEXT_EXIT=$?
 ```
@@ -110,9 +169,12 @@ ctx = json.loads(pathlib.Path("$CONTEXT_PATH").read_text()) if "$CONTEXT_PATH" e
 DIFF_BYTES   = ctx.get("diff_bytes", 0)
 EVENTS_CHARS = ctx.get("events_chars", 0)
 RUN_BRIEF_PRESENT = ctx.get("run_brief_present", False)
+SURFACE_MAP_STATUS = ctx.get("surface_map_status", "omitted")
+SURFACE_MAP_SUMMARY = ctx.get("surface_map_summary", "")
+SURFACE_MAP_WARNINGS = ctx.get("surface_map_warnings", [])
 ```
 
-Record `DIFF_BYTES`, `EVENTS_CHARS`, and `RUN_BRIEF_PRESENT` for Phase 2.
+Record `DIFF_BYTES`, `EVENTS_CHARS`, `RUN_BRIEF_PRESENT`, `SURFACE_MAP_STATUS`, `SURFACE_MAP_SUMMARY`, and `SURFACE_MAP_WARNINGS` for Phase 2.
 
 Resolve `RUN_DIR` once here for use in Phase 2 Branch A and Phase 3 Step 2:
 
@@ -136,14 +198,14 @@ Apply the defensive guard before invoking the renderer (`RUN_DIR` was resolved a
 
 If `RUN_DIR` is empty or the directory does not exist, **skip the fast path entirely and proceed to Branch C** (report-synth). Do not invoke `render-run-brief.py` with an empty or missing `--run-dir` — it would fail silently or produce no output.
 
-Otherwise emit the fast-path render and skip the subagent entirely:
+Otherwise capture the fast-path render as `NARRATIVE` and skip the subagent entirely:
 
 ```bash
-python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-run-brief.py" \
-  --run-dir "$RUN_DIR" --format chat
+NARRATIVE="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-run-brief.py" \
+  --run-dir "$RUN_DIR" --format chat)"
 ```
 
-Print the output to chat and proceed to Phase 3 (output + finalize) with `FELL_BACK_INLINE=false`.
+Append any fast-path `## Surface Map` section to `NARRATIVE` before proceeding to Phase 3. If `context.json` includes `surface_map_summary` or `surface_map_warnings`, append the section after the run-brief render using only `context.json` fields (`surface_map_status`, `surface_map_source`, `surface_map_summary`, `surface_map_generated_at`, and `surface_map_warnings`). The fast path must not read `surface_map_path`, run discovery, or refresh surface data; summary-tier surface facts are existing-only. Set `FELL_BACK_INLINE=false`.
 
 Do not dispatch `report-synth` when the fast path fires.
 
@@ -191,7 +253,7 @@ If the size gate does **not** fire (sizes are within threshold, OR tier is `summ
 Agent(
   subagent_type="report-synth",
   description="Synthesize z-report narrative for <MODE> target at <TIER> tier",
-  prompt="context_path: <CONTEXT_PATH>\ntier: <TIER>\nmode: <MODE>"
+  prompt="context_path: <CONTEXT_PATH>\ntier: <TIER>\nmode: <MODE>\nsurface_contract: Use only context.json surface_map_* fields for any Surface Map discussion. Do not read surface_map_path, invoke discovery, or call sibling z-harness commands."
 )
 ```
 
@@ -201,13 +263,15 @@ If the subagent is unavailable (driver does not support `subagent`) OR `SYNTH_OU
 
 Otherwise set `NARRATIVE = SYNTH_OUTPUT` and `FELL_BACK_INLINE=false`. Proceed to Phase 3.
 
+`report-synth` may include a compact `Surface Map` section only when `context.json` contains `surface_map_summary` and/or `surface_map_warnings`. It must label `surface_map_source=report_time_current_repo` as report-time current state, not historical truth for run/slug reports.
+
 ### Branch D — Inline deterministic digest fallback
 
 Used when: subagent support is absent, `report-synth` returns the `INSUFFICIENT_CONTEXT:` marker, `SYNTH_OUTPUT` is empty, or the user chose "Summary only" in the size gate.
 
 Set `FELL_BACK_INLINE=true`.
 
-Read `context.json` (or use an empty dict if missing) and render the following sections directly, in order, with no LLM synthesis.
+Read `context.json` (or use an empty dict if missing) and render the following sections directly, in order, with no LLM synthesis and no reads from `surface_map_path`.
 
 **0. Incomplete-context banner (conditional)**
 
@@ -272,7 +336,24 @@ If `ctx["followups"]` is non-empty, render as a markdown list:
 If `ctx["followups_note"]` is present, append it as a blockquote.
 If absent or empty: `No open follow-ups recorded.`
 
-**4. Cost line**
+**4. Surface Map (conditional)**
+
+Render this section only when at least one of `ctx["surface_map_summary"]`, `ctx["surface_map_status"]`, or `ctx["surface_map_warnings"]` is present and non-empty:
+
+```markdown
+## Surface Map
+```
+
+Use only these `context.json` fields:
+- `surface_map_status`
+- `surface_map_source`
+- `surface_map_summary`
+- `surface_map_generated_at`
+- `surface_map_warnings`
+
+If `surface_map_summary` is present, render it as the body. If `surface_map_source` is `report_time_current_repo`, prefix the body with: `Report-time current repo state, not historical run truth.` If warnings are present, render them as bullets. If the status is `failed`, `truncated`, `skipped`, or `omitted`, state the status plainly and do not infer missing coverage. Never read `surface_map_path` from the inline fallback.
+
+**5. Cost line**
 
 ```markdown
 ## Cost
@@ -285,7 +366,7 @@ If `ctx["cost"]` is non-empty, render each subagent row:
 
 If absent or empty: `Cost data not available.`
 
-**5. Phase wall-time table**
+**6. Phase wall-time table**
 
 ```markdown
 ## Phase Wall-Time
@@ -300,7 +381,7 @@ If `ctx["phases"]` is non-empty, render as a markdown table:
 Omit the `User wait` column if no phase has a `user_wait_ms` field.
 If absent or empty: `No phase timing data available.`
 
-Set `NARRATIVE` to the concatenation of these five sections.
+Set `NARRATIVE` to the concatenation of these sections.
 
 ## Phase 3 — Output + finalize
 
@@ -409,7 +490,7 @@ Print only the applicable advisories. Omit any advisory whose trigger condition 
 
 1. **Read-only on the target repo.** `/z-report` writes only `REPORT.md` (at `<run-dir>/REPORT.md` for run/slug targets) and the `--save` path. No edits to any source file, config, plan artifact, or other path in the target repo.
 2. **No sibling-command invocation.** `/z-report` never spawns, invokes, or auto-dispatches any other z-harness command (e.g., `/z-improve`, `/z-followup-next`, `/z-explain`). Handoffs to those commands are advisory prose recommendations only — the user invokes them.
-3. **Every factual claim sourced from `context.json`.** All metrics, timings, decisions, costs, follow-ups, and status values in the narrative must originate from the `context.json` bundle assembled in Phase 1 (which is itself derived from events/metrics/artifacts/diff). No fabricated numbers, no inferred timings.
+3. **Every factual claim sourced from `context.json`.** All metrics, timings, decisions, costs, follow-ups, status values, and surface-map statements in the narrative must originate from the `context.json` bundle assembled in Phase 1 (which is itself derived from events/metrics/artifacts/diff and attached surface fields). Renderers must use only `context.json` `surface_map_*` fields for surface claims; they must not read `surface_map_path`, invoke discovery, or infer coverage from omitted data.
 4. **No emojis.** The narrative and all printed output must contain no emoji characters.
 5. **One narrative, one tier per invocation.** A single `/z-report` call produces exactly one narrative at exactly one depth tier. Tier is resolved in Phase 0 and does not change after the size-gate decision.
 

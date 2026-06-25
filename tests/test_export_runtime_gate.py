@@ -40,10 +40,21 @@ from runtime.drivers._export_utils import enumerate_sources, _parse_frontmatter 
 # ---------------------------------------------------------------------------
 
 def _make_fixture_repo(tmp: Path) -> Path:
-    """Create a minimal fixture repo with one skill carrying a RUNTIME-GATE comment."""
+    """Create a minimal fixture repo with direct and included RUNTIME-GATE comments."""
     repo = tmp / "fixture_repo"
     agents_dir = repo / "agents"
     agents_dir.mkdir(parents=True)
+    fragments_dir = repo / "_fragments"
+    fragments_dir.mkdir(parents=True)
+    (fragments_dir / "surface-mapping.md").write_text(
+        textwrap.dedent("""\
+        ## Surface mapping fixture fragment
+
+        <!-- RUNTIME-GATE: subagent; non-supporting drivers must preserve this included gate comment. -->
+        Included fragment body.
+        """),
+        encoding="utf-8",
+    )
 
     # Fixture skill: skills/<id>/SKILL.md layout (post-migration)
     skill_dir = repo / "skills" / "z-fixture-gate"
@@ -61,7 +72,11 @@ def _make_fixture_repo(tmp: Path) -> Path:
            <!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface this before any re-entry. -->
         Use AskUserQuestion to present the remediation.
 
-        ## Phase 1 — main body
+        ## Phase 1 — included fragment
+
+        <!-- include: _fragments/surface-mapping.md -->
+
+        ## Phase 2 — main body
 
         The rest of the skill body here.
         """),
@@ -173,6 +188,22 @@ class TestRuntimeGateTokenSurvival(unittest.TestCase):
         """pi prompt renderer must preserve RUNTIME-GATE category=risk token."""
         rendered = _render_pi_prompt(self._fixture_repo)
         self._assert_token_survives(rendered, "pi")
+
+    def test_included_fragment_runtime_gate_survives_all_renderers(self) -> None:
+        """RUNTIME-GATE comments from included fragments survive rendering."""
+        rendered_by_surface = {
+            "cursor": _render_cursor(self._fixture_repo),
+            "codex": _render_codex(self._fixture_repo),
+            "agy": _render_agy_workflow(self._fixture_repo),
+            "pi": _render_pi_prompt(self._fixture_repo),
+        }
+
+        for surface, rendered in rendered_by_surface.items():
+            with self.subTest(surface=surface):
+                self.assertNotIn("<!-- include: _fragments/surface-mapping.md -->", rendered)
+                self.assertIn("Surface mapping fixture fragment", rendered)
+                self.assertIn("RUNTIME-GATE: subagent", rendered)
+                self.assertIn("included gate comment", rendered)
 
     def test_runtime_gate_comment_not_rewritten_as_agent_dispatch(self) -> None:
         """RUNTIME-GATE HTML comment must NOT be treated as an Agent() call site.
@@ -451,6 +482,164 @@ class TestLiveExportZAttend(unittest.TestCase):
             )
 
 
+
+class TestLiveExportZExplainSurfacePolicy(unittest.TestCase):
+    """End-to-end export coverage for the /z-explain repo surface command text."""
+
+    def _exported_text(
+        self,
+        exporter_module: str,
+        exported_path_parts: tuple[str, ...],
+    ) -> str:
+        import importlib
+
+        mod = importlib.import_module(exporter_module)
+        with tempfile.TemporaryDirectory() as tmp:
+            out_root = Path(tmp) / "export_out"
+            mod.export(REPO_ROOT, out_root)
+            exported = out_root / Path(*exported_path_parts)
+            self.assertTrue(exported.exists(), f"missing z-explain export at {exported}")
+            return exported.read_text(encoding="utf-8")
+
+    def test_z_explain_repo_surface_policy_survives_all_exports(self) -> None:
+        exported_by_surface = {
+            "cursor": self._exported_text(
+                "runtime.drivers.cursor.export",
+                (".cursor", "skills", "z-explain", "SKILL.md"),
+            ),
+            "codex": self._exported_text(
+                "runtime.drivers.codex.export",
+                ("skills", "z-explain", "SKILL.md"),
+            ),
+            "agy": self._exported_text(
+                "runtime.drivers.antigravity.export",
+                (".agent", "skills", "z-explain", "SKILL.md"),
+            ),
+            "pi": self._exported_text(
+                "runtime.drivers.pi.export",
+                ("prompts", "z-explain.md"),
+            ),
+        }
+
+        for surface, content in exported_by_surface.items():
+            with self.subTest(surface=surface):
+                self.assertIn("/z-explain --repo orientation", content)
+                self.assertIn("--surface=auto|off|force", content)
+                self.assertIn("--surface=off", content)
+                self.assertIn("surface-map.json", content)
+                self.assertIn("One answer, one lens", content)
+                self.assertIn("Shared surface mapping contract", content)
+                self.assertNotIn("<!-- include: _fragments/surface-mapping.md -->", content)
+                self.assertNotIn("/z-" + "grasp", content)
+
+
+
+class TestLiveExportZLearnSurfacePolicy(unittest.TestCase):
+    """End-to-end export coverage for the /z-learn repo surface grounding text."""
+
+    def _exported_text(
+        self,
+        exporter_module: str,
+        exported_path_parts: tuple[str, ...],
+    ) -> str:
+        import importlib
+
+        mod = importlib.import_module(exporter_module)
+        with tempfile.TemporaryDirectory() as tmp:
+            out_root = Path(tmp) / "export_out"
+            mod.export(REPO_ROOT, out_root)
+            exported = out_root / Path(*exported_path_parts)
+            self.assertTrue(exported.exists(), f"missing z-learn export at {exported}")
+            return exported.read_text(encoding="utf-8")
+
+    def test_z_learn_repo_surface_policy_survives_all_exports(self) -> None:
+        exported_by_surface = {
+            "cursor": self._exported_text(
+                "runtime.drivers.cursor.export",
+                (".cursor", "skills", "z-learn", "SKILL.md"),
+            ),
+            "codex": self._exported_text(
+                "runtime.drivers.codex.export",
+                ("skills", "z-learn", "SKILL.md"),
+            ),
+            "agy": self._exported_text(
+                "runtime.drivers.antigravity.export",
+                (".agent", "skills", "z-learn", "SKILL.md"),
+            ),
+            "pi": self._exported_text(
+                "runtime.drivers.pi.export",
+                ("prompts", "z-learn.md"),
+            ),
+        }
+
+        for surface, content in exported_by_surface.items():
+            with self.subTest(surface=surface):
+                self.assertIn("/z-learn --repo", content)
+                self.assertIn("--surface=auto|off|force", content)
+                self.assertIn("--surface=off", content)
+                self.assertIn("surface-map.json", content)
+                self.assertIn("## Grounding", content)
+                self.assertIn("Raw maps stay archived", content)
+                self.assertIn("Do not paste raw maps", content)
+                self.assertIn("First repo turn", content)
+                self.assertIn("One teaching chunk per turn", content)
+                self.assertIn("Target-changing pivots rerun Phase 2", content)
+                self.assertIn("Orientation map", content)
+                self.assertIn("Shared surface mapping contract", content)
+                self.assertNotIn("<!-- include: _fragments/surface-mapping.md -->", content)
+                self.assertNotIn("/z-" + "grasp", content)
+
+
+class TestLiveExportZReportSurfacePolicy(unittest.TestCase):
+    """End-to-end export coverage for /z-report surface aliases and context contract."""
+
+    def _exported_text(
+        self,
+        exporter_module: str,
+        exported_path_parts: tuple[str, ...],
+    ) -> str:
+        import importlib
+
+        mod = importlib.import_module(exporter_module)
+        with tempfile.TemporaryDirectory() as tmp:
+            out_root = Path(tmp) / "export_out"
+            mod.export(REPO_ROOT, out_root)
+            exported = out_root / Path(*exported_path_parts)
+            self.assertTrue(exported.exists(), f"missing z-report export at {exported}")
+            return exported.read_text(encoding="utf-8")
+
+    def test_z_report_surface_aliases_survive_all_exports(self) -> None:
+        exported_by_surface = {
+            "cursor": self._exported_text(
+                "runtime.drivers.cursor.export",
+                (".cursor", "skills", "z-report", "SKILL.md"),
+            ),
+            "codex": self._exported_text(
+                "runtime.drivers.codex.export",
+                ("skills", "z-report", "SKILL.md"),
+            ),
+            "agy": self._exported_text(
+                "runtime.drivers.antigravity.export",
+                (".agent", "skills", "z-report", "SKILL.md"),
+            ),
+            "pi": self._exported_text(
+                "runtime.drivers.pi.export",
+                ("prompts", "z-report.md"),
+            ),
+        }
+
+        for surface, content in exported_by_surface.items():
+            with self.subTest(surface=surface):
+                self.assertIn("/z-report current", content)
+                self.assertIn("/z-report since <ref>", content)
+                self.assertIn("--surface=auto|off|existing|refresh", content)
+                self.assertIn("--surface=off", content)
+                self.assertIn("context.json", content)
+                self.assertIn("surface_map_*", content)
+                self.assertIn("## Surface Map", content)
+                self.assertIn("report-time current repo state", content)
+                self.assertIn("Never read `surface_map_path`", content)
+                self.assertNotIn("/z-" + "grasp", content)
 
 class TestUnsupportedCallBlockRewrites(unittest.TestCase):
     """Regression coverage for multi-line unsupported runtime call export rewrites."""

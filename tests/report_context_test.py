@@ -1892,3 +1892,459 @@ class TestResolveRunDirNestedLayout:
         assert result_nested == nested_run_dir, (
             f"Nested run_id resolved to wrong path: {result_nested!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# T006 — surface-map attachment and repo-state aliases
+# ---------------------------------------------------------------------------
+
+def _surface_payload(*, status: str = "ok", path: str = "src/example.py") -> dict:
+    return {
+        "schema_version": 1,
+        "generated_at": "2026-06-25T00:00:00Z",
+        "mode": "diff",
+        "caller": "z-report",
+        "status": status,
+        "target": {
+            "raw": "test",
+            "repo_root": str(_REPO_ROOT),
+            "inferred_kind": "diff",
+        },
+        "caps": {"max_primary_files": 10, "max_refs": 100, "max_bytes": 200000},
+        "stats": {"files_scanned": 1, "candidate_files": 1, "refs": 1, "truncated": False},
+        "primary": [
+            {
+                "path": path,
+                "kind": "changed_file",
+                "relation": "changes",
+                "line_start": 1,
+                "line_end": 2,
+                "citations": [f"{path}:1"],
+                "reason": "file appears in unified diff",
+                "confidence": "high",
+            }
+        ],
+        "related": [],
+        "clusters": [{"id": "C1", "label": "Source", "paths": [path], "summary": "source files"}],
+        "suggested_reads": [{"path": path, "ranges": ["1-2"], "reason": "changed hunks from diff"}],
+        "warnings": [],
+        "tried_strategies": ["test"],
+    }
+
+
+def _fake_diff(path: str = "src/example.py") -> str:
+    return (
+        f"diff --git a/{path} b/{path}\n"
+        f"--- a/{path}\n"
+        f"+++ b/{path}\n"
+        "@@ -1 +1 @@\n"
+        "-old\n"
+        "+new\n"
+    )
+
+
+class TestSurfaceMapAttachment:
+    def test_fresh_diff_surface_attached_for_standard_auto(self, tmp_path):
+        out_path = tmp_path / "context.json"
+        descriptor = {"mode": "range", "range": "base..HEAD"}
+
+        with patch.object(
+            _mod,
+            "_assemble_range_bundle",
+            return_value={
+                "schema_version": 1,
+                "mode": "range",
+                "followups": [],
+                "followups_note": "diff-backed target",
+                "commits": [],
+                "diff": _fake_diff("src/fresh.py"),
+                "diff_bytes": len(_fake_diff("src/fresh.py").encode("utf-8")),
+                "warnings": [],
+            },
+        ):
+            rc = _assemble_bundle(
+                descriptor,
+                out_path=out_path,
+                base=None,
+                surface_policy="auto",
+                tier="standard",
+            )
+
+        assert rc == 0
+        bundle = json.loads(out_path.read_text(encoding="utf-8"))
+        assert bundle["surface_map_status"] == "fresh"
+        assert bundle["surface_map_source"] == "diff_context"
+        assert "src/fresh.py" in bundle["surface_map_summary"]
+        assert (tmp_path / "surface-map.json").is_file()
+        assert (tmp_path / "surface-map.diff").is_file()
+
+    def test_existing_only_policy_consumes_existing_artifact_without_refresh(self, tmp_path):
+        out_path = tmp_path / "context.json"
+        surface_path = tmp_path / "surface-map.json"
+        surface_path.write_text(json.dumps(_surface_payload(path="src/existing.py")), encoding="utf-8")
+        descriptor = {"mode": "worktree"}
+
+        with (
+            patch.object(
+                _mod,
+                "_assemble_worktree_bundle",
+                return_value={
+                    "schema_version": 1,
+                    "mode": "worktree",
+                    "followups": [],
+                    "followups_note": "diff-backed target",
+                    "commits": [],
+                    "diff": _fake_diff("src/ignored.py"),
+                    "diff_bytes": len(_fake_diff("src/ignored.py").encode("utf-8")),
+                    "warnings": [],
+                },
+            ),
+            patch.object(_mod, "_run_surface_mapper", side_effect=AssertionError("fresh mapper must not run")),
+        ):
+            rc = _assemble_bundle(
+                descriptor,
+                out_path=out_path,
+                base=None,
+                surface_policy="existing",
+                tier="standard",
+            )
+
+        assert rc == 0
+        bundle = json.loads(out_path.read_text(encoding="utf-8"))
+        assert bundle["surface_map_status"] == "existing"
+        assert bundle["surface_map_path"] == str(surface_path)
+        assert "src/existing.py" in bundle["surface_map_summary"]
+
+    def test_summary_auto_consumes_existing_artifact_without_refresh(self, tmp_path):
+        out_path = tmp_path / "context.json"
+        surface_path = tmp_path / "surface-map.json"
+        surface_path.write_text(json.dumps(_surface_payload(path="src/summary.py")), encoding="utf-8")
+        descriptor = {"mode": "range", "range": "base..HEAD"}
+
+        with (
+            patch.object(
+                _mod,
+                "_assemble_range_bundle",
+                return_value={
+                    "schema_version": 1,
+                    "mode": "range",
+                    "followups": [],
+                    "followups_note": "diff-backed target",
+                    "commits": [],
+                    "diff": _fake_diff("src/summary.py"),
+                    "diff_bytes": len(_fake_diff("src/summary.py").encode("utf-8")),
+                    "warnings": [],
+                },
+            ),
+            patch.object(_mod, "_run_surface_mapper", side_effect=AssertionError("summary tier must not refresh")),
+        ):
+            rc = _assemble_bundle(
+                descriptor,
+                out_path=out_path,
+                base=None,
+                surface_policy="auto",
+                tier="summary",
+            )
+
+        assert rc == 0
+        bundle = json.loads(out_path.read_text(encoding="utf-8"))
+        assert bundle["surface_map_status"] == "existing"
+        assert bundle["surface_map_path"] == str(surface_path)
+
+
+    def test_surface_off_omits_surface_fields(self, tmp_path):
+        out_path = tmp_path / "context.json"
+        descriptor = {"mode": "worktree"}
+
+        with patch.object(
+            _mod,
+            "_assemble_worktree_bundle",
+            return_value={
+                "schema_version": 1,
+                "mode": "worktree",
+                "followups": [],
+                "followups_note": "diff-backed target",
+                "commits": [],
+                "diff": _fake_diff(),
+                "diff_bytes": len(_fake_diff().encode("utf-8")),
+                "warnings": [],
+            },
+        ):
+            rc = _assemble_bundle(
+                descriptor,
+                out_path=out_path,
+                base=None,
+                surface_policy="off",
+                tier="standard",
+            )
+
+        assert rc == 0
+        bundle = json.loads(out_path.read_text(encoding="utf-8"))
+        assert "surface_map_status" not in bundle
+        assert "surface_map_path" not in bundle
+
+    def test_mapper_failure_degrades_with_warning(self, tmp_path):
+        out_path = tmp_path / "context.json"
+        descriptor = {"mode": "range", "range": "base..HEAD"}
+
+        with (
+            patch.object(
+                _mod,
+                "_assemble_range_bundle",
+                return_value={
+                    "schema_version": 1,
+                    "mode": "range",
+                    "followups": [],
+                    "followups_note": "diff-backed target",
+                    "commits": [],
+                    "diff": _fake_diff("src/failure.py"),
+                    "diff_bytes": len(_fake_diff("src/failure.py").encode("utf-8")),
+                    "warnings": [],
+                },
+            ),
+            patch.object(_mod, "_run_surface_mapper", return_value=(1, "", "boom")),
+        ):
+            rc = _assemble_bundle(
+                descriptor,
+                out_path=out_path,
+                base=None,
+                surface_policy="auto",
+                tier="deep",
+            )
+
+        assert rc == 0
+        bundle = json.loads(out_path.read_text(encoding="utf-8"))
+        assert bundle["surface_map_status"] == "failed"
+        assert any("surface-map.py failed" in w for w in bundle["surface_map_warnings"])
+        assert any("surface-map.py failed" in w for w in bundle["warnings"])
+
+    def test_run_refresh_is_labeled_report_time_current_repo_state(self, tmp_path):
+        run_dir = _make_run_dir(tmp_path, "20260625T000000Z-test-plan")
+        out_path = tmp_path / "context.json"
+        descriptor = {"mode": "run", "run_id": run_dir.name}
+
+        with (
+            patch.object(_mod, "_resolve_run_dir", return_value=run_dir),
+            patch.object(_mod, "_classify_status", return_value="clean"),
+            patch.object(_mod, "_resolve_followups", return_value=[]),
+            patch.object(_mod, "_estimate_cost", return_value={}),
+            patch.object(_mod, "_current_worktree_diff", return_value=_fake_diff("src/current.py")),
+        ):
+            rc = _assemble_bundle(
+                descriptor,
+                out_path=out_path,
+                base=None,
+                surface_policy="refresh",
+                tier="standard",
+            )
+
+        assert rc == 0
+        bundle = json.loads(out_path.read_text(encoding="utf-8"))
+        assert bundle["surface_map_status"] == "fresh"
+        assert bundle["surface_map_source"] == "report_time_current_repo"
+        assert "src/current.py" in bundle["surface_map_summary"]
+
+    def test_run_existing_artifact_is_discovered_as_historical(self, tmp_path):
+        run_dir = _make_run_dir(tmp_path, "20260625T010000Z-test-plan")
+        surface_path = run_dir / "surface-map.json"
+        surface_path.write_text(json.dumps(_surface_payload(path="src/historical.py")), encoding="utf-8")
+        out_path = tmp_path / "context.json"
+        descriptor = {"mode": "run", "run_id": run_dir.name}
+
+        with (
+            patch.object(_mod, "_resolve_run_dir", return_value=run_dir),
+            patch.object(_mod, "_classify_status", return_value="clean"),
+            patch.object(_mod, "_resolve_followups", return_value=[]),
+            patch.object(_mod, "_estimate_cost", return_value={}),
+            patch.object(_mod, "_run_surface_mapper", side_effect=AssertionError("existing historical map must not refresh")),
+        ):
+            rc = _assemble_bundle(
+                descriptor,
+                out_path=out_path,
+                base=None,
+                surface_policy="auto",
+                tier="standard",
+            )
+
+        assert rc == 0
+        bundle = json.loads(out_path.read_text(encoding="utf-8"))
+        assert bundle["surface_map_status"] == "existing"
+        assert bundle["surface_map_source"] == "historical_run"
+        assert bundle["surface_map_path"] == str(surface_path)
+
+    def test_run_default_context_path_discovers_run_surface_artifact(self, tmp_path):
+        run_dir = _make_run_dir(tmp_path, "20260625T011500Z-test-plan")
+        surface_path = run_dir / "surface-map.json"
+        surface_path.write_text(json.dumps(_surface_payload(path="src/default-context.py")), encoding="utf-8")
+        out_path = run_dir / "context.json"
+        descriptor = {"mode": "run", "run_id": run_dir.name}
+
+        with (
+            patch.object(_mod, "_resolve_run_dir", return_value=run_dir),
+            patch.object(_mod, "_classify_status", return_value="clean"),
+            patch.object(_mod, "_resolve_followups", return_value=[]),
+            patch.object(_mod, "_estimate_cost", return_value={}),
+            patch.object(_mod, "_run_surface_mapper", side_effect=AssertionError("existing historical map must not refresh")),
+        ):
+            rc = _assemble_bundle(
+                descriptor,
+                out_path=out_path,
+                base=None,
+                surface_policy="auto",
+                tier="standard",
+            )
+
+        assert rc == 0
+        bundle = json.loads(out_path.read_text(encoding="utf-8"))
+        assert bundle["surface_map_status"] == "existing"
+        assert bundle["surface_map_source"] == "historical_run"
+        assert bundle["surface_map_path"] == str(surface_path)
+
+    def test_run_existing_artifact_does_not_discover_sibling_archive_run(self, tmp_path):
+        run_dir = _make_run_dir(tmp_path, "20260625T020000Z-target-plan")
+        sibling_dir = run_dir.parent / "20260625T030000Z-other-plan"
+        sibling_dir.mkdir()
+        sibling_surface = sibling_dir / "surface-map.json"
+        sibling_surface.write_text(json.dumps(_surface_payload(path="src/sibling.py")), encoding="utf-8")
+        out_path = tmp_path / "context.json"
+        descriptor = {"mode": "run", "run_id": run_dir.name}
+
+        with (
+            patch.object(_mod, "_resolve_run_dir", return_value=run_dir),
+            patch.object(_mod, "_classify_status", return_value="clean"),
+            patch.object(_mod, "_resolve_followups", return_value=[]),
+            patch.object(_mod, "_estimate_cost", return_value={}),
+            patch.object(_mod, "_run_surface_mapper", side_effect=AssertionError("existing historical map must not refresh")),
+        ):
+            rc = _assemble_bundle(
+                descriptor,
+                out_path=out_path,
+                base=None,
+                surface_policy="auto",
+                tier="standard",
+            )
+
+        assert rc == 0
+        bundle = json.loads(out_path.read_text(encoding="utf-8"))
+        assert bundle["surface_map_status"] == "skipped"
+        assert bundle["surface_map_path"] == ""
+        assert "src/sibling.py" not in bundle["surface_map_summary"]
+        assert str(sibling_surface) not in bundle.get("surface_map_path", "")
+
+
+class TestZReportSkillSurfacePropagation:
+    def test_skill_passes_tier_and_surface_to_report_context(self):
+        skill_text = (_REPO_ROOT / "skills" / "z-report" / "SKILL.md").read_text(encoding="utf-8")
+
+        assert "--resolve-only $REPORT_CONTEXT_TARGET_ARGS \\\n  --tier \"$TIER\" \\\n  --surface \"$SURFACE_POLICY\"" in skill_text
+        assert "$REPORT_CONTEXT_TARGET_ARGS \\\n  --tier \"$TIER\" \\\n  --surface \"$SURFACE_POLICY\" \\\n  --out \"$CONTEXT_PATH\"" in skill_text
+        assert "must not pass `--tier`" not in skill_text
+        assert "must not pass `--surface`" not in skill_text
+
+
+class TestSurfaceAliases:
+    def test_current_alias_resolves_to_worktree(self):
+        desc = resolve_target(
+            target="current",
+            flag_run=None,
+            flag_slug=None,
+            flag_pr=None,
+            flag_range=None,
+            flag_base=None,
+        )
+        assert desc["mode"] == "worktree"
+
+    def test_changes_alias_resolves_to_worktree(self):
+        desc = resolve_target(
+            target="changes",
+            flag_run=None,
+            flag_slug=None,
+            flag_pr=None,
+            flag_range=None,
+            flag_base=None,
+        )
+        assert desc["mode"] == "worktree"
+
+    def test_since_alias_cli_resolves_to_base_range(self):
+        target, tier, base = _mod._parse_report_positionals(["since", "origin/main", "deep"], None)
+        assert target is None
+        assert tier == "deep"
+        assert base == "origin/main"
+
+    def test_current_standard_auto_cli_attaches_fresh_diff_surface(self, tmp_path):
+        out_path = tmp_path / "context.json"
+        diff_text = _fake_diff("src/current_alias.py")
+        with patch.object(
+            _mod,
+            "_assemble_worktree_bundle",
+            return_value={
+                "schema_version": 1,
+                "mode": "worktree",
+                "followups": [],
+                "followups_note": "diff-backed target",
+                "commits": [],
+                "diff": diff_text,
+                "diff_bytes": len(diff_text.encode("utf-8")),
+                "warnings": [],
+            },
+        ):
+            rc = main(["current", "standard", "--surface=auto", "--out", str(out_path)])
+        assert rc == 0
+        bundle = json.loads(out_path.read_text(encoding="utf-8"))
+        assert bundle["mode"] == "worktree"
+        assert bundle["surface_map_status"] == "fresh"
+        assert bundle["surface_map_source"] == "diff_context"
+        assert "src/current_alias.py" in bundle["surface_map_summary"]
+
+    def test_since_alias_surface_off_cli_uses_range_without_mapper(self, tmp_path):
+        out_path = tmp_path / "context.json"
+        diff_text = _fake_diff("src/since_alias.py")
+        captured_descriptors = []
+        def _fake_range_bundle(descriptor, warnings):
+            captured_descriptors.append(dict(descriptor))
+            return {
+                "schema_version": 1,
+                "mode": "range",
+                "followups": [],
+                "followups_note": "diff-backed target",
+                "commits": [],
+                "diff": diff_text,
+                "diff_bytes": len(diff_text.encode("utf-8")),
+                "warnings": [],
+            }
+        with (
+            patch.object(_mod, "_assemble_range_bundle", side_effect=_fake_range_bundle),
+            patch.object(_mod, "_run_surface_mapper", side_effect=AssertionError("surface=off must not run mapper")),
+        ):
+            rc = main(["since", "origin/main", "standard", "--surface=off", "--out", str(out_path)])
+        assert rc == 0
+        assert captured_descriptors == [{"mode": "range", "base": "origin/main"}]
+        bundle = json.loads(out_path.read_text(encoding="utf-8"))
+        assert bundle["mode"] == "range"
+        assert "surface_map_status" not in bundle
+        assert "surface_map_path" not in bundle
+
+    def test_current_summary_surface_off_cli_passes_policy_and_tier(self, tmp_path):
+        out_path = tmp_path / "context.json"
+        with (
+            patch.object(_mod, "resolve_target", return_value={"mode": "worktree"}) as resolve,
+            patch.object(_mod, "assemble_bundle", return_value=0) as assemble,
+        ):
+            rc = main(["current", "summary", "--surface=off", "--out", str(out_path)])
+
+        assert rc == 0
+        resolve.assert_called_once()
+        assert resolve.call_args.kwargs["target"] == "current"
+        assert assemble.call_args.kwargs["out_path"] == out_path
+        assert assemble.call_args.kwargs["surface_policy"] == "off"
+        assert assemble.call_args.kwargs["tier"] == "summary"
+
+    def test_save_alias_writes_context_bundle(self, tmp_path):
+        out_path = tmp_path / "saved-context.json"
+        with patch.object(_mod, "_run_cmd_capture", return_value=(0, "", "")):
+            rc = main(["current", "--surface=off", "--save", str(out_path)])
+        assert rc == 0
+        assert out_path.is_file()
+        bundle = json.loads(out_path.read_text(encoding="utf-8"))
+        assert bundle["mode"] == "worktree"
+        assert "surface_map_status" not in bundle
