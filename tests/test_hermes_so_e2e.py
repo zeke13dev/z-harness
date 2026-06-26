@@ -1,4 +1,4 @@
-"""Fake Discord/MCP/tmux e2e for Hermes `so` orchestration."""
+"""Fake LLM/MCP/tmux e2e for Hermes `so` orchestration."""
 
 from pathlib import Path
 import subprocess
@@ -9,16 +9,14 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from hermes.config import DiscordProjectAlias, HermesConfig  # noqa: E402
-from hermes.discord_relay import (  # noqa: E402
-    launch_accepted_so_command,
-    parse_so_command,
-)
 from hermes.mcp_hermes_orchestrator import (  # noqa: E402
     SoSessionStore,
+    SoStartRequest,
     read_so_session,
     send_to_so_session,
     start_so_session,
 )
+from hermes import so_watcher  # noqa: E402
 
 
 class FakeTmuxRunner:
@@ -51,16 +49,23 @@ def _config(tmp_path):
     return cfg
 
 
-def test_fake_discord_to_mcp_tmux_to_reply_flow(tmp_path):
-    cfg = _config(tmp_path)
-    command = parse_so_command(
-        "so omp qt-bot fix blah using z-debug",
+def _llm_parsed_request(cfg):
+    return SoStartRequest(
+        host="omp",
+        project="qt-bot",
+        project_alias=cfg.discord.so.project_aliases["qt-bot"],
+        task="fix blah",
+        z_command="z-debug",
         requester_user_id="user-1",
-        channel_id="chan-1",
-        message_id="msg-1",
-        thread_id="thread-1",
-        config=cfg,
+        discord_channel_id="chan-1",
+        discord_message_id="msg-1",
+        discord_thread_id="thread-1",
     )
+
+
+def test_fake_llm_to_mcp_tmux_to_reply_flow(tmp_path):
+    cfg = _config(tmp_path)
+    command = _llm_parsed_request(cfg)
     runner = FakeTmuxRunner()
 
     launched = start_so_session(command, cfg, runner=runner, session_id="so-test")
@@ -81,28 +86,21 @@ def test_fake_discord_to_mcp_tmux_to_reply_flow(tmp_path):
     assert SoSessionStore.from_config(cfg).get("so-test").last_output == "Need input?"
 
 
-def test_discord_launcher_uses_mcp_orchestrator(monkeypatch, tmp_path):
-    cfg = _config(tmp_path)
-    command = parse_so_command(
-        "so omp qt-bot fix blah using z-debug",
-        requester_user_id="user-1",
-        channel_id="chan-1",
-        message_id="msg-1",
-        config=cfg,
-    )
+def test_deterministic_watcher_script_runs_one_poll(monkeypatch, capsys):
     calls = []
 
-    def fake_start(command_arg, config_arg):
-        calls.append((command_arg, config_arg))
-        return type(
-            "Result",
-            (),
-            {"job_id": "so-test", "session_id": "so-test", "task": command_arg.task},
-        )()
+    def fake_load_config(repo_root):
+        calls.append(("load_config", repo_root))
+        return "cfg"
 
-    monkeypatch.setattr("hermes.mcp_hermes_orchestrator.start_so_session", fake_start)
+    def fake_poll(config, *, ttl_seconds=None):
+        calls.append(("poll", config, ttl_seconds))
+        return {"checked": ["so-test"], "needs_input": ["so-test"]}
 
-    result = launch_accepted_so_command(command, cfg)
+    monkeypatch.setattr(so_watcher, "load_config", fake_load_config)
+    monkeypatch.setattr(so_watcher, "poll_so_sessions", fake_poll)
 
-    assert result.session_id == "so-test"
-    assert calls == [(command, cfg)]
+    assert so_watcher.main(["--repo-root", "/repo", "--ttl-seconds", "7"]) == 0
+
+    assert calls == [("load_config", "/repo"), ("poll", "cfg", 7)]
+    assert '"needs_input": ["so-test"]' in capsys.readouterr().out

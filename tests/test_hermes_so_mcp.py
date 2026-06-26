@@ -11,12 +11,16 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from hermes.config import DiscordProjectAlias, HermesConfig  # noqa: E402
-from hermes.discord_relay import SoCommand  # noqa: E402
 from hermes.mcp_hermes_orchestrator import (  # noqa: E402
     SoMcpError,
     SoSessionStore,
+    SoStartRequest,
+    drain_signal_events,
+    authorize_so_start,
     build_initial_prompt,
     read_so_session,
+    poll_so_sessions,
+    reap_so_sessions,
     send_to_so_session,
     start_so_session,
     tmux_session_name,
@@ -31,7 +35,12 @@ class FakeRunner:
 
     def run(self, argv, *, cwd=None, env=None, timeout=None):
         self.calls.append(
-            {"argv": list(argv), "cwd": cwd, "env": dict(env or {}), "timeout": timeout}
+            {
+                "argv": list(argv),
+                "cwd": cwd,
+                "env": dict(env or {}),
+                "timeout": timeout,
+            }
         )
         text = " ".join(argv)
         if any(token in text for token in self.fail_on):
@@ -48,14 +57,16 @@ def _config(tmp_path, *, transport="local"):
         execution_host="zeke-pc" if transport == "ssh" else "local",
         transport=transport,
         ssh_target="zeke-pc" if transport == "ssh" else "",
-        workdir="/home/zeke/dev/qt-bot" if transport == "ssh" else str(tmp_path),
+        workdir=(
+            "/home/zeke/dev/qt-bot" if transport == "ssh" else str(tmp_path)
+        ),
     )
     cfg.discord.so.project_aliases["qt-bot"] = alias
     return cfg, alias
 
 
 def _command(alias):
-    return SoCommand(
+    return SoStartRequest(
         host="omp",
         project="qt-bot",
         project_alias=alias,
@@ -100,7 +111,9 @@ def test_ssh_transport_runs_tmux_on_recorded_host(tmp_path):
 
 def test_send_uses_existing_tmux_session(tmp_path):
     cfg, alias = _config(tmp_path)
-    start_so_session(_command(alias), cfg, runner=FakeRunner(), session_id="so-test")
+    start_so_session(
+        _command(alias), cfg, runner=FakeRunner(), session_id="so-test"
+    )
     runner = FakeRunner()
 
     record = send_to_so_session("so-test", "continue", cfg, runner=runner)
@@ -118,12 +131,63 @@ def test_send_uses_existing_tmux_session(tmp_path):
 
 def test_read_captures_on_demand_and_sets_needs_input(tmp_path):
     cfg, alias = _config(tmp_path)
-    start_so_session(_command(alias), cfg, runner=FakeRunner(), session_id="so-test")
+    start_so_session(
+        _command(alias), cfg, runner=FakeRunner(), session_id="so-test"
+    )
 
-    record = read_so_session("so-test", cfg, runner=FakeRunner(capture="Proceed?"))
+    record = read_so_session(
+        "so-test", cfg, runner=FakeRunner(capture="Proceed?")
+    )
 
     assert record.status == "needs_input"
     assert record.last_output == "Proceed?"
+
+    events = drain_signal_events(cfg)
+    assert events[0]["event"] == "so_needs_input"
+    assert events[0]["session_id"] == "so-test"
+    assert events[0]["discord_thread_id"] == "thread-1"
+
+
+def test_read_deduplicates_needs_input_signals(tmp_path):
+    cfg, alias = _config(tmp_path)
+    start_so_session(
+        _command(alias), cfg, runner=FakeRunner(), session_id="so-test"
+    )
+
+    read_so_session("so-test", cfg, runner=FakeRunner(capture="Proceed?"))
+    read_so_session("so-test", cfg, runner=FakeRunner(capture="Proceed?"))
+
+    assert len(drain_signal_events(cfg)) == 1
+
+
+def test_reaper_marks_missing_tmux_session_dead(tmp_path):
+    cfg, alias = _config(tmp_path)
+    start_so_session(
+        _command(alias), cfg, runner=FakeRunner(), session_id="so-test"
+    )
+
+    result = reap_so_sessions(cfg, runner=FakeRunner(fail_on={"has-session"}))
+
+    assert result["dead"] == ["so-test"]
+    assert SoSessionStore.from_config(cfg).get("so-test").status == "dead"
+    assert drain_signal_events(cfg)[0]["event"] == "so_session_dead"
+
+
+def test_reaper_expires_sessions_past_ttl(tmp_path):
+    cfg, alias = _config(tmp_path)
+    start_so_session(
+        _command(alias), cfg, runner=FakeRunner(), session_id="so-test"
+    )
+    store = SoSessionStore.from_config(cfg)
+    record = store.get("so-test")
+    record.expires_at = "2000-01-01T00:00:00+00:00"
+    store.save(record)
+
+    result = reap_so_sessions(cfg, runner=FakeRunner())
+
+    assert result["expired"] == ["so-test"]
+    assert store.get("so-test").status == "expired"
+    assert drain_signal_events(cfg)[0]["event"] == "so_session_expired"
 
 
 def test_failed_tmux_marks_session_failed(tmp_path):
@@ -146,3 +210,49 @@ def test_prompt_names_mcp_managed_tmux(tmp_path):
 
     assert "MCP-managed tmux session" in prompt
     assert "z-debug" in prompt
+
+
+def test_start_auth_rejects_unallowed_user_channel_and_host(tmp_path):
+    cfg, _alias = _config(tmp_path)
+    cfg.discord.so.allowed_user_ids = {"user-1"}
+    cfg.discord.so.allowed_channel_ids = {"chan-1"}
+    cfg.discord.so.allowed_hosts = {"omp"}
+
+    with pytest.raises(SoMcpError):
+        authorize_so_start(
+            cfg,
+            host="omp",
+            requester_user_id="user-2",
+            discord_channel_id="chan-1",
+        )
+    with pytest.raises(SoMcpError):
+        authorize_so_start(
+            cfg,
+            host="omp",
+            requester_user_id="user-1",
+            discord_channel_id="chan-2",
+        )
+    with pytest.raises(SoMcpError):
+        authorize_so_start(
+            cfg,
+            host="other",
+            requester_user_id="user-1",
+            discord_channel_id="chan-1",
+        )
+
+
+def test_poll_so_sessions_reads_active_sessions_and_reaps(tmp_path):
+    cfg, alias = _config(tmp_path)
+    start_so_session(
+        _command(alias), cfg, runner=FakeRunner(), session_id="so-test"
+    )
+
+    result = poll_so_sessions(
+        cfg,
+        runner=FakeRunner(capture="Waiting for input"),
+    )
+
+    assert result["checked"] == ["so-test"]
+    assert result["needs_input"] == ["so-test"]
+    assert result["errors"] == {}
+    assert drain_signal_events(cfg)[0]["event"] == "so_needs_input"

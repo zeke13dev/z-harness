@@ -9,7 +9,7 @@ Surface mapping is a bounded discovery layer used by existing understanding and 
 - `repo` — broad repository/package/module orientation.
 - `symbol` — one unqualified symbol, type, module, or similarly named surface.
 - `diff` — files and hunks touched by a PR, range, base ref, or worktree diff.
-- Valid callers: `z-explain`, `z-learn`, `z-report`.
+- Valid callers: `z-explain`, `z-learn`, `z-report`, `z-explore`.
 
 ### Status vocabulary
 
@@ -32,7 +32,7 @@ Persist the raw payload as `surface-map.json` in the command's archive when a ma
   "schema_version": 1,
   "generated_at": "<ISO-8601 UTC>",
   "mode": "repo|symbol|diff",
-  "caller": "z-explain|z-learn|z-report",
+  "caller": "z-explain|z-learn|z-report|z-explore",
   "status": "ok|partial|not_found|ambiguous|too_broad|truncated|error",
   "target": {
     "raw": "<original target>",
@@ -111,4 +111,5 @@ Surface mapping is an enhancement, not a dependency for baseline command behavio
 - `/z-explain` owns one-shot rendering. It may use `repo` Explore facets or deterministic `symbol` preflight, then still returns exactly one cited answer at one lens.
 - `/z-learn` owns progressive teaching. It may use the same repo facets for initial grounding, archives raw `surface-map.json`, stages only compact metadata, and teaches one chunk per turn.
 - `/z-report` owns context-grounded reporting. It uses the JSON contract through deterministic context assembly; report prose must render from assembled `context.json` fields, not ad hoc discovery.
+- `/z-explore` owns depth-scaled terrain discovery. Quick mode may use repo facets for fast orientation; standard mode persists `surface-map.json` alongside `EXPLORE.md`; deep mode produces MAP.md-compatible terrain. Depth determines whether the map is inline, persisted, or produces full cross-LLM critique.
 - All callers preserve the raw map separately from user prose, cite direct source lines for factual claims, expose warnings/cap status, and avoid treating a surface map as an audit, plan, or complete codebase atlas.

@@ -32,6 +32,7 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
 ## 2026-06-26
 
 - _(auto)_ Redesign /z-plan pipeline with mode gate, sharper routing, and handoff
+- _(auto)_ Apply cross-LLM review findings to /z-plan redesign
 
 ## 2026-06-24
 

@@ -1,7 +1,7 @@
 ---
 name: z-research
 disable-model-invocation: false
-description: Higher-order meta-orchestrator. Composes /z-map (terrain) and /z-brainstorm (framings), then runs adversarial synthesis panel (3 perspectives + judge) producing RESEARCH.md with 10-section schema including approach decision matrix. Cost 3–6M tokens; AskUser cost gate at invocation.
+description: Higher-order meta-orchestrator. Composes /z-explore --depth=deep (terrain, replaces /z-map) and /z-brainstorm (framings), then runs adversarial synthesis panel (3 perspectives + judge) producing RESEARCH.md with 10-section schema including approach decision matrix. Cost 3–6M tokens; AskUser cost gate at invocation.
 argument-hint: <research-topic> [--slug=<kebab>]
 runtime: c1
 driver_features_required:
@@ -16,7 +16,7 @@ Arguments (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
-Strict, multi-phase. Do not skip phases. `/z-research` orchestrates sub-commands and an adversarial synthesis panel — it does **not** write MAP.md or BRAINSTORM.md content directly. Those artifacts are exclusively owned by `/z-map` and `/z-brainstorm` respectively.
+Strict, multi-phase. Do not skip phases. `/z-research` orchestrates sub-commands and an adversarial synthesis panel — it does **not** write MAP.md or BRAINSTORM.md content directly. Those artifacts are exclusively owned by `/z-explore` (via --depth=deep) and `/z-brainstorm` respectively. `/z-map` is legacy; `/z-explore --depth=deep` replaces it.
 
 **Cost warning:** this pipeline runs up to 3M tokens for sub-commands + 3M tokens for the synthesis panel (3 perspectives @ ~1M each) + 0.5M for the judge. Total: 3–6M tokens. The cost gate in Phase 0.5 always runs before dispatch.
 
@@ -217,7 +217,7 @@ Determine the suggested dispatch action based on the 4-bucket matrix:
 | MAP_STATE | BRAINSTORM_STATE | Suggested dispatch |
 |---|---|---|
 | `absent` or `stale` | `absent` or `incomplete` | **Run both** |
-| `absent` or `stale` | `complete` | **Run /z-map, reuse BRAINSTORM** |
+| `absent` or `stale` | `complete` | **Run /z-explore --depth=deep, reuse BRAINSTORM** |
 | `fresh` | `absent` or `incomplete` | **Reuse MAP, run /z-brainstorm** |
 | `fresh` | `complete` | **Reuse both, synthesize directly** |
 
@@ -226,10 +226,10 @@ Determine the suggested dispatch action based on the 4-bucket matrix:
 if [ "$MAP_STATE" = "absent" ] || [ "$MAP_STATE" = "stale" ]; then
   if [ "$BRAINSTORM_STATE" = "absent" ] || [ "$BRAINSTORM_STATE" = "incomplete" ]; then
     DISPATCH_SUGGESTION="run_both"
-    DISPATCH_LABEL="Run both /z-map and /z-brainstorm"
+    DISPATCH_LABEL="Run both /z-explore --depth=deep and /z-brainstorm"
   else
     DISPATCH_SUGGESTION="run_map_reuse_brainstorm"
-    DISPATCH_LABEL="Run /z-map (MAP is ${MAP_STATE}), reuse existing BRAINSTORM"
+    DISPATCH_LABEL="Run /z-explore --depth=deep (MAP is ${MAP_STATE}), reuse existing BRAINSTORM"
   fi
 else
   # MAP_STATE = fresh
@@ -541,9 +541,9 @@ If `DISPATCH_MAP=ran` (and `DISPATCH_BRAINSTORM != ran`):
    <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The /z-map sub-command produces the terrain MAP.md used in synthesis; drivers that skip it must warn the user that terrain mapping is unavailable. -->
    ```
    Agent(
-     subagent_type="z-map",
+     subagent_type="z-explore",
      description="Terrain mapping for /z-research: $TOPIC",
-     prompt="$TOPIC --slug=$SLUG",
+     prompt="$TOPIC --slug=$SLUG --depth=deep",
      env={
        "Z_HARNESS_PARENT_RUN_ID": "$RUN",
        "Z_HARNESS_PARENT_COMMAND": "/z-research"
@@ -694,9 +694,9 @@ This step fires only when both sub-commands need to run (i.e., `DISPATCH_MAP=ran
    <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() calls. Both sub-commands must be dispatched; drivers that skip either must warn the user that the corresponding artifact is unavailable. -->
    ```
    Agent(
-     subagent_type="z-map",
+     subagent_type="z-explore",
      description="Terrain mapping for /z-research: $TOPIC",
-     prompt="$TOPIC --slug=$SLUG",
+     prompt="$TOPIC --slug=$SLUG --depth=deep",
      env={
        "Z_HARNESS_PARENT_RUN_ID": "$RUN",
        "Z_HARNESS_PARENT_COMMAND": "/z-research"
@@ -715,7 +715,7 @@ This step fires only when both sub-commands need to run (i.e., `DISPATCH_MAP=ran
 
    Both agents run in parallel and both must complete before continuing.
 
-3. After both Agent() calls return, identify the two new archive directories by diffing against the pre-dispatch snapshot. Distinguish MAP from BRAINSTORM by reading the first event in each new archive's `events.jsonl` and checking its `kind` field — `/z-map` emits `kind: "map_run_start"` and `/z-brainstorm` emits `kind: "brainstorm_run_start"`. This is robust against RUN-ID timestamp collisions (both commands derive RUN from the same second-precision timestamp) because the `kind` field is set by the command itself, not by the directory name.
+3. After both Agent() calls return, identify the two new archive directories by diffing against the pre-dispatch snapshot. Distinguish MAP from BRAINSTORM by reading the first event in each new archive's `events.jsonl` and checking its `kind` field — `/z-map` emits `kind: "map_run_start"` (or `/z-explore` emits `kind: "explore_run_start"`) and `/z-brainstorm` emits `kind: "brainstorm_run_start"`. This is robust against RUN-ID timestamp collisions (both commands derive RUN from the same second-precision timestamp) because the `kind` field is set by the command itself, not by the directory name.
 
    ```bash
    POST_DISPATCH_ARCHIVE="$(ls -1 "$Z_HARNESS_PLAN_DIR/archive/" | grep -v "^${RUN}$" | grep "$SLUG" || true)"
@@ -742,8 +742,8 @@ line=open(sys.argv[1]).readline().strip()
 if line: print(json.loads(line).get('kind',''))
 " "$events_file" 2>/dev/null || true)"
        case "$first_kind" in
-         map_run_start)        MAP_SUB_RUN="$dir" ;;
-         brainstorm_run_start) BRAINSTORM_SUB_RUN="$dir" ;;
+         map_run_start|explore_run_start) MAP_SUB_RUN="$dir" ;;
+         brainstorm_run_start)            BRAINSTORM_SUB_RUN="$dir" ;;
        esac
      fi
    done <<< "$NEW_ARCHIVE_DIRS"
@@ -1465,7 +1465,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 | Feature | Used | Gates |
 |---------|------|-------|
-| `subagent` | yes | Phase 1 Step 2 z-map; Phase 1 Step 3 z-brainstorm; Phase 2 Step 3 general-purpose + consultant-primary + consultant-secondary (panel, parallel); Phase 3 Step 1 research-judge |
+| `subagent` | yes | Phase 1 Step 2 z-explore --depth=deep; Phase 1 Step 3 z-brainstorm; Phase 2 Step 3 general-purpose + consultant-primary + consultant-secondary (panel, parallel); Phase 3 Step 1 research-judge |
 | `ask_user` | yes | Setup Step 1 empty-topic question; Phase 0 Step 3 dispatch decision; Phase 0.5 Step 2 cost gate; Phase 2 Step 4 panel 2/3 failure decision |
 | `skill_invoke` | no | — |
 

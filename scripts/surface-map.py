@@ -23,7 +23,7 @@ from typing import Any
 SCHEMA_VERSION = 1
 
 MODES = {"repo", "symbol", "diff"}
-CALLERS = {"z-explain", "z-learn", "z-report"}
+CALLERS = {"z-explain", "z-learn", "z-report", "z-explore"}
 STATUSES = {
     "ok",
     "partial",

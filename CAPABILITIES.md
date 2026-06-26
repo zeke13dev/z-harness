@@ -39,7 +39,7 @@ Export drivers must not silently drop those constructs. They preserve `RUNTIME-G
 ## Release surfaces
 
 - **dev/main surface:** includes experimental research commands for local development.
-- **prod surface:** hides `/z-research`, `/z-map`, `/z-overnight`, `/z-attend`, and `z-axiom-*` by default while keeping `/z-learn`, `/z-sharpen`, `/z-grill`, and `/z-brainstorm`.
+- **prod surface:** hides `/z-research`, `/z-explore`, `/z-map` (legacy), `/z-overnight`, `/z-attend`, and `z-axiom-*` by default while keeping `/z-learn`, `/z-sharpen`, `/z-grill`, and `/z-brainstorm`.
 - Use `z-harness export --surface prod ...` for public-beta exports.
 
 ## Safety posture

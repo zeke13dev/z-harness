@@ -17,7 +17,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from hermes.config import DiscordProjectAlias  # noqa: E402
-from hermes.discord_relay import SoCommand  # noqa: E402
+from hermes.mcp_hermes_orchestrator import SoStartRequest  # noqa: E402
 from hermes.session import (  # noqa: E402
     TmuxLaunchError,
     hermes_tmux_session_name,
@@ -48,8 +48,8 @@ class FakeRunner:
         return subprocess.CompletedProcess(argv, 0, "", "")
 
 
-def _command(*, transport="local") -> SoCommand:
-    return SoCommand(
+def _command(*, transport="local") -> SoStartRequest:
+    return SoStartRequest(
         host="omp",
         project="qt-bot",
         project_alias=DiscordProjectAlias(
