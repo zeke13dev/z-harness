@@ -1,7 +1,7 @@
 # personas-and-roles
 
-> Last updated: 2026-06-19
-> Covers source: scripts/resolve-persona.py, scripts/resolve-persona.sh, runtime/contract/persona.schema.json, personas/README.md, personas/builtin/codex-default-consultant.md, personas/builtin/gemini-default-consultant.md, commands/z-personas.md, runtime/drivers/_persona_utils.py, runtime/drivers/antigravity/persona_export.py, runtime/drivers/cursor/persona_export.py, runtime/drivers/codex/persona_export.py, runtime/drivers/claude/persona_export.py, z_harness_cli/adapters/antigravity.py, z_harness_cli/adapters/cursor.py, z_harness_cli/adapters/codex.py, z_harness_cli/adapters/claude.py
+> Last updated: 2026-06-24
+> Covers source: scripts/resolve-persona.py, scripts/resolve-persona.sh, runtime/contract/persona.schema.json, personas/README.md, personas/builtin/codex-default-consultant.md, personas/builtin/gemini-default-consultant.md, skills/z-personas/SKILL.md, runtime/drivers/_persona_utils.py, runtime/drivers/antigravity/persona_export.py, runtime/drivers/cursor/persona_export.py, runtime/drivers/codex/persona_export.py, runtime/drivers/claude/persona_export.py, z_harness_cli/adapters/antigravity.py, z_harness_cli/adapters/cursor.py, z_harness_cli/adapters/codex.py, z_harness_cli/adapters/claude.py
 
 ## Overview
 
@@ -33,10 +33,10 @@ The feature also drives the persona-rotation experiment, which randomizes which 
 - `runtime/drivers/cursor/persona_export.py:48` — `export_persona` — exports to `.cursor/personas/<name>.mdc`; NOT NATIVE; body injected as system-prompt prefix via glob rule
 - `runtime/drivers/codex/persona_export.py:37` — `export_persona` — exports to `prompts/personas/<name>.md`; NOT NATIVE; orchestrator concatenates as system-prompt prefix
 - `runtime/drivers/claude/persona_export.py:38` — `export_persona` — exports to `personas/<name>.md`; NOT NATIVE; injected as system-prompt prefix by Claude subagent dispatcher
-- `z_harness_cli/adapters/antigravity.py:207` — `AntigravityAdapter.export_payload` — globs `personas/builtin/*.md` and calls `export_persona` per file; raises on persona-name collision with workflow ids
-- `z_harness_cli/adapters/cursor.py:214` — `CursorAdapter.export_payload` — globs `personas/builtin/*.md` and calls cursor `export_persona` per file; raises on collision with rule ids
-- `z_harness_cli/adapters/codex.py:243` — `CodexAdapter.export_payload` — globs `personas/builtin/*.md` and calls codex `export_persona` per file; raises on collision with prompts ids
-- `z_harness_cli/adapters/claude.py:160` — `ClaudeAdapter.export_payload` — globs `personas/builtin/*.md` and calls claude `export_persona`; returns ExportResult with fidelity=native
+- `z_harness_cli/adapters/antigravity.py:1` — `AntigravityAdapter.export_payload` — globs `personas/builtin/*.md` and calls `export_persona` per file; raises on persona-name collision with workflow ids
+- `z_harness_cli/adapters/cursor.py:1` — `CursorAdapter.export_payload` — globs `personas/builtin/*.md` and calls cursor `export_persona` per file; raises on collision with rule ids
+- `z_harness_cli/adapters/codex.py:1` — `CodexAdapter.export_payload` — globs `personas/builtin/*.md` and calls codex `export_persona` per file; raises on collision with prompts ids
+- `z_harness_cli/adapters/claude.py:1` — `ClaudeAdapter.export_payload` — globs `personas/builtin/*.md` and calls claude `export_persona`; returns ExportResult with fidelity=native
 
 ## How it interacts with others
 

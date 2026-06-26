@@ -352,6 +352,13 @@ Handle the three `SURFACE_RC` cases explicitly (per the T009 contract):
 - **`SURFACE_RC -eq 0`** — no-op (the chain already includes `audit`, so `AUDIT_IN_CHAIN=true` and the surface call was skipped): proceed into the loop without an ask.
 - **`SURFACE_RC -eq 2`** — INFRA ERROR (RUN unset, wiring bug, or telemetry lost). Surface a diagnostic ("audit-skip shortcut telemetry failed — asking anyway"), then **fall back to surfacing the same `AskUserQuestion` as the `-eq 1` case** (fail-safe: ASK rather than silently skip audit).
 
+### Step 2.0a — Artifact Scout wrapper-only pass-through
+
+`/z-attend` is a wrapper. It does not run `scripts/artifact-scout-inventory.py`, does not dispatch `artifact-scout`, and does not scan historical artifacts independently. Child commands own their own scout hook positions, hard gates, artifacts, and route boundaries.
+
+When a child step surfaces scout output, `/z-attend` only passes it through inline with the child step label and preserves the child artifact paths (`artifact-scout-inventory.json`, `artifact-scout.md`, and any child `route-decision.md`). Warning-only child scout output remains warning-only in the wrapper: it never advances the attend chain's `route_chain` and never creates a wrapper-level `route-decision.md`. Only a child `artifact_scout_route` / `plan_route_decision` route outcome may pause the chain for the normal gate handling.
+
+
 For each position `CURSOR` through `len(CHAIN_STEPS)-1`, do the following. `STEP_NAME = CHAIN_STEPS[CURSOR]`.
 
 ### Step 2.1 — Skip if already complete

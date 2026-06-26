@@ -2,7 +2,9 @@
 
 Brings z-harness to [pi](https://pi.dev): every agent as an executable fan-out subagent, every command/skill as a prompt, and the global rule that wires `doc-fetcher` (cheap grounding) and `explore` (parallel recon) together. Unlike the Cursor/Codex/agy exports, pi has no native subagent primitive — fan-out runs through pi's **subagent extension**, which this export vendors.
 
-This tree is **generated** by `python3 scripts/export-pi.py`. Do not edit `exports/pi/` by hand.
+This tree is **generated** by `/z-export --target=pi`, which calls the runtime-owned `runtime.drivers.pi.export.export` entry point. Do not edit `exports/pi/` by hand.
+
+For first-class OMP support, use `/z-export --target=omp`; the legacy pi export remains separate and does not route native OMP through pi rewrites or `scripts/omp-consult.sh` (the consult-provider fallback shim, not the native OMP export path).
 
 ## What's here
 
@@ -79,9 +81,9 @@ Or just describe the intent — `AGENTS.md` tells the orchestrator to reach for 
 ## Regenerating
 
 ```bash
-python3 scripts/export-pi.py            # or: /z-export --target=pi
+/z-export --target=pi
 ```
 
-Edit z-harness sources (`agents/`, `commands/`, `skills/`) or the pi-only assets (`scripts/pi_assets/`), then re-run. After regenerating, `pi /reload` picks up extension changes; symlinks stay valid since paths are stable.
+Edit z-harness sources (`agents/`, `commands/`, `skills/`) or the pi-only assets (`scripts/pi_assets/`), then re-run `/z-export --target=pi`. After regenerating, `pi /reload` picks up extension changes; symlinks stay valid since paths are stable.
 
 See `CAPABILITIES.md` for the full mapping and its lossy edges (no Haiku tier, line-based call rewrites, etc.).

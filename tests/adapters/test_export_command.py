@@ -18,6 +18,7 @@ Covers:
 """
 
 from __future__ import annotations
+import os
 import importlib
 
 import sys
@@ -289,6 +290,54 @@ class TestInPlaceVsDefaultDest(_ExportCmdBase):
         result = self.runner.invoke(app, ["export", "--host", "claude", "--all"])
         self.assertEqual(result.exit_code, 1)
         self.assertIn("mutually exclusive", result.output.lower())
+
+    def test_surface_env_restored_on_early_validation_failure(self):
+        """Early validation errors must not leak prod surface into this process."""
+        previous = os.environ.get("Z_HARNESS_RELEASE_SURFACE")
+        os.environ["Z_HARNESS_RELEASE_SURFACE"] = "dev"
+        try:
+            result = self.runner.invoke(
+                app, ["export", "--surface", "prod", "--host", "claude", "--all"]
+            )
+            self.assertEqual(result.exit_code, 1)
+            self.assertEqual(os.environ.get("Z_HARNESS_RELEASE_SURFACE"), "dev")
+        finally:
+            if previous is None:
+                os.environ.pop("Z_HARNESS_RELEASE_SURFACE", None)
+            else:
+                os.environ["Z_HARNESS_RELEASE_SURFACE"] = previous
+
+    def test_prod_surface_removes_stale_hidden_skill_paths(self):
+        """Prod exports into reused destinations delete stale dev-only skills."""
+        adapter = _make_adapter("codex", "flattened")
+        project_dir = self.tmp_root / "project"
+        out_dir = project_dir / "export"
+        stale_skill = out_dir / "skills" / "z-research" / "SKILL.md"
+        stale_axiom = out_dir / "skills" / "z-axiom-scan" / "SKILL.md"
+        stale_prompt = out_dir / "prompts" / "z-map.md"
+        stale_cursor_skill = out_dir / ".cursor" / "skills" / "z-overnight" / "SKILL.md"
+        for path in (stale_skill, stale_axiom, stale_prompt, stale_cursor_skill):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("stale\n", encoding="utf-8")
+
+        with patch(
+            "z_harness_cli.commands.export._repo_root",
+            return_value=project_dir,
+        ), patch(
+            "z_harness_cli.adapters.registry.select",
+            return_value=(adapter, MagicMock(installed=True)),
+        ):
+            result = self.runner.invoke(
+                app,
+                ["export", "--host", "codex", "--surface", "prod", "--out", str(out_dir), "--force"],
+            )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertFalse((out_dir / "skills" / "z-research").exists())
+        self.assertFalse((out_dir / "skills" / "z-axiom-scan").exists())
+        self.assertFalse(stale_prompt.exists())
+        self.assertFalse((out_dir / ".cursor" / "skills" / "z-overnight").exists())
+        self.assertTrue((out_dir / "codex-export.txt").exists())
 
 
 # ---------------------------------------------------------------------------

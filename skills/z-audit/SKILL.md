@@ -48,6 +48,9 @@ Parse `$ARGUMENTS` for `--scope-from <chunk-spec>` **immediately — before slug
 5. Set `SCOPE_HINT` to the matched chunk's `scope_hint` field.
 6. **Defer all `log-event.sh` calls to after Setup.** At this pre-Setup stage, `$RUN` does not yet exist, so no events may be logged. Store `SCOPE_FROM_RESOLVED_PAYLOAD='{"chunk_id": "<id>", "scope_hint": "<SCOPE_HINT>", "parent_scope_json": "<path>"}'` for logging after Setup initializes `$RUN`.
 
+7. **Artifact Scout inheritance:** child audit flows invoked with `--scope-from` inherit the parent's artifact-scout context. Set `ARTIFACT_SCOUT_PARENT_CONTEXT="$scope_json_path"` (or the parent archive dir when known) and `ARTIFACT_SCOUT_SKIP_HISTORICAL_RESCAN=true`. A `--scope-from` child MUST NOT run `scripts/artifact-scout-inventory.py` and MUST NOT dispatch `artifact-scout`; it may surface the parent `artifact-scout.md` warning summary if the parent archive is available.
+
+
 **After Setup completes (RUN and archive dirs exist):** If `SCOPE_FROM_ERROR` is set, halt with `AskUserQuestion`: "Chunk `<id>` not found in SCOPE.json. Valid chunk ids: <SCOPE_FROM_VALID_IDS>." Execute **Run Brief — halt finalize** with reason `chunk <id> not found`.
 Otherwise log:
 ```bash
@@ -115,7 +118,57 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
    Resolve the kernel path exactly once here. When `KERNEL_PATH` is non-empty, inject `kernel_path: <KERNEL_PATH>` as a line in the `Agent(prompt=...)` of every behavioral-agent dispatch in this run (auditor, consultant-primary, consultant-secondary, reviewer). Omit the line entirely when `KERNEL_PATH` is empty — the agent's static fallback handles self-resolution in that case. Do NOT inject kernel content — inject the path string only.
 
 7. Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
-8. If `docs/llm/INDEX.json` exists → dispatch `doc-fetcher` (Haiku) to get the concept list overlapping the audit target. Do NOT read INDEX.json or per-concept JSONs from main thread.
+8. **Artifact Scout preflight (skipped for `--scope-from` children):**
+   If `ARTIFACT_SCOUT_SKIP_HISTORICAL_RESCAN=true`, surface the inherited parent scout context and continue; do not rescan historical artifacts.
+
+   Otherwise run deterministic inventory and classifier before doc-fetcher, scope-probe, auditor, consultant, or reviewer dispatch:
+   ```bash
+   REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+   ARTIFACT_SCOUT_INVENTORY="$Z_HARNESS_PLAN_DIR/archive/$RUN/artifact-scout-inventory.json"
+   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/artifact-scout-inventory.py" \
+     --command /z-audit --slug "$Z_HARNESS_SLUG" --run-id "$RUN" \
+     --repo-root "$REPO_ROOT" --plan-dir "$Z_HARNESS_PLAN_DIR" \
+     --task "$SANITIZED_ARGUMENTS" --output "$ARTIFACT_SCOUT_INVENTORY"
+   ARTIFACT_SCOUT_EVENT_PAYLOAD="$(python3 - "$ARTIFACT_SCOUT_INVENTORY" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path, encoding="utf-8"))
+print(json.dumps({
+  "command": data.get("command"),
+  "slug": data.get("slug"),
+  "run_id": data.get("run_id"),
+  "artifact_path": path,
+  "source_status": data.get("source_status", {}),
+  "mandatory_candidate_count": len(data.get("mandatory_candidates") or []),
+  "historical_candidate_count": len(data.get("historical_candidates") or []),
+  "active_record_count": len(data.get("active_records") or []),
+  "worktree_count": len(data.get("worktrees") or []),
+  "truncated": bool(data.get("truncated")),
+}, separators=(",", ":")))
+PYEOF
+)"
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" artifact_scout_inventory_complete "$ARTIFACT_SCOUT_EVENT_PAYLOAD"
+   ```
+   The `artifact_scout_inventory_complete` payload MUST include `command`, `slug`, `run_id`, `artifact_path`, `source_status`, `mandatory_candidate_count`, `historical_candidate_count`, `active_record_count`, `worktree_count`, and `truncated` from the inventory JSON.
+   ```
+   <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this artifact-scout
+        requirement and skip the Agent() call. Skipping means continue without scout routing. -->
+   Agent(
+     subagent_type="artifact-scout",
+     description="Artifact scout for z-audit <slug>",
+     prompt="current_command: /z-audit
+task_or_topic: <sanitized audit target>
+route_chain_json: <current route chain JSON>
+repo_root: <abs repo root>
+inventory_json_path: $Z_HARNESS_PLAN_DIR/archive/$RUN/artifact-scout-inventory.json
+
+Inline inventory JSON:
+<contents printed by scripts/artifact-scout-inventory.py>"
+   )
+   ```
+   Write the raw response to `$Z_HARNESS_PLAN_DIR/archive/$RUN/artifact-scout.md`. Emit `artifact_scout_classified`, `artifact_scout_warning`, and `artifact_scout_route` per the contract. Warning-only debug/audit similarity never routes: it never writes `route-decision.md`, never emits `artifact_scout_route`, and never advances `route_chain`. Only `ask_user` or route outcomes with `route_chain_effect: "write_route_decision"` may write a route artifact and emit `plan_route_decision`.
+
+9. If `docs/llm/INDEX.json` exists → dispatch `doc-fetcher` (Haiku) to get the concept list overlapping the audit target. Do NOT read INDEX.json or per-concept JSONs from main thread.
    ```
    <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
         requirement and skip if unavailable. Audit proceeds without doc grounding. -->

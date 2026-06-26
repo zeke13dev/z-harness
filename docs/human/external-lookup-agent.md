@@ -1,6 +1,6 @@
 # external-lookup-agent
 
-> Last updated: 2026-06-19
+> Last updated: 2026-06-24
 > Covers source: agents/external-lookup.md
 
 ## Overview
@@ -17,7 +17,7 @@ The agent is strictly read-only. Every response follows the canonical `lookup-co
 - `agents/external-lookup.md:91` — `Budget` — 3 KB total cap, normalized-query SHA256 rule, raw artifact cache behavior.
 - `agents/external-lookup.md:99` — `Freshness discipline` — `freshness_ts` is the UTC retrieval timestamp (not document last-modified); stale cache (>24h mtime) forces `confidence: low`.
 - `agents/external-lookup.md:105` — `Refusal modes` — Defines `ok`, `partial`, `refused` semantics and three refusal categories: `mutation_blocked`, `out_of_scope`, `auth_missing`.
-- `agents/external-lookup.md:113` — `Provenance section format` — Provenance fields: `query`, `tools_used`, `sources`, `freshness_ts`, `confidence`, `commands`. Commands are always verbatim, never truncated in provenance.
+- `agents/external-lookup.md:22` — `Provenance section format` — Provenance fields: `query`, `tools_used`, `sources`, `freshness_ts`, `confidence`, `commands`. Commands are always verbatim, never truncated in provenance.
 - `agents/external-lookup.md:127` — `Confidence scale` — Three-value enum: `high` (authoritative source, no interpolation), `medium` (inference or partial contradiction), `low` (stale cache or single uncorroborated source).
 - `agents/external-lookup.md:137` — `Edge cases` — Specifies partial/refused handling for 4xx/5xx, WebSearch no-results, pagination depth limit (WebFetch max depth 2), and auth-missing.
 - `agents/external-lookup.md:144` — `Invariants` — Formal checklist: STATUS line first, section order fixed, ≤3 KB, no raw HTML/JSON/YAML in Answer, verb-blocklist before every Bash, commands verbatim in provenance.

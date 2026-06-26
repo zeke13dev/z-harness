@@ -1,7 +1,7 @@
 # Plan Layout Migration
 
-> Last updated: 2026-06-19
-> Covers source: scripts/plan-path.sh, scripts/migrate-plan-layout.sh, scripts/log-event.sh, docs/human/PLAN-LAYOUT.md, scripts/rescue-worktree-state.sh
+> Last updated: 2026-06-24
+> Covers source: scripts/plan-path.sh, scripts/migrate-plan-layout.sh, scripts/log-event.sh, docs/human/PLAN-LAYOUT.md
 
 ## Overview
 
@@ -34,7 +34,6 @@ Within the chosen base the directory structure is: `<base>/plans/<slug>/` for pl
 - `scripts/migrate-plan-layout.sh:370` — `merge_metrics` — dedup-append of `metrics.jsonl`; idempotent across crash/re-run
 - `scripts/migrate-plan-layout.sh:485` — `migrate_plan_slug` — migrates one slug from both legacy sources to `<base>/plans/<slug>`
 - `scripts/migrate-plan-layout.sh:612` — `migrate_full` — full migration: all plan slugs, archive, metrics, followups, flat TASKS.md, empty-dir cleanup
-- `scripts/rescue-worktree-state.sh:1` — `rescue-worktree-state.sh` — COPY (not move) of in-repo z-harness state to external base before a git worktree is archived; inverse of migrate-plan-layout.sh; no live-run barrier; source-wins merge with `.pre-rescue` backup
 <!-- AUTO-END: entry-points -->
 
 ## How it interacts with others

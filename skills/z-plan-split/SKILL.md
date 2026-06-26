@@ -82,6 +82,42 @@ $ARGUMENTS
 9. **Check for LLM-tier docs.** If `docs/llm/INDEX.json` exists in the repo root, do NOT read it from main thread. Note its existence; Phase 1 may dispatch `doc-fetcher` (Haiku) for one-shot topic grounding. Skip the docs-freshness gate — this command does not itself touch INDEX.json; cluster-planners handle their own doc reads.
 10. **Cluster proposal seed.** If `--clusters="a,b,c"` was passed, parse the comma-separated list into proposed cluster names (kebab-case, 2-6 entries — each name must independently pass the same `^[a-z0-9]+(-[a-z0-9]+)*$` validator from step 2; reject the entire flag on any invalid name). **`--clusters=` supplies names only, not scopes** — Phase 1 must still derive a one-line scope per cluster (either auto-derived from the topic text by Phase 1's main-thread reasoning, or interactively asked via `AskUserQuestion` if scopes can't be inferred unambiguously). Skip Phase 1's automatic name proposal (jump straight to Phase 1's scope-derivation + user confirmation, 1d). Otherwise proceed to Phase 1 normally.
 
+## Artifact Scout preflight
+
+Run after Setup and before Phase 1 doc-fetcher, cluster proposal, Plan Route Check, or cluster-planner dispatch. The deterministic inventory runs now; the optional `artifact-scout` Agent classifier is deferred until after the Phase 1.5 hard cost gate, preserving the no-pre-gate-Agent invariant.
+
+```bash
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+ARTIFACT_SCOUT_INVENTORY="$Z_HARNESS_PLAN_DIR/archive/$RUN/artifact-scout-inventory.json"
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/artifact-scout-inventory.py" \
+  --command /z-plan-split --slug "$Z_HARNESS_SLUG" --run-id "$RUN" \
+  --repo-root "$REPO_ROOT" --plan-dir "$Z_HARNESS_PLAN_DIR" \
+  --task "$ARGUMENTS" --output "$ARTIFACT_SCOUT_INVENTORY"
+ARTIFACT_SCOUT_EVENT_PAYLOAD="$(python3 - "$ARTIFACT_SCOUT_INVENTORY" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path, encoding="utf-8"))
+print(json.dumps({
+  "command": data.get("command"),
+  "slug": data.get("slug"),
+  "run_id": data.get("run_id"),
+  "artifact_path": path,
+  "source_status": data.get("source_status", {}),
+  "mandatory_candidate_count": len(data.get("mandatory_candidates") or []),
+  "historical_candidate_count": len(data.get("historical_candidates") or []),
+  "active_record_count": len(data.get("active_records") or []),
+  "worktree_count": len(data.get("worktrees") or []),
+  "truncated": bool(data.get("truncated")),
+}, separators=(",", ":")))
+PYEOF
+)"
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" artifact_scout_inventory_complete "$ARTIFACT_SCOUT_EVENT_PAYLOAD"
+```
+
+The `artifact_scout_inventory_complete` payload MUST include `command`, `slug`, `run_id`, `artifact_path`, `source_status`, `mandatory_candidate_count`, `historical_candidate_count`, `active_record_count`, `worktree_count`, and `truncated` from the inventory JSON.
+
+
+
 **All paths in subsequent phases live under `z-harness/<root-slug>/`:**
 - `z-harness/<root-slug>/MANIFEST.md`
 - `z-harness/<root-slug>/SHARED-CONCERNS.md`
@@ -190,12 +226,12 @@ Run this route check after Phase 1b proposes cluster seams and before user confi
 
 Deterministic routes:
 - If `cluster_seams < 2`, write a route decision to `/z-plan` with `reason_codes: ["too_few_clusters"]`, emit the existing `aborted_too_few_clusters` terminal telemetry, and stop. This hard-refusal branch may use `user_choice: "not_asked"` because continuation would violate the split invariant.
-- If `cluster_seams > 6`, stop before planner dispatch; recommend narrowing the topic or routing to `/z-map` when the excess seams come from unknown terrain (`reason_codes: ["too_many_clusters"]` or `["too_many_clusters","needs_terrain_map"]`).
-- If seams are unknown because terrain or ownership boundaries cannot be cited, route to `/z-map` with `reason_codes: ["needs_terrain_map"]`.
+- If `cluster_seams > 6`, stop before planner dispatch; recommend narrowing the topic when the excess seams come from unknown terrain (`reason_codes: ["too_many_clusters"]` or `["too_many_clusters","needs_terrain_grounding"]`).
+- If seams are unknown because terrain or ownership boundaries cannot be cited, ask the user to narrow the topic or gather citations first with `reason_codes: ["needs_terrain_grounding"]`.
 - If `cluster_seams` is in `2..6` and each seam is independently plannable, stay in `/z-plan-split`.
 - If the request is actually a small concrete fix or medium coherent plan with no independent seams, route to `/z-plan` using the primary route matrix.
 
-Call `planning-router` only when the seam count is plausible but conflicting signals make `/z-plan`, `/z-plan-split`, and `/z-map` comparably reasonable. It receives a compact signal payload plus the route chain and is advisory; malformed or unavailable classifier output falls back to deterministic routing or an explicit AskUser choice.
+Call `planning-router` only when the seam count is plausible but conflicting signals make `/z-plan`, `/z-plan-split`, and an explicit user-narrowing choice comparably reasonable. It receives a compact signal payload plus the route chain and is advisory; malformed or unavailable classifier output falls back to deterministic routing or an explicit AskUser choice.
 
 If routing, write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md`, emit `plan_route_decision` with `from_command`, `to_command`, `route_class`, `reason_codes`, `signals`, `confidence`, `classifier_used`, `artifact_path`, `route_chain`, and `user_choice`, then present the AskUser handoff gate when continuation is allowed: switch, continue, or abandon. Do not execute the next command automatically.
 
@@ -333,6 +369,29 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
   "$(printf '{"phase":"1.5","name":"pre-fanout-cost-gate","wall_ms":%d,"user_wait_ms":%d}' \
      "$WALL_MS" "$USER_WAIT_MS_THIS_PHASE")"
 ```
+
+## Artifact Scout classifier
+
+Run immediately after the Phase 1.5 hard cost gate succeeds and before Phase 2 cluster-planner dispatch. Do not dispatch `artifact-scout` before this gate.
+
+```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this artifact-scout
+     requirement and skip the Agent() call. Skipping means continue without scout routing. -->
+Agent(
+  subagent_type="artifact-scout",
+  description="Artifact scout for z-plan-split <slug>",
+  prompt="current_command: /z-plan-split
+task_or_topic: <split topic>
+route_chain_json: <current route chain JSON>
+repo_root: <abs repo root>
+inventory_json_path: $Z_HARNESS_PLAN_DIR/archive/$RUN/artifact-scout-inventory.json
+
+Inline inventory JSON:
+<contents printed by scripts/artifact-scout-inventory.py>"
+)
+```
+
+Write the raw response to `$Z_HARNESS_PLAN_DIR/archive/$RUN/artifact-scout.md`. Emit `artifact_scout_classified`, `artifact_scout_warning`, and `artifact_scout_route` per the contract. Warning-only output never writes `route-decision.md`, never emits `artifact_scout_route`, and never advances `route_chain`; only `ask_user` or route outcomes with `route_chain_effect: "write_route_decision"` may write a route artifact and emit `plan_route_decision`.
 
 ---
 

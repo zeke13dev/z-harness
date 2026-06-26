@@ -78,7 +78,54 @@ Loop prevention: carry forward the latest route chain; if it already has two ent
    `RUN=$(date -u +%Y%m%dT%H%M%SZ)-${Z_HARNESS_SLUG}-audit-plan-style`
 5. **Create directories:**
    `mkdir -p $BASE/archive/$RUN/transcripts`
-6. **Voice availability pre-check:**
+6. **Artifact Scout preflight (post STYLE.md hard gate):**
+   Run only after the STYLE.md hard gate has passed and `$BASE/archive/$RUN` exists. This is the first allowed classifier position; do not dispatch `artifact-scout` before the hard gate.
+   ```bash
+   ARTIFACT_SCOUT_INVENTORY="$BASE/archive/$RUN/artifact-scout-inventory.json"
+   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/artifact-scout-inventory.py" \
+     --command /z-audit-plan-style --slug "$Z_HARNESS_SLUG" --run-id "$RUN" \
+     --repo-root "$REPO_ROOT" --plan-dir "$BASE" \
+     --task "$ARGUMENTS" --output "$ARTIFACT_SCOUT_INVENTORY"
+   ARTIFACT_SCOUT_EVENT_PAYLOAD="$(python3 - "$ARTIFACT_SCOUT_INVENTORY" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path, encoding="utf-8"))
+print(json.dumps({
+  "command": data.get("command"),
+  "slug": data.get("slug"),
+  "run_id": data.get("run_id"),
+  "artifact_path": path,
+  "source_status": data.get("source_status", {}),
+  "mandatory_candidate_count": len(data.get("mandatory_candidates") or []),
+  "historical_candidate_count": len(data.get("historical_candidates") or []),
+  "active_record_count": len(data.get("active_records") or []),
+  "worktree_count": len(data.get("worktrees") or []),
+  "truncated": bool(data.get("truncated")),
+}, separators=(",", ":")))
+PYEOF
+)"
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" artifact_scout_inventory_complete "$ARTIFACT_SCOUT_EVENT_PAYLOAD"
+   ```
+   The `artifact_scout_inventory_complete` payload MUST include `command`, `slug`, `run_id`, `artifact_path`, `source_status`, `mandatory_candidate_count`, `historical_candidate_count`, `active_record_count`, `worktree_count`, and `truncated` from the inventory JSON.
+   ```
+   <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this artifact-scout
+        requirement and skip the Agent() call. Skipping means continue without scout routing. -->
+   Agent(
+     subagent_type="artifact-scout",
+     description="Artifact scout for z-audit-plan-style <slug>",
+     prompt="current_command: /z-audit-plan-style
+task_or_topic: <plan style audit request>
+route_chain_json: <current route chain JSON>
+repo_root: <abs repo root>
+inventory_json_path: $BASE/archive/$RUN/artifact-scout-inventory.json
+
+Inline inventory JSON:
+<contents printed by scripts/artifact-scout-inventory.py>"
+   )
+   ```
+   Write the raw response to `$BASE/archive/$RUN/artifact-scout.md`. Emit `artifact_scout_classified`, `artifact_scout_warning`, and `artifact_scout_route` per the contract. Warning-only output never writes `route-decision.md`, never emits `artifact_scout_route`, and never advances `route_chain`; only `ask_user` or route outcomes with `route_chain_effect: "write_route_decision"` may write a route artifact and emit `plan_route_decision`.
+
+7. **Voice availability pre-check:**
    ```bash
    command -v codex >/dev/null 2>&1 && CODEX_AVAILABLE=true || CODEX_AVAILABLE=false
    command -v gemini >/dev/null 2>&1 && GEMINI_AVAILABLE=true || GEMINI_AVAILABLE=false

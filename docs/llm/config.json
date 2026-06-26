@@ -1,6 +1,6 @@
 {
   "concept": "config",
-  "last_updated": "2026-06-19",
+  "last_updated": "2026-06-24",
   "covers_spec": "z-harness/askuser-prefs-hook/SPEC.md",
   "source_file": [
     "scripts/config.py",
@@ -15,46 +15,46 @@
       "line": 61,
       "symbol": "DEFAULTS",
       "kind": "const",
-      "summary": "[Loader API] Built-in defaults for all config sections: [notify],[docs],[workflow],[followup],[axioms],[brainstorm],[changelog],[personas],[experiment],[runtime],[cost],[models],[export] (layer 1)"
+      "summary": "[Loader API] Built-in defaults for all config sections including workflow.pre_run_cost_gate and cost.token_budget (layer 1)"
     },
     {
       "file": "scripts/config.py",
-      "line": 296,
+      "line": 323,
       "symbol": "VALIDATORS",
       "kind": "const",
-      "summary": "[Loader API] Allowed enum sets per dotted-key; hard-fail on repo/env, soft-warn on global; covers brainstorm, personas, workflow, axioms, experiment, cost, models, export keys"
+      "summary": "[Loader API] Allowed enum sets per dotted-key; hard-fail on repo/env, soft-warn on global; covers workflow.pre_run_cost_gate and cost.token_budget"
     },
     {
       "file": "scripts/config.py",
-      "line": 360,
+      "line": 401,
       "symbol": "_COERCERS",
       "kind": "const",
-      "summary": "[Loader API] Post-validation normalizers; converts env-var strings to typed Python values for all bool/int knobs including personas.* and brainstorm.*"
+      "summary": "[Loader API] Post-validation normalizers; converts env-var strings to typed Python values, including cost.token_budget string -> int/null"
     },
     {
       "file": "scripts/config.py",
-      "line": 492,
+      "line": 565,
       "symbol": "QUESTION_IDS",
       "kind": "const",
-      "summary": "[Workflow Resolver] Single source of truth for AskUserQuestion routing-class preference keys (6 workflow.* + pre_run_cost_gate); validated against VALIDATORS at module load by _run_startup_guards"
+      "summary": "[Workflow Resolver] Single source of truth for AskUserQuestion routing-class preference keys, including workflow.pre_run_cost_gate; callsites list includes /z-plan"
     },
     {
       "file": "scripts/config.py",
-      "line": 580,
+      "line": 640,
       "symbol": "OVERNIGHT_AUTODECIDE_QIDS_DEFAULT",
       "kind": "const",
       "summary": "[Workflow Resolver] Default overnight allowlist: {workflow.slug_confirm: recommend_derived, workflow.audit_to_amend: amend}"
     },
     {
       "file": "scripts/config.py",
-      "line": 586,
+      "line": 646,
       "symbol": "RESULT_MAP",
       "kind": "const",
       "summary": "[Workflow Resolver] Maps (question_id, option-domain-value) -> resolver result-domain (skip|prefill|ask|halt|defer-to-sink)"
     },
     {
       "file": "scripts/config.py",
-      "line": 615,
+      "line": 679,
       "symbol": "_run_startup_guards",
       "kind": "fn",
       "summary": "[Workflow Resolver] Module-load consistency check: asserts QUESTION_IDS<=VALIDATORS, every qid has skill_default and valid halt_category, RESULT_MAP references valid choices; SystemExit(2) on violation"
@@ -180,10 +180,10 @@
     },
     {
       "file": "scripts/config.py",
-      "line": 2879,
+      "line": 2993,
       "symbol": "cmd_check_no_ask",
       "kind": "fn",
-      "summary": "[Workflow Resolver] Overnight-gate checker with cost-gate delegation path (--range-high/--severity); returns {result: halt|proceed|auto_proceed|unhandled_gate, question_id, rule_id}; always exits 0"
+      "summary": "[Workflow Resolver] Overnight-gate checker with cost-gate delegation path (--range-high/--severity); hard severity under NO_ASK=halt applies cost.token_budget and may return halt or unhandled_gate"
     },
     {
       "file": "scripts/config.py",
@@ -289,7 +289,7 @@
     "[Workflow Resolver] workflow.implement_all_proceed valid values: ask | auto_resume | halt; default ask",
     "[Workflow Resolver] workflow.review_all_proceed valid values: ask | proceed | halt; default ask",
     "[Workflow Resolver] workflow.plan_decisions_approval valid values: ask | approve | halt; default ask",
-    "[Workflow Resolver] workflow.pre_run_cost_gate valid values: ask | auto_proceed | halt; default ask",
+    "[Workflow Resolver] workflow.pre_run_cost_gate valid values: ask | auto_proceed | halt; default ask; hard pre-run gates delegate to check-no-ask, where interactive mode returns ask and Z_HARNESS_NO_ASK=halt applies workflow/allowlist then cost.token_budget",
     "resolve-question stdout is reserved exclusively for JSON; all diagnostics route to stderr",
     "Z_HARNESS_ASK_ALL=1 short-circuits resolve-question to always return {result: ask, source: override}",
     "resolve-question exit 0 = valid JSON; exit 2 = bad invocation; exit 3 = unknown question_id; exit 4 = I/O error; exit 5 = config conflict (ASK_ALL=1 + NO_ASK=halt)",
@@ -309,7 +309,10 @@
     "[claim-lock] Z_HARNESS_CLAIM_TTL_SECS (default 2700), Z_HARNESS_CLAIM_OVERRIDE, Z_HARNESS_CLAIM_DISABLE are env-only (NOT TOML keys); read inline by plan-claim.sh; NOT emitted by export-env",
     "[claim-lock] Z_HARNESS_CLAIM_DISABLE=1 makes every plan-claim.sh subcommand an immediate exit-0 no-op; release is a safe no-op without event-presence gate",
     "[claim-lock] exit-2 from acquire is the normal post-crash recovery path (setsid-detached daemon survives SIGKILL, leaks until TTL); unattended exit-2 default-aborts unless Z_HARNESS_CLAIM_OVERRIDE=1",
-    "[claim-lock] heartbeat exit-9 fires ONLY on confirmed ownership change; transient read error is heartbeat_error + exit-0 (NOT exit-9)"
+    "[claim-lock] heartbeat exit-9 fires ONLY on confirmed ownership change; transient read error is heartbeat_error + exit-0 (NOT exit-9)",
+    "[cost] cost.token_budget=null means no budget; check-no-ask with --severity hard under Z_HARNESS_NO_ASK=halt halts with rule_id: cost_budget_missing for /z-plan and other hard gates",
+    "[Workflow Resolver] workflow.pre_run_cost_gate callsites include scripts/pre-run-cost-gate.sh, z-research, z-uplift, z-plan-split, and z-plan",
+    "[Overnight gate] Hard cost gates under Z_HARNESS_NO_ASK=halt auto_proceed only when range_high <= cost.token_budget; over-budget halts or returns unhandled_gate in policy mode."
   ],
   "gotchas": [
     "[brainstorm] brainstorm.personas remains in [brainstorm] not [personas] — do NOT move it; existing configs already have it there",
@@ -342,7 +345,8 @@
     "[active-plan] Z_HARNESS_REGISTRY_ENABLED, Z_HARNESS_REGISTRY_STALE_SECS, Z_HARNESS_STRICT_OVERLAP, Z_HARNESS_EXTERNAL_DEFAULT, Z_HARNESS_BASE_DIR are surfaced by inspect-all under env-only but are NOT TOML keys; NOT emitted by export-env",
     "[claim-lock] Z_HARNESS_CLAIM_TTL_SECS, Z_HARNESS_CLAIM_OVERRIDE, Z_HARNESS_CLAIM_DISABLE are NOT TOML keys and NOT emitted by export-env; set only via environment",
     "[claim-lock] release is always safe to call even when Z_HARNESS_CLAIM_DISABLE=1; it is a true no-op (not gated on event presence)",
-    "[claim-lock] do NOT conflate heartbeat exit-9 (confirmed ownership change) with heartbeat_error (transient read, exit-0); they have opposite severities"
+    "[claim-lock] do NOT conflate heartbeat exit-9 (confirmed ownership change) with heartbeat_error (transient read, exit-0); they have opposite severities",
+    "[cost] /z-plan is a hard workflow.pre_run_cost_gate callsite; unattended runs need a positive cost.token_budget or an explicit allowlist/config decision to avoid cost_budget_missing halts."
   ],
   "workflow_section": {
     "keys": {
@@ -417,11 +421,12 @@
         "env": "Z_HARNESS_WORKFLOW_PRE_RUN_COST_GATE",
         "callsites": [
           "scripts/pre-run-cost-gate.sh",
-          "commands/z-research.md",
-          "commands/z-uplift.md",
-          "commands/z-plan-split.md"
+          "skills/z-research/SKILL.md",
+          "skills/z-uplift/SKILL.md",
+          "skills/z-plan-split/SKILL.md",
+          "skills/z-plan/SKILL.md"
         ],
-        "description": "Controls pre-run cost gate for z-research/z-uplift/z-plan-split. ask=prompt; auto_proceed=skip gate; halt=stop unconditionally. Also consumed by check-no-ask --range-high/--severity delegation path."
+        "description": "Controls pre-run cost gates for z-research/z-uplift/z-plan-split/z-plan. ask=prompt; auto_proceed=skip AskUser after helper-approved estimate. pre-run-cost-gate.sh delegates hard gates to check-no-ask --range-high/--severity: interactive mode (Z_HARNESS_NO_ASK not halt) returns ask; unattended mode (Z_HARNESS_NO_ASK=halt) applies workflow.pre_run_cost_gate/allowlist resolution first, then cost.token_budget if still unresolved."
       }
     }
   },
@@ -533,13 +538,13 @@
   },
   "cost_section": {
     "section": "[cost]",
-    "description": "Token budget configuration for cost-gate delegation. Used by check-no-ask when invoked with --range-high and --severity.",
+    "description": "Token budget configuration for hard cost-gate delegation. Used by check-no-ask when invoked with --range-high and --severity; /z-plan uses the same path.",
     "keys": {
       "cost.token_budget": {
         "type": "int_or_null",
         "default": null,
         "env": "Z_HARNESS_COST_TOKEN_BUDGET",
-        "description": "Token budget ceiling. When set, check-no-ask --severity hard compares range_high against this value. null=budget not configured; hard gates under NO_ASK=halt will halt with cost_budget_missing."
+        "description": "Token budget ceiling. When set, check-no-ask --severity hard compares range_high against this value. null=budget not configured; hard gates under Z_HARNESS_NO_ASK=halt halt with cost_budget_missing."
       }
     }
   },

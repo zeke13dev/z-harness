@@ -1,64 +1,58 @@
 # z-brainstorm
 
-> Last updated: 2026-06-19
-> Covers source: commands/z-brainstorm.md, agents/ideator-clusterer.md
+> Last updated: 2026-06-24
+> Covers source: skills/z-brainstorm/SKILL.md, agents/ideator-clusterer.md
 
 ## Overview
 
-`/z-brainstorm` is cheap, opt-in pre-plan ideation. It dispatches three vendor-diverse ideators (Claude, Codex, Gemini) in parallel, runs a mandatory anti-bias check, and produces a `BRAINSTORM.md` file that seeds a subsequent `/z-plan` invocation. The entire pipeline targets ≤200K tokens end-to-end. It does not produce SPEC/PLAN/TASKS — those come from `/z-plan` after the user locks in a framing.
+`/z-brainstorm` is cheap, opt-in pre-planning ideation. It produces `BRAINSTORM.md` as a seed for `/z-plan`; it does not produce SPEC/PLAN/TASKS. The pipeline derives a slug, initializes a run brief, sharpens the topic if no `GRILL.md` already exists, probes scope, builds shared scaffolding, dispatches vendor-diverse ideators, performs an anti-bias synthesis pass, and then enters a natural-language discussion loop where the user can ask questions, combine directions, request re-spins/refinements, restart, abandon, or lock in a choice.
 
-The pipeline is organized into five phases. Phase 0 probes for scope (LIGHT/MEDIUM/HEAVY) and optionally sharpens a vague topic by auto-invoking `/z-sharpen` inline before any ideation begins. Phases 1–3 scaffold and run ideation. Phase 4 is a conversational discussion loop where the user can ask questions, challenge framings, request re-spins, combine directions, or lock in a choice. The orchestrator never auto-picks a framing — it always waits for an unambiguous signal from the user before writing `chosen_framing`.
+Current Phase 0 behavior is intentionally conversational: if `GRILL.md` is absent, the orchestrator asks 1-2 short sharpening questions in prose and ends the turn. A reply of `skip` or `go` uses the raw topic unchanged; any other reply is synthesized into `GRILL.md`. This sharpening check is separate from the LIGHT/MEDIUM/HEAVY scope probe and from wide-mode count parsing.
 
 ## Key entry points
 
-- `commands/z-brainstorm.md:1` — `/z-brainstorm` — Top-level command. Sets up slug, run-id, plan dir, run-brief; then executes Phase 0 through Phase 4 in sequence.
-- `commands/z-brainstorm.md:82` — `Phase 0 — sharpen-vs-skip gate (D5)` — Heuristic check (GRILL.md present → skip; topic ≥40 chars + concrete markers → skip; topic <15 chars → sharpen; grey zone → one Haiku call). If "sharpen" wins, auto-invokes `/z-sharpen` inline to produce `GRILL.md`. Orthogonal to scope-probe: idea vagueness ≠ codebase fanout size.
-- `commands/z-brainstorm.md:198` — `Phase 0 — count parse (wide N)` — Extracts ideator count N from natural-language prose (no `--wide` flag). Default N=3. "lots of / many / wide / mega" → N=6. Cap at 20. Sets `WIDE_N` for all downstream branches.
-- `commands/z-brainstorm.md:536` — `Phase 1 — Scaffolding` — Assembles an identical payload for all ideators: doc-fetcher synthesis (Haiku; never reads `docs/llm/*.json` from main thread), optional Explore (gated on `Z_HARNESS_BRAINSTORM_EXPLORE=1`), MAP.md terrain (or accepted legacy RESEARCH.md), GRILL.md seed framing if present. Computes `input_hash` from all ingredients. Checkpoints to `archive/<RUN>/phase1-scaffolding.md`.
-- `commands/z-brainstorm.md:632` — `Phase 2 — Parallel ideator dispatch` — Phase 2a draws up to 3 distinct personas from the `ideator` role pool (gated on `brainstorm.personas` knob; graceful degradation on underflow). Phase 2b dispatches all three ideators in one parallel message, each receiving identical scaffolding + the five-section `IDEATOR_SCHEMA`. Failure policy: 1/3 proceed, 2/3 `AskUser` (retry/proceed-with-1/abandon), 3/3 hard halt.
-- `commands/z-brainstorm.md:739` — `Phase 2c — Wide mode dispatch` — Fires only when `WIDE_N > 3`. Resolves overflow model (prompt override > `brainstorm.wide_overflow_model` config > `haiku`; `cheap-mixed` is gated/no-op, fallback to haiku + inline warning). Presents a conversational cost estimate and **ends the turn** — HARD INVARIANT: no ideators dispatched until user confirms. Wave 1 is the existing Phase 2b dispatch. Overflow waves (2+) use the re-spin machinery with anti-seed divergence prompts in rotating vendor pairs. After all waves, dispatches `ideator-clusterer` (Haiku) to collapse N framings → K clusters. Cap: max 3 overflow waves (N > 9 → cap at 9, user informed).
-- `commands/z-brainstorm.md:1026` — `Phase 3 — Synthesis + mandatory anti-bias check` — Parses ideator returns, runs the anti-bias check (every Claude-favoring pick needs explicit concrete justification), picks a tentative recommendation. Writes `BRAINSTORM.md` with YAML frontmatter (`chosen_framing: pending`, `ideator_personas` always written). Produces the ranked prose briefing inline and **ends the turn** (MUST NOT call `AskUserQuestion` or any further tool).
-- `commands/z-brainstorm.md:1193` — `Phase 4 — HEAVY mode branch` — Parses the chunk×framing matrix from the unified `BRAINSTORM.md` (skips FAILED chunks). Presents a ranked pair briefing inline and ends the turn. Discussion loop interprets free-text reply; locks in `chosen_pair: {chunk_id, framing}` on unambiguous signal; HEAVY abandon uses `chosen_framing: abandoned` (no `chosen_pair`).
-- `commands/z-brainstorm.md:1305` — `Phase 4 — LIGHT/MEDIUM discussion loop` — Interprets user's free-text reply for: ask-a-question, challenge/narrow, combine X+Y (draft synthesized framing + await confirm), re-spin (via re-spin machinery, cap 3), lock-in (write `chosen_framing` + `## User choice` verbatim), restart (archive + conversational refined-topic ask), abandon. `synthesized` is the default/expected outcome for a discussion-born hybrid.
-- `commands/z-brainstorm.md:1375` — `Re-spin machinery` — Shared helper for the Phase 4 discussion loop and wide-mode overflow. Hard cap: 3 waves (fully-failed wave does not consume a cap slot). Subset is deterministic by wave number: wave1=Claude+Codex, wave2=Claude+Gemini, wave3=Codex+Gemini. Anti-seed prompt contains all prior framings + divergence instruction. Emits one-line cost note inline before dispatch. Appends `## Re-spin wave N` to `BRAINSTORM.md` (append-only). Emits `respin_wave` event.
-- `agents/ideator-clusterer.md:1` — `ideator-clusterer` — Haiku subagent dispatched after all wide-mode waves complete. Reads N framing blocks from `BRAINSTORM.md`, clusters by core hypothesis / approach axis into K directions. Returns: K cluster labels + members + representative framing (verbatim), effective-diversity report, cross-cluster consensus. Read-only. Clusterer failure or K=0 → orchestrator falls back to N raw framings in the Phase 3 briefing.
+- `skills/z-brainstorm/SKILL.md:26` — setup: derive slug, create run/archive dirs, emit `brainstorm_run_start`, initialize Run Brief, and handle existing `BRAINSTORM.md` overwrite/archive.
+- `skills/z-brainstorm/SKILL.md:84` — `0-sharpen`: if no `GRILL.md`, ask brief clarifying questions conversationally and write `GRILL.md` from the reply before continuing.
+- `skills/z-brainstorm/SKILL.md:145` — `0-count`: infer `WIDE_N` from natural-language count signals; default 3, prose-many default 6, cap 20 before later wide overflow caps.
+- `skills/z-brainstorm/SKILL.md:483` — Phase 1 scaffolding: doc-fetcher synthesis, optional Explore, MAP.md or legacy terrain ingestion, GRILL.md seed, `input_hash`, and archived scaffolding checkpoint.
+- `skills/z-brainstorm/SKILL.md:586` — Phase 2 ideator dispatch: persona draw, three parallel ideators (Claude/general-purpose, Codex consultant-secondary, Gemini consultant-primary), five-section schema, and failure policy.
+- `skills/z-brainstorm/SKILL.md:693` — Phase 2c wide mode: resolves overflow model, presents a conversational cost gate and ends the turn, dispatches overflow re-spin waves after user confirmation, then clusters N framings.
+- `skills/z-brainstorm/SKILL.md:945` — `ideator-clusterer` dispatch: after all wide waves, clusters ideator IDs from `BRAINSTORM.md` into K directions; failure falls back to raw framings.
+- `skills/z-brainstorm/SKILL.md:982` — Phase 3 synthesis: writes `BRAINSTORM.md`, records ideator personas, runs mandatory anti-bias check, presents ranked briefing, and hard-stops for user reply.
+- `skills/z-brainstorm/SKILL.md:1149` — Phase 4 finalize: HEAVY branch ranks `(chunk, framing)` pairs and writes `chosen_pair` only on unambiguous lock-in; LIGHT/MEDIUM branch writes `chosen_framing` or handles combine/re-spin/refine/restart/abandon.
+- `skills/z-brainstorm/SKILL.md:1335` — re-spin machinery: shared helper for discussion re-spins and wide overflow; supports `diverge` and `refine` modes with optional cap enforcement.
+- `agents/ideator-clusterer.md:1` — Haiku read-only clustering agent used only by wide mode.
 
 ## How it interacts with others
 
-- `z-sharpen` — Auto-invoked inline at Phase 0 when the topic is vague. Produces `GRILL.md`. Phase 1c-ii ingests `GRILL.md` as seed framing injected into the scaffolding payload for all ideators.
-- `commands/z-research` — Consumes `/z-brainstorm` as a downstream step after terrain discovery via `/z-map`.
-- `agents/scope-probe` — Dispatched in Phase 0 (non-fast-path) to classify scope as LIGHT/MEDIUM/HEAVY and identify chunks for HEAVY fan-out.
-- `agents/scope-reconciler-brainstorm` — HEAVY mode only: reconciles per-chunk BRAINSTORM.md files into the unified file that the orchestrator writes to the plan dir.
-- `agents/ideator-clusterer` — Wide mode only (WIDE_N>3): collapses N ideator framings into K cluster directions for the Phase 3 ranked briefing.
-- `config` — `brainstorm.personas` knob (ON by default) gates persona draw in Phase 2a. `brainstorm.wide_overflow_model` sets the model for overflow waves (default `haiku`).
-- `personas-and-roles` — `resolve-persona.py random-distinct-for-role ideator --count=N` draws ideator personas in Phase 2a and for each overflow wave.
-- `cost-estimation` — `pre-run-cost-gate.sh` called as a soft gate in the HEAVY path (auto-proceeds); wide-mode cost is surfaced as a conversational estimate inline (not a gate script call).
-- `run-brief` — Run Brief initialized immediately after `brainstorm_run_start`; finalized in Phase 4 "In all branches". Outcome/next set from the user's Phase 4 pick.
-- `active-plan-registry` — Session ID acquired via `active-plan-registry.py session-id` in Setup; plan dir resolved via `plan-path.sh resolve_plan_path`.
+- `doc-fetcher` — Phase 1 uses docs before Explore so ideators share current, compact repo context.
+- `z-sharpen`/`GRILL.md` — prior or newly written sharpening context is included in scaffolding and in `input_hash`.
+- `z-map`/`z-research` — MAP.md is the canonical terrain artifact; legacy RESEARCH.md is accepted only when it is terrain-like, not approach synthesis.
+- `scope-probe` and `scope-reconciler-brainstorm` — non-fast-path scope classification and HEAVY chunk reconciliation.
+- `personas-and-roles` — `brainstorm.personas` controls ideator persona draws; underflow slots run vanilla and are recorded as `<none>`.
+- `cost-estimation` — wide mode uses an inline conversational cost estimate and waits for explicit user confirmation before extra ideators dispatch.
+- `active-plan-registry` and Run Brief — setup registers the session and finalization records outcome/next steps.
 
 ## Edge cases / gotchas
 
-- **Phase 3 hard end-turn invariant.** After writing `BRAINSTORM.md` and producing the ranked briefing, the orchestrator MUST NOT call any further tool — not even Read. The next tool call comes only after the user replies in Phase 4.
-- **Ambiguity guardrail (m5).** If the user's Phase 4 reply is ambiguous, ask a clarifying question conversationally — never write `chosen_framing` or `chosen_pair` on a guess.
-- **Wide × HEAVY suppression (D2).** If `WIDE_N > 3` and the scope probe returns HEAVY, the HEAVY fan-out is entirely suppressed and `MODE` is downgraded to MEDIUM. The `wide_suppressed_heavy` event is emitted. These two fan-out axes never multiply.
-- **Wide cost gate is conversational, not a structured gate.** The orchestrator presents an estimate inline and ends the turn. The user must send an explicit reply before any ideators are dispatched.
-- **cheap-mixed is gated/no-op.** There is no verified `--model` path for codex-cli or agy. Setting `brainstorm.wide_overflow_model=cheap-mixed` triggers a fallback to `haiku` and an inline warning. The `wide_overflow_model_warn` event is emitted.
-- **MAP.md vs RESEARCH.md terrain precedence.** MAP.md is the canonical artifact. RESEARCH.md is accepted only when `artifact_kind: map` or the field is absent (legacy). `artifact_kind: approach_synthesis` is explicitly skipped — it is a meta-orchestrator output, not terrain.
-- **GRILL.md is included in `input_hash`.** A changed GRILL.md invalidates any stale cache hit and forces brainstorm to regenerate.
-- **Re-spin append-only.** BRAINSTORM.md is never rewritten after Phase 3; all re-spin waves append under `## Re-spin wave N` headers. The file is the resumable state.
-- **Parent attribution.** When `Z_HARNESS_PARENT_RUN_ID` is set (e.g. dispatched by `/z-research`), every `log-event.sh` call must include `parent_run_id` and `parent_command` fields.
-- **HEAVY abandon shape.** HEAVY abandon sets `chosen_framing: abandoned` and omits `chosen_pair`. This keeps abandon detection uniform across modes in downstream consumers.
-- **`ideator_personas` always written in Phase 3 frontmatter** — even when `brainstorm.personas=OFF` (all values `<none>`) or when an ideator failed (binding still recorded; the ideator appears as `<id>:failed` in `ideators`).
+- Phase 0 sharpening is not a specificity heuristic anymore: absent `GRILL.md` means ask 1-2 questions and end the turn.
+- Phase 3 has a hard end-turn invariant: after writing `BRAINSTORM.md` and presenting the ranked briefing, no further tool call is allowed until the user replies.
+- Wide mode's cost gate is conversational, not `AskUserQuestion`; no ideators dispatch until the user replies yes/go/proceed or adjusts N.
+- `cheap-mixed` overflow model is gated/no-op; it logs a warning and falls back to Haiku because Codex/Antigravity model override paths are not verified.
+- Wide overflow is capped at three overflow waves (maximum 9 total ideators); requests beyond the cap are explicitly reported to the user.
+- HEAVY abandon writes `chosen_framing: abandoned` and omits `chosen_pair`; successful HEAVY lock-in removes `chosen_framing` and writes `chosen_pair` atomically.
+- Discussion re-spins are uncapped when `RESPIN_CAP` is empty; wide overflow passes `RESPIN_CAP=3`.
+- Refine mode is distinct from divergence mode: it deepens liked framing(s) and forbids switching axes.
+- `ideator_personas` is always written in frontmatter, including `<none>` and failed slots.
 
 ## Memories
 
 <!-- DO NOT EDIT this section by hand — regenerated from docs/llm/z-brainstorm.json by doc-updater. Use /z-suggest-memory to add or edit memories. -->
 
-_Note: no memories recorded yet._
+_No memories recorded yet._
 
 ## Examples
 
-- Standard run: `/z-brainstorm rethink the batting order model` → auto-derives slug `rethink-batting-order`, runs Phase 0 scope probe (topic has enough specificity to skip sharpen), dispatches 3 ideators, produces ranked briefing, user replies "go with Codex framing", `chosen_framing: codex` written to `BRAINSTORM.md`.
-- Wide run: `/z-brainstorm give me 6 ways to approach the auth redesign` → `WIDE_N=6`, conversational cost gate presented, on confirm: wave 1 (3 vendors) + 1 overflow wave (2 vendors) + ideator-clusterer, Phase 3 presents K cluster directions.
-- Vague topic: `/z-brainstorm improve performance` → heuristic classifies as VAGUE (<15 chars, no concrete markers), `/z-sharpen` runs inline, produces `GRILL.md`, Phase 1 injects seed framing into scaffolding.
-- HEAVY scope + wide request: `/z-brainstorm 5 ways to refactor the entire platform` → scope probe returns HEAVY, D2 suppression fires, `wide_suppressed_heavy` emitted, run proceeds as `WIDE_N=5 MODE=MEDIUM` (HEAVY fan-out skipped).
+- `/z-brainstorm improve performance` -> asks sharpening questions first if no `GRILL.md`; after the reply, scope probe and ideation proceed.
+- `/z-brainstorm give me 6 approaches to the auth redesign` -> parses `WIDE_N=6`, shows the wide cost gate, then on confirmation runs base ideators, overflow ideators, and clusterer.
+- In Phase 4, `combine Codex and Gemini` drafts a synthesized five-section framing and waits for confirmation before writing `chosen_framing: synthesized`.

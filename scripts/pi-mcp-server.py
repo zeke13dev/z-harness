@@ -1,4 +1,4 @@
-#!/Users/zeke/.hermes/hermes-agent/venv/bin/python3
+#!/usr/bin/env python3
 """
 pi-mcp-server — MCP server wrapping pi-cli for Hermes Agent orchestration.
 

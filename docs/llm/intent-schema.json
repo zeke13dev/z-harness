@@ -1,6 +1,6 @@
 {
   "concept": "intent-schema",
-  "last_updated": "2026-06-19",
+  "last_updated": "2026-06-24",
   "covers_spec": "none",
   "source_file": [
     "scripts/intent-schema.py",
@@ -8,18 +8,90 @@
   ],
   "confidence": "high",
   "entry_points": [
-    {"file": "scripts/intent-schema.py", "line": 216, "symbol": "validate_intent", "kind": "fn", "summary": "Validates INTENT.md frontmatter (6 fields) + required sections per level; returns ValidationResult"},
-    {"file": "scripts/intent-schema.py", "line": 297, "symbol": "lint_criteria", "kind": "fn", "summary": "Flags bare 'runs'/'works' criteria with no observable object; returns list[LintFailure]"},
-    {"file": "scripts/intent-schema.py", "line": 339, "symbol": "validate_ledger", "kind": "fn", "summary": "Validates LEDGER.md frontmatter (artifact, slug, intent_frozen_at)"},
-    {"file": "scripts/intent-schema.py", "line": 439, "symbol": "freeze_intent", "kind": "fn", "summary": "Idempotent UTC ISO stamp into frozen_at; returns (was_frozen_now, frozen_at_value)"},
-    {"file": "scripts/intent-schema.py", "line": 377, "symbol": "reopen_intent", "kind": "fn", "summary": "Sets frozen_at back to 'pending' for amendment; idempotent; returns (was_reopened, 'pending')"},
-    {"file": "scripts/intent-schema.py", "line": 494, "symbol": "bootstrap_ledger", "kind": "fn", "summary": "Creates LEDGER.md with required frontmatter if absent; idempotent; returns bool"},
-    {"file": "scripts/intent-schema.py", "line": 635, "symbol": "evaluate_acceptance", "kind": "fn", "summary": "Per-criterion met|unmet|unknown + done|continue verdict from INTENT+LEDGER+diff; conservative"},
-    {"file": "scripts/session-helpers.sh", "line": 66, "symbol": "done_set_hash", "kind": "fn", "summary": "sha256 of sorted [x] task-ids; canonical resume key shared between curator and orchestrator"},
-    {"file": "scripts/session-helpers.sh", "line": 197, "symbol": "next_pending_task", "kind": "fn", "summary": "First [ ] task whose declared deps are all in done-set"},
-    {"file": "scripts/session-helpers.sh", "line": 321, "symbol": "last_curated_marker", "kind": "fn", "summary": "Timestamp of most recent context_curated event from metrics.jsonl"},
-    {"file": "scripts/session-helpers.sh", "line": 369, "symbol": "session_frontmatter_field", "kind": "fn", "summary": "Extracts scalar YAML frontmatter field from SESSION.md"},
-    {"file": "scripts/session-helpers.sh", "line": 423, "symbol": "validate_intent", "kind": "fn", "summary": "Shell wrapper delegating to intent-schema.py validate-intent (+ optional lint)"}
+    {
+      "file": "scripts/intent-schema.py",
+      "line": 216,
+      "symbol": "validate_intent",
+      "kind": "fn",
+      "summary": "Validates INTENT.md frontmatter (6 fields) + required sections per level; returns ValidationResult"
+    },
+    {
+      "file": "scripts/intent-schema.py",
+      "line": 297,
+      "symbol": "lint_criteria",
+      "kind": "fn",
+      "summary": "Flags bare 'runs'/'works' criteria with no observable object; returns list[LintFailure]"
+    },
+    {
+      "file": "scripts/intent-schema.py",
+      "line": 339,
+      "symbol": "validate_ledger",
+      "kind": "fn",
+      "summary": "Validates LEDGER.md frontmatter (artifact, slug, intent_frozen_at)"
+    },
+    {
+      "file": "scripts/intent-schema.py",
+      "line": 439,
+      "symbol": "freeze_intent",
+      "kind": "fn",
+      "summary": "Idempotent UTC ISO stamp into frozen_at; returns (was_frozen_now, frozen_at_value)"
+    },
+    {
+      "file": "scripts/intent-schema.py",
+      "line": 377,
+      "symbol": "reopen_intent",
+      "kind": "fn",
+      "summary": "Sets frozen_at back to 'pending' for amendment; idempotent; returns (was_reopened, 'pending')"
+    },
+    {
+      "file": "scripts/intent-schema.py",
+      "line": 494,
+      "symbol": "bootstrap_ledger",
+      "kind": "fn",
+      "summary": "Creates LEDGER.md with required frontmatter if absent; idempotent; returns bool"
+    },
+    {
+      "file": "scripts/intent-schema.py",
+      "line": 635,
+      "symbol": "evaluate_acceptance",
+      "kind": "fn",
+      "summary": "Per-criterion met|unmet|unknown + done|continue verdict from INTENT+LEDGER+diff; conservative"
+    },
+    {
+      "file": "scripts/session-helpers.sh",
+      "line": 66,
+      "symbol": "done_set_hash",
+      "kind": "fn",
+      "summary": "sha256 of sorted [x] task-ids; canonical resume key shared between curator and orchestrator"
+    },
+    {
+      "file": "scripts/session-helpers.sh",
+      "line": 197,
+      "symbol": "next_pending_task",
+      "kind": "fn",
+      "summary": "First [ ] task whose declared deps are all in done-set"
+    },
+    {
+      "file": "scripts/session-helpers.sh",
+      "line": 321,
+      "symbol": "last_curated_marker",
+      "kind": "fn",
+      "summary": "Timestamp of most recent context_curated event from metrics.jsonl"
+    },
+    {
+      "file": "scripts/session-helpers.sh",
+      "line": 369,
+      "symbol": "session_frontmatter_field",
+      "kind": "fn",
+      "summary": "Extracts scalar YAML frontmatter field from SESSION.md"
+    },
+    {
+      "file": "scripts/session-helpers.sh",
+      "line": 423,
+      "symbol": "validate_intent",
+      "kind": "fn",
+      "summary": "Shell wrapper delegating to intent-schema.py validate-intent (+ optional lint)"
+    }
   ],
   "depends_on": [
     "scripts",

@@ -1,6 +1,6 @@
 {
   "concept": "reviewer-capture",
-  "last_updated": "2026-06-19",
+  "last_updated": "2026-06-24",
   "covers_spec": "reviewer-cost-telemetry/SPEC.md Change 1",
   "source_file": [
     "agents/reviewer.md",
@@ -9,45 +9,94 @@
   ],
   "confidence": "high",
   "entry_points": [
-    {"file": "agents/reviewer.md", "line": 229, "symbol": "PROBE_SENTINEL", "kind": "module", "summary": "Per-PPID sentinel caches CODEX_SUPPORTS_OUTFILE; greps `codex exec --help` for `output-last-message`; runs once per orchestrating process"},
-    {"file": "agents/reviewer.md", "line": 248, "symbol": "ARCHIVE_DIR / OUTFILE", "kind": "module", "summary": "Canonical artifact path: $Z_HARNESS_PLAN_DIR/archive/tasks/<id>/review-cycle<N>.md"},
-    {"file": "agents/reviewer.md", "line": 253, "symbol": "CAPTURE_MODE=file branch", "kind": "module", "summary": "Codex dispatch appends -o OUTFILE; stdout transcript discarded; fallback on empty/missing file emits review_capture_fallback"},
-    {"file": "agents/reviewer.md", "line": 281, "symbol": "review_capture_fallback event", "kind": "module", "summary": "Uniform schema {id, cycle, role, reason} across all three agents; role disambiguates for fallback-rate cut"},
-    {"file": "agents/consultant-primary.md", "line": 49, "symbol": "consult_start event", "kind": "module", "summary": "Emitted before CLI call; liveness.sh uses as in-flight marker; matching end is consult event in Archiving section"},
-    {"file": "agents/consultant-primary.md", "line": 53, "symbol": "probe + dispatch block", "kind": "module", "summary": "Identical CODEX_SUPPORTS_OUTFILE probe; archive path z-harness/archive/$RUN/transcripts/<N>-<slug>.response.md"},
-    {"file": "agents/consultant-secondary.md", "line": 49, "symbol": "consult_start event", "kind": "module", "summary": "Same shape as consultant-primary; role=consultant_secondary"},
-    {"file": "agents/consultant-secondary.md", "line": 53, "symbol": "probe + dispatch block", "kind": "module", "summary": "Identical probe/dispatch/fallback; role=consultant-secondary"}
+    {
+      "file": "agents/reviewer.md",
+      "line": 221,
+      "symbol": "PROBE_SENTINEL",
+      "kind": "module",
+      "summary": "PPID-keyed Codex output-last-message capability probe."
+    },
+    {
+      "file": "agents/reviewer.md",
+      "line": 240,
+      "symbol": "ARCHIVE_DIR",
+      "kind": "module",
+      "summary": "Reviewer artifact dir under plan archive tasks."
+    },
+    {
+      "file": "agents/reviewer.md",
+      "line": 248,
+      "symbol": "CAPTURE_MODE=file",
+      "kind": "module",
+      "summary": "Codex -o outfile final-message capture branch."
+    },
+    {
+      "file": "agents/reviewer.md",
+      "line": 263,
+      "symbol": "review_capture_fallback",
+      "kind": "event",
+      "summary": "Uniform fallback event with id/cycle/role/reason."
+    },
+    {
+      "file": "agents/reviewer.md",
+      "line": 354,
+      "symbol": "FOLLOWUPS",
+      "kind": "section",
+      "summary": "Reviewer minors/nits routed to follow-up sink."
+    },
+    {
+      "file": "agents/consultant-primary.md",
+      "line": 49,
+      "symbol": "consult_start",
+      "kind": "event",
+      "summary": "Primary consultant liveness start marker."
+    },
+    {
+      "file": "agents/consultant-primary.md",
+      "line": 53,
+      "symbol": "PROBE_SENTINEL",
+      "kind": "module",
+      "summary": "Primary consultant Codex file-capture probe."
+    },
+    {
+      "file": "agents/consultant-secondary.md",
+      "line": 49,
+      "symbol": "consult_start",
+      "kind": "event",
+      "summary": "Secondary consultant liveness start marker."
+    },
+    {
+      "file": "agents/consultant-secondary.md",
+      "line": 53,
+      "symbol": "PROBE_SENTINEL",
+      "kind": "module",
+      "summary": "Secondary consultant Codex file-capture probe."
+    }
   ],
   "depends_on": [
     "agents",
     "providers-registry",
-    "subagent-telemetry"
+    "subagent-telemetry",
+    "followup-sink"
   ],
   "consumed_by": [
     "commands",
     "subagent-telemetry"
   ],
   "invariants": [
-    "non-codex provider path is byte-identical to pre-feature; -o is only appended when provider==codex",
-    "capability probe runs at most once per PPID process; sentinel keyed on PPID not $$",
-    "reviewer OUTFILE always in $Z_HARNESS_PLAN_DIR/archive/tasks/<id>/; path never needs external discovery",
-    "fallback always emits review_capture_fallback before reverting to stdout; verdict is never silently dropped",
-    "response_chars = size of the captured final review (honest), not the discarded transcript",
-    "all three agents share the same probe/dispatch/fallback/log shape; co-maintained",
-    "reviewer expected_contract=review-verdict; both consultants expected_contract=freeform; persona binding validated by resolve-persona.py",
-    "reviewer INTENT mode requires both intent_snapshot: AND ledger_path:; exactly one present => BLOCKED verdict with MISCONFIGURED message",
-    "minors/nits dropped from reviewer return sections; MUST appear in FOLLOWUPS fenced JSON block (P3/P2) routed via parse-followups-block.py",
-    "consult_start emitted BEFORE the CLI call (not after); consult event is the matching end-marker for liveness.sh"
+    "Only provider==codex with a positive output-last-message probe uses -o file capture.",
+    "Non-codex path remains stdout capture.",
+    "Probe sentinel is keyed on PPID.",
+    "Fallback emits review_capture_fallback before stdout retry.",
+    "Reviewer INTENT mode requires both intent_snapshot and ledger_path.",
+    "Reviewer minors/nits must be represented in FOLLOWUPS rather than silently dropped.",
+    "All three agents call log-subagent.sh after capture."
   ],
   "gotchas": [
-    "sentinel keyed on $PPID (parent PID) not $$; each bash invocation is a new process so $$ always differs",
-    "if $Z_HARNESS_PLAN_DIR is unset, ARCHIVE_DIR construction fails before dispatch — orchestrator must export it",
-    "codex non-zero exit triggers fallback even if $OUTFILE was partially written; file considered valid only on exit 0",
-    "probe greps for long-form --output-last-message but dispatches with short alias -o; future rename will probe-fail and fall through safely",
-    "review-cycle<N>.md is overwritten on cycle number reuse; callers should not assume uniqueness across retries",
-    "review_capture_fallback uniform schema: {id, cycle, role, reason}; role is cross-agent disambiguator (not just reviewer)",
-    "consultant archive paths differ from reviewer: z-harness/archive/$RUN/transcripts/ vs $Z_HARNESS_PLAN_DIR/archive/tasks/<id>/",
-    "reviewer reads relevant_docs (docs/llm/<concept>.json paths) BEFORE composing review prompt — omitting them can cause missed contract drift findings"
+    "Reviewer and consultant archive paths differ.",
+    "Codex non-zero exit invalidates outfile and triggers fallback.",
+    "Z_HARNESS_PLAN_DIR is required for reviewer artifact path construction.",
+    "Consultants use freeform contract; reviewer uses review-verdict contract."
   ],
   "memories": []
 }

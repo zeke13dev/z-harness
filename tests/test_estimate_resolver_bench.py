@@ -1,13 +1,16 @@
 """
-Tests for T012 remaining cases: static envelope, dispatch, missing/malformed profiles,
-config.py check-no-ask resolver, bench-autonomy assertion, z-research loop-back
-structural check, and _COERCERS budget coercion.
+Tests for T012 remaining cases: static envelope, dispatch, z-plan dispatch
+contract, missing/malformed profiles, config.py check-no-ask resolver,
+bench-autonomy assertion, z-research loop-back structural check, and _COERCERS
+budget coercion.
 
 Covers:
   TEST-001  static-only envelope: known profile, no dispatch → confidence:low,
             range == profile range, exit 0.
   TEST-002  static+dispatch: --dispatch map=1 brainstorm=1 → range/estimate
             increased by 2.2M; confidence:medium.
+  TEST-002B z-plan dispatch contract: hard gate defaults fail closed, explicit
+            known counts replace defaults, negatives cannot reduce estimates.
   TEST-005  missing profile / malformed JSON → no-profile envelope, exit 0,
             warning to stderr.
   TEST-006  resolver: check-no-ask with --severity soft → auto_proceed;
@@ -40,6 +43,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _SCRIPTS_DIR = _REPO_ROOT / "scripts"
 _SCRIPT_ESTIMATE = str(_SCRIPTS_DIR / "estimate-tokens.py")
 _SCRIPT_CONFIG = str(_SCRIPTS_DIR / "config.py")
+_SCRIPT_PRE_RUN_COST_GATE = str(_SCRIPTS_DIR / "pre-run-cost-gate.sh")
 _PROFILES_PATH = _SCRIPTS_DIR / "token-cost-profiles.json"
 _BENCH_SCRIPT = str(_SCRIPTS_DIR / "bench-autonomy-check.sh")
 _BENCH_YAML = _REPO_ROOT / "z-harness" / "bench" / "pier" / "benchmark-autonomy.yaml"
@@ -268,6 +272,76 @@ class TestStaticDispatchEnvelope(unittest.TestCase):
         result = json.loads(stdout)
         self.assertEqual(result["range_high"], 6_000_000 + 2_200_000)
         self.assertEqual(result["confidence"], "medium")
+
+
+# ---------------------------------------------------------------------------
+# TEST-002B: z-plan dispatch contract
+# ---------------------------------------------------------------------------
+
+class TestZPlanDispatchContract(unittest.TestCase):
+    """z-plan hard-gate profile defaults fail closed and dispatch remains additive."""
+
+    def _z_plan(self, dispatch_pairs=None):
+        return _estimate(
+            raw_command="z-plan",
+            dispatch_pairs=dispatch_pairs or [],
+            profiles_path=_PROFILES_PATH,
+            metrics_path=Path("/nonexistent/metrics.jsonl"),
+            tail_lines=2000,
+            min_samples=3,
+        )
+
+    def test_slash_z_plan_resolves_same_profile(self):
+        """The command-normalizer treats /z-plan as the z-plan cost profile."""
+        slash = _estimate(
+            raw_command="/z-plan",
+            dispatch_pairs=[],
+            profiles_path=_PROFILES_PATH,
+            metrics_path=Path("/nonexistent/metrics.jsonl"),
+            tail_lines=2000,
+            min_samples=3,
+        )
+        plain = self._z_plan()
+
+        self.assertEqual(slash["command"], "z-plan")
+        self.assertEqual(slash["gate"], plain["gate"])
+        self.assertEqual(slash["range_low"], plain["range_low"])
+        self.assertEqual(slash["range_high"], plain["range_high"])
+
+    def test_z_plan_default_profile_is_hard_and_conservative(self):
+        """No explicit dispatch uses conservative default counts for unknown fan-out."""
+        result = self._z_plan()
+        dispatch = next(b for b in result["breakdown"] if b["tier"] == "dispatch")
+
+        self.assertEqual(result["gate"], "hard")
+        self.assertGreater(result["range_low"], 0)
+        self.assertEqual(dispatch["counts"]["explore"], 3)
+        self.assertEqual(dispatch["counts"]["phase3_consultants"], 5)
+        self.assertEqual(dispatch["counts"]["phase7_consultants"], 5)
+        self.assertIn("explore", dispatch["defaults"])
+
+    def test_explicit_z_plan_dispatch_replaces_defaults(self):
+        """Known pre-gate counts replace defaults so multipliers are deterministic."""
+        result = self._z_plan([
+            ("intent_level_depth", 0),
+            ("doc_fetcher", 0),
+            ("explore", 1),
+            ("phase3_consultants", 0),
+            ("phase7_consultants", 0),
+            ("task_tree_generator", 1),
+        ])
+        dispatch = next(b for b in result["breakdown"] if b["tier"] == "dispatch")
+
+        self.assertEqual(dispatch["counts"], {"explore": 1, "task_tree_generator": 1})
+        self.assertEqual(dispatch["add"], 2_800_000 + 300_000)
+
+    def test_negative_z_plan_dispatch_cannot_reduce_defaults(self):
+        """Negative counts are rejected, leaving fail-closed defaults intact."""
+        defaulted = self._z_plan()
+        negative = self._z_plan([("explore", -1)])
+
+        self.assertEqual(negative["range_low"], defaulted["range_low"])
+        self.assertEqual(negative["range_high"], defaulted["range_high"])
 
 
 # ---------------------------------------------------------------------------
@@ -692,6 +766,240 @@ class TestCoercersAndBudgetEdges(unittest.TestCase):
         self.assertEqual(result["result"], "halt")
 
 
+
+class TestPreRunCostGateHelperJson(unittest.TestCase):
+    """pre-run-cost-gate.sh emits one parseable helper JSON object and fails open."""
+
+    def _run_gate(self, command="z-plan", severity="hard", *extra_args, env_override=None):
+        env = _clean_env()
+        env["XDG_CONFIG_HOME"] = tempfile.mkdtemp()
+        if env_override:
+            env.update(env_override)
+        cp = subprocess.run(
+            ["bash", _SCRIPT_PRE_RUN_COST_GATE, command, severity, "test-run-001", *extra_args],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=str(_REPO_ROOT),
+        )
+        return cp
+
+    def test_stdout_is_single_parseable_json_object(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_file = Path(tmpdir) / "config.toml"
+            config_file.write_text(
+                "schema_version = 1\n[cost]\ntoken_budget = 999999999\n",
+                encoding="utf-8",
+            )
+            cp = self._run_gate(
+                "z-plan",
+                "hard",
+                "--dispatch", "intent_level_depth=0",
+                env_override={
+                    "Z_HARNESS_NO_ASK": "halt",
+                    "Z_HARNESS_REPO_CONFIG": str(config_file),
+                },
+            )
+
+        self.assertEqual(cp.returncode, 0, msg=cp.stderr)
+        self.assertEqual(cp.stdout.count("\n"), 1, msg=cp.stdout)
+        payload = json.loads(cp.stdout)
+        self.assertEqual(set(payload), {"disposition", "estimate", "human_block"})
+        self.assertEqual(payload["disposition"], "auto_proceed")
+        self.assertIsInstance(payload["estimate"], dict)
+        self.assertIsInstance(payload["human_block"], str)
+        self.assertEqual(payload["estimate"]["command"], "z-plan")
+
+    def test_unknown_profile_fails_open_to_ask_with_no_profile_estimate(self):
+        cp = self._run_gate("z-not-a-real-command", "hard")
+
+        self.assertEqual(cp.returncode, 0, msg=cp.stderr)
+        payload = json.loads(cp.stdout)
+        self.assertEqual(payload["disposition"], "ask")
+        self.assertEqual(payload["estimate"]["confidence"], "low")
+        self.assertEqual(payload["estimate"]["range_high"], 0)
+        self.assertIsNone(payload["estimate"]["gate"])
+
+
+class TestCostGateBudgetResolverMatrix(unittest.TestCase):
+    """Explicit missing/invalid/nonpositive/under/over budget matrix."""
+
+    QID = "workflow.pre_run_cost_gate"
+
+    def _check_no_ask(self, *extra_flags, env_override=None):
+        flags = ["--question-id", self.QID] + list(extra_flags)
+        return _run_config_check_no_ask(*flags, env_override=env_override)
+
+    def test_invalid_toml_budget_exits_with_validation_error(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_dir = Path(tmpdir) / ".z-harness"
+            config_dir.mkdir()
+            config_file = config_dir / "config.toml"
+            config_file.write_text(
+                'schema_version = 1\n[cost]\ntoken_budget = "not-an-int"\n',
+                encoding="utf-8",
+            )
+            rc, result, stderr = self._check_no_ask(
+                "--severity", "hard",
+                "--range-high", "5000000",
+                env_override={
+                    "Z_HARNESS_NO_ASK": "halt",
+                    "Z_HARNESS_REPO_CONFIG": str(config_file),
+                },
+            )
+
+        self.assertEqual(rc, 2)
+        self.assertIsNone(result)
+        self.assertIn("invalid value for 'cost.token_budget'", stderr)
+
+    def test_direct_invalid_budget_type_is_rejected(self):
+        import importlib.util
+        import unittest.mock as mock
+
+        config_spec = importlib.util.spec_from_file_location("config_mod_invalid", _SCRIPT_CONFIG)
+        config_mod = importlib.util.module_from_spec(config_spec)
+        config_spec.loader.exec_module(config_mod)
+
+        with mock.patch.object(config_mod, "load_config",
+                               return_value=({"cost.token_budget": "5000000"}, {})), \
+             mock.patch.object(config_mod.os.environ, "get",
+                               side_effect=lambda k, default="": {
+                                   "Z_HARNESS_NO_ASK": "halt",
+                               }.get(k, default)):
+            result = config_mod._resolve_cost_gate(
+                "workflow.pre_run_cost_gate",
+                range_high=5_000_000,
+                severity="hard",
+            )
+
+        self.assertEqual(result["result"], "halt")
+        self.assertEqual(result["rule_id"], "cost_budget_invalid")
+
+    def test_direct_negative_budget_is_rejected(self):
+        import importlib.util
+        import unittest.mock as mock
+
+        config_spec = importlib.util.spec_from_file_location("config_mod_negative", _SCRIPT_CONFIG)
+        config_mod = importlib.util.module_from_spec(config_spec)
+        config_spec.loader.exec_module(config_mod)
+
+        with mock.patch.object(config_mod, "load_config",
+                               return_value=({"cost.token_budget": -1}, {})), \
+             mock.patch.object(config_mod.os.environ, "get",
+                               side_effect=lambda k, default="": {
+                                   "Z_HARNESS_NO_ASK": "halt",
+                               }.get(k, default)):
+            result = config_mod._resolve_cost_gate(
+                "workflow.pre_run_cost_gate",
+                range_high=1,
+                severity="hard",
+            )
+
+        self.assertEqual(result["result"], "halt")
+        self.assertEqual(result["rule_id"], "cost_budget_invalid")
+
+    def test_under_budget_and_over_budget_rule_ids_are_distinct(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_dir = Path(tmpdir) / ".z-harness"
+            config_dir.mkdir()
+            config_file = config_dir / "config.toml"
+            config_file.write_text(
+                "schema_version = 1\n[cost]\ntoken_budget = 5000000\n",
+                encoding="utf-8",
+            )
+            env = {
+                "Z_HARNESS_NO_ASK": "halt",
+                "Z_HARNESS_REPO_CONFIG": str(config_file),
+            }
+            rc_under, under, stderr_under = self._check_no_ask(
+                "--severity", "hard",
+                "--range-high", "4999999",
+                env_override=env,
+            )
+            rc_over, over, stderr_over = self._check_no_ask(
+                "--severity", "hard",
+                "--range-high", "5000001",
+                env_override=env,
+            )
+
+        self.assertEqual(rc_under, 0, msg=stderr_under)
+        self.assertEqual(under["result"], "auto_proceed")
+        self.assertEqual(under["rule_id"], "within_budget")
+        self.assertEqual(rc_over, 0, msg=stderr_over)
+        self.assertEqual(over["result"], "halt")
+        self.assertEqual(over["rule_id"], "cost_over_budget")
+
+
+class TestZPlanCostGateSkillText(unittest.TestCase):
+    """Structural assertions for the documented /z-plan cost-gate branch."""
+
+    _Z_PLAN_SKILL = _REPO_ROOT / "skills" / "z-plan" / "SKILL.md"
+
+    def setUp(self):
+        if not self._Z_PLAN_SKILL.exists():
+            self.skipTest(f"z-plan skill not found at {self._Z_PLAN_SKILL}")
+        self._content = self._Z_PLAN_SKILL.read_text(encoding="utf-8")
+
+    def test_malformed_helper_json_is_sanitized_not_logged_raw(self):
+        self.assertIn('"error": "malformed_helper_json"', self._content)
+        self.assertIn("GATE_SANITIZED_ERROR", self._content)
+        self.assertIn("Raw helper text is never logged", self._content)
+        self.assertIn("choice_source=sanitized_helper_error", self._content)
+
+    def test_reestimate_attempt_telemetry_shape_is_documented(self):
+        for marker in (
+            "cost_gate_reestimate_attempt",
+            '"command": "z-plan"',
+            '"run_id": run_id',
+            '"gate_id": gate_id',
+            '"attempt_index": int(attempt)',
+            '"changed_drivers": json.loads(changed)',
+            '"prior_range_high": as_int(prior, 0)',
+            '"new_range_high": as_int(new, 0)',
+            '"terminal_event_kind": "cost_gate_decision"',
+        ):
+            self.assertIn(marker, self._content)
+
+    def test_terminal_decision_emitted_once_and_nonterminal_not_counted(self):
+        self.assertIn("ZPLAN_COST_DECISION_EMITTED=0", self._content)
+        self.assertIn('if [[ "${ZPLAN_COST_DECISION_EMITTED:-0}" -eq 1 ]]', self._content)
+        self.assertIn("ZPLAN_COST_DECISION_EMITTED=1", self._content)
+        self.assertEqual(
+            self._content.count(
+                'bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \\\n'
+                '    "$RUN" cost_gate_decision'
+            ),
+            1,
+        )
+        self.assertIn("exactly one terminal `/z-plan` cost-gate decision per run", self._content)
+        self.assertIn("Nonterminal reduction / re-estimate attempts MUST NOT emit `cost_gate_decision`", self._content)
+        self.assertIn("Never emit a generic \"successful gate\" `cost_gate_decision`", self._content)
+
+    def test_cleanup_matrix_and_release_before_deregister_ordering(self):
+        self.assertIn("Cleanup matrix:", self._content)
+        self.assertIn("Run Brief — halt finalize", self._content)
+        release_idx = self._content.find("plan-claim.sh\" release", self._content.find("zplan_cost_gate_halt_finalize"))
+        deregister_idx = self._content.find("active-plan-registry.py\" deregister", self._content.find("zplan_cost_gate_halt_finalize"))
+        self.assertGreater(release_idx, -1, "cost-gate halt helper must release the claim")
+        self.assertGreater(deregister_idx, -1, "cost-gate halt helper must deregister after release")
+        self.assertLess(release_idx, deregister_idx, "cost-gate halt cleanup must release before deregister")
+
+    def test_cleanup_matrix_covers_terminal_branches(self):
+        for branch in (
+            "| `auto_proceed` |",
+            "| `ask` → Proceed |",
+            "| `ask` → Reduce / re-estimate |",
+            "| `ask` → Re-estimate returns `auto_proceed` |",
+            "| `ask` → Re-estimate returns `halt` |",
+            "| `ask` → Abandon |",
+            "| `halt` |",
+            "| `unhandled_gate` |",
+            "| Helper invocation failure |",
+            "| Malformed helper JSON |",
+            "| Missing estimate fields |",
+            "| Interrupted user wait after claim/register |",
+        ):
+            self.assertIn(branch, self._content)
 # ---------------------------------------------------------------------------
 # Run tests
 # ---------------------------------------------------------------------------

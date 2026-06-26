@@ -12,6 +12,7 @@ class DispatchResult:
     exit_code: int
     is_error: bool
     stdout_events: list[dict] = field(default_factory=list)
+    stdout: str = ""
     stderr: str = ""
     wall_ms: float = 0.0
     session_id: str | None = None

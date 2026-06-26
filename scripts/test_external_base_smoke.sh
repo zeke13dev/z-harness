@@ -19,7 +19,7 @@
 #   SMOKE-E: overlaps → exit 0 (no peer) + expected output.
 #   SMOKE-F: list/read-back → record is readable with correct base and slug.
 #   SMOKE-G: NOTHING is written under the in-repo z-harness/ when Z_HARNESS_BASE_DIR is set.
-#   SMOKE-H: cleanup — no anchor pollution at /Users/zeke/dev/z-harness/.git/.z-harness-base.
+#   SMOKE-H: cleanup — no anchor pollution at <repo>/.git/.z-harness-base.
 #
 # This test script is SELF-CONTAINED: all artifacts are created and destroyed here.
 # No teardown uses rm -rf on the real repo.

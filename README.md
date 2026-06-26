@@ -1,6 +1,6 @@
 # z-harness
 
-z-harness is a workflow harness for AI-assisted software development. It provides commands, agents, skills, runtime dispatch, export drivers, and safety gates for planning, implementation, audit, review, documentation, and release workflows.
+z-harness is a plugin/workflow layer for existing AI coding harnesses. It adds planning, implementation, review, documentation, and release workflows through host-native skills/agents where available, with explicit fallbacks where a host cannot support the full orchestration model.
 
 ## Beta status
 
@@ -8,25 +8,24 @@ This project is pre-1.0 beta software. It can orchestrate tools that read and wr
 
 ## Supported surfaces
 
-- **Claude Code plugin:** native/highest-fidelity command and agent workflow.
-- **Codex, Cursor, Antigravity:** exported or injected host-specific workflows with documented fidelity limits.
-- **Export-only targets:** pi, Windsurf, Kiro, Cline, and Copilot are generated artifacts; they do not all have runtime adapters.
-- **Python CLI (`z-harness` / `zh`):** installs, exports, launches, serves MCP, checks status, and updates the local install.
+- **Claude Code plugin:** primary/native command and agent workflow.
+- **Oh My Pi / OMP:** first-class package/export target; native claims are bounded by the documented parity gate.
+- **Cursor and Codex:** supported setup/export/injection targets; multi-agent orchestration remains explicitly degraded or blocked until host-native subagent parity is proven.
+- **Python CLI (`z-harness`):** small setup/onboarding entrypoint for installing/configuring existing harnesses. It is not the day-to-day z-harness workflow surface.
 
 See `CAPABILITIES.md` for the host matrix and known fidelity limits.
 
 ## Install
 
-### CLI bootstrap
+### Setup bootstrap
 
 ```bash
 curl -fsSL https://github.com/zeke13dev/z-harness/releases/latest/download/install.sh | sh
-z-harness doctor
-z-harness install --target=claude
-z-harness launch
+z-harness setup --target claude --dry-run
+z-harness setup --target claude --install
 ```
 
-The CLI installer uses the release manifest, downloads the wheel over HTTPS, verifies SHA-256, and installs via `uv tool install`.
+The CLI installer uses the release manifest, downloads the wheel over HTTPS, verifies SHA-256, and installs via `uv tool install`. Use `z-harness setup --target all --dry-run` to inspect Claude, OMP, Cursor, and Codex readiness without writing host config.
 
 ### Source checkout / plugin development
 
@@ -44,8 +43,8 @@ Source installs symlink the checkout into the host plugin location. Edits take e
 
 ```bash
 make export
-# or
-z-harness export --host codex --out temp/exports/codex --force
+# or produce a public-beta surface that hides experimental commands
+z-harness export --host codex --surface prod --out temp/exports/codex --force
 ```
 
 Generated exports go under `temp/exports/` by default and are not committed release source. Release tarballs are audited before publication.
@@ -60,7 +59,7 @@ z-harness resolves runtime state outside the repository by default, under the pl
 make test
 make test-sh
 make export
-bash scripts/bundle-plugin.sh
+Z_HARNESS_RELEASE_SURFACE=prod bash scripts/bundle-plugin.sh
 ```
 
 Release CI also builds the wheel, installs it in isolation, runs CLI/export smoke checks, and audits the plugin tarball.

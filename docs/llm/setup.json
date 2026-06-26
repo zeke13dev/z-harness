@@ -1,11 +1,11 @@
 {
   "concept": "setup",
-  "last_updated": "2026-06-19",
+  "last_updated": "2026-06-24",
   "covers_spec": "none",
   "source_file": [
     "scripts/setup.py",
     "scripts/setup.sh",
-    "commands/z-setup.md",
+    "skills/z-setup/SKILL.md",
     "docs/human/SETUP.md"
   ],
   "confidence": "high",
@@ -130,17 +130,18 @@
       "summary": "Thin bash wrapper: exec python3 setup.py $@"
     },
     {
-      "file": "commands/z-setup.md",
+      "file": "skills/z-setup/SKILL.md",
       "line": 1,
       "symbol": "/z-setup",
-      "kind": "module",
-      "summary": "Skill surface: parses invocation form, shells out to setup.py, uses AskUserQuestion for apply confirmation"
+      "kind": "skill",
+      "summary": "Skill surface: parses inspect/wizard/apply/explain/status forms, delegates to scripts/setup.py, gates apply with AskUserQuestion, and emits setup_skill_start/end."
     }
   ],
   "depends_on": [
     "config",
     "providers-registry",
-    "axioms"
+    "axioms",
+    "docs"
   ],
   "consumed_by": [],
   "invariants": [
@@ -219,13 +220,13 @@
     },
     {
       "event": "setup_skill_start",
-      "emitted_by": "commands/z-setup.md Phase 0",
+      "emitted_by": "skills/z-setup/SKILL.md Phase 0",
       "payload": "{arguments}",
       "description": "Emitted by /z-setup skill at invocation start, before any subprocess"
     },
     {
       "event": "setup_skill_end",
-      "emitted_by": "commands/z-setup.md Phase N",
+      "emitted_by": "skills/z-setup/SKILL.md Phase N",
       "payload": "{form, exit_code}",
       "description": "Emitted by /z-setup skill after all invocation-form logic including error paths"
     }

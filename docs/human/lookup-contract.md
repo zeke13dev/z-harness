@@ -1,6 +1,6 @@
 # lookup-contract
 
-> Last updated: 2026-06-19
+> Last updated: 2026-06-24
 > Covers source: agents/external-lookup.md
 
 ## Overview

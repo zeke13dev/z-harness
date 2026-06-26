@@ -54,7 +54,7 @@ Cases covered (T013 — claim/release/wait-for + TOCTOU/seniority/backcompat):
   (l) MINOR-6: eldest-senior concede — ≥2 seniors on one path → loser concedes to lowest run_id
 
 All tests use a hermetic temp base via Z_HARNESS_BASE_DIR so no anchor pollution
-occurs at /Users/zeke/dev/z-harness/.git/.z-harness-base or the real registry.
+occurs at <repo>/.git/.z-harness-base or the real registry.
 """
 
 from __future__ import annotations

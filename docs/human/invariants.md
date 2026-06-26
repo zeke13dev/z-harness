@@ -1,44 +1,53 @@
 # Invariants
 
-> Last updated: 2026-06-19
-> Covers source: docs/INVARIANTS.json, docs/schemas/invariant.schema.json, scripts/validate-invariants.py, scripts/invariant-check.sh
+> Last updated: 2026-06-24
+> Covers source: docs/INVARIANTS.json
 
 ## Overview
 
-`docs/INVARIANTS.json` is the per-repo durable invariant registry — a hand-authored (never auto-generated) catalog of system-level behavioral truths that must hold across all plan implementations. Each entry names a concrete failure class, severity tier (blocker/major/minor), controlled tag set, provenance source, and optional fixture schema for structured test data. The file is versioned (currently schema v1 with 14 entries, inv_001 through inv_014) and must be written atomically (tempfile → flush → fsync → os.replace) per inv_003.
+`docs/INVARIANTS.json` is the canonical durable invariant registry for z-harness. It is user-authored and optional, not generated automatically. The current registry is schema version 1 and contains 14 invariants (`inv_001, inv_002, inv_003, inv_004, inv_005, inv_006, inv_007, inv_008, inv_009, inv_010, inv_011, inv_012, inv_013, inv_014`) covering behavioral test quality, adversarial fixture validity, atomic writes, pipeline resilience, export fidelity, artifact commits, feed observability, INTENT immutability, legacy routing, configuration discipline, and Hermes gating.
 
-The registry feeds two downstream consumers: `/z-test` uses it as the primary seed for behavioral test planning — mapping invariants to tasks by tag overlap and generating TESTS.md entries keyed to stable `inv_NNN` IDs — and `/z-review-all` passes the full file as the durable tier to each consultant subagent in INTENT mode, so reviewers can flag acceptance-criterion violations against declared invariants. A thin validation layer (`scripts/validate-invariants.py`) enforces structural and semantic constraints (id uniqueness, tag subset, fixture_schema non-triviality, fixture_defaults compatibility) at write time; `scripts/invariant-check.sh` provides a CI gate that reads TESTS.md, checks blocker-invariant coverage, and runs the test suite.
+Each invariant has a stable `inv_NNN` id, severity, controlled tags, failure class, provenance source, `source_files`, `last_updated`, and optional `fixture_schema`/`fixture_defaults` or sighting fields. Downstream commands can use these entries as durable, repo-specific behavioral constraints; absence of the file is normal and consumers must fall back gracefully.
 
 ## Key entry points
 
-- `docs/INVARIANTS.json:1` — top-level registry: `{"version": 1, "generated_at": "...", "invariants": [...]}`
-- `docs/schemas/invariant.schema.json:1` — JSON Schema draft-2020-12 for each invariant entry; 11 fields (id, description, tags, failure_class, fixture_schema, fixture_defaults, severity, source_files, last_updated, source, sighting_count/last_sighting/anchor_module optional)
-- `scripts/validate-invariants.py:145` — `validate_invariants_file()`: exit 0=valid, 1=schema error, 2=constraint violation, 3=I/O error; also exposes `--fixture`+`--schema` mode for fixture-only validation
-- `scripts/invariant-check.sh:1` — CI runner: reads TESTS.md + INVARIANTS.json, gates on uncovered blocker invariants (exit 3), runs test suite, optionally runs full-chain tests; exit 0=pass, 1=test failure, 3=coverage gap, 4=I/O error
-- `commands/z-test.md:83` — primary consumer: loads INVARIANTS.json as v2 seed path; absence is expected (falls back to SPEC.md/INTENT.md extraction)
-- `commands/z-review-all.md:203` — passes `$INVARIANTS_PATH` (docs/INVARIANTS.json) as durable tier to both consultant subagents in INTENT mode
+- `docs/INVARIANTS.json:1` — top-level registry object with `version`, `generated_at`, and `invariants[]`.
+- `docs/INVARIANTS.json:6` — `inv_001`: invariant tests must verify behavioral properties, not just unit-level function returns.
+- `docs/INVARIANTS.json:36` — `inv_002`: adversarial fixtures must match the invariant fixture schema.
+- `docs/INVARIANTS.json:65` — `inv_003`: writes to INVARIANTS.json must be atomic.
+- `docs/INVARIANTS.json:94` — `inv_005`: consultant subagents must be able to dispatch even when the repo lacks a generated providers config.
+- `docs/INVARIANTS.json:139` — `inv_008`: feed connectivity checks at tier boundaries must stay observable.
+- `docs/INVARIANTS.json:155` — `inv_009`: frozen INTENT.md is immutable.
+- `docs/INVARIANTS.json:171` — `inv_010`: a level's TASKS.md is immutable while that level executes.
+- `docs/INVARIANTS.json:186` — `inv_011`: LEDGER.md is append-only.
+- `docs/INVARIANTS.json:202` — `inv_012`: legacy SPEC/PLAN/TASKS plans stay on the legacy path.
+- `docs/INVARIANTS.json:218` — `inv_013`: new behavior must not be driven by new env vars; use config files.
+- `docs/INVARIANTS.json:233` — `inv_014`: old Hermes machinery is gated by `workflow.hermes_enabled=true`.
 
 ## How it interacts with others
 
-- `z-test` — primary consumer; maps invariant entries to TASKS.md tasks by tag-keyword overlap, produces TESTS.md entries with stable `invariant_id: inv_NNN` references; INVARIANTS.json absence falls back gracefully to v1 mode
-- `z-review-all` — in INTENT mode, passes the full INVARIANTS.json as the durable tier alongside frozen INTENT and LEDGER; consultants flag acceptance-criterion violations against declared invariants
-- `z-init-docs` — writer; the atomic-write discipline for INVARIANTS.json is declared in inv_003 and enforced by `validate-invariants.py`
-- `adaptive-intent` — inv_009 (INTENT.md immutability) and inv_010/inv_011 (per-level TASKS.md and LEDGER.md immutability) are entries in INVARIANTS.json that the INTENT engine must honor
-- `scripts` (TAGS.txt) — `validate-invariants.py` reads `docs/llm/TAGS.txt` to enforce that invariant `tags[]` entries are a subset of the controlled tag set
+- `/z-test` — can seed behavioral test plans from stable `inv_NNN` ids when INVARIANTS.json exists; falls back to SPEC/INTENT extraction when absent.
+- `/z-review-all` — in INTENT mode, passes INVARIANTS.json as part of the durable tier so consultants can flag invariant violations.
+- Adaptive INTENT — inv_009, inv_010, and inv_011 encode immutability rules for frozen INTENT, per-level TASKS, and append-only LEDGER.
+- Validation/check scripts — external validators enforce structure, tag discipline, fixture constraints, and blocker coverage; those scripts are consumers, while this concept's source of truth is the JSON file itself.
 
 ## Edge cases / gotchas
 
-- INVARIANTS.json is user-authored and optional. Its absence is explicitly designed for and not an error — `/z-test` and `/z-review-all` both degrade gracefully. Attempting to auto-generate it will produce hollow entries without domain knowledge.
-- The `docs/INVARIANTS.md` file is a rendered human-readable view generated from INVARIANTS.json; it currently shows only 8 invariants while the canonical JSON has 14. The JSON is authoritative — the `.md` is stale.
-- inv_006 references `exports/export-pi.py` and `scripts/export-codex-skills.py` as source files; both paths are from the pre-export-runtime-drivers era. The actual export logic now lives in `runtime/drivers/*/export.py`. The inv_006 source_files are stale but the behavioral property itself is still valid.
-- `fixture_defaults` is only valid when `fixture_schema` is also present. `validate-invariants.py` enforces this (constraint exit 2), not the JSON Schema.
-- `invariant-check.sh` auto-discovers TESTS.md under `z-harness/plans/*/` and `plans/*/`; it does not search the legacy flat `z-harness/TASKS.md` path. If the plan dir is non-standard, pass `--tests-file` explicitly.
-- `sighting_count`, `last_sighting`, and `anchor_module` are optional fields that `/z-review-all` Phase 5.5 increments on finding matches. None of the current 14 entries have these fields populated (never yet sighted via a review run).
-- Tag validation against TAGS.txt is done at validate time; if a new tag is needed, add it to TAGS.txt first.
+- Do not auto-generate INVARIANTS.json; hollow invariants without domain judgment are worse than absence.
+- `id` values are stable and never reused; deprecate rather than recycle.
+- `source_files` inside entries may themselves become stale while the behavioral invariant remains valid; update the entry instead of treating the whole registry as generated output.
+- `fixture_defaults` is meaningful only alongside `fixture_schema`.
+- Optional sighting fields (`sighting_count`, `last_sighting`, `anchor_module`) may be absent when no review run has triggered the invariant.
+- Tags must stay within the controlled tag set used by the docs/memory layer.
+
+## Memories
+
+<!-- DO NOT EDIT this section by hand — regenerated from docs/llm/invariants.json by doc-updater. Use /z-suggest-memory to add or edit memories. -->
+
+_No memories recorded yet._
 
 ## Examples
 
-- Invariant id pattern: `inv_001`, `inv_014` — sequential 3-digit zero-padded; never reused after deprecation
-- Provenance sources: `spec` (mined from SPEC.md), `plan`, `user-concern`, `code-review`, `axiom-derived`
-- Severity tiers: `blocker` (PR gate fail), `major` (PR gate warn), `minor` (informational)
-- Current entries by category: test-quality (inv_001, inv_002), write-atomicity (inv_003), pipeline-resilience (inv_004, inv_005), export-fidelity (inv_006), artifact-commit (inv_007), feed-observability (inv_008), INTENT-engine immutability (inv_009, inv_010, inv_011), legacy-routing (inv_012), config-file-only knobs (inv_013), Hermes-flag-gate (inv_014)
+- Current severities: blocker and major.
+- Current provenance values include `spec`, `plan`, `user-concern`, `code-review`, and `axiom-derived`.
+- Stable id format: `inv_001`, `inv_014`.

@@ -58,11 +58,11 @@ jobs:
           /tmp/z-harness-wheel-smoke/bin/z-harness doctor --help >/tmp/z-harness-doctor-help.txt
           /tmp/z-harness-wheel-smoke/bin/z-harness serve --help >/tmp/z-harness-serve-help.txt
           rm -rf temp/release-wheel-export
-          /tmp/z-harness-wheel-smoke/bin/z-harness export --host codex --out temp/release-wheel-export --force
+          /tmp/z-harness-wheel-smoke/bin/z-harness export --host codex --surface prod --out temp/release-wheel-export --force
           test -f temp/release-wheel-export/.codex-plugin/plugin.json
 
       - name: Build plugin tarball
-        run: bash scripts/bundle-plugin.sh
+        run: Z_HARNESS_RELEASE_SURFACE=prod bash scripts/bundle-plugin.sh
 
       - name: Locate plugin tarball
         id: tarball

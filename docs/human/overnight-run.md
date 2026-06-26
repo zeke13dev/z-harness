@@ -1,7 +1,7 @@
 # overnight-run
 
-> Last updated: 2026-06-19
-> Covers source: commands/z-overnight.md, scripts/run-status.sh, scripts/normalize-task-state.sh, scripts/overnight-preflight.sh, scripts/config.py, scripts/bench-autonomy-check.sh, scripts/chain-runner.sh, docs/human/overnight-run.md
+> Last updated: 2026-06-24
+> Covers source: skills/z-overnight/SKILL.md, scripts/run-status.sh, scripts/normalize-task-state.sh, scripts/overnight-preflight.sh, scripts/config.py, docs/human/overnight-run.md, scripts/bench-autonomy-check.sh
 
 ## Overview
 
@@ -108,7 +108,7 @@ Hard-halt conditions (slug collision, lock corruption, state corruption) are nev
 
 `scripts/bench-autonomy-check.sh` (invoked via `make bench-autonomy-check`) is a mandatory pre-run gate for unattended policy-mode runs. It must exit 0 before launching a benchmark overnight run. It performs three checks:
 
-**Step 1 — Callsite registration audit (lint-askuser --strict):** scans the quick-build hot-path files (`commands/z-plan.md`, `skills/z-execute/SKILL.md`) for `AskUserQuestion` callsites and asserts that each file using `AskUserQuestion` also contains a `resolve-question` or `check-no-ask` call. Unregistered callsites will fail-open (silently block) under `Z_HARNESS_NO_ASK=halt`, violating the policy-mode contract.
+**Step 1 — Callsite registration audit (lint-askuser --strict):** scans the quick-build hot-path files (`skills/z-plan/SKILL.md`, `skills/z-execute/SKILL.md`) for `AskUserQuestion` callsites and asserts that each file using `AskUserQuestion` also contains a `resolve-question` or `check-no-ask` call. Unregistered callsites will fail-open (silently block) under `Z_HARNESS_NO_ASK=halt`, violating the policy-mode contract.
 
 **Step 2 — Policy coverage assertion:** loads `z-harness/bench/pier/benchmark-autonomy.yaml` via `zharness_pier.policy.load_policy` and checks that every `workflow.*` pattern found in the hot-path command files (`z-plan.md`, `z-execute.md`) is present in the policy's `gates` map. If any gate is missing from the policy, the check fails with an actionable error.
 
@@ -318,8 +318,8 @@ The `_build_recommended_next` function in `morning-report.py` branches on `termi
 > **v1 known limit (fail-OPEN for unregistered callsites):** Sub-commands that call `AskUserQuestion` outside the registered gate set will block the conversation until you respond, even with `Z_HARNESS_NO_ASK=halt`. `scripts/lint-askuser.sh` is documentation and audit tooling — it is NOT runtime enforcement and cannot convert a non-instrumented AskUser into a halt. Run `make bench-autonomy-check` before launching a policy-mode benchmark run; for standard overnight runs, run `scripts/lint-askuser.sh --strict` before launching a long chain and instrument any callsites flagged as unregistered if they are on your chain's hot path. v2 will pursue runtime enforcement (e.g., centralized AskUser wrapper at the driver layer).
 
 The instrumented callsites are:
-- **workflow.slug_confirm** (6): `commands/z-plan.md`, `commands/z-fix.md`, `commands/z-uplift.md`, `commands/z-debug.md`, `commands/z-brainstorm.md`, `commands/z-map.md`
-- **workflow.audit_to_amend** (2): `commands/z-audit-plan.md`, `commands/z-audit-plan-style.md`
+- **workflow.slug_confirm** (6): `skills/z-plan/SKILL.md`, `skills/z-fix/SKILL.md`, `skills/z-uplift/SKILL.md`, `skills/z-debug/SKILL.md`, `skills/z-brainstorm/SKILL.md`, `skills/z-map/SKILL.md`
+- **workflow.audit_to_amend** (2): `skills/z-audit-plan/SKILL.md`, `skills/z-audit-plan-style/SKILL.md`
 - **workflow.implement_all_proceed** (1): `/z-execute` halt-resolution gate
 - **workflow.review_all_proceed** (1): `/z-review-all` Phase 3.7 proceed gate
 - **workflow.plan_decisions_approval** (1): `/z-plan` Phase 2.5 decisions-doc approval gate
@@ -339,16 +339,16 @@ Context accumulation risk for step 4+ on large implementations. Deferred to v2.
 ## Key entry points
 
 <!-- AUTO-START: entry-points -->
-- `commands/z-overnight.md:17` — `invocation forms` — Three invocation forms: chain, preset:<name>, and resume <RUN_ID>
-- `commands/z-overnight.md:80` — `Phase 1 Setup` — New-run setup: slug derivation, preflight, lock, AUTODECIDE_EFFECTIVE, state init via chain-runner.sh
-- `commands/z-overnight.md:323` — `Phase 3 per-step loop` — Per-step execution: NO_ASK carve-out, Skill call, C14 archive detection, run-status classification
-- `commands/z-overnight.md:590` — `Phase 4 terminal handling` — Best-effort terminal: state update, morning-report.py, overnight_end, lock release, push-notify
-- `scripts/config.py:580` — `OVERNIGHT_AUTODECIDE_QIDS_DEFAULT` — Default allowlist constant: workflow.slug_confirm + workflow.audit_to_amend
-- `scripts/config.py:1733` — `_parse_overnight_allowlist` — Parses Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE; merges over defaults
-- `scripts/config.py:1824` — `_apply_overnight_overrides` — Post-processes resolver envelope under Z_HARNESS_NO_ASK=halt
-- `scripts/config.py:2717` — `_is_policy_mode` — Detects frozen-policy mode (fail-closed H4)
-- `scripts/config.py:2733` — `_emit_unhandled_gate` — Emits unhandled_gate event for policy-mode gate miss
-- `scripts/config.py:2879` — `cmd_check_no_ask` — check-no-ask CLI; budget-aware via --range-high/--severity
+- `skills/z-overnight/SKILL.md:19` — `invocation forms` — Three invocation forms: chain, preset:<name>, and resume <RUN_ID>
+- `skills/z-overnight/SKILL.md:82` — `Phase 1 Setup` — New-run setup: slug derivation, preflight, lock, AUTODECIDE_EFFECTIVE, state init via chain-runner.sh
+- `skills/z-overnight/SKILL.md:341` — `Phase 3 per-step loop` — Per-step execution: NO_ASK carve-out, Skill call, C14 archive detection, run-status classification
+- `skills/z-overnight/SKILL.md:608` — `Phase 4 terminal handling` — Best-effort terminal: state update, morning-report.py, overnight_end, lock release, push-notify
+- `scripts/config.py:635` — `OVERNIGHT_AUTODECIDE_QIDS_DEFAULT` — Default allowlist constant: workflow.slug_confirm + workflow.audit_to_amend
+- `scripts/config.py:1842` — `_parse_overnight_allowlist` — Parses Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE; merges over defaults
+- `scripts/config.py:1933` — `_apply_overnight_overrides` — Post-processes resolver envelope under Z_HARNESS_NO_ASK=halt
+- `scripts/config.py:2826` — `_is_policy_mode` — Detects frozen-policy mode (fail-closed H4)
+- `scripts/config.py:2842` — `_emit_unhandled_gate` — Emits unhandled_gate event for policy-mode gate miss
+- `scripts/config.py:2988` — `cmd_check_no_ask` — check-no-ask CLI; budget-aware via --range-high/--severity
 - `scripts/overnight-preflight.sh:240` — `cmd_check_collisions` — Phase 0 slug-collision guard
 - `scripts/bench-autonomy-check.sh:1` — `bench-autonomy-check.sh` — 3-step pre-run gate for policy-mode runs
 - `scripts/run-status.sh:1` — `run-status.sh` — classify and last-event subcommands for step-status classification

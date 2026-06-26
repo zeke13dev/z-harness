@@ -1,11 +1,12 @@
 {
   "schema_version": "1",
   "_grounding": {
-    "source": "z-harness/metrics.jsonl (worktree copy absent; checked main-tree /Users/zeke/dev/z-harness/z-harness/metrics.jsonl, 1349 events, parent-rollup aggregation per SPEC empirical tier)",
+    "source": "z-harness/metrics.jsonl (worktree copy absent; checked main-tree <repo>/z-harness/metrics.jsonl, 1349 events, parent-rollup aggregation per SPEC empirical tier)",
     "method": "bucket events by effective_run = (parent_run_id or run), attribute to (parent_command or command), sum subagent_input_tokens+subagent_output_tokens // prompt_chars/4 // 0 per run, filter to normally-completed parents only",
     "z-research":   "ungrounded: 0 samples (no research_run_start/research_run_end events found; range kept at SPEC initial estimate)",
     "z-uplift":     "ungrounded: 0 samples (no uplift run events found; range kept at SPEC initial estimate)",
     "z-plan-split": "ungrounded: 0 samples (no plan-split run events found; range kept at SPEC initial estimate)",
+    "z-plan":       "ungrounded: 0 samples; static range is the cheapest supported full-plan baseline, dispatch_defaults fail closed for pre-gate unknown fan-out",
     "z-brainstorm": "ungrounded: 0 samples with token data (4 brainstorm_run_start events found, 2 brainstorm_run_end; none carry subagent_input_tokens, subagent_output_tokens, prompt_chars, or response_chars fields; token sum = 0 for all; range kept at SPEC initial estimate)",
     "z-audit":      "ungrounded: 0 samples (no audit run events found; range kept at SPEC initial estimate)",
     "z-debug":      "ungrounded: 0 samples (no debug run events found; range kept at SPEC initial estimate)"
@@ -17,6 +18,50 @@
                       "multipliers": {"per_component": 600000}},
     "z-plan-split":  {"range": [1500000, 5000000], "gate": "hard",
                       "multipliers": {"per_cluster": 700000}},
+    "z-plan":        {
+      "range": [300000, 900000],
+      "gate": "hard",
+      "multipliers": {
+        "planning_mode_full": 700000,
+        "intent_level_depth": 200000,
+        "doc_fetcher": 100000,
+        "explore": 2800000,
+        "phase3_consultants": 350000,
+        "phase7_consultants": 350000,
+        "task_tree_generator": 300000
+      },
+      "dispatch_defaults": {
+        "planning_mode_full": 0,
+        "intent_level_depth": 2,
+        "doc_fetcher": 1,
+        "explore": 3,
+        "phase3_consultants": 5,
+        "phase7_consultants": 5,
+        "task_tree_generator": 1
+      },
+      "dispatch_contract": {
+        "semantics": "All accepted keys are non-negative integer counts. Explicit dispatch values replace the default for that key; duplicate explicit values for the same key are summed before replacing the default. Unknown keys warn on stderr and are ignored. Negative counts are rejected so they cannot reduce the estimate. Defaults are conservative pre-gate upper bounds for values /z-plan may not know yet.",
+        "accepted_keys": {
+          "planning_mode_full": "0 for intent-mode baseline; 1 when /z-plan is forced onto the legacy SPEC/PLAN/TASKS path.",
+          "intent_level_depth": "0=quick, 1=standard, 2=deep or not-yet-classified auto; additive depth premium only, consult counts are separate.",
+          "doc_fetcher": "Number of doc-fetcher dispatches known before the gate; default 1 if docs may exist.",
+          "explore": "Number of Explore dispatches; default 3 is workflow.max_explore's fail-closed cap.",
+          "phase3_consultants": "Number of Phase 3 consultant/panel arms expected before the gate; default 5 covers persona-rotation panel mode.",
+          "phase7_consultants": "Number of Phase 7 final-review consultant/panel arms expected before the gate; default 5 covers persona-rotation panel mode.",
+          "task_tree_generator": "1 when intent-mode will dispatch task-tree-generator; 0 for known legacy/full mode."
+        }
+      },
+      "e2e_forecast": {
+        "execute_forecast": {
+          "range": [2000000, 20000000],
+          "estimated_tokens": 2000000,
+          "confidence": "low",
+          "uncertainty": "wide_static_fallback",
+          "basis": "static fallback for post-plan execution; task count, implementer model mix, and review retries are unknown before planning",
+          "user_facing_wording": "Projected execute cost is approximate, not exact, and not a hard cap."
+        }
+      }
+    },
     "z-brainstorm":  {"range": [80000, 220000], "gate": "soft",
                       "multipliers": {"per_heavy_chunk": 200000}},
     "z-audit":       {"range": [200000, 1200000], "gate": "soft",

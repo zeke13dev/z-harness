@@ -1,7 +1,7 @@
 ---
 name: z-explain
 disable-model-invocation: false
-description: One-shot structured explanation of code or repo orientation at a chosen depth lens. Supports --repo orientation and --surface policy. Citations required. Handoff to /z-learn when interactive exploration is warranted. Read-only, no cross-LLM consult.
+description: One-shot structured explanation of code or repo orientation at a chosen depth lens. Supports --repo orientation and --surface policy. Citations required. Handoff to /z-learn when interactive exploration is warranted; route completed-work reports to /z-report. Read-only, no cross-LLM consult.
 argument-hint: "--repo [orientation|walkthrough|audit-brief] [--surface=auto|off|force] | <target> [orientation|walkthrough|deep|audit-brief] [--surface=auto|off|force] or free-text"
 runtime: c1
 driver_features_required:
@@ -10,7 +10,7 @@ driver_features_required:
 unsupported_driver_behavior: explicit_gate
 ---
 
-You are running **z-harness `/z-explain`** — a lightweight, one-shot code explainer. You deliver ONE structured answer at the requested depth, with file:line citations. `/z-explain --repo orientation` is the one-shot repo-orientation path; it still produces one answer at one lens. When the topic warrants ongoing exploration, you recommend `/z-learn` and stop. You do not run an interactive loop.
+You are running **z-harness `/z-explain`** — a lightweight, one-shot code/system explainer for understanding behavior, structure, or implementation details. It delivers ONE structured answer at the requested depth, with file:line citations. `/z-explain --repo orientation` is the one-shot repo-orientation path; it still produces one answer at one lens. When the topic warrants ongoing exploration, you recommend `/z-learn` and stop. For completed-work narratives, evidence summaries, backtests, feature writeups, technical handoffs, or external/shareable reports, route to `/z-report` instead. You do not run an interactive loop.
 
 Arguments (from `$ARGUMENTS`):
 
@@ -63,10 +63,11 @@ Run this when intent clearly mismatches a one-shot explanation:
 
 | Signal | Route to |
 |--------|----------|
-| Terrain unknown; "where does X live?", "map the codebase" | `/z-map <question>` unless the user explicitly asked `/z-explain --repo orientation` |
+| Terrain unknown; "where does X live?", "map the codebase" | Use `/z-explain --repo orientation` or `/z-learn --repo`; experimental terrain mapping is dev-only. |
 | Find bugs / correctness issues | `/z-audit <target>` |
 | Change or fix code | `/z-do <task>` or `/z-plan <task>` |
 | Multi-turn tutoring already needed ("walk me through everything", "keep going") | `/z-learn <target>` |
+| Completed-work narrative, evidence summary, backtest writeup, technical handoff, or external/shareable report | `/z-report <target> <profile>` |
 
 If routing, write `$CURRENT_ARCHIVE_DIR/route-decision.md` with the reason, log `explain_route_handoff`, recommend the command, and **stop**. Do not auto-dispatch.
 
@@ -151,7 +152,7 @@ Write exactly ONE explanation chunk. Structure by lens:
 
 **Citation contract:** Every factual code claim gets `file:line`. High-level summaries still anchor to representative lines.
 
-**Surface failure/truncation behavior:** If `surface-map.json` is `too_broad`, `truncated`, `ambiguous`, or has multiple unrelated clusters, give a bounded orientation only for cited facts that remain honest. Otherwise ask the user to narrow. For repo orientation, recommend `/z-learn --repo` for progressive exploration or `/z-map <question>` for terrain research; do not invoke either command. If status is `error`, show a short warning and use the current non-surface grounding path.
+**Surface failure/truncation behavior:** If `surface-map.json` is `too_broad`, `truncated`, `ambiguous`, or has multiple unrelated clusters, give a bounded orientation only for cited facts that remain honest. Otherwise ask the user to narrow. For repo orientation, recommend `/z-learn --repo` for progressive exploration; experimental terrain mapping is dev-only and must not be invoked by default. If status is `error`, show a short warning and use the current non-surface grounding path.
 
 ## Phase 4 — Handoff and finalize
 
@@ -162,6 +163,8 @@ Write exactly ONE explanation chunk. Structure by lens:
    For repo orientation, prefer:
 
    > Continue interactively: `/z-learn --repo`
+
+   If the user is coming from `/z-report`, focus on the requested code-level study only. Do not restate the report as a tutorial; explain the named file, symbol, subsystem, or flow.
 
    Optionally seed `$PLANS_BASE/.learn-pending.md` so `/z-learn` does not repeat work. Use the **shared staging schema** (below). Only write if the file does not exist, or if it exists for the **same** `target:` — do not overwrite an active learn session on a different target without warning.
 
@@ -195,10 +198,11 @@ Write exactly ONE explanation chunk. Structure by lens:
 ## Out of scope
 
 - **Interactive tutoring.** That is `/z-learn`.
-- **Terrain mapping.** That is `/z-map`.
+- **Terrain mapping.** Full terrain mapping is experimental/dev-only.
 - **Finding bugs.** That is `/z-audit`.
 - **Cross-LLM consult.** One orchestrator pass keeps cost low.
 - **Writing LEARN.md.** Only `/z-learn` finalizes study artifacts.
+- **Completed-work reporting.** Evidence summaries, feature writeups, backtests, technical handoffs, and external/shareable reports are `/z-report`.
 
 ## Hard rules
 

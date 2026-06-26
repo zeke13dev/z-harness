@@ -232,7 +232,7 @@ State the recommendation in one or two sentences, point at the written `GRILL.md
 - **Cross-LLM consult.** No Gemini/Codex consultants. The grill is a one-on-one interview, not a panel.
 - **Implementation or review.** `/z-grill` writes no code and runs no reviewer.
 - **Ideation breadth.** Generating multiple competing approaches is `/z-brainstorm`'s job. `/z-grill` narrows; brainstorm widens.
-- **Terrain mapping.** Deep codebase mapping is `/z-map`. `/z-grill` only self-serves the specific constraints a branch needs.
+- **Terrain mapping.** Deep terrain mapping is experimental/dev-only. `/z-grill` only self-serves the specific constraints a branch needs.
 
 ## Hard rules
 

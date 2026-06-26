@@ -63,7 +63,7 @@
 **Source files:** `commands/z-review-all.md`
 ---
 
-## inv_006 — Every exported z-command (export-pi.py, export-codex-*) must expose the full set of behavioral rules from the base skill. An export that drops critical rules (e.g., structural test vs invariant test distinction, fixture_schema validation) produces broken behavior.
+## inv_006 — Every exported z-command runtime driver (including `runtime/drivers/pi/export.py` and `runtime/drivers/codex/export.py`) must expose the full set of behavioral rules from the base skill. An export that drops critical rules (e.g., structural test vs invariant test distinction, fixture_schema validation) produces broken behavior.
 
 **Severity:** blocker
 
@@ -71,7 +71,7 @@
 
 **Failure class:** Export omits critical behavioral rules
 
-**Source files:** `exports/export-pi.py`, `scripts/export-codex-skills.py`
+**Source files:** `runtime/drivers/pi/export.py`, `runtime/drivers/codex/export.py`
 ---
 
 ## inv_007 — All plan artifacts (SPEC.md, PLAN.md, TASKS.md) plus INVARIANTS.json and all TESTS.md files must be committed to the repo. An uncommitted artifact may represent incomplete work that could be lost on checkout.

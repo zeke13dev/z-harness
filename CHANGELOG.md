@@ -29,6 +29,11 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
 
 ---
 
+## 2026-06-24
+
+- _(auto)_ Make Oh My Pi a first-class native z-harness host _(omp)_
+- _(auto)_ Opt-in Hermes webhook notifier for watchdog alerts _(notify)_
+
 ## 2026-06-22
 
 - _(auto)_ Emergent sharpen-first pipeline — rename z-implement-all→z-execute, fold sharpen, delete redundant commands _(plan-family)_

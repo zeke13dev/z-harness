@@ -70,6 +70,18 @@ EXCLUDES=(
   "--exclude=./providers.json"
 )
 
+if [[ "${Z_HARNESS_RELEASE_SURFACE:-dev}" == "prod" || "${Z_HARNESS_RELEASE_SURFACE:-dev}" == "production" ]]; then
+  EXCLUDES+=(
+    "--exclude=./skills/z-research"
+    "--exclude=./skills/z-map"
+    "--exclude=./skills/z-overnight"
+    "--exclude=./skills/z-attend"
+    "--exclude=./skills/z-axiom-*"
+    "--exclude=./agents/axiom-extractor.md"
+    "--exclude=./agents/research-judge.md"
+  )
+fi
+
 # Enumerate legacy plan dirs — any z-harness/<slug>/ that contains PLAN.md,
 # SPEC.md, or TASKS.md — and exclude them from the tarball.
 # Skip the canonical directories that are either already excluded above or

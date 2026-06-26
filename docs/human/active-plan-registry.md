@@ -1,7 +1,7 @@
 # active-plan-registry — Cross-session awareness registry
 
-> Last updated: 2026-06-19
-> Covers source: scripts/active-plan-registry.py, scripts/plan-path.sh, scripts/migrate-plan-layout.sh, agents/scope-extractor.md, skills/z-execute/SKILL.md, commands/z-plan.md
+> Last updated: 2026-06-26
+> Covers source: scripts/active-plan-registry.py, scripts/plan-path.sh, scripts/migrate-plan-layout.sh, scripts/artifact-scout-inventory.py, agents/artifact-scout.md, agents/scope-extractor.md, skills/z-execute/SKILL.md, skills/z-plan/SKILL.md, docs/human/active-plan-registry.md, docs/handoff-parallel-session-safety.md
 
 ## Overview
 
@@ -96,7 +96,8 @@ Each `<run-id>.json` record (schema_version 2) contains:
     {"path": "scripts/plan-path.sh", "confidence": "explicit", "reason": "TASKS T003 File changes"}
   ],
   "held_paths": [{"path": "scripts/plan-path.sh", "since": "ISO-UTC"}],
-  "waiting_on": []
+  "waiting_on": [],
+  "watchdog_pid": 12345
 }
 ```
 
@@ -111,8 +112,8 @@ Each `<run-id>.json` record (schema_version 2) contains:
 | Subcommand | Purpose |
 |------------|---------|
 | `session-id` | Prints a stable session id for the current shell session. Returns `$Z_HARNESS_SESSION_ID` if set; otherwise derives `<ppid>-<start_epoch>` (Linux: from `/proc`; macOS: pure-Python fallback). Callers should `export Z_HARNESS_SESSION_ID="$(session-id)"` once at run start. |
-| `register --run-id ID --slug S --command C --phase P [--session SID]` | Creates/overwrites `<active>/ID.json` atomically. Idempotent. Emits `plan_registered`. |
-| `heartbeat --run-id ID [--phase P] [--current-task T] [--status running\|paused]` | Updates `last_heartbeat`, `phase`, `current_task`, and (when provided) `status` in the own record. There is **no `--waiting-on` CLI flag** — the paused beat's combined atomic write of `status=paused + waiting_on` is performed internally by `_set_waiting_on()` inside `wait-for`'s poll loop, ensuring no window where status=paused but waiting_on is stale. If the record is absent (reaped or never registered), emits `registry_error(reason:missing_record)` and returns 0 — does NOT recreate a zombie record. |
+| `register --run-id ID --slug S --command C --phase P [--session SID] [--watchdog-pid PID]` | Creates/overwrites `<active>/ID.json` atomically. Idempotent. Emits `plan_registered`. `watchdog_pid` is advisory observability only; the authoritative PID source is the per-run `.watchdog.pid` file on disk. |
+| `heartbeat --run-id ID [--phase P] [--current-task T] [--status running\|paused] [--watchdog-pid PID]` | Updates `last_heartbeat`, `phase`, `current_task`, optional `watchdog_pid`, and (when provided) `status` in the own record. There is **no `--waiting-on` CLI flag** — the paused beat's combined atomic write of `status=paused + waiting_on` is performed internally by `_set_waiting_on()` inside `wait-for`'s poll loop, ensuring no window where status=paused but waiting_on is stale. If the record is absent (reaped or never registered), emits `registry_error(reason:missing_record)` and returns 0 — does NOT recreate a zombie record. |
 | `update-scope --run-id ID --scope-json FILE` | Merges a scope array `[{path, confidence, reason}]` into the record. |
 | `claim --run-id ID --paths p1,p2[,...]` | Stage and claim per-file leases. Performs a check-after-claim: re-reads all peer records, applies lexicographic run_id tiebreak (lower run_id = senior wins). Persists only the won set into `held_paths`. Stdout: JSON `{"claimed":[...],"conceded":[{"path","holder_run_id"}]}`. Exit 0 always (advisory). `Z_HARNESS_REGISTRY_ENABLED=0` → silent no-op. |
 | `release --run-id ID (--paths p1,p2 \| --all)` | Remove named paths (or all) from own `held_paths`. Best-effort, exit 0. Emits `lease_released`. `Z_HARNESS_REGISTRY_ENABLED=0` → silent no-op. |
@@ -240,6 +241,16 @@ This empties the senior's `held_paths`. All juniors waiting on that senior will 
 
 ---
 
+## Artifact Scout inventory consumer
+
+`scripts/artifact-scout-inventory.py` reads the registry as one input to the compact `artifact-scout-inventory.v1` payload used by command preflights. It records active records, scope overlaps, held-path overlaps, and a `source_status.registry` value. Registry failures are intentionally non-authoritative: `unavailable` or `corrupt` means the scout has unknown evidence, not that no peer run exists.
+
+The `artifact-scout` classifier is tool-less and reads only the inline JSON supplied by the command. Its `unknown_sources` list includes sources whose status is `partial`, `corrupt`, `unavailable`, or `truncated`; these statuses cap confidence and may produce warning reason codes. `missing` is a valid source-health value but is not evidence that duplicate work is impossible, especially for optional archives.
+
+Scout routing does not replace registry overlap and lease behavior. `active_path_overlap` and `held_paths_overlap` findings are warning/strict-overlap surfaces only; the existing registry `overlaps`, `claim`, `wait-for`, and strict-mode rules remain authoritative for active coordination. Warning-only scout output never writes `route-decision.md`; only a classifier result with `route_chain_effect: "write_route_decision"` may participate in the normal route-decision boundary.
+
+The archived scout files are `$BASE/archive/$RUN/artifact-scout-inventory.json` and `$BASE/archive/$RUN/artifact-scout.md`. LLM concept JSON under `docs/llm/` is outside this human-doc update path and should be refreshed later through `/z-maintain-docs`, not edited manually.
+
 ## Scope-extractor (Haiku subagent)
 
 `agents/scope-extractor.md` (frontmatter `model: haiku`). Input: `repo_root`, `base` (plan artifact dir), optional `task_id`. Reads SPEC.md + PLAN.md + TASKS.md (and the task block if `task_id` given), emits JSON `[{path, confidence, reason}]` to stdout.
@@ -323,6 +334,8 @@ See `docs/human/PLAN-LAYOUT.md` for the full migration guide.
 9. **Release is per task, not per merge.** Leases are dropped on each task's clean success, not when the branch merges.
 10. **`heartbeat` does NOT recreate absent records.** Missing record → `registry_error(reason:missing_record)` + return 0. No zombie records with empty fields.
 
+11. **Artifact Scout cannot turn registry uncertainty into absence.** `source_status.registry` values other than `ok` lower scout confidence and may warn; they never prove there are no active peers and never bypass overlap/lease gates.
+
 ---
 
 ## Env knobs (quick reference)
@@ -369,15 +382,16 @@ This answers "where are my plans?", "what else is running?", and "why is my run 
 
 ## Key entry points
 
-- `scripts/active-plan-registry.py:565` — `cmd_session_id` — stable session-id derivation
-- `scripts/active-plan-registry.py:584` — `cmd_register` — create run record (exits 3 on failure)
-- `scripts/active-plan-registry.py:831` — `cmd_claim` — check-after-claim per-file lease
-- `scripts/active-plan-registry.py:1119` — `cmd_wait_for` — senior-peer poll loop
-- `scripts/active-plan-registry.py:1533` — `cmd_overlaps` — scope+held-path intersection check
-- `scripts/active-plan-registry.py:1774` — `cmd_reap` — conservative dead-record cleanup
-- `scripts/active-plan-registry.py:1423` — `_reap_inline` — wait-for's internal reap (pre-resolved active_dir)
-- `scripts/active-plan-registry.py:355` — `_is_lease_capable` — schema-v2 + held_paths guard
-- `scripts/active-plan-registry.py:376` — `_is_senior` — canonical lexicographic run_id ordering predicate
+- `scripts/active-plan-registry.py:656` — `cmd_session_id` — stable session-id derivation
+- `scripts/active-plan-registry.py:675` — `cmd_register` — create run record (exits 3 on failure)
+- `scripts/active-plan-registry.py:940` — `cmd_claim` — check-after-claim per-file lease
+- `scripts/active-plan-registry.py:1228` — `cmd_wait_for` — senior-peer poll loop
+- `scripts/active-plan-registry.py:1642` — `cmd_overlaps` — scope+held-path intersection check
+- `scripts/active-plan-registry.py:1883` — `cmd_reap` — conservative dead-record cleanup
+- `scripts/active-plan-registry.py:1532` — `_reap_inline` — wait-for's internal reap (pre-resolved active_dir)
+- `scripts/active-plan-registry.py:281` — `_sigterm_watchdog` — best-effort SIGTERM/SIGKILL cleanup using `<plan>/active/<run-id>.watchdog.pid`; registry `watchdog_pid` is observability-only
+- `scripts/active-plan-registry.py:439` — `_is_lease_capable` — schema-v2 + held_paths guard
+- `scripts/active-plan-registry.py:460` — `_is_senior` — canonical lexicographic run_id ordering predicate
 - `scripts/plan-path.sh:178` — `z_harness_base` — five-tier base resolution with anchor
 - `scripts/plan-path.sh:337` — `active_plans_dir` — registry home path helper
 - `agents/scope-extractor.md:1` — `scope-extractor` — Haiku scope array emitter
@@ -387,6 +401,7 @@ This answers "where are my plans?", "what else is running?", and "why is my run 
 - `plan-claim` — orthogonal hard slug-level mutex; uses `claims_dir()` from plan-path.sh. The lockless registry is advisory; plan-claim is the hard gate. Hermes cross-plan paths acquire plan-claim locks before operating.
 - `hermes-orchestration` — calls `session-id` at workstream start; depends on registry for concurrent plan awareness.
 - `commands` (z-execute, z-plan, z-where, etc.) — primary consumers of register/overlaps/claim/release/wait-for/deregister.
+- `artifact-scout` — consumes registry records through `artifact-scout-inventory.py` for duplicate/collision warnings. It is advisory and cannot mutate records or replace `overlaps`/lease enforcement.
 - `followup-sink` — shares `<base>` via `followups_dir()`; must not participate in per-entry→global lock ordering of `followup_common.py`.
 - `plan-layout-migration` — `migrate-plan-layout.sh` gates on `list --json` to refuse when any run is live.
 

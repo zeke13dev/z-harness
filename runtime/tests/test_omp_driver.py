@@ -65,6 +65,40 @@ class TestNativeOmpArgv:
 
         popen.assert_not_called()
 
+    @pytest.mark.parametrize("flag", ["--no-rules", "--no-session"])
+    def test_consult_only_flags_are_rejected_before_spawn(
+        self, monkeypatch: pytest.MonkeyPatch, flag: str
+    ) -> None:
+        popen = MagicMock()
+        monkeypatch.setattr("runtime.drivers.omp.subprocess_driver.subprocess.Popen", popen)
+
+        driver = _driver()
+        with pytest.raises(OmpDriverConfigError, match="consult-only"):
+            driver.dispatch("z-do", ["-p", flag, "prompt"], {})
+
+        popen.assert_not_called()
+
+    @pytest.mark.parametrize("prompt", ["--no-rules", "--no-session=please", "scripts/omp-consult.sh is legacy"])
+    def test_consult_only_tokens_are_allowed_inside_prompt(
+        self, monkeypatch: pytest.MonkeyPatch, prompt: str
+    ) -> None:
+        seen: dict[str, object] = {}
+
+        def fake_popen(argv, *, stdout, stderr, env):
+            seen["argv"] = argv
+            return _proc(stdout=b"ok\n")
+
+        monkeypatch.setattr("runtime.drivers.omp.subprocess_driver.subprocess.Popen", fake_popen)
+        monkeypatch.setattr("runtime.drivers.omp.subprocess_driver._fire_telemetry", MagicMock())
+
+        driver = _driver()
+        handle = driver.dispatch("z-do", ["-p", prompt], {})
+        list(handle.events())
+        result = handle.wait()
+
+        assert seen["argv"] == ["omp", "-p", prompt]
+        assert result.exit_code == 0
+
     def test_provider_config_adds_model_profile_session_and_plugin_root_without_consult_flags(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -15,9 +15,9 @@ This document summarizes the beta support level for each shipped host/export tar
 |---|---:|---:|---:|---|
 | Claude Code | native | yes | plugin/source install | Best-supported beta path. |
 | Antigravity | high | yes | `.agent/` workflows/rules/skills | Some subagent/provider-routing features require explicit fallback instructions. |
-| Cursor | flattened | yes | `.cursor/skills` + rules | Single-agent translation; review fan-out is not native. |
-| Codex | flattened | yes | `skills/` + `.codex-plugin/plugin.json` | MCP registration is global/persistent in `~/.codex/config.toml`; removal is explicit via doctor. |
-| pi | export-only | no | prompts/agents/assets | Generated for pi-native consumption; no generic launcher. |
+| Cursor | flattened | yes | `.cursor/skills` + rules | Supported setup/export target; subagent fan-out is not native and remains blocked until parity tests prove otherwise. |
+| Codex | flattened | yes | `skills/` + `.codex-plugin/plugin.json` | Supported setup/export target; MCP registration is global/persistent in `~/.codex/config.toml`; subagent fan-out is not native. |
+| OMP / pi | native/export | yes for OMP, no for legacy pi | `.omp/z-harness/` package and pi compatibility exports | OMP native claims are bounded by parity evidence; legacy pi remains export-only. |
 | Windsurf | export-only | no | rules | Curated/full export only. |
 | Kiro | export-only | no | steering docs | Curated/full export only. |
 | Cline | export-only | no | `.clinerules/` | Pointer export by default to avoid context bloat. |
@@ -35,6 +35,12 @@ Non-native hosts may not support these z-harness runtime constructs directly:
 - long-running telemetry handshakes across host context resets.
 
 Export drivers must not silently drop those constructs. They preserve `RUNTIME-GATE` comments and replace unsupported call blocks with target-specific fallback instructions.
+
+## Release surfaces
+
+- **dev/main surface:** includes experimental research commands for local development.
+- **prod surface:** hides `/z-research`, `/z-map`, `/z-overnight`, `/z-attend`, and `z-axiom-*` by default while keeping `/z-learn`, `/z-sharpen`, `/z-grill`, and `/z-brainstorm`.
+- Use `z-harness export --surface prod ...` for public-beta exports.
 
 ## Safety posture
 

@@ -1,99 +1,105 @@
 {
   "concept": "z-audit-plan",
-  "last_updated": "2026-06-19",
-  "source_file": [
-    "commands/z-audit-plan.md",
+  "last_updated": "2026-06-24",
+  "source_files": [
+    "skills/z-audit-plan/SKILL.md",
     "docs/human/z-audit-plan.md"
   ],
   "confidence": "high",
+  "summary": "Read-only pre-implementation plan audit pipeline that reality-checks and cross-reviews plan artifacts, class-tags findings as spec_gap or premise_failure, then routes Phase 5 through auto_split/prose summary/halt with run-brief finalization.",
   "entry_points": [
     {
-      "file": "commands/z-audit-plan.md",
-      "line": 1,
-      "symbol": "z-audit-plan",
+      "file": "skills/z-audit-plan/SKILL.md",
+      "line": 511,
+      "symbol": "Class tagging",
       "kind": "module",
-      "summary": "Command definition: pre-implementation plan audit pipeline; read-only; emits PLAN_AUDIT_REPORT.md"
+      "summary": "Surviving findings get canonical Class; audit-plan uses spec_gap or premise_failure only."
     },
     {
-      "file": "commands/z-audit-plan.md",
-      "line": 427,
-      "symbol": "Phase 4",
+      "file": "skills/z-audit-plan/SKILL.md",
+      "line": 557,
+      "symbol": "per-finding report format",
       "kind": "module",
-      "summary": "Merge/synthesize findings + Class tagging: every surviving finding tagged spec_gap or premise_failure using z-review-all.md:716 enum; PLAN_AUDIT_REPORT.md written with **Class:** field after **Severity:**"
+      "summary": "Class field is required immediately after Severity in every finding."
     },
     {
-      "file": "commands/z-audit-plan.md",
-      "line": 516,
-      "symbol": "Phase 5",
+      "file": "skills/z-audit-plan/SKILL.md",
+      "line": 596,
+      "symbol": "Phase 5 gate decision",
       "kind": "module",
-      "summary": "Gate & Action: config.py resolve-question workflow.audit_to_amend + amend-gate-decision.py -> auto_split (default) / force_ask / halt"
+      "summary": "Resolve workflow.audit_to_amend and map with amend-gate-decision.py before user interaction."
     },
     {
-      "file": "commands/z-audit-plan.md",
-      "line": 554,
-      "symbol": "Phase 5 gate resolution",
+      "file": "skills/z-audit-plan/SKILL.md",
+      "line": 621,
+      "symbol": "halt branch",
       "kind": "module",
-      "summary": "Resolver envelope piped to amend-gate-decision.py; gate token dispatches auto_split/force_ask/halt branches"
+      "summary": "audit_halt telemetry, no amend/popup, jump to Run Brief halt finalize."
     },
     {
-      "file": "commands/z-audit-plan.md",
-      "line": 575,
-      "symbol": "Phase 5 auto_split branch",
+      "file": "skills/z-audit-plan/SKILL.md",
+      "line": 631,
+      "symbol": "auto_split branch",
       "kind": "module",
-      "summary": "auto_split: INTENT-mode batches all spec_gap into ONE /z-amend call; legacy-mode per-finding; premise_failure rendered via amendment-brief.py as conversational prose; no popup"
+      "summary": "Extract findings by Class, auto-amend spec_gap, render premise_failure as prose brief."
     },
     {
-      "file": "commands/z-audit-plan.md",
-      "line": 638,
-      "symbol": "audit_auto_split telemetry",
+      "file": "skills/z-audit-plan/SKILL.md",
+      "line": 661,
+      "symbol": "target-mode-aware amend",
       "kind": "module",
-      "summary": "Telemetry event: corrections_auto_amended, approach_concerns_surfaced, target_mode"
+      "summary": "INTENT targets batch all spec_gap corrections into one amend; legacy targets one amend per finding."
     },
     {
-      "file": "commands/z-audit-plan.md",
-      "line": 645,
-      "symbol": "Phase 5 force_ask branch",
+      "file": "skills/z-audit-plan/SKILL.md",
+      "line": 778,
+      "symbol": "force_ask prose branch",
       "kind": "module",
-      "summary": "force_ask: fires ONLY when amend-gate-decision.py returns force_ask (explicit user preference); 3-way popup: Amend Plan / Proceed as-is / Reject & Re-plan"
+      "summary": "Prose alignment summary replaces the old 3-way AskUserQuestion popup."
     },
     {
-      "file": "commands/z-audit-plan.md",
-      "line": 765,
-      "symbol": "Phase 9",
+      "file": "skills/z-audit-plan/SKILL.md",
+      "line": 807,
+      "symbol": "Run Brief finalize",
       "kind": "module",
-      "summary": "Elevation proposer: workflow preference elevation check after gate resolves"
+      "summary": "Sets outcome/next/approach and renders via run-brief before plan_audit_end."
+    },
+    {
+      "file": "skills/z-audit-plan/SKILL.md",
+      "line": 863,
+      "symbol": "plan_audit_end",
+      "kind": "event",
+      "summary": "Completion telemetry with status/findings/blockers/majors."
     }
   ],
   "depends_on": [
     "amendment-brief",
     "config",
-    "commands",
     "plan-claim",
-    "active-plan-registry"
+    "active-plan-registry",
+    "run-brief-contract"
   ],
   "consumed_by": [
-    "commands"
+    "z-plan",
+    "z-execute",
+    "z-amend"
   ],
   "invariants": [
-    "command is read-only: never edits active codebase files; all changes go through /z-amend or /z-plan",
-    "every surviving finding in PLAN_AUDIT_REPORT.md must have a **Class:** field immediately after **Severity:**",
-    "Class values are restricted to spec_gap or premise_failure for audit-plan findings; correction/approach are glosses only",
-    "discriminator is Class not severity: a BLOCKER can be spec_gap or premise_failure",
-    "Phase 5 default (source==none) is auto_split — no popup; fresh users never see the 3-way popup",
-    "force_ask fires ONLY when amend-gate-decision.py returns force_ask (explicit config/memory preference with ask|prefill)",
-    "INTENT-mode auto_split batches ALL spec_gap corrections into ONE /z-amend call (one contract re-freeze)",
-    "legacy-mode auto_split invokes one /z-amend --skip-user-gate per spec_gap finding",
-    "completed ([x]) tasks are skipped in the auto_split amend loop",
-    "halt gate token causes immediate abort via Run Brief halt-finalize path",
-    "audit_auto_split telemetry event emitted on every auto_split path execution"
+    "Command is read-only for production code.",
+    "Every surviving finding in PLAN_AUDIT_REPORT.md has **Class:** after **Severity:**.",
+    "Audit-plan classes are spec_gap or premise_failure only.",
+    "Class is the discriminator, not severity.",
+    "auto_split skips completed [x] task references.",
+    "INTENT-mode auto_split batches spec_gap corrections into one amend call.",
+    "force_ask emits prose alignment, not a popup.",
+    "Run Brief owns completion prose."
   ],
   "gotchas": [
-    "workflow.audit_to_amend semantics are SOURCE-KEYED: source==none -> auto_split regardless of result value; stored ask/prefill from config|memory -> force_ask",
-    "INTENT-mode one-batch constraint is not optional: N separate /z-amend calls on an INTENT target would re-freeze the contract N times and invalidate TASKS.md each time",
-    "the 3-way popup (Amend Plan / Proceed as-is / Reject & Re-plan) is preserved but fires only on force_ask — most runs never see it",
-    "PLAN_AUDIT_REPORT.md is written to both $BASE/ and $BASE/archive/$RUN/; the archive copy is for the run-brief pipeline",
-    "Phase 5 run-brief populates outcome/next; the approach section prefers extractable bullets from PLAN_AUDIT_REPORT.md, falls back to a seed file",
-    "Class enum source is z-review-all.md:716 — audit-plan does NOT define its own enum; keep in sync"
+    "The embedded comment still mentions z-review-all line 716; use the current enum in z-review-all rather than hardcoding stale line numbers.",
+    "amend-gate-decision.py failures fall safe to force_ask/prose.",
+    "PLAN_AUDIT_REPORT.md must exist before Phase 5 extraction.",
+    "premise_failure may have no single affected task/file.",
+    "halt path must release claim before deregister when claim was acquired."
   ],
   "memories": []
 }

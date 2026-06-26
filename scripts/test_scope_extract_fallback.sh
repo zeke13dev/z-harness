@@ -68,7 +68,7 @@ ACTUAL_TASKS=""
 for candidate in \
     "$REPO_ROOT/z-harness/active-plan-coordination/TASKS.md" \
     "$(git -C "$REPO_ROOT" rev-parse --show-toplevel 2>/dev/null)/z-harness/active-plan-coordination/TASKS.md" \
-    "/Users/zeke/dev/z-harness/z-harness/active-plan-coordination/TASKS.md"; do
+    "<repo>/z-harness/active-plan-coordination/TASKS.md"; do
     if [[ -f "$candidate" ]]; then
         ACTUAL_TASKS="$candidate"
         break

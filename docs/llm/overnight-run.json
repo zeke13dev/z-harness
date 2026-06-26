@@ -1,77 +1,76 @@
 {
   "concept": "overnight-run",
-  "last_updated": "2026-06-19",
+  "last_updated": "2026-06-24",
   "covers_spec": "none",
   "source_file": [
-    "commands/z-overnight.md",
+    "skills/z-overnight/SKILL.md",
     "scripts/run-status.sh",
     "scripts/normalize-task-state.sh",
     "scripts/overnight-preflight.sh",
     "scripts/config.py",
-    "scripts/bench-autonomy-check.sh",
-    "scripts/chain-runner.sh",
-    "docs/human/overnight-run.md"
+    "docs/human/overnight-run.md",
+    "scripts/bench-autonomy-check.sh"
   ],
   "confidence": "high",
   "entry_points": [
     {
-      "file": "commands/z-overnight.md",
-      "line": 17,
+      "file": "skills/z-overnight/SKILL.md",
+      "line": 19,
       "symbol": "invocation forms",
       "kind": "doc",
       "summary": "Three invocation forms: chain form, preset:<name> form, and resume <RUN_ID> form; chain is comma/arrow-separated step names without /z- prefix"
     },
     {
-      "file": "commands/z-overnight.md",
-      "line": 80,
+      "file": "skills/z-overnight/SKILL.md",
+      "line": 82,
       "symbol": "Phase 1 Setup",
       "kind": "doc",
       "summary": "New-run setup: derive slug, resolve plan dir, preflight slug-collision check, acquire flock-based lock, build AUTODECIDE_EFFECTIVE, init overnight-state.json via chain-runner.sh, log overnight_start"
     },
     {
-      "file": "commands/z-overnight.md",
-      "line": 110,
+      "file": "skills/z-overnight/SKILL.md",
+      "line": 94,
       "symbol": "lock acquisition",
       "kind": "doc",
       "summary": "Lock file at $BASE/.overnight.lock (JSON: owner_run_id, started_at, last_heartbeat); flock file at $BASE/.overnight.flock; stale threshold Z_HARNESS_OVERNIGHT_LOCK_STALE_S (default 7200s)"
     },
     {
-      "file": "commands/z-overnight.md",
+      "file": "skills/z-overnight/SKILL.md",
       "line": 148,
       "symbol": "AUTODECIDE_EFFECTIVE build",
       "kind": "doc",
       "summary": "Merge OVERNIGHT_AUTODECIDE_QIDS_DEFAULT with Z_HARNESS_OVERNIGHT_AUTODECIDE (JSON string); exported as Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE before Skill calls"
     },
     {
-      "file": "commands/z-overnight.md",
-      "line": 249,
+      "file": "skills/z-overnight/SKILL.md",
+      "line": 267,
       "symbol": "Phase 2 Resume",
       "kind": "doc",
       "summary": "Resume: locate state file, parse via chain-runner.sh state-read, compute cursor = first non-complete step, validate HEAD SHA against last completed step head_sha_after (warn-and-continue on mismatch), re-acquire lock"
     },
     {
-      "file": "commands/z-overnight.md",
-      "line": 323,
+      "file": "skills/z-overnight/SKILL.md",
+      "line": 341,
       "symbol": "Phase 3 per-step loop",
       "kind": "doc",
       "summary": "Per-step: skip if complete, update state to running, log step_start, snapshot archive dirs, set Z_HARNESS_NO_ASK=halt, invoke Skill, unset Z_HARNESS_NO_ASK, identify sub-RUN via C14 algorithm, classify via run-status.sh, write state via chain-runner.sh, log terminal event, break on non-complete"
     },
     {
-      "file": "commands/z-overnight.md",
+      "file": "skills/z-overnight/SKILL.md",
       "line": 434,
       "symbol": "Step 3.8 run_id_ambiguous",
       "kind": "doc",
       "summary": "If archive-dir snapshot finds 0 or >1 new dirs after Skill call, emit run_id_ambiguous as a top-level event (to overnight run_id), set STEP_STATUS=error, jump to terminal handling"
     },
     {
-      "file": "commands/z-overnight.md",
-      "line": 590,
+      "file": "skills/z-overnight/SKILL.md",
+      "line": 608,
       "symbol": "Phase 4 terminal handling",
       "kind": "doc",
       "summary": "Best-effort terminal: determine overall status, update state via chain-runner.sh, invoke morning-report.py, log overnight_end, release lock, push-notify via should-notify"
     },
     {
-      "file": "commands/z-overnight.md",
+      "file": "skills/z-overnight/SKILL.md",
       "line": 650,
       "symbol": "Phase 4.3 MORNING_REPORT generation",
       "kind": "doc",
@@ -100,42 +99,42 @@
     },
     {
       "file": "scripts/config.py",
-      "line": 580,
+      "line": 635,
       "symbol": "OVERNIGHT_AUTODECIDE_QIDS_DEFAULT",
       "kind": "const",
       "summary": "Default allowlist: {workflow.slug_confirm: recommend_derived, workflow.audit_to_amend: amend}; merged under Z_HARNESS_OVERNIGHT_AUTODECIDE env override"
     },
     {
       "file": "scripts/config.py",
-      "line": 1733,
+      "line": 1842,
       "symbol": "_parse_overnight_allowlist",
       "kind": "fn",
       "summary": "Parses Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE (JSON object); merges over OVERNIGHT_AUTODECIDE_QIDS_DEFAULT"
     },
     {
       "file": "scripts/config.py",
-      "line": 1824,
+      "line": 1933,
       "symbol": "_apply_overnight_overrides",
       "kind": "fn",
       "summary": "Post-processes the resolve-question envelope under Z_HARNESS_NO_ASK=halt: allowlist match -> overnight_decision envelope; no match -> halt envelope. Fires only when result==ask"
     },
     {
       "file": "scripts/config.py",
-      "line": 2717,
+      "line": 2826,
       "symbol": "_is_policy_mode",
       "kind": "fn",
       "summary": "Returns True when Z_HARNESS_NO_ASK=halt AND either Z_HARNESS_OVERNIGHT_AUTODECIDE_EFFECTIVE or Z_HARNESS_OVERNIGHT_AUTODECIDE is non-empty (frozen policy active)"
     },
     {
       "file": "scripts/config.py",
-      "line": 2733,
+      "line": 2842,
       "symbol": "_emit_unhandled_gate",
       "kind": "fn",
       "summary": "Emits unhandled_gate event via log-event.sh for a registered gate not covered by the frozen policy; non-fatal, skips if Z_HARNESS_RUN unset"
     },
     {
       "file": "scripts/config.py",
-      "line": 2879,
+      "line": 2988,
       "symbol": "cmd_check_no_ask",
       "kind": "fn",
       "summary": "check-no-ask --question-id <id> [--range-high N] [--severity hard|soft]: returns JSON {result: halt|proceed|unhandled_gate, question_id, rule_id}; --range-high/--severity activates budget-aware _resolve_cost_gate path for cost gates; unhandled_gate fires when policy mode is active and a registered gate is not covered by the frozen allowlist"
@@ -146,13 +145,6 @@
       "symbol": "bench-autonomy-check.sh",
       "kind": "module",
       "summary": "Pre-run gate for benchmark policy-mode runs (make bench-autonomy-check): step 1 asserts quick-build hot-path AskUserQuestion callsites are registered; step 2 asserts frozen policy covers every hot-path gate; step 3 asserts config.py-registered required gates (currently workflow.pre_run_cost_gate) are in the policy gates block. Exit 0 required before unattended policy-mode run"
-    },
-    {
-      "file": "scripts/chain-runner.sh",
-      "line": 1,
-      "symbol": "chain-runner.sh",
-      "kind": "module",
-      "summary": "Shared state-init/state-read/state-write/cursor/new-run-id/steps subcommands used by /z-overnight and /z-attend. Flock-guarded writes via CHAIN_RUNNER_LOCK_FILE env. Large states written via stdin (`-` form) to avoid OS argv/env ceiling. Preset -> step ordering is the single source of truth."
     }
   ],
   "depends_on": [
@@ -251,31 +243,31 @@
   },
   "instrumented_callsites": {
     "workflow.slug_confirm": [
-      "commands/z-plan.md",
-      "commands/z-fix.md",
-      "commands/z-uplift.md",
-      "commands/z-debug.md",
-      "commands/z-brainstorm.md",
-      "commands/z-map.md"
+      "skills/z-plan/SKILL.md",
+      "skills/z-fix/SKILL.md",
+      "skills/z-uplift/SKILL.md",
+      "skills/z-debug/SKILL.md",
+      "skills/z-brainstorm/SKILL.md",
+      "skills/z-map/SKILL.md"
     ],
     "workflow.audit_to_amend": [
-      "commands/z-audit-plan.md",
-      "commands/z-audit-plan-style.md"
+      "skills/z-audit-plan/SKILL.md",
+      "skills/z-audit-plan-style/SKILL.md"
     ],
     "workflow.implement_all_proceed": [
       "skills/z-execute/SKILL.md (halt-resolution gate)"
     ],
     "workflow.review_all_proceed": [
-      "commands/z-review-all.md (Phase 3.7 proceed gate)"
+      "skills/z-review-all/SKILL.md (Phase 3.7 proceed gate)"
     ],
     "workflow.plan_decisions_approval": [
-      "commands/z-plan.md (Phase 2.5 decisions-doc approval gate)"
+      "skills/z-plan/SKILL.md (Phase 2.5 decisions-doc approval gate)"
     ]
   },
   "bench_autonomy_check": {
     "make_target": "bench-autonomy-check",
     "script": "scripts/bench-autonomy-check.sh",
-    "step1": "lint-askuser --strict scoped to commands/z-plan.md and skills/z-execute/SKILL.md; asserts AskUserQuestion callsites are paired with resolve-question or check-no-ask",
+    "step1": "lint-askuser --strict scoped to skills/z-plan/SKILL.md and skills/z-execute/SKILL.md; asserts AskUserQuestion callsites are paired with resolve-question or check-no-ask",
     "step2": "policy coverage assertion: loads z-harness/bench/pier/benchmark-autonomy.yaml via zharness_pier.policy.load_policy; checks every workflow.* gate referenced in z-plan.md, z-execute.md is present in policy gates map",
     "step3": "targeted gate-coverage assertion: for each qid in REQUIRED_IN_POLICY (currently [workflow.pre_run_cost_gate]), checks that the qid is registered in config.py list-question-ids AND is a key in the policy's gates: block; requires PyYAML",
     "policy_path_default": "z-harness/bench/pier/benchmark-autonomy.yaml",

@@ -9,16 +9,19 @@
         "scripts/intent-schema.py",
         "scripts/session-helpers.sh"
       ],
-      "last_updated": "2026-06-16",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
-        "scripts"
+        "scripts",
+        "adaptive-intent"
       ],
       "consumed_by": [
         "commands",
-        "agents"
+        "agents",
+        "session-handoff",
+        "adaptive-intent"
       ],
-      "summary": "INTENT.md + LEDGER.md schema validation and acceptance-criterion lint helper. validate_intent checks frontmatter required fields (artifact/slug/level/generated_at/frozen_at/planning_mode) and required sections per level: acceptance checklist always required; not-doing + consider-for-this required at L2+ (standard|deep). lint-criteria flags bare 'runs'/'works' criteria with no observable object following. CLI: python3 scripts/intent-schema.py validate-intent|lint-criteria|validate-ledger <file>. Shell wrapper: bash scripts/session-helpers.sh validate_intent <INTENT.md> [lint]. Exit 0=valid, 1=errors found, 2=usage error."
+      "summary": "Schema validation and mutation engine for INTENT.md/LEDGER.md plus TASKS.md/SESSION.md helper functions used by adaptive intent execution."
     },
     {
       "slug": "active-plan-registry",
@@ -32,7 +35,7 @@
         "docs/human/active-plan-registry.md",
         "docs/handoff-parallel-session-safety.md"
       ],
-      "last_updated": "2026-06-05",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
         "scripts",
@@ -40,9 +43,10 @@
       ],
       "consumed_by": [
         "commands",
-        "agents"
+        "agents",
+        "hermes-orchestration"
       ],
-      "summary": "Durable external artifact base + lockless cross-session awareness registry with per-file lease/wait system. Five-tier base fallback (Z_HARNESS_BASE_DIR > XDG_STATE_HOME > HOME/.local/state > git-common-dir > pwd/z-harness) with anchor enforcement prevents split-brain. Per-run schema-v2 JSON records (held_paths, waiting_on) enable advisory per-file leases: claim (lexicographic tiebreak, won-set-only persist), release (per-task success), wait-for (poll loop with budget, waiting_on cleared on every exit via finally), overlaps (scope + held_conflict). Five wait/lease env knobs: Z_HARNESS_AUTO_WAIT, Z_HARNESS_AUTO_WAIT_BUDGET_SECS, Z_HARNESS_WAIT_POLL_SECS, Z_HARNESS_WAIT_TIMEOUT_SECS, Z_HARNESS_WAIT_REQUIRE_MERGE (deferred). Reaper live-local-pid carve-out: confirmed-alive local pids past 2x stale are marked stale but NOT deleted. Addresses the 2026-06-01 git clean incident."
+      "summary": "External-base active-plan coordination registry, path-scope overlap scans, per-file lease waiting, and plan-layout migration safety rules."
     },
     {
       "slug": "agents",
@@ -137,15 +141,19 @@
         "runtime/drivers/windsurf/export.py",
         "runtime/drivers/kiro/export.py",
         "runtime/drivers/cline/export.py",
-        "runtime/drivers/copilot/export.py"
+        "runtime/drivers/copilot/export.py",
+        "runtime/drivers/omp/export.py",
+        "runtime/drivers/omp/subprocess_driver.py",
+        "z_harness_cli/adapters/omp.py",
+        ".omp/config.yml"
       ],
-      "last_updated": "2026-06-16",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
         "multi-ide-exports"
       ],
       "consumed_by": [],
-      "summary": "Per-host fidelity tiers and command-capability grid for all z-harness export targets. Adapter hosts: native (claude) = full orchestration; high (antigravity) = native skills, multi-agent degraded; flattened (cursor, codex) = transliterated rules, multi-agent blocked. Export-only hosts (windsurf=curated rules with trigger frontmatter; kiro=curated steering with inclusion frontmatter; cline=single pointer file; copilot=single instructions file) have NO adapter-registry entry — registry.select() raises UnknownHostError for them (M5 invariant).",
+      "summary": "Per-host fidelity tiers and command-capability grid for z-harness hosts and export targets. Claude Code is the native parity ground truth. OMP has partial adapter/export support; native fidelity/parity remains gated below T009, so COMMAND_CAPABILITY_MATRIX tiers stay blocked/degraded until one parity gate proves launch/inject/cleanup, export/discovery, runtime dispatch, events, AskUser/subagents/consults, doctor, and command-family evidence. Legacy pi remains export-only.",
       "source_files": []
     },
     {
@@ -195,7 +203,7 @@
         "skills/z-handoff/SKILL.md",
         "skills/z-doc-rationale/SKILL.md"
       ],
-      "last_updated": "2026-06-18",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
         "agents",
@@ -205,7 +213,7 @@
         "active-plan-registry"
       ],
       "consumed_by": [],
-      "summary": "Slash command surfaces: planning-family route checks, contextual exits, plan_route_decision telemetry, review-family finding promotion, config.py export-env/should-notify wrappers, check-no-ask halt branches (7 commands), /z-overnight unattended pipeline orchestrator, /z-grill requirements-interview, /z-explain one-shot code explanation and /z-learn interactive tutor (four shared depth lenses), /z-git-guardrails PreToolUse hook installer, follow-up sink consumer commands (6 /z-followup-* commands), /z-where concurrent-run diagnostic, and persona-rotation (experiment.persona_rotation knob): random implementer draw + dual reviewer dispatch in z-execute, fixed 5-panel consult in z-plan/z-debug, ideator/audit_persona/advisory-consult-arm draws.",
+      "summary": "Slash command surfaces including /z-plan hard pre-subagent cost gate and bounded re-estimates, planning-family route checks, contextual exits, plan_route_decision telemetry, review-family finding promotion, config.py export-env/should-notify wrappers, check-no-ask halt branches, /z-overnight unattended pipeline orchestration, follow-up sink commands, /z-where diagnostics, and persona-rotation behavior.",
       "source_files": []
     },
     {
@@ -216,15 +224,16 @@
         "scripts/propose-prefs.py",
         "docs/human/config.md"
       ],
-      "last_updated": "2026-06-02",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
         "scripts"
       ],
       "consumed_by": [
-        "commands"
+        "commands",
+        "cost-estimation"
       ],
-      "summary": "Unified config concept covering Loader API (4-layer TOML loader: get, export-env, ensure-defaults, explain, should-notify) and Workflow Resolver (resolve-question, set, list-question-ids, [workflow] section, routing-preference memory schema, elevation proposer), and the [experiment] section (experiment.persona_rotation default true, experiment.control_every_n default 5) governing the persona-rotation feature.",
+      "summary": "Unified config concept covering Loader API and Workflow Resolver, including workflow.pre_run_cost_gate as the single disposition authority for profiled hard gates such as /z-plan and cost.token_budget for Z_HARNESS_NO_ASK=halt budget decisions.",
       "source_files": []
     },
     {
@@ -239,25 +248,27 @@
         "skills/z-plan-split/SKILL.md",
         "skills/z-brainstorm/SKILL.md",
         "skills/z-audit/SKILL.md",
-        "skills/z-debug/SKILL.md"
+        "skills/z-debug/SKILL.md",
+        "skills/z-plan/SKILL.md"
       ],
-      "last_updated": "2026-06-02",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
         "scripts",
         "config"
       ],
       "consumed_by": [
-        "commands"
+        "commands",
+        "subagent-telemetry"
       ],
-      "summary": "LLM-free pre-run token-cost estimator (3 tiers: static/dispatch/empirical with parent-rollup + static-floor clamp), profile schema (token-cost-profiles.json), gate helper (pre-run-cost-gate.sh), workflow.pre_run_cost_gate enum gate + cost.token_budget integer knob; hard gates (z-research/z-uplift/z-plan-split) require user confirmation; soft gates (z-brainstorm HEAVY/z-audit HEAVY/z-debug) auto-proceed; overnight/no-ask budget rule; cost_gate_decision event."
+      "summary": "LLM-free token estimate envelopes, /z-plan hard pre-subagent cost gate dispatch defaults, plan-vs-plan+execute forecasts, token-cost profiles, and retrospective subagent cost telemetry."
     },
     {
       "slug": "external-lookup-agent",
       "source_files": [
         "agents/external-lookup.md"
       ],
-      "last_updated": "2026-05-28T00:00:00Z",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
         "agents",
@@ -266,7 +277,7 @@
       "consumed_by": [
         "multi-ide-exports"
       ],
-      "summary": "Haiku-tier subagent for external retrieval (web docs, public APIs, library docs) that offloads lookups from main context while enforcing a read-only verb-blocklist."
+      "summary": "Read-only Haiku lookup worker that fetches external docs/APIs and returns bounded STATUS-headed syntheses."
     },
     {
       "slug": "followup-sink",
@@ -320,15 +331,16 @@
       "source_files": [
         "agents/external-lookup.md"
       ],
-      "last_updated": "2026-05-28T00:00:00Z",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
         "agents"
       ],
       "consumed_by": [
+        "agents",
         "external-lookup-agent"
       ],
-      "summary": "Output envelope contract (STATUS line + fixed Markdown sections) that all external/domain lookup subagents must emit."
+      "summary": "Canonical STATUS-headed Markdown contract used by external-lookup results, including provenance, budget, freshness, and refusal semantics."
     },
     {
       "slug": "multi-ide-exports",
@@ -342,17 +354,31 @@
         "z_harness_cli/adapters/cursor.py",
         "z_harness_cli/adapters/codex.py",
         "z_harness_cli/adapters/antigravity.py",
-        "skills/z-export/SKILL.md"
+        "skills/z-export/SKILL.md",
+        "runtime/drivers/omp/export.py",
+        "z_harness_cli/adapters/omp.py",
+        ".omp/config.yml"
       ],
-      "last_updated": "2026-06-18",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
         "commands",
         "agents",
-        "scripts"
+        "personas-and-roles",
+        "central-config",
+        "runtime-drivers",
+        "scripts",
+        "capabilities-matrix"
       ],
-      "consumed_by": [],
-      "summary": "Pipeline translating z-harness source files into Cursor (.mdc rules), Codex CLI (AGENTS.md + prompts), and Antigravity (workflows + rules + prompts); /z-export slash command; per-target CAPABILITIES.md documents dropped constructs. Personas export from personas/builtin/ for cursor/codex/agy."
+      "consumed_by": [
+        "z_harness_cli.commands.export"
+      ],
+      "summary": "Target-specific export pipeline. Current cursor/codex/agy/pi paths remain; OMP native export has partial support for an explicit .omp/z-harness package layout, while native fidelity/parity remains gated below T009 and ExportResult.fidelity must stay synchronized with the OMP parity gate rather than reusing pi export or omp-consult compatibility.",
+      "source_file": [
+        "runtime/drivers/omp/export.py",
+        "z_harness_cli/adapters/omp.py",
+        ".omp/config.yml"
+      ]
     },
     {
       "slug": "overnight-run",
@@ -365,17 +391,18 @@
         "docs/human/overnight-run.md",
         "scripts/bench-autonomy-check.sh"
       ],
-      "last_updated": "2026-06-02",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
         "commands",
         "scripts",
-        "config"
+        "config",
+        "attend"
       ],
       "consumed_by": [
         "commands"
       ],
-      "summary": "Linear pipeline orchestrator that chains z-harness sub-commands unattended with halt-only interaction; Z_HARNESS_NO_ASK=halt set only around Skill calls; 12 instrumented callsites (9 resolver + 3 new gates); flock-guarded overnight-state.json; MORNING_REPORT.md written on every terminal transition; resume via /z-overnight resume <RUN_ID>."
+      "summary": "Unattended /z-overnight chain orchestration, halt-only user gates, run-state mechanics, preflight checks, and morning reports."
     },
     {
       "slug": "personas-and-roles",
@@ -397,10 +424,11 @@
         "z_harness_cli/adapters/codex.py",
         "z_harness_cli/adapters/claude.py"
       ],
-      "last_updated": "2026-06-18",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
         "providers-registry",
+        "config",
         "scripts",
         "agents"
       ],
@@ -408,7 +436,7 @@
         "commands",
         "multi-ide-exports"
       ],
-      "summary": "Persona feature surface: layered persona registry (builtin < user-global < repo-local, last wins), three-axis binding (persona/model/runtime), contract enforcement per role, per-target export adapters, and persona-rotation experiment (random-for-role, forced-control, control-counter subcommands; boring-anchor as control; selection_source enum; persona_random_selected + persona_attempt_outcome + extended persona_bound telemetry)."
+      "summary": "Layered persona registry, role contracts, random persona draws, and per-host persona export behavior."
     },
     {
       "slug": "pi-export",
@@ -425,16 +453,19 @@
         "scripts/lint-frontmatter.sh",
         "Makefile"
       ],
-      "last_updated": "2026-06-18",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
         "multi-ide-exports",
         "agents",
         "commands",
-        "scripts"
+        "export-utils",
+        "capabilities-matrix"
       ],
-      "consumed_by": [],
-      "summary": "pi export target: builds pi (https://pi.dev) resources from z-harness source files. Unlike Cursor/Codex/agy, pi has no native subagent dispatch — fan-out runs through a vendored subagent extension. Semantic model tier mapping (haiku→deepseek-v4-flash, sonnet/opus→deepseek-v4-pro) with cheap subagents pinned to flash for token efficiency. Agent .md files are rendered with pipelined _yaml_quote on descriptions to prevent YAML parsing failures. The explore agent (pi-only) is a read-only fan-out recon agent for parallel dispatch. pi-mcp-server.py is an MCP server wrapping pi-cli for Hermes Agent orchestration (pi_instruct + pi_inspect_model tools). Four-layer defense against YAML dispatch bug: (1) pi runtime quoteUnquotedColonValues() patch, (2) source quoting in pi_assets, (3) export-pi.py _yaml_quote for all generated agents, (4) post-export _validate_frontmatter_yaml() pass with strict YAML 1.2 parser. Standalone lint-frontmatter.sh + make lint-frontmatter for source-level validation. CI wiring recommended but not yet implemented."
+      "consumed_by": [
+        "test-export-golden"
+      ],
+      "summary": "pi export remains export-only: agents/prompts/AGENTS.md plus vendored subagent extension, no adapter/HostDriver/launch. Docs now define the boundary that native OMP support must not reuse pi prompt rewrites, pi assets, or the vendored extension."
     },
     {
       "slug": "plan-claim",
@@ -467,16 +498,19 @@
         "scripts/log-event.sh",
         "docs/human/PLAN-LAYOUT.md"
       ],
-      "last_updated": "2026-06-02",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
         "scripts",
         "commands"
       ],
       "consumed_by": [
-        "commands"
+        "commands",
+        "active-plan-registry",
+        "plan-claim",
+        "followup-sink"
       ],
-      "summary": "Canonical plan layout under z-harness/plans/<slug>/; Z_HARNESS_PLANS_DIR override; dual-read fallback from legacy z-harness/<slug>/; migrate-plan-layout.sh for bulk or per-slug migration."
+      "summary": "External z-harness artifact base resolution, plan-layout migration helpers, telemetry, and safe move semantics."
     },
     {
       "slug": "providers-registry",
@@ -489,19 +523,24 @@
         "runtime/compat.py",
         "runtime/contract/provider.schema.json",
         "scripts/log-providers.sh",
-        ".z-harness/providers.json"
+        ".z-harness/providers.json",
+        "scripts/omp-consult.sh"
       ],
-      "last_updated": "2026-06-02",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
-        "scripts"
+        "scripts",
+        "config",
+        "runtime",
+        "capabilities-matrix"
       ],
       "consumed_by": [
         "agents",
         "commands",
-        "personas-and-roles"
+        "personas-and-roles",
+        "reviewer-capture"
       ],
-      "summary": "Config-file registry routing consultant/reviewer dispatches to any CLI-addressable LLM; three fixed roles mapped to named provider entries; resolution via scripts/resolve-provider.sh. Schema v2 uses -cli provider names with dual-entry + aliases for forward-compat. TOML [roles.*.*] bindings are preferred; providers.json.roles is legacy fallback."
+      "summary": "Provider CLI resolution and role binding. OMP provider entries (omp-gemini/omp-codex) are consult-provider compatibility through scripts/omp-consult.sh, not evidence of native OMP host support; native OMP dispatch uses a separate HostDriver contract."
     },
     {
       "slug": "review-agent",
@@ -534,9 +573,10 @@
         "scripts/lint-run-brief.sh",
         "commands/_fragments/run-brief-finalize.md",
         "commands/_fragments/run-brief-halt-finalize-implement-all.md",
-        "commands/_fragments/run-brief-halt-finalize-implement-next.md"
+        "commands/_fragments/run-brief-halt-finalize-implement-next.md",
+        "skills/z-plan/SKILL.md"
       ],
-      "last_updated": "2026-06-11",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
         "scripts",
@@ -545,7 +585,7 @@
       "consumed_by": [
         "commands"
       ],
-      "summary": "Unified Run Brief receipt emitted at finalize for 11 v1 registry commands. Chat renders a warm glyph-titled Briefing (What/How/Key decisions/Result/Next) via render-run-brief.py; decision why is surfaced; orchestrator authors approach via run-brief.sh set-section, scrape is empty-only fallback. JSON canonical in archive/$RUN/run-brief.json.",
+      "summary": "Unified Run Brief receipt emitted at finalize, including /z-plan pre-subagent cost-gate halt cleanup before claim release/deregister; chat renders Briefing markdown via render-run-brief.py with optional non-fatal cost summary text.",
       "source_files": []
     },
     {
@@ -600,7 +640,7 @@
     },
     {
       "slug": "setup",
-      "last_updated": "2026-05-28",
+      "last_updated": "2026-06-24",
       "source_files": [
         "scripts/setup.py",
         "scripts/setup.sh",
@@ -609,11 +649,13 @@
       ],
       "depends_on": [
         "config",
-        "providers-registry"
+        "providers-registry",
+        "axioms",
+        "docs"
       ],
       "consumed_by": [],
       "confidence": "high",
-      "summary": "Configuration cockpit: inspect resolved state, run guided concern-grouped wizard, or apply a posture preset (interactive/overnight/ci-batch). CLI is scripts/setup.py; /z-setup skill is the slash-command surface. Seven wizard scopes (all lowercase): notifications, workflow, overnight, providers, personas, docs, memories."
+      "summary": "Configuration cockpit for inspecting resolved z-harness state, running scoped wizard flows, applying posture presets, explaining keys, and reporting compact status."
     },
     {
       "slug": "z-fix",
@@ -656,36 +698,38 @@
         "skills/z-brainstorm/SKILL.md",
         "agents/ideator-clusterer.md"
       ],
-      "last_updated": "2026-06-18",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
-        "commands",
-        "agents",
-        "scripts",
-        "config",
-        "active-plan-registry",
-        "z-sharpen"
+        "doc-fetcher",
+        "z-sharpen",
+        "scope-probe",
+        "personas-and-roles",
+        "cost-estimation",
+        "run-brief",
+        "active-plan-registry"
       ],
       "consumed_by": [
-        "commands/z-research"
+        "z-plan",
+        "z-research"
       ],
-      "summary": "Cheap parallel pre-plan ideation with conversational discussion/selection tail. Phase 0: sharpen-vs-skip gate (auto-invokes /z-sharpen inline when topic is vague); NL count parse (WIDE_N from prose, default 3); scope probe (LIGHT/MEDIUM/HEAVY); wide×HEAVY suppression (D2). Phase 2b: 3 vendor-diverse ideators; Phase 2c (WIDE_N>3): phased overflow waves + ideator-clusterer to collapse N framings→K directions. Phase 3: ranked prose briefing (pros/cons/consensus/divergence/recommendation) + end-turn guardrail — MUST NOT auto-decide. Phase 4 LIGHT/MEDIUM: discussion loop (ask/challenge/combine/re-spin/lock-in/abandon); synthesized is the default chosen_framing for discussion-born hybrids. Phase 4 HEAVY: ranked-pair briefing + end-turn (replaces AskUserQuestion matrix). Config knob: brainstorm.wide_overflow_model (default haiku; cheap-mixed gated/no-op)."
+      "summary": "Conversational pre-planning ideation pipeline producing BRAINSTORM.md from sharpened topic, scoped scaffolding, vendor-diverse ideators, anti-bias synthesis, wide-mode clustering, and user lock-in."
     },
     {
       "slug": "ideator-clusterer",
       "source_files": [
         "agents/ideator-clusterer.md"
       ],
-      "last_updated": "2026-06-18",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
         "agents",
         "z-brainstorm"
       ],
       "consumed_by": [
-        "commands/z-brainstorm"
+        "z-brainstorm"
       ],
-      "summary": "Haiku subagent for wide /z-brainstorm runs (WIDE_N > 3). Reads N peer ideator framing blocks from BRAINSTORM.md, clusters them into K distinct directions by core hypothesis / approach axis. Returns: K cluster labels + members + representative framing (verbatim), effective-diversity report (N→K, which collapsed), cross-cluster consensus. Read-only. Distinct from scope-reconciler-brainstorm (which operates on the chunk axis in HEAVY mode); this agent operates on the divergence axis (N peers, same topic)."
+      "summary": "Read-only Haiku agent that clusters wide-mode ideator framings by core approach axis and reports effective diversity without selecting a winner."
     },
     {
       "slug": "z-update",
@@ -696,14 +740,15 @@
         "skills/z-update/SKILL.md",
         "docs/human/INSTALL.md"
       ],
-      "last_updated": "2026-06-02",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
         "scripts",
-        "commands"
+        "install",
+        "release-packaging"
       ],
       "consumed_by": [],
-      "summary": "Explicit in-place plugin update via /z-update; detects symlink vs tarball mode; git pull --ff-only for symlink, atomic swap for tarball; no autoupdate; version tracked by scripts/version.sh."
+      "summary": "Plugin update command that detects symlink/runtime/tarball installs, updates via ff-only pull or atomic swap, emits version telemetry, and refreshes host plugin caches."
     },
     {
       "slug": "z-uplift",
@@ -750,9 +795,18 @@
         "scripts/reconcile-tier1-staged.py",
         "scripts/add-doc-markers.py"
       ],
-      "last_updated": "2026-06-09T19:45:00Z",
+      "last_updated": "2026-06-24",
       "confidence": "high",
-      "summary": "Tier 1 Flash subagent for per-task mechanical doc sync. Reads task diff, reverse-lookups changed files to concepts via INDEX.json, applies surgical updates to AUTO-START/AUTO-END delimited machine-truth fields in human-tier and LLM-tier docs. Stages updates; reconciliation applies after all tasks."
+      "summary": "Mechanical per-task docs sync agent that stages AUTO-section and LLM machine-field updates from task diffs for later reconciliation.",
+      "depends_on": [
+        "doc-updater",
+        "doc-fetcher",
+        "docs-index"
+      ],
+      "consumed_by": [
+        "z-execute",
+        "tier2-doc-rationale"
+      ]
     },
     {
       "slug": "tier2-doc-rationale",
@@ -760,18 +814,37 @@
         "skills/z-doc-rationale/SKILL.md",
         "scripts/append-tier2-context.py"
       ],
-      "last_updated": "2026-06-09T19:45:00Z",
+      "last_updated": "2026-06-24",
       "confidence": "high",
-      "summary": "Tier 2 narrative doc system. Accumulates tier2-context.json incrementally across pipeline phases (z-plan, z-execute, z-review-all). /z-doc-rationale command spawns Pro subagent to produce ADRs, design rationale, and migration guides. Significance-gated by three-signal OR."
+      "summary": "Narrative documentation command and accumulator for finalized tier2-context.json, generating ADRs, rationale, migration guides, and concept doc cross-links.",
+      "depends_on": [
+        "tier1-doc-updater",
+        "z-review-all",
+        "doc-updater"
+      ],
+      "consumed_by": [
+        "commands",
+        "concept-docs"
+      ]
     },
     {
       "slug": "invariants",
       "source_files": [
         "docs/INVARIANTS.json"
       ],
-      "last_updated": "2026-06-10T20:40:34Z",
+      "last_updated": "2026-06-24",
       "confidence": "high",
-      "summary": "System-level behavioral invariants — permanent per-repo truths consumed by /z-test for behavioral test generation."
+      "summary": "Canonical optional registry of stable repo-specific behavioral invariants consumed by testing, review, and adaptive INTENT durable tiers.",
+      "depends_on": [
+        "z-test",
+        "z-review-all",
+        "adaptive-intent"
+      ],
+      "consumed_by": [
+        "z-test",
+        "z-review-all",
+        "adaptive-intent"
+      ]
     },
     {
       "slug": "reviewer-capture",
@@ -780,18 +853,19 @@
         "agents/consultant-primary.md",
         "agents/consultant-secondary.md"
       ],
-      "last_updated": "2026-06-10",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
         "agents",
         "providers-registry",
-        "subagent-telemetry"
+        "subagent-telemetry",
+        "followup-sink"
       ],
       "consumed_by": [
         "commands",
         "subagent-telemetry"
       ],
-      "summary": "File-based review capture via codex -o flag. Capability-probed per-PPID sentinel (greps `codex exec --help` for `output-last-message`); -o appended only for codex provider (providers.json unchanged). Full review written to archive/tasks/<id>/review-cycle<N>.md as source of truth; orchestrator receives only verdict+counts+artifact-path. Explicit fallback to stdout capture emits review_capture_fallback {id,cycle,reason} (consultants add role field). response_chars = captured-review size (honest), not discarded transcript. Non-codex path byte-identical to today."
+      "summary": "Shared reviewer/consultant capture pattern using Codex final-message files when supported, stdout fallback, liveness markers, follow-up routing, and subagent telemetry."
     },
     {
       "slug": "subagent-telemetry",
@@ -803,19 +877,21 @@
         "scripts/test_subagent_logging.sh",
         "skills/z-stats/SKILL.md"
       ],
-      "last_updated": "2026-06-10",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
         "scripts",
-        "cost-estimation"
+        "cost-estimation",
+        "plan-path"
       ],
       "consumed_by": [
         "agents",
-        "commands",
+        "skills",
         "reviewer-capture",
-        "impl-pre-review"
+        "impl-pre-review",
+        "z-stats"
       ],
-      "summary": "Per-subagent cost telemetry. detect-host.sh prints claude|pi|codex|cursor|antigravity (default claude, positive-marker overrides only, never unknown/empty). host stamped on EVERY event by log-event.sh (lazy: Z_HARNESS_HOST env var else detect-host.sh once, cached to /tmp/zh-host-$PPID). log-subagent.sh emits subagent_call {host,role,subagent_type,subagent_model,prompt_chars,response_chars,provider_input_tokens?,provider_output_tokens?}; non-fatal (always exits 0). HONEST LIMITATION: for native Claude Agent() subagents prompt_chars/response_chars are exact character counts not token counts; real provider_*_tokens only from external CLIs printing a usage line. D9: prompt_chars and response_chars kept SEPARATE (no collapsed est_tokens). Drift-guard CI: test_subagent_logging.sh greps Agent( sites, fails if no paired log-subagent.sh call or # no-subagent-log opt-out. Read-side: estimate-tokens.py subagent-costs weights input vs output rates, groups by host+subagent_type, labels char-est vs real-tokens."
+      "summary": "Host-stamped non-fatal subagent_call telemetry and retrospective read-side cost model for per-host/per-type observed subagent cost reporting, distinct from pre-run plan/execute forecasts."
     },
     {
       "slug": "impl-pre-review",
@@ -825,17 +901,19 @@
         "agents/pre-reviewer.md",
         "agents/complexity-classifier.md"
       ],
-      "last_updated": "2026-06-10",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
         "agents",
-        "commands",
-        "subagent-telemetry"
+        "config",
+        "subagent-telemetry",
+        "z-review-all"
       ],
       "consumed_by": [
-        "commands"
+        "z-execute",
+        "z-review-all"
       ],
-      "summary": "Opt-in pre-review gate-down at the per-task implement gate. Z_HARNESS_IMPL_PRE_REVIEW default 0 (SHIPS INERT; knob-off is byte-identical to today). When on: Step 6.P1 tier-drift re-check via complexity-classifier (must strip cached **Complexity:** line; drift-up emits tier_drift_detected and forces codex). Step 6.P2 gate-down (low-tier only): Flash pre-reviewer dispatch; CLEAN verdict skips codex + emits review_gated_down; flagged verdict escalates to codex with Flash findings prepended as FLASH_PREPEND. Medium/high always go to codex unchanged. Flash unavailable emits pre_review_skipped + falls through to codex (fail-safe toward more thorough review). COST-INVERSION CAVEAT: Flash-on-all + codex-on-subset can invert cost vs codex-on-all. EVIDENCE GATE: knob is undocumented-as-recommended until scripts/audit-preview-misses.sh shows acceptable Flash false-negative rate."
+      "summary": "Opt-in Flash/Haiku pre-review features: per-task /z-execute gate-down via runtime.impl_pre_review and /z-review-all Phase 3.6 pre-review cycle via runtime.pre_review; both default off and fail safe toward full reviewer coverage."
     },
     {
       "slug": "attend",
@@ -850,19 +928,19 @@
         "docs/human/attend.md",
         "docs/llm/attend.json"
       ],
-      "last_updated": "2026-06-12",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
-        "commands",
-        "scripts",
         "config",
-        "session-handoff"
-      ],
-      "consumed_by": [
+        "session-handoff",
         "commands",
         "scripts"
       ],
-      "summary": "Middle-gear attended chain orchestrator. Auto-advances through a command chain (default preset attend-full = plan,audit,test,implement-all,review-all), halts and asks inline only on the four halt categories (decision/risk/shortcut/archiving), auto-proceeds mechanical_proceed gates with skill_default, and yields for a real user /clear at declared yield_after boundaries (plan, implement-all). Resume validates a hardened handoff.json protocol-1.1 predicate: HEAD SHA mismatch=HARD HALT, phase/cursor disagree=HARD HALT, session_id unchanged=WARN, done-set/dirty drift=WARN. Gate policy lives in z-attend.md; sequencing/state mechanics live in chain-runner.sh (policy separation Invariant 2). Untagged gates always resolve to 'ask' (Invariant 1 fail-safe). Z_HARNESS_NO_ASK=halt is never set."
+      "consumed_by": [
+        "z-attend",
+        "z-overnight"
+      ],
+      "summary": "Attended middle-gear chain runner: auto-answers mechanical gates, surfaces decision/risk/shortcut/archiving gates inline, and yields with protocol-1.1 handoff predicates at plan and implement-all boundaries."
     },
     {
       "slug": "hermes-orchestration",
@@ -877,17 +955,20 @@
         "scripts/hermes/session.py",
         "docs/human/hermes-integration-v1.md"
       ],
-      "last_updated": "2026-06-12",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
         "active-plan-registry",
         "plan-claim",
+        "config",
         "scripts"
       ],
       "consumed_by": [
-        "commands"
+        "z-plan",
+        "z-execute",
+        "z-plan-split"
       ],
-      "summary": "Hermes parallelism layer — ACTIVATED (v1.3, T001-T015 complete, 2026-06-12). Within-plan DAG concurrency: generate-workstreams.py assigns parallel_group=level-{depth} via assign_ws_depths; hermes-execute.py runs level-aware loop: compute_ready_level → partition_level (greedy graph-coloring, HIGH-severity serialization) → asyncio.gather bounded by asyncio.Semaphore(max_parallel_workstreams) held for full run_workstream lifetime. Cross-plan: run_cross_plan builds conflict graph via build_plan_conflict_graph (scope intersection or scope_unknown → conflict), acquires sorted-slug plan-claim locks (INV-6 deadlock-free), schedules disjoint plans concurrently bounded by max_parallel_plans. Single in-process asyncio.Lock serializes all merge_workstream calls across workstreams and plans. Default caps=1 (opt-in via HERMES_MAX_PARALLEL / HERMES_MAX_PARALLEL_PLANS; INV-5: cap=1 ≡ legacy sequential). Non-file shared state not protected — use HERMES_SERIALIZE_ALL=1 escape hatch. 7 invariants: INV-1 worktree write-safety, INV-2 depends_on authoritative, INV-3 merge_order authoritative, INV-4 fail-safe serialize on unknown scope, INV-5 cap=1 ≡ legacy, INV-6 deadlock-free sorted locks, INV-7 forward-compatible additive schema fields."
+      "summary": "Dormant-by-default Hermes parallel execution layer: generates workstream DAGs, runs conflict-safe workstreams in isolated git worktrees, serializes merges, and can schedule conflict-free plans under sorted plan-claim locks when workflow.hermes_enabled is explicitly true."
     },
     {
       "slug": "adaptive-intent",
@@ -904,20 +985,23 @@
         "agents/reviewer.md",
         "docs/human/adaptive-intent.md"
       ],
-      "last_updated": "2026-06-16",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
         "config",
-        "scripts",
         "agents",
-        "commands",
-        "session-handoff"
+        "scripts",
+        "session-handoff",
+        "invariants"
       ],
       "consumed_by": [
-        "commands",
-        "agents"
+        "z-plan",
+        "z-execute",
+        "z-amend",
+        "z-review-all",
+        "z-audit-plan"
       ],
-      "summary": "Default z-harness paradigm (workflow.planning_mode=intent). Replaces thick SPEC/PLAN/TASKS with: thin frozen INTENT.md contract (frozen at /z-execute start, immutable thereafter — INV-1); emergent BFS task-tree generated one level at a time by task-tree-generator (Sonnet); append-only LEDGER.md as realized-plan audit trail. Level depth (L1 quick / L2 standard / L3 deep) chosen by intent-classifier (Haiku, advisory) or config-forced. /z-execute mode detection: SPEC.md present → legacy unchanged (INV-4); INTENT.md present → INTENT engine (freeze→bootstrap-ledger→BFS loop→evaluate-acceptance per level). Four new workflow.* knobs in config.py (lines 78–81): planning_mode, intent_level, intent_parallel_levels (default false), hermes_enabled (default false, INV-6). /z-amend re-opens via reopen-intent (scripts/intent-schema.py:377). /z-do → /z-plan --quick shim."
+      "summary": "Default intent-mode planning/execution model: /z-plan writes and audits a thin INTENT contract plus initial TASKS, /z-execute freezes it and advances BFS task levels with LEDGER checkpoints, and /z-review-all reviews INTENT.frozen.md plus LEDGER."
     },
     {
       "slug": "amendment-brief",
@@ -926,16 +1010,18 @@
         "scripts/amend-gate-decision.py",
         "docs/human/amendment-brief.md"
       ],
-      "last_updated": "2026-06-19",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
         "config",
-        "commands"
+        "z-audit-plan",
+        "z-review-all"
       ],
       "consumed_by": [
-        "commands"
+        "z-audit-plan",
+        "z-review-all"
       ],
-      "summary": "Shared amendment-brief renderer and gate-decision helper for the default-amend continuation path in /z-audit-plan and /z-review-all. scripts/amendment-brief.py: file/stdin JSON {corrections:[{title,why,target}], approach_concerns:[{concern,affected?,suggestion?}]} -> two-section markdown brief: 'Patched automatically (N corrections)' (always) + 'Worth your eyes (M)' (only when approach_concerns non-empty; absent affected -> 'rework this, or proceed?'). scripts/amend-gate-decision.py: maps workflow.audit_to_amend resolver (result,source) -> auto_split|force_ask|halt using 5-rule precedence (halt wins; skip->auto_split; source==none->auto_split; explicit-config/memory+ask|prefill->force_ask; fallback->auto_split). Both commands call the same renderer. Discriminator is Class not severity: spec_gap=correction (auto-amended), premise_failure=approach (rendered as prose)."
+      "summary": "Shared amendment-continuation helpers: amend-gate-decision maps workflow.audit_to_amend resolver envelopes to auto_split/force_ask/halt, and amendment-brief renders spec_gap corrections plus premise_failure concerns for z-audit-plan and z-review-all."
     },
     {
       "slug": "z-audit-plan",
@@ -943,19 +1029,21 @@
         "skills/z-audit-plan/SKILL.md",
         "docs/human/z-audit-plan.md"
       ],
-      "last_updated": "2026-06-19",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
         "amendment-brief",
         "config",
         "plan-claim",
         "active-plan-registry",
-        "commands"
+        "run-brief-contract"
       ],
       "consumed_by": [
-        "commands"
+        "z-plan",
+        "z-execute",
+        "z-amend"
       ],
-      "summary": "Pre-implementation plan audit pipeline: reality-check (Phase 1), best-practices/design (Phase 2), adversarial cross-LLM review (Phase 3), Class-tagged synthesis (Phase 4), default-amend gate (Phase 5). Phase 4 tags every surviving finding spec_gap or premise_failure (from z-review-all.md:716 enum; correction/approach are glosses only). Phase 5 default (source==none) is auto_split — no popup: INTENT-mode batches all spec_gap into ONE /z-amend call (single contract re-freeze); legacy-mode per-finding; premise_failure rendered via amendment-brief.py as conversational prose. force_ask fires only when amend-gate-decision.py returns force_ask (explicit config|memory ask|prefill preference). halt unchanged. audit_auto_split telemetry emitted on auto_split path. workflow.audit_to_amend is SOURCE-KEYED: stored value alone does not determine behavior; resolver source is the discriminator."
+      "summary": "Read-only pre-implementation plan audit pipeline that reality-checks and cross-reviews plan artifacts, class-tags findings as spec_gap or premise_failure, then routes Phase 5 through auto_split/prose summary/halt with run-brief finalization."
     },
     {
       "slug": "z-review-all",
@@ -963,18 +1051,21 @@
         "skills/z-review-all/SKILL.md",
         "docs/human/z-review-all.md"
       ],
-      "last_updated": "2026-06-19",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
         "amendment-brief",
-        "commands",
         "run-brief-contract",
-        "active-plan-registry"
+        "active-plan-registry",
+        "tier2-context",
+        "memory-review"
       ],
       "consumed_by": [
-        "commands"
+        "z-execute",
+        "z-report",
+        "z-improve"
       ],
-      "summary": "Final-gate cross-LLM review after /z-execute. Two consultant subagents (Gemini+Codex) on cumulative diff vs plan contract (SPEC in legacy; frozen INTENT+LEDGER in INTENT mode). Class enum at line 716 is canonical: implementation_drift|spec_gap|completed_task_contradiction|premise_failure|observation. Phase 6.5: unconditionally auto-amends every amendment_proposal (spec_gap) via /z-amend --skip-user-gate; no per-finding popup; skips [x] tasks; writes auto-amend-log.md; emits auto_amend_applied per amendment. Phase 6.6: renders unified amendment brief via scripts/amendment-brief.py (corrections=Phase-6.5 spec_gaps, approach_concerns=premise_failure escalations); writes amendment-brief.md to archive; Finalize APPROACH_FILE prefers amendment-brief.md over older seed. Phase 6.6 skipped when both lists empty. ## Escalations in REVIEW-TASKS.md preserved as archive record; amendment-brief.md is the active presentation layer."
+      "summary": "Final cross-LLM plan review over cumulative diff: promotes drift/spec-gap findings into REVIEW-TASKS, auto-amends amendment proposals, renders amendment brief/run-brief, finalizes tier2 context, and then runs memory review."
     },
     {
       "slug": "z-reconcile",
@@ -983,16 +1074,18 @@
         "scripts/reconcile.py",
         "scripts/plan-claim.sh"
       ],
-      "last_updated": "2026-06-19",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
-        "scripts",
         "active-plan-registry",
-        "intent-schema",
-        "plan-claim"
+        "plan-claim",
+        "followups",
+        "scripts"
       ],
-      "consumed_by": [],
-      "summary": "Read-mostly workspace audit command that cross-references git worktrees, plan slugs, the active-plan registry, claim locks, uncommitted work, and follow-up entries into a single consistency report. Default run is zero mutations; six cleanup flags (--prune-worktrees, --archive-plans, --clean-locks, --reap-registry, --open-followups, --save) each require per-item AskUserQuestion confirmation. Classification delegates to scripts/reconcile.py: six worktree classes (dead/dirty/detached/merged-uncertain/unknown-remote/active) and four plan classes (precontext-only-aged/tasks-complete-unmerged/in-progress/stale-in-progress). Four cross-reference boolean flags surface joined findings across surfaces."
+      "consumed_by": [
+        "operators"
+      ],
+      "summary": "Read-mostly workspace consistency audit joining worktrees, plan artifacts, active-plan registry records, claim locks, uncommitted work, and follow-up opportunities; cleanup is opt-in per flag with per-item confirmation."
     },
     {
       "slug": "watchdog",
@@ -1009,18 +1102,22 @@
         "skills/z-execute/SKILL.md",
         "skills/z-overnight/SKILL.md"
       ],
-      "last_updated": "2026-06-19",
+      "last_updated": "2026-06-24",
       "confidence": "high",
       "depends_on": [
         "config",
-        "scripts",
-        "active-plan-registry"
+        "active-plan-registry",
+        "agents",
+        "remote-runner",
+        "notification"
       ],
       "consumed_by": [
-        "agents",
-        "commands"
+        "z-execute",
+        "z-overnight",
+        "reviewer",
+        "remote-runner"
       ],
-      "summary": "Two-layer liveness mechanism for long z-harness runs. Layer 1 (enforcement): scripts/supervised-run.sh wraps killable dispatches (ssh, rsync, cargo, reviewer, bash) in a hard deadline — prefers timeout/gtimeout, falls back to a guarded bash deadline; on deadline kills the process group and returns exit 124, feeding the orchestrator's retry/halt path for real recovery. Layer 2 (detection+alert): scripts/watchdog-sweep.sh is a daemonized poller that reads events.jsonl for unmatched dispatch_start leases and calls liveness.sh for unmatched subagent *_start — covers native Agent() stalls that no shell signal can kill. On stall: emits watchdog_stall and alerts out-of-band via notify-watchdog.sh (Discord webhook + macOS osascript). CAPABILITY BOUNDARY: killable dispatches are genuinely recovered; Agent() stalls are detect+alert only. events.jsonl is the lease store (append-only, flock-safe, zero extra files). Config: watchdog.enabled/sweep_interval_secs/intervention_level{observe,notify}/kill_grace_secs/max_lifetime_secs/stale_secs/timeout_secs.<type>. macOS users should run brew install coreutils for gtimeout."
+      "summary": "Two-layer liveness protection: supervised-run enforces hard deadlines for killable subprocesses, while z-execute/z-overnight schedule one-shot hang-checks based on metrics-derived thresholds to detect and notify on native-agent stalls."
     }
   ]
 }

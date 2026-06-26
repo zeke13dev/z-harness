@@ -4,7 +4,8 @@ Tests for scripts/estimate-tokens.py — empirical tier (T004).
 Covers:
   TEST-003  empirical fires: synthetic metrics with >=2*min_samples completed
             z-research runs → empirical tier in breakdown, confidence:high,
-            p50/p90 correct.
+            p50/p90 correct; completed zero-token runs do not count as empirical
+            samples because they represent missing telemetry, not free execution.
   TEST-004  empirical hygiene: fixture mixes in-flight, aborted
             (cost_gate_decision{choice:abandon}), halted, and malformed lines →
             all excluded; p50 computed only from normal completions.
@@ -23,6 +24,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -42,6 +44,7 @@ _estimate = _mod.estimate
 _empirical_tier = _mod._empirical_tier
 _event_tokens = _mod._event_tokens
 _percentile = _mod._percentile
+_forecast_e2e = _mod.forecast_e2e
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +220,32 @@ class TestEmpericalFires(unittest.TestCase):
         self.assertNotIn("empirical", tier_names)
         # Confidence: static-only → "low"
         self.assertEqual(result["confidence"], "low")
+
+    def test_zero_token_runs_do_not_fire_empirical(self):
+        """Completed runs with no token telemetry are ignored, not treated as free."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mpath = Path(tmpdir) / "metrics.jsonl"
+            events = []
+            for i in range(3):
+                events.extend([
+                    {
+                        "run": f"zero-r{i}",
+                        "kind": "run_start",
+                        "command": "z-plan",
+                        "ts": f"2026-05-0{i+1}T00:00:00Z",
+                    },
+                    {
+                        "run": f"zero-r{i}",
+                        "kind": "run_end",
+                        "command": "z-plan",
+                        "ts": f"2026-05-0{i+1}T00:01:00Z",
+                        "status": "ok",
+                    },
+                ])
+            _write_metrics(mpath, events)
+            result = _empirical_tier("z-plan", mpath, tail_lines=2000, min_samples=1)
+
+        self.assertIsNone(result)
 
     def test_empirical_confidence_medium_when_samples_lt_2x_min(self):
         """Empirical fires but confidence=medium when min_samples <= samples < 2*min_samples."""
@@ -653,6 +682,228 @@ class TestParentRunRollup(unittest.TestCase):
         self.assertEqual(result["samples"], 1,
                          "audit_run_start/end must map to z-audit via _KIND_TO_COMMAND fallback")
 
+
+
+
+class TestE2EForecastSchema(unittest.TestCase):
+    """Explicit E2E forecast schema and composite aggregation."""
+
+    def test_forecast_static_fallback_schema(self):
+        """Static execute fallback is separate from the cost-to-plan component."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pfile = Path(tmpdir) / "profiles.json"
+            profiles = {
+                "schema_version": "1",
+                "profiles": {
+                    "z-plan": {
+                        "range": [100, 200],
+                        "gate": "hard",
+                        "multipliers": {},
+                        "e2e_forecast": {
+                            "execute_forecast": {
+                                "range": [300, 500],
+                                "estimated_tokens": 350,
+                                "confidence": "low",
+                                "uncertainty": "wide_static_fallback",
+                                "basis": "static fallback execute forecast",
+                                "user_facing_wording": "Execute forecast is approximate, not exact.",
+                            }
+                        },
+                    }
+                },
+            }
+            pfile.write_text(json.dumps(profiles))
+
+            result = _forecast_e2e(
+                raw_command="z-plan",
+                dispatch_pairs=[],
+                profiles_path=pfile,
+                metrics_path=Path("/nonexistent/metrics.jsonl"),
+                tail_lines=2000,
+                min_samples=3,
+            )
+
+        self.assertEqual(result["schema_version"], "e2e_forecast.v1")
+        self.assertEqual(result["mode"], "e2e_forecast")
+        self.assertEqual(result["plan_component"]["semantics"], "cost_to_plan_only")
+        self.assertEqual(result["execute_forecast_component"]["semantics"], "forecast_execute_after_plan")
+        self.assertEqual(result["plan_component"]["range_low"], 100)
+        self.assertEqual(result["execute_forecast_component"]["range_low"], 300)
+        self.assertEqual(result["total_forecast"]["estimated_tokens"], 450)
+        self.assertEqual(result["total_forecast"]["range_low"], 400)
+        self.assertEqual(result["total_forecast"]["range_high"], 700)
+        self.assertEqual(result["estimated_tokens"], 450)
+        self.assertEqual(result["range_low"], 400)
+        self.assertEqual(result["range_high"], 700)
+        self.assertEqual(result["plan_estimate_envelope"]["estimated_tokens"], 100)
+        self.assertIn("not exact", result["user_facing_wording"])
+        self.assertIn("range_low/range_high", result["range_semantics"])
+        self.assertIn("uncertainty", result["total_forecast"])
+        self.assertEqual(result["confidence"], "low")
+        self.assertEqual(result["uncertainty"], "wide_static_fallback")
+        self.assertEqual(result["total_forecast"]["confidence"], "low")
+        self.assertEqual(result["total_forecast"]["uncertainty"], "wide_static_fallback")
+        self.assertLessEqual(
+            {
+                "schema_version",
+                "mode",
+                "command",
+                "estimated_tokens",
+                "range_low",
+                "range_high",
+                "gate",
+                "plan_estimate_envelope",
+                "range_semantics",
+                "confidence",
+                "uncertainty",
+                "basis",
+                "user_facing_wording",
+                "plan_component",
+                "execute_forecast_component",
+                "total_forecast",
+            },
+            set(result),
+        )
+        for component in (result["plan_component"], result["execute_forecast_component"]):
+            self.assertLessEqual(
+                {
+                    "component",
+                    "semantics",
+                    "source",
+                    "command",
+                    "estimated_tokens",
+                    "range_low",
+                    "range_high",
+                    "confidence",
+                    "uncertainty",
+                    "basis",
+                    "breakdown",
+                    "user_facing_wording",
+                },
+                set(component),
+            )
+
+    def test_forecast_cli_flag_outputs_single_json_object(self):
+        """The estimate --e2e-forecast flag exposes the schema without changing default estimate mode."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pfile = Path(tmpdir) / "profiles.json"
+            profiles = {
+                "schema_version": "1",
+                "profiles": {
+                    "z-plan": {
+                        "range": [100, 200],
+                        "gate": "hard",
+                        "multipliers": {},
+                        "e2e_forecast": {
+                            "execute_forecast": {
+                                "range": [300, 500],
+                                "estimated_tokens": 300,
+                                "basis": "static fallback execute forecast",
+                            }
+                        },
+                    }
+                },
+            }
+            pfile.write_text(json.dumps(profiles))
+            cp = subprocess.run(
+                [
+                    sys.executable,
+                    _SCRIPT,
+                    "estimate",
+                    "z-plan",
+                    "--e2e-forecast",
+                    "--profiles",
+                    str(pfile),
+                    "--metrics",
+                    "/nonexistent/metrics.jsonl",
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(cp.returncode, 0, msg=cp.stderr)
+        result = json.loads(cp.stdout)
+        self.assertEqual(result["mode"], "e2e_forecast")
+        self.assertIn("plan_component", result)
+        self.assertIn("execute_forecast_component", result)
+
+    def test_forecast_execute_profile_uses_empirical_component(self):
+        """When configured with an execute command profile, the forecast composes empirical execute data."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pfile = Path(tmpdir) / "profiles.json"
+            mpath = Path(tmpdir) / "metrics.jsonl"
+            profiles = {
+                "schema_version": "1",
+                "profiles": {
+                    "z-plan": {
+                        "range": [100, 200],
+                        "gate": "hard",
+                        "multipliers": {},
+                        "e2e_forecast": {
+                            "execute_forecast": {
+                                "command": "z-execute",
+                                "range": [1, 1],
+                                "basis": "fallback unused when execute profile exists",
+                            }
+                        },
+                    },
+                    "z-execute": {
+                        "range": [1000, 2000],
+                        "gate": "hard",
+                        "multipliers": {},
+                    },
+                },
+            }
+            pfile.write_text(json.dumps(profiles))
+            events = []
+            for i, tokens in enumerate([3000, 4000, 10000]):
+                run = f"exec-{i}"
+                events.extend([
+                    {
+                        "run": run,
+                        "kind": "run_start",
+                        "command": "z-execute",
+                        "ts": f"2026-05-0{i + 1}T00:00:00Z",
+                        "subagent_input_tokens": tokens,
+                        "subagent_output_tokens": 0,
+                    },
+                    {
+                        "run": run,
+                        "kind": "run_end",
+                        "command": "z-execute",
+                        "ts": f"2026-05-0{i + 1}T00:30:00Z",
+                        "status": "ok",
+                        "subagent_input_tokens": 0,
+                        "subagent_output_tokens": 0,
+                    },
+                ])
+            _write_metrics(mpath, events)
+
+            result = _forecast_e2e(
+                raw_command="z-plan",
+                dispatch_pairs=[],
+                profiles_path=pfile,
+                metrics_path=mpath,
+                tail_lines=2000,
+                min_samples=1,
+            )
+
+        execute = result["execute_forecast_component"]
+        self.assertEqual(execute["source"], "estimate_profile")
+        self.assertEqual(execute["estimated_tokens"], 4000)
+        self.assertEqual(execute["range_high"], 8800)
+        self.assertIn("empirical", [b["tier"] for b in execute["breakdown"]])
+        self.assertEqual(result["total_forecast"]["estimated_tokens"], 4100)
+        self.assertEqual(result["total_forecast"]["range_low"], 1100)
+        self.assertEqual(result["total_forecast"]["range_high"], 9000)
+        self.assertEqual(result["plan_component"]["confidence"], "low")
+        self.assertEqual(result["plan_component"]["uncertainty"], "wide_static_fallback")
+        self.assertEqual(execute["confidence"], "high")
+        self.assertEqual(execute["uncertainty"], "narrow_empirical")
+        self.assertEqual(result["total_forecast"]["confidence"], "low")
+        self.assertEqual(result["total_forecast"]["uncertainty"], "wide_static_fallback")
+        self.assertEqual(result["confidence"], result["total_forecast"]["confidence"])
+        self.assertEqual(result["uncertainty"], result["total_forecast"]["uncertainty"])
 
 # ---------------------------------------------------------------------------
 # Run tests

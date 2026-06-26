@@ -25,6 +25,7 @@ except ImportError:
 
 _OMP_BIN = "omp"
 _FORBIDDEN_COMPAT_NAMES = ("omp-consult.sh", "scripts/omp-consult.sh")
+_CONSULT_ONLY_FLAGS = ("--no-rules", "--no-session")
 
 
 class OmpDriverConfigError(ValueError):
@@ -68,9 +69,8 @@ class OmpHostDriver(HostDriver):
         ``args`` is the dispatcher's final argv tail.  The final token is the
         prompt.  If the provider config supplies model/profile/session fields and
         the corresponding flags are absent from ``args``, the driver adds them
-        before the final prompt.  The driver never adds ``--no-rules`` or
-        ``--no-session``; those are consult-mode concerns and are only present if
-        a caller explicitly included them in the argv tail.
+        before the final prompt.  ``--no-rules`` and ``--no-session`` are
+        consult-mode concerns; native dispatch rejects them before spawning.
         """
         prompt = _extract_prompt(args)
         argv = self._build_args(prompt=prompt, args=args)
@@ -82,10 +82,11 @@ class OmpHostDriver(HostDriver):
 
     def _build_args(self, *, prompt: str, args: list[str]) -> list[str]:
         """Return full native OMP argv with prompt as the final positional arg."""
-        if _contains_forbidden_compat(args):
+        tail = list(args[:-1])
+        _reject_consult_only_flags(tail)
+        if _contains_forbidden_compat(tail):
             raise OmpDriverConfigError("native OMP driver must not invoke scripts/omp-consult.sh")
 
-        tail = list(args[:-1])
         if not _has_print_flag(tail):
             tail.insert(0, "-p")
 
@@ -246,6 +247,13 @@ def _flag_value(args: list[str], flag: str) -> str | None:
 def _reject_compat_command(command: str) -> None:
     if any(command.endswith(name) or command == name for name in _FORBIDDEN_COMPAT_NAMES):
         raise OmpDriverConfigError("native OMP driver must not use scripts/omp-consult.sh")
+
+
+def _reject_consult_only_flags(args: list[str]) -> None:
+    forbidden = [flag for flag in _CONSULT_ONLY_FLAGS if _has_flag(args, flag)]
+    if forbidden:
+        joined = ", ".join(forbidden)
+        raise OmpDriverConfigError(f"native OMP dispatch rejects consult-only flags: {joined}")
 
 
 def _contains_forbidden_compat(args: list[str]) -> bool:

@@ -1,7 +1,7 @@
 {
   "name": "z-harness",
-  "version": "1.0.295",
-  "description": "Rigorous planning + implementation pipeline: cross-LLM consultation (Gemini + Codex), push-back-by-default, archived SPEC/PLAN/TASKS, and per-task code review.",
+  "version": "1.0.298",
+  "description": "Plugin/workflow layer for existing AI coding harnesses: setup, planning, implementation, review, docs, and release gates with explicit host capability limits.",
   "author": {
     "name": "zeke"
   }

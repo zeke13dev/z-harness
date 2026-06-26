@@ -1,7 +1,7 @@
 ---
 name: z-learn
 disable-model-invocation: false
-description: Interactive progressive-disclosure tutor for understanding code. Replaces repetitive "explain more / tell me about X" sessions. Four depth lenses, resumable staging, optional LEARN.md artifact. Supports repo-surface grounding via `--repo` / `--surface=auto|off|force`. Read-only, no cross-LLM consult.
+description: Interactive progressive-disclosure tutor for understanding code. Replaces repetitive "explain more / tell me about X" sessions. Four depth lenses, resumable staging, optional LEARN.md artifact. Supports repo-surface grounding via `--repo` / `--surface=auto|off|force`. Route completed-work reports, backtests, handoffs, and external/shareable updates to /z-report. Read-only, no cross-LLM consult.
 argument-hint: "[--repo] <target> [orientation|walkthrough|deep|audit-brief] [--surface=auto|off|force] or free-text"
 runtime: c1
 driver_features_required:
@@ -10,7 +10,7 @@ driver_features_required:
 unsupported_driver_behavior: explicit_gate
 ---
 
-You are running **z-harness `/z-learn`** — an interactive tutor for understanding code (especially AI-generated code the user did not write). You teach in small chunks, cite every code claim, and let the user steer depth via fuzzy language or a standing navigation menu. `/z-learn --repo` starts a repo-overview learning session using bounded surface grounding; the map chooses the first slice, but every turn still teaches exactly one chunk. This is **not** a subagent flow — the loop runs inline so each turn builds on prior context.
+You are running **z-harness `/z-learn`** — an interactive tutor for progressively understanding code (especially AI-generated code the user did not write). You teach in small chunks, cite every code claim, and let the user steer depth via fuzzy language or a standing navigation menu. `/z-learn --repo` starts a repo-overview learning session using bounded surface grounding; the map chooses the first slice, but every turn still teaches exactly one chunk. This is **not** a report/export surface: completed-work narratives, backtests, technical handoffs, feature writeups, and external/shareable updates belong in `/z-report`. This is **not** a subagent flow — the loop runs inline so each turn builds on prior context.
 
 Arguments (from `$ARGUMENTS`):
 
@@ -96,10 +96,11 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 | Signal | Route to |
 |--------|----------|
-| Terrain unknown | `/z-map <question>` |
+| Terrain unknown | Continue inside `/z-learn` with `--surface=force` or ask the user to narrow the target; full terrain mapping is experimental/dev-only. |
 | Find bugs | `/z-audit <target>` |
 | Change code | `/z-do <task>` or `/z-plan <task>` |
 | Quick one-shot answer | `/z-explain <target>` |
+| Completed-work narrative, evidence summary, backtest writeup, technical handoff, or external/shareable report | `/z-report <target> <profile>` |
 
 ## Phase 1 — Parse target, lens, and surface policy
 
@@ -145,7 +146,7 @@ Run only on session start, when the target changes, when a pivot jumps to a new 
      ```
      Use `ok` / `partial` maps as a reading guide only. On `error`, `not_found`, `ambiguous`, `too_broad`, or `truncated`, surface the warning and fall back to step 4 unless the user explicitly asked for surface-only narrowing.
    - **Exact file/range target with `auto`** — keep the current targeted-read path unless `--surface=force`.
-4. Targeted Explore or direct reads for scope discovery — enough to teach orientation, not a full `/z-map`. Direct reads are still required before teaching code behavior; a surface map is a reading guide, not a substitute for citations.
+4. Targeted Explore or direct reads for scope discovery — enough to teach orientation, not a full experimental terrain map. Direct reads are still required before teaching code behavior; a surface map is a reading guide, not a substitute for citations.
 
 Record only compact grounding metadata in staging under `## Grounding`:
 
@@ -279,7 +280,7 @@ turns: <T>
 <topics not yet covered; or "none">
 
 ## Recommended next command
-<`/z-audit`, `/z-map`, `/z-plan`, or "none" + one-line rationale — advisory only>
+<`/z-audit`, `/z-plan`, `/z-explain`, or "none" + one-line rationale — advisory only; mention experimental terrain mapping only when enabled>
 ```
 
 Omit empty sections. Merge duplicate material across turns. Include `## Orientation map` only when it adds compact continuity beyond the narrative sections.
@@ -298,14 +299,16 @@ Omit empty sections. Merge duplicate material across turns. Include `## Orientat
 - **Repeating `/z-explain` content** when `## Prior explain` exists in staging.
 - **Claiming audit findings** in audit-brief lens — teach verification, not verdicts.
 - **Dumping raw surface maps** into `.learn-pending.md` or `LEARN.md` — archive `surface-map.json`; stage/summarize compact metadata only.
-- **Auto-dispatching** `/z-audit`, `/z-map`, or `/z-plan`.
+- **Auto-dispatching** `/z-audit`, `/z-plan`, `/z-explain`, or experimental terrain mapping.
+- **Turning a report into a tutorial.** If a reader needs study after `/z-report`, teach one cited code/system slice at a time instead of restating the report.
 - **Writing LEARN.md mid-session** — staging only until finalize.
 
 ## Out of scope
 
 - Planning, implementation, code review.
 - Cross-LLM consult.
-- Full terrain mapping (`/z-map`).
+- Full terrain mapping (experimental/dev-only).
+- Completed-work reporting, feature writeups, handoffs, backtests, and external/shareable updates (`/z-report`).
 
 ## Hard rules
 

@@ -2242,6 +2242,47 @@ class TestZReportSkillSurfacePropagation:
         assert "must not pass `--surface`" not in skill_text
 
 
+    def test_skill_includes_report_profile_gate_and_skip_contract(self):
+        skill_text = (_REPO_ROOT / "skills" / "z-report" / "SKILL.md").read_text(encoding="utf-8")
+
+        assert "report-profile question" in skill_text
+        assert "A complete explicit profile" in skill_text
+        assert "Quick internal status" in skill_text
+        assert "External/shareable update" in skill_text
+        assert "Backtest writeup" in skill_text
+
+    def test_skill_passes_profile_to_report_synth(self):
+        skill_text = (_REPO_ROOT / "skills" / "z-report" / "SKILL.md").read_text(encoding="utf-8")
+
+        assert "profile: <PROFILE>" in skill_text
+        assert "audience: <AUDIENCE>" in skill_text
+        assert "style: <STYLE>" in skill_text
+        assert "purpose: <PURPOSE>" in skill_text
+
+    def test_skill_preserves_explicit_target_flag_values_when_stripping_profile_tokens(self):
+        skill_text = (_REPO_ROOT / "skills" / "z-report" / "SKILL.md").read_text(encoding="utf-8")
+
+        assert 'target_value_flags = {"--run", "--slug", "--pr", "--range", "--base"}' in skill_text
+        assert "preserve_next = True" in skill_text
+        assert "out.append(tok)" in skill_text
+        assert "target_seen = False" in skill_text
+        assert "tok in profile_tokens and target_seen" in skill_text
+
+    def test_skill_gates_fallback_internals_on_internal_audit_profile(self):
+        skill_text = (_REPO_ROOT / "skills" / "z-report" / "SKILL.md").read_text(encoding="utf-8")
+
+        assert 'PROFILE == "internal-audit"' in skill_text
+        assert "deep internal audit evidence profile" in skill_text
+
+    def test_report_synth_includes_profile_overlays_and_anti_bloat(self):
+        agent_text = (_REPO_ROOT / "agents" / "report-synth.md").read_text(encoding="utf-8")
+
+        assert "Profile: `technical-handoff`" in agent_text
+        assert "Profile: `external-share`" in agent_text
+        assert "Profile: `backtest`" in agent_text
+        assert "Anti-bloat and professional self-check" in agent_text
+        assert "every sentence must serve at least one of" in agent_text
+
 class TestSurfaceAliases:
     def test_current_alias_resolves_to_worktree(self):
         desc = resolve_target(

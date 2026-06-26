@@ -1,44 +1,43 @@
 {
   "concept": "invariants",
-  "last_updated": "2026-06-19",
+  "last_updated": "2026-06-24",
   "covers_spec": "none",
   "source_file": [
-    "docs/INVARIANTS.json",
-    "docs/schemas/invariant.schema.json",
-    "scripts/validate-invariants.py",
-    "scripts/invariant-check.sh"
+    "docs/INVARIANTS.json"
   ],
   "confidence": "high",
   "entry_points": [
-    {"file": "docs/INVARIANTS.json", "line": 1, "symbol": "invariants[]", "kind": "const", "summary": "Durable registry of 14 system-level behavioral invariants (inv_001–inv_014), schema v1"},
-    {"file": "docs/schemas/invariant.schema.json", "line": 1, "symbol": "InvariantEntry", "kind": "struct", "summary": "JSON Schema draft-2020-12 for one invariant entry; 11 fields, additionalProperties:false"},
-    {"file": "scripts/validate-invariants.py", "line": 145, "symbol": "validate_invariants_file", "kind": "fn", "summary": "Validate INVARIANTS.json: id-uniqueness, tag-subset, fixture non-triviality; exits 0/1/2/3"},
-    {"file": "scripts/validate-invariants.py", "line": 78, "symbol": "has_nontrivial_constraint", "kind": "fn", "summary": "Checks fixture_schema for at least one constraining keyword (enum/required/minItems/etc.)"},
-    {"file": "scripts/validate-invariants.py", "line": 298, "symbol": "validate_fixture_against_schema", "kind": "fn", "summary": "Limited but practical JSON Schema validator for fixture_defaults vs fixture_schema"},
-    {"file": "scripts/invariant-check.sh", "line": 1, "symbol": "invariant-check", "kind": "fn", "summary": "CI gate: coverage check (blocker uncovered=exit 3), test-suite run, optional full-chain pass"}
+    {
+      "file": "docs/INVARIANTS.json",
+      "line": 1,
+      "symbol": "invariants[]",
+      "kind": "registry",
+      "summary": "Schema v1 registry with 14 stable invariant entries (inv_001, inv_002, inv_003, inv_004, inv_005, inv_006, inv_007, inv_008, inv_009, inv_010, inv_011, inv_012, inv_013, inv_014)."
+    }
   ],
   "depends_on": [
-    "scripts",
-    "commands"
+    "z-test",
+    "z-review-all",
+    "adaptive-intent"
   ],
   "consumed_by": [
-    "commands",
+    "z-test",
+    "z-review-all",
     "adaptive-intent"
   ],
   "invariants": [
-    "INVARIANTS.json is user-authored and optional — absence is normal, not a bug; both z-test and z-review-all degrade gracefully",
-    "All writes to INVARIANTS.json must be atomic: tempfile → flush → fsync → os.replace() (inv_003)",
-    "tags[] must be a subset of the controlled tag set in docs/llm/TAGS.txt; validate-invariants.py enforces this at write time",
-    "fixture_defaults is only valid when fixture_schema is also present (constraint exit 2, not schema-enforced)",
-    "id format is inv_NNN (3-digit zero-padded); once assigned, never reused — deprecate rather than recycle",
-    "sighting_count/last_sighting/anchor_module are optional review-run fields; absence means the invariant has never been triggered in a review"
+    "INVARIANTS.json is user-authored and optional; absence is normal and consumers fall back gracefully.",
+    "IDs are stable inv_NNN values and must not be reused.",
+    "Writes to the registry must be atomic.",
+    "Tags must remain within the controlled docs/memory tag set.",
+    "fixture_defaults requires fixture_schema.",
+    "Optional sighting fields may be absent until a review run observes a match."
   ],
   "gotchas": [
-    "docs/INVARIANTS.md is a stale rendered view (shows 8 entries); docs/INVARIANTS.json is canonical (14 entries)",
-    "inv_006 source_files reference pre-migration export paths (exports/export-pi.py, scripts/export-codex-skills.py) that no longer exist — behavioral property is still valid but source_files are stale",
-    "invariant-check.sh auto-discovers TESTS.md under z-harness/plans/*/ and plans/*/; non-standard plan dirs require --tests-file",
-    "z-test v2 path requires INVARIANTS.json present; absence triggers v1 fallback (SPEC.md/INTENT.md extraction only, no stable inv_NNN IDs in TESTS.md)",
-    "New tags must be added to TAGS.txt before being used in INVARIANTS.json entries — validate-invariants.py will reject unknown tags with exit 2"
+    "Do not auto-generate invariants from vague prose.",
+    "Entry source_files inside the registry can drift independently from the invariant behavior.",
+    "Current registry contains 14 entries.",
+    "Some old source paths in entry metadata may need future cleanup while the behavior remains valid."
   ],
   "memories": []
 }

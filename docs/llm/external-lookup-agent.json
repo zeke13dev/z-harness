@@ -1,6 +1,6 @@
 {
   "concept": "external-lookup-agent",
-  "last_updated": "2026-06-19",
+  "last_updated": "2026-06-24",
   "covers_spec": "none",
   "source_file": [
     "agents/external-lookup.md"
@@ -51,7 +51,7 @@
     },
     {
       "file": "agents/external-lookup.md",
-      "line": 113,
+      "line": 22,
       "symbol": "Provenance section format",
       "kind": "const",
       "summary": "Six provenance fields; commands always verbatim, never truncated in provenance section"

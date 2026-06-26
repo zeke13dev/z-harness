@@ -46,6 +46,7 @@ resolve_strategy(default_strategy, repo_root=None) -> str
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -313,6 +314,56 @@ def _collect_skills(skills_dir: Path, repo_root: Path) -> list[dict[str, Any]]:
     return entries
 
 
+_PROD_HIDDEN_SKILL_IDS: frozenset[str] = frozenset(
+    {
+        "z-research",
+        "z-map",
+        "z-overnight",
+        "z-attend",
+    }
+)
+
+_PROD_HIDDEN_AGENT_IDS: frozenset[str] = frozenset(
+    {
+        "axiom-extractor",
+        "research-judge",
+    }
+)
+
+
+def _is_prod_hidden(kind: str, entry_id: str) -> bool:
+    if kind == "skills":
+        return entry_id in _PROD_HIDDEN_SKILL_IDS or entry_id.startswith("z-axiom-")
+    if kind == "agents":
+        return entry_id in _PROD_HIDDEN_AGENT_IDS
+    return False
+
+
+def _apply_release_surface(
+    sources: dict[str, list[dict[str, Any]]],
+    surface: str | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Filter experimental sources from the public prod release surface.
+
+    `main`/development exports default to the full dev surface. The `prod`
+    branch or release scripts opt into the public surface by setting
+    `Z_HARNESS_RELEASE_SURFACE=prod` or by passing `--surface prod` through the
+    CLI export command.
+    """
+    resolved = (surface or os.environ.get("Z_HARNESS_RELEASE_SURFACE") or "dev").strip().lower()
+    if resolved not in {"prod", "production"}:
+        return sources
+
+    return {
+        kind: [
+            entry
+            for entry in entries
+            if not _is_prod_hidden(kind, entry["id"])
+        ]
+        for kind, entries in sources.items()
+    }
+
+
 def enumerate_sources(repo_root: Path) -> dict[str, list[dict[str, Any]]]:
     """Return a dict with keys ``commands``, ``agents``, ``skills``.
 
@@ -326,11 +377,12 @@ def enumerate_sources(repo_root: Path) -> dict[str, list[dict[str, Any]]]:
         }
     """
     repo_root = Path(repo_root).resolve()
-    return {
+    sources = {
         "commands": _collect_entries(repo_root / "commands", repo_root),
         "agents": _collect_entries(repo_root / "agents", repo_root),
         "skills": _collect_skills(repo_root / "skills", repo_root),
     }
+    return _apply_release_surface(sources)
 
 
 # ---------------------------------------------------------------------------

@@ -28,6 +28,9 @@ __pycache__/
 /.codex-plugin/
 /.claude/scheduled_tasks.lock
 
+
+# Generated z-report context bundle.
+/context.json
 # Ad-hoc local research scratch
 /research/
 

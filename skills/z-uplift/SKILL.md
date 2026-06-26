@@ -548,6 +548,42 @@ STYLE_MD_PATH="$(pwd)/STYLE.md"
 
 ---
 
+## Artifact Scout preflight (post setup gates)
+
+Run after Setup resume handling and the STYLE.md gate, before Phase 0 premise check, decomposition, cross-cutting consultants, component auditors, or implement dispatch. This block runs deterministic inventory only; the optional `artifact-scout` Agent classifier is deferred until after the Phase 1.5 hard cost gate (or after the resume `SKIP_TO_PHASE` guard, where that gate already ran on the original invocation).
+
+```bash
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+ARTIFACT_SCOUT_INVENTORY="$Z_HARNESS_PLAN_DIR/archive/$RUN/artifact-scout-inventory.json"
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/artifact-scout-inventory.py" \
+  --command /z-uplift --slug "$SLUG" --run-id "$RUN" \
+  --repo-root "$REPO_ROOT" --plan-dir "$Z_HARNESS_PLAN_DIR" \
+  --task "$ARGUMENTS" --output "$ARTIFACT_SCOUT_INVENTORY"
+ARTIFACT_SCOUT_EVENT_PAYLOAD="$(python3 - "$ARTIFACT_SCOUT_INVENTORY" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path, encoding="utf-8"))
+print(json.dumps({
+  "command": data.get("command"),
+  "slug": data.get("slug"),
+  "run_id": data.get("run_id"),
+  "artifact_path": path,
+  "source_status": data.get("source_status", {}),
+  "mandatory_candidate_count": len(data.get("mandatory_candidates") or []),
+  "historical_candidate_count": len(data.get("historical_candidates") or []),
+  "active_record_count": len(data.get("active_records") or []),
+  "worktree_count": len(data.get("worktrees") or []),
+  "truncated": bool(data.get("truncated")),
+}, separators=(",", ":")))
+PYEOF
+)"
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" artifact_scout_inventory_complete "$ARTIFACT_SCOUT_EVENT_PAYLOAD"
+```
+
+The `artifact_scout_inventory_complete` payload MUST include `command`, `slug`, `run_id`, `artifact_path`, `source_status`, `mandatory_candidate_count`, `historical_candidate_count`, `active_record_count`, `worktree_count`, and `truncated` from the inventory JSON.
+
+
+
 ## Phase telemetry (mandatory)
 
 At the **start** of each phase (0 through 6), record `T0=$(date +%s%3N)`. At the **end**, log:
@@ -1217,6 +1253,29 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 ```bash
 fi  # end SKIP_TO_PHASE guard
 ```
+
+## Artifact Scout classifier
+
+Run after the Phase 1.5 hard cost gate succeeds and before Phase 2 cross-cutting/component fanout. If `SKIP_TO_PHASE` skipped Phase 1.5 during resume, this point still represents a previously approved gate; do not dispatch `artifact-scout` before either the current or original gate.
+
+```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this artifact-scout
+     requirement and skip the Agent() call. Skipping means continue without scout routing. -->
+Agent(
+  subagent_type="artifact-scout",
+  description="Artifact scout for z-uplift <slug>",
+  prompt="current_command: /z-uplift
+task_or_topic: <uplift request>
+route_chain_json: <current route chain JSON>
+repo_root: <abs repo root>
+inventory_json_path: $Z_HARNESS_PLAN_DIR/archive/$RUN/artifact-scout-inventory.json
+
+Inline inventory JSON:
+<contents printed by scripts/artifact-scout-inventory.py>"
+)
+```
+
+Write the raw response to `$Z_HARNESS_PLAN_DIR/archive/$RUN/artifact-scout.md`. Emit `artifact_scout_classified`, `artifact_scout_warning`, and `artifact_scout_route` per the contract. Warning-only output never writes `route-decision.md`, never emits `artifact_scout_route`, and never advances `route_chain`; only `ask_user` or route outcomes with `route_chain_effect: "write_route_decision"` may write a route artifact and emit `plan_route_decision`.
 
 ---
 

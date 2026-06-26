@@ -232,9 +232,9 @@ After writing `handoff.json`:
   "status": "context_pressure",
   "next_step": "Continue handoff-protocol: implement commands/z-handoff.md — the /handoff command spec. Schema and docs are done.",
   "context_files": [
-    {"path": "/Users/zeke/.local/state/z-harness/z-harness-ded77383/plans/handoff-protocol/FIX.md", "role": "plan"},
-    {"path": "/Users/zeke/.local/state/z-harness/z-harness-ded77383/plans/handoff-protocol/archive/20260609T014456Z-handoff-protocol/events.jsonl", "role": "session_log"},
-    {"path": "/Users/zeke/dev/z-harness/docs/schemas/handoff.schema.json", "role": "other"}
+    {"path": "<state>/z-harness/example-repo-00000000/plans/handoff-protocol/FIX.md", "role": "plan"},
+    {"path": "<state>/z-harness/example-repo-00000000/plans/handoff-protocol/archive/20260609T014456Z-handoff-protocol/events.jsonl", "role": "session_log"},
+    {"path": "<repo>/docs/schemas/handoff.schema.json", "role": "other"}
   ]
 }
 ```
@@ -251,7 +251,7 @@ After writing `handoff.json`:
   "next_step": "Continue refactoring src/auth/handlers.py — extract token validation into a separate function. Current diff in /tmp/auth-refactor.patch.",
   "context_files": [
     {"path": "/tmp/auth-refactor.patch", "role": "diff"},
-    {"path": "/Users/zeke/project/src/auth/handlers.py", "role": "other"}
+    {"path": "<project>/src/auth/handlers.py", "role": "other"}
   ]
 }
 ```

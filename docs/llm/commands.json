@@ -1,6 +1,6 @@
 {
   "concept": "commands",
-  "last_updated": "2026-06-19",
+  "last_updated": "2026-06-25",
   "covers_spec": "none",
   "source_file": [
     "commands/z-amend.md",
@@ -184,7 +184,7 @@
       "line": 1,
       "symbol": "z-explain",
       "kind": "module",
-      "summary": "One-shot structured code explanation at a chosen depth lens (orientation/walkthrough/deep/audit-brief). File:line citations required. Handoff to /z-learn when interactive exploration warranted. Telemetry: explain_run_start / explain_run_end."
+      "summary": "One-shot structured code explanation at a chosen depth lens (orientation/walkthrough/deep/audit-brief). Supports /z-explain --repo orientation for one-answer repo orientation via bounded surface mapping, with --surface=auto|off|force; --surface=off preserves current grounding. File:line citations required. Handoff to /z-learn when interactive exploration warranted. Telemetry: explain_run_start / explain_run_end."
     },
     {
       "file": "commands/z-export.md",
@@ -338,7 +338,7 @@
       "line": 1,
       "symbol": "z-plan",
       "kind": "module",
-      "summary": "Produces SPEC.md, PLAN.md, TASKS.md. config.py export-env during Setup. Active-plan registry: registers after run_start, seeds scope (Phase 8), heartbeat at Phase 8, deregisters via FINALIZE_STATUS. Slug-confirm resolver gate (workflow.slug_confirm) after hard collision check; check-no-ask halt branches at workflow.slug_confirm and workflow.plan_decisions_approval (both emit plan_halt). Step 9c consolidated freshness gate. Phases 3+7 honor Z_HARNESS_CONSULT=off; fixed 5-panel when experiment.persona_rotation=true with independent consultant persona draws per phase."
+      "summary": "Produces INTENT/TASKS (or legacy SPEC/PLAN/TASKS in full mode). Runs a hard pre-subagent /z-plan cost gate via pre-run-cost-gate.sh before any expensive Agent dispatch; supports bounded cost-reduction re-estimates, emits one terminal cost_gate_decision, and finalizes Run Brief before claim release/deregister on terminal cost-gate halts. Existing slug/claim/registry/freshness/consult behavior remains unchanged."
     },
     {
       "file": "commands/z-providers-discover.md",
@@ -530,7 +530,10 @@
     "z-review-all Phase 6.5 unconditionally auto-amends every amendment_proposal (spec_gap) via /z-amend --skip-user-gate; no per-finding popup; writes auto-amend-log.md; emits auto_amend_applied per amendment. Phase 6.6 renders unified amendment brief via amendment-brief.py when either list is non-empty.",
     "z-audit-plan Phase 5 default (source==none) is auto_split: INTENT-mode batches all spec_gap into ONE /z-amend call; legacy-mode per-finding; premise_failure rendered via amendment-brief.py as conversational prose. force_ask fires only when amend-gate-decision.py returns force_ask.",
     "Z_HARNESS_CONSULT=off is detected via resolve-provider.py returning the none sentinel — NOT by reading the env var directly. Commands that check for none: z-plan (consultant_primary, Phases 3+7), z-execute (reviewer, Steps 6+7a).",
-    "consult_skipped (z-plan) and no_consult_dispatch (z-execute) are distinct event kinds. consult_skipped carries {phase:3} or {phase:7}; no_consult_dispatch carries {id, reason, reviewer_replaced_by: self_review} per task-cycle."
+    "consult_skipped (z-plan) and no_consult_dispatch (z-execute) are distinct event kinds. consult_skipped carries {phase:3} or {phase:7}; no_consult_dispatch carries {id, reason, reviewer_replaced_by: self_review} per task-cycle.",
+    "z-plan is a workflow.pre_run_cost_gate hard callsite before planning-router, intent-classifier, doc-fetcher, Explore, consultant panels, task-tree-generator, or any other expensive Agent dispatch.",
+    "z-plan nonterminal cost-reduction attempts emit cost_gate_reestimate_attempt; exactly one terminal cost_gate_decision is emitted per run.",
+    "z-plan terminal cost-gate halt/abandon/interrupted paths finalize and render Run Brief before claim release and deregister."
   ],
   "gotchas": [
     "[registry] z-plan Phase 0.0 ordering: register runs AFTER slug discovery, collision check, and resolver gate. Pre-validation register creates a zombie record with no deregister path.",
@@ -579,7 +582,8 @@
     "z-verify delegates fully to skills/z-verify/SKILL.md; the command file itself is a one-line dispatch.",
     "z-context-budget and z-evaluate both register/deregister in the active-plan registry even though they are read-only — this is advisory-only registration for visibility.",
     "z-review-all Phase 6.5 auto-amends ALL spec_gap findings unconditionally (blocker/major/minor); only implementation_drift is left as candidate fixup tasks. Phase 6.6 is skipped when both corrections and approach_concerns lists are empty.",
-    "z-audit-plan auto_split path (source==none): INTENT-mode batches ALL spec_gap into a single /z-amend re-freeze, not per-finding. workflow.audit_to_amend is SOURCE-KEYED: stored value alone does not determine behavior; resolver source is the discriminator."
+    "z-audit-plan auto_split path (source==none): INTENT-mode batches ALL spec_gap into a single /z-amend re-freeze, not per-finding. workflow.audit_to_amend is SOURCE-KEYED: stored value alone does not determine behavior; resolver source is the discriminator.",
+    "z-plan cost-reduction can only lower documented intent-depth/Phase-3 drivers and must re-run the hard gate; it does not mutate config or silently reduce doc_fetcher/explore/Phase-7/task-tree-generator dispatch."
   ],
   "memories": []
 }

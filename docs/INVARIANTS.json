@@ -108,7 +108,7 @@
     },
     {
       "id": "inv_006",
-      "description": "Every exported z-command (export-pi.py, export-codex-*) must expose the full set of behavioral rules from the base skill. An export that drops critical rules (e.g., structural test vs invariant test distinction, fixture_schema validation) produces broken behavior.",
+      "description": "Every exported z-command runtime driver (including runtime/drivers/pi/export.py and runtime/drivers/codex/export.py) must expose the full set of behavioral rules from the base skill. An export that drops critical rules (e.g., structural test vs invariant test distinction, fixture_schema validation) produces broken behavior.",
       "tags": [
         "correctness",
         "schema"
@@ -116,8 +116,8 @@
       "failure_class": "Export omits critical behavioral rules",
       "severity": "blocker",
       "source_files": [
-        "exports/export-pi.py",
-        "scripts/export-codex-skills.py"
+        "runtime/drivers/pi/export.py",
+        "runtime/drivers/codex/export.py"
       ],
       "source": "spec",
       "last_updated": "2026-06-10T20:42:20Z"

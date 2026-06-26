@@ -1,7 +1,7 @@
 # Cost Estimation
 
-> Last updated: 2026-06-19
-> Covers source: scripts/estimate-tokens.py, scripts/token-cost-profiles.json, scripts/pre-run-cost-gate.sh, scripts/config.py (workflow.pre_run_cost_gate, cost.token_budget), commands/z-research.md, commands/z-uplift.md, commands/z-plan-split.md, commands/z-brainstorm.md, commands/z-audit.md, commands/z-debug.md
+> Last updated: 2026-06-26
+> Covers source: scripts/estimate-tokens.py, scripts/pre-run-cost-gate.sh, scripts/token-cost-profiles.json, scripts/config.py, scripts/artifact-scout-inventory.py, agents/artifact-scout.md, skills/z-research/SKILL.md, skills/z-uplift/SKILL.md, skills/z-plan-split/SKILL.md, skills/z-plan/SKILL.md, skills/z-brainstorm/SKILL.md, skills/z-audit/SKILL.md, skills/z-debug/SKILL.md
 
 ## Overview
 
@@ -9,15 +9,20 @@ The cost-estimation subsystem provides LLM-free pre-run token-cost estimates for
 
 The design is intentionally DRY: one estimator (`estimate-tokens.py`), one gate helper (`pre-run-cost-gate.sh`), one event kind (`cost_gate_decision`), and one profile file (`token-cost-profiles.json`). No per-command cost logic is duplicated. The estimator also exposes a `subagent-costs` subcommand that reads `subagent_call` events from `metrics.jsonl` and computes per-host, per-model cost breakdowns used by `/z-stats`.
 
+Hard-gated scout hooks (`/z-plan`, `/z-research`, `/z-uplift`, and `/z-plan-split`) run Artifact Scout preflight around their hard gate. The pre-gate half is deterministic only (`scripts/artifact-scout-inventory.py` writes `artifact-scout-inventory.json`); the post-gate half is the optional tool-less `artifact-scout` classifier whose raw response is archived as `artifact-scout.md`. This split preserves the **no-pre-gate-Agent invariant**: hard-gated preflight cannot spend Agent tokens before the user/policy has approved the hard cost gate.
+
 ## The estimator: `scripts/estimate-tokens.py`
 
-`estimate-tokens.py` is a standalone Python CLI that supports two subcommands. It is LLM-free and fail-open: on any error it returns a usable envelope and exits 0; it exits non-zero only when a required argument is missing.
+`estimate-tokens.py` is a standalone Python CLI that supports three command families. It is LLM-free and fail-open: on any error it returns a usable envelope and exits 0; it exits non-zero only when a required argument is missing.
 
 ### CLI
 
 ```
 estimate-tokens.py estimate <command> [--dispatch KEY=N ...] [--metrics PATH]
                              [--profiles PATH] [--tail-lines N] [--min-samples N]
+                             [--e2e-forecast]
+
+estimate-tokens.py forecast <command> [--dispatch KEY=N ...]
 
 estimate-tokens.py subagent-costs [--metrics PATH] [--tail-lines N] [--json]
 
@@ -26,11 +31,12 @@ estimate-tokens.py <command> [--dispatch KEY=N ...]
 ```
 
 - `<command>` — the z-harness command to estimate (accepts `/z-research`, `z-research`, or bare `research`; prefix normalization is automatic).
-- `--dispatch KEY=N` — adds `multipliers[KEY] * N` tokens to the static range. Repeatable. Unknown keys warn to stderr and are ignored.
+- `--dispatch KEY=N` — adds `multipliers[KEY] * N` tokens to the static range. Repeatable. Unknown keys warn to stderr and are ignored. Profile `dispatch_defaults` apply unless explicitly replaced by a known key.
 - `--metrics PATH` — path to `metrics.jsonl`. Default: resolves via `plan-path.sh base_dir` (external base after Phase-D flip) then falls back to `<repo>/z-harness/metrics.jsonl`.
 - `--profiles PATH` — path to `token-cost-profiles.json`. Default: co-located with this script.
 - `--tail-lines N` — max lines to read from `metrics.jsonl` tail (env `Z_HARNESS_COST_TAIL_LINES`, default 2000; default 5000 for `subagent-costs`).
 - `--min-samples N` — minimum historical samples for the empirical tier to fire (env `Z_HARNESS_COST_MIN_SAMPLES`, default 3).
+- `--e2e-forecast` / `forecast` — emit a plan-vs-plan+execute forecast object instead of only the pre-run estimate envelope.
 - `--json` — (`subagent-costs` only) emit raw JSON instead of the human-readable table.
 
 ### Output envelope (estimate subcommand)
@@ -54,13 +60,41 @@ estimate-tokens.py <command> [--dispatch KEY=N ...]
 
 `gate` reflects the profile's declared severity (`"hard"` | `"soft"` | `null`). A no-profile command returns a zeroed envelope with `confidence: "low"`, `range_high: 0`, and `gate: null`.
 
+### E2E forecast output
+
+`forecast <command>` and `estimate <command> --e2e-forecast` return a forecast object that explicitly separates the gated plan cost from the projected post-plan execution cost:
+
+```json
+{
+  "schema_version": "e2e_forecast.v1",
+  "mode": "e2e_forecast",
+  "command": "z-plan",
+  "plan_component": { "semantics": "cost_to_plan", "range_high": 10300000 },
+  "execute_forecast_component": {
+    "semantics": "forecast_execute_after_plan",
+    "source": "static_forecast_profile",
+    "range_low": 2000000,
+    "range_high": 20000000,
+    "confidence": "low",
+    "uncertainty": "wide_static_fallback"
+  },
+  "total_forecast": {
+    "semantics": "forecast_plan_plus_execute",
+    "range_high": 30300000,
+    "uncertainty": "total_forecast low uncertainty"
+  }
+}
+```
+
+The `/z-plan` hard gate uses the plan component only. The execute component is an intentionally wide, low-confidence projection for later `/z-execute`; it is not exact and is not a hard cap.
+
 ### Three estimation tiers
 
 All three tiers compose additively. Each tier is recorded in `breakdown`.
 
 **Tier 1 — Static.** Reads the `range` array from the command's profile in `token-cost-profiles.json`. This is always present for profiled commands and provides the floor/ceiling.
 
-**Tier 2 — Dispatch.** Adds `multipliers[KEY] * N` for each `--dispatch KEY=N` argument. This accounts for per-invocation parameters such as the number of components in a plan-split or the brainstorm sub-run count in a research run. Unknown dispatch keys are ignored with a warning. Dispatch is added to both bounds: `range_low += dispatch_add`, `range_high += dispatch_add`.
+**Tier 2 — Dispatch.** Adds `multipliers[KEY] * N` for each effective dispatch key. Profile `dispatch_defaults` supply conservative pre-gate counts when the command cannot know fan-out yet; explicit `--dispatch KEY=N` values replace defaults for the same key. Unknown dispatch keys are ignored with a warning. Dispatch is added to both bounds: `range_low += dispatch_add`, `range_high += dispatch_add`.
 
 **Tier 3 — Empirical.** Reads the tail of `metrics.jsonl`, buckets events by parent-run (using `parent_run_id` if present, else `run`), and computes p50/p90 token totals over normally-completed parent runs attributed to the command. Only runs that have a terminal event with a non-aborted/non-halted/non-errored status are included; in-flight runs (latest timestamp within 5 minutes of the file's max timestamp) and runs with `cost_gate_decision{choice: abandon}` are also excluded.
 
@@ -100,18 +134,35 @@ When `provider_input_tokens` / `provider_output_tokens` are present in an event 
                       "multipliers": {"per_component": 600000}},
     "z-plan-split":  {"range": [1500000, 5000000], "gate": "hard",
                       "multipliers": {"per_cluster": 700000}},
+    "z-plan":        {"range": [300000, 900000], "gate": "hard",
+                      "multipliers": {"planning_mode_full": 700000,
+                                      "intent_level_depth": 200000,
+                                      "doc_fetcher": 100000,
+                                      "explore": 2800000,
+                                      "phase3_consultants": 350000,
+                                      "phase7_consultants": 350000,
+                                      "task_tree_generator": 300000},
+                      "dispatch_defaults": {"intent_level_depth": 2,
+                                            "doc_fetcher": 1,
+                                            "explore": 3,
+                                            "phase3_consultants": 5,
+                                            "phase7_consultants": 5,
+                                            "task_tree_generator": 1}},
     "z-brainstorm":  {"range": [80000, 220000], "gate": "soft",
                       "multipliers": {"per_heavy_chunk": 200000}},
     "z-audit":       {"range": [200000, 1200000], "gate": "soft",
                       "multipliers": {"per_dimension": 250000}},
     "z-debug":       {"range": [300000, 1500000], "gate": "soft"}
-  }
+}
 }
 ```
 
 - `range`: `[low, high]` integer token estimate forming the static floor/ceiling.
 - `gate`: `"hard"` | `"soft"` | (absent = no gate). Consumed by `pre-run-cost-gate.sh`.
 - `multipliers`: optional map of dispatch key to per-unit token cost. A command passes `--dispatch key=N` to apply `multipliers[key] * N`. Absent key = 0.
+- `dispatch_defaults`: optional conservative defaults used when a command cannot know future fan-out before the gate. Explicit dispatch values for the same key replace the default; duplicate explicit values for one key are summed before replacement. Negative counts are rejected.
+
+The real `z-plan` profile also carries `dispatch_contract.accepted_keys` documentation and an `e2e_forecast.execute_forecast` block. The latter is the static, low-confidence projected `/z-execute` component used only by forecast mode; it is not part of the hard gate's plan-cost approval.
 
 An unknown command produces a `confidence: "low"` envelope with `range_high: 0` and `gate: null`; the caller treats this as estimate-unavailable and proceeds.
 
@@ -200,16 +251,19 @@ This knob is NOT a question_id and does NOT appear in `QUESTION_IDS` or `RESULT_
 
 | Command | Severity | Gate fires on |
 |---------|----------|---------------|
-| `/z-research` | hard | Always (Phase 0.5, after dispatch decision) |
-| `/z-uplift` | hard | Always (Phase 1.5) |
-| `/z-plan-split` | hard | Always (Phase 1.5) |
-| `/z-brainstorm` | soft | HEAVY classification path only (Phase 0 HEAVY fan-out, step 1a) |
-| `/z-audit` | soft | HEAVY classification path only |
-| `/z-debug` | soft | Always (Phase 0 wrong-tool gate preamble) |
+| `/z-research` | hard | Phase 0.5, after dispatch decision and deterministic scout inventory, before the post-gate `artifact-scout` classifier or child `/z-map`/`/z-brainstorm` dispatch |
+| `/z-uplift` | hard | Phase 1.5 pre-fanout gate after component count is known; deterministic scout inventory may run earlier, but the `artifact-scout` Agent classifier is post-gate and before expensive decomposition/fanout |
+| `/z-plan-split` | hard | Phase 1.5 pre-fanout gate after cluster confirmation; deterministic scout inventory may run earlier, but the `artifact-scout` Agent classifier is post-gate and before cluster-planner fanout |
+| `/z-plan` | hard | Pre-subagent gate, after cheap setup/route/mode preflight and deterministic scout inventory, before post-gate `artifact-scout`, deferred `planning-router`, `intent-classifier`, doc-fetcher, Explore, consultants, task-tree generator, or any other Agent |
+| `/z-brainstorm` | soft | HEAVY classification path only (Phase 0 HEAVY fan-out, step 1a); Artifact Scout runs after setup because there is no earlier hard cost gate |
+| `/z-audit` | soft | HEAVY classification path only; Artifact Scout runs after setup (or is inherited by `--scope-from` child flows) |
+| `/z-debug` | soft | Always (Phase 0 wrong-tool gate preamble); Artifact Scout runs after setup |
 
-**Hard gates** present an AskUserQuestion with proceed / change-dispatch / abandon choices. The command halts if the user abandons or if `workflow.pre_run_cost_gate = halt`.
+**Hard gates** present an AskUserQuestion unless policy/config auto-resolves them. `/z-research` uses proceed / change-dispatch / abandon. `/z-plan` uses proceed / bounded cost-reduction re-estimate / abandon before any expensive Agent dispatch. The command halts if the user abandons, if `workflow.pre_run_cost_gate = halt`, or if unattended budget policy returns `halt`/`unhandled_gate`.
 
 **Soft gates** display the estimate and log `cost_gate_decision{choice: auto_proceed, reason: soft_gate}` without blocking. No AskUser is presented.
+
+For hard-gated scout preflight (`/z-plan`, `/z-research`, `/z-uplift`, `/z-plan-split`), "pre-gate" means no Agent dispatch of any kind: not `artifact-scout`, not `planning-router`, not doc-fetcher/Explore/consultants, and not child commands. The deterministic inventory is allowed because it is bounded local Python/shell work and writes an audit artifact for the post-gate classifier.
 
 **Wide-mode conversational gate (`/z-brainstorm` WIDE_N > 3 only).** When a wide brainstorm run is requested (WIDE_N > 3, Phase 2c), a separate inline prose cost estimate is presented at the end of the turn — this is NOT backed by `pre-run-cost-gate.sh` but is a direct calculation. The orchestrator ends the turn and awaits user confirmation before dispatching any overflow ideators. This gate is orthogonal to the HEAVY soft gate above: D2 ensures wide and HEAVY never multiply (wide requests suppress HEAVY fan-out).
 
@@ -222,7 +276,7 @@ All gates (hard and soft) emit exactly one `cost_gate_decision` event per invoca
   "kind":             "cost_gate_decision",
   "run":              "<RUN_ID>",
   "command":          "z-research",
-  "choice":           "proceed | auto_proceed | change_dispatch | abandon | halt",
+  "choice":           "proceed | auto_proceed | change_dispatch | abandon | halt | interrupted",
   "estimated_tokens": 4200000,
   "confidence":       "high",
   "basis":            "static profile + 5 historical runs"
@@ -238,8 +292,13 @@ All gates (hard and soft) emit exactly one `cost_gate_decision` event per invoca
 | `change_dispatch` | User chose to change dispatch parameters (z-research loop-back) |
 | `abandon` | User abandoned at AskUser, or `halt` disposition, or loop-back cap exceeded |
 | `halt` | Automatic halt (overnight/policy mode) |
+| `interrupted` | `/z-plan` driver wait was cancelled/unknown; treated as terminal halt |
 
 The event is logged AFTER `run_start` so it attributes to the run. An abandoned gate (`choice: abandon`) causes the empirical tier to exclude that run from future estimates.
+
+`/z-plan` emits exactly one terminal `cost_gate_decision` per run, before the first expensive Agent dispatch. Interactive cost-reduction attempts are nonterminal and emit `cost_gate_reestimate_attempt` with the shared `gate_id`, prior/new `range_high`, changed drivers, and terminal correlation fields; they do not duplicate `cost_gate_decision`.
+
+Pre-run forecasts and post-run reports are intentionally different surfaces. Forecasts are prospective and may include a wide static execute projection. `/z-stats subagent-costs` is retrospective: it reports observed `subagent_call` events after a run, using provider token counts when present and clearly labeled `chars/4` estimates for native Claude subagents.
 
 `/z-stats` reads `cost_gate_decision` events for the read-only cost-gate decisions rollup (command, choice, estimated_tokens).
 
@@ -262,9 +321,9 @@ The `cost_gate_decision` events form a calibration record: `estimated_tokens` vs
 ## How it interacts with others
 
 - `config` — `_resolve_cost_gate` in config.py is the single authority for cost-gate disposition; pre-run-cost-gate.sh delegates to it via `check-no-ask`; `cost.token_budget` and `workflow.pre_run_cost_gate` are both defined in config.py DEFAULTS
-- `scripts` — estimate-tokens.py and pre-run-cost-gate.sh live in scripts/; they share no state beyond the gate helper invoking the estimator as a subprocess
-- `commands` — six commands (z-research, z-uplift, z-plan-split, z-brainstorm, z-audit, z-debug) call pre-run-cost-gate.sh and own AskUser + cost_gate_decision event logging
-- `subagent-telemetry` — `estimate-tokens.py subagent-costs` reads `subagent_call` events to produce the cost model output consumed by `/z-stats`; the two subsystems share `metrics.jsonl` but have no shared in-process state
+- `scripts` — estimate-tokens.py and pre-run-cost-gate.sh live in scripts/; `artifact-scout-inventory.py` may run before hard gates because it is deterministic local inventory, not an Agent; these scripts share no state beyond subprocess invocation and archived JSON artifacts
+- `commands` — seven commands (z-research, z-uplift, z-plan-split, z-plan, z-brainstorm, z-audit, z-debug) call pre-run-cost-gate.sh and own AskUser + cost_gate_decision event logging; scout-aware command hooks additionally include z-audit-plan and z-audit-plan-style, while z-attend only passes child scout output through
+- `subagent-telemetry` — `estimate-tokens.py subagent-costs` reads `subagent_call` events to produce the cost model output consumed by `/z-stats`; pre-gate deterministic scout inventory emits no subagent token telemetry
 
 ## Edge cases / gotchas
 
@@ -281,5 +340,7 @@ The `cost_gate_decision` events form a calibration record: `estimated_tokens` vs
 - D2 (wide×HEAVY suppression): when `WIDE_N > 3`, the brainstorm command treats the run as MEDIUM and suppresses HEAVY fan-out entirely. This prevents the two fan-out axes from multiplying.
 - The `cost_gate_decision` event replaces the legacy `research_cost_gate_decision` event for `/z-research`. Do not emit both.
 - `_KIND_TO_COMMAND` maps generic `run_start`/`run_end` to `z-plan` as a best-effort default for legacy pre-T001 events; if pre-T001 z-research events appear in the tail window, attribution will be wrong for those runs only.
+- `/z-plan` dispatch defaults are fail-closed because route/depth/doc/explore/consult fan-out may not be fully known before the gate. User cost-reduction can lower only the documented intent-depth/Phase-3 drivers and must re-run the hard gate before any expensive Agent dispatch.
+- Artifact Scout's deterministic inventory is the only scout work allowed before the `/z-plan`, `/z-research`, `/z-uplift`, and `/z-plan-split` hard gates. If a host cannot support the post-gate `artifact-scout` Agent, it must surface the requirement and skip scout routing rather than silently dispatching pre-gate or pretending classification happened.
 - `subagent-costs` pricing rates are approximate for native Claude subagents (chars/4 → tokens); only external CLIs that print a usage line produce `provider_input_tokens` / `provider_output_tokens` for exact accounting.
 - The `_default_metrics_path()` function resolves the external base via `bash scripts/plan-path.sh base_dir` (subprocess, 10s timeout). If this fails, it falls back to the legacy in-repo `z-harness/metrics.jsonl` path. After the Phase-D external-base flip, the legacy path may be stale; `Z_HARNESS_BASE_DIR` env override is the reliable escape hatch.

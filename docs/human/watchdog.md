@@ -1,83 +1,66 @@
 # Silent-failure protection
 
-A two-layer liveness mechanism so long z-harness runs no longer dead-wait on a
-silently-hung subprocess. A hard-deadline enforcement wrapper handles killable
-dispatches; a scheduled one-shot hang-check handles everything else, including
-un-killable native `Agent()` calls.
+> Last updated: 2026-06-24
+> Covers source: scripts/supervised-run.sh, scripts/hang-threshold.py, scripts/schedule-hang-check.sh, scripts/hang-check.sh, scripts/liveness.sh, scripts/notify-watchdog.sh, scripts/check-timeout.sh, scripts/config.py, scripts/active-plan-registry.py, agents/reviewer.md, agents/remote-runner.md, skills/z-execute/SKILL.md, skills/z-overnight/SKILL.md
 
-> History: Layer 2 was originally a daemonized background poller
-> (`watchdog-sweep.sh` + `watchdog-spawn.sh`). That daemon was **retired** by the
-> `statusline-hud` plan (Workstream B) — it never fired outside tests, could not
-> notify (notify was off), was host-local, and added flock/daemonization
-> complexity. It is replaced by the scheduled one-shot below plus the in-chat
-> statusLine HUD (see [statusline.md](statusline.md)) as the positive liveness
-> glance. Layer 1 is unchanged.
+## Overview
 
----
+Watchdog protection has two layers:
 
-## Two-layer model
+1. **Hard-deadline enforcement for killable subprocesses.** `scripts/supervised-run.sh` wraps reviewer CLIs, ssh/rsync/cargo, and generic Bash with deterministic timeouts. On deadline it kills the child process group and returns `124`.
+2. **Scheduled one-shot hang detection for runtime-native stalls.** `/z-execute` and `/z-overnight` schedule `hang-check.sh` once at run start when `watchdog.enabled` and registry are enabled. The old long-lived daemon poller (`watchdog-sweep.sh`/`watchdog-spawn.sh`) is retired.
 
-### Layer 1 — Enforcement (killable dispatches) — unchanged
+Native `Agent()` stalls cannot be killed from shell. The scheduled hang-check can only detect and notify; the enforcement wrapper is the only layer that can recover by killing a subprocess.
 
-`scripts/supervised-run.sh` wraps every killable external dispatch (ssh, rsync,
-cargo, codex reviewer CLI, generic Bash) in a hard deadline:
+## Layer 1 — supervised-run
 
-- Prefers the system `timeout(1)` or `gtimeout` binary (`brew install coreutils`
-  on macOS); falls back to a guarded pure-bash deadline.
-- On deadline: SIGTERM to the child process group, then SIGKILL after a grace
-  period, returning exit code **124** (GNU `timeout` convention).
-- Emits `dispatch_start` / `dispatch_end` lease events around every wrapped call.
-- The exit code feeds the orchestrator's existing retry / halt path — real
-  recovery, not just detection.
+`supervised-run.sh --run R --type T --timeout N -- cmd ...` emits `dispatch_start` / `dispatch_end` lease events around the child. `--timeout 0` resolves `watchdog.timeout_secs.<type>` from config, falling back to 600. It prefers `timeout`/`gtimeout`, then falls back to a Bash process-group deadline. Diagnostics go to stderr so child stdout can be captured byte-for-byte.
 
-### Layer 2 — Detection + alert (scheduled one-shot hang-check)
+## Layer 2 — scheduled hang-check
 
-Instead of a long-lived poller, the orchestrator (`/z-execute`,
-`/z-overnight`) schedules a **one-shot** check at run start, timed to a
-prediction of when work *should* be done:
+`hang-threshold.py` reads metrics and computes per-class thresholds from p90 (default) wall time times a margin, excluding test noise. Sparse classes fall back to `watchdog.stale_secs`.
 
-- `scripts/hang-threshold.py` computes a per-class threshold = p90 (or p95) of
-  historical `wall_ms` x a margin, from `metrics.jsonl`. Class key uses the fields
-  that actually exist per event source (`persona_attempt_outcome` →
-  `role`/`complexity_tier`; `<kind>:<subagent_model>` else `<kind>`). Sparse
-  classes fall back to `watchdog.stale_secs`. Deterministic — no LLM.
-- `scripts/schedule-hang-check.sh` schedules `hang-check.sh` to fire at that
-  horizon. On macOS it uses a **self-removing launchd one-shot** (survives the
-  spawning shell exiting and the machine sleeping); elsewhere a detached
-  `sleep && run` fallback. `--self-test` proves launchd can actually execute the
-  job; `--print` dry-runs the plan.
-- `scripts/hang-check.sh` fires once: it asks `liveness.sh` whether any
-  `*_start` in the run is still unmatched past the threshold and, if so, alerts via
-  `notify-watchdog.sh` (notify-once per reason). It always exits 0 — a scheduled
-  check must never fail loudly.
+`schedule-hang-check.sh` schedules one `hang-check.sh` invocation for the future horizon. On macOS it writes a self-removing launchd one-shot; elsewhere it uses a detached sleep fallback. `hang-check.sh` calls `liveness.sh` for unmatched stale `*_start` events and notifies once through `notify-watchdog.sh`.
 
----
+## Key entry points
 
-## Capability boundary (load-bearing)
+<!-- AUTO-START: entry-points -->
+- `skills/z-execute/SKILL.md:130` — z-execute scheduling hook — schedules one-shot hang-check after registry registration when watchdog is enabled.
+- `skills/z-overnight/SKILL.md:251` — z-overnight scheduling hook — same one-shot model for overnight runs.
+- `scripts/supervised-run.sh:1` — hard-deadline wrapper — process-group timeout enforcement and dispatch lease events.
+- `scripts/hang-threshold.py:1` — metrics threshold calculator — p90/p95 × margin with sparse fallback.
+- `scripts/schedule-hang-check.sh:1` — scheduler — launchd one-shot or detached fallback.
+- `scripts/hang-check.sh:1` — one-shot detector — liveness scan plus notify-once marker.
+- `scripts/liveness.sh:1` — post-hoc inspector — unmatched `*_start` vs matching end events.
+- `scripts/notify-watchdog.sh:1` — notification channel — Discord/macOS best-effort alert.
+- `scripts/check-timeout.sh:37` — timeout backend helper — shared `timeout|gtimeout|bash_fallback` resolution.
+- `scripts/config.py:191` — watchdog defaults — enabled/stale/timeout/grace config.
+- `scripts/active-plan-registry.py:281` — legacy watchdog pid cleanup — best-effort SIGTERM/SIGKILL for recorded pid files.
+- `agents/reviewer.md:47` — reviewer supervised-run call — wraps external reviewer provider.
+- `agents/remote-runner.md:68` — remote-runner supervised operations — rsync/cargo/ssh wrappers and orphan warning path.
+<!-- AUTO-END: entry-points -->
 
-| Situation | Layer | Outcome |
-|---|---|---|
-| Killable subprocess stalls (ssh, rsync, cargo, reviewer CLI, Bash) | Enforcement | Hard kill + retry/halt — **real recovery** |
-| Native `Agent()` call blocks the Claude runtime main loop | Scheduled hang-check | Detect + notify human — **alert only, no auto-recovery** |
+## Invariants
 
-A hung native `Agent()` call blocks Claude Code's main loop from inside the
-runtime; there is no orchestrator PID a shell watchdog can signal. For that case
-the hang-check **detects and alerts** — it cannot auto-recover. (The complementary
-in-chat positive signal is the statusLine HUD.)
+- Killable subprocesses can be killed and routed to retry/halt; native Agent stalls can only be detected and alerted.
+- `dispatch_id` pairs dispatch start/end events; matching must not rely only on type or pid.
+- `supervised-run.sh` preserves child stdout and writes its own diagnostics to stderr.
+- Exit code `124` means the wrapper enforced a deadline.
+- Watchdog telemetry and notification are fail-open; failure must not prevent the wrapped command or scheduled check from completing.
+- Scheduled hang-check exits 0 even on detection/evaluation issues; it must not fail loudly.
+- Notify-once markers prevent repeated alerts for the same run/reason.
+- `watchdog.timeout_secs.*` is config-file-only and read via `config.py get`, not env-exported.
 
----
+## Gotchas
 
-## Alerts must be turned on (or this is inert)
+- Alerts are inert unless notification config allows `watchdog_stall` / `watchdog_timeout`.
+- The old daemon scripts are gone; do not document `watchdog-sweep.sh` or `watchdog-spawn.sh` as live paths.
+- `liveness.sh` ignores broad lifecycle brackets and focuses on subagent/action starts with matching ends.
+- `hang-threshold.py` class keys depend on event fields that actually exist (`persona_attempt_outcome` role/tier, `subagent_model`, or kind).
+- Remote command timeouts may leave a remote systemd-run unit alive; `remote-runner` emits `remote_orphan_possible` guidance.
 
-Like the old daemon, the hang-check is silent until notify is configured:
+## Memories
 
-```bash
-python3 scripts/config.py set notify.level notify
-python3 scripts/config.py set notify.discord_webhook_url "https://discord.com/api/webhooks/..."
-python3 scripts/config.py should-notify --event watchdog_stall   # must print: yes
-```
+<!-- DO NOT EDIT this section by hand — regenerated from docs/llm/watchdog.json by doc-updater. Use /z-suggest-memory to add or edit memories. -->
 
-macOS desktop notifications work with no webhook; a headless/remote host needs the
-Discord webhook (no desktop). Config lives in `[watchdog]` in `config.toml`
-(`watchdog.enabled`, `watchdog.stale_secs`, etc.) — these keys are retained and
-reused by the hang-check.
+_Note: no memories recorded for this concept yet._

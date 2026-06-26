@@ -10,17 +10,24 @@ CLI:
   # Explicit estimate subcommand:
   estimate-tokens.py estimate <command> [--dispatch KEY=N ...] [...]
 
+  # Explicit E2E forecast mode (plan cost + projected execute cost):
+  estimate-tokens.py forecast <command> [--dispatch KEY=N ...] [...]
+  estimate-tokens.py estimate <command> --e2e-forecast [--dispatch KEY=N ...] [...]
+
   # Per-host, per-subagent_type cost breakdown from logged subagent_call events:
   estimate-tokens.py subagent-costs [--metrics PATH] [--tail-lines N] [--json]
 
 Estimate subcommand stdout: a single JSON envelope (see SPEC "Output envelope").
+Forecast subcommand stdout: a single JSON object with plan, execute, and total forecast fields.
 Subagent-costs stdout: human-readable table (default) or JSON (with --json).
 Stderr: all diagnostics/warnings.
 Exit 0 on any producible output; exit non-zero only if required arg is missing.
 
 Estimate tiers:
   1. Static  — reads profile range from token-cost-profiles.json.
-  2. Dispatch — adds Σ multipliers[key]*N for each --dispatch KEY=N given.
+  2. Dispatch — adds Σ multipliers[key]*N. Profiles may declare
+                 dispatch_defaults for fail-closed pre-gate estimates; explicit
+                 --dispatch values replace the default for that key.
   3. Empirical — parent-run rollup from metrics.jsonl (bounded, race-safe,
                  completion-filtered).
 
@@ -741,7 +748,10 @@ def _empirical_tier(
         if status in _EXCLUDED_STATUSES:
             continue
 
-        # Normally completed — include.
+        # Normally completed with observable token data — include. A zero total
+        # means the run had no token telemetry in the tail, not that it was free.
+        if total_tokens <= 0:
+            continue
         qualifying_totals.append(total_tokens)
 
     if not qualifying_totals:
@@ -777,6 +787,59 @@ def _no_profile_envelope(command: str) -> dict:
         "breakdown": [],
         "gate": None,
     }
+
+
+# ---------------------------------------------------------------------------
+# Dispatch contract helpers
+# ---------------------------------------------------------------------------
+
+def _coerce_nonnegative_count(value: object, *, key: str, source: str) -> int | None:
+    """Return a non-negative dispatch count, warning and skipping invalid values."""
+    try:
+        count = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        print(
+            f"estimate-tokens: non-integer dispatch count for '{key}' in {source} — ignored",
+            file=sys.stderr,
+        )
+        return None
+    if count < 0:
+        print(
+            f"estimate-tokens: negative dispatch count for '{key}' in {source} — ignored",
+            file=sys.stderr,
+        )
+        return None
+    return count
+
+
+def _dispatch_defaults(profile: dict, multipliers: dict[str, int], command: str) -> dict[str, int]:
+    """Return validated profile-declared default dispatch counts.
+
+    Defaults are used for commands such as /z-plan where the pre-run gate happens
+    before some fan-out is known. They must be conservative; explicit dispatch
+    values replace the default for that key.
+    """
+    raw_defaults = profile.get("dispatch_defaults", {})
+    if not isinstance(raw_defaults, dict):
+        print(
+            f"estimate-tokens: dispatch_defaults for '{command}' is not an object — ignored",
+            file=sys.stderr,
+        )
+        return {}
+
+    defaults: dict[str, int] = {}
+    for key, raw_count in raw_defaults.items():
+        if key not in multipliers:
+            print(
+                f"estimate-tokens: default dispatch key '{key}' for command "
+                f"'{command}' has no multiplier — ignored",
+                file=sys.stderr,
+            )
+            continue
+        count = _coerce_nonnegative_count(raw_count, key=key, source=f"profile '{command}'")
+        if count is not None:
+            defaults[key] = count
+    return defaults
 
 
 # ---------------------------------------------------------------------------
@@ -818,12 +881,21 @@ def estimate(
     # ------------------------------------------------------------------ Tier 2: Dispatch
     dispatch_add = 0
     used_dispatch_keys: list[str] = []
+    used_dispatch_counts: dict[str, int] = {}
+    defaulted_dispatch_keys: list[str] = []
+
+    # Profile defaults let a gate fail closed when /z-plan has not yet learned
+    # all shape drivers. Explicit values replace the default for that key.
+    applied_dispatch_counts = _dispatch_defaults(profile, multipliers, canonical_key)
+    explicit_dispatch_counts: dict[str, int] = {}
 
     if dispatch_pairs:
         for key, count in dispatch_pairs:
             if key in multipliers:
-                dispatch_add += multipliers[key] * count
-                used_dispatch_keys.append(key)
+                safe_count = _coerce_nonnegative_count(count, key=key, source="--dispatch")
+                if safe_count is None:
+                    continue
+                explicit_dispatch_counts[key] = explicit_dispatch_counts.get(key, 0) + safe_count
             else:
                 print(
                     f"estimate-tokens: unknown dispatch key '{key}' for command "
@@ -831,10 +903,29 @@ def estimate(
                     file=sys.stderr,
                 )
 
-        if used_dispatch_keys:
-            breakdown.append(
-                {"tier": "dispatch", "add": dispatch_add, "keys": used_dispatch_keys}
-            )
+    for key, count in explicit_dispatch_counts.items():
+        applied_dispatch_counts[key] = count
+
+    for key, count in applied_dispatch_counts.items():
+        if count <= 0:
+            continue
+        multiplier = int(multipliers[key])
+        dispatch_add += multiplier * count
+        used_dispatch_keys.append(key)
+        used_dispatch_counts[key] = count
+        if key not in explicit_dispatch_counts:
+            defaulted_dispatch_keys.append(key)
+
+    if used_dispatch_keys:
+        breakdown.append(
+            {
+                "tier": "dispatch",
+                "add": dispatch_add,
+                "keys": used_dispatch_keys,
+                "counts": used_dispatch_counts,
+                "defaults": defaulted_dispatch_keys,
+            }
+        )
 
     # ------------------------------------------------------------------ Tier 3: Empirical
     empirical = _empirical_tier(canonical_key, metrics_path, tail_lines, min_samples)
@@ -892,6 +983,219 @@ def estimate(
 
 
 # ---------------------------------------------------------------------------
+# E2E forecast — explicit plan + execute forecast surface
+# ---------------------------------------------------------------------------
+
+_CONFIDENCE_RANK: dict[str, int] = {"low": 0, "medium": 1, "high": 2}
+
+
+def _weaker_confidence(left: str, right: str) -> str:
+    """Return the less certain confidence label, preserving known low/medium/high labels."""
+    left_rank = _CONFIDENCE_RANK.get(left, 0)
+    right_rank = _CONFIDENCE_RANK.get(right, 0)
+    return left if left_rank <= right_rank else right
+
+
+def _uncertainty_for(confidence: str, *, source: str) -> str:
+    """Return a stable machine-readable uncertainty label for forecast consumers."""
+    if confidence == "high":
+        return "narrow_empirical"
+    if confidence == "medium":
+        return "moderate_composite"
+    if source == "missing_profile":
+        return "unknown_no_profile"
+    return "wide_static_fallback"
+
+
+def _component_from_estimate(
+    envelope: dict,
+    *,
+    component: str,
+    semantics: str,
+    source: str,
+    user_facing_wording: str,
+) -> dict:
+    """Adapt an existing estimate envelope into an E2E forecast component."""
+    confidence = str(envelope.get("confidence", "low"))
+    return {
+        "component": component,
+        "semantics": semantics,
+        "source": source,
+        "command": envelope.get("command"),
+        "estimated_tokens": int(envelope.get("estimated_tokens") or 0),
+        "range_low": int(envelope.get("range_low") or 0),
+        "range_high": int(envelope.get("range_high") or 0),
+        "confidence": confidence,
+        "uncertainty": _uncertainty_for(confidence, source=source),
+        "basis": envelope.get("basis", "unknown"),
+        "breakdown": envelope.get("breakdown", []),
+        "user_facing_wording": user_facing_wording,
+    }
+
+
+def _coerce_forecast_range(raw_range: object, *, command: str) -> tuple[int, int]:
+    """Return a non-negative (low, high) range from profile forecast config."""
+    if (
+        isinstance(raw_range, list)
+        and len(raw_range) == 2
+    ):
+        try:
+            low = max(0, int(raw_range[0]))
+            high = max(0, int(raw_range[1]))
+            if high < low:
+                high = low
+            return low, high
+        except (TypeError, ValueError):
+            pass
+    print(
+        f"estimate-tokens: malformed e2e_forecast.execute_forecast.range "
+        f"for '{command}' — using [0, 0]",
+        file=sys.stderr,
+    )
+    return 0, 0
+
+
+def _static_execute_forecast_component(command: str, config: dict) -> dict:
+    """Build a static fallback execute component from profile e2e_forecast config."""
+    low, high = _coerce_forecast_range(config.get("range", [0, 0]), command=command)
+    try:
+        estimated = int(config.get("estimated_tokens", low))
+    except (TypeError, ValueError):
+        estimated = low
+    estimated = min(max(low, estimated), high) if high else max(low, estimated)
+    confidence = str(config.get("confidence", "low"))
+    basis = str(config.get("basis", "static e2e execute forecast profile"))
+    uncertainty = str(config.get("uncertainty", _uncertainty_for(confidence, source="static_forecast")))
+    wording = str(config.get(
+        "user_facing_wording",
+        "Execute forecast is approximate, not exact, and not a hard cap.",
+    ))
+    return {
+        "component": "execute_forecast",
+        "semantics": "forecast_execute_after_plan",
+        "source": "static_forecast_profile",
+        "command": config.get("command", "z-execute"),
+        "estimated_tokens": estimated,
+        "range_low": low,
+        "range_high": high,
+        "confidence": confidence,
+        "uncertainty": uncertainty,
+        "basis": basis,
+        "breakdown": [{"tier": "static_forecast", "low": low, "high": high}],
+        "user_facing_wording": wording,
+    }
+
+
+def forecast_e2e(
+    raw_command: str,
+    dispatch_pairs: list[tuple[str, int]],
+    profiles_path: Path,
+    metrics_path: Path,
+    tail_lines: int,
+    min_samples: int,
+) -> dict:
+    """Compute an explicit E2E forecast: cost-to-plan plus forecast execute cost."""
+    plan_envelope = estimate(
+        raw_command=raw_command,
+        dispatch_pairs=dispatch_pairs,
+        profiles_path=profiles_path,
+        metrics_path=metrics_path,
+        tail_lines=tail_lines,
+        min_samples=min_samples,
+    )
+
+    profiles = _load_profiles(profiles_path)
+    canonical_key, profile = _resolve_profile(raw_command, profiles)
+    forecast_config = profile.get("e2e_forecast", {}) if isinstance(profile, dict) else {}
+    if not isinstance(forecast_config, dict):
+        forecast_config = {}
+
+    execute_config = forecast_config.get("execute_forecast", {})
+    if not isinstance(execute_config, dict):
+        execute_config = {}
+
+    plan_component = _component_from_estimate(
+        plan_envelope,
+        component="plan",
+        semantics="cost_to_plan_only",
+        source="estimate_envelope",
+        user_facing_wording="Plan component is the estimated cost to produce the plan only.",
+    )
+
+    execute_command = execute_config.get("command")
+    execute_profile_exists = False
+    if isinstance(execute_command, str) and execute_command:
+        _, execute_profile = _resolve_profile(execute_command, profiles)
+        execute_profile_exists = execute_profile is not None
+
+    if execute_profile_exists:
+        execute_envelope = estimate(
+            raw_command=str(execute_command),
+            dispatch_pairs=[],
+            profiles_path=profiles_path,
+            metrics_path=metrics_path,
+            tail_lines=tail_lines,
+            min_samples=min_samples,
+        )
+        execute_component = _component_from_estimate(
+            execute_envelope,
+            component="execute_forecast",
+            semantics="forecast_execute_after_plan",
+            source="estimate_profile",
+            user_facing_wording=str(execute_config.get(
+                "user_facing_wording",
+                "Execute forecast is approximate, not exact, and not a hard cap.",
+            )),
+        )
+    else:
+        execute_component = _static_execute_forecast_component(canonical_key, execute_config)
+
+    total_confidence = _weaker_confidence(
+        str(plan_component["confidence"]),
+        str(execute_component["confidence"]),
+    )
+    total_estimated = int(plan_component["estimated_tokens"]) + int(execute_component["estimated_tokens"])
+    total_low = int(plan_component["range_low"]) + int(execute_component["range_low"])
+    total_high = int(plan_component["range_high"]) + int(execute_component["range_high"])
+    total_basis = f"{plan_component['basis']} + {execute_component['basis']}"
+
+    return {
+        "schema_version": "e2e_forecast.v1",
+        "mode": "e2e_forecast",
+        "command": plan_component["command"],
+        "estimated_tokens": total_estimated,
+        "range_low": total_low,
+        "range_high": total_high,
+        "gate": plan_envelope.get("gate"),
+        "plan_estimate_envelope": plan_envelope,
+        "range_semantics": (
+            "Component range_low/range_high values are token ranges for that component. "
+            "total_forecast ranges are the sum of component lows/highs; "
+            "total_forecast.estimated_tokens is the sum of component point estimates."
+        ),
+        "confidence": total_confidence,
+        "uncertainty": _uncertainty_for(total_confidence, source="total_forecast"),
+        "basis": total_basis,
+        "user_facing_wording": (
+            "Approximate E2E forecast: plan_component is cost-to-plan only; "
+            "execute_forecast_component is projected post-plan execution cost. "
+            "This is not exact and is not a hard cap."
+        ),
+        "plan_component": plan_component,
+        "execute_forecast_component": execute_component,
+        "total_forecast": {
+            "semantics": "forecast_plan_plus_execute",
+            "estimated_tokens": total_estimated,
+            "range_low": total_low,
+            "range_high": total_high,
+            "confidence": total_confidence,
+            "uncertainty": _uncertainty_for(total_confidence, source="total_forecast"),
+            "basis": total_basis,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -916,6 +1220,12 @@ def _parse_dispatch(values: list[str]) -> list[tuple[str, int]]:
         except ValueError:
             print(
                 f"estimate-tokens: non-integer count in --dispatch '{val}' — ignored",
+                file=sys.stderr,
+            )
+            continue
+        if n < 0:
+            print(
+                f"estimate-tokens: negative count in --dispatch '{val}' — ignored",
                 file=sys.stderr,
             )
             continue
@@ -977,7 +1287,75 @@ def _build_estimate_parser(subparsers: argparse.Action) -> None:  # type: ignore
         default=int(os.environ.get("Z_HARNESS_COST_MIN_SAMPLES", "3")),
         help="Minimum historical samples for empirical tier to fire (default 3).",
     )
+    ep.add_argument(
+        "--e2e-forecast",
+        action="store_true",
+        default=False,
+        help=(
+            "Output the explicit E2E forecast schema instead of the legacy estimate envelope. "
+            "Default estimate output remains backward-compatible when this flag is absent."
+        ),
+    )
 
+
+
+def _build_forecast_parser(subparsers: argparse.Action) -> None:  # type: ignore[type-arg]
+    """Add the 'forecast' subcommand (E2E plan + execute forecast)."""
+    fp = subparsers.add_parser(
+        "forecast",
+        help="E2E forecast for a command: cost-to-plan plus projected execute cost.",
+        description=(
+            "LLM-free E2E token forecast for a z-harness command. "
+            "Outputs explicit plan_component, execute_forecast_component, and total_forecast fields."
+        ),
+    )
+    fp.add_argument(
+        "command",
+        help="Command to forecast (e.g. z-plan, /z-plan, plan).",
+    )
+    fp.add_argument(
+        "--dispatch",
+        metavar="KEY=N",
+        nargs="+",
+        action="append",
+        default=[],
+        help=(
+            "Dispatch multiplier for the plan component: KEY=N [KEY=N ...]. Repeatable. "
+            "Adds multipliers[KEY]*N tokens per entry."
+        ),
+    )
+    fp.add_argument(
+        "--metrics",
+        metavar="PATH",
+        default=None,
+        help=(
+            "Path to metrics.jsonl. "
+            "Default: $Z_HARNESS_BASE_DIR/metrics.jsonl or <repo>/z-harness/metrics.jsonl."
+        ),
+    )
+    fp.add_argument(
+        "--profiles",
+        metavar="PATH",
+        default=None,
+        help=(
+            "Path to token-cost-profiles.json. "
+            "Default: scripts/token-cost-profiles.json relative to this script."
+        ),
+    )
+    fp.add_argument(
+        "--tail-lines",
+        metavar="N",
+        type=int,
+        default=int(os.environ.get("Z_HARNESS_COST_TAIL_LINES", "2000")),
+        help="Max lines to read from metrics.jsonl tail (default 2000).",
+    )
+    fp.add_argument(
+        "--min-samples",
+        metavar="N",
+        type=int,
+        default=int(os.environ.get("Z_HARNESS_COST_MIN_SAMPLES", "3")),
+        help="Minimum historical samples for empirical tier to fire (default 3).",
+    )
 
 def _build_subagent_costs_parser(subparsers: argparse.Action) -> None:  # type: ignore[type-arg]
     """Add the 'subagent-costs' subcommand (per-host, per-type cost breakdown)."""
@@ -1024,21 +1402,23 @@ def _build_subagent_costs_parser(subparsers: argparse.Action) -> None:  # type: 
 def _build_parser() -> argparse.ArgumentParser:
     """Build the top-level argument parser.
 
-    Supports two modes:
+    Supports three modes:
       1. Legacy positional mode: estimate-tokens.py <command> [opts]
          (positional arg that doesn't match a subcommand — treated as 'estimate <command>')
       2. Subcommand mode: estimate-tokens.py estimate <command> [opts]
+                          estimate-tokens.py forecast <command> [opts]
                           estimate-tokens.py subagent-costs [opts]
     """
     parser = argparse.ArgumentParser(
         prog="estimate-tokens.py",
         description=(
-            "LLM-free pre-run token-cost estimator for z-harness commands. "
+            "LLM-free pre-run token-cost estimator and E2E forecaster for z-harness commands. "
             "Also provides per-host, per-subagent_type cost breakdown via 'subagent-costs'."
         ),
     )
     subparsers = parser.add_subparsers(dest="subcommand")
     _build_estimate_parser(subparsers)
+    _build_forecast_parser(subparsers)
     _build_subagent_costs_parser(subparsers)
     # Legacy positional (backwards-compat): first arg is command name, not a subcommand
     parser.add_argument(
@@ -1074,6 +1454,12 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=int(os.environ.get("Z_HARNESS_COST_MIN_SAMPLES", "3")),
         help="Minimum historical samples (used when no subcommand is given).",
+    )
+    parser.add_argument(
+        "--e2e-forecast",
+        action="store_true",
+        default=False,
+        help="Output E2E forecast schema (used when no subcommand is given).",
     )
     return parser
 
@@ -1151,7 +1537,7 @@ def main() -> None:
     if (
         len(sys.argv) >= 2
         and not sys.argv[1].startswith("--")
-        and sys.argv[1] not in ("estimate", "subagent-costs")
+        and sys.argv[1] not in ("estimate", "forecast", "subagent-costs")
     ):
         # Inject 'estimate' subcommand for legacy callers.
         sys.argv.insert(1, "estimate")
@@ -1175,6 +1561,35 @@ def main() -> None:
             print(_format_subagent_costs_table(result))
         return
 
+
+    if args.subcommand == "forecast":
+        command = getattr(args, "command", None)
+        if command is None:
+            parser.print_usage(sys.stderr)
+            sys.exit(1)
+
+        profiles_path = (
+            Path(args.profiles)
+            if args.profiles
+            else _SCRIPT_DIR / "token-cost-profiles.json"
+        )
+        metrics_path = (
+            Path(args.metrics)
+            if args.metrics
+            else _default_metrics_path()
+        )
+        flat_dispatch: list[str] = [item for sublist in args.dispatch for item in sublist]
+        dispatch_pairs = _parse_dispatch(flat_dispatch)
+        envelope = forecast_e2e(
+            raw_command=command,
+            dispatch_pairs=dispatch_pairs,
+            profiles_path=profiles_path,
+            metrics_path=metrics_path,
+            tail_lines=getattr(args, "tail_lines", 2000),
+            min_samples=getattr(args, "min_samples", 3),
+        )
+        print(json.dumps(envelope, indent=2))
+        return
     # Default: 'estimate' subcommand (or legacy positional mode).
     if args.subcommand not in ("estimate", None):
         parser.print_usage(sys.stderr)
@@ -1205,14 +1620,24 @@ def main() -> None:
     tail_lines = getattr(args, "tail_lines", 2000)
     min_samples = getattr(args, "min_samples", 3)
 
-    envelope = estimate(
-        raw_command=command,
-        dispatch_pairs=dispatch_pairs,
-        profiles_path=profiles_path,
-        metrics_path=metrics_path,
-        tail_lines=tail_lines,
-        min_samples=min_samples,
-    )
+    if getattr(args, "e2e_forecast", False):
+        envelope = forecast_e2e(
+            raw_command=command,
+            dispatch_pairs=dispatch_pairs,
+            profiles_path=profiles_path,
+            metrics_path=metrics_path,
+            tail_lines=tail_lines,
+            min_samples=min_samples,
+        )
+    else:
+        envelope = estimate(
+            raw_command=command,
+            dispatch_pairs=dispatch_pairs,
+            profiles_path=profiles_path,
+            metrics_path=metrics_path,
+            tail_lines=tail_lines,
+            min_samples=min_samples,
+        )
 
     # Stdout is pure JSON — one object, no trailing noise.
     print(json.dumps(envelope, indent=2))

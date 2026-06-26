@@ -86,6 +86,59 @@ $ARGUMENTS
 6. Record start time `T0_DEBUG=$(date -u +%Y-%m-%dT%H:%M:%SZ)` — used for post-mortem timeline.
 7. If `docs/llm/INDEX.json` exists → note it. Phase 2 (Evidence) and Phase 3a (Round 1 hypotheses) will dispatch `doc-fetcher` (Haiku) instead of reading INDEX.json or per-concept JSONs from main thread. The orchestrator never reads `docs/llm/*.json` directly.
 
+## Artifact Scout preflight
+
+Run after Setup provider logging and before the soft cost estimate, wrong-tool gate, evidence collection, bisect-isolator, doc-fetcher, or hypothesis consultant dispatch. This command has no hard pre-run cost gate, but scout output for debug/similarity is warning-only unless the classifier returns an explicit route recommendation with `route_chain_effect: "write_route_decision"`.
+
+```bash
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+ARTIFACT_SCOUT_INVENTORY="$Z_HARNESS_PLAN_DIR/archive/$RUN/artifact-scout-inventory.json"
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/artifact-scout-inventory.py" \
+  --command /z-debug --slug "$Z_HARNESS_SLUG" --run-id "$RUN" \
+  --repo-root "$REPO_ROOT" --plan-dir "$Z_HARNESS_PLAN_DIR" \
+  --task "$ARGUMENTS" --output "$ARTIFACT_SCOUT_INVENTORY"
+ARTIFACT_SCOUT_EVENT_PAYLOAD="$(python3 - "$ARTIFACT_SCOUT_INVENTORY" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path, encoding="utf-8"))
+print(json.dumps({
+  "command": data.get("command"),
+  "slug": data.get("slug"),
+  "run_id": data.get("run_id"),
+  "artifact_path": path,
+  "source_status": data.get("source_status", {}),
+  "mandatory_candidate_count": len(data.get("mandatory_candidates") or []),
+  "historical_candidate_count": len(data.get("historical_candidates") or []),
+  "active_record_count": len(data.get("active_records") or []),
+  "worktree_count": len(data.get("worktrees") or []),
+  "truncated": bool(data.get("truncated")),
+}, separators=(",", ":")))
+PYEOF
+)"
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" artifact_scout_inventory_complete "$ARTIFACT_SCOUT_EVENT_PAYLOAD"
+```
+
+The `artifact_scout_inventory_complete` payload MUST include `command`, `slug`, `run_id`, `artifact_path`, `source_status`, `mandatory_candidate_count`, `historical_candidate_count`, `active_record_count`, `worktree_count`, and `truncated` from the inventory JSON.
+
+```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this artifact-scout
+     requirement and skip the Agent() call. Skipping means continue without scout routing. -->
+Agent(
+  subagent_type="artifact-scout",
+  description="Artifact scout for z-debug <slug>",
+  prompt="current_command: /z-debug
+task_or_topic: <debug symptom>
+route_chain_json: <current route chain JSON>
+repo_root: <abs repo root>
+inventory_json_path: $Z_HARNESS_PLAN_DIR/archive/$RUN/artifact-scout-inventory.json
+
+Inline inventory JSON:
+<contents printed by scripts/artifact-scout-inventory.py>"
+)
+```
+
+Write the raw response to `$Z_HARNESS_PLAN_DIR/archive/$RUN/artifact-scout.md`. Emit `artifact_scout_classified`, `artifact_scout_warning`, and `artifact_scout_route` per the contract. The warning-only debug/similar path (`STATUS: warned`, `historical_similar`, `allowed_action: warning_only`, or `route_chain_effect: "none"`) never writes `route-decision.md`, never emits `artifact_scout_route`, and never advances `route_chain`. An exact active same-slug debug run is not a similarity warning: surface the existing claim/active-run AskUser gate (continue, wait/inspect, or choose a new slug), but still write `route-decision.md` only for `ask_user` or route outcomes with `route_chain_effect: "write_route_decision"` and then emit `plan_route_decision`.
+
 8. **Soft cost estimate (non-blocking).** Call the gate helper and display the estimate. No AskUser, no halt — always proceeds.
    ```bash
    # workflow.pre_run_cost_gate
@@ -102,6 +155,7 @@ $ARGUMENTS
      "$(python3 -c 'import json,sys; print(json.dumps({"command":"z-debug","choice":"auto_proceed","reason":"soft_gate","estimated_tokens":json.loads(sys.argv[1]),"confidence":sys.argv[2],"basis":sys.argv[3]}))' \
         "${COST_ESTIMATED_TOKENS:-null}" "${COST_CONFIDENCE:-unknown}" "${COST_BASIS:-unknown}")"
    ```
+
 
 ## Auto-bail thresholds (softened — heavy path)
 

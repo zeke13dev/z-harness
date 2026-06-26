@@ -26,6 +26,8 @@ Output model:
 from __future__ import annotations
 import importlib
 
+import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any, Optional
@@ -34,6 +36,65 @@ import typer
 
 _EXPORT_ONLY_HOSTS = frozenset({"pi", "windsurf", "kiro", "cline", "copilot"})
 _RUNTIME_DRIVER_HOSTS = _EXPORT_ONLY_HOSTS
+
+_PROD_HIDDEN_SKILL_IDS = (
+    "z-research",
+    "z-map",
+    "z-overnight",
+    "z-attend",
+)
+_PROD_HIDDEN_AGENT_IDS = (
+    "axiom-extractor",
+    "research-judge",
+)
+
+
+def _remove_generated_path(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.exists():
+        shutil.rmtree(path)
+
+
+def _cleanup_prod_surface(dest: Path) -> None:
+    """Remove stale dev-only files before writing a prod-surface export."""
+    surface = (os.environ.get("Z_HARNESS_RELEASE_SURFACE") or "dev").strip().lower()
+    if surface not in {"prod", "production"}:
+        return
+
+    skill_ids = set(_PROD_HIDDEN_SKILL_IDS)
+    for skills_dir in (
+        dest / "skills",
+        dest / ".cursor" / "skills",
+        dest / ".agent" / "skills",
+        dest / ".omp" / "z-harness" / "skills",
+    ):
+        if skills_dir.is_dir():
+            skill_ids.update(path.name for path in skills_dir.glob("z-axiom-*"))
+
+    for skill_id in skill_ids:
+        for path in (
+            dest / "skills" / skill_id,
+            dest / "prompts" / f"{skill_id}.md",
+            dest / ".cursor" / "skills" / skill_id,
+            dest / ".cursor" / "rules" / f"{skill_id}.mdc",
+            dest / ".agent" / "skills" / skill_id,
+            dest / ".agent" / "workflows" / f"{skill_id}.md",
+            dest / ".agent" / "rules" / f"z-harness-{skill_id}.md",
+            dest / ".omp" / "z-harness" / "skills" / skill_id,
+            dest / ".omp" / "z-harness" / "prompts" / f"{skill_id}.md",
+            dest / ".omp" / "z-harness" / "rules" / f"{skill_id}.md",
+        ):
+            _remove_generated_path(path)
+
+    for agent_id in _PROD_HIDDEN_AGENT_IDS:
+        for path in (
+            dest / "prompts" / f"{agent_id}.md",
+            dest / ".cursor" / "rules" / f"{agent_id}.mdc",
+            dest / ".agent" / "rules" / f"z-harness-{agent_id}.md",
+            dest / ".omp" / "z-harness" / "agents" / f"{agent_id}.md",
+        ):
+            _remove_generated_path(path)
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +193,7 @@ def _export_for_host(
     """
     host_dest = dest / adapter.name if namespace_by_host else dest
     host_dest.mkdir(parents=True, exist_ok=True)
+    _cleanup_prod_surface(host_dest)
 
     result = adapter.export_payload(host_dest)
 
@@ -165,6 +227,7 @@ def _export_runtime_driver(host_name: str, repo_root: Path, dest: Path) -> None:
         typer.echo(f"Error: cannot import exporter for host {host_name!r}: {exc}", err=True)
         raise typer.Exit(code=1)
 
+    _cleanup_prod_surface(dest)
     result = mod.export(repo_root, dest)
     typer.echo(
         f"[{host_name}] fidelity={result.fidelity}  "
@@ -190,6 +253,7 @@ def run(
     in_place: bool,
     out: Optional[str],
     force: bool,
+    surface: str = "dev",
 ) -> None:
     """Entry point called from __main__.export_cmd."""
     from z_harness_cli.adapters.registry import (
@@ -200,6 +264,11 @@ def run(
     )
 
     repo_root = _repo_root()
+    if surface not in {"dev", "prod"}:
+        typer.echo("Error: --surface must be one of: dev, prod", err=True)
+        raise typer.Exit(code=2)
+
+    previous_surface = os.environ.get("Z_HARNESS_RELEASE_SURFACE")
 
     # -----------------------------------------------------------------------
     # Validate mutual exclusions before any I/O (fail fast).
@@ -278,10 +347,17 @@ def run(
     # Run exports.
     # -----------------------------------------------------------------------
     dest.mkdir(parents=True, exist_ok=True)
+    os.environ["Z_HARNESS_RELEASE_SURFACE"] = surface
 
-    for adapter in adapters:
-        _export_for_host(adapter, dest, namespace_by_host)
-    for host_name in runtime_hosts:
-        host_dest = dest / host_name if namespace_by_host else dest
-        host_dest.mkdir(parents=True, exist_ok=True)
-        _export_runtime_driver(host_name, repo_root, host_dest)
+    try:
+        for adapter in adapters:
+            _export_for_host(adapter, dest, namespace_by_host)
+        for host_name in runtime_hosts:
+            host_dest = dest / host_name if namespace_by_host else dest
+            host_dest.mkdir(parents=True, exist_ok=True)
+            _export_runtime_driver(host_name, repo_root, host_dest)
+    finally:
+        if previous_surface is None:
+            os.environ.pop("Z_HARNESS_RELEASE_SURFACE", None)
+        else:
+            os.environ["Z_HARNESS_RELEASE_SURFACE"] = previous_surface

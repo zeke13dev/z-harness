@@ -185,6 +185,29 @@ class TestSkillFrontmatter:
         # Source preserved verbatim
         assert out_file.read_text(encoding="utf-8") == custom_content
 
+    def test_skill_md_expands_include_markers(self, tmp_path: Path):
+        """Native skills keep frontmatter but receive enumerated expanded body."""
+        repo = tmp_path / "repo"
+        fragment_dir = repo / "_fragments"
+        fragment_dir.mkdir(parents=True)
+        fragment_dir.joinpath("surface-mapping.md").write_text(
+            "## Shared surface mapping contract\n\nRepo Explore facets\n",
+            encoding="utf-8",
+        )
+        marker = "<!-- include: _fragments/surface-mapping.md -->"
+        _make_skill(repo / "skills", "z-explain", body=f"Before.\n{marker}\nAfter.\n")
+        _make_skill(repo / "skills", "z-learn", body=f"Before.\n{marker}\nAfter.\n")
+
+        export_root = tmp_path / "export"
+        export(repo, export_root)
+
+        for skill_name in ("z-explain", "z-learn"):
+            out_file = export_root / ".cursor" / "skills" / skill_name / "SKILL.md"
+            out_text = out_file.read_text(encoding="utf-8")
+            assert out_text.startswith(f"---\nname: {skill_name}\n")
+            assert "Shared surface mapping contract" in out_text
+            assert marker not in out_text
+
     def test_skill_md_not_rewritten(self, tmp_path: Path):
         """Skills must NOT have Agent/Skill calls rewritten — they are native."""
         skills_dir = tmp_path / "repo" / "skills"

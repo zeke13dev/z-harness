@@ -1,6 +1,6 @@
 {
   "concept": "tier1-doc-updater",
-  "last_updated": "2026-06-19",
+  "last_updated": "2026-06-24",
   "covers_spec": "doc-updater-agent/20260609T194026Z-doc-updater-agent",
   "source_files": [
     "agents/tier1-doc-updater.md",
@@ -59,8 +59,15 @@
       "summary": "CLI entry: scans docs/human/*.md and applies AUTO markers; --dry-run supported"
     }
   ],
-  "depends_on": ["doc-updater", "doc-fetcher"],
-  "consumed_by": ["z-execute", "tier2-doc-rationale"],
+  "depends_on": [
+    "doc-updater",
+    "doc-fetcher",
+    "docs-index"
+  ],
+  "consumed_by": [
+    "z-execute",
+    "tier2-doc-rationale"
+  ],
   "invariants": [
     "NEVER writes to docs/ directly — staging only ($Z_HARNESS_PLAN_DIR/tier1-staged/)",
     "Never touches memories[]",

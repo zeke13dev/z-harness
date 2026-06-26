@@ -247,6 +247,14 @@ if peers:
    ```
 7. Notification policy is resolved from config via the `export-env` step above. See `docs/human/config.md` for knob details (`notify.level`).
 8. **Check for LLM-tier docs.** If `docs/llm/INDEX.json` exists in the repo root, **do NOT read it from main thread.** Note its existence; Phase 1 will dispatch `doc-fetcher` (Haiku) to read it. The orchestrator never reads `docs/llm/*.json` directly — that's what burns main-thread context unnecessarily. If INDEX.json does not exist, note that fact and continue (Phase 1 will Explore without doc grounding).
+   ```bash
+   if [[ -f "docs/llm/INDEX.json" ]]; then
+     DOCS_LLM_INDEX_EXISTS=1
+   else
+     DOCS_LLM_INDEX_EXISTS=0
+   fi
+   export DOCS_LLM_INDEX_EXISTS
+   ```
 9. **Docs-freshness scan (inline, no gate yet).** Initialize signals before scanning: `docs_stale=false`, `research_stale=false`, `map_stale=false`; `stale_concepts_list=[]`; `stale_research_citations=[]`; `stale_map_citations=[]`. If `docs/llm/INDEX.json` exists, compute staleness across all its entries. This step is the ONE exception where main thread reads INDEX.json — but only the lightweight metadata fields (`slug`, `last_updated`, `source_file`), never the per-concept `<slug>.json` bodies. For each concept entry, compare `entry.last_updated` against the max `mtime` of its `source_files`. A concept is **stale** if any source file's mtime exceeds `last_updated`. Compute `stale_pct = stale_concepts / total_concepts`. The threshold is the value from `config.py get docs.staleness_threshold` (default `20` — meaning 20 percent). Record signal: `docs_stale = (stale_pct >= threshold)`. Also record `stale_concepts_list` (list of stale concept slugs) for display. **Do not present any AskUserQuestion here** — the gate fires below in step 10c after all three signals are collected.
 10. **Pre-plan artifact detection.** Check `$Z_HARNESS_PLAN_DIR/` for `MAP.md`, `BRAINSTORM.md`, `RESEARCH.md`, and `GRILL.md`.
 
@@ -255,7 +263,7 @@ if peers:
     - **`artifact_kind: approach_synthesis` + `status: complete`** → **one-way gate active.** RESEARCH.md is canonical precontext. Skip MAP.md + BRAINSTORM.md injection entirely. Phase 1 uses matrix-based skip rules (see Phase 1 — RESEARCH.md one-way gate shortcut).
     - **`artifact_kind: map`** (legacy old-RESEARCH.md not yet renamed) → treat as a MAP.md artifact: apply freshness check (same regex/mtime logic as MAP.md below), then proceed with component-file injection (MAP.md + BRAINSTORM.md mode). Log `legacy_map_artifact_detected`.
     - **No `artifact_kind` field** → treat as legacy MAP.md artifact per above (component-file injection). Log `legacy_map_artifact_detected`.
-    - **`status: incomplete`** → halt. Emit `precontext_research_incomplete`. Recommend re-running `/z-research` before proceeding. Per the FINALIZE_STATUS rule, execute **Run Brief — halt finalize** (below) with reason `RESEARCH.md status incomplete`.
+    - **`status: incomplete`** → halt. Emit `precontext_research_incomplete`. Recommend regenerating or removing the incomplete artifact before proceeding; do not recommend hidden experimental commands in prod. Per the FINALIZE_STATUS rule, execute **Run Brief — halt finalize** (below) with reason `RESEARCH.md status incomplete`.
 
     **Freshness scan — RESEARCH.md (inline, no gate yet)** (when one-way gate is active): parse all file citations using regex `/[A-Za-z0-9_./-]+\.(rs|py|md|ts|tsx|js|jsx|json|toml|yaml|yml|sh|sql)(:\d+(-\d+)?)?/`. Also scan for extensionless allowlist filenames (`Makefile`, `Dockerfile`). Markdown link form `[label](path:line)` — extract the inner path. For each cited path: follow symlinks; compare mtime to `generated_at`; for line-ranges, use min-line mtime (any modification within range → stale). Record signal: `research_stale = true` if any citation is stale. Deleted-source detection: if a cited file no longer exists, emit a `precontext_source_deleted` event (higher severity than stale-mtime) and set `research_stale = true`. Parse failure: emit `precontext_freshness_check_failed`, continue (fail-open). **Do not present any AskUserQuestion here** — the gate fires below in step 10c.
 
@@ -269,27 +277,25 @@ if peers:
      citation is stale or deleted. Silent omission is forbidden. -->
     **10c. Consolidated freshness gate.** After all four scans complete (docs, RESEARCH.md, MAP.md, GRILL.md citations if present), if `docs_stale OR research_stale OR map_stale` is true:
 
-    Write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md`. Build up `reason_codes` from all true signals (e.g. `["docs_stale"]`, `["research_stale"]`, `["map_stale"]`, or a combination). Set `to_command` to the most specific single remedy (prefer `"/z-maintain-docs"` if docs_stale, `"/z-research"` if only research_stale, `"/z-map"` if only map_stale; if multiple signals fire, use `"/z-maintain-docs"` and list all remedies in the route-decision.md body).
+    Write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md`. Build up `reason_codes` from all true signals (e.g. `["docs_stale"]`, `["research_stale"]`, `["map_stale"]`, or a combination). Set `to_command` to the most specific release-safe remedy (prefer `"/z-maintain-docs"` if docs_stale; otherwise use `null` and ask the user to refresh/remove stale precontext manually; list all remedies in the route-decision.md body).
 
     Push-notify (guarded by notify level), then present **ONE** `AskUserQuestion` with:
 
     - **Header:** "One or more planning inputs are stale. Review and choose how to proceed:"
     - **Per-source bullets** for each true signal (include only bullets for signals that fired):
       - `docs`: "Docs are stale — `stale_pct`% of concepts outdated (affects: `stale_concepts_list`). Remedy: `/z-maintain-docs`."
-      - `research`: "RESEARCH.md has stale or deleted citations. Remedy: `/z-research`."
-      - `map`: "MAP.md has stale or deleted citations. Remedy: `/z-map`."
-    - **Options** (include only per-source remedy options that correspond to true signals, always include the last two):
+      - `research`: "RESEARCH.md has stale or deleted citations. Remedy: refresh or remove the stale precontext artifact; experimental synthesis regeneration is dev-only."
+      - `map`: "MAP.md has stale or deleted citations. Remedy: refresh or remove the stale terrain artifact; experimental terrain mapping is dev-only."
+    - **Options** (always include):
       - `re-run /z-maintain-docs` (if `docs_stale`)
-      - `re-run /z-research` (if `research_stale`)
-      - `re-run /z-map` (if `map_stale`)
       - `proceed with all stale — I accept the risk`
       - `abandon`
 
-    If only one signal fired, the question naturally collapses to a single per-source bullet and two options (per-source remedy + proceed + abandon).
+    If only one signal fired, the question naturally collapses to a single per-source bullet plus proceed/abandon; the `/z-maintain-docs` remedy appears only for docs staleness.
 
     On user choice:
 
-    - **Re-run remedy**: Update `route-decision.md` with the user's chosen remedy. Emit `plan_route_decision` with `from_command: "/z-plan"`, `to_command: <the computed remedy from the route-decision.md step above>`, `route_class: "contextual"`, `reason_codes` (built above), `signals.docs_stale_or_drifted: <docs_stale>`, `signals.research_stale: <research_stale>`, `signals.map_stale: <map_stale>`, `confidence: "high"`, `classifier_used: false`, `artifact_path`, `route_chain`, and `user_choice: <the user's selection>`. Halt. Do not auto-invoke the remedy command. Per the FINALIZE_STATUS rule, execute **Run Brief — halt finalize** (below) with reason `stale inputs — user chose remedy re-run`.
+    - **Re-run /z-maintain-docs** (docs staleness only): Update `route-decision.md` with the user's chosen remedy. Emit `plan_route_decision` with `from_command: "/z-plan"`, `to_command: "/z-maintain-docs"`, `route_class: "contextual"`, `reason_codes` (built above), `signals.docs_stale_or_drifted: <docs_stale>`, `signals.research_stale: <research_stale>`, `signals.map_stale: <map_stale>`, `confidence: "high"`, `classifier_used: false`, `artifact_path`, `route_chain`, and `user_choice: <the user's selection>`. Halt. Do not auto-invoke the remedy command. Per the FINALIZE_STATUS rule, execute **Run Brief — halt finalize** (below) with reason `stale inputs — user chose docs remedy re-run`.
     - **Proceed with all stale**: Update `route-decision.md` to record "no remedy command selected — user accepted stale inputs." Emit `plan_route_decision` with `from_command: "/z-plan"`, **`to_command: null`** (omit the field or set it to `null` explicitly — `/z-stats` must be able to distinguish this from a real remedy), `route_class: "contextual"`, `reason_codes` (built above), `signals.docs_stale_or_drifted: <docs_stale>`, `signals.research_stale: <research_stale>`, `signals.map_stale: <map_stale>`, `confidence: "high"`, `classifier_used: false`, `artifact_path`, `route_chain`, and `user_choice: "proceed_with_all_stale"`. Then:
       - If `docs_stale=true`: emit a `doc_drift_acknowledged` event. Phase 1 still uses INDEX.json but the orchestrator should weight `relevant_concepts` hints less and verify against current code more aggressively.
       - If `research_stale=true OR map_stale=true` (regardless of `docs_stale`): emit a `precontext_freshness_acknowledged` event with `sources: ["research"]` / `["map"]` / `["research","map"]` as applicable.
@@ -311,6 +317,42 @@ Multiple slugs can coexist (parallel plans). The repo-wide `z-harness/metrics.js
 
 Each phase below ends with a checkpoint — write the phase's output to `$Z_HARNESS_PLAN_DIR/archive/$RUN/<phase>.md` so the run is resumable.
 
+## Artifact Scout deterministic inventory (pre-gate, no Agent)
+
+Run this hook after claim/register/awareness and docs/precontext freshness scanning, before Plan Route Check and before the hard cost gate. It is deterministic shell/Python only; it MUST NOT dispatch `artifact-scout` or any other Agent before the hard gate. The resulting inventory facts may feed deterministic route preflight and cost-shape estimates without creating a pre-gate Agent exception.
+
+```bash
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+ARTIFACT_SCOUT_INVENTORY="$Z_HARNESS_PLAN_DIR/archive/$RUN/artifact-scout-inventory.json"
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/artifact-scout-inventory.py" \
+  --command /z-plan --slug "$Z_HARNESS_SLUG" --run-id "$RUN" \
+  --repo-root "$REPO_ROOT" --plan-dir "$Z_HARNESS_PLAN_DIR" \
+  --task "$ARGUMENTS" --output "$ARTIFACT_SCOUT_INVENTORY"
+ARTIFACT_SCOUT_EVENT_PAYLOAD="$(python3 - "$ARTIFACT_SCOUT_INVENTORY" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path, encoding="utf-8"))
+print(json.dumps({
+  "command": data.get("command"),
+  "slug": data.get("slug"),
+  "run_id": data.get("run_id"),
+  "artifact_path": path,
+  "source_status": data.get("source_status", {}),
+  "mandatory_candidate_count": len(data.get("mandatory_candidates") or []),
+  "historical_candidate_count": len(data.get("historical_candidates") or []),
+  "active_record_count": len(data.get("active_records") or []),
+  "worktree_count": len(data.get("worktrees") or []),
+  "truncated": bool(data.get("truncated")),
+}, separators=(",", ":")))
+PYEOF
+)"
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" artifact_scout_inventory_complete "$ARTIFACT_SCOUT_EVENT_PAYLOAD"
+```
+
+The `artifact_scout_inventory_complete` payload MUST include `command`, `slug`, `run_id`, `artifact_path`, `source_status`, `mandatory_candidate_count`, `historical_candidate_count`, `active_record_count`, `worktree_count`, and `truncated` from the inventory JSON.
+
+The post-gate classifier consumes the inline JSON printed by this command and archives its raw response as `$Z_HARNESS_PLAN_DIR/archive/$RUN/artifact-scout.md`.
+
 <!-- PLAN_ROUTE_CHECK_START -->
 ## Plan Route Check
 
@@ -321,14 +363,14 @@ Deterministic routes:
 - Route small targeted fixes (`candidate_files <= 5`, `non_obvious_decisions <= 2`, no public API/schema impact) to `/z-fix`; if the task is an unknown bug symptom, use contextual `/z-debug`.
 - Stay in `/z-plan` for coherent medium changes, especially `expected_tasks <= 25` with no clear independent cluster seams.
 - Route large or independently separable work to `/z-plan-split` when `expected_tasks > 25` or `cluster_seams` is in `2..6`.
-- Route unknown terrain or missing citations to `/z-research`; route multiple plausible framings with sufficient terrain to `/z-brainstorm`.
+- For unknown terrain or missing citations, surface the grounding risk and ask the user to narrow/gather facts; route multiple plausible framings with sufficient terrain to `/z-brainstorm`.
 - Recommend contextual `/z-audit-plan` only after `SPEC.md`, `PLAN.md`, and `TASKS.md` exist; use `/z-amend` when the user is changing an existing plan, and `/z-maintain-docs` when doc drift blocks confidence.
 
-Call `planning-router` only when deterministic signals conflict and no hard threshold already decides the route. It receives the compact signal payload plus the current route chain and is advisory; malformed or unavailable classifier output falls back to deterministic routing or an AskUser choice.
+Call `planning-router` only when deterministic signals conflict and no hard threshold already decides the route. During the pre-gate route preflight, this is a **deferred expensive subagent**: do not invoke it before the `/z-plan` hard cost gate below. If deterministic routing cannot decide and the run still needs `/z-plan`, carry the compact signal payload forward, complete the hard cost gate, then invoke `planning-router` after a successful gate and before Phase 1 dispatch. Malformed or unavailable classifier output falls back to deterministic routing or an AskUser choice.
 
 If routing, write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md`, emit `plan_route_decision` with `from_command`, `to_command`, `route_class`, `reason_codes`, `signals`, `confidence`, `classifier_used`, `artifact_path`, `route_chain`, and `user_choice`.
 
-**Route-down shortcut surface (route-DOWN routes only).** A route is a *shortcut* only when it routes **DOWN** to a lighter command — i.e. `to_command` is `/z-do`, `/z-fix`, or `/z-debug`. Lateral or upward routes (`/z-plan-split`, `/z-research`, `/z-brainstorm`, `/z-audit-plan`, `/z-amend`, `/z-maintain-docs`) are **not** shortcuts — they do not decline a more-robust alternative for speed — so they must NOT fire the surface. Scope this block to the route-down branch ONLY:
+**Route-down shortcut surface (route-DOWN routes only).** A route is a *shortcut* only when it routes **DOWN** to a lighter command — i.e. `to_command` is `/z-do`, `/z-fix`, or `/z-debug`. Lateral or upward routes (`/z-plan-split`, `/z-brainstorm`, `/z-audit-plan`, `/z-amend`, `/z-maintain-docs`) are **not** shortcuts — they do not decline a more-robust alternative for speed — so they must NOT fire the surface. Scope this block to the route-down branch ONLY:
 
 ```bash
 # Callsite 1 — route-down shortcut surface (route-DOWN routes only).
@@ -366,13 +408,17 @@ Loop prevention: carry forward the latest route chain; if it already has two ent
 
 ## Mode detection
 
-Read `workflow.planning_mode` and `workflow.intent_level` from config (already exported by Setup step 4a). These two knobs govern the entire planning paradigm for this run.
+Read `workflow.planning_mode` and `workflow.intent_level` from config (already exported by Setup step 4a). These two knobs govern the entire planning paradigm for this run. Normalize `workflow.intent_level` before the cost gate: only `quick`, `standard`, `deep`, and `auto` are recognized; any unknown value is treated as `auto` for dispatch estimation and later classifier resolution.
 
 ```bash
 PLANNING_MODE="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get workflow.planning_mode 2>/dev/null || echo "intent")"
 INTENT_LEVEL_CONFIG="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get workflow.intent_level 2>/dev/null || echo "auto")"
+case "$INTENT_LEVEL_CONFIG" in
+  quick|standard|deep|auto) ;;
+  *) INTENT_LEVEL_CONFIG="auto" ;;
+esac
 # Export immediately so downstream phases (3, 6, 8, 9) running in fresh shells can read it.
-export PLANNING_MODE
+export PLANNING_MODE INTENT_LEVEL_CONFIG
 ```
 
 **Flag overrides (parsed from `$ARGUMENTS` before the branch below).** CLI flags take precedence over config:
@@ -417,14 +463,15 @@ _ARGS_REMAINING="${_ARGS_REMAINING%"${_ARGS_REMAINING##*[![:space:]]}"}"
 export PLANNING_MODE
 ```
 
-When `INTENT_LEVEL_SOURCE="flag"`, the intent-level announce + override gate (Step 2) still fires — pre-selecting the flag-forced level as the recommended option — so the user can still override interactively. Emit `intent_level_chosen` with `source: "flag"` instead of `"classifier"` or `"config-forced"`.
+When `INTENT_LEVEL_SOURCE="flag"`, the intent-level announce + override gate (Step 2) still fires — pre-selecting the flag-forced level as the recommended option — but it MUST obey the pre-subagent cost ceiling recorded in `ZPLAN_COST_APPROVED_INTENT_LEVEL_MAX`: it may not silently offer or accept a level more expensive than the gate estimated. Emit `intent_level_chosen` with `source: "flag"` instead of `"classifier"` or `"config-forced"`.
 
-When any of `--quick`, `--standard`, or `--deep` was parsed, also set `INTENT_LEVEL_CONFIG="$INTENT_LEVEL"` (overwriting the config-read value) so the Step 1 `if [[ "$INTENT_LEVEL_CONFIG" != "auto" ]]` branch fires and the classifier is bypassed:
+When any of `--quick`, `--standard`, or `--deep` was parsed, also set `INTENT_LEVEL_CONFIG="$INTENT_LEVEL"` (overwriting the config-read value) so the Step 1 forced-level branch fires and the classifier is bypassed:
 
 ```bash
 # After flag parse: if a level flag was set, sync INTENT_LEVEL_CONFIG so Step 1 skips the classifier.
 if [[ "$INTENT_LEVEL_SOURCE" == "flag" ]]; then
   INTENT_LEVEL_CONFIG="$INTENT_LEVEL"
+  export INTENT_LEVEL_CONFIG
 fi
 ```
 
@@ -463,6 +510,654 @@ What would you like to do?" \
 fi
 ```
 
+
+## Pre-subagent cost gate (hard)
+
+This gate runs after the cheap setup, claim/register, freshness checks, deterministic route preflight, and cheap mode/depth preflight above. It runs **before every expensive subagent**: `planning-router` (when deferred), `intent-classifier`, Phase 1 `doc-fetcher`, Phase 1 Explore, Phase 3 / Phase 7 consultant panels, Phase 8 `task-tree-generator`, and any other Agent dispatch.
+
+`workflow.pre_run_cost_gate` remains the single disposition authority: `/z-plan` must call `scripts/pre-run-cost-gate.sh`, and that helper delegates the disposition to `scripts/config.py`. Do not read `cost.token_budget` here and do not reimplement the budget comparison in the skill.
+
+Compute explicit dispatch counts using only the documented `z-plan` keys from `scripts/token-cost-profiles.json`: `planning_mode_full`, `intent_level_depth`, `doc_fetcher`, `explore`, `phase3_consultants`, `phase7_consultants`, and `task_tree_generator`. Counts are conservative pre-gate upper bounds; unknown future fan-out stays at the fail-closed default rather than being guessed downward.
+
+```bash
+# Explicit z-plan dispatch counts replace profile defaults for these keys.
+# Keep this key list in sync with scripts/token-cost-profiles.json profiles["z-plan"].dispatch_contract.accepted_keys.
+ZPLAN_DISPATCH_PLANNING_MODE_FULL=0
+if [[ "$PLANNING_MODE" == "full" ]]; then
+  ZPLAN_DISPATCH_PLANNING_MODE_FULL=1
+fi
+
+# intent_level_depth: 0=quick, 1=standard, 2=deep.
+# Forced config/flag levels are known before the gate because flag parsing syncs
+# INTENT_LEVEL_CONFIG above. Charge their exact depth. Only auto/unknown charges
+# deep conservatively because the classifier and level override have not run yet.
+ZPLAN_DISPATCH_INTENT_LEVEL_DEPTH=0
+if [[ "$PLANNING_MODE" == "intent" ]]; then
+  case "${INTENT_LEVEL_CONFIG:-auto}" in
+    quick)    ZPLAN_DISPATCH_INTENT_LEVEL_DEPTH=0 ;;
+    standard) ZPLAN_DISPATCH_INTENT_LEVEL_DEPTH=1 ;;
+    deep)     ZPLAN_DISPATCH_INTENT_LEVEL_DEPTH=2 ;;
+    *)        ZPLAN_DISPATCH_INTENT_LEVEL_DEPTH=2 ;;
+  esac
+fi
+ZPLAN_COST_APPROVED_INTENT_LEVEL_MAX="$ZPLAN_DISPATCH_INTENT_LEVEL_DEPTH"
+export ZPLAN_COST_APPROVED_INTENT_LEVEL_MAX
+
+# Setup step 8 records whether docs/llm/INDEX.json exists; use that cheap signal only.
+# If the driver did not persist a boolean, fail closed with 1 because docs may exist.
+case "${DOCS_LLM_INDEX_EXISTS:-unknown}" in
+  0|false|False|no|No) ZPLAN_DISPATCH_DOC_FETCHER=0 ;;
+  *)                   ZPLAN_DISPATCH_DOC_FETCHER=1 ;;
+esac
+
+# Explore is capped by workflow.max_explore (default 3). Use the configured cap because
+# Phase 1 skip conditions are not guaranteed until after the gate.
+ZPLAN_DISPATCH_EXPLORE="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get workflow.max_explore 2>/dev/null || echo 3)"
+case "$ZPLAN_DISPATCH_EXPLORE" in
+  ''|*[!0-9]*) ZPLAN_DISPATCH_EXPLORE=3 ;;
+esac
+
+# Phase 3 may still run unless a later, post-gate level decision/user choice skips it.
+# Charge the full panel conservatively except when a pre-known L1 Quick level makes
+# Phase 3 structurally unreachable before the gate.
+ZPLAN_DISPATCH_PHASE3_CONSULTANTS=5
+if [[ "$PLANNING_MODE" == "intent" && "${INTENT_LEVEL_CONFIG:-auto}" == "quick" ]]; then
+  ZPLAN_DISPATCH_PHASE3_CONSULTANTS=0
+fi
+
+# Phase 7 remains a possible final-review panel before the gate; keep the conservative panel count.
+ZPLAN_DISPATCH_PHASE7_CONSULTANTS=5
+
+ZPLAN_DISPATCH_TASK_TREE_GENERATOR=0
+if [[ "$PLANNING_MODE" == "intent" ]]; then
+  ZPLAN_DISPATCH_TASK_TREE_GENERATOR=1
+fi
+
+GATE_JSON="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/pre-run-cost-gate.sh" \
+  z-plan hard "$RUN" \
+  --dispatch \
+    planning_mode_full="$ZPLAN_DISPATCH_PLANNING_MODE_FULL" \
+    intent_level_depth="$ZPLAN_DISPATCH_INTENT_LEVEL_DEPTH" \
+    doc_fetcher="$ZPLAN_DISPATCH_DOC_FETCHER" \
+    explore="$ZPLAN_DISPATCH_EXPLORE" \
+    phase3_consultants="$ZPLAN_DISPATCH_PHASE3_CONSULTANTS" \
+    phase7_consultants="$ZPLAN_DISPATCH_PHASE7_CONSULTANTS" \
+    task_tree_generator="$ZPLAN_DISPATCH_TASK_TREE_GENERATOR" \
+  2>/dev/null)" || GATE_JSON=""
+
+# Parse and normalize the helper's single JSON object. The raw helper output is never logged.
+# If the helper invocation failed, the JSON is malformed, or required estimate fields are
+# missing, convert that condition into a sanitized ask/halt branch rather than emitting the
+# raw payload.
+GATE_HELPER_STATUS=ok
+GATE_PARSE_STATUS=ok
+GATE_FIELDS_STATUS=ok
+GATE_SANITIZED_ERROR=""
+GATE_NORMALIZED_JSON="$(python3 - "$GATE_JSON" <<'PY'
+import json, sys
+raw = sys.argv[1]
+try:
+    d = json.loads(raw)
+except Exception:
+    print(json.dumps({"ok": False, "error": "malformed_helper_json"}))
+    raise SystemExit(0)
+
+def as_int(value, default=0):
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+est = d.get("estimate")
+missing = []
+if not isinstance(est, dict):
+    est = {}
+    missing.extend(["estimated_tokens", "confidence", "basis", "range_high"])
+for key in ("estimated_tokens", "confidence", "basis"):
+    if key not in est or est.get(key) in (None, ""):
+        missing.append(key)
+if "range_high" not in est and "range_high" not in d:
+    missing.append("range_high")
+invalid = []
+for key in ("estimated_tokens", "range_high"):
+    value = est.get(key, d.get(key))
+    if value not in (None, "") and as_int(value, None) is None:
+        invalid.append(key)
+
+out = {
+    "ok": True,
+    "disposition": d.get("disposition") or "ask",
+    "human_block": d.get("human_block") or "Token estimate unavailable.",
+    "estimated_tokens": as_int(est.get("estimated_tokens"), 0),
+    "confidence": est.get("confidence") or "low",
+    "basis": est.get("basis") or "unknown",
+    "rule_id": d.get("rule_id") or d.get("rule", {}).get("id"),
+    "range_high": est.get("range_high", d.get("range_high")),
+    "missing_fields": sorted(set(missing + invalid)),
+}
+print(json.dumps(out, separators=(",", ":")))
+PY
+)"
+if [[ -z "$GATE_JSON" ]]; then
+  GATE_HELPER_STATUS=failed
+  GATE_SANITIZED_ERROR="helper_invocation_failure"
+fi
+if [[ "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("ok"))' "$GATE_NORMALIZED_JSON" 2>/dev/null)" != "True" ]]; then
+  GATE_PARSE_STATUS=malformed
+  GATE_SANITIZED_ERROR="${GATE_SANITIZED_ERROR:-malformed_helper_json}"
+fi
+
+GATE_DISPOSITION="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("disposition","ask"))' "$GATE_NORMALIZED_JSON" 2>/dev/null || echo ask)"
+GATE_HUMAN_BLOCK="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("human_block","Token estimate unavailable."))' "$GATE_NORMALIZED_JSON" 2>/dev/null || echo "Token estimate unavailable.")"
+GATE_EST_TOKENS="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("estimated_tokens",0))' "$GATE_NORMALIZED_JSON" 2>/dev/null || echo 0)"
+GATE_CONFIDENCE="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("confidence","low"))' "$GATE_NORMALIZED_JSON" 2>/dev/null || echo low)"
+GATE_BASIS="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("basis","unknown"))' "$GATE_NORMALIZED_JSON" 2>/dev/null || echo unknown)"
+GATE_RULE_ID="$(python3 -c 'import json,sys; v=json.loads(sys.argv[1]).get("rule_id"); print("" if v is None else v)' "$GATE_NORMALIZED_JSON" 2>/dev/null || true)"
+GATE_RANGE_HIGH="$(python3 -c 'import json,sys; v=json.loads(sys.argv[1]).get("range_high"); print("" if v is None else v)' "$GATE_NORMALIZED_JSON" 2>/dev/null || true)"
+GATE_MISSING_FIELDS="$(python3 -c 'import json,sys; print(",".join(json.loads(sys.argv[1]).get("missing_fields",[])))' "$GATE_NORMALIZED_JSON" 2>/dev/null || true)"
+if [[ -n "$GATE_MISSING_FIELDS" ]]; then
+  GATE_FIELDS_STATUS=missing
+  GATE_SANITIZED_ERROR="${GATE_SANITIZED_ERROR:-missing_estimate_fields}"
+fi
+
+# Helper problems degrade to the ask path when a user can decide. In no-ask/non-interactive
+# drivers they are terminal halts: do not proceed after an untrusted or incomplete estimate.
+if [[ "$GATE_HELPER_STATUS" != ok || "$GATE_PARSE_STATUS" != ok || "$GATE_FIELDS_STATUS" != ok ]]; then
+  if [[ -n "${Z_HARNESS_NO_ASK:-}" ]]; then
+    GATE_DISPOSITION="halt"
+  else
+    GATE_DISPOSITION="ask"
+    GATE_HUMAN_BLOCK="Token estimate unavailable or incomplete (${GATE_SANITIZED_ERROR}). Proceed with /z-plan, or abandon before any expensive planning subagents run?"
+  fi
+fi
+
+printf '%s\n' "$GATE_HUMAN_BLOCK"
+```
+
+<!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the pre-subagent cost gate via their native channel when the normalized disposition is `ask`. Silent omission is forbidden. -->
+
+### Cost gate telemetry contract
+
+`cost_gate_decision` is reserved for **exactly one terminal `/z-plan` cost-gate decision per run**. It is emitted before any expensive Agent dispatch and never emitted again on later success paths. Every terminal branch uses the same payload builder and includes these fields when known:
+
+- `command: "z-plan"`
+- `choice`: one of `auto_proceed`, `proceed`, `abandon`, `halt`, or `interrupted`
+- `estimated_tokens`, `confidence`, `basis`
+- `disposition`: normalized helper disposition that led to the branch (`auto_proceed`, `ask`, `halt`, `unhandled_gate`, or the sanitized fallback disposition)
+- `rule_id`
+- `range_high`
+- `choice_source`: `helper`, `user`, `policy`, `sanitized_helper_error`, or `driver_interrupt`
+- `attempt_count`: terminal count of cost reduction / re-estimate attempts
+- optional `reason`: sanitized reason such as `gate_policy_halt`, `unhandled_gate`, `helper_invocation_failure`, `malformed_helper_json`, `missing_estimate_fields`, `user_abandoned`, or `user_wait_interrupted`
+
+Nonterminal reduction / re-estimate attempts MUST NOT emit `cost_gate_decision`. They emit `cost_gate_reestimate_attempt` instead, with: `command`, `run_id`, `gate_id`, `attempt_index`, changed driver(s) (for example `changed_drivers`), `prior_range_high`, `new_range_high`, `disposition`, and terminal-correlation fields (`terminal_event_kind: "cost_gate_decision"` plus the same `gate_id`).
+
+Use this logging shape in each terminal branch; bind `ZPLAN_COST_CHOICE`, `ZPLAN_COST_CHOICE_SOURCE`, and optional `ZPLAN_COST_REASON` once, then call it **once**:
+
+```bash
+ZPLAN_COST_DECISION_EMITTED=0
+ZPLAN_COST_ATTEMPT_COUNT="${ZPLAN_COST_ATTEMPT_COUNT:-0}"
+ZPLAN_COST_REESTIMATE_MAX="${ZPLAN_COST_REESTIMATE_MAX:-2}"
+ZPLAN_COST_GATE_ID="${RUN}:z-plan:pre-subagent-cost-gate"
+emit_zplan_cost_gate_decision_once() {
+  if [[ "${ZPLAN_COST_DECISION_EMITTED:-0}" -eq 1 ]]; then
+    return 0
+  fi
+  ZPLAN_COST_DECISION_JSON="$(python3 - \
+    "$ZPLAN_COST_CHOICE" "$GATE_EST_TOKENS" "$GATE_CONFIDENCE" "$GATE_BASIS" \
+    "$GATE_DISPOSITION" "$GATE_RULE_ID" "$GATE_RANGE_HIGH" "$ZPLAN_COST_CHOICE_SOURCE" \
+    "$ZPLAN_COST_ATTEMPT_COUNT" "${ZPLAN_COST_REASON:-}" "$ZPLAN_COST_GATE_ID" <<'PY'
+import json, sys
+def as_int(value, default=0):
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+choice, est, confidence, basis, disposition, rule_id, range_high, source, attempts, reason, gate_id = sys.argv[1:12]
+payload = {
+    "command": "z-plan",
+    "choice": choice,
+    "estimated_tokens": as_int(est, 0),
+    "confidence": confidence,
+    "basis": basis,
+    "disposition": disposition,
+    "choice_source": source,
+    "gate_id": gate_id,
+}
+if rule_id:
+    payload["rule_id"] = rule_id
+if range_high:
+    payload["range_high"] = as_int(range_high, 0)
+if attempts:
+    payload["attempt_count"] = as_int(attempts, 0)
+if reason:
+    payload["reason"] = reason
+print(json.dumps(payload, separators=(",", ":")))
+PY
+)"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
+    "$RUN" cost_gate_decision "$ZPLAN_COST_DECISION_JSON"
+  ZPLAN_COST_DECISION_EMITTED=1
+}
+```
+
+### Cost gate reduction / re-estimate UX (bounded)
+
+The interactive `ask` branch offers a bounded chance to lower already-known `/z-plan` cost drivers and re-run the same helper before any expensive Agent dispatch. This is not a budget bypass: every re-estimate still calls `scripts/pre-run-cost-gate.sh`, every terminal path still emits exactly one `cost_gate_decision`, and every nonterminal reduction emits `cost_gate_reestimate_attempt`.
+
+Loop rules:
+
+- `ZPLAN_COST_REESTIMATE_MAX=2`. After two valid reduction attempts, the prompt MUST remove all reduction options; the user can only proceed with the current estimate or abandon.
+- Default action: **Proceed with current estimate (default)**. Drivers may bind Enter/Return to this option only when they can distinguish it from cancellation/timeout.
+- Invalid, malformed, unavailable, or driver-unknown choices take the conservative path: set `_COST_GATE_CHOICE=interrupted`, emit `user_wait_end` with `disposition=interrupted`, then use the existing interrupted terminal branch (`choice=interrupted`, `choice_source=driver_interrupt`, halt-finalize). Never treat an unrecognized reduction token as proceed.
+- If a reduction re-estimate refreshes `GATE_DISPOSITION=auto_proceed`, that helper approval is terminal: emit the single `cost_gate_decision` with `choice=auto_proceed` / `choice_source=helper` and continue without printing another prompt or recording a user proceed.
+- Reduction options are shown only in `PLANNING_MODE=intent`. Legacy `planning_mode=full` has no cost-reduction option in this loop because reducing `planning_mode_full` would change the planning paradigm; users must abandon and rerun with an explicit flag/config if they want a different mode.
+- Reducible drivers in this loop are limited to:
+  - `intent_level_depth`: explicit user downgrade to L2 Standard or L1 Quick.
+  - `phase3_consultants`: only through the L1 Quick downgrade, which sets `INTENT_CONSULT_POLICY=skip` and updates the dispatch count to 0.
+- Non-reducible here: `doc_fetcher` (required when docs exist), `task_tree_generator` (required for intent runs), `phase7_consultants` (no existing downstream run-state variable controls a per-run skip), and `explore` (Phase 1's cap is config-governed; do not silently mutate config from this gate).
+
+Exact prompt/options while attempts remain:
+
+```text
+<GATE_HUMAN_BLOCK>
+
+Current high-end estimate: <GATE_RANGE_HIGH or unknown> tokens
+Confidence: <GATE_CONFIDENCE>; basis: <GATE_BASIS>
+Reduction attempts remaining: <ZPLAN_COST_REESTIMATE_MAX - ZPLAN_COST_ATTEMPT_COUNT>
+
+Choose a cost-gate action:
+1. Proceed with current estimate (default)
+2. Reduce: force L2 Standard — full intent, optional Phase-3 consult
+3. Reduce: force L1 Quick — thin intent, skip Phase-3 consult
+4. Abandon before expensive planning subagents
+```
+
+Exact prompt/options after the cap:
+
+```text
+<GATE_HUMAN_BLOCK>
+
+Reduction attempt limit reached (2). Choose a terminal action:
+1. Proceed with current estimate (default)
+2. Abandon before expensive planning subagents
+```
+
+Reduction state mutations are authoritative run state, not display-only. The downgrade MUST update the variables consumed by later mode/consult phases and the dispatch variables passed into the next helper call:
+
+```bash
+zplan_apply_cost_reduction() {
+  _ZPLAN_COST_REDUCTION="$1"
+  ZPLAN_COST_CHANGED_DRIVERS_JSON="[]"
+
+  case "$_ZPLAN_COST_REDUCTION" in
+    force_l2_standard)
+      # Explicit L3/auto -> L2 downgrade. This is the only way the cost gate may
+      # reduce deep semantics to standard semantics.
+      PLANNING_MODE="intent"
+      INTENT_LEVEL="standard"
+      INTENT_LEVEL_CONFIG="standard"   # Step 1 skips intent-classifier later.
+      INTENT_LEVEL_SOURCE="user-cost-reduction"
+      INTENT_LEVEL_REASON="cost gate reduction: user forced L2 Standard"
+      INTENT_CONSULT_POLICY="optional" # Step 3/Phase 3 later read the same policy.
+      ZPLAN_DISPATCH_INTENT_LEVEL_DEPTH=1
+      ZPLAN_COST_APPROVED_INTENT_LEVEL_MAX=1
+      # L2 consult is optional later, but the pre-gate estimate stays conservative
+      # and keeps charging the Phase-3 panel until the user explicitly skips it there.
+      ZPLAN_DISPATCH_PHASE3_CONSULTANTS=5
+      ZPLAN_COST_CHANGED_DRIVERS_JSON='["intent_level_depth","intent_level","intent_consult_policy"]'
+      ;;
+
+    force_l1_quick)
+      # Explicit downgrade to L1 Quick. This is the only cost-gate path that
+      # changes Phase-3 consult dispatch to zero before Phase 3.
+      PLANNING_MODE="intent"
+      INTENT_LEVEL="quick"
+      INTENT_LEVEL_CONFIG="quick"      # Step 1 skips intent-classifier later.
+      INTENT_LEVEL_SOURCE="user-cost-reduction"
+      INTENT_LEVEL_REASON="cost gate reduction: user forced L1 Quick"
+      INTENT_CONSULT_POLICY="skip"     # Phase 3 structural guard consumes this.
+      ZPLAN_DISPATCH_INTENT_LEVEL_DEPTH=0
+      ZPLAN_COST_APPROVED_INTENT_LEVEL_MAX=0
+      ZPLAN_DISPATCH_PHASE3_CONSULTANTS=0
+      ZPLAN_COST_CHANGED_DRIVERS_JSON='["intent_level_depth","intent_level","intent_consult_policy","phase3_consultants"]'
+      ;;
+
+    *)
+      return 2
+      ;;
+  esac
+
+  export PLANNING_MODE INTENT_LEVEL INTENT_LEVEL_CONFIG INTENT_LEVEL_SOURCE INTENT_LEVEL_REASON INTENT_CONSULT_POLICY
+  export ZPLAN_DISPATCH_INTENT_LEVEL_DEPTH ZPLAN_DISPATCH_PHASE3_CONSULTANTS ZPLAN_COST_APPROVED_INTENT_LEVEL_MAX
+}
+```
+
+Re-estimate pseudocode (reuse the exact helper invocation and normalization rules from the initial estimate; raw helper output is still never logged):
+
+```bash
+zplan_reestimate_cost_gate_after_reduction() {
+  _ZPLAN_PRIOR_RANGE_HIGH="$GATE_RANGE_HIGH"
+
+  GATE_JSON="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/pre-run-cost-gate.sh" \
+    z-plan hard "$RUN" \
+    --dispatch \
+      planning_mode_full="$ZPLAN_DISPATCH_PLANNING_MODE_FULL" \
+      intent_level_depth="$ZPLAN_DISPATCH_INTENT_LEVEL_DEPTH" \
+      doc_fetcher="$ZPLAN_DISPATCH_DOC_FETCHER" \
+      explore="$ZPLAN_DISPATCH_EXPLORE" \
+      phase3_consultants="$ZPLAN_DISPATCH_PHASE3_CONSULTANTS" \
+      phase7_consultants="$ZPLAN_DISPATCH_PHASE7_CONSULTANTS" \
+      task_tree_generator="$ZPLAN_DISPATCH_TASK_TREE_GENERATOR" \
+    2>/dev/null)" || GATE_JSON=""
+
+  # Re-run the same parse/normalize block used above, then refresh:
+  # GATE_DISPOSITION, GATE_HUMAN_BLOCK, GATE_EST_TOKENS, GATE_CONFIDENCE,
+  # GATE_BASIS, GATE_RULE_ID, GATE_RANGE_HIGH, and GATE_SANITIZED_ERROR.
+
+  ZPLAN_COST_ATTEMPT_COUNT=$((ZPLAN_COST_ATTEMPT_COUNT + 1))
+  ZPLAN_COST_REESTIMATE_JSON="$(python3 - \
+    "$RUN" "$ZPLAN_COST_GATE_ID" "$ZPLAN_COST_ATTEMPT_COUNT" \
+    "$ZPLAN_COST_CHANGED_DRIVERS_JSON" "$_ZPLAN_PRIOR_RANGE_HIGH" \
+    "$GATE_RANGE_HIGH" "$GATE_DISPOSITION" <<'PY'
+import json, sys
+run_id, gate_id, attempt, changed, prior, new, disposition = sys.argv[1:8]
+def as_int(value, default=0):
+    try:
+        return int(value)
+    except Exception:
+        return default
+payload = {
+    "command": "z-plan",
+    "run_id": run_id,
+    "gate_id": gate_id,
+    "attempt_index": int(attempt),
+    "changed_drivers": json.loads(changed),
+    "prior_range_high": as_int(prior, 0),
+    "new_range_high": as_int(new, 0),
+    "disposition": disposition,
+    "terminal_event_kind": "cost_gate_decision",
+}
+print(json.dumps(payload, separators=(",", ":")))
+PY
+)"
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" \
+    "$RUN" cost_gate_reestimate_attempt "$ZPLAN_COST_REESTIMATE_JSON"
+}
+```
+
+L3/deep semantics are never reduced implicitly. The only cost-gate paths that lower them are the explicit `force_l2_standard` or `force_l1_quick` options above, both of which set `INTENT_LEVEL_CONFIG`, update `ZPLAN_COST_APPROVED_INTENT_LEVEL_MAX`, and export `INTENT_LEVEL` / `INTENT_CONSULT_POLICY` for downstream phases. Later intent-level override handling MUST treat `ZPLAN_COST_APPROVED_INTENT_LEVEL_MAX` as the maximum already-gated depth; choosing a deeper level requires a fresh hard cost-gate re-estimate before any expensive Agent dispatch.
+
+### Cost gate terminal cleanup helper
+
+The gate runs after `run-brief.sh init` and after the active-plan register attempt. Every terminal post-register failure (`abandon`, `halt`, `unhandled_gate`, helper failure/malformed/missing-field no-ask halt, or interrupted wait) MUST reuse **Run Brief — halt finalize** semantics. The invariant is finalize/render/require before cleanup, then release-before-deregister:
+
+```bash
+zplan_cost_gate_halt_finalize() {
+  RB_HALT_REASON="$1"
+  export RUN_BRIEF_PROFILE=full
+  export RUN_BRIEF_ARTIFACT="${RUN_BRIEF_ARTIFACT:-}"
+  export RUN_BRIEF_ARTIFACT_FALLBACKS="${RUN_BRIEF_ARTIFACT_FALLBACKS:-PLAN.md:SPEC.md}"
+  RB_SH="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/run-brief.sh"
+  bash "$RB_SH" set-section --run "$RUN" --section outcome --value "Halted: ${RB_HALT_REASON}"
+  bash "$RB_SH" set-section --run "$RUN" --section next --json /dev/stdin <<'JSON'
+{"label": "Review plan status and retry or escalate", "command": null}
+JSON
+  # Run the standard Run Brief finalize sequence before any claim release or registry deregister.
+  # This is the inline equivalent of `<!-- include: _fragments/run-brief-finalize.md -->`
+  # for the pre-subagent cost gate helper.
+  RB_PY="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-run-brief.py"
+  bash "$RB_SH" finalize --run "$RUN"
+  COST_SUMMARY_TEXT=""
+  COST_RENDERER="${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/render-cost-summary.py"
+  if [ -f "$COST_RENDERER" ] && [ -f "$CURRENT_ARCHIVE_DIR/events.jsonl" ]; then
+    COST_SUMMARY_TEXT="$(python3 "$COST_RENDERER" "$CURRENT_ARCHIVE_DIR/events.jsonl" 2>/dev/null || true)"
+  fi
+  if [[ -n "$COST_SUMMARY_TEXT" ]]; then
+    python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat --cost-summary-text "$COST_SUMMARY_TEXT"
+  else
+    python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format chat
+  fi
+  if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end)" = yes ]; then
+    PUSH_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+    PushNotification("$PUSH_BODY")
+  fi
+  if [ "$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" should-notify --event phase_end --channel discord)" = yes ]; then
+    DISCORD_TITLE="${RUN_BRIEF_INTENT:-z-harness run}"
+    DISCORD_BODY="$(python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --format push)"
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/notify-discord.sh" "$DISCORD_TITLE" "$DISCORD_BODY" || true
+  fi
+  python3 "$RB_PY" --run-dir "$CURRENT_ARCHIVE_DIR" --require
+  RB_REQUIRE_RC=$?
+  if [[ "$RB_REQUIRE_RC" -ne 0 ]]; then
+    echo "run-brief: --require failed (missing or invalid run-brief.json)" >&2
+  fi
+  FINALIZE_STATUS=aborted
+  if [[ "${CLAIM_HELD:-0}" -eq 1 ]]; then
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" release \
+      --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+      --command /z-plan || true
+  fi
+  if [[ "${REG_RC:-1}" -eq 0 ]]; then
+    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+      --run-id "$RUN" --status aborted 2>/dev/null || true
+  fi
+}
+```
+
+Cleanup matrix:
+
+| Branch | Terminal event | Cleanup / next step |
+|---|---|---|
+| `auto_proceed` | `choice=auto_proceed`, `choice_source=helper`, `disposition=auto_proceed` | Continue; no AskUser; no cleanup. |
+| `ask` → Proceed | `choice=proceed`, `choice_source=user`, `disposition=ask` | Continue after `user_wait_end`; no cleanup. |
+| `ask` → Reduce / re-estimate | Nonterminal only: emit `cost_gate_reestimate_attempt`; do **not** emit `cost_gate_decision` | Mutate the authoritative intent/dispatch variables, re-run the helper, print the recomputed human block, and loop until proceed/abandon, cap, interruption, or policy halt. |
+| `ask` → Re-estimate returns `auto_proceed` | `choice=auto_proceed`, `choice_source=helper`, `disposition=auto_proceed`, `attempt_count>0` | Continue immediately; no extra AskUser and no user-proceed terminal event. |
+| `ask` → Re-estimate returns `halt` | `choice=halt`, `choice_source=policy`, `reason=gate_policy_halt`, `attempt_count>0` | Run `zplan_cost_gate_halt_finalize "cost gate policy halt"`; exit 1. |
+| `ask` → Abandon | `choice=abandon`, `choice_source=user`, `reason=user_abandoned` | Run `zplan_cost_gate_halt_finalize "cost gate abandoned by user"`; exit 1. |
+| `halt` | `choice=halt`, `choice_source=policy`, `reason=gate_policy_halt` | Run `zplan_cost_gate_halt_finalize "cost gate policy halt"`; exit 1. |
+| `unhandled_gate` | `choice=halt`, `choice_source=policy`, `disposition=unhandled_gate`, `reason=unhandled_gate` | Run `zplan_cost_gate_halt_finalize "cost gate unhandled disposition"`; exit 1. |
+| Helper invocation failure | Interactive: ask branch with `reason=helper_invocation_failure`; no-ask: terminal `choice=halt` | If terminal, run halt-finalize; if user proceeds, continue only after the terminal `proceed` event. |
+| Malformed helper JSON | Interactive: ask branch with `reason=malformed_helper_json`; no-ask: terminal `choice=halt` | Never log raw helper output; if terminal, run halt-finalize. |
+| Missing estimate fields | Interactive: ask branch with `reason=missing_estimate_fields`; no-ask: terminal `choice=halt` | Never invent confidence/basis beyond safe defaults; if terminal, run halt-finalize. |
+| Interrupted user wait after claim/register | `choice=interrupted`, `choice_source=driver_interrupt`, `reason=user_wait_interrupted` | Emit `user_wait_end` with interrupted disposition, then halt-finalize; release guarded by `CLAIM_HELD`, deregister only when `REG_RC==0`. |
+
+Sanitized helper-error expansion (these are the only allowed outcomes once `GATE_SANITIZED_ERROR` is set):
+
+| Condition | Interactive outcome | No-ask / noninteractive outcome |
+|---|---|---|
+| `helper_invocation_failure` | Ask with safe defaults. Proceed emits one terminal `cost_gate_decision` (`choice=proceed`, `reason=helper_invocation_failure`) and continues; Abandon/Interrupted emit one terminal decision and halt-finalize. | Emit one terminal `cost_gate_decision` (`choice=halt`, `choice_source=sanitized_helper_error`, `reason=helper_invocation_failure`), then halt-finalize. |
+| `malformed_helper_json` | Ask with safe defaults. Proceed emits one terminal `cost_gate_decision` (`choice=proceed`, `reason=malformed_helper_json`) and continues; Abandon/Interrupted emit one terminal decision and halt-finalize. Raw helper text is never logged. | Emit one terminal `cost_gate_decision` (`choice=halt`, `choice_source=sanitized_helper_error`, `reason=malformed_helper_json`), then halt-finalize. Raw helper text is never logged. |
+| `missing_estimate_fields` | Ask with safe defaults. Proceed emits one terminal `cost_gate_decision` (`choice=proceed`, `reason=missing_estimate_fields`) and continues; Abandon/Interrupted emit one terminal decision and halt-finalize. | Emit one terminal `cost_gate_decision` (`choice=halt`, `choice_source=sanitized_helper_error`, `reason=missing_estimate_fields`), then halt-finalize. |
+
+Branch on normalized `GATE_DISPOSITION` before any Agent dispatch:
+
+```bash
+case "$GATE_DISPOSITION" in
+  auto_proceed)
+    ZPLAN_COST_CHOICE=auto_proceed
+    ZPLAN_COST_CHOICE_SOURCE=helper
+    emit_zplan_cost_gate_decision_once
+    ;;
+
+  ask)
+    while :; do
+      # Load-bearing heartbeat BEFORE each user wait.
+      if [[ "${CLAIM_HELD:-0}" -eq 1 ]]; then
+        bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-claim.sh" heartbeat \
+          --slug "$Z_HARNESS_SLUG" --run-id "$RUN" --session "$Z_HARNESS_SESSION_ID" \
+          --command /z-plan || true
+      fi
+      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_start \
+        '{"phase":"pre-subagent-cost-gate","reason":"cost_gate"}'
+
+      if [[ "${PLANNING_MODE:-intent}" == "intent" && "${ZPLAN_COST_ATTEMPT_COUNT:-0}" -lt "${ZPLAN_COST_REESTIMATE_MAX:-2}" ]]; then
+        AskUserQuestion(
+          header: "$GATE_HUMAN_BLOCK
+
+Current high-end estimate: ${GATE_RANGE_HIGH:-unknown} tokens
+Confidence: ${GATE_CONFIDENCE}; basis: ${GATE_BASIS}
+Reduction attempts remaining: $(( ${ZPLAN_COST_REESTIMATE_MAX:-2} - ${ZPLAN_COST_ATTEMPT_COUNT:-0} ))
+
+Choose a cost-gate action:",
+          options: [
+            "Proceed with current estimate (default)",
+            "Reduce: force L2 Standard — full intent, optional Phase-3 consult",
+            "Reduce: force L1 Quick — thin intent, skip Phase-3 consult",
+            "Abandon before expensive planning subagents"
+          ]
+        )
+      else
+        if [[ "${PLANNING_MODE:-intent}" != "intent" ]]; then
+          _ZPLAN_COST_TERMINAL_REASON="No cost-reduction options are available for planning_mode=${PLANNING_MODE}."
+        else
+          _ZPLAN_COST_TERMINAL_REASON="Reduction attempt limit reached (${ZPLAN_COST_REESTIMATE_MAX:-2})."
+        fi
+        AskUserQuestion(
+          header: "$GATE_HUMAN_BLOCK
+
+${_ZPLAN_COST_TERMINAL_REASON} Choose a terminal action:",
+          options: [
+            "Proceed with current estimate (default)",
+            "Abandon before expensive planning subagents"
+          ]
+        )
+      fi
+
+      # _COST_GATE_CHOICE must be captured as one of:
+      # proceed, reduce_force_l2_standard, reduce_force_l1_quick, abandon, interrupted.
+      # A re-estimate may also set the internal terminal token auto_proceed_after_reestimate.
+      # Empty/default UI selection may become proceed; malformed/unknown tokens MUST become interrupted.
+      case "$_COST_GATE_CHOICE" in
+        reduce_force_l2_standard|reduce_force_l1_quick)
+          if [[ "${ZPLAN_COST_ATTEMPT_COUNT:-0}" -ge "${ZPLAN_COST_REESTIMATE_MAX:-2}" ]]; then
+            _COST_GATE_CHOICE=interrupted
+            bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end \
+              '{"phase":"pre-subagent-cost-gate","reason":"cost_gate","disposition":"interrupted"}'
+            break
+          fi
+          bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end \
+            "$(printf '{"phase":"pre-subagent-cost-gate","reason":"cost_gate","disposition":"%s"}' "$_COST_GATE_CHOICE")"
+          case "$_COST_GATE_CHOICE" in
+            reduce_force_l2_standard) zplan_apply_cost_reduction force_l2_standard ;;
+            reduce_force_l1_quick)    zplan_apply_cost_reduction force_l1_quick ;;
+          esac || { _COST_GATE_CHOICE=interrupted; break; }
+          zplan_reestimate_cost_gate_after_reduction
+          if [[ "$GATE_DISPOSITION" == "auto_proceed" ]]; then
+            _COST_GATE_CHOICE=auto_proceed_after_reestimate
+            break
+          elif [[ "$GATE_DISPOSITION" == "halt" ]]; then
+            _COST_GATE_CHOICE=policy_halt_after_reestimate
+            break
+          fi
+          printf '%s\n' "$GATE_HUMAN_BLOCK"
+          continue
+          ;;
+        proceed|abandon|interrupted)
+          bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end \
+            "$(printf '{"phase":"pre-subagent-cost-gate","reason":"cost_gate","disposition":"%s"}' "$_COST_GATE_CHOICE")"
+          break
+          ;;
+        *)
+          _COST_GATE_CHOICE=interrupted
+          bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" user_wait_end \
+            '{"phase":"pre-subagent-cost-gate","reason":"cost_gate","disposition":"interrupted"}'
+          break
+          ;;
+      esac
+    done
+
+    case "$_COST_GATE_CHOICE" in
+      auto_proceed_after_reestimate)
+        ZPLAN_COST_CHOICE=auto_proceed
+        ZPLAN_COST_CHOICE_SOURCE=helper
+        ZPLAN_COST_REASON=""
+        emit_zplan_cost_gate_decision_once
+        ;;
+      proceed)
+        ZPLAN_COST_CHOICE=proceed
+        ZPLAN_COST_CHOICE_SOURCE=user
+        ZPLAN_COST_REASON="${GATE_SANITIZED_ERROR:-}"
+        emit_zplan_cost_gate_decision_once
+        ;;
+      abandon)
+        ZPLAN_COST_CHOICE=abandon
+        ZPLAN_COST_CHOICE_SOURCE=user
+        ZPLAN_COST_REASON="${GATE_SANITIZED_ERROR:-user_abandoned}"
+        emit_zplan_cost_gate_decision_once
+        zplan_cost_gate_halt_finalize "cost gate abandoned by user"
+        exit 1
+        ;;
+      policy_halt_after_reestimate)
+        ZPLAN_COST_CHOICE=halt
+        ZPLAN_COST_CHOICE_SOURCE=policy
+        ZPLAN_COST_REASON=gate_policy_halt
+        emit_zplan_cost_gate_decision_once
+        zplan_cost_gate_halt_finalize "cost gate policy halt"
+        exit 1
+        ;;
+      *)
+        ZPLAN_COST_CHOICE=interrupted
+        ZPLAN_COST_CHOICE_SOURCE=driver_interrupt
+        ZPLAN_COST_REASON=user_wait_interrupted
+        emit_zplan_cost_gate_decision_once
+        zplan_cost_gate_halt_finalize "cost gate user wait interrupted"
+        exit 1
+        ;;
+    esac
+    ;;
+
+  halt)
+    ZPLAN_COST_CHOICE=halt
+    ZPLAN_COST_CHOICE_SOURCE="${GATE_SANITIZED_ERROR:+sanitized_helper_error}"
+    ZPLAN_COST_CHOICE_SOURCE="${ZPLAN_COST_CHOICE_SOURCE:-policy}"
+    ZPLAN_COST_REASON="${GATE_SANITIZED_ERROR:-gate_policy_halt}"
+    emit_zplan_cost_gate_decision_once
+    zplan_cost_gate_halt_finalize "cost gate policy halt"
+    exit 1
+    ;;
+
+  unhandled_gate|*)
+    ZPLAN_COST_CHOICE=halt
+    ZPLAN_COST_CHOICE_SOURCE=policy
+    ZPLAN_COST_REASON=unhandled_gate
+    GATE_DISPOSITION=unhandled_gate
+    emit_zplan_cost_gate_decision_once
+    zplan_cost_gate_halt_finalize "cost gate unhandled disposition"
+    exit 1
+    ;;
+esac
+```
+
+Never emit a generic "successful gate" `cost_gate_decision` after this branch; the successful paths above are already logged once.
+
+## Artifact Scout classifier (post-gate, before first expensive dispatch)
+
+Run this only after the hard cost gate has produced a terminal proceed/auto-proceed event and only when `artifact-scout-inventory.json` has nontrivial candidates, active/worktree overlaps, partial/truncated sources, or exact-slug/precontext signals. If the inventory is a clean no-match, skip the Agent and continue. This is the first allowed `artifact-scout` Agent position for `/z-plan`; it runs before deferred `planning-router`, `intent-classifier`, Phase 1 `doc-fetcher`, Explore, consultants, or task-tree generation.
+
+```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this artifact-scout
+     requirement and skip the Agent() call. Skipping means continue without scout routing. -->
+Agent(
+  subagent_type="artifact-scout",
+  description="Artifact scout for z-plan <slug>",
+  prompt="current_command: /z-plan
+task_or_topic: <original task>
+route_chain_json: <current route chain JSON>
+repo_root: <abs repo root>
+inventory_json_path: $Z_HARNESS_PLAN_DIR/archive/$RUN/artifact-scout-inventory.json
+
+Inline inventory JSON:
+<contents printed by scripts/artifact-scout-inventory.py>"
+)
+```
+
+Write the raw classifier response to `$Z_HARNESS_PLAN_DIR/archive/$RUN/artifact-scout.md`. Parse it with the `artifact-scout` contract. Emit `artifact_scout_classified` for every well-formed response, `artifact_scout_warning` for `STATUS: warned` or warning-only findings, and `artifact_scout_route` only when `ROUTE_RECOMMENDATION` is not `continue` and the JSON has `route_chain_effect: "write_route_decision"`.
+
+Route boundary: warning-only output never writes `route-decision.md`, never emits `artifact_scout_route`, and never advances `route_chain`. Only `ask_user` or route recommendations with `route_chain_effect: "write_route_decision"` may write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md`, emit `plan_route_decision`, and append the artifact-scout hop to `route_chain`.
+
+
 ### Branch: `planning_mode=full` (legacy SDD path)
 
 If `PLANNING_MODE == "full"`, set `INTENT_LEVEL=""` and proceed directly to Phase 0. All subsequent phases run exactly as documented below — no classifier dispatch, no INTENT.md write. The legacy SPEC/PLAN/TASKS path is unchanged.
@@ -485,15 +1180,19 @@ If `PLANNING_MODE == "intent"` (the default), run the intent-classifier to choos
 
 **Step 1 — Resolve the level.**
 
-If `INTENT_LEVEL_CONFIG` is not `auto` (i.e. the user forced a level via config), skip the classifier and use the forced value directly:
+If `INTENT_LEVEL_CONFIG` is one of `quick`, `standard`, or `deep` (i.e. the user forced a level via config, flag, or the pre-subagent cost-reduction gate), skip the classifier and use the forced value directly. `auto` or any unknown value is not a forced level:
 
 ```bash
 if [[ "$PLANNING_MODE" == "intent" ]]; then
-  if [[ "$INTENT_LEVEL_CONFIG" != "auto" ]]; then
-    # Config-forced level: skip classifier entirely. NEVER fall through to parse below.
+  if [[ "$INTENT_LEVEL_CONFIG" =~ ^(quick|standard|deep)$ ]]; then
+    # Forced level: skip classifier entirely. NEVER fall through to parse below.
+    # Preserve explicit flag and cost-gate reduction sources; otherwise this is
+    # a normal config-forced level.
     INTENT_LEVEL="$INTENT_LEVEL_CONFIG"
-    INTENT_LEVEL_SOURCE="config-forced"
-    INTENT_LEVEL_REASON="config-forced: workflow.intent_level=$INTENT_LEVEL_CONFIG"
+    if [[ "$INTENT_LEVEL_SOURCE" != "user-cost-reduction" && "$INTENT_LEVEL_SOURCE" != "flag" ]]; then
+      INTENT_LEVEL_SOURCE="config-forced"
+      INTENT_LEVEL_REASON="config-forced: workflow.intent_level=$INTENT_LEVEL_CONFIG"
+    fi
   else
     # Auto mode: dispatch the intent-classifier (Haiku). Pass forced_level="" so the
     # classifier knows it is in auto mode.
@@ -503,7 +1202,7 @@ if [[ "$PLANNING_MODE" == "intent" ]]; then
 
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must skip the intent-classifier
      Agent() call and default INTENT_LEVEL to "standard" with source "fallback". -->
-If `INTENT_LEVEL_CONFIG == "auto"` and `PLANNING_MODE == "intent"`, dispatch the classifier and capture its return into `INTENT_CLASSIFIER_OUT`. A non-zero exit or empty return triggers the fallback path:
+If `INTENT_LEVEL_CONFIG` is not a forced level and `PLANNING_MODE == "intent"`, dispatch the classifier and capture its return into `INTENT_CLASSIFIER_OUT`. A non-zero exit or empty return triggers the fallback path:
 
 ```
 INTENT_CLASSIFIER_OUT="$(Agent(
@@ -519,7 +1218,7 @@ INTENT_CLASSIFIER_RC=$?
 ```bash
     # Parse classifier output (INTENT_CLASSIFIER_OUT holds the agent's return).
     # This parse block is inside the `else` (auto-mode) branch — it NEVER runs
-    # when INTENT_LEVEL_CONFIG != "auto" (i.e. config-forced case above).
+    # when INTENT_LEVEL_CONFIG is quick/standard/deep (i.e. forced case above).
     if [[ "$INTENT_CLASSIFIER_RC" -ne 0 || -z "$INTENT_CLASSIFIER_OUT" ]]; then
       INTENT_LEVEL="standard"
       INTENT_LEVEL_SOURCE="fallback"
@@ -536,7 +1235,7 @@ INTENT_CLASSIFIER_RC=$?
         INTENT_LEVEL_REASON="classifier parse failed or returned unrecognized level; defaulting standard"
       fi
     fi
-  fi  # end of auto-mode else branch (closes the if [[ "$INTENT_LEVEL_CONFIG" != "auto" ]] block)
+  fi  # end of auto/non-forced else branch (closes the forced-level INTENT_LEVEL_CONFIG check)
 fi
 ```
 
@@ -559,24 +1258,47 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the
      level announcement and offer the override choice via their native channel.
      Silent omission is forbidden — the user must always see the chosen level. -->
-Present an `AskUserQuestion` announcing the chosen level and offering an inline override. Pre-select the classifier's choice as the recommended option:
+Present an `AskUserQuestion` announcing the chosen level and offering an inline override. Pre-select the chosen level as the recommended option. Before building the options, read `ZPLAN_COST_APPROVED_INTENT_LEVEL_MAX` (0=quick, 1=standard, 2=deep; default to 2 only if the variable is absent for a pre-contract resume). The override gate MUST NOT present or accept an option whose rank is greater than this approved maximum. If a driver cannot hide unsupported options and the user selects a too-deep level, it MUST either re-run the hard pre-subagent cost gate with the higher dispatch counts before any expensive Agent dispatch, or treat the selection as invalid/interrupted and halt-finalize; the default `/z-plan` contract is to constrain the options, not to re-gate.
 
+```bash
+case "${ZPLAN_COST_APPROVED_INTENT_LEVEL_MAX:-2}" in
+  0|1|2) ;;
+  *) ZPLAN_COST_APPROVED_INTENT_LEVEL_MAX=2 ;;
+esac
+zplan_intent_level_rank() {
+  case "$1" in
+    quick) echo 0 ;;
+    standard) echo 1 ;;
+    deep) echo 2 ;;
+    *) echo 1 ;;  # safe default matches fallback standard
+  esac
+}
 ```
+
+Build the options from that ceiling; never display a level above the approved rank:
+
+```bash
+ZPLAN_INTENT_LEVEL_OPTIONS=(
+  "<INTENT_LEVEL_LABEL> — proceed (recommended)"
+  "L1 Quick — thin intent, skip consult"
+)
+if [[ "$ZPLAN_COST_APPROVED_INTENT_LEVEL_MAX" -ge 1 ]]; then
+  ZPLAN_INTENT_LEVEL_OPTIONS+=("L2 Standard — full intent, optional consult")
+fi
+if [[ "$ZPLAN_COST_APPROVED_INTENT_LEVEL_MAX" -ge 2 ]]; then
+  ZPLAN_INTENT_LEVEL_OPTIONS+=("L3 Deep — full intent, full cross-LLM consult")
+fi
+
 AskUserQuestion(
   header: "Planning depth: <INTENT_LEVEL_LABEL> (<INTENT_LEVEL>) — <INTENT_LEVEL_REASON>.
            Proceed with this level, or override?",
-  options: [
-    "<INTENT_LEVEL_LABEL> — proceed (recommended)",
-    "L1 Quick — thin intent, skip consult",
-    "L2 Standard — full intent, optional consult",
-    "L3 Deep — full intent, full cross-LLM consult"
-  ]
+  options: ZPLAN_INTENT_LEVEL_OPTIONS
 )
 ```
 
 On user selection:
 - **Proceed (recommended)**: keep `INTENT_LEVEL` as-is.
-- **L1 Quick / L2 Standard / L3 Deep**: set `INTENT_LEVEL` to `quick` / `standard` / `deep` and set `INTENT_LEVEL_SOURCE="user-override"`. Emit `intent_level_override` event:
+- **L1 Quick / L2 Standard / L3 Deep**: first compute `SELECTED_INTENT_LEVEL_RANK="$(zplan_intent_level_rank "$SELECTED_INTENT_LEVEL")"` and verify `SELECTED_INTENT_LEVEL_RANK <= ZPLAN_COST_APPROVED_INTENT_LEVEL_MAX`. If not, do not mutate `INTENT_LEVEL`; either run the fresh hard cost re-gate described above or treat the selection as invalid/interrupted and halt-finalize. Only after the rank check passes, set `INTENT_LEVEL` to `quick` / `standard` / `deep` and set `INTENT_LEVEL_SOURCE="user-override"`. Emit `intent_level_override` event:
   ```bash
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" intent_level_override \
     "$(printf '{"level":"%s","prior_level":"%s","source":"user-override"}' \
@@ -596,7 +1318,7 @@ case "$INTENT_LEVEL" in
   deep)     INTENT_CONSULT_POLICY="full"     ;;
   *)        INTENT_CONSULT_POLICY="optional" ;;  # safe default
 esac
-export INTENT_LEVEL INTENT_LEVEL_SOURCE INTENT_CONSULT_POLICY
+export INTENT_LEVEL INTENT_LEVEL_SOURCE INTENT_CONSULT_POLICY ZPLAN_COST_APPROVED_INTENT_LEVEL_MAX
 ```
 
 **After mode detection, all downstream phases read `PLANNING_MODE` and `INTENT_LEVEL`:**
@@ -1823,7 +2545,9 @@ Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema
 | `sharpen_skipped` | Phase 0 auto-sharpen step skipped (opt-out or not handoff input) | `reason` |
 | `handoff_written` | Phase 9 handoff artifact written to HANDOFF.md | `slug`, `path`, `artifact_kind` |
 | `plan_claim_lost_during_gate` | Heartbeat detected ownership change (exit 9) at a phase boundary or before a user gate; URGENT abort/continue-uncoordinated gate fires | `slug`, `run_id`, `phase` |
-| `intent_level_chosen` | Mode detection resolved the planning depth level (via classifier, config-forced, flag, or fallback) | `level`, `source` (`classifier` / `config-forced` / `flag` / `user-override` / `fallback`), `reason` |
+| `cost_gate_decision` | Exactly one terminal pre-subagent hard cost-gate decision per `/z-plan` run | `command`, `choice`, `estimated_tokens`, `confidence`, `basis`, `disposition`, `rule_id`, `range_high`, `choice_source`, `attempt_count` when known; optional sanitized `reason` |
+| `cost_gate_reestimate_attempt` | Nonterminal cost reduction / re-estimate attempt; never counts as the terminal gate decision | `command`, `run_id`, `gate_id`, `attempt_index`, `changed_drivers`, `prior_range_high`, `new_range_high`, `disposition`, `terminal_event_kind`, terminal-correlation `gate_id` |
+| `intent_level_chosen` | Mode detection resolved the planning depth level (via classifier, config-forced, flag, cost-gate reduction, or fallback) | `level`, `source` (`classifier` / `config-forced` / `flag` / `user-cost-reduction` / `user-override` / `fallback`), `reason` |
 | `intent_level_override` | User overrode the classifier's chosen level via the inline announce gate | `level` (new), `prior_level`, `source` (`user-override`) |
 | `consult_skipped` | Phase-3 or Phase-7 consult skipped; `reason` distinguishes `Z_HARNESS_CONSULT=off` / `intent_level_L1_quick` / `intent_level_L2_user_skipped` | `phase`, `reason`, optionally `intent_level` |
 | `legacy_spec_detected` | Backward-compat guard: SPEC.md found in slug dir; `PLANNING_MODE` forced to `full` (Invariant 4) | `slug`, `spec_path`, `original_planning_mode` |
@@ -1848,7 +2572,7 @@ Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema
 | Feature | Used | Gates |
 |---------|------|-------|
 | `subagent` | yes | Phase 1a doc-fetcher Agent(); Phase 1b Explore Agent(); **Mode detection: intent-classifier Agent()** (when `planning_mode=intent` and `intent_level=auto`); Phase 3 consultant-primary/secondary Agent() calls (2-consultant fallback when `experiment.persona_rotation=false`) or fixed 5-panel Agent() calls (agy, cursor@claude-4.6-sonnet, cursor@grok-4.3, cursor@composer-2.5, codex-cli — when `experiment.persona_rotation=true`); Phase 7 same panel structure as Phase 3; Phase 8 complexity-classifier Agent() calls. When `personas.critique_panel=true` (and `experiment.persona_rotation=true`), each Phase 3 and Phase 7 arm is additionally prefixed with a drawn consultant persona — no extra Agent() calls, the prefix is injected into each arm's existing prompt. |
-| `ask_user` | yes | Setup step 0 (empty arguments); Setup step 1 (slug collision + resolver prefill/ask branches); Setup step 5 claim acquire — CLAIM_RC 1 (live peer: proceed/abort/use-new-slug), CLAIM_RC 2 (stale-takeover: proceed/abort, default abort), CLAIM_RC 3 (corrupt: abort/proceed-uncoordinated, default abort); Setup step 10c (consolidated freshness gate — one AskUserQuestion covering docs / research / map / GRILL.md-citation staleness); **Mode detection: backward-compat SPEC detection — finished legacy plan gate** (amend / implement / continue / abort when SPEC.md+TASKS.md present); **Mode detection: intent level announce + override gate** (when `planning_mode=intent`; offers L1/L2/L3 override); **Mode detection: L2 optional consult gate** (when `INTENT_CONSULT_POLICY=optional` and not `Z_HARNESS_NO_ASK`); Phase 0 (premise concern); Phase 2.5 (decisions doc approval — guarded by `workflow.plan_decisions_approval` resolver); Phase 5 (design decision + shortcut approval); **Phase 6 (intent-mode only): acceptance-criterion lint failure gate — surfaces offending lines and offers rewrite or abandon** (when `planning_mode=intent` and lint finds non-observable criteria); Phase 8 (task-count overflow); heartbeat exit 9 at any phase boundary or pre-gate (`plan_claim_lost_during_gate` — abort/continue-uncoordinated, default abort). **Phase 9 no longer uses AskUserQuestion** — the next-step recommendation is emitted as prose only (handoff artifact + printed `/clear` + `/z-audit-plan <slug>` instruction). |
+| `ask_user` | yes | Setup step 0 (empty arguments); Setup step 1 (slug collision + resolver prefill/ask branches); Setup step 5 claim acquire — CLAIM_RC 1 (live peer: proceed/abort/use-new-slug), CLAIM_RC 2 (stale-takeover: proceed/abort, default abort), CLAIM_RC 3 (corrupt: abort/proceed-uncoordinated, default abort); Setup step 10c (consolidated freshness gate — one AskUserQuestion covering docs / research / map / GRILL.md-citation staleness); **Pre-subagent hard cost gate** (guarded by `workflow.pre_run_cost_gate`, before `planning-router`, `intent-classifier`, doc-fetcher, Explore, consultants, and task-tree generation); **Mode detection: backward-compat SPEC detection — finished legacy plan gate** (amend / implement / continue / abort when SPEC.md+TASKS.md present); **Mode detection: intent level announce + override gate** (when `planning_mode=intent`; offers L1/L2/L3 override); **Mode detection: L2 optional consult gate** (when `INTENT_CONSULT_POLICY=optional` and not `Z_HARNESS_NO_ASK`); Phase 0 (premise concern); Phase 2.5 (decisions doc approval — guarded by `workflow.plan_decisions_approval` resolver); Phase 5 (design decision + shortcut approval); **Phase 6 (intent-mode only): acceptance-criterion lint failure gate — surfaces offending lines and offers rewrite or abandon** (when `planning_mode=intent` and lint finds non-observable criteria); Phase 8 (task-count overflow); heartbeat exit 9 at any phase boundary or pre-gate (`plan_claim_lost_during_gate` — abort/continue-uncoordinated, default abort). **Phase 9 no longer uses AskUserQuestion** — the next-step recommendation is emitted as prose only (handoff artifact + printed `/clear` + `/z-audit-plan <slug>` instruction). |
 | `skill_invoke` | no | — |
 
 Driver support requirements: see frontmatter `driver_features_required`.

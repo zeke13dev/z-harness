@@ -1,6 +1,6 @@
 {
   "concept": "personas-and-roles",
-  "last_updated": "2026-06-19",
+  "last_updated": "2026-06-24",
   "covers_spec": "none",
   "source_file": [
     "scripts/resolve-persona.py",
@@ -9,7 +9,7 @@
     "personas/README.md",
     "personas/builtin/codex-default-consultant.md",
     "personas/builtin/gemini-default-consultant.md",
-    "commands/z-personas.md",
+    "skills/z-personas/SKILL.md",
     "runtime/drivers/_persona_utils.py",
     "runtime/drivers/antigravity/persona_export.py",
     "runtime/drivers/cursor/persona_export.py",
@@ -178,28 +178,28 @@
     },
     {
       "file": "z_harness_cli/adapters/antigravity.py",
-      "line": 207,
+      "line": 1,
       "symbol": "AntigravityAdapter.export_payload",
       "kind": "fn",
       "summary": "Globs personas/builtin/*.md (not personas/*.md) and calls export_persona per file; also exports commands/agents/skills. Raises RuntimeError on persona-name collision with workflow ids."
     },
     {
       "file": "z_harness_cli/adapters/cursor.py",
-      "line": 214,
+      "line": 1,
       "symbol": "CursorAdapter.export_payload",
       "kind": "fn",
       "summary": "Globs personas/builtin/*.md and calls cursor export_persona per file; warns if personas/builtin/ missing. Raises RuntimeError on persona-name collision with rule ids."
     },
     {
       "file": "z_harness_cli/adapters/codex.py",
-      "line": 243,
+      "line": 1,
       "symbol": "CodexAdapter.export_payload",
       "kind": "fn",
       "summary": "Globs personas/builtin/*.md and calls codex export_persona per file; raises RuntimeError on persona-name collision with prompts/ ids."
     },
     {
       "file": "z_harness_cli/adapters/claude.py",
-      "line": 160,
+      "line": 1,
       "symbol": "ClaudeAdapter.export_payload",
       "kind": "fn",
       "summary": "Globs personas/builtin/*.md and calls claude export_persona per file; returns ExportResult with fidelity=native."

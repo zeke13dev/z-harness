@@ -111,10 +111,10 @@ When `slug` is present and non-null, the orchestrator may also set `Z_HARNESS_SL
   "status": "context_pressure",
   "next_step": "Continue implementing the handoff protocol. We completed the schema and human doc. Next: write commands/z-handoff.md — the /handoff command spec for agents.",
   "context_files": [
-    {"path": "/Users/zeke/.local/state/z-harness/z-harness-ded77383/plans/handoff-protocol/FIX.md", "role": "plan"},
-    {"path": "/Users/zeke/.local/state/z-harness/z-harness-ded77383/plans/handoff-protocol/archive/20260609T014456Z-handoff-protocol/events.jsonl", "role": "session_log"},
-    {"path": "/Users/zeke/dev/z-harness/docs/schemas/handoff.schema.json", "role": "other"},
-    {"path": "/Users/zeke/dev/z-harness/docs/human/handoff-v1.md", "role": "other"}
+    {"path": "<state>/z-harness/example-repo-00000000/plans/handoff-protocol/FIX.md", "role": "plan"},
+    {"path": "<state>/z-harness/example-repo-00000000/plans/handoff-protocol/archive/20260609T014456Z-handoff-protocol/events.jsonl", "role": "session_log"},
+    {"path": "<repo>/docs/schemas/handoff.schema.json", "role": "other"},
+    {"path": "<repo>/docs/human/handoff-v1.md", "role": "other"}
   ]
 }
 ```
@@ -130,10 +130,10 @@ When `slug` is present and non-null, the orchestrator may also set `Z_HARNESS_SL
   "status": "clean_break",
   "next_step": "Resume /z-execute for add-auth-middleware. T001–T008 are done. Start at T009 (add rate-limiting to auth middleware). Acceptance criteria in TASKS.md.",
   "context_files": [
-    {"path": "/Users/zeke/.local/state/z-harness/example-repo-d6f8a2b1/plans/add-auth-middleware/SPEC.md", "role": "spec"},
-    {"path": "/Users/zeke/.local/state/z-harness/example-repo-d6f8a2b1/plans/add-auth-middleware/PLAN.md", "role": "plan"},
-    {"path": "/Users/zeke/.local/state/z-harness/example-repo-d6f8a2b1/plans/add-auth-middleware/TASKS.md", "role": "tasks"},
-    {"path": "/Users/zeke/.local/state/z-harness/example-repo-d6f8a2b1/plans/add-auth-middleware/SESSION.md", "role": "session_log"}
+    {"path": "<state>/z-harness/example-repo-00000000/plans/add-auth-middleware/SPEC.md", "role": "spec"},
+    {"path": "<state>/z-harness/example-repo-00000000/plans/add-auth-middleware/PLAN.md", "role": "plan"},
+    {"path": "<state>/z-harness/example-repo-00000000/plans/add-auth-middleware/TASKS.md", "role": "tasks"},
+    {"path": "<state>/z-harness/example-repo-00000000/plans/add-auth-middleware/SESSION.md", "role": "session_log"}
   ]
 }
 ```
@@ -150,7 +150,7 @@ When `slug` is present and non-null, the orchestrator may also set `Z_HARNESS_SL
   "next_step": "Continue refactoring src/auth/handlers.py — extract the token validation logic from login() into a separate validate_token() function. Current diff is in /tmp/auth-refactor.patch.",
   "context_files": [
     {"path": "/tmp/auth-refactor.patch", "role": "diff"},
-    {"path": "/Users/zeke/project/src/auth/handlers.py", "role": "other"}
+    {"path": "<project>/src/auth/handlers.py", "role": "other"}
   ]
 }
 ```
@@ -166,7 +166,7 @@ When `slug` is present and non-null, the orchestrator may also set `Z_HARNESS_SL
   "status": "complete",
   "next_step": "",
   "context_files": [
-    {"path": "/Users/zeke/.local/state/z-harness/z-harness-ded77383/plans/fix-login-timeout/FIX.md", "role": "plan"}
+    {"path": "<state>/z-harness/example-repo-00000000/plans/fix-login-timeout/FIX.md", "role": "plan"}
   ]
 }
 ```

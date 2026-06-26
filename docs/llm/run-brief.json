@@ -1,6 +1,6 @@
 {
   "concept": "run-brief",
-  "last_updated": "2026-06-19",
+  "last_updated": "2026-06-24",
   "covers_spec": "unified-command-output",
   "source_file": [
     "docs/llm/run-brief-contract.json",
@@ -11,7 +11,8 @@
     "scripts/lint-run-brief.sh",
     "commands/_fragments/run-brief-finalize.md",
     "commands/_fragments/run-brief-halt-finalize-implement-all.md",
-    "commands/_fragments/run-brief-halt-finalize-implement-next.md"
+    "commands/_fragments/run-brief-halt-finalize-implement-next.md",
+    "skills/z-plan/SKILL.md"
   ],
   "confidence": "high",
   "entry_points": [
@@ -77,6 +78,13 @@
       "symbol": "lint-run-brief.sh",
       "kind": "module",
       "summary": "Schema + registry + renderer self-test + _test_finalize_preserves_decisions integration test (default mode). --registry-only greps all 11 commands for finalize fragment include and implement-family halt fragment includes."
+    },
+    {
+      "file": "skills/z-plan/SKILL.md",
+      "line": 862,
+      "symbol": "zplan_cost_gate_halt_finalize",
+      "kind": "fn",
+      "summary": "/z-plan pre-subagent cost-gate terminal cleanup: set halted outcome/next, finalize, render with optional cost summary, require, then release claim before deregister."
     }
   ],
   "depends_on": [
@@ -99,7 +107,9 @@
     "Decision tokens are humanized (underscores to spaces) in chat render; verbatim values remain in events.jsonl.",
     "why field on decisions is surfaced in chat as italic text after an em-dash.",
     "Cost summary (step 3.5) and Discord render (step 5.5) are non-fatal — failures do not block the hard gate or abort the run.",
-    "Full-profile complete path: even if artifact has no bullet lines, finalize preserves existing decisions and uses ensure_approach_for_full (not lite downgrade)."
+    "Full-profile complete path: even if artifact has no bullet lines, finalize preserves existing decisions and uses ensure_approach_for_full (not lite downgrade).",
+    "/z-plan pre-subagent cost-gate terminal paths reuse Run Brief halt-finalize semantics before claim release and active-plan deregister.",
+    "Cost summary injection in render-run-brief.py is optional and non-fatal; run-brief --require remains the hard validation gate before cleanup."
   ],
   "gotchas": [
     "Lite profile forbids approach and decisions properties — do not emit empty arrays.",
@@ -111,7 +121,8 @@
     "Old ALL-CAPS labeled block format (INTENT:/APPROACH:/DECISIONS:/OUTCOME:/NEXT:) is obsolete — render_chat now emits glyph-titled Briefing markdown.",
     "render_push format is UNCHANGED — single line: intent[:80] · outcome[:60] · Next: label. Discord step 5.5 uses the same push-format body via notify-discord.sh.",
     "Decision source enum is event|artifact — no other values are schema-valid.",
-    "_test_finalize_preserves_decisions in lint-run-brief.sh proves that finalize keeps decisions[] intact when the artifact has no bullet lines on a complete path — guards against regression in the prose-only artifact code path."
+    "_test_finalize_preserves_decisions in lint-run-brief.sh proves that finalize keeps decisions[] intact when the artifact has no bullet lines on a complete path — guards against regression in the prose-only artifact code path.",
+    "/z-plan cost-gate cleanup happens after run-brief init/register; if register failed and no active-plan record exists, cleanup must not call deregister."
   ],
   "memories": []
 }

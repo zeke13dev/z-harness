@@ -1,47 +1,55 @@
 # tier1-doc-updater
 
-> Last updated: 2026-06-19
+> Last updated: 2026-06-24
 > Covers source: agents/tier1-doc-updater.md, scripts/reconcile-tier1-staged.py, scripts/add-doc-markers.py
 
 ## Overview
 
-Tier 1 is the per-task mechanical doc sync layer of the two-tier automatic doc maintenance system. A Haiku subagent (labeled "Flash-tier" in the plan, but pinned to `model: haiku` in Claude Code) reads the task diff and applies surgical updates to machine-truth fields in `<!-- AUTO-START -->` / `<!-- AUTO-END -->` delimited sections of human-tier and LLM-tier documentation. The core principle is: the diff IS the spec — no reasoning, no prose writing, only pattern-matching diff additions and removals against known machine-truth sections.
+`tier1-doc-updater` is the cheap, mechanical Tier 1 documentation sync layer. It is a Haiku subagent that receives one completed task diff, reverse-lookups changed files against `docs/llm/INDEX.json`, and stages surgical updates for affected concepts. Its core rule is: the diff is the spec. It does not author narrative prose, infer design rationale, or inspect unrelated source code; it pattern-matches additions/removals against machine-truth sections.
 
-Tier 1 is dispatched automatically from `/z-execute` after each task's reviewer passes. Updated docs are staged under `$Z_HARNESS_PLAN_DIR/tier1-staged/<concept>/` and reconciled into `docs/` after all tasks complete via `scripts/reconcile-tier1-staged.py`. The agent is constrained to `Read, Grep, Glob, Write, Bash` tools only — it does not have access to Agent() and cannot spawn sub-subagents.
+The agent never writes live `docs/human/` or `docs/llm/` files. It writes staged `human.md` and `llm.json` files under `$Z_HARNESS_PLAN_DIR/tier1-staged/<concept>/`; `scripts/reconcile-tier1-staged.py` later merges AUTO-marked human sections and selected LLM fields into live docs, updates INDEX metadata, and regenerates `MEMORIES-FLAT.md`.
 
 ## Key entry points
 
 <!-- AUTO-START: entry-points -->
-- `agents/tier1-doc-updater.md:1` — `tier1-doc-updater` — Haiku subagent definition for per-task mechanical doc sync; tools constrained to Read/Grep/Glob/Write/Bash; model: haiku
-- `scripts/reconcile-tier1-staged.py:128` — `main()` — CLI entry: merges staged AUTO-START/AUTO-END sections from `tier1-staged/` into live `docs/`; updates INDEX.json; regenerates MEMORIES-FLAT.md
-- `scripts/reconcile-tier1-staged.py:36` — `merge_human_doc()` — Merges staged human doc sections into live human doc by replacing matching AUTO-START/AUTO-END blocks
-- `scripts/reconcile-tier1-staged.py:77` — `merge_llm_json()` — Merges `entry_points`, `source_file`, `source_files`, `last_updated` from staged LLM JSON into live LLM JSON; preserves `depends_on`, `consumed_by`, `summary`, `confidence`, `memories`, `invariants`, `gotchas`
-- `scripts/reconcile-tier1-staged.py:106` — `update_index()` — Updates INDEX.json `last_updated` for all touched concepts
-- `scripts/add-doc-markers.py:36` — `add_markers_to_doc()` — Idempotent: wraps `## Key entry points`, `## Public API`, `## Exports`, `## Configuration` sections in AUTO-START/AUTO-END markers
-- `scripts/add-doc-markers.py:82` — `main()` — CLI entry: scans `docs/human/*.md` and applies markers; `--dry-run` supported
+- `agents/tier1-doc-updater.md:1` — Haiku agent definition; tools constrained to `Read, Grep, Glob, Write, Bash`.
+- `agents/tier1-doc-updater.md:24` — reverse lookup: changed files -> concept slugs via `source_files`/`source_file` in INDEX.
+- `agents/tier1-doc-updater.md:34` — human update rules: only `AUTO-START`/`AUTO-END` delimited machine-truth sections.
+- `agents/tier1-doc-updater.md:56` — LLM JSON update rules: `entry_points`, source-file arrays, and `last_updated`; preserve metadata and memories.
+- `scripts/reconcile-tier1-staged.py:36` — `merge_human_doc()` — replaces matching AUTO sections in live human docs.
+- `scripts/reconcile-tier1-staged.py:77` — `merge_llm_json()` — merges machine fields while preserving dependencies, confidence, invariants, gotchas, and memories.
+- `scripts/reconcile-tier1-staged.py:106` — `update_index()` — updates touched concept metadata in INDEX during reconciliation.
+- `scripts/reconcile-tier1-staged.py:128` — `main()` — scans `tier1-staged/`, merges staged docs, and regenerates memories flatfile.
+- `scripts/add-doc-markers.py:36` — `add_markers_to_doc()` — idempotently adds AUTO markers around machine-truth sections.
+- `scripts/add-doc-markers.py:82` — `main()` — scans human docs and supports `--dry-run`.
 <!-- AUTO-END: entry-points -->
 
 ## How it interacts with others
 
-- **z-execute** — Dispatches `tier1-doc-updater` (Haiku) per task after the reviewer passes; runs `reconcile-tier1-staged.py` in Finalize phase.
-- **doc-updater** — Tier 1 handles per-task mechanical sync; `doc-updater` (Sonnet) is the deep-clean agent for `/z-maintain-docs` full concept refreshes.
-- **tier2-doc-rationale** — Sibling system; Tier 2 handles narrative docs (ADRs, design rationale, migration guides) accumulated from plan/implement/review context. `tier2-doc-rationale` depends on `tier1-doc-updater`.
-- **INDEX.json** — Used for file-to-concept reverse lookup during Tier 1 dispatch (`source_files` and `source_file` arrays).
-- **regenerate-memories-flat.py** — Called by `reconcile-tier1-staged.py` post-merge to keep `MEMORIES-FLAT.md` current.
+- `/z-execute` — dispatches Tier 1 after a task's reviewer passes, then reconciles staged docs during finalization.
+- `/z-maintain-docs` / `doc-updater` — Tier 1 is narrow mechanical sync; maintain-docs is the fuller concept refresh path.
+- `tier2-doc-rationale` — Tier 2 produces narrative ADR/rationale/migration docs from warm pipeline context, not per-diff machine fields.
+- `docs/llm/INDEX.json` — source-file reverse lookup and later index metadata reconciliation.
+- `regenerate-memories-flat.py` — run after reconciliation to keep memory projections current.
 
 ## Edge cases / gotchas
 
-- Tier 1 NEVER writes to `docs/` directly — all output goes to the staging directory.
-- If a concept doc lacks `<!-- AUTO-START -->` / `<!-- AUTO-END -->` markers, Tier 1 skips that concept and logs in NOTES; use `add-doc-markers.py` to instrument docs first.
-- Visibility-only changes (`pub` → `pub(crate)`) are out of scope and intentionally ignored.
-- Tier 1 never touches `memories[]` — memory authoring always goes through `/z-suggest-memory`.
-- The agent frontmatter uses `model: haiku`; the old `model: flash` was an invalid identifier that resolved to nothing in Claude Code.
-- The agent has an explicit `tools:` constraint (`Read, Grep, Glob, Write, Bash`); previously it inherited ALL tools (including Agent). Sibling mechanical agents (doc-fetcher, context-curator) use the same constrained set.
-- If the live doc has no AUTO-START sections, `merge_human_doc()` returns the live content unchanged — staged human updates are silently dropped.
-- Reconciliation uses a latest-wins strategy for overlapping staged updates to the same concept.
+- The agent must never write live docs; staging only.
+- It never edits prose outside AUTO markers and never touches `memories[]`.
+- Concepts without AUTO markers are skipped and reported in NOTES; staged human updates would otherwise be silently dropped by reconciliation.
+- Visibility-only changes such as `pub` -> `pub(crate)` are out of scope.
+- Latest staged update wins if multiple staged updates touch the same concept.
+- The model is `haiku`, not `flash`; `flash` was not a valid Claude Code model identifier.
+
+## Memories
+
+<!-- DO NOT EDIT this section by hand — regenerated from docs/llm/tier1-doc-updater.json by doc-updater. Use /z-suggest-memory to add or edit memories. -->
+
+_No memories recorded yet._
 
 ## Examples
 
-- After a task adds a new `fn parse_event(...)` to a source file covered by concept `followup-sink`, Tier 1 reads the diff, finds the `entry-points` AUTO section in `docs/human/followup-sink.md`, appends the new entry, and stages the result to `$Z_HARNESS_PLAN_DIR/tier1-staged/followup-sink/human.md`.
-- `python3 scripts/add-doc-markers.py --dry-run` previews which docs would receive markers without writing anything.
-- `python3 scripts/reconcile-tier1-staged.py --dry-run --plan-dir /path/to/plan` shows what would be merged.
+```bash
+python3 scripts/add-doc-markers.py --dry-run
+python3 scripts/reconcile-tier1-staged.py --dry-run --plan-dir /path/to/plan
+```

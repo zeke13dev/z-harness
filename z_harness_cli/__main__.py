@@ -1,4 +1,4 @@
-"""Entry point for `python -m z_harness_cli`, `z-harness`, and `zh` shims."""
+"""Entry point for `python -m z_harness_cli` and the `z-harness` setup CLI."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import typer
 
 app = typer.Typer(
     name="z-harness",
-    help="z-harness packaging CLI — install, export, launch, doctor, and update.",
+    help="z-harness setup CLI — install and configure existing AI harnesses.",
     add_completion=False,
     no_args_is_help=True,
 )
@@ -35,7 +35,7 @@ def main(
         is_flag=True,
     ),
 ) -> None:
-    """z-harness packaging CLI."""
+    """z-harness setup CLI."""
     # When invoked as `z-harness --help` (no sub-command), Typer shows help
     # automatically because no_args_is_help=True.
     if ctx.invoked_subcommand is None and not version:
@@ -49,6 +49,53 @@ def main(
 # only when the command is actually invoked. This keeps cold-start low even
 # before the command modules are written (they do not exist yet in T001).
 # ---------------------------------------------------------------------------
+
+@app.command("setup")
+def setup_cmd(
+    target: str = typer.Option(
+        "claude",
+        "--target",
+        "--host",
+        help="Harness(es) to configure: claude, omp, pi, cursor, codex, or all.",
+    ),
+    install: bool = typer.Option(
+        False,
+        "--install",
+        help="Install Claude/Codex plugin targets after showing the setup plan.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Overwrite existing Claude/Codex plugin installs when used with --install.",
+    ),
+    posture: Optional[str] = typer.Option(
+        None,
+        "--posture",
+        help="Apply a setup posture preset: interactive, ci-batch, or overnight.",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Show detected harnesses/providers and planned actions without writing.",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        help="Skip setup.py confirmation prompts for posture application.",
+    ),
+) -> None:
+    """First-run onboarding for the harnesses you already use."""
+    from z_harness_cli.commands import setup as _setup_mod
+
+    _setup_mod.run(
+        target=target,
+        install=install,
+        force=force,
+        posture=posture,
+        dry_run=dry_run,
+        yes=yes,
+    )
+
 
 @app.command("install")
 def install_cmd(
@@ -109,6 +156,11 @@ def export_cmd(
         "--force",
         help="Allow overwriting a non-empty existing --out directory.",
     ),
+    surface: str = typer.Option(
+        "dev",
+        "--surface",
+        help="Export surface: dev (all commands) or prod (hide experimental commands).",
+    ),
 ) -> None:
     """Export z-harness commands/agents/skills to a host (Model A)."""
     try:
@@ -124,6 +176,7 @@ def export_cmd(
         in_place=in_place,
         out=out,
         force=force,
+        surface=surface,
     )
 
 

@@ -16,7 +16,11 @@ VENV_DIR="$WORK_DIR/venv"
 EXPORT_DIR="$REPO_ROOT/temp/release-dry-run-export-codex"
 MANIFEST="$WORK_DIR/latest.json"
 
-rm -rf "$WORK_DIR"
+rm -rf "$WORK_DIR" "$EXPORT_DIR"
+cleanup() {
+  rm -rf "$EXPORT_DIR"
+}
+trap cleanup EXIT
 mkdir -p "$DIST_DIR" "$HOME_DIR"
 
 cd "$REPO_ROOT"
@@ -46,7 +50,7 @@ PY
 
 printf 'release-dry-run: building audited plugin tarball\n'
 rm -rf dist
-bash scripts/bundle-plugin.sh
+Z_HARNESS_RELEASE_SURFACE=prod bash scripts/bundle-plugin.sh
 TARBALL_COUNT="$(find dist -maxdepth 1 -name 'z-harness-*.tar.gz' | wc -l | tr -d ' ')"
 if [[ "$TARBALL_COUNT" -ne 1 ]]; then
   printf 'release-dry-run: ERROR expected one tarball, found %s\n' "$TARBALL_COUNT" >&2
@@ -107,8 +111,9 @@ test -f "$HOME_DIR/.claude/plugins/z-harness@zeke-tools/install.sh"
 
 echo 'release-dry-run: running export smoke'
 rm -rf "$EXPORT_DIR"
-"$VENV_DIR/bin/z-harness" export --host codex --out "$EXPORT_DIR" --force >/tmp/z-harness-release-dry-run-export.log
+"$VENV_DIR/bin/z-harness" export --host codex --surface prod --out "$EXPORT_DIR" --force >/tmp/z-harness-release-dry-run-export.log
 test -f "$EXPORT_DIR/.codex-plugin/plugin.json"
+test ! -d "$EXPORT_DIR/skills/z-research"
 
 printf 'release-dry-run: validating release workflow metadata for %s\n' "$TAG"
 python3 - "$MANIFEST" "$VERSION" <<'PY'

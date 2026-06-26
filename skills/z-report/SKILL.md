@@ -1,8 +1,8 @@
 ---
 name: z-report
 disable-model-invocation: false
-description: "Depth-tiered narrative of exactly what happened + what follow-ups exist, for a z-harness run or past work (run-id / plan-slug / PR / commit-range). User-invoked, read-only, composes existing reporting primitives. Does not auto-fire."
-argument-hint: "[target|current|changes|since <ref>] [summary|standard|deep] [--surface=auto|off|existing|refresh] | --run <id> --slug <s> --pr <N|url> --range <A..B> --base <ref> --save <path>"
+description: "Profile-aware narrative for completed work: evidence, backtests, feature writeups, technical handoffs, and external/shareable reports for a z-harness run or past work (run-id / plan-slug / PR / commit-range). User-invoked, read-only, composes existing reporting primitives. Does not auto-fire or become a tutorial."
+argument-hint: "[target|current|changes|since <ref>] [summary|standard|deep] [--audience=internal|external|reviewer] [--style=operator|professional] [--purpose=status|technical-handoff|external-share|backtest|audit-review] [--profile=<bundle>] [--share] [--surface=auto|off|existing|refresh] | --run <id> --slug <s> --pr <N|url> --range <A..B> --base <ref> --save <path>"
 runtime: c1
 driver_features_required:
   - subagent
@@ -10,7 +10,9 @@ driver_features_required:
 unsupported_driver_behavior: explicit_gate
 ---
 
-You are running **z-harness `/z-report`** — a depth-tiered narrative of exactly what happened and what follow-ups exist for a z-harness run or past work. Read-only; never edits the target repo beyond writing `REPORT.md` or the `--save` path.
+You are running **z-harness `/z-report`** — a profile-aware narrative for communicating completed work and evidence from a z-harness run or past work. Use it for status reports, feature writeups, technical handoffs, backtest writeups, audit-style evidence summaries, and external/shareable updates. Read-only; never edits the target repo beyond writing `REPORT.md` or the `--save` path.
+
+**Command-family boundary:** `/z-report` communicates what happened, what evidence exists, what was decided, what remains, and what a specific reader should take away. It may end with prose handoffs to `/z-explain` for one-shot code/system understanding or `/z-learn` for progressive tutoring, but it must not turn the report body into a tutorial. Code-level teaching belongs to `/z-explain` or `/z-learn`.
 
 Arguments (from `$ARGUMENTS`):
 
@@ -37,14 +39,53 @@ $ARGUMENTS
    ```
 5. Notification policy: `/z-report` is low-noise — no push on completion unless policy demands it. See [docs/human/config.md](docs/human/config.md) (`notify.level` key).
 
-## Phase 0 — Parse target, depth, and surface policy
+## Phase 0 — Parse target, report profile, and surface policy
 
-**Depth** is one of `summary | standard | deep`. Resolve from `$ARGUMENTS` as follows:
-- If an explicit keyword (`summary`, `standard`, `deep`) appears, use it.
-- If fuzzy NL signals a tier (e.g., "brief", "quick" → summary; "full", "verbose" → deep), map it.
-- Default (no signal): `standard`.
+**Report profile** controls reader, framing, and output contract. It is deliberately small and bundled; do not accept free-form arbitrary style prompts.
 
-Record the chosen tier as `TIER`.
+The selected profile also enforces the command boundary: reporting completed work and evidence is in scope; teaching the reader how the code works step by step is not.
+
+Resolve explicit controls from `$ARGUMENTS` first:
+- **Tier** is one of `summary | standard | deep`. Explicit keyword tokens and `--tier <value>` / `--tier=<value>` win over fuzzy signals. Fuzzy NL may map "brief" or "quick" to `summary`, and "full" or "verbose" to `deep`.
+- **Audience** is one of `internal | external | reviewer`, via `--audience <value>` / `--audience=<value>` or a bundled profile.
+- **Style** is one of `operator | professional`, via `--style <value>` / `--style=<value>` or a bundled profile.
+- **Purpose** is one of `status | technical-handoff | external-share | backtest | audit-review`, via `--purpose <value>` / `--purpose=<value>` or a bundled profile.
+- `--profile=<internal-status|technical-handoff|external-share|backtest|internal-audit>` selects the corresponding bundle below.
+- `--share` is shorthand for the external/shareable bundle (`audience=external`, `style=professional`, `purpose=external-share`, default `tier=standard`).
+- Profile words in the command text may fill missing dimensions only when unambiguous: `handoff` → technical handoff, `backtest` → backtest, `audit` → deep internal audit, `external/shareable/client-facing` → external share, `internal status` → quick internal status.
+
+Bundle defaults fill only missing dimensions; they never override explicit controls. A complete explicit profile (`tier`, `audience`, `style`, and `purpose`, or any bundle/alias that supplies all missing dimensions) skips the profile question entirely. `PROFILE` is then derived from the selected bundle/purpose; a missing `PROFILE` label alone is not a reason to ask when the four controls are complete.
+
+**Bundled profile options for AskUserQuestion:**
+
+| Option | Profile | Audience | Style | Tier default | Purpose |
+|---|---|---|---|---|---|
+| `Quick internal status` | `internal-status` | `internal` | `operator` | `summary` | `status` |
+| `Standard internal handoff` | `technical-handoff` | `internal` | `operator` | `standard` | `technical-handoff` |
+| `External/shareable update` | `external-share` | `external` | `professional` | `standard` | `external-share` |
+| `Backtest writeup` | `backtest` | `reviewer` | `professional` | `deep` | `backtest` |
+| `Deep internal audit` | `internal-audit` | `internal` | `operator` | `deep` | `audit-review` |
+
+If any of `TIER`, `AUDIENCE`, `STYLE`, or `PURPOSE` is still missing after explicit parsing, ask once:
+
+This report-profile gate is separate from target resolution and the large-context size gate. Do not reuse the ambiguous-target question or size-gate question to choose profile values.
+
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the
+     report-profile question via their native channel. Silent omission is forbidden. -->
+
+Invoke AskUserQuestion:
+
+> Choose the report profile. Explicit values already supplied in the command will be preserved; the selected option fills only missing values.
+>
+> 1. **Quick internal status** — internal/operator summary for a concise run status.
+> 2. **Standard internal handoff** — internal/operator standard report for another engineer taking over.
+> 3. **External/shareable update** — external/professional standard report for a polished stakeholder update.
+> 4. **Backtest writeup** — reviewer/professional deep report for methods, assumptions, results present in context, caveats, and reproducibility.
+> 5. **Deep internal audit** — internal/operator deep report for detailed evidence and process audit.
+
+After the answer, set `PROFILE`, `AUDIENCE`, `STYLE`, `PURPOSE`, and any missing `TIER` from the selected bundle while preserving every explicit value. If the user supplied complete explicit controls, do not ask this question.
+
+Record the chosen values as `PROFILE`, `AUDIENCE`, `STYLE`, `PURPOSE`, and `TIER`.
 
 **Surface policy** is one of `auto | off | existing | refresh`. Resolve from `$ARGUMENTS` as follows and record the chosen value as `SURFACE_POLICY`:
 - Default: `auto`.
@@ -68,8 +109,7 @@ Record the chosen tier as `TIER`.
 
 T006 provides native parser/context support for these aliases, `--tier`, and `--surface`.
 
-**Target resolution** — delegate to `scripts/report-context.py --resolve-only` with the same target, tier, and surface policy that Phase 1 will use. Build target arguments by removing `/z-report` control flags (`--save`, `--tier`, `--surface`) and positional depth tokens, then append the normalized `--tier "$TIER"` and `--surface "$SURFACE_POLICY"` flags explicitly.
-
+**Target resolution** — delegate to `scripts/report-context.py --resolve-only` with the same target, tier, and surface policy that Phase 1 will use. Build target arguments by removing `/z-report` control flags (`--save`, `--tier`, `--surface`), report-profile-only flags (`--audience`, `--style`, `--purpose`, `--profile`, `--share`), positional depth/profile tokens, and then append the normalized `--tier "$TIER"` and `--surface "$SURFACE_POLICY"` flags explicitly. Never pass `PROFILE`, `AUDIENCE`, `STYLE`, or `PURPOSE` to `report-context.py`; they belong only to render selection and the `report-synth` prompt.
 Normalize `since <ref>` to the supported `--base <ref>` form; keep already-supported explicit target flags unchanged.
 
 ```bash
@@ -79,24 +119,49 @@ import shlex, sys
 tokens = shlex.split(sys.argv[1])
 out = []
 skip_next = False
+preserve_next = False
+target_seen = False
 depths = {"summary", "standard", "deep"}
+profile_value_flags = {"--audience", "--style", "--purpose", "--profile"}
+control_value_flags = {"--surface", "--tier", "--save"}
+target_value_flags = {"--run", "--slug", "--pr", "--range", "--base"}
+value_prefixes = tuple(f + "=" for f in profile_value_flags | control_value_flags)
+profile_only_flags = {"--share", "--professional", "--operator"}
+profile_tokens = {
+    "internal-status", "technical-handoff", "external-share", "backtest", "internal-audit",
+    "handoff", "audit", "share", "shareable", "external/shareable", "external", "internal", "reviewer",
+    "status", "update", "writeup", "client", "facing", "client-facing", "professional", "operator",
+}
 
 for idx, tok in enumerate(tokens):
+    if preserve_next:
+        out.append(tok)
+        target_seen = True
+        preserve_next = False
+        continue
     if skip_next:
         skip_next = False
         continue
+    if tok in target_value_flags:
+        out.append(tok)
+        preserve_next = True
+        continue
     if tok in depths:
         continue
-    if tok in {"--surface", "--tier", "--save"}:
+    if tok in profile_tokens and target_seen:
+        continue
+    if tok in profile_value_flags or tok in control_value_flags:
         skip_next = True
         continue
-    if tok.startswith("--surface=") or tok.startswith("--tier=") or tok.startswith("--save="):
+    if tok.startswith(value_prefixes) or tok in profile_only_flags:
         continue
     if tok == "since" and idx + 1 < len(tokens):
         out.extend(["--base", tokens[idx + 1]])
+        target_seen = True
         skip_next = True
         continue
     out.append(tok)
+    target_seen = True
 
 print(shlex.join(out))
 PY
@@ -189,9 +254,14 @@ fi
 
 ### Branch A — Fast path (run-brief chat render)
 
-If **all three** of the following are true:
+The run-brief renderer is valid only for the internal/operator status summary profile. External, reviewer, professional, handoff, backtest, audit, or any non-summary report must proceed to Branch C so `report-synth` can apply the selected profile contract.
+
+If **all six** of the following are true:
 - `MODE == "run"`
 - `TIER == "summary"`
+- `AUDIENCE == "internal"`
+- `STYLE == "operator"`
+- `PURPOSE == "status"`
 - `RUN_BRIEF_PRESENT` is true
 
 Apply the defensive guard before invoking the renderer (`RUN_DIR` was resolved at the end of Phase 1):
@@ -231,17 +301,16 @@ SIZE_DESC = ", ".join(size_label)
 
 Present an `AskUserQuestion`:
 
-> **Large context detected** (`SIZE_DESC`): the assembled bundle exceeds the recommended threshold for a `TIER`-tier report. Choose how to proceed:
+> **Large context detected** (`SIZE_DESC`): the assembled bundle exceeds the recommended threshold for a `TIER`-tier `PROFILE` report (`AUDIENCE` audience, `STYLE` style, `PURPOSE` purpose). Choose how to proceed:
 >
-> 1. **Proceed** — run `report-synth` at `TIER` tier as requested (may consume significant tokens).
-> 2. **Downgrade** — run `report-synth` at the next-lower tier (`standard` → `summary`; `deep` → `standard`).
-> 3. **Summary only** — use the fast-path inline digest (no subagent, deterministic output only).
+> 1. **Proceed** — run `report-synth` at `TIER` tier with the selected profile (may consume significant tokens).
+> 2. **Downgrade** — run `report-synth` at the next-lower tier (`standard` → `summary`; `deep` → `standard`) while preserving `PROFILE`, `AUDIENCE`, `STYLE`, and `PURPOSE`.
+> 3. **Summary only** — use the profile-aware degraded inline digest (no subagent, deterministic output only).
 
 On the user's answer:
 - **Proceed** — continue to Branch C with the original `TIER`.
-- **Downgrade** — set `TIER` to the next-lower tier and continue to Branch C.
+- **Downgrade** — set `TIER` to the next-lower tier, leave `PROFILE`, `AUDIENCE`, `STYLE`, and `PURPOSE` unchanged, and continue to Branch C.
 - **Summary only** — set `FELL_BACK_INLINE=true` and jump to Branch D.
-
 If the size gate does **not** fire (sizes are within threshold, OR tier is `summary`), proceed directly to Branch C.
 
 ### Branch C — Synthesis via report-synth subagent
@@ -252,8 +321,8 @@ If the size gate does **not** fire (sizes are within threshold, OR tier is `summ
 ```
 Agent(
   subagent_type="report-synth",
-  description="Synthesize z-report narrative for <MODE> target at <TIER> tier",
-  prompt="context_path: <CONTEXT_PATH>\ntier: <TIER>\nmode: <MODE>\nsurface_contract: Use only context.json surface_map_* fields for any Surface Map discussion. Do not read surface_map_path, invoke discovery, or call sibling z-harness commands."
+  description="Synthesize z-report narrative for <MODE> target at <TIER> tier using <PROFILE> profile",
+  prompt="context_path: <CONTEXT_PATH>\ntier: <TIER>\nmode: <MODE>\nprofile: <PROFILE>\naudience: <AUDIENCE>\nstyle: <STYLE>\npurpose: <PURPOSE>\nsurface_contract: Use only context.json surface_map_* fields for any Surface Map discussion. Do not read surface_map_path, invoke discovery, or call sibling z-harness commands."
 )
 ```
 
@@ -271,19 +340,31 @@ Used when: subagent support is absent, `report-synth` returns the `INSUFFICIENT_
 
 Set `FELL_BACK_INLINE=true`.
 
-Read `context.json` (or use an empty dict if missing) and render the following sections directly, in order, with no LLM synthesis and no reads from `surface_map_path`.
+Read `context.json` (or use an empty dict if missing) and render a visibly degraded deterministic report with no LLM synthesis and no reads from `surface_map_path`. The fallback must remain profile-aware:
+- Always state the selected `PROFILE`, `AUDIENCE`, `STYLE`, `PURPOSE`, and `TIER`.
+- For `AUDIENCE != "internal"` or `STYLE == "professional"`, suppress detailed z-harness cost rows and phase wall-time tables; include at most a short note that operational internals were omitted for the selected profile.
+- Render detailed cost and phase wall-time sections only when the selected profile explicitly asks for deep internal evidence (`AUDIENCE == "internal"` and `STYLE == "operator"` and `TIER == "deep"`).
 
-**0. Incomplete-context banner (conditional)**
+Render the following sections directly, in order:
 
-Before rendering any sections, check whether the bundle is degraded: if `ctx.get("message")` is present OR `ctx.get("warnings")` is non-empty (a non-empty list), print the following banner at the very top of the output, before the status line:
+**0. Degraded fallback banner (always)**
+
+Print this banner at the very top of the output:
 
 ```
-NOTE: incomplete context — this report may be missing data.
+NOTE: degraded deterministic fallback — report-synth was unavailable or skipped, so this report may be incomplete and less polished than the selected profile contract.
+Profile: <PROFILE>; audience=<AUDIENCE>; style=<STYLE>; purpose=<PURPOSE>; tier=<TIER>
+```
+
+If the bundle is also incomplete (`ctx.get("message")` is present OR `ctx.get("warnings")` is non-empty), append:
+
+```
+Incomplete context:
 <ctx["message"] if present>
 <for each warning in ctx["warnings"]: "- <warning>">
 ```
 
-Omit the banner entirely if both `ctx.get("message")` is absent (or None) and `ctx.get("warnings")` is empty or absent. Do not print the banner for a fully populated bundle.
+Do not claim the selected professional/shareable contract was fully satisfied when this fallback rendered the report.
 
 **1. Status line**
 
@@ -308,7 +389,7 @@ Status: <ctx["status"] if present else "unknown">
 Generated: <REPORT_GENERATED_AT>
 ```
 
-**2. Decision table**
+**2. Decisions**
 
 ```markdown
 ## Decisions
@@ -322,7 +403,7 @@ If `ctx["decisions"]` is non-empty, render as a markdown table:
 
 If absent or empty: `No decisions recorded.`
 
-**3. Follow-up table**
+**3. Follow-ups**
 
 ```markdown
 ## Follow-Ups
@@ -353,7 +434,17 @@ Use only these `context.json` fields:
 
 If `surface_map_summary` is present, render it as the body. If `surface_map_source` is `report_time_current_repo`, prefix the body with: `Report-time current repo state, not historical run truth.` If warnings are present, render them as bullets. If the status is `failed`, `truncated`, `skipped`, or `omitted`, state the status plainly and do not infer missing coverage. Never read `surface_map_path` from the inline fallback.
 
-**5. Cost line**
+**5. Operational internals (profile-gated)**
+
+For external, reviewer, professional, external-share, backtest, handoff, and non-audit reports, do not render detailed cost or wall-time tables. Instead render:
+
+```markdown
+## Operational Internals
+
+Detailed z-harness cost and phase timing tables were omitted by the degraded fallback for the selected profile.
+```
+
+Only for the deep internal audit evidence profile (`PROFILE == "internal-audit"` and `AUDIENCE == "internal"` and `STYLE == "operator"` and `TIER == "deep"`), render the detailed sections below.
 
 ```markdown
 ## Cost
@@ -365,8 +456,6 @@ If `ctx["cost"]` is non-empty, render each subagent row:
 ```
 
 If absent or empty: `Cost data not available.`
-
-**6. Phase wall-time table**
 
 ```markdown
 ## Phase Wall-Time
@@ -460,15 +549,19 @@ else:
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" report_run_end \
   "$(python3 -c '
 import json, sys
-mode, tier, target, saved, fell_back = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+mode, tier, target, saved, fell_back, profile, audience, style, purpose = sys.argv[1:10]
 print(json.dumps({
   "mode": mode,
   "tier": tier,
   "target": target,
   "saved": saved == "true",
-  "fell_back_inline": fell_back == "true"
+  "fell_back_inline": fell_back == "true",
+  "profile": profile,
+  "audience": audience,
+  "style": style,
+  "purpose": purpose
 }))
-' "$MODE" "$TIER" "$TARGET_ID" "$SAVED" "$FELL_BACK_INLINE")"
+' "$MODE" "$TIER" "$TARGET_ID" "$SAVED" "$FELL_BACK_INLINE" "$PROFILE" "$AUDIENCE" "$STYLE" "$PURPOSE")"
 ```
 
 **Step 5 — Advisory handoffs (prose only; never invoked).**
@@ -479,8 +572,8 @@ After the narrative, print advisory recommendations where applicable. These are 
   > To address the friction signals above, consider running `/z-improve` to generate targeted improvement proposals.
 - If `NARRATIVE` or `ctx["followups"]` contains any open follow-up items: recommend `/z-followup-next`.
   > Open follow-ups were found. Run `/z-followup-next` to surface and triage the next actionable item.
-- If the user's original question referenced a specific function, file, or symbol: recommend `/z-explain`.
-  > For a deeper code-level walkthrough of any symbol above, run `/z-explain <symbol>`.
+- If the user's original question referenced a specific function, file, or symbol, or the completed-work narrative leaves a reader needing code-level understanding: recommend `/z-explain` for a one-shot walkthrough or `/z-learn` for progressive tutoring.
+  > For code-level study of any symbol, file, or system behavior above, run `/z-explain <target>` for one answer or `/z-learn <target>` for guided tutoring.
 
 Print only the applicable advisories. Omit any advisory whose trigger condition is not met.
 
@@ -492,7 +585,9 @@ Print only the applicable advisories. Omit any advisory whose trigger condition 
 2. **No sibling-command invocation.** `/z-report` never spawns, invokes, or auto-dispatches any other z-harness command (e.g., `/z-improve`, `/z-followup-next`, `/z-explain`). Handoffs to those commands are advisory prose recommendations only — the user invokes them.
 3. **Every factual claim sourced from `context.json`.** All metrics, timings, decisions, costs, follow-ups, status values, and surface-map statements in the narrative must originate from the `context.json` bundle assembled in Phase 1 (which is itself derived from events/metrics/artifacts/diff and attached surface fields). Renderers must use only `context.json` `surface_map_*` fields for surface claims; they must not read `surface_map_path`, invoke discovery, or infer coverage from omitted data.
 4. **No emojis.** The narrative and all printed output must contain no emoji characters.
-5. **One narrative, one tier per invocation.** A single `/z-report` call produces exactly one narrative at exactly one depth tier. Tier is resolved in Phase 0 and does not change after the size-gate decision.
+5. **One narrative, one tier, one profile per invocation.** A single `/z-report` call produces exactly one narrative at exactly one depth tier for exactly one selected profile. Tier is resolved in Phase 0 and changes only if the user explicitly chooses the size-gate downgrade; profile, audience, style, and purpose remain unchanged after Phase 0. Do not bundle multiple audiences, tiers, or profile styles into one run.
+6. **No free-form style bypass.** Audience/style choices must come from the supported profile controls and bundled options, never arbitrary style instructions that weaken citation, no-fabrication, read-only, no-sibling-command, or no-emoji rules.
+7. **Not a tutorial.** `/z-report` communicates completed work, evidence, decisions, backtests, feature writeups, handoffs, and external/shareable reports. It can recommend `/z-explain` or `/z-learn` in prose, but it must not teach code step-by-step or run a learning loop inside the report.
 
 ---
 
@@ -501,7 +596,7 @@ Print only the applicable advisories. Omit any advisory whose trigger condition 
 | Feature | Used | Gates |
 |---|---|---|
 | `subagent` | yes | Phase 2 Branch C — `report-synth` dispatch |
-| `ask_user` | yes | Phase 0 ambiguous target; Phase 2 Branch B large-context size gate |
+| `ask_user` | yes | Phase 0 report profile; Phase 0 ambiguous target; Phase 2 Branch B large-context size gate |
 | `skill_invoke` | no | — |
 
 Non-supporting drivers **must surface and skip** any gated block — silent omission is forbidden. Each gated call site is annotated with a `<!-- RUNTIME-GATE: ... -->` comment immediately before the call.

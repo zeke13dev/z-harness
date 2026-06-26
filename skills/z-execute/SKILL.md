@@ -3027,7 +3027,7 @@ This phase fires once per run, after Run Brief finalize (Finalize §), before th
     )
     ```
 
-    **Proposes only — no auto-approve:** the axiom-extractor returns ≤5 candidate axioms as a fenced JSON array; nothing is written to the axiom store and no axiom is approved automatically. The candidates surface opportunities for later `/z-axiom-scan` / `/z-axiom-approve` review. Do not block on the axiom-extractor's return or error if it is unavailable.
+    **Proposes only — no auto-approve:** the axiom-extractor returns ≤5 candidate axioms as a fenced JSON array; nothing is written to the axiom store and no axiom is approved automatically. The candidates surface opportunities for later human review or dev-only `z-axiom-*` workflows. Do not block on the axiom-extractor's return or error if it is unavailable.
 
 5. **Parse agent return — extract single fenced ```json block:**
 

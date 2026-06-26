@@ -1,6 +1,6 @@
 # intent-schema
 
-> Last updated: 2026-06-19
+> Last updated: 2026-06-24
 > Covers source: scripts/intent-schema.py, scripts/session-helpers.sh
 
 ## Overview

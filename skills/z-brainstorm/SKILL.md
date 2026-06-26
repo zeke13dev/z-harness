@@ -59,7 +59,7 @@ $ARGUMENTS
    export RUN_BRIEF_ARTIFACT="$Z_HARNESS_PLAN_DIR/BRAINSTORM.md"
    export RUN_BRIEF_ARTIFACT_FALLBACKS=""
    ```
-7. **Parent attribution (sub-command contract).** If `$Z_HARNESS_PARENT_RUN_ID` is set in the environment (i.e. this sub-command is being dispatched by a meta-orchestrator like `/z-research`), include `parent_run_id` and `parent_command` fields in every subsequent `log-event.sh` payload. Example:
+7. **Parent attribution (sub-command contract).** If `$Z_HARNESS_PARENT_RUN_ID` is set in the environment (i.e. this sub-command is being dispatched by a parent meta-orchestrator), include `parent_run_id` and `parent_command` fields in every subsequent `log-event.sh` payload. Example:
 
    ```bash
    bash log-event.sh "$RUN" some_event "$(python3 -c 'import json,os,sys; p=json.loads(sys.argv[1]);
@@ -72,6 +72,60 @@ $ARGUMENTS
    If env vars absent → emit events as today (no attribution fields). Backward compatible.
 8. Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
 9. **Cost guardrail.** Target ≤200K tokens. If the running total exceeds 200K (rough estimate: sum prompt+response chars across consult events ÷ 4), log a warning event and continue — do not halt.
+
+## Artifact Scout preflight
+
+Run immediately after Setup and before Phase 0 scope-probe, Plan Route Check, doc-fetcher, ideator, or reconciler dispatch. This command has no hard cost gate, so the deterministic inventory and classifier are adjacent.
+
+```bash
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+ARTIFACT_SCOUT_INVENTORY="$Z_HARNESS_PLAN_DIR/archive/$RUN/artifact-scout-inventory.json"
+python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/artifact-scout-inventory.py" \
+  --command /z-brainstorm --slug "$Z_HARNESS_SLUG" --run-id "$RUN" \
+  --repo-root "$REPO_ROOT" --plan-dir "$Z_HARNESS_PLAN_DIR" \
+  --task "$ARGUMENTS" --output "$ARTIFACT_SCOUT_INVENTORY"
+ARTIFACT_SCOUT_EVENT_PAYLOAD="$(python3 - "$ARTIFACT_SCOUT_INVENTORY" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path, encoding="utf-8"))
+print(json.dumps({
+  "command": data.get("command"),
+  "slug": data.get("slug"),
+  "run_id": data.get("run_id"),
+  "artifact_path": path,
+  "source_status": data.get("source_status", {}),
+  "mandatory_candidate_count": len(data.get("mandatory_candidates") or []),
+  "historical_candidate_count": len(data.get("historical_candidates") or []),
+  "active_record_count": len(data.get("active_records") or []),
+  "worktree_count": len(data.get("worktrees") or []),
+  "truncated": bool(data.get("truncated")),
+}, separators=(",", ":")))
+PYEOF
+)"
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" artifact_scout_inventory_complete "$ARTIFACT_SCOUT_EVENT_PAYLOAD"
+```
+
+The `artifact_scout_inventory_complete` payload MUST include `command`, `slug`, `run_id`, `artifact_path`, `source_status`, `mandatory_candidate_count`, `historical_candidate_count`, `active_record_count`, `worktree_count`, and `truncated` from the inventory JSON.
+
+```
+<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this artifact-scout
+     requirement and skip the Agent() call. Skipping means continue without scout routing. -->
+Agent(
+  subagent_type="artifact-scout",
+  description="Artifact scout for z-brainstorm <slug>",
+  prompt="current_command: /z-brainstorm
+task_or_topic: <brainstorm topic>
+route_chain_json: <current route chain JSON>
+repo_root: <abs repo root>
+inventory_json_path: $Z_HARNESS_PLAN_DIR/archive/$RUN/artifact-scout-inventory.json
+
+Inline inventory JSON:
+<contents printed by scripts/artifact-scout-inventory.py>"
+)
+```
+
+Write the raw response to `$Z_HARNESS_PLAN_DIR/archive/$RUN/artifact-scout.md`. Emit `artifact_scout_classified`, `artifact_scout_warning`, and `artifact_scout_route` per the agent contract. Warning-only output (`STATUS: warned`, `allowed_action: warning_only`, or `route_chain_effect: "none"`) is displayed but never writes `route-decision.md`, never emits `artifact_scout_route`, and never advances `route_chain`; only `ask_user` or route outcomes with `route_chain_effect: "write_route_decision"` may write a route artifact and emit `plan_route_decision`.
+
 
 **All paths live under `$Z_HARNESS_PLAN_DIR/`:**
 - `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md`
@@ -445,7 +499,7 @@ Run this route check after Phase 1 scaffolding is assembled and before Phase 2 i
 Use only already-known signals from the topic, doc-fetcher synthesis, optional Explore, and any ingested `MAP.md` (or legacy `RESEARCH.md` with `artifact_kind: map`): `candidate_files`, `expected_tasks`, `non_obvious_decisions`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `terrain_uncertain`, `approach_uncertain`, `has_existing_plan`, `plan_validation_intent`, `plan_amend_intent`, `has_fix_artifact`, and `docs_stale_or_drifted`. Set `plan_validation_intent`/`plan_amend_intent` only when the user re-enters a planning entry command on a slug with `SPEC.md`+`PLAN.md`+`TASKS.md` all present (see `agents/planning-router.md` for the language-match heuristic).
 
 Deterministic routes:
-- Route unknown terrain, missing citations, or insufficient source facts to `/z-research`.
+- For unknown terrain, missing citations, or insufficient source facts, stay in `/z-brainstorm`, surface the missing-facts risk to the user, and ask whether to continue with incomplete grounding or stop to gather facts. Do not route to experimental terrain/synthesis commands by default.
 - Route a framing that is already clear and ready for task planning to `/z-plan`.
 - Route a small concrete fix (`candidate_files <= 5`, `non_obvious_decisions <= 2`, no public API/schema impact) to `/z-plan`.
 - Stay in `/z-brainstorm` when the terrain is known enough but multiple plausible framings remain.
@@ -521,9 +575,9 @@ If `Z_HARNESS_BRAINSTORM_EXPLORE` is unset or `0`, skip this step entirely — b
 
 Resolve the terrain artifact to inline into scaffolding using this precedence:
 
-1. **MAP.md (primary):** If `$Z_HARNESS_PLAN_DIR/MAP.md` exists, read it. This is the canonical terrain artifact after the `/z-research` → `/z-map` rename.
+1. **MAP.md (optional artifact):** If `$Z_HARNESS_PLAN_DIR/MAP.md` exists, read it as pre-existing terrain context. Prod release does not require the command that generated it to be installed.
 2. **Legacy RESEARCH.md fallback (backward-compat):** If MAP.md does not exist AND `$Z_HARNESS_PLAN_DIR/RESEARCH.md` exists, read its YAML frontmatter. Accept it as terrain scaffolding only if `artifact_kind` is `map` OR the `artifact_kind` field is absent (pre-rename legacy artifact). In that case, treat it identically to MAP.md.
-3. **Explicit skip:** If `$Z_HARNESS_PLAN_DIR/RESEARCH.md` exists but its frontmatter has `artifact_kind: approach_synthesis`, **do not ingest it.** It is a synthesis output produced by the new `/z-research` meta-orchestrator — not raw terrain — and is not useful as brainstorm scaffolding. Log a note and proceed without terrain content.
+3. **Explicit skip:** If `$Z_HARNESS_PLAN_DIR/RESEARCH.md` exists but its frontmatter has `artifact_kind: approach_synthesis`, **do not ingest it.** It is synthesis output — not raw terrain — and is not useful as brainstorm scaffolding. Log a note and proceed without terrain content.
 4. **No terrain artifact:** If none of the above resolve, proceed with empty terrain content.
 
 Once a terrain file is resolved (MAP.md or accepted legacy RESEARCH.md):

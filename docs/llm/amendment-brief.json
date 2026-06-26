@@ -1,89 +1,88 @@
 {
   "concept": "amendment-brief",
-  "last_updated": "2026-06-19",
-  "source_file": [
+  "last_updated": "2026-06-24",
+  "source_files": [
     "scripts/amendment-brief.py",
     "scripts/amend-gate-decision.py",
+    "skills/z-audit-plan/SKILL.md",
+    "skills/z-review-all/SKILL.md",
     "docs/human/amendment-brief.md"
   ],
   "confidence": "high",
+  "summary": "Shared amendment-continuation helpers: amend-gate-decision maps workflow.audit_to_amend resolver envelopes to auto_split/force_ask/halt, and amendment-brief renders spec_gap corrections plus premise_failure concerns for z-audit-plan and z-review-all.",
   "entry_points": [
-    {
-      "file": "scripts/amendment-brief.py",
-      "line": 1,
-      "symbol": "amendment-brief",
-      "kind": "module",
-      "summary": "Shared renderer: file/stdin JSON {corrections:[{title,why,target}], approach_concerns:[{concern,affected?,suggestion?}]} -> two-section markdown brief"
-    },
     {
       "file": "scripts/amendment-brief.py",
       "line": 32,
       "symbol": "render_brief",
       "kind": "fn",
-      "summary": "Core rendering function: section 1 (Patched automatically N corrections) always present; section 2 (Worth your eyes M) only when approach_concerns non-empty"
-    },
-    {
-      "file": "scripts/amend-gate-decision.py",
-      "line": 1,
-      "symbol": "amend-gate-decision",
-      "kind": "module",
-      "summary": "Gate-decision helper: maps (result, source) resolver envelope for workflow.audit_to_amend -> auto_split|force_ask|halt; exit 0=token printed, exit 1=bad input"
+      "summary": "Render corrections and approach_concerns to deterministic markdown; Patched section always present, Worth-your-eyes only when non-empty."
     },
     {
       "file": "scripts/amend-gate-decision.py",
       "line": 47,
       "symbol": "decide",
       "kind": "fn",
-      "summary": "5-rule precedence: halt wins; skip->auto_split; source==none->auto_split; explicit-source+ask|prefill->force_ask; all other->auto_split"
+      "summary": "Maps resolver envelope to auto_split, force_ask, or halt using five-rule precedence."
     },
     {
-      "file": "commands/z-audit-plan.md",
-      "line": 554,
-      "symbol": "Phase 5 gate resolution",
+      "file": "skills/z-audit-plan/SKILL.md",
+      "line": 596,
+      "symbol": "Phase 5 gate decision",
       "kind": "module",
-      "summary": "Calls amend-gate-decision.py with resolver envelope; dispatches auto_split / force_ask / halt branches"
+      "summary": "Calls config.py resolve-question workflow.audit_to_amend and passes envelope to amend-gate-decision.py."
     },
     {
-      "file": "commands/z-audit-plan.md",
-      "line": 619,
-      "symbol": "Phase 5 amendment-brief render",
+      "file": "skills/z-audit-plan/SKILL.md",
+      "line": 631,
+      "symbol": "auto_split branch",
       "kind": "module",
-      "summary": "Builds corrections + approach_concerns JSON and pipes to amendment-brief.py; presents output conversationally (no popup)"
+      "summary": "Auto-amends spec_gap findings and renders premise_failure findings with amendment-brief.py."
     },
     {
-      "file": "commands/z-review-all.md",
-      "line": 926,
-      "symbol": "Phase 6.6",
+      "file": "skills/z-audit-plan/SKILL.md",
+      "line": 778,
+      "symbol": "force_ask prose branch",
       "kind": "module",
-      "summary": "Calls amendment-brief.py with spec_gap corrections (from Phase 6.5) + premise_failure escalations; writes amendment-brief.md to archive; Finalize APPROACH_FILE prefers it"
+      "summary": "Emits prose alignment summary instead of AskUserQuestion popup."
+    },
+    {
+      "file": "skills/z-review-all/SKILL.md",
+      "line": 821,
+      "symbol": "Phase 6.5 auto-amend",
+      "kind": "module",
+      "summary": "Auto-applies all amendment_proposal tasks via /z-amend --skip-user-gate."
+    },
+    {
+      "file": "skills/z-review-all/SKILL.md",
+      "line": 892,
+      "symbol": "Phase 6.6 amendment brief",
+      "kind": "module",
+      "summary": "Builds corrections + approach_concerns JSON and writes archive amendment-brief.md."
     }
   ],
   "depends_on": [
     "config",
-    "commands"
+    "z-audit-plan",
+    "z-review-all"
   ],
   "consumed_by": [
-    "commands"
+    "z-audit-plan",
+    "z-review-all"
   ],
   "invariants": [
-    "both /z-audit-plan and /z-review-all call the same scripts/amendment-brief.py — no duplicated format logic",
-    "auto_split never presents an AskUserQuestion popup; the brief is a conversational reply only",
-    "amend-gate-decision.py exits 1 on malformed input; orchestrator falls through to ask",
-    "amendment-brief.py always emits Patched-automatically line even when corrections=[]; omits Worth-your-eyes only when approach_concerns=[]",
-    "affected on approach_concerns is optional — premise_failure may be plan-level with no single task target",
-    "correction/approach are human glosses only — the canonical enum values are spec_gap and premise_failure (z-review-all.md:716)",
-    "discriminator is Class, never severity",
-    "amend-gate-decision.py source==none maps to auto_split (fresh user default); source in {config,memory} + result in {ask,prefill} maps to force_ask",
-    "halt gate token causes immediate abort; force_ask invokes the 3-way popup unchanged",
-    "workflow.audit_to_amend is in OVERNIGHT_AUTODECIDE_QIDS_DEFAULT as amend; maps to auto_split via rule 2 (result==skip)"
+    "Renderer format is shared by audit-plan and review-all.",
+    "Patched automatically line is always emitted.",
+    "Worth your eyes section is omitted when there are zero approach_concerns.",
+    "Gate decision source==none maps to auto_split.",
+    "force_ask in current z-audit-plan is rendered as prose alignment, not popup.",
+    "z-review-all Phase 6.5 is unconditional for amendment proposals and does not call amend-gate-decision.py."
   ],
   "gotchas": [
-    "amendment-brief.py absent approach_concerns yields no Worth-your-eyes section at all — do not test for a blank section, test for its absence",
-    "amend-gate-decision.py prints the token with no trailing newline; shell $(…) captures will strip it anyway but be aware",
-    "source==none is the common case for a fresh install — always routes to auto_split regardless of result value",
-    "amend-gate-decision.py is called only by /z-audit-plan Phase 5; /z-review-all does not call it (Phase 6.5 auto-amend is unconditional)",
-    "if amend-gate-decision.py exits 1 (bad input), the orchestrator should fall through to the force_ask / ask branch, not halt",
-    "amendment-brief.py correction target field is a file path string (e.g. SPEC.md); do not confuse with the full artifact path"
+    "amend-gate-decision.py prints token without trailing newline.",
+    "source==none is a common fresh-install path and auto-splits.",
+    "amendment-brief.py correction target is an artifact path/gloss, not necessarily an absolute path.",
+    "A missing approach_concerns list is treated as empty and omits the Worth-your-eyes section."
   ],
   "memories": []
 }

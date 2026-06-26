@@ -1,53 +1,113 @@
 {
   "concept": "impl-pre-review",
-  "last_updated": "2026-06-19",
+  "last_updated": "2026-06-24",
   "covers_spec": "reviewer-cost-telemetry/SPEC.md Change 3",
-  "source_file": [
+  "source_files": [
     "skills/z-execute/SKILL.md",
+    "skills/z-review-all/SKILL.md",
     "scripts/audit-preview-misses.sh",
     "agents/pre-reviewer.md",
     "agents/complexity-classifier.md"
   ],
   "confidence": "high",
+  "summary": "Opt-in Flash/Haiku pre-review features: per-task /z-execute gate-down via runtime.impl_pre_review and /z-review-all Phase 3.6 pre-review cycle via runtime.pre_review; both default off and fail safe toward full reviewer coverage.",
   "entry_points": [
-    {"file": "skills/z-execute/SKILL.md", "line": 1951, "symbol": "runtime.impl_pre_review block", "kind": "module", "summary": "Knob header, cost-inversion caveat, NO-OP fallthrough guarantee; PRE_REVIEW_GATED_DOWN/FLASH_PREPEND initialized unconditionally before block"},
-    {"file": "skills/z-execute/SKILL.md", "line": 1969, "symbol": "outer knob gate", "kind": "module", "summary": "config.py get runtime.impl_pre_review == true AND CYCLE==1 guard; whole block skipped when false"},
-    {"file": "skills/z-execute/SKILL.md", "line": 1974, "symbol": "Step 6.P1 tier-drift re-check", "kind": "module", "summary": "Strips cached **Complexity:** line; dispatches complexity-classifier for LIVE_TIER; drift-up emits tier_drift_detected and forces codex"},
-    {"file": "skills/z-execute/SKILL.md", "line": 2019, "symbol": "Step 6.P2 gate-down", "kind": "module", "summary": "Low-tier only; probes Flash provider; dispatches pre-reviewer in final-review-prong-a mode; CLEAN skips codex (review_gated_down); MAJORS/BLOCKERS escalates with FLASH_PREPEND"},
-    {"file": "skills/z-execute/SKILL.md", "line": 2098, "symbol": "Step 6.P3 medium/high advisory", "kind": "module", "summary": "Flash advisory-only for medium/high; VERDICT never gates codex; PRE_REVIEW_GATED_DOWN stays 0"},
-    {"file": "commands/z-review-all.md", "line": 267, "symbol": "Phase 3.6 pre-review cycle", "kind": "module", "summary": "Opt-in via runtime.pre_review; 3 parallel pre-reviewer dispatches (prong-a/b + quality) before Phase 4 consultants; separate from impl_pre_review"},
-    {"file": "scripts/audit-preview-misses.sh", "line": 1, "symbol": "evidence gate", "kind": "module", "summary": "Samples review_gated_down events; re-runs codex on archived diffs; reports Flash false-negative rate; read-only; --demo mode for flow testing"},
-    {"file": "agents/pre-reviewer.md", "line": 1, "symbol": "pre-reviewer", "kind": "module", "summary": "Haiku-tier pre-reviewer; 4 modes: final-review-prong-a/b, final-review-quality, plan-audit; emits **VERDICT:** CLEAN|MAJORS_FOUND|BLOCKERS_FOUND; max 4000 chars output"},
-    {"file": "agents/complexity-classifier.md", "line": 1, "symbol": "complexity-classifier", "kind": "module", "summary": "Reused in Step 6.P1 for tier-drift re-check; heuristic #1 returns cached tier if **Complexity:** present — stripping mandatory"}
+    {
+      "file": "skills/z-execute/SKILL.md",
+      "line": 2082,
+      "symbol": "runtime.impl_pre_review block",
+      "kind": "module",
+      "summary": "Default-off per-task Flash gate-down; documents cost-inversion caveat and no-op fallthrough."
+    },
+    {
+      "file": "skills/z-execute/SKILL.md",
+      "line": 2100,
+      "symbol": "outer knob gate",
+      "kind": "module",
+      "summary": "Requires runtime.impl_pre_review=true and CYCLE==1; retry cycles bypass gate-down."
+    },
+    {
+      "file": "skills/z-execute/SKILL.md",
+      "line": 2105,
+      "symbol": "Step 6.P1 tier-drift re-check",
+      "kind": "module",
+      "summary": "Strips cached **Complexity:** line, dispatches complexity-classifier, drift-up forces codex."
+    },
+    {
+      "file": "skills/z-execute/SKILL.md",
+      "line": 2150,
+      "symbol": "Step 6.P2 low-tier gate-down",
+      "kind": "module",
+      "summary": "Eligible low-tier tasks call pre-reviewer; CLEAN emits review_gated_down and skips codex; blockers/majors prepend and escalate."
+    },
+    {
+      "file": "skills/z-execute/SKILL.md",
+      "line": 2229,
+      "symbol": "Step 6.P3 medium/high advisory",
+      "kind": "module",
+      "summary": "Flash may supply advisory prepend for medium/high tiers but cannot gate codex."
+    },
+    {
+      "file": "skills/z-execute/SKILL.md",
+      "line": 2255,
+      "symbol": "PRE_REVIEW_GATED_DOWN guard",
+      "kind": "module",
+      "summary": "Codex/self-review/advisory reviewer sections are nested under PRE_REVIEW_GATED_DOWN != 1."
+    },
+    {
+      "file": "skills/z-review-all/SKILL.md",
+      "line": 269,
+      "symbol": "Phase 3.6 pre-review cycle",
+      "kind": "module",
+      "summary": "Separate runtime.pre_review opt-in cycle; runs three pre-reviewer modes before final consultants."
+    },
+    {
+      "file": "scripts/audit-preview-misses.sh",
+      "line": 1,
+      "symbol": "audit-preview-misses",
+      "kind": "script",
+      "summary": "Read-only Flash false-negative audit harness; samples review_gated_down events and re-runs codex."
+    },
+    {
+      "file": "agents/pre-reviewer.md",
+      "line": 18,
+      "symbol": "pre-reviewer modes",
+      "kind": "agent",
+      "summary": "final-review-prong-a/b, final-review-quality, and plan-audit; output ends with VERDICT."
+    },
+    {
+      "file": "agents/complexity-classifier.md",
+      "line": 24,
+      "symbol": "cached complexity heuristic",
+      "kind": "agent",
+      "summary": "Returns user-authored tier when **Complexity:** is present, so gate-down callers must strip it for drift detection."
+    }
   ],
   "depends_on": [
     "agents",
-    "commands",
+    "config",
     "subagent-telemetry",
-    "config"
+    "z-review-all"
   ],
   "consumed_by": [
-    "commands"
+    "z-execute",
+    "z-review-all"
   ],
   "invariants": [
-    "runtime.impl_pre_review=false (default): entire block is NO-OP; byte-identical to today",
-    "gate-down only runs on cycle 1; retry cycles always use the full codex reviewer",
-    "Flash provider unavailable → fail-safe toward more thorough review (codex runs); never silently skip",
-    "tier-drift re-check strips cached **Complexity:** line before dispatching classifier",
-    "medium/high tier tasks are never gated down by Flash; Flash may prepend findings but is not authoritative",
-    "PRE_REVIEW_GATED_DOWN and FLASH_PREPEND always initialized before knob block",
-    "PRE_REVIEW_GATE_DOWN (eligibility, P1) and PRE_REVIEW_GATED_DOWN (skip decision, P2) are two DISTINCT variables — must never be unified; downstream skip-guard reads only GATED_DOWN",
-    "runtime.pre_review and runtime.impl_pre_review are independent knobs; enabling one does not enable the other"
+    "Both knobs default false and ship inert.",
+    "runtime.impl_pre_review gate-down only runs on cycle 1.",
+    "Flash provider unavailable or malformed verdict falls through to codex.",
+    "Only eligible low-tier CLEAN can set PRE_REVIEW_GATED_DOWN=1.",
+    "Medium/high Flash use is advisory-only.",
+    "PRE_REVIEW_GATE_DOWN and PRE_REVIEW_GATED_DOWN are distinct and load-bearing.",
+    "runtime.pre_review in /z-review-all never skips production consultants."
   ],
   "gotchas": [
-    "cost-inversion: Haiku-on-all + codex-on-subset can exceed codex-on-all when most tasks are medium/high — run audit before enabling",
-    "complexity-classifier heuristic #1 returns cached tier if **Complexity:** present; stripping the line is mandatory for drift detection",
-    "Flash verdict parsing uses grep -o 'VERDICT:[[:space:]]*[A-Z_]*'; format deviations yield empty verdict → falls through to codex (safe)",
-    "pre-reviewer operates in final-review-prong-a mode in gate-down path (correctness/spec-drift focus); not a generic CLEAN/FAIL oracle",
-    "FLASH_PREPEND injected into codex prompt; codex not constrained by Flash findings",
-    "Z_HARNESS_IMPL_PRE_REVIEW is now a legacy env alias (transliterated); prefer runtime.impl_pre_review = true in config.toml",
-    "models.pre_reviewer in config.toml pins the pre-reviewer model (default empty = resolved via providers.json)",
-    "FOOTGUN: PRE_REVIEW_GATE_DOWN vs PRE_REVIEW_GATED_DOWN differ by one letter ('GATE' vs 'GATED'); P1 sets GATE_DOWN=1 when eligible (no drift-up); P2 sets GATED_DOWN=1 only when Flash returns CLEAN on a low-tier eligible task; do NOT unify into one variable"
+    "Cost inversion is possible; audit review_gated_down misses before recommending enablement.",
+    "The cached **Complexity:** line must be stripped before tier-drift re-check.",
+    "pre-reviewer is line-cited and noise-averse, not a final correctness oracle.",
+    "Legacy env aliases exist, but TOML runtime.* keys are canonical.",
+    "A malformed VERDICT is treated as empty and falls through to codex."
   ],
   "memories": []
 }

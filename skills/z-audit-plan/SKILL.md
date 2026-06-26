@@ -188,7 +188,55 @@ Loop prevention: carry forward the latest route chain; if it already has two ent
    export RUN_BRIEF_ARTIFACT_FALLBACKS=""
    ```
 6. **Notification policy:** see [docs/human/config.md](docs/human/config.md) (notify.level key).
-7. **Docs Grounding:**
+7. **Artifact Scout preflight:**
+   Run after plan selection, claim/register, awareness, and Run Brief init, but before docs grounding, pre-reviewer, consultant, or auditor dispatch.
+   ```bash
+   REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+   ARTIFACT_SCOUT_INVENTORY="$BASE/archive/$RUN/artifact-scout-inventory.json"
+   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/artifact-scout-inventory.py" \
+     --command /z-audit-plan --slug "$Z_HARNESS_SLUG" --run-id "$RUN" \
+     --repo-root "$REPO_ROOT" --plan-dir "$BASE" \
+     --task "$ARGUMENTS" --output "$ARTIFACT_SCOUT_INVENTORY"
+   ARTIFACT_SCOUT_EVENT_PAYLOAD="$(python3 - "$ARTIFACT_SCOUT_INVENTORY" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path, encoding="utf-8"))
+print(json.dumps({
+  "command": data.get("command"),
+  "slug": data.get("slug"),
+  "run_id": data.get("run_id"),
+  "artifact_path": path,
+  "source_status": data.get("source_status", {}),
+  "mandatory_candidate_count": len(data.get("mandatory_candidates") or []),
+  "historical_candidate_count": len(data.get("historical_candidates") or []),
+  "active_record_count": len(data.get("active_records") or []),
+  "worktree_count": len(data.get("worktrees") or []),
+  "truncated": bool(data.get("truncated")),
+}, separators=(",", ":")))
+PYEOF
+)"
+   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" artifact_scout_inventory_complete "$ARTIFACT_SCOUT_EVENT_PAYLOAD"
+   ```
+   The `artifact_scout_inventory_complete` payload MUST include `command`, `slug`, `run_id`, `artifact_path`, `source_status`, `mandatory_candidate_count`, `historical_candidate_count`, `active_record_count`, `worktree_count`, and `truncated` from the inventory JSON.
+   ```
+   <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this artifact-scout
+        requirement and skip the Agent() call. Skipping means continue without scout routing. -->
+   Agent(
+     subagent_type="artifact-scout",
+     description="Artifact scout for z-audit-plan <slug>",
+     prompt="current_command: /z-audit-plan
+task_or_topic: <plan audit request>
+route_chain_json: <current route chain JSON>
+repo_root: <abs repo root>
+inventory_json_path: $BASE/archive/$RUN/artifact-scout-inventory.json
+
+Inline inventory JSON:
+<contents printed by scripts/artifact-scout-inventory.py>"
+   )
+   ```
+   Write the raw response to `$BASE/archive/$RUN/artifact-scout.md`. Emit `artifact_scout_classified`, `artifact_scout_warning`, and `artifact_scout_route` per the contract. Warning-only output never writes `route-decision.md`, never emits `artifact_scout_route`, and never advances `route_chain`; only `ask_user` or route outcomes with `route_chain_effect: "write_route_decision"` may write a route artifact and emit `plan_route_decision`.
+
+8. **Docs Grounding:**
    If `docs/llm/INDEX.json` exists in the repo root, dispatch `doc-fetcher` (Haiku) to identify concepts touched by this plan:
    ```
    <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
@@ -202,9 +250,9 @@ Loop prevention: carry forward the latest route chain; if it already has two ent
    ```
    Use the returned concept slugs to retrieve the appropriate `docs/llm/<concept>.json` files as plan-grounding validation guidelines.
 
-8. **Skip-by-recommendation — low-risk fast-path:**
+9. **Skip-by-recommendation — low-risk fast-path:**
 
-   After completing steps 0–7, evaluate whether the plan qualifies for a skip. A plan is **low-risk** when ALL of the following hold:
+   After completing steps 0–8, evaluate whether the plan qualifies for a skip. A plan is **low-risk** when ALL of the following hold:
 
    - No public API changes (no new exported functions, types, or CLI flags in the acceptance criteria)
    - No schema/migration impact (no database table changes, no serialization-format changes)

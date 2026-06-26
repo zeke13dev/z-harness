@@ -1,18 +1,19 @@
 {
   "concept": "cost-estimation",
-  "last_updated": "2026-06-19",
+  "last_updated": "2026-06-24",
   "covers_spec": "none",
   "source_file": [
     "scripts/estimate-tokens.py",
     "scripts/pre-run-cost-gate.sh",
     "scripts/token-cost-profiles.json",
     "scripts/config.py",
-    "commands/z-research.md",
-    "commands/z-uplift.md",
-    "commands/z-plan-split.md",
-    "commands/z-brainstorm.md",
-    "commands/z-audit.md",
-    "commands/z-debug.md"
+    "skills/z-research/SKILL.md",
+    "skills/z-uplift/SKILL.md",
+    "skills/z-plan-split/SKILL.md",
+    "skills/z-brainstorm/SKILL.md",
+    "skills/z-audit/SKILL.md",
+    "skills/z-debug/SKILL.md",
+    "skills/z-plan/SKILL.md"
   ],
   "confidence": "high",
   "entry_points": [
@@ -21,14 +22,21 @@
       "line": 1,
       "symbol": "estimate-tokens.py",
       "kind": "module",
-      "summary": "LLM-free CLI; two subcommands: estimate (pre-run envelope) + subagent-costs (per-host/model USD breakdown); legacy positional mode backward-compatible; exit 0 on any producible output"
+      "summary": "LLM-free CLI; estimate (pre-run envelope), forecast/--e2e-forecast (plan + projected execute), and subagent-costs (observed per-host/type USD breakdown); legacy positional mode backward-compatible; exit 0 on any producible output"
     },
     {
       "file": "scripts/estimate-tokens.py",
-      "line": 786,
+      "line": 849,
       "symbol": "estimate",
       "kind": "fn",
-      "summary": "Core estimator: loads profiles, resolves profile for command, computes static + dispatch + empirical tiers, applies static-floor clamp, returns envelope dict"
+      "summary": "Core estimator: loads profiles, resolves profile for command, computes static + dispatch-default/explicit + empirical tiers, applies static-floor clamp, returns envelope dict"
+    },
+    {
+      "file": "scripts/estimate-tokens.py",
+      "line": 1089,
+      "symbol": "forecast_e2e",
+      "kind": "fn",
+      "summary": "Builds schema_version e2e_forecast.v1 with plan_component, execute_forecast_component, and total_forecast; execute may be a static low-confidence profile projection."
     },
     {
       "file": "scripts/estimate-tokens.py",
@@ -67,7 +75,7 @@
     },
     {
       "file": "scripts/estimate-tokens.py",
-      "line": 116,
+      "line": 128,
       "symbol": "_default_metrics_path",
       "kind": "fn",
       "summary": "Resolves metrics.jsonl path: Z_HARNESS_BASE_DIR > bash plan-path.sh base_dir (external base, 10s timeout) > legacy <repo>/z-harness/metrics.jsonl"
@@ -84,35 +92,42 @@
       "line": 1,
       "symbol": "token-cost-profiles.json",
       "kind": "const",
-      "summary": "Profile registry: schema_version 1; profiles object keyed by command name (z-research, z-uplift, z-plan-split, z-brainstorm, z-audit, z-debug); each entry: range [low, high], gate hard|soft, optional multipliers {key: per_unit_tokens}"
+      "summary": "Profile registry: schema_version 1; includes hard profiles for z-research, z-uplift, z-plan-split, and z-plan; z-plan defines dispatch_defaults/dispatch_contract plus a low-confidence execute e2e_forecast component"
     },
     {
       "file": "scripts/config.py",
-      "line": 78,
+      "line": 1,
       "symbol": "workflow.pre_run_cost_gate (DEFAULTS)",
       "kind": "const",
       "summary": "[Cost gate] Enum question_id in DEFAULTS workflow block; default 'ask'; valid values ask|auto_proceed|halt"
     },
     {
       "file": "scripts/config.py",
-      "line": 165,
+      "line": 1,
       "symbol": "cost.token_budget (DEFAULTS)",
       "kind": "const",
       "summary": "[Cost gate] Integer budget knob; default None (unset); NOT a question_id; validator: _validate_positive_int_or_none; coercer converts string env values to int"
     },
     {
       "file": "scripts/config.py",
-      "line": 564,
+      "line": 623,
       "symbol": "workflow.pre_run_cost_gate (QUESTION_IDS)",
       "kind": "const",
-      "summary": "[Cost gate] Registered question_id; choices {ask, auto_proceed, halt}; skill_default ask; callsites: scripts/pre-run-cost-gate.sh, commands/z-research.md, commands/z-uplift.md, commands/z-plan-split.md"
+      "summary": "[Cost gate] Registered question_id; choices {ask, auto_proceed, halt}; skill_default ask; callsites include scripts/pre-run-cost-gate.sh plus z-research/z-uplift/z-plan-split/z-plan skills"
     },
     {
       "file": "scripts/config.py",
-      "line": 2789,
+      "line": 2898,
       "symbol": "_resolve_cost_gate",
       "kind": "fn",
       "summary": "[Cost gate] Budget-aware resolver invoked by check-no-ask when --range-high and --severity are both provided; applies overnight envelope first, then budget rule; unhandled_gate when policy mode + range_high > budget; returns {result, rule_id}"
+    },
+    {
+      "file": "skills/z-plan/SKILL.md",
+      "line": 479,
+      "symbol": "Pre-subagent cost gate",
+      "kind": "section",
+      "summary": "/z-plan hard gate before every expensive Agent dispatch; passes documented z-plan dispatch keys to pre-run-cost-gate.sh and delegates budget/no-ask policy to config.py."
     }
   ],
   "depends_on": [
@@ -147,7 +162,11 @@
     "OVERNIGHT_AUTODECIDE_QIDS_DEFAULT does NOT include workflow.pre_run_cost_gate; operators must opt in via OVERNIGHT_AUTODECIDE_EFFECTIVE or direct config",
     "D2 (wide x HEAVY suppression): when WIDE_N > 3, brainstorm treats run as MEDIUM and skips HEAVY fan-out; wide and HEAVY never multiply",
     "Subagent-costs pricing lives only in _DEFAULT_MODEL_RATES (SOLID); raw telemetry keeps prompt_chars/response_chars separate per D9",
-    "_default_metrics_path resolves external base via plan-path.sh base_dir subprocess (10s timeout); falls back to legacy in-repo path on failure"
+    "_default_metrics_path resolves external base via plan-path.sh base_dir subprocess (10s timeout); falls back to legacy in-repo path on failure",
+    "estimate-tokens.py forecast and estimate --e2e-forecast emit schema_version e2e_forecast.v1 with plan_component, execute_forecast_component, and total_forecast; /z-plan gates only the plan component.",
+    "Profiles may declare dispatch_defaults; explicit non-negative dispatch values replace defaults for the same key, duplicate explicit values are summed before replacement, and unknown keys warn/are ignored.",
+    "/z-plan is a hard workflow.pre_run_cost_gate callsite and runs the gate before planning-router, intent-classifier, doc-fetcher, Explore, consultant panels, task-tree-generator, or any other expensive Agent dispatch.",
+    "/z-plan emits exactly one terminal cost_gate_decision per run; nonterminal cost-reduction attempts emit cost_gate_reestimate_attempt instead."
   ],
   "gotchas": [
     "Z_HARNESS_COST_TOKEN_BUDGET string env value must coerce to int; the coercer in _COERCERS handles this; if coercion fails at repo/env layer, config.py exits 2 (hard fail, not soft warn)",
@@ -165,7 +184,10 @@
     "_no_profile_envelope returns range_high=0; the gate fallback envelope (when estimator binary missing/failing) returns range_high=null; callers check for null to detect estimate-unavailable",
     "Wide-mode conversational gate (Phase 2c-1, WIDE_N > 3) in z-brainstorm is a separate inline prose estimate — NOT backed by pre-run-cost-gate.sh; uses simple formula and ends the turn awaiting user confirmation",
     "subagent-costs pricing rates are approximate for native Claude subagents (chars/4); only external CLIs producing provider_input_tokens/provider_output_tokens give exact accounting",
-    "After Phase-D external-base flip, legacy in-repo z-harness/metrics.jsonl may be stale; Z_HARNESS_BASE_DIR env override is the reliable escape hatch if plan-path.sh subprocess fails"
+    "After Phase-D external-base flip, legacy in-repo z-harness/metrics.jsonl may be stale; Z_HARNESS_BASE_DIR env override is the reliable escape hatch if plan-path.sh subprocess fails",
+    "Plan+execute forecasts are approximate and prospective; execute_forecast_component is a wide low-confidence projection for later /z-execute and is not a cap.",
+    "/z-plan dispatch_defaults are intentionally fail-closed because route/depth/doc/explore/consult fan-out may not be known before the gate.",
+    "Post-run subagent-costs is retrospective observed-call accounting (provider tokens when present, char-est otherwise); do not treat it as the same surface as pre-run forecasts."
   ],
   "envelope_schema": {
     "command": "<canonical command key, e.g. z-research>",
@@ -175,9 +197,24 @@
     "confidence": "high | medium | low",
     "basis": "<human-readable string describing data sources>",
     "breakdown": [
-      {"tier": "static", "low": "<int>", "high": "<int>"},
-      {"tier": "dispatch", "add": "<int>", "keys": ["<key>"]},
-      {"tier": "empirical", "p50": "<float>", "p90": "<float>", "samples": "<int>"}
+      {
+        "tier": "static",
+        "low": "<int>",
+        "high": "<int>"
+      },
+      {
+        "tier": "dispatch",
+        "add": "<int>",
+        "keys": [
+          "<key>"
+        ]
+      },
+      {
+        "tier": "empirical",
+        "p50": "<float>",
+        "p90": "<float>",
+        "samples": "<int>"
+      }
     ],
     "gate": "hard | soft | null"
   },
@@ -190,19 +227,24 @@
     "kind": "cost_gate_decision",
     "run": "<RUN_ID>",
     "command": "<e.g. z-research>",
-    "choice": "proceed | auto_proceed | change_dispatch | abandon | halt",
+    "choice": "proceed | auto_proceed | change_dispatch | abandon | halt | interrupted",
     "estimated_tokens": "<int>",
     "confidence": "<confidence level>",
-    "basis": "<basis string>"
+    "basis": "<basis string>",
+    "z_plan_terminal_only": true
   },
   "config_knobs": {
     "workflow.pre_run_cost_gate": {
       "type": "string",
       "default": "ask",
-      "valid_values": ["ask", "auto_proceed", "halt"],
+      "valid_values": [
+        "ask",
+        "auto_proceed",
+        "halt"
+      ],
       "env": "Z_HARNESS_WORKFLOW_PRE_RUN_COST_GATE",
       "is_question_id": true,
-      "description": "Controls hard-gate AskUser behavior. ask=prompt; auto_proceed=skip prompt; halt=unconditional halt"
+      "description": "Controls hard-gate AskUser behavior for profiled commands including /z-plan. ask=prompt; auto_proceed=skip prompt after helper approval; halt=unconditional halt."
     },
     "cost.token_budget": {
       "type": "int | null",
@@ -213,12 +255,127 @@
     }
   },
   "profiled_commands": {
-    "z-research": {"gate": "hard", "range": [3000000, 6000000], "dispatch_keys": ["map", "brainstorm"], "fires_on": "always (Phase 0.5)"},
-    "z-uplift": {"gate": "hard", "range": [2000000, 8000000], "dispatch_keys": ["per_component"], "fires_on": "always (Phase 1.5)"},
-    "z-plan-split": {"gate": "hard", "range": [1500000, 5000000], "dispatch_keys": ["per_cluster"], "fires_on": "always (Phase 1.5)"},
-    "z-brainstorm": {"gate": "soft", "range": [80000, 220000], "dispatch_keys": ["per_heavy_chunk"], "fires_on": "HEAVY path only (step 1a); wide WIDE_N>3 uses separate inline prose gate (2c-1)"},
-    "z-audit": {"gate": "soft", "range": [200000, 1200000], "dispatch_keys": ["per_dimension"], "fires_on": "HEAVY path only"},
-    "z-debug": {"gate": "soft", "range": [300000, 1500000], "dispatch_keys": [], "fires_on": "always (Phase 0 preamble)"}
+    "z-research": {
+      "gate": "hard",
+      "range": [
+        3000000,
+        6000000
+      ],
+      "dispatch_keys": [
+        "map",
+        "brainstorm"
+      ],
+      "fires_on": "always (Phase 0.5)"
+    },
+    "z-uplift": {
+      "gate": "hard",
+      "range": [
+        2000000,
+        8000000
+      ],
+      "dispatch_keys": [
+        "per_component"
+      ],
+      "fires_on": "always (Phase 1.5)"
+    },
+    "z-plan-split": {
+      "gate": "hard",
+      "range": [
+        1500000,
+        5000000
+      ],
+      "dispatch_keys": [
+        "per_cluster"
+      ],
+      "fires_on": "always (Phase 1.5)"
+    },
+    "z-brainstorm": {
+      "gate": "soft",
+      "range": [
+        80000,
+        220000
+      ],
+      "dispatch_keys": [
+        "per_heavy_chunk"
+      ],
+      "fires_on": "HEAVY path only (step 1a); wide WIDE_N>3 uses separate inline prose gate (2c-1)"
+    },
+    "z-audit": {
+      "gate": "soft",
+      "range": [
+        200000,
+        1200000
+      ],
+      "dispatch_keys": [
+        "per_dimension"
+      ],
+      "fires_on": "HEAVY path only"
+    },
+    "z-debug": {
+      "gate": "soft",
+      "range": [
+        300000,
+        1500000
+      ],
+      "dispatch_keys": [],
+      "fires_on": "always (Phase 0 preamble)"
+    },
+    "z-plan": {
+      "gate": "hard",
+      "range": [
+        300000,
+        900000
+      ],
+      "dispatch_keys": [
+        "planning_mode_full",
+        "intent_level_depth",
+        "doc_fetcher",
+        "explore",
+        "phase3_consultants",
+        "phase7_consultants",
+        "task_tree_generator"
+      ],
+      "dispatch_defaults": {
+        "planning_mode_full": 0,
+        "intent_level_depth": 2,
+        "doc_fetcher": 1,
+        "explore": 3,
+        "phase3_consultants": 5,
+        "phase7_consultants": 5,
+        "task_tree_generator": 1
+      },
+      "fires_on": "pre-subagent gate in /z-plan, before any expensive Agent dispatch",
+      "e2e_forecast": {
+        "execute_range": [
+          2000000,
+          20000000
+        ],
+        "confidence": "low",
+        "uncertainty": "wide_static_fallback"
+      }
+    }
+  },
+  "cost_gate_reestimate_attempt_event": {
+    "kind": "cost_gate_reestimate_attempt",
+    "command": "z-plan",
+    "run_id": "<RUN_ID>",
+    "gate_id": "<RUN_ID>:z-plan:pre-subagent-cost-gate",
+    "attempt_index": "<1..2>",
+    "changed_drivers": [
+      "intent_level_depth",
+      "phase3_consultants"
+    ],
+    "prior_range_high": "<int>",
+    "new_range_high": "<int>",
+    "disposition": "ask | auto_proceed | halt | unhandled_gate",
+    "terminal_event_kind": "cost_gate_decision"
+  },
+  "e2e_forecast_schema": {
+    "schema_version": "e2e_forecast.v1",
+    "mode": "e2e_forecast",
+    "plan_component": "pre-run estimate envelope component for the command being gated",
+    "execute_forecast_component": "projected post-plan execution component; for z-plan this is static low-confidence wide fallback from token-cost-profiles.json",
+    "total_forecast": "plan + execute component sums; approximate, not exact, not a hard cap"
   },
   "memories": []
 }

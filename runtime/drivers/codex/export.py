@@ -213,8 +213,8 @@ def export(
     ExportResult
         ``dest`` is *export_root* (resolved).
         ``files`` lists every file written.
-        ``fidelity`` is ``"native"`` (skills are copied verbatim; Codex
-        discovers them via the .codex-plugin manifest).
+        ``fidelity`` is ``"flattened"`` because skills are copied verbatim but
+        Codex still lacks native z-harness subagent orchestration.
         ``warnings`` carries any non-fatal validation errors discovered during
         export.
     """
@@ -271,6 +271,6 @@ def export(
     return ExportResult(
         dest=export_root,
         files=emitted + [agents_path, plugin_manifest_path],
-        fidelity="native",
+        fidelity="flattened",
         warnings=warnings,
     )

@@ -253,6 +253,24 @@ class TestRenderHostTable(unittest.TestCase):
         _, mock_console = self._render(adapters)
         mock_console.print.assert_called_once()
 
+    def test_omp_host_and_matrix_render(self):
+        """Doctor renders OMP in both the host table and command matrix."""
+        from rich.console import Console
+
+        adapters = [_fake_adapter("omp", fidelity="partial", installed=True, version="omp 0.1.0")]
+        console = Console(record=True, width=120)
+        with patch(
+            "z_harness_cli.commands.doctor._probe_reachable",
+            return_value=True,
+        ):
+            doctor_mod._render_host_table(adapters, console)
+        doctor_mod._render_command_matrix(adapters, console)
+
+        output = console.export_text()
+        self.assertIn("omp", output)
+        self.assertIn("partial", output)
+        self.assertIn("Command-capability matrix", output)
+
 
 # ---------------------------------------------------------------------------
 # Telemetry + config paths
@@ -693,6 +711,7 @@ class TestHostDetectionPrecedence(unittest.TestCase):
         self.assertIn("cursor", output)
         self.assertIn("codex", output)
         self.assertIn("agy", output)
+        self.assertIn("omp", output)
 
 
 # ---------------------------------------------------------------------------

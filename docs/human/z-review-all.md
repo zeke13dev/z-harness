@@ -1,120 +1,61 @@
 # z-review-all
 
-> Last updated: 2026-06-19
-> Covers source: commands/z-review-all.md
+> Last updated: 2026-06-24
+> Covers source: skills/z-review-all/SKILL.md, docs/human/z-review-all.md
 
 ## Overview
 
-`/z-review-all` is the final-gate cross-LLM review for a completed z-harness plan. It runs
-two consultant subagents (Gemini + Codex) on the cumulative diff against the plan contract
-(SPEC.md in legacy mode; frozen INTENT.md + LEDGER.md in INTENT mode). It surfaces:
+`/z-review-all` is the final-gate review for a completed plan. It compares the cumulative diff against the plan contract (legacy SPEC/PLAN/TASKS or INTENT.frozen.md + LEDGER), runs Gemini/Codex final-review consultants, aggregates findings, and promotes actionable work into `REVIEW-TASKS.md`.
 
-- **Implementation drift** (Prong A): code changes that diverge from the spec/intent.
-- **Spec/intent gaps** (Prong B): defects in the plan artifacts that only appear when looking at
-  all tasks together.
+It is broader than `/z-execute` per-task review: it catches cross-task implementation drift, plan gaps, completed-task contradictions, and premise failures that only appear in aggregate.
 
-Use after `/z-execute` completes. Per-task review is done by `/z-execute`; this
-command catches issues that span tasks.
+## Finding promotion contract
 
-## Phase pipeline
+Every promoted finding carries Source, Class, Severity, Evidence, Pushback, Files, Disposition, and Acceptance. Classes map to dispositions:
 
-| Phase | Name | Key output |
-|-------|------|------------|
-| 0 | Setup / Resume check | Slug resolution, state file, run brief init |
-| 1 | Sanity check task status | All tasks complete guard |
-| 2 | Determine base git ref | `BASE_REF` |
-| 3 | Build cumulative diff | `cumulative.diff`, `cumulative.stat` |
-| 3.5 | Full test suite (if TESTS.md) | Test results |
-| 3.6 | Pre-review (opt-in) | Optional self-reviewer pass |
-| 3.7 | Pre-consult compaction | `proceed` gate; consultant context prep |
-| 4 | Spawn consultant subagents (parallel) | Prong A (drift) + Prong B (spec gaps) findings |
-| 5 | Aggregate findings | `findings.md` |
-| 6 | Promote findings to review tasks | `REVIEW-TASKS.md` |
-| 6.5 | Auto-amend spec_gap findings | Automatic `/z-amend --skip-user-gate` per amendment proposal |
-| 6.6 | Render amendment brief | `amendment-brief.md` in archive; registered in run-brief pipeline |
-| 6.7 | Tier 2 context finalization | `tier2-context.json`, significance gate |
-| 7 | Memory review | `review-agent` subagent dispatch |
+| Class | Disposition |
+|---|---|
+| `implementation_drift` | `candidate_task` fixup. |
+| `spec_gap` | `amendment_proposal` routed through `/z-amend`. |
+| `completed_task_contradiction` | `superseding_task`, never mutate completed `[x]` tasks in place. |
+| `premise_failure` | escalation section. |
+| `observation` | evidence/report only. |
 
-## Class enum (line 716)
+If there are no actionable findings or escalations, the command writes `shipped.md` and omits REVIEW-TASKS.
 
-Every promoted finding must carry a **Class** field using this enum:
+## Phase 6.5 and 6.6
 
-| Class | Meaning | Default action |
-|-------|---------|---------------|
-| `implementation_drift` | Code deviates from plan | Candidate fixup task |
-| `spec_gap` | Plan artifact is incorrect | Amendment proposal → `/z-amend` |
-| `completed_task_contradiction` | Finding contradicts completed work | Superseding task |
-| `premise_failure` | Plan approach is questionable | Escalation section |
-| `observation` | Informational only | Evidence artifact only |
+Phase 6.5 auto-applies every `amendment_proposal` regardless of severity. It uses `/z-amend --skip-user-gate`, logs `auto-amend-log.md`, emits `auto_amend_applied`, and never auto-implements code changes. Candidate fixups, superseding tasks, and premise-failure escalations remain for the user.
 
-This enum is shared by `/z-audit-plan` Phase 4 (which restricts to `spec_gap` and
-`premise_failure` only).
-
-## Phase 6.5 — Auto-amend spec_gap findings
-
-After `REVIEW-TASKS.md` is built, Phase 6.5 automatically applies every `amendment_proposal`
-finding (Class: `spec_gap`) via `/z-amend --skip-user-gate`. This is unconditional — the
-cross-LLM review already validated the findings. Skipping the "do you want to amend?" question
-per finding saves tokens without sacrificing correctness.
-
-Rules:
-- Only `amendment_proposal` tasks are auto-amended; `candidate_task` and `superseding_task` are
-  left in REVIEW-TASKS.md for the user.
-- Completed (`[x]`) tasks are not touched.
-- Only plan artifacts (SPEC.md, PLAN.md, TASKS.md) are touched; code changes are never
-  auto-implemented.
-- An `auto-amend-log.md` is written to the archive and an `auto_amend_applied` event emitted per
-  amendment.
-
-## Phase 6.6 — Amendment brief
-
-After Phase 6.5, Phase 6.6 renders a unified amendment brief via `scripts/amendment-brief.py`
-from both finding streams:
-
-- **`corrections`** — every `spec_gap` amendment proposal successfully auto-amended in Phase 6.5.
-  Each entry carries `title` (task title from REVIEW-TASKS.md), `why` (source finding reference),
-  and `target` (amended artifact path).
-- **`approach_concerns`** — every `premise_failure` escalation from the `## Escalations` section
-  of REVIEW-TASKS.md. Each entry carries `concern` (finding text) and optionally `affected`
-  (affected scope/file).
-
-The brief is written to `$BASE/archive/$RRUN/amendment-brief.md`. The Finalize phase's
-`APPROACH_FILE` resolution **prefers** `amendment-brief.md` over the older approach seed, so the
-amendment brief becomes the active presentation surface in the run-brief pipeline.
-
-The `## Escalations` heading in REVIEW-TASKS.md is preserved as a structured archive record.
-The run-brief pipeline (amendment-brief.md → approach bullets in run-brief.json → Finalize render)
-is the active presentation layer.
-
-Phase 6.6 is skipped entirely when both `corrections` and `approach_concerns` are empty — no brief
-file is written and no pipeline entry is created.
+Phase 6.6 builds `{corrections, approach_concerns}`, calls `scripts/amendment-brief.py`, and writes archive `amendment-brief.md` unless both lists are empty. Finalize prefers that brief over `findings.md` for run-brief approach bullets.
 
 ## Key entry points
 
 <!-- AUTO-START: entry-points -->
-- `commands/z-review-all.md:1` — command definition — role, consultant subagents, INTENT vs legacy mode
-- `commands/z-review-all.md:716` — Class enum — canonical finding classes; consumed by z-audit-plan Phase 4
-- `commands/z-review-all.md:787` — Phase 6 — promote findings to REVIEW-TASKS.md; per-class promotion rules
-- `commands/z-review-all.md:853` — Phase 6.5 — auto-amend amendment_proposal tasks; unconditional /z-amend --skip-user-gate
-- `commands/z-review-all.md:924` — Phase 6.6 — build amendment brief JSON from corrections + approach_concerns; call amendment-brief.py; write to archive
-- `commands/z-review-all.md:995` — Phase 6.6 skip gate — skip when both lists empty
-- `commands/z-review-all.md:1132` — Finalize APPROACH_FILE — prefers amendment-brief.md over approach seed when present
+- `skills/z-review-all/SKILL.md:269` — Phase 3.6 — optional pre-review cycle gated by `runtime.pre_review`.
+- `skills/z-review-all/SKILL.md:562` — Phase 4 — Gemini/Codex final-review consultants.
+- `skills/z-review-all/SKILL.md:674` — finding promotion contract — required fields and Class enum.
+- `skills/z-review-all/SKILL.md:755` — Phase 6 — writes `REVIEW-TASKS.md` or clean `shipped.md`.
+- `skills/z-review-all/SKILL.md:821` — Phase 6.5 — auto-amends every amendable amendment proposal.
+- `skills/z-review-all/SKILL.md:892` — Phase 6.6 — amendment brief renderer integration.
+- `skills/z-review-all/SKILL.md:976` — Phase 6.6 skip gate — skip only when corrections and approach_concerns are both empty.
+- `skills/z-review-all/SKILL.md:1005` — Phase 6.7 — finalizes tier2 context and significance gate.
+- `skills/z-review-all/SKILL.md:1058` — Run Brief finalize — renders outcome/next/approach from run-brief.json.
+- `skills/z-review-all/SKILL.md:1112` — `APPROACH_FILE` selection — prefers archive amendment-brief.md.
+- `skills/z-review-all/SKILL.md:1179` — Phase 7 memory review — dispatches review-agent and optional axiom extractor.
 <!-- AUTO-END: entry-points -->
 
-## How it interacts with others
+## Invariants
 
-- `scripts/amendment-brief.py` — shared renderer called in Phase 6.6 to produce the amendment brief.
-- `/z-amend --skip-user-gate` — called unconditionally in Phase 6.5 for each `amendment_proposal`.
-- `/z-audit-plan` — shares the Class enum defined at line 716; both commands use the same
-  `spec_gap`/`premise_failure` discriminator and the same `amendment-brief.py` renderer.
-- `scripts/run-brief.sh` — run-brief pipeline populated by Phase 6.6 (APPROACH_FILE preference)
-  and Finalize.
-- `scripts/render-run-brief.py` — Finalize render; uses amendment-brief.md as approach source
-  when present.
+- Final consultants are the production-grade review gate; pre-review is opt-in context only.
+- `spec_gap` amendment proposals are auto-amended; no per-finding "do you want to amend?" prompt.
+- `[x]` completed tasks are never mutated in place; contradictions become superseding tasks.
+- Phase 6.6 is skipped only when both corrections and approach concerns are empty.
+- `.review_state.json` is deleted after Phase 6.5 cleanup so the next run starts fresh.
+- Run Brief is the completion surface; avoid independent duplicated prose.
 
-## Telemetry events
+## Memories
 
-| Event | Phase | Payload fields |
-|-------|-------|---------------|
-| `auto_amend_applied` | 6.5 (per amendment) | `finding_id`, `severity` |
-| `z_review_all_verdict` | Finalize | `status`, `drift_findings`, `spec_gap_findings`, `review_tasks`, `escalations`, `user_action` |
+<!-- DO NOT EDIT this section by hand — regenerated from docs/llm/z-review-all.json by doc-updater. Use /z-suggest-memory to add or edit memories. -->
+
+_Note: no memories recorded for this concept yet._

@@ -1,19 +1,19 @@
 {
   "concept": "tier2-doc-rationale",
-  "last_updated": "2026-06-19",
+  "last_updated": "2026-06-24",
   "covers_spec": "doc-updater-agent/20260609T194026Z-doc-updater-agent",
   "source_files": [
-    "commands/z-doc-rationale.md",
+    "skills/z-doc-rationale/SKILL.md",
     "scripts/append-tier2-context.py"
   ],
   "confidence": "high",
   "entry_points": [
     {
-      "file": "commands/z-doc-rationale.md",
+      "file": "skills/z-doc-rationale/SKILL.md",
       "line": 1,
-      "symbol": "z-doc-rationale",
-      "kind": "command",
-      "summary": "Four-phase command: slug discovery, finalized validation, memoize, Sonnet draft, gap-fill, write finals"
+      "symbol": "/z-doc-rationale",
+      "kind": "skill",
+      "summary": "Tier 2 narrative-doc command: discover finalized tier2-context.json, memoize by hash, draft ADR/rationale/migration docs, fill gaps honestly, write finals and cross-links."
     },
     {
       "file": "scripts/append-tier2-context.py",
@@ -44,8 +44,15 @@
       "summary": "Dedup by key fields (task or id); replaces existing or appends"
     }
   ],
-  "depends_on": ["tier1-doc-updater", "z-review-all"],
-  "consumed_by": ["commands"],
+  "depends_on": [
+    "tier1-doc-updater",
+    "z-review-all",
+    "doc-updater"
+  ],
+  "consumed_by": [
+    "commands",
+    "concept-docs"
+  ],
   "invariants": [
     "Never fabricates gap content — ships with honest gaps flagged",
     "Preserves human_overrides with captured-at-decision-time reasons",

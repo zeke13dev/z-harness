@@ -1,6 +1,6 @@
 {
   "concept": "ideator-clusterer",
-  "last_updated": "2026-06-19",
+  "last_updated": "2026-06-24",
   "covers_spec": "brainstorm-conversational",
   "source_files": [
     "agents/ideator-clusterer.md"
@@ -27,7 +27,7 @@
     "z-brainstorm"
   ],
   "consumed_by": [
-    "commands/z-brainstorm"
+    "z-brainstorm"
   ],
   "invariants": [
     "Read-only: no file writes, no shell commands",

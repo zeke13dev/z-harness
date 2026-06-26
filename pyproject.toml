@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "z-harness"
 dynamic = ["version"]
-description = "Packaging CLI for z-harness — install, export, launch, doctor, and update."
+description = "Setup CLI for installing and configuring z-harness in existing AI harnesses."
 requires-python = ">=3.11"
 readme = "README.md"
 license = "MIT"
@@ -34,7 +34,6 @@ Issues = "https://github.com/zeke13dev/z-harness/issues"
 
 [project.scripts]
 z-harness = "z_harness_cli.__main__:app"
-zh = "z_harness_cli.__main__:app"
 
 [project.optional-dependencies]
 dev = [

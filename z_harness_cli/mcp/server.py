@@ -229,7 +229,7 @@ class MCPDispatcher:
         telemetry-only and drivers do not support true subprocess continuation).
         """
         # --- Resolve command metadata ---
-        meta = COMMAND_TOOLS.get(self._tool_name)
+        meta = _active_command_tools().get(self._tool_name)
         if meta is None:
             return ToolResult.error(f"Unknown command: {self._tool_name}")
         cmd_id: str = meta["command_id"]
@@ -472,6 +472,8 @@ COMMAND_TOOLS: dict[str, dict[str, Any]] = {
     "z_clear_checkpoint": {"command_id": "/z-clear-checkpoint", "description": "Write a watcher-readable clear checkpoint",                         "is_heavy": False},
     "z_update":          {"command_id": "/z-update",          "description": "Check local z-harness version; updates must be run explicitly via CLI/plugin", "is_heavy": False},
     "z_sharpen":         {"command_id": "/z-sharpen",         "description": "Conversational bounded idea-sharpener — probes, reframes, and converges a vague idea into a buildable problem statement; writes GRILL.md", "is_heavy": False},
+    "z_learn":           {"command_id": "/z-learn",           "description": "Progressive codebase tutoring and orientation with citations",       "is_heavy": False},
+    "z_grill":           {"command_id": "/z-grill",           "description": "Interactive pushback interview for sharpening a problem statement",  "is_heavy": False},
     "z_overnight":       {"command_id": "/z-overnight",       "description": "Overnight batch run of multiple /z-* commands",                      "is_heavy": False},
     "z_evaluate":        {"command_id": "/z-evaluate",        "description": "Evaluate a completed z-harness session for patterns worth preserving","is_heavy": False},
     "z_context_budget":  {"command_id": "/z-context-budget",  "description": "Analyze context utilization and surface savings recommendations",    "is_heavy": False},
@@ -482,6 +484,36 @@ COMMAND_TOOLS: dict[str, dict[str, Any]] = {
     "z_subagent_dispatch":{"command_id": "/z-subagent-dispatch", "description": "Dispatch a subagent via LLM CLI",                                  "is_heavy": True},
 }
 
+_PROD_HIDDEN_TOOL_NAMES = frozenset(
+    {
+        "z_research",
+        "z_map",
+        "z_overnight",
+        "z_attend",
+        "z_axiom_scan",
+        "z_axiom_list",
+        "z_axiom_approve",
+        "z_axiom_reject",
+        "z_axiom_edit",
+    }
+)
+
+
+def _release_surface() -> str:
+    return os.environ.get("Z_HARNESS_RELEASE_SURFACE", "dev").strip().lower()
+
+
+def _active_command_tools() -> dict[str, dict[str, Any]]:
+    if _release_surface() not in {"prod", "production"}:
+        return COMMAND_TOOLS
+    return {
+        name: meta
+        for name, meta in COMMAND_TOOLS.items()
+        if name not in _PROD_HIDDEN_TOOL_NAMES
+    }
+
+
+
 
 # ==========================================================================
 # Role mapping & repo root
@@ -491,6 +523,7 @@ _COMMAND_ROLE_MAP: dict[str, str] = {
     "z_plan": "implementer", "z_execute": "implementer",
     "z_review_all": "reviewer", "z_audit": "reviewer", "z_audit_plan_style": "reviewer",
     "z_debug": "implementer", "z_do": "implementer", "z_brainstorm": "implementer",
+    "z_learn": "implementer", "z_grill": "implementer",
     "z_research": "implementer", "z_map": "implementer",
     "z_plan_split": "implementer", "z_test": "implementer", "z_amend": "implementer",
     "z_init_docs": "implementer", "z_maintain_docs": "implementer",
@@ -526,10 +559,11 @@ def _dispatch_command(
     """Resolve and dispatch a z-harness command through the runtime dispatcher."""
     tool_name = command_id.lstrip("/").replace("/", "_").replace("-", "_")
 
-    if tool_name not in COMMAND_TOOLS:
+    active_tools = _active_command_tools()
+    if tool_name not in active_tools:
         return ToolResult.error(f"Unknown command: {command_id}")
 
-    meta = COMMAND_TOOLS[tool_name]
+    meta = active_tools[tool_name]
 
     # Fast path: read-only commands use direct handlers.
     if not meta.get("is_heavy", True) and tool_name in _FAST_HANDLERS:
@@ -828,7 +862,7 @@ def _register_tools() -> None:
     if mcp is None:
         return
 
-    for tool_name, meta in COMMAND_TOOLS.items():
+    for tool_name, meta in _active_command_tools().items():
         _make_tool(tool_name, meta)
 
 
