@@ -39,8 +39,37 @@ def test_planning_mode_chosen_telemetry_is_documented_and_emitted_before_cost_ev
 
     assert mode_event < cost_event
     assert "mandatory and is emitted exactly once per run" in mode_block
-    for field in ("mode", "recommended_mode", "source", "reason", "legacy_spec_forced"):
+    for field in ("mode", "choice", "recommended_mode", "source", "reason", "legacy_spec_forced"):
         assert f'"{field}"' in mode_block
+    assert "PLANNING_MODE_CHOICE" in mode_block
+    assert 'case "$PLANNING_MODE_ANSWER" in' in mode_block
+    assert '"Intent mode"*) PLANNING_MODE_CHOICE="intent"; PLANNING_MODE="intent"' in mode_block
+    assert '"Full SDD mode"*) PLANNING_MODE_CHOICE="full"; PLANNING_MODE="full"' in mode_block
+    assert "unattended/no-ask config default from workflow.planning_mode or CLI flag" in mode_block
+
+
+def test_plan_route_check_uses_amended_signal_names() -> None:
+    text = skill_text()
+
+    route_check = index_after(text, "## Plan Route Check")
+    signal_start = index_after(text, "Use only already-known signals:", route_check)
+    signal_end = index_after(text, "and artifact existence.", signal_start)
+    signal_list = text[signal_start:signal_end]
+
+    for signal in (
+        "`plan_validation_intent`",
+        "`question_heavy_artifacts`",
+        "`artifact_unsettled_approach`",
+        "`post_artifact_check`",
+    ):
+        assert signal in signal_list
+    stale_signals = (
+        "`plan_validation_" + "requested`",
+        "`question_heavy_" + "artifact`",
+        "`unsettled_approach_" + "signal`",
+    )
+    for stale_signal in stale_signals:
+        assert stale_signal not in signal_list
 
 
 def test_post_artifact_route_check_fires_after_tasks_and_before_handoff() -> None:
@@ -54,6 +83,15 @@ def test_post_artifact_route_check_fires_after_tasks_and_before_handoff() -> Non
     assert phase8 < post_route < handoff < final_gate
     block = text[post_route:handoff]
     assert 'route_class: "post_artifact"' in block
+    assert '"route_class": "post_artifact"' in block
+    assert '"reason_codes": ["question_heavy_artifacts", "post_artifact_check"]' in block
+    for signal in (
+        '"plan_validation_intent"',
+        '"question_heavy_artifacts"',
+        '"artifact_unsettled_approach"',
+        '"post_artifact_check"',
+    ):
+        assert signal in block
     assert "/z-plan-split" in block
     assert "/z-sharpen" in block
     assert "/z-brainstorm" in block
@@ -85,6 +123,19 @@ def test_final_handoff_gate_ordering_and_resume_map() -> None:
     assert "primary artifact wording changes resume at Phase 6" in block
     assert "task decomposition changes resume at Phase 8" in block
     assert "phase_8_6_final_handoff_gate" in block
+    answer_capture = index_after(block, 'FINAL_HANDOFF_ANSWER="$(AskUserQuestion')
+    capture = index_after(block, 'FINAL_HANDOFF_CHOICE="fresh_session_implementation"', answer_capture)
+    validation_case = index_after(block, 'case "$FINAL_HANDOFF_CHOICE" in', capture)
+    log_choice = index_after(block, 'log-event.sh" "$RUN" next_step_choice', validation_case)
+    next_json_case = index_after(block, 'case "$FINAL_HANDOFF_CHOICE" in', log_choice)
+    assert answer_capture < capture < validation_case < log_choice < next_json_case
+    for machine_option in (
+        "fresh_session_implementation",
+        "audit_first",
+        "stop_with_handoff",
+        "amend",
+    ):
+        assert machine_option in block
 
 
 def test_revised_spine_documents_ordered_skill_edit_sequence() -> None:

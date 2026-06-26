@@ -545,6 +545,8 @@ fi
 
 Config (`workflow.planning_mode`) and flags (`--full`, `--quick`, `--standard`, `--deep`) only choose the recommended/preselected option. A pre-existing `$Z_HARNESS_PLAN_DIR/SPEC.md` is the only hard override: it forces `PLANNING_MODE=full`, records `planning_mode_source=legacy_spec`, and the mode gate must explain that intent mode is unavailable for this slug to avoid overwriting legacy artifacts.
 
+In unattended/no-ask mode, the visible question cannot be surfaced; bind the explicit choice variable from the resolved recommendation instead. The answer source remains `config` (from `workflow.planning_mode`) unless a CLI flag set `PLANNING_MODE_SOURCE=flag`, and the event reason records that this was the unattended/no-ask config default path.
+
 ```bash
 PLANNING_MODE_RECOMMENDED="$PLANNING_MODE"
 PLANNING_MODE_SOURCE="${PLANNING_MODE_SOURCE:-config}"
@@ -563,15 +565,15 @@ elif [[ -n "${Z_HARNESS_NO_ASK:-}" ]]; then
   esac
   PLANNING_MODE_REASON="unattended/no-ask config default from workflow.planning_mode or CLI flag"
 else
-  AskUserQuestion "Choose planning mode for this /z-plan run before cost estimation:" \
+  PLANNING_MODE_ANSWER="$(AskUserQuestion "Choose planning mode for this /z-plan run before cost estimation:" \
     ["Intent mode — adaptive INTENT.md + initial TASKS.md (recommended: ${PLANNING_MODE_RECOMMENDED})", \
-     "Full SDD mode — SPEC.md + PLAN.md + TASKS.md"]
+     "Full SDD mode — SPEC.md + PLAN.md + TASKS.md"])"
   # Capture the visible answer first, then map it to the only values the rest
   # of the pipeline may consume.
-  PLANNING_MODE_CHOICE="<intent|full from AskUserQuestion>"
-  case "$PLANNING_MODE_CHOICE" in
-    intent) PLANNING_MODE="intent" ;;
-    full) PLANNING_MODE="full" ;;
+  case "$PLANNING_MODE_ANSWER" in
+    "Intent mode"*) PLANNING_MODE_CHOICE="intent"; PLANNING_MODE="intent" ;;
+    "Full SDD mode"*) PLANNING_MODE_CHOICE="full"; PLANNING_MODE="full" ;;
+    *) echo "invalid planning mode answer: $PLANNING_MODE_ANSWER" >&2; exit 1 ;;
   esac
   PLANNING_MODE_SOURCE="user"
   PLANNING_MODE_REASON="explicit mode gate"
@@ -2567,7 +2569,23 @@ Request-change resume map: scope/goal changes resume at Phase 0; decision change
 Capture the final gate answer before any logging or branch logic. Normalize it to exactly one of these values: `fresh_session_implementation`, `audit_first`, `stop_with_handoff`, or `amend`.
 
 ```bash
-FINAL_HANDOFF_CHOICE="<fresh_session_implementation|audit_first|stop_with_handoff|amend from AskUserQuestion>"
+FINAL_HANDOFF_ANSWER="$(AskUserQuestion "Choose the next step for <$Z_HARNESS_SLUG>:" \
+  ["Fresh-session implementation — run /clear, then /z-execute <$Z_HARNESS_SLUG>", \
+   "Audit first — run /clear, then /z-audit-plan <$Z_HARNESS_SLUG>", \
+   "Stop with handoff — leave HANDOFF.md as next-session context", \
+   "Amend — run /z-amend <$Z_HARNESS_SLUG>"])"
+if [[ "$FINAL_HANDOFF_ANSWER" == "Fresh-session implementation"* ]]; then
+  FINAL_HANDOFF_CHOICE="fresh_session_implementation"
+elif [[ "$FINAL_HANDOFF_ANSWER" == "Audit first"* ]]; then
+  FINAL_HANDOFF_CHOICE="audit_first"
+elif [[ "$FINAL_HANDOFF_ANSWER" == "Stop with handoff"* ]]; then
+  FINAL_HANDOFF_CHOICE="stop_with_handoff"
+elif [[ "$FINAL_HANDOFF_ANSWER" == "Amend"* ]]; then
+  FINAL_HANDOFF_CHOICE="amend"
+else
+  echo "invalid final handoff answer: $FINAL_HANDOFF_ANSWER" >&2
+  exit 1
+fi
 case "$FINAL_HANDOFF_CHOICE" in
   fresh_session_implementation|audit_first|stop_with_handoff|amend) ;;
   *) echo "invalid final handoff choice: $FINAL_HANDOFF_CHOICE" >&2; exit 1 ;;

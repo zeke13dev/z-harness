@@ -139,7 +139,7 @@ Run Phase 0 **immediately after Setup** — BEFORE Plan Route Check, BEFORE Phas
 
 This is a **separate step** that runs BEFORE scope-probe. It is NOT folded into scope-probe's LIGHT/MEDIUM/HEAVY classifier — the two checks are orthogonal (idea vagueness ≠ codebase fanout size).
 
-Phase 0 uses only the shared `z-sharpen` **Reusable inline component contract** that emits `GRILL.md` content. Treat that contract as the source of truth for prompt input, optional precontext input, clarity/alternatives assessment, `GRILL.md` output, and `proceed|sharpen_more|route_to_brainstorm` recommendation output. Do **not** invoke the `/z-sharpen` command wrapper and do **not** depend on wrapper-only slug derivation, collision handling, telemetry, or conversational lifecycle behavior; `/z-brainstorm` already owns slug/setup/telemetry for this run.
+Phase 0 uses only the shared `z-sharpen`/`GRILL.md` **Reusable inline component contract**. Treat that contract as the source of truth for prompt input, optional precontext input, clarity/alternatives assessment, `GRILL.md` output, and `proceed|sharpen_more|route_to_brainstorm` recommendation output. Do **not** invoke the `/z-sharpen` command wrapper and do **not** depend on wrapper-only slug derivation, collision handling, telemetry, or conversational lifecycle behavior; `/z-brainstorm` already owns slug/setup/telemetry for this run.
 
 **Check — GRILL.md already exists?**
 
@@ -441,7 +441,7 @@ Original topic (for context): <topic>
 Axis: <AXIS>
 Output path: <interpolate $Z_HARNESS_PLAN_DIR>/archive/<interpolate $RUN>/chunks/<C.id>/BRAINSTORM.md
 
-Scaffolding instructions: follow /z-brainstorm Phase 1 (doc-fetcher, optional Explore, MAP.md ingestion with legacy RESEARCH.md fallback, GRILL.md seed framing from the shared z-sharpen contract, and the unchanged input_hash formula). Ideator dispatch: follow /z-brainstorm Phase 2 with the IDEATOR_SCHEMA. Synthesis: follow /z-brainstorm Phase 3 (anti-bias check, orchestrator recommendation). Return the full per-chunk BRAINSTORM.md content (frontmatter + body) with chosen_framing: pending in your response; the parent orchestrator writes the file. Do NOT present an AskUserQuestion — the parent owns the user-pick gate."
+Scaffolding instructions: follow /z-brainstorm Phase 1 (doc-fetcher, optional Explore, MAP.md ingestion with legacy RESEARCH.md fallback, GRILL.md seed framing from the shared `z-sharpen`/`GRILL.md` reusable component contract, and the unchanged input_hash formula). Ideator dispatch: follow /z-brainstorm Phase 2 with the IDEATOR_SCHEMA. Synthesis: follow /z-brainstorm Phase 3 (anti-bias check, orchestrator recommendation). Return the full per-chunk BRAINSTORM.md content (frontmatter + body) with chosen_framing: pending in your response; the parent orchestrator writes the file. Do NOT present an AskUserQuestion — the parent owns the user-pick gate."
    )
    ```
 
@@ -484,13 +484,14 @@ axis: <AXIS>"
 
 Run this route check after Phase 1 scaffolding is assembled and before Phase 2 ideator dispatch. `/z-brainstorm` may route only before ideators are spawned; once ideation starts, finish the brainstorm flow instead of switching commands mid-run.
 
-Use only already-known signals from the topic, doc-fetcher synthesis, optional Explore, and any ingested `MAP.md` (or legacy `RESEARCH.md` with `artifact_kind: map`): `candidate_files`, `expected_tasks`, `non_obvious_decisions`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `terrain_uncertain`, `approach_uncertain`, `has_existing_plan`, `plan_validation_intent`, `plan_amend_intent`, `has_fix_artifact`, and `docs_stale_or_drifted`. Set `plan_validation_intent`/`plan_amend_intent` only when the user re-enters a planning entry command on a slug with `SPEC.md`+`PLAN.md`+`TASKS.md` all present (see `agents/planning-router.md` for the language-match heuristic).
+Use only already-known signals from the topic, doc-fetcher synthesis, optional Explore, and any ingested `MAP.md` (or legacy `RESEARCH.md` with `artifact_kind: map`): `candidate_files`, `expected_tasks`, `non_obvious_decisions`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `terrain_uncertain`, `approach_uncertain`, `has_existing_plan`, `plan_validation_intent`, `plan_amend_intent`, `has_fix_artifact`, and `docs_stale_or_drifted`. The extracted `GRILL.md` seed sections from §1c-ii are local route context for deterministic boundaries below; do not invent extra planning-router signal names from them. Set `plan_validation_intent`/`plan_amend_intent` only when the user re-enters a planning entry command on a slug with `SPEC.md`+`PLAN.md`+`TASKS.md` all present (see `agents/planning-router.md` for the language-match heuristic).
 
 Deterministic routes:
 - For unknown terrain, missing citations, or insufficient source facts, stay in `/z-brainstorm`, surface the missing-facts risk to the user, and ask whether to continue with incomplete grounding or stop to gather facts. Do not route to experimental terrain/synthesis commands by default.
-- Route a framing that is already clear and ready for task planning to `/z-plan`.
+- Do not route from here to `/z-sharpen`: Phase 0 already ran the shared component, and any `sharpen_more` loop is resolved before scaffolding. If the component wrote `GRILL.md` with `route_to_brainstorm`, continue this command.
+- Route a framing that is already clear and ready for task planning to `/z-plan` when `## Open branches` is empty/non-material and the user did not ask for option generation.
 - Route a small concrete fix (`candidate_files <= 5`, `non_obvious_decisions <= 2`, no public API/schema impact) to `/z-plan`.
-- Stay in `/z-brainstorm` when the terrain is known enough but multiple plausible framings remain.
+- Stay in `/z-brainstorm` when the terrain is known enough but multiple plausible framings remain, `## Open branches` contains material alternatives, or the user explicitly asked for options/approaches/brainstorming.
 
 Call `planning-router` only when deterministic signals conflict and no hard threshold already decides the route. It receives the compact signal payload plus the current route chain and is advisory; malformed or unavailable classifier output falls back to deterministic routing or an AskUser choice.
 
@@ -577,7 +578,7 @@ Record `depends_on: [MAP.md]` in the eventual BRAINSTORM.md frontmatter if a ter
 
 ### 1c-ii. GRILL.md seed framing (if present)
 
-**GRILL.md sources:** `GRILL.md` is the shared precontext artifact produced by the `z-sharpen` reusable inline component contract (or by a compatible prior GRILL producer). `/z-brainstorm` reads the same sections regardless of producer:
+**GRILL.md sources:** `GRILL.md` is the shared precontext artifact produced by the `z-sharpen`/`GRILL.md` reusable inline component contract (or by a compatible prior GRILL producer). `/z-brainstorm` reads the same sections regardless of producer:
 
 1. **Shared `z-sharpen` inline component (Phase 0, always-on when absent):** §0-sharpen calls the reusable component contract inline, using the brainstorm topic plus empty Phase 0 precontext, and writes `GRILL.md` before scope-probe.
 2. **Reusable component run elsewhere (`/z-sharpen` command wrapper):** A pre-existing `GRILL.md` from the front-end command wrapper is read verbatim; brainstorm does not depend on wrapper-only slug/collision/telemetry/session behavior.
@@ -681,7 +682,7 @@ fi
 
 ### 2b. Dispatch
 
-Spawn **all three ideators in parallel in a single message**, each receiving the **identical** scaffolding payload from Phase 1 (topic + doc-fetcher synthesis + Explore findings if any + RESEARCH content/summary if any). No read-by-reference asymmetry.
+Spawn **all three ideators in parallel in a single message**, each receiving the **identical** scaffolding payload from Phase 1 (topic + doc-fetcher synthesis + Explore findings if any + MAP.md or accepted legacy RESEARCH.md content/summary if any + GRILL.md seed framing from the shared `z-sharpen`/`GRILL.md` contract if any). No read-by-reference asymmetry.
 
 Define a shared instruction block `IDEATOR_SCHEMA` (used verbatim in all three prompts):
 

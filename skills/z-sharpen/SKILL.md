@@ -38,9 +38,12 @@ checks, or pacing, they implement that behavior in their own command surface.
 
 ### Surface boundary rules
 
-- The reusable component is pure orchestration guidance plus optional caller-directed
-  `GRILL.md` writing; it does not create or choose plan directories, derive stable run
-  slugs, check existing artifacts, emit telemetry, or own a multi-turn session.
+- The reusable component is pure orchestration guidance plus `GRILL.md` content. It does
+  not create or choose plan directories, derive stable run slugs, check existing
+  artifacts, emit telemetry, or own a multi-turn session.
+- If a caller supplies a destination context, the component may perform that
+  caller-directed `GRILL.md` write; the caller still owns whether and where the artifact
+  is written.
 - The wrapper may use the component's assessment and markdown exactly as returned, but any
   slug, collision, telemetry, abandonment, confirmation, and handoff behavior is wrapper
   state layered around that reusable result.
@@ -114,13 +117,13 @@ Return all of the following to the caller:
 1. **Clarity assessment:** `clear` or `unclear`, plus the missing dimension if unclear.
 2. **Alternatives assessment:** `single_path`, `minor_open_forks`, or
    `material_alternatives`, plus a one-line rationale.
-3. **Recommendation:** exactly one of:
+3. **Recommendation output:** exactly one of:
    - `proceed` — the problem is buildable and any open forks are minor enough for planning.
    - `sharpen_more` — the prompt is still under-specified, and a focused clarification is
      the next best move.
    - `route_to_brainstorm` — materially different framings survived sharpening; parallel
      ideation should run before planning.
-4. **`GRILL.md` output:** on `proceed` or `route_to_brainstorm`, provide a complete
+4. **GRILL.md output:** on `proceed` or `route_to_brainstorm`, provide a complete
    `GRILL.md` using the schema below. On `sharpen_more`, do not write a final artifact;
    return the best current draft fields and the next clarification to ask.
 

@@ -19,6 +19,7 @@ The caller prompt must provide:
 - `task_or_topic`: the user's task or topic, kept compact.
 - `signals_json`: JSON object containing deterministic route signals.
 - `route_chain_json`: JSON array of prior route hops, or `[]`.
+- `route_chain_json` entries, when present, are compact route-decision objects with `from_command`, `to_command`, `topic_slug` or equivalent topic key, and `reason_codes`; malformed entries are bad input rather than weak loop evidence.
 - `repo_root`: absolute path to the repo root.
 
 The caller may also provide:
@@ -53,8 +54,8 @@ Primary route targets:
 - `/z-do`
 - `/z-plan`
 - `/z-plan-split`
-- `/z-brainstorm`
-- `/z-sharpen` (special non-plan route — conversational bounded idea-sharpener, handled by `premise_underspecified` signal)
+- `/z-brainstorm` (approach-framing route for unsettled alternatives, architecture choices, reversibility uncertainty, or post-artifact approach gaps)
+- `/z-sharpen` (special non-plan route — conversational bounded idea-sharpener for underspecified premises, "what should we do?" prompts, or post-artifact question-heavy output)
 
 Contextual exits:
 
@@ -141,8 +142,8 @@ Use only these reason codes:
 - `architecture_decision`: boolean — the route hinges on architecture, subsystem boundaries, public API, persistence, or irreversible implementation shape
 - `reversibility_uncertain`: boolean — the caller cannot tell whether a choice is easy to undo, making pre-implementation framing valuable
 - `post_artifact_check`: boolean — the caller is routing after writing plan artifacts, not before planning starts
-- `question_heavy_artifacts`: boolean — generated artifacts still contain open questions, placeholders for decisions, or unresolved user-facing choices
-- `artifact_unsettled_approach`: boolean — generated artifacts still present competing approaches or lack an implementation direction
+- `question_heavy_artifacts`: boolean — generated artifacts still contain open questions, unresolved placeholders, decision prompts, or user-facing choices that require sharpening before task execution
+- `artifact_unsettled_approach`: boolean — generated artifacts still present competing approaches, lack a chosen implementation direction, or leave architecture/reversibility tradeoffs unresolved
 - `artifact_exact_slug_match`: boolean — a deterministic artifact inventory entry has the exact slug/topic the caller is routing
 - `artifact_finished_plan_match`: boolean — the exact artifact is a finished plan-family artifact set, including legacy `SPEC.md` + `PLAN.md` + canonical `TASKS.md`, intent `INTENT.md` + canonical `TASKS.md`, or `FIX.md`
 - `artifact_plan_mode`: `legacy_sdd`, `intent`, `fix`, or `null` — mode for the exact finished artifact set when known
@@ -156,7 +157,7 @@ Use only these reason codes:
 - `artifact_inventory_truncated`: boolean — artifact/worktree inventory was capped or truncated before all candidates were considered
 Typed artifact/worktree signal contract: callers may supply `artifact_exact_slug_match`, `artifact_finished_plan_match`, `artifact_plan_mode`, `canonical_tasks_present`, `artifact_similar_candidates`, `active_registry_overlap`, `worktree_overlap`, `artifact_match_confidence`, and `artifact_match_basis`; these names are stable and should be forwarded unchanged from deterministic preflight.
 
-Intent-mode finished-plan detection is explicit: `INTENT.md` plus canonical `TASKS.md` is a finished plan-family artifact set even when `SPEC.md` and `PLAN.md` are absent. Canonical means the task file uses parseable z-harness task headings/status markers, not merely a free-form note named `TASKS.md`. When this exact intent set is present, callers set `artifact_finished_plan_match: true`, `artifact_plan_mode: "intent"`, `canonical_tasks_present: true`, and include `exact_intent_finished_plan` plus `canonical_tasks` in `artifact_match_basis`.
+Intent-mode finished-plan detection is explicit: `INTENT.md` plus canonical `TASKS.md` is a finished plan-family artifact set even when `SPEC.md` and `PLAN.md` are absent. `INTENT.md` alone, or `INTENT.md` with a free-form/noncanonical task note, is not finished-plan evidence. Canonical means the task file uses parseable z-harness task headings/status markers, not merely a free-form note named `TASKS.md`. When this exact intent set is present, callers set `artifact_finished_plan_match: true`, `artifact_plan_mode: "intent"`, `canonical_tasks_present: true`, and include `exact_intent_finished_plan` plus `canonical_tasks` in `artifact_match_basis`.
 
 If a relevant signal is missing, reason from what is present and lower confidence. Do not infer file counts, task counts, independent seam plannability, or artifact existence from the filesystem unless the caller supplied an `existing_artifacts` list or typed artifact/worktree signals to interpret.
 
@@ -173,8 +174,8 @@ Historical similar does not satisfy `has_existing_plan`: it is evidence to surfa
 Apply these rules in order:
 
 1. If any required input is absent or malformed, return `STATUS: bad_input`.
-2. Inspect `route_chain_json` before recommending a target. If the chain already contains two prior entries, return `STATUS: ask_user` with `REASON_CODES: route_loop_risk`.
-3. If the best recommendation would send the user back to the immediate prior `from_command`, return `STATUS: ask_user` with `REASON_CODES: route_loop_risk`.
+2. Inspect `route_chain_json` before recommending a target. If the chain already contains two prior entries for this topic, return `STATUS: ask_user` with `REASON_CODES: route_loop_risk`.
+3. If the candidate target equals `current_command`, or the best recommendation would send the user back to the immediate prior hop's `from_command`, return `STATUS: ask_user` with `REASON_CODES: route_loop_risk`.
 4. If `route_chain_json` already contains the same `from_command` + candidate `to_command` + overlapping reason-code set for this topic, return `STATUS: ask_user` with `REASON_CODES: route_loop_risk`; do not create route ping-pong through `/z-sharpen`, `/z-brainstorm`, `/z-plan`, or `/z-plan-split`.
 5. Normalize exact-plan state:
    - `exact_finished_plan := (artifact_exact_slug_match && artifact_finished_plan_match) || (has_existing_plan && artifact_match_basis is absent or contains exact_finished_plan/unknown)`.
@@ -193,8 +194,8 @@ Apply these rules in order:
 11. If `artifact_inventory_partial` or `artifact_inventory_truncated` is true, include `inventory_partial` and/or `inventory_truncated` as applicable and lower confidence: cap otherwise-high recommendations at `medium`, and use `low` when the recommendation relies on absence of matching artifacts or absence of overlaps.
 12. If `post_artifact_check` is true, surface recommendations only through the caller's route gate; never auto-dispatch the recommended command and never turn warning-only artifact/worktree findings into a route.
 13. If `post_artifact_check` is true and `expected_tasks > 25`, recommend `/z-plan-split` with `post_artifact_recommendation,too_many_tasks` only when `cluster_seams_independently_plannable` is true; otherwise include `too_many_tasks` and keep `/z-plan` or `ask_user` based on split ambiguity.
-14. If `post_artifact_check` is true and `question_heavy_artifacts` is true and `current_command` is not `/z-sharpen`, recommend `/z-sharpen` with `post_artifact_recommendation,question_heavy_artifacts,needs_sharpen`.
-15. If `post_artifact_check` is true and `artifact_unsettled_approach` is true and `current_command` is not `/z-brainstorm`, recommend `/z-brainstorm` with `post_artifact_recommendation,unsettled_approach,needs_brainstorm`.
+14. If `post_artifact_check` is true and `question_heavy_artifacts` is true, recommend `/z-sharpen` with `post_artifact_recommendation,question_heavy_artifacts,needs_sharpen` only when route-chain loop checks permit it and `current_command` is not `/z-sharpen`; otherwise return `ask_user` with `route_loop_risk` rather than re-entering `/z-sharpen`.
+15. If `post_artifact_check` is true and `artifact_unsettled_approach` is true, recommend `/z-brainstorm` with `post_artifact_recommendation,unsettled_approach,needs_brainstorm` only when route-chain loop checks permit it and `current_command` is not `/z-brainstorm`; otherwise return `ask_user` with `route_loop_risk` rather than re-entering `/z-brainstorm`.
 16. If `premise_underspecified` or `asks_what_should_we_do` is true AND `current_command` is NOT `/z-sharpen` (prevent loop), recommend `/z-sharpen` with `needs_sharpen` plus `premise_underspecified` when present.
 17. If `terrain_uncertain` is true, return `STATUS: ask_user` with `RECOMMENDED: ask_user` and `REASON_CODES: ambiguous_route,needs_terrain_grounding` unless the caller explicitly supplied an experimental-route allowlist.
 18. If `alternatives_unsettled`, `architecture_decision`, `reversibility_uncertain`, or `approach_uncertain` is true and terrain is known enough to compare approaches, recommend `/z-brainstorm` with `needs_brainstorm` plus the matching reason codes (`alternatives_unclear`, `architecture_uncertain`, `reversibility_uncertain`, or `needs_more_framing`). If `has_map_and_brainstorm` is true, use `needs_more_framing` to signal that more framing is needed rather than hidden synthesis.
@@ -513,6 +514,34 @@ ROUTE_CLASS: primary
 CONFIDENCE: medium
 REASON_CODES: post_artifact_recommendation,unsettled_approach,needs_brainstorm
 REASON: Generated artifacts still leave approach selection unsettled.
+```
+
+### Example: route-chain loop risk asks user instead of repeating sharpen
+
+Input signal sketch:
+
+```json
+{
+  "current_command": "/z-plan",
+  "route_chain_json": [
+    {"from_command": "/z-plan", "to_command": "/z-sharpen", "topic_slug": "ambiguous-widget", "reason_codes": ["needs_sharpen"]},
+    {"from_command": "/z-sharpen", "to_command": "/z-plan", "topic_slug": "ambiguous-widget", "reason_codes": ["medium_plan"]}
+  ],
+  "premise_underspecified": true,
+  "asks_what_should_we_do": true,
+  "artifact_match_basis": ["none"]
+}
+```
+
+Expected output:
+
+```text
+STATUS: ask_user
+RECOMMENDED: ask_user
+ROUTE_CLASS: none
+CONFIDENCE: low
+REASON_CODES: route_loop_risk
+REASON: Route chain already bounced through sharpen and plan; ask the user instead of repeating the loop.
 ```
 
 The caller owns the final decision. A malformed return is ignored by the caller, which falls back to deterministic routing or an AskUser choice.

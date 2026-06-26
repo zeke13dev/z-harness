@@ -25,9 +25,13 @@ REQUIRED_SIGNALS = {
     "artifact_match_confidence",
     "artifact_match_basis",
     "asks_what_should_we_do",
+    "premise_underspecified",
     "alternatives_unsettled",
     "architecture_decision",
     "reversibility_uncertain",
+    "approach_uncertain",
+    "terrain_uncertain",
+    "plan_validation_intent",
     "post_artifact_check",
     "question_heavy_artifacts",
     "artifact_unsettled_approach",
@@ -36,6 +40,8 @@ REQUIRED_SIGNALS = {
 REQUIRED_REASON_CODES = {
     "existing_artifact_exact",
     "existing_artifact_similar",
+    "existing_plan_audit",
+    "existing_plan_amend",
     "active_plan_overlap",
     "worktree_overlap",
     "inventory_partial",
@@ -51,6 +57,15 @@ REQUIRED_REASON_CODES = {
     "intent_finished_plan",
     "canonical_tasks_present",
     "route_loop_risk",
+    "too_many_tasks",
+    "ambiguous_route",
+    "premise_underspecified",
+}
+
+LEGACY_SIGNAL_NAME_PARTS = {
+    ("plan_validation", "requested"),
+    ("question_heavy", "artifact"),
+    ("unsettled_approach", "signal"),
 }
 
 
@@ -100,6 +115,16 @@ def _basis_contains(signals: dict[str, object], tag: str) -> bool:
 
 def _limited_artifact_router(signals: dict[str, object]) -> dict[str, str]:
     """Deterministic subset of the markdown rules covered by T004 examples."""
+    route_chain = signals.get("route_chain_json")
+    if isinstance(route_chain, list) and len(route_chain) >= 2:
+        return {
+            "STATUS": "ask_user",
+            "RECOMMENDED": "ask_user",
+            "ROUTE_CLASS": "none",
+            "CONFIDENCE": "low",
+            "REASON_CODES": "route_loop_risk",
+        }
+
     exact_finished = bool(
         signals.get("artifact_exact_slug_match")
         and signals.get("artifact_finished_plan_match")
@@ -238,6 +263,13 @@ def test_declares_typed_artifact_worktree_signals_and_reason_codes() -> None:
     assert "- `worktree_overlap`: array" in signal_section
     assert "- `artifact_match_basis`: array" in signal_section
 
+    # Check for backtick-wrapped legacy names to avoid false matches on
+    # new signal names that contain old names as substrings
+    # (e.g. question_heavy_artifact vs question_heavy_artifacts)
+    for prefix, suffix in LEGACY_SIGNAL_NAME_PARTS:
+        assert f"`{prefix}_{suffix}`" not in text, (
+            f"legacy backtick-wrapped name `{prefix}_{suffix}` still present"
+        )
 
 def test_examples_match_deterministic_artifact_signal_rules() -> None:
     titles = [
@@ -252,6 +284,7 @@ def test_examples_match_deterministic_artifact_signal_rules() -> None:
         "post-artifact too many tasks recommends /z-plan-split gate",
         "post-artifact question-heavy artifacts recommend /z-sharpen gate",
         "post-artifact unsettled approach recommends /z-brainstorm gate",
+        "route-chain loop risk asks user instead of repeating sharpen",
     ]
 
     for title in titles:
@@ -300,6 +333,17 @@ def test_exact_finished_without_intent_asks_user() -> None:
     assert output["ROUTE_CLASS"] == "none"
     assert {"existing_artifact_exact", "ambiguous_route"} <= _reason_codes(output)
 
+def test_intent_finished_plan_detection_requires_intent_and_canonical_tasks() -> None:
+    text = _router_text()
+    signals, output = _example("intent finished plan with canonical TASKS routes to /z-amend")
+
+    assert "`INTENT.md` plus canonical `TASKS.md`" in text
+    assert "`INTENT.md` alone" in text
+    assert "free-form/noncanonical task note" in text
+    assert signals["artifact_plan_mode"] == "intent"
+    assert signals["canonical_tasks_present"] is True
+    assert {"intent_finished_plan", "canonical_tasks_present"} <= _reason_codes(output)
+
 
 def test_historical_similar_never_satisfies_has_existing_plan() -> None:
     text = _router_text()
@@ -334,6 +378,36 @@ def test_active_overlap_asks_but_worktree_overlap_is_warning_only() -> None:
     assert "must not by itself return `ask_user` or write a route decision" in rules
     assert "not proof of a reusable plan" in rules
 
+
+def test_sharpen_brainstorm_and_loop_contracts_are_explicit() -> None:
+    text = _router_text()
+    signals = _section(text, "Expected Signals", "Decision Rules")
+    rules = _section(text, "Decision Rules", "Route Gate and Dispatch Boundaries")
+
+    assert "`question_heavy_artifacts`: boolean" in signals
+    assert "`artifact_unsettled_approach`: boolean" in signals
+    assert "unresolved placeholders" in signals
+    assert "competing approaches" in signals
+    assert "`current_command` is not `/z-sharpen`" in rules
+    assert "`current_command` is not `/z-brainstorm`" in rules
+    assert "return `ask_user` with `route_loop_risk`" in rules
+    assert "do not create route ping-pong through `/z-sharpen`, `/z-brainstorm`, `/z-plan`, or `/z-plan-split`" in rules
+
+
+def test_post_artifact_recommendations_remain_gate_only_not_auto_dispatch() -> None:
+    text = _router_text()
+    gate = _section(text, "Route Gate and Dispatch Boundaries", "Confidence Guidance")
+    signals, output = _example("post-artifact question-heavy artifacts recommend /z-sharpen gate")
+
+    assert "never means \"execute the recommended command now.\"" in gate
+    assert "never auto-dispatched" in gate
+    assert "Warning-only artifact/worktree output remains warning-only" in gate
+    assert signals["post_artifact_check"] is True
+    assert signals["question_heavy_artifacts"] is True
+    assert signals["worktree_overlap"]
+    assert output["STATUS"] == "routed"
+    assert output["RECOMMENDED"] == "/z-sharpen"
+    assert {"worktree_overlap", "post_artifact_recommendation", "question_heavy_artifacts", "needs_sharpen"} <= _reason_codes(output)
 
 def test_examples_use_only_declared_reason_codes() -> None:
     text = _router_text()
