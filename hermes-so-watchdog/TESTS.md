@@ -43,11 +43,11 @@ Expected coverage:
 
 - `so omp qt-bot fix blah using z-debug` parses into host/project/task/z-command.
 - Unauthorized Discord users/channels are rejected.
-- Accepted Discord commands call `hermes.so_mcp.start_so_session`.
-- MCP start runs the configured agent CLI with a stable session id.
-- SSH aliases run the agent command on the recorded host/workdir.
+- Accepted Discord commands call `hermes.mcp_hermes_orchestrator.start_so_session`.
+- MCP start creates an internal tmux session with a stable session id.
+- SSH aliases run tmux commands on the recorded host/workdir.
 - Session metadata is persisted in `so-mcp-sessions.json`.
-- `so_send` continues the same session id and updates status/turn count.
+- `so_send` sends input to the same session; `so_read` captures output on demand and reports `needs_input`.
 - Retired tmux/job-registry/supervisor/watchdog tests live under
   `tests/deprecated/` and skip by default.
 
@@ -61,11 +61,12 @@ Fake scenario:
 
 1. Fake Discord message: `so omp qt-bot fix blah using z-debug`.
 2. Hermes parses and authorizes it.
-3. Hermes calls the MCP backend.
-4. The fake agent runner receives an SSH-backed `omp -p --mode text --session-id <id>` command for the configured project alias.
+3. Hermes calls the MCP orchestrator backend.
+4. The fake runner receives SSH-backed tmux `new-session` and `send-keys`
+   commands for the configured project alias.
 5. The initial MCP prompt contains the task and requested z-command.
 6. A fake requester reply is sent through `so_send` to the same MCP session id.
-7. The state file records the turn count, latest output, and status.
+7. `so_read` captures the pane on demand and records latest output/status.
 
 The fake e2e must not contact real Discord, real OMP, real tmux, or real
 project repos.

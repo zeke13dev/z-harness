@@ -1,16 +1,12 @@
 #!/usr/bin/env python3
-"""Deprecated wrapper for the Hermes ``so`` MCP orchestrator.
-
-Use ``scripts/hermes/mcp-hermes-orchestrator.py``. This file remains as a
-compatibility entry point for older local MCP registrations.
-"""
+"""Run the Hermes ``so`` MCP orchestrator over stdio."""
 
 from __future__ import annotations
 
 from pathlib import Path
 import sys
 
-SCRIPTS_DIR = Path(__file__).resolve().parent
+SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 

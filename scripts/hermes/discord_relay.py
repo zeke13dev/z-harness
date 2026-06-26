@@ -135,8 +135,8 @@ def parse_so_command(
     )
 
 def launch_accepted_so_command(command: SoCommand, config: HermesConfig):
-    """Launch an accepted Discord `so` command through the MCP backend."""
-    from hermes.so_mcp import start_so_session
+    """Launch an accepted Discord `so` command through the MCP orchestrator."""
+    from hermes.mcp_hermes_orchestrator import start_so_session
 
     return start_so_session(command, config)
 
@@ -158,7 +158,7 @@ class HermesDiscordClient(discord.Client if DISCORD_AVAILABLE else object):
         self.config = config
         self.target_user: Optional[discord.User] = None
         self._ready = asyncio.Event()
-        self.accepted_so_commands: list[SoCommand] = []
+        self.so_sessions_by_thread: dict[str, tuple[str, str]] = {}
     
     async def on_ready(self):
         """Fetch target user on connect."""
@@ -205,19 +205,43 @@ class HermesDiscordClient(discord.Client if DISCORD_AVAILABLE else object):
                 await message.channel.send(str(exc))
                 return
             try:
-                job = launch_accepted_so_command(command, self.config)
+                session = launch_accepted_so_command(command, self.config)
             except Exception as exc:
                 await message.channel.send(
                     f"Failed to launch Hermes session: {exc}"
                 )
                 return
-            self.accepted_so_commands.append(command)
+            key = str(command.discord_thread_id or command.discord_channel_id)
+            self.so_sessions_by_thread[key] = (
+                session.session_id,
+                command.requester_user_id,
+            )
             await message.channel.send(
-                f"Started Hermes job `{job.job_id}` for `{command.project}`: "
-                f"{command.task}"
+                f"Started Hermes MCP session `{session.session_id}` "
+                f"for `{command.project}`: {command.task}"
             )
             return
         
+        key = str(message.channel.id)
+        session_info = self.so_sessions_by_thread.get(key)
+        if session_info and session_info[1] == str(message.author.id):
+            from hermes.mcp_hermes_orchestrator import send_to_so_session
+
+            session_id = session_info[0]
+            try:
+                response = send_to_so_session(
+                    session_id,
+                    message.content.strip(),
+                    self.config,
+                )
+            except Exception as exc:
+                await message.channel.send(f"Failed to send to `{session_id}`: {exc}")
+                return
+            await message.channel.send(
+                f"Sent to Hermes MCP session `{response.session_id}`."
+            )
+            return
+
         # Check if this is a DM reply to a question
         # We don't track reply chains explicitly; accept any DM from target
         if (isinstance(message.channel, discord.DMChannel) and 

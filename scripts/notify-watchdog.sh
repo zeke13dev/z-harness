@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# DEPRECATED for Discord `so`: MCP orchestration now lives in
+# scripts/hermes/mcp-hermes-orchestrator.py. This script remains only for legacy
+# z-harness watchdog notifications and must not be used as the `so` backend.
+#
 # notify-watchdog.sh — Out-of-band human alert for watchdog events.
 #
 # Usage:

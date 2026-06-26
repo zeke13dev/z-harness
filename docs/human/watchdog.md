@@ -23,10 +23,10 @@ Native `Agent()` stalls cannot be killed from shell. The scheduled hang-check ca
 `schedule-hang-check.sh` schedules one `hang-check.sh` invocation for the future horizon. On macOS it writes a self-removing launchd one-shot; elsewhere it uses a detached sleep fallback. `hang-check.sh` calls `liveness.sh` for unmatched stale `*_start` events and notifies once through `notify-watchdog.sh`.
 
 Discord `so` no longer consumes watchdog webhooks. The current `so` backend is
-`scripts/hermes/so_mcp.py`, which launches and continues agent CLI sessions
-through MCP tools instead of tmux panes, supervisor polling, or watchdog
-routing. `notify-watchdog.sh` remains the z-harness notification channel for
-ordinary watchdog alerts.
+`scripts/hermes/mcp-hermes-orchestrator.py`, an MCP server that owns tmux
+session lifecycle internally and reads panes only through explicit `so_read`.
+`notify-watchdog.sh` and `hang-check.sh` remain legacy z-harness notification
+paths and are deprecated for Discord `so`.
 
 ## Key entry points
 
@@ -39,7 +39,7 @@ ordinary watchdog alerts.
 - `scripts/hang-check.sh:1` — one-shot detector — liveness scan plus notify-once marker.
 - `scripts/liveness.sh:1` — post-hoc inspector — unmatched `*_start` vs matching end events.
 - `scripts/notify-watchdog.sh:1` — notification channel — Discord/macOS best-effort alert.
-- `scripts/hermes/watchdog_webhook.py:1` — deprecated reference only — replaced by `scripts/hermes/so_mcp.py` for Discord `so`.
+- `scripts/hermes/watchdog_webhook.py:1` — deprecated reference only — replaced by `scripts/hermes/mcp-hermes-orchestrator.py` for Discord `so`.
 - `scripts/check-timeout.sh:37` — timeout backend helper — shared `timeout|gtimeout|bash_fallback` resolution.
 - `scripts/config.py:191` — watchdog defaults — enabled/stale/timeout/grace config.
 - `scripts/active-plan-registry.py:281` — legacy watchdog pid cleanup — best-effort SIGTERM/SIGKILL for recorded pid files.
@@ -57,7 +57,7 @@ ordinary watchdog alerts.
 - Scheduled hang-check exits 0 even on detection/evaluation issues; it must not fail loudly.
 - Notify-once markers prevent repeated alerts for the same run/reason.
 - `watchdog.timeout_secs.*` is config-file-only and read via `config.py get`, not env-exported.
-- Discord `so` does not require watchdog `job_id` routing; MCP session ids are owned by `so_mcp.py`.
+- Discord `so` does not require watchdog `job_id` routing; MCP session ids are owned by `mcp-hermes-orchestrator.py`.
 
 ## Gotchas
 

@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# DEPRECATED for Discord `so`: MCP orchestration now lives in
+# scripts/hermes/mcp-hermes-orchestrator.py. This script remains only for legacy
+# z-harness scheduled hang notifications and must not be used as the `so` backend.
+#
 # hang-check.sh — one-shot scheduled hang detector (statusline-hud Workstream B,
 # T007). Replaces the daemon poller layer of the old watchdog: instead of a
 # long-lived sweep, the orchestrator schedules ONE of these (via T008) at a
