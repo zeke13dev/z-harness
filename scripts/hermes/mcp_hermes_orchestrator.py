@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from dataclasses import asdict, dataclass, fields
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -14,10 +14,17 @@ import sys
 from typing import Any, Optional, Protocol
 from uuid import uuid4
 
+SCRIPTS_DIR = Path(__file__).resolve().parents[1]
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
 from hermes.config import DiscordProjectAlias, HermesConfig, load_config
 
 STATE_FILENAME = "so-mcp-sessions.json"
+SIGNAL_FILENAME = "so-mcp-signals.jsonl"
 CAPTURE_LIMIT = 120
+DEFAULT_SESSION_TTL_SECONDS = 24 * 60 * 60
+TERMINAL_STATUSES = {"dead", "expired", "failed", "closed"}
 
 
 class SoMcpError(RuntimeError):
@@ -56,6 +63,19 @@ class SubprocessCommandRunner:
         )
 
 
+
+@dataclass(frozen=True)
+class SoStartRequest:
+    host: str
+    project: str
+    project_alias: DiscordProjectAlias
+    task: str
+    z_command: Optional[str]
+    requester_user_id: str = ""
+    discord_channel_id: str = ""
+    discord_message_id: str = ""
+    discord_thread_id: str = ""
+
 @dataclass
 class SoSessionRecord:
     session_id: str
@@ -79,6 +99,11 @@ class SoSessionRecord:
     updated_at: str = ""
     last_output: str = ""
     last_exit_code: int = 0
+    expires_at: str = ""
+    ended_at: str = ""
+    last_liveness_at: str = ""
+    last_signal_at: str = ""
+    last_signal_digest: str = ""
 
     @property
     def job_id(self) -> str:
@@ -103,6 +128,39 @@ def tmux_session_name(session_id: str) -> str:
 def state_path(config: HermesConfig) -> Path:
     return Path(config.paths.hermes_state_root).expanduser() / STATE_FILENAME
 
+def signal_path(config: HermesConfig) -> Path:
+    return Path(config.paths.hermes_state_root).expanduser() / SIGNAL_FILENAME
+
+
+def _parse_time(value: str) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _expired(record: SoSessionRecord, now: datetime) -> bool:
+    expires_at = _parse_time(record.expires_at)
+    return expires_at is not None and expires_at <= now
+
+
+def _digest(text: str) -> str:
+    import hashlib
+
+    return "sha256:" + hashlib.sha256(text.encode()).hexdigest()
+
+
+def _session_ttl(config: HermesConfig) -> int:
+    raw = os.environ.get("HERMES_SO_SESSION_TTL_SECONDS")
+    if raw:
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            pass
+    return DEFAULT_SESSION_TTL_SECONDS
+
 
 class SoSessionStore:
     def __init__(self, path: str | Path):
@@ -124,8 +182,10 @@ class SoSessionStore:
         for sid, data in raw.items():
             if not isinstance(data, dict):
                 continue
+            known = {field.name for field in fields(SoSessionRecord)}
+            filtered = {key: value for key, value in data.items() if key in known}
             try:
-                records[str(sid)] = SoSessionRecord(**data)
+                records[str(sid)] = SoSessionRecord(**filtered)
             except TypeError:
                 continue
         return records
@@ -156,6 +216,73 @@ class SoSessionStore:
             key=lambda record: record.updated_at or record.created_at,
             reverse=True,
         )
+
+
+class SoSignalStore:
+    def __init__(self, path: str | Path):
+        self.path = Path(path).expanduser()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    @classmethod
+    def from_config(cls, config: HermesConfig) -> "SoSignalStore":
+        return cls(signal_path(config))
+
+    def append(self, event: dict[str, Any]) -> None:
+        with self.path.open("a") as fh:
+            fh.write(json.dumps(event, sort_keys=True) + "\n")
+
+    def drain(self) -> list[dict[str, Any]]:
+        try:
+            lines = self.path.read_text().splitlines()
+        except FileNotFoundError:
+            return []
+        events: list[dict[str, Any]] = []
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event, dict):
+                events.append(event)
+        self.path.write_text("")
+        return events
+
+
+def _signal_payload(record: SoSessionRecord, event: str, text: str) -> dict[str, Any]:
+    return {
+        "event": event,
+        "session_id": record.session_id,
+        "job_id": record.session_id,
+        "status": record.status,
+        "project": record.project,
+        "task": record.task,
+        "requester_user_id": record.requester_user_id,
+        "discord_channel_id": record.discord_channel_id,
+        "discord_thread_id": record.discord_thread_id,
+        "text": text,
+        "created_at": utc_now(),
+    }
+
+
+def _emit_signal(
+    record: SoSessionRecord,
+    config: HermesConfig,
+    event: str,
+    text: str,
+    *,
+    store: Optional[SoSignalStore] = None,
+) -> bool:
+    digest = _digest(f"{event}\0{text}")
+    if record.last_signal_digest == digest:
+        return False
+    (store or SoSignalStore.from_config(config)).append(
+        _signal_payload(record, event, text)
+    )
+    record.last_signal_at = utc_now()
+    record.last_signal_digest = digest
+    return True
 
 
 def build_initial_prompt(command: Any, session_id: str) -> str:
@@ -213,6 +340,33 @@ def _run_checked(
     return proc
 
 
+def _alias_for_record(
+    config: HermesConfig,
+    record: SoSessionRecord,
+) -> DiscordProjectAlias:
+    alias = config.discord.so.project_aliases.get(record.project)
+    if alias is None:
+        raise SoMcpError(f"project alias not configured: {record.project}")
+    return alias
+
+
+def session_is_alive(
+    record: SoSessionRecord,
+    config: HermesConfig,
+    *,
+    runner: Optional[CommandRunner] = None,
+) -> bool:
+    runner = runner or SubprocessCommandRunner()
+    alias = _alias_for_record(config, record)
+    argv, cwd = _run_for_alias(
+        alias,
+        ["tmux", "has-session", "-t", record.tmux_session],
+        _env(record),
+    )
+    proc = runner.run(argv, cwd=cwd, env=_env(record), timeout=15)
+    return proc.returncode == 0
+
+
 def _env(record: SoSessionRecord) -> dict[str, str]:
     env = dict(os.environ)
     env["HERMES_SO_SESSION_ID"] = record.session_id
@@ -234,10 +388,35 @@ def _payload(record: SoSessionRecord) -> dict[str, Any]:
     data["job_id"] = record.session_id
     return data
 
+def _allowed(value: str, allowed_values: set[str]) -> bool:
+    return not allowed_values or value in allowed_values
 
-def _record_from_command(command: Any, session_id: str) -> SoSessionRecord:
+
+def authorize_so_start(
+    config: HermesConfig,
+    *,
+    host: str,
+    requester_user_id: str = "",
+    discord_channel_id: str = "",
+) -> None:
+    """Enforce the deterministic auth envelope; parsing stays with the LLM."""
+    if not _allowed(requester_user_id, config.discord.so.allowed_user_ids):
+        raise SoMcpError("requester is not authorized for so")
+    if not _allowed(discord_channel_id, config.discord.so.allowed_channel_ids):
+        raise SoMcpError("channel is not authorized for so")
+    if not _allowed(host, config.discord.so.allowed_hosts):
+        raise SoMcpError(f"host is not authorized for so: {host}")
+
+
+def _record_from_command(
+    command: Any,
+    session_id: str,
+    *,
+    ttl_seconds: int = DEFAULT_SESSION_TTL_SECONDS,
+) -> SoSessionRecord:
     alias = command.project_alias
-    now = utc_now()
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat()
     return SoSessionRecord(
         session_id=session_id,
         host=command.host,
@@ -257,8 +436,8 @@ def _record_from_command(command: Any, session_id: str) -> SoSessionRecord:
         status="created",
         created_at=now,
         updated_at=now,
+        expires_at=(now_dt + timedelta(seconds=ttl_seconds)).isoformat(),
     )
-
 
 def start_so_session(
     command: Any,
@@ -271,7 +450,7 @@ def start_so_session(
     runner = runner or SubprocessCommandRunner()
     store = store or SoSessionStore.from_config(config)
     sid = session_id or new_session_id()
-    record = _record_from_command(command, sid)
+    record = _record_from_command(command, sid, ttl_seconds=_session_ttl(config))
     store.save(record)
     alias = command.project_alias
     env = _env(record)
@@ -314,9 +493,7 @@ def send_to_so_session(
     record = store.get(session_id)
     if record is None:
         raise SoMcpError(f"session not found: {session_id}")
-    alias = config.discord.so.project_aliases.get(record.project)
-    if alias is None:
-        raise SoMcpError(f"project alias not configured: {record.project}")
+    alias = _alias_for_record(config, record)
     _run_checked(
         runner,
         alias,
@@ -343,21 +520,154 @@ def read_so_session(
     record = store.get(session_id)
     if record is None:
         raise SoMcpError(f"session not found: {session_id}")
-    alias = config.discord.so.project_aliases.get(record.project)
-    if alias is None:
-        raise SoMcpError(f"project alias not configured: {record.project}")
-    proc = _run_checked(
-        runner,
-        alias,
-        ["tmux", "capture-pane", "-p", "-t", record.tmux_session, "-S", f"-{limit}"],
-        _env(record),
-    )
+    alias = _alias_for_record(config, record)
+    try:
+        proc = _run_checked(
+            runner,
+            alias,
+            [
+                "tmux",
+                "capture-pane",
+                "-p",
+                "-t",
+                record.tmux_session,
+                "-S",
+                f"-{limit}",
+            ],
+            _env(record),
+        )
+    except SoMcpError:
+        record.status = "dead"
+        record.ended_at = utc_now()
+        record.updated_at = record.ended_at
+        _emit_signal(
+            record,
+            config,
+            "so_session_dead",
+            f"Hermes MCP session `{record.session_id}` is no longer alive.",
+        )
+        store.save(record)
+        raise
     record.last_output = proc.stdout.strip()
     record.last_exit_code = proc.returncode
     record.status = "needs_input" if _needs_input(record.last_output) else "running"
+    if record.status == "needs_input":
+        _emit_signal(
+            record,
+            config,
+            "so_needs_input",
+            record.last_output[-2000:],
+        )
     record.updated_at = utc_now()
     store.save(record)
     return record
+
+
+def reap_so_sessions(
+    config: HermesConfig,
+    *,
+    runner: Optional[CommandRunner] = None,
+    store: Optional[SoSessionStore] = None,
+    ttl_seconds: Optional[int] = None,
+) -> dict[str, list[str]]:
+    runner = runner or SubprocessCommandRunner()
+    store = store or SoSessionStore.from_config(config)
+    ttl = _session_ttl(config) if ttl_seconds is None else max(0, ttl_seconds)
+    records = store.load()
+    now = datetime.now(timezone.utc)
+    changed = False
+    dead: list[str] = []
+    expired: list[str] = []
+    removed: list[str] = []
+
+    for session_id, record in list(records.items()):
+        if record.status in TERMINAL_STATUSES:
+            ended = _parse_time(record.ended_at or record.updated_at)
+            if ended is not None and now - ended >= timedelta(seconds=ttl):
+                removed.append(session_id)
+                del records[session_id]
+                changed = True
+            continue
+
+        record.last_liveness_at = now.isoformat()
+        if _expired(record, now):
+            record.status = "expired"
+            record.ended_at = now.isoformat()
+            record.updated_at = record.ended_at
+            _emit_signal(
+                record,
+                config,
+                "so_session_expired",
+                f"Hermes MCP session `{session_id}` exceeded its TTL.",
+            )
+            expired.append(session_id)
+            changed = True
+            continue
+
+        if not session_is_alive(record, config, runner=runner):
+            record.status = "dead"
+            record.ended_at = now.isoformat()
+            record.updated_at = record.ended_at
+            _emit_signal(
+                record,
+                config,
+                "so_session_dead",
+                f"Hermes MCP session `{session_id}` tmux pane is gone.",
+            )
+            dead.append(session_id)
+            changed = True
+
+    if changed:
+        store.save_all(records)
+    return {"dead": dead, "expired": expired, "removed": removed}
+
+
+def poll_so_sessions(
+    config: HermesConfig,
+    *,
+    runner: Optional[CommandRunner] = None,
+    store: Optional[SoSessionStore] = None,
+    ttl_seconds: Optional[int] = None,
+) -> dict[str, Any]:
+    """Capture active sessions once, emit input signals, then reap stale records."""
+    runner = runner or SubprocessCommandRunner()
+    store = store or SoSessionStore.from_config(config)
+    checked: list[str] = []
+    needs_input: list[str] = []
+    errors: dict[str, str] = {}
+
+    for record in store.list():
+        if record.status in TERMINAL_STATUSES:
+            continue
+        try:
+            updated = read_so_session(
+                record.session_id,
+                config,
+                runner=runner,
+                store=store,
+            )
+            checked.append(record.session_id)
+            if updated.status == "needs_input":
+                needs_input.append(record.session_id)
+        except SoMcpError as exc:
+            errors[record.session_id] = str(exc)
+
+    reaped = reap_so_sessions(
+        config,
+        runner=runner,
+        store=store,
+        ttl_seconds=ttl_seconds,
+    )
+    return {
+        "checked": checked,
+        "needs_input": needs_input,
+        "errors": errors,
+        "reaped": reaped,
+    }
+
+
+def drain_signal_events(config: HermesConfig) -> list[dict[str, Any]]:
+    return SoSignalStore.from_config(config).drain()
 
 
 try:
@@ -382,25 +692,28 @@ if mcp is not None:
         discord_message_id: str = "",
         discord_thread_id: str = "",
     ) -> dict[str, Any]:
-        """Start an MCP-managed tmux session and return structured state."""
-        from hermes.discord_relay import SoCommand
-
         config = load_config(os.environ.get("Z_HARNESS_REPO", "."))
-        alias = config.discord.so.project_aliases.get(project)
-        if alias is None:
-            return {"ok": False, "error": f"unknown project: {project}"}
-        command = SoCommand(
-            host=host,
-            project=project,
-            project_alias=alias,
-            task=task,
-            z_command=z_command,
-            requester_user_id=requester_user_id,
-            discord_channel_id=discord_channel_id,
-            discord_message_id=discord_message_id,
-            discord_thread_id=discord_thread_id,
-        )
         try:
+            authorize_so_start(
+                config,
+                host=host,
+                requester_user_id=requester_user_id,
+                discord_channel_id=discord_channel_id,
+            )
+            alias = config.discord.so.project_aliases.get(project)
+            if alias is None:
+                return {"ok": False, "error": f"unknown project: {project}"}
+            command = SoStartRequest(
+                host=host,
+                project=project,
+                project_alias=alias,
+                task=task,
+                z_command=z_command,
+                requester_user_id=requester_user_id,
+                discord_channel_id=discord_channel_id,
+                discord_message_id=discord_message_id,
+                discord_thread_id=discord_thread_id,
+            )
             record = start_so_session(command, config)
         except SoMcpError as exc:
             return {"ok": False, "error": str(exc)}
@@ -427,11 +740,27 @@ if mcp is not None:
         return {"ok": True, "output": record.last_output, **_payload(record)}
 
     @mcp.tool()
+    def so_reap_sessions(ttl_seconds: Optional[int] = None) -> dict[str, Any]:
+        """Check tmux liveness, expire old sessions, and prune terminal records."""
+        config = load_config(os.environ.get("Z_HARNESS_REPO", "."))
+        return {"ok": True, **reap_so_sessions(config, ttl_seconds=ttl_seconds)}
+
+    @mcp.tool()
+    def so_drain_signals() -> dict[str, Any]:
+        """Drain Discord-routable session lifecycle/input events."""
+        config = load_config(os.environ.get("Z_HARNESS_REPO", "."))
+        events = drain_signal_events(config)
+        return {"events": events, "count": len(events)}
+
+    @mcp.tool()
     def so_list_sessions() -> dict[str, Any]:
         """List all MCP-managed ``so`` sessions."""
         config = load_config(os.environ.get("Z_HARNESS_REPO", "."))
         records = SoSessionStore.from_config(config).list()
-        return {"sessions": [_payload(record) for record in records], "count": len(records)}
+        return {
+            "sessions": [_payload(record) for record in records],
+            "count": len(records),
+        }
 
 
 def main(argv: list[str] | None = None) -> int:

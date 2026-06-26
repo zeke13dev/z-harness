@@ -11,15 +11,12 @@ Gracefully degrades if discord.py is not installed.
 
 from __future__ import annotations
 import asyncio
-from dataclasses import dataclass
-import os
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from hermes.schema import write_resolve_json, ResolveAnswer
-from hermes.config import DiscordProjectAlias, HermesConfig
+from hermes.config import HermesConfig
 
 try:
     import discord
@@ -52,93 +49,26 @@ def _dedup_key(reason: str, description: str) -> str:
     """Generate dedup key from halt reason + description."""
     return f"{reason}::{description}"
 
-# ---------------------------------------------------------------------------
-# Discord `so` command parsing (Hermes session orchestration)
-# ---------------------------------------------------------------------------
-
-_Z_COMMAND_RE = re.compile(r"^(?P<task>.+)\s+using\s+(?P<z_command>[A-Za-z0-9._/-]+)$")
+def is_so_prefix(content: str) -> bool:
+    stripped = content.lstrip().lower()
+    return stripped == "so" or stripped.startswith("so ")
 
 
-@dataclass(frozen=True)
-class SoCommand:
-    host: str
-    project: str
-    project_alias: DiscordProjectAlias
-    task: str
-    z_command: Optional[str]
-    requester_user_id: str
-    discord_channel_id: str
-    discord_message_id: str
-    discord_thread_id: str = ""
-
-
-class SoCommandError(ValueError):
-    """Discord-visible command intake error."""
-
-
-def parse_so_command(
-    content: str,
-    *,
-    requester_user_id: str,
-    channel_id: str,
-    message_id: str,
-    config: HermesConfig,
-    thread_id: str = "",
-) -> SoCommand:
-    """Parse and authorize `so <host> <project> <task...> [using <z-command>]`."""
-    parts = content.strip().split(maxsplit=3)
-    if len(parts) < 4 or parts[0] != "so":
-        raise SoCommandError(
-            "Usage: so <host> <project> <task...> [using <z-command>]"
-        )
-
-    requester_user_id = str(requester_user_id)
-    channel_id = str(channel_id)
-    message_id = str(message_id)
-    thread_id = str(thread_id or "")
-    so_config = config.discord.so
-
-    allowed_users = set(so_config.allowed_user_ids)
-    if config.discord.user_id:
-        allowed_users.add(str(config.discord.user_id))
-    if requester_user_id not in allowed_users:
-        raise SoCommandError("You are not authorized to start Hermes sessions.")
-
-    if so_config.allowed_channel_ids and channel_id not in so_config.allowed_channel_ids:
-        raise SoCommandError("This Discord channel is not authorized for Hermes sessions.")
-
-    _, host, project, task_part = parts
-    if so_config.allowed_hosts and host not in so_config.allowed_hosts:
-        raise SoCommandError(f"Unknown Hermes host: {host}")
-    if project not in so_config.project_aliases:
-        raise SoCommandError(f"Unknown Hermes project: {project}")
-
-    task_text = task_part.strip()
-    z_command: Optional[str] = None
-    match = _Z_COMMAND_RE.match(task_text)
-    if match:
-        task_text = match.group("task").strip()
-        z_command = match.group("z_command")
-    if not task_text:
-        raise SoCommandError("Task text is required.")
-
-    return SoCommand(
-        host=host,
-        project=project,
-        project_alias=so_config.project_aliases[project],
-        task=task_text,
-        z_command=z_command,
-        requester_user_id=requester_user_id,
-        discord_channel_id=channel_id,
-        discord_message_id=message_id,
-        discord_thread_id=thread_id,
+def so_entry_prompt(raw_message: str) -> str:
+    return (
+        "User wants to orchestrate an agent session from Discord. "
+        "Parse the host, project, task, and optional z-command naturally, "
+        "then call the Hermes so MCP tools directly. Raw message: "
+        f"{raw_message}"
     )
 
-def launch_accepted_so_command(command: SoCommand, config: HermesConfig):
-    """Launch an accepted Discord `so` command through the MCP orchestrator."""
-    from hermes.mcp_hermes_orchestrator import start_so_session
 
-    return start_so_session(command, config)
+def _id_allowed(value: str, allowed_values: set[str]) -> bool:
+    return not allowed_values or value in allowed_values
+
+
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +89,7 @@ class HermesDiscordClient(discord.Client if DISCORD_AVAILABLE else object):
         self.target_user: Optional[discord.User] = None
         self._ready = asyncio.Event()
         self.so_sessions_by_thread: dict[str, tuple[str, str]] = {}
+        self._so_signal_task: Optional[asyncio.Task] = None
     
     async def on_ready(self):
         """Fetch target user on connect."""
@@ -169,7 +100,45 @@ class HermesDiscordClient(discord.Client if DISCORD_AVAILABLE else object):
             print(f"  Discord: target user {self.target_user.name}")
         except Exception as e:
             print(f"  Discord: WARNING — could not fetch user: {e}")
+        if self._so_signal_task is None or self._so_signal_task.done():
+            self._so_signal_task = asyncio.create_task(self._poll_so_signals())
         self._ready.set()
+    
+    async def close(self):
+        if self._so_signal_task is not None:
+            self._so_signal_task.cancel()
+        await super().close()
+    
+    async def _poll_so_signals(self):
+        """Route MCP session signals back into Discord without pane polling."""
+        from hermes.mcp_hermes_orchestrator import drain_signal_events
+
+        while not self.is_closed():
+            try:
+                for event in drain_signal_events(self.config):
+                    await self._route_so_signal(event)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                print(f"  Discord: WARNING — so signal routing failed: {exc}")
+            await asyncio.sleep(10)
+    
+    async def _route_so_signal(self, event: dict):
+        target = event.get("discord_thread_id") or event.get("discord_channel_id")
+        if not target:
+            return
+        try:
+            channel = await self.fetch_channel(int(target))
+        except Exception as exc:
+            print(f"  Discord: WARNING — could not fetch so target {target}: {exc}")
+            return
+        session_id = event.get("session_id", "unknown")
+        text = str(event.get("text", "")).strip()
+        if len(text) > 1800:
+            text = text[-1800:]
+        await channel.send(
+            f"Hermes MCP session `{session_id}` needs attention.\n\n{text}"
+        )
     
     async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User):
         """Handle reaction-based answers."""
@@ -187,72 +156,35 @@ class HermesDiscordClient(discord.Client if DISCORD_AVAILABLE else object):
                     q.answered.set()
                     print(f"  Discord: answer received for {key}: option {q.answer}")
     
+    async def _route_so_entry(self, message: discord.Message, prompt: str):
+        """Hook for the Hermes gateway to receive raw `so` text as an LLM prompt."""
+        print(f"  Discord: so entry routed to Hermes LLM: {prompt}")
+
+
+    def _so_authorized(self, message: discord.Message) -> bool:
+        so_config = self.config.discord.so
+        user_id = str(getattr(message.author, "id", ""))
+        channel_id = str(getattr(message.channel, "id", ""))
+        return _id_allowed(user_id, so_config.allowed_user_ids) and _id_allowed(
+            channel_id,
+            so_config.allowed_channel_ids,
+        )
+
+
     async def on_message(self, message: discord.Message):
-        """Handle text answers and inbound `so` commands."""
-        if message.author.bot:
+        """Detect `so` prefix and hand raw text to Hermes; never parse the task."""
+        if getattr(message.author, "bot", False):
             return
-
-        if message.content.strip().startswith("so "):
+        raw = str(getattr(message, "content", ""))
+        if not is_so_prefix(raw):
+            return
+        if not self._so_authorized(message):
             try:
-                command = parse_so_command(
-                    message.content,
-                    requester_user_id=str(message.author.id),
-                    channel_id=str(message.channel.id),
-                    message_id=str(message.id),
-                    config=self.config,
-                )
-            except SoCommandError as exc:
-                await message.channel.send(str(exc))
-                return
-            try:
-                session = launch_accepted_so_command(command, self.config)
+                await message.channel.send("Not authorized to use Hermes `so` here.")
             except Exception as exc:
-                await message.channel.send(
-                    f"Failed to launch Hermes session: {exc}"
-                )
-                return
-            key = str(command.discord_thread_id or command.discord_channel_id)
-            self.so_sessions_by_thread[key] = (
-                session.session_id,
-                command.requester_user_id,
-            )
-            await message.channel.send(
-                f"Started Hermes MCP session `{session.session_id}` "
-                f"for `{command.project}`: {command.task}"
-            )
+                print(f"  Discord: WARNING — could not send so auth failure: {exc}")
             return
-        
-        key = str(message.channel.id)
-        session_info = self.so_sessions_by_thread.get(key)
-        if session_info and session_info[1] == str(message.author.id):
-            from hermes.mcp_hermes_orchestrator import send_to_so_session
-
-            session_id = session_info[0]
-            try:
-                response = send_to_so_session(
-                    session_id,
-                    message.content.strip(),
-                    self.config,
-                )
-            except Exception as exc:
-                await message.channel.send(f"Failed to send to `{session_id}`: {exc}")
-                return
-            await message.channel.send(
-                f"Sent to Hermes MCP session `{response.session_id}`."
-            )
-            return
-
-        # Check if this is a DM reply to a question
-        # We don't track reply chains explicitly; accept any DM from target
-        if (isinstance(message.channel, discord.DMChannel) and 
-            str(message.author.id) == self.config.discord.user_id):
-            # Find an unanswered question and accept this as the answer
-            for key, q in _inflight.items():
-                if q.answer is None:
-                    q.answer = message.content.strip()
-                    q.answered.set()
-                    print(f"  Discord: text answer for {key}: {q.answer}")
-                    break
+        await self._route_so_entry(message, so_entry_prompt(raw))
     
     async def wait_ready(self, timeout: float = 30):
         """Wait for client to be ready."""
