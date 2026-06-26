@@ -1,0 +1,415 @@
+{
+  "schema_version": "artifact-scout-route-semantics-fixtures.v1",
+  "cases": [
+    {
+      "name": "exact_finished_plan_ask_user",
+      "description": "An exact finished plan exists for the slug, but the task has no amend/audit/execute intent, so the scout must ask instead of silently planning over it.",
+      "inventory": {
+        "schema_version": "artifact-scout-inventory.v1",
+        "command": "/z-plan",
+        "slug": "artifact-scout-preflight",
+        "run_id": "run-exact-finished",
+        "repo_root": "/repo",
+        "plan_dir": "/repo/z-harness/plans/artifact-scout-preflight",
+        "task_terms": ["artifact", "scout", "preflight"],
+        "source_status": {"plans": "ok", "archives": "ok", "registry": "ok", "worktrees": "ok"},
+        "truncated": false,
+        "dropped_counts": {},
+        "mandatory_candidates": [
+          {
+            "slug": "artifact-scout-preflight",
+            "path": "/repo/z-harness/plans/artifact-scout-preflight",
+            "artifact_kinds": ["PLAN", "SPEC", "TASKS"],
+            "status": "finished",
+            "mtime": "2026-06-20T12:00:00Z",
+            "score": 100,
+            "basis": ["current_plan_dir", "exact_slug", "plan_dir"],
+            "summary_excerpt": "Goal: add deterministic artifact-scout preflight.\nAcceptance: router asks before reusing exact finished plans.",
+            "files": ["agents/artifact-scout.md", "agents/planning-router.md"],
+            "source_status": {"plans": "ok"},
+            "truncated": false
+          }
+        ],
+        "historical_candidates": [],
+        "active_records": [],
+        "worktrees": [],
+        "signals": {
+          "exact_slug_finished_plan": true,
+          "exact_slug_precontext": true,
+          "active_same_slug": false,
+          "active_path_overlap": false,
+          "held_paths_overlap": false,
+          "worktree_branch_overlap": false,
+          "historical_similar_count": 0,
+          "unknown_due_to_partial_sources": false
+        }
+      },
+      "scout_output": "STATUS: classified\nROUTE_RECOMMENDATION: ask_user\nCONFIDENCE: medium\nREASON_CODES: exact_slug_finished_plan\nREASON: Existing finished plan matches this slug; ask which route to take before proceeding.\n\n```json\n{\n  \"findings\": [\n    {\n      \"class\": \"exact_slug_finished_plan\",\n      \"slug\": \"artifact-scout-preflight\",\n      \"confidence\": \"high\",\n      \"allowed_action\": \"ask_user_route\",\n      \"evidence\": [\"SPEC.md, PLAN.md, and TASKS.md exist for the exact slug\", \"status=finished\", \"no explicit amend/audit/execute intent\"]\n    }\n  ],\n  \"route_chain_effect\": \"write_route_decision\",\n  \"unknown_sources\": []\n}\n```\n",
+      "expected": {
+        "status": "classified",
+        "route_recommendation": "ask_user",
+        "confidence": "medium",
+        "reason_codes": ["exact_slug_finished_plan"],
+        "route_chain_effect": "write_route_decision",
+        "unknown_sources": [],
+        "findings": [{"class": "exact_slug_finished_plan", "allowed_action": "ask_user_route"}]
+      }
+    },
+    {
+      "name": "exact_precontext_continue",
+      "description": "An exact in-progress plan exists for the slug; the scout should continue with precontext and not route.",
+      "inventory": {
+        "schema_version": "artifact-scout-inventory.v1",
+        "command": "/z-plan",
+        "slug": "artifact-scout-preflight",
+        "run_id": "run-exact-precontext",
+        "repo_root": "/repo",
+        "plan_dir": "/repo/z-harness/plans/artifact-scout-preflight",
+        "task_terms": ["artifact", "scout", "preflight"],
+        "source_status": {"plans": "ok", "archives": "ok", "registry": "ok", "worktrees": "ok"},
+        "truncated": false,
+        "dropped_counts": {},
+        "mandatory_candidates": [
+          {
+            "slug": "artifact-scout-preflight",
+            "path": "/repo/z-harness/plans/artifact-scout-preflight",
+            "artifact_kinds": ["SPEC", "PLAN"],
+            "status": "active",
+            "mtime": "2026-06-21T12:00:00Z",
+            "score": 100,
+            "basis": ["current_plan_dir", "exact_slug", "plan_dir"],
+            "summary_excerpt": "Goal: implement artifact-scout preflight.\nApproach: keep current plan context in scope.",
+            "files": ["agents/artifact-scout.md"],
+            "source_status": {"plans": "ok"},
+            "truncated": false
+          }
+        ],
+        "historical_candidates": [],
+        "active_records": [],
+        "worktrees": [],
+        "signals": {
+          "exact_slug_finished_plan": false,
+          "exact_slug_precontext": true,
+          "active_same_slug": false,
+          "active_path_overlap": false,
+          "held_paths_overlap": false,
+          "worktree_branch_overlap": false,
+          "historical_similar_count": 0,
+          "unknown_due_to_partial_sources": false
+        }
+      },
+      "scout_output": "STATUS: classified\nROUTE_RECOMMENDATION: continue\nCONFIDENCE: high\nREASON_CODES: exact_slug_precontext\nREASON: Exact in-progress plan context is available; continue with that precontext.\n\n```json\n{\n  \"findings\": [\n    {\n      \"class\": \"exact_slug_precontext\",\n      \"slug\": \"artifact-scout-preflight\",\n      \"confidence\": \"high\",\n      \"allowed_action\": \"continue_with_precontext\",\n      \"evidence\": [\"SPEC.md and PLAN.md exist for the exact slug\", \"status=active\", \"finished-plan gate is false\"]\n    }\n  ],\n  \"route_chain_effect\": \"none\",\n  \"unknown_sources\": []\n}\n```\n",
+      "expected": {
+        "status": "classified",
+        "route_recommendation": "continue",
+        "confidence": "high",
+        "reason_codes": ["exact_slug_precontext"],
+        "route_chain_effect": "none",
+        "unknown_sources": [],
+        "findings": [{"class": "exact_slug_precontext", "allowed_action": "continue_with_precontext"}]
+      }
+    },
+    {
+      "name": "active_same_slug_warning",
+      "description": "A peer active record has the same slug; scout warns only because claim handling owns arbitration.",
+      "inventory": {
+        "schema_version": "artifact-scout-inventory.v1",
+        "command": "/z-plan",
+        "slug": "artifact-scout-preflight",
+        "run_id": "run-active-same-slug",
+        "repo_root": "/repo",
+        "plan_dir": "/repo/z-harness/plans/artifact-scout-preflight",
+        "task_terms": ["artifact", "scout", "preflight"],
+        "source_status": {"plans": "ok", "archives": "ok", "registry": "ok", "worktrees": "ok"},
+        "truncated": false,
+        "dropped_counts": {},
+        "mandatory_candidates": [],
+        "historical_candidates": [],
+        "active_records": [
+          {"run_id": "peer-active", "slug": "artifact-scout-preflight", "session_id": "peer-session", "scope": [{"path": "agents/artifact-scout.md"}]}
+        ],
+        "worktrees": [],
+        "signals": {
+          "exact_slug_finished_plan": false,
+          "exact_slug_precontext": false,
+          "active_same_slug": true,
+          "active_path_overlap": false,
+          "held_paths_overlap": false,
+          "worktree_branch_overlap": false,
+          "historical_similar_count": 0,
+          "unknown_due_to_partial_sources": false
+        }
+      },
+      "scout_output": "STATUS: warned\nROUTE_RECOMMENDATION: continue\nCONFIDENCE: medium\nREASON_CODES: active_same_slug\nREASON: A peer active claim uses the same slug; warn only because claim rules arbitrate.\n\n```json\n{\n  \"findings\": [\n    {\n      \"class\": \"active_same_slug\",\n      \"slug\": \"artifact-scout-preflight\",\n      \"confidence\": \"medium\",\n      \"allowed_action\": \"warning_only\",\n      \"evidence\": [\"active registry record peer-active has the same slug\", \"claim gate owns proceed/wait/abort behavior\"]\n    }\n  ],\n  \"route_chain_effect\": \"none\",\n  \"unknown_sources\": []\n}\n```\n",
+      "expected": {
+        "status": "warned",
+        "route_recommendation": "continue",
+        "confidence": "medium",
+        "reason_codes": ["active_same_slug"],
+        "route_chain_effect": "none",
+        "unknown_sources": [],
+        "findings": [{"class": "active_same_slug", "allowed_action": "warning_only"}]
+      }
+    },
+    {
+      "name": "active_path_overlap_warning_or_strict",
+      "description": "A peer active record scope overlaps the current target files; scout warns and leaves strict-overlap behavior to the existing gate.",
+      "inventory": {
+        "schema_version": "artifact-scout-inventory.v1",
+        "command": "/z-plan",
+        "slug": "artifact-scout-preflight",
+        "run_id": "run-active-path-overlap",
+        "repo_root": "/repo",
+        "plan_dir": "/repo/z-harness/plans/artifact-scout-preflight",
+        "task_terms": ["artifact", "scout", "preflight"],
+        "source_status": {"plans": "ok", "archives": "ok", "registry": "ok", "worktrees": "ok"},
+        "truncated": false,
+        "dropped_counts": {},
+        "mandatory_candidates": [],
+        "historical_candidates": [],
+        "active_records": [
+          {"run_id": "peer-path", "slug": "other-plan", "session_id": "peer-session", "scope": [{"path": "tests/test_artifact_scout_route_semantics.py"}]}
+        ],
+        "worktrees": [],
+        "signals": {
+          "exact_slug_finished_plan": false,
+          "exact_slug_precontext": false,
+          "active_same_slug": false,
+          "active_path_overlap": true,
+          "held_paths_overlap": false,
+          "worktree_branch_overlap": false,
+          "historical_similar_count": 0,
+          "unknown_due_to_partial_sources": false
+        }
+      },
+      "scout_output": "STATUS: warned\nROUTE_RECOMMENDATION: continue\nCONFIDENCE: medium\nREASON_CODES: active_path_overlap\nREASON: Active registry scope overlaps target files; warn and defer strict handling to the caller.\n\n```json\n{\n  \"findings\": [\n    {\n      \"class\": \"active_path_overlap\",\n      \"slug\": \"other-plan\",\n      \"confidence\": \"medium\",\n      \"allowed_action\": \"warning_or_existing_strict_overlap\",\n      \"evidence\": [\"peer-path scope includes tests/test_artifact_scout_route_semantics.py\", \"existing strict-overlap gate owns blocking behavior\"]\n    }\n  ],\n  \"route_chain_effect\": \"none\",\n  \"unknown_sources\": []\n}\n```\n",
+      "expected": {
+        "status": "warned",
+        "route_recommendation": "continue",
+        "confidence": "medium",
+        "reason_codes": ["active_path_overlap"],
+        "route_chain_effect": "none",
+        "unknown_sources": [],
+        "findings": [{"class": "active_path_overlap", "allowed_action": "warning_or_existing_strict_overlap"}]
+      }
+    },
+    {
+      "name": "held_paths_overlap_warning_or_strict",
+      "description": "A peer active record holds a target path; scout warns and leaves wait/strict handling to the existing lease gate.",
+      "inventory": {
+        "schema_version": "artifact-scout-inventory.v1",
+        "command": "/z-plan",
+        "slug": "artifact-scout-preflight",
+        "run_id": "run-held-paths-overlap",
+        "repo_root": "/repo",
+        "plan_dir": "/repo/z-harness/plans/artifact-scout-preflight",
+        "task_terms": ["artifact", "scout", "preflight"],
+        "source_status": {"plans": "ok", "archives": "ok", "registry": "ok", "worktrees": "ok"},
+        "truncated": false,
+        "dropped_counts": {},
+        "mandatory_candidates": [],
+        "historical_candidates": [],
+        "active_records": [
+          {"run_id": "peer-held", "slug": "other-plan", "session_id": "peer-session", "held_paths": [{"path": "tests/fixtures/artifact_scout/route_semantics_cases.json"}]}
+        ],
+        "worktrees": [],
+        "signals": {
+          "exact_slug_finished_plan": false,
+          "exact_slug_precontext": false,
+          "active_same_slug": false,
+          "active_path_overlap": false,
+          "held_paths_overlap": true,
+          "worktree_branch_overlap": false,
+          "historical_similar_count": 0,
+          "unknown_due_to_partial_sources": false
+        }
+      },
+      "scout_output": "STATUS: warned\nROUTE_RECOMMENDATION: continue\nCONFIDENCE: medium\nREASON_CODES: held_paths_overlap\nREASON: Peer held paths overlap target files; warn and defer wait or strict behavior to the caller.\n\n```json\n{\n  \"findings\": [\n    {\n      \"class\": \"held_paths_overlap\",\n      \"slug\": \"other-plan\",\n      \"confidence\": \"medium\",\n      \"allowed_action\": \"warning_or_existing_strict_overlap\",\n      \"evidence\": [\"peer-held holds tests/fixtures/artifact_scout/route_semantics_cases.json\", \"lease gate owns wait/strict handling\"]\n    }\n  ],\n  \"route_chain_effect\": \"none\",\n  \"unknown_sources\": []\n}\n```\n",
+      "expected": {
+        "status": "warned",
+        "route_recommendation": "continue",
+        "confidence": "medium",
+        "reason_codes": ["held_paths_overlap"],
+        "route_chain_effect": "none",
+        "unknown_sources": [],
+        "findings": [{"class": "held_paths_overlap", "allowed_action": "warning_or_existing_strict_overlap"}]
+      }
+    },
+    {
+      "name": "worktree_branch_overlap_warning",
+      "description": "A git worktree branch name overlaps the slug; scout warns only because a branch is not proof of a reusable plan.",
+      "inventory": {
+        "schema_version": "artifact-scout-inventory.v1",
+        "command": "/z-plan",
+        "slug": "artifact-scout-preflight",
+        "run_id": "run-worktree-branch-overlap",
+        "repo_root": "/repo",
+        "plan_dir": "/repo/z-harness/plans/artifact-scout-preflight",
+        "task_terms": ["artifact", "scout", "preflight"],
+        "source_status": {"plans": "ok", "archives": "ok", "registry": "ok", "worktrees": "ok"},
+        "truncated": false,
+        "dropped_counts": {},
+        "mandatory_candidates": [],
+        "historical_candidates": [],
+        "active_records": [],
+        "worktrees": [
+          {"path": "/tmp/z-harness-artifact-scout-preflight", "head": "abc123", "branch": "feature/artifact-scout-preflight", "detached": false, "bare": false}
+        ],
+        "signals": {
+          "exact_slug_finished_plan": false,
+          "exact_slug_precontext": false,
+          "active_same_slug": false,
+          "active_path_overlap": false,
+          "held_paths_overlap": false,
+          "worktree_branch_overlap": true,
+          "historical_similar_count": 0,
+          "unknown_due_to_partial_sources": false
+        }
+      },
+      "scout_output": "STATUS: warned\nROUTE_RECOMMENDATION: continue\nCONFIDENCE: medium\nREASON_CODES: worktree_branch_overlap\nREASON: A worktree branch overlaps the slug; warn only because it is not a reusable plan.\n\n```json\n{\n  \"findings\": [\n    {\n      \"class\": \"worktree_branch_overlap\",\n      \"slug\": \"artifact-scout-preflight\",\n      \"confidence\": \"medium\",\n      \"allowed_action\": \"warning_only\",\n      \"evidence\": [\"branch feature/artifact-scout-preflight contains the slug\", \"no exact finished artifact was found\"]\n    }\n  ],\n  \"route_chain_effect\": \"none\",\n  \"unknown_sources\": []\n}\n```\n",
+      "expected": {
+        "status": "warned",
+        "route_recommendation": "continue",
+        "confidence": "medium",
+        "reason_codes": ["worktree_branch_overlap"],
+        "route_chain_effect": "none",
+        "unknown_sources": [],
+        "findings": [{"class": "worktree_branch_overlap", "allowed_action": "warning_only"}]
+      }
+    },
+    {
+      "name": "historical_similar_warning_only",
+      "description": "A historical candidate is similar, but it does not set has_existing_plan and remains warning-only by default.",
+      "inventory": {
+        "schema_version": "artifact-scout-inventory.v1",
+        "command": "/z-plan",
+        "slug": "artifact-scout-preflight",
+        "run_id": "run-historical-similar",
+        "repo_root": "/repo",
+        "plan_dir": "/repo/z-harness/plans/artifact-scout-preflight",
+        "task_terms": ["artifact", "scout", "preflight"],
+        "source_status": {"plans": "ok", "archives": "ok", "registry": "ok", "worktrees": "ok"},
+        "truncated": false,
+        "dropped_counts": {},
+        "mandatory_candidates": [],
+        "historical_candidates": [
+          {
+            "slug": "artifact-index-preflight",
+            "path": "/repo/z-harness/plans/artifact-index-preflight",
+            "artifact_kinds": ["PLAN", "SPEC", "TASKS"],
+            "status": "finished",
+            "mtime": "2026-06-15T12:00:00Z",
+            "score": 42,
+            "basis": ["plan_dir"],
+            "summary_excerpt": "Goal: preflight artifact index data before planning.",
+            "files": ["agents/artifact-scout.md"],
+            "source_status": {"plans": "ok"},
+            "truncated": false
+          }
+        ],
+        "active_records": [],
+        "worktrees": [],
+        "signals": {
+          "exact_slug_finished_plan": false,
+          "exact_slug_precontext": false,
+          "active_same_slug": false,
+          "active_path_overlap": false,
+          "held_paths_overlap": false,
+          "worktree_branch_overlap": false,
+          "historical_similar_count": 1,
+          "unknown_due_to_partial_sources": false
+        }
+      },
+      "scout_output": "STATUS: warned\nROUTE_RECOMMENDATION: continue\nCONFIDENCE: medium\nREASON_CODES: historical_similar\nREASON: A historical plan is similar, but it is warning-only and not an existing plan.\n\n```json\n{\n  \"findings\": [\n    {\n      \"class\": \"historical_similar\",\n      \"slug\": \"artifact-index-preflight\",\n      \"confidence\": \"medium\",\n      \"allowed_action\": \"warning_only\",\n      \"evidence\": [\"similar slug artifact-index-preflight\", \"artifact kind PLAN is historical\", \"summary mentions preflight artifacts\"]\n    }\n  ],\n  \"route_chain_effect\": \"none\",\n  \"unknown_sources\": []\n}\n```\n",
+      "expected": {
+        "status": "warned",
+        "route_recommendation": "continue",
+        "confidence": "medium",
+        "reason_codes": ["historical_similar"],
+        "route_chain_effect": "none",
+        "unknown_sources": [],
+        "findings": [{"class": "historical_similar", "allowed_action": "warning_only"}]
+      }
+    },
+    {
+      "name": "partial_inventory_unknown_no_match",
+      "description": "No match is visible, but partial/truncated sources make absence unknown rather than negative evidence.",
+      "inventory": {
+        "schema_version": "artifact-scout-inventory.v1",
+        "command": "/z-plan",
+        "slug": "artifact-scout-preflight",
+        "run_id": "run-partial-inventory",
+        "repo_root": "/repo",
+        "plan_dir": "/repo/z-harness/plans/artifact-scout-preflight",
+        "task_terms": ["artifact", "scout", "preflight"],
+        "source_status": {"plans": "truncated", "archives": "ok", "registry": "unavailable", "worktrees": "ok"},
+        "truncated": true,
+        "dropped_counts": {"plan_dirs": 7},
+        "mandatory_candidates": [],
+        "historical_candidates": [],
+        "active_records": [],
+        "worktrees": [],
+        "signals": {
+          "exact_slug_finished_plan": false,
+          "exact_slug_precontext": false,
+          "active_same_slug": false,
+          "active_path_overlap": false,
+          "held_paths_overlap": false,
+          "worktree_branch_overlap": false,
+          "historical_similar_count": 0,
+          "unknown_due_to_partial_sources": true
+        }
+      },
+      "scout_output": "STATUS: classified\nROUTE_RECOMMENDATION: continue\nCONFIDENCE: low\nREASON_CODES: no_match_within_caps,inventory_partial,inventory_truncated,unknown_sources_present\nREASON: No match was visible, but truncated plans and unavailable registry make absence uncertain.\n\n```json\n{\n  \"findings\": [],\n  \"route_chain_effect\": \"none\",\n  \"unknown_sources\": [\"plans\", \"registry\"]\n}\n```\n",
+      "expected": {
+        "status": "classified",
+        "route_recommendation": "continue",
+        "confidence": "low",
+        "reason_codes": ["no_match_within_caps", "inventory_partial", "inventory_truncated", "unknown_sources_present"],
+        "route_chain_effect": "none",
+        "unknown_sources": ["plans", "registry"],
+        "findings": []
+      }
+    },
+    {
+      "name": "no_match_within_caps_complete_inventory",
+      "description": "All sources are complete and no relevant findings exist, so no-match-within-caps is a bounded continue result.",
+      "inventory": {
+        "schema_version": "artifact-scout-inventory.v1",
+        "command": "/z-plan",
+        "slug": "artifact-scout-preflight",
+        "run_id": "run-no-match",
+        "repo_root": "/repo",
+        "plan_dir": "/repo/z-harness/plans/artifact-scout-preflight",
+        "task_terms": ["artifact", "scout", "preflight"],
+        "source_status": {"plans": "ok", "archives": "ok", "registry": "ok", "worktrees": "ok"},
+        "truncated": false,
+        "dropped_counts": {},
+        "mandatory_candidates": [],
+        "historical_candidates": [],
+        "active_records": [],
+        "worktrees": [],
+        "signals": {
+          "exact_slug_finished_plan": false,
+          "exact_slug_precontext": false,
+          "active_same_slug": false,
+          "active_path_overlap": false,
+          "held_paths_overlap": false,
+          "worktree_branch_overlap": false,
+          "historical_similar_count": 0,
+          "unknown_due_to_partial_sources": false
+        }
+      },
+      "scout_output": "STATUS: classified\nROUTE_RECOMMENDATION: continue\nCONFIDENCE: high\nREASON_CODES: no_match_within_caps\nREASON: Complete inventory found no exact, active, worktree, or historical match within caps.\n\n```json\n{\n  \"findings\": [],\n  \"route_chain_effect\": \"none\",\n  \"unknown_sources\": []\n}\n```\n",
+      "expected": {
+        "status": "classified",
+        "route_recommendation": "continue",
+        "confidence": "high",
+        "reason_codes": ["no_match_within_caps"],
+        "route_chain_effect": "none",
+        "unknown_sources": [],
+        "findings": []
+      }
+    }
+  ]
+}
