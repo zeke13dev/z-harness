@@ -1,7 +1,7 @@
 # Silent-failure protection
 
-> Last updated: 2026-06-24
-> Covers source: scripts/supervised-run.sh, scripts/hang-threshold.py, scripts/schedule-hang-check.sh, scripts/hang-check.sh, scripts/liveness.sh, scripts/notify-watchdog.sh, scripts/check-timeout.sh, scripts/config.py, scripts/active-plan-registry.py, agents/reviewer.md, agents/remote-runner.md, skills/z-execute/SKILL.md, skills/z-overnight/SKILL.md
+> Last updated: 2026-06-26
+> Covers source: scripts/supervised-run.sh, scripts/hang-threshold.py, scripts/schedule-hang-check.sh, scripts/hang-check.sh, scripts/liveness.sh, scripts/notify-watchdog.sh, scripts/check-timeout.sh, scripts/config.py, scripts/active-plan-registry.py, scripts/hermes/watchdog_webhook.py, agents/reviewer.md, agents/remote-runner.md, skills/z-execute/SKILL.md, skills/z-overnight/SKILL.md
 
 ## Overview
 
@@ -22,6 +22,13 @@ Native `Agent()` stalls cannot be killed from shell. The scheduled hang-check ca
 
 `schedule-hang-check.sh` schedules one `hang-check.sh` invocation for the future horizon. On macOS it writes a self-removing launchd one-shot; elsewhere it uses a detached sleep fallback. `hang-check.sh` calls `liveness.sh` for unmatched stale `*_start` events and notifies once through `notify-watchdog.sh`.
 
+When Hermes supervises a Discord `so` job, `HERMES_SO_JOB_ID` is propagated
+into `notify-watchdog.sh` as `job_id`. Hermes webhook payloads include
+`event`, unique `event_id`, `run_id` when known, `slug` when known, `pid` when
+known, `severity`, and `reason`; `next_step` is optional metadata. The Hermes
+channel is fail-open and HMAC-signed when a secret is configured. Payloads are
+inputs to Hermes routing, not detached user instructions.
+
 ## Key entry points
 
 <!-- AUTO-START: entry-points -->
@@ -33,6 +40,7 @@ Native `Agent()` stalls cannot be killed from shell. The scheduled hang-check ca
 - `scripts/hang-check.sh:1` — one-shot detector — liveness scan plus notify-once marker.
 - `scripts/liveness.sh:1` — post-hoc inspector — unmatched `*_start` vs matching end events.
 - `scripts/notify-watchdog.sh:1` — notification channel — Discord/macOS best-effort alert.
+- `scripts/hermes/watchdog_webhook.py:1` — Hermes receiver — validates signed payloads, dedups events, and routes to the owning Discord thread or subscription fallback.
 - `scripts/check-timeout.sh:37` — timeout backend helper — shared `timeout|gtimeout|bash_fallback` resolution.
 - `scripts/config.py:191` — watchdog defaults — enabled/stale/timeout/grace config.
 - `scripts/active-plan-registry.py:281` — legacy watchdog pid cleanup — best-effort SIGTERM/SIGKILL for recorded pid files.
@@ -50,6 +58,7 @@ Native `Agent()` stalls cannot be killed from shell. The scheduled hang-check ca
 - Scheduled hang-check exits 0 even on detection/evaluation issues; it must not fail loudly.
 - Notify-once markers prevent repeated alerts for the same run/reason.
 - `watchdog.timeout_secs.*` is config-file-only and read via `config.py get`, not env-exported.
+- Hermes-supervised `so` watchdog payloads require `job_id`; fallback `run_id`/pid/slug lookup is for legacy or degraded sources only.
 
 ## Gotchas
 

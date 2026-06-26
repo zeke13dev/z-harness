@@ -49,10 +49,10 @@ class TestSchedule(unittest.TestCase):
         p = _run(["--run", "r"])
         self.assertEqual(p.returncode, 2)
 
-    def test_label_sanitized_into_plist(self):
-        p = _run(["--run", "weird/run id", "--threshold-secs", "300", "--print"])
+    def test_default_label_uses_valid_run_id(self):
+        p = _run(["--run", "weird.run_id-01", "--threshold-secs", "300", "--print"])
         self.assertEqual(p.returncode, 0)
-        self.assertIn("com.zharness.hangcheck.weird-run-id", p.stdout)
+        self.assertIn("com.zharness.hangcheck.weird.run_id-01", p.stdout)
 
     def test_self_test_passes_or_skips(self):
         p = _run(["--self-test"])

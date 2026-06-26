@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-06-26",
+  "plan_slug": "hermes-so-watchdog",
+  "title": "Hermes Discord so session orchestration",
+  "status": "ready_for_execution",
+  "repo_root": "/Users/zeke/dev/z-harness",
+  "branch_policy": {
+    "branch": "main",
+    "reason": "Hermes and watchdog orchestration are experimental/development surfaces unless explicitly promoted."
+  },
+  "artifacts": {
+    "spec": "hermes-so-watchdog/SPEC.md",
+    "plan": "hermes-so-watchdog/PLAN.md",
+    "tasks": "hermes-so-watchdog/TASKS.md",
+    "tests": "hermes-so-watchdog/TESTS.md",
+    "session": "hermes-so-watchdog/SESSION.md"
+  },
+  "user_story": "A user opens a Hermes session in Discord and sends `so omp qt-bot fix blah using z-debug`. Hermes creates and registers the tmux-backed job, supervises it, consumes watchdog events, asks the requester for input by default, records feedback, and detects stale/dead sessions without blind sleep/capture polling.",
+  "hard_constraints": [
+    "`so` is Discord/Hermes command language, not a z-harness CLI or local binary.",
+    "Do not require or expose user-provided tmux names such as `so-session`; Hermes generates internal session names and only shows them as diagnostics.",
+    "Do not use fixed `sleep N && tmux capture-pane ...` loops as orchestration. Captures must be event-driven: launch confirmation, watchdog alert, explicit status/log request, or bounded stale check.",
+    "Ask-first behavior is mandatory initially. Hermes sends no session input until the requester replies unless a future reviewed/promoted learned pattern exists.",
+    "No hardcoded initial replies for `/new`, handoff ingestion, `continue`, or similar prompts.",
+    "Pattern mining/review/promotion is a separate task after ask-first flow and fake e2e are working.",
+    "For Hermes-supervised `so` sessions, `job_id` is mandatory in watchdog routing; Hermes exports `HERMES_SO_JOB_ID=<job_id>` into the launched tmux session.",
+    "`next_step` is optional webhook metadata, not required routing data.",
+    "`execution_host`, `transport`, `ssh_target`, and `workdir` in the Hermes job record are authoritative for tmux/pid/capture/send-keys/attach/restart/abort operations.",
+    "Automated tests must use fake Discord and fake tmux/OMP; they must not contact real Discord, real OMP, real tmux, or real project repos.",
+    "No `REMOTE_VERIFY` tags unless an implementation task explicitly dogfoods `qt-bot` on its remote host."
+  ],
+  "implementation_tasks": [
+    {
+      "id": "T001",
+      "title": "Hermes Discord `so` command parser and authorization",
+      "files": ["scripts/hermes/discord_relay.py", "scripts/hermes/config.py", "tests/test_hermes_discord_relay.py"],
+      "depends_on": [],
+      "tests": ["python3 -m pytest tests/test_hermes_discord_relay.py -q"]
+    },
+    {
+      "id": "T002",
+      "title": "Hermes job registry for Discord/tmux sessions",
+      "files": ["scripts/hermes/so_jobs.py", "scripts/hermes/config.py", "tests/test_hermes_so_jobs.py"],
+      "depends_on": ["T001"],
+      "tests": ["python3 -m pytest tests/test_hermes_so_jobs.py -q"]
+    },
+    {
+      "id": "T003",
+      "title": "Tmux launcher for Hermes `so` jobs",
+      "files": ["scripts/hermes/session.py", "scripts/hermes/so_jobs.py", "tests/test_hermes_session.py"],
+      "depends_on": ["T001", "T002"],
+      "tests": ["python3 -m pytest tests/test_hermes_session.py -q"]
+    },
+    {
+      "id": "T004",
+      "title": "Hermes watchdog delivery and Discord thread resumption",
+      "files": ["scripts/hermes/watchdog_webhook.py", "scripts/hermes/so_jobs.py", "tests/test_hermes_watchdog_webhook.py"],
+      "depends_on": ["T002", "T007", "T008"],
+      "tests": ["python3 -m pytest tests/test_hermes_watchdog_webhook.py -q"]
+    },
+    {
+      "id": "T005",
+      "title": "Ask-first prompt handling and feedback capture",
+      "files": ["scripts/hermes/supervisor.py", "scripts/hermes/so_jobs.py", "scripts/hermes/discord_relay.py", "tests/test_hermes_supervisor.py"],
+      "depends_on": ["T003", "T004"],
+      "tests": ["python3 -m pytest tests/test_hermes_supervisor.py -q"]
+    },
+    {
+      "id": "T006",
+      "title": "Stale/dead session checkups",
+      "files": ["scripts/hermes/supervisor.py", "scripts/hermes/so_jobs.py", "tests/test_hermes_supervisor.py"],
+      "depends_on": ["T003", "T005"],
+      "tests": ["python3 -m pytest tests/test_hermes_supervisor.py -q"]
+    },
+    {
+      "id": "T007",
+      "title": "z-harness watchdog payload fields for Hermes routing",
+      "files": ["scripts/notify-watchdog.sh", "scripts/hang-check.sh", "scripts/test_notify_watchdog.sh", "tests/test_hang_check.py"],
+      "depends_on": [],
+      "tests": ["bash scripts/test_notify_watchdog.sh", "python3 -m pytest tests/test_hang_check.py -q"]
+    },
+    {
+      "id": "T008",
+      "title": "Fix existing schedule-hang-check test/script contract",
+      "files": ["scripts/schedule-hang-check.sh", "tests/test_schedule_hang_check.py"],
+      "depends_on": [],
+      "tests": ["python3 -m pytest tests/test_schedule_hang_check.py -q"]
+    },
+    {
+      "id": "T009",
+      "title": "Fake Discord/tmux/OMP end-to-end harness",
+      "files": ["tests/test_hermes_so_e2e.py", "hermes-so-watchdog/TESTS.md"],
+      "depends_on": ["T001", "T002", "T003", "T004", "T005", "T006", "T007", "T008"],
+      "tests": ["python3 -m pytest tests/test_hermes_so_e2e.py tests/test_hermes_supervisor.py tests/test_hermes_watchdog_webhook.py -q"]
+    },
+    {
+      "id": "T010",
+      "title": "Pattern mining, review, and promotion",
+      "files": ["scripts/hermes/supervisor.py", "scripts/hermes/so_jobs.py", "tests/test_hermes_supervisor.py"],
+      "depends_on": ["T005", "T009"],
+      "tests": ["python3 -m pytest tests/test_hermes_supervisor.py -q"]
+    },
+    {
+      "id": "T011",
+      "title": "Docs and generated exports",
+      "files": ["docs/human/hermes-orchestration.md", "docs/human/watchdog.md", "docs/human/commands.md", "docs/llm/hermes-orchestration.json", "docs/llm/watchdog.json", "docs/llm/INDEX.json", "generated export trees from existing exporters"],
+      "depends_on": ["T001", "T003", "T004", "T005", "T006", "T007", "T009", "T010"],
+      "tests": ["repo doc validation/export audit commands used for z-harness release checks"]
+    }
+  ],
+  "execution_order": [
+    ["T001", "T007", "T008"],
+    ["T002"],
+    ["T003", "T004"],
+    ["T005"],
+    ["T006"],
+    ["T009"],
+    ["T010"],
+    ["T011"]
+  ],
+  "final_verification": [
+    "python3 -m pytest tests/test_hang_check.py tests/test_schedule_hang_check.py tests/test_hang_threshold.py -q",
+    "bash scripts/test_notify_watchdog.sh",
+    "python3 -m pytest tests/test_hermes_discord_relay.py tests/test_hermes_so_jobs.py tests/test_hermes_session.py tests/test_hermes_watchdog_webhook.py tests/test_hermes_supervisor.py -q",
+    "python3 -m pytest tests/test_hermes_so_e2e.py -q",
+    "Manual Discord dogfood, or document unavailable real dependency and cite fake e2e as substitute"
+  ],
+  "known_pre_plan_failure": {
+    "command": "python3 -m pytest tests/test_hang_check.py tests/test_schedule_hang_check.py tests/test_hang_threshold.py -q",
+    "observed": "17 passed, 1 failed",
+    "failure": "tests/test_schedule_hang_check.py::TestSchedule::test_label_sanitized_into_plist expected invalid --run `weird/run id` to sanitize and succeed; script rejects invalid --run with exit 2.",
+    "planned_resolution": "Keep strict run-id validation and update the test in T008."
+  },
+  "ready_for_new_session": true
+}

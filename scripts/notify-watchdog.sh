@@ -32,6 +32,7 @@ PID=""
 SLUG=""
 SEVERITY=""
 NEXT_STEP=""
+JOB_ID="${HERMES_SO_JOB_ID:-}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -57,6 +58,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --severity)
             SEVERITY="${2:-}"
+            shift 2
+            ;;
+        --job-id)
+            JOB_ID="${2:-}"
             shift 2
             ;;
         --next-step)
@@ -129,7 +134,8 @@ repo = sys.argv[6]
 severity = sys.argv[7]
 reason = sys.argv[8]
 pid_str = sys.argv[9]
-next_step = sys.argv[10]
+job_id = sys.argv[10]
+next_step = sys.argv[11]
 
 payload = {
     "schema_version": schema_version,
@@ -144,6 +150,8 @@ payload = {
     "reason": reason,
     "ts": int(time.time()),
 }
+if job_id:
+    payload["job_id"] = job_id
 if pid_str:
     try:
         payload["pid"] = int(pid_str)
@@ -162,6 +170,7 @@ print(json.dumps(payload))
   "${SEVERITY:-}" \
   "${FULL_MESSAGE:-${MESSAGE:-}}" \
   "${PID:-}" \
+  "${JOB_ID:-}" \
   "${NEXT_STEP:-}" \
   2>/dev/null || true)"
 

@@ -33,7 +33,7 @@ class TestHangCheck(unittest.TestCase):
         self.notify_log = os.path.join(self.base, "notify.log")
         self.notify_mock = os.path.join(self.base, "notify-mock.sh")
         with open(self.notify_mock, "w") as fh:
-            fh.write(f'#!/bin/sh\necho called >> "{self.notify_log}"\n')
+            fh.write(f'#!/bin/sh\necho "$@" >> "{self.notify_log}"\n')
         os.chmod(self.notify_mock, 0o755)
 
     def tearDown(self):
@@ -44,11 +44,13 @@ class TestHangCheck(unittest.TestCase):
             for e in events:
                 fh.write(json.dumps(e) + "\n")
 
-    def _run(self, threshold=300, reason="testreason"):
+    def _run(self, threshold=300, reason="testreason", job_id=None):
         env = dict(os.environ)
         env["Z_HARNESS_BASE_DIR"] = self.base
         env["Z_HARNESS_PLAN_DIR"] = self.base
         env["HANG_NOTIFY_SCRIPT"] = self.notify_mock
+        if job_id:
+            env["HERMES_SO_JOB_ID"] = job_id
         return subprocess.run(
             ["bash", HANG_CHECK, "--run", self.run,
              "--threshold-secs", str(threshold), "--reason", reason],
@@ -93,6 +95,15 @@ class TestHangCheck(unittest.TestCase):
         with open(self.notify_log) as fh:
             calls = [l for l in fh if l.strip()]
         self.assertEqual(len(calls), 1, "notify should fire exactly once per reason")
+
+    def test_hermes_job_id_passed_to_notify(self):
+        self._write_events([
+            {"ts": _ts(1000), "run": self.run, "kind": "review_start", "id": "T1"},
+        ])
+        self._run(threshold=300, reason="job", job_id="so-hermes-123")
+        with open(self.notify_log) as fh:
+            call = fh.read()
+        self.assertIn("--job-id so-hermes-123", call)
 
     def test_missing_run_never_fails(self):
         env = dict(os.environ)

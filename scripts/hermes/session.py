@@ -7,15 +7,149 @@ and handles kill + re-spawn with retry counting.
 """
 
 import os
+import re
 import signal
 import subprocess
 import time
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Optional
+from typing import Optional, Protocol
 
+from hermes.discord_relay import SoCommand
 from hermes.schema import parse_session_status, SessionStatus
-from hermes.config import HermesConfig
+from hermes.so_jobs import SoJobRecord, SoJobRegistry, new_job_id
+
+
+class CommandRunner(Protocol):
+    def run(
+        self,
+        argv: list[str],
+        *,
+        cwd: Optional[str] = None,
+        env: Optional[dict[str, str]] = None,
+    ) -> subprocess.CompletedProcess:
+        ...
+
+
+class SubprocessCommandRunner:
+    def run(
+        self,
+        argv: list[str],
+        *,
+        cwd: Optional[str] = None,
+        env: Optional[dict[str, str]] = None,
+    ) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            argv,
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+
+class TmuxLaunchError(RuntimeError):
+    pass
+
+
+def hermes_tmux_session_name(job_id: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", job_id).strip("-")
+    return f"hermes-so-{safe}"
+
+
+def build_initial_so_prompt(command: SoCommand, job_id: str) -> str:
+    z_part = (
+        f"Use the z-harness command `{command.z_command}`."
+        if command.z_command
+        else "Use the appropriate z-harness command for this task."
+    )
+    return (
+        "You are running under Hermes Discord supervision. "
+        f"Hermes job id: {job_id}. "
+        f"{z_part} "
+        f"User task: {command.task}"
+    )
+
+
+def launch_so_job(
+    command: SoCommand,
+    registry: SoJobRegistry,
+    *,
+    runner: Optional[CommandRunner] = None,
+    job_id: Optional[str] = None,
+) -> SoJobRecord:
+    """Create and launch a tmux-backed Hermes `so` job."""
+    runner = runner or SubprocessCommandRunner()
+    job_id = job_id or new_job_id()
+    tmux_session = hermes_tmux_session_name(job_id)
+    alias = command.project_alias
+    record = SoJobRecord(
+        job_id=job_id,
+        discord_channel_id=command.discord_channel_id,
+        discord_message_id=command.discord_message_id,
+        discord_thread_id=command.discord_thread_id or command.discord_channel_id,
+        requester_user_id=command.requester_user_id,
+        host=command.host,
+        project=command.project,
+        repo_root=alias.repo_root,
+        execution_host=alias.execution_host,
+        transport=alias.transport,
+        ssh_target=alias.ssh_target,
+        workdir=alias.workdir,
+        z_command=command.z_command,
+        task=command.task,
+        tmux_session=tmux_session,
+        status="starting",
+    )
+    registry.create(record)
+
+    env = dict(os.environ)
+    env["HERMES_SO_JOB_ID"] = job_id
+    workdir = alias.workdir or None
+    new_session = runner.run(
+        [
+            "tmux",
+            "new-session",
+            "-d",
+            "-s",
+            tmux_session,
+            "-c",
+            alias.workdir,
+            command.host,
+        ],
+        cwd=workdir,
+        env=env,
+    )
+    if new_session.returncode != 0:
+        registry.transition(job_id, "failed")
+        raise TmuxLaunchError(new_session.stderr or "tmux new-session failed")
+
+    pid = None
+    display = runner.run(
+        ["tmux", "display-message", "-p", "-t", tmux_session, "#{pane_pid}"],
+        cwd=workdir,
+        env=env,
+    )
+    if display.returncode == 0:
+        try:
+            pid = int(display.stdout.strip())
+        except ValueError:
+            pid = None
+    if pid is not None:
+        record.pid = pid
+        registry.save(record)
+
+    prompt = build_initial_so_prompt(command, job_id)
+    send = runner.run(
+        ["tmux", "send-keys", "-t", tmux_session, prompt, "C-m"],
+        cwd=workdir,
+        env=env,
+    )
+    if send.returncode != 0:
+        registry.transition(job_id, "failed")
+        raise TmuxLaunchError(send.stderr or "tmux send-keys failed")
+
+    return registry.transition(job_id, "running", pid=pid)
 
 
 # ---------------------------------------------------------------------------

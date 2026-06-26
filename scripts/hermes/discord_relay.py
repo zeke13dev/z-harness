@@ -11,6 +11,7 @@ Gracefully degrades if discord.py is not installed.
 
 from __future__ import annotations
 import asyncio
+from dataclasses import dataclass
 import os
 import re
 from datetime import datetime, timezone
@@ -18,7 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 from hermes.schema import write_resolve_json, ResolveAnswer
-from hermes.config import HermesConfig
+from hermes.config import DiscordProjectAlias, HermesConfig
 
 try:
     import discord
@@ -51,6 +52,88 @@ def _dedup_key(reason: str, description: str) -> str:
     """Generate dedup key from halt reason + description."""
     return f"{reason}::{description}"
 
+# ---------------------------------------------------------------------------
+# Discord `so` command parsing (Hermes session orchestration)
+# ---------------------------------------------------------------------------
+
+_Z_COMMAND_RE = re.compile(r"^(?P<task>.+)\s+using\s+(?P<z_command>[A-Za-z0-9._/-]+)$")
+
+
+@dataclass(frozen=True)
+class SoCommand:
+    host: str
+    project: str
+    project_alias: DiscordProjectAlias
+    task: str
+    z_command: Optional[str]
+    requester_user_id: str
+    discord_channel_id: str
+    discord_message_id: str
+    discord_thread_id: str = ""
+
+
+class SoCommandError(ValueError):
+    """Discord-visible command intake error."""
+
+
+def parse_so_command(
+    content: str,
+    *,
+    requester_user_id: str,
+    channel_id: str,
+    message_id: str,
+    config: HermesConfig,
+    thread_id: str = "",
+) -> SoCommand:
+    """Parse and authorize `so <host> <project> <task...> [using <z-command>]`."""
+    parts = content.strip().split(maxsplit=3)
+    if len(parts) < 4 or parts[0] != "so":
+        raise SoCommandError(
+            "Usage: so <host> <project> <task...> [using <z-command>]"
+        )
+
+    requester_user_id = str(requester_user_id)
+    channel_id = str(channel_id)
+    message_id = str(message_id)
+    thread_id = str(thread_id or "")
+    so_config = config.discord.so
+
+    allowed_users = set(so_config.allowed_user_ids)
+    if config.discord.user_id:
+        allowed_users.add(str(config.discord.user_id))
+    if requester_user_id not in allowed_users:
+        raise SoCommandError("You are not authorized to start Hermes sessions.")
+
+    if so_config.allowed_channel_ids and channel_id not in so_config.allowed_channel_ids:
+        raise SoCommandError("This Discord channel is not authorized for Hermes sessions.")
+
+    _, host, project, task_part = parts
+    if so_config.allowed_hosts and host not in so_config.allowed_hosts:
+        raise SoCommandError(f"Unknown Hermes host: {host}")
+    if project not in so_config.project_aliases:
+        raise SoCommandError(f"Unknown Hermes project: {project}")
+
+    task_text = task_part.strip()
+    z_command: Optional[str] = None
+    match = _Z_COMMAND_RE.match(task_text)
+    if match:
+        task_text = match.group("task").strip()
+        z_command = match.group("z_command")
+    if not task_text:
+        raise SoCommandError("Task text is required.")
+
+    return SoCommand(
+        host=host,
+        project=project,
+        project_alias=so_config.project_aliases[project],
+        task=task_text,
+        z_command=z_command,
+        requester_user_id=requester_user_id,
+        discord_channel_id=channel_id,
+        discord_message_id=message_id,
+        discord_thread_id=thread_id,
+    )
+
 
 # ---------------------------------------------------------------------------
 # Discord client (T001)
@@ -69,6 +152,7 @@ class HermesDiscordClient(discord.Client if DISCORD_AVAILABLE else object):
         self.config = config
         self.target_user: Optional[discord.User] = None
         self._ready = asyncio.Event()
+        self.accepted_so_commands: list[SoCommand] = []
     
     async def on_ready(self):
         """Fetch target user on connect."""
@@ -98,8 +182,26 @@ class HermesDiscordClient(discord.Client if DISCORD_AVAILABLE else object):
                     print(f"  Discord: answer received for {key}: option {q.answer}")
     
     async def on_message(self, message: discord.Message):
-        """Handle text-based answers."""
+        """Handle text answers and inbound `so` commands."""
         if message.author.bot:
+            return
+
+        if message.content.strip().startswith("so "):
+            try:
+                command = parse_so_command(
+                    message.content,
+                    requester_user_id=str(message.author.id),
+                    channel_id=str(message.channel.id),
+                    message_id=str(message.id),
+                    config=self.config,
+                )
+            except SoCommandError as exc:
+                await message.channel.send(str(exc))
+                return
+            self.accepted_so_commands.append(command)
+            await message.channel.send(
+                f"Accepted Hermes session request for `{command.project}`: {command.task}"
+            )
             return
         
         # Check if this is a DM reply to a question

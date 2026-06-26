@@ -435,6 +435,7 @@ MOCKEOF
 chmod +x "${MOCK_BIN_H4}/curl"
 
 EXIT_STATUS_H4=0
+HERMES_SO_JOB_ID="so-hermes-004" \
 Z_HARNESS_REPO_CONFIG="${TMPDIR_H4}/z-harness.toml" \
     PATH="${MOCK_BIN_H4}:${PATH}" \
     bash "$NOTIFY" \
@@ -443,6 +444,8 @@ Z_HARNESS_REPO_CONFIG="${TMPDIR_H4}/z-harness.toml" \
     --message "dispatch timed out" \
     --slug the-plan \
     --severity error \
+    --pid 9876 \
+    --next-step "ask user" \
     2>/dev/null || EXIT_STATUS_H4=$?
 
 assert_eq "T015-D exits 0 with full payload" "0" "$EXIT_STATUS_H4"
@@ -460,10 +463,72 @@ assert_contains "T015-D payload has repo"             '"repo"'            "$CURL
 assert_contains "T015-D payload has severity"         '"severity"'        "$CURL_LOG_CONTENT_H4"
 assert_contains "T015-D payload has reason"           '"reason"'          "$CURL_LOG_CONTENT_H4"
 assert_contains "T015-D payload has ts"               '"ts"'              "$CURL_LOG_CONTENT_H4"
+assert_contains "T015-D payload has job_id"           '"job_id"'          "$CURL_LOG_CONTENT_H4"
+assert_contains "T015-D payload has pid"              '"pid"'             "$CURL_LOG_CONTENT_H4"
+assert_contains "T015-D payload has next_step"        '"next_step"'       "$CURL_LOG_CONTENT_H4"
+assert_contains "T015-D payload has env job id"       'so-hermes-004'     "$CURL_LOG_CONTENT_H4"
+assert_contains "T015-D payload has numeric pid"      '9876'             "$CURL_LOG_CONTENT_H4"
+assert_not_contains "T015-D payload hides webhook URL" 'https://hermes.test/webhook' "$CURL_LOG_CONTENT_H4"
 # Confirm no Discord-specific field
 assert_not_contains "T015-D payload has no Discord embeds" '"embeds"' "$CURL_LOG_CONTENT_H4"
 
 rm -rf "$TMPDIR_H4"
+
+# ---------------------------------------------------------------------------
+# T015-E: event_id is unique across Hermes payloads
+# ---------------------------------------------------------------------------
+
+printf '\nT015-E: Hermes payload event_id is unique per notification\n'
+
+TMPDIR_H5="$(_tmpdir)"
+
+cat > "${TMPDIR_H5}/z-harness.toml" <<'EOF'
+[notify]
+level = "all"
+hermes_webhook_url = "https://hermes.test/webhook"
+EOF
+
+MOCK_BIN_H5="${TMPDIR_H5}/bin"
+mkdir -p "$MOCK_BIN_H5"
+CURL_LOG_H5="${TMPDIR_H5}/curl_log.txt"
+
+cat > "${MOCK_BIN_H5}/curl" <<MOCKEOF
+#!/usr/bin/env bash
+prev_arg=""
+for arg in "\$@"; do
+    if [[ "\$prev_arg" == "-d" ]]; then
+        printf '%s\n' "\$arg" >> "${CURL_LOG_H5}"
+    fi
+    prev_arg="\$arg"
+done
+exit 0
+MOCKEOF
+chmod +x "${MOCK_BIN_H5}/curl"
+
+EXIT_STATUS_H5=0
+for i in 1 2; do
+    Z_HARNESS_REPO_CONFIG="${TMPDIR_H5}/z-harness.toml" \
+        PATH="${MOCK_BIN_H5}:${PATH}" \
+        bash "$NOTIFY" \
+        --run test-hermes-unique \
+        --event watchdog_stall \
+        --message "unique id check" \
+        2>/dev/null || EXIT_STATUS_H5=$?
+done
+
+assert_eq "T015-E exits 0 for both sends" "0" "$EXIT_STATUS_H5"
+
+EVENT_ID_CHECK="$(python3 - "$CURL_LOG_H5" <<'PY'
+import json
+import sys
+payloads = [json.loads(line) for line in open(sys.argv[1]) if line.strip()]
+ids = [payload["event_id"] for payload in payloads]
+print("unique" if len(ids) == 2 and len(set(ids)) == 2 else "duplicate")
+PY
+)"
+assert_eq "T015-E event ids are unique" "unique" "$EVENT_ID_CHECK"
+
+rm -rf "$TMPDIR_H5"
 
 # ---------------------------------------------------------------------------
 # Summary

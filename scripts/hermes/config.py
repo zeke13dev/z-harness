@@ -28,11 +28,41 @@ def _bool_coerce(val: str) -> bool:
     return val.strip().lower() not in ("0", "false", "no", "off", "")
 
 
+def _str_set(value) -> set[str]:
+    """Normalize scalar/list YAML config values into a string set."""
+    if value is None:
+        return set()
+    if isinstance(value, (str, int)):
+        text = str(value).strip()
+        return {text} if text else set()
+    try:
+        return {str(item).strip() for item in value if str(item).strip()}
+    except TypeError:
+        return set()
+
+
+@dataclass
+class DiscordProjectAlias:
+    repo_root: str = ""
+    execution_host: str = "local"
+    transport: str = "local"
+    ssh_target: str = ""
+    workdir: str = ""
+
+
+@dataclass
+class DiscordSoConfig:
+    allowed_user_ids: set[str] = field(default_factory=set)
+    allowed_channel_ids: set[str] = field(default_factory=set)
+    allowed_hosts: set[str] = field(default_factory=set)
+    project_aliases: dict[str, DiscordProjectAlias] = field(default_factory=dict)
+
+
 @dataclass
 class DiscordConfig:
     bot_token: str = ""
     user_id: str = ""
-
+    so: DiscordSoConfig = field(default_factory=DiscordSoConfig)
 
 @dataclass
 class ConcurrencyConfig:
@@ -64,6 +94,7 @@ class TimeoutConfig:
 @dataclass
 class PathsConfig:
     worktree_base: str = "../"
+    hermes_state_root: str = "~/.hermes"
 
 
 @dataclass
@@ -104,8 +135,31 @@ def load_config(repo_root: str = ".") -> HermesConfig:
                     data = yaml.safe_load(f) or {}
 
                 if "discord" in data:
-                    config.discord.bot_token = data["discord"].get("bot_token", "")
-                    config.discord.user_id = str(data["discord"].get("user_id", ""))
+                    discord_data = data["discord"] or {}
+                    config.discord.bot_token = discord_data.get("bot_token", "")
+                    config.discord.user_id = str(discord_data.get("user_id", ""))
+                    so_data = discord_data.get("so", {}) or {}
+                    config.discord.so.allowed_user_ids = _str_set(
+                        so_data.get("allowed_user_ids", discord_data.get("allowed_user_ids"))
+                    )
+                    config.discord.so.allowed_channel_ids = _str_set(
+                        so_data.get("allowed_channel_ids", discord_data.get("allowed_channel_ids"))
+                    )
+                    config.discord.so.allowed_hosts = _str_set(
+                        so_data.get("allowed_hosts", discord_data.get("allowed_so_hosts"))
+                    )
+                    aliases = so_data.get("project_aliases", discord_data.get("project_aliases", {})) or {}
+                    config.discord.so.project_aliases = {
+                        str(name): DiscordProjectAlias(
+                            repo_root=str(alias.get("repo_root", "")),
+                            execution_host=str(alias.get("execution_host", "local")),
+                            transport=str(alias.get("transport", "local")),
+                            ssh_target=str(alias.get("ssh_target", "")),
+                            workdir=str(alias.get("workdir", "")),
+                        )
+                        for name, alias in aliases.items()
+                        if isinstance(alias, dict)
+                    }
                 if "concurrency" in data:
                     config.concurrency.max_parallel_workstreams = int(
                         data["concurrency"].get("max_parallel_workstreams", 1)
@@ -134,6 +188,9 @@ def load_config(repo_root: str = ".") -> HermesConfig:
                     )
                 if "paths" in data:
                     config.paths.worktree_base = data["paths"].get("worktree_base", "../")
+                    config.paths.hermes_state_root = data["paths"].get(
+                        "hermes_state_root", "~/.hermes"
+                    )
 
                 break  # Use first found config
             except (ValueError, TypeError, OSError, *_YAML_ERRORS):

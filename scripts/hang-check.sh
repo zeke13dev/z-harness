@@ -71,7 +71,12 @@ if [[ -n "$PLAN_DIR" ]]; then
 fi
 
 # Best-effort notify (config-gated inside notify-watchdog.sh); never blocks/fails.
-bash "$NOTIFY" --run "$RUN" --event "watchdog_stall" --message "$MESSAGE" \
-  >/dev/null 2>&1 || true
+if [[ -n "${HERMES_SO_JOB_ID:-}" ]]; then
+  bash "$NOTIFY" --run "$RUN" --event "watchdog_stall" --message "$MESSAGE" \
+    --job-id "$HERMES_SO_JOB_ID" >/dev/null 2>&1 || true
+else
+  bash "$NOTIFY" --run "$RUN" --event "watchdog_stall" --message "$MESSAGE" \
+    >/dev/null 2>&1 || true
+fi
 
 exit 0
