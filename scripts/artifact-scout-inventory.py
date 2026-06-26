@@ -81,12 +81,18 @@ class CandidateAccumulator:
 
     def add_summary(self, summary: ArtifactSummary, source: str) -> None:
         self.artifact_kinds.add(summary.kind)
-        if summary.status and summary.status != "unknown" and self.status == "unknown":
+        if (
+            summary.status
+            and summary.status != "unknown"
+            and summary.status != "corrupt"
+            and summary.kind != "run-brief"
+            and self.status == "unknown"
+        ):
             self.status = summary.status
         self.summary_parts.extend(part for part in summary.excerpt_parts if part)
         self.files.update(summary.files)
-        status = "truncated" if summary.truncated else "ok"
-        if self.source_status.get(source) != "truncated":
+        status = "corrupt" if summary.status == "corrupt" else ("truncated" if summary.truncated else "ok")
+        if self.source_status.get(source) not in {"truncated", "corrupt"}:
             self.source_status[source] = status
 
     def as_dict(self) -> dict[str, Any]:
@@ -492,6 +498,8 @@ def _read_artifacts_from_dir(
             continue
         try:
             summary = _parse_artifact(path)
+            if summary.status == "corrupt":
+                state.partial_sources.add(source)
             if summary.truncated:
                 state.drop("artifact_bytes_over_cap", source=source)
             summaries.append(summary)
@@ -732,9 +740,8 @@ def _signals(
         if candidate.get("slug") != slug:
             continue
         exact_precontext = True
-        status = str(candidate.get("status") or "").lower()
         kinds = set(candidate.get("artifact_kinds") or [])
-        if status in {"complete", "completed", "finished", "frozen", "done"} or {"SPEC", "PLAN", "TASKS"}.issubset(kinds):
+        if {"SPEC", "PLAN", "TASKS"}.issubset(kinds):
             exact_finished = True
 
     active_same_slug = any(rec.get("slug") == slug for rec in active_records)
@@ -919,6 +926,8 @@ def collect_inventory(
     )
     full_signals = inventory["signals"]
     _enforce_json_payload_cap(inventory)
+    if inventory.get("truncated"):
+        full_signals["unknown_due_to_partial_sources"] = True
     inventory["signals"] = full_signals
     return inventory
 

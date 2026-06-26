@@ -1,6 +1,18 @@
-"""Ask-first supervisor for Hermes `so` jobs."""
+"""Deprecated ask-first/tmux supervisor for Discord ``so``.
+
+Replaced by ``hermes/so_mcp.py``. This module remains only as historical
+reference; production gateway and ``discord_relay`` code must not import it.
+Set ``HERMES_ALLOW_DEPRECATED_SO_BACKEND=1`` only for archaeology.
+"""
 
 from __future__ import annotations
+import os
+
+if os.environ.get("HERMES_ALLOW_DEPRECATED_SO_BACKEND") != "1":
+    raise RuntimeError(
+        "hermes.supervisor is deprecated; use hermes.so_mcp for `so` orchestration"
+    )
+
 
 from dataclasses import dataclass
 import hashlib

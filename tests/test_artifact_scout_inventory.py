@@ -112,6 +112,36 @@ def test_valid_output_writes_atomically_and_collects_sources(tmp_path: Path, mon
     assert from_file["signals"]["unknown_due_to_partial_sources"] is False
 
 
+def test_run_brief_complete_alone_is_not_finished_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    plan_dir = tmp_path / "base" / "plans" / "demo-plan"
+    plan_dir.mkdir(parents=True)
+    (plan_dir / "run-brief.json").write_text(json.dumps({"status": "complete"}), encoding="utf-8")
+    monkeypatch.setattr(inventory, "_run_command", _stub_commands())
+
+    data = inventory.collect_inventory(command="/z-plan", slug="demo-plan", run_id="run", repo_root=repo, plan_dir=plan_dir, task=None)
+
+    assert data["signals"]["exact_slug_precontext"] is True
+    assert data["signals"]["exact_slug_finished_plan"] is False
+
+
+def test_corrupt_allowed_artifact_marks_source_partial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    plan_dir = tmp_path / "base" / "plans" / "demo-plan"
+    _write_plan(plan_dir)
+    (plan_dir / "run-brief.json").write_text("{not-json", encoding="utf-8")
+    monkeypatch.setattr(inventory, "_run_command", _stub_commands())
+
+    data = inventory.collect_inventory(command="/z-plan", slug="demo-plan", run_id="run", repo_root=repo, plan_dir=plan_dir, task=None)
+
+    candidate = data["mandatory_candidates"][0]
+    assert candidate["source_status"]["plans"] == "corrupt"
+    assert data["source_status"]["plans"] == "partial"
+    assert data["signals"]["unknown_due_to_partial_sources"] is True
+
+
 def test_invalid_args_exit_2() -> None:
     assert inventory.main(["--command", "/z-plan"]) == 2
     assert inventory.main([

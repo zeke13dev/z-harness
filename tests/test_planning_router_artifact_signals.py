@@ -17,11 +17,20 @@ ROUTER_MD = Path(__file__).resolve().parents[1] / "agents" / "planning-router.md
 REQUIRED_SIGNALS = {
     "artifact_exact_slug_match",
     "artifact_finished_plan_match",
+    "artifact_plan_mode",
+    "canonical_tasks_present",
     "artifact_similar_candidates",
     "active_registry_overlap",
     "worktree_overlap",
     "artifact_match_confidence",
     "artifact_match_basis",
+    "asks_what_should_we_do",
+    "alternatives_unsettled",
+    "architecture_decision",
+    "reversibility_uncertain",
+    "post_artifact_check",
+    "question_heavy_artifacts",
+    "artifact_unsettled_approach",
 }
 
 REQUIRED_REASON_CODES = {
@@ -31,6 +40,17 @@ REQUIRED_REASON_CODES = {
     "worktree_overlap",
     "inventory_partial",
     "inventory_truncated",
+    "needs_sharpen",
+    "needs_brainstorm",
+    "alternatives_unclear",
+    "architecture_uncertain",
+    "reversibility_uncertain",
+    "question_heavy_artifacts",
+    "unsettled_approach",
+    "post_artifact_recommendation",
+    "intent_finished_plan",
+    "canonical_tasks_present",
+    "route_loop_risk",
 }
 
 
@@ -84,14 +104,25 @@ def _limited_artifact_router(signals: dict[str, object]) -> dict[str, str]:
         signals.get("artifact_exact_slug_match")
         and signals.get("artifact_finished_plan_match")
     )
+    exact_intent_finished = bool(
+        exact_finished
+        and signals.get("artifact_plan_mode") == "intent"
+        and signals.get("canonical_tasks_present")
+    )
 
     if exact_finished and signals.get("plan_amend_intent"):
+        reason_codes = "existing_artifact_exact,existing_plan_amend"
+        if exact_intent_finished:
+            reason_codes = (
+                "existing_artifact_exact,intent_finished_plan,"
+                "canonical_tasks_present,existing_plan_amend"
+            )
         return {
             "STATUS": "routed",
             "RECOMMENDED": "/z-amend",
             "ROUTE_CLASS": "contextual",
             "CONFIDENCE": "high",
-            "REASON_CODES": "existing_artifact_exact,existing_plan_amend",
+            "REASON_CODES": reason_codes,
         }
 
     if (
@@ -136,6 +167,62 @@ def _limited_artifact_router(signals: dict[str, object]) -> dict[str, str]:
             "REASON_CODES": "inventory_partial,inventory_truncated,tiny_task",
         }
 
+    if signals.get("post_artifact_check") and signals.get("expected_tasks", 0) > 25:
+        return {
+            "STATUS": "routed",
+            "RECOMMENDED": "/z-plan-split",
+            "ROUTE_CLASS": "primary",
+            "CONFIDENCE": "high",
+            "REASON_CODES": "post_artifact_recommendation,too_many_tasks",
+        }
+
+    if signals.get("post_artifact_check") and signals.get("question_heavy_artifacts"):
+        reason_codes = "post_artifact_recommendation,question_heavy_artifacts,needs_sharpen"
+        if signals.get("worktree_overlap"):
+            reason_codes = f"worktree_overlap,{reason_codes}"
+        return {
+            "STATUS": "routed",
+            "RECOMMENDED": "/z-sharpen",
+            "ROUTE_CLASS": "primary",
+            "CONFIDENCE": "medium",
+            "REASON_CODES": reason_codes,
+        }
+
+    if signals.get("post_artifact_check") and signals.get("artifact_unsettled_approach"):
+        return {
+            "STATUS": "routed",
+            "RECOMMENDED": "/z-brainstorm",
+            "ROUTE_CLASS": "primary",
+            "CONFIDENCE": "medium",
+            "REASON_CODES": "post_artifact_recommendation,unsettled_approach,needs_brainstorm",
+        }
+
+    if signals.get("premise_underspecified") or signals.get("asks_what_should_we_do"):
+        return {
+            "STATUS": "routed",
+            "RECOMMENDED": "/z-sharpen",
+            "ROUTE_CLASS": "primary",
+            "CONFIDENCE": "medium",
+            "REASON_CODES": "needs_sharpen,premise_underspecified",
+        }
+
+    if (
+        signals.get("alternatives_unsettled")
+        or signals.get("architecture_decision")
+        or signals.get("reversibility_uncertain")
+        or signals.get("approach_uncertain")
+    ):
+        return {
+            "STATUS": "routed",
+            "RECOMMENDED": "/z-brainstorm",
+            "ROUTE_CLASS": "primary",
+            "CONFIDENCE": "high",
+            "REASON_CODES": (
+                "needs_brainstorm,alternatives_unclear,"
+                "architecture_uncertain,reversibility_uncertain"
+            ),
+        }
+
     raise AssertionError(f"unhandled T004 example signals: {signals!r}")
 
 
@@ -159,6 +246,12 @@ def test_examples_match_deterministic_artifact_signal_rules() -> None:
         "exact finished plan without amend/audit intent asks the user",
         "historical similar candidates are warning-only for existing-plan state",
         "partial and truncated artifact inventory lowers confidence",
+        "intent finished plan with canonical TASKS routes to /z-amend",
+        "underspecified what-should-we-do prompt routes to /z-sharpen",
+        "architecture alternatives route to /z-brainstorm",
+        "post-artifact too many tasks recommends /z-plan-split gate",
+        "post-artifact question-heavy artifacts recommend /z-sharpen gate",
+        "post-artifact unsettled approach recommends /z-brainstorm gate",
     ]
 
     for title in titles:

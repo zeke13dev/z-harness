@@ -498,9 +498,54 @@ _PROD_HIDDEN_TOOL_NAMES = frozenset(
     }
 )
 
+_PROD_HIDDEN_SKILL_IDS = frozenset(
+    {
+        "z-research",
+        "z-map",
+        "z-overnight",
+        "z-attend",
+        "z-axiom-scan",
+        "z-axiom-list",
+        "z-axiom-approve",
+        "z-axiom-reject",
+        "z-axiom-edit",
+    }
+)
+
+
+def _candidate_repo_roots() -> list[Path]:
+    roots: list[Path] = [Path.cwd()]
+    module_path = Path(__file__).resolve()
+    roots.extend(module_path.parents[:4])
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for root in roots:
+        resolved = root.resolve()
+        if resolved not in seen:
+            unique.append(resolved)
+            seen.add(resolved)
+    return unique
+
+
+def _packaged_prod_surface_detected() -> bool:
+    """Infer prod when dev-only skill files were omitted from the package."""
+    for root in _candidate_repo_roots():
+        skills_dir = root / "skills"
+        if not skills_dir.is_dir():
+            continue
+        hidden_present = any((skills_dir / skill_id / "SKILL.md").is_file() for skill_id in _PROD_HIDDEN_SKILL_IDS)
+        visible_present = any((skills_dir / skill_id / "SKILL.md").is_file() for skill_id in ("z-plan", "z-brainstorm", "z-learn"))
+        if visible_present and not hidden_present:
+            return True
+    return False
+
+
 
 def _release_surface() -> str:
-    return os.environ.get("Z_HARNESS_RELEASE_SURFACE", "dev").strip().lower()
+    explicit = os.environ.get("Z_HARNESS_RELEASE_SURFACE")
+    if explicit:
+        return explicit.strip().lower()
+    return "prod" if _packaged_prod_surface_detected() else "dev"
 
 
 def _active_command_tools() -> dict[str, dict[str, Any]]:

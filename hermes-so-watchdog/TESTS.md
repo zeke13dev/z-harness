@@ -30,29 +30,26 @@ Failure:
 
 Plan decision: keep strict run-id validation and update the test.
 
-### Hermes command/registry/supervisor units
+### Hermes command/MCP backend units
 
 ```bash
 python3 -m pytest \
   tests/test_hermes_discord_relay.py \
-  tests/test_hermes_so_jobs.py \
-  tests/test_hermes_session.py \
-  tests/test_hermes_watchdog_webhook.py \
-  tests/test_hermes_supervisor.py -q
+  tests/test_hermes_so_mcp.py \
+  tests/test_hermes_so_e2e.py -q
 ```
 
 Expected coverage:
 
 - `so omp qt-bot fix blah using z-debug` parses into host/project/task/z-command.
 - Unauthorized Discord users/channels are rejected.
-- Job records are written before tmux send-keys.
-- Fake tmux command runner sees generated session name, not user-provided `so-session`.
-- Watchdog event maps to the correct job, resumes the original Discord thread, and dedups repeat events; subscription fallback is covered when thread reconstruction is unavailable.
-- Prompt handler asks the requester for `/new`, handoff, continuation, ambiguous, destructive, cost, and credential prompts.
-- No tmux input is sent before the requester replies.
-- Discord replies in the job thread resume the pending prompt; unrelated thread replies do not.
-- Missing tmux/dead pid/unchanged pane digest produce stale/dead checkups.
-- Explicit attach, abort, and restart checkup actions update tmux/job state; restart is never automatic.
+- Accepted Discord commands call `hermes.so_mcp.start_so_session`.
+- MCP start runs the configured agent CLI with a stable session id.
+- SSH aliases run the agent command on the recorded host/workdir.
+- Session metadata is persisted in `so-mcp-sessions.json`.
+- `so_send` continues the same session id and updates status/turn count.
+- Retired tmux/job-registry/supervisor/watchdog tests live under
+  `tests/deprecated/` and skip by default.
 
 ### End-to-end fake harness
 
@@ -64,16 +61,14 @@ Fake scenario:
 
 1. Fake Discord message: `so omp qt-bot fix blah using z-debug`.
 2. Hermes parses and authorizes it.
-3. Hermes writes a job record.
-4. Hermes fake-tmux creates `hermes-so-<job-id>` and sends the initial OMP prompt.
-5. Fake watchdog webhook says the run is stalled.
-6. Hermes routes the event back into the original fake Discord thread, or through the owning fake Discord session's watchdog subscription fallback.
-7. Hermes captures one bounded pane excerpt.
-8. Hermes asks the requester for input in that same thread/session.
-9. Fake requester reply is routed from the Discord thread to tmux and recorded as feedback.
-10. Explicit stale/dead checkup actions are exercised for attach, abort, and restart.
+3. Hermes calls the MCP backend.
+4. The fake agent runner receives an SSH-backed `omp -p --mode text --session-id <id>` command for the configured project alias.
+5. The initial MCP prompt contains the task and requested z-command.
+6. A fake requester reply is sent through `so_send` to the same MCP session id.
+7. The state file records the turn count, latest output, and status.
 
-The fake e2e must not contact real Discord, real OMP, real tmux, or real project repos.
+The fake e2e must not contact real Discord, real OMP, real tmux, or real
+project repos.
 
 `tests/test_hermes_so_e2e.py` is the local/fake harness for this path.
 
@@ -84,8 +79,7 @@ Prereqs:
 - Hermes Discord bot is running in a test Discord channel.
 - The requester is authorized in Hermes config.
 - Project alias exists, e.g. `qt-bot` → repo/remote/workdir.
-- `notify.hermes_webhook_url` points at the Hermes webhook receiver.
-- Watchdog thread resumption has been tested. If it fails in the target Discord deployment, enable/use the Discord-session subscription fallback instead of detached webhook alerts.
+- `scripts/so-mcp-server.py` is registered where MCP clients need direct tools.
 - Use a disposable branch/repo first.
 
 ### Launch from Discord
@@ -98,9 +92,9 @@ so omp qt-bot fix a harmless test issue using z-debug
 
 Pass criteria:
 
-- Hermes replies with a job id and generated tmux session name only as diagnostic detail.
-- Hermes creates the tmux session.
-- Hermes records the job.
+- Hermes replies with an MCP session id.
+- The MCP state file contains that session id under the Hermes state root.
+- The launched agent prompt includes the task and `z-debug`.
 - OMP receives a prompt that includes the task and tells it to use `z-debug`.
 - User does not type a tmux command.
 

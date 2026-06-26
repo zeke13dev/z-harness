@@ -135,11 +135,10 @@ def parse_so_command(
     )
 
 def launch_accepted_so_command(command: SoCommand, config: HermesConfig):
-    """Register and launch an accepted Discord `so` command."""
-    from hermes.session import launch_so_job
-    from hermes.so_jobs import SoJobRegistry
+    """Launch an accepted Discord `so` command through the MCP backend."""
+    from hermes.so_mcp import start_so_session
 
-    return launch_so_job(command, SoJobRegistry.from_config(config))
+    return start_so_session(command, config)
 
 
 # ---------------------------------------------------------------------------

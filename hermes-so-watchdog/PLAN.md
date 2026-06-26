@@ -1,5 +1,10 @@
 # PLAN — Hermes Discord `so` session orchestration
 
+> Superseded 2026-06-26: implementation pivoted to the MCP backend in
+> `scripts/hermes/so_mcp.py` with `scripts/so-mcp-server.py` as the stdio MCP
+> entry point. The tmux/job-registry/supervisor/watchdog plan below is retained
+> only as historical context.
+
 ## Goals
 
 1. Let a Discord user launch work with `so omp qt-bot fix blah using z-debug`.

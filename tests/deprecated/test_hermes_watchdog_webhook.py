@@ -1,4 +1,8 @@
-"""Tests for Hermes watchdog webhook routing."""
+"""Deprecated tests for the retired Hermes `so` watchdog webhook.
+
+The watchdog webhook backend was replaced by `hermes.so_mcp`; these tests are
+kept for reference only and are not part of active verification.
+"""
 
 from pathlib import Path
 import hashlib
@@ -7,6 +11,8 @@ import json
 import sys
 
 import pytest
+pytest.skip("deprecated so backend reference tests", allow_module_level=True)
+
 
 SCRIPTS_DIR = Path(__file__).parent.parent / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:

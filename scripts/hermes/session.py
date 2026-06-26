@@ -1,177 +1,21 @@
 """
-session.py — Pi session lifecycle management.
+session.py — legacy pi z-execute lifecycle helpers.
 
-C3 of the Hermes orchestrator. Spawns pi sessions in worktrees,
-polls session-status.json, detects stalled/timed-out sessions,
-and handles kill + re-spawn with retry counting.
+Deprecated for Discord `so`: the former tmux launcher in this file was replaced
+by `hermes/so_mcp.py`. Discord and gateway code must not import this module for
+`so` orchestration.
 """
 
 import os
-import re
-import shlex
 import signal
 import subprocess
 import time
 from datetime import datetime, timezone
-from typing import Optional, Protocol
+from typing import Optional
 
-from hermes.discord_relay import SoCommand
 from hermes.schema import parse_session_status, SessionStatus
-from hermes.so_jobs import SoJobRecord, SoJobRegistry, new_job_id
 
 
-class CommandRunner(Protocol):
-    def run(
-        self,
-        argv: list[str],
-        *,
-        cwd: Optional[str] = None,
-        env: Optional[dict[str, str]] = None,
-    ) -> subprocess.CompletedProcess:
-        ...
-
-
-class SubprocessCommandRunner:
-    def run(
-        self,
-        argv: list[str],
-        *,
-        cwd: Optional[str] = None,
-        env: Optional[dict[str, str]] = None,
-    ) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            argv,
-            cwd=cwd,
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-
-class TmuxLaunchError(RuntimeError):
-    pass
-
-
-def hermes_tmux_session_name(job_id: str) -> str:
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", job_id).strip("-")
-    return f"hermes-so-{safe}"
-
-
-def build_initial_so_prompt(command: SoCommand, job_id: str) -> str:
-    z_part = (
-        f"Use the z-harness command `{command.z_command}`."
-        if command.z_command
-        else "Use the appropriate z-harness command for this task."
-    )
-    return (
-        "You are running under Hermes Discord supervision. "
-        f"Hermes job id: {job_id}. "
-        f"{z_part} "
-        f"User task: {command.task}"
-    )
-
-
-def _job_command(
-    alias,
-    env: dict[str, str],
-    argv: list[str],
-) -> tuple[list[str], Optional[str]]:
-    """Return argv/cwd for local or SSH tmux execution."""
-    workdir = alias.workdir or None
-    if alias.transport != "ssh":
-        return argv, workdir
-    if not alias.ssh_target:
-        raise TmuxLaunchError("ssh transport requires ssh_target")
-    exports = " ".join(
-        f"{shlex.quote(key)}={shlex.quote(value)}"
-        for key, value in env.items()
-        if key == "HERMES_SO_JOB_ID"
-    )
-    command = " ".join(shlex.quote(part) for part in argv)
-    if workdir:
-        command = f"cd {shlex.quote(workdir)} && {exports} {command}"
-    elif exports:
-        command = f"{exports} {command}"
-    return ["ssh", alias.ssh_target, command], None
-
-
-def launch_so_job(
-    command: SoCommand,
-    registry: SoJobRegistry,
-    *,
-    runner: Optional[CommandRunner] = None,
-    job_id: Optional[str] = None,
-) -> SoJobRecord:
-    """Create and launch a tmux-backed Hermes `so` job."""
-    runner = runner or SubprocessCommandRunner()
-    job_id = job_id or new_job_id()
-    tmux_session = hermes_tmux_session_name(job_id)
-    alias = command.project_alias
-    record = SoJobRecord(
-        job_id=job_id,
-        discord_channel_id=command.discord_channel_id,
-        discord_message_id=command.discord_message_id,
-        discord_thread_id=command.discord_thread_id or command.discord_channel_id,
-        requester_user_id=command.requester_user_id,
-        host=command.host,
-        project=command.project,
-        repo_root=alias.repo_root,
-        execution_host=alias.execution_host,
-        transport=alias.transport,
-        ssh_target=alias.ssh_target,
-        workdir=alias.workdir,
-        z_command=command.z_command,
-        task=command.task,
-        tmux_session=tmux_session,
-        status="starting",
-    )
-    registry.create(record)
-
-    env = dict(os.environ)
-    env["HERMES_SO_JOB_ID"] = job_id
-    new_argv = [
-        "tmux",
-        "new-session",
-        "-d",
-        "-s",
-        tmux_session,
-        "-c",
-        alias.workdir,
-        command.host,
-    ]
-    run_argv, run_cwd = _job_command(alias, env, new_argv)
-    new_session = runner.run(run_argv, cwd=run_cwd, env=env)
-    if new_session.returncode != 0:
-        registry.transition(job_id, "failed")
-        raise TmuxLaunchError(new_session.stderr or "tmux new-session failed")
-
-    pid = None
-    display_argv, display_cwd = _job_command(
-        alias,
-        env,
-        ["tmux", "display-message", "-p", "-t", tmux_session, "#{pane_pid}"],
-    )
-    display = runner.run(display_argv, cwd=display_cwd, env=env)
-    if display.returncode == 0:
-        try:
-            pid = int(display.stdout.strip())
-        except ValueError:
-            pid = None
-    if pid is not None:
-        record.pid = pid
-        registry.save(record)
-
-    prompt = build_initial_so_prompt(command, job_id)
-    send_argv, send_cwd = _job_command(
-        alias, env, ["tmux", "send-keys", "-t", tmux_session, prompt, "C-m"]
-    )
-    send = runner.run(send_argv, cwd=send_cwd, env=env)
-    if send.returncode != 0:
-        registry.transition(job_id, "failed")
-        raise TmuxLaunchError(send.stderr or "tmux send-keys failed")
-
-    return registry.transition(job_id, "running", pid=pid)
 
 
 # ---------------------------------------------------------------------------

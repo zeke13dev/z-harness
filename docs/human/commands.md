@@ -218,7 +218,7 @@ Hard-gated prod-surface scout hooks (`/z-plan`, `/z-uplift`, and `/z-plan-split`
 
 - **`/z-handoff [continuation prompt]`** — Writes `handoff.json` for session continuity across `/clear` boundaries. Universal across pi, Claude Code, Codex CLI. Watchers such as Oh My Pi, Hermes, or MCP consume it to resume work in a fresh agent session.
 - **`/z-clear-checkpoint [continuation prompt]`** — Writes a watcher-readable clear checkpoint (`handoff.json` + `clear_checkpoint_written`) without performing `/clear` itself.
-- **Discord `so <host> <project> <task...> [using <z-command>]`** — Hermes gateway command, not a local z-harness CLI. It creates a Hermes-owned tmux job from Discord, records job/thread/process routing state, and starts ask-first supervision through watchdog events.
+- **Discord `so <host> <project> <task...> [using <z-command>]`** — Hermes gateway command, not a local z-harness CLI. It parses and authorizes the Discord message, then calls the Hermes `so` MCP backend (`scripts/hermes/so_mcp.py`) to launch or continue an agent CLI session.
 
 ### Docs
 

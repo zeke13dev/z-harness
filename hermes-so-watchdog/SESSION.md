@@ -2,7 +2,9 @@
 
 ## Status
 
-Ready for execution in a clean session.
+Superseded by the MCP backend redesign. Discord `so` keeps
+`scripts/hermes/discord_relay.py` parser/authorization and now delegates launch
+and continuation to `scripts/hermes/so_mcp.py` / `scripts/so-mcp-server.py`.
 
 Plan artifacts:
 

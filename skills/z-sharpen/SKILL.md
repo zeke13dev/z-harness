@@ -1,10 +1,10 @@
 ---
 name: z-sharpen
 disable-model-invocation: false
-description: Conversational idea-sharpening on-ramp — probes, reframes, and converges a vague
-  idea into a buildable problem statement, escalating to pin individual fuzzy dimensions (with a
-  recommended answer) only as needed. Bounded — never full /z-grill exhaustiveness. Writes GRILL.md
-  as precontext for /z-plan or /z-brainstorm; also auto-invoked as /z-brainstorm Phase 0.
+description: Reusable bounded idea-sharpening contract plus `/z-sharpen` wrapper. The
+  inline component assesses prompt clarity and surviving alternatives, emits GRILL.md
+  content, and recommends proceed/sharpen_more/route_to_brainstorm. The command wrapper
+  adds slug resolution, collision handling, telemetry, and lifecycle.
 argument-hint: "[raw idea — or blank to start the conversation]"
 runtime: c1
 driver_features_required:
@@ -20,23 +20,166 @@ Topic (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
+`/z-sharpen` contains two separate surfaces:
+
+1. **Reusable inline component contract** — a bounded sharpening procedure that can be
+   referenced by `/z-plan`, `/z-brainstorm`, or this wrapper. It takes prompt/precontext
+   input, assesses clarity and alternatives, returns `GRILL.md` content, and recommends
+   exactly one of `proceed`, `sharpen_more`, or `route_to_brainstorm`.
+2. **`/z-sharpen` command wrapper** — the user-facing slash command. It owns empty-topic
+   bootstrap, conversational lifecycle, slug derivation, collision handling, telemetry,
+   final file writes, and advisory handoff.
+
+`/z-plan` and `/z-brainstorm` callers reference **only** the reusable inline component
+contract below. They must not depend on wrapper-only slug derivation, collision checks,
+telemetry event names, session lifecycle, empty-topic bootstrap, or final handoff behavior.
+Those callers already own their slug/session context; if they need logging, collision
+checks, or pacing, they implement that behavior in their own command surface.
+
+### Surface boundary rules
+
+- The reusable component is pure orchestration guidance plus optional caller-directed
+  `GRILL.md` writing; it does not create or choose plan directories, derive stable run
+  slugs, check existing artifacts, emit telemetry, or own a multi-turn session.
+- The wrapper may use the component's assessment and markdown exactly as returned, but any
+  slug, collision, telemetry, abandonment, confirmation, and handoff behavior is wrapper
+  state layered around that reusable result.
+
+**Invariant — bounded vs. exhaustive:** z-sharpen = adaptive + bounded;
+`/z-grill` = exhaustive + deliberate. If you find yourself wanting to grill every
+dimension systematically, stop and recommend `/z-grill` instead.
+
+## Surface 1 — Reusable inline component contract
+
+Use this section when another command says it is invoking the shared z-sharpen contract.
+This component is inline: it runs in the caller's orchestrator thread. Do not spawn a
+subagent to conduct the interview. Explore is the only subagent allowed, used solely to
+self-serve codebase-answerable questions so the user is not asked what the repo already
+states.
+
+### Inputs
+
+- **Prompt input (required):** the raw idea, task, handoff text, or topic the caller wants
+  sharpened.
+- **Precontext input (optional):** caller-supplied context such as existing `GRILL.md`
+  text, `BRAINSTORM.md` framing, `MAP.md`/`RESEARCH.md` summaries, handoff notes,
+  constraints, known non-goals, or codebase facts. The component consumes precontext as
+  already-resolved context; it does not derive slugs, inspect plan directories for
+  collisions, or decide whether a caller's precontext is fresh.
+- **Destination context (optional):** a caller-owned target path if the caller wants the
+  component to write `GRILL.md` directly. If omitted, return the complete markdown content
+  for the caller to write.
+- **Interaction policy (caller-owned):** whether the caller may ask the user a free-text
+  clarification. The component can recommend `sharpen_more`; the caller decides whether to
+  end the turn, ask inline, skip, or abort according to that command's lifecycle.
+
+### Procedure
+
+1. **Frame the current understanding.** Restate the idea in 2-3 sentences: actors, pain,
+   approximate scope, and any constraints supplied by precontext.
+2. **Self-serve codebase-answerable gaps.** Before asking the user, ask whether the gap can
+   be answered by looking at the repo.
+
+   <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
+        requirement and skip the Explore Agent() call. If skipped, ask the user the
+        question directly instead of self-answering. Silent omission is forbidden. -->
+   ```
+   Agent(
+     subagent_type="general-purpose",
+     model="haiku",
+     description="Self-serve: <one-line question>",
+     prompt="<question about the codebase>\nrepo_root: <abs path>"
+   )
+   ```
+
+   Log or record the self-answered question using the caller's own mechanism. Do not use
+   `/z-sharpen` wrapper telemetry from this component.
+3. **Assess clarity.** Decide whether the available input can clearly state:
+   - the concrete problem being solved;
+   - the minimal scope, including what is intentionally cut;
+   - the evidence or pain that makes the problem worth solving;
+   - the genuinely open forks, if any.
+4. **Assess alternatives.** Decide whether surviving alternatives are minor planning
+   choices or materially different framings. Materially different framings are alternatives
+   that would change the problem statement, success criterion, target user, architecture
+   direction, or first task batch.
+5. **Probe only the highest-signal gap.** If one bounded clarification would likely make
+   the idea buildable, recommend a concrete answer and ask the caller/user to confirm or
+   correct it. Do not run a checklist. Do not interrogate every dimension.
+
+### Component outputs
+
+Return all of the following to the caller:
+
+1. **Clarity assessment:** `clear` or `unclear`, plus the missing dimension if unclear.
+2. **Alternatives assessment:** `single_path`, `minor_open_forks`, or
+   `material_alternatives`, plus a one-line rationale.
+3. **Recommendation:** exactly one of:
+   - `proceed` — the problem is buildable and any open forks are minor enough for planning.
+   - `sharpen_more` — the prompt is still under-specified, and a focused clarification is
+     the next best move.
+   - `route_to_brainstorm` — materially different framings survived sharpening; parallel
+     ideation should run before planning.
+4. **`GRILL.md` output:** on `proceed` or `route_to_brainstorm`, provide a complete
+   `GRILL.md` using the schema below. On `sharpen_more`, do not write a final artifact;
+   return the best current draft fields and the next clarification to ask.
+
+If the caller supplied a destination context and the recommendation is `proceed` or
+`route_to_brainstorm`, write the destination `GRILL.md`. Otherwise, return the markdown to
+the caller. The component never writes `BRAINSTORM.md`.
+
+```markdown
+---
+generated_at: <iso 8601 UTC timestamp>
+status: complete
+slug: <caller-owned slug, or "inline" if no slug exists>
+---
+
+# GRILL — <caller-owned slug or short title>
+
+## Sharpened problem
+<1 paragraph — the buildable problem statement. Concrete, not abstract.>
+
+## Pain evidence
+<the specific recent painful moment(s), frequency, cost, who feels it>
+
+## Who else has this
+<just-me / named others + how they cope today; or "unknown — solo papercut">
+
+## Dumbest version that solves 80%
+<the minimal thing that kills most of the pain>
+
+## Killed scope
+<each piece cut from the user's original mental model + why it was cut>
+
+## Open branches
+<genuinely undecided forks deferred to planning/brainstorming; or "none">
+
+## Recommended next command
+<`/z-plan <slug>` or `/z-brainstorm <slug>` + one-line rationale (advisory only)>
+```
+
+Recommendation mapping:
+
+- `proceed` maps to **`/z-plan <slug>`** when the terrain is known and the remaining work
+  is decision-making plus task breakdown.
+- `route_to_brainstorm` maps to **`/z-brainstorm <slug>`** when `## Open branches`
+  contains materially different framings that would benefit from parallel ideation.
+- `sharpen_more` maps to no next command yet.
+
+## Surface 2 — `/z-sharpen` command wrapper
+
+This wrapper invokes the reusable inline component above as a user-facing conversational
+command. The wrapper, not the reusable component, owns session lifecycle, slug/collision
+behavior, telemetry, final writes, and user-visible handoff.
+
 <!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface the question
      "What are you thinking about?" via their native channel. Silent omission is
      forbidden. -->
 **If the topic above is empty or whitespace**, open with: "What are you thinking
 about?" The entire conversation discovers the topic.
 
-`/z-sharpen` is a **bounded** conversational on-ramp — a thinking-partner conversation
-that adaptively refines a raw idea into a crisp, buildable problem statement. It starts
-conversational (reframe/probe), escalates to pin individual fuzzy dimensions only as needed,
-and stops once the idea is buildable. It never exhaustively interrogates every dimension —
-that is `/z-grill`'s job.
-
-**Invariant — bounded vs. exhaustive:** z-sharpen = adaptive + bounded;
-`/z-grill` = exhaustive + deliberate. If you find yourself wanting to grill every
-dimension systematically, stop and recommend `/z-grill` instead.
-
-## Setup
+### Setup
 
 1. **Resolve the plans base:**
    ```bash
@@ -50,77 +193,27 @@ dimension systematically, stop and recommend `/z-grill` instead.
      "$(printf '{"topic":"%s","command":"/z-sharpen"}' "<original user prompt>")"
    ```
 
-## Protocol (inline — no subagents for the interview itself)
+### Wrapper lifecycle
 
-The conversation runs inline in this orchestrator thread. Do not spawn a subagent to run
-the interview. Explore is the only subagent allowed, used to self-serve codebase-answerable
-questions so the user is not asked what the repo already states.
+1. Start from `$ARGUMENTS` or the empty-topic answer.
+2. Invoke the reusable inline component with:
+   - prompt input = the current topic/conversation summary;
+   - precontext input = any user-supplied context already present in the conversation;
+   - no destination context until slug/collision resolution succeeds.
+3. If the component returns `sharpen_more`, ask one focused conversational question with a
+   recommended answer, wait for the user's free-text reply, and invoke the component again
+   with the updated prompt/precontext. This is a single-threaded wrapper lifecycle; do not
+   spawn a subagent to run the interview.
+4. Stop probing when the component returns `proceed` or `route_to_brainstorm`. Summarize the
+   converged problem and ask the user to confirm: "Here's what I've got — does this capture
+   it, or is there something important I'm missing?" Proceed to artifact production only on
+   user confirmation.
+5. If the user abandons before confirmation, run the abandonment path. No artifact is
+   written.
 
-### Stage 1 — Framing restate
+### Slug derivation and collision check
 
-Restate the idea back to the user in your own words. Make it concrete: name the actors,
-the pain, and the approximate scope as you understand them. This is a check, not a lecture —
-keep it brief (2-3 sentences). Invite correction.
-
-### Stage 2 — Probe / Clarify / Reframe loop
-
-Adaptively explore the idea. This stage is **not** a structured checklist — follow the
-thread with the highest signal, not a fixed order.
-
-**For each turn:**
-
-**Step A — Codebase-answerable?** Ask yourself: can this be answered by looking at the
-codebase rather than the user? If yes, self-serve it:
-
-<!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
-     requirement and skip the Explore Agent() call. If skipped, ask the user the
-     question directly instead of self-answering. Silent omission is forbidden. -->
-```
-Agent(
-  subagent_type="general-purpose",
-  model="haiku",
-  description="Self-serve: <one-line question>",
-  prompt="<question about the codebase>\nrepo_root: <abs path>"
-)
-```
-Log the self-answered question and continue. Do NOT ask the user about it.
-
-**Step B — Probe or reframe conversationally.** Offer a reframing, ask a clarifying
-question, or surface a tension you see. Keep it conversational — one thread at a time.
-
-**Step C — Adaptive escalation (bounded).** If a particular dimension stays fuzzy after
-a conversational exchange, **escalate** for that dimension only: state a recommended answer
-and ask the user to confirm or correct it. Example: "I'm reading this as [X] — does that
-match, or is it more like [Y]?" This is a single-dimension pin, not a full interrogation.
-
-Resume conversational probing after each pin.
-
-**Codebase self-serve examples (Step A):** Does this integration point already exist? Does
-this data model already have the field? Is there an existing command that covers this?
-These do not count against the bounded-escalation budget.
-
-### Stage 3 — Convergence gate
-
-The idea is buildable when you can clearly articulate:
-- The concrete, specific problem being solved (not abstract);
-- The minimal scope (what's in and what's cut);
-- The key open forks (genuinely deferred vs. known).
-
-**Adaptive termination:** stop probing once those three things are clear. Do not continue
-probing just to cover all possible dimensions — if it's buildable, stop.
-
-When you believe the idea is sharp enough, summarize what you've converged on and ask the
-user to confirm: "Here's what I've got — does this capture it, or is there something
-important I'm missing?" Proceed to Stage 4 only on user confirmation.
-
-If the user signals convergence themselves ("that's it", "let's write it up", similar),
-accept it and proceed to Stage 4.
-
-### Stage 4 — Artifact production and handoff
-
-Only reached on convergence. On abandonment, exit cleanly — no artifact written.
-
-#### Slug derivation and collision check
+Only the command wrapper performs this section.
 
 1. **Derive a provisional slug** from the sharpened problem: short kebab-case, 2-4 words.
 
@@ -149,64 +242,33 @@ Only reached on convergence. On abandonment, exit cleanly — no artifact writte
    mkdir -p "$Z_HARNESS_PLAN_DIR"
    ```
 
-#### Log convergence
+### Log convergence
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" sharpen_convergence \
-  "$(printf '{"slug":"%s","collision":%s}' "$Z_HARNESS_SLUG" "$COLLISION")"
+  "$(printf '{"slug":"%s","collision":%s,"recommendation":"%s"}' "$Z_HARNESS_SLUG" "$COLLISION" "<proceed|route_to_brainstorm>")"
 ```
 
-#### Write GRILL.md
+### Write GRILL.md
 
-Write `$Z_HARNESS_PLAN_DIR/GRILL.md` using the EXACT schema `/z-grill` already produces.
-**Never write BRAINSTORM.md** — `/z-brainstorm` owns that artifact.
+Invoke the reusable inline component one final time or reuse its latest returned markdown,
+now with destination context `$Z_HARNESS_PLAN_DIR/GRILL.md` and slug
+`$Z_HARNESS_SLUG`. Write the exact `GRILL.md` schema above. **Never write
+`BRAINSTORM.md`** — `/z-brainstorm` owns that artifact.
 
-```markdown
----
-generated_at: <iso 8601 UTC timestamp>
-status: complete
-slug: <resolved-slug>
----
+`GRILL.md` is written only on convergence. An abandoned session writes nothing.
 
-# GRILL — <resolved-slug>
-
-## Sharpened problem
-<1 paragraph — the buildable problem statement. Concrete, not abstract.>
-
-## Pain evidence
-<the specific recent painful moment(s), frequency, cost, who feels it>
-
-## Who else has this
-<just-me / named others + how they cope today; or "unknown — solo papercut">
-
-## Dumbest version that solves 80%
-<the minimal thing that kills most of the pain>
-
-## Killed scope
-<each piece cut from the user's original mental model + why it was cut>
-
-## Open branches
-<genuinely undecided forks deferred to planning; or "none">
-
-## Recommended next command
-<`/z-plan <slug>` or `/z-brainstorm <slug>` + one-line rationale (advisory only)>
-```
-
-GRILL.md is written only on convergence. An abandoned session writes nothing.
-
-#### Handoff (advisory, NEVER auto-dispatch)
+### Handoff (advisory, NEVER auto-dispatch)
 
 Recommend the next command — but **do not invoke it**. State the recommendation in one or
 two sentences, point at the written `GRILL.md` path, and stop. The user runs the next
 command themselves.
 
-- Recommend **`/z-plan <slug>`** when the terrain is known and the path is clear enough
-  that the remaining work is decision-making + task breakdown.
-- Recommend **`/z-brainstorm <slug>`** when multiple plausible framings survived sharpening
-  — i.e., `## Open branches` carries forks that would materially change the plan, and
-  parallel ideation would help before planning.
+- Recommend **`/z-plan <slug>`** when the component returned `proceed`.
+- Recommend **`/z-brainstorm <slug>`** when the component returned
+  `route_to_brainstorm`.
 
-#### Log run end
+### Log run end
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" sharpen_run_end \
@@ -215,7 +277,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 ## Abandonment
 
-If the user abandons at any stage, log and exit cleanly:
+If the user abandons at any stage before confirmed convergence, log and exit cleanly:
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" sharpen_run_end \

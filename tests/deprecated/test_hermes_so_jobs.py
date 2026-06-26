@@ -1,8 +1,16 @@
-"""Tests for the Hermes `so` job registry."""
+"""Deprecated tests for the retired Hermes `so` job registry.
+
+The tmux/job-registry backend was replaced by `hermes.so_mcp`; these tests are
+kept for reference only and are not part of active verification.
+"""
 
 from pathlib import Path
 import json
 import sys
+import pytest
+
+pytest.skip("deprecated so backend reference tests", allow_module_level=True)
+
 
 
 SCRIPTS_DIR = Path(__file__).parent.parent / "scripts"

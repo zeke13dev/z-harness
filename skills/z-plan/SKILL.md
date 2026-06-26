@@ -23,6 +23,28 @@ $ARGUMENTS
 
 Strict, multi-phase. Do not skip phases. Do not write production code — `/z-plan` produces planning artifacts only; implementation happens later via `/z-execute`.
 
+## Revised phase spine and `/z-plan` edit sequence
+
+The `/z-plan` spine is ordered so every expensive action is gated, every artifact handoff is explicit, and later redesign tasks have stable insertion points:
+
+1. **Setup** — slug/collision checks, claim/register, docs/precontext freshness, deterministic artifact inventory.
+2. **Plan Route Check (pre-gate)** — route-down/lateral recommendations from cheap signals only; do not auto-dispatch another command.
+3. **Explicit planning mode gate** — visible Intent-vs-Full SDD choice, with config/flags as the recommended default and `SPEC.md` as the legacy full-mode override.
+4. **Pre-subagent cost gate (hard)** — runs after the mode gate has fixed the cost shape and before any expensive Agent dispatch.
+5. **Post-gate classifiers** — artifact-scout classifier, deferred planning-router, intent classifier/depth announcement.
+6. **Phases 0–5** — premise, exploration, decisions, user approval, and consulted design convergence.
+7. **Phase 6** — write the primary planning artifact: `INTENT.md` in intent mode, or `SPEC.md` + `PLAN.md` in full SDD mode.
+8. **Phase 7** — bundled final review. T001 owns only the ordering hook; later mode-aware prompt details belong to the Phase 7 task.
+9. **Phase 8** — write `TASKS.md`: task-tree-generator for intent mode, hand-authored legacy tasks for full mode.
+10. **Phase 8.4** — post-artifact route checks after the artifacts exist; may recommend `/z-plan-split`, `/z-sharpen`, or `/z-brainstorm`, but never auto-dispatch.
+11. **Phase 8.5** — handoff context producer. T001 keeps the thin existing handoff contract in place; the later handoff task owns the richer producer.
+12. **Phase 8.6** — final user handoff gate: fresh-session implementation, audit-first, stop with handoff, or amend.
+13. **Phase 9** — finalize run brief, release claim, deregister.
+
+`/z-plan` skill edits for this redesign MUST land in this sequence: **T001 spine/mode gate first**, then **T005 Phase 8 sanity**, then **T006 Phase 8.5 handoff producer**, then **T007 Phase 7 mode-aware reviewer inputs**, then docs sync. Dependent tasks must not edit earlier sections to smuggle in their own ordering changes.
+
+Amend/resume routing is phase-specific: scope or goal changes resume at **Phase 0**, decision changes resume at **Phase 2**, primary artifact wording changes resume at **Phase 6**, and task decomposition changes resume at **Phase 8**.
+
 ## Setup
 
 1. **Derive a plan slug** from the task: short kebab-case, 2-4 words (e.g. "expand sports ML" → `expand-sports-ml`; "add rate limit middleware" → `add-rate-limit`). Run `bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" all_plan_slugs` to check for existing slug names across both new and legacy plan layouts. If a matching slug dir is found:
@@ -356,7 +378,7 @@ The post-gate classifier consumes the inline JSON printed by this command and ar
 <!-- PLAN_ROUTE_CHECK_START -->
 ## Plan Route Check
 
-Run this route check after Setup step 10's precontext/docs gates and before Phase 1 dispatch, then run it again after Phase 5 approval if the decisions or estimated task shape make split risk clear. Use only already-known signals: `candidate_files`, `expected_tasks`, `non_obvious_decisions`, `cluster_seams`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `terrain_uncertain`, `approach_uncertain`, `has_bug_diagnosis`, `has_unknown_bug_symptom`, `has_existing_plan`, `plan_validation_intent`, `plan_amend_intent`, `has_fix_artifact`, and `docs_stale_or_drifted`. Set `plan_validation_intent`/`plan_amend_intent` only when the user re-enters this command on a slug with `SPEC.md`+`PLAN.md`+`TASKS.md` all present (see `agents/planning-router.md` for the language-match heuristic).
+Run this route check after Setup step 10's precontext/docs gates and before Phase 1 dispatch, then run it again after Phase 5 approval if the decisions or estimated task shape make split risk clear, and once more in **Phase 8.4** after `INTENT.md`/`SPEC.md`/`PLAN.md` and `TASKS.md` exist. Use only already-known signals: `candidate_files`, `expected_tasks`, `non_obvious_decisions`, `cluster_seams`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `terrain_uncertain`, `approach_uncertain`, `has_bug_diagnosis`, `has_unknown_bug_symptom`, `has_existing_plan`, `plan_validation_intent`, `question_heavy_artifacts`, `artifact_unsettled_approach`, `post_artifact_check`, and artifact existence.
 
 Deterministic routes:
 - Route tiny implementation-only work (`candidate_files <= 3`, no non-obvious decisions, no cross-module/schema/public surface impact) to `/z-do`.
@@ -406,9 +428,9 @@ When the user chooses **switch** or **abandon** at the route gate (ending the ru
 Loop prevention: carry forward the latest route chain; if it already has two entries, ask the user to choose explicitly. If the recommended target equals the immediate prior `from_command`, block ping-pong, show both route artifacts, and ask the user to choose. If the user continues here, log the override and do not route again for the same `reason_codes` in this run.
 <!-- PLAN_ROUTE_CHECK_END -->
 
-## Mode detection
+## Explicit planning mode gate (before hard cost gate)
 
-Read `workflow.planning_mode` and `workflow.intent_level` from config (already exported by Setup step 4a). These two knobs govern the entire planning paradigm for this run. Normalize `workflow.intent_level` before the cost gate: only `quick`, `standard`, `deep`, and `auto` are recognized; any unknown value is treated as `auto` for dispatch estimation and later classifier resolution.
+Read `workflow.planning_mode` and `workflow.intent_level` from config (already exported by Setup step 4a). These two knobs are recommendations for the visible Intent-vs-Full SDD gate, not a silent final decision unless an unattended driver must use the recommended default. Normalize `workflow.intent_level` before the cost gate: only `quick`, `standard`, `deep`, and `auto` are recognized; any unknown value is treated as `auto` for dispatch estimation and later classifier resolution.
 
 ```bash
 PLANNING_MODE="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" get workflow.planning_mode 2>/dev/null || echo "intent")"
@@ -431,10 +453,12 @@ for _flag in "$@"; do
   case "$_flag" in
     --full)
       PLANNING_MODE="full"
+      PLANNING_MODE_SOURCE="flag"
       _ARGS_REMAINING="${_ARGS_REMAINING/--full/}"
       ;;
     --quick)
       PLANNING_MODE="intent"
+      PLANNING_MODE_SOURCE="flag"
       INTENT_LEVEL="quick"
       INTENT_LEVEL_SOURCE="flag"
       INTENT_LEVEL_REASON="--quick flag: forced L1"
@@ -442,6 +466,7 @@ for _flag in "$@"; do
       ;;
     --standard)
       PLANNING_MODE="intent"
+      PLANNING_MODE_SOURCE="flag"
       INTENT_LEVEL="standard"
       INTENT_LEVEL_SOURCE="flag"
       INTENT_LEVEL_REASON="--standard flag: forced L2"
@@ -449,6 +474,7 @@ for _flag in "$@"; do
       ;;
     --deep)
       PLANNING_MODE="intent"
+      PLANNING_MODE_SOURCE="flag"
       INTENT_LEVEL="deep"
       INTENT_LEVEL_SOURCE="flag"
       INTENT_LEVEL_REASON="--deep flag: forced L3"
@@ -510,10 +536,61 @@ What would you like to do?" \
 fi
 ```
 
+<!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the
+     Intent-vs-Full SDD mode choice before the hard cost gate. Silent omission is forbidden. -->
+**Visible planning-mode choice.** After config, flags, and the `SPEC.md` legacy guard have resolved the recommended mode, surface a visible choice **before** the hard cost gate:
+
+- **Intent mode (recommended default for new plans):** write `INTENT.md` with `frozen_at: pending`, then generate initial `TASKS.md`.
+- **Full SDD mode:** write legacy `SPEC.md`, `PLAN.md`, and `TASKS.md`.
+
+Config (`workflow.planning_mode`) and flags (`--full`, `--quick`, `--standard`, `--deep`) only choose the recommended/preselected option. A pre-existing `$Z_HARNESS_PLAN_DIR/SPEC.md` is the only hard override: it forces `PLANNING_MODE=full`, records `planning_mode_source=legacy_spec`, and the mode gate must explain that intent mode is unavailable for this slug to avoid overwriting legacy artifacts.
+
+```bash
+PLANNING_MODE_RECOMMENDED="$PLANNING_MODE"
+PLANNING_MODE_SOURCE="${PLANNING_MODE_SOURCE:-config}"
+if [[ -f "$Z_HARNESS_PLAN_DIR/SPEC.md" ]]; then
+  PLANNING_MODE_CHOICE="full"
+  PLANNING_MODE="full"
+  PLANNING_MODE_SOURCE="legacy_spec"
+  PLANNING_MODE_REASON="SPEC.md exists; legacy full SDD mode is forced"
+elif [[ -n "${Z_HARNESS_NO_ASK:-}" ]]; then
+  # Unattended/no-ask drivers cannot surface the visible gate; bind the
+  # already-resolved config/flag recommendation as the explicit answer.
+  PLANNING_MODE_CHOICE="$PLANNING_MODE_RECOMMENDED"
+  case "$PLANNING_MODE_CHOICE" in
+    intent|full) PLANNING_MODE="$PLANNING_MODE_CHOICE" ;;
+    *) PLANNING_MODE_CHOICE="intent"; PLANNING_MODE="intent" ;;
+  esac
+  PLANNING_MODE_REASON="unattended/no-ask config default from workflow.planning_mode or CLI flag"
+else
+  AskUserQuestion "Choose planning mode for this /z-plan run before cost estimation:" \
+    ["Intent mode — adaptive INTENT.md + initial TASKS.md (recommended: ${PLANNING_MODE_RECOMMENDED})", \
+     "Full SDD mode — SPEC.md + PLAN.md + TASKS.md"]
+  # Capture the visible answer first, then map it to the only values the rest
+  # of the pipeline may consume.
+  PLANNING_MODE_CHOICE="<intent|full from AskUserQuestion>"
+  case "$PLANNING_MODE_CHOICE" in
+    intent) PLANNING_MODE="intent" ;;
+    full) PLANNING_MODE="full" ;;
+  esac
+  PLANNING_MODE_SOURCE="user"
+  PLANNING_MODE_REASON="explicit mode gate"
+fi
+export PLANNING_MODE PLANNING_MODE_CHOICE PLANNING_MODE_SOURCE PLANNING_MODE_REASON
+
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" planning_mode_chosen \
+  "$(printf '{"slug":"%s","mode":"%s","choice":"%s","recommended_mode":"%s","source":"%s","reason":"%s","legacy_spec_forced":%s}' \
+     "$Z_HARNESS_SLUG" "$PLANNING_MODE" "$PLANNING_MODE_CHOICE" \
+     "$PLANNING_MODE_RECOMMENDED" "$PLANNING_MODE_SOURCE" "${PLANNING_MODE_REASON:-}" \
+     "$(if [[ "$PLANNING_MODE_SOURCE" == "legacy_spec" ]]; then echo true; else echo false; fi)")"
+```
+
+The `planning_mode_chosen` event is mandatory and is emitted exactly once per run, before `cost_gate_decision`. Downstream telemetry must treat it as the source of truth for `planning_mode`.
+
 
 ## Pre-subagent cost gate (hard)
 
-This gate runs after the cheap setup, claim/register, freshness checks, deterministic route preflight, and cheap mode/depth preflight above. It runs **before every expensive subagent**: `planning-router` (when deferred), `intent-classifier`, Phase 1 `doc-fetcher`, Phase 1 Explore, Phase 3 / Phase 7 consultant panels, Phase 8 `task-tree-generator`, and any other Agent dispatch.
+This gate runs after the cheap setup, claim/register, freshness checks, deterministic route preflight, and the **explicit planning mode gate** above. It runs **before every expensive subagent**: `planning-router` (when deferred), `intent-classifier`, Phase 1 `doc-fetcher`, Phase 1 Explore, Phase 3 / Phase 7 consultant panels, Phase 8 `task-tree-generator`, and any other Agent dispatch.
 
 `workflow.pre_run_cost_gate` remains the single disposition authority: `/z-plan` must call `scripts/pre-run-cost-gate.sh`, and that helper delegates the disposition to `scripts/config.py`. Do not read `cost.token_budget` here and do not reimplement the budget comparison in the skill.
 
@@ -2335,7 +2412,50 @@ fi  # hermes_enabled gate (Invariant 6: Hermes machinery never executes unless h
 fi  # end of Phase 8 else-branch: legacy SPEC/PLAN/TASKS authoring — skipped when PLANNING_MODE=intent and INTENT.md present
 ```
 
-## Phase 9 — Finalize archive
+## Phase 8.4 — Post-artifact route check
+
+Run this route check after Phase 8 has produced the current artifact set:
+
+- Intent mode: `$Z_HARNESS_PLAN_DIR/INTENT.md` (with `frozen_at: pending`) and canonical `$Z_HARNESS_PLAN_DIR/TASKS.md`.
+- Full SDD mode: `$Z_HARNESS_PLAN_DIR/SPEC.md`, `$Z_HARNESS_PLAN_DIR/PLAN.md`, and `$Z_HARNESS_PLAN_DIR/TASKS.md`.
+
+This check reuses the **Plan Route Check** event and route-decision contract. It fires after artifact writing so it can inspect concrete artifact shape instead of estimates:
+
+- Recommend `/z-plan-split` when the produced task count or independent cluster seams show the plan should be split before execution.
+- Recommend `/z-sharpen` when artifacts remain question-heavy, acceptance criteria are vague, or task text shows unresolved problem framing.
+- Recommend `/z-brainstorm` when approach alternatives remain unsettled or the artifacts still read like "what should we do?" rather than an approved implementation direction.
+
+If a post-artifact route is recommended, write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md`, emit `plan_route_decision` with `route_class: "post_artifact"`, include the same `route_chain` loop-prevention fields as the pre-gate route check, and surface an `AskUserQuestion` with **switch / continue here / abandon**. Never auto-dispatch the target command. If no signal fires, record no route artifact and continue to Phase 8.5.
+
+Concrete Phase 8.4 `plan_route_decision` payload example:
+
+```json
+{
+  "from_command": "/z-plan",
+  "to_command": "/z-sharpen",
+  "route_class": "post_artifact",
+  "reason_codes": ["question_heavy_artifacts", "post_artifact_check"],
+  "signals": {
+    "plan_validation_intent": false,
+    "question_heavy_artifacts": true,
+    "artifact_unsettled_approach": false,
+    "post_artifact_check": true
+  },
+  "confidence": "high",
+  "classifier_used": false,
+  "artifact_path": "$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md",
+  "route_chain": ["/z-plan"],
+  "user_choice": "continue_here"
+}
+```
+
+Recognize both finished-plan artifact sets as complete when deciding whether to route or stop: legacy `SPEC.md` + `PLAN.md` + `TASKS.md`, and intent `INTENT.md` + canonical `TASKS.md`.
+
+## Phase 8.5 — Handoff context producer (thin until T006)
+
+The handoff producer runs only after Phase 8.4 post-artifact route checks have either passed or the user explicitly chose to continue here. T001 preserves the existing thin `HANDOFF.md` contract below; the later handoff task may enrich this section but must keep it before Phase 8.6 and before Phase 9 finalization.
+
+### Archive copies for handoff and finalization
 
 **Intent-mode artifact copy (when `PLANNING_MODE=intent`):** copy `INTENT.md` in addition to (or instead of) `SPEC.md`/`PLAN.md` when INTENT.md is present. If `INTENT.md` is absent, fall back to the legacy artifact set.
 
@@ -2416,9 +2536,11 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
      "$Z_HARNESS_SLUG" "$Z_HARNESS_PLAN_DIR/HANDOFF.md" "$_HANDOFF_ARTIFACT_KIND")"
 ```
 
-**Post-intent prose checkpoint (no AskUserQuestion).** Print the following summary directly as chat output — do not use `AskUserQuestion`. This replaces the former four-option popup:
+## Phase 8.6 — Final handoff gate
 
-```
+Print the completion summary, then surface one final user gate. This gate occurs **after** Phase 8.5 writes `HANDOFF.md` and **before** Phase 9 finalizes the run:
+
+```text
 Plan complete for slug: <$Z_HARNESS_SLUG>
 
 Primary artifact: <$_HANDOFF_PRIMARY_ARTIFACT>
@@ -2428,28 +2550,58 @@ Primary artifact: <$_HANDOFF_PRIMARY_ARTIFACT>
 <If PLANNING_MODE=full: "SPEC.md + PLAN.md + TASKS.md are the contract for this run.">
 
 Handoff context written to: $Z_HARNESS_PLAN_DIR/HANDOFF.md
-
-Next move — run these two commands in sequence:
-
-/clear
-/z-audit-plan <$Z_HARNESS_SLUG>
-
-The audit is the recommended next step (contract-level reality check + adversarial review).
-If you have high confidence in the plan and want to skip auditing, run /z-execute directly.
 ```
 
-Log the next-step recommendation:
+<!-- RUNTIME-GATE: ask_user; category=mechanical_proceed; non-supporting drivers must surface
+     the final handoff gate after HANDOFF.md is written and before Phase 9 finalization.
+     Silent omission is forbidden. -->
+Ask the user to choose exactly one next step:
+
+- **Fresh-session implementation** — run `/clear`, then `/z-execute <$Z_HARNESS_SLUG>`.
+- **Audit first** — run `/clear`, then `/z-audit-plan <$Z_HARNESS_SLUG>`.
+- **Stop with handoff** — leave `HANDOFF.md` as the next-session context and do not start another command.
+- **Amend** — run `/z-amend <$Z_HARNESS_SLUG>` and resume from the mapped phase below.
+
+Request-change resume map: scope/goal changes resume at Phase 0; decision changes resume at Phase 2; primary artifact wording changes resume at Phase 6; task decomposition changes resume at Phase 8.
+
+Capture the final gate answer before any logging or branch logic. Normalize it to exactly one of these values: `fresh_session_implementation`, `audit_first`, `stop_with_handoff`, or `amend`.
+
+```bash
+FINAL_HANDOFF_CHOICE="<fresh_session_implementation|audit_first|stop_with_handoff|amend from AskUserQuestion>"
+case "$FINAL_HANDOFF_CHOICE" in
+  fresh_session_implementation|audit_first|stop_with_handoff|amend) ;;
+  *) echo "invalid final handoff choice: $FINAL_HANDOFF_CHOICE" >&2; exit 1 ;;
+esac
+export FINAL_HANDOFF_CHOICE
+```
+
+Log the selected next step:
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" next_step_choice \
-  "$(printf '{"choice":"/z-audit-plan","source":"prose_recommendation"}')"
+  "$(printf '{"choice":"%s","source":"phase_8_6_final_handoff_gate"}' "$FINAL_HANDOFF_CHOICE")"
 ```
 
-Set `$NEXT_JSON` for the run brief:
+Set `$NEXT_JSON` for the run brief from the gate selection:
 
 ```bash
-NEXT_JSON='{"label":"Audit the plan","command":"/z-audit-plan"}'
+case "$FINAL_HANDOFF_CHOICE" in
+  fresh_session_implementation)
+    NEXT_JSON='{"label":"Implement in a fresh session","command":"/z-execute"}'
+    ;;
+  audit_first)
+    NEXT_JSON='{"label":"Audit the plan first","command":"/z-audit-plan"}'
+    ;;
+  stop_with_handoff)
+    NEXT_JSON='{"label":"Stop with handoff","command":null}'
+    ;;
+  amend)
+    NEXT_JSON='{"label":"Amend the plan","command":"/z-amend"}'
+    ;;
+esac
 ```
+
+## Phase 9 — Finalize archive
 
 **Run Brief finalize (registry Phase 9).** Set registry artifact env, pre-seed outcome/status/next, then include the shared fragment. Chat and push text are rendered from `run-brief.json` only — do not author independent completion prose.
 
@@ -2527,6 +2679,7 @@ Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema
 | Event kind | When / meaning | Required fields |
 |---|---|---|
 | `run_start` | Planning run begins | version fields, `task`, `command` |
+| `planning_mode_chosen` | Explicit Intent-vs-Full SDD mode gate resolved before the hard cost gate | `slug`, `mode`, `recommended_mode`, `source`, `reason`, `legacy_spec_forced` |
 | `plan_route_decision` | Route check fired and a route was chosen | `from_command`, `to_command`, `route_class`, `reason_codes`, `signals`, `confidence`, `classifier_used`, `artifact_path`, `route_chain`, `user_choice` |
 | `plan_halt` | Run halted (e.g. `no_ask_blocked` on slug gate) | `reason`, `question_id`, `rule_id` |
 | `askuser_skipped` | AskUserQuestion suppressed by resolver | `question_id`, `source` |
@@ -2540,10 +2693,10 @@ Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema
 | `task_classified` | complexity-classifier stamped a task block | `task`, `tier`, `reason` |
 | `persona_bound` | Emitted per panel arm at Phase 3 and Phase 7 (5-panel path only) | `run_id`, `command`, `role`, `arm`, `selection_source`, `phase`; additionally `persona_id` + `draw_id` when `personas.critique_panel` drew a persona for that arm (`selection_source=random_role_pool_distinct`); vanilla arms omit those fields and carry `selection_source=fixed_panel` |
 | `telemetry_anomaly` | `log-phase.sh` detected impossible `wall_ms` | `phase`, `reason` (`wall_ms_overflow` / `wall_ms_negative`), `t_start`, `t_end`, `computed_wall_ms` |
-| `next_step_choice` | Phase 9 prose recommendation emitted (source: `prose_recommendation`) | `choice`, `source` |
+| `next_step_choice` | Phase 8.6 final handoff gate selection emitted (source: `phase_8_6_final_handoff_gate`) | `choice`, `source` |
 | `sharpen_gate` | Phase 0 auto-sharpen gate decision | `decision` (`sharpened`\|`skipped`), `grill_md_existed` |
 | `sharpen_skipped` | Phase 0 auto-sharpen step skipped (opt-out or not handoff input) | `reason` |
-| `handoff_written` | Phase 9 handoff artifact written to HANDOFF.md | `slug`, `path`, `artifact_kind` |
+| `handoff_written` | Phase 8.5 handoff artifact written to HANDOFF.md | `slug`, `path`, `artifact_kind` |
 | `plan_claim_lost_during_gate` | Heartbeat detected ownership change (exit 9) at a phase boundary or before a user gate; URGENT abort/continue-uncoordinated gate fires | `slug`, `run_id`, `phase` |
 | `cost_gate_decision` | Exactly one terminal pre-subagent hard cost-gate decision per `/z-plan` run | `command`, `choice`, `estimated_tokens`, `confidence`, `basis`, `disposition`, `rule_id`, `range_high`, `choice_source`, `attempt_count` when known; optional sanitized `reason` |
 | `cost_gate_reestimate_attempt` | Nonterminal cost reduction / re-estimate attempt; never counts as the terminal gate decision | `command`, `run_id`, `gate_id`, `attempt_index`, `changed_drivers`, `prior_range_high`, `new_range_high`, `disposition`, `terminal_event_kind`, terminal-correlation `gate_id` |

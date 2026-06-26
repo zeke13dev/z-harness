@@ -2,6 +2,10 @@
 
 Plan: [SPEC.md](../hermes-so-watchdog/SPEC.md) · [PLAN.md](../hermes-so-watchdog/PLAN.md) · [TESTS.md](../hermes-so-watchdog/TESTS.md)
 
+> Superseded 2026-06-26: active implementation uses `scripts/hermes/so_mcp.py`
+> and `scripts/so-mcp-server.py`; retired tmux/job-registry/supervisor/watchdog
+> tasks are historical only.
+
 No `REMOTE_VERIFY` tags unless an implementation task explicitly dogfoods `qt-bot` on its remote host; the core tests are local/fake.
 
 ---

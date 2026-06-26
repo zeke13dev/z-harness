@@ -121,6 +121,31 @@ class ProdSurfaceMcpFilterTest(unittest.TestCase):
         self.assertNotIn("z_overnight", active)
         self.assertNotIn("z_axiom_scan", active)
 
+    def test_packaged_prod_surface_hides_mcp_tools_without_env(self) -> None:
+        import z_harness_cli.mcp.server as server
+
+        previous = os.environ.get("Z_HARNESS_RELEASE_SURFACE")
+        if previous is not None:
+            os.environ.pop("Z_HARNESS_RELEASE_SURFACE")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                for skill_id in ("z-plan", "z-brainstorm", "z-learn"):
+                    skill_dir = root / "skills" / skill_id
+                    skill_dir.mkdir(parents=True)
+                    (skill_dir / "SKILL.md").write_text("---\nname: test\n---\n", encoding="utf-8")
+                with patch.object(server, "_candidate_repo_roots", return_value=[root]):
+                    active = server._active_command_tools()
+        finally:
+            if previous is not None:
+                os.environ["Z_HARNESS_RELEASE_SURFACE"] = previous
+
+        self.assertIn("z_brainstorm", active)
+        self.assertNotIn("z_research", active)
+        self.assertNotIn("z_map", active)
+        self.assertNotIn("z_overnight", active)
+        self.assertNotIn("z_axiom_scan", active)
+
 class UxSmokeScriptExistsTest(unittest.TestCase):
     def test_ux_smoke_script_exists(self) -> None:
         script = REPO_ROOT / "scripts" / "ux-setup-smoke.sh"

@@ -2,8 +2,8 @@
   "schema_version": 1,
   "created_at": "2026-06-26",
   "plan_slug": "hermes-so-watchdog",
-  "title": "Hermes Discord so session orchestration",
-  "status": "ready_for_execution",
+  "title": "Hermes Discord so MCP orchestration",
+  "status": "superseded_by_mcp_redesign",
   "repo_root": "/Users/zeke/dev/z-harness",
   "branch_policy": {
     "branch": "main",
@@ -16,18 +16,14 @@
     "tests": "hermes-so-watchdog/TESTS.md",
     "session": "hermes-so-watchdog/SESSION.md"
   },
-  "user_story": "A user opens a Hermes session in Discord and sends `so omp qt-bot fix blah using z-debug`. Hermes creates and registers the tmux-backed job, supervises it, consumes watchdog events, asks the requester for input by default, records feedback, and detects stale/dead sessions without blind sleep/capture polling.",
+  "user_story": "A user opens Discord and sends `so omp qt-bot fix blah using z-debug`. Hermes parses and authorizes the command, calls the Hermes `so` MCP backend, and replies with the MCP session id. The backend launches/continues OMP or Claude-code through structured MCP tools instead of tmux, watchdog webhook routing, supervisor state, or job-registry CRUD.",
   "hard_constraints": [
     "`so` is Discord/Hermes command language, not a z-harness CLI or local binary.",
-    "Do not require or expose user-provided tmux names such as `so-session`; Hermes generates internal session names and only shows them as diagnostics.",
-    "Do not use fixed `sleep N && tmux capture-pane ...` loops as orchestration. Captures must be event-driven: launch confirmation, watchdog alert, explicit status/log request, or bounded stale check.",
-    "Ask-first behavior is mandatory initially. Hermes sends no session input until the requester replies unless a future reviewed/promoted learned pattern exists.",
-    "No hardcoded initial replies for `/new`, handoff ingestion, `continue`, or similar prompts.",
-    "Pattern mining/review/promotion is a separate task after ask-first flow and fake e2e are working.",
-    "For Hermes-supervised `so` sessions, `job_id` is mandatory in watchdog routing; Hermes exports `HERMES_SO_JOB_ID=<job_id>` into the launched tmux session.",
-    "`next_step` is optional webhook metadata, not required routing data.",
-    "`execution_host`, `transport`, `ssh_target`, and `workdir` in the Hermes job record are authoritative for tmux/pid/capture/send-keys/attach/restart/abort operations.",
-    "Automated tests must use fake Discord and fake tmux/OMP; they must not contact real Discord, real OMP, real tmux, or real project repos.",
+    "Keep `scripts/hermes/discord_relay.py` and `scripts/hermes/config.py` as the thin parser/authorization layer.",
+    "Use `scripts/hermes/so_mcp.py` and `scripts/so-mcp-server.py` as the backend.",
+    "Do not route Discord `so` through Hermes tmux management, watchdog webhook handling, supervisor logic, or the old job registry.",
+    "The deprecated files `session.py`, `supervisor.py`, `so_jobs.py`, and `watchdog_webhook.py` remain only as reference and must not be loaded by gateway/discord_relay for `so`.",
+    "Automated tests must use fake Discord and fake agent CLI runners; they must not contact real Discord, real OMP, real tmux, or real project repos.",
     "No `REMOTE_VERIFY` tags unless an implementation task explicitly dogfoods `qt-bot` on its remote host."
   ],
   "implementation_tasks": [

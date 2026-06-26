@@ -1,5 +1,10 @@
 # SPEC — Hermes Discord `so` session orchestration
 
+> Superseded 2026-06-26: Discord `so` now keeps the parser/authorization layer
+> and uses `scripts/hermes/so_mcp.py` / `scripts/so-mcp-server.py` as the
+> backend. The tmux/job-registry/supervisor/watchdog design below is retained
+> only as historical context.
+
 ## Overview
 
 Target user story:

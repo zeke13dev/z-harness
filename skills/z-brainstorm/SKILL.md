@@ -131,13 +131,15 @@ Write the raw response to `$Z_HARNESS_PLAN_DIR/archive/$RUN/artifact-scout.md`. 
 - `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md`
 - `$Z_HARNESS_PLAN_DIR/archive/<RUN>/...`
 
-## Phase 0 — Scope probe
+## Phase 0 — Shared sharpen + scope probe
 
-Run Phase 0 **immediately after Setup** — BEFORE Plan Route Check, BEFORE Phase 1 scaffolding begins. scope-probe internally dispatches doc-fetcher (per its step 4); Phase 0 does not depend on Phase 1's doc-fetcher run.
+Run Phase 0 **immediately after Setup** — BEFORE Plan Route Check, BEFORE Phase 1 scaffolding begins. The shared sharpen step runs first and writes or reuses `GRILL.md`; scope-probe then dispatches doc-fetcher internally (per its step 4). Phase 0 does not depend on Phase 1's doc-fetcher run.
 
-### 0-sharpen. Lightweight inline sharpen
+### 0-sharpen. Shared GRILL precontext sharpen
 
 This is a **separate step** that runs BEFORE scope-probe. It is NOT folded into scope-probe's LIGHT/MEDIUM/HEAVY classifier — the two checks are orthogonal (idea vagueness ≠ codebase fanout size).
+
+Phase 0 uses only the shared `z-sharpen` **Reusable inline component contract** that emits `GRILL.md` content. Treat that contract as the source of truth for prompt input, optional precontext input, clarity/alternatives assessment, `GRILL.md` output, and `proceed|sharpen_more|route_to_brainstorm` recommendation output. Do **not** invoke the `/z-sharpen` command wrapper and do **not** depend on wrapper-only slug derivation, collision handling, telemetry, or conversational lifecycle behavior; `/z-brainstorm` already owns slug/setup/telemetry for this run.
 
 **Check — GRILL.md already exists?**
 
@@ -152,33 +154,19 @@ fi
 
 If a `GRILL.md` already exists for the slug, emit the event and proceed directly to 0-count (continue with step 0-count below). Phase 1c-ii already ingests `GRILL.md` as seed framing. No questions are emitted to the user.
 
-**Lightweight sharpen (if GRILL.md absent):**
+**Reusable sharpen component (if GRILL.md absent):**
 
-Always run this step when GRILL.md does not already exist. Do NOT evaluate topic specificity — pose 1–2 brief clarifying questions in prose to sharpen the topic. This is a conversational exchange (NOT an AskUserQuestion call).
+Always run the shared inline component when GRILL.md does not already exist. Inputs:
 
-Write the questions directly in your response, then **end the turn** and wait for the user's free-text reply. A one-word reply of "skip" or "go" proceeds with the raw topic unchanged (treat the same as an immediate proceed with no extra context).
+- `prompt`: the raw brainstorm topic from `$ARGUMENTS` after empty-topic handling.
+- `precontext`: empty for Phase 0; doc-fetcher, MAP.md, Explore, and ideator context have not run yet.
+- `artifact_path`: `$Z_HARNESS_PLAN_DIR/GRILL.md`.
 
-Questions to pose (adapt to the specific topic — choose 1–2 of the most useful):
-- What constraint or success criterion matters most here? (e.g. speed, cost, simplicity, compatibility)
-- Who is the primary audience or consumer of the output?
-- Are there existing approaches or constraints to work within or avoid?
-- What does "done" look like — what would a good answer let you do?
+Run the component inline in this orchestrator thread, not as a subagent and not as a nested command. It may ask bounded conversational clarifying questions per the shared contract; write questions directly in your response, then **end the turn** and wait for the user's free-text reply. A one-word reply of "skip" or "go" proceeds with the raw topic unchanged (treat the same as an immediate proceed with no extra context).
 
-After the user replies (or sends "skip"/"go"), write `$Z_HARNESS_PLAN_DIR/GRILL.md` with the following two sections:
+On convergence, the component writes `$Z_HARNESS_PLAN_DIR/GRILL.md` using the shared `GRILL.md` contract. The file must include at least the `## Sharpened problem` and `## Open branches` sections that §1c-ii extracts; richer shared-contract sections are allowed and ignored by the hash unless §1c-ii is extended. The `## Sharpened problem` text from GRILL.md flows through §1c-ii as seed framing and is folded into the `input_hash` at §1d, so a changed sharpen invalidates stale cache.
 
-```markdown
-## Sharpened problem
-
-<synthesize the original topic + any clarifications the user gave into 2–4 sentences
- that name the problem, the key constraint(s), and the intended outcome.
- If the user replied "skip" or "go", restate the raw topic verbatim here.>
-
-## Open branches
-
-<!-- populated by Phase 1 ideators -->
-```
-
-The `## Sharpened problem` text from GRILL.md flows through §1c-ii as seed framing alongside any pre-existing GRILL content, and is folded into the `input_hash` at §1d so a changed sharpen invalidates stale cache.
+**Brainstorm remains the correct route** when the sharpened output still benefits from parallel framings rather than immediate planning: the user explicitly asked for options/approaches/brainstorming, `## Open branches` contains forks that materially change the plan, the topic is an architecture/reversibility tradeoff, or the core question is "what should we do?" rather than "implement this known path." A shared-component recommendation of `route_to_brainstorm` confirms this command should continue. A recommendation of `proceed` means the topic may already be ready for `/z-plan`; surface that as advisory context if the brainstorm signals above are absent, but do not auto-dispatch another command from Phase 0. A recommendation of `sharpen_more` keeps the bounded shared-component conversation going until GRILL.md is written or the user explicitly replies "skip"/"go".
 
 ```bash
 SHARPEN_GATE_DECISION="sharpened"
@@ -453,7 +441,7 @@ Original topic (for context): <topic>
 Axis: <AXIS>
 Output path: <interpolate $Z_HARNESS_PLAN_DIR>/archive/<interpolate $RUN>/chunks/<C.id>/BRAINSTORM.md
 
-Scaffolding instructions: follow /z-brainstorm Phase 1 (doc-fetcher, optional Explore, MAP.md ingestion with legacy RESEARCH.md fallback, input_hash). Ideator dispatch: follow /z-brainstorm Phase 2 with the IDEATOR_SCHEMA. Synthesis: follow /z-brainstorm Phase 3 (anti-bias check, orchestrator recommendation). Return the full per-chunk BRAINSTORM.md content (frontmatter + body) with chosen_framing: pending in your response; the parent orchestrator writes the file. Do NOT present an AskUserQuestion — the parent owns the user-pick gate."
+Scaffolding instructions: follow /z-brainstorm Phase 1 (doc-fetcher, optional Explore, MAP.md ingestion with legacy RESEARCH.md fallback, GRILL.md seed framing from the shared z-sharpen contract, and the unchanged input_hash formula). Ideator dispatch: follow /z-brainstorm Phase 2 with the IDEATOR_SCHEMA. Synthesis: follow /z-brainstorm Phase 3 (anti-bias check, orchestrator recommendation). Return the full per-chunk BRAINSTORM.md content (frontmatter + body) with chosen_framing: pending in your response; the parent orchestrator writes the file. Do NOT present an AskUserQuestion — the parent owns the user-pick gate."
    )
    ```
 
@@ -589,17 +577,18 @@ Record `depends_on: [MAP.md]` in the eventual BRAINSTORM.md frontmatter if a ter
 
 ### 1c-ii. GRILL.md seed framing (if present)
 
-**GRILL.md sources:** `GRILL.md` is written by two distinct paths — both produce the same file format so this section reads them identically:
+**GRILL.md sources:** `GRILL.md` is the shared precontext artifact produced by the `z-sharpen` reusable inline component contract (or by a compatible prior GRILL producer). `/z-brainstorm` reads the same sections regardless of producer:
 
-1. **Lightweight inline sharpen (Phase 0, always-on):** When GRILL.md did not already exist, the §0-sharpen step posed 1–2 clarifying questions in prose, collected the user's reply, and wrote `GRILL.md` with a `## Sharpened problem` block (synthesizing the topic + clarifications) and an empty `## Open branches` block. This is the normal path for a new brainstorm.
-2. **Full GRILL interview (opt-in, /z-grill):** A pre-existing GRILL.md from a prior full interview is read verbatim. When this path fires, Phase 0 emitted `grill_existed` and skipped the lightweight sharpen entirely.
+1. **Shared `z-sharpen` inline component (Phase 0, always-on when absent):** §0-sharpen calls the reusable component contract inline, using the brainstorm topic plus empty Phase 0 precontext, and writes `GRILL.md` before scope-probe.
+2. **Reusable component run elsewhere (`/z-sharpen` command wrapper):** A pre-existing `GRILL.md` from the front-end command wrapper is read verbatim; brainstorm does not depend on wrapper-only slug/collision/telemetry/session behavior.
+3. **Full GRILL interview (opt-in, /z-grill):** A pre-existing GRILL.md from a prior exhaustive interview is read verbatim. When any pre-existing path fires, Phase 0 emitted `grill_existed` and skipped the inline component.
 
-In both cases GRILL.md exists by the time Phase 1 runs. **An implementer must not make the Phase 0 lightweight sharpen file-less** — if §0-sharpen does not write `## Sharpened problem` to GRILL.md, this seed path is broken and the `input_hash` invariant in §1d is violated.
+In the normal new-brainstorm path GRILL.md exists by the time Phase 1 runs. **An implementer must not replace the Phase 0 shared contract with divergent inline sharpening or make it file-less** — if §0-sharpen does not write `## Sharpened problem` to GRILL.md, this seed path is broken and the `input_hash` invariant in §1d is violated.
 
 If `$Z_HARNESS_PLAN_DIR/GRILL.md` exists, read it and extract two sections:
 
-- `## Sharpened problem` — either the refined problem from the lightweight sharpen or from the full grill interview
-- `## Open branches` — unresolved decisions (populated by Phase 1 ideators; may be empty when written by the lightweight sharpen)
+- `## Sharpened problem` — the refined problem from the shared sharpen component, `/z-sharpen`, or `/z-grill`
+- `## Open branches` — unresolved decisions; non-empty open branches are a primary signal that brainstorm remains useful before planning
 
 Inline both sections as **seed framing** in the scaffolding payload, placed after any terrain content. Prefix the block with a brief label so ideators understand its provenance:
 
@@ -629,7 +618,7 @@ input_hash = sha256(canonicalize(
 )).hexdigest()[:16]
 ```
 
-`grill_seed_content_or_empty` is the value of `GRILL_SEED_CONTENT` from §1c-ii, or an empty string if GRILL.md was absent. In the normal path (new brainstorm), GRILL.md is written by the Phase 0 lightweight inline sharpen, so `GRILL_SEED_CONTENT` contains the `## Sharpened problem` text synthesized from the user's clarifications — this means a changed lightweight-sharpen answer invalidates any stale cache hit just as a changed full GRILL interview would. In the pre-existing GRILL.md path (`grill_existed`), the same formula applies unchanged. Including GRILL.md in the hash ensures that any change to the sharpened-problem content — from either source — forces brainstorm to regenerate.
+`grill_seed_content_or_empty` is the value of `GRILL_SEED_CONTENT` from §1c-ii, or an empty string if GRILL.md was absent. In the normal path (new brainstorm), GRILL.md is written by the Phase 0 shared `z-sharpen` inline component, so `GRILL_SEED_CONTENT` contains the `## Sharpened problem` text synthesized from the user's clarifications — this means a changed sharpen answer invalidates any stale cache hit just as a changed full GRILL interview would. In the pre-existing GRILL.md path (`grill_existed`), the same formula applies unchanged. Including GRILL.md in the hash ensures that any change to the sharpened-problem content — from any shared-contract source — forces brainstorm to regenerate.
 
 `canonicalize`: strip leading/trailing whitespace; collapse all internal runs of whitespace to a single space.
 
@@ -1748,7 +1737,7 @@ JSON
 
 | Feature | Used | Gates |
 |---------|------|-------|
-| `subagent` | yes | Phase 0 sharpen-gate optional Haiku Agent() (ambiguous topics only); Phase 0 scope-probe Agent(); HEAVY sub-flow and reconciler Agent() calls; Phase 1a doc-fetcher Agent(); Phase 1b optional Explore Agent(); Phase 2 three ideator Agent() calls; Phase 2c overflow ideator Agent() calls (wide mode only, WIDE_N > 3); Phase 2c-5 ideator-clusterer Agent() (wide mode only) |
+| `subagent` | yes | Phase 0 scope-probe Agent(); HEAVY sub-flow and reconciler Agent() calls; Phase 1a doc-fetcher Agent(); Phase 1b optional Explore Agent(); Phase 2 three ideator Agent() calls; Phase 2c overflow ideator Agent() calls (wide mode only, WIDE_N > 3); Phase 2c-5 ideator-clusterer Agent() (wide mode only). Phase 0 shared sharpen runs inline, not as a subagent. |
 | `ask_user` | yes | Empty topic gate (finite); Setup slug confirmation (finite); Setup existing BRAINSTORM.md overwrite (finite); Phase 2 2/3 ideator failure gate (finite); Phase 4 HEAVY "no framings" halt (finite). **Conversational (no ask_user):** Phase 3 framing-selection briefing; Phase 4 HEAVY chunk×framing matrix (T009); Phase 4 LIGHT/MEDIUM discussion loop including restart refined-topic |
 | `skill_invoke` | no | — |
 

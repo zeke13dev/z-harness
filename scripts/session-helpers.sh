@@ -112,7 +112,7 @@ with open(tasks_file, 'r', encoding='utf-8', errors='replace') as fh:
             prev_done = False
             continue
 
-        # Non-heading line: check if it's a [x] checkbox
+        # Non-heading line: check whether it is a [x] checkbox
         if DONE_RE.match(line_stripped):
             # It might carry a task-id inline (e.g. "- [x] T001 — ...")
             # Strip the [x] prefix and look for a task-id

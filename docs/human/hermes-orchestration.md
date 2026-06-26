@@ -1,7 +1,7 @@
 # Hermes Orchestration
 
 > Last updated: 2026-06-26
-> Covers source: scripts/hermes-execute.py, scripts/hermes/config.py, scripts/hermes/cross_plan.py, scripts/generate-workstreams.py, scripts/hermes/merge.py, scripts/hermes/schema.py, scripts/hermes/worktree.py, scripts/hermes/session.py, scripts/hermes/discord_relay.py, scripts/hermes/so_jobs.py, scripts/hermes/watchdog_webhook.py, scripts/hermes/supervisor.py, docs/human/hermes-integration-v1.md
+> Covers source: scripts/hermes-execute.py, scripts/hermes/config.py, scripts/hermes/cross_plan.py, scripts/generate-workstreams.py, scripts/hermes/merge.py, scripts/hermes/schema.py, scripts/hermes/worktree.py, scripts/hermes/session.py, scripts/hermes/discord_relay.py, scripts/hermes/so_mcp.py, scripts/so-mcp-server.py, docs/human/hermes-integration-v1.md
 
 ## Overview
 
@@ -17,38 +17,29 @@ message grammar is `so <host> <project> <task...> [using <z-command>]`.
 configured users, channels, hosts, and project aliases. `so` is not a local
 z-harness CLI.
 
-Accepted commands become durable `scripts/hermes/so_jobs.py` records before
-the first tmux `send-keys`. The record is the authority for Discord ids,
-requester, host/project, execution host, transport/SSH target, workdir, tmux
-session, pid, z-harness run id, status, last pane digest, progress time,
-watchdog dedup id, and prompt feedback records. Tmux and pid operations must
-use the recorded execution host/transport; a local pid is never interpreted on
-a different host.
+Accepted commands call the MCP-backed `scripts/hermes/so_mcp.py` backend. The
+backend launches and continues agent CLI sessions through structured tools,
+following the proven `scripts/pi-mcp-server.py` pattern: `so_start_session`,
+`so_send`, `so_list_sessions`, `so_status`, and `so_instruct`. The stdio MCP
+entry point is `scripts/so-mcp-server.py`.
 
-`scripts/hermes/session.py` generates internal tmux names such as
-`hermes-so-<job-id>`, exports `HERMES_SO_JOB_ID`, launches the selected host in
-the project workdir, and sends an initial supervised prompt containing the
-task and requested z-command. User-provided tmux names are not part of the
-interface.
+`so_mcp.py` persists lightweight MCP session metadata in
+`so-mcp-sessions.json` under the configured Hermes state root. The metadata
+tracks Discord ids, requester, host/project, execution host, transport/SSH
+target, workdir, task, z-command, turn count, status, and latest output. It is
+not the old tmux job registry and does not own panes, pids, watchdog events, or
+supervisor state.
 
-Watchdog webhooks are consumed by `scripts/hermes/watchdog_webhook.py`.
-Signed payloads dedup by `event_id`, resolve jobs by `job_id`, run id, pid, or
-slug, and post back to the original Discord thread. If the thread cannot be
-reconstructed, the owning Discord session subscription fallback receives the
-same event path instead of posting detached alerts.
+Remote aliases use the recorded alias transport. For the `qt-bot` alias this
+means the MCP backend runs the agent CLI through SSH on `zeke-pc` in
+`/home/zeke/dev/qt-bot`; local aliases run in their configured workdir. The
+initial prompt contains the Discord task and requested z-command.
 
-`scripts/hermes/supervisor.py` starts ask-first. Watchdog/check events capture
-one bounded pane excerpt, ask the requester in Discord, and send no tmux input
-until the requester replies in the job thread. Replies are sent exactly as
-typed and recorded with pane digest, prompt features, answer, sent text, job
-context, and outcome. Learned replies are separate mined candidates; only
-explicitly promoted candidates can answer automatically, and each automatic
-reply records candidate id plus source evidence.
-
-Supervisor checkups mark missing tmux sessions or dead pids as `dead`, mark
-unchanged pane output after a watchdog alert as `stale`, and post attach,
-abort, and restart options. Restart is explicit only; there is no blind
-`sleep && tmux capture-pane` orchestration loop.
+The retired tmux/job-registry/watchdog backend files remain only as reference:
+`scripts/hermes/so_jobs.py`, `scripts/hermes/supervisor.py`, and
+`scripts/hermes/watchdog_webhook.py` raise unless explicitly unlocked for
+archaeology. `scripts/hermes/session.py` remains for legacy Hermes
+`pi z-execute` lifecycle helpers, not Discord `so` launch.
 
 ## Scheduling model
 
