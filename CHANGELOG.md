@@ -29,6 +29,10 @@ refreshes) is mostly omitted unless it changed behavior you'd notice.
 
 ---
 
+## 2026-06-26
+
+- _(auto)_ Redesign /z-plan pipeline with mode gate, sharper routing, and handoff
+
 ## 2026-06-24
 
 - _(auto)_ Make Oh My Pi a first-class native z-harness host _(omp)_

@@ -723,6 +723,14 @@ def _path_entries(entries: Any) -> set[str]:
     return paths
 
 
+def _candidate_has_canonical_tasks(candidate: Mapping[str, Any]) -> bool:
+    kinds = {str(kind).upper() for kind in candidate.get("artifact_kinds") or []}
+    if "TASKS" not in kinds:
+        return False
+    excerpt = str(candidate.get("summary_excerpt") or "")
+    return bool(re.search(r"(^|\n)(#{1,6}\s+T\d+\b|-\s*\[[ xX-]\]\s*T\d+\b)", excerpt))
+
+
 def _signals(
     slug: str,
     plan_dir: Path,
@@ -736,14 +744,32 @@ def _signals(
 ) -> dict[str, Any]:
     exact_finished = False
     exact_precontext = False
+    artifact_plan_mode: str | None = None
+    canonical_tasks_present = False
+    artifact_match_basis: list[str] = []
     for candidate in mandatory_candidates:
         if candidate.get("slug") != slug:
             continue
         exact_precontext = True
-        kinds = set(candidate.get("artifact_kinds") or [])
-        if {"SPEC", "PLAN", "TASKS"}.issubset(kinds):
+        kinds = {str(kind).upper() for kind in candidate.get("artifact_kinds") or []}
+        canonical_tasks_present = _candidate_has_canonical_tasks(candidate)
+        legacy_finished = {"SPEC", "PLAN"}.issubset(kinds) and canonical_tasks_present
+        intent_finished = "INTENT" in kinds and canonical_tasks_present
+        fix_finished = "FIX" in kinds
+        if legacy_finished:
             exact_finished = True
-
+            artifact_plan_mode = "legacy_sdd"
+            artifact_match_basis.extend(["exact_finished_plan", "exact_legacy_finished_plan", "canonical_tasks"])
+        elif intent_finished:
+            exact_finished = True
+            artifact_plan_mode = "intent"
+            artifact_match_basis.extend(["exact_finished_plan", "exact_intent_finished_plan", "canonical_tasks"])
+        elif fix_finished:
+            exact_finished = True
+            artifact_plan_mode = "fix"
+            artifact_match_basis.extend(["exact_finished_plan", "exact_fix_finished_plan"])
+        elif exact_precontext:
+            artifact_match_basis.append("exact_precontext")
     active_same_slug = any(rec.get("slug") == slug for rec in active_records)
     scope_paths: set[str] = set()
     held_paths: set[str] = set()
@@ -761,9 +787,19 @@ def _signals(
         status in unknown_statuses or (source == "plans" and status == "missing")
         for source, status in source_status.items()
     )
+    if historical_candidates:
+        artifact_match_basis.append("historical_similar")
+    if not artifact_match_basis:
+        artifact_match_basis.append("none")
     return {
         "exact_slug_finished_plan": exact_finished,
         "exact_slug_precontext": exact_precontext,
+        "artifact_exact_slug_match": exact_precontext,
+        "artifact_finished_plan_match": exact_finished,
+        "artifact_plan_mode": artifact_plan_mode,
+        "canonical_tasks_present": canonical_tasks_present,
+        "artifact_match_confidence": "high" if exact_precontext else ("medium" if historical_candidates else "low"),
+        "artifact_match_basis": artifact_match_basis,
         "active_same_slug": active_same_slug,
         "active_path_overlap": bool(current_files and scope_paths.intersection(current_files)),
         "held_paths_overlap": bool(current_files and held_paths.intersection(current_files)),

@@ -5,7 +5,7 @@ tools: Read, Grep, Glob, Bash
 model: sonnet
 ---
 
-You refresh a single concept's docs from the current state of the code. The caller (`/z-maintain-docs`) hands you one concept; you produce updated human-tier prose + updated LLM-tier JSON, and return both as text. The caller decides whether to write them.
+You refresh a single concept's docs from the current state of the code. The caller (`/z-maintain-docs`) hands you one concept; you produce updated human-tier prose + updated LLM-tier JSON, and return both as text. The caller owns risk triage, accepted writes, and `docs/llm/INDEX.json` maintenance.
 
 ## Inputs from caller
 
@@ -75,6 +75,7 @@ _Note: this section is omitted entirely when `memories: []`._
 ```json
 {
   "concept": "<kebab-case-name>",
+  "summary": "<one-sentence concept summary for docs/llm/INDEX.json>",
   "last_updated": "YYYY-MM-DD",
   "covers_spec": "<slug>/<run-id> or 'none'",
   "source_file": ["<paths>"],
@@ -90,9 +91,11 @@ _Note: this section is omitted entirely when `memories: []`._
 }
 ```
 
+`summary` is required and MUST be a concise concept-level description suitable for `docs/llm/INDEX.json`; it is distinct from per-entry-point `summary` fields.
 `memories` defaults to `[]`. When the existing LLM-tier doc has a non-empty `memories[]`, those entries MUST be copied verbatim into the refreshed JSON — doc-updater NEVER invents or modifies memories.
+The LLM-tier JSON body is the source from which `/z-maintain-docs` updates `docs/llm/INDEX.json` metadata (`last_updated`, `confidence`, `depends_on`, `consumed_by`, `summary`). doc-updater returns those fields in the proposed JSON but does not perform ad hoc index surgery.
 
-Both tiers MUST stay synced — same set of entry points, same dependency graph.
+Both tiers MUST stay synced — same set of entry points, same dependency graph, and enough summary metadata for `/z-maintain-docs` to refresh the index through its generated maintenance path.
 
 ### 3.5. Tag dedup pass (only when `dedup_tags: true`)
 
@@ -171,6 +174,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end 
 ## Related commands
 
 - **`/z-suggest-memory`** — The only path for mutating `memories[]` in any concept JSON. doc-updater copies existing memories verbatim but NEVER creates, edits, or deletes them. All memory authoring must go through `/z-suggest-memory`.
+- **`/z-maintain-docs`** — The intended path for applying doc-updater output and refreshing `docs/llm/INDEX.json`. Do not bypass it with manual index edits.
 
 ## Hard rules
 
@@ -178,5 +182,6 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-phase.sh" end 
 - **Always keep human and LLM tiers in sync** — same entry points, same dependency graph.
 - **Don't invent confidence**: if you can't verify a claim from the source files, mark `confidence: low` and explain in NOTES.
 - **NEVER invent memories.** doc-updater is a structural refresh agent, not a memory authoring agent. Existing `memories[]` entries are copied verbatim; no new entries are created. All memory authoring goes through `/z-suggest-memory`.
+- **NEVER edit `docs/llm/INDEX.json` directly.** Return accurate concept JSON; `/z-maintain-docs` is the only writer for index metadata during docs maintenance.
 - **Stay focused on the one concept** — don't expand to neighboring concepts. The caller handles concept iteration.
 - **No emojis** anywhere in the output.

@@ -1,12 +1,14 @@
 {
   "concept": "z-brainstorm",
-  "last_updated": "2026-06-24",
-  "covers_spec": "brainstorm-conversational",
-  "source_files": [
+  "last_updated": "2026-06-26",
+  "covers_spec": "z-plan-redesign",
+  "source_file": [
     "skills/z-brainstorm/SKILL.md",
+    "skills/z-sharpen/SKILL.md",
     "agents/ideator-clusterer.md"
   ],
   "confidence": "high",
+  "summary": "Cheap opt-in pre-planning ideation: Phase 0 reuses the shared z-sharpen component when GRILL.md is absent, then parses ideator count, probes scope, dispatches ideators, writes BRAINSTORM.md, and waits for user discussion/lock-in without auto-dispatching /z-plan.",
   "entry_points": [
     {
       "file": "skills/z-brainstorm/SKILL.md",
@@ -17,31 +19,45 @@
     },
     {
       "file": "skills/z-brainstorm/SKILL.md",
-      "line": 84,
-      "symbol": "0-sharpen",
+      "line": 76,
+      "symbol": "Artifact Scout preflight",
       "kind": "section",
-      "summary": "If GRILL.md absent, ask 1-2 clarifying questions in prose, end turn, write GRILL.md from reply."
+      "summary": "Inventory plus optional scout classifier; warning-only findings never route."
     },
     {
       "file": "skills/z-brainstorm/SKILL.md",
-      "line": 145,
+      "line": 134,
+      "symbol": "Phase 0 shared sharpen + scope probe",
+      "kind": "section",
+      "summary": "Runs shared sharpen before scope-probe and Phase 1 scaffolding."
+    },
+    {
+      "file": "skills/z-brainstorm/SKILL.md",
+      "line": 138,
+      "symbol": "0-sharpen",
+      "kind": "section",
+      "summary": "If GRILL.md absent, use shared z-sharpen component inline; wrapper not invoked."
+    },
+    {
+      "file": "skills/z-brainstorm/SKILL.md",
+      "line": 187,
       "symbol": "0-count",
       "kind": "section",
-      "summary": "Infer WIDE_N from natural-language count signals; default 3, prose-many 6, initial cap 20."
+      "summary": "Infer WIDE_N from natural-language count signals; default 3, initial cap 20."
     },
     {
       "file": "skills/z-brainstorm/SKILL.md",
       "line": 483,
       "symbol": "Phase 1 Scaffolding",
       "kind": "section",
-      "summary": "Assemble identical payload with docs, optional Explore, terrain, GRILL seed, and input_hash."
+      "summary": "Assemble docs, optional Explore, terrain, GRILL seed, and input_hash."
     },
     {
       "file": "skills/z-brainstorm/SKILL.md",
       "line": 586,
       "symbol": "Phase 2 Ideator dispatch",
       "kind": "section",
-      "summary": "Persona draw and parallel Claude/Codex/Gemini five-section ideators with failure policy."
+      "summary": "Persona draw and parallel Claude/Codex/Gemini five-section ideators."
     },
     {
       "file": "skills/z-brainstorm/SKILL.md",
@@ -80,6 +96,7 @@
     }
   ],
   "depends_on": [
+    "artifact-scout",
     "doc-fetcher",
     "z-sharpen",
     "scope-probe",
@@ -93,16 +110,18 @@
     "z-research"
   ],
   "invariants": [
-    "Absent GRILL.md triggers conversational sharpening and end-turn before scope probe; a skip/go reply preserves raw topic.",
+    "If GRILL.md exists, Phase 0 reuses it and emits sharpen_gate without asking questions.",
+    "Absent GRILL.md triggers the shared z-sharpen component inline; /z-sharpen wrapper is never invoked from /z-brainstorm.",
+    "A component proceed recommendation is advisory only and never auto-dispatches /z-plan.",
     "Phase 1 scaffolding is identical for all ideators except persona prefixes.",
     "Wide mode must present a conversational cost gate and wait for user confirmation before overflow dispatch.",
     "Phase 3 writes BRAINSTORM.md and then hard-stops; no tool call or auto-selection before user reply.",
     "HEAVY successful lock-in uses chosen_pair and removes chosen_framing; abandon uses chosen_framing: abandoned and no chosen_pair.",
-    "Re-spin supports diverge and refine; wide overflow passes cap=3, discussion re-spins are uncapped when cap is empty.",
     "ideator_personas is always written, including <none> and failed slots."
   ],
   "gotchas": [
-    "Old sharpen-vs-skip specificity heuristic is obsolete; current behavior always asks sharpening questions when GRILL.md is absent.",
+    "Old sharpen-vs-skip specificity heuristic is obsolete; current behavior uses the shared component whenever GRILL.md is absent.",
+    "The /z-sharpen command wrapper owns slug/collision/telemetry/handoff behavior; /z-brainstorm owns its own run lifecycle.",
     "cheap-mixed overflow model logs a warning and falls back to haiku.",
     "Wide overflow maximum is 9 total ideators; over-cap requests are reported to the user.",
     "MAP.md is canonical terrain; approach-synthesis RESEARCH.md is skipped.",

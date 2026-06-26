@@ -13,6 +13,8 @@
 #   Z_HARNESS_AGENT      — agent name (optional; default "pi")
 #   Z_HARNESS_HANDOFF_STATUS — status override (optional; default clean_break)
 #   Z_HARNESS_HANDOFF_NEXT_STEP — next_step override (optional)
+#   Z_HARNESS_HANDOFF_SESSION_CONTEXT — optional mid-session agent brief; when set,
+#       written to $Z_HARNESS_PLAN_DIR/SESSION_CONTEXT.md and included as session_log
 #
 # Attend-yield env vars (read ONLY when Z_HARNESS_ATTEND_RESUME=1 — these populate
 # the optional attend_resume predicate and bump protocol_version to "1.1"):
@@ -45,6 +47,7 @@ MODEL="${Z_HARNESS_MODEL:-unknown}"
 CONTEXT_PCT="${Z_HARNESS_CONTEXT_PCT:-}"
 HANDOFF_STATUS="${Z_HARNESS_HANDOFF_STATUS:-clean_break}"
 HANDOFF_NEXT_STEP_OVERRIDE="${Z_HARNESS_HANDOFF_NEXT_STEP:-}"
+HANDOFF_SESSION_CONTEXT="${Z_HARNESS_HANDOFF_SESSION_CONTEXT:-}"
 
 case "$HANDOFF_STATUS" in
   context_pressure|clean_break|complete|blocked) ;;
@@ -58,6 +61,8 @@ esac
 HANDOFF_FILE="$PLAN_DIR/handoff.json"
 TASKS_FILE="$PLAN_DIR/TASKS.md"
 SESSION_FILE="$PLAN_DIR/SESSION.md"
+HUMAN_HANDOFF_FILE="$PLAN_DIR/HANDOFF.md"
+SESSION_CONTEXT_FILE="$PLAN_DIR/SESSION_CONTEXT.md"
 
 # ---------------------------------------------------------------------------
 # Derive timestamp
@@ -71,8 +76,31 @@ TASKS_COMPLETED=0
 TASKS_TOTAL=0
 
 if [ -f "$TASKS_FILE" ]; then
-  TASKS_COMPLETED="$(grep -cE '^\s*[-*]?\s*\[x\]' "$TASKS_FILE" 2>/dev/null || echo 0)"
-  TASKS_TOTAL="$(grep -cE '^\s*[-*]?\s*\[[x ]\]' "$TASKS_FILE" 2>/dev/null || echo 0)"
+  TASK_COUNTS="$(awk '
+    BEGIN {
+      staged_completed = staged_total = 0
+      legacy_completed = legacy_total = 0
+    }
+    /^[[:space:]]*##[[:space:]]+T[0-9][0-9][0-9][[:space:]]/ && /`\[[xX ]\]`/ {
+      staged_total++
+      if ($0 ~ /`\[[xX]\]`/) staged_completed++
+      next
+    }
+    /^[[:space:]]*[-*]?[[:space:]]*\[[xX ]\]/ {
+      legacy_total++
+      if ($0 ~ /^[[:space:]]*[-*]?[[:space:]]*\[[xX]\]/) legacy_completed++
+    }
+    END {
+      if (staged_total > 0) {
+        print staged_completed, staged_total
+      } else {
+        print legacy_completed, legacy_total
+      }
+    }
+  ' "$TASKS_FILE")"
+  set -- $TASK_COUNTS
+  TASKS_COMPLETED="${1:-0}"
+  TASKS_TOTAL="${2:-0}"
   case "$TASKS_COMPLETED" in ''|*[!0-9]*) TASKS_COMPLETED=0 ;; esac
   case "$TASKS_TOTAL" in ''|*[!0-9]*) TASKS_TOTAL=0 ;; esac
 fi
@@ -120,12 +148,44 @@ if [ -f "$SESSION_FILE" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Optional live session context
+# ---------------------------------------------------------------------------
+# SESSION.md is curated from durable plan telemetry; it cannot know the live
+# agent's conversational state. /z-handoff may pass a compact brief through
+# Z_HARNESS_HANDOFF_SESSION_CONTEXT so the next agent can recover the exact
+# mid-session work, decisions, questions, and landmines that are otherwise only
+# in the current context window.
+SESSION_CONTEXT_WRITTEN=0
+if [ -n "$HANDOFF_SESSION_CONTEXT" ]; then
+  SESSION_CONTEXT_TMP="$SESSION_CONTEXT_FILE.tmp.$$"
+  python3 -c '
+import sys
+from datetime import datetime, timezone
+
+path, slug, status, note = sys.argv[1:5]
+ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+with open(path, "w", encoding="utf-8") as f:
+    f.write("---\n")
+    f.write("artifact: session_context\n")
+    f.write(f"slug: {slug or 'null'}\n")
+    f.write(f"status: {status}\n")
+    f.write(f"generated_at: {ts}\n")
+    f.write("generated_by: write-handoff.sh\n")
+    f.write("---\n\n")
+    # note is the section content below "# Session context"
+    f.write(note.rstrip() + "\n")
+' "$SESSION_CONTEXT_TMP" "$SLUG" "$HANDOFF_STATUS" "$HANDOFF_SESSION_CONTEXT"
+  mv "$SESSION_CONTEXT_TMP" "$SESSION_CONTEXT_FILE"
+  SESSION_CONTEXT_WRITTEN=1
+fi
+
+# ---------------------------------------------------------------------------
 # Compose next_step (continuation prompt for the next agent session)
 # ---------------------------------------------------------------------------
 if [ -n "$NEXT_PENDING" ] && [ "$NEXT_PENDING" != "none" ]; then
-  NEXT_STEP="Resume /z-execute for ${SLUG:-this plan}. ${TASKS_COMPLETED}/${TASKS_TOTAL} tasks done. Start at ${NEXT_PENDING}. Read TASKS.md for acceptance criteria and SESSION.md for context."
+  NEXT_STEP="Resume /z-execute for ${SLUG:-this plan}. ${TASKS_COMPLETED}/${TASKS_TOTAL} tasks done. Start at ${NEXT_PENDING}. Read TASKS.md for acceptance criteria, SESSION_CONTEXT.md for live mid-session state if present, and SESSION.md for curated plan context."
 else
-  NEXT_STEP="Resume /z-execute for ${SLUG:-this plan}. ${TASKS_COMPLETED}/${TASKS_TOTAL} tasks done. Read TASKS.md for current state and SESSION.md for context from the prior session."
+  NEXT_STEP="Resume /z-execute for ${SLUG:-this plan}. ${TASKS_COMPLETED}/${TASKS_TOTAL} tasks done. Read TASKS.md for current state, SESSION_CONTEXT.md for live mid-session state if present, and SESSION.md for curated plan context."
 fi
 
 if [ -n "$HANDOFF_NEXT_STEP_OVERRIDE" ]; then
@@ -155,9 +215,21 @@ _add_ctx() {
   fi
 }
 
+# Priority order: live session context first, then plan artifacts by importance.
+# Only include SESSION_CONTEXT.md if freshly written (not stale from a prior handoff).
+[ "$SESSION_CONTEXT_WRITTEN" = 1 ] && _add_ctx "$SESSION_CONTEXT_FILE" "session_log"
+_add_ctx "$HUMAN_HANDOFF_FILE" "handoff"
+_add_ctx "$HUMAN_HANDOFF_FILE" "invariants"
+_add_ctx "$HUMAN_HANDOFF_FILE" "rejected_approaches"
+_add_ctx "$HUMAN_HANDOFF_FILE" "decisions_archive"
+_add_ctx "$HUMAN_HANDOFF_FILE" "verification_commands"
+_add_ctx "$PLAN_DIR/INTENT.md" "intent"
 _add_ctx "$PLAN_DIR/SPEC.md" "spec"
 _add_ctx "$PLAN_DIR/PLAN.md" "plan"
 _add_ctx "$TASKS_FILE" "tasks"
+_add_ctx "$PLAN_DIR/FIX.md" "plan"
+_add_ctx "$PLAN_DIR/workstreams.json" "workstreams"
+_add_ctx "$PLAN_DIR/LEDGER.md" "ledger"
 _add_ctx "$SESSION_FILE" "session_log"
 
 CTX_FILES="${CTX_FILES}]"

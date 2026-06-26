@@ -1,8 +1,8 @@
 {
   "concept": "adaptive-intent",
-  "last_updated": "2026-06-24",
+  "last_updated": "2026-06-26",
   "covers_spec": "beyond-sdd",
-  "source_files": [
+  "source_file": [
     "scripts/intent-schema.py",
     "scripts/config.py",
     "agents/intent-classifier.md",
@@ -16,7 +16,7 @@
     "docs/human/adaptive-intent.md"
   ],
   "confidence": "high",
-  "summary": "Default intent-mode planning/execution model: /z-plan writes and audits a thin INTENT contract plus initial TASKS, /z-execute freezes it and advances BFS task levels with LEDGER checkpoints, and /z-review-all reviews INTENT.frozen.md plus LEDGER.",
+  "summary": "Explicit-mode /z-plan and adaptive INTENT execution model: /z-plan records Intent-vs-Full SDD before cost gating, writes INTENT.md plus initial TASKS.md in intent mode, may surface non-auto-dispatch route recommendations after artifacts, writes HANDOFF.md after TASKS, and /z-execute freezes INTENT for BFS execution with LEDGER checkpoints.",
   "entry_points": [
     {
       "file": "scripts/intent-schema.py",
@@ -62,59 +62,73 @@
     },
     {
       "file": "skills/z-plan/SKILL.md",
-      "line": 369,
-      "symbol": "planning mode branch",
-      "kind": "module",
-      "summary": "Reads workflow.planning_mode and workflow.intent_level; intent path writes INTENT and initial TASKS."
+      "line": 431,
+      "symbol": "explicit planning mode gate",
+      "kind": "section",
+      "summary": "Visible Intent-vs-Full SDD choice before hard cost gate; config/flags preselect."
     },
     {
       "file": "skills/z-plan/SKILL.md",
-      "line": 385,
-      "symbol": "level/mode flags",
-      "kind": "module",
-      "summary": "--full forces legacy; --quick/--standard/--deep force intent levels and bypass classifier."
+      "line": 446,
+      "symbol": "flag overrides",
+      "kind": "section",
+      "summary": "--full, --quick, --standard, --deep override config and cost-estimate shape."
+    },
+    {
+      "file": "skills/z-plan/SKILL.md",
+      "line": 2262,
+      "symbol": "Phase 8 initial TASKS",
+      "kind": "section",
+      "summary": "Intent mode dispatches task-tree-generator for level-0 TASKS.md; full mode writes legacy tasks."
+    },
+    {
+      "file": "skills/z-plan/SKILL.md",
+      "line": 2441,
+      "symbol": "Phase 8.4 post-artifact route check",
+      "kind": "section",
+      "summary": "May recommend split, sharpen, or brainstorm; route gate never auto-dispatches."
+    },
+    {
+      "file": "skills/z-plan/SKILL.md",
+      "line": 2480,
+      "symbol": "Phase 8.5 handoff producer",
+      "kind": "section",
+      "summary": "Writes HANDOFF.md after TASKS sanity and post-artifact route checks."
+    },
+    {
+      "file": "skills/z-plan/SKILL.md",
+      "line": 2578,
+      "symbol": "Phase 8.6 final handoff gate",
+      "kind": "section",
+      "summary": "User chooses fresh execute, audit first, stop with handoff, or amend."
     },
     {
       "file": "skills/z-execute/SKILL.md",
       "line": 433,
       "symbol": "mode detection",
-      "kind": "module",
+      "kind": "section",
       "summary": "SPEC.md present -> legacy; INTENT.md present -> intent; neither -> halt."
     },
     {
       "file": "skills/z-execute/SKILL.md",
       "line": 468,
       "symbol": "freeze and snapshot",
-      "kind": "module",
+      "kind": "section",
       "summary": "Freeze INTENT and snapshot to archive/INTENT.frozen.md on first freeze."
-    },
-    {
-      "file": "skills/z-execute/SKILL.md",
-      "line": 540,
-      "symbol": "intent BFS guard config",
-      "kind": "module",
-      "summary": "Reads workflow.intent_bfs_level_cap and cost.token_budget; fallback cap is 6."
     },
     {
       "file": "skills/z-execute/SKILL.md",
       "line": 674,
       "symbol": "task-tree-generator dispatch",
-      "kind": "module",
-      "summary": "Generates BFS level N from frozen INTENT, LEDGER, unmet criteria, and prior outcomes."
-    },
-    {
-      "file": "skills/z-execute/SKILL.md",
-      "line": 792,
-      "symbol": "INTENT_MODE_CTX",
-      "kind": "module",
-      "summary": "Injects intent_snapshot and ledger_path into implementer/reviewer prompts."
+      "kind": "section",
+      "summary": "Generate BFS levels from frozen INTENT, LEDGER, unmet criteria, and prior outcomes."
     },
     {
       "file": "skills/z-amend/SKILL.md",
       "line": 241,
       "symbol": "stale_reason amended-intent",
-      "kind": "module",
-      "summary": "Marks TASKS.md stale so task-tree-generator regenerates after an amended contract."
+      "kind": "section",
+      "summary": "Marks TASKS.md stale so task-tree-generator regenerates after amended contract."
     }
   ],
   "depends_on": [
@@ -132,11 +146,13 @@
     "z-audit-plan"
   ],
   "invariants": [
-    "SPEC.md presence forces legacy mode.",
+    "Config and flags recommend planning mode; /z-plan records the actual explicit mode choice before hard cost gating unless unattended/no-ask binds the recommendation.",
+    "SPEC.md presence forces legacy full SDD mode for that slug.",
+    "Intent-mode /z-plan writes INTENT.md with frozen_at: pending plus an initial canonical TASKS.md generated by task-tree-generator.",
     "INTENT is frozen at execution boundary, not continuously mutable.",
-    "LEDGER is append-only audit trail for realized plan.",
-    "Task-tree levels are generated BFS; cross-level dependencies defer to later levels.",
-    "intent_snapshot and ledger_path are mandatory prompt signals in INTENT mode.",
+    "LEDGER is append-only audit trail for realized BFS execution.",
+    "Post-artifact route checks and final handoff choices are non-auto-dispatch user gates.",
+    "HANDOFF.md is written after TASKS and before finalization; it indexes context but does not replace INTENT/SPEC/PLAN/TASKS.",
     "Unknown acceptance state counts as unmet.",
     "workflow.intent_parallel_levels controls within-level sibling dispatch only."
   ],
@@ -144,12 +160,13 @@
     "workflow.intent_bfs_level_cap is runtime-read and may not appear in DEFAULTS; empty/None falls back to 6.",
     "stale_reason: amended-intent must replace any existing key, not duplicate it.",
     ".bfs_level_state hash mismatch restarts from level 0.",
-    "/z-do is now a lightweight route-down/deprecated shim toward quick planning.",
+    "/z-plan Phase 8.4 can recommend /z-sharpen or /z-brainstorm for question-heavy/unsettled artifacts, but it never launches them.",
+    "Final gate options recommend commands for the user/fresh session; /z-plan itself does not start /z-execute, /z-audit-plan, or /z-amend.",
     "Do not pass spec_path/plan_path to implementers in INTENT mode."
   ],
   "config_keys": {
-    "workflow.planning_mode": "intent|full",
-    "workflow.intent_level": "auto|quick|standard|deep",
+    "workflow.planning_mode": "intent|full recommendation for the explicit mode gate",
+    "workflow.intent_level": "auto|quick|standard|deep; level flags override and bypass classifier",
     "workflow.intent_parallel_levels": "bool, default false",
     "workflow.intent_bfs_level_cap": "int guard, fallback 6 when unset",
     "workflow.hermes_enabled": "bool master gate for Hermes machinery"

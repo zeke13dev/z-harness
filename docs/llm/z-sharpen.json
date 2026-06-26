@@ -1,84 +1,105 @@
 {
   "concept": "z-sharpen",
-  "last_updated": "2026-06-19",
-  "covers_spec": "brainstorm-conversational",
+  "last_updated": "2026-06-26",
+  "covers_spec": "z-plan-redesign",
   "source_file": [
-    "commands/z-sharpen.md"
+    "skills/z-sharpen/SKILL.md"
   ],
   "confidence": "high",
+  "summary": "Reusable bounded idea-sharpening component plus /z-sharpen wrapper. The component assesses clarity and alternatives, returns proceed/sharpen_more/route_to_brainstorm plus GRILL.md content when ready; the wrapper owns slug, collision, telemetry, final write, and advisory handoff.",
   "entry_points": [
     {
-      "file": "commands/z-sharpen.md",
-      "line": 1,
-      "symbol": "/z-sharpen",
-      "kind": "module",
-      "summary": "Conversational bounded idea-sharpener; $ARGUMENTS=empty opens with 'What are you thinking about?'; runtime=c1, no subagent for the interview itself."
+      "file": "skills/z-sharpen/SKILL.md",
+      "line": 23,
+      "symbol": "surface split",
+      "kind": "section",
+      "summary": "Separates reusable inline component from /z-sharpen command wrapper."
     },
     {
-      "file": "commands/z-sharpen.md",
-      "line": 57,
-      "symbol": "Stage 1 — Framing restate",
-      "kind": "module",
-      "summary": "Restates the idea back in 2-3 concrete sentences (actors, pain, scope); invites correction before probing."
+      "file": "skills/z-sharpen/SKILL.md",
+      "line": 39,
+      "symbol": "surface boundary rules",
+      "kind": "section",
+      "summary": "Component does not own slug, collision, telemetry, or wrapper lifecycle."
     },
     {
-      "file": "commands/z-sharpen.md",
-      "line": 65,
-      "symbol": "Stage 2 — Probe/Clarify/Reframe loop",
-      "kind": "module",
-      "summary": "Per-turn: (A) codebase self-serve via Haiku Explore, (B) conversational probe/reframe, (C) bounded escalation to pin a single fuzzy dimension with recommended answer. Not a structured checklist."
+      "file": "skills/z-sharpen/SKILL.md",
+      "line": 55,
+      "symbol": "reusable inline component contract",
+      "kind": "section",
+      "summary": "Caller-owned prompt/precontext/destination inputs; no interview subagent."
     },
     {
-      "file": "commands/z-sharpen.md",
-      "line": 100,
-      "symbol": "Stage 3 — Convergence gate",
-      "kind": "module",
-      "summary": "Terminates when concrete problem + minimal scope + key open forks are clear. User must confirm; or user's own signal accepted. Stage 4 only on confirmation."
+      "file": "skills/z-sharpen/SKILL.md",
+      "line": 113,
+      "symbol": "component outputs",
+      "kind": "section",
+      "summary": "Clarity, alternatives, recommendation, and GRILL.md output contract."
     },
     {
-      "file": "commands/z-sharpen.md",
-      "line": 118,
-      "symbol": "Stage 4 — Artifact production and handoff",
-      "kind": "module",
-      "summary": "Derives slug; collision-checks via plan-path.sh all_plan_slugs (precontext-only=continuation/no-prompt; finished-plan=AskUserQuestion); writes GRILL.md; advisory handoff only — never auto-dispatches."
+      "file": "skills/z-sharpen/SKILL.md",
+      "line": 165,
+      "symbol": "recommendation mapping",
+      "kind": "section",
+      "summary": "proceed -> /z-plan advisory; route_to_brainstorm -> /z-brainstorm advisory."
     },
     {
-      "file": "commands/z-sharpen.md",
-      "line": 162,
-      "symbol": "GRILL.md schema",
-      "kind": "module",
-      "summary": "Frontmatter: generated_at, status:complete, slug. Sections: Sharpened problem, Pain evidence, Who else has this, Dumbest version that solves 80%, Killed scope, Open branches, Recommended next command."
+      "file": "skills/z-sharpen/SKILL.md",
+      "line": 173,
+      "symbol": "command wrapper",
+      "kind": "section",
+      "summary": "User-facing lifecycle, empty-topic bootstrap, slug/collision, telemetry, final writes."
+    },
+    {
+      "file": "skills/z-sharpen/SKILL.md",
+      "line": 217,
+      "symbol": "slug derivation and collision check",
+      "kind": "section",
+      "summary": "Precontext-only dirs continue; finished-plan dirs require confirmation."
+    },
+    {
+      "file": "skills/z-sharpen/SKILL.md",
+      "line": 255,
+      "symbol": "Write GRILL.md",
+      "kind": "section",
+      "summary": "Writes only on convergence and never writes BRAINSTORM.md."
+    },
+    {
+      "file": "skills/z-sharpen/SKILL.md",
+      "line": 264,
+      "symbol": "Handoff",
+      "kind": "section",
+      "summary": "Advisory next-command recommendation; never auto-dispatches."
     }
   ],
   "depends_on": [
     "commands",
-    "scripts"
+    "scripts",
+    "z-brainstorm"
   ],
   "consumed_by": [
     "agents/planning-router",
-    "commands/z-brainstorm"
+    "skills/z-plan",
+    "skills/z-brainstorm"
   ],
   "invariants": [
-    "User always owns convergence — AI never writes GRILL.md before user signals convergence",
-    "Bounded adaptive escalation: start conversational; escalate to pin a fuzzy dimension only as needed; stop once the idea is buildable",
-    "Never exhaustively interrogate every dimension — that is /z-grill's job; if systematic probing tempts, recommend /z-grill instead",
-    "Abandonment is clean — no GRILL.md written; only sharpen_run_end with status:abandoned emitted",
-    "No subagents for the interview — Haiku Explore is the only allowed subagent, used to self-serve codebase-answerable questions only",
-    "Writes GRILL.md (NOT BRAINSTORM.md) — schema identical to /z-grill output; /z-brainstorm owns BRAINSTORM.md",
-    "Three logging events: sharpen_run_start (setup), sharpen_convergence (Stage 4 pre-write), sharpen_run_end (terminal — complete or abandoned)",
-    "Slug collision: precontext-only dir (no PLAN.md/SPEC.md/TASKS.md) = continuation/overwrite no prompt; finished-plan dir = AskUserQuestion",
-    "Empty $ARGUMENTS opens with 'What are you thinking about?' — entire conversation discovers the topic",
-    "Advisory handoff only — never auto-dispatches to /z-plan or /z-brainstorm; user runs the next command themselves",
-    "No active-plan registration — /z-sharpen is not a plan-family command"
+    "Reusable component is inline orchestration guidance, not a subagent and not the /z-sharpen wrapper.",
+    "Callers own interaction policy, destination context, and whether/where GRILL.md is written.",
+    "Component output is exactly one of proceed, sharpen_more, route_to_brainstorm.",
+    "User-facing wrapper owns empty-topic bootstrap, slug resolution, collision prompts, telemetry, final writes, and advisory handoff.",
+    "Bounded adaptive escalation: ask the highest-signal clarification only; do not run a checklist.",
+    "Never exhaustively interrogate every dimension — that is /z-grill's job.",
+    "Writes GRILL.md, never BRAINSTORM.md.",
+    "Advisory handoff only — never auto-dispatches to /z-plan or /z-brainstorm.",
+    "No active-plan registration — /z-sharpen is not a plan-family command."
   ],
   "gotchas": [
-    "z-sharpen = adaptive + bounded; /z-grill = exhaustive + deliberate — must remain distinguishable so /z-grill is not vestigial",
-    "Writes GRILL.md not BRAINSTORM.md — downstream commands expecting BRAINSTORM.md will not find z-sharpen output",
-    "planning-router rule 5: premise_underspecified routes to /z-sharpen only if current_command is NOT /z-sharpen (loop prevention guard at agents/planning-router.md:146)",
-    "GRILL.md schema is shared with /z-grill — last-writer-wins if both run on the same slug",
-    "No active-plan registration — /z-sharpen is not a plan-family command",
-    "Precontext-only collision is silent overwrite (no prompt); finished-plan collision requires AskUserQuestion — distinguish the two cases carefully",
-    "When auto-invoked inline by /z-brainstorm Phase 0, z-sharpen runs in the same conversation turn (no sub-agent dispatch); SHARPEN_ABANDONED=1 on abandon lets z-brainstorm continue"
+    "Do not invoke the /z-sharpen wrapper from /z-brainstorm; use the reusable component contract only.",
+    "A proceed recommendation means /z-plan is likely next, but the caller/user must choose; no automatic launch.",
+    "route_to_brainstorm means parallel framing is useful, not that the component should write BRAINSTORM.md.",
+    "Precontext-only collision is silent overwrite (no prompt); finished-plan collision requires AskUserQuestion.",
+    "GRILL.md schema is shared with /z-grill — last-writer-wins if both run on the same slug.",
+    "No active-plan registration — /z-sharpen is not a plan-family command."
   ],
   "memories": []
 }

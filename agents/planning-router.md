@@ -54,8 +54,8 @@ Primary route targets:
 - `/z-do`
 - `/z-plan`
 - `/z-plan-split`
-- `/z-brainstorm` (approach-framing route for unsettled alternatives, architecture choices, reversibility uncertainty, or post-artifact approach gaps)
-- `/z-sharpen` (special non-plan route — conversational bounded idea-sharpener for underspecified premises, "what should we do?" prompts, or post-artifact question-heavy output)
+- `/z-brainstorm` (approach-framing route for "what should we do?" prompts, unsettled alternatives, architecture choices, reversibility uncertainty, or post-artifact approach gaps)
+- `/z-sharpen` (special non-plan route — conversational bounded idea-sharpener for underspecified premises or post-artifact question-heavy output)
 
 Contextual exits:
 
@@ -157,6 +157,8 @@ Use only these reason codes:
 - `artifact_inventory_truncated`: boolean — artifact/worktree inventory was capped or truncated before all candidates were considered
 Typed artifact/worktree signal contract: callers may supply `artifact_exact_slug_match`, `artifact_finished_plan_match`, `artifact_plan_mode`, `canonical_tasks_present`, `artifact_similar_candidates`, `active_registry_overlap`, `worktree_overlap`, `artifact_match_confidence`, and `artifact_match_basis`; these names are stable and should be forwarded unchanged from deterministic preflight.
 
+Plan Route Check stable signal names include `plan_validation_intent`, `question_heavy_artifacts`, `artifact_unsettled_approach`, and `post_artifact_check`. Callers must forward those exact names unchanged and avoid compatibility aliases for older singular or requested-form variants.
+
 Intent-mode finished-plan detection is explicit: `INTENT.md` plus canonical `TASKS.md` is a finished plan-family artifact set even when `SPEC.md` and `PLAN.md` are absent. `INTENT.md` alone, or `INTENT.md` with a free-form/noncanonical task note, is not finished-plan evidence. Canonical means the task file uses parseable z-harness task headings/status markers, not merely a free-form note named `TASKS.md`. When this exact intent set is present, callers set `artifact_finished_plan_match: true`, `artifact_plan_mode: "intent"`, `canonical_tasks_present: true`, and include `exact_intent_finished_plan` plus `canonical_tasks` in `artifact_match_basis`.
 
 If a relevant signal is missing, reason from what is present and lower confidence. Do not infer file counts, task counts, independent seam plannability, or artifact existence from the filesystem unless the caller supplied an `existing_artifacts` list or typed artifact/worktree signals to interpret.
@@ -187,26 +189,27 @@ Apply these rules in order:
    - `has_bug_diagnosis` -> `/z-fix`
    - `has_unknown_bug_symptom` -> `/z-debug`
    - `docs_stale_or_drifted` -> `/z-maintain-docs`
-7. If `exact_finished_plan` is true but neither `plan_amend_intent` nor `plan_validation_intent` is true, return `STATUS: ask_user`, `RECOMMENDED: ask_user`, `ROUTE_CLASS: none`, and include `existing_artifact_exact,ambiguous_route` plus `intent_finished_plan,canonical_tasks_present` when `exact_intent_finished_plan` is true. The user must choose amend, audit, execute/resume, or a new slug; do not silently start a new plan over a finished exact slug.
-8. If `active_registry_overlap` is non-empty and no exact finished-plan rule already routed, return `STATUS: ask_user`, `RECOMMENDED: ask_user`, `ROUTE_CLASS: none`, and include `active_plan_overlap,ambiguous_route`; active claims need caller/user arbitration before more planning.
-9. If `worktree_overlap` is non-empty and no exact finished-plan or active-overlap rule already routed, treat it as warning-only: include `worktree_overlap` in any compatible result, lower confidence when it raises collision risk, and continue through the primary-route rules. A standalone worktree overlap must not by itself return `ask_user` or write a route decision; worktrees are collision warnings, not proof of a reusable plan.
-10. If `artifact_similar_candidates` is non-empty or `artifact_match_basis` contains `historical_similar`, include `existing_artifact_similar` in any compatible result and keep `has_existing_plan` false. Historical similar evidence alone must not unlock `/z-amend` or `/z-audit-plan`; route by the remaining primary-route signals or ask the user if primary routes tie.
-11. If `artifact_inventory_partial` or `artifact_inventory_truncated` is true, include `inventory_partial` and/or `inventory_truncated` as applicable and lower confidence: cap otherwise-high recommendations at `medium`, and use `low` when the recommendation relies on absence of matching artifacts or absence of overlaps.
-12. If `post_artifact_check` is true, surface recommendations only through the caller's route gate; never auto-dispatch the recommended command and never turn warning-only artifact/worktree findings into a route.
-13. If `post_artifact_check` is true and `expected_tasks > 25`, recommend `/z-plan-split` with `post_artifact_recommendation,too_many_tasks` only when `cluster_seams_independently_plannable` is true; otherwise include `too_many_tasks` and keep `/z-plan` or `ask_user` based on split ambiguity.
-14. If `post_artifact_check` is true and `question_heavy_artifacts` is true, recommend `/z-sharpen` with `post_artifact_recommendation,question_heavy_artifacts,needs_sharpen` only when route-chain loop checks permit it and `current_command` is not `/z-sharpen`; otherwise return `ask_user` with `route_loop_risk` rather than re-entering `/z-sharpen`.
-15. If `post_artifact_check` is true and `artifact_unsettled_approach` is true, recommend `/z-brainstorm` with `post_artifact_recommendation,unsettled_approach,needs_brainstorm` only when route-chain loop checks permit it and `current_command` is not `/z-brainstorm`; otherwise return `ask_user` with `route_loop_risk` rather than re-entering `/z-brainstorm`.
-16. If `premise_underspecified` or `asks_what_should_we_do` is true AND `current_command` is NOT `/z-sharpen` (prevent loop), recommend `/z-sharpen` with `needs_sharpen` plus `premise_underspecified` when present.
-17. If `terrain_uncertain` is true, return `STATUS: ask_user` with `RECOMMENDED: ask_user` and `REASON_CODES: ambiguous_route,needs_terrain_grounding` unless the caller explicitly supplied an experimental-route allowlist.
-18. If `alternatives_unsettled`, `architecture_decision`, `reversibility_uncertain`, or `approach_uncertain` is true and terrain is known enough to compare approaches, recommend `/z-brainstorm` with `needs_brainstorm` plus the matching reason codes (`alternatives_unclear`, `architecture_uncertain`, `reversibility_uncertain`, or `needs_more_framing`). If `has_map_and_brainstorm` is true, use `needs_more_framing` to signal that more framing is needed rather than hidden synthesis.
-19. Apply split-specific seam rules before generic downrouting. If `current_command` is `/z-plan-split` or `cluster_seams` is present, resolve these seam rules before considering `candidate_files`-based routes:
+7. If `post_artifact_check` is true, surface recommendations only through the caller's route gate; never auto-dispatch the recommended command and never turn warning-only artifact/worktree findings into a route.
+8. If `post_artifact_check` is true and `expected_tasks > 25`, recommend `/z-plan-split` with `post_artifact_recommendation,too_many_tasks` only when `cluster_seams_independently_plannable` is true; otherwise include `too_many_tasks` and keep `/z-plan` or `ask_user` based on split ambiguity.
+9. If `post_artifact_check` is true and `question_heavy_artifacts` is true, recommend `/z-sharpen` with `post_artifact_recommendation,question_heavy_artifacts,needs_sharpen` only when route-chain loop checks permit it and `current_command` is not `/z-sharpen`; otherwise return `ask_user` with `route_loop_risk` rather than re-entering `/z-sharpen`.
+10. If `post_artifact_check` is true and `artifact_unsettled_approach` is true, recommend `/z-brainstorm` with `post_artifact_recommendation,unsettled_approach,needs_brainstorm` only when route-chain loop checks permit it and `current_command` is not `/z-brainstorm`; otherwise return `ask_user` with `route_loop_risk` rather than re-entering `/z-brainstorm`.
+11. If `exact_finished_plan` is true but neither `plan_amend_intent` nor `plan_validation_intent` is true, return `STATUS: ask_user`, `RECOMMENDED: ask_user`, `ROUTE_CLASS: none`, and include `existing_artifact_exact,ambiguous_route` plus `intent_finished_plan,canonical_tasks_present` when `exact_intent_finished_plan` is true. The user must choose amend, audit, execute/resume, or a new slug; do not silently start a new plan over a finished exact slug.
+12. If `active_registry_overlap` is non-empty and no post-artifact or exact finished-plan rule already routed, return `STATUS: ask_user`, `RECOMMENDED: ask_user`, `ROUTE_CLASS: none`, and include `active_plan_overlap,ambiguous_route`; active claims need caller/user arbitration before more planning.
+13. If `worktree_overlap` is non-empty and no post-artifact, exact finished-plan, or active-overlap rule already routed, treat it as warning-only: include `worktree_overlap` in any compatible result, lower confidence when it raises collision risk, and continue through the primary-route rules. A standalone worktree overlap must not by itself return `ask_user` or write a route decision; worktrees are collision warnings, not proof of a reusable plan.
+14. If `artifact_similar_candidates` is non-empty or `artifact_match_basis` contains `historical_similar`, include `existing_artifact_similar` in any compatible result and keep `has_existing_plan` false. Historical similar evidence alone must not unlock `/z-amend` or `/z-audit-plan`; route by the remaining primary-route signals or ask the user if primary routes tie.
+15. If `artifact_inventory_partial` or `artifact_inventory_truncated` is true, include `inventory_partial` and/or `inventory_truncated` as applicable and lower confidence: cap otherwise-high recommendations at `medium`, and use `low` when the recommendation relies on absence of matching artifacts or absence of overlaps.
+16. If `asks_what_should_we_do` is true and `current_command` is NOT `/z-brainstorm` (prevent loop), recommend `/z-brainstorm` with `needs_brainstorm,needs_more_framing`; this signal asks for option-shaping, not premise cleanup.
+17. If `premise_underspecified` is true and `current_command` is NOT `/z-sharpen` (prevent loop), recommend `/z-sharpen` with `needs_sharpen,premise_underspecified`.
+18. If `terrain_uncertain` is true, return `STATUS: ask_user` with `RECOMMENDED: ask_user` and `REASON_CODES: ambiguous_route,needs_terrain_grounding` unless the caller explicitly supplied an experimental-route allowlist.
+19. If `alternatives_unsettled`, `architecture_decision`, `reversibility_uncertain`, or `approach_uncertain` is true and terrain is known enough to compare approaches, recommend `/z-brainstorm` with `needs_brainstorm` plus the matching reason codes (`alternatives_unclear`, `architecture_uncertain`, `reversibility_uncertain`, or `needs_more_framing`). If `has_map_and_brainstorm` is true, use `needs_more_framing` to signal that more framing is needed rather than hidden synthesis.
+20. Apply split-specific seam rules before generic downrouting. If `current_command` is `/z-plan-split` or `cluster_seams` is present, resolve these seam rules before considering `candidate_files`-based routes:
    - If `current_command` is `/z-plan-split` and `cluster_seams` is `null` or absent, return `STATUS: ask_user` with `ambiguous_route` and `needs_terrain_grounding`.
    - If `cluster_seams < 2`, recommend `/z-plan` with `too_few_clusters`.
    - If `cluster_seams` is between 2 and 6 and `cluster_seams_independently_plannable` is true, recommend `/z-plan-split`.
    - If `cluster_seams` is between 2 and 6 but independent plannability is false or unknown, do not recommend `/z-plan-split`; prefer `/z-plan` or return `STATUS: ask_user` with `ambiguous_route` if `/z-plan` and `/z-plan-split` remain tied.
-20. If `candidate_files` is known and `candidate_files <= 3`, no cross-module impact, no schema or persistence impact, and `non_obvious_decisions == 0`, recommend `/z-do`. If `non_obvious_decisions` is `null` or absent, do not recommend `/z-do`; choose a safer planning route or `ask_user` with lower confidence.
-21. If `expected_tasks > 25`, recommend `/z-plan-split` only when `cluster_seams_independently_plannable` is true; otherwise recommend `/z-plan` with medium or low confidence based on the supplied signals.
-22. Otherwise recommend `/z-plan`.
+21. If `candidate_files` is known and `candidate_files <= 3`, no cross-module impact, no schema or persistence impact, and `non_obvious_decisions == 0`, recommend `/z-do`. If `non_obvious_decisions` is `null` or absent, do not recommend `/z-do`; choose a safer planning route or `ask_user` with lower confidence.
+22. If `expected_tasks > 25`, recommend `/z-plan-split` only when `cluster_seams_independently_plannable` is true; otherwise recommend `/z-plan` with medium or low confidence based on the supplied signals.
+23. Otherwise recommend `/z-plan`.
 
 If two or more plausible targets remain tied after applying the rules, return `STATUS: ask_user` with `REASON_CODES: ambiguous_route`.
 
@@ -392,13 +395,40 @@ REASON_CODES: existing_artifact_exact,intent_finished_plan,canonical_tasks_prese
 REASON: Exact intent plan matches the slug with canonical TASKS and the user asked to amend it.
 ```
 
-### Example: underspecified what-should-we-do prompt routes to /z-sharpen
+### Example: intent finished plan with canonical TASKS routes to /z-audit-plan
 
 Input signal sketch:
 
 ```json
 {
-  "premise_underspecified": true,
+  "artifact_exact_slug_match": true,
+  "artifact_finished_plan_match": true,
+  "artifact_plan_mode": "intent",
+  "canonical_tasks_present": true,
+  "artifact_match_confidence": "high",
+  "artifact_match_basis": ["exact_intent_finished_plan", "canonical_tasks"],
+  "plan_amend_intent": false,
+  "plan_validation_intent": true
+}
+```
+
+Expected output:
+
+```text
+STATUS: routed
+RECOMMENDED: /z-audit-plan
+ROUTE_CLASS: contextual
+CONFIDENCE: high
+REASON_CODES: existing_artifact_exact,intent_finished_plan,canonical_tasks_present,existing_plan_audit
+REASON: Exact intent plan matches the slug with canonical TASKS and the user asked to audit it.
+```
+
+### Example: what-should-we-do prompt routes to /z-brainstorm
+
+Input signal sketch:
+
+```json
+{
   "asks_what_should_we_do": true,
   "candidate_files": null,
   "non_obvious_decisions": null,
@@ -410,10 +440,10 @@ Expected output:
 
 ```text
 STATUS: routed
-RECOMMENDED: /z-sharpen
+RECOMMENDED: /z-brainstorm
 ROUTE_CLASS: primary
 CONFIDENCE: medium
-REASON_CODES: needs_sharpen,premise_underspecified
+REASON_CODES: needs_brainstorm,needs_more_framing
 REASON: The prompt asks for option-shaping before a concrete implementation target exists.
 ```
 
@@ -468,16 +498,21 @@ REASON_CODES: post_artifact_recommendation,too_many_tasks
 REASON: Generated tasks exceed the split threshold and the seams are independently plannable.
 ```
 
-### Example: post-artifact question-heavy artifacts recommend /z-sharpen gate
+### Example: post-artifact exact finished question-heavy artifacts recommend /z-sharpen gate
 
 Input signal sketch:
 
 ```json
 {
   "post_artifact_check": true,
+  "artifact_exact_slug_match": true,
+  "artifact_finished_plan_match": true,
+  "artifact_match_confidence": "high",
+  "artifact_match_basis": ["exact_finished_plan", "worktree_overlap"],
+  "plan_amend_intent": false,
+  "plan_validation_intent": false,
   "question_heavy_artifacts": true,
-  "worktree_overlap": [{"branch": "feature/related-plan", "path": "agents/planning-router.md"}],
-  "artifact_match_basis": ["worktree_overlap"]
+  "worktree_overlap": [{"branch": "feature/related-plan", "path": "agents/planning-router.md"}]
 }
 ```
 

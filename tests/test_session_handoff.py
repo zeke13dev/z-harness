@@ -2226,23 +2226,28 @@ class TestResumeIntegration:
 
 
 # ===========================================================================
-# SECTION 4 — handoff.schema.json validation harness (T005)
+# SECTION 4 — handoff.schema.json validation harness (T005/T006)
 # ===========================================================================
 # Introduces the FIRST live jsonschema validator for handoff.json. T005 changes
 # the schema's protocol_version from `const: "1.0"` to `enum: ["1.0", "1.1"]`
-# and adds an OPTIONAL nested `attend_resume` object (its own
-# additionalProperties:false; not in `required`) so:
-#   (a) a 1.0 handoff with NO attend_resume key still validates, and
-#   (b) a populated 1.1 handoff validates.
-# The regression guard (c) reconstructs a `const`-"1.1"-only variant of the
-# schema and asserts it REJECTS the 1.0 fixture — proving it is the ENUM, not a
-# const, that admits both versions (a const can never admit two values).
+# and adds an OPTIONAL nested `attend_resume` object; T006 adds fresh-session
+# context roles while preserving path/role-only thin pointers. Together:
+#   (a) a 1.0 handoff with NO attend_resume key still validates,
+#   (b) a populated 1.1 handoff validates, and
+#   (c) HANDOFF.md/INTENT.md/LEDGER.md context pointers validate without
+#       allowing embedded file content.
 
 import copy as _copy
 
 jsonschema = pytest.importorskip("jsonschema")
 
 _SCHEMA_PATH = _REPO_ROOT / "docs" / "schemas" / "handoff.schema.json"
+_ZHANDOFF_SKILL_PATH = _REPO_ROOT / "skills" / "z-handoff" / "SKILL.md"
+
+
+def _load_zhandoff_skill() -> str:
+    """Load the live manual /z-handoff contract from disk."""
+    return _ZHANDOFF_SKILL_PATH.read_text(encoding="utf-8")
 
 
 def _load_handoff_schema() -> dict[str, Any]:
@@ -2264,8 +2269,18 @@ def _make_1_0_handoff() -> dict[str, Any]:
         "status": "clean_break",
         "next_step": "Resume /z-execute for attended-chain. 2/5 tasks done.",
         "context_files": [
+            {"path": "/tmp/plan/HANDOFF.md", "role": "handoff"},
+            {"path": "/tmp/plan/HANDOFF.md", "role": "invariants"},
+            {"path": "/tmp/plan/HANDOFF.md", "role": "rejected_approaches"},
+            {"path": "/tmp/plan/HANDOFF.md", "role": "decisions_archive"},
+            {"path": "/tmp/plan/HANDOFF.md", "role": "verification_commands"},
+            {"path": "/tmp/plan/INTENT.md", "role": "intent"},
             {"path": "/tmp/plan/SPEC.md", "role": "spec"},
+            {"path": "/tmp/plan/PLAN.md", "role": "plan"},
             {"path": "/tmp/plan/TASKS.md", "role": "tasks"},
+            {"path": "/tmp/plan/FIX.md", "role": "plan"},
+            {"path": "/tmp/plan/workstreams.json", "role": "workstreams"},
+            {"path": "/tmp/plan/LEDGER.md", "role": "ledger"},
         ],
     }
 
@@ -2285,7 +2300,7 @@ def _make_1_1_handoff() -> dict[str, Any]:
 
 
 class TestHandoffSchemaValidation:
-    """Live jsonschema validation of docs/schemas/handoff.schema.json (T005).
+    """Live jsonschema validation of docs/schemas/handoff.schema.json (T005/T006).
 
     These are the regression guards for the const→enum change. They fail if a
     future edit reverts protocol_version to a const (which would reject the 1.0
@@ -2384,15 +2399,71 @@ class TestHandoffSchemaValidation:
         with pytest.raises(jsonschema.ValidationError):
             jsonschema.validate(instance=handoff, schema=schema)
 
+    def test_context_files_accept_fresh_session_roles_but_remain_thin(self):
+        """HANDOFF context-category pointers validate, but embedded file content is rejected."""
+        schema = _load_handoff_schema()
+        role_schema = schema["properties"]["context_files"]["items"]["properties"]["role"]
+        assert {"handoff", "intent", "ledger", "invariants", "rejected_approaches", "decisions_archive", "verification_commands"}.issubset(set(role_schema["enum"]))
+
+        handoff = _make_1_0_handoff()
+        jsonschema.validate(instance=handoff, schema=schema)
+
+        handoff["context_files"][0]["content"] = "# Handoff\n"
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(instance=handoff, schema=schema)
+
+
+class TestZHandoffSkillContract:
+    """Regression guards for the manual /z-handoff context discovery contract."""
+
+    def _context_discovery_block(self) -> str:
+        text = _load_zhandoff_skill()
+        start = text.index("### 1c — Identify context files")
+        end = text.index("### 1d — Determine next_step", start)
+        return text[start:end]
+
+    def test_manual_discovery_includes_intent_and_legacy_plan_artifacts(self):
+        """Manual /z-handoff must not drop intent-mode or legacy plan artifacts."""
+        block = self._context_discovery_block()
+        for artifact in (
+            "HANDOFF.md",
+            "INTENT.md",
+            "SPEC.md",
+            "PLAN.md",
+            "TASKS.md",
+            "FIX.md",
+            "LEDGER.md",
+        ):
+            assert f"$Z_HARNESS_PLAN_DIR/{artifact}" in block
+
+    def test_manual_role_table_uses_schema_role_names_for_primary_artifacts(self):
+        """Manual role names must match handoff.schema.json/write-handoff.sh roles."""
+        block = self._context_discovery_block()
+        expected_roles = {
+            "HANDOFF.md": "handoff",
+            "INTENT.md": "intent",
+            "SPEC.md": "spec",
+            "PLAN.md": "plan",
+            "TASKS.md": "tasks",
+            "FIX.md": "plan",
+            "LEDGER.md": "ledger",
+        }
+        schema_roles = set(
+            _load_handoff_schema()["properties"]["context_files"]["items"]["properties"]["role"]["enum"]
+        )
+
+        for artifact, role in expected_roles.items():
+            assert f'| `**/{artifact}` | `"{role}"` |' in block
+            assert role in schema_roles
+
 
 # ===========================================================================
-# SECTION 5 — write-handoff.sh producer ↔ schema conformance (T005)
+# SECTION 5 — write-handoff.sh producer ↔ schema conformance (T005/T006)
 # ===========================================================================
 # write-handoff.sh emits protocol_version "1.0" with NO attend_resume key on the
-# default (curator/compaction) path, and "1.1" with a populated attend_resume
-# block ONLY when Z_HARNESS_ATTEND_RESUME=1. These tests run the actual script
-# in both modes and validate its output against the LIVE schema, closing the
-# loop between producer and validator.
+# default path, and "1.1" with a populated attend_resume block ONLY when
+# Z_HARNESS_ATTEND_RESUME=1. T006 also pins fresh-session artifact pointers and
+# staged intent-mode TASKS.md heading counts against the LIVE schema.
 
 _WRITE_HANDOFF_SH = str(_REPO_ROOT / "scripts" / "write-handoff.sh")
 _WRITE_CLEAR_CHECKPOINT_SH = str(_REPO_ROOT / "scripts" / "write-clear-checkpoint.sh")
@@ -2420,16 +2491,29 @@ def _run_write_handoff(plan_dir: Path, extra_env: dict[str, str] | None = None) 
 
 def _seed_plan_dir(plan_dir: Path) -> None:
     """Write the minimal plan artifacts write-handoff.sh reads."""
+    (plan_dir / "HANDOFF.md").write_text("# Handoff\n", encoding="utf-8")
+    (plan_dir / "INTENT.md").write_text("# Intent\n", encoding="utf-8")
+    (plan_dir / "LEDGER.md").write_text("# Ledger\n", encoding="utf-8")
     (plan_dir / "SPEC.md").write_text("# Spec\n", encoding="utf-8")
+    (plan_dir / "PLAN.md").write_text("# Plan\n", encoding="utf-8")
+    (plan_dir / "workstreams.json").write_text('{"workstreams": []}\n', encoding="utf-8")
+    (plan_dir / "SESSION.md").write_text(
+        "---\ndone_count: 2\nnext_pending: T003\n---\n\n## Open threads\n- Continue\n",
+        encoding="utf-8",
+    )
     (plan_dir / "TASKS.md").write_text(
-        "## T001 — First `[x]`\n**Depends on:** —\n\n"
-        "## T002 — Second `[ ]`\n**Depends on:** T001\n",
+        "## Base level — spine and mode gate\n\n"
+        "## T001 — Base done `[x]`\n**Depends on:** —\n\n"
+        "## Independent source-contract tracks\n\n"
+        "## T002 — Independent pending `[ ]`\n**Depends on:** —\n\n"
+        "## Dependent level — after T001\n\n"
+        "## T003 — Dependent done `[x]`\n**Depends on:** T001\n",
         encoding="utf-8",
     )
 
 
 class TestWriteHandoffProducer:
-    """write-handoff.sh output conforms to handoff.schema.json in both modes (T005)."""
+    """write-handoff.sh conforms to schema and T006 handoff pointer/count contracts."""
 
     def test_default_path_emits_1_0_without_attend_resume(self, tmp_path: Path):
         """No Z_HARNESS_ATTEND_RESUME → protocol_version 1.0, no attend_resume key, valid."""
@@ -2443,6 +2527,51 @@ class TestWriteHandoffProducer:
             "Default (non-attend) path must NOT add an attend_resume key"
         )
         jsonschema.validate(instance=handoff, schema=_load_handoff_schema())
+
+    def test_default_path_points_at_all_primary_artifacts_thinly(self, tmp_path: Path):
+        """Machine handoff lists primary artifacts as path/role pointers only."""
+        _seed_plan_dir(tmp_path)
+        handoff = _run_write_handoff(tmp_path)
+
+        context_files = handoff["context_files"]
+        assert [entry["role"] for entry in context_files] == [
+            "handoff",
+            "invariants",
+            "rejected_approaches",
+            "decisions_archive",
+            "verification_commands",
+            "intent",
+            "spec",
+            "plan",
+            "tasks",
+            "workstreams",
+            "ledger",
+            "session_log",
+        ]
+        assert [Path(entry["path"]).name for entry in context_files] == [
+            "HANDOFF.md",
+            "HANDOFF.md",
+            "HANDOFF.md",
+            "HANDOFF.md",
+            "HANDOFF.md",
+            "INTENT.md",
+            "SPEC.md",
+            "PLAN.md",
+            "TASKS.md",
+            "workstreams.json",
+            "LEDGER.md",
+            "SESSION.md",
+        ]
+        assert all(set(entry) == {"path", "role"} for entry in context_files)
+        jsonschema.validate(instance=handoff, schema=_load_handoff_schema())
+
+    def test_staged_intent_task_headings_drive_task_counts(self, tmp_path: Path):
+        """Intent TASKS.md staged TNNN headings produce accurate done/total counts."""
+        _seed_plan_dir(tmp_path)
+        handoff = _run_write_handoff(tmp_path)
+
+        assert "2/3 tasks done" in handoff["next_step"]
+        assert "Start at T003" in handoff["next_step"]
 
     def test_attend_path_emits_1_1_with_populated_attend_resume(self, tmp_path: Path):
         """Z_HARNESS_ATTEND_RESUME=1 → protocol_version 1.1 with a full attend_resume, valid."""

@@ -57,6 +57,21 @@ def _write_plan(plan_dir: Path, *, slug: str = "demo-plan", status: str = "activ
     )
 
 
+def _write_intent_plan(plan_dir: Path, *, slug: str = "demo-plan", canonical_tasks: bool = True) -> None:
+    plan_dir.mkdir(parents=True, exist_ok=True)
+    (plan_dir / "INTENT.md").write_text(
+        f"---\nartifact_kind: INTENT\nslug: {slug}\nfrozen_at: pending\n---\n"
+        "# Intent\n\n## Intent\n- Build the thing\n",
+        encoding="utf-8",
+    )
+    tasks_body = (
+        f"---\nartifact: tasks\nslug: {slug}\n---\n# TASKS\n\n## T001 — Demo task — `[ ]`\n**Files:** `scripts/demo.py`\n"
+        if canonical_tasks
+        else f"---\nartifact: tasks\nslug: {slug}\n---\n# TASKS\n\nRemember to do some work eventually.\n"
+    )
+    (plan_dir / "TASKS.md").write_text(tasks_body, encoding="utf-8")
+
+
 def test_valid_output_writes_atomically_and_collects_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -125,6 +140,42 @@ def test_run_brief_complete_alone_is_not_finished_plan(tmp_path: Path, monkeypat
     assert data["signals"]["exact_slug_precontext"] is True
     assert data["signals"]["exact_slug_finished_plan"] is False
 
+
+
+def test_intent_plus_canonical_tasks_is_finished_plan_for_amend_and_audit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    plan_dir = tmp_path / "base" / "plans" / "demo-plan"
+    _write_intent_plan(plan_dir)
+    monkeypatch.setattr(inventory, "_run_command", _stub_commands())
+
+    amend = inventory.collect_inventory(command="/z-amend", slug="demo-plan", run_id="run-amend", repo_root=repo, plan_dir=plan_dir, task="amend plan")
+    audit = inventory.collect_inventory(command="/z-audit-plan", slug="demo-plan", run_id="run-audit", repo_root=repo, plan_dir=plan_dir, task="audit plan")
+
+    for data in (amend, audit):
+        signals = data["signals"]
+        assert signals["artifact_exact_slug_match"] is True
+        assert signals["artifact_finished_plan_match"] is True
+        assert signals["exact_slug_finished_plan"] is True
+        assert signals["artifact_plan_mode"] == "intent"
+        assert signals["canonical_tasks_present"] is True
+        assert {"exact_intent_finished_plan", "canonical_tasks"} <= set(signals["artifact_match_basis"])
+
+
+def test_intent_plus_noncanonical_tasks_is_not_finished_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    plan_dir = tmp_path / "base" / "plans" / "demo-plan"
+    _write_intent_plan(plan_dir, canonical_tasks=False)
+    monkeypatch.setattr(inventory, "_run_command", _stub_commands())
+
+    data = inventory.collect_inventory(command="/z-plan", slug="demo-plan", run_id="run", repo_root=repo, plan_dir=plan_dir, task=None)
+
+    assert data["signals"]["artifact_exact_slug_match"] is True
+    assert data["signals"]["artifact_finished_plan_match"] is False
+    assert data["signals"]["exact_slug_finished_plan"] is False
+    assert data["signals"]["artifact_plan_mode"] is None
+    assert data["signals"]["canonical_tasks_present"] is False
 
 def test_corrupt_allowed_artifact_marks_source_partial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path / "repo"

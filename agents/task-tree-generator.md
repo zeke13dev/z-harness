@@ -1,6 +1,6 @@
 ---
 name: task-tree-generator
-description: "A model:sonnet subagent that generates the next BFS-level batch of independent sibling tasks from a frozen INTENT.md snapshot, the current LEDGER.md, the current level number, the set of still-unmet acceptance criteria, and (for level >0) the prior-level outcomes. Emits a TASKS.md block in the canonical heading format that session-helpers.sh parses — each heading ends with a backtick-enclosed [ ] status marker. Cross-level deps are deferred to the next level; all siblings in the emitted batch must be independent of each other."
+description: "A model:sonnet subagent that generates the next BFS-level batch of independent sibling tasks from a frozen INTENT.md snapshot, the current LEDGER.md, the current level number, the set of still-unmet acceptance criteria, and (for level >0) the prior-level outcomes. Emits a TASKS.md block in the canonical heading format that session-helpers.sh parses — each heading ends with a backtick-enclosed [ ] status marker. Cross-level deps are deferred to the next level; all siblings in the emitted batch must be independent, and every current acceptance criterion must be advanced or explicitly deferred."
 tools: Read, Write, Edit, Bash, Grep, Glob
 model: sonnet
 ---
@@ -120,6 +120,18 @@ After the final task block, append a `## Level <N> notes` section:
 **Rationale:** <1–2 sentences on why this decomposition is the right shape for this level>
 **Termination outlook:** <one sentence: are unmet criteria likely to be satisfied by level N+1, or do you anticipate more levels?>
 ```
+
+## Phase 2.5 — Self-sanity before return
+
+Before returning `STATUS: ok`, re-read the TASKS.md you wrote and confirm it would pass the `/z-plan` Phase 8 sanity helper (`scripts/intent-schema.py validate-tasks <INTENT.md> <TASKS.md> <#1,#3,...>`):
+
+- Every current unmet acceptance criterion is either named by at least one task's `**Advances:** criterion #N` line or explicitly listed in `**Criteria deferred to next level:**`.
+- Every task heading is exactly `## T<NNN> — <title> \`[ ]\`` with the pending status marker.
+- Every task has literal `**Depends on:** —`; sibling dependencies are forbidden.
+- The task dependency graph is acyclic. Because normal siblings have no dependencies, this should be trivially true; if you find a dependency, move that task to a later level instead of keeping it in this batch.
+- No task is orphaned: each task must advance at least one current unmet criterion from the caller-provided `unmet_criteria` list.
+
+If the sanity check would fail, edit `tasks_output_path` before returning. Do not ask the caller to repair malformed TASKS.md.
 
 ## Termination and level-cap contract
 

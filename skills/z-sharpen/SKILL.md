@@ -88,7 +88,7 @@ states.
         question directly instead of self-answering. Silent omission is forbidden. -->
    ```
    Agent(
-     subagent_type="general-purpose",
+     subagent_type="explore",
      model="haiku",
      description="Self-serve: <one-line question>",
      prompt="<question about the codebase>\nrepo_root: <abs path>"

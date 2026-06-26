@@ -56,16 +56,53 @@ echo "PLAN_DIR=${Z_HARNESS_PLAN_DIR:-none}"
 
 If `Z_HARNESS_SLUG` is set, use it as the `slug` field. If not set, `slug` is `null`.
 
-### 1b — Identify context files
+### 1b — Write live session context
+
+Plan artifacts say what should happen. A mid-session agent also has live state that otherwise exists only in the context window. Write that state to `$Z_HARNESS_PLAN_DIR/SESSION_CONTEXT.md` (or the workspace fallback when no plan is active) before assembling `context_files`.
+
+Keep it short and concrete. Include only state needed to resume:
+
+- **Current work**: the exact task/subtask/symbol/file the agent was touching when `/z-handoff` was invoked.
+- **Workspace state**: uncommitted change summary and changed files; include a patch file separately if needed, not inline.
+- **Decisions made this session**: decisions not already captured in HANDOFF/INTENT/SPEC/PLAN/TASKS/FIX/LEDGER artifacts.
+- **Open questions/blockers**: unresolved user, design, dependency, or review questions.
+- **Landmines discovered**: failed commands, bad assumptions, broken tests, merge/rebase hazards, or files that looked tempting but were wrong.
+- **Immediate next action**: the first concrete command/edit/read the next agent should perform.
+
+Use this shape — the script prepends frontmatter and `# Session context` automatically, so pass only the section content:
+
+```markdown
+## Current work
+- ...
+
+## Workspace state
+- ...
+
+## Decisions this session
+- ...
+
+## Open questions
+- ...
+
+## Landmines
+- ...
+
+## Immediate next action
+- ...
+```
+
+If invoking `scripts/write-handoff.sh`, pass this section content through `Z_HARNESS_HANDOFF_SESSION_CONTEXT`; the script wraps it with frontmatter, writes `SESSION_CONTEXT.md` atomically, and includes it in `context_files`.
+
+### 1c — Identify context files
 
 Gather the files that the next session will need. Use this priority order:
-
-1. **Plan artifacts** (if in a plan): `$Z_HARNESS_PLAN_DIR/SPEC.md`, `$Z_HARNESS_PLAN_DIR/PLAN.md`, `$Z_HARNESS_PLAN_DIR/TASKS.md`, `$Z_HARNESS_PLAN_DIR/FIX.md` — include whichever exist.
-2. **Workstreams** (if in a plan): `$Z_HARNESS_PLAN_DIR/workstreams.json` — include if it exists.
-3. **Session log**: the current run's `events.jsonl` at `${CURRENT_ARCHIVE_DIR}/events.jsonl` or `$Z_HARNESS_PLAN_DIR/archive/<current_run>/events.jsonl` — include if the path is known.
-4. **Active diff**: if the workspace has uncommitted changes, run `git diff > /tmp/handoff-diff-<timestamp>.patch` and include the patch path. Do NOT include the diff inline in `next_step`.
-5. **Any other files** the user explicitly mentions as context.
-6. **Fallback** — if no context files are found from any of the above, include at least one file from the workspace root (e.g., `README.md`, `.gitignore`) with role `"other"` so the `context_files` array is never empty.
+1. **Live session context**: `$Z_HARNESS_PLAN_DIR/SESSION_CONTEXT.md` — include if written.
+2. **Primary plan artifacts** (if in a plan): `$Z_HARNESS_PLAN_DIR/HANDOFF.md`, `$Z_HARNESS_PLAN_DIR/INTENT.md`, `$Z_HARNESS_PLAN_DIR/SPEC.md`, `$Z_HARNESS_PLAN_DIR/PLAN.md`, `$Z_HARNESS_PLAN_DIR/TASKS.md`, `$Z_HARNESS_PLAN_DIR/FIX.md`, `$Z_HARNESS_PLAN_DIR/LEDGER.md` — include whichever exist. This keeps intent-mode handoffs carrying the accepted intent/scope/acceptance checklist and ledger while preserving legacy SPEC/PLAN/TASKS/FIX context.
+3. **Workstreams** (if in a plan): `$Z_HARNESS_PLAN_DIR/workstreams.json` — include if it exists.
+4. **Session log**: the current run's `events.jsonl` at `${CURRENT_ARCHIVE_DIR}/events.jsonl` or `$Z_HARNESS_PLAN_DIR/archive/<current_run>/events.jsonl` — include if the path is known.
+5. **Active diff**: if the workspace has uncommitted changes, run `git diff > /tmp/handoff-diff-<timestamp>.patch` and include the patch path. Do NOT include the diff inline in `next_step`.
+6. **Any other files** the user explicitly mentions as context.
+7. **Fallback** — if no context files are found from any of the above, include at least one file from the workspace root (e.g., `README.md`, `.gitignore`) with role `"other"` so the `context_files` array is never empty.
 
 After detection, assign the discovered files to a variable:
 
@@ -78,26 +115,29 @@ For each file, determine its `role`:
 
 | File pattern | Role |
 |-------------|------|
+| `**/HANDOFF.md` | `"handoff"` |
+| `**/INTENT.md` | `"intent"` |
 | `**/SPEC.md` | `"spec"` |
 | `**/PLAN.md` | `"plan"` |
 | `**/TASKS.md` | `"tasks"` |
 | `**/FIX.md` | `"plan"` |
+| `**/LEDGER.md` | `"ledger"` |
 | `**/workstreams.json` | `"workstreams"` |
-| `**/events.jsonl`, `**/SESSION.md` | `"session_log"` |
+| `**/events.jsonl`, `**/SESSION.md`, `**/SESSION_CONTEXT.md` | `"session_log"` |
 | `*.patch`, `*.diff` | `"diff"` |
 | Anything else | `"other"` |
 
-### 1c — Determine next_step
+### 1d — Determine next_step
 
 If the user provided `$ARGUMENTS`, use it verbatim as `next_step`.
 
-Otherwise, auto-detect from context:
+Otherwise, auto-detect from context. The `next_step` must name the active work and point at `SESSION_CONTEXT.md` whenever it exists:
 
-- **If in a plan with TASKS.md**: find the first `[ ]` (pending) task. Use: `"Continue <slug>: implement <first pending task id> — <task description from TASKS.md>"`
-- **If in a plan with FIX.md** (light mode): use: `"Continue <slug>: <one-line summary from FIX.md Approach section>"`
-- **If no plan (ad-hoc)**: describe what the agent was last doing. Use: `"Continue <brief description of current work>. Context files loaded."`
+- **If in a plan with TASKS.md**: find the first `[ ]` (pending) task. Use: `"Continue <slug>: implement <first pending task id> — <task description>. First read SESSION_CONTEXT.md for the live handoff, then TASKS.md for acceptance criteria."`
+- **If in a plan with FIX.md** (light mode): use: `"Continue <slug>: <one-line summary from FIX.md Approach section>. First read SESSION_CONTEXT.md for live state."`
+- **If no plan (ad-hoc)**: describe what the agent was last doing. Use: `"Continue <brief description of current work>. First read SESSION_CONTEXT.md and the listed context files."`
 
-The `next_step` must be specific enough that a fresh agent session can begin work without asking "what was I doing?"
+The `next_step` must be specific enough that a fresh agent can begin work without asking "what was I doing?"
 
 After detection, assign to a variable:
 
@@ -106,7 +146,7 @@ After detection, assign to a variable:
 NEXT_STEP="Continue <slug>: ..."
 ```
 
-### 1d — Determine status
+### 1e — Determine status
 
 | Condition | Status |
 |-----------|--------|
@@ -117,7 +157,7 @@ NEXT_STEP="Continue <slug>: ..."
 
 When unsure, default to `"clean_break"`.
 
-### 1e — Identify agent
+### 1f — Identify agent
 
 Set the `agent` field to a short identifier for the current agent platform:
 
@@ -166,24 +206,7 @@ When in a plan, the resume consumers (`/z-attend`, the `/z-execute` compaction f
 
 ### Alternate output: SESSION.md
 
-If in a z-harness plan directory, optionally also write or update `SESSION.md` at the plan root. This is a human-readable context summary:
-
-```markdown
-## Done
-- T001: Implemented X
-- T003: Fixed Y bug
-
-## Pending
-- T002: Depends on T001 — needs input parsing
-
-## Decisions
-- Chose approach B over A because of latency constraints
-
-## Blockers
-- Waiting on API key from user
-```
-
-This SESSION.md can be included in `context_files` with `role: "session_log"` on subsequent handoffs.
+`SESSION_CONTEXT.md` is the required live handoff brief for `/z-handoff`. `SESSION.md` remains the bounded curated execution log produced by `context-curator`; do not rely on it for live conversational state. If both exist, include both in `context_files` with `SESSION_CONTEXT.md` before `SESSION.md`.
 
 ## Phase 4 — Emit telemetry
 
@@ -232,7 +255,13 @@ After writing `handoff.json`:
   "status": "context_pressure",
   "next_step": "Continue handoff-protocol: implement commands/z-handoff.md — the /handoff command spec. Schema and docs are done.",
   "context_files": [
+    {"path": "<state>/z-harness/example-repo-00000000/plans/handoff-protocol/HANDOFF.md", "role": "handoff"},
+    {"path": "<state>/z-harness/example-repo-00000000/plans/handoff-protocol/INTENT.md", "role": "intent"},
+    {"path": "<state>/z-harness/example-repo-00000000/plans/handoff-protocol/SPEC.md", "role": "spec"},
+    {"path": "<state>/z-harness/example-repo-00000000/plans/handoff-protocol/PLAN.md", "role": "plan"},
+    {"path": "<state>/z-harness/example-repo-00000000/plans/handoff-protocol/TASKS.md", "role": "tasks"},
     {"path": "<state>/z-harness/example-repo-00000000/plans/handoff-protocol/FIX.md", "role": "plan"},
+    {"path": "<state>/z-harness/example-repo-00000000/plans/handoff-protocol/LEDGER.md", "role": "ledger"},
     {"path": "<state>/z-harness/example-repo-00000000/plans/handoff-protocol/archive/20260609T014456Z-handoff-protocol/events.jsonl", "role": "session_log"},
     {"path": "<repo>/docs/schemas/handoff.schema.json", "role": "other"}
   ]
@@ -258,10 +287,10 @@ After writing `handoff.json`:
 
 ## Hard rules
 
-- **Write to the plan dir when in a plan.** `handoff.json` goes in `$Z_HARNESS_PLAN_DIR` (the canonical home, co-located with SESSION.md/TASKS.md). Fall back to `$PWD`/`$WORKSPACE_ROOT` only when there is no active plan.
-- **Never duplicate plan state.** `context_files` points to SPEC/PLAN/TASKS — do not inline their contents in `next_step`.
-- **next_step must be specific.** A fresh agent session must be able to begin work from `next_step` alone.
-- **No agent-specific branching.** The command works identically for pi, Claude Code, and any future agent. The `agent` field is provenance only.
+- **Write to the plan dir when in a plan.** `handoff.json` goes in `$Z_HARNESS_PLAN_DIR` (the canonical home, co-located with HANDOFF.md/INTENT.md/SESSION.md/TASKS.md/LEDGER.md). Fall back to `$PWD`/`$WORKSPACE_ROOT` only when there is no active plan.
+- **Never duplicate plan state.** `context_files` points to HANDOFF/INTENT/SPEC/PLAN/TASKS/FIX/LEDGER artifacts — do not inline their contents in `next_step`.
+- **next_step must be specific.** A fresh agent must be able to begin work from `next_step` alone; when `SESSION_CONTEXT.md` exists, `next_step` must tell the agent to read it first.
+- **Capture live state outside handoff.json.** Put current work, workspace state, decisions, open questions, landmines, and immediate next action in `SESSION_CONTEXT.md`; keep `handoff.json` thin.
 - **Validate before writing.** `context_files` must be non-empty. `next_step` must be non-empty (unless status is `"complete"`).
 - **Atomic write.** Use temp-file in same directory + rename so the orchestrator never sees a partially-written `handoff.json`.
 - **At least 1 context file.** An empty `context_files` array is invalid. If no files are found, include a fallback file from the workspace root.

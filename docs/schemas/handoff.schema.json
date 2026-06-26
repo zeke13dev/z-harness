@@ -60,8 +60,8 @@
           },
           "role": {
             "type": "string",
-            "enum": ["spec", "plan", "tasks", "workstreams", "session_log", "diff", "other"],
-            "description": "Semantic role of this file. spec: SPEC.md. plan: PLAN.md. tasks: TASKS.md. workstreams: workstreams.json. session_log: session transcript or events. diff: git diff or patch file. other: any other context file."
+            "enum": ["handoff", "intent", "spec", "plan", "tasks", "ledger", "workstreams", "session_log", "invariants", "rejected_approaches", "decisions_archive", "verification_commands", "diff", "other"],
+            "description": "Semantic role of this file. handoff: HANDOFF.md curated fresh-session brief. intent: INTENT.md. spec: SPEC.md. plan: PLAN.md. tasks: TASKS.md. ledger: LEDGER.md intent-mode BFS ledger. workstreams: workstreams.json. session_log: session transcript or events. invariants/rejected_approaches/decisions_archive/verification_commands: HANDOFF.md category pointers for fresh-session executors. diff: git diff or patch file. other: any other context file."
           }
         }
       }

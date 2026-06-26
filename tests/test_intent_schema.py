@@ -6,7 +6,8 @@ Tests cover:
   TestRequiredSections          — per-level required section checks
   TestCriteriaLint              — acceptance-criterion lint heuristic
   TestLedgerValidation          — LEDGER.md frontmatter checks
-  TestCLI                       — CLI entry-point (validate-intent, lint-criteria, validate-ledger)
+  TestTasksValidation           — Phase 8 TASKS.md sanity checks
+  TestCLI                       — CLI entry-point (validate-intent, lint-criteria, validate-ledger, validate-tasks)
   TestValidateIntentShellHelper — session-helpers.sh validate_intent wrapper
 
 The criterion lint invariant under test:
@@ -48,6 +49,7 @@ _mod = _import_module()
 validate_intent = _mod.validate_intent
 lint_criteria = _mod.lint_criteria
 validate_ledger = _mod.validate_ledger
+validate_tasks = _mod.validate_tasks
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +105,31 @@ _VALID_LEDGER = textwrap.dedent("""\
     - Added validate_intent helper (advances criterion #1)
     ### Deviations
     - None
+""")
+
+_VALID_TASKS = textwrap.dedent("""\
+    ---
+    artifact: tasks
+    level: 0
+    generated_at: 2026-06-16
+    planning_mode: intent
+    ---
+
+    # Tasks — Level 0
+
+    ## T001 — Implement command behavior `[ ]`
+    **Files:** scripts/example.py
+    **Depends on:** —
+    **Advances:** criterion #1
+    **Acceptance:** The command exits 0 for a valid input file.
+    **Complexity:** low
+
+    ## Level 0 notes
+
+    **Criteria addressed this level:** #1
+    **Criteria deferred to next level:** #2
+    **Rationale:** One task plus one explicit deferral is enough for this level.
+    **Termination outlook:** The deferred criterion can be handled next.
 """)
 
 
@@ -563,6 +590,116 @@ class TestLedgerValidation(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# TestTasksValidation
+# ---------------------------------------------------------------------------
+
+class TestTasksValidation(unittest.TestCase):
+    """Phase 8 TASKS.md sanity checks."""
+
+    def _validate(
+        self,
+        tasks_content: str,
+        intent_content: str = _VALID_QUICK_INTENT,
+        current_criteria: set[int] | None = None,
+    ):
+        intent = _write_tmp(intent_content)
+        tasks = _write_tmp(tasks_content)
+        try:
+            return validate_tasks(intent, tasks, current_criteria=current_criteria)
+        finally:
+            intent.unlink(missing_ok=True)
+            tasks.unlink(missing_ok=True)
+
+    def test_valid_tasks_cover_or_defer_current_criteria(self):
+        result = self._validate(_VALID_TASKS)
+        self.assertTrue(result.valid, msg=result.errors)
+
+    def test_uncovered_criterion_must_be_deferred(self):
+        tasks = _VALID_TASKS.replace(
+            "**Criteria deferred to next level:** #2",
+            "**Criteria deferred to next level:** none",
+        )
+        result = self._validate(tasks)
+        self.assertFalse(result.valid)
+        self.assertIn("Criterion #2 is neither advanced", "\n".join(result.errors))
+
+    def test_current_criteria_subset_does_not_require_other_intent_items(self):
+        tasks = _VALID_TASKS.replace(
+            "**Criteria deferred to next level:** #2",
+            "**Criteria deferred to next level:** none",
+        )
+        result = self._validate(tasks, current_criteria={1})
+        self.assertTrue(result.valid, msg=result.errors)
+
+    def test_task_advancing_only_non_current_criterion_is_orphaned(self):
+        tasks = _VALID_TASKS.replace("**Advances:** criterion #1", "**Advances:** criterion #2")
+        result = self._validate(tasks, current_criteria={1})
+        self.assertFalse(result.valid)
+        errors = "\n".join(result.errors)
+        self.assertIn("orphaned", errors)
+        self.assertIn("non-current criterion #2", errors)
+
+    def test_task_heading_must_use_canonical_pending_status(self):
+        tasks = _VALID_TASKS.replace(
+            "## T001 — Implement command behavior `[ ]`",
+            "## T001 — Implement command behavior `[x]`",
+        )
+        result = self._validate(tasks)
+        self.assertFalse(result.valid)
+        self.assertIn("canonical pending status", "\n".join(result.errors))
+
+    def test_depends_on_must_be_literal_dash_for_sibling_independence(self):
+        tasks = _VALID_TASKS.replace("**Depends on:** —", "**Depends on:** T002")
+        result = self._validate(tasks)
+        self.assertFalse(result.valid)
+        self.assertIn("must use literal '**Depends on:** —'", "\n".join(result.errors))
+
+    def test_dependency_cycle_is_rejected(self):
+        tasks = textwrap.dedent("""\
+            ---
+            artifact: tasks
+            level: 0
+            generated_at: 2026-06-16
+            planning_mode: intent
+            ---
+
+            # Tasks — Level 0
+
+            ## T001 — First task `[ ]`
+            **Files:** a.py
+            **Depends on:** T002
+            **Advances:** criterion #1
+            **Acceptance:** File a.py contains the first implementation.
+            **Complexity:** low
+
+            ## T002 — Second task `[ ]`
+            **Files:** b.py
+            **Depends on:** T001
+            **Advances:** criterion #2
+            **Acceptance:** File b.py contains the second implementation.
+            **Complexity:** low
+
+            ## Level 0 notes
+
+            **Criteria addressed this level:** #1, #2
+            **Criteria deferred to next level:** none
+            **Rationale:** Invalid cycle fixture.
+            **Termination outlook:** Invalid cycle fixture.
+        """)
+        result = self._validate(tasks)
+        self.assertFalse(result.valid)
+        self.assertIn("dependency graph must be acyclic", "\n".join(result.errors))
+
+    def test_orphan_task_referencing_nonexistent_criterion_is_rejected(self):
+        tasks = _VALID_TASKS.replace("**Advances:** criterion #1", "**Advances:** criterion #99")
+        result = self._validate(tasks)
+        self.assertFalse(result.valid)
+        errors = "\n".join(result.errors)
+        self.assertIn("orphaned", errors)
+        self.assertIn("nonexistent criterion #99", errors)
+
+
+# ---------------------------------------------------------------------------
 # TestCLI
 # ---------------------------------------------------------------------------
 
@@ -631,6 +768,57 @@ class TestCLI(unittest.TestCase):
         content = _VALID_LEDGER.replace("artifact: ledger\n", "")
         result = self._run_cli("validate-ledger", content=content)
         self.assertEqual(result.returncode, 1, msg=result.stdout)
+
+    def test_validate_tasks_valid_exits_0(self):
+        intent = _write_tmp(_VALID_QUICK_INTENT)
+        tasks = _write_tmp(_VALID_TASKS)
+        try:
+            result = subprocess.run(
+                [sys.executable, _SCHEMA_PY, "validate-tasks", str(intent), str(tasks)],
+                capture_output=True,
+                text=True,
+            )
+        finally:
+            intent.unlink(missing_ok=True)
+            tasks.unlink(missing_ok=True)
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("OK", result.stdout)
+
+    def test_validate_tasks_invalid_exits_1(self):
+        intent = _write_tmp(_VALID_QUICK_INTENT)
+        tasks = _write_tmp(_VALID_TASKS.replace(
+            "**Criteria deferred to next level:** #2",
+            "**Criteria deferred to next level:** none",
+        ))
+        try:
+            result = subprocess.run(
+                [sys.executable, _SCHEMA_PY, "validate-tasks", str(intent), str(tasks)],
+                capture_output=True,
+                text=True,
+            )
+        finally:
+            intent.unlink(missing_ok=True)
+            tasks.unlink(missing_ok=True)
+        self.assertEqual(result.returncode, 1, msg=result.stdout)
+        self.assertIn("ERROR: Criterion #2", result.stdout)
+
+    def test_validate_tasks_current_criteria_arg_limits_coverage(self):
+        intent = _write_tmp(_VALID_QUICK_INTENT)
+        tasks = _write_tmp(_VALID_TASKS.replace(
+            "**Criteria deferred to next level:** #2",
+            "**Criteria deferred to next level:** none",
+        ))
+        try:
+            result = subprocess.run(
+                [sys.executable, _SCHEMA_PY, "validate-tasks", str(intent), str(tasks), "#1"],
+                capture_output=True,
+                text=True,
+            )
+        finally:
+            intent.unlink(missing_ok=True)
+            tasks.unlink(missing_ok=True)
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("OK", result.stdout)
 
     def test_no_args_exits_2(self):
         result = subprocess.run(

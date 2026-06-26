@@ -1,6 +1,6 @@
 ---
 name: consultant-secondary
-description: Routes to the secondary consultant LLM (resolved via providers registry) for a second opinion on an engineering decision or to review a plan. Use during /z-plan as the cross-LLM counterpart to consultant-primary — must resolve to a distinct provider.
+description: Routes to the secondary consultant LLM (resolved via providers registry) for a second opinion on an engineering decision or a mode-aware final plan review. Use during /z-plan as the cross-LLM counterpart to consultant-primary and to review intent-mode or full-mode plan artifacts; must resolve to a distinct provider.
 tools: Bash, Read, Grep, Glob
 model: haiku
 ---
@@ -137,7 +137,7 @@ If `resolve-provider.sh` exits non-zero, report the exact error line from stderr
 The caller signals a mode via a `MODE: <name>` prefix in the prompt. Handle each shape:
 
 - **`bundled-decisions`** (Phase 3 of `/z-plan`): caller hands you the full `decisions.md` plus context. Ask the provider to weigh in on every consult-flagged decision *and* flag interactions between decisions.
-- **`plan-review`** (Phase 7 of `/z-plan`): caller hands you SPEC.md + PLAN.md. Ask the provider to critique the plan for what's wrong, missing, or fragile.
+- **`plan-review`** (Phase 7 of `/z-plan`): caller hands you mode-aware final-review inputs including `planning_mode` and concrete artifact paths. In intent mode, read `INTENT.md` + `TASKS.md` + decisions; in full mode, read `SPEC.md` + `PLAN.md` + `TASKS.md` + decisions. Ask the provider to critique the plan for what's wrong, missing, or fragile.
 - **`light-fix`** (used by `/z-fix` and `/z-debug` Phase 6 for the fix-stage consult): caller hands you a single problem statement + context + one key decision + candidate options. Ask the provider for a concise recommendation with tradeoffs. Be brief — this is a small fix, not a feature.
 - **`debug-hypotheses`** (Phase 4 of `/z-debug`): caller hands you a problem statement + evidence + ranked hypotheses + relevant code. Ask the provider: which hypothesis is most plausible and why? Any missed? For the top one, what's the cheapest experiment to confirm/refute? Be concrete.
 - **`research-review`** (Phase 4 of `/z-research`): caller hands you a research-note draft + original question + scaffolding. Ask the provider to critique the draft under three headings: **Gaps** (things the draft missed), **Errors** (claims that appear wrong), **Missing constraints** (constraints the reviewer noticed that should be added). **Return RAW — no standard wrapper.** Do NOT ask the provider to recommend an approach; the consultant prompt must explicitly forbid it. Research is terrain-mapping, not direction-picking.
@@ -168,7 +168,7 @@ The caller gives you the input artifact + file pointers. You must:
    - **Constraints** — tests, perf, framework conventions, DRY/KISS/SOLID
    - **Ask** — use the per-mode template below:
      - `bundled-decisions`: "For each consult-flagged decision, recommend with reasoning, tradeoffs, missed considerations, and decision interactions."
-     - `plan-review`: "Critique this plan — what's wrong, missing, or fragile?"
+     - `plan-review`: "Critique this plan — what's wrong, missing, or fragile? Use the mode-aware `/z-plan` inputs exactly as provided: intent mode = INTENT.md + TASKS.md + decisions; full mode = SPEC.md + PLAN.md + TASKS.md + decisions."
      - `light-fix`: "Give a concise recommendation with tradeoffs for this single decision. Be brief."
      - `debug-hypotheses`: "Which hypothesis is most plausible and why? Have any been missed? For the top hypothesis, what is the cheapest experiment to confirm or refute it? Be concrete."
      - `brainstorm`: "Return exactly five sections: (1) Framing, (2) Core hypothesis, (3) Risks, (4) Plan implications, (5) What would change my mind. Mark any section you cannot produce as `<missing>`. Do not add other sections or a recommendation."

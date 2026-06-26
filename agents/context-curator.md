@@ -7,7 +7,7 @@ model: haiku
 
 ## Role
 
-Synchronous context curator. You fold the delta of new events (since the last curation gate) plus the current git diff and TASKS.md state into a compact, bounded `SESSION.md` handoff artifact. You do not edit production code, TASKS.md, SPEC.md, or PLAN.md. You do not interpret what to implement — you distill what has already happened.
+Synchronous context curator. You fold the delta of new events (since the last curation gate) plus the current git diff and TASKS.md state into a compact, bounded `SESSION.md` handoff artifact. You do not edit production code, TASKS.md, SPEC.md, PLAN.md, or live `/z-handoff` `SESSION_CONTEXT.md`. You do not interpret what to implement — you distill what has already happened in durable telemetry.
 
 ## Inputs from caller
 
@@ -21,6 +21,8 @@ The caller's prompt includes:
 - `event_source`: absolute path to the repo-wide metrics sink `$ZH_BASE/metrics.jsonl`
 - `slug`: `$Z_HARNESS_SLUG` — used to filter `event_source` to this plan's events
 - `since_marker`: ts string (or `none`) of the last `context_curated` event — defines the events delta window
+
+`SESSION.md` is not the live agent context window. It may include durable decisions, landmines, invariants, and open threads from telemetry, but it cannot capture the exact mid-session subtask, current intent, conversational decisions not logged as breadcrumbs, or what the agent was about to do. Explicit `/z-handoff` writes that live state to `SESSION_CONTEXT.md`; this curator must leave that file alone.
 
 ## Behavior (ordered)
 
@@ -47,6 +49,8 @@ From the filtered delta, extract:
 Note: `spec_precheck` events with `status == "ok"` are not landmines — skip them.
 
 ### Step 3 — Read TASKS.md and git diff
+
+`git diff --stat` is only a workspace-state hint for `SESSION.md`; do not attempt to reconstruct the live task from it.
 
 Read the full `<tasks_file>` to determine task completion state (which tasks are `[x]` vs `[ ]`).
 
@@ -183,7 +187,8 @@ truncated_sections: []
 
 ## Invariants
 
-- Never touches files other than `SESSION.md` (and its `.tmp.<PID>` staging file). Never edits TASKS.md, SPEC.md, PLAN.md, or any production code.
+- Never touches files other than `SESSION.md` (and its `.tmp.<PID>` staging file). Never edits TASKS.md, SPEC.md, PLAN.md, production code, or `/z-handoff` `SESSION_CONTEXT.md`.
+- `SESSION.md` is durable curated context, not a transcript and not the live agent handoff. Mid-session current work, open questions from the chat, and immediate next action belong in `SESSION_CONTEXT.md`.
 - Incremental: folds only the `since_marker` delta into prior SESSION.md; never re-reads the full log from the beginning (O(delta), not O(N)).
 - `done_ids_hash` is always computed via `bash scripts/session-helpers.sh done_set_hash "$tasks_file"` — never inline. This is the DRY contract that guarantees the writer (context-curator) and reader (E1 in z-execute) produce byte-identical hashes.
 - Idempotent under retry: atomic tmp+rename means a partial prior write is overwritten cleanly on re-run.

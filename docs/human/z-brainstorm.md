@@ -1,19 +1,21 @@
 # z-brainstorm
 
-> Last updated: 2026-06-24
-> Covers source: skills/z-brainstorm/SKILL.md, agents/ideator-clusterer.md
+> Last updated: 2026-06-26
+> Covers source: skills/z-brainstorm/SKILL.md, skills/z-sharpen/SKILL.md, agents/ideator-clusterer.md
 
 ## Overview
 
-`/z-brainstorm` is cheap, opt-in pre-planning ideation. It produces `BRAINSTORM.md` as a seed for `/z-plan`; it does not produce SPEC/PLAN/TASKS. The pipeline derives a slug, initializes a run brief, sharpens the topic if no `GRILL.md` already exists, probes scope, builds shared scaffolding, dispatches vendor-diverse ideators, performs an anti-bias synthesis pass, and then enters a natural-language discussion loop where the user can ask questions, combine directions, request re-spins/refinements, restart, abandon, or lock in a choice.
+`/z-brainstorm` is cheap, opt-in pre-planning ideation. It produces `BRAINSTORM.md` as a seed for `/z-plan`; it does not produce SPEC/PLAN/TASKS. The pipeline derives a slug, initializes a run brief, runs Artifact Scout preflight, then Phase 0 runs the shared `z-sharpen` reusable inline component when no `GRILL.md` exists, parses natural-language ideator count, probes scope, builds shared scaffolding, dispatches vendor-diverse ideators, performs an anti-bias synthesis pass, and enters a natural-language discussion loop where the user can ask questions, combine directions, request re-spins/refinements, restart, abandon, or lock in a choice.
 
-Current Phase 0 behavior is intentionally conversational: if `GRILL.md` is absent, the orchestrator asks 1-2 short sharpening questions in prose and ends the turn. A reply of `skip` or `go` uses the raw topic unchanged; any other reply is synthesized into `GRILL.md`. This sharpening check is separate from the LIGHT/MEDIUM/HEAVY scope probe and from wide-mode count parsing.
+Current Phase 0 behavior is intentionally conversational but no longer a wrapper auto-invocation or a vague-topic heuristic. If `GRILL.md` is absent, `/z-brainstorm` references the shared `z-sharpen` component inline in its own orchestrator thread; the `/z-sharpen` slash-command wrapper is not invoked. A reply of `skip` or `go` uses the raw topic unchanged. A `proceed` recommendation is advisory context only, while `route_to_brainstorm` confirms this command should continue; neither result auto-dispatches another command.
 
 ## Key entry points
 
 - `skills/z-brainstorm/SKILL.md:26` — setup: derive slug, create run/archive dirs, emit `brainstorm_run_start`, initialize Run Brief, and handle existing `BRAINSTORM.md` overwrite/archive.
-- `skills/z-brainstorm/SKILL.md:84` — `0-sharpen`: if no `GRILL.md`, ask brief clarifying questions conversationally and write `GRILL.md` from the reply before continuing.
-- `skills/z-brainstorm/SKILL.md:145` — `0-count`: infer `WIDE_N` from natural-language count signals; default 3, prose-many default 6, cap 20 before later wide overflow caps.
+- `skills/z-brainstorm/SKILL.md:76` — Artifact Scout preflight — deterministic inventory plus optional scout classifier; warning-only findings never route.
+- `skills/z-brainstorm/SKILL.md:134` — Phase 0 shared sharpen + scope probe — sharpen runs before scope-probe and before Phase 1 scaffolding.
+- `skills/z-brainstorm/SKILL.md:138` — `0-sharpen` — if `GRILL.md` is absent, use the shared `z-sharpen` reusable component inline; do not invoke the `/z-sharpen` wrapper or auto-dispatch `/z-plan`.
+- `skills/z-brainstorm/SKILL.md:187` — `0-count`: infer `WIDE_N` from natural-language count signals; default 3, prose-many default 6, cap 20 before later wide overflow caps.
 - `skills/z-brainstorm/SKILL.md:483` — Phase 1 scaffolding: doc-fetcher synthesis, optional Explore, MAP.md or legacy terrain ingestion, GRILL.md seed, `input_hash`, and archived scaffolding checkpoint.
 - `skills/z-brainstorm/SKILL.md:586` — Phase 2 ideator dispatch: persona draw, three parallel ideators (Claude/general-purpose, Codex consultant-secondary, Gemini consultant-primary), five-section schema, and failure policy.
 - `skills/z-brainstorm/SKILL.md:693` — Phase 2c wide mode: resolves overflow model, presents a conversational cost gate and ends the turn, dispatches overflow re-spin waves after user confirmation, then clusters N framings.
@@ -26,7 +28,7 @@ Current Phase 0 behavior is intentionally conversational: if `GRILL.md` is absen
 ## How it interacts with others
 
 - `doc-fetcher` — Phase 1 uses docs before Explore so ideators share current, compact repo context.
-- `z-sharpen`/`GRILL.md` — prior or newly written sharpening context is included in scaffolding and in `input_hash`.
+- `z-sharpen`/`GRILL.md` — Phase 0 reuses the shared z-sharpen component when `GRILL.md` is absent; prior or newly written sharpening context is included in scaffolding and in `input_hash`.
 - `z-map`/`z-research` — MAP.md is the canonical terrain artifact; legacy RESEARCH.md is accepted only when it is terrain-like, not approach synthesis.
 - `scope-probe` and `scope-reconciler-brainstorm` — non-fast-path scope classification and HEAVY chunk reconciliation.
 - `personas-and-roles` — `brainstorm.personas` controls ideator persona draws; underflow slots run vanilla and are recorded as `<none>`.
@@ -35,9 +37,10 @@ Current Phase 0 behavior is intentionally conversational: if `GRILL.md` is absen
 
 ## Edge cases / gotchas
 
-- Phase 0 sharpening is not a specificity heuristic anymore: absent `GRILL.md` means ask 1-2 questions and end the turn.
+- Phase 0 sharpening is not a specificity heuristic or wrapper auto-invocation anymore: absent `GRILL.md` means run the shared component inline, possibly ask bounded questions, and end the turn before scope probe.
 - Phase 3 has a hard end-turn invariant: after writing `BRAINSTORM.md` and presenting the ranked briefing, no further tool call is allowed until the user replies.
 - Wide mode's cost gate is conversational, not `AskUserQuestion`; no ideators dispatch until the user replies yes/go/proceed or adjusts N.
+- A shared-component `proceed` recommendation does not launch `/z-plan`; it can be surfaced as advisory context, but `/z-brainstorm` either continues after the user's choice or stops at its own gates.
 - `cheap-mixed` overflow model is gated/no-op; it logs a warning and falls back to Haiku because Codex/Antigravity model override paths are not verified.
 - Wide overflow is capped at three overflow waves (maximum 9 total ideators); requests beyond the cap are explicitly reported to the user.
 - HEAVY abandon writes `chosen_framing: abandoned` and omits `chosen_pair`; successful HEAVY lock-in removes `chosen_framing` and writes `chosen_pair` atomically.

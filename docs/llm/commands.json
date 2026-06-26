@@ -1,6 +1,6 @@
 {
   "concept": "commands",
-  "last_updated": "2026-06-25",
+  "last_updated": "2026-06-26",
   "covers_spec": "none",
   "source_file": [
     "commands/z-amend.md",
@@ -13,7 +13,7 @@
     "commands/z-axiom-list.md",
     "commands/z-axiom-reject.md",
     "commands/z-axiom-scan.md",
-    "commands/z-brainstorm.md",
+    "skills/z-brainstorm/SKILL.md",
     "commands/z-context-budget.md",
     "commands/z-debt.md",
     "commands/z-debug.md",
@@ -36,18 +36,18 @@
     "commands/z-improve.md",
     "commands/z-init-docs.md",
     "commands/z-learn.md",
-    "commands/z-maintain-docs.md",
+    "skills/z-maintain-docs/SKILL.md",
     "commands/z-map.md",
     "commands/z-mr-review.md",
     "commands/z-overnight.md",
     "commands/z-personas.md",
     "commands/z-plan-split.md",
-    "commands/z-plan.md",
+    "skills/z-plan/SKILL.md",
     "commands/z-providers-discover.md",
     "commands/z-research.md",
     "commands/z-review-all.md",
     "commands/z-setup.md",
-    "commands/z-sharpen.md",
+    "skills/z-sharpen/SKILL.md",
     "commands/z-skill-fix.md",
     "commands/z-stats.md",
     "commands/z-style-init.md",
@@ -59,6 +59,7 @@
     "commands/z-where.md"
   ],
   "confidence": "high",
+  "summary": "Slash-command contract catalogue covering explicit routing, z-plan mode selection, z-brainstorm/z-sharpen pre-planning, implementation/review/docs workflows, handoff/resume, and docs maintenance through doc-updater rather than ad hoc index edits.",
   "entry_points": [
     {
       "file": "commands/z-amend.md",
@@ -131,11 +132,11 @@
       "summary": "Mine candidate axioms from z-harness interaction history via axiom-extractor agent; writes candidates to axiom store; --historical for full metrics.jsonl scan; never auto-approves."
     },
     {
-      "file": "commands/z-brainstorm.md",
+      "file": "skills/z-brainstorm/SKILL.md",
       "line": 1,
       "symbol": "z-brainstorm",
       "kind": "module",
-      "summary": "Cheap parallel ideation with conversational discussion/selection tail. Phase 0: sharpen-vs-skip gate (auto-invokes /z-sharpen inline if vague); NL count parse (WIDE_N, default 3); scope probe per_vendor/per_framing axis; wide×HEAVY suppression (D2). Phase 2a: 3 distinct ideator personas when brainstorm.personas ON. Phase 2c (WIDE_N>3): phased overflow waves + ideator-clusterer (Haiku). Phase 3: ranked prose briefing + HARD end-turn guardrail. Phase 4 LIGHT/MEDIUM: discussion loop (ask/combine/re-spin cap 3/lock-in/abandon; synthesized default chosen_framing). Phase 4 HEAVY: ranked-pair briefing + end-turn."
+      "summary": "Cheap ideation. Phase 0 uses shared z-sharpen component when GRILL.md absent; no wrapper invocation or auto-dispatch; writes BRAINSTORM.md and waits for user lock-in."
     },
     {
       "file": "commands/z-context-budget.md",
@@ -292,11 +293,11 @@
       "summary": "Interactive progressive-disclosure tutor. Four depth lenses; resumable .learn-pending.md staging; optional LEARN.md finalize. Standing navigation menu each turn. Ingests prior /z-explain context. Telemetry: learn_run_start / learn_turn / learn_finalized."
     },
     {
-      "file": "commands/z-maintain-docs.md",
+      "file": "skills/z-maintain-docs/SKILL.md",
       "line": 1,
       "symbol": "z-maintain-docs",
       "kind": "module",
-      "summary": "Refreshes stale concept docs (applies by default; --dry-run previews). --glossary flag also refreshes repo-root CONTEXT.md. Default path unchanged when --glossary is absent. Stops for confirmation only on genuine-risk signals (memories_lost mismatch, or audit reject/needs-review under --audit)."
+      "summary": "Intended path for refreshing human docs, concept JSON, and INDEX; doc-updater returns dry-run proposals, command owns writes and index update."
     },
     {
       "file": "commands/z-map.md",
@@ -334,11 +335,11 @@
       "summary": "Splits large work into one-level cluster plans. Active-plan registry lifecycle: registers in Setup, seeds scope, runs overlap scan, deregisters on completion or abort (FINALIZE_STATUS rule). Uses all_plan_slugs for collision detection."
     },
     {
-      "file": "commands/z-plan.md",
+      "file": "skills/z-plan/SKILL.md",
       "line": 1,
       "symbol": "z-plan",
       "kind": "module",
-      "summary": "Produces INTENT/TASKS (or legacy SPEC/PLAN/TASKS in full mode). Runs a hard pre-subagent /z-plan cost gate via pre-run-cost-gate.sh before any expensive Agent dispatch; supports bounded cost-reduction re-estimates, emits one terminal cost_gate_decision, and finalizes Run Brief before claim release/deregister on terminal cost-gate halts. Existing slug/claim/registry/freshness/consult behavior remains unchanged."
+      "summary": "Explicit mode gate before hard cost gate; writes INTENT+TASKS by default or SPEC/PLAN/TASKS with --full; post-artifact route checks and final handoff gate never auto-dispatch."
     },
     {
       "file": "commands/z-providers-discover.md",
@@ -369,11 +370,11 @@
       "summary": "Configuration cockpit: inspect resolved state (default), run guided concern-grouped wizard (--scope), or apply a posture preset (--posture). Delegates to scripts/setup.py. Seven wizard scopes: notifications, workflow, overnight, providers, personas, docs, memories."
     },
     {
-      "file": "commands/z-sharpen.md",
+      "file": "skills/z-sharpen/SKILL.md",
       "line": 1,
       "symbol": "z-sharpen",
       "kind": "module",
-      "summary": "Conversational bounded idea-sharpener. Probes, reframes, and converges a vague idea into a buildable problem statement; escalates to pin fuzzy dimensions only as needed (bounded — never full /z-grill exhaustiveness). Writes GRILL.md as precontext for /z-plan or /z-brainstorm; auto-invoked as /z-brainstorm Phase 0. Three events: sharpen_run_start, sharpen_convergence, sharpen_run_end."
+      "summary": "Reusable bounded sharpening component plus wrapper; returns proceed/sharpen_more/route_to_brainstorm, writes GRILL.md, advisory handoff only."
     },
     {
       "file": "commands/z-skill-fix.md",
@@ -462,7 +463,7 @@
     "Commands are Markdown procedure specs; planning, research, audit, and test commands do not write production code unless explicitly scoped to do so.",
     "Route checks collect deterministic signals first; planning-router is advisory only when deterministic signals conflict.",
     "Every route decision writes route-decision.md, emits plan_route_decision, asks the user, and never auto-executes the target command.",
-    "Primary routes are z-do, z-plan, z-plan-split, z-brainstorm, and z-research; contextual exits include z-audit-plan, z-fix, z-debug, z-amend, and z-maintain-docs.",
+    "Primary routes are z-do, z-plan, z-plan-split, z-brainstorm, and z-sharpen; contextual exits include z-audit-plan, z-fix, z-debug, z-amend, and z-maintain-docs.",
     "z-audit-plan is valid only with existing plan artifacts and remains read-only.",
     "Review-family commands preserve evidence separately and promote only actionable findings into task-shaped artifacts consumed by z-execute --tasks.",
     "z-execute preserves fresh-context implementation by delegating tasks to implementer and reviewer subagents.",
@@ -533,7 +534,11 @@
     "consult_skipped (z-plan) and no_consult_dispatch (z-execute) are distinct event kinds. consult_skipped carries {phase:3} or {phase:7}; no_consult_dispatch carries {id, reason, reviewer_replaced_by: self_review} per task-cycle.",
     "z-plan is a workflow.pre_run_cost_gate hard callsite before planning-router, intent-classifier, doc-fetcher, Explore, consultant panels, task-tree-generator, or any other expensive Agent dispatch.",
     "z-plan nonterminal cost-reduction attempts emit cost_gate_reestimate_attempt; exactly one terminal cost_gate_decision is emitted per run.",
-    "z-plan terminal cost-gate halt/abandon/interrupted paths finalize and render Run Brief before claim release and deregister."
+    "z-plan terminal cost-gate halt/abandon/interrupted paths finalize and render Run Brief before claim release and deregister.",
+    "Planning route checks and final handoff gates surface user choices and never auto-dispatch the recommended command.",
+    "/z-plan records explicit Intent-vs-Full SDD mode before hard cost gating; config/flags only preselect unless unattended/no-ask binds the recommendation.",
+    "/z-brainstorm uses the shared z-sharpen component when GRILL.md is absent; it does not invoke the /z-sharpen wrapper.",
+    "/z-maintain-docs plus doc-updater is the intended path for concept docs and INDEX updates; no ad hoc index-only surgery."
   ],
   "gotchas": [
     "[registry] z-plan Phase 0.0 ordering: register runs AFTER slug discovery, collision check, and resolver gate. Pre-validation register creates a zombie record with no deregister path.",
@@ -583,7 +588,10 @@
     "z-context-budget and z-evaluate both register/deregister in the active-plan registry even though they are read-only — this is advisory-only registration for visibility.",
     "z-review-all Phase 6.5 auto-amends ALL spec_gap findings unconditionally (blocker/major/minor); only implementation_drift is left as candidate fixup tasks. Phase 6.6 is skipped when both corrections and approach_concerns lists are empty.",
     "z-audit-plan auto_split path (source==none): INTENT-mode batches ALL spec_gap into a single /z-amend re-freeze, not per-finding. workflow.audit_to_amend is SOURCE-KEYED: stored value alone does not determine behavior; resolver source is the discriminator.",
-    "z-plan cost-reduction can only lower documented intent-depth/Phase-3 drivers and must re-run the hard gate; it does not mutate config or silently reduce doc_fetcher/explore/Phase-7/task-tree-generator dispatch."
+    "z-plan cost-reduction can only lower documented intent-depth/Phase-3 drivers and must re-run the hard gate; it does not mutate config or silently reduce doc_fetcher/explore/Phase-7/task-tree-generator dispatch.",
+    "A /z-sharpen or /z-brainstorm recommendation from planning-router or Phase 8.4 is a route gate result, not a command launch.",
+    "HANDOFF.md is written after TASKS in /z-plan and supports fresh-session audit/execute handoff; it is not the primary contract.",
+    "Do not patch docs/llm/INDEX.json by itself; update concept docs through /z-maintain-docs so human, LLM, and index tiers remain consistent."
   ],
   "memories": []
 }

@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """
-scripts/intent-schema.py — INTENT.md + LEDGER.md schema validation and
-acceptance-criterion lint helper.
+scripts/intent-schema.py — INTENT.md + LEDGER.md schema validation,
+acceptance-criterion lint helper, and TASKS.md sanity checks.
 
 CLI:
   python3 scripts/intent-schema.py validate-intent <path-to-INTENT.md>
   python3 scripts/intent-schema.py lint-criteria <path-to-INTENT.md>
   python3 scripts/intent-schema.py validate-ledger <path-to-LEDGER.md>
   python3 scripts/intent-schema.py freeze-intent <path-to-INTENT.md>
+  python3 scripts/intent-schema.py reopen-intent <path-to-INTENT.md>
   python3 scripts/intent-schema.py bootstrap-ledger <path-to-LEDGER.md> <intent_frozen_at> <slug>
   python3 scripts/intent-schema.py evaluate-acceptance <path-to-INTENT.md> <path-to-LEDGER.md> [<path-to-diff>]
+  python3 scripts/intent-schema.py validate-tasks <path-to-INTENT.md> <path-to-TASKS.md> [<#1,#3,...>]
 
 Exit codes:
   0 — valid / no lint failures / operation succeeded / overall verdict is "done"
@@ -19,7 +21,7 @@ Exit codes:
 
 Also callable as a Python module:
   from scripts.intent_schema import validate_intent, lint_criteria, validate_ledger
-  from scripts.intent_schema import freeze_intent, bootstrap_ledger, evaluate_acceptance
+  from scripts.intent_schema import freeze_intent, bootstrap_ledger, evaluate_acceptance, validate_tasks
 
 Level semantics (from SPEC.md):
   quick (L1)    — checklist required; not-doing + consider optional
@@ -582,6 +584,233 @@ class AcceptanceResult(NamedTuple):
     verdict: str         # done | continue
 
 
+
+# ---------------------------------------------------------------------------
+# validate_tasks — Phase 8 TASKS.md sanity helper
+# ---------------------------------------------------------------------------
+
+_CANONICAL_TASK_HEADING_RE = re.compile(r"^##\s+(T\d{3})\s+—\s+.+\s+`\[ \]`\s*$")
+_LOOSE_TASK_HEADING_RE = re.compile(r"^##\s+(T\d+)\b")
+_CRITERION_REF_RE = re.compile(r"#(\d+)")
+_TASK_REF_RE = re.compile(r"\bT\d{3}\b")
+
+
+class TaskBlock(NamedTuple):
+    task_id: str
+    heading_line: int
+    heading: str
+    body_lines: list[str]
+
+
+def _extract_criterion_refs(text: str) -> set[int]:
+    """Return positive criterion numbers referenced as #N."""
+    refs: set[int] = set()
+    for match in _CRITERION_REF_RE.finditer(text):
+        number = int(match.group(1))
+        if number > 0:
+            refs.add(number)
+    return refs
+
+
+def _parse_criteria_numbers(text: str) -> set[int]:
+    """Return positive criterion numbers from a loose CLI/list string."""
+    numbers: set[int] = set()
+    for match in re.finditer(r"\d+", text):
+        number = int(match.group(0))
+        if number > 0:
+            numbers.add(number)
+    return numbers
+
+
+def _extract_task_blocks(tasks_content: str) -> list[TaskBlock]:
+    """Extract level-2 task blocks from TASKS.md."""
+    blocks: list[TaskBlock] = []
+    current_id: str | None = None
+    current_line = 0
+    current_heading = ""
+    current_body: list[str] = []
+
+    for line_number, line in enumerate(tasks_content.splitlines(), start=1):
+        if line.startswith("## "):
+            if current_id is not None:
+                blocks.append(TaskBlock(current_id, current_line, current_heading, current_body))
+                current_id = None
+                current_body = []
+
+            loose = _LOOSE_TASK_HEADING_RE.match(line)
+            if loose:
+                current_id = loose.group(1)
+                current_line = line_number
+                current_heading = line
+                current_body = []
+            continue
+
+        if current_id is not None:
+            current_body.append(line)
+
+    if current_id is not None:
+        blocks.append(TaskBlock(current_id, current_line, current_heading, current_body))
+
+    return blocks
+
+
+def _task_field(block: TaskBlock, field_name: str) -> str | None:
+    """Return the stripped value for a task metadata line, if present."""
+    prefix = f"**{field_name}:**"
+    for line in block.body_lines:
+        stripped = line.strip()
+        if stripped.startswith(prefix):
+            return stripped[len(prefix):].strip()
+    return None
+
+
+def _extract_deferred_criteria(tasks_content: str) -> set[int]:
+    """Return criterion numbers listed in the Level notes deferral line."""
+    prefix = "**Criteria deferred to next level:**"
+    for line in tasks_content.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith(prefix):
+            continue
+        value = stripped[len(prefix):].strip()
+        if not value or value.lower() == "none":
+            return set()
+        return _extract_criterion_refs(value)
+    return set()
+
+
+def _find_dependency_cycle(graph: dict[str, set[str]]) -> list[str] | None:
+    """Return one dependency cycle if present."""
+    visiting: set[str] = set()
+    visited: set[str] = set()
+    stack: list[str] = []
+
+    def visit(node: str) -> list[str] | None:
+        if node in visiting:
+            start = stack.index(node)
+            return stack[start:] + [node]
+        if node in visited:
+            return None
+
+        visiting.add(node)
+        stack.append(node)
+        for dep in sorted(graph.get(node, set())):
+            cycle = visit(dep)
+            if cycle is not None:
+                return cycle
+        stack.pop()
+        visiting.remove(node)
+        visited.add(node)
+        return None
+
+    for node in sorted(graph):
+        cycle = visit(node)
+        if cycle is not None:
+            return cycle
+    return None
+
+
+def validate_tasks(
+    intent_path: Path,
+    tasks_path: Path,
+    current_criteria: set[int] | None = None,
+) -> ValidationResult:
+    """Validate a current-level TASKS.md batch against INTENT acceptance criteria.
+
+    The helper is intentionally lightweight and static. It checks the Phase 8
+    invariants that make the generated level safe to hand to `/z-execute`:
+    every current criterion is advanced or explicitly deferred, every task uses
+    canonical pending status, siblings have no intra-level dependencies, any
+    declared dependency graph is acyclic, and no task is orphaned from the
+    current acceptance set.
+    """
+    errors: list[str] = []
+
+    try:
+        intent_content = intent_path.read_text(encoding="utf-8")
+        tasks_content = tasks_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return ValidationResult(False, [f"File read error: {exc}"])
+
+    _fm, intent_body = _parse_frontmatter(intent_content)
+    criteria = _extract_checklist_items(intent_body)
+    if not criteria:
+        errors.append("INTENT.md has no acceptance checklist items")
+
+    all_criteria = set(range(1, len(criteria) + 1))
+    target_criteria = set(current_criteria) if current_criteria is not None else all_criteria
+    for number in sorted(target_criteria):
+        if number not in all_criteria:
+            errors.append(f"Current criterion #{number} does not exist in INTENT.md")
+
+    blocks = _extract_task_blocks(tasks_content)
+    if not blocks:
+        errors.append("TASKS.md contains no task blocks")
+
+    task_ids = [block.task_id for block in blocks]
+    duplicate_ids = sorted({task_id for task_id in task_ids if task_ids.count(task_id) > 1})
+    for task_id in duplicate_ids:
+        errors.append(f"Duplicate task id: {task_id}")
+
+    task_id_set = set(task_ids)
+    dependency_graph: dict[str, set[str]] = {task_id: set() for task_id in task_id_set}
+    advanced_criteria: set[int] = set()
+
+    for block in blocks:
+        if not _CANONICAL_TASK_HEADING_RE.match(block.heading):
+            errors.append(
+                f"Task {block.task_id} heading must be '## TNNN — <title> `[ ]`' "
+                f"with canonical pending status (line {block.heading_line})"
+            )
+
+        depends_on = _task_field(block, "Depends on")
+        if depends_on != "—":
+            errors.append(f"Task {block.task_id} must use literal '**Depends on:** —'")
+            if depends_on:
+                dependency_graph.setdefault(block.task_id, set()).update(
+                    ref for ref in _TASK_REF_RE.findall(depends_on) if ref in task_id_set
+                )
+
+        advances = _task_field(block, "Advances")
+        if advances is None:
+            errors.append(f"Task {block.task_id} is orphaned: missing '**Advances:**' line")
+            continue
+
+        refs = _extract_criterion_refs(advances)
+        if not refs:
+            errors.append(f"Task {block.task_id} is orphaned: '**Advances:**' names no criterion")
+            continue
+
+        valid_current_refs = refs & target_criteria
+        if not valid_current_refs:
+            errors.append(
+                f"Task {block.task_id} is orphaned: '**Advances:**' references no current criterion"
+            )
+
+        for ref in sorted(refs):
+            if ref not in all_criteria:
+                errors.append(f"Task {block.task_id} references nonexistent criterion #{ref}")
+            elif ref not in target_criteria:
+                errors.append(f"Task {block.task_id} references non-current criterion #{ref}")
+
+        advanced_criteria.update(valid_current_refs)
+
+    cycle = _find_dependency_cycle(dependency_graph)
+    if cycle is not None:
+        errors.append(f"TASKS.md dependency graph must be acyclic: {' -> '.join(cycle)}")
+
+    deferred_criteria = _extract_deferred_criteria(tasks_content)
+    for ref in sorted(deferred_criteria):
+        if ref not in all_criteria:
+            errors.append(f"Deferred criterion #{ref} does not exist in INTENT.md")
+        elif ref not in target_criteria:
+            errors.append(f"Deferred criterion #{ref} is not a current-level criterion")
+
+    covered = advanced_criteria | (deferred_criteria & target_criteria)
+    for ref in sorted(target_criteria - covered):
+        errors.append(f"Criterion #{ref} is neither advanced by a task nor explicitly deferred")
+
+    return ValidationResult(len(errors) == 0, errors)
+
 def _extract_checklist_items(body: str) -> list[str]:
     """Return checklist item texts from the ## Acceptance checklist section.
 
@@ -711,7 +940,8 @@ def _main(argv: list[str]) -> int:
             "  freeze-intent   <INTENT.md>                                    — stamp frozen_at (idempotent; prints ISO on stdout)\n"
             "  reopen-intent   <INTENT.md>                                    — set frozen_at to pending (re-open frozen contract; idempotent)\n"
             "  bootstrap-ledger <LEDGER.md> <frozen_at> <slug>               — create LEDGER.md if absent (idempotent)\n"
-            "  evaluate-acceptance <INTENT.md> <LEDGER.md> [<diff-file>]     — per-criterion met|unmet|unknown + done|continue verdict",
+            "  evaluate-acceptance <INTENT.md> <LEDGER.md> [<diff-file>]     — per-criterion met|unmet|unknown + done|continue verdict\n"
+            "  validate-tasks <INTENT.md> <TASKS.md> [<#1,#3,...>]            — Phase 8 TASKS.md sanity checks",
             file=sys.stderr,
         )
         return 2
@@ -786,6 +1016,25 @@ def _main(argv: list[str]) -> int:
         else:
             print(f"EXISTS: {file_path}")
         return 0
+
+    if cmd == "validate-tasks":
+        # argv: validate-tasks <INTENT.md> <TASKS.md> [<#1,#3,...>]
+        if len(argv) < 4:
+            print(
+                "Usage: intent-schema.py validate-tasks <INTENT.md> <TASKS.md> [<#1,#3,...>]",
+                file=sys.stderr,
+            )
+            return 2
+        intent_file = file_path          # argv[2]
+        tasks_file = Path(argv[3])
+        current_criteria = _parse_criteria_numbers(argv[4]) if len(argv) >= 5 else None
+        result = validate_tasks(intent_file, tasks_file, current_criteria=current_criteria)
+        if result.valid:
+            print("OK")
+            return 0
+        for err in result.errors:
+            print(f"ERROR: {err}")
+        return 1
 
     if cmd == "evaluate-acceptance":
         # argv: evaluate-acceptance <INTENT.md> <LEDGER.md> [<diff-file>]

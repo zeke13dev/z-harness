@@ -10,7 +10,7 @@ driver_features_required:
 unsupported_driver_behavior: explicit_gate
 ---
 
-You are running **z-harness `/z-maintain-docs`**. Goal: keep `docs/human/` and `docs/llm/` in sync with the current state of the code.
+You are running **z-harness `/z-maintain-docs`**. Goal: keep `docs/human/`, `docs/llm/*.json`, and `docs/llm/INDEX.json` in sync with the current state of the code through the generated docs-maintenance workflow, not ad hoc index edits.
 
 This command **applies refreshed docs by default** — routine updates are written without asking. Pass `--dry-run` to preview the diffs without writing anything. It stops for a targeted per-concept confirmation only when a genuine-risk signal fires (a `memories_lost` mismatch, or — under `--audit` — a doc the consultants flagged as inaccurate or disputed). For scoped refresh, pass `--scope <concept-slug>`. Pass `--glossary` to additionally refresh the `CONTEXT.md` domain-language glossary (user-initiated; see Phase 1.5). Pass `--audit` to additionally run cross-LLM verification on each proposed doc update (recommended when you don't fully trust the `doc-updater`'s output).
 
@@ -120,14 +120,14 @@ for slug in stale_concepts:
         baseline_memories[slug] = 0
 ```
 
-For each stale concept, spawn a `doc-updater` subagent. **Always pass `mode: dry-run`** — the updater returns proposed text but writes nothing. This command owns all writes (Phase 4) in both apply and `--dry-run` mode, so it can inspect the risk signals (`memories_lost`, audit verdicts) and gate before anything lands on disk.
+For each stale concept, spawn a `doc-updater` subagent. **Always pass `mode: dry-run`** — the updater returns proposed text but writes nothing. This command owns all writes (Phase 4) in both apply and `--dry-run` mode, so it can inspect the risk signals (`memories_lost`, audit verdicts) and gate before anything lands on disk. The updater must return enough concept JSON metadata for this command to update `docs/llm/INDEX.json`; the updater must not edit the index directly.
 
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The doc-updater refreshes per-concept docs; drivers that skip it should warn the user that docs refresh is unavailable. -->
 ```
 Agent(
   subagent_type="doc-updater",
   description="Refresh docs for <concept>",
-  prompt="concept: <slug>\nhuman_path: docs/human/<slug>.md\nllm_path: docs/llm/<slug>.json\nsource_files: <paths from INDEX.json>\nreason: <stale|drift|spec_change>\nmode: <dry-run|write>\nrepo_root: <abs path>\ndedup_tags: true"
+  prompt="concept: <slug>\nhuman_path: docs/human/<slug>.md\nllm_path: docs/llm/<slug>.json\nsource_files: <paths from INDEX.json>\nreason: <stale|drift|spec_change>\nmode: dry-run\nrepo_root: <abs path>\ndedup_tags: true"
 )
 ```
 
@@ -313,7 +313,7 @@ Do not prompt per collision. The user acts on them later if they care; tags are 
 
 The **apply set** = every `clean` concept, plus every `flagged` concept the user chose **Apply anyway** in Phase 3. `deferred` (not_enough_info) and user-skipped concepts are excluded.
 
-**Default mode:** for each concept in the apply set, write the proposed `human_path` and `llm_path` files. Update `docs/llm/INDEX.json` with the new `last_updated`, `confidence`, `depends_on`, `consumed_by`, `summary` fields.
+**Default mode:** for each concept in the apply set, write the proposed `human_path` and `llm_path` files. Then update `docs/llm/INDEX.json` from the accepted concept JSON's `last_updated`, `confidence`, `depends_on`, `consumed_by`, and `summary` fields. This Phase 4 generated update is the intended index-maintenance path; do not hand-edit INDEX independently or patch only the index without the matching concept files.
 
 **`--dry-run` mode:** write nothing. The presented diffs + the `proposed/` archive are the deliverable; tell the user to re-run without `--dry-run` to apply.
 
@@ -358,6 +358,7 @@ If the script exits non-zero, surface the error to the user and halt (do not pro
 
 - **Default = apply.** Routine (`clean`) concepts are written without asking. Pass `--dry-run` to preview without writing. Only `flagged` concepts (`memories_lost`, or audit `rejected`/`needs review` under `--audit`) require per-concept confirmation before writing. The `--glossary` path follows the same apply-by-default posture.
 - **Never modify code files.** This command only touches `docs/` and (with `--glossary`) `CONTEXT.md`.
+- **No ad hoc index surgery.** `docs/llm/INDEX.json` changes only in Phase 4 from accepted doc-updater output, together with the matching human + LLM concept files.
 - **Atomic per-concept writes.** A concept's human + LLM tiers update together or not at all (don't leave them out of sync).
 - **Preserve git history.** Write to existing paths; don't create _v2 files.
 - **Glossary is additive.** The `--glossary` refresh never removes existing `### <Term>` entries — only adds new ones or updates definitions. User-authored terms are preserved.

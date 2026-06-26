@@ -33,11 +33,11 @@ The `/z-plan` spine is ordered so every expensive action is gated, every artifac
 4. **Pre-subagent cost gate (hard)** — runs after the mode gate has fixed the cost shape and before any expensive Agent dispatch.
 5. **Post-gate classifiers** — artifact-scout classifier, deferred planning-router, intent classifier/depth announcement.
 6. **Phases 0–5** — premise, exploration, decisions, user approval, and consulted design convergence.
-7. **Phase 6** — write the primary planning artifact: `INTENT.md` in intent mode, or `SPEC.md` + `PLAN.md` in full SDD mode.
-8. **Phase 7** — bundled final review. T001 owns only the ordering hook; later mode-aware prompt details belong to the Phase 7 task.
-9. **Phase 8** — write `TASKS.md`: task-tree-generator for intent mode, hand-authored legacy tasks for full mode.
+7. **Phase 6** — write the primary planning artifact: `INTENT.md` in intent mode, or `SPEC.md` + `PLAN.md` + initial legacy `TASKS.md` in full SDD mode.
+8. **Phase 7** — bundled final review after the initial task plan exists: intent mode generates missing initial `TASKS.md` with `task-tree-generator`; full mode requires the legacy `TASKS.md` path before review.
+9. **Phase 8** — validate/checkpoint/finalize `TASKS.md`: intent-mode sanity, legacy complexity stamps, scope seed, and workstreams.
 10. **Phase 8.4** — post-artifact route checks after the artifacts exist; may recommend `/z-plan-split`, `/z-sharpen`, or `/z-brainstorm`, but never auto-dispatch.
-11. **Phase 8.5** — handoff context producer. T001 keeps the thin existing handoff contract in place; the later handoff task owns the richer producer.
+11. **Phase 8.5** — handoff context producer. Writes rich `HANDOFF.md`, calls `scripts/write-handoff.sh`, validates/logs `handoff.json`, and stays before Phase 8.6.
 12. **Phase 8.6** — final user handoff gate: fresh-session implementation, audit-first, stop with handoff, or amend.
 13. **Phase 9** — finalize run brief, release claim, deregister.
 
@@ -378,7 +378,7 @@ The post-gate classifier consumes the inline JSON printed by this command and ar
 <!-- PLAN_ROUTE_CHECK_START -->
 ## Plan Route Check
 
-Run this route check after Setup step 10's precontext/docs gates and before Phase 1 dispatch, then run it again after Phase 5 approval if the decisions or estimated task shape make split risk clear, and once more in **Phase 8.4** after `INTENT.md`/`SPEC.md`/`PLAN.md` and `TASKS.md` exist. Use only already-known signals: `candidate_files`, `expected_tasks`, `non_obvious_decisions`, `cluster_seams`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `terrain_uncertain`, `approach_uncertain`, `has_bug_diagnosis`, `has_unknown_bug_symptom`, `has_existing_plan`, `plan_validation_intent`, `question_heavy_artifacts`, `artifact_unsettled_approach`, `post_artifact_check`, and artifact existence.
+Run this route check after Setup step 10's precontext/docs gates and before Phase 1 dispatch, then run it again after Phase 5 approval if the decisions or estimated task shape make split risk clear, and once more in **Phase 8.4** after `INTENT.md`/`SPEC.md`/`PLAN.md` and `TASKS.md` exist. Use only already-known signals: `candidate_files`, `expected_tasks`, `non_obvious_decisions`, `cluster_seams`, `cross_module`, `schema_or_persistence`, `public_api_or_wire_format`, `terrain_uncertain`, `approach_uncertain`, `asks_what_should_we_do`, `alternatives_unsettled`, `architecture_decision`, `reversibility_uncertain`, `has_bug_diagnosis`, `has_unknown_bug_symptom`, `has_existing_plan`, `plan_validation_intent`, `question_heavy_artifacts`, `artifact_unsettled_approach`, `post_artifact_check`, and artifact existence.
 
 Deterministic routes:
 - Route tiny implementation-only work (`candidate_files <= 3`, no non-obvious decisions, no cross-module/schema/public surface impact) to `/z-do`.
@@ -565,15 +565,16 @@ elif [[ -n "${Z_HARNESS_NO_ASK:-}" ]]; then
   esac
   PLANNING_MODE_REASON="unattended/no-ask config default from workflow.planning_mode or CLI flag"
 else
-  PLANNING_MODE_ANSWER="$(AskUserQuestion "Choose planning mode for this /z-plan run before cost estimation:" \
-    ["Intent mode — adaptive INTENT.md + initial TASKS.md (recommended: ${PLANNING_MODE_RECOMMENDED})", \
-     "Full SDD mode — SPEC.md + PLAN.md + TASKS.md"])"
-  # Capture the visible answer first, then map it to the only values the rest
-  # of the pipeline may consume.
-  case "$PLANNING_MODE_ANSWER" in
-    "Intent mode"*) PLANNING_MODE_CHOICE="intent"; PLANNING_MODE="intent" ;;
-    "Full SDD mode"*) PLANNING_MODE_CHOICE="full"; PLANNING_MODE="full" ;;
-    *) echo "invalid planning mode answer: $PLANNING_MODE_ANSWER" >&2; exit 1 ;;
+  PLANNING_MODE_CHOICE="$(AskUserQuestion "Choose planning mode for this /z-plan run before cost estimation:" \
+    ["intent — Intent mode: adaptive INTENT.md + initial TASKS.md (recommended: ${PLANNING_MODE_RECOMMENDED})", \
+     "full — Full SDD mode: SPEC.md + PLAN.md + TASKS.md"])"
+  # Capture the visible answer into PLANNING_MODE_CHOICE first, normalize the
+  # machine token before the em dash, then map it to PLANNING_MODE.
+  PLANNING_MODE_CHOICE="${PLANNING_MODE_CHOICE%% — *}"
+  case "$PLANNING_MODE_CHOICE" in
+    intent) PLANNING_MODE="intent" ;;
+    full) PLANNING_MODE="full" ;;
+    *) echo "invalid planning mode choice: $PLANNING_MODE_CHOICE" >&2; exit 1 ;;
   esac
   PLANNING_MODE_SOURCE="user"
   PLANNING_MODE_REASON="explicit mode gate"
@@ -592,7 +593,7 @@ The `planning_mode_chosen` event is mandatory and is emitted exactly once per ru
 
 ## Pre-subagent cost gate (hard)
 
-This gate runs after the cheap setup, claim/register, freshness checks, deterministic route preflight, and the **explicit planning mode gate** above. It runs **before every expensive subagent**: `planning-router` (when deferred), `intent-classifier`, Phase 1 `doc-fetcher`, Phase 1 Explore, Phase 3 / Phase 7 consultant panels, Phase 8 `task-tree-generator`, and any other Agent dispatch.
+This gate runs after the cheap setup, claim/register, freshness checks, deterministic route preflight, and the **explicit planning mode gate** above. It runs **before every expensive subagent**: `planning-router` (when deferred), `intent-classifier`, Phase 1 `doc-fetcher`, Phase 1 Explore, Phase 3 / Phase 7 consultant panels, the Phase 7 pre-dispatch `task-tree-generator` guard, and any other Agent dispatch.
 
 `workflow.pre_run_cost_gate` remains the single disposition authority: `/z-plan` must call `scripts/pre-run-cost-gate.sh`, and that helper delegates the disposition to `scripts/config.py`. Do not read `cost.token_budget` here and do not reimplement the budget comparison in the skill.
 
@@ -1401,7 +1402,7 @@ export INTENT_LEVEL INTENT_LEVEL_SOURCE INTENT_CONSULT_POLICY ZPLAN_COST_APPROVE
 ```
 
 **After mode detection, all downstream phases read `PLANNING_MODE` and `INTENT_LEVEL`:**
-- `PLANNING_MODE=intent` with a set `INTENT_LEVEL` → intent path; Phase 6 writes INTENT.md, Phase 8 dispatches `task-tree-generator` to produce the initial level-0 `TASKS.md`.
+- `PLANNING_MODE=intent` with a set `INTENT_LEVEL` → intent path; Phase 6 writes INTENT.md, and the Phase 7 pre-dispatch guard generates the initial level-0 `TASKS.md` before reviewer prompts render `tasks_path`.
 - `PLANNING_MODE=full` or `INTENT_LEVEL=""` → legacy path; all phases run as documented.
 - SPEC.md detected in slug dir → `PLANNING_MODE` forced to `full` by the backward-compat guard above (Invariant 4); legacy path runs as if `--full` was passed.
 
@@ -1996,7 +1997,7 @@ For each shortcut record, handle the three `SURFACE_RC` cases explicitly (per th
 
 Default to the robust alternative if the user does not approve. Block until all design decisions and all shortcut records are answered.
 
-## Phase 6 — Write SPEC.md and PLAN.md (legacy) / INTENT.md (intent-mode)
+## Phase 6 — Write SPEC.md / PLAN.md / TASKS.md (legacy) / INTENT.md (intent-mode)
 
 ```bash
 if [[ "$PLANNING_MODE" == "intent" ]]; then
@@ -2149,10 +2150,12 @@ Include only rows for artifacts that were actually present. If none were present
 
 Create `$Z_HARNESS_PLAN_DIR/PLAN.md` — approved plan: goals, decisions (with rationale), non-goals, approved shortcuts, ordered phases.
 
-Both obey **DRY / KISS / SOLID**. State explicitly how the plan respects each.
+Create the initial legacy `$Z_HARNESS_PLAN_DIR/TASKS.md` in the same full-mode branch, before Phase 7. Break PLAN.md into small, independently-implementable tasks. Each task uses a `T001`-style ID, title, files touched, dependencies, acceptance criteria, and status `[ ]`. Size so each fits a fresh context window, target **10–20 tasks**, and preserve the remote-verify/docs-touched flags described in Phase 8 for any applicable task.
+
+SPEC.md and PLAN.md obey **DRY / KISS / SOLID**. State explicitly how the plan respects each. TASKS.md is the executable task contract that Phase 7 reviews and Phase 8 checkpoints.
 
 ```bash
-fi  # end of Phase 6 if/else: intent-mode (INTENT.md writer) vs legacy (SPEC/PLAN writer)
+fi  # end of Phase 6 if/else: intent-mode (INTENT.md writer) vs legacy (SPEC/PLAN/TASKS writer)
 ```
 
 ## Phase 7 — Bundled final review
@@ -2161,6 +2164,111 @@ fi  # end of Phase 6 if/else: intent-mode (INTENT.md writer) vs legacy (SPEC/PLA
      requirement to the user and skip all Phase 7 consultant Agent() calls.
      Document the gap in the archive and proceed to Phase 8 without final
      review input. -->
+
+**Pre-dispatch TASKS existence/generation guard.** Phase 7 reviews the primary artifact plus the initial task plan, so the guard below runs before the consult-off branch, persona binding, prompt rendering, or any Phase 7 Agent dispatch. It guarantees the task plan exists and is not an amended-intent stale batch: Phase 8 still owns TASKS sanity, complexity/checkpoint work, scope seeding, workstreams, and handoff sequencing.
+
+```bash
+PHASE7_TASKS_PATH="$Z_HARNESS_PLAN_DIR/TASKS.md"
+PHASE7_TASKS_STALE_REASON="$(python3 -c '
+import re, sys
+path = sys.argv[1]
+try:
+    text = open(path, encoding="utf-8").read()
+except OSError:
+    print("")
+    raise SystemExit
+m = re.search(r"^stale_reason:\s*(.+?)\s*$", text, re.M)
+print(m.group(1).strip() if m else "")
+' "$PHASE7_TASKS_PATH" 2>/dev/null || echo "")"
+if [[ ! -f "$PHASE7_TASKS_PATH" || "$PHASE7_TASKS_STALE_REASON" == "amended-intent" ]]; then
+  if [[ "$PLANNING_MODE" == "intent" ]]; then
+    if [[ ! -f "$Z_HARNESS_PLAN_DIR/INTENT.md" ]]; then
+      echo "ERROR: intent-mode Phase 7 cannot generate TASKS.md before INTENT.md exists." >&2
+      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_halt \
+        '{"reason":"intent_missing_before_phase7_tasks"}' 2>/dev/null || true
+      RB_HALT_REASON="intent artifact missing before Phase 7 TASKS guard"
+      # include: _fragments/run-brief-halt-finalize-plan.md
+      FINALIZE_STATUS=aborted
+      python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+        --run-id "$RUN" --status aborted 2>/dev/null || true
+      exit 1
+    fi
+
+    LEVEL_TASKS_FILE="$PHASE7_TASKS_PATH"
+    LEDGER_FILE="$Z_HARNESS_PLAN_DIR/LEDGER.md"
+
+    UNMET_CRITERIA_JSON="$(python3 -c "
+import re, sys, json
+content = open(sys.argv[1]).read()
+m = re.search(r'## Acceptance checklist(.*?)(?=\n## |\Z)', content, re.S)
+section = m.group(1) if m else ''
+items = re.findall(r'- \[ \] (.+)', section)
+print(json.dumps(items))
+" "$Z_HARNESS_PLAN_DIR/INTENT.md" 2>/dev/null || echo '[]')"
+
+    INTENT_BFS_LEVEL_CAP="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" \
+      get workflow.intent_bfs_level_cap 2>/dev/null || echo "")"
+    if [ -z "$INTENT_BFS_LEVEL_CAP" ] || [ "$INTENT_BFS_LEVEL_CAP" = "None" ]; then
+      INTENT_BFS_LEVEL_CAP=6
+    fi
+
+    INTENT_TOKEN_BUDGET="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py" \
+      get cost.token_budget 2>/dev/null || echo "")"
+    [ "$INTENT_TOKEN_BUDGET" = "None" ] && INTENT_TOKEN_BUDGET=""
+
+    # <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface that intent-mode `/z-plan`
+    #      requires `task-tree-generator` to create TASKS.md before Phase 7 review. Silent omission
+    #      is forbidden; if the driver cannot dispatch subagents, halt with `plan_halt` rather than
+    #      continuing to Phase 7 with a nonexistent tasks_path. -->
+    GENERATOR_RETURN="$(Agent(
+      subagent_type="task-tree-generator",
+      description="Generate initial BFS level 0 task batch",
+      prompt="intent_snapshot_path: ${Z_HARNESS_PLAN_DIR}/INTENT.md
+ledger_path: ${LEDGER_FILE}
+level: 0
+unmet_criteria: ${UNMET_CRITERIA_JSON}
+prior_level_outcomes: none
+tasks_output_path: ${LEVEL_TASKS_FILE}
+plan_dir: ${Z_HARNESS_PLAN_DIR}
+level_cap: ${INTENT_BFS_LEVEL_CAP}
+budget_tokens_remaining: ${INTENT_TOKEN_BUDGET:-}
+task_id_start: 1"
+    ))"
+
+    GENERATOR_STATUS="$(printf '%s' "$GENERATOR_RETURN" | grep '^STATUS:' | head -1 | awk '{print $2}')"
+    GENERATOR_TASKS_COUNT="$(printf '%s' "$GENERATOR_RETURN" | grep '^TASKS_WRITTEN:' | head -1 | awk '{print $2}')"
+    GENERATOR_TERMINATION="$(printf '%s' "$GENERATOR_RETURN" | grep '^TERMINATION_CONDITION:' | head -1 | awk '{print $2}')"
+
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" intent_initial_tasks_generated \
+      "$(printf '{"slug":"%s","status":"%s","tasks_written":%s,"termination_condition":"%s","path":"%s","phase":"phase7_pre_dispatch"}' \
+        "$Z_HARNESS_SLUG" "${GENERATOR_STATUS:-unknown}" "${GENERATOR_TASKS_COUNT:-0}" \
+        "${GENERATOR_TERMINATION:-unknown}" "$LEVEL_TASKS_FILE")" 2>/dev/null || true
+
+    if [ "${GENERATOR_STATUS:-}" = "unable_to_complete" ] || [ "${GENERATOR_STATUS:-}" = "termination_guard" ] || [ ! -f "$LEVEL_TASKS_FILE" ]; then
+      echo "ERROR: task-tree-generator did not produce initial TASKS.md before Phase 7 review." >&2
+      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_halt \
+        "$(printf '{"reason":"phase7_intent_initial_tasks_failed","generator_status":"%s","termination_condition":"%s"}' \
+          "${GENERATOR_STATUS:-unknown}" "${GENERATOR_TERMINATION:-unknown}")" 2>/dev/null || true
+      RB_HALT_REASON="intent initial task generation failed before Phase 7"
+      # include: _fragments/run-brief-halt-finalize-plan.md
+      FINALIZE_STATUS=aborted
+      python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+        --run-id "$RUN" --status aborted 2>/dev/null || true
+      exit 1
+    fi
+  else
+    echo "ERROR: full-mode Phase 7 requires $PHASE7_TASKS_PATH to exist before final review." >&2
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_halt \
+      "$(printf '{"reason":"full_mode_tasks_missing_before_phase7","path":"%s"}' "$PHASE7_TASKS_PATH")" 2>/dev/null || true
+    RB_HALT_REASON="full-mode TASKS.md missing before Phase 7 review"
+    # include: _fragments/run-brief-halt-finalize-plan.md
+    FINALIZE_STATUS=aborted
+    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+      --run-id "$RUN" --status aborted 2>/dev/null || true
+    exit 1
+  fi
+fi
+```
 
 **Consult-off guard.** Before spawning any consultant, check the runtime signal:
 
@@ -2237,88 +2345,104 @@ for ARM in gemini claude-sonnet grok composer codex-5.5; do
 done
 ```
 
-Spawn all 5 panel members in parallel, each handed the full SPEC.md + PLAN.md. Include `kernel_path: <KERNEL_PATH>` in each `Agent(prompt=...)` when `KERNEL_PATH` is non-empty (resolved in Setup). All 5 arms receive: "Critique this plan. What's wrong, missing, or fragile?" Prepend the arm's Phase 7 persona body to the prompt when available — empty string when vanilla. Cursor arms pass their model via `--model <model>`:
+**Phase 7 mode-aware input contract.** The final-review prompt always includes decisions and the task plan, but the primary planning artifact depends on `PLANNING_MODE`. This block is a runtime-expanded prompt payload, not a placeholder mapping. Every Phase 7 Agent prompt (5-panel and 2-consultant fallback) MUST include `planning_mode: $PLANNING_MODE` plus exactly one concrete artifact set:
 
-- `Agent(subagent_type="agy", description="Phase 7 final review — gemini arm", prompt="<P7_GEMINI_PREFIX>Critique this plan...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
-- `Agent(subagent_type="cursor", model="claude-4.6-sonnet", description="Phase 7 final review — claude-sonnet arm", prompt="<P7_SONNET_PREFIX>Critique this plan...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
-- `Agent(subagent_type="cursor", model="grok-4.3", description="Phase 7 final review — grok arm", prompt="<P7_GROK_PREFIX>Critique this plan...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
-- `Agent(subagent_type="cursor", model="composer-2.5", description="Phase 7 final review — composer arm", prompt="<P7_COMPOSER_PREFIX>Critique this plan...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
-- `Agent(subagent_type="codex-cli", description="Phase 7 final review — codex-5.5 arm", prompt="<P7_CODEX_PREFIX>Critique this plan...\n[kernel_path: <KERNEL_PATH>  ← omit when KERNEL_PATH is empty]")`
+- **Intent mode:** pass `INTENT.md` + `TASKS.md` + decisions. Do **not** ask for or synthesize `SPEC.md`/`PLAN.md` in intent mode.
+  ```text
+  planning_mode: $PLANNING_MODE
+  intent_path: $Z_HARNESS_PLAN_DIR/INTENT.md
+  tasks_path: $Z_HARNESS_PLAN_DIR/TASKS.md
+  decisions_path: $Z_HARNESS_PLAN_DIR/archive/$RUN/phase3-decisions-final.md
+  ```
+- **Full mode:** pass `SPEC.md` + `PLAN.md` + `TASKS.md` + decisions.
+  ```text
+  planning_mode: $PLANNING_MODE
+  spec_path: $Z_HARNESS_PLAN_DIR/SPEC.md
+  plan_path: $Z_HARNESS_PLAN_DIR/PLAN.md
+  tasks_path: $Z_HARNESS_PLAN_DIR/TASKS.md
+  decisions_path: $Z_HARNESS_PLAN_DIR/archive/$RUN/phase3-decisions-final.md
+  ```
 
-Each `<P7_*_PREFIX>` is the persona body followed by a blank line, or **empty** when that arm drew no persona (underflow slot, `CRITIQUE_PANEL` off, or `PERSONA_ROTATION` off) — in the empty case the prompt is byte-identical to the pre-feature dispatch.
+Immediately before any Phase 7 Agent dispatch, build the rendered input block from the current mode and pass that same block to every arm:
 
-If `PERSONA_ROTATION == "false"`, fall back to the standard 2-consultant behavior: spawn both consultants in parallel, each handed the full SPEC.md + PLAN.md. Include `kernel_path: <KERNEL_PATH>` in each `Agent(prompt=...)` when `KERNEL_PATH` is non-empty (resolved in Setup):
-- consultant-primary: "Critique this plan. What's wrong, missing, or fragile?"
-- consultant-secondary: same.
+```bash
+if [[ "$PLANNING_MODE" == "intent" ]]; then
+  PHASE7_MODE_AWARE_INPUT_BLOCK="$(cat <<EOF
+planning_mode: $PLANNING_MODE
+intent_path: $Z_HARNESS_PLAN_DIR/INTENT.md
+tasks_path: $Z_HARNESS_PLAN_DIR/TASKS.md
+decisions_path: $Z_HARNESS_PLAN_DIR/archive/$RUN/phase3-decisions-final.md
+EOF
+)"
+else
+  PHASE7_MODE_AWARE_INPUT_BLOCK="$(cat <<EOF
+planning_mode: $PLANNING_MODE
+spec_path: $Z_HARNESS_PLAN_DIR/SPEC.md
+plan_path: $Z_HARNESS_PLAN_DIR/PLAN.md
+tasks_path: $Z_HARNESS_PLAN_DIR/TASKS.md
+decisions_path: $Z_HARNESS_PLAN_DIR/archive/$RUN/phase3-decisions-final.md
+EOF
+)"
+fi
+
+PHASE7_KERNEL_LINE=""
+if [[ -n "${KERNEL_PATH:-}" ]]; then
+  PHASE7_KERNEL_LINE=$'\n'"kernel_path: $KERNEL_PATH"
+fi
+```
+
+All Phase 7 arms receive: "Critique this plan. What's wrong, missing, or fragile?" Prepend the arm's Phase 7 persona body to the prompt when available — empty string when vanilla — then include `$PHASE7_MODE_AWARE_INPUT_BLOCK$PHASE7_KERNEL_LINE`. Cursor arms pass their model via `--model <model>`:
+
+- `Agent(subagent_type="agy", description="Phase 7 final review — gemini arm", prompt="${P7_GEMINI_PREFIX}Critique this plan. What's wrong, missing, or fragile?\n$PHASE7_MODE_AWARE_INPUT_BLOCK$PHASE7_KERNEL_LINE")`
+- `Agent(subagent_type="cursor", model="claude-4.6-sonnet", description="Phase 7 final review — claude-sonnet arm", prompt="${P7_SONNET_PREFIX}Critique this plan. What's wrong, missing, or fragile?\n$PHASE7_MODE_AWARE_INPUT_BLOCK$PHASE7_KERNEL_LINE")`
+- `Agent(subagent_type="cursor", model="grok-4.3", description="Phase 7 final review — grok arm", prompt="${P7_GROK_PREFIX}Critique this plan. What's wrong, missing, or fragile?\n$PHASE7_MODE_AWARE_INPUT_BLOCK$PHASE7_KERNEL_LINE")`
+- `Agent(subagent_type="cursor", model="composer-2.5", description="Phase 7 final review — composer arm", prompt="${P7_COMPOSER_PREFIX}Critique this plan. What's wrong, missing, or fragile?\n$PHASE7_MODE_AWARE_INPUT_BLOCK$PHASE7_KERNEL_LINE")`
+- `Agent(subagent_type="codex-cli", description="Phase 7 final review — codex-5.5 arm", prompt="${P7_CODEX_PREFIX}Critique this plan. What's wrong, missing, or fragile?\n$PHASE7_MODE_AWARE_INPUT_BLOCK$PHASE7_KERNEL_LINE")`
+
+Each `<P7_*_PREFIX>`/`$P7_*_PREFIX` is the persona body followed by a blank line, or **empty** when that arm drew no persona (underflow slot, `CRITIQUE_PANEL` off, or `PERSONA_ROTATION` off) — in the empty case the prompt differs from vanilla only by the required `planning_mode: $PLANNING_MODE` and artifact-path lines.
+
+If `PERSONA_ROTATION == "false"`, fall back to the standard 2-consultant behavior: spawn both consultants in parallel with the same rendered `$PHASE7_MODE_AWARE_INPUT_BLOCK$PHASE7_KERNEL_LINE`:
+- `Agent(subagent_type="consultant-primary", ..., prompt="MODE: plan-review\nCritique this plan. What's wrong, missing, or fragile?\n$PHASE7_MODE_AWARE_INPUT_BLOCK$PHASE7_KERNEL_LINE")`
+- `Agent(subagent_type="consultant-secondary", ..., prompt="MODE: plan-review\nCritique this plan. What's wrong, missing, or fragile?\n$PHASE7_MODE_AWARE_INPUT_BLOCK$PHASE7_KERNEL_LINE")`
 
 Apply findings that hold up under "one reason this might be wrong" scrutiny. Push back on the rest with documented reasoning.
 
-## Phase 8 — TASKS.md (legacy) / task-tree-generator dispatch (intent-mode)
+## Phase 8 — TASKS.md checkpoint, sanity, and workstream finalization
 
-In intent mode, `/z-plan` does not hand-author a thick legacy TASKS.md. It dispatches the
-`task-tree-generator` agent once to create the initial BFS level-0 `TASKS.md` from the freshly
-validated `INTENT.md`; later `/z-execute` runs may regenerate or advance subsequent levels after
-freezing INTENT.md and appending to LEDGER.md.
+By Phase 8, `$Z_HARNESS_PLAN_DIR/TASKS.md` must already exist: the Phase 7 pre-dispatch guard generated the intent-mode initial level-0 task plan, while full mode authored the legacy TASKS.md in Phase 6 and the guard halted if it was still missing. Phase 8 does not create the first TASKS.md. It performs the intent-mode schema sanity check, then the existing checkpoint work: legacy complexity stamps, scope seeding, workstream generation, post-artifact routing, and handoff sequencing.
 
 ```bash
 if [[ "$PLANNING_MODE" == "intent" && -f "$Z_HARNESS_PLAN_DIR/INTENT.md" ]]; then
-  # Generate the initial level-0 TASKS.md from INTENT.md so `/z-audit-plan` and humans can
-  # inspect the first implementation layer before `/z-execute` freezes and runs it.
   LEVEL_TASKS_FILE="$Z_HARNESS_PLAN_DIR/TASKS.md"
-  LEDGER_FILE="$Z_HARNESS_PLAN_DIR/LEDGER.md"
-
-  UNMET_CRITERIA_JSON="$(python3 -c "
-import re, sys, json
-content = open(sys.argv[1]).read()
-m = re.search(r'## Acceptance checklist(.*?)(?=\n## |\Z)', content, re.S)
-section = m.group(1) if m else ''
-items = re.findall(r'- \[ \] (.+)', section)
-print(json.dumps(items))
-" "$Z_HARNESS_PLAN_DIR/INTENT.md" 2>/dev/null || echo '[]')"
-
-  INTENT_BFS_LEVEL_CAP="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py"     get workflow.intent_bfs_level_cap 2>/dev/null || echo "")"
-  if [ -z "$INTENT_BFS_LEVEL_CAP" ] || [ "$INTENT_BFS_LEVEL_CAP" = "None" ]; then
-    INTENT_BFS_LEVEL_CAP=6
-  fi
-
-  INTENT_TOKEN_BUDGET="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/config.py"     get cost.token_budget 2>/dev/null || echo "")"
-  [ "$INTENT_TOKEN_BUDGET" = "None" ] && INTENT_TOKEN_BUDGET=""
-
-  # <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface that intent-mode `/z-plan`
-  #      requires `task-tree-generator` to create TASKS.md. Silent omission is forbidden; if the
-  #      driver cannot dispatch subagents, halt with `plan_halt` rather than continuing without tasks. -->
-  GENERATOR_RETURN="$(Agent(
-    subagent_type="task-tree-generator",
-    description="Generate initial BFS level 0 task batch",
-    prompt="intent_snapshot_path: ${Z_HARNESS_PLAN_DIR}/INTENT.md
-ledger_path: ${LEDGER_FILE}
-level: 0
-unmet_criteria: ${UNMET_CRITERIA_JSON}
-prior_level_outcomes: none
-tasks_output_path: ${LEVEL_TASKS_FILE}
-plan_dir: ${Z_HARNESS_PLAN_DIR}
-level_cap: ${INTENT_BFS_LEVEL_CAP}
-budget_tokens_remaining: ${INTENT_TOKEN_BUDGET:-}
-task_id_start: 1"
-  ))"
-
-  GENERATOR_STATUS="$(printf '%s' "$GENERATOR_RETURN" | grep '^STATUS:' | head -1 | awk '{print $2}')"
-  GENERATOR_TASKS_COUNT="$(printf '%s' "$GENERATOR_RETURN" | grep '^TASKS_WRITTEN:' | head -1 | awk '{print $2}')"
-  GENERATOR_TERMINATION="$(printf '%s' "$GENERATOR_RETURN" | grep '^TERMINATION_CONDITION:' | head -1 | awk '{print $2}')"
-
-  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" intent_initial_tasks_generated     "$(printf '{"slug":"%s","status":"%s","tasks_written":%s,"termination_condition":"%s","path":"%s"}'        "$Z_HARNESS_SLUG" "${GENERATOR_STATUS:-unknown}" "${GENERATOR_TASKS_COUNT:-0}"        "${GENERATOR_TERMINATION:-unknown}" "$LEVEL_TASKS_FILE")" 2>/dev/null || true
-
-  if [ "${GENERATOR_STATUS:-}" = "unable_to_complete" ] || [ "${GENERATOR_STATUS:-}" = "termination_guard" ] || [ ! -f "$LEVEL_TASKS_FILE" ]; then
-    echo "ERROR: task-tree-generator did not produce initial TASKS.md for intent-mode /z-plan." >&2
-    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_halt       "$(printf '{"reason":"intent_initial_tasks_failed","generator_status":"%s","termination_condition":"%s"}'          "${GENERATOR_STATUS:-unknown}" "${GENERATOR_TERMINATION:-unknown}")" 2>/dev/null || true
-    RB_HALT_REASON="intent initial task generation failed"
+  if [[ ! -f "$LEVEL_TASKS_FILE" ]]; then
+    echo "ERROR: Phase 8 reached intent-mode TASKS sanity before Phase 7 generated TASKS.md." >&2
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_halt \
+      '{"reason":"phase8_tasks_missing_after_phase7_guard"}' 2>/dev/null || true
+    RB_HALT_REASON="TASKS.md missing after Phase 7 pre-dispatch guard"
     # include: _fragments/run-brief-halt-finalize-plan.md
     FINALIZE_STATUS=aborted
-    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister       --run-id "$RUN" --status aborted 2>/dev/null || true
+    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+      --run-id "$RUN" --status aborted 2>/dev/null || true
     exit 1
   fi
 
-  # Seed active-plan scope from the generated initial TASKS.md. Best-effort, same as legacy.
+  TASKS_SANITY_OUT="$(python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/intent-schema.py" \
+    validate-tasks "$Z_HARNESS_PLAN_DIR/INTENT.md" "$LEVEL_TASKS_FILE" 2>&1)"
+  TASKS_SANITY_RC=$?
+  if [ "$TASKS_SANITY_RC" -ne 0 ]; then
+    printf '%s\n' "$TASKS_SANITY_OUT" >&2
+    TASKS_SANITY_JSON="$(printf '%s' "$TASKS_SANITY_OUT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')"
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_halt \
+      "$(printf '{"reason":"intent_initial_tasks_sanity_failed","errors":%s}' "$TASKS_SANITY_JSON")" 2>/dev/null || true
+    RB_HALT_REASON="intent initial task sanity failed"
+    # include: _fragments/run-brief-halt-finalize-plan.md
+    FINALIZE_STATUS=aborted
+    python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+      --run-id "$RUN" --status aborted 2>/dev/null || true
+    exit 1
+  fi
+
+  # Seed active-plan scope from the initial TASKS.md. Best-effort, same as legacy.
   # <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to
   #      the user and skip the Agent() call. Scope seeding is advisory; the plan proceeds without it. -->
   SCOPE_JSON="$(mktemp)"
@@ -2340,16 +2464,30 @@ base: $Z_HARNESS_PLAN_DIR"
   # T007: backward-compat SPEC detection is resolved upstream in Mode detection (Invariant 4).
   # When SPEC.md is present, PLANNING_MODE is forced to "full" before Phase 6 runs, so
   # INTENT.md is never written and this `if` branch is never entered for legacy slug dirs.
-  # --- STRUCTURAL SKIP: the entire legacy SPEC/PLAN/TASKS authoring section below is inside the
+  # --- STRUCTURAL SKIP: the entire legacy SPEC/PLAN/TASKS checkpoint section below is inside the
   # `else` branch of this conditional. Do NOT add code between here and the matching `else` ---
 else
-  # The `else` closes when the legacy path (TASKS.md hand-authoring) finishes — see the
+  # The `else` closes when the legacy path (TASKS.md checkpoint/finalization) finishes — see the
   # closing `fi` at the end of the scope-seed + workstreams manifest block below.
 ```
 
 **Legacy path (planning_mode=full, or INTENT.md not yet written):**
 
-Create `$Z_HARNESS_PLAN_DIR/TASKS.md`. Break PLAN.md into small, independently-implementable tasks. Each: `T001`-style ID, title, files touched, dependencies, acceptance criteria, status `[ ]`. Size so each fits a fresh context window.
+Full-mode `$Z_HARNESS_PLAN_DIR/TASKS.md` was authored in Phase 6 and must already have survived Phase 7 review. In Phase 8, finalize that legacy task plan: enforce task-count discipline, add complexity stamps, seed scope, and generate workstreams. If a driver reaches this point without TASKS.md, halt rather than letting post-artifact routing or handoff consume an incomplete plan.
+
+```bash
+if [[ ! -f "$Z_HARNESS_PLAN_DIR/TASKS.md" ]]; then
+  echo "ERROR: Phase 8 reached full-mode TASKS checkpoint without TASKS.md." >&2
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_halt \
+    '{"reason":"phase8_full_tasks_missing_after_phase7_guard"}' 2>/dev/null || true
+  RB_HALT_REASON="full-mode TASKS.md missing after Phase 7 review"
+  # include: _fragments/run-brief-halt-finalize-plan.md
+  FINALIZE_STATUS=aborted
+  python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/active-plan-registry.py" deregister \
+    --run-id "$RUN" --status aborted 2>/dev/null || true
+  exit 1
+fi
+```
 
 <!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the task-count
      overflow question ("Combine", "Ship as-is", "Restructure") via their native
@@ -2411,17 +2549,17 @@ if [ "$HERMES_ENABLED" = "true" ]; then
   python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/generate-workstreams.py" \
     --slug "$Z_HARNESS_SLUG" --source z-plan --plan-dir "$Z_HARNESS_PLAN_DIR" || true
 fi  # hermes_enabled gate (Invariant 6: Hermes machinery never executes unless hermes_enabled=true)
-fi  # end of Phase 8 else-branch: legacy SPEC/PLAN/TASKS authoring — skipped when PLANNING_MODE=intent and INTENT.md present
+fi  # end of Phase 8 else-branch: legacy SPEC/PLAN/TASKS checkpoint/finalization — skipped when PLANNING_MODE=intent and INTENT.md present
 ```
 
 ## Phase 8.4 — Post-artifact route check
 
-Run this route check after Phase 8 has produced the current artifact set:
+Run this route check after Phase 8 has checkpointed the current artifact set:
 
 - Intent mode: `$Z_HARNESS_PLAN_DIR/INTENT.md` (with `frozen_at: pending`) and canonical `$Z_HARNESS_PLAN_DIR/TASKS.md`.
 - Full SDD mode: `$Z_HARNESS_PLAN_DIR/SPEC.md`, `$Z_HARNESS_PLAN_DIR/PLAN.md`, and `$Z_HARNESS_PLAN_DIR/TASKS.md`.
 
-This check reuses the **Plan Route Check** event and route-decision contract. It fires after artifact writing so it can inspect concrete artifact shape instead of estimates:
+This check reuses the **Plan Route Check** event and route-decision contract. It fires after artifact writing plus TASKS checkpointing, so it can inspect concrete artifact shape instead of estimates:
 
 - Recommend `/z-plan-split` when the produced task count or independent cluster seams show the plan should be split before execution.
 - Recommend `/z-sharpen` when artifacts remain question-heavy, acceptance criteria are vague, or task text shows unresolved problem framing.
@@ -2446,16 +2584,22 @@ Concrete Phase 8.4 `plan_route_decision` payload example:
   "confidence": "high",
   "classifier_used": false,
   "artifact_path": "$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md",
-  "route_chain": ["/z-plan"],
+  "route_chain": [
+    {
+      "from_command": "/z-plan",
+      "to_command": "/z-sharpen",
+      "reason_codes": ["question_heavy_artifacts", "post_artifact_check"]
+    }
+  ],
   "user_choice": "continue_here"
 }
 ```
 
 Recognize both finished-plan artifact sets as complete when deciding whether to route or stop: legacy `SPEC.md` + `PLAN.md` + `TASKS.md`, and intent `INTENT.md` + canonical `TASKS.md`.
 
-## Phase 8.5 — Handoff context producer (thin until T006)
+## Phase 8.5 — Handoff context producer
 
-The handoff producer runs only after Phase 8.4 post-artifact route checks have either passed or the user explicitly chose to continue here. T001 preserves the existing thin `HANDOFF.md` contract below; the later handoff task may enrich this section but must keep it before Phase 8.6 and before Phase 9 finalization.
+The handoff producer runs only after Phase 7 has generated/required `TASKS.md`, the Phase 8 task sanity/checkpoint has passed, and Phase 8.4 post-artifact route checks have either passed or the user explicitly chose to continue here. It must stay before Phase 8.6 and before Phase 9 finalization.
 
 ### Archive copies for handoff and finalization
 
@@ -2474,17 +2618,23 @@ fi
 
 Copy `$Z_HARNESS_PLAN_DIR/{SPEC,PLAN,TASKS}.md` into `$Z_HARNESS_PLAN_DIR/archive/$RUN/`. Update `manifest.json` with end timestamp, status `complete`, totals (decision count, consultation count, total tokens if available).
 
-**Handoff artifact.** Write a curated context slice to `$Z_HARNESS_PLAN_DIR/HANDOFF.md` so the next command (`/z-audit-plan`) can orient itself without re-reading the full planning transcript. This artifact must be written before printing the next-move instruction below.
+**Handoff artifact.** Write a curated context slice to `$Z_HARNESS_PLAN_DIR/HANDOFF.md` so the next command can orient itself without re-reading the full planning transcript. This artifact must be written after TASKS sanity and before printing the next-move instruction below. It is a human-readable index and summary, not a second copy of the plan.
 
 ```bash
-# Determine the primary artifact path for the handoff slice.
+# Determine the primary artifact set for the handoff slice.
+_HANDOFF_PRIMARY_ARTIFACTS=("$Z_HARNESS_PLAN_DIR/HANDOFF.md")
 if [[ "$PLANNING_MODE" == "intent" && -f "$Z_HARNESS_PLAN_DIR/INTENT.md" ]]; then
   _HANDOFF_PRIMARY_ARTIFACT="$Z_HARNESS_PLAN_DIR/INTENT.md"
   _HANDOFF_ARTIFACT_KIND="INTENT.md"
+  _HANDOFF_PRIMARY_ARTIFACTS+=("$Z_HARNESS_PLAN_DIR/INTENT.md" "$Z_HARNESS_PLAN_DIR/TASKS.md")
+  [[ -f "$Z_HARNESS_PLAN_DIR/LEDGER.md" ]] && _HANDOFF_PRIMARY_ARTIFACTS+=("$Z_HARNESS_PLAN_DIR/LEDGER.md")
 else
   _HANDOFF_PRIMARY_ARTIFACT="$Z_HARNESS_PLAN_DIR/PLAN.md"
   _HANDOFF_ARTIFACT_KIND="PLAN.md"
+  _HANDOFF_PRIMARY_ARTIFACTS+=("$Z_HARNESS_PLAN_DIR/SPEC.md" "$Z_HARNESS_PLAN_DIR/PLAN.md" "$Z_HARNESS_PLAN_DIR/TASKS.md")
 fi
+[[ -f "$Z_HARNESS_PLAN_DIR/workstreams.json" ]] && _HANDOFF_PRIMARY_ARTIFACTS+=("$Z_HARNESS_PLAN_DIR/workstreams.json")
+_HANDOFF_PRIMARY_ARTIFACT_LIST="$(printf '%s\n' "${_HANDOFF_PRIMARY_ARTIFACTS[@]}")"
 ```
 
 Write `$Z_HARNESS_PLAN_DIR/HANDOFF.md` with the following sections:
@@ -2494,6 +2644,7 @@ Write `$Z_HARNESS_PLAN_DIR/HANDOFF.md` with the following sections:
 artifact: handoff
 slug: <$Z_HARNESS_SLUG>
 planning_run: <$RUN>
+planning_mode: <$PLANNING_MODE>
 generated_at: <ISO UTC timestamp>
 ---
 
@@ -2501,19 +2652,23 @@ generated_at: <ISO UTC timestamp>
 
 <$Z_HARNESS_SLUG>
 
-## Primary planning artifact
+## Primary artifacts
 
-<$_HANDOFF_PRIMARY_ARTIFACT>
+<One bullet per path in $_HANDOFF_PRIMARY_ARTIFACT_LIST. Use pointers only; do not paste file contents. Include role labels such as "HANDOFF.md — curated context", "INTENT.md — accepted intent contract", "SPEC.md/PLAN.md — full SDD artifacts", "TASKS.md — executable task contract", "workstreams.json — generated workstream split", and "LEDGER.md — intent-mode BFS ledger" when present.>
 
 ## Intent / Goal
 
 <2–3 sentence summary of what this plan sets out to accomplish, drawn from INTENT.md §Intent
- or PLAN.md goals section — do not invent; quote or lightly paraphrase the approved text.>
+or PLAN.md goals section — do not invent; quote or lightly paraphrase the approved text.>
+
+## Task batch state
+
+<Summarize the current TASKS.md level and staged groups (base, independent, dependent) in 3–6 bullets. Preserve canonical task ids and status marks from `## TNNN — title \`[ ]\`` headings.>
 
 ## Key decisions
 
 <Bullet list of the top 3–5 approved decisions from decisions.md — one line each:
- "Decision: [what was decided] — Rationale: [one-sentence reason]">
+"Decision: [what was decided] — Rationale: [one-sentence reason]">
 
 ## Accepted shortcuts (if any)
 
@@ -2522,20 +2677,66 @@ generated_at: <ISO UTC timestamp>
 ## Grounding notes
 
 <1–2 sentences summarizing what the codebase exploration (Phases 1–2) found —
- key files, key constraints, or notable surprises. Omit if nothing noteworthy.>
+key files, key constraints, or notable surprises. Omit if nothing noteworthy.>
+
+## Invariants
+
+<Bullets for non-negotiable constraints the executor must preserve: public API compatibility, data/schema invariants, ordering guarantees, safety gates, or "none".>
+
+## Rejected approaches
+
+<Bullets for approaches explicitly considered and rejected, with the reason. Use "none" if no rejection was recorded.>
+
+## Decisions archive
+
+<Pointer bullets to the durable decision artifacts under `$Z_HARNESS_PLAN_DIR/archive/$RUN/`, especially `phase3-decisions-final.md`, route-decision.md, consultant outputs, and review outputs when present. Do not paste full transcripts.>
+
+## Verification commands
+
+<Commands the executor/reviewer should run after implementation. Include the targeted tests named by the plan; use "none recorded" if the plan did not define commands.>
 
 ## Next move
 
-/clear
-/z-audit-plan <$Z_HARNESS_SLUG>
+Choose one of the Phase 8.6 gate options (`fresh_session_implementation`, `audit_first`, `stop_with_handoff`, or `amend`). Do not hard-code an audit-first recommendation before `FINAL_HANDOFF_CHOICE` is captured.
 ```
 
-After writing `HANDOFF.md`, log a `handoff_written` event:
+Machine handoff files (`handoff.json`, when produced by `scripts/write-handoff.sh`) must stay thin: `context_files` contains only `{path, role}` pointers. For a complete plan directory it should point at `HANDOFF.md`, the HANDOFF.md context categories (`invariants`, `rejected_approaches`, `decisions_archive`, `verification_commands`), `INTENT.md` when present, `SPEC.md`/`PLAN.md` when present, `TASKS.md`, `workstreams.json` when present, `LEDGER.md` when present, and `SESSION.md`; the schema owns the allowed roles.
+
+After writing `HANDOFF.md`, call the machine handoff producer before Phase 8.6. Set the required z-plan overrides so the generated `handoff.json` describes a completed planning handoff, not an in-progress execute checkpoint; validate that the file exists and log both the human and machine artifacts:
 
 ```bash
+export Z_HARNESS_HANDOFF_STATUS="complete"
+export Z_HARNESS_HANDOFF_NEXT_STEP="Plan complete for ${Z_HARNESS_SLUG}. Choose the Phase 8.6 next step: fresh-session implementation, audit first, stop with handoff, or amend. Read HANDOFF.md, ${_HANDOFF_ARTIFACT_KIND}, and TASKS.md before acting."
+export Z_HARNESS_AGENT="${Z_HARNESS_AGENT:-pi}"
+
+HANDOFF_PRODUCER_OUT="$(Z_HARNESS_PLAN_DIR="$Z_HARNESS_PLAN_DIR" Z_HARNESS_SLUG="$Z_HARNESS_SLUG" bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/write-handoff.sh" 2>&1)"
+HANDOFF_PRODUCER_RC=$?
+if [[ "$HANDOFF_PRODUCER_RC" -ne 0 || ! -s "$Z_HARNESS_PLAN_DIR/handoff.json" ]]; then
+  echo "ERROR: write-handoff.sh failed before Phase 8.6: $HANDOFF_PRODUCER_OUT" >&2
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" plan_halt \
+    "$(printf '{"reason":"handoff_json_producer_failed","rc":%d}' "$HANDOFF_PRODUCER_RC")" 2>/dev/null || true
+  exit 1
+fi
+
+HANDOFF_JSON_VALIDATE="$(python3 - "$Z_HARNESS_PLAN_DIR/handoff.json" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+with open(path, encoding="utf-8") as f:
+    data = json.load(f)
+roles = [entry.get("role") for entry in data.get("context_files", []) if isinstance(entry, dict)]
+required = {"handoff", "tasks"}
+missing = sorted(required.difference(roles))
+if missing:
+    raise SystemExit(f"missing required handoff context roles: {missing}")
+print(json.dumps({"path": path, "roles": roles, "context_file_count": len(roles)}, separators=(",", ":")))
+PYEOF
+)"
+
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" handoff_written \
-  "$(printf '{"slug":"%s","path":"%s","artifact_kind":"%s"}' \
-     "$Z_HARNESS_SLUG" "$Z_HARNESS_PLAN_DIR/HANDOFF.md" "$_HANDOFF_ARTIFACT_KIND")"
+  "$(printf '{"slug":"%s","path":"%s","artifact_kind":"%s","handoff_json":"%s","producer_output":"%s"}' \
+     "$Z_HARNESS_SLUG" "$Z_HARNESS_PLAN_DIR/HANDOFF.md" "$_HANDOFF_ARTIFACT_KIND" \
+     "$Z_HARNESS_PLAN_DIR/handoff.json" "$(printf '%s' "$HANDOFF_PRODUCER_OUT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read())[1:-1])')")"
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" handoff_json_validated "$HANDOFF_JSON_VALIDATE"
 ```
 
 ## Phase 8.6 — Final handoff gate
@@ -2566,31 +2767,20 @@ Ask the user to choose exactly one next step:
 
 Request-change resume map: scope/goal changes resume at Phase 0; decision changes resume at Phase 2; primary artifact wording changes resume at Phase 6; task decomposition changes resume at Phase 8.
 
-Capture the final gate answer before any logging or branch logic. Normalize it to exactly one of these values: `fresh_session_implementation`, `audit_first`, `stop_with_handoff`, or `amend`.
+Capture the final gate answer, normalize it into `FINAL_HANDOFF_CHOICE`, and export that machine value before any logging or `case "$FINAL_HANDOFF_CHOICE"` use. The only valid values are `fresh_session_implementation`, `audit_first`, `stop_with_handoff`, and `amend`.
 
 ```bash
-FINAL_HANDOFF_ANSWER="$(AskUserQuestion "Choose the next step for <$Z_HARNESS_SLUG>:" \
-  ["Fresh-session implementation — run /clear, then /z-execute <$Z_HARNESS_SLUG>", \
-   "Audit first — run /clear, then /z-audit-plan <$Z_HARNESS_SLUG>", \
-   "Stop with handoff — leave HANDOFF.md as next-session context", \
-   "Amend — run /z-amend <$Z_HARNESS_SLUG>"])"
-if [[ "$FINAL_HANDOFF_ANSWER" == "Fresh-session implementation"* ]]; then
-  FINAL_HANDOFF_CHOICE="fresh_session_implementation"
-elif [[ "$FINAL_HANDOFF_ANSWER" == "Audit first"* ]]; then
-  FINAL_HANDOFF_CHOICE="audit_first"
-elif [[ "$FINAL_HANDOFF_ANSWER" == "Stop with handoff"* ]]; then
-  FINAL_HANDOFF_CHOICE="stop_with_handoff"
-elif [[ "$FINAL_HANDOFF_ANSWER" == "Amend"* ]]; then
-  FINAL_HANDOFF_CHOICE="amend"
-else
-  echo "invalid final handoff answer: $FINAL_HANDOFF_ANSWER" >&2
-  exit 1
-fi
+FINAL_HANDOFF_CHOICE="$(AskUserQuestion "Choose the next step for <$Z_HARNESS_SLUG>:" \
+  ["fresh_session_implementation — Fresh-session implementation: run /clear, then /z-execute <$Z_HARNESS_SLUG>", \
+   "audit_first — Audit first: run /clear, then /z-audit-plan <$Z_HARNESS_SLUG>", \
+   "stop_with_handoff — Stop with handoff: leave HANDOFF.md as next-session context", \
+   "amend — Amend: run /z-amend <$Z_HARNESS_SLUG>"])"
+FINAL_HANDOFF_CHOICE="${FINAL_HANDOFF_CHOICE%% — *}"
+export FINAL_HANDOFF_CHOICE
 case "$FINAL_HANDOFF_CHOICE" in
   fresh_session_implementation|audit_first|stop_with_handoff|amend) ;;
   *) echo "invalid final handoff choice: $FINAL_HANDOFF_CHOICE" >&2; exit 1 ;;
 esac
-export FINAL_HANDOFF_CHOICE
 ```
 
 Log the selected next step:
@@ -2714,7 +2904,8 @@ Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema
 | `next_step_choice` | Phase 8.6 final handoff gate selection emitted (source: `phase_8_6_final_handoff_gate`) | `choice`, `source` |
 | `sharpen_gate` | Phase 0 auto-sharpen gate decision | `decision` (`sharpened`\|`skipped`), `grill_md_existed` |
 | `sharpen_skipped` | Phase 0 auto-sharpen step skipped (opt-out or not handoff input) | `reason` |
-| `handoff_written` | Phase 8.5 handoff artifact written to HANDOFF.md | `slug`, `path`, `artifact_kind` |
+| `handoff_written` | Phase 8.5 handoff artifacts written to HANDOFF.md and handoff.json | `slug`, `path`, `artifact_kind`, `handoff_json`, `producer_output` |
+| `handoff_json_validated` | Phase 8.5 verified the machine handoff before Phase 8.6 | `path`, `roles`, `context_file_count` |
 | `plan_claim_lost_during_gate` | Heartbeat detected ownership change (exit 9) at a phase boundary or before a user gate; URGENT abort/continue-uncoordinated gate fires | `slug`, `run_id`, `phase` |
 | `cost_gate_decision` | Exactly one terminal pre-subagent hard cost-gate decision per `/z-plan` run | `command`, `choice`, `estimated_tokens`, `confidence`, `basis`, `disposition`, `rule_id`, `range_high`, `choice_source`, `attempt_count` when known; optional sanitized `reason` |
 | `cost_gate_reestimate_attempt` | Nonterminal cost reduction / re-estimate attempt; never counts as the terminal gate decision | `command`, `run_id`, `gate_id`, `attempt_index`, `changed_drivers`, `prior_range_high`, `new_range_high`, `disposition`, `terminal_event_kind`, terminal-correlation `gate_id` |
@@ -2742,7 +2933,7 @@ Event kinds emitted by `/z-plan` and its helpers. For full per-task event schema
 
 | Feature | Used | Gates |
 |---------|------|-------|
-| `subagent` | yes | Phase 1a doc-fetcher Agent(); Phase 1b Explore Agent(); **Mode detection: intent-classifier Agent()** (when `planning_mode=intent` and `intent_level=auto`); Phase 3 consultant-primary/secondary Agent() calls (2-consultant fallback when `experiment.persona_rotation=false`) or fixed 5-panel Agent() calls (agy, cursor@claude-4.6-sonnet, cursor@grok-4.3, cursor@composer-2.5, codex-cli — when `experiment.persona_rotation=true`); Phase 7 same panel structure as Phase 3; Phase 8 complexity-classifier Agent() calls. When `personas.critique_panel=true` (and `experiment.persona_rotation=true`), each Phase 3 and Phase 7 arm is additionally prefixed with a drawn consultant persona — no extra Agent() calls, the prefix is injected into each arm's existing prompt. |
+| `subagent` | yes | Phase 1a doc-fetcher Agent(); Phase 1b Explore Agent(); **Mode detection: intent-classifier Agent()** (when `planning_mode=intent` and `intent_level=auto`); Phase 3 consultant-primary/secondary Agent() calls or fixed 5-panel Agent() calls; Phase 7 pre-dispatch task-tree-generator guard when intent TASKS.md is absent; Phase 7 same consultant panel structure as Phase 3; Phase 8 complexity-classifier Agent() calls. When `personas.critique_panel=true` (and `experiment.persona_rotation=true`), each Phase 3 and Phase 7 arm is additionally prefixed with a drawn consultant persona — no extra Agent() calls, the prefix is injected into each arm's existing prompt. |
 | `ask_user` | yes | Setup step 0 (empty arguments); Setup step 1 (slug collision + resolver prefill/ask branches); Setup step 5 claim acquire — CLAIM_RC 1 (live peer: proceed/abort/use-new-slug), CLAIM_RC 2 (stale-takeover: proceed/abort, default abort), CLAIM_RC 3 (corrupt: abort/proceed-uncoordinated, default abort); Setup step 10c (consolidated freshness gate — one AskUserQuestion covering docs / research / map / GRILL.md-citation staleness); **Pre-subagent hard cost gate** (guarded by `workflow.pre_run_cost_gate`, before `planning-router`, `intent-classifier`, doc-fetcher, Explore, consultants, and task-tree generation); **Mode detection: backward-compat SPEC detection — finished legacy plan gate** (amend / implement / continue / abort when SPEC.md+TASKS.md present); **Mode detection: intent level announce + override gate** (when `planning_mode=intent`; offers L1/L2/L3 override); **Mode detection: L2 optional consult gate** (when `INTENT_CONSULT_POLICY=optional` and not `Z_HARNESS_NO_ASK`); Phase 0 (premise concern); Phase 2.5 (decisions doc approval — guarded by `workflow.plan_decisions_approval` resolver); Phase 5 (design decision + shortcut approval); **Phase 6 (intent-mode only): acceptance-criterion lint failure gate — surfaces offending lines and offers rewrite or abandon** (when `planning_mode=intent` and lint finds non-observable criteria); Phase 8 (task-count overflow); heartbeat exit 9 at any phase boundary or pre-gate (`plan_claim_lost_during_gate` — abort/continue-uncoordinated, default abort). **Phase 9 no longer uses AskUserQuestion** — the next-step recommendation is emitted as prose only (handoff artifact + printed `/clear` + `/z-audit-plan <slug>` instruction). |
 | `skill_invoke` | no | — |
 
