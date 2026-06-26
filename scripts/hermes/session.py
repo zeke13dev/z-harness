@@ -8,6 +8,7 @@ and handles kill + re-spawn with retry counting.
 
 import os
 import re
+import shlex
 import signal
 import subprocess
 import time
@@ -71,6 +72,30 @@ def build_initial_so_prompt(command: SoCommand, job_id: str) -> str:
     )
 
 
+def _job_command(
+    alias,
+    env: dict[str, str],
+    argv: list[str],
+) -> tuple[list[str], Optional[str]]:
+    """Return argv/cwd for local or SSH tmux execution."""
+    workdir = alias.workdir or None
+    if alias.transport != "ssh":
+        return argv, workdir
+    if not alias.ssh_target:
+        raise TmuxLaunchError("ssh transport requires ssh_target")
+    exports = " ".join(
+        f"{shlex.quote(key)}={shlex.quote(value)}"
+        for key, value in env.items()
+        if key == "HERMES_SO_JOB_ID"
+    )
+    command = " ".join(shlex.quote(part) for part in argv)
+    if workdir:
+        command = f"cd {shlex.quote(workdir)} && {exports} {command}"
+    elif exports:
+        command = f"{exports} {command}"
+    return ["ssh", alias.ssh_target, command], None
+
+
 def launch_so_job(
     command: SoCommand,
     registry: SoJobRegistry,
@@ -105,31 +130,29 @@ def launch_so_job(
 
     env = dict(os.environ)
     env["HERMES_SO_JOB_ID"] = job_id
-    workdir = alias.workdir or None
-    new_session = runner.run(
-        [
-            "tmux",
-            "new-session",
-            "-d",
-            "-s",
-            tmux_session,
-            "-c",
-            alias.workdir,
-            command.host,
-        ],
-        cwd=workdir,
-        env=env,
-    )
+    new_argv = [
+        "tmux",
+        "new-session",
+        "-d",
+        "-s",
+        tmux_session,
+        "-c",
+        alias.workdir,
+        command.host,
+    ]
+    run_argv, run_cwd = _job_command(alias, env, new_argv)
+    new_session = runner.run(run_argv, cwd=run_cwd, env=env)
     if new_session.returncode != 0:
         registry.transition(job_id, "failed")
         raise TmuxLaunchError(new_session.stderr or "tmux new-session failed")
 
     pid = None
-    display = runner.run(
+    display_argv, display_cwd = _job_command(
+        alias,
+        env,
         ["tmux", "display-message", "-p", "-t", tmux_session, "#{pane_pid}"],
-        cwd=workdir,
-        env=env,
     )
+    display = runner.run(display_argv, cwd=display_cwd, env=env)
     if display.returncode == 0:
         try:
             pid = int(display.stdout.strip())
@@ -140,11 +163,10 @@ def launch_so_job(
         registry.save(record)
 
     prompt = build_initial_so_prompt(command, job_id)
-    send = runner.run(
-        ["tmux", "send-keys", "-t", tmux_session, prompt, "C-m"],
-        cwd=workdir,
-        env=env,
+    send_argv, send_cwd = _job_command(
+        alias, env, ["tmux", "send-keys", "-t", tmux_session, prompt, "C-m"]
     )
+    send = runner.run(send_argv, cwd=send_cwd, env=env)
     if send.returncode != 0:
         registry.transition(job_id, "failed")
         raise TmuxLaunchError(send.stderr or "tmux send-keys failed")

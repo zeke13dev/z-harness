@@ -123,10 +123,13 @@ def load_config(repo_root: str = ".") -> HermesConfig:
     config = HermesConfig()
 
     # Try loading YAML
-    config_paths = [
+    config_paths = []
+    if os.environ.get("HERMES_CONFIG_PATH"):
+        config_paths.append(Path(os.environ["HERMES_CONFIG_PATH"]))
+    config_paths.extend([
         Path(repo_root) / "hermes-config.yaml",
         Path.home() / ".config" / "hermes" / "config.yaml",
-    ]
+    ])
 
     for config_path in config_paths:
         if config_path.exists() and yaml is not None:

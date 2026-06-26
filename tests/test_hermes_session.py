@@ -42,15 +42,15 @@ class FakeRunner:
         return subprocess.CompletedProcess(argv, 0, "", "")
 
 
-def _command() -> SoCommand:
+def _command(*, transport="local") -> SoCommand:
     return SoCommand(
         host="omp",
         project="qt-bot",
         project_alias=DiscordProjectAlias(
             repo_root="ssh://zeke-pc/qt-bot",
-            execution_host="zeke-pc",
-            transport="ssh",
-            ssh_target="zeke-pc",
+            execution_host="zeke-pc" if transport == "ssh" else "local",
+            transport=transport,
+            ssh_target="zeke-pc" if transport == "ssh" else "",
             workdir="/home/zeke/dev/qt-bot",
         ),
         task="fix blah",
@@ -80,6 +80,20 @@ def test_launch_creates_tmux_then_sends_initial_prompt(tmp_path):
     assert any("fix blah" in arg for arg in send_args)
     assert any("z-debug" in arg for arg in send_args)
     assert all(env["HERMES_SO_JOB_ID"] == "so-test" for env in runner.envs)
+
+def test_ssh_transport_runs_tmux_on_recorded_host(tmp_path):
+    registry = SoJobRegistry(tmp_path)
+    runner = FakeRunner(registry)
+
+    record = launch_so_job(
+        _command(transport="ssh"), registry, runner=runner, job_id="so-test"
+    )
+
+    assert record.execution_host == "zeke-pc"
+    assert record.transport == "ssh"
+    assert runner.calls[0][0][0:2] == ["ssh", "zeke-pc"]
+    assert "HERMES_SO_JOB_ID=so-test" in runner.calls[0][0][2]
+    assert "tmux new-session" in runner.calls[0][0][2]
 
 
 def test_generated_session_name_is_safe():

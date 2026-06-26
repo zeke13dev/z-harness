@@ -130,10 +130,11 @@ def test_fake_discord_to_tmux_to_watchdog_to_reply_flow(tmp_path):
     )
 
     assert launched.status == "running"
-    assert tmux_runner.calls[0][0][:2] == ["tmux", "new-session"]
-    assert tmux_runner.calls[2][0][:2] == ["tmux", "send-keys"]
-    assert any("fix blah" in arg for arg in tmux_runner.calls[2][0])
-    assert any("z-debug" in arg for arg in tmux_runner.calls[2][0])
+    assert tmux_runner.calls[0][0][:2] == ["ssh", "zeke-pc"]
+    assert "tmux new-session" in tmux_runner.calls[0][0][2]
+    assert "tmux send-keys" in tmux_runner.calls[2][0][2]
+    assert "fix blah" in tmux_runner.calls[2][0][2]
+    assert "z-debug" in tmux_runner.calls[2][0][2]
 
     discord = FakeDiscord()
     payload = WatchdogPayload(
