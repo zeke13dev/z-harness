@@ -1,6 +1,6 @@
 # config
 
-> Last updated: 2026-06-19
+> Last updated: 2026-06-28
 > Covers source: scripts/config.py, scripts/config.sh, scripts/propose-prefs.py, docs/human/config.md
 
 ## Overview
@@ -617,8 +617,8 @@ The `[export]` section controls which hosts `/z-export` targets and what strateg
 <!-- AUTO-END: entry-points -->
 ## How it interacts with others
 
-- `commands` (z-audit-plan, z-audit-plan-style, z-plan, z-fix, z-uplift, z-amend, z-do, z-research, z-execute, z-review-all, z-overnight, z-debug, z-audit, z-brainstorm, z-attend) — call `export-env` + `should-notify` during Setup; call `resolve-question` before workflow AskUserQuestions; call `check-no-ask` for overnight gate checks; call `set` after proposal acceptance; call `propose-prefs.py` at command end; read `brainstorm.personas`, `personas.*`, `experiment.*` at each persona-dispatch site; call `resolve-halt-category` for halt-category tagging in chain-runner.sh
-- `skills` (z-suggest-memory, z-map, z-debug, z-brainstorm, z-do, z-plan, z-research) — call `list-question-ids` to validate routing-preference question IDs; call `resolve-question` for slug-confirm gate; call `export-env` + `should-notify` during Setup
+- `commands` (z-audit-plan, z-audit-plan-style, z-plan, z-fix, z-uplift, z-amend, z-do, z-research, z-explore, z-execute, z-review-all, z-overnight, z-debug, z-audit, z-brainstorm, z-attend) — call `export-env` + `should-notify` during Setup; call `resolve-question` before workflow AskUserQuestions (including the current terrain workflow, where deep terrain mapping is `/z-explore --depth=deep`); call `check-no-ask` for overnight gate checks; call `set` after proposal acceptance; call `propose-prefs.py` at command end; read `brainstorm.personas`, `personas.*`, `experiment.*` at each persona-dispatch site; call `resolve-halt-category` for halt-category tagging in chain-runner.sh
+- `skills` (z-suggest-memory, z-explore, z-debug, z-brainstorm, z-do, z-plan, z-research; `z-map` only as a legacy compatibility wrapper that routes to `/z-explore --depth=deep`) — call `list-question-ids` to validate routing-preference question IDs; call `resolve-question` for slug-confirm gate; call `export-env` + `should-notify` during Setup
 - `scripts` — provides the `log-event.sh` + `log-phase.sh` telemetry pipeline that `config.py` writes events through; `scripts/axiom-store.py` loaded dynamically by `_load_axiom_store_module` for axiom resolution
 - `followup-sink` — `sink-add.sh` called by orchestrators when `resolve-question` returns `defer-to-sink`; `notion-push.py` reads `Z_HARNESS_NOTION_TOKEN` env override
 - `active-plan-registry` — `Z_HARNESS_REGISTRY_ENABLED`, `Z_HARNESS_REGISTRY_STALE_SECS`, `Z_HARNESS_STRICT_OVERLAP`, `Z_HARNESS_EXTERNAL_DEFAULT`, `Z_HARNESS_BASE_DIR`, `Z_HARNESS_AUTO_WAIT`, `Z_HARNESS_AUTO_WAIT_BUDGET_SECS`, `Z_HARNESS_WAIT_POLL_SECS`, `Z_HARNESS_WAIT_TIMEOUT_SECS`, and `Z_HARNESS_WAIT_REQUIRE_MERGE` are env-only knobs (not in config.py's DEFAULTS) consumed by `plan-path.sh` and `active-plan-registry.py`

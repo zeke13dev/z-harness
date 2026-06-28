@@ -1,6 +1,6 @@
 # z-brainstorm
 
-> Last updated: 2026-06-26
+> Last updated: 2026-06-28
 > Covers source: skills/z-brainstorm/SKILL.md, skills/z-sharpen/SKILL.md, agents/ideator-clusterer.md
 
 ## Overview
@@ -16,7 +16,7 @@ Current Phase 0 behavior is intentionally conversational but no longer a wrapper
 - `skills/z-brainstorm/SKILL.md:134` — Phase 0 shared sharpen + scope probe — sharpen runs before scope-probe and before Phase 1 scaffolding.
 - `skills/z-brainstorm/SKILL.md:138` — `0-sharpen` — if `GRILL.md` is absent, use the shared `z-sharpen` reusable component inline; do not invoke the `/z-sharpen` wrapper or auto-dispatch `/z-plan`.
 - `skills/z-brainstorm/SKILL.md:187` — `0-count`: infer `WIDE_N` from natural-language count signals; default 3, prose-many default 6, cap 20 before later wide overflow caps.
-- `skills/z-brainstorm/SKILL.md:483` — Phase 1 scaffolding: doc-fetcher synthesis, optional Explore, MAP.md or legacy terrain ingestion, GRILL.md seed, `input_hash`, and archived scaffolding checkpoint.
+- `skills/z-brainstorm/SKILL.md:483` — Phase 1 scaffolding: doc-fetcher synthesis, optional Explore-agent synthesis, ingestion of `/z-explore --depth=deep`-owned `MAP.md` or a legacy terrain artifact, GRILL.md seed, `input_hash`, and archived scaffolding checkpoint.
 - `skills/z-brainstorm/SKILL.md:586` — Phase 2 ideator dispatch: persona draw, three parallel ideators (Claude/general-purpose, Codex consultant-secondary, Gemini consultant-primary), five-section schema, and failure policy.
 - `skills/z-brainstorm/SKILL.md:693` — Phase 2c wide mode: resolves overflow model, presents a conversational cost gate and ends the turn, dispatches overflow re-spin waves after user confirmation, then clusters N framings.
 - `skills/z-brainstorm/SKILL.md:945` — `ideator-clusterer` dispatch: after all wide waves, clusters ideator IDs from `BRAINSTORM.md` into K directions; failure falls back to raw framings.
@@ -29,7 +29,7 @@ Current Phase 0 behavior is intentionally conversational but no longer a wrapper
 
 - `doc-fetcher` — Phase 1 uses docs before Explore so ideators share current, compact repo context.
 - `z-sharpen`/`GRILL.md` — Phase 0 reuses the shared z-sharpen component when `GRILL.md` is absent; prior or newly written sharpening context is included in scaffolding and in `input_hash`.
-- `z-map`/`z-research` — MAP.md is the canonical terrain artifact; legacy RESEARCH.md is accepted only when it is terrain-like, not approach synthesis.
+- `/z-explore --depth=deep`/`MAP.md` — current terrain/MAP.md production belongs to `/z-explore --depth=deep`; `/z-brainstorm` consumes that artifact as optional terrain context. `/z-research` composes terrain plus brainstorm outputs, and `/z-map` is legacy only. Legacy `RESEARCH.md` is accepted only when terrain-like, not approach synthesis.
 - `scope-probe` and `scope-reconciler-brainstorm` — non-fast-path scope classification and HEAVY chunk reconciliation.
 - `personas-and-roles` — `brainstorm.personas` controls ideator persona draws; underflow slots run vanilla and are recorded as `<none>`.
 - `cost-estimation` — wide mode uses an inline conversational cost estimate and waits for explicit user confirmation before extra ideators dispatch.

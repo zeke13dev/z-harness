@@ -1,7 +1,7 @@
 ---
 name: z-explore
 disable-model-invocation: false
-description: depth-scaled codebase terrain explorer; quick scout through deep MAP.md equivalent for /z-map replacement
+description: depth-scaled codebase terrain explorer; quick scout through deep MAP.md terrain synthesis
 argument-hint: "<question> [--depth=quick|standard|deep] [--repo] [--slug=<kebab>] [--surface=auto|off|force]"
 runtime: c1
 driver_features_required:
@@ -10,7 +10,7 @@ driver_features_required:
 unsupported_driver_behavior: explicit_gate
 ---
 
-You are running the **z-harness `/z-explore`** pipeline — a depth-scaled terrain discovery command that replaces `/z-map` for quick scouts through deep MAP.md equivalents.
+You are running the **z-harness `/z-explore`** pipeline — a depth-scaled terrain discovery command from quick scouts through deep MAP.md synthesis.
 
 Question (from `$ARGUMENTS`):
 
@@ -26,7 +26,7 @@ Strict, multi-phase. Do not skip phases. `/z-explore` produces a terrain note on
 **Depth modes** (parsed from `--depth=` argument):
 - `quick` (default): 1-2 Haiku Explores, inline findings. Low cost, fast turnaround.
 - `standard`: up to 3 Haiku Explores, persisted EXPLORE.md + surface-map.json. Moderate cost.
-- `deep`: up to 3 Haiku/Sonnet Explores, full research-draft + bundled cross-LLM critique + MAP.md. Full z-map equivalent.
+- `deep`: up to 3 Haiku/Sonnet Explores, full research-draft + bundled cross-LLM critique + MAP.md. Full terrain synthesis.
 
 **Known v1 limitation:** `Agent()` does not expose a per-call wall-clock timeout. Subagents that hang block the run. User escape: ctrl-c.
 
@@ -88,7 +88,7 @@ Advisory-only routing. Run this route check before Phase 1. Use only already-kno
 
 Never auto-dispatch. Write `$Z_HARNESS_PLAN_DIR/archive/$RUN/route-decision.md` and present the user with recommended next steps via `AskUserQuestion`:
 
-- `z-explore --depth=deep` (replaces z-map) — full MAP.md with cross-LLM critique when deep terrain certainty is required.
+- `/z-explore --depth=deep` — full MAP.md with cross-LLM critique when deep terrain certainty is required.
 - `/z-explain` — targeted explanation of a specific code path the explore uncovered.
 - `/z-learn` — progressive codebase tutoring when the user wants orientation.
 - `/z-report` — structured report on specific findings.
@@ -128,7 +128,7 @@ Depth-dependent cost handling:
 
 **`standard` mode:** Simple cost note — log a `cost_note` event stating estimated ~500k tokens, then proceed without user prompt.
 
-**`deep` mode:** Full cost gate, same as `/z-map` Phase 0. Present the cost up front via `AskUserQuestion` with three options:
+**`deep` mode:** Full cost gate for deep terrain synthesis. Present the cost up front via `AskUserQuestion` with three options:
 
 <!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the cost-gate
      question (Proceed/Reduce/Abandon) via their native channel and accept a
@@ -146,7 +146,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 If `abandon`: exit. If `reduce`: set `EXPLORE_BUDGET=1`. Otherwise `EXPLORE_BUDGET=3`.
 
-For **deep** mode: after the cost gate, run Phase 0.5 slug + artifact collision handling (same as `/z-map` Phase 0.5 — check existing `$Z_HARNESS_PLAN_DIR/` dirs and `MAP.md`, prompt user for archive-and-start-fresh / continue / abort).
+For **deep** mode: after the cost gate, run Phase 0.5 slug + artifact collision handling (check existing `$Z_HARNESS_PLAN_DIR/` dirs and `MAP.md`, prompt user for archive-and-start-fresh / continue / abort).
 
 Checkpoint: `phase1-cost-gate.md`.
 
@@ -204,7 +204,7 @@ Agent(
 )
 ```
 
-Track `EXPLORES_DISPATCHED` and `EXPLORES_SUCCEEDED` per z-map conventions.
+Track `EXPLORES_DISPATCHED` and `EXPLORES_SUCCEEDED` per exploration telemetry conventions.
 
 ### standard mode (up to 3 Haiku Explores)
 
@@ -233,7 +233,7 @@ Agent(
 
 ### deep mode (up to 3 Haiku/Sonnet Explores)
 
-Same as `/z-map` Phase 2. Dispatch up to `EXPLORE_BUDGET` (3 or 1) parallel `Explore` subagents. Use Haiku for locating tasks, Sonnet for interpretation tasks:
+For deep terrain synthesis, dispatch up to `EXPLORE_BUDGET` (3 or 1) parallel `Explore` subagents. Use Haiku for locating tasks, Sonnet for interpretation tasks:
 
 ```
 Agent(
@@ -321,7 +321,7 @@ explore_calls: <EXPLORES_SUCCEEDED>
 This exploration explicitly does not recommend an approach. Use /z-brainstorm or /z-plan to pick one.
 
 ## Next
-- /z-map <topic> — full MAP.md with cross-LLM critique
+- /z-explore <topic> --depth=deep — full MAP.md with cross-LLM critique
 - /z-explain <topic> — targeted explanation
 - /z-learn <topic> — progressive codebase tutoring
 ```
@@ -341,7 +341,7 @@ Also write `$Z_HARNESS_PLAN_DIR/surface-map.json`:
 
 ### deep mode — full research pipeline
 
-1. **Write research-draft.md** — same as `/z-map` Phase 3:
+1. **Write research-draft.md** — draft cited terrain findings for deep synthesis:
    ```markdown
    ## Findings
    ## Constraints discovered
@@ -350,7 +350,7 @@ Also write `$Z_HARNESS_PLAN_DIR/surface-map.json`:
    ```
    With citation enforcement, demotion rule, and the invariant `## No-recommendation` section.
 
-2. **Bundled consultant critique** — same as `/z-map` Phase 4. Spawn **both** consultants in parallel:
+2. **Bundled consultant critique** — review the draft for terrain gaps/errors. Spawn **both** consultants in parallel:
    ```
    Agent(
      subagent_type="consultant-primary",
@@ -363,11 +363,11 @@ Also write `$Z_HARNESS_PLAN_DIR/surface-map.json`:
      prompt="MODE: research-review\n\n..."
    )
    ```
-   Per-consultant failure policy (retry-once, then log failed), aggregate decision logic — same as `/z-map` Phase 4.
+   Per-consultant failure policy: retry once, then log failed. Require at least one successful critique before revising; if both fail, use the both-consultants-failed `ask_user` gate before proceeding.
 
 3. **Revise** — update research-draft.md with critique, add `## Cross-LLM review notes` section.
 
-4. **Write MAP.md** — same as `/z-map` Phase 6 output format:
+4. **Write MAP.md** — final deep-mode terrain output format:
    ```markdown
    ---
    artifact: map
@@ -420,7 +420,7 @@ Send a `PushNotification` if policy ≠ `off` with a next-step recommendation:
 Explore complete. Depth: <depth>.
 
 Recommended next step:
-  /z-map <topic>   — full MAP.md with cross-LLM critique
+  /z-explore <topic> --depth=deep — full MAP.md with cross-LLM critique
   /z-explain <topic> — targeted explanation of a specific code path
   /z-learn <topic>  — progressive codebase tutoring
   /z-plan <task>    — go straight to planning if terrain is clear enough

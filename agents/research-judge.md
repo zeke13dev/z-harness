@@ -121,7 +121,7 @@ List approaches that have majority `BLOCKS` or `RISKY` cells. State the rational
 
 **Section 8: `## Evidence gaps`**
 
-Enumerate UNVERIFIED cells aggregated from the matrix. For each: `Approach × Constraint: UNVERIFIED`. Suggest a targeted `/z-map` re-run topic to close the gap (e.g. "Suggested: /z-map with focus on <constraint class> for <approach name>"). These suggestions are mechanical (derived from the gap's constraint class) — not design recommendations.
+Enumerate UNVERIFIED cells aggregated from the matrix. For each: `Approach × Constraint: UNVERIFIED`. Suggest a targeted `/z-explore --depth=deep` investigation topic to close the gap (e.g. "Suggested: /z-explore --depth=deep with focus on <constraint class> for <approach name>"). These suggestions are mechanical (derived from the gap's constraint class) — not design recommendations.
 
 If no UNVERIFIED cells: write "No evidence gaps detected."
 
@@ -223,7 +223,7 @@ slug: <slug>
 generated_at: <ISO 8601>
 command: /z-research <args>
 dispatch_decision:
-  map: <ran|reused|skipped|abandoned>
+  map: <ran|reused|skipped|abandoned>  # MAP.md terrain artifact / legacy compatibility
   brainstorm: <ran|reused|skipped|abandoned>
 source_artifacts:
   - path: MAP.md
@@ -250,8 +250,8 @@ Field definitions:
 - **`slug`** — the research topic slug; kebab-case string matching the slug used for the archive directory.
 - **`generated_at`** — ISO 8601 timestamp of when this file was written by the orchestrator.
 - **`command`** — the exact command invocation that triggered this run (e.g. `/z-research my-topic --slug=my-topic`).
-- **`dispatch_decision`** — audit record of what was run vs. reused. Each field is one of `ran | reused | skipped | abandoned`:
-  - **`map`** — disposition of the /z-map sub-command for this run.
+- **`dispatch_decision`** — audit record of which component artifacts or lanes were produced, reused, skipped, or abandoned. Each field is one of `ran | reused | skipped | abandoned`:
+  - **`map`** — disposition of MAP.md terrain artifact production/reuse; the field name is retained for legacy terrain-wrapper compatibility. Active deep terrain gathering is `/z-explore --depth=deep`.
   - **`brainstorm`** — disposition of the /z-brainstorm sub-command for this run.
 - **`source_artifacts`** — array of the two component artifacts consumed by the synthesis panel. Each entry has:
   - **`path`** — relative path to the artifact (either `MAP.md` or `BRAINSTORM.md`).
@@ -283,7 +283,7 @@ The body (returned under `RESEARCH_CONTENT:`) must contain exactly the following
 
 7. **`## Rejected / weak framings`** — approaches with majority `BLOCKS` or `RISKY` cells. Rationale is mechanical matrix output: "Approach X has <N> BLOCKS cells: <constraint A> (`BLOCKS: citation`), <constraint B> (`BLOCKS: citation`)." No editorial commentary.
 
-8. **`## Evidence gaps`** — UNVERIFIED cells aggregated from the matrix. Format per gap: `<Approach> × <Constraint>: UNVERIFIED`. Each gap includes a suggested targeted `/z-map` re-run topic (mechanical — derived from the gap's constraint class, not a design recommendation). If no UNVERIFIED cells: "No evidence gaps detected."
+8. **`## Evidence gaps`** — UNVERIFIED cells aggregated from the matrix. Format per gap: `<Approach> × <Constraint>: UNVERIFIED`. Each gap includes a suggested targeted `/z-explore --depth=deep` investigation topic (mechanical — derived from the gap's constraint class, not a design recommendation). If no UNVERIFIED cells: "No evidence gaps detected."
 
 9. **`## Adversarial perspectives summary`** — one paragraph per perspective that was available. Each paragraph names the perspective label, summarizes what it emphasized, and lists the key constraints it considered load-bearing. If a perspective was unavailable (panel degraded), one sentence: "Perspective `<name>` was unavailable (panel degraded)." If panel was degraded, prepend the panel-degraded warning block before the per-perspective paragraphs.
 

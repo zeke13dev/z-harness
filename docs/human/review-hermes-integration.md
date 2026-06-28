@@ -4,8 +4,9 @@
 > all reviewed). The "dormant/planned" language from the original v1.1 review no longer applies.
 > Within-plan DAG concurrency, cross-plan orchestration, and the merge mutex are all live.
 > See [docs/human/hermes-integration-v1.md](hermes-integration-v1.md) for the finalized
-> protocol v1.3 specification and operator runbook. Historical mentions of `/z-plan --quick`
-> below now correspond to `/z-plan --quick` after the light-plan command was removed.
+> protocol v1.3 specification and operator runbook. Any historical references to the removed
+> light-plan command family (`light-plan`, `z-light-plan`, `/z-light-plan`, `z-plan-light`)
+> now map to the current `/z-plan --quick` flow; the removed names are not active guidance.
 
 > **Document reviewed:** `docs/human/hermes-integration-v1.md` (v1.1.0, status: DRAFT)
 > **Date:** 2026-06-08

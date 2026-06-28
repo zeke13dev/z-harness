@@ -68,7 +68,7 @@ Used by `/z-do` only. Requires **Intent, Outcome, Next** only. The `approach` an
 
 ---
 
-## v1 registry commands (11)
+## v1 registry commands (9)
 
 | Command | Profile |
 |---------|---------|
@@ -88,11 +88,11 @@ Command → artifact mapping lives in `docs/llm/run-brief-registry.json`.
 
 ---
 
-## Excluded commands (meta / read-only / setup)
+## Excluded commands (meta / read-only / setup / terrain)
 
-Not wired in v1 — no run brief at finalize:
+Not wired in v1 — no run brief at finalize. Terrain mapping is also excluded: use `/z-explore --depth=deep` for current deep terrain runs; `/z-map` is retained only as legacy compatibility.
 
-`/z-stats`, `/z-where`, `/z-export`, `/z-setup`, `/z-update`, `/z-uplift`, `/z-research`, `/z-map`, `/z-plan-split`, `/z-overnight`, `/z-mr-review`, `/z-maintain-docs`, `/z-init-docs`, `/z-learn`, `/z-explain`
+`/z-stats`, `/z-where`, `/z-export`, `/z-setup`, `/z-update`, `/z-uplift`, `/z-research`, `/z-explore --depth=deep`, `/z-map` (legacy compatibility), `/z-plan-split`, `/z-overnight`, `/z-mr-review`, `/z-maintain-docs`, `/z-init-docs`, `/z-learn`, `/z-explain`
 
 Secondary commands may be added post-v1 by extending the registry JSON.
 

@@ -1,7 +1,7 @@
 ---
 name: z-research
 disable-model-invocation: false
-description: Higher-order meta-orchestrator. Composes /z-explore --depth=deep (terrain, replaces /z-map) and /z-brainstorm (framings), then runs adversarial synthesis panel (3 perspectives + judge) producing RESEARCH.md with 10-section schema including approach decision matrix. Cost 3–6M tokens; AskUser cost gate at invocation.
+description: Higher-order meta-orchestrator. Composes /z-explore --depth=deep (terrain/MAP.md) and /z-brainstorm (framings), then runs adversarial synthesis panel (3 perspectives + judge) producing RESEARCH.md with 10-section schema including approach decision matrix. Cost 3–6M tokens; AskUser cost gate at invocation.
 argument-hint: <research-topic> [--slug=<kebab>]
 runtime: c1
 driver_features_required:
@@ -16,7 +16,7 @@ Arguments (from `$ARGUMENTS`):
 
 $ARGUMENTS
 
-Strict, multi-phase. Do not skip phases. `/z-research` orchestrates sub-commands and an adversarial synthesis panel — it does **not** write MAP.md or BRAINSTORM.md content directly. Those artifacts are exclusively owned by `/z-explore` (via --depth=deep) and `/z-brainstorm` respectively. `/z-map` is legacy; `/z-explore --depth=deep` replaces it.
+Strict, multi-phase. Do not skip phases. `/z-research` orchestrates sub-commands and an adversarial synthesis panel — it does **not** write MAP.md or BRAINSTORM.md content directly. Those artifacts are exclusively owned by `/z-explore --depth=deep` and `/z-brainstorm` respectively. `/z-map` is legacy/compatibility naming only, not a current dispatch target.
 
 **Cost warning:** this pipeline runs up to 3M tokens for sub-commands + 3M tokens for the synthesis panel (3 perspectives @ ~1M each) + 0.5M for the judge. Total: 3–6M tokens. The cost gate in Phase 0.5 always runs before dispatch.
 
@@ -489,7 +489,7 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 ## Artifact Scout classifier (post-gate, before subcommand dispatch)
 
-Run only after Phase 0.5 cost gate proceeds. This is the first allowed `artifact-scout` Agent position for `/z-research`; it runs before `/z-map` or `/z-brainstorm` child dispatch and before synthesis panel dispatch.
+Run only after Phase 0.5 cost gate proceeds. This is the first allowed `artifact-scout` Agent position for `/z-research`; it runs before `/z-explore --depth=deep` or `/z-brainstorm` child dispatch and before synthesis panel dispatch.
 
 ```
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this artifact-scout
@@ -519,7 +519,7 @@ Record `T0=$(date +%s%3N)` and `USER_WAIT_MS_THIS_PHASE=0` at phase start.
 The orchestrator cannot mutate a sub-command's internal RUN id — each sub-command derives its own from `date -u +%Y%m%dT%H%M%SZ`. Audit attribution uses the **child-emits-event-with-parent-attribution** pattern:
 
 1. Orchestrator exports `Z_HARNESS_PARENT_RUN_ID=$RUN` and `Z_HARNESS_PARENT_COMMAND=/z-research` into the Agent() dispatch environment.
-2. Sub-command's Setup detects `$Z_HARNESS_PARENT_RUN_ID` and includes `parent_run_id` in every `log-event.sh` payload it emits (this is already handled by the sub-commands' Setup step 6 — see /z-map Setup step 6 and /z-brainstorm equivalent).
+2. Sub-command's Setup detects `$Z_HARNESS_PARENT_RUN_ID` and includes `parent_run_id` in every `log-event.sh` payload it emits (this is already handled by the sub-commands' Setup step 6 — see `/z-explore --depth=deep` and `/z-brainstorm` equivalents).
 3. After the sub-command completes, orchestrator extracts the sub-run id from the sub-command's emitted `run_start` event in its events.jsonl.
 4. Orchestrator creates a symlink `archive/$RUN/subruns/<sub-command>` → `archive/<sub-run>/`.
 5. Orchestrator emits `research_subcommand_complete`.
@@ -530,15 +530,15 @@ The orchestrator cannot mutate a sub-command's internal RUN id — each sub-comm
 mkdir -p "$Z_HARNESS_PLAN_DIR/archive/$RUN/subruns"
 ```
 
-### Step 2 — Dispatch /z-map (if `DISPATCH_MAP=ran`)
+### Step 2 — Dispatch /z-explore --depth=deep (if `DISPATCH_MAP=ran`)
 
 **When both `DISPATCH_MAP=ran` AND `DISPATCH_BRAINSTORM=ran`, skip this step and go directly to Step 2+3 (parallel dispatch) below.**
 
 If `DISPATCH_MAP=ran` (and `DISPATCH_BRAINSTORM != ran`):
 
-1. Dispatch `/z-map` via Agent():
+1. Dispatch `/z-explore --depth=deep` via Agent():
 
-   <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The /z-map sub-command produces the terrain MAP.md used in synthesis; drivers that skip it must warn the user that terrain mapping is unavailable. -->
+   <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch requirement to the user and skip the Agent() call. The /z-explore terrain pass produces the MAP.md artifact used in synthesis; drivers that skip it must warn the user that terrain mapping is unavailable. -->
    ```
    Agent(
      subagent_type="z-explore",
@@ -559,7 +559,7 @@ If `DISPATCH_MAP=ran` (and `DISPATCH_BRAINSTORM != ran`):
    MAP_SUB_RUN="$(ls -1t "$Z_HARNESS_PLAN_DIR/archive/" | grep -v "^${RUN}$" | grep "$SLUG" | head -1 || true)"
    ```
 
-   If `MAP_SUB_RUN` is empty, search for any events.jsonl with a `research_run_start` event (the event type emitted by /z-map):
+   If `MAP_SUB_RUN` is empty, search for any events.jsonl with an `explore_run_start` event (legacy terrain archives may use `map_run_start`):
 
    ```bash
    MAP_ARCHIVE_PATH="$Z_HARNESS_PLAN_DIR/archive/$MAP_SUB_RUN"
@@ -584,19 +584,19 @@ If `DISPATCH_MAP=ran` (and `DISPATCH_BRAINSTORM != ran`):
    MAP_VERIFY_STATUS=$?
    ```
 
-   If MAP.md verification fails: abort the current run, log `research_subcommand_failed {sub: z-map, reason: artifact_missing_or_malformed}`, push-notify, surface to user. Do NOT attempt to fix the sub-command's output.
+   If MAP.md verification fails: abort the current run, log `research_subcommand_failed {sub: z-explore, reason: artifact_missing_or_malformed}`, push-notify, surface to user. Do NOT attempt to fix the sub-command's output.
 
 4. Create symlink:
 
    ```bash
-   ln -sfn "$MAP_ARCHIVE_PATH" "$Z_HARNESS_PLAN_DIR/archive/$RUN/subruns/z-map"
+   ln -sfn "$MAP_ARCHIVE_PATH" "$Z_HARNESS_PLAN_DIR/archive/$RUN/subruns/z-explore"
    ```
 
 5. Emit:
 
    ```bash
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" research_subcommand_complete \
-     "$(printf '{"sub":"z-map","status":"complete","sub_run_id":"%s","sub_archive_path":"%s"}' \
+     "$(printf '{"sub":"z-explore","status":"complete","sub_run_id":"%s","sub_archive_path":"%s"}' \
         "$MAP_SUB_RUN" "$MAP_ARCHIVE_PATH")"
    ```
 
@@ -604,14 +604,14 @@ If `DISPATCH_MAP=reused`:
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" research_subcommand_complete \
-  "$(printf '{"sub":"z-map","status":"reused","sub_run_id":null,"sub_archive_path":null}')"
+  "$(printf '{"sub":"z-explore","status":"reused","sub_run_id":null,"sub_archive_path":null}')"
 ```
 
 If `DISPATCH_MAP=skipped`:
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" research_subcommand_complete \
-  "$(printf '{"sub":"z-map","status":"skipped","sub_run_id":null,"sub_archive_path":null}')"
+  "$(printf '{"sub":"z-explore","status":"skipped","sub_run_id":null,"sub_archive_path":null}')"
 ```
 
 ### Step 3 — Dispatch /z-brainstorm (if `DISPATCH_BRAINSTORM=ran`)
@@ -677,7 +677,7 @@ If `DISPATCH_BRAINSTORM=ran` (and `DISPATCH_MAP != ran`):
         "$BRAINSTORM_SUB_RUN" "$BRAINSTORM_ARCHIVE_PATH")"
    ```
 
-If `DISPATCH_BRAINSTORM=reused` or `DISPATCH_BRAINSTORM=skipped`, emit accordingly (same pattern as /z-map above).
+If `DISPATCH_BRAINSTORM=reused` or `DISPATCH_BRAINSTORM=skipped`, emit accordingly (same pattern as the terrain mapping event above).
 
 ### Step 2+3 — Parallel dispatch (when `DISPATCH_MAP=ran` AND `DISPATCH_BRAINSTORM=ran`)
 
@@ -715,7 +715,7 @@ This step fires only when both sub-commands need to run (i.e., `DISPATCH_MAP=ran
 
    Both agents run in parallel and both must complete before continuing.
 
-3. After both Agent() calls return, identify the two new archive directories by diffing against the pre-dispatch snapshot. Distinguish MAP from BRAINSTORM by reading the first event in each new archive's `events.jsonl` and checking its `kind` field — `/z-map` emits `kind: "map_run_start"` (or `/z-explore` emits `kind: "explore_run_start"`) and `/z-brainstorm` emits `kind: "brainstorm_run_start"`. This is robust against RUN-ID timestamp collisions (both commands derive RUN from the same second-precision timestamp) because the `kind` field is set by the command itself, not by the directory name.
+3. After both Agent() calls return, identify the two new archive directories by diffing against the pre-dispatch snapshot. Distinguish MAP from BRAINSTORM by reading the first event in each new archive's `events.jsonl` and checking its `kind` field — `/z-explore --depth=deep` emits `kind: "explore_run_start"` (legacy terrain archives may use `kind: "map_run_start"`) and `/z-brainstorm` emits `kind: "brainstorm_run_start"`. This is robust against RUN-ID timestamp collisions (both commands derive RUN from the same second-precision timestamp) because the `kind` field is set by the command itself, not by the directory name.
 
    ```bash
    POST_DISPATCH_ARCHIVE="$(ls -1 "$Z_HARNESS_PLAN_DIR/archive/" | grep -v "^${RUN}$" | grep "$SLUG" || true)"
@@ -788,7 +788,7 @@ if line: print(json.loads(line).get('kind',''))
    MAP_VERIFY_STATUS=$?
    ```
 
-   If MAP.md verification fails: abort the current run, log `research_subcommand_failed {sub: z-map, reason: artifact_missing_or_malformed}`, push-notify, surface to user. Do NOT attempt to fix the sub-command's output.
+   If MAP.md verification fails: abort the current run, log `research_subcommand_failed {sub: z-explore, reason: artifact_missing_or_malformed}`, push-notify, surface to user. Do NOT attempt to fix the sub-command's output.
 
 5. Verify BRAINSTORM.md was written:
 
@@ -815,7 +815,7 @@ if line: print(json.loads(line).get('kind',''))
 
    ```bash
    if [ -d "$MAP_ARCHIVE_PATH" ] && [ -d "$BRAINSTORM_ARCHIVE_PATH" ] && [ "$MAP_SUB_RUN" != "$BRAINSTORM_SUB_RUN" ]; then
-     ln -sfn "$MAP_ARCHIVE_PATH"        "$Z_HARNESS_PLAN_DIR/archive/$RUN/subruns/z-map"
+     ln -sfn "$MAP_ARCHIVE_PATH"        "$Z_HARNESS_PLAN_DIR/archive/$RUN/subruns/z-explore"
      ln -sfn "$BRAINSTORM_ARCHIVE_PATH" "$Z_HARNESS_PLAN_DIR/archive/$RUN/subruns/z-brainstorm"
    else
      bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end \
@@ -832,7 +832,7 @@ if line: print(json.loads(line).get('kind',''))
 
    ```bash
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" research_subcommand_complete \
-     "$(printf '{"sub":"z-map","status":"complete","sub_run_id":"%s","sub_archive_path":"%s"}' \
+     "$(printf '{"sub":"z-explore","status":"complete","sub_run_id":"%s","sub_archive_path":"%s"}' \
         "$MAP_SUB_RUN" "$MAP_ARCHIVE_PATH")"
    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" research_subcommand_complete \
      "$(printf '{"sub":"z-brainstorm","status":"complete","sub_run_id":"%s","sub_archive_path":"%s"}' \
@@ -1327,7 +1327,7 @@ else:
 
 if [ "$MATRIX_STATS" = "HIGH" ]; then
   bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" research_high_unverified_rate \
-    "$(printf '{"slug":"%s","advisory":"over 50 percent of matrix cells are UNVERIFIED; consider re-running /z-map with a more refined topic"}' "$SLUG")"
+    "$(printf '{"slug":"%s","advisory":"over 50 percent of matrix cells are UNVERIFIED; consider re-running /z-explore --depth=deep with a more refined topic"}' "$SLUG")"
   TRIPWIRES_FIRED="$TRIPWIRES_FIRED research_high_unverified_rate"
 fi
 ```

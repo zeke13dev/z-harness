@@ -223,7 +223,7 @@ Each per-command halt event has the same payload shape: `{reason, question_id, r
 | `plan_style_halt` | `/z-audit-plan-style` | `workflow.audit_to_amend` |
 | `uplift_halt` | `/z-uplift` | `workflow.slug_confirm` |
 | `debug_halt` | `skills/z-debug` | `workflow.slug_confirm` |
-| `map_halt` | `skills/z-map` | `workflow.slug_confirm` |
+| `map_halt` | `skills/z-map/SKILL.md` (legacy wrapper; current terrain command is `/z-explore --depth=deep` via `skills/z-explore/SKILL.md`) | `workflow.slug_confirm` |
 | `brainstorm_halt` | `skills/z-brainstorm` | `workflow.slug_confirm` |
 | `plan_halt` | `/z-plan` | `workflow.slug_confirm` (Phase 1) or `workflow.plan_decisions_approval` (Phase 2.5) |
 | `review_halt` | `/z-review-all` | `workflow.review_all_proceed` (Phase 3.7) |
@@ -318,7 +318,7 @@ The `_build_recommended_next` function in `morning-report.py` branches on `termi
 > **v1 known limit (fail-OPEN for unregistered callsites):** Sub-commands that call `AskUserQuestion` outside the registered gate set will block the conversation until you respond, even with `Z_HARNESS_NO_ASK=halt`. `scripts/lint-askuser.sh` is documentation and audit tooling — it is NOT runtime enforcement and cannot convert a non-instrumented AskUser into a halt. Run `make bench-autonomy-check` before launching a policy-mode benchmark run; for standard overnight runs, run `scripts/lint-askuser.sh --strict` before launching a long chain and instrument any callsites flagged as unregistered if they are on your chain's hot path. v2 will pursue runtime enforcement (e.g., centralized AskUser wrapper at the driver layer).
 
 The instrumented callsites are:
-- **workflow.slug_confirm** (6): `skills/z-plan/SKILL.md`, `skills/z-fix/SKILL.md`, `skills/z-uplift/SKILL.md`, `skills/z-debug/SKILL.md`, `skills/z-brainstorm/SKILL.md`, `skills/z-map/SKILL.md`
+- **workflow.slug_confirm** (6): `skills/z-plan/SKILL.md`, `skills/z-fix/SKILL.md`, `skills/z-uplift/SKILL.md`, `skills/z-debug/SKILL.md`, `skills/z-brainstorm/SKILL.md`, `skills/z-explore/SKILL.md`; `skills/z-map/SKILL.md` is a legacy wrapper compatibility path for current `/z-explore --depth=deep` terrain runs.
 - **workflow.audit_to_amend** (2): `skills/z-audit-plan/SKILL.md`, `skills/z-audit-plan-style/SKILL.md`
 - **workflow.implement_all_proceed** (1): `/z-execute` halt-resolution gate
 - **workflow.review_all_proceed** (1): `/z-review-all` Phase 3.7 proceed gate

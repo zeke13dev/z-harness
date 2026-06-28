@@ -44,15 +44,14 @@ estimate-tokens.py <command> [--dispatch KEY=N ...]
 ```json
 {
   "command":          "z-research",
-  "estimated_tokens": 4200000,
-  "range_low":        3000000,
-  "range_high":       6200000,
-  "confidence":       "high",
-  "basis":            "static profile + dispatch(map) + 5 historical runs",
+  "estimated_tokens": 5200000,
+  "range_low":        5200000,
+  "range_high":       8200000,
+  "confidence":       "medium",
+  "basis":            "static profile + terrain/MAP dispatch (`map` key; /z-explore --depth=deep) + brainstorm dispatch",
   "breakdown": [
     {"tier": "static",   "low": 3000000, "high": 6000000},
-    {"tier": "dispatch", "add": 200000,  "keys": ["map"]},
-    {"tier": "empirical","p50": 4200000, "p90": 6200000, "samples": 5}
+    {"tier": "dispatch", "add": 2200000, "keys": ["map", "brainstorm"]}
   ],
   "gate": "hard"
 }
@@ -160,6 +159,7 @@ When `provider_input_tokens` / `provider_output_tokens` are present in an event 
 - `range`: `[low, high]` integer token estimate forming the static floor/ceiling.
 - `gate`: `"hard"` | `"soft"` | (absent = no gate). Consumed by `pre-run-cost-gate.sh`.
 - `multipliers`: optional map of dispatch key to per-unit token cost. A command passes `--dispatch key=N` to apply `multipliers[key] * N`. Absent key = 0.
+- For `z-research`, the legacy `map` multiplier key is still the live profile key for terrain/MAP.md cost compatibility; user-facing command guidance should describe that child terrain work as `/z-explore --depth=deep`.
 - `dispatch_defaults`: optional conservative defaults used when a command cannot know future fan-out before the gate. Explicit dispatch values for the same key replace the default; duplicate explicit values for one key are summed before replacement. Negative counts are rejected.
 
 The real `z-plan` profile also carries `dispatch_contract.accepted_keys` documentation and an `e2e_forecast.execute_forecast` block. The latter is the static, low-confidence projected `/z-execute` component used only by forecast mode; it is not part of the hard gate's plan-cost approval.
@@ -184,7 +184,7 @@ A single JSON object (no bare text):
 {
   "disposition": "ask|auto_proceed|halt|unhandled_gate",
   "estimate":    { ... full envelope from estimate-tokens.py ... },
-  "human_block": "Token estimate for /z-research:\n  estimate  : ~4.2M\n  range     : 3.0M–6.2M\n  confidence: high\n  basis     : static profile + 5 historical runs"
+  "human_block": "Token estimate for /z-research:\n  estimate  : ~5.2M\n  range     : 5.2M–8.2M\n  confidence: medium\n  basis     : static profile + terrain/MAP dispatch (`map` key; /z-explore --depth=deep) + brainstorm dispatch"
 }
 ```
 
@@ -251,7 +251,7 @@ This knob is NOT a question_id and does NOT appear in `QUESTION_IDS` or `RESULT_
 
 | Command | Severity | Gate fires on |
 |---------|----------|---------------|
-| `/z-research` | hard | Phase 0.5, after dispatch decision and deterministic scout inventory, before the post-gate `artifact-scout` classifier or child `/z-map`/`/z-brainstorm` dispatch |
+| `/z-research` | hard | Phase 0.5, after dispatch decision and deterministic scout inventory, before the post-gate `artifact-scout` classifier or child terrain (`/z-explore --depth=deep`, producing MAP.md) / `/z-brainstorm` dispatch |
 | `/z-uplift` | hard | Phase 1.5 pre-fanout gate after component count is known; deterministic scout inventory may run earlier, but the `artifact-scout` Agent classifier is post-gate and before expensive decomposition/fanout |
 | `/z-plan-split` | hard | Phase 1.5 pre-fanout gate after cluster confirmation; deterministic scout inventory may run earlier, but the `artifact-scout` Agent classifier is post-gate and before cluster-planner fanout |
 | `/z-plan` | hard | Pre-subagent gate, after cheap setup/route/mode preflight and deterministic scout inventory, before post-gate `artifact-scout`, deferred `planning-router`, `intent-classifier`, doc-fetcher, Explore, consultants, task-tree generator, or any other Agent |
@@ -277,9 +277,9 @@ All gates (hard and soft) emit exactly one `cost_gate_decision` event per invoca
   "run":              "<RUN_ID>",
   "command":          "z-research",
   "choice":           "proceed | auto_proceed | change_dispatch | abandon | halt | interrupted",
-  "estimated_tokens": 4200000,
-  "confidence":       "high",
-  "basis":            "static profile + 5 historical runs"
+  "estimated_tokens": 5200000,
+  "confidence":       "medium",
+  "basis":            "static profile + terrain/MAP dispatch (`map` key; /z-explore --depth=deep) + brainstorm dispatch"
 }
 ```
 

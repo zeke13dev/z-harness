@@ -1,6 +1,6 @@
 # Telemetry
 
-> Last updated: 2026-05-27
+> Last updated: 2026-06-28
 
 All events are appended to `<base>/metrics.jsonl` via `scripts/log-event.sh`,
 where `<base>` is the resolved artifact base — external by default
@@ -13,7 +13,7 @@ appear only on subagent-bracket events, not on lifecycle or gate events.
 
 ## Event kinds
 
-### `/z-brainstorm`, `/z-map`, and `/z-research`
+### `/z-brainstorm`, `/z-explore --depth=deep`, and `/z-research`
 
 | Event | Emitted by |
 |---|---|
@@ -23,11 +23,20 @@ appear only on subagent-bracket events, not on lifecycle or gate events.
 | `research_run_end` | `/z-research` Phase 6 |
 | `ideator_failed` | `/z-brainstorm` Phase 2 (fields: `vendor`, `reason`) |
 | `total_ideator_failure` | `/z-brainstorm` Phase 2 when all three ideators fail |
-| `research_temptation` | `/z-map` (`commands/z-map.md`) when orchestrator drafts a recommendation it must not make (note: `commands/z-map.md` emits `map_temptation` for the same invariant) |
+| `explore_run_start` | `/z-explore --depth=deep` setup for current terrain mapping; the same event kind is also used by other `/z-explore` depths and records `depth` |
+| `explore_run_end` | `/z-explore --depth=deep` Phase 5 finalize; deep mode writes the `MAP.md` artifact and records `map_written`, `citation_count`, `gap_count`, and `critique_status` |
+| `research_subcommand_complete` | `/z-research` when the current `z-explore` or `z-brainstorm` subcommand completes, is reused, or is skipped |
+| `phase_end` | `/z-explore --depth=deep` and `/z-research` phase checkpoints (fields: `phase`, `name`, `wall_ms`, `user_wait_ms`) |
+| `user_wait_start` / `user_wait_end` | `/z-explore --depth=deep` AskUser gates, including cost and collision decisions |
+| `research_temptation` / `map_temptation` | Legacy compatibility telemetry for older `/z-map` archives/docs only; current `/z-explore --depth=deep` telemetry uses `explore_run_*` plus `MAP.md` artifact fields |
 | `precontext_source_deleted` | `/z-plan` Setup step 10 freshness check (higher severity than stale-mtime) |
 | `precontext_freshness_check_failed` | `/z-plan` Setup step 10 freshness check parse failure |
-| `cost_gate_decision` | `/z-research` Phase 0 cost-confirmation gate |
-| `explore_failure` | any command that dispatches an Explore subagent that does not return |
+| `cost_gate_decision` | `/z-research` Phase 0 cost-confirmation gate; `/z-explore --depth=deep` cost gate |
+| `explore_failure` | `/z-explore --depth=deep` or any command that dispatches an Explore subagent that does not return |
+
+`/z-map` is not a current telemetry producer. Mentions of `map_*` event names
+above are legacy compatibility only; `MAP.md` is the deep terrain artifact written
+by `/z-explore --depth=deep`.
 
 ### `/z-plan-split` and tree-walking branch of `/z-execute`
 

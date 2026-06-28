@@ -45,8 +45,8 @@ is the standard MCP stdio pattern.
 | `z_debug` | `/z-debug` | Investigate a bug with repro/hypothesis/evidence/isolation phases |
 | `z_do` | `/z-do` | Plan-less execution for trivial changes with harness discipline |
 | `z_brainstorm` | `/z-brainstorm` | 3-vendor parallel pre-plan ideation with anti-bias check |
-| `z_research` | `/z-research` | Deep research: map + brainstorm + adversarial synthesis panel |
-| `z_map` | `/z-map` | Map terrain with citations and cross-LLM critique |
+| `z_research` | `/z-research` | Deep research: deep terrain exploration (`/z-explore --depth=deep` in the command flow) + brainstorm + adversarial synthesis panel |
+| `z_map` | `/z-map` (legacy) | Registered legacy MCP tool for older clients; prefer direct `/z-explore --depth=deep` command guidance for new terrain work |
 | `z_plan_split` | `/z-plan-split` | Pre-emptive scope splitter — fan-out into N narrow cluster-planners |
 | `z_test` | `/z-test` | Dual-source semantic test-case planner (ERROR_POINTS + INVARIANTS) |
 | `z_amend` | `/z-amend` | Amend an existing plan (SPEC/PLAN/TASKS) preserving completed state |
@@ -217,7 +217,7 @@ Hermes calls `z_plan`, `z_implement_all`, `z_implement_next`, and the fast read 
 - `z_harness_cli/__main__.py:184` — `serve_cmd` — Typer CLI wrapper; help text: "Start the z-harness MCP server (stdio)"; delegates to `z_harness_cli/commands/serve.py`.
 - `z_harness_cli/commands/serve.py:11` — `run` — Thin command implementation; calls `z_harness_cli.mcp.server.serve(transport=transport)`.
 - `z_harness_cli/mcp/server.py:32` — `mcp` — `FastMCP("z-harness")` singleton; all tools are registered against it at import time via `_register_tools()`.
-- `z_harness_cli/mcp/server.py:360` — `COMMAND_TOOLS` — Registry mapping tool name → `{command_id, description, is_heavy, skills_path}`. 40 entries.
+- `z_harness_cli/mcp/server.py:360` — `COMMAND_TOOLS` — Registry mapping tool name → `{command_id, description, is_heavy, skills_path}` for the MCP tool catalog.
 - `z_harness_cli/mcp/server.py:208` — `MCPDispatcher` — Routes heavy commands through `runtime/dispatch/dispatcher.py`; bridges `DispatchResult` to `ToolResult`.
 - `z_harness_cli/mcp/server.py:675` — `_FAST_HANDLERS` — Dict of direct in-process handlers for read-only tools (`z_where`, `z_stats`, `z_handoff`, `z_clear_checkpoint`, `z_personas`, `z_update`, `z_export`, `z_detect`).
 - `z_harness_cli/mcp/server.py:707` — `serve` — `mcp.run(transport=transport)` — public entry point called by the CLI.

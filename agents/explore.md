@@ -1,6 +1,6 @@
 ---
 name: explore
-description: 'read-only surface scout that locates source facts with file:line citations; used by /z-explore, /z-map, /z-brainstorm'
+description: 'read-only surface scout that locates source facts with file:line citations; used by /z-explore --depth=deep, generic terrain exploration, and /z-brainstorm grounding'
 tools: Read, Grep, Glob, Bash
 model: haiku
 ---
@@ -62,5 +62,4 @@ The caller's prompt should include:
 ## Related commands
 
 - **`/z-explore`** — The depth-scaled terrain explorer that dispatches this agent.
-- **`/z-map`** — Full terrain mapping with cross-LLM critique; also uses this agent for Phase 2 Explores.
 - **`/z-brainstorm`** — Pre-plan ideation that may use this agent for grounding.
