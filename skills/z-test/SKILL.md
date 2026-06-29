@@ -63,6 +63,60 @@ print(json.dumps(v))
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" test_plan_start "$START_PAYLOAD"
 ```
 
+## Shared context checkpoint hook/check contract
+
+`/z-test` uses the reusable z-harness hook/check layer at durable planning seams. It MUST NOT keep workflow-local checkpoint snippets, ack files, or direct `handoff.json` writes. Do not write `handoff.json` directly; call `scripts/check-compaction.sh` first and call `scripts/write-clear-checkpoint.sh` only when the shared check exits `1`.
+
+Standard seam call pattern:
+
+```bash
+run_workflow_compaction_seam() {
+  local seam_id="$1" phase_name="$2" completed_artifact="$3" next_step="$4"
+  export Z_HARNESS_PLAN_DIR="$BASE"
+  export Z_HARNESS_SLUG
+  export Z_HARNESS_CHECKPOINT_PRODUCER="z-test"
+  export Z_HARNESS_CHECKPOINT_PHASE_ID="$seam_id"
+  export Z_HARNESS_CHECKPOINT_PHASE_NAME="$phase_name"
+  export Z_HARNESS_CHECKPOINT_COMPLETED_ARTIFACT="$completed_artifact"
+  export Z_HARNESS_CHECKPOINT_FAST_FORWARD_GUARD="$(git rev-parse HEAD 2>/dev/null || printf unknown):$(python3 - "$completed_artifact" <<'PYEOF'
+import hashlib, sys
+with open(sys.argv[1], "rb") as fh:
+    print(hashlib.sha256(fh.read()).hexdigest())
+PYEOF
+)"
+  export Z_HARNESS_CHECKPOINT_STALE_MODE="reject"
+  export Z_HARNESS_CHECKPOINT_RESUME_COMMAND="/z-test --slug $Z_HARNESS_SLUG"
+  export Z_HARNESS_CHECKPOINT_NEXT_STEP="$next_step"
+  export Z_HARNESS_CHECKPOINT_PRODUCER_META_JSON="$(printf '{"command":"z-test","seam":"%s","run":"%s"}' "$seam_id" "$RRUN")"
+
+  COMPACTION_TRIGGERED=0
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/check-compaction.sh" || COMPACTION_TRIGGERED=$?
+  if [ "$COMPACTION_TRIGGERED" -eq 1 ]; then
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/write-clear-checkpoint.sh"
+    exit 0
+  elif [ "$COMPACTION_TRIGGERED" -eq 2 ]; then
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" test_plan_end '{"status":"halted","reason":"context_pressure_strict"}'
+    exit 1
+  fi
+}
+```
+
+The hook owns percentage-threshold evaluation, `compaction_pause`, checkpoint metadata, resume/fast-forward state, stale-state handling, and under-threshold fallthrough. Exit `0` means continue without checkpoint side effects; exit `1` means write the shared checkpoint and stop before the next high-context step; exit `2` is a strict-mode halt. Existing checkpoint state that matches phase/artifact/guard fast-forwards; stale state is rejected by the shared producer.
+
+Registered durable seams:
+
+| Seam id | When it runs | Durable artifact | Next step |
+|---------|--------------|------------------|-----------|
+| `test-phase3-pre-consult` | after `$BASE/archive/$RRUN/phase2-drafts.md` exists, immediately before Phase 3 consultant dispatch | `$BASE/archive/$RRUN/phase2-drafts.md` | resume at Phase 3 consult dispatch |
+| `test-phase3-post-consult` | after both consultant transcripts are archived | `$BASE/archive/$RRUN/transcripts/consultant-primary.md` | resume at Phase 4 synthesis |
+| `test-phase4-pre-synthesis` | before merging consultant additions/drops into the synthesized list | `$BASE/archive/$RRUN/phase2-drafts.md` | resume at Phase 4 synthesis |
+| `test-phase5-pre-approval` | after `$BASE/archive/$RRUN/phase4-synthesis.md` exists, before user-facing approval | `$BASE/archive/$RRUN/phase4-synthesis.md` | resume at Phase 5 approval |
+| `test-phase6-pre-tests-write` | after approval decisions are durable in memory/logs, before writing `TESTS.md` | `$BASE/archive/$RRUN/phase4-synthesis.md` | resume at Phase 6 `TESTS.md` write |
+| `test-phase7-pre-task-crosslink` | after `TESTS.md` is written, before mutating `TASKS.md` links | `$BASE/TESTS.md` | resume at Phase 7 cross-link |
+| `test-phase8-pre-user-report` | after `TESTS.md` and `TASKS.md` links are durable, before final push/user summary | `$BASE/TESTS.md` | resume at Phase 8 finalize |
+
+Skipped candidate seams: no check before Phase 1/2 drafting because no durable test artifact exists yet; no check while consultants are in flight; no check inside Phase 5 per-test edit prompts because user decisions are not a durable artifact boundary until the accepted set is known; no check after an abandon choice because the terminal `test_plan_end` event owns that state.
+
 Notification policy: see [docs/human/config.md](docs/human/config.md) (notify.level key).
 
 ## Phase 1 — Risk-rank the plan
@@ -137,6 +191,8 @@ Save the draft list to `$BASE/archive/$RRUN/phase2-drafts.md`.
 
 Spawn **both** consultants in parallel in a single message:
 
+Before dispatching Phase 3 consultants, run shared seam `test-phase3-pre-consult` with completed artifact `$BASE/archive/$RRUN/phase2-drafts.md`.
+
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this parallel consultant dispatch requirement to the user and skip the Agent() calls. The cross-LLM consult is non-skippable per the hard rules; drivers that skip it must warn the user that coverage-gap detection has been bypassed. -->
 ```
 Agent(
@@ -152,6 +208,10 @@ Agent(
 ```
 
 Both transcripts archive themselves under `$BASE/archive/$RRUN/transcripts/`.
+
+After both Phase 3 consultant transcripts are archived, run shared seam `test-phase3-post-consult` with completed artifact `$BASE/archive/$RRUN/transcripts/consultant-primary.md` (or the concrete primary transcript path written by the driver).
+
+Before Phase 4 synthesis, run shared seam `test-phase4-pre-synthesis`.
 
 ## Phase 4 — Synthesize
 
@@ -169,6 +229,8 @@ Track three counts for the Phase 8 finalize push-notify:
 
 Save the synthesized list to `$BASE/archive/$RRUN/phase4-synthesis.md`.
 
+Before presenting the synthesized test plan to the user, run shared seam `test-phase5-pre-approval` with completed artifact `$BASE/archive/$RRUN/phase4-synthesis.md`.
+
 ## Phase 5 — Present + approve
 
 Send `PushNotification` (if policy != `off`): "Test plan ready for review."
@@ -185,6 +247,8 @@ Options:
 
 <!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the fixture-scaffolding approval question via their native channel. Silent omission is forbidden. -->
 **Fixture-scaffolding gate.** For any accepted test whose `setup:` field requires non-trivial new test infrastructure (a new fixture file, a new mock framework, a new test-data generation step), get separate explicit approval via `AskUserQuestion`. Same discipline as `/z-plan` shortcuts: building new test infra without buy-in is a scope expansion.
+
+Before writing `TESTS.md`, run shared seam `test-phase6-pre-tests-write`.
 
 ## Phase 6 — Write TESTS.md
 
@@ -217,6 +281,8 @@ Each TEST-NNN block must be parseable by the implementer subagent (it greps the 
 
 No plan-contract edits (SPEC.md / PLAN.md / INTENT.md / LEDGER.md). TESTS.md is its own artifact.
 
+After `TESTS.md` is written and before mutating `TASKS.md`, run shared seam `test-phase7-pre-task-crosslink` with completed artifact `$BASE/TESTS.md`.
+
 ## Phase 7 — Cross-link into TASKS.md
 
 For each task `Txxx` referenced by one or more TEST-NNN entries, append a line under that task's block in TASKS.md:
@@ -232,6 +298,8 @@ This is the signal to the implementer subagent: when implementing this task, als
 If a task already has a `**Tests:**` line from a prior `/z-test` invocation, **merge IDs** — never overwrite. Sort the merged list.
 
 **Cross-task tests** (entries with `task: null`) are not linked into TASKS.md. They get implemented as part of `/z-review-all`'s final gate or as standalone follow-up tasks the user creates manually. Note this in the user-facing summary in Phase 8.
+
+Before final push-notify/user summary, run shared seam `test-phase8-pre-user-report` with completed artifact `$BASE/TESTS.md`.
 
 ## Phase 8 — Finalize
 

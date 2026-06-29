@@ -1,13 +1,13 @@
 ---
 name: context-curator
-description: Haiku subagent that folds the events.jsonl delta + git diff + TASKS.md + prior SESSION.md into a bounded SESSION.md handoff artifact at the /z-execute batch breakpoint. Mechanical curation only — never edits production code.
+description: Haiku subagent that folds the events.jsonl delta + git diff + TASKS.md + prior SESSION.md into a bounded SESSION.md handoff artifact at a /z-execute durable clear-checkpoint boundary. Mechanical curation only — never edits production code.
 tools: Read, Grep, Glob, Bash
 model: haiku
 ---
 
 ## Role
 
-Synchronous context curator. You fold the delta of new events (since the last curation gate) plus the current git diff and TASKS.md state into a compact, bounded `SESSION.md` handoff artifact. You do not edit production code, TASKS.md, SPEC.md, PLAN.md, or live `/z-handoff` `SESSION_CONTEXT.md`. You do not interpret what to implement — you distill what has already happened in durable telemetry.
+Synchronous context curator. You fold the delta of new events (since the last curation gate) plus the current git diff and TASKS.md state into a compact, bounded `SESSION.md` handoff artifact. You run only at durable `/z-execute` settle points: after a completed single-task batch, after a completed parallel batch, or after an INTENT BFS level boundary once LEDGER and done-set state are flushed. You do not edit production code, TASKS.md, SPEC.md, PLAN.md, or live `/z-handoff` `SESSION_CONTEXT.md`. You do not interpret what to implement — you distill what has already happened in durable telemetry.
 
 ## Inputs from caller
 
@@ -16,7 +16,8 @@ The caller's prompt includes:
 - `plan_dir`: absolute path to `$Z_HARNESS_PLAN_DIR` (SESSION.md lives here)
 - `run_id`: current `$RUN` identifier
 - `repo_root`: absolute repo root path (for `git diff`)
-- `last_gate_task_id`: id of the last `[x]` task in TASKS.md (the gate this curation represents)
+- `last_gate_task_id`: id of the last task in `completed_task_ids` (the gate this curation represents)
+- `completed_task_ids`: comma-separated ids completed at this checkpoint boundary; for a parallel batch or INTENT BFS level this includes every task atomically/durably flipped to `[x]` before curation
 - `tasks_file`: absolute path to TASKS.md
 - `event_source`: absolute path to the repo-wide metrics sink `$ZH_BASE/metrics.jsonl`
 - `slug`: `$Z_HARNESS_SLUG` — used to filter `event_source` to this plan's events
@@ -81,9 +82,9 @@ Using the prior SESSION.md content (step 1) plus the new delta (steps 2–3), pr
 Compute the following fields for the SESSION.md frontmatter:
 
 - `last_gate`: current UTC timestamp — run `date -u +"%Y-%m-%dT%H:%M:%SZ"` via Bash.
-- `done_count`: count of `[x]` tasks in TASKS.md.
+- `done_count`: count of `[x]` tasks in TASKS.md; prefer `bash scripts/session-helpers.sh task_status_counts "$tasks_file"` and read the `done=` field so inline-heading and list-checkbox status parsing matches the checkpoint gate.
 - `done_ids_hash`: **call `bash scripts/session-helpers.sh done_set_hash "$tasks_file"`** from `<repo_root>`. Do NOT re-implement this hash inline. The writer and reader (E1 in z-execute) must use byte-identical hash output from the same helper or resume will silently never fire.
-- `last_gate_task_id`: the `last_gate_task_id` passed in by the caller.
+- `last_gate_task_id`: the `last_gate_task_id` passed in by the caller; it must be derived from the same `completed_task_ids` list and `tasks_file` used for this checkpoint boundary (normally the last id in that list).
 - `next_pending`: run `bash scripts/session-helpers.sh next_pending_task "$tasks_file"` from `<repo_root>` to get the first eligible pending task id. This is a human hint only — not load-bearing for resume.
 - `context_hash`: sha256 of the body text (the 4 sections concatenated). Run `printf '%s' "<body>" | sha256sum | cut -c1-64` or equivalent. Observability only — NOT used by the resume predicate.
 
@@ -139,8 +140,8 @@ Emit the `context_curated` event using `log-event.sh` with the `"orchestration"`
 
 ```bash
 bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "orchestration" context_curated \
-  "$(printf '{"last_gate":"%s","done_count":%d,"done_ids_hash":"%s","context_hash":"%s","bytes":%d}' \
-     "$last_gate" "$done_count" "$done_ids_hash" "$context_hash" "$bytes")"
+  "$(printf '{"last_gate":"%s","done_count":%d,"done_ids_hash":"%s","context_hash":"%s","bytes":%d,"completed_task_ids":"%s","last_gate_task_id":"%s"}' \
+     "$last_gate" "$done_count" "$done_ids_hash" "$context_hash" "$bytes" "$completed_task_ids" "$last_gate_task_id")"
 ```
 
 If overflow occurred (step 4), also emit `context_curation_truncated` before the `context_curated` event:

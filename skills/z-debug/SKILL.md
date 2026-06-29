@@ -86,6 +86,81 @@ $ARGUMENTS
 6. Record start time `T0_DEBUG=$(date -u +%Y-%m-%dT%H:%M:%SZ)` — used for post-mortem timeline.
 7. If `docs/llm/INDEX.json` exists → note it. Phase 2 (Evidence) and Phase 3a (Round 1 hypotheses) will dispatch `doc-fetcher` (Haiku) instead of reading INDEX.json or per-concept JSONs from main thread. The orchestrator never reads `docs/llm/*.json` directly.
 
+## Shared context checkpoint hook/check contract
+
+`/z-debug` uses the reusable z-harness hook/check layer at every durable debug seam. It MUST NOT keep workflow-local checkpoint snippets, ack files, or direct `handoff.json` writes. Do not write `handoff.json` directly; call `scripts/check-compaction.sh` first and call `scripts/write-clear-checkpoint.sh` only when the shared check exits `1`.
+
+Standard seam call pattern:
+
+```bash
+run_zdebug_compaction_seam() {
+  local seam_id="$1" phase_name="$2" completed_artifact="$3" next_step="$4"
+  local debug_md="$Z_HARNESS_PLAN_DIR/DEBUG.md"
+  export Z_HARNESS_PLAN_DIR
+  export Z_HARNESS_SLUG
+  export Z_HARNESS_CHECKPOINT_PRODUCER="z-debug"
+  export Z_HARNESS_CHECKPOINT_PHASE_ID="$seam_id"
+  export Z_HARNESS_CHECKPOINT_PHASE_NAME="$phase_name"
+  export Z_HARNESS_CHECKPOINT_COMPLETED_ARTIFACT="$completed_artifact"
+  export Z_HARNESS_CHECKPOINT_FAST_FORWARD_GUARD="$(python3 - "$debug_md" "$completed_artifact" <<'PYEOF'
+import hashlib, sys
+h = hashlib.sha256()
+for path in sys.argv[1:]:
+    try:
+        with open(path, "rb") as fh:
+            h.update(path.encode("utf-8") + b"\0" + fh.read() + b"\0")
+    except FileNotFoundError:
+        h.update(path.encode("utf-8") + b"\0missing\0")
+print(h.hexdigest())
+PYEOF
+)"
+  export Z_HARNESS_CHECKPOINT_STALE_MODE="reject"
+  export Z_HARNESS_CHECKPOINT_RESUME_COMMAND="/z-debug ${Z_HARNESS_SLUG:-<symptom>}"
+  export Z_HARNESS_CHECKPOINT_NEXT_STEP="Resume /z-debug from ${debug_md}; ${next_step}"
+  export Z_HARNESS_CHECKPOINT_PRODUCER_META_JSON="$(python3 - "$seam_id" "$RUN" "$debug_md" <<'PYEOF'
+import json, sys
+print(json.dumps({"command": "z-debug", "seam": sys.argv[1], "run": sys.argv[2], "debug_md": sys.argv[3]}))
+PYEOF
+)"
+
+  COMPACTION_TRIGGERED=0
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/check-compaction.sh" || COMPACTION_TRIGGERED=$?
+  if [ "$COMPACTION_TRIGGERED" -eq 1 ]; then
+    CHECKPOINT_OUT="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/write-clear-checkpoint.sh")"
+    printf '%s\n' "$CHECKPOINT_OUT"
+    case "$CHECKPOINT_OUT" in
+      STATUS:\ clear_checkpoint_fast_forward*) ;;
+      STATUS:\ clear_checkpoint*) exit 0 ;;
+      *) exit 1 ;;
+    esac
+  elif [ "$COMPACTION_TRIGGERED" -eq 2 ]; then
+    # Execute Run Brief — halt finalize with reason "context pressure estimate failed in strict mode at $seam_id", then exit 1.
+    exit 1
+  fi
+}
+```
+
+The hook owns percentage-threshold evaluation, `compaction_pause`, checkpoint metadata, resume/fast-forward state, stale-state handling, and under-threshold fallthrough. Exit `0` means continue without checkpoint side effects; exit `1` means write the shared checkpoint and stop before the next high-context phase; exit `2` is a strict-mode halt. Existing checkpoint state that matches phase/artifact/guard fast-forwards; stale state is rejected by the shared producer. Resume text always points at `$Z_HARNESS_PLAN_DIR/DEBUG.md` and the next phase, even when the completed artifact is an archive file.
+
+Registered durable seams:
+
+| Seam id | When it runs | Durable artifact | Next step |
+|---------|--------------|------------------|-----------|
+| `debug-phase2-post-evidence` | after `DEBUG.md` contains `## Evidence Inventory` with `repro_confidence` high/low, before Phase 2.5 bisect dispatch or Phase 3a | `$Z_HARNESS_PLAN_DIR/DEBUG.md` | resume at Phase 2.5 bisect gate or Phase 3a Round 1 |
+| `debug-phase3a-after-round1-orchestrator` | after `archive/$RUN/round1-orchestrator.md` is written, immediately before Round 1 consultant dispatch | `$Z_HARNESS_PLAN_DIR/archive/$RUN/round1-orchestrator.md` | resume at Phase 3a Round 1 consultant dispatch using `DEBUG.md` |
+| `debug-phase3a-post-hypothesis-pool` | after the initial merged `## Hypothesis Pool` is committed to `DEBUG.md`, before Phase 3b adversarial dispatch | `$Z_HARNESS_PLAN_DIR/DEBUG.md` | resume at Phase 3b adversarial dispatch |
+| `debug-phase3b-post-hypothesis-pool` | after Round 2 critiques/additions are applied and the updated `## Hypothesis Pool` is committed, before Test Matrix synthesis | `$Z_HARNESS_PLAN_DIR/DEBUG.md` | resume at Phase 4 Test Matrix synthesis |
+| `debug-phase5-pre-isolation` | after `## Test Matrix` and test order are written, before Phase 6 isolation starts | `$Z_HARNESS_PLAN_DIR/DEBUG.md` | resume at Phase 6 isolation cycle |
+| `debug-phase6-post-scoring` | after each cycle's `## Experiment Log`, `## Score Updates`, and `## Eliminated Alternatives` changes are committed, before the next isolation/fix-gate/Round 3 transition | `$Z_HARNESS_PLAN_DIR/DEBUG.md` | resume at Phase 6 loop decision |
+| `debug-phase7-pre-fix-consult` | after `## Root Cause` and Evidence coverage are written and the fix-gate preconditions hold, before `light-fix` consultant dispatch | `$Z_HARNESS_PLAN_DIR/DEBUG.md` | resume at Phase 7 fix consult |
+| `debug-phase7-post-fix-plan` | after `## Fix Plan` is written, before inline implementation/Codex review | `$Z_HARNESS_PLAN_DIR/DEBUG.md` | resume at Phase 7 implementation |
+| `debug-phase8-pre-postmortem` | after `## Verification` is written, before mandatory Post-mortem synthesis | `$Z_HARNESS_PLAN_DIR/DEBUG.md` | resume at Phase 9 Post-mortem |
+| `debug-phase9-pre-mr-review` | after `## Post-mortem` is written, before MR-style review and action-item user gates | `$Z_HARNESS_PLAN_DIR/DEBUG.md` | resume at Phase 9 review/action-item gates |
+| `debug-phase10-pre-finalize` | after post-mortem action-item disposition is recorded and before final run-brief/user-facing report generation | `$Z_HARNESS_PLAN_DIR/DEBUG.md` | resume at Phase 10 Finalize |
+
+Skipped candidate seams: no checkpoint before `DEBUG.md` exists; no checkpoint before writing `round1-orchestrator.md` because the contamination invariant requires the orchestrator hypothesis decision to be durably written first; no checkpoint while consultants, bisect, isolation commands, Codex review, or MR review are in flight; no checkpoint between reading consultant output and committing the merged pool/scoring artifact; no checkpoint for `repro_confidence: none` before the cannot-reproduce user gate; and no checkpoint after a run-ending halt because halt finalize owns that terminal state.
+
+
 ## Artifact Scout preflight
 
 Run after Setup provider logging and before the soft cost estimate, wrong-tool gate, evidence collection, bisect-isolator, doc-fetcher, or hypothesis consultant dispatch. This command has no hard pre-run cost gate, but scout output for debug/similarity is warning-only unless the classifier returns an explicit route recommendation with `route_chain_effect: "write_route_decision"`.
@@ -272,6 +347,9 @@ Append `## Evidence Inventory` to `DEBUG.md`:
 
 **Each evidence entry gets a stable `EVID-NNN` ID at capture time** (zero-padded, 3 digits). These IDs are referenced by Phase 7's Evidence coverage table — never renumber, never reuse.
 
+If `repro_confidence` is `high` or `low`, run `run_zdebug_compaction_seam "debug-phase2-post-evidence" "Phase 2 post-evidence" "$Z_HARNESS_PLAN_DIR/DEBUG.md" "continue at Phase 2.5 bisect gate or Phase 3a Round 1 using DEBUG.md Evidence Inventory"` before Phase 2.5 or Phase 3a. If `repro_confidence` is `none`, skip this seam because the cannot-reproduce user gate owns the pause.
+
+
 <!-- RUNTIME-GATE: ask_user; category=risk; non-supporting drivers must surface the cannot-
      reproduce gate (gather more evidence / proceed on inference / abandon) via
      their native channel. Silent omission is forbidden. -->
@@ -362,6 +440,9 @@ Parse the `STATUS:` line:
    ```
 
    `parallel_safe: true` only if the discriminating test mutates no shared state.
+
+   Immediately after this file is written — before resolving consultant config, before dispatching any Round 1 consultant, and before any consultant output can be read — run `run_zdebug_compaction_seam "debug-phase3a-after-round1-orchestrator" "Phase 3a after orchestrator checkpoint" "$Z_HARNESS_PLAN_DIR/archive/$RUN/round1-orchestrator.md" "continue at Phase 3a Round 1 consultant dispatch using DEBUG.md Problem and Evidence Inventory"`. This preserves the contamination invariant: the orchestrator hypothesis checkpoint decision is durable before the shared hook can pause/fast-forward and before consultant output exists.
+
 
 2. **Dispatch consultants in parallel (single message).** Each receives ONLY the Problem + Evidence Inventory sections of DEBUG.md (plus doc-fetcher synthesis if relevant). Never share the orchestrator's checkpoint block.
 
@@ -498,6 +579,9 @@ Parse the `STATUS:` line:
    | H002 | ... | [gemini] | 1 | ... | ... | ... | medium | false |
    ```
 
+After the initial `## Hypothesis Pool` is committed to `DEBUG.md`, run `run_zdebug_compaction_seam "debug-phase3a-post-hypothesis-pool" "Phase 3a post-hypothesis-pool" "$Z_HARNESS_PLAN_DIR/DEBUG.md" "continue at Phase 3b adversarial dispatch using DEBUG.md Hypothesis Pool"` before starting Phase 3b.
+
+
 ## Phase 3b — Round 2 adversarial
 
 Single-message parallel dispatch with `MODE: generate-hypotheses-round2-adversarial`. Each receives ONLY the merged `## Hypothesis Pool` section (surgical extraction per the Phase-visibility matrix), plus Problem + Evidence Inventory. **Do NOT** include Test Matrix, Experiment Log, or Score Updates — those don't exist yet anyway.
@@ -599,6 +683,9 @@ For CRITIQUES:
 
 Commit the updated `## Hypothesis Pool` to DEBUG.md after Phase 3b.
 
+Run `run_zdebug_compaction_seam "debug-phase3b-post-hypothesis-pool" "Phase 3b post-hypothesis-pool" "$Z_HARNESS_PLAN_DIR/DEBUG.md" "continue at Phase 4 Test Matrix synthesis from DEBUG.md"` before building the Test Matrix.
+
+
 ## Phase 4 — Build the Test Matrix
 
 Append `## Test Matrix` to DEBUG.md. Schema header documented at the top of the section:
@@ -626,6 +713,9 @@ Sort the active rows by `overlap` descending (consensus first — higher overlap
 **Forced outlier carve-out (groupthink mitigation):** always insert the top 2 unique-to-one-model rows (`overlap == 1`) near the front of the test order — within the first 3-4 positions, even if their `prior` is `low`. The orthogonality these surface is exactly what consensus-only ranking destroys.
 
 Document the chosen order in DEBUG.md as a one-line note under the Test Matrix (e.g., `_Test order (cycle 1): H001, H004, H002 (outlier carve-out), H005 (outlier carve-out), H003._`).
+
+After the Test Matrix and cycle-1 test order are committed to `DEBUG.md`, run `run_zdebug_compaction_seam "debug-phase5-pre-isolation" "Phase 5 pre-isolation" "$Z_HARNESS_PLAN_DIR/DEBUG.md" "continue at Phase 6 isolation cycle from DEBUG.md Test Matrix"` before running isolation commands.
+
 
 ## Phase 6 — Batch isolation cycle (loop)
 
@@ -685,6 +775,9 @@ For the current cycle (start at cycle 1):
    - **H002** (eliminated cycle 1): claim=`...`; falsified by `<discriminating_test>` — output showed `...`.
    ```
 
+After the cycle's `## Experiment Log`, `## Score Updates`, and `## Eliminated Alternatives` updates are committed to `DEBUG.md`, run `run_zdebug_compaction_seam "debug-phase6-post-scoring" "Phase 6 post-scoring" "$Z_HARNESS_PLAN_DIR/DEBUG.md" "continue at Phase 6 loop decision, then the next isolation cycle, Round 3, or Phase 7 fix-gate"` before evaluating the next high-context transition.
+
+
 ### Phase 6 loop logic
 
 - **Fix-gate check:** if any active hypothesis has `posterior == very_high` AND there is a written causal mechanism (Phase 7's Root Cause draft) explaining every `EVID-NNN` in the Evidence Inventory → fix-gate open, proceed to Phase 7.
@@ -738,6 +831,9 @@ Promote the winning hypothesis (the one with `posterior == very_high`) to a `## 
 2. Zero rows in the Evidence coverage table with `status == unexplained`.
 
 If either fails: halt. Either upgrade the root cause statement (so it actually explains the unexplained row) or return to Phase 6 for additional experiments. Do not advance to fix on a partial story.
+
+When the Root Cause and Evidence coverage table have been written and both fix-gate preconditions hold, run `run_zdebug_compaction_seam "debug-phase7-pre-fix-consult" "Phase 7 pre-fix-consult" "$Z_HARNESS_PLAN_DIR/DEBUG.md" "continue at Phase 7 light-fix consultant dispatch from DEBUG.md Root Cause"` before capturing `PRE_FIX_SHA` and dispatching fix consultants.
+
 
 **Once the gate opens:**
 
@@ -811,6 +907,9 @@ If either fails: halt. Either upgrade the root cause statement (so it actually e
    ...
    ```
 
+After `## Fix Plan` is committed to `DEBUG.md`, run `run_zdebug_compaction_seam "debug-phase7-post-fix-plan" "Phase 7 post-fix-plan" "$Z_HARNESS_PLAN_DIR/DEBUG.md" "continue at Phase 7 inline implementation from DEBUG.md Fix Plan"` before inline implementation and Codex review.
+
+
 6. **Inline implementation.** Implementer self-check: no broad exception handlers, no scope expansion, no unsolicited validation, no new public surface, no stale comments.
 
    #### Git history-rewrite safety
@@ -841,6 +940,9 @@ Append `## Verification` section to DEBUG.md. **Two mandatory items:**
 - Discriminating test re-run: `<command>`.
 - Pre-fix signal: `<falsifying signal>`. Post-fix signal: `<still same falsifying signal — confirms elimination wasn't a coincidence>`.
 ```
+
+After `## Verification` is committed to `DEBUG.md`, run `run_zdebug_compaction_seam "debug-phase8-pre-postmortem" "Phase 8 pre-postmortem" "$Z_HARNESS_PLAN_DIR/DEBUG.md" "continue at Phase 9 Post-mortem synthesis from DEBUG.md Verification"` before writing the Post-mortem.
+
 
 ## Phase 9 — Post-mortem (mandatory)
 
@@ -885,6 +987,9 @@ Pick at least one. Be honest:
 - **Root cause confidence:** <yes | partial — explain>
 - **Similar bugs likely elsewhere?** <list any places worth auditing; or "none — this is localized">
 ```
+
+After `## Post-mortem` is committed to `DEBUG.md`, run `run_zdebug_compaction_seam "debug-phase9-pre-mr-review" "Phase 9 pre-MR-review" "$Z_HARNESS_PLAN_DIR/DEBUG.md" "continue at Phase 9 MR-style review and action-item gates from DEBUG.md Post-mortem"` before the MR-review gate and action-item conversion prompts.
+
 
 <!-- RUNTIME-GATE: ask_user; category=decision; non-supporting drivers must surface the MR-review
      gate question and the action-item conversion question via their native
@@ -951,6 +1056,9 @@ After writing, ask the user via `AskUserQuestion`:
 - "Just record and move on" → leave the Post-mortem section as a standalone record.
 
 Push-notify: "Post-mortem ready: `$Z_HARNESS_PLAN_DIR/DEBUG.md` Post-mortem section. Action items: <N> (converted to tasks: <yes/no>)."
+
+After action-item disposition is recorded, run `run_zdebug_compaction_seam "debug-phase10-pre-finalize" "Phase 10 pre-finalize" "$Z_HARNESS_PLAN_DIR/DEBUG.md" "continue at Phase 10 Finalize and final user-facing report from DEBUG.md"` before Run Brief finalize and the final user-facing report.
+
 
 ## Phase 10 — Finalize
 

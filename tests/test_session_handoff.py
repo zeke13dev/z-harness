@@ -3,8 +3,9 @@ tests/test_session_handoff.py — Tests for SESSION.md handoff mechanics.
 
 Structure:
   - TestSessionHelpers     : unit tests for scripts/session-helpers.sh functions
-                             (done_set_hash, last_done_task, next_pending_task,
-                              last_curated_marker, session_frontmatter_field)
+                             (done_set_hash, completed_task_ids, last_done_task,
+                              next_pending_task, last_curated_marker,
+                              session_frontmatter_field)
   - TestCurator            : (T004) tests for agents/context-curator.md behaviour
   - TestResumeIntegration  : (T008) smoke tests for the resume predicate in
                              skills/z-execute/SKILL.md
@@ -33,6 +34,7 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _HELPERS_SH = str(_REPO_ROOT / "scripts" / "session-helpers.sh")
+_CONTEXT_CURATOR_PATH = _REPO_ROOT / "agents" / "context-curator.md"
 
 # sha256("") — canonical empty-set hash that done_set_hash MUST return when
 # zero tasks are marked [x].
@@ -280,6 +282,45 @@ class TestSessionHelpers:
         )
         result = _run_helper("last_done_task", str(tasks), tmp_base=tmp_path)
         assert result == ""
+
+    # -----------------------------------------------------------------------
+    # completed_task_ids — full boundary completion set
+    # -----------------------------------------------------------------------
+
+    def test_completed_task_ids_returns_every_done_id_in_file_order(self, tmp_path: Path):
+        """Clear-checkpoint metadata must include every completed batch/level id."""
+        tasks = tmp_path / "tasks.md"
+        tasks.write_text(
+            "## T001 — Parallel one `[x]`\n"
+            "**Depends on:** —\n\n"
+            "## T002 — Still pending `[ ]`\n"
+            "**Depends on:** —\n\n"
+            "## T003 — Parallel two `[x]`\n"
+            "**Depends on:** —\n\n"
+            "## T004 — Parallel three `[x]`\n"
+            "**Depends on:** —\n",
+            encoding="utf-8",
+        )
+
+        result = _run_helper("completed_task_ids", str(tasks), tmp_base=tmp_path)
+        assert result == "T001,T003,T004"
+
+    def test_completed_task_ids_matches_bullet_status_forms(self, tmp_path: Path):
+        """The full-id helper must parse the same [x] forms as done_set_hash."""
+        tasks = tmp_path / "tasks.md"
+        tasks.write_text(
+            "- [x] T001 — inline bullet done\n"
+            "- [ ] T002 — inline bullet pending\n"
+            "- [x]\n"
+            "## T003 — following heading done\n"
+            "**Depends on:** —\n\n"
+            "## T004 — inline heading done `[x]`\n"
+            "**Depends on:** —\n",
+            encoding="utf-8",
+        )
+
+        result = _run_helper("completed_task_ids", str(tasks), tmp_base=tmp_path)
+        assert result == "T001,T003,T004"
 
     # -----------------------------------------------------------------------
     # next_pending_task — dep-gating
@@ -616,6 +657,23 @@ class TestSessionHelpers:
         )
 
 
+    def test_task_status_counts_matches_inline_heading_statuses(self, tmp_path: Path):
+        """Checkpoint gates must count the same inline statuses as done_set_hash."""
+        tasks = tmp_path / "tasks_counts.md"
+        tasks.write_text(
+            "## T001 -- done `[x]`\n"
+            "**Depends on:** --\n\n"
+            "## T002 -- pending `[ ]`\n"
+            "**Depends on:** --\n\n"
+            "## T003 -- running `[~]`\n"
+            "**Depends on:** T001\n",
+            encoding="utf-8",
+        )
+
+        counts = _run_helper("task_status_counts", str(tasks), tmp_base=tmp_path)
+
+        assert counts == "done=1 pending=1 in_progress=1 other=0"
+
 # ===========================================================================
 # SECTION 2 — Curator unit tests (T004)
 # ===========================================================================
@@ -923,6 +981,16 @@ class TestCurator:
         violations and passes on well-formed fixtures.
       - Step 7: log-event.sh emission — tested elsewhere; not duplicated here.
     """
+
+    def test_curator_spec_records_full_completed_task_metadata(self):
+        """Curator prompt/event contract must preserve parallel/BFS completion sets."""
+        spec = _CONTEXT_CURATOR_PATH.read_text(encoding="utf-8")
+
+        assert "completed_task_ids" in spec
+        assert "parallel batch or INTENT BFS level" in spec
+        assert '"completed_task_ids":"%s"' in spec
+        assert '"last_gate_task_id":"%s"' in spec
+        assert "derived from the same `completed_task_ids` list and `tasks_file`" in spec
 
     # -----------------------------------------------------------------------
     # 1. HASH PARITY (keystone)
@@ -1778,8 +1846,10 @@ class TestResumeIntegration:
     After merging the SESSION.md handoff feature into a live plan, verify the O(N^2)
     cache_read reduction as follows:
 
-      1. Run /z-execute on a plan large enough to trigger at least one
-         compaction_pause (≥ Z_IMPLEMENT_PAUSE_TASKS completed tasks, default 5).
+      1. Run /z-execute on a plan large enough to trigger a compaction_pause
+         (primary trigger: context pressure reaches the configured checkpoint
+         percentage; legacy heuristic fallback: ≥ Z_IMPLEMENT_PAUSE_TASKS
+         completed tasks, default 5).
       2. After the pause, issue /clear and re-invoke /z-execute.
       3. In the Claude web UI or SDK metrics, compare the cache_read token count at
          the start of the resumed run to the cache_read count of an equivalent run
@@ -2243,11 +2313,64 @@ jsonschema = pytest.importorskip("jsonschema")
 
 _SCHEMA_PATH = _REPO_ROOT / "docs" / "schemas" / "handoff.schema.json"
 _ZHANDOFF_SKILL_PATH = _REPO_ROOT / "skills" / "z-handoff" / "SKILL.md"
+_ZEXECUTE_SKILL_PATH = _REPO_ROOT / "skills" / "z-execute" / "SKILL.md"
+_ZAUDIT_SKILL_PATH = _REPO_ROOT / "skills" / "z-audit" / "SKILL.md"
+_ZMAP_SKILL_PATH = _REPO_ROOT / "skills" / "z-map" / "SKILL.md"
+_ZEXPLORE_SKILL_PATH = _REPO_ROOT / "skills" / "z-explore" / "SKILL.md"
+_ZRESEARCH_SKILL_PATH = _REPO_ROOT / "skills" / "z-research" / "SKILL.md"
+_ZTEST_SKILL_PATH = _REPO_ROOT / "skills" / "z-test" / "SKILL.md"
+_ZUPLIFT_SKILL_PATH = _REPO_ROOT / "skills" / "z-uplift" / "SKILL.md"
+_ZDEBUG_SKILL_PATH = _REPO_ROOT / "skills" / "z-debug" / "SKILL.md"
+_ZREVIEW_ALL_SKILL_PATH = _REPO_ROOT / "skills" / "z-review-all" / "SKILL.md"
+
+
 
 
 def _load_zhandoff_skill() -> str:
     """Load the live manual /z-handoff contract from disk."""
     return _ZHANDOFF_SKILL_PATH.read_text(encoding="utf-8")
+
+def _load_zexecute_skill() -> str:
+    """Load the live /z-execute contract from disk."""
+    return _ZEXECUTE_SKILL_PATH.read_text(encoding="utf-8")
+
+def _load_zaudit_skill() -> str:
+    """Load the live /z-audit contract from disk."""
+    return _ZAUDIT_SKILL_PATH.read_text(encoding="utf-8")
+
+
+def _load_zmap_skill() -> str:
+    """Load the live /z-map compatibility contract from disk."""
+    return _ZMAP_SKILL_PATH.read_text(encoding="utf-8")
+
+def _load_zexplore_skill() -> str:
+    """Load the live /z-explore terrain contract from disk."""
+    return _ZEXPLORE_SKILL_PATH.read_text(encoding="utf-8")
+
+
+def _load_zresearch_skill() -> str:
+    """Load the live /z-research contract from disk."""
+    return _ZRESEARCH_SKILL_PATH.read_text(encoding="utf-8")
+
+
+def _load_ztest_skill() -> str:
+    """Load the live /z-test contract from disk."""
+    return _ZTEST_SKILL_PATH.read_text(encoding="utf-8")
+
+
+def _load_zuplift_skill() -> str:
+    """Load the live /z-uplift contract from disk."""
+    return _ZUPLIFT_SKILL_PATH.read_text(encoding="utf-8")
+
+
+def _load_zdebug_skill() -> str:
+    """Load the live /z-debug contract from disk."""
+    return _ZDEBUG_SKILL_PATH.read_text(encoding="utf-8")
+
+def _load_zreview_all_skill() -> str:
+    """Load the live /z-review-all contract from disk."""
+    return _ZREVIEW_ALL_SKILL_PATH.read_text(encoding="utf-8")
+
 
 
 def _load_handoff_schema() -> dict[str, Any]:
@@ -2467,6 +2590,7 @@ class TestZHandoffSkillContract:
 
 _WRITE_HANDOFF_SH = str(_REPO_ROOT / "scripts" / "write-handoff.sh")
 _WRITE_CLEAR_CHECKPOINT_SH = str(_REPO_ROOT / "scripts" / "write-clear-checkpoint.sh")
+_CHECK_COMPACTION_SH = str(_REPO_ROOT / "scripts" / "check-compaction.sh")
 
 
 
@@ -2510,6 +2634,49 @@ def _seed_plan_dir(plan_dir: Path) -> None:
         "## T003 — Dependent done `[x]`\n**Depends on:** T001\n",
         encoding="utf-8",
     )
+
+def _write_session_for_current_done_set(plan_dir: Path, *, last_gate_task_id: str = "T001") -> str:
+    done_hash = _run_helper("done_set_hash", str(plan_dir / "TASKS.md"), tmp_base=plan_dir)
+    next_pending = _run_helper("next_pending_task", str(plan_dir / "TASKS.md"), tmp_base=plan_dir)
+    session_text = _build_session_md(
+        slug="checkpoint-plan",
+        done_ids_hash=done_hash,
+        last_gate_task_id=last_gate_task_id,
+        next_pending=next_pending or "none",
+        sections={"Decisions": "- checkpoint ready", "Landmines": "", "Invariants": "", "Open threads": ""},
+    )
+    (plan_dir / "SESSION.md").write_text(session_text, encoding="utf-8")
+    return done_hash
+
+
+def _run_check_compaction(plan_dir: Path, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    env = {
+        **os.environ,
+        "Z_HARNESS_PLAN_DIR": str(plan_dir),
+        "Z_HARNESS_BASE_DIR": str(plan_dir / "state"),
+        "Z_IMPLEMENT_PAUSE_TASKS": "0",
+        "Z_IMPLEMENT_PAUSE_MINUTES": "0",
+    }
+    if extra_env:
+        env.update(extra_env)
+    return subprocess.run(
+        ["bash", _CHECK_COMPACTION_SH],
+        env=env,
+        cwd=str(_REPO_ROOT),
+        capture_output=True,
+        text=True,
+    )
+
+
+def _read_metrics(plan_dir: Path) -> list[dict[str, Any]]:
+    metrics_path = plan_dir / "state" / "metrics.jsonl"
+    if not metrics_path.exists():
+        return []
+    return [
+        json.loads(line)
+        for line in metrics_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
 
 
 class TestWriteHandoffProducer:
@@ -2741,3 +2908,1062 @@ class TestClearCheckpointProducer:
         ]
         payload = [event for event in events if event.get("kind") == "clear_checkpoint_written"][-1]
         assert payload["resume_command"] == "/z-review-all checkpoint-plan"
+
+
+    def test_clear_checkpoint_preserves_session_context_pointer(self, tmp_path: Path):
+        _seed_plan_dir(tmp_path)
+        env = {
+            **os.environ,
+            "Z_HARNESS_PLAN_DIR": str(tmp_path),
+            "Z_HARNESS_HANDOFF_SESSION_CONTEXT": "## Current work\n- Resume from live brief.\n",
+            "Z_HARNESS_BASE_DIR": str(tmp_path / "state"),
+            "RUN": "test-clear-checkpoint-session-context",
+        }
+
+        result = subprocess.run(
+            ["bash", _WRITE_CLEAR_CHECKPOINT_SH],
+            env=env,
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stderr
+        session_context = tmp_path / "SESSION_CONTEXT.md"
+        assert session_context.is_file()
+        handoff = json.loads((tmp_path / "handoff.json").read_text(encoding="utf-8"))
+        assert Path(handoff["context_files"][0]["path"]) == session_context
+        assert handoff["context_files"][0]["role"] == "session_log"
+        assert "Resume from live brief" in session_context.read_text(encoding="utf-8")
+
+    def test_clear_checkpoint_phase_metadata_fast_forwards(self, tmp_path: Path):
+        _seed_plan_dir(tmp_path)
+        artifact = tmp_path / "archive" / "run-1" / "phase3-review.md"
+        artifact.parent.mkdir(parents=True)
+        artifact.write_text("# Phase 3 review\n", encoding="utf-8")
+        state_base = tmp_path / "state"
+        checkpoint_state = tmp_path / ".review_state.json"
+        env = {
+            **os.environ,
+            "Z_HARNESS_PLAN_DIR": str(tmp_path),
+            "Z_HARNESS_BASE_DIR": str(state_base),
+            "RUN": "test-clear-checkpoint-phase",
+            "Z_HARNESS_CHECKPOINT_STATUS": "clean_break",
+            "Z_HARNESS_CHECKPOINT_NEXT_STEP": "Resume /z-review-all; continue at Phase 4.",
+            "Z_HARNESS_CHECKPOINT_RESUME_COMMAND": "/z-review-all checkpoint-plan",
+            "Z_HARNESS_CHECKPOINT_PHASE_NAME": "Phase 3.7 pre-consult",
+            "Z_HARNESS_CHECKPOINT_PHASE_ID": "review-phase-3-7",
+            "Z_HARNESS_CHECKPOINT_STATE_FILE": str(checkpoint_state),
+            "Z_HARNESS_CHECKPOINT_COMPLETED_ARTIFACT": str(artifact),
+            "Z_HARNESS_CHECKPOINT_FAST_FORWARD_GUARD": "head:abc123",
+            "Z_HARNESS_CHECKPOINT_PRODUCER": "z-review-all",
+            "Z_HARNESS_CHECKPOINT_PRODUCER_META_JSON": '{"phase":"3.7","base_ref":"main"}',
+        }
+
+        first = subprocess.run(
+            ["bash", _WRITE_CLEAR_CHECKPOINT_SH],
+            env=env,
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            text=True,
+        )
+        assert first.returncode == 0, first.stderr
+        assert first.stdout.startswith("STATUS: clear_checkpoint "), first.stdout
+        assert checkpoint_state.is_file()
+
+        metrics_path = state_base / "metrics.jsonl"
+        events = [
+            json.loads(line)
+            for line in metrics_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        payload = [event for event in events if event.get("kind") == "clear_checkpoint_written"][-1]
+        assert payload["phase_name"] == "Phase 3.7 pre-consult"
+        assert payload["phase_id"] == "review-phase-3-7"
+        assert payload["completed_artifact"] == str(artifact)
+        assert payload["fast_forward_guard"] == "head:abc123"
+        assert payload["checkpoint_state_path"] == str(checkpoint_state)
+        assert payload["producer"] == "z-review-all"
+        assert payload["producer_metadata"] == {"phase": "3.7", "base_ref": "main"}
+
+        second = subprocess.run(
+            ["bash", _WRITE_CLEAR_CHECKPOINT_SH],
+            env=env,
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            text=True,
+        )
+        assert second.returncode == 0, second.stderr
+        assert second.stdout.startswith("STATUS: clear_checkpoint_fast_forward "), second.stdout
+
+        events = [
+            json.loads(line)
+            for line in metrics_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        fast_forward = [event for event in events if event.get("kind") == "clear_checkpoint_fast_forward"][-1]
+        assert fast_forward["phase_id"] == "review-phase-3-7"
+        assert fast_forward["completed_artifact"] == str(artifact)
+        assert fast_forward["fast_forward_guard"] == "head:abc123"
+        assert fast_forward["producer"] == "z-review-all"
+
+    def test_clear_checkpoint_rejects_stale_fast_forward_state(self, tmp_path: Path):
+        _seed_plan_dir(tmp_path)
+        artifact = tmp_path / "phase.md"
+        artifact.write_text("# phase\n", encoding="utf-8")
+        checkpoint_state = tmp_path / ".phase_state.json"
+        checkpoint_state.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "phase_id": "phase-1",
+                    "completed_artifact": str(artifact),
+                    "fast_forward_guard": "head:old",
+                    "handoff_path": str(tmp_path / "handoff.json"),
+                    "session_path": str(tmp_path / "SESSION.md"),
+                    "status": "clean_break",
+                    "resume_command": "/z-review-all checkpoint-plan",
+                    "producer": "z-review-all",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        env = {
+            **os.environ,
+            "Z_HARNESS_PLAN_DIR": str(tmp_path),
+            "Z_HARNESS_BASE_DIR": str(tmp_path / "state"),
+            "RUN": "test-clear-checkpoint-stale",
+            "Z_HARNESS_CHECKPOINT_PHASE_ID": "phase-1",
+            "Z_HARNESS_CHECKPOINT_STATE_FILE": str(checkpoint_state),
+            "Z_HARNESS_CHECKPOINT_COMPLETED_ARTIFACT": str(artifact),
+            "Z_HARNESS_CHECKPOINT_FAST_FORWARD_GUARD": "head:new",
+            "Z_HARNESS_CHECKPOINT_STALE_MODE": "reject",
+        }
+
+        result = subprocess.run(
+            ["bash", _WRITE_CLEAR_CHECKPOINT_SH],
+            env=env,
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 3
+        assert "stale checkpoint state rejected" in result.stderr
+        assert "fast_forward_guard_mismatch" in result.stderr
+
+    def test_non_zexecute_checkpoint_resume_simulation_uses_shared_hook(self, tmp_path: Path):
+        """A /z-audit-style seam can check pressure, checkpoint, then fast-forward."""
+        _seed_plan_dir(tmp_path)
+        report = tmp_path / "REPORT.md"
+        report.write_text("# Audit report\n\n## Consult additions\n- durable\n", encoding="utf-8")
+        guard = "report-sha:" + hashlib.sha256(report.read_bytes()).hexdigest()
+
+        check = _run_check_compaction(
+            tmp_path,
+            {
+                "Z_HARNESS_CONTEXT_USED_TOKENS": "900",
+                "Z_HARNESS_CONTEXT_WINDOW_TOKENS": "1000",
+            },
+        )
+        assert check.returncode == 1, check.stderr
+
+        env = {
+            **os.environ,
+            "Z_HARNESS_PLAN_DIR": str(tmp_path),
+            "Z_HARNESS_SLUG": "audit-demo",
+            "Z_HARNESS_BASE_DIR": str(tmp_path / "state"),
+            "RUN": "test-audit-seam-checkpoint",
+            "Z_HARNESS_CHECKPOINT_STATUS": "context_pressure",
+            "Z_HARNESS_CHECKPOINT_NEXT_STEP": "Resume /z-audit at Phase 5 promotion after consult archive.",
+            "Z_HARNESS_CHECKPOINT_RESUME_COMMAND": "/z-audit audit-demo",
+            "Z_HARNESS_CHECKPOINT_PHASE_NAME": "/z-audit Phase 4 post-consult",
+            "Z_HARNESS_CHECKPOINT_PHASE_ID": "audit-phase4-post-consult",
+            "Z_HARNESS_CHECKPOINT_COMPLETED_ARTIFACT": str(report),
+            "Z_HARNESS_CHECKPOINT_FAST_FORWARD_GUARD": guard,
+            "Z_HARNESS_CHECKPOINT_STALE_MODE": "reject",
+            "Z_HARNESS_CHECKPOINT_PRODUCER": "z-audit",
+            "Z_HARNESS_CHECKPOINT_PRODUCER_META_JSON": '{"command":"z-audit","seam":"audit-phase4-post-consult"}',
+        }
+
+        first = subprocess.run(
+            ["bash", _WRITE_CLEAR_CHECKPOINT_SH],
+            env=env,
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            text=True,
+        )
+        assert first.returncode == 0, first.stderr
+        assert first.stdout.startswith("STATUS: clear_checkpoint "), first.stdout
+        assert (tmp_path / "handoff.json").is_file()
+
+        second = subprocess.run(
+            ["bash", _WRITE_CLEAR_CHECKPOINT_SH],
+            env=env,
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            text=True,
+        )
+        assert second.returncode == 0, second.stderr
+        assert second.stdout.startswith("STATUS: clear_checkpoint_fast_forward "), second.stdout
+
+        events = _read_metrics(tmp_path)
+        assert any(event.get("kind") == "compaction_pause" for event in events)
+        written = [event for event in events if event.get("kind") == "clear_checkpoint_written"][-1]
+        assert written["producer"] == "z-audit"
+        assert written["phase_id"] == "audit-phase4-post-consult"
+        assert written["completed_artifact"] == str(report)
+        assert written["fast_forward_guard"] == guard
+        assert written["producer_metadata"] == {
+            "command": "z-audit",
+            "seam": "audit-phase4-post-consult",
+        }
+        fast_forward = [event for event in events if event.get("kind") == "clear_checkpoint_fast_forward"][-1]
+        assert fast_forward["phase_id"] == "audit-phase4-post-consult"
+        assert fast_forward["producer"] == "z-audit"
+
+    def test_non_zexecute_context_pressure_runs_without_tasks_md(self, tmp_path: Path):
+        """REPORT.md-backed seams must checkpoint on pressure before TASKS.md exists."""
+        report = tmp_path / "REPORT.md"
+        report.write_text("# Audit report\n\n## Consult additions\n- durable\n", encoding="utf-8")
+        assert not (tmp_path / "TASKS.md").exists()
+
+        check = _run_check_compaction(
+            tmp_path,
+            {
+                "Z_HARNESS_CONTEXT_USED_TOKENS": "900",
+                "Z_HARNESS_CONTEXT_WINDOW_TOKENS": "1000",
+            },
+        )
+
+        assert check.returncode == 1, check.stderr
+        assert "evaluating context pressure only" in check.stderr
+        pauses = [event for event in _read_metrics(tmp_path) if event.get("kind") == "compaction_pause"]
+        assert pauses, "compaction_pause event missing"
+        assert pauses[-1]["trigger"] == "context_pressure"
+        assert pauses[-1]["tasks_completed_total"] == 0
+        assert pauses[-1]["pending_remaining"] == 0
+        assert (tmp_path / ".last-compaction-check").is_file()
+
+    def test_legacy_fallback_requires_tasks_md(self, tmp_path: Path):
+        """Task-count and wall-time fallback heuristics must not run without TASKS.md."""
+        (tmp_path / "REPORT.md").write_text("# Audit report\n", encoding="utf-8")
+        (tmp_path / ".last-compaction-check").write_text("0 0\n", encoding="utf-8")
+        assert not (tmp_path / "TASKS.md").exists()
+
+        result = _run_check_compaction(
+            tmp_path,
+            {
+                "Z_HARNESS_CONTEXT_PRESSURE_ENABLED": "0",
+                "Z_IMPLEMENT_PAUSE_TASKS": "1",
+                "Z_IMPLEMENT_PAUSE_MINUTES": "1",
+            },
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert not any(event.get("kind") == "compaction_pause" for event in _read_metrics(tmp_path))
+
+
+class TestZExecuteCompactionCheckpointPolicy:
+    """Executable smoke tests for /z-execute durable-boundary compaction policy."""
+
+    def test_completed_task_below_threshold_continues_without_checkpoint(self, tmp_path: Path):
+        _seed_plan_dir(tmp_path)
+        (tmp_path / "TASKS.md").write_text(
+            "## T001 -- done `[x]`\n**Depends on:** --\n\n"
+            "## T002 -- pending `[ ]`\n**Depends on:** --\n",
+            encoding="utf-8",
+        )
+
+        result = _run_check_compaction(
+            tmp_path,
+            {
+                "Z_HARNESS_CONTEXT_USED_TOKENS": "500",
+                "Z_HARNESS_CONTEXT_WINDOW_TOKENS": "1000",
+            },
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert not (tmp_path / ".last-compaction-check").exists()
+        assert not any(event.get("kind") == "compaction_pause" for event in _read_metrics(tmp_path))
+
+    def test_completed_task_over_threshold_writes_clear_checkpoint(self, tmp_path: Path):
+        _seed_plan_dir(tmp_path)
+        (tmp_path / "TASKS.md").write_text(
+            "## T001 -- done `[x]`\n**Depends on:** --\n\n"
+            "## T002 -- pending `[ ]`\n**Depends on:** --\n",
+            encoding="utf-8",
+        )
+        _write_session_for_current_done_set(tmp_path, last_gate_task_id="T001")
+
+        check = _run_check_compaction(
+            tmp_path,
+            {
+                "Z_HARNESS_CONTEXT_USED_TOKENS": "900",
+                "Z_HARNESS_CONTEXT_WINDOW_TOKENS": "1000",
+            },
+        )
+        assert check.returncode == 1, check.stderr
+
+        checkpoint = subprocess.run(
+            ["bash", _WRITE_CLEAR_CHECKPOINT_SH],
+            env={
+                **os.environ,
+                "Z_HARNESS_PLAN_DIR": str(tmp_path),
+                "Z_HARNESS_SLUG": "checkpoint-plan",
+                "Z_HARNESS_BASE_DIR": str(tmp_path / "state"),
+                "RUN": "test-task-threshold",
+            },
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            text=True,
+        )
+
+        assert checkpoint.returncode == 0, checkpoint.stderr
+        assert (tmp_path / "handoff.json").is_file()
+        assert (tmp_path / ".last-compaction-check").is_file()
+        events = _read_metrics(tmp_path)
+        assert any(event.get("kind") == "compaction_pause" and event.get("trigger") == "context_pressure" for event in events)
+        assert any(event.get("kind") == "clear_checkpoint_written" for event in events)
+
+    def test_parallel_batch_evaluates_once_after_all_completion_updates(self, tmp_path: Path):
+        _seed_plan_dir(tmp_path)
+        (tmp_path / "TASKS.md").write_text(
+            "## T001 -- parallel one `[x]`\n**Depends on:** --\n\n"
+            "## T002 -- parallel two `[x]`\n**Depends on:** --\n\n"
+            "## T003 -- next pending `[ ]`\n**Depends on:** T001, T002\n",
+            encoding="utf-8",
+        )
+        done_hash = _write_session_for_current_done_set(tmp_path, last_gate_task_id="T002")
+
+        check = _run_check_compaction(
+            tmp_path,
+            {
+                "Z_HARNESS_CONTEXT_USED_TOKENS": "900",
+                "Z_HARNESS_CONTEXT_WINDOW_TOKENS": "1000",
+            },
+        )
+        assert check.returncode == 1, check.stderr
+
+        events = _read_metrics(tmp_path)
+        pauses = [event for event in events if event.get("kind") == "compaction_pause"]
+        assert len(pauses) == 1
+        assert pauses[0]["tasks_completed_total"] == 2
+        assert _run_helper("session_frontmatter_field", str(tmp_path / "SESSION.md"), "done_ids_hash", tmp_base=tmp_path) == done_hash
+
+    def test_bfs_level_boundary_checkpoint_runs_after_ledger_and_done_hash_flush(self, tmp_path: Path):
+        _seed_plan_dir(tmp_path)
+        (tmp_path / "TASKS.md").write_text(
+            "## T001 -- level task `[x]`\n**Depends on:** --\n\n"
+            "## T002 -- next level `[ ]`\n**Depends on:** T001\n",
+            encoding="utf-8",
+        )
+        ledger = tmp_path / "LEDGER.md"
+        ledger.write_text("# Ledger\n\n## Level 0\n\n### T001\n\n**Decisions:**\n  - accepted\n", encoding="utf-8")
+        level_hash = _run_helper("done_set_hash", str(tmp_path / "TASKS.md"), tmp_base=tmp_path)
+        archive = tmp_path / "archive" / "run-bfs"
+        archive.mkdir(parents=True)
+        (archive / ".bfs_level_state").write_text(f"0 {level_hash}\n", encoding="utf-8")
+        _write_session_for_current_done_set(tmp_path, last_gate_task_id="T001")
+
+        check = _run_check_compaction(
+            tmp_path,
+            {
+                "Z_HARNESS_CONTEXT_USED_TOKENS": "900",
+                "Z_HARNESS_CONTEXT_WINDOW_TOKENS": "1000",
+            },
+        )
+        assert check.returncode == 1, check.stderr
+        checkpoint = subprocess.run(
+            ["bash", _WRITE_CLEAR_CHECKPOINT_SH],
+            env={
+                **os.environ,
+                "Z_HARNESS_PLAN_DIR": str(tmp_path),
+                "Z_HARNESS_BASE_DIR": str(tmp_path / "state"),
+                "RUN": "test-bfs-threshold",
+            },
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            text=True,
+        )
+
+        assert checkpoint.returncode == 0, checkpoint.stderr
+        assert "### T001" in ledger.read_text(encoding="utf-8")
+        assert (archive / ".bfs_level_state").read_text(encoding="utf-8").strip() == f"0 {level_hash}"
+        assert (tmp_path / "handoff.json").is_file()
+
+    def test_in_level_suppression_prevents_pre_ledger_checkpoint_pause(self, tmp_path: Path):
+        """LEVEL_EXECUTE_SUPPRESS_COMPACTION=1 must force no-op inside BFS level."""
+        _seed_plan_dir(tmp_path)
+        (tmp_path / "TASKS.md").write_text(
+            "## T001 -- level task `[x]`\n**Depends on:** --\n\n"
+            "## T002 -- next level `[ ]`\n**Depends on:** T001\n",
+            encoding="utf-8",
+        )
+
+        result = _run_check_compaction(
+            tmp_path,
+            {
+                "LEVEL_EXECUTE_SUPPRESS_COMPACTION": "1",
+                "Z_HARNESS_CONTEXT_USED_TOKENS": "950",
+                "Z_HARNESS_CONTEXT_WINDOW_TOKENS": "1000",
+                "Z_IMPLEMENT_PAUSE_TASKS": "1",
+            },
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert not (tmp_path / ".last-compaction-check").exists()
+        assert not any(event.get("kind") == "compaction_pause" for event in _read_metrics(tmp_path))
+
+    def test_zexecute_bfs_checkpoint_uses_concrete_protocol_and_full_ids(self):
+        """BFS over-threshold path must curate/write handoff with all level ids."""
+        text = _load_zexecute_skill()
+        bfs_section = text[
+            text.index("BFS boundary clear-checkpoint threshold check"):
+            text.index("Acceptance-evaluator invocation seam", text.index("BFS boundary clear-checkpoint threshold check"))
+        ]
+        checkpoint_section = text[
+            text.index("Reusable clear-checkpoint protocol"):
+            text.index("## Parallelism", text.index("## Clear checkpoint policy"))
+        ]
+
+        assert "include: Clear checkpoint policy curator-dispatch block" not in text
+        assert "execute_clear_checkpoint_protocol" in bfs_section
+        assert 'completed_task_ids "$CHECKPOINT_TASKS_FILE"' in bfs_section
+        assert 'last_done_task "$LEVEL_TASKS_FILE"' not in bfs_section
+        assert "scripts/write-clear-checkpoint.sh" in checkpoint_section
+        assert "completed_task_ids: $COMPLETED_TASK_IDS" in checkpoint_section
+        assert "tasks_file: $CHECKPOINT_TASKS_FILE" in checkpoint_section
+
+    def test_zexecute_main_loop_compaction_has_intent_suppression_guard(self):
+        """The reused Main loop must not checkpoint inside an active BFS level."""
+        text = _load_zexecute_skill()
+        batch_step = text[
+            text.index("Batch-settle clear checkpoint check"):
+            text.index("## Run Brief", text.index("Batch-settle clear checkpoint check"))
+        ]
+
+        assert 'LEVEL_EXECUTE_SUPPRESS_COMPACTION:-0' in batch_step
+        assert 'MAIN_LOOP_RESULT="compaction_deferred"' in batch_step
+        assert "Never pause inside the reused Main loop" in batch_step
+        assert 'CHECKPOINT_TASKS_FILE="$TASKS_FILE"' in batch_step
+        assert 'BATCH_COMPLETED_TASK_IDS="$COMPLETED_IDS_FROM_ATOMIC_BATCH_WRITE"' in batch_step
+        assert "COMPACTION_TRIGGERED=0" in batch_step
+        assert "execute_clear_checkpoint_protocol" in batch_step
+
+    def test_malformed_or_unavailable_estimate_fails_open_by_default(self, tmp_path: Path):
+        _seed_plan_dir(tmp_path)
+        result = _run_check_compaction(
+            tmp_path,
+            {
+                "Z_HARNESS_CONTEXT_CHECKPOINT_THRESHOLD_PERCENT": "not-a-number",
+            },
+        )
+
+        assert result.returncode == 0
+        assert "continuing fail-open" in result.stderr
+        assert not (tmp_path / ".last-compaction-check").exists()
+
+        unavailable = _run_check_compaction(
+            tmp_path,
+            {
+                "ANTIGRAVITY_PLUGIN_ROOT": str(tmp_path / "missing-plugin-root"),
+            },
+        )
+        assert unavailable.returncode == 0
+        assert "continuing fail-open" in unavailable.stderr
+
+    def test_legacy_fallback_works_when_percentage_estimator_disabled(self, tmp_path: Path):
+        _seed_plan_dir(tmp_path)
+        (tmp_path / "TASKS.md").write_text(
+            "## T001 -- done `[x]`\n**Depends on:** --\n\n"
+            "## T002 -- pending `[ ]`\n**Depends on:** --\n",
+            encoding="utf-8",
+        )
+
+        result = _run_check_compaction(
+            tmp_path,
+            {
+                "Z_HARNESS_CONTEXT_PRESSURE_ENABLED": "0",
+                "Z_IMPLEMENT_PAUSE_TASKS": "1",
+            },
+        )
+
+        assert result.returncode == 1, result.stderr
+        assert any(event.get("kind") == "compaction_pause" and event.get("trigger") == "task_count" for event in _read_metrics(tmp_path))
+
+    def test_checkpoint_exit_contract_skips_finalize_and_deregister(self):
+        text = _load_zexecute_skill()
+        checkpoint_section = text[text.index("## Clear checkpoint policy"):text.index("## Parallelism", text.index("## Clear checkpoint policy"))]
+        finalize_section = text[text.index("## Finalize"):text.index("## Phase 9", text.index("## Finalize"))]
+
+        assert "skip the entire Finalize section" in checkpoint_section
+        assert "do NOT deregister" in checkpoint_section
+        assert "do NOT run Run Brief finalize" in checkpoint_section
+        assert "Clear-checkpoint exits" in finalize_section
+        assert "do NOT" in finalize_section and "deregister" in finalize_section
+
+
+class TestAuditStyleWorkflowCheckpointHooks:
+    """Text contracts for non-/z-execute shared checkpoint hook adoption."""
+
+    _SHARED_ENV_TOKENS = (
+        "scripts/check-compaction.sh",
+        "scripts/write-clear-checkpoint.sh",
+        "Z_HARNESS_CHECKPOINT_PHASE_ID",
+        "Z_HARNESS_CHECKPOINT_COMPLETED_ARTIFACT",
+        "Z_HARNESS_CHECKPOINT_FAST_FORWARD_GUARD",
+        "Z_HARNESS_CHECKPOINT_STALE_MODE",
+        "Z_HARNESS_CHECKPOINT_PRODUCER",
+        "compaction_pause",
+        "under-threshold fallthrough",
+        "stale-state handling",
+        "Do not write `handoff.json` directly",
+        "Skipped candidate seams",
+    )
+
+    def _assert_shared_hook_contract(self, text: str, seam_ids: tuple[str, ...]) -> None:
+        assert "run_workflow_compaction_seam" in text
+        for token in self._SHARED_ENV_TOKENS:
+            assert token in text
+        for seam_id in seam_ids:
+            assert seam_id in text
+        assert not re.search(r'cat\s+>\s*["$A-Za-z0-9_/{}/.-]*handoff\.json', text)
+        assert "checkpoint_ack" not in text
+        assert "local ack file" not in text
+
+    def test_zaudit_registers_shared_hook_at_natural_pause_points(self):
+        text = _load_zaudit_skill()
+        self._assert_shared_hook_contract(
+            text,
+            (
+                "audit-phase4-pre-consult",
+                "audit-phase4-post-consult",
+                "audit-phase5-pre-promotion",
+                "audit-phase6-pre-review",
+                "audit-phase7-pre-user-report",
+            ),
+        )
+        assert "Before dispatching Phase 4 consultants" in text
+        assert "After `REPORT.md` has been updated with `## Consult additions`" in text
+        assert "before run-brief/final user-facing report generation" in text
+        report_update = text.index("Update `REPORT.md` with `## Consult additions`")
+        post_consult = text.index("After `REPORT.md` has been updated with `## Consult additions`")
+        auto_bail = text.index("**Check auto-bail thresholds now**")
+        assert report_update < post_consult < auto_bail
+
+    def test_ztest_registers_shared_hook_at_natural_pause_points(self):
+        text = _load_ztest_skill()
+        self._assert_shared_hook_contract(
+            text,
+            (
+                "test-phase3-pre-consult",
+                "test-phase3-post-consult",
+                "test-phase4-pre-synthesis",
+                "test-phase5-pre-approval",
+                "test-phase6-pre-tests-write",
+                "test-phase7-pre-task-crosslink",
+                "test-phase8-pre-user-report",
+            ),
+        )
+        assert "Before dispatching Phase 3 consultants" in text
+        assert "After both Phase 3 consultant transcripts are archived" in text
+        assert "Before final push-notify/user summary" in text
+
+    def test_zuplift_registers_shared_hook_at_natural_pause_points(self):
+        text = _load_zuplift_skill()
+        self._assert_shared_hook_contract(
+            text,
+            (
+                "uplift-phase2-pre-cross-cutting-consultants",
+                "uplift-phase2-post-cross-cutting-consultants",
+                "uplift-phase2-pre-cross-cutting-promotion",
+                "uplift-phase3-pre-component-consultants",
+                "uplift-phase3-post-component-consultants",
+                "uplift-phase3-pre-component-task-promotion",
+                "uplift-phase3-pre-component-reviewer",
+                "uplift-phase4-pre-user-report",
+                "uplift-phase5-pre-dispatch",
+                "uplift-phase6-pre-final-report",
+            ),
+        )
+        assert "Before cross-cutting consultant dispatch" in text
+        assert "After per-component audit-review transcripts are archived" in text
+        assert "Before presenting the `/z-execute` dispatch command" in text
+
+    def test_zreview_all_uses_shared_hook_before_consultants(self):
+        text = _load_zreview_all_skill()
+        self._assert_shared_hook_contract(
+            text,
+            ("review-all-phase3-7-pre-consult",),
+        )
+        phase = text[
+            text.index("## Phase 3.7 — Pre-consult clear checkpoint"):
+            text.index("## Phase 3.7.5", text.index("## Phase 3.7 — Pre-consult clear checkpoint"))
+        ]
+        assert "scripts/check-compaction.sh" in phase
+        assert "under-threshold fallthrough" in phase
+        assert "continue directly to Phase 4" in phase
+        assert "run_workflow_compaction_seam" in phase
+        assert "Phase 3.7 has been acknowledged" in phase
+        assert "Fast-forward output falls through to Phase 4" in phase
+        assert phase.count("scripts/check-compaction.sh") == 1
+        assert "CHECKPOINT_RESULT=0" in phase
+        assert "return 10" in text
+        assert "clear_checkpoint_fast_forward: fall through to Phase 4" in phase
+        assert 'Z_HARNESS_CHECKPOINT_PRODUCER="z-review-all"' in text
+
+    def test_zreview_all_phase37_control_flow_simulation(self, tmp_path: Path):
+        """Executable guard for one-check, clear-exit, and fast-forward-fallthrough semantics."""
+        script = tmp_path / "phase37.sh"
+        script.write_text(
+            """#!/usr/bin/env bash
+set -euo pipefail
+CHECK_RC="${1:?check rc}"
+WRITE_OUT="${2:-STATUS: clear_checkpoint handoff=x}"
+check_calls=0
+notify_calls=0
+run_workflow_compaction_seam() {
+  printf '%s\n' "$WRITE_OUT"
+  case "$WRITE_OUT" in
+    STATUS:\\ clear_checkpoint_fast_forward*) return 0 ;;
+    STATUS:\\ clear_checkpoint*) return 10 ;;
+    *) return 1 ;;
+  esac
+}
+check_calls=$((check_calls + 1))
+COMPACTION_TRIGGERED=0
+if [ "$CHECK_RC" -ne 0 ]; then COMPACTION_TRIGGERED="$CHECK_RC"; fi
+if [ "$COMPACTION_TRIGGERED" -eq 0 ]; then
+  echo "PHASE4 check_calls=$check_calls notify_calls=$notify_calls"
+elif [ "$COMPACTION_TRIGGERED" -eq 2 ]; then
+  echo "STRICT check_calls=$check_calls notify_calls=$notify_calls"
+  exit 2
+else
+  CHECKPOINT_RESULT=0
+  run_workflow_compaction_seam || CHECKPOINT_RESULT=$?
+  if [ "$CHECKPOINT_RESULT" -eq 10 ]; then
+    notify_calls=$((notify_calls + 1))
+    echo "CLEAR_EXIT check_calls=$check_calls notify_calls=$notify_calls"
+    exit 0
+  elif [ "$CHECKPOINT_RESULT" -ne 0 ]; then
+    echo "ERROR check_calls=$check_calls notify_calls=$notify_calls"
+    exit "$CHECKPOINT_RESULT"
+  fi
+  echo "PHASE4 check_calls=$check_calls notify_calls=$notify_calls"
+fi
+""",
+            encoding="utf-8",
+        )
+
+        under = subprocess.run(["bash", str(script), "0"], capture_output=True, text=True)
+        assert under.returncode == 0
+        assert under.stdout.strip() == "PHASE4 check_calls=1 notify_calls=0"
+
+        clear = subprocess.run(
+            ["bash", str(script), "1", "STATUS: clear_checkpoint handoff=x"],
+            capture_output=True,
+            text=True,
+        )
+        assert clear.returncode == 0
+        assert "CLEAR_EXIT check_calls=1 notify_calls=1" in clear.stdout
+
+        fast_forward = subprocess.run(
+            ["bash", str(script), "1", "STATUS: clear_checkpoint_fast_forward state=x"],
+            capture_output=True,
+            text=True,
+        )
+        assert fast_forward.returncode == 0
+        assert "PHASE4 check_calls=1 notify_calls=0" in fast_forward.stdout
+
+
+class TestDebugWorkflowCheckpointHooks:
+    """Contract tests for /z-debug shared checkpoint hook adoption."""
+
+    _DEBUG_SEAMS = (
+        "debug-phase2-post-evidence",
+        "debug-phase3a-after-round1-orchestrator",
+        "debug-phase3a-post-hypothesis-pool",
+        "debug-phase3b-post-hypothesis-pool",
+        "debug-phase5-pre-isolation",
+        "debug-phase6-post-scoring",
+        "debug-phase7-pre-fix-consult",
+        "debug-phase7-post-fix-plan",
+        "debug-phase8-pre-postmortem",
+        "debug-phase9-pre-mr-review",
+        "debug-phase10-pre-finalize",
+    )
+
+    def test_zdebug_registers_shared_hook_at_debug_pause_points(self):
+        text = _load_zdebug_skill()
+
+        for token in (
+            "run_zdebug_compaction_seam",
+            "scripts/check-compaction.sh",
+            "scripts/write-clear-checkpoint.sh",
+            "Z_HARNESS_CHECKPOINT_PHASE_ID",
+            "Z_HARNESS_CHECKPOINT_COMPLETED_ARTIFACT",
+            "Z_HARNESS_CHECKPOINT_FAST_FORWARD_GUARD",
+            "Z_HARNESS_CHECKPOINT_STALE_MODE",
+            "Z_HARNESS_CHECKPOINT_PRODUCER=\"z-debug\"",
+            "compaction_pause",
+            "under-threshold fallthrough",
+            "stale-state handling",
+            "Do not write `handoff.json` directly",
+            "Skipped candidate seams",
+            "Resume /z-debug from ${debug_md}",
+            "STATUS:\\ clear_checkpoint_fast_forward*) ;;",
+        ):
+            assert token in text
+
+        for seam_id in self._DEBUG_SEAMS:
+            assert seam_id in text
+
+        round1_write = text.index("Write to `$Z_HARNESS_PLAN_DIR/archive/$RUN/round1-orchestrator.md`")
+        round1_hook = text.index('run_zdebug_compaction_seam "debug-phase3a-after-round1-orchestrator"')
+        round1_dispatch = text.index("Dispatch consultants in parallel", round1_hook)
+        assert round1_write < round1_hook < round1_dispatch
+
+        pool_hook = text.index('run_zdebug_compaction_seam "debug-phase3a-post-hypothesis-pool"')
+        round2_dispatch = text.index("## Phase 3b — Round 2 adversarial")
+        assert text.index("After the initial `## Hypothesis Pool`") < pool_hook < round2_dispatch
+
+        updated_pool = text.index("Commit the updated `## Hypothesis Pool` to DEBUG.md after Phase 3b")
+        updated_pool_hook = text.index('run_zdebug_compaction_seam "debug-phase3b-post-hypothesis-pool"')
+        phase4 = text.index("## Phase 4 — Build the Test Matrix")
+        assert updated_pool < updated_pool_hook < phase4
+
+        scoring_hook = text.index('run_zdebug_compaction_seam "debug-phase6-post-scoring"')
+        loop_decision = text.index("### Phase 6 loop logic")
+        assert text.index("## Score Updates") < scoring_hook < loop_decision
+
+        fix_consult_hook = text.index('run_zdebug_compaction_seam "debug-phase7-pre-fix-consult"')
+        fix_consult_dispatch = text.index("Bundled `light-fix` consult", fix_consult_hook)
+        assert fix_consult_hook < fix_consult_dispatch
+
+        assert "orchestrator hypothesis checkpoint decision is durable" in text
+        assert "before any consultant output can be read" in text
+        assert "$Z_HARNESS_PLAN_DIR/DEBUG.md` and the next phase" in text
+
+    def test_zdebug_over_threshold_checkpoint_points_resume_at_debug_md_and_next_phase(self, tmp_path: Path):
+        _seed_plan_dir(tmp_path)
+        debug_md = tmp_path / "DEBUG.md"
+        debug_md.write_text("# Debug: demo\n\n## Problem\n\n## Evidence Inventory\n", encoding="utf-8")
+        round1 = tmp_path / "archive" / "run-debug" / "round1-orchestrator.md"
+        round1.parent.mkdir(parents=True)
+        round1.write_text("# Round 1 — Orchestrator hypotheses\n", encoding="utf-8")
+        guard = "debug-sha:" + hashlib.sha256(debug_md.read_bytes() + round1.read_bytes()).hexdigest()
+
+        check = _run_check_compaction(
+            tmp_path,
+            {
+                "Z_HARNESS_CONTEXT_USED_TOKENS": "900",
+                "Z_HARNESS_CONTEXT_WINDOW_TOKENS": "1000",
+            },
+        )
+        assert check.returncode == 1, check.stderr
+
+        next_step = f"Resume /z-debug from {debug_md}; continue at Phase 3a Round 1 consultant dispatch using DEBUG.md"
+        env = {
+            **os.environ,
+            "Z_HARNESS_PLAN_DIR": str(tmp_path),
+            "Z_HARNESS_SLUG": "debug-demo",
+            "Z_HARNESS_BASE_DIR": str(tmp_path / "state"),
+            "RUN": "test-zdebug-round1-checkpoint",
+            "Z_HARNESS_CHECKPOINT_STATUS": "context_pressure",
+            "Z_HARNESS_CHECKPOINT_NEXT_STEP": next_step,
+            "Z_HARNESS_CHECKPOINT_RESUME_COMMAND": "/z-debug debug-demo",
+            "Z_HARNESS_CHECKPOINT_PHASE_NAME": "Phase 3a after orchestrator checkpoint",
+            "Z_HARNESS_CHECKPOINT_PHASE_ID": "debug-phase3a-after-round1-orchestrator",
+            "Z_HARNESS_CHECKPOINT_COMPLETED_ARTIFACT": str(round1),
+            "Z_HARNESS_CHECKPOINT_FAST_FORWARD_GUARD": guard,
+            "Z_HARNESS_CHECKPOINT_STALE_MODE": "reject",
+            "Z_HARNESS_CHECKPOINT_PRODUCER": "z-debug",
+            "Z_HARNESS_CHECKPOINT_PRODUCER_META_JSON": json.dumps(
+                {
+                    "command": "z-debug",
+                    "seam": "debug-phase3a-after-round1-orchestrator",
+                    "debug_md": str(debug_md),
+                }
+            ),
+        }
+
+        checkpoint = subprocess.run(
+            ["bash", _WRITE_CLEAR_CHECKPOINT_SH],
+            env=env,
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            text=True,
+        )
+
+        assert checkpoint.returncode == 0, checkpoint.stderr
+        assert checkpoint.stdout.startswith("STATUS: clear_checkpoint "), checkpoint.stdout
+        handoff = json.loads((tmp_path / "handoff.json").read_text(encoding="utf-8"))
+        assert handoff["status"] == "context_pressure"
+        assert str(debug_md) in handoff["next_step"]
+        assert "Phase 3a Round 1 consultant dispatch" in handoff["next_step"]
+
+        events = _read_metrics(tmp_path)
+        written = [event for event in events if event.get("kind") == "clear_checkpoint_written"][-1]
+        assert written["producer"] == "z-debug"
+        assert written["phase_id"] == "debug-phase3a-after-round1-orchestrator"
+        assert written["completed_artifact"] == str(round1)
+        assert written["fast_forward_guard"] == guard
+        assert written["resume_command"] == "/z-debug debug-demo"
+        assert written["producer_metadata"] == {
+            "command": "z-debug",
+            "seam": "debug-phase3a-after-round1-orchestrator",
+            "debug_md": str(debug_md),
+        }
+
+    def test_zdebug_under_threshold_continues_without_checkpoint(self, tmp_path: Path):
+        _seed_plan_dir(tmp_path)
+        (tmp_path / "DEBUG.md").write_text("# Debug: demo\n\n## Test Matrix\n", encoding="utf-8")
+
+        result = _run_check_compaction(
+            tmp_path,
+            {
+                "Z_HARNESS_CONTEXT_USED_TOKENS": "500",
+                "Z_HARNESS_CONTEXT_WINDOW_TOKENS": "1000",
+            },
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert not (tmp_path / "handoff.json").exists()
+        assert not any(event.get("kind") == "compaction_pause" for event in _read_metrics(tmp_path))
+
+
+class TestMapResearchWorkflowCheckpointHooks:
+    """Contract tests for map/research shared checkpoint hook adoption."""
+
+    _RESEARCH_SEAMS = (
+        "research-phase1-pre-panel",
+        "research-phase2-pre-judge",
+        "research-phase3-pre-finalize",
+        "research-phase4-pre-user-report",
+    )
+
+    _MAP_SEAMS = (
+        "map-phase4-pre-critique",
+        "map-phase4-post-critique",
+        "map-phase4-pre-map-write",
+        "map-phase5-pre-final-review",
+        "map-phase5-pre-user-report",
+    )
+
+    def test_zmap_delegates_checkpointing_to_canonical_explore(self):
+        text = _load_zmap_skill()
+
+        assert "LEGACY COMPATIBILITY WRAPPER" in text
+        assert "/z-explore --depth=deep $ARGUMENTS" in text
+        assert "Compatibility checkpoint delegation" in text
+        assert "research-draft.md" in text
+        assert "critique" in text
+        assert "MAP.md" in text
+        TestAuditStyleWorkflowCheckpointHooks()._assert_shared_hook_contract(
+            text,
+            self._MAP_SEAMS,
+        )
+        assert "Registered historical map seams" in text
+        assert "executed by `/z-explore --depth=deep`, not by this wrapper" in text
+
+        explore = _load_zexplore_skill()
+        TestAuditStyleWorkflowCheckpointHooks()._assert_shared_hook_contract(
+            explore,
+            self._MAP_SEAMS,
+        )
+        assert 'run_workflow_compaction_seam \\\n     "map-phase4-pre-critique"' in explore
+        assert "After `research-draft.md` is durable, checkpoint before bundled consultant critique" in explore
+        assert "After critique transcripts are archived" in explore
+        assert "After `MAP.md` is atomically written, checkpoint before final review/finalize checks" in explore
+        assert "### Deep-mode resume-phase gate" in explore
+        assert "RESUME_TARGET=\"critique\"" in explore
+        assert "CURRENT_GUARD" in explore
+        assert "stale /z-explore checkpoint guard" in explore
+        assert "do not rerun route/cost/doc/explore/critique phases" in explore
+        assert "/z-explore --depth=deep ${Z_HARNESS_SLUG:-<topic>} --resume-phase=$seam_id" in explore
+        assert "--resume-phase=$seam_id --resume-run=$RUN" in explore
+        assert "Z_EXPLORE_RESUME_TARGET" in explore
+        assert "Do not run Route Check, Phase 1, Phase 2, or Phase 3" in explore
+        assert "before slug derivation" in explore
+        assert 'RUN="${RESUME_RUN:-$(date -u +%Y%m%dT%H%M%SZ)-<slug>}"' in explore
+
+    def test_zresearch_registers_shared_hook_at_durable_phase_boundaries(self):
+        text = _load_zresearch_skill()
+        TestAuditStyleWorkflowCheckpointHooks()._assert_shared_hook_contract(
+            text,
+            self._RESEARCH_SEAMS,
+        )
+
+        for token in (
+            'Z_HARNESS_CHECKPOINT_PRODUCER="z-research"',
+            "STATUS:\\ clear_checkpoint_fast_forward*) ;;",
+            "Resume /z-research from $Z_HARNESS_PLAN_DIR",
+            "PANEL_PERSPECTIVES_PATH",
+            "perspectives.json",
+            "--resume-phase=$seam_id --resume-run=$RUN",
+            "### Step 0 — Resume-phase gate",
+            "RESUME_TARGET=\"phase3\"",
+            "do not rerun earlier subcommands/panel/judge work",
+            "CURRENT_GUARD",
+            "stale /z-research checkpoint guard",
+            "Z_RESEARCH_RESUME_TARGET",
+            "Do not run Phase 1 or Phase 2 when `Z_RESEARCH_RESUME_TARGET=phase3`",
+            "skip Phase 2 entirely and enter the later target phase",
+            "skip judge synthesis and enter Phase 4",
+            "resume flags are not topic text",
+            "never included in slug derivation",
+            'RUN="${RESUME_RUN:-$(date -u +%Y%m%dT%H%M%SZ)-$SLUG}"',
+            'PERSPECTIVES_JSON="$(cat "$PANEL_PERSPECTIVES_PATH")"',
+            "On a `Z_RESEARCH_RESUME_TARGET=phase3` resume, reload the durable judge input manifest",
+        ):
+            assert token in text
+
+        phase1_ready = text.index("Before proceeding to Phase 2, both MAP.md and BRAINSTORM.md")
+        phase1_hook = text.index('run_workflow_compaction_seam \\\n  "research-phase1-pre-panel"')
+        panel_dispatch = text.index("### Step 3 — Parallel dispatch", text.index("## Phase 2"))
+        assert phase1_ready < phase1_hook < panel_dispatch
+
+        panel_manifest = text.index('PANEL_PERSPECTIVES_PATH="$Z_HARNESS_PLAN_DIR/archive/$RUN/panel/perspectives.json"')
+        phase2_hook = text.index('run_workflow_compaction_seam \\\n  "research-phase2-pre-judge"')
+        judge_dispatch = text.index("### Step 1 — Dispatch research-judge")
+        assert panel_manifest < phase2_hook < judge_dispatch
+
+        research_write = text.index("Atomic write: tmp then rename")
+        phase3_hook = text.index('run_workflow_compaction_seam \\\n  "research-phase3-pre-finalize"')
+        phase4 = text.index("## Phase 4 — Finalize")
+        assert research_write < phase3_hook < phase4
+
+        tripwire_update = text.index("Update RESEARCH.md frontmatter with fired tripwires")
+        phase4_hook = text.index('run_workflow_compaction_seam \\\n  "research-phase4-pre-user-report"')
+        user_report = text.index("### Step 5 — Push-notify + final message")
+        assert tripwire_update < phase4_hook < user_report
+
+    def test_zresearch_over_threshold_checkpoint_points_resume_at_next_phase(self, tmp_path: Path):
+        _seed_plan_dir(tmp_path)
+        panel_dir = tmp_path / "archive" / "run-research" / "panel"
+        panel_dir.mkdir(parents=True)
+        map_md = tmp_path / "MAP.md"
+        brainstorm_md = tmp_path / "BRAINSTORM.md"
+        research_md = tmp_path / "RESEARCH.md"
+        perspectives = panel_dir / "perspectives.json"
+        map_md.write_text("---\nartifact: map\n---\n\n## Terrain\n", encoding="utf-8")
+        brainstorm_md.write_text("---\nartifact: brainstorm\n---\n\n## Framings\n", encoding="utf-8")
+        research_md.write_text("---\nartifact: research\n---\n\n## Approach decision matrix\n", encoding="utf-8")
+        perspectives.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "architecture-conservative",
+                        "return_path": str(panel_dir / "architecture-conservative.md"),
+                    }
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        guard = "research-sha:" + hashlib.sha256(
+            map_md.read_bytes()
+            + brainstorm_md.read_bytes()
+            + research_md.read_bytes()
+            + perspectives.read_bytes()
+        ).hexdigest()
+
+        check = _run_check_compaction(
+            tmp_path,
+            {
+                "Z_HARNESS_CONTEXT_USED_TOKENS": "900",
+                "Z_HARNESS_CONTEXT_WINDOW_TOKENS": "1000",
+            },
+        )
+        assert check.returncode == 1, check.stderr
+
+        next_step = (
+            f"Resume /z-research from {tmp_path}; "
+            "continue at Phase 3 judge synthesis using the archived panel perspectives"
+        )
+        env = {
+            **os.environ,
+            "Z_HARNESS_PLAN_DIR": str(tmp_path),
+            "Z_HARNESS_SLUG": "research-demo",
+            "Z_HARNESS_BASE_DIR": str(tmp_path / "state"),
+            "RUN": "test-zresearch-panel-checkpoint",
+            "Z_HARNESS_CHECKPOINT_STATUS": "context_pressure",
+            "Z_HARNESS_CHECKPOINT_RESUME_COMMAND": "/z-research research-demo --resume-phase=research-phase2-pre-judge --resume-run=run-research",
+            "Z_HARNESS_CHECKPOINT_NEXT_STEP": next_step,
+            "Z_HARNESS_CHECKPOINT_PHASE_NAME": "Phase 2 panel archived before judge",
+            "Z_HARNESS_CHECKPOINT_PHASE_ID": "research-phase2-pre-judge",
+            "Z_HARNESS_CHECKPOINT_COMPLETED_ARTIFACT": str(perspectives),
+            "Z_HARNESS_CHECKPOINT_FAST_FORWARD_GUARD": guard,
+            "Z_HARNESS_CHECKPOINT_STALE_MODE": "reject",
+            "Z_HARNESS_CHECKPOINT_PRODUCER": "z-research",
+            "Z_HARNESS_CHECKPOINT_PRODUCER_META_JSON": json.dumps(
+                {
+                    "command": "z-research",
+                    "resume_phase": "research-phase2-pre-judge",
+                    "seam": "research-phase2-pre-judge",
+                    "map_md": str(map_md),
+                    "brainstorm_md": str(brainstorm_md),
+                    "research_md": str(research_md),
+                }
+            ),
+        }
+
+        first = subprocess.run(
+            ["bash", _WRITE_CLEAR_CHECKPOINT_SH],
+            env=env,
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            text=True,
+        )
+        assert first.returncode == 0, first.stderr
+        assert first.stdout.startswith("STATUS: clear_checkpoint "), first.stdout
+        handoff = json.loads((tmp_path / "handoff.json").read_text(encoding="utf-8"))
+        assert handoff["status"] == "context_pressure"
+        assert "Phase 3 judge synthesis" in handoff["next_step"]
+
+        second = subprocess.run(
+            ["bash", _WRITE_CLEAR_CHECKPOINT_SH],
+            env=env,
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            text=True,
+        )
+        assert second.returncode == 0, second.stderr
+        assert second.stdout.startswith("STATUS: clear_checkpoint_fast_forward "), second.stdout
+
+        events = _read_metrics(tmp_path)
+        written = [event for event in events if event.get("kind") == "clear_checkpoint_written"][-1]
+        assert written["producer"] == "z-research"
+        assert written["phase_id"] == "research-phase2-pre-judge"
+        assert written["completed_artifact"] == str(perspectives)
+        assert written["resume_command"] == "/z-research research-demo --resume-phase=research-phase2-pre-judge --resume-run=run-research"
+        assert written["producer_metadata"] == {
+            "command": "z-research",
+            "seam": "research-phase2-pre-judge",
+            "resume_phase": "research-phase2-pre-judge",
+            "map_md": str(map_md),
+            "brainstorm_md": str(brainstorm_md),
+            "research_md": str(research_md),
+        }
+        fast_forward = [event for event in events if event.get("kind") == "clear_checkpoint_fast_forward"][-1]
+        assert fast_forward["phase_id"] == "research-phase2-pre-judge"
+        assert fast_forward["producer"] == "z-research"
+
+    def test_zresearch_under_threshold_continues_without_checkpoint(self, tmp_path: Path):
+        _seed_plan_dir(tmp_path)
+        (tmp_path / "MAP.md").write_text("# Map\n", encoding="utf-8")
+        (tmp_path / "BRAINSTORM.md").write_text("# Brainstorm\n", encoding="utf-8")
+
+        result = _run_check_compaction(
+            tmp_path,
+            {
+                "Z_HARNESS_CONTEXT_USED_TOKENS": "500",
+                "Z_HARNESS_CONTEXT_WINDOW_TOKENS": "1000",
+            },
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert not (tmp_path / "handoff.json").exists()
+        assert not any(event.get("kind") == "compaction_pause" for event in _read_metrics(tmp_path))

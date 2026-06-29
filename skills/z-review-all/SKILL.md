@@ -12,6 +12,61 @@ unsupported_driver_behavior: explicit_gate
 
 You are running the **z-harness `/z-review-all`** final-gate review. This is a holistic cross-task cross-LLM review, intentionally distinct from the per-task review that `/z-execute` already performs. Per-task review catches per-task issues; this catches issues that only show up when looking at all tasks together.
 
+## Shared context checkpoint hook/check contract
+
+`/z-review-all` uses the reusable z-harness hook/check layer at its durable pre-consult seam. Do not write `handoff.json` directly. It MUST NOT emit `compaction_pause` outside `scripts/check-compaction.sh`; call `scripts/check-compaction.sh` first and call `scripts/write-clear-checkpoint.sh` only when the shared check exits `1`.
+
+```bash
+run_workflow_compaction_seam() {
+  local seam_id="$1" phase_name="$2" completed_artifact="$3" next_step="$4"
+  local diff_path="$BASE/archive/$RRUN/cumulative.diff"
+  local stat_path="$BASE/archive/$RRUN/cumulative.stat"
+  export Z_HARNESS_PLAN_DIR="$Z_HARNESS_PLAN_DIR"
+  export Z_HARNESS_SLUG="$Z_HARNESS_SLUG"
+  export Z_HARNESS_CHECKPOINT_STATUS="clean_break"
+  export Z_HARNESS_CHECKPOINT_PRODUCER="z-review-all"
+  export Z_HARNESS_CHECKPOINT_PHASE_ID="$seam_id"
+  export Z_HARNESS_CHECKPOINT_PHASE_NAME="$phase_name"
+  export Z_HARNESS_CHECKPOINT_COMPLETED_ARTIFACT="$completed_artifact"
+  export Z_HARNESS_CHECKPOINT_FAST_FORWARD_GUARD="$(python3 - "$diff_path" "$stat_path" "$completed_artifact" <<'PYEOF'
+import hashlib, sys
+h = hashlib.sha256()
+for path in sys.argv[1:]:
+    try:
+        with open(path, "rb") as fh:
+            h.update(path.encode("utf-8") + b"\0" + fh.read() + b"\0")
+    except FileNotFoundError:
+        h.update(path.encode("utf-8") + b"\0missing\0")
+print(h.hexdigest())
+PYEOF
+)"
+  export Z_HARNESS_CHECKPOINT_STALE_MODE="reject"
+  export Z_HARNESS_CHECKPOINT_RESUME_COMMAND="/z-review-all ${Z_HARNESS_SLUG:-this plan}"
+  export Z_HARNESS_CHECKPOINT_NEXT_STEP="Resume /z-review-all for ${Z_HARNESS_SLUG:-this plan}; ${next_step}"
+  export Z_HARNESS_CHECKPOINT_PRODUCER_META_JSON="$(python3 - "$seam_id" "$RRUN" "$BASE_REF" "$diff_path" "$stat_path" <<'PYEOF'
+import json, sys
+print(json.dumps({"command":"z-review-all","seam":sys.argv[1],"run":sys.argv[2],"base_ref":sys.argv[3],"cumulative_diff":sys.argv[4],"cumulative_stat":sys.argv[5]}))
+PYEOF
+)"
+
+  CHECKPOINT_OUT="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/write-clear-checkpoint.sh")"
+  printf '%s\n' "$CHECKPOINT_OUT"
+  case "$CHECKPOINT_OUT" in
+    STATUS:\ clear_checkpoint_fast_forward*) return 0 ;;
+    STATUS:\ clear_checkpoint*) return 10 ;;
+    *) return 1 ;;
+  esac
+}
+```
+
+Registered durable seams:
+
+| Seam id | When it runs | Durable artifact | Next step |
+|---------|--------------|------------------|-----------|
+| `review-all-phase3-7-pre-consult` | after cumulative diff/stat and optional pre-review summary are durable, before Phase 4 consultant dispatch | `$BASE/archive/$RRUN/cumulative.diff` | continue to Phase 4 consultant review |
+
+Skipped candidate seams: no check while cumulative diff/stat or pre-review subagents are in flight; no check after terminal halt/finalize because the run-brief terminal state owns that boundary. The shared hook owns `compaction_pause`, under-threshold fallthrough, fast-forward resume, and stale-state handling.
+
 ## Pre-Phase 0 — Resume check
 
 **Before entering Phase 0**, check for an existing state file from a prior invocation that reached Phase 3.7:
@@ -432,83 +487,62 @@ These are cheap pre-screener findings — validate them critically before accept
 
 ## Phase 3.7 — Pre-consult clear checkpoint
 
-**Always runs** between Phase 3.5 and Phase 4 (unless fast-forwarded via the Pre-Phase 0 resume check).
-
-Emit the compaction pause event:
-```bash
-bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" compaction_pause \
-  '{"trigger":"pre_consult","phase":"review_all_phase_4"}'
-```
-
-**No-ask gate — run first, before the resolver:**
+Run after Phase 3.5/3.6 durable artifacts exist and before Phase 4 consultant dispatch. This is no longer an unconditional clear break: first evaluate the shared context-pressure check. If under threshold, continue directly to Phase 4. If over threshold, run the existing no-ask gate, persist `.review_state.json`, write the shared clear checkpoint, push-notify, and exit before consultant dispatch. Fast-forward output falls through to Phase 4.
 
 ```bash
-# check-no-ask is the fail-closed overnight gate. It returns halt|proceed and
-# correctly handles Z_HARNESS_ASK_ALL=1 vs Z_HARNESS_NO_ASK=halt conflicts (exit 5).
-NOASK_JSON="$(python3 scripts/config.py check-no-ask --question-id workflow.review_all_proceed)"
-NOASK_EXIT=$?
-NOASK_RESULT="$(echo "$NOASK_JSON" | jq -r .result)"
-
-if [[ $NOASK_EXIT -eq 5 ]]; then
-  # Config conflict (ASK_ALL=1 + NO_ASK=halt). check-no-ask already printed error JSON.
-  # Surface to user and abort.
-  echo "config_conflict: Z_HARNESS_ASK_ALL=1 and Z_HARNESS_NO_ASK=halt are mutually exclusive" >&2
-  exit 5
-fi
-```
-
-- **If `$NOASK_RESULT == "halt"`:** Emit `review_halt` event, write a partial `.review_state.json`, and exit cleanly — do NOT write the clear checkpoint or start Phase 4:
-  ```bash
+COMPACTION_TRIGGERED=0
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/check-compaction.sh" || COMPACTION_TRIGGERED=$?
+if [ "$COMPACTION_TRIGGERED" -eq 0 ]; then
+  # under-threshold fallthrough: continue to Phase 4 without checkpoint side effects.
+  :
+elif [ "$COMPACTION_TRIGGERED" -eq 2 ]; then
+  # Execute Run Brief — halt finalize with reason "context pressure estimate failed in strict mode at review-all-phase3-7-pre-consult", then exit 1.
+  exit 1
+else
+  # check-no-ask is the fail-closed overnight gate for actually pausing.
+  NOASK_JSON="$(python3 scripts/config.py check-no-ask --question-id workflow.review_all_proceed)"
+  NOASK_EXIT=$?
+  NOASK_RESULT="$(echo "$NOASK_JSON" | jq -r .result)"
+  if [[ $NOASK_EXIT -eq 5 ]]; then
+    echo "config_conflict: Z_HARNESS_ASK_ALL=1 and Z_HARNESS_NO_ASK=halt are mutually exclusive" >&2
+    exit 5
+  fi
   if [[ "$NOASK_RESULT" == "halt" ]]; then
     bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RRUN" review_halt \
       "$(printf '{"reason":"no_ask_blocked","question_id":"workflow.review_all_proceed","rule_id":"no_ask_halt"}')"
     echo "halt: no_ask_blocked on workflow.review_all_proceed" >&2
-    # Write partial state file so /z-review-all resume check recognizes this as a
-    # halted-state file (not stale/corrupt) on next invocation.
     python3 -c "
 import json, datetime, sys
-state = {
-  'phase_3_7_acknowledged': False,
-  'halted': True,
-  'halt_reason': 'no_ask_blocked',
-  'halted_at': datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
-}
-path = sys.argv[1]
-with open(path, 'w') as f:
+state = {'phase_3_7_acknowledged': False, 'halted': True, 'halt_reason': 'no_ask_blocked', 'halted_at': datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')}
+with open(sys.argv[1], 'w') as f:
     json.dump(state, f, indent=2)
-" "$Z_HARNESS_PLAN_DIR/.review_state.json" 2>/dev/null \
-      || echo "warn: could not write .review_state.json" >&2
+" "$Z_HARNESS_PLAN_DIR/.review_state.json" 2>/dev/null || echo "warn: could not write .review_state.json" >&2
     exit 0
   fi
-  ```
-  On this halt path (after `run-brief.sh init`), run **Run Brief — halt finalize** below (substitute `<reason>` = `no_ask_blocked on workflow.review_all_proceed`) before `exit 0`.
-
-- **If `$NOASK_RESULT == "proceed"`:** write the Phase 3.7 resume state, then write a clear checkpoint and exit. Do **not** ask "pause or proceed"; the heavy Phase 4 consultant spawn is exactly the boundary where clearing is valuable.
-  ```bash
   python3 - "$Z_HARNESS_PLAN_DIR/.review_state.json" "$RRUN" "$BASE_REF" "$BASE/archive/$RRUN/cumulative.diff" "$BASE/archive/$RRUN/cumulative.stat" <<'PY' || echo "warn: could not write .review_state.json" >&2
 import datetime, json, subprocess, sys
 path, run_id, base_ref, diff_path, stat_path = sys.argv[1:6]
 head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-state = {
-  "phase_3_7_acknowledged": True,
-  "run_id": run_id,
-  "base_ref": base_ref,
-  "head_sha": head,
-  "cumulative_diff_path": diff_path,
-  "cumulative_stat_path": stat_path,
-  "acknowledged_at": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-}
+state = {"phase_3_7_acknowledged": True, "run_id": run_id, "base_ref": base_ref, "head_sha": head, "cumulative_diff_path": diff_path, "cumulative_stat_path": stat_path, "acknowledged_at": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")}
 with open(path, "w", encoding="utf-8") as f:
     json.dump(state, f, indent=2)
 PY
-  export Z_HARNESS_PLAN_DIR="$Z_HARNESS_PLAN_DIR" Z_HARNESS_SLUG="$Z_HARNESS_SLUG" Z_HARNESS_AGENT="${Z_HARNESS_AGENT:-pi}"
-  export Z_HARNESS_CHECKPOINT_STATUS=clean_break
-  export Z_HARNESS_CHECKPOINT_NEXT_STEP="Resume /z-review-all for ${Z_HARNESS_SLUG:-this plan}; Phase 3.7 has been acknowledged, so continue to Phase 4 consultant review."
-  export Z_HARNESS_CHECKPOINT_RESUME_COMMAND="/z-review-all ${Z_HARNESS_SLUG:-this plan}"
-  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/write-clear-checkpoint.sh" || true
-  push_notify "Clear checkpoint written before review consultants. Run \`/clear\`, then re-invoke \`/z-review-all\` to resume at Phase 4."
-  exit 0
-  ```
+  CHECKPOINT_RESULT=0
+  run_workflow_compaction_seam \
+    "review-all-phase3-7-pre-consult" \
+    "Phase 3.7 pre-consult" \
+    "$BASE/archive/$RRUN/cumulative.diff" \
+    "Phase 3.7 has been acknowledged, so continue to Phase 4 consultant review." \
+    || CHECKPOINT_RESULT=$?
+  if [ "$CHECKPOINT_RESULT" -eq 10 ]; then
+    push_notify "Clear checkpoint written before review consultants. Run \`/clear\`, then re-invoke \`/z-review-all\` to resume at Phase 4."
+    exit 0
+  elif [ "$CHECKPOINT_RESULT" -ne 0 ]; then
+    exit "$CHECKPOINT_RESULT"
+  fi
+  # clear_checkpoint_fast_forward: fall through to Phase 4.
+fi
+```
 
 The next `/z-review-all` invocation validates `.review_state.json` in the pre-Phase-0 resume gate. If HEAD and artifacts still match, it fast-forwards to Phase 4; if not, it deletes the stale state file and re-runs from Phase 0.
 

@@ -242,27 +242,40 @@ def _parse_ts(ts_str: str | None) -> float | None:
 
 
 def _event_tokens(event: dict) -> int:
-    """Return the token count for a single event using the z-stats fallback chain.
+    """Return observed/estimated tokens for a telemetry event.
 
-    Chain:
-      subagent_input_tokens  // prompt_chars/4  // 0
-    + subagent_output_tokens // response_chars/4 // 0
+    Precedence is intentionally aligned with the context-pressure estimator:
+      provider_* token fields  // subagent_* token fields // prompt/response chars ÷ 4 // 0
+
+    Input and output are resolved separately so prompt_chars and response_chars
+    remain distinct telemetry even when only one side has provider token data.
     """
     def _get_int(event: dict, key: str) -> int | None:
         v = event.get(key)
         if v is None:
             return None
         try:
-            return int(v)
+            n = int(v)
         except (TypeError, ValueError):
             return None
+        return n if n >= 0 else None
 
-    raw_in = _get_int(event, "subagent_input_tokens")
+    provider_total = _get_int(event, "provider_total_tokens")
+    if provider_total is None:
+        provider_total = _get_int(event, "total_tokens")
+    if provider_total is not None:
+        return provider_total
+
+    raw_in = _get_int(event, "provider_input_tokens")
+    if raw_in is None:
+        raw_in = _get_int(event, "subagent_input_tokens")
     if raw_in is None:
         pc = _get_int(event, "prompt_chars")
         raw_in = (pc // 4) if pc is not None else 0
 
-    raw_out = _get_int(event, "subagent_output_tokens")
+    raw_out = _get_int(event, "provider_output_tokens")
+    if raw_out is None:
+        raw_out = _get_int(event, "subagent_output_tokens")
     if raw_out is None:
         rc = _get_int(event, "response_chars")
         raw_out = (rc // 4) if rc is not None else 0
@@ -364,12 +377,12 @@ def _compute_event_cost(event: dict) -> dict:
     """Compute input/output token counts and estimated cost for a subagent_call event.
 
     Returns a dict with:
-      input_tokens  — int (from provider_input_tokens if present, else prompt_chars/4)
-      output_tokens — int (from provider_output_tokens if present, else response_chars/4)
+      input_tokens  — provider_input_tokens, else subagent_input_tokens, else prompt_chars/4
+      output_tokens — provider_output_tokens, else subagent_output_tokens, else response_chars/4
       est_input_usd — float (input_tokens / 1e6 * input_rate)
       est_output_usd — float (output_tokens / 1e6 * output_rate)
       est_total_usd — float (est_input_usd + est_output_usd)
-      token_source  — "provider" | "chars"  (label per SPEC honest-limitation requirement)
+      token_source  — "provider" | "chars"  (provider when any provider token field is present)
     """
     def _safe_int(v: object) -> int | None:
         if v is None:
@@ -383,20 +396,36 @@ def _compute_event_cost(event: dict) -> dict:
     rates = _get_model_rates(model_label)
 
     # Prefer real provider tokens when available (external CLIs that print usage).
+    # Resolve input/output independently: if only one side has provider data, keep
+    # the other side's best available telemetry instead of discarding the provider
+    # field and falling all the way back to char estimates for both sides.
+    provider_total = _safe_int(event.get("provider_total_tokens"))
+    if provider_total is None:
+        provider_total = _safe_int(event.get("total_tokens"))
+
     provider_in = _safe_int(event.get("provider_input_tokens"))
     provider_out = _safe_int(event.get("provider_output_tokens"))
 
-    if provider_in is not None and provider_out is not None:
-        input_tokens = provider_in
-        output_tokens = provider_out
+    if provider_total is not None:
+        input_tokens = provider_total
+        output_tokens = 0
         token_source = "provider"
     else:
-        # Fall back to chars/4 approximation (native Claude subagents).
-        pc = _safe_int(event.get("prompt_chars"))
-        rc = _safe_int(event.get("response_chars"))
-        input_tokens = int((pc or 0) / _CHARS_PER_TOKEN)
-        output_tokens = int((rc or 0) / _CHARS_PER_TOKEN)
-        token_source = "chars"
+        input_tokens = provider_in
+        if input_tokens is None:
+            input_tokens = _safe_int(event.get("subagent_input_tokens"))
+        if input_tokens is None:
+            pc = _safe_int(event.get("prompt_chars"))
+            input_tokens = int((pc or 0) / _CHARS_PER_TOKEN)
+
+        output_tokens = provider_out
+        if output_tokens is None:
+            output_tokens = _safe_int(event.get("subagent_output_tokens"))
+        if output_tokens is None:
+            rc = _safe_int(event.get("response_chars"))
+            output_tokens = int((rc or 0) / _CHARS_PER_TOKEN)
+
+        token_source = "provider" if provider_in is not None or provider_out is not None else "chars"
 
     est_input_usd = (input_tokens / 1_000_000.0) * rates["input"]
     est_output_usd = (output_tokens / 1_000_000.0) * rates["output"]

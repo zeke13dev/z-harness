@@ -32,6 +32,58 @@ This command is **read-only**. Never edit the target. Fixes happen later via `/z
 
 Each promoted audit task must preserve the finding's source dimension, severity, evidence, files, recommendation, and verifiable acceptance criteria. Observations with no clear fix stay in `REPORT.md`. Structural or premise-level findings that exceed the audit auto-bail thresholds become `escalation.md` instead of task blocks. This command may use its own severity labels and filenames, but the artifact must remain task-shaped and consumable by `/z-execute`.
 
+## Shared context checkpoint hook/check contract
+
+`/z-audit` uses the reusable z-harness hook/check layer at every durable audit seam. It MUST NOT keep workflow-local checkpoint snippets, ack files, or direct `handoff.json` writes. Do not write `handoff.json` directly; call `scripts/check-compaction.sh` first and call `scripts/write-clear-checkpoint.sh` only when the shared check exits `1`.
+
+Standard seam call pattern:
+
+```bash
+run_workflow_compaction_seam() {
+  local seam_id="$1" phase_name="$2" completed_artifact="$3" next_step="$4"
+  export Z_HARNESS_PLAN_DIR="$BASE"
+  export Z_HARNESS_SLUG
+  export Z_HARNESS_CHECKPOINT_PRODUCER="z-audit"
+  export Z_HARNESS_CHECKPOINT_PHASE_ID="$seam_id"
+  export Z_HARNESS_CHECKPOINT_PHASE_NAME="$phase_name"
+  export Z_HARNESS_CHECKPOINT_COMPLETED_ARTIFACT="$completed_artifact"
+  export Z_HARNESS_CHECKPOINT_FAST_FORWARD_GUARD="$(git rev-parse HEAD 2>/dev/null || printf unknown):$(python3 - "$completed_artifact" <<'PYEOF'
+import hashlib, sys
+with open(sys.argv[1], "rb") as fh:
+    print(hashlib.sha256(fh.read()).hexdigest())
+PYEOF
+)"
+  export Z_HARNESS_CHECKPOINT_STALE_MODE="reject"
+  export Z_HARNESS_CHECKPOINT_RESUME_COMMAND="/z-audit <target>"
+  export Z_HARNESS_CHECKPOINT_NEXT_STEP="$next_step"
+  export Z_HARNESS_CHECKPOINT_PRODUCER_META_JSON="$(printf '{"command":"z-audit","seam":"%s","run":"%s"}' "$seam_id" "$RUN")"
+
+  COMPACTION_TRIGGERED=0
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/check-compaction.sh" || COMPACTION_TRIGGERED=$?
+  if [ "$COMPACTION_TRIGGERED" -eq 1 ]; then
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/write-clear-checkpoint.sh"
+    exit 0
+  elif [ "$COMPACTION_TRIGGERED" -eq 2 ]; then
+    # Execute Run Brief — halt finalize with reason "context pressure estimate failed in strict mode at $seam_id", then exit 1.
+    exit 1
+  fi
+}
+```
+
+The hook owns percentage-threshold evaluation, `compaction_pause`, checkpoint metadata, resume/fast-forward state, stale-state handling, and under-threshold fallthrough. Exit `0` means continue without checkpoint side effects; exit `1` means write the shared checkpoint and stop before entering the next high-context step; exit `2` is a strict-mode halt. Existing checkpoint state that matches phase/artifact/guard fast-forwards; stale state is rejected by the shared producer.
+
+Registered durable seams:
+
+| Seam id | When it runs | Durable artifact | Next step |
+|---------|--------------|------------------|-----------|
+| `audit-phase4-pre-consult` | after `REPORT.md` exists, immediately before Phase 4 consultants/advisory arm dispatch | `$BASE/REPORT.md` | resume at Phase 4 consultant dispatch |
+| `audit-phase4-post-consult` | after consultant/advisory transcripts are archived and consult additions/drops are appended | `$BASE/REPORT.md` | resume at post-consult auto-bail and promotion |
+| `audit-phase5-pre-promotion` | before generating audit `TASKS.md`/`SPEC.md`/`PLAN.md` from accepted findings | `$BASE/REPORT.md` | resume at Phase 5 promotion |
+| `audit-phase6-pre-review` | after audit `TASKS.md`/`SPEC.md`/`PLAN.md` are durable, before reviewer dispatch | `$BASE/TASKS.md` | resume at Phase 6 safety gate |
+| `audit-phase7-pre-user-report` | after reviewer acceptance, before run-brief/final user-facing report generation | `$BASE/REPORT.md` | resume at Phase 7 finalize |
+
+Skipped candidate seams: no check before Phase 2 auditor dispatch (no durable findings artifact yet), no check while auditors or consultants are in flight, no check between re-reading cited code and applying a consult decision, and no check after a run-ending halt because halt finalize owns that terminal state.
+
 ## --scope-from flag handling (parsed BEFORE Setup)
 
 Parse `$ARGUMENTS` for `--scope-from <chunk-spec>` **immediately — before slug derivation, doc-fetcher, version stamp, or run_start logging**. This ordering ensures recursive sub-flows do not pollute the parent run's slug or events.
@@ -700,6 +752,8 @@ fi
 
 Spawn both neutral consultants in parallel against `REPORT.md`. When `CONSULT_EVAL` is `true` and `ADVISORY_PERSONA_NAME` is non-empty, include the advisory arm as a **third Agent() call in the same parallel message**:
 
+Before dispatching Phase 4 consultants, run shared seam `audit-phase4-pre-consult` with completed artifact `$BASE/REPORT.md`.
+
 ```
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this dispatch
      requirement to the user and skip both consultant Agent() calls. Phase 4
@@ -750,13 +804,18 @@ fi
 
 Both transcripts archive themselves under `$BASE/archive/$RUN/transcripts/`.
 
+
 **When both neutral arms return (advisory arm output is captured separately):**
 
 1. For each addition: apply the "one reason this might be wrong" check before accepting.
 2. For each suggested drop: confirm by re-reading the cited code.
 3. Update `REPORT.md` with `## Consult additions` and `## Consult drops` sections noting what changed and which consultant flagged it.
 
+After `REPORT.md` has been updated with `## Consult additions` and `## Consult drops` from the neutral consult synthesis, run shared seam `audit-phase4-post-consult` with completed artifact `$BASE/REPORT.md` before auto-bail or promotion decisions.
+
 **Check auto-bail thresholds now** (see top). If the post-consult count exceeds the bail thresholds, escalate to `/z-plan`. Execute **Run Brief — halt finalize** with reason `auto-bail: post-consult findings exceed threshold`.
+
+Before generating promoted audit artifacts, run shared seam `audit-phase5-pre-promotion` with completed artifact `$BASE/REPORT.md`.
 
 ## Phase 5 — Promote to TASKS.md
 
@@ -807,6 +866,8 @@ Non-goals: structural refactors (those need `/z-plan`).
 
 This three-file set (SPEC.md / PLAN.md / TASKS.md) is what `/z-execute` requires.
 
+After `$BASE/TASKS.md`, `$BASE/SPEC.md`, and `$BASE/PLAN.md` are written, run shared seam `audit-phase6-pre-review` with completed artifact `$BASE/TASKS.md` before dispatching the reviewer.
+
 ## Phase 6 — Codex safety gate on TASKS.md
 
 Spawn the reviewer against the audit-produced TASKS.md (the diff in this case is the TASKS.md itself):
@@ -828,6 +889,8 @@ Parse the return (capped at 8 KB):
 - **Blockers** → re-edit the affected TASKS.md entries; re-run review once. Second failure → halt with `AskUserQuestion`.
 - **Majors** → fix in place, then accept.
 - **No blockers/majors** → accept.
+
+After the reviewer accepts the audit TASKS and before run-brief/final user-facing report generation, run shared seam `audit-phase7-pre-user-report` with completed artifact `$BASE/REPORT.md`.
 
 ## Phase 7 — Present + finalize
 

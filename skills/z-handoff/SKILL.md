@@ -22,6 +22,28 @@ If `$ARGUMENTS` is non-empty, it overrides the auto-detected `next_step`. If emp
 - **Lightweight**: `handoff.json` points to context files — it does NOT duplicate plan state (SPEC, PLAN, TASKS).
 - **Watcher-driven**: the handoff is pure data. The watcher decides how to spawn the next session and which model to use.
 
+
+## Shared command-side checkpoint hook
+
+For explicit `/clear` + resume checkpoints, workflow skills should prefer `scripts/write-clear-checkpoint.sh` (or `/z-clear-checkpoint`) over open-coded local ack files. The shared hook wraps this handoff producer, preserves the existing `handoff.json` schema, and puts workflow resume metadata in the `clear_checkpoint_written` event plus an optional checkpoint state file.
+
+Common seam setup:
+
+```bash
+export Z_HARNESS_CHECKPOINT_STATUS="${Z_HARNESS_CHECKPOINT_STATUS:-clean_break}"
+export Z_HARNESS_CHECKPOINT_NEXT_STEP="Resume <command>; continue at <phase>."
+export Z_HARNESS_CHECKPOINT_RESUME_COMMAND="<command>"
+export Z_HARNESS_CHECKPOINT_PHASE_NAME="<human phase name>"
+export Z_HARNESS_CHECKPOINT_PHASE_ID="<stable-phase-id>"
+export Z_HARNESS_CHECKPOINT_COMPLETED_ARTIFACT="$Z_HARNESS_PLAN_DIR/archive/$RUN/<artifact>.md"
+export Z_HARNESS_CHECKPOINT_FAST_FORWARD_GUARD="<HEAD/hash/input fingerprint>"
+export Z_HARNESS_CHECKPOINT_PRODUCER="<workflow-name>"
+export Z_HARNESS_CHECKPOINT_PRODUCER_META_JSON='{"phase":"<phase>"}'
+bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/write-clear-checkpoint.sh"
+```
+
+If the script prints `STATUS: clear_checkpoint`, stop before the high-context phase and let the watcher/operator clear and resume. If it prints `STATUS: clear_checkpoint_fast_forward`, the stored phase state is fresh and the workflow continues past the checkpoint seam. If stored state is stale, the default `Z_HARNESS_CHECKPOINT_STALE_MODE=reject` fails closed; callers may opt into `refresh` only when re-writing the checkpoint is safe.
+
 ## Phase 0 — Resolve run context
 
 If working inside a plan, resolve the current run identifier and archive directory:

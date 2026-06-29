@@ -29,17 +29,21 @@ Parse `$ARGUMENTS` before doing anything else:
 ```bash
 TOPIC=""
 SLUG_OVERRIDE=""
+RESUME_PHASE=""
+RESUME_RUN=""
 _args=($ARGUMENTS)
 _i=0
 while [ $_i -lt ${#_args[@]} ]; do
   _arg="${_args[$_i]}"
   case "$_arg" in
-    --slug=*) SLUG_OVERRIDE="${_arg#--slug=}" ;;
-    *)        TOPIC="$TOPIC $_arg" ;;
+    --slug=*)         SLUG_OVERRIDE="${_arg#--slug=}" ;;
+    --resume-phase=*) RESUME_PHASE="${_arg#--resume-phase=}" ;;
+    --resume-run=*)   RESUME_RUN="${_arg#--resume-run=}" ;;
+    *)                TOPIC="$TOPIC $_arg" ;;
   esac
   _i=$((_i+1))
 done
-TOPIC="$(echo "$TOPIC" | xargs)"  # trim leading/trailing whitespace
+TOPIC="$(echo "$TOPIC" | xargs)"  # trim leading/trailing whitespace; resume flags are not topic text
 ```
 
 ---
@@ -53,7 +57,7 @@ If `$TOPIC` is empty or whitespace, do NOT auto-invent a topic. Use `AskUserQues
 
 ### Step 2 — Derive slug
 
-If `--slug=` was provided, use `$SLUG_OVERRIDE` as the slug. Otherwise derive a short kebab-case slug (2–4 words) from `$TOPIC`. Example: "how does retry interact with token limits?" → `retry-token-limits`.
+If `--slug=` was provided, use `$SLUG_OVERRIDE` as the slug. Otherwise derive a short kebab-case slug (2–4 words) from cleaned `$TOPIC`; `--resume-phase` and `--resume-run` are never included in slug derivation. Example: "how does retry interact with token limits?" → `retry-token-limits`.
 
 ```bash
 SLUG="<derived-or-overridden-kebab-slug>"
@@ -65,7 +69,7 @@ export Z_HARNESS_SLUG="$SLUG"
 ```bash
 Z_HARNESS_PLAN_DIR="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/plan-path.sh" resolve_plan_path "$Z_HARNESS_SLUG")"
 export Z_HARNESS_PLAN_DIR
-RUN="$(date -u +%Y%m%dT%H%M%SZ)-$SLUG"
+RUN="${RESUME_RUN:-$(date -u +%Y%m%dT%H%M%SZ)-$SLUG}"
 mkdir -p "$Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts"
 mkdir -p "$Z_HARNESS_PLAN_DIR/archive/$RUN/panel"
 mkdir -p "$Z_HARNESS_PLAN_DIR/archive/$RUN/subruns"
@@ -122,11 +126,160 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
   "$(printf '{"phase":<n>,"wall_ms":%d}' "$(( $(date +%s%3N) - _WAIT_T0 ))")"
 ```
 
+## Shared context checkpoint hook/check contract
+
+`/z-research` uses the reusable z-harness hook/check layer at every durable research seam. It MUST NOT keep workflow-local checkpoint snippets, ack files, or direct `handoff.json` writes. Do not write `handoff.json` directly; call `scripts/check-compaction.sh` first and call `scripts/write-clear-checkpoint.sh` only when the shared check exits `1`.
+
+Standard seam call pattern:
+
+```bash
+run_workflow_compaction_seam() {
+  local seam_id="$1" phase_name="$2" completed_artifact="$3" next_step="$4"
+  shift 4 || true
+  local research_md="$Z_HARNESS_PLAN_DIR/RESEARCH.md"
+  export Z_HARNESS_PLAN_DIR
+  export Z_HARNESS_SLUG
+  export Z_HARNESS_CHECKPOINT_STATUS="context_pressure"
+  export Z_HARNESS_CHECKPOINT_PRODUCER="z-research"
+  export Z_HARNESS_CHECKPOINT_PHASE_ID="$seam_id"
+  export Z_HARNESS_CHECKPOINT_PHASE_NAME="$phase_name"
+  export Z_HARNESS_CHECKPOINT_COMPLETED_ARTIFACT="$completed_artifact"
+  export Z_HARNESS_CHECKPOINT_FAST_FORWARD_GUARD="$(python3 - "$Z_HARNESS_PLAN_DIR/MAP.md" "$Z_HARNESS_PLAN_DIR/BRAINSTORM.md" "$research_md" "$completed_artifact" "$@" <<'PYEOF'
+import hashlib, sys
+h = hashlib.sha256()
+for path in sys.argv[1:]:
+    try:
+        with open(path, "rb") as fh:
+            h.update(path.encode("utf-8") + b"\0" + fh.read() + b"\0")
+    except FileNotFoundError:
+        h.update(path.encode("utf-8") + b"\0missing\0")
+print(h.hexdigest())
+PYEOF
+)"
+  export Z_HARNESS_CHECKPOINT_STALE_MODE="reject"
+  export Z_HARNESS_CHECKPOINT_RESUME_COMMAND="/z-research ${Z_HARNESS_SLUG:-<topic>} --resume-phase=$seam_id --resume-run=$RUN"
+  export Z_HARNESS_CHECKPOINT_NEXT_STEP="Resume /z-research from $Z_HARNESS_PLAN_DIR at $seam_id; ${next_step}"
+  export Z_HARNESS_CHECKPOINT_PRODUCER_META_JSON="$(python3 - "$seam_id" "$RUN" "$Z_HARNESS_PLAN_DIR/MAP.md" "$Z_HARNESS_PLAN_DIR/BRAINSTORM.md" "$research_md" <<'PYEOF'
+import json, sys
+print(json.dumps({
+    "command": "z-research",
+    "seam": sys.argv[1],
+    "resume_phase": sys.argv[1],
+    "run": sys.argv[2],
+    "map_md": sys.argv[3],
+    "brainstorm_md": sys.argv[4],
+    "research_md": sys.argv[5],
+}))
+PYEOF
+)"
+
+  COMPACTION_TRIGGERED=0
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/check-compaction.sh" || COMPACTION_TRIGGERED=$?
+  if [ "$COMPACTION_TRIGGERED" -eq 1 ]; then
+    CHECKPOINT_OUT="$(bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/write-clear-checkpoint.sh")"
+    printf '%s\n' "$CHECKPOINT_OUT"
+    case "$CHECKPOINT_OUT" in
+      STATUS:\ clear_checkpoint_fast_forward*) ;;
+      STATUS:\ clear_checkpoint*) exit 0 ;;
+      *) exit 1 ;;
+    esac
+  elif [ "$COMPACTION_TRIGGERED" -eq 2 ]; then
+    # Execute Run Brief — halt finalize with reason "context pressure estimate failed in strict mode at $seam_id", then exit 1.
+    exit 1
+  fi
+}
+```
+
+The hook owns percentage-threshold evaluation, `compaction_pause`, checkpoint metadata, resume/fast-forward state, stale-state handling, and under-threshold fallthrough. Exit `0` means continue without checkpoint side effects; exit `1` means write the shared checkpoint and stop before entering the next high-context panel, judge, validation, or report step; exit `2` is a strict-mode halt. Existing checkpoint state that matches phase/artifact/guard fast-forwards and continues, so resume does not loop; stale state is rejected by the shared producer.
+
+Resume re-entry contract: `--resume-phase=<seam_id>` is a phase-entry selector, not just a display hint. Phase 0 validates the matching `.clear-checkpoint-<seam_id>.json` state, recomputes and compares its `fast_forward_guard` against the current durable artifacts, then skips already-completed earlier phases and jumps to the next phase named by that seam. If the state is missing or stale, halt and ask the user to inspect rather than rerunning earlier high-context work silently.
+
+Registered durable seams:
+
+| Seam id | When it runs | Durable artifact | Next step |
+|---------|--------------|------------------|-----------|
+| `research-phase1-pre-panel` | after MAP.md and BRAINSTORM.md are present/readable and Phase 1 telemetry is durable, before the Phase 2 adversarial panel dispatch | `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md` plus MAP.md in the guard | resume at Phase 2 adversarial panel dispatch |
+| `research-phase2-pre-judge` | after panel returns are archived, `perspectives.json` is written, and lane telemetry is durable, before research-judge dispatch | `$Z_HARNESS_PLAN_DIR/archive/$RUN/panel/perspectives.json` | resume at Phase 3 judge synthesis |
+| `research-phase3-pre-finalize` | after RESEARCH.md is atomically written and `research_judge_complete` telemetry is durable, before final RESEARCH.md validation/tripwires | `$Z_HARNESS_PLAN_DIR/RESEARCH.md` | resume at Phase 4 self-check and tripwires |
+| `research-phase4-pre-user-report` | after RESEARCH.md tripwire frontmatter is durable, before push-notify/final user-facing report generation | `$Z_HARNESS_PLAN_DIR/RESEARCH.md` | resume at Phase 4 user-facing report |
+
+Skipped candidate seams: no check before Phase 1 subcommands because MAP.md/BRAINSTORM.md are not both durable yet; no check while subcommands, panel perspectives, or judge synthesis are in flight; no check between reading panel output and committing the `perspectives.json` durable artifact; no check after a run-ending halt because halt finalize owns that terminal state.
+
 ---
+
 
 ## Phase 0 — Dispatch decision (intelligent, user-driven)
 
 Record `T0=$(date +%s%3N)` and `USER_WAIT_MS_THIS_PHASE=0` at phase start.
+
+### Step 0 — Resume-phase gate
+
+If `$ARGUMENTS` includes `--resume-phase=<seam_id>`, strip that flag (and optional `--resume-run=<run-id>`) from the topic before slug derivation and validate the corresponding `$Z_HARNESS_PLAN_DIR/.clear-checkpoint-<seam_id>.json` file before any Phase 1/2/3 dispatch. The accepted seam ids and re-entry targets are:
+
+| Resume phase | Required durable artifact | Re-enter at |
+|--------------|---------------------------|-------------|
+| `research-phase1-pre-panel` | `$Z_HARNESS_PLAN_DIR/BRAINSTORM.md` and `$Z_HARNESS_PLAN_DIR/MAP.md` | Phase 2 adversarial panel dispatch |
+| `research-phase2-pre-judge` | `$Z_HARNESS_PLAN_DIR/archive/$RUN/panel/perspectives.json` | Phase 3 judge synthesis |
+| `research-phase3-pre-finalize` | `$Z_HARNESS_PLAN_DIR/RESEARCH.md` | Phase 4 self-check/tripwires |
+| `research-phase4-pre-user-report` | `$Z_HARNESS_PLAN_DIR/RESEARCH.md` | Phase 4 push-notify/final user-facing report |
+
+```bash
+RESUME_PHASE="$(printf '%s\n' "$ARGUMENTS" | python3 -c 'import re,sys; text=sys.stdin.read(); m=re.search(r"--resume-phase=([^\\s]+)", text); print(m.group(1) if m else "")')"
+RESUME_RUN="$(printf '%s\n' "$ARGUMENTS" | python3 -c 'import re,sys; text=sys.stdin.read(); m=re.search(r"--resume-run=([^\\s]+)", text); print(m.group(1) if m else "")')"
+if [ -n "$RESUME_RUN" ]; then RUN="$RESUME_RUN"; fi
+if [ -n "$RESUME_PHASE" ]; then
+  case "$RESUME_PHASE" in
+    research-phase1-pre-panel)
+      RESUME_TARGET="phase2"
+      REQUIRED_ARTIFACT="$Z_HARNESS_PLAN_DIR/BRAINSTORM.md"
+      GUARD_PATHS=("$Z_HARNESS_PLAN_DIR/MAP.md" "$Z_HARNESS_PLAN_DIR/BRAINSTORM.md" "$Z_HARNESS_PLAN_DIR/RESEARCH.md" "$REQUIRED_ARTIFACT" "$Z_HARNESS_PLAN_DIR/MAP.md")
+      ;;
+    research-phase2-pre-judge)
+      RESUME_TARGET="phase3"
+      REQUIRED_ARTIFACT="$Z_HARNESS_PLAN_DIR/archive/$RUN/panel/perspectives.json"
+      GUARD_PATHS=("$Z_HARNESS_PLAN_DIR/MAP.md" "$Z_HARNESS_PLAN_DIR/BRAINSTORM.md" "$Z_HARNESS_PLAN_DIR/RESEARCH.md" "$REQUIRED_ARTIFACT" "$Z_HARNESS_PLAN_DIR/archive/$RUN/panel/architecture-conservative.md" "$Z_HARNESS_PLAN_DIR/archive/$RUN/panel/product-expansive.md" "$Z_HARNESS_PLAN_DIR/archive/$RUN/panel/failure-mode-adversarial.md")
+      ;;
+    research-phase3-pre-finalize)
+      RESUME_TARGET="phase4-validation"
+      REQUIRED_ARTIFACT="$Z_HARNESS_PLAN_DIR/RESEARCH.md"
+      GUARD_PATHS=("$Z_HARNESS_PLAN_DIR/MAP.md" "$Z_HARNESS_PLAN_DIR/BRAINSTORM.md" "$Z_HARNESS_PLAN_DIR/RESEARCH.md" "$REQUIRED_ARTIFACT")
+      ;;
+    research-phase4-pre-user-report)
+      RESUME_TARGET="phase4-user-report"
+      REQUIRED_ARTIFACT="$Z_HARNESS_PLAN_DIR/RESEARCH.md"
+      GUARD_PATHS=("$Z_HARNESS_PLAN_DIR/MAP.md" "$Z_HARNESS_PLAN_DIR/BRAINSTORM.md" "$Z_HARNESS_PLAN_DIR/RESEARCH.md" "$REQUIRED_ARTIFACT")
+      ;;
+    *) echo "Unknown /z-research resume phase: $RESUME_PHASE" >&2; exit 1 ;;
+  esac
+  STATE_FILE="$Z_HARNESS_PLAN_DIR/.clear-checkpoint-${RESUME_PHASE}.json"
+  CURRENT_GUARD="$(python3 - "${GUARD_PATHS[@]}" <<'PYEOF'
+import hashlib, sys
+h = hashlib.sha256()
+for path in sys.argv[1:]:
+    try:
+        with open(path, "rb") as fh:
+            h.update(path.encode("utf-8") + b"\0" + fh.read() + b"\0")
+    except FileNotFoundError:
+        h.update(path.encode("utf-8") + b"\0missing\0")
+print(h.hexdigest())
+PYEOF
+)"
+  python3 - "$STATE_FILE" "$RESUME_PHASE" "$REQUIRED_ARTIFACT" "$CURRENT_GUARD" <<'PYEOF' || exit 1
+import json, sys
+from pathlib import Path
+state = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if state.get("phase_id") != sys.argv[2] or state.get("completed_artifact") != sys.argv[3]:
+    raise SystemExit("stale /z-research checkpoint state")
+if state.get("fast_forward_guard") != sys.argv[4]:
+    raise SystemExit("stale /z-research checkpoint guard")
+PYEOF
+  export Z_RESEARCH_RESUME_TARGET="$RESUME_TARGET"
+  # The command driver must enter the section named by Z_RESEARCH_RESUME_TARGET
+  # and skip earlier phases; do not rerun earlier subcommands/panel/judge work.
+fi
+```
+
+Resume target dispatch is mandatory: `phase2` starts at Phase 2, `phase3` starts at Phase 3, `phase4-validation` starts at Phase 4 Step 1, and `phase4-user-report` starts at Phase 4 Step 5. Do not run Phase 1 or Phase 2 when `Z_RESEARCH_RESUME_TARGET=phase3`.
 
 ### Step 1 — Read slug dir state
 
@@ -512,6 +665,8 @@ Write the raw response to `$Z_HARNESS_PLAN_DIR/archive/$RUN/artifact-scout.md`. 
 
 ## Phase 1 — Subcommand dispatch (inline, with audit contract)
 
+If `Z_RESEARCH_RESUME_TARGET` is set, skip Phase 1 unless the target is empty; a `phase2`, `phase3`, `phase4-validation`, or `phase4-user-report` resume must not rerun subcommands.
+
 Record `T0=$(date +%s%3N)` and `USER_WAIT_MS_THIS_PHASE=0` at phase start.
 
 ### Sub-run audit contract
@@ -863,9 +1018,22 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
      "$WALL_MS" "$USER_WAIT_MS_THIS_PHASE")"
 ```
 
+After the Phase 1 artifacts and telemetry are durable, checkpoint before the high-context adversarial panel:
+
+```bash
+run_workflow_compaction_seam \
+  "research-phase1-pre-panel" \
+  "Phase 1 artifacts ready before adversarial panel" \
+  "$Z_HARNESS_PLAN_DIR/BRAINSTORM.md" \
+  "continue at Phase 2 adversarial panel dispatch using MAP.md and BRAINSTORM.md" \
+  "$Z_HARNESS_PLAN_DIR/MAP.md"
+```
+
 ---
 
 ## Phase 2 — Adversarial synthesis panel
+
+If `Z_RESEARCH_RESUME_TARGET` is `phase3`, `phase4-validation`, or `phase4-user-report`, skip Phase 2 entirely and enter the later target phase; only `phase2` resumes here.
 
 Record `T0=$(date +%s%3N)` and `USER_WAIT_MS_THIS_PHASE=0` at phase start.
 
@@ -1040,7 +1208,12 @@ print(json.dumps(result))
 " "$Z_HARNESS_PLAN_DIR/archive/$RUN/panel")"
 
 PANEL_PERSPECTIVE_COUNT="$(echo "$PERSPECTIVES_JSON" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))")"
+
+PANEL_PERSPECTIVES_PATH="$Z_HARNESS_PLAN_DIR/archive/$RUN/panel/perspectives.json"
+printf '%s\n' "$PERSPECTIVES_JSON" > "$PANEL_PERSPECTIVES_PATH"
 ```
+
+The `perspectives.json` file is the durable judge input manifest for resume/fast-forward. It is written only after panel outputs have been archived and failure handling has selected the surviving perspectives.
 
 ### Step 6 — Emit per-perspective telemetry
 
@@ -1058,11 +1231,36 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
      "$WALL_MS" "$USER_WAIT_MS_THIS_PHASE" "$PANEL_PERSPECTIVE_COUNT")"
 ```
 
+After the panel returns, manifest, and telemetry are durable, checkpoint before judge synthesis:
+
+```bash
+run_workflow_compaction_seam \
+  "research-phase2-pre-judge" \
+  "Phase 2 panel archived before judge" \
+  "$PANEL_PERSPECTIVES_PATH" \
+  "continue at Phase 3 judge synthesis using the archived panel perspectives" \
+  "$Z_HARNESS_PLAN_DIR/archive/$RUN/panel/architecture-conservative.md" \
+  "$Z_HARNESS_PLAN_DIR/archive/$RUN/panel/product-expansive.md" \
+  "$Z_HARNESS_PLAN_DIR/archive/$RUN/panel/failure-mode-adversarial.md"
+```
+
 ---
 
 ## Phase 3 — Judge synthesis
 
+If `Z_RESEARCH_RESUME_TARGET` is `phase3`, start here. If it is `phase4-validation` or `phase4-user-report`, skip judge synthesis and enter Phase 4.
+
 Record `T0=$(date +%s%3N)` and `USER_WAIT_MS_THIS_PHASE=0` at phase start.
+
+On a `Z_RESEARCH_RESUME_TARGET=phase3` resume, reload the durable judge input manifest before dispatch:
+
+```bash
+if [ "${Z_RESEARCH_RESUME_TARGET:-}" = "phase3" ]; then
+  PANEL_PERSPECTIVES_PATH="$Z_HARNESS_PLAN_DIR/archive/$RUN/panel/perspectives.json"
+  PERSPECTIVES_JSON="$(cat "$PANEL_PERSPECTIVES_PATH")"
+  PANEL_PERSPECTIVE_COUNT="$(echo "$PERSPECTIVES_JSON" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))")"
+fi
+```
 
 ### Step 1 — Dispatch research-judge
 
@@ -1226,9 +1424,21 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
      "$WALL_MS" "$USER_WAIT_MS_THIS_PHASE")"
 ```
 
+After RESEARCH.md and judge telemetry are durable, checkpoint before final validation/tripwires:
+
+```bash
+run_workflow_compaction_seam \
+  "research-phase3-pre-finalize" \
+  "Phase 3 RESEARCH.md written before final validation" \
+  "$Z_HARNESS_PLAN_DIR/RESEARCH.md" \
+  "continue at Phase 4 self-check, tripwires, and final validation"
+```
+
 ---
 
 ## Phase 4 — Finalize
+
+If `Z_RESEARCH_RESUME_TARGET` is `phase4-validation`, start at Step 1. If it is `phase4-user-report`, skip Steps 1-4 and start at Step 5.
 
 Record `T0=$(date +%s%3N)` and `USER_WAIT_MS_THIS_PHASE=0` at phase start.
 
@@ -1387,6 +1597,16 @@ os.replace(tmp, path)
 print(f"updated tripwires_fired: {fired_json}")
 PYEOF
 fi
+```
+
+Checkpoint before producing the user-facing report:
+
+```bash
+run_workflow_compaction_seam \
+  "research-phase4-pre-user-report" \
+  "Phase 4 RESEARCH.md finalized before user report" \
+  "$Z_HARNESS_PLAN_DIR/RESEARCH.md" \
+  "continue at Phase 4 push-notify and final user-facing report"
 ```
 
 ### Step 4 — Post-launch tripwire notes

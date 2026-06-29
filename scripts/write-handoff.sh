@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # write-handoff.sh — Write handoff.json to the plan directory at a clear checkpoint.
 #
-# Called by the legacy /z-execute checkpoint flow after the context-curator writes
-# SESSION.md. Reads plan state (TASKS.md, SESSION.md, env vars) and produces a
-# handoff.json conforming to docs/schemas/handoff.schema.json (handoff-v1).
+# Called by /z-handoff and by scripts/write-clear-checkpoint.sh after a command
+# reaches a durable clear/checkpoint boundary. Reads plan state (TASKS.md,
+# SESSION.md, env vars) and produces a handoff.json conforming to
+# docs/schemas/handoff.schema.json (handoff-v1). Workflow-specific checkpoint
+# metadata belongs in the clear_checkpoint_written event/state file, not in this
+# schema-constrained handoff token.
 #
 # Env vars (read):
 #   Z_HARNESS_PLAN_DIR  — plan directory (required; handoff.json written here)
@@ -15,7 +18,6 @@
 #   Z_HARNESS_HANDOFF_NEXT_STEP — next_step override (optional)
 #   Z_HARNESS_HANDOFF_SESSION_CONTEXT — optional mid-session agent brief; when set,
 #       written to $Z_HARNESS_PLAN_DIR/SESSION_CONTEXT.md and included as session_log
-#
 # Attend-yield env vars (read ONLY when Z_HARNESS_ATTEND_RESUME=1 — these populate
 # the optional attend_resume predicate and bump protocol_version to "1.1"):
 #   Z_HARNESS_ATTEND_RESUME          — set to "1" to emit a 1.1 handoff with attend_resume
@@ -167,7 +169,7 @@ ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 with open(path, "w", encoding="utf-8") as f:
     f.write("---\n")
     f.write("artifact: session_context\n")
-    f.write(f"slug: {slug or 'null'}\n")
+    f.write("slug: " + (slug or "null") + "\n")
     f.write(f"status: {status}\n")
     f.write(f"generated_at: {ts}\n")
     f.write("generated_by: write-handoff.sh\n")

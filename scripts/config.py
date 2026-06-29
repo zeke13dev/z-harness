@@ -147,6 +147,10 @@ DEFAULTS: dict = {
         "auto_wait_budget_secs": 300,   # int>0: auto-wait budget in seconds (auto mode)
         # Context-window pause threshold. Exported as Z_HARNESS_PAUSE_AT_PCT.
         "pause_at_pct": 85,         # int>0: context fill % at which to pause; 85 = pause at 85%
+        # Fallback context window for rough pressure estimates when the host/editor
+        # does not report one. Host env Z_HARNESS_CONTEXT_WINDOW_TOKENS takes
+        # precedence in the estimator; this config value is the stable fallback.
+        "context_window_tokens": 200000,  # int>0: explicit fallback context window tokens
         # Resolver verbosity. Exported as Z_HARNESS_EXPLAIN_RESOLUTION.
         "explain_resolution": False,  # bool: print resolver decision tree to stderr
         # Parallelism knobs. Exported as Z_HARNESS_RUNTIME_MAX_PARALLEL / Z_HARNESS_MAX_PARALLEL_PLANS.
@@ -363,6 +367,7 @@ VALIDATORS: dict = {
     "runtime.auto_wait":            _validate_bool_or_zero_one,
     "runtime.auto_wait_budget_secs": _validate_positive_int,
     "runtime.pause_at_pct":         _validate_positive_int,
+    "runtime.context_window_tokens": _validate_positive_int,
     "runtime.explain_resolution":   _validate_bool,
     "runtime.max_parallel":         _validate_positive_int,
     "runtime.max_parallel_plans":   _validate_positive_int,
@@ -471,6 +476,9 @@ _COERCERS: dict[str, object] = {
         v if isinstance(v, int) and not isinstance(v, bool) else int(v)
     ),
     "runtime.pause_at_pct": lambda v: (
+        v if isinstance(v, int) and not isinstance(v, bool) else int(v)
+    ),
+    "runtime.context_window_tokens": lambda v: (
         v if isinstance(v, int) and not isinstance(v, bool) else int(v)
     ),
     "runtime.explain_resolution": lambda v: (
@@ -855,6 +863,9 @@ LEGAL_ENV_KEYS: frozenset[str] = frozenset({
     "Z_HARNESS_PARENT_COMMAND",
     "Z_HARNESS_REPO_CONFIG",
     "Z_HARNESS_REPO_PROVIDERS",
+    # ── Host/editor context pressure reports (per-session dynamic inputs) ──
+    "Z_HARNESS_CONTEXT_USED_TOKENS",
+    "Z_HARNESS_CONTEXT_WINDOW_TOKENS",
     # ── Unattended-entry — autonomy/overnight/CI gate flags ──
     "Z_HARNESS_NO_ASK",
     "Z_HARNESS_ASK_ALL",

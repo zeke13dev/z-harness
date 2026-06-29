@@ -19,6 +19,63 @@ $ARGUMENTS
 
 Strict, multi-phase. Do not skip phases. Do not edit production code directly — `/z-uplift` orchestrates audits and delegates implementation to `/z-execute`.
 
+## Shared context checkpoint hook/check contract
+
+`/z-uplift` uses the reusable z-harness hook/check layer at every durable bulk-audit seam. It MUST NOT keep workflow-local checkpoint snippets, ack files, or direct `handoff.json` writes. Do not write `handoff.json` directly; call `scripts/check-compaction.sh` first and call `scripts/write-clear-checkpoint.sh` only when the shared check exits `1`.
+
+Standard seam call pattern:
+
+```bash
+run_workflow_compaction_seam() {
+  local seam_id="$1" phase_name="$2" completed_artifact="$3" next_step="$4" producer_meta="$5"
+  export Z_HARNESS_PLAN_DIR
+  export Z_HARNESS_SLUG
+  export Z_HARNESS_CHECKPOINT_PRODUCER="z-uplift"
+  export Z_HARNESS_CHECKPOINT_PHASE_ID="$seam_id"
+  export Z_HARNESS_CHECKPOINT_PHASE_NAME="$phase_name"
+  export Z_HARNESS_CHECKPOINT_COMPLETED_ARTIFACT="$completed_artifact"
+  export Z_HARNESS_CHECKPOINT_FAST_FORWARD_GUARD="$(git rev-parse HEAD 2>/dev/null || printf unknown):$(python3 - "$completed_artifact" <<'PYEOF'
+import hashlib, sys
+with open(sys.argv[1], "rb") as fh:
+    print(hashlib.sha256(fh.read()).hexdigest())
+PYEOF
+)"
+  export Z_HARNESS_CHECKPOINT_STALE_MODE="reject"
+  export Z_HARNESS_CHECKPOINT_RESUME_COMMAND="/z-uplift $Z_HARNESS_SLUG"
+  export Z_HARNESS_CHECKPOINT_NEXT_STEP="$next_step"
+  export Z_HARNESS_CHECKPOINT_PRODUCER_META_JSON="$producer_meta"
+
+  COMPACTION_TRIGGERED=0
+  bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/check-compaction.sh" || COMPACTION_TRIGGERED=$?
+  if [ "$COMPACTION_TRIGGERED" -eq 1 ]; then
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/write-clear-checkpoint.sh"
+    exit 0
+  elif [ "$COMPACTION_TRIGGERED" -eq 2 ]; then
+    bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RUN" run_end '{"command":"z-uplift","status":"halted","reason":"context_pressure_strict"}'
+    exit 1
+  fi
+}
+```
+
+The hook owns percentage-threshold evaluation, `compaction_pause`, checkpoint metadata, resume/fast-forward state, stale-state handling, and under-threshold fallthrough. Exit `0` means continue without checkpoint side effects; exit `1` means write the shared checkpoint and stop before the next high-context step; exit `2` is a strict-mode halt. Existing checkpoint state that matches phase/artifact/guard fast-forwards; stale state is rejected by the shared producer.
+
+Registered durable seams:
+
+| Seam id | When it runs | Durable artifact | Next step |
+|---------|--------------|------------------|-----------|
+| `uplift-phase2-pre-cross-cutting-consultants` | after the cross-cutting prompt/source map is durable, before cross-cutting consultants | `$Z_HARNESS_PLAN_DIR/COMPONENTS.md` | resume at Phase 2 consultant dispatch |
+| `uplift-phase2-post-cross-cutting-consultants` | after cross-cutting consultant transcripts are archived | `$Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts/phase2-consultant-primary.md` | resume at CROSS-CUTTING synthesis |
+| `uplift-phase2-pre-cross-cutting-promotion` | after `CROSS-CUTTING.md` is written/counts computed, before synthetic plan/MANIFEST promotion | `$Z_HARNESS_PLAN_DIR/CROSS-CUTTING.md` | resume at cross-cutting promotion |
+| `uplift-phase3-pre-component-consultants` | per component, after component `REPORT.md` exists, before audit-review consultants | `$COMP_PLAN_DIR/REPORT.md` | resume at component audit-review consult |
+| `uplift-phase3-post-component-consultants` | per component, after consultant transcripts are archived and REPORT.md is updated | `$COMP_PLAN_DIR/REPORT.md` | resume at auto-bail/TASKS promotion |
+| `uplift-phase3-pre-component-task-promotion` | per component, before writing component `TASKS.md` | `$COMP_PLAN_DIR/REPORT.md` | resume at component TASKS promotion |
+| `uplift-phase3-pre-component-reviewer` | per component, after component `TASKS.md` exists, before reviewer dispatch | `$COMP_PLAN_DIR/TASKS.md` | resume at component reviewer |
+| `uplift-phase4-pre-user-report` | after `phase4-review-gate.md` exists, before queue-ready user-facing report | `$Z_HARNESS_PLAN_DIR/archive/$RUN/phase4-review-gate.md` | resume at Phase 4 queue report |
+| `uplift-phase5-pre-dispatch` | after MANIFEST is marked `[i] implementing`, before presenting `/z-execute` dispatch command | `$Z_HARNESS_PLAN_DIR/MANIFEST.md` | resume at Phase 5 dispatch handoff |
+| `uplift-phase6-pre-final-report` | before final push/user-facing summary | `$Z_HARNESS_PLAN_DIR/MANIFEST.md` | resume at Phase 6 finalize |
+
+Skipped candidate seams: no check before Phase 1 decomposition is accepted because component state is not durable enough to resume; no check while cross-cutting consultants, auditors, audit-review consultants, or reviewers are in flight; no check in the `--cross-cutting=skip` branch until the skipped artifact is written; no check inside per-component AskUser loops because the MANIFEST transition that follows is the durable seam; no check after terminal abort/abandon events because those events own the final state.
+
 ---
 
 ## Argument parsing
@@ -1446,6 +1503,8 @@ CRITICAL FORMAT REQUIREMENT: Each finding MUST be a bullet beginning with \`G-NN
 
 Dispatch `consultant-primary` and `consultant-secondary` in a single message (two `Agent(...)` calls):
 
+Before cross-cutting consultant dispatch, run shared seam `uplift-phase2-pre-cross-cutting-consultants`.
+
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this parallel cross-cutting consultant dispatch requirement to the user and skip the Agent() calls. The cross-cutting pass is required to detect repo-wide issues; drivers that skip it must warn the user that cross-cutting analysis has been bypassed. -->
 ```
 Agent(
@@ -1466,6 +1525,8 @@ Archive both transcripts:
 echo "$PRIMARY_TRANSCRIPT"   > "$Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts/phase2-consultant-primary.md"
 echo "$SECONDARY_TRANSCRIPT" > "$Z_HARNESS_PLAN_DIR/archive/$RUN/transcripts/phase2-consultant-secondary.md"
 ```
+
+After cross-cutting consultant transcripts are archived, run shared seam `uplift-phase2-post-cross-cutting-consultants`.
 
 ### Step 5 — Merge findings into CROSS-CUTTING.md
 
@@ -1668,6 +1729,8 @@ with open('$Z_HARNESS_PLAN_DIR/CROSS-CUTTING.md') as fh:
 print(len(re.findall(r'^- R-\d+', content, re.MULTILINE)))
 ")"
 ```
+
+Before creating/promoting the synthetic cross-cutting plan, run shared seam `uplift-phase2-pre-cross-cutting-promotion` with completed artifact `$Z_HARNESS_PLAN_DIR/CROSS-CUTTING.md`.
 
 ### Step 6 — Create synthetic cross-cutting plan (if global-task count > 0)
 
@@ -2099,6 +2162,8 @@ After all auditors for this component return, merge their findings files into `$
 
 Dispatch `consultant-primary` and `consultant-secondary` in a **single message** (parallel):
 
+Before per-component audit-review consultant dispatch, run shared seam `uplift-phase3-pre-component-consultants` with completed artifact `$COMP_PLAN_DIR/REPORT.md`.
+
 <!-- RUNTIME-GATE: subagent; non-supporting drivers must surface this parallel audit-review consultant dispatch requirement to the user and skip the Agent() calls. The cross-LLM review of REPORT.md is required to catch missed and trivial findings; drivers that skip it must warn the user that the audit consult has been bypassed. -->
 ```
 Agent(
@@ -2139,6 +2204,8 @@ Archive transcripts:
 echo "$PRIMARY_TRANSCRIPT"   > "$COMP_PLAN_DIR/archive-consult-primary.md"
 echo "$SECONDARY_TRANSCRIPT" > "$COMP_PLAN_DIR/archive-consult-secondary.md"
 ```
+
+After per-component audit-review transcripts are archived and `REPORT.md` consult sections are updated, run shared seam `uplift-phase3-post-component-consultants` with completed artifact `$COMP_PLAN_DIR/REPORT.md`.
 
 #### Step 2g — Auto-bail check
 
@@ -2362,6 +2429,8 @@ INNEREOF
 
 7. **Continue to next component** — do not generate TASKS.md or run the reviewer.
 
+Before promoting component findings to `TASKS.md`, run shared seam `uplift-phase3-pre-component-task-promotion` with completed artifact `$COMP_PLAN_DIR/REPORT.md`.
+
 #### Step 2h — Promote findings to TASKS.md (non-bail path)
 
 Only reached when bail condition is NOT met.
@@ -2384,6 +2453,8 @@ Status legend: `[ ]` pending · `[~]` in_progress · `[x]` done.
 ```
 
 Severity prefix: `[CRITICAL] | [HIGH] | [MED] | [LOW]`. Group by phase (Phase A / B / ...) when tasks have ordering dependencies. Only actionable findings (those with a clear fix) go into TASKS.md; observations without a concrete recommendation stay in REPORT.md only.
+
+After component `TASKS.md` is written and before reviewer dispatch, run shared seam `uplift-phase3-pre-component-reviewer` with completed artifact `$COMP_PLAN_DIR/TASKS.md`.
 
 #### Step 2i — Dispatch reviewer over TASKS.md (mandatory safety gate)
 
@@ -2605,6 +2676,8 @@ with open(out_path, "w") as f:
 print("wrote phase4-review-gate.md")
 PYEOF
 ```
+
+Before push-notifying or presenting the queue-ready report, run shared seam `uplift-phase4-pre-user-report` with completed artifact `$Z_HARNESS_PLAN_DIR/archive/$RUN/phase4-review-gate.md`.
 
 Push-notify the user with the queue summary.
 
@@ -2905,6 +2978,8 @@ print(f"marked {comp_slug} as {new_state}")
 PYEOF
 ```
 
+Before presenting the `/z-execute` dispatch command and exiting with `pending_implement`, run shared seam `uplift-phase5-pre-dispatch` with completed artifact `$Z_HARNESS_PLAN_DIR/MANIFEST.md`.
+
 Present the `/z-execute` invocation command to the user and instruct them to run it:
 
 > **RESUME INSTRUCTION — run this command now:**
@@ -3024,6 +3099,8 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 Record `T0=$(date +%s%3N)` at phase start.
 
 Phase 6 closes the uplift run by recording final telemetry, notifying the user with a summary of outcomes (done / skipped / bailed), and flagging any follow-on work. It logs `run_end` with a structured status blob so post-run analysis can compute per-run metrics. If any task in any generated TASKS.md carried a `**DOCS:**` line, Phase 6 surfaces a recommendation to run `/z-maintain-docs` — this keeps the two-tier documentation current after uplift-driven code changes. No code is modified in this phase.
+
+Before final push-notify/user-facing summary, run shared seam `uplift-phase6-pre-final-report` with completed artifact `$Z_HARNESS_PLAN_DIR/MANIFEST.md`.
 
 1. Log `run_end` with a status blob:
 

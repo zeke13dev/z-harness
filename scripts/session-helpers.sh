@@ -19,11 +19,20 @@
 #     Empty done-set hashes the canonical empty string "".
 #     Order-independent: same [x] set in any line order → identical hash.
 #
+#   completed_task_ids <tasks_file>
+#     Prints comma-separated ids for every [x] task in file order.
+#     Empty output when no tasks are done.
+#
 #   last_done_task <tasks_file>
 #     Prints the id of the last [x] task (human hint only; not load-bearing).
-#
 #   next_pending_task <tasks_file>
 #     Prints the first [ ] task id whose deps are all [x] (empty if none).
+#
+#   task_status_counts <tasks_file>
+#     Prints shell assignments for TASKS.md status counts:
+#       done=<n> pending=<n> in_progress=<n> other=<n>
+#     Uses the same inline-heading and list-checkbox parser as done_set_hash /
+#     next_pending_task so checkpoint gates see the same done-set as resume.
 #
 #   last_curated_marker <events_file>
 #     Prints the ts of the most recent context_curated event ("none" if absent).
@@ -190,6 +199,66 @@ PYEOF
 }
 
 # ---------------------------------------------------------------------------
+# completed_task_ids <tasks_file>
+# ---------------------------------------------------------------------------
+# Prints comma-separated ids for EVERY [x] task in file order.
+# This is the metadata contract used by clear-checkpoint curation: parallel
+# batches and INTENT BFS levels must pass the full boundary completion set, not
+# only the last task.
+completed_task_ids() {
+  local tasks_file="$1"
+  if [[ ! -f "$tasks_file" ]]; then
+    return 0
+  fi
+
+  python3 - "$tasks_file" <<'PYEOF'
+import sys, re
+
+tasks_file = sys.argv[1]
+DONE_RE = re.compile(r'^\s*[-*]?\s*\[x\]', re.IGNORECASE)
+HEADING_RE = re.compile(r'^##\s+(\S+)')
+INLINE_STATUS_RE = re.compile(r'`\[([x ~])\]`', re.IGNORECASE)
+
+ids = []
+seen = set()
+prev_done = False
+
+def add(task_id):
+    if task_id and task_id not in seen:
+        ids.append(task_id)
+        seen.add(task_id)
+
+with open(tasks_file, 'r', encoding='utf-8', errors='replace') as fh:
+    for line in fh:
+        line_stripped = line.rstrip('\n')
+        heading_m = HEADING_RE.match(line_stripped)
+        if heading_m:
+            task_id = heading_m.group(1)
+            status_m = INLINE_STATUS_RE.search(line_stripped)
+            if status_m and status_m.group(1).lower() == 'x':
+                add(task_id)
+            elif prev_done:
+                add(task_id)
+            prev_done = False
+            continue
+
+        if DONE_RE.match(line_stripped):
+            rest = re.sub(r'^\s*[-*]?\s*\[x\]\s*', '', line_stripped, flags=re.IGNORECASE)
+            id_m = re.match(r'(\S+)', rest)
+            if id_m:
+                add(id_m.group(1))
+                prev_done = False
+            else:
+                prev_done = True
+        else:
+            prev_done = False
+
+print(",".join(ids))
+PYEOF
+  return 0
+}
+
+# ---------------------------------------------------------------------------
 # next_pending_task <tasks_file>
 # ---------------------------------------------------------------------------
 # Prints the first [ ] task id whose deps are all [x] (empty if none).
@@ -309,6 +378,90 @@ for task_id, is_pending, deps in tasks:
     if all(d in done_ids for d in deps):
         print(task_id)
         break
+PYEOF
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# task_status_counts <tasks_file>
+# ---------------------------------------------------------------------------
+# Prints: done=<n> pending=<n> in_progress=<n> other=<n>
+# Counts task headings with inline backtick status plus list-checkbox forms.
+task_status_counts() {
+  local tasks_file="$1"
+  if [[ ! -f "$tasks_file" ]]; then
+    printf 'done=0 pending=0 in_progress=0 other=0\n'
+    return 0
+  fi
+
+  python3 - "$tasks_file" <<'PYEOF'
+import sys
+import re
+
+tasks_file = sys.argv[1]
+
+DONE_RE = re.compile(r'^\s*[-*]?\s*\[x\]', re.IGNORECASE)
+PENDING_RE = re.compile(r'^\s*[-*]?\s*\[ \]', re.IGNORECASE)
+IN_PROGRESS_RE = re.compile(r'^\s*[-*]?\s*\[~\]', re.IGNORECASE)
+HEADING_RE = re.compile(r'^##\s+(\S+)')
+INLINE_STATUS_RE = re.compile(r'`\[([x~ ])\]`', re.IGNORECASE)
+
+counts = {"done": 0, "pending": 0, "in_progress": 0, "other": 0}
+seen = set()
+pending_next_status = None
+
+def add(task_id, status):
+    if not task_id or task_id in seen:
+        return
+    seen.add(task_id)
+    counts[status] = counts.get(status, 0) + 1
+
+with open(tasks_file, 'r', encoding='utf-8', errors='replace') as fh:
+    for raw in fh:
+        line = raw.rstrip('\n')
+        heading_m = HEADING_RE.match(line)
+        if heading_m:
+            task_id = heading_m.group(1)
+            status_m = INLINE_STATUS_RE.search(line)
+            if status_m:
+                marker = status_m.group(1).lower()
+                if marker == 'x':
+                    add(task_id, "done")
+                elif marker == ' ':
+                    add(task_id, "pending")
+                elif marker == '~':
+                    add(task_id, "in_progress")
+                else:
+                    add(task_id, "other")
+            elif pending_next_status:
+                add(task_id, pending_next_status)
+            elif task_id.startswith("T") and task_id[1:].isdigit():
+                add(task_id, "other")
+            pending_next_status = None
+            continue
+
+        status = None
+        if DONE_RE.match(line):
+            status = "done"
+            rest = re.sub(r'^\s*[-*]?\s*\[x\]\s*', '', line, flags=re.IGNORECASE)
+        elif PENDING_RE.match(line):
+            status = "pending"
+            rest = re.sub(r'^\s*[-*]?\s*\[ \]\s*', '', line, flags=re.IGNORECASE)
+        elif IN_PROGRESS_RE.match(line):
+            status = "in_progress"
+            rest = re.sub(r'^\s*[-*]?\s*\[~\]\s*', '', line, flags=re.IGNORECASE)
+        else:
+            pending_next_status = None
+            continue
+
+        id_m = re.match(r'(\S+)', rest)
+        if id_m:
+            add(id_m.group(1), status)
+            pending_next_status = None
+        else:
+            pending_next_status = status
+
+print("done={done} pending={pending} in_progress={in_progress} other={other}".format(**counts))
 PYEOF
   return 0
 }
@@ -453,18 +606,18 @@ validate_intent() {
 # ---------------------------------------------------------------------------
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   if [[ $# -lt 1 ]]; then
-    printf 'Usage: %s {done_set_hash|last_done_task|next_pending_task|last_curated_marker|session_frontmatter_field|validate_intent} [args...]\n' "$0" >&2
+    printf 'Usage: %s {done_set_hash|completed_task_ids|last_done_task|next_pending_task|task_status_counts|last_curated_marker|session_frontmatter_field|validate_intent} [args...]\n' "$0" >&2
     exit 1
   fi
   cmd="$1"
   shift
   case "$cmd" in
-    done_set_hash|last_done_task|next_pending_task|last_curated_marker|session_frontmatter_field|validate_intent)
+    done_set_hash|completed_task_ids|last_done_task|next_pending_task|task_status_counts|last_curated_marker|session_frontmatter_field|validate_intent)
       "$cmd" "$@"
       ;;
     *)
       printf 'Unknown function: %s\n' "$cmd" >&2
-      printf 'Usage: %s {done_set_hash|last_done_task|next_pending_task|last_curated_marker|session_frontmatter_field|validate_intent} [args...]\n' "$0" >&2
+      printf 'Usage: %s {done_set_hash|completed_task_ids|last_done_task|next_pending_task|task_status_counts|last_curated_marker|session_frontmatter_field|validate_intent} [args...]\n' "$0" >&2
       exit 1
       ;;
   esac
