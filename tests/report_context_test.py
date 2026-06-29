@@ -874,6 +874,476 @@ class TestBundleWrittenToDisk:
         assert rc != 0
 
 
+class TestSelectedResumeContextAttachment:
+    """T011: selected /z-resume packet is attached only after cited selection."""
+
+    def test_selected_resume_context_attached_to_bundle_with_citations(self, tmp_path):
+        run_dir = _make_run_dir(tmp_path, "20260629T010203Z-report-resume")
+        out_path = tmp_path / "context.json"
+        resume_packet_path = tmp_path / "resume-context.json"
+        resume_packet_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "resume-context.v1",
+                    "status": "selected",
+                    "generated_at": "2026-06-29T01:02:03Z",
+                    "query": {"text": "report resume"},
+                    "interaction_mode": "noninteractive",
+                    "requested_report": {"requested": True, "tier": "summary", "forwarded_args": []},
+                    "report_target": {"requested": True, "status": "ready", "target_args": ["--run", run_dir.name]},
+                    "ambiguity": {"state": "none", "needs_selection": False, "triggers": []},
+                    "selected_target": {
+                        "target_type": "run",
+                        "selection_kind": "explicit",
+                        "candidate_id": "cand-run",
+                        "slug": "report-resume",
+                        "run_id": run_dir.name,
+                        "citation_ids": ["cit-run"],
+                        "evidence_ids": ["ev-run"],
+                    },
+                    "evidence_records": [
+                        {
+                            "evidence_id": "ev-run",
+                            "type": "run_brief",
+                            "provider": "run_brief",
+                            "source": str(run_dir / "run-brief.json"),
+                            "citation": "cit-run",
+                            "status": "ok",
+                            "validation_status": "valid",
+                            "candidate_id": "cand-run",
+                            "candidate_refs": ["cand-run"],
+                            "data": {"summary": "selected run evidence"},
+                        }
+                    ],
+                    "citation_metadata": [
+                        {
+                            "citation_id": "cit-run",
+                            "source_type": "file",
+                            "path": str(run_dir / "run-brief.json"),
+                            "description": "selected run brief",
+                        }
+                    ],
+                    "warnings": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        descriptor = {"mode": "run", "run_id": run_dir.name}
+        with (
+            patch.object(_mod, "_resolve_run_dir", return_value=run_dir),
+            patch.object(_mod, "_classify_status", return_value="clean"),
+            patch.object(_mod, "_resolve_followups", return_value=[]),
+            patch.object(_mod, "_estimate_cost", return_value={}),
+        ):
+            rc = _assemble_bundle(
+                descriptor,
+                out_path=out_path,
+                base=None,
+                resume_context_path=resume_packet_path,
+            )
+
+        assert rc == 0
+        bundle = json.loads(out_path.read_text(encoding="utf-8"))
+        selected_resume = bundle["selected_resume_context"]
+        assert bundle["selected_resume_context_status"] == "attached"
+        assert selected_resume["selected_target"]["run_id"] == run_dir.name
+        assert selected_resume["selected_evidence"][0]["citation"] == "cit-run"
+        assert selected_resume["citation_metadata"][0]["citation_id"] == "cit-run"
+
+    def test_selected_resume_context_uses_explicit_evidence_ids_before_shared_citations(self, tmp_path):
+        run_dir = _make_run_dir(tmp_path, "20260629T040506Z-report-resume")
+        out_path = tmp_path / "context.json"
+        resume_packet_path = tmp_path / "resume-context.json"
+        resume_packet_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "resume-context.v1",
+                    "status": "selected",
+                    "generated_at": "2026-06-29T04:05:06Z",
+                    "requested_report": {"requested": True, "tier": "summary", "forwarded_args": []},
+                    "report_target": {"requested": True, "status": "ready", "target_args": ["--run", run_dir.name]},
+                    "ambiguity": {"state": "none", "needs_selection": False, "triggers": []},
+                    "selected_target": {
+                        "target_type": "run",
+                        "selection_kind": "explicit",
+                        "candidate_id": "cand-run",
+                        "run_id": run_dir.name,
+                        "citation_ids": ["cit-shared"],
+                        "evidence_ids": ["ev-selected"],
+                    },
+                    "evidence_records": [
+                        {
+                            "evidence_id": "ev-unrelated",
+                            "type": "provider_note",
+                            "provider": "provider",
+                            "source": "provider",
+                            "citation": "cit-shared",
+                            "status": "ok",
+                            "validation_status": "valid",
+                            "candidate_id": "cand-other",
+                            "candidate_refs": ["cand-other"],
+                        },
+                        {
+                            "evidence_id": "ev-selected",
+                            "type": "run_brief",
+                            "provider": "run_brief",
+                            "source": str(run_dir / "run-brief.json"),
+                            "citation": "cit-shared",
+                            "status": "ok",
+                            "validation_status": "valid",
+                            "candidate_id": "cand-run",
+                            "candidate_refs": ["cand-run"],
+                        },
+                    ],
+                    "citation_metadata": [{"citation_id": "cit-shared", "source_type": "file"}],
+                    "warnings": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        descriptor = {"mode": "run", "run_id": run_dir.name}
+        with (
+            patch.object(_mod, "_resolve_run_dir", return_value=run_dir),
+            patch.object(_mod, "_classify_status", return_value="clean"),
+            patch.object(_mod, "_resolve_followups", return_value=[]),
+            patch.object(_mod, "_estimate_cost", return_value={}),
+        ):
+            rc = _assemble_bundle(
+                descriptor,
+                out_path=out_path,
+                base=None,
+                resume_context_path=resume_packet_path,
+            )
+
+        assert rc == 0
+        bundle = json.loads(out_path.read_text(encoding="utf-8"))
+        selected_evidence = bundle["selected_resume_context"]["selected_evidence"]
+        assert [record["evidence_id"] for record in selected_evidence] == ["ev-selected"]
+
+    def test_selected_resume_context_emits_metadata_for_13th_used_citation(self, tmp_path):
+        run_dir = _make_run_dir(tmp_path, "20260629T090011Z-report-resume")
+        out_path = tmp_path / "context.json"
+        resume_packet_path = tmp_path / "resume-context.json"
+        citation_ids = [f"cit-{idx:02d}" for idx in range(1, 14)]
+        resume_packet_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "resume-context.v1",
+                    "status": "selected",
+                    "generated_at": "2026-06-29T09:00:11Z",
+                    "requested_report": {"requested": True, "tier": "summary", "forwarded_args": []},
+                    "report_target": {"requested": True, "status": "ready", "target_args": ["--run", run_dir.name]},
+                    "ambiguity": {"state": "none", "needs_selection": False, "triggers": []},
+                    "selected_target": {
+                        "target_type": "run",
+                        "selection_kind": "explicit",
+                        "candidate_id": "cand-run",
+                        "run_id": run_dir.name,
+                        "citation_ids": citation_ids,
+                        "evidence_ids": ["ev-13"],
+                    },
+                    "evidence_records": [
+                        {
+                            "evidence_id": "ev-13",
+                            "type": "run_brief",
+                            "provider": "run_brief",
+                            "source": str(run_dir / "run-brief.json"),
+                            "citation": "cit-13",
+                            "status": "ok",
+                            "validation_status": "valid",
+                            "candidate_id": "cand-run",
+                            "candidate_refs": ["cand-run"],
+                        }
+                    ],
+                    "citation_metadata": [
+                        {"citation_id": citation_id, "source_type": "file", "path": str(run_dir / f"{citation_id}.json")}
+                        for citation_id in citation_ids
+                    ],
+                    "warnings": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        descriptor = {"mode": "run", "run_id": run_dir.name}
+        with (
+            patch.object(_mod, "_resolve_run_dir", return_value=run_dir),
+            patch.object(_mod, "_classify_status", return_value="clean"),
+            patch.object(_mod, "_resolve_followups", return_value=[]),
+            patch.object(_mod, "_estimate_cost", return_value={}),
+        ):
+            rc = _assemble_bundle(
+                descriptor,
+                out_path=out_path,
+                base=None,
+                resume_context_path=resume_packet_path,
+            )
+
+        assert rc == 0
+        bundle = json.loads(out_path.read_text(encoding="utf-8"))
+        selected_resume = bundle["selected_resume_context"]
+        assert [record["citation"] for record in selected_resume["selected_evidence"]] == ["cit-13"]
+        assert [record["citation_id"] for record in selected_resume["citation_metadata"]] == ["cit-13"]
+        assert selected_resume["selected_target"]["citation_ids"] == ["cit-13"]
+        assert selected_resume["selected_target"]["evidence_ids"] == ["ev-13"]
+
+    def test_selected_resume_context_rejects_citation_only_shared_unrelated_evidence(self, tmp_path):
+        run_dir = _make_run_dir(tmp_path, "20260629T050607Z-report-resume")
+        out_path = tmp_path / "context.json"
+        resume_packet_path = tmp_path / "resume-context.json"
+        resume_packet_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "resume-context.v1",
+                    "status": "selected",
+                    "generated_at": "2026-06-29T05:06:07Z",
+                    "requested_report": {"requested": True, "tier": "summary", "forwarded_args": []},
+                    "report_target": {"requested": True, "status": "ready", "target_args": ["--run", run_dir.name]},
+                    "ambiguity": {"state": "none", "needs_selection": False, "triggers": []},
+                    "selected_target": {
+                        "target_type": "run",
+                        "selection_kind": "explicit",
+                        "candidate_id": "cand-run",
+                        "run_id": run_dir.name,
+                        "citation_ids": ["cit-shared"],
+                    },
+                    "evidence_records": [
+                        {
+                            "evidence_id": "ev-unrelated",
+                            "type": "provider_note",
+                            "provider": "provider",
+                            "source": "provider",
+                            "citation": "cit-shared",
+                            "status": "ok",
+                            "validation_status": "valid",
+                            "candidate_id": "cand-other",
+                            "candidate_refs": ["cand-other"],
+                        }
+                    ],
+                    "citation_metadata": [{"citation_id": "cit-shared", "source_type": "file"}],
+                    "warnings": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        descriptor = {"mode": "run", "run_id": run_dir.name}
+        with (
+            patch.object(_mod, "_resolve_run_dir", return_value=run_dir),
+            patch.object(_mod, "_classify_status", return_value="clean"),
+            patch.object(_mod, "_resolve_followups", return_value=[]),
+            patch.object(_mod, "_estimate_cost", return_value={}),
+        ):
+            rc = _assemble_bundle(
+                descriptor,
+                out_path=out_path,
+                base=None,
+                resume_context_path=resume_packet_path,
+            )
+
+        assert rc == 2
+        assert not out_path.exists()
+
+    def test_selected_resume_context_rejects_unmatched_explicit_evidence_ids(self, tmp_path):
+        run_dir = _make_run_dir(tmp_path, "20260629T060708Z-report-resume")
+        out_path = tmp_path / "context.json"
+        resume_packet_path = tmp_path / "resume-context.json"
+        resume_packet_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "resume-context.v1",
+                    "status": "selected",
+                    "generated_at": "2026-06-29T06:07:08Z",
+                    "requested_report": {"requested": True, "tier": "summary", "forwarded_args": []},
+                    "report_target": {"requested": True, "status": "ready", "target_args": ["--run", run_dir.name]},
+                    "ambiguity": {"state": "none", "needs_selection": False, "triggers": []},
+                    "selected_target": {
+                        "target_type": "run",
+                        "selection_kind": "explicit",
+                        "candidate_id": "cand-run",
+                        "run_id": run_dir.name,
+                        "citation_ids": ["cit-run"],
+                        "evidence_ids": ["ev-missing"],
+                    },
+                    "evidence_records": [
+                        {
+                            "evidence_id": "ev-other",
+                            "type": "run_brief",
+                            "provider": "run_brief",
+                            "source": str(run_dir / "run-brief.json"),
+                            "citation": "cit-run",
+                            "status": "ok",
+                            "validation_status": "valid",
+                            "candidate_id": "cand-run",
+                            "candidate_refs": ["cand-run"],
+                        }
+                    ],
+                    "citation_metadata": [{"citation_id": "cit-run", "source_type": "file"}],
+                    "warnings": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        descriptor = {"mode": "run", "run_id": run_dir.name}
+        with (
+            patch.object(_mod, "_resolve_run_dir", return_value=run_dir),
+            patch.object(_mod, "_classify_status", return_value="clean"),
+            patch.object(_mod, "_resolve_followups", return_value=[]),
+            patch.object(_mod, "_estimate_cost", return_value={}),
+        ):
+            rc = _assemble_bundle(
+                descriptor,
+                out_path=out_path,
+                base=None,
+                resume_context_path=resume_packet_path,
+            )
+
+        assert rc == 2
+        assert not out_path.exists()
+
+    def test_selected_resume_context_rejects_uncited_selected_evidence(self, tmp_path):
+        cases = [
+            ("missing", {}, [{"citation_id": "cit-run", "source_type": "file"}]),
+            ("unselected", {"citation": "cit-other"}, [{"citation_id": "cit-run", "source_type": "file"}]),
+            ("missing-metadata", {"citation": "cit-run"}, []),
+        ]
+        for suffix, citation_fields, metadata in cases:
+            run_dir = _make_run_dir(tmp_path, f"20260629T08090{len(suffix)}Z-{suffix}")
+            out_path = tmp_path / f"context-{suffix}.json"
+            resume_packet_path = tmp_path / f"uncited-{suffix}-resume-context.json"
+            resume_packet_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "resume-context.v1",
+                        "status": "selected",
+                        "generated_at": "2026-06-29T08:09:10Z",
+                        "requested_report": {"requested": True, "tier": "summary", "forwarded_args": []},
+                        "report_target": {"requested": True, "status": "ready", "target_args": ["--run", run_dir.name]},
+                        "ambiguity": {"state": "none", "needs_selection": False, "triggers": []},
+                        "selected_target": {
+                            "target_type": "run",
+                            "selection_kind": "explicit",
+                            "candidate_id": "cand-run",
+                            "run_id": run_dir.name,
+                            "citation_ids": ["cit-run"],
+                            "evidence_ids": ["ev-run"],
+                        },
+                        "evidence_records": [
+                            {
+                                "evidence_id": "ev-run",
+                                "type": "run_brief",
+                                "provider": "run_brief",
+                                "source": str(run_dir / "run-brief.json"),
+                                "status": "ok",
+                                "validation_status": "valid",
+                                "candidate_id": "cand-run",
+                                "candidate_refs": ["cand-run"],
+                                **citation_fields,
+                            }
+                        ],
+                        "citation_metadata": metadata,
+                        "warnings": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(_mod, "_resolve_run_dir", return_value=run_dir),
+                patch.object(_mod, "_classify_status", return_value="clean"),
+                patch.object(_mod, "_resolve_followups", return_value=[]),
+                patch.object(_mod, "_estimate_cost", return_value={}),
+            ):
+                rc = _assemble_bundle(
+                    {"mode": "run", "run_id": run_dir.name},
+                    out_path=out_path,
+                    base=None,
+                    resume_context_path=resume_packet_path,
+                )
+
+            assert rc == 2
+            assert not out_path.exists()
+
+    def test_ambiguous_resume_context_is_rejected_before_bundle_write(self, tmp_path):
+        out_path = tmp_path / "context.json"
+        resume_packet_path = tmp_path / "ambiguous-resume-context.json"
+        resume_packet_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "resume-context.v1",
+                    "status": "needs_selection",
+                    "ambiguity": {"state": "needs_selection", "needs_selection": True, "triggers": ["close_scores"]},
+                    "selected_target": None,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        rc = _assemble_bundle(
+            {"mode": "range", "range": "base..HEAD"},
+            out_path=out_path,
+            base=None,
+            resume_context_path=resume_packet_path,
+        )
+
+        assert rc == 2
+        assert not out_path.exists()
+
+    def test_selected_resume_context_rejects_report_target_mismatch(self, tmp_path):
+        run_dir = _make_run_dir(tmp_path, "20260629T070809Z-report-resume")
+        out_path = tmp_path / "context.json"
+        resume_packet_path = tmp_path / "mismatched-resume-context.json"
+        resume_packet_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "resume-context.v1",
+                    "status": "selected",
+                    "generated_at": "2026-06-29T07:08:09Z",
+                    "requested_report": {"requested": True, "tier": "standard", "forwarded_args": []},
+                    "report_target": {"requested": True, "status": "ready", "target_args": ["--run", "20260629T999999Z-other"]},
+                    "ambiguity": {"state": "none", "needs_selection": False, "triggers": []},
+                    "selected_target": {
+                        "target_type": "run",
+                        "selection_kind": "explicit",
+                        "candidate_id": "cand-run",
+                        "run_id": run_dir.name,
+                        "citation_ids": ["cit-run"],
+                        "evidence_ids": ["ev-run"],
+                    },
+                    "evidence_records": [
+                        {
+                            "evidence_id": "ev-run",
+                            "type": "run_brief",
+                            "provider": "run_brief",
+                            "source": str(run_dir / "run-brief.json"),
+                            "citation": "cit-run",
+                            "status": "ok",
+                            "validation_status": "valid",
+                            "candidate_id": "cand-run",
+                            "candidate_refs": ["cand-run"],
+                        }
+                    ],
+                    "citation_metadata": [{"citation_id": "cit-run", "source_type": "file"}],
+                    "warnings": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        rc = _assemble_bundle(
+            {"mode": "run", "run_id": run_dir.name},
+            out_path=out_path,
+            base=None,
+            resume_context_path=resume_packet_path,
+        )
+
+        assert rc == 2
+        assert not out_path.exists()
+
+
 # ---------------------------------------------------------------------------
 # T003 — diff-backed bundle assembly (pr / range / base / worktree)
 # ---------------------------------------------------------------------------
@@ -2237,9 +2707,11 @@ class TestZReportSkillSurfacePropagation:
         skill_text = (_REPO_ROOT / "skills" / "z-report" / "SKILL.md").read_text(encoding="utf-8")
 
         assert "--resolve-only $REPORT_CONTEXT_TARGET_ARGS \\\n  --tier \"$TIER\" \\\n  --surface \"$SURFACE_POLICY\"" in skill_text
-        assert "$REPORT_CONTEXT_TARGET_ARGS \\\n  --tier \"$TIER\" \\\n  --surface \"$SURFACE_POLICY\" \\\n  --out \"$CONTEXT_PATH\"" in skill_text
+        assert "$REPORT_CONTEXT_TARGET_ARGS \\\n  \"${SELECTED_RESUME_CONTEXT_ARG[@]}\" \\\n  --tier \"$TIER\" \\\n  --surface \"$SURFACE_POLICY\" \\\n  --out \"$CONTEXT_PATH\"" in skill_text
         assert "must not pass `--tier`" not in skill_text
         assert "must not pass `--surface`" not in skill_text
+        assert "SELECTED_RESUME_CONTEXT_PATH" in skill_text
+        assert "stop without report rendering" in skill_text
 
 
     def test_skill_includes_report_profile_gate_and_skip_contract(self):
@@ -2262,7 +2734,7 @@ class TestZReportSkillSurfacePropagation:
     def test_skill_preserves_explicit_target_flag_values_when_stripping_profile_tokens(self):
         skill_text = (_REPO_ROOT / "skills" / "z-report" / "SKILL.md").read_text(encoding="utf-8")
 
-        assert 'target_value_flags = {"--run", "--slug", "--pr", "--range", "--base"}' in skill_text
+        assert 'target_value_flags = {"--run", "--slug", "--pr", "--range", "--base", "--worktree"}' in skill_text
         assert "preserve_next = True" in skill_text
         assert "out.append(tok)" in skill_text
         assert "target_seen = False" in skill_text

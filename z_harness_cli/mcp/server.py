@@ -478,6 +478,7 @@ COMMAND_TOOLS: dict[str, dict[str, Any]] = {
     "z_evaluate":        {"command_id": "/z-evaluate",        "description": "Evaluate a completed z-harness session for patterns worth preserving","is_heavy": False},
     "z_context_budget":  {"command_id": "/z-context-budget",  "description": "Analyze context utilization and surface savings recommendations",    "is_heavy": False},
     "z_doc_rationale":   {"command_id": "/z-doc-rationale",   "description": "Produce ADRs, design rationale, and tradeoff explanations",          "is_heavy": False},
+    "z_resume":          {"command_id": "/z-resume",          "description": "Read-only recovery for selecting and continuing prior work context",  "is_heavy": False},
     # ── Utility ──
     "z_export":          {"command_id": "/z-export",          "description": "Export z-harness commands/agents/skills to a host",                   "is_heavy": False},
     "z_detect":          {"command_id": "/z-detect",          "description": "Detect installed hosts and versions",                                 "is_heavy": False},
@@ -568,7 +569,7 @@ _COMMAND_ROLE_MAP: dict[str, str] = {
     "z_plan": "implementer", "z_execute": "implementer",
     "z_review_all": "reviewer", "z_audit": "reviewer", "z_audit_plan_style": "reviewer",
     "z_debug": "implementer", "z_do": "implementer", "z_brainstorm": "implementer",
-    "z_learn": "implementer", "z_grill": "implementer",
+    "z_learn": "implementer", "z_grill": "implementer", "z_resume": "implementer",
     "z_research": "implementer", "z_map": "implementer",
     "z_plan_split": "implementer", "z_test": "implementer", "z_amend": "implementer",
     "z_init_docs": "implementer", "z_maintain_docs": "implementer",
@@ -590,6 +591,51 @@ def _get_repo_root() -> Path:
             return candidate
         candidate = candidate.parent
     raise RuntimeError("Cannot locate z-harness repo root")
+
+def _resolve_caller_repo_root(args: dict[str, Any]) -> Path:
+    """Return the explicit target repository root supplied by the MCP caller.
+
+    ``_get_repo_root()`` locates the installed z-harness helper/plugin tree.
+    Fast handlers that inspect user work must keep that separate from the
+    caller's current repository.  Do not fall back to process ``PWD`` or
+    ``os.getcwd()`` here: for MCP servers those values often point at the
+    helper/plugin checkout rather than the user's workspace.
+    """
+    raw: object | None = None
+    source = ""
+    for key in (
+        "repo_root",
+        "cwd",
+        "workspace_root",
+        "workspaceRoot",
+        "working_directory",
+        "project_root",
+    ):
+        value = args.get(key)
+        if value is not None and str(value).strip():
+            raw = value
+            source = key
+            break
+
+    if raw is None:
+        env_value = os.environ.get("Z_HARNESS_TARGET_REPO_ROOT")
+        if env_value and env_value.strip():
+            raw = env_value
+            source = "Z_HARNESS_TARGET_REPO_ROOT"
+
+    if raw is None:
+        raise ValueError(
+            "z_resume requires an explicit caller workspace root via repo_root, "
+            "cwd, workspace_root, or Z_HARNESS_TARGET_REPO_ROOT; refusing to use "
+            "the MCP helper process cwd"
+        )
+
+    path = Path(str(raw)).expanduser()
+    if not path.is_absolute():
+        raise ValueError(
+            f"z_resume caller workspace root from {source} must be an absolute path"
+        )
+    return path.resolve()
 
 
 # ==========================================================================
@@ -758,6 +804,68 @@ def _handle_z_stats(args: dict[str, Any]) -> ToolResult:
         return ToolResult.error(f"z_stats failed: {exc}")
 
 
+def _handle_z_resume(args: dict[str, Any]) -> ToolResult:
+    try:
+        helper_root = _get_repo_root()
+        target_repo_root = _resolve_caller_repo_root(args)
+        raw_arguments = str(args.get("prompt") or "").strip()
+        cmd = [sys.executable, str(helper_root / "scripts" / "resume-context.py")]
+        if raw_arguments:
+            cmd.extend(["--arguments", raw_arguments])
+        if args.get("slug"):
+            cmd.extend(["--slug", str(args["slug"])])
+        cmd.extend(["--repo-root", str(target_repo_root), "--format", "json", "--noninteractive"])
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=str(target_repo_root),
+            env=os.environ.copy(),
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "resume-context failed").strip()
+            return ToolResult.error(detail)
+
+        try:
+            packet = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            return ToolResult.error(f"resume-context returned invalid JSON: {exc}")
+
+        ambiguity = packet.get("ambiguity") if isinstance(packet, dict) else {}
+        needs_selection = bool(
+            packet.get("status") == "needs_selection"
+            or (isinstance(ambiguity, dict) and ambiguity.get("needs_selection"))
+        )
+        selected_target = packet.get("selected_target") if isinstance(packet, dict) else None
+        summary = {
+            "status": packet.get("status"),
+            "needs_selection": needs_selection,
+            "selected_target": selected_target,
+            "suggested_selection_args": packet.get("suggested_selection_args", []),
+            "safe_next_command": packet.get("safe_next_command"),
+        }
+        return ToolResult.success(
+            content=json.dumps(summary, indent=2, sort_keys=True),
+            artifacts={"resume_context": json.dumps(packet, indent=2, sort_keys=True)},
+            meta={
+                "packet": packet,
+                "needs_selection": needs_selection,
+                "selected_target": selected_target,
+                "status": packet.get("status"),
+                "interaction_mode": packet.get("interaction_mode"),
+            },
+        )
+    except subprocess.TimeoutExpired:
+        return ToolResult.error("resume-context timed out")
+    except ValueError as exc:
+        return ToolResult.error(str(exc))
+    except Exception as exc:
+        return ToolResult.error(f"z_resume failed: {exc}")
+
+
+
 def _handle_z_handoff(args: dict[str, Any]) -> ToolResult:
     try:
         repo_root = _get_repo_root()
@@ -856,6 +964,7 @@ def _handle_z_detect(args: dict[str, Any]) -> ToolResult:
 
 _FAST_HANDLERS: dict[str, Callable[[dict[str, Any]], ToolResult]] = {
     "z_where": _handle_z_where, "z_stats": _handle_z_stats,
+    "z_resume": _handle_z_resume,
     "z_handoff": _handle_z_handoff, "z_clear_checkpoint": _handle_z_clear_checkpoint,
     "z_personas": _handle_z_personas,
     "z_update": _handle_z_update, "z_export": _handle_z_export,
@@ -918,6 +1027,9 @@ def _make_tool(tool_name: str, meta: dict[str, Any]) -> None:
     async def tool_fn(
         prompt: str = "",
         slug: str | None = None,
+        repo_root: str | None = None,
+        cwd: str | None = None,
+        workspace_root: str | None = None,
         ctx: Any = None,
         _tool_name: str = tool_name,
         _meta: dict[str, Any] = meta,
@@ -925,7 +1037,12 @@ def _make_tool(tool_name: str, meta: dict[str, Any]) -> None:
         args: dict[str, Any] = {"prompt": prompt}
         if slug:
             args["slug"] = slug
-
+        if repo_root:
+            args["repo_root"] = repo_root
+        if cwd:
+            args["cwd"] = cwd
+        if workspace_root:
+            args["workspace_root"] = workspace_root
         # Determine if progress callback is available via ctx.
         progress_cb = getattr(ctx, "report_progress", None) if ctx is not None else None
 

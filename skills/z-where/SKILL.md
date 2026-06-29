@@ -8,6 +8,8 @@ runtime: c1
 
 You are running **z-harness `/z-where`**. Read-only diagnostic. Cheap — uses only Bash/Python on the active-plan registry; no subagent dispatch, no LLM calls.
 
+**Adjacent boundary:** `/z-where` is active plans only. If the user asks what they were doing, needs fuzzy topic recovery, exact historical slug/run selection, branch/worktree recovery, cross-repo source citations, noninteractive ambiguity output, or a report after selecting a prior work thread, route to `/z-resume` instead. `/z-resume` may cite active-plan registry evidence, but `/z-where` never searches historical artifacts, sessions, handoffs, git history, reports, memories, or follow-ups.
+
 ## Phase 0 — Resolved base header
 
 Print a small header at the very top of the output (unconditionally):

@@ -22,7 +22,7 @@ from hermes.config import DiscordProjectAlias, HermesConfig, load_config
 
 STATE_FILENAME = "so-mcp-sessions.json"
 SIGNAL_FILENAME = "so-mcp-signals.jsonl"
-CAPTURE_LIMIT = 120
+CAPTURE_LIMIT = 15
 DEFAULT_SESSION_TTL_SECONDS = 24 * 60 * 60
 TERMINAL_STATUSES = {"dead", "expired", "failed", "closed"}
 
@@ -274,7 +274,12 @@ def _emit_signal(
     *,
     store: Optional[SoSignalStore] = None,
 ) -> bool:
-    digest = _digest(f"{event}\0{text}")
+    """Emit a signal event, debounced by state-stable digest.
+
+    The digest key uses event + record.status (not the tmux output text)
+    so repeated reads of the same session state don't re-emit signals.
+    """
+    digest = _digest(f"{event}\0{record.status}")
     if record.last_signal_digest == digest:
         return False
     (store or SoSignalStore.from_config(config)).append(
@@ -343,10 +348,10 @@ def _run_checked(
 def _alias_for_record(
     config: HermesConfig,
     record: SoSessionRecord,
-) -> DiscordProjectAlias:
+) -> DiscordProjectAlias | None:
     alias = config.discord.so.project_aliases.get(record.project)
     if alias is None:
-        raise SoMcpError(f"project alias not configured: {record.project}")
+        return None
     return alias
 
 
@@ -358,6 +363,8 @@ def session_is_alive(
 ) -> bool:
     runner = runner or SubprocessCommandRunner()
     alias = _alias_for_record(config, record)
+    if alias is None:
+        return False  # can't verify = not alive
     argv, cwd = _run_for_alias(
         alias,
         ["tmux", "has-session", "-t", record.tmux_session],
@@ -377,9 +384,25 @@ def _env(record: SoSessionRecord) -> dict[str, str]:
 
 
 def _needs_input(text: str) -> bool:
-    lowered = text.lower()
-    markers = ("?", "choose", "confirm", "proceed", "waiting", "input")
-    return any(marker in lowered for marker in markers)
+    """Detect whether omp is actually waiting for user input.
+
+    Checks the LAST 3 lines of captured output for omp's prompt character
+    (❯ or >) at the END of a line — NOT a broad substring match.
+    omp's TUI shows `❯` as the input prompt when it is waiting.
+    Claude Code shows `> ` as a prompt continuation.
+    Garbage like \"? for keyboard shortcuts\" is NOT matched.
+    """
+    lines = [line.rstrip() for line in text.strip().splitlines() if line.strip()]
+    tail = lines[-3:] if len(lines) >= 3 else lines
+    for line in tail:
+        stripped = line.strip()
+        # omp prompt: line ending with ❯ or >
+        if stripped.endswith("❯") or stripped.endswith(">"):
+            return True
+        # Claude Code prompt: bare > on its own line
+        if stripped == ">":
+            return True
+    return False
 
 
 def _payload(record: SoSessionRecord) -> dict[str, Any]:
@@ -494,6 +517,8 @@ def send_to_so_session(
     if record is None:
         raise SoMcpError(f"session not found: {session_id}")
     alias = _alias_for_record(config, record)
+    if alias is None:
+        raise SoMcpError(f"project alias not configured: {record.project}")
     _run_checked(
         runner,
         alias,
@@ -502,6 +527,7 @@ def send_to_so_session(
     )
     record.turn_count += 1
     record.status = "running"
+    record.last_signal_digest = ""
     record.updated_at = utc_now()
     store.save(record)
     return record
@@ -521,6 +547,18 @@ def read_so_session(
     if record is None:
         raise SoMcpError(f"session not found: {session_id}")
     alias = _alias_for_record(config, record)
+    if alias is None:
+        record.status = "dead"
+        record.ended_at = utc_now()
+        record.updated_at = record.ended_at
+        _emit_signal(
+            record,
+            config,
+            "so_session_dead",
+            f"Hermes MCP session `{record.session_id}` has no configured project alias.",
+        )
+        store.save(record)
+        raise SoMcpError(f"project alias not configured: {record.project}")
     try:
         proc = _run_checked(
             runner,
@@ -550,14 +588,19 @@ def read_so_session(
         raise
     record.last_output = proc.stdout.strip()
     record.last_exit_code = proc.returncode
-    record.status = "needs_input" if _needs_input(record.last_output) else "running"
-    if record.status == "needs_input":
-        _emit_signal(
-            record,
-            config,
-            "so_needs_input",
-            record.last_output[-2000:],
-        )
+    new_status = "needs_input" if _needs_input(record.last_output) else "running"
+    # Only emit signal on actual transition — not every repeat poll
+    old_status = record.status
+    if new_status != old_status:
+        record.status = new_status
+        if old_status == "running" and new_status == "needs_input":
+            # Use stable digest: event + status only, not changing tmux text
+            _emit_signal(
+                record,
+                config,
+                "so_needs_input",
+                record.last_output[-2000:],
+            )
     record.updated_at = utc_now()
     store.save(record)
     return record

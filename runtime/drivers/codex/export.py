@@ -35,6 +35,7 @@ from runtime.drivers._export_utils import (
     output_path_for,
     validate_capabilities,
     rewrite_unsupported_call_blocks,
+    export_resume_runtime_scripts,
 )
 
 
@@ -255,6 +256,8 @@ def export(
     plugin_dir.mkdir(parents=True, exist_ok=True)
     plugin_manifest_path = plugin_dir / "plugin.json"
     plugin_manifest_path.write_text(_render_plugin_manifest(repo_root), encoding="utf-8")
+
+    emitted.extend(export_resume_runtime_scripts(repo_root, export_root))
 
     # --- Validate CAPABILITIES.md if it exists ---
     caps_path = export_root / "CAPABILITIES.md"

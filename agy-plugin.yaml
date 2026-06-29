@@ -125,6 +125,11 @@ rules:
     output: .agent/rules/z-harness-resolver.md
     trigger: model_decision
     description: "Documents the workflow question resolver — the read-only subsystem that maps registered question_ids to a result-domain value (skip|prefill|ask|halt|defer-to-sink) by consulting config layers, memory, and overnight-gate overrides."
+  - id: resume-cluster
+    source: agents/resume-cluster.md
+    output: .agent/rules/z-harness-resume-cluster.md
+    trigger: model_decision
+    description: "Cheap read-only bounded inference agent for /z-resume. Receives one resume-context supplied cluster or compact top-cluster comparison and returns a cited JSON judgment without inspecting arbitrary repo state."
   - id: review-agent
     source: agents/review-agent.md
     output: .agent/rules/z-harness-review-agent.md
@@ -355,6 +360,10 @@ skills:
     source: skills/z-research/SKILL.md
     output: .agent/skills/z-research/SKILL.md
     description: "Higher-order meta-orchestrator. Composes /z-map (terrain) and /z-brainstorm (framings), then runs adversarial synthesis panel (3 perspectives + judge) producing RESEARCH.md with 10-section schema including approach decision matrix. Cost 3–6M token..."
+  - id: z-resume
+    source: skills/z-resume/SKILL.md
+    output: .agent/skills/z-resume/SKILL.md
+    description: "Read-only work-thread recovery from a fuzzy or exact prior-work target. Finds and selects the likely plan/run/worktree/branch/artifact/repo context from bounded cited evidence, reports ambiguity explicitly, and recommends safe next commands withou..."
   - id: z-review-all
     source: skills/z-review-all/SKILL.md
     output: .agent/skills/z-review-all/SKILL.md

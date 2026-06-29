@@ -38,6 +38,7 @@ from runtime.drivers._export_utils import (
     ExportResult,
     _ALWAYS_ON_AGENTS,
     enumerate_sources,
+    export_resume_runtime_scripts,
     resolve_strategy,
     select_sources,
     rewrite_unsupported_call_blocks,
@@ -270,6 +271,8 @@ def export(
     # Validate all emitted files.
     for path in emitted:
         validation_errors.extend(_validate_steering_doc(path))
+
+    emitted.extend(export_resume_runtime_scripts(repo_root, out_root))
 
     dest = steering_dir
     return ExportResult(

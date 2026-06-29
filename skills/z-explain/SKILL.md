@@ -63,11 +63,12 @@ Run this when intent clearly mismatches a one-shot explanation:
 
 | Signal | Route to |
 |--------|----------|
-| Terrain unknown; "where does X live?", "map the codebase" | Use `/z-explain --repo orientation` or `/z-learn --repo`; experimental terrain mapping is dev-only. |
+| Code terrain reconstruction: "where does X live?", "map the codebase", "find entry points/seams" | `/z-explore <target> --depth=quick|standard|deep` |
 | Find bugs / correctness issues | `/z-audit <target>` |
 | Change or fix code | `/z-do <task>` or `/z-plan <task>` |
 | Multi-turn tutoring already needed ("walk me through everything", "keep going") | `/z-learn <target>` |
 | Completed-work narrative, evidence summary, backtest writeup, technical handoff, or external/shareable report | `/z-report <target> <profile>` |
+| Work-thread recovery/reorientation: "what was I doing?", "where did that run/branch/worktree end up?", "how do I continue safely?" | `/z-resume <topic|--slug|--run|--branch|--worktree>` |
 
 If routing, write `$CURRENT_ARCHIVE_DIR/route-decision.md` with the reason, log `explain_route_handoff`, recommend the command, and **stop**. Do not auto-dispatch.
 
@@ -196,13 +197,13 @@ Write exactly ONE explanation chunk. Structure by lens:
 3. Brief summary to user: lens used, 1-line takeaway, handoff hint if any.
 
 ## Out of scope
-
 - **Interactive tutoring.** That is `/z-learn`.
-- **Terrain mapping.** Full terrain mapping is experimental/dev-only.
+- **Code terrain reconstruction.** That is `/z-explore`; `/z-explain --repo orientation` remains a one-answer orientation path, not a MAP/terrain survey.
 - **Finding bugs.** That is `/z-audit`.
 - **Cross-LLM consult.** One orchestrator pass keeps cost low.
 - **Writing LEARN.md.** Only `/z-learn` finalizes study artifacts.
 - **Completed-work reporting.** Evidence summaries, feature writeups, backtests, technical handoffs, and external/shareable reports are `/z-report`.
+- **Work-thread recovery.** That is `/z-resume`; `/z-explain` may teach a selected code surface after recovery, but it does not select prior plan/run/worktree state.
 
 ## Hard rules
 

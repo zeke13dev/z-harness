@@ -4,8 +4,7 @@
 Usage:
     report-context.py [--resolve-only] [target]
         [--run ID] [--slug S] [--pr N|URL] [--range A..B] [--base REF]
-        [--out PATH]
-
+        [--worktree PATH] [--resume-context PATH] [--out PATH]
 ``--resolve-only`` prints the resolution descriptor JSON to stdout and exits.
 Otherwise assembles the full bundle and writes it to ``--out``.
 
@@ -132,6 +131,263 @@ def _descriptor(mode: str, **extra) -> dict:
     return desc
 
 
+_SELECTED_RESUME_TARGET_KEYS = {
+    "target_type",
+    "selection_kind",
+    "selection_token",
+    "slug",
+    "run_id",
+    "repo_id",
+    "repo_root",
+    "plan_dir",
+    "run_dir",
+    "branch",
+    "worktree_path",
+    "head",
+    "current_state",
+    "confidence",
+    "score",
+    "candidate_id",
+    "citation_ids",
+    "citations",
+    "evidence_ids",
+    "evidence_refs",
+    "score_components",
+    "negative_evidence",
+    "source_status",
+    "source_warnings",
+    "ambiguity_warnings",
+}
+
+_SELECTED_RESUME_EVIDENCE_KEYS = {
+    "evidence_id",
+    "type",
+    "provider",
+    "source",
+    "source_path",
+    "citation",
+    "citation_id",
+    "freshness",
+    "status",
+    "validation_status",
+    "candidate_id",
+    "candidate_refs",
+    "stale",
+    "superseded",
+    "degraded",
+    "truncated",
+    "side_evidence",
+    "data",
+}
+
+
+def _compact_resume_value(value, *, max_items: int = 12, max_chars: int = 1200):
+    """Return a deterministic, JSON-safe, bounded projection of resume-context data."""
+    if isinstance(value, str):
+        if len(value) > max_chars:
+            return value[: max_chars - 3] + "..."
+        return value
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, list):
+        return [_compact_resume_value(item, max_items=max_items, max_chars=max_chars) for item in value[:max_items]]
+    if isinstance(value, dict):
+        projected = {}
+        for idx, key in enumerate(sorted(value, key=str)):
+            if idx >= max_items:
+                projected["_truncated_keys"] = max(0, len(value) - max_items)
+                break
+            projected[str(key)] = _compact_resume_value(value[key], max_items=max_items, max_chars=max_chars)
+        return projected
+    return str(value)
+
+
+def _load_resume_context_packet(path: Path, warnings: list[str]) -> dict | None:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        warnings.append(f"selected resume-context read failed: {exc}")
+        return None
+    try:
+        packet = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        warnings.append(f"selected resume-context JSON parse failed: {exc}")
+        return None
+    if not isinstance(packet, dict):
+        warnings.append("selected resume-context packet is not a JSON object")
+        return None
+    return packet
+
+
+def _clean_resume_string_set(value) -> set[str]:
+    return {str(item).strip() for item in value or [] if str(item).strip()}
+
+
+def _safe_report_path(value: str) -> str:
+    try:
+        return str(Path(value).expanduser().resolve())
+    except (OSError, RuntimeError):
+        return str(Path(value).expanduser())
+
+
+def _descriptor_report_target_args(descriptor: dict) -> list[str] | None:
+    mode = str(descriptor.get("mode") or "")
+    if mode == "run":
+        run_id = str(descriptor.get("run_id") or "").strip()
+        if run_id:
+            return ["--run", run_id]
+        slug = str(descriptor.get("slug") or "").strip()
+        if slug:
+            return ["--slug", slug]
+    if mode == "slug":
+        slug = str(descriptor.get("slug") or "").strip()
+        if slug:
+            return ["--slug", slug]
+    if mode == "worktree":
+        worktree_path = str(descriptor.get("worktree_path") or "").strip()
+        if worktree_path:
+            return ["--worktree", worktree_path]
+    return None
+
+
+def _report_target_args_match(report_target: dict, descriptor: dict) -> bool:
+    target_args = [str(item) for item in report_target.get("target_args") or []]
+    expected = _descriptor_report_target_args(descriptor)
+    if not target_args or expected is None or len(target_args) != len(expected):
+        return False
+    if target_args[0] != expected[0]:
+        return False
+    if target_args[0] == "--worktree":
+        return _safe_report_path(target_args[1]) == _safe_report_path(expected[1])
+    return target_args[1:] == expected[1:]
+
+
+def _project_selected_resume_context(packet: dict, source_path: Path, warnings: list[str], descriptor: dict | None = None) -> dict | None:
+    """Project only the selected, cited resume-context fields into context.json."""
+    ambiguity = packet.get("ambiguity") if isinstance(packet.get("ambiguity"), dict) else {}
+    selected = packet.get("selected_target") if isinstance(packet.get("selected_target"), dict) else None
+    report_target = packet.get("report_target") if isinstance(packet.get("report_target"), dict) else {}
+    if str(packet.get("status") or "").strip().lower() != "selected":
+        warnings.append("selected resume-context packet status is not selected")
+        return None
+    if ambiguity.get("needs_selection") or selected is None:
+        warnings.append("selected resume-context requires target selection before report rendering")
+        return None
+    if report_target.get("status") != "ready" or not report_target.get("target_args"):
+        warnings.append("selected resume-context report target is not ready")
+        return None
+    if descriptor is not None and not _report_target_args_match(report_target, descriptor):
+        warnings.append("selected resume-context report target does not match requested report target")
+        return None
+
+    selected_ids = _clean_resume_string_set(selected.get("evidence_ids") or selected.get("evidence_refs"))
+    selected_citations = _clean_resume_string_set(selected.get("citation_ids") or selected.get("citations"))
+    if not selected_ids:
+        warnings.append("selected resume-context has no explicit selected evidence ids")
+        return None
+    if not selected_citations:
+        warnings.append("selected resume-context has no explicit selected citation ids")
+        return None
+
+    citation_metadata_by_id: dict[str, dict] = {}
+    for citation in packet.get("citation_metadata") or packet.get("citations") or []:
+        if not isinstance(citation, dict):
+            continue
+        citation_id = str(citation.get("citation_id") or "").strip()
+        if citation_id in selected_citations and citation_id not in citation_metadata_by_id:
+            citation_metadata_by_id[citation_id] = _compact_resume_value(citation)
+
+    evidence_records: list[dict] = []
+    emitted_evidence_ids: list[str] = []
+    emitted_citation_ids: list[str] = []
+    for record in packet.get("evidence_records") or []:
+        if not isinstance(record, dict):
+            continue
+        evidence_id = str(record.get("evidence_id") or "")
+        include_record = evidence_id in selected_ids
+        if include_record:
+            record_citation = str(record.get("citation_id") or record.get("citation") or "").strip()
+            if not record_citation:
+                warnings.append("selected resume-context selected evidence is missing a citation")
+                return None
+            if record_citation not in selected_citations:
+                warnings.append("selected resume-context selected evidence cites an unselected citation")
+                return None
+            if record_citation not in citation_metadata_by_id:
+                warnings.append("selected resume-context selected evidence citation is missing metadata")
+                return None
+            projected = {
+                key: _compact_resume_value(value)
+                for key, value in record.items()
+                if key in _SELECTED_RESUME_EVIDENCE_KEYS
+            }
+            evidence_records.append(projected)
+            emitted_evidence_ids.append(evidence_id)
+            if record_citation not in emitted_citation_ids:
+                emitted_citation_ids.append(record_citation)
+        if len(evidence_records) >= 12:
+            break
+
+    if not evidence_records:
+        warnings.append("selected resume-context selected evidence ids did not match evidence records")
+        return None
+
+    citation_metadata = [citation_metadata_by_id[citation_id] for citation_id in emitted_citation_ids]
+
+    selected_target = {
+        key: _compact_resume_value(value)
+        for key, value in selected.items()
+        if key in _SELECTED_RESUME_TARGET_KEYS
+    }
+    if "citation_ids" in selected:
+        selected_target["citation_ids"] = emitted_citation_ids
+    if "citations" in selected:
+        selected_target["citations"] = emitted_citation_ids
+    if "evidence_ids" in selected:
+        selected_target["evidence_ids"] = emitted_evidence_ids
+    if "evidence_refs" in selected:
+        selected_target["evidence_refs"] = emitted_evidence_ids
+
+    requested_report = packet.get("requested_report") if isinstance(packet.get("requested_report"), dict) else {}
+    return {
+        "source": str(source_path),
+        "schema_version": packet.get("schema_version"),
+        "status": packet.get("status"),
+        "generated_at": packet.get("generated_at"),
+        "query": _compact_resume_value(packet.get("query") or {}),
+        "interaction_mode": packet.get("interaction_mode"),
+        "requested_report": _compact_resume_value(requested_report),
+        "report_target": _compact_resume_value(report_target),
+        "ambiguity": _compact_resume_value(
+            {
+                "state": ambiguity.get("state", "none"),
+                "needs_selection": bool(ambiguity.get("needs_selection")),
+                "triggers": ambiguity.get("triggers") or [],
+            }
+        ),
+        "selected_target": selected_target,
+        "selected_evidence": evidence_records,
+        "citation_metadata": citation_metadata,
+        "warnings": _compact_resume_value(packet.get("warnings") or []),
+    }
+
+
+def _resolve_selected_resume_context(resume_context_path: Path | None, warnings: list[str], descriptor: dict | None = None) -> dict | None:
+    if resume_context_path is None:
+        return None
+    packet = _load_resume_context_packet(resume_context_path, warnings)
+    if packet is None:
+        return None
+    return _project_selected_resume_context(packet, resume_context_path, warnings, descriptor)
+
+
+def _attach_selected_resume_context(bundle: dict, projection: dict | None) -> None:
+    if projection is None:
+        return
+    bundle["selected_resume_context_status"] = "attached"
+    bundle["selected_resume_context"] = projection
+
+
 def resolve_target(
     *,
     target: str | None,
@@ -140,6 +396,7 @@ def resolve_target(
     flag_pr: str | None,
     flag_range: str | None,
     flag_base: str | None,
+    flag_worktree: str | None = None,
 ) -> dict:
     """Return the resolution descriptor JSON dict.
 
@@ -154,6 +411,7 @@ def resolve_target(
         "slug": flag_slug,
         "pr": flag_pr,
         "range": flag_range,
+        "worktree": flag_worktree,
     }
     active_typed = {k: v for k, v in typed_flags.items() if v is not None}
     if len(active_typed) > 1:
@@ -162,7 +420,7 @@ def resolve_target(
             "error",
             message=(
                 f"Conflicting flags: {names}. "
-                "Supply at most one of --run/--slug/--pr/--range."
+                "Supply at most one of --run/--slug/--pr/--range/--worktree."
             ),
         )
 
@@ -176,6 +434,8 @@ def resolve_target(
         rng = active_typed["range"]
         base = flag_base
         return _descriptor("range", range=rng, **({"base": base} if base else {}))
+    if "worktree" in active_typed:
+        return _descriptor("worktree", worktree_path=active_typed["worktree"])
 
     # --base alone (no --range) maps to range/base mode using HEAD
     if flag_base is not None and target is None:
@@ -1332,6 +1592,7 @@ def assemble_bundle(
     base: str | None,
     surface_policy: str = "off",
     tier: str = "standard",
+    resume_context_path: Path | None = None,
 ) -> int:
     """Assemble the full context bundle and write it to out_path.
 
@@ -1340,6 +1601,14 @@ def assemble_bundle(
     """
     mode = descriptor.get("mode", "")
     warnings: list[str] = []
+    selected_resume_context = _resolve_selected_resume_context(resume_context_path, warnings, descriptor)
+    if resume_context_path is not None and selected_resume_context is None:
+        print(
+            "report-context.py: selected resume-context is missing, invalid, or still needs selection",
+            file=sys.stderr,
+        )
+        return 2
+
 
     if mode in ("run", "slug"):
         run_dir = _resolve_run_dir(descriptor, warnings)
@@ -1366,6 +1635,7 @@ def assemble_bundle(
         if out_path is None:
             out_path = Path(run_dir / "context.json") if run_dir else Path("context.json")
 
+        _attach_selected_resume_context(bundle, selected_resume_context)
         _attach_surface_map(
             bundle,
             descriptor,
@@ -1383,6 +1653,7 @@ def assemble_bundle(
         bundle = _assemble_pr_bundle(descriptor, warnings)
         if out_path is None:
             out_path = Path("context.json")
+        _attach_selected_resume_context(bundle, selected_resume_context)
         _attach_surface_map(
             bundle,
             descriptor,
@@ -1400,6 +1671,7 @@ def assemble_bundle(
         bundle = _assemble_range_bundle(descriptor, warnings)
         if out_path is None:
             out_path = Path("context.json")
+        _attach_selected_resume_context(bundle, selected_resume_context)
         _attach_surface_map(
             bundle,
             descriptor,
@@ -1413,9 +1685,10 @@ def assemble_bundle(
         return 0
 
     if mode == "worktree":
-        bundle = _assemble_worktree_bundle(warnings)
+        bundle = _assemble_worktree_bundle(warnings, cwd=descriptor.get("worktree_path"))
         if out_path is None:
             out_path = Path("context.json")
+        _attach_selected_resume_context(bundle, selected_resume_context)
         _attach_surface_map(
             bundle,
             descriptor,
@@ -1491,6 +1764,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pr", dest="flag_pr", default=None, metavar="N|URL", help="Pull request number or URL.")
     parser.add_argument("--range", dest="flag_range", default=None, metavar="A..B", help="Git commit range.")
     parser.add_argument("--base", dest="flag_base", default=None, metavar="REF", help="Base ref for feature-branch diff.")
+    parser.add_argument("--worktree", dest="flag_worktree", default=None, metavar="PATH", help="Explicit worktree path.")
+    parser.add_argument("--resume-context", dest="resume_context", default=None, metavar="PATH", help="Attach selected /z-resume context packet.")
     parser.add_argument("--out", "--save", dest="out", default=None, metavar="PATH", help="Output path for bundle JSON.")
     parser.add_argument("--tier", choices=sorted(TIERS), default=None, help="Report depth tier.")
     parser.add_argument("--surface", choices=sorted(SURFACE_POLICIES), default="auto", help="Surface-map policy.")
@@ -1507,6 +1782,7 @@ def main(argv: list[str] | None = None) -> int:
         flag_pr=args.flag_pr,
         flag_range=args.flag_range,
         flag_base=flag_base,
+        flag_worktree=args.flag_worktree,
     )
 
     if args.resolve_only:
@@ -1534,6 +1810,7 @@ def main(argv: list[str] | None = None) -> int:
         base=flag_base,
         surface_policy=args.surface,
         tier=tier,
+        resume_context_path=Path(args.resume_context) if args.resume_context else None,
     )
 
 

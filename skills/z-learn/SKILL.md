@@ -96,11 +96,12 @@ bash "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/log-event.sh" "$RU
 
 | Signal | Route to |
 |--------|----------|
-| Terrain unknown | Continue inside `/z-learn` with `--surface=force` or ask the user to narrow the target; full terrain mapping is experimental/dev-only. |
+| Code terrain reconstruction: "where does X live?", "map the codebase", "find entry points/seams" | `/z-explore <target> --depth=quick|standard|deep`; stay in `/z-learn` only when the user wants teaching after the terrain target is known. |
 | Find bugs | `/z-audit <target>` |
 | Change code | `/z-do <task>` or `/z-plan <task>` |
 | Quick one-shot answer | `/z-explain <target>` |
 | Completed-work narrative, evidence summary, backtest writeup, technical handoff, or external/shareable report | `/z-report <target> <profile>` |
+| Work-thread recovery/reorientation: "what was I doing?", "where did that run/branch/worktree end up?", "how do I continue safely?" | `/z-resume <topic|--slug|--run|--branch|--worktree>` |
 
 ## Phase 1 — Parse target, lens, and surface policy
 
@@ -306,9 +307,9 @@ Omit empty sections. Merge duplicate material across turns. Include `## Orientat
 ## Out of scope
 
 - Planning, implementation, code review.
-- Cross-LLM consult.
-- Full terrain mapping (experimental/dev-only).
+- Code terrain reconstruction / MAP-style source surveys (`/z-explore`); `/z-learn` teaches selected slices after terrain is known.
 - Completed-work reporting, feature writeups, handoffs, backtests, and external/shareable updates (`/z-report`).
+- Work-thread recovery/reorientation across plan/run/worktree/branch evidence (`/z-resume`).
 
 ## Hard rules
 

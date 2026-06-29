@@ -52,6 +52,7 @@ from runtime.drivers._export_utils import (
     _parse_frontmatter,
     enumerate_sources,
     validate_capabilities,
+    export_resume_runtime_scripts,
 )
 
 # ---------------------------------------------------------------------------
@@ -456,6 +457,8 @@ def export(
             path = prompts_dir / f"{export_id}.md"
             path.write_text(_render_prompt(entry, agent_names), encoding="utf-8")
             emitted.append(path)
+
+    emitted.extend(export_resume_runtime_scripts(repo_root, out_root))
 
     # --- copy curated pi-only assets ---
     if explore_present:

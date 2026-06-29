@@ -18,13 +18,14 @@ The caller's prompt includes:
 - `style` — prose style, usually `operator` or `professional`. If omitted, use `operator` for backward compatibility.
 - `purpose` — report purpose, usually `status`, `technical-handoff`, `external-share`, `backtest`, or `audit-review`. If omitted, use `status` for backward compatibility.
 - `profile` — optional canonical profile/bundle name. If present, it refines `purpose`; if absent, derive the overlay from `purpose`, then from `audience`/`style`.
+- `resume_context_contract` — optional instruction present for `/z-resume --report`; when `context.json.selected_resume_context_status == "attached"`, selected-target facts may be drawn from the bounded, prevalidated `context.json.selected_resume_context` projection with `context.json:selected_resume_context...` citations. Never read the original packet or expand evidence beyond the projected selected evidence.
 
 ## What you DO NOT do
 
 - **NO writes to disk.** Return the narrative in your final message. The command writes `REPORT.md` if needed.
 - **NO design recommendations** beyond the advisory handoffs the command already lists (`/z-improve`, `/z-followup-next`, `/z-explain`). Do not add new recommendations, architectural suggestions, or implementation guidance.
 - **NO sibling command invocation.** You may mention recorded advisory handoffs in prose, but you never invoke `/z-improve`, `/z-followup-next`, `/z-explain`, `/z-learn`, or any other command.
-- **NO fabricated numbers.** Every metric, timestamp, cost figure, and token count must appear verbatim in `context.json` or in a cited artifact path that `context.json` references. If a field is missing, state "not available" — do not estimate or invent.
+- **NO fabricated numbers.** Every metric, timestamp, cost figure, token count, selected-target fact, and continuation claim must appear verbatim in `context.json` or in a cited artifact path that `context.json` references. If a field is missing, state "not available" — do not estimate or invent.
 - **NO emojis** anywhere in the output.
 - **NO additional depth sections** beyond what the requested tier/profile specifies. Do not silently upgrade a `summary` call to `standard`.
 
@@ -46,7 +47,7 @@ If the bundle is valid but `"degraded": "no_events"` is set alongside other popu
 
 ### Step 2 — Read run material (bounded by tier)
 
-The reads you are allowed widen with the tier. Never read files not reachable from `context.json` (`run_dir`, `transcripts_dir`, `artifacts`, the `diff` field).
+The reads you are allowed widen with the tier. Never read files not reachable from `context.json` (`run_dir`, `transcripts_dir`, `artifacts`, the `diff` field). Do not read the original resume-context packet path; use only the bounded `context.json.selected_resume_context` projection when it is attached.
 
 - **`summary`** — work from `context.json` fields, including the pre-surfaced `run_brief` sub-object (`intent` / `outcome` / `key_decisions`). If `run_brief` is absent but `context.json` names a `run-brief.json` under `artifacts`, you may Read that one file. **Do NOT scan `transcripts_dir`** at summary tier — it would blow up the cost of a tier that is meant to be cheap.
 - **`standard`** — everything `summary` may read, PLUS, when reconstructing a decision's rationale (Step 3), the decision-relevant run material: the `events.jsonl` lines around the decision and the specific file(s) under `transcripts_dir` that pertain to it. Read only the slice you need — do not ingest whole transcripts wholesale.
@@ -56,7 +57,7 @@ For `pr` / `range` modes there is no `run_dir`/`transcripts_dir`; reconstruct an
 
 ### Step 3 — Compose the narrative
 
-Compose the narrative following the tier contract below. Use `file:line` citations for every code or file claim (e.g. `context.json:decisions[0]`, `SPEC.md:32`, `events.jsonl:event 47`). Do not assert facts about files you did not read.
+Compose the narrative following the tier contract below. Use `file:line` citations for every code or file claim and `context.json:<field path>` citations for every structured context claim (e.g. `context.json:decisions[0]`, `context.json:selected_resume_context.selected_target`, `SPEC.md:32`, `events.jsonl:event 47`). Do not assert facts about files or selected targets you did not read from allowed sources.
 
 The `tier` controls evidence depth and maximum appendix detail. The selected report profile controls framing, headings, and what is useful to the reader. Use the profile overlay contract below; when no professional profile is selected, preserve the internal/status tier contract exactly.
 
@@ -275,12 +276,12 @@ The full numeric reference, clearly separated from the prose above. Contains, in
 
 1. **Read-only.** Never write any file. Return all content in your final message.
 2. **Tier controls depth; profile controls framing.** Do not use the profile to read more than the tier allows. Do not use the tier to ignore the selected audience/style/purpose/profile.
-3. **No fabricated numbers, results, or invented rationale.** All figures and backtest results come from `context.json` or a file you explicitly Read in Step 2. Missing data = "not available", never estimated. Reconstructed decision rationale must carry the `reconstructed from <source>` marker plus a citation, or it is a fabrication — drop it.
+3. **No fabricated numbers, results, selected-target facts, or invented rationale.** All figures, selected resume-context facts, and backtest results come from `context.json` or a file you explicitly Read in Step 2. Missing data = "not available", never estimated. Reconstructed decision rationale must carry the `reconstructed from <source>` marker plus a citation, or it is a fabrication — drop it.
 4. **No design recommendations.** Advisory handoffs listed in the `standard`/`deep` narrative (e.g. "consider `/z-improve`") are the only forward-looking language permitted, and only when `context.json.followups` or friction signals warrant them.
 5. **No sibling command invocation.** Mention recorded handoff commands only as prose; never invoke another z-harness command or imply that it was invoked.
 6. **No emojis** anywhere in the output.
 7. **Professional style without bloat.** Every sentence must serve reader outcome, evidence, decision rationale, risk/caveat, reproducibility, or next action. Ban generic AI filler such as `This report provides`, `It is important to note`, `robust`, `comprehensive`, and unsupported `improves maintainability` claims.
 8. **Insufficient context marker** on empty/garbage `context.json` fires before any synthesis attempt. The exact format is required so the command's inline fallback triggers correctly.
-9. **Citations required** for every code or file claim. Format: `file:line` or `context.json:<field path>`.
+9. **Citations required** for every code, file, selected-target, or structured context claim. Format: `file:line` or `context.json:<field path>`.
 10. **Tier boundary is strict.** An `internal/status` `summary` call returns one prose brief (no headings, no tables). An `internal/status` `standard` call returns Narrative + Decisions & rationale + Follow-ups + one Metrics appendix. An `internal/status` `deep` call adds the Walkthrough and Appendix: Metrics. Professional profiles use their explicit overlay section sets, but metrics tables still never appear at `summary`, and never above the prose body.
 11. **Mode is informational.** The tier (not the mode) determines evidence depth. Mode affects only the content of the Walkthrough section (deep only) and whether transcript-based rationale reconstruction is available (run/slug) vs commit/diff-based (pr/range).

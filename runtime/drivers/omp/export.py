@@ -13,7 +13,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from runtime.drivers._export_utils import ExportResult, enumerate_sources
+from runtime.drivers._export_utils import ExportResult, enumerate_sources, export_resume_runtime_scripts
 from runtime.drivers._persona_utils import parse_persona_file
 
 _PACKAGE_DIR = ".omp/z-harness"
@@ -259,6 +259,8 @@ def export(
     for entry in sources["agents"]:
         agent_text = _render_markdown_resource(entry, kind="agent", heading="Agent")
         emitted.append(_write(package_root / "agents" / f"{entry['id']}.md", agent_text))
+
+    emitted.extend(export_resume_runtime_scripts(repo_root, package_root))
 
     emitted.extend(
         _export_profiles(

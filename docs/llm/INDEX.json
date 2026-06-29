@@ -190,6 +190,7 @@
         "skills/z-providers-discover/SKILL.md",
         "skills/z-sharpen/SKILL.md",
         "skills/z-report/SKILL.md",
+        "skills/z-resume/SKILL.md",
         "skills/z-research/SKILL.md",
         "skills/z-review-all/SKILL.md",
         "skills/z-skill-fix/SKILL.md",
@@ -203,7 +204,7 @@
         "skills/z-handoff/SKILL.md",
         "skills/z-doc-rationale/SKILL.md"
       ],
-      "last_updated": "2026-06-24",
+      "last_updated": "2026-06-29",
       "confidence": "high",
       "depends_on": [
         "agents",
@@ -213,8 +214,37 @@
         "active-plan-registry"
       ],
       "consumed_by": [],
-      "summary": "Slash command surfaces including /z-plan hard pre-subagent cost gate and bounded re-estimates, planning-family route checks, contextual exits, plan_route_decision telemetry, review-family finding promotion, config.py export-env/should-notify wrappers, check-no-ask halt branches, /z-overnight unattended pipeline orchestration, follow-up sink commands, /z-where diagnostics, and persona-rotation behavior.",
+      "summary": "Slash command surfaces including /z-plan hard pre-subagent cost gate and bounded re-estimates, planning-family route checks, contextual exits, plan_route_decision telemetry, review-family finding promotion, config.py export-env/should-notify wrappers, check-no-ask halt branches, /z-overnight unattended pipeline orchestration, follow-up sink commands, /z-where active diagnostics, /z-resume work-thread recovery boundaries, and persona-rotation behavior.",
       "source_files": []
+    },
+    {
+      "slug": "z-resume",
+      "source_files": [
+        "skills/z-resume/SKILL.md",
+        "docs/human/z-resume.md",
+        "scripts/resume-context.py",
+        "scripts/report-context.py",
+        "scripts/active-plan-registry.py",
+        "skills/z-report/SKILL.md",
+        "skills/z-explain/SKILL.md",
+        "skills/z-learn/SKILL.md",
+        "skills/z-where/SKILL.md"
+      ],
+      "last_updated": "2026-06-29",
+      "confidence": "high",
+      "depends_on": [
+        "commands",
+        "active-plan-registry",
+        "session-handoff",
+        "handoff-protocol",
+        "run-brief",
+        "followup-sink"
+      ],
+      "consumed_by": [
+        "commands",
+        "z-report"
+      ],
+      "summary": "Read-only work-thread recovery for fuzzy or exact prior-work targets: selects bounded plan/run/worktree/branch/artifact/repo context, cites evidence hierarchy and ambiguity, treats memories/follow-ups as side evidence only, recommends safe continuations without executing them, and delegates --report to /z-report only after target selection."
     },
     {
       "slug": "config",

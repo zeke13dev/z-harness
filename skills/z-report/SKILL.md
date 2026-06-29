@@ -12,7 +12,9 @@ unsupported_driver_behavior: explicit_gate
 
 You are running **z-harness `/z-report`** — a profile-aware narrative for communicating completed work and evidence from a z-harness run or past work. Use it for status reports, feature writeups, technical handoffs, backtest writeups, audit-style evidence summaries, and external/shareable updates. Read-only; never edits the target repo beyond writing `REPORT.md` or the `--save` path.
 
-**Command-family boundary:** `/z-report` communicates what happened, what evidence exists, what was decided, what remains, and what a specific reader should take away. It may end with prose handoffs to `/z-explain` for one-shot code/system understanding or `/z-learn` for progressive tutoring, but it must not turn the report body into a tutorial. Code-level teaching belongs to `/z-explain` or `/z-learn`.
+**Command-family boundary:** `/z-report` communicates what happened, what evidence exists, what was decided, what remains, and what a specific reader should take away for a **known or resolved** run/slug/PR/range/base/worktree target. It may end with prose handoffs to `/z-explain` for one-shot code/system understanding or `/z-learn` for progressive tutoring, but it must not turn the report body into a tutorial. Code-level teaching belongs to `/z-explain` or `/z-learn`.
+
+**Adjacent boundary:** If the user has only a fuzzy prior-work topic, asks "what was I doing?", needs branch/worktree recovery, needs cross-repo source selection, or otherwise needs the command to find/select the recovery target before a narrative exists, route to `/z-resume`. `/z-report` assumes a known or resolvable report target. `/z-resume --report` may call this machinery only after target selection, and ambiguous resume targets must stop before report rendering.
 
 Arguments (from `$ARGUMENTS`):
 
@@ -110,7 +112,7 @@ Record the chosen values as `PROFILE`, `AUDIENCE`, `STYLE`, `PURPOSE`, and `TIER
 T006 provides native parser/context support for these aliases, `--tier`, and `--surface`.
 
 **Target resolution** — delegate to `scripts/report-context.py --resolve-only` with the same target, tier, and surface policy that Phase 1 will use. Build target arguments by removing `/z-report` control flags (`--save`, `--tier`, `--surface`), report-profile-only flags (`--audience`, `--style`, `--purpose`, `--profile`, `--share`), positional depth/profile tokens, and then append the normalized `--tier "$TIER"` and `--surface "$SURFACE_POLICY"` flags explicitly. Never pass `PROFILE`, `AUDIENCE`, `STYLE`, or `PURPOSE` to `report-context.py`; they belong only to render selection and the `report-synth` prompt.
-Normalize `since <ref>` to the supported `--base <ref>` form; keep already-supported explicit target flags unchanged.
+Normalize `since <ref>` to the supported `--base <ref>` form; keep already-supported explicit target flags unchanged. `/z-resume --report` may additionally supply a preselected `SELECTED_RESUME_CONTEXT_PATH`; ordinary `/z-report` leaves it unset.
 
 ```bash
 REPORT_CONTEXT_TARGET_ARGS="$(python3 - "$ARGUMENTS" <<'PY'
@@ -124,7 +126,7 @@ target_seen = False
 depths = {"summary", "standard", "deep"}
 profile_value_flags = {"--audience", "--style", "--purpose", "--profile"}
 control_value_flags = {"--surface", "--tier", "--save"}
-target_value_flags = {"--run", "--slug", "--pr", "--range", "--base"}
+target_value_flags = {"--run", "--slug", "--pr", "--range", "--base", "--worktree"}
 value_prefixes = tuple(f + "=" for f in profile_value_flags | control_value_flags)
 profile_only_flags = {"--share", "--professional", "--operator"}
 profile_tokens = {
@@ -212,19 +214,24 @@ Parse the JSON descriptor from `$DESCRIPTOR`. Extract the `mode` field:
 
 ## Phase 1 — Assemble context bundle
 
-Call `scripts/report-context.py` (full run, no `--resolve-only`) to compose the deterministic context bundle. Pass the normalized target arguments plus `--tier "$TIER"`, `--surface "$SURFACE_POLICY"`, and `--out`. `scripts/report-context.py` is the only place that may attach surface data; render branches consume only the fields present in the resulting `context.json`.
+Call `scripts/report-context.py` (full run, no `--resolve-only`) to compose the deterministic context bundle. Pass the normalized target arguments plus `--tier "$TIER"`, `--surface "$SURFACE_POLICY"`, and `--out`. If `/z-resume --report` supplied `SELECTED_RESUME_CONTEXT_PATH`, pass it through as `--resume-context "$SELECTED_RESUME_CONTEXT_PATH"` only after target selection has already succeeded. `scripts/report-context.py` is the only place that may attach surface data or selected resume-context data; it must reject resume-context packets that are not selected, lack a selected target, lack a ready/matching `report_target`, or would attach evidence outside explicit selected evidence ids. Render branches consume only the fields present in the resulting `context.json`.
 
 ```bash
 CONTEXT_PATH="$CURRENT_ARCHIVE_DIR/context.json"
+SELECTED_RESUME_CONTEXT_ARG=()
+if [ -n "${SELECTED_RESUME_CONTEXT_PATH:-}" ]; then
+  SELECTED_RESUME_CONTEXT_ARG=(--resume-context "$SELECTED_RESUME_CONTEXT_PATH")
+fi
 python3 "${ANTIGRAVITY_PLUGIN_ROOT:-$CLAUDE_PLUGIN_ROOT}/scripts/report-context.py" \
   $REPORT_CONTEXT_TARGET_ARGS \
+  "${SELECTED_RESUME_CONTEXT_ARG[@]}" \
   --tier "$TIER" \
   --surface "$SURFACE_POLICY" \
   --out "$CONTEXT_PATH" 2>&1
 CONTEXT_EXIT=$?
 ```
 
-If `$CONTEXT_EXIT` is non-zero, record `CONTEXT_PATH=""` and proceed — the inline fallback in Phase 2 handles missing context.
+If `$CONTEXT_EXIT` is non-zero and `SELECTED_RESUME_CONTEXT_PATH` was set, stop without report rendering; the selected resume-context packet was missing, invalid, mismatched to the requested report target, or still needed selection. Otherwise, if `$CONTEXT_EXIT` is non-zero, record `CONTEXT_PATH=""` and proceed — the inline fallback in Phase 2 handles missing ordinary report context.
 
 Read the written `context.json` to extract the size-gate fields:
 
@@ -322,7 +329,7 @@ If the size gate does **not** fire (sizes are within threshold, OR tier is `summ
 Agent(
   subagent_type="report-synth",
   description="Synthesize z-report narrative for <MODE> target at <TIER> tier using <PROFILE> profile",
-  prompt="context_path: <CONTEXT_PATH>\ntier: <TIER>\nmode: <MODE>\nprofile: <PROFILE>\naudience: <AUDIENCE>\nstyle: <STYLE>\npurpose: <PURPOSE>\nsurface_contract: Use only context.json surface_map_* fields for any Surface Map discussion. Do not read surface_map_path, invoke discovery, or call sibling z-harness commands."
+  prompt="context_path: <CONTEXT_PATH>\ntier: <TIER>\nmode: <MODE>\nprofile: <PROFILE>\naudience: <AUDIENCE>\nstyle: <STYLE>\npurpose: <PURPOSE>\nsurface_contract: Use only context.json surface_map_* fields for any Surface Map discussion. Do not read surface_map_path, invoke discovery, or call sibling z-harness commands.\nresume_context_contract: If context.json contains selected_resume_context, use it only as cited selected-target evidence. Do not infer a target from it when selected_resume_context_status is absent or not attached."
 )
 ```
 
@@ -583,7 +590,7 @@ Print only the applicable advisories. Omit any advisory whose trigger condition 
 
 1. **Read-only on the target repo.** `/z-report` writes only `REPORT.md` (at `<run-dir>/REPORT.md` for run/slug targets) and the `--save` path. No edits to any source file, config, plan artifact, or other path in the target repo.
 2. **No sibling-command invocation.** `/z-report` never spawns, invokes, or auto-dispatches any other z-harness command (e.g., `/z-improve`, `/z-followup-next`, `/z-explain`). Handoffs to those commands are advisory prose recommendations only — the user invokes them.
-3. **Every factual claim sourced from `context.json`.** All metrics, timings, decisions, costs, follow-ups, status values, and surface-map statements in the narrative must originate from the `context.json` bundle assembled in Phase 1 (which is itself derived from events/metrics/artifacts/diff and attached surface fields). Renderers must use only `context.json` `surface_map_*` fields for surface claims; they must not read `surface_map_path`, invoke discovery, or infer coverage from omitted data.
+3. **Every factual claim sourced from `context.json`.** All metrics, timings, decisions, costs, follow-ups, status values, selected resume-context facts, and surface-map statements in the narrative must originate from the `context.json` bundle assembled in Phase 1 (which is itself derived from events/metrics/artifacts/diff, the optional bounded `selected_resume_context` projection, and attached surface fields). Renderers must use only `context.json` `selected_resume_context` fields for resume-selection claims and only `context.json` `surface_map_*` fields for surface claims; they must not read `surface_map_path`, invoke discovery, or infer coverage from omitted data.
 4. **No emojis.** The narrative and all printed output must contain no emoji characters.
 5. **One narrative, one tier, one profile per invocation.** A single `/z-report` call produces exactly one narrative at exactly one depth tier for exactly one selected profile. Tier is resolved in Phase 0 and changes only if the user explicitly chooses the size-gate downgrade; profile, audience, style, and purpose remain unchanged after Phase 0. Do not bundle multiple audiences, tiers, or profile styles into one run.
 6. **No free-form style bypass.** Audience/style choices must come from the supported profile controls and bundled options, never arbitrary style instructions that weaken citation, no-fabrication, read-only, no-sibling-command, or no-emoji rules.

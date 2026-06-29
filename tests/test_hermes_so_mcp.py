@@ -136,11 +136,11 @@ def test_read_captures_on_demand_and_sets_needs_input(tmp_path):
     )
 
     record = read_so_session(
-        "so-test", cfg, runner=FakeRunner(capture="Proceed?")
+        "so-test", cfg, runner=FakeRunner(capture="Proceed?\n❯")
     )
 
     assert record.status == "needs_input"
-    assert record.last_output == "Proceed?"
+    assert record.last_output == "Proceed?\n❯"
 
     events = drain_signal_events(cfg)
     assert events[0]["event"] == "so_needs_input"
@@ -154,10 +154,27 @@ def test_read_deduplicates_needs_input_signals(tmp_path):
         _command(alias), cfg, runner=FakeRunner(), session_id="so-test"
     )
 
-    read_so_session("so-test", cfg, runner=FakeRunner(capture="Proceed?"))
-    read_so_session("so-test", cfg, runner=FakeRunner(capture="Proceed?"))
+    read_so_session("so-test", cfg, runner=FakeRunner(capture="Proceed?\n❯"))
+    read_so_session("so-test", cfg, runner=FakeRunner(capture="Proceed?\n❯"))
 
     assert len(drain_signal_events(cfg)) == 1
+
+
+def test_send_allows_next_needs_input_signal(tmp_path):
+    cfg, alias = _config(tmp_path)
+    start_so_session(
+        _command(alias), cfg, runner=FakeRunner(), session_id="so-test"
+    )
+
+    read_so_session("so-test", cfg, runner=FakeRunner(capture="Proceed?\n❯"))
+    send_to_so_session("so-test", "continue", cfg, runner=FakeRunner())
+    read_so_session("so-test", cfg, runner=FakeRunner(capture="Next?\n❯"))
+
+    events = drain_signal_events(cfg)
+    assert [event["event"] for event in events] == [
+        "so_needs_input",
+        "so_needs_input",
+    ]
 
 
 def test_reaper_marks_missing_tmux_session_dead(tmp_path):
@@ -249,7 +266,7 @@ def test_poll_so_sessions_reads_active_sessions_and_reaps(tmp_path):
 
     result = poll_so_sessions(
         cfg,
-        runner=FakeRunner(capture="Waiting for input"),
+        runner=FakeRunner(capture="Waiting for input\n❯"),
     )
 
     assert result["checked"] == ["so-test"]

@@ -22,10 +22,14 @@ Tests:
 """
 
 from __future__ import annotations
+import json
+import os
+import subprocess
 
 import sys
 import tempfile
 import textwrap
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -480,6 +484,227 @@ class TestLiveExportZAttend(unittest.TestCase):
                 prompts_dir.exists(),
                 "[codex] prompts/ directory still present — old flat-transliteration layout not removed",
             )
+
+
+
+class TestLiveExportZResumeRegistration(unittest.TestCase):
+    """End-to-end export and packaging coverage for the /z-resume recovery surface."""
+
+    def _exported_text(
+        self,
+        exporter_module: str,
+        exported_path_parts: tuple[str, ...],
+    ) -> str:
+        import importlib
+
+        mod = importlib.import_module(exporter_module)
+        with tempfile.TemporaryDirectory() as tmp:
+            out_root = Path(tmp) / "export_out"
+            mod.export(REPO_ROOT, out_root)
+            exported = out_root / Path(*exported_path_parts)
+            self.assertTrue(exported.exists(), f"missing z-resume export at {exported}")
+            return exported.read_text(encoding="utf-8")
+
+    def _exported_file_set(self, exporter_module: str) -> set[str]:
+        import importlib
+
+        mod = importlib.import_module(exporter_module)
+        with tempfile.TemporaryDirectory() as tmp:
+            out_root = (Path(tmp) / "export_out").resolve()
+            result = mod.export(REPO_ROOT, out_root)
+            paths: set[str] = set()
+            for path in result.files:
+                resolved = Path(path).resolve()
+                if resolved.exists():
+                    paths.add(resolved.relative_to(out_root).as_posix())
+            return paths
+
+
+    def test_enumerate_sources_includes_z_resume_skill_with_script_reference(self) -> None:
+        sources = enumerate_sources(REPO_ROOT)
+        resume_entries = [entry for entry in sources["skills"] if entry["id"] == "z-resume"]
+        self.assertTrue(resume_entries, "enumerate_sources did not include z-resume skill")
+        entry = resume_entries[0]
+        self.assertTrue(entry["frontmatter"].get("description"), "z-resume description not parsed")
+        self.assertIn("scripts/resume-context.py", entry["body"])
+        self.assertTrue(
+            (REPO_ROOT / "scripts" / "resume-context.py").exists(),
+            "deterministic resume-context.py script is missing",
+        )
+
+    def test_z_resume_skill_and_script_reference_survive_all_exports(self) -> None:
+        exported_by_surface = {
+            "cursor": self._exported_text(
+                "runtime.drivers.cursor.export",
+                (".cursor", "skills", "z-resume", "SKILL.md"),
+            ),
+            "codex": self._exported_text(
+                "runtime.drivers.codex.export",
+                ("skills", "z-resume", "SKILL.md"),
+            ),
+            "agy": self._exported_text(
+                "runtime.drivers.antigravity.export",
+                (".agent", "skills", "z-resume", "SKILL.md"),
+            ),
+            "pi": self._exported_text(
+                "runtime.drivers.pi.export",
+                ("prompts", "z-resume.md"),
+            ),
+            "kiro": self._exported_text(
+                "runtime.drivers.kiro.export",
+                (".kiro", "steering", "z-resume.md"),
+            ),
+            "windsurf": self._exported_text(
+                "runtime.drivers.windsurf.export",
+                (".windsurf", "rules", "z-resume.md"),
+            ),
+        }
+
+        for surface, content in exported_by_surface.items():
+            with self.subTest(surface=surface):
+                self.assertIn("/z-resume", content)
+                self.assertIn("scripts/resume-context.py", content)
+                self.assertIn("selected_target", content)
+
+
+    def test_omp_export_declares_z_resume_skill_without_agent_project_autoload(self) -> None:
+        import importlib
+
+        mod = importlib.import_module("runtime.drivers.omp.export")
+        with tempfile.TemporaryDirectory() as tmp:
+            out_root = Path(tmp) / "export_out"
+            mod.export(REPO_ROOT, out_root)
+            config = (out_root / ".omp" / "config.yml").read_text(encoding="utf-8")
+            skill = (out_root / ".omp" / "z-harness" / "skills" / "z-resume" / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn("enableAgentsProject: false", config)
+        self.assertIn("/z-resume", skill)
+        self.assertIn("scripts/resume-context.py", skill)
+        self.assertIn("selected_target", skill)
+        self.assertIn("Selection before story", skill)
+
+    def test_z_resume_runtime_scripts_are_exported_for_hosts(self) -> None:
+        expected = {
+            "scripts/resume-context.py",
+            "scripts/artifact-scout-inventory.py",
+            "scripts/active-plan-registry.py",
+            "scripts/plan-path.sh",
+            "scripts/session-helpers.sh",
+        }
+        exporters = {
+            "cursor": ("runtime.drivers.cursor.export", ""),
+            "codex": ("runtime.drivers.codex.export", ""),
+            "agy": ("runtime.drivers.antigravity.export", ""),
+            "pi": ("runtime.drivers.pi.export", ""),
+            "omp": ("runtime.drivers.omp.export", ".omp/z-harness/"),
+            "kiro": ("runtime.drivers.kiro.export", ""),
+            "windsurf": ("runtime.drivers.windsurf.export", ""),
+        }
+
+        for surface, (module, prefix) in exporters.items():
+            with self.subTest(surface=surface):
+                exported_files = self._exported_file_set(module)
+                for rel_path in expected:
+                    self.assertIn(f"{prefix}{rel_path}", exported_files)
+
+
+    def test_export_only_z_resume_references_have_runtime_scripts(self) -> None:
+        exporters = {
+            "kiro": (
+                "runtime.drivers.kiro.export",
+                (".kiro", "steering", "z-resume.md"),
+            ),
+            "windsurf": (
+                "runtime.drivers.windsurf.export",
+                (".windsurf", "rules", "z-resume.md"),
+            ),
+        }
+
+        for surface, (module, exported_path_parts) in exporters.items():
+            with self.subTest(surface=surface):
+                import importlib
+
+                mod = importlib.import_module(module)
+                with tempfile.TemporaryDirectory() as tmp:
+                    out_root = (Path(tmp) / "export_out").resolve()
+                    result = mod.export(REPO_ROOT, out_root)
+                    exported = out_root / Path(*exported_path_parts)
+                    self.assertTrue(exported.exists(), f"[{surface}] missing z-resume export")
+                    content = exported.read_text(encoding="utf-8")
+                    self.assertIn("scripts/resume-context.py", content)
+                    runtime_script = out_root / "scripts" / "resume-context.py"
+                    self.assertTrue(
+                        runtime_script.exists(),
+                        f"[{surface}] z-resume references scripts/resume-context.py "
+                        "but the runtime script was not exported",
+                    )
+                    emitted = {Path(path).resolve() for path in result.files}
+                    self.assertIn(runtime_script, emitted)
+
+    def test_exported_z_resume_runtime_uses_target_repo_root_without_target_scripts(self) -> None:
+        import importlib
+
+        mod = importlib.import_module("runtime.drivers.codex.export")
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            export_root = (tmp_path / "export_out").resolve()
+            target_repo = (tmp_path / "target_repo").resolve()
+            target_repo.mkdir()
+            (target_repo / "README.txt").write_text("target repo marker\n", encoding="utf-8")
+
+            mod.export(REPO_ROOT, export_root)
+            self.assertFalse((target_repo / "scripts").exists(), "target fixture must not carry helper scripts")
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(export_root / "scripts" / "resume-context.py"),
+                    "--repo-root",
+                    str(target_repo),
+                    "--format",
+                    "json",
+                    "--noninteractive",
+                    "--max-candidates",
+                    "1",
+                ],
+                cwd=str(target_repo),
+                env={**os.environ, "Z_HARNESS_PLAN_DIR": str(tmp_path / "state")},
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
+            packet = json.loads(proc.stdout)
+            self.assertEqual(Path(packet["repo_identity"]["repo_root"]).resolve(), target_repo)
+            self.assertNotEqual(Path(packet["repo_identity"]["repo_root"]).resolve(), export_root)
+            repo_records = [record for record in packet["evidence_records"] if record.get("type") == "repo_identity"]
+            self.assertTrue(repo_records)
+            self.assertEqual(Path(repo_records[0]["data"]["repo_root"]).resolve(), target_repo)
+            inventory_records = [record for record in packet["evidence_records"] if record.get("type") == "artifact_inventory"]
+            self.assertTrue(inventory_records)
+            self.assertEqual(Path(inventory_records[0]["data"]["repo_root"]).resolve(), target_repo)
+            self.assertFalse(
+                any(record.get("type") == "provider_failure" and record.get("provider") == "artifact_inventory" for record in packet["evidence_records"]),
+                "artifact inventory should load helpers from export root while probing target repo",
+            )
+
+    def test_agy_manifest_declares_z_resume_skill_and_resume_agent(self) -> None:
+        manifest = (REPO_ROOT / "agy-plugin.yaml").read_text(encoding="utf-8")
+        self.assertIn("id: z-resume", manifest)
+        self.assertIn("source: skills/z-resume/SKILL.md", manifest)
+        self.assertIn("output: .agent/skills/z-resume/SKILL.md", manifest)
+        self.assertIn("id: resume-cluster", manifest)
+        self.assertIn("source: agents/resume-cluster.md", manifest)
+
+    def test_pyproject_force_includes_z_resume_runtime_roots(self) -> None:
+        data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        force_include = data["tool"]["hatch"]["build"]["targets"]["wheel"]["force-include"]
+        self.assertEqual(force_include.get("skills"), "skills")
+        self.assertEqual(force_include.get("scripts"), "scripts")
+        self.assertEqual(force_include.get("agents"), "agents")
+        self.assertTrue((REPO_ROOT / "skills" / "z-resume" / "SKILL.md").exists())
+        self.assertTrue((REPO_ROOT / "scripts" / "resume-context.py").exists())
 
 
 

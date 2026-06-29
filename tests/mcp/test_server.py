@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import types
@@ -158,12 +159,145 @@ class TestFastMCPContextInjection:
         assert COMMAND_TOOLS["z_plan"]["command_id"] == "/z-plan"
         assert COMMAND_TOOLS["z_plan"]["is_heavy"] is True
         assert COMMAND_TOOLS["z_where"]["is_heavy"] is False
+        assert COMMAND_TOOLS["z_resume"]["command_id"] == "/z-resume"
+        assert COMMAND_TOOLS["z_resume"]["is_heavy"] is False
         assert COMMAND_TOOLS["z_subagent_dispatch"]["is_heavy"] is True
         for name, entry in COMMAND_TOOLS.items():
             assert "command_id" in entry
             assert "description" in entry
             assert "is_heavy" in entry
 
+
+    def test_z_resume_uses_fast_handler_registration(self) -> None:
+        """z_resume must bypass heavy command dispatch and use the deterministic fast handler."""
+        from z_harness_cli.mcp.server import _FAST_HANDLERS, _handle_z_resume
+
+        assert _FAST_HANDLERS["z_resume"] is _handle_z_resume
+
+
+
+# ── z-resume fast handler tests ─────────────────────────────────────────────
+
+
+class TestZResumeFastHandler:
+    """Verify /z-resume uses deterministic resume-context JSON, not skill dispatch."""
+
+    def _make_proc(self, packet: dict[str, object]) -> subprocess.CompletedProcess:
+        return subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps(packet),
+            stderr="",
+        )
+
+    def test_ambiguous_prompt_returns_noninteractive_packet(self, tmp_path) -> None:
+        from z_harness_cli.mcp.server import _dispatch_command
+
+        packet = {
+            "status": "needs_selection",
+            "interaction_mode": "noninteractive",
+            "ambiguity": {"needs_selection": True, "state": "ambiguous"},
+            "selected_target": None,
+            "suggested_selection_args": ["--select candidate:cand-1"],
+            "safe_next_command": {"kind": "select_target"},
+        }
+
+
+        target_repo = tmp_path / "target-repo"
+        target_repo.mkdir()
+        with patch("subprocess.run", return_value=self._make_proc(packet)) as run, \
+             patch("z_harness_cli.mcp.server._handle_skill_dispatch") as skill_dispatch:
+            result = _dispatch_command("z_resume", {"prompt": "resume parser work", "repo_root": str(target_repo)})
+
+        assert result.status == "complete"
+        assert result.meta["needs_selection"] is True
+        assert result.meta["selected_target"] is None
+        assert result.meta["packet"]["status"] == "needs_selection"
+        assert "resume_context" in result.artifacts
+        skill_dispatch.assert_not_called()
+        argv = run.call_args.args[0]
+        assert argv[-3:] == ["--format", "json", "--noninteractive"]
+        assert "--arguments" in argv
+        assert argv[argv.index("--arguments") + 1] == "resume parser work"
+        assert "--repo-root" in argv
+        assert run.call_args.kwargs["cwd"] == argv[argv.index("--repo-root") + 1]
+        assert argv[argv.index("--repo-root") + 1] == str(target_repo)
+
+    def test_missing_explicit_caller_repo_root_does_not_use_process_cwd(self, tmp_path) -> None:
+        from z_harness_cli.mcp.server import _dispatch_command
+
+        helper_root = tmp_path / "helper-root"
+        process_cwd = tmp_path / "process-cwd"
+        helper_root.mkdir()
+        process_cwd.mkdir()
+
+        with patch.dict(
+            os.environ,
+            {"PWD": str(process_cwd), "Z_HARNESS_TARGET_REPO_ROOT": ""},
+            clear=False,
+        ), \
+             patch("z_harness_cli.mcp.server._get_repo_root", return_value=helper_root), \
+             patch("os.getcwd", return_value=str(process_cwd)), \
+             patch("subprocess.run") as run:
+            result = _dispatch_command("z_resume", {"prompt": "resume parser work"})
+
+        assert result.status == "error"
+        assert "explicit caller workspace root" in result.content
+        assert "helper process cwd" in result.content
+        run.assert_not_called()
+
+    def test_exact_slug_control_selects_target(self, tmp_path) -> None:
+        from z_harness_cli.mcp.server import _dispatch_command
+
+        selected = {
+            "target_type": "plan",
+            "slug": "z-resume",
+            "selection_token": "candidate:cand-1|slug:z-resume",
+        }
+        packet = {
+            "status": "selected",
+            "interaction_mode": "noninteractive",
+            "ambiguity": {"needs_selection": False, "state": "none"},
+            "selected_target": selected,
+            "suggested_selection_args": [],
+            "safe_next_command": {"kind": "continue_plan"},
+        }
+
+        target_repo = tmp_path / "target-repo"
+        target_repo.mkdir()
+
+        with patch("subprocess.run", return_value=self._make_proc(packet)) as run:
+            result = _dispatch_command("z_resume", {"prompt": "", "slug": "z-resume", "cwd": str(target_repo)})
+
+        assert result.status == "complete"
+        assert result.meta["needs_selection"] is False
+        assert result.meta["selected_target"] == selected
+        argv = run.call_args.args[0]
+        assert "--slug" in argv
+        assert argv[argv.index("--slug") + 1] == "z-resume"
+        assert "--arguments" not in argv
+
+    def test_fast_handler_does_not_mutate_caller_args(self, tmp_path) -> None:
+        from z_harness_cli.mcp.server import _dispatch_command
+
+        packet = {
+            "status": "selected",
+            "interaction_mode": "noninteractive",
+            "ambiguity": {"needs_selection": False, "state": "none"},
+            "selected_target": {"target_type": "plan", "slug": "z-resume"},
+            "suggested_selection_args": [],
+            "safe_next_command": {"kind": "continue_plan"},
+        }
+        target_repo = tmp_path / "target-repo"
+        target_repo.mkdir()
+        args = {"prompt": "resume parser work", "slug": "z-resume", "repo_root": str(target_repo)}
+        before = dict(args)
+
+        with patch("subprocess.run", return_value=self._make_proc(packet)):
+            result = _dispatch_command("z_resume", args)
+
+        assert result.status == "complete"
+        assert args == before
 
 # ── Progress phases test ───────────────────────────────────────────────────
 

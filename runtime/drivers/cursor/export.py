@@ -43,6 +43,7 @@ from runtime.drivers._export_utils import (
     output_path_for,
     validate_capabilities,
     rewrite_unsupported_call_blocks,
+    export_resume_runtime_scripts,
 )
 
 
@@ -248,6 +249,8 @@ def export(
         index_path = rules_dir / _SKILLS_INDEX_NAME
         index_path.write_text(_SKILLS_INDEX_TEMPLATE, encoding="utf-8")
         emitted.append(index_path)
+
+    emitted.extend(export_resume_runtime_scripts(repo_root, out_root))
 
     # Validate all emitted .mdc files (agents + index; SKILL.md are not .mdc).
     for path in emitted:

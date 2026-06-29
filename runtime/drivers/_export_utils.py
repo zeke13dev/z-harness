@@ -634,6 +634,53 @@ def resolve_strategy(
     return default_strategy
 
 
+
+# ---------------------------------------------------------------------------
+# Deterministic runtime script export helpers
+# ---------------------------------------------------------------------------
+
+_RESUME_CONTEXT_RUNTIME_FILES: tuple[str, ...] = (
+    "scripts/resume-context.py",
+    "scripts/artifact-scout-inventory.py",
+    "scripts/active-plan-registry.py",
+    "scripts/plan-path.sh",
+    "scripts/session-helpers.sh",
+    "scripts/config.py",
+    "scripts/log-event.sh",
+    "scripts/detect-host.sh",
+    "scripts/intent-schema.py",
+)
+
+
+def export_resume_runtime_scripts(repo_root: Path | str, export_root: Path | str) -> list[Path]:
+    """Copy the deterministic ``/z-resume`` runtime scripts into an export root.
+
+    Host exports can render the ``z-resume`` skill text without having a live
+    checkout beside the exported files.  Keep the script root layout stable
+    (``scripts/...``) so the skill can invoke ``scripts/resume-context.py`` and
+    that script's bounded helper dependencies from the installed plugin/export.
+    Fixture repos that do not carry ``scripts/resume-context.py`` are left
+    unchanged so generic exporter tests stay minimal.
+    """
+    import shutil
+
+    repo_root = Path(repo_root).resolve()
+    export_root = Path(export_root).resolve()
+    if not (repo_root / "scripts" / "resume-context.py").is_file():
+        return []
+
+    emitted: list[Path] = []
+    for rel_path in _RESUME_CONTEXT_RUNTIME_FILES:
+        src = repo_root / rel_path
+        if not src.is_file():
+            continue
+        dst = export_root / rel_path
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        emitted.append(dst)
+    return emitted
+
+
 # ---------------------------------------------------------------------------
 # Self-test (ported verbatim from scripts/export-common.py cmd_self_test)
 # ---------------------------------------------------------------------------

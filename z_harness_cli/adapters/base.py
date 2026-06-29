@@ -272,7 +272,7 @@ class HostAdapter(Protocol):
 # Known /z-* command families (seed list; adapters extend as needed):
 #   z-plan, z-implement, z-execute, z-review, z-test, z-audit,
 #   z-export, z-update, z-doctor, z-status, z-brainstorm, z-consult,
-#   z-panel, z-gate, z-maintain-docs
+#   z-panel, z-gate, z-maintain-docs, z-resume
 
 COMMAND_CAPABILITY_MATRIX: dict[str, dict[str, CommandTier]] = {
     # Populated by concrete adapters at import time.
@@ -297,6 +297,7 @@ KNOWN_COMMANDS: tuple[str, ...] = (
     "z-panel",
     "z-gate",
     "z-maintain-docs",
+    "z-resume",
 )
 
 

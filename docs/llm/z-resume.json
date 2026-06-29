@@ -1,0 +1,194 @@
+{
+  "concept": "z-resume",
+  "last_updated": "2026-06-29",
+  "covers_spec": "skills/z-resume/SKILL.md",
+  "source_files": [
+    "skills/z-resume/SKILL.md",
+    "docs/human/z-resume.md",
+    "scripts/resume-context.py",
+    "scripts/report-context.py",
+    "scripts/active-plan-registry.py",
+    "skills/z-report/SKILL.md",
+    "skills/z-explain/SKILL.md",
+    "skills/z-learn/SKILL.md",
+    "skills/z-where/SKILL.md"
+  ],
+  "confidence": "high",
+  "summary": "Read-only work-thread recovery for fuzzy or exact prior-work targets. /z-resume selects a bounded plan/run/worktree/branch/artifact/repo target, reports evidence-backed state and ambiguity, recommends safe continuations without executing them, and delegates --report to /z-report only after selection.",
+  "entry_points": [
+    {
+      "file": "skills/z-resume/SKILL.md",
+      "line": 11,
+      "symbol": "z-resume purpose",
+      "kind": "module",
+      "summary": "Answers what the user was doing, what state it is actually in, and how to continue safely."
+    },
+    {
+      "file": "skills/z-resume/SKILL.md",
+      "line": 47,
+      "symbol": "exact target shortcuts",
+      "kind": "module",
+      "summary": "Parses run, slug, plan, branch, worktree, artifact, repo, select token, current/active, latest/last, and fuzzy topic controls."
+    },
+    {
+      "file": "skills/z-resume/SKILL.md",
+      "line": 87,
+      "symbol": "resume-context invocation",
+      "kind": "module",
+      "summary": "Calls scripts/resume-context.py as the deterministic gather/score/packet producer with bounded repo/lookback inputs."
+    },
+    {
+      "file": "scripts/resume-context.py",
+      "line": 3897,
+      "symbol": "build_context",
+      "kind": "function",
+      "summary": "Builds the deterministic /z-resume packet by gathering bounded evidence, ranking candidates, applying ambiguity/reportability gates, and emitting selected target context."
+    },
+    {
+      "file": "scripts/active-plan-registry.py",
+      "line": 2177,
+      "symbol": "main",
+      "kind": "module",
+      "summary": "CLI entry point for active-plan registry reads and advisory overlap/status records that /z-resume treats as live state evidence."
+    },
+    {
+      "file": "scripts/report-context.py",
+      "line": 1719,
+      "symbol": "main",
+      "kind": "module",
+      "summary": "Resolves report targets and accepts --resume-context so a selected /z-resume packet can be projected into the /z-report context bundle."
+    },
+    {
+      "file": "skills/z-resume/SKILL.md",
+      "line": 109,
+      "symbol": "resume-context packet contract",
+      "kind": "schema",
+      "summary": "Packet carries query, repo identity, lookback, source status, evidence records, candidates, ambiguity, selected target, warnings, citations, and suggestions."
+    },
+    {
+      "file": "skills/z-resume/SKILL.md",
+      "line": 126,
+      "symbol": "evidence providers",
+      "kind": "module",
+      "summary": "Providers include plan/run artifacts, active registry, git/worktree/branch evidence, validated session/handoff files, and memory/follow-up side evidence."
+    },
+    {
+      "file": "skills/z-resume/SKILL.md",
+      "line": 195,
+      "symbol": "ambiguity gate",
+      "kind": "module",
+      "summary": "Stops before narrative/report rendering when candidates are ambiguous, thin, conflicting, cross-repo, or not reportable."
+    },
+    {
+      "file": "skills/z-resume/SKILL.md",
+      "line": 235,
+      "symbol": "concise recovery render",
+      "kind": "module",
+      "summary": "Selected packets render target, repo/worktree/branch, state, confidence, latest consensus, changed state, warnings, and safe next options."
+    },
+    {
+      "file": "skills/z-resume/SKILL.md",
+      "line": 265,
+      "symbol": "--report after selection",
+      "kind": "module",
+      "summary": "Only selected, exact, non-ambiguous targets may hand off to report-context/report-synth through the existing z-report machinery."
+    },
+    {
+      "file": "docs/human/z-resume.md",
+      "line": 1,
+      "symbol": "human concept doc",
+      "kind": "doc",
+      "summary": "Human-oriented evidence hierarchy, boundaries, examples, key entry points, and side-evidence rules."
+    }
+  ],
+  "depends_on": [
+    "commands",
+    "active-plan-registry",
+    "session-handoff",
+    "handoff-protocol",
+    "run-brief",
+    "followup-sink"
+  ],
+  "consumed_by": [
+    "commands",
+    "z-report"
+  ],
+  "evidence_hierarchy": [
+    "Exact user selectors after validation: run, slug/plan, branch, worktree, artifact, repo, select token.",
+    "Current repo identity plus configured z-harness state bases.",
+    "Active-plan registry records for live phase/current task/heartbeat/held paths/wait edges/worktree/branch/repo.",
+    "Plan and run artifacts: INTENT/SPEC/PLAN/TASKS/FIX/LEDGER, archive artifacts, REPORT/context/run-brief/events/decisions/follow-ups.",
+    "Git/worktree/branch associations backed by repo id, registry, HEAD/commit, artifacts, or explicit user input.",
+    "Validated session/handoff evidence when schema, timestamps, hashes, next-step state, and referenced files agree.",
+    "Optional bounded cheap inference stored under subagent_judgments only.",
+    "Memories, follow-ups, and fuzzy topic text as side evidence only."
+  ],
+  "invariants": [
+    "/z-resume is read-only: no edits, no registry mutation, no branch/worktree/service/database mutation, no command execution handoff.",
+    "resume-context.py is deterministic and owns selection packets; consumers must not infer hidden targets from prose or filesystem scans when selected_target is null.",
+    "Selection comes before story: interactive ambiguity asks one bounded selection question; noninteractive ambiguity returns needs_selection with selected_target null.",
+    "--report may invoke/reuse z-report machinery only after an unambiguous or explicit target selection and exact report_target are available.",
+    "Branch/worktree matching is associative evidence only; substring/basename matches alone are insufficient proof.",
+    "Memories, follow-ups, cheap inference, and fuzzy user text never prove current state, landed state, completion, or branch/worktree ownership.",
+    "Cross-repo candidates must carry source/repo citations, and broader discovery is capped and explicit via --repo or --all-repos.",
+    "Safe next options are advisory and copyable; /z-resume never auto-dispatches the recommended command."
+  ],
+  "adjacent_boundaries": [
+    {
+      "command": "/z-where",
+      "use_for": "Active-plan registry status and path overlaps for currently registered runs.",
+      "resume_boundary": "/z-resume consumes registry evidence but also recovers bounded historical artifacts, sessions, branches, reports, and cross-repo context."
+    },
+    {
+      "command": "/z-report",
+      "use_for": "Narrative for a known run/slug/PR/range/base/worktree target.",
+      "resume_boundary": "Fuzzy prior-work recovery routes to /z-resume; /z-resume --report delegates only after selected target resolution."
+    },
+    {
+      "command": "/z-explore",
+      "use_for": "Code terrain reconstruction, entry points, seams, and MAP-like source surveys.",
+      "resume_boundary": "/z-resume reconstructs work-thread state, not code architecture; recommend /z-explore only after selected evidence says terrain is the gap."
+    },
+    {
+      "command": "/z-explain",
+      "use_for": "One-shot cited teaching of a file, symbol, subsystem, repo orientation, or behavior lens.",
+      "resume_boundary": "Route work-thread continuation or prior-run reorientation to /z-resume."
+    },
+    {
+      "command": "/z-learn",
+      "use_for": "Interactive progressive tutoring over code/system understanding.",
+      "resume_boundary": "Learning-session staging is not plan/run/worktree recovery; use /z-resume for what-was-I-doing continuity."
+    },
+    {
+      "command": "/z-attend resume",
+      "use_for": "Resume a known attended chain run after its handoff predicate validates.",
+      "resume_boundary": "/z-resume can find/cite the likely attended run but does not re-enter the chain."
+    },
+    {
+      "command": "/z-overnight resume",
+      "use_for": "Resume a known overnight run id/state.",
+      "resume_boundary": "/z-resume can find/cite the likely overnight run but does not resume unattended orchestration."
+    }
+  ],
+  "examples": [
+    "/z-resume \"resume-context ranking\"",
+    "/z-resume current",
+    "/z-resume latest --lookback 14d",
+    "/z-resume --slug z-resume",
+    "/z-resume --run 20260601T120000Z-implement",
+    "/z-resume --branch feature/resume-context",
+    "/z-resume --worktree ../z-harness-resume",
+    "/z-resume --repo qt-bot --topic \"missing fills report\"",
+    "/z-resume \"resume docs\" --json",
+    "/z-resume --select cand-2",
+    "/z-resume --slug z-resume --report standard --profile=technical-handoff"
+  ],
+  "gotchas": [
+    "Recency filters discovery and ranking; it does not prove current truth or hide older canonical linked decisions attached to a selected candidate.",
+    "Provider truncation, stale session/handoff files, malformed artifacts, dirty/divergent worktrees, and close-score competitors become warnings or ambiguity, not silent choices.",
+    "Noninteractive ambiguous output must not invoke report-context.py, report-synth, /z-report, or any report renderer.",
+    "Worktree-backed selected reports must use --worktree target args; non-current-repo selections must not fall back to current repo --run/--slug resolution.",
+    "SESSION_CONTEXT.md is live side evidence only when freshly linked by a valid session/handoff artifact; otherwise it is stale side evidence."
+  ],
+  "memories": []
+}

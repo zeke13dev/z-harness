@@ -66,6 +66,7 @@ from runtime.drivers._export_utils import (
     enumerate_sources,
     validate_capabilities,
     rewrite_unsupported_call_blocks,
+    export_resume_runtime_scripts,
 )
 
 
@@ -645,6 +646,8 @@ def export(
     manifest_path = out_root / "agy-plugin.yaml"
     manifest_path.write_text(_build_manifest(sources), encoding="utf-8")
     emitted_files.append(manifest_path)
+
+    emitted_files.extend(export_resume_runtime_scripts(repo_root, out_root))
 
     # --- CAPABILITIES.md ---
     caps_path = out_root / "CAPABILITIES.md"

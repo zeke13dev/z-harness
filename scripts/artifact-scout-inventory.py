@@ -15,6 +15,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+HELPER_ROOT = SCRIPT_DIR.parent
+
 SCHEMA_VERSION = "artifact-scout-inventory.v1"
 SOURCE_STATUSES = {"ok", "missing", "unavailable", "partial", "corrupt", "truncated"}
 ALLOWED_ARTIFACT_FILES = (
@@ -31,6 +34,11 @@ ALLOWED_ARTIFACT_FILES = (
     "REPORT.md",
     "DEBUG.md",
     "run-brief.json",
+    "SESSION.md",
+    "SESSION_CONTEXT.md",
+    "handoff.json",
+    "HANDOFF.md",
+    "context.json",
 )
 BODY_DENY_NAMES = {
     "events.jsonl",
@@ -271,10 +279,13 @@ def _tokenize_terms(slug: str, task: str | None) -> list[str]:
     return terms
 
 
-def _run_command(argv: Sequence[str], cwd: Path, timeout: int = 5) -> subprocess.CompletedProcess[str]:
+def _run_command(argv: Sequence[str], cwd: Path, timeout: int = 5, environ: Mapping[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    env = dict(environ or os.environ)
+    env["PWD"] = str(cwd)
     return subprocess.run(
         list(argv),
         cwd=str(cwd),
+        env=env,
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -338,12 +349,12 @@ def _resolve_base_from_plan_dir(plan_dir: Path) -> Path | None:
     return None
 
 
-def _resolve_base_from_helper(repo_root: Path) -> Path | None:
-    helper = repo_root / "scripts" / "plan-path.sh"
+def _resolve_base_from_helper(repo_root: Path, helper_root: Path, environ: Mapping[str, str] | None = None) -> Path | None:
+    helper = helper_root / "scripts" / "plan-path.sh"
     if not helper.exists():
         return None
     try:
-        result = _run_command(["bash", str(helper), "base_dir"], cwd=repo_root)
+        result = _run_command(["bash", str(helper), "base_dir"], cwd=repo_root, environ=environ)
     except (OSError, subprocess.TimeoutExpired):
         return None
     if result.returncode != 0:
@@ -352,9 +363,9 @@ def _resolve_base_from_helper(repo_root: Path) -> Path | None:
     return Path(resolved) if resolved else None
 
 
-def _allowed_roots(repo_root: Path, plan_dir: Path) -> list[Path]:
+def _allowed_roots(repo_root: Path, plan_dir: Path, helper_root: Path, environ: Mapping[str, str] | None = None) -> list[Path]:
     roots: list[Path] = []
-    for root in (repo_root, _resolve_base_from_plan_dir(plan_dir), _resolve_base_from_helper(repo_root)):
+    for root in (repo_root, _resolve_base_from_plan_dir(plan_dir), _resolve_base_from_helper(repo_root, helper_root, environ)):
         if root is None:
             continue
         try:
@@ -366,15 +377,14 @@ def _allowed_roots(repo_root: Path, plan_dir: Path) -> list[Path]:
     return roots
 
 
-def _plan_roots(repo_root: Path, plan_dir: Path) -> list[Path]:
+def _plan_roots(repo_root: Path, plan_dir: Path, helper_root: Path, environ: Mapping[str, str] | None = None) -> list[Path]:
     roots: list[Path] = []
     base = _resolve_base_from_plan_dir(plan_dir)
     if base is not None:
         roots.append(base / "plans")
-    helper_base = _resolve_base_from_helper(repo_root)
+    helper_base = _resolve_base_from_helper(repo_root, helper_root, environ)
     if helper_base is not None:
         roots.append(helper_base / "plans")
-    roots.extend([repo_root / "z-harness" / "plans", repo_root / "z-harness"])
     unique: list[Path] = []
     seen: set[str] = set()
     for root in roots:
@@ -397,12 +407,14 @@ def _collect_plan_dirs(
     slug: str,
     state: ScanState,
     allowed_roots: Sequence[Path],
+    helper_root: Path,
+    environ: Mapping[str, str] | None = None,
 ) -> tuple[list[Path], str]:
     mandatory_dirs: list[Path] = []
     historical_dirs: list[Path] = []
     partial = False
 
-    for root in _plan_roots(repo_root, plan_dir):
+    for root in _plan_roots(repo_root, plan_dir, helper_root, environ):
         if not root.exists():
             continue
         if not _path_within(root, allowed_roots):
@@ -565,10 +577,12 @@ def _build_candidates(
     plan_dir: Path,
     run_id: str,
     task: str | None = None,
+    helper_root: Path = HELPER_ROOT,
+    environ: Mapping[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str], set[str], ScanState]:
     state = ScanState()
-    allowed_roots = _allowed_roots(repo_root, plan_dir)
-    plan_dirs, plans_status = _collect_plan_dirs(repo_root, plan_dir, slug, state, allowed_roots)
+    allowed_roots = _allowed_roots(repo_root, plan_dir, helper_root, environ)
+    plan_dirs, plans_status = _collect_plan_dirs(repo_root, plan_dir, slug, state, allowed_roots, helper_root, environ)
     candidates: dict[str, CandidateAccumulator] = {}
     archives_seen = False
     current_files: set[str] = set()
@@ -642,9 +656,9 @@ def _build_candidates(
     return mandatory, historical, source_status, current_files, state
 
 
-def _registry_records(repo_root: Path, run_id: str, environ: Mapping[str, str]) -> tuple[list[dict[str, Any]], str]:
+def _registry_records(repo_root: Path, run_id: str, environ: Mapping[str, str], helper_root: Path) -> tuple[list[dict[str, Any]], str]:
     try:
-        result = _run_command(["python3", "scripts/active-plan-registry.py", "list", "--json"], cwd=repo_root)
+        result = _run_command(["python3", str(helper_root / "scripts" / "active-plan-registry.py"), "list", "--json"], cwd=repo_root, environ=environ)
     except (OSError, subprocess.TimeoutExpired):
         return [], "unavailable"
     if result.returncode != 0:
@@ -917,14 +931,16 @@ def collect_inventory(
     repo_root: Path,
     plan_dir: Path,
     task: str | None,
+    helper_root: Path | None = None,
     environ: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     environ = environ or os.environ
     repo_root = repo_root.expanduser().resolve() if repo_root.exists() else repo_root.expanduser().absolute()
     plan_dir = plan_dir.expanduser().resolve() if plan_dir.exists() else plan_dir.expanduser().absolute()
+    helper_root = (helper_root or HELPER_ROOT).expanduser().resolve()
 
-    mandatory_candidates, historical_candidates, artifact_status, current_files, scan_state = _build_candidates(slug, repo_root, plan_dir, run_id, task)
-    active_records, registry_status = _registry_records(repo_root, run_id, environ)
+    mandatory_candidates, historical_candidates, artifact_status, current_files, scan_state = _build_candidates(slug, repo_root, plan_dir, run_id, task, helper_root=helper_root, environ=environ)
+    active_records, registry_status = _registry_records(repo_root, run_id, environ, helper_root)
     worktree_records, worktree_status = _worktrees(repo_root)
     source_status = {
         "plans": artifact_status["plans"],
@@ -993,6 +1009,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--plan-dir", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--task", default=None)
+    parser.add_argument("--helper-root", default=str(HELPER_ROOT), help="installed z-harness helper root containing scripts/")
     return parser
 
 
@@ -1000,7 +1017,7 @@ def _validate_args(args: argparse.Namespace) -> str | None:
     for attr in ("command", "slug", "run_id", "repo_root", "plan_dir", "output"):
         if not str(getattr(args, attr, "")).strip():
             return f"--{attr.replace('_', '-')} must not be empty"
-    for attr in ("repo_root", "plan_dir", "output"):
+    for attr in ("repo_root", "plan_dir", "output", "helper_root"):
         if not Path(getattr(args, attr)).expanduser().is_absolute():
             return f"--{attr.replace('_', '-')} must be an absolute path"
     return None
@@ -1027,6 +1044,7 @@ def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] | None = 
             plan_dir=Path(args.plan_dir),
             task=args.task,
             environ=environ,
+            helper_root=Path(args.helper_root),
         )
         _atomic_write_json(output, inventory)
     except OSError as exc:
