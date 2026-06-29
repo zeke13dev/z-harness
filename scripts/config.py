@@ -184,7 +184,7 @@ DEFAULTS: dict = {
         # Closed set: adapter names {claude, antigravity, cursor, codex} ∪
         # export-only driver names {pi, windsurf, cline, kiro, copilot}.
         # Env transport: Z_HARNESS_EXPORT_HOSTS as JSON-encoded array string.
-        "hosts": ["cursor", "codex", "agy", "pi"],  # default = current "all" set
+        "hosts": ["cursor", "codex", "agy", "omp", "pi"],  # default "all" set; omp is a first-class native host
         # Export strategy enum.  Each driver interprets it for its host.
         # pointer  — single capabilities-pointer rule file
         # curated  — always-on agent subset (mirrors agy _ALWAYS_ON_AGENTS)

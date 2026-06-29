@@ -575,7 +575,7 @@ The `[export]` section controls which hosts `/z-export` targets and what strateg
 
 | Key | Type | Default | Env var | Description |
 |-----|------|---------|---------|-------------|
-| `export.hosts` | array\<string\> | `["cursor", "codex", "agy", "pi"]` | `Z_HARNESS_EXPORT_HOSTS` (JSON-encoded array) | Export target hosts. Closed set: adapter names (`claude`, `antigravity`, `agy`, `cursor`, `codex`) and export-only driver names (`pi`, `windsurf`, `cline`, `kiro`, `copilot`). Must be non-empty. |
+| `export.hosts` | array\<string\> | `["cursor", "codex", "agy", "omp", "pi"]` | `Z_HARNESS_EXPORT_HOSTS` (JSON-encoded array) | Export target hosts. Closed set: adapter names (`claude`, `antigravity`, `agy`, `cursor`, `codex`, `omp`) and export-only driver names (`pi`, `windsurf`, `cline`, `kiro`, `copilot`). Must be non-empty. |
 | `export.strategy` | string | `""` | `Z_HARNESS_EXPORT_STRATEGY` | Export strategy. `""` (default, empty sentinel) defers to each driver's own `default_strategy` (e.g. `cline` → `pointer`, `windsurf`/`kiro` → `curated`). Explicit values: `pointer`, `curated`, `full`. |
 
 ---
